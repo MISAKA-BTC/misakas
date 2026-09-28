@@ -21,9 +21,11 @@
   (Bitcoin はブロックが正しいかを検証し、ASIC の作り方は問わない)。規範:**候補モデルが VM で作られたことを要求しては
   ならない(MUST NOT)**。プロトコルが検証するのは 4 つだけ:モデル成果物(IR class の admission)、provenance policy
   (宣言の形と参照の有効性。真偽ではない)、評価結果、promotion の資格。
-- **既存の土台。** line は spec 15(ADR-0088)の line で、head は line の current version。IR の line では version が
-  class id を名指す(Phase F の class id は重みを含むので、新しい重みは新しい class)。line が改良に opt-in すると、
-  promotion は developer ではなくプロトコルが行う。利用量は既存の version ごとの usage カウンタで数える。
+- **既存の土台。** line は spec 15(ADR-0088)の line。改良に opt-in した line の head は改良行の `head`(IR class id)と
+  その履歴で、spec 15 の version 行と `current` にはプロトコルは書かない(Phase F の class id は重みを含むので新しい重みは
+  新しい class。version に class id を書く当初の推奨形は spec 15 の稼働中の読み手 3 つを壊すと分かった — §3)。opt-in した
+  line では developer の `ModelVersionPromoted` を拒否し、head はプロトコルの promotion と rollback でだけ動く。利用量は
+  head class の Final claim を改良行で数える。
 - **consensus-native な epoch 状態機械。** 利用量が閾値を超える → OPEN_IMPROVEMENT_EPOCH → hard case の dataset_root を
   固定 → 候補の提出窓 → CLOSE_SUBMISSION → 凍結後に届いた hard case と setter セットから R で評価項目を引く → 各候補を
   評価 → 合格した最良の候補を promotion し、lineage head を更新。状態・オブジェクト・遷移を規定する(tag は提案だけで、
@@ -211,15 +213,29 @@ The protocol builds on spec 15's lines (ADR-0088) rather than beside them.
 - **The line.** `PalwModelLineV1` (`consensus/core/src/palw_model_lines_v1.rs`): `(class, owner, name)`,
   with roles, a `current` version, previews, a contributor's permille of the owner's leg, and per-version
   usage (`PalwVersionUsageV1`: attempt claims, free-prompt claims, work leaves).
-- **The head is the line's current version.** No new pointer is needed.
-- **For an IR line, a version names an IR class id.** A legacy version is a root in force of one class
-  (PALW-MK-2). Phase F's IR class id, however, commits to the artifact root, so new weights are a new
-  class. An IR line's `PalwModelVersionV1.root` therefore names the version's class id, and "the roots
-  in force" of an IR line are its versions' classes. This is the smallest reconciliation of spec 15 with
-  Phase F (open question 1).
+- **The head of a governed line is a class id in the line's improvement row** (`improvement_lines`),
+  with a bounded head history, and it names an IR class. A legacy version is a root in force of one class
+  (PALW-MK-2); Phase F's IR class id, however, commits to the artifact root, so new weights are a new
+  class.
+- **Amended (2026-09-29, implementation).** This RFC first recommended writing the promoted class id
+  into spec 15's `PalwModelVersionV1.root` and making it the line's `current` version, so that no new
+  pointer was needed (open question 1). Implementation found that form breaks three live readers of spec
+  15's rows:
+  1. `class_roots_in_force` reads every in-force version root of a class's lines, and attempt admission
+     accepts any of them — so a class id would become an "artifact root" an attempt of the parent class
+     could name;
+  2. a promotion supersedes the parent's version, whose root then leaves force after the grace, so the
+     parent class's attempts are refused and its cadence share goes dormant, while the promoted class —
+     a separate IR class with its own share — inherits nothing;
+  3. free-prompt usage is attributed through the current version's root, so it would land on the wrong
+     version.
+  The protocol therefore writes neither spec 15's version rows nor `current`: the governed line's head
+  lives in its improvement row, and the market, the owner's leg and the parent class's share and roots
+  are untouched. The trigger counts the head class's claims at `Final` in the same row (§4), not spec
+  15's per-version usage, which attributes by artifact root.
 - **Opting in.** The owner signs `ModelLineImprovementPolicySet { line, policy }` (a proposal, like
-  every object here). From the next epoch boundary the line is **governed**: its current version moves
-  only by this protocol's promotion or rollback, and no longer by the developer's `ModelVersionPromoted`.
+  every object here). From then on the line is **governed**: its head moves only by this protocol's
+  promotion or rollback, and the developer's `ModelVersionPromoted` is refused on it.
   The policy changes only between epochs. Opting out takes effect after the current epoch and a delay.
 - **The policy** (`PalwImprovementPolicyV1`):
 
@@ -252,7 +268,7 @@ for most transitions.
 
 | State | Enters when | What happens | Leaves when |
 | --- | --- | --- | --- |
-| `Idle` | the line opts in; an epoch ends | the head's usage since the last epoch is counted (`PalwVersionUsageV1`) | a grid boundary finds usage ≥ `usage_threshold` → **OPEN_IMPROVEMENT_EPOCH** |
+| `Idle` | the line opts in; an epoch ends | the head's usage since the last epoch is counted in the line's improvement row (the head class's claims at `Final`, §3) | a grid boundary finds usage ≥ `usage_threshold` → **OPEN_IMPROVEMENT_EPOCH** |
 | `Open` | `t_open` | hard cases, registered datasets and teaching artifacts are admitted into the epoch's training material | `t_fix = t_open + w_collect` |
 | `Submission` | `t_fix`: **`dataset_root` is fixed** — the Merkle root over the material admitted in `Open`, published for trainers | candidates are submitted, with fees and bonds, up to `k_max` in acceptance order | `t_close = t_fix + w_submit` → **CLOSE_SUBMISSION**: the candidate set freezes; nothing is withdrawn after it |
 | `HoldOut` | `t_close` | only hard cases admitted from now on are eligible as evaluation items; setter sets must already be committed | `t_draw = t_close + w_holdout` |
@@ -507,9 +523,10 @@ of them may later become a specified adapter form.
 - **The draw.** At `Drawn`, R (RFC-0003, domain `CLASS_UNIFORM_V1`), keyed by the epoch seed — the
   beacon at the first block `d` DAA past `t_draw` — draws `n` items from the eligible pool.
 - **Bonded setter sets.** Stewards commit private items (prompt and key commitments) before `t_close`.
-  Prompts are disclosed at `Drawn`, when every candidate is already fixed. Keys and references are
-  disclosed only after every subject's outputs are final. A steward who does not reveal forfeits its bond,
-  and its items drop out for every subject alike.
+  Prompts are disclosed at `Drawn`, when every candidate is already fixed. The references of
+  teacher-forced items are disclosed at `Drawn` too, because a teacher-forced job reads its reference as
+  prefill. Keys of generated items are disclosed only after every subject's outputs are final. A steward
+  who does not reveal forfeits its bond, and its items drop out for every subject alike.
 - **Caps.** No submitter or steward supplies more than a fraction `κ` of an epoch's items (§15).
 
 ### 7.2 The evaluation job
@@ -529,18 +546,22 @@ PalwEvalJobV1 { line, epoch, item, subject: Parent | Candidate(class_id), mode, 
 - **The pipeline** is an RFC-0003 pipeline: a subject stage (the subject class, in `Generate` or
   `TeacherForced` mode) followed by TIR scoring stages. It commits one step tree (PALW-GEN-3) and a
   `score_root` over the committed score tensor (RFC-0003's output digest).
-- **Two additions to RFC-0003's pipeline format**, and nothing else:
+- **Three additions to RFC-0003's pipeline format**, and nothing else (landed as A7, `rfc4/eval`):
   - a `Decode` stage kind — the text profile inside a pipeline, with FP V4's commitments and Phase F's
     `TirDecodeToken*` arms;
-  - a `FinalizedOutput { claim, stage }` binding — an input bound to a final claim's committed output in
-    the same epoch, opened under its output root, so a pairwise stage can read the parent's and the
-    candidate's generations without running them again.
+  - a `FinalizedOutput { claim, stage }` binding (token source 5) — an input bound to a final claim's
+    committed output in the same epoch, opened under its output root, so a pairwise stage can read the
+    parent's and the candidate's generations without running them again;
+  - a `Key` token source (token source 4) — an exact-match key read as an input of the scoring stage,
+    bound to the item's committed key.
 - **Adjudication** is Phase F's arms and RFC-0003's pipeline rules, unchanged: `TirCone`, H dissection,
   `TirLogits`, `TirDecodeToken*`, `TirOutputDigestMismatch`.
 - **Claiming.** Evaluation jobs are claimed openly: the first valid claim per job in the accepting
   chain's order is the one, it is paid the job's evaluation fee at `Final`, and it counts against the
-  executor's claim capacity (§13). A subject's job unclaimed by `t_eval` scores as a failure for that
-  subject; if the parent's job is unclaimed, the item drops out for everyone.
+  executor's claim capacity (§13).
+- **Missing evaluations count for the incumbent** (amended 2026-09-29). An item missing a candidate's
+  evaluation is a loss for that candidate; an item missing the parent's evaluation is a win for the
+  parent against every candidate. Missing data can block a promotion and can never make one.
 - **Not the reward path.** Evaluation claims earn their fee and no quantum, ticket or eligibility.
 
 ### 7.3 Scoring stages
@@ -790,8 +811,8 @@ on any VM.
 | # | Work item | Where | Depends on | Engineer-weeks | With agents |
 | --- | --- | --- | --- | --- | --- |
 | A1 | Spec chapter 17; the vector plan (scoring programs, the sign-test table, epoch transitions) | `docs/spec/palw/17-model-improvement.md` | — | 3–4 | 1–2 days |
-| A2 | The line's improvement policy; IR versions naming class ids; protocol promotion; head history and rollback | `palw_model_lines_v1.rs` (`PalwModelLineV1.current`, `PalwModelVersionV1`), spec 15's objects | Phase F | 4–5 | 2–3 days |
-| A3 | The epoch state machine: `improvement_lines` and `improvement_epochs`, DAA-driven transitions, the usage trigger (`PalwVersionUsageV1`), `dataset_root`, the freeze, the draw (R and the beacon) | `palw_state_v2.rs` (fold, `state_root`), a new `palw_improve_epoch_v1.rs` | A2 | 6–8 | 3–4 days |
+| A2 | The line's improvement policy; the head as a class id in the improvement row (§3, amended); protocol promotion; head history and rollback; the developer's promotion refused on a governed line | `palw_state_v2.rs` (`improvement_lines`), spec 15's `ModelVersionPromoted` arm | Phase F | 4–5 | 2–3 days |
+| A3 | The epoch state machine: `improvement_lines` and `improvement_epochs`, DAA-driven transitions, the usage trigger (the head class's claims at `Final`), `dataset_root`, the freeze, the draw (R and the beacon) | `palw_state_v2.rs` (fold, `state_root`), a new `palw_improve_epoch_v1.rs` | A2 | 6–8 | 3–4 days |
 | A4 | Hard cases, setter sets, registered datasets, teaching artifacts, the data-use opt-in, `TeacherLicence` | appended `PalwConsensusObjectV2` variants; `palw_prompt_ids_v1.rs` for the prompt-hash check | A3 | 4–6 | 2–3 days |
 | A5 | Candidates and composite artifacts: `CandidateSubmitted`, the family rule, `PalwTirArtifactRefV1`, sub-root openings | `palw_tir_class_v1.rs`, `palw_tir_artifact_v1.rs`, `palw_tir_admission_v1.rs`, `palw_artifact.rs` | Phase F | 4–6 | 2–3 days |
 | A6 | The evaluation job family: derived contexts (as `palw_tir_attempt_v1`), job identity, open claiming, fees, capacity reservation, panels | `palw_tir_attempt_v1.rs`, `palw_job_identity.rs`, `palw_job_state.rs`, `palw_capacity_formulas_v1.rs` | A3; RFC-0003 steps 3–5 | 6–8 | 3–4 days |
@@ -830,8 +851,9 @@ Applies past `palw_improvement_v1`.
 - **PALW-MIP-3 (governed lines).** A line is governed only after its owner signs an improvement policy.
   A policy MUST change only between epochs, and opting out MUST take effect only after the current
   epoch and a delay.
-- **PALW-MIP-4 (IR versions).** A version of an IR line MUST name an IR class id. A governed line's head
-  is its current version, and it MUST move only by this chapter's promotion or rollback.
+- **PALW-MIP-4 (the head).** A governed line's head MUST be an IR class id, kept with its history in the
+  line's improvement row, and it MUST move only by this chapter's promotion or rollback. The protocol
+  MUST NOT write spec 15's version rows or `current`.
 - **PALW-MIP-5 (epochs).** A governed line MUST run at most one epoch at a time, advanced by the
   transitions of §4 at the DAA boundaries its policy fixes.
 - **PALW-MIP-6 (opening).** An epoch MUST open at the first grid boundary at which the head's usage since
@@ -842,8 +864,9 @@ Applies past `palw_improvement_v1`.
   admitted IR class of the parent's family, with its fees and bond. No candidate MAY be withdrawn after
   `t_close`.
 - **PALW-MIP-9 (the hold-out).** Evaluation items MUST be drawn by R under the epoch seed from the cases
-  admitted in `HoldOut` and from committed setter sets. Setter prompts MUST be disclosed only after
-  `t_close`, and keys only after every subject's outputs are final.
+  admitted in `HoldOut` and from committed setter sets. Setter prompts and teacher-forced references MUST
+  be disclosed only after `t_close`, and the keys of generated items only after every subject's outputs
+  are final. An item missing a subject's evaluation MUST count for the parent.
 - **PALW-MIP-10 (evaluation jobs).** Every item MUST be evaluated for the parent and every candidate by
   evaluation jobs whose contexts the chain derives, with one generation seed per item shared by every
   subject.
@@ -927,8 +950,10 @@ without the A-2 tolerance.
 
 ## Open questions
 
-1. **IR versions**: a version names a class id (recommended), or IR lines keep spec 15's roots-in-force
-   form with a different class identity.
+1. **IR versions** — *resolved 2026-09-29*: the head is a class id in the governed line's improvement row,
+   and spec 15's version rows are not written (§3). The first recommendation — a version naming a class
+   id — broke three live readers of spec 15 (the roots in force that attempt admission accepts, the parent
+   class's roots and share after a supersede, and free-prompt usage attribution).
 2. **PALW-PR-1's scope**: is protocol promotion by registered scoring programs acceptable (recommended),
    or must promotion move to the optional contracts?
 3. **The usage trigger**: claims or work leaves, and the threshold.
@@ -937,8 +962,8 @@ without the A-2 tolerance.
 5. **Continuous scores**: the sign of the paired difference (recommended), or a fixed-point paired LCB.
 6. **Claiming evaluation jobs**: open claiming (recommended), or assignment by R as a seat duty.
 7. **The evaluation budget**: its share of ADR-0160 capacity.
-8. **The `Decode` stage and the `FinalizedOutput` binding**: added to RFC-0003's pipeline format
-   (recommended), or defined here.
+8. **The `Decode` stage, the `FinalizedOutput` binding and the `Key` source** — *resolved*: added to
+   RFC-0003's pipeline format (A7, `rfc4/eval`).
 9. **Training as IR**: do the 25 primitives suffice for a future training profile (optimizer state,
    gradient accumulation, reductions, sampling by R, batching)?
 10. **Challenging a setter's key without a VM**: bonded human or judged challenges only, until Phase C.
