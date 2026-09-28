@@ -1,5 +1,5 @@
 //! **RFC-0003 activation step 4: the pipeline admission — the gate a generative class registration
-//! passes** (`ClassRegisteredGenV1`, tag 67), the registration builder, and the preflight a node asks
+//! passes** (`ClassRegisteredGenV1`, tag 68), the registration builder, and the preflight a node asks
 //! before it signs. The generative twin of Phase F's admission v10
 //! ([`crate::palw_tir_admission_v1::verify_class_admission_v10`]), asked of a pipeline, cheapest
 //! refusal first:
@@ -28,8 +28,11 @@
 //!    history is dissected** under the k-ary court — RFC-0002 F7 composed into the generative court:
 //!    F7's obligations (O-1…O-5), its value bound, its round and root-claim sizing and its window
 //!    asked of the stage's view verbatim, the terminal one `h_tile` chunk — and must fit the court
-//!    whole where the court is not armed (`GenNeedsDissection`). A dissected cone with a `TopK` is
-//!    refused by name until ref2's H7 (the TopK row of §10.3's box demand) lands in F7;
+//!    whole where the court is not armed (`GenNeedsDissection`). Everything is sized under the
+//!    block's box-demand rules (`Params::palw_tir_demand_rules_at`): below `palw_tir_fence2` the
+//!    DAA-2,000 release's, under which a dissected cone with a `TopK` is refused by name (its row
+//!    understates a tile that straddles TopK rows); past it ref2's H7 row, under which the value bound
+//!    `V` covers such a tile and the cone is admitted like any other;
 //! 4. the class id is `tir_pipeline_class_id_v1(class, artifact_root)`;
 //! 5. **weight: none.** No attempt lane exists for pipelines (Phase F decision 12's reading for
 //!    generative classes: `palw_gen_v1` opens registration, panels and the court), so a generative
@@ -54,7 +57,7 @@ use crate::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwPwuRuleV2};
 use crate::palw_tir_admission_v1::{PALW_TIR_CLOSE_FRAME_BYTES_V1, palw_tir_carriable_close_bytes_v1, palw_tir_prim_kernel_id_v1};
 use misaka_palw_tir::admit::{LeafV1, TirAdmitError, TirAdmitInputsV1, TirCeilingsV1};
-use misaka_palw_tir::admit_v2::{TirJobCeilingsV1, TirPipelineAdmissionV1, tir_admit_pipeline_staged_v1};
+use misaka_palw_tir::admit_v2::{TirJobCeilingsV1, TirPipelineAdmissionV1, tir_admit_pipeline_staged_with_rules_v1};
 use misaka_palw_tir::pipeline::{PipelineJob, TirPipelineV1, TripRule, stage_job_facts};
 use misaka_palw_tir::program_v2::TirProgramV2;
 
@@ -73,6 +76,9 @@ pub struct PalwGenAdmissionRulesV1 {
     pub court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
     /// `Params::palw_held_context` at the block: which clock the dissection's window is read on.
     pub held_armed: bool,
+    /// **The box-demand rules at the block** (spec 04b §10.3): the release's, or ref2's H7 `TopK` row
+    /// past `Params::palw_tir_fence2` — read by the stages' admission and the value bound `V`.
+    pub demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
 }
 
 impl PalwGenAdmissionRulesV1 {
@@ -81,7 +87,12 @@ impl PalwGenAdmissionRulesV1 {
     pub fn at(params: &crate::config::params::Params, daa_score: u64) -> Option<Self> {
         let fence = params.palw_gen_v1_fence().filter(|f| f.activation.is_active(daa_score))?;
         let tir = crate::palw_tir_admission_v1::PalwTirAdmissionRulesV1::at(params, daa_score);
-        Some(Self { fence, court: tir.and_then(|r| r.court), held_armed: tir.is_some_and(|r| r.held.armed) })
+        Some(Self {
+            fence,
+            court: tir.and_then(|r| r.court),
+            held_armed: tir.is_some_and(|r| r.held.armed),
+            demand: params.palw_tir_demand_rules_at(daa_score),
+        })
     }
 }
 
@@ -136,6 +147,7 @@ fn admit_at_tiles(
     class: &PalwGenClassV1,
     ceilings: &crate::palw_gen_v1::PalwGenProfileCeilingsV1,
     tiles: &[u32],
+    demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
 ) -> Result<TirPipelineAdmissionV1, PalwClassAdmissionError> {
     let stage_inputs: Vec<TirAdmitInputsV1> = class
         .layouts
@@ -164,7 +176,7 @@ fn admit_at_tiles(
         max_job_step_leaves: u64::MAX,
         max_job_cone_work: ceilings.max_job_cone_work,
     };
-    tir_admit_pipeline_staged_v1(&class.pipeline, &class.programs, &stage_inputs, &open).map_err(|e| match e {
+    tir_admit_pipeline_staged_with_rules_v1(&class.pipeline, &class.programs, &stage_inputs, &open, demand).map_err(|e| match e {
         TirAdmitError::Program(e) => PalwClassAdmissionError::GenClass(e.to_string()),
         TirAdmitError::Exceeds { limit, at, value, cap } => PalwClassAdmissionError::TirExceeds { limit, at, value, cap },
         TirAdmitError::Inputs(why) => PalwClassAdmissionError::GenClass(why.into()),
@@ -255,7 +267,7 @@ pub fn verify_gen_class_admission_v1(
     let mut runs = Vec::with_capacity(runs_needed);
     for r in 0..runs_needed {
         let tiles: Vec<u32> = distinct.iter().map(|d| *d.get(r).or(d.last()).unwrap_or(&1)).collect();
-        runs.push(admit_at_tiles(class, ceilings, &tiles)?);
+        runs.push(admit_at_tiles(class, ceilings, &tiles, rules.demand)?);
     }
     let limits = crate::palw_court_v2::palw_tir_court_limits_v1(&bundle.court);
     let work_limit = limits.max_elements.min(limits.max_terms);
@@ -304,20 +316,27 @@ pub fn verify_gen_class_admission_v1(
                                 node: ni as u16,
                                 why,
                             };
-                            // ref2's H7 (pending in F7): §10.3's TopK row undercounts a tile that
-                            // straddles TopK rows, so `V` can fall below the claim an honest
-                            // responder must post. Until the row is fixed a dissected cone with a
-                            // TopK is refused, never admitted under a bound it can exceed.
+                            // ref2's H7: below `palw_tir_fence2` §10.3's TopK row undercounts a tile
+                            // that straddles TopK rows, so `V` can fall below the claim an honest
+                            // responder must post — a dissected cone with a TopK is refused there,
+                            // never admitted under a bound it can exceed. Past it the row is H7's
+                            // and `V` covers the tile.
                             let vblock = &view.program.blocks[bi];
-                            if cone.nodes.iter().any(|n| matches!(vblock.nodes[*n as usize].prim, misaka_palw_tir::Prim::TopK { .. }))
+                            if rules.demand == crate::palw_tir_fence2_v1::PalwTirDemandRulesV1::Release2000
+                                && cone
+                                    .nodes
+                                    .iter()
+                                    .any(|n| matches!(vblock.nodes[*n as usize].prim, misaka_palw_tir::Prim::TopK { .. }))
                             {
                                 return Err(gen_refused(
-                                    "a TopK in a dissected cone: the value bound undercounts its tiles (ref2's H7, pending)".into(),
+                                    "a TopK in a dissected cone: below palw_tir_fence2 the value bound undercounts its tiles (ref2's H7)"
+                                        .into(),
                                 ));
                             }
                             crate::palw_tir_admission_v1::palw_tir_dissected_cone_admits_parts_v1(
                                 bundle,
                                 rules.held_armed,
+                                rules.demand,
                                 &view.program,
                                 vblock,
                                 bi as u8,
@@ -325,13 +344,34 @@ pub fn verify_gen_class_admission_v1(
                                 tile_len,
                                 layout.max_context as u64,
                                 layout.h_tile,
-                                cone,
                                 k,
                             )
                             .map_err(|e| match e {
                                 PalwClassAdmissionError::TirDissection { why, .. } => gen_refused(why),
                                 other => other,
                             })?;
+                            // The root claim rides one carrier: the close frame, the chunk's opened
+                            // evidence, the claimed values and the move's frame (a NECESSARY
+                            // condition; the finalize's carriage is recorded exactly when built).
+                            let values = crate::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v2(
+                                &view.program,
+                                vblock,
+                                ni as u16,
+                                tile_len,
+                                rules.demand,
+                            );
+                            let root = PALW_TIR_CLOSE_FRAME_BYTES_V1
+                                .saturating_add(cone.terminal_opened_bytes())
+                                .saturating_add(values.saturating_mul(20))
+                                .saturating_add(crate::palw_tir_admission_v1::PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1);
+                            if root > crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1 {
+                                return Err(PalwClassAdmissionError::TirExceeds {
+                                    limit: "generative dissection root claim bytes",
+                                    at: format!("stage {s} block {bi} node {ni}"),
+                                    value: root,
+                                    cap: crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1,
+                                });
+                            }
                         }
                     }
                 }

@@ -1409,6 +1409,7 @@ pub fn palw_held_pursuit_seeds_v1(state: &PalwChainStateV2, mine: &[PalwBondKeyV
                 free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
                 fused_class: true,
                 dissection: None,
+                tir_dissection: None,
                 panel_seat_count: state.panel(claim_id).map(|panel| panel.seats.len() as u16).unwrap_or(0),
             },
             record: record.clone(),
@@ -1485,6 +1486,11 @@ pub struct PalwCourtDutyV2 {
     /// dispute, the root's `(m*, S*)`, the children awaiting the challenger's index — everything a
     /// party's next move is computed against, read off the chain rather than remembered.
     pub dissection: Option<crate::palw_attn_court_v1::PalwAttnDissectPhaseV1>,
+    /// **An IR class's history dissection phase, once a root claim opened one** (RFC-0002 F7): the
+    /// row of `tir_dissections` beside the session (`PalwChainStateV2::tir_dissection_v1`) — the range
+    /// under dispute, the root's totals, the children awaiting the challenger's index — read off the
+    /// chain as `dissection` is, so a party's next IR move is computed against it. A view field only.
+    pub tir_dissection: Option<Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
     /// ADR-0133 S1: seats on this claim's bound panel, so a close resumes the accused V2 segment
     /// from its published checkpoint rather than from genesis. Zero when no panel is bound yet
     /// (the bisection still runs; segment resume is then unavailable).
@@ -1543,6 +1549,7 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
             free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
             fused_class: crate::palw_state_v2::court_session_class_is_fused_v2(state, session),
             dissection: session.dissection.clone(),
+            tir_dissection: state.tir_dissection_v1(session_id).map(|phase| Box::new(phase.clone())),
             panel_seat_count: state.panel(&session.claim).map(|panel| panel.seats.len() as u16).unwrap_or(0),
         });
     }

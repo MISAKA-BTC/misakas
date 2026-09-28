@@ -159,3 +159,118 @@ fn a_dissected_class_owes_its_terminal_move() {
     assert!(!row.dissected.is_empty());
     assert!(chain.s.class(&class_id).expect("the class").fused_attention, "it owes a root claim at a dissected leaf");
 }
+
+/// ref2's H7 shape (`tests/palw_tir_h7.rs`) as a one-stage text class: the scores `Qᵀ · K` over a
+/// 16-row window, then `TopK { axis 0, k 4 }` of them, committed in tiles of 4 lanes — a dissected
+/// cone with a `TopK`.
+fn topk_class() -> PalwGenClassV1 {
+    use misaka_palw_tir::builder::ProgramBuilder;
+    use misaka_palw_tir::pipeline::{StageDecl, TIR_PIPELINE_VERSION_V1, TripRule};
+    use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+    use misaka_palw_tir::program_v2::OutputDecl;
+    use misaka_palw_tir::{DType, Ref, TensorType};
+    let mut pb = ProgramBuilder::new(8, HISTORY_BOUND_V1_SMALL);
+    let embed = pb.param("embed", DType::I8, &[8, 7], false);
+    let head = pb.param("head", DType::I8, &[8, 7], false);
+    let ks = pb.hist_state("k", DType::I32, &[3], 16, true);
+    let qs = pb.hist_state("q", DType::I32, &[4], 16, true);
+    let carry = vec![TensorType::fixed(DType::I32, &[7])];
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let x = b.gather(embed, Ref::Input(0), 0, 0);
+        let x = b.cast(x, DType::I32);
+        b.finish(&[x])
+    };
+    let layer = {
+        let mut b = pb.block("layer", carry.clone());
+        let rk = b.slice(Ref::CarryIn(0), 0, 0, 3);
+        let rk = b.clamp(rk, -127, 127, DType::I32);
+        let k = b.hist_append(ks, rk);
+        let rq = b.slice(Ref::CarryIn(0), 0, 3, 4);
+        let rq = b.clamp(rq, -127, 127, DType::I32);
+        let q = b.hist_append(qs, rq);
+        let qt = b.transpose(q, &[1, 0]);
+        let s = b.matmul(qt, k, DType::I64);
+        let s = b.clamp(s, i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.topk(s, 0, 4);
+        let y = b.cast(Ref::CarryIn(0), DType::I32);
+        b.finish(&[y])
+    };
+    let (post, logits) = {
+        let mut b = pb.block("post", carry);
+        let x = b.reshape_fixed(Ref::CarryIn(0), &[7, 1]);
+        let l = b.matmul(head, x, DType::I64);
+        let l = b.clamp(l, i32::MIN as i64, i32::MAX as i64, DType::I32);
+        let l = b.reshape_fixed(l, &[8]);
+        let l = b.commit(l);
+        let Ref::Node(i) = l else { unreachable!() };
+        (b.finish(&[]), i)
+    };
+    let v1 = pb.finish(pre, vec![layer], post, logits);
+    let program = TirProgramV2::from_v1_lifting_params(&v1, &[], OutputDecl::Logits { node: logits, scheme_id: v1.logits_scheme_id })
+        .expect("a text program");
+    let pipeline = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![StageDecl {
+            name: "lm".into(),
+            program: 0,
+            trip: TripRule::TextStream,
+            max_trip: 16,
+            tokens: None,
+            bind: vec![],
+        }],
+        output_stage: 0,
+    };
+    let commits = program.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum::<usize>();
+    PalwGenClassV1 {
+        version: PALW_GEN_CLASS_VERSION_V1,
+        profile: PalwGenProfileV1::Text as u8,
+        pipeline: pipeline.encode(),
+        programs: vec![program.encode()],
+        layouts: vec![PalwTirLayoutV1 {
+            version: PALW_TIR_LAYOUT_VERSION_V1,
+            max_context: 16,
+            checkpoint_interval: 4,
+            h_tile: 16,
+            commit_tiles: vec![4; commits],
+            state_tiles: vec![4; program.states.len()],
+        }],
+        output: OutputSpecV1::tokens(16),
+        offers: PalwGenOffersV1 {
+            steps: vec![],
+            scalars: vec![],
+            max_prompt_tokens: 8,
+            max_negative_tokens: 0,
+            images: vec![],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
+        },
+        tokenizer_id: Hash64::from_bytes([0x74; 64]),
+    }
+}
+
+/// **A `TopK` in a dissected cone** (ref2's H7): below `palw_tir_fence2` the release's box-demand row
+/// understates the tile, so the class is refused by name; past it the block's rules are H7's, the
+/// value bound covers the tile, and the class is admitted with the TopK's cone dissected.
+#[test]
+fn a_topk_in_a_dissected_cone_is_refused_below_the_second_ir_fence_and_sized_by_h7_past_it() {
+    use kaspa_consensus_core::palw_tir_fence2_v1::PalwTirDemandRulesV1;
+    let below = armed();
+    let object = register(topk_class());
+    let rules = PalwGenAdmissionRulesV1::at(&below, AT).unwrap();
+    assert_eq!(rules.demand, PalwTirDemandRulesV1::Release2000);
+    let refused = verify_gen_class_admission_v1(&bundle(&below), &rules, &object).err().expect("refused below the fence");
+    assert!(
+        matches!(&refused, PalwClassAdmissionError::GenDissection { why, .. } if why.contains("TopK")),
+        "the release's row: {refused:?}"
+    );
+    let mut past = armed();
+    past.palw_tir_fence2 = Some(ForkActivation::new(AT));
+    past.sync_palw_tir_fence2();
+    past.validate_palw_v2().unwrap_or_else(|e| panic!("the second IR fence at {AT}: {e}"));
+    let rules = PalwGenAdmissionRulesV1::at(&past, AT).unwrap();
+    assert_eq!(rules.demand, PalwTirDemandRulesV1::H7);
+    let admitted = verify_gen_class_admission_v1(&bundle(&past), &rules, &object).unwrap_or_else(|e| panic!("past the fence: {e}"));
+    assert!(!admitted.record.dissected.is_empty(), "the TopK's cone is admitted dissected");
+}

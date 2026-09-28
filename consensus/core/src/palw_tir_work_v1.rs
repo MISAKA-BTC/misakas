@@ -79,6 +79,16 @@ impl Affine {
     fn add(self, o: Affine) -> Affine {
         Affine { c0: self.c0.saturating_add(o.c0), c1: self.c1.saturating_add(o.c1) }
     }
+
+    fn sub(self, o: Affine) -> Affine {
+        Affine { c0: self.c0.saturating_sub(o.c0), c1: self.c1.saturating_sub(o.c1) }
+    }
+
+    /// Coefficient-wise maximum: `A + B − max(A, B)` is the coefficient-wise minimum, an affine form
+    /// never above `min(A(H), B(H))` at any `H`.
+    fn max(self, o: Affine) -> Affine {
+        Affine { c0: self.c0.max(o.c0), c1: self.c1.max(o.c1) }
+    }
 }
 
 /// One block's work, per dimension and per traffic term, affine in `H`.
@@ -88,6 +98,75 @@ struct BlockWorkV1 {
     weight_bytes: Affine,
     kv_read: Affine,
     kv_write: Affine,
+}
+
+impl BlockWorkV1 {
+    fn zip(self, o: BlockWorkV1, f: impl Fn(Affine, Affine) -> Affine) -> BlockWorkV1 {
+        let mut kinds = [Affine::default(); KINDS];
+        for (k, slot) in kinds.iter_mut().enumerate() {
+            *slot = f(self.kinds[k], o.kinds[k]);
+        }
+        BlockWorkV1 {
+            kinds,
+            weight_bytes: f(self.weight_bytes, o.weight_bytes),
+            kv_read: f(self.kv_read, o.kv_read),
+            kv_write: f(self.kv_write, o.kv_write),
+        }
+    }
+
+    fn add(self, o: BlockWorkV1) -> BlockWorkV1 {
+        self.zip(o, Affine::add)
+    }
+
+    fn sub(self, o: BlockWorkV1) -> BlockWorkV1 {
+        self.zip(o, Affine::sub)
+    }
+
+    fn max(self, o: BlockWorkV1) -> BlockWorkV1 {
+        self.zip(o, Affine::max)
+    }
+}
+
+/// **The `Select` arm-only regions of a block** (the second IR fence's work credit): for each
+/// `Select` `s`, in ascending node order, and each arm `k ∈ {1, 2}` (its value operands), the nodes
+/// whose every use reaches the rest of the block only through `s`'s operand `k` — `E(s, k)`. A node is
+/// in `E(s, k)` iff it is not a sink (a commit point, which a court checks whole, carry-outs and the
+/// logits included; a `StateWrite`; a `HistAppend`), it has a use, and every use is `s` at operand `k`
+/// or a node already in `E(s, k)`. So a node that `s`'s condition, its other arm, or anything outside
+/// the arm reads is outside it, and a region holds no committed or state-writing node: exactly the
+/// work a backend may skip where the condition does not choose the arm, and no court would notice.
+pub fn palw_tir_select_arm_regions_v1(block: &Block) -> Vec<(usize, [Vec<usize>; 2])> {
+    let n = block.nodes.len();
+    let mut uses: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
+    for (i, node) in block.nodes.iter().enumerate() {
+        for (slot, r) in node.inputs.iter().enumerate() {
+            if let Ref::Node(j) = r {
+                uses[*j as usize].push((i, slot));
+            }
+        }
+    }
+    let sink = |i: usize| {
+        let node = &block.nodes[i];
+        node.commit || matches!(node.prim, Prim::StateWrite { .. } | Prim::HistAppend { .. })
+    };
+    let mut out = Vec::new();
+    for (s, node) in block.nodes.iter().enumerate() {
+        if !matches!(node.prim, Prim::Select) || node.inputs.len() != 3 {
+            continue;
+        }
+        let mut arms: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+        for (a, slot) in [1usize, 2].into_iter().enumerate() {
+            let mut member = vec![false; n];
+            for m in (0..s).rev() {
+                member[m] = !sink(m)
+                    && !uses[m].is_empty()
+                    && uses[m].iter().all(|(c, k)| (*c == s && *k == slot) || (*c < s && member[*c]));
+            }
+            arms[a] = (0..s).filter(|m| member[*m]).collect();
+        }
+        out.push((s, arms));
+    }
+    out
 }
 
 /// **An IR class's work, per block and affine in `H`** — derived once per program, summed per job.
@@ -348,12 +427,24 @@ pub fn palw_tir_node_work_v1(p: &TirProgramV1, block: usize, node: usize, kind: 
 
 /// **An IR program's work shape**: every node classified and priced, affine in `H`, summed per block.
 pub fn palw_tir_work_shape_v1(p: &TirProgramV1) -> Result<PalwTirWorkShapeV1, PalwTirWorkError> {
+    palw_tir_work_shape_with_v1(p, false)
+}
+
+/// [`palw_tir_work_shape_v1`], with `min_select_arms` the second IR fence's credit
+/// (`Params::palw_tir_fence2`): each `Select`'s arm-only regions ([`palw_tir_select_arm_regions_v1`])
+/// are credited at the coefficient-wise minimum of the two arms — the least any execution does, as it
+/// computes one arm per element — instead of both. Nested `Select`s are credited first (ascending
+/// node order), so an outer arm's size is its credited size: with `w(n)` a node's work and
+/// `A_s = Σ_{n ∈ E(s,1)} w(n) − Σ_{Select s' ∈ E(s,1)} δ(s')` (`B_s` likewise), the discount is
+/// `δ(s) = max(A_s, B_s)` coefficient-wise and the block is credited `Σ_n w(n) − Σ_s δ(s)`.
+pub fn palw_tir_work_shape_with_v1(p: &TirProgramV1, min_select_arms: bool) -> Result<PalwTirWorkShapeV1, PalwTirWorkError> {
     let info = misaka_palw_tir::validate::validate(p).map_err(|e| PalwTirWorkError::Program(e.to_string()))?;
     let mut blocks = Vec::with_capacity(p.blocks.len());
     for bi in 0..p.blocks.len() {
         let kinds = palw_tir_work_kinds_v1(p, bi);
         let windowed = info.blocks[bi].window.is_some();
         let mut w = BlockWorkV1::default();
+        let mut per_node: Vec<BlockWorkV1> = Vec::with_capacity(kinds.len());
         for (ni, &kind) in kinds.iter().enumerate() {
             let sample = |h: u64| palw_tir_node_work_v1(p, bi, ni, kind, h);
             let affine: [Affine; 4] = if windowed {
@@ -371,10 +462,29 @@ pub fn palw_tir_work_shape_v1(p: &TirProgramV1) -> Result<PalwTirWorkShapeV1, Pa
             } else {
                 sample(1).map(|v| Affine { c0: v, c1: 0 })
             };
-            w.kinds[kind.index()] = w.kinds[kind.index()].add(affine[0]);
-            w.weight_bytes = w.weight_bytes.add(affine[1]);
-            w.kv_read = w.kv_read.add(affine[2]);
-            w.kv_write = w.kv_write.add(affine[3]);
+            let mut node = BlockWorkV1::default();
+            node.kinds[kind.index()] = affine[0];
+            node.weight_bytes = affine[1];
+            node.kv_read = affine[2];
+            node.kv_write = affine[3];
+            w = w.add(node);
+            per_node.push(node);
+        }
+        if min_select_arms {
+            let block = &p.blocks[bi];
+            let mut discount: Vec<Option<BlockWorkV1>> = vec![None; block.nodes.len()];
+            for (s, arms) in palw_tir_select_arm_regions_v1(block) {
+                let credited = |region: &[usize]| {
+                    region.iter().fold(BlockWorkV1::default(), |acc, m| {
+                        let inner = discount[*m].unwrap_or_default();
+                        acc.add(per_node[*m]).sub(inner)
+                    })
+                };
+                let (a, b) = (credited(&arms[0]), credited(&arms[1]));
+                let d = a.max(b);
+                discount[s] = Some(d);
+                w = w.sub(d);
+            }
         }
         blocks.push(w);
     }
@@ -488,7 +598,17 @@ pub fn palw_tir_model_work_v1(
     p: &TirProgramV1,
     canonical: &crate::palw_v2::PalwJobContextV2,
 ) -> Result<crate::palw_model_registry_v1::PalwModelWorkV1, PalwTirWorkError> {
-    let shape = palw_tir_work_shape_v1(p)?;
+    palw_tir_model_work_v2(p, canonical, false)
+}
+
+/// [`palw_tir_model_work_v1`] with the second IR fence's `Select`-arm credit when `min_select_arms`
+/// ([`palw_tir_work_shape_with_v1`]) — what a registration past `Params::palw_tir_fence2` records.
+pub fn palw_tir_model_work_v2(
+    p: &TirProgramV1,
+    canonical: &crate::palw_v2::PalwJobContextV2,
+    min_select_arms: bool,
+) -> Result<crate::palw_model_registry_v1::PalwModelWorkV1, PalwTirWorkError> {
+    let shape = palw_tir_work_shape_with_v1(p, min_select_arms)?;
     let job = PalwCanonicalExecutionFactsV1::uncached(canonical.declared_prefill_tokens, canonical.exact_decode_tokens);
     let verification = shape.work_v1(&job)?.provisional_scalar_v1();
     let draw = shape.work_v1(&PalwCanonicalExecutionFactsV1::of_attempt(canonical, true))?.provisional_scalar_v1();

@@ -98,6 +98,10 @@ pub const PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/da-disclo
 pub enum PalwDaUnitV1 {
     Event { row: u32, tile: u8 },
     Held(PalwHeldMissingV1),
+    /// **One committed step leaf of an IR claim** (past `Params::palw_tir_fence2`; appended, so no
+    /// earlier tag moves): its preimage and opening, with the claim's ids (and a logits tile's row
+    /// pin) — [`crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1`].
+    TirStepLeaf { index: u64 },
 }
 
 impl PalwDaUnitV1 {
@@ -179,6 +183,9 @@ pub enum PalwDaAnswerV1 {
     /// payload an older build cannot decode (A-2), so this build drops it by name below
     /// `palw_tir_v1` and the fold refuses it there as the second lock.
     TirEvent(Box<crate::palw_tir_court_v1::PalwTirTraceEventDisclosureV1>),
+    /// **The second IR fence: one committed step leaf of an IR claim** (appended), answering a
+    /// `TirStepLeaf { index }` unit. Dropped by name below `palw_tir_fence2`.
+    TirStepLeaf(Box<crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1>),
 }
 
 impl PalwDaAnswerV1 {
@@ -188,7 +195,7 @@ impl PalwDaAnswerV1 {
         match self {
             Self::Event(disclosure) => Some(disclosure.binding()),
             Self::Held(carriage) => Some(&carriage.binding),
-            Self::TirEvent(_) => None,
+            Self::TirEvent(_) | Self::TirStepLeaf(_) => None,
         }
     }
 
@@ -196,13 +203,19 @@ impl PalwDaAnswerV1 {
     pub fn tir_binding(&self) -> Option<&crate::palw_tir_step_v1::PalwTirStepBindingV1> {
         match self {
             Self::TirEvent(disclosure) => Some(disclosure.binding()),
+            Self::TirStepLeaf(disclosure) => Some(&disclosure.binding),
             _ => None,
         }
     }
 
     /// Is this an IR class's answer (RFC-0002 Phase F)? A move only past `palw_tir_v1`.
     pub fn is_tir_v1(&self) -> bool {
-        matches!(self, Self::TirEvent(_))
+        matches!(self, Self::TirEvent(_) | Self::TirStepLeaf(_))
+    }
+
+    /// Is this the second IR fence's answer? A move only past `palw_tir_fence2`.
+    pub fn is_tir_fence2_v1(&self) -> bool {
+        matches!(self, Self::TirStepLeaf(_))
     }
 }
 
@@ -320,6 +333,8 @@ pub enum PalwDaDrawSpaceV1<'a> {
     /// `(checkpoint, chunk)`: a checkpoint uniform in `[0, checkpoints)`, then a chunk uniform in the
     /// chunks that checkpoint holds (`chunks_of`, from the binding).
     StateChunks { checkpoints: u32, chunks_of: &'a dyn Fn(u32) -> Option<u64> },
+    /// The second IR fence: an IR claim's committed step leaves `[0, leaves)`.
+    TirStepLeaves { leaves: u64 },
 }
 
 impl PalwDaDrawSpaceV1<'_> {
@@ -342,6 +357,9 @@ impl PalwDaDrawSpaceV1<'_> {
                 (0..*leaves).map(|first| PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first, count: 1 })).collect()
             }),
             Self::StateChunks { .. } => None,
+            Self::TirStepLeaves { leaves } => {
+                (*leaves <= limit).then(|| (0..*leaves).map(|index| PalwDaUnitV1::TirStepLeaf { index }).collect())
+            }
         }
     }
 
@@ -371,6 +389,7 @@ impl PalwDaDrawSpaceV1<'_> {
                 let chunk = scaled(draw_word(seed, 1, counter), chunks.min(1 << 32)) as u32;
                 Some(PalwDaUnitV1::Held(PalwHeldMissingV1::StateChunk { checkpoint, chunk }))
             }
+            Self::TirStepLeaves { leaves } => (*leaves > 0).then(|| PalwDaUnitV1::TirStepLeaf { index: scaled(word, *leaves) }),
         }
     }
 }
@@ -553,6 +572,14 @@ pub fn palw_da_answer_form_v1(claim: &Hash64, unit: &PalwDaUnitV1, answer: &Palw
                 Err("an IR answer's binding carries no program: the chain holds the registered class's")
             }
         }
+        // The second IR fence: a step leaf's binding carries no program either.
+        (PalwDaUnitV1::TirStepLeaf { .. }, PalwDaAnswerV1::TirStepLeaf(disclosure)) => {
+            if disclosure.binding.class.program.is_empty() {
+                Ok(())
+            } else {
+                Err("an IR answer's binding carries no program: the chain holds the registered class's")
+            }
+        }
         (PalwDaUnitV1::Held(missing), PalwDaAnswerV1::Held(carriage)) => {
             if carriage.version != crate::palw_held_da_v1::PALW_HELD_DA_VERSION_V1 {
                 Err("the carriage is not version 1")
@@ -564,7 +591,7 @@ pub fn palw_da_answer_form_v1(claim: &Hash64, unit: &PalwDaUnitV1, answer: &Palw
                 Ok(())
             }
         }
-        _ => Err("an event unit is answered by an event disclosure, a held unit by a held carriage"),
+        _ => Err("an event unit is answered by an event disclosure, a held unit by a held carriage, a step leaf by its disclosure"),
     }
 }
 
@@ -859,6 +886,65 @@ pub const PALW_DA_RCORE_ALL_DOMAINS: &[&[u8]] = &[
     PALW_DA_DISCLOSURE_V4_DOMAIN,
     PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT,
 ];
+
+
+// ---------------------------------------------------------------------------------------------
+// The second IR fence: a DA demand for one committed step leaf of an IR claim (evidence transport C)
+// ---------------------------------------------------------------------------------------------
+
+/// The accuser's ML-DSA-87 context for [`PalwTirLeafAccusationV1`].
+pub const PALW_TIR_LEAF_ACCUSATION_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/tir/da-leaf-accusation/mldsa87/v1";
+/// The accusation message's own domain.
+pub const PALW_TIR_LEAF_ACCUSATION_DOMAIN_V1: &[u8] = b"misaka-palw/tir/da-leaf-accusation/message/v1";
+
+/// **A data-availability demand for one committed step leaf of an IR claim** (the second IR fence's
+/// `DefaultAccusedTirLeaf`): the claim, the leaf, and the claim's IR binding — its program EMPTY, the
+/// chain holds the class's — which bounds the leaf (`index < step_leaf_count`) and pins the
+/// execution; signed by the accuser's bond over [`palw_tir_leaf_accusation_message_v1`].
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTirLeafAccusationV1 {
+    pub claim: Hash64,
+    pub index: u64,
+    pub binding: crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    pub accuser: PalwBondKeyV2,
+    pub signature: Vec<u8>,
+}
+
+/// **What an IR leaf accusation is signed over**: `H(domain ‖ network ‖ claim ‖ index ‖ accuser)`.
+/// The binding is not in it — the fold holds it to the claim's own roots — and a replay of an
+/// answered demand opens nothing (the M3 review's F3 rule).
+pub fn palw_tir_leaf_accusation_message_v1(network_domain: Hash64, claim: &Hash64, index: u64, accuser: &PalwBondKeyV2) -> Hash64 {
+    let mut h = keyed(PALW_TIR_LEAF_ACCUSATION_DOMAIN_V1);
+    h.update(network_domain.as_byte_slice());
+    h.update(claim.as_byte_slice());
+    h.update(&index.to_le_bytes());
+    h.update(&borsh::to_vec(accuser).expect("a bond key serializes"));
+    finish(h)
+}
+
+/// **The ONE builder of a `DefaultAccusedTirLeaf`** — what a seat files once its replay parts from
+/// the claim at leaf `index` and the producer has not served the leaf: the binding with its program
+/// stripped, signed by `sign(message, context)` with the accuser's key, held to the ride rule.
+pub fn palw_tir_leaf_accusation_object_v1(
+    network_domain: &Hash64,
+    claim: Hash64,
+    index: u64,
+    binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    accuser: PalwBondKeyV2,
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<crate::palw_state_v2::PalwConsensusObjectV2, PalwDaAccusationBuildErrorV1> {
+    let message = palw_tir_leaf_accusation_message_v1(*network_domain, &claim, index, &accuser);
+    let signature = sign(message.as_byte_slice(), PALW_TIR_LEAF_ACCUSATION_MLDSA87_CONTEXT_V1)
+        .filter(|signature| !signature.is_empty())
+        .ok_or(PalwDaAccusationBuildErrorV1::Unsigned)?;
+    let mut binding = binding.clone();
+    crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut binding);
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::DefaultAccusedTirLeaf {
+        accusation: Box::new(PalwTirLeafAccusationV1 { claim, index, binding, accuser, signature }),
+    };
+    crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(PalwDaAccusationBuildErrorV1::CannotRide)?;
+    Ok(object)
+}
 
 #[cfg(test)]
 mod tests {

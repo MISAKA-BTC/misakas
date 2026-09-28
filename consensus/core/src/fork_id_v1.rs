@@ -728,6 +728,7 @@ mod tests {
             "palw_gen_v1" => params.palw_gen_v1 = Some(crate::palw_gen_v1::PalwGenFenceV1::drill_v1(at)),
             // FP Job V5 (RFC-0003 §II.2.1): a bare height.
             "palw_fp_job_v5" => params.palw_fp_job_v5 = Some(at),
+            "palw_tir_fence2" => params.palw_tir_fence2 = Some(at),
             "palw_canonical_work" => params.palw_canonical_work = Some(at),
             "palw_admission_independence" => params.palw_admission_independence = Some(at),
             "palw_seat_gate_possession" => params.palw_seat_gate_possession = Some(at),

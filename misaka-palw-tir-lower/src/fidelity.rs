@@ -417,6 +417,107 @@ pub fn site_errors(
     Ok(out)
 }
 
+/// **Per-site errors by position window** — the drift's diagnosis. The traced float session and
+/// the typed backend run one sequence position by position (the backend hands its committed values
+/// to a sink); a site's error in a window is `‖int − float‖ / ‖float‖` over the window's
+/// positions. Returns `(site, error per window)`, in site order. Holds one position of either side
+/// at a time, so a 4,096-position run needs only the two models.
+#[allow(clippy::too_many_arguments)]
+pub fn site_errors_windows(
+    prep: &Prepared,
+    params_f: &crate::float_ref::ParamStore,
+    stats: &BTreeMap<String, SiteStat>,
+    policy: &crate::quant::QuantPolicy,
+    mat: &crate::lower::Materialised,
+    seq: &[usize],
+    windows: &[(usize, usize)],
+    progress: &dyn Fn(usize),
+) -> Result<Vec<(String, Vec<f64>)>> {
+    use crate::lower::{FillCtx, IntData};
+    use misaka_palw_tir_exec::{NodeValue, ParamData, StepSink, TirExecutor, TirParams, TirPlan};
+    use std::borrow::Cow;
+    struct Grab<'s> {
+        want: &'s BTreeMap<(u8, u16), (String, crate::lower::ScaleKey, usize)>,
+        got: Vec<(u8, Option<u16>, u16, Vec<i128>)>,
+    }
+    impl StepSink for Grab<'_> {
+        fn node(&mut self, v: &NodeValue<'_>) {
+            if v.commit && self.want.contains_key(&(v.block, v.node)) {
+                self.got.push((v.block, v.layer, v.node, v.data.to_i128s()));
+            }
+        }
+    }
+    let hl = &prep.hl;
+    let lw = &prep.lowered;
+    let program = &lw.program;
+    let fail = |e: tir::TirError| LowerError::eval(format!("typed backend: {e}"));
+    let plan = TirPlan::compile(program).map_err(fail)?;
+    let mut xp = TirParams::new(&plan);
+    for ((j, layer), t) in &mat.params.tensors {
+        let data = match &t.data {
+            IntData::I8(v) => ParamData::I8(Cow::Borrowed(v)),
+            IntData::I16(v) => ParamData::I16(Cow::Borrowed(v)),
+            IntData::I32(v) => ParamData::I32(Cow::Borrowed(v)),
+            IntData::I64(v) => ParamData::I64(Cow::Borrowed(v)),
+            IntData::Idx(v) => ParamData::Idx(Cow::Borrowed(v)),
+        };
+        xp.insert(&plan, *j, *layer, data).map_err(fail)?;
+    }
+    let mut exec = TirExecutor::new(&plan, &xp).map_err(fail)?;
+    let mut sess = crate::float_ref::Session::new(hl, params_f).with_trace();
+    let empty = crate::float_ref::ParamStore::default();
+    // (site) → per window (Σ(a−b)², Σb²); scales cached per (block, layer, node).
+    let mut acc: BTreeMap<String, Vec<(f64, f64)>> = BTreeMap::new();
+    let mut scales: BTreeMap<(u8, Option<u16>, u16), Vec<f64>> = BTreeMap::new();
+    let last = windows.iter().map(|w| w.1).max().unwrap_or(0).min(seq.len());
+    for (p, t) in seq[..last].iter().enumerate() {
+        sess.step(*t)?;
+        let mut grab = Grab { want: &lw.site_nodes, got: Vec::new() };
+        exec.step(*t as u32, &mut grab).map_err(|e| LowerError::eval(format!("position {p}: {e}")))?;
+        progress(p);
+        let inside: Vec<usize> = windows.iter().enumerate().filter(|(_, w)| p >= w.0 && p < w.1).map(|(i, _)| i).collect();
+        if inside.is_empty() {
+            continue;
+        }
+        let tr = sess.trace.as_ref().ok_or_else(|| LowerError::eval("internal: no trace"))?;
+        for (block, layer, node, vals) in grab.got {
+            let Some((site, key, len)) = lw.site_nodes.get(&(block, node)) else { continue };
+            let prefix = if block == program.schedule.pre {
+                "pre.".to_string()
+            } else if block == program.schedule.post {
+                "post.".to_string()
+            } else {
+                format!("L{}.", layer.unwrap_or(0))
+            };
+            let k = format!("{prefix}{site}");
+            let Some(fv) = tr.get(&k) else { continue };
+            if fv.len() != vals.len() {
+                continue;
+            }
+            let sv = match scales.get(&(block, layer, node)) {
+                Some(v) => v,
+                None => {
+                    let ctx = FillCtx::for_scales(hl, &empty, layer.map(|l| l as usize), &prefix, stats, mat.resid_scale, policy);
+                    let v = if key.split() > 0 { ctx.scale_vec(key, *len)? } else { vec![ctx.scale(key)?; fv.len()] };
+                    scales.entry((block, layer, node)).or_insert(v)
+                }
+            };
+            let e = acc.entry(k).or_insert_with(|| vec![(0.0, 0.0); windows.len()]);
+            let (mut dd, mut bb) = (0.0, 0.0);
+            for (i, (iv, f)) in vals.iter().zip(fv).enumerate() {
+                let d = *iv as f64 * sv[i % sv.len()] - *f as f64;
+                dd += d * d;
+                bb += (*f as f64) * (*f as f64);
+            }
+            for w in &inside {
+                e[*w].0 += dd;
+                e[*w].1 += bb;
+            }
+        }
+    }
+    Ok(acc.into_iter().map(|(k, v)| (k, v.iter().map(|(dd, bb)| (dd / bb.max(1e-300)).sqrt()).collect())).collect())
+}
+
 /// Seeded pseudo-random token sequences (tiny models have no text).
 pub fn random_sequences(vocab: usize, count: usize, len: usize, seed: u64) -> Vec<Vec<usize>> {
     use rand::{Rng, SeedableRng};

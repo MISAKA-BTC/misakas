@@ -31,7 +31,7 @@
 //! `pwu_per_inference` (RFC-0003's activation step 4); nothing a registrant says about it is believed.
 //!
 //! **Carriage.** The registration object is APPENDED to the lifecycle objects
-//! (`PalwConsensusObjectV2::ClassRegisteredGenV1`, tag 67, from Phase F's allocation): an older build
+//! (`PalwConsensusObjectV2::ClassRegisteredGenV1`, tag 68, the next free after the second IR fence's 67): an older build
 //! on a ruleset that declared `palw_audit_2026_09_11` skips a payload it cannot decode (A-2). A class
 //! larger than one carrier rides in `ObjectChunk`s (the user's decision 8, multi-carrier registration)
 //! once admission admits the kind. Below `palw_gen_v1` this build drops the object by name exactly as

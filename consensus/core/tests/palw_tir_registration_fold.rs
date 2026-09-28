@@ -36,6 +36,11 @@ fn armed() -> Params {
 
 /// The corpus's `moe-top2-shared` model as an IR class at 64 positions, and its inventory root.
 fn class() -> (PalwTirClassV1, Hash64) {
+    class_with(0x70)
+}
+
+/// [`class`] under tokenizer `[tokenizer; 64]` — another class id for the same program.
+fn class_with(tokenizer: u8) -> (PalwTirClassV1, Hash64) {
     let (_, mut program, params, _) = fixture::programs().into_iter().find(|(n, ..)| n == "moe-top2-shared").expect("the MoE model");
     program.logits_scheme_id.copy_from_slice(tiled_logits_scheme_id_v1().as_byte_slice());
     let ops = palw_tir_inventory_operands_v1(&program, &fixture::TensorSrc(&params)).expect("the inventory");
@@ -44,14 +49,18 @@ fn class() -> (PalwTirClassV1, Hash64) {
         version: PALW_TIR_CLASS_VERSION_V1,
         program: program.encode(),
         layout: fixture::layout(&program, 64),
-        tokenizer_id: Hash64::from_bytes([0x70; 64]),
+        tokenizer_id: Hash64::from_bytes([tokenizer; 64]),
     };
     (class, root)
 }
 
 /// The registration a registrant makes: the chain's target and slash value, weightless, active now.
 fn registration(chain: &Chain, registrant: PalwBondKeyV2, daa: u64) -> PalwConsensusObjectV2 {
-    let (class, root) = class();
+    registration_of(chain, registrant, daa, class())
+}
+
+/// [`registration`] of a given class.
+fn registration_of(chain: &Chain, registrant: PalwBondKeyV2, daa: u64, (class, root): (PalwTirClassV1, Hash64)) -> PalwConsensusObjectV2 {
     let facts = PalwTirJobFactsV1::of_class(&class, class.class_id(&root)).expect("decodes");
     let canonical = palw_tir_job_context_v1(&facts, palw_tir_attempt_canonical_v1(&class).expect("wide enough"));
     let (floor, _, target, slash) = genesis_classes(&chain.p)[0];
@@ -146,4 +155,68 @@ fn a_chain_with_no_ir_class_roots_and_carries_as_before() {
     let bytes = borsh::to_vec(&carriage).expect("encodes");
     let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("decodes");
     assert_eq!(back, carriage);
+}
+
+/// **One IR class registration a block** (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`, the fold's second
+/// lock behind the acceptance walk's by-name drop): two distinct IR classes in one block are refused
+/// as `TirRegistrationsPerBlockExceeded`, whichever comes first; each folds alone, and the two land in
+/// two consecutive blocks.
+#[test]
+fn a_second_ir_registration_in_one_block_is_refused_by_the_folds_second_lock() {
+    use kaspa_consensus_core::palw_state_v2::PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1;
+    assert_eq!(PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1, 1);
+    let mut chain = Chain::new(armed());
+    chain.room = true;
+    let (registrant, _, _) = floor_producer(&chain.p);
+    let a = registration_of(&chain, registrant, AT, class_with(0x70));
+    let b = registration_of(&chain, registrant, AT, class_with(0x71));
+    let id = |o: &PalwConsensusObjectV2| match o {
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, .. } => *class_id,
+        _ => unreachable!(),
+    };
+    assert_ne!(id(&a), id(&b), "two classes");
+    for pair in [[a.clone(), b.clone()], [b.clone(), a.clone()]] {
+        let both = chain.try_fold(&chain.s, &ctx(0xCB_0000 + AT, AT, AT, 0), &pair, PalwBlockWorkV3::None, Hash64::default());
+        assert!(
+            matches!(both, Err(PalwStateV2Error::TirRegistrationsPerBlockExceeded { class, max: 1 }) if class == id(&pair[1])),
+            "the second of the block is refused: {both:?}"
+        );
+    }
+    for one in [&a, &b] {
+        chain
+            .try_fold(&chain.s, &ctx(0xCB_1000 + AT, AT, AT, 0), std::slice::from_ref(one), PalwBlockWorkV3::None, Hash64::default())
+            .expect("one IR registration a block folds");
+    }
+    chain.step_at(AT, &[a.clone()], PalwBlockWorkV3::None, Hash64::default(), 0);
+    chain.step_at(AT + 1, &[b.clone()], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(chain.s.tir_class_v1(&id(&a)).is_some() && chain.s.tir_class_v1(&id(&b)).is_some(), "one a block: both land");
+}
+
+/// **A registration past the second IR fence records the `Select`-arm credit** (`palw_tir_fence2`):
+/// the registry's work row is `palw_tir_model_work_v2(.., true)` at or past the fence's height and the
+/// release's vector below it — and for this class (six `Select`s) the two differ.
+#[test]
+fn a_registration_past_the_second_ir_fence_records_the_select_arm_credit() {
+    use kaspa_consensus_core::palw_tir_work_v1::palw_tir_model_work_v2;
+    let mut rows = Vec::new();
+    for (fence2, min_select_arms) in [(AT, true), (AT + 50, false)] {
+        let mut p = armed();
+        p.palw_tir_fence2 = Some(ForkActivation::new(fence2));
+        p.sync_palw_tir_fence2();
+        p.validate_palw_v2().expect("the second IR fence at or past palw_tir_v1");
+        let mut chain = Chain::new(p);
+        chain.room = true;
+        let (registrant, _, _) = floor_producer(&chain.p);
+        let object = registration(&chain, registrant, AT);
+        let PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, admission, .. } = &object else { unreachable!() };
+        let (class_id, admission) = (*class_id, admission.clone());
+        chain.step_at(AT, &[object.clone()], PalwBlockWorkV3::None, Hash64::default(), 0);
+        let program = admission.class.decode_program().expect("decodes");
+        let want = palw_tir_model_work_v2(&program, &admission.canonical, min_select_arms).expect("a work row");
+        let row = chain.s.model_lifecycle(&class_id).expect("the registry's row").work.clone();
+        assert_eq!(row, want, "fence2 at {fence2}: the {} vector", if min_select_arms { "credited" } else { "release's" });
+        rows.push(row);
+    }
+    assert_ne!(rows[0], rows[1], "the class's arm-only work is credited at the smaller arm past the fence");
+    assert!(rows[0].verification_ccu <= rows[1].verification_ccu && rows[0].economic_ccu_per_claim <= rows[1].economic_ccu_per_claim);
 }

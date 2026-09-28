@@ -271,18 +271,23 @@ struct PalwRegisteredClassContext {
 }
 
 /// **An IR class's context, from the record the chain keeps** (RFC-0002 Phase F): its layout's
-/// `max_context` is its window and its canonical job's context bound, and the canonical job is the
-/// attempt formula's `(f − 1, 2)` at that window — the job admission v10 required it to carry.
+/// `max_context` is its window, and the canonical job — its token counts and its context bound — is
+/// the one admission v10 required it to carry (`palw_tir_job_context_v1` at the attempt formula's
+/// `(f − 1, 2)`).
 fn palw_tir_registered_class_context(
     record: &kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1,
 ) -> PalwRegisteredClassContext {
     let n_ctx = record.facts.max_context;
-    let (prefill, decode) = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(n_ctx).unwrap_or((0, 0));
+    let Some(canonical) = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(n_ctx) else {
+        return PalwRegisteredClassContext { n_ctx, canonical_prefill_tokens: 0, canonical_decode_tokens: 0, max_context_tokens: 0, ir: true };
+    };
+    // The one constructor of an IR job context, so the bound is the one the chain's jobs carry.
+    let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_job_context_v1(&record.facts, canonical);
     PalwRegisteredClassContext {
         n_ctx,
-        canonical_prefill_tokens: prefill,
-        canonical_decode_tokens: decode,
-        max_context_tokens: n_ctx,
+        canonical_prefill_tokens: job.declared_prefill_tokens,
+        canonical_decode_tokens: job.exact_decode_tokens,
+        max_context_tokens: job.max_context_tokens,
         ir: true,
     }
 }
@@ -5539,13 +5544,15 @@ mod palw_class_context_tests {
             logits_vocab: 64,
             program_bytes: 14_637,
             program: Default::default(),
+            dissected: Default::default(),
         };
         let row = palw_class_context_row(class_id, Some(palw_tir_registered_class_context(&record)), None);
         let (prefill, decode) = palw_tir_attempt_canonical_of_v1(64).expect("a canonical job at 64");
         assert_eq!(row.source, "chain_ir_registration");
+        let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_job_context_v1(&record.facts, (prefill, decode));
         assert_eq!(
             (row.n_ctx, row.canonical_prefill_tokens, row.canonical_decode_tokens, row.max_context_tokens),
-            (64, prefill, decode, 64)
+            (64, prefill, decode, job.max_context_tokens)
         );
         assert!(row.canonical_footprint_positions <= row.n_ctx, "the canonical job fits its window");
     }

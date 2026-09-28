@@ -1,7 +1,7 @@
 //! **RFC-0003: the generative class, its identity, its preflight, and a registration object that
 //! changes nothing below `palw_gen_v1`.**
 //!
-//! `ClassRegisteredGenV1` is APPENDED (tag 67, Phase F's allocation) so no earlier discriminant
+//! `ClassRegisteredGenV1` is APPENDED (tag 68, after the second IR fence's 67) so no earlier discriminant
 //! moves; it rides the stateless gate at every height (a block carrying it must be valid on this build
 //! and on an older one that skips it undecoded), rents nothing, is charged a registration slot like
 //! any bought registration (past the fence only: the walk drops it by name first below), is not a
@@ -148,7 +148,7 @@ fn registration(class: PalwGenClassV1) -> PalwConsensusObjectV2 {
 fn the_object_is_appended_after_every_existing_tag() {
     let object = registration(class());
     let bytes = borsh::to_vec(&object).expect("encodes");
-    assert_eq!(bytes[0], 67, "tag 67, Phase F's allocation: no earlier discriminant moves");
+    assert_eq!(bytes[0], 68, "tag 68, after the second IR fence's 67: no earlier discriminant moves");
     let last = PalwConsensusObjectV2::CourtTirChildChosen {
         session_id: Hash64::from_bytes([1; 64]),
         choice: kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectChoiceV1 {
@@ -183,8 +183,8 @@ fn it_rides_statelessly_rents_nothing_and_takes_no_slot() {
 
     // What an OLDER build meets: a tag its enum does not have — tolerated only under A-2.
     let mut unknown = payload.clone();
-    unknown[2] = 68;
-    assert!(borsh::from_slice::<PalwLifecycleTxPayloadV2>(&unknown).is_err(), "tag 68 is past this build's enum");
+    unknown[2] = 70;
+    assert!(borsh::from_slice::<PalwLifecycleTxPayloadV2>(&unknown).is_err(), "tag 70 is past this build's enum");
     assert!(validate_palw_lifecycle_tx(&unknown, true).is_ok(), "A-2: tolerated where palw_audit_2026_09_11 is declared");
     assert!(validate_palw_lifecycle_tx(&unknown, false).is_err(), "…and refused where it is not, which is why the fence needs it");
 }

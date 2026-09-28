@@ -6,7 +6,7 @@
 //!
 //! An honest responder is acquitted at the bottom; a responder whose totals lie — the lie spread over
 //! the children so every fold checks — is convicted where the dissection narrows it, whichever
-//! child it hides in. The same root claim rides as the chain's object (tag 68), and the site the fold
+//! child it hides in. The same root claim rides as the chain's object (tag 69), and the site the fold
 //! derives is the site the acceptance layer's finalize admits.
 
 use kaspa_consensus_core::Hash64;
@@ -323,7 +323,7 @@ fn an_honest_dissection_of_a_real_vlm_attention_leaf_acquits() {
         arity: 2,
         signature: vec![1],
     };
-    assert_eq!(borsh::to_vec(&object).unwrap()[0], 68, "tag 68, after the generative registration's 67");
+    assert_eq!(borsh::to_vec(&object).unwrap()[0], 69, "tag 69, after the generative registration's 68");
     assert!(kaspa_consensus_core::palw_state_v2::palw_object_is_gen_v1(&object));
     assert!(kaspa_consensus_core::palw_state_v2::palw_object_is_tir_dissection_move_v1(&object), "a dissection move: the k-ary fence");
     // The claim is exactly the closure: a value the dissection never reads is refused, and so is a

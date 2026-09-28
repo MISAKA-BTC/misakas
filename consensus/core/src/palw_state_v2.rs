@@ -1541,6 +1541,11 @@ pub struct PalwStateParamsV2 {
     /// copy that disagrees.
     #[borsh(skip)]
     gen_from_daa: Option<u64>,
+    /// **RFC-0002 Phase F: `Params::palw_tir_fence2`'s height**, mirrored by
+    /// `Params::sync_palw_tir_fence2` for `tir_from_daa`'s reason (the fold reads the credited work,
+    /// the admission rules and the DA court's IR unit from it). `None` on every shipped preset.
+    #[borsh(skip)]
+    tir_fence2_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1749,6 +1754,7 @@ impl PalwStateParamsV2 {
             floor_refusal_retry_from_daa: None,
             tir_from_daa: None,
             gen_from_daa: None,
+            tir_fence2_from_daa: None,
         })
     }
 
@@ -1942,6 +1948,23 @@ impl PalwStateParamsV2 {
     /// **Is `palw_gen_v1` in force at `daa_score`?** `false` on every shipped preset.
     pub fn gen_active_at(&self, daa_score: u64) -> bool {
         self.gen_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0002 Phase F: the second IR fence's mirror** — written by `Params::sync_palw_tir_fence2`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_tir_fence2_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.tir_fence2_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_tir_fence2`'s height, if the network arms it (the mirror).
+    pub fn tir_fence2_from_daa(&self) -> Option<u64> {
+        self.tir_fence2_from_daa
+    }
+
+    /// **Is the second IR fence in force at `daa_score`?** `false` on every shipped preset.
+    pub fn tir_fence2_active_at(&self, daa_score: u64) -> bool {
+        self.tir_fence2_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -7279,8 +7302,17 @@ pub enum PalwConsensusObjectV2 {
         choice: crate::palw_tir_dissect_v1::PalwTirDissectChoiceV1,
         signature: Vec<u8>,
     },
-    // ---- RFC-0003: tag 67, from Phase F's allocation (the next free after F7's 66). ----
-    /// **A generative class registered as a pipeline of PALW-TIR version-2 programs** (tag 67;
+    // ---- RFC-0002 Phase F, the second IR fence (`Params::palw_tir_fence2`) ----
+    /// **A data-availability demand for one committed step leaf of an IR claim** (evidence transport
+    /// C): opens an R-core+ DA session naming `TirStepLeaf { index }` (the fold draws up to three more
+    /// leaves), which the producer or any locked signer answers with `MaterialDisclosedV2` carrying the
+    /// leaf ([`crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1`]) inside `W_disclose`, or it
+    /// defaults. Signed by the accuser's bond. Appended; dropped by name below `palw_tir_fence2`.
+    DefaultAccusedTirLeaf {
+        accusation: Box<crate::palw_da_rcore_v1::PalwTirLeafAccusationV1>,
+    },
+    // ---- RFC-0003: tag 68, the next free after the second IR fence's 67. ----
+    /// **A generative class registered as a pipeline of PALW-TIR version-2 programs** (tag 68;
     /// RFC-0003 §I.2.3): `ClassRegistered`'s fields with the pipeline carriage — the pipeline's and
     /// every program's canonical bytes, the per-stage layouts, the output header, the offers and the
     /// tokenizer ([`crate::palw_gen_class_v1::PalwGenClassV1`]). `class_id` must be
@@ -7302,8 +7334,8 @@ pub enum PalwConsensusObjectV2 {
         activation_daa: u64,
         admission: Box<crate::palw_gen_class_v1::PalwGenAdmissionCarriageV1>,
     },
-    // ---- RFC-0003: tag 68, F7's history dissection composed into the generative court. ----
-    /// **Move 1 of a history dissection of a pipeline claim (tag 68): the responder's root claim** at
+    // ---- RFC-0003: tag 69, F7's history dissection composed into the generative court. ----
+    /// **Move 1 of a history dissection of a pipeline claim (tag 69): the responder's root claim** at
     /// a dissected leaf ([`crate::palw_gen_close_v1::PalwGenRootClaimV1`]) — F7's
     /// `CourtTirRootClaimed` with the generative close as its finalize's carriage. The acceptance layer
     /// admits it only if it finalizes to the committed leaf reading exactly the claimed values
@@ -7339,12 +7371,27 @@ pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
         PalwConsensusObjectV2::ObjectiveOffence { kind, .. } => {
             *kind == crate::palw_offence_v1::PalwOffenceKindV1::TirIdentityMismatch
         }
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => true,
+        _ => false,
+    }
+}
+
+/// **Is this object a move only the second IR fence makes legal** (`Params::palw_tir_fence2`): an IR
+/// step-leaf demand, or an answer or unit of that kind — payloads an older build cannot decode (A-2).
+/// Below the fence the acceptance walk drops every such object by name before any slot, rent or
+/// budget is charged, and the fold refuses it as the second lock.
+pub fn palw_object_is_tir_fence2_v1(object: &PalwConsensusObjectV2) -> bool {
+    match object {
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => true,
+        PalwConsensusObjectV2::MaterialDisclosedV2 { unit, answer, .. } => {
+            answer.is_tir_fence2_v1() || matches!(unit, crate::palw_da_rcore_v1::PalwDaUnitV1::TirStepLeaf { .. })
+        }
         _ => false,
     }
 }
 
 /// **Is this object an RFC-0003 generative move** — an appended generative variant (today the
-/// pipeline class registration, tag 67) that an older build cannot decode and skips (A-2)? Below
+/// pipeline class registration, tag 68) that an older build cannot decode and skips (A-2)? Below
 /// `palw_gen_v1` the acceptance walk drops every such object by name before any slot, rent or budget
 /// is charged for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
@@ -7356,7 +7403,7 @@ pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
 }
 
 /// **Is this object a move of an IR history dissection** (RFC-0002 F7, tags 64–66) — or the
-/// generative root claim that opens the same phase (RFC-0003, tag 68)?
+/// generative root claim that opens the same phase (RFC-0003, tag 69)?
 pub fn palw_object_is_tir_dissection_move_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(
         object,
@@ -7665,6 +7712,14 @@ pub const PALW_CERTIFICATION_MAX_PER_BLOCK: usize = 2;
 /// that reached it with a fifth anyway — a node that skipped the walk — is refused rather than
 /// folded. Four is one registration per model tier the network carries today plus the floor.
 pub const PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1: usize = 4;
+
+/// **RFC-0002 Phase F: at most ONE IR class registration (tag 61) a block reaches admission v10.**
+/// Sizing an IR program (`tir_admit_v1` under its work cap) costs up to seconds of every node's time,
+/// so four a block — the registration cap above — would be a validation DoS. The acceptance walk
+/// DROPS a further `ClassRegisteredTirV1` by name, first, with the block standing (before any rent,
+/// slot or fee is read), exactly as it drops one below `palw_tir_v1`; the fold holds the same number
+/// as its second lock (`TirRegistrationsPerBlockExceeded`). Counted within the four above.
+pub const PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1: usize = 1;
 
 /// **2026-09-24 DoS audit #12 (b): what a bought class registration destroys** — 1 MSK
 /// (`SOMPI_PER_KASPA` sompi), the user's decision; past `palw_audit_2026_09_23` only.
@@ -9415,11 +9470,23 @@ pub enum PalwStateV2Error {
     TirRegistrationRefused(&'static str),
     // ---- RFC-0003 ----
     /// **A generative object the fold does not take**: any below `Params::palw_gen_v1` (the bundle's
-    /// mirror) — a class registration (tag 67) or a court close carrying a generative proof — and a
+    /// mirror) — a class registration (tag 68) or a court close carrying a generative proof — and a
     /// registration whose carried class does not decode or is not the declared id's. The acceptance
     /// walk drops it first; this is the second lock.
     #[error("a generative object is refused: {0}")]
     GenObjectRefused(&'static str),
+    /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
+    /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
+    #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
+    TirRegistrationsPerBlockExceeded { class: Hash64, max: usize },
+    /// **A move only the second IR fence makes legal, refused** (`Params::palw_tir_fence2`): below
+    /// its height (the acceptance walk drops it by name first; this is the second lock), or an IR
+    /// step-leaf demand the fold does not open.
+    #[error("the second IR fence refuses this move: {0}")]
+    TirFence2Refused(&'static str),
+    /// **An IR step-leaf demand past the claim's committed leaves.**
+    #[error("claim {claim}: step leaf {index} is past the {count} its execution commits")]
+    TirLeafOutOfRange { claim: Hash64, index: u64, count: u64 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -16355,6 +16422,9 @@ struct TransitionBuilder<'a> {
     /// against [`PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`]. Not state: one builder is one block's
     /// fold, and the count is the block's.
     class_registrations: usize,
+    /// **IR class registrations (tag 61) this builder has folded** (RFC-0002 Phase F), against
+    /// [`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]. Not state: one builder is one block's fold.
+    tir_registrations: usize,
     /// **Prompt ids this builder has recomputed whole for `PromptNotAnchored { Whole }`** (ADR-0152
     /// v3.1 addendum §4-bis.3), charged BEFORE the adjudicator runs, against
     /// [`crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1`]. The processor's
@@ -16781,6 +16851,7 @@ impl<'a> TransitionBuilder<'a> {
             own_attempt_fit: false,
             room_exempt_class: None,
             class_registrations: 0,
+            tir_registrations: 0,
             heavy_prompt_ids_charged: 0,
             heavy_prompt_claims: BTreeSet::new(),
         }
@@ -26832,6 +26903,7 @@ fn open_da_session_rcore_v1(
     accuser: PalwBondKeyV2,
     named: crate::palw_da_rcore_v1::PalwDaUnitV1,
     binding: Option<&crate::palw_step_leg::PalwStepBindingV2>,
+    tir_leaves: Option<u64>,
 ) -> Result<(), PalwStateV2Error> {
     use crate::palw_da_rcore_v1::{PalwDaDrawSpaceV1, PalwDaSessionV1, PalwDaUnitV1, palw_da_draw_seed_v1, palw_da_draw_units_v1};
     use crate::palw_held_da_v1::PalwHeldMissingV1;
@@ -26927,9 +26999,16 @@ fn open_da_session_rcore_v1(
                     PalwDaUnitV1::Held(drawn) => {
                         crate::palw_held_da_v1::palw_held_da_check_accusation_v1(&claim.execution_root, drawn, binding, form).is_ok()
                     }
-                    PalwDaUnitV1::Event { .. } => false,
+                    PalwDaUnitV1::Event { .. } | PalwDaUnitV1::TirStepLeaf { .. } => false,
                 })
                 .collect()
+        }
+        // The second IR fence: an IR step leaf, bounded by the authenticated binding's leaf count
+        // (`open_da_session_tir_leaf_v1` checked the named one); the drawn ones from the same range.
+        (PalwDaUnitV1::TirStepLeaf { .. }, None) => {
+            let leaves = tir_leaves
+                .ok_or(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "an IR leaf demand carries its binding's count" })?;
+            palw_da_draw_units_v1(&seed, &named, &PalwDaDrawSpaceV1::TirStepLeaves { leaves })
         }
         _ => return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "an accusation's unit and binding disagree in kind" }),
     };
@@ -26985,6 +27064,51 @@ fn open_da_session_rcore_v1(
     let until = admission.deadline_daa.saturating_add(builder.params.window_challenge_at(ctx.daa_score));
     builder.da_rekey_v1(claim_id, until, ctx.daa_score);
     Ok(())
+}
+
+/// **The second IR fence: an IR step-leaf demand opens an R-core+ DA session** (evidence transport C).
+///
+/// The claim must be an IR class's; the carried binding (program empty, put back from the class's
+/// record) must verify and name the claim's execution and trace roots, and must not answer another
+/// job (J-5, `DaBindingIsIdentityFault`); the leaf must be one it commits. Then every gate, budget,
+/// clock, draw (three more leaves of the same range) and record of [`open_da_session_rcore_v1`]
+/// applies unchanged.
+fn open_da_session_tir_leaf_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    accusation: &crate::palw_da_rcore_v1::PalwTirLeafAccusationV1,
+) -> Result<(), PalwStateV2Error> {
+    if !builder.da_court {
+        return Err(PalwStateV2Error::DaCourtDormant);
+    }
+    if !builder.params.rcore_plus_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::TirFence2Refused("an IR leaf demand opens an R-core+ session, and R-core+ is not in force"));
+    }
+    let claim_id = accusation.claim;
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    let malformed = |why: &'static str| PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why };
+    let record = builder.state.tir_classes.get(&claim.class_id).ok_or(malformed("the claim's class is not an IR program"))?;
+    let binding = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(&accusation.binding, record).map_err(malformed)?;
+    crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+        .map_err(|_| malformed("the IR binding does not verify"))?;
+    if binding.committed_execution_root != claim.execution_root || binding.full_logits_trace_root != claim.trace_root {
+        return Err(malformed("the IR binding is not the claim's execution"));
+    }
+    if accusation.index >= binding.step_leaf_count {
+        return Err(PalwStateV2Error::TirLeafOutOfRange { claim: claim_id, index: accusation.index, count: binding.step_leaf_count });
+    }
+    if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &binding) {
+        return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
+    }
+    open_da_session_rcore_v1(
+        builder,
+        ctx,
+        claim_id,
+        accusation.accuser,
+        crate::palw_da_rcore_v1::PalwDaUnitV1::TirStepLeaf { index: accusation.index },
+        None,
+        Some(binding.step_leaf_count),
+    )
 }
 
 /// **ADR-0152 DA-4 (M3): `MaterialDisclosedV2` — an answer to every open session that demands the
@@ -27077,6 +27201,32 @@ fn apply_da_answer_v1(
                 return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
             }
             disclosure.is_flat()
+        }
+        // **The second IR fence: an IR step leaf**, checked by hash arithmetic against the claim's
+        // roots (`check_tir_step_leaf_disclosure_v1`: the leaf, its opening, the ids, the logits
+        // tile's row pin), then the identity rule over its binding.
+        (PalwDaUnitV1::TirStepLeaf { index }, PalwDaAnswerV1::TirStepLeaf(carried)) => {
+            if !builder.params.tir_fence2_active_at(ctx.daa_score) {
+                return Err(malformed("an IR step-leaf answer before palw_tir_fence2 is in force"));
+            }
+            let record = builder
+                .state
+                .tir_classes
+                .get(&claim.class_id)
+                .ok_or(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "the claim's class is not an IR program" })?;
+            let disclosure = carried.with_program_v1(record).map_err(malformed)?;
+            crate::palw_tir_court_v1::check_tir_step_leaf_disclosure_v1(
+                claim.trace_root,
+                claim.execution_root,
+                *index,
+                &disclosure,
+                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            )
+            .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
+            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding) {
+                return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
+            }
+            false
         }
         (PalwDaUnitV1::Held(missing), PalwDaAnswerV1::Held(carriage)) => {
             let Some(network_ladder) = builder.extras.held_context_ladder else {
@@ -30473,6 +30623,11 @@ fn apply_object(
     if palw_object_is_gen_v1(object) && !builder.params.gen_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::GenObjectRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
     }
+    // **The second IR fence, likewise**: below `palw_tir_fence2` its moves are payloads an older build
+    // cannot decode; the acceptance walk drops them by name, and this is the second lock.
+    if palw_object_is_tir_fence2_v1(object) && !builder.params.tir_fence2_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
+    }
     match object {
         PalwConsensusObjectV2::BondRegistered {
             bond,
@@ -30849,6 +31004,7 @@ fn apply_object(
                     accusation.accuser,
                     crate::palw_da_rcore_v1::PalwDaUnitV1::Held(accusation.missing),
                     Some(&accusation.binding),
+                    None,
                 );
             }
             let claim_id = accusation.claim;
@@ -31285,7 +31441,7 @@ fn apply_object(
                 }
             }
         }
-        // **RFC-0003 (tag 67): a generative class registration**, past `palw_gen_v1` (the lock above
+        // **RFC-0003 (tag 68): a generative class registration**, past `palw_gen_v1` (the lock above
         // refuses it below). The pipeline admission ran at acceptance (ADR-0049 Decision H: no graph
         // walk inside the transition); the fold derives what it keeps from the carried class — the
         // `gen_classes` row by the one function admission derives it with — and folds the rest through
@@ -31347,12 +31503,23 @@ fn apply_object(
             activation_daa,
             admission,
         } => {
+            // One a block: the acceptance walk drops a second by name first; the second lock.
+            if builder.tir_registrations >= PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1 {
+                return Err(PalwStateV2Error::TirRegistrationsPerBlockExceeded {
+                    class: *class_id,
+                    max: PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1,
+                });
+            }
+            builder.tir_registrations += 1;
             let (record, program) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&admission.class, artifact_root)
                 .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?;
             if record.facts.class_id != *class_id {
                 return Err(PalwStateV2Error::TirRegistrationRefused("the declared class id is not the carried class's"));
             }
-            let work = || crate::palw_tir_work_v1::palw_tir_model_work_v1(&program, &admission.canonical).ok();
+            // RFC-0002 Phase F's second IR fence: past it the registry records the `Select`-arm credit
+            // (each arm-only region at the smaller arm's work); below it, the release's vector.
+            let min_select_arms = builder.params.tir_fence2_active_at(ctx.daa_score);
+            let work = || crate::palw_tir_work_v1::palw_tir_model_work_v2(&program, &admission.canonical, min_select_arms).ok();
             apply_class_registration_v1(
                 builder,
                 ctx,
@@ -32848,6 +33015,11 @@ fn apply_object(
             // a claim nobody was in a position to blame the producer for.
             builder.void_and_slash(*claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ProducerWithholding)?;
         }
+        // **The second IR fence: an IR step-leaf demand** (evidence transport C) opens an R-core+ DA
+        // session over the leaf and three drawn from its execution's range.
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { accusation } => {
+            return open_da_session_tir_leaf_v1(builder, ctx, accusation);
+        }
         // **ADR-0062 SA-1: the accusation that CAN take a bond, because somebody has to prove it.**
         PalwConsensusObjectV2::DefaultAccused { claim: claim_id, missing_event_index, accuser, signature: _ } => {
             // ADR-0152 DA-1 (M3): past `palw_rcore_plus` the event accusation opens a session in the
@@ -32859,6 +33031,7 @@ fn apply_object(
                     *claim_id,
                     *accuser,
                     crate::palw_da_rcore_v1::PalwDaUnitV1::event_of_index(*missing_event_index),
+                    None,
                     None,
                 );
             }

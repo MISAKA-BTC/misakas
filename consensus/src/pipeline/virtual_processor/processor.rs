@@ -7259,6 +7259,9 @@ impl VirtualStateProcessor {
         let mut court_closes_completed = 0usize;
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
         let mut class_registrations_charged = 0usize;
+        // RFC-0002 Phase F: whether this block has handed an IR class registration to the gate
+        // (admission v10) — at most one is (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`).
+        let mut tir_registration_gated = false;
         // ADR-0152 v3.1 addendum §4-bis.3: prompt ids charged for whole-prompt recomputations, and
         // the claims already charged (a claim is charged once per block).
         let mut heavy_prompt_ids_charged = 0u64;
@@ -7316,6 +7319,29 @@ impl VirtualStateProcessor {
             // charged nothing, for the IR objects' reason above (an older build skips it undecoded).
             if kaspa_consensus_core::palw_state_v2::palw_object_is_gen_v1(&object) && !self.palw_gen_at(point.daa_score) {
                 info!("Block {block}: a generative object was dropped by name below palw_gen_v1, and the block stands (RFC-0003)");
+                continue;
+            }
+            // **RFC-0002 Phase F: one IR class registration a block reaches admission v10**
+            // (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`). Sizing an IR program costs every node up to
+            // seconds, so a further `ClassRegisteredTirV1` is dropped by name HERE — before any rent,
+            // slot or fee is read or charged, exactly as the below-fence drop above — and the block
+            // stands. The place is taken by the one handed to the gate (see there), whatever the gate
+            // then decides; one dropped before the gate (unsigned, at a stale target, refused by the
+            // rehearsal, over the slot cap) never took it. The fold refuses a second as its second lock.
+            // **The second IR fence, likewise**: below `palw_tir_fence2` its moves (an IR step-leaf demand,
+            // an answer of that kind) are payloads an older build cannot decode and skips (A-2), so
+            // they are dropped here, first, and charged nothing; the fold refuses them too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_tir_fence2_v1(&object) && !self.palw_tir_fence2_at(point.daa_score) {
+                info!("Block {block}: a second-IR-fence object was dropped by name below palw_tir_fence2, and the block stands (RFC-0002 Phase F)");
+                continue;
+            }
+            if tir_registration_gated
+                && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
+            {
+                info!(
+                    "Block {block}: a second IR class registration was dropped by name, and the block stands: one a block reaches \
+                     admission v10 (PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1, RFC-0002 Phase F)"
+                );
                 continue;
             }
             // **ADR-0075 SA-1: a chunk group's opener pays for the SLOT it takes.**
@@ -7828,6 +7854,23 @@ impl VirtualStateProcessor {
                     kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
                 );
                 continue;
+            }
+            // RFC-0002 Phase F: the IR registration handed to the gate takes the block's one place at
+            // admission v10. One the slot accounting above did not see (a network without the
+            // 2026-09-23 audit, or the genesis registrant named) is first put to the gate's own two
+            // O(1) refusals, so a copy nobody signed never takes the place.
+            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }) {
+                if bought_registration.is_none() {
+                    if let Err(why) = self.palw_v2_class_registration_starts_at_the_chains_target(&folded, &object) {
+                        info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
+                        continue;
+                    }
+                    if let Err(why) = self.palw_v2_class_registration_is_signed(&folded, &object) {
+                        info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
+                        continue;
+                    }
+                }
+                tir_registration_gated = true;
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
@@ -9793,7 +9836,7 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| format!("session {session_id}: {e}"))?;
                 }
-                // RFC-0003 (tag 68): the generative root claim — F7's gates over the generative
+                // RFC-0003 (tag 69): the generative root claim — F7's gates over the generative
                 // registry: the k-ary fence (`palw_gen_v1` dropped it by name below), the responder's
                 // signature, the arity and the finalize at the court's limits.
                 Obj::CourtGenRootClaimed { session_id, root, arity, signature } => {
@@ -11102,6 +11145,53 @@ impl VirtualStateProcessor {
                 // **ADR-0103 Decision 4: the held DA court's two moves.** The fence, the DA court's
                 // own fence, the signer (the accuser's key; the claim's producer for an answer), the
                 // ceiling, and the unit bounded — or answered — against the claim's own roots.
+                // **The second IR fence: an IR step-leaf demand** (evidence transport C). The fence, the
+                // DA court, the accuser's registered key over the demand, a binding that rides empty,
+                // and the ruleset's close ceiling; the claim, its class and the leaf's bound are the
+                // fold's (`open_da_session_tir_leaf_v1`).
+                Obj::DefaultAccusedTirLeaf { accusation } => {
+                    let claim = accusation.claim;
+                    if !self.palw_tir_fence2_at(point.daa_score) {
+                        return Err(format!("claim {claim}: an IR leaf demand is refused: palw_tir_fence2 is not in force (RFC-0002)"));
+                    }
+                    if !self.palw_da_court_at(point.daa_score) {
+                        return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
+                    }
+                    if !accusation.binding.class.program.is_empty() {
+                        return Err(format!("claim {claim}: an IR leaf demand's binding carries no program: the chain holds the class's"));
+                    }
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "an IR leaf demand on a network with no V2 court parameters".to_string())?;
+                    let bytes = borsh::to_vec(accusation.as_ref()).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+                    if bytes > court.max_close_bytes() {
+                        return Err(format!(
+                            "claim {claim}'s IR leaf demand is {bytes} bytes, above this ruleset's {}-byte close ceiling",
+                            court.max_close_bytes()
+                        ));
+                    }
+                    let record = state
+                        .bond(&accusation.accuser)
+                        .ok_or_else(|| format!("an IR leaf demand names bond {:?} this chain does not have", accusation.accuser))?;
+                    let message = kaspa_consensus_core::palw_da_rcore_v1::palw_tir_leaf_accusation_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        &claim,
+                        accusation.index,
+                        &accusation.accuser,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_da_rcore_v1::PALW_TIR_LEAF_ACCUSATION_MLDSA87_CONTEXT_V1,
+                    ) {
+                        return Err(format!("claim {claim}'s IR leaf demand is not signed by the bond it names"));
+                    }
+                }
                 Obj::DefaultAccusedHeld { accusation } => {
                     let claim_id = accusation.claim;
                     if !self.palw_held_context_at(point.daa_score) || !self.palw_da_court_at(point.daa_score) {
@@ -11399,7 +11489,7 @@ impl VirtualStateProcessor {
                     }
                 }
                 Obj::FreePromptCommitted { .. } => {}
-                // **RFC-0003 (tag 67): a generative class registration.** Below `palw_gen_v1` it is
+                // **RFC-0003 (tag 68): a generative class registration.** Below `palw_gen_v1` it is
                 // dropped by name, exactly as an older build skips the payload it cannot decode (A-2;
                 // the walk dropped it first). Past it, the IR arm's order: the chain's target (one map
                 // read), the registrant's signature, then the pipeline admission — which decodes the
@@ -11436,14 +11526,17 @@ impl VirtualStateProcessor {
                         fence: self.palw_gen_v1.expect("palw_gen_at said the fence is in force"),
                         court,
                         held_armed: self.palw_held_context_at(point.daa_score),
+                        // The block's box-demand rules, as the IR arm reads them (the fold's mirror).
+                        demand: kaspa_consensus_core::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(&bundle.state, point.daa_score),
                     };
                     kaspa_consensus_core::palw_gen_admission_v1::verify_gen_class_admission_v1(bundle, &rules, object)
                         .map_err(|e| format!("generative class {class_id} is not admissible: {e}"))?;
                 }
-                // **RFC-0002 Phase F (tag 61): an IR class registration is dropped by name, and the
-                // block stands.** Below `palw_tir_v1` exactly as an older build skips the payload it
-                // cannot decode (A-2); above it until admission v10 lands (step F6). Never charged a
-                // registration slot: `palw_class_registration_buyer_v1` does not name it.
+                // **RFC-0002 Phase F (tag 61): an IR class registration.** Below `palw_tir_v1` it is
+                // refused by name (the walk drops it first, exactly as an older build skips the payload
+                // it cannot decode, A-2); above it, a bought registration (a slot and the 1 MSK burn)
+                // judged in the legacy arm's order and then by admission v10 — at most one a block
+                // reaches here (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`, the walk's by-name drop).
                 Obj::ClassRegisteredTirV1 { class_id, share_permille, .. } => {
                     if !self.palw_tir_at(point.daa_score) {
                         return Err(format!(
@@ -11482,6 +11575,7 @@ impl VirtualStateProcessor {
                         },
                         prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
                         court,
+                        demand: kaspa_consensus_core::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(&bundle.state, point.daa_score),
                     };
                     // The network's committed certified families and the chain's own, as the legacy
                     // arm reads them (consensus never reads the drilled registry).
@@ -12917,6 +13011,12 @@ impl VirtualStateProcessor {
     /// **RFC-0003, resolved in exactly one place.**
     fn palw_gen_at(&self, daa_score: u64) -> bool {
         self.palw_gen_v1.is_some_and(|fence| fence.activation.is_active(daa_score))
+    }
+
+    /// **RFC-0002 Phase F's second IR fence, read off the bundle's mirror** (`tir_fence2_from_daa`,
+    /// which `validate_palw_v2` holds equal to `Params::palw_tir_fence2`).
+    fn palw_tir_fence2_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.tir_fence2_active_at(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
@@ -18852,6 +18952,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
         O::CourtTirDissected { .. } => "CourtTirDissected",
         O::CourtTirChildChosen { .. } => "CourtTirChildChosen",
+        O::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
         O::ReporterCommitted { .. } => "ReporterCommitted",

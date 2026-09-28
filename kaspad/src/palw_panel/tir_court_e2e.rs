@@ -118,12 +118,25 @@ fn ir_class(tag: &str, tiled: bool) -> Ir {
     ir_class_with(tag, tiled, court(), FORM)
 }
 
+/// **A class with no dissected point** — the golden `moe-top2-shared` program (a routed MLP, no
+/// reduction over the history): what the bisection court's own tests run on, since F7 gives a class
+/// with a dissected cone its IR history dissection as the terminal move (a root claim at a dissected
+/// leaf, a declared close elsewhere), which the ladder below does not play.
+fn ir_class_undissected(tag: &str, tiled: bool) -> Ir {
+    ir_class_of("moe-top2-shared", tag, tiled, court(), FORM)
+}
+
 /// [`ir_class`] served under a network's own court and prompt form.
 fn ir_class_with(tag: &str, tiled: bool, court: PalwCourtParamsV2, form: PalwPromptIdsFormV1) -> Ir {
+    ir_class_of("dense-gqa-2layer", tag, tiled, court, form)
+}
+
+/// [`ir_class_with`] over the golden program vector `program`.
+fn ir_class_of(program: &str, tag: &str, tiled: bool, court: PalwCourtParamsV2, form: PalwPromptIdsFormV1) -> Ir {
     use kaspa_consensus_core::palw_step_refute::{PALW_LOGITS_TILE_LANES, flat_logits_scheme_id_v1, tiled_logits_scheme_id_v1};
     use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
     use misaka_palw_tir::TirProgramV1;
-    let vector = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v1/programs/dense-gqa-2layer.json");
+    let vector = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../consensus-vectors/tir-v1/programs/{program}.json"));
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&vector).expect("the golden program")).expect("json");
     let mut program = TirProgramV1::decode_canonical(&unhex(v["program_borsh_hex"].as_str().unwrap())).expect("canonical");
     let scheme = if tiled { tiled_logits_scheme_id_v1() } else { flat_logits_scheme_id_v1() };
@@ -365,6 +378,11 @@ fn play_ladder(
     let backend = ir.backend();
     loop {
         let r = duty_of(&s, PRODUCER, sid).expect("the responder's duty");
+        // Narrowed: the terminal move is the close — or, at a dissected leaf of an IR class, the
+        // responder's root claim (RFC-0002 F7), which the fold clocks as `AwaitDisclosure`.
+        if r.terminal_index.is_some() {
+            return (s, daa);
+        }
         match r.turn {
             PalwBisectTurnV1::Terminal => return (s, daa),
             PalwBisectTurnV1::AwaitDisclosure => {
@@ -442,7 +460,7 @@ fn open_court(s: &PalwChainStateV2, claim: &Claim, challenger: u64, daa: u64) ->
 #[test]
 fn an_honest_ir_claim_goes_final_and_a_false_accusation_is_defeated() {
     for tiled in [false, true] {
-        let ir = ir_class(if tiled { "honest-tiled" } else { "honest-flat" }, tiled);
+        let ir = ir_class_undissected(if tiled { "honest-tiled" } else { "honest-flat" }, tiled);
         let backend = ir.backend();
         let s = registry_with(&ir);
         let claim = produce(&ir, 1, None);
@@ -483,7 +501,7 @@ fn an_honest_ir_claim_goes_final_and_a_false_accusation_is_defeated() {
 #[test]
 fn a_planted_lie_in_an_ir_claim_is_convicted_by_the_ir_court() {
     for tiled in [false, true] {
-        let ir = ir_class(if tiled { "lie-tiled" } else { "lie-flat" }, tiled);
+        let ir = ir_class_undissected(if tiled { "lie-tiled" } else { "lie-flat" }, tiled);
         let backend = ir.backend();
         let s = registry_with(&ir);
         // The honest run of the same job names the leaf the lie moves (a mid-job commit tile).
@@ -664,6 +682,188 @@ fn a_wrong_answer_over_honest_arithmetic_is_accused_in_one_move() {
     }
 }
 
+/// **A lie at a DISSECTED leaf is challenged by name** (RFC-0002 F7, the seat's side): on a class
+/// whose history cones are dissected, the seat's one-move case parts from the lie at the dissected leaf
+/// and its cone candidate becomes the named-leaf proof — the accused's leaf and its opening, nothing
+/// else — which the chain's one-move gate reads as the challenge that opens a dissection there
+/// (`NeedsDissection` under the held regime), declared `ExecutorGuilty`. A lie at an undissected commit
+/// leaf of the same class is accused at its cone and convicted in one move, as before.
+#[test]
+fn a_lie_at_a_dissected_leaf_is_challenged_by_name() {
+    use super::tir_court::{
+        PALW_TIR_NAMED_LEAF_LABEL_V1, palw_tir_leaf_is_dissected_v1, palw_tir_one_move_accusation_to_file_v1,
+        palw_tir_one_move_case_at_dissected_leaf_v1, palw_tir_one_move_case_v1,
+    };
+    use kaspa_consensus_core::palw_producer_v2::palw_disputable_claims_v2;
+    use kaspa_consensus_core::palw_tir_one_move_v1::{PalwTirOneMoveOutcomeV1, palw_tir_one_move_outcome_v1};
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1;
+    let ir = ir_class("named-leaf", true);
+    let tir = ir.tir();
+    let rules = tir.court_rules(&court());
+    let s = registry_with(&ir);
+    let honest = produce(&ir, 6, None);
+    let ctx = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).unwrap().binding.job_context;
+    let n =
+        kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(tir.class()).unwrap().leaf_count_capped(&ctx, LADDER).unwrap();
+    let dissected = (0..n).find(|&i| palw_tir_leaf_is_dissected_v1(&tir, &ctx, i)).expect("the class dissects its history cones");
+    let undissected = (dissected + 1..n)
+        .find(|&i| {
+            !palw_tir_leaf_is_dissected_v1(&tir, &ctx, i)
+                && tir.space().leaf_at(&ctx, i).is_some_and(|l| matches!(l.kind, PalwTirLeafKindV1::Commit { .. }))
+        })
+        .expect("an undissected commit leaf after it");
+    for (lie, at_dissected) in [(dissected, true), (undissected, false)] {
+        let liar = produce(&ir, 6, Some(lie));
+        assert_ne!(liar.env.attempt.execution_root, honest.env.attempt.execution_root, "leaf {lie}: the lie is committed");
+        let s = licensed(&s, &liar, 101);
+        let case = palw_tir_one_move_case_v1(&tir, &liar.material, &honest.material, &rules).unwrap().expect("a case");
+        assert_eq!(case.leaf, Some(lie), "the case names the planted leaf");
+        let (case, named) = palw_tir_one_move_case_at_dissected_leaf_v1(&tir, &liar.material, case, &rules);
+        assert_eq!(named, at_dissected.then_some(lie), "leaf {lie}");
+        assert_eq!(case.candidates.iter().any(|(label, _)| *label == "cone"), !at_dissected, "leaf {lie}");
+        let target = palw_disputable_claims_v2(&s, &[bond_key(SEAT)]).into_iter().find(|t| t.claim_id == liar.id).expect("disputable");
+        let (label, mut accusation) = palw_tir_one_move_accusation_to_file_v1(
+            case.candidates,
+            &target,
+            &tir.class().program,
+            bond_key(SEAT),
+            &court(),
+            LADDER,
+            FORM,
+        )
+        .unwrap_or_else(|| panic!("leaf {lie}: an accusation is filed"));
+        assert_eq!(accusation.verdict, PalwCourtVerdictV2::ExecutorGuilty);
+        accusation.signature = vec![3; 16];
+        let claim = s.claim(&liar.id).expect("the claim");
+        let outcome = palw_tir_one_move_outcome_v1(&s, claim, &accusation, &court(), LADDER, FORM, true).expect("the gate reads it");
+        if at_dissected {
+            assert_eq!(label, PALW_TIR_NAMED_LEAF_LABEL_V1);
+            assert!(accusation.proof.tir_binding_v1().is_some_and(|b| b.class.program.is_empty()), "it rides without its program");
+            assert_eq!(outcome, PalwTirOneMoveOutcomeV1::NeedsDissection { leaf: lie }, "the named leaf opens the dissection");
+        } else {
+            assert_eq!(label, "cone", "a lie at an undissected leaf is accused at its cone");
+            assert_eq!(outcome, PalwTirOneMoveOutcomeV1::Verdict(PalwCourtVerdictV2::ExecutorGuilty));
+        }
+    }
+}
+
+/// **RFC-0002 F7's node side, played against the fold** — every move of an IR history dissection built
+/// by the node's own builders (`palw_panel::tir_dissect`) from the party's own capture, read off the
+/// chain's duty view, and folded: the bisection route narrows to a DISSECTED leaf (the held regime
+/// reaches the same leaf by a named-leaf challenge).
+///
+/// * **An honest producer falsely accused there defends itself to the bottom**: its root claim passes
+///   the acceptance layer's finalize, every round folds, the challenger (whose own execution parts from
+///   it only in the dissected leaf's output) finds no child to name — every child is its own
+///   computation too, the node files nothing and says why — and, the child named for it, the bottom
+///   the responder builds from its own capture acquits it: `ChallengerDefeated`, the claim live.
+/// * **A liar at the dissected leaf cannot open its defence**: its capture's committed leaf is not its
+///   evaluation, so the root claim does not finalize and the node does not file it; its silence is
+///   the fold's no-show at the rung, which voids the claim.
+#[test]
+fn an_ir_history_dissection_is_played_by_the_node() {
+    use super::tir_court::palw_tir_leaf_is_dissected_v1;
+    use super::tir_dissect::{
+        PalwTirDissectBuiltV1, PalwTirDissectMoveV1, palw_tir_dissect_build_v1, palw_tir_dissect_move_of_duty_v1,
+        palw_tir_dissect_object_v1,
+    };
+    use kaspa_consensus_core::palw_court_v2::{adjudicate_court_close_v3, check_court_tir_root_claim_admits_v1};
+    use kaspa_consensus_core::palw_tir_dissect_v1::{PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirDissectChoiceV1};
+    for tiled in [false, true] {
+        let ir = ir_class(if tiled { "f7-tiled" } else { "f7-flat" }, tiled);
+        let tir = ir.tir();
+        let rules = tir.court_rules(&court());
+        let arity = court().dissection_arity();
+        let honest = produce(&ir, 7, None);
+        let ctx = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).unwrap().binding.job_context;
+        let n = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(tir.class())
+            .unwrap()
+            .leaf_count_capped(&ctx, LADDER)
+            .unwrap();
+        // The LAST dissected leaf of the job: the longest history, so the dissection has rounds to play.
+        let leaf = (0..n).rev().find(|&i| palw_tir_leaf_is_dissected_v1(&tir, &ctx, i)).expect("a dissected leaf");
+        let sign = |_: &[u8], _: &[u8]| Some(vec![5u8; 8]);
+
+        // ---- an honest producer, falsely accused at the dissected leaf ----
+        let wrong = produce(&ir, 7, Some(leaf));
+        let s = licensed(&registry_with(&ir), &honest, 101);
+        let (s, sid) = open_court(&s, &honest, SEAT, 104);
+        let (mut s, mut daa) = play_ladder(&ir, s, sid, &honest.material, &wrong.material, SEAT, false, 105);
+        assert_eq!(duty_of(&s, SEAT, sid).and_then(|d| d.terminal_index), Some(leaf), "tiled {tiled}: the ladder lands on it");
+        let mut played = Vec::new();
+        loop {
+            let (r, c) = (duty_of(&s, PRODUCER, sid), duty_of(&s, SEAT, sid));
+            let Some((duty, own)) = [(r, &honest.material), (c, &wrong.material)]
+                .into_iter()
+                .find_map(|(d, own)| d.filter(|d| palw_tir_dissect_move_of_duty_v1(d).is_some()).map(|d| (d, own)))
+            else {
+                panic!("tiled {tiled}: a live session with no party to move ({played:?})");
+            };
+            let mv = palw_tir_dissect_move_of_duty_v1(&duty).unwrap();
+            played.push(mv);
+            let built = palw_tir_dissect_build_v1(&tir, &duty, mv, own, Some(&honest.material), &rules);
+            let object = match (mv, built) {
+                (PalwTirDissectMoveV1::Choice, Err(why)) => {
+                    // The challenger finds no child to name: its own execution agrees with every one.
+                    assert!(why.contains("no child to name"), "tiled {tiled}: {why}");
+                    let phase = duty.tir_dissection.as_deref().expect("a phase");
+                    let choice = PalwTirDissectChoiceV1 {
+                        version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+                        session_id: sid,
+                        round: phase.round(),
+                        child: 0,
+                    };
+                    palw_tir_dissect_object_v1(PalwTirDissectBuiltV1::Choice(choice), &duty, arity, &sign, &|_, _| None)
+                        .unwrap()
+                        .unwrap()
+                }
+                (mv, built) => {
+                    let built = built.unwrap_or_else(|e| panic!("tiled {tiled}: the {mv:?} builds: {e}"));
+                    if let PalwTirDissectBuiltV1::Root(root) = &built {
+                        check_court_tir_root_claim_admits_v1(&s, &sid, root, arity, arity, &court(), LADDER, FORM)
+                            .unwrap_or_else(|e| panic!("tiled {tiled}: the acceptance layer admits the root claim: {e}"));
+                    }
+                    let verdict_of = |sid: &Hash64, proof: &PalwCourtVerdictProofV2| {
+                        adjudicate_court_close_v3(&s, sid, proof, &court(), LADDER, FORM, false, false, None).ok()
+                    };
+                    palw_tir_dissect_object_v1(built, &duty, arity, &sign, &verdict_of)
+                        .unwrap_or_else(|e| panic!("tiled {tiled}: the {mv:?} is filed: {e}"))
+                        .unwrap_or_else(|| panic!("tiled {tiled}: the {mv:?} wins this party's side"))
+                }
+            };
+            let closing = matches!(object, PalwConsensusObjectV2::CourtClosed { .. });
+            if let PalwConsensusObjectV2::CourtClosed { verdict, .. } = &object {
+                assert_eq!(*verdict, PalwCourtVerdictV2::ChallengerDefeated, "tiled {tiled}: the bottom acquits the honest leaf");
+                assert!(duty.i_am_responder, "tiled {tiled}: the acquittal is the responder's to file");
+            }
+            s = step(&s, daa, &[object]).unwrap_or_else(|e| panic!("tiled {tiled}: the {mv:?} folds: {e}"));
+            daa += 1;
+            if closing {
+                break;
+            }
+            assert!(played.len() < 64, "tiled {tiled}: the dissection ends");
+        }
+        assert_eq!(played.first(), Some(&PalwTirDissectMoveV1::Root), "tiled {tiled}");
+        assert!(played.contains(&PalwTirDissectMoveV1::Round) && played.contains(&PalwTirDissectMoveV1::Choice), "{played:?}");
+        assert!(s.court_session(&sid).is_none() && s.tir_dissection_v1(&sid).is_none(), "tiled {tiled}: the session ended");
+        assert!(!matches!(phase_of(&s, &honest.id), PalwClaimPhaseV2::Voided { .. }), "tiled {tiled}: the honest claim stands");
+
+        // ---- a liar at the dissected leaf ----
+        let liar = produce(&ir, 8, Some(leaf));
+        let honest_twin = produce(&ir, 8, None);
+        let s = licensed(&registry_with(&ir), &liar, 101);
+        let (s, sid) = open_court(&s, &liar, SEAT, 104);
+        let (s, _) = play_ladder(&ir, s, sid, &liar.material, &honest_twin.material, SEAT, false, 105);
+        let duty = duty_of(&s, PRODUCER, sid).expect("the responder's duty");
+        assert_eq!(palw_tir_dissect_move_of_duty_v1(&duty), Some(PalwTirDissectMoveV1::Root), "tiled {tiled}");
+        let refused = palw_tir_dissect_build_v1(&tir, &duty, PalwTirDissectMoveV1::Root, &liar.material, Some(&liar.material), &rules)
+            .expect_err("a lying leaf's root claim does not finalize");
+        assert!(refused.contains("does not finalize to the committed tile"), "tiled {tiled}: {refused}");
+        let s = step(&s, duty.rung_deadline_daa + 1, &[]).expect("the clock runs");
+        assert!(matches!(phase_of(&s, &liar.id), PalwClaimPhaseV2::Voided { .. }), "tiled {tiled}: the liar's silence voids it");
+    }
+}
+
 /// **An IR claim answers its data-availability demands in the IR form** (F6 D): the node's own
 /// answering path (`palw_da_claim_answers_v1`: the kept capture verified against the claim, then each
 /// unit) discloses a trace event of an IR claim as a `TirEvent` — the row's tile opened under the
@@ -747,7 +947,8 @@ fn an_ir_claims_trace_events_are_answered_in_the_ir_form() {
 /// registered by the node's own object, its lifecycle row walked `Candidate → Prefetching →
 /// Probation → ActiveLimited → Active` by the chain's registry — the admission jury seated on the
 /// node's readiness V2 proofs, the probation passed by IR claims the node produced going `Final` —
-/// an honest claim of the `Active` class going `Final`, and a planted lie convicted in one move.
+/// an honest claim of the `Active` class going `Final`, planted lies convicted in one move (licensed,
+/// and refused its licence), and a borrowed root convicted by kind 7 (`TirIdentityMismatch`).
 /// testnet-12's fold harness (`consensus/core/tests/rcore_common.rs`: the real fold with the
 /// processor's extras, every block re-applied, reverted and reloaded).
 #[path = "../../../consensus/core/tests/rcore_common.rs"]
@@ -798,12 +999,28 @@ mod t12_walk {
     /// and canonical-work height, the import every node runs (the harness's `step_at` reloads with
     /// the fixtures' `into_state`, whose weight rule a weightless class's `Final` does not obey).
     fn step(c: &mut rcore::Chain, daa: u64, objects: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, subsidy: u64) {
+        step_anchored(c, daa, objects, work, key, subsidy, Hash64::default())
+    }
+
+    /// [`step`], the block's own attempt carried with its header's execution anchor (`job_anchor`,
+    /// the processor's `extras.own_job_anchor`): past `palw_offence_attribution` the claim records it
+    /// as its job identity, which an identity offence (kind 4, kind 7) is judged against.
+    fn step_anchored(
+        c: &mut rcore::Chain,
+        daa: u64,
+        objects: &[PalwConsensusObjectV2],
+        work: PalwBlockWorkV3<'_>,
+        key: Hash64,
+        subsidy: u64,
+        job_anchor: Hash64,
+    ) {
         use kaspa_consensus_core::palw_state_v2::{PalwStateCarriageV2, apply_delta_v2, revert_delta_v2};
         assert!(daa > c.daa, "DAA moves forward");
         let at = rcore::ctx(0xCA_0000 + daa, daa, daa, subsidy);
         let parent = c.s.clone();
         let (child, delta, skips) =
-            c.try_fold(&parent, &at, objects, work, key).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
+            rcore::fold_with(&c.p, &c.sp, &parent, &at, objects, work, key, &rcore::tape_extras(c, false, daa, job_anchor))
+                .unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
         assert!(skips.is_empty(), "nothing skipped at {daa}: {skips:?}");
         assert_eq!(apply_delta_v2(&parent, &delta, &c.sp).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
         assert_eq!(revert_delta_v2(&child, &delta, &c.sp).expect("reverts"), parent, "DAA {daa}: the delta reverts");
@@ -905,6 +1122,21 @@ mod t12_walk {
         daa: u64,
         lie: Option<u64>,
     ) -> Option<(Hash64, Vec<u8>, PalwClaimRootsV1)> {
+        ir_claim_of(c, ir, n, seed, daa, lie, None)
+    }
+
+    /// [`ir_claim_lying`], the committed execution borrowed — when `borrowed` names an anchor — from
+    /// that anchor's job instead of the one the claim's own anchor names (an honest run of the wrong
+    /// question: kind 7's J1).
+    fn ir_claim_of(
+        c: &mut rcore::Chain,
+        ir: &Ir,
+        n: u64,
+        seed: u64,
+        daa: u64,
+        lie: Option<u64>,
+        borrowed: Option<Hash64>,
+    ) -> Option<(Hash64, Vec<u8>, PalwClaimRootsV1)> {
         let backend = ir.backend();
         let bond = rcore::bond_key(n);
         let (pre_pow, nonce) = (0x7C0_0000 + seed, 7u64);
@@ -917,7 +1149,7 @@ mod t12_walk {
                 kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(nonce),
             )
             .expect("an anchor");
-        let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor's job");
+        let (job, prompt) = backend.job_for_anchor(borrowed.unwrap_or(anchor)).expect("the anchor's job");
         let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, false);
         let run = match lie {
             None => backend.execute(&job, &prompt),
@@ -943,17 +1175,16 @@ mod t12_walk {
         };
         let env =
             PalwAttemptEnvelopeV2 { attempt, signature: vec![0u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] };
-        let key = execution_commitment_v3(
-            &env.attempt,
-            execution_anchor_v3(rcore::h(rcore::NET), rcore::h(pre_pow), ir.class_id, &bond.0, nonce),
-        );
+        let execution_anchor = execution_anchor_v3(rcore::h(rcore::NET), rcore::h(pre_pow), ir.class_id, &bond.0, nonce);
+        let key = execution_commitment_v3(&env.attempt, execution_anchor);
         let id = attempt_id_v2(&env.attempt);
         let at = rcore::ctx(0xCA_0000 + daa, daa, daa, rcore::T12_BLOCK_SUBSIDY_SOMPI);
-        if let Err(e) = c.try_fold(&c.s.clone(), &at, &[], PalwBlockWorkV3::Attempt(&env), key) {
+        let extras = rcore::tape_extras(c, false, daa, execution_anchor);
+        if let Err(e) = rcore::fold_with(&c.p, &c.sp, &c.s.clone(), &at, &[], PalwBlockWorkV3::Attempt(&env), key, &extras) {
             eprintln!("DAA {daa}: the class gate refuses the IR attempt: {e}");
             return None;
         }
-        step(c, daa, &[], PalwBlockWorkV3::Attempt(&env), key, rcore::T12_BLOCK_SUBSIDY_SOMPI);
+        step_anchored(c, daa, &[], PalwBlockWorkV3::Attempt(&env), key, rcore::T12_BLOCK_SUBSIDY_SOMPI, execution_anchor);
         let roots = PalwClaimRootsV1 {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
@@ -969,6 +1200,8 @@ mod t12_walk {
     fn an_ir_class_walks_to_active_on_testnet_12_its_claims_go_final_and_a_lie_is_convicted_in_one_move() {
         let mut c = rcore::Chain::new(armed());
         c.room = true;
+        // testnet-12 arms `palw_offence_attribution` at genesis: its fold runs with it, as here.
+        c.attribution = true;
         let bundle = rcore::bundle(&c.p);
         let ir = super::ir_class_with("t12-walk", false, bundle.court, c.p.palw_prompt_ids_form_v1());
         let backend = ir.backend();
@@ -1252,6 +1485,45 @@ mod t12_walk {
         );
         assert!(c.s.bond(&producer).expect("the producer").collateral < before, "the producer is charged again");
         eprintln!("walk: an unlicensed lie at leaf {lie} is convicted in one move by the seat that refuted it");
+
+        // 9. Kind 7: a claim whose committed execution is an honest run of ANOTHER job (a borrowed
+        //    root) — the seat's J1 probe finds it (`palw_tir_borrowed_root_binding_v1`), the identity
+        //    check the gate will run names the fault (`palw_tir_identity_fault_v1`), and the object the
+        //    node files (`palw_tir_identity_object_v1`, the program stripped) folds: the claim is voided
+        //    and its producer charged.
+        keep_ready(&mut c, &ir, registrant);
+        let (id, material, roots) = loop {
+            seed += 1;
+            let daa = c.daa + 1;
+            if let Some(claim) = ir_claim_of(&mut c, &ir, 1, seed, daa, None, Some(rcore::h(0xB0B0))) {
+                break claim;
+            }
+            empty(&mut c, daa);
+        };
+        bind(&mut c, id, &seats);
+        let duty = kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&c.s, &c.sp, &[seats[2].0])
+            .into_iter()
+            .find(|d| d.claim_id == id)
+            .expect("the seat's duty on the borrowed claim");
+        let binding = crate::palw_panel::reporter_filer::palw_tir_borrowed_root_binding_v1(backend.as_ref(), &material, roots)
+            .expect("the capture reproduces the claim's roots under another job");
+        let rules = kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+            prompt_ids_form: form,
+            base_class_id: bundle.base_class_id,
+            da_signer_liability: false,
+        };
+        let fault = crate::palw_panel::reporter_filer::palw_tir_identity_fault_v1(&duty, &binding, rules).expect("an identity fault");
+        let object = kaspa_consensus_core::palw_offence_attribution_v1::palw_tir_identity_object_v1(duty.executor_bond, id, &binding);
+        let before = c.s.bond(&producer).expect("the producer").collateral;
+        let next = c.daa + 1;
+        step(&mut c, next, &[object], PalwBlockWorkV3::None, Hash64::default(), 0);
+        assert!(
+            matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { .. }),
+            "the borrowed claim is voided: {:?}",
+            c.claim(&id).phase
+        );
+        assert!(c.s.bond(&producer).expect("the producer").collateral < before, "its producer is charged");
+        eprintln!("walk: a borrowed IR root is convicted by kind 7 ({fault:?})");
     }
 
     /// **A Hugging Face model through the operator's path, to a registration on testnet-12's fold**

@@ -172,10 +172,19 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::CourtTirChildChosen { .. } => {
             Err("an IR dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves")
         }
-        // RFC-0003 (tag 68): the generative root claim rides as F7's does, signed by its party.
+        // RFC-0003 (tag 69): the generative root claim rides as F7's does, signed by its party.
         PalwConsensusObjectV2::CourtGenRootClaimed { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::CourtGenRootClaimed { .. } => {
             Err("a generative root claim must carry the signature of the responder — unsigned, the challenger could write it")
+        }
+        // The second IR fence: an IR step-leaf demand carries its accuser's signature and a binding
+        // whose program rides empty (the chain holds the registered class's).
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { accusation } if !accusation.binding.class.program.is_empty() => {
+            Err("an IR leaf demand's binding carries no program: the chain holds the registered class's")
+        }
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { accusation } if !accusation.signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => {
+            Err("an IR leaf demand must carry its accuser's signature — unsigned, anyone could spend a bond's DA budget")
         }
         PalwConsensusObjectV2::CourtCloseDeclared { signature, .. } if !signature.is_empty() => Ok(()),
         // ADR-0087 Decision 3: a buy is bound to its carrier's sink output below; a sell must carry
@@ -276,7 +285,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // this build and on an older one that skips it undecoded (A-2) — and the acceptance walk
         // drops it by name until `palw_tir_v1` is armed.
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => Ok(()),
-        // RFC-0003 (tag 67): a generative registration carries its pipeline and every program, so it
+        // RFC-0003 (tag 68): a generative registration carries its pipeline and every program, so it
         // is checkable whenever it is admitted. It RIDES at every height, as the IR registration does
         // (A-2), and the acceptance walk drops it by name until the pipeline admission lands.
         PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => Ok(()),

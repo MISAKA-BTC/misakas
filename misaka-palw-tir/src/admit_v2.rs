@@ -21,7 +21,9 @@
 //! step leaves times its `max_trip`, summed, against the job ceilings ([`TirJobCeilingsV1`]; the
 //! network's per-profile caps). Its edges were proved by [`validate_pipeline`] (NF-P1 … NF-P9).
 
-use crate::admit::{CostV1, ParamLeafV1, TirAdmissionV1, TirAdmitError, TirAdmitInputsV1, admit_core, check_admit_inputs};
+use crate::admit::{
+    CostV1, ParamLeafV1, TirAdmissionV1, TirAdmitError, TirAdmitInputsV1, TirDemandRulesV1, admit_core, check_admit_inputs,
+};
 use crate::interval::Interval;
 use crate::interval_v2::analyze_ranges_v2;
 use crate::pipeline::{Binding, TirPipelineV1};
@@ -62,13 +64,18 @@ fn standalone_leaves(p: &TirProgramV2) -> Vec<ParamLeafV1> {
         .collect()
 }
 
-fn admit_with(p: &TirProgramV2, inputs: &TirAdmitInputsV1, leaves: &[ParamLeafV1]) -> Result<TirAdmissionV2, TirAdmitError> {
+fn admit_with(
+    p: &TirProgramV2,
+    inputs: &TirAdmitInputsV1,
+    leaves: &[ParamLeafV1],
+    rules: TirDemandRulesV1,
+) -> Result<TirAdmissionV2, TirAdmitError> {
     check_admit_inputs(inputs)?;
     let info = validate_v2(p)?;
     let intervals = analyze_ranges_v2(p)?;
     let first = info.first_input_param;
     let param_leaf = |j: u16| if j < first { ParamLeafV1::Artifact } else { leaves[(j - first) as usize] };
-    let view = admit_core(info.view.clone(), info.v1.clone(), intervals, inputs, &param_leaf)?;
+    let view = admit_core(info.view.clone(), info.v1.clone(), intervals, inputs, &param_leaf, rules)?;
     let mut post_written: Vec<u16> = info.post_writes.iter().map(|(_, s)| *s).collect();
     post_written.sort_unstable();
     let inputs = p
@@ -88,7 +95,7 @@ fn admit_with(p: &TirProgramV2, inputs: &TirAdmitInputsV1, leaves: &[ParamLeafV1
 pub fn tir_admit_v2(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<TirAdmissionV2, TirAdmitError> {
     check_admit_inputs(inputs)?;
     let p = TirProgramV2::decode_canonical(program_bytes)?;
-    admit_with(&p, inputs, &standalone_leaves(&p))
+    admit_with(&p, inputs, &standalone_leaves(&p), TirDemandRulesV1::Release2000)
 }
 
 /// [`tir_admit_v2`] of a program already in memory (its canonical encoding).
@@ -178,7 +185,7 @@ pub fn tir_admit_pipeline_v1(
 ) -> Result<TirPipelineAdmissionV1, TirAdmitError> {
     check_admit_inputs(inputs)?;
     let (programs, pipeline) = decode_pipeline(pipeline_bytes, program_bytes)?;
-    admit_pipeline(programs, pipeline, &|_| inputs, job)
+    admit_pipeline(programs, pipeline, &|_| inputs, job, TirDemandRulesV1::Release2000)
 }
 
 /// **`tir_admit_pipeline_staged_v1`**: [`tir_admit_pipeline_v1`] with each stage's own network
@@ -191,6 +198,18 @@ pub fn tir_admit_pipeline_staged_v1(
     stage_inputs: &[TirAdmitInputsV1],
     job: &TirJobCeilingsV1,
 ) -> Result<TirPipelineAdmissionV1, TirAdmitError> {
+    tir_admit_pipeline_staged_with_rules_v1(pipeline_bytes, program_bytes, stage_inputs, job, TirDemandRulesV1::Release2000)
+}
+
+/// [`tir_admit_pipeline_staged_v1`] under the box-demand rules `rules` — the registering block's
+/// (ref2's H7 `TopK` row past `palw_tir_fence2`).
+pub fn tir_admit_pipeline_staged_with_rules_v1(
+    pipeline_bytes: &[u8],
+    program_bytes: &[Vec<u8>],
+    stage_inputs: &[TirAdmitInputsV1],
+    job: &TirJobCeilingsV1,
+    rules: TirDemandRulesV1,
+) -> Result<TirPipelineAdmissionV1, TirAdmitError> {
     for inputs in stage_inputs {
         check_admit_inputs(inputs)?;
     }
@@ -198,7 +217,7 @@ pub fn tir_admit_pipeline_staged_v1(
     if stage_inputs.len() != pipeline.stages.len() {
         return Err(TirAdmitError::Inputs("one set of network inputs per stage"));
     }
-    admit_pipeline(programs, pipeline, &|s| &stage_inputs[s], job)
+    admit_pipeline(programs, pipeline, &|s| &stage_inputs[s], job, rules)
 }
 
 /// Every program decoded strictly (§15.1), then the pipeline over them (§15.6).
@@ -213,6 +232,7 @@ fn admit_pipeline<'a>(
     pipeline: TirPipelineV1,
     inputs_of: &dyn Fn(usize) -> &'a TirAdmitInputsV1,
     job: &TirJobCeilingsV1,
+    rules: TirDemandRulesV1,
 ) -> Result<TirPipelineAdmissionV1, TirAdmitError> {
     let mut stages = Vec::with_capacity(pipeline.stages.len());
     let (mut job_cost, mut job_step_leaves, mut cone_work) = (CostV1::default(), 0u64, 0u64);
@@ -235,7 +255,7 @@ fn admit_pipeline<'a>(
                 },
             })
             .collect();
-        let admission = admit_with(prog, inputs, &leaves).map_err(|e| match e {
+        let admission = admit_with(prog, inputs, &leaves, rules).map_err(|e| match e {
             TirAdmitError::Exceeds { limit, at, value, cap } => {
                 TirAdmitError::Exceeds { limit, at: format!("stage {s} ({}): {at}", st.name), value, cap }
             }

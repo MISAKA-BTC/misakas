@@ -1059,6 +1059,56 @@ pub(crate) fn palw_borrowed_root_binding_v1(
     backend.disclose_trace_event(bytes, u32::MAX, u8::MAX).ok().map(|disclosure| disclosure.binding().clone())
 }
 
+/// **J1 auto over an IR capture** (RFC-0002 Phase F, kind 7's detector): the capture's own IR binding
+/// when the bytes are an IR capture that reproduces the claim's committed roots under ANOTHER job —
+/// refused against the claim's own job (`roots` with its anchor) and admitted with the job left out
+/// (`roots` with the anchor zeroed) — exactly [`palw_borrowed_root_binding_v1`]'s test; `None`
+/// otherwise. The binding is the capture's, program and all (the filer strips it).
+pub(crate) fn palw_tir_borrowed_root_binding_v1(
+    backend: &dyn PalwExecutionBackendV1,
+    bytes: &[u8],
+    roots: PalwClaimRootsV1,
+) -> Option<kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1> {
+    if !bytes.starts_with(&misaka_palw_sdk::lineages::tir::TirCaptureV1::MAGIC) {
+        return None;
+    }
+    let unbound = PalwClaimRootsV1 { anchor: Hash64::default(), attempt_draw: None, job_pin: None, ..roots };
+    if backend.verify_material(bytes, roots) == PalwMaterialVerdictV1::Matches
+        || backend.verify_material(bytes, unbound) != PalwMaterialVerdictV1::Matches
+    {
+        return None;
+    }
+    misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(bytes).ok().map(|capture| capture.binding)
+}
+
+/// **Kind 7's identity check, as the chain will run it, asked of `binding` before anything is filed**
+/// — `palw_tir_binding_identity_fault_v1` against the claim `duty` names (its class, roots and the job
+/// identity it recorded) at the network's identity ladder, with J5b. `Some(fault)` is a conviction
+/// the gate re-derives; `None` files nothing (the gate would refuse it as `IdentityHolds`).
+pub(crate) fn palw_tir_identity_fault_v1(
+    duty: &PalwSeatDutyV2,
+    binding: &kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1,
+    rules: kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1,
+) -> Option<kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityFaultV1> {
+    use kaspa_consensus_core::palw_offence_attribution_v1::{
+        PALW_FALSE_VALID_NETWORK_LADDER_V1, PalwClaimSourceKindV1, PalwOffenceTargetV1, palw_tir_binding_identity_fault_v1,
+    };
+    let target = PalwOffenceTargetV1 {
+        claim_id: duty.claim_id,
+        class_id: duty.class_id,
+        artifact_root: duty.artifact_root,
+        executor_bond: duty.executor_bond,
+        execution_root: duty.execution_root,
+        lane: Some(if duty.free_prompt { PalwClaimSourceKindV1::FreePrompt } else { PalwClaimSourceKindV1::Attempt }),
+        segment_count: None,
+        phase: None,
+        job_identity: duty.job_identity,
+        trace_root: duty.trace_root,
+        output_root: duty.output_root,
+    };
+    palw_tir_binding_identity_fault_v1(&target, binding, rules, true, PALW_FALSE_VALID_NETWORK_LADDER_V1).ok().flatten()
+}
+
 /// **The landing margin of an automatic kind-4 filing**: the evidence must fold while the claim is
 /// still live for S2 (a claim voided at its receipt deadline is charged only its S0′ forfeit), so
 /// past `deadline − 60` it stops waiting on its commitment — P2-6's margin, for the same reason.
@@ -1498,6 +1548,52 @@ impl PalwPanelService {
             }
         };
         let owned = bytes.to_vec();
+        // RFC-0002 Phase F: an IR capture's binding is an IR binding, and its identity offence is kind 7
+        // (`TirIdentityMismatch`) — past `palw_tir_v1` only (below it the object is dropped by name).
+        if owned.starts_with(&misaka_palw_sdk::lineages::tir::TirCaptureV1::MAGIC) {
+            if !self.consensus_config.params.palw_tir_v1_active_at(current_daa) {
+                filer.release_probe(probe);
+                return;
+            }
+            let Ok((_backend, binding)) = offload(backend, move |b| {
+                let _held_for_the_probe = reserved;
+                palw_tir_borrowed_root_binding_v1(b, &owned, roots)
+            })
+            .await
+            else {
+                return;
+            };
+            let Some(binding) = binding else { return };
+            let rules = kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+                prompt_ids_form: self.config.prompt_ids_form,
+                base_class_id: match &self.consensus_config.params.palw_consensus_mode {
+                    kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.base_class_id,
+                    _ => Hash64::default(),
+                },
+                da_signer_liability: false,
+            };
+            let Some(fault) = palw_tir_identity_fault_v1(duty, &binding, rules) else { return };
+            let object = kaspa_consensus_core::palw_offence_attribution_v1::palw_tir_identity_object_v1(
+                duty.executor_bond,
+                duty.claim_id,
+                &binding,
+            );
+            let Some(filing) = PalwConvictionFilingV1::of_offence(
+                object,
+                duty.claim_id,
+                palw_kind4_file_by_v1(receipt_deadline, current_daa),
+                PalwFilingOriginV1::BorrowedRoot,
+            ) else {
+                return;
+            };
+            info!(
+                "[{PALW_PANEL}] IR claim {}: its capture reproduces its committed root under another job ({fault:?}) — filing \
+                 TirIdentityMismatch (kind 7, J1 auto)",
+                duty.claim_id
+            );
+            self.reporter_filer_file_v1(session, filer, filing, bond_key, network_domain);
+            return;
+        }
         let Ok((_backend, binding)) = offload(backend, move |b| {
             let _held_for_the_probe = reserved;
             palw_borrowed_root_binding_v1(b, &owned, roots)

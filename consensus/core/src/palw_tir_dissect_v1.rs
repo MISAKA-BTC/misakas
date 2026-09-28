@@ -298,6 +298,19 @@ pub fn palw_tir_dissect_obligations_v1(block: &Block, node: u16) -> Result<(), P
 /// value-chosen read in the `H`-free region is bounded too). What admission sizes a round, a root
 /// claim and the value cap against.
 pub fn palw_tir_dissect_value_bound_v1(program: &TirProgramV1, block: &Block, node: u16, tile_len: u32) -> u64 {
+    palw_tir_dissect_value_bound_v2(program, block, node, tile_len, crate::palw_tir_fence2_v1::PalwTirDemandRulesV1::Release2000)
+}
+
+/// [`palw_tir_dissect_value_bound_v1`] under the box-demand rules `rules`: past
+/// `Params::palw_tir_fence2`, a `TopK` passes the rows a run of `d` elements can touch (ref2's H7),
+/// so `V` is never below the closure a claim of a TopK tile carries (§9.5.6).
+pub fn palw_tir_dissect_value_bound_v2(
+    program: &TirProgramV1,
+    block: &Block,
+    node: u16,
+    tile_len: u32,
+    rules: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
+) -> u64 {
     let computed = palw_tir_cone_computed_v1(block, node);
     let n = block.nodes.len();
     if node as usize >= n {
@@ -332,9 +345,13 @@ pub fn palw_tir_dissect_value_bound_v1(program: &TirProgramV1, block: &Block, no
             Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => {
                 d.saturating_mul(first.as_ref().and_then(|s| s.get(axis as usize)).copied().unwrap_or(1) as u64)
             }
-            Prim::TopK { axis, k } => d
-                .div_ceil(k.max(1) as u64)
-                .saturating_mul(first.as_ref().and_then(|s| s.get(axis as usize)).copied().unwrap_or(1) as u64),
+            Prim::TopK { axis, k } => match first.as_ref() {
+                Some(shape) => {
+                    let shape: Vec<u64> = shape.iter().map(|x| *x as u64).collect();
+                    rules.topk_operand_demand(d, k as u64, axis as usize, &shape)
+                }
+                None => d.div_ceil(k.max(1) as u64),
+            },
             _ => d,
         };
         for r in &nd.inputs {
