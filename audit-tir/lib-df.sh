@@ -18,7 +18,8 @@ WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-tir-drill}
 BIN_DIR=${BIN_DIR:-}
 KASPAD_BIN=${KASPAD_BIN:-${BIN_DIR:+$BIN_DIR/kaspad}}
 CLI_BIN=${CLI_BIN:-$(dirname "${KASPAD_BIN:-/nonexistent/kaspad}")/misaka}
-OLD_KASPAD_BIN=${OLD_KASPAD_BIN:-}
+# The fleet's release (the arm64 int-7 build, the exact commit the fleet runs), per the coordinator 2026-09-28.
+OLD_KASPAD_BIN=${OLD_KASPAD_BIN:-/Users/wata/Downloads/MISAKA-wt-b/lifecycle-run/bin/7aba8dd57/kaspad}
 # The offline tools (palw-class, palw-a16-to-tir, palw-tir-equiv): beside kaspad unless named.
 TOOLS_BIN=${TOOLS_BIN:-$(dirname "${KASPAD_BIN:-/nonexistent/kaspad}")}
 KR=$WORK_DIR/keyring
