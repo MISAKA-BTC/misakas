@@ -303,14 +303,8 @@ impl<'a> FillCtx<'a> {
     /// fixed point relative to each row's main unit, `wo[o][j] = W[o, c_j] · t_{c_j} /
     /// (sw[o] · t_main) · 2^f[o]`, with `f[o] ≤ f_max` as large as keeps them inside `±2^30`.
     pub fn split_rows(&self, p: u32, kx: &ScaleKey, f_max: i32) -> Result<Arc<SplitCodes>> {
-        self.split_rows_as(p, kx, f_max, false)
-    }
-
-    /// [`Self::split_rows`] with the main codes at per-row `i16` (`main16`) when `bits16`; `main`
-    /// then carries only the rows' scales.
-    pub fn split_rows_as(&self, p: u32, kx: &ScaleKey, f_max: i32, bits16: bool) -> Result<Arc<SplitCodes>> {
         let out = self.outliers(kx)?;
-        let mk = format!("{p}:{out:?}:{f_max}:{bits16}");
+        let mk = format!("{p}:{out:?}:{f_max}");
         if let Some(r) = self.split_memo.lock().expect("memo").get(&mk) {
             return Ok(r.clone());
         }
@@ -322,12 +316,7 @@ impl<'a> FillCtx<'a> {
                 masked[r * cols + c] = 0.0;
             }
         }
-        let (main, main16) = if bits16 {
-            let m16 = crate::quant::quantize_rows16(&masked, rows, cols);
-            (RowCodes { rows, cols, codes: Vec::new(), scales: m16.scales.clone() }, Some(m16))
-        } else {
-            (quantize_rows(&masked, rows, cols, None), None)
-        };
+        let main = quantize_rows(&masked, rows, cols, None);
         let tv = self.scale_vec(kx, cols)?;
         let tn = self.scale(kx)?;
         let mut wo = Vec::with_capacity(rows * out.len());
@@ -341,7 +330,7 @@ impl<'a> FillCtx<'a> {
                 vals.iter().map(|v| (v * 2f64.powi(fr)).round().clamp(-(1i64 << 31) as f64 + 1.0, (1i64 << 31) as f64 - 1.0) as i32),
             );
         }
-        let sc = Arc::new(SplitCodes { main, main16, outliers: out, wo, f });
+        let sc = Arc::new(SplitCodes { main, outliers: out, wo, f });
         self.split_memo.lock().expect("memo").insert(mk, sc.clone());
         Ok(sc)
     }
@@ -351,8 +340,6 @@ impl<'a> FillCtx<'a> {
 #[derive(Clone, Debug)]
 pub struct SplitCodes {
     pub main: RowCodes,
-    /// The main codes at per-row `i16` (`split_rows_as(.., true)`); `main.codes` is then empty.
-    pub main16: Option<crate::quant::RowCodes16>,
     pub outliers: Vec<usize>,
     /// `[rows, outliers]`, row-major.
     pub wo: Vec<i32>,
