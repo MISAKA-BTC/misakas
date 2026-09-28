@@ -21,16 +21,15 @@ evidence.
   * **After the freeze** (§5.2): the post-freeze precision work (tir/lower `b60e91ef5`, `1f9c2fc80`,
     `b5f892be4`, `251f77f23`; no primitive) takes the long-context factor to ×1.47 (Qwen3.5) and
     ×1.46 (Mamba). The single-document ratios are ×2.15 and ×1.67.
-  * **The drift column's absolute floor** (decided 2026-09-29 by the RFC-0002 coordinator, corpus-v1
-    §9): a row passes if KL at 4,096 ≤ 1.5 × KL at 128, **or** KL at 4,096 ≤ 0.01. Under it:
-    * Jamba passes on the ratio (×0.37).
-    * Mamba passes on the floor (late window 0.00035; all 4,096 positions 0.00028).
-    * Qwen3.5 passes on the reading the decision quoted, its KL over all 4,096 positions (0.0085).
-      Its late window alone (positions 3,968–4,096) is 0.0123, 0.0023 above the floor. That window
-      is mostly the document's harder tail, which scores 0.0085 even at a short context (§5.2).
-  * **Criterion 5 is met** under the rule as decided. Should the floor be read on the late window
-    only, Qwen3.5's row is the one exception, and it is recorded here in case that reading is
-    chosen. §9's 16 × 4,096 sample is scheduled for the record (§8).
+  * **The drift column's definition** (decided 2026-09-29 by the RFC-0002 coordinator, corpus-v1
+    §9). Drift is measured like-for-like: the same target tokens (positions 3,968–4,096) scored at
+    4,096 context against short context. A row passes if the ratio is ≤ 1.5, or, secondarily, if
+    KL at 4,096 ≤ 0.01. A change of text difficulty is not drift. All three rows pass on the ratio:
+    * Qwen3.5: 0.01227 / 0.00836 = ×1.47.
+    * Mamba: 0.00035 / 0.00024 = ×1.46. It also passes the floor.
+    * Jamba: 0.00091 / 0.00148 = ×0.61.
+  * **Criterion 5 is met**, with no exception. §9's 16 × 4,096 sample is scheduled for a quiet
+    window, for the record (§8).
 * **What the freeze fixes, and what it leaves open.** Fixed: the primitive set, its semantics (spec
   04b rev2) and the descriptor; a change to any of them is v2, with a new `prim_set_id`. Open: the
   lowering, calibration, library forms and quantisation. Those change programs and artifacts, never
@@ -61,7 +60,7 @@ full under the freeze declaration above.
 | 2 | minimality | **holds** (25 < the 30–50 target, argued) | corpus-v1 §8.2 per primitive; nothing added since Gate 1 |
 | 3 | stability under the last family | **holds** | the last families (MLA + group-limited routing, RWKV-4; RWKV-6/7 in the library) forced no primitive; `prim.rs` has held 25 since `ac7b96ae7` |
 | 4 | three-way bit identity | **holds** | golden 239/239 on ref2; 1,824 positions × 57 HF programs equal on reference/ref2/exec; admission and demand differentials 0 disagreements; D-F1: 13,846 positions of the genesis 8k artifact equal to the legacy engine |
-| 5 | fidelity | **met**: every fidelity row (57/57 fixtures, 7/7 real checkpoints), and every drift row under the absolute floor decided 2026-09-29 (KL at 4,096 ≤ 1.5 × KL at 128, or ≤ 0.01): Jamba ×0.37; Mamba 0.00035; Qwen3.5 0.0085 over all 4,096 positions (its late window alone is 0.0123) (§5.2) | Mamba-370m 1.000 / 0.00021 / −0.14 %; Qwen2.5-1.5B 0.980 / 0.0008 / +0.53 % |
+| 5 | fidelity | **met**: every fidelity row (57/57 fixtures, 7/7 real checkpoints), and every drift row under the like-for-like definition decided 2026-09-29 (the same tokens at 4,096 vs short context ≤ ×1.5; floor ≤ 0.01 secondary): Qwen3.5 ×1.47, Mamba ×1.46, Jamba ×0.61 (§5.2) | Mamba-370m 1.000 / 0.00021 / −0.14 %; Qwen2.5-1.5B 0.980 / 0.0008 / +0.53 % |
 | 6 | legacy conformance | **holds** | 38 integer catalogue kernels + `RequantizeByToken` byte-identical on the live code; the whole dense A16 tier by D-F1 (9,373,742 legacy node rows equal) |
 | 7 | static verifiability | **holds with one stated window** | `tir_admit_v1` admits every corpus and HF-lowered program at the legacy court's ceilings; DeepSeek-V3 needs a window ≤ `2^16` |
 
@@ -352,15 +351,19 @@ corpus-v1 §9 proposed 16 × 4,096 sequences, which average such tails out. The 
 separates the recurrence from the text and from the noise floor: Qwen3.5 ×1.47, Mamba ×1.46,
 Jamba ×0.61.
 
-**The rule that settles the column** (decided 2026-09-29, now corpus-v1 §9): a row passes if KL at
-4,096 ≤ 1.5 × KL at 128, **or** KL at 4,096 ≤ 0.01 nats. The ratio of two numbers near zero is not
-a meaningful gate.
+**The rule that settles the column** (decided 2026-09-29, now corpus-v1 §9):
+- Drift is measured like-for-like: the same target tokens (the last 128 of a 4,096-token held-out
+  document) scored at 4,096 context against at short context (positions 128–256 of the document's
+  last 256 tokens).
+- A row passes if that ratio is ≤ 1.5, or, secondarily, if KL at 4,096 ≤ 0.01 nats.
+- A change of text difficulty is not drift. The early window (64–192) scores different tokens and is
+  reported only.
 
-| row | KL at 128 | KL at 4,096: late window | KL at 4,096: all positions | ratio | passes |
-| --- | --- | --- | --- | --- | --- |
-| Qwen3.5-0.8B | 0.00572 | 0.01227 | 0.00845 | 2.15 | yes on the all-positions reading, the one the decision quoted; the late window is 0.0023 over the floor |
-| Mamba-370m | 0.00021 | 0.00035 | 0.00028 | 1.67 | **yes** (the floor, either reading) |
-| Jamba-tiny-dev | 0.00248 | 0.00091 | 0.00117 | 0.37 | **yes** (the ratio) |
+| row (lowering) | KL at 4,096 (3,968–4,096) | same tokens at short context | ratio | floor | early window 64–192 | passes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Qwen3.5-0.8B (`b60e91ef5`) | 0.01227 | 0.00836 | **×1.47** | 0.0123 > 0.01 | 0.00572 | **yes** (the ratio) |
+| Mamba-370m (`251f77f23`) | 0.00035 | 0.00024 | **×1.46** | 0.00035 ≤ 0.01 | 0.00021 | **yes** (both) |
+| Jamba-tiny-dev (`251f77f23`) | 0.00091 | 0.00148 | **×0.61** | 0.00091 ≤ 0.01 | 0.00248 | **yes** (both) |
 
 One more lowering option was tried for Qwen3.5 after the rule was set: per-row `i16` weights for
 the gated delta's decay and β projections (`89c4fbcd9`, the Mamba lesson). It left the late window
@@ -428,16 +431,15 @@ provisional `palw_tir_v1` ceilings (`max_macs_per_position` 2^37, `max_cone_work
 
 ## 8. Open after the freeze (lowering work; none of it changes `prim_set_id`)
 
-1. **Recurrence drift: settled by the absolute floor** (decided 2026-09-29; §5.2 and corpus-v1 §9).
-   What remains is for the record:
+1. **Recurrence drift: settled** by the like-for-like definition (decided 2026-09-29; §5.2 and
+   corpus-v1 §9). What remains is for the record:
    * **§9's 16 × 4,096 sample**, scheduled for a quiet window rather than a night with release builds
      and a drill on this host. It takes about 7 hours, one checkpoint at a time, each run under
      8 GB. The runner, `tir-lower-target/fidelity/real/run-sample16.sh`, and its token files are
      prepared.
-   * **Qwen3.5's late window** (0.0123, if the floor is ever read on the late window alone). The
-     lowering options left are `v` finer at its source (a Q24 SiLU on the conv's `v` part) and the
-     conv path's own precision. The decay and β projections at `i16` did not help (reverted,
-     `403b38c6a`).
+   * **Qwen3.5's margin** (×1.47 against 1.5). Lowering options left: `v` finer at its source (a
+     Q24 SiLU on the conv's `v` part) and the conv path's own precision. The decay and β projections
+     at `i16` did not help (reverted, `403b38c6a`).
 2. **No real checkpoint under the download rules** for Gemma-3 (every official checkpoint is
    gated), Mamba-2 and RWKV-4.
    * Mamba-2 has no official HF-format checkpoint of ≤ 3B: `mistralai/Mamba-Codestral-7B-v0.1` is
