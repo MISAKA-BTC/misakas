@@ -141,7 +141,7 @@ impl<'a> TirClassRunnerV1<'a> {
         verify: bool,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<TirJobRunV1, String> {
-        let d = self.drive(ctx, prompt, cap, verify, None, None, on_leaf)?;
+        let d = self.drive(ctx, prompt, cap, verify, None, None, None, on_leaf)?;
         self.commit(ctx, cap, d)
     }
 
@@ -154,7 +154,7 @@ impl<'a> TirClassRunnerV1<'a> {
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<(TirJobRunV1, Vec<TirResumePointV1>), String> {
         let mut points = Vec::new();
-        let d = self.drive(ctx, prompt, cap, false, None, Some(&mut points), on_leaf)?;
+        let d = self.drive(ctx, prompt, cap, false, None, None, Some(&mut points), on_leaf)?;
         Ok((self.commit(ctx, cap, d)?, points))
     }
 
@@ -193,7 +193,22 @@ impl<'a> TirClassRunnerV1<'a> {
         point: &TirResumePointV1,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<TirRangeRunV1, String> {
-        let d = self.drive(ctx, prompt, cap, false, Some(point), None, on_leaf)?;
+        self.replay(ctx, prompt, cap, Some(point), None, on_leaf)
+    }
+
+    /// **Replay part of a job**: from `from` (the job's start when `None`) through position
+    /// `until − 1` (the job's end when `None`) — the leaves, at their indices, of the uninterrupted
+    /// run over those positions. What an evidence builder re-derives a retained job's leaves with.
+    pub fn replay(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        cap: u64,
+        from: Option<&TirResumePointV1>,
+        until: Option<u32>,
+        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
+    ) -> Result<TirRangeRunV1, String> {
+        let d = self.drive(ctx, prompt, cap, false, from, until, None, on_leaf)?;
         Ok(TirRangeRunV1 { first_index: d.first_index, leaf_hashes: d.hashes, logits_rows: d.rows, generated: d.generated })
     }
 
@@ -205,6 +220,7 @@ impl<'a> TirClassRunnerV1<'a> {
         cap: u64,
         verify: bool,
         start: Option<&TirResumePointV1>,
+        until: Option<u32>,
         mut record: Option<&mut Vec<TirResumePointV1>>,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<Driven, String> {
@@ -258,7 +274,12 @@ impl<'a> TirClassRunnerV1<'a> {
             meta: verify.then(Vec::new),
         };
         let mut rows: Vec<Vec<i32>> = Vec::with_capacity(ctx.exact_decode_tokens as usize);
-        for a in first_position..job.positions {
+        let end = match until {
+            None => job.positions,
+            Some(u) if u >= first_position && u <= job.positions => u,
+            Some(u) => return Err(format!("a replay to position {u} from {first_position} of a job of {}", job.positions)),
+        };
+        for a in first_position..end {
             let first = emit.first_index + emit.hashes.len() as u64;
             let token = if a < job.prefill {
                 prompt[a as usize]
@@ -338,7 +359,7 @@ impl<'a> TirClassRunnerV1<'a> {
                 points.push(self.capture(&exec, a, &generated)?);
             }
         }
-        if emit.first_index + emit.hashes.len() as u64 != total {
+        if end == job.positions && emit.first_index + emit.hashes.len() as u64 != total {
             return Err(format!("{} leaves produced, the step space counts {total}", emit.first_index + emit.hashes.len() as u64));
         }
         Ok(Driven { first_index, hashes: emit.hashes, rows, generated, tiled })

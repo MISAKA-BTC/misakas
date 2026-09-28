@@ -27,12 +27,14 @@ kaspa-consensus-core = { workspace = true, optional = true }
 misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact", optional = true }
 libc = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
+# The node-side bisection prefix state is a keyed BLAKE2b-512 (as the legacy families' is).
+blake2b_simd = { workspace = true, optional = true }
 # Only for `tir-exec-bench --legacy/--mirror`: the legacy A16 engine at the same geometry, the
 # comparison the Phase F plan names (F9).
 misaka-palw-base0 = { workspace = true, optional = true }
 
 [features]
-node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:libc", "dep:borsh"]
+node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:libc", "dep:borsh", "dep:blake2b_simd"]
 legacy-bench = ["node", "dep:misaka-palw-base0"]
 
 [dev-dependencies]

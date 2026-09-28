@@ -7,12 +7,15 @@
 
 use std::borrow::Cow;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
 use kaspa_consensus_core::palw_tir_artifact_v1::{PalwTirTensorSourceV1, palw_tir_inventory_root_v1};
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1, PalwTirLayoutV1};
 use misaka_palw_tir_artifact::PalwTirContainerV1;
 
+use super::inventory::{TirInventoryTreeV1, TirParamOpenerV1};
 use super::mapped::MappedFile;
 use crate::params::{ParamData, TirParams};
 use crate::plan::TirPlan;
@@ -23,6 +26,8 @@ pub struct TirArtifactV1 {
     params: TirParams<'static>,
     plan: TirPlan,
     container: PalwTirContainerV1,
+    /// The inventory tree, built on the first opening (a court close; never at load).
+    tree: OnceLock<Result<TirInventoryTreeV1, String>>,
     map: MappedFile,
 }
 
@@ -48,7 +53,7 @@ impl TirArtifactV1 {
             let data = ParamData::from_le_bytes(d.dtype, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
             params.insert(&plan, j, layer, data).map_err(|e| format!("{}: {e}", path.display()))?;
         }
-        Ok(TirArtifactV1 { params, plan, container, map })
+        Ok(TirArtifactV1 { params, plan, container, tree: OnceLock::new(), map })
     }
 
     pub fn plan(&self) -> &TirPlan {
@@ -86,13 +91,25 @@ impl TirArtifactV1 {
     /// **The inventory root and leaf count** — streamed from the mapping, one instance at a time,
     /// through the consensus inventory.
     pub fn inventory_root(&self) -> Result<(Hash64, u32), String> {
-        struct Src<'a>(&'a TirArtifactV1);
-        impl PalwTirTensorSourceV1 for Src<'_> {
-            fn tensor_bytes(&self, param: u16, layer: Option<u16>) -> Option<Cow<'_, [u8]>> {
-                let (off, len) = self.0.container.locate(param, layer)?;
-                self.0.map.bytes().get(off as usize..(off + len) as usize).map(Cow::Borrowed)
-            }
-        }
-        palw_tir_inventory_root_v1(&self.plan.program, &Src(self)).map_err(|e| e.to_string())
+        palw_tir_inventory_root_v1(&self.plan.program, self).map_err(|e| e.to_string())
+    }
+
+    /// The inventory tree (built once, on first use).
+    pub fn inventory_tree(&self) -> Result<&TirInventoryTreeV1, String> {
+        self.tree.get_or_init(|| TirInventoryTreeV1::build(&self.plan.program, self)).as_ref().map_err(|e| e.clone())
+    }
+}
+
+/// The mapping serves every instance's bytes in place.
+impl PalwTirTensorSourceV1 for TirArtifactV1 {
+    fn tensor_bytes(&self, param: u16, layer: Option<u16>) -> Option<Cow<'_, [u8]>> {
+        let (off, len) = self.container.locate(param, layer)?;
+        self.map.bytes().get(off as usize..(off + len) as usize).map(Cow::Borrowed)
+    }
+}
+
+impl TirParamOpenerV1 for TirArtifactV1 {
+    fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
+        self.inventory_tree().ok()?.open(&self.plan.program, self, leaf)
     }
 }

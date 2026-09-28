@@ -248,6 +248,18 @@ impl Buf {
 }
 
 impl<'a> Slice<'a> {
+    /// The elements as little-endian bytes of their dtype (a param's artifact form).
+    pub fn to_le_bytes(&self) -> Vec<u8> {
+        let dtype = self.dtype();
+        let mut out = Vec::with_capacity(self.len() * dtype.width());
+        with_slice!(*self, v => {
+            for x in v.iter() {
+                dtype.encode_le(x.to_i128(), &mut out);
+            }
+        });
+        out
+    }
+
     pub fn dtype(&self) -> DType {
         match self {
             Slice::I8(_) => DType::I8,

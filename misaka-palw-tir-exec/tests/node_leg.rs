@@ -9,11 +9,9 @@
 //! trace root and the IR execution root.
 #![cfg(feature = "node")]
 
-#[path = "../../misaka-palw-tir/tests/common/mod.rs"]
-mod tircommon;
+mod node_common;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_step_refute::{base0_decode_token_select_v1, base0_logits_trace_root_v1, flat_logits_scheme_id_v1};
@@ -24,95 +22,11 @@ use kaspa_consensus_core::palw_tir_step_v1::{
     PalwTirLeafKindV1, PalwTirStepLegBuilderV1, PalwTirStepSpaceV1, palw_tir_execution_root_v1,
 };
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
-use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, Ref};
-use misaka_palw_tir::{DType, Interpreter, MapParams, RunState, Tensor, TirProgramV1};
+use misaka_palw_tir::program::Ref;
+use misaka_palw_tir::{Interpreter, MapParams, RunState, Tensor, TirProgramV1};
 use misaka_palw_tir_exec::node::TirClassRunnerV1;
 use misaka_palw_tir_exec::{TirParams, TirPlan};
-
-fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect()
-}
-
-/// The program under the flat logits scheme (the vectors' programs name none).
-fn flat(mut p: TirProgramV1) -> TirProgramV1 {
-    p.logits_scheme_id = flat_logits_scheme_id_v1().as_bytes();
-    p
-}
-
-fn programs() -> Vec<(String, TirProgramV1, MapParams)> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v1/programs");
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir).expect("vectors").map(|e| e.unwrap().path()).collect();
-    files.sort();
-    let mut out: Vec<(String, TirProgramV1, MapParams)> = files
-        .into_iter()
-        .map(|path| {
-            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            let program = TirProgramV1::decode_canonical(&unhex(v["program_borsh_hex"].as_str().unwrap())).expect("canonical");
-            let mut params = MapParams::default();
-            for p in v["params"].as_array().unwrap() {
-                let j = p["param"].as_u64().unwrap() as u16;
-                let layer = p["layer"].as_u64().map(|l| l as u16);
-                let d = &program.params[j as usize];
-                let shape: Vec<usize> = d.shape.iter().map(|x| *x as usize).collect();
-                params
-                    .tensors
-                    .insert((j, layer), Tensor::from_le_bytes(d.dtype, &shape, &unhex(p["le_hex"].as_str().unwrap())).unwrap());
-            }
-            (v["name"].as_str().unwrap().to_string(), flat(program), params)
-        })
-        .collect();
-    use tircommon::models::*;
-    for (name, (p, gens)) in [
-        ("corpus dense", dense(&[HISTORY_BOUND_V1_SMALL, HISTORY_BOUND_V1_SMALL])),
-        ("corpus sliding", dense(&[3, HISTORY_BOUND_V1_SMALL, 3])),
-        ("corpus gdn", gdn_program(true)),
-        ("corpus mamba2", mamba2_program()),
-        ("corpus moe", moe_program()),
-    ] {
-        let params = materialize(&p, &gens, 99);
-        out.push((name.to_string(), flat(p), params));
-    }
-    out.push(h_program());
-    out
-}
-
-/// Committed nodes that CARRY `H` (a windowed history summed per position): both halves of F4's
-/// closed form, under three layer occurrences.
-fn h_program() -> (String, TirProgramV1, MapParams) {
-    use misaka_palw_tir::builder::ProgramBuilder;
-    use misaka_palw_tir::{Ref as R, TensorType};
-    let mut pb = ProgramBuilder::new(16, HISTORY_BOUND_V1_SMALL);
-    let emb = pb.param("embed", DType::I8, &[16, 4], false);
-    let hist = pb.hist_state("rows", DType::I8, &[4], 5, true);
-    let carry = TensorType::fixed(DType::I8, &[4]);
-    let pre = {
-        let mut b = pb.block("pre", vec![]);
-        let x = b.gather(emb, R::Input(0), 0, 0);
-        b.finish(&[x])
-    };
-    let layer = {
-        let mut b = pb.block("layer", vec![carry.clone()]);
-        let window = b.hist_append(hist, R::CarryIn(0));
-        let wide = b.cast(window, DType::I32);
-        let wide = b.commit(wide);
-        let sum = b.reduce_sum(wide, 0, DType::I32);
-        let sum = b.reshape_fixed(sum, &[4]);
-        let y = b.clamp(sum, -128, 127, DType::I8);
-        b.finish(&[y])
-    };
-    let (post, logits) = {
-        let mut b = pb.block("post", vec![carry]);
-        let l = b.cast(R::CarryIn(0), DType::I32);
-        let l = b.commit(l);
-        let R::Node(i) = l else { unreachable!() };
-        (b.finish(&[]), i)
-    };
-    let program = pb.finish(pre, vec![layer, layer, layer], post, logits);
-    let mut params = MapParams::default();
-    let data: Vec<i128> = (0..64).map(|i| ((i * 37 + 11) % 256) as i128 - 128).collect();
-    params.tensors.insert((0, None), Tensor::new(DType::I8, vec![16, 4], data).unwrap());
-    ("h-window-sum".to_string(), flat(program), params)
-}
+use node_common::programs;
 
 fn layout(p: &TirProgramV1, seed: u32, c: u32, h: u32, max_context: u32) -> PalwTirLayoutV1 {
     let committed: usize = p.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum();
