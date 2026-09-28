@@ -79,6 +79,17 @@ mod palw_filer_replay;
 #[path = "palw_operator_da.rs"]
 mod palw_operator_da;
 
+/// ADR-0160 F-Q (stage 2, rcore/cap-s1): the operator's audit duty — an operator node in a credited
+/// claim's audit pool replays it and posts a receipt batch when it reproduces (a child module, so it
+/// reads the replay runner and the court queue's seams).
+#[path = "palw_audit_duty.rs"]
+mod palw_audit_duty;
+
+/// ADR-0160 lane verify V1: a seat's one window root a DAA, the collector's window pool and its batch
+/// licence (node policy; dormant below `palw_capacity_batch_licence`).
+#[allow(dead_code)]
+mod batch_licence;
+
 /// **Take the host ledger's reservation for a replay of `role`** — the body of
 /// [`PalwPanelService::reserve_replay_v1`], free of the service so a blocking task that prices its
 /// own need (the replay filer's, which decodes its candidates off the loop) takes it through the
@@ -100,6 +111,10 @@ const PALW_PANEL: &str = "palw-panel";
 
 /// ADR-0152 §4-ter N3: a held dissection's moves, answered off the tick by the windowed builders.
 mod held_court;
+/// RFC-0002 Phase F (F6, node half): an IR class's court close.
+mod tir_court;
+#[cfg(test)]
+mod tir_court_e2e;
 /// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
 #[cfg(test)]
 mod held_court_e2e;
@@ -149,6 +164,8 @@ pub(crate) fn own_claim_events_at_v1(
                     R::CourtDefault => "court_default",
                     // ADR-0152 §4-ter (F3, decision (B)): a held dissection's verdict, past `palw_offence_attribution`.
                     R::CourtHeldVerdict => "court_held_verdict",
+                    // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
+                    R::AggregateForfeit => "aggregate_forfeit",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }
@@ -2042,8 +2059,24 @@ pub(crate) fn palw_da_unit_answer_v1(
         PalwDaCaptureV1::FreePrompt(payload) => &payload.capture,
         PalwDaCaptureV1::Attempt(capture) => capture,
     };
+    // RFC-0002 Phase F (F6 D): an IR claim's material is an IR capture, and its events are disclosed
+    // in the IR form (`PalwDaAnswerV1::TirEvent`), from the capture's own binding, rows and ids.
+    let tir_capture = capture.starts_with(&misaka_palw_sdk::lineages::tir::TirCaptureV1::MAGIC);
     let missing = match unit {
-        PalwDaUnitV1::Event { row, tile } => return backend.disclose_trace_event(capture, row, tile).map(PalwDaAnswerV1::Event),
+        PalwDaUnitV1::Event { row, tile } => {
+            if let Some(answer) = misaka_palw_sdk::lineages::tir::tir_trace_event_disclosure_of_capture_v1(capture, row, tile) {
+                // The answer rides without the class's program: the chain holds the registered one
+                // and refuses a carried copy (RFC-0002 Phase F, decision 2).
+                return answer.map(|mut disclosure| {
+                    disclosure.strip_program_v1();
+                    PalwDaAnswerV1::TirEvent(Box::new(disclosure))
+                });
+            }
+            return backend.disclose_trace_event(capture, row, tile).map(PalwDaAnswerV1::Event);
+        }
+        PalwDaUnitV1::Held(_) if tir_capture => {
+            return Err("an IR claim answers no held unit: the held regime's units are the legacy families' (RFC-0002 Phase F)".into());
+        }
         PalwDaUnitV1::Held(missing) => missing,
     };
     let (binding, disclosure) = match (material, &facts.lane) {
@@ -2114,7 +2147,8 @@ pub(crate) fn palw_da_claim_answers_v1(
             continue;
         }
         let answer = palw_da_unit_answer_v1(backend, facts, &material, *unit);
-        flat |= matches!(answer, Ok(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })));
+        flat |= matches!(answer, Ok(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })))
+            || matches!(&answer, Ok(PalwDaAnswerV1::TirEvent(disclosure)) if disclosure.is_flat());
         answers.push(Some(answer));
     }
     Ok(PalwDaClaimAnswersV1 { remade, answers })
@@ -2411,6 +2445,8 @@ pub(crate) fn palw_carrier_replaceable_v1(tx: &Transaction) -> bool {
             payload.object,
             PalwConsensusObjectV2::BondRegistered { .. }
                 | PalwConsensusObjectV2::ClassRegistered { .. }
+                | PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }
+                | PalwConsensusObjectV2::ClassRegisteredGenV1 { .. }
                 | PalwConsensusObjectV2::FreePromptCommitted { .. }
         ),
         Err(_) => false,
@@ -3475,6 +3511,16 @@ impl PalwPanelService {
             .registration_candidate(registry.holdings(), &terms, self.config.register_class.as_deref())
             .ok()
             .map(|c| c.entry.class_id())
+            // RFC-0002 Phase F (F6): the IR class one of this node's IR artifacts declares.
+            .or_else(|| {
+                misaka_palw_sdk::tir_registration::tir_registration_candidate_v1(
+                    registry.holdings(),
+                    &terms,
+                    self.config.register_class.as_deref(),
+                )
+                .ok()
+                .map(|entry| entry.class_id())
+            })
     }
 
     // **This network's price for a job shape** — the same arithmetic the chain used to open the
@@ -5304,10 +5350,16 @@ impl PalwPanelService {
         // `registration_candidate`: one path, shared with every other consumer of the ledger, so
         // a new lineage registers here without this function learning it exists.
         let registry = self.backends();
-        let candidate = registry
-            .sdk()
-            .registration_candidate(registry.holdings(), &terms, self.config.register_class.as_deref())
-            .map_err(|e| e.to_string())?;
+        let picked = registry.sdk().registration_candidate(registry.holdings(), &terms, self.config.register_class.as_deref());
+        let candidate = match picked {
+            Ok(candidate) => candidate,
+            // RFC-0002 Phase F (F6): no legacy class is the pick, and this node holds IR artifacts —
+            // the class one of them declares is.
+            Err(_) if !misaka_palw_sdk::tir_registration::tir_entries_of_v1(registry.holdings()).is_empty() => {
+                return self.build_tir_class_registration(session, &terms, bond_key);
+            }
+            Err(e) => return Err(e.to_string()),
+        };
 
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
             &self.consensus_config.params.palw_consensus_mode
@@ -5378,6 +5430,47 @@ impl PalwPanelService {
         );
         let signature = self
             .sign(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT)
+            .ok_or("this node holds no bond key, so it cannot sign a registration")?;
+        build(signature)
+    }
+
+    /// **Build the `ClassRegisteredTirV1` for the IR class this node holds an artifact for**
+    /// (RFC-0002 Phase F, F6's node half). The legacy registration's discipline: the class is the
+    /// one the loaded `PALWTIR1` artifact declares (program, layout, tokenizer) under the root its
+    /// bytes derive, every term is the chain's (weightless until the chain certifies an IR family),
+    /// the gate runs before anything is signed, and the registrant bond signs the message of the
+    /// object's own fields under the IR registration context.
+    fn build_tir_class_registration(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        terms: &kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2,
+        bond_key: PalwBondKeyV2,
+    ) -> Result<PalwConsensusObjectV2, String> {
+        use misaka_palw_sdk::tir_registration::{build_tir_registration_v1, tir_registration_candidate_v1, tir_registration_message_v1};
+        let registry = self.backends();
+        let entry = tir_registration_candidate_v1(registry.holdings(), terms, self.config.register_class.as_deref())?;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+            &self.consensus_config.params.palw_consensus_mode
+        else {
+            return Err("this chain has no V2 bundle, so there is nothing to register a class into".to_string());
+        };
+        let params = &self.consensus_config.params;
+        let daa = session.get_virtual_daa_score();
+        info!(
+            "[{PALW_PANEL}] registering the IR class {} ({}) at artifact root {}",
+            entry.class_id(),
+            entry.model_id,
+            entry.artifact_root
+        );
+        let build = |signature: Vec<u8>| build_tir_registration_v1(params, bundle, &entry, terms, 0, bond_key, signature, daa);
+        let unsigned = build(Vec::new())?;
+        let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
+        let message = tir_registration_message_v1(domain, &unsigned).ok_or("the builder did not build an IR registration")?;
+        let signature = self
+            .sign(message.as_byte_slice(), kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1)
             .ok_or("this node holds no bond key, so it cannot sign a registration")?;
         build(signature)
     }
@@ -7023,6 +7116,8 @@ impl PalwPanelService {
         // Lane B (panel-seed stopgap (B)): the operator's non-seat accusations; armed by identity alone.
         let mut operator_da =
             palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_registrations_v1(&self.consensus_config.params));
+        // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
+        let mut audit_duty = palw_audit_duty::PalwAuditDutyV1::new();
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -7229,7 +7324,11 @@ impl PalwPanelService {
                         info!("[{PALW_PANEL}] built a class registration for this node's worker");
                         class_registration = Some(object);
                     }
-                    Err(e) => warn!("[{PALW_PANEL}] cannot register this node's class: {e}"),
+                    // Once a minute: a gate that refuses (an IR class below `palw_tir_v1`, say) refuses
+                    // every tick until the chain moves, and the retry each tick is what registers it then.
+                    Err(e) => crate::palw_backends::note_throttled_v1("class-registration-build", || {
+                        format!("[{PALW_PANEL}] cannot register this node's class: {e}")
+                    }),
                 }
             }
             // **Submit HERE, before the duty sweep.** The funded carrier used to be built at the
@@ -7443,6 +7542,32 @@ impl PalwPanelService {
                         },
                     ));
                 }
+            }
+
+            // **RFC-0002 Phase F (F6): an IR claim's court where no bisection is played.** The
+            // held regime's court for a legacy claim is its seat's capture arm (`ShardCourtAccused`
+            // over a legacy refutation), which no IR execution has; an IR claim is accused in one
+            // move by an IR close instead (`TirShardCourtAccused`, `tir_court`).
+            if !bisection_is_played
+                && self.consensus_config.params.palw_tir_v1_active_at(current_daa)
+                && (self.config.challenge || !seat_faulted.is_empty() || !replay_refuted.is_empty())
+            {
+                self.tir_one_move_pass_v1(
+                    &session,
+                    bond_key,
+                    network_domain,
+                    current_daa,
+                    &materials,
+                    &seat_faulted,
+                    &replay_refuted,
+                    tir_court::PalwTirOneMoveBooksV1 {
+                        challenged: &mut challenged,
+                        accused: &mut accused,
+                        court_pending: &mut court_pending,
+                        court_due: &mut court_due,
+                    },
+                )
+                .await;
             }
 
             // --- the court's half: answer the disputes this bond is a party to ---
@@ -8206,6 +8331,64 @@ impl PalwPanelService {
                             *court_stalls.entry("the ladder has not narrowed to a step").or_default() += 1;
                             continue;
                         };
+                        // **RFC-0002 Phase F (F6): an IR class closes with an IR proof**, built by the
+                        // IR backend from the ACCUSED capture — `TirCone` for either party, and at a
+                        // logits tile the challenger's `TirLogits` and decode-token doors
+                        // (`palw_panel::tir_court`). A party files only the close that wins its side.
+                        if let Some(tir) = self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root) {
+                            let tir = match tir {
+                                Ok(tir) => tir,
+                                Err(why) => {
+                                    *court_stalls.entry("the IR backend does not build for the class").or_default() += 1;
+                                    warn!("[{PALW_PANEL}] session {}: {why}", duty.session_id);
+                                    continue;
+                                }
+                            };
+                            let Some(accused) = accused_capture.as_deref().map(|c| c.to_vec()) else {
+                                *court_stalls
+                                    .entry("the IR close needs the ACCUSED capture and this node holds none")
+                                    .or_default() += 1;
+                                continue;
+                            };
+                            let own = own_executions.get(&duty.claim_id).cloned();
+                            let rules = tir.court_rules(&self.config.court);
+                            let challenger = !duty.i_am_responder;
+                            let Ok(candidates) = tokio::task::spawn_blocking(move || {
+                                tir_court::palw_tir_close_candidates_v1(&tir, &accused, own.as_deref(), index, &rules, challenger)
+                            })
+                            .await
+                            else {
+                                *court_stalls.entry("the IR close's task did not finish").or_default() += 1;
+                                continue;
+                            };
+                            let mut filed = None;
+                            for (label, built) in candidates {
+                                let proof = match built {
+                                    Ok(proof) => proof,
+                                    Err(why) => {
+                                        trace!(
+                                            "[{PALW_PANEL}] session {}: the IR {label} close does not build: {why}",
+                                            duty.session_id
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let Some(verdict) = session.palw_court_close_verdict_v2(&duty.session_id, &proof) else { continue };
+                                if tir_court::palw_tir_close_is_mine_v1(verdict, duty.i_am_responder) {
+                                    let note = tir_court::palw_tir_close_note_v1(&duty.session_id, label, verdict, index);
+                                    info!("[{PALW_PANEL}] {note}");
+                                    filed = Some(PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof });
+                                    break;
+                                }
+                            }
+                            let Some(object) = filed else {
+                                *court_stalls.entry("no IR close wins this party's side").or_default() += 1;
+                                continue;
+                            };
+                            court_due.insert((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
+                            court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
+                            continue;
+                        }
                         // The rungs speak from each party's OWN execution — that is what makes a
                         // disagreement possible at all. The close does not: it is an assertion
                         // about the accused's step, so it is assembled from the accused's bytes by
@@ -10785,6 +10968,23 @@ impl PalwPanelService {
             )
             .await;
 
+            // --- ADR-0160 F-Q (stage 2): the operator's audit duty (`palw_audit_duty`) ---
+            //
+            // Past `palw_capacity_audit_door` a credited claim reaches Final only through `k_aud` receipts
+            // from its pool; a node in a pool replays the claim on its turn and receipts it when it
+            // reproduces. Identity arms it (the chain's read is empty otherwise); no flag does.
+            self.audit_duty_tick_v1(
+                &session,
+                &mut audit_duty,
+                current_daa,
+                network_domain,
+                bond_key,
+                seat_replays.has_room(false),
+                &mut court_pending,
+                &mut court_due,
+            )
+            .await;
+
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {
                 // Resolve the fee UTXO ONCE per tick and then CHAIN it: the change of a carrier
@@ -12094,6 +12294,15 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::SeatReadinessProved { .. } => "SeatReadinessProved",
         PalwConsensusObjectV2::ClassManifestV2 { .. } => "ClassManifestV2",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
+        PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
+        PalwConsensusObjectV2::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",
+        PalwConsensusObjectV2::TirShardCourtAccused { .. } => "TirShardCourtAccused",
+        PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
+        PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
+        PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
+        PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared; the chain drops each until its owner lands it, and no
         // path in this node builds one yet.

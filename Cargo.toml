@@ -41,10 +41,17 @@ members = [
     "misaka-palw-sdk",
     "misaka-palw-derive",
     "misaka-palw-extension",
+    "misaka-palw-tir",
+    "misaka-palw-tir-exec",
+    "misaka-palw-tir-ref2",
+    "misaka-palw-tir-artifact",
+    "misaka-palw-tir-conformance",
     "tools/palw-jobs-export",
     "tools/palw-job-replay",
     "misaka-palw-reference2",
     "misaka-palw-reexecutor",
+    "misaka-palw-tir-lower",
+    "misaka-palw-gen",
     "simpa",
     "wasm",
     "wasm/core",
@@ -152,10 +159,17 @@ default-members = [
     "misaka-palw-sdk",
     "misaka-palw-derive",
     "misaka-palw-extension",
+    "misaka-palw-tir",
+    "misaka-palw-tir-exec",
+    "misaka-palw-tir-ref2",
+    "misaka-palw-tir-artifact",
+    "misaka-palw-tir-conformance",
     "tools/palw-jobs-export",
     "tools/palw-job-replay",
     "misaka-palw-reference2",
     "misaka-palw-reexecutor",
+    "misaka-palw-tir-lower",
+    "misaka-palw-gen",
     "simpa",
     "wasm",
     "wasm/core",
@@ -292,6 +306,8 @@ misaka-palw-derive = { version = "1.1.0", path = "misaka-palw-derive" }
 misaka-palw-extension = { version = "1.1.0", path = "misaka-palw-extension" }
 misaka-palw-fp-submit = { version = "1.1.0", path = "misaka-palw-fp-submit" }
 misaka-palw-constraint = { version = "1.1.0", path = "misaka-palw-constraint" }
+misaka-palw-tir = { path = "misaka-palw-tir" }
+misaka-palw-gen = { path = "misaka-palw-gen" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka-palw" }

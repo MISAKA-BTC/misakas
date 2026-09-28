@@ -857,7 +857,7 @@ fn v02_a_lock_heavy_seat_with_an_open_held_dissection_reads_one_room_at_the_draw
     assert_eq!(floor, Some(c.sp.min_collateral_sompi()), "past the fence the block charges held sessions: the floor rides");
     assert_eq!(palw_v02_held_charge_floor_v1(&c.sp, 1_000, true), None, "below the fence the readers read what they shipped with");
     let count = palw_accuser_exposure_v1(&c.s, &by);
-    let ledger = palw_accuser_ledger_v1(&c.s, &by, floor);
+    let ledger = palw_accuser_ledger_v1(&c.s, &Default::default(), &by, floor);
     let surplus = ledger - count;
     assert!(surplus > 2 * MSK, "the held session's charge exceeds its reserved (surplus {:.2} MSK)", msk(surplus));
     let reserve = palw_bond_accuser_reserve_v1(&c.sp, t);
@@ -888,6 +888,7 @@ fn v02_a_lock_heavy_seat_with_an_open_held_dissection_reads_one_room_at_the_draw
         settled_anchor_depth: palw_second_clock_depth_of_v1(s, &c.sp, &e, t),
         window_court: c.sp.window_court(),
         rcore: Some(PalwRcoreSeatFilterV1 {
+            gain_scale: Default::default(),
             eligibility,
             ceiling_permille: c.sp.fp_max_exposure_ratio_permille(),
             resolved_locks_off_ceiling: c.sp.final_lock_full_collateral_active_at(t),
@@ -971,12 +972,16 @@ fn v02_a_lock_heavy_seat_with_an_open_held_dissection_reads_one_room_at_the_draw
         palw_bond_committed_raw_v1(&inside, &c.sp, &by, t, raw),
         kaspa_consensus_core::palw_state_v2::palw_bond_off_ceiling_raw_v1(&inside, &c.sp, &by, t, raw),
         reserve,
-        palw_accuser_ledger_v1(&inside, &by, floor),
+        palw_accuser_ledger_v1(&inside, &Default::default(), &by, floor),
         PalwRcoreGateV1::Work,
     );
     assert!(fold_room < claim_exposure, "the fold's gate refuses the attempt");
     let patched = facts_on(&inside, true);
-    assert_eq!(patched.accuser_exposure, palw_accuser_ledger_v1(&inside, &by, floor), "the facts carry the fold's ledger");
+    assert_eq!(
+        patched.accuser_exposure,
+        palw_accuser_ledger_v1(&inside, &Default::default(), &by, floor),
+        "the facts carry the fold's ledger"
+    );
     assert!(!patched.has_committed_room(), "the producer's pre-check agrees with the fold");
     assert!(facts_on(&inside, false).has_committed_room(), "unpatched (the count alone) it would mine into the refusal");
     println!(

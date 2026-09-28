@@ -240,6 +240,19 @@ pub enum PalwAdmissionV2Error {
     /// a new key and operator identity, ADR §9.3 Q11) restores production.
     #[error("bond {bond:?} posts {collateral} sompi, below the producer floor of {floor}: top up before producing")]
     ProducerBelowFloor { bond: PalwBondKeyV2, collateral: u64, floor: u64 },
+    /// **ADR-0160 lane liab (AG-3): the producing bond is frozen by a conviction** past
+    /// `Params::palw_capacity_aggregate_liability` — for good once forfeited, until the freeze lifts
+    /// otherwise. The fold refuses the same attempt (`ProducerFrozen`).
+    #[error("bond {bond:?} is frozen by a conviction (ADR-0160 AG-3): it produces nothing until the freeze lifts")]
+    ProducerFrozen { bond: PalwBondKeyV2 },
+    /// **ADR-0160 F-S (S.2): the bond's issuance is capped at this DAA** — `N_out` slots held, or no whole
+    /// token in its bucket. The fold refuses (skips) the same attempt (`IssuanceCapped`).
+    #[error("bond {bond:?}'s issuance is capped (ADR-0160 F-S): {refusal}")]
+    IssuanceCapped { bond: PalwBondKeyV2, refusal: String },
+    /// **ADR-0160 F-Q (§5.9 (f)): the audit backlog is full**: a credited claim waits. The fold refuses
+    /// (skips) the same attempt (`AuditBacklogFull`).
+    #[error("{backlog} credited claims await their audit (at most {max}, ADR-0160 F-Q): a credited claim waits")]
+    AuditBacklogFull { backlog: u64, max: u64 },
     #[error("arithmetic overflow in {0}")]
     Overflow(&'static str),
     #[error("class {class_id} is registered but weightless until DAA {activation_daa} — it holds no cadence share yet")]
@@ -607,6 +620,13 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
             return Err(PalwAdmissionV2Error::ProducerBelowFloor { bond: bond_key, collateral: posted, floor });
         }
     }
+    // 7c. **ADR-0160 lane liab (AG-3): a frozen bond produces nothing** — the fold refuses the same
+    //     attempt (`ProducerFrozen`, skipped there when the block's own objects froze the bond under it)
+    //     and the producer's facts carry it. The freeze map is empty below
+    //     `Params::palw_capacity_aggregate_liability`, so this refuses nothing there.
+    if crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, &bond_key) {
+        return Err(PalwAdmissionV2Error::ProducerFrozen { bond: bond_key });
+    }
 
     // 8. The exposure ceiling (closes P0-10): what this bond already backs, plus what this claim
     //    would reserve, against collateral × ratio. Floor on the ceiling — conservative.
@@ -674,15 +694,28 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         .checked_mul(class.slash_value_per_pwu as u128)
         .and_then(|sompi| sompi.checked_mul(attempts as u128))
         .ok_or(PalwAdmissionV2Error::Overflow("claim exposure"))?;
+    // **ADR-0160 F-W (SR-7): the weight reservation the fold will record** — `min(w, R_budget − held)`
+    // past the fence, `claim_exposure` itself below it. The ceiling reads this; item 9's escrow backing
+    // below keeps reading the uncapped `claim_exposure` (it prices the class, not the bond's budget).
+    let claim_weight_reservation = crate::palw_weight_cap_v1::palw_claim_weight_reservation_of_v1(
+        state_params,
+        bond.collateral,
+        state.capacity_weight_index().bond(&bond_key).reserved_w,
+        claim_exposure,
+        ctx.daa_score,
+    );
     // **Option A: the ceiling holds the claim's ESCROW as well as its weight**, past the height the
     // bundle carries — priced from the SAME expression the fold stores as `escrowed_reward` (this
     // block's subsidy, the carve resolved at this block's DAA) and read through the same reservation
     // the ledger reserves, so the gate admits exactly what the ledger can record. Outside H-1's
-    // `x attempts`: the escrow is one claim's cash, not a per-draw quantity.
-    let claim_reservation = claim_exposure
-        .checked_add(state_params.claim_escrow_reservation_v1(
+    // `x attempts`: the escrow is one claim's cash, not a per-draw quantity. Past ADR-0160's
+    // `palw_capacity_escrow_at_licence` the slot is `m_c` (the claim is accepted at this block's DAA);
+    // past F-W the weight term is the capped reservation above.
+    let claim_reservation = claim_weight_reservation
+        .checked_add(state_params.claim_escrow_term_v2(
             ctx.daa_score,
             crate::palw_state_v2::palw_claim_escrow_v1(state_params, ctx.subsidy, budget_fences.escrow_carve),
+            &attempt.class_id,
         ))
         .ok_or(PalwAdmissionV2Error::Overflow("claim reservation"))?;
     let ceiling = if rcore {
@@ -709,6 +742,7 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
             // their charge; below it the shipped count.
             crate::palw_state_v2::palw_accuser_ledger_v1(
                 state,
+                &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(state_params),
                 &bond_key,
                 crate::palw_state_v2::palw_v02_held_charge_floor_v1(
                     state_params,
@@ -734,6 +768,26 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
             collateral: bond.collateral,
             ratio_permille: admission.max_exposure_ratio_permille,
         });
+    }
+
+    // 8b. **ADR-0160 stage 2 (rcore/cap-s1): lane S's slot and bucket, and lane Q's audit backlog** —
+    //     the fold's own readings (`palw_issuance_read_at_v1`, `palw_capacity_audit_backlog_v1`), so
+    //     admission, the fold and the producer's facts ask one question (S.4). Nothing below the fences.
+    if let Some(read) =
+        crate::palw_issuance_slots_v1::palw_issuance_read_at_v1(state, state_params, &bond_key, bond.collateral, ctx.daa_score)
+    {
+        read.admits_v1().map_err(|refusal| PalwAdmissionV2Error::IssuanceCapped { bond: bond_key, refusal: format!("{refusal:?}") })?;
+    }
+    if state_params.capacity_audit_active_at(ctx.daa_score) {
+        let escrow = crate::palw_state_v2::palw_claim_escrow_v1(state_params, ctx.subsidy, budget_fences.escrow_carve);
+        let template = crate::palw_state_v2::palw_claim_template_v1(attempt.class_id, bond_key, ctx.daa_score, 0, escrow);
+        if crate::palw_audit_door_v1::palw_capacity_claim_credited_v1(state_params, &template) {
+            let backlog = crate::palw_audit_door_v1::palw_capacity_audit_backlog_v1(state, state_params);
+            let max = crate::palw_audit_door_v1::palw_capacity_audit_backlog_max_v1(&attempt.class_id);
+            if backlog >= max {
+                return Err(PalwAdmissionV2Error::AuditBacklogFull { backlog, max });
+            }
+        }
     }
 
     // 9. **A claim may not escrow more reward than the collateral it puts at risk backs.**

@@ -32,17 +32,27 @@
 //! owns its container), funding and signing (key custody is the node's), and fleet distribution.
 //! The SDK is where a model becomes a class; it is not a wallet and not a deployment tool.
 
+/// RFC-0002 Phase F (F10): `palw-class check-architecture` — IR and legacy verdicts for a config.
+pub mod check_architecture;
 pub mod class_manifest;
 pub mod conformance;
 pub mod lineage;
 pub mod lineages {
     pub mod dense;
     pub mod qwen36;
+    pub mod tir;
 }
 pub mod sdk;
+/// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
+pub mod tir_equiv;
+pub mod tir_manifest;
+/// RFC-0002 Phase F (F6, node half): registering an IR class.
+pub mod tir_certification;
+pub mod tir_layout;
+pub mod tir_registration;
 
 pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};
-pub use lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwWeightResidencyV1};
+pub use lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1, PalwWeightResidencyV1};
 pub use sdk::{PalwCandidateError, PalwClassSdk, PalwRegistrationCandidateV1, builtin_lineages_v1};
 
 #[cfg(test)]

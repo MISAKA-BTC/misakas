@@ -577,6 +577,13 @@ mod tests {
             // lane: rcore/f1-forkchoice-attacks
             "palw_reorg_strict_economic_win" => params.palw_reorg_strict_economic_win = Some(at),
             "palw_pruning_proof_strict_economic_win" => params.palw_pruning_proof_strict_economic_win = Some(at),
+            // lane: rcore/cap-weight (ADR-0160 F-W): refused without R-core+, strict-win and lane A's operator
+            // anchor at or below it by `validate_palw_v2`, which the probe does not run — it asks only the
+            // hashers and the schedule.
+            "palw_capacity_weight_cap" => {
+                params.palw_capacity_weight_cap = Some(at);
+                params.sync_palw_capacity_weight_cap();
+            }
             "palw_heartbeat" => {
                 let hb = params.palw_heartbeat.as_mut().expect("the RC probe base carries the heartbeat lane");
                 hb.activation = at;
@@ -652,6 +659,25 @@ mod tests {
             // Lane V02 (the shortened post-Final lock life, post-launch): refused without R-core+ at or
             // below it and an unsynced mirror by `validate_palw_v2`, which the probe does not run.
             "palw_final_lock_life" => params.palw_final_lock_life = Some(at),
+            // ADR-0160 lane liab (F-L): the height over testnet-12's schedule (its one step at the height);
+            // refused without R-core+ and the attribution fence at or below it by `validate_palw_v2`, which
+            // the probe does not run — it asks only the hashers and the schedule.
+            "palw_capacity_aggregate_liability" => {
+                params.palw_capacity_aggregate_liability = Some(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at))
+            }
+            // A later step's slot: the value (armed at 1,000 where absent, as a widening's lane is) grows to
+            // `slot` steps, the missing ones one DAA apart above the last, and step `slot` sits at `at`.
+            step if step.starts_with("palw_capacity_aggregate_liability_step_") => {
+                let slot: usize = step["palw_capacity_aggregate_liability_step_".len()..].parse().expect("a slot number");
+                let value = params.palw_capacity_aggregate_liability.get_or_insert_with(|| {
+                    crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(ForkActivation::new(1_000))
+                });
+                while value.steps.len() < slot {
+                    let last = *value.steps.last().expect("a value has its first step");
+                    value.steps.push(crate::palw_aggregate_liability_v1::PalwCapacityStepV1 { from_daa: last.from_daa + 1, ..last });
+                }
+                value.steps[slot - 1].from_daa = at.daa_score();
+            }
             // Lane F2-lock (the lock life applied retroactively, post-launch): refused without lane V02's
             // lock life at or below it and an unsynced mirror by `validate_palw_v2`, which the probe does
             // not run — it asks only the hashers and the schedule.
@@ -696,6 +722,10 @@ mod tests {
                 params.palw_public_model_source_required = Some(crate::config::params::PalwPublicModelSourceRuleV1 { activation: at })
             }
             "palw_kimi_k3" => params.palw_kimi_k3 = Some(at),
+            // RFC-0002 Phase F: a fence with a value — the activation is what the probe moves.
+            "palw_tir_v1" => params.palw_tir_v1 = Some(crate::palw_tir_v1::PalwTirFenceV1::testnet12_v1(at)),
+            // RFC-0003, likewise: the drill's value (the fence is in no network's release).
+            "palw_gen_v1" => params.palw_gen_v1 = Some(crate::palw_gen_v1::PalwGenFenceV1::drill_v1(at)),
             "palw_canonical_work" => params.palw_canonical_work = Some(at),
             "palw_admission_independence" => params.palw_admission_independence = Some(at),
             "palw_seat_gate_possession" => params.palw_seat_gate_possession = Some(at),
@@ -727,6 +757,13 @@ mod tests {
             // Lane sink (the model sink binding, post-launch): refused without the market and the
             // 2026-09-23 audit fence at or below it by `validate_palw_v2`, which the probe does not run.
             "palw_model_sink_bound" => params.palw_model_sink_bound = Some(at),
+            // ADR-0160 lane verify (F-B, F-R): bare heights; `validate_palw_v2` (not run by the probe)
+            // refuses them without R-core+, the audit and attribution fences and their mirrors.
+            "palw_capacity_batch_licence" => params.palw_capacity_batch_licence = Some(at),
+            "palw_capacity_verify_room" => params.palw_capacity_verify_room = Some(at),
+            "palw_capacity_audit_door" => params.palw_capacity_audit_door = Some(at),
+            "palw_capacity_issuance_slots" => params.palw_capacity_issuance_slots = Some(at),
+            "palw_capacity_network_room" => params.palw_capacity_network_room = Some(at),
             "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
             "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
             "palw_kary_court" => params.palw_kary_court = Some(at),
@@ -753,6 +790,9 @@ mod tests {
             // fence above; `validate_palw_v2` wants that one at or below it, which the probe does not
             // run — it asks only the hashers and the schedule.
             "palw_heartbeat_transparent_same_chain" => params.palw_heartbeat_transparent_same_chain = Some(at),
+            // ADR-0160 lane escrow (post-launch): a bare height; its prerequisites are `validate_palw_v2`'s,
+            // which the probe does not run.
+            "palw_capacity_escrow_at_licence" => params.palw_capacity_escrow_at_licence = Some(at),
             "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
             "palw_panel_economy" => params.palw_panel_economy = Some(at),
             "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),

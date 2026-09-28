@@ -803,6 +803,18 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0160 F-B: assemble a batch licence** of the `due` claims (oldest bind first) over the
+    /// pooled seats' signed `windows`, within `max_bytes`, or `None` while the fence is dormant or
+    /// nothing licenses (node policy: which licences a collector carries, never what a block accepts).
+    fn palw_v2_batch_licence_assemble(
+        &self,
+        _windows: Vec<crate::palw_batch_licence_v1::PalwSeatWindowV1>,
+        _due: Vec<crate::Hash64>,
+        _max_bytes: usize,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
     /// ADR-0133 S2: assemble an optimistic licence from V3 receipts, or `None` while the fence is
     /// dormant or the full-replay seat has not filed `Valid`.
     fn palw_v2_optimistic_assemble(
@@ -891,6 +903,17 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0160 §7.5: the capacity shadow at the tip** (`getPalwCapacityShadow`; kaspad's
+    /// interval log): what the capacity formulas would reserve, weigh and allow for every live
+    /// claim and bond, per ramp step, next to today's values — asked at the next block's DAA with
+    /// the RAW second-clock depth. A read: no rule calls it. `None` off `ConsensusV2`.
+    fn palw_capacity_shadow_v1(
+        &self,
+        _options: crate::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1,
+    ) -> Option<crate::palw_capacity_shadow_v1::PalwCapacityShadowV1> {
+        None
+    }
+
     /// The court's half: open sessions this node holds a bond in.
     fn palw_court_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwCourtDutyV2> {
         Vec::new()
@@ -945,6 +968,16 @@ pub trait ConsensusApi: Send + Sync {
         &self,
         _operators: Vec<crate::palw_state_v2::PalwBondKeyV2>,
     ) -> Vec<crate::palw_operator_da_v1::PalwOperatorDaCandidateV1> {
+        Vec::new()
+    }
+
+    /// **ADR-0160 F-Q (stage 2): the credited claims `me`'s audit duty may receipt** at the tip
+    /// ([`crate::palw_audit_door_v1::palw_capacity_audit_candidates_v1`]). A read for node policy, never
+    /// a block rule; empty off `ConsensusV2`, with no tip state, and below `palw_capacity_audit_door`.
+    fn palw_capacity_audit_candidates_v1(
+        &self,
+        _me: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<crate::palw_audit_door_v1::PalwAuditCandidateV1> {
         Vec::new()
     }
 
@@ -1212,6 +1245,15 @@ pub trait ConsensusApi: Send + Sync {
         &self,
         _class_id: kaspa_hashes::Hash64,
     ) -> Option<(crate::palw_step::PalwShapeProfileV3, crate::palw_v2::PalwJobContextV2)> {
+        None
+    }
+
+    /// RFC-0002 Phase F: the IR class record the chain holds for `class_id` (its `tir_classes`
+    /// row) at the tip. `None` for a legacy class, an unknown one, or off ConsensusV2.
+    fn palw_tir_class_record_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
         None
     }
 

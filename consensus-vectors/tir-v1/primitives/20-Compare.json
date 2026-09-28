@@ -1,0 +1,481 @@
+{
+  "format": "palw-tir-v1/primitive-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md",
+  "primitive": "Compare",
+  "tag": 20,
+  "cases": [
+    {
+      "name": "eq_mixed",
+      "prim": {
+        "name": "Compare",
+        "attrs": [
+          [
+            "cmp",
+            "eq"
+          ]
+        ],
+        "borsh_hex": "1400"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "-1",
+            "0",
+            "0",
+            "1",
+            "-2147483648"
+          ]
+        },
+        {
+          "dtype": "i64",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "0",
+            "0",
+            "-1",
+            "2",
+            "9223372036854775807"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ]
+      },
+      "expect": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ],
+        "data": [
+          "1",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      }
+    },
+    {
+      "name": "ne_mixed",
+      "prim": {
+        "name": "Compare",
+        "attrs": [
+          [
+            "cmp",
+            "ne"
+          ]
+        ],
+        "borsh_hex": "1401"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "-1",
+            "0",
+            "0",
+            "1",
+            "-2147483648"
+          ]
+        },
+        {
+          "dtype": "i64",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "0",
+            "0",
+            "-1",
+            "2",
+            "9223372036854775807"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ]
+      },
+      "expect": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ],
+        "data": [
+          "0",
+          "1",
+          "0",
+          "1",
+          "1",
+          "1"
+        ]
+      }
+    },
+    {
+      "name": "lt_mixed",
+      "prim": {
+        "name": "Compare",
+        "attrs": [
+          [
+            "cmp",
+            "lt"
+          ]
+        ],
+        "borsh_hex": "1402"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "-1",
+            "0",
+            "0",
+            "1",
+            "-2147483648"
+          ]
+        },
+        {
+          "dtype": "i64",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "0",
+            "0",
+            "-1",
+            "2",
+            "9223372036854775807"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ]
+      },
+      "expect": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ],
+        "data": [
+          "0",
+          "1",
+          "0",
+          "0",
+          "1",
+          "1"
+        ]
+      }
+    },
+    {
+      "name": "le_mixed",
+      "prim": {
+        "name": "Compare",
+        "attrs": [
+          [
+            "cmp",
+            "le"
+          ]
+        ],
+        "borsh_hex": "1403"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "-1",
+            "0",
+            "0",
+            "1",
+            "-2147483648"
+          ]
+        },
+        {
+          "dtype": "i64",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "0",
+            "0",
+            "-1",
+            "2",
+            "9223372036854775807"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ]
+      },
+      "expect": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ],
+        "data": [
+          "1",
+          "1",
+          "1",
+          "0",
+          "1",
+          "1"
+        ]
+      }
+    },
+    {
+      "name": "gt_mixed",
+      "prim": {
+        "name": "Compare",
+        "attrs": [
+          [
+            "cmp",
+            "gt"
+          ]
+        ],
+        "borsh_hex": "1404"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "-1",
+            "0",
+            "0",
+            "1",
+            "-2147483648"
+          ]
+        },
+        {
+          "dtype": "i64",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "0",
+            "0",
+            "-1",
+            "2",
+            "9223372036854775807"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ]
+      },
+      "expect": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ],
+        "data": [
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0"
+        ]
+      }
+    },
+    {
+      "name": "ge_mixed",
+      "prim": {
+        "name": "Compare",
+        "attrs": [
+          [
+            "cmp",
+            "ge"
+          ]
+        ],
+        "borsh_hex": "1405"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "-1",
+            "0",
+            "0",
+            "1",
+            "-2147483648"
+          ]
+        },
+        {
+          "dtype": "i64",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-2",
+            "0",
+            "0",
+            "-1",
+            "2",
+            "9223372036854775807"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ]
+      },
+      "expect": {
+        "dtype": "i8",
+        "shape": [
+          6
+        ],
+        "data": [
+          "1",
+          "0",
+          "1",
+          "1",
+          "0",
+          "0"
+        ]
+      }
+    },
+    {
+      "name": "broadcast_scalar",
+      "prim": {
+        "name": "Compare",
+        "attrs": [
+          [
+            "cmp",
+            "le"
+          ]
+        ],
+        "borsh_hex": "1403"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2,
+            2
+          ],
+          "data": [
+            "1",
+            "2",
+            "3",
+            "4"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [],
+          "data": [
+            "2"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          2,
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "i8",
+        "shape": [
+          2,
+          2
+        ],
+        "data": [
+          "1",
+          "1",
+          "0",
+          "0"
+        ]
+      }
+    },
+    {
+      "name": "error_out_not_i8",
+      "prim": {
+        "name": "Compare",
+        "attrs": [
+          [
+            "cmp",
+            "eq"
+          ]
+        ],
+        "borsh_hex": "1400"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "1"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "1"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ]
+      },
+      "expect_error": "Shape"
+    }
+  ]
+}

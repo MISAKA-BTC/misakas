@@ -885,3 +885,30 @@ pub fn fp_commit_of(c: &Chain, n: u64, work_leaves: u64, i: u64) -> (PalwConsens
         claim,
     )
 }
+
+/// **Stage 2 (rcore/cap-s1): the audits the credited claims of `ids` wait for** — for every claim the
+/// audit door holds (credited, licensed, not yet audited), a receipt from each of the first `k_aud`
+/// members of its pool, batched by auditor (entries in claim order) into one block's objects. Empty where
+/// nothing waits. The fold never reads a batch's signature (the acceptance layer's).
+pub fn audit_receipts_for(s: &PalwChainStateV2, sp: &PalwStateParamsV2, ids: &[Hash64]) -> Vec<PalwConsensusObjectV2> {
+    use kaspa_consensus_core::palw_audit_door_v1::{
+        PalwAuditEntryV1, palw_audit_pool_of_claim_v1, palw_capacity_awaits_audit_v1, palw_capacity_claim_k_aud_v1,
+    };
+    let mut by_auditor: std::collections::BTreeMap<PalwBondKeyV2, Vec<PalwAuditEntryV1>> = std::collections::BTreeMap::new();
+    for id in ids {
+        let Some(claim) = s.claim(id) else { continue };
+        if !palw_capacity_awaits_audit_v1(sp, claim, s.audit_status_of_v1(id)) {
+            continue;
+        }
+        for auditor in palw_audit_pool_of_claim_v1(s, sp, id, claim).into_iter().take(palw_capacity_claim_k_aud_v1(sp, claim)) {
+            by_auditor.entry(auditor).or_default().push(PalwAuditEntryV1 { claim_id: *id, reproduced_root: claim.execution_root });
+        }
+    }
+    by_auditor
+        .into_iter()
+        .map(|(auditor, mut entries)| {
+            entries.sort();
+            PalwConsensusObjectV2::AuditReceiptBatchV1 { auditor, entries, signature: vec![] }
+        })
+        .collect()
+}

@@ -129,6 +129,7 @@ fn policy_at(c: &Chain, base: &PalwChainStateV2, claim_id: &Hash64, daa: u64) ->
         settled_anchor_depth: palw_second_clock_depth_of_v1(base, sp, &e, daa),
         window_court: sp.window_court(),
         rcore: sp.rcore_plus_active_at(daa).then(|| PalwRcoreSeatFilterV1 {
+            gain_scale: Default::default(),
             eligibility: palw_rcore_bind_prices_v1(base, sp, &e, claim_id, claim, seat_count, daa).eligibility,
             ceiling_permille: sp.fp_max_exposure_ratio_permille(),
             // Lane V02: as the processor resolves it at the binding block.

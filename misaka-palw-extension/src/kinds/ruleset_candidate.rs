@@ -59,6 +59,13 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // rcore/hf-pptake2 (post-launch): a bare height — a pruning-proof / IBD staging commit needs a
         // strict economic win past it, read at the incumbent's DAA.
         "palw_pruning_proof_strict_economic_win" => params.palw_pruning_proof_strict_economic_win = Some(at),
+        // lane rcore/cap-weight (ADR-0160 F-W, post-launch): the V2 bundle mirrors the height the fold
+        // reads, and `validate_palw_v2` refuses the two apart — set together. Needs R-core+, the
+        // strict-economic-win reorg rule and lane A's operator anchor at or below it.
+        "palw_capacity_weight_cap" => {
+            params.palw_capacity_weight_cap = Some(at);
+            params.sync_palw_capacity_weight_cap();
+        }
         "palw_heartbeat" => {
             companion(&mut params.palw_heartbeat, name, "work_log2 and the mergeset bound", at, |f, at| f.activation = at)?
         }
@@ -98,6 +105,29 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // Lane sink (the model sink binding, post-launch): a bare height; `validate_palw_v2` refuses it
         // without the market and the 2026-09-23 audit fence at or below it.
         "palw_model_sink_bound" => params.palw_model_sink_bound = Some(at),
+        // ADR-0160 lane verify (F-B, F-R): bare heights with the fold's mirrors.
+        "palw_capacity_batch_licence" => {
+            params.palw_capacity_batch_licence = Some(at);
+            params.sync_palw_capacity_verify();
+        }
+        "palw_capacity_verify_room" => {
+            params.palw_capacity_verify_room = Some(at);
+            params.sync_palw_capacity_verify();
+        }
+        // ADR-0160 stage 2 (F-Q, F-S): bare heights with the fold's mirrors.
+        "palw_capacity_audit_door" => {
+            params.palw_capacity_audit_door = Some(at);
+            params.sync_palw_capacity_stage2();
+        }
+        "palw_capacity_issuance_slots" => {
+            params.palw_capacity_issuance_slots = Some(at);
+            params.sync_palw_capacity_stage2();
+        }
+        // ADR-0160 stage 4 (F-N): a bare height with the fold's mirror.
+        "palw_capacity_network_room" => {
+            params.palw_capacity_network_room = Some(at);
+            params.sync_palw_capacity_stage2();
+        }
         "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
         "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
         "palw_kary_court" => params.palw_kary_court = Some(at),
@@ -121,6 +151,8 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
         // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency).
         "palw_heartbeat_transparent_same_chain" => params.palw_heartbeat_transparent_same_chain = Some(at),
+        // ADR-0160 lane escrow (post-launch): a bare height.
+        "palw_capacity_escrow_at_licence" => params.palw_capacity_escrow_at_licence = Some(at),
         "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
         "palw_model_registry" => params.palw_model_registry = Some(at),
         "palw_economic_payout" => {
@@ -287,6 +319,19 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
                     "`{name}` carries a companion value (the shortened span) this preset does not set — the candidate needs a build before it needs a height"
                 ));
             }
+        }
+        // ADR-0160 lane liab (F-L, rcore/cap-s1): a value fence — its value is the ramp's schedule, so
+        // the height is set where the preset carries one (and the fold's mirror re-synced); each later
+        // step's slot is a step of that schedule, which a height alone cannot spell.
+        "palw_capacity_aggregate_liability" => {
+            companion(&mut params.palw_capacity_aggregate_liability, name, "the ramp's schedule", at, |f, at| f.activation = at)?;
+            params.sync_palw_capacity_liability();
+        }
+        step if step.starts_with("palw_capacity_aggregate_liability_step_") => {
+            return Err(format!(
+                "`{step}` carries a companion value (the step's ρ and credit) this preset does not set — the candidate needs a \
+                 build before it needs a height"
+            ));
         }
         other => return Err(format!("this build has no fence `{other}`: the candidate needs a build before it needs a height")),
     }

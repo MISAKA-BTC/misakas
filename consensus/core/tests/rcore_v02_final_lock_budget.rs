@@ -502,6 +502,7 @@ fn v02_the_producer_seat_admission_the_fold_the_facts_and_the_draw_agree_on_each
             settled_anchor_depth: escaped,
             window_court: chain.sp.window_court(),
             rcore: Some(PalwRcoreSeatFilterV1 {
+                gain_scale: Default::default(),
                 eligibility: 640 * MSK,
                 ceiling_permille: chain.sp.fp_max_exposure_ratio_permille(),
                 resolved_locks_off_ceiling: chain.sp.final_lock_full_collateral_active_at(t),
@@ -539,6 +540,7 @@ fn draw_filter(c: &Chain, daa: u64, eligibility: u128) -> PalwPanelValidLockV1 {
         settled_anchor_depth: palw_second_clock_depth_v1(raw_depth(c, daa), c.s.recent_anchor_daas(), daa, c.sp.window_court()),
         window_court: c.sp.window_court(),
         rcore: Some(PalwRcoreSeatFilterV1 {
+            gain_scale: Default::default(),
             eligibility,
             ceiling_permille: c.sp.fp_max_exposure_ratio_permille(),
             resolved_locks_off_ceiling: c.sp.final_lock_full_collateral_active_at(daa),

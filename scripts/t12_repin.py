@@ -93,6 +93,7 @@ HARVEST_TARGETS = [
     "palw_exec_maturity_is_t12_only",
     "palw_clock_lead_cap_is_t12_only",
     "t12_mainnet_values_moved_only_these",
+    "palw_tir_fences_are_dormant",
 ]
 HARVEST_FILTERS = [
     "print_every_value_the_pins_hold",
@@ -108,6 +109,7 @@ HARVEST_FILTERS = [
     "the_maturity_moves_testnet12s_fingerprint_and_nothing_else_did",
     "the_cap_moves_testnet12s_fingerprint_and_a_never_collapses",
     "the_three_mainnet_values_are_the_only_thing_that_moved_testnet12",
+    "every_shipped_ruleset_keeps_its_three_ids",
 ]
 # The one lib test whose value is only visible in its own failure message (or, when it passes, is
 # the pin itself): run alone, so its result line is unambiguous.
@@ -233,6 +235,44 @@ def _triple(prefix, scope, file, const, value_prefix, tests, until=r"^\);"):
             for i, what in enumerate(["params_id", "identity_id", "schedule_id"])]
 
 
+# RFC-0002 Phase F: `palw_tir_fences_are_dormant` pins every ruleset's three ids, row by row, as its test
+# prints them (`REPIN tirdorm.<slug>.<id>`). testnet-12's rows are this re-pin's to move (the IR flag day's
+# rows are pinned with that list dormant, so they move only when testnet-12 itself does); every other row is
+# its network's (a drift there is refused, mainnet's aside).
+TIRDORM = "consensus/core/tests/palw_tir_fences_are_dormant.rs"
+TIRDORM_ROWS = [
+    ("MAINNET_PARAMS", "mainnet"), ("TESTNET_PARAMS", "testnet-10"), ("TESTNET11_PARAMS", "testnet-11"),
+    ("DEVNET_PARAMS", "devnet"), ("SIMNET_PARAMS", "simnet"),
+    ("from(mainnet)", "mainnet"), ("from(testnet-10)", "testnet-10"), ("from(testnet-11)", "testnet-11"),
+    ("from(testnet-12) − IR flag day", "t12"), ("from(devnet)", "devnet"), ("from(simnet)", "simnet"),
+    ("mainnet_shipped_params", "mainnet"), ("devnet_shipped_params", "devnet"), ("palw_rc_shipped_params", "testnet-11"),
+    ("palw_t12_shipped_params − IR flag day", "t12"), ("palw_t12_launch_params_v1", "t12"),
+    ("palw_t12_release_v1_params", "t12"), ("palw_t12_release_v2_params", "t12"), ("palw_t12_release_v3_params", "t12"),
+    ("palw_t12_drill_params_v1 − IR flag day", "t12"),
+]
+
+
+def _tirdorm_slug(name: str) -> str:
+    out = ""
+    for c in name:
+        if c.isascii() and c.isalnum():
+            out += c.lower()
+        elif not out.endswith("_"):
+            out += "_"
+    return out.strip("_")
+
+
+def _tirdorm() -> list:
+    out = []
+    for row, scope in TIRDORM_ROWS:
+        for i, what in enumerate(["params_id", "identity_id", "schedule_id"]):
+            out.append(Pin(key=f"tirdorm.{_tirdorm_slug(row)}.{what}", scope=scope, file=TIRDORM,
+                           anchors=[re.escape("const PINS: &[(&str, &str, &str, &str)] = &["), rf'"{re.escape(row)}",'],
+                           nth=i, length=64, until=r"^\];", value=f"tirdorm.{_tirdorm_slug(row)}.{what}",
+                           tests=(f"{TIRDORM}::every_shipped_ruleset_keeps_its_three_ids",)))
+    return out
+
+
 def _genesis(const, net, scope):
     return [Pin(key=f"genesis.{net}.{field_}", scope=scope, file="consensus/core/src/config/genesis.rs",
                 anchors=[rf"^pub const {const}: GenesisBlock = GenesisBlock \{{", rf"\b{field_}: Hash64::from_bytes\("],
@@ -253,14 +293,21 @@ CAP = "consensus/core/tests/palw_clock_lead_cap_is_t12_only.rs"
 SEED = "consensus/core/tests/palw_panel_seed_execution_is_t12_only.rs"
 RESIL = "consensus/core/tests/palw_registry_resilience_is_t12_only.rs"
 HBSC = "consensus/core/tests/palw_hb_transparency_same_chain_fence.rs"
+CAPESC = "consensus/core/tests/palw_capacity_escrow_at_licence_is_t12_only.rs"
 SEATMAT = "consensus/core/tests/palw_bond_maturity_early_is_t12_only.rs"
 OPANCHOR = "consensus/core/tests/palw_operator_anchor_is_t12_only.rs"
+LIAB = "consensus/core/tests/palw_capacity_aggregate_liability_is_t12_only.rs"
 REORG = "consensus/core/tests/reorg_strict_win_fence.rs"
+CAPWEIGHT = "consensus/core/tests/palw_capacity_weight_cap_is_t12_only.rs"
 MNV = "consensus/core/tests/t12_mainnet_values_moved_only_these.rs"
 EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
 SINK = "consensus/core/tests/palw_model_sink_bound_is_t12_only.rs"
 V02 = "consensus/core/tests/palw_final_lock_full_collateral_is_t12_only.rs"
 V02LIFE = "consensus/core/tests/palw_final_lock_life_is_t12_only.rs"
+CAPROOM = "consensus/core/tests/palw_capacity_verify_room_is_t12_only.rs"
+CAPBATCH = "consensus/core/tests/palw_capacity_batch_licence_is_t12_only.rs"
+CAPQS = "consensus/core/tests/palw_capacity_stage2_is_t12_only.rs"
+CAPN = "consensus/core/tests/palw_capacity_network_room_is_t12_only.rs"
 RETROLIFE = "consensus/core/tests/palw_final_lock_life_retro_is_t12_only.rs"
 FLOOR2 = "consensus/core/tests/palw_floor_refusal_retry_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
@@ -453,6 +500,9 @@ def registry() -> list[Pin]:
     # F1 heartbeat transparency (the same-chain fence, post-launch, dormant): testnet-12 as shipped.
     pins += _triple("hbsc.T12_RELEASED", "t12", HBSC, "const T12_RELEASED: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{HBSC}::the_same_chain_fence_is_dormant_on_every_other_preset_and_t12_arms_it_at_750",))
+    # ADR-0160 lane escrow (F-E, the capacity release's escrow funding point, dormant): testnet-12 as shipped.
+    pins += _triple("capesc.T12_RELEASE", "t12", CAPESC, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
+                    (f"{CAPESC}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # Lane maturity (ADR-0065 D1 brought forward to the post-launch fence, dormant): testnet-12 as shipped,
     # which the dormant fence must not move.
     pins += _triple("seatmat.T12_RELEASE", "t12", SEATMAT, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
@@ -463,6 +513,14 @@ def registry() -> list[Pin]:
     # Fork choice (the strict-economic-win reorg fence, post-launch; armed at DAA 750 since int-4): testnet-12 as shipped.
     pins += _triple("reorg.T12_RELEASE", "t12", REORG, "const T12_RELEASE: (&str, &str, &str) = (",
                     "shipped.testnet-12", (f"{REORG}::shipped_testnet_12_arms_the_fence_at_750",))
+    # Lane cap-weight (ADR-0160 F-W, the capacity release's per-bond weight cap, dormant): testnet-12 as
+    # shipped, which the dormant fence must not move.
+    pins += _triple("capweight.T12_RELEASE", "t12", CAPWEIGHT, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
+                    (f"{CAPWEIGHT}::the_weight_cap_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # ADR-0160 lane liab (F-L, the capacity redesign's aggregate liability, post-launch, dormant): testnet-12 as
+    # shipped, which the dormant fence must not move.
+    pins += _triple("liab.T12_RELEASE", "t12", LIAB, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
+                    (f"{LIAB}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # The mainnet values (2026-09-25): testnet-12 with the three values set back (and the later fences taken away).
     pins += _triple("mnv.PARENT_WITHOUT_THE_ATTRIBUTION", "t12", MNV, "const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (",
                     "twin.mnv_parent", (f"{MNV}::the_three_mainnet_values_are_the_only_thing_that_moved_testnet12",))
@@ -510,6 +568,18 @@ def registry() -> list[Pin]:
     # 750 with the rest of the list): testnet-12 as shipped.
     pins += _triple("laneorder.T12_RELEASE", "t12", LANEORDER, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{LANEORDER}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # ADR-0160 lane verify (F-R room v2, F-B batch licence; post-launch, later than DAA 500, dormant): testnet-12 as
+    # shipped, which the dormant fences must not move.
+    pins += _triple("caproom.T12_RELEASE", "t12", CAPROOM, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
+                    (f"{CAPROOM}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    pins += _triple("capbatch.T12_RELEASE", "t12", CAPBATCH, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
+                    (f"{CAPBATCH}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # ADR-0160 stage 2 (rcore/cap-s1: F-Q the audit door, F-S the issuance slots; dormant): testnet-12 as shipped.
+    pins += _triple("capqs.T12_RELEASE", "t12", CAPQS, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
+                    (f"{CAPQS}::the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # ADR-0160 stage 4 (rcore/cap-s1: F-N the network level and the fair share; dormant): testnet-12 as shipped.
+    pins += _triple("capn.T12_RELEASE", "t12", CAPN, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
+                    (f"{CAPN}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)
@@ -663,6 +733,8 @@ def registry() -> list[Pin]:
                     fmt="abbr", comment=None))
     pins.append(Pin("monitor_doc.sample_fp", "copy", MONITOR_DOC, [r'^PANEL_BIAS \{"status":"OK","time":\.\.\.,"tip":70,"fp":"'],
                     lambda c: c["from.testnet-12.params_id"][:16], fmt="token", length=16, comment=None))
+    # RFC-0002 Phase F: every ruleset's ids as the IR dormancy pins hold them.
+    pins += _tirdorm()
     return pins
 
 

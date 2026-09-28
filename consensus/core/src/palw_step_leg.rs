@@ -2017,6 +2017,23 @@ pub enum PalwStepFaultV1 {
     /// root, the job context is too, and the comparison is two integers (discriminants 0-17
     /// unmoved).
     JobExceedsClassContext = 18,
+    /// **PALW-TIR-33** (RFC-0002 Phase F): a committed lane of an IR execution lies outside the
+    /// interval the class's program proves for it — a value no execution can produce, committed by
+    /// the executor whichever leaf was disputed (discriminants 0-18 unmoved).
+    TirValueOutsideProvenInterval {
+        value_index: u32,
+    } = 19,
+    /// An IR execution's two commitments to one logits row — the logits node's step tile and the
+    /// trace's tile of the same row — differ at `value_index` (discriminants 0-19 unmoved).
+    TirLogitsTraceMismatch {
+        value_index: u32,
+    } = 20,
+    /// **PALW-OUT-4** (RFC-0003): a generative claim's two commitments to one output lane — the output
+    /// node's step tile and the output tile of the claim's `output_root` — differ at `value_index`
+    /// (discriminants 0-20 unmoved; 21 is RFC-0003's in Phase F's allocation).
+    TirOutputDigestMismatch {
+        value_index: u32,
+    } = 21,
 }
 
 impl PalwStepFaultV1 {
@@ -2041,6 +2058,9 @@ impl PalwStepFaultV1 {
             PalwStepFaultV1::ComputationMismatch { value_index } => (15, value_index),
             PalwStepFaultV1::DecodeTokenMismatch { position } => (16, position),
             PalwStepFaultV1::JobExceedsClassContext => (18, 0),
+            PalwStepFaultV1::TirValueOutsideProvenInterval { value_index } => (19, value_index),
+            PalwStepFaultV1::TirLogitsTraceMismatch { value_index } => (20, value_index),
+            PalwStepFaultV1::TirOutputDigestMismatch { value_index } => (21, value_index),
         }
     }
 }

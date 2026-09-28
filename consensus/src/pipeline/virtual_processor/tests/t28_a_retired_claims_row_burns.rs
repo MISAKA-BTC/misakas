@@ -82,7 +82,7 @@ async fn t28_a_conviction_after_retirement_under_a_held_second_clock_burns_the_r
     let liability = walk.state.panel_liability(&id).expect("the liability record outlives the claim").clone();
     assert_eq!(liability.basis_k, row.basis_k, "N8: the vesting row copies the licence's basis_k");
     assert!(liability.basis_k >= 2, "a replay-backed licence: basis_k {}", liability.basis_k);
-    let gains = palw_claim_g_v1(&walk.state, &id).expect("the gain terms outlive the claim");
+    let gains = palw_claim_g_v1(&walk.state, &Default::default(), &id).expect("the gain terms outlive the claim");
     assert_eq!(
         (gains.g_res, gains.escrowed_reward, gains.basis_k),
         (liability.g_res_sompi, liability.escrowed_reward, liability.basis_k),

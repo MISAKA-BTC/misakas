@@ -173,15 +173,36 @@ impl PalwDaClaimV1 {
 pub enum PalwDaAnswerV1 {
     Event(crate::palw_step_refute::PalwTraceEventDisclosureV1),
     Held(Box<PalwHeldDisclosureCarriageV1>),
+    /// **RFC-0002 Phase F: an event of an IR class's trace** (appended, so no earlier tag moves),
+    /// in the form the class's scheme names, with the claim's IR binding
+    /// ([`crate::palw_tir_court_v1::PalwTirTraceEventDisclosureV1`]). An object carrying it is a
+    /// payload an older build cannot decode (A-2), so this build drops it by name below
+    /// `palw_tir_v1` and the fold refuses it there as the second lock.
+    TirEvent(Box<crate::palw_tir_court_v1::PalwTirTraceEventDisclosureV1>),
 }
 
 impl PalwDaAnswerV1 {
-    /// The binding every answer carries — what the identity rule (J-5) reads.
-    pub fn binding(&self) -> &crate::palw_step_leg::PalwStepBindingV2 {
+    /// The legacy binding an answer carries — what the legacy identity rule (J-5) reads — or
+    /// `None` for an IR answer, whose binding is [`Self::tir_binding`].
+    pub fn binding(&self) -> Option<&crate::palw_step_leg::PalwStepBindingV2> {
         match self {
-            Self::Event(disclosure) => disclosure.binding(),
-            Self::Held(carriage) => &carriage.binding,
+            Self::Event(disclosure) => Some(disclosure.binding()),
+            Self::Held(carriage) => Some(&carriage.binding),
+            Self::TirEvent(_) => None,
         }
+    }
+
+    /// The IR binding an IR answer carries.
+    pub fn tir_binding(&self) -> Option<&crate::palw_tir_step_v1::PalwTirStepBindingV1> {
+        match self {
+            Self::TirEvent(disclosure) => Some(disclosure.binding()),
+            _ => None,
+        }
+    }
+
+    /// Is this an IR class's answer (RFC-0002 Phase F)? A move only past `palw_tir_v1`.
+    pub fn is_tir_v1(&self) -> bool {
+        matches!(self, Self::TirEvent(_))
     }
 }
 
@@ -524,6 +545,14 @@ pub fn palw_da_unit_covered_by_v1(_unit: &PalwDaUnitV1, attested: crate::palw_ve
 pub fn palw_da_answer_form_v1(claim: &Hash64, unit: &PalwDaUnitV1, answer: &PalwDaAnswerV1) -> Result<(), &'static str> {
     match (unit, answer) {
         (PalwDaUnitV1::Event { .. }, PalwDaAnswerV1::Event(_)) => Ok(()),
+        // RFC-0002 Phase F: an IR event's binding carries no program — the chain holds the class's.
+        (PalwDaUnitV1::Event { .. }, PalwDaAnswerV1::TirEvent(disclosure)) => {
+            if disclosure.binding().class.program.is_empty() {
+                Ok(())
+            } else {
+                Err("an IR answer's binding carries no program: the chain holds the registered class's")
+            }
+        }
         (PalwDaUnitV1::Held(missing), PalwDaAnswerV1::Held(carriage)) => {
             if carriage.version != crate::palw_held_da_v1::PALW_HELD_DA_VERSION_V1 {
                 Err("the carriage is not version 1")
