@@ -1,6 +1,6 @@
 # PALW-TIR v1 — the architecture corpus (RFC-0002 Phase A)
 
-> **Design record, Gate 1.** Every corpus family of RFC-0002 §1.1 and the common Hugging Face decoder
+> **Design record, Gates 1–2.** Every corpus family of RFC-0002 §1.1 and the common Hugging Face decoder
 > architectures, decomposed per position into PALW Canonical Tensor IR primitives in INTEGER semantics;
 > the primitive list those decompositions force, argued against freeze criteria 1–3; the per-family
 > fidelity thresholds for Phase E. The normative definitions are [spec 04b](../../../spec/palw/04b-tensor-ir.md);
@@ -18,8 +18,18 @@
 > (`tests/totality.rs`). Every integer kernel of the live court's catalogue is byte-identical to its
 > `tir_library_v1` segment against the LIVE code (`misaka-palw-tir-conformance`; the BASE-0 KAT digest
 > in `tests/kat_base0.rs`), and every template of the library is admissible and checked against a float
-> reference (`tests/library.rs`). Everything else in this file is decomposition on paper, which is what
-> Phase A asks for; Phase E turns each row into a lowering and a fidelity run.
+> reference (`tests/library.rs`). `tir_admit_v1` (spec 04b §10.3) admits all five, and a
+> Qwen2.5-1.5B-sized decoder written with the library, with the numbers the court is built from — cone
+> tiles, dissection chunks, replay groups, checkpoint intervals (`tests/admit.rs`). Everything else in
+> this file is decomposition on paper, which is what Phase A asks for; Phase E turns each row into a
+> lowering and a fidelity run.
+>
+> **Gate 1 decisions recorded here.** (1) The twenty-five primitives and an internal-only `i128` are
+> accepted provisionally and frozen at Phase E (§1, §8). (2) PALW-TIR-33: a committed operand outside
+> its node's proven interval is a malformed commitment and its committer loses (§2.4). (3) IR
+> artifacts store typed tensors with the narrowing's `m`, `s`, `z` separate (§2.2). (4) LongRoPE and
+> dynamic NTK are per-position decode (§4, §11). (5) The fidelity thresholds of §9 are accepted.
+> (6) Freeze criterion 6 covers the integer catalogue kernels only (§10.5).
 
 ## 0. Scope
 
@@ -44,7 +54,9 @@ Twenty-five primitives (spec 04b §6). Kinds: **S** Reshape, Transpose, Slice, C
 Iota, Gather · **E** Cast, Add, Sub, Mul, MatMul, ReduceSum, ReduceMax · **L** Div
 (Floor | HalfUp | HalfAwayFromZero), Clamp, Log2Floor · **T** IntExp, IntRsqrt, IntLn (Q24) ·
 **X** Compare, Select, TopK · **State** StateWrite, HistAppend. §7 is the family × primitive matrix,
-§8 the minimality argument.
+§8 the minimality argument. Accepted provisionally at Gate 1, with `i128` internal only (never a
+param, a state or a commit, PALW-TIR-5); the set is frozen at Phase E, and `prim_set_id` (spec 04b
+§6.0) names the revision.
 
 ## 2. The integer vocabulary every family is written in
 
@@ -85,6 +97,29 @@ Written as functions; each expands into the listed primitives.
 | `Conv_w(x; state, taps)` | `Concat(State[w−1,C], x[1,C])`, `Slice` last `w−1` → `StateWrite`, `Mul` by taps, `ReduceSum` over the window | none (exact) + the narrowing after |
 | `MapHeads_g / _t(x)` | grouping `Reshape[k,1,d]→Broadcast[k,r,d]→Reshape[v,d]`; tiling `Reshape[1,k,d]→Broadcast[r,k,d]→Reshape[v,d]` | none |
 
+**In `tir_library_v1`** (`misaka_palw_tir::library`, catalogue `LIBRARY_V1`; every template builds
+plain primitives, is admissible at full param ranges and is checked against a float reference in
+`tests/library.rs`; the legacy ones are byte-identical to the live kernels in
+`misaka-palw-tir-conformance`):
+
+| template | builders |
+| --- | --- |
+| `N`, `Lin` | `narrow`, `narrow_codes`, `narrow_wide` (the `Narrowing { m, s, z }`); legacy `narrow_a16`, `a16_matmul`, `base0_matmul`, `requantize_base0`, `rescale_base0`, `q36_matmul_grouped` (Q4_K-style group scales), `requantize_by_token` |
+| `RMS`, `RMSw`, `LN`, `L2` | `rms_norm_wide_q36` / `rms_norm_wide_q36_exact` (any wide row; the legacy form is the general one), `layer_norm_exact`, `group_norm_exact`, `l2_norm_eps`; legacy `rms_norm_a16`, `base0_rms_norm`, `l2_norm_q15` |
+| `Sig`, `SiLU`, `Tanh`, `GELUtanh`, `Table` | legacy `int_sigmoid`, `int_recip`, `silu`; `tanh_q24`, `gelu_tanh_q24`, `gelu_erf_q24`, `quick_gelu_q24`, `relu`, `relu2_q24`, `swiglu_clamped_q24`, `act_table`, `act_table_wide` |
+| `Softmax_up` | legacy `softmax_shifted`; `softmax_with_sink`, `softcap_q24` |
+| `RoPE`, `Angles` | `rope_half`, `rope_partial`, `rope_angles_two_level`, `rope_angles_by_position` (a frequency set chosen by absolute position — LongRoPE, dynamic NTK), `alibi`; legacy `rope_pairs`, `rope_pairs_wide`, `q36_rope_partial` |
+| `Attn` | `attention` (`AttnCfg`: GQA/MQA, window, sinks, soft-cap, ALiBi), `mla_absorbed` (`MlaCfg`); legacy `a16_attn_scores`, `a16_attn_values`, `a16_attn_fused` |
+| routing | `route_sigmoid`, `selection_bias`, `grouped_topk` (`GroupScore`), `renormalize_div`, `renormalize_recip`, `scale_q24`; legacy `router_topk_q36`, `moe_combine_q36` |
+| `Softplus`, `ExpRef`, `Decay`, recurrences | legacy `softplus_q36`, `exp_refined_q36`, `decay_q36`, `gdn_step_q36`, `q36_ssm_conv`, `q36_gate_apply`; `exp_q24`, `exp_neg_exp_q24`, `causal_conv`, `token_shift`, `lerp_q24`, `mamba1_step`, `mamba2_step`, `rwkv4_step`, `rwkv6_step`, `rwkv7_step` |
+| `MapHeads_g / _t` | `map_heads_group`, `map_heads_tile` |
+| `Pow2` | the builder's `pow2_of`, `pow2_128_of` |
+
+**The narrowing's operands are three typed params** (Gate 1 decision 3): `m: i64[n]`, `s: i8[n]`,
+`z: i64[n]` per channel (or `[1]`). An IR artifact stores typed tensors; a legacy 17-byte A16 triple
+is repacked into the three at conversion, so a legacy class re-registered as an IR class gets a new
+inventory root over the same numbers.
+
 ### 2.3 Lossy sites and their rules
 
 Every lossy site in every decomposition below is one of:
@@ -109,8 +144,9 @@ The legacy kernels use exactly these rules (spec 04b §11.1): `RoundingShiftRigh
 | every block | carry-out (the residual stream, `code[D]`), logits (post) |
 | attention | the K and V rows appended (`HistAppend` inputs) |
 | routing | every `TopK` |
-| recurrence (`Fixed` state) | the per-position inputs of the update cone (e.g. the conv row, the gates), so the court can replay from a checkpoint (spec 04b §10.1) |
-| cone size | lowerers add commit points (e.g. after each projection) until every cone fits `derive_court_cost_v1` |
+| recurrence (`Fixed` state) | the per-position inputs of the update cone (e.g. the conv row, the gates), so the court can replay from a checkpoint; the checkpoints are step leaves of the one step tree every `C ≤ min_j C_j` positions (spec 04b §10.1, Phase F D7), `C_j` from admission's replay closure and groups (§10.3) |
+| cone size | lowerers add commit points (e.g. after each projection) until every cone's terminal tile fits the ceilings `tir_admit_v1` checks (spec 04b §10.3: box demand — the LM head's tile is `tile_len · d` MACs, not the vocabulary; a cone reducing over `H` is dissected into `h_chunk` chunks) |
+| every committed value | lies in its node's proven interval (PALW-TIR-33, Gate 1 decision 2): admission's intervals are the domains, and a committed operand outside its interval — step leaf, checkpoint leaf, carry-in — is a malformed commitment its committer loses |
 
 ## 3. The corpus families
 
@@ -167,7 +203,10 @@ with `H`, the softmax's `ReduceMax`/`IntExp`/`ReduceSum`, `IntRsqrt`, `Div` (Flo
 arm reads `true_position · pairs · 8` bytes), i.e. `n_ctx × rope_dims/2 × 8` bytes — 1 GiB at
 `2^21 × 64` pairs. The `Angles` template needs two tables of `2^b` rows (§6.6); "llama3", YaRN,
 NTK, linear and LongRoPE scalings only change the frequencies and an attention factor
-(`modeling_rope_utils.py:_compute_llama3_parameters`, `_compute_yarn_parameters`) — data.
+(`modeling_rope_utils.py:_compute_llama3_parameters`, `_compute_yarn_parameters`) — data. LongRoPE
+and dynamic NTK, whose HF frequencies depend on the call's length, are per-position decode: the
+frequency set is a function of the absolute position, a `Select` on a position threshold (Gate 1
+decision 4; spec 04b §11.3).
 
 ### C2 — Attention variants (GQA, MQA, sliding + global)
 
@@ -416,7 +455,7 @@ and a fidelity matter only.
 | Llama / Mistral / Qwen2 / Qwen3 dense | `modeling_llama.py`, `modeling_mistral.py`, `modeling_qwen2.py`, `modeling_qwen3.py` | biases (Qwen2), QK-norm per head (Qwen3), sliding window (Mistral v0.1) | C1/C2 exactly |
 | Gemma 1/2/3 | `modeling_gemma.py:GemmaRMSNorm` (`1 + w`), `modeling_gemma2.py` (sandwich norms, `attn_logit_softcapping`, `final_logit_softcapping`), `modeling_gemma3.py` (per-type RoPE, QK-norm) | `1 + w`; `√D` embedding scale; soft-cap `cap·tanh(x/cap)`; sliding/global with two bases; GeGLU | `1 + w` and `√D` are data; `Tanh`; two layer blocks; `GELUtanh` or `Table` |
 | Phi-2 | `modeling_phi.py:PhiDecoderLayer.forward` (`attn + mlp + residual` from one LayerNorm), partial rotary | parallel block, LayerNorm + bias, `gelu_new`, dense + bias, rotary on `partial_rotary_factor·d` lanes | `LN` (+ bias as `z`); the two branches in one DAG; `RoPE` on a `Slice`, the rest passed through; `GELUtanh` |
-| Phi-3 | `modeling_phi3.py:Phi3MLP` (`gate_up_proj` fused), `Phi3Attention` (`qkv_proj` fused), LongRoPE (`modeling_rope_utils.py:_compute_longrope_parameters`, `longrope_frequency_update`) | fused projections; LongRoPE switches short/long factors when **the call's** `max(position_ids) + 1 > original_max_position_embeddings` | `Slice`; LongRoPE is two table sets; the HF switch depends on the forward call's length, not the position — the lowering chooses per position (`Select(pos ≥ original_max, long, short)`) and records it as a fidelity deviation |
+| Phi-3 | `modeling_phi3.py:Phi3MLP` (`gate_up_proj` fused), `Phi3Attention` (`qkv_proj` fused), LongRoPE (`modeling_rope_utils.py:_compute_longrope_parameters`, `longrope_frequency_update`) | fused projections; LongRoPE switches short/long factors when **the call's** `max(position_ids) + 1 > original_max_position_embeddings` | `Slice`; LongRoPE is two table sets chosen by position — `Select(pos ≥ original_max, long, short)` (`rope_angles_by_position`). Canonical semantics is per-position decode (Gate 1 decision 4): one position per call, where HF's call-length switch IS this position threshold, and the criterion-5 reference runs HF that way (§9) |
 | GPT-2 | `modeling_gpt2.py` (`Conv1D`, `wpe`), `activations.py:NewGELUActivation` | learned absolute positions; LayerNorm + bias; GELU-tanh; `Conv1D` = transposed linear | `Gather(wpe, pos)` + `Add` in pre; `LN`; `GELUtanh` or `Table`; the transpose at conversion |
 | GPT-NeoX / Pythia | `modeling_gpt_neox.py` (`use_parallel_residual`: `x + attn(ln1 x) + mlp(ln2 x)`), `partial_rotary_factor` | parallel residual; partial rotary (0.25); exact-erf GELU | DAG; `Slice` + `RoPE`; erf-GELU as a `Table` on codes (no `erf` primitive) |
 | Falcon | `modeling_falcon.py:FalconDecoderLayer.forward` (`parallel_attn`, `new_decoder_architecture` with `ln_attn`/`ln_mlp`, `num_kv_heads`), optional ALiBi | MQA/GQA, parallel attention, fused qkv laid out `[kv, G+2, d]` | shapes; `Slice`/`Reshape` of the fused qkv; ALiBi as below |
@@ -458,9 +497,17 @@ question (RFC §7): the reference comment says the other reading "pairs every va
 wrong key from layer 0 onward", which was measured against a float reference that reads the same
 GGUF — consistent with a permuted artifact, not proof of it.
 
+**Settled by Phase F** (`docs/design/palw/tir/phase-f-integration.md` §3.2): the pinned GGUF is
+llama.cpp's `qwen35moe` output, whose converter reorders every value-indexed tensor from HF's grouped
+order to tiled order (`_LinearAttentionVReorderBase`, since the architecture was added), and
+`qwen36-convert` never permutes heads. On that artifact `vh % k_heads` computes exactly HF's function
+with the value heads relabelled: **not a live defect**, an undocumented convention a converter from HF
+safetensors would break. The live defect is the conv geometry alone (§10 finding 1).
+
 **Decision for PALW-TIR.** The mapping is data (`MapHeads_g` vs `MapHeads_t`), inside the program and
 therefore inside the class id; a lowerer from HF emits **grouping** with HF's weight order. A
-program that tiles is a different class with a different id. The legacy convention becomes explicit.
+program that tiles over a V-reordered artifact is a different class with a different id computing
+the same function. The legacy convention becomes explicit.
 
 ## 6. Resolutions and additions
 
@@ -603,11 +650,13 @@ On paper the set is stable; criterion 3 is re-checked when Phase E lowers the la
 
 ## 9. Fidelity thresholds for Phase E (freeze criterion 5)
 
-Measured against the family's Hugging Face float reference (bf16 weights, fp32 softmax as HF runs
-it), teacher-forced on a fixed evaluation set — proposed: 256 sequences × 512 tokens from a pinned
-multilingual corpus plus 16 sequences × 4,096 tokens for the recurrent families. Per position:
-top-1 agreement, `KL(p_HF ‖ p_TIR)` in nats, and the perplexity ratio. Integer quantisation changes
-outputs by design; these thresholds decide whether a lowering is useful, never whether a claim is valid.
+**Accepted at Gate 1 (decision 5).** Measured against the family's Hugging Face float reference
+(bf16 weights, fp32 softmax as HF runs it; pinned to `transformers` 5.17 with eager attention and
+per-position decode — Gate 1 decision 4), teacher-forced on a fixed evaluation set — proposed: 256
+sequences × 512 tokens from a pinned multilingual corpus plus 16 sequences × 4,096 tokens for the
+recurrent families. Per position: top-1 agreement, `KL(p_HF ‖ p_TIR)` in nats, and the perplexity
+ratio. Integer quantisation changes outputs by design; these thresholds decide whether a lowering is
+useful, never whether a claim is valid.
 
 | family | top-1 agreement | mean KL (nats) | perplexity delta | recurrence drift |
 | --- | --- | --- | --- | --- |
@@ -633,18 +682,27 @@ an IR problem, and is reported as such (RFC open question 3).
    width is `2·k_heads·dk + v_heads·dv` (`Qwen3NextGatedDeltaNet.__init__`: `conv_dim = key_dim·2 +
    value_dim`), and the k block starts at `k_heads·dk`, not `heads·dk`. Correct only at
    `k_heads = v_heads`; Qwen3.6-35B (16/32) and Qwen3.8 (16/48) are on the wrong side. The key-head
-   count is not in `PalwShapeProfileV3` at all.
-2. **GDN head mapping (live, convention).** §5: the kernel tiles, HF groups; correct only for a
-   V-permuted artifact. Phase 0 must check the pinned GGUF against HF.
-3. **`q36_rope_partial` can overflow `i64` on the court path (live, looks like a defect).**
+   count is not in `PalwShapeProfileV3` at all. Phase F (§3.2–3.3) confirms it is THE live GDN
+   defect — capture refuses the 16/32 window row (`ConvIsNotTheGeometrys`), the prefill failure of
+   every held hybrid — and designs the fix: profile version 3 deriving `k_heads` from the ref width,
+   state-chunk maps v3/v5 that spell it, engine capture geometry v3, the fence `palw_gdn_key_heads`,
+   and 16/32 and 16/48 fixtures end to end (P0a).
+2. **GDN head mapping (live, convention — settled).** §5: the kernel tiles, HF groups; correct only
+   for a V-permuted artifact, and Phase F found the pinned GGUF is exactly that (llama.cpp's
+   `qwen35moe` V-reorder). Not a defect; the IR states the convention as data.
+3. **`q36_rope_partial` could overflow `i64` on the court path (live — fixed).**
    It never checks that its row is A16 codes (`palw_qwen36_ops.rs:536–576`: no `check_a16(x)`), and
    the court arm passes committed lanes straight in (`palw_step_refute.rs:1772–1798`: `as_i32(&inputs[0])`).
    With a row pair `(i32::MIN, i32::MIN)` and a registered table entry `cos = sin = i32::MIN`,
    `a·s + b·c = 2^63` overflows the `i64` product at line 564, which panics under the release
    profile's `overflow-checks = true`. It needs an adversarial table (a registrant) and a crafted
    committed row (a committer) — one party can be both. `a16_rope` and `rope_table` widen to `i128`
-   and are safe. I did not trace whether registration bounds rope-table values; if it does not, this
-   is a remote-halt vector of the kind the 2026-09 audit closed elsewhere.
+   and are safe. **Fixed** on `rcore/hf-court-total` (ea80b2e88, a node-only update with no fence):
+   a sweep of every court arm under `catch_unwind` with committed lanes and registered bytes at
+   their rails found it (it reaches `2^63` at exactly the corner `a = b = c = s = i32::MIN`) and two
+   more — `q36_moe_combine` summed committed `i32 × i32` weights in `i64` unchecked (reachable at
+   `k = 2`), and `q36_gdn_step` took `abs(i64::MIN)` of a registered multiplier. Each now refuses
+   exactly the inputs that panicked (`DoesNotAdjudicate`) and answers every other input unchanged.
 4. **Fenced Kimi court arms adjudicate less than they claim (fenced, not live).**
    `kimi_row`'s `KdaStep` recomputes from a ZEROED state and a unit output scale
    (`palw_step_refute.rs:1010–1022`), so it is correct only at position 0; it also takes one scalar
@@ -654,10 +712,16 @@ an IR problem, and is reported as such (RFC open question 3).
    `v_head_dim` (`DeepseekV3Attention`). The fenced Kimi router is softmax + exact division with the
    remainder to the last-selected expert; HF Kimi Linear routes by sigmoid + selection bias + groups
    (`KimiLinearTopkRouter.forward`). None of this is live; it should not be armed as is.
+   `misaka-palw-tir-conformance` records the four arms as defective and out of scope
+   (`KIMI_OUT_OF_SCOPE`); a Kimi IR class is written with the library's MLA, delta-rule and routing
+   templates instead.
 5. **Seven catalog kernels are float** (`KDESC_L2_NORM`, `KDESC_RMS_NORM_FUSED`, `KDESC_SWIGLU`, the
    two glibc sigmoid/softplus, `GdnCore` NEON/AVX2 — `palw_step_refute.rs:461–467`). An integer IR
-   cannot express them byte-identically; freeze criterion 6 applies to the 38 integer kernels (and the
-   5 fenced ones). See spec 04b §14.
+   cannot express them byte-identically. Freeze criterion 6 covers the integer kernels only (Gate 1
+   decision 6): the 38 integer kernels and the fenced `RequantizeByToken`, which
+   `misaka-palw-tir-conformance` reproduces byte for byte against the live code (its coverage test
+   hashes the list against the catalogue's ids); the float kernels are out of scope, the fenced Kimi
+   arms defective (finding 4). See spec 04b §11 and §14.
 6. **Dead code, recorded:** `softmax`/`softmax_shifted`'s `sum ≤ 0` uniform branch and the router's
    uniform fallback are unreachable (the row maximum contributes `IntExp(0) = 16,781,800 > 0`, and the
    kept maximum's probability is positive); `int_rsqrt`'s normalisation loops never run (the first
@@ -672,11 +736,14 @@ an IR problem, and is reported as such (RFC open question 3).
 - The float reference for RWKV-6/7 (not in the installed `transformers`).
 - Whether absorbed MLA (latent cache) or expanded MLA (HF's) is the default lowering — a fidelity and
   memory trade, both v1.
-- LongRoPE's and dynamic-NTK's call-length-dependent frequencies (`longrope_frequency_update`,
-  `_compute_dynamic_ntk_parameters`) have no per-position equivalent; the lowering's per-position
-  choice must be measured in Phase E.
-- Per-group weight scales (Q4_K-style, `q36_matmul_grouped`): expressible as a `MatMul` per group
-  (`[out, G, 32] × [G, 32, 1]`, batch `G`) and a `Mul` by `Pow2(exp)` before the sum — Gate 2 checks
-  byte identity with the legacy kernel.
 - The Q24 activation `Table` for GELU/erf on codes costs 256 KiB per table as a param; whether such
-  tables are params (per class) or a shared pinned artifact is a Gate 2 packaging question.
+  tables are params (per class) or a shared pinned artifact is a packaging question (`act_table`
+  takes it as a param today).
+- The network values of admission's ceilings (Phase F's fence), and vectors of admission's derived
+  numbers for the program vectors (spec 04b §14).
+
+Settled since Gate 1: LongRoPE's and dynamic NTK's call-length-dependent frequencies are per-position
+decode (decision 4; `rope_angles_by_position`), and per-group weight scales (`q36_matmul_grouped`,
+Q4_K-style) are byte-identical to the legacy kernel as one `MatMul` batched over the groups (a ragged
+last group a second one), each group's exact sum scaled by its power of two, summed and narrowed once
+(`misaka-palw-tir-conformance::q36`).
