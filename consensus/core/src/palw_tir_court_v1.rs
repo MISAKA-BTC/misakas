@@ -1259,10 +1259,7 @@ fn finalize_and_closure(
     source: &mut TirSource<'_, '_>,
     limits: &DemandLimits,
 ) -> Result<Vec<i128>, DemandError> {
-    let elements = leaf_elements(leaf);
-    let request =
-        DemandRangeRequest { ctx: site.ctx, target: site.node, elements: &elements, supplied: &site.reductions, range: None };
-    let (values, _) = eval_demanded_range(&space.program, &space.info, &request, source, limits)?;
+    let values = finalize_values(space, site, &leaf_elements(leaf), source, limits)?;
     loop {
         let before = source.used_supplied.len();
         for node in &site.reductions {
@@ -1279,6 +1276,26 @@ fn finalize_and_closure(
             return Ok(values);
         }
     }
+}
+
+/// **The finalize** (spec 04b §9.5.3): the tile's `elements` evaluated with every reduction over `H`
+/// supplied from the source's claimed values. A commit point that itself reduces over `H` is its
+/// own finalize — the tile IS that reduction's totals, so the claimed values are the values, read
+/// through the source, which records them as read (it cannot be both the target and a supplied node
+/// of one range request: §9.5.2 refuses that, and the honest responder's root claim would be refused
+/// with it).
+fn finalize_values(
+    space: &PalwTirStepSpaceV1,
+    site: &PalwTirDissectSiteV1,
+    elements: &[usize],
+    source: &mut TirSource<'_, '_>,
+    limits: &DemandLimits,
+) -> Result<Vec<i128>, DemandError> {
+    if site.reductions.contains(&site.node) {
+        return elements.iter().map(|e| source.node(site.ctx, site.node, *e).map_err(DemandError::from)).collect();
+    }
+    let request = DemandRangeRequest { ctx: site.ctx, target: site.node, elements, supplied: &site.reductions, range: None };
+    Ok(eval_demanded_range(&space.program, &space.info, &request, source, limits)?.0)
 }
 
 /// **Admit a root claim** (spec 04b §9.5; the acceptance layer's check, which holds the court's work
@@ -1437,11 +1454,8 @@ pub fn tir_root_claim_finalizes_to_v1(
     let mut source = store_source(&v, &binding.job_context, &inventory, store, narrowed, rules);
     source.supplied_ctx = Some(site.ctx);
     source.supplied = supplied_values(&site.reductions, elements, totals, None);
-    let lanes = leaf_elements(&leaf);
-    let request = DemandRangeRequest { ctx: site.ctx, target: site.node, elements: &lanes, supplied: &site.reductions, range: None };
-    Ok(eval_demanded_range(&v.space.program, &v.space.info, &request, &mut source, &rules.limits)
-        .map_err(|e| PalwTirEvidenceErrorV1::Evaluation(e.to_string()))?
-        .0)
+    finalize_values(&v.space, &site, &leaf_elements(&leaf), &mut source, &rules.limits)
+        .map_err(|e| PalwTirEvidenceErrorV1::Evaluation(e.to_string()))
 }
 
 /// The partials of every reduction over the history positions `range`, the others supplied from the

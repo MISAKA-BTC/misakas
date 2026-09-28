@@ -33,6 +33,7 @@ use crate::palw_tir_court_v1::PalwTirConeRefutationV1;
 use crate::palw_tir_step_v1::{PalwTirLeafKindV1, PalwTirLeafV1, PalwTirStepSpaceV1};
 use misaka_palw_tir::demand::{DemandContext, history_length_v1, reduces_over_h_v1};
 use misaka_palw_tir::interval::Interval;
+use misaka_palw_tir::program::{Block, TirProgramV1};
 use misaka_palw_tir::{Prim, Ref};
 
 /// Wire version of every object in this module.
@@ -156,6 +157,121 @@ pub struct PalwTirDissectSiteV1 {
     pub counts: Vec<u64>,
 }
 
+/// **The computed nodes of commit point `node`'s cone** (spec 04b §10.2), by index: the nodes of
+/// `block` reachable backwards from `node` through `Node` refs, the walk stopping AT every other
+/// commit point (a leaf of the cone, read, never computed). `computed[i]` is true for `node` and for
+/// every non-commit node the walk reaches; a reached commit point other than `node` is a leaf and is
+/// not in it. Empty for a node the block does not have.
+pub fn palw_tir_cone_computed_v1(block: &Block, node: u16) -> Vec<bool> {
+    let n = block.nodes.len();
+    let mut computed = vec![false; n];
+    if node as usize >= n {
+        return computed;
+    }
+    let mut seen = vec![false; n];
+    let mut stack = vec![node as usize];
+    while let Some(i) = stack.pop() {
+        if std::mem::replace(&mut seen[i], true) {
+            continue;
+        }
+        if i != node as usize && block.nodes[i].commit {
+            continue;
+        }
+        computed[i] = true;
+        stack.extend(block.nodes[i].inputs.iter().filter_map(|r| if let Ref::Node(j) = r { Some(*j as usize) } else { None }));
+    }
+    computed
+}
+
+/// **The reductions over `H` of commit point `node`'s cone** (spec 04b §9.5.1), in node order —
+/// `node` itself included when it reduces over `H`. Empty: the cone is closed whole, not dissected.
+pub fn palw_tir_cone_reductions_v1(block: &Block, node: u16) -> Vec<u16> {
+    let computed = palw_tir_cone_computed_v1(block, node);
+    (0..block.nodes.len() as u16).filter(|i| computed[*i as usize] && reduces_over_h_v1(block, *i)).collect()
+}
+
+/// **Every dissected commit point of a program** — `(block, node)`, in block then node order: the
+/// commit points whose cone reduces over `H`. A class with any is one whose ladder's terminal move
+/// may be a root claim (`PalwClassStateV2::fused_attention` for an IR class).
+pub fn palw_tir_dissected_commit_points_v1(program: &TirProgramV1) -> Vec<(u8, u16)> {
+    let mut out = Vec::new();
+    for (bi, b) in program.blocks.iter().enumerate() {
+        for (ni, n) in b.nodes.iter().enumerate() {
+            if n.commit && !palw_tir_cone_reductions_v1(b, ni as u16).is_empty() {
+                out.push((bi as u8, ni as u16));
+            }
+        }
+    }
+    out
+}
+
+/// Why a dissected cone breaks an admission obligation (spec 04b §9.5.6).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwTirDissectObligationV1 {
+    /// O-1.
+    #[error("the cone reduces over the history {got} times; at most {max}")]
+    TooManyReductions { got: usize, max: usize },
+    /// O-2: a `Gather` whose indices carry `H` reads data that depends on a reduction over `H`, or a
+    /// `Select` whose condition carries `H` chooses between operands one of which does — the element
+    /// read would be chosen by a value that varies along the history, so the one-index probe of the
+    /// element closure would not name it.
+    #[error("node {node} ({prim}) chooses by a history-varying value between reads of a reduction's output")]
+    DataDependentRead { node: u16, prim: &'static str },
+    /// O-3: a reduction over `H` whose output still carries `H` (its total is not one value per
+    /// `H`-free element).
+    #[error("reduction {node} keeps an H axis in its output")]
+    TotalCarriesH { node: u16 },
+}
+
+/// **The admission obligations of a dissected cone** (spec 04b §9.5.6, O-1 to O-3), asked of commit
+/// point `node` of `block`: at most [`PALW_TIR_DISSECT_MAX_REDUCTIONS`] reductions over `H`; no
+/// `Gather` with `H`-carrying indices whose data depends (through computed nodes of the cone) on a
+/// reduction over `H`, and no `Select` with an `H`-carrying condition one of whose value operands
+/// does; every reduction's output `H`-free. `Ok` for a cone with no reduction over `H`. Linear in
+/// the block.
+pub fn palw_tir_dissect_obligations_v1(block: &Block, node: u16) -> Result<(), PalwTirDissectObligationV1> {
+    let computed = palw_tir_cone_computed_v1(block, node);
+    let reductions: Vec<u16> =
+        (0..block.nodes.len() as u16).filter(|i| computed[*i as usize] && reduces_over_h_v1(block, *i)).collect();
+    if reductions.len() > PALW_TIR_DISSECT_MAX_REDUCTIONS {
+        return Err(PalwTirDissectObligationV1::TooManyReductions { got: reductions.len(), max: PALW_TIR_DISSECT_MAX_REDUCTIONS });
+    }
+    if let Some(r) = reductions.iter().find(|r| block.nodes[**r as usize].out.has_h()) {
+        return Err(PalwTirDissectObligationV1::TotalCarriesH { node: *r });
+    }
+    // Which computed nodes of the cone depend on a reduction over H (refs are strictly backward, so
+    // one pass in index order sees every input first; a leaf of the cone is read, never derived).
+    let mut derived = vec![false; block.nodes.len()];
+    for (i, n) in block.nodes.iter().enumerate() {
+        if !computed[i] {
+            continue;
+        }
+        derived[i] = reductions.contains(&(i as u16))
+            || n.inputs.iter().any(|r| matches!(r, Ref::Node(j) if computed[*j as usize] && derived[*j as usize]));
+    }
+    let depends = |r: &Ref| matches!(r, Ref::Node(j) if computed[*j as usize] && derived[*j as usize]);
+    // An operand carries H iff its declared type does (a param, const, state or input never does).
+    let carries_h = |r: Option<&Ref>| match r {
+        Some(Ref::Node(j)) => block.nodes.get(*j as usize).is_some_and(|m| m.out.has_h()),
+        Some(Ref::CarryIn(k)) => block.carry_in.get(*k as usize).is_some_and(|t| t.has_h()),
+        _ => false,
+    };
+    for (i, n) in block.nodes.iter().enumerate() {
+        if !computed[i] {
+            continue;
+        }
+        let bad = match n.prim {
+            Prim::Gather { .. } => (carries_h(n.inputs.get(1)) && n.inputs.first().is_some_and(depends)).then_some("Gather"),
+            Prim::Select => (carries_h(n.inputs.first()) && n.inputs.iter().skip(1).any(depends)).then_some("Select"),
+            _ => None,
+        };
+        if let Some(prim) = bad {
+            return Err(PalwTirDissectObligationV1::DataDependentRead { node: i as u16, prim });
+        }
+    }
+    Ok(())
+}
+
 /// **The site of a commit leaf, if its cone reduces over `H`** (`None` otherwise: the leaf is closed
 /// by a cone close, not dissected).
 pub fn palw_tir_dissect_site_v1(
@@ -165,21 +281,7 @@ pub fn palw_tir_dissect_site_v1(
 ) -> Option<PalwTirDissectSiteV1> {
     let PalwTirLeafKindV1::Commit { occurrence, block, node, .. } = leaf.kind else { return None };
     let b = space.program.blocks.get(block as usize)?;
-    // The cone: backward from the node through computed nodes; other commit points are leaves.
-    let mut in_cone = vec![false; b.nodes.len()];
-    let mut stack = vec![node as usize];
-    while let Some(i) = stack.pop() {
-        if std::mem::replace(&mut in_cone[i], true) {
-            continue;
-        }
-        if i != node as usize && b.nodes[i].commit {
-            continue;
-        }
-        stack.extend(b.nodes[i].inputs.iter().filter_map(|r| if let Ref::Node(j) = r { Some(*j as usize) } else { None }));
-    }
-    let reductions: Vec<u16> = (0..b.nodes.len() as u16)
-        .filter(|i| in_cone[*i as usize] && (*i == node || !b.nodes[*i as usize].commit) && reduces_over_h_v1(b, *i))
-        .collect();
+    let reductions = palw_tir_cone_reductions_v1(b, node);
     if reductions.is_empty() || reductions.len() > PALW_TIR_DISSECT_MAX_REDUCTIONS {
         return None;
     }
