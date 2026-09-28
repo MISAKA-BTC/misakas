@@ -47,6 +47,7 @@ pub mod sdk;
 pub mod tir_equiv;
 pub mod tir_manifest;
 /// RFC-0002 Phase F (F6, node half): registering an IR class.
+pub mod tir_certification;
 pub mod tir_registration;
 
 pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};

@@ -18,16 +18,23 @@
 //!   `kernel_semantics_id_v1("palw-tir/v1/prim=<Name>")` (design §2.7's namespace), against every
 //!   primitive the program uses.
 //!
-//! The result, [`TirFamilyCertificateV1`], states what was drilled and what the court said; the
-//! chain-side certifier that would score it (the IR twin of `certify_e2e_family_v1`) is F6's.
+//! The result, [`TirFamilyCertificateV1`], states what was drilled and what the court said.
+//! [`tir_family_evidence_v1`] also records it in the form the chain grades
+//! (`palw_tir_certify_v1::PalwTirE2eDrillEvidenceV1`, graded by `certify_tir_e2e_family_v1` — what a
+//! `FamilyCertified` carries as `TirAttempt`): per drilled leaf, the honest run's refutation (which
+//! the court acquits) and the lying run's (which it convicts), their programs stripped (the evidence
+//! carries the class once), the two runs' prefix states around the leaf, and how many malformed
+//! materials the seat's verb refused.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step::kernel_semantics_id_v1;
 use kaspa_consensus_core::palw_step_leg::PalwStepFaultV1;
 use kaspa_consensus_core::palw_step_refute::PalwStepRefuteError;
+use kaspa_consensus_core::palw_tir_certify_v1::{PalwTirE2eDrillEvidenceV1, PalwTirE2eFaultVectorV1, palw_tir_strip_program_v1};
 use kaspa_consensus_core::palw_tir_court_v1::{PalwTirCourtRulesV1, check_tir_cone_refutation_v1};
 use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1;
 use misaka_palw_tir::admit::cone_nodes;
@@ -117,9 +124,53 @@ pub fn tir_family_drill_v1(
     anchor: Hash64,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<TirFamilyCertificateV1, String> {
+    tir_family_evidence_v1(backend, anchor, rules, Hash64::default()).map(|(certificate, _)| certificate)
+}
+
+/// **The family id an IR drill names by default**: the keyed digest of the kernel ids of every
+/// primitive the program reaches (`palw_tir_reachable_prims_v1`, the set the chain's grader
+/// certifies the family for) — so two drills of one primitive set name one family.
+pub fn tir_family_id_v1(kernel_ids: &BTreeSet<Hash64>) -> Hash64 {
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/tir/family-id/v1").to_state();
+    s.update(&(kernel_ids.len() as u64).to_le_bytes());
+    for id in kernel_ids {
+        s.update(id.as_byte_slice());
+    }
+    Hash64::from_bytes(s.finalize().as_bytes().try_into().expect("64 bytes"))
+}
+
+/// Material a seat may be handed that is not a capture of this class's job: truncations and an
+/// extension of the class's own honest capture (a decoder's most likely wrong turn: a value that
+/// parses and does not cohere), and bytes that are not the format at all.
+fn tir_malformed_variants_v1(material: &[u8]) -> Vec<Vec<u8>> {
+    let n = material.len();
+    let mut cuts: Vec<usize> = vec![0, 1, 7, 8, 9, 16, n / 4, n / 2, n.saturating_sub(64), n.saturating_sub(1)];
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut out: Vec<Vec<u8>> = cuts.into_iter().filter(|c| *c < n).map(|c| material[..c].to_vec()).collect();
+    let mut extended = material.to_vec();
+    extended.extend_from_slice(&[0u8; 16]);
+    out.push(extended);
+    out.push(b"not a capture of any class".to_vec());
+    let mut head = material[..material.len().min(8)].to_vec();
+    head.extend_from_slice(&[0xFF; 64]);
+    out.push(head);
+    out
+}
+
+/// **Drill one IR class, and record it as the chain's evidence** under `family_id` (the default,
+/// [`tir_family_id_v1`] of the drilled kernels, when `Hash64::default()`). The certificate is
+/// [`tir_family_drill_v1`]'s; the evidence is what `FamilyCertified { TirAttempt }` carries.
+pub fn tir_family_evidence_v1(
+    backend: &TirBackendV1,
+    anchor: Hash64,
+    rules: &PalwTirCourtRulesV1,
+    family_id: Hash64,
+) -> Result<(TirFamilyCertificateV1, PalwTirE2eDrillEvidenceV1), String> {
     let (job, prompt) = backend.job_for_anchor(anchor)?;
     let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
-    let honest = backend.execute(&job, &prompt)?.material;
+    let honest_run = backend.execute(&job, &prompt)?;
+    let honest = honest_run.material.clone();
     let honest_capture = TirCaptureV1::decode(&honest)?;
     if !honest_capture.is_dense() {
         return Err("the drill needs a dense capture: the job is past the dense-capture cap".into());
@@ -142,6 +193,9 @@ pub fn tir_family_drill_v1(
     }
 
     let mut units = Vec::with_capacity(candidates.len());
+    let mut vectors = Vec::with_capacity(candidates.len());
+    let prefix =
+        |material: &[u8], at: u64| backend.bisect_prefix_state(material, at).ok_or_else(|| format!("no prefix state at {at}"));
     let mut covered_prims = BTreeSet::new();
     for ((kind, call), leaf) in candidates {
         // The executor lies at `leaf`.
@@ -197,19 +251,59 @@ pub fn tir_family_drill_v1(
                 covered_prims.insert(program.blocks[block].nodes[n as usize].prim.name());
             }
         }
+        let (mut honest_refutation, mut guilty_refutation) = (defence, challenger);
+        palw_tir_strip_program_v1(&mut honest_refutation);
+        palw_tir_strip_program_v1(&mut guilty_refutation);
+        vectors.push(PalwTirE2eFaultVectorV1 {
+            leaf_index: leaf,
+            honest: honest_refutation,
+            guilty: guilty_refutation,
+            honest_prefix: (prefix(&honest, leaf)?, prefix(&honest, leaf + 1)?),
+            guilty_prefix: (prefix(&faulty, leaf)?, prefix(&faulty, leaf + 1)?),
+        });
         units.push(TirDrillUnitV1 { kind, call, leaf, conviction, acquitted });
+    }
+    // **The seat's verb, pointed at a stranger's bytes** (the legacy drill's rule): it answers
+    // every malformed material without crashing, and never `Matches`.
+    let claim = PalwClaimRootsV1 {
+        execution_root: honest_run.execution_root,
+        trace_root: honest_run.trace_root,
+        anchor,
+        attempt_draw: None,
+        output_root: None,
+        job_pin: None,
+    };
+    let mut malformed_inputs_refused = 0u32;
+    for bytes in tir_malformed_variants_v1(&honest) {
+        if backend.verify_material(&bytes, claim) == PalwMaterialVerdictV1::Matches {
+            return Err(format!("a {}-byte malformed material verified as Matches", bytes.len()));
+        }
+        malformed_inputs_refused += 1;
     }
     let mut scheduled: BTreeSet<usize> = [program.schedule.pre as usize, program.schedule.post as usize].into_iter().collect();
     scheduled.extend(program.schedule.layers.iter().map(|b| *b as usize));
     let reachable_prims: BTreeSet<&'static str> =
         scheduled.into_iter().flat_map(|b| program.blocks[b].nodes.iter().map(|n| n.prim.name())).collect();
     let covered_kernels = covered_prims.iter().map(|n| tir_prim_kernel_id_v1(n)).collect();
-    Ok(TirFamilyCertificateV1 {
+    let family_id = if family_id == Hash64::default() {
+        tir_family_id_v1(&kaspa_consensus_core::palw_tir_admission_v1::palw_tir_reachable_prims_v1(program))
+    } else {
+        family_id
+    };
+    let evidence = PalwTirE2eDrillEvidenceV1 {
+        family_id,
+        class: backend.class().clone(),
+        artifact_root: backend.artifact_root(),
+        vectors,
+        malformed_inputs_refused,
+    };
+    let certificate = TirFamilyCertificateV1 {
         class_id: backend.class_id(),
         artifact_root: backend.artifact_root(),
         units,
         covered_prims,
         covered_kernels,
         reachable_prims,
-    })
+    };
+    Ok((certificate, evidence))
 }

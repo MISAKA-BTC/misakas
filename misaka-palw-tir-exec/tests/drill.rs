@@ -25,7 +25,9 @@ use kaspa_consensus_core::palw_tir_court_v1::{
 use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir::demand::DemandLimits;
 use misaka_palw_tir::interval::analyze_ranges;
-use misaka_palw_tir_exec::node::{TirArtifactV1, TirBackendV1, TirCaptureV1, TirDrillCallV1, TirDrillUnitKindV1, tir_family_drill_v1};
+use misaka_palw_tir_exec::node::{
+    TirArtifactV1, TirBackendV1, TirCaptureV1, TirDrillCallV1, TirDrillUnitKindV1, tir_family_evidence_v1,
+};
 use node_common::{layout, programs, tiled};
 
 #[test]
@@ -154,8 +156,20 @@ fn the_drill_certifies_every_tiny_class() {
         };
         assert_eq!(verdict, Err(PalwStepRefuteError::NoFaultFound), "{name}: the decode door");
 
-        let cert = tir_family_drill_v1(&backend, anchor, &rules).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let (cert, evidence) =
+            tir_family_evidence_v1(&backend, anchor, &rules, Hash64::default()).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(cert.holds(), "{name}: {:?} of {:?} covered", cert.covered_prims, cert.reachable_prims);
+        // The chain grades the same drill (`FamilyCertified { TirAttempt }`): a family over every
+        // primitive the program reaches, drilled on this class.
+        assert_eq!(evidence.vectors.len(), cert.units.len(), "{name}: a vector per drilled unit");
+        assert!(evidence.vectors.iter().all(|v| v.honest.binding.class.program.is_empty()), "{name}: the program rides once");
+        let graded = kaspa_consensus_core::palw_tir_certify_v1::certify_tir_e2e_family_v1(&evidence)
+            .unwrap_or_else(|e| panic!("{name}: the chain's grader refuses the drill: {e:?}"));
+        let reachable = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_reachable_prims_v1(&backend.space().program);
+        assert_eq!(graded.family.kernel_ids, reachable, "{name}");
+        assert!(reachable.is_subset(&cert.covered_kernels), "{name}: the node's coverage is the chain's");
+        assert_eq!(graded.family.drilled_class_id, backend.class_id(), "{name}");
+        assert_eq!(graded.family.family_id, misaka_palw_tir_exec::node::tir_family_id_v1(&reachable), "{name}");
         let calls: BTreeSet<_> = cert.units.iter().map(|u| u.call).collect();
         assert_eq!(calls, [TirDrillCallV1::Prefill, TirDrillCallV1::Decode].into_iter().collect(), "{name}: both call classes");
         for u in &cert.units {

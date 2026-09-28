@@ -290,6 +290,47 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **An IR family's certification, as the node's operator files it** (`palw-class certify`):
+    /// the class's drill in the chain's evidence form, graded by the chain's certifier into a
+    /// family over every primitive the program reaches, reproducible byte for byte, and the lane
+    /// object that seats the class.
+    #[test]
+    fn an_ir_family_certification_is_built_and_graded() {
+        use crate::tir_certification::{tir_family_certification_v1, tir_lane_certification_v1};
+        use kaspa_consensus_core::palw_state_v2::{PalwCertificationEvidenceV1, PalwConsensusObjectV2};
+        let dir = std::env::temp_dir().join(format!("palw-sdk-tir-cert-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sdk = PalwClassSdk::builtin_v1(court(), PalwPromptIdsFormV1::Flat, b"misaka-palw-rc".to_vec());
+        let (name, p, params) = vectors().remove(0);
+        // The narrowest context a class may declare: the drill runs its canonical job once per
+        // committed unit and call class, both ways.
+        let narrow = PalwTirLayoutV1 { max_context: 16, ..layout(&p) };
+        let path = write(&dir, &name, &p, &params, borsh::to_vec(&narrow).unwrap());
+        let holdings = vec![sdk.load_artifact(&path).unwrap()];
+        let entry = crate::tir_registration::tir_entries_of_v1(&holdings).remove(0);
+        let (object, family) = tir_family_certification_v1(&entry, &court(), PalwPromptIdsFormV1::Flat, None).expect("certifies");
+        let PalwConsensusObjectV2::FamilyCertified { evidence } = &object else { panic!("a FamilyCertified") };
+        let PalwCertificationEvidenceV1::TirAttempt(drill) = evidence.as_ref() else { panic!("the IR attempt lane") };
+        assert!(!drill.vectors.is_empty() && drill.malformed_inputs_refused > 0);
+        assert_eq!(family.drilled_class_id, entry.class_id());
+        assert_eq!(family.kernel_ids, kaspa_consensus_core::palw_tir_admission_v1::palw_tir_reachable_prims_v1(&p));
+        assert_eq!(evidence.grade().expect("the chain's grader"), family, "the family is the grader's");
+        // A family named by the operator; otherwise one build over one artifact writes one object.
+        let named = Hash64::from_bytes([5; 64]);
+        let (again, again_family) = tir_family_certification_v1(&entry, &court(), PalwPromptIdsFormV1::Flat, Some(named)).unwrap();
+        assert_eq!(again_family.family_id, named);
+        let PalwConsensusObjectV2::FamilyCertified { evidence: again } = again else { panic!() };
+        let PalwCertificationEvidenceV1::TirAttempt(mut again) = *again else { panic!() };
+        again.family_id = drill.family_id;
+        assert_eq!(borsh::to_vec(&again).unwrap(), borsh::to_vec(drill).unwrap(), "the drill is reproducible");
+        let PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { class_id, artifact_root, class } = tir_lane_certification_v1(&entry)
+        else {
+            panic!("the lane object")
+        };
+        assert_eq!((class.class_id(&artifact_root), class_id), (entry.class_id(), entry.class_id()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **An IR registration, built, signed and read back** (F6's node half): the candidate is the
     /// held class, dropped once the chain holds its id or its weights; the object carries the class,
     /// the formula's canonical job and the counted pwu; the signature verifies under the registrant

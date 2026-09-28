@@ -24,6 +24,8 @@ misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec", features = ["node"] }
 misaka-palw-tir-lower = { path = "../misaka-palw-tir-lower" }
 # A PALWTIR1 container's declared layout is `borsh(PalwTirLayoutV1)`; the manifest decodes it.
 borsh.workspace = true
+# An IR class's certification drill runs at an anchor keyed off its class id.
+blake2b_simd.workspace = true
 # `palw-tir-equiv` (D-F1 offline): the IR side of a 1.5B class runs on the typed backend (the
 # `misaka-palw-tir-exec` dependency above), the random prompts are seeded.
 rand.workspace = true

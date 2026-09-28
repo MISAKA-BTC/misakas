@@ -36,6 +36,16 @@ USAGE:
     palw-class manifest  --network <id> [--out <path>] [--check] <artifact-path>
     palw-class check-architecture --network <id> --config <config.json> [--legacy] [--held] [--tile-len N] [--h-chunk N] [--json]
     palw-class check-architecture --network <id> --tir <program.tir> [--tile-len N] [--h-chunk N] [--json]
+    palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
+
+`certify` (RFC-0002 Phase F) drills an IR (PALWTIR1) class end to end — a lie planted at a leaf of
+every committed unit, prefill and decode, convicted by the IR court, and the honest run acquitted —
+grades the drill with this build's copy of the chain's certifier, and writes the
+`FamilyCertified { TirAttempt }` object to --out (with `<out>.chunkN` beside it when it needs more
+than one carrier) and the `ClassLaneCertifiedTirV1` that seats the registered class at the floor
+once the family is certified to `<out>.lane`. Submit them in that order with
+`misaka palw submit-object`. The drill runs the class's canonical job at dense capture: a class
+whose job is past the dense-capture cap is refused.
 
 `measure` (ADR-0100) reads the geometry off the artifact, measures its bytes from the inventory,
 evaluates every wall of ADR-0097 at 512 / 32,768 / 131,072 / 1,048,576 positions and the shard
@@ -195,6 +205,17 @@ fn run(args: &[String]) -> Result<(), String> {
                 true => Ok(()),
                 false => std::process::exit(2),
             }
+        }
+        "certify" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let out = take_flag(&mut args, "--out").ok_or(USAGE)?;
+            let wanted = take_flag(&mut args, "--model-id");
+            let family_id = match take_flag(&mut args, "--family-id") {
+                Some(hex) => Some(hex.trim_start_matches("0x").parse::<Hash64>().map_err(|e| format!("--family-id {hex}: {e:?}"))?),
+                None => None,
+            };
+            let path = PathBuf::from(args.first().ok_or(USAGE)?);
+            certify(&view, &path, wanted.as_deref(), family_id, &out)
         }
         _ => Err(USAGE.to_string()),
     }
@@ -515,6 +536,82 @@ fn inspect(view: &NetworkView, path: &std::path::Path) -> Result<(), String> {
             Err(why) => println!("  no      {}  — {why}", entry.model_id),
         }
     }
+    Ok(())
+}
+
+/// `certify`: the IR class's drill as the chain's `FamilyCertified { TirAttempt }` object, graded
+/// here first, and the lane object that seats the class once the family is certified.
+fn certify(
+    view: &NetworkView,
+    path: &std::path::Path,
+    wanted: Option<&str>,
+    family_id: Option<Hash64>,
+    out: &str,
+) -> Result<(), String> {
+    use kaspa_consensus_core::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_BYTES, palw_object_chunks_v1};
+    let sdk = sdk_for(view);
+    let artifact = sdk.load_artifact(path)?;
+    let entries: Vec<_> = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&artifact))
+        .into_iter()
+        .filter(|e| wanted.is_none_or(|w| w == e.model_id))
+        .collect();
+    let [entry] = entries.as_slice() else {
+        return Err(match entries.len() {
+            0 => "this artifact declares no IR class (by that --model-id) — `certify` drills PALWTIR1 classes".to_string(),
+            n => format!("this artifact declares {n} IR classes — name one with --model-id"),
+        });
+    };
+    let write = |path: &str, object: &PalwConsensusObjectV2| -> Result<usize, String> {
+        let bytes = borsh::to_vec(object).map_err(|e| format!("the object does not serialize: {e}"))?;
+        std::fs::write(path, &bytes).map_err(|e| format!("{path}: {e}"))?;
+        Ok(bytes.len())
+    };
+    let (object, family) = misaka_palw_sdk::tir_certification::tir_family_certification_v1(
+        entry,
+        &view.bundle.court,
+        view.params.palw_prompt_ids_form_v1(),
+        family_id,
+    )?;
+    let vectors = match &object {
+        PalwConsensusObjectV2::FamilyCertified { evidence } => evidence.vector_count(),
+        _ => 0,
+    };
+    let bytes = write(out, &object)?;
+    println!(
+        "wrote {out}: FamilyCertified (TirAttempt), family {} (digest {}), class {} ({}), {vectors} fault vectors, {} kernels, {bytes} bytes",
+        family.family_id,
+        family.digest(),
+        entry.model_id,
+        family.drilled_class_id,
+        family.kernel_ids.len()
+    );
+    match palw_object_chunks_v1(&object) {
+        Ok(None) => println!("fits one carrier: submit {out} as it is"),
+        Ok(Some(chunks)) => {
+            let mut names = Vec::with_capacity(chunks.len());
+            for chunk in &chunks {
+                let PalwConsensusObjectV2::ObjectChunk { index, count, group, .. } = chunk else {
+                    return Err("the chunker returned something other than a chunk".to_string());
+                };
+                let name = format!("{out}.chunk{index}");
+                let n = write(&name, chunk)?;
+                println!("wrote {name}: ObjectChunk {index}/{count} of group {group}, {n} bytes");
+                names.push(name);
+            }
+            println!(
+                "too large for one carrier ({bytes} > {PALW_OBJECT_CHUNK_MAX_BYTES}): submit the chunks in order — misaka palw \
+                 submit-object {} --yes",
+                names.iter().map(|n| format!("--object {n}")).collect::<Vec<_>>().join(" ")
+            );
+        }
+        Err(e) => return Err(format!("the drill cannot be chunked: {e}")),
+    }
+    let lane = format!("{out}.lane");
+    let n = write(&lane, &misaka_palw_sdk::tir_certification::tir_lane_certification_v1(entry))?;
+    println!(
+        "wrote {lane}: ClassLaneCertifiedTirV1 for {} ({n} bytes) — submit it once the family is certified and the class is Active",
+        entry.class_id()
+    );
     Ok(())
 }
 
