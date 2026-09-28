@@ -2,15 +2,17 @@
 //! would this Hugging Face architecture be admitted on this network — as a PALW-TIR program (IR
 //! mode), or as a class of a shipped lineage (legacy mode)?
 //!
-//! **IR mode.** `misaka-palw-tir-lower` (non-consensus) lowers the config to a `TirProgramV1`; the
-//! program is then checked against the network's `palw_tir_v1` ceilings (the fence's value where it
-//! is armed; testnet-12's provisional v1 ceilings while it is dormant, and the output says which).
-//! What exists today is checked for real: the canonical encoding and normal form, the primitive set
-//! the network names, the spec 04b §7 range analysis (the executable half of `tir_admit_v1`), and
-//! every ceiling a program's §8 costs can be compared to (`misaka_palw_tir_lower::lower::cost`, a
-//! preview of the normative costs). The court half — per-commit-point cone costs, the default
-//! layout's tiles and checkpoint interval — is `tir_admit_v1`'s (tir/core, Gate 2); until it lands
-//! an admitted program reads `ADMISSIBLE (pending tir_admit_v1: …)`.
+//! **IR mode.** `misaka-palw-tir-lower` (non-consensus) lowers the config to a `TirProgramV1`, and
+//! the verdict is `tir_admit_v1`'s (tir/core, spec 04b §10.3) — normal form, types, ranges, the
+//! per-position costs, every commit point's court cone, every `Fixed` state's checkpoint interval,
+//! admission's own work — under the network's `palw_tir_v1` ceilings (the fence's value where it is
+//! armed; testnet-12's provisional v1 ceilings while it is dormant, and the output says which): the
+//! network's per-position MACs and state bytes replace tir/core's starting values, the terminal
+//! (per-tile) ceilings are tir/core's, and the network's program-byte, unrolled-node and peak-live
+//! caps are checked against the same admission's numbers. `tile_len` and the history chunk are the
+//! two layout facts admission reads; both are 64 unless given. What admission v10 adds beyond
+//! `tir_admit_v1` — a declared layout's tiles and `C ≤ min C_j`, the canonical job, close bytes, the
+//! window court — needs a layout, and an admitted program says so.
 //!
 //! **Legacy mode.** The config is mapped to the shipped lineage whose graph can express it — the
 //! dense A16 family (Qwen2.5's graph) or the Qwen3.6 hybrid family (gated delta + gated attention +
@@ -29,7 +31,7 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2;
 use kaspa_consensus_core::palw_tir_v1::{PALW_T12_TIR_CEILINGS_V1, PalwTirCeilingsV1, palw_tir_prim_set_id_v1};
 use kaspa_hashes::Hash64;
 use misaka_palw_tir::TirProgramV1;
-use misaka_palw_tir_lower::lower::cost::{ProgramCostV1, program_cost_v1};
+use misaka_palw_tir::admit::{TirAdmitError, TirAdmitInputsV1, TirCeilingsV1};
 use misaka_palw_tir_lower::spec::{Act, ArchSpec, Ffn, Gain, Glu, Mixer, NormKind, Position, Residual};
 
 /// A verdict of either mode.
@@ -87,9 +89,34 @@ pub struct IrReportV1 {
     pub program_bytes: usize,
     pub blocks: usize,
     pub nodes: usize,
-    pub cost: Option<ProgramCostV1>,
+    /// Nodes of one position: `pre`, every layer's block, `post`.
+    pub unrolled_nodes: u64,
     pub max_context: u32,
     pub graph_ir_root: Option<Hash64>,
+    /// What admission ran with.
+    pub inputs: Option<TirAdmitInputsV1>,
+    /// `tir_admit_v1`'s report (text lines and JSON) — its numbers, or its refusal.
+    pub admission_text: String,
+    pub admission_json: serde_json::Value,
+}
+
+/// `tile_len` and the canonical history chunk IR mode admits with unless given (a layout's
+/// `commit_tiles` and `h_tile`).
+pub const IR_DEFAULT_TILE_LEN_V1: u32 = 64;
+pub const IR_DEFAULT_H_CHUNK_V1: u32 = 64;
+
+/// **The inputs `tir_admit_v1` runs with on this network**: the layout facts, tir/core's terminal
+/// ceilings, and the network's per-position MACs and state bytes in place of tir/core's.
+pub fn tir_admit_inputs_v1(ceilings: &PalwTirCeilingsV1, tile_len: u32, h_chunk: u32) -> TirAdmitInputsV1 {
+    TirAdmitInputsV1 {
+        tile_len,
+        h_chunk,
+        ceilings: TirCeilingsV1 {
+            max_position_macs: ceilings.max_macs_per_position,
+            max_state_bytes: ceilings.max_state_bytes,
+            ..TirCeilingsV1::legacy_court_v1()
+        },
+    }
 }
 
 /// The ceilings a network judges IR programs by, and how that was decided.
@@ -104,8 +131,13 @@ pub fn tir_ceilings_v1(params: &Params) -> (PalwTirCeilingsV1, String, Hash64) {
     }
 }
 
-/// **IR mode from a config.**
+/// **IR mode from a config**, at the default layout facts.
 pub fn check_ir_config_v1(params: &Params, config_text: &str, long_history: bool) -> IrReportV1 {
+    check_ir_config_at_v1(params, config_text, long_history, IR_DEFAULT_TILE_LEN_V1, IR_DEFAULT_H_CHUNK_V1)
+}
+
+/// **IR mode from a config** with `tile_len` and the history chunk given.
+pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: bool, tile_len: u32, h_chunk: u32) -> IrReportV1 {
     let opts = misaka_palw_tir_lower::lower::LowerOpts {
         history_bound: if long_history {
             misaka_palw_tir::program::HISTORY_BOUND_V1_HELD
@@ -123,9 +155,12 @@ pub fn check_ir_config_v1(params: &Params, config_text: &str, long_history: bool
         program_bytes: 0,
         blocks: 0,
         nodes: 0,
-        cost: None,
+        unrolled_nodes: 0,
         max_context: 0,
         graph_ir_root: None,
+        inputs: None,
+        admission_text: String::new(),
+        admission_json: serde_json::Value::Null,
     };
     let spec = match misaka_palw_tir_lower::parse_config_str(config_text) {
         Ok(s) => s,
@@ -136,7 +171,7 @@ pub fn check_ir_config_v1(params: &Params, config_text: &str, long_history: bool
         Ok(lw) => lw,
         Err(e) => return empty(arch, not_lowerable(e)),
     };
-    let mut r = check_ir_program_v1(params, &prep.program);
+    let mut r = check_ir_program_at_v1(params, &prep.program, tile_len, h_chunk);
     r.architecture = arch;
     if matches!(spec.reference, misaka_palw_tir_lower::spec::Reference::RemoteCode { .. }) {
         r.unverified
@@ -152,11 +187,23 @@ fn not_lowerable(e: misaka_palw_tir_lower::LowerError) -> ArchVerdictV1 {
     }
 }
 
-/// **IR mode on a program.**
+/// **IR mode on a program**, at the default layout facts.
 pub fn check_ir_program_v1(params: &Params, program: &TirProgramV1) -> IrReportV1 {
+    check_ir_program_at_v1(params, program, IR_DEFAULT_TILE_LEN_V1, IR_DEFAULT_H_CHUNK_V1)
+}
+
+/// **IR mode on a program**: the network's primitive set, then `tir_admit_v1` under the network's
+/// ceilings, then the network caps admission does not know (program bytes, unrolled nodes, peak
+/// live bytes) against admission's own numbers.
+pub fn check_ir_program_at_v1(params: &Params, program: &TirProgramV1, tile_len: u32, h_chunk: u32) -> IrReportV1 {
     let (ceilings, source, prim_set) = tir_ceilings_v1(params);
     let bytes = program.encode();
     let max_context = program.history_bound.min(ceilings.max_context);
+    let occurrences = std::iter::once(program.schedule.pre)
+        .chain(program.schedule.layers.iter().copied())
+        .chain(std::iter::once(program.schedule.post));
+    let unrolled_nodes = occurrences.map(|b| program.blocks.get(b as usize).map_or(0, |b| b.nodes.len() as u64)).sum();
+    let inputs = tir_admit_inputs_v1(&ceilings, tile_len, h_chunk);
     let mut r = IrReportV1 {
         architecture: String::new(),
         verdict: ArchVerdictV1::Admissible { pending: Vec::new() },
@@ -166,43 +213,44 @@ pub fn check_ir_program_v1(params: &Params, program: &TirProgramV1) -> IrReportV
         program_bytes: bytes.len(),
         blocks: program.blocks.len(),
         nodes: program.blocks.iter().map(|b| b.nodes.len()).sum(),
-        cost: None,
+        unrolled_nodes,
         max_context,
         graph_ir_root: Some(kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_graph_ir_root_v1(&bytes)),
+        inputs: Some(inputs),
+        admission_text: String::new(),
+        admission_json: serde_json::Value::Null,
     };
-    // The canonical encoding round-trips and is in normal form.
-    match TirProgramV1::decode_canonical(&bytes) {
-        Ok(p) if p == *program => {}
-        Ok(_) => {
-            r.verdict = ArchVerdictV1::Refused("the program's encoding does not decode to itself".into());
-            return r;
-        }
-        Err(e) => {
-            r.verdict = ArchVerdictV1::Refused(format!("encoding: {e}"));
-            return r;
-        }
-    }
-    if let Err(e) = misaka_palw_tir::validate::validate(program) {
-        r.verdict = ArchVerdictV1::Refused(format!("normal form: {e}"));
-        return r;
-    }
+    // The primitive set first: a program over another set is not this network's to judge.
     if program.prim_set_id[..] != *prim_set.as_byte_slice() {
         r.verdict = ArchVerdictV1::NeedsPrimitive("the program names another primitive set than this network's prim_set_id".into());
         return r;
     }
-    if let Err(e) = misaka_palw_tir::interval::analyze_ranges(program) {
-        r.verdict = ArchVerdictV1::Refused(format!("range analysis (04b §7): {e}"));
-        return r;
-    }
-    let cost = program_cost_v1(program, max_context);
-    let checks: [(&str, u128, u128); 5] = [
+    // `tir_admit_v1` over the canonical bytes: decode, normal form, types, ranges, costs, cones,
+    // checkpoint intervals, cone work — refused by rule, or by limit and number.
+    let verdict = misaka_palw_tir::admit::tir_admit_v1(&bytes, &inputs);
+    r.admission_text = misaka_palw_tir_lower::admission::render(program, &inputs, &verdict);
+    r.admission_json = misaka_palw_tir_lower::admission::to_json(program, &inputs, &verdict);
+    let a = match verdict {
+        Ok(a) => a,
+        Err(TirAdmitError::Exceeds { limit, at, value, cap }) => {
+            let limit = if at == "the position" { limit.to_string() } else { format!("{limit} at {at}") };
+            r.verdict = ArchVerdictV1::Exceeds { limit, value: value as u128, cap: cap as u128 };
+            return r;
+        }
+        Err(TirAdmitError::Program(e)) => {
+            r.verdict = ArchVerdictV1::Refused(format!("tir_admit_v1: {e}"));
+            return r;
+        }
+        Err(TirAdmitError::Inputs(m)) => {
+            r.verdict = ArchVerdictV1::Refused(format!("tir_admit_v1 inputs: {m}"));
+            return r;
+        }
+    };
+    let checks: [(&str, u128, u128); 3] = [
         ("max_program_bytes", bytes.len() as u128, ceilings.max_program_bytes as u128),
-        ("max_unrolled_nodes", cost.unrolled_nodes as u128, ceilings.max_unrolled_nodes as u128),
-        ("max_macs_per_position", cost.macs, ceilings.max_macs_per_position as u128),
-        ("max_state_bytes", cost.state_bytes, ceilings.max_state_bytes as u128),
-        ("max_peak_live_bytes", cost.peak_live_bytes, ceilings.max_peak_live_bytes as u128),
+        ("max_unrolled_nodes", unrolled_nodes as u128, ceilings.max_unrolled_nodes as u128),
+        ("max_peak_live_bytes", a.position.peak_live_bytes as u128, ceilings.max_peak_live_bytes as u128),
     ];
-    r.cost = Some(cost);
     for (limit, value, cap) in checks {
         if value > cap {
             r.verdict = ArchVerdictV1::Exceeds { limit: limit.into(), value, cap };
@@ -210,7 +258,9 @@ pub fn check_ir_program_v1(params: &Params, program: &TirProgramV1) -> IrReportV
         }
     }
     r.verdict = ArchVerdictV1::Admissible {
-        pending: vec!["tir_admit_v1: court cone costs per commit point, the default layout's tiles and checkpoint interval".into()],
+        pending: vec![
+            "admission v10's layout checks (declared tiles, C ≤ min C_j, the canonical job, close bytes, the window court) need a declared layout".into(),
+        ],
     };
     r
 }
@@ -603,7 +653,7 @@ mod tests {
             let name = d.file_name().expect("name").to_string_lossy().to_string();
             eprintln!("{name:>20}: {} ({} bytes, {} nodes)", r.verdict, r.program_bytes, r.nodes);
             assert!(r.verdict.is_admissible(), "{name}: {}", r.verdict);
-            assert!(r.graph_ir_root.is_some() && r.cost.is_some());
+            assert!(r.graph_ir_root.is_some() && r.admission_json["admitted"] == serde_json::json!(true), "{name}");
         }
     }
 

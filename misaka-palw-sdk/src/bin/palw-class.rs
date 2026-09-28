@@ -34,8 +34,8 @@ USAGE:
                          [--key-file <ml-dsa-87 seed>] [--out <measured.json>] <artifact-path>
     palw-class verify    --network <id> [--artifact <artifact-path>] <measured.json>
     palw-class manifest  --network <id> [--out <path>] [--check] <artifact-path>
-    palw-class check-architecture --network <id> --config <config.json> [--legacy] [--held] [--json]
-    palw-class check-architecture --network <id> --tir <program.tir> [--json]
+    palw-class check-architecture --network <id> --config <config.json> [--legacy] [--held] [--tile-len N] [--h-chunk N] [--json]
+    palw-class check-architecture --network <id> --tir <program.tir> [--tile-len N] [--h-chunk N] [--json]
 
 `measure` (ADR-0100) reads the geometry off the artifact, measures its bytes from the inventory,
 evaluates every wall of ADR-0097 at 512 / 32,768 / 131,072 / 1,048,576 positions and the shard
@@ -54,10 +54,11 @@ the dense tier of testnet-11 and then of testnet-12. `--check` recomputes an exi
 exits 1 on any disagreement instead of writing.
 
 `check-architecture` (RFC-0002 Phase F): would this Hugging Face architecture be admitted on this
-network? IR mode lowers the config to a PALW-TIR program and checks it against the network's
-palw_tir_v1 ceilings (testnet-12's provisional values while the fence is dormant — said in the
-output), the network's primitive set and the spec 04b range analysis; tir_admit_v1's court-cost half
-is named as pending until it exists. --legacy maps the config to the shipped lineage that can
+network? IR mode lowers the config to a PALW-TIR program and admits it with tir_admit_v1 (spec 04b
+§10.3: normal form, ranges, per-position costs, every commit point's court cone, checkpoint
+intervals) under the network's palw_tir_v1 ceilings (testnet-12's provisional values while the
+fence is dormant — said in the output) and primitive set, at --tile-len values per step leaf and an
+--h-chunk history chunk (64 and 64 unless given). --legacy maps the config to the shipped lineage that can
 express it (dense A16, Qwen3.6 hybrid) and runs the processor-same admission gate on each class
 row — the shipped rows at the config's geometry, else the family's graph projected at its
 dimensions. Verdicts: ADMISSIBLE, EXCEEDS(limit, value, cap), NEEDS_PRIMITIVE, NOT_LOWERABLE,
@@ -181,10 +182,16 @@ fn run(args: &[String]) -> Result<(), String> {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
             let config = take_flag(&mut args, "--config");
             let tir = take_flag(&mut args, "--tir");
+            let number = |v: Option<String>, name: &str, default: u32| -> Result<u32, String> {
+                v.map(|v| v.parse::<u32>().map_err(|e| format!("{name} {v}: {e}"))).unwrap_or(Ok(default))
+            };
+            let tile_len = number(take_flag(&mut args, "--tile-len"), "--tile-len", 64)?;
+            let h_chunk = number(take_flag(&mut args, "--h-chunk"), "--h-chunk", 64)?;
             let legacy = args.iter().any(|a| a == "--legacy");
             let held = args.iter().any(|a| a == "--held");
             let json = args.iter().any(|a| a == "--json");
-            match check_architecture(&view, config.as_deref(), tir.as_deref(), legacy, held, json)? {
+            let flags = ArchFlags { legacy, held, json, tile_len, h_chunk };
+            match check_architecture(&view, config.as_deref(), tir.as_deref(), &flags)? {
                 true => Ok(()),
                 false => std::process::exit(2),
             }
@@ -193,16 +200,20 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
-/// `check-architecture`: returns whether the verdict is ADMISSIBLE.
-fn check_architecture(
-    view: &NetworkView,
-    config: Option<&str>,
-    tir: Option<&str>,
+/// `check-architecture`'s switches.
+struct ArchFlags {
     legacy: bool,
     held: bool,
     json: bool,
-) -> Result<bool, String> {
+    /// The layout facts IR mode admits with (`--tile-len`, `--h-chunk`).
+    tile_len: u32,
+    h_chunk: u32,
+}
+
+/// `check-architecture`: returns whether the verdict is ADMISSIBLE.
+fn check_architecture(view: &NetworkView, config: Option<&str>, tir: Option<&str>, flags: &ArchFlags) -> Result<bool, String> {
     use misaka_palw_sdk::check_architecture::*;
+    let ArchFlags { legacy, held, json, tile_len, h_chunk } = *flags;
     if legacy {
         let path = config.ok_or("--legacy needs --config")?;
         let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
@@ -242,26 +253,23 @@ fn check_architecture(
     let r = match (config, tir) {
         (Some(path), None) => {
             let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-            check_ir_config_v1(&view.params, &text, held)
+            check_ir_config_at_v1(&view.params, &text, held, tile_len, h_chunk)
         }
         (None, Some(path)) => {
             let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
             let program = misaka_palw_tir::TirProgramV1::decode_canonical(&bytes).map_err(|e| format!("{path}: {e}"))?;
-            check_ir_program_v1(&view.params, &program)
+            check_ir_program_at_v1(&view.params, &program, tile_len, h_chunk)
         }
         _ => return Err("give exactly one of --config and --tir".into()),
     };
     if json {
-        let cost = r.cost.as_ref().map(|c| {
-            serde_json::json!({ "unrolled_nodes": c.unrolled_nodes, "macs": c.macs.to_string(), "state_bytes": c.state_bytes.to_string(),
-                                "peak_live_bytes": c.peak_live_bytes.to_string() })
-        });
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({ "mode": "ir", "network": view.network_id.to_string(),
                 "architecture": r.architecture, "verdict": r.verdict.to_string(), "ceilings": r.ceilings_source,
-                "program_bytes": r.program_bytes, "blocks": r.blocks, "nodes": r.nodes, "max_context": r.max_context,
-                "graph_ir_root": r.graph_ir_root.map(|h| h.to_string()), "cost": cost, "unverified": r.unverified }))
+                "program_bytes": r.program_bytes, "blocks": r.blocks, "nodes": r.nodes, "unrolled_nodes": r.unrolled_nodes,
+                "max_context": r.max_context, "graph_ir_root": r.graph_ir_root.map(|h| h.to_string()),
+                "admission": r.admission_json, "unverified": r.unverified }))
             .unwrap_or_default()
         );
     } else {
@@ -274,12 +282,10 @@ fn check_architecture(
         if let Some(h) = r.graph_ir_root {
             println!("  graph_ir_root {h}");
         }
-        if let Some(c) = &r.cost {
-            println!(
-                "  per position at max_context {}: {} unrolled nodes, {} MACs, {} state bytes, {} peak live bytes",
-                r.max_context, c.unrolled_nodes, c.macs, c.state_bytes, c.peak_live_bytes
-            );
+        if r.unrolled_nodes > 0 {
+            println!("  max_context {}, {} unrolled nodes a position", r.max_context, r.unrolled_nodes);
         }
+        print!("{}", r.admission_text);
         for u in &r.unverified {
             println!("  unverified: {u}");
         }

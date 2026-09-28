@@ -49,10 +49,11 @@
 //!
 //! Commit points: every carry-out, the logits, the K/V rows (normal form), and every `i16` code
 //! row at a matmul boundary (norm outputs, projection outputs, the attention context, the GLU
-//! hidden) plus the mid-layer residual — the pattern of corpus §2.4. Court cone sizing is
-//! `tir_admit_v1`'s job and is not attempted here.
+//! hidden) plus the mid-layer residual — the pattern of corpus §2.4. With these commit points
+//! every cone of every lowered program fits the legacy court's terminal ceiling as `tir_admit_v1`
+//! measures it (`tests/admission.rs`; the worst, Falcon-40B's, is 2.6 Mi MACs of 16 Mi), so no
+//! commit point is added for cone size.
 
-pub mod cost;
 pub mod fill;
 
 use crate::error::{LowerError, Result};
@@ -326,7 +327,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     let logits = logits.ok_or_else(|| LowerError::eval("internal: post block produced no logits"))?;
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
-    let mut program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], logits);
+    let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], logits);
     // `prim_set_id` is the builder's default, `misaka_palw_tir::prim::PRIM_SET_ID_V1` (NF-1).
     tir::validate::validate(&program)
         .map_err(|e| LowerError::eval(format!("internal: lowered program is not in normal form: {e}")))?;
@@ -390,6 +391,32 @@ fn code_bounds(dt: DType) -> (i64, i64) {
 
 fn u32s(shape: &[usize]) -> Vec<u32> {
     shape.iter().map(|d| *d as u32).collect()
+}
+
+/// The window `W` a `Hist` state of HL block `hbk` is lowered with: the model's own (a sliding
+/// window) or the history bound — capped so that every history the block appends to fits NF-8's
+/// `2^28` elements at the worst case (`[W] ++ row`: a row of 1,024 lanes admits `2^18`, one of
+/// 4,096 lanes `2^16`). Every `Hist` state a block appends to shares this window (spec 04b §2.2),
+/// and the cap is a power of two so a canonical `H` chunk divides it. Up to `W` positions the
+/// program is the model; a class whose layout's `max_context` stays within `W` never sees the cap.
+pub fn hist_window_cap(row_lanes: usize) -> u32 {
+    let most = (tir::types::MAX_ELEMENTS / row_lanes.max(1) as u64).max(1);
+    1u32 << (63 - most.leading_zeros()).min(31)
+}
+
+fn hist_window(cx: &Cx<'_>, hbk: usize, window: Option<usize>) -> u32 {
+    let hl = cx.hl;
+    let widest = hl.blocks[hbk]
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.op, Op::HistAppend))
+        .filter_map(|n| match n.inputs.get(1) {
+            Some(hl::Ref::State(s)) => Some(hl.states[*s as usize].shape.iter().product::<usize>()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(1);
+    window.map(|w| w as u32).unwrap_or(cx.history_bound).min(cx.history_bound).min(hist_window_cap(widest))
 }
 
 /// Per-block lowering state.
@@ -952,7 +979,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let x = codes(b, cx, lb, &x)?;
             let sd = &hl.states[s as usize];
             let StateKind::Hist { window } = sd.kind else { return Err(LowerError::eval("internal: HistAppend on a Fixed state")) };
-            let w = window.map(|w| w as u32).unwrap_or(cx.history_bound).min(cx.history_bound);
+            let w = hist_window(cx, lb.hb, window);
             let ts = match cx.tstate.get(&s) {
                 Some(t) => *t,
                 None => {
@@ -978,7 +1005,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let want =
                 if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
             let window = match hl.states[ks as usize].kind {
-                StateKind::Hist { window } => window.map(|w| w as u32).unwrap_or(cx.history_bound).min(cx.history_bound),
+                StateKind::Hist { window } => hist_window(cx, lb.hb, window),
                 StateKind::Fixed => return Err(LowerError::eval("internal: attention over a Fixed state")),
             };
             let shape = AttnDims { heads: *heads, kv: *kv_heads, d: *head_dim, dv: *v_head_dim, window };
