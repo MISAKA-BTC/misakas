@@ -277,3 +277,69 @@ fn judged_kinds_wait_and_disagreements_are_refused() {
         "an exact match generates"
     );
 }
+
+/// ref2's H7 shape as a Phase F class (`tests/palw_tir_h7.rs`): scores `Qᵀ · K` over a 16-row window
+/// and a `TopK` of them — a commit point whose cone reduces over the history.
+fn attention_program() -> TirProgramV1 {
+    let mut pb = ProgramBuilder::new(8, HISTORY_BOUND_V1_SMALL);
+    let embed = pb.param("embed", DType::I8, &[8, 7], false);
+    let head = pb.param("head", DType::I8, &[8, 7], false);
+    let ks = pb.hist_state("k", DType::I32, &[3], 16, true);
+    let qs = pb.hist_state("q", DType::I32, &[4], 16, true);
+    let carry = vec![TensorType::fixed(DType::I32, &[7])];
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let x = b.gather(embed, Ref::Input(0), 0, 0);
+        let x = b.cast(x, DType::I32);
+        b.finish(&[x])
+    };
+    let layer = {
+        let mut b = pb.block("layer", carry.clone());
+        let rk = b.slice(Ref::CarryIn(0), 0, 0, 3);
+        let rk = b.clamp(rk, -127, 127, DType::I32);
+        let k = b.hist_append(ks, rk);
+        let rq = b.slice(Ref::CarryIn(0), 0, 3, 4);
+        let rq = b.clamp(rq, -127, 127, DType::I32);
+        let q = b.hist_append(qs, rq);
+        let qt = b.transpose(q, &[1, 0]);
+        let s = b.matmul(qt, k, DType::I64);
+        let s = b.clamp(s, i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.topk(s, 0, 4);
+        let y = b.cast(Ref::CarryIn(0), DType::I32);
+        b.finish(&[y])
+    };
+    let (post, logits) = {
+        let mut b = pb.block("post", carry);
+        let x = b.reshape_fixed(Ref::CarryIn(0), &[7, 1]);
+        let l = b.matmul(head, x, DType::I64);
+        let l = b.clamp(l, i32::MIN as i64, i32::MAX as i64, DType::I32);
+        let l = b.reshape_fixed(l, &[8]);
+        let l = b.commit(l);
+        let Ref::Node(i) = l else { unreachable!() };
+        (b.finish(&[]), i)
+    };
+    let mut program = pb.finish(pre, vec![layer], post, logits);
+    program.logits_scheme_id.copy_from_slice(kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1().as_byte_slice());
+    program
+}
+
+/// **The dissected points follow the subject** — a Phase F class whose attention reduces over the
+/// history keeps its dissected commit points in the evaluation pipeline, at the subject stage: the
+/// lifted program's view is the class's program, so a court answers the same leaves with F7's phase.
+#[test]
+fn the_subject_s_dissected_points_are_its_class_s() {
+    let program = attention_program();
+    let class_points = kaspa_consensus_core::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&program);
+    assert!(!class_points.is_empty(), "the attention's TopK reduces over the history");
+    let layout = layout(&program);
+    let subject =
+        PalwEvalSubjectClassV1 { class_id: Hash64::default(), artifact_root: Hash64::default(), program: &program, layout: &layout };
+    let seed = Hash64::from_bytes([1; 64]);
+    let j = job(PalwScoringKindV1::ExactMatch, PalwEvalModeV1::Generate { seed, max_new: 4, stop_ids: vec![] });
+    let ctx =
+        palw_improve_eval_context_v1(&j, &subject, PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1, key_cap: 4 }).unwrap();
+    let at_subject: Vec<(u8, u16)> = ctx.dissected.iter().filter(|(s, _, _)| *s == 0).map(|(_, b, n)| (*b, *n)).collect();
+    assert_eq!(at_subject, class_points, "the class's own points, at the subject stage");
+    assert!(ctx.dissected.iter().all(|(s, _, _)| *s == 0), "the scoring stages read no history");
+    assert_eq!(ctx.programs[0].v1_view().encode(), program.encode(), "the lifted program's view is the class's program");
+}

@@ -207,6 +207,12 @@ pub struct PalwEvalContextV1 {
     pub subject_class: Hash64,
     /// The subject class's `artifact_root`: the pipeline's params are proven under it.
     pub artifact_root: Hash64,
+    /// **The dissected commit points** `(stage, block, node)` — every commit point whose cone reduces
+    /// over `H` (spec 04b §9.5.1), as a registered pipeline's row lists them: a court answers these
+    /// with F7's phase (a root claim), never a whole cone. The subject stage's are its IR class's own
+    /// (`PalwTirClassRecordV1::dissected`), the lifted program's view being the class's program; the
+    /// scoring stages read no history and have none.
+    pub dissected: Vec<(u8, u8, u16)>,
 }
 
 /// Why a context, a binding or a claim is refused.
@@ -347,6 +353,15 @@ pub fn palw_improve_eval_context_v1(
     for (st, p) in pipeline.stages.iter().zip(&programs).skip(1) {
         layouts.push(palw_improve_scoring_layout_v1(p, st.max_trip));
     }
+    let dissected = pipeline
+        .stages
+        .iter()
+        .enumerate()
+        .flat_map(|(s, st)| {
+            let view = programs[st.program as usize].v1_view();
+            crate::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&view).into_iter().map(move |(b, n)| (s as u8, b, n))
+        })
+        .collect();
     Ok(PalwEvalContextV1 {
         job_id: job.id(),
         seed,
@@ -357,6 +372,7 @@ pub fn palw_improve_eval_context_v1(
         decode,
         subject_class: subject.class_id,
         artifact_root: subject.artifact_root,
+        dissected,
     })
 }
 
