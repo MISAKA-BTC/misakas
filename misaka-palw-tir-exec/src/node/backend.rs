@@ -43,8 +43,10 @@ use super::run::TirClassRunnerV1;
 /// The 8-byte head of an encoded [`TirCaptureV1`].
 pub const TIR_CAPTURE_MAGIC_V1: [u8; 8] = *b"PALWTIRC";
 
-/// A capture holds every preimage up to this many leaves (a dense capture); past it, a fold.
-pub const TIR_DENSE_CAPTURE_LEAVES_V1: u64 = 1 << 16;
+/// A capture holds every preimage while their lanes stay within this many bytes (a dense
+/// capture); past it, a fold. (A leaf is up to 16 KiB of lanes — a 4,096-lane logits tile — so the
+/// cap is in bytes, not leaves.)
+pub const TIR_DENSE_CAPTURE_BYTES_V1: usize = 64 << 20;
 
 /// **What an IR producer retains and serves for one execution** — the material of its outcome.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -142,6 +144,11 @@ pub struct TirBackendV1 {
     /// The ruleset's `max_step_leaf_count` (the ladder every opening and root is capped at).
     ladder: u64,
     attempt_rules: PalwAttemptRulesV1,
+    /// The leaf hashes of the last fold re-executed, by job context — the ladder asks a fold's
+    /// prefix state at every rung, and each answer would otherwise be a whole re-execution.
+    fold_hashes: std::sync::Mutex<Option<(Hash64, Arc<Vec<Hash64>>)>>,
+    /// The lane bytes up to which a capture is dense ([`TIR_DENSE_CAPTURE_BYTES_V1`] by default).
+    dense_capture_bytes: usize,
 }
 
 impl TirBackendV1 {
@@ -174,7 +181,15 @@ impl TirBackendV1 {
             prompt_ids_form,
             ladder,
             attempt_rules: PalwAttemptRulesV1::CoreV1,
+            fold_hashes: std::sync::Mutex::new(None),
+            dense_capture_bytes: TIR_DENSE_CAPTURE_BYTES_V1,
         })
+    }
+
+    /// Keep captures dense only while their lanes fit `bytes` (0: every capture is a fold).
+    pub fn with_dense_capture_bytes(mut self, bytes: usize) -> Self {
+        self.dense_capture_bytes = bytes;
+        self
     }
 
     pub fn class(&self) -> &PalwTirClassV1 {
@@ -218,19 +233,25 @@ impl TirBackendV1 {
         self.runner().retain(&self.class, self.artifact_root, job, prompt, self.ladder)
     }
 
-    /// Run a job into a capture — dense up to [`TIR_DENSE_CAPTURE_LEAVES_V1`] leaves — optionally
-    /// with one lane of leaf `fault` corrupted and the commitment re-derived over the lie (a drill).
+    /// Run a job into a capture — dense while its lanes fit the dense-capture bytes —
+    /// optionally with one lane of leaf `fault` corrupted and the commitment re-derived over the lie
+    /// (a drill; always dense).
     fn capture_run(&self, job: &PalwJobContextV2, prompt: &[u32], fault: Option<u64>) -> Result<TirCaptureV1, String> {
         if !prompt_token_ids_match_v1(self.prompt_ids_form, prompt, &job.prompt_token_ids_hash) {
             return Err("the prompt does not commit to the job's prompt hash".into());
         }
-        let count = self.space.leaf_count_capped(job, self.ladder).map_err(|e| e.to_string())?;
-        let dense = count <= TIR_DENSE_CAPTURE_LEAVES_V1 || fault.is_some();
+        let (mut dense, mut bytes) = (true, 0usize);
         let mut leaves = Vec::new();
         let run = self.runner().run(job, prompt, self.ladder, false, &mut |l| {
-            if dense {
-                leaves.push(l.preimage.clone());
+            if !dense {
+                return;
             }
+            bytes += l.preimage.values_le.len();
+            if bytes > self.dense_capture_bytes && fault.is_none() {
+                (dense, leaves) = (false, Vec::new());
+                return;
+            }
+            leaves.push(l.preimage.clone());
         })?;
         let mut binding = PalwTirStepBindingV1 {
             version: kaspa_consensus_core::palw_tir_step_v1::PALW_TIR_STEP_BINDING_VERSION_V1,
@@ -284,13 +305,27 @@ impl TirBackendV1 {
 
     /// The leaf hashes a capture answers with: a dense capture's own; a fold's, replayed (which
     /// is its producer's execution when that execution was honest).
-    fn capture_leaf_hashes(&self, capture: &TirCaptureV1) -> Result<Vec<Hash64>, String> {
+    fn capture_leaf_hashes(&self, capture: &TirCaptureV1) -> Result<Arc<Vec<Hash64>>, String> {
+        let ctx = &capture.binding.job_context;
+        let ctx_hash = ctx.context_hash();
         if capture.is_dense() {
-            let ctx_hash = capture.binding.job_context.context_hash();
-            return Ok(capture.leaves.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &self.class_id, p)).collect());
+            return Ok(Arc::new(capture.leaves.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &self.class_id, p)).collect()));
         }
-        let run = self.runner().run(&capture.binding.job_context, &capture.prompt, self.ladder, false, &mut |_| {})?;
-        Ok(run.leaf_hashes)
+        // The context commits to the prompt, so a re-execution is a function of the context once
+        // the prompt is checked against it — which is what makes the context a sound memo key.
+        if !prompt_token_ids_match_v1(self.prompt_ids_form, &capture.prompt, &ctx.prompt_token_ids_hash) {
+            return Err("the capture's prompt does not commit to its job".into());
+        }
+        let mut memo = self.fold_hashes.lock().map_err(|_| "the fold memo is poisoned")?;
+        if let Some((key, hashes)) = memo.as_ref()
+            && *key == ctx_hash
+        {
+            return Ok(hashes.clone());
+        }
+        let run = self.runner().run(ctx, &capture.prompt, self.ladder, false, &mut |_| {})?;
+        let hashes = Arc::new(run.leaf_hashes);
+        *memo = Some((ctx_hash, hashes.clone()));
+        Ok(hashes)
     }
 
     /// **The canonical cone refutation of leaf `index` of a capture** — the same object whichever

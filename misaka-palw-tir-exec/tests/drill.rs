@@ -20,7 +20,7 @@ use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir::demand::DemandLimits;
 use misaka_palw_tir::interval::analyze_ranges;
 use misaka_palw_tir_exec::node::{
-    TirArtifactV1, TirBackendV1, TirDrillCallV1, TirDrillUnitKindV1, tir_family_drill_v1, tir_job_context_v1,
+    TirArtifactV1, TirBackendV1, TirCaptureV1, TirDrillCallV1, TirDrillUnitKindV1, tir_family_drill_v1, tir_job_context_v1,
 };
 use node_common::{layout, programs, tiled};
 
@@ -78,6 +78,26 @@ fn the_drill_certifies_every_tiny_class() {
         let forged_claim = PalwClaimRootsV1 { execution_root: forged.execution_root, ..claim };
         assert_eq!(backend.verify_material(&forged.material, forged_claim), PalwMaterialVerdictV1::Mismatch, "{name}: a lie");
         assert_eq!(backend.verify_material(b"not a capture", claim), PalwMaterialVerdictV1::Unverifiable);
+
+        // A FOLD of the same execution (no preimages): a seat's check re-executes it, its prefix
+        // states are the dense capture's, and its leaves open as the executor's own.
+        let folding = TirBackendV1::new(name.clone(), backend.artifact().clone(), root, backend.canonical().clone(), form, 1 << 26)
+            .unwrap()
+            .with_dense_capture_bytes(0);
+        let fold = folding.execute(&job, &prompt).unwrap();
+        assert!(!TirCaptureV1::decode(&fold.material).unwrap().is_dense(), "{name}: a fold");
+        assert_eq!((fold.execution_root, fold.trace_root), (outcome.execution_root, outcome.trace_root));
+        assert_eq!(folding.verify_material(&fold.material, claim), PalwMaterialVerdictV1::Matches, "{name}: the fold");
+        let n = TirCaptureV1::decode(&outcome.material).unwrap().binding.step_leaf_count;
+        for i in [0, n / 3, n / 2, n - 1] {
+            assert_eq!(
+                folding.bisect_prefix_state(&fold.material, i),
+                backend.bisect_prefix_state(&outcome.material, i),
+                "{name}: {i}"
+            );
+            let r = folding.cone_refutation(&fold.material, i, &rules).unwrap_or_else(|e| panic!("{name}: fold leaf {i}: {e}"));
+            assert_eq!(r, backend.cone_refutation(&outcome.material, i, &rules).unwrap(), "{name}: fold leaf {i}");
+        }
 
         let cert = tir_family_drill_v1(&backend, anchor, &rules).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(cert.holds(), "{name}: {:?} of {:?} covered", cert.covered_prims, cert.reachable_prims);
