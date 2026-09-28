@@ -5038,6 +5038,13 @@ impl Params {
                  not armed from genesis: that kernel is adjudicated only where its fence is (ADR-0102)",
             ));
         }
+        // **RFC-0002 Phase F: no IR class at genesis before Phase H.** A genesis row is checked
+        // against the committed catalog, not by admission v10, and the catalog has no IR entry form.
+        if crate::palw_tir_class_v1::palw_genesis_registers_tir_class_v1(bundle) {
+            return Err(PalwModeV2Error::Invalid(
+                "this ruleset's genesis set registers an IR class: IR genesis rows arrive with RFC-0002 Phase H",
+            ));
+        }
         if crate::palw_class_admission_v2::palw_genesis_reaches_kimi_kernel_v1(bundle)
             && !self.palw_kimi_k3.is_some_and(|f| f != ForkActivation::never() && f.is_active(0))
         {
