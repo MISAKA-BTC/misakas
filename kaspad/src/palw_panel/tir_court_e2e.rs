@@ -227,8 +227,9 @@ fn bond(n: u64) -> PalwConsensusObjectV2 {
     }
 }
 
-/// The base class and three bonds at 100 — and the IR class, stood in by a carriage-less
-/// registration of its `(class_id, artifact_root)` until the IR arm of the fold (F6 C(1)) lands.
+/// The base class and three bonds at 100 — and the IR class, registered by its own object
+/// (`ClassRegisteredTirV1`, F6 C(1)): its `tir_classes` row holds the program every IR object the
+/// chain adjudicates is filled from (decision 2).
 fn registry_with(ir: &Ir) -> PalwChainStateV2 {
     let class = |class_id: Hash64, artifact_root: Hash64, share_permille: u16| PalwConsensusObjectV2::ClassRegistered {
         class_id,
@@ -240,8 +241,26 @@ fn registry_with(ir: &Ir) -> PalwChainStateV2 {
         activation_daa: 0,
         admission: None,
     };
-    let objects = vec![class(h64(1), h64(11), 1000), bond(PRODUCER), bond(SEAT), bond(COLLUDER), class(ir.class_id, ir.root, 100)];
-    step(&PalwChainStateV2::genesis(), 100, &objects).expect("the registry")
+    let entry = misaka_palw_sdk::tir_registration::tir_entries_of_v1(ir.registry.holdings()).remove(0);
+    let ir_class = PalwConsensusObjectV2::ClassRegisteredTirV1 {
+        class_id: ir.class_id,
+        artifact_root: ir.root,
+        slash_value_per_pwu: 5,
+        pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 40 },
+        initial_target: u128::MAX / 2,
+        share_permille: 100,
+        activation_daa: 0,
+        admission: Box::new(kaspa_consensus_core::palw_tir_class_v1::PalwTirAdmissionCarriageV1 {
+            class: entry.class.as_ref().clone(),
+            canonical: entry.canonical_context(),
+            registrant_bond: bond_key(PRODUCER),
+            signature: vec![9; 8],
+        }),
+    };
+    let objects = vec![class(h64(1), h64(11), 1000), bond(PRODUCER), bond(SEAT), bond(COLLUDER), ir_class];
+    let s = step(&PalwChainStateV2::genesis(), 100, &objects).expect("the registry");
+    assert!(s.tir_class_v1(&ir.class_id).is_some(), "the IR class's row, with its program");
+    s
 }
 
 /// One claim: the anchor's job run by the producer's backend — honestly, or lying at `lie` — its
@@ -601,9 +620,16 @@ fn a_wrong_answer_over_honest_arithmetic_is_accused_in_one_move() {
             assert_eq!(case.row.is_some(), door == "decode token", "tiled {tiled}, {door}: the selection moved or it did not");
             let target =
                 palw_disputable_claims_v2(&s, &[bond_key(SEAT)]).into_iter().find(|t| t.claim_id == liar.id).expect("disputable");
-            let (label, mut accusation) =
-                palw_tir_one_move_accusation_to_file_v1(case.candidates, &target, bond_key(SEAT), &court(), LADDER, FORM)
-                    .unwrap_or_else(|| panic!("tiled {tiled}, {door}: a close convicts"));
+            let (label, mut accusation) = palw_tir_one_move_accusation_to_file_v1(
+                case.candidates,
+                &target,
+                &tir.class().program,
+                bond_key(SEAT),
+                &court(),
+                LADDER,
+                FORM,
+            )
+            .unwrap_or_else(|| panic!("tiled {tiled}, {door}: a close convicts"));
             assert_eq!(label, door, "tiled {tiled}");
             accusation.signature = vec![3; 16];
             palw_tir_one_move_shape_v1(&accusation).expect("the shape");
@@ -619,12 +645,19 @@ fn a_wrong_answer_over_honest_arithmetic_is_accused_in_one_move() {
         let s = licensed(&s, &honest, 101);
         let target = palw_disputable_claims_v2(&s, &[bond_key(SEAT)]).into_iter().find(|t| t.claim_id == honest.id).unwrap();
         let wrong_beat = (greedy + 1) % 4;
+        let as_filed = |built: Result<PalwCourtVerdictProofV2, String>| {
+            built.map(|mut proof| {
+                proof.tir_strip_program_v1();
+                proof
+            })
+        };
         let against = vec![
-            ("cone", tir.cone_close(&honest.material, 3, &rules)),
-            ("decode token", tir.decode_token_close(&honest.material, 0, wrong_beat)),
+            ("cone", as_filed(tir.cone_close(&honest.material, 3, &rules))),
+            ("decode token", as_filed(tir.decode_token_close(&honest.material, 0, wrong_beat))),
         ];
         assert!(
-            palw_tir_one_move_accusation_to_file_v1(against, &target, bond_key(SEAT), &court(), LADDER, FORM).is_none(),
+            palw_tir_one_move_accusation_to_file_v1(against, &target, &tir.class().program, bond_key(SEAT), &court(), LADDER, FORM)
+                .is_none(),
             "tiled {tiled}: nothing convicts an honest claim"
         );
     }
@@ -644,6 +677,8 @@ fn an_ir_claims_trace_events_are_answered_in_the_ir_form() {
     for tiled in [false, true] {
         let ir = ir_class(if tiled { "da-tiled" } else { "da-flat" }, tiled);
         let backend = ir.backend();
+        let (record, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(ir.tir().class(), &ir.root)
+            .expect("the class's record");
         let claim = produce(&ir, 3, None);
         let facts = super::PalwDaClaimFactsV1 {
             claim_id: claim.id,
@@ -684,12 +719,14 @@ fn an_ir_claims_trace_events_are_answered_in_the_ir_form() {
             } else {
                 assert_eq!(disclosure.is_flat(), !tiled, "the class's scheme");
             }
+            // It rides without the program (decision 2): the chain fills the registered one back.
+            let filled = disclosure.with_program_v1(&record).expect("an answer carries no program");
             check_tir_trace_event_disclosure_v1(
                 claim.env.attempt.trace_root,
                 claim.env.attempt.execution_root,
                 row,
                 tile,
-                &disclosure,
+                &filled,
                 LADDER,
             )
             .unwrap_or_else(|e| panic!("tiled {tiled}: event ({row}, {tile}) is answered: {e}"));
@@ -1122,9 +1159,16 @@ mod t12_walk {
             .expect("the case builds")
             .expect("the lie is a case");
         assert_eq!(case.leaf, Some(lie), "the case names the planted leaf");
-        let (label, mut accusation) =
-            super::super::tir_court::palw_tir_one_move_accusation_to_file_v1(case.candidates, &target, accuser, &court, ladder, form)
-                .expect("a close convicts");
+        let (label, mut accusation) = super::super::tir_court::palw_tir_one_move_accusation_to_file_v1(
+            case.candidates,
+            &target,
+            &tir.class().program,
+            accuser,
+            &court,
+            ladder,
+            form,
+        )
+        .expect("a close convicts");
         accusation.signature = vec![5; 16];
         kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(&accusation).expect("the shape");
         assert_eq!(
@@ -1179,9 +1223,16 @@ mod t12_walk {
             .expect("the case builds")
             .expect("the lie is a case");
         assert_eq!(case.leaf, Some(lie));
-        let (_, mut accusation) =
-            super::super::tir_court::palw_tir_one_move_accusation_to_file_v1(case.candidates, &target, seat, &court, ladder, form)
-                .expect("a close convicts");
+        let (_, mut accusation) = super::super::tir_court::palw_tir_one_move_accusation_to_file_v1(
+            case.candidates,
+            &target,
+            &tir.class().program,
+            seat,
+            &court,
+            ladder,
+            form,
+        )
+        .expect("a close convicts");
         accusation.signature = vec![6; 16];
         let before = c.s.bond(&producer).expect("the producer").collateral;
         let next = c.daa + 1;

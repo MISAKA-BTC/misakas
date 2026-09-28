@@ -2065,7 +2065,12 @@ pub(crate) fn palw_da_unit_answer_v1(
     let missing = match unit {
         PalwDaUnitV1::Event { row, tile } => {
             if let Some(answer) = misaka_palw_sdk::lineages::tir::tir_trace_event_disclosure_of_capture_v1(capture, row, tile) {
-                return answer.map(|disclosure| PalwDaAnswerV1::TirEvent(Box::new(disclosure)));
+                // The answer rides without the class's program: the chain holds the registered one
+                // and refuses a carried copy (RFC-0002 Phase F, decision 2).
+                return answer.map(|mut disclosure| {
+                    disclosure.strip_program_v1();
+                    PalwDaAnswerV1::TirEvent(Box::new(disclosure))
+                });
             }
             return backend.disclose_trace_event(capture, row, tile).map(PalwDaAnswerV1::Event);
         }

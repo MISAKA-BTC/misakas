@@ -47,7 +47,18 @@ use super::PALW_PANEL;
 /// A close a party may file, built or refused, under the label the log names it by.
 pub(crate) type PalwTirCloseCandidateV1 = (&'static str, Result<PalwCourtVerdictProofV2, String>);
 
-/// The IR closes a party may file at leaf `index`, in the order it tries them, each built or refused.
+/// **A close as it rides**: its binding's program emptied — the chain holds the registered class's
+/// program in its `tir_classes` row, puts it back before it reads the binding, and refuses a carried
+/// one (RFC-0002 Phase F, decision 2).
+fn as_filed(built: Result<PalwCourtVerdictProofV2, String>) -> Result<PalwCourtVerdictProofV2, String> {
+    built.map(|mut proof| {
+        proof.tir_strip_program_v1();
+        proof
+    })
+}
+
+/// The IR closes a party may file at leaf `index`, in the order it tries them, each built (as it
+/// rides: its program stripped) or refused.
 pub(crate) fn palw_tir_close_candidates_v1(
     tir: &TirBackendV1,
     accused: &[u8],
@@ -56,7 +67,7 @@ pub(crate) fn palw_tir_close_candidates_v1(
     rules: &PalwTirCourtRulesV1,
     challenger: bool,
 ) -> Vec<PalwTirCloseCandidateV1> {
-    let mut out = vec![("cone", tir.cone_close(accused, index, rules))];
+    let mut out = vec![("cone", as_filed(tir.cone_close(accused, index, rules)))];
     if !challenger {
         return out;
     }
@@ -72,12 +83,12 @@ pub(crate) fn palw_tir_close_candidates_v1(
     if !at_logits {
         return out;
     }
-    out.push(("logits", tir.logits_close(accused, index)));
+    out.push(("logits", as_filed(tir.logits_close(accused, index))));
     let Some(row) = (leaf.position + 1).checked_sub(ctx.declared_prefill_tokens) else { return out };
     let own_token = own.and_then(|own| TirCaptureV1::decode(own).ok()).and_then(|mine| mine.generated.get(row as usize).copied());
     let committed = capture.generated.get(row as usize).copied();
     if let Some(beat) = own_token.filter(|t| Some(*t) != committed) {
-        out.push(("decode token", tir.decode_token_close(accused, row, beat)));
+        out.push(("decode token", as_filed(tir.decode_token_close(accused, row, beat))));
     }
     out
 }
@@ -137,7 +148,7 @@ pub(crate) fn palw_tir_one_move_case_v1(
         None => Vec::new(),
     };
     if let Some(r) = row {
-        let door = tir.decode_token_close(accused, r, o.generated[r as usize]);
+        let door = as_filed(tir.decode_token_close(accused, r, o.generated[r as usize]));
         let offered = door.as_ref().is_ok_and(|d| candidates.iter().any(|(_, built)| built.as_ref().ok() == Some(d)));
         if !offered {
             candidates.push(("decode token", door));
@@ -160,7 +171,7 @@ pub(crate) fn palw_tir_one_move_case_v1(
             })
         });
         if let Some(tile) = tile {
-            candidates.push(("logits", tir.logits_close(accused, tile.index)));
+            candidates.push(("logits", as_filed(tir.logits_close(accused, tile.index))));
         }
     }
     if leaf.is_none() && row.is_none() && candidates.is_empty() {
@@ -171,15 +182,17 @@ pub(crate) fn palw_tir_one_move_case_v1(
 
 /// **The verdict an IR close proof supports against a claim, as far as a node derives it without
 /// the chain's state** — the one-move gate's own derivation (`palw_tir_one_move_verdict_v1` →
-/// `adjudicate_close_proof_v2`'s IR arm) with the state's two reads supplied by the claim's facts
-/// the node already holds (its class and that class's artifact root, from the disputable-claim
-/// view): the proof within the court's byte ceiling, its binding naming the claim's class, artifact
+/// `adjudicate_close_proof_v2`'s IR arm) with the state's three reads supplied by what the node
+/// already holds (the claim's class and that class's artifact root, from the disputable-claim view,
+/// and the class's `program`, from its own artifact, put back into the proof as the chain puts back
+/// the registered one): the proof within the court's byte ceiling, its binding naming the claim's class, artifact
 /// root and roots, then the IR court at the chain's ladder, prompt form and work limits. `None`
 /// where the proof does not adjudicate. The gate re-derives it and refuses a mismatch, so a wrong
 /// answer here costs a refused carrier, never a wrong verdict.
 pub(crate) fn palw_tir_one_move_verdict_stateless_v1(
     proof: &PalwCourtVerdictProofV2,
     target: &PalwDisputableClaimV2,
+    program: &[u8],
     court: &PalwCourtParamsV2,
     step_ladder: u64,
     prompt_form: PalwPromptIdsFormV1,
@@ -187,6 +200,15 @@ pub(crate) fn palw_tir_one_move_verdict_stateless_v1(
     use kaspa_consensus_core::palw_step_refute::PalwStepRefuteError;
     use kaspa_consensus_core::palw_tir_court_v1 as tir;
     kaspa_consensus_core::palw_court_v2::check_close_cost_v2(proof, court).ok()?;
+    // The chain puts the registered program back into a close that rides without it, and refuses one
+    // that carries it (decision 2); the node puts back its own copy — the class id the binding names
+    // commits to it, so a wrong copy is a binding that does not name the claim's class.
+    if !proof.tir_binding_v1()?.class.program.is_empty() {
+        return None;
+    }
+    let mut filled = proof.clone();
+    filled.tir_binding_mut_v1()?.class.program = program.to_vec();
+    let proof = &filled;
     let binding = proof.tir_binding_v1()?;
     if binding.class.class_id(&binding.artifact_root) != target.class_id
         || binding.artifact_root != target.artifact_root
@@ -224,6 +246,7 @@ pub(crate) fn palw_tir_one_move_verdict_stateless_v1(
 pub(crate) fn palw_tir_one_move_accusation_to_file_v1(
     candidates: Vec<PalwTirCloseCandidateV1>,
     target: &PalwDisputableClaimV2,
+    program: &[u8],
     accuser: PalwBondKeyV2,
     court: &PalwCourtParamsV2,
     step_ladder: u64,
@@ -231,7 +254,7 @@ pub(crate) fn palw_tir_one_move_accusation_to_file_v1(
 ) -> Option<(&'static str, PalwTirOneMoveAccusationV1)> {
     candidates.into_iter().find_map(|(label, built)| {
         let proof = built.ok()?;
-        (palw_tir_one_move_verdict_stateless_v1(&proof, target, court, step_ladder, prompt_form)
+        (palw_tir_one_move_verdict_stateless_v1(&proof, target, program, court, step_ladder, prompt_form)
             == Some(PalwCourtVerdictV2::ExecutorGuilty))
         .then(|| {
             (
@@ -413,9 +436,10 @@ impl super::PalwPanelService {
             let (own, facts) = (run.material, target.clone());
             let Ok(found) = tokio::task::spawn_blocking(move || {
                 let case = palw_tir_one_move_case_v1(&tir, &accused, &own, &rules)?;
+                let program = tir.class().program.clone();
                 Ok::<_, String>(case.and_then(|case| {
                     let (leaf, row) = (case.leaf, case.row);
-                    palw_tir_one_move_accusation_to_file_v1(case.candidates, &facts, bond_key, &court, ladder, form)
+                    palw_tir_one_move_accusation_to_file_v1(case.candidates, &facts, &program, bond_key, &court, ladder, form)
                         .map(|(label, accusation)| (leaf, row, label, accusation))
                 }))
             })

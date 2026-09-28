@@ -5538,6 +5538,7 @@ mod palw_class_context_tests {
             prim_set_id: kaspa_consensus_core::palw_tir_v1::palw_tir_prim_set_id_v1(),
             logits_vocab: 64,
             program_bytes: 14_637,
+            program: Default::default(),
         };
         let row = palw_class_context_row(class_id, Some(palw_tir_registered_class_context(&record)), None);
         let (prefill, decode) = palw_tir_attempt_canonical_of_v1(64).expect("a canonical job at 64");
