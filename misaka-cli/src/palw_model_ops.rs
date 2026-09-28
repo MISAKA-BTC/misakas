@@ -65,6 +65,11 @@ pub(crate) async fn inspect(ctx: &Ctx, profile: Profile, artifact: PathBuf) -> C
     };
     let sdk = crate::operator::model_add::chain_sdk(&params, &bundle, &net.to_string());
     let loaded = sdk.load_artifact(&artifact).map_err(|e| CliError::new(exit::MODEL, e))?;
+    // RFC-0002 Phase F: an IR artifact (PALWTIR1) is its own class under its declared layout.
+    let tir = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&loaded));
+    if !tir.is_empty() {
+        return inspect_tir(ctx, &params, &bundle, &loaded, &tir);
+    }
     if ctx.output == OutputFormat::Json {
         let pairings: Vec<_> = sdk
             .pairings(&loaded)
@@ -138,6 +143,87 @@ pub(crate) async fn inspect(ctx: &Ctx, profile: Profile, artifact: PathBuf) -> C
     Ok(())
 }
 
+/// **`misaka model inspect` of an IR artifact**: each class it declares — its id, root, program,
+/// layout and canonical job — and the verdict of the registration gate a node would run
+/// (admission v10, `tir_class_admission_offline_v1`: at the fence's height, or as if `palw_tir_v1`
+/// were armed where it is still dormant, which the line says).
+fn inspect_tir(
+    ctx: &Ctx,
+    params: &kaspa_consensus_core::config::params::Params,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    loaded: &misaka_palw_sdk::PalwLoadedArtifactV1,
+    entries: &[misaka_palw_sdk::PalwTirClassEntryV1],
+) -> CliResult {
+    let gate = misaka_palw_sdk::tir_layout::TirOfflineGateV1::of(params);
+    let rows: Vec<_> = entries
+        .iter()
+        .map(|entry| {
+            let verdict =
+                misaka_palw_sdk::tir_layout::tir_class_admission_offline_v1(params, bundle, &entry.class, entry.artifact_root);
+            (entry, verdict)
+        })
+        .collect();
+    if ctx.output == OutputFormat::Json {
+        let classes: Vec<_> = rows
+            .iter()
+            .map(|(entry, verdict)| {
+                let l = &entry.class.layout;
+                let canonical = entry.canonical_context();
+                serde_json::json!({
+                    "model_id": entry.model_id,
+                    "class_id": entry.class_id().to_string(),
+                    "artifact_root": entry.artifact_root.to_string(),
+                    "graph_ir_root": entry.class.graph_ir_root().to_string(),
+                    "tokenizer_id": entry.class.tokenizer_id.to_string(),
+                    "n_ctx": l.max_context,
+                    "checkpoint_interval": l.checkpoint_interval,
+                    "h_tile": l.h_tile,
+                    "commit_tiles": l.commit_tiles,
+                    "state_tiles": l.state_tiles,
+                    "canonical_prefill": canonical.declared_prefill_tokens,
+                    "canonical_decode": canonical.exact_decode_tokens,
+                    "admissible": verdict.is_ok(),
+                    "admission": verdict.as_ref().err(),
+                    "admission_at": gate.note(),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({ "schema": "misaka.model.inspect.v1", "summary": loaded.summary, "lineage": loaded.lineage_id, "ir_classes": classes })
+        );
+        return Ok(());
+    }
+    println!("{}", loaded.summary);
+    println!("lineage          {}  (an IR class: a PALW-TIR program under its declared layout)", loaded.lineage_id);
+    for (entry, verdict) in &rows {
+        let l = &entry.class.layout;
+        let canonical = entry.canonical_context();
+        println!("class_id         {}", entry.class_id());
+        println!("model_id         {}  (ctx {})", entry.model_id, l.max_context);
+        println!("artifact root    {}", entry.artifact_root);
+        println!("graph ir root    {}", entry.class.graph_ir_root());
+        println!("tokenizer root   {}", entry.class.tokenizer_id);
+        println!(
+            "layout           checkpoint interval {}, h_tile {}, {} commit tiles, {} state tiles",
+            l.checkpoint_interval,
+            l.h_tile,
+            l.commit_tiles.len(),
+            l.state_tiles.len()
+        );
+        println!(
+            "CanonicalWork    prefill {} / decode {} / max_context {}",
+            canonical.declared_prefill_tokens, canonical.exact_decode_tokens, canonical.max_context_tokens
+        );
+        match verdict {
+            Ok(()) => println!("admission result ADMISSION_OK  (admission v10 {})", gate.note()),
+            Err(why) => println!("admission result REFUSED — {why}  (admission v10 {})", gate.note()),
+        }
+        println!();
+    }
+    Ok(())
+}
+
 trait FitRowLabel {
     fn verdict_label(&self) -> &'static str;
 }
@@ -185,6 +271,32 @@ async fn local_registration_object(ctx: &Ctx, profile: &Profile, artifact: &Path
     };
     let sdk = crate::operator::model_add::chain_sdk(&params, &bundle, &net.to_string());
     let loaded = sdk.load_artifact(artifact).map_err(|e| CliError::new(exit::MODEL, e))?;
+    // RFC-0002 Phase F: an IR artifact registers through `ClassRegisteredTirV1`, built unsigned at
+    // the live chain's pricing, weightless, and judged by the node's own gate (the preflight RPC
+    // runs `palw_tir_registration_preflight_at_v1` at its tip).
+    if let Some(entry) = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&loaded)).into_iter().next() {
+        let nv = connect(ctx).await?;
+        let terms_resp = nv
+            .client
+            .get_palw_registration_terms()
+            .await
+            .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwRegistrationTerms: {e}")))?;
+        let (terms, _) = crate::operator::model_add::decode_terms(&terms_resp).map_err(|e| CliError::new(exit::GENERIC, e))?;
+        let dummy = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::Hash64::default(), 0));
+        return kaspa_consensus_core::palw_tir_admission_v1::palw_tir_post_genesis_registration_v1(
+            entry.class.as_ref().clone(),
+            entry.canonical_context(),
+            entry.artifact_root,
+            0,
+            terms.initial_target,
+            terms.slash_value_per_pwu,
+            0,
+            dummy,
+            Vec::new(),
+            bundle.court.max_step_leaf_count(),
+        )
+        .map_err(|e| CliError::new(exit::MODEL, format!("{}: {} ({e})", entry.model_id, e.code())));
+    }
     let pairings: Vec<_> = sdk.pairings(&loaded).into_iter().filter_map(|(e, p)| p.ok().map(|root| (e, root))).collect();
     let (entry, root) = pairings.into_iter().next().ok_or_else(|| CliError::new(exit::MODEL, "this artifact pairs with no class this build knows"))?;
     let nv = connect(ctx).await?;

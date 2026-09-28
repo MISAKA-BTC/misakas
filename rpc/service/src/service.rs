@@ -254,6 +254,11 @@ pub struct PalwClassLedgerContext {
     pub max_context_tokens: u32,
 }
 
+/// **Why an IR class takes no free prompt** (RFC-0002): its free-prompt lane stays closed until
+/// Phase H — the same words the node's IR backend and the CLI refuse with.
+const PALW_TIR_FREE_PROMPT_CLOSED_V1: &str =
+    "free-prompt claims of an IR class are closed until RFC-0002 Phase H — an IR class serves attempts only";
+
 /// The numbers a class declaration the chain registered fixes: its graph's `n_ctx` and its canonical
 /// job's token counts.
 struct PalwRegisteredClassContext {
@@ -2356,6 +2361,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let GetPalwFreePromptPriceRequest { prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, .. } = request;
         let session = self.consensus_manager.consensus().unguarded_session();
+        // RFC-0002: an IR class's free-prompt lane stays closed until Phase H — refused by name here,
+        // before a gateway prices a commitment the transition refuses (`FreePromptLaneUncertified`).
+        if session.clone().spawn_blocking(move |c| c.palw_tir_class_record_v1(class_id)).await.is_some() {
+            return Err(RpcError::General(format!("class {class_id}: {PALW_TIR_FREE_PROMPT_CLOSED_V1}")));
+        }
         let answer = session
             .spawn_blocking(move |c| {
                 c.palw_fp_commitment_price_v1(class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond)

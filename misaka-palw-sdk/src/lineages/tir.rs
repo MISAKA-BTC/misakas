@@ -290,6 +290,27 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **The calibration-length rule at declare-layout** (freeze-v1): a recurrent program is declared
+    /// at no longer a context than it was calibrated on, unless the conversion waived the rule, and
+    /// one that records no calibration length is refused; an attention-only program is not bound.
+    #[test]
+    fn a_recurrent_class_is_declared_within_its_calibration() {
+        use crate::tir_layout::tir_calibration_covers_context_v1 as covers;
+        use misaka_palw_tir::StateKind;
+        let all = vectors();
+        let recurrent = all.iter().find(|(_, p, _)| p.states.iter().any(|s| matches!(s.kind, StateKind::Fixed { .. })));
+        let attention = all.iter().find(|(_, p, _)| p.states.iter().all(|s| !matches!(s.kind, StateKind::Fixed { .. })));
+        let (_, rec, _) = recurrent.expect("a golden program with a fixed state");
+        let (_, att, _) = attention.expect("an attention-only golden program");
+        let meta = |v: serde_json::Value| v;
+        assert!(covers(rec, &meta(serde_json::json!({ "calibrated_context": 64 })), 64).is_ok());
+        let err = covers(rec, &meta(serde_json::json!({ "calibrated_context": 32 })), 64).unwrap_err();
+        assert!(err.contains("at most 32 positions"), "{err}");
+        assert!(covers(rec, &meta(serde_json::json!({})), 16).unwrap_err().contains("records no calibrated context"));
+        assert!(covers(rec, &meta(serde_json::json!({ "calibrated_context": 8, "rule": "waived" })), 64).is_ok(), "waived");
+        assert!(covers(att, &meta(serde_json::json!({})), 1 << 18).is_ok(), "attention is not bound");
+    }
+
     /// **An IR family's certification, as the node's operator files it** (`palw-class certify`):
     /// the class's drill in the chain's evidence form, graded by the chain's certifier into a
     /// family over every primitive the program reaches, reproducible byte for byte, and the lane

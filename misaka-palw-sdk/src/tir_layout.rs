@@ -207,6 +207,35 @@ pub fn tir_class_admission_offline_v1(
     crate::tir_registration::tir_registration_preflight_v1(params, bundle, &object, at, &[])
 }
 
+/// **The calibration-length rule** (tir/lower's `fidelity::check_calibration_length`, freeze-v1):
+/// a recurrent program — one with any `Fixed` state (Mamba, Jamba, the Qwen hybrids, RWKV) — drifts
+/// past the longest sequence it was calibrated on, so it is declared at a context no longer than the
+/// `calibrated_context` its converter recorded, unless the conversion waived the rule
+/// (`--allow-short-calibration`, recorded as `"rule": "waived"`). An attention-only program is not
+/// bound. A recurrent artifact that records no calibration length is refused: its context cannot be
+/// shown to be covered.
+pub fn tir_calibration_covers_context_v1(program: &TirProgramV1, meta: &serde_json::Value, max_context: u32) -> Result<(), String> {
+    let recurrent = program.states.iter().any(|s| matches!(s.kind, misaka_palw_tir::program::StateKind::Fixed { .. }));
+    if !recurrent {
+        return Ok(());
+    }
+    let waived = |v: &serde_json::Value| v.get("rule").and_then(|r| r.as_str()) == Some("waived");
+    if waived(meta) || meta.get("calibration").is_some_and(waived) {
+        return Ok(());
+    }
+    match meta.get("calibrated_context").and_then(|c| c.as_u64()) {
+        Some(calibrated) if u64::from(max_context) <= calibrated => Ok(()),
+        Some(calibrated) => Err(format!(
+            "a recurrent program calibrated on sequences of at most {calibrated} positions is not declared at a context of \
+             {max_context}: its fixed state drifts past its calibration (calibrate on one sequence as long as the context, or \
+             pass a --max-context of at most {calibrated})"
+        )),
+        None => Err("a recurrent program whose artifact records no calibrated context: the calibration-length rule cannot be shown \
+             (convert it with palw-tir-fidelity, which records calibrated_context)"
+            .to_string()),
+    }
+}
+
 /// **Write `input`'s program and tensors to `output` as a class** — under the logits scheme `choice`
 /// names ([`tir_program_with_scheme_v1`]) and a declared layout: `choice` tiled, its checkpoint
 /// interval the widest admission v10 accepts (halved from `min_j C_j` down to 1) — with `model_id`
@@ -243,6 +272,7 @@ pub fn tir_declare_layout_v1(
         admission = tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root);
     }
     let mut meta = serde_json::from_str::<serde_json::Value>(&container.header.meta).unwrap_or_else(|_| serde_json::json!({}));
+    tir_calibration_covers_context_v1(program, &meta, layout.max_context)?;
     if !meta.is_object() {
         meta = serde_json::json!({ "provenance": meta });
     }

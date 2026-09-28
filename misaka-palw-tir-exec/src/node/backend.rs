@@ -55,6 +55,11 @@ pub const TIR_CAPTURE_MAGIC_V1: [u8; 8] = *b"PALWTIRC";
 /// cap is in bytes, not leaves.)
 pub const TIR_DENSE_CAPTURE_BYTES_V1: usize = 64 << 20;
 
+/// **Why an IR class takes no free prompt** (RFC-0002): its free-prompt lane stays closed until
+/// Phase H. The node's backend, the RPC's pricing and the CLI refuse with these words.
+pub const TIR_FREE_PROMPT_CLOSED_V1: &str =
+    "free-prompt claims of an IR class are closed until RFC-0002 Phase H — an IR class serves attempts only";
+
 /// **What an IR producer retains and serves for one execution** — the material of its outcome.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct TirCaptureV1 {
@@ -651,6 +656,15 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
 
     fn output_root_for_context_v1(&self, context: &PalwJobContextV2, output_token_ids: &[u32]) -> Option<Hash64> {
         Some(palw_attempt_output_root_v1(context, output_token_ids))
+    }
+
+    /// RFC-0002: an IR class's free-prompt lane stays closed until Phase H.
+    fn execute_free_prompt(
+        &self,
+        _job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        Err(TIR_FREE_PROMPT_CLOSED_V1.to_string())
     }
 
     fn execute_with_injected_fault(
