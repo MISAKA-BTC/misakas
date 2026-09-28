@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft |
+| Status | Draft — implementation in progress: Phases A–C passed Gate 1 on 2026-09-28 (see *Implementation status*) |
 | Author(s) | MISAKA core (drafted with Claude) |
 | Created | 2026-09-28 |
 | Affects | spec/palw 03 (registry), 04/04a (execution, arithmetic), 05 (canonical work), 08 (verification), 09 (court), 14 (node), 16 (fences) · all networks (dormant until armed) · `consensus/core` (admission, court), `misaka-palw-base0` (engines), `misaka-palw-sdk`, `misaka-palw-extension` |
@@ -175,12 +175,15 @@ fixed) at the moment they first hold together:
    byte, at every commit point.
 5. **Fidelity against the float original.** The integer program is compared with the family's
    Hugging Face float reference on a fixed evaluation set — top-1 agreement, KL divergence and
-   perplexity difference — against per-family thresholds set in Phase A. **This is not a bit-identity
+   perplexity difference — against per-family thresholds set in Phase A. The reference is pinned:
+   the `transformers` version the fixtures name (5.17 at Gate 1), eager attention, and per-position
+   decode — `transformers` disagrees with itself across attention backends and between prefill and
+   decode (soft-capping under sdpa, dynamic NTK and LongRoPE frequency switching). **This is not a bit-identity
    requirement**: static integer quantization changes outputs by design, and ADR-0053 withdrew
    tolerance from consensus. Fidelity decides whether a lowering is *useful*, never whether a claim is
    *valid*.
-6. **Legacy conformance.** Each of today's 45 catalog kernels is expressed as an IR segment and is
-   byte-identical to it (so today's semantics are a subset of v1, and today's kernels can become fused
+6. **Legacy conformance.** Each of today's integer catalog kernels (the 45 less the 7 float kernels,
+   plus the fenced `RequantizeByToken`) is expressed as an IR segment and is byte-identical to it (so today's semantics are a subset of v1, and today's kernels can become fused
    kernels).
 7. **Static verifiability.** Every corpus program passes the range, cost and court analyses of §3
    within the proposed ceilings, or the ceiling is revised with a stated reason.
@@ -480,6 +483,7 @@ without network state.
 | --- | --- |
 | `ADMISSIBLE` | registrable as data; fused kernels cover every hot pattern |
 | `ADMISSIBLE_GENERIC` | registrable as data; some patterns run on generic kernels (estimated slowdown printed) |
+| `LOWERABLE_UNVERIFIED` | lowered from an architecture whose float reference is remote code the tool cannot run offline; the verdict above it holds, the fidelity column is empty |
 | `EXCEEDS(limit, value, cap)` | a size, range, cost or court ceiling fails |
 | `NEEDS_PRIMITIVE(name)` | the graph needs an operation outside v1 — a protocol upgrade (ADR-0135 D7) |
 | `NOT_LOWERABLE(reason)` | no lowerer template for this family; the model may still be expressible by hand |
@@ -547,6 +551,26 @@ Total to Phase F: about 6–9 months with two to four experienced people. `palw_
 fence like ADR-0102's: a dormant network fingerprints as if it did not exist; when armed, the params
 fingerprint gains `prim_set_id` and the IR ceilings. On testnet-12 it would join the first fence list
 after the capacity steps (ADR-0160), at a height chosen when Phase F's drill passes.
+
+## Implementation status
+
+- **Gate 1 (2026-09-28): Phases A–C.**
+  - **Corpus:** `docs/design/palw/tir/corpus-v1.md`, with every semantic claim cited to the `transformers` modeling code.
+  - **Normative text:** `docs/spec/palw/04b-tensor-ir.md`.
+  - **Crate `misaka-palw-tir`:** the reference evaluator with golden vectors `consensus-vectors/tir-v1/`. The BASE-0 frozen KAT and the A16/Q36 kernels are byte-identical as IR segments.
+  - **Crate `misaka-palw-tir-lower`:** HF `config.json` + safetensors → frontend-neutral high-level graph → f32 reference. It matches `transformers` 5.17 on 57 tiny architectures and is estimated to cover about 91 % of decoder-only HF checkpoints by count.
+  - **The primitive set came out at 25**, below the 30–50 target: minimality removed every composition. `Requantize`, `Rescale`, the shifts, `IntRecip` and `IntSigmoid` are library segments, byte-identical to the legacy kernels. `Scatter`, `Sort`, `BoundedScan` and `BoundedMap` are out, and a user-body `BoundedReduce` is refused. The additions are an internal-only `i128`, `Log2Floor`, and a `Div` with a tensor divisor, which carries every rounding shift.
+  - **Deviations recorded in 04b §14:**
+    - `HistAppend` returns the window.
+    - Fixed state is committed at checkpoints rather than at every position (a per-position GDN state is far above the step-leaf cap).
+    - `token_bound`.
+    - Committed operands are checked against their proven intervals (PALW-TIR-33: out of interval is a malformed commitment and the producer loses).
+    - Params get a 2^40 sanity bound instead of the 2^28 cap.
+- **Gate 2 (running):** the composite library, conformance against the live kernels, `tir_admit_v1`, quantisation and fidelity, the independent second implementation, and the Phase F integration design.
+- **Found on the way (legacy code, outside this RFC):**
+  - A court arm that could panic on hostile committed lanes. It is being fixed as a node update.
+  - The fenced Kimi court arms disagree with the model: zeroed KDA state, equal-head-dim MLA, and a softmax router where HF uses a grouped sigmoid.
+  - For GDN, HF maps value head `vh` to key head `vh / (v_heads / k_heads)` (grouping). The live kernel's `vh % k_heads` equals it only after a value-head reordering at conversion, which Phase 0 checks.
 
 ## Alternatives
 
