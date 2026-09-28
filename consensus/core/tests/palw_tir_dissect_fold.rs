@@ -19,6 +19,10 @@
 //!   choice; at the bottom the burden is the challenger's and the backstop ends it on its side.
 //! * **The held regime:** a one-move accusation naming the dissected leaf opens the same phase at
 //!   that leaf (`CourtOpened` is refused there), and the dissection convicts from there.
+//! * **A leaf that is not dissected is still the executor's to answer** (the class has a dissected
+//!   point, so its terminal is clocked at every leaf): its acquitting close, past one carrier, is
+//!   declared, and the executor's clock then waits on it — a close that delivers acquits it, one that
+//!   does not convicts it at its own assembly deadline.
 //! * **Every move is refused out of turn, by the wrong party, and below the fence.**
 
 #[path = "palw_tir_fixture_common.rs"]
@@ -849,6 +853,90 @@ fn every_move_is_refused_out_of_turn_by_the_wrong_party_and_below_the_fence() {
         66,
         "tag 66"
     );
+}
+
+#[test]
+fn a_leaf_that_is_not_dissected_is_answered_by_a_declared_close() {
+    use kaspa_consensus_core::palw_state_v2::{PalwCourtSideV1, palw_close_assembly_daa_v1, palw_court_close_chunk_digest_v1};
+    use kaspa_consensus_core::palw_step_leg::PalwStepFaultV1;
+    let w = world();
+    let intervals = w.f.intervals.as_ref().expect("admissible");
+    // The last committed leaf before the dissected one whose cone does not reduce over H.
+    let other = (0..w.leaf)
+        .rev()
+        .find(|i| {
+            let leaf = &w.f.leaves[*i as usize];
+            matches!(leaf.kind, kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::Commit { .. })
+                && palw_tir_dissect_site_v1(&w.f.space, intervals, leaf).is_none()
+        })
+        .expect("a committed leaf that is not dissected");
+    let store = Store { f: &w.f, x: &w.honest };
+    let refutation = kaspa_consensus_core::palw_tir_court_v1::build_tir_cone_refutation_v1(&w.honest.binding, other, &store, &RULES)
+        .expect("a close");
+    let proof = PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+
+    for delivers in [true, false] {
+        let (mut run, claim_id) = licensed(&w, &w.honest);
+        let sid = court_at_leaf(&mut run, claim_id, &w.honest, other);
+        // The executor is clocked at this leaf too: the class has a dissected point.
+        let duty = kaspa_consensus_core::palw_producer_v2::palw_court_duties_v2(&run.s, &[bond_key(PRODUCER)])
+            .into_iter()
+            .find(|d| d.session_id == sid)
+            .expect("the executor's duty");
+        assert_eq!(duty.turn, PalwBisectTurnV1::AwaitDisclosure, "the executor owes the terminal move");
+        assert!(duty.fused_class);
+        // Its move: the acquitting close, too large to be carried whole by this test's rule, declared.
+        let verdict = adjudicate_court_close_v3(&run.s, &sid, &proof, &court(), LADDER, PalwPromptIdsFormV1::Flat, false, false)
+            .expect("the close adjudicates");
+        assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "the honest leaf acquits");
+        let close = PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict, proof: proof.clone() };
+        let bytes = borsh::to_vec(&close).unwrap();
+        let chunks = [bytes[..bytes.len() / 2].to_vec(), bytes[bytes.len() / 2..].to_vec()];
+        let declare = |side| PalwConsensusObjectV2::CourtCloseDeclared {
+            session_id: sid,
+            side,
+            count: 2,
+            chunk_digests: chunks.iter().map(|c| palw_court_close_chunk_digest_v1(c)).collect(),
+            close_digest: palw_court_close_chunk_digest_v1(&bytes),
+            verdict,
+            signature: vec![1; 8],
+        };
+        // The move is the executor's: the challenger declares nothing at a clock that is not its own.
+        assert!(matches!(run.refused(&[declare(PalwCourtSideV1::Challenger)]), PalwStateV2Error::CourtCloseNotTerminal { .. }));
+        // Declared at the last DAA of its rung window, so the rung passes while the group assembles.
+        let rung = run.s.court_session(&sid).unwrap().ladder.last_deadline_daa();
+        run.at(rung, &[declare(PalwCourtSideV1::Executor)], None);
+        assert!(rung + 1 <= rung + palw_close_assembly_daa_v1(2), "the assembly window outlasts the rung");
+        run.at(rung + 1, &[], None);
+        assert!(run.s.court_session(&sid).is_some(), "past its rung, the executor's clock waits on its declared close");
+        let duty = kaspa_consensus_core::palw_producer_v2::palw_court_duties_v2(&run.s, &[bond_key(PRODUCER)])
+            .into_iter()
+            .find(|d| d.session_id == sid)
+            .expect("the duty");
+        assert_eq!(duty.turn, PalwBisectTurnV1::Terminal);
+        if delivers {
+            for (index, bytes) in chunks.iter().enumerate() {
+                run.step(&[PalwConsensusObjectV2::CourtCloseChunk {
+                    session_id: sid,
+                    side: PalwCourtSideV1::Executor,
+                    index: index as u8,
+                    bytes: bytes.clone(),
+                }]);
+            }
+            assert!(run.s.court_session(&sid).is_none(), "the delivered close ends the session");
+            assert!(!run.s.claim(&claim_id).unwrap().phase.is_terminal(), "and acquits the executor");
+        } else {
+            let deadline = rung + palw_close_assembly_daa_v1(2);
+            run.at(deadline + 1, &[], None);
+            assert!(run.s.court_session(&sid).is_none(), "a declared close that never assembles ends the session");
+            assert!(
+                matches!(run.s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }),
+                "on its declarer's side: {:?}",
+                run.s.claim(&claim_id).unwrap().phase
+            );
+        }
+    }
+    let _ = PalwStepFaultV1::ComputationMismatch { value_index: 0 };
 }
 
 fn build_root(w: &World) -> PalwTirRootClaimV1 {

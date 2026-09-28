@@ -16853,6 +16853,15 @@ impl<'a> TransitionBuilder<'a> {
             self.state.court_close_deadlines.insert((record.assembly_deadline_daa, key));
         }
         self.entries.push(PalwDeltaEntryV2::CourtCloseGroup { key, old, new });
+        // RFC-0002 F7: an IR session's clock reads its executor's declared close
+        // (`court_session_turn_and_rung_deadline_v2`), so the session is re-indexed when a group comes
+        // or goes — a no-op for every other session, whose key does not read the groups.
+        let session_id = key.0;
+        if let Some(session) = self.state.court_sessions.get(&session_id) {
+            let next = court_next_deadline_v2(&self.state, session);
+            self.state.court_deadlines.retain(|(_, id)| *id != session_id);
+            self.state.court_deadlines.insert((next, session_id));
+        }
     }
 
     fn write_derived_artifact(
@@ -27165,10 +27174,38 @@ pub(crate) fn court_session_turn_and_rung_deadline_v2(
     state: &PalwChainStateV2,
     session: &PalwCourtSessionStateV2,
 ) -> (crate::palw_bisect::PalwBisectTurnV1, u64) {
-    match state.tir_dissections.get(&session.ladder.session_id()) {
+    let session_id = session.ladder.session_id();
+    match state.tir_dissections.get(&session_id) {
         Some(phase) => (phase.turn(), phase.last_deadline_daa()),
+        // **An IR executor's declared close is its terminal move** (RFC-0002 F7). At an IR class's
+        // terminal the executor owes a move at EVERY leaf — the clock cannot tell a dissected leaf
+        // from another, the leaf's kind being a fact of the job — and at a leaf that is not
+        // dissected that move is an acquitting close, which past one carrier is DECLARED. So once
+        // the executor's declared close stands, the session waits at `Terminal` on it: the group's
+        // own assembly deadline convicts a declarer that does not deliver (`sweep_court_close_deadlines`),
+        // and a delivered close ends the session with its verdict.
+        None if court_session_executor_declared_at_the_ir_terminal_v1(state, session) => {
+            (crate::palw_bisect::PalwBisectTurnV1::Terminal, session.ladder.last_deadline_daa())
+        }
         None => court_turn_and_rung_deadline_v2(session, court_session_class_is_fused_v2(state, session)),
     }
+}
+
+/// **Is this an IR class's session at its ladder's terminal, with no phase open?** — where the
+/// executor owes the terminal move (RFC-0002 F7): the class has a dissected point
+/// (`PalwClassStateV2::fused_attention`) and is an IR program.
+pub(crate) fn court_session_at_the_ir_terminal_v1(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> bool {
+    session.dissection.is_none()
+        && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal
+        && !state.tir_dissections.contains_key(&session.ladder.session_id())
+        && court_session_class_is_fused_v2(state, session)
+        && state.claims.get(&session.claim).is_some_and(|claim| state.tir_classes.contains_key(&claim.class_id))
+}
+
+/// [`court_session_at_the_ir_terminal_v1`], and the executor's declared close stands.
+fn court_session_executor_declared_at_the_ir_terminal_v1(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> bool {
+    state.court_close_groups.contains_key(&(session.ladder.session_id(), PalwCourtSideV1::Executor))
+        && court_session_at_the_ir_terminal_v1(state, session)
 }
 
 /// **RFC-0002 F7: [`cap_session_rung_deadline_v2`] for an IR phase** — the same reserve, under the
@@ -31712,8 +31749,18 @@ fn apply_object(
             // A fused class with no phase open is not at `Terminal` for this purpose — its
             // terminal move is the responder's root claim (ADR-0082 C-5), which is exactly the
             // move a close would be declared INSTEAD of. The same helper answers both questions.
+            //
+            // **RFC-0002 F7: except the IR executor's own terminal move.** At an IR class's terminal
+            // the executor is clocked at every leaf, and at a leaf that is not dissected its move is
+            // an acquitting close — declared, when it does not fit one carrier. Refusing the
+            // declaration there would leave an honest executor no move its clock accepts; allowing
+            // it costs nothing it should not: the declared close must deliver AND adjudicate, or its
+            // declarer is convicted at its own assembly deadline (a whole close at a dissected leaf
+            // that does not fit the court is such a failure).
             let turn = court_session_turn_and_rung_deadline_v2(&builder.state, &session).0;
-            if turn != crate::palw_bisect::PalwBisectTurnV1::Terminal {
+            let the_ir_executor_s_move =
+                *side == PalwCourtSideV1::Executor && court_session_at_the_ir_terminal_v1(&builder.state, &session);
+            if turn != crate::palw_bisect::PalwBisectTurnV1::Terminal && !the_ir_executor_s_move {
                 return Err(PalwStateV2Error::CourtCloseNotTerminal { session: *session_id, turn });
             }
             // One declaration per `(session, side)`, ever. It is what makes the interlock's
