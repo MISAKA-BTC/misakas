@@ -2466,33 +2466,39 @@ fn lower_attention(
         let t = b.iota(DType::I64, &[Dim::H], 0, 0, 1);
         let (hs, al2) = (heads, al.clone());
         let bias = if al.bf16_bias {
-            // Falcon rounds `slope` and `slope · j` to bfloat16: one row of pinned values per head.
+            // Falcon rounds `slope` and `slope · j` to bfloat16: one row of pinned values per head,
+            // one value per position the program serves — `max_window` of them when the lowering
+            // was given one (a class is declared at no longer a context), else every position of
+            // the history bound (a table no court close can carry: lower Falcon-ALiBi with
+            // `--max-window`).
+            let rows = (cx.max_window.min(hb)) as usize;
             let tab = decl(
                 b,
                 cx,
                 lb,
                 &format!("{site}.alibi"),
                 DType::I64,
-                &[heads, hb as usize],
+                &[heads, rows],
                 false,
                 Arc::new(move |_c| {
-                    let mut v = Vec::with_capacity(hs * hb as usize);
+                    let mut v = Vec::with_capacity(hs * rows);
                     for h in 0..hs {
-                        for j in 0..hb as usize {
+                        for j in 0..rows {
                             let bj = crate::rope::bf16_round(crate::rope::bf16_round(al2.slopes[h] as f32) * j as f32) as f64;
                             let bj = if al2.scaled_by_softmax_scale { bj * scale } else { bj };
                             v.push((bj * (1u64 << LOGIT_Q) as f64).round() as i64);
                         }
                     }
-                    Ok(IntTensor::i64(vec![hs, hb as usize], v))
+                    Ok(IntTensor::i64(vec![hs, rows], v))
                 }),
             )?;
             let base = b.sub(pos, hm1, DType::I64);
             let j = b.add(base, t, DType::I64);
-            let j = b.clamp(j, 0, hb as i64 - 1, DType::Idx);
+            let j = b.clamp(j, 0, rows as i64 - 1, DType::Idx);
             let bj = b.gather(tab, j, 1, 0);
             let bj = b.clamp(bj, -(1i64 << 40), 1 << 40, DType::I64);
-            let bp = b.gather(tab, pos, 1, 0);
+            let pc = b.clamp(pos, 0, rows as i64 - 1, DType::Idx);
+            let bp = b.gather(tab, pc, 1, 0);
             let bp = b.clamp(bp, -(1i64 << 40), 1 << 40, DType::I64);
             let bp = b.reshape_fixed(bp, &[heads as u32, 1]);
             b.sub(bj, bp, DType::I64)

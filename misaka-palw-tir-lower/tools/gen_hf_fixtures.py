@@ -109,6 +109,20 @@ CONFIGS = {
                           n_positions=16, multi_query=False), {}),
     "olmo": (c("olmo", "OlmoForCausalLM", L, num_hidden_layers=2, clip_qkv=1.5), {}),
     "olmo2": (c("olmo2", "Olmo2ForCausalLM", L, num_hidden_layers=2), {}),
+    # OLMo-3: OLMo-2 with 3 sliding : 1 full layers and rope parameters per layer type (yarn on the
+    # full-attention layers, a different θ on the sliding ones).
+    "olmo3": (c("olmo3", "Olmo3ForCausalLM", L, num_hidden_layers=4, sliding_window=4,
+                rope_parameters={"full_attention": {"rope_type": "yarn", "rope_theta": 500000.0, "factor": 4.0,
+                                                    "original_max_position_embeddings": 32},
+                                 "sliding_attention": {"rope_type": "default", "rope_theta": 10000.0}},
+                max_position_embeddings=128), {}),
+    # GLM (glm-4-9b-chat-hf) and GLM-4 (GLM-4-0414): fused gate_up, q/k/v biases, partial rotary on
+    # interleaved pairs; GLM-4's post-norms.
+    "glm": (c("glm", "GlmForCausalLM", L, num_hidden_layers=2, head_dim=16, pad_token_id=0), {}),
+    "glm4": (c("glm4", "Glm4ForCausalLM", L, num_hidden_layers=2, head_dim=16, pad_token_id=0), {}),
+    # Ministral (8B-2410): Mistral with per-layer sliding windows.
+    "ministral": (c("ministral", "MinistralForCausalLM", L, num_hidden_layers=3, sliding_window=4, head_dim=16,
+                    layer_types=["sliding_attention", "full_attention", "sliding_attention"]), {}),
     "cohere": (c("cohere", "CohereForCausalLM", L, num_hidden_layers=2, use_qk_norm=True, logit_scale=0.5), {}),
     "cohere2": (c("cohere2", "Cohere2ForCausalLM", L, num_hidden_layers=4, head_dim=8, sliding_window=4,
                   layer_types=["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"]), {}),

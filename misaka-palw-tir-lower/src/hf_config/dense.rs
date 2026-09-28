@@ -1119,3 +1119,136 @@ pub(crate) fn phi3(p: &mut P) -> Result<ArchSpec> {
         conv1d: false,
     }))
 }
+
+/// GLM (`GlmForCausalLM`: glm-4-9b(-chat)-hf, GLM-Edge) and GLM-4 (`Glm4ForCausalLM`: GLM-4-0414,
+/// GLM-Z1): Llama math with a fused `gate_up_proj` (`[gate | up]`), q/k/v biases (`attention_bias`,
+/// default true; `o_proj` never has one) and a partial rotary (`partial_rotary_factor`, default 0.5)
+/// on interleaved pairs (`rotate_half` over `x[0::2]`, `x[1::2]`, the angles repeated pairwise).
+/// GLM-4 wraps each sublayer in a post-norm as well: `post_self_attn_layernorm` after attention,
+/// `post_mlp_layernorm` after the MLP (its `post_attention_layernorm` is the pre-MLP norm).
+pub(crate) fn glm(p: &mut P, v4: bool) -> Result<ArchSpec> {
+    let vocab = p.cfg.usize_or("vocab_size", 151552)?;
+    let hidden = p.cfg.usize_or("hidden_size", 4096)?;
+    let inter = p.cfg.usize_or("intermediate_size", 13696)?;
+    let n = p.cfg.usize_or("num_hidden_layers", 40)?;
+    let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 32, Some(2), Some(128))?;
+    let act = p.act("hidden_act", "silu")?;
+    let max_pos = p.cfg.usize_or("max_position_embeddings", 131072)?;
+    let eps = p.cfg.f64_or("rms_norm_eps", 1.5625e-7)?;
+    let tied = p.cfg.bool_or("tie_word_embeddings", false)?;
+    let bias = p.cfg.bool_or("attention_bias", true)?;
+    let partial = super::legacy::partial_factor(p, &["partial_rotary_factor"], 0.5)?;
+    let rd = (hd as f64 * partial) as usize;
+    let rope = p.rope(rd, RopeStyle::Interleaved, Some(10000.0), None, partial, Some(max_pos), None)?;
+    let norm = NormSpec::rms(eps);
+    let at = attn(h, kv, hd, Position::Rope(rope), (bias, false));
+    p.layouts.mlp = MlpLayout::FusedGateFirst;
+    let residual = if v4 {
+        Residual::Sequential { pre_mixer: Some(norm), post_mixer: Some(norm), pre_ffn: Some(norm), post_ffn: Some(norm), multiplier: 1.0 }
+    } else {
+        pre_norm(norm)
+    };
+    let layers = (0..n)
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
+            residual: residual.clone(),
+            post_scale: 1.0,
+        })
+        .collect();
+    let l = "model.layers.{L}.";
+    let mut nm = llama_names("model.", "lm_head");
+    nm.remove("mlp.gate");
+    nm.remove("mlp.up");
+    nm.insert("mlp.gate_up".into(), format!("{l}mlp.gate_up_proj"));
+    if v4 {
+        nm.insert("norm.post_mix".into(), format!("{l}post_self_attn_layernorm"));
+        nm.insert("norm.post_ffn".into(), format!("{l}post_mlp_layernorm"));
+    }
+    if tied {
+        nm.insert("lm_head".into(), "model.embed_tokens".into());
+    }
+    Ok(p.finish_spec(SpecParts {
+        model_type: if v4 { "glm4" } else { "glm" },
+        families: vec!["C1"],
+        vocab,
+        hidden,
+        max_pos: Some(max_pos),
+        embedding: plain_embedding(hidden),
+        layers,
+        final_norm: Some(norm),
+        head: plain_head(tied),
+        names: nm,
+        prefix_aliases: vec![],
+        conv1d: false,
+    }))
+}
+
+/// OLMo-3 (`Olmo3ForCausalLM`): OLMo-2 (post-norms only, RMS QK-norm over the whole projection)
+/// with `layer_types` (default: every fourth layer full, the rest sliding) over `sliding_window`
+/// (default 4096) and rope parameters per layer type (both default θ 500,000; a legacy
+/// `rope_scaling` applies to the full-attention layers).
+pub(crate) fn olmo3(p: &mut P) -> Result<ArchSpec> {
+    let vocab = p.cfg.usize_or("vocab_size", 50304)?;
+    let hidden = p.cfg.usize_or("hidden_size", 4096)?;
+    let inter = p.cfg.usize_or("intermediate_size", 11008)?;
+    let n = p.cfg.usize_or("num_hidden_layers", 32)?;
+    let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 32, None, None)?;
+    let act = p.act("hidden_act", "silu")?;
+    let max_pos = p.cfg.usize_or("max_position_embeddings", 2048)?;
+    let eps = p.cfg.f64_or("rms_norm_eps", 1e-5)?;
+    let tied = p.cfg.bool_or("tie_word_embeddings", false)?;
+    let bias = p.cfg.bool_or("attention_bias", false)?;
+    let sw = p.cfg.usize_or_null("sliding_window", Some(4096))?;
+    p.cfg.forbid("clip_qkv", "Olmo3Config has no clip_qkv")?;
+    let types = p.layer_types(n, &["full_attention", "sliding_attention"], |i| {
+        if (i + 1) % 4 != 0 { "sliding_attention" } else { "full_attention" }
+    })?;
+    let keyed = p.cfg.opt_obj("rope_parameters")?.is_some_and(|r| r.contains_key("full_attention") || r.contains_key("sliding_attention"));
+    let (full, local) = if keyed {
+        (
+            p.rope(hd, RopeStyle::Half, Some(500_000.0), Some("full_attention"), 1.0, Some(max_pos), None)?,
+            p.rope(hd, RopeStyle::Half, Some(500_000.0), Some("sliding_attention"), 1.0, Some(max_pos), None)?,
+        )
+    } else {
+        let r = p.rope(hd, RopeStyle::Half, Some(500_000.0), None, 1.0, Some(max_pos), None)?;
+        (r.clone(), r)
+    };
+    let norm = NormSpec::rms(eps);
+    let layers = (0..n)
+        .map(|i| {
+            let sliding = types[i] == "sliding_attention";
+            let mut at = attn(h, kv, hd, Position::Rope(if sliding { local.clone() } else { full.clone() }), (bias, bias));
+            at.qk_norm = Some(QkNorm { norm, scope: QkNormScope::Whole });
+            at.window = if sliding { sw } else { None };
+            LayerSpec {
+                mixer: Mixer::Attention(at),
+                ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
+                residual: Residual::Sequential { pre_mixer: None, post_mixer: Some(norm), pre_ffn: None, post_ffn: Some(norm), multiplier: 1.0 },
+                post_scale: 1.0,
+            }
+        })
+        .collect();
+    let mut nm = llama_names("model.", "lm_head");
+    nm.remove("norm.mix");
+    nm.remove("norm.ffn");
+    nm.insert("norm.post_mix".into(), "model.layers.{L}.post_attention_layernorm".into());
+    nm.insert("norm.post_ffn".into(), "model.layers.{L}.post_feedforward_layernorm".into());
+    if tied {
+        nm.insert("lm_head".into(), "model.embed_tokens".into());
+    }
+    Ok(p.finish_spec(SpecParts {
+        model_type: "olmo3",
+        families: vec!["C1", "C2"],
+        vocab,
+        hidden,
+        max_pos: Some(max_pos),
+        embedding: plain_embedding(hidden),
+        layers,
+        final_norm: Some(norm),
+        head: plain_head(tied),
+        names: nm,
+        prefix_aliases: vec![],
+        conv1d: false,
+    }))
+}

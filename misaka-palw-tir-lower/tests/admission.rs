@@ -50,7 +50,7 @@ fn every_hf_tiny_fixture_is_admitted() {
             }
         }
     }
-    assert_eq!(names.len(), 57);
+    assert_eq!(names.len(), 61);
     assert!(refused.is_empty(), "refused: {refused:?}");
 }
 

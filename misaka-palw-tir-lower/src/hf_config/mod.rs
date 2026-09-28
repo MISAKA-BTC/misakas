@@ -28,6 +28,10 @@ use std::collections::BTreeMap;
 pub const SUPPORTED: &[(&str, &str)] = &[
     ("LlamaForCausalLM", "C1 C2"),
     ("MistralForCausalLM", "C1 C2"),
+    ("MinistralForCausalLM", "C1 C2"),
+    ("GlmForCausalLM", "C1"),
+    ("Glm4ForCausalLM", "C1"),
+    ("Olmo3ForCausalLM", "C1 C2"),
     ("Qwen2ForCausalLM", "C1 C2"),
     ("Qwen3ForCausalLM", "C1 C2"),
     ("GemmaForCausalLM", "C1"),
@@ -105,7 +109,6 @@ pub const REFUSED: &[(&str, &str)] = &[
     ("NemotronHForCausalLM", "Nemotron-H hybrid is not modelled yet"),
     ("FalconH1ForCausalLM", "Falcon-H1 hybrid with muP multipliers is not modelled yet"),
     ("Zamba2ForCausalLM", "Zamba2 shared-attention hybrid is not modelled yet"),
-    ("Olmo3ForCausalLM", "OLMo-3 per-layer-type rope parameters are not modelled yet"),
 ];
 
 /// Replace non-standard JSON number tokens Python writes (`Infinity`, `-Infinity`, `NaN`) outside
@@ -249,6 +252,11 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
     let spec = match arch.as_str() {
         "LlamaForCausalLM" => dense::llama(&mut p, Flavor::Llama)?,
         "MistralForCausalLM" => dense::llama(&mut p, Flavor::Mistral)?,
+        // Ministral (8B-2410): Mistral math with `layer_types` (all sliding by default).
+        "MinistralForCausalLM" => dense::llama(&mut p, Flavor::Mistral)?,
+        "GlmForCausalLM" => dense::glm(&mut p, false)?,
+        "Glm4ForCausalLM" => dense::glm(&mut p, true)?,
+        "Olmo3ForCausalLM" => dense::olmo3(&mut p)?,
         "Qwen2ForCausalLM" => dense::llama(&mut p, Flavor::Qwen2)?,
         "Qwen3ForCausalLM" => dense::llama(&mut p, Flavor::Qwen3)?,
         "GraniteForCausalLM" => dense::llama(&mut p, Flavor::Granite)?,
