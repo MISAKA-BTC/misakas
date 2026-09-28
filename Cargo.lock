@@ -6179,6 +6179,7 @@ dependencies = [
 name = "misaka-palw-sdk"
 version = "1.1.0"
 dependencies = [
+ "blake2b_simd",
  "borsh",
  "kaspa-consensus-core",
  "kaspa-hashes",
