@@ -7310,6 +7310,13 @@ impl VirtualStateProcessor {
             // stands. The place is taken by the one handed to the gate (see there), whatever the gate
             // then decides; one dropped before the gate (unsigned, at a stale target, refused by the
             // rehearsal, over the slot cap) never took it. The fold refuses a second as its second lock.
+            // **The second IR fence, likewise**: below `palw_tir_fence2` its moves (an IR step-leaf demand,
+            // an answer of that kind) are payloads an older build cannot decode and skips (A-2), so
+            // they are dropped here, first, and charged nothing; the fold refuses them too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_tir_fence2_v1(&object) && !self.palw_tir_fence2_at(point.daa_score) {
+                info!("Block {block}: a second-IR-fence object was dropped by name below palw_tir_fence2, and the block stands (RFC-0002 Phase F)");
+                continue;
+            }
             if tir_registration_gated
                 && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
             {
@@ -11025,6 +11032,53 @@ impl VirtualStateProcessor {
                 // **ADR-0103 Decision 4: the held DA court's two moves.** The fence, the DA court's
                 // own fence, the signer (the accuser's key; the claim's producer for an answer), the
                 // ceiling, and the unit bounded — or answered — against the claim's own roots.
+                // **The second IR fence: an IR step-leaf demand** (evidence transport C). The fence, the
+                // DA court, the accuser's registered key over the demand, a binding that rides empty,
+                // and the ruleset's close ceiling; the claim, its class and the leaf's bound are the
+                // fold's (`open_da_session_tir_leaf_v1`).
+                Obj::DefaultAccusedTirLeaf { accusation } => {
+                    let claim = accusation.claim;
+                    if !self.palw_tir_fence2_at(point.daa_score) {
+                        return Err(format!("claim {claim}: an IR leaf demand is refused: palw_tir_fence2 is not in force (RFC-0002)"));
+                    }
+                    if !self.palw_da_court_at(point.daa_score) {
+                        return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
+                    }
+                    if !accusation.binding.class.program.is_empty() {
+                        return Err(format!("claim {claim}: an IR leaf demand's binding carries no program: the chain holds the class's"));
+                    }
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "an IR leaf demand on a network with no V2 court parameters".to_string())?;
+                    let bytes = borsh::to_vec(accusation.as_ref()).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+                    if bytes > court.max_close_bytes() {
+                        return Err(format!(
+                            "claim {claim}'s IR leaf demand is {bytes} bytes, above this ruleset's {}-byte close ceiling",
+                            court.max_close_bytes()
+                        ));
+                    }
+                    let record = state
+                        .bond(&accusation.accuser)
+                        .ok_or_else(|| format!("an IR leaf demand names bond {:?} this chain does not have", accusation.accuser))?;
+                    let message = kaspa_consensus_core::palw_da_rcore_v1::palw_tir_leaf_accusation_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        &claim,
+                        accusation.index,
+                        &accusation.accuser,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_da_rcore_v1::PALW_TIR_LEAF_ACCUSATION_MLDSA87_CONTEXT_V1,
+                    ) {
+                        return Err(format!("claim {claim}'s IR leaf demand is not signed by the bond it names"));
+                    }
+                }
                 Obj::DefaultAccusedHeld { accusation } => {
                     let claim_id = accusation.claim;
                     if !self.palw_held_context_at(point.daa_score) || !self.palw_da_court_at(point.daa_score) {
@@ -12785,6 +12839,12 @@ impl VirtualStateProcessor {
     /// **RFC-0002 Phase F, resolved in exactly one place.**
     fn palw_tir_at(&self, daa_score: u64) -> bool {
         self.palw_tir_v1.is_some_and(|fence| fence.activation.is_active(daa_score))
+    }
+
+    /// **RFC-0002 Phase F's second IR fence, read off the bundle's mirror** (`tir_fence2_from_daa`,
+    /// which `validate_palw_v2` holds equal to `Params::palw_tir_fence2`).
+    fn palw_tir_fence2_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.tir_fence2_active_at(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
@@ -18714,6 +18774,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         O::CourtTirDissected { .. } => "CourtTirDissected",
         O::CourtTirChildChosen { .. } => "CourtTirChildChosen",
+        O::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
         O::ReporterCommitted { .. } => "ReporterCommitted",

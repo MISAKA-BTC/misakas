@@ -82,6 +82,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
             | PalwOffenceKindV1::CourtConviction => false,
         },
         O::DefaultAccused { .. } | O::DefaultAccusedHeld { .. } | O::MaterialDisclosedV2 { .. } => true,
+        // The second IR fence: the IR step-leaf demand is a DA accusation like the two above.
+        O::DefaultAccusedTirLeaf { .. } => true,
         O::ReporterCommitted { .. } | O::ReporterRevealed { .. } => true,
         O::CourtOpened { .. }
         | O::CourtClosed { .. }

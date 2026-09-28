@@ -607,6 +607,21 @@ integer operation of the requantisation, rotary and norm segments (report in
 `PalwModelWorkV1` comes from the same walk (`tir_model_work_v1`); `palw_economic_compute_v1.rs:
 297-325`'s name heuristics are never reached by an IR class.
 
+**The `Select`-arm credit (past `Params::palw_tir_fence2`; RFC-0004 open question 4).** The walk above
+credits both value operands of a `Select`, but a backend may legally skip, per element, the arm the
+condition does not choose, and no court reads work that reaches no commit point — so a class could be
+paid for work never done (P5). Past the second IR fence the registry records
+`palw_tir_model_work_v2(.., true)`: for each `Select` `s`, in ascending node order, and each value
+operand `k`, the **arm-only region** `E(s, k)` is the set of nodes that are not sinks (a commit point —
+carry-outs and the logits included —, a `StateWrite`, a `HistAppend`), have a use, and whose every use
+is `s` at operand `k` or a node of `E(s, k)`. With `w(n)` a node's affine work (§8, per dimension),
+`A_s = Σ_{E(s,1)} w − Σ_{Select s' ∈ E(s,1)} δ(s')` and `B_s` likewise, the discount is `δ(s) =
+max(A_s, B_s)` coefficient by coefficient, and a block is credited `Σ_n w(n) − Σ_s δ(s)`: each arm pair
+at the coefficient-wise minimum of the two, an affine form never above `min(A(H), B(H))` — so never
+more than any execution does, and nested `Select`s are credited first. On the corpus it moves the
+elementwise work by 1–20 % of the toy programs with `Select`s and the A16 decoders by under 0.02 %;
+a program without a `Select` is unchanged (`tests/palw_tir_select_credit.rs`).
+
 ### 2.10 The SDK lineage and the node backend
 
 * **Consensus artifact layout (the "TIR inventory").** Leaves in declaration order: for each param

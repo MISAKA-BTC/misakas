@@ -7248,6 +7248,15 @@ pub enum PalwConsensusObjectV2 {
         choice: crate::palw_tir_dissect_v1::PalwTirDissectChoiceV1,
         signature: Vec<u8>,
     },
+    // ---- RFC-0002 Phase F, the second IR fence (`Params::palw_tir_fence2`) ----
+    /// **A data-availability demand for one committed step leaf of an IR claim** (evidence transport
+    /// C): opens an R-core+ DA session naming `TirStepLeaf { index }` (the fold draws up to three more
+    /// leaves), which the producer or any locked signer answers with `MaterialDisclosedV2` carrying the
+    /// leaf ([`crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1`]) inside `W_disclose`, or it
+    /// defaults. Signed by the accuser's bond. Appended; dropped by name below `palw_tir_fence2`.
+    DefaultAccusedTirLeaf {
+        accusation: Box<crate::palw_da_rcore_v1::PalwTirLeafAccusationV1>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7267,6 +7276,21 @@ pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
         | PalwConsensusObjectV2::CourtTirChildChosen { .. } => true,
         PalwConsensusObjectV2::ObjectiveOffence { kind, .. } => {
             *kind == crate::palw_offence_v1::PalwOffenceKindV1::TirIdentityMismatch
+        }
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => true,
+        _ => false,
+    }
+}
+
+/// **Is this object a move only the second IR fence makes legal** (`Params::palw_tir_fence2`): an IR
+/// step-leaf demand, or an answer or unit of that kind — payloads an older build cannot decode (A-2).
+/// Below the fence the acceptance walk drops every such object by name before any slot, rent or
+/// budget is charged, and the fold refuses it as the second lock.
+pub fn palw_object_is_tir_fence2_v1(object: &PalwConsensusObjectV2) -> bool {
+    match object {
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => true,
+        PalwConsensusObjectV2::MaterialDisclosedV2 { unit, answer, .. } => {
+            answer.is_tir_fence2_v1() || matches!(unit, crate::palw_da_rcore_v1::PalwDaUnitV1::TirStepLeaf { .. })
         }
         _ => false,
     }
@@ -9326,6 +9350,14 @@ pub enum PalwStateV2Error {
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
     TirRegistrationsPerBlockExceeded { class: Hash64, max: usize },
+    /// **A move only the second IR fence makes legal, refused** (`Params::palw_tir_fence2`): below
+    /// its height (the acceptance walk drops it by name first; this is the second lock), or an IR
+    /// step-leaf demand the fold does not open.
+    #[error("the second IR fence refuses this move: {0}")]
+    TirFence2Refused(&'static str),
+    /// **An IR step-leaf demand past the claim's committed leaves.**
+    #[error("claim {claim}: step leaf {index} is past the {count} its execution commits")]
+    TirLeafOutOfRange { claim: Hash64, index: u64, count: u64 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -26674,6 +26706,7 @@ fn open_da_session_rcore_v1(
     accuser: PalwBondKeyV2,
     named: crate::palw_da_rcore_v1::PalwDaUnitV1,
     binding: Option<&crate::palw_step_leg::PalwStepBindingV2>,
+    tir_leaves: Option<u64>,
 ) -> Result<(), PalwStateV2Error> {
     use crate::palw_da_rcore_v1::{PalwDaDrawSpaceV1, PalwDaSessionV1, PalwDaUnitV1, palw_da_draw_seed_v1, palw_da_draw_units_v1};
     use crate::palw_held_da_v1::PalwHeldMissingV1;
@@ -26769,9 +26802,16 @@ fn open_da_session_rcore_v1(
                     PalwDaUnitV1::Held(drawn) => {
                         crate::palw_held_da_v1::palw_held_da_check_accusation_v1(&claim.execution_root, drawn, binding, form).is_ok()
                     }
-                    PalwDaUnitV1::Event { .. } => false,
+                    PalwDaUnitV1::Event { .. } | PalwDaUnitV1::TirStepLeaf { .. } => false,
                 })
                 .collect()
+        }
+        // The second IR fence: an IR step leaf, bounded by the authenticated binding's leaf count
+        // (`open_da_session_tir_leaf_v1` checked the named one); the drawn ones from the same range.
+        (PalwDaUnitV1::TirStepLeaf { .. }, None) => {
+            let leaves = tir_leaves
+                .ok_or(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "an IR leaf demand carries its binding's count" })?;
+            palw_da_draw_units_v1(&seed, &named, &PalwDaDrawSpaceV1::TirStepLeaves { leaves })
         }
         _ => return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "an accusation's unit and binding disagree in kind" }),
     };
@@ -26827,6 +26867,51 @@ fn open_da_session_rcore_v1(
     let until = admission.deadline_daa.saturating_add(builder.params.window_challenge_at(ctx.daa_score));
     builder.da_rekey_v1(claim_id, until, ctx.daa_score);
     Ok(())
+}
+
+/// **The second IR fence: an IR step-leaf demand opens an R-core+ DA session** (evidence transport C).
+///
+/// The claim must be an IR class's; the carried binding (program empty, put back from the class's
+/// record) must verify and name the claim's execution and trace roots, and must not answer another
+/// job (J-5, `DaBindingIsIdentityFault`); the leaf must be one it commits. Then every gate, budget,
+/// clock, draw (three more leaves of the same range) and record of [`open_da_session_rcore_v1`]
+/// applies unchanged.
+fn open_da_session_tir_leaf_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    accusation: &crate::palw_da_rcore_v1::PalwTirLeafAccusationV1,
+) -> Result<(), PalwStateV2Error> {
+    if !builder.da_court {
+        return Err(PalwStateV2Error::DaCourtDormant);
+    }
+    if !builder.params.rcore_plus_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::TirFence2Refused("an IR leaf demand opens an R-core+ session, and R-core+ is not in force"));
+    }
+    let claim_id = accusation.claim;
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    let malformed = |why: &'static str| PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why };
+    let record = builder.state.tir_classes.get(&claim.class_id).ok_or(malformed("the claim's class is not an IR program"))?;
+    let binding = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(&accusation.binding, record).map_err(malformed)?;
+    crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+        .map_err(|_| malformed("the IR binding does not verify"))?;
+    if binding.committed_execution_root != claim.execution_root || binding.full_logits_trace_root != claim.trace_root {
+        return Err(malformed("the IR binding is not the claim's execution"));
+    }
+    if accusation.index >= binding.step_leaf_count {
+        return Err(PalwStateV2Error::TirLeafOutOfRange { claim: claim_id, index: accusation.index, count: binding.step_leaf_count });
+    }
+    if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &binding) {
+        return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
+    }
+    open_da_session_rcore_v1(
+        builder,
+        ctx,
+        claim_id,
+        accusation.accuser,
+        crate::palw_da_rcore_v1::PalwDaUnitV1::TirStepLeaf { index: accusation.index },
+        None,
+        Some(binding.step_leaf_count),
+    )
 }
 
 /// **ADR-0152 DA-4 (M3): `MaterialDisclosedV2` — an answer to every open session that demands the
@@ -26919,6 +27004,32 @@ fn apply_da_answer_v1(
                 return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
             }
             disclosure.is_flat()
+        }
+        // **The second IR fence: an IR step leaf**, checked by hash arithmetic against the claim's
+        // roots (`check_tir_step_leaf_disclosure_v1`: the leaf, its opening, the ids, the logits
+        // tile's row pin), then the identity rule over its binding.
+        (PalwDaUnitV1::TirStepLeaf { index }, PalwDaAnswerV1::TirStepLeaf(carried)) => {
+            if !builder.params.tir_fence2_active_at(ctx.daa_score) {
+                return Err(malformed("an IR step-leaf answer before palw_tir_fence2 is in force"));
+            }
+            let record = builder
+                .state
+                .tir_classes
+                .get(&claim.class_id)
+                .ok_or(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "the claim's class is not an IR program" })?;
+            let disclosure = carried.with_program_v1(record).map_err(malformed)?;
+            crate::palw_tir_court_v1::check_tir_step_leaf_disclosure_v1(
+                claim.trace_root,
+                claim.execution_root,
+                *index,
+                &disclosure,
+                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            )
+            .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
+            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding) {
+                return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
+            }
+            false
         }
         (PalwDaUnitV1::Held(missing), PalwDaAnswerV1::Held(carriage)) => {
             let Some(network_ladder) = builder.extras.held_context_ladder else {
@@ -30308,6 +30419,11 @@ fn apply_object(
     if palw_object_is_tir_v1(object) && !builder.params.tir_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirRegistrationRefused("an IR object before palw_tir_v1 is in force (RFC-0002 Phase F)"));
     }
+    // **The second IR fence, likewise**: below `palw_tir_fence2` its moves are payloads an older build
+    // cannot decode; the acceptance walk drops them by name, and this is the second lock.
+    if palw_object_is_tir_fence2_v1(object) && !builder.params.tir_fence2_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
+    }
     match object {
         PalwConsensusObjectV2::BondRegistered {
             bond,
@@ -30684,6 +30800,7 @@ fn apply_object(
                     accusation.accuser,
                     crate::palw_da_rcore_v1::PalwDaUnitV1::Held(accusation.missing),
                     Some(&accusation.binding),
+                    None,
                 );
             }
             let claim_id = accusation.claim;
@@ -31152,7 +31269,10 @@ fn apply_object(
             if record.facts.class_id != *class_id {
                 return Err(PalwStateV2Error::TirRegistrationRefused("the declared class id is not the carried class's"));
             }
-            let work = || crate::palw_tir_work_v1::palw_tir_model_work_v1(&program, &admission.canonical).ok();
+            // RFC-0002 Phase F's second IR fence: past it the registry records the `Select`-arm credit
+            // (each arm-only region at the smaller arm's work); below it, the release's vector.
+            let min_select_arms = builder.params.tir_fence2_active_at(ctx.daa_score);
+            let work = || crate::palw_tir_work_v1::palw_tir_model_work_v2(&program, &admission.canonical, min_select_arms).ok();
             apply_class_registration_v1(
                 builder,
                 ctx,
@@ -32606,6 +32726,11 @@ fn apply_object(
             // a claim nobody was in a position to blame the producer for.
             builder.void_and_slash(*claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ProducerWithholding)?;
         }
+        // **The second IR fence: an IR step-leaf demand** (evidence transport C) opens an R-core+ DA
+        // session over the leaf and three drawn from its execution's range.
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { accusation } => {
+            return open_da_session_tir_leaf_v1(builder, ctx, accusation);
+        }
         // **ADR-0062 SA-1: the accusation that CAN take a bond, because somebody has to prove it.**
         PalwConsensusObjectV2::DefaultAccused { claim: claim_id, missing_event_index, accuser, signature: _ } => {
             // ADR-0152 DA-1 (M3): past `palw_rcore_plus` the event accusation opens a session in the
@@ -32617,6 +32742,7 @@ fn apply_object(
                     *claim_id,
                     *accuser,
                     crate::palw_da_rcore_v1::PalwDaUnitV1::event_of_index(*missing_event_index),
+                    None,
                     None,
                 );
             }
