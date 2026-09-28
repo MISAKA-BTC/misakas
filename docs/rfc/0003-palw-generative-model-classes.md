@@ -1199,7 +1199,13 @@ the text stage's.
     Phase F's per program, in program order, in one tree, each leaf named `p<k>/<name>`. A close
     carries the param leaves its cone reads with their paths; the court reads a weight only from a
     leaf proven under the class's `artifact_root`, so an executor that ran other weights is convicted
-    at its first divergent leaf.
+    at its first divergent leaf. **Nodes load a class from a `PALWTIR2` file**
+    (`misaka-palw-tir-artifact::v2`): the pipeline's and every program's canonical bytes, the class
+    as declared, the tokenizer id, and one tensor table in exactly this inventory's order (program
+    by program, each program's declared params in PALWTIR1's order), 64-byte aligned, so the root
+    streams from the file front to back. It is not a consensus object; the node holds a class from it
+    only when its pipeline, programs, class and tokenizer are the row's and its tensors hash to the
+    row's `artifact_root`. PALWTIR1 readers are unchanged and refuse it by its magic;
 
   - **the closes as consensus objects** (`palw_gen_close_v1`): a V5 claim's execution root binds
     the job id, the class, the step leaf count, the step root and the generated ids; `GenCone` (tag
