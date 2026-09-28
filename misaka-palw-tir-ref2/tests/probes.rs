@@ -562,3 +562,41 @@ fn p09_cone_histories_and_layer_instances() {
     let f = first_step(&fp, &params_to(&params), &mut fst, 1);
     println!("p09 step with no history instance: ref2 {} / first {}", summary(&a), summary(&f));
 }
+
+/// Tensors whose values are outside their dtype, handed to both evaluators directly (bypassing
+/// this crate's checked constructor): as a param, a Fixed state, a carry-in and a supplied node.
+#[test]
+fn p10_values_outside_their_dtype() {
+    let raw = |dtype: DType, shape: &[u64], data: &[i128]| Tensor { dtype, shape: shape.to_vec(), data: data.to_vec() };
+    // A param i8[2] holding 200.
+    let mut b = ProgBuilder::new(HB, 16);
+    let w = b.param("w", DType::I8, &[2], false);
+    let pre = b.block("pre", vec![]);
+    let n0 = b.node(pre, Prim::Cast, &[Ref::Param(w)], fixed(DType::I32, &[2]), true);
+    b.carry_out(pre, &[n0]);
+    let post = b.block("post", vec![fixed(DType::I32, &[2])]);
+    let m0 = b.node(post, Prim::Clamp { lo: -5, hi: 5 }, &[Ref::CarryIn(0)], fixed(DType::I32, &[2]), true);
+    b.schedule(pre, &[], post, m0);
+    let p = b.finish();
+    let mut params = Params::new();
+    params.insert((w, None), raw(DType::I8, &[2], &[200, 1]));
+    let r = run_both("p10 param i8 holding 200", &p, &params, &[1]);
+    assert!(!r[0].0.is_ok() && !r[0].1.is_ok());
+    params.insert((w, None), raw(DType::I8, &[2], &[1]));
+    let r = run_both("p10 param with too few elements", &p, &params, &[1]);
+    assert!(!r[0].0.is_ok() && !r[0].1.is_ok());
+    // A Fixed state value outside its dtype, a carry-in outside its dtype, a supplied node outside.
+    let p = base(false);
+    let mut e = honest_env(3, 2);
+    e.fixed.insert(0, raw(DType::I32, &[2], &[1i128 << 40, 0]));
+    cone_both("p10 fixed value outside i32", &p, &Params::new(), 0, None, 4, &e, true);
+    let mut e = honest_env(3, 2);
+    e.carry_in.insert(0, raw(DType::I32, &[2], &[1i128 << 40, 0]));
+    cone_both("p10 carry-in outside i32", &p, &Params::new(), 1, None, 1, &e, true);
+    let mut e = honest_env(3, 2);
+    e.supplied.insert(2, raw(DType::I32, &[2], &[1i128 << 40, 0]));
+    cone_both("p10 supplied node outside i32", &p, &Params::new(), 0, None, 4, &e, true);
+    let mut e = honest_env(3, 2);
+    e.supplied.insert(2, raw(DType::I32, &[2], &[1]));
+    cone_both("p10 supplied node with too few elements", &p, &Params::new(), 0, None, 4, &e, true);
+}
