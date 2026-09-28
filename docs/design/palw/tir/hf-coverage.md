@@ -423,7 +423,51 @@ llama-likes. Still unsure:
 7. **Phase 0 (GDN)**: check whether the GGUF the live kernel reads has tiled V heads (§7) before
    "fixing" `vh % k_heads`; the IR's `head_map` makes both explicit.
 
-## 10. Reproducing
+## 10. Gate 2a — the lowering, the artifact, fidelity
+
+`misaka_palw_tir_lower::lower` expands the HL graph into a `TirProgramV1` whose structure depends on
+the architecture only; every number is a param filled per layer from the checkpoint and the
+calibration statistics (`lower::fill`), so a recalibration moves the artifact, never the program.
+
+| value | format |
+| --- | --- |
+| residual stream (the carry) | `i32`, ONE scale for the program (first-token massive activations need no position-0 lane) |
+| matmul inputs, op boundaries | A16: `i16` codes `±32767`, static scale per site and layer (headroom 2× over the calibrated absmax) |
+| weights | W8: `i8` per output row; `(m, s, z)` as three typed per-channel params (`i64`, `i8`, `i64`) |
+| norm unit rows, softmax probabilities, decays, gates | Q24 `i32` |
+| attention and router logits | Q14 `i32` (±131,072: Qwen2.5's layer-0 logits reach 24,000) |
+| activations | `Table(x; T)`: 65,536 `i16` entries per site and layer, the float function rounded on the code grid |
+
+**Outlier channels.** A value read only by projections splits off its `k ≤ 16` channels with the
+largest calibrated absmax; each gets its own activation scale and the projection routes them through
+`i32` fixed-point columns (`acc·2^f + acco`, exact), the rest stays W8 with those columns zeroed —
+the static int8 "outlier decomposition". Qwen2.5-1.5B's first-token MLP channels reach 1000× every
+other position; without the split, one static scale leaves ordinary tokens ~5 bits (KL 2.9 → 0.002).
+
+**Node economy.** NF-12 caps a block at 512 nodes. The lowering uses 21- and 17-node RMS/L2 unit-row
+composites that give the library templates' exact values (the exponent is taken out only when
+positive; `IntRsqrt` normalises the rest internally) and 3-node narrowings when there is no zero
+term; when a block still does not fit (GDN + MoE layers), it drops the splits of the most-read values
+and retries. Proposed for `tir_library_v1`: the lean norms.
+
+**Artifact.** `artifact::write` — a crate-local container (`PALWTIRA`: JSON header, typed
+little-endian tensors in `(param, layer)` order, per-tensor BLAKE2b-256, whole-artifact
+BLAKE2b-512 over the program digest and every tensor). Phase F (F3) grows it into `PALWTIR1`.
+
+**Fidelity on the tiny fixtures** (`tests/fidelity_tiny.rs`: calibration 6×32 random tokens, evaluation
+3×24 others; reference evaluator vs the f32 reference, which matches transformers 5.17 to ~1e-6):
+every one of the 49 lowerable fixtures passes the 04b §7 range analysis and agrees at
+
+| group | fixtures | top-1 | mean KL (nats) |
+| --- | --- | --- | --- |
+| dense (Llama, Mistral, Qwen2/3, Gemma 1/2/3, Phi, GPT-2/J/Neo/NeoX, Falcon incl. ALiBi, BLOOM, MPT, OPT, StarCoder2, StableLM, OLMo 1/2, Cohere 1/2, Nemotron, EXAONE-4, Granite, SmolLM3, VLM text decoders) | 39 | 0.90–1.00 | ≤ 2.3e-3 |
+| MoE (Mixtral, Qwen2/3-MoE, OLMoE, GraniteMoE, gpt-oss) | 6 | 0.97–1.00 | ≤ 2.6e-4 |
+| GDN hybrids (Qwen3-Next, Qwen3.5, Qwen3.5-MoE, Qwen3.5-VL) | 4 | 0.93–0.99 | ≤ 1.2e-2 |
+
+Not lowered yet (NOT_LOWERABLE, named): MLA / DeepSeek (and group-limited or sigmoid routing),
+Mamba, Mamba2, Jamba, RWKV-4.
+
+## 11. Reproducing
 
 ```sh
 export CARGO_TARGET_DIR=…/tir-lower-target CARGO_BUILD_JOBS=4

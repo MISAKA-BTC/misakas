@@ -149,7 +149,7 @@ macro_rules! recurrent {
     )*};
 }
 
-recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm);
+recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm, mamba, falcon_mamba, mamba2, jamba);
 
 /// Per-site errors of one fixture (debugging aid): `PALW_SITES=qwen3_5 cargo test … -- --ignored`.
 #[test]

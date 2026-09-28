@@ -408,6 +408,8 @@ struct Lb {
     absorbed: Vec<bool>,
     /// For each GatedDelta node: where its decay and beta come from.
     gdn: BTreeMap<usize, GdnInputs>,
+    /// For each scan node (Mamba, Mamba2): where its step size comes from.
+    ssm: BTreeMap<usize, SsmDt>,
     /// Name suffix for per-layer params whose base name another block already declared.
     suffix: String,
 }
@@ -442,9 +444,11 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
         requants: 0,
         absorbed: vec![false; blk.nodes.len()],
         gdn: BTreeMap::new(),
+        ssm: BTreeMap::new(),
         suffix,
     };
     gdn_patterns(hl, blk, &mut lb)?;
+    ssm_patterns(blk, &mut lb)?;
     concat_wants(blk, &mut lb);
     let tb = pb.blocks.len() as u8;
     let mut b = pb.block(&blk.name, if blk.role == BlockRole::Pre { vec![] } else { carry_sig });
@@ -1022,16 +1026,44 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             one(lower_gdn(b, cx, lb, &q, &k, &v, &a, &bb, &gi, st, dims, &site, &want)?)
         }
         Op::GatedRmsNorm { eps, groups, gate_first } => {
-            if *gate_first {
-                return Err(LowerError::not_lowerable("the gate-first gated RMSNorm (Mamba2) is not in Gate 2a"));
-            }
             let x = operand(lb, node.inputs[0])?;
             let z = operand(lb, node.inputs[1])?;
             let z = codes(b, cx, lb, &z)?;
             let gain = pidx(node.inputs[2])?;
-            let v = lower_gated_norm(b, cx, lb, &x, &z, gain, *eps, *groups, &site, &want)?;
+            let v = if *gate_first {
+                let x = codes(b, cx, lb, &x)?;
+                lower_gated_norm_first(b, cx, lb, &x, &z, gain, *eps, *groups, &site, &want)?
+            } else {
+                lower_gated_norm(b, cx, lb, &x, &z, gain, *eps, *groups, &site, &want)?
+            };
             note_resid(cx, lb, &v);
             one(v)
+        }
+        Op::SelectiveScan { inner, state } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let bb = operand(lb, node.inputs[2])?;
+            let bb = codes(b, cx, lb, &bb)?;
+            let cc = operand(lb, node.inputs[3])?;
+            let cc = codes(b, cx, lb, &cc)?;
+            let (ap, dp) = (pidx(node.inputs[4])?, pidx(node.inputs[5])?);
+            let hl::Ref::State(st) = node.inputs[6] else { return Err(LowerError::eval("internal: scan without a state")) };
+            let dt = lb.ssm.get(&i).cloned().ok_or_else(|| LowerError::eval("internal: scan step size not matched"))?;
+            let dims = SsmDims { heads: *inner, p: 1, groups: 1, n: *state, per_state_decay: true };
+            one(lower_ssm(b, cx, lb, &x, &bb, &cc, ap, dp, st, &dt, dims, &site, &want)?)
+        }
+        Op::Ssd { heads, head_dim, groups, state } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let bb = operand(lb, node.inputs[2])?;
+            let bb = codes(b, cx, lb, &bb)?;
+            let cc = operand(lb, node.inputs[3])?;
+            let cc = codes(b, cx, lb, &cc)?;
+            let (ap, dp) = (pidx(node.inputs[4])?, pidx(node.inputs[5])?);
+            let hl::Ref::State(st) = node.inputs[6] else { return Err(LowerError::eval("internal: scan without a state")) };
+            let dt = lb.ssm.get(&i).cloned().ok_or_else(|| LowerError::eval("internal: scan step size not matched"))?;
+            let dims = SsmDims { heads: *heads, p: *head_dim, groups: *groups, n: *state, per_state_decay: false };
+            one(lower_ssm(b, cx, lb, &x, &bb, &cc, ap, dp, st, &dt, dims, &site, &want)?)
         }
         other => Err(LowerError::not_lowerable(format!("op {} is not in Gate 2a (dense decoders only)", other.name()))),
     }
@@ -2463,6 +2495,274 @@ fn lower_gated_norm(
         }),
     )?;
     let r = narrow(b, p, m, s, None, want.dt);
+    if want.dt == DType::I16 {
+        b.commit(r);
+    }
+    Ok(Val { r, dt: want.dt, key: want.key.clone(), len: n, site: site.to_string() })
+}
+
+/// Where a scan's step size comes from: `dt = clamp(softplus(proj (+ dt_bias)), lo, hi)`, the
+/// softplus/add/clamp nodes absorbed and the projection narrowed to Q24.
+#[derive(Clone, Debug)]
+struct SsmDt {
+    proj: u32,
+    bias: Option<u32>,
+    clamp: Option<(f64, f64)>,
+}
+
+fn ssm_patterns(blk: &hl::Block, lb: &mut Lb) -> Result<()> {
+    let mut consumers = vec![0usize; blk.nodes.len()];
+    for n in &blk.nodes {
+        for r in &n.inputs {
+            if let hl::Ref::Node(j, _) = r {
+                consumers[*j as usize] += 1;
+            }
+        }
+    }
+    let node_of = |r: hl::Ref| if let hl::Ref::Node(j, 0) = r { Some(j as usize) } else { None };
+    for (i, n) in blk.nodes.iter().enumerate() {
+        if !matches!(n.op, Op::SelectiveScan { .. } | Op::Ssd { .. }) {
+            continue;
+        }
+        let bad = || LowerError::not_lowerable("a scan whose step size is not softplus(projection (+ bias)), optionally clamped");
+        let mut at = node_of(n.inputs[1]).ok_or_else(bad)?;
+        let mut absorbed = Vec::new();
+        let mut clamp = None;
+        if let Op::Clamp { lo, hi } = blk.nodes[at].op {
+            clamp = Some((lo, hi));
+            absorbed.push(at);
+            at = node_of(blk.nodes[at].inputs[0]).ok_or_else(bad)?;
+        }
+        let Op::Act(Act::Softplus) = blk.nodes[at].op else { return Err(bad()) };
+        absorbed.push(at);
+        at = node_of(blk.nodes[at].inputs[0]).ok_or_else(bad)?;
+        let mut bias = None;
+        if let (Op::Add, [a, hl::Ref::Param(p)]) = (&blk.nodes[at].op, blk.nodes[at].inputs.as_slice()) {
+            bias = Some(*p);
+            absorbed.push(at);
+            at = node_of(*a).ok_or_else(bad)?;
+        }
+        if !matches!(blk.nodes[at].op, Op::Linear { .. }) || consumers[at] != 1 {
+            return Err(bad());
+        }
+        for j in absorbed {
+            if consumers[j] != 1 {
+                return Err(bad());
+            }
+            lb.absorbed[j] = true;
+        }
+        lb.wants[at] = Some(Want { dt: DType::I32, key: ScaleKey::q24() });
+        lb.ssm.insert(i, SsmDt { proj: at as u32, bias, clamp });
+    }
+    Ok(())
+}
+
+struct SsmDims {
+    /// Mamba: the inner channels (one "head" each); Mamba2: the heads.
+    heads: usize,
+    /// Channels per head (Mamba: 1).
+    p: usize,
+    /// B/C groups (Mamba: 1, shared by every channel).
+    groups: usize,
+    n: usize,
+    /// Mamba's `A` is `[inner, N]` (a decay per state); Mamba2's is `[heads]`.
+    per_state_decay: bool,
+}
+
+/// One step of a selective state-space scan (Mamba's `selective_scan`, Mamba2's SSD at one
+/// position), state `h [heads, p, N]` in `i32` at a calibrated scale:
+///
+/// ```text
+/// Δ      = clamp(softplus(dt_proj (+ dt_bias)))                     Q24  (library softplus_q36)
+/// decay  = exp(A·Δ)                        Q24  (the decay_q36 steps after its softplus)
+/// h'     = (decay · h) >> 24  +  N(Δ · x · B)                      the input term narrowed to h's scale
+/// y      = N(Σ_n C_n · h'_n) + N(D · x)                            two narrowings to y's codes
+/// ```
+#[allow(clippy::too_many_arguments)]
+fn lower_ssm(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    bb: &Val,
+    cc: &Val,
+    ap: u32,
+    dp: u32,
+    st: u32,
+    dt: &SsmDt,
+    dims: SsmDims,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let hl = cx.hl;
+    let SsmDims { heads, p, groups, n, per_state_decay } = dims;
+    let (h32, p32, n32, g32) = (heads as u32, p as u32, n as u32, groups as u32);
+    let pl = per_layer(lb);
+    let dv = lb.vals[dt.proj as usize][0].clone().ok_or_else(|| LowerError::eval("internal: scan step projection not lowered"))?;
+    let mut d = dv.r;
+    if let Some(bp) = dt.bias {
+        let bias = decl(
+            b,
+            cx,
+            lb,
+            &format!("{site}.dt_bias"),
+            DType::I32,
+            &[heads],
+            pl,
+            Arc::new(move |c| Ok(IntTensor::i32(vec![heads], c.f(bp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))),
+        )?;
+        let s = b.add(d, bias, DType::I64);
+        d = b.clamp(s, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    }
+    let sp = b.softplus_q36(d);
+    let sp = match dt.clamp {
+        Some((lo, hi)) => {
+            let lo = (lo * (1u64 << 24) as f64).round().clamp(0.0, i32::MAX as f64) as i64;
+            let hi = if hi.is_finite() { (hi * (1u64 << 24) as f64).round().clamp(0.0, i32::MAX as f64) as i64 } else { i32::MAX as i64 };
+            b.clamp(sp, lo, hi.max(lo), DType::I32)
+        }
+        None => b.clamp(sp, 0, i32::MAX as i64, DType::I32),
+    };
+    let sp = b.commit(sp);
+    // decay = exp(−c·Δ), c = −A ≥ 0 in Q24: Mamba `[heads, 1, N]`, Mamba2 `[heads, 1, 1]`.
+    let a_shape: Vec<usize> = if per_state_decay { vec![heads, n] } else { vec![heads] };
+    let an = a_shape.iter().product::<usize>();
+    let cpar = decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.decay_c"),
+        DType::I64,
+        &[an],
+        pl,
+        Arc::new(move |c| Ok(IntTensor::i64(vec![an], c.f(ap)?.data.iter().map(|v| (-(*v as f64) * (1u64 << 24) as f64).round().max(0.0) as i64).collect()))),
+    )?;
+    let cr = if per_state_decay { b.reshape_fixed(cpar, &[h32, 1, n32]) } else { b.reshape_fixed(cpar, &[h32, 1, 1]) };
+    let spr = b.reshape_fixed(sp, &[h32, 1, 1]);
+    let prod = b.mul(cr, spr, DType::I128);
+    let arg = b.shr(prod, 24, Rounding::Floor, DType::I128);
+    let arg = b.clamp(arg, 0, 1i64 << 31, DType::I64);
+    let zero = b.c(DType::I32, 0);
+    let neg = b.sub(zero, arg, DType::I64);
+    let neg = b.clamp(neg, i32::MIN as i64, 0, DType::I32);
+    let decay = b.exp_refined_q36(neg);
+    // The state.
+    let sd = &hl.states[st as usize];
+    let ts = match cx.tstate.get(&st) {
+        Some(t) => *t,
+        None => {
+            let t = b.pb.fixed_state(&sd.name, DType::I32, &[h32, p32, n32], -(i32::MAX as i64), i32::MAX as i64, true);
+            cx.tstate.insert(st, t);
+            t
+        }
+    };
+    let kept = b.mul(tir::Ref::State(ts), decay, DType::I64);
+    let kept = b.shr(kept, 24, Rounding::HalfAwayFromZero, DType::I64);
+    // Input term Δ·x·B → h's scale.
+    let xr = b.reshape_fixed(x.r, &[h32, p32, 1]);
+    let map_groups = |b: &mut BlockBuilder<'_>, v: tir::Ref| -> tir::Ref {
+        if groups == 1 {
+            b.reshape_fixed(v, &[1, 1, n32])
+        } else {
+            let r = h32 / g32;
+            let y = b.reshape_fixed(v, &[g32, 1, n32]);
+            let y = b.broadcast(y, &[Dim::Fixed(g32), Dim::Fixed(r), Dim::Fixed(n32)]);
+            b.reshape_fixed(y, &[h32, 1, n32])
+        }
+    };
+    let br = map_groups(b, bb.r);
+    let dx = b.mul(spr, xr, DType::I64);
+    let u = b.mul(dx, br, DType::I64);
+    let hkey = ScaleKey::site(vec![format!("{site}.state")], true);
+    let (kx, kb, kh) = (x.key.clone(), bb.key.clone(), hkey.clone());
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.input"),
+        1,
+        Arc::new(move |c| Ok(vec![c.scale(&kx)? * c.scale(&kb)? / (1u64 << 24) as f64 / c.scale(&kh)?])),
+    )?;
+    let un = narrow(b, u, m, s, None, DType::I32);
+    let hn = b.add(kept, un, DType::I64);
+    let hn = b.state_write(ts, hn);
+    // y = Σ_n C_n h'_n + D·x.
+    let cr = map_groups(b, cc.r);
+    let ct = b.transpose(cr, &[0, 2, 1]);
+    let acc = b.matmul(hn, ct, DType::I64);
+    let acc = b.reshape_fixed(acc, &[(heads * p) as u32]);
+    let yk = want.key.clone();
+    let yn = heads * p;
+    let (kc, kh2, ky) = (cc.key.clone(), hkey.clone(), yk.clone());
+    let (m, s) = decl_ms(b, cx, lb, site, 1, Arc::new(move |c| Ok(vec![c.scale(&kc)? * c.scale(&kh2)? / c.scale(&ky)?])))?;
+    let y1 = narrow(b, acc, m, s, None, DType::I32);
+    let (kx2, ky2) = (x.key.clone(), yk.clone());
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.skip"),
+        heads,
+        Arc::new(move |c| {
+            let dvv = c.f(dp)?.data.clone();
+            let (sx, sy) = (c.scale(&kx2)?, c.scale(&ky2)?);
+            Ok(dvv.iter().map(|d| *d as f64 * sx / sy).collect())
+        }),
+    )?;
+    let m = b.reshape_fixed(m, &[h32, 1]);
+    let s = b.reshape_fixed(s, &[h32, 1]);
+    let x2 = b.reshape_fixed(x.r, &[h32, p32]);
+    let y2 = narrow(b, x2, m, s, None, DType::I32);
+    let y2 = b.reshape_fixed(y2, &[yn as u32]);
+    let y = b.add(y1, y2, DType::I64);
+    let (lo, hi) = code_bounds(want.dt);
+    let r = b.clamp(y, lo, hi, want.dt);
+    b.commit(r);
+    Ok(Val { r, dt: want.dt, key: want.key.clone(), len: yn, site: site.to_string() })
+}
+
+/// Mamba2's `RMSNorm(y · silu(z)) · w` per group: the product of two code rows is exact in `i32`
+/// and the norm is scale-free, so the gated row goes straight into the unit-row composite.
+#[allow(clippy::too_many_arguments)]
+fn lower_gated_norm_first(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    z: &Val,
+    gain: u32,
+    eps: f64,
+    groups: usize,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let n = x.len;
+    let g = n / groups;
+    let gate = lower_table_named(b, cx, lb, z, TableFn::Act(Act::Silu), &format!("{site}.gate"))?;
+    let p = b.mul(x.r, gate.r, DType::I32);
+    let pr = b.reshape_fixed(p, &[groups as u32, g as u32]);
+    let (kx, kg) = (x.key.clone(), gate.key.clone());
+    let eps_q = Arc::new(move |c: &FillCtx<'_>| -> Result<f64> {
+        let s = c.scale(&kx)? * c.scale(&kg)?;
+        Ok(eps * (1u64 << 24) as f64 / (s * s))
+    });
+    let eps_p = decl_eps(b, cx, lb, site, eps_q)?;
+    let u = rms_unit(b, pr, eps_p);
+    let u = b.reshape_fixed(u, &[n as u32]);
+    let ky = want.key.clone();
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        site,
+        n,
+        Arc::new(move |c| {
+            let w = c.f(gain)?.data.clone();
+            let sy = c.scale_vec(&ky, n)?;
+            Ok((0..n).map(|i| w[if w.len() == n { i } else { i % w.len() }] as f64 / (1u64 << 24) as f64 / sy[i]).collect())
+        }),
+    )?;
+    let r = narrow(b, u, m, s, None, want.dt);
     if want.dt == DType::I16 {
         b.commit(r);
     }
