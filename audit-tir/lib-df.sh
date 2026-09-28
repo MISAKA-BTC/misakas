@@ -105,6 +105,16 @@ salt() {
 manifest() { python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print($1)" "$KR/manifest.json"; }
 ir_class_id() { tr -d ' \n' < "$WORK_DIR/ir-class.id"; }
 small_class_id() { tr -d ' \n' < "$WORK_DIR/small-class.id"; }
+# Is the class already on the drill chain (getPalwModelRegistry through new3)? Then its registrant is restarted
+# WITHOUT --palw-register-class: the int-8 release (tir/node up to 7a9ab18da) builds nothing for a class the
+# chain holds, never marks its registration done, and skips every duty after it in the panel's tick — readiness
+# proofs included — for as long as the process lives (fixed on tir/node after 7a9ab18da). Not reachable (the
+# chain is not up yet): the flag stays, as the first registration needs it.
+class_on_chain() {
+    local cid=$1
+    [ -n "$cid" ] || return 1
+    python3 "$A/rpc.py" call --port "$(jport new3)" getPalwModelRegistry '{}' 2>/dev/null | grep -q "$cid"
+}
 
 # The shared ports and logs, exported for Phase F's step scripts.
 export_layout() {
@@ -146,9 +156,12 @@ node_args() {
     [ "$ir" = 1 ] && [ -s "$SMALL_ARTIFACT" ] && a+=("--palw-class-artifact=$SMALL_ARTIFACT")
     case $role in
         floor) a+=(--palw-produce) ;;
-        ir) a+=(--palw-produce "--palw-register-class=$IR_MODEL_ID" "--palw-producer-class=$(ir_class_id)") ;;
-        ir2) [ -s "$WORK_DIR/small-class.id" ] &&
-            a+=(--palw-produce "--palw-register-class=$SMALL_MODEL_ID" "--palw-producer-class=$(small_class_id)") ;;
+        ir) a+=(--palw-produce "--palw-producer-class=$(ir_class_id)")
+            class_on_chain "$(ir_class_id)" || a+=("--palw-register-class=$IR_MODEL_ID") ;;
+        ir2) if [ -s "$WORK_DIR/small-class.id" ]; then
+                a+=(--palw-produce "--palw-producer-class=$(small_class_id)")
+                class_on_chain "$(small_class_id)" || a+=("--palw-register-class=$SMALL_MODEL_ID")
+            fi ;;
     esac
     [ "$hb" = 1 ] && a+=("--palw-heartbeat-miner-address=$(manifest "m['heartbeat'][$k]['address']")" --enable-unsynced-mining)
     local m; for m in $(new_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done
