@@ -154,11 +154,25 @@ fn indexed(v: &Value, key: &str) -> BTreeMap<u64, Tensor> {
 
 fn run_program_file(path: &std::path::Path) -> (usize, usize, Vec<String>) {
     let d = read_json(path);
-    assert_eq!(d["format"], "palw-tir-v1/program-vectors/2");
+    assert_eq!(d["format"], "palw-tir-v1/program-vectors/3");
     let name = d["name"].as_str().unwrap().to_string();
     let bytes = hex_decode(d["program_borsh_hex"].as_str().unwrap());
     let prog = decode_canonical(&bytes).unwrap_or_else(|e| panic!("{name}: the program is refused: {e}"));
     assert_eq!(encode(&prog), bytes);
+    // §3.6: the identity, computed from the stated definition.
+    let root = hex_encode(&misaka_palw_tir_ref2::graph_ir_root(&prog));
+    assert_eq!(root, d["graph_ir_root_hex"].as_str().unwrap(), "{name}: graph_ir_root");
+    if name == "fixed-state-saturation" {
+        // The value §3.6 prints.
+        assert_eq!(
+            root,
+            concat!(
+                "dcc4422a07d843bd575c689b18c8b2e41812d69589ca97749d722b2ba987ea80",
+                "eb8ad3ffa4dcac6672befc8ecc0c909f6f0bc09711336095def307d6cfa89c88"
+            )
+        );
+        assert_eq!(bytes.len(), 470);
+    }
     let params = params_of(&prog, &d["params"]);
     let mut total = 0;
     let mut ok = 0;

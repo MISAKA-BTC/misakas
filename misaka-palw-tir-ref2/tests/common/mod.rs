@@ -3,6 +3,7 @@
 
 pub mod bridge;
 pub mod progen;
+pub mod qwen;
 
 use std::path::PathBuf;
 

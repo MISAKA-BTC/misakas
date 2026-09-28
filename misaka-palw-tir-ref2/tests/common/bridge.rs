@@ -240,3 +240,256 @@ pub fn first_eval_primitive(p: &Prim, ins: &[Tensor], out_dtype: DType, out_shap
 pub fn map_keys<K: Ord + Clone, V>(m: &BTreeMap<K, V>) -> Vec<K> {
     m.keys().cloned().collect()
 }
+
+// ------------------------------------------------------------------ admission (black box)
+
+use ref2::admit::{Admission, AdmitError, AdmitInputs, Ceilings, Cost, Leaf};
+
+pub fn ceilings_from(c: &first::admit::TirCeilingsV1) -> Ceilings {
+    Ceilings {
+        max_tile_macs: c.max_tile_macs,
+        max_tile_transcendentals: c.max_tile_transcendentals,
+        max_tile_opened_bytes: c.max_tile_opened_bytes,
+        max_tile_operands: c.max_tile_operands,
+        max_position_macs: c.max_position_macs,
+        max_position_transcendentals: c.max_position_transcendentals,
+        max_state_bytes: c.max_state_bytes,
+        max_step_leaves: c.max_step_leaves,
+        max_checkpoint_interval: c.max_checkpoint_interval,
+        max_cone_work: c.max_cone_work,
+    }
+}
+
+pub fn ceilings_to(c: &Ceilings) -> first::admit::TirCeilingsV1 {
+    first::admit::TirCeilingsV1 {
+        max_tile_macs: c.max_tile_macs,
+        max_tile_transcendentals: c.max_tile_transcendentals,
+        max_tile_opened_bytes: c.max_tile_opened_bytes,
+        max_tile_operands: c.max_tile_operands,
+        max_position_macs: c.max_position_macs,
+        max_position_transcendentals: c.max_position_transcendentals,
+        max_state_bytes: c.max_state_bytes,
+        max_step_leaves: c.max_step_leaves,
+        max_checkpoint_interval: c.max_checkpoint_interval,
+        max_cone_work: c.max_cone_work,
+    }
+}
+
+pub fn inputs_to(i: &AdmitInputs) -> first::admit::TirAdmitInputsV1 {
+    first::admit::TirAdmitInputsV1 { tile_len: i.tile_len, h_chunk: i.h_chunk, ceilings: ceilings_to(&i.ceilings) }
+}
+
+pub fn cost_from(c: &first::admit::CostV1) -> Cost {
+    Cost {
+        macs: c.macs,
+        elementwise: c.elementwise,
+        transcendentals: c.transcendentals,
+        bytes_read: c.bytes_read,
+        bytes_written: c.bytes_written,
+    }
+}
+
+pub fn leaf_from(l: &first::admit::LeafV1) -> Leaf {
+    use first::admit::LeafV1 as L;
+    match *l {
+        L::Commit(k) => Leaf::Commit(k),
+        L::CarryIn(k) => Leaf::CarryIn(k),
+        L::State(j) => Leaf::State(j),
+        L::History(j) => Leaf::History(j),
+        L::Param(j) => Leaf::Param(j),
+        L::Const(j) => Leaf::Const(j),
+        L::Input(j) => Leaf::Input(j),
+    }
+}
+
+/// The outcome of an admission, reduced to comparable data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdmitOutcome {
+    Admitted(Box<AdmittedView>),
+    Program(Class),
+    Exceeds(String, u64),
+    Inputs,
+    Panic(String),
+}
+
+/// Every derived quantity the first implementation's API exposes, in this crate's terms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmittedView {
+    pub intervals: Vec<Vec<(i128, i128)>>,
+    pub node_costs: Vec<Vec<Cost>>,
+    pub position: (Cost, u64, u64, u64, u64),
+    /// (block, node) → (nodes, leaves, whole, tiles, tile, tile_opened, operands, h_reductions,
+    /// chunk, chunk_opened); nodes and leaves sorted.
+    pub cones: Vec<ConeView>,
+    /// state → (closure sorted, groups, per_position, interval)
+    pub states: Vec<(u16, Vec<u16>, u64, Cost, u32)>,
+    pub checkpoint_interval: u32,
+    pub cone_work: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConeView {
+    pub block: u8,
+    pub node: u16,
+    pub nodes: Vec<u16>,
+    pub leaves: Vec<Leaf>,
+    pub whole: Cost,
+    pub tiles: u64,
+    pub tile: Cost,
+    pub tile_opened_bytes: u64,
+    pub operands: u64,
+    pub h_reductions: Vec<u16>,
+    pub chunk: Option<Cost>,
+    pub chunk_opened_bytes: Option<u64>,
+}
+
+pub fn view_mine(a: &Admission) -> AdmittedView {
+    AdmittedView {
+        intervals: a.intervals.iter().map(|b| b.iter().map(|i| (i.lo, i.hi)).collect()).collect(),
+        node_costs: a.node_costs.clone(),
+        position: (
+            a.position.cost,
+            a.position.state_bytes,
+            a.position.peak_live_bytes,
+            a.position.commit_lanes,
+            a.position.step_leaves,
+        ),
+        cones: a
+            .cones
+            .iter()
+            .map(|c| {
+                let mut nodes = c.nodes.clone();
+                nodes.sort();
+                let mut leaves = c.leaves.clone();
+                leaves.sort();
+                leaves.dedup();
+                let mut hr = c.h_reductions.clone();
+                hr.sort();
+                ConeView {
+                    block: c.block,
+                    node: c.node,
+                    nodes,
+                    leaves,
+                    whole: c.whole,
+                    tiles: c.tiles,
+                    tile: c.tile,
+                    tile_opened_bytes: c.tile_opened_bytes,
+                    operands: c.operands,
+                    h_reductions: hr,
+                    chunk: c.chunk,
+                    chunk_opened_bytes: c.chunk_opened_bytes,
+                }
+            })
+            .collect(),
+        states: a
+            .states
+            .iter()
+            .map(|s| {
+                let mut cl = s.closure.clone();
+                cl.sort();
+                (s.state, cl, s.groups, s.per_position, s.interval)
+            })
+            .collect(),
+        checkpoint_interval: a.checkpoint_interval,
+        cone_work: a.cone_work,
+    }
+}
+
+pub fn view_first(a: &first::admit::TirAdmissionV1) -> AdmittedView {
+    AdmittedView {
+        intervals: a.intervals.iter().map(|b| b.iter().map(|i| (i.lo, i.hi)).collect()).collect(),
+        node_costs: a.node_costs.iter().map(|b| b.iter().map(cost_from).collect()).collect(),
+        position: (
+            cost_from(&a.position.cost),
+            a.position.state_bytes,
+            a.position.peak_live_bytes,
+            a.position.commit_lanes,
+            a.position.step_leaves,
+        ),
+        cones: a
+            .cones
+            .iter()
+            .map(|c| {
+                let mut nodes = c.nodes.clone();
+                nodes.sort();
+                let mut leaves: Vec<Leaf> = c.leaves.iter().map(leaf_from).collect();
+                leaves.sort();
+                leaves.dedup();
+                let mut hr = c.h_reductions.clone();
+                hr.sort();
+                ConeView {
+                    block: c.block,
+                    node: c.node,
+                    nodes,
+                    leaves,
+                    whole: cost_from(&c.whole),
+                    tiles: c.tiles,
+                    tile: cost_from(&c.tile),
+                    tile_opened_bytes: c.tile_opened_bytes,
+                    operands: c.operands,
+                    h_reductions: hr,
+                    chunk: c.chunk.as_ref().map(cost_from),
+                    chunk_opened_bytes: c.chunk_opened_bytes,
+                }
+            })
+            .collect(),
+        states: a
+            .states
+            .iter()
+            .map(|s| {
+                let mut cl = s.closure.clone();
+                cl.sort();
+                (s.state, cl, s.groups, cost_from(&s.per_position), s.interval)
+            })
+            .collect(),
+        checkpoint_interval: a.checkpoint_interval,
+        cone_work: a.cone_work,
+    }
+}
+
+pub fn admit_mine(bytes: &[u8], inputs: &AdmitInputs) -> AdmitOutcome {
+    admit_mine_with(bytes, inputs, ref2::admit::Readings::default())
+}
+
+pub fn admit_mine_with(bytes: &[u8], inputs: &AdmitInputs, readings: ref2::admit::Readings) -> AdmitOutcome {
+    match ref2::admit::admit_with(bytes, inputs, readings) {
+        Ok(a) => AdmitOutcome::Admitted(Box::new(view_mine(&a))),
+        Err(AdmitError::Program(e)) => AdmitOutcome::Program(e.class),
+        Err(AdmitError::Exceeds { limit, value, .. }) => AdmitOutcome::Exceeds(limit.to_string(), value),
+        Err(AdmitError::Inputs(_)) => AdmitOutcome::Inputs,
+    }
+}
+
+pub fn admit_first(bytes: &[u8], inputs: &AdmitInputs) -> AdmitOutcome {
+    let fi = inputs_to(inputs);
+    let r = catch(|| Ok(first::admit::tir_admit_v1(bytes, &fi)));
+    match r {
+        Outcome::Ok(Ok(a)) => AdmitOutcome::Admitted(Box::new(view_first(&a))),
+        Outcome::Ok(Err(first::admit::TirAdmitError::Program(e))) => AdmitOutcome::Program(class_from(e.kind)),
+        Outcome::Ok(Err(first::admit::TirAdmitError::Exceeds { limit, value, .. })) => {
+            AdmitOutcome::Exceeds(limit_name(limit).to_string(), value)
+        }
+        Outcome::Ok(Err(first::admit::TirAdmitError::Inputs(_))) => AdmitOutcome::Inputs,
+        Outcome::Err(c) => AdmitOutcome::Program(c),
+        Outcome::Panic(s) => AdmitOutcome::Panic(s),
+    }
+}
+
+/// The first implementation's refusal names, mapped onto this crate's (04b names no limit strings;
+/// this crate names each after its ceiling). A C_j of 0 is named once for MACs, transcendentals
+/// and a zero interval cap alike, so it maps to a shared name on both sides.
+pub fn limit_name(first_name: &str) -> &'static str {
+    match first_name {
+        "tile MACs" => "max_tile_macs",
+        "tile transcendentals" => "max_tile_transcendentals",
+        "tile opened bytes" => "max_tile_opened_bytes",
+        "tile operands" => "max_tile_operands",
+        "position MACs" => "max_position_macs",
+        "position transcendentals" => "max_position_transcendentals",
+        "state bytes" => "max_state_bytes",
+        "step leaves per position" => "max_step_leaves",
+        "cone work" => "max_cone_work",
+        "one position's state replay (MACs or transcendentals)" => "state_replay",
+        _ => "UNKNOWN LIMIT NAME",
+    }
+}

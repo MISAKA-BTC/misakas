@@ -28,11 +28,14 @@ pub struct GenCfg {
     /// (revision 2) refuses, generated to check that both implementations refuse them.
     pub post_writes: bool,
     pub max_nodes: usize,
+    /// Keep only nodes whose §7 obligations hold (this crate's transfer functions), so that the
+    /// program passes admission's range analysis and reaches the cones and the replay.
+    pub range_safe: bool,
 }
 
 impl Default for GenCfg {
     fn default() -> Self {
-        GenCfg { post_writes: false, max_nodes: 18 }
+        GenCfg { post_writes: false, max_nodes: 18, range_safe: false }
     }
 }
 
@@ -125,6 +128,8 @@ struct BB {
     role: Role,
     window: Option<u32>,
     nodes: Vec<Node>,
+    /// The §7 interval of every node (for range-safe generation).
+    ivs: Vec<ref2::admit::Interval>,
     pool: Vec<(Ref, TensorType)>,
     written: BTreeSet<u16>,
     appended: BTreeSet<u16>,
@@ -331,10 +336,40 @@ impl<'r> G<'r> {
         if idx >= 500 {
             return None;
         }
+        // §7: the node's interval from its operands'; a broken obligation discards it when
+        // generating range-safe programs.
+        let ins: Vec<ref2::admit::Interval> = inputs.iter().map(|(r, t)| self.iv_of_ref(bb, r, t)).collect();
+        let h = bb.window.map(|w| w as u64).unwrap_or(1);
+        let iv = match ref2::admit::transfer(&prim, &ins, &tys, &out, h, &self.states, 0, idx) {
+            Ok(iv) => iv,
+            Err(_) if self.cfg.range_safe => return None,
+            Err(_) => ref2::admit::Interval { lo: out.dtype.min(), hi: out.dtype.max() },
+        };
+        bb.ivs.push(iv);
         bb.nodes.push(Node { prim, inputs: inputs.iter().map(|(r, _)| *r).collect(), out: out.clone(), commit });
         let r = (Ref::Node(idx as u16), out);
         bb.pool.push(r.clone());
         Some(r)
+    }
+
+    /// The §7 interval of an operand.
+    fn iv_of_ref(&self, bb: &BB, r: &Ref, t: &TensorType) -> ref2::admit::Interval {
+        use ref2::admit::Interval;
+        match *r {
+            Ref::Node(k) => bb.ivs[k as usize],
+            Ref::Const(j) => {
+                let c = &self.consts[j as usize];
+                let v = Tensor::from_le_bytes(c.dtype, c.shape.iter().map(|&d| d as u64).collect(), &c.data).unwrap();
+                Interval { lo: *v.data.iter().min().unwrap(), hi: *v.data.iter().max().unwrap() }
+            }
+            Ref::State(j) => match self.states[j as usize].kind {
+                StateKind::Fixed { lo, hi } => Interval { lo: lo as i128, hi: hi as i128 },
+                StateKind::Hist { .. } => Interval { lo: t.dtype.min(), hi: t.dtype.max() },
+            },
+            Ref::Input(0) => Interval { lo: 0, hi: self.token_bound as i128 - 1 },
+            Ref::Input(_) => Interval { lo: 0, hi: self.history_bound as i128 - 1 },
+            Ref::CarryIn(_) | Ref::Param(_) => Interval { lo: t.dtype.min(), hi: t.dtype.max() },
+        }
     }
 
     /// A shape broadcast-compatible with `s` (dims turned to 1, leading dims dropped or added).
@@ -1014,7 +1049,8 @@ impl<'r> G<'r> {
     }
 
     fn gen_block(&mut self, b: usize, role: Role, carry_in: &[TensorType], window: Option<u32>) -> BB {
-        let mut bb = BB { b, role, window, nodes: vec![], pool: vec![], written: BTreeSet::new(), appended: BTreeSet::new() };
+        let mut bb =
+            BB { b, role, window, nodes: vec![], ivs: vec![], pool: vec![], written: BTreeSet::new(), appended: BTreeSet::new() };
         for (k, t) in carry_in.iter().enumerate() {
             bb.pool.push((Ref::CarryIn(k as u8), t.clone()));
         }
@@ -1039,6 +1075,7 @@ impl<'r> G<'r> {
                 // No history after all: the block has no window, and no H may appear in it.
                 bb.window = None;
                 bb.nodes.clear();
+                bb.ivs.clear();
                 bb.pool.retain(|(r, _)| !matches!(r, Ref::Node(_)));
             }
         }
@@ -1319,4 +1356,242 @@ pub fn gen_program(rng: &mut R, cfg: GenCfg) -> Generated {
 
 fn rng_of<'a>(r: &'a mut &mut R) -> &'a mut R {
     r
+}
+
+/// A structural mutation of a program (every field class), for refusal differentials.
+pub fn mutate(rng: &mut R, p: &mut Program) -> String {
+    let nb = p.blocks.len();
+    let b = rng.gen_range(0..nb);
+    let nn = p.blocks[b].nodes.len();
+    let i = rng.gen_range(0..nn);
+    let k = rng.gen_range(0..40);
+    let dim = |rng: &mut R| {
+        pick(
+            rng,
+            &[Dim::Fixed(0), Dim::Fixed(1), Dim::Fixed(2), Dim::Fixed(3), Dim::Fixed(1 << 24), Dim::Fixed((1 << 24) + 1), Dim::H],
+        )
+    };
+    match k {
+        0 => p.version = pick(rng, &[0u16, 2, u16::MAX]),
+        1 => p.history_bound = pick(rng, &[0u32, 1, 1 << 17, (1 << 18) + 1, 1 << 20, 1 << 22, u32::MAX]),
+        2 => p.token_bound = 0,
+        3 => p.schedule.pre = rng.gen_range(0..=nb as u8),
+        4 => p.schedule.post = rng.gen_range(0..=nb as u8),
+        5 => {
+            let l = rng.gen_range(0..=nb as u8);
+            p.schedule.layers.push(l)
+        }
+        6 => {
+            if !p.schedule.layers.is_empty() {
+                p.schedule.layers.pop();
+            }
+        }
+        7 => p.logits = rng.gen_range(0..=p.blocks[p.schedule.post as usize].nodes.len() as u16),
+        8 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.commit = !n.commit;
+        }
+        9 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.out.dtype = pick(rng, &DType::ALL);
+        }
+        10 => {
+            let n = &mut p.blocks[b].nodes[i];
+            if n.out.shape.is_empty() {
+                n.out.shape.push(dim(rng));
+            } else {
+                let j = rng.gen_range(0..n.out.shape.len());
+                n.out.shape[j] = dim(rng);
+            }
+        }
+        11 => {
+            let n = &mut p.blocks[b].nodes[i];
+            if !n.inputs.is_empty() {
+                let j = rng.gen_range(0..n.inputs.len());
+                n.inputs[j] = match rng.gen_range(0..6) {
+                    0 => Ref::Node(rng.gen_range(0..=nn as u16)),
+                    1 => Ref::CarryIn(rng.gen_range(0..4)),
+                    2 => Ref::Param(rng.gen_range(0..=p.params.len() as u16)),
+                    3 => Ref::Const(rng.gen_range(0..=p.consts.len() as u16)),
+                    4 => Ref::State(rng.gen_range(0..=p.states.len() as u16)),
+                    _ => Ref::Input(rng.gen_range(0..3)),
+                };
+            }
+        }
+        12 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.inputs.push(Ref::Input(1));
+        }
+        13 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.inputs.pop();
+        }
+        14 => {
+            if !p.params.is_empty() {
+                let j = rng.gen_range(0..p.params.len());
+                p.params[j].per_layer = !p.params[j].per_layer;
+            }
+        }
+        15 => {
+            if !p.states.is_empty() {
+                let j = rng.gen_range(0..p.states.len());
+                p.states[j].per_layer = !p.states[j].per_layer;
+            }
+        }
+        16 => {
+            if !p.states.is_empty() {
+                let j = rng.gen_range(0..p.states.len());
+                p.states[j].kind = match p.states[j].kind {
+                    StateKind::Fixed { .. } => {
+                        StateKind::Fixed { lo: pick(rng, &[1, -200, 0]), hi: pick(rng, &[-1, 200, 0, 1 << 40]) }
+                    }
+                    StateKind::Hist { .. } => StateKind::Hist { window: pick(rng, &[0, 1, 2, 7, 1 << 18, (1 << 18) + 1, 1 << 21]) },
+                };
+            }
+        }
+        17 => {
+            if !p.states.is_empty() {
+                let j = rng.gen_range(0..p.states.len());
+                p.states[j].dtype = pick(rng, &DType::ALL);
+            }
+        }
+        18 => p.params.push(ref2::ParamDecl { name: "unused".into(), dtype: DType::I8, shape: vec![1], per_layer: false }),
+        19 => p.consts.push(ref2::ConstDecl { dtype: DType::I8, shape: vec![1], data: vec![9] }),
+        20 => {
+            if let Some(c) = p.consts.first().cloned() {
+                p.consts.push(c);
+            }
+        }
+        21 => {
+            if !p.consts.is_empty() {
+                let j = rng.gen_range(0..p.consts.len());
+                if rng.gen_bool(0.5) {
+                    p.consts[j].data.push(0);
+                } else {
+                    p.consts[j].data.pop();
+                }
+            }
+        }
+        22 => {
+            if !p.params.is_empty() {
+                let j = rng.gen_range(0..p.params.len());
+                p.params[j].name = pick(rng, &[String::new(), "x".repeat(129), "x".repeat(128), "p0".into()]);
+            }
+        }
+        23 => {
+            if !p.states.is_empty() {
+                let j = rng.gen_range(0..p.states.len());
+                p.states[j].name = pick(rng, &[String::new(), "x".repeat(129), "s0".into()]);
+            }
+        }
+        24 => p.blocks[b].name = pick(rng, &[String::new(), "x".repeat(129), "pre".into()]),
+        25 => p.blocks[b].carry_out.push(rng.gen_range(0..=nn as u16)),
+        26 => {
+            p.blocks[b].carry_out.pop();
+        }
+        27 => p.blocks[b].carry_in.push(TensorType::fixed(DType::I32, &[2])),
+        28 => {
+            p.blocks[b].carry_in.pop();
+        }
+        29 => {
+            // An extra dead node.
+            p.blocks[b].nodes.push(ref2::Node {
+                prim: Prim::Iota { axis: 0, start: 0, step: 1 },
+                inputs: vec![],
+                out: TensorType::fixed(DType::I32, &[2]),
+                commit: false,
+            });
+        }
+        30 => {
+            // Change an attribute.
+            let n = &mut p.blocks[b].nodes[i];
+            let mut reverse = false;
+            match n.prim {
+                Prim::Transpose { ref mut perm } => {
+                    if !perm.is_empty() {
+                        perm[0] = perm[0].wrapping_add(1);
+                    } else {
+                        perm.push(0);
+                    }
+                }
+                Prim::Slice { ref mut start, .. } => {
+                    let v = pick(rng, &[start.wrapping_add(1), u32::MAX, 0]);
+                    *start = v;
+                }
+                Prim::Concat { ref mut axis } | Prim::ReduceSum { ref mut axis } | Prim::ReduceMax { ref mut axis } => {
+                    *axis = axis.wrapping_add(1)
+                }
+                Prim::Iota { ref mut axis, ref mut step, .. } => {
+                    *axis = axis.wrapping_add(rng.gen_range(0..2));
+                    *step = step.wrapping_mul(3);
+                }
+                Prim::Gather { ref mut axis, ref mut batch_dims } => {
+                    if rng.gen_bool(0.5) {
+                        *axis = axis.wrapping_add(1)
+                    } else {
+                        *batch_dims = batch_dims.wrapping_add(1)
+                    }
+                }
+                Prim::Clamp { ref mut lo, ref mut hi } => std::mem::swap(lo, hi),
+                Prim::TopK { ref mut k, .. } => {
+                    let v = pick(rng, &[0, k.wrapping_add(1), u32::MAX]);
+                    *k = v;
+                }
+                Prim::StateWrite { ref mut state } | Prim::HistAppend { ref mut state } => *state = state.wrapping_add(1),
+                Prim::Div { ref mut rule } => *rule = pick(rng, &[Rounding::Floor, Rounding::HalfUp, Rounding::HalfAwayFromZero]),
+                _ => reverse = true,
+            }
+            if reverse {
+                n.out.shape.reverse();
+            }
+        }
+        31 => {
+            // Swap two nodes (forward refs, reordered slots).
+            let j = rng.gen_range(0..nn);
+            p.blocks[b].nodes.swap(i, j);
+        }
+        32 => {
+            // Duplicate a StateWrite/HistAppend.
+            if let Some(n) =
+                p.blocks[b].nodes.iter().find(|n| matches!(n.prim, Prim::StateWrite { .. } | Prim::HistAppend { .. })).cloned()
+            {
+                p.blocks[b].nodes.push(n);
+            }
+        }
+        33 => {
+            if !p.params.is_empty() {
+                let j = rng.gen_range(0..p.params.len());
+                p.params[j].dtype = pick(rng, &DType::ALL);
+            }
+        }
+        34 => {
+            if !p.params.is_empty() {
+                let j = rng.gen_range(0..p.params.len());
+                p.params[j].shape.push(pick(rng, &[0u32, 1, 2, 1 << 24, (1 << 24) + 1]));
+            }
+        }
+        35 => {
+            if !p.states.is_empty() {
+                let j = rng.gen_range(0..p.states.len());
+                p.states[j].shape.push(pick(rng, &[0u32, 1, 2]));
+            }
+        }
+        36 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.out.shape.push(Dim::H);
+        }
+        37 => {
+            // Many blocks / layers.
+            p.schedule.layers.extend(std::iter::repeat_n(p.schedule.layers.first().copied().unwrap_or(0), 1025));
+        }
+        38 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.out.shape = vec![Dim::Fixed(1 << 14), Dim::Fixed(1 << 14), Dim::Fixed(2)];
+        }
+        _ => {
+            // Remove a node (dangling refs, carries, logits).
+            p.blocks[b].nodes.remove(i);
+        }
+    }
+    format!("mutation {k} block {b} node {i}")
 }

@@ -224,9 +224,25 @@ pub fn prim_set_id_v1() -> [u8; 64] {
     })
 }
 
+/// The key of §3.6: 32 ASCII bytes.
+pub const GRAPH_IR_ROOT_KEY: &[u8] = b"misaka-palw/tir/graph-ir-root/v1";
+
+/// `graph_ir_root` (§3.6): BLAKE2b-512 keyed by [`GRAPH_IR_ROOT_KEY`] over `encode(program)`.
+pub fn graph_ir_root(p: &Program) -> [u8; 64] {
+    let h = crate::blake2b::blake2b(64, GRAPH_IR_ROOT_KEY, &crate::codec::encode(p));
+    let mut a = [0u8; 64];
+    a.copy_from_slice(&h);
+    a
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graph_ir_root_key_is_32_bytes() {
+        assert_eq!(GRAPH_IR_ROOT_KEY.len(), 32);
+    }
 
     #[test]
     fn prim_set_id_is_the_stated_constant() {

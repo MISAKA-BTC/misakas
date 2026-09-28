@@ -15,6 +15,7 @@
 //! - [`prims`]: index maps by unravel/ravel of §0, one output element at a time;
 //! - [`eval`]: a step as a pure function of the run state.
 
+pub mod admit;
 pub mod blake2b;
 pub mod build;
 pub mod codec;
