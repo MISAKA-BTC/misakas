@@ -2033,7 +2033,9 @@ pub fn qwen36_dev_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
 /// and `v_heads` value heads of `head_dim` lanes over a `d_model`-wide residual. Phase F §3.3's
 /// fixtures are 16/32 and 16/48 at head dim 4 over 64 lanes — the key/value ratios of Qwen3.6-35B
 /// and Qwen3.8-27B, where a window row is `2 · 16 · 4 + v · 4` lanes and not `(2 · 4 + 4) · v`.
-/// Same discipline (and the same warning) as [`qwen36_dev_fixture`].
+/// The rotary table covers 64 positions, so a held class at `n_ctx` 256 (the attempt formula's 31
+/// prompt ids, past one recurrence spacing) runs on it. Same discipline (and the same warning) as
+/// [`qwen36_dev_fixture`].
 pub fn qwen36_dev_fixture_heads(
     layers: usize,
     experts: usize,
@@ -2061,7 +2063,7 @@ pub fn qwen36_dev_fixture_heads(
         moe_dim: 16,
         shared_dim: 16,
         vocab: 64,
-        max_position: 32,
+        max_position: 64,
         eps_q: 1,
         router_up_bits: 20,
     };
