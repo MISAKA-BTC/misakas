@@ -481,11 +481,30 @@ fn tir_manifest(path: &std::path::Path, out: Option<PathBuf>, check: bool) -> Re
     Ok(())
 }
 
+/// **An IR artifact's class** (RFC-0002 Phase F): the class it declares, under the root its bytes
+/// derive, at the formula's canonical job — what a `--palw-register-class` run registers.
+fn inspect_tir(view: &NetworkView, entry: &misaka_palw_sdk::PalwTirClassEntryV1) {
+    let taken = view.genesis_classes.iter().any(|(id, _)| *id == entry.class_id());
+    println!("  IR CLASS  {}  class {}  root {}", entry.model_id, entry.class_id(), entry.artifact_root);
+    println!(
+        "            canonical job {} + {}, max_context {}, checkpoint interval {}, h_tile {}{}",
+        entry.canonical_job.0,
+        entry.canonical_job.1,
+        entry.class.layout.max_context,
+        entry.class.layout.checkpoint_interval,
+        entry.class.layout.h_tile,
+        if taken { " (class already in genesis)" } else { "" }
+    );
+}
+
 fn inspect(view: &NetworkView, path: &std::path::Path) -> Result<(), String> {
     let sdk = sdk_for(view);
     let artifact = sdk.load_artifact(path)?;
     println!("{}", artifact.summary);
     println!("lineage: {}", artifact.lineage_id);
+    for entry in misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&artifact)) {
+        inspect_tir(view, &entry);
+    }
     for (entry, paired) in sdk.pairings(&artifact) {
         match paired {
             Ok(root) => {
@@ -503,6 +522,31 @@ fn preflight(view: &NetworkView, path: &std::path::Path, wanted: Option<&str>) -
     let sdk = sdk_for(view);
     let artifact = sdk.load_artifact(path)?;
     println!("{}", artifact.summary);
+    // RFC-0002 Phase F: an IR artifact is its own class — gated as a `--palw-register-class` run
+    // gates it, at the point the network's `palw_tir_v1` fence arms (or refused: not armed).
+    let tir = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&artifact));
+    if !tir.is_empty() {
+        let mut refused = false;
+        for entry in tir.iter().filter(|e| wanted.is_none_or(|w| w == e.model_id)) {
+            inspect_tir(view, entry);
+            let at = view.params.palw_tir_v1_fence().map(|f| f.activation.daa_score()).unwrap_or(0);
+            match misaka_palw_sdk::tir_registration::tir_registration_preflight_v1(&view.params, &view.bundle, entry, at) {
+                Ok(()) => println!(
+                    "  ADMISSIBLE (node-side preflight; admission v10 is consensus's, RFC-0002 F6)  {}  root {}",
+                    entry.model_id, entry.artifact_root
+                ),
+                Err(why) => {
+                    refused = true;
+                    println!("  REFUSED   {}  — {why}", entry.model_id);
+                }
+            }
+        }
+        return if refused {
+            Err("the IR class would be refused — nothing should be signed or funded for it".to_string())
+        } else {
+            Ok(())
+        };
+    }
     let pairings: Vec<_> = sdk
         .pairings(&artifact)
         .into_iter()

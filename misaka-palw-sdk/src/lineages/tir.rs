@@ -18,9 +18,12 @@ use std::sync::{Arc, RwLock};
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_hashes::Hash64;
-use misaka_palw_tir_exec::node::{TirArtifactV1, TirBackendV1, tir_attempt_canonical_v1};
+use misaka_palw_tir_exec::node::{TirArtifactV1, tir_attempt_canonical_v1};
 
 use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1};
+
+/// The IR backend and its capture, for the node's IR-only verbs (the IR court's close proofs).
+pub use misaka_palw_tir_exec::node::{TirBackendV1, TirCaptureV1};
 
 /// The lineage's id.
 pub const TIR_LINEAGE_ID_V1: &str = "palw-tir-v1";

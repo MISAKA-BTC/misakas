@@ -111,6 +111,8 @@ const PALW_PANEL: &str = "palw-panel";
 
 /// ADR-0152 §4-ter N3: a held dissection's moves, answered off the tick by the windowed builders.
 mod held_court;
+/// RFC-0002 Phase F (F6, node half): an IR class's court close.
+mod tir_court;
 /// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
 #[cfg(test)]
 mod held_court_e2e;
@@ -8243,6 +8245,64 @@ impl PalwPanelService {
                             *court_stalls.entry("the ladder has not narrowed to a step").or_default() += 1;
                             continue;
                         };
+                        // **RFC-0002 Phase F (F6): an IR class closes with an IR proof**, built by the
+                        // IR backend from the ACCUSED capture — `TirCone` for either party, and at a
+                        // logits tile the challenger's `TirLogits` and decode-token doors
+                        // (`palw_panel::tir_court`). A party files only the close that wins its side.
+                        if let Some(tir) = self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root) {
+                            let tir = match tir {
+                                Ok(tir) => tir,
+                                Err(why) => {
+                                    *court_stalls.entry("the IR backend does not build for the class").or_default() += 1;
+                                    warn!("[{PALW_PANEL}] session {}: {why}", duty.session_id);
+                                    continue;
+                                }
+                            };
+                            let Some(accused) = accused_capture.as_deref().map(|c| c.to_vec()) else {
+                                *court_stalls
+                                    .entry("the IR close needs the ACCUSED capture and this node holds none")
+                                    .or_default() += 1;
+                                continue;
+                            };
+                            let own = own_executions.get(&duty.claim_id).cloned();
+                            let rules = tir.court_rules(&self.config.court);
+                            let challenger = !duty.i_am_responder;
+                            let Ok(candidates) = tokio::task::spawn_blocking(move || {
+                                tir_court::palw_tir_close_candidates_v1(&tir, &accused, own.as_deref(), index, &rules, challenger)
+                            })
+                            .await
+                            else {
+                                *court_stalls.entry("the IR close's task did not finish").or_default() += 1;
+                                continue;
+                            };
+                            let mut filed = None;
+                            for (label, built) in candidates {
+                                let proof = match built {
+                                    Ok(proof) => proof,
+                                    Err(why) => {
+                                        trace!(
+                                            "[{PALW_PANEL}] session {}: the IR {label} close does not build: {why}",
+                                            duty.session_id
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let Some(verdict) = session.palw_court_close_verdict_v2(&duty.session_id, &proof) else { continue };
+                                if tir_court::palw_tir_close_is_mine_v1(verdict, duty.i_am_responder) {
+                                    let note = tir_court::palw_tir_close_note_v1(&duty.session_id, label, verdict, index);
+                                    info!("[{PALW_PANEL}] {note}");
+                                    filed = Some(PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof });
+                                    break;
+                                }
+                            }
+                            let Some(object) = filed else {
+                                *court_stalls.entry("no IR close wins this party's side").or_default() += 1;
+                                continue;
+                            };
+                            court_due.insert((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
+                            court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
+                            continue;
+                        }
                         // The rungs speak from each party's OWN execution — that is what makes a
                         // disagreement possible at all. The close does not: it is an assertion
                         // about the accused's step, so it is assembled from the accused's bytes by
