@@ -1527,7 +1527,7 @@ pub fn build_tir_named_leaf_refutation_v1(
         output_opening: store.step_opening(leaf).ok_or_else(|| missing(format!("the opening of leaf {leaf}")))?,
         output_preimage: store.step_leaf(leaf).ok_or_else(|| missing(format!("step leaf {leaf}")))?,
         operands: PalwStepInputRowV1 { preimages: Vec::new(), run_siblings: Vec::new() },
-        params: Vec::new(),
+        params: None,
         prompt_token_ids: Vec::new(),
         prompt_ids_openings: Vec::new(),
         decode_tokens: None,
