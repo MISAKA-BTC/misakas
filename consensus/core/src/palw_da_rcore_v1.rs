@@ -544,7 +544,15 @@ pub fn palw_da_unit_covered_by_v1(_unit: &PalwDaUnitV1, attested: crate::palw_ve
 /// form the fold refuses.
 pub fn palw_da_answer_form_v1(claim: &Hash64, unit: &PalwDaUnitV1, answer: &PalwDaAnswerV1) -> Result<(), &'static str> {
     match (unit, answer) {
-        (PalwDaUnitV1::Event { .. }, PalwDaAnswerV1::Event(_) | PalwDaAnswerV1::TirEvent(_)) => Ok(()),
+        (PalwDaUnitV1::Event { .. }, PalwDaAnswerV1::Event(_)) => Ok(()),
+        // RFC-0002 Phase F: an IR event's binding carries no program — the chain holds the class's.
+        (PalwDaUnitV1::Event { .. }, PalwDaAnswerV1::TirEvent(disclosure)) => {
+            if disclosure.binding().class.program.is_empty() {
+                Ok(())
+            } else {
+                Err("an IR answer's binding carries no program: the chain holds the registered class's")
+            }
+        }
         (PalwDaUnitV1::Held(missing), PalwDaAnswerV1::Held(carriage)) => {
             if carriage.version != crate::palw_held_da_v1::PALW_HELD_DA_VERSION_V1 {
                 Err("the carriage is not version 1")

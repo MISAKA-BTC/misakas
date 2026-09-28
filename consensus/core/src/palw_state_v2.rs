@@ -7203,6 +7203,9 @@ pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
         PalwConsensusObjectV2::TirShardCourtAccused { .. } => true,
         PalwConsensusObjectV2::FamilyCertified { evidence } => evidence.is_tir_v1(),
         PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => true,
+        PalwConsensusObjectV2::ObjectiveOffence { kind, .. } => {
+            *kind == crate::palw_offence_v1::PalwOffenceKindV1::TirIdentityMismatch
+        }
         _ => false,
     }
 }
@@ -11693,6 +11696,12 @@ impl PalwChainStateV2 {
         self.tir_classes.get(class_id)
     }
 
+    /// A test's way to stand a `tir_classes` row in (the fold writes rows only through a registration).
+    #[cfg(test)]
+    pub(crate) fn test_insert_tir_class_v1(&mut self, class_id: Hash64, record: crate::palw_tir_admission_v1::PalwTirClassRecordV1) {
+        self.tir_classes.insert(class_id, record);
+    }
+
     /// **ADR-0160 F-S: `bond`'s issuance bucket**, if it has one (a bond with none holds a full bucket).
     pub fn issuance_bucket_of_v1(&self, bond: &PalwBondKeyV2) -> Option<&crate::palw_issuance_slots_v1::PalwIssuanceBucketV1> {
         self.issuance_buckets.get(bond)
@@ -12027,7 +12036,7 @@ impl PalwChainStateV2 {
         // registers, which nothing below `palw_tir_v1` can do.
         if !self.tir_classes.is_empty() {
             state.update(b"tir_classes/v1");
-            state.update(collection_root(b"tir_classes", &self.tir_classes).as_byte_slice());
+            state.update(palw_tir_classes_root_v1(&self.tir_classes).as_byte_slice());
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -13100,6 +13109,27 @@ fn deadline_with_params(_phase: &PalwClaimPhaseV2, anchor: u64) -> u64 {
 /// One collection's root: `H(domain ‖ label ‖ count ‖ (len(key) ‖ key ‖ len(record) ‖ record)*)`
 /// over the map's (already canonical) key order. Length prefixes keep adjacent entries from
 /// bleeding into each other; the label keeps two same-shaped collections from colliding.
+/// **RFC-0002 Phase F: the `tir_classes` collection's root** — [`collection_root`]'s form over each
+/// record's rooted bytes ([`crate::palw_tir_admission_v1::PalwTirClassRecordV1::rooted_bytes_v1`]:
+/// the record without its program, which `graph_ir_root` commits to), so a root costs nothing per
+/// program byte.
+fn palw_tir_classes_root_v1(map: &BTreeMap<Hash64, crate::palw_tir_admission_v1::PalwTirClassRecordV1>) -> Hash64 {
+    let mut state = keyed(PALW_STATE_V2_DOMAIN_COLLECTION);
+    let label: &[u8] = b"tir_classes";
+    state.update(&(label.len() as u64).to_le_bytes());
+    state.update(label);
+    state.update(&(map.len() as u64).to_le_bytes());
+    for (key, record) in map {
+        let key_bytes = borsh::to_vec(key).expect("state keys are borsh-serializable");
+        let value_bytes = record.rooted_bytes_v1();
+        state.update(&(key_bytes.len() as u64).to_le_bytes());
+        state.update(&key_bytes);
+        state.update(&(value_bytes.len() as u64).to_le_bytes());
+        state.update(&value_bytes);
+    }
+    finish(state)
+}
+
 fn collection_root<K: borsh::BorshSerialize, V: borsh::BorshSerialize>(label: &[u8], map: &BTreeMap<K, V>) -> Hash64 {
     let mut state = keyed(PALW_STATE_V2_DOMAIN_COLLECTION);
     state.update(&(label.len() as u64).to_le_bytes());
@@ -19123,7 +19153,7 @@ impl<'a> TransitionBuilder<'a> {
         let (accused, collected, kind) = (PalwBondKeyV2(record.accused), record.collected, record.kind);
         let fits = match basis {
             PalwConvictionBasisV1::CheckedEvidence { .. } => {
-                matches!(kind, K::ExecutorEquivocation | K::PanelFalseValidV2 | K::ExecutorRefuted)
+                matches!(kind, K::ExecutorEquivocation | K::PanelFalseValidV2 | K::ExecutorRefuted | K::TirIdentityMismatch)
             }
             PalwConvictionBasisV1::CourtVerdict { .. } | PalwConvictionBasisV1::CourtDefault => kind == K::CourtConviction,
             PalwConvictionBasisV1::DaDefault { .. } => kind == K::DaDefault,
@@ -19526,11 +19556,19 @@ impl<'a> TransitionBuilder<'a> {
                 PalwOffenceKindV1::PanelFalseValidV2 => return self.consume_false_valid_v2(ctx, accused, evidence_id, evidence),
                 // ADR-0152 v3.1 J-4 (F1): the executor's own conviction, judged by the same reading.
                 PalwOffenceKindV1::ExecutorRefuted => return self.consume_executor_refuted_v1(ctx, accused, evidence_id, evidence),
+                // RFC-0002 Phase F: an IR executor's identity conviction. Below `palw_tir_v1` the lock
+                // at the top of `apply_object` refused it already (an older build cannot decode it).
+                PalwOffenceKindV1::TirIdentityMismatch => {
+                    return self.consume_tir_identity_mismatch_v1(ctx, accused, evidence_id, evidence);
+                }
                 PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
                 // Refused above; listed so a routing change that forgets them fails to compile.
                 PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {}
             }
-        } else if matches!(kind, PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted) {
+        } else if matches!(
+            kind,
+            PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch
+        ) {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
         }
         if matches!(kind, PalwOffenceKindV1::CourtExecutorGuilty) {
@@ -19646,7 +19684,7 @@ impl<'a> TransitionBuilder<'a> {
             // `consume_executor_refuted_v1` past the fence, refused as dormant below it. An `Err`,
             // never `unreachable!`, so a routing change that forgot this arm refuses the object
             // instead of panicking the node.
-            PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted => {
+            PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch => {
                 return Err(PalwStateV2Error::ObjectiveOffenceRefused(
                     offence_id,
                     crate::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string(),
@@ -20275,6 +20313,76 @@ impl<'a> TransitionBuilder<'a> {
             }),
         );
         self.forfeit_convicted_rights_v1(finding.forfeit, claim_id, &recorded_root);
+        Ok(())
+    }
+
+    /// **RFC-0002 Phase F: kind 7, consumed** — [`Self::consume_executor_refuted_v1`]'s body over the IR
+    /// adjudicator ([`crate::palw_offence_attribution_v1::palw_check_tir_identity_mismatch_v1`]) and the
+    /// IR key: the same conviction funnel past `palw_rcore_plus` (which `palw_tir_v1` requires), the
+    /// same forfeiture by claim. No heavy-prompt charge: admission v10 caps an IR class's canonical
+    /// prompt at J5b's inline bound.
+    fn consume_tir_identity_mismatch_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        accused: PalwBondKeyV2,
+        evidence_id: Hash64,
+        evidence: &[u8],
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_offence_attribution_v1::{palw_check_tir_identity_mismatch_v1, palw_tir_identity_offence_id_v1};
+        use crate::palw_offence_v1::PalwOffenceKindV1;
+        if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
+            return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                evidence_id,
+                "evidence_id is not the digest of the evidence bytes".into(),
+            ));
+        }
+        if !self.params.rcore_plus_active_at(ctx.daa_score) {
+            return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+        }
+        let finding =
+            palw_check_tir_identity_mismatch_v1(&self.state, &accused, evidence, false, self.identity_rules_v1(ctx.daa_score))
+                .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
+        let claim_id = finding.target.claim_id;
+        let offence_id = palw_tir_identity_offence_id_v1(&accused.0, &claim_id);
+        if self.state.consumed_offences.contains_key(&offence_id) {
+            return Ok(());
+        }
+        let now = ctx.daa_score;
+        let conv = self.open_conviction_v1(&[accused], now);
+        let g = self.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
+        let live = self.claim_is_live_before_final_v1(&claim_id);
+        let fp_first = self.post_final_fp_g_v1(&claim_id);
+        let mut nominal = self.act_on_convicted_claim_v1(ctx, claim_id, Some(&conv))?;
+        if !live {
+            let tier = self.post_final_producer_leg_v1(
+                &conv,
+                claim_id,
+                accused,
+                offence_id,
+                PalwOffenceKindV1::TirIdentityMismatch,
+                g,
+                fp_first,
+            )?;
+            nominal = nominal.saturating_add(tier);
+        }
+        let recorded_root = self.recorded_forfeit_root_v1(finding.forfeit, &finding.target);
+        let offence = crate::palw_aggregate_liability_v1::palw_evidence_contradiction_offence_v1(
+            PalwOffenceKindV1::TirIdentityMismatch,
+            evidence,
+        );
+        self.close_conviction_v1(
+            &conv,
+            offence_id,
+            PalwOffenceKindV1::TirIdentityMismatch,
+            accused,
+            nominal,
+            recorded_root,
+            claim_id,
+            &[accused],
+            &[(accused, offence)],
+        )?;
+        self.forfeit_convicted_rights_v1(finding.forfeit, claim_id, &recorded_root);
+        self.open_reporter_reward(now, offence_id, 0, PalwConvictionBasisV1::CheckedEvidence { evidence_id })?;
         Ok(())
     }
 
@@ -26610,16 +26718,24 @@ fn apply_da_answer_v1(
         // against the claim's roots, then the identity rule over the IR binding. Below
         // `palw_tir_v1` the acceptance layer drops the object by name (an older build cannot decode
         // it); reaching the fold there is refused, the second lock.
-        (PalwDaUnitV1::Event { row, tile }, PalwDaAnswerV1::TirEvent(disclosure)) => {
+        (PalwDaUnitV1::Event { row, tile }, PalwDaAnswerV1::TirEvent(carried)) => {
             if !builder.params.tir_active_at(ctx.daa_score) {
                 return Err(malformed("an IR answer before palw_tir_v1 is in force"));
             }
+            // The disclosure carries its binding with the program empty; the claim's class's row
+            // holds the program, put back before anything reads the binding.
+            let record = builder
+                .state
+                .tir_classes
+                .get(&claim.class_id)
+                .ok_or(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "the claim's class is not an IR program" })?;
+            let disclosure = carried.with_program_v1(record).map_err(malformed)?;
             crate::palw_tir_court_v1::check_tir_trace_event_disclosure_v1(
                 claim.trace_root,
                 claim.execution_root,
                 *row,
                 *tile,
-                disclosure,
+                &disclosure,
                 crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             )
             .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
@@ -36279,6 +36395,11 @@ impl PalwStateCarriageV2 {
                 "carriage version {} is not {}",
                 self.version, PALW_STATE_V2_VERSION
             )));
+        }
+        // RFC-0002 Phase F: the root commits an IR class's program through its `graph_ir_root`, so a
+        // carriage is refused unless every program hashes to its row's root (and is its row's length).
+        for (class_id, record) in &self.tir_classes {
+            record.check_program_v1().map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("IR class {class_id}: {why}")))?;
         }
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
@@ -54862,6 +54983,122 @@ pub(crate) mod tests {
         assert!(matches!(refused(&s2, &params(), &lane), PalwStateV2Error::TirRegistrationRefused(_)));
         assert!(palw_object_is_tir_v1(&certified) && palw_object_is_tir_v1(&lane));
         assert_eq!(borsh::to_vec(&lane).unwrap()[0], 63, "tag 63, after the one-move court's 62");
+    }
+
+    /// **RFC-0002 Phase F (F6): kind 7 — an IR executor whose committed binding answers another job.**
+    /// Two claims of an IR class registered past the fence, recording one anchor: one committing the
+    /// anchor's J5 context, one a context whose decode count moved (J5a). Filed against each, kind 7
+    /// convicts the second — voided `CourtFraud`, one record at its IR key — and refuses the first
+    /// (`IdentityHolds`); a carried program, another accused and a non-IR claim are refused; below
+    /// `palw_tir_v1` the object is refused before any arm reads it.
+    #[test]
+    fn kind_7_convicts_an_ir_executor_whose_binding_answers_another_job() {
+        use crate::palw_offence_attribution_v1::{
+            PalwTirIdentityEvidenceV1, palw_tir_identity_object_v1, palw_tir_identity_offence_id_v1,
+        };
+        use crate::palw_offence_v1::PalwOffenceKindV1;
+        use crate::palw_tir_court_v1::test_support::attempt_binding;
+        let anchor = h64(0xA5A5);
+        let (honest, _) = attempt_binding(anchor, |_| {});
+        let (faulty, _) = attempt_binding(anchor, |ctx| ctx.exact_decode_tokens = 2);
+        let class = honest.class.clone();
+        let artifact_root = honest.artifact_root;
+        let class_id = class.class_id(&artifact_root);
+        let p = params().with_tir_from_daa(Some(0)).with_rcore_plus_mirrors(Some(0), 0, Vec::new());
+        let x = PalwTransitionExtrasV1 { offence_attribution_active: true, ..door_extras(true) };
+        let step = |parent: &PalwChainStateV2, daa: u64, objects: &[PalwConsensusObjectV2], att: Option<&PalwAttemptEnvelopeV2>| {
+            apply_palw_transition_v2_with_extras(parent, &p, &ctx(daa, daa, daa), objects, att, false, false, false, true, &x)
+                .map(|(state, _)| state)
+        };
+        let mut objects = register_class_and_bond();
+        if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = &mut objects[1] {
+            *collateral = 1_000_000_000;
+        }
+        objects.push(PalwConsensusObjectV2::ClassRegisteredTirV1 {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 40 },
+            initial_target: u128::MAX / 2,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: Box::new(crate::palw_tir_class_v1::PalwTirAdmissionCarriageV1 {
+                class,
+                canonical: honest.job_context.clone(),
+                registrant_bond: bond_key(1),
+                signature: vec![9; 8],
+            }),
+        });
+        let s0 = step(&PalwChainStateV2::genesis(), 100, &objects, None).expect("the registry");
+        let claim_of = |parent: &PalwChainStateV2, b: &crate::palw_tir_step_v1::PalwTirStepBindingV1, nonce: u64, daa: u64| {
+            let mut env = attempt_for_class(40, nonce, class_id, bond_key(1), vec![7; 4], op_id(21), artifact_root);
+            env.attempt.trace_root = b.full_logits_trace_root;
+            env.attempt.execution_root = b.committed_execution_root;
+            env.attempt.trace_chunk_count = 1;
+            env.attempt.trace_retention_daa = 999_999;
+            let id = attempt_id_v2(&env.attempt);
+            let mut s = step(parent, daa, &[], Some(&env)).expect("the claim");
+            // The anchor the carrying header named (the fold records it from the header; this harness has none).
+            s.claims.get_mut(&id).expect("live").job_identity = anchor;
+            (s, id)
+        };
+        let (s1, honest_claim) = claim_of(&s0, &honest, 1, 101);
+        let (s2, faulty_claim) = claim_of(&s1, &faulty, 2, 102);
+        let file =
+            |claim: Hash64, b: &crate::palw_tir_step_v1::PalwTirStepBindingV1| palw_tir_identity_object_v1(bond_key(1), claim, b);
+        let refused = |state: &PalwChainStateV2, params: &PalwStateParamsV2, object: &PalwConsensusObjectV2| {
+            apply_palw_transition_v2_with_extras(
+                state,
+                params,
+                &ctx(110, 110, 110),
+                std::slice::from_ref(object),
+                None,
+                false,
+                false,
+                false,
+                true,
+                &x,
+            )
+            .expect_err("refused")
+        };
+
+        // The faulty claim: convicted, once, at its IR key.
+        let object = file(faulty_claim, &faulty);
+        let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &object else { unreachable!() };
+        let carried: PalwTirIdentityEvidenceV1 = borsh::from_slice(evidence).unwrap();
+        assert!(carried.binding.class.program.is_empty(), "the program is referenced, not carried");
+        assert!(palw_object_is_tir_v1(&object));
+        let s3 = step(&s2, 110, &[object.clone()], None).expect("kind 7 convicts");
+        assert!(
+            matches!(s3.claim(&faulty_claim).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "{:?}",
+            s3.claim(&faulty_claim).unwrap().phase
+        );
+        let record =
+            s3.consumed_offence(&palw_tir_identity_offence_id_v1(&bond_key(1).0, &faulty_claim)).expect("the conviction's record");
+        assert_eq!(record.kind, PalwOffenceKindV1::TirIdentityMismatch);
+        assert!(s3.bond(&bond_key(1)).unwrap().collateral < s2.bond(&bond_key(1)).unwrap().collateral, "the executor is charged");
+
+        // The honest claim: its binding is its job's, so the identity holds.
+        let err = refused(&s2, &p, &file(honest_claim, &honest));
+        assert!(matches!(&err, PalwStateV2Error::ObjectiveOffenceRefused(_, why) if why.contains("identity")), "{err:?}");
+        // A carried program, another accused, a claim of a class that is not an IR program.
+        let mut carrying = object.clone();
+        if let PalwConsensusObjectV2::ObjectiveOffence { evidence, evidence_id, .. } = &mut carrying {
+            let mut payload: PalwTirIdentityEvidenceV1 = borsh::from_slice(evidence).unwrap();
+            payload.binding.class.program = faulty.class.program.clone();
+            *evidence = borsh::to_vec(&payload).unwrap();
+            *evidence_id = crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence);
+        }
+        assert!(matches!(refused(&s2, &p, &carrying), PalwStateV2Error::ObjectiveOffenceRefused(_, why) if why.contains("program")));
+        let mut other = object.clone();
+        if let PalwConsensusObjectV2::ObjectiveOffence { accused, .. } = &mut other {
+            *accused = bond_key(2);
+        }
+        assert!(matches!(refused(&s2, &p, &other), PalwStateV2Error::ObjectiveOffenceRefused(..)));
+        // Below the fence: refused before any arm reads it.
+        let below = params().with_rcore_plus_mirrors(Some(0), 0, Vec::new());
+        assert!(matches!(refused(&s2, &below, &object), PalwStateV2Error::TirRegistrationRefused(_)));
     }
 
     // ---------------------------------------------------------------------------------------------

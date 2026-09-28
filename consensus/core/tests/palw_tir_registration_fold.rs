@@ -109,6 +109,26 @@ fn an_ir_registration_folds_past_the_fence_and_is_refused_below_it() {
         assert!(row.work.ops_supported && row.work.verification_ccu > 0, "the registry work is the IR program's");
     }
 
+    // The chain holds the program (every IR object references it by class). The root commits it
+    // through `graph_ir_root`, not byte by byte; a carriage whose program does not hash to its row's
+    // root is refused at load.
+    assert_eq!(record.program.as_slice(), admission.class.program.as_slice(), "the chain holds the program");
+    let empty = kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1 {
+        program: std::sync::Arc::new(Vec::new()),
+        ..record.clone()
+    };
+    assert_eq!(record.rooted_bytes_v1(), borsh::to_vec(&empty).unwrap(), "rooted without the program's bytes");
+    assert_eq!(record.check_program_v1(), Ok(()));
+    let carriage = PalwStateCarriageV2::from_state(&chain.s);
+    let mut bent = carriage.clone();
+    let row = bent.tir_classes.get_mut(&class_id).expect("the row rides the carriage");
+    let mut other = row.program.as_ref().clone();
+    let last = other.len() - 1;
+    other[last] ^= 1;
+    row.program = std::sync::Arc::new(other);
+    assert!(bent.into_state(&chain.sp, None).is_err(), "a program that is not its graph_ir_root's is refused at load");
+    assert!(carriage.into_state(&chain.sp, Some(chain.s.state_root())).is_ok());
+
     // A second registration of a live class is a duplicate, as for any class.
     let again =
         chain.try_fold(&chain.s, &ctx(0xCA_0000 + AT + 1, AT + 1, AT + 1, 0), &[object], PalwBlockWorkV3::None, Hash64::default());
