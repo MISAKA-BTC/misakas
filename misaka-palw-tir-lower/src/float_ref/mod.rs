@@ -50,12 +50,14 @@ impl ParamStore {
             let pi = pi as u32;
             if d.per_layer {
                 for l in layers_of_param(prog, pi) {
-                    let t = eval_src(&binding.srcs[pi as usize], &r, Some(l), &none).map_err(|e| LowerError::weights(format!("param `{}` layer {l}: {e}", d.name)))?;
+                    let t = eval_src(&binding.srcs[pi as usize], &r, Some(l), &none)
+                        .map_err(|e| LowerError::weights(format!("param `{}` layer {l}: {e}", d.name)))?;
                     check_shape(&d.name, &t, &d.shape)?;
                     st.layered.insert((pi, l), t);
                 }
             } else {
-                let t = eval_src(&binding.srcs[pi as usize], &r, None, &none).map_err(|e| LowerError::weights(format!("param `{}`: {e}", d.name)))?;
+                let t = eval_src(&binding.srcs[pi as usize], &r, None, &none)
+                    .map_err(|e| LowerError::weights(format!("param `{}`: {e}", d.name)))?;
                 check_shape(&d.name, &t, &d.shape)?;
                 st.global.insert(pi, t);
             }
@@ -216,7 +218,15 @@ impl<'a> Session<'a> {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn eval_node(&mut self, node: &Node, vals: &[Vec<Vec<f32>>], carries: &[Vec<f32>], layer: Option<usize>, token: usize, prefix: &str) -> Result<Vec<Vec<f32>>> {
+    fn eval_node(
+        &mut self,
+        node: &Node,
+        vals: &[Vec<Vec<f32>>],
+        carries: &[Vec<f32>],
+        layer: Option<usize>,
+        token: usize,
+        prefix: &str,
+    ) -> Result<Vec<Vec<f32>>> {
         let ins = &node.inputs;
         let x = |i: usize| -> Result<&[f32]> { operand(ins[i], vals, carries) };
         let lyr = layer.unwrap_or(0);
@@ -313,7 +323,9 @@ impl<'a> Session<'a> {
                 Ok(vec![vec![]])
             }
             Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window, alibi, sinks } => {
-                let (Ref::State(ks), Ref::State(vs)) = (ins[1], ins[2]) else { return Err(LowerError::eval("attention without states")) };
+                let (Ref::State(ks), Ref::State(vs)) = (ins[1], ins[2]) else {
+                    return Err(LowerError::eval("attention without states"));
+                };
                 let q = x(0)?.to_vec();
                 let sinks_v = if *sinks { Some(self.param(ins[3], layer)?.data.clone()) } else { None };
                 let keys = self.hist.get(&(ks, lyr)).cloned().unwrap_or_default();
@@ -423,7 +435,11 @@ impl<'a> Session<'a> {
                 let g = self.param(ins[3], layer)?;
                 let u = self.param(ins[4], layer)?;
                 let d = self.param(ins[5], layer)?;
-                let biases = if *bias { Some((self.param(ins[6], layer)?, self.param(ins[7], layer)?, self.param(ins[8], layer)?)) } else { None };
+                let biases = if *bias {
+                    Some((self.param(ins[6], layer)?, self.param(ins[7], layer)?, self.param(ins[8], layer)?))
+                } else {
+                    None
+                };
                 let (e_i, e_d) = (g.shape[1], g.shape[2]);
                 let mut y = vec![0f64; e_d];
                 let mut hidden_all = Vec::new();
@@ -440,7 +456,9 @@ impl<'a> Session<'a> {
                     let uv = linear_raw(&xv, &uw, e_i, ub.as_deref());
                     let hv: Vec<f32> = match glu {
                         Glu::Standard => gv.iter().zip(&uv).map(|(g, u)| act(*a, *g) * *u).collect(),
-                        Glu::ClampedSwiGlu { alpha, limit } => gv.iter().zip(&uv).map(|(g, u)| clamped_swiglu(*g, *u, *alpha, *limit)).collect(),
+                        Glu::ClampedSwiGlu { alpha, limit } => {
+                            gv.iter().zip(&uv).map(|(g, u)| clamped_swiglu(*g, *u, *alpha, *limit)).collect()
+                        }
                     };
                     if self.sites.is_some() {
                         hidden_all.extend_from_slice(&hv);
@@ -467,7 +485,11 @@ impl<'a> Session<'a> {
 
 fn operand<'v>(r: Ref, vals: &'v [Vec<Vec<f32>>], carries: &'v [Vec<f32>]) -> Result<&'v [f32]> {
     match r {
-        Ref::Node(i, o) => vals.get(i as usize).and_then(|v| v.get(o as usize)).map(Vec::as_slice).ok_or_else(|| LowerError::eval(format!("node {i}.{o} not evaluated"))),
+        Ref::Node(i, o) => vals
+            .get(i as usize)
+            .and_then(|v| v.get(o as usize))
+            .map(Vec::as_slice)
+            .ok_or_else(|| LowerError::eval(format!("node {i}.{o} not evaluated"))),
         Ref::Carry(c) => carries.get(c as usize).map(Vec::as_slice).ok_or_else(|| LowerError::eval(format!("carry {c}"))),
         other => Err(LowerError::eval(format!("operand {other:?} is not a value"))),
     }
@@ -511,10 +533,15 @@ pub fn erf(x: f64) -> f64 {
         sum * 2.0 / std::f64::consts::PI.sqrt()
     } else {
         let t = 1.0 / (1.0 + 0.5 * a);
-        let e = t * (-a * a - 1.265_512_23
-            + t * (1.000_023_68
-                + t * (0.374_091_96 + t * (0.096_784_18 + t * (-0.186_288_06 + t * (0.278_868_07 + t * (-1.135_203_98 + t * (1.488_515_87 + t * (-0.822_152_23 + t * 0.170_872_77)))))))))
-            .exp();
+        let e = t
+            * (-a * a - 1.265_512_23
+                + t * (1.000_023_68
+                    + t * (0.374_091_96
+                        + t * (0.096_784_18
+                            + t * (-0.186_288_06
+                                + t * (0.278_868_07
+                                    + t * (-1.135_203_98 + t * (1.488_515_87 + t * (-0.822_152_23 + t * 0.170_872_77)))))))))
+                .exp();
         1.0 - e
     };
     if x < 0.0 { -r } else { r }
@@ -554,7 +581,15 @@ fn clamped_swiglu(g: f32, u: f32, alpha: f64, limit: f64) -> f32 {
     ((u + 1.0) * glu) as f32
 }
 
-pub fn norm(x: &[f32], kind: NormKind, eps: f64, gain_kind: crate::spec::Gain, gain: Option<&Tensor>, bias: Option<&Tensor>, groups: usize) -> Vec<f32> {
+pub fn norm(
+    x: &[f32],
+    kind: NormKind,
+    eps: f64,
+    gain_kind: crate::spec::Gain,
+    gain: Option<&Tensor>,
+    bias: Option<&Tensor>,
+    groups: usize,
+) -> Vec<f32> {
     let n = x.len();
     let g = n / groups.max(1);
     let mut out = Vec::with_capacity(n);
@@ -670,7 +705,8 @@ pub fn attention(
                 match alibi {
                     Some(al) => {
                         let slope = al.slopes[h];
-                        let bias = if al.bf16_bias { bf16_round(bf16_round(slope as f32) * j as f32) as f64 } else { slope * j as f64 };
+                        let bias =
+                            if al.bf16_bias { bf16_round(bf16_round(slope as f32) * j as f32) as f64 } else { slope * j as f64 };
                         if al.scaled_by_softmax_scale { (dot + bias) * scale } else { dot * scale + bias }
                     }
                     None => dot * scale,
@@ -708,7 +744,18 @@ pub fn softmax_with_sink(s: &[f64], sink: Option<f64>) -> Vec<f64> {
 /// MLA in absorbed form: `q̃ = W_kᵀ q_nope`, scores over the latent history, context mapped back
 /// through `W_v`. Equal to HF's expanded form (`kv_b · latent` per head), tested below.
 #[allow(clippy::too_many_arguments)]
-pub fn mla(q: &[f32], kvb: &[f32], lat: &[Vec<f32>], kr: &[Vec<f32>], heads: usize, nope: usize, rope: usize, vd: usize, r: usize, scale: f64) -> Vec<f32> {
+pub fn mla(
+    q: &[f32],
+    kvb: &[f32],
+    lat: &[Vec<f32>],
+    kr: &[Vec<f32>],
+    heads: usize,
+    nope: usize,
+    rope: usize,
+    vd: usize,
+    r: usize,
+    scale: f64,
+) -> Vec<f32> {
     let qd = nope + rope;
     let mut out = vec![0f32; heads * vd];
     for h in 0..heads {
@@ -758,7 +805,20 @@ pub fn causal_conv(x: &[f32], st: &mut Vec<f32>, w: &[f32], b: Option<&[f32]>, c
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn gated_delta(q: &[f32], k: &[f32], v: &[f32], g: &[f32], beta: &[f32], s: &mut [f32], nk: usize, nv: usize, dk: usize, dv: usize, map: HeadMap, q_scale: f64) -> Vec<f32> {
+pub fn gated_delta(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    g: &[f32],
+    beta: &[f32],
+    s: &mut [f32],
+    nk: usize,
+    nv: usize,
+    dk: usize,
+    dv: usize,
+    map: HeadMap,
+    q_scale: f64,
+) -> Vec<f32> {
     let rep = nv / nk;
     let mut out = vec![0f32; nv * dv];
     for vh in 0..nv {
@@ -790,7 +850,17 @@ pub fn gated_delta(q: &[f32], k: &[f32], v: &[f32], g: &[f32], beta: &[f32], s: 
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn selective_scan(x: &[f32], dt: &[f32], b: &[f32], c: &[f32], a: &[f32], d: &[f32], h: &mut [f32], inner: usize, n: usize) -> Vec<f32> {
+pub fn selective_scan(
+    x: &[f32],
+    dt: &[f32],
+    b: &[f32],
+    c: &[f32],
+    a: &[f32],
+    d: &[f32],
+    h: &mut [f32],
+    inner: usize,
+    n: usize,
+) -> Vec<f32> {
     let mut y = vec![0f32; inner];
     for i in 0..inner {
         let mut acc = 0f64;
@@ -807,7 +877,19 @@ pub fn selective_scan(x: &[f32], dt: &[f32], b: &[f32], c: &[f32], a: &[f32], d:
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn ssd_step(x: &[f32], dt: &[f32], b: &[f32], c: &[f32], a: &[f32], d: &[f32], h: &mut [f32], heads: usize, p: usize, groups: usize, n: usize) -> Vec<f32> {
+pub fn ssd_step(
+    x: &[f32],
+    dt: &[f32],
+    b: &[f32],
+    c: &[f32],
+    a: &[f32],
+    d: &[f32],
+    h: &mut [f32],
+    heads: usize,
+    p: usize,
+    groups: usize,
+    n: usize,
+) -> Vec<f32> {
     let per = heads / groups;
     let mut y = vec![0f32; heads * p];
     for hh in 0..heads {

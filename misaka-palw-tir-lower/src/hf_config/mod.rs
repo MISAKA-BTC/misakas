@@ -187,7 +187,9 @@ const REMOTE_ONLY: &[&str] =
 pub fn parse_config(v: &Value) -> Result<ArchSpec> {
     let root = v.as_object().ok_or_else(|| LowerError::bad("config.json is not an object"))?;
     let arch = match root.get("architectures") {
-        Some(Value::Array(a)) if !a.is_empty() => a[0].as_str().ok_or_else(|| LowerError::bad("architectures[0] is not a string"))?.to_string(),
+        Some(Value::Array(a)) if !a.is_empty() => {
+            a[0].as_str().ok_or_else(|| LowerError::bad("architectures[0] is not a string"))?.to_string()
+        }
         _ => {
             return Err(LowerError::not_lowerable(
                 "config has no `architectures`: the reference implementation cannot be identified (not a transformers config?)",
@@ -328,14 +330,27 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
     // Both HF weight layouts exist on the hub: `language_model.model.*` (≤ 4.51) and
     // `model.language_model.*` (≥ 4.52, and every checkpoint of a newer family).
     let qwen35 = tmt.starts_with("qwen3_5");
-    let (prefix, lm_head) = if qwen35 { ("model.language_model.", "lm_head") } else { ("language_model.model.", "language_model.lm_head") };
+    let (prefix, lm_head) =
+        if qwen35 { ("model.language_model.", "lm_head") } else { ("language_model.model.", "language_model.lm_head") };
     let aliases = if qwen35 {
-        vec![("model.language_model.".to_string(), "language_model.model.".to_string()), ("lm_head".to_string(), "language_model.lm_head".to_string())]
+        vec![
+            ("model.language_model.".to_string(), "language_model.model.".to_string()),
+            ("lm_head".to_string(), "language_model.lm_head".to_string()),
+        ]
     } else {
-        vec![("language_model.model.".to_string(), "model.language_model.".to_string()), ("language_model.lm_head".to_string(), "lm_head".to_string())]
+        vec![
+            ("language_model.model.".to_string(), "model.language_model.".to_string()),
+            ("language_model.lm_head".to_string(), "lm_head".to_string()),
+        ]
     };
     let root_tie = p.cfg.opt_bool("tie_word_embeddings")?;
-    let mut sub = P { cfg: Cfg::new(arch.to_string(), text, "text_config"), notes: vec![], unsure: vec![], reference: p.reference.clone(), layouts: Layouts::default() };
+    let mut sub = P {
+        cfg: Cfg::new(arch.to_string(), text, "text_config"),
+        notes: vec![],
+        unsure: vec![],
+        reference: p.reference.clone(),
+        layouts: Layouts::default(),
+    };
     sub.cfg.inert(&["model_type"]);
     let mut spec = match tmt {
         "gemma3_text" => dense::gemma3_text(&mut sub, prefix, lm_head, aliases)?,
@@ -360,7 +375,8 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
     {
         // `tie_weights` reads `get_text_config(decoder=True).tie_word_embeddings` (as understood);
         // a composite flag that disagrees is followed only after a fixture confirms it.
-        sub.unsure.push(format!("root tie_word_embeddings={t} disagrees with text_config's {}; the text config's is used", spec.head.tied));
+        sub.unsure
+            .push(format!("root tie_word_embeddings={t} disagrees with text_config's {}; the text config's is used", spec.head.tied));
     }
     spec.architecture = arch.to_string();
     spec.notes.push("text decoder only: vision tower, projector and image tokens are not lowered".into());
@@ -452,7 +468,12 @@ impl P<'_> {
         let freqs = compute_freqs(
             &self.cfg.arch,
             &rc,
-            RopeContext { dim: rotary_dim, max_position_embeddings: max_pos, top_level_original_max: top_orig, partial_rotary_factor: partial },
+            RopeContext {
+                dim: rotary_dim,
+                max_position_embeddings: max_pos,
+                top_level_original_max: top_orig,
+                partial_rotary_factor: partial,
+            },
         )?;
         Ok(RopeSpec { rotary_dim, offset: 0, style, freqs })
     }
@@ -563,7 +584,7 @@ pub(crate) fn heads(
     let hd = match p.cfg.opt_usize("head_dim")?.or(hd_default) {
         Some(d) => d,
         None => {
-            if h == 0 || hidden % h != 0 {
+            if h == 0 || !hidden.is_multiple_of(h) {
                 return Err(LowerError::bad(format!("{}: hidden {hidden} not divisible by {h} heads", p.cfg.arch)));
             }
             hidden / h
@@ -616,12 +637,14 @@ mod tests {
 
     #[test]
     fn refusals_happen_before_any_family_parser() {
-        let e = parse_config(&serde_json::json!({"architectures": ["T5ForConditionalGeneration"], "is_encoder_decoder": true})).unwrap_err();
+        let e = parse_config(&serde_json::json!({"architectures": ["T5ForConditionalGeneration"], "is_encoder_decoder": true}))
+            .unwrap_err();
         assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("encoder–decoder")), "{e}");
         let e = parse_config(&serde_json::json!({"hidden_size": 8})).unwrap_err();
         assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("architectures")), "{e}");
-        let e = parse_config(&serde_json::json!({"architectures": ["LlamaForCausalLM"], "quantization_config": {"quant_method": "gptq"}}))
-            .unwrap_err();
+        let e =
+            parse_config(&serde_json::json!({"architectures": ["LlamaForCausalLM"], "quantization_config": {"quant_method": "gptq"}}))
+                .unwrap_err();
         assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("gptq")), "{e}");
         let e = parse_config(&serde_json::json!({
             "architectures": ["LlamaForCausalLM"],

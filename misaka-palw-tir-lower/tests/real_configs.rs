@@ -204,7 +204,10 @@ fn remote_code_llama_likes_are_lowered_but_marked_unsure() {
 #[test]
 fn exaone4_and_smollm3() {
     let (s, _) = ok("exaone-4.0-1.2b");
-    assert!(s.layers.iter().all(|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.position, Position::Rope(_)))), "no sliding window ⇒ rope everywhere");
+    assert!(
+        s.layers.iter().all(|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.position, Position::Rope(_)))),
+        "no sliding window ⇒ rope everywhere"
+    );
     let (s, p) = ok("smollm3-3b");
     assert!(matches!(attn(&s, 3).position, Position::None));
     assert!(matches!(attn(&s, 2).position, Position::Rope(_)));

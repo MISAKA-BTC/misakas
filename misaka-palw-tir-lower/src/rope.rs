@@ -139,9 +139,16 @@ pub fn read_rope_config(cfg: &Cfg, theta_default: Option<f64>, layer_type: Optio
         Some(p) => match layer_type {
             Some(lt) => match p.get(lt) {
                 Some(Value::Object(o)) => Some(o.clone()),
-                _ => return Err(LowerError::not_lowerable(format!("{}: rope_parameters has no entry for layer type `{lt}`", cfg.arch))),
+                _ => {
+                    return Err(LowerError::not_lowerable(format!("{}: rope_parameters has no entry for layer type `{lt}`", cfg.arch)));
+                }
             },
-            None => return Err(LowerError::not_lowerable(format!("{}: rope_parameters is keyed by layer type but the layer has none", cfg.arch))),
+            None => {
+                return Err(LowerError::not_lowerable(format!(
+                    "{}: rope_parameters is keyed by layer type but the layer has none",
+                    cfg.arch
+                )));
+            }
         },
         None => scaling.cloned(),
     };
@@ -173,9 +180,11 @@ fn take_usize(m: &mut Map<String, Value>, k: &str) -> Result<Option<usize>> {
 fn take_f64_list(m: &mut Map<String, Value>, k: &str) -> Result<Option<Vec<f64>>> {
     match m.remove(k) {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::Array(a)) => {
-            a.iter().map(|v| v.as_f64().ok_or_else(|| LowerError::bad(format!("rope `{k}` holds a non-number")))).collect::<Result<Vec<_>>>().map(Some)
-        }
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| v.as_f64().ok_or_else(|| LowerError::bad(format!("rope `{k}` holds a non-number"))))
+            .collect::<Result<Vec<_>>>()
+            .map(Some),
         Some(_) => Err(LowerError::bad(format!("rope `{k}` is not a list"))),
     }
 }
@@ -200,7 +209,7 @@ pub struct RopeContext {
 pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<RopeFreqs> {
     let mut m = rc.params.clone();
     let dim = ctx.dim;
-    if dim == 0 || dim % 2 != 0 {
+    if dim == 0 || !dim.is_multiple_of(2) {
         return Err(LowerError::bad(format!("{arch}: rotary dim {dim} must be even and positive")));
     }
     if let Some(p) = take_f64(&mut m, "partial_rotary_factor")?
@@ -219,7 +228,10 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
             Ok(())
         } else {
             let keys: Vec<&String> = m.keys().collect();
-            Err(LowerError::not_lowerable(format!("{arch}: rope type `{}` with key(s) {keys:?} this lowerer does not model", rc.rope_type)))
+            Err(LowerError::not_lowerable(format!(
+                "{arch}: rope type `{}` with key(s) {keys:?} this lowerer does not model",
+                rc.rope_type
+            )))
         }
     };
     match rc.rope_type.as_str() {
@@ -283,18 +295,20 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
         }
         "llama3" => {
             let factor = take_f64(&mut m, "factor")?.ok_or_else(|| LowerError::bad(format!("{arch}: llama3 rope without factor")))?;
-            let low = take_f64(&mut m, "low_freq_factor")?.ok_or_else(|| LowerError::bad(format!("{arch}: llama3 rope without low_freq_factor")))?;
-            let high =
-                take_f64(&mut m, "high_freq_factor")?.ok_or_else(|| LowerError::bad(format!("{arch}: llama3 rope without high_freq_factor")))?;
+            let low = take_f64(&mut m, "low_freq_factor")?
+                .ok_or_else(|| LowerError::bad(format!("{arch}: llama3 rope without low_freq_factor")))?;
+            let high = take_f64(&mut m, "high_freq_factor")?
+                .ok_or_else(|| LowerError::bad(format!("{arch}: llama3 rope without high_freq_factor")))?;
             let old = take_f64(&mut m, "original_max_position_embeddings")?
                 .ok_or_else(|| LowerError::bad(format!("{arch}: llama3 rope without original_max_position_embeddings")))?;
             refuse_leftover(&m)?;
             out.inv_freq = llama3_inv_freq(&out.inv_freq, factor, low, high, old);
         }
         "longrope" | "su" => {
-            let long = take_f64_list(&mut m, "long_factor")?.ok_or_else(|| LowerError::bad(format!("{arch}: longrope without long_factor")))?;
-            let short =
-                take_f64_list(&mut m, "short_factor")?.ok_or_else(|| LowerError::bad(format!("{arch}: longrope without short_factor")))?;
+            let long = take_f64_list(&mut m, "long_factor")?
+                .ok_or_else(|| LowerError::bad(format!("{arch}: longrope without long_factor")))?;
+            let short = take_f64_list(&mut m, "short_factor")?
+                .ok_or_else(|| LowerError::bad(format!("{arch}: longrope without short_factor")))?;
             let dict_factor = take_f64(&mut m, "factor")?;
             let attention_factor = take_f64(&mut m, "attention_factor")?;
             let dict_orig = take_usize(&mut m, "original_max_position_embeddings")?;
@@ -307,7 +321,9 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
                     dim / 2
                 )));
             }
-            let max_pos = ctx.max_position_embeddings.ok_or_else(|| LowerError::bad(format!("{arch}: longrope needs max_position_embeddings")))?;
+            let max_pos = ctx
+                .max_position_embeddings
+                .ok_or_else(|| LowerError::bad(format!("{arch}: longrope needs max_position_embeddings")))?;
             // HF (4.4x–4.5x): a top-level `original_max_position_embeddings` wins and the factor
             // becomes max/original; otherwise the dict factor (or 1) with original = max.
             let (original_max, factor) = match ctx.top_level_original_max.or(dict_orig) {
@@ -337,7 +353,15 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
 }
 
 /// YaRN (`_compute_yarn_parameters`).
-pub fn yarn_inv_freq(base: f64, dim: usize, factor: f64, original_max: usize, beta_fast: f64, beta_slow: f64, truncate: bool) -> Vec<f32> {
+pub fn yarn_inv_freq(
+    base: f64,
+    dim: usize,
+    factor: f64,
+    original_max: usize,
+    beta_fast: f64,
+    beta_slow: f64,
+    truncate: bool,
+) -> Vec<f32> {
     let two_pi = 2.0 * std::f64::consts::PI;
     let find_dim = |rot: f64| (dim as f64 * (original_max as f64 / (rot * two_pi)).ln()) / (2.0 * base.ln());
     let (mut low, mut high) = (find_dim(beta_fast), find_dim(beta_slow));
@@ -469,7 +493,11 @@ mod tests {
         // Llama 3.1: factor 8, low 1, high 4, original 8192, theta 500000, head_dim 128.
         let f = compute_freqs(
             "t",
-            &rc("llama3", 500000.0, json!({"factor": 8.0, "low_freq_factor": 1.0, "high_freq_factor": 4.0, "original_max_position_embeddings": 8192})),
+            &rc(
+                "llama3",
+                500000.0,
+                json!({"factor": 8.0, "low_freq_factor": 1.0, "high_freq_factor": 4.0, "original_max_position_embeddings": 8192}),
+            ),
             ctx(128, 131072),
         )
         .unwrap();
@@ -513,10 +541,16 @@ mod tests {
         assert!(low > 0 && high < 31, "{low} {high}");
         assert_eq!(f.inv_freq[0], plain[0]);
         assert!((f.inv_freq[31] - plain[31] / 40.0).abs() <= plain[31] * 1e-6);
-        assert!(f.inv_freq[(low + high) / 2] < plain[(low + high) / 2] && f.inv_freq[(low + high) / 2] > plain[(low + high) / 2] / 40.0);
+        assert!(
+            f.inv_freq[(low + high) / 2] < plain[(low + high) / 2] && f.inv_freq[(low + high) / 2] > plain[(low + high) / 2] / 40.0
+        );
         // No mscale given → 0.1·ln(factor)+1.
-        let g = compute_freqs("t", &rc("yarn", 10000.0, json!({"factor": 4.0, "original_max_position_embeddings": 32768})), ctx(64, 131072))
-            .unwrap();
+        let g = compute_freqs(
+            "t",
+            &rc("yarn", 10000.0, json!({"factor": 4.0, "original_max_position_embeddings": 32768})),
+            ctx(64, 131072),
+        )
+        .unwrap();
         assert!((g.attention_factor - (0.1 * 4f64.ln() + 1.0)).abs() < 1e-12);
         let (c, _) = g.cos_sin(0);
         assert!((c[0] as f64 - g.attention_factor).abs() < 1e-6, "cos(0) carries the attention factor");

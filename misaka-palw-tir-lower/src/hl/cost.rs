@@ -99,7 +99,13 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     c.elementwise += 2 * *experts as u64;
                     c.transcendental += *experts as u64;
                 }
-                Op::Embedding | Op::PosEmbedding { .. } | Op::Slice { .. } | Op::Concat | Op::Zeros | Op::HistAppend | Op::TokenShift => {}
+                Op::Embedding
+                | Op::PosEmbedding { .. }
+                | Op::Slice { .. }
+                | Op::Concat
+                | Op::Zeros
+                | Op::HistAppend
+                | Op::TokenShift => {}
                 Op::Add | Op::Sub | Op::Mul | Op::Scale { .. } | Op::Clamp { .. } | Op::Lerp => c.elementwise += out,
             }
         }

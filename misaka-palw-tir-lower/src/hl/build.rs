@@ -13,7 +13,15 @@ use crate::spec::*;
 use std::collections::BTreeMap;
 
 pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
-    let mut b = Builder { s: spec, params: vec![], pidx: BTreeMap::new(), states: vec![], sidx: BTreeMap::new(), ropes: vec![], blocks: vec![] };
+    let mut b = Builder {
+        s: spec,
+        params: vec![],
+        pidx: BTreeMap::new(),
+        states: vec![],
+        sidx: BTreeMap::new(),
+        ropes: vec![],
+        blocks: vec![],
+    };
     let carries = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size] }];
     let pre = b.pre_block()?;
     let mut kinds: Vec<(LayerSpec, u16)> = Vec::new();
@@ -63,7 +71,15 @@ struct Bk {
 }
 
 impl Bk {
-    fn push(&mut self, op: Op, inputs: Vec<Ref>, outs: Vec<Vec<usize>>, types: Vec<HlType>, site: Option<&str>, writes: Vec<u32>) -> NodeId {
+    fn push(
+        &mut self,
+        op: Op,
+        inputs: Vec<Ref>,
+        outs: Vec<Vec<usize>>,
+        types: Vec<HlType>,
+        site: Option<&str>,
+        writes: Vec<u32>,
+    ) -> NodeId {
         self.nodes.push(Node { op, inputs, outs, out_types: types, site: site.map(str::to_string), writes });
         (self.nodes.len() - 1) as NodeId
     }
@@ -130,7 +146,17 @@ impl Builder<'_> {
 
     /// `Linear` `[out, in]` under role `name` (params `name.w`, `name.b`).
     #[allow(clippy::too_many_arguments)]
-    fn linear(&mut self, bk: &mut Bk, x: Ref, name: &str, out: usize, inp: usize, bias: bool, per_layer: bool, site: &str) -> Result<Ref> {
+    fn linear(
+        &mut self,
+        bk: &mut Bk,
+        x: Ref,
+        name: &str,
+        out: usize,
+        inp: usize,
+        bias: bool,
+        per_layer: bool,
+        site: &str,
+    ) -> Result<Ref> {
         let w = self.param(&format!("{name}.w"), vec![out, inp], per_layer, Init::Normal(W_STD))?;
         let mut ins = vec![x, w];
         if bias {
@@ -142,7 +168,18 @@ impl Builder<'_> {
     /// A norm under role `name` over `n` values in `groups` groups, gain shaped `gain_shape`
     /// (`[n]` full, `[n/groups]` shared by the groups, `[groups, n/groups]` per group).
     #[allow(clippy::too_many_arguments)]
-    fn norm(&mut self, bk: &mut Bk, x: Ref, spec: NormSpec, name: &str, n: usize, groups: usize, gain_shape: Vec<usize>, per_layer: bool, site: &str) -> Result<Ref> {
+    fn norm(
+        &mut self,
+        bk: &mut Bk,
+        x: Ref,
+        spec: NormSpec,
+        name: &str,
+        n: usize,
+        groups: usize,
+        gain_shape: Vec<usize>,
+        per_layer: bool,
+        site: &str,
+    ) -> Result<Ref> {
         let mut ins = vec![x];
         if spec.gain != Gain::None {
             let init = if spec.gain == Gain::OnePlusW { Init::Uniform(-0.3, 0.3) } else { Init::Uniform(0.6, 1.4) };
@@ -330,8 +367,18 @@ impl Builder<'_> {
         match &a.position {
             Position::Rope(r) => {
                 let t = self.rope_table(&r.freqs);
-                q = bk.f(Op::Rope { heads: h, head_dim: hd, rotary_dim: r.rotary_dim, offset: r.offset, style: r.style, table: t }, vec![q, Ref::Pos], qn, "attn.q_rope");
-                k = bk.f(Op::Rope { heads: kv, head_dim: hd, rotary_dim: r.rotary_dim, offset: r.offset, style: r.style, table: t }, vec![k, Ref::Pos], kn, "attn.k_rope");
+                q = bk.f(
+                    Op::Rope { heads: h, head_dim: hd, rotary_dim: r.rotary_dim, offset: r.offset, style: r.style, table: t },
+                    vec![q, Ref::Pos],
+                    qn,
+                    "attn.q_rope",
+                );
+                k = bk.f(
+                    Op::Rope { heads: kv, head_dim: hd, rotary_dim: r.rotary_dim, offset: r.offset, style: r.style, table: t },
+                    vec![k, Ref::Pos],
+                    kn,
+                    "attn.k_rope",
+                );
             }
             Position::Alibi(al) => alibi = Some(al.clone()),
             Position::None => {}
@@ -345,7 +392,17 @@ impl Builder<'_> {
         if a.sinks {
             ins.push(self.param("attn.sinks", vec![h], true, Init::Normal(1.0))?);
         }
-        let op = Op::Attention { heads: h, kv_heads: kv, head_dim: hd, v_head_dim: vd, scale: a.scale, softcap: a.softcap, window: a.window, alibi, sinks: a.sinks };
+        let op = Op::Attention {
+            heads: h,
+            kv_heads: kv,
+            head_dim: hd,
+            v_head_dim: vd,
+            scale: a.scale,
+            softcap: a.softcap,
+            window: a.window,
+            alibi,
+            sinks: a.sinks,
+        };
         let mut o = bk.f(op, ins, h * vd, "attn.ctx");
         if let Some(g) = gate {
             let s = bk.f(Op::Act(Act::Sigmoid), vec![g], qn, "attn.gate_act");
@@ -378,17 +435,32 @@ impl Builder<'_> {
             None => self.linear(bk, x, "mla.q", h * qd, d, false, true, "mla.q")?,
         };
         let t = self.rope_table(&a.rope.freqs);
-        let q = bk.f(Op::Rope { heads: h, head_dim: qd, rotary_dim: rope, offset: nope, style: a.rope.style, table: t }, vec![q, Ref::Pos], h * qd, "mla.q_rope");
+        let q = bk.f(
+            Op::Rope { heads: h, head_dim: qd, rotary_dim: rope, offset: nope, style: a.rope.style, table: t },
+            vec![q, Ref::Pos],
+            h * qd,
+            "mla.q_rope",
+        );
         let c = self.linear(bk, x, "mla.kv_a.latent", r, d, a.a_bias, true, "mla.kv_a")?;
         let c = self.norm(bk, c, a.kv_a_norm, "mla.kv_a_norm", r, 1, vec![r], true, "mla.latent")?;
         let kr = self.linear(bk, x, "mla.kv_a.rope", rope, d, a.a_bias, true, "mla.k_rope_in")?;
-        let kr = bk.f(Op::Rope { heads: 1, head_dim: rope, rotary_dim: rope, offset: 0, style: a.rope.style, table: t }, vec![kr, Ref::Pos], rope, "mla.k_rope");
+        let kr = bk.f(
+            Op::Rope { heads: 1, head_dim: rope, rotary_dim: rope, offset: 0, style: a.rope.style, table: t },
+            vec![kr, Ref::Pos],
+            rope,
+            "mla.k_rope",
+        );
         let ls = self.state("mla.latent_hist", StateKind::Hist { window: None }, vec![r], 0.0)?;
         let rs = self.state("mla.k_rope_hist", StateKind::Hist { window: None }, vec![rope], 0.0)?;
         bk.append(c, ls);
         bk.append(kr, rs);
         let kvb = self.param("mla.kv_b.w", vec![h * (nope + vd), r], true, Init::Normal(W_STD))?;
-        let o = bk.f(Op::MlaAttention { heads: h, nope, rope, v_dim: vd, kv_lora: r, scale: a.scale }, vec![q, ls, rs, kvb], h * vd, "mla.ctx");
+        let o = bk.f(
+            Op::MlaAttention { heads: h, nope, rope, v_dim: vd, kv_lora: r, scale: a.scale },
+            vec![q, ls, rs, kvb],
+            h * vd,
+            "mla.ctx",
+        );
         self.linear(bk, o, "mla.o", d, h * vd, false, true, "mla.out")
     }
 
@@ -463,7 +535,8 @@ impl Builder<'_> {
         let aa = self.param("mamba.A", vec![i, n], true, Init::Uniform(-3.0, -0.3))?;
         let dd = self.param("mamba.D", vec![i], true, Init::Uniform(0.5, 1.5))?;
         let st = self.state("mamba.h", StateKind::Fixed, vec![i, n], 0.0)?;
-        let y = bk.fw(Op::SelectiveScan { inner: i, state: n }, vec![xc, dt, bb, cc, aa, dd, st], i, Some("mamba.scan"), vec![sid(st)]);
+        let y =
+            bk.fw(Op::SelectiveScan { inner: i, state: n }, vec![xc, dt, bb, cc, aa, dd, st], i, Some("mamba.scan"), vec![sid(st)]);
         let gz = bk.f(Op::Act(Act::Silu), vec![z], i, "mamba.gate");
         let y = bk.f(Op::Mul, vec![y, gz], i, "mamba.gated");
         self.linear(bk, y, "mamba.out", d, i, m.proj_bias, true, "mamba.out")
@@ -498,7 +571,8 @@ impl Builder<'_> {
             vec![sid(st)],
         );
         let w = self.param("mamba2.norm.gain", vec![inner], true, Init::Uniform(0.6, 1.4))?;
-        let y = bk.f(Op::GatedRmsNorm { eps: m.norm_eps, groups: m.norm_groups, gate_first: true }, vec![y, z, w], inner, "mamba2.normed");
+        let y =
+            bk.f(Op::GatedRmsNorm { eps: m.norm_eps, groups: m.norm_groups, gate_first: true }, vec![y, z, w], inner, "mamba2.normed");
         self.linear(bk, y, "mamba2.out", d, inner, m.proj_bias, true, "mamba2.out")
     }
 
@@ -572,7 +646,9 @@ impl Builder<'_> {
                     let a = bk.f(Op::Act(m.act), vec![g], i, &format!("{pfx}.act"));
                     bk.f(Op::Mul, vec![a, u], i, &format!("{pfx}.hidden"))
                 }
-                Glu::ClampedSwiGlu { alpha, limit } => bk.f(Op::ClampedSwiGlu { alpha, limit }, vec![g, u], i, &format!("{pfx}.hidden")),
+                Glu::ClampedSwiGlu { alpha, limit } => {
+                    bk.f(Op::ClampedSwiGlu { alpha, limit }, vec![g, u], i, &format!("{pfx}.hidden"))
+                }
             }
         } else {
             bk.f(Op::Act(m.act), vec![u], i, &format!("{pfx}.act"))
@@ -607,7 +683,14 @@ impl Builder<'_> {
         }
         let mut y = bk.f(Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias }, ins, d, "moe.routed");
         if let Some(sh) = &m.shared {
-            let spec = MlpSpec { intermediate: sh.intermediate, act: m.act, gated: true, glu: Glu::Standard, up_bias: false, down_bias: false };
+            let spec = MlpSpec {
+                intermediate: sh.intermediate,
+                act: m.act,
+                gated: true,
+                glu: Glu::Standard,
+                up_bias: false,
+                down_bias: false,
+            };
             let mut s = self.mlp(bk, &spec, x, "moe.shared")?;
             if sh.sigmoid_gate {
                 let g = self.linear(bk, x, "moe.shared_gate", 1, d, false, true, "moe.shared_gate")?;

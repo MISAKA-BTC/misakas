@@ -73,7 +73,9 @@ fn every_site_records_statistics_for_calibration() {
             let layers: Vec<String> = match b.role {
                 BlockRole::Pre => vec!["pre.".into()],
                 BlockRole::Post => vec!["post.".into()],
-                BlockRole::Layer => prog.schedule.iter().enumerate().filter(|(_, k)| **k as usize == bi).map(|(l, _)| format!("L{l}.")).collect(),
+                BlockRole::Layer => {
+                    prog.schedule.iter().enumerate().filter(|(_, k)| **k as usize == bi).map(|(l, _)| format!("L{l}.")).collect()
+                }
             };
             for site in prog.sites(bi) {
                 for l in &layers {
@@ -90,7 +92,12 @@ fn every_site_records_statistics_for_calibration() {
 fn composite_ops_report_their_internal_sites() {
     let progs = tiny();
     let find = |n: &str| progs.iter().find(|(x, _)| x == n).map(|(_, p)| p).unwrap();
-    for (arch, sub) in [("qwen3_next", "L0.gdn.core.state"), ("llama", "L0.attn.ctx.probs"), ("mamba2", "L0.mamba2.scan.state"), ("mixtral", "L0.moe.routed.hidden")] {
+    for (arch, sub) in [
+        ("qwen3_next", "L0.gdn.core.state"),
+        ("llama", "L0.attn.ctx.probs"),
+        ("mamba2", "L0.mamba2.scan.state"),
+        ("mixtral", "L0.moe.routed.hidden"),
+    ] {
         let prog = find(arch);
         let params = ParamStore::synthetic(prog, 5);
         let mut s = Session::new(prog, &params).with_site_stats();

@@ -173,7 +173,9 @@ impl<'a> Cfg<'a> {
     pub fn opt_usize(&self, k: &str) -> Result<Option<usize>> {
         match self.raw(k) {
             None => Ok(None),
-            Some(v) => as_usize(v).map(Some).ok_or_else(|| LowerError::bad(format!("`{}` is not a non-negative integer: {v}", self.key(k)))),
+            Some(v) => {
+                as_usize(v).map(Some).ok_or_else(|| LowerError::bad(format!("`{}` is not a non-negative integer: {v}", self.key(k))))
+            }
         }
     }
     pub fn req_usize(&self, k: &str) -> Result<usize> {
@@ -189,7 +191,9 @@ impl<'a> Cfg<'a> {
         match self.map.get(k) {
             None => Ok(d),
             Some(Value::Null) => Ok(None),
-            Some(v) => as_usize(v).map(Some).ok_or_else(|| LowerError::bad(format!("`{}` is not a non-negative integer: {v}", self.key(k)))),
+            Some(v) => {
+                as_usize(v).map(Some).ok_or_else(|| LowerError::bad(format!("`{}` is not a non-negative integer: {v}", self.key(k))))
+            }
         }
     }
     pub fn f64_or_null(&self, k: &str, d: Option<f64>) -> Result<Option<f64>> {
@@ -286,7 +290,9 @@ impl<'a> Cfg<'a> {
             None => Ok(None),
             Some(l) => l
                 .iter()
-                .map(|v| v.as_str().map(str::to_string).ok_or_else(|| LowerError::bad(format!("`{}` holds a non-string", self.key(k)))))
+                .map(|v| {
+                    v.as_str().map(str::to_string).ok_or_else(|| LowerError::bad(format!("`{}` holds a non-string", self.key(k))))
+                })
                 .collect::<Result<Vec<_>>>()
                 .map(Some),
         }
@@ -316,7 +322,9 @@ impl<'a> Cfg<'a> {
         match self.raw(k) {
             None => Ok(()),
             Some(v) if values_equal(v, want) => Ok(()),
-            Some(v) => Err(LowerError::not_lowerable(format!("{}: `{}` = {v}, only {want} is implemented ({why})", self.arch, self.key(k)))),
+            Some(v) => {
+                Err(LowerError::not_lowerable(format!("{}: `{}` = {v}, only {want} is implemented ({why})", self.arch, self.key(k))))
+            }
         }
     }
 

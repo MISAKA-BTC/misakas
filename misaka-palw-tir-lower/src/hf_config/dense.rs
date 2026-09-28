@@ -37,9 +37,17 @@ fn llama_defaults(f: Flavor) -> LlamaDefaults {
         Flavor::Qwen2 => LlamaDefaults { vocab: 151936, inter: 22016, kv: Some(32), max_pos: 32768, ..d },
         Flavor::Qwen3 => LlamaDefaults { vocab: 151936, inter: 22016, kv: Some(32), hd: Some(128), max_pos: 32768, ..d },
         Flavor::MiniCpm => LlamaDefaults { tie: true, ..d },
-        Flavor::SmolLm3 => {
-            LlamaDefaults { vocab: 128256, hidden: 2048, layers: 36, heads: 16, kv: Some(4), max_pos: 32768, tie: true, theta: 2_000_000.0, ..d }
-        }
+        Flavor::SmolLm3 => LlamaDefaults {
+            vocab: 128256,
+            hidden: 2048,
+            layers: 36,
+            heads: 16,
+            kv: Some(4),
+            max_pos: 32768,
+            tie: true,
+            theta: 2_000_000.0,
+            ..d
+        },
     }
 }
 
@@ -92,7 +100,31 @@ pub(crate) fn llama_with_prefix(p: &mut P, f: Flavor, model: &str, lm_head: &str
         Flavor::Mistral => {
             let sw = p.cfg.usize_or_null("sliding_window", Some(4096))?;
             let t = p.layer_types(n, &["full_attention", "sliding_attention"], |_| "sliding_attention")?;
-            return finish_llama(p, f, FinishArgs { vocab, hidden, inter, n, h, kv, hd, act, max_pos, eps, tied, qkv_bias, o_bias, mlp_bias, types: t, sw, model, lm_head, arch });
+            return finish_llama(
+                p,
+                f,
+                FinishArgs {
+                    vocab,
+                    hidden,
+                    inter,
+                    n,
+                    h,
+                    kv,
+                    hd,
+                    act,
+                    max_pos,
+                    eps,
+                    tied,
+                    qkv_bias,
+                    o_bias,
+                    mlp_bias,
+                    types: t,
+                    sw,
+                    model,
+                    lm_head,
+                    arch,
+                },
+            );
         }
         Flavor::Qwen2 | Flavor::Qwen3 | Flavor::SmolLm3 => {
             if f == Flavor::Qwen2 {
@@ -107,10 +139,58 @@ pub(crate) fn llama_with_prefix(p: &mut P, f: Flavor, model: &str, lm_head: &str
             let t = p.layer_types(n, &["full_attention", "sliding_attention"], |i| {
                 if sw.is_some() && i >= mwl { "sliding_attention" } else { "full_attention" }
             })?;
-            return finish_llama(p, f, FinishArgs { vocab, hidden, inter, n, h, kv, hd, act, max_pos, eps, tied, qkv_bias, o_bias, mlp_bias, types: t, sw, model, lm_head, arch });
+            return finish_llama(
+                p,
+                f,
+                FinishArgs {
+                    vocab,
+                    hidden,
+                    inter,
+                    n,
+                    h,
+                    kv,
+                    hd,
+                    act,
+                    max_pos,
+                    eps,
+                    tied,
+                    qkv_bias,
+                    o_bias,
+                    mlp_bias,
+                    types: t,
+                    sw,
+                    model,
+                    lm_head,
+                    arch,
+                },
+            );
         }
     };
-    finish_llama(p, f, FinishArgs { vocab, hidden, inter, n, h, kv, hd, act, max_pos, eps, tied, qkv_bias, o_bias, mlp_bias, types, sw: None, model, lm_head, arch })
+    finish_llama(
+        p,
+        f,
+        FinishArgs {
+            vocab,
+            hidden,
+            inter,
+            n,
+            h,
+            kv,
+            hd,
+            act,
+            max_pos,
+            eps,
+            tied,
+            qkv_bias,
+            o_bias,
+            mlp_bias,
+            types,
+            sw: None,
+            model,
+            lm_head,
+            arch,
+        },
+    )
 }
 
 struct FinishArgs<'s> {
@@ -155,7 +235,9 @@ fn finish_llama(p: &mut P, f: Flavor, a: FinishArgs) -> Result<ArchSpec> {
             multiplier = depth / (a.n as f64).sqrt();
             let base = p.cfg.f64_or("dim_model_base", 1.0)?;
             pre_scale = base / a.hidden as f64;
-            p.unsure.push("MiniCPM remote-code defaults (tie_word_embeddings=true) taken from configuration_minicpm.py as recalled".into());
+            p.unsure.push(
+                "MiniCPM remote-code defaults (tie_word_embeddings=true) taken from configuration_minicpm.py as recalled".into(),
+            );
         }
         _ => {}
     }
@@ -174,16 +256,22 @@ fn finish_llama(p: &mut P, f: Flavor, a: FinishArgs) -> Result<ArchSpec> {
     }
 
     let mut layers = Vec::with_capacity(a.n);
-    for i in 0..a.n {
-        let position = if no_rope[i] { Position::None } else { Position::Rope(rope.clone()) };
+    for (i, nope) in no_rope.iter().enumerate() {
+        let position = if *nope { Position::None } else { Position::Rope(rope.clone()) };
         let mut at = attn(a.h, a.kv, a.hd, position, (a.qkv_bias, a.o_bias));
         at.scale = attn_scale;
         at.window = window_for(&a.types[i], a.sw);
         if f == Flavor::Qwen3 {
             at.qk_norm = Some(QkNorm { norm, scope: QkNormScope::PerHeadShared });
         }
-        let residual = Residual::Sequential { pre_mixer: Some(norm), post_mixer: None, pre_ffn: Some(norm), post_ffn: None, multiplier };
-        layers.push(LayerSpec { mixer: Mixer::Attention(at), ffn: Ffn::Mlp(gated_mlp(a.inter, a.act, a.mlp_bias)), residual, post_scale: 1.0 });
+        let residual =
+            Residual::Sequential { pre_mixer: Some(norm), post_mixer: None, pre_ffn: Some(norm), post_ffn: None, multiplier };
+        layers.push(LayerSpec {
+            mixer: Mixer::Attention(at),
+            ffn: Ffn::Mlp(gated_mlp(a.inter, a.act, a.mlp_bias)),
+            residual,
+            post_scale: 1.0,
+        });
     }
     let mut nm = llama_names(a.model, a.lm_head);
     if a.tied {
@@ -239,7 +327,12 @@ pub(crate) fn internlm2(p: &mut P) -> Result<ArchSpec> {
     let at = attn(h, kv, hd, Position::Rope(rope), (bias, bias));
     p.layouts.qkv = QkvLayout::FusedPerKvGroup;
     let layers = (0..n)
-        .map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(gated_mlp(inter, act, false)), residual: pre_norm(norm), post_scale: 1.0 })
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
         .collect();
     let l = "model.layers.{L}.";
     let mut nm = names(&[
@@ -290,7 +383,12 @@ pub(crate) fn exaone(p: &mut P) -> Result<ArchSpec> {
     let norm = NormSpec::rms(eps);
     let at = attn(h, kv, hd, Position::Rope(rope), (false, false));
     let layers = (0..n)
-        .map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(gated_mlp(inter, act, false)), residual: pre_norm(norm), post_scale: 1.0 })
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
         .collect();
     let l = "transformer.h.{L}.";
     let mut nm = names(&[
@@ -355,7 +453,13 @@ pub(crate) fn exaone4(p: &mut P) -> Result<ArchSpec> {
             LayerSpec {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
-                residual: Residual::Sequential { pre_mixer: None, post_mixer: Some(norm), pre_ffn: None, post_ffn: Some(norm), multiplier: 1.0 },
+                residual: Residual::Sequential {
+                    pre_mixer: None,
+                    post_mixer: Some(norm),
+                    pre_ffn: None,
+                    post_ffn: Some(norm),
+                    multiplier: 1.0,
+                },
                 post_scale: 1.0,
             }
         })
@@ -368,7 +472,10 @@ pub(crate) fn exaone4(p: &mut P) -> Result<ArchSpec> {
     if tied {
         nm.insert("lm_head".into(), "model.embed_tokens".into());
     }
-    p.unsure.push("EXAONE-4 wiring (post-norm only, NoPE on global layers when sliding_window is set) as recalled from modeling_exaone4.py".into());
+    p.unsure.push(
+        "EXAONE-4 wiring (post-norm only, NoPE on global layers when sliding_window is set) as recalled from modeling_exaone4.py"
+            .into(),
+    );
     Ok(p.finish_spec(SpecParts {
         model_type: "exaone4",
         families: vec!["C1", "C2"],
@@ -457,7 +564,12 @@ pub(crate) fn stablelm(p: &mut P) -> Result<ArchSpec> {
     }
     let residual = if parallel { Residual::Parallel { norm, ffn_norm: None } } else { pre_norm(norm) };
     let layers = (0..n)
-        .map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(gated_mlp(inter, act, false)), residual: residual.clone(), post_scale: 1.0 })
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
+            residual: residual.clone(),
+            post_scale: 1.0,
+        })
         .collect();
     let mut nm = llama_names("model.", "lm_head");
     nm.insert("attn.q_norm".into(), "model.layers.{L}.self_attn.q_layernorm.norms.{H}".into());
@@ -503,7 +615,12 @@ pub(crate) fn starcoder2(p: &mut P) -> Result<ArchSpec> {
     let mut at = attn(h, kv, hd, Position::Rope(rope), (bias, bias));
     at.window = sw;
     let layers = (0..n)
-        .map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(plain_mlp(inter, act, bias)), residual: pre_norm(norm), post_scale: 1.0 })
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(plain_mlp(inter, act, bias)),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
         .collect();
     let mut nm = llama_names("model.", "lm_head");
     nm.remove("mlp.gate");
@@ -546,7 +663,12 @@ pub(crate) fn olmo(p: &mut P) -> Result<ArchSpec> {
     let mut at = attn(h, kv, hd, Position::Rope(rope), (bias, bias));
     at.clip_qkv = clip;
     let layers = (0..n)
-        .map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(gated_mlp(inter, act, false)), residual: pre_norm(norm), post_scale: 1.0 })
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
         .collect();
     let mut nm = llama_names("model.", "lm_head");
     if tied {
@@ -589,7 +711,13 @@ pub(crate) fn olmo2(p: &mut P) -> Result<ArchSpec> {
         .map(|_| LayerSpec {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
-            residual: Residual::Sequential { pre_mixer: None, post_mixer: Some(norm), pre_ffn: None, post_ffn: Some(norm), multiplier: 1.0 },
+            residual: Residual::Sequential {
+                pre_mixer: None,
+                post_mixer: Some(norm),
+                pre_ffn: None,
+                post_ffn: Some(norm),
+                multiplier: 1.0,
+            },
             post_scale: 1.0,
         })
         .collect();
@@ -637,7 +765,11 @@ pub(crate) fn cohere(p: &mut P, v2: bool) -> Result<ArchSpec> {
     if v2 {
         // Keys of the original Cohere2 release that transformers does not read; each must name
         // the behaviour transformers hard-codes.
-        p.cfg.require_eq("order_of_interleaved_layers", &serde_json::json!("local_attn_first"), "sliding layers come first in each group")?;
+        p.cfg.require_eq(
+            "order_of_interleaved_layers",
+            &serde_json::json!("local_attn_first"),
+            "sliding layers come first in each group",
+        )?;
         p.cfg.require_eq("position_embedding_type", &serde_json::json!("rope_gptj"), "interleaved (GPT-J) rope")?;
         p.cfg.require_eq("rotary_pct", &serde_json::json!(1.0), "full rotary")?;
         p.cfg.require_eq("use_gated_activation", &serde_json::json!(true), "SwiGLU MLP")?;
@@ -653,7 +785,9 @@ pub(crate) fn cohere(p: &mut P, v2: bool) -> Result<ArchSpec> {
         p.cfg.forbid("use_qk_norm", "Cohere2 has no QK norm")?;
         let sw = p.cfg.usize_or_null("sliding_window", Some(4096))?;
         let pattern = p.cfg.opt_usize("sliding_window_pattern")?.or(p.cfg.opt_usize("_sliding_window_pattern")?).unwrap_or(4);
-        let t = p.layer_types(n, &["full_attention", "sliding_attention"], |i| if (i + 1) % pattern != 0 { "sliding_attention" } else { "full_attention" })?;
+        let t = p.layer_types(n, &["full_attention", "sliding_attention"], |i| {
+            if (i + 1) % pattern != 0 { "sliding_attention" } else { "full_attention" }
+        })?;
         (false, t, sw)
     } else {
         (p.cfg.bool_or("use_qk_norm", false)?, vec!["full_attention".to_string(); n], None)
@@ -667,7 +801,12 @@ pub(crate) fn cohere(p: &mut P, v2: bool) -> Result<ArchSpec> {
             if qk_norm {
                 at.qk_norm = Some(QkNorm { norm, scope: QkNormScope::PerHeadSeparate });
             }
-            LayerSpec { mixer: Mixer::Attention(at), ffn: Ffn::Mlp(gated_mlp(inter, act, false)), residual: Residual::Parallel { norm, ffn_norm: None }, post_scale: 1.0 }
+            LayerSpec {
+                mixer: Mixer::Attention(at),
+                ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
+                residual: Residual::Parallel { norm, ffn_norm: None },
+                post_scale: 1.0,
+            }
         })
         .collect();
     let mut nm = llama_names("model.", "lm_head");
@@ -701,7 +840,9 @@ fn gemma_act(p: &mut P, primary: &str, other: &str) -> Result<Act> {
     if let Some(o) = p.cfg.opt_str(other)?
         && o != name
     {
-        p.unsure.push(format!("Gemma: `{primary}`={name} is used (transformers 5); `{other}`={o} disagrees and older transformers may have used it"));
+        p.unsure.push(format!(
+            "Gemma: `{primary}`={name} is used (transformers 5); `{other}`={o} disagrees and older transformers may have used it"
+        ));
     }
     Act::from_hf(&name).ok_or_else(|| LowerError::not_lowerable(format!("{}: activation `{name}`", p.cfg.arch)))
 }
@@ -776,7 +917,9 @@ pub(crate) fn gemma2(p: &mut P) -> Result<ArchSpec> {
     let attn_cap = p.cfg.f64_or_null("attn_logit_softcapping", Some(50.0))?;
     p.cfg.forbid("use_bidirectional_attention", "bidirectional attention is not a causal LM")?;
     p.cfg.inert(&["cache_implementation"]);
-    let types = p.layer_types(n, &["full_attention", "sliding_attention"], |i| if (i + 1) % 2 != 0 { "sliding_attention" } else { "full_attention" })?;
+    let types = p.layer_types(n, &["full_attention", "sliding_attention"], |i| {
+        if (i + 1) % 2 != 0 { "sliding_attention" } else { "full_attention" }
+    })?;
     let rope = p.rope(hd, RopeStyle::Half, Some(10000.0), None, 1.0, Some(max_pos), None)?;
     let norm = NormSpec::rms_1p(eps);
     let layers = (0..n)
@@ -788,7 +931,13 @@ pub(crate) fn gemma2(p: &mut P) -> Result<ArchSpec> {
             LayerSpec {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
-                residual: Residual::Sequential { pre_mixer: Some(norm), post_mixer: Some(norm), pre_ffn: Some(norm), post_ffn: Some(norm), multiplier: 1.0 },
+                residual: Residual::Sequential {
+                    pre_mixer: Some(norm),
+                    post_mixer: Some(norm),
+                    pre_ffn: Some(norm),
+                    post_ffn: Some(norm),
+                    multiplier: 1.0,
+                },
                 post_scale: 1.0,
             }
         })
@@ -846,7 +995,9 @@ pub(crate) fn gemma3_text(p: &mut P, model: &str, lm_head: &str, aliases: Vec<(S
     let pattern = p.cfg.opt_usize("sliding_window_pattern")?.or(p.cfg.opt_usize("_sliding_window_pattern")?).unwrap_or(6);
     p.cfg.forbid("use_bidirectional_attention", "bidirectional (embedding) Gemma-3 is not a causal LM")?;
     p.cfg.inert(&["cache_implementation"]);
-    let types = p.layer_types(n, &["full_attention", "sliding_attention"], |i| if (i + 1) % pattern != 0 { "sliding_attention" } else { "full_attention" })?;
+    let types = p.layer_types(n, &["full_attention", "sliding_attention"], |i| {
+        if (i + 1) % pattern != 0 { "sliding_attention" } else { "full_attention" }
+    })?;
     let global = if p.cfg.has("rope_parameters") {
         p.rope(hd, RopeStyle::Half, Some(1_000_000.0), Some("full_attention"), 1.0, Some(max_pos), None)?
     } else {
@@ -870,7 +1021,13 @@ pub(crate) fn gemma3_text(p: &mut P, model: &str, lm_head: &str, aliases: Vec<(S
             LayerSpec {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
-                residual: Residual::Sequential { pre_mixer: Some(norm), post_mixer: Some(norm), pre_ffn: Some(norm), post_ffn: Some(norm), multiplier: 1.0 },
+                residual: Residual::Sequential {
+                    pre_mixer: Some(norm),
+                    post_mixer: Some(norm),
+                    pre_ffn: Some(norm),
+                    post_ffn: Some(norm),
+                    multiplier: 1.0,
+                },
                 post_scale: 1.0,
             }
         })
@@ -920,7 +1077,14 @@ pub(crate) fn phi3(p: &mut P) -> Result<ArchSpec> {
     let mlp = gated_mlp(inter, act, false);
     p.layouts.qkv = QkvLayout::FusedConcat;
     p.layouts.mlp = MlpLayout::FusedGateFirst;
-    let layers = (0..n).map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(mlp.clone()), residual: pre_norm(norm), post_scale: 1.0 }).collect();
+    let layers = (0..n)
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(mlp.clone()),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
+        .collect();
     let l = "model.layers.{L}.";
     let mut nm = names(&[
         ("embed", "model.embed_tokens".into()),
@@ -935,7 +1099,10 @@ pub(crate) fn phi3(p: &mut P) -> Result<ArchSpec> {
     ]);
     nm.remove("unused");
     if sw.is_some() {
-        p.notes.push(format!("sliding_window={} applies to every layer (HF builds a sliding causal mask when it is set)", sw.unwrap_or(0)));
+        p.notes.push(format!(
+            "sliding_window={} applies to every layer (HF builds a sliding causal mask when it is set)",
+            sw.unwrap_or(0)
+        ));
     }
     Ok(p.finish_spec(SpecParts {
         model_type: "phi3",

@@ -30,6 +30,7 @@ pub mod float_ref;
 pub mod hf_config;
 pub mod hf_weights;
 pub mod hl;
+pub mod report;
 pub mod rope;
 pub mod spec;
 pub mod weights;

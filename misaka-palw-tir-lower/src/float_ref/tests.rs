@@ -11,7 +11,13 @@ fn close(a: f64, b: f64, tol: f64) -> bool {
 
 #[test]
 fn erf_matches_reference_values() {
-    for (x, want) in [(0.0, 0.0), (0.5, 0.520_499_877_813_046_5), (1.0, 0.842_700_792_949_714_9), (2.0, 0.995_322_265_018_952_7), (3.5, 0.999_999_256_901_627_7)] {
+    for (x, want) in [
+        (0.0, 0.0),
+        (0.5, 0.520_499_877_813_046_5),
+        (1.0, 0.842_700_792_949_714_9),
+        (2.0, 0.995_322_265_018_952_7),
+        (3.5, 0.999_999_256_901_627_7),
+    ] {
         assert!(close(erf(x), want, 1e-12), "erf({x}) = {} vs {want}", erf(x));
         assert!(close(erf(-x), -want, 1e-12));
     }
@@ -109,7 +115,18 @@ fn softcap_sinks_and_alibi() {
     assert!(close(p[1] as f64, want, 1e-6));
     // Falcon: the bias is scaled with the scores and rounded through bfloat16.
     let al = AlibiSpec { slopes: vec![0.3], scaled_by_softmax_scale: true, bf16_bias: true };
-    let (_, sc, _) = attention(&[0.0], &kv(&[&[0.0], &[0.0], &[0.0], &[0.0]]), &kv(&[&[0.0], &[0.0], &[0.0], &[0.0]]), SH1, 0.5, None, None, Some(&al), None, true);
+    let (_, sc, _) = attention(
+        &[0.0],
+        &kv(&[&[0.0], &[0.0], &[0.0], &[0.0]]),
+        &kv(&[&[0.0], &[0.0], &[0.0], &[0.0]]),
+        SH1,
+        0.5,
+        None,
+        None,
+        Some(&al),
+        None,
+        true,
+    );
     let b3 = bf16_round(bf16_round(0.3) * 3.0) as f64 * 0.5;
     assert_eq!(sc[3] as f64, b3 as f32 as f64);
     assert_ne!(b3, 0.3 * 3.0 * 0.5, "bf16 rounding is visible");
@@ -317,7 +334,7 @@ fn rwkv7_single_state_hand_check() {
     // n = 1: S' = S·w + (S·a)·b + v·k; o = S'·r.
     let mut s = vec![2.0f32];
     let o = wkv7(&[3.0], &[0.5], &[4.0], &[5.0], &[0.25], &[-1.0], &mut s, 1, 1);
-    let s1 = 2.0 * 0.5 + (2.0 * 0.25) * -1.0 + 5.0 * 4.0;
+    let s1 = 2.0 * 0.5 - (2.0 * 0.25) + 5.0 * 4.0;
     assert_eq!(s[0], s1);
     assert_eq!(o[0], s1 * 3.0);
 }
@@ -340,7 +357,9 @@ fn mla_absorbed_form_equals_the_expanded_keys_and_values() {
             k.extend(kr[j].iter().map(|x| *x as f64));
             k
         };
-        let value = |j: usize| -> Vec<f64> { (0..vd).map(|i| (0..r).map(|c| rows[(nope + i) * r + c] as f64 * lat[j][c] as f64).sum()).collect() };
+        let value = |j: usize| -> Vec<f64> {
+            (0..vd).map(|i| (0..r).map(|c| rows[(nope + i) * r + c] as f64 * lat[j][c] as f64).sum()).collect()
+        };
         let qh: Vec<f64> = q[h * qd..(h + 1) * qd].iter().map(|x| *x as f64).collect();
         let sc: Vec<f64> = (0..3).map(|j| key(j).iter().zip(&qh).map(|(a, b)| a * b).sum::<f64>() * scale).collect();
         let p = softmax_with_sink(&sc, None);

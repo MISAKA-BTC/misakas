@@ -35,12 +35,16 @@ fn run_fixture(dir: &Path) -> Result<Outcome, String> {
     if !unused.is_empty() {
         return Err(format!("checkpoint tensors the program never reads: {unused:?}"));
     }
-    let meta: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("logits.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let meta: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("logits.json")).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
     let tokens: Vec<usize> = meta["tokens"].as_array().ok_or("tokens")?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
     let (key, reference) = if meta.get("logits_decode").is_some() { ("logits_decode", "decode") } else { ("logits_full", "full") };
-    let want: Vec<Vec<f64>> =
-        meta[key].as_array().ok_or("logits")?.iter().map(|r| r.as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect()).unwrap_or_default()).collect();
+    let want: Vec<Vec<f64>> = meta[key]
+        .as_array()
+        .ok_or("logits")?
+        .iter()
+        .map(|r| r.as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect()).unwrap_or_default())
+        .collect();
     let mut sess = Session::new(&prog, &params);
     let got = sess.run(&tokens).map_err(|e| format!("run: {e}"))?;
     let scale = want.iter().flatten().fold(1.0f64, |m, v| m.max(v.abs()));

@@ -140,7 +140,15 @@ pub(crate) fn qwen3_next(p: &mut P) -> Result<ArchSpec> {
         act: q.act,
         glu: Glu::Standard,
         expert_bias: false,
-        router: RouterSpec { scoring: Scoring::Softmax, linear_bias: false, selection_bias: false, groups: None, normalize: norm_topk, norm_eps: 0.0, scale: 1.0 },
+        router: RouterSpec {
+            scoring: Scoring::Softmax,
+            linear_bias: false,
+            selection_bias: false,
+            groups: None,
+            normalize: norm_topk,
+            norm_eps: 0.0,
+            scale: 1.0,
+        },
         shared: (shared > 0).then_some(SharedExpertSpec { intermediate: shared, sigmoid_gate: true }),
     };
     let layers = (0..q.n)
@@ -153,7 +161,9 @@ pub(crate) fn qwen3_next(p: &mut P) -> Result<ArchSpec> {
     let mut nm = llama_names("model.", if q.tied { "model.embed_tokens" } else { "lm_head" });
     qwen_gdn_names(&mut nm, "model.layers.{L}.", true);
     qwen_moe_names(&mut nm, "model.layers.{L}.");
-    p.notes.push("GDN value head vh reads key head vh / (v_heads/k_heads) (repeat_interleave), not the live Q36 kernel's vh % k_heads".into());
+    p.notes.push(
+        "GDN value head vh reads key head vh / (v_heads/k_heads) (repeat_interleave), not the live Q36 kernel's vh % k_heads".into(),
+    );
     Ok(p.finish_spec(SpecParts {
         model_type: "qwen3_next",
         families: vec!["C3", "C4", "C7"],
@@ -172,8 +182,18 @@ pub(crate) fn qwen3_next(p: &mut P) -> Result<ArchSpec> {
 
 /// Qwen3.5 text decoder (dense or MoE): Qwen3-Next's hybrid with split GDN projections; the MoE
 /// always renormalises its top-k.
-pub(crate) fn qwen3_5_text(p: &mut P, moe_variant: bool, model: &str, lm_head: &str, aliases: Vec<(String, String)>) -> Result<ArchSpec> {
-    let q = if moe_variant { qwen_hybrid(p, 248320, 2048, 40, 2, GdnLayout::Split)? } else { qwen_hybrid(p, 248320, 4096, 32, 4, GdnLayout::Split)? };
+pub(crate) fn qwen3_5_text(
+    p: &mut P,
+    moe_variant: bool,
+    model: &str,
+    lm_head: &str,
+    aliases: Vec<(String, String)>,
+) -> Result<ArchSpec> {
+    let q = if moe_variant {
+        qwen_hybrid(p, 248320, 2048, 40, 2, GdnLayout::Split)?
+    } else {
+        qwen_hybrid(p, 248320, 4096, 32, 4, GdnLayout::Split)?
+    };
     let ffn = if moe_variant {
         let e = p.cfg.alias_usize(&["num_experts", "num_local_experts"])?.unwrap_or(256);
         let k = p.cfg.usize_or("num_experts_per_tok", 8)?;
@@ -189,7 +209,15 @@ pub(crate) fn qwen3_5_text(p: &mut P, moe_variant: bool, model: &str, lm_head: &
             act: q.act,
             glu: Glu::Standard,
             expert_bias: false,
-            router: RouterSpec { scoring: Scoring::Softmax, linear_bias: false, selection_bias: false, groups: None, normalize: true, norm_eps: 0.0, scale: 1.0 },
+            router: RouterSpec {
+                scoring: Scoring::Softmax,
+                linear_bias: false,
+                selection_bias: false,
+                groups: None,
+                normalize: true,
+                norm_eps: 0.0,
+                scale: 1.0,
+            },
             shared: (shared > 0).then_some(SharedExpertSpec { intermediate: shared, sigmoid_gate: true }),
         })
     } else {
@@ -203,7 +231,8 @@ pub(crate) fn qwen3_5_text(p: &mut P, moe_variant: bool, model: &str, lm_head: &
     if moe_variant {
         qwen_moe_names(&mut nm, &l);
     }
-    p.notes.push("text-only positions: the multimodal rope (mrope) reduces to plain rope when the three position ids are equal".into());
+    p.notes
+        .push("text-only positions: the multimodal rope (mrope) reduces to plain rope when the three position ids are equal".into());
     p.notes.push("GDN value head vh reads key head vh / (v_heads/k_heads) (repeat_interleave)".into());
     Ok(p.finish_spec(SpecParts {
         model_type: if moe_variant { "qwen3_5_moe_text" } else { "qwen3_5_text" },
@@ -256,7 +285,15 @@ pub(crate) fn jamba(p: &mut P) -> Result<ArchSpec> {
         return Err(LowerError::bad("jamba: periods/top-k"));
     }
     let norm = NormSpec::rms(eps);
-    let mamba = MambaSpec { inner: expand * hidden, state: d_state, conv_kernel: d_conv, dt_rank, conv_bias, proj_bias, bcdt_norm: Some(norm) };
+    let mamba = MambaSpec {
+        inner: expand * hidden,
+        state: d_state,
+        conv_kernel: d_conv,
+        dt_rank,
+        conv_bias,
+        proj_bias,
+        bcdt_norm: Some(norm),
+    };
     let m = MoeSpec {
         experts: e,
         top_k: k,
@@ -264,7 +301,15 @@ pub(crate) fn jamba(p: &mut P) -> Result<ArchSpec> {
         act,
         glu: Glu::Standard,
         expert_bias: false,
-        router: RouterSpec { scoring: Scoring::Softmax, linear_bias: false, selection_bias: false, groups: None, normalize: false, norm_eps: 0.0, scale: 1.0 },
+        router: RouterSpec {
+            scoring: Scoring::Softmax,
+            linear_bias: false,
+            selection_bias: false,
+            groups: None,
+            normalize: false,
+            norm_eps: 0.0,
+            scale: 1.0,
+        },
         shared: None,
     };
     let layers = (0..n)
@@ -550,7 +595,15 @@ pub(crate) fn rwkv4(p: &mut P) -> Result<ArchSpec> {
     let norm = NormSpec::layer(eps);
     let layers = (0..n)
         .map(|i| LayerSpec {
-            mixer: Mixer::RwkvTime(RwkvTimeSpec { version: 4, attn_dim, heads: 1, head_size: attn_dim, head_size_divisor: 1.0, gn_eps: 0.0, lora: vec![] }),
+            mixer: Mixer::RwkvTime(RwkvTimeSpec {
+                version: 4,
+                attn_dim,
+                heads: 1,
+                head_size: attn_dim,
+                head_size_divisor: 1.0,
+                gn_eps: 0.0,
+                lora: vec![],
+            }),
             ffn: Ffn::RwkvChannel(RwkvChannelSpec { version: 4, intermediate: inter }),
             residual: pre_norm(norm),
             post_scale: if rescale > 0 && (i + 1) % rescale == 0 { 0.5 } else { 1.0 },

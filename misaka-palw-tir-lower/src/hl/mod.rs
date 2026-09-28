@@ -55,40 +55,74 @@ pub enum Op {
     /// `table[token]`. In: `[Token, table]`.
     Embedding,
     /// `table[pos + offset]`. In: `[Pos, table]`.
-    PosEmbedding { offset: usize },
-    Slice { start: usize, len: usize },
+    PosEmbedding {
+        offset: usize,
+    },
+    Slice {
+        start: usize,
+        len: usize,
+    },
     Concat,
     Zeros,
     // ── arithmetic ──
     /// `W·x (+ b)`, `W` is `[out, in]`. In: `[x, W, (b)]`.
-    Linear { bias: bool },
+    Linear {
+        bias: bool,
+    },
     /// Elementwise; an operand of one element broadcasts.
     Add,
     Sub,
     Mul,
-    Scale { c: f64 },
+    Scale {
+        c: f64,
+    },
     Act(Act),
-    Clamp { lo: f64, hi: f64 },
+    Clamp {
+        lo: f64,
+        hi: f64,
+    },
     /// `tanh(x / cap) · cap`.
-    Softcap { cap: f64 },
+    Softcap {
+        cap: f64,
+    },
     /// `a + (b − a)·t`. In: `[a, b, t]`.
     Lerp,
     /// RWKV-5/6 per-channel decay `exp(−exp(x))`.
     DecayExpNegExp,
     /// gpt-oss: `(clamp(up,−l,l)+1) · g·σ(α·g)`, `g = min(gate, l)`. In: `[gate, up]`.
-    ClampedSwiGlu { alpha: f64, limit: f64 },
+    ClampedSwiGlu {
+        alpha: f64,
+        limit: f64,
+    },
     // ── normalisation ──
     /// `groups` equal groups normalised separately; gain `[n]`, `[n/groups]` (shared) or
     /// `[groups, n/groups]`. In: `[x, (gain), (bias)]`.
-    Norm { spec: NormSpec, groups: usize },
+    Norm {
+        spec: NormSpec,
+        groups: usize,
+    },
     /// RMSNorm with a SiLU gate `z`: `gate_first` ⇒ `norm(x·silu(z))·w` (Mamba2), else
     /// `norm(x)·w·silu(z)` (Qwen3-Next). In: `[x, z, gain]`.
-    GatedRmsNorm { eps: f64, groups: usize, gate_first: bool },
+    GatedRmsNorm {
+        eps: f64,
+        groups: usize,
+        gate_first: bool,
+    },
     /// `x · rsqrt(Σx² + eps)` per group (FLA's l2norm).
-    L2Norm { groups: usize, eps: f64 },
+    L2Norm {
+        groups: usize,
+        eps: f64,
+    },
     // ── position ──
     /// Rotates dims `[offset, offset+rotary_dim)` of each head by `pos`. In: `[x, Pos]`.
-    Rope { heads: usize, head_dim: usize, rotary_dim: usize, offset: usize, style: RopeStyle, table: u32 },
+    Rope {
+        heads: usize,
+        head_dim: usize,
+        rotary_dim: usize,
+        offset: usize,
+        style: RopeStyle,
+        table: u32,
+    },
     // ── history (Hist states) ──
     /// Append a row to a `Hist` state. In: `[x, State]`.
     HistAppend,
@@ -107,18 +141,45 @@ pub enum Op {
     },
     /// Multi-head latent attention over a compressed history (DeepSeek). Keys/values are
     /// `kv_b · latent` per head plus the shared rotary key. In: `[q, State(latent), State(k_rope), kv_b]`.
-    MlaAttention { heads: usize, nope: usize, rope: usize, v_dim: usize, kv_lora: usize, scale: f64 },
+    MlaAttention {
+        heads: usize,
+        nope: usize,
+        rope: usize,
+        v_dim: usize,
+        kv_lora: usize,
+        scale: f64,
+    },
     // ── recurrences (Fixed states) ──
     /// Depthwise causal convolution over the last `kernel` inputs; the state keeps `kernel−1`
     /// rows. In: `[x, State(window), w [C,K], (b)]`.
-    CausalConv1d { channels: usize, kernel: usize, bias: bool, act: Option<Act> },
+    CausalConv1d {
+        channels: usize,
+        kernel: usize,
+        bias: bool,
+        act: Option<Act>,
+    },
     /// Gated delta rule (Qwen3-Next): per value head `S ← S·exp(g); S += k (β(v − Sᵀk))ᵀ; o = Sᵀ(q·q_scale)`.
     /// In: `[q, k, v, g, beta, State(S [vh, dk, dv])]`.
-    GatedDelta { k_heads: usize, v_heads: usize, dk: usize, dv: usize, head_map: HeadMap, q_scale: f64 },
+    GatedDelta {
+        k_heads: usize,
+        v_heads: usize,
+        dk: usize,
+        dv: usize,
+        head_map: HeadMap,
+        q_scale: f64,
+    },
     /// Mamba-1 selective scan step. In: `[x, dt, B, C, A [I,N], D [I], State(h [I,N])]`.
-    SelectiveScan { inner: usize, state: usize },
+    SelectiveScan {
+        inner: usize,
+        state: usize,
+    },
     /// Mamba-2 SSD step (scalar decay per head, grouped B/C). In: `[x, dt, B, C, A [H], D [H], State(h [H,P,N])]`.
-    Ssd { heads: usize, head_dim: usize, groups: usize, state: usize },
+    Ssd {
+        heads: usize,
+        head_dim: usize,
+        groups: usize,
+        state: usize,
+    },
     /// RWKV token shift: outputs the previous position's `x` (zeros at 0) and stores `x`.
     /// In: `[x, State(prev)]`.
     TokenShift,
@@ -126,16 +187,31 @@ pub enum Op {
     Wkv4,
     /// RWKV-5/6 WKV: `o = r·(u⊙kᵀv + S)`, `S ← kᵀv + w⊙S` per head (w per channel).
     /// In: `[r, k, v, w, u, State(S [H,S,S])]`.
-    Wkv6 { heads: usize, head_size: usize },
+    Wkv6 {
+        heads: usize,
+        head_size: usize,
+    },
     /// RWKV-7 WKV: `S ← S·diag(w) + (S·a)bᵀ + v kᵀ`, `o = S·r`. In: `[r, w, k, v, a, b, State(S [H,S,S])]`.
-    Wkv7 { heads: usize, head_size: usize },
+    Wkv7 {
+        heads: usize,
+        head_size: usize,
+    },
     // ── routing ──
     /// Expert selection. Out 0: `top_k` expert ids in index order (ties → lowest index);
     /// out 1: their weights. In: `[logits, (selection bias)]`.
-    Route { router: RouterSpec, experts: usize, top_k: usize },
+    Route {
+        router: RouterSpec,
+        experts: usize,
+        top_k: usize,
+    },
     /// `Σ_j w_j · down_e(glu(gate_e x, up_e x))` over the selected experts.
     /// In: `[x, ids, weights, gate [E,I,D], up [E,I,D], down [E,D,I], (gate_b, up_b, down_b)]`.
-    MoeExperts { top_k: usize, act: Act, glu: Glu, bias: bool },
+    MoeExperts {
+        top_k: usize,
+        act: Act,
+        glu: Glu,
+        bias: bool,
+    },
 }
 
 impl Op {
@@ -273,8 +349,12 @@ impl HlProgram {
     }
     /// Params referenced by a block.
     pub fn block_params(&self, b: usize) -> Vec<u32> {
-        let mut v: Vec<u32> =
-            self.blocks[b].nodes.iter().flat_map(|n| n.inputs.iter()).filter_map(|r| if let Ref::Param(p) = r { Some(*p) } else { None }).collect();
+        let mut v: Vec<u32> = self.blocks[b]
+            .nodes
+            .iter()
+            .flat_map(|n| n.inputs.iter())
+            .filter_map(|r| if let Ref::Param(p) = r { Some(*p) } else { None })
+            .collect();
         v.sort_unstable();
         v.dedup();
         v
@@ -283,7 +363,9 @@ impl HlProgram {
         let mut v: Vec<u32> = self.blocks[b]
             .nodes
             .iter()
-            .flat_map(|n| n.inputs.iter().filter_map(|r| if let Ref::State(s) = r { Some(*s) } else { None }).chain(n.writes.iter().copied()))
+            .flat_map(|n| {
+                n.inputs.iter().filter_map(|r| if let Ref::State(s) = r { Some(*s) } else { None }).chain(n.writes.iter().copied())
+            })
             .collect();
         v.sort_unstable();
         v.dedup();
@@ -360,7 +442,14 @@ impl HlProgram {
     pub fn summary(&self) -> String {
         use std::fmt::Write;
         let mut s = String::new();
-        let _ = writeln!(s, "HL program for {}: {} layers, hidden {}, vocab {}", self.architecture, self.num_layers(), self.hidden, self.vocab);
+        let _ = writeln!(
+            s,
+            "HL program for {}: {} layers, hidden {}, vocab {}",
+            self.architecture,
+            self.num_layers(),
+            self.hidden,
+            self.vocab
+        );
         for (i, b) in self.blocks.iter().enumerate() {
             let mut ops: Vec<String> = Vec::new();
             for n in &b.nodes {
@@ -373,7 +462,8 @@ impl HlProgram {
                 }
             }
             let sites = b.nodes.iter().filter(|n| n.site.is_some()).count();
-            let _ = writeln!(s, "  block {i} `{}` ({:?}): {} nodes, {sites} sites: {}", b.name, b.role, b.nodes.len(), ops.join(" → "));
+            let _ =
+                writeln!(s, "  block {i} `{}` ({:?}): {} nodes, {sites} sites: {}", b.name, b.role, b.nodes.len(), ops.join(" → "));
         }
         let mut runs: Vec<(u16, usize)> = Vec::new();
         for k in &self.schedule {

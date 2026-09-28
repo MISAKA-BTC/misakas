@@ -123,7 +123,12 @@ pub(crate) fn gpt2(p: &mut P) -> Result<ArchSpec> {
             if inv_layer {
                 at.scale /= (i + 1) as f64;
             }
-            LayerSpec { mixer: Mixer::Attention(at), ffn: Ffn::Mlp(plain_mlp(inter, act, true)), residual: pre_norm(norm), post_scale: 1.0 }
+            LayerSpec {
+                mixer: Mixer::Attention(at),
+                ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
+                residual: pre_norm(norm),
+                post_scale: 1.0,
+            }
         })
         .collect();
     let l = "transformer.h.{L}.";
@@ -175,7 +180,8 @@ pub(crate) fn gpt_neo(p: &mut P) -> Result<ArchSpec> {
     match p.cfg.opt_list("attention_types")? {
         Some(list) => {
             for item in list {
-                let pair = item.as_array().filter(|a| a.len() == 2).ok_or_else(|| LowerError::bad("gpt_neo: attention_types entry"))?;
+                let pair =
+                    item.as_array().filter(|a| a.len() == 2).ok_or_else(|| LowerError::bad("gpt_neo: attention_types entry"))?;
                 let kinds = pair[0].as_array().ok_or_else(|| LowerError::bad("gpt_neo: attention_types kinds"))?;
                 let reps = pair[1].as_u64().ok_or_else(|| LowerError::bad("gpt_neo: attention_types count"))?;
                 for _ in 0..reps {
@@ -193,7 +199,9 @@ pub(crate) fn gpt_neo(p: &mut P) -> Result<ArchSpec> {
         return Err(LowerError::bad("gpt_neo: attention_layers disagrees with attention_types"));
     }
     if types.len() != n || types.iter().any(|t| t != "global" && t != "local") {
-        return Err(LowerError::not_lowerable(format!("gpt_neo: attention layer pattern {types:?} does not match {n} layers of global/local")));
+        return Err(LowerError::not_lowerable(format!(
+            "gpt_neo: attention layer pattern {types:?} does not match {n} layers of global/local"
+        )));
     }
     let hd = hidden / h;
     let norm = ln(eps);
@@ -202,7 +210,12 @@ pub(crate) fn gpt_neo(p: &mut P) -> Result<ArchSpec> {
             let mut at = attn(h, h, hd, Position::None, (false, true));
             at.scale = 1.0;
             at.window = if types[i] == "local" { Some(window) } else { None };
-            LayerSpec { mixer: Mixer::Attention(at), ffn: Ffn::Mlp(plain_mlp(inter, act, true)), residual: pre_norm(norm), post_scale: 1.0 }
+            LayerSpec {
+                mixer: Mixer::Attention(at),
+                ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
+                residual: pre_norm(norm),
+                post_scale: 1.0,
+            }
         })
         .collect();
     let l = "transformer.h.{L}.";
@@ -264,7 +277,12 @@ pub(crate) fn gpt_neox(p: &mut P) -> Result<ArchSpec> {
     p.layouts.qkv = QkvLayout::FusedPerHead;
     let residual = if parallel { Residual::Parallel { norm, ffn_norm: Some(norm) } } else { pre_norm(norm) };
     let layers = (0..n)
-        .map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(plain_mlp(inter, act, true)), residual: residual.clone(), post_scale: 1.0 })
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
+            residual: residual.clone(),
+            post_scale: 1.0,
+        })
         .collect();
     let l = "gpt_neox.layers.{L}.";
     let nm = names(&[
@@ -418,7 +436,12 @@ pub(crate) fn falcon(p: &mut P) -> Result<ArchSpec> {
     };
     let two_ln = matches!(residual, Residual::Parallel { ffn_norm: Some(_), .. });
     let layers = (0..n)
-        .map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(plain_mlp(ffn, act, bias)), residual: residual.clone(), post_scale: 1.0 })
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(plain_mlp(ffn, act, bias)),
+            residual: residual.clone(),
+            post_scale: 1.0,
+        })
         .collect();
     let l = "transformer.h.{L}.";
     let (mix, ffn_n) = if two_ln { ("ln_attn", "ln_mlp") } else { ("input_layernorm", "post_attention_layernorm") };
@@ -490,7 +513,12 @@ pub(crate) fn gpt_bigcode(p: &mut P) -> Result<ArchSpec> {
     p.layouts.qkv = if mq { QkvLayout::FusedConcat } else { QkvLayout::FusedPerHead };
     at.scale = if scale_w { 1.0 / (hd as f64).sqrt() } else { 1.0 };
     let layers = (0..n)
-        .map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(plain_mlp(inter, act, true)), residual: pre_norm(norm), post_scale: 1.0 })
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
         .collect();
     let l = "transformer.h.{L}.";
     let nm = names(&[
@@ -548,10 +576,21 @@ pub(crate) fn bloom(p: &mut P) -> Result<ArchSpec> {
     ]);
     let hd = hidden / h;
     let norm = ln(eps);
-    let at = attn(h, h, hd, Position::Alibi(AlibiSpec { slopes: alibi_slopes_bloom(h), scaled_by_softmax_scale: false, bf16_bias: false }), (true, true));
+    let at = attn(
+        h,
+        h,
+        hd,
+        Position::Alibi(AlibiSpec { slopes: alibi_slopes_bloom(h), scaled_by_softmax_scale: false, bf16_bias: false }),
+        (true, true),
+    );
     p.layouts.qkv = QkvLayout::FusedPerHead;
     let layers = (0..n)
-        .map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(plain_mlp(4 * hidden, Act::GeluTanh, true)), residual: pre_norm(norm), post_scale: 1.0 })
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(plain_mlp(4 * hidden, Act::GeluTanh, true)),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
         .collect();
     let l = "transformer.h.{L}.";
     let nm = names(&[
@@ -613,7 +652,16 @@ pub(crate) fn mpt(p: &mut P) -> Result<ArchSpec> {
     }
     // `learned_pos_emb` has no effect with ALiBi (the native model has no `wpe`); training and
     // placement knobs are inert.
-    p.cfg.inert(&["learned_pos_emb", "init_device", "verbose", "embedding_fraction", "init_config", "fc_type", "tokenizer_name", "use_pad_tok_in_ffn"]);
+    p.cfg.inert(&[
+        "learned_pos_emb",
+        "init_device",
+        "verbose",
+        "embedding_fraction",
+        "init_config",
+        "fc_type",
+        "tokenizer_name",
+        "use_pad_tok_in_ffn",
+    ]);
     let mut clip = None;
     let mut softmax_scale = None;
     if let Some(ac) = p.cfg.opt_obj("attn_config")? {
@@ -635,12 +683,23 @@ pub(crate) fn mpt(p: &mut P) -> Result<ArchSpec> {
     }
     let hd = hidden / h;
     let norm = NormSpec::layer_nobias(eps);
-    let mut at = attn(h, h, hd, Position::Alibi(AlibiSpec { slopes: alibi_slopes_mpt(h, 8.0), scaled_by_softmax_scale: false, bf16_bias: false }), (false, false));
+    let mut at = attn(
+        h,
+        h,
+        hd,
+        Position::Alibi(AlibiSpec { slopes: alibi_slopes_mpt(h, 8.0), scaled_by_softmax_scale: false, bf16_bias: false }),
+        (false, false),
+    );
     p.layouts.qkv = QkvLayout::FusedConcat;
     at.clip_qkv = clip;
     at.scale = softmax_scale.unwrap_or(1.0 / (hd as f64).sqrt());
     let layers = (0..n)
-        .map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(plain_mlp(4 * hidden, Act::Gelu, false)), residual: pre_norm(norm), post_scale: 1.0 })
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(plain_mlp(4 * hidden, Act::Gelu, false)),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
         .collect();
     let l = "transformer.blocks.{L}.";
     let nm = names(&[
@@ -687,10 +746,18 @@ pub(crate) fn opt(p: &mut P) -> Result<ArchSpec> {
     let affine = p.cfg.bool_or("layer_norm_elementwise_affine", true)?;
     let tied = p.cfg.bool_or("tie_word_embeddings", true)?;
     let hd = hidden / h;
-    let norm = if affine { NormSpec::layer(1e-5) } else { NormSpec { kind: NormKind::Layer, eps: 1e-5, gain: Gain::None, bias: false } };
+    let norm =
+        if affine { NormSpec::layer(1e-5) } else { NormSpec { kind: NormKind::Layer, eps: 1e-5, gain: Gain::None, bias: false } };
     let residual = if pre { pre_norm(norm) } else { Residual::PostNorm { mixer_norm: norm, ffn_norm: norm } };
     let at = attn(h, h, hd, Position::None, (bias, bias));
-    let layers = (0..n).map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Mlp(plain_mlp(ffn, act, bias)), residual: residual.clone(), post_scale: 1.0 }).collect();
+    let layers = (0..n)
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(plain_mlp(ffn, act, bias)),
+            residual: residual.clone(),
+            post_scale: 1.0,
+        })
+        .collect();
     let l = "model.decoder.layers.{L}.";
     let mut nm = names(&[
         ("embed", "model.decoder.embed_tokens".into()),

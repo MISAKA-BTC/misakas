@@ -20,7 +20,10 @@ struct M<'a> {
 
 impl M<'_> {
     fn role(&self, role: &str) -> Result<String> {
-        self.st.name(role).map(str::to_string).ok_or_else(|| LowerError::eval(format!("internal: no HF tensor name for role `{role}`")))
+        self.st
+            .name(role)
+            .map(str::to_string)
+            .ok_or_else(|| LowerError::eval(format!("internal: no HF tensor name for role `{role}`")))
     }
     fn put(&mut self, name: impl Into<String>, src: Src) -> Result<()> {
         let name = name.into();
@@ -107,7 +110,12 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     }
     let mut srcs = Vec::with_capacity(prog.params.len());
     for d in &prog.params {
-        srcs.push(m.out.get(&d.name).cloned().ok_or_else(|| LowerError::eval(format!("internal: HL param `{}` has no HF source", d.name)))?);
+        srcs.push(
+            m.out
+                .get(&d.name)
+                .cloned()
+                .ok_or_else(|| LowerError::eval(format!("internal: HL param `{}` has no HF source", d.name)))?,
+        );
     }
     Ok(Binding { srcs, aliases: spec.hf.prefix_aliases.clone() })
 }
@@ -115,7 +123,9 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
 fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> Result<()> {
     match &ls.residual {
         Residual::Sequential { pre_mixer, post_mixer, pre_ffn, post_ffn, .. } => {
-            for (n, name) in [(pre_mixer, "norm.mix"), (post_mixer, "norm.post_mix"), (pre_ffn, "norm.ffn"), (post_ffn, "norm.post_ffn")] {
+            for (n, name) in
+                [(pre_mixer, "norm.mix"), (post_mixer, "norm.post_mix"), (pre_ffn, "norm.ffn"), (post_ffn, "norm.post_ffn")]
+            {
                 if let Some(n) = n {
                     m.norm(name, name, n)?;
                 }
@@ -173,7 +183,9 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
         }
         layout => {
             let (pq, pk, pv) = match layout {
-                QkvLayout::FusedConcat => (Pick::Range { start: 0, len: qn }, Pick::Range { start: qn, len: kn }, Pick::Range { start: qn + kn, len: vn }),
+                QkvLayout::FusedConcat => {
+                    (Pick::Range { start: 0, len: qn }, Pick::Range { start: qn, len: kn }, Pick::Range { start: qn + kn, len: vn })
+                }
                 QkvLayout::FusedPerHead => {
                     let blk = 3 * hd;
                     (
@@ -329,7 +341,8 @@ fn mamba2(m: &mut M, s: &Mamba2Spec) -> Result<()> {
     let conv_dim = inner + 2 * s.groups * s.state;
     let off = 2 * s.d_mlp;
     let w = m.w("mamba2.in")?;
-    let parts = [("mamba2.in.z", off, inner), ("mamba2.in.xbc", off + inner, conv_dim), ("mamba2.in.dt", off + inner + conv_dim, s.heads)];
+    let parts =
+        [("mamba2.in.z", off, inner), ("mamba2.in.xbc", off + inner, conv_dim), ("mamba2.in.dt", off + inner + conv_dim, s.heads)];
     for (name, start, len) in parts {
         m.put(format!("{name}.w"), w.clone().rows(Pick::Range { start, len }))?;
         if s.proj_bias {
@@ -442,7 +455,8 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
         }
     }
     if let Some(sh) = &s.shared {
-        let spec = MlpSpec { intermediate: sh.intermediate, act: s.act, gated: true, glu: Glu::Standard, up_bias: false, down_bias: false };
+        let spec =
+            MlpSpec { intermediate: sh.intermediate, act: s.act, gated: true, glu: Glu::Standard, up_bias: false, down_bias: false };
         mlp(m, &spec, "moe.shared", MlpLayout::Separate)?;
         if sh.sigmoid_gate {
             m.lin("moe.shared_gate", "moe.shared_gate", false)?;

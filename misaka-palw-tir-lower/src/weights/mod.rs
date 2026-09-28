@@ -117,8 +117,8 @@ pub fn parse_header(bytes: &[u8], file_len: u64) -> Result<(BTreeMap<String, Ent
     if end > file_len || end as usize > bytes.len() {
         return Err(LowerError::weights("safetensors: header runs past the end of the file"));
     }
-    let json: serde_json::Value =
-        serde_json::from_slice(&bytes[8..end as usize]).map_err(|e| LowerError::weights(format!("safetensors: header is not JSON: {e}")))?;
+    let json: serde_json::Value = serde_json::from_slice(&bytes[8..end as usize])
+        .map_err(|e| LowerError::weights(format!("safetensors: header is not JSON: {e}")))?;
     let map = json.as_object().ok_or_else(|| LowerError::weights("safetensors: header is not an object"))?;
     let mut out = BTreeMap::new();
     let data_len = file_len - end;
@@ -126,7 +126,8 @@ pub fn parse_header(bytes: &[u8], file_len: u64) -> Result<(BTreeMap<String, Ent
         if name == "__metadata__" {
             continue;
         }
-        let dtype = spec.get("dtype").and_then(|v| v.as_str()).ok_or_else(|| LowerError::weights(format!("`{name}`: no dtype")))?.to_string();
+        let dtype =
+            spec.get("dtype").and_then(|v| v.as_str()).ok_or_else(|| LowerError::weights(format!("`{name}`: no dtype")))?.to_string();
         let shape: Vec<usize> = spec
             .get("shape")
             .and_then(|v| v.as_array())
@@ -134,7 +135,10 @@ pub fn parse_header(bytes: &[u8], file_len: u64) -> Result<(BTreeMap<String, Ent
             .iter()
             .map(|v| v.as_u64().map(|u| u as usize).ok_or_else(|| LowerError::weights(format!("`{name}`: bad shape"))))
             .collect::<Result<_>>()?;
-        let off = spec.get("data_offsets").and_then(|v| v.as_array()).ok_or_else(|| LowerError::weights(format!("`{name}`: no data_offsets")))?;
+        let off = spec
+            .get("data_offsets")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| LowerError::weights(format!("`{name}`: no data_offsets")))?;
         if off.len() != 2 {
             return Err(LowerError::weights(format!("`{name}`: data_offsets is not a pair")));
         }
@@ -143,7 +147,10 @@ pub fn parse_header(bytes: &[u8], file_len: u64) -> Result<(BTreeMap<String, Ent
             return Err(LowerError::weights(format!("`{name}`: data_offsets out of range")));
         }
         if let Some(sz) = dtype_size(&dtype) {
-            let want = shape.iter().try_fold(sz as u64, |a, d| a.checked_mul(*d as u64)).ok_or_else(|| LowerError::weights("size overflow"))?;
+            let want = shape
+                .iter()
+                .try_fold(sz as u64, |a, d| a.checked_mul(*d as u64))
+                .ok_or_else(|| LowerError::weights("size overflow"))?;
             if want != e - b {
                 return Err(LowerError::weights(format!("`{name}`: {dtype}{shape:?} needs {want} bytes, has {}", e - b)));
             }
@@ -172,7 +179,8 @@ impl SafetensorsFile {
 
     pub fn read(&self, name: &str) -> Result<Tensor> {
         let e = self.entries.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}` in {}", self.path.display())))?;
-        let sz = dtype_size(&e.dtype).ok_or_else(|| LowerError::weights(format!("`{name}` is {}, not a float type this reader widens", e.dtype)))?;
+        let sz = dtype_size(&e.dtype)
+            .ok_or_else(|| LowerError::weights(format!("`{name}` is {}, not a float type this reader widens", e.dtype)))?;
         let mut f = std::fs::File::open(&self.path).map_err(|x| LowerError::Io(x.to_string()))?;
         f.seek(SeekFrom::Start(self.data_offset + e.begin)).map_err(|x| LowerError::Io(x.to_string()))?;
         let mut raw = vec![0u8; (e.end - e.begin) as usize];
@@ -207,8 +215,9 @@ impl Checkpoint {
         };
         let files: Vec<SafetensorsFile> = if p.extension().and_then(|e| e.to_str()) == Some("json") {
             let dir = p.parent().unwrap_or(Path::new("."));
-            let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).map_err(|e| LowerError::Io(format!("{}: {e}", p.display())))?)
-                .map_err(|e| LowerError::weights(format!("index: {e}")))?;
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&p).map_err(|e| LowerError::Io(format!("{}: {e}", p.display())))?)
+                    .map_err(|e| LowerError::weights(format!("index: {e}")))?;
             let wm = v.get("weight_map").and_then(|w| w.as_object()).ok_or_else(|| LowerError::weights("index has no weight_map"))?;
             let shards: BTreeSet<String> = wm.values().filter_map(|x| x.as_str().map(str::to_string)).collect();
             let files = shards.iter().map(|s| SafetensorsFile::open(&dir.join(s))).collect::<Result<Vec<_>>>()?;
@@ -254,8 +263,9 @@ pub struct IndexOnly(pub BTreeSet<String>);
 
 impl IndexOnly {
     pub fn open(path: &Path) -> Result<Self> {
-        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?)
-            .map_err(|e| LowerError::weights(format!("index: {e}")))?;
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?)
+                .map_err(|e| LowerError::weights(format!("index: {e}")))?;
         let wm = v.get("weight_map").and_then(|w| w.as_object()).ok_or_else(|| LowerError::weights("index has no weight_map"))?;
         Ok(IndexOnly(wm.keys().cloned().collect()))
     }
@@ -266,16 +276,26 @@ impl IndexOnly {
 /// Which index of a checkpoint tensor axis to take.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum Pick {
-    Range { start: usize, len: usize },
+    Range {
+        start: usize,
+        len: usize,
+    },
     /// For `g` in `0..groups`: indices `g·block + offset .. + len`, concatenated.
-    Strided { block: usize, offset: usize, len: usize, groups: usize },
+    Strided {
+        block: usize,
+        offset: usize,
+        len: usize,
+        groups: usize,
+    },
 }
 
 impl Pick {
     pub fn indices(&self) -> Vec<usize> {
         match self {
             Pick::Range { start, len } => (*start..start + len).collect(),
-            Pick::Strided { block, offset, len, groups } => (0..*groups).flat_map(|g| (g * block + offset)..(g * block + offset + len)).collect(),
+            Pick::Strided { block, offset, len, groups } => {
+                (0..*groups).flat_map(|g| (g * block + offset)..(g * block + offset + len)).collect()
+            }
         }
     }
     pub fn count(&self) -> usize {
@@ -292,7 +312,9 @@ pub enum MapFn {
     NegExp,
     Scale(f64),
     /// `x / 2^(layer / every)` (RWKV `rescale_every`).
-    RescaleByLayer { every: usize },
+    RescaleByLayer {
+        every: usize,
+    },
 }
 
 /// How to build one HL param from checkpoint tensors (a frontend's weight mapping produces
@@ -301,13 +323,27 @@ pub enum MapFn {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Src {
     Tensor(String),
-    Take { src: Box<Src>, axis: usize, pick: Pick },
+    Take {
+        src: Box<Src>,
+        axis: usize,
+        pick: Pick,
+    },
     /// Swap the last two axes.
     Transpose(Box<Src>),
     /// Stack `count` instances of `src` with `var` ∈ {`E`, `H`} bound to `0..count`, on a new axis 0.
-    Stack { src: Box<Src>, var: char, count: usize },
-    Map { src: Box<Src>, f: MapFn },
-    Reshape { src: Box<Src>, shape: Vec<usize> },
+    Stack {
+        src: Box<Src>,
+        var: char,
+        count: usize,
+    },
+    Map {
+        src: Box<Src>,
+        f: MapFn,
+    },
+    Reshape {
+        src: Box<Src>,
+        shape: Vec<usize>,
+    },
 }
 
 impl Src {
@@ -333,8 +369,6 @@ impl Src {
         Src::Stack { src: Box::new(self), var, count }
     }
 }
-
-
 
 /// Resolves template names against a source, honouring the spec's prefix aliases, and records
 /// every tensor it touched.
@@ -570,12 +604,20 @@ pub fn check_weights(prog: &HlProgram, binding: &Binding, source: &dyn TensorSou
     let mut rep = WeightReport::default();
     let none = BTreeMap::new();
     for (pi, d) in prog.params.iter().enumerate() {
-        let layers: Vec<Option<usize>> = if d.per_layer { layers_of_param(prog, pi as u32).into_iter().map(Some).collect() } else { vec![None] };
+        let layers: Vec<Option<usize>> =
+            if d.per_layer { layers_of_param(prog, pi as u32).into_iter().map(Some).collect() } else { vec![None] };
         for l in layers {
             match src_shape(&binding.srcs[pi], &r, l, &none) {
                 Ok(s) if s == d.shape => rep.bound += 1,
-                Ok(s) => rep.errors.push(format!("param `{}`{}: checkpoint gives {s:?}, graph needs {:?}", d.name, l.map(|x| format!(" (layer {x})")).unwrap_or_default(), d.shape)),
-                Err(e) => rep.errors.push(format!("param `{}`{}: {e}", d.name, l.map(|x| format!(" (layer {x})")).unwrap_or_default())),
+                Ok(s) => rep.errors.push(format!(
+                    "param `{}`{}: checkpoint gives {s:?}, graph needs {:?}",
+                    d.name,
+                    l.map(|x| format!(" (layer {x})")).unwrap_or_default(),
+                    d.shape
+                )),
+                Err(e) => {
+                    rep.errors.push(format!("param `{}`{}: {e}", d.name, l.map(|x| format!(" (layer {x})")).unwrap_or_default()))
+                }
             }
         }
     }
@@ -618,7 +660,8 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
         }
     }
     for (pi, d) in prog.params.iter().enumerate() {
-        let layers: Vec<Option<usize>> = if d.per_layer { layers_of_param(prog, pi as u32).into_iter().map(Some).collect() } else { vec![None] };
+        let layers: Vec<Option<usize>> =
+            if d.per_layer { layers_of_param(prog, pi as u32).into_iter().map(Some).collect() } else { vec![None] };
         let mut ls = vec![];
         leaves(&binding.srcs[pi], &mut ls);
         for l in layers {
@@ -713,14 +756,18 @@ mod tests {
     fn src_slices_fused_layouts_transposes_and_stacks() {
         let mut m = MapSource::default();
         // A 6×2 fused tensor, rows r·10 + c.
-        m.0.insert("qkv.weight".into(), Tensor::new(vec![6, 2], (0..6).flat_map(|r| [r as f32 * 10.0, r as f32 * 10.0 + 1.0]).collect()));
+        m.0.insert(
+            "qkv.weight".into(),
+            Tensor::new(vec![6, 2], (0..6).flat_map(|r| [r as f32 * 10.0, r as f32 * 10.0 + 1.0]).collect()),
+        );
         m.0.insert("e.0.w".into(), Tensor::new(vec![1, 2], vec![1.0, 2.0]));
         m.0.insert("e.1.w".into(), Tensor::new(vec![1, 2], vec![3.0, 4.0]));
         m.0.insert("a_log".into(), Tensor::new(vec![2], vec![0.0, (2f32).ln()]));
         let r = Resolver::new(&m, &[]);
         let none = BTreeMap::new();
         // Per-head interleaved q/k/v with 2 heads of 1 row: rows [q0,k0,v0,q1,k1,v1].
-        let k = eval_src(&Src::t("qkv.weight").rows(Pick::Strided { block: 3, offset: 1, len: 1, groups: 2 }), &r, None, &none).unwrap();
+        let k =
+            eval_src(&Src::t("qkv.weight").rows(Pick::Strided { block: 3, offset: 1, len: 1, groups: 2 }), &r, None, &none).unwrap();
         assert_eq!(k.data, vec![10.0, 11.0, 40.0, 41.0]);
         let t = eval_src(&Src::t("qkv.weight").rows(Pick::Range { start: 1, len: 2 }).transpose(), &r, None, &none).unwrap();
         assert_eq!(t.shape, vec![2, 2]);

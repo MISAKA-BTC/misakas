@@ -41,7 +41,14 @@ pub(crate) fn mixtral(p: &mut P) -> Result<ArchSpec> {
     let mut at = attn(h, kv, hd, Position::Rope(rope), (false, false));
     at.window = sw;
     let m = moe(e, k, inter, act, router(Scoring::Softmax, true));
-    let layers = (0..n).map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Moe(m.clone()), residual: pre_norm(norm), post_scale: 1.0 }).collect();
+    let layers = (0..n)
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Moe(m.clone()),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
+        .collect();
     let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
     let l = "model.layers.{L}.block_sparse_moe.";
     nm.insert("moe.router".into(), format!("{l}gate"));
@@ -71,7 +78,11 @@ pub(crate) fn qwen_moe(p: &mut P, v3: bool) -> Result<ArchSpec> {
     let hidden = p.cfg.usize_or("hidden_size", 2048)?;
     let inter = p.cfg.usize_or("intermediate_size", if v3 { 6144 } else { 5632 })?;
     let n = p.cfg.usize_or("num_hidden_layers", 24)?;
-    let (h, kv, hd) = if v3 { heads(p, hidden, "num_attention_heads", 32, Some(4), None)? } else { heads(p, hidden, "num_attention_heads", 16, Some(16), None)? };
+    let (h, kv, hd) = if v3 {
+        heads(p, hidden, "num_attention_heads", 32, Some(4), None)?
+    } else {
+        heads(p, hidden, "num_attention_heads", 16, Some(16), None)?
+    };
     let act = p.act("hidden_act", "silu")?;
     let max_pos = p.cfg.usize_or("max_position_embeddings", 32768)?;
     let eps = p.cfg.f64_or("rms_norm_eps", 1e-6)?;
@@ -87,7 +98,9 @@ pub(crate) fn qwen_moe(p: &mut P, v3: bool) -> Result<ArchSpec> {
     let sw_raw = p.cfg.opt_usize("sliding_window")?.filter(|w| *w > 0);
     let sw = if use_sw { sw_raw } else { None };
     let mwl = p.cfg.usize_or("max_window_layers", 28)?;
-    let types = p.layer_types(n, &["full_attention", "sliding_attention"], |i| if sw.is_some() && i >= mwl { "sliding_attention" } else { "full_attention" })?;
+    let types = p.layer_types(n, &["full_attention", "sliding_attention"], |i| {
+        if sw.is_some() && i >= mwl { "sliding_attention" } else { "full_attention" }
+    })?;
     let (qkv_bias, o_bias) = if v3 {
         let b = p.cfg.bool_or("attention_bias", false)?;
         (b, b)
@@ -165,7 +178,14 @@ pub(crate) fn olmoe(p: &mut P) -> Result<ArchSpec> {
     at.qk_norm = Some(QkNorm { norm, scope: QkNormScope::Whole });
     at.clip_qkv = clip;
     let m = moe(e, k, inter, act, router(Scoring::Softmax, norm_topk));
-    let layers = (0..n).map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Moe(m.clone()), residual: pre_norm(norm), post_scale: 1.0 }).collect();
+    let layers = (0..n)
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Moe(m.clone()),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
+        .collect();
     let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
     let l = "model.layers.{L}.mlp.";
     nm.insert("moe.router".into(), format!("{l}gate"));
@@ -214,8 +234,16 @@ pub(crate) fn granite_moe(p: &mut P) -> Result<ArchSpec> {
     at.scale = attn_mult;
     let m = moe(e, k, inter, act, router(Scoring::TopKThenSoftmax, false));
     p.layouts.experts = MlpLayout::FusedGateFirst;
-    let residual = Residual::Sequential { pre_mixer: Some(norm), post_mixer: None, pre_ffn: Some(norm), post_ffn: None, multiplier: res_mult };
-    let layers = (0..n).map(|_| LayerSpec { mixer: Mixer::Attention(at.clone()), ffn: Ffn::Moe(m.clone()), residual: residual.clone(), post_scale: 1.0 }).collect();
+    let residual =
+        Residual::Sequential { pre_mixer: Some(norm), post_mixer: None, pre_ffn: Some(norm), post_ffn: None, multiplier: res_mult };
+    let layers = (0..n)
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Moe(m.clone()),
+            residual: residual.clone(),
+            post_scale: 1.0,
+        })
+        .collect();
     let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
     let l = "model.layers.{L}.block_sparse_moe.";
     nm.insert("moe.router".into(), format!("{l}router.layer"));
@@ -264,9 +292,17 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
     let rope_d = p.cfg.usize_or("qk_rope_head_dim", 64)?;
     let v_d = p.cfg.usize_or("v_head_dim", 128)?;
     let nope_d = p.cfg.usize_or("qk_nope_head_dim", 128)?;
-    let k = p.cfg.opt_usize("num_experts_per_tok")?.or(if v3 { Some(8) } else { None }).ok_or_else(|| LowerError::bad("deepseek: num_experts_per_tok"))?;
+    let k = p
+        .cfg
+        .opt_usize("num_experts_per_tok")?
+        .or(if v3 { Some(8) } else { None })
+        .ok_or_else(|| LowerError::bad("deepseek: num_experts_per_tok"))?;
     let first_dense = p.cfg.usize_or("first_k_dense_replace", if v3 { 3 } else { 0 })?;
-    p.cfg.require_eq("moe_layer_freq", &serde_json::json!(1), "transformers 5 native DeepSeek ignores it; the remote code honours it")?;
+    p.cfg.require_eq(
+        "moe_layer_freq",
+        &serde_json::json!(1),
+        "transformers 5 native DeepSeek ignores it; the remote code honours it",
+    )?;
     let act = p.act("hidden_act", "silu")?;
     let max_pos = p.cfg.usize_or("max_position_embeddings", if v3 { 4096 } else { 2048 })?;
     let eps = p.cfg.f64_or("rms_norm_eps", 1e-6)?;
@@ -319,7 +355,15 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
     }
     let interleave = if v3 { p.cfg.bool_or("rope_interleave", true)? } else { true };
     let qk_d = nope_d + rope_d;
-    let mut rope = p.rope(rope_d, if interleave { RopeStyle::Interleaved } else { RopeStyle::Half }, Some(10000.0), None, 1.0, Some(max_pos), None)?;
+    let mut rope = p.rope(
+        rope_d,
+        if interleave { RopeStyle::Interleaved } else { RopeStyle::Half },
+        Some(10000.0),
+        None,
+        1.0,
+        Some(max_pos),
+        None,
+    )?;
     rope.offset = nope_d;
     // `yarn_apply_mscale`: scaling × mscale² when the rope is not default and mscale_all_dim is set.
     let mut scale = 1.0 / (qk_d as f64).sqrt();
@@ -387,7 +431,9 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
     }
     p.notes.push("MLA's history is the compressed latent (kv_lora_rank) plus the shared rotary key; per-head keys/values are re-expanded by kv_b_proj, as transformers 5 does".into());
     if !v3 {
-        p.notes.push("DeepSeek-V2 routing follows transformers 5 native: weights = scores·routed_scaling_factor, never renormalised".into());
+        p.notes.push(
+            "DeepSeek-V2 routing follows transformers 5 native: weights = scores·routed_scaling_factor, never renormalised".into(),
+        );
     }
     Ok(p.finish_spec(SpecParts {
         model_type: if v3 { "deepseek_v3" } else { "deepseek_v2" },
@@ -426,10 +472,23 @@ pub(crate) fn gpt_oss(p: &mut P) -> Result<ArchSpec> {
     // activation name is never read.
     p.cfg.require_eq("swiglu_limit", &serde_json::json!(7.0), "GptOssExperts hard-codes limit = 7.0")?;
     p.cfg.inert(&["hidden_act", "initial_context_length", "rope_scaling_factor"]);
-    let types = p.layer_types(n, &["full_attention", "sliding_attention"], |i| if i % 2 == 0 { "sliding_attention" } else { "full_attention" })?;
+    let types =
+        p.layer_types(
+            n,
+            &["full_attention", "sliding_attention"],
+            |i| if i % 2 == 0 { "sliding_attention" } else { "full_attention" },
+        )?;
     let rope = p.rope(hd, RopeStyle::Half, Some(150000.0), None, 1.0, Some(max_pos), None)?;
     let norm = NormSpec::rms(eps);
-    let r = RouterSpec { scoring: Scoring::TopKThenSoftmax, linear_bias: true, selection_bias: false, groups: None, normalize: false, norm_eps: 0.0, scale: 1.0 };
+    let r = RouterSpec {
+        scoring: Scoring::TopKThenSoftmax,
+        linear_bias: true,
+        selection_bias: false,
+        groups: None,
+        normalize: false,
+        norm_eps: 0.0,
+        scale: 1.0,
+    };
     let m = MoeSpec {
         experts: e,
         top_k: k,
