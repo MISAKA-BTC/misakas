@@ -32,6 +32,7 @@
 
 pub mod arith;
 pub mod builder;
+pub mod demand;
 pub mod error;
 pub mod eval;
 pub mod interp;
