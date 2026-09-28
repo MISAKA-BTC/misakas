@@ -66,6 +66,41 @@ pub fn quantize_rows(w: &[f32], rows: usize, cols: usize, col_scale: Option<&[f6
     RowCodes { rows, cols, codes, scales }
 }
 
+/// Per-row `i16` codes of a table (`scale = absmax / 32767` per row) — what a gathered table
+/// (an embedding, and the head that reads the same tensor) is stored as: a lookup costs no MAC, and
+/// an embedding's rows carry outliers that per-row `i8` codes cannot hold (Mamba-370m's tied
+/// embedding: 4.2 % relative weight error at 8 bits, the whole of its fidelity loss).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowCodes16 {
+    pub rows: usize,
+    pub cols: usize,
+    pub codes: Vec<i16>,
+    /// Float value of one code, per row. An all-zero row has scale 1 and zero codes.
+    pub scales: Vec<f64>,
+}
+
+pub fn quantize_rows16(w: &[f32], rows: usize, cols: usize) -> RowCodes16 {
+    assert_eq!(w.len(), rows * cols, "quantize_rows16: {} values for [{rows}, {cols}]", w.len());
+    let per_row: Vec<(Vec<i16>, f64)> = w
+        .par_chunks(cols.max(1))
+        .map(|row| {
+            let amax = row.iter().fold(0f64, |m, v| m.max((*v as f64).abs()));
+            if amax == 0.0 || !amax.is_finite() {
+                return (vec![0i16; cols], 1.0);
+            }
+            let scale = amax / 32767.0;
+            (row.iter().map(|v| (*v as f64 / scale).round().clamp(-32767.0, 32767.0) as i16).collect(), scale)
+        })
+        .collect();
+    let mut codes = Vec::with_capacity(rows * cols);
+    let mut scales = Vec::with_capacity(rows);
+    for (c, s) in per_row {
+        codes.extend_from_slice(&c);
+        scales.push(s);
+    }
+    RowCodes16 { rows, cols, codes, scales }
+}
+
 /// How calibration statistics become code scales.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuantPolicy {

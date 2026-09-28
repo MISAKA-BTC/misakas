@@ -261,6 +261,16 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         shared.extend(here.into_iter().filter(|(_, n)| *n > 1).map(|(p, _)| p));
     }
     shared.extend(uses.into_iter().filter(|(p, n)| *n > 1 && !hl.params[*p as usize].per_layer).map(|(p, _)| p));
+    let tables: std::collections::BTreeSet<u32> = hl
+        .blocks
+        .iter()
+        .flat_map(|b| b.nodes.iter())
+        .filter(|n| matches!(n.op, Op::Embedding | Op::PosEmbedding { .. }))
+        .filter_map(|n| match n.inputs.first() {
+            Some(hl::Ref::Param(p)) => Some(*p),
+            _ => None,
+        })
+        .collect();
     let mut cx = Cx {
         hl,
         fills: Vec::new(),
@@ -271,6 +281,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         logits_key: None,
         site_nodes: BTreeMap::new(),
         shared,
+        tables,
         split_max_readers: usize::MAX,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
@@ -398,6 +409,9 @@ struct Cx<'h> {
     /// HL params read by more than one node (a tied embedding): a projection over them keeps the
     /// plain per-row codes the other reader shares.
     shared: std::collections::BTreeSet<u32>,
+    /// HL params gathered by row (embeddings, learned positions): stored as per-row `i16` codes,
+    /// and so is a head that reads the same tensor.
+    tables: std::collections::BTreeSet<u32>,
     /// Split a value's outlier channels only when at most this many projections read it: each
     /// split projection costs 9 nodes more, and a block has 512 (NF-12).
     split_max_readers: usize,
@@ -1244,7 +1258,7 @@ fn lower_row_lookup(
     let hl = cx.hl;
     let d = &hl.params[tp as usize];
     let (rows, cols) = (d.shape[0], d.shape[1]);
-    let table = decl(b, cx, lb, &d.name, DType::I8, &[rows, cols], d.per_layer, weight_codes(tp))?;
+    let table = decl(b, cx, lb, &d.name, DType::I16, &[rows, cols], d.per_layer, table_codes(tp))?;
     let key = want.key.clone();
     let (m, s) = decl_ms(
         b,
@@ -1253,7 +1267,7 @@ fn lower_row_lookup(
         site,
         rows,
         Arc::new(move |c| {
-            let rc = c.rows(tp)?;
+            let rc = c.rows16(tp)?;
             let to = c.scale(&key)?;
             Ok(rc.scales.iter().map(|sw| sw / to).collect())
         }),
@@ -1268,6 +1282,14 @@ fn lower_row_lookup(
     let v = Val { r, dt: want.dt, key: want.key.clone(), len: cols, site: site.to_string() };
     note_resid(cx, lb, &v);
     Ok(v)
+}
+
+/// Per-row `i16` codes of a gathered table (and of a head tied to it).
+fn table_codes(p: u32) -> FillFn {
+    Arc::new(move |c| {
+        let rc = c.rows16(p)?;
+        Ok(IntTensor::i16(c.f(p)?.shape.clone(), rc.codes.clone()))
+    })
 }
 
 /// Weight codes of an HL `[out, in]` param (per-row scales).
@@ -1335,8 +1357,14 @@ fn lower_linear(
         None => None,
     };
     let xc = b.reshape_fixed(x.r, &[inp as u32, 1]);
+    let table = cx.tables.contains(&w);
+    if table && k != 0 {
+        return Err(LowerError::eval(format!("internal: a split input reads the table `{}`", d.name)));
+    }
     let r = if k == 0 {
-        let wt = decl(b, cx, lb, &d.name, DType::I8, &[out, inp], d.per_layer, weight_codes(w))?;
+        // A head tied to an embedding reads the table's `i16` codes (the same param).
+        let (dt, fill) = if table { (DType::I16, table_codes(w)) } else { (DType::I8, weight_codes(w)) };
+        let wt = decl(b, cx, lb, &d.name, dt, &[out, inp], d.per_layer, fill)?;
         let (m, s) = decl_ms(
             b,
             cx,
@@ -1344,9 +1372,9 @@ fn lower_linear(
             site,
             out,
             Arc::new(move |c| {
-                let rc = c.rows(w)?;
+                let scales = if table { c.rows16(w)?.scales.clone() } else { c.rows(w)?.scales.clone() };
                 let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, out)?);
-                Ok(rc.scales.iter().zip(&sy).map(|(sw, sy)| sw * sx / sy).collect())
+                Ok(scales.iter().zip(&sy).map(|(sw, sy)| sw * sx / sy).collect())
             }),
         )?;
         let acc = b.matmul(wt, xc, DType::I64);
