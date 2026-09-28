@@ -6258,6 +6258,8 @@ dependencies = [
 name = "misaka-palw-tir-ref2"
 version = "1.1.0"
 dependencies = [
+ "borsh",
+ "kaspa-consensus-core",
  "misaka-palw-tir",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
