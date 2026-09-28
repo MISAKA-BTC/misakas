@@ -800,7 +800,7 @@ fn an_ir_history_dissection_is_played_by_the_node() {
             };
             let mv = palw_tir_dissect_move_of_duty_v1(&duty).unwrap();
             played.push(mv);
-            let built = palw_tir_dissect_build_v1(&tir, &duty, mv, own, Some(&honest.material), &rules);
+            let built = palw_tir_dissect_build_v1(&tir, &duty, mv, own, Some(&honest.material), None, &rules);
             let object = match (mv, built) {
                 (PalwTirDissectMoveV1::Choice, Err(why)) => {
                     // The challenger finds no child to name: its own execution agrees with every one.
@@ -855,12 +855,231 @@ fn an_ir_history_dissection_is_played_by_the_node() {
         let (s, _) = play_ladder(&ir, s, sid, &liar.material, &honest_twin.material, SEAT, false, 105);
         let duty = duty_of(&s, PRODUCER, sid).expect("the responder's duty");
         assert_eq!(palw_tir_dissect_move_of_duty_v1(&duty), Some(PalwTirDissectMoveV1::Root), "tiled {tiled}");
-        let refused = palw_tir_dissect_build_v1(&tir, &duty, PalwTirDissectMoveV1::Root, &liar.material, Some(&liar.material), &rules)
-            .expect_err("a lying leaf's root claim does not finalize");
+        let refused =
+            palw_tir_dissect_build_v1(&tir, &duty, PalwTirDissectMoveV1::Root, &liar.material, Some(&liar.material), None, &rules)
+                .expect_err("a lying leaf's root claim does not finalize");
         assert!(refused.contains("does not finalize to the committed tile"), "tiled {tiled}: {refused}");
         let s = step(&s, duty.rung_deadline_daa + 1, &[]).expect("the clock runs");
         assert!(matches!(phase_of(&s, &liar.id), PalwClaimPhaseV2::Voided { .. }), "tiled {tiled}: the liar's silence voids it");
     }
+}
+
+/// **A lie is accused from served annexes — no capture moves** (RFC-0002's evidence transport, option
+/// B). The seat holds its own execution of the claim's job and nothing of the accused's; the executor
+/// serves one annex per leaf asked (`TirBackendV1::leaf_annex`: binding, the leaf's preimage and
+/// opening, the trace summary), each verified by hash arithmetic against the claim's roots
+/// (`palw_tir_leaf_annex_verify_v1`: a carried program, another claim's roots or a doctored preimage is
+/// refused). The descent (`tir_first_divergence_from_opening_v1`) names the first differing leaf in at
+/// most ⌈log₂ n⌉ + 1 annexes, and the accusation is built over the seat's own execution and that one
+/// annex:
+///
+/// * a lie at an undissected commit leaf: its cone close, which the one-move gate reads `ExecutorGuilty`;
+/// * a lie at a dissected leaf: the named-leaf challenge, which the gate reads as the dissection it opens;
+/// * a wrong token over honest arithmetic: the descent agrees at once, the ids say which row, and the
+///   annex of the logits leaf whose tile holds the seat's own token carries the pin of the decode-token
+///   door, which convicts;
+/// * an honest claim: the first annex agrees, and nothing is built.
+#[test]
+fn a_lie_is_accused_from_served_annexes_without_the_capture() {
+    use super::tir_court::{
+        palw_tir_leaf_is_dissected_v1, palw_tir_one_move_names_a_dissected_leaf_v1, palw_tir_one_move_verdict_stateless_v1,
+    };
+    use kaspa_consensus_core::palw_producer_v2::palw_disputable_claims_v2;
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1;
+    use misaka_palw_sdk::lineages::tir::{
+        PalwTirLeafAnnexV1, TirDivergenceV1, TirStepTreeV1, palw_tir_leaf_annex_verify_v1, tir_first_divergence_from_opening_v1,
+    };
+    let ir = ir_class("annex", true);
+    let tir = ir.tir();
+    let rules = tir.court_rules(&court());
+    let program = tir.class().program.clone();
+    let s = registry_with(&ir);
+    let honest = produce(&ir, 11, None);
+    let ctx = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).unwrap().binding.job_context;
+    let prompt: Vec<u32> = honest.prompt.iter().map(|t| *t as u32).collect();
+    // The seat's own execution of the job, and its tree.
+    let own = tir.retain_memo(&ctx, &prompt).expect("the seat's own run");
+    let own_tree = TirStepTreeV1::full(&own.leaf_hashes);
+    let n = own.leaf_hashes.len() as u64;
+    let depth = 64 - (n - 1).leading_zeros() as usize;
+    // The descent against a claim's served annexes: each asked, encoded, decoded and verified.
+    let serve = |claim: &Claim, leaf: u64| -> (PalwTirLeafAnnexV1, kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1) {
+        let bytes = tir.leaf_annex(&claim.material, leaf).expect("the executor serves the annex").encode();
+        let annex = PalwTirLeafAnnexV1::decode(&bytes).expect("an annex");
+        let binding =
+            palw_tir_leaf_annex_verify_v1(&annex, &program, claim.env.attempt.execution_root, claim.env.attempt.trace_root, LADDER)
+                .expect("the annex is the claim's");
+        (annex, binding)
+    };
+    let descend = |claim: &Claim| -> Option<(PalwTirLeafAnnexV1, kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1)> {
+        let (mut j, mut below) = (0u64, None);
+        for _ in 0..=depth {
+            let (annex, binding) = serve(claim, j);
+            match tir_first_divergence_from_opening_v1(&own_tree, &annex.opening, below).expect("of the job's shape") {
+                TirDivergenceV1::At(_) => return Some((annex, binding)),
+                TirDivergenceV1::Within { level, first } => (j, below) = (first, Some(level)),
+                TirDivergenceV1::Agrees => return None,
+            }
+        }
+        panic!("the descent did not end in ⌈log₂ n⌉ + 1 annexes");
+    };
+    // An honest claim: the first annex agrees.
+    assert!(descend(&honest).is_none(), "an honest claim's annexes agree with the seat's own run");
+    // Tampering is refused by arithmetic.
+    let (good, _) = serve(&honest, 0);
+    let mut carried = good.clone();
+    carried.binding.class.program = program.clone();
+    assert!(
+        palw_tir_leaf_annex_verify_v1(&carried, &program, honest.env.attempt.execution_root, honest.env.attempt.trace_root, LADDER)
+            .is_err()
+    );
+    let mut doctored = good.clone();
+    doctored.preimage.values_le[0] ^= 1;
+    assert!(
+        palw_tir_leaf_annex_verify_v1(&doctored, &program, honest.env.attempt.execution_root, honest.env.attempt.trace_root, LADDER)
+            .is_err()
+    );
+    assert!(
+        palw_tir_leaf_annex_verify_v1(&good, &program, h64(1), honest.env.attempt.trace_root, LADDER).is_err(),
+        "another claim's roots"
+    );
+
+    let dissected = (0..n).find(|&i| palw_tir_leaf_is_dissected_v1(&tir, &ctx, i)).expect("a dissected leaf");
+    let undissected = (dissected + 1..n)
+        .find(|&i| {
+            !palw_tir_leaf_is_dissected_v1(&tir, &ctx, i)
+                && tir.space().leaf_at(&ctx, i).is_some_and(|l| matches!(l.kind, PalwTirLeafKindV1::Commit { .. }))
+        })
+        .expect("an undissected commit leaf");
+    for (lie, at_dissected) in [(undissected, false), (dissected, true)] {
+        let liar = produce(&ir, 11, Some(lie));
+        let s = licensed(&s, &liar, 101);
+        let target = palw_disputable_claims_v2(&s, &[bond_key(SEAT)]).into_iter().find(|t| t.claim_id == liar.id).expect("disputable");
+        let (annex, binding) = descend(&liar).expect("the lie is found");
+        assert_eq!(annex.leaf(), lie, "the descent names the planted leaf");
+        if at_dissected {
+            let proof = tir.annex_named_leaf(&binding, &annex, &own).expect("the named-leaf proof");
+            let mut proof = proof;
+            proof.tir_strip_program_v1();
+            assert!(palw_tir_one_move_names_a_dissected_leaf_v1(&proof, &target, &program, &court()), "it opens the dissection");
+        } else {
+            let mut proof = tir.annex_cone_close(&binding, &annex, &own, &rules).expect("the cone close");
+            proof.tir_strip_program_v1();
+            assert_eq!(
+                palw_tir_one_move_verdict_stateless_v1(&proof, &target, &program, &court(), LADDER, FORM),
+                Some(PalwCourtVerdictV2::ExecutorGuilty),
+                "the cone close convicts the lie"
+            );
+        }
+    }
+
+    // A wrong token over honest arithmetic: no step differs; the ids name the row, and the annex of the
+    // logits leaf holding the seat's own token carries the decode-token door's pin.
+    let token_liar = craft(&ir, &honest, |c| c.generated[0] = (c.generated[0] + 1) % c.logits_rows[0].len() as u32);
+    let s2 = licensed(&s, &token_liar, 101);
+    let target =
+        palw_disputable_claims_v2(&s2, &[bond_key(SEAT)]).into_iter().find(|t| t.claim_id == token_liar.id).expect("disputable");
+    assert!(descend(&token_liar).is_none(), "every step leaf is the honest execution's");
+    let (first, _) = serve(&token_liar, 0);
+    let row = first.generated().iter().zip(&own.generated).position(|(a, b)| a != b).expect("the ids differ") as u32;
+    let mine = own.generated[row as usize];
+    let position = ctx.declared_prefill_tokens + row - 1;
+    let space = tir.space();
+    let post = (space.occurrences().len() - 1) as u32;
+    let leaf = space
+        .leaves_of_position(&ctx, position)
+        .into_iter()
+        .find(|l| {
+            matches!(l.kind, PalwTirLeafKindV1::Commit { occurrence, node, first_element, .. }
+                if occurrence == post && node == space.program.logits
+                    && (first_element..first_element + u64::from(l.value_count)).contains(&u64::from(mine)))
+        })
+        .expect("the logits leaf holding the seat's token")
+        .index;
+    let (annex, binding) = serve(&token_liar, leaf);
+    let mut proof = tir.annex_decode_token_close(&binding, &annex, row, mine).expect("the decode-token door");
+    proof.tir_strip_program_v1();
+    assert_eq!(
+        palw_tir_one_move_verdict_stateless_v1(&proof, &target, &program, &court(), LADDER, FORM),
+        Some(PalwCourtVerdictV2::ExecutorGuilty),
+        "the wrong token is convicted from the annex"
+    );
+}
+
+/// **F7's bottom from the accused's ON-CHAIN root claim** (RFC-0002's evidence transport, option D): a
+/// challenger that holds no accused capture builds the bottom close from its own execution and the leaf
+/// the accused's root claim carries (`TirBackendV1::dissect_bottom_from_root_claim`) — byte for byte the
+/// canonical bottom the accused's own capture builds, so it adjudicates exactly as that one does.
+#[test]
+fn a_challenger_builds_the_dissection_bottom_from_the_on_chain_root_claim() {
+    use super::tir_court::palw_tir_leaf_is_dissected_v1;
+    use super::tir_dissect::{
+        PalwTirDissectBuiltV1, PalwTirDissectMoveV1, palw_tir_dissect_build_v1, palw_tir_dissect_move_of_duty_v1,
+        palw_tir_dissect_object_v1,
+    };
+    use kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3;
+    let ir = ir_class("bottom-from-chain", true);
+    let tir = ir.tir();
+    let rules = tir.court_rules(&court());
+    let arity = court().dissection_arity();
+    let honest = produce(&ir, 12, None);
+    let ctx = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).unwrap().binding.job_context;
+    let n =
+        kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(tir.class()).unwrap().leaf_count_capped(&ctx, LADDER).unwrap();
+    let leaf = (0..n).rev().find(|&i| palw_tir_leaf_is_dissected_v1(&tir, &ctx, i)).expect("a dissected leaf");
+    let wrong = produce(&ir, 12, Some(leaf));
+    let s = licensed(&registry_with(&ir), &honest, 101);
+    let (s, sid) = open_court(&s, &honest, SEAT, 104);
+    let (mut s, mut daa) = play_ladder(&ir, s, sid, &honest.material, &wrong.material, SEAT, false, 105);
+    let sign = |_: &[u8], _: &[u8]| Some(vec![5u8; 8]);
+    // Play to the bottom: the responder's root claim and rounds, the challenger's choices.
+    let mut root = None;
+    loop {
+        let (r, c) = (duty_of(&s, PRODUCER, sid).unwrap(), duty_of(&s, SEAT, sid).unwrap());
+        if r.tir_dissection.as_ref().is_some_and(|p| p.turn() == PalwBisectTurnV1::Terminal) {
+            break;
+        }
+        let (duty, own) = if palw_tir_dissect_move_of_duty_v1(&r).is_some() { (r, &honest.material) } else { (c, &wrong.material) };
+        let mv = palw_tir_dissect_move_of_duty_v1(&duty).expect("a move");
+        let object = match palw_tir_dissect_build_v1(&tir, &duty, mv, own, None, None, &rules) {
+            Ok(built) => {
+                if let PalwTirDissectBuiltV1::Root(filed) = &built {
+                    root = Some(filed.as_ref().clone());
+                }
+                palw_tir_dissect_object_v1(built, &duty, arity, &sign, &|_, _| None).unwrap().unwrap()
+            }
+            Err(why) if mv == PalwTirDissectMoveV1::Choice => {
+                assert!(why.contains("no child to name"), "{why}");
+                let phase = duty.tir_dissection.as_deref().unwrap();
+                let choice = kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectChoiceV1 {
+                    version: kaspa_consensus_core::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+                    session_id: sid,
+                    round: phase.round(),
+                    child: 0,
+                };
+                palw_tir_dissect_object_v1(PalwTirDissectBuiltV1::Choice(choice), &duty, arity, &sign, &|_, _| None).unwrap().unwrap()
+            }
+            Err(why) => panic!("{mv:?}: {why}"),
+        };
+        s = step(&s, daa, &[object]).expect("the move folds");
+        daa += 1;
+    }
+    let root = root.expect("the responder's root claim, as it rode");
+    let c = duty_of(&s, SEAT, sid).unwrap();
+    let phase = c.tir_dissection.as_deref().expect("the phase");
+    // The challenger holds no accused capture: its bottom comes from the root claim on chain.
+    let built = palw_tir_dissect_build_v1(&tir, &c, PalwTirDissectMoveV1::Close, &wrong.material, None, Some(&root), &rules)
+        .expect("the bottom from the root claim");
+    let PalwTirDissectBuiltV1::Close(from_chain) = built else { panic!("a close") };
+    // The accused's own capture builds the canonical bottom; the two are one object.
+    let canonical =
+        palw_tir_dissect_build_v1(&tir, &c, PalwTirDissectMoveV1::Close, &wrong.material, Some(&honest.material), None, &rules)
+            .expect("the bottom from the capture");
+    let PalwTirDissectBuiltV1::Close(canonical) = canonical else { panic!("a close") };
+    assert_eq!(from_chain, canonical, "the bottom from the chain is the canonical bottom");
+    let verdict = adjudicate_court_close_v3(&s, &sid, &from_chain, &court(), LADDER, FORM, false, false).expect("it adjudicates");
+    assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest leaf's bottom acquits, whoever builds it");
+    let _ = phase;
 }
 
 /// **A node started with `--palw-verify-class-manifest` holds an IR artifact by its IR manifest**

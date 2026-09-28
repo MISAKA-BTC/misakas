@@ -34,7 +34,7 @@ use kaspa_consensus_core::palw_backend::{
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1};
 use kaspa_consensus_core::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1, step_merkle_root_capped_v1, step_tile_leaf_hash_v1};
-use kaspa_consensus_core::palw_step_refute::{PalwTiledDecodePinV1, tiled_logits_scheme_id_v1};
+use kaspa_consensus_core::palw_step_refute::{PalwDecodeTokenPinV1, PalwTiledDecodePinV1, tiled_logits_scheme_id_v1};
 use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_job_for_anchor_of_v1};
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
@@ -47,8 +47,9 @@ use kaspa_consensus_core::palw_tir_step_v1::{
 };
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 
+use super::annex::{PALW_TIR_LEAF_ANNEX_VERSION_V1, PalwTirAnnexTraceV1, PalwTirLeafAnnexV1, tir_annex_trace_v1};
 use super::artifact::TirArtifactV1;
-use super::evidence::{TirEvidenceV1, TirRetainedJobV1, tir_bisect_prefix_state_v1};
+use super::evidence::{TirEvidenceV1, TirRetainedJobV1, TirTraceV1, tir_bisect_prefix_state_v1};
 use super::run::TirClassRunnerV1;
 
 /// The 8-byte head of an encoded [`TirCaptureV1`].
@@ -74,6 +75,13 @@ pub fn set_tir_fused_kernels_default_v1(on: bool) {
 pub fn tir_fused_kernels_default_v1() -> bool {
     TIR_FUSED_KERNELS_DEFAULT.load(std::sync::atomic::Ordering::Relaxed)
 }
+
+/// **One retained job, kept process-wide** — keyed by the class and the job's context hash. A fold's
+/// every evidence build (an annex asked, a dissection's round) re-derives the execution it opens
+/// ([`TirBackendV1::retain`], a whole run); a backend is built per request, so the memo lives here.
+/// One entry: the retention is a class's leaf hashes, trace and resume points (≈ 180 MB for a 1.5B
+/// class at 512 positions), and one pursuit or one serve at a time is what a node runs.
+static TIR_RETAINED_MEMO: std::sync::Mutex<Option<(Hash64, Hash64, Arc<TirRetainedJobV1>)>> = std::sync::Mutex::new(None);
 
 /// **Why an IR class takes no free prompt** (RFC-0002): its free-prompt lane stays closed until
 /// Phase H. The node's backend, the RPC's pricing and the CLI refuse with these words.
@@ -271,6 +279,25 @@ impl TirBackendV1 {
         self.runner().retain(&self.class, self.artifact_root, job, prompt, self.ladder)
     }
 
+    /// [`Self::retain`], through the process-wide memo ([`TIR_RETAINED_MEMO`]): the same job of the same
+    /// class is run once, however many evidence builds read it.
+    pub fn retain_memo(&self, job: &PalwJobContextV2, prompt: &[u32]) -> Result<Arc<TirRetainedJobV1>, String> {
+        let ctx_hash = job.context_hash();
+        if let Ok(memo) = TIR_RETAINED_MEMO.lock()
+            && let Some((class, ctx, held)) = memo.as_ref()
+            && *class == self.class_id
+            && *ctx == ctx_hash
+            && held.prompt == prompt
+        {
+            return Ok(held.clone());
+        }
+        let job = Arc::new(self.retain(job, prompt)?);
+        if let Ok(mut memo) = TIR_RETAINED_MEMO.lock() {
+            *memo = Some((self.class_id, ctx_hash, job.clone()));
+        }
+        Ok(job)
+    }
+
     /// Run a job into a capture — dense while its lanes fit the dense-capture bytes —
     /// optionally with one lane of leaf `fault` corrupted and the commitment re-derived over the lie
     /// (a drill; always dense).
@@ -406,12 +433,168 @@ impl TirBackendV1 {
             )?;
             return f(&store, &capture.binding);
         }
-        let own = self.retain(&capture.binding.job_context, &capture.prompt)?;
+        let own = self.retain_memo(&capture.binding.job_context, &capture.prompt)?;
         if own.binding != capture.binding {
             return Err("a fold of an execution this node does not reproduce: open it as a challenger".into());
         }
         let store = TirEvidenceV1::own(&runner, &own, self.artifact.as_ref(), prompt_form, self.ladder)?;
         f(&store, &own.binding)
+    }
+
+    /// **The served annex of leaf `leaf` of this node's capture** (RFC-0002's evidence transport, option
+    /// B; [`super::annex`]): the claim's binding with its program stripped, the leaf's preimage and
+    /// opening, and the trace summary — built from a dense capture's own preimages, or from this node's
+    /// re-derivation of its fold (the executor answering for its own claim).
+    pub fn leaf_annex(&self, material: &[u8], leaf: u64) -> Result<PalwTirLeafAnnexV1, String> {
+        let capture = self.decode_capture(material)?;
+        use kaspa_consensus_core::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+        let (opening, preimage, mut binding) = self.with_capture_store(material, self.prompt_ids_form, |store, binding| {
+            let opening = store.step_opening(leaf).ok_or_else(|| format!("leaf {leaf} does not open"))?;
+            let preimage = store.step_leaf(leaf).ok_or_else(|| format!("leaf {leaf} is not held"))?;
+            Ok((opening, preimage, binding.clone()))
+        })?;
+        let trace = tir_annex_trace_v1(&self.space, &binding.job_context, &capture.logits_rows, &capture.generated, leaf)?;
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut binding);
+        Ok(PalwTirLeafAnnexV1 { version: PALW_TIR_LEAF_ANNEX_VERSION_V1, binding, opening, preimage, trace })
+    }
+
+    /// **A challenger's store over a served annex** — its own execution `own` of the same job for every
+    /// leaf before the annex's, the annex's leaf and trace summary for the accused's. `binding` is the
+    /// annex's, verified and filled ([`palw_tir_leaf_annex_verify_v1`]).
+    fn with_annex_store<R>(
+        &self,
+        binding: &PalwTirStepBindingV1,
+        annex: &PalwTirLeafAnnexV1,
+        own: &TirRetainedJobV1,
+        f: impl FnOnce(&TirEvidenceV1<'_>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let runner = self.runner();
+        let pins: Vec<PalwTiledDecodePinV1> = match &annex.trace {
+            PalwTirAnnexTraceV1::Tiled { pin: Some(pin), .. } => vec![pin.clone()],
+            _ => Vec::new(),
+        };
+        let trace = match &annex.trace {
+            PalwTirAnnexTraceV1::Flat { logits_rows, generated_token_ids } => {
+                TirTraceV1::Rows { rows: logits_rows, generated: generated_token_ids }
+            }
+            PalwTirAnnexTraceV1::Tiled { rows_root, generated_token_ids, .. } => {
+                TirTraceV1::Summary { rows_root: *rows_root, generated: generated_token_ids, pins: &pins }
+            }
+        };
+        let store = TirEvidenceV1::challenger_with_trace(
+            &runner,
+            binding,
+            own,
+            &annex.opening,
+            annex.preimage.clone(),
+            trace,
+            self.artifact.as_ref(),
+            self.prompt_ids_form,
+            self.ladder,
+        )?;
+        f(&store)
+    }
+
+    /// **The cone close of the annex's leaf** from a challenger's own execution and the annex (the
+    /// first leaf the two differ at): a `TirCone` the court convicts on when that leaf is false.
+    pub fn annex_cone_close(
+        &self,
+        binding: &PalwTirStepBindingV1,
+        annex: &PalwTirLeafAnnexV1,
+        own: &TirRetainedJobV1,
+        rules: &PalwTirCourtRulesV1,
+    ) -> Result<PalwCourtVerdictProofV2, String> {
+        let refutation =
+            self.with_annex_store(binding, annex, own, |store| store.cone_refutation(annex.leaf(), rules).map_err(|e| e.to_string()))?;
+        Ok(PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) })
+    }
+
+    /// **The named-leaf proof of the annex's leaf** (a dissected leaf's one-move challenge, F7) — the
+    /// accused's binding, the leaf's opening and preimage, nothing else.
+    pub fn annex_named_leaf(
+        &self,
+        binding: &PalwTirStepBindingV1,
+        annex: &PalwTirLeafAnnexV1,
+        own: &TirRetainedJobV1,
+    ) -> Result<PalwCourtVerdictProofV2, String> {
+        let refutation = self.with_annex_store(binding, annex, own, |store| {
+            build_tir_named_leaf_refutation_v1(binding, annex.leaf(), store).map_err(|e| e.to_string())
+        })?;
+        Ok(PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) })
+    }
+
+    /// **The logits door at the annex's leaf** (a leaf of the logits node): its step tile against the
+    /// same row's lanes in the committed trace, from the annex's pin.
+    pub fn annex_logits_close(
+        &self,
+        binding: &PalwTirStepBindingV1,
+        annex: &PalwTirLeafAnnexV1,
+        own: &TirRetainedJobV1,
+    ) -> Result<PalwCourtVerdictProofV2, String> {
+        let accusation = self.with_annex_store(binding, annex, own, |store| store.logits_consistency(annex.leaf()))?;
+        Ok(PalwCourtVerdictProofV2::TirLogits { accusation: Box::new(accusation) })
+    }
+
+    /// **The tiled decode-token door from an annex's pin**: the committed token of row `row` against
+    /// `beat_lane` (the challenger's own token), which the pin's beat tile must hold.
+    pub fn annex_decode_token_close(
+        &self,
+        binding: &PalwTirStepBindingV1,
+        annex: &PalwTirLeafAnnexV1,
+        row: u32,
+        beat_lane: u32,
+    ) -> Result<PalwCourtVerdictProofV2, String> {
+        let PalwTirAnnexTraceV1::Tiled { pin: Some(pin), .. } = &annex.trace else {
+            return Err("the annex carries no pin (not a leaf of the logits node, or the flat scheme)".into());
+        };
+        let pins = [pin.clone()];
+        let trace = TirTraceV1::Summary { rows_root: Hash64::default(), generated: &[], pins: &pins };
+        let pin = trace
+            .pin_v1(&binding.job_context, row, beat_lane)
+            .ok_or("the annex's pin is not of that row, or its tile holds no such lane")?;
+        let mut binding = binding.clone();
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut binding);
+        Ok(PalwCourtVerdictProofV2::TirDecodeTokenTiled { binding: Box::new(binding), pin })
+    }
+
+    /// **F7's bottom close for a challenger that holds no accused capture** (RFC-0002's evidence
+    /// transport, option D): the accused's disputed leaf as its ON-CHAIN root claim carries it (the
+    /// finalize's opening and preimage, and its decode pin when the finalize read one), every other leaf
+    /// from the challenger's own execution of the same job (`own_material`, its capture). `root_binding`
+    /// is the root claim's finalize binding with the class's program put back.
+    pub fn dissect_bottom_from_root_claim(
+        &self,
+        own_material: &[u8],
+        root: &PalwTirRootClaimV1,
+        root_binding: &PalwTirStepBindingV1,
+        phase: &PalwTirDissectPhaseV1,
+        rules: &PalwTirCourtRulesV1,
+    ) -> Result<PalwTirConeRefutationV1, String> {
+        let own_capture = self.decode_capture(own_material)?;
+        let own = self.retain_memo(&own_capture.binding.job_context, &own_capture.prompt)?;
+        let runner = self.runner();
+        let finalize = &root.finalize;
+        let trace = match &finalize.decode_tokens {
+            Some(PalwDecodeTokenPinV1::TiledV1(pin)) => {
+                TirTraceV1::Summary { rows_root: pin.rows_root, generated: &pin.generated_token_ids, pins: &[] }
+            }
+            Some(PalwDecodeTokenPinV1::Base0V1(pin)) => {
+                TirTraceV1::Rows { rows: &pin.logits_rows, generated: &pin.generated_token_ids }
+            }
+            _ => TirTraceV1::Absent,
+        };
+        let store = TirEvidenceV1::challenger_with_trace(
+            &runner,
+            root_binding,
+            &own,
+            &finalize.output_opening,
+            finalize.output_preimage.clone(),
+            trace,
+            self.artifact.as_ref(),
+            rules.prompt_form,
+            self.ladder,
+        )?;
+        build_tir_dissect_bottom_v1(root_binding, phase, &store, rules).map_err(|e| e.to_string())
     }
 
     /// **RFC-0002 F7: the responder's IR root claim** at the narrowed dissected leaf `narrowed` of its

@@ -6970,6 +6970,10 @@ impl PalwPanelService {
             Hash64,
             (u64, Option<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1>),
         > = HashMap::new();
+        // RFC-0002 F7, option D: the accused's IR root claim per session, read off the chain on the same
+        // throttle — a challenger's bottom when it holds no accused capture.
+        let mut tir_root_filings: HashMap<Hash64, (u64, Option<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirRootClaimV1>)> =
+            HashMap::new();
         // ADR-0152 §4-ter N3: the held route's evidence per (session, role), its builds off the tick,
         // and the accused's held filings read off the chain.
         let mut held_court = held_court::PalwHeldCourtV1::default();
@@ -7717,6 +7721,7 @@ impl PalwPanelService {
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             attn_evidence.retain(|(session_id, _), _| court_duties.iter().any(|d| d.session_id == *session_id));
             attn_root_filings.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
+            tir_root_filings.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
             held_court.begin_tick_v1(&court_duties, current_daa).await;
             let mut held_duties: Vec<kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2> = Vec::new();
             for duty in &court_duties {
@@ -8052,9 +8057,52 @@ impl PalwPanelService {
                         continue;
                     };
                     let name = tir_dissect::palw_tir_dissect_move_name_v1(mv);
+                    // **Option D: a challenger's bottom without the accused capture** — the leaf the
+                    // accused's root claim carries, read off the chain (a large class's capture never
+                    // reaches a seat). Looked up once, re-looked on the attention route's throttle.
+                    let accused_root = if mv == tir_dissect::PalwTirDissectMoveV1::Close && accused_capture.is_none() {
+                        match tir_root_filings.get(&duty.session_id) {
+                            Some((_, Some(root))) => Some(root.clone()),
+                            Some((looked, None)) if current_daa < looked.saturating_add(25) => None,
+                            _ => {
+                                let window = match &self.consensus_config.params.palw_consensus_mode {
+                                    kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                                        bundle.state.window_court()
+                                    }
+                                    _ => 0,
+                                };
+                                let not_before = duty.session_deadline_daa.saturating_sub(window);
+                                let span = current_daa.saturating_sub(not_before).saturating_add(64).min(1 << 16) as usize;
+                                let sid = duty.session_id;
+                                let filed = session
+                                    .clone()
+                                    .spawn_blocking(move |c| tir_root_claims_from_chain_v1(c, sid, not_before, span))
+                                    .await;
+                                let root = filed.into_iter().find(|root| {
+                                    root.finalize.binding.committed_execution_root == duty.execution_root
+                                        && duty
+                                            .tir_dissection
+                                            .as_ref()
+                                            .is_some_and(|p| p.leaf_index() == root.finalize.output_opening.leaf_index)
+                                });
+                                tir_root_filings.insert(duty.session_id, (current_daa, root.clone()));
+                                root
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     let (own, accused, task_duty) = (capture.to_vec(), accused_capture.as_deref().map(|c| c.to_vec()), duty.clone());
                     let built = tokio::task::spawn_blocking(move || {
-                        tir_dissect::palw_tir_dissect_build_v1(&tir, &task_duty, mv, &own, accused.as_deref(), &rules)
+                        tir_dissect::palw_tir_dissect_build_v1(
+                            &tir,
+                            &task_duty,
+                            mv,
+                            &own,
+                            accused.as_deref(),
+                            accused_root.as_ref(),
+                            &rules,
+                        )
                     })
                     .await;
                     let built = match built {
@@ -12620,6 +12668,28 @@ fn attn_root_filings_from_chain_v1(
             found.push(PalwAttnAccusedFilingV1 { binding: *binding, out_tile, anchor: Some(*anchor) });
         }
         _ => {}
+    });
+    found.reverse();
+    found
+}
+
+/// **RFC-0002 F7, option D: the accused's IR root claims for `session_id`, off the chain** — every
+/// `CourtTirRootClaimed` accepted since `not_before_daa`, OLDEST first, as they rode (program empty).
+/// Read, never believed: the walk returns objects the fold refused too, and the challenger's bottom
+/// builder re-checks the one it uses against the claim and the phase.
+fn tir_root_claims_from_chain_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    session_id: Hash64,
+    not_before_daa: u64,
+    max_chain_blocks: usize,
+) -> Vec<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirRootClaimV1> {
+    let mut found = Vec::new();
+    walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
+        if let PalwConsensusObjectV2::CourtTirRootClaimed { session_id: filed, root, .. } = object
+            && filed == session_id
+        {
+            found.push(*root);
+        }
     });
     found.reverse();
     found

@@ -120,6 +120,12 @@ impl TirStepTreeV1 {
         *self.leaves.get(index as usize)?
     }
 
+    /// The node at `pos` of `level` (0 = the leaves' own nodes, `step_merkle_leaf_v1`), when held —
+    /// what an opening's sibling at that place is compared with.
+    pub fn node(&self, level: usize, pos: u64) -> Option<Hash64> {
+        *self.levels.get(level)?.get(pos as usize)?
+    }
+
     /// **The opening of leaf `index`** — `step_opening_capped_v1`'s path.
     pub fn opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
         let leaf_hash = self.leaf_hash(index)?;

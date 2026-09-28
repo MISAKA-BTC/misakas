@@ -3,6 +3,7 @@
 //! roots Phase F defines ([`run`]). The consensus types these are stated in live in
 //! `kaspa-consensus-core`; the executor itself does not need them, so this layer is a feature.
 
+pub mod annex;
 pub mod artifact;
 pub mod backend;
 pub mod drill;
@@ -12,6 +13,10 @@ pub mod mapped;
 pub mod run;
 pub mod tree;
 
+pub use annex::{
+    PALW_TIR_LEAF_ANNEX_MAGIC_V1, PALW_TIR_LEAF_ANNEX_VERSION_V1, PalwTirAnnexTraceV1, PalwTirLeafAnnexV1, TirDivergenceV1,
+    palw_tir_leaf_annex_verify_v1, tir_annex_trace_v1, tir_first_divergence_from_opening_v1,
+};
 pub use artifact::TirArtifactV1;
 pub use backend::{
     TIR_CAPTURE_MAGIC_V1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_fused_kernels_default_v1,
@@ -21,7 +26,7 @@ pub use drill::{
     TirCloseSizeV1, TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_drill_covering_leaves_v1,
     tir_family_drill_v1, tir_family_evidence_v1, tir_family_id_v1, tir_prim_kernel_id_v1, tir_terminal_close_sizes_v1,
 };
-pub use evidence::{TirEvidenceV1, TirRetainedJobV1, tir_bisect_prefix_state_v1, tir_first_divergence_v1};
+pub use evidence::{TirEvidenceV1, TirRetainedJobV1, TirTraceV1, tir_bisect_prefix_state_v1, tir_first_divergence_v1};
 pub use inventory::{TirHeldInventoryV1, TirInventoryTreeV1, TirParamOpenerV1, TirParamsSourceV1};
 pub use run::{TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};
 pub use tree::TirStepTreeV1;
