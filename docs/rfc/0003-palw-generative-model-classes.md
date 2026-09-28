@@ -1192,7 +1192,9 @@ the text stage's.
     of the class's most expensive offered job; every commit point's cone at its own tile length
     against the court (a cone that reduces over the history must fit whole — the generative court
     dissects no history before court version 3); the class id; and 0‰, since no attempt lane
-    exists for pipelines. The fold writes the class's `gen_classes` row (rooted without the class's
+    exists for pipelines. The registration is `ClassRegisteredGenV1`, object tag **68** (renumbered
+    from 67 on 2026-09-29: RFC-0002's second IR fence takes 67 for `DefaultAccusedTirLeaf` and
+    merges first). The fold writes the class's `gen_classes` row (rooted without the class's
     bytes, delta entry 90, carriage tail `0xC2`). A V5 claim's class is the row its job names: a
     text class, its tokenizer, its slots and its stream;
   - **the params against the artifact root** (`palw_gen_artifact_v1`): the pipeline inventory is
@@ -1214,15 +1216,19 @@ the text stage's.
     reads it. Below `palw_gen_v1` both are dropped by name;
   - **the history dissection, composed** (RFC-0002 F7, spec 04b §9.5): a text stage's attention
     cone is dissected, not closed whole. Admission asks F7's obligations, value bound, sizing and
-    window of the stage's view verbatim; `CourtGenRootClaimed` (tag 68) opens F7's own phase, whose
-    rounds and choices are F7's objects unchanged; `GenDissection` (tag 12) is the bottom. A dissected
-    cone with a `TopK` is refused until ref2's H7 (the TopK row of §10.3's box demand) is fixed in
-    F7. Admission targets: tir-lower's lowered tiny LLaVA, Qwen2-VL and Qwen2.5-VL (`rfc3/lower`
+    window of the stage's view verbatim; `CourtGenRootClaimed` (tag **69**, renumbered from 68 with
+    the registration) opens F7's own phase, whose rounds and choices are F7's objects unchanged;
+    `GenDissection` (tag 12) is the bottom. Every stage is sized under the block's box-demand rules:
+    below `palw_tir_fence2` the DAA-2,000 release's, under which a dissected cone with a `TopK` is
+    refused by name; past it ref2's H7 row (RFC-0002's second IR fence), under which `V` covers a
+    TopK tile and such a cone is admitted dissected like any other. Admission targets: tir-lower's lowered tiny LLaVA, Qwen2-VL and Qwen2.5-VL (`rfc3/lower`
     4c25416a5), each admitted with its attention dissected; LLaVA's attention leaf is argued end to
     end (an honest responder acquitted, a lie in the totals convicted wherever it hides).
 
-  Not yet built: the node's worker and seat loops (kaspad, `misaka-palw-base0`) calling these. The
-  V5 lane itself (the walk admitting version 8) waits for its fence and open question 13's price.
+  Built since: the node's worker, seat, capture and court halves (`misaka-palw-base0::gen_worker`,
+  re-exported by kaspad's `palw_gen_seat`), the source input and the forced prefix (§II.2.2), and
+  `PALWTIR2`. The kaspad panel wiring and the V5 lane itself (the walk admitting version 8) wait
+  for the V5 lane's fence, which the user decides, and open questions 13 and 15's prices.
 
 **Order of implementation for this path.**
 
