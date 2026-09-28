@@ -138,6 +138,8 @@ quantised!(
     awq_g32,
     awq_g64,
     awq_g128,
+    gptq_qwen3moe_b4_g32_act,
+    awq_mixtral_g64,
 );
 
 /// A checkpoint whose config says GPTQ but whose projection is stored in float is a clear error,

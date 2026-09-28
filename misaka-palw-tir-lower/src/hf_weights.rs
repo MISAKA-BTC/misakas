@@ -47,8 +47,23 @@ impl M<'_> {
     /// The format a linear role is stored in, when the checkpoint is pre-quantised and the role is
     /// one of a block's projections the config converts (`crate::prequant::QuantConfig`).
     fn quantised(&self, role: &str) -> Result<Option<crate::prequant::QFormat>> {
-        const PROJECTIONS: &[&str] =
-            &["attn.q", "attn.k", "attn.v", "attn.qkv", "attn.o", "mlp.gate", "mlp.up", "mlp.gate_up", "mlp.down"];
+        const PROJECTIONS: &[&str] = &[
+            "attn.q",
+            "attn.k",
+            "attn.v",
+            "attn.qkv",
+            "attn.o",
+            "mlp.gate",
+            "mlp.up",
+            "mlp.gate_up",
+            "mlp.down",
+            "moe.gate",
+            "moe.up",
+            "moe.down",
+            "moe.shared.gate",
+            "moe.shared.up",
+            "moe.shared.down",
+        ];
         let Some(q) = &self.st.quant else { return Ok(None) };
         // GGUF: every tensor has its own type; the modules stored block-quantised are listed.
         if let crate::prequant::QFormat::Gguf { .. } = q.fmt {
@@ -487,7 +502,12 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
         MlpLayout::Separate => {
             for (name, role) in [("moe.experts.gate", "moe.gate"), ("moe.experts.up", "moe.up"), ("moe.experts.down", "moe.down")] {
                 let r = m.role(role)?;
-                m.put(name, Src::t(format!("{r}.weight")).stack('E', e))?;
+                // Pre-quantised experts keep their integers, one stored module per expert.
+                let src = match m.quantised(role)? {
+                    Some(fmt) => Src::Quant { module: r, fmt }.stack('E', e),
+                    None => Src::t(format!("{r}.weight")).stack('E', e),
+                };
+                m.put(name, src)?;
             }
         }
         MlpLayout::FusedGateFirst => {

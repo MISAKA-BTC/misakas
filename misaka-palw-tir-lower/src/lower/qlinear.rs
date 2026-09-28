@@ -421,6 +421,161 @@ pub(super) fn lower_linear_q(
     Ok(v)
 }
 
+/// One projection of the selected experts from their stored integers: `codes:i8[E, G, rows, gs]`,
+/// `a`/`c:i32[E, G, rows]` (and GPTQ's `order:idx[E, cols]`) gathered by the `k` expert ids, the
+/// grouped MatMul against `input` (`[cols, 1]` shared by every expert, or `[k, cols, 1]`), the
+/// per-group scales exact, the groups summed, and one narrowing per (expert, row) — the W8 path's
+/// `m`/`s` gathered the same way. An expert's input is never split, so there is no outlier path.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lower_experts_q(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    p: u32,
+    bias: Option<u32>,
+    input: tir::Ref,
+    in_key: super::ScaleKey,
+    name: &str,
+    out: super::ScaleKey,
+    dt: DType,
+    idx: tir::Ref,
+    k: usize,
+    layout: QLayout,
+) -> Result<tir::Ref> {
+    let hl = cx.hl;
+    let pd = &hl.params[p as usize];
+    let (e, rows, cols) = (pd.shape[0], pd.shape[1], pd.shape[2]);
+    let gs = if layout.group == 0 { cols } else { layout.group };
+    if cols % gs != 0 {
+        return Err(LowerError::not_lowerable(format!("`{}`: {cols} columns are not a multiple of the group size {gs}", pd.name)));
+    }
+    let groups = cols / gs;
+    let pl = per_layer(lb);
+    let ints: Arc<dyn Fn(&FillCtx<'_>) -> Result<Arc<Vec<QInts>>> + Send + Sync> = Arc::new(move |c| c.qints_stack(p, layout));
+    let cat8 = |f: fn(&QInts) -> &Vec<i8>, v: &[QInts]| v.iter().flat_map(|q| f(q).iter().copied()).collect::<Vec<i8>>();
+    let f = ints.clone();
+    let codes = decl(
+        b,
+        cx,
+        lb,
+        &pd.name,
+        DType::I8,
+        &[e, groups, rows, gs],
+        pd.per_layer,
+        Arc::new(move |c| Ok(IntTensor::i8(vec![e, groups, rows, gs], cat8(|q| &q.codes, &f(c)?)))),
+    )?;
+    let f = ints.clone();
+    let ap = decl(
+        b,
+        cx,
+        lb,
+        &format!("{name}.qa"),
+        DType::I32,
+        &[e, groups, rows],
+        pl,
+        Arc::new(move |c| Ok(IntTensor::i32(vec![e, groups, rows], f(c)?.iter().flat_map(|q| q.a.iter().copied()).collect()))),
+    )?;
+    // The shared input `[cols]`, or one row per selected expert `[k, cols]`.
+    let shape = b.shape(input);
+    let per_expert = shape.len() == 3;
+    let flat = if per_expert { b.reshape_fixed(input, &[k as u32, cols as u32]) } else { b.reshape_fixed(input, &[cols as u32]) };
+    let xin = if layout.order {
+        let f = ints.clone();
+        let ord = decl(
+            b,
+            cx,
+            lb,
+            &format!("{name}.qorder"),
+            DType::Idx,
+            &[e, cols],
+            pl,
+            Arc::new(move |c| Ok(IntTensor::idx(vec![e, cols], f(c)?.iter().flat_map(|q| q.order.iter().copied()).collect()))),
+        )?;
+        let ord = b.clamp(ord, 0, cols as i64 - 1, DType::Idx);
+        let ok = b.gather(ord, idx, 0, 0);
+        if per_expert { b.gather(flat, ok, 1, 1) } else { b.gather(flat, ok, 0, 0) }
+    } else {
+        flat
+    };
+    let xg = if per_expert || layout.order {
+        b.reshape_fixed(xin, &[k as u32, groups as u32, gs as u32, 1])
+    } else {
+        b.reshape_fixed(xin, &[groups as u32, gs as u32, 1])
+    };
+    let sel = b.gather(codes, idx, 0, 0);
+    let acc = b.matmul(sel, xg, DType::I64);
+    let acc = b.reshape_fixed(acc, &[k as u32, groups as u32, rows as u32]);
+    let asel = b.gather(ap, idx, 0, 0);
+    let ac = b.clamp(asel, -(1i64 << A_BITS), 1i64 << A_BITS, DType::I32);
+    let mut t = b.mul(ac, acc, DType::I64);
+    if layout.offset_term {
+        let f = ints.clone();
+        let cp = decl(
+            b,
+            cx,
+            lb,
+            &format!("{name}.qc"),
+            DType::I32,
+            &[e, groups, rows],
+            pl,
+            Arc::new(move |c| Ok(IntTensor::i32(vec![e, groups, rows], f(c)?.iter().flat_map(|q| q.c.iter().copied()).collect()))),
+        )?;
+        let csel = b.gather(cp, idx, 0, 0);
+        let cc = b.clamp(csel, -(1i64 << C_BITS), 1i64 << C_BITS, DType::I32);
+        let xs = b.reduce_sum(xg, if per_expert || layout.order { 2 } else { 1 }, DType::I64);
+        let xs = if per_expert || layout.order {
+            b.reshape_fixed(xs, &[k as u32, groups as u32, 1])
+        } else {
+            b.reshape_fixed(xs, &[groups as u32, 1])
+        };
+        let offs = b.mul(cc, xs, DType::I64);
+        t = b.sub(t, offs, DType::I64);
+    }
+    let t = if groups > 1 { b.reduce_sum(t, 1, DType::I64) } else { t };
+    let total = b.reshape_fixed(t, &[k as u32, rows as u32]);
+    let f = ints;
+    let (ki, ko) = (in_key, out.clone());
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        name,
+        e * rows,
+        Arc::new(move |c| {
+            let q = f(c)?;
+            let (si, so) = (c.scale(&ki)?, c.scale(&ko)?);
+            Ok(q.iter().flat_map(|x| x.e.iter().map(|eu| si * 2f64.powi(*eu) / so).collect::<Vec<_>>()).collect())
+        }),
+    )?;
+    let z = match bias {
+        Some(bp) => {
+            let ko = out;
+            let zp = decl(
+                b,
+                cx,
+                lb,
+                &format!("{name}.z"),
+                DType::I64,
+                &[e * rows],
+                pl,
+                Arc::new(move |c| {
+                    let bv = c.f(bp)?;
+                    let so = c.scale(&ko)?;
+                    Ok(IntTensor::i64(vec![bv.data.len()], bv.data.iter().map(|v| (*v as f64 / so).round() as i64).collect()))
+                }),
+            )?;
+            let zp = b.reshape_fixed(zp, &[e as u32, rows as u32]);
+            Some(b.gather(zp, idx, 0, 0))
+        }
+        None => None,
+    };
+    let m = b.reshape_fixed(m, &[e as u32, rows as u32]);
+    let s = b.reshape_fixed(s, &[e as u32, rows as u32]);
+    let mk = b.gather(m, idx, 0, 0);
+    let sk = b.gather(s, idx, 0, 0);
+    Ok(narrow(b, total, mk, sk, z, dt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

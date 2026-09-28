@@ -707,15 +707,29 @@ fn load_quant(module: &str, fmt: &QFormat, r: &Resolver, layer: Option<usize>, v
 }
 
 /// The stored integers of a quantised param (`None` when the param is not quantised): the
-/// module's [`QWeight`], through the row slices a fused projection takes. Anything else on the
-/// way (a transpose, a reshape, a map) is refused — it would not keep the integers.
-pub fn eval_qsrc(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<Option<QWeight>> {
+/// module's [`QWeight`], through the row slices a fused projection takes; one per expert through a
+/// [`Src::Stack`] of experts. Anything else on the way (a transpose, a reshape, a map) is refused —
+/// it would not keep the integers.
+pub fn eval_qsrc(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<Option<Vec<QWeight>>> {
     match src {
-        Src::Quant { module, fmt } => Ok(Some(load_quant(module, fmt, r, layer, vars)?)),
+        Src::Quant { module, fmt } => Ok(Some(vec![load_quant(module, fmt, r, layer, vars)?])),
         Src::Take { src: inner, axis: 0, pick } => match eval_qsrc(inner, r, layer, vars)? {
-            Some(q) => Ok(Some(q.take_rows(&pick.indices())?)),
+            Some(v) if v.len() == 1 => Ok(Some(vec![v[0].take_rows(&pick.indices())?])),
+            Some(_) => Err(LowerError::not_lowerable("a row slice across stacked quantised experts")),
             None => Ok(None),
         },
+        Src::Stack { src: inner, var, count } if inner.is_quant() => {
+            let mut out = Vec::with_capacity(*count);
+            for i in 0..*count {
+                let mut v = vars.clone();
+                v.insert(*var, i);
+                match eval_qsrc(inner, r, layer, &v)? {
+                    Some(q) if q.len() == 1 => out.extend(q),
+                    _ => return Err(LowerError::not_lowerable("a nested stack of quantised tensors")),
+                }
+            }
+            Ok(Some(out))
+        }
         other if other.is_quant() => {
             Err(LowerError::not_lowerable(format!("a quantised weight read through {other:?} (only row slices keep the integers)")))
         }
@@ -728,8 +742,8 @@ pub fn quant_layouts(prog: &HlProgram, binding: &Binding) -> Result<BTreeMap<u32
     let mut out = BTreeMap::new();
     for (pi, s) in binding.srcs.iter().enumerate() {
         if let Some(fmt) = s.quant_format() {
-            if prog.params[pi].shape.len() != 2 {
-                return Err(LowerError::not_lowerable(format!("quantised param `{}` is not a matrix", prog.params[pi].name)));
+            if !matches!(prog.params[pi].shape.len(), 2 | 3) {
+                return Err(LowerError::not_lowerable(format!("quantised param `{}` is not a matrix or a stack of experts", prog.params[pi].name)));
             }
             out.insert(pi as u32, fmt.layout());
         }

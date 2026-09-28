@@ -57,12 +57,15 @@ FIX = os.path.join(CRATE, "tests", "fixtures", "hf-quant")
 
 V = 128
 T = 16
-PROJ = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
+PROJ = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", "w1", "w2", "w3")
 AWQ_ORDER = [0, 2, 4, 6, 1, 3, 5, 7]
 
 BASE = dict(hidden_size=128, intermediate_size=256, num_attention_heads=4, num_key_value_heads=2, vocab_size=V,
             num_hidden_layers=2, max_position_embeddings=1024)
 MODELS = {
+    "qwen3moe": ("qwen3_moe", "Qwen3MoeForCausalLM", dict(BASE, moe_intermediate_size=128, num_experts=4, num_experts_per_tok=2,
+                                                        norm_topk_prob=True, head_dim=32)),
+    "mixtral": ("mixtral", "MixtralForCausalLM", dict(BASE, intermediate_size=128, num_local_experts=4, num_experts_per_tok=2)),
     "llama": ("llama", "LlamaForCausalLM", dict(BASE)),
     # Qwen2: q/k/v biases (a quantised module's float bias), tied embeddings.
     "qwen2": ("qwen2", "Qwen2ForCausalLM", dict(BASE, tie_word_embeddings=True)),
@@ -82,6 +85,10 @@ CONFIGS = {
     "awq_g32": ("llama", {"quant_method": "awq", "bits": 4, "group_size": 32, "zero_point": True, "version": "gemm"}),
     "awq_g64": ("qwen2", {"quant_method": "awq", "bits": 4, "group_size": 64, "zero_point": True, "version": "gemm"}),
     "awq_g128": ("llama", {"quant_method": "awq", "bits": 4, "group_size": 128, "zero_point": True, "version": "gemm"}),
+    # Experts: one stored module per expert; the router stays float.
+    "gptq_qwen3moe_b4_g32_act": ("qwen3moe", {"quant_method": "gptq", "bits": 4, "group_size": 32, "desc_act": True, "sym": True}),
+    "awq_mixtral_g64": ("mixtral", {"quant_method": "awq", "bits": 4, "group_size": 64, "zero_point": True, "version": "gemm",
+                                    "modules_to_not_convert": ["gate"]}),
 }
 
 
@@ -206,6 +213,14 @@ def awq_dequant(t, group):
 # ───────────────────────────── models ─────────────────────────────
 
 def build(name):
+    """The float model, its quantised checkpoint tensors, the reference model and the config.
+
+    The quantisation works on the CHECKPOINT's tensors (transformers' `save_pretrained` names:
+    one module per expert), and the reference is `from_pretrained` of the same checkpoint with the
+    dequantised weights — so fused in-memory layouts (transformers 5's experts) need no handling.
+    """
+    import tempfile
+    from safetensors.numpy import load_file
     model_name, qc = CONFIGS[name]
     model_type, arch, cfg_kw = MODELS[model_name]
     seed = sum(ord(ch) for ch in name) + 77
@@ -225,17 +240,19 @@ def build(name):
             else:
                 p.add_(torch.randn(p.shape, generator=g) * 0.1)
             p.copy_(p.to(torch.float16).to(torch.float32))
+    tmp = tempfile.mkdtemp(prefix="quantfix-")
+    save_float(model, tmp)
+    ck = load_file(os.path.join(tmp, "model.safetensors"))
     rng = np.random.default_rng(seed)
-    tensors = {}
+    tensors, deq = {}, {}
     method, bits = qc["quant_method"], qc.get("bits", 4)
     group = qc.get("group_size", 128)
     v2 = qc.get("checkpoint_format") == "gptq_v2"
-    sd = model.state_dict()
-    deq = {}
-    for k, v in sd.items():
+    for k in sorted(ck):
+        v = ck[k]
         if k.endswith(".weight") and k.split(".")[-2] in PROJ and ".layers." in k:
             mod = k[: -len(".weight")]
-            w = v.double().numpy()
+            w = v.astype(np.float64)
             if method == "gptq":
                 q, z, s16, gi = gptq_quantize(w, bits, group, qc.get("sym", True), qc.get("desc_act", False), rng)
                 packed = gptq_pack(q, z, s16, gi, bits, v2)
@@ -254,20 +271,20 @@ def build(name):
             assert np.array_equal(back, ref), f"{name}: {mod} does not unpack to its quantiser's grid"
             for part, arr in packed.items():
                 tensors[f"{mod}.{part}"] = arr
-            deq[k] = torch.from_numpy(back.astype(np.float32))
+            # C order: safetensors writes the buffer as laid out (`back` is a transposed view).
+            deq[k] = np.ascontiguousarray(back, dtype=np.float32)
         else:
-            if model.config.tie_word_embeddings and k == "lm_head.weight":
-                continue
-            tensors[k] = v.numpy().astype(np.float16)
-    # The reference: the float model with the dequantised weights substituted.
-    new_sd = dict(sd)
-    new_sd.update(deq)
-    model.load_state_dict(new_sd)
+            tensors[k] = v.astype(np.float16)
+            deq[k] = v.astype(np.float16).astype(np.float32)
+    # The reference: the same checkpoint with the dequantised weights, as transformers loads it.
+    save_file(deq, os.path.join(tmp, "model.safetensors"), metadata={"format": "pt"})
+    ref_model = AutoModelForCausalLM.from_pretrained(tmp, dtype=torch.float32, attn_implementation="eager")
+    ref_model.eval()
     qcfg = dict(qc)
     if method == "gptq":
         qcfg.setdefault("checkpoint_format", "gptq")
         qcfg.update({"damp_percent": 0.01, "true_sequential": True, "static_groups": False})
-    return model, tensors, qcfg, seed
+    return ref_model, tensors, qcfg, seed
 
 
 def save_float(model, d):

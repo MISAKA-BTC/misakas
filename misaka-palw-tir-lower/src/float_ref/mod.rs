@@ -30,17 +30,28 @@ pub mod stream;
 pub struct ParamStore {
     global: BTreeMap<u32, Tensor>,
     layered: BTreeMap<(u32, usize), Tensor>,
-    /// A pre-quantised param's stored integers (its float tensor above is their dequantisation).
-    quant: BTreeMap<(u32, Option<usize>), Arc<QWeight>>,
+    /// A pre-quantised param's stored integers (its float tensor above is their dequantisation);
+    /// one per expert for a stack of experts.
+    quant: BTreeMap<(u32, Option<usize>), Arc<Vec<QWeight>>>,
 }
 
 /// One param instance from its source: the float tensor, and the stored integers when the param
 /// is pre-quantised (the float tensor is then their dequantisation, read once).
-pub(crate) fn bind_one(src: &Src, r: &Resolver, layer: Option<usize>) -> Result<(Tensor, Option<QWeight>)> {
+pub(crate) fn bind_one(src: &Src, r: &Resolver, layer: Option<usize>) -> Result<(Tensor, Option<Vec<QWeight>>)> {
     let none = BTreeMap::new();
     if src.is_quant() {
         let q = eval_qsrc(src, r, layer, &none)?.ok_or_else(|| LowerError::eval("internal: a quantised source read no integers"))?;
-        Ok((q.dequant(), Some(q)))
+        let t = if q.len() == 1 {
+            q[0].dequant()
+        } else {
+            // A stack of experts: `[E, out, in]`.
+            let mut data = Vec::new();
+            for w in &q {
+                data.extend(w.dequant().data);
+            }
+            Tensor::new(vec![q.len(), q[0].out, q[0].inp], data)
+        };
+        Ok((t, Some(q)))
     } else {
         Ok((eval_src(src, r, layer, &none)?, None))
     }
@@ -55,15 +66,16 @@ impl ParamStore {
         .ok_or_else(|| LowerError::eval(format!("param {p} (layer {layer:?}) is not bound")))
     }
 
-    /// A pre-quantised param's stored integers (`None`: the param is float).
-    pub fn get_q(&self, p: u32, layer: Option<usize>) -> Option<&Arc<QWeight>> {
+    /// A pre-quantised param's stored integers (`None`: the param is float); one per expert for a
+    /// stack of experts.
+    pub fn get_q(&self, p: u32, layer: Option<usize>) -> Option<&Arc<Vec<QWeight>>> {
         match layer {
             Some(l) => self.quant.get(&(p, Some(l))).or_else(|| self.quant.get(&(p, None))),
             None => self.quant.get(&(p, None)),
         }
     }
 
-    pub(crate) fn insert(&mut self, p: u32, layer: Option<usize>, t: Tensor, q: Option<QWeight>) {
+    pub(crate) fn insert(&mut self, p: u32, layer: Option<usize>, t: Tensor, q: Option<Vec<QWeight>>) {
         if let Some(q) = q {
             self.quant.insert((p, layer), Arc::new(q));
         }

@@ -2794,6 +2794,10 @@ fn lower_moe(
                 out: ScaleKey,
                 dt: DType|
      -> Result<tir::Ref> {
+        // Pre-quantised experts: from their stored integers.
+        if let Some(layout) = cx.quant.get(&p).copied() {
+            return qlinear::lower_experts_q(b, cx, lb, p, bias, input, in_key, name, out, dt, idx.r, k, layout);
+        }
         let pd = &hl.params[p as usize];
         let (rows, cols) = (pd.shape[1], pd.shape[2]);
         let codes = decl(b, cx, lb, &pd.name, DType::I8, &[e, rows, cols], pd.per_layer, weight_codes(p))?;

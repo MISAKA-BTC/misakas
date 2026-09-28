@@ -150,6 +150,7 @@ pub struct FillCtx<'a> {
     memo16: Mutex<BTreeMap<u32, Arc<RowCodes16>>>,
     split_memo: Mutex<BTreeMap<String, Arc<SplitCodes>>>,
     qmemo: Mutex<BTreeMap<String, Arc<QInts>>>,
+    qstack_memo: Mutex<BTreeMap<u32, Arc<Vec<QInts>>>>,
 }
 
 impl<'a> FillCtx<'a> {
@@ -176,6 +177,7 @@ impl<'a> FillCtx<'a> {
             memo16: Mutex::new(BTreeMap::new()),
             split_memo: Mutex::new(BTreeMap::new()),
             qmemo: Mutex::new(BTreeMap::new()),
+            qstack_memo: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -187,10 +189,14 @@ impl<'a> FillCtx<'a> {
         if let Some(r) = self.qmemo.lock().expect("memo").get(&mk) {
             return Ok(r.clone());
         }
-        let q = self
+        let qs = self
             .params
             .get_q(p, self.layer)
             .ok_or_else(|| LowerError::eval(format!("param {p} is lowered as pre-quantised, but the checkpoint gave no integers")))?;
+        if qs.len() != 1 {
+            return Err(LowerError::eval(format!("internal: param {p} is a stack of {} quantised experts", qs.len())));
+        }
+        let q = &qs[0];
         let ratio: Vec<f64> = if outl.is_empty() {
             Vec::new()
         } else {
@@ -202,9 +208,26 @@ impl<'a> FillCtx<'a> {
         Ok(qi)
     }
 
+    /// A stack of quantised experts' integers in `layout` (no outlier split: an expert's input is
+    /// never split), one [`QInts`] per expert, computed once per occurrence.
+    pub fn qints_stack(&self, p: u32, layout: QLayout) -> Result<Arc<Vec<QInts>>> {
+        if let Some(r) = self.qstack_memo.lock().expect("memo").get(&p) {
+            return Ok(r.clone());
+        }
+        let qs = self
+            .params
+            .get_q(p, self.layer)
+            .ok_or_else(|| LowerError::eval(format!("param {p} is lowered as pre-quantised experts, but the checkpoint gave no integers")))?;
+        let v: Vec<QInts> = qs.iter().map(|q| super::qlinear::build(q, layout, &[], &[])).collect::<Result<_>>()?;
+        let v = Arc::new(v);
+        self.qstack_memo.lock().expect("memo").insert(p, v.clone());
+        Ok(v)
+    }
+
     /// Scales of this occurrence's quantised projections that are not exact at their row's unit.
     pub fn quant_inexact(&self) -> usize {
-        self.qmemo.lock().expect("memo").values().map(|q| q.inexact).sum()
+        self.qmemo.lock().expect("memo").values().map(|q| q.inexact).sum::<usize>()
+            + self.qstack_memo.lock().expect("memo").values().flat_map(|v| v.iter()).map(|q| q.inexact).sum::<usize>()
     }
 
     /// A float param of this occurrence.
@@ -453,6 +476,7 @@ pub fn materialise(
             memo16: Mutex::new(BTreeMap::new()),
             split_memo: Mutex::new(BTreeMap::new()),
             qmemo: Mutex::new(BTreeMap::new()),
+            qstack_memo: Mutex::new(BTreeMap::new()),
         };
         for &pi in &used[tb] {
             let d = &lw.program.params[pi as usize];

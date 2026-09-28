@@ -1012,6 +1012,14 @@ impl GgufModel {
             let template = match module.strip_prefix("model.layers.") {
                 Some(rest) => {
                     let (_, tail) = rest.split_once('.').unwrap_or(("", rest));
+                    // One stored expert per module: `experts.{E}`.
+                    let tail = match tail.split_once(".experts.") {
+                        Some((a, b)) => match b.split_once('.') {
+                            Some((n, c)) if n.bytes().all(|x| x.is_ascii_digit()) => format!("{a}.experts.{{E}}.{c}"),
+                            _ => tail.to_string(),
+                        },
+                        None => tail.to_string(),
+                    };
                     format!("model.layers.{{L}}.{tail}")
                 }
                 None => module.to_string(),

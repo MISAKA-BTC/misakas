@@ -352,10 +352,16 @@ pub(crate) fn attach_quant(spec: &mut ArchSpec, q: crate::prequant::QuantConfig)
         return Err(LowerError::not_lowerable(format!("{arch}: a pre-quantised multimodal checkpoint")));
     }
     for (l, ls) in spec.layers.iter().enumerate() {
-        if !matches!(ls.mixer, Mixer::Attention(_) | Mixer::GatedDeltaNet(_)) || !matches!(ls.ffn, Ffn::Mlp(_)) {
+        if !matches!(ls.mixer, Mixer::Attention(_) | Mixer::GatedDeltaNet(_)) || !matches!(ls.ffn, Ffn::Mlp(_) | Ffn::Moe(_)) {
             return Err(LowerError::not_lowerable(format!(
-                "{arch}: layer {l} of a pre-quantised checkpoint is not attention or gated delta + MLP (quantised experts, latent attention and the other recurrent mixers are not lowered from their integers yet)"
+                "{arch}: layer {l} of a pre-quantised checkpoint is not attention or gated delta + MLP or experts (latent attention and the other recurrent mixers are not lowered from their integers yet)"
             )));
+        }
+        if let Ffn::Moe(m) = &ls.ffn
+            && spec.hf.experts != crate::spec::MlpLayout::Separate
+        {
+            let _ = m;
+            return Err(LowerError::not_lowerable(format!("{arch}: pre-quantised experts in a fused layout")));
         }
     }
     spec.notes.push(format!("pre-quantised checkpoint ({}): projections lowered from the stored integers", q.fmt.label()));
