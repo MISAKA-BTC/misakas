@@ -194,3 +194,27 @@ fn a_pipeline_round_trips_its_canonical_bytes() {
     assert_eq!(TirPipelineV1::decode_canonical(&bad.encode(), &progs).unwrap_err().kind, TirErrorKind::NormalForm);
     assert_eq!(TirPipelineV1::decode_canonical(&vec![0u8; MAX_PIPELINE_BYTES + 1], &progs).unwrap_err().kind, TirErrorKind::Encoding);
 }
+
+/// The court's derived inputs other than `R`: what a job fixes of each stage is what the run used.
+#[test]
+fn stage_job_facts_are_what_the_run_used() {
+    let (p, programs) = toy_pipeline();
+    let job = toy_job();
+    let facts = stage_job_facts(&p, &programs, &job).unwrap();
+    let a = run(&job, [0x2a; 32], 0).unwrap();
+    for (f, s) in facts.iter().zip(&a.stages) {
+        assert_eq!((f.trip, &f.tokens), (s.trip, &s.tokens));
+    }
+    let den = &facts[1].inputs;
+    assert_eq!(den.keys().copied().collect::<Vec<_>>(), vec![IN_COND_LEN, IN_GUIDANCE, IN_STEPS_IDX], "no edge, no random input");
+    assert_eq!(den[&IN_COND_LEN].data, vec![4], "the encoder's 5 rows less the one dropped");
+    assert_eq!((den[&IN_GUIDANCE].data[0], den[&IN_STEPS_IDX].data[0]), (24, 1));
+    assert!(facts[0].inputs.is_empty() && facts[2].inputs.is_empty(), "the encoder reads tokens only; the decoder an edge");
+    // Refused as the run refuses.
+    let short = PipelineJob { scalars: vec![24], ..job.clone() };
+    assert_eq!(stage_job_facts(&p, &programs, &short).unwrap_err().kind, TirErrorKind::Missing);
+    let long = PipelineJob { prompt: vec![5; 5], ..job.clone() };
+    assert_eq!(stage_job_facts(&p, &programs, &long).unwrap_err().kind, TirErrorKind::Position);
+    let none = PipelineJob { steps: 0, ..job };
+    assert_eq!(stage_job_facts(&p, &programs, &none).unwrap_err().kind, TirErrorKind::Position);
+}

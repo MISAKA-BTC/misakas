@@ -167,7 +167,8 @@ fn exceeds(limit: &'static str, value: u64, cap: u64) -> Result<(), TirAdmitErro
 
 /// **`tir_admit_pipeline_v1`**: admit a pipeline's canonical bytes over its programs' canonical
 /// bytes: every program decoded (§15.1), the pipeline decoded and its edges proved (§15.6), every
-/// stage admitted with its inputs opened as bound, and the job's totals against `job`.
+/// stage admitted with its inputs opened as bound, and the job's totals against `job`. Every stage
+/// is admitted under the same network inputs; [`tir_admit_pipeline_staged_v1`] takes one per stage.
 pub fn tir_admit_pipeline_v1(
     pipeline_bytes: &[u8],
     program_bytes: &[Vec<u8>],
@@ -175,12 +176,48 @@ pub fn tir_admit_pipeline_v1(
     job: &TirJobCeilingsV1,
 ) -> Result<TirPipelineAdmissionV1, TirAdmitError> {
     check_admit_inputs(inputs)?;
+    let (programs, pipeline) = decode_pipeline(pipeline_bytes, program_bytes)?;
+    admit_pipeline(programs, pipeline, &|_| inputs, job)
+}
+
+/// **`tir_admit_pipeline_staged_v1`**: [`tir_admit_pipeline_v1`] with each stage's own network
+/// inputs — `stage_inputs[s]` carries stage `s`'s tile length, history chunk and checkpoint interval,
+/// since a class commits each stage under its own layout (RFC-0003 §I.2.3, Phase F D5 per stage).
+/// Refused unless there is exactly one per stage.
+pub fn tir_admit_pipeline_staged_v1(
+    pipeline_bytes: &[u8],
+    program_bytes: &[Vec<u8>],
+    stage_inputs: &[TirAdmitInputsV1],
+    job: &TirJobCeilingsV1,
+) -> Result<TirPipelineAdmissionV1, TirAdmitError> {
+    for inputs in stage_inputs {
+        check_admit_inputs(inputs)?;
+    }
+    let (programs, pipeline) = decode_pipeline(pipeline_bytes, program_bytes)?;
+    if stage_inputs.len() != pipeline.stages.len() {
+        return Err(TirAdmitError::Inputs("one set of network inputs per stage"));
+    }
+    admit_pipeline(programs, pipeline, &|s| &stage_inputs[s], job)
+}
+
+/// Every program decoded strictly (§15.1), then the pipeline over them (§15.6).
+fn decode_pipeline(pipeline_bytes: &[u8], program_bytes: &[Vec<u8>]) -> Result<(Vec<TirProgramV2>, TirPipelineV1), TirAdmitError> {
     let programs = program_bytes.iter().map(|b| TirProgramV2::decode_canonical(b)).collect::<Result<Vec<_>, _>>()?;
     let pipeline = TirPipelineV1::decode_canonical(pipeline_bytes, &programs)?;
+    Ok((programs, pipeline))
+}
+
+fn admit_pipeline<'a>(
+    programs: Vec<TirProgramV2>,
+    pipeline: TirPipelineV1,
+    inputs_of: &dyn Fn(usize) -> &'a TirAdmitInputsV1,
+    job: &TirJobCeilingsV1,
+) -> Result<TirPipelineAdmissionV1, TirAdmitError> {
     let mut stages = Vec::with_capacity(pipeline.stages.len());
     let (mut job_cost, mut job_step_leaves, mut cone_work) = (CostV1::default(), 0u64, 0u64);
     for (s, st) in pipeline.stages.iter().enumerate() {
         let prog = &programs[st.program as usize];
+        let inputs = inputs_of(s);
         let mut bindings = st.bind.iter();
         let leaves: Vec<ParamLeafV1> = prog
             .inputs

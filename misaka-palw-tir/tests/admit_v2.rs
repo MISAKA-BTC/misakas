@@ -166,3 +166,28 @@ fn refusals_name_their_rule_and_number() {
     };
     assert!(matches!(tir_admit_v2(&v1.encode(), &inputs()), Err(TirAdmitError::Program(e)) if e.kind == TirErrorKind::NormalForm));
 }
+
+#[test]
+fn each_stage_may_be_admitted_under_its_own_network_inputs() {
+    let (pb, progs) = toy_bytes();
+    let open = TirJobCeilingsV1::open_v1();
+    let uniform = tir_admit_pipeline_v1(&pb, &progs, &inputs(), &open).unwrap();
+    let n = uniform.stages.len();
+    let same = tir_admit_pipeline_staged_v1(&pb, &progs, &vec![inputs(); n], &open).unwrap();
+    assert_eq!(same, uniform, "the same inputs for every stage are the uniform admission");
+    // One stage at a wider tile: its leaves (and only its) change; costs do not.
+    let mut staged = vec![inputs(); n];
+    staged[1].tile_len = 256;
+    let wide = tir_admit_pipeline_staged_v1(&pb, &progs, &staged, &open).unwrap();
+    assert!(wide.stages[1].job_step_leaves <= uniform.stages[1].job_step_leaves);
+    for s in [0, 2] {
+        assert_eq!(wide.stages[s], uniform.stages[s], "stage {s} is admitted as before");
+    }
+    assert_eq!(wide.job_cost, uniform.job_cost, "a tile length prices nothing (PALW-TIR-16)");
+    // One set of inputs per stage, each legal.
+    for bad in [vec![inputs(); n - 1], vec![inputs(); n + 1]] {
+        assert!(matches!(tir_admit_pipeline_staged_v1(&pb, &progs, &bad, &open), Err(TirAdmitError::Inputs(_))));
+    }
+    staged[2].h_chunk = 3;
+    assert!(matches!(tir_admit_pipeline_staged_v1(&pb, &progs, &staged, &open), Err(TirAdmitError::Inputs(_))));
+}

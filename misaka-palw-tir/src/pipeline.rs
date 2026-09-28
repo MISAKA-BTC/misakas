@@ -402,6 +402,70 @@ fn apply_rule(rule: &TokenRule, job: &PipelineJob) -> TirResult<Vec<u32>> {
     Ok(seq)
 }
 
+/// **What a job fixes of a stage before anything runs** — its trip count, its token run, and every
+/// input the court derives from the job rather than opening (spec 04b §15.4): job scalars, token
+/// tensors, token counts and row counts (an earlier stage's row count is its trip count, a job fact).
+/// An input bound to an earlier stage's committed output, and a random input, are not here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StageJobFacts {
+    pub trip: u32,
+    /// `Input(0)` at each position (empty for a stage that reads no token).
+    pub tokens: Vec<u32>,
+    /// Input index → its value.
+    pub inputs: BTreeMap<u16, Tensor>,
+}
+
+/// **The job facts of every stage**, in order — what [`run_pipeline`] computes before it runs a
+/// stage, without running anything. Refused as the run refuses: a template longer than its pad, a
+/// trip count outside `[1, max_trip]`, a job scalar the job does not carry.
+pub fn stage_job_facts(p: &TirPipelineV1, programs: &[TirProgramV2], job: &PipelineJob) -> TirResult<Vec<StageJobFacts>> {
+    validate_pipeline(p, programs)?;
+    let mut facts: Vec<StageJobFacts> = Vec::with_capacity(p.stages.len());
+    for st in &p.stages {
+        let prog = &programs[st.program as usize];
+        let tokens = match &st.tokens {
+            Some(rule) => apply_rule(rule, job)?,
+            None => Vec::new(),
+        };
+        let trip = match st.trip {
+            TripRule::Fixed { n } => n,
+            TripRule::JobSteps => job.steps,
+            TripRule::TokenCount => tokens.len() as u32,
+        };
+        if trip == 0 || trip > st.max_trip {
+            return err(TirErrorKind::Position, format!("stage {}: trip count {trip} outside [1, {}]", st.name, st.max_trip));
+        }
+        let mut inputs = BTreeMap::new();
+        let externals = prog.inputs.iter().enumerate().filter(|(_, d)| d.is_external());
+        for (b, (k, d)) in st.bind.iter().zip(externals) {
+            let shape: Vec<usize> = d.shape.iter().map(|x| *x as usize).collect();
+            let value = match b {
+                Binding::JobScalar { index } => {
+                    let v = job.scalars.get(*index as usize).ok_or_else(|| {
+                        TirError::new(TirErrorKind::Missing, format!("stage {}: the job carries no scalar {index}", st.name))
+                    })?;
+                    Tensor::scalar(d.dtype, *v as i128)?
+                }
+                Binding::JobTokens { rule } => {
+                    let seq = apply_rule(rule, job)?;
+                    Tensor::new(DType::Idx, shape, seq.iter().map(|t| *t as i128).collect())?
+                }
+                Binding::JobTokenCount { rule } => {
+                    let n = apply_rule(rule, job)?.len() - pad_count(rule, job);
+                    Tensor::scalar(DType::Idx, n as i128)?
+                }
+                Binding::StageRowCount { stage, drop } => {
+                    Tensor::scalar(DType::Idx, facts[*stage as usize].trip.saturating_sub(*drop) as i128)?
+                }
+                Binding::StageRows { .. } | Binding::StageFinal { .. } => continue,
+            };
+            inputs.insert(k as u16, value);
+        }
+        facts.push(StageJobFacts { trip, tokens, inputs });
+    }
+    Ok(facts)
+}
+
 /// A stage's inputs: external ones computed once, random ones drawn per position when per-step.
 struct StageInputs<'a> {
     constant: BTreeMap<u16, Tensor>,

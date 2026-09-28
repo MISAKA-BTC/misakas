@@ -239,6 +239,14 @@ impl OutputSpecV1 {
         if values.len() as u64 != l.elements {
             return Err(OutputErrorV1::Count { want: l.elements, got: values.len() as u64 });
         }
+        self.lane_bytes(values)
+    }
+
+    /// **The canonical bytes of a run of elements** — a tile's lanes, say — in the kind's element
+    /// encoding; a value outside the kind's domain is refused at its index within the run. The whole
+    /// output's bytes are this over every element ([`Self::canonical_bytes`]).
+    pub fn lane_bytes(&self, values: &[i64]) -> Result<Vec<u8>, OutputErrorV1> {
+        let l = self.layout()?;
         let mut out = Vec::with_capacity(values.len() * l.element_bytes);
         for (i, v) in values.iter().enumerate() {
             if *v < l.lo || *v > l.hi {
@@ -377,9 +385,51 @@ pub fn verify_output_tile_v1(
     used == proof.len() && root_from_merkle(spec, tile_len, &h) == *root
 }
 
+/// The key of [`output_set_id_v1`].
+pub const OUTPUT_SET_ID_KEY_V1: &[u8] = b"misaka-palw/output-set-id/v1";
+
+/// **The output-set descriptor**: every kind (tag, name, element encoding, shape rule, metadata) and
+/// the digest's construction (its three keys, the root's preimage), as one ASCII line. The fence
+/// `palw_gen_v1` carries its hash, so two builds whose canonical outputs differ in any way have
+/// different consensus identities where the fence is armed.
+pub fn output_set_descriptor_v1() -> String {
+    let kinds = [
+        "0:Tokens:u32le:[n]:-",
+        "1:ImageRgb8:u8:[H,W,3]:-",
+        "2:PcmI16:i16le:[frames,channels]:le32(sample_rate>=1)",
+        "3:EmbeddingI32:i32le:[n,d]:[q<=31,normalised<=1]",
+        "4:VideoRgb8:u8:[T,H,W,3]:le32(fps_num>=1)le32(fps_den>=1)",
+        "5:TensorLe:i8|i16|i32le:rank1-4:[dtype<=2,q<=62]",
+    ];
+    format!(
+        "palw-output/v1/kinds={}/tile_len=[{OUTPUT_MIN_TILE_LEN_V1},{OUTPUT_MAX_TILE_LEN_V1}]/leaf={}(le32(t)|bytes)/node={}(left|right)/odd=promoted/root={}(borsh(spec)|le32(tile_len)|merkle)",
+        kinds.join(","),
+        String::from_utf8_lossy(OUTPUT_TILE_KEY_V1),
+        String::from_utf8_lossy(OUTPUT_NODE_KEY_V1),
+        String::from_utf8_lossy(OUTPUT_ROOT_KEY_V1),
+    )
+}
+
+/// `output_set_id = BLAKE2b-512(key = "misaka-palw/output-set-id/v1", output_set_descriptor_v1())`.
+pub fn output_set_id_v1() -> [u8; 64] {
+    keyed64(OUTPUT_SET_ID_KEY_V1, &[output_set_descriptor_v1().as_bytes()])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_output_set_descriptor_names_every_kind_and_every_key() {
+        let d = output_set_descriptor_v1();
+        for k in OutputKindV1::ALL {
+            assert!(d.contains(&format!("{}:{}:", k.tag(), k.name())), "{}", k.name());
+        }
+        for key in [OUTPUT_TILE_KEY_V1, OUTPUT_NODE_KEY_V1, OUTPUT_ROOT_KEY_V1] {
+            assert!(d.contains(std::str::from_utf8(key).unwrap()));
+        }
+        assert!(d.is_ascii());
+    }
 
     #[test]
     fn every_kind_round_trips_its_tag() {
