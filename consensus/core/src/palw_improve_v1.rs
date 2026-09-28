@@ -40,10 +40,6 @@ pub const PALW_IMPROVE_COURT_VERSION_V1: u16 = 1;
 pub const PALW_IMPROVE_SCORING_SET_DOMAIN_V1: &[u8] = b"misaka-palw/improve/scoring-set/v1";
 /// Key of [`palw_improve_sign_table_id_v1`].
 pub const PALW_IMPROVE_SIGN_TABLE_DOMAIN_V1: &[u8] = b"misaka-palw/improve/sign-table/v1";
-/// **The scoring library's descriptor** (RFC-0004 §7.3, spec 17 §17.7). The evaluation lane replaces
-/// it by the library's program roots before the fence is armed on any network; until then the fence
-/// is dormant everywhere and nothing reads it.
-pub const PALW_IMPROVE_SCORING_SET_DESCRIPTOR_V1: &str = "palw-improve/v1/scoring=1:ExactMatch,2:RefLogLik,3:Judge,4:Pairwise";
 /// **The sign test's table descriptor** (RFC-0004 §7.5, spec 17 §17.8). The promotion item (A8)
 /// replaces it by the pinned table's digest.
 pub const PALW_IMPROVE_SIGN_TABLE_DESCRIPTOR_V1: &str = "palw-improve/v1/sign-table=binomial-one-sided";
@@ -58,9 +54,12 @@ fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
-/// **The network's `scoring_set_id`** — the scoring library this build evaluates with.
+/// **The network's `scoring_set_id`** — the scoring library this build evaluates with: the library's
+/// descriptor (its version and every reference program's canonical bytes,
+/// `misaka_palw_tir::scoring::scoring_set_descriptor_v1`) under this key. The IR crate is a leaf and
+/// never hashes, so the key is applied here (vector: `consensus-vectors/tir-v2/scoring/set.json`).
 pub fn palw_improve_scoring_set_id_v1() -> Hash64 {
-    keyed64(PALW_IMPROVE_SCORING_SET_DOMAIN_V1, &[PALW_IMPROVE_SCORING_SET_DESCRIPTOR_V1.as_bytes()])
+    keyed64(PALW_IMPROVE_SCORING_SET_DOMAIN_V1, &[&misaka_palw_tir::scoring::scoring_set_descriptor_v1()])
 }
 
 /// **The network's `sign_table_id`** — the pinned binomial table this build's promotion reads.

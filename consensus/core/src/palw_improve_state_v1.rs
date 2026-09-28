@@ -13,10 +13,6 @@ use crate::Hash64;
 use crate::palw_state_v2::PalwBondKeyV2;
 use borsh::{BorshDeserialize, BorshSerialize};
 
-/// Key of [`palw_improve_eval_seed_v1`] (RFC-0004 §7.2).
-pub const PALW_IMPROVE_EVAL_SEED_DOMAIN_V1: &[u8] = b"misaka-palw/improve/eval-seed/v1";
-/// Key of [`palw_improve_eval_job_id_v1`] (RFC-0004 §7.2).
-pub const PALW_IMPROVE_EVAL_JOB_DOMAIN_V1: &[u8] = b"misaka-palw/improve/eval-job/v1";
 /// Key of [`palw_improvement_policy_digest_v1`].
 pub const PALW_IMPROVE_POLICY_DOMAIN_V1: &[u8] = b"misaka-palw/improve/policy/v1";
 /// The policy version this build reads.
@@ -373,7 +369,7 @@ pub struct PalwEvalItemV1 {
     pub item: u32,
     pub case_id: Hash64,
     pub source: PalwItemSourceV1,
-    /// [`palw_improve_eval_seed_v1`]: the same for every subject.
+    /// [`crate::palw_improve_eval_v1::palw_improve_eval_seed_v1`]: the same for every subject.
     pub seed: Hash64,
     /// The judge drawn for the item, when the spec has judged stages.
     pub judge: Option<Hash64>,
@@ -502,38 +498,8 @@ pub struct PalwImprovementEpochV1 {
 }
 
 // ---- the evaluation job (RFC-0004 §7.2) ----
-
-/// **How the subject stage runs.**
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum PalwEvalModeV1 {
-    /// RFC-0001 §A's selection rule, R's domain 0 under `seed`.
-    Generate { seed: Hash64, max_new: u32, stop_ids: Vec<u32> },
-    /// The prompt and the reference continuation as prefill; logits consumed over the reference.
-    TeacherForced { reference_commitment: Hash64 },
-}
-
-/// **An evaluation job**: everything its context is derived from. Executors choose nothing.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct PalwEvalJobV1 {
-    pub line_id: Hash64,
-    pub epoch: u64,
-    pub item: u32,
-    pub subject: PalwEvalSubjectV1,
-    pub mode: PalwEvalModeV1,
-    /// The scoring pipeline's root (RFC-0003 pipeline class id of the evaluation pipeline).
-    pub pipeline_root: Hash64,
-}
-
-/// **An item's generation seed** (RFC-0004 §7.2): the same for every subject, so pairing is exact.
-pub fn palw_improve_eval_seed_v1(epoch_seed: &Hash64, item: u32) -> Hash64 {
-    keyed64(PALW_IMPROVE_EVAL_SEED_DOMAIN_V1, &[epoch_seed.as_byte_slice(), &item.to_le_bytes()])
-}
-
-/// **An evaluation job's id**: `H(line ‖ epoch ‖ item ‖ subject)`.
-pub fn palw_improve_eval_job_id_v1(line_id: &Hash64, epoch: u64, item: u32, subject: &PalwEvalSubjectV1) -> Hash64 {
-    let subject_bytes = borsh::to_vec(subject).expect("a subject is borsh-serializable");
-    keyed64(PALW_IMPROVE_EVAL_JOB_DOMAIN_V1, &[line_id.as_byte_slice(), &epoch.to_le_bytes(), &item.to_le_bytes(), &subject_bytes])
-}
+//
+// The job, its mode, its seed and its id are the evaluation lane's (`crate::palw_improve_eval_v1`).
 
 // ---- the payloads of the core lane's own objects (tags 70, 81, 82) ----
 
@@ -725,14 +691,4 @@ mod tests {
         assert!(!PalwScoringKindV1::Pairwise.is_primary());
     }
 
-    #[test]
-    fn the_eval_seed_is_the_same_for_every_subject_and_differs_by_item() {
-        let seed = Hash64::from_bytes([7u8; 64]);
-        assert_eq!(palw_improve_eval_seed_v1(&seed, 3), palw_improve_eval_seed_v1(&seed, 3));
-        assert_ne!(palw_improve_eval_seed_v1(&seed, 3), palw_improve_eval_seed_v1(&seed, 4));
-        let line = Hash64::from_bytes([1u8; 64]);
-        let parent = palw_improve_eval_job_id_v1(&line, 1, 3, &PalwEvalSubjectV1::Parent);
-        let cand = palw_improve_eval_job_id_v1(&line, 1, 3, &PalwEvalSubjectV1::Candidate(Hash64::from_bytes([2u8; 64])));
-        assert_ne!(parent, cand);
-    }
 }
