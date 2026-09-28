@@ -19,7 +19,7 @@ fn shape_err<T>(prim: &Prim, why: &str) -> Res<T> {
 }
 
 /// The exact-result rule: `v` must be a value of `dt`.
-fn fit(v: Wide, dt: DType) -> Res<i128> {
+pub(crate) fn fit(v: Wide, dt: DType) -> Res<i128> {
     if v.within(dt.min(), dt.max()) {
         Ok(v.to_i128().unwrap_or(0))
     } else {
@@ -27,7 +27,7 @@ fn fit(v: Wide, dt: DType) -> Res<i128> {
     }
 }
 
-fn fit_i(v: i128, dt: DType) -> Res<i128> {
+pub(crate) fn fit_i(v: i128, dt: DType) -> Res<i128> {
     fit(Wide::from_i128(v), dt)
 }
 
@@ -52,24 +52,24 @@ fn broadcasts_to(in_shape: &[u64], out: &[u64]) -> bool {
 
 /// Order-free sum (§6.3, PALW-TIR-24): `P` = sum of the positive terms, `N` = sum of the negative
 /// terms, both exact; fail unless `N ≥ min` and `P ≤ max`; the value is `P + N`.
-struct OrderFree {
+pub(crate) struct OrderFree {
     p: Wide,
     n: Wide,
     overflow: bool,
 }
 
 impl OrderFree {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         OrderFree { p: Wide::ZERO, n: Wide::ZERO, overflow: false }
     }
-    fn push(&mut self, t: Wide) {
+    pub(crate) fn push(&mut self, t: Wide) {
         let slot = if t.is_negative() { &mut self.n } else { &mut self.p };
         match slot.checked_add(t) {
             Some(s) => *slot = s,
             None => self.overflow = true,
         }
     }
-    fn finish(self, dt: DType) -> Res<i128> {
+    pub(crate) fn finish(self, dt: DType) -> Res<i128> {
         if self.overflow {
             return err(Class::Overflow, "order-free sum beyond 256 bits");
         }
@@ -105,7 +105,7 @@ pub fn divide(x: i128, d: i128, rule: Rounding) -> Wide {
     }
 }
 
-fn cmp_holds(c: Cmp, a: i128, b: i128) -> bool {
+pub(crate) fn cmp_holds(c: Cmp, a: i128, b: i128) -> bool {
     match c {
         Cmp::Eq => a == b,
         Cmp::Ne => a != b,

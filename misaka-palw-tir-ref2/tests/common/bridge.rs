@@ -142,6 +142,15 @@ pub fn catch<T>(f: impl FnOnce() -> Result<T, first::error::TirError>) -> Outcom
     }
 }
 
+/// Runs a black-box call with panics caught quietly: `Err` carries the panic message.
+pub fn catch_any<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    install_hook();
+    SILENT.with(|s| s.set(true));
+    let r = catch_unwind(AssertUnwindSafe(f));
+    SILENT.with(|s| s.set(false));
+    r.map_err(|p| p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default())
+}
+
 pub fn mine<T>(r: ref2::Res<T>) -> Outcome<T> {
     match r {
         Ok(v) => Outcome::Ok(v),

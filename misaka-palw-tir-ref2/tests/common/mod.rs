@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 pub mod bridge;
+pub mod demsrc;
 pub mod progen;
 pub mod qwen;
 
