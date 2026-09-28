@@ -78,6 +78,11 @@ impl TirInventoryTreeV1 {
         self.index.leaf_count()
     }
 
+    /// Every leaf hash, in inventory order.
+    pub fn leaves(&self) -> &[Hash64] {
+        &self.levels[0]
+    }
+
     pub fn index(&self) -> &PalwTirInventoryIndexV1 {
         &self.index
     }

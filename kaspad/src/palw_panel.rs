@@ -2395,6 +2395,7 @@ pub(crate) fn palw_carrier_replaceable_v1(tx: &Transaction) -> bool {
             payload.object,
             PalwConsensusObjectV2::BondRegistered { .. }
                 | PalwConsensusObjectV2::ClassRegistered { .. }
+                | PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }
                 | PalwConsensusObjectV2::FreePromptCommitted { .. }
         ),
         Err(_) => false,
@@ -3459,6 +3460,16 @@ impl PalwPanelService {
             .registration_candidate(registry.holdings(), &terms, self.config.register_class.as_deref())
             .ok()
             .map(|c| c.entry.class_id())
+            // RFC-0002 Phase F (F6): the IR class one of this node's IR artifacts declares.
+            .or_else(|| {
+                misaka_palw_sdk::tir_registration::tir_registration_candidate_v1(
+                    registry.holdings(),
+                    &terms,
+                    self.config.register_class.as_deref(),
+                )
+                .ok()
+                .map(|entry| entry.class_id())
+            })
     }
 
     // **This network's price for a job shape** — the same arithmetic the chain used to open the
@@ -5288,10 +5299,16 @@ impl PalwPanelService {
         // `registration_candidate`: one path, shared with every other consumer of the ledger, so
         // a new lineage registers here without this function learning it exists.
         let registry = self.backends();
-        let candidate = registry
-            .sdk()
-            .registration_candidate(registry.holdings(), &terms, self.config.register_class.as_deref())
-            .map_err(|e| e.to_string())?;
+        let picked = registry.sdk().registration_candidate(registry.holdings(), &terms, self.config.register_class.as_deref());
+        let candidate = match picked {
+            Ok(candidate) => candidate,
+            // RFC-0002 Phase F (F6): no legacy class is the pick, and this node holds IR artifacts —
+            // the class one of them declares is.
+            Err(_) if !misaka_palw_sdk::tir_registration::tir_entries_of_v1(registry.holdings()).is_empty() => {
+                return self.build_tir_class_registration(session, &terms, bond_key);
+            }
+            Err(e) => return Err(e.to_string()),
+        };
 
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
             &self.consensus_config.params.palw_consensus_mode
@@ -5362,6 +5379,47 @@ impl PalwPanelService {
         );
         let signature = self
             .sign(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT)
+            .ok_or("this node holds no bond key, so it cannot sign a registration")?;
+        build(signature)
+    }
+
+    /// **Build the `ClassRegisteredTirV1` for the IR class this node holds an artifact for**
+    /// (RFC-0002 Phase F, F6's node half). The legacy registration's discipline: the class is the
+    /// one the loaded `PALWTIR1` artifact declares (program, layout, tokenizer) under the root its
+    /// bytes derive, every term is the chain's (weightless until the chain certifies an IR family),
+    /// the gate runs before anything is signed, and the registrant bond signs the message of the
+    /// object's own fields under the IR registration context.
+    fn build_tir_class_registration(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        terms: &kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2,
+        bond_key: PalwBondKeyV2,
+    ) -> Result<PalwConsensusObjectV2, String> {
+        use misaka_palw_sdk::tir_registration::{build_tir_registration_v1, tir_registration_candidate_v1, tir_registration_message_v1};
+        let registry = self.backends();
+        let entry = tir_registration_candidate_v1(registry.holdings(), terms, self.config.register_class.as_deref())?;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+            &self.consensus_config.params.palw_consensus_mode
+        else {
+            return Err("this chain has no V2 bundle, so there is nothing to register a class into".to_string());
+        };
+        let params = &self.consensus_config.params;
+        let daa = session.get_virtual_daa_score();
+        info!(
+            "[{PALW_PANEL}] registering the IR class {} ({}) at artifact root {}",
+            entry.class_id(),
+            entry.model_id,
+            entry.artifact_root
+        );
+        let build = |signature: Vec<u8>| build_tir_registration_v1(params, bundle, &entry, terms, 0, bond_key, signature, daa);
+        let unsigned = build(Vec::new())?;
+        let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
+        let message = tir_registration_message_v1(domain, &unsigned).ok_or("the builder did not build an IR registration")?;
+        let signature = self
+            .sign(message.as_byte_slice(), kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1)
             .ok_or("this node holds no bond key, so it cannot sign a registration")?;
         build(signature)
     }

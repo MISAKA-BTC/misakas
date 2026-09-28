@@ -41,3 +41,7 @@ path = "src/bin/palw-class.rs"
 [[bin]]
 name = "palw-tir-equiv"
 path = "src/bin/palw-tir-equiv.rs"
+
+[dev-dependencies]
+# The IR registration test signs and verifies under a bond's ML-DSA-87 key, as the node does.
+libcrux-ml-dsa.workspace = true

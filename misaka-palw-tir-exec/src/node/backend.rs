@@ -8,17 +8,19 @@
 //!   [`TirCaptureV1`]: the binding, the prompt, the committed logits trace, and — within a byte cap —
 //!   every leaf preimage (a DENSE capture, which anyone holding it opens at any leaf, as the legacy
 //!   families' captures are); past the cap a FOLD, whose leaves are re-derived by replay.
-//! * `verify_material` — a seat's check: the capture answers the claim's job, roots and output root,
-//!   its binding verifies, and a re-execution of its job commits exactly its roots.
+//! * `verify_material` — a seat's check that the material answers for the claim: the claim's job,
+//!   roots and output root, the binding, the trace root over the committed rows and ids, and the step
+//!   root over the committed leaves (a dense capture's own; a fold's re-derived). It is not a
+//!   judgement of honesty — that is the replay's (`execute_for_verdict`) and the court's.
 //! * `bisect_prefix_state` — [`super::evidence::tir_bisect_prefix_state_v1`] over the capture's
 //!   leaves (a dense capture's own, a fold's replayed).
+//! * Readiness: the root, the leaf hashes and the drawn operands from the held inventory tree.
 //! * The IR court's close proofs — `PalwCourtVerdictProofV2::TirCone`, `TirLogits`,
 //!   `TirDecodeTokenTiled` / `TirDecodeToken` (F5, appended to the close proofs) — are built by
 //!   inherent methods here ([`TirBackendV1::cone_close`], [`TirBackendV1::logits_close`],
 //!   [`TirBackendV1::decode_token_close`]) over [`super::evidence::TirEvidenceV1`], under the rules
-//!   the court grades them by ([`TirBackendV1::court_rules`]). The trait's legacy court verbs
-//!   (`refutation_for_index` → `PalwExecutionStepRefutationV1`) cannot carry an IR close, so
-//!   `supports_court` stays `false` until the node's court flow asks these builders (F6's node half).
+//!   the court grades them by ([`TirBackendV1::court_rules`]); the node's court flow asks them of an
+//!   IR class (the trait's legacy verbs cannot carry an IR close). `supports_court` is `true`.
 
 use std::sync::Arc;
 
@@ -468,6 +470,16 @@ impl TirBackendV1 {
         }
     }
 
+    /// The operands of the drawn inventory leaves, in the draw's order.
+    fn drawn_operands(&self, draw: &[u32]) -> Result<Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>, String> {
+        use super::inventory::TirParamOpenerV1;
+        draw.iter()
+            .map(|i| {
+                self.artifact.param_opening(*i).map(|o| (*i, o.operand)).ok_or_else(|| format!("inventory leaf {i} does not open"))
+            })
+            .collect()
+    }
+
     /// The step opening of leaf `index` of a capture (the disclosure the bisection's last rung asks).
     pub fn step_opening(&self, material: &[u8], index: u64) -> Result<(PalwStepOpeningV1, PalwStepTileLeafV1), String> {
         let capture = self.decode_capture(material)?;
@@ -536,19 +548,32 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         {
             return PalwMaterialVerdictV1::Mismatch;
         }
-        // The check the court would run, without a court: re-execute and compare every root.
-        match self.runner().run(&b.job_context, &capture.prompt, self.ladder, false, &mut |_| {}) {
-            Ok(run)
-                if run.execution_root == b.committed_execution_root
-                    && run.trace_root == b.full_logits_trace_root
-                    && run.generated == capture.generated
-                    && run.logits_rows == capture.logits_rows =>
-            {
-                PalwMaterialVerdictV1::Matches
-            }
-            Ok(_) => PalwMaterialVerdictV1::Mismatch,
-            Err(_) => PalwMaterialVerdictV1::Unverifiable,
+        // **The material answers for the roots — which is not "the execution is honest"** (the
+        // families' one reading of this check): the trace root is the committed rows' and ids', and
+        // the step root is the committed leaves'. Whether those leaves are the program's is the
+        // replay's question (`execute_for_verdict`) and, at a leaf, the court's — a challenger must
+        // find a lying capture here to build the close that convicts it.
+        let ctx = &b.job_context;
+        let trace = if Hash64::from_bytes(self.space.program.logits_scheme_id) == tiled_logits_scheme_id_v1() {
+            kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &capture.logits_rows, &capture.generated)
+        } else {
+            Some(kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(ctx, &capture.logits_rows, &capture.generated))
+        };
+        if trace != Some(b.full_logits_trace_root) {
+            return PalwMaterialVerdictV1::Mismatch;
         }
+        // The leaves: a dense capture's own preimages; a fold's, re-derived — so a fold answers only
+        // for the execution this build reproduces.
+        let hashes = match self.capture_leaf_hashes(&capture) {
+            Ok(hashes) => hashes,
+            Err(_) => return PalwMaterialVerdictV1::Unverifiable,
+        };
+        if hashes.len() as u64 != b.step_leaf_count
+            || step_merkle_root_capped_v1(&hashes, self.ladder).ok() != Some(b.step_merkle_root)
+        {
+            return PalwMaterialVerdictV1::Mismatch;
+        }
+        PalwMaterialVerdictV1::Matches
     }
 
     fn capture_shape(&self, material: &[u8]) -> Option<PalwCaptureShapeV1> {
@@ -568,6 +593,63 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         }
         let hashes = self.capture_leaf_hashes(&capture).ok()?;
         Some(tir_bisect_prefix_state_v1(&capture.binding.job_context, &hashes, index))
+    }
+
+    /// The replay a seat licenses an attempt by: the roots of this build's own execution of the
+    /// job — no capture laid out.
+    fn execute_for_verdict(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwReplayRootsV1, String> {
+        let ids = Self::ids(prompt)?;
+        if !prompt_token_ids_match_v1(self.prompt_ids_form, &ids, &job.prompt_token_ids_hash) {
+            return Err("the prompt does not commit to the job's prompt hash".into());
+        }
+        let run = self.runner().run(job, &ids, self.ladder, false, &mut |_| {})?;
+        Ok(kaspa_consensus_core::palw_backend::PalwReplayRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            work_leaves: None,
+            output_root: Some(run.output_root),
+        })
+    }
+
+    /// **The IR court is this family's**: the ladder's rungs (`bisect_prefix_state`) and the close
+    /// (the IR proofs this backend builds — `cone_close`, `logits_close`, `decode_token_close` — which
+    /// the node's court flow asks of it for an IR class).
+    fn supports_court(&self) -> bool {
+        true
+    }
+
+    fn artifact_root_and_leaf_count(&self) -> Result<(Hash64, u32), String> {
+        let tree = self.artifact.inventory_tree()?;
+        Ok((tree.root(), tree.leaf_count()))
+    }
+
+    /// The readiness material from the held inventory tree: its root, every leaf hash, and the drawn
+    /// leaves' operands in the draw's order. (The IR inventory is in declaration order, not the
+    /// legacy digest's name order, so it is served from the tree, never through a digest.)
+    fn artifact_readiness_material(
+        &self,
+        draw: &[u32],
+    ) -> Result<(Hash64, Vec<Hash64>, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>), String> {
+        let tree = self.artifact.inventory_tree()?;
+        Ok((tree.root(), tree.leaves().to_vec(), self.drawn_operands(draw)?))
+    }
+
+    fn artifact_readiness_material_streamed_v1(
+        &self,
+        draw: &[u32],
+        on_leaf: &mut dyn FnMut(Hash64),
+    ) -> Option<Result<(Hash64, u32, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>), String>> {
+        Some((|| {
+            let tree = self.artifact.inventory_tree()?;
+            for leaf in tree.leaves() {
+                on_leaf(*leaf);
+            }
+            Ok((tree.root(), tree.leaf_count(), self.drawn_operands(draw)?))
+        })())
     }
 
     fn output_root_for_context_v1(&self, context: &PalwJobContextV2, output_token_ids: &[u32]) -> Option<Hash64> {

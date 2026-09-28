@@ -286,6 +286,105 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **An IR registration, built, signed and read back** (F6's node half): the candidate is the
+    /// held class, dropped once the chain holds its id or its weights; the object carries the class,
+    /// the formula's canonical job and the counted pwu; the signature verifies under the registrant
+    /// bond's key over the message of the object's own fields; and the gate refuses a network that
+    /// has not armed `palw_tir_v1`, or one where it is not yet in force.
+    #[test]
+    fn an_ir_registration_is_built_signed_and_gated() {
+        use crate::tir_registration::{build_tir_registration_v1, tir_registration_candidate_v1, tir_registration_message_v1};
+        use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_shipped_params};
+        use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+        use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwPwuRuleV2, PalwRegistrationTermsV2};
+        use kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1;
+        use kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1;
+        use kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1;
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+        let dir = std::env::temp_dir().join(format!("palw-sdk-tir-reg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sdk = PalwClassSdk::builtin_v1(court(), PalwPromptIdsFormV1::Flat, b"misaka-palw-rc".to_vec());
+        let (name, p, params) = vectors().remove(0);
+        let path = write(&dir, &name, &p, &params, borsh::to_vec(&layout(&p)).unwrap());
+        let holdings = vec![sdk.load_artifact(&path).unwrap()];
+        let mut terms = PalwRegistrationTermsV2 {
+            min_grantable_share_permille: 1,
+            slash_value_per_pwu: 7,
+            initial_target: 1 << 100,
+            registered_class_ids: Vec::new(),
+            registered_artifact_roots: Vec::new(),
+            chain_certified_families: Vec::new(),
+        };
+        let entry = tir_registration_candidate_v1(&holdings, &terms, None).unwrap();
+        assert_eq!(tir_registration_candidate_v1(&holdings, &terms, Some(&entry.model_id)).unwrap().class_id(), entry.class_id());
+        assert!(tir_registration_candidate_v1(&holdings, &terms, Some(&entry.class_id().to_string())).is_ok(), "by class id too");
+        assert!(tir_registration_candidate_v1(&holdings, &terms, Some("another/model")).unwrap_err().contains("names no IR class"));
+
+        // A network that armed the IR fence at 100.
+        let mut net = palw_t12_shipped_params();
+        net.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(ForkActivation::new(100)));
+        net.sync_palw_tir_v1();
+        let PalwConsensusMode::ConsensusV2(bundle) = &net.palw_consensus_mode else { panic!("t12 is V2") };
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_bytes([4; 64]), 0));
+        let build = |sig: Vec<u8>, daa: u64| build_tir_registration_v1(&net, bundle, &entry, &terms, 0, bond, sig, daa);
+        assert!(build(Vec::new(), 99).unwrap_err().contains("not in force"), "below the fence nothing is built");
+        let unarmed = palw_t12_shipped_params();
+        let PalwConsensusMode::ConsensusV2(b2) = &unarmed.palw_consensus_mode else { panic!() };
+        assert!(
+            build_tir_registration_v1(&unarmed, b2, &entry, &terms, 0, bond, Vec::new(), 1_000).unwrap_err().contains("not armed")
+        );
+
+        let unsigned = build(Vec::new(), 100).unwrap();
+        let PalwConsensusObjectV2::ClassRegisteredTirV1 {
+            class_id,
+            artifact_root,
+            pwu_rule,
+            share_permille,
+            slash_value_per_pwu,
+            admission,
+            ..
+        } = &unsigned
+        else {
+            panic!("an IR registration")
+        };
+        assert_eq!((*class_id, *artifact_root), (entry.class_id(), entry.artifact_root));
+        assert_eq!((*share_permille, *slash_value_per_pwu), (0, 7), "weightless, at the network's pricing");
+        assert_eq!(admission.class, *entry.class);
+        assert_eq!(admission.canonical, entry.canonical_context());
+        let space = PalwTirStepSpaceV1::new(&entry.class).unwrap();
+        let counted = space.leaf_count_capped(&admission.canonical, court().max_step_leaf_count()).unwrap();
+        assert_eq!(*pwu_rule, PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted });
+
+        // Signed by the bond's ML-DSA-87 key over the object's own message; the signed object is
+        // the unsigned one plus the signature, and verifies.
+        let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([9u8; 32]);
+        let domain = Hash64::from_bytes([0x5D; 64]);
+        let message = tir_registration_message_v1(domain, &unsigned).unwrap();
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &keys.signing_key,
+            message.as_byte_slice(),
+            PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1,
+            [3u8; 32],
+        )
+        .unwrap();
+        let signed = build(signature.as_ref().to_vec(), 100).unwrap();
+        assert_eq!(tir_registration_message_v1(domain, &signed), Some(message), "the signature is not in its own message");
+        let PalwConsensusObjectV2::ClassRegisteredTirV1 { admission, .. } = &signed else { unreachable!() };
+        let verified = kaspa_txscript::verify_mldsa87_with_context(
+            keys.verification_key.as_ref(),
+            message.as_byte_slice(),
+            &admission.signature,
+            PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1,
+        );
+        assert_eq!(verified, Ok(true), "the bond's key verifies the registration");
+
+        // Once the chain holds the class — or its weights — it is no candidate.
+        terms.registered_artifact_roots.push(entry.artifact_root);
+        assert!(tir_registration_candidate_v1(&holdings, &terms, None).unwrap_err().contains("already registered"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// The battery refuses what the IR admission gate would: a checkpoint interval past the
     /// `min_j C_j` the states' replay fits in.
     #[test]

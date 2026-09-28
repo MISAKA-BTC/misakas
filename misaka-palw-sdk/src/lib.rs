@@ -46,6 +46,8 @@ pub mod sdk;
 /// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
 pub mod tir_equiv;
 pub mod tir_manifest;
+/// RFC-0002 Phase F (F6, node half): registering an IR class.
+pub mod tir_registration;
 
 pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};
 pub use lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1, PalwWeightResidencyV1};

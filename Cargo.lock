@@ -6182,6 +6182,7 @@ dependencies = [
  "kaspa-hashes",
  "kaspa-pq-validator-core",
  "kaspa-txscript",
+ "libcrux-ml-dsa",
  "misaka-palw-base0",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",

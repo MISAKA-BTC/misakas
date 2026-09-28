@@ -83,10 +83,36 @@ fn the_drill_certifies_every_tiny_class() {
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches, "{name}");
         let other = PalwClaimRootsV1 { anchor: Hash64::from_bytes([0x77; 64]), ..claim };
         assert_eq!(backend.verify_material(&outcome.material, other), PalwMaterialVerdictV1::Mismatch, "{name}: another anchor");
+        // A lie the producer committed to answers for ITS roots (that is how a challenger finds the
+        // capture it closes from) and for no other; the replay is what tells it from the honest run.
         let forged = backend.execute_with_injected_fault(&job, &prompt, 3).unwrap();
         let forged_claim = PalwClaimRootsV1 { execution_root: forged.execution_root, ..claim };
-        assert_eq!(backend.verify_material(&forged.material, forged_claim), PalwMaterialVerdictV1::Mismatch, "{name}: a lie");
+        assert_eq!(backend.verify_material(&forged.material, forged_claim), PalwMaterialVerdictV1::Matches, "{name}: its own roots");
+        assert_eq!(backend.verify_material(&forged.material, claim), PalwMaterialVerdictV1::Mismatch, "{name}: the honest roots");
+        let replay = backend.execute_for_verdict(&job, &prompt).unwrap();
+        assert_eq!(
+            (replay.execution_root, replay.trace_root, replay.output_root),
+            (outcome.execution_root, outcome.trace_root, Some(outcome.output_root))
+        );
+        assert_ne!(replay.execution_root, forged.execution_root, "{name}: the replay refuses the lie");
+        // A capture whose leaf moved after it was committed answers for nothing.
+        let mut tampered = TirCaptureV1::decode(&outcome.material).unwrap();
+        tampered.leaves[1].values_le[0] ^= 1;
+        assert_eq!(backend.verify_material(&tampered.encode(), claim), PalwMaterialVerdictV1::Mismatch, "{name}: a moved leaf");
         assert_eq!(backend.verify_material(b"not a capture", claim), PalwMaterialVerdictV1::Unverifiable);
+        // Readiness: the drawn leaves open against the class root in one multiproof.
+        let (root_now, leaf_count) = backend.artifact_root_and_leaf_count().unwrap();
+        assert_eq!(root_now, root);
+        let draw: Vec<u32> = (0..leaf_count).step_by(3).collect();
+        let (r2, leaves, opened) = backend.artifact_readiness_material(&draw).unwrap();
+        assert_eq!((r2, leaves.len() as u32), (root, leaf_count));
+        let mut streamed = Vec::new();
+        let (r3, n3, opened3) = backend.artifact_readiness_material_streamed_v1(&draw, &mut |l| streamed.push(l)).unwrap().unwrap();
+        assert_eq!((r3, n3, &streamed, &opened3), (root, leaf_count, &leaves, &opened));
+        let mut sorted = opened.clone();
+        sorted.sort_by_key(|(i, _)| *i);
+        let proof = kaspa_consensus_core::palw_artifact::palw_artifact_multiproof_v1(&leaves, &sorted).unwrap();
+        kaspa_consensus_core::palw_artifact::verify_artifact_multiproof_v1(&proof, root).unwrap();
 
         // A FOLD of the same execution (no preimages): a seat's check re-executes it, its prefix
         // states are the dense capture's, and its leaves open as the executor's own.
