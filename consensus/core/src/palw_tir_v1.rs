@@ -141,17 +141,28 @@ impl PalwTirCeilingsV1 {
     }
 }
 
-/// **testnet-12's IR ceilings, v1 — PROVISIONAL.** The byte cap (one carrier, design D3) and the
-/// cone-work cap (`2^16`: seventy times the 1.5B decoder's 905) are the lead's; the other five are
-/// placeholders at the format's scale until admission v10 (Phase F step F6) measures the corpus, and
-/// are fixed then. Nothing arms them: the fence is dormant.
+/// **testnet-12's IR ceilings, v1** — set from admission v10's measurement of the Qwen2.5 A16
+/// decoders as IR programs at the small history bound (`misaka-palw-base0/tests/
+/// tir_a16_admission_measure.rs`, 2026-09-28): the 1.5B costs 12,928 program bytes, 7,762 unrolled
+/// nodes, 24.1 G MACs a position at `H = W = 2^18`, 7.5 GB of state, 549 MB peak live and 838 units of
+/// admission work; the 3B 12,936 B, 9,970 nodes, 41.7 G MACs, 9.7 GB, 554 MB and 838.
+///
+/// * program bytes 88,000 — one lifecycle carrier beside the registration's other fields (D3);
+/// * unrolled nodes `2^16` — 6.5× the 3B's;
+/// * context `2^18` — the small history bound (v10 admits no held program);
+/// * MACs a position `2^37` — 5.7× the 1.5B's and 3.3× the 3B's at the full window;
+/// * state `2^35` bytes — 3.5× the 3B's full-window KV;
+/// * peak live `2^32` bytes — 7.8× the 3B's;
+/// * admission work `2^16` — seventy-eight times the decoders' 838.
+///
+/// Nothing arms them: the fence is dormant until its flag day (a single list entry).
 pub const PALW_T12_TIR_CEILINGS_V1: PalwTirCeilingsV1 = PalwTirCeilingsV1 {
     max_program_bytes: 88_000,
-    max_unrolled_nodes: 1 << 18,
-    max_context: misaka_palw_tir::program::HISTORY_BOUND_V1_HELD,
+    max_unrolled_nodes: 1 << 16,
+    max_context: misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL,
     max_macs_per_position: 1 << 37,
-    max_state_bytes: 1 << 40,
-    max_peak_live_bytes: 1 << 36,
+    max_state_bytes: 1 << 35,
+    max_peak_live_bytes: 1 << 32,
     max_cone_work: 1 << 16,
 };
 
