@@ -253,6 +253,7 @@ fn admit_pwu(
         shape.held,
         shape.kimi_family,
         p.palw_audit_2026_09_23_active_at(daa),
+        shape.gdn_key_heads,
     )
     .map(|e| e.canonical_step_leaf_count)
 }

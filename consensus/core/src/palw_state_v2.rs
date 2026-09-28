@@ -31478,7 +31478,7 @@ fn apply_object(
                               dissect it inside a turn",
                     });
                 }
-                if !crate::palw_state_chunk_map::palw_map_is_held_v4(&binding.shape_profile.state_chunk_map_id) {
+                if !crate::palw_state_chunk_map::palw_profile_is_held_v4(&binding.shape_profile) {
                     return Err(PalwStateV2Error::HeldRootClaimRefused {
                         session: *session_id,
                         why: "the held root claim's binding does not register the held map",

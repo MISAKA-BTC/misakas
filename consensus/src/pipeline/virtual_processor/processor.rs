@@ -552,6 +552,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_token_lift: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_kimi_k3`: may a registration reach the fenced Kimi K3 kernels.
     pub(super) palw_kimi_k3: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_gdn_key_heads` (P0a): may a registration carry a version-3 profile. Resolved in
+    /// ONE place, [`Self::palw_gdn_key_heads_at`], at the block the registration is judged in.
+    pub(super) palw_gdn_key_heads: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_fused_dissectable` (ADR-0093 Decision 6): must a fused registration's output
     /// tile be one head's. Resolved in ONE place, [`Self::palw_fused_dissectable_at`].
     pub(super) palw_fused_dissectable: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1118,6 +1121,7 @@ impl VirtualStateProcessor {
             palw_shard_licensing: params.palw_shard_licensing_fence(),
             palw_token_lift: params.palw_token_lift_fence(),
             palw_kimi_k3: params.palw_kimi_k3_fence(),
+            palw_gdn_key_heads: params.palw_gdn_key_heads_fence(),
             palw_fused_dissectable: params.palw_fused_dissectable_fence(),
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_held_context: params.palw_held_context_fence(),
@@ -9789,6 +9793,10 @@ impl VirtualStateProcessor {
                         // 2026-09-23 audit C-4: past its fence a non-fused class's priced geometry
                         // must fit the query row its graph reads.
                         self.palw_audit_2026_09_23_at(point.daa_score),
+                        // P0a: a version-3 profile (the derived GDN key-head count) is admitted by its
+                        // fence alone, and past it a V1/V2 hybrid whose head counts differ may not
+                        // register a map written over one head count.
+                        self.palw_gdn_key_heads_at(point.daa_score),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                     // ADR-0152 §4-ter C5: past `palw_offence_attribution` a held class is admitted
@@ -12363,6 +12371,11 @@ impl VirtualStateProcessor {
 
     fn palw_kimi_k3_at(&self, daa_score: u64) -> bool {
         self.palw_kimi_k3.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **P0a, resolved in exactly one place.**
+    fn palw_gdn_key_heads_at(&self, daa_score: u64) -> bool {
+        self.palw_gdn_key_heads.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**

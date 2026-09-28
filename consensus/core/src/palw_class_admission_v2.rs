@@ -458,6 +458,10 @@ pub struct PalwAdmissionShapeV1 {
     /// `Params::palw_prompt_ids_form_at` at the height — the network form the attribution check's
     /// (d) reads (the court's own copy is `None` where the court is dormant).
     pub prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// **P0a**: `Params::palw_gdn_key_heads` at the height — may a class carry a version-3 profile
+    /// (the derived GDN key-head count), and must a V1/V2 class's key and value head counts agree on a
+    /// recurrence map. Carried so every preflight asks what the acceptance path asks.
+    pub gdn_key_heads: bool,
 }
 
 /// **ADR-0103: what the held regime's gate reads at the height** — the caller's reading of two
@@ -509,6 +513,7 @@ pub fn palw_admission_shape_at_v1(
         legal_job_bound: params.palw_canonical_work_daa().is_some_and(|height| daa_score >= height),
         offence_attribution: params.palw_offence_attribution_active_at(daa_score),
         prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
+        gdn_key_heads: params.palw_gdn_key_heads_active_at(daa_score),
     })
 }
 
@@ -533,6 +538,34 @@ pub fn palw_genesis_reaches_fenced_kernel_v1(bundle: &PalwConsensusParamsV2) -> 
         matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
             if !reachable_kernels_v1(&carriage.profile).is_disjoint(&fenced))
     })
+}
+
+/// **P0a: does a genesis set register a class with a version-3 profile?** Genesis rows are verified
+/// against the committed catalog rather than through the admission gate, so `Params::validate_palw_v2`
+/// asks this and refuses the set unless `palw_gdn_key_heads` is armed from genesis.
+pub fn palw_genesis_registers_key_head_class_v1(bundle: &PalwConsensusParamsV2) -> bool {
+    bundle.genesis_objects.iter().any(|object| {
+        matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
+            if carriage.profile.version == crate::palw_step::PALW_STEP_OBJECT_VERSION_V3)
+    })
+}
+
+/// **P0a: does this profile register a recurrence map whose gather is written over ONE head count?**
+/// The gdn v1/v2 maps and every hybrid composition whose `gdn=` half is one of them (v1–v4). The
+/// hygiene half of `palw_gdn_key_heads` refuses such a map under a V1/V2 profile whose key and value
+/// head counts differ.
+pub fn palw_map_gathers_over_one_head_count_v1(profile: &PalwShapeProfileV3) -> bool {
+    use crate::palw_state_chunk_map as map;
+    let id = profile.state_chunk_map_id;
+    [
+        map::gdn_state_chunk_map_id_v1(),
+        map::gdn_state_chunk_map_id_v2(),
+        map::hybrid_state_chunk_map_id_v1(),
+        map::hybrid_state_chunk_map_id_v2(),
+        map::hybrid_state_chunk_map_id_v3(),
+        map::hybrid_state_chunk_map_id_v4(),
+    ]
+    .contains(&id)
 }
 
 /// A genesis row that reaches a Kimi K3 kernel. Refused until a dedicated fence exists: shipping
@@ -1322,6 +1355,23 @@ pub enum PalwClassAdmissionError {
     /// the cap (F5). See [`palw_held_class_unanswerable_v1`].
     #[error("a held class no honest party can dissect inside a turn: {why} (ADR-0152 §4-ter C5)")]
     HeldClassUnanswerable { why: PalwHeldUnanswerableV1 },
+    /// **P0a: the class carries a profile of version 3 — its GDN key-head count derived, its map the
+    /// held composition that spells it — and this network has not armed `palw_gdn_key_heads`.**
+    /// Refused by name, for the `TokenLiftNeedsItsFence` reason: nothing is wrong with the graph; the
+    /// fence is missing. A build before P0a refuses the same registration in `validate_shape`, so
+    /// before the fence the two agree.
+    #[error("the class carries a version-3 profile (the derived GDN key-head count) and this network has not armed palw_gdn_key_heads")]
+    GdnKeyHeadsNeedsItsFence,
+    /// **P0a (hygiene, past `palw_gdn_key_heads`): a V1/V2 profile whose derived key-head count is not
+    /// its value-head count, on a recurrence map written over ONE head count.** Such a class can
+    /// never capture a checkpoint that carries the recurrence — the window row is
+    /// `2 · k_heads · k + v_heads · v` lanes and the map's gather expects `(2 · k + v) · v_heads` — so
+    /// it can never produce; the version-3 profile on the v5 map is the class it means to be.
+    #[error(
+        "the class derives {key_heads} GDN key heads over {value_heads} value heads and registers a recurrence map written \
+         over one head count: it can never capture its recurrence (P0a — register the version-3 profile on the v5 map)"
+    )]
+    GdnMapAssumesEqualHeads { key_heads: u32, value_heads: u16 },
 }
 
 impl PalwClassAdmissionError {
@@ -1354,6 +1404,8 @@ impl PalwClassAdmissionError {
             Self::ChainWallOrderUnknown { .. } => "CHAIN_WALL_ORDER_UNKNOWN",
             Self::HeldClassUnattributable { .. } => "HELD_CLASS_UNATTRIBUTABLE",
             Self::HeldClassUnanswerable { .. } => "HELD_CLASS_UNANSWERABLE",
+            Self::GdnKeyHeadsNeedsItsFence => "FAMILY_FENCE_CLOSED",
+            Self::GdnMapAssumesEqualHeads { .. } => "GDN_MAP_ASSUMES_EQUAL_HEADS",
         }
     }
 }
@@ -2015,6 +2067,8 @@ pub fn verify_class_admission_v8(
         false,
         // v8's callers predate the 2026-09-23 fence: the pre-fence gate, byte for byte.
         false,
+        // ... and P0a's fence: dormant.
+        false,
     )
 }
 
@@ -2196,6 +2250,10 @@ pub fn verify_class_admission_v9(
     held: PalwHeldAdmissionV1,
     kimi_family: bool,
     attention_geometry_bound: bool,
+    // **P0a**: `Params::palw_gdn_key_heads` at the block, read by the CALLER. `false` on every
+    // shipped preset — where a version-3 profile is refused by name and every other class is judged
+    // exactly as before.
+    gdn_key_heads: bool,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
@@ -2217,6 +2275,23 @@ pub fn verify_class_admission_v9(
     // **ADR-0103: the held map is admitted by its fence, and only by it** — asked immediately after
     // the shape, because the map is what lifted the context ceiling `validate_shape` just skipped,
     // so nothing past this line may spend work on a context the network never agreed to carry.
+    // **P0a: a version-3 profile is admitted by its fence, and only by it** — asked before the held
+    // check for the same reason that one comes first: a V3 profile on the v5 map is held, and nothing
+    // past this line may treat it as a class the network agreed to carry. A build before P0a refuses
+    // it in `validate_shape`, so the two agree until the fence.
+    if profile.version == crate::palw_step::PALW_STEP_OBJECT_VERSION_V3 && !gdn_key_heads {
+        return Err(PalwClassAdmissionError::GdnKeyHeadsNeedsItsFence);
+    }
+    // **And past it, the hygiene half**: a V1/V2 class whose key and value head counts differ, on a
+    // map whose gather is written over one head count, can never capture its recurrence.
+    if gdn_key_heads
+        && profile.version != crate::palw_step::PALW_STEP_OBJECT_VERSION_V3
+        && palw_map_gathers_over_one_head_count_v1(profile)
+        && let Ok(key_heads) = crate::palw_step::palw_gdn_key_heads_v1(profile)
+        && key_heads != u32::from(profile.gdn_heads)
+    {
+        return Err(PalwClassAdmissionError::GdnMapAssumesEqualHeads { key_heads, value_heads: profile.gdn_heads });
+    }
     let held_class = crate::palw_state_chunk_map::palw_profile_is_held_v4(profile);
     if held_class && !held.armed {
         return Err(PalwClassAdmissionError::HeldMapNeedsItsFence);

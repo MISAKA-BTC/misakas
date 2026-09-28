@@ -187,7 +187,7 @@ pub fn palw_map_addresses_history_tiles_v1(profile: &PalwShapeProfileV3) -> bool
     declared == tiled_kv_state_chunk_map_id_v3()
         || declared == hybrid_state_chunk_map_id_v3()
         || declared == tiled_kv_state_chunk_map_id_v4()
-        || declared == hybrid_state_chunk_map_id_v4()
+        || palw_map_is_hybrid_held_for_version_v1(&declared, profile.version)
 }
 
 /// **How many positions of the cache one chunk of THIS class's map addresses.**
@@ -256,16 +256,62 @@ pub fn hybrid_state_chunk_map_id_v4() -> Hash64 {
     state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v4())
 }
 
+/// **P0a: the held composition whose recurrence half spells the key-head count (v5)** — v4's
+/// composition with its `gdn=` half at [`PALW_GDN_STATE_CHUNK_MAP_NAME_V3`], spelled as its two parts
+/// for the reason every composition is. The attention half, the chunk count, the leaf binding, the
+/// two-level root and the price are v4's (see [`palw_map_is_hybrid_held_for_version_v1`]); what a
+/// class that registers it changes is which lanes of a conv window row its producer, its seat and
+/// its restore gather into a head's slice.
+///
+/// A DIFFERENT class from any v4 class — the map is inside the class id — and registrable only
+/// under a version-3 profile past `Params::palw_gdn_key_heads`.
+pub fn palw_hybrid_state_chunk_map_name_v5() -> String {
+    format!("palw-hybrid-state/attn={PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V4}/gdn={PALW_GDN_STATE_CHUNK_MAP_NAME_V3}/v5")
+}
+
+/// `state_chunk_map_id` for a version-3 hybrid class under the held map (P0a).
+pub fn hybrid_state_chunk_map_id_v5() -> Hash64 {
+    state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v5())
+}
+
 /// **Is this map the held one?** The one dispatch every reader of a state root goes through, for
 /// the reason [`palw_map_addresses_history_tiles_v1`] is one dispatch.
+///
+/// **By id alone it names ADR-0103's two held maps and nothing else.** P0a's held composition
+/// ([`hybrid_state_chunk_map_id_v5`]) is held only under a version-3 profile — read it through
+/// [`palw_profile_is_held_v4`] or [`palw_map_is_held_for_version_v1`], never by id: for any other
+/// version its id is a map this tree does not know, as it was before P0a.
 pub fn palw_map_is_held_v4(map_id: &Hash64) -> bool {
     *map_id == tiled_kv_state_chunk_map_id_v4() || *map_id == hybrid_state_chunk_map_id_v4()
+}
+
+/// **The held regime's hybrid composition, for a profile of `version`** — ADR-0103's v4, or P0a's v5
+/// under a version-3 profile. v5 is v4 with its recurrence half's gather spelled over the key-head
+/// count, so every consensus fact of the two — held-ness, the layout, the chunk count, the root, the
+/// price — is the same function of the profile; only the engine's gather differs.
+pub fn palw_map_is_hybrid_held_for_version_v1(map_id: &Hash64, version: u16) -> bool {
+    *map_id == hybrid_state_chunk_map_id_v4()
+        || (version == crate::palw_step::PALW_STEP_OBJECT_VERSION_V3 && *map_id == hybrid_state_chunk_map_id_v5())
+}
+
+/// [`palw_map_is_held_v4`] for a profile of `version` — the form every reader that holds the map id
+/// AND the profile it belongs to uses, so P0a's v5 is held exactly where its profile is version 3.
+pub fn palw_map_is_held_for_version_v1(map_id: &Hash64, version: u16) -> bool {
+    palw_map_is_held_v4(map_id) || palw_map_is_hybrid_held_for_version_v1(map_id, version)
 }
 
 /// **Is this class under ADR-0103's regime?** A class is its map, so a class is under the regime
 /// exactly when it registered a held map — a fact inside its id, never a flag beside it.
 pub fn palw_profile_is_held_v4(profile: &PalwShapeProfileV3) -> bool {
-    palw_map_is_held_v4(&profile.state_chunk_map_id)
+    palw_map_is_held_for_version_v1(&profile.state_chunk_map_id, profile.version)
+}
+
+/// **P0a: does this profile's map spell its GDN key-head count?** True exactly for a version-3
+/// profile on the held composition v5 — the one pairing whose recurrence half an executor gathers
+/// over `k_heads` ([`PALW_GDN_STATE_CHUNK_MAP_NAME_V3`]). The engine's capture, restore and seat
+/// dispatch on this; every consensus reader treats the class as v4's.
+pub fn palw_profile_spells_key_heads_v1(profile: &PalwShapeProfileV3) -> bool {
+    profile.version == crate::palw_step::PALW_STEP_OBJECT_VERSION_V3 && profile.state_chunk_map_id == hybrid_state_chunk_map_id_v5()
 }
 
 /// **The attention history an A16 op may reduce over for this class** (ADR-0116): the held
@@ -460,7 +506,7 @@ impl PalwStateLayoutV4 {
 /// ([`crate::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1`]).
 pub fn palw_state_layout_v4(profile: &PalwShapeProfileV3, positions: u32) -> Result<PalwStateLayoutV4, PalwStateChunkMapError> {
     let attn = tiled_kv_state_geometry_v4(profile, positions)?;
-    if profile.state_chunk_map_id != hybrid_state_chunk_map_id_v4() {
+    if !palw_map_is_hybrid_held_for_version_v1(&profile.state_chunk_map_id, profile.version) {
         return Ok(PalwStateLayoutV4 { attn, gdn_layers: Vec::new(), gdn_heads: 0, delta_head_bytes: 0, conv_head_bytes: 0 });
     }
     let with_recurrence = crate::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1(profile, positions);
@@ -503,7 +549,7 @@ pub fn palw_state_chunk_leaves_for_map_v1(
     chunks: &[Vec<u8>],
 ) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
     let map_id = profile.state_chunk_map_id;
-    if !palw_map_is_held_v4(&map_id) {
+    if !palw_profile_is_held_v4(profile) {
         return Ok(chunks
             .iter()
             .enumerate()
@@ -621,7 +667,7 @@ pub fn palw_state_root_from_leaves_for_map_v1(
     leaves: &[Hash64],
 ) -> Result<Hash64, crate::palw_step_leg::PalwStepLegError> {
     let map_id = profile.state_chunk_map_id;
-    if !palw_map_is_held_v4(&map_id) {
+    if !palw_profile_is_held_v4(profile) {
         return crate::palw_step_leg::state_chunks_root_v1(leaves);
     }
     let layout =
@@ -644,7 +690,7 @@ pub fn palw_state_chunk_path_from_leaves_for_map_v1(
     flat_index: u32,
 ) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
     use crate::palw_step_leg::PalwStepLegError;
-    if !palw_map_is_held_v4(&profile.state_chunk_map_id) {
+    if !palw_profile_is_held_v4(profile) {
         return crate::palw_step_leg::state_chunk_path_v1(leaves, flat_index as usize);
     }
     let layout = palw_state_layout_v4(profile, positions).map_err(|e| PalwStepLegError::HeldLayout(e.to_string()))?;
@@ -700,7 +746,7 @@ pub fn palw_state_chunk_leaf_for_map_v1(
     chunk_bytes: &[u8],
 ) -> Option<Hash64> {
     let map_id = profile.state_chunk_map_id;
-    if !palw_map_is_held_v4(&map_id) {
+    if !palw_profile_is_held_v4(profile) {
         return Some(crate::palw_step_leg::state_chunk_leaf_hash_v1(&map_id, flat_index, chunk_bytes));
     }
     let address = palw_state_layout_v4(profile, positions).ok()?.address(u64::from(flat_index))?;
@@ -719,7 +765,7 @@ pub fn palw_state_chunk_membership_root_v1(
     siblings: &[Hash64],
 ) -> Result<Hash64, crate::palw_step_leg::PalwStepLegError> {
     use crate::palw_step_leg::PalwStepLegError;
-    if !palw_map_is_held_v4(&profile.state_chunk_map_id) {
+    if !palw_profile_is_held_v4(profile) {
         let count = palw_state_chunk_count_at_v1(profile, positions)
             .ok_or_else(|| PalwStepLegError::HeldLayout("this map's chunk count is not derivable here".into()))?;
         return crate::palw_step_leg::state_chunk_opening_root_v1(count as usize, flat_index, chunk_hash, siblings);
@@ -895,7 +941,7 @@ pub fn hybrid_state_geometry_at_v3(
 ) -> Result<PalwHybridStateGeometryV1, PalwStateChunkMapError> {
     // ADR-0103 Decision 3: the held composition's attention half is the held map's — the same
     // tiles, bounded by the proof's depth rather than by a chunk count.
-    let held = palw_map_is_held_v4(&profile.state_chunk_map_id);
+    let held = palw_profile_is_held_v4(profile);
     let attn = if held { tiled_kv_state_geometry_v4(profile, positions)? } else { tiled_kv_state_geometry_v3(profile, positions)? };
     if !with_recurrence {
         // The attention half alone. Not an empty recurrence enumerated at zero heads — an absent
@@ -1009,8 +1055,8 @@ pub fn palw_state_chunk_count_at_v1(profile: &PalwShapeProfileV3, positions: u32
         return hybrid_state_geometry_for_covered_v1(profile, positions).ok().map(|g| g.chunk_count());
     }
     // ADR-0103 Decision 3: the held map's count is the same flat count, with no count cap — its
-    // bound is the proof's depth.
-    if palw_map_is_held_v4(&declared) {
+    // bound is the proof's depth (and P0a's v5, under a version-3 profile, is v4's).
+    if palw_profile_is_held_v4(profile) {
         return palw_state_layout_v4(profile, positions).ok().map(|l| l.chunk_count());
     }
     None
@@ -1130,6 +1176,34 @@ pub fn palw_hybrid_state_chunk_map_name_v2() -> String {
 /// `state_chunk_map_id` for a hybrid class whose recurrence half is [v2](gdn_state_chunk_map_id_v2).
 pub fn hybrid_state_chunk_map_id_v2() -> Hash64 {
     state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v2())
+}
+
+/// **P0a: the recurrence map whose gather is written over the KEY-head count (v3).**
+///
+/// v2's gather — `[q:h*k, k:heads*k+h*k, v:2*heads*k+h*v]` — spells one head count for q, k and v,
+/// and a conv window row is `2 · k_heads · k + v_heads · v` lanes wide (`[q | k | v]`, the q and k
+/// regions over the KEY heads). The two agree only at `k_heads = v_heads`: at Qwen3.6's 16/32 the
+/// window is 8,192 lanes where v2 expects 12,288, so the capture refused every checkpoint that
+/// carried the recurrence (every held hybrid failed at prefill), and value head `h ≥ 16` would have
+/// gathered its q from the k region.
+///
+/// v3 is the same bytes per head — one head's slice is still `(2 · k + v) × 4` bytes a window row,
+/// head `h` reading key head `h % k_heads` (the tiling the kernel, the court and the llama.cpp
+/// artifact agree on) — gathered at the right offsets:
+/// `q:(h%kh)*k`, `k:kh*k+(h%kh)*k`, `v:2*kh*k+h*v`, over a `(2*kh*k+heads*v)*4`-byte window row. The
+/// name spells how `kh` is had, `width(gdn.ref0)/k` ([`crate::palw_step::palw_gdn_key_heads_v1`]):
+/// a gather a reader has to reconstruct is a gather two readers reconstruct differently.
+///
+/// Read this way only under a version-3 profile ([`palw_profile_spells_key_heads_v1`]).
+pub const PALW_GDN_STATE_CHUNK_MAP_NAME_V3: &str = "palw-gdn-state/i32-le/kind-major(delta,conv)/layer-asc/head-asc/row-asc/\
+     delta-row=gdn_head_k_dim*4/conv-head-row=(2*gdn_head_k_dim+gdn_head_v_dim)*4/\
+     conv-head-gather=[q:(h%kh)*k,k:kh*k+(h%kh)*k,v:2*kh*k+h*v]/window-row=(2*kh*k+heads*v)*4/kh=width(gdn.ref0)/k/\
+     chunk<=2^20/v3";
+
+/// `state_chunk_map_id` of [`PALW_GDN_STATE_CHUNK_MAP_NAME_V3`] — the name's id, which no profile
+/// registers standalone (a version-3 profile registers the held composition v5 or no map).
+pub fn gdn_state_chunk_map_id_v3() -> Hash64 {
+    state_chunk_map_id_v1(PALW_GDN_STATE_CHUNK_MAP_NAME_V3)
 }
 
 /// **What a court opening of ONE head's convolution window costs under v2**:

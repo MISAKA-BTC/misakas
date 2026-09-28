@@ -1376,6 +1376,24 @@ pub fn qwen36_profile_v7(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, 
     Ok(profile)
 }
 
+/// **P0a: `graph-v8` — graph-v7 at profile version 3, under the held composition whose recurrence
+/// half spells the key-head count** ([`crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v5`]).
+///
+/// The graph, the fused head-wide tile, the per-token lift and the attention half are graph-v7's,
+/// node for node. What moves is the version (V3: `k_heads` is derived from the recurrence node's
+/// key row, `crate::palw_step::palw_gdn_key_heads_v1`) and the map (v5: a conv window row is
+/// `2 · k_heads · k + v_heads · v` lanes and head `h` gathers key head `h % k_heads`) — the two
+/// facts that were wrong for every hybrid whose key and value head counts differ, Qwen3.6-35B's
+/// 16/32 and Qwen3.8's 16/48 among them. A new class id by construction; graph-v7 classes stay the
+/// live chain facts they are. It needs `palw_gdn_key_heads` besides graph-v7's two fences.
+pub fn qwen36_profile_v8(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    let mut profile = qwen36_profile_v7(g)?;
+    profile.version = crate::palw_step::PALW_STEP_OBJECT_VERSION_V3;
+    profile.state_chunk_map_id = crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v5();
+    profile.validate_shape()?;
+    Ok(profile)
+}
+
 fn qwen36_profile_with(
     g: PalwQwen36GeometryV1,
     pre: &[Ir],

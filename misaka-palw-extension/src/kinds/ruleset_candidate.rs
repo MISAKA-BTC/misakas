@@ -138,6 +138,7 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
         "palw_token_lift" => params.palw_token_lift = Some(at),
         "palw_kimi_k3" => params.palw_kimi_k3 = Some(at),
+        "palw_gdn_key_heads" => params.palw_gdn_key_heads = Some(at),
         "palw_fused_dissectable" => params.palw_fused_dissectable = Some(at),
         "palw_attn_anchored_root" => params.palw_attn_anchored_root = Some(at),
         "palw_held_context" => params.palw_held_context = Some(at),

@@ -377,6 +377,7 @@ pub fn palw_model_preflight_v1(
         shape.kimi_family,
         // 2026-09-23 audit C-4: the geometry a non-fused class is priced from must fit its query row.
         shape.attention_geometry_bound,
+        shape.gdn_key_heads,
     );
     // **The processor's attribution checks, asked where it asks them** (beside the gate, after it):
     // ADR-0152 §4-ter C5's held check and addendum §4-bis.8's — one shared function, the processor's

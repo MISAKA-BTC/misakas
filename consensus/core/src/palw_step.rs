@@ -39,9 +39,76 @@ pub const PALW_STEP_OBJECT_VERSION_V1: u16 = 1;
 /// V2 is `i % interval == 0` (24 of 93). A new version, not a field: adding a field to
 /// [`PalwShapeProfileV3`] would move every existing `shape_profile_id`.
 pub const PALW_STEP_OBJECT_VERSION_V2: u16 = 2;
+/// **P0a: the GDN key-head count is DERIVED, and the maps that read it spell it.** V1's layer phase,
+/// and `k_heads = width(GatedDeltaNet.ref0) / gdn_head_k_dim` ([`palw_gdn_key_heads_v1`]) — the
+/// derivation the court's GDN slice already reads. `gdn_heads` stays the VALUE head count.
+///
+/// A version and not a field, for V2's reason: a field would move every existing
+/// `shape_profile_id`. And a version because a build before this one refuses it in
+/// `validate_shape` (`UnsupportedVersion`), so before `Params::palw_gdn_key_heads` arms, an old and
+/// a new build agree about every V3 registration: nobody admits it. The maps a V3 profile may
+/// register ([`crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v5`], whose recurrence half
+/// spells the key-head count) are read that way ONLY for a V3 profile: for V1 and V2 their ids are
+/// maps this tree does not know, exactly as they were before P0a, so no registration an old build
+/// can see is judged differently by a new one.
+pub const PALW_STEP_OBJECT_VERSION_V3: u16 = 3;
 
 fn palw_step_version_supported(version: u16) -> bool {
-    version == PALW_STEP_OBJECT_VERSION_V1 || version == PALW_STEP_OBJECT_VERSION_V2
+    version == PALW_STEP_OBJECT_VERSION_V1 || version == PALW_STEP_OBJECT_VERSION_V2 || version == PALW_STEP_OBJECT_VERSION_V3
+}
+
+/// **P0a: the GDN key-head count from the widths a GDN step reads** — `k_heads = ref0 / hd_k`, with
+/// `ref0 = k_heads · hd_k` exactly and the query row (`ref2`) as wide as the key row. The ONE
+/// derivation: the court's slice ([`crate::palw_step_refute::qwen36_gdn_slice_v1`], over the widths
+/// a refutation opens) and [`palw_gdn_key_heads_v1`] (over the widths a profile declares) both read
+/// it, so the key head a court slices and the one a map gathers cannot be two answers. `None` for a
+/// zero or incoherent width.
+pub fn palw_gdn_key_heads_of_widths_v1(hd_k: u64, ref0_width: u64, ref2_width: u64) -> Option<u64> {
+    let k_heads = ref0_width / hd_k.max(1);
+    if hd_k == 0 || k_heads == 0 || ref0_width != k_heads * hd_k || ref2_width != ref0_width {
+        return None;
+    }
+    Some(k_heads)
+}
+
+/// **P0a: a profile's GDN key-head count** — [`palw_gdn_key_heads_of_widths_v1`] over the widths the
+/// GDN table declares for its recurrence node's key and query rows (refs 0 and 2 of the one
+/// `KDESC_Q36_GDN_STEP` node), and the two facts a key-head map needs on top: the value heads group
+/// over the key heads (`gdn_heads % k_heads == 0`), and the convolution row (ref 1) is the window
+/// the map spells, `2 · k_heads · hd_k + gdn_heads · hd_v`.
+///
+/// A profile whose recurrence is not the integer gated delta rule — no such node, or more than one —
+/// has no key-head count to derive, and is refused rather than given one.
+pub fn palw_gdn_key_heads_v1(profile: &PalwShapeProfileV3) -> Result<u32, PalwStepError> {
+    use PalwStepError::ProfileNotCanonical as bad;
+    let step = kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_GDN_STEP);
+    let mut steps = profile.gdn_nodes.iter().filter(|n| n.kernel_semantics_id == step);
+    let (Some(node), None) = (steps.next(), steps.next()) else {
+        return Err(bad("the key-head count is derived from the one integer gated-delta node a GDN table declares"));
+    };
+    let width = |ordinal: usize| -> Option<u64> {
+        let r = *node.input_refs.get(ordinal)?;
+        if r >= PALW_STEP_INPUT_SENTINEL_MIN {
+            return None;
+        }
+        match profile.gdn_nodes.get(r as usize)?.out_len {
+            PalwStepOutLenV1::Fixed { elements } => Some(elements as u64),
+            PalwStepOutLenV1::KvScaled { .. } => None,
+        }
+    };
+    let (hd_k, hd_v, heads) = (profile.gdn_head_k_dim as u64, profile.gdn_head_v_dim as u64, profile.gdn_heads as u64);
+    let (Some(key), Some(conv), Some(query)) = (width(0), width(1), width(2)) else {
+        return Err(bad("the gated-delta node's key, convolution and query rows are fixed rows of its own table"));
+    };
+    let k_heads = palw_gdn_key_heads_of_widths_v1(hd_k, key, query)
+        .ok_or(bad("the gated-delta node's key row is not a whole number of key heads (or its query row is not as wide)"))?;
+    if heads == 0 || hd_v == 0 || k_heads > heads || !heads.is_multiple_of(k_heads) {
+        return Err(bad("the value heads do not group over the key heads (gdn_heads % k_heads != 0)"));
+    }
+    if Some(conv) != (2 * k_heads).checked_mul(hd_k).and_then(|a| heads.checked_mul(hd_v).and_then(|b| a.checked_add(b))) {
+        return Err(bad("the convolution row is not the window 2 * k_heads * gdn_head_k_dim + gdn_heads * gdn_head_v_dim"));
+    }
+    Ok(k_heads as u32)
 }
 
 /// The shape-profile v3 identity domain. v2's shape-string domain stays frozen; deployed
@@ -534,7 +601,7 @@ impl PalwShapeProfileV3 {
         // `PALW_STEP_MAX_NODES_PER_POSITION`; the context itself is bounded by the ladder's depth
         // at admission. Every other class keeps the product ceiling, byte for byte: the marker is
         // the registered map, which is inside the class id, so no class that exists today moves.
-        let held = crate::palw_state_chunk_map::palw_map_is_held_v4(&self.state_chunk_map_id);
+        let held = crate::palw_state_chunk_map::palw_profile_is_held_v4(self);
         if !held && (self.n_ctx as u64).saturating_mul(self.layer_count as u64) > PALW_STEP_MAX_ENUMERATION {
             return Err(bad("the declared shape drives an enumeration past the work ceiling"));
         }
@@ -600,7 +667,7 @@ impl PalwShapeProfileV3 {
         // enumeration is driven by this product, and it is computed BEFORE anything can compare
         // against the leaf cap. A class under the held map is bounded per position instead
         // (ADR-0103 Decision 6; `validate_geometry` above says why).
-        if !crate::palw_state_chunk_map::palw_map_is_held_v4(&self.state_chunk_map_id)
+        if !crate::palw_state_chunk_map::palw_profile_is_held_v4(self)
             && (self.n_ctx as u64).saturating_mul(self.layer_count as u64) > PALW_STEP_MAX_ENUMERATION
         {
             return Err(bad("the declared shape drives an enumeration past the work ceiling"));
@@ -722,6 +789,27 @@ impl PalwShapeProfileV3 {
         if self.kv_chunk_calls != 0 && !has_attention {
             return Err(bad("kv aux series declared without attention layers"));
         }
+        // **P0a: what version 3 means, checked where the shape is.** Its key-head count derives
+        // (`palw_gdn_key_heads_v1`), and the only recurrence-bearing map it registers is the one
+        // whose name spells that count — the held hybrid composition v5 — or none: a V3 profile on
+        // a map whose gather is written over one head count would be the defect V3 exists to end.
+        if self.version == PALW_STEP_OBJECT_VERSION_V3 {
+            if !self.gdn_layer_exists() {
+                return Err(bad("profile version 3 derives the GDN key-head count, and this profile has no GDN layer"));
+            }
+            palw_gdn_key_heads_v1(self)?;
+            let map = self.state_chunk_map_id;
+            if map != Hash64::default() && map != crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v5() {
+                return Err(bad(
+                    "a version-3 profile registers the held composition that spells its key-head count (hybrid v5), or no map",
+                ));
+            }
+            if map != Hash64::default() && !has_attention {
+                return Err(bad(
+                    "the held hybrid composition is a hybrid's: a version-3 profile with no attention layer registers no map",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -747,8 +835,9 @@ impl PalwShapeProfileV3 {
 
     /// Layer kind under the pinned rule (Fact 1). `layer` must be `< layer_count`.
     ///
-    /// V1: `(layer + 1) % interval == 0`. V2: `layer % interval == 0` — the phase Kimi K3's
-    /// 24-of-93 MLA stack actually uses. Existing V1 profiles keep the +1 phase byte for byte.
+    /// V1 (and V3, which is V1's phase — P0a): `(layer + 1) % interval == 0`. V2: `layer % interval
+    /// == 0` — the phase Kimi K3's 24-of-93 MLA stack actually uses. Existing V1 profiles keep the
+    /// +1 phase byte for byte.
     pub fn layer_kind(&self, layer: u16) -> PalwLayerKindV1 {
         let interval = self.full_attention_interval as u32;
         let hit = interval != 0
