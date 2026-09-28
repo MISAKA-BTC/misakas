@@ -256,12 +256,16 @@ impl PalwTirStepSpaceV1 {
                 if !tile_ok(tile_len) {
                     return layout_err(format!("block {bi} node {ni}: tile_len {tile_len} is outside [4, 65536]"));
                 }
+                // Under the tiled logits scheme a logits step tile lies inside one trace tile: its
+                // length divides the scheme's 4,096 lanes (decision (1) of 2026-09-28 — a real
+                // vocabulary's 4,096-lane tile reads 4,096 weight rows, a close no carrier holds, so
+                // a class may tile its logits finer and every terminal close stays carriable).
                 if tiled_scheme
                     && bi == program.schedule.post as usize
                     && ni == program.logits as usize
-                    && tile_len as usize != crate::palw_step_refute::PALW_LOGITS_TILE_LANES
+                    && !(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u32).is_multiple_of(tile_len)
                 {
-                    return layout_err("under the tiled logits scheme the logits node tiles at the scheme's 4,096 lanes");
+                    return layout_err("under the tiled logits scheme the logits node's tile length divides the scheme's 4,096 lanes");
                 }
                 let fixed_elements = n.out.shape.iter().fold(1u64, |acc, d| match d {
                     Dim::Fixed(k) => acc.saturating_mul(*k as u64),

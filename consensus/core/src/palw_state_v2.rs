@@ -7189,6 +7189,42 @@ pub enum PalwConsensusObjectV2 {
         artifact_root: Hash64,
         class: Box<crate::palw_tir_class_v1::PalwTirClassV1>,
     },
+    // ---- RFC-0002 Phase F, step F7: the generic history dissection of an IR class (tags 64–66) ----
+    /// **Move 1 of an IR history dissection (tag 64): the responder's root claim** (spec 04b §9.5.3,
+    /// [`crate::palw_tir_dissect_v1::PalwTirRootClaimV1`]) — for each reduction over `H` of the
+    /// narrowed leaf's cone, the elements its tile reads and their totals over the whole history, with
+    /// the leaf's canonical carriage (`finalize`) under which the court re-evaluates the tile from
+    /// those totals. The ADR-0082 root claim with the attention triple replaced by "every reduction
+    /// over `H`": the acceptance layer admits it only if it finalizes to the committed tile and reads
+    /// exactly the claimed values (`check_tir_root_claim_v1`, at the IR court's limits); the fold
+    /// binds its binding to the claim, derives the site from the class's own program and opens the
+    /// phase (`tir_dissections`). `arity` is declared and refused unless it is the ruleset's derived
+    /// one, as `CourtAttnRootClaimed`'s. Signed by the CLAIM's bond under the ADR-0082 responder
+    /// context over [`crate::palw_tir_dissect_v1::palw_tir_root_claim_message_v1`]. Appended; dropped
+    /// by name below `palw_tir_v1`.
+    CourtTirRootClaimed {
+        session_id: Hash64,
+        root: Box<crate::palw_tir_dissect_v1::PalwTirRootClaimV1>,
+        arity: u8,
+        signature: Vec<u8>,
+    },
+    /// **Move 2 (tag 65): the responder's children of the disputed range** — every reduction's
+    /// partials over each child, fold-checked (`Σ` or `max`, exact) and bound-checked before the
+    /// challenger moves. A round that does not fold is refused, and the responder's turn runs on.
+    /// Signed by the claim's bond under the responder context over
+    /// [`crate::palw_tir_dissect_v1::palw_tir_round_message_v1`] at the phase's round.
+    CourtTirDissected {
+        session_id: Hash64,
+        round: crate::palw_tir_dissect_v1::PalwTirDissectRoundV1,
+        signature: Vec<u8>,
+    },
+    /// **Move 3 (tag 66): the challenger names the child it disputes.** Signed by the SESSION's
+    /// challenger bond under the ADR-0082 challenger context over the choice's encoding.
+    CourtTirChildChosen {
+        session_id: Hash64,
+        choice: crate::palw_tir_dissect_v1::PalwTirDissectChoiceV1,
+        signature: Vec<u8>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7203,11 +7239,24 @@ pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
         PalwConsensusObjectV2::TirShardCourtAccused { .. } => true,
         PalwConsensusObjectV2::FamilyCertified { evidence } => evidence.is_tir_v1(),
         PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => true,
+        PalwConsensusObjectV2::CourtTirRootClaimed { .. }
+        | PalwConsensusObjectV2::CourtTirDissected { .. }
+        | PalwConsensusObjectV2::CourtTirChildChosen { .. } => true,
         PalwConsensusObjectV2::ObjectiveOffence { kind, .. } => {
             *kind == crate::palw_offence_v1::PalwOffenceKindV1::TirIdentityMismatch
         }
         _ => false,
     }
+}
+
+/// **Is this object a move of an IR history dissection** (RFC-0002 F7, tags 64–66)?
+pub fn palw_object_is_tir_dissection_move_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(
+        object,
+        PalwConsensusObjectV2::CourtTirRootClaimed { .. }
+            | PalwConsensusObjectV2::CourtTirDissected { .. }
+            | PalwConsensusObjectV2::CourtTirChildChosen { .. }
+    )
 }
 
 /// **The name of a v22-skeleton object (ADR-0152 v3.1 §6 row 24, tags 53–56)**, or `None` for
@@ -8207,7 +8256,10 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { session_id, .. }
         | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { session_id, .. }
         | PalwConsensusObjectV2::CourtAttnDissected { session_id, .. }
-        | PalwConsensusObjectV2::CourtAttnChildChosen { session_id, .. } => session_id,
+        | PalwConsensusObjectV2::CourtAttnChildChosen { session_id, .. }
+        | PalwConsensusObjectV2::CourtTirRootClaimed { session_id, .. }
+        | PalwConsensusObjectV2::CourtTirDissected { session_id, .. }
+        | PalwConsensusObjectV2::CourtTirChildChosen { session_id, .. } => session_id,
         _ => return false,
     };
     let Some(session) = state.court_session(session_id) else {
@@ -8233,6 +8285,26 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         // Move 3 is the challenger's, at the round the phase is actually at.
         PalwConsensusObjectV2::CourtAttnChildChosen { choice, .. } => session.dissection.as_ref().is_some_and(|phase| {
             choice.version == crate::palw_attn_court_v1::PALW_ATTN_COURT_OBJECT_VERSION_V1
+                && choice.session_id == *session_id
+                && phase.turn() == PalwBisectTurnV1::AwaitVerdict
+                && choice.round == phase.round()
+                && (choice.child as usize) < phase.child_ranges().len()
+        }),
+        // RFC-0002 F7: the IR moves, by the same three questions of the IR phase (the root claim's
+        // acceptance is a demand evaluation at the IR court's limits, which is what the slot bounds).
+        PalwConsensusObjectV2::CourtTirRootClaimed { root, .. } => {
+            session.dissection.is_none()
+                && state.tir_dissections.get(session_id).is_none()
+                && session.ladder.terminal_index().is_some()
+                && root.version == crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1
+        }
+        PalwConsensusObjectV2::CourtTirDissected { round, .. } => state.tir_dissections.get(session_id).is_some_and(|phase| {
+            round.version == crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1
+                && phase.turn() == PalwBisectTurnV1::AwaitDisclosure
+                && round.children.len() == phase.child_ranges().len()
+        }),
+        PalwConsensusObjectV2::CourtTirChildChosen { choice, .. } => state.tir_dissections.get(session_id).is_some_and(|phase| {
+            choice.version == crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1
                 && choice.session_id == *session_id
                 && phase.turn() == PalwBisectTurnV1::AwaitVerdict
                 && choice.round == phase.round()
@@ -9751,6 +9823,13 @@ pub struct PalwChainStateV2 {
     /// block (`tir_classes/v1`) and carriage tail (`0xC0`): empty below `palw_tir_v1`, so every
     /// network roots and carries exactly as before.
     tir_classes: BTreeMap<Hash64, crate::palw_tir_admission_v1::PalwTirClassRecordV1>,
+    /// **RFC-0002 Phase F (F7): every open IR history dissection**, by court session id — the phase
+    /// ([`crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1`]) an IR class's session runs once the
+    /// responder's root claim is admitted (spec 04b §9.5). The legacy phase lives in the session
+    /// record; this one is a table beside it so a state that has none roots and carries exactly as
+    /// before: its own Some-only root block (`tir_dissections/v1`) and carriage tail (`0xC1`). A row
+    /// lives exactly as long as its session: `write_court` drops it when the session leaves.
+    tir_dissections: BTreeMap<Hash64, Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -9912,6 +9991,7 @@ impl PalwChainStateV2 {
             network_demand: BTreeMap::new(),
             operator_ring: BTreeMap::new(),
             tir_classes: BTreeMap::new(),
+            tir_dissections: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -11696,6 +11776,11 @@ impl PalwChainStateV2 {
         self.tir_classes.get(class_id)
     }
 
+    /// **RFC-0002 F7: a court session's IR history dissection**, if its root claim was admitted.
+    pub fn tir_dissection_v1(&self, session_id: &Hash64) -> Option<&crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1> {
+        self.tir_dissections.get(session_id).map(|phase| phase.as_ref())
+    }
+
     /// A test's way to stand a `tir_classes` row in (the fold writes rows only through a registration).
     #[cfg(test)]
     pub(crate) fn test_insert_tir_class_v1(&mut self, class_id: Hash64, record: crate::palw_tir_admission_v1::PalwTirClassRecordV1) {
@@ -12037,6 +12122,12 @@ impl PalwChainStateV2 {
         if !self.tir_classes.is_empty() {
             state.update(b"tir_classes/v1");
             state.update(palw_tir_classes_root_v1(&self.tir_classes).as_byte_slice());
+        }
+        // **RFC-0002 Phase F (F7): the open IR dissections, ONE Some-only block** — empty until an IR
+        // class's root claim is admitted.
+        if !self.tir_dissections.is_empty() {
+            state.update(b"tir_dissections/v1");
+            state.update(collection_root(b"tir_dissections", &self.tir_dissections).as_byte_slice());
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -12527,6 +12618,18 @@ impl PalwChainStateV2 {
             self.court_sessions.iter().map(|(id, s)| (court_next_deadline_v2(self, s), *id)).collect();
         if court_deadlines != self.court_deadlines {
             return Err(PalwStateV2Error::CarriageInconsistent("court-deadline index differs from the sessions".into()));
+        }
+        // RFC-0002 F7: an IR dissection is a row about a live session of its own id, which holds no
+        // legacy phase — `write_court` drops it with its session.
+        for (id, phase) in &self.tir_dissections {
+            match self.court_sessions.get(id) {
+                Some(session) if session.dissection.is_none() && phase.session_id() == *id => {}
+                _ => {
+                    return Err(PalwStateV2Error::CarriageInconsistent(
+                        "an IR dissection is not a row about a live session without a legacy phase".into(),
+                    ));
+                }
+            }
         }
         // The declared closes' own queue, checked the same way and against the same primary data
         // (audit H-2c). A stale one is a group whose bytes nothing sweeps.
@@ -13674,6 +13777,13 @@ pub enum PalwDeltaEntryV2 {
         key: Hash64,
         old: Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1>,
         new: Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1>,
+    },
+    /// A court session's IR dissection phase was opened, advanced or dropped (89; RFC-0002 Phase F,
+    /// F7, [`crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1`]).
+    TirDissection {
+        key: Hash64,
+        old: Option<Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
+        new: Option<Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
     },
 }
 
@@ -16773,6 +16883,15 @@ impl<'a> TransitionBuilder<'a> {
             self.state.court_close_deadlines.insert((record.assembly_deadline_daa, key));
         }
         self.entries.push(PalwDeltaEntryV2::CourtCloseGroup { key, old, new });
+        // RFC-0002 F7: an IR session's clock reads its executor's declared close
+        // (`court_session_turn_and_rung_deadline_v2`), so the session is re-indexed when a group comes
+        // or goes — a no-op for every other session, whose key does not read the groups.
+        let session_id = key.0;
+        if let Some(session) = self.state.court_sessions.get(&session_id) {
+            let next = court_next_deadline_v2(&self.state, session);
+            self.state.court_deadlines.retain(|(_, id)| *id != session_id);
+            self.state.court_deadlines.insert((next, session_id));
+        }
     }
 
     fn write_derived_artifact(
@@ -17543,6 +17662,18 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::TirClass { key, old, new });
+        }
+    }
+
+    /// **RFC-0002 F7: the one writer of `tir_dissections`**, journaled `TirDissection` (89).
+    fn write_tir_dissection(&mut self, key: Hash64, new: Option<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>) {
+        let new = new.map(Box::new);
+        let old = match new.clone() {
+            Some(phase) => self.state.tir_dissections.insert(key, phase),
+            None => self.state.tir_dissections.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::TirDissection { key, old, new });
         }
     }
 
@@ -23338,6 +23469,12 @@ impl<'a> TransitionBuilder<'a> {
         }
         let removed = new.is_none();
         self.entries.push(PalwDeltaEntryV2::Court { key, old, new });
+        // **RFC-0002 F7: an IR dissection is a row ABOUT a session, so it dies with it** — here, for
+        // the close groups' reason below: a cleanup each removal site had to remember is a cleanup
+        // one of them eventually would not, and `assert_internal_consistency` refuses an orphan.
+        if removed && self.state.tir_dissections.contains_key(&key) {
+            self.write_tir_dissection(key, None);
+        }
         // **ADR-0080 design A: a close group is a row ABOUT a session, so it dies with it.**
         //
         // Here rather than at each of the five removal sites, for the reason written above the
@@ -26819,6 +26956,32 @@ fn apply_da_answer_v1(
     Ok(())
 }
 
+/// **ADR-0152 §4-ter C3: a session already open on the claim admits one more dissection only from
+/// a seat of the claim's panel** — one per seat, at most `1 + seat_count` on the claim, at any leaf
+/// (a decoy the producer's own Sybil opened holds off no seat). Two sessions at one leaf do not
+/// collide: the session id binds the challenger. One spelling for the legacy one-move court and the
+/// IR one (RFC-0002 F7).
+fn check_further_held_dissection_v1(
+    state: &PalwChainStateV2,
+    claim_id: Hash64,
+    accuser: PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    let refused = |why| PalwStateV2Error::HeldDissectionFurtherSessionRefused { claim: claim_id, why };
+    let seats = state.panels.get(&claim_id).map(|panel| panel.seats.clone()).unwrap_or_default();
+    if !seats.iter().any(|seat| seat.bond == accuser) {
+        return Err(refused("only a seat of the claim's panel opens a further dissection while one is open"));
+    }
+    let on_claim: Vec<&PalwCourtSessionStateV2> = state.court_sessions.values().filter(|s| s.claim == claim_id).collect();
+    if on_claim.iter().any(|s| s.challenger_bond == accuser) {
+        return Err(refused("this seat already holds a session on the claim"));
+    }
+    // `1 + seat_count` sessions at most: the first, and one per seat.
+    if on_claim.len() > seats.len() {
+        return Err(refused("the claim already holds one session and one per seat"));
+    }
+    Ok(())
+}
+
 /// **ADR-0103 Decision 5: a dissection opened at the leaf an accusation named.** The `CourtOpened`
 /// arm's session, minus the walk: the ladder is built already narrowed to the named leaf
 /// ([`crate::palw_bisect::PalwBisectLadderV1::open_at_named_leaf`]) under the id a bisection
@@ -26834,21 +26997,6 @@ fn open_held_dissection_v1(
     accusation: &crate::palw_shard_court_v1::PalwShardCourtAccusationV1,
     ladder: u64,
 ) -> Result<(), PalwStateV2Error> {
-    let refused = |why: String| PalwStateV2Error::HeldDissectionRefused { claim: claim_id, leaf: accusation.leaf_index, why };
-    let open_sessions = builder.state.court_sessions.len() as u64;
-    let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
-    if open_sessions >= max_sessions {
-        return Err(PalwStateV2Error::CourtSessionsAtCapacity {
-            open: open_sessions,
-            max: max_sessions,
-            turn_deadline_daa: builder.params.turn_deadline_daa(),
-            per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
-        });
-    }
-    let challenger_bond = accusation.accuser_bond;
-    let challenger_collateral =
-        builder.state.bonds.get(&challenger_bond).ok_or(PalwStateV2Error::MissingBond(challenger_bond))?.collateral;
-    let deadline_daa = ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
     // **ADR-0152 §4-ter (the review's F5, decision): the root claim is a COMPUTE move.** For an
     // answerable held class past the fence the responder re-executes to the site before it can file
     // (N1), so its rung is the class's compute turn — `palw_held_move_turn_daa_v1` of the profile the
@@ -26863,6 +27011,48 @@ fn open_held_dissection_v1(
         }
         _ => builder.params.turn_deadline_daa(),
     };
+    open_dissection_at_named_leaf_v1(
+        builder,
+        ctx,
+        claim_id,
+        claim,
+        accusation.accuser_bond,
+        accusation.leaf_index,
+        ladder,
+        opening_turn,
+    )
+}
+
+/// **A session opened at `Terminal` on a named leaf** — the body [`open_held_dissection_v1`] and
+/// the IR one-move court's dissected leaf (RFC-0002 F7) share: the court's capacity, the ladder
+/// narrowed to the leaf under the id a bisection between the same parties over the same space would
+/// have had, the accuser's reservation, the claim's path to `Final` frozen. `opening_turn` is the
+/// responder's first rung (the root claim).
+#[allow(clippy::too_many_arguments)]
+fn open_dissection_at_named_leaf_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    claim: &PalwClaimStateV2,
+    challenger_bond: PalwBondKeyV2,
+    leaf_index: u64,
+    ladder: u64,
+    opening_turn: u64,
+) -> Result<(), PalwStateV2Error> {
+    let refused = |why: String| PalwStateV2Error::HeldDissectionRefused { claim: claim_id, leaf: leaf_index, why };
+    let open_sessions = builder.state.court_sessions.len() as u64;
+    let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
+    if open_sessions >= max_sessions {
+        return Err(PalwStateV2Error::CourtSessionsAtCapacity {
+            open: open_sessions,
+            max: max_sessions,
+            turn_deadline_daa: builder.params.turn_deadline_daa(),
+            per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
+        });
+    }
+    let challenger_collateral =
+        builder.state.bonds.get(&challenger_bond).ok_or(PalwStateV2Error::MissingBond(challenger_bond))?.collateral;
+    let deadline_daa = ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
     let first_deadline_daa =
         ctx.daa_score.checked_add(opening_turn).ok_or(PalwStateV2Error::Overflow("court opening rung deadline"))?.min(deadline_daa);
     // The space a bisection would have declared: the ruleset's own leaf cap — the ladder the
@@ -26875,7 +27065,7 @@ fn open_held_dissection_v1(
         &crate::palw_court_v2::court_party_id_v2(&claim.bond),
         crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
         space_size,
-        accusation.leaf_index,
+        leaf_index,
         ctx.daa_score,
         first_deadline_daa,
     )
@@ -27090,9 +27280,66 @@ pub(crate) fn court_turn_and_rung_deadline_v2(
     }
 }
 
+/// **RFC-0002 F7: whose move a session waits on, and by when — with the state in hand.** An IR
+/// class's dissection phase lives in `tir_dissections` beside the session, not in it, so the one
+/// question [`court_turn_and_rung_deadline_v2`] answers from the record needs the state to be
+/// answered for an IR session: the IR phase's pair once one is open, the record's otherwise. Every
+/// reader — the deadline index, its rebuild and checker, the sweep, the close declaration and the
+/// producer's duty view — asks it here, so an IR phase cannot grow a second clock either.
+pub(crate) fn court_session_turn_and_rung_deadline_v2(
+    state: &PalwChainStateV2,
+    session: &PalwCourtSessionStateV2,
+) -> (crate::palw_bisect::PalwBisectTurnV1, u64) {
+    let session_id = session.ladder.session_id();
+    match state.tir_dissections.get(&session_id) {
+        Some(phase) => (phase.turn(), phase.last_deadline_daa()),
+        // **An IR executor's declared close is its terminal move** (RFC-0002 F7). At an IR class's
+        // terminal the executor owes a move at EVERY leaf — the clock cannot tell a dissected leaf
+        // from another, the leaf's kind being a fact of the job — and at a leaf that is not
+        // dissected that move is an acquitting close, which past one carrier is DECLARED. So once
+        // the executor's declared close stands, the session waits at `Terminal` on it: the group's
+        // own assembly deadline convicts a declarer that does not deliver (`sweep_court_close_deadlines`),
+        // and a delivered close ends the session with its verdict.
+        None if court_session_executor_declared_at_the_ir_terminal_v1(state, session) => {
+            (crate::palw_bisect::PalwBisectTurnV1::Terminal, session.ladder.last_deadline_daa())
+        }
+        None => court_turn_and_rung_deadline_v2(session, court_session_class_is_fused_v2(state, session)),
+    }
+}
+
+/// **Is this an IR class's session at its ladder's terminal, with no phase open?** — where the
+/// executor owes the terminal move (RFC-0002 F7): the class has a dissected point
+/// (`PalwClassStateV2::fused_attention`) and is an IR program.
+pub(crate) fn court_session_at_the_ir_terminal_v1(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> bool {
+    session.dissection.is_none()
+        && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal
+        && !state.tir_dissections.contains_key(&session.ladder.session_id())
+        && court_session_class_is_fused_v2(state, session)
+        && state.claims.get(&session.claim).is_some_and(|claim| state.tir_classes.contains_key(&claim.class_id))
+}
+
+/// [`court_session_at_the_ir_terminal_v1`], and the executor's declared close stands.
+fn court_session_executor_declared_at_the_ir_terminal_v1(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> bool {
+    state.court_close_groups.contains_key(&(session.ladder.session_id(), PalwCourtSideV1::Executor))
+        && court_session_at_the_ir_terminal_v1(state, session)
+}
+
+/// **RFC-0002 F7: [`cap_session_rung_deadline_v2`] for an IR phase** — the same reserve, under the
+/// same ruleset rule (a ruleset with no rung clock is not given one by the cap).
+fn cap_tir_phase_deadline_v1(
+    phase: &mut crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+    session: &PalwCourtSessionStateV2,
+    params: &PalwStateParamsV2,
+) {
+    if params.turn_deadline_daa() >= params.window_court() {
+        return;
+    }
+    phase.cap_deadline_to_session_v1(session.deadline_daa, palw_close_assembly_daa_v1(PALW_COURT_CLOSE_MAX_CHUNKS));
+}
+
 pub(crate) fn court_next_deadline_v2(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> u64 {
     use crate::palw_bisect::PalwBisectTurnV1;
-    let (turn, rung_deadline) = court_turn_and_rung_deadline_v2(session, court_session_class_is_fused_v2(state, session));
+    let (turn, rung_deadline) = court_session_turn_and_rung_deadline_v2(state, session);
     match turn {
         PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::AwaitVerdict => session.deadline_daa.min(rung_deadline),
         // **`Terminal` has no move the responder can make, so it may not be clocked as if it did.**
@@ -27203,7 +27450,11 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // reached its dissection and hand the whole exchange to the backstop, which closes
         // challenger-side: a responder could simply stop answering rounds and win.
         let class_is_fused = court_session_class_is_fused_v2(&builder.state, &session);
-        let (turn, rung_deadline) = court_turn_and_rung_deadline_v2(&session, class_is_fused);
+        let (turn, rung_deadline) = court_session_turn_and_rung_deadline_v2(&builder.state, &session);
+        // RFC-0002 F7: an IR class's phase, the table's row beside the session. Every rule below that
+        // asks "is a phase open" asks it of either phase.
+        let mut tir_phase = builder.state.tir_dissections.get(&session_id).map(|phase| phase.as_ref().clone());
+        let no_phase = session.dissection.is_none() && tir_phase.is_none();
         // **The fused terminal's OPENING move, named before the ladder is abandoned** (mainnet
         // audit 2026-09-06, C-2/H-5).
         //
@@ -27212,7 +27463,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // `AwaitDisclosure`, so by then a fused terminal is indistinguishable from an ordinary rung.
         // It is asked once, here, off the same two facts the remap used.
         let owes_the_dissection_opening =
-            session.dissection.is_none() && class_is_fused && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal;
+            no_phase && class_is_fused && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal;
         let turn_can_still_move =
             !matches!(turn, crate::palw_bisect::PalwBisectTurnV1::Terminal | crate::palw_bisect::PalwBisectTurnV1::Abandoned);
         let rung_fired = turn_can_still_move && rung_deadline < ctx.daa_score && rung_deadline < session.deadline_daa;
@@ -27220,9 +27471,10 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
             // The phase's own `declare_no_show` when a phase is open, the ladder's otherwise —
             // and both mint the same `PalwBisectNoShowV1` with the same rule at `Terminal`, which
             // is why the arms below need no second spelling.
-            let declared = match session.dissection.as_mut() {
-                Some(phase) => phase.declare_no_show(ctx.daa_score).map_err(|e| e.to_string()),
-                None => session.ladder.declare_no_show(ctx.daa_score).map_err(|e| e.to_string()),
+            let declared = match (tir_phase.as_mut(), session.dissection.as_mut()) {
+                (Some(phase), _) => phase.declare_no_show(ctx.daa_score).map_err(|e| e.to_string()),
+                (None, Some(phase)) => phase.declare_no_show(ctx.daa_score).map_err(|e| e.to_string()),
+                (None, None) => session.ladder.declare_no_show(ctx.daa_score).map_err(|e| e.to_string()),
             };
             if let Ok(no_show) = declared {
                 // **Whether the accused could have moved at all, as a fact the chain already
@@ -27318,7 +27570,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                     crate::palw_bisect::PalwBisectPartyV1::Responder
                         if !(owes_the_dissection_opening
                             && palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id))
-                            && ((session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight)
+                            && ((no_phase && session.ladder.round() == 0 && !class_holds_weight)
                                 || (builder.extras.court_responder_coverage_active
                                     && owes_the_dissection_opening
                                     // The deep fence lifts the fused-terminal mercy — but ONLY where an
@@ -30172,11 +30424,40 @@ fn apply_object(
             if accuser_record.collateral < floor {
                 return Err(PalwStateV2Error::BondBelowFloor { bond: accuser, collateral: accuser_record.collateral, floor });
             }
-            match accusation.verdict {
-                PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
-                PalwCourtVerdictV2::ChallengerDefeated => {
-                    let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
-                    builder.slash_seat(accuser, charge, floor)?;
+            // **RFC-0002 F7 (ADR-0103 Decision 5 for an IR program): under the held regime a cone
+            // accusation at a DISSECTED leaf is the challenge.** Its cone reduces over the history, so
+            // it is never tried in one move there: the leaf is named, the session opens at `Terminal`
+            // on it, and the responder's IR root claim is its first clocked move — spec 04b §9.5 from
+            // then on. The leaf is bound to the claim first (the binding the claim's, the leaf opened
+            // under it); the acceptance layer refused any other declared verdict, and this is the
+            // second lock on that door. Outside the held regime the bisection court reaches the leaf,
+            // and a cone accusation is adjudicated whole as every IR close is.
+            let dissected_leaf = match builder.extras.held_context_ladder {
+                Some(held) => crate::palw_tir_one_move_v1::palw_tir_one_move_dissected_leaf_v1(&builder.state, &claim, accusation)
+                    .map_err(|e| PalwStateV2Error::ShardCourt(e.to_string()))?
+                    .map(|leaf| (held, leaf)),
+                None => None,
+            };
+            if let Some((held, leaf)) = dissected_leaf {
+                if accusation.verdict != PalwCourtVerdictV2::ExecutorGuilty {
+                    return Err(PalwStateV2Error::ShardCourt("an accusation that opens a dissection declares ExecutorGuilty".into()));
+                }
+                if builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id) {
+                    return Err(PalwStateV2Error::ShardCourtHeldSiteUnanswerable { claim: claim_id, leaf, class: claim.class_id });
+                }
+                if open_session.is_some() {
+                    check_further_held_dissection_v1(&builder.state, claim_id, accuser)?;
+                }
+                let ladder = builder.state.class_step_ladder_v1(&claim.class_id, held);
+                let turn = builder.params.turn_deadline_daa();
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn)?;
+            } else {
+                match accusation.verdict {
+                    PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
+                    PalwCourtVerdictV2::ChallengerDefeated => {
+                        let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
+                        builder.slash_seat(accuser, charge, floor)?;
+                    }
                 }
             }
         }
@@ -30280,20 +30561,7 @@ fn apply_object(
                     // challenger (`open_at_named_leaf`). A non-seat's dissection waits, as one court
                     // at a time always made it.
                     if open_session.is_some() {
-                        let refused = |why| PalwStateV2Error::HeldDissectionFurtherSessionRefused { claim: claim_id, why };
-                        let seats = builder.state.panels.get(&claim_id).map(|panel| panel.seats.clone()).unwrap_or_default();
-                        if !seats.iter().any(|seat| seat.bond == accuser) {
-                            return Err(refused("only a seat of the claim's panel opens a further dissection while one is open"));
-                        }
-                        let on_claim: Vec<&PalwCourtSessionStateV2> =
-                            builder.state.court_sessions.values().filter(|s| s.claim == claim_id).collect();
-                        if on_claim.iter().any(|s| s.challenger_bond == accuser) {
-                            return Err(refused("this seat already holds a session on the claim"));
-                        }
-                        // `1 + seat_count` sessions at most: the first, and one per seat.
-                        if on_claim.len() > seats.len() {
-                            return Err(refused("the claim already holds one session and one per seat"));
-                        }
+                        check_further_held_dissection_v1(&builder.state, claim_id, accuser)?;
                     }
                     open_held_dissection_v1(builder, ctx, claim_id, &claim, accusation, ladder)?;
                 }
@@ -30817,9 +31085,11 @@ fn apply_object(
         // refuses it below). Admission v10 ran at acceptance (ADR-0049 Decision H: no graph walk
         // inside the transition); the fold derives what it keeps from the carried class — the
         // `tir_classes` row by the one function v10 derives it with, and the registry work from the
-        // program — and folds the rest through the legacy registration's own body. An IR class owes
-        // no root claim until the history dissection is wired (v10 admits no dissected commit point)
-        // and records no held ladder (v10 admits no held program).
+        // program — and folds the rest through the legacy registration's own body. A class with a
+        // dissected commit point (spec 04b §9.5.1: a cone that reduces over the history) owes its
+        // court's terminal move — a root claim at a dissected leaf, an acquitting close at any other
+        // — exactly as a legacy fused class does (`fused_attention`, ADR-0082 C-5; RFC-0002 F7). It
+        // records no held ladder (v10 admits no held program).
         PalwConsensusObjectV2::ClassRegisteredTirV1 {
             class_id,
             artifact_root,
@@ -30849,7 +31119,7 @@ fn apply_object(
                     share_permille,
                     activation_daa,
                     registrant: Some(admission.registrant_bond),
-                    fused_attention: false,
+                    fused_attention: !record.dissected.is_empty(),
                     held: false,
                     work: Some(&work),
                 },
@@ -31503,9 +31773,15 @@ fn apply_object(
                         // the producer's own disclosure false, not the execution the seats replayed —
                         // whatever the class — recorded `CourtHeldVerdict`, charged the same, no
                         // kind-3 basis.
+                        // RFC-0002 F7: an IR dissection's bottom proves the same thing — the responder's
+                        // own claim of partials false — so it is recorded the same way.
                         let reason = palw_court_verdict_void_reason_v1(
                             builder.extras.offence_attribution_active,
-                            matches!(proof, crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { .. }),
+                            matches!(
+                                proof,
+                                crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { .. }
+                                    | crate::palw_court_v2::PalwCourtVerdictProofV2::TirDissection { .. }
+                            ),
                         );
                         builder.convict_by_court_verdict_as_v1(
                             ctx,
@@ -31589,8 +31865,18 @@ fn apply_object(
             // A fused class with no phase open is not at `Terminal` for this purpose — its
             // terminal move is the responder's root claim (ADR-0082 C-5), which is exactly the
             // move a close would be declared INSTEAD of. The same helper answers both questions.
-            let turn = court_turn_and_rung_deadline_v2(&session, court_session_class_is_fused_v2(&builder.state, &session)).0;
-            if turn != crate::palw_bisect::PalwBisectTurnV1::Terminal {
+            //
+            // **RFC-0002 F7: except the IR executor's own terminal move.** At an IR class's terminal
+            // the executor is clocked at every leaf, and at a leaf that is not dissected its move is
+            // an acquitting close — declared, when it does not fit one carrier. Refusing the
+            // declaration there would leave an honest executor no move its clock accepts; allowing
+            // it costs nothing it should not: the declared close must deliver AND adjudicate, or its
+            // declarer is convicted at its own assembly deadline (a whole close at a dissected leaf
+            // that does not fit the court is such a failure).
+            let turn = court_session_turn_and_rung_deadline_v2(&builder.state, &session).0;
+            let the_ir_executor_s_move =
+                *side == PalwCourtSideV1::Executor && court_session_at_the_ir_terminal_v1(&builder.state, &session);
+            if turn != crate::palw_bisect::PalwBisectTurnV1::Terminal && !the_ir_executor_s_move {
                 return Err(PalwStateV2Error::CourtCloseNotTerminal { session: *session_id, turn });
             }
             // One declaration per `(session, side)`, ever. It is what makes the interlock's
@@ -32174,6 +32460,75 @@ fn apply_object(
                 .apply_choice(choice, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             cap_session_rung_deadline_v2(&mut session, builder.params);
+            builder.write_court(*session_id, Some(session))?;
+        }
+        // -------------------------------------------------------------------------------------
+        // RFC-0002 Phase F, F7 — the IR history dissection's three moves (spec 04b §9.5)
+        //
+        // ADR-0082's arms over PALW-TIR-32: each refuses a move that is not legal in this session
+        // and hands the message to `PalwTirDissectPhaseV1`, whose rules are not restated here. The
+        // phase is a row of `tir_dissections` beside the session, written BEFORE `write_court`,
+        // which re-indexes the session under the phase's clock. The fence (the k-ary court), the
+        // signatures, the arity against the ruleset and the root claim's finalize — a demand
+        // evaluation, bounded by the IR court's limits — are the acceptance layer's
+        // (`check_court_tir_*_v1`), the split every court move uses. `palw_tir_v1` is the lock above.
+        // -------------------------------------------------------------------------------------
+        PalwConsensusObjectV2::CourtTirRootClaimed { session_id, root, arity, signature: _ } => {
+            let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            if session.dissection.is_some() || builder.state.tir_dissections.contains_key(session_id) {
+                return Err(PalwStateV2Error::DissectionAlreadyOpen(*session_id));
+            }
+            // A dissection begins where the ladder ends — for a held dissection, at the leaf the
+            // accusation named (`open_at_named_leaf`).
+            let narrowed = session.ladder.terminal_index().ok_or(PalwStateV2Error::LadderNotTerminal(*session_id))?;
+            let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
+            let refused = |why: String| PalwStateV2Error::DissectionRefused(*session_id, why);
+            if !builder.state.tir_classes.contains_key(&claim.class_id) {
+                return Err(refused("an IR root claim in a session about a class that is not an IR program".into()));
+            }
+            // The binding is the claim's — carried with its program empty, the registered class's put
+            // back — and the site is the CLASS's description of the narrowed leaf, derived from the
+            // program, never supplied by the mover.
+            let mut filled = root.as_ref().clone();
+            filled.finalize.binding = crate::palw_court_v2::tir_binding_filled_v1(&builder.state, &claim, &root.finalize.binding)
+                .map_err(|e| refused(e.to_string()))?;
+            crate::palw_court_v2::check_tir_binding_is_the_claims_v1(&builder.state, &claim, &filled.finalize.binding)
+                .map_err(|e| refused(e.to_string()))?;
+            let site = crate::palw_tir_court_v1::palw_tir_root_claim_site_v1(&filled, narrowed).map_err(refused)?;
+            let mut phase = crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open(
+                *session_id,
+                narrowed,
+                &site,
+                root,
+                *arity,
+                ctx.daa_score,
+                builder.params.turn_deadline_daa(),
+            )
+            .map_err(|e| refused(e.to_string()))?;
+            cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
+            builder.write_tir_dissection(*session_id, Some(phase));
+            builder.write_court(*session_id, Some(session))?;
+        }
+        PalwConsensusObjectV2::CourtTirDissected { session_id, round, signature: _ } => {
+            let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            let mut phase =
+                builder.state.tir_dissections.get(session_id).ok_or(PalwStateV2Error::NoDissection(*session_id))?.as_ref().clone();
+            phase
+                .apply_round(round, ctx.daa_score, builder.params.turn_deadline_daa())
+                .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
+            builder.write_tir_dissection(*session_id, Some(phase));
+            builder.write_court(*session_id, Some(session))?;
+        }
+        PalwConsensusObjectV2::CourtTirChildChosen { session_id, choice, signature: _ } => {
+            let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            let mut phase =
+                builder.state.tir_dissections.get(session_id).ok_or(PalwStateV2Error::NoDissection(*session_id))?.as_ref().clone();
+            phase
+                .apply_choice(choice, ctx.daa_score, builder.params.turn_deadline_daa())
+                .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
+            builder.write_tir_dissection(*session_id, Some(phase));
             builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts } => {
@@ -35102,6 +35457,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::NetworkDemand { key, old, new } => swap_write!(state.network_demand, key, old, new),
         PalwDeltaEntryV2::OperatorRing { key, old, new } => swap_write!(state.operator_ring, key, old, new),
         PalwDeltaEntryV2::TirClass { key, old, new } => swap_write!(state.tir_classes, key, old, new),
+        PalwDeltaEntryV2::TirDissection { key, old, new } => swap_write!(state.tir_dissections, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -35530,6 +35886,9 @@ pub struct PalwStateCarriageV2 {
     /// **RFC-0002 Phase F (F6): the IR classes.** A tagged tail (`0xC0`, clear of the capacity
     /// package's `0xB*` run), encoded only when non-empty; rooted.
     pub tir_classes: BTreeMap<Hash64, crate::palw_tir_admission_v1::PalwTirClassRecordV1>,
+    /// **RFC-0002 Phase F (F7): the open IR dissections.** A tagged tail (`0xC1`, after the IR
+    /// classes'), encoded only when non-empty; rooted.
+    pub tir_dissections: BTreeMap<Hash64, Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -35650,6 +36009,8 @@ const PALW_CARRIAGE_CAPACITY_N_TAIL_V1: u8 = 0xBA;
 /// with none is byte-identical to one before this tail existed. `0xC0`, clear of the capacity
 /// package's sequential `0xB*` run, so the two lines cannot collide when they are integrated.
 const PALW_CARRIAGE_TIR_CLASSES_TAIL_V1: u8 = 0xC0;
+/// RFC-0002 Phase F (F7): the open IR dissections' tail, encoded only when one is open.
+const PALW_CARRIAGE_TIR_DISSECTIONS_TAIL_V1: u8 = 0xC1;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -35864,6 +36225,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_TIR_CLASSES_TAIL_V1.serialize(writer)?;
             self.tir_classes.serialize(writer)?;
         }
+        if !self.tir_dissections.is_empty() {
+            PALW_CARRIAGE_TIR_DISSECTIONS_TAIL_V1.serialize(writer)?;
+            self.tir_dissections.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -35989,6 +36354,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_capacity_n = false;
         let mut tir_classes = BTreeMap::new();
         let mut seen_tir_classes = false;
+        let mut tir_dissections = BTreeMap::new();
+        let mut seen_tir_dissections = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -36131,6 +36498,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_tir_classes = true;
                     tir_classes = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_TIR_DISSECTIONS_TAIL_V1 if !seen_tir_dissections => {
+                    seen_tir_dissections = true;
+                    tir_dissections = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -36237,6 +36608,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             network_demand,
             operator_ring,
             tir_classes,
+            tir_dissections,
         })
     }
 }
@@ -36321,6 +36693,7 @@ impl PalwStateCarriageV2 {
             network_demand: state.network_demand.clone(),
             operator_ring: state.operator_ring.clone(),
             tir_classes: state.tir_classes.clone(),
+            tir_dissections: state.tir_dissections.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -36478,6 +36851,7 @@ impl PalwStateCarriageV2 {
             network_demand: self.network_demand,
             operator_ring: self.operator_ring,
             tir_classes: self.tir_classes,
+            tir_dissections: self.tir_dissections,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -53036,6 +53410,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::NetworkDemand { .. } => "network_demand",
                     PalwDeltaEntryV2::OperatorRing { .. } => "operator_ring",
                     PalwDeltaEntryV2::TirClass { .. } => "tir_class",
+                    // RFC-0002 F7: its round trip is the IR dissection suite's.
+                    PalwDeltaEntryV2::TirDissection { .. } => "tir_dissection",
                 });
             }
         }
@@ -53158,6 +53534,8 @@ pub(crate) mod tests {
             (87, PalwDeltaEntryV2::OperatorRing { key: 7, old: None, new: None }),
             // RFC-0002 Phase F (F6), after stage 4's.
             (88, PalwDeltaEntryV2::TirClass { key, old: None, new: None }),
+            // RFC-0002 Phase F (F7), after F6's.
+            (89, PalwDeltaEntryV2::TirDissection { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -53778,6 +54156,8 @@ pub(crate) mod tests {
             network_demand: _,
             operator_ring: _,
             tir_classes: _,
+            // RFC-0002 F7: its own Some-only block, empty here.
+            tir_dissections: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -53866,6 +54246,10 @@ pub(crate) mod tests {
             })),
             ("tir_classes", Box::new(|s| {
                 s.tir_classes.insert(block(0xC0), crate::palw_tir_admission_v1::PalwTirClassRecordV1::test_row_v1(block(0xC0)));
+            })),
+            ("tir_dissections", Box::new(|s| {
+                let phase = crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1::test_phase_v1(block(0xC1));
+                s.tir_dissections.insert(block(0xC1), Box::new(phase));
             })),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),

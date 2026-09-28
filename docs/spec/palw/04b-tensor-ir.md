@@ -1049,6 +1049,312 @@ program vector:
 and requires identical bytes; `TIR_BLESS=1` rewrites them, which is a change of the semantics and is
 reviewed as one.
 
+### 9.5 H dissection (PALW-TIR-37)
+
+A commit point whose cone reduces over the history costs `O(H)` to recompute, and at a long context
+one tile of it does not fit a close. The court then **dissects** the history: the responder states
+the totals of every reduction over `H` in the tile's cone, the history is cut into ranges, the
+responder states every reduction's partial over each range, and the challenger follows a range that
+it disputes down to one `h_tile` of positions, which the court evaluates. This section defines the
+arithmetic of that exchange — which reductions, which of their elements, what "evaluated over a
+range" means, how partials fold, what the bottom compares — so that two implementations reach the
+same verdict on every move. It extends §9.4: everything not stated here is §9.4's.
+
+The protocol that carries the exchange on the chain — its objects, messages, clocks and charges — is
+ADR-0082's with the attention triple replaced by "every reduction over `H`"; §9.5.9 states the parts an
+independent implementation must reproduce byte for byte, and the rest is Phase F's.
+
+#### 9.5.1 Reductions over `H` and dissected leaves
+
+A node `r` of block `b` **reduces over `H`** iff
+
+- it is a `ReduceSum` or a `ReduceMax` whose operand's declared shape has `H` at its `axis`; or
+- it is a `MatMul` whose first operand's declared shape has `H` as its last dimension (the
+  contraction axis).
+
+The operand is `Node(j)` or `CarryIn(k)` (its declared `out`, resp. the carry-in's declared type); a
+reduction whose operand is any other `Ref` does not reduce over `H` (a param, const or state has no
+`H`).
+
+Let commit point `n` of block `b` have a committed tile in context `(p, o)` (§10.3, *Committed tiles*).
+Its **cone** is §10.2's: the nodes of `b` reachable backwards from `n` through `Node` refs without
+passing through another commit point (the walk stops AT a commit point other than `n` and does not
+enter it). Its **reductions** `r_1 < r_2 < … < r_m` are the nodes of the cone that reduce over `H`, in
+node index order — `n` itself included if it reduces over `H`; another commit point never is (it is
+a leaf of the cone). The tile is **dissected** iff `m ≥ 1`. A state checkpoint leaf and a Hist tile
+leaf are never dissected (they are opened values).
+
+The **site** of a dissected tile is, per reduction `r_i`:
+
+- its **fold**: `Max` for a `ReduceMax`, `Sum` for a `ReduceSum` or a `MatMul`;
+- its **bound**: the interval §7 proves for `r_i` (a partial over any sub-range of the history lies
+  in it: an exact partial sum's positive and negative parts are sub-sums of the total's, and a
+  partial maximum is one of the maximised values);
+- its **element count** `E_i`: the element count of `r_i`'s output at the context's `H`;
+
+and, for the whole site, `H = min(p + 1, W)` of block `b` (§9.4, *Contexts*) and the class's
+`h_tile` (positions per history tile of its commitment layout). The dissection's arithmetic needs
+only `h_tile ≥ 1`; the Phase F commitment layout (`PalwTirLayoutV1`) further requires `h_tile` to be
+a power of two in `[1, 4096]`, and every commit and state tile to be `[4, 2^16]` lanes (under the
+tiled logits scheme the logits tile divides 4,096, §10.3). The site is a function of the
+program, the layout and the tile's coordinate; nothing in it is supplied by a mover. A site with
+`m > 16` is refused (`PALW_TIR_DISSECT_MAX_REDUCTIONS`); admission refuses a program that has one
+(§9.5.6).
+
+#### 9.5.2 Supplied nodes and range evaluation
+
+`eval_range(ctx, target, elements, supplied, range)` is §9.4's `eval_demanded` of target
+`node(p, o, target)` with two changes:
+
+1. **Supplied nodes.** `supplied` is a set of node indices of the target's block, none equal to
+   `target` (a supplied set holding the target, or an index that is no node of the block, refuses
+   the request, class `Malformed`, before anything is read). In the target's context `(p, o)` — and only there — every node of `supplied` is a *leaf*
+   exactly as a commit point is: its element `i` is `source.node(p, o, n, i)`, which must be a value
+   of the node's dtype (else `Operand`); it is never computed, costs nothing and its operands are
+   never read. (A supplied node that the evaluation never reaches is never asked for.)
+2. **The range.** With `range = (from, to)`, the target MUST reduce over `H` (§9.5.1) and
+   `0 ≤ from < to ≤ H` must hold (else the request is refused, class `Malformed`, before anything is
+   read). The target then reduces over the history indices `t ∈ [from, to)` only:
+   - `MatMul`: for `t = from … to − 1`, `a[β_a, r, t]` and `b[β_b, t, c]` are read (in that order,
+     `t` ascending) and summed exactly under the order-free rule of §6.3 (PALW-TIR-24), in the
+     node's declared dtype;
+   - `ReduceSum axis`: `x[o′]` with `o′[axis] = t` for `t ∈ [from, to)`, summed exactly under the same
+     rule;
+   - `ReduceMax axis`: the maximum of the same `x[o′]`.
+   Its work is `to − from` terms per computed element of the target (instead of `H`). Every other
+   node — including every other reduction over `H` that the evaluation computes, which is not
+   possible in a dissection (they are supplied), but is defined — reduces over its whole axis.
+
+A request whose `range` is absent is `eval_demanded` with supplied nodes. The requests, the work
+and the refusals are §9.4's, with the supplied nodes' elements among the `node` requests (they ARE
+`source.node` questions: a source answers them from the dissection's claimed values).
+
+#### 9.5.3 The root claim: the finalize and the element closure
+
+A **range claim** is, for each reduction `r_i` of a site, one integer per element of an element
+list `L_i`: `v_i[e]` for `e ∈ L_i`. A **root claim** is `(L, T)`: the element lists and the
+**totals** `T_i[e]`, the responder's statement of `r_i`'s element `e` over the whole history
+`[0, H)`. Integers are unbounded in this definition (a wire form carries them as `i128`); each is
+checked against its bound.
+
+**The finalize.** The tile's elements (§10.3: the `tile_len`-value run of `n`'s value at `H`,
+row-major, the last one ragged) are evaluated by `eval_range(ctx, n, tile elements, S, none)` with
+`S = {r_1, …, r_m} \ {n}`, every supplied value answered from `T` (`source.node(p, o, r_i, e) =
+T_i[e]` for `e ∈ L_i`; any other element of a supplied node is refused, so the evaluation fails
+`Missing`). If `n` itself reduces over `H` (`n = r_m`), the finalize of element `e` is `T_m[e]`
+itself: `L_m` must contain every tile element and nothing is evaluated for them.
+
+**The element closure** `C = (C_1, …, C_m)` of a tile is the least family of element sets such that
+
+- every element of a supplied reduction that the finalize reads is in its set (for `n = r_m`, `C_m`
+  contains the tile's elements); and
+- for every `i` and every `e ∈ C_i`, every element of a reduction `r_j ≠ r_i` read by the **probe**
+  `eval_range(ctx, r_i, [e], S_i, (0, 1))` with `S_i = {r_1, …, r_m} \ {r_i}` — `r_i`'s element `e`
+  over the one history index `t = 0`, every OTHER reduction of the site supplied — is in `C_j`.
+
+It is computed by iterating the second rule to a fixpoint (each set only grows and is bounded by
+`E_j`). Why one index suffices: an `H`-local node's term at history index `t` reads another
+reduction's output as an `H`-free operand (§10.3, *Dissectability is structural*), whose element is
+fixed by the output index alone — the same element at every `t` — provided no read of a reduction's
+output inside the `H`-local region is data-dependent (§9.5.6, obligation O-2). The probe needs `H ≥ 1`,
+which always holds.
+
+**Admitting a root claim.** The claim rides with the tile's **finalize carriage** — the form of a
+cone close (§10.4): the binding, the tile's opening and preimage, and exactly the evidence the
+finalize and the probes read (every other reduction's value comes from `T`, never from evidence). Its
+checks are a cone close's, up to the evaluation: the binding speaks about the committed execution,
+the tile opens under it, and every carried leaf lies in its proven interval — but a carriage whose
+own checks CONVICT (a binding fault, a malformed leaf, a committed value outside its interval,
+PALW-TIR-33) is not a root claim: that tile is closed by a cone close, not dissected. Then, and each
+failure refuses the claim — a refused MOVE, never a verdict; the order decides only which refusal
+is reported:
+
+1. the tile is dissected and is the one the dispute narrowed to;
+2. shape: `m` lists and `m` value lists; each `L_i` strictly ascending with every element `< E_i` —
+   possibly EMPTY: a tile that reads none of a reduction of its cone (a `Concat`, `Slice` or `Gather`
+   routing its rows around it) claims nothing of it, and step 5 then requires `L_i = ∅`; a round's
+   children and the bottom carry and compare nothing for it; `|v_i| = |L_i|`; `Σ |L_i| ≤ 4096`
+   (`PALW_TIR_DISSECT_MAX_VALUES`);
+3. every `T_i[e]` lies in `r_i`'s bound;
+4. the finalize, with `T` supplied, **reproduces the committed tile** value for value, reading
+   exactly the evidence the claim carries;
+5. the element closure computed with `T` supplied is **exactly `L`**: no claimed element goes
+   unread, and no read element is unclaimed (an unclaimed read is refused by the source, so the
+   evaluation fails).
+
+Steps 4 and 5 read only the tile's cone at one history index per reduction element: their work is
+bounded by the tile's box demand at `H = 1` plus the finalize (§10.3), never by `H`.
+
+#### 9.5.4 Rounds: the cut, the partials and the fold
+
+The history is `T_h = ⌈H / h_tile⌉` **history tiles**, tile `τ` covering positions
+`[τ · h_tile, min((τ + 1) · h_tile, H))`. A dispute is over a range of tiles `(first, count)`,
+initially `(0, T_h)`, with a claim — initially the root's totals `T`.
+
+**The cut** at arity `k` (a power of two, `2 ≤ k ≤ 64`) of a range `(first, count)` with `count ≥ 2`
+is `w = ⌈count / k⌉` and the children `(first + s, min(w, count − s))` for `s = 0, w, 2w, …` while
+`s < count` — between 2 and `k` children, in order, the last possibly shorter. A range of one tile
+has no cut: it is the **bottom**. The number of rounds to reach the bottom from `T_h` tiles is the
+number of times `count ← ⌈count / k⌉` is applied before `count ≤ 1`.
+
+**A round.** For each child `(f, c)` the responder states a range claim over positions
+`[f · h_tile, min((f + c) · h_tile, H))`: for each `r_i` and each `e ∈ L_i` (the root's lists, at
+every level) the partial `P_i[e] = eval_range(ctx, r_i, [e], S_i, range)` with
+`S_i = {r_1, …, r_m} \ {r_i}` supplied **from the root's totals `T`** — never from the parent's or a
+child's claim. A round is admitted iff it has one claim per child, each of the root's shape, every
+value inside its reduction's bound, and the children **fold** to the claim of the range under
+dispute, for every `(i, e)`:
+
+- `Sum`: `Σ_child P_i[e] = claim_i[e]` exactly (unbounded integers);
+- `Max`: `max_child P_i[e] = claim_i[e]`.
+
+A round that does not fold is the responder's self-contradiction; it is refused as a move, and the
+responder's turn runs on (its silence then loses). The challenger then names one child — by its index
+in the cut, at the dispute's round — and the named child's range and claim become the dispute's; the
+round counter advances. A dispute opened on `T_h ≤ 1` tiles is at the bottom at once, and no dispute
+takes more rounds than the cut's own recurrence from `T_h` (a choice past it is refused).
+
+#### 9.5.5 The bottom
+
+At the bottom — one tile `τ`, positions `[from, to)`, and the claim `claim` the dispute narrowed
+to — the court evaluates, for each `i` in order and each `e ∈ L_i` in order,
+`eval_range(ctx, r_i, [e], S_i, (from, to))` with `S_i` supplied from the ROOT's totals `T`, and
+compares the list of values (flattened, `i` major, then `e`) with `claim` flattened alike:
+
+- the first index at which they differ convicts the executor (`ComputationMismatch { value_index }`
+  on the dissected leaf);
+- none: no fault is found and the challenger is defeated.
+
+The bottom rides with its own carriage in the cone close's form, the tile being the dissected one:
+its checks are a cone close's, and there its convictions STAND (a carried leaf outside its proven
+interval convicts, PALW-TIR-33, before anything is evaluated). The evaluation reads exactly the
+evidence the bottom carries — the tile's history rows, the `H`-free leaves of the `H`-local region,
+and nothing past the range — and a carriage with anything more or less is refused.
+
+#### 9.5.6 Admission obligations and bounds
+
+A cone of a registered class is dissected only where the network's court can play the exchange (the
+k-ary court, Phase F); without it a cone that reduces over `H` is adjudicated whole, and its tile at
+`H = W` must fit like any other (§10.3). Where it is dissected, admission refuses the class, naming
+the commit point, unless every dissected cone meets:
+
+- **O-1 (count).** At most 16 reductions over `H` in the cone.
+- **O-2 (no data-dependent read of a reduction).** No computed `Gather` of the cone whose indices
+  carry `H` has a data operand that depends (through computed nodes of the cone) on a reduction over
+  `H`, and no computed `Select` whose condition carries `H` has a value operand (`a` or `b`) that
+  does — the two reads whose element is chosen by a history-varying VALUE rather than by the output
+  index (a `Select` reads its condition, then only the chosen operand, §9.4). A value operand the
+  condition reads itself at the same element is exempt: the condition a `Compare` of the `Select`'s
+  shape with that operand, of the same shape, as a direct input — a shifted softmax's
+  clamp-by-select `select(x − m < floor, floor, x − m)` reads `m` through its condition whichever it
+  chooses. An `H`-free read is the same at every history index, so only these matter; with O-2 the
+  one-index probe of §9.5.3 names every element any history index reads, and the element closure is
+  exact.
+- **O-3 (`H`-free totals).** Every reduction over `H` of the cone has an `H`-free output. This
+  follows from §2.2 (a shape holds at most one `H`): a `ReduceSum`/`ReduceMax` over `H` keeps its axis
+  as 1, and a `MatMul` contracting `H` has `H` only in `K`. It is kept as a guard; no program that
+  passes §2.2 breaks it.
+- **O-4 (the bottom fits).** The cone's terminal is one history tile — the box demand of the tile at
+  `H = min(h_tile, W)` (§10.3, *Dissection*) — and its work, its opened bytes and its
+  multiply-accumulates fit the court's ceilings, as every terminal does; its close, as carried, is
+  carriable (PALW-TIR-38).
+- **O-5 (the exchange fits).** The claim's value count is bounded by `V`, the box demand of §10.3 at
+  `H = 1` arriving at the cone's reductions: from the tile's `tile_len` elements (capped at the
+  node's count), each computed node in descending index order passes `d · K` to each operand of a
+  `MatMul` (`K` its first operand's last extent at `H = 1`, whatever that operand is — a node, a
+  carry-in, a param, a constant or a state), `d · x.shape[axis]` to a reduction's, `⌈d / k⌉ ·
+  x.shape[axis]` to a `TopK`'s and `d` to every other operand, each computed operand's demand capped
+  at its element count; `V` is the sum over the reductions of what arrives (capped likewise). `V` is
+  never below the closure a claim carries (the vectors pin both). Then `V ≤
+  4096`; a round at the court's arity `k` — `6 + k · (4 + 4m + 16V)` bytes with `m` reductions, plus
+  the move's frame of 4,764 bytes — fits one lifecycle carrier (100,000 bytes); so does the root
+  claim — the 16 KiB close frame, the terminal's opened bytes, `20V` and the frame (the program is
+  referenced by the class, never carried); and
+  the whole exchange fits strictly inside the court window `window_court`:
+  `(2 · (B + R) + t + 1) · D + 2 · 4 · max_close_chunks < window_court`, with `R` the rounds of the
+  cut at arity `k` from `⌈max_context / h_tile⌉` tiles (§9.5.4), `B = rounds(max_step_leaf_count)`
+  of the binary leaf ladder (the same recurrence at arity 2; `B = 0` under the held regime, where the
+  dispute opens at the named leaf), `t` the court's terminal rounds, `D` its rung window (each round
+  is two clocked moves, the root claim one), and the last term the DAA reserved for assembling
+  closes of `max_close_chunks` chunks (`palw_close_assembly_daa_v1`: 2 · 4 per chunk) — the rule that
+  sizes the network's arity (ADR-0082 Z4).
+
+#### 9.5.7 Why a lie is always convictable (informative)
+
+Take the honest run's values `h_i[e]` of every reduction over `[0, H)`. The reductions are in node
+order and refs are strictly backward, so `r_i`'s cone reads only reductions `r_j` with `j < i`. If a
+root claim `T` differs from `h` somewhere, let `i` be the first reduction with `T_i ≠ h_i`: every
+`r_j`, `j < i`, is supplied at its honest value, so `r_i` evaluated with the others supplied from `T`
+is `h_i`, and `T_i` is a false statement about an evaluation the court can repeat. At every round the
+children of a false claim contain a false child: for `Sum`, honest children sum to the honest value,
+not to the claim; for `Max`, a claim above the honest maximum needs a child that claims it, and one
+below it leaves the child that holds the maximum under-claimed. Following false children reaches a
+bottom whose evaluation differs from the claim. Conversely, an honest responder's every claim is an
+evaluation, so every bottom matches and the challenger is defeated. A committed tile that is not the
+honest one finalizes only from a `T ≠ h` (the finalize is a function of `T`), so a forged tile is
+always convictable; a false `T` that happens to finalize to the honest tile (a softmax is
+shift-invariant in its maximum) is convicted too — it is still a false claim.
+
+#### 9.5.8 Golden vectors
+
+`dissect/<program>.json` (`format = palw-tir-v1/dissect-vectors/1`), one per corpus model with a
+dissected tile (today the dense GQA and the sliding + global models). `job` is the run the cases are
+cut from — the program vector's model on the prompt `prompt` (`prefill` tokens) with `generated` fed
+back (`decode` tokens), history tiles of `h_tile` positions. Each case is a dissected tile of the
+last two positions: `leaf` (its step-leaf `index`, `pos`, `occurrence`, `node`, `first_element` and
+`values`, the tile's length), `site` (`reductions`, `folds` = `sum`/`max`, `bounds` = the proven
+`{lo, hi}` of each, `h`, `h_tile`, `counts` = each `E_i`), `value_bound` (O-5's `V` at the node's
+tile length), the element closure `elements` (the lists `L_i`, some possibly empty), the honest
+`totals`, `finalize` (the tile the totals finalize to — the committed one),
+`cut` (the first cut at arity 2: each child's `tiles` = `[first, count]`, its `positions` = `[from,
+to)` and its `partials`, every other reduction supplied from the totals), and `bottom` (the last
+tile, reached by naming the last child at every round: its `positions` and the partials the court
+evaluates there). Two files carry their program inline (`program: null`, `inline` =
+`{program_borsh_hex, params}` in the program vectors' form) — the second implementation's findings
+H1 and H2: `h1-concat-maxima` (two maxima concatenated, committed at a 6-lane tile: the second tile
+claims an EMPTY list for the first maximum) and `h2-matmul-const-first` (a maximum over a
+constant-by-history `MatMul` whose `V` counts `d · K` through the constant, equal to its closure). `cargo test -p kaspa-consensus-core --test palw_tir_dissect_vectors` regenerates
+every file and requires identical bytes, checking each case against the court as it goes (the root
+claim is admitted, every round folds, the bottom finds no fault); `TIR_BLESS=1` rewrites them, which
+is a change of the semantics and is reviewed as one.
+
+#### 9.5.9 The carriage on the chain (Phase F)
+
+The exchange rides as ADR-0082's does, as three lifecycle objects and one close proof, appended after
+Phase F's IR objects (each refused below `palw_tir_v1` and, for the moves, where the k-ary court is
+not armed):
+
+- `CourtTirRootClaimed { session_id, root, arity, signature }` (object tag 64): the root claim
+  `{ version = 1, elements, totals, finalize }` (`elements: Vec<Vec<u32>>`, `totals` a range claim
+  `{ partials: Vec<Vec<i128>> }`, `finalize` the carriage above); `arity` MUST be the ruleset's
+  derived dissection arity. Like every IR binding on the chain, the carriage's binding carries its
+  class with the program EMPTY: the chain puts back the registered class's program before reading
+  it, and refuses a carried one;
+- `CourtTirDissected { session_id, round, signature }` (65): `round = { version = 1, children }`,
+  one range claim per child of the cut, in order;
+- `CourtTirChildChosen { session_id, choice, signature }` (66):
+  `choice = { version = 1, session_id, round: u32, child: u8 }`;
+- the close proof `TirDissection { bottom }` (proof tag 9), graded against the dispute's phase;
+  `ComputationMismatch` is `ExecutorGuilty`, no fault `ChallengerDefeated`.
+
+The executor signs the root claim and every round, the challenger every choice, with ML-DSA-87 under
+ADR-0082's responder and challenger contexts, over messages that open with their own domains (so no
+signature over another court's move is one over these):
+
+- root claim: `"misaka-palw/tir/dissect/root/v1" ‖ session_id ‖ borsh(version, elements, totals)`;
+- round: `"misaka-palw/tir/dissect/round/v1" ‖ session_id ‖ le32(the dispute's round) ‖ borsh(round)`;
+- choice: `"misaka-palw/tir/dissect/choice/v1" ‖ borsh(choice)`.
+
+The clock is ADR-0082's. At the dissected leaf the executor owes the root claim (or a close that
+acquits it); within the dispute it owes each round, and the challenger each choice, within one rung
+window of the previous move; silence past its window loses the dispute for the silent party (the
+executor's at the root claim under ADR-0082's mercies for an opening nobody could have answered,
+unchanged). At the bottom nobody is clocked: the challenger files the bottom (or the executor an
+acquitting one), and a dispute nobody closes ends at the session's backstop on the challenger's side.
+Under the held regime, where no bisection is played, a one-move accusation whose cone close names a
+dissected tile (and carries nothing else) opens the dispute at that tile, the executor's root claim
+its first move.
+
 ## 10. Commitment and the court
 
 ### 10.1 Commit points (PALW-TIR-14)
@@ -1152,7 +1458,24 @@ along an `H` axis, a `MatMul` contracting `H` — is **dissected**: the court na
 claimed partial results over the canonical chunks `[c · h_chunk, (c+1) · h_chunk)` of the window's
 index space, and its terminal step recomputes one chunk. Its terminal cost is the box demand of one
 tile at `H = min(h_chunk, W)`; a cone with no such reduction has the terminal cost of its tile at
-`H = W`. Each terminal cost MUST fit the tile ceilings.
+`H = W`. Each terminal cost MUST fit the tile ceilings. §9.5 defines the exchange — which values are
+claimed, how they fold, what the bottom evaluates — and the obligations admission checks for it.
+
+**Every terminal close is carriable (PALW-TIR-38).** A class with a dissected tile clocks its
+executor at every terminal leaf (ADR-0082 C-5: the clock cannot tell a dissected leaf from another),
+so the acquitting close of every tile — the whole tile's for a cone that is not dissected, the
+bottom's for one that is — MUST be one the chain can carry: its bytes as carried (the close frame,
+16 KiB, and the tile's opened bytes; the program is referenced by the class, never carried) at most
+`min(max_close_chunks, 32) × 100,000` — the chunks the fold assembles (its bitmap addresses 32) of
+one carrier each, 3,200,000 bytes on testnet-12, whose ruleset's close ceiling (202 chunks) is wider
+than that. A class past it is refused, naming the bytes and the cap; the registrant declares smaller
+tiles. Under the tiled logits scheme the logits node's tile length MUST divide the scheme's 4,096
+lanes (a step tile then lies inside one trace tile, at an offset, and the logits consistency check
+compares it with that part), so a large vocabulary's head can be tiled finer: at `d_model = 1,536`
+(Qwen2.5-1.5B A16) a logits tile reads 1,536 weight bytes a lane and 2,048 lanes is the largest
+admissible divisor. The boundary, on that class's FFN gate tile (1,536 weight bytes and its
+per-channel tables a lane): 2,045 lanes are admitted, 2,046 refused (3,200,470 bytes as carried >
+3,200,000) — `misaka-palw-base0/tests/tir_a16_admission_dissected.rs` pins both.
 
 **Checkpoint intervals.** The *update cone* of `Fixed` state `j` in a block that writes it is the
 cone (§10.2) of its `StateWrite` node (counted once in the cone work). Replaying `j` over positions
@@ -1323,6 +1646,9 @@ tensors are `{"dtype": "i32", "shape": [2, 3], "data": ["1", "-2", …]}` in row
 `cargo test -p misaka-palw-tir --test golden` regenerates every file and requires identical bytes;
 `TIR_BLESS=1` rewrites them, which is a change of the semantics and is reviewed as one.
 
+- **`demand/<program>.json`** and **`dissect/<program>.json`**: §9.4's demand evaluation and §9.5.8's
+  history dissection, each regenerated by its own test as its section states.
+
 ## 13. Rules
 
 - **PALW-TIR-1 (the primitive set).** An IR class's execution MUST be the evaluation of its
@@ -1396,6 +1722,15 @@ tensors are `{"dtype": "i32", "shape": [2, 3], "data": ["1", "-2", …]}` in row
 - **PALW-TIR-36 (no structured control).** v1 has no `BoundedScan`, `BoundedMap` or `BoundedReduce`:
   no corpus family has a recurrence inside a position, heads/experts/channels are batched as tensor
   axes, and a reduction with a user body is order-dependent unless proved associative and exact.
+- **PALW-TIR-38 (carriable closes).** As §10.3: every terminal close of a class — a whole tile's or a
+  dissected cone's bottom — fits the chunks the chain assembles; under the tiled logits scheme the
+  logits tile length divides 4,096.
+- **PALW-TIR-37 (H dissection).** A committed tile whose cone reduces over `H` is dissected as §9.5
+  states: its reductions and site are the program's; a root claim is admitted only if it finalizes
+  to the committed tile and its element lists are exactly the element closure; every round folds
+  exactly to the claim under dispute, each partial computed against the ROOT's totals; the bottom
+  evaluates one history tile and convicts on the first differing value. Admission refuses a
+  dissected cone that breaks O-1 to O-5.
 
 ## 14. Deviations from RFC-0002 and open items
 
@@ -1419,7 +1754,11 @@ Deviations (each argued in `docs/design/palw/tir/corpus-v1.md`):
 5. **`token_bound`** is a program field (the embedding `Gather` needs a provable index range).
 6. **Committed operands are checked against proven intervals** (PALW-TIR-33), so the range analysis
    is sound for cones evaluated from commitments; CarryIn takes the full dtype range.
-7. **The 2^28-element cap is for computed tensors only.** Applied to params (RFC §5.4 lists it for
+7. **The dissection is over every reduction over `H`, not the attention triple.** RFC-0002 and
+   ADR-0082 dissect the fused attention's three quantities; §9.5 dissects whatever reductions the
+   program's cone has (at most sixteen), each folding exactly, with the attention as one instance
+   (PALW-TIR-37).
+8. **The 2^28-element cap is for computed tensors only.** Applied to params (RFC §5.4 lists it for
    "any tensor") it would refuse every real vocabulary embedding and every large MoE layer; params
    get a sanity bound of 2^40 elements instead (NF-8).
 
