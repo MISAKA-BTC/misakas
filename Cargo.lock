@@ -6244,8 +6244,10 @@ version = "1.1.0"
 dependencies = [
  "borsh",
  "kaspa-consensus-core",
+ "libc",
  "misaka-palw-base0",
  "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rayon",

@@ -20,13 +20,20 @@ path = "src/bin/tir-exec-bench.rs"
 [dependencies]
 misaka-palw-tir = { path = "../misaka-palw-tir" }
 rayon.workspace = true
-# Only for `tir-exec-bench --legacy`: the legacy A16 engine at the same geometry, the comparison
-# the Phase F plan names (F9). Off by default so the backend builds without the consensus crates.
-misaka-palw-base0 = { workspace = true, optional = true }
+# `node`: the executor as a node runs a class — the PALWTIR1 container mapped in place, the step
+# leg of Phase F (F4) streamed from an execution, the roots a claim commits. It needs the consensus
+# types those are defined in; the executor itself does not, so it stays a feature.
 kaspa-consensus-core = { workspace = true, optional = true }
+misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact", optional = true }
+libc = { workspace = true, optional = true }
+borsh = { workspace = true, optional = true }
+# Only for `tir-exec-bench --legacy/--mirror`: the legacy A16 engine at the same geometry, the
+# comparison the Phase F plan names (F9).
+misaka-palw-base0 = { workspace = true, optional = true }
 
 [features]
-legacy-bench = ["dep:misaka-palw-base0", "dep:kaspa-consensus-core"]
+node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:libc", "dep:borsh"]
+legacy-bench = ["node", "dep:misaka-palw-base0"]
 
 [dev-dependencies]
 # The golden vectors carry each primitive as its canonical Borsh encoding.

@@ -37,6 +37,8 @@ pub mod elem;
 pub mod exec;
 pub mod kernels;
 pub mod layout;
+#[cfg(feature = "node")]
+pub mod node;
 pub mod params;
 pub mod plan;
 pub mod ranges;

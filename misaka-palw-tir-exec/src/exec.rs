@@ -368,6 +368,11 @@ pub(crate) struct RunBufs {
     pub fixed_next: Vec<Buf>,
     pub written: Vec<bool>,
     pub hist: Vec<HistBuf>,
+    /// Per `Hist` instance, when kept: the last `tail_rows` appended rows, oldest first, as lanes —
+    /// kept whatever the window (a step leg's history tile covers `h_tile` rows, which may be more
+    /// than a sliding window still shows).
+    pub tails: Vec<std::collections::VecDeque<Vec<i32>>>,
+    pub tail_rows: usize,
 }
 
 impl RunBufs {
@@ -387,7 +392,15 @@ impl RunBufs {
             }
         }
         let n = plan.instances.len();
-        RunBufs { pos: 0, fixed_next: fixed.clone(), fixed, written: vec![false; n], hist }
+        RunBufs {
+            pos: 0,
+            fixed_next: fixed.clone(),
+            fixed,
+            written: vec![false; n],
+            hist,
+            tails: vec![Default::default(); n],
+            tail_rows: 0,
+        }
     }
 }
 
@@ -470,6 +483,28 @@ impl<'a> TirExecutor<'a> {
         &self.work.node_profile
     }
 
+    /// Keep the last `rows` appended rows of every history, whatever its window
+    /// ([`Self::hist_tail`]); 0 keeps none.
+    pub fn set_hist_tail(&mut self, rows: usize) {
+        self.run.tail_rows = rows;
+        for t in self.run.tails.iter_mut() {
+            t.clear();
+        }
+    }
+
+    /// The kept tail of the history instance of state `j` at `layer`: the last appended rows,
+    /// oldest first, as lanes.
+    pub fn hist_tail(&self, j: u16, layer: Option<u16>) -> Option<&std::collections::VecDeque<Vec<i32>>> {
+        self.run.tails.get(self.plan.instance(j, layer)? as usize)
+    }
+
+    /// The current value of the `Fixed` instance of state `j` at `layer` (after the last
+    /// successful step).
+    pub fn fixed_value(&self, j: u16, layer: Option<u16>) -> Option<Slice<'_>> {
+        let k = self.plan.instance(j, layer)? as usize;
+        matches!(self.plan.instances[k].kind, StateKind::Fixed { .. }).then(|| self.run.fixed[k].slice())
+    }
+
     /// The last successful step's logits.
     pub fn logits(&self) -> (&[usize], Slice<'_>) {
         (&self.work.logits_shape, self.work.logits.slice())
@@ -478,6 +513,14 @@ impl<'a> TirExecutor<'a> {
     /// One position: `token` at [`Self::pos`]. On success the state advances; on failure it is
     /// exactly as before (spec 04b §9.1(4)).
     pub fn step(&mut self, token: u32, sink: &mut dyn StepSink) -> TirResult<()> {
+        self.step_opt(token, sink, true)
+    }
+
+    /// [`Self::step`], evaluating `post` only when `run_post` — a job's positions whose logits are
+    /// not consumed skip it (the step space of Phase F, design §2.5). Exact: `post` writes no
+    /// state (NF-19), so the run state after the position is the same either way; the logits are
+    /// then not produced ([`Self::logits`] is empty).
+    pub fn step_opt(&mut self, token: u32, sink: &mut dyn StepSink, run_post: bool) -> TirResult<()> {
         let p = &self.plan.program;
         let pos = self.run.pos;
         if pos >= p.history_bound {
@@ -487,13 +530,24 @@ impl<'a> TirExecutor<'a> {
             return Err(TirError::new(TirErrorKind::Operand, format!("token {token} ≥ token_bound {}", p.token_bound)));
         }
         self.work.inputs = [token, pos];
-        let r = self.step_inner(pos, sink);
+        let r = self.step_inner(pos, sink, run_post);
         let run = &mut self.run;
         match r {
             Ok(()) => {
                 for (k, w) in run.written.iter_mut().enumerate() {
                     if std::mem::replace(w, false) {
                         std::mem::swap(&mut run.fixed[k], &mut run.fixed_next[k]);
+                    }
+                }
+                if run.tail_rows > 0 {
+                    for (h, tail) in run.hist.iter().zip(run.tails.iter_mut()) {
+                        for k in 0..h.pending {
+                            let at = (h.start + h.rows + k) * h.row;
+                            let mut row = if tail.len() >= run.tail_rows { tail.pop_front().unwrap_or_default() } else { Vec::new() };
+                            row.clear();
+                            with_slice!(h.data.slice(), v => row.extend(v[at..at + h.row].iter().map(|x| x.to_i64() as i32)));
+                            tail.push_back(row);
+                        }
                     }
                 }
                 for h in run.hist.iter_mut() {
@@ -510,14 +564,19 @@ impl<'a> TirExecutor<'a> {
         }
     }
 
-    fn step_inner(&mut self, pos: u32, sink: &mut dyn StepSink) -> TirResult<()> {
+    fn step_inner(&mut self, pos: u32, sink: &mut dyn StepSink, run_post: bool) -> TirResult<()> {
         let plan = self.plan;
         let params = self.params;
         let every = sink.every_node();
         let n_occ = plan.occurrences.len();
         let TirExecutor { run, work, occ_plans, .. } = self;
         work.carry.clear();
-        for (occ, &(block, layer)) in plan.occurrences.iter().enumerate() {
+        if !run_post {
+            work.logits_shape.clear();
+            work.logits = Buf::default();
+        }
+        let run_occ = if run_post { n_occ } else { n_occ - 1 };
+        for (occ, &(block, layer)) in plan.occurrences.iter().enumerate().take(run_occ) {
             let bp = &occ_plans[occ];
             let h = bp.window.map(|w| (pos as usize + 1).min(w as usize)).unwrap_or(1);
             let n = bp.nodes.len();
@@ -722,6 +781,7 @@ impl<'a> TirExecutor<'a> {
         }
         let mut run = RunBufs::initial(self.plan);
         run.pos = st.pos;
+        run.tail_rows = self.run.tail_rows;
         let bad = |what: &str| TirError::new(TirErrorKind::Operand, what.to_string());
         for (k, inst) in self.plan.instances.iter().enumerate() {
             let key = (inst.state, inst.layer);
