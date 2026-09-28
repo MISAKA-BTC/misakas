@@ -25,7 +25,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use kaspa_consensus_core::Hash64;
-use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
+use kaspa_consensus_core::palw_artifact::{PalwArtifactMultiproofV1, PalwArtifactOpeningV1};
 use kaspa_consensus_core::palw_prompt_ids_v1::{
     PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, PalwPromptIdsOpeningV1, prompt_ids_opening_v1,
 };
@@ -417,6 +417,12 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
 
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
         self.params.param_opening(leaf)
+    }
+
+    /// One multiproof read off the held inventory's levels (the builder's bytes; see
+    /// [`super::inventory::TirInventoryTreeV1::multiproof`]) — not assembled from a path per leaf.
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        self.params.param_multiproof(leaves)
     }
 
     fn prompt_token_ids(&self) -> Option<Vec<u32>> {

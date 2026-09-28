@@ -662,6 +662,114 @@ palw-class check-architecture --network <id> --tir program.tir [--layout layout.
 | spec 04b §10.1 wording: Fixed-state checkpoints and Hist tiles are step leaves (D7) | tir/core | F4 |
 | keyed hashing stays in consensus-core (the crate exposes bytes) | — (already so) | F1 |
 
+#### 2.12.1 Close sizing — the exact interface admission needs (decision 3, 2026-09-28)
+
+**Why.** A court is clocked at every terminal leaf, so an admitted class whose worst terminal close cannot
+ride the fold (at most `min(court.max_close_chunks, PALW_COURT_CLOSE_MAX_CHUNKS = 32)` chunks of
+`PALW_COURT_CLOSE_CHUNK_MAX_BYTES`, ≈ 3.2 MB on testnet-12) convicts an HONEST executor. The first v10
+measure (the 16 KiB frame plus `ConeV1::terminal_opened_bytes`) is element-granular — committed lanes at 4
+bytes, params at their width — and is a lower bound only: a close carries WHOLE units with their openings.
+`PalwTirConeRefutationV1::params` is one `PalwArtifactOpeningV1` per inventory leaf, each with a full path.
+Measured on the Qwen2.5-1.5B A16 mirror: 959,657 inventory leaves → 20 siblings → 1,280 path bytes per
+opening, against a 1,536-byte `output.weight` row; a logits tile of `T` vocab rows carries ≈ `T × 2,860`
+bytes, twice the element measure: `T = 2048` is ≈ 5.9 MB (element measure 3.1 MB), `T = 1024` ≈ 2.93 MB.
+(3B: 2,048-byte rows, depth 21 → `T = 1024` ≈ 3.5 MB; `T = 512`.)
+
+**The interface (misaka-palw-tir, `admit.rs`).**
+
+```rust
+pub struct TirAdmitInputsV1 {
+    /// Values per step leaf, per commit point in the program's commit order ((block, node) —
+    /// `PalwTirLayoutV1::commit_tiles` verbatim). Replaces the single `tile_len`; each in `1..=2^16`.
+    pub commit_tile_len: Vec<u32>,
+    /// Elements per `Fixed`-state leaf, per state in declaration order (`PalwTirLayoutV1::state_tiles`).
+    pub state_tile_len: Vec<u32>,
+    /// Positions per canonical `H` chunk (`PalwTirLayoutV1::h_tile`).
+    pub h_chunk: u32,
+    pub ceilings: TirCeilingsV1,
+}
+
+/// A terminal close's demand in the units it is CARRIED in — never element bytes.
+pub struct TirCloseDemandV1 {
+    /// Per committed source (commit index): the distinct step leaves read, at that source's own
+    /// `commit_tile_len`, and the contiguous runs they form (a run shares one sibling set).
+    pub commit_leaves: Vec<(u16, u64 /* leaves */, u64 /* runs */)>,
+    /// Per `Fixed` state: the checkpoint leaves the replay reads (at `state_tile_len`) and the
+    /// positions replayed (at most `C_j − 1`).
+    pub state_leaves: Vec<(u16, u64, u32)>,
+    /// Per `Hist` state: the distinct `h_chunk` tiles read.
+    pub hist_tiles: Vec<(u16, u64)>,
+    /// Per param instance `(param, layer)`: the demanded element ranges `[from, to)`, row-major,
+    /// merged and sorted. consensus-core maps them to inventory leaves (rows, 32 KiB pieces).
+    pub param_ranges: Vec<(u16, Option<u16>, Vec<(u64, u64)>)>,
+    /// Prompt ids read (`pre`'s `Input(0)` inside the cone).
+    pub prompt_ids: u64,
+}
+
+pub struct ConeV1 {
+    // … as today, plus:
+    /// The worst tile's demand under the caller's `price`, at `H = W`.
+    pub tile_demand: TirCloseDemandV1,
+    /// With `h_reductions`: the worst dissection bottom's demand at `H = h_chunk`.
+    pub chunk_demand: Option<TirCloseDemandV1>,
+}
+
+pub fn tir_admit_v1(
+    program_bytes: &[u8],
+    inputs: &TirAdmitInputsV1,
+    price: &dyn Fn(&TirCloseDemandV1) -> u64,
+) -> Result<TirAdmissionV1, TirAdmitError>;
+```
+
+**The contract.** (1) *Containment*: for every job the layout admits, every tile of every commit point and
+every dissection bottom, the units `eval_demanded` records for it (the court's own close) form a demand
+`D` with `price(D) ≤ price(tile_demand)` (resp. `chunk_demand`) — the reported worst is an upper bound
+under any monotone `price` (more units never cost less). (2) Deterministic: a consensus value. (3) The
+ranking runs inside `max_cone_work`. (4) One run per class: the per-tile ceilings apply at each commit
+point's own length (admission's loop over distinct lengths, at most 8, goes away).
+
+**consensus-core's price** (`palw_tir_admission_v1`, the only place bytes are priced): `16,384` (the frame:
+the binding with its program referenced, the headers) + the disputed leaf's preimage and opening + Σ commit
+leaves × preimage bytes at `commit_tile_len` + Σ runs × `2 · 64 · ⌈log2 L⌉` (a run's two boundary paths;
+`L` the deepest job's step-leaf count, capped by the ladder) + the same for state leaves and Hist tiles +
+Σ inventory leaves of `param_ranges` × (leaf bytes + 30, the operand header and index) + Σ runs of
+consecutive inventory leaves × `2 · 64 · ⌈log2 N_inv⌉` (the parameter openings ride as ONE
+`PalwArtifactMultiproofV1`, below) + the prompt as the network's form carries it. v10 refuses `price(terminal) > cap` as `CourtCostExceedsCeiling { what: "IR terminal close
+bytes as carried" }` — then exact, not necessary-only. Until this interface lands, admission must bound
+the parameter part from the element ranges' row count (every touched row's pieces priced with a full
+path), which is exact for vocabulary tiles and an over-count elsewhere.
+
+**Test.** A property test over the corpus: random jobs, random tiles, `build_tir_cone_refutation_v1`'s
+borsh length ≤ `price(tile_demand)` and ≤ the cap for every admitted class.
+
+**The box rule is sound, not tight (tir-core, 2026-09-28).** On the 1.5B mirror the attention-scores tile
+(block 1, node 103, 128 lanes) box-demands ALL of `W_q` — 2,459,157 element bytes — because the box
+over-approximates through `reshape` and `rope_pairs`; the court's own close reads one head's 128 rows. With a
+path per leaf that box prices at ≈ 4.4 MB (refused) against a real close of ≈ 0.5 MB. An exact price of the
+box therefore refuses the 1.5B class, and an element-granular one (v10 as of F7 34c672bec) is a LOWER bound
+that admits uncarriable layouts (the 1.5B at 2,048 logits lanes carries ≈ 5.9 MB with per-leaf paths): an
+honest executor of such a class loses its terminal-leaf clock.
+
+**The order (the DAA-2,000 release needs 1–3; 4 is its own later fence, since admission only widens):**
+
+1. *(consensus-core, Phase F)* The IR close carries its parameter openings as ONE `PalwArtifactMultiproofV1`
+   (the readiness-V2 format consensus already verifies, `verify_artifact_multiproof_v1`) in place of one
+   `PalwArtifactOpeningV1` per leaf: a run of consecutive leaves pays ≤ `2 · depth · 64` bytes of siblings,
+   not `depth · 64` per leaf. A logits tile of `T` rows is then ≈ `T × 1,566` bytes (1,024 → ≈ 1.62 MB with
+   the frame; 2,048 → ≈ 3.23 MB, over the 3.2 MB cap).
+2. *(tir-core)* `tir_admit_v1` reports each cone's worst tile and dissection bottom as `TirCloseDemandV1`
+   built from the box rule's own per-source boxes — an upper bound on the court's read set for every tile,
+   position, job and value (`Select`: the condition and both operands; `Gather`: the index and one slice per
+   index element, location-free).
+3. *(tir-core)* v10 prices (2) in carried units under (1) and refuses above the cap. Sound; the 1.5B class is
+   admitted at 1,024 logits lanes (the scores tile ≈ 2.53 MB even with all of `W_q`, the logits tile
+   ≈ 1.62 MB); the 3B class is refused (its box `W_q` alone is 4.2 MB) until (4).
+4. *(later fence)* The tight analysis: per-source unions of at most `N` boxes (exact through `reshape`,
+   `rope_pairs`, transpose, slice and broadcast; a deterministic merge above `N`), evaluated per alignment
+   class of a commit point's tiles (a layout needing more than a cap of classes is refused: tiles align to the
+   head width and `h_tile`), counted in `max_cone_work`; the containment test above plus tightness on the
+   corpus (priced ≤ 1.25 × the court's measured close for every commit point).
+
 ---
 
 ## 3. Phase 0(a): the live GDN `k_heads ≠ v_heads` defect
