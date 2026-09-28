@@ -365,7 +365,9 @@ pub fn gdn_program(grouping: bool) -> (TirProgramV1, BTreeMap<u16, Gen>) {
         let braw = linear(&mut b, h, wb, 18, i32::MIN as i64, i32::MAX as i64, DType::I32);
         let beta = b.int_sigmoid(braw);
         let araw = linear(&mut b, h, wa, 18, -(1 << 30), 1 << 30, DType::I32);
-        let dt = b.add(araw, dt_bias, DType::I32);
+        // `dt + dt_bias` saturating in i32, as the live engine's `saturating_add`.
+        let dt = b.add(araw, dt_bias, DType::I64);
+        let dt = b.clamp(dt, i32::MIN as i64, i32::MAX as i64, DType::I32);
         let decay = b.decay_q36(dt, c);
         let (rsp, dsp, osp) = (b.pow2_of(read.1), b.pow2_of(delta.1), b.pow2_of(out.1));
         let o =
@@ -476,7 +478,8 @@ pub fn mamba2_program() -> (TirProgramV1, BTreeMap<u16, Gen>) {
         let ch = group(&mut b, cs);
         // dt = softplus(dt + bias) (Q24, per head); dA = exp((dt·A) >> 24).
         let dtraw = linear(&mut b, h, wdt, 18, -(1 << 30), 1 << 30, DType::I32);
-        let dtb = b.add(dtraw, dt_bias, DType::I32);
+        let dtb = b.add(dtraw, dt_bias, DType::I64);
+        let dtb = b.clamp(dtb, i32::MIN as i64, i32::MAX as i64, DType::I32);
         let dt = b.softplus_q36(dtb);
         let dt = b.clamp(dt, 0, 1 << 30, DType::I32);
         let dt = b.reshape_fixed(dt, &[MH, 1]);

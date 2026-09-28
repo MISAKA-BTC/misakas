@@ -637,7 +637,7 @@ impl<'a> BlockBuilder<'a> {
         let lp = self.pow2_of(lp);
         let left = self.mul(prod, lp, DType::I128);
         let left = self.clamp(left, i64::MIN, i64::MAX, DType::I64);
-        let nws = self.sub(zero, ws, DType::I32);
+        let nws = self.sub(zero, ws, DType::I64);
         let rp = self.clamp(nws, 0, 62, DType::I32);
         let rp = self.pow2_of(rp);
         let right = self.div(prod, rp, Rounding::HalfAwayFromZero, DType::I64);
@@ -678,7 +678,9 @@ impl<'a> BlockBuilder<'a> {
         let scaled = self.mul(sum, one, DType::I128);
         let nn = self.c(DType::I64, n as i128);
         let mean0 = self.div(scaled, nn, Rounding::Floor, DType::I128);
-        let ez = self.clamp(eps_zero, 0, i64::MAX, DType::I64);
+        // `eps_zero · 2^min(shift, 96)` must stay an i128: the mantissa is bounded at 2^30 (legacy
+        // shifts in i128 and silently wraps past it; a registered eps is single-digit).
+        let ez = self.clamp(eps_zero, 0, 1 << 30, DType::I64);
         let es = self.pow2_128_of(eps_shift, 96);
         let eps = self.mul(ez, es, DType::I128);
         let mean = self.add(mean0, eps, DType::I128);
@@ -773,14 +775,16 @@ impl<'a> BlockBuilder<'a> {
         let sh = self.gather(sin_hi, hi, 0, 0);
         let cl = self.gather(cos_lo, lo, 0, 0);
         let sl = self.gather(sin_lo, lo, 0, 0);
+        // Each product fits i64 (|i32·i32| ≤ 2^62); their sum may not (2^63), so it is i128 —
+        // the tables are params and take the full i32 range (spec 04b §7).
         let a = self.mul(ch, cl, DType::I64);
         let b = self.mul(sh, sl, DType::I64);
-        let c = self.sub(a, b, DType::I64);
+        let c = self.sub(a, b, DType::I128);
         let c = self.shr(c, K, Rounding::Floor, DType::I64);
         let c = self.clamp(c, -(ONE as i64), ONE as i64, DType::I32);
         let e = self.mul(sh, cl, DType::I64);
         let f = self.mul(ch, sl, DType::I64);
-        let s = self.add(e, f, DType::I64);
+        let s = self.add(e, f, DType::I128);
         let s = self.shr(s, K, Rounding::Floor, DType::I64);
         let s = self.clamp(s, -(ONE as i64), ONE as i64, DType::I32);
         (c, s)
