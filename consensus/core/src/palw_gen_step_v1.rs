@@ -290,6 +290,31 @@ impl PalwGenStepSpaceV1 {
         Ok(Self { stages })
     }
 
+    /// **The claim's leaf count**: every stage's leaves.
+    pub fn leaf_count(&self) -> u64 {
+        self.stages.iter().map(|s| s.leaves.len() as u64).sum()
+    }
+
+    /// **A leaf's index in the claim's one leaf order** (stage-major: every leaf of stage `s` after
+    /// every leaf of the stages before it) — the index space a court session's ladder narrows over.
+    pub fn global_index(&self, coord: &PalwGenLeafCoordV1) -> Option<u64> {
+        let s = coord.stage as usize;
+        let before: u64 = self.stages.get(..s)?.iter().map(|x| x.leaves.len() as u64).sum();
+        Some(before + self.stages.get(s)?.leaf_index(coord)?)
+    }
+
+    /// **The leaf at index `index` of the claim's one leaf order**: `(stage, index in the stage)`.
+    pub fn locate(&self, mut index: u64) -> Option<(u8, u64)> {
+        for (s, stage) in self.stages.iter().enumerate() {
+            let n = stage.leaves.len() as u64;
+            if index < n {
+                return Some((s as u8, index));
+            }
+            index -= n;
+        }
+        None
+    }
+
     /// The space of a class's job.
     pub fn of_class(
         class: &PalwGenClassV1,

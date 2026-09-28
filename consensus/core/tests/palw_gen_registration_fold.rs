@@ -305,7 +305,7 @@ fn a_generative_registration_folds_past_the_fence_and_is_refused_below_it() {
         PalwBlockWorkV3::None,
         Hash64::default(),
     );
-    assert!(matches!(below, Err(PalwStateV2Error::GenRegistrationRefused(_))), "{below:?}");
+    assert!(matches!(below, Err(PalwStateV2Error::GenObjectRefused(_))), "{below:?}");
 
     // At the fence: it folds (the harness re-applies, reverts and reloads the block).
     let collateral = chain.s.bond(&registrant).expect("the registrant").collateral;

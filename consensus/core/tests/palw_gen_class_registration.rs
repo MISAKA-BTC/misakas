@@ -193,7 +193,7 @@ fn below_the_fence_the_fold_refuses_it_by_name() {
     for daa_score in [10, 2_500, u64::MAX - 1] {
         let ctx = PalwBlockContextV2 { block: Default::default(), daa_score, blue_score: 10, subsidy: 0 };
         let refused = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &[registration(class())], None);
-        assert!(matches!(refused, Err(PalwStateV2Error::GenRegistrationRefused(_))), "at {daa_score}: {refused:?}");
+        assert!(matches!(refused, Err(PalwStateV2Error::GenObjectRefused(_))), "at {daa_score}: {refused:?}");
     }
 }
 

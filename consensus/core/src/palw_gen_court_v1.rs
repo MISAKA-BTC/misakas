@@ -355,7 +355,7 @@ use misaka_palw_tir::interval::Interval;
 use misaka_palw_tir::program::StateKind;
 
 /// One carried input tile of a job image, with its path under the job's `input_root`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwGenImageTileV1 {
     pub image: u8,
     pub tile: u64,

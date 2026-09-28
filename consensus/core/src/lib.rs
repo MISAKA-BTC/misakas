@@ -465,6 +465,8 @@ pub mod palw_gen_court_v1;
 pub mod palw_gen_step_v1;
 /// RFC-0003: the pipeline inventory — the artifact layout a generative class's `artifact_root` commits to, and the court's authenticated params.
 pub mod palw_gen_artifact_v1;
+/// RFC-0003: the generative court's consensus objects — a pipeline claim's binding and its two closes.
+pub mod palw_gen_close_v1;
 /// RFC-0003 activation step 4: the pipeline admission — the gate a generative class registration passes, its builder and the node's preflight.
 pub mod palw_gen_admission_v1;
 /// RFC-0003 §II.2.1: the worker and the panel of a pipeline class — a V5 job run into the step tree, and a seat's replay.

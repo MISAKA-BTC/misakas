@@ -7331,7 +7331,11 @@ pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
 /// `palw_gen_v1` the acceptance walk drops every such object by name before any slot, rent or budget
 /// is charged for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
-    matches!(object, PalwConsensusObjectV2::ClassRegisteredGenV1 { .. })
+    match object {
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => true,
+        PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_gen_v1(),
+        _ => false,
+    }
 }
 
 /// **Is this object a move of an IR history dissection** (RFC-0002 F7, tags 64–66)?
@@ -9382,11 +9386,12 @@ pub enum PalwStateV2Error {
     #[error("an IR class registration (tag 61) is refused: {0}")]
     TirRegistrationRefused(&'static str),
     // ---- RFC-0003 ----
-    /// **A generative class registration (tag 67) the fold does not take**: below
-    /// `Params::palw_gen_v1` (the bundle's mirror), or a carried class that does not decode or is not
-    /// the declared id's. The acceptance walk drops it first; this is the second lock.
-    #[error("a generative class registration (tag 67) is refused: {0}")]
-    GenRegistrationRefused(&'static str),
+    /// **A generative object the fold does not take**: any below `Params::palw_gen_v1` (the bundle's
+    /// mirror) — a class registration (tag 67) or a court close carrying a generative proof — and a
+    /// registration whose carried class does not decode or is not the declared id's. The acceptance
+    /// walk drops it first; this is the second lock.
+    #[error("a generative object is refused: {0}")]
+    GenObjectRefused(&'static str),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -30434,7 +30439,7 @@ fn apply_object(
         return Err(PalwStateV2Error::TirRegistrationRefused("an IR object before palw_tir_v1 is in force (RFC-0002 Phase F)"));
     }
     if palw_object_is_gen_v1(object) && !builder.params.gen_active_at(ctx.daa_score) {
-        return Err(PalwStateV2Error::GenRegistrationRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
+        return Err(PalwStateV2Error::GenObjectRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
     }
     match object {
         PalwConsensusObjectV2::BondRegistered {
@@ -31267,9 +31272,9 @@ fn apply_object(
             admission,
         } => {
             let record = crate::palw_gen_class_v1::palw_gen_class_record_v1(&admission.class, artifact_root)
-                .map_err(|_| PalwStateV2Error::GenRegistrationRefused("the carried pipeline does not decode"))?;
+                .map_err(|_| PalwStateV2Error::GenObjectRefused("the carried pipeline does not decode"))?;
             if record.class_id != *class_id {
-                return Err(PalwStateV2Error::GenRegistrationRefused("the declared class id is not the carried class's"));
+                return Err(PalwStateV2Error::GenObjectRefused("the declared class id is not the carried class's"));
             }
             apply_class_registration_v1(
                 builder,
@@ -32370,6 +32375,11 @@ fn apply_object(
                 .filter(|object| {
                     !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
                         if proof.is_tir_v1() && !builder.params.tir_active_at(ctx.daa_score))
+                })
+                // RFC-0003: likewise a generative proof below `palw_gen_v1`.
+                .filter(|object| {
+                    !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
+                        if proof.is_gen_v1() && !builder.params.gen_active_at(ctx.daa_score))
                 });
             let Some(close) = decoded else {
                 return convict_close_declarer_v1(builder, ctx, *session_id, *side);

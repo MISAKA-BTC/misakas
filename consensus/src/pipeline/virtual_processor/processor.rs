@@ -9272,6 +9272,11 @@ impl VirtualStateProcessor {
                             .filter(|object| {
                                 !matches!(object, Obj::CourtClosed { proof, .. }
                                     if proof.is_tir_v1() && !self.palw_tir_at(point.daa_score))
+                            })
+                            // RFC-0003: likewise a generative proof below `palw_gen_v1`.
+                            .filter(|object| {
+                                !matches!(object, Obj::CourtClosed { proof, .. }
+                                    if proof.is_gen_v1() && !self.palw_gen_at(point.daa_score))
                             });
                         // Only when the bytes ARE this session's close does the adjudication run;
                         // anything else is the transition's conviction, not this layer's refusal.
@@ -9595,6 +9600,12 @@ impl VirtualStateProcessor {
                     if proof.is_tir_v1() && !self.palw_tir_at(point.daa_score) {
                         return Err(format!(
                             "court {session_id}: an IR close is refused: palw_tir_v1 is not in force at this block (RFC-0002 Phase F)"
+                        ));
+                    }
+                    // RFC-0003: a generative close likewise below `palw_gen_v1`.
+                    if proof.is_gen_v1() && !self.palw_gen_at(point.daa_score) {
+                        return Err(format!(
+                            "court {session_id}: a generative close is refused: palw_gen_v1 is not in force at this block (RFC-0003)"
                         ));
                     }
                     // The close carries its proof now, so there is something to adjudicate. The
