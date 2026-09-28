@@ -455,10 +455,14 @@ pub mod palw_step_refute;
 pub mod palw_tir_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
+/// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).
+pub mod palw_tir_attempt_v1;
 /// RFC-0002 Phase F step F2: an IR class — the program, its commitment layout, its identity and its registration carriage.
 pub mod palw_tir_class_v1;
 /// RFC-0002 Phase F step F5: the IR court — one committed leaf adjudicated by demand evaluation of its cone, PALW-TIR-33, logits consistency and the decode-token door.
 pub mod palw_tir_court_v1;
+/// RFC-0002 Phase F step F7: the generic history dissection of an IR class — every reduction over H of the disputed cone, folded exactly.
+pub mod palw_tir_dissect_v1;
 /// RFC-0002 Phase F step F4: the step space of an IR class — commit-point tiles, Fixed-state checkpoints and history tiles as step leaves, in closed form.
 pub mod palw_tir_step_v1;
 /// RFC-0002 Phase F step F8: an IR class's canonical work vector, classified and priced by structure alone.

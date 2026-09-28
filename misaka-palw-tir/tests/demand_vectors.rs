@@ -17,8 +17,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use misaka_palw_tir::TirErrorKind;
 use misaka_palw_tir::demand::{
-    DemandContext, DemandError, DemandLimits, DemandRequest, DemandTarget, MapSource, MapSourceRequest, eval_demanded,
+    DemandContext, DemandError, DemandLimits, DemandRequest, DemandTarget, MapSource, MapSourceKey, MapSourceRequest, eval_demanded,
     hist_row_node_v1, state_occurrence_v1,
 };
 use misaka_palw_tir::program::StateKind;
@@ -98,12 +99,21 @@ struct ExpectJson {
 }
 
 #[derive(Serialize)]
+struct WithholdJson {
+    #[serde(flatten)]
+    key: RequestKeyJson,
+    raises: String,
+}
+
+#[derive(Serialize)]
 struct CaseJson {
     name: String,
     target: TargetJson,
     elements: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     states: Option<Vec<StateJson>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    withhold: Option<Vec<WithholdJson>>,
     limits: LimitsJson,
     #[serde(skip_serializing_if = "Option::is_none")]
     expect: Option<ExpectJson>,
@@ -332,6 +342,30 @@ fn limits_json(l: &DemandLimits) -> LimitsJson {
     LimitsJson { max_elements: s(l.max_elements), max_terms: s(l.max_terms) }
 }
 
+fn key_json(key: &MapSourceKey) -> RequestKeyJson {
+    match *key {
+        MapSourceKey::Node { ctx, node } => RequestKeyJson::Node { pos: s(ctx.pos), occurrence: s(ctx.occurrence), node: s(node) },
+        MapSourceKey::Param { param, layer } => RequestKeyJson::Param { param: s(param), layer: layer.map(s) },
+        MapSourceKey::State { pos, state, layer } => RequestKeyJson::State { pos: s(pos), state: s(state), layer: layer.map(s) },
+        MapSourceKey::HistRow { pos, state, layer, row_pos } => {
+            RequestKeyJson::HistRow { pos: s(pos), state: s(state), layer: layer.map(s), row_pos: s(row_pos) }
+        }
+        MapSourceKey::Token { pos } => RequestKeyJson::Token { pos: s(pos) },
+    }
+}
+
+/// A request's question: everything but the element index.
+fn key_of(r: &MapSourceRequest) -> MapSourceKey {
+    match *r {
+        MapSourceRequest::Node { ctx, node, .. } => MapSourceKey::Node { ctx, node },
+        MapSourceRequest::Param { param, layer, .. } => MapSourceKey::Param { param, layer },
+        MapSourceRequest::State { pos, state, layer, .. } => MapSourceKey::State { pos, state, layer },
+        MapSourceRequest::HistRow { pos, state, layer, row_pos, .. } => MapSourceKey::HistRow { pos, state, layer, row_pos },
+        MapSourceRequest::Token { pos } => MapSourceKey::Token { pos },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_case(
     pv: &ProgramVector,
     states: &[(u32, u16, Option<u16>, Tensor)],
@@ -341,8 +375,23 @@ fn run_case(
     limits: DemandLimits,
     own_states: bool,
 ) -> (CaseJson, Option<(u64, u64)>) {
+    run_case_withholding(pv, states, name, target, elements, limits, own_states, &[]).0
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_case_withholding(
+    pv: &ProgramVector,
+    states: &[(u32, u16, Option<u16>, Tensor)],
+    name: String,
+    target: DemandTarget,
+    elements: Vec<usize>,
+    limits: DemandLimits,
+    own_states: bool,
+    withhold: &[(MapSourceKey, TirErrorKind)],
+) -> ((CaseJson, Option<(u64, u64)>), Vec<MapSourceRequest>) {
     let info = misaka_palw_tir::validate::validate(&pv.program).expect("valid");
     let mut src = source(pv, states);
+    src.withheld = withhold.iter().copied().collect();
     let request = DemandRequest { target, elements: &elements };
     let outcome = eval_demanded(&pv.program, &info, &request, &mut src, &limits);
     let target = match target {
@@ -364,18 +413,38 @@ fn run_case(
         Err(DemandError::WorkLimit(_)) => (None, Some("WorkLimit".to_string()), None),
         Err(DemandError::Tir(e)) => (None, Some(format!("{:?}", e.kind)), None),
     };
+    let withhold_json = (!withhold.is_empty())
+        .then(|| withhold.iter().map(|(k, kind)| WithholdJson { key: key_json(k), raises: format!("{kind:?}") }).collect());
     (
-        CaseJson {
-            name,
-            target,
-            elements: elements.iter().map(s).collect(),
-            states: states_json,
-            limits: limits_json(&limits),
-            expect,
-            expect_error,
-        },
-        work,
+        (
+            CaseJson {
+                name,
+                target,
+                elements: elements.iter().map(s).collect(),
+                states: states_json,
+                withhold: withhold_json,
+                limits: limits_json(&limits),
+                expect,
+                expect_error,
+            },
+            work,
+        ),
+        src.requests,
     )
+}
+
+fn target_of(t: &TargetJson) -> DemandTarget {
+    match t {
+        TargetJson::Node { pos, occurrence, node } => DemandTarget::Node {
+            ctx: DemandContext { pos: pos.parse().unwrap(), occurrence: occurrence.parse().unwrap() },
+            node: node.parse().unwrap(),
+        },
+        TargetJson::StateAfter { pos, state, layer } => DemandTarget::StateAfter {
+            pos: pos.parse().unwrap(),
+            state: state.parse().unwrap(),
+            layer: layer.as_ref().map(|l| l.parse().unwrap()),
+        },
+    }
 }
 
 fn file_for(pv: &ProgramVector) -> String {
@@ -461,19 +530,10 @@ fn file_for(pv: &ProgramVector) -> String {
             push(&mut cases, case);
         }
     }
-    // The work boundary: the heaviest case at exactly its work, and one short in each dimension.
+    // The work boundary: the first case with the most terms, at exactly its work, and one short in
+    // each count.
     let (hi, we, wt) = heaviest.expect("a case with work");
-    let base_target = match &cases[hi].target {
-        TargetJson::Node { pos, occurrence, node } => DemandTarget::Node {
-            ctx: DemandContext { pos: pos.parse().unwrap(), occurrence: occurrence.parse().unwrap() },
-            node: node.parse().unwrap(),
-        },
-        TargetJson::StateAfter { pos, state, layer } => DemandTarget::StateAfter {
-            pos: pos.parse().unwrap(),
-            state: state.parse().unwrap(),
-            layer: layer.as_ref().map(|l| l.parse().unwrap()),
-        },
-    };
+    let base_target = target_of(&cases[hi].target);
     let base_elements: Vec<usize> = cases[hi].elements.iter().map(|e| e.parse().unwrap()).collect();
     let base_name = cases[hi].name.clone();
     for (label, limits) in [
@@ -513,6 +573,34 @@ fn file_for(pv: &ProgramVector) -> String {
         let layer = p.states[j].per_layer.then_some(0u16);
         let target = DemandTarget::StateAfter { pos: 0, state: j as u16, layer };
         cases.push(run_case(pv, &states, "refused: a Hist state named as Fixed".into(), target, vec![0], UNLIMITED, false).0);
+    }
+    // A source that refuses, for any reason, fails the evaluation `Missing`: for each kind of question,
+    // the first case that asks one has its first such question withheld, with a reason that is not
+    // `Missing`.
+    let regular: Vec<(DemandTarget, Vec<usize>)> = cases
+        .iter()
+        .filter(|c| c.expect.is_some() && !c.name.contains(", ") && c.limits.max_terms == s(u64::MAX))
+        .map(|c| (target_of(&c.target), c.elements.iter().map(|e| e.parse().unwrap()).collect()))
+        .collect();
+    let kinds: [(&str, fn(&MapSourceKey) -> bool, TirErrorKind); 5] = [
+        ("node", |k| matches!(k, MapSourceKey::Node { .. }), TirErrorKind::Operand),
+        ("param", |k| matches!(k, MapSourceKey::Param { .. }), TirErrorKind::Position),
+        ("state", |k| matches!(k, MapSourceKey::State { .. }), TirErrorKind::Malformed),
+        ("hist_row", |k| matches!(k, MapSourceKey::HistRow { .. }), TirErrorKind::Operand),
+        ("token", |k| matches!(k, MapSourceKey::Token { .. }), TirErrorKind::Position),
+    ];
+    for (label, is_kind, raises) in kinds {
+        let found = regular.iter().find_map(|(target, elements)| {
+            let (_, requests) = run_case_withholding(pv, &states, String::new(), *target, elements.clone(), UNLIMITED, false, &[]);
+            let keys: BTreeSet<MapSourceKey> = requests.iter().map(key_of).collect();
+            keys.into_iter().find(|k| is_kind(k)).map(|k| (*target, elements.clone(), k))
+        });
+        if let Some((target, elements, key)) = found {
+            let name = format!("refused: the source withholds a {label} question (saying {raises:?})");
+            let (case, _) = run_case_withholding(pv, &states, name, target, elements, UNLIMITED, false, &[(key, raises)]);
+            assert_eq!(case.0.expect_error.as_deref(), Some("Missing"), "{}: a withheld {label} question is Missing", pv.name);
+            cases.push(case.0);
+        }
     }
     let file = FileJson {
         format: FORMAT.into(),

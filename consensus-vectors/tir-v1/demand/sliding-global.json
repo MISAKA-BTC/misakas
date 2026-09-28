@@ -15429,6 +15429,132 @@
         "max_terms": "18446744073709551615"
       },
       "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: the source withholds a node question (saying Operand)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "58"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "withhold": [
+        {
+          "node": {
+            "pos": "0",
+            "occurrence": "0",
+            "node": "5"
+          },
+          "raises": "Operand"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a param question (saying Position)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "withhold": [
+        {
+          "param": {
+            "param": "0",
+            "layer": null
+          },
+          "raises": "Position"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a hist_row question (saying Operand)",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "1",
+          "node": "142"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "withhold": [
+        {
+          "hist_row": {
+            "pos": "1",
+            "state": "0",
+            "layer": "0",
+            "row_pos": "0"
+          },
+          "raises": "Operand"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a token question (saying Position)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "withhold": [
+        {
+          "token": {
+            "pos": "0"
+          },
+          "raises": "Position"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
     }
   ]
 }
