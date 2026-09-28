@@ -526,4 +526,136 @@ impl<'a> BlockBuilder<'a> {
         let z16 = self.c(DType::I16, 0);
         self.select(empty, z16, y, DType::I16)
     }
+
+    /// `palw_qwen36_ops::q36_softplus`: `ln(1 + e^x)` split at the sign so `IntExp` only sees
+    /// `−|x|`: `x ≤ 0 → IntLn(ONE + e)`, `x > 0 → x + IntLn(ONE + e)`, `e = IntExp(−|x|)`. Q24.
+    pub fn softplus_q36(&mut self, x: Ref) -> Ref {
+        let zero = self.c(DType::I32, 0);
+        let pos = self.compare(x, zero, Cmp::Gt);
+        let neg = self.sub(zero, x, DType::I64);
+        let neg_abs = self.select(pos, neg, x, DType::I64);
+        let e = self.int_exp(neg_abs);
+        let one = self.c(DType::I32, ONE);
+        let arg = self.add(e, one, DType::I64);
+        let tail = self.int_ln(arg);
+        let sum = self.add(x, tail, DType::I64);
+        let le = self.compare(x, zero, Cmp::Le);
+        self.select(le, tail, sum, DType::I64)
+    }
+
+    /// `palw_qwen36_ops::q36_exp_refined` for a Q24 `x ≤ 0` (`i32`): one Newton step of the
+    /// frozen `IntExp` against `IntLn`, `y ← y + (y·clamp(x − ln y, ±ONE/4)) >> 24`, clamped to
+    /// `[0, ONE]`; 0 where `IntExp` is 0.
+    pub fn exp_refined_q36(&mut self, x: Ref) -> Ref {
+        let y0 = self.int_exp(x);
+        let ln_y = self.int_ln(y0);
+        let d = self.sub(x, ln_y, DType::I64);
+        let corr = self.clamp(d, -(ONE as i64 / 4), ONE as i64 / 4, DType::I32);
+        let prod = self.mul(y0, corr, DType::I64);
+        let step = self.shr(prod, K, Rounding::Floor, DType::I64);
+        let adj = self.add(y0, step, DType::I64);
+        let adj = self.clamp(adj, 0, ONE as i64, DType::I32);
+        let zero = self.c(DType::I32, 0);
+        let dead = self.compare(y0, zero, Cmp::Le);
+        self.select(dead, zero, adj, DType::I32)
+    }
+
+    /// `palw_qwen36_ops::q36_decay`: `exp(−c · softplus(dt))` for a registered `c ≥ 0` (Q24,
+    /// `c ≤ 0` gives `ONE`): `arg = clamp((c·softplus(dt)) >> 24, 0, 2^31)`, then the refined
+    /// exponential of `−arg`, clamped to `[0, ONE]`.
+    pub fn decay_q36(&mut self, dt: Ref, c: Ref) -> Ref {
+        let sp = self.softplus_q36(dt);
+        let p = self.mul(c, sp, DType::I128);
+        let a = self.shr(p, K, Rounding::Floor, DType::I128);
+        let a = self.clamp(a, 0, 1i64 << 31, DType::I64);
+        let zero = self.c(DType::I32, 0);
+        let neg = self.sub(zero, a, DType::I64);
+        let neg = self.clamp(neg, i32::MIN as i64, 0, DType::I32);
+        let y = self.exp_refined_q36(neg);
+        let one = self.c(DType::I32, ONE);
+        let off = self.compare(c, zero, Cmp::Le);
+        self.select(off, one, y, DType::I32)
+    }
+
+    /// `palw_qwen36_ops::q36_gdn_step`, vectorised over heads: one position of the gated delta
+    /// rule for `Fixed` state `state` (`[heads, d_v, d_k]`, range `±(2^31 − 1)`).
+    ///
+    /// `k`, `q`: `[heads, d_k]` unit codes (already mapped to the value heads — the head mapping is
+    /// an explicit Reshape/Broadcast, not part of the rule); `v`: `[heads, d_v]` codes; `decay`,
+    /// `beta`: `[heads]` Q24 in `[0, ONE]`. The narrowings are per-head params: `(m, pow2_s, z)` for
+    /// the read, the delta and the output, and `write_shift` (`i32`, left if ≥ 0). Returns the
+    /// output `[heads, d_v]` as `i32`; the state write is part of the expansion.
+    #[allow(clippy::too_many_arguments)]
+    pub fn gdn_step_q36(
+        &mut self,
+        state: u16,
+        k: Ref,
+        v: Ref,
+        q: Ref,
+        decay: Ref,
+        beta: Ref,
+        read: (Ref, Ref, Ref),
+        delta: (Ref, Ref, Ref),
+        write_shift: Ref,
+        out: (Ref, Ref, Ref),
+    ) -> Ref {
+        let smax = i32::MAX as i64;
+        let s_shape = self.ty(Ref::State(state)).shape;
+        let (Dim::Fixed(h), Dim::Fixed(dv), Dim::Fixed(dk)) = (s_shape[0], s_shape[1], s_shape[2]) else { panic!("static state") };
+        let col = |b: &mut Self, x: Ref, n: u32| b.reshape_fixed(x, &[h, n, 1]);
+        // 1. The gate: S1 = clamp(RSR(S · decay, 24), ±(2^31 − 1)).
+        let dec = b_reshape3(self, decay, h);
+        let sd = self.mul(Ref::State(state), dec, DType::I64);
+        let sd = self.shr(sd, K, Rounding::HalfAwayFromZero, DType::I64);
+        let s1 = self.clamp(sd, -smax, smax, DType::I32);
+        // 2. w = narrow_read(S1 k) — wide, the i64 rail.
+        let kc = col(self, k, dk);
+        let acc = self.matmul(s1, kc, DType::I64);
+        let rm = b_reshape3(self, read.0, h);
+        let rs = b_reshape3(self, read.1, h);
+        let rz = b_reshape3(self, read.2, h);
+        let w = self.narrow_a16(acc, rm, rs, rz, i64::MIN, i64::MAX, DType::I64);
+        // 3. u = clamp(narrow_delta(RSR(sat64(sat64(v − w) · beta), 24)), ±(2^24 − 1)).
+        let vc = col(self, v, dv);
+        let diff = self.sub(vc, w, DType::I128);
+        let diff = self.clamp(diff, i64::MIN, i64::MAX, DType::I64);
+        let bt = b_reshape3(self, beta, h);
+        let db = self.mul(diff, bt, DType::I128);
+        let db = self.clamp(db, i64::MIN, i64::MAX, DType::I64);
+        let scaled = self.shr(db, K, Rounding::HalfAwayFromZero, DType::I64);
+        let dm = b_reshape3(self, delta.0, h);
+        let ds = b_reshape3(self, delta.1, h);
+        let dz = b_reshape3(self, delta.2, h);
+        let u = self.narrow_a16(scaled, dm, ds, dz, -((1 << 24) - 1), (1 << 24) - 1, DType::I32);
+        // 4. The rank-one write: S2 = clamp(S1 + write(u ⊗ k), ±(2^31 − 1)).
+        let kr = self.reshape_fixed(k, &[h, 1, dk]);
+        let prod = self.mul(u, kr, DType::I64);
+        let ws = b_reshape3(self, write_shift, h);
+        let zero = self.c(DType::I32, 0);
+        let left_on = self.compare(ws, zero, Cmp::Ge);
+        let lp = self.clamp(ws, 0, 20, DType::I32);
+        let lp = self.pow2_of(lp);
+        let left = self.mul(prod, lp, DType::I128);
+        let left = self.clamp(left, i64::MIN, i64::MAX, DType::I64);
+        let nws = self.sub(zero, ws, DType::I32);
+        let rp = self.clamp(nws, 0, 62, DType::I32);
+        let rp = self.pow2_of(rp);
+        let right = self.div(prod, rp, Rounding::HalfAwayFromZero, DType::I64);
+        let write = self.select(left_on, left, right, DType::I64);
+        let s2 = self.add(s1, write, DType::I128);
+        let s2 = self.state_write(state, s2);
+        // 5. o = narrow_out(S2 q), wide.
+        let qc = col(self, q, dk);
+        let acc = self.matmul(s2, qc, DType::I64);
+        let om = b_reshape3(self, out.0, h);
+        let os = b_reshape3(self, out.1, h);
+        let oz = b_reshape3(self, out.2, h);
+        let o = self.narrow_a16(acc, om, os, oz, i32::MIN as i64, i32::MAX as i64, DType::I32);
+        self.reshape_fixed(o, &[h, dv])
+    }
+}
+
+/// A per-head vector `[h]` as `[h, 1, 1]`, to broadcast against `[h, rows, cols]`.
+fn b_reshape3(b: &mut BlockBuilder<'_>, x: Ref, h: u32) -> Ref {
+    b.reshape_fixed(x, &[h, 1, 1])
 }
