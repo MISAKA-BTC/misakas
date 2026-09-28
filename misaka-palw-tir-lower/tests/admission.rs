@@ -77,3 +77,26 @@ fn every_lowerable_real_configuration_is_admitted() {
     // name and number, as it should be; every other lowerable configuration is admitted.
     assert_eq!(refused, vec!["deepseek-v3-bf16.json".to_string()]);
 }
+
+/// Freeze criterion 1's evidence: the primitives every lowered architecture uses — all of them
+/// among the 25 of PALW-TIR v1, none named after a model.
+#[test]
+fn every_lowered_architecture_uses_only_the_v1_primitives() {
+    use std::collections::BTreeSet;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf");
+    let mut names: Vec<String> =
+        std::fs::read_dir(&dir).expect("fixtures").map(|e| e.expect("entry").file_name().to_string_lossy().to_string()).collect();
+    names.sort();
+    let mut all = BTreeSet::new();
+    for n in &names {
+        let cfg = std::fs::read_to_string(dir.join(n).join("config.json")).expect("config");
+        let spec = misaka_palw_tir_lower::parse_config_str(&cfg).expect("spec");
+        let hl = misaka_palw_tir_lower::hl::build_program(&spec).expect("hl");
+        let lw = lower(&hl, &LowerOpts::default()).expect("lowered");
+        let used: BTreeSet<&str> = lw.program.blocks.iter().flat_map(|b| b.nodes.iter().map(|x| x.prim.name())).collect();
+        eprintln!("{n:>20} [{:2}] {}", used.len(), used.iter().copied().collect::<Vec<_>>().join(" "));
+        all.extend(used);
+    }
+    eprintln!("union over the 57 [{}]: {}", all.len(), all.iter().copied().collect::<Vec<_>>().join(" "));
+    assert!(all.iter().all(|p| misaka_palw_tir::prim::PRIM_NAMES_V1.contains(p)));
+}
