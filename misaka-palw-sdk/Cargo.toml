@@ -19,6 +19,8 @@ misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
 # `check-architecture`'s IR mode: a Hugging Face config lowered to a PALW-TIR program (the lowerer
 # is non-consensus tooling; the verdict comes from consensus functions).
 misaka-palw-tir-lower = { path = "../misaka-palw-tir-lower" }
+# A PALWTIR1 container's declared layout is `borsh(PalwTirLayoutV1)`; the manifest decodes it.
+borsh.workspace = true
 # ADR-0100 `palw-class measure` / `verify`: the Measured Model Artifact is JSON, signed by the
 # adder's bond key and verified by anyone holding the public key.
 kaspa-pq-validator-core.workspace = true

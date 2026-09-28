@@ -1,12 +1,15 @@
-//! `palw-tir-check --config config.json [--weights PATH | --weights-index INDEX] [--tir-out FILE] [--json]`
+//! `palw-tir-check --config config.json [--weights PATH | --weights-index INDEX] [--tir-out FILE]
+//! [--long-history] [--tile-len N] [--h-chunk N] [--json]`
 //!
 //! Reads a Hugging Face `config.json` and prints the normalised ArchSpec, the HL program's
 //! blocks and layer schedule, per-position MAC/state estimates and, when weights are given, a
 //! shape check of every HL param against the checkpoint. Then it lowers the HL program to a
-//! PALW-TIR program (Gate 2a) and prints its summary and the 04b §7 range analysis; `--tir-out`
-//! writes the program's canonical encoding. The admission verdict (`tir_admit_v1`) is printed
-//! once that verifier exists; until then the range analysis is its only executable half. Exit
-//! status: 0 lowerable, 2 NOT_LOWERABLE, 1 usage or I/O error. Non-consensus tooling.
+//! PALW-TIR program (Gate 2a), prints its summary, and ADMITS it: `tir_admit_v1` (spec 04b §10.3)
+//! at tir/core's starting ceilings with `--tile-len` values per step leaf and an `--h-chunk`
+//! history chunk (both 64 unless given; a class layout declares its own) — the per-position costs,
+//! the court cones, the checkpoint interval, or the refusal by limit and number. `--tir-out` writes
+//! the program's canonical encoding. Exit status: 0 lowered and admitted, 2 NOT_LOWERABLE, a
+//! weights mismatch or an admission refusal, 1 usage or I/O error. Non-consensus tooling.
 
 use clap::Parser;
 use misaka_palw_tir_lower::lower::{self, LowerOpts};
@@ -32,12 +35,18 @@ struct Args {
     /// Lower with the long history bound (2^21) instead of 2^18.
     #[arg(long)]
     long_history: bool,
+    /// Values per step leaf admission tiles every commit point with (a layout's `commit_tiles`).
+    #[arg(long, default_value_t = 64)]
+    tile_len: u32,
+    /// Positions per canonical history chunk (a layout's `h_tile`; a power of two).
+    #[arg(long, default_value_t = 64)]
+    h_chunk: u32,
     /// Print the ArchSpec, HL program and costs as JSON instead of text.
     #[arg(long)]
     json: bool,
 }
 
-/// The TIR half of the report: lowered or refused, summary, range analysis, digest.
+/// The TIR half of the report: lowered or refused, summary, admission, digest.
 fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, bool) {
     let opts = LowerOpts {
         history_bound: if a.long_history {
@@ -50,10 +59,12 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
         Ok(lw) => {
             let p = &lw.program;
             let bytes = p.encode();
-            let ranges = match misaka_palw_tir::interval::analyze_ranges(p) {
-                Ok(_) => "ok".to_string(),
-                Err(e) => format!("REFUSED: {e}"),
+            let inputs = misaka_palw_tir::admit::TirAdmitInputsV1 {
+                tile_len: a.tile_len,
+                h_chunk: a.h_chunk,
+                ..misaka_palw_tir_lower::admission::default_inputs()
             };
+            let verdict = misaka_palw_tir_lower::admission::admit(p, &inputs);
             let digest = misaka_palw_tir_lower::artifact::program_digest(p);
             let mut written = None;
             if let Some(path) = &a.tir_out {
@@ -67,13 +78,17 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
             }
             let mut text = String::from("\nPALW-TIR (Gate 2a lowering)\n");
             text.push_str(&lw.summary());
-            text.push_str(&format!("  range analysis (04b §7): {ranges}\n"));
-            text.push_str("  admission (tir_admit_v1): not available yet — summary and range analysis only\n");
+            for (block, readers) in &lw.budget_fallbacks {
+                text.push_str(&format!(
+                    "  node budget (NF-12, 512 a block): block `{block}` keeps outlier splits only for values at most {readers} projections read\n"
+                ));
+            }
+            text.push_str(&misaka_palw_tir_lower::admission::render(p, &inputs, &verdict));
             text.push_str(&format!("  program digest (BLAKE2b-512 of the encoding): {digest}\n"));
             if let Some(w) = &written {
                 text.push_str(&format!("  written: {w} ({} bytes)\n", bytes.len()));
             }
-            let ok = ranges == "ok";
+            let ok = verdict.is_ok();
             (
                 serde_json::json!({
                     "lowered": true,
@@ -82,8 +97,8 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
                     "nodes": p.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(),
                     "params": p.params.len(),
                     "states": p.states.len(),
-                    "ranges": ranges,
-                    "admission": "tir_admit_v1 not available yet",
+                    "admission": misaka_palw_tir_lower::admission::to_json(p, &inputs, &verdict),
+                    "budget_fallbacks": lw.budget_fallbacks.iter().map(|(b, r)| serde_json::json!({"block": b, "max_readers": r})).collect::<Vec<_>>(),
                     "digest": digest,
                     "written": written,
                 }),
@@ -126,7 +141,7 @@ fn main() {
     };
     match report::check(&text, w) {
         Ok(c) => {
-            let (tir_json, tir_text, _tir_ok) = tir_section(&c, &a);
+            let (tir_json, tir_text, tir_ok) = tir_section(&c, &a);
             if a.json {
                 let v = serde_json::json!({
                     "verdict": report::verdict(&c),
@@ -142,7 +157,7 @@ fn main() {
                 print!("{tir_text}");
             }
             let bad = c.weights.as_ref().map(|w| !w.errors.is_empty()).unwrap_or(false);
-            std::process::exit(if bad { 2 } else { 0 });
+            std::process::exit(if bad || !tir_ok { 2 } else { 0 });
         }
         Err(e) => {
             println!("{}", report::refusal(&e));

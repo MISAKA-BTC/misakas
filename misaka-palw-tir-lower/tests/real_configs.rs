@@ -73,6 +73,12 @@ fn qwen2_biases_and_disabled_sliding_window() {
     assert!(s.layers.iter().all(|l| matches!(&l.mixer, Mixer::Attention(a) if a.window.is_none())), "use_sliding_window=false");
     let (s, _) = ok("qwen2.5-0.5b");
     assert!(s.head.tied);
+    // The Gate 2a real checkpoint (the on-disk config, copied verbatim): 12 query heads over 2 KV
+    // heads, tied head, no sliding window.
+    let (s, _) = ok("qwen2.5-1.5b-instruct");
+    let a = attn(&s, 0);
+    assert!(s.head.tied && a.window.is_none());
+    assert_eq!((s.layers.len(), a.heads, a.kv_heads, a.head_dim), (28, 12, 2, 128));
     let (s, _) = ok("qwen3-8b");
     assert_eq!(attn(&s, 0).qk_norm.map(|q| q.scope), Some(QkNormScope::PerHeadShared));
 }

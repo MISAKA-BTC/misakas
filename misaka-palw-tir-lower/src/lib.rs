@@ -31,6 +31,7 @@
 //!
 //! Nothing here depends on consensus crates; nothing here is on a validation path.
 
+pub mod admission;
 pub mod artifact;
 pub mod cfg;
 pub mod error;

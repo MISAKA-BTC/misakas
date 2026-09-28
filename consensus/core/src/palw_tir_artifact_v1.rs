@@ -34,12 +34,12 @@ use std::collections::BTreeSet;
 /// The largest leaf: a row longer than this is split into pieces of this size.
 pub const PALW_TIR_ROW_PIECE_BYTES_V1: u64 = 65_536;
 
-/// Key of [`palw_tir_graph_ir_root_v1`] (design §2.3).
+/// Key of [`palw_tir_graph_ir_root_v1`] (design §2.3); `palw_tir_class_v1` re-exports it.
 pub const PALW_TIR_GRAPH_IR_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/tir/graph-ir-root/v1";
 
 /// **`graph_ir_root = H64(key "misaka-palw/tir/graph-ir-root/v1", program)`** over the program's
 /// canonical bytes (design §2.3) — what a container's embedded program is checked against, and what
-/// the class id commits to.
+/// the class id commits to (`PalwTirClassV1::graph_ir_root` calls this).
 pub fn palw_tir_graph_ir_root_v1(program_bytes: &[u8]) -> Hash64 {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_TIR_GRAPH_IR_ROOT_DOMAIN_V1).to_state();
     state.update(program_bytes);
@@ -454,5 +454,24 @@ mod tests {
         let mut src = source(&p);
         src.0.remove(&(4, Some(1)));
         assert!(matches!(palw_tir_inventory_root_v1(&p, &src), Err(PalwTirInventoryError::Missing { .. })));
+    }
+
+    #[test]
+    fn the_graph_ir_root_of_bare_bytes_is_the_class_graph_ir_root() {
+        let bytes = program().encode();
+        let class = crate::palw_tir_class_v1::PalwTirClassV1 {
+            version: crate::palw_tir_class_v1::PALW_TIR_CLASS_VERSION_V1,
+            program: bytes.clone(),
+            layout: crate::palw_tir_class_v1::PalwTirLayoutV1 {
+                version: crate::palw_tir_class_v1::PALW_TIR_LAYOUT_VERSION_V1,
+                max_context: 1,
+                checkpoint_interval: 1,
+                h_tile: 1,
+                commit_tiles: vec![],
+                state_tiles: vec![],
+            },
+            tokenizer_id: Hash64::from_bytes([0; 64]),
+        };
+        assert_eq!(palw_tir_graph_ir_root_v1(&bytes), class.graph_ir_root());
     }
 }
