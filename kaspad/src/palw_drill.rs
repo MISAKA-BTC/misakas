@@ -550,6 +550,7 @@ pub fn palw_drill_write_keyring_v3(
         "fence_at": fence_at,
         "fence2_at": fence2_at,
         "fence3_at": fence3_at,
+        "fence4_at": fence4_at,
         "public_genesis_hash": public.genesis.hash.to_string(),
         "public_consensus_params_id": public.consensus_params_id().to_string(),
         "premine_txid": kaspa_consensus_core::config::premine::palw_t12_drill_premine_txid_v1(salt).to_string(),
