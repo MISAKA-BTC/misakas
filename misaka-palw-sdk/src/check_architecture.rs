@@ -235,7 +235,7 @@ pub fn check_ir_program_at_v1(params: &Params, program: &TirProgramV1, tile_len:
     let a = match verdict {
         Ok(a) => a,
         Err(TirAdmitError::Exceeds { limit, at, value, cap }) => {
-            let limit = if at == "the position" { limit.to_string() } else { format!("{limit} at {at}") };
+            let limit = if at == "the position" || at == "the run" { limit.to_string() } else { format!("{limit} at {at}") };
             r.verdict = ArchVerdictV1::Exceeds { limit, value: value as u128, cap: cap as u128 };
             return r;
         }

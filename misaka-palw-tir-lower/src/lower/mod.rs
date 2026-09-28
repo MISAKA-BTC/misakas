@@ -799,20 +799,11 @@ fn decl_ms(
     Ok((m, s))
 }
 
-/// The narrowing `N(x; m, 2^s, z)` into `(dt, lo..hi)`.
+/// The narrowing `N(x; m, 2^s, z)` into `(dt, lo..hi)` — the library's `narrow` (three nodes past
+/// the `Pow2` gather when there is no zero term).
 fn narrow(b: &mut BlockBuilder<'_>, x: tir::Ref, m: tir::Ref, s: tir::Ref, z: Option<tir::Ref>, dt: DType) -> tir::Ref {
     let (lo, hi) = code_bounds(dt);
-    let p2 = b.pow2_of(s);
-    match z {
-        Some(z) => b.narrow_a16(x, m, p2, z, lo, hi, dt),
-        // Without a zero term the template's `Clamp_i64 → Add 0 → Clamp[lo,hi]` is exactly
-        // `Clamp[lo,hi]` (`[lo, hi] ⊆ i64`): two nodes fewer, every value identical.
-        None => {
-            let p = b.mul(x, m, DType::I128);
-            let q = b.div(p, p2, Rounding::HalfAwayFromZero, DType::I128);
-            b.clamp(q, lo, hi, dt)
-        }
-    }
+    b.narrow(x, &tir::library::Narrowing::new(m, s, z), lo, hi, dt)
 }
 
 /// Re-express `v` in `(dt, key)`: one uniform narrowing (the identity when it already is).
@@ -1570,65 +1561,16 @@ fn decl_eps(
     )
 }
 
-/// The unit row `x / √(mean(x²) + eps)` in Q24 along the last axis, for rows of any width up to
-/// `i32` — the value of the library's `rms_norm_wide_q36` in 21 nodes instead of 39.
-///
-/// The mean's exponent is taken out only when it is positive (`h = max(0, ⌊(log2 mean − 24)/2⌋)`):
-/// for a smaller mean `IntRsqrt` normalises internally and returns `y · 2^−e` exactly as the
-/// template's left-shift branch reassembles it, so both give the same integers; the eps is one
-/// `i64` param instead of a mantissa and a shift. (Proposed for `tir_library_v1`: the GDN + MoE
-/// hybrid layers of Qwen3-Next/3.5 do not fit NF-12's 512 nodes with the 39-node form.)
+/// The unit row `x / √(mean(x²) + eps)` in Q24 along the last axis — the library's `rms_unit_q24`
+/// (21 nodes, one `i64` eps; the value of `rms_norm_wide_q36`).
 fn rms_unit(b: &mut BlockBuilder<'_>, x: tir::Ref, eps: tir::Ref) -> tir::Ref {
-    let shape = b.shape(x);
-    let axis = shape.len() - 1;
-    let Dim::Fixed(n) = shape[axis] else { panic!("norm over H") };
-    let sq = b.mul(x, x, DType::I64);
-    let sum = b.reduce_sum(sq, axis, DType::I128);
-    let one = b.c(DType::I64, 1 << 24);
-    let scaled = b.mul(sum, one, DType::I128);
-    let nn = b.c(DType::I64, n as i128);
-    let mean0 = b.div(scaled, nn, Rounding::Floor, DType::I128);
-    let e = b.clamp(eps, 0, i64::MAX, DType::I64);
-    let mean = b.add(mean0, e, DType::I128);
-    let bit = b.log2_floor(mean, DType::I32);
-    let k = b.c(DType::I32, 24);
-    let t = b.sub(bit, k, DType::I32);
-    let two = b.c(DType::I32, 2);
-    let h = b.div(t, two, Rounding::Floor, DType::I32);
-    let h = b.clamp(h, 0, 51, DType::I32);
-    let h2 = b.mul(h, two, DType::I32);
-    let p2 = b.pow2_128_of(h2, 102);
-    let m = b.div(mean, p2, Rounding::Floor, DType::I128);
-    let m = b.clamp(m, 0, i64::MAX, DType::I64);
-    let r = b.int_rsqrt(m);
-    let prod = b.mul(x, r, DType::I128);
-    let p1 = b.pow2_128_of(h, 51);
-    let y = b.div(prod, p1, Rounding::Floor, DType::I128);
-    b.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32)
+    b.rms_unit_q24(x, eps)
 }
 
-/// `x / ‖x‖` in Q15 codes along the last axis (the library's `l2_norm_q15`, a zero row stays
-/// zero) in 17 nodes: `IntRsqrt(Σx² / 2^2h) · x / 2^(h + 21)`, `h = max(0, ⌊(log2 Σx² − 24)/2⌋)`.
+/// `x / ‖x‖` in Q15 codes along the last axis — the library's `l2_unit_q15` (17 nodes; the value
+/// of `l2_norm_q15`, a zero row stays zero).
 fn l2_unit_q15(b: &mut BlockBuilder<'_>, x: tir::Ref) -> tir::Ref {
-    let axis = b.shape(x).len() - 1;
-    let sq = b.mul(x, x, DType::I64);
-    let sum = b.reduce_sum(sq, axis, DType::I64);
-    let bit = b.log2_floor(sum, DType::I32);
-    let k = b.c(DType::I32, 24);
-    let t = b.sub(bit, k, DType::I32);
-    let two = b.c(DType::I32, 2);
-    let h = b.div(t, two, Rounding::Floor, DType::I32);
-    let h = b.clamp(h, 0, 20, DType::I32);
-    let h2 = b.mul(h, two, DType::I32);
-    let p2 = b.pow2_128_of(h2, 40);
-    let m = b.div(sum, p2, Rounding::Floor, DType::I64);
-    let r = b.int_rsqrt(m);
-    let prod = b.mul(x, r, DType::I64);
-    let off = b.c(DType::I32, 21);
-    let sh = b.add(h, off, DType::I32);
-    let p1 = b.pow2_128_of(sh, 41);
-    let y = b.div(prod, p1, Rounding::Floor, DType::I64);
-    b.clamp(y, -32767, 32767, DType::I16)
+    b.l2_unit_q15(x)
 }
 
 /// The float function an activation table tabulates.
@@ -1896,6 +1838,9 @@ fn lower_attention(
     let AttnDims { heads, kv, d, dv, window } = dims;
     let g = heads / kv;
     let (kv32, g32, d32, dv32) = (kv as u32, g as u32, d as u32, dv as u32);
+    if ex.softcap.is_none() && ex.alibi.is_none() && dv == d {
+        return lower_attention_library(b, cx, lb, q, k, v, dims, ex, site, want);
+    }
     let qg = b.reshape_fixed(q.r, &[kv32, g32, d32]);
     let kw = b.reshape(k.0, &[Dim::H, Dim::Fixed(kv32), Dim::Fixed(d32)]);
     let kt = b.transpose(kw, &[1, 2, 0]);
@@ -2021,25 +1966,7 @@ fn lower_attention(
     let probs = match ex.sinks {
         None => b.softmax_shifted(logits, 24 - LOGIT_Q),
         Some(sp) => {
-            let sink = decl(
-                b,
-                cx,
-                lb,
-                &format!("{site}.sinks"),
-                DType::I32,
-                &[heads],
-                per_layer(lb),
-                Arc::new(move |c| {
-                    let t = c.f(sp)?;
-                    Ok(IntTensor::i32(
-                        vec![t.data.len()],
-                        t.data
-                            .iter()
-                            .map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
-                            .collect(),
-                    ))
-                }),
-            )?;
+            let sink = decl_sinks(b, cx, lb, site, heads, sp)?;
             let sink = b.reshape_fixed(sink, &[kv32, g32, 1]);
             b.softmax_with_sink(logits, sink, 24 - LOGIT_Q)
         }
@@ -2065,6 +1992,99 @@ fn lower_attention(
     let r = narrow(b, o, m, s, None, DType::I16);
     b.commit(r);
     Ok(Val { r, dt: DType::I16, key: out_key, len: heads * dv, site: site.to_string() })
+}
+
+/// The attention sink logits `[heads]`, Q`LOGIT_Q` (gpt-oss).
+fn decl_sinks(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, site: &str, heads: usize, sp: u32) -> Result<tir::Ref> {
+    decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.sinks"),
+        DType::I32,
+        &[heads],
+        per_layer(lb),
+        Arc::new(move |c| {
+            let t = c.f(sp)?;
+            Ok(IntTensor::i32(
+                vec![t.data.len()],
+                t.data
+                    .iter()
+                    .map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
+                    .collect(),
+            ))
+        }),
+    )
+}
+
+/// **Attention through the library's `attention` template** (grouped-query, sliding window, sinks):
+/// the score narrowing to Q`LOGIT_Q` logits, the softmax lifted by `2^(24 − LOGIT_Q)`, the value
+/// narrowing back to codes (per channel when the output is split). The lowering's own form is kept
+/// only where the function differs: soft-capping (Q24 then Q14, no division), ALiBi (Falcon's
+/// bfloat16 table, the distance form) and a value head width unlike the query's.
+#[allow(clippy::too_many_arguments)]
+fn lower_attention_library(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    q: &Val,
+    k: (tir::Ref, ScaleKey),
+    v: (tir::Ref, ScaleKey),
+    dims: AttnDims,
+    ex: &AttnExtras,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let AttnDims { heads, kv, d, .. } = dims;
+    let g = heads / kv;
+    let (kq, kk) = (q.key.clone(), k.1.clone());
+    let scale = ex.scale;
+    let (ms, ss) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.scores"),
+        1,
+        Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])),
+    )?;
+    let sink = match ex.sinks {
+        Some(sp) => Some(decl_sinks(b, cx, lb, site, heads, sp)?),
+        None => None,
+    };
+    let out_key = want.key.clone();
+    let (kv_, ko) = (v.1.clone(), out_key.clone());
+    let n = if ko.split() > 0 { heads * d } else { 1 };
+    let (mv, sv) = decl_ms(
+        b,
+        cx,
+        lb,
+        site,
+        n,
+        Arc::new(move |c| {
+            let sv = c.scale(&kv_)? / (1u64 << 24) as f64;
+            Ok(c.scale_vec(&ko, n)?.iter().map(|so| sv / so).collect())
+        }),
+    )?;
+    let (mv, sv) = if n > 1 {
+        let shape = [kv as u32, g as u32, d as u32];
+        (b.reshape_fixed(mv, &shape), b.reshape_fixed(sv, &shape))
+    } else {
+        (mv, sv)
+    };
+    let cfg = tir::library::attn::AttnCfg {
+        heads: heads as u32,
+        kv_heads: kv as u32,
+        head_dim: d as u32,
+        score: tir::library::Narrowing::new(ms, ss, None),
+        softcap: None,
+        alibi: None,
+        sink,
+        up_bits: 24 - LOGIT_Q,
+        value: tir::library::Narrowing::new(mv, sv, None),
+    };
+    let r = b.attention(q.r, k.0, v.0, &cfg);
+    let r = b.commit(r);
+    Ok(Val { r, dt: DType::I16, key: out_key, len: heads * d, site: site.to_string() })
 }
 
 /// Expert selection from Q14 router logits (library `router_topk_q36` pattern): the softmax over
@@ -2139,18 +2159,7 @@ fn lower_route(
     };
     let kept = b.gather(scores, idx, 0, 0);
     let kept = if r.scoring == Scoring::TopKThenSoftmax { b.softmax_shifted(kept, up) } else { kept };
-    // `renormalize_recip`'s rounding with the probabilities' own range: the library clamps the
-    // result to `i32`, and at DeepSeek-V3's width that interval makes the combine's `MatMul`
-    // overflow `i64` in the range analysis; `[0, 2^25]` (a clamp that never fires) keeps it inside.
-    let w = if r.normalize {
-        let sum = b.reduce_sum(kept, 0, DType::I64);
-        let recip = b.int_recip(sum);
-        let p = b.mul(kept, recip, DType::I128);
-        let q = b.shr(p, 24, Rounding::Floor, DType::I64);
-        b.clamp(q, 0, 1 << 25, DType::I32)
-    } else {
-        kept
-    };
+    let w = if r.normalize { b.renormalize_recip(kept) } else { kept };
     Ok((idx, w))
 }
 

@@ -68,7 +68,7 @@ fn every_lowerable_real_configuration_is_admitted() {
             Err(e) if e.starts_with("not lowerable") => eprintln!("{n:>40}: {e}"),
             Err(e) => {
                 eprintln!("{n:>40}: {e}");
-                assert!(e.starts_with("REFUSED position MACs"), "{n}: {e}");
+                assert!(e.starts_with("REFUSED max_position_macs"), "{n}: {e}");
                 refused.push(n.clone());
             }
         }
