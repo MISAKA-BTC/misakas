@@ -55,6 +55,7 @@
 //! commit point is added for cone size.
 
 pub mod bidir;
+pub mod vision;
 pub mod fill;
 
 use crate::error::{LowerError, Result};

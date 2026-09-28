@@ -220,3 +220,33 @@ pub fn as_last_token_embedder(mut spec: crate::spec::ArchSpec, normalize: bool) 
     spec.notes.push("read as a last-token embedder: the head is not part of the class".into());
     spec
 }
+
+/// Lift named version-1 params into `External` inputs and declare `output`: the version-2 program
+/// of a one-position encoder whose inputs the lowering declared as params. Validated.
+pub fn lift_v2(lw: &Lowered, lifts: &[(&str, tir::program_v2::InputSource)], output: OutputDecl) -> Result<TirProgramV2> {
+    let mut v = Vec::with_capacity(lifts.len());
+    for (name, src) in lifts {
+        let i = lw
+            .program
+            .params
+            .iter()
+            .position(|p| p.name == *name)
+            .ok_or_else(|| LowerError::eval(format!("internal: no input param `{name}`")))?;
+        v.push((i as u16, *src));
+    }
+    let p = TirProgramV2::from_v1_lifting_params(&lw.program, &v, output).map_err(|e| LowerError::eval(e.to_string()))?;
+    tir::validate_v2::validate_v2(&p).map_err(|e| LowerError::eval(format!("version-2 normal form: {e}")))?;
+    Ok(p)
+}
+
+/// The version-2 program of a vision tower ([`crate::lower::vision`]): the canonical image
+/// `input.image` (`i16 [H, W, 3]`) lifted into an `External` input over `[0, 255]`, and the tower's
+/// output rows `[R, width]` as its `Final` output. `JobImage` (RFC-0003 II.4, rfc3/impl) will bind
+/// that input; until it lands the program runs standalone.
+pub fn vision_v2(lw: &Lowered) -> Result<TirProgramV2> {
+    lift_v2(
+        lw,
+        &[(crate::lower::vision::IMAGE_PARAM, tir::program_v2::InputSource::External { lo: 0, hi: 255 })],
+        OutputDecl::Final { node: lw.program.logits },
+    )
+}

@@ -95,7 +95,7 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
     })
 }
 
-fn hl_param(hl: &HlProgram, name: &str) -> Result<u32> {
+pub(super) fn hl_param(hl: &HlProgram, name: &str) -> Result<u32> {
     hl.params
         .iter()
         .position(|p| p.name == name)
@@ -162,16 +162,16 @@ pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lo
 }
 
 /// A value of this lowering: `[L, n]` (or `[1, n]`) rows.
-fn rows_val(r: tir::Ref, dt: DType, key: ScaleKey, n: usize, site: &str) -> Val {
+pub(super) fn rows_val(r: tir::Ref, dt: DType, key: ScaleKey, n: usize, site: &str) -> Val {
     Val { r, dt, key, len: n, site: site.to_string() }
 }
 
-fn site_key(site: &str) -> ScaleKey {
+pub(super) fn site_key(site: &str) -> ScaleKey {
     ScaleKey::site(vec![site.to_string()], false)
 }
 
 /// Record a committed node's site for the per-site diagnosis.
-fn note_site(cx: &mut Cx<'_>, tb: u8, v: &Val) {
+pub(super) fn note_site(cx: &mut Cx<'_>, tb: u8, v: &Val) {
     if let tir::Ref::Node(n) = v.r {
         cx.site_nodes.entry((tb, n)).or_insert((v.site.clone(), v.key.clone(), v.len));
     }
@@ -412,18 +412,19 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
 
 /// A zero-filled input param (the program's inputs are lifted before it runs; a version-1 run of
 /// the lowered program gets its inputs by overwriting these).
-fn input_fill(dt: DType, shape: Vec<usize>) -> FillFn {
+pub(super) fn input_fill(dt: DType, shape: Vec<usize>) -> FillFn {
     Arc::new(move |_c| {
         let n: usize = shape.iter().product();
         Ok(match dt {
             DType::Idx => IntTensor { dtype: DType::Idx, shape: shape.clone(), data: crate::lower::IntData::Idx(vec![0; n]) },
+            DType::I16 => IntTensor::i16(shape.clone(), vec![0; n]),
             _ => IntTensor::i32(shape.clone(), vec![0; n]),
         })
     })
 }
 
 /// `i16` codes of a row value at its own site's scale (the rows' version of `codes`).
-fn codes_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, v: &Val) -> Result<Val> {
+pub(super) fn codes_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, v: &Val) -> Result<Val> {
     if v.dt == DType::I16 {
         return Ok(v.clone());
     }
@@ -436,7 +437,7 @@ fn codes_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, v: &Val) -
 }
 
 /// `x + y` of two residual-scale rows.
-fn add_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, x: &Val, y: &Val, site: &str) -> Result<Val> {
+pub(super) fn add_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, x: &Val, y: &Val, site: &str) -> Result<Val> {
     if !x.key.same(&ScaleKey::resid()) || !y.key.same(&ScaleKey::resid()) {
         return Err(LowerError::eval(format!("internal: `{site}` adds values off the residual scale")));
     }
@@ -450,7 +451,7 @@ fn add_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, x: &Val, y: &Val
 /// `x·Wᵀ + b` over rows: `x:code[L, in]`, `W:i8[out, in]` per-row codes, stored transposed as
 /// `[in, out]` so the product is one `MatMul` into `[L, out]`; narrowed per output channel.
 #[allow(clippy::too_many_arguments)]
-fn linear_rows(
+pub(super) fn linear_rows(
     b: &mut BlockBuilder<'_>,
     cx: &mut Cx<'_>,
     lb: &mut Lb,
@@ -534,24 +535,55 @@ fn linear_rows(
 /// the decoder's exact centring (`c = n·x − Σx`, brought into `i32` by `2^k`), the Q24 unit row,
 /// then one per-channel narrowing with the gain as `m` and the bias as `z`.
 fn norm_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, eps: f64, site: &str, want: &Want) -> Result<Val> {
+    norm_rows_kind(b, cx, lb, x, NormKind::Layer, eps, site, true, want)
+}
+
+/// LayerNorm or RMSNorm along the last axis of `[L, n]` rows, gain `{site}.gain` and (when
+/// `bias`) bias `{site}.bias`. LayerNorm centres exactly (`c = n·x − Σx`, brought into `i32` by
+/// `2^k`); both then take the Q24 unit row and one per-channel narrowing with the gain as `m`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn norm_rows_kind(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    kind: NormKind,
+    eps: f64,
+    site: &str,
+    bias: bool,
+    want: &Want,
+) -> Result<Val> {
     let hl = cx.hl;
     let n = x.len;
-    let (gp, bp) = (hl_param(hl, &format!("{site}.gain"))?, hl_param(hl, &format!("{site}.bias"))?);
+    let gp = hl_param(hl, &format!("{site}.gain"))?;
+    let bp = if bias { Some(hl_param(hl, &format!("{site}.bias"))?) } else { None };
     let in_bits: i32 = if x.dt == DType::I16 { 16 } else { 32 };
-    let k = (in_bits + (n as f64).log2().ceil() as i32 - 31).max(0) as u32;
+    let k = match kind {
+        NormKind::Layer => (in_bits + (n as f64).log2().ceil() as i32 - 31).max(0) as u32,
+        NormKind::Rms => 0,
+    };
     let kx = x.key.clone();
     let eps_q = Arc::new(move |c: &FillCtx<'_>| -> Result<f64> {
         let sx = c.scale(&kx)?;
-        Ok(eps * (1u64 << 24) as f64 / (sx * sx) * (n * n) as f64 / 4f64.powi(k as i32))
+        let base = eps * (1u64 << 24) as f64 / (sx * sx);
+        Ok(match kind {
+            NormKind::Layer => base * (n * n) as f64 / 4f64.powi(k as i32),
+            NormKind::Rms => base,
+        })
     });
     let eps_p = decl_eps(b, cx, lb, site, eps_q)?;
-    let axis = b.shape(x.r).len() - 1;
-    let nn = b.c(DType::I64, n as i128);
-    let nx = b.mul(x.r, nn, DType::I64);
-    let sum = b.reduce_sum(x.r, axis, DType::I64);
-    let c = b.sub(nx, sum, DType::I64);
-    let c = if k > 0 { b.shr(c, k, tir::Rounding::HalfAwayFromZero, DType::I64) } else { c };
-    let c = b.clamp(c, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    let c = match kind {
+        NormKind::Layer => {
+            let axis = b.shape(x.r).len() - 1;
+            let nn = b.c(DType::I64, n as i128);
+            let nx = b.mul(x.r, nn, DType::I64);
+            let sum = b.reduce_sum(x.r, axis, DType::I64);
+            let c = b.sub(nx, sum, DType::I64);
+            let c = if k > 0 { b.shr(c, k, tir::Rounding::HalfAwayFromZero, DType::I64) } else { c };
+            b.clamp(c, i32::MIN as i64, i32::MAX as i64, DType::I32)
+        }
+        NormKind::Rms => x.r,
+    };
     let u = rms_unit(b, c, eps_p);
     let ky = want.key.clone();
     let (m, s) = decl_ms(
@@ -568,21 +600,24 @@ fn norm_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, ep
     )?;
     let ky = want.key.clone();
     let pl = per_layer(lb);
-    let z = decl(
-        b,
-        cx,
-        lb,
-        &format!("{site}.z"),
-        DType::I64,
-        &[n],
-        pl,
-        Arc::new(move |c| {
-            let bv = c.f(bp)?;
-            let sy = c.scale_vec(&ky, n)?;
-            Ok(IntTensor::i64(vec![n], (0..n).map(|i| (bv.data[i] as f64 / sy[i]).round() as i64).collect()))
-        }),
-    )?;
-    let r = narrow(b, u, m, s, Some(z), want.dt);
+    let z = match bp {
+        Some(bp) => Some(decl(
+            b,
+            cx,
+            lb,
+            &format!("{site}.z"),
+            DType::I64,
+            &[n],
+            pl,
+            Arc::new(move |c| {
+                let bv = c.f(bp)?;
+                let sy = c.scale_vec(&ky, n)?;
+                Ok(IntTensor::i64(vec![n], (0..n).map(|i| (bv.data[i] as f64 / sy[i]).round() as i64).collect()))
+            }),
+        )?),
+        None => None,
+    };
+    let r = narrow(b, u, m, s, z, want.dt);
     if want.dt == DType::I16 {
         b.commit(r);
     }
