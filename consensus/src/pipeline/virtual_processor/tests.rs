@@ -16386,6 +16386,9 @@ mod t12_rcore_s6_producer_share;
 // in the block below the fence, refused from it; a bound buy valid on both sides; the released rule
 // and the armed one agreeing on every block below it.
 mod t12_model_sink_bound_fence;
+// RFC-0002 Phase F: one IR class registration a block reaches admission v10 — the walk drops a second
+// by name before any slot or fee, and the fold refuses a second as its second lock.
+mod t12_tir_registration_cap;
 // ADR-0152 v3.1 S-7: the reporter's commitment (tag 53) and reveal (tag 54) at the gate, the walk
 // and the fold past `palw_rcore_plus`, with real card signatures.
 mod t12_rcore_s7_reporter_gate;

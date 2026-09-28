@@ -361,6 +361,11 @@ left open:
   per-commit-point `tile_len` in `TirAdmitInputsV1` would make this one run (a tir/core follow-up).
 * A cone that reduces over `H` is adjudicated whole until F7 wires the dissection: its tile at
   `H = W` must fit like any other, else `TirNeedsDissection`.
+* **One IR registration a block reaches v10** (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`, the
+  coordinator's release item of 2026-09-29): sizing costs every node up to seconds, so the acceptance
+  walk drops a further `ClassRegisteredTirV1` by name before any rent, slot or fee — exactly as the
+  below-fence drop — and the fold refuses a second as its second lock (`TirRegistrationsPerBlockExceeded`).
+  One the walk drops before the gate (unsigned, a stale target, refused by the rehearsal) takes no place.
 * The close-bytes check (program + frame + the worst tile's opened operand bytes ≤ `max_close_bytes`)
   is a necessary condition only: `tir_admit_v1` reports element-granular demand, and a close carries
   whole step leaves and whole inventory pieces with their paths. A sufficient bound needs per-leaf
