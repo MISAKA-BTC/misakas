@@ -1186,10 +1186,23 @@ the text stage's.
     layout change. The V4 validators refuse it, and the V5 validator applies V4's commitment rules
     to its V4 view past `palw_fp_job_v5`.
 
-  Not yet built: the pipeline admission and the generative class registry that a V5 claim resolves
-  its class against; the node's worker and seat loops (kaspad, `misaka-palw-base0`) calling these;
-  the close proofs as consensus objects (`PalwCourtVerdictProofV2` 10/11); and the params' openings
-  against the artifact root (Phase F's inventory, for pipelines).
+  - **the pipeline admission and the registry** (`palw_gen_admission_v1`, dormant under
+    `palw_gen_v1`): the preflight; the one step tree counted exactly in closed form — the widest job
+    within the court's ladder and `max_job_step_leaves`, and `pwu_per_inference` equal to the count
+    of the class's most expensive offered job; every commit point's cone at its own tile length
+    against the court (a cone that reduces over the history must fit whole — the generative court
+    dissects no history before court version 3); the class id; and 0‰, since no attempt lane
+    exists for pipelines. The fold writes the class's `gen_classes` row (rooted without the class's
+    bytes, delta entry 90, carriage tail `0xC2`). A V5 claim's class is the row its job names: a
+    text class, its tokenizer, its slots and its stream;
+  - **the params against the artifact root** (`palw_gen_artifact_v1`): the pipeline inventory is
+    Phase F's per program, in program order, in one tree, each leaf named `p<k>/<name>`. A close
+    carries the param leaves its cone reads with their paths; the court reads a weight only from a
+    leaf proven under the class's `artifact_root`, so an executor that ran other weights is convicted
+    at its first divergent leaf.
+
+  Not yet built: the close proofs as consensus objects (`PalwCourtVerdictProofV2` 10/11) and their
+  fold; the node's worker and seat loops (kaspad, `misaka-palw-base0`) calling these.
 
 **Order of implementation for this path.**
 
@@ -1553,6 +1566,15 @@ output kinds (§I.3.3).
 | 11 | **Multimodal input** (§II.4), then image-editing bodies. Built on `rfc3/impl` (2026-09-29), dormant: `JobImage`, the slots, the image leaf, the court's tile reading. Then the **VLM path** (§II.2.1): the text stage in the IR and the `Text` profile, dormant; FP Job V5 in RFC-0001's lane after its owner agrees | fence value; **[RFC-0001]** for V5 | — | — |
 | 12 | **Audio** (§II.5) | fence value | — | — |
 | 13 | **Generalised dissection** (§II.1.5.6, court version 3), then **video** (§II.6), subject to open question 6 | fence | — | — |
+
+**Which lanes each fence opens.** RFC-0002 Phase F's decision 12 keeps the free-prompt lane closed
+to IR classes: testnet-12's DAA 2,000 (`palw_tir_v1`) opens registration, the attempt lane, panels
+and the court for IR classes, and nothing of the free-prompt lane. `palw_gen_v1` opens registration
+(the pipeline admission), panels and the court for generative classes; a pipeline has no attempt
+lane (it registers at 0‰). **Opening the free-prompt lane to IR and pipeline classes is its own
+later fence.** For a pipeline class that lane is FP Job V5's (`palw_fp_job_v5`, §II.2.1): its walk
+admits a V5 commitment only once the fence is armed and open question 13's price is confirmed.
+Until then the walk skips every version-8 payload, whatever the height.
 
 **Order of implementation, in one line:** R and canonical outputs, then TIR V2, then pipelines and
 the court, then the image profile (with embedding as the smoke test), then drills and testnet, then
