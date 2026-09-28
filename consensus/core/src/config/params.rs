@@ -20766,6 +20766,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_capacity_verify();
     // Lane F2's floor-refusal-retry height, for the same reason and in the same place.
     params.sync_palw_floor_refusal_retry();
+    // RFC-0002 Phase F's IR fence, for the same reason and in the same place.
+    params.sync_palw_tir_v1();
     params.validate_palw_v2()?;
     Ok(params)
 }

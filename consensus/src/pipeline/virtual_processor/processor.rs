@@ -9131,7 +9131,14 @@ impl VirtualStateProcessor {
                             kaspa_consensus_core::palw_state_v2::palw_court_close_chunk_digest_v1(&assembled) == group.close_digest;
                         let decoded = assembles
                             .then(|| borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&assembled).ok())
-                            .flatten();
+                            .flatten()
+                            // RFC-0002 Phase F: below `palw_tir_v1` an IR proof does not decode on an
+                            // older build, so here it is bytes that do not decode as well — admitted,
+                            // and the transition convicts the declarer exactly as the older build does.
+                            .filter(|object| {
+                                !matches!(object, Obj::CourtClosed { proof, .. }
+                                    if proof.is_tir_v1() && !self.palw_tir_at(point.daa_score))
+                            });
                         // Only when the bytes ARE this session's close does the adjudication run;
                         // anything else is the transition's conviction, not this layer's refusal.
                         if let Some(Obj::CourtClosed { session_id: decoded_session, verdict, proof }) = &decoded
@@ -9447,6 +9454,13 @@ impl VirtualStateProcessor {
                     .map_err(|e| e.to_string())?;
                 }
                 Obj::CourtClosed { session_id, verdict, proof } => {
+                    // RFC-0002 Phase F: an IR close is dropped by name below `palw_tir_v1`, exactly
+                    // as an older build skips the payload it cannot decode (A-2).
+                    if proof.is_tir_v1() && !self.palw_tir_at(point.daa_score) {
+                        return Err(format!(
+                            "court {session_id}: an IR close is refused: palw_tir_v1 is not in force at this block (RFC-0002 Phase F)"
+                        ));
+                    }
                     // The close carries its proof now, so there is something to adjudicate. The
                     // node re-derives the verdict from the proof and compares: a declared verdict
                     // that its own proof does not produce is refused, in EITHER direction — an

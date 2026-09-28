@@ -1512,6 +1512,13 @@ pub struct PalwStateParamsV2 {
     /// `validate_palw_v2` refuses a bundle whose copy disagrees with it.
     #[borsh(skip)]
     floor_refusal_retry_from_daa: Option<u64>,
+    /// **RFC-0002 Phase F: `Params::palw_tir_v1`'s height**, mirrored by `Params::sync_palw_tir_v1`
+    /// because the fold that assembles a split court close holds only these params: below the fence
+    /// an assembled close carrying an IR proof reads as bytes that do not decode — what an older
+    /// build, whose enum has no IR proof, reads. `None` on every shipped preset; skipped by borsh for
+    /// `floor_refusal_retry_from_daa`'s reason, and `validate_palw_v2` refuses a copy that disagrees.
+    #[borsh(skip)]
+    tir_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1717,6 +1724,7 @@ impl PalwStateParamsV2 {
             registry_resilience_from_daa: None,
             final_lock_life_from_daa: None,
             floor_refusal_retry_from_daa: None,
+            tir_from_daa: None,
         })
     }
 
@@ -1876,6 +1884,23 @@ impl PalwStateParamsV2 {
     /// Lane F2: `Params::palw_floor_refusal_retry`'s height, if the network arms it (the mirror).
     pub fn floor_refusal_retry_from_daa(&self) -> Option<u64> {
         self.floor_refusal_retry_from_daa
+    }
+
+    /// **RFC-0002 Phase F: the IR fence's mirror** — written by `Params::sync_palw_tir_v1` and by
+    /// nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_tir_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.tir_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_tir_v1`'s height, if the network arms it (the mirror).
+    pub fn tir_from_daa(&self) -> Option<u64> {
+        self.tir_from_daa
+    }
+
+    /// **Is `palw_tir_v1` in force at `daa_score`?** `false` on every shipped preset.
+    pub fn tir_active_at(&self, daa_score: u64) -> bool {
+        self.tir_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -31398,6 +31423,12 @@ fn apply_object(
                 .filter(|object| {
                     matches!(object, PalwConsensusObjectV2::CourtClosed { session_id: decoded_session, verdict, .. }
                         if decoded_session == session_id && *verdict == group.verdict)
+                })
+                // RFC-0002 Phase F: below `palw_tir_v1` an IR proof is not in the enum an older build
+                // decodes with, so its bytes do not decode there — and do not decode here either.
+                .filter(|object| {
+                    !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
+                        if proof.is_tir_v1() && !builder.params.tir_active_at(ctx.daa_score))
                 });
             let Some(close) = decoded else {
                 return convict_close_declarer_v1(builder, ctx, *session_id, *side);
