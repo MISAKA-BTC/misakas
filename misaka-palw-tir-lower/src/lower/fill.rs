@@ -309,7 +309,9 @@ impl<'a> FillCtx<'a> {
             let mx = vals.iter().fold(0f64, |m, v| m.max(v.abs()));
             let fr = if mx > 0.0 { (30 - mx.log2().ceil() as i32).clamp(0, f_max) } else { f_max };
             f.push(fr as i8);
-            wo.extend(vals.iter().map(|v| (v * 2f64.powi(fr)).round().clamp(-(1i64 << 31) as f64 + 1.0, (1i64 << 31) as f64 - 1.0) as i32));
+            wo.extend(
+                vals.iter().map(|v| (v * 2f64.powi(fr)).round().clamp(-(1i64 << 31) as f64 + 1.0, (1i64 << 31) as f64 - 1.0) as i32),
+            );
         }
         let sc = Arc::new(SplitCodes { main, outliers: out, wo, f });
         self.split_memo.lock().expect("memo").insert(mk, sc.clone());

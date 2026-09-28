@@ -209,7 +209,15 @@ pub fn program_summary(p: &TirProgramV1) -> String {
     let per_layer = p.params.iter().filter(|d| d.per_layer).count();
     let _ = writeln!(s, "  params: {} ({} per-layer)", p.params.len(), per_layer);
     for st in &p.states {
-        let _ = writeln!(s, "    state `{}` {:?} {} {:?}{}", st.name, st.kind, st.dtype.name(), st.shape, if st.per_layer { " per-layer" } else { "" });
+        let _ = writeln!(
+            s,
+            "    state `{}` {:?} {} {:?}{}",
+            st.name,
+            st.kind,
+            st.dtype.name(),
+            st.shape,
+            if st.per_layer { " per-layer" } else { "" }
+        );
     }
     s
 }
@@ -289,7 +297,11 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
                     break;
                 }
                 Err(p) => {
-                    let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                    let msg = p
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_default();
                     pb.params.truncate(snap.0);
                     pb.consts.truncate(snap.1);
                     pb.states.truncate(snap.2);
@@ -314,7 +326,8 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     let logits = logits.ok_or_else(|| LowerError::eval("internal: post block produced no logits"))?;
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
     let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], logits);
-    tir::validate::validate(&program).map_err(|e| LowerError::eval(format!("internal: lowered program is not in normal form: {e}")))?;
+    tir::validate::validate(&program)
+        .map_err(|e| LowerError::eval(format!("internal: lowered program is not in normal form: {e}")))?;
     let fills: Vec<FillFn> = cx.fills;
     if fills.len() != program.params.len() {
         return Err(LowerError::eval("internal: fills do not match params"));
@@ -407,7 +420,9 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
     let prefixes: Vec<String> = match blk.role {
         BlockRole::Pre => vec!["pre.".into()],
         BlockRole::Post => vec!["post.".into()],
-        BlockRole::Layer => hl.schedule.iter().enumerate().filter(|(_, k)| **k as usize == hbk).map(|(l, _)| format!("L{l}.")).collect(),
+        BlockRole::Layer => {
+            hl.schedule.iter().enumerate().filter(|(_, k)| **k as usize == hbk).map(|(l, _)| format!("L{l}.")).collect()
+        }
     };
     let suffix = if blk.role == BlockRole::Layer && hl.schedule.first().map(|k| *k as usize) != Some(hbk) {
         format!("#{hbk}")
@@ -434,11 +449,12 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
     let tb = pb.blocks.len() as u8;
     let mut b = pb.block(&blk.name, if blk.role == BlockRole::Pre { vec![] } else { carry_sig });
     for (i, node) in blk.nodes.iter().enumerate() {
-        let out = lower_node(&mut b, cx, &mut lb, i, node)
-            .map_err(|e| match e {
-                LowerError::NotLowerable(m) => LowerError::NotLowerable(format!("block `{}` node {i} ({}): {m}", blk.name, node.op.name())),
-                other => other,
-            })?;
+        let out = lower_node(&mut b, cx, &mut lb, i, node).map_err(|e| match e {
+            LowerError::NotLowerable(m) => {
+                LowerError::NotLowerable(format!("block `{}` node {i} ({}): {m}", blk.name, node.op.name()))
+            }
+            other => other,
+        })?;
         if std::env::var_os("PALW_TIR_DEBUG").is_some() {
             let last = out.iter().flatten().filter_map(|v| if let tir::Ref::Node(n) = v.r { Some(n) } else { None }).max();
             eprintln!("  [{}] {i:>3} {:<14} {:<22} → node {last:?}", blk.name, node.op.name(), node.site.as_deref().unwrap_or(""));
@@ -943,7 +959,8 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             };
             let (kw, kk) = lb.windows.get(&ks).cloned().ok_or_else(|| LowerError::eval("internal: K read before its append"))?;
             let (vw, vk) = lb.windows.get(&vs).cloned().ok_or_else(|| LowerError::eval("internal: V read before its append"))?;
-            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            let want =
+                if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
             let window = match hl.states[ks as usize].kind {
                 StateKind::Hist { window } => window.map(|w| w as u32).unwrap_or(cx.history_bound).min(cx.history_bound),
                 StateKind::Fixed => return Err(LowerError::eval("internal: attention over a Fixed state")),
@@ -1016,16 +1033,22 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             note_resid(cx, lb, &v);
             one(v)
         }
-        other => {
-            Err(LowerError::not_lowerable(format!("op {} is not in Gate 2a (dense decoders only)", other.name())))
-        }
+        other => Err(LowerError::not_lowerable(format!("op {} is not in Gate 2a (dense decoders only)", other.name()))),
     }
 }
 
 /// A row of a table param selected by an index (`Embedding`, `PosEmbedding`), lifted to `want`:
 /// the `i8` row times its own per-row scale — a per-token (per-position) `(m, s)` gathered by the
 /// same index.
-fn lower_row_lookup(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, tp: u32, at: tir::Ref, site: &str, want: &Want) -> Result<Val> {
+fn lower_row_lookup(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    tp: u32,
+    at: tir::Ref,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
     let hl = cx.hl;
     let d = &hl.params[tp as usize];
     let (rows, cols) = (d.shape[0], d.shape[1]);
@@ -1110,7 +1133,10 @@ fn lower_linear(
                 Arc::new(move |c| {
                     let bv = c.f(bp)?;
                     let sy = c.scale_vec(&ky, bv.data.len())?;
-                    Ok(IntTensor::i64(vec![bv.data.len()], bv.data.iter().zip(&sy).map(|(v, s)| (*v as f64 / s).round() as i64).collect()))
+                    Ok(IntTensor::i64(
+                        vec![bv.data.len()],
+                        bv.data.iter().zip(&sy).map(|(v, s)| (*v as f64 / s).round() as i64).collect(),
+                    ))
                 }),
             )?)
         }
@@ -1312,7 +1338,12 @@ fn lower_norm(
                 Arc::new(move |c| {
                     let bv = c.f(bp)?;
                     let sy = c.scale_vec(&ky, n)?;
-                    Ok(IntTensor::i64(vec![n], (0..n).map(|i| (bv.data[if bv.data.len() == n { i } else { i % bv.data.len() }] as f64 / sy[i]).round() as i64).collect()))
+                    Ok(IntTensor::i64(
+                        vec![n],
+                        (0..n)
+                            .map(|i| (bv.data[if bv.data.len() == n { i } else { i % bv.data.len() }] as f64 / sy[i]).round() as i64)
+                            .collect(),
+                    ))
                 }),
             )?)
         }
@@ -1413,9 +1444,14 @@ enum TableFn {
     Softcap(f64),
     Clamp(f64, f64),
     /// gpt-oss's gate half: `g·σ(α·g)` with `g = min(gate, limit)`.
-    ClampedGlu { alpha: f64, limit: f64 },
+    ClampedGlu {
+        alpha: f64,
+        limit: f64,
+    },
     /// gpt-oss's up half: `clamp(up, −limit, limit) + 1`.
-    ClampedUp { limit: f64 },
+    ClampedUp {
+        limit: f64,
+    },
 }
 
 impl TableFn {
@@ -1471,7 +1507,15 @@ fn lower_table_named(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: 
 }
 
 /// A table whose output scale is given (not a calibrated site).
-fn lower_table_keyed(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, f: TableFn, site: &str, out_key: ScaleKey) -> Result<Val> {
+fn lower_table_keyed(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    f: TableFn,
+    site: &str,
+    out_key: ScaleKey,
+) -> Result<Val> {
     let (kx, ko) = (x.key.clone(), out_key.clone());
     let t = decl(
         b,
@@ -1528,7 +1572,7 @@ fn rope_angles(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32) -
         let pos = tir::Ref::Input(INPUT_POS);
         (b.gather(cos, pos, 0, 0), b.gather(sin, pos, 0, 0))
     } else {
-        let lo_bits = (hb.trailing_zeros() + 1) / 2;
+        let lo_bits = hb.trailing_zeros().div_ceil(2);
         let (lo_rows, hi_rows) = (1usize << lo_bits, hb >> lo_bits);
         // cos/sin of `r · 2^step · θ_i`, exact in f64 on HF's float32 θ.
         let mk = |rows: usize, step: u32, sin: bool| -> FillFn {
@@ -1765,7 +1809,9 @@ fn lower_attention(
                         vec![hs, 1],
                         al2.slopes
                             .iter()
-                            .map(|sl| (sl * if al2.scaled_by_softmax_scale { scale } else { 1.0 } * (1u64 << LOGIT_Q) as f64).round() as i64)
+                            .map(|sl| {
+                                (sl * if al2.scaled_by_softmax_scale { scale } else { 1.0 } * (1u64 << LOGIT_Q) as f64).round() as i64
+                            })
                             .collect(),
                     ))
                 }),
@@ -1793,7 +1839,10 @@ fn lower_attention(
                     let t = c.f(sp)?;
                     Ok(IntTensor::i32(
                         vec![t.data.len()],
-                        t.data.iter().map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32).collect(),
+                        t.data
+                            .iter()
+                            .map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
+                            .collect(),
                     ))
                 }),
             )?;
@@ -1896,7 +1945,17 @@ fn lower_moe(
     let kx = x.key.clone();
     // One projection over the selected experts: `[E, rows, cols]` codes, `(m, s, z)` per
     // (expert, row), gathered by `idx`.
-    let proj = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, p: u32, bias: Option<u32>, input: tir::Ref, in_key: ScaleKey, name: &str, out: ScaleKey, dt: DType| -> Result<tir::Ref> {
+    let proj = |b: &mut BlockBuilder<'_>,
+                cx: &mut Cx<'_>,
+                lb: &mut Lb,
+                p: u32,
+                bias: Option<u32>,
+                input: tir::Ref,
+                in_key: ScaleKey,
+                name: &str,
+                out: ScaleKey,
+                dt: DType|
+     -> Result<tir::Ref> {
         let pd = &hl.params[p as usize];
         let (rows, cols) = (pd.shape[1], pd.shape[2]);
         let codes = decl(b, cx, lb, &pd.name, DType::I8, &[e, rows, cols], pd.per_layer, weight_codes(p))?;
@@ -2080,8 +2139,11 @@ fn concat_wants(blk: &hl::Block, lb: &mut Lb) {
         if !matches!(n.op, Op::Concat) {
             continue;
         }
-        let parts: Vec<usize> = n.inputs.iter().filter_map(|r| if let hl::Ref::Node(j, 0) = r { Some(*j as usize) } else { None }).collect();
-        if parts.len() != n.inputs.len() || parts.iter().any(|j| !matches!(blk.nodes[*j].op, Op::Linear { .. }) || lb.wants[*j].is_some()) {
+        let parts: Vec<usize> =
+            n.inputs.iter().filter_map(|r| if let hl::Ref::Node(j, 0) = r { Some(*j as usize) } else { None }).collect();
+        if parts.len() != n.inputs.len()
+            || parts.iter().any(|j| !matches!(blk.nodes[*j].op, Op::Linear { .. }) || lb.wants[*j].is_some())
+        {
             continue;
         }
         let names: Vec<String> = parts.iter().filter_map(|j| blk.nodes[*j].site.clone()).collect();
@@ -2253,7 +2315,12 @@ fn lower_gdn(
         DType::I64,
         &[nv],
         pl,
-        Arc::new(move |c| Ok(IntTensor::i64(vec![nv], c.f(an)?.data.iter().map(|v| (-(*v as f64) * (1u64 << 24) as f64).round().max(0.0) as i64).collect()))),
+        Arc::new(move |c| {
+            Ok(IntTensor::i64(
+                vec![nv],
+                c.f(an)?.data.iter().map(|v| (-(*v as f64) * (1u64 << 24) as f64).round().max(0.0) as i64).collect(),
+            ))
+        }),
     )?;
     let dt = b.add(a.r, dtp, DType::I64);
     let dt = b.clamp(dt, i32::MIN as i64, i32::MAX as i64, DType::I32);
@@ -2285,7 +2352,12 @@ fn lower_gdn(
         let ss = su / 32768.0 / 2f64.powi(ws);
         Ok((sv, su, ws, ss))
     });
-    let head_ms = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, name: &str, f: Arc<dyn Fn(&FillCtx<'_>) -> Result<f64> + Send + Sync>| -> Result<(tir::Ref, tir::Ref, tir::Ref)> {
+    let head_ms = |b: &mut BlockBuilder<'_>,
+                   cx: &mut Cx<'_>,
+                   lb: &mut Lb,
+                   name: &str,
+                   f: Arc<dyn Fn(&FillCtx<'_>) -> Result<f64> + Send + Sync>|
+     -> Result<(tir::Ref, tir::Ref, tir::Ref)> {
         let (m, s) = decl_ms(b, cx, lb, name, nv, Arc::new(move |c| Ok(vec![f(c)?; nv])))?;
         let p2 = b.pow2_of(s);
         let z = b.c(DType::I64, 0);
@@ -2293,20 +2365,38 @@ fn lower_gdn(
         Ok((m, p2, z))
     };
     let s1 = scales.clone();
-    let read = head_ms(b, cx, lb, &format!("{site}.read"), Arc::new(move |c| {
-        let (sv, _, _, ss) = s1(c)?;
-        Ok(ss / 32768.0 / sv)
-    }))?;
+    let read = head_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.read"),
+        Arc::new(move |c| {
+            let (sv, _, _, ss) = s1(c)?;
+            Ok(ss / 32768.0 / sv)
+        }),
+    )?;
     let s2 = scales.clone();
-    let delta = head_ms(b, cx, lb, &format!("{site}.delta"), Arc::new(move |c| {
-        let (sv, su, _, _) = s2(c)?;
-        Ok(sv / su)
-    }))?;
+    let delta = head_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.delta"),
+        Arc::new(move |c| {
+            let (sv, su, _, _) = s2(c)?;
+            Ok(sv / su)
+        }),
+    )?;
     let (s3, ko) = (scales.clone(), want.key.clone());
-    let out = head_ms(b, cx, lb, &format!("{site}.out"), Arc::new(move |c| {
-        let (_, _, _, ss) = s3(c)?;
-        Ok(ss / 32768.0 * q_scale / c.scale(&ko)?)
-    }))?;
+    let out = head_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.out"),
+        Arc::new(move |c| {
+            let (_, _, _, ss) = s3(c)?;
+            Ok(ss / 32768.0 * q_scale / c.scale(&ko)?)
+        }),
+    )?;
     let s4 = scales.clone();
     let ws = decl(
         b,

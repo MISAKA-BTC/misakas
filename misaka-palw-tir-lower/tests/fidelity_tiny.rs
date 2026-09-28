@@ -35,7 +35,8 @@ fn run(name: &str) -> Result<fidelity::Metrics, String> {
     let eval = fidelity::random_sequences(vocab, 3, 24.min(max_len), 1234);
     let quiet = |_: usize, _: usize| {};
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).map_err(|e| format!("calibrate: {e}"))?;
-    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet)
+        .map_err(|e| format!("materialise: {e}"))?;
     // The artifact round-trips through the file format with its digest.
     let tmp = std::env::temp_dir().join(format!("palw-tir-{name}-{}.art", std::process::id()));
     let digest = artifact::write(&tmp, &prep.lowered.program, &mat.params, serde_json::json!({})).map_err(|e| e.to_string())?;

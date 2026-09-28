@@ -40,18 +40,34 @@ pub fn prepare(config_text: &str, opts: &LowerOpts) -> Result<Prepared> {
 }
 
 /// Per-site statistics of the float reference over `seqs` (keys `pre.embed`, `L3.attn.q`, …).
-pub fn calibrate(hl: &HlProgram, loader: &dyn OccParams, seqs: &[Vec<usize>], progress: &dyn Fn(usize, usize)) -> Result<BTreeMap<String, SiteStat>> {
+pub fn calibrate(
+    hl: &HlProgram,
+    loader: &dyn OccParams,
+    seqs: &[Vec<usize>],
+    progress: &dyn Fn(usize, usize),
+) -> Result<BTreeMap<String, SiteStat>> {
     Ok(run_layer_major(hl, loader, seqs, true, false, progress)?.stats)
 }
 
 /// Float logits per sequence and position.
-pub fn float_logits(hl: &HlProgram, loader: &dyn OccParams, seqs: &[Vec<usize>], progress: &dyn Fn(usize, usize)) -> Result<Vec<Vec<Vec<f32>>>> {
+pub fn float_logits(
+    hl: &HlProgram,
+    loader: &dyn OccParams,
+    seqs: &[Vec<usize>],
+    progress: &dyn Fn(usize, usize),
+) -> Result<Vec<Vec<Vec<f32>>>> {
     Ok(run_layer_major(hl, loader, seqs, false, true, progress)?.logits)
 }
 
 /// Logits of the integer program for one sequence, by the reference evaluator, as floats
 /// (`code · logits_scale`). `progress(pos)` after each position.
-pub fn int_logits(program: &tir::TirProgramV1, params: &IntParams, seq: &[usize], logits_scale: f64, progress: &dyn Fn(usize)) -> Result<Vec<Vec<f64>>> {
+pub fn int_logits(
+    program: &tir::TirProgramV1,
+    params: &IntParams,
+    seq: &[usize],
+    logits_scale: f64,
+    progress: &dyn Fn(usize),
+) -> Result<Vec<Vec<f64>>> {
     let interp = tir::Interpreter::new(program).map_err(|e| LowerError::eval(format!("evaluator refused the program: {e}")))?;
     let mut state = tir::RunState::default();
     let mut out = Vec::with_capacity(seq.len());

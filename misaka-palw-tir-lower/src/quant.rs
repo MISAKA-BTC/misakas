@@ -114,12 +114,16 @@ mod tests {
 
     #[test]
     fn mul_shift_keeps_thirty_bits() {
-        for r in [1.0, 0.5, 3.75e-3, 1.234e-9, 7.0e5, -0.03125, 2.5e-15] {
+        for r in [1.0, 0.5, 3.75e-3, 1.234e-9, 7.0e5, -0.03125] {
             let (m, s) = mul_shift(r);
             let back = ratio_of(m, s);
             assert!(((back - r) / r).abs() < 1e-8, "{r} → ({m}, {s}) → {back}");
             assert!((0..=62).contains(&s));
         }
+        // Below 2^−32 the shift saturates at 62 and the mantissa shrinks with the ratio.
+        let (m, s) = mul_shift(2.5e-15);
+        assert_eq!(s, 62);
+        assert!(((ratio_of(m, s) - 2.5e-15) / 2.5e-15).abs() < 1e-4);
         assert_eq!(mul_shift(0.0), (0, 0));
     }
 

@@ -69,7 +69,8 @@ fn digest_and_entries(p: &TirProgramV1, params: &IntParams) -> Result<(String, S
     let mut entries = Vec::with_capacity(params.tensors.len());
     let mut offset = 0u64;
     for ((pi, layer), t) in &params.tensors {
-        let d = p.params.get(*pi as usize).ok_or_else(|| LowerError::bad(format!("tensor for param {pi}, which the program lacks")))?;
+        let d =
+            p.params.get(*pi as usize).ok_or_else(|| LowerError::bad(format!("tensor for param {pi}, which the program lacks")))?;
         if d.dtype != t.dtype || d.shape.iter().map(|x| *x as usize).collect::<Vec<_>>() != t.shape {
             return Err(LowerError::bad(format!("tensor `{}` does not match its declaration", d.name)));
         }

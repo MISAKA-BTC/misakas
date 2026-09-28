@@ -68,8 +68,8 @@ fn tokens(path: &Option<PathBuf>, vocab: usize, count: usize, seed: u64) -> Resu
     match path {
         None => Ok((fidelity::random_sequences(vocab, count, 32, seed), serde_json::json!(format!("random (seed {seed})")))),
         Some(p) => {
-            let v: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?).map_err(|e| e.to_string())?;
+            let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?)
+                .map_err(|e| e.to_string())?;
             let seqs: Vec<Vec<usize>> = v["sequences"]
                 .as_array()
                 .ok_or("token file: no `sequences`")?
@@ -110,9 +110,11 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let calib = cut(calib, a.calib_seqs);
     let (eval, eval_src) = tokens(&a.eval, vocab, 2, 29)?;
     let eval = cut(eval, a.eval_seqs);
-    let progress = |what: &'static str| move |d: usize, n: usize| {
-        if d == n || d % 8 == 0 {
-            eprintln!("[{:>7.1}s]   {what} {d}/{n}", t0.elapsed().as_secs_f64());
+    let progress = |what: &'static str| {
+        move |d: usize, n: usize| {
+            if d == n || d.is_multiple_of(8) {
+                eprintln!("[{:>7.1}s]   {what} {d}/{n}", t0.elapsed().as_secs_f64());
+            }
         }
     };
     let stats = match &a.stats_in {
@@ -156,19 +158,20 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let fl = fidelity::float_logits(&prep.hl, &loader, &eval, &progress("float")).map_err(|e| e.to_string())?;
     log("integer program on the reference evaluator".into());
     let pool = rayon::ThreadPoolBuilder::new().num_threads(a.jobs.max(1)).build().map_err(|e| e.to_string())?;
-    let il: Vec<Vec<Vec<f64>>> = pool.install(|| {
-        eval.par_iter()
-            .enumerate()
-            .map(|(si, s)| {
-                fidelity::int_logits(&prep.lowered.program, &mat.params, s, mat.logits_scale, &|p| {
-                    if (p + 1) % 16 == 0 || p + 1 == s.len() {
-                        eprintln!("[{:>7.1}s]   integer seq {si}: {}/{}", t0.elapsed().as_secs_f64(), p + 1, s.len());
-                    }
+    let il: Vec<Vec<Vec<f64>>> = pool
+        .install(|| {
+            eval.par_iter()
+                .enumerate()
+                .map(|(si, s)| {
+                    fidelity::int_logits(&prep.lowered.program, &mat.params, s, mat.logits_scale, &|p| {
+                        if (p + 1) % 16 == 0 || p + 1 == s.len() {
+                            eprintln!("[{:>7.1}s]   integer seq {si}: {}/{}", t0.elapsed().as_secs_f64(), p + 1, s.len());
+                        }
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>, _>>()
-    })
-    .map_err(|e| e.to_string())?;
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| e.to_string())?;
     let m = fidelity::compare(&fl, &il, &eval);
     log(format!(
         "top-1 {:.4}  KL mean {:.5} max {:.4}  ppl float {:.3} int {:.3} (Δ {:+.2}%)",

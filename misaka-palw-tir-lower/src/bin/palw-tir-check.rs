@@ -91,11 +91,9 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
                 ok,
             )
         }
-        Err(e) => (
-            serde_json::json!({ "lowered": false, "refusal": e.to_string() }),
-            format!("\nPALW-TIR (Gate 2a lowering): {e}\n"),
-            false,
-        ),
+        Err(e) => {
+            (serde_json::json!({ "lowered": false, "refusal": e.to_string() }), format!("\nPALW-TIR (Gate 2a lowering): {e}\n"), false)
+        }
     }
 }
 

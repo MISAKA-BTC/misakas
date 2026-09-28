@@ -455,7 +455,8 @@ impl<'a> Session<'a> {
                 let (q, k, v, g, beta) = (x(0)?.to_vec(), x(1)?.to_vec(), x(2)?.to_vec(), x(3)?.to_vec(), x(4)?.to_vec());
                 let st = self.fixed_mut(s, lyr);
                 let mut deltas = Vec::new();
-                let out = gated_delta_traced(&q, &k, &v, &g, &beta, st, *k_heads, *v_heads, *dk, *dv, *head_map, *q_scale, &mut deltas);
+                let out =
+                    gated_delta_traced(&q, &k, &v, &g, &beta, st, *k_heads, *v_heads, *dk, *dv, *head_map, *q_scale, &mut deltas);
                 let snap = if self.sites.is_some() { self.fixed[&(s, lyr)].clone() } else { vec![] };
                 self.sub_site(prefix, &node.site, "state", &snap);
                 self.sub_site(prefix, &node.site, "delta", &deltas);
