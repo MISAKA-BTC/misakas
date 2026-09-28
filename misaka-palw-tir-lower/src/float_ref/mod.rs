@@ -318,47 +318,12 @@ impl<'a> Session<'a> {
                 let sinks_v = if *sinks { Some(self.param(ins[3], layer)?.data.clone()) } else { None };
                 let keys = self.hist.get(&(ks, lyr)).cloned().unwrap_or_default();
                 let values = self.hist.get(&(vs, lyr)).cloned().unwrap_or_default();
-                let n = keys.len();
-                let start = window.map(|w| n.saturating_sub(w)).unwrap_or(0);
-                let group = heads / kv_heads;
-                let mut out = vec![0f32; heads * v_head_dim];
-                let mut all_scores = Vec::new();
-                let mut all_probs = Vec::new();
-                for h in 0..*heads {
-                    let kvh = h / group;
-                    let qh = &q[h * head_dim..(h + 1) * head_dim];
-                    let mut sc: Vec<f64> = (start..n)
-                        .map(|j| {
-                            let kj = &keys[j][kvh * head_dim..(kvh + 1) * head_dim];
-                            let dot: f64 = qh.iter().zip(kj).map(|(a, b)| *a as f64 * *b as f64).sum();
-                            match alibi {
-                                Some(al) => {
-                                    let slope = al.slopes[h];
-                                    let bias = if al.bf16_bias { bf16_round(bf16_round(slope as f32) * j as f32) as f64 } else { slope * j as f64 };
-                                    if al.scaled_by_softmax_scale { (dot + bias) * scale } else { dot * scale + bias }
-                                }
-                                None => dot * scale,
-                            }
-                        })
-                        .collect();
-                    if let Some(c) = softcap {
-                        sc.iter_mut().for_each(|s| *s = (*s / c).tanh() * c);
-                    }
-                    let sink = sinks_v.as_ref().map(|s| s[h] as f64);
-                    let p = softmax_with_sink(&sc, sink);
-                    if self.sites.is_some() {
-                        all_scores.extend(sc.iter().map(|v| *v as f32));
-                        all_probs.extend(p.iter().map(|v| *v as f32));
-                    }
-                    for (jj, j) in (start..n).enumerate() {
-                        let vj = &values[j][kvh * v_head_dim..(kvh + 1) * v_head_dim];
-                        for (o, vv) in out[h * v_head_dim..(h + 1) * v_head_dim].iter_mut().zip(vj) {
-                            *o += (p[jj] * *vv as f64) as f32;
-                        }
-                    }
-                }
-                self.sub_site(prefix, &node.site, "scores", &all_scores);
-                self.sub_site(prefix, &node.site, "probs", &all_probs);
+                let shape = AttnShape { heads: *heads, kv_heads: *kv_heads, head_dim: *head_dim, v_head_dim: *v_head_dim };
+                let want = self.sites.is_some();
+                let (out, scores, probs) =
+                    attention(&q, &keys, &values, shape, *scale, *softcap, *window, alibi.as_ref(), sinks_v.as_deref(), want);
+                self.sub_site(prefix, &node.site, "scores", &scores);
+                self.sub_site(prefix, &node.site, "probs", &probs);
                 one(out)
             }
             Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale } => {
@@ -663,7 +628,74 @@ pub fn rope(x: &[f32], heads: usize, head_dim: usize, rd: usize, off: usize, sty
     out
 }
 
-fn softmax_with_sink(s: &[f64], sink: Option<f64>) -> Vec<f64> {
+#[derive(Clone, Copy, Debug)]
+pub struct AttnShape {
+    pub heads: usize,
+    pub kv_heads: usize,
+    pub head_dim: usize,
+    pub v_head_dim: usize,
+}
+
+/// Softmax attention of one query position over the history rows `keys[j]`/`values[j]`
+/// (row `j` = absolute position `j`). Query head `h` reads kv head `h / (heads/kv_heads)`
+/// (`repeat_kv`). A window keeps the last `window` rows. ALiBi adds `slope_h · j` (a per-row
+/// constant away from `−slope·(i−j)`), scaled with the scores for Falcon. Sinks join the softmax
+/// and are dropped. Returns `(out, scores, probs)`; the last two only when `want_sites`.
+#[allow(clippy::too_many_arguments)]
+pub fn attention(
+    q: &[f32],
+    keys: &[Vec<f32>],
+    values: &[Vec<f32>],
+    sh: AttnShape,
+    scale: f64,
+    softcap: Option<f64>,
+    window: Option<usize>,
+    alibi: Option<&crate::rope::AlibiSpec>,
+    sinks: Option<&[f32]>,
+    want_sites: bool,
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let AttnShape { heads, kv_heads, head_dim, v_head_dim } = sh;
+    let n = keys.len();
+    let start = window.map(|w| n.saturating_sub(w)).unwrap_or(0);
+    let group = heads / kv_heads;
+    let mut out = vec![0f32; heads * v_head_dim];
+    let (mut all_scores, mut all_probs) = (Vec::new(), Vec::new());
+    for h in 0..heads {
+        let kvh = h / group;
+        let qh = &q[h * head_dim..(h + 1) * head_dim];
+        let mut sc: Vec<f64> = (start..n)
+            .map(|j| {
+                let kj = &keys[j][kvh * head_dim..(kvh + 1) * head_dim];
+                let dot: f64 = qh.iter().zip(kj).map(|(a, b)| *a as f64 * *b as f64).sum();
+                match alibi {
+                    Some(al) => {
+                        let slope = al.slopes[h];
+                        let bias = if al.bf16_bias { bf16_round(bf16_round(slope as f32) * j as f32) as f64 } else { slope * j as f64 };
+                        if al.scaled_by_softmax_scale { (dot + bias) * scale } else { dot * scale + bias }
+                    }
+                    None => dot * scale,
+                }
+            })
+            .collect();
+        if let Some(c) = softcap {
+            sc.iter_mut().for_each(|s| *s = (*s / c).tanh() * c);
+        }
+        let p = softmax_with_sink(&sc, sinks.map(|s| s[h] as f64));
+        if want_sites {
+            all_scores.extend(sc.iter().map(|v| *v as f32));
+            all_probs.extend(p.iter().map(|v| *v as f32));
+        }
+        for (jj, j) in (start..n).enumerate() {
+            let vj = &values[j][kvh * v_head_dim..(kvh + 1) * v_head_dim];
+            for (o, vv) in out[h * v_head_dim..(h + 1) * v_head_dim].iter_mut().zip(vj) {
+                *o += (p[jj] * *vv as f64) as f32;
+            }
+        }
+    }
+    (out, all_scores, all_probs)
+}
+
+pub fn softmax_with_sink(s: &[f64], sink: Option<f64>) -> Vec<f64> {
     let mut m = s.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if let Some(k) = sink {
         m = m.max(k);
@@ -701,7 +733,7 @@ pub fn mla(q: &[f32], kvb: &[f32], lat: &[Vec<f32>], kr: &[Vec<f32>], heads: usi
     out
 }
 
-fn causal_conv(x: &[f32], st: &mut Vec<f32>, w: &[f32], b: Option<&[f32]>, ch: usize, k: usize, a: Option<Act>) -> Vec<f32> {
+pub fn causal_conv(x: &[f32], st: &mut Vec<f32>, w: &[f32], b: Option<&[f32]>, ch: usize, k: usize, a: Option<Act>) -> Vec<f32> {
     // state: (k−1) rows of `ch`, oldest first.
     let mut out = vec![0f32; ch];
     for c in 0..ch {
@@ -796,7 +828,7 @@ pub fn ssd_step(x: &[f32], dt: &[f32], b: &[f32], c: &[f32], a: &[f32], d: &[f32
     y
 }
 
-fn wkv4(k: &[f32], v: &[f32], w: &[f32], u: &[f32], num: &mut [f32], den: &mut [f32], mx: &mut [f32]) -> Vec<f32> {
+pub fn wkv4(k: &[f32], v: &[f32], w: &[f32], u: &[f32], num: &mut [f32], den: &mut [f32], mx: &mut [f32]) -> Vec<f32> {
     let mut out = vec![0f32; k.len()];
     for c in 0..k.len() {
         let (kc, vc) = (k[c] as f64, v[c] as f64);
