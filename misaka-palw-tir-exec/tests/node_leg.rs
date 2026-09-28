@@ -1,0 +1,332 @@
+//! **The node's step leg of an IR job equals Phase F's (F4), leaf for leaf** (feature `node`).
+//!
+//! For every golden program, the corpus programs of `misaka-palw-tir/tests` and a program whose
+//! committed nodes carry `H`, under several layouts and jobs: the REFERENCE evaluator runs the job
+//! (prompt, then argmax-selected tokens — `base0_decode_token_select_v1`), its values fill the
+//! consensus fail-closed builder (`PalwTirStepLegBuilderV1`) in F4's order, and the typed backend's
+//! producer (`TirClassRunnerV1`) — which checks every position's leaves against F4's enumeration as
+//! it goes — must reproduce the leaf count, the step Merkle root, the generated tokens, the logits
+//! trace root and the IR execution root.
+#![cfg(feature = "node")]
+
+#[path = "../../misaka-palw-tir/tests/common/mod.rs"]
+mod tircommon;
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::palw_step_refute::{base0_decode_token_select_v1, base0_logits_trace_root_v1, flat_logits_scheme_id_v1};
+use kaspa_consensus_core::palw_tir_class_v1::{
+    PALW_TIR_CLASS_VERSION_V1, PALW_TIR_LAYOUT_VERSION_V1, PalwTirClassV1, PalwTirLayoutV1,
+};
+use kaspa_consensus_core::palw_tir_step_v1::{
+    PalwTirLeafKindV1, PalwTirStepLegBuilderV1, PalwTirStepSpaceV1, palw_tir_execution_root_v1,
+};
+use kaspa_consensus_core::palw_v2::PalwJobContextV2;
+use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, Ref};
+use misaka_palw_tir::{DType, Interpreter, MapParams, RunState, Tensor, TirProgramV1};
+use misaka_palw_tir_exec::node::TirClassRunnerV1;
+use misaka_palw_tir_exec::{TirParams, TirPlan};
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect()
+}
+
+/// The program under the flat logits scheme (the vectors' programs name none).
+fn flat(mut p: TirProgramV1) -> TirProgramV1 {
+    p.logits_scheme_id = flat_logits_scheme_id_v1().as_bytes();
+    p
+}
+
+fn programs() -> Vec<(String, TirProgramV1, MapParams)> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v1/programs");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir).expect("vectors").map(|e| e.unwrap().path()).collect();
+    files.sort();
+    let mut out: Vec<(String, TirProgramV1, MapParams)> = files
+        .into_iter()
+        .map(|path| {
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let program = TirProgramV1::decode_canonical(&unhex(v["program_borsh_hex"].as_str().unwrap())).expect("canonical");
+            let mut params = MapParams::default();
+            for p in v["params"].as_array().unwrap() {
+                let j = p["param"].as_u64().unwrap() as u16;
+                let layer = p["layer"].as_u64().map(|l| l as u16);
+                let d = &program.params[j as usize];
+                let shape: Vec<usize> = d.shape.iter().map(|x| *x as usize).collect();
+                params
+                    .tensors
+                    .insert((j, layer), Tensor::from_le_bytes(d.dtype, &shape, &unhex(p["le_hex"].as_str().unwrap())).unwrap());
+            }
+            (v["name"].as_str().unwrap().to_string(), flat(program), params)
+        })
+        .collect();
+    use tircommon::models::*;
+    for (name, (p, gens)) in [
+        ("corpus dense", dense(&[HISTORY_BOUND_V1_SMALL, HISTORY_BOUND_V1_SMALL])),
+        ("corpus sliding", dense(&[3, HISTORY_BOUND_V1_SMALL, 3])),
+        ("corpus gdn", gdn_program(true)),
+        ("corpus mamba2", mamba2_program()),
+        ("corpus moe", moe_program()),
+    ] {
+        let params = materialize(&p, &gens, 99);
+        out.push((name.to_string(), flat(p), params));
+    }
+    out.push(h_program());
+    out
+}
+
+/// Committed nodes that CARRY `H` (a windowed history summed per position): both halves of F4's
+/// closed form, under three layer occurrences.
+fn h_program() -> (String, TirProgramV1, MapParams) {
+    use misaka_palw_tir::builder::ProgramBuilder;
+    use misaka_palw_tir::{Ref as R, TensorType};
+    let mut pb = ProgramBuilder::new(16, HISTORY_BOUND_V1_SMALL);
+    let emb = pb.param("embed", DType::I8, &[16, 4], false);
+    let hist = pb.hist_state("rows", DType::I8, &[4], 5, true);
+    let carry = TensorType::fixed(DType::I8, &[4]);
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let x = b.gather(emb, R::Input(0), 0, 0);
+        b.finish(&[x])
+    };
+    let layer = {
+        let mut b = pb.block("layer", vec![carry.clone()]);
+        let window = b.hist_append(hist, R::CarryIn(0));
+        let wide = b.cast(window, DType::I32);
+        let wide = b.commit(wide);
+        let sum = b.reduce_sum(wide, 0, DType::I32);
+        let sum = b.reshape_fixed(sum, &[4]);
+        let y = b.clamp(sum, -128, 127, DType::I8);
+        b.finish(&[y])
+    };
+    let (post, logits) = {
+        let mut b = pb.block("post", vec![carry]);
+        let l = b.cast(R::CarryIn(0), DType::I32);
+        let l = b.commit(l);
+        let R::Node(i) = l else { unreachable!() };
+        (b.finish(&[]), i)
+    };
+    let program = pb.finish(pre, vec![layer, layer, layer], post, logits);
+    let mut params = MapParams::default();
+    let data: Vec<i128> = (0..64).map(|i| ((i * 37 + 11) % 256) as i128 - 128).collect();
+    params.tensors.insert((0, None), Tensor::new(DType::I8, vec![16, 4], data).unwrap());
+    ("h-window-sum".to_string(), flat(program), params)
+}
+
+fn layout(p: &TirProgramV1, seed: u32, c: u32, h: u32, max_context: u32) -> PalwTirLayoutV1 {
+    let committed: usize = p.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum();
+    PalwTirLayoutV1 {
+        version: PALW_TIR_LAYOUT_VERSION_V1,
+        max_context,
+        checkpoint_interval: c,
+        h_tile: h,
+        commit_tiles: (0..committed as u32).map(|k| 4 + (k.wrapping_mul(seed) % 6)).collect(),
+        state_tiles: p.states.iter().enumerate().map(|(j, _)| 4 + ((j as u32 * seed) % 3)).collect(),
+    }
+}
+
+fn job(prefill: u32, decode: u32, class_id: Hash64) -> PalwJobContextV2 {
+    let z = Hash64::from_bytes([0u8; 64]);
+    PalwJobContextV2 {
+        version: 2,
+        network_id: b"testnet-12".to_vec(),
+        job_id: Hash64::from_bytes([prefill as u8; 64]),
+        job_nullifier: z,
+        assignment_id: z,
+        execution_seed: [decode as u8; 32],
+        model_profile_id: z,
+        runtime_manifest_hash: z,
+        runtime_class_id: z,
+        shape_profile_id: class_id,
+        trace_scheme_id: flat_logits_scheme_id_v1(),
+        cu_ruleset_id: z,
+        tokenizer_id: z,
+        prompt_token_ids_hash: z,
+        declared_prefill_tokens: prefill,
+        exact_decode_tokens: decode,
+        max_context_tokens: 1024,
+    }
+}
+
+struct Honest {
+    values: Vec<Vec<i128>>,
+    generated: Vec<u32>,
+    rows: Vec<Vec<i32>>,
+}
+
+/// The job on the REFERENCE evaluator, and every leaf's values in F4's order: commit points from
+/// the step's records, checkpoints from the run state after the position, history tiles from the
+/// rows each `HistAppend` appended (its input: a committed node or a carry-in, NF-20).
+fn honest(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, params: &MapParams, prompt: &[u32]) -> Honest {
+    let p = &space.program;
+    let interp = Interpreter::new(p).unwrap();
+    let mut state = RunState::default();
+    let prefill = ctx.declared_prefill_tokens;
+    let positions = prefill + ctx.exact_decode_tokens - 1;
+    let mut appended: BTreeMap<(u16, Option<u16>), Vec<Vec<i128>>> = BTreeMap::new();
+    let (mut values, mut generated, mut rows) = (Vec::new(), Vec::new(), Vec::new());
+    for a in 0..positions {
+        let token = if a < prefill { prompt[a as usize] } else { generated[(a - prefill) as usize] };
+        let step = interp.step(params, &mut state, token).unwrap();
+        if a + 1 >= prefill {
+            let row: Vec<i32> = step.logits.data.iter().map(|v| *v as i32).collect();
+            generated.push(base0_decode_token_select_v1(&row) as u32);
+            rows.push(row);
+        }
+        let mut commits: BTreeMap<(u8, Option<u16>, u16), Tensor> = BTreeMap::new();
+        for c in &step.commits {
+            commits.insert((c.block, c.layer, c.node), c.value.clone());
+        }
+        let occ = p.occurrences();
+        for (i, (b, layer)) in occ.iter().enumerate() {
+            for n in &p.blocks[*b as usize].nodes {
+                if let misaka_palw_tir::Prim::HistAppend { state: j } = n.prim {
+                    let row = match n.inputs[0] {
+                        Ref::Node(k) => commits[&(*b, *layer, k)].data.clone(),
+                        Ref::CarryIn(k) => {
+                            let (pb, pl) = occ[i - 1];
+                            commits[&(pb, pl, p.blocks[pb as usize].carry_out[k as usize])].data.clone()
+                        }
+                        _ => unreachable!("NF-20"),
+                    };
+                    appended.entry((j, if p.states[j as usize].per_layer { *layer } else { None })).or_default().push(row);
+                }
+            }
+        }
+        for leaf in space.leaves_of_position(ctx, a) {
+            let n = leaf.value_count as usize;
+            values.push(match leaf.kind {
+                PalwTirLeafKindV1::Commit { block, layer, node, first_element, .. } => {
+                    commits[&(block, layer, node)].data[first_element as usize..first_element as usize + n].to_vec()
+                }
+                PalwTirLeafKindV1::State { state: j, layer, first_element, .. } => {
+                    let s = &p.states[j as usize];
+                    let shape: Vec<usize> = s.shape.iter().map(|d| *d as usize).collect();
+                    let v = state.fixed.get(&(j, layer)).cloned().unwrap_or_else(|| Tensor::zeros(s.dtype, &shape));
+                    v.data[first_element as usize..first_element as usize + n].to_vec()
+                }
+                PalwTirLeafKindV1::HistTile { state: j, layer, first_lane, row_lanes, first_position, .. } => {
+                    let all = &appended[&(j, layer)];
+                    (first_position..=a)
+                        .flat_map(|t| all[t as usize][first_lane as usize..first_lane as usize + row_lanes as usize].to_vec())
+                        .collect()
+                }
+            });
+        }
+    }
+    Honest { values, generated, rows }
+}
+
+#[test]
+fn the_node_leg_equals_the_reference_through_the_consensus_builder() {
+    let mut runs = 0usize;
+    let mut leaves = 0u64;
+    for (name, program, params) in programs() {
+        let bytes = program.encode();
+        let plan = TirPlan::compile(&program).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let tparams = TirParams::from_map(&plan, &params).unwrap_or_else(|e| panic!("{name}: {e}"));
+        for (seed, c, h, prefill, decode) in [(7u32, 2u32, 2u32, 3u32, 3u32), (3, 1, 4, 5, 4), (5, 3, 1, 1, 6), (11, 4, 8, 6, 5)] {
+            let class = PalwTirClassV1 {
+                version: PALW_TIR_CLASS_VERSION_V1,
+                program: bytes.clone(),
+                layout: layout(&program, seed, c, h, 64),
+                tokenizer_id: Hash64::from_bytes([1; 64]),
+            };
+            let artifact_root = Hash64::from_bytes([0xA7; 64]);
+            let class_id = class.class_id(&artifact_root);
+            let space = PalwTirStepSpaceV1::new(&class).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let ctx = job(prefill, decode, class_id);
+            let prompt: Vec<u32> = (0..prefill).map(|i| (i * 5 + 3) % program.token_bound).collect();
+            let honest = honest(&space, &ctx, &params, &prompt);
+            let mut builder = PalwTirStepLegBuilderV1::new(&space, &ctx, class_id, u64::MAX).unwrap();
+            for v in &honest.values {
+                builder.push(v).unwrap_or_else(|e| panic!("{name}: {e}"));
+            }
+            let (count, root) = builder.finish().unwrap();
+            let trace = base0_logits_trace_root_v1(&ctx, &honest.rows, &honest.generated);
+            let runner = TirClassRunnerV1::new(&space, &plan, &tparams, class_id).unwrap();
+            let mut seen = 0u64;
+            let run = runner
+                .run(&ctx, &prompt, u64::MAX, true, &mut |leaf| {
+                    assert_eq!(leaf.index, seen);
+                    seen += 1;
+                })
+                .unwrap_or_else(|e| panic!("{name} (seed {seed}, C {c}, h {h}, {prefill}+{decode}): {e}"));
+            assert_eq!(run.leaf_count, count, "{name}: leaf count");
+            assert_eq!(run.step_merkle_root, root, "{name} (seed {seed}): the step root");
+            assert_eq!(run.generated, honest.generated, "{name}: generated tokens");
+            assert_eq!(run.logits_rows, honest.rows, "{name}: logits rows");
+            assert_eq!(run.trace_root, trace, "{name}: the logits trace");
+            assert_eq!(
+                run.execution_root,
+                palw_tir_execution_root_v1(&ctx.context_hash(), &trace, &class_id, count, &root),
+                "{name}: the execution root"
+            );
+            runs += 1;
+            leaves += count;
+        }
+    }
+    eprintln!("{runs} jobs, {leaves} leaves: node leg = reference leg");
+    assert!(runs >= 40);
+}
+
+/// A PALWTIR1 container written, then opened MAPPED: the params are served in place, the streamed
+/// inventory root is the consensus inventory over the same bytes, and a job run from the mapping
+/// commits exactly what the in-memory params commit.
+#[test]
+fn a_mapped_container_runs_like_the_params_it_holds() {
+    use kaspa_consensus_core::palw_tir_artifact_v1::{PalwTirTensorSourceV1, palw_tir_inventory_root_v1};
+    use misaka_palw_tir_exec::node::TirArtifactV1;
+    use std::borrow::Cow;
+    let dir = std::env::temp_dir().join(format!("tir-exec-node-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // (A program without params has no inventory and no root: the consensus inventory refuses it.)
+    let mut ran = 0;
+    for (name, program, params) in
+        programs().into_iter().filter(|(n, p, _)| (n.starts_with("corpus") || n.contains("hist")) && !p.params.is_empty())
+    {
+        let lay = layout(&program, 7, 2, 4, 64);
+        let path = dir.join(format!("{}.palwtir", name.replace(' ', "-")));
+        let tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
+            params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
+        };
+        let mut tensor = tensor;
+        misaka_palw_tir_artifact::write_container_v1(
+            &path,
+            &program,
+            borsh::to_vec(&lay).unwrap(),
+            [1; 64],
+            String::new(),
+            &mut tensor,
+        )
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let art = TirArtifactV1::open(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        // The inventory root, streamed from the mapping = the consensus inventory over the map.
+        struct Map<'m>(&'m MapParams);
+        impl PalwTirTensorSourceV1 for Map<'_> {
+            fn tensor_bytes(&self, param: u16, layer: Option<u16>) -> Option<Cow<'_, [u8]>> {
+                self.0.tensors.get(&(param, layer)).map(|t| Cow::Owned(t.to_le_bytes()))
+            }
+        }
+        let (root, count) = art.inventory_root().unwrap();
+        assert_eq!((root, count), palw_tir_inventory_root_v1(&program, &Map(&params)).unwrap(), "{name}");
+        // The class it declares, and a job from the mapping against a job from memory.
+        let class = art.class().unwrap();
+        assert_eq!(class.layout, lay);
+        let class_id = class.class_id(&root);
+        let space = PalwTirStepSpaceV1::new(&class).unwrap();
+        let ctx = job(4, 4, class_id);
+        let prompt: Vec<u32> = (0..4).map(|i| (i * 7 + 1) % program.token_bound).collect();
+        let mapped =
+            TirClassRunnerV1::new(&space, art.plan(), art.params(), class_id).unwrap().run(&ctx, &prompt, u64::MAX, true, &mut |_| {});
+        let plan = TirPlan::compile(&program).unwrap();
+        let tp = TirParams::from_map(&plan, &params).unwrap();
+        let memory = TirClassRunnerV1::new(&space, &plan, &tp, class_id).unwrap().run(&ctx, &prompt, u64::MAX, true, &mut |_| {});
+        assert_eq!(mapped.unwrap(), memory.unwrap(), "{name}: the mapped artifact commits what its params commit");
+        std::fs::remove_file(&path).ok();
+        ran += 1;
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(ran >= 5, "{ran} containers");
+}
