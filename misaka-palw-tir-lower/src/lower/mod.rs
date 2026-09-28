@@ -1440,9 +1440,15 @@ fn lower_linear(
     if table && k != 0 {
         return Err(LowerError::eval(format!("internal: a split input reads the table `{}`", d.name)));
     }
+    // A projection reading the `i32` rail (a scan's gated output) has its weights at per-row `i16`
+    // too: the wide input gives up the outlier split, whose high-precision weight columns carried
+    // most of such an input's energy (Mamba-370m: KL 0.0012 → 0.0041 at `i8`). `i16 × i32` over
+    // `inp ≤ 2^16` terms stays inside `i64`.
+    let wide16 = x.dt == DType::I32;
     let r = if k == 0 {
         // A head tied to an embedding reads the table's `i16` codes (the same param).
-        let (dt, fill) = if table { (DType::I16, table_codes(w)) } else { (DType::I8, weight_codes(w)) };
+        let rows16 = table || wide16;
+        let (dt, fill) = if rows16 { (DType::I16, table_codes(w)) } else { (DType::I8, weight_codes(w)) };
         let wt = decl(b, cx, lb, &d.name, dt, &[out, inp], d.per_layer, fill)?;
         let (m, s) = decl_ms(
             b,
@@ -1451,7 +1457,7 @@ fn lower_linear(
             site,
             out,
             Arc::new(move |c| {
-                let scales = if table { c.rows16(w)?.scales.clone() } else { c.rows(w)?.scales.clone() };
+                let scales = if rows16 { c.rows16(w)?.scales.clone() } else { c.rows(w)?.scales.clone() };
                 let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, out)?);
                 Ok(scales.iter().zip(&sy).map(|(sw, sy)| sw * sx / sy).collect())
             }),
