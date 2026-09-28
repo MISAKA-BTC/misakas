@@ -40,6 +40,10 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
     let post = b.post_block()?;
     let p = HlProgram {
         architecture: spec.architecture.clone(),
+        output: match spec.output {
+            OutputSpec::Logits => HlOutput::Logits,
+            OutputSpec::Embedding { normalize, .. } => HlOutput::Embedding { normalized: normalize },
+        },
         vocab: spec.vocab_size,
         hidden: spec.hidden_size,
         carries,
@@ -230,6 +234,22 @@ impl Builder<'_> {
         let mut x = Ref::Carry(0);
         if let Some(n) = s.final_norm {
             x = self.full_norm(&mut bk, x, n, "final_norm", d, false)?;
+        }
+        // An encoder: the final row, projected and normalised as the class says; no head.
+        if let OutputSpec::Embedding { proj, normalize } = &s.output {
+            let mut width = d;
+            if let Some((w, bias)) = *proj {
+                x = self.linear(&mut bk, x, "embed.proj", w, d, bias, false, "embed.proj")?;
+                width = w;
+            }
+            if *normalize {
+                x = bk.f(Op::L2Norm { groups: 1, eps: 1e-24 }, vec![x], width, "embed.normed");
+            }
+            if !matches!(x, Ref::Node(..)) {
+                return Err(LowerError::not_lowerable("an encoder whose output is its carry (no final norm, projection or normalisation)"));
+            }
+            self.blocks.push(Block { name: "post".into(), role: BlockRole::Post, nodes: bk.nodes, outputs: vec![x] });
+            return Ok(self.blocks.len() - 1);
         }
         if h.pre_scale != 1.0 {
             x = bk.f(Op::Scale { c: h.pre_scale }, vec![x], d, "head.pre_scaled");

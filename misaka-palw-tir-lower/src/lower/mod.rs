@@ -101,6 +101,9 @@ pub enum Base {
     Site { names: Vec<String>, wide: bool, split: usize },
     /// Q24 fixed point (`2^−24`).
     Q24,
+    /// A power-of-two unit `2^−q` for an output in the class's fixed point (RFC-0003 §I.3.3): the
+    /// smallest power of two at least the site's `i32` scale, `q` clamped to `[0, 31]`.
+    Pow2Site { names: Vec<String> },
     /// A scale known when lowering (a value with a proven range, e.g. `clamp(up, −l, l) + 1`).
     Fixed(f64),
 }
@@ -565,7 +568,7 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
     match blk.role {
         BlockRole::Post => {
             let v = operand(&lb, blk.outputs[0])?;
-            let key = ScaleKey::site(vec![v.site.clone()], true);
+            let key = output_key(hl, &v.site);
             let v = coerce(&mut b, cx, &mut lb, &v, DType::I32, &key)?;
             let v = ensure_node(&mut b, &v);
             let tir::Ref::Node(li) = v.r else { unreachable!("ensure_node") };
@@ -615,7 +618,7 @@ fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
             hl::Ref::Node(i, _) => blk.nodes[i as usize].site.clone().unwrap_or_else(|| "logits".into()),
             _ => "logits".into(),
         };
-        Want { dt: DType::I32, key: ScaleKey::site(vec![site], true) }
+        Want { dt: DType::I32, key: output_key(hl, &site) }
     } else {
         Want { dt: DType::I32, key: ScaleKey::resid() }
     };
@@ -657,6 +660,19 @@ fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
         }
     }
     want
+}
+
+/// The key of `post`'s output node: the logits at their site's `i32` scale, or an encoder's
+/// embedding in fixed point — `Q30` when L2-normalised (every lane is in `[−1, 1]`), else a
+/// power-of-two unit sized on the calibration ([`Base::Pow2Site`]).
+fn output_key(hl: &HlProgram, site: &str) -> ScaleKey {
+    match hl.output {
+        hl::HlOutput::Logits => ScaleKey::site(vec![site.to_string()], true),
+        hl::HlOutput::Embedding { normalized: true } => ScaleKey { base: Base::Fixed(1.0 / (1u64 << 30) as f64), factor: 1.0 },
+        hl::HlOutput::Embedding { normalized: false } => {
+            ScaleKey { base: Base::Pow2Site { names: vec![site.to_string()] }, factor: 1.0 }
+        }
+    }
 }
 
 /// Q14 fixed point (`2^−14`), the logits' format.

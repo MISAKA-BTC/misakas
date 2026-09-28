@@ -85,14 +85,22 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     if let Some(n) = &spec.final_norm {
         m.norm("final_norm", "final_norm", n)?;
     }
-    if spec.head.proj_out {
+    let logits = matches!(spec.output, OutputSpec::Logits);
+    if let OutputSpec::Embedding { proj: Some((_, bias)), .. } = spec.output {
+        let w = m.w("embed_proj")?;
+        m.put("embed.proj.w", w)?;
+        if bias {
+            m.put("embed.proj.b", Src::t(format!("{}.bias", m.role("embed_proj")?)))?;
+        }
+    }
+    if logits && spec.head.proj_out {
         let w = m.w("proj_out")?;
         m.put("head.proj_out.w", w)?;
     }
-    if !spec.head.tied {
+    if logits && !spec.head.tied {
         m.put("head.w", Src::t(format!("{}.weight", m.role("lm_head")?)))?;
     }
-    if spec.head.bias {
+    if logits && spec.head.bias {
         let b = match spec.hf.name("lm_head_bias") {
             Some(n) => Src::t(n),
             None => Src::t(format!("{}.bias", m.role("lm_head")?)),

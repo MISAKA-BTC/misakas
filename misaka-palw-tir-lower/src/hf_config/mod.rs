@@ -11,6 +11,7 @@
 //! handful of fields that differ. Every default below is the config class's own.
 
 mod dense;
+mod encoder;
 mod hybrid;
 mod legacy;
 mod moe;
@@ -79,6 +80,8 @@ pub const SUPPORTED: &[(&str, &str)] = &[
     ("FalconMambaForCausalLM", "C5"),
     ("Mamba2ForCausalLM", "C5"),
     ("RwkvForCausalLM", "C6"),
+    ("CLIPTextModel", "E1 (encoder: RFC-0003 Embedding profile)"),
+    ("CLIPTextModelWithProjection", "E1 (encoder: RFC-0003 Embedding profile)"),
 ];
 
 /// Architectures refused on purpose, with the reason (printed instead of "unknown").
@@ -294,6 +297,8 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         "Rwkv5ForCausalLM" => hybrid::rwkv56(&mut p, 5)?,
         "Rwkv6ForCausalLM" => hybrid::rwkv56(&mut p, 6)?,
         "RWKV7ForCausalLM" => hybrid::rwkv7(&mut p)?,
+        "CLIPTextModel" => encoder::clip_text(&mut p, false)?,
+        "CLIPTextModelWithProjection" => encoder::clip_text(&mut p, true)?,
         other => {
             return Err(LowerError::not_lowerable(format!(
                 "`{other}` has no lowerer template (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet)"
@@ -524,6 +529,7 @@ impl P<'_> {
             layers: s.layers,
             final_norm: s.final_norm,
             head: s.head,
+            output: OutputSpec::Logits,
             hf: HfStorage {
                 names: s.names,
                 prefix_aliases: s.prefix_aliases,

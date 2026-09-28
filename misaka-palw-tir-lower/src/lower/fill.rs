@@ -193,6 +193,13 @@ impl<'a> FillCtx<'a> {
             Base::Resid => self.resid,
             Base::Q24 => 1.0 / (1u64 << 24) as f64,
             Base::Fixed(v) => *v,
+            Base::Pow2Site { names } => {
+                let mut a = 0f64;
+                for n in names {
+                    a = a.max(self.absmax(n)?);
+                }
+                pow2_unit(code_scale(a, CODE32_MAX, self.policy.headroom32))
+            }
             Base::Site { names, wide, split } => {
                 let a = if *split == 0 {
                     let mut a = 0f64;
@@ -435,4 +442,18 @@ pub fn materialise(
         progress(oi + 1, total);
     }
     Ok(Materialised { params: out, resid_scale: resid, logits_scale: logits_scale.expect("post runs") })
+}
+
+/// The smallest power of two `≥ s`, as `2^−q` with `q` in `[0, 31]` (an `EmbeddingI32` output's
+/// fixed point, RFC-0003 §I.3.3).
+pub fn pow2_unit(s: f64) -> f64 {
+    2f64.powi(output_q(s).map_or(0, |q| -(q as i32)))
+}
+
+/// The fractional bits `q` of [`pow2_unit`]`(s)`.
+pub fn output_q(s: f64) -> Option<u8> {
+    if !(s > 0.0) || !s.is_finite() {
+        return None;
+    }
+    Some((-s.log2().ceil()).clamp(0.0, 31.0) as u8)
 }

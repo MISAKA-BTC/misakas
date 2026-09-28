@@ -444,6 +444,16 @@ pub struct HeadSpec {
     pub softcap: Option<f64>,
 }
 
+/// What a program's `post` produces (RFC-0003 §I.2.3's output kinds are chosen per class, from it).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum OutputSpec {
+    /// A language model's logits, through the head.
+    Logits,
+    /// An encoder's embedding: the hidden row after `final_norm`, then an optional projection
+    /// (`width`, `bias`: CLIP's `text_projection`), then an optional L2 normalisation.
+    Embedding { proj: Option<(usize, bool)>, normalize: bool },
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ArchSpec {
     /// `architectures[0]` as given.
@@ -460,6 +470,8 @@ pub struct ArchSpec {
     pub layers: Vec<LayerSpec>,
     pub final_norm: Option<NormSpec>,
     pub head: HeadSpec,
+    /// Logits, or an encoder's embedding.
+    pub output: OutputSpec,
     /// How the checkpoint stores the weights. Read only by `crate::hf_weights`; the HL builder
     /// never looks at it, so the HL graph is the same whichever frontend produced the spec.
     pub hf: HfStorage,

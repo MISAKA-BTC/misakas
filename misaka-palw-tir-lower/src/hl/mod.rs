@@ -330,6 +330,8 @@ pub struct CarryDecl {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HlProgram {
     pub architecture: String,
+    /// What `post` produces: logits, or an encoder's embedding.
+    pub output: HlOutput,
     pub vocab: usize,
     pub hidden: usize,
     pub carries: Vec<CarryDecl>,
@@ -341,6 +343,15 @@ pub struct HlProgram {
     pub post: usize,
     /// Block index per layer.
     pub schedule: Vec<u16>,
+}
+
+/// What a program's `post` produces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum HlOutput {
+    /// Logits, through the head.
+    Logits,
+    /// An encoder's embedding row, L2-normalised or not.
+    Embedding { normalized: bool },
 }
 
 impl HlProgram {
