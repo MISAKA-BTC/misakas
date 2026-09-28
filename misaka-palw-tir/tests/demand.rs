@@ -439,3 +439,122 @@ fn eval_demanded_refuses_what_it_cannot_honestly_answer() {
     let hist_as_fixed = DemandRequest { target: DemandTarget::StateAfter { pos: 0, state: 0, layer: Some(0) }, elements: &[0] };
     assert!(malformed(eval_demanded(&hp, &hinfo, &hist_as_fixed, &mut hsrc, &DemandLimits::UNLIMITED)));
 }
+
+/// Two layer blocks, a per-layer `Fixed` state in `[-5, 5]` that only the first references, whose
+/// `StateWrite` is a commit point; and a global `Fixed` state that `pre` reads and nothing writes.
+fn two_block_program() -> (TirProgramV1, MapParams) {
+    let mut pb = ProgramBuilder::new(8, HISTORY_BOUND_V1_SMALL);
+    let s = pb.fixed_state("acc", DType::I16, &[2], -5, 5, true);
+    let g = pb.fixed_state("frozen", DType::I32, &[2], -1000, 1000, false);
+    let carry = vec![TensorType::fixed(DType::I32, &[2])];
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let tk = b.cast(Ref::Input(INPUT_TOKEN), DType::I32);
+        let tk = b.reshape_fixed(tk, &[1]);
+        let x = b.add(tk, Ref::State(g), DType::I32);
+        b.finish(&[x])
+    };
+    let a = {
+        let mut b = pb.block("a", carry.clone());
+        let n = b.add(Ref::State(s), Ref::CarryIn(0), DType::I64);
+        let n = b.state_write(s, n);
+        let n = b.commit(n);
+        let n = b.cast(n, DType::I32);
+        let out = b.add(Ref::CarryIn(0), n, DType::I64);
+        let out = b.clamp(out, -1_000_000, 1_000_000, DType::I32);
+        b.finish(&[out])
+    };
+    let bb = {
+        let mut b = pb.block("b", carry.clone());
+        let out = b.reshape_fixed(Ref::CarryIn(0), &[2]);
+        b.finish(&[out])
+    };
+    let post = {
+        let mut b = pb.block("post", carry);
+        let l = b.reshape_fixed(Ref::CarryIn(0), &[2]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    (pb.finish(pre, vec![a, bb], post, 0), MapParams::default())
+}
+
+/// **The text's open places, closed (ref2 D1–D4).** D1: a committed writer's value outside
+/// `[lo, hi]` is refused (`Operand`) as `state_after` and as a replayed value alike. D2: a carried
+/// walk charges one term for each position it passes, also when it never finds a value. D3:
+/// `state_after` of an instance no block references is refused (`Malformed`). D4: a source's refusal
+/// is `Missing`, whatever the source's own reason.
+#[test]
+fn the_text_decides_d1_to_d4() {
+    let (p, params) = two_block_program();
+    let info = misaka_palw_tir::validate::validate(&p).expect("valid");
+    let r = run(&p, &params, &[1, 2, 3, 4, 5, 6, 7, 1, 2, 3]);
+    let a_occ = 1u16;
+    let writer = p.blocks[p.schedule.layers[0] as usize]
+        .nodes
+        .iter()
+        .position(|n| matches!(n.prim, misaka_palw_tir::Prim::StateWrite { .. }))
+        .unwrap() as u16;
+    let classify = |res: Result<(Vec<i128>, misaka_palw_tir::demand::DemandWork), DemandError>| match res {
+        Ok(_) => "ok".to_string(),
+        Err(DemandError::WorkLimit(_)) => "WorkLimit".to_string(),
+        Err(DemandError::Tir(e)) => format!("{:?}", e.kind),
+    };
+
+    // D1. The honest run is accepted both ways; a committed 100 in [-5, 5] is refused both ways.
+    let mut honest = source(&p, &params, &r, &|p| p == 0);
+    let after1 = DemandRequest { target: DemandTarget::StateAfter { pos: 1, state: 0, layer: Some(0) }, elements: &[0, 1] };
+    assert_eq!(classify(eval_demanded(&p, &info, &after1, &mut honest, &DemandLimits::UNLIMITED)), "ok");
+    let mut forged = source(&p, &params, &r, &|p| p == 0);
+    forged.nodes.insert((DemandContext { pos: 1, occurrence: a_occ }, writer), vec![100, 100]);
+    assert_eq!(classify(eval_demanded(&p, &info, &after1, &mut forged, &DemandLimits::UNLIMITED)), "Operand", "state_after");
+    let reader = p.blocks[p.schedule.layers[0] as usize].nodes.iter().position(|n| n.inputs.contains(&Ref::State(0))).unwrap() as u16;
+    let replayed = DemandRequest {
+        target: DemandTarget::Node { ctx: DemandContext { pos: 2, occurrence: a_occ }, node: reader },
+        elements: &[0],
+    };
+    assert_eq!(classify(eval_demanded(&p, &info, &replayed, &mut forged, &DemandLimits::UNLIMITED)), "Operand", "replayed");
+
+    // D2. The global state nothing writes: supplied nowhere, `state_after(9)` walks 9 positions to
+    // position 0 and fails `Missing` — having charged 9 terms, so 8 terms is `WorkLimit` first.
+    let mut nothing = source(&p, &params, &r, &|_| false);
+    let after9 = DemandRequest { target: DemandTarget::StateAfter { pos: 9, state: 1, layer: None }, elements: &[0] };
+    assert_eq!(classify(eval_demanded(&p, &info, &after9, &mut nothing, &DemandLimits { max_elements: 0, max_terms: 9 })), "Missing");
+    assert_eq!(
+        classify(eval_demanded(&p, &info, &after9, &mut nothing, &DemandLimits { max_elements: 0, max_terms: 8 })),
+        "WorkLimit"
+    );
+    // Supplied at 4, it is carried 5 positions: 5 terms, no element.
+    let mut at4 = source(&p, &params, &r, &|p| p == 4);
+    let (v, work) = eval_demanded(&p, &info, &after9, &mut at4, &DemandLimits::UNLIMITED).expect("carried");
+    assert_eq!((v, work.elements, work.terms), (vec![0], 0, 5));
+
+    // D3. Layer 1's block (`b`) does not reference the per-layer state: no instance there.
+    let unheld = DemandRequest { target: DemandTarget::StateAfter { pos: 1, state: 0, layer: Some(1) }, elements: &[0] };
+    assert_eq!(classify(eval_demanded(&p, &info, &unheld, &mut honest, &DemandLimits::UNLIMITED)), "Malformed");
+
+    // D4. Whatever reason a source gives, the evaluation reports `Missing`.
+    use misaka_palw_tir::demand::MapSourceKey;
+    let pre_out = p.blocks[p.schedule.pre as usize].carry_out[0];
+    for (key, target) in [
+        (MapSourceKey::Token { pos: 1 }, DemandTarget::Node { ctx: DemandContext { pos: 1, occurrence: 0 }, node: pre_out }),
+        (
+            MapSourceKey::State { pos: 0, state: 1, layer: None },
+            DemandTarget::Node { ctx: DemandContext { pos: 0, occurrence: 0 }, node: pre_out },
+        ),
+        (
+            MapSourceKey::Node { ctx: DemandContext { pos: 1, occurrence: 0 }, node: pre_out },
+            DemandTarget::Node { ctx: DemandContext { pos: 1, occurrence: a_occ }, node: reader },
+        ),
+    ] {
+        for kind in [TirErrorKind::Operand, TirErrorKind::Position, TirErrorKind::Malformed, TirErrorKind::Missing] {
+            let mut src = source(&p, &params, &r, &|p| p == 0);
+            src.withheld.insert(key, kind);
+            let request = DemandRequest { target, elements: &[0] };
+            assert_eq!(
+                classify(eval_demanded(&p, &info, &request, &mut src, &DemandLimits::UNLIMITED)),
+                "Missing",
+                "{key:?} {kind:?}"
+            );
+        }
+    }
+}

@@ -893,8 +893,11 @@ are returned in list order; repeats are allowed and cost nothing) and *limits*
 
 The request is refused before anything is read: class `Position` if `p ≥ history_bound`; class
 `Malformed` if `o` names no occurrence, `n` no node of its block, an element is not below the
-target's element count, or `state_after` names a state that is not `Fixed` or an instance its
-`per_layer` does not have (a layer for a global state; none, or a layer `≥ L`, for a per-layer one).
+target's element count, or `state_after` names a state that is not `Fixed` or an instance no run
+holds — a layer for a global state; none, or a layer `≥ L`, for a per-layer one; or a layer whose
+scheduled block neither reads, writes nor appends to the state (a run holds a per-layer instance only
+where its block references it, and a global state's one instance always: normal form uses every
+declared state).
 
 **The source** answers five questions, and nothing else is ever read:
 
@@ -906,8 +909,9 @@ target's element count, or `state_after` names a state that is not `Fixed` or an
 | `hist_row(p, j, l, r, i)` | element `i` of the row appended to `Hist` instance `(j, l)` at position `r`, as read at `p` (`r < p`) |
 | `token(p)` | the token of position `p` |
 
-Any answer may be a refusal; the evaluation then fails (class `Missing`) and never substitutes a
-value. The questions asked, with their arguments, are the evaluation's **requests**. They are a
+Any answer may be a refusal; the evaluation then fails with class `Missing` — whatever reason the
+source gives: a source's own class is never read, so two sources refusing one question for different
+reasons fail the evaluation alike — and never substitutes a value. The questions asked, with their arguments, are the evaluation's **requests**. They are a
 **set**: an implementation may ask a question twice, and the order it asks in is not part of the
 result.
 
@@ -967,8 +971,9 @@ batch prefix, mapped into each operand by broadcasting. `n` is the reduced exten
   of the source in turn.
 
 A `state_after(p, j, l)` target's element `i` is the writer's element `i` in context
-`(p, the writer's occurrence)` — a leaf if the writer is committed — or, for an instance nothing
-writes, the value at the start of `p`.
+`(p, the writer's occurrence)` — a leaf if the writer is committed — which must lie in `[lo, hi]`
+(else `Operand`), as every `Fixed` value the evaluation reads does (a computed write is clamped into
+it; a committed one is checked); or, for an instance nothing writes, the value at the start of `p`.
 
 **Work** is two counts:
 
@@ -977,9 +982,10 @@ writes, the value at the start of `p`.
 - `terms`: for each computed element, `K` for a `MatMul`, the reduced extent `n` (at the context's
   `H`) for a `ReduceSum`, a `ReduceMax` or a `TopK` row, and 0 otherwise; plus, for each distinct
   `(p, j, l, i)` whose value at the start of `p` the evaluation needs for an instance nothing writes
-  (a `State` operand in a context at `p`, or an element of `state_after(p, j, l)`), the number of
-  positions the value is carried across: `p − q` for the largest `q ≤ p` at which the source answers
-  a value.
+  (a `State` operand in a context at `p`, or an element of `state_after(p, j, l)`), one term for each
+  position the walk passes: `p − q` for the largest `q ≤ p` at which the source answers a value, and,
+  when it answers `Replay` all the way down, `p` — the walk then fails at position 0 (`Missing`), and
+  a `max_terms` below `p` makes it `WorkLimit` first.
 
 Leaves, params, consts, tokens, history rows and supplied state values cost nothing.
 
@@ -1017,10 +1023,13 @@ program vector:
   `value` — here every instance a block references, at every even position (the initial zeros at 0
   included); every other `(p, j, l)` answers `Replay`. A case may carry its own `states`, which then
   replaces the file's.
-- A question the files do not answer is refused (`Missing`).
+- A question the files do not answer is refused (`Missing`). A case may list `withhold`: questions
+  (in the form of `requests`, without `indices`) the source refuses, each with the reason it gives
+  (`raises`, a class that is not `Missing`); the evaluation fails `Missing` all the same.
 - `cases[]`: `name`, `target` (`{"node": {pos, occurrence, node}}` or
   `{"state_after": {pos, state, layer}}`), `elements`, `limits` (`max_elements`, `max_terms`), and
-  either `expect` — `values` (in `elements`' order), `work` (`elements`, `terms`) and `requests`, the
+  optionally `withhold`, and either `expect` — `values` (in `elements`' order), `work` (`elements`,
+  `terms`) and `requests`, the
   request set grouped by question: one entry per question with every argument but the element index
   (`{"node": {pos, occurrence, node}}`, `{"param": {param, layer}}`,
   `{"state": {pos, state, layer}}`, `{"hist_row": {pos, state, layer, row_pos}}` or
@@ -1030,10 +1039,11 @@ program vector:
 - The cases: every commit point of every position (the first, second, middle and last two
   elements, or all of them when there are at most six), a sample of uncommitted nodes at the last
   position, every referenced `Fixed` instance after every position (the odd positions replay from the
-  even one before), the heaviest case at exactly its work and one short in each count, and the
-  refusals — an element outside the target, an occurrence or a node that does not exist,
-  `p = history_bound`, a position the run did not reach, `Replay` at position 0, a `Hist` state named
-  by `state_after`.
+  even one before), the first case with the most terms at exactly its work and one short in each
+  count, and the refusals — an element outside the target, an occurrence or a node that does not
+  exist, `p = history_bound`, a position the run did not reach, `Replay` at position 0, a `Hist` state
+  named by `state_after`, and, for each kind of question some case asks, the first such question
+  withheld by the source with a reason that is not `Missing`.
 
 `cargo test -p misaka-palw-tir --test demand_vectors` regenerates every file from the program vectors
 and requires identical bytes; `TIR_BLESS=1` rewrites them, which is a change of the semantics and is

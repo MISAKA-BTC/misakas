@@ -29,7 +29,8 @@
 //!
 //! By the step space's invariant (design D7) every such unit is a leaf that PRECEDES the disputed
 //! one, so the court never reads a leaf the bisection has not already agreed on; a request for one
-//! that does not precede it is refused as an interpreter defect, never answered.
+//! that does not precede it is refused, never answered (and, as every refusal of a source is, it
+//! fails the evaluation `Missing`, spec 04b §9.4).
 //!
 //! **The canonical operand set is exactly what the evaluation asked for.** Every request is
 //! recorded; a unit asked for and not carried, or carried and not asked for, is
@@ -665,6 +666,7 @@ fn evaluate_leaf(
 
 fn evaluation_refusal(e: &DemandError) -> PalwStepRefuteError {
     match e {
+        // Every refusal of the source is `Missing` (spec 04b §9.4), a unit not carried among them.
         DemandError::Tir(t) if t.kind == TirErrorKind::Missing => bad("the evaluation reads a unit the refutation does not carry"),
         // A work limit, a malformed request of the court's own making, or an evaluation error after
         // PALW-TIR-33 held on every operand: an interpreter defect. Nobody is slashed.
@@ -880,8 +882,9 @@ fn check_flat_pin(binding: &PalwTirStepBindingV1, vocab: usize, d: &PalwBase0Dec
 ///    openings, the prompt carriage in the network's form, the decode pin in the class's scheme;
 /// 6. **PALW-TIR-33 on every carried step leaf**, ascending leaf index, lanes in order — the first
 ///    lane outside convicts (kind 5, THAT leaf's index);
-/// 7. **the evaluation** of the disputed leaf's values — a unit it needs and the refutation does not
-///    carry is `InputSetNotCanonical`; any other failure `Unadjudicable`;
+/// 7. **the evaluation** of the disputed leaf's values — a refusal of the court's source (a unit the
+///    refutation does not carry, or one the court will not serve) is `Missing` and so
+///    `InputSetNotCanonical`; any other failure `Unadjudicable`;
 /// 8. **the canonical set** — every carried unit was read, and the prompt and decode carriages are
 ///    present exactly when read; otherwise `InputSetNotCanonical`;
 /// 9. **the comparison** — the first differing lane convicts
