@@ -62,6 +62,14 @@ struct Args {
     /// Print the result as JSON.
     #[arg(long)]
     json: bool,
+    /// Run the integer program on the typed backend (`misaka-palw-tir-exec`, byte-identical to the
+    /// reference evaluator and far faster) instead of the reference evaluator.
+    #[arg(long)]
+    exec: bool,
+    /// With `--exec`: also run the first N positions of the first evaluation sequence on the
+    /// reference evaluator and refuse unless every logit is equal.
+    #[arg(long, default_value_t = 0)]
+    cross_check: usize,
 }
 
 fn tokens(path: &Option<PathBuf>, vocab: usize, count: usize, seed: u64) -> Result<(Vec<Vec<usize>>, serde_json::Value), String> {
@@ -161,10 +169,34 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     }
     log(format!("float reference on {} sequences", eval.len()));
     let fl = fidelity::float_logits(&prep.hl, &loader, &eval, &progress("float")).map_err(|e| e.to_string())?;
-    log("integer program on the reference evaluator".into());
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(a.jobs.max(1)).build().map_err(|e| e.to_string())?;
-    let il: Vec<Vec<Vec<f64>>> = pool
-        .install(|| {
+    let il: Vec<Vec<Vec<f64>>> = if a.exec {
+        log("integer program on the typed backend (misaka-palw-tir-exec)".into());
+        let il = eval
+            .iter()
+            .enumerate()
+            .map(|(si, s)| {
+                fidelity::int_logits_exec(&prep.lowered.program, &mat.params, s, mat.logits_scale, &|p| {
+                    if (p + 1) % 64 == 0 || p + 1 == s.len() {
+                        eprintln!("[{:>7.1}s]   integer seq {si}: {}/{}", t0.elapsed().as_secs_f64(), p + 1, s.len());
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        if a.cross_check > 0 {
+            let s = &eval[0][..a.cross_check.min(eval[0].len())];
+            let r =
+                fidelity::int_logits(&prep.lowered.program, &mat.params, s, mat.logits_scale, &|_| {}).map_err(|e| e.to_string())?;
+            if r[..] != il[0][..r.len()] {
+                return Err("the typed backend's logits differ from the reference evaluator's".into());
+            }
+            log(format!("cross-check: the first {} positions equal on the reference evaluator", r.len()));
+        }
+        il
+    } else {
+        log("integer program on the reference evaluator".into());
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(a.jobs.max(1)).build().map_err(|e| e.to_string())?;
+        pool.install(|| {
             eval.par_iter()
                 .enumerate()
                 .map(|(si, s)| {
@@ -176,7 +208,8 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+    };
     let m = fidelity::compare(&fl, &il, &eval);
     log(format!(
         "top-1 {:.4}  KL mean {:.5} max {:.4}  ppl float {:.3} int {:.3} (Δ {:+.2}%)",
@@ -196,6 +229,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         "calibration": { "source": calib_src, "sequences": calib.len(), "positions": calib.iter().map(Vec::len).sum::<usize>() },
         "evaluation": { "source": eval_src, "sequences": eval.len(), "positions": eval.iter().map(Vec::len).sum::<usize>() },
         "metrics": m,
+        "backend": if a.exec { "misaka-palw-tir-exec" } else { "misaka-palw-tir reference evaluator" },
         "seconds": t0.elapsed().as_secs_f64(),
     }))
 }
