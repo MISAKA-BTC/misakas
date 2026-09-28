@@ -19,8 +19,10 @@ fn admit(cfg: &str) -> Result<String, String> {
     let lw = lower(&hl, &LowerOpts::default()).map_err(|e| format!("not lowerable: {e}"))?;
     let a = tir_admit_program_v1(&lw.program, &inputs()).map_err(|e| format!("REFUSED {e}"))?;
     let worst = a.cones.iter().max_by_key(|c| c.terminal().macs).expect("a cone");
+    let nodes = lw.program.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
     Ok(format!(
-        "{} cones, worst terminal {} MACs ({}:{}), C {}, cone work {}, step leaves {}",
+        "largest block {nodes} nodes{}, {} cones, worst terminal {} MACs ({}:{}), C {}, cone work {}, step leaves {}",
+        if lw.budget_fallbacks.is_empty() { String::new() } else { format!(" (fallbacks {:?})", lw.budget_fallbacks) },
         a.cones.len(),
         worst.terminal().macs,
         worst.block,

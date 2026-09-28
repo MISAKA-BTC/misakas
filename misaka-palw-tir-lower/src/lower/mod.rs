@@ -155,6 +155,10 @@ pub struct Lowered {
     /// `(TIR block, node)` → the HL site whose float value the node holds, its scale and width:
     /// what a per-site comparison against the float reference decodes committed values with.
     pub site_nodes: BTreeMap<(u8, u16), (String, ScaleKey, usize)>,
+    /// HL blocks that did not fit NF-12's 512 nodes with every outlier split, and the reader limit
+    /// they were lowered at instead (a split is kept only for values at most this many projections
+    /// read) — empty when every block kept every split.
+    pub budget_fallbacks: Vec<(String, usize)>,
 }
 
 impl Lowered {
@@ -274,6 +278,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     order.push(hl.post);
     let mut logits = None;
+    let mut budget_fallbacks = Vec::new();
     for &hbk in &order {
         // The builder panics on a block past NF-12's node cap. The lowering then gives up the
         // outlier splits of the most-read values first and tries again (the program stays a
@@ -296,6 +301,9 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
             match r {
                 Ok(v) => {
                     result = Some(v?);
+                    if readers != usize::MAX {
+                        budget_fallbacks.push((hl.blocks[hbk].name.clone(), readers));
+                    }
                     break;
                 }
                 Err(p) => {
@@ -337,7 +345,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no logits scale"))?;
-    Ok(Lowered { program, fills, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes })
+    Ok(Lowered { program, fills, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks })
 }
 
 // ───────────────────────────── lowering state ─────────────────────────────
@@ -2005,7 +2013,7 @@ fn lower_attention(
                 }),
             )?;
             let sink = b.reshape_fixed(sink, &[kv32, g32, 1]);
-            softmax_with_sink(b, logits, sink, 24 - LOGIT_Q)
+            b.softmax_with_sink(logits, sink, 24 - LOGIT_Q)
         }
     };
     let vw = b.reshape(v.0, &[Dim::H, Dim::Fixed(kv32), Dim::Fixed(dv32)]);
@@ -2081,41 +2089,31 @@ fn lower_route(
                             Ok(IntTensor::i32(vec![experts], c.f(bp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))
                         }),
                     )?;
-                    let s = b.add(sig, bias, DType::I64);
-                    b.clamp(s, i32::MIN as i64, i32::MAX as i64, DType::I32)
+                    b.selection_bias(sig, bias)
                 }
                 None => sig,
             };
             (sig, choice, i32::MIN as i64)
         }
     };
-    let choice = match &r.groups {
-        None => choice,
+    // Group-limited routing is the library's `grouped_topk` (its top-two group score needs groups
+    // of two or more experts; a group of one scores by its one expert, which is `Max`).
+    let idx = match &r.groups {
+        None => b.topk(choice, 0, k as u32),
         Some(g) => {
-            let (ng, per) = (g.n_group as u32, (experts / g.n_group) as u32);
-            let cg = b.reshape_fixed(choice, &[ng, per]);
-            let gs = match g.score {
-                GroupScore::Max => b.reduce_max(cg, 1),
-                GroupScore::Top2Sum => {
-                    let t2 = b.topk(cg, 1, 2.min(per));
-                    let v = b.gather(cg, t2, 1, 1);
-                    b.reduce_sum(v, 1, DType::I64)
-                }
+            let per = experts / g.n_group;
+            let rule = match g.score {
+                GroupScore::Top2Sum if per >= 2 => tir::library::moe::GroupScore::Top2Sum,
+                _ => tir::library::moe::GroupScore::Max,
             };
-            let gs = b.reshape_fixed(gs, &[ng]);
-            let keep = b.topk(gs, 0, g.topk_group as u32);
-            let ids = b.iota(DType::Idx, &[Dim::Fixed(ng), Dim::Fixed(1)], 0, 0, 1);
-            let kr = b.reshape_fixed(keep, &[1, g.topk_group as u32]);
-            let eq = b.compare(ids, kr, tir::Cmp::Eq);
-            let mask = b.reduce_max(eq, 1);
-            let f = b.c(DType::I32, fill as i128);
-            let masked = b.select(mask, cg, f, DType::I32);
-            b.reshape_fixed(masked, &[experts as u32])
+            b.grouped_topk(choice, g.n_group as u32, g.topk_group as u32, k as u32, rule, fill)
         }
     };
-    let idx = b.topk(choice, 0, k as u32);
     let kept = b.gather(scores, idx, 0, 0);
     let kept = if r.scoring == Scoring::TopKThenSoftmax { b.softmax_shifted(kept, up) } else { kept };
+    // `renormalize_recip`'s rounding with the probabilities' own range: the library clamps the
+    // result to `i32`, and at DeepSeek-V3's width that interval makes the combine's `MatMul`
+    // overflow `i64` in the range analysis; `[0, 2^25]` (a clamp that never fires) keeps it inside.
     let w = if r.normalize {
         let sum = b.reduce_sum(kept, 0, DType::I64);
         let recip = b.int_recip(sum);
@@ -2256,36 +2254,6 @@ fn lower_moe(
     Ok(Val { r, dt: want.dt, key: want.key.clone(), len: d, site: site.to_string() })
 }
 
-/// `softmax_shifted` over the last axis with one extra logit per row that joins the maximum and
-/// the sum and is then dropped (gpt-oss's sinks) — the template's steps and roundings, one term
-/// more: `m = max(max_j x_j, s)`, `e_j = IntExp(clamp(x_j − m) · 2^up)`,
-/// `p_j = (e_j · IntRecip(Σe + IntExp(clamp(s − m) · 2^up))) >> 24`.
-fn softmax_with_sink(b: &mut BlockBuilder<'_>, x: tir::Ref, sink: tir::Ref, up: u32) -> tir::Ref {
-    use tir::Cmp;
-    let axis = b.shape(x).len() - 1;
-    let mx = b.reduce_max(x, axis);
-    let gt = b.compare(mx, sink, Cmp::Gt);
-    let m = b.select(gt, mx, sink, DType::I32);
-    let floor = (i32::MIN as i64) >> up;
-    let scale = b.c(DType::I64, 1i128 << up);
-    let arg = |b: &mut BlockBuilder<'_>, v: tir::Ref| {
-        let d = b.sub(v, m, DType::I64);
-        let d = b.clamp(d, floor, 0, DType::I64);
-        let w = b.mul(d, scale, DType::I64);
-        b.clamp(w, i32::MIN as i64, 0, DType::I32)
-    };
-    let ax = arg(b, x);
-    let e = b.int_exp(ax);
-    let sa = arg(b, sink);
-    let es = b.int_exp(sa);
-    let sum = b.reduce_sum(e, axis, DType::I64);
-    let sum = b.add(sum, es, DType::I64);
-    let recip = b.int_recip(sum);
-    let p = b.mul(e, recip, DType::I128);
-    let q = b.shr(p, 24, Rounding::Floor, DType::I64);
-    b.clamp(q, 0, 1 << 25, DType::I32)
-}
-
 /// Where a gated-delta node's decay and beta come from: `g = A · softplus(a + dt_bias)` and
 /// `β = σ(b)`, matched in the HL graph and computed by the library's `decay_q36` and
 /// `int_sigmoid` on the Q24 projections instead of node by node.
@@ -2391,17 +2359,31 @@ fn lower_conv(
             t
         }
     };
-    let row = b.reshape_fixed(x.r, &[1, ch as u32]);
+    let row = ensure_node(b, x).r;
     let row = b.commit(row);
-    let win = b.concat(&[tir::Ref::State(ts), row], 0);
-    let keep = b.slice(win, 0, 1, (kernel - 1) as u32);
-    b.state_write(ts, keep);
+    // The taps are stored window-major (`[kernel, ch]`, oldest first), the library's layout: the
+    // checkpoint's per-channel codes, transposed at fill time.
     let pd = &hl.params[w as usize];
-    let taps = decl(b, cx, lb, &pd.name, DType::I8, &[ch, kernel], pd.per_layer, weight_codes(w))?;
-    let tt = b.transpose(taps, &[1, 0]);
-    let prod = b.mul(win, tt, DType::I32);
-    let acc = b.reduce_sum(prod, 0, DType::I64);
-    let acc = b.reshape_fixed(acc, &[ch as u32]);
+    let taps = decl(
+        b,
+        cx,
+        lb,
+        &pd.name,
+        DType::I8,
+        &[kernel, ch],
+        pd.per_layer,
+        Arc::new(move |c| {
+            let rc = c.rows(w)?;
+            let mut t = vec![0i8; kernel * ch];
+            for (c_, row) in rc.codes.chunks(kernel).enumerate() {
+                for (k_, v) in row.iter().enumerate() {
+                    t[k_ * ch + c_] = *v;
+                }
+            }
+            Ok(IntTensor::i8(vec![kernel, ch], t))
+        }),
+    )?;
+    let acc = b.causal_conv(ts, row, taps);
     let pre_key = ScaleKey::site(vec![format!("{site}.pre")], false);
     let (kx, kp) = (x.key.clone(), pre_key.clone());
     let (m, s) = decl_ms(
