@@ -2843,6 +2843,18 @@ pub struct Params {
     /// holds its refusals.
     pub palw_gen_v1: Option<crate::palw_gen_v1::PalwGenFenceV1>,
 
+    /// **FP Job V5: a free-prompt job with image inputs** (RFC-0003 §II.2.1, PALW-GEN-13; RFC-0001's
+    /// lane) — the job of a vision-language class, which embeds FP Job V4 unchanged
+    /// ([`crate::palw_fp_job_v5`]). Past this height a V5 job may be admitted for a text class with
+    /// image slots; below it, and on every network that leaves it `None`, a V5 job is refused by
+    /// name and FP Job V4 is exactly what it was.
+    ///
+    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only in both
+    /// fingerprints, the whole option collapsed from `Some(never())`. Requires `palw_gen_v1` (a
+    /// vision-language class is a generative class) and `palw_fp_decode_rules` (V5 embeds V4) in
+    /// force at or below it ([`Self::validate_palw_fp_job_v5_v1`]).
+    pub palw_fp_job_v5: Option<ForkActivation>,
+
     /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
     ///
     /// A dissection tries ONE head's softmax, so a fused output tile wider than a head (or not a
@@ -3816,6 +3828,8 @@ impl Params {
         self.validate_palw_tir_v1()?;
         // **RFC-0003: the generative fence's own refusals** (`crate::palw_gen_v1`).
         self.validate_palw_gen_v1()?;
+        // **FP Job V5** (`crate::palw_fp_job_v5`): over the generative fence and FP Job V4's.
+        self.validate_palw_fp_job_v5_v1()?;
         // **ADR-0152 v2 F2: the offence-attribution fence is armed at genesis or not at all.** Past
         // it the V1 `PanelFalseValid` is refused and a kind the chain never consumed before is; a
         // later crossing would leave pre-fence V1 rows beside V2 rows keyed differently for the
@@ -6025,6 +6039,10 @@ impl Params {
         // RFC-0003, likewise: the WHOLE option collapses from `Some(never())`.
         if self.palw_gen_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_gen_v1 = None;
+        }
+        // FP Job V5, likewise.
+        if self.palw_fp_job_v5 == Some(ForkActivation::never()) {
+            self.palw_fp_job_v5 = None;
         }
         // ADR-0093 Decision 6, likewise.
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
@@ -9187,6 +9205,7 @@ impl Params {
             palw_kimi_k3,
             palw_tir_v1,
             palw_gen_v1,
+            palw_fp_job_v5,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -9419,6 +9438,7 @@ impl Params {
             ("palw_kimi_k3", *palw_kimi_k3),
             ("palw_tir_v1", palw_tir_v1.map(|fence| fence.activation)),
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
+            ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
@@ -9663,6 +9683,11 @@ impl Params {
             h.write(b"palw_gen_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
+        }
+        // FP Job V5, NAMED likewise.
+        if let Some(v5) = self.palw_fp_job_v5 {
+            h.write(b"palw_fp_job_v5");
+            h.write(v5.daa_score().to_le_bytes());
         }
         // ADR-0093 Decision 6's fence, NAMED likewise: it changes which classes may register.
         if let Some(dissectable) = self.palw_fused_dissectable {
@@ -10156,6 +10181,7 @@ impl Params {
             palw_kimi_k3,
             palw_tir_v1,
             palw_gen_v1,
+            palw_fp_job_v5,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -10837,6 +10863,10 @@ impl Params {
         if let Some(fence) = palw_gen_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        // FP Job V5. Some-only.
+        if let Some(activation) = palw_fp_job_v5.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0093 Decision 6. Some-only, likewise.
         if let Some(activation) = palw_fused_dissectable.as_mut() {
             fork(activation, visit);
@@ -11262,6 +11292,7 @@ impl Params {
             palw_kimi_k3,
             palw_tir_v1,
             palw_gen_v1,
+            palw_fp_job_v5,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -11984,6 +12015,12 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
+        // FP Job V5, Some-only for the same reason: a dormant network fingerprints byte-identically
+        // to a build without the field, and FP Job V4's own bytes never move.
+        if let Some(activation) = palw_fp_job_v5 {
+            h.write(b"palw_fp_job_v5");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
         // byte-identically to a build without the field.
         if let Some(activation) = palw_fused_dissectable {
@@ -12627,6 +12664,7 @@ impl Params {
             palw_kimi_k3: self.palw_kimi_k3,
             palw_tir_v1: self.palw_tir_v1,
             palw_gen_v1: self.palw_gen_v1,
+            palw_fp_job_v5: self.palw_fp_job_v5,
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
@@ -13681,6 +13719,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_token_lift: None,
     palw_tir_v1: None,
     palw_gen_v1: None,
+    palw_fp_job_v5: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -13932,6 +13971,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_token_lift: None,
     palw_tir_v1: None,
     palw_gen_v1: None,
+    palw_fp_job_v5: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14165,6 +14205,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_token_lift: None,
     palw_tir_v1: None,
     palw_gen_v1: None,
+    palw_fp_job_v5: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -21201,6 +21242,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_token_lift: None,
     palw_tir_v1: None,
     palw_gen_v1: None,
+    palw_fp_job_v5: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,

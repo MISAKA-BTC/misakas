@@ -633,6 +633,15 @@ pub fn palw_drill_gen_fence_at_v1(params: &mut crate::config::params::Params, at
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_GEN_V1)
 }
 
+/// **A drill arms FP Job V5 at a low height** (RFC-0003 §II.2.1; `--palw-drill-fp-v5-at`) — the same
+/// machinery for the one-entry drill list [`crate::palw_fp_job_v5::PALW_DRILL_FP_V5_FENCES_V1`]: ARMS
+/// `palw_fp_job_v5` at `at` and moves nothing else. `validate_palw_v2` refuses the result unless
+/// `palw_gen_v1` and `palw_fp_decode_rules` are in force at or below `at` (arm them first with
+/// `--palw-drill-gen-at` and the decode-rules flag day).
+pub fn palw_drill_fp_v5_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_V5_V1)
+}
+
 /// One post-launch flag day a drill may cross: its list and the command-line flag that moves it.
 struct PalwDrillFlagDayV1 {
     list: &'static [crate::config::params::PalwPostLaunchFenceV1],
@@ -658,6 +667,10 @@ const PALW_DRILL_FLAG_DAY_TIR_V1: PalwDrillFlagDayV1 =
 /// The generative fence alone (`--palw-drill-gen-at`, RFC-0003): a drill-only list.
 const PALW_DRILL_FLAG_DAY_GEN_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_gen_v1::PALW_DRILL_GEN_FENCES_V1, flag: "--palw-drill-gen-at" };
+
+/// FP Job V5 alone (`--palw-drill-fp-v5-at`): a drill-only list.
+const PALW_DRILL_FLAG_DAY_FP_V5_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_fp_job_v5::PALW_DRILL_FP_V5_FENCES_V1, flag: "--palw-drill-fp-v5-at" };
 
 /// The one body both flag days share — see [`palw_drill_post_launch_fences_at_v1`].
 fn palw_drill_move_fences_v1(

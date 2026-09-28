@@ -352,6 +352,7 @@ fn vision_class() -> PalwGenClassV1 {
         h: img["h"].as_u64().unwrap() as u32,
         w: img["w"].as_u64().unwrap() as u32,
         tile_len: img["tile_len"].as_u64().unwrap() as u32,
+        token_equivalents: 0,
     };
     PalwGenClassV1 {
         version: PALW_GEN_CLASS_VERSION_V1,
@@ -381,8 +382,11 @@ fn an_image_class_declares_its_slots_and_its_id_covers_them() {
     };
     for (what, e) in [
         ("no slot", refused(&|c| c.offers.images.clear())),
-        ("a slot no stage reads", refused(&|c| c.offers.images.push(PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4 }))),
-        ("another size", refused(&|c| c.offers.images[0] = PalwGenImageOfferV1 { h: 3, w: 2, tile_len: 4 })),
+        (
+            "a slot no stage reads",
+            refused(&|c| c.offers.images.push(PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4, token_equivalents: 0 })),
+        ),
+        ("another size", refused(&|c| c.offers.images[0] = PalwGenImageOfferV1 { h: 3, w: 2, tile_len: 4, token_equivalents: 0 })),
         ("a tile under 4", refused(&|c| c.offers.images[0].tile_len = 3)),
         ("a tile over 2^16", refused(&|c| c.offers.images[0].tile_len = (1 << 16) + 1)),
     ] {
@@ -442,8 +446,9 @@ fn text_class(vector: &str, images: Vec<PalwGenImageOfferV1>) -> PalwGenClassV1 
     }
 }
 
+/// The toy VLM class, its image priced well above any floor.
 fn vlm_class() -> PalwGenClassV1 {
-    text_class("toy-vlm.json", vec![PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4 }])
+    text_class("toy-vlm.json", vec![PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4, token_equivalents: 1_000_000 }])
 }
 
 #[test]
@@ -509,4 +514,36 @@ fn a_text_only_pipeline_is_a_text_class() {
     };
     let report = palw_gen_class_preflight_v1(&c, &fence()).unwrap_or_else(|e| panic!("the text class: {e}"));
     assert_eq!((report.profile, report.output_tile_len, report.draws_randomness), (PalwGenProfileV1::Text, None, false));
+}
+
+/// **An image's price in prompt tokens** (RFC-0003 open question 13's recommendation, pending user
+/// confirmation): declared per slot, floored at `⌈admitted per-image work / per-token work⌉`, and
+/// declared only by a text class.
+#[test]
+fn a_text_class_prices_each_image_at_or_above_its_token_floor() {
+    let c = vlm_class();
+    let report = palw_gen_class_preflight_v1(&c, &fence()).unwrap();
+    let a = &report.admission;
+    let per_image = palw_gen_work_units_v1(&a.stages[0].job_cost);
+    let per_token = palw_gen_work_units_v1(&a.stages[1].admission.view.position.cost);
+    let floor = per_image.div_ceil(per_token) as u32;
+    assert!(per_image > 0 && per_token > 0);
+    assert_eq!(report.image_token_floor, vec![floor], "⌈{per_image} / {per_token}⌉");
+    let priced = |tokens: u32| {
+        let mut p = c.clone();
+        p.offers.images[0].token_equivalents = tokens;
+        palw_gen_class_preflight_v1(&p, &fence())
+    };
+    assert!(priced(floor.max(1)).is_ok(), "at the floor");
+    assert!(matches!(priced(floor.max(1) - 1), Err(PalwGenClassErrorV1::Offers(_))), "one token below it");
+    // The price is in the class id: another price is another class.
+    let root = Hash64::from_bytes([0xA9; 64]);
+    let mut other = c.clone();
+    other.offers.images[0].token_equivalents += 1;
+    assert_ne!(c.class_id(&root), other.class_id(&root));
+    // A class that is not a text class declares no token price.
+    let mut vision = vision_class();
+    vision.offers.images[0].token_equivalents = 1;
+    assert!(matches!(palw_gen_class_preflight_v1(&vision, &fence()), Err(PalwGenClassErrorV1::Offers(_))));
+    assert!(palw_gen_class_preflight_v1(&vision_class(), &fence()).unwrap().image_token_floor.is_empty());
 }

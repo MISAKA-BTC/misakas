@@ -89,6 +89,13 @@ pub struct PalwGenImageOfferV1 {
     pub w: u32,
     /// Bytes per input tile, in `[4, 2^16]`: what a court opens against `input_root`.
     pub tile_len: u32,
+    /// **The image's price in prompt tokens** (RFC-0003 open question 13, the recommendation —
+    /// PENDING USER CONFIRMATION): a text class's image stages are charged as this many
+    /// prefill-equivalent tokens per image, at the job's per-token price. Declared by the registrant
+    /// and floored by admission at `⌈admitted per-image work / per-token work⌉`
+    /// ([`palw_gen_image_token_floor_v1`]); `0` on a class that is not a text class (its images are
+    /// its job, priced by its own profile).
+    pub token_equivalents: u32,
 }
 
 /// **A job's reference to one of its images** (RFC-0003 §II.4, `ImageInputRefV1`): the chain carries
@@ -318,6 +325,70 @@ pub struct PalwGenClassReportV1 {
     pub output_tile_len: Option<u32>,
     /// Whether any stage draws `R` (PALW-GEN-6: a job's seed is all zeros exactly when it does not).
     pub draws_randomness: bool,
+    /// A text class's per-slot price floor in prompt tokens ([`palw_gen_image_token_floor_v1`]);
+    /// empty for every other class.
+    pub image_token_floor: Vec<u32>,
+}
+
+/// Work in MAC-equivalents: ADR-0131's table over §8's three arithmetic counts (a MAC 1, an
+/// elementwise op 1, a transcendental 4) — the units the canonical work rule prices arithmetic in.
+pub fn palw_gen_work_units_v1(cost: &misaka_palw_tir::admit::CostV1) -> u128 {
+    let t = crate::palw_economic_compute_v1::PALW_ECONOMIC_COST_TABLE_V1;
+    cost.macs as u128 * t.matmul_mac as u128
+        + cost.elementwise as u128 * t.elementwise as u128
+        + cost.transcendentals as u128 * t.transcendental as u128
+}
+
+/// **The price floor of every image slot of a text class, in prompt tokens** (RFC-0003 open question
+/// 13's recommendation, PENDING USER CONFIRMATION): `⌈admitted per-image work / per-token work⌉`.
+///
+/// * **Per-image work.** Every stage but the text stage is image work: its admitted job work (every
+///   position, [`palw_gen_work_units_v1`]) is split evenly over the images it depends on — the images
+///   it binds and those of every earlier stage it reads — and slot `i`'s work is the sum of its
+///   shares, each rounded up.
+/// * **Per-token work.** The text stage's admitted work for one position: what a prompt token costs.
+///
+/// `Err` names a stage of a text class that depends on no image: prefill no rule prices (RFC-0001's
+/// D10 pays decode leaves only), refused rather than carried free.
+pub fn palw_gen_image_token_floor_v1(
+    pipeline: &TirPipelineV1,
+    admission: &TirPipelineAdmissionV1,
+    images: usize,
+) -> Result<Vec<u32>, PalwGenClassErrorV1> {
+    let text = pipeline.output_stage as usize;
+    let mut depends: Vec<std::collections::BTreeSet<u8>> = Vec::with_capacity(pipeline.stages.len());
+    let mut work = vec![0u128; images];
+    for (s, st) in pipeline.stages.iter().enumerate() {
+        let mut set = std::collections::BTreeSet::new();
+        for b in &st.bind {
+            match b {
+                Binding::JobImage { index } => {
+                    set.insert(*index);
+                }
+                Binding::StageRows { stage, .. } | Binding::StageFinal { stage } | Binding::StageRowCount { stage, .. } => {
+                    set.extend(depends[*stage as usize].iter().copied());
+                }
+                _ => {}
+            }
+        }
+        if s != text {
+            if set.is_empty() {
+                return Err(PalwGenClassErrorV1::Offers(format!(
+                    "stage {s} ({}) of a text class reads no image: prefill no rule prices",
+                    st.name
+                )));
+            }
+            let share = palw_gen_work_units_v1(&admission.stages[s].job_cost).div_ceil(set.len() as u128);
+            for i in &set {
+                if let Some(w) = work.get_mut(*i as usize) {
+                    *w = w.saturating_add(share);
+                }
+            }
+        }
+        depends.push(set);
+    }
+    let per_token = palw_gen_work_units_v1(&admission.stages[text].admission.view.position.cost).max(1);
+    Ok(work.iter().map(|w| u32::try_from(w.div_ceil(per_token)).unwrap_or(u32::MAX)).collect())
 }
 
 fn fixed_shape(dims: &[Dim]) -> Option<Vec<u32>> {
@@ -396,6 +467,11 @@ fn check_offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2], offers: &Pa
         }
         if !(4..=1 << 16).contains(&slot.tile_len) {
             return bad(format!("image slot {i}'s input tile {} is outside [4, 2^16]", slot.tile_len));
+        }
+        // Only a text class prices its images in prompt tokens; its floor is checked with admission.
+        let text = pipeline.stages.iter().any(|st| matches!(st.trip, TripRule::TextStream));
+        if !text && slot.token_equivalents != 0 {
+            return bad(format!("image slot {i} declares a token price on a class that is not a text class"));
         }
     }
     // Prompts: an offered length fits every rule that reads it; nothing is offered that no rule reads.
@@ -505,7 +581,23 @@ pub fn palw_gen_class_preflight_v1(
         }
         check_offers(&pipeline, &programs, &class.offers)?;
         let admission = admit_class(class, ceilings)?;
-        return Ok(PalwGenClassReportV1 { profile, admission, output_tile_len: None, draws_randomness: draws_randomness(&programs) });
+        let image_token_floor = palw_gen_image_token_floor_v1(&pipeline, &admission, class.offers.images.len())?;
+        for (i, (slot, floor)) in class.offers.images.iter().zip(&image_token_floor).enumerate() {
+            if slot.token_equivalents < (*floor).max(1) {
+                return Err(PalwGenClassErrorV1::Offers(format!(
+                    "image slot {i} is priced at {} prompt tokens, below its floor {} (⌈per-image work / per-token work⌉)",
+                    slot.token_equivalents,
+                    (*floor).max(1)
+                )));
+            }
+        }
+        return Ok(PalwGenClassReportV1 {
+            profile,
+            admission,
+            output_tile_len: None,
+            draws_randomness: draws_randomness(&programs),
+            image_token_floor,
+        });
     }
     let post = &out_prog.blocks[out_prog.schedule.post as usize];
     let node = out_prog.output.node();
@@ -556,6 +648,7 @@ pub fn palw_gen_class_preflight_v1(
         admission,
         output_tile_len: Some(output_tile_len),
         draws_randomness: draws_randomness(&programs),
+        image_token_floor: Vec::new(),
     })
 }
 
