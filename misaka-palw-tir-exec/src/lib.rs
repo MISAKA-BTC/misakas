@@ -35,6 +35,7 @@
 pub mod cone;
 pub mod elem;
 pub mod exec;
+pub mod fused;
 pub mod kernels;
 pub mod layout;
 #[cfg(feature = "node")]

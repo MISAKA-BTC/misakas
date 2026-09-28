@@ -120,6 +120,9 @@ pub struct TirPlan {
     pub instance_of: Vec<Vec<Option<u32>>>,
     /// Every `(param, layer)` some occurrence reads.
     pub param_instances: BTreeSet<(u16, Option<u16>)>,
+    /// The fused regions of every block ([`crate::fused::match_program`]), matched once per plan on
+    /// first use: structural, so they hold for every executor and every artifact of the class.
+    pub fused: std::sync::OnceLock<Vec<Vec<crate::fused::Region>>>,
 }
 
 fn work_of(ivs: &[Interval]) -> Work {
@@ -327,7 +330,13 @@ impl TirPlan {
             instances,
             instance_of,
             param_instances,
+            fused: std::sync::OnceLock::new(),
         })
+    }
+
+    /// The fused regions of every block, matched on first use.
+    pub fn fused_regions(&self) -> &[Vec<crate::fused::Region>] {
+        self.fused.get_or_init(|| crate::fused::match_program(&self.program))
     }
 
     /// **Per occurrence, the block plan refined by the params actually bound.** A param's interval
