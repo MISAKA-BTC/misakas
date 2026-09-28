@@ -172,6 +172,11 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::CourtTirChildChosen { .. } => {
             Err("an IR dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves")
         }
+        // RFC-0003 (tag 68): the generative root claim rides as F7's does, signed by its party.
+        PalwConsensusObjectV2::CourtGenRootClaimed { signature, .. } if !signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::CourtGenRootClaimed { .. } => {
+            Err("a generative root claim must carry the signature of the responder — unsigned, the challenger could write it")
+        }
         PalwConsensusObjectV2::CourtCloseDeclared { signature, .. } if !signature.is_empty() => Ok(()),
         // ADR-0087 Decision 3: a buy is bound to its carrier's sink output below; a sell must carry
         // the holder's signature, checked at acceptance against the payload it names.

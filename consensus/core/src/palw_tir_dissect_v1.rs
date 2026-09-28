@@ -487,8 +487,25 @@ impl PalwTirDissectPhaseV1 {
         opened_at_daa: u64,
         w_round: u64,
     ) -> Result<Self, PalwTirDissectError> {
-        if root.version != PALW_TIR_DISSECT_OBJECT_VERSION_V1 {
-            return Err(PalwTirDissectError::UnsupportedVersion { got: root.version });
+        Self::open_parts(session_id, leaf_index, site, root.version, &root.elements, &root.totals, arity, opened_at_daa, w_round)
+    }
+
+    /// **[`Self::open`] from a root claim's parts** — its version, element lists and totals, whatever
+    /// carriage its finalize rides in (RFC-0003's generative root claim opens the same phase).
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_parts(
+        session_id: Hash64,
+        leaf_index: u64,
+        site: &PalwTirDissectSiteV1,
+        version: u16,
+        elements: &[Vec<u32>],
+        totals: &PalwTirRangeClaimV1,
+        arity: u8,
+        opened_at_daa: u64,
+        w_round: u64,
+    ) -> Result<Self, PalwTirDissectError> {
+        if version != PALW_TIR_DISSECT_OBJECT_VERSION_V1 {
+            return Err(PalwTirDissectError::UnsupportedVersion { got: version });
         }
         if !palw_attn_arity_is_legal_v1(arity) {
             return Err(PalwTirDissectError::Arity(format!("arity {arity} is not a power of two in 2..=64")));
@@ -499,9 +516,9 @@ impl PalwTirDissectPhaseV1 {
         if site.history_positions == 0 || site.tile_positions == 0 {
             return Err(PalwTirDissectError::NotDissected("an empty history"));
         }
-        check_shape(site, &root.elements, &root.totals)?;
+        check_shape(site, elements, totals)?;
         let bounds: Vec<(i128, i128)> = site.bounds.iter().map(|b| (b.lo, b.hi)).collect();
-        check_bounds(&bounds, &root.totals)?;
+        check_bounds(&bounds, totals)?;
         let tile_count = (site.history_positions as u64).div_ceil(site.tile_positions as u64);
         Ok(Self {
             session_id,
@@ -510,11 +527,11 @@ impl PalwTirDissectPhaseV1 {
             reductions: site.reductions.clone(),
             folds: site.folds.clone(),
             bounds,
-            elements: root.elements.clone(),
+            elements: elements.to_vec(),
             history_positions: site.history_positions,
             tile_positions: site.tile_positions,
-            root: root.totals.clone(),
-            claim: root.totals.clone(),
+            root: totals.clone(),
+            claim: totals.clone(),
             tile_first: 0,
             tile_count,
             round: 0,

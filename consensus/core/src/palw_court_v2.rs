@@ -506,13 +506,17 @@ pub enum PalwCourtVerdictProofV2 {
     /// **RFC-0003 (tag 11): a generative decode close** — a generated id against the committed logits
     /// row it was selected from ([`crate::palw_gen_close_v1::check_gen_decode_close_v1`]).
     GenDecodeToken { close: Box<crate::palw_gen_close_v1::PalwGenDecodeCloseV1> },
+    /// **RFC-0003 (tag 12): the bottom of a pipeline claim's history dissection** — F7's
+    /// `TirDissection` with the generative close as its carriage, graded against its session's phase
+    /// ([`crate::palw_gen_close_v1::check_gen_dissect_bottom_v1`]), never against the claim alone.
+    GenDissection { bottom: Box<crate::palw_gen_close_v1::PalwGenConeCloseV1> },
 }
 
 impl PalwCourtVerdictProofV2 {
     /// **Is this a generative close** (RFC-0003)? A move only past `palw_gen_v1`; below it the
     /// acceptance layer drops it by name and the fold reads an assembled one as undecodable bytes.
     pub fn is_gen_v1(&self) -> bool {
-        matches!(self, Self::GenCone { .. } | Self::GenDecodeToken { .. })
+        matches!(self, Self::GenCone { .. } | Self::GenDecodeToken { .. } | Self::GenDissection { .. })
     }
 
     /// **Is this an IR class's close** (RFC-0002 Phase F)? Such a close is a move only past
@@ -826,6 +830,65 @@ where
     Ok(())
 }
 
+/// **RFC-0003: the generative root claim, under the responder's key** — the claim's bond, the
+/// ADR-0082 responder context, over [`crate::palw_gen_close_v1::palw_gen_root_claim_message_v1`].
+pub fn check_court_gen_root_claim_acceptance_v1<V>(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    root: &crate::palw_gen_close_v1::PalwGenRootClaimV1,
+    signature: &[u8],
+    verify_mldsa87: V,
+) -> Result<(), PalwCourtV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    let (_session, claim) = resolve_court_session_v2(state, session_id)?;
+    let bond = state.bond(&claim.bond).ok_or(PalwCourtV2Error::ChallengerMissing(claim.bond))?;
+    let message = crate::palw_gen_close_v1::palw_gen_root_claim_message_v1(session_id, root);
+    if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT) {
+        return Err(PalwCourtV2Error::RungSignatureInvalid);
+    }
+    Ok(())
+}
+
+/// **RFC-0003: the generative root claim, admitted** — F7's `check_court_tir_root_claim_admits_v1`
+/// over the generative registry: the session's ladder terminal and no phase open on it, the claim's
+/// class a registered pipeline, the declared arity the ruleset's derived one, and the finalize
+/// ([`crate::palw_gen_close_v1::check_gen_root_claim_v1`]) at the court's limits. Returns the site
+/// the phase will open on (the fold derives the same one).
+#[allow(clippy::too_many_arguments)]
+pub fn check_court_gen_root_claim_admits_v1(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    root: &crate::palw_gen_close_v1::PalwGenRootClaimV1,
+    arity: u8,
+    derived_arity: u8,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<crate::palw_tir_dissect_v1::PalwTirDissectSiteV1, PalwCourtV2Error> {
+    let (session, claim) = resolve_court_session_v2(state, session_id)?;
+    if session.dissection.is_some() || state.tir_dissection_v1(session_id).is_some() {
+        return Err(PalwCourtV2Error::DissectionAlreadyOpen(*session_id));
+    }
+    let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
+    let row = state.gen_class_v1(&claim.class_id).ok_or_else(|| {
+        PalwCourtV2Error::TirDissectionRefused("the session disputes a claim of a class that is not a pipeline".into())
+    })?;
+    if arity != derived_arity {
+        return Err(PalwCourtV2Error::ArityIsNotTheDerivedOne { declared: arity, derived: derived_arity });
+    }
+    crate::palw_gen_close_v1::check_gen_root_claim_v1(
+        root,
+        row,
+        &claim.class_id,
+        &claim.execution_root,
+        narrowed,
+        prompt_ids_form,
+        &palw_tir_court_limits_v1(court),
+    )
+    .map_err(PalwCourtV2Error::TirDissectionRefused)
+}
+
 /// **What a `CourtCloseDeclared` binds** (ADR-0080 design A, W6).
 ///
 /// Every field of the object except the signature itself, in the object's own order, borsh-encoded
@@ -1006,7 +1069,8 @@ fn binding_of(proof: &PalwCourtVerdictProofV2) -> Option<&crate::palw_step_leg::
         | PalwCourtVerdictProofV2::TirDecodeToken { .. }
         | PalwCourtVerdictProofV2::TirDissection { .. }
         | PalwCourtVerdictProofV2::GenCone { .. }
-        | PalwCourtVerdictProofV2::GenDecodeToken { .. } => None,
+        | PalwCourtVerdictProofV2::GenDecodeToken { .. }
+        | PalwCourtVerdictProofV2::GenDissection { .. } => None,
     }
 }
 
@@ -1291,6 +1355,33 @@ pub fn adjudicate_court_close_v3(
         PalwCourtVerdictProofV2::GenCone { .. } | PalwCourtVerdictProofV2::GenDecodeToken { .. } => {
             return adjudicate_gen_close_v1(state, claim, proof, Some(narrowed), court, prompt_ids_form, decode_close_convicts_only);
         }
+        // **RFC-0003: the generative dissection's bottom, graded against F7's phase** — the tile it
+        // may open, the claim it is compared with and the totals the other reductions are supplied
+        // from are the phase's facts.
+        PalwCourtVerdictProofV2::GenDissection { bottom } => {
+            let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
+            let row = state.gen_class_v1(&claim.class_id).ok_or_else(|| {
+                PalwCourtV2Error::DoesNotAdjudicate(format!("claim {}'s class is not a generative class", claim.class_id))
+            })?;
+            let outcome = crate::palw_gen_close_v1::check_gen_dissect_bottom_v1(
+                phase,
+                bottom,
+                row,
+                &claim.class_id,
+                &claim.execution_root,
+                narrowed,
+                prompt_ids_form,
+                &palw_tir_court_limits_v1(court),
+            );
+            return match outcome {
+                Ok(Some(_)) => Ok(PalwCourtVerdictV2::ExecutorGuilty),
+                Ok(None) => Ok(PalwCourtVerdictV2::ChallengerDefeated),
+                Err(crate::palw_gen_close_v1::PalwGenCloseErrorV1::NotTheNarrowedLeaf { opened, narrowed }) => {
+                    Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened, narrowed })
+                }
+                Err(e) => Err(PalwCourtV2Error::DoesNotAdjudicate(e.to_string())),
+            };
+        }
         // **ADR-0082 Decision 2: the fused terminal is not a recompute, it is the end of an
         // exchange — so it is adjudicated HERE, where the phase it answers lives.**
         //
@@ -1556,10 +1647,11 @@ pub fn adjudicate_close_proof_v2(
         | PalwCourtVerdictProofV2::TirDecodeTokenTiled { .. }
         | PalwCourtVerdictProofV2::TirDecodeToken { .. }
         | PalwCourtVerdictProofV2::TirDissection { .. } => Err(PalwCourtV2Error::DoesNotAdjudicate("an IR close".into())),
-        // Adjudicated above, by `adjudicate_gen_close_v1`.
+        // Adjudicated above, by `adjudicate_gen_close_v1`; the bottom only in its session.
         PalwCourtVerdictProofV2::GenCone { .. } | PalwCourtVerdictProofV2::GenDecodeToken { .. } => {
             Err(PalwCourtV2Error::DoesNotAdjudicate("a generative close".into()))
         }
+        PalwCourtVerdictProofV2::GenDissection { .. } => Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
     }
 }
 
@@ -1593,6 +1685,9 @@ fn adjudicate_gen_close_v1(
         PalwCourtVerdictProofV2::GenDecodeToken { close } => {
             g::check_gen_decode_close_v1(close, row, &claim.class_id, &claim.execution_root, narrowed)
         }
+        // Graded against its phase, in `adjudicate_court_close_v3` — refused here, never read as
+        // "no fault found" (which would acquit).
+        PalwCourtVerdictProofV2::GenDissection { .. } => return Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
         _ => return Err(PalwCourtV2Error::DoesNotAdjudicate("not a generative close".into())),
     };
     let verdict = match outcome {
@@ -2238,7 +2333,8 @@ pub fn check_close_cost_v2(
         | PalwCourtVerdictProofV2::TirDissection { .. }
         // RFC-0003: a generative close likewise, measured as it rides (the class referenced by id).
         | PalwCourtVerdictProofV2::GenCone { .. }
-        | PalwCourtVerdictProofV2::GenDecodeToken { .. } => {
+        | PalwCourtVerdictProofV2::GenDecodeToken { .. }
+        | PalwCourtVerdictProofV2::GenDissection { .. } => {
             let bytes = borsh::to_vec(proof).map(|b| b.len() as u64).unwrap_or(u64::MAX);
             if bytes > court.max_close_bytes() {
                 return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });

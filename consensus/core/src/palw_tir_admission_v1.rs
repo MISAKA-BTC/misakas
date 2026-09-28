@@ -313,6 +313,38 @@ fn palw_tir_dissected_cone_admits_v1(
     cone: &misaka_palw_tir::admit::ConeV1,
     k: crate::palw_class_admission_v2::PalwKaryCourtV1,
 ) -> Result<(), PalwClassAdmissionError> {
+    palw_tir_dissected_cone_admits_parts_v1(
+        bundle,
+        rules.held.armed,
+        program,
+        block,
+        bi,
+        ni,
+        tile_len,
+        class.layout.max_context as u64,
+        class.layout.h_tile,
+        cone,
+        k,
+    )
+}
+
+/// **[`palw_tir_dissected_cone_admits_v1`] over the parts it reads** — the held regime's reading,
+/// the program (a version-1 program, or a version-2 stage's view), the history bound and the history
+/// tile — so RFC-0003's pipeline admission asks F7's questions of each stage verbatim.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn palw_tir_dissected_cone_admits_parts_v1(
+    bundle: &PalwConsensusParamsV2,
+    held_armed: bool,
+    program: &TirProgramV1,
+    block: &misaka_palw_tir::program::Block,
+    bi: u8,
+    ni: u16,
+    tile_len: u32,
+    max_context: u64,
+    h_tile: u32,
+    cone: &misaka_palw_tir::admit::ConeV1,
+    k: crate::palw_class_admission_v2::PalwKaryCourtV1,
+) -> Result<(), PalwClassAdmissionError> {
     use crate::palw_tir_dissect_v1 as d;
     let refused = |why: String| PalwClassAdmissionError::TirDissection { block: bi, node: ni, why };
     d::palw_tir_dissect_obligations_v1(block, ni).map_err(|e| refused(e.to_string()))?;
@@ -334,9 +366,9 @@ fn palw_tir_dissected_cone_admits_v1(
         .court
         .with_dissection_arity(k.dissection_arity)
         .map_err(|e| refused(format!("the court's dissection arity is not legal: {e}")))?;
-    let history = class.layout.max_context as u64;
-    let tile = class.layout.h_tile.max(1);
-    let admits = if rules.held.armed {
+    let history = max_context;
+    let tile = h_tile.max(1);
+    let admits = if held_armed {
         crate::palw_attn_court_v1::palw_attn_court_admits_row_held_v1(&played, history, tile, k.window_court_daa)
     } else {
         crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa)

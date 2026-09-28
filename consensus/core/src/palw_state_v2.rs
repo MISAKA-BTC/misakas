@@ -7302,6 +7302,23 @@ pub enum PalwConsensusObjectV2 {
         activation_daa: u64,
         admission: Box<crate::palw_gen_class_v1::PalwGenAdmissionCarriageV1>,
     },
+    // ---- RFC-0003: tag 68, F7's history dissection composed into the generative court. ----
+    /// **Move 1 of a history dissection of a pipeline claim (tag 68): the responder's root claim** at
+    /// a dissected leaf ([`crate::palw_gen_close_v1::PalwGenRootClaimV1`]) — F7's
+    /// `CourtTirRootClaimed` with the generative close as its finalize's carriage. The acceptance layer
+    /// admits it only if it finalizes to the committed leaf reading exactly the claimed values
+    /// (`check_gen_root_claim_v1`, at the court's limits) and `arity` is the ruleset's derived one;
+    /// the fold derives the site from the class's own program and opens F7's phase
+    /// (`tir_dissections`), whose rounds and choices are F7's own objects (tags 65, 66). Signed by the
+    /// claim's bond under the ADR-0082 responder context over
+    /// [`crate::palw_gen_close_v1::palw_gen_root_claim_message_v1`]. Appended; dropped by name below
+    /// `palw_gen_v1`.
+    CourtGenRootClaimed {
+        session_id: Hash64,
+        root: Box<crate::palw_gen_close_v1::PalwGenRootClaimV1>,
+        arity: u8,
+        signature: Vec<u8>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7332,19 +7349,21 @@ pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
 /// is charged for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
     match object {
-        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => true,
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } | PalwConsensusObjectV2::CourtGenRootClaimed { .. } => true,
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_gen_v1(),
         _ => false,
     }
 }
 
-/// **Is this object a move of an IR history dissection** (RFC-0002 F7, tags 64–66)?
+/// **Is this object a move of an IR history dissection** (RFC-0002 F7, tags 64–66) — or the
+/// generative root claim that opens the same phase (RFC-0003, tag 68)?
 pub fn palw_object_is_tir_dissection_move_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(
         object,
         PalwConsensusObjectV2::CourtTirRootClaimed { .. }
             | PalwConsensusObjectV2::CourtTirDissected { .. }
             | PalwConsensusObjectV2::CourtTirChildChosen { .. }
+            | PalwConsensusObjectV2::CourtGenRootClaimed { .. }
     )
 }
 
@@ -8353,7 +8372,8 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         | PalwConsensusObjectV2::CourtAttnChildChosen { session_id, .. }
         | PalwConsensusObjectV2::CourtTirRootClaimed { session_id, .. }
         | PalwConsensusObjectV2::CourtTirDissected { session_id, .. }
-        | PalwConsensusObjectV2::CourtTirChildChosen { session_id, .. } => session_id,
+        | PalwConsensusObjectV2::CourtTirChildChosen { session_id, .. }
+        | PalwConsensusObjectV2::CourtGenRootClaimed { session_id, .. } => session_id,
         _ => return false,
     };
     let Some(session) = state.court_session(session_id) else {
@@ -8387,6 +8407,14 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         // RFC-0002 F7: the IR moves, by the same three questions of the IR phase (the root claim's
         // acceptance is a demand evaluation at the IR court's limits, which is what the slot bounds).
         PalwConsensusObjectV2::CourtTirRootClaimed { root, .. } => {
+            session.dissection.is_none()
+                && state.tir_dissections.get(session_id).is_none()
+                && session.ladder.terminal_index().is_some()
+                && root.version == crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1
+        }
+        // RFC-0003: the generative root claim, by the same questions (its finalize is a demand
+        // evaluation at the court's limits too).
+        PalwConsensusObjectV2::CourtGenRootClaimed { root, .. } => {
             session.dissection.is_none()
                 && state.tir_dissections.get(session_id).is_none()
                 && session.ladder.terminal_index().is_some()
@@ -27478,13 +27506,17 @@ pub(crate) fn court_session_turn_and_rung_deadline_v2(
 
 /// **Is this an IR class's session at its ladder's terminal, with no phase open?** — where the
 /// executor owes the terminal move (RFC-0002 F7): the class has a dissected point
-/// (`PalwClassStateV2::fused_attention`) and is an IR program.
+/// (`PalwClassStateV2::fused_attention`) and is an IR program — or a generative pipeline (RFC-0003,
+/// F7 composed into the generative court).
 pub(crate) fn court_session_at_the_ir_terminal_v1(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> bool {
     session.dissection.is_none()
         && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal
         && !state.tir_dissections.contains_key(&session.ladder.session_id())
         && court_session_class_is_fused_v2(state, session)
-        && state.claims.get(&session.claim).is_some_and(|claim| state.tir_classes.contains_key(&claim.class_id))
+        && state
+            .claims
+            .get(&session.claim)
+            .is_some_and(|claim| state.tir_classes.contains_key(&claim.class_id) || state.gen_classes.contains_key(&claim.class_id))
 }
 
 /// [`court_session_at_the_ir_terminal_v1`], and the executor's declared close stands.
@@ -31257,10 +31289,10 @@ fn apply_object(
         // refuses it below). The pipeline admission ran at acceptance (ADR-0049 Decision H: no graph
         // walk inside the transition); the fold derives what it keeps from the carried class — the
         // `gen_classes` row by the one function admission derives it with — and folds the rest through
-        // the legacy registration's own body. The generative court dissects no history in v1 (a cone
-        // that reduces over it must fit whole), so no class owes a root claim; nothing is held; and a
-        // pipeline opens no registry lifecycle row in v1 (the registry's work model is a text
-        // model's).
+        // the legacy registration's own body. A class with a dissected commit point (a cone that
+        // reduces over the history, F7 composed) owes its court's terminal move, as an IR class does
+        // (`fused_attention`); nothing is held; and a pipeline opens no registry lifecycle row in v1
+        // (the registry's work model is a text model's).
         PalwConsensusObjectV2::ClassRegisteredGenV1 {
             class_id,
             artifact_root,
@@ -31289,7 +31321,7 @@ fn apply_object(
                     share_permille,
                     activation_daa,
                     registrant: Some(admission.registrant_bond),
-                    fused_attention: false,
+                    fused_attention: !record.dissected.is_empty(),
                     held: false,
                     work: None,
                 },
@@ -32720,6 +32752,43 @@ fn apply_object(
                 narrowed,
                 &site,
                 root,
+                *arity,
+                ctx.daa_score,
+                builder.params.turn_deadline_daa(),
+            )
+            .map_err(|e| refused(e.to_string()))?;
+            cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
+            builder.write_tir_dissection(*session_id, Some(phase));
+            builder.write_court(*session_id, Some(session))?;
+        }
+        // **RFC-0003: a pipeline claim's root claim opens F7's phase** — the IR arm above over the
+        // generative registry: the claim's class must be a registered pipeline, the binding the
+        // claim's, and the site the class's description of the narrowed leaf, derived from its
+        // program and the job's trips (`palw_gen_root_claim_site_v1`), never supplied by the mover.
+        // The finalize is the acceptance layer's; `palw_gen_v1` is the lock above.
+        PalwConsensusObjectV2::CourtGenRootClaimed { session_id, root, arity, signature: _ } => {
+            let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            if session.dissection.is_some() || builder.state.tir_dissections.contains_key(session_id) {
+                return Err(PalwStateV2Error::DissectionAlreadyOpen(*session_id));
+            }
+            let narrowed = session.ladder.terminal_index().ok_or(PalwStateV2Error::LadderNotTerminal(*session_id))?;
+            let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
+            let refused = |why: String| PalwStateV2Error::DissectionRefused(*session_id, why);
+            let row = builder
+                .state
+                .gen_classes
+                .get(&claim.class_id)
+                .ok_or_else(|| refused("a generative root claim in a session about a class that is not a pipeline".into()))?;
+            let site =
+                crate::palw_gen_close_v1::palw_gen_root_claim_site_v1(root, row, &claim.class_id, &claim.execution_root, narrowed)
+                    .map_err(refused)?;
+            let mut phase = crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open_parts(
+                *session_id,
+                narrowed,
+                &site,
+                root.version,
+                &root.elements,
+                &root.totals,
                 *arity,
                 ctx.daa_score,
                 builder.params.turn_deadline_daa(),

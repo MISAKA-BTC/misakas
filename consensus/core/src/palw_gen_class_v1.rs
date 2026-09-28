@@ -727,6 +727,11 @@ pub struct PalwGenClassRecordV1 {
     pub text_max_trip: Option<u32>,
     /// The class's carried bytes, counted.
     pub class_bytes: u64,
+    /// **The dissected commit points** `(stage, block, node)`, in stage then block then node order:
+    /// the commit points whose cone reduces over the history (spec 04b §9.5.1, each stage's view). A
+    /// class with any owes the terminal move of its court (`PalwClassStateV2::fused_attention`): a
+    /// root claim at a dissected leaf (RFC-0002 F7 composed), an acquitting close at any other.
+    pub dissected: Vec<(u8, u8, u16)>,
     /// The class (rooted through the three hashes above, never by its bytes).
     pub class: std::sync::Arc<PalwGenClassV1>,
 }
@@ -764,6 +769,7 @@ impl PalwGenClassRecordV1 {
             images: Vec::new(),
             text_max_trip: Some(8),
             class_bytes: class.carried_bytes(),
+            dissected: Vec::new(),
             class: std::sync::Arc::new(class),
         }
     }
@@ -781,6 +787,7 @@ impl PalwGenClassRecordV1 {
             &self.images,
             self.text_max_trip,
             self.class_bytes,
+            &self.dissected,
         ))
         .expect("a record is borsh-serializable")
     }
@@ -803,8 +810,17 @@ impl PalwGenClassRecordV1 {
 /// **The row a registration writes**, derived from the carried class alone (the class decodes, and
 /// its facts are read off it); `Err` when the class does not decode.
 pub fn palw_gen_class_record_v1(class: &PalwGenClassV1, artifact_root: &Hash64) -> Result<PalwGenClassRecordV1, PalwGenClassErrorV1> {
-    let (_, pipeline) = class.decode().map_err(|e| PalwGenClassErrorV1::Program(e.to_string()))?;
+    let (programs, pipeline) = class.decode().map_err(|e| PalwGenClassErrorV1::Program(e.to_string()))?;
     let out = &pipeline.stages[pipeline.output_stage as usize];
+    let dissected = pipeline
+        .stages
+        .iter()
+        .enumerate()
+        .flat_map(|(s, st)| {
+            let view = programs[st.program as usize].v1_view();
+            crate::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&view).into_iter().map(move |(b, n)| (s as u8, b, n))
+        })
+        .collect();
     let text_max_trip = matches!(out.trip, TripRule::TextStream).then_some(out.max_trip);
     Ok(PalwGenClassRecordV1 {
         version: PALW_GEN_CLASS_RECORD_VERSION_V1,
@@ -817,6 +833,7 @@ pub fn palw_gen_class_record_v1(class: &PalwGenClassV1, artifact_root: &Hash64) 
         images: class.offers.images.clone(),
         text_max_trip,
         class_bytes: class.carried_bytes(),
+        dissected,
         class: std::sync::Arc::new(class.clone()),
     })
 }

@@ -9793,6 +9793,44 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| format!("session {session_id}: {e}"))?;
                 }
+                // RFC-0003 (tag 68): the generative root claim — F7's gates over the generative
+                // registry: the k-ary fence (`palw_gen_v1` dropped it by name below), the responder's
+                // signature, the arity and the finalize at the court's limits.
+                Obj::CourtGenRootClaimed { session_id, root, arity, signature } => {
+                    kaspa_consensus_core::palw_court_v2::palw_tir_dissection_move_is_admissible_v1(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    let derived = self
+                        .palw_court_params_at(point.daa_score)
+                        .ok_or_else(|| "a generative dissection move on a network with no V2 bundle".to_string())?
+                        .map_err(|e| format!("session {session_id}: {e}"))?;
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a generative dissection move on a network with no V2 court parameters".to_string())?;
+                    kaspa_consensus_core::palw_court_v2::check_court_gen_root_claim_acceptance_v1(
+                        state,
+                        session_id,
+                        root,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                    kaspa_consensus_core::palw_court_v2::check_court_gen_root_claim_admits_v1(
+                        state,
+                        session_id,
+                        root,
+                        *arity,
+                        derived.dissection_arity(),
+                        court,
+                        self.palw_prompt_ids_form_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                }
                 Obj::CourtTirDissected { session_id, round, signature } => {
                     kaspa_consensus_core::palw_court_v2::palw_tir_dissection_move_is_admissible_v1(
                         object,
@@ -11378,8 +11416,26 @@ impl VirtualStateProcessor {
                     };
                     self.palw_v2_class_registration_starts_at_the_chains_target(state, object)?;
                     self.palw_v2_class_registration_is_signed(state, object)?;
+                    // The k-ary court at this block, resolved as the IR arm resolves it: a cone that
+                    // reduces over the history is dissected only under it (F7 composed).
+                    let court = match self.palw_kary_court_active_at(point.daa_score) {
+                        false => None,
+                        true => {
+                            let derived = self
+                                .palw_court_params_at(point.daa_score)
+                                .ok_or_else(|| format!("generative class {class_id} is registered on a chain with no V2 ruleset"))?
+                                .map_err(|e| format!("generative class {class_id} is judged under a court with no shape: {e}"))?;
+                            Some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+                                dissection_arity: derived.dissection_arity(),
+                                prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
+                                window_court_daa: bundle.state.window_court(),
+                            })
+                        }
+                    };
                     let rules = kaspa_consensus_core::palw_gen_admission_v1::PalwGenAdmissionRulesV1 {
                         fence: self.palw_gen_v1.expect("palw_gen_at said the fence is in force"),
+                        court,
+                        held_armed: self.palw_held_context_at(point.daa_score),
                     };
                     kaspa_consensus_core::palw_gen_admission_v1::verify_gen_class_admission_v1(bundle, &rules, object)
                         .map_err(|e| format!("generative class {class_id} is not admissible: {e}"))?;
@@ -18793,6 +18849,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::TirShardCourtAccused { .. } => "TirShardCourtAccused",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
+        O::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
         O::CourtTirDissected { .. } => "CourtTirDissected",
         O::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",

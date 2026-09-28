@@ -25,9 +25,11 @@
 //!    work limits (`palw_court_v2::palw_tir_court_limits_v1`, which the generative court adjudicates
 //!    under); the opened bytes and the close frame within the ruleset's close ceiling and the chunks
 //!    the fold assembles (the class referenced by id, never carried). **A cone that reduces over the
-//!    history must fit whole**: the generative court dissects no history in v1 (RFC-0003 §II.1.5.6
-//!    brings dissection with court version 3), so such a cone is refused by name
-//!    (`GenNeedsDissection`) rather than admitted into a dispute nobody can close;
+//!    history is dissected** under the k-ary court — RFC-0002 F7 composed into the generative court:
+//!    F7's obligations (O-1…O-5), its value bound, its round and root-claim sizing and its window
+//!    asked of the stage's view verbatim, the terminal one `h_tile` chunk — and must fit the court
+//!    whole where the court is not armed (`GenNeedsDissection`). A dissected cone with a `TopK` is
+//!    refused by name until ref2's H7 (the TopK row of §10.3's box demand) lands in F7;
 //! 4. the class id is `tir_pipeline_class_id_v1(class, artifact_root)`;
 //! 5. **weight: none.** No attempt lane exists for pipelines (Phase F decision 12's reading for
 //!    generative classes: `palw_gen_v1` opens registration, panels and the court), so a generative
@@ -64,6 +66,13 @@ pub const PALW_GEN_MAX_DISTINCT_TILES_V1: usize = crate::palw_tir_admission_v1::
 pub struct PalwGenAdmissionRulesV1 {
     /// `Params::palw_gen_v1`'s value (in force at the block).
     pub fence: PalwGenFenceV1,
+    /// **The k-ary court at the block**, resolved as Phase F's rules resolve it
+    /// ([`crate::palw_tir_admission_v1::PalwTirAdmissionRulesV1::at`]): a cone that reduces over the
+    /// history is dissected (RFC-0002 F7, spec 04b §9.5) only under it, and must fit the court whole
+    /// without it.
+    pub court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+    /// `Params::palw_held_context` at the block: which clock the dissection's window is read on.
+    pub held_armed: bool,
 }
 
 impl PalwGenAdmissionRulesV1 {
@@ -71,7 +80,8 @@ impl PalwGenAdmissionRulesV1 {
     /// registration is then dropped by name, as an older build skips it).
     pub fn at(params: &crate::config::params::Params, daa_score: u64) -> Option<Self> {
         let fence = params.palw_gen_v1_fence().filter(|f| f.activation.is_active(daa_score))?;
-        Some(Self { fence })
+        let tir = crate::palw_tir_admission_v1::PalwTirAdmissionRulesV1::at(params, daa_score);
+        Some(Self { fence, court: tir.and_then(|r| r.court), held_armed: tir.is_some_and(|r| r.held.armed) })
     }
 }
 
@@ -268,13 +278,64 @@ pub fn verify_gen_class_admission_v1(
                     .iter()
                     .find(|c| c.block as usize == bi && c.node as usize == ni)
                     .expect("the IR's admission costs every commit point");
-                let tile = &cone.tile;
+                // **A cone that reduces over the history is DISSECTED under the k-ary court** — RFC-0002
+                // F7 composed into the generative court: F7's obligations and sizing asked of the
+                // stage's view verbatim ([`palw_tir_dissected_cone_admits_parts_v1`]), the terminal one
+                // `h_tile` chunk. Without the court such a cone must fit whole.
+                let dissected = !cone.h_reductions.is_empty() && rules.court.is_some();
                 if !cone.h_reductions.is_empty() {
-                    let whole = tile.macs.saturating_add(tile.elementwise).saturating_add(tile.transcendentals);
-                    if tile.macs > bundle.court.max_terminal_macs() || whole > work_limit {
-                        return Err(PalwClassAdmissionError::GenNeedsDissection { stage: s as u8, block: bi as u8, node: ni as u16 });
+                    match rules.court {
+                        None => {
+                            let tile = &cone.tile;
+                            let whole = tile.macs.saturating_add(tile.elementwise).saturating_add(tile.transcendentals);
+                            if tile.macs > bundle.court.max_terminal_macs() || whole > work_limit {
+                                return Err(PalwClassAdmissionError::GenNeedsDissection {
+                                    stage: s as u8,
+                                    block: bi as u8,
+                                    node: ni as u16,
+                                });
+                            }
+                        }
+                        Some(k) => {
+                            let gen_refused = |why: String| PalwClassAdmissionError::GenDissection {
+                                stage: s as u8,
+                                block: bi as u8,
+                                node: ni as u16,
+                                why,
+                            };
+                            // ref2's H7 (pending in F7): §10.3's TopK row undercounts a tile that
+                            // straddles TopK rows, so `V` can fall below the claim an honest
+                            // responder must post. Until the row is fixed a dissected cone with a
+                            // TopK is refused, never admitted under a bound it can exceed.
+                            let vblock = &view.program.blocks[bi];
+                            if cone.nodes.iter().any(|n| matches!(vblock.nodes[*n as usize].prim, misaka_palw_tir::Prim::TopK { .. }))
+                            {
+                                return Err(gen_refused(
+                                    "a TopK in a dissected cone: the value bound undercounts its tiles (ref2's H7, pending)".into(),
+                                ));
+                            }
+                            crate::palw_tir_admission_v1::palw_tir_dissected_cone_admits_parts_v1(
+                                bundle,
+                                rules.held_armed,
+                                &view.program,
+                                vblock,
+                                bi as u8,
+                                ni as u16,
+                                tile_len,
+                                layout.max_context as u64,
+                                layout.h_tile,
+                                cone,
+                                k,
+                            )
+                            .map_err(|e| match e {
+                                PalwClassAdmissionError::TirDissection { why, .. } => gen_refused(why),
+                                other => other,
+                            })?;
+                        }
                     }
                 }
+                let (tile, opened) =
+                    if dissected { (cone.terminal(), cone.terminal_opened_bytes()) } else { (&cone.tile, cone.tile_opened_bytes) };
                 exceeds("generative tile multiply-accumulates", tile.macs, bundle.court.max_terminal_macs())?;
                 let mut work = tile.macs.saturating_add(tile.elementwise).saturating_add(tile.transcendentals);
                 for leaf in &cone.leaves {
@@ -287,7 +348,7 @@ pub fn verify_gen_class_admission_v1(
                     }
                 }
                 exceeds("generative cone evaluation work (tile and state replay)", work, work_limit)?;
-                let close = PALW_TIR_CLOSE_FRAME_BYTES_V1.saturating_add(cone.tile_opened_bytes);
+                let close = PALW_TIR_CLOSE_FRAME_BYTES_V1.saturating_add(opened);
                 exceeds("generative close bytes as carried", close, carriable)?;
                 worst_close = worst_close.max(close);
                 worst_macs = worst_macs.max(tile.macs);

@@ -1373,6 +1373,11 @@ pub enum PalwClassAdmissionError {
     /// can be earned (ADR-0069 D5: registration at 0‰ is permissionless).
     #[error("a generative class registers at 0‰ (it earns no attempt weight in this build); this one asks {share}‰")]
     GenEarnsNoWeight { share: u16 },
+    /// A stage's dissected commit point breaks an obligation of the history dissection (spec 04b
+    /// §9.5.6), or a move of its dissection would not fit one carrier (RFC-0002 F7, composed into the
+    /// generative court).
+    #[error("stage {stage} block {block} commit point {node} cannot be dissected: {why}")]
+    GenDissection { stage: u8, block: u8, node: u16, why: String },
 }
 
 impl PalwClassAdmissionError {
@@ -1419,6 +1424,7 @@ impl PalwClassAdmissionError {
             Self::GenClassIdIsNotDerived { .. } => "GEN_CLASS_ID_IS_NOT_DERIVED",
             Self::GenNeedsDissection { .. } => "GEN_NEEDS_DISSECTION",
             Self::GenEarnsNoWeight { .. } => "GEN_EARNS_NO_WEIGHT",
+            Self::GenDissection { .. } => "GEN_DISSECTION_REFUSED",
         }
     }
 }
