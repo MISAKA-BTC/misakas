@@ -53,7 +53,7 @@ impl DType {
         DType::ALL.into_iter().find(|d| d.name() == name)
     }
 
-    pub const fn min(self) -> i128 {
+    pub const fn min_value(self) -> i128 {
         match self {
             DType::I8 => i8::MIN as i128,
             DType::I16 => i16::MIN as i128,
@@ -64,7 +64,7 @@ impl DType {
         }
     }
 
-    pub const fn max(self) -> i128 {
+    pub const fn max_value(self) -> i128 {
         match self {
             DType::I8 => i8::MAX as i128,
             DType::I16 => i16::MAX as i128,
@@ -76,7 +76,7 @@ impl DType {
     }
 
     pub const fn contains(self, v: i128) -> bool {
-        v >= self.min() && v <= self.max()
+        v >= self.min_value() && v <= self.max_value()
     }
 
     /// Bytes per element in a const, a param and a history row.
@@ -253,8 +253,8 @@ mod tests {
             assert_eq!(enc, vec![d.tag()], "{} encodes as its tag", d.name());
             assert_eq!(DType::from_name(d.name()), Some(d));
         }
-        assert_eq!((DType::I8.min(), DType::I8.max()), (-128, 127));
-        assert_eq!((DType::Idx.min(), DType::Idx.max()), (0, 4_294_967_295));
+        assert_eq!((DType::I8.min_value(), DType::I8.max_value()), (-128, 127));
+        assert_eq!((DType::Idx.min_value(), DType::Idx.max_value()), (0, 4_294_967_295));
         assert!(DType::I32.committable() && !DType::I64.committable() && !DType::I128.committable());
     }
 
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn element_codec_round_trips_every_type_at_its_ends() {
         for d in DType::ALL {
-            for v in [d.min(), d.max(), 0, 1] {
+            for v in [d.min_value(), d.max_value(), 0, 1] {
                 let mut buf = Vec::new();
                 d.encode_le(v, &mut buf);
                 assert_eq!(buf.len(), d.width());

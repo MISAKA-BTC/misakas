@@ -655,11 +655,14 @@ impl<'a> BlockBuilder<'a> {
     }
 
     /// `2^s` as `i128` for shift amounts known to lie in `[0, max]` (`max ≤ 126`): a gather from the
-    /// pinned table `[2^0, …, 2^126]`.
+    /// pinned table `[2^0, …, 2^max]`.
+    ///
+    /// The table has exactly `max + 1` entries, so its interval — which is what the range rules
+    /// give a `Gather` from it (spec 04b §7) — is `[1, 2^max]`, not `[1, 2^126]`.
     pub fn pow2_128_of(&mut self, s: Ref, max: u32) -> Ref {
         assert!(max <= 126);
-        let table: Vec<i128> = (0..=126).map(|i| 1i128 << i).collect();
-        let t = self.pb.konst(DType::I128, &[127], &table);
+        let table: Vec<i128> = (0..=max).map(|i| 1i128 << i).collect();
+        let t = self.pb.konst(DType::I128, &[max + 1], &table);
         let s = self.clamp(s, 0, max as i64, DType::Idx);
         self.gather(t, s, 0, 0)
     }
@@ -770,7 +773,10 @@ impl<'a> BlockBuilder<'a> {
         let d = self.c(DType::I64, 1i128 << lo_bits);
         let hi = self.div(pos, d, Rounding::Floor, DType::Idx);
         let back = self.mul(hi, d, DType::I64);
-        let lo = self.sub(pos, back, DType::Idx);
+        // `pos − hi·2^b` is `pos mod 2^b`, in `[0, 2^b)`; interval analysis cannot see the
+        // correlation, so the (never active) clamp states the range it proves.
+        let lo = self.sub(pos, back, DType::I64);
+        let lo = self.clamp(lo, 0, (1i64 << lo_bits) - 1, DType::Idx);
         let ch = self.gather(cos_hi, hi, 0, 0);
         let sh = self.gather(sin_hi, hi, 0, 0);
         let cl = self.gather(cos_lo, lo, 0, 0);

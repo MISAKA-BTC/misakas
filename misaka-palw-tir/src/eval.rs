@@ -56,13 +56,13 @@ fn order_free_sum(terms: impl Iterator<Item = TirResult<i128>>, dtype: DType, wh
         let t = t?;
         if t > 0 {
             pos = checked(pos.checked_add(t), what)?;
-            if pos > dtype.max() {
-                return err(TirErrorKind::Overflow, format!("{what}: a partial sum reaches {pos} > {}", dtype.max()));
+            if pos > dtype.max_value() {
+                return err(TirErrorKind::Overflow, format!("{what}: a partial sum reaches {pos} > {}", dtype.max_value()));
             }
         } else {
             neg = checked(neg.checked_add(t), what)?;
-            if neg < dtype.min() {
-                return err(TirErrorKind::Overflow, format!("{what}: a partial sum reaches {neg} < {}", dtype.min()));
+            if neg < dtype.min_value() {
+                return err(TirErrorKind::Overflow, format!("{what}: a partial sum reaches {neg} < {}", dtype.min_value()));
             }
         }
     }

@@ -12,9 +12,11 @@
 > has RWKV-4 only); their rows cite the published formulations and are marked so.
 >
 > **Status of the claims.** Five corpus programs are built and run in `tests/programs.rs` (dense GQA,
-> sliding + global, GDN with unequal heads, Mamba2, top-2 MoE with a shared expert), and the legacy
-> kernels' lossy chains are shown byte-identical as IR segments in `tests/kat_base0.rs` and
-> `tests/legacy_mirror.rs`. Everything else in this file is decomposition on paper, which is what
+> sliding + global, GDN with unequal heads, Mamba2, top-2 MoE with a shared expert); all five pass the
+> range rules of spec 04b §7 (`tests/intervals.rs`: no exact primitive of theirs can overflow on any
+> weights, token or position) and run to completion under full-range hostile weights
+> (`tests/totality.rs`). The legacy kernels' lossy chains are shown byte-identical as IR segments in
+> `tests/kat_base0.rs` and `tests/legacy_mirror.rs`. Everything else in this file is decomposition on paper, which is what
 > Phase A asks for; Phase E turns each row into a lowering and a fidelity run.
 
 ## 0. Scope

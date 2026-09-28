@@ -219,7 +219,7 @@ const I64MIN: i128 = i64::MIN as i128;
 const I64MAX: i128 = i64::MAX as i128;
 
 fn random_i(rng: &mut Lcg, d: DType, n: usize) -> Vec<i128> {
-    let (lo, hi) = (d.min().max(-(1i128 << 100)), d.max().min(1i128 << 100));
+    let (lo, hi) = (d.min_value().max(-(1i128 << 100)), d.max_value().min(1i128 << 100));
     (0..n).map(|_| rng.range(lo, hi)).collect()
 }
 

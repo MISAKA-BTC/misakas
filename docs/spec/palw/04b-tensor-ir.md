@@ -583,7 +583,10 @@ compute them any way it likes (fused kernels, F-1/F-2 of RFC-0002 §7).
 
 `tir_admit_v1` (Gate 2) assigns every tensor an integer interval `[lo, hi]` and refuses the program
 unless every obligation below holds. The rules are normative now so that the analysis is identical
-on every node.
+on every node, and they are already executable: `misaka_palw_tir::interval::analyze_ranges`.
+`tests/intervals.rs` checks them sound against the reference evaluator (operands drawn anywhere
+inside random intervals, endpoints included, never leave the transferred interval and never
+overflow) and shows the five corpus test programs admissible.
 
 **Leaves.** `Param`: its dtype's full range (weights are untrusted). `Const`: `[min data, max data]`.
 `State` (Fixed): `[lo, hi]`. `CarryIn`: its dtype's full range. `Input(0)`: `[0, token_bound − 1]`.
@@ -607,7 +610,7 @@ endpoint pairs):
 | Clamp | `[clamp(x.lo), clamp(x.hi)]` | — |
 | Log2Floor | `[f(x.lo), f(x.hi)]` | ⊆ out dtype |
 | IntExp | `[0, 0]` if `x.hi ≤ −31·LN2_Q`, else `[0, 16781800]` | ⊆ out dtype |
-| IntRsqrt | `[0, 0]` if `x.hi ≤ 0`, else `[0, 68719472640]` | ⊆ out dtype |
+| IntRsqrt | `[0, 0]` if `x.hi ≤ 0`, else `[0, min(68719472640, ONE·2^(−e))]` with `e = ⌊(Log2Floor(max(x.lo, 1)) − 24) / 2⌋` (`ONE >> e` for `e ≥ 0`) | ⊆ out dtype |
 | IntLn | `[0, 0]` if `x.hi ≤ 0`; else `[s_lo·LN2_Q, (s_hi + 1)·LN2_Q − 1]` with `s_lo = Log2Floor(max(x.lo, 1)) − 24`, `s_hi = Log2Floor(x.hi) − 24`, widened to include 0 when `x.lo ≤ 0` | ⊆ out dtype |
 | Compare | `[0, 1]` | — |
 | Select | union of `a` and `b` | ⊆ out dtype |
@@ -618,9 +621,19 @@ endpoint pairs):
 Soundness: MatMul and ReduceSum bound every partial sum in every order (the obligation is exactly
 PALW-TIR-24's condition for every admissible input); `Div`'s quotient is monotone in each operand
 for `d ≥ 1`, so its extremes are at the corners; `Log2Floor` is monotone; the transcendental bounds
-are the proved output ranges of §6.5 (they are constant intervals because `IntExp` is not monotone
-across bucket edges). No other obligation exists: shifts are divisions by proved-positive divisors,
+are the proved output ranges of §6.5 (constant intervals for `IntExp` and `IntLn`'s series part,
+because `IntExp` is not monotone across bucket edges; `IntRsqrt` uses its input's lower bound, because
+its value is `y·2^(−e(v))` with the Newton value `y ∈ [1, ONE]` for every input and `e(v)`
+non-decreasing — so `IntRecip(ONE + e)` in a sigmoid is provably at most `ONE`). No other obligation exists: shifts are divisions by proved-positive divisors,
 indices are proved in range, sizes are capped by NF-8/§2.2.
+
+**Stating a range the analysis cannot see.** Interval analysis loses correlations: `pos − ⌊pos/2^b⌋·2^b`
+is `pos mod 2^b` but its interval reaches below 0; a softmax probability is at most `2^24`-ish because
+the row maximum contributes `IntExp(0)` to the sum, but `e · IntRecip(sum)` has a much wider interval.
+A lowerer states such a fact with a `Clamp` that never fires (`Clamp(pos − hi·2^b, 0, 2^b − 1)`,
+`Clamp(p, 0, 2^25)`): it is part of the program and of its identity, costs one elementwise op, and
+changes no value for any input, because the fact holds for every input. The library templates of §11
+carry these clamps.
 
 **Committed operands (PALW-TIR-33).** A node's proven interval is also the domain of its committed
 value: when the court opens a commit point, a value outside the node's proven interval is a
@@ -803,6 +816,10 @@ tables `T_hi[hi][j] = (cos, sin)(hi·2^b·ω_j)` and `T_lo[lo][j] = (cos, sin)(l
 hi = Div_Floor(pos, 2^b);  lo = pos − hi·2^b                       (idx, exact)
 cos = Clamp(Div_Floor(ch·cl − sh·sl, 2^24), ±ONE);  sin = Clamp(Div_Floor(sh·cl + ch·sl, 2^24), ±ONE)
 ```
+
+Each product is `i64`; the sum is `i128`, because the tables are params and take the full `i32`
+range (two `i32·i32` products sum to `2^63`) — the pattern that overflows `i64` in the live
+`q36_rope_partial` (corpus §10.3).
 
 At `2^18` positions that is two 512-row tables instead of one 262,144-row table (at `2^21`, three
 128-row tables). The gathers' index ranges are provable (`hi < 2^(18−b)`, `lo < 2^b`). YaRN, NTK,

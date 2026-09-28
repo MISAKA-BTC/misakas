@@ -26,8 +26,8 @@ fn hostile_params(p: &TirProgramV1, seed: u64) -> MapParams {
         for l in layers {
             let data = (0..n)
                 .map(|i| match i % 3 {
-                    0 => [d.dtype.min(), d.dtype.max(), 0, 1, -1i128.max(d.dtype.min())][(i / 3) % 5],
-                    _ => rng.range(d.dtype.min().max(-(1 << 100)), d.dtype.max().min(1 << 100)),
+                    0 => [d.dtype.min_value(), d.dtype.max_value(), 0, 1, (-1i128).max(d.dtype.min_value())][(i / 3) % 5],
+                    _ => rng.range(d.dtype.min_value().max(-(1 << 100)), d.dtype.max_value().min(1 << 100)),
                 })
                 .collect();
             out.tensors.insert((j as u16, l), Tensor::new(d.dtype, d.shape.iter().map(|x| *x as usize).collect(), data).unwrap());
