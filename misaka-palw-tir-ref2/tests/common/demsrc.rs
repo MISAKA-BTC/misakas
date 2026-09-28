@@ -41,6 +41,8 @@ pub struct Model {
     /// Per `Hist` instance, the appending occurrence and the row's committed node.
     pub hist_src: BTreeMap<(u16, Option<u32>), (u32, HistIn)>,
     pub faults: BTreeMap<Question, Fault>,
+    /// Questions refused whatever their element index (keys as `Question::split` gives them).
+    pub withheld: BTreeSet<Question>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +86,9 @@ pub fn hist_sources(p: &Program) -> BTreeMap<(u16, Option<u32>), (u32, HistIn)> 
 
 impl Model {
     pub fn answer(&self, q: &Question) -> Option<Answer> {
+        if self.withheld.contains(&q.split().0) {
+            return None;
+        }
         if let Some(f) = self.faults.get(q) {
             return match f {
                 Fault::Refuse => None,
