@@ -15,7 +15,9 @@
 use std::borrow::Cow;
 
 use kaspa_consensus_core::Hash64;
-use kaspa_consensus_core::palw_artifact::{PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_parts_v1, artifact_node_v1};
+use kaspa_consensus_core::palw_artifact::{
+    PalwArtifactMultiproofV1, PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_parts_v1, artifact_node_v1,
+};
 use kaspa_consensus_core::palw_tir_artifact_v1::{PalwTirTensorSourceV1, palw_tir_tensor_bytes_v1};
 use kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1;
 use misaka_palw_tir::TirProgramV1;
@@ -107,6 +109,60 @@ impl TirInventoryTreeV1 {
         }
         Some(PalwArtifactOpeningV1 { operand, leaf_index: leaf, leaf_count: self.leaf_count(), path })
     }
+
+    /// **One multiproof over `leaves`** (RFC-0002 Phase F §2.12.1: an IR close carries its parameter
+    /// openings as one `PalwArtifactMultiproofV1`): the operands read from `src` in ascending leaf
+    /// order, and exactly the siblings `palw_artifact_multiproof_v1` supplies — read off this tree's
+    /// levels instead of folding the inventory again, so a run of leaves costs its two boundary paths.
+    /// `None` for an empty set, a repeated leaf, a leaf outside the inventory, or a source that does not
+    /// hold a piece.
+    pub fn multiproof(&self, program: &TirProgramV1, src: &dyn PalwTirTensorSourceV1, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        let mut sorted = leaves.to_vec();
+        sorted.sort_unstable();
+        if sorted.is_empty() || sorted.windows(2).any(|w| w[0] == w[1]) || *sorted.last()? >= self.leaf_count() {
+            return None;
+        }
+        let mut opened = Vec::with_capacity(sorted.len());
+        let mut current: Option<((u16, Option<u16>), Cow<'_, [u8]>)> = None;
+        for &leaf in &sorted {
+            let (j, layer, start, len) = self.index.piece_of(leaf)?;
+            if current.as_ref().is_none_or(|(key, _)| *key != (j, layer)) {
+                current = Some(((j, layer), src.tensor_bytes(j, layer)?));
+            }
+            let (_, bytes) = current.as_ref()?;
+            let piece = bytes.get(start as usize..start as usize + len as usize)?.to_vec();
+            let operand =
+                PalwArtifactOperandV1 { tensor_name: program.params[j as usize].name.clone(), layer, row_start: start, bytes: piece };
+            opened.push((leaf, operand));
+        }
+        // The builder's walk: level by level, a known node whose partner is not known supplies it.
+        let mut known: Vec<u64> = sorted.iter().map(|&i| i as u64).collect();
+        let mut siblings = Vec::new();
+        for level in &self.levels[..self.levels.len() - 1] {
+            let width = level.len() as u64;
+            let mut next = Vec::with_capacity(known.len());
+            let mut i = 0;
+            while i < known.len() {
+                let index = known[i];
+                if index == width - 1 && width % 2 == 1 {
+                    next.push(index / 2); // an odd last node is promoted
+                    i += 1;
+                    continue;
+                }
+                let partner = index ^ 1;
+                if known.get(i + 1).copied() == Some(partner) {
+                    i += 2;
+                } else {
+                    siblings.push(level[partner as usize]);
+                    i += 1;
+                }
+                next.push(index / 2);
+            }
+            next.dedup();
+            known = next;
+        }
+        Some(PalwArtifactMultiproofV1 { leaf_count: self.leaf_count(), opened, siblings })
+    }
 }
 
 /// **In-memory params as an inventory source**: each instance's elements as the little-endian
@@ -124,6 +180,8 @@ impl PalwTirTensorSourceV1 for TirParamsSourceV1<'_, '_> {
 /// in memory.
 pub trait TirParamOpenerV1 {
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1>;
+    /// One multiproof over `leaves` ([`TirInventoryTreeV1::multiproof`]).
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1>;
 }
 
 /// A tree and the source it was built from.
@@ -142,5 +200,9 @@ impl<'s> TirHeldInventoryV1<'s> {
 impl TirParamOpenerV1 for TirHeldInventoryV1<'_> {
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
         self.tree.open(self.program, self.src, leaf)
+    }
+
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        self.tree.multiproof(self.program, self.src, leaves)
     }
 }
