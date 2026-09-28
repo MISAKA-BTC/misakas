@@ -59,19 +59,19 @@ const SIMNET_IDS: (&str, &str, &str) = (
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day (2026-09-27): the capacity architecture at rho 10 (ADR-0160 F-W, F-E, F-L, F-B, F-R, F-Q, F-S, F-N) armed at DAA 1,500 (was d7a1ec84…, f9eacabd…)
+// re-pin 2026-09-28 @ea80b2e88867: third post-launch flag day moved to DAA 1,700 (the DAA-1,500 release was never rolled out; the chain passed 1,500 on the DAA-1,300 rules) (was 2d1dab89…, 79fced2b…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "2d1dab890dab39da8f2a240ced03f0b93451d182c52ac3f5a10ef1298bb14ad9",
+    "60f4e1e9fefea3705353ef0361d0312366f4d3547278ee9ff2eb942441927467",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "79fced2bec9a2ba9b8f7207548b51d7ff6c6552a5a3c24e9dd3b555d2a2af9a7",
+    "8275f4b7954a7f4119f9f5d183aa8b7a04f0058c6c6693876e26bda713ded53c",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day (2026-09-27): the capacity architecture at rho 10 (ADR-0160 F-W, F-E, F-L, F-B, F-R, F-Q, F-S, F-N) armed at DAA 1,500 (was 24e1aec3…, d263d7f2…)
+// re-pin 2026-09-28 @ea80b2e88867: third post-launch flag day moved to DAA 1,700 (the DAA-1,500 release was never rolled out; the chain passed 1,500 on the DAA-1,300 rules) (was cbe9152f…, f78b02ad…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "cbe9152fa73e1c57737918bbea1e48c3f57a53ca9ab36273cbfb3407c15e257f",
+    "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "f78b02adad83fbd4e02790142a2a03462dddb8ec4df13ad9f613f21d2dd9294a",
+    "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
 );
 
 fn shipped(name: &str) -> Params {

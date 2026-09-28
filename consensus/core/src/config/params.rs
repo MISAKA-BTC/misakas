@@ -19428,9 +19428,12 @@ fn palw_t12_arm_post_launch_fences_v2(params: &mut Params) {
 /// FP Job V4 fence are later flag days' entries.
 pub const PALW_T12_POST_LAUNCH_FENCES_V3: &[PalwPostLaunchFenceV1] = PALW_T12_CAPACITY_RHO10_FENCES_V1;
 
-/// **testnet-12's third post-launch flag day: DAA 1,500** (the user's decision of 2026-09-27, with the live
-/// chain at DAA ~1,100). A height no other fence uses — not 750, 1,000 or 1,300.
-pub const PALW_T12_POST_LAUNCH_FENCE_V3_DAA: Option<u64> = Some(1_500);
+/// **testnet-12's third post-launch flag day: DAA 1,700** (the user's decision of 2026-09-28). It was 1,500
+/// (2026-09-27, the live chain at DAA ~1,100), but that release was never rolled out: the fleet stayed on the
+/// DAA-1,300 release and the chain passed 1,500 on its rules (DAA ~1,565 at 17:15 JST), so the package moves to
+/// 1,700 (~22:55 JST at ~2.5 min/DAA). A height no other fence uses — not 750, 1,000 or 1,300, and not the
+/// P0a list's (`PALW_T12_POST_LAUNCH_FENCE_V4_DAA`, still `None`).
+pub const PALW_T12_POST_LAUNCH_FENCE_V3_DAA: Option<u64> = Some(1_700);
 
 /// **The third flag day, armed** — every entry of [`PALW_T12_POST_LAUNCH_FENCES_V3`] at
 /// [`PALW_T12_POST_LAUNCH_FENCE_V3_DAA`] through its own `set`, on the ASSEMBLED ruleset, after the DAA-750
@@ -29545,7 +29548,7 @@ mod post_launch_fence_arming_tests {
         let mut alone = palw_t12_launch_params_v1();
         alone.palw_anchor_at_ceiling = Some(ForkActivation::new(900));
         refused(&alone, "lane A dormant");
-        // The DAA-1,300 release: the capacity fences (1,500) need lane A too, and would answer first.
+        // The DAA-1,300 release: the capacity fences (1,700) need lane A too, and would answer first.
         let release = palw_t12_release_v2_params();
         let mut below = release.clone();
         below.palw_anchor_at_ceiling = Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA - 1));
