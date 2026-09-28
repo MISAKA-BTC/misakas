@@ -96,6 +96,12 @@ pub struct PalwProducerConfig {
     /// commitment re-derived — so a court can be shown convicting on a live chain. The daemon
     /// refuses to set it on a network carrying value.
     pub drill_tamper_leaf: Option<u64>,
+    /// **DRILL ONLY (`--palw-drill-answer-only`): announce the answer envelope, never the capture**
+    /// — as the panel serves its pulls under the same flag — so no seat holds this node's capture
+    /// whatever its size, and a claim is judged by replay and pursued through the executor's served
+    /// annexes or the chain's demand (RFC-0002's evidence transport, on a class small enough to
+    /// drill live). The daemon refuses it off a private drill.
+    pub drill_answer_only: bool,
     /// Which class to produce for. The daemon passes the bundle's `base_class_id` — the liveness
     /// floor — because that is the one class ADR-0039 W6′ guarantees is always producible.
     pub class_id: Hash64,
@@ -1541,9 +1547,11 @@ impl PalwProducerService {
             // this capture (748 MB on the graph-v5 class) does not fit the transport. Best-effort:
             // a missing envelope costs the serving node one decode of the capture on the first
             // pull, not the claim.
+            let mut envelope = None;
             if let Some(ids) = answer_ids.as_deref() {
                 let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
                 let answer = kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_encode_v1(anchor, &prompt_ids, ids);
+                envelope = self.config.drill_answer_only.then(|| answer.clone());
                 let path = palw_retained_answer_path(&self.config.retention_dir, &message);
                 let tmp = path.with_extension("answer.partial");
                 if let Err(e) = std::fs::write(&tmp, &answer).and_then(|()| std::fs::rename(&tmp, &path)) {
@@ -1569,11 +1577,19 @@ impl PalwProducerService {
                 .await
                 .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: block {hash} was not submitted"))?
                 .map_err(|e| format!("the chain refused a block this node produced: {e}"))?;
-            palw_until_exit_v1(&self.shutdown.listener, self.flow_context.broadcast_palw_material(message, material)).await;
+            // DRILL (`--palw-drill-answer-only`): the answer envelope, never the capture.
+            let announced = palw_attempt_announcement_v1(material, envelope);
+            palw_until_exit_v1(&self.shutdown.listener, self.flow_context.broadcast_palw_material(message, announced)).await;
             return Ok(Some((hash, message)));
         }
         Ok(None)
     }
+}
+
+/// **What an attempt's announcement carries**: the retained material, or — on a drill that serves
+/// answers only (`--palw-drill-answer-only`, which sets `envelope`) — its answer envelope.
+pub(crate) fn palw_attempt_announcement_v1(material: Vec<u8>, envelope: Option<Vec<u8>>) -> Vec<u8> {
+    envelope.unwrap_or(material)
 }
 
 impl AsyncService for PalwProducerService {
@@ -1734,6 +1750,29 @@ mod exit_tests {
             }
             assert!(submits > 0, "{name} submits blocks");
         }
+    }
+}
+
+/// **A drill that serves answers only announces no capture** (`--palw-drill-answer-only` on the
+/// attempt lane): the envelope when the flag set one, the material otherwise — and the producer's one
+/// broadcast goes through it.
+#[cfg(test)]
+mod answer_only_tests {
+    use super::palw_attempt_announcement_v1;
+
+    #[test]
+    fn an_answer_only_drill_announces_the_envelope_and_never_the_capture() {
+        let (material, envelope) = (vec![7u8; 64], vec![9u8; 8]);
+        assert_eq!(palw_attempt_announcement_v1(material.clone(), None), material);
+        assert_eq!(palw_attempt_announcement_v1(material, Some(envelope.clone())), envelope);
+        let src = include_str!("palw_producer.rs");
+        let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
+        assert!(src.contains("envelope = self.config.drill_answer_only.then(|| answer.clone());"));
+        assert!(src.contains("let announced = palw_attempt_announcement_v1(material, envelope);"));
+        assert!(src.contains("self.flow_context.broadcast_palw_material(message, announced)"));
+        assert!(!src.contains("self.flow_context.broadcast_palw_material(message, material)"), "no capture announced past the switch");
+        let daemon = include_str!("daemon.rs");
+        assert!(daemon.contains("drill_answer_only: args.palw_drill_answer_only && palw_private_drill,"), "a private drill's only");
     }
 }
 

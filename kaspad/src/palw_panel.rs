@@ -8107,6 +8107,13 @@ impl PalwPanelService {
                                             .is_some_and(|p| p.leaf_index() == root.finalize.output_opening.leaf_index)
                                 });
                                 tir_root_filings.insert(duty.session_id, (current_daa, root.clone()));
+                                if root.is_some() {
+                                    info!(
+                                        "[{PALW_PANEL}] session {}: no accused capture here — the dissection's bottom is built from the \
+                                         accused's root claim on chain (RFC-0002 evidence transport D)",
+                                        duty.session_id
+                                    );
+                                }
                                 root
                             }
                         }

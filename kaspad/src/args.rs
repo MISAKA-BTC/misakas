@@ -1469,9 +1469,10 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_DRILL_ANSWER_ONLY")
                 .action(clap::ArgAction::SetTrue)
                 .help(
-                    "PALW DRILL ONLY: this node's canonical free-prompt claims are broadcast and served as their answer \
-                     envelope, never the capture, so every seat judges them by intervals alone and must obtain a named \
-                     leaf's evidence from the executor (ADR-0111). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                    "PALW DRILL ONLY: this node's canonical free-prompt claims and attempts are broadcast and served as their \
+                     answer envelope, never the capture, so every seat judges them by replay or intervals alone and must \
+                     obtain a named leaf's evidence from the executor (ADR-0111) — or, for an IR class, its served annexes or \
+                     the chain's demand (RFC-0002's evidence transport). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
                 ),
         )
         .arg(
