@@ -591,3 +591,66 @@ set is unchanged.
   `tir_admit_program_v2` and `tir_admit_pipeline_v1` admit both.
 - **Not done.** T5-style encoder–decoders need relative position buckets and cross-attention over
   an encoder's rows (a `StageRows` input), which is more than falls out of this.
+
+## 13. Vision input (RFC-0003 Part II.4)
+
+On `rfc3/lower` (`lower::vision`, `tests/vision.rs`, `tools/gen_hf_vision_fixtures.py`). A tower is
+one position over a fixed patch axis. The canonical image enters as `input.image`, an `i16
+[H, W, 3]` lifted into an `External` input over `[0, 255]`, and the output rows are `Final`.
+`JobImage` (rfc3/impl, in progress) will bind the input; until then the programs run standalone.
+
+**Preprocessing** (in the program, rank ≤ 4):
+- optional fixed-ratio box downscale: two `MatMul`s with pinned 0/1 matrices and an exact rounded
+  `Div` by `r²`;
+- patchify by `Reshape`/`Transpose`, row-major or Qwen2-VL's block-major;
+- normalisation folded into the patch projection: `W' = W/(255·std)`, `b' = b − Σ W·mean/std`,
+  with `Conv3d` temporal copies summed. The projection reads exact pixels with `i16` weights.
+
+| tower | output | float vs HF | integer cosine vs HF (min per row) |
+| --- | --- | --- | --- |
+| CLIP (`CLIPVisionModelWithProjection`) | `image_embeds [1, 24]` | 2.1–2.8e-7 | 0.99992 |
+| SigLIP (`SiglipVisionModel`, attention-pooling head) | `pooler_output [1, 32]` | 2.0–3.4e-7 | 0.99991 |
+| Qwen2-VL tower + merger (2D rope) | merged `[4, 48]` | 3.4–3.8e-7 | 0.99993 |
+| Qwen2.5-VL tower + merger (RMSNorm, SwiGLU, window attention: pinned order, id mask, restore) | merged `[16, 48]` | 3.2e-7 | 0.99993 |
+| LLaVA tower (feature layer −2, CLS dropped) + projector | image rows `[16, 32]` | 3.3e-7 | 0.99988 |
+| CLIP behind a ×2 box downscale (56×56 input, pixels replicated 2×2) | `image_embeds` | — | 0.99991 |
+
+**Image + text → logits, off-chain** (`llava_image_and_text_to_logits_matches_hf_off_chain`):
+1. The tower's integer rows go to an LM version-2 program through `LowerOpts::image_rows`. It reads
+   `input.image_rows` and `input.image_start` and applies II.4's
+   `Select(is_image_pos, Gather(img, pos − start), token embedding)`, with a `Logits` output.
+2. Against `LlavaForConditionalGeneration`: top-1 22/22, mean KL 0.00013.
+3. On chain, the LM stage belongs to the FP job version RFC-0003 II.2 plans. A pipeline cannot
+   carry a `Logits` stage today, by design.
+
+## 14. Next: cross-attention (T5, Whisper) — what `TirProgramV2` needs
+
+Not built. The analysis:
+
+- **The encoder is a stage** like §12's bidirectional encoder. T5 needs:
+  - RMSNorm without a mean;
+  - unscaled scores;
+  - gated-GELU FFNs;
+  - a relative position bias: a pinned `[h, L, L]` param for the encoder, and for the decoder
+    `Gather(bucket table, pos − j)` over `Iota` along `H`.
+
+  Whisper's encoder reads PCM `i16`. Its log-mel front end is integer TIR throughout:
+  - STFT as `MatMul`s with pinned Q24 DFT matrices, and power as `Mul`/`Add`;
+  - the mel filterbank as a pinned `MatMul`;
+  - `IntLn`, then the global `ReduceMax` clamp and the `(x+4)/4` scaling;
+  - the two strided conv stems as `Reshape`/`Gather` windows into `MatMul`s.
+- **Cross-attention needs no new primitive.** Recomputing each decoder layer's cross K/V from the
+  encoder rows at every position would cost `L_enc·d²` a position per layer. Instead:
+  - the encoder stage emits every decoder layer's K/V as its one `Final` output
+    `[layers, 2, L_enc, d]` (Whisper-large: 123M elements < `2^28`);
+  - the decoder binds it with `StageFinal`;
+  - each layer occurrence picks its slice with a per-layer `idx` param through `Gather`;
+  - attention runs over the encoder axis, which is `Fixed` (not `H`), under the same cone ceilings
+    as §12, masked by `StageRowCount`/`JobTokenCount`.
+- **What V2 lacks for it:**
+  1. A `Logits` stage: T5 and Whisper generate. As with the VLM, that is RFC-0003 II.2's FP job
+     over a one-stage text pipeline, and neither exists yet.
+  2. For Whisper, an audio input binding. It is `JobImage`'s pattern with PCM `i16` and 2-byte
+     leaves against `input_root` (RFC-0003 II.5).
+  3. Optionally, stages with more than one output node. That would avoid concatenating the
+     per-layer K/V into one tensor, but the concatenation works today.
