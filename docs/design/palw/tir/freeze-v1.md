@@ -22,9 +22,9 @@ keyed `misaka-palw/tir-prim-set-id/v1` over the descriptor `rev2`, `misaka-palw-
 | 1 | no model-specific primitive | **holds** | 25 primitives named by mathematics; 57 HF architectures + 7 golden + 5 corpus programs lower to them; the union over the 57 is all 25 |
 | 2 | minimality | **holds** (25 < the 30–50 target, argued) | corpus-v1 §8.2 per primitive; nothing added since Gate 1 |
 | 3 | stability under the last family | **holds** | the last families (MLA + group-limited routing, RWKV-4; RWKV-6/7 in the library) forced no primitive; `prim.rs` has held 25 since `ac7b96ae7` |
-| 4 | three-way bit identity | **holds for evaluation** | golden 239/239 on ref2; 1,824 positions × 57 HF programs equal on reference/ref2/exec; D-F1 (legacy engine) equal |
+| 4 | three-way bit identity | **holds** | golden 239/239 on ref2; 1,824 positions × 57 HF programs equal on reference/ref2/exec; admission and demand differentials 0 disagreements; D-F1: 13,846 positions of the genesis 8k artifact equal to the legacy engine |
 | 5 | fidelity | **partly**: fixtures all pass; real checkpoints: C1 (Qwen2.5-1.5B) passes, others running (§5.2) | top-1 0.973 / KL 0.0014 / ppl +0.53 % on Qwen2.5-1.5B |
-| 6 | legacy conformance | **holds** | 38 integer catalogue kernels + `RequantizeByToken` byte-identical on the live code; the whole dense A16 tier by D-F1 |
+| 6 | legacy conformance | **holds** | 38 integer catalogue kernels + `RequantizeByToken` byte-identical on the live code; the whole dense A16 tier by D-F1 (9,373,742 legacy node rows equal) |
 | 7 | static verifiability | **holds with one stated window** | `tir_admit_v1` admits every corpus and HF-lowered program at the legacy court's ceilings; DeepSeek-V3 needs a window ≤ `2^16` |
 
 Open before the freeze (§8): the real-checkpoint rows still running, and Gemma-3 / Mamba-2 / RWKV-4
@@ -174,7 +174,14 @@ row's registered profile:
 
 | jobs | positions | logits rows equal | legacy node rows equal to their IR commit points | legacy / IR ms a position |
 | --- | --- | --- | --- | --- |
-| canonical (1,023 + 2, the backend's prompt for the zero anchor) + 32 random prompts (lengths 1–1,023, + 2 decoded) | (running) | | | |
+| canonical (1,023 + 2, the backend's prompt for the zero anchor) + 32 random prompts (lengths 1–1,023, seed 0x5EED, + 2 decoded) | 13,846 | **13,846 / 13,846** | **9,373,742 / 9,373,742** | 105.6 / 116.2 (the IR side also hands every commit to the comparison) |
+
+**EQUAL** everywhere (51 minutes, 3.96 GB peak RSS, M1 Max shared with a testnet drill). The IR
+program commits 56 values a position the legacy row does not (the fused site's logit and
+probability codes, two a layer); they are covered by the logits' equality and by the conformance of
+`a16_attn_fused`. Reproduce: `palw-a16-to-tir --artifact bound-candidate.palwart --respan 8192
+--out genesis-8k.palwtir` (80 s; file digest `686be1d9…`), then `palw-tir-equiv --network testnet-12
+--artifact bound-candidate.palwart --respan --tir genesis-8k.palwtir --prompts 32`.
 
 ## 7. Criterion 7 — static verifiability
 
