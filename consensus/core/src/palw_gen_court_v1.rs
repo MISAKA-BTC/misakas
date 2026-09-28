@@ -340,3 +340,337 @@ pub fn palw_gen_output_tile_check_v1(
     }
     Ok(None)
 }
+
+// ---------------------------------------------------------------------------------------------
+// The court composition across stages (RFC-0003 §II.2.1: one step tree, stage-major)
+// ---------------------------------------------------------------------------------------------
+
+use crate::palw_gen_step_v1::{
+    PalwGenLeafCoordV1, PalwGenLeafKindV1, PalwGenOpenedLeafV1, PalwGenStepSpaceV1, palw_gen_verify_leaf_v1,
+};
+use crate::palw_gen_worker_v1::{PalwGenClaimRootsV1, PalwGenDecodeV1};
+use misaka_palw_tir::demand::{DemandError, DemandLimits, DemandRequest, DemandTarget, hist_row_node_v1};
+use misaka_palw_tir::demand_v2::eval_demanded_v2;
+use misaka_palw_tir::interval::Interval;
+use misaka_palw_tir::pipeline::PipelineParams;
+use misaka_palw_tir::program::StateKind;
+
+/// One carried input tile of a job image, with its path under the job's `input_root`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwGenImageTileV1 {
+    pub image: u8,
+    pub tile: u64,
+    pub bytes: Vec<u8>,
+    pub proof: Vec<[u8; 64]>,
+}
+
+/// **A generative close**: the disputed leaf and every unit its cone reads, opened — leaves of the
+/// disputed stage that precede it, leaves of earlier stages (the edges), and job-image tiles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwGenCloseV1 {
+    pub disputed: PalwGenOpenedLeafV1,
+    pub operands: Vec<PalwGenOpenedLeafV1>,
+    pub image_tiles: Vec<PalwGenImageTileV1>,
+}
+
+/// **What the court holds of a claim**: its class (the space, the pipeline, the programs and the
+/// artifact's params — authenticated against the class's artifact root, the Phase F inventory's
+/// work), the job's facts (its prompt and committed ids, never an image's bytes), its images' roots,
+/// its draw, and the claim's roots.
+pub struct PalwGenCourtCaseV1<'a> {
+    pub space: &'a PalwGenStepSpaceV1,
+    pub pipeline: &'a TirPipelineV1,
+    pub programs: &'a [TirProgramV2],
+    pub params: &'a dyn PipelineParams,
+    pub facts: &'a [StageJobFacts],
+    pub images: &'a [PalwGenImageRefV1],
+    pub draw: PalwGenDrawV1,
+    pub claim: &'a PalwGenClaimRootsV1,
+}
+
+/// **A generative close's verdict.**
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwGenVerdictV1 {
+    /// The disputed leaf is what its cone computes from the leaves before it: the accusation fails.
+    Acquitted,
+    /// The executor's commitments convict it: `fault` at `leaf`.
+    Convicted { leaf: PalwGenLeafCoordV1, fault: PalwStepFaultV1 },
+}
+
+/// Why a close convicts nobody: the evidence fails.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwGenCloseRefusalV1 {
+    #[error("the claim's step root does not bind its stage roots")]
+    RootsNotBound,
+    #[error("leaf {0:?} is not under its stage's root")]
+    LeafNotProven(PalwGenLeafCoordV1),
+    #[error("leaf {0:?} does not precede the disputed leaf")]
+    NotPreceding(PalwGenLeafCoordV1),
+    #[error(transparent)]
+    Image(PalwGenImageRefusalV1),
+    #[error("the evaluation reads a unit the close does not carry: {0}")]
+    Incomplete(String),
+    #[error("the close is unadjudicable: {0}")]
+    Unadjudicable(String),
+}
+
+/// Stage `stage`'s external input `input`'s binding.
+fn binding_of<'b>(case: &'b PalwGenCourtCaseV1<'_>, stage: usize, input: u16) -> Option<&'b Binding> {
+    let st = &case.pipeline.stages[stage];
+    let prog = &case.programs[st.program as usize];
+    let k = prog.inputs.iter().take(input as usize + 1).filter(|d| d.is_external()).count().checked_sub(1)?;
+    prog.inputs.get(input as usize).filter(|d| d.is_external())?;
+    st.bind.get(k)
+}
+
+/// **The upstream leaf an edge element reads**: `(stage, leaf index, lane)`.
+fn edge_leaf(case: &PalwGenCourtCaseV1<'_>, stage: usize, input: u16, index: usize) -> Option<(u8, u64, usize)> {
+    let (up, pos, element) = match binding_of(case, stage, input)? {
+        Binding::StageFinal { stage: u } => {
+            let up = &case.space.stages[*u as usize];
+            (*u, up.trip.checked_sub(1)?, index as u64)
+        }
+        Binding::StageRows { stage: u, drop, .. } => {
+            let prog = &case.programs[case.pipeline.stages[stage].program as usize];
+            let row: u64 = prog.inputs[input as usize].shape[1..].iter().map(|d| *d as u64).product();
+            (*u, (index as u64 / row) as u32 + drop, index as u64 % row)
+        }
+        _ => return None,
+    };
+    let up_space = &case.space.stages[up as usize];
+    let up_prog = &case.programs[case.pipeline.stages[up as usize].program as usize];
+    let post_occ = (up_prog.occurrences().len() - 1) as u16;
+    let (leaf, lane) = up_space.commit_leaf_of(DemandContext { pos, occurrence: post_occ }, up_prog.output.node(), element)?;
+    Some((up, leaf, lane))
+}
+
+/// The court's source for one stage: the carried, authenticated leaves and the class's params.
+struct CarriageSource<'a, 'c> {
+    case: &'a PalwGenCourtCaseV1<'c>,
+    stage: usize,
+    leaves: &'a std::collections::BTreeMap<(u8, u64), Vec<i128>>,
+}
+
+fn missing(m: String) -> TirError {
+    TirError::new(TirErrorKind::Missing, m)
+}
+
+impl DemandSourceV2 for CarriageSource<'_, '_> {
+    fn node(&mut self, ctx: DemandContext, node: u16, index: usize) -> TirResult<i128> {
+        let sp = &self.case.space.stages[self.stage];
+        let (leaf, lane) = sp
+            .commit_leaf_of(ctx, node, index as u64)
+            .ok_or_else(|| TirError::new(TirErrorKind::Malformed, format!("node {node} at {ctx:?} is no commit leaf")))?;
+        self.leaves.get(&(self.stage as u8, leaf)).and_then(|v| v.get(lane)).copied().ok_or_else(|| missing(format!("leaf {leaf}")))
+    }
+    fn param(&mut self, param: u16, layer: Option<u16>, index: usize) -> TirResult<i128> {
+        let program = self.case.pipeline.stages[self.stage].program;
+        self.case
+            .params
+            .params(program)
+            .param(param, layer)
+            .and_then(|t| t.data.get(index).copied())
+            .ok_or_else(|| missing(format!("param {param} layer {layer:?} element {index}")))
+    }
+    fn input(&mut self, _pos: u32, input: u16, index: usize) -> TirResult<i128> {
+        let (up, leaf, lane) = edge_leaf(self.case, self.stage, input, index)
+            .ok_or_else(|| missing(format!("input {input} is no edge the court reads")))?;
+        self.leaves.get(&(up, leaf)).and_then(|v| v.get(lane)).copied().ok_or_else(|| missing(format!("stage {up} leaf {leaf}")))
+    }
+    fn state(&mut self, pos: u32, state: u16, layer: Option<u16>, index: usize) -> TirResult<StateSupply> {
+        if pos == 0 {
+            return Ok(StateSupply::Value(0));
+        }
+        let sp = &self.case.space.stages[self.stage];
+        if !pos.is_multiple_of(sp.layout.checkpoint_interval) {
+            return Ok(StateSupply::Replay);
+        }
+        let tile = *sp.layout.state_tiles.get(state as usize).ok_or_else(|| missing(format!("state {state}")))? as usize;
+        let coord = PalwGenLeafCoordV1 {
+            stage: self.stage as u8,
+            pos: pos - 1,
+            kind: PalwGenLeafKindV1::State { state, layer },
+            tile: (index / tile) as u32,
+        };
+        let leaf = sp.leaf_index(&coord).ok_or_else(|| missing(format!("{coord:?}")))?;
+        self.leaves
+            .get(&(self.stage as u8, leaf))
+            .and_then(|v| v.get(index % tile))
+            .copied()
+            .map(StateSupply::Value)
+            .ok_or_else(|| missing(format!("leaf {leaf}")))
+    }
+    fn hist_row(&mut self, _pos: u32, state: u16, layer: Option<u16>, row_pos: u32, index: usize) -> TirResult<i128> {
+        let view = &self.case.space.stages[self.stage].info.view;
+        let (ctx, node) = hist_row_node_v1(view, state, layer, row_pos)
+            .ok_or_else(|| TirError::new(TirErrorKind::Malformed, format!("history {state} appends nothing")))?;
+        self.node(ctx, node, index)
+    }
+    fn token(&mut self, pos: u32) -> TirResult<u32> {
+        self.case.facts[self.stage].tokens.get(pos as usize).copied().ok_or_else(|| missing(format!("the token at {pos}")))
+    }
+}
+
+/// The interval a leaf's every lane must lie in (PALW-TIR-33): its node's proven interval, or its
+/// `Fixed` state's declared range.
+fn leaf_interval(case: &PalwGenCourtCaseV1<'_>, coord: &PalwGenLeafCoordV1) -> Option<Interval> {
+    let sp = &case.space.stages[coord.stage as usize];
+    match coord.kind {
+        PalwGenLeafKindV1::Commit { occurrence, node } => {
+            let block = sp.occurrence_block(occurrence)?;
+            let ranges = misaka_palw_tir::interval_v2::analyze_ranges_v2(&sp.program).ok()?;
+            ranges.get(block as usize)?.get(node as usize).copied()
+        }
+        PalwGenLeafKindV1::State { state, .. } => match sp.program.states.get(state as usize)?.kind {
+            StateKind::Fixed { lo, hi } => Some(Interval::new(lo as i128, hi as i128)),
+            StateKind::Hist { .. } => None,
+        },
+    }
+}
+
+fn first_outside(values: &[i128], iv: Interval) -> Option<u32> {
+    values.iter().position(|v| *v < iv.lo || *v > iv.hi).map(|i| i as u32)
+}
+
+/// **Adjudicate one leaf of a pipeline claim** — the composition of the IR court across stages:
+///
+/// 1. the claim's step root binds its stage roots, and every carried leaf is under its stage's root;
+///    a leaf of the disputed stage precedes the disputed one, and a leaf of another stage is an
+///    earlier stage's (every earlier stage precedes, PALW-GEN-3);
+/// 2. **PALW-TIR-33** on the disputed leaf and then on every carried leaf, in (stage, index) order:
+///    the first lane outside its node's proven interval convicts;
+/// 3. the image tiles, verified against the job's `input_root`s (a failure refuses the close);
+/// 4. the disputed leaf's elements re-evaluated from the carried leaves alone (spec 04b §15.4): its
+///    own stage's earlier leaves, the class's params, `R` recomputed, the job's facts, edges read from
+///    the earlier stages' leaves (PALW-TIR-33 again, as read), image lanes from the proven tiles;
+/// 5. the first lane that differs convicts (`ComputationMismatch`); none acquits.
+///
+/// A unit the evaluation reads and the close does not carry refuses the close (`Incomplete`); an
+/// evaluation that fails on authenticated units is an interpreter defect (`Unadjudicable`), which
+/// convicts nobody.
+pub fn palw_gen_adjudicate_leaf_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    limits: &DemandLimits,
+) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
+    use PalwGenCloseRefusalV1 as R;
+    if crate::palw_gen_step_v1::palw_gen_step_root_v1(&case.claim.stage_roots) != case.claim.step_root
+        || case.claim.stage_roots.len() != case.space.stages.len()
+    {
+        return Err(R::RootsNotBound);
+    }
+    let d = &close.disputed;
+    let s = d.coord.stage as usize;
+    let sp = case.space.stages.get(s).ok_or(R::LeafNotProven(d.coord))?;
+    if !palw_gen_verify_leaf_v1(sp, &case.claim.stage_roots[s], d) {
+        return Err(R::LeafNotProven(d.coord));
+    }
+    let before = sp.leaf_index(&d.coord).expect("verified");
+    let mut leaves = std::collections::BTreeMap::new();
+    for o in &close.operands {
+        let os = o.coord.stage as usize;
+        let osp = case.space.stages.get(os).ok_or(R::LeafNotProven(o.coord))?;
+        if !palw_gen_verify_leaf_v1(osp, &case.claim.stage_roots[os], o) {
+            return Err(R::LeafNotProven(o.coord));
+        }
+        let index = osp.leaf_index(&o.coord).expect("verified");
+        if os > s || (os == s && index >= before) {
+            return Err(R::NotPreceding(o.coord));
+        }
+        leaves.insert((o.coord.stage, index), o.values.clone());
+    }
+    // PALW-TIR-33: the disputed leaf first, then every carried leaf in (stage, index) order.
+    let fault = |i| PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: i };
+    if let Some(iv) = leaf_interval(case, &d.coord)
+        && let Some(i) = first_outside(&d.values, iv)
+    {
+        return Ok(PalwGenVerdictV1::Convicted { leaf: d.coord, fault: fault(i) });
+    }
+    for ((stage, index), values) in &leaves {
+        let coord = case.space.stages[*stage as usize].leaves()[*index as usize].coord;
+        if let Some(iv) = leaf_interval(case, &coord)
+            && let Some(i) = first_outside(values, iv)
+        {
+            return Ok(PalwGenVerdictV1::Convicted { leaf: coord, fault: fault(i) });
+        }
+    }
+    // The stage's inputs as the court answers them.
+    let answers = palw_gen_stage_answers_v1(case.pipeline, case.programs, s, case.facts, case.images)
+        .map_err(|e| R::Incomplete(format!("the job does not fix the stage's inputs: {e}")))?;
+    let mut carriage = CarriageSource { case, stage: s, leaves: &leaves };
+    let mut source = PalwGenStageSourceV1::new(&mut carriage, answers, case.draw).with_images(case.images.to_vec());
+    for t in &close.image_tiles {
+        source.carry_image_tile(t.image, t.tile, &t.bytes, &t.proof).map_err(R::Image)?;
+    }
+    let leaf = sp.leaves()[before as usize];
+    let elements: Vec<usize> = (leaf.first_element..leaf.first_element + leaf.value_count as u64).map(|e| e as usize).collect();
+    let target = match d.coord.kind {
+        PalwGenLeafKindV1::Commit { occurrence, node } => {
+            DemandTarget::Node { ctx: DemandContext { pos: d.coord.pos, occurrence }, node }
+        }
+        PalwGenLeafKindV1::State { state, layer } => DemandTarget::StateAfter { pos: d.coord.pos, state, layer },
+    };
+    let evaluated = eval_demanded_v2(&sp.program, &sp.info, &DemandRequest { target, elements: &elements }, &mut source, limits);
+    if let Some((input, _pos, index, _value)) = source.violation {
+        // An edge value read outside its upstream's interval — carried leaves were all checked
+        // above, so this names the upstream leaf the court read.
+        if let Some((up, leaf, lane)) = edge_leaf(case, s, input, index) {
+            let coord = case.space.stages[up as usize].leaves()[leaf as usize].coord;
+            return Ok(PalwGenVerdictV1::Convicted { leaf: coord, fault: fault(lane as u32) });
+        }
+    }
+    let values = match evaluated {
+        Ok((values, _)) => values,
+        Err(DemandError::Tir(t)) if t.kind == TirErrorKind::Missing => return Err(R::Incomplete(t.to_string())),
+        Err(e) => return Err(R::Unadjudicable(format!("{e:?}"))),
+    };
+    match values.iter().zip(&d.values).position(|(a, b)| a != b) {
+        Some(i) => {
+            Ok(PalwGenVerdictV1::Convicted { leaf: d.coord, fault: PalwStepFaultV1::ComputationMismatch { value_index: i as u32 } })
+        }
+        None => Ok(PalwGenVerdictV1::Acquitted),
+    }
+}
+
+/// **The decode-token door of a pipeline claim's text stage** (RFC-0001 §A.3 over the committed
+/// logits, RFC-0003 §II.2.1): generated id `t` must be the lane the V4 decode selects from the
+/// committed logits row of position `|prompt| − 1 + t` with the committed ids before it. `row` is
+/// every tile of that row, opened under the text stage's root.
+pub fn palw_gen_decode_door_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    decode: &PalwGenDecodeV1,
+    prompt_len: u32,
+    t: u32,
+    row: &[PalwGenOpenedLeafV1],
+) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
+    use PalwGenCloseRefusalV1 as R;
+    let s = case.pipeline.output_stage as usize;
+    let sp = &case.space.stages[s];
+    let prog = &sp.program;
+    let post_occ = (prog.occurrences().len() - 1) as u16;
+    let pos = prompt_len.saturating_sub(1) + t;
+    let node = prog.output.node();
+    let kind = PalwGenLeafKindV1::Commit { occurrence: post_occ, node };
+    let tiles = sp.leaves().iter().filter(|l| l.coord.pos == pos && l.coord.kind == kind).count();
+    if row.len() != tiles || tiles == 0 {
+        return Err(R::Incomplete(format!("the logits row at {pos} is {tiles} tiles; {} were carried", row.len())));
+    }
+    let mut lanes = Vec::new();
+    for (k, leaf) in row.iter().enumerate() {
+        let expected = PalwGenLeafCoordV1 { stage: s as u8, pos, kind, tile: k as u32 };
+        if leaf.coord != expected || !palw_gen_verify_leaf_v1(sp, &case.claim.stage_roots[s], leaf) {
+            return Err(R::LeafNotProven(leaf.coord));
+        }
+        lanes.extend(leaf.values.iter().map(|v| *v as i32));
+    }
+    let Some(committed) = case.claim.generated.get(t as usize) else {
+        return Err(R::Incomplete(format!("the claim commits no id {t}")));
+    };
+    let before = &case.claim.generated[..t as usize];
+    let selected = crate::palw_decode_pipeline_v4::decode_select_v4(&decode.config, &decode.sampling, before, &lanes, &|_| true);
+    if selected == Some(*committed as usize) {
+        Ok(PalwGenVerdictV1::Acquitted)
+    } else {
+        Ok(PalwGenVerdictV1::Convicted { leaf: row[0].coord, fault: PalwStepFaultV1::DecodeTokenMismatch { position: t } })
+    }
+}

@@ -434,6 +434,25 @@ pub struct StageRun {
     /// `Input(0)` at each position (empty for a stage that reads no token).
     pub tokens: Vec<u32>,
     pub steps: Vec<StepOutputV2>,
+    /// The `Fixed` states after each position — what a step tree checkpoints (RFC-0003 §I.2.3's one
+    /// tree): an absent instance is all zeros.
+    pub fixed_after: Vec<BTreeMap<crate::interp::StateKey, Tensor>>,
+}
+
+/// Run one stage position by position, keeping each position's output and the `Fixed` states after it.
+fn run_stage(
+    interp: &InterpreterV2<'_>,
+    params: &dyn ParamSource,
+    inputs: &dyn InputProvider,
+    tokens: &[u32],
+) -> TirResult<(Vec<StepOutputV2>, Vec<BTreeMap<crate::interp::StateKey, Tensor>>)> {
+    let mut state = crate::interp::RunState::default();
+    let (mut steps, mut fixed_after) = (Vec::with_capacity(tokens.len()), Vec::with_capacity(tokens.len()));
+    for t in tokens {
+        steps.push(interp.step(params, inputs, &mut state, *t)?);
+        fixed_after.push(state.fixed.clone());
+    }
+    Ok((steps, fixed_after))
 }
 
 impl StageRun {
@@ -571,8 +590,8 @@ pub fn run_pipeline(
         let inputs = stage_inputs(st, prog, &runs, job, random)?;
         let interp = InterpreterV2::new(prog)?;
         let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
-        let steps = interp.run(params.params(st.program), &inputs, &run_tokens)?;
-        runs.push(StageRun { trip, tokens, steps });
+        let (steps, fixed_after) = run_stage(&interp, params.params(st.program), &inputs, &run_tokens)?;
+        runs.push(StageRun { trip, tokens, steps, fixed_after });
     }
     let output = pipeline_output(p, programs, &runs)?;
     Ok(PipelineRun { stages: runs, output })
@@ -642,8 +661,8 @@ pub fn run_text_pipeline(
         let (tokens, trip) = stage_tokens(st, job)?;
         let inputs = stage_inputs(st, prog, &runs, job, random)?;
         let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
-        let steps = InterpreterV2::new(prog)?.run(params.params(st.program), &inputs, &run_tokens)?;
-        runs.push(StageRun { trip, tokens, steps });
+        let (steps, fixed_after) = run_stage(&InterpreterV2::new(prog)?, params.params(st.program), &inputs, &run_tokens)?;
+        runs.push(StageRun { trip, tokens, steps, fixed_after });
     }
     let st = &p.stages[text];
     let prog = &programs[st.program as usize];
@@ -651,12 +670,14 @@ pub fn run_text_pipeline(
     let interp = InterpreterV2::new(prog)?;
     let mut state = crate::interp::RunState::default();
     let (mut stream, mut generated, mut steps) = (job.prompt.clone(), Vec::new(), Vec::new());
+    let mut fixed_after = Vec::new();
     let mut pos = 0usize;
     loop {
         if pos as u32 >= st.max_trip {
             return err(TirErrorKind::Position, format!("stage {}: the stream passes max_trip {}", st.name, st.max_trip));
         }
         let out = interp.step(params.params(st.program), &inputs, &mut state, stream[pos])?;
+        fixed_after.push(state.fixed.clone());
         let consumed = pos + 1 >= job.prompt.len();
         let answer = if consumed { Some(select(pos as u32, &out.output)) } else { None };
         steps.push(out);
@@ -675,7 +696,7 @@ pub fn run_text_pipeline(
         pos += 1;
     }
     let tokens = stream[..steps.len()].to_vec();
-    runs.push(StageRun { trip: steps.len() as u32, tokens, steps });
+    runs.push(StageRun { trip: steps.len() as u32, tokens, steps, fixed_after });
     let output = pipeline_output(p, programs, &runs)?;
     Ok((PipelineRun { stages: runs, output }, generated))
 }
