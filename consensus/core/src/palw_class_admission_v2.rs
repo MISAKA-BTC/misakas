@@ -1322,6 +1322,33 @@ pub enum PalwClassAdmissionError {
     /// the cap (F5). See [`palw_held_class_unanswerable_v1`].
     #[error("a held class no honest party can dissect inside a turn: {why} (ADR-0152 §4-ter C5)")]
     HeldClassUnanswerable { why: PalwHeldUnanswerableV1 },
+    // ---- RFC-0002 Phase F (F6): admission v10, an IR class (`palw_tir_admission_v1`). ----
+    /// The class is an IR program and this network has not armed `palw_tir_v1` at the block.
+    #[error("the class is a PALW-TIR program and this network has not armed palw_tir_v1")]
+    TirNeedsItsFence,
+    /// The program does not decode as a canonical TIR v1 program (spec 04b §4.4: strict bytes,
+    /// normal form, types and ranges).
+    #[error("the IR program is refused: {0}")]
+    TirProgram(String),
+    /// The program names another primitive set than the fence's.
+    #[error("the IR program's prim_set_id {program} is not the network's {fence}")]
+    TirPrimSet { program: Hash64, fence: Hash64 },
+    /// A quantity `tir_admit_v1` derives exceeds the network's ceiling for it.
+    #[error("the IR program's {limit} of {value} exceeds the ceiling {cap} at {at}")]
+    TirExceeds { limit: &'static str, at: String, value: u64, cap: u64 },
+    /// The layout, the scheme, the token bound or the history bound is not one v10 admits.
+    #[error("the IR class is refused: {0}")]
+    TirLayout(String),
+    /// The declared class id is not `tir_class_id_v1(class, artifact_root)`.
+    #[error("the declared IR class id {declared} is not the derived {derived}")]
+    TirClassIdIsNotDerived { declared: Hash64, derived: Hash64 },
+    /// The carried canonical job is not the attempt formula's context (J5 derives exactly that).
+    #[error("the IR class's canonical job is refused: {0}")]
+    TirCanonicalNotTheFormula(String),
+    /// A commit point's cone reduces over the history and does not fit the court whole; its
+    /// adjudication is the history dissection (step F7), which this build has not wired.
+    #[error("block {block} commit point {node} needs the history dissection, which this build does not play yet (RFC-0002 F7)")]
+    TirNeedsDissection { block: u8, node: u16 },
 }
 
 impl PalwClassAdmissionError {
@@ -1354,6 +1381,14 @@ impl PalwClassAdmissionError {
             Self::ChainWallOrderUnknown { .. } => "CHAIN_WALL_ORDER_UNKNOWN",
             Self::HeldClassUnattributable { .. } => "HELD_CLASS_UNATTRIBUTABLE",
             Self::HeldClassUnanswerable { .. } => "HELD_CLASS_UNANSWERABLE",
+            Self::TirNeedsItsFence => "FAMILY_FENCE_CLOSED",
+            Self::TirProgram(_) => "TIR_PROGRAM_REFUSED",
+            Self::TirPrimSet { .. } => "TIR_PRIM_SET_MISMATCH",
+            Self::TirExceeds { .. } => "TIR_EXCEEDS_CEILING",
+            Self::TirLayout(_) => "TIR_CLASS_REFUSED",
+            Self::TirClassIdIsNotDerived { .. } => "TIR_CLASS_ID_IS_NOT_DERIVED",
+            Self::TirCanonicalNotTheFormula(_) => "CLASS_NOT_ATTRIBUTABLE",
+            Self::TirNeedsDissection { .. } => "TIR_NEEDS_DISSECTION",
         }
     }
 }
