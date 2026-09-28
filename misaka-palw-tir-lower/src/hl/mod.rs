@@ -40,6 +40,15 @@ pub enum Ref {
     Pos,
 }
 
+/// An unmerged LoRA path's shape and scale: rank `r`, and `alpha/r` (or `alpha/√r` for rsLoRA)
+/// as the exact rational `num/den`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct LoraOp {
+    pub rank: usize,
+    pub num: i64,
+    pub den: i64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum HlType {
     F32,
@@ -68,6 +77,9 @@ pub enum Op {
     /// `W·x (+ b)`, `W` is `[out, in]`. In: `[x, W, (b)]`.
     Linear {
         bias: bool,
+        /// A LoRA adapter on this projection (RFC-0004's candidate = parent + adapter): inputs
+        /// `[x, W, (b), A, B]`, value `W·x (+ b) + (num/den)·B·(A·x)`, unmerged.
+        lora: Option<LoraOp>,
     },
     /// Elementwise; an operand of one element broadcasts.
     Add,

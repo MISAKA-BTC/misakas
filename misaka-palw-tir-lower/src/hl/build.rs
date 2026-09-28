@@ -162,7 +162,16 @@ impl Builder<'_> {
         if bias {
             ins.push(self.param(&format!("{name}.b"), vec![out], per_layer, Init::Uniform(-0.1, 0.1))?);
         }
-        Ok(bk.f(Op::Linear { bias }, ins, out, site))
+        // A LoRA adapter on this role (a layer's projection): `A [r, in]`, `B [out, r]`.
+        let lora = match self.s.adapter.as_ref().and_then(|a| a.role(name)) {
+            Some(l) if per_layer => {
+                ins.push(self.param(&format!("{name}.lora_a"), vec![l.rank, inp], true, Init::Normal(W_STD))?);
+                ins.push(self.param(&format!("{name}.lora_b"), vec![out, l.rank], true, Init::Normal(W_STD))?);
+                Some(LoraOp { rank: l.rank, num: l.num, den: l.den })
+            }
+            _ => None,
+        };
+        Ok(bk.f(Op::Linear { bias, lora }, ins, out, site))
     }
 
     /// A norm under role `name` over `n` values in `groups` groups, gain shaped `gain_shape`
@@ -249,7 +258,7 @@ impl Builder<'_> {
         if h.bias {
             ins.push(self.param("head.b", vec![s.vocab_size], false, Init::Uniform(-0.1, 0.1))?);
         }
-        let mut logits = bk.f(Op::Linear { bias: h.bias }, ins, s.vocab_size, "logits");
+        let mut logits = bk.f(Op::Linear { bias: h.bias, lora: None }, ins, s.vocab_size, "logits");
         if h.logit_scale != 1.0 {
             logits = bk.f(Op::Scale { c: h.logit_scale }, vec![logits], s.vocab_size, "logits.scaled");
         }

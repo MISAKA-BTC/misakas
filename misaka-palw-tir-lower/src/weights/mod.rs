@@ -39,6 +39,28 @@ pub trait TensorSource {
     fn names(&self) -> Vec<String>;
 }
 
+/// Two sources read as one: `over` (an adapter's tensors) before `base` (the parent checkpoint).
+pub struct Overlay<'a> {
+    pub base: &'a dyn TensorSource,
+    pub over: &'a dyn TensorSource,
+}
+
+impl TensorSource for Overlay<'_> {
+    fn shape(&self, name: &str) -> Option<Vec<usize>> {
+        self.over.shape(name).or_else(|| self.base.shape(name))
+    }
+    fn load(&self, name: &str) -> Result<Tensor> {
+        if self.over.shape(name).is_some() { self.over.load(name) } else { self.base.load(name) }
+    }
+    fn names(&self) -> Vec<String> {
+        let mut n = self.base.names();
+        n.extend(self.over.names());
+        n.sort();
+        n.dedup();
+        n
+    }
+}
+
 /// An in-memory source (tests, synthetic checkpoints).
 #[derive(Default)]
 pub struct MapSource(pub BTreeMap<String, Tensor>);
