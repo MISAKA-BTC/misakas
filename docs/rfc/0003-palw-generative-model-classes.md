@@ -1109,23 +1109,38 @@ Nothing else about text changes (PALW-GEN-10 stands):
 job, which embeds V4 unchanged:
 
 ```
-PalwFreePromptJobV5 = every PalwFreePromptJobV4 field (V3's fields, then `decode: DecodeConfigV4`),
-                      in order and unchanged in meaning, at version 8,
-                      then images: Vec<ImageInputRefV1>        // 1..=16: one per image slot, at its size
+PalwFreePromptJobV5 = { v4: PalwFreePromptJobV4, images: Vec<ImageInputRefV1> }   // images: 1..=16, one per slot
+wire                = le16(8) ‖ (borsh(v4) without its version word) ‖ borsh(images)
 fp_job_id_v5        = H64(key "misaka-palw/fp-v5/job-id/v1", le64(|bytes|) ‖ bytes)   // the whole borsh
 ```
 
-- **One encoding per behaviour.** A class with image slots takes V5 only, and a class without slots
-  takes V4 only (`JobVersionNotOffered`). `images` is never empty, so a text job has exactly one
-  encoding.
+The embedded job *is* an FP Job V4 (version 7, its `DecodeConfigV4` present), and V4's own rules
+admit it verbatim. On the wire only its version word says 8. No V3/V4 rule admits version 8, no V4
+byte string decodes as V5, and V4's wire, ids, acceptance and fingerprints do not move. Built
+dormant on `rfc3/fp-v5` (2026-09-29), behind the fence `palw_fp_job_v5`, which requires
+`palw_gen_v1` and `palw_fp_decode_rules` at or below it.
+
+- **One encoding per behaviour** (open question 14, decided 2026-09-29). A class with image slots takes
+  V5 only, and a class without slots takes V4 only (`JobVersionNotOffered`). `images` is never empty,
+  so a text job has exactly one encoding.
 - `images` satisfies PALW-GEN-11: exactly one image per slot, at the slot's size.
 - **Where images travel.** Image bytes never ride a transaction, whatever `privacy_mode` says about the
   prompt ids. They travel with the capture to the panel, and a dispute opens tiles against
   `input_root`. `PublicDa` makes a V5 job's prompt ids public, not its images.
-- **Price [RFC-0001].** RFC-0001's D10 pays decode leaves only (prefill is 0). A V5 job's image stages
-  and its image-row prefill are real work. Proposal: price them as a per-job constant of the class,
-  the image stages' admitted job cost converted by the canonical work rule (§Compute), added to the
-  claim's quanta. This changes FP pricing, so it is RFC-0001's owner's decision (open question 13).
+- **Price [RFC-0001] — recommendation, pending user confirmation (open question 13).** RFC-0001's D10
+  pays decode leaves only (prefill is 0). A V5 job's image stages are real work, so they are priced as
+  **prefill-equivalent tokens**:
+  - each image slot of the class declares `token_equivalents`, a count of prompt tokens, in its
+    offer. The class id covers it;
+  - admission floors it at `⌈admitted per-image work / per-token work⌉`. Per-image work is every
+    non-text stage's admitted job work in MAC-equivalents (ADR-0131's table), split evenly over the
+    images the stage depends on. Per-token work is the text stage's admitted work for one position.
+    A non-text stage that depends on no image is refused, because it would be prefill no rule
+    prices;
+  - a V5 job is charged the sum of its slots' counts at the job's per-token price.
+
+  Built as pure functions (`palw_fp_v5_image_tokens_v1`, `palw_fp_v5_image_charge_v1`). Nothing in the
+  lane reads them until the user confirms.
 - **Numbering.** The version number and the name are RFC-0001's to assign at freeze. RFC-0001 §A.8
   keeps "V5" for an emergency fence of V4; if that fence comes first, this job takes the next free
   version. Nothing here binds a name.
@@ -1479,11 +1494,12 @@ A new chapter `spec/palw/04c-generative-classes.md`, plus additions to 04b. Appl
 11. **Multi-codebook audio tokens:** a later FP job version for several logits rows per position.
 12. **Privacy of reproducible outputs:** is the `PublicDa` or `PanelDa` choice enough, or should image
     jobs default to `PanelDa`?
-13. **The price of a V5 job's image stages** (§II.2.1) [RFC-0001]: a per-job class constant from the image
-    stages' admitted cost (proposed), or a change to D10 that counts prefill.
-14. **May a class with image slots also take text-only V4 jobs?** Proposed: no. A class with slots
-    takes V5 only, and the text-only use registers the text-only class (the same weights, another
-    pipeline), so each behaviour keeps one encoding.
+13. **The price of a V5 job's image stages** (§II.2.1) [RFC-0001]. Recommendation, **pending user
+    confirmation**: prefill-equivalent tokens. Each slot declares a count, floored at
+    `⌈admitted per-image work / per-token work⌉` and charged at the job's per-token price.
+14. **May a class with image slots also take text-only V4 jobs?** Decided 2026-09-29: no. A class with
+    slots takes V5 only, and the text-only use registers the text-only class (the same weights,
+    another pipeline), so each behaviour keeps one encoding.
 
 ## Activation plan and order of implementation
 
@@ -1538,5 +1554,7 @@ naming R's domain 0. Steps 1–8 take about 4–5 calendar months with two or th
 | 10 | generalised dissection | **with video** (§II.6), not with the first image fence |
 | 11 | multi-codebook audio | **later** (a later FP job version) |
 | 12 | privacy | image jobs **default to `PanelDa`**; `PublicDa` stays available when the user chooses it |
+| 13 | V5 image price | **pending user confirmation** — recommendation: prefill-equivalent tokens per slot, floored at `⌈per-image work / per-token work⌉`, at the job's per-token price |
+| 14 | V4 jobs on a class with image slots | **no** (2026-09-29): a class with slots takes V5 only |
 
 The rest of the RFC (Parts I and II, the program surface, the activation order) stands as written.
