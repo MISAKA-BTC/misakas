@@ -7289,6 +7289,14 @@ impl VirtualStateProcessor {
                 refund,
                 unrefundable,
             });
+            // **RFC-0002 Phase F: below `palw_tir_v1` an IR object is dropped by name before any rule
+            // below reads it.** An older build cannot decode it and skips it (A-2) without charging it
+            // a registration slot, the court's adjudication slot or any budget — so it is dropped
+            // here, first, and charged nothing either. The gate's own arms and the fold refuse it too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_tir_v1(&object) && !self.palw_tir_at(point.daa_score) {
+                info!("Block {block}: an IR object was dropped by name below palw_tir_v1, and the block stands (RFC-0002 Phase F)");
+                continue;
+            }
             // **ADR-0075 SA-1: a chunk group's opener pays for the SLOT it takes.**
             //
             // A group holds one of `PALW_OBJECT_CHUNK_MAX_GROUPS` rows in the state root for up to
@@ -8757,6 +8765,52 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Result<(), String> {
+        // **RFC-0002 Phase F: an IR registration is signed over its own message**, which carries the
+        // class (program, layout, tokenizer) in the profile's place, under its own context — so
+        // neither form's signature can be lifted onto the other.
+        if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 {
+            class_id,
+            share_permille,
+            admission,
+            activation_daa,
+            artifact_root,
+            slash_value_per_pwu,
+            initial_target,
+            pwu_rule,
+        } = object
+        {
+            let registrant = state
+                .bond(&admission.registrant_bond)
+                .ok_or_else(|| format!("IR class {class_id} is registered under a bond this chain does not have"))?;
+            if !matches!(registrant.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                return Err(format!("IR class {class_id} is registered under a bond that is not Active"));
+            }
+            let message = kaspa_consensus_core::palw_tir_class_v1::palw_tir_class_registration_message_v1(
+                kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                    self.network_id_bytes.as_slice(),
+                    Some(self.genesis.hash),
+                ),
+                *class_id,
+                *share_permille,
+                *activation_daa,
+                &admission.registrant_bond,
+                *artifact_root,
+                *slash_value_per_pwu,
+                *initial_target,
+                pwu_rule,
+                &admission.canonical,
+                &admission.class,
+            );
+            if !Self::verify_mldsa87_with_context_bool(
+                &registrant.pubkey,
+                message.as_byte_slice(),
+                &admission.signature,
+                kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1,
+            ) {
+                return Err(format!("IR class {class_id}'s registration is not signed by the bond it names"));
+            }
+            return Ok(());
+        }
         let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
             class_id,
             share_permille,
@@ -8824,9 +8878,12 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Result<(), String> {
-        let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, initial_target, .. } = object
-        else {
-            return Ok(());
+        let (class_id, initial_target) = match object {
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, initial_target, .. }
+            | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, initial_target, .. } => {
+                (class_id, initial_target)
+            }
+            _ => return Ok(()),
         };
         let Some(bundle) = self.palw_v2_bundle.as_ref() else { return Ok(()) };
         if let Some(base_target) = state.class_target(&bundle.base_class_id)
@@ -11019,13 +11076,60 @@ impl VirtualStateProcessor {
                 // block stands.** Below `palw_tir_v1` exactly as an older build skips the payload it
                 // cannot decode (A-2); above it until admission v10 lands (step F6). Never charged a
                 // registration slot: `palw_class_registration_buyer_v1` does not name it.
-                Obj::ClassRegisteredTirV1 { class_id, .. } => {
+                Obj::ClassRegisteredTirV1 { class_id, share_permille, .. } => {
                     if !self.palw_tir_at(point.daa_score) {
                         return Err(format!(
                             "IR class {class_id} is refused: palw_tir_v1 is not in force at this block (RFC-0002 Phase F)"
                         ));
                     }
-                    return Err(format!("IR class {class_id} is refused: admission v10 is not in this build (RFC-0002 Phase F, F6)"));
+                    let Some(bundle) = self.palw_v2_bundle.as_ref() else {
+                        return Err(format!("IR class {class_id} registered on a network with no V2 bundle"));
+                    };
+                    // The legacy arm's order, the graph gate last: the chain's target (one map
+                    // read), the registrant's signature, then admission v10 — which decodes the
+                    // program and derives the primitives the share rule reads.
+                    self.palw_v2_class_registration_starts_at_the_chains_target(state, object)?;
+                    self.palw_v2_class_registration_is_signed(state, object)?;
+                    let rules = kaspa_consensus_core::palw_tir_admission_v1::PalwTirAdmissionRulesV1 {
+                        fence: self.palw_tir_v1.expect("palw_tir_at said the fence is in force"),
+                        held: kaspa_consensus_core::palw_class_admission_v2::PalwHeldAdmissionV1 {
+                            armed: self.palw_held_context_at(point.daa_score),
+                            panel_da: self.palw_panel_da_at(point.daa_score),
+                        },
+                        prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
+                    };
+                    // The network's committed certified families and the chain's own, as the legacy
+                    // arm reads them (consensus never reads the drilled registry).
+                    let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+                    let chain_certified =
+                        state.chain_certified_families(kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt);
+                    let (entry, _) = kaspa_consensus_core::palw_tir_admission_v1::verify_class_admission_v10(
+                        bundle,
+                        &rules,
+                        object,
+                        &certified,
+                        &chain_certified,
+                    )
+                    .map_err(|e| format!("IR class {class_id} is not admissible: {e}"))?;
+                    // Decision H's and ADR-0069's share rule, as the legacy arm states it: the
+                    // minimum grantable share for a class a certified family covers (below
+                    // `palw_admission_independence`), nothing otherwise.
+                    let prosecutable = kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v2(
+                        bundle.court_e2e_root,
+                        &certified,
+                        &chain_certified,
+                        &entry.reachable_kernels,
+                    )
+                    .map_err(|e| format!("IR class {class_id}: {e}"))?
+                    .is_some();
+                    let independence = self.palw_admission_independence_at(point.daa_score);
+                    let required = if prosecutable && !independence { state_params.min_grantable_share_permille() } else { 0 };
+                    if *share_permille != required {
+                        return Err(format!(
+                            "IR class {class_id} registers at {share_permille}‰; the share rule requires {required}‰ (ADR-0049 \
+                             Decision H, ADR-0069 Decision 6, ADR-0145 §7)"
+                        ));
+                    }
                 }
                 // ADR-0075: both certification objects are judged entirely by the transition —
                 // the evidence by the court's grader, the class binding by the class's own profile

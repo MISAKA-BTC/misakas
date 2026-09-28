@@ -125,13 +125,26 @@ pub struct PalwTirClassRecordV1 {
     pub prim_set_id: Hash64,
     /// The logits row's width: what a trace event's tile index is bounded by.
     pub logits_vocab: u32,
-    /// The step-leaf ladder the class was admitted under (the network's).
-    pub ladder: u64,
     /// The program's canonical bytes, counted (what every IR close carries).
     pub program_bytes: u32,
 }
 
 impl PalwTirClassRecordV1 {
+    /// A row with every field derived from `class_id` alone — for tests that need a row to exist.
+    #[cfg(test)]
+    pub(crate) fn test_row_v1(class_id: Hash64) -> Self {
+        Self {
+            version: PALW_TIR_CLASS_RECORD_VERSION_V1,
+            facts: PalwTirJobFactsV1 { class_id, max_context: 64, token_bound: 8, tiled: true, held: false },
+            graph_ir_root: class_id,
+            layout_digest: class_id,
+            tokenizer_id: class_id,
+            prim_set_id: crate::palw_tir_v1::palw_tir_prim_set_id_v1(),
+            logits_vocab: 8,
+            program_bytes: 1,
+        }
+    }
+
     /// Logits tiles per row under the class's scheme: one for the flat scheme, `⌈vocab / 4096⌉` for
     /// the tiled one — the event space a data-availability draw picks from.
     pub fn logits_tiles(&self) -> u32 {
@@ -141,6 +154,30 @@ impl PalwTirClassRecordV1 {
             1
         }
     }
+}
+
+/// **An IR class's record, derived from the class and its inventory root** — the ONE derivation
+/// admission v10 returns and the fold writes (it decodes the program strictly; the program is
+/// returned for the caller's other readings). Every field is a function of the carried class.
+pub fn palw_tir_class_record_v1(
+    class: &PalwTirClassV1,
+    artifact_root: &Hash64,
+) -> misaka_palw_tir::TirResult<(PalwTirClassRecordV1, TirProgramV1)> {
+    let program = class.decode_program()?;
+    let class_id = class.class_id(artifact_root);
+    let post = &program.blocks[program.schedule.post as usize];
+    let logits_vocab = post.nodes[program.logits as usize].out.elements_at(1);
+    let record = PalwTirClassRecordV1 {
+        version: PALW_TIR_CLASS_RECORD_VERSION_V1,
+        facts: PalwTirJobFactsV1::of(class, &program, class_id),
+        graph_ir_root: class.graph_ir_root(),
+        layout_digest: class.layout_digest(),
+        tokenizer_id: class.tokenizer_id,
+        prim_set_id: Hash64::from_bytes(program.prim_set_id),
+        logits_vocab: u32::try_from(logits_vocab).unwrap_or(u32::MAX),
+        program_bytes: u32::try_from(class.program.len()).unwrap_or(u32::MAX),
+    };
+    Ok((record, program))
 }
 
 fn tir_program_error(e: misaka_palw_tir::TirError) -> PalwClassAdmissionError {
@@ -378,17 +415,9 @@ pub fn verify_class_admission_v10(
             max_operand_count: u32::try_from(worst_operands).unwrap_or(u32::MAX),
         },
     };
-    let record = PalwTirClassRecordV1 {
-        version: PALW_TIR_CLASS_RECORD_VERSION_V1,
-        facts,
-        graph_ir_root: class.graph_ir_root(),
-        layout_digest: class.layout_digest(),
-        tokenizer_id: class.tokenizer_id,
-        prim_set_id: prim_set,
-        logits_vocab: u32::try_from(logits_vocab).unwrap_or(u32::MAX),
-        ladder,
-        program_bytes: class.program.len() as u32,
-    };
+    // The record by the one derivation the fold writes it with.
+    let (record, _) = palw_tir_class_record_v1(class, artifact_root).map_err(tir_program_error)?;
+    debug_assert_eq!(record.facts, facts);
     Ok((entry, record))
 }
 
