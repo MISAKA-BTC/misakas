@@ -782,3 +782,41 @@ fn p10_values_outside_their_dtype() {
     e.supplied.insert(2, raw(DType::I32, &[2], &[1]));
     cone_both("p10 supplied node with too few elements", &p, &Params::new(), 0, None, 4, &e, true);
 }
+
+/// The largest H at run time: a history of window `history_bound` at pos `history_bound − 1`, and the
+/// first position past it.
+#[test]
+fn p11_the_largest_window_at_the_last_position() {
+    let mut b = ProgBuilder::new(HB, 16);
+    let h = b.hist_state("h", DType::I8, &[1], HB, false);
+    let pre = b.block("pre", vec![]);
+    let n0 = b.node(pre, Prim::Cast, &[Ref::Input(0)], fixed(DType::I8, &[]), false);
+    let n1 = b.node(pre, Prim::Reshape, &[Ref::Node(n0)], fixed(DType::I8, &[1]), true);
+    let n2 = b.node(pre, Prim::HistAppend { state: h }, &[Ref::Node(n1)], ty(DType::I8, &[Dim::H, Dim::Fixed(1)]), false);
+    let n3 = b.node(pre, Prim::Iota { axis: 0, start: 0, step: 1 }, &[], ty(DType::I32, &[Dim::H, Dim::Fixed(1)]), false);
+    let n4 = b.node(pre, Prim::Mul, &[Ref::Node(n2), Ref::Node(n3)], ty(DType::I64, &[Dim::H, Dim::Fixed(1)]), false);
+    let n5 = b.node(pre, Prim::ReduceSum { axis: 0 }, &[Ref::Node(n4)], fixed(DType::I64, &[1, 1]), false);
+    let n6 = b.node(pre, Prim::Clamp { lo: i32::MIN as i64, hi: i32::MAX as i64 }, &[Ref::Node(n5)], fixed(DType::I32, &[1, 1]), true);
+    b.carry_out(pre, &[n6]);
+    let post = b.block("post", vec![fixed(DType::I32, &[1, 1])]);
+    let m0 =
+        b.node(post, Prim::Clamp { lo: i32::MIN as i64, hi: i32::MAX as i64 }, &[Ref::CarryIn(0)], fixed(DType::I32, &[1, 1]), true);
+    b.schedule(pre, &[], post, m0);
+    let p = b.finish();
+    let fp = match first_decode(&encode(&p)) {
+        Outcome::Ok(fp) => fp,
+        o => panic!("{o:?}"),
+    };
+    for pos in [HB as u64 - 1, HB as u64] {
+        let mut st = initial_state(&p);
+        st.pos = pos;
+        let rows = (pos as usize).min(HB as usize - 1);
+        st.hist.insert((h, None), (0..rows).map(|i| t(DType::I8, &[1], &[(i % 7) as i128 - 3])).collect());
+        let (a, _) = ref2_step(&p, &Params::new(), &st, 5);
+        let mut fst = state_to(&st);
+        let f = first_step(&fp, &params_to(&Params::new()), &mut fst, 5);
+        println!("p11 pos {pos} (H = {}): ref2 {} / first {}", (pos + 1).min(HB as u64), summary(&a), summary(&f));
+        assert_eq!(a, f);
+        assert_eq!(a.is_ok(), pos < HB as u64);
+    }
+}

@@ -487,6 +487,172 @@ fn a_primitive_differential() {
     assert!(t.disagreements.is_empty() && t.panics_first.is_empty());
 }
 
+/// Accumulations at the exact edge of the order-free sum rule (§6.3, PALW-TIR-24): the largest
+/// positive and negative totals that fit, one unit past them, long contractions, and totals that fit
+/// while a partial sum does not.
+#[test]
+fn a2_maximal_accumulations() {
+    let t = |dt: DType, shape: &[u64], v: Vec<i128>| Tensor::new(dt, shape.to_vec(), v).unwrap();
+    let rep = |x: i128, n: usize| vec![x; n];
+    let mut cases: Vec<(String, Prim, Vec<Tensor>, DType, Vec<u64>, bool)> = Vec::new();
+    // ReduceSum of i8 into i16: 258·127 + 1 = 32,767 fits; + 2 does not; the negative side.
+    for (extra, ok) in [(1i128, true), (2, false)] {
+        let mut v = rep(127, 258);
+        v.push(extra);
+        cases.push((
+            format!("ReduceSum 258·127 + {extra} into i16"),
+            Prim::ReduceSum { axis: 0 },
+            vec![t(DType::I8, &[259], v)],
+            DType::I16,
+            vec![1],
+            ok,
+        ));
+    }
+    for (n, ok) in [(256usize, true), (257, false)] {
+        cases.push((
+            format!("ReduceSum {n}·(−128) into i16"),
+            Prim::ReduceSum { axis: 0 },
+            vec![t(DType::I8, &[n as u64], rep(-128, n))],
+            DType::I16,
+            vec![1],
+            ok,
+        ));
+    }
+    // The total fits, a partial sum does not (positive and negative terms).
+    let mut v = rep(127, 300);
+    v.extend(rep(-128, 300));
+    cases.push((
+        "ReduceSum ±, total −300, positive part 38,100 above i16".into(),
+        Prim::ReduceSum { axis: 0 },
+        vec![t(DType::I8, &[600], v)],
+        DType::I16,
+        vec![1],
+        false,
+    ));
+    // MatMul i8·i8 with K = 2^17 into i32: 2^17·16,384 = 2^31 overflows; 2^17 − 1 fits.
+    for (k, ok) in [((1u64 << 17) - 1, true), (1 << 17, false)] {
+        cases.push((
+            format!("MatMul (−128)² × {k} into i32"),
+            Prim::MatMul,
+            vec![t(DType::I8, &[1, k], rep(-128, k as usize)), t(DType::I8, &[k, 1], rep(-128, k as usize))],
+            DType::I32,
+            vec![1, 1],
+            ok,
+        ));
+    }
+    // i16 into i32 at both ends: (−32768)² × 2 = 2^31 overflows; the negative sum
+    // −32768·(32767 + 32767 + 2) = −2^31 exactly fits, one more −32768 does not.
+    cases.push((
+        "MatMul i16 (−32768)·(−32768) × 2 into i32 (2^31)".into(),
+        Prim::MatMul,
+        vec![t(DType::I16, &[1, 2], rep(-32768, 2)), t(DType::I16, &[2, 1], rep(-32768, 2))],
+        DType::I32,
+        vec![1, 1],
+        false,
+    ));
+    for (last, ok) in [(2i128, true), (3, false)] {
+        cases.push((
+            format!("MatMul i16 −32768·(32767 + 32767 + {last}) into i32"),
+            Prim::MatMul,
+            vec![t(DType::I16, &[1, 3], rep(-32768, 3)), t(DType::I16, &[3, 1], vec![32767, 32767, last])],
+            DType::I32,
+            vec![1, 1],
+            ok,
+        ));
+    }
+    // i64·i64 into i128: two products of 2^126 overflow; the most negative pair fits.
+    cases.push((
+        "MatMul i64::MIN² × 2 into i128 (2^127)".into(),
+        Prim::MatMul,
+        vec![t(DType::I64, &[1, 2], rep(i64::MIN as i128, 2)), t(DType::I64, &[2, 1], rep(i64::MIN as i128, 2))],
+        DType::I128,
+        vec![1, 1],
+        false,
+    ));
+    cases.push((
+        "MatMul i64::MIN·i64::MAX × 2 into i128".into(),
+        Prim::MatMul,
+        vec![t(DType::I64, &[1, 2], rep(i64::MIN as i128, 2)), t(DType::I64, &[2, 1], rep(i64::MAX as i128, 2))],
+        DType::I128,
+        vec![1, 1],
+        true,
+    ));
+    // i32·i32 into i64 with K = 2: 2·2^62 = 2^63 overflows; (2^31 − 1)² · 2 fits.
+    cases.push((
+        "MatMul i32::MIN² × 2 into i64".into(),
+        Prim::MatMul,
+        vec![t(DType::I32, &[1, 2], rep(i32::MIN as i128, 2)), t(DType::I32, &[2, 1], rep(i32::MIN as i128, 2))],
+        DType::I64,
+        vec![1, 1],
+        false,
+    ));
+    cases.push((
+        "MatMul i32::MAX² × 2 into i64".into(),
+        Prim::MatMul,
+        vec![t(DType::I32, &[1, 2], rep(i32::MAX as i128, 2)), t(DType::I32, &[2, 1], rep(i32::MAX as i128, 2))],
+        DType::I64,
+        vec![1, 1],
+        true,
+    ));
+    // ReduceSum of i128 extremes: MAX + MIN + … never fits once P > MAX.
+    cases.push((
+        "ReduceSum [i128::MIN, i128::MIN] into i128".into(),
+        Prim::ReduceSum { axis: 0 },
+        vec![t(DType::I128, &[2], vec![i128::MIN, i128::MIN])],
+        DType::I128,
+        vec![1],
+        false,
+    ));
+    cases.push((
+        "ReduceSum [i128::MIN, 0, i128::MAX] into i128".into(),
+        Prim::ReduceSum { axis: 0 },
+        vec![t(DType::I128, &[3], vec![i128::MIN, 0, i128::MAX])],
+        DType::I128,
+        vec![1],
+        true,
+    ));
+    // idx output: any negative term fails even when the total is positive.
+    cases.push((
+        "ReduceSum [5, −1] into idx".into(),
+        Prim::ReduceSum { axis: 0 },
+        vec![t(DType::I32, &[2], vec![5, -1])],
+        DType::Idx,
+        vec![1],
+        false,
+    ));
+    cases.push((
+        "ReduceSum [2^31, 2^31 − 1] into idx".into(),
+        Prim::ReduceSum { axis: 0 },
+        vec![t(DType::Idx, &[2], vec![1 << 31, (1 << 31) - 1])],
+        DType::Idx,
+        vec![1],
+        true,
+    ));
+    cases.push((
+        "ReduceSum [2^31, 2^31] into idx".into(),
+        Prim::ReduceSum { axis: 0 },
+        vec![t(DType::Idx, &[2], vec![1 << 31, 1 << 31])],
+        DType::Idx,
+        vec![1],
+        false,
+    ));
+    let mut tally = Tally::default();
+    for (name, prim, ins, od, os, ok) in &cases {
+        let a = mine(eval_primitive(prim, ins, *od, os));
+        let f = first_eval_primitive(prim, ins, *od, os);
+        println!(
+            "a2 {name}: text {} ref2 {} first {}",
+            if *ok { "fits" } else { "Overflow" },
+            brief(&a).chars().take(90).collect::<String>(),
+            brief(&f).chars().take(90).collect::<String>()
+        );
+        assert_eq!(a.is_ok(), *ok, "{name}: ref2 against the text");
+        tally.record(name, &a, &f);
+    }
+    tally.report("A2. maximal accumulations");
+    assert!(tally.disagreements.is_empty() && tally.panics_first.is_empty());
+}
+
 // =============================================================== B. programs
 
 fn commits_of(o: &Outcome<(Tensor, Commits)>) -> Outcome<(Tensor, Commits)> {

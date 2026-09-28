@@ -39,13 +39,14 @@ state, effects applied to a copy only after every node succeeded. §7 (ranges), 
 | --- | --- | --- |
 | `tests/golden.rs` | every vector of `consensus-vectors/tir-v1/` | 134/134 primitive cases, 49/49 program steps and cones, 12/12 encoding cases; no error-class disagreement |
 | `tests/differential.rs` A | random single primitives, range extremes, exact halves, IntExp bucket edges, ties, perturbed output types | 1,000,000 cases (×25 run): 737,689 both ok and identical, 262,311 both fail, **0 disagreements**, classes identical |
+| A2 | maximal accumulations: `ReduceSum`/`MatMul` exactly at and one past each dtype's ends (contractions up to K = 2^17, totals that fit while a partial sum does not, `idx` outputs) | 19 cases, ref2 = text on all, first = ref2 on all |
 | B | random well-formed programs from ref2's own generator (histories of windows 1, 2, 3, 5, `history_bound`; attention with a `MatMul` contracting `H`; per-layer and global states and params) | 37,500 programs, 149,693 steps (72,196 both ok, 77,497 both fail), run states identical after every step, 1,690,652 court-env cones + 1,690,652 random-subset cones identical and equal to the step's value; **0 disagreements** |
 | B2 | as B with a global state written by pre and post | 7,500 programs, 29,774 steps, 342,013 cones; 0 disagreements (see F5) |
 | B3 | honest court envs with one perturbation each | table under F1–F4 |
 | C | random byte mutations of valid encodings | 398,269 cases, 0 disagreements on accept/reject; the 48,940 accepted by both re-encode to the input in both |
 | D | structural mutations of every field class, re-encoded; steps of mutants both accept | 225,000 decodes + 131,664 steps, 0 disagreements |
 | `tests/limits.rs` | every §4.4/§5 limit at and past its edge, UTF-8 edges | 98 + 8 cases and the 262,144/262,145-byte cap: ref2 = text on all, first = ref2 on all |
-| `tests/probes.rs` | the silent corners, one by one | evidence of F1–F8, F11 |
+| `tests/probes.rs` | the silent corners, one by one; the largest run-time `H` (window `history_bound` at pos `history_bound − 1`) | evidence of F1–F8, F11; the largest `H` agrees |
 | `tests/claims.rs` | the numeric statements of §6.5, exhaustively | all hold (see "Verified claims") |
 
 Run: `CARGO_TARGET_DIR=… cargo test --release -p misaka-palw-tir-ref2`; `TIR_REF2_CASES=25` scales the
