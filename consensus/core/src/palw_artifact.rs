@@ -575,6 +575,63 @@ pub fn verify_artifact_multiproof_v1(proof: &PalwArtifactMultiproofV1, registere
     }
 }
 
+/// **The siblings [`palw_artifact_multiproof_v1`] supplies for `indices`, without the leaves** — the
+/// builder's own walk over the indices alone: the count is a function of the tree's shape and the
+/// opened positions, never of a hash. What an admission price counts for a multiproof it has not built
+/// (RFC-0002 Phase F §2.12.1: an IR close carries its parameter openings as one multiproof).
+///
+/// `indices` ascending and distinct, each below `leaf_count`; `None` otherwise, or when either is
+/// empty. A run of consecutive leaves costs at most two siblings a level (its two boundary partners).
+pub fn palw_artifact_multiproof_sibling_count_v1(leaf_count: u32, indices: &[u32]) -> Option<u64> {
+    if leaf_count == 0 || indices.is_empty() || indices.windows(2).any(|w| w[0] >= w[1]) {
+        return None;
+    }
+    if *indices.last()? >= leaf_count {
+        return None;
+    }
+    let mut known: Vec<u64> = indices.iter().map(|index| *index as u64).collect();
+    let mut count = 0u64;
+    for width in level_widths_v1(leaf_count as u64) {
+        let mut next: Vec<u64> = Vec::with_capacity(known.len());
+        let mut i = 0;
+        while i < known.len() {
+            let index = known[i];
+            if index == width - 1 && width % 2 == 1 {
+                next.push(index / 2);
+                i += 1;
+                continue;
+            }
+            if known.get(i + 1).copied() == Some(index ^ 1) {
+                i += 2;
+            } else {
+                count += 1;
+                i += 1;
+            }
+            next.push(index / 2);
+        }
+        next.dedup();
+        known = next;
+    }
+    Some(count)
+}
+
+/// **The borsh bytes of one [`PalwArtifactOperandV1`]**: its name (a 4-byte length and the bytes),
+/// its layer (a 1-byte tag, and 2 bytes when present), its byte offset (4) and its bytes (a 4-byte
+/// length and the bytes).
+pub const fn palw_artifact_operand_borsh_len_v1(tensor_name_len: usize, layer_is_some: bool, bytes_len: usize) -> u64 {
+    (4 + tensor_name_len + if layer_is_some { 3 } else { 1 } + 4 + 4 + bytes_len) as u64
+}
+
+/// **The borsh bytes of a [`PalwArtifactMultiproofV1`]** whose opened operands have the borsh lengths
+/// `operand_lens` ([`palw_artifact_operand_borsh_len_v1`]) and which supplies `siblings` siblings
+/// ([`palw_artifact_multiproof_sibling_count_v1`]): `leaf_count` (4), the opened vector (a 4-byte
+/// length, and per entry its 4-byte index and its operand), the siblings vector (a 4-byte length and
+/// 64 bytes each — a `Hash64` is its 64 bytes).
+pub fn palw_artifact_multiproof_borsh_len_v1(operand_lens: impl IntoIterator<Item = u64>, siblings: u64) -> u64 {
+    let opened: u64 = operand_lens.into_iter().map(|len| 4 + len).sum();
+    4 + 4 + opened + 4 + 64 * siblings
+}
+
 pub fn verify_artifact_opening_v1(opening: &PalwArtifactOpeningV1, registered_root: Hash64) -> Result<(), PalwArtifactError> {
     if opening.leaf_count == 0 {
         return Err(PalwArtifactError::EmptyInventory(0));
@@ -1588,5 +1645,73 @@ mod inventory_tests {
         assert!(!layer_template_matches("blk.{layer}.w", "blk.7.other.w"), "a dot is not a digit");
         assert!(!layer_template_matches("blk.{layer}.w", "blk..w"), "an empty layer is not a layer");
         assert!(!layer_template_matches("blk.{layer}.w", "blk.7.x"));
+    }
+}
+
+#[cfg(test)]
+mod multiproof_size_tests {
+    use super::*;
+
+    fn operand(i: u32, len: usize, layer: Option<u16>) -> PalwArtifactOperandV1 {
+        PalwArtifactOperandV1 {
+            tensor_name: format!("blk.{}.attn_q.weight", i % 7),
+            layer,
+            row_start: i * 17,
+            bytes: (0..len).map(|b| (b as u32 ^ i) as u8).collect(),
+        }
+    }
+
+    /// Deterministic xorshift, so the subsets are reproducible.
+    fn next(x: &mut u64) -> u64 {
+        *x ^= *x << 13;
+        *x ^= *x >> 7;
+        *x ^= *x << 17;
+        *x
+    }
+
+    /// **The count and the borsh length are the builder's, byte for byte**: over leaf counts with odd
+    /// widths at every level, random subsets, contiguous runs, single leaves and the whole inventory.
+    #[test]
+    fn the_sibling_count_and_the_borsh_length_are_the_builders() {
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        for leaf_count in [1u32, 2, 3, 5, 7, 8, 9, 31, 33, 64, 100, 257, 1_000, 3_333] {
+            let operands: Vec<PalwArtifactOperandV1> =
+                (0..leaf_count).map(|i| operand(i, (i % 5) as usize * 3 + 1, if i % 3 == 0 { None } else { Some(i as u16) })).collect();
+            let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+            let mut subsets: Vec<Vec<u32>> = vec![vec![0], vec![leaf_count - 1], (0..leaf_count).collect()];
+            for _ in 0..12 {
+                let a = (next(&mut x) % leaf_count as u64) as u32;
+                let b = (a + 1 + (next(&mut x) % 40) as u32).min(leaf_count);
+                subsets.push((a..b).collect()); // a contiguous run
+                let mut random: Vec<u32> = (0..leaf_count).filter(|_| next(&mut x) % 7 == 0).collect();
+                if random.is_empty() {
+                    random.push((next(&mut x) % leaf_count as u64) as u32);
+                }
+                subsets.push(random);
+            }
+            for indices in subsets {
+                let opened: Vec<(u32, PalwArtifactOperandV1)> = indices.iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+                let proof = palw_artifact_multiproof_v1(&leaves, &opened).expect("a proof");
+                let count = palw_artifact_multiproof_sibling_count_v1(leaf_count, &indices).expect("a count");
+                assert_eq!(count, proof.siblings.len() as u64, "{leaf_count} leaves, {} opened", indices.len());
+                let lens = opened.iter().map(|(_, o)| palw_artifact_operand_borsh_len_v1(o.tensor_name.len(), o.layer.is_some(), o.bytes.len()));
+                assert_eq!(palw_artifact_multiproof_borsh_len_v1(lens, count), borsh::to_vec(&proof).unwrap().len() as u64);
+                verify_artifact_multiproof_v1(&proof, artifact_root_v1(&leaves).unwrap()).expect("verifies");
+                if indices.len() > 1 && indices.windows(2).all(|w| w[1] == w[0] + 1) {
+                    let depth = level_widths_v1(leaf_count as u64).len() as u64;
+                    assert!(count <= 2 * depth, "a run pays at most its two boundary paths: {count} > 2 x {depth}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_malformed_index_set_has_no_count() {
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(0, &[0]), None);
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(8, &[]), None);
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(8, &[3, 3]), None);
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(8, &[4, 3]), None);
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(8, &[8]), None);
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(1, &[0]), Some(0), "a one-leaf tree is its root");
     }
 }
