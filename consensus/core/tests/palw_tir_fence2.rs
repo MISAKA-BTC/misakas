@@ -101,3 +101,20 @@ fn it_is_refused_below_palw_tir_v1_and_with_its_mirror_unsynced() {
     stale.sync_palw_tir_fence2();
     assert_eq!(ids(&stale), ids(&palw_t12_shipped_params()), "re-synced it is the shipped ruleset");
 }
+
+/// **Admission v10 reads H7's `TopK` row from the fence's height** (`PalwTirAdmissionRulesV1::at`,
+/// and the fold's `palw_tir_demand_rules_at_v1` on the mirror): the release's row below it.
+#[test]
+fn admission_reads_h7_from_the_fence_and_the_release_below_it() {
+    use kaspa_consensus_core::palw_tir_admission_v1::PalwTirAdmissionRulesV1;
+    use kaspa_consensus_core::palw_tir_fence2_v1::{PalwTirDemandRulesV1, palw_tir_demand_rules_at_v1};
+    let p = armed(ForkActivation::new(AT));
+    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("V2") };
+    for (daa, want) in [(AT - 1, PalwTirDemandRulesV1::Release2000), (AT, PalwTirDemandRulesV1::H7), (AT + 9, PalwTirDemandRulesV1::H7)] {
+        assert_eq!(PalwTirAdmissionRulesV1::at(&p, daa).expect("past palw_tir_v1").demand, want, "{daa}");
+        assert_eq!(palw_tir_demand_rules_at_v1(&bundle.state, daa), want, "the fold's copy at {daa}");
+        assert_eq!(p.palw_tir_demand_rules_at(daa), want);
+    }
+    let shipped = palw_t12_shipped_params();
+    assert_eq!(PalwTirAdmissionRulesV1::at(&shipped, u64::MAX - 1).expect("past palw_tir_v1").demand, PalwTirDemandRulesV1::Release2000);
+}

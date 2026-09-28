@@ -389,16 +389,56 @@ fn leaf_of(cone: &[bool], r: Ref) -> Option<LeafV1> {
     }
 }
 
+/// **Which box-demand rules a sizing reads** (spec 04b §10.3): the DAA-2,000 release's, or those of
+/// testnet-12's second IR fence (`Params::palw_tir_fence2`), whose one change is ref2's H7 `TopK`
+/// row. A consensus parameter: admission v10 and the value bound `V` are asked under the
+/// registering block's rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TirDemandRulesV1 {
+    /// `⌈d / k⌉ · x.shape[axis]` for a `TopK` — the DAA-2,000 release's row.
+    #[default]
+    Release2000,
+    /// **ref2's H7**: the TopK rows a run of `d` consecutive demanded elements can touch — `min(R, d)`
+    /// along an axis that is not the innermost (consecutive indices lie in different rows),
+    /// `min(R, ⌈d / k⌉ + 1)` along the innermost (an unaligned run touches one row more), `R` the
+    /// rows — times `x.shape[axis]`.
+    H7,
+}
+
+impl TirDemandRulesV1 {
+    /// **The demand a `TopK` passes to its operand** when `d` of its output elements are demanded:
+    /// `in_shape` is the operand's shape at the sizing's `H`, `axis` the TopK's axis, `k` its count.
+    /// Capped at the operand's element count; H7 never counts less than the release's row.
+    pub fn topk_operand_demand(self, d: u64, k: u64, axis: usize, in_shape: &[u64]) -> u64 {
+        let elements = in_shape.iter().fold(1u64, |acc, x| acc.saturating_mul(*x));
+        let along = in_shape.get(axis).copied().unwrap_or(1).max(1);
+        let raw = match self {
+            Self::Release2000 => d.div_ceil(k.max(1)).saturating_mul(along),
+            Self::H7 => {
+                // A TopK row is one index of every axis but `axis`: `elements / along` of them.
+                let rows = elements / along;
+                let innermost = axis + 1 == in_shape.len();
+                let touched = if innermost { rows.min(d.div_ceil(k.max(1)).saturating_add(1)) } else { rows.min(d) };
+                touched.saturating_mul(along)
+            }
+        };
+        raw.min(elements)
+    }
+}
+
 /// The demand a node's operand receives when `d` of the node's output elements are demanded
-/// (spec 04b §10.3's box-demand rules). `e_in` is the operand's element count.
-fn operand_demand(p: &TirProgramV1, block: usize, node: usize, input: usize, d: u64, h: u64) -> u64 {
+/// (spec 04b §10.3's box-demand rules, under `rules`). `e_in` is the operand's element count.
+fn operand_demand(p: &TirProgramV1, block: usize, node: usize, input: usize, d: u64, h: u64, rules: TirDemandRulesV1) -> u64 {
     let n = &p.blocks[block].nodes[node];
     let t = ref_type(p, block, n.inputs[input]);
     let e_in = elems(&t, h);
     let raw = match &n.prim {
         Prim::MatMul => d.saturating_mul(contraction(p, block, node, h)),
         Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => d.saturating_mul(dim_at(t.shape[*axis as usize], h)),
-        Prim::TopK { axis, k } => d.div_ceil(*k as u64).saturating_mul(dim_at(t.shape[*axis as usize], h)),
+        Prim::TopK { axis, k } => {
+            let shape: Vec<u64> = t.shape.iter().map(|x| dim_at(*x, h)).collect();
+            rules.topk_operand_demand(d, *k as u64, *axis as usize, &shape)
+        }
         _ => d,
     };
     raw.min(e_in)
@@ -423,7 +463,15 @@ fn demanded_cost(p: &TirProgramV1, block: usize, node: usize, d: u64, ins: &[u64
 
 /// The box demand of one tile of `root` at `H = h`: `(cost, opened bytes, leaves with positive
 /// demand)`.
-fn tile_demand(p: &TirProgramV1, block: usize, root: usize, cone: &[u16], tile_len: u64, h: u64) -> (CostV1, u64, Vec<LeafV1>) {
+fn tile_demand(
+    p: &TirProgramV1,
+    block: usize,
+    root: usize,
+    cone: &[u16],
+    tile_len: u64,
+    h: u64,
+    rules: TirDemandRulesV1,
+) -> (CostV1, u64, Vec<LeafV1>) {
     let b = &p.blocks[block];
     let mut in_cone = vec![false; b.nodes.len()];
     for i in cone {
@@ -442,7 +490,7 @@ fn tile_demand(p: &TirProgramV1, block: usize, root: usize, cone: &[u16], tile_l
         let n = &b.nodes[i];
         let mut ins = Vec::with_capacity(n.inputs.len());
         for (k, r) in n.inputs.iter().enumerate() {
-            let delta = operand_demand(p, block, i, k, d, h);
+            let delta = operand_demand(p, block, i, k, d, h, rules);
             ins.push(delta);
             match leaf_of(&in_cone, *r) {
                 None => {
@@ -591,8 +639,18 @@ fn exceeds(limit: &'static str, at: impl Into<String>, value: u64, cap: u64) -> 
     if value > cap { Err(TirAdmitError::Exceeds { limit, at: at.into(), value, cap }) } else { Ok(()) }
 }
 
-/// **`tir_admit_v1`**: admit the canonical bytes of a program, or refuse them by rule and number.
+/// **`tir_admit_v1`**: admit the canonical bytes of a program, or refuse them by rule and number —
+/// under the DAA-2,000 release's box-demand rules ([`tir_admit_with_rules_v1`]).
 pub fn tir_admit_v1(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<TirAdmissionV1, TirAdmitError> {
+    tir_admit_with_rules_v1(program_bytes, inputs, TirDemandRulesV1::Release2000)
+}
+
+/// [`tir_admit_v1`] under the box-demand rules `rules` — the registering block's.
+pub fn tir_admit_with_rules_v1(
+    program_bytes: &[u8],
+    inputs: &TirAdmitInputsV1,
+    rules: TirDemandRulesV1,
+) -> Result<TirAdmissionV1, TirAdmitError> {
     if !(1..=1 << 16).contains(&inputs.tile_len) {
         return Err(TirAdmitError::Inputs("tile_len outside [1, 2^16]"));
     }
@@ -745,9 +803,9 @@ pub fn tir_admit_v1(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<T
             }
             leaves.sort_unstable();
             leaves.dedup();
-            let (tile, tile_opened_bytes, _) = tile_demand(&p, bi, ni, &nodes, tile_len, h);
-            let chunked =
-                (!h_reductions.is_empty()).then(|| tile_demand(&p, bi, ni, &nodes, tile_len, (inputs.h_chunk as u64).min(h)));
+            let (tile, tile_opened_bytes, _) = tile_demand(&p, bi, ni, &nodes, tile_len, h, rules);
+            let chunked = (!h_reductions.is_empty())
+                .then(|| tile_demand(&p, bi, ni, &nodes, tile_len, (inputs.h_chunk as u64).min(h), rules));
             let (chunk, chunk_opened_bytes) = match chunked {
                 Some((c, o, _)) => (Some(c), Some(o)),
                 None => (None, None),

@@ -32,45 +32,22 @@ pub const PALW_T12_TIR_FENCE2_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFence
     },
 };
 
-/// **Which box-demand rules a sizing reads** (spec 04b §10.3): the DAA-2,000 release's, or the
-/// second IR fence's (ref2's H7 `TopK` row). What admission v10 and the value bound `V` are asked
-/// under — the registering block's own rules.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PalwTirDemandRulesV1 {
-    /// `⌈d / k⌉ · x.shape[axis]` for a `TopK` — the rule of the DAA-2,000 release.
-    #[default]
-    Release2000,
-    /// ref2's H7: the TopK rows a run of `d` elements can touch, times `x.shape[axis]`.
-    H7,
-}
+/// **Which box-demand rules a sizing reads** (spec 04b §10.3) — the release's, or this fence's (ref2's
+/// H7 `TopK` row). Defined beside the rule it selects (`misaka_palw_tir::admit`); admission v10 and the
+/// value bound `V` are asked under the registering block's rules ([`palw_tir_demand_rules_at_v1`]).
+pub use misaka_palw_tir::admit::TirDemandRulesV1 as PalwTirDemandRulesV1;
 
-impl PalwTirDemandRulesV1 {
-    /// The rules in force at `daa_score` on `params` (the fold's copy of the fence).
-    pub fn at(params: &crate::palw_state_v2::PalwStateParamsV2, daa_score: u64) -> Self {
-        if params.tir_fence2_active_at(daa_score) { Self::H7 } else { Self::Release2000 }
-    }
-
-    /// **The demand a `TopK` passes to its operand** when `d` of its output elements are demanded
-    /// (spec 04b §10.3's row): `in_shape` is the operand's shape at the sizing's `H`, `axis` the
-    /// TopK's axis and `k` its count. Capped at the operand's element count.
-    pub fn topk_operand_demand(self, d: u64, k: u64, axis: usize, in_shape: &[u64]) -> u64 {
-        let elements = in_shape.iter().fold(1u64, |acc, x| acc.saturating_mul(*x));
-        let along = in_shape.get(axis).copied().unwrap_or(1).max(1);
-        let raw = match self {
-            Self::Release2000 => d.div_ceil(k.max(1)).saturating_mul(along),
-            Self::H7 => {
-                // A TopK row is one index of every axis but `axis`: `elements / along` of them.
-                let rows = elements / along;
-                let innermost = axis + 1 == in_shape.len();
-                let touched = if innermost { rows.min(d.div_ceil(k.max(1)).saturating_add(1)) } else { rows.min(d) };
-                touched.saturating_mul(along)
-            }
-        };
-        raw.min(elements)
-    }
+/// The box-demand rules in force at `daa_score` on the fold's copy of the fence.
+pub fn palw_tir_demand_rules_at_v1(params: &crate::palw_state_v2::PalwStateParamsV2, daa_score: u64) -> PalwTirDemandRulesV1 {
+    if params.tir_fence2_active_at(daa_score) { PalwTirDemandRulesV1::H7 } else { PalwTirDemandRulesV1::Release2000 }
 }
 
 impl Params {
+    /// The box-demand rules in force at `daa_score` on this ruleset.
+    pub fn palw_tir_demand_rules_at(&self, daa_score: u64) -> PalwTirDemandRulesV1 {
+        if self.palw_tir_fence2_active_at(daa_score) { PalwTirDemandRulesV1::H7 } else { PalwTirDemandRulesV1::Release2000 }
+    }
+
     /// `palw_tir_fence2`, resolved: `Some` only on a `ConsensusV2` network that armed it with a real
     /// height (a `never()` value is dormant).
     pub fn palw_tir_fence2_fence(&self) -> Option<ForkActivation> {
