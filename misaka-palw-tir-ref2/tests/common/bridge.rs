@@ -465,6 +465,33 @@ pub fn admit_mine(bytes: &[u8], inputs: &AdmitInputs) -> AdmitOutcome {
     }
 }
 
+/// This crate's admission under a given `TopK` row.
+pub fn admit_mine_rules(bytes: &[u8], inputs: &AdmitInputs, row: ref2::admit::TopkRow) -> AdmitOutcome {
+    match ref2::admit::admit_with_rules(bytes, inputs, row) {
+        Ok(a) => AdmitOutcome::Admitted(Box::new(view_mine(&a))),
+        Err(AdmitError::Program(e)) => AdmitOutcome::Program(e.class),
+        Err(AdmitError::Exceeds { limit, value, .. }) => AdmitOutcome::Exceeds(limit.to_string(), value),
+        Err(AdmitError::Inputs(_)) => AdmitOutcome::Inputs,
+    }
+}
+
+/// The first implementation's admission under `palw_tir_fence2`'s rules (`H7`) or the release's.
+pub fn admit_first_rules(bytes: &[u8], inputs: &AdmitInputs, h7: bool) -> AdmitOutcome {
+    let fi = inputs_to(inputs);
+    let rules = if h7 { first::admit::TirDemandRulesV1::H7 } else { first::admit::TirDemandRulesV1::Release2000 };
+    let r = catch(|| Ok(first::admit::tir_admit_with_rules_v1(bytes, &fi, rules)));
+    match r {
+        Outcome::Ok(Ok(a)) => AdmitOutcome::Admitted(Box::new(view_first(&a))),
+        Outcome::Ok(Err(first::admit::TirAdmitError::Program(e))) => AdmitOutcome::Program(class_from(e.kind)),
+        Outcome::Ok(Err(first::admit::TirAdmitError::Exceeds { limit, value, .. })) => {
+            AdmitOutcome::Exceeds(limit_name(limit).to_string(), value)
+        }
+        Outcome::Ok(Err(first::admit::TirAdmitError::Inputs(_))) => AdmitOutcome::Inputs,
+        Outcome::Err(c) => AdmitOutcome::Program(c),
+        Outcome::Panic(s) => AdmitOutcome::Panic(s),
+    }
+}
+
 pub fn admit_first(bytes: &[u8], inputs: &AdmitInputs) -> AdmitOutcome {
     let fi = inputs_to(inputs);
     let r = catch(|| Ok(first::admit::tir_admit_v1(bytes, &fi)));

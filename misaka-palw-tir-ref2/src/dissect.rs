@@ -512,6 +512,11 @@ pub fn obligations(p: &Program, b: usize, n: u16) -> Vec<Obligation> {
 /// §9.5.6 O-5's `V`: the box demand at `H = 1` arriving at the cone's reductions over `H`, from the
 /// tile's `tile_len` elements.
 pub fn value_bound(p: &Program, b: usize, n: u16, tile_len: u64) -> u64 {
+    value_bound_with(p, b, n, tile_len, crate::admit::TopkRow::Release)
+}
+
+/// [`value_bound`] under a given `TopK` row (`Fence2`: past `palw_tir_fence2`, ref2's H7).
+pub fn value_bound_with(p: &Program, b: usize, n: u16, tile_len: u64, row: crate::admit::TopkRow) -> u64 {
     let block = &p.blocks[b];
     let (nodes, _) = cone(p, b, n as usize);
     let in_cone: BTreeSet<u16> = nodes.iter().copied().collect();
@@ -536,7 +541,7 @@ pub fn value_bound(p: &Program, b: usize, n: u16, tile_len: u64) -> u64 {
                     di.saturating_mul(*a.extents(1).last().unwrap())
                 }
                 Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => di.saturating_mul(x.extents(1)[axis as usize]),
-                Prim::TopK { axis, k: kk } => di.div_ceil(kk as u64).saturating_mul(x.extents(1)[axis as usize]),
+                Prim::TopK { axis, k: kk } => crate::admit::topk_demand(row, di, kk as u64, axis as usize, &x.extents(1)),
                 _ => di,
             };
             let v = d.entry(k).or_insert(0);

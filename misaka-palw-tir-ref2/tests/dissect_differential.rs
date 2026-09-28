@@ -1011,6 +1011,13 @@ fn cone_functions() {
                 if !mine_r.is_empty() {
                     for tile_len in [1u32, 3, 64] {
                         let mv = value_bound(&prog, b, n16, tile_len as u64);
+                        let mv7 = ref2::dissect::value_bound_with(&prog, b, n16, tile_len as u64, ref2::admit::TopkRow::Fence2);
+                        let fv7 = catch_any(|| {
+                            cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v2(&fp, fb, n16, tile_len, cc::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7)
+                        });
+                        if Ok(mv7) != fv7 {
+                            t.disagree("value bound (H7 rules)", format!("{name} b{b} n{n} tile_len {tile_len}: ref2 {mv7} first {fv7:?}"));
+                        }
                         let fv = catch_any(|| cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, fb, n16, tile_len));
                         if Ok(mv) != fv {
                             // Finding H2: the first implementation's V falls below the text's formula
@@ -1191,6 +1198,7 @@ fn investigate_value_bound() {
 fn value_bound_against_closures() {
     let mut rows = Vec::new();
     let mut h7 = Vec::new();
+    let mut h7_fixed = 0usize;
     let mut checked_v = 0usize;
     for seed in 0..(300 * scale() as u64) {
         let mut rng = R::seed_from_u64(0xC0FE_0000 + seed);
@@ -1205,9 +1213,17 @@ fn value_bound_against_closures() {
                 if !node.commit || ref2::dissect::cone_reductions(p, b, n as u16).is_empty() {
                     continue;
                 }
-                for tl in [1u64, 3, 64] {
+                for tl in [1u64, 3, 4, 64] {
                     let mv = value_bound(p, b, n as u16, tl);
                     let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, &fp.blocks[b], n as u16, tl as u32);
+                    let mv7 = ref2::dissect::value_bound_with(p, b, n as u16, tl, ref2::admit::TopkRow::Fence2);
+                    let fv7 = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v2(
+                        &fp,
+                        &fp.blocks[b],
+                        n as u16,
+                        tl as u32,
+                        cc::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7,
+                    );
                     checked_v += 1;
                     // The real closures: every tile of this commit point at the last position of a run.
                     let occs = occurrences(p);
@@ -1233,6 +1249,14 @@ fn value_bound_against_closures() {
                         }
                         start += tl;
                     }
+                    if mv7 != fv7 {
+                        rows.push(format!("H7 rules: seed {seed} b{b} n{n} tile_len {tl}: ref2 V {mv7}, first V {fv7}, the largest real closure {worst}"));
+                    } else if (mv7 as usize) < worst {
+                        rows.push(format!("H7 rules: seed {seed} b{b} n{n} tile_len {tl}: V {mv7} (both) below the largest real closure {worst}"));
+                    }
+                    if (mv as usize) < worst {
+                        h7_fixed += usize::from((mv7 as usize) >= worst);
+                    }
                     if mv != fv {
                         rows.push(format!("seed {seed} b{b} n{n} tile_len {tl}: ref2 V {mv}, first V {fv}, the largest real closure {worst}"));
                     } else if (mv as usize) < worst {
@@ -1245,7 +1269,7 @@ fn value_bound_against_closures() {
         }
     }
     println!(
-        "value bound against the real closures: {checked_v} (commit point, tile_len) pairs; V differs between the implementations in {}; V (equal in both) below a real closure in {} (H7)",
+        "value bound against the real closures: {checked_v} (commit point, tile_len) pairs; disagreements (either rule) or an H7-rule V below a closure: {}; release-rule V (equal in both) below a real closure: {} (H7), of which the H7 rule covers {h7_fixed}",
         rows.len(),
         h7.len()
     );
