@@ -59,7 +59,8 @@ impl Tally {
                 } else {
                     *self.class_diff.entry((*x, *y)).or_default() += 1;
                     let ex = self.class_examples.entry((*x, *y)).or_default();
-                    if ex.len() < 4 {
+                    let cap = std::env::var("TIR_REF2_CLASS_EXAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+                    if ex.len() < cap {
                         ex.push(what.chars().take(160).collect());
                     }
                 }
@@ -171,7 +172,10 @@ fn bshape(a: &[u64], b: &[u64]) -> Option<Vec<u64>> {
 
 /// Divisor/dividend pairs around exact halves.
 fn half_case(rng: &mut R, dt_x: DType, dt_d: DType) -> (i128, i128) {
-    let d = pick(rng, &[1i128, 2, 3, 4, 5, 7, 8, 16, 1 << 24, 1 << 31, (1 << 31) - 1, 1 << 62, i64::MAX as i128, i128::MAX, u32::MAX as i128]);
+    let d = pick(
+        rng,
+        &[1i128, 2, 3, 4, 5, 7, 8, 16, 1 << 24, 1 << 31, (1 << 31) - 1, 1 << 62, i64::MAX as i128, i128::MAX, u32::MAX as i128],
+    );
     let d = d.clamp(1, dt_d.max());
     let any: i128 = rng.gen_range(-1000..1000);
     let q: i128 = pick(rng, &[0i128, 1, 2, 3, 100, -1, -2, -3, -100, any]);
@@ -191,7 +195,7 @@ fn prim_case(rng: &mut R) -> (Prim, Vec<Tensor>, DType, Vec<u64>) {
             let mut out = Vec::new();
             let mut rem = n;
             while rem > 1 && out.len() < 3 {
-                let divs: Vec<u64> = (1..=rem).filter(|d| rem % d == 0).collect();
+                let divs: Vec<u64> = (1..=rem).filter(|d| rem.is_multiple_of(*d)).collect();
                 let d = pick(rng, &divs);
                 out.push(d);
                 rem /= d;
@@ -276,12 +280,21 @@ fn prim_case(rng: &mut R) -> (Prim, Vec<Tensor>, DType, Vec<u64>) {
             let idt = pick(rng, &[DType::Idx, DType::I8, DType::I16, DType::I32, DType::I64, DType::I128]);
             let n: u64 = is.iter().product();
             let ext = ds[a] as i128;
-            let iv: Vec<i128> =
-                (0..n).map(|_| if rng.gen_bool(0.9) { rng.gen_range(0..ext) } else { pick(rng, &[-1, ext, i128::MIN, idt.max()]) }.clamp(idt.min(), idt.max())).collect();
+            let iv: Vec<i128> = (0..n)
+                .map(|_| {
+                    if rng.gen_bool(0.9) { rng.gen_range(0..ext) } else { pick(rng, &[-1, ext, i128::MIN, idt.max()]) }
+                        .clamp(idt.min(), idt.max())
+                })
+                .collect();
             let mut out = ds[..a].to_vec();
             out.extend_from_slice(&is[b..]);
             out.extend_from_slice(&ds[a + 1..]);
-            (Prim::Gather { axis: a as u8, batch_dims: b as u8 }, vec![rand_t(rng, dt, &ds), Tensor::new(idt, is, iv).unwrap()], dt, out)
+            (
+                Prim::Gather { axis: a as u8, batch_dims: b as u8 },
+                vec![rand_t(rng, dt, &ds), Tensor::new(idt, is, iv).unwrap()],
+                dt,
+                out,
+            )
         }
         7 => {
             let s = rand_shape(rng, 3);
@@ -363,7 +376,11 @@ fn prim_case(rng: &mut R) -> (Prim, Vec<Tensor>, DType, Vec<u64>) {
         16..=19 => {
             let s = rand_shape(rng, 3);
             let prim = [Prim::Log2Floor, Prim::IntExp, Prim::IntRsqrt, Prim::IntLn][k - 16].clone();
-            let xd = if k == 16 { any_dt(rng) } else { pick(rng, &[DType::I8, DType::I16, DType::I32, DType::I64, DType::Idx, DType::I64]) };
+            let xd = if k == 16 {
+                any_dt(rng)
+            } else {
+                pick(rng, &[DType::I8, DType::I16, DType::I32, DType::I64, DType::Idx, DType::I64])
+            };
             let x = if k == 17 {
                 // IntExp's range-reduction bucket edges and the saturation threshold.
                 let n: u64 = s.iter().product();
@@ -372,7 +389,8 @@ fn prim_case(rng: &mut R) -> (Prim, Vec<Tensor>, DType, Vec<u64>) {
                     .map(|_| {
                         let z = rng.gen_range(0..=32i128);
                         let any = rand_value(rng, xd, 1);
-                        (pick(rng, &[-z * ln2, -z * ln2 + 1, -z * ln2 - 1, -31 * ln2, -31 * ln2 + 1, 0, 1, any])).clamp(xd.min(), xd.max())
+                        (pick(rng, &[-z * ln2, -z * ln2 + 1, -z * ln2 - 1, -31 * ln2, -31 * ln2 + 1, 0, 1, any]))
+                            .clamp(xd.min(), xd.max())
                     })
                     .collect();
                 Tensor::new(xd, s.clone(), v).unwrap()
@@ -407,7 +425,21 @@ fn prim_case(rng: &mut R) -> (Prim, Vec<Tensor>, DType, Vec<u64>) {
             out[a] = kk;
             // Ties: small value ranges.
             let n: u64 = s.iter().product();
-            let x = Tensor::new(dt, s.clone(), (0..n).map(|_| if rng.gen_bool(0.7) { rng.gen_range(-2..=2i128).clamp(dt.min(), dt.max()) } else { rand_value(rng, dt, 2) }).collect()).unwrap();
+            let x =
+                Tensor::new(
+                    dt,
+                    s.clone(),
+                    (0..n)
+                        .map(|_| {
+                            if rng.gen_bool(0.7) {
+                                rng.gen_range(-2..=2i128).clamp(dt.min(), dt.max())
+                            } else {
+                                rand_value(rng, dt, 2)
+                            }
+                        })
+                        .collect(),
+                )
+                .unwrap();
             (Prim::TopK { axis: a as u8, k: kk as u32 }, vec![x], DType::Idx, out)
         }
     };
@@ -440,7 +472,12 @@ fn a_primitive_differential() {
         if a.is_ok() {
             e.1 += 1;
         }
-        let what = format!("case {i} {prim:?} ins {:?} out {} {:?}", ins.iter().map(|x| (x.dtype.name(), x.shape.clone(), x.data.clone())).collect::<Vec<_>>(), od.name(), os);
+        let what = format!(
+            "case {i} {prim:?} ins {:?} out {} {:?}",
+            ins.iter().map(|x| (x.dtype.name(), x.shape.clone(), x.data.clone())).collect::<Vec<_>>(),
+            od.name(),
+            os
+        );
         t.record(&what, &a, &f);
     }
     t.report("A. primitives");
@@ -503,18 +540,25 @@ fn features(p: &Program) -> Vec<String> {
             }
             match &n.prim {
                 Prim::MatMul if ins.len() == 2 && ins[0].shape.last() == Some(&Dim::H) => f.push("MatMul contracting H".into()),
-                Prim::ReduceSum { axis } | Prim::ReduceMax { axis } if ins.first().is_some_and(|t| t.shape.get(*axis as usize) == Some(&Dim::H)) => {
+                Prim::ReduceSum { axis } | Prim::ReduceMax { axis }
+                    if ins.first().is_some_and(|t| t.shape.get(*axis as usize) == Some(&Dim::H)) =>
+                {
                     f.push(format!("{} along H", n.prim.name()))
                 }
                 Prim::Gather { batch_dims, .. } if *batch_dims > 0 => f.push("Gather batch_dims > 0".into()),
                 Prim::HistAppend { state } => {
                     let s = &p.states[*state as usize];
                     if let StateKind::Hist { window } = s.kind {
-                        f.push(format!("HistAppend window {}", if window >= 1 << 18 { "history_bound".to_string() } else { window.to_string() }));
+                        f.push(format!(
+                            "HistAppend window {}",
+                            if window >= 1 << 18 { "history_bound".to_string() } else { window.to_string() }
+                        ));
                     }
                     f.push(format!("HistAppend {}", if s.per_layer { "per-layer" } else { "global" }));
                 }
-                Prim::StateWrite { state } => f.push(format!("StateWrite {}", if p.states[*state as usize].per_layer { "per-layer" } else { "global" })),
+                Prim::StateWrite { state } => {
+                    f.push(format!("StateWrite {}", if p.states[*state as usize].per_layer { "per-layer" } else { "global" }))
+                }
                 _ => {}
             }
             for r in &n.inputs {
@@ -533,7 +577,11 @@ fn features(p: &Program) -> Vec<String> {
         .iter()
         .filter_map(|n| if let Prim::StateWrite { state } = n.prim { Some(state) } else { None })
         .collect();
-    if p.blocks[p.schedule.post as usize].nodes.iter().any(|n| matches!(n.prim, Prim::StateWrite { state } if globals_written.contains(&state))) {
+    if p.blocks[p.schedule.post as usize]
+        .nodes
+        .iter()
+        .any(|n| matches!(n.prim, Prim::StateWrite { state } if globals_written.contains(&state)))
+    {
         f.push("a global state written by pre and post".into());
     }
     if p.schedule.layers.len() > p.schedule.layers.iter().collect::<std::collections::BTreeSet<_>>().len() {
@@ -588,7 +636,10 @@ fn run_program_case(seed: u64, cfg: GenCfg, st: &mut ProgStats) {
         };
         let traced = step_traced(p, &g.params, &mst, token);
         let a: Outcome<(Tensor, Commits)> = match &traced {
-            Ok((o, _, _)) => Outcome::Ok((o.logits.clone(), o.commits.iter().map(|c| (c.slot, c.block, c.layer, c.node, c.value.clone())).collect())),
+            Ok((o, _, _)) => Outcome::Ok((
+                o.logits.clone(),
+                o.commits.iter().map(|c| (c.slot, c.block, c.layer, c.node, c.value.clone())).collect(),
+            )),
             Err(e) => Outcome::Err(e.class),
         };
         let before = fst.clone();
@@ -643,10 +694,10 @@ fn cones_for_step(
         let mut env = ConeEnv { token, pos: st.pos, carry_in: occ.carry_in.clone(), ..Default::default() };
         for n in &block.nodes {
             for r in &n.inputs {
-                if let Ref::State(j) = *r {
-                    if let Some(v) = st.fixed.get(&(j, inst(j))) {
-                        env.fixed.insert(j, v.clone());
-                    }
+                if let Ref::State(j) = *r
+                    && let Some(v) = st.fixed.get(&(j, inst(j)))
+                {
+                    env.fixed.insert(j, v.clone());
                 }
             }
             if let Prim::HistAppend { state } = n.prim {
@@ -684,10 +735,10 @@ fn cones_for_step(
             let a = mine(eval_cone(p, params, occ.block, occ.layer, target, &e));
             let f = first_cone(fp, fparams, occ.block, occ.layer, target, &env_to(&e, true));
             stats.cones_subset.record(&format!("{what} (random supplied subset)"), &a, &f);
-            if let Outcome::Ok(v) = &a {
-                if *v != occ.values[target as usize] {
-                    stats.cone_mismatch_step.push(format!("{what}: ref2 subset cone differs from the step"));
-                }
+            if let Outcome::Ok(v) = &a
+                && *v != occ.values[target as usize]
+            {
+                stats.cone_mismatch_step.push(format!("{what}: ref2 subset cone differs from the step"));
             }
         }
     }
@@ -700,7 +751,10 @@ fn b_program_differential() {
     for seed in 0..n {
         run_program_case(seed, GenCfg::default(), &mut st);
     }
-    println!("B. {} random programs ({} with histories, {} successful steps of those)", st.programs, st.h_programs, st.ok_steps_with_h);
+    println!(
+        "B. {} random programs ({} with histories, {} successful steps of those)",
+        st.programs, st.h_programs, st.ok_steps_with_h
+    );
     st.decode.report("B. decode");
     st.steps.report("B. steps");
     st.states.report("B. run states after each step");
@@ -832,7 +886,12 @@ fn mutate(rng: &mut R, p: &mut Program) -> String {
     let nn = p.blocks[b].nodes.len();
     let i = rng.gen_range(0..nn);
     let k = rng.gen_range(0..40);
-    let dim = |rng: &mut R| pick(rng, &[Dim::Fixed(0), Dim::Fixed(1), Dim::Fixed(2), Dim::Fixed(3), Dim::Fixed(1 << 24), Dim::Fixed((1 << 24) + 1), Dim::H]);
+    let dim = |rng: &mut R| {
+        pick(
+            rng,
+            &[Dim::Fixed(0), Dim::Fixed(1), Dim::Fixed(2), Dim::Fixed(3), Dim::Fixed(1 << 24), Dim::Fixed((1 << 24) + 1), Dim::H],
+        )
+    };
     match k {
         0 => p.version = pick(rng, &[0u16, 2, u16::MAX]),
         1 => p.history_bound = pick(rng, &[0u32, 1, 1 << 17, (1 << 18) + 1, 1 << 20, 1 << 22, u32::MAX]),
@@ -904,7 +963,9 @@ fn mutate(rng: &mut R, p: &mut Program) -> String {
             if !p.states.is_empty() {
                 let j = rng.gen_range(0..p.states.len());
                 p.states[j].kind = match p.states[j].kind {
-                    StateKind::Fixed { .. } => StateKind::Fixed { lo: pick(rng, &[1, -200, 0]), hi: pick(rng, &[-1, 200, 0, 1 << 40]) },
+                    StateKind::Fixed { .. } => {
+                        StateKind::Fixed { lo: pick(rng, &[1, -200, 0]), hi: pick(rng, &[-1, 200, 0, 1 << 40]) }
+                    }
                     StateKind::Hist { .. } => StateKind::Hist { window: pick(rng, &[0, 1, 2, 7, 1 << 18, (1 << 18) + 1, 1 << 21]) },
                 };
             }
@@ -955,7 +1016,12 @@ fn mutate(rng: &mut R, p: &mut Program) -> String {
         }
         29 => {
             // An extra dead node.
-            p.blocks[b].nodes.push(ref2::Node { prim: Prim::Iota { axis: 0, start: 0, step: 1 }, inputs: vec![], out: TensorType::fixed(DType::I32, &[2]), commit: false });
+            p.blocks[b].nodes.push(ref2::Node {
+                prim: Prim::Iota { axis: 0, start: 0, step: 1 },
+                inputs: vec![],
+                out: TensorType::fixed(DType::I32, &[2]),
+                commit: false,
+            });
         }
         30 => {
             // Change an attribute.
@@ -973,7 +1039,9 @@ fn mutate(rng: &mut R, p: &mut Program) -> String {
                     let v = pick(rng, &[start.wrapping_add(1), u32::MAX, 0]);
                     *start = v;
                 }
-                Prim::Concat { ref mut axis } | Prim::ReduceSum { ref mut axis } | Prim::ReduceMax { ref mut axis } => *axis = axis.wrapping_add(1),
+                Prim::Concat { ref mut axis } | Prim::ReduceSum { ref mut axis } | Prim::ReduceMax { ref mut axis } => {
+                    *axis = axis.wrapping_add(1)
+                }
                 Prim::Iota { ref mut axis, ref mut step, .. } => {
                     *axis = axis.wrapping_add(rng.gen_range(0..2));
                     *step = step.wrapping_mul(3);
@@ -1005,7 +1073,9 @@ fn mutate(rng: &mut R, p: &mut Program) -> String {
         }
         32 => {
             // Duplicate a StateWrite/HistAppend.
-            if let Some(n) = p.blocks[b].nodes.iter().find(|n| matches!(n.prim, Prim::StateWrite { .. } | Prim::HistAppend { .. })).cloned() {
+            if let Some(n) =
+                p.blocks[b].nodes.iter().find(|n| matches!(n.prim, Prim::StateWrite { .. } | Prim::HistAppend { .. })).cloned()
+            {
                 p.blocks[b].nodes.push(n);
             }
         }
@@ -1109,10 +1179,10 @@ fn closure(p: &Program, b: usize, target: u16, supplied: &BTreeMap<u16, Tensor>)
     for i in (0..=target as usize).rev() {
         if todo[i] {
             for r in &nodes[i].inputs {
-                if let Ref::Node(k) = *r {
-                    if !supplied.contains_key(&k) {
-                        todo[k as usize] = true;
-                    }
+                if let Ref::Node(k) = *r
+                    && !supplied.contains_key(&k)
+                {
+                    todo[k as usize] = true;
                 }
             }
         }
@@ -1161,10 +1231,10 @@ fn b3_hostile_cone_envs() {
                 let mut env = ConeEnv { token, pos: st.pos, carry_in: occ.carry_in.clone(), ..Default::default() };
                 for nd in &block.nodes {
                     for r in &nd.inputs {
-                        if let Ref::State(j) = *r {
-                            if let Some(v) = st.fixed.get(&(j, inst(j))) {
-                                env.fixed.insert(j, v.clone());
-                            }
+                        if let Ref::State(j) = *r
+                            && let Some(v) = st.fixed.get(&(j, inst(j)))
+                        {
+                            env.fixed.insert(j, v.clone());
                         }
                     }
                     if let Prim::HistAppend { state } = nd.prim {
@@ -1177,10 +1247,29 @@ fn b3_hostile_cone_envs() {
                     }
                 }
                 let todo = closure(p, b, target, &env.supplied);
-                let needed_carry: Vec<u8> = block.nodes.iter().enumerate().filter(|(i, _)| todo[*i]).flat_map(|(_, nd)| nd.inputs.iter().filter_map(|r| if let Ref::CarryIn(k) = r { Some(*k) } else { None })).collect();
-                let needed_fixed: Vec<u16> = block.nodes.iter().enumerate().filter(|(i, _)| todo[*i]).flat_map(|(_, nd)| nd.inputs.iter().filter_map(|r| if let Ref::State(j) = r { Some(*j) } else { None })).collect();
-                let needed_hist: Vec<u16> = block.nodes.iter().enumerate().filter(|(i, _)| todo[*i]).filter_map(|(_, nd)| if let Prim::HistAppend { state } = nd.prim { Some(state) } else { None }).collect();
-                let outside: Vec<u16> = (0..block.nodes.len() as u16).filter(|&i| !todo[i as usize] && !env.supplied.contains_key(&i)).collect();
+                let needed_carry: Vec<u8> = block
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| todo[*i])
+                    .flat_map(|(_, nd)| nd.inputs.iter().filter_map(|r| if let Ref::CarryIn(k) = r { Some(*k) } else { None }))
+                    .collect();
+                let needed_fixed: Vec<u16> = block
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| todo[*i])
+                    .flat_map(|(_, nd)| nd.inputs.iter().filter_map(|r| if let Ref::State(j) = r { Some(*j) } else { None }))
+                    .collect();
+                let needed_hist: Vec<u16> = block
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| todo[*i])
+                    .filter_map(|(_, nd)| if let Prim::HistAppend { state } = nd.prim { Some(state) } else { None })
+                    .collect();
+                let outside: Vec<u16> =
+                    (0..block.nodes.len() as u16).filter(|&i| !todo[i as usize] && !env.supplied.contains_key(&i)).collect();
                 let inside: Vec<u16> = (0..target).filter(|&i| todo[i as usize]).collect();
                 let mut k = rng.gen_range(0..KINDS.len() - 1);
                 if k == 2 {
@@ -1215,18 +1304,21 @@ fn b3_hostile_cone_envs() {
                         e.pos = p.history_bound as u64;
                         true
                     }
-                    7 => needed_hist.first().map(|j| e.hist_prior.get_mut(j).unwrap().push(occ.values[0].clone())).is_some() && !needed_hist.is_empty(),
+                    7 => {
+                        needed_hist.first().map(|j| e.hist_prior.get_mut(j).unwrap().push(occ.values[0].clone())).is_some()
+                            && !needed_hist.is_empty()
+                    }
                     8 => outside.first().map(|&i| e.supplied.insert(i, wrong.clone())).is_some(),
                     _ => {
                         let mut done = false;
-                        if let Some(&j) = needed_fixed.first() {
-                            if let StateKind::Fixed { hi, .. } = p.states[j as usize].kind {
-                                let d = p.states[j as usize].dtype;
-                                if (hi as i128) < d.max() {
-                                    let v = e.fixed.get_mut(&j).unwrap();
-                                    v.data[0] = hi as i128 + 1;
-                                    done = true;
-                                }
+                        if let Some(&j) = needed_fixed.first()
+                            && let StateKind::Fixed { hi, .. } = p.states[j as usize].kind
+                        {
+                            let d = p.states[j as usize].dtype;
+                            if (hi as i128) < d.max() {
+                                let v = e.fixed.get_mut(&j).unwrap();
+                                v.data[0] = hi as i128 + 1;
+                                done = true;
                             }
                         }
                         done
@@ -1246,7 +1338,11 @@ fn b3_hostile_cone_envs() {
                         } else {
                             slot.3 += 1;
                             if examples[k].len() < 2 {
-                                examples[k].push(format!("seed {seed}: both ok, values differ: ref2 {} / first {}", brief(&a), brief(&f)));
+                                examples[k].push(format!(
+                                    "seed {seed}: both ok, values differ: ref2 {} / first {}",
+                                    brief(&a),
+                                    brief(&f)
+                                ));
                             }
                         }
                     }
@@ -1269,7 +1365,10 @@ fn b3_hostile_cone_envs() {
         }
     }
     println!("B3. hostile cone environments (each an honest court env with one perturbation):");
-    println!("    {:52} {:18} {:>6} {:>8} {:>8} {:>10} {:>10}", "perturbation", "04b says", "cases", "both ok", "both err", "ref2 ok", "first ok");
+    println!(
+        "    {:52} {:18} {:>6} {:>8} {:>8} {:>10} {:>10}",
+        "perturbation", "04b says", "cases", "both ok", "both err", "ref2 ok", "first ok"
+    );
     for (i, (name, says)) in KINDS.iter().enumerate() {
         let (c, ok, er, a_only, f_only) = per[i];
         println!("    {:52} {:18} {:>6} {:>8} {:>8} {:>10} {:>10}", name, says, c, ok, er, a_only, f_only);

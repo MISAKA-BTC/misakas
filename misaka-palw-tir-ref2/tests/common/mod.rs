@@ -23,7 +23,7 @@ pub fn read_json(path: &std::path::Path) -> Value {
 }
 
 pub fn hex_decode(s: &str) -> Vec<u8> {
-    assert!(s.len() % 2 == 0, "odd hex length");
+    assert!(s.len().is_multiple_of(2), "odd hex length");
     let nib = |c: u8| -> u8 {
         match c {
             b'0'..=b'9' => c - b'0',

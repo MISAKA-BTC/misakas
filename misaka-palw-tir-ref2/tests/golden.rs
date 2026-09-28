@@ -22,7 +22,9 @@ fn attrs_of(p: &Prim) -> Vec<(String, String)> {
         Prim::Transpose { perm } => vec![s("perm", format!("{:?}", perm))],
         Prim::Slice { axis, start } => vec![s("axis", axis.to_string()), s("start", start.to_string())],
         Prim::Concat { axis } | Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => vec![s("axis", axis.to_string())],
-        Prim::Iota { axis, start, step } => vec![s("axis", axis.to_string()), s("start", start.to_string()), s("step", step.to_string())],
+        Prim::Iota { axis, start, step } => {
+            vec![s("axis", axis.to_string()), s("start", start.to_string()), s("step", step.to_string())]
+        }
         Prim::Gather { axis, batch_dims } => vec![s("axis", axis.to_string()), s("batch_dims", batch_dims.to_string())],
         Prim::Div { rule } => vec![s(
             "rule",
@@ -137,8 +139,9 @@ fn params_of(prog: &misaka_palw_tir_ref2::Program, v: &Value) -> Params {
         let j = int_of(&e["param"]) as u16;
         let layer = if e["layer"].is_null() { None } else { Some(int_of(&e["layer"]) as u32) };
         let d = &prog.params[j as usize];
-        let t = Tensor::from_le_bytes(d.dtype, d.shape.iter().map(|&x| x as u64).collect(), &hex_decode(e["le_hex"].as_str().unwrap()))
-            .expect("param bytes");
+        let t =
+            Tensor::from_le_bytes(d.dtype, d.shape.iter().map(|&x| x as u64).collect(), &hex_decode(e["le_hex"].as_str().unwrap()))
+                .expect("param bytes");
         params.insert((j, layer), t);
     }
     params

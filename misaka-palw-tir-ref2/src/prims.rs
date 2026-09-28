@@ -64,7 +64,7 @@ impl OrderFree {
     }
     fn push(&mut self, t: Wide) {
         let slot = if t.is_negative() { &mut self.n } else { &mut self.p };
-        match slot.add(t) {
+        match slot.checked_add(t) {
             Some(s) => *slot = s,
             None => self.overflow = true,
         }
@@ -81,7 +81,7 @@ impl OrderFree {
         if self.p.cmp_wide(&hi) == Ordering::Greater {
             return err(Class::Overflow, format!("positive terms sum above max({})", dt.name()));
         }
-        fit(self.p.add(self.n).unwrap_or(Wide::ZERO), dt)
+        fit(self.p.checked_add(self.n).unwrap_or(Wide::ZERO), dt)
     }
 }
 
@@ -93,13 +93,13 @@ pub fn divide(x: i128, d: i128, rule: Rounding) -> Wide {
             let (q, r) = floor_divmod(x, d);
             let bump = 2 * (r as u128) >= d as u128;
             let q = Wide::from_i128(q);
-            if bump { q.add(Wide::from_i128(1)).unwrap_or(q) } else { q }
+            if bump { q.checked_add(Wide::from_i128(1)).unwrap_or(q) } else { q }
         }
         Rounding::HalfAwayFromZero => {
             let m = x.unsigned_abs();
             let du = d as u128;
             let (q, r) = (m / du, m % du);
-            let q = Wide::from_u128(q).add(Wide::from_i128(if 2 * r >= du { 1 } else { 0 })).unwrap_or(Wide::ZERO);
+            let q = Wide::from_u128(q).checked_add(Wide::from_i128(if 2 * r >= du { 1 } else { 0 })).unwrap_or(Wide::ZERO);
             if x < 0 { q.negate() } else { q }
         }
     }
@@ -117,13 +117,7 @@ fn cmp_holds(c: Cmp, a: i128, b: i128) -> bool {
 }
 
 /// An elementwise primitive over operands broadcast to `out_shape`.
-fn elementwise(
-    prim: &Prim,
-    ins: &[&Tensor],
-    out_dtype: DType,
-    out_shape: &[u64],
-    f: impl Fn(&[i128]) -> Res<i128>,
-) -> Res<Tensor> {
+fn elementwise(prim: &Prim, ins: &[&Tensor], out_dtype: DType, out_shape: &[u64], f: impl Fn(&[i128]) -> Res<i128>) -> Res<Tensor> {
     for t in ins {
         if !broadcasts_to(&t.shape, out_shape) {
             return shape_err(prim, "operand does not broadcast to out");
@@ -253,7 +247,7 @@ pub fn eval_prim(
             let mut data = Vec::with_capacity(n_out);
             for lin in 0..n_out as u64 {
                 unravel(lin, out_shape, &mut o);
-                let v = Wide::from_i128(*start as i128).add(Wide::mul_i128(*step as i128, o[a] as i128)).unwrap_or(Wide::ZERO);
+                let v = Wide::from_i128(*start as i128).checked_add(Wide::mul_i128(*step as i128, o[a] as i128)).unwrap_or(Wide::ZERO);
                 data.push(fit(v, out_dtype)?);
             }
             Ok(Tensor { dtype: out_dtype, shape: out_shape.to_vec(), data })
@@ -304,10 +298,10 @@ pub fn eval_prim(
             Ok(Tensor { dtype: out_dtype, shape: out_shape.to_vec(), data })
         }
         Prim::Add => elementwise(prim, ins, out_dtype, out_shape, |v| {
-            fit(Wide::from_i128(v[0]).add(Wide::from_i128(v[1])).unwrap_or(Wide::ZERO), out_dtype)
+            fit(Wide::from_i128(v[0]).checked_add(Wide::from_i128(v[1])).unwrap_or(Wide::ZERO), out_dtype)
         }),
         Prim::Sub => elementwise(prim, ins, out_dtype, out_shape, |v| {
-            fit(Wide::from_i128(v[0]).sub(Wide::from_i128(v[1])).unwrap_or(Wide::ZERO), out_dtype)
+            fit(Wide::from_i128(v[0]).checked_sub(Wide::from_i128(v[1])).unwrap_or(Wide::ZERO), out_dtype)
         }),
         Prim::Mul => elementwise(prim, ins, out_dtype, out_shape, |v| fit(Wide::mul_i128(v[0], v[1]), out_dtype)),
         Prim::Div { rule } => elementwise(prim, ins, out_dtype, out_shape, |v| {
@@ -320,15 +314,20 @@ pub fn eval_prim(
             if ins[0].shape != out_shape {
                 return shape_err(prim, "shape");
             }
-            let data =
-                ins[0].data.iter().map(|&v| fit_i(v.clamp(*lo as i128, (*hi as i128).max(*lo as i128)), out_dtype)).collect::<Res<Vec<_>>>()?;
+            let data = ins[0]
+                .data
+                .iter()
+                .map(|&v| fit_i(v.clamp(*lo as i128, (*hi as i128).max(*lo as i128)), out_dtype))
+                .collect::<Res<Vec<_>>>()?;
             Ok(Tensor { dtype: out_dtype, shape: out_shape.to_vec(), data })
         }
         Prim::Log2Floor => unary(prim, ins[0], out_dtype, out_shape, log2_floor),
         Prim::IntExp => unary(prim, ins[0], out_dtype, out_shape, int_exp),
         Prim::IntRsqrt => unary(prim, ins[0], out_dtype, out_shape, int_rsqrt),
         Prim::IntLn => unary(prim, ins[0], out_dtype, out_shape, int_ln),
-        Prim::Compare { cmp } => elementwise(prim, ins, out_dtype, out_shape, |v| fit_i(cmp_holds(*cmp, v[0], v[1]) as i128, out_dtype)),
+        Prim::Compare { cmp } => {
+            elementwise(prim, ins, out_dtype, out_shape, |v| fit_i(cmp_holds(*cmp, v[0], v[1]) as i128, out_dtype))
+        }
         Prim::Select => elementwise(prim, ins, out_dtype, out_shape, |v| fit_i(if v[0] != 0 { v[1] } else { v[2] }, out_dtype)),
         Prim::MatMul => {
             let (at, bt) = (ins[0], ins[1]);
@@ -373,7 +372,10 @@ pub fn eval_prim(
         Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => {
             let x = ins[0];
             let a = *axis as usize;
-            if a >= x.shape.len() || out_rank != x.shape.len() || out_shape[a] != 1 || (0..out_rank).any(|d| d != a && out_shape[d] != x.shape[d])
+            if a >= x.shape.len()
+                || out_rank != x.shape.len()
+                || out_shape[a] != 1
+                || (0..out_rank).any(|d| d != a && out_shape[d] != x.shape[d])
             {
                 return shape_err(prim, "shape");
             }
@@ -452,7 +454,11 @@ pub fn eval_prim(
             if ins[0].shape != out_shape {
                 return shape_err(prim, "shape");
             }
-            let data = ins[0].data.iter().map(|&v| fit_i(v.clamp(*lo as i128, (*hi as i128).max(*lo as i128)), out_dtype)).collect::<Res<Vec<_>>>()?;
+            let data = ins[0]
+                .data
+                .iter()
+                .map(|&v| fit_i(v.clamp(*lo as i128, (*hi as i128).max(*lo as i128)), out_dtype))
+                .collect::<Res<Vec<_>>>()?;
             Ok(Tensor { dtype: out_dtype, shape: out_shape.to_vec(), data })
         }
         Prim::HistAppend { .. } => {

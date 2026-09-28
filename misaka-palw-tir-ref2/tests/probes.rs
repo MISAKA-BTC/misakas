@@ -65,7 +65,12 @@ impl<T> MapUnit for Outcome<T> {
 }
 
 /// Runs `tokens` through both, printing each step; returns (ref2 states, first states).
-fn run_both(name: &str, p: &Program, params: &Params, tokens: &[u64]) -> Vec<(Outcome<(Tensor, Commits)>, Outcome<(Tensor, Commits)>)> {
+fn run_both(
+    name: &str,
+    p: &Program,
+    params: &Params,
+    tokens: &[u64],
+) -> Vec<(Outcome<(Tensor, Commits)>, Outcome<(Tensor, Commits)>)> {
     let bytes = encode(p);
     let fp = match first_decode(&bytes) {
         Outcome::Ok(fp) => fp,
@@ -150,7 +155,16 @@ fn p02_with_window(window: u32) {
     }
 }
 
-fn cone_both(name: &str, p: &Program, params: &Params, block: u8, layer: Option<u32>, target: u16, env: &ConeEnv, token_supplied: bool) -> (Outcome<Tensor>, Outcome<Tensor>) {
+fn cone_both(
+    name: &str,
+    p: &Program,
+    params: &Params,
+    block: u8,
+    layer: Option<u32>,
+    target: u16,
+    env: &ConeEnv,
+    token_supplied: bool,
+) -> (Outcome<Tensor>, Outcome<Tensor>) {
     let fp = match first_decode(&encode(p)) {
         Outcome::Ok(fp) => fp,
         o => panic!("{name}: first refuses: {o:?}"),
@@ -296,18 +310,78 @@ fn p06_primitive_extremes() {
     let i128min = i128::MIN;
     let i128max = i128::MAX;
     let cases: Vec<(&str, Prim, Vec<Tensor>, DType, Vec<u64>)> = vec![
-        ("HAFZ(i128::MIN, 1)", Prim::Div { rule: Rounding::HalfAwayFromZero }, vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[1])], DType::I128, vec![]),
-        ("HalfUp(i128::MIN, i128::MAX)", Prim::Div { rule: Rounding::HalfUp }, vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[i128max])], DType::I128, vec![]),
-        ("HalfUp(i128::MAX, i128::MAX)", Prim::Div { rule: Rounding::HalfUp }, vec![t(DType::I128, &[], &[i128max]), t(DType::I128, &[], &[i128max])], DType::I128, vec![]),
-        ("HalfUp(i128::MAX − 1, i128::MAX)", Prim::Div { rule: Rounding::HalfUp }, vec![t(DType::I128, &[], &[i128max - 1]), t(DType::I128, &[], &[i128max])], DType::I128, vec![]),
-        ("HAFZ(i128::MIN, i128::MAX)", Prim::Div { rule: Rounding::HalfAwayFromZero }, vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[i128max])], DType::I128, vec![]),
-        ("HAFZ(i128::MAX, 2^126 + 1)", Prim::Div { rule: Rounding::HalfAwayFromZero }, vec![t(DType::I128, &[], &[i128max]), t(DType::I128, &[], &[(1i128 << 126) + 1])], DType::I128, vec![]),
-        ("Floor(i128::MIN, 3)", Prim::Div { rule: Rounding::Floor }, vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[3])], DType::I128, vec![]),
+        (
+            "HAFZ(i128::MIN, 1)",
+            Prim::Div { rule: Rounding::HalfAwayFromZero },
+            vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[1])],
+            DType::I128,
+            vec![],
+        ),
+        (
+            "HalfUp(i128::MIN, i128::MAX)",
+            Prim::Div { rule: Rounding::HalfUp },
+            vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[i128max])],
+            DType::I128,
+            vec![],
+        ),
+        (
+            "HalfUp(i128::MAX, i128::MAX)",
+            Prim::Div { rule: Rounding::HalfUp },
+            vec![t(DType::I128, &[], &[i128max]), t(DType::I128, &[], &[i128max])],
+            DType::I128,
+            vec![],
+        ),
+        (
+            "HalfUp(i128::MAX − 1, i128::MAX)",
+            Prim::Div { rule: Rounding::HalfUp },
+            vec![t(DType::I128, &[], &[i128max - 1]), t(DType::I128, &[], &[i128max])],
+            DType::I128,
+            vec![],
+        ),
+        (
+            "HAFZ(i128::MIN, i128::MAX)",
+            Prim::Div { rule: Rounding::HalfAwayFromZero },
+            vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[i128max])],
+            DType::I128,
+            vec![],
+        ),
+        (
+            "HAFZ(i128::MAX, 2^126 + 1)",
+            Prim::Div { rule: Rounding::HalfAwayFromZero },
+            vec![t(DType::I128, &[], &[i128max]), t(DType::I128, &[], &[(1i128 << 126) + 1])],
+            DType::I128,
+            vec![],
+        ),
+        (
+            "Floor(i128::MIN, 3)",
+            Prim::Div { rule: Rounding::Floor },
+            vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[3])],
+            DType::I128,
+            vec![],
+        ),
         ("Mul(i128::MIN, −1)", Prim::Mul, vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[-1])], DType::I128, vec![]),
-        ("Mul(i128::MIN, i128::MIN)", Prim::Mul, vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[i128min])], DType::I128, vec![]),
+        (
+            "Mul(i128::MIN, i128::MIN)",
+            Prim::Mul,
+            vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[i128min])],
+            DType::I128,
+            vec![],
+        ),
         ("Sub(i128::MIN, 1)", Prim::Sub, vec![t(DType::I128, &[], &[i128min]), t(DType::I128, &[], &[1])], DType::I128, vec![]),
-        ("Add(i128::MAX, i128::MIN)", Prim::Add, vec![t(DType::I128, &[], &[i128max]), t(DType::I128, &[], &[i128min])], DType::I128, vec![]),
-        ("Sub(i128::MAX, i128::MIN)", Prim::Sub, vec![t(DType::I128, &[], &[i128max]), t(DType::I128, &[], &[i128min])], DType::I128, vec![]),
+        (
+            "Add(i128::MAX, i128::MIN)",
+            Prim::Add,
+            vec![t(DType::I128, &[], &[i128max]), t(DType::I128, &[], &[i128min])],
+            DType::I128,
+            vec![],
+        ),
+        (
+            "Sub(i128::MAX, i128::MIN)",
+            Prim::Sub,
+            vec![t(DType::I128, &[], &[i128max]), t(DType::I128, &[], &[i128min])],
+            DType::I128,
+            vec![],
+        ),
         (
             "MatMul i64::MIN² × 3 into i128",
             Prim::MatMul,
@@ -318,17 +392,50 @@ fn p06_primitive_extremes() {
         (
             "MatMul ±i64::MIN² alternating into i128 (total 2^126, P = 2·2^126)",
             Prim::MatMul,
-            vec![t(DType::I64, &[1, 3], &[i64::MIN as i128, i64::MIN as i128, i64::MIN as i128]), t(DType::I64, &[3, 1], &[i64::MIN as i128, i64::MAX as i128, i64::MIN as i128])],
+            vec![
+                t(DType::I64, &[1, 3], &[i64::MIN as i128, i64::MIN as i128, i64::MIN as i128]),
+                t(DType::I64, &[3, 1], &[i64::MIN as i128, i64::MAX as i128, i64::MIN as i128]),
+            ],
             DType::I128,
             vec![1, 1],
         ),
-        ("ReduceSum into idx, total ≥ 0 with a negative term", Prim::ReduceSum { axis: 0 }, vec![t(DType::I32, &[3], &[5, -1, 2])], DType::Idx, vec![1]),
-        ("ReduceSum i128 extremes", Prim::ReduceSum { axis: 0 }, vec![t(DType::I128, &[3], &[i128max, i128min, i128max])], DType::I128, vec![1]),
+        (
+            "ReduceSum into idx, total ≥ 0 with a negative term",
+            Prim::ReduceSum { axis: 0 },
+            vec![t(DType::I32, &[3], &[5, -1, 2])],
+            DType::Idx,
+            vec![1],
+        ),
+        (
+            "ReduceSum i128 extremes",
+            Prim::ReduceSum { axis: 0 },
+            vec![t(DType::I128, &[3], &[i128max, i128min, i128max])],
+            DType::I128,
+            vec![1],
+        ),
         ("ReduceSum i128 two maxima", Prim::ReduceSum { axis: 0 }, vec![t(DType::I128, &[2], &[i128max, 1])], DType::I128, vec![1]),
-        ("Iota i64::MIN step i64::MIN into i128", Prim::Iota { axis: 0, start: i64::MIN, step: i64::MIN }, vec![], DType::I128, vec![3]),
+        (
+            "Iota i64::MIN step i64::MIN into i128",
+            Prim::Iota { axis: 0, start: i64::MIN, step: i64::MIN },
+            vec![],
+            DType::I128,
+            vec![3],
+        ),
         ("Iota i64::MAX step i64::MAX into i64", Prim::Iota { axis: 0, start: i64::MAX, step: i64::MAX }, vec![], DType::I64, vec![2]),
-        ("Slice start = u32::MAX", Prim::Slice { axis: 0, start: u32::MAX }, vec![t(DType::I32, &[4], &[1, 2, 3, 4])], DType::I32, vec![1]),
-        ("Slice start = 2^32 − 3, len 3, extent 4", Prim::Slice { axis: 0, start: u32::MAX - 2 }, vec![t(DType::I32, &[4], &[1, 2, 3, 4])], DType::I32, vec![3]),
+        (
+            "Slice start = u32::MAX",
+            Prim::Slice { axis: 0, start: u32::MAX },
+            vec![t(DType::I32, &[4], &[1, 2, 3, 4])],
+            DType::I32,
+            vec![1],
+        ),
+        (
+            "Slice start = 2^32 − 3, len 3, extent 4",
+            Prim::Slice { axis: 0, start: u32::MAX - 2 },
+            vec![t(DType::I32, &[4], &[1, 2, 3, 4])],
+            DType::I32,
+            vec![3],
+        ),
         ("Log2Floor i128::MAX into i8", Prim::Log2Floor, vec![t(DType::I128, &[], &[i128max])], DType::I8, vec![]),
         ("Log2Floor 0 into idx", Prim::Log2Floor, vec![t(DType::I32, &[], &[0])], DType::Idx, vec![]),
         ("IntExp of idx 5", Prim::IntExp, vec![t(DType::Idx, &[], &[5])], DType::I32, vec![]),
@@ -343,21 +450,69 @@ fn p06_primitive_extremes() {
         ("Transpose rank 0", Prim::Transpose { perm: vec![] }, vec![t(DType::I8, &[], &[5])], DType::I8, vec![]),
         ("Reshape [1,1,1,1] → []", Prim::Reshape, vec![t(DType::I8, &[1, 1, 1, 1], &[5])], DType::I8, vec![]),
         ("Broadcast [] → [2,1,3,1]", Prim::Broadcast, vec![t(DType::I8, &[], &[5])], DType::I8, vec![2, 1, 3, 1]),
-        ("Gather batch_dims = rank(indices)", Prim::Gather { axis: 1, batch_dims: 1 }, vec![t(DType::I32, &[2, 3], &[1, 2, 3, 4, 5, 6]), t(DType::I32, &[2], &[2, 0])], DType::I32, vec![2]),
-        ("Gather i128 data", Prim::Gather { axis: 0, batch_dims: 0 }, vec![t(DType::I128, &[2], &[i128min, i128max]), t(DType::Idx, &[], &[1])], DType::I128, vec![]),
-        ("Clamp idx [0, 2^32 − 1] of i128::MIN", Prim::Clamp { lo: 0, hi: u32::MAX as i64 }, vec![t(DType::I128, &[], &[i128min])], DType::Idx, vec![]),
-        ("Select c = idx", Prim::Select, vec![t(DType::Idx, &[2], &[0, 7]), t(DType::I8, &[], &[1]), t(DType::I128, &[2], &[i128max, -3])], DType::I8, vec![2]),
-        ("Select unchosen value overflows", Prim::Select, vec![t(DType::I8, &[2], &[1, 1]), t(DType::I8, &[], &[1]), t(DType::I128, &[2], &[i128max, -3])], DType::I8, vec![2]),
-        ("Compare idx vs i8", Prim::Compare { cmp: ref2::Cmp::Gt }, vec![t(DType::Idx, &[2], &[0, u32::MAX as i128]), t(DType::I8, &[1], &[-1])], DType::I8, vec![2]),
+        (
+            "Gather batch_dims = rank(indices)",
+            Prim::Gather { axis: 1, batch_dims: 1 },
+            vec![t(DType::I32, &[2, 3], &[1, 2, 3, 4, 5, 6]), t(DType::I32, &[2], &[2, 0])],
+            DType::I32,
+            vec![2],
+        ),
+        (
+            "Gather i128 data",
+            Prim::Gather { axis: 0, batch_dims: 0 },
+            vec![t(DType::I128, &[2], &[i128min, i128max]), t(DType::Idx, &[], &[1])],
+            DType::I128,
+            vec![],
+        ),
+        (
+            "Clamp idx [0, 2^32 − 1] of i128::MIN",
+            Prim::Clamp { lo: 0, hi: u32::MAX as i64 },
+            vec![t(DType::I128, &[], &[i128min])],
+            DType::Idx,
+            vec![],
+        ),
+        (
+            "Select c = idx",
+            Prim::Select,
+            vec![t(DType::Idx, &[2], &[0, 7]), t(DType::I8, &[], &[1]), t(DType::I128, &[2], &[i128max, -3])],
+            DType::I8,
+            vec![2],
+        ),
+        (
+            "Select unchosen value overflows",
+            Prim::Select,
+            vec![t(DType::I8, &[2], &[1, 1]), t(DType::I8, &[], &[1]), t(DType::I128, &[2], &[i128max, -3])],
+            DType::I8,
+            vec![2],
+        ),
+        (
+            "Compare idx vs i8",
+            Prim::Compare { cmp: ref2::Cmp::Gt },
+            vec![t(DType::Idx, &[2], &[0, u32::MAX as i128]), t(DType::I8, &[1], &[-1])],
+            DType::I8,
+            vec![2],
+        ),
         ("TopK k = n with ties", Prim::TopK { axis: 0, k: 4 }, vec![t(DType::I8, &[4], &[1, 1, 1, 1])], DType::Idx, vec![4]),
-        ("TopK k = 2 ties at the cut", Prim::TopK { axis: 1, k: 2 }, vec![t(DType::I8, &[2, 4], &[3, 5, 5, 5, -1, -1, -2, -1])], DType::Idx, vec![2, 2]),
+        (
+            "TopK k = 2 ties at the cut",
+            Prim::TopK { axis: 1, k: 2 },
+            vec![t(DType::I8, &[2, 4], &[3, 5, 5, 5, -1, -1, -2, -1])],
+            DType::Idx,
+            vec![2, 2],
+        ),
         ("Concat of 8", Prim::Concat { axis: 0 }, (0..8).map(|i| t(DType::I8, &[1], &[i])).collect(), DType::I8, vec![8]),
         ("Concat of 9", Prim::Concat { axis: 0 }, (0..9).map(|i| t(DType::I8, &[1], &[i])).collect(), DType::I8, vec![9]),
         ("Cast i128::MIN → i128", Prim::Cast, vec![t(DType::I128, &[], &[i128min])], DType::I128, vec![]),
         ("Out dim 0", Prim::Iota { axis: 0, start: 0, step: 1 }, vec![], DType::I8, vec![0]),
         ("Out rank 5", Prim::Iota { axis: 0, start: 0, step: 0 }, vec![], DType::I8, vec![1, 1, 1, 1, 1]),
         ("Out 2^28 + elements", Prim::Iota { axis: 0, start: 0, step: 0 }, vec![], DType::I8, vec![1 << 14, 1 << 14, 2]),
-        ("MatMul K mismatch with a broadcastable 1", Prim::MatMul, vec![t(DType::I8, &[1, 1], &[1]), t(DType::I8, &[3, 1], &[1, 1, 1])], DType::I32, vec![1, 1]),
+        (
+            "MatMul K mismatch with a broadcastable 1",
+            Prim::MatMul,
+            vec![t(DType::I8, &[1, 1], &[1]), t(DType::I8, &[3, 1], &[1, 1, 1])],
+            DType::I32,
+            vec![1, 1],
+        ),
     ];
     let mut differ = 0;
     for (name, prim, ins, od, os) in cases {
@@ -512,11 +667,29 @@ fn p09_cone_histories_and_layer_instances() {
         e
     };
     let acc = t(DType::I32, &[2], &[3, -3]);
-    let (a, f) = cone_both("p09 pos 4 honest (2 rows)", &p, &params, 1, Some(1), 5, &env(4, Some(vec![row(1), row(2)]), Some(acc.clone())), true);
+    let (a, f) = cone_both(
+        "p09 pos 4 honest (2 rows)",
+        &p,
+        &params,
+        1,
+        Some(1),
+        5,
+        &env(4, Some(vec![row(1), row(2)]), Some(acc.clone())),
+        true,
+    );
     assert_eq!(a, f);
     cone_both("p09 pos 4 history missing", &p, &params, 1, Some(1), 5, &env(4, None, Some(acc.clone())), true);
     cone_both("p09 pos 4 one row (short)", &p, &params, 1, Some(1), 5, &env(4, Some(vec![row(1)]), Some(acc.clone())), true);
-    cone_both("p09 pos 4 three rows (long)", &p, &params, 1, Some(1), 5, &env(4, Some(vec![row(1), row(2), row(3)]), Some(acc.clone())), true);
+    cone_both(
+        "p09 pos 4 three rows (long)",
+        &p,
+        &params,
+        1,
+        Some(1),
+        5,
+        &env(4, Some(vec![row(1), row(2), row(3)]), Some(acc.clone())),
+        true,
+    );
     cone_both("p09 pos 0 no rows", &p, &params, 1, Some(0), 5, &env(0, Some(vec![]), Some(acc.clone())), true);
     cone_both("p09 pos 0 history missing", &p, &params, 1, Some(0), 5, &env(0, None, Some(acc.clone())), true);
     cone_both(
@@ -531,7 +704,16 @@ fn p09_cone_histories_and_layer_instances() {
     );
     cone_both("p09 pos 4 fixed missing", &p, &params, 1, Some(1), 5, &env(4, Some(vec![row(1), row(2)]), None), true);
     cone_both("p09 (layer, None)", &p, &params, 1, None, 5, &env(4, Some(vec![row(1), row(2)]), Some(acc.clone())), true);
-    cone_both("p09 (layer, Some(2)) past the schedule", &p, &params, 1, Some(2), 5, &env(4, Some(vec![row(1), row(2)]), Some(acc)), true);
+    cone_both(
+        "p09 (layer, Some(2)) past the schedule",
+        &p,
+        &params,
+        1,
+        Some(2),
+        5,
+        &env(4, Some(vec![row(1), row(2)]), Some(acc)),
+        true,
+    );
     // The HistAppend node itself as a target.
     cone_both("p09 target = HistAppend", &p, &params, 1, Some(1), 0, &env(4, Some(vec![row(1), row(2)]), None), true);
     // A hostile RunState for a step: history rows that do not match the position.

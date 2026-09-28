@@ -15,7 +15,10 @@ use rand_chacha::ChaCha8Rng;
 use ref2::eval::Params;
 use ref2::normal_form::Role;
 use ref2::typing::check_type;
-use ref2::{Block, Cmp, ConstDecl, DType, Dim, Node, ParamDecl, Prim, Program, Ref, Rounding, Schedule, StateDecl, StateKind, Tensor, TensorType};
+use ref2::{
+    Block, Cmp, ConstDecl, DType, Dim, Node, ParamDecl, Prim, Program, Ref, Rounding, Schedule, StateDecl, StateKind, Tensor,
+    TensorType,
+};
 
 pub type R = ChaCha8Rng;
 
@@ -64,7 +67,10 @@ pub fn rand_value(rng: &mut R, dt: DType, profile: u8) -> i128 {
                 if m >> (bits - 1) == 1 { m as i128 - (1i128 << bits) } else { m as i128 }
             }
         }
-        2 => pick(rng, &[dt.min(), dt.max(), clamp_to(dt, dt.min() + 1), clamp_to(dt, dt.max() - 1), 0, clamp_to(dt, 1), clamp_to(dt, -1)]),
+        2 => pick(
+            rng,
+            &[dt.min(), dt.max(), clamp_to(dt, dt.min() + 1), clamp_to(dt, dt.max() - 1), 0, clamp_to(dt, 1), clamp_to(dt, -1)],
+        ),
         _ => {
             let maxk = (8 * dt.width() - 2) as u32;
             let k = rng.gen_range(0..=maxk.min(126));
@@ -185,7 +191,7 @@ fn factor(rng: &mut R, count: u32, max_rank: usize) -> Vec<Dim> {
     let mut dims = Vec::new();
     let mut rem = count;
     for _ in 0..rank - 1 {
-        let divs: Vec<u32> = (1..=rem).filter(|d| rem % d == 0).collect();
+        let divs: Vec<u32> = (1..=rem).filter(|d| rem.is_multiple_of(*d)).collect();
         let d = pick(rng, &divs);
         dims.push(Dim::Fixed(d));
         rem /= d;
@@ -256,7 +262,13 @@ impl<'r> G<'r> {
             let dtype = narrow_dtype(self.rng);
             let shape = self.rand_fixed_shape(3);
             let (lo, hi) = self.rand_state_range(dtype);
-            self.states.push(StateDecl { name: format!("s{}", self.states.len()), kind: StateKind::Fixed { lo, hi }, dtype, shape, per_layer });
+            self.states.push(StateDecl {
+                name: format!("s{}", self.states.len()),
+                kind: StateKind::Fixed { lo, hi },
+                dtype,
+                shape,
+                per_layer,
+            });
             self.states.len() - 1
         };
         let s = &self.states[j];
@@ -296,7 +308,14 @@ impl<'r> G<'r> {
     }
 
     /// Pushes a node if this crate's type rule and legality check accept it.
-    fn push(&mut self, bb: &mut BB, prim: Prim, inputs: Vec<(Ref, TensorType)>, out: TensorType, commit: bool) -> Option<(Ref, TensorType)> {
+    fn push(
+        &mut self,
+        bb: &mut BB,
+        prim: Prim,
+        inputs: Vec<(Ref, TensorType)>,
+        out: TensorType,
+        commit: bool,
+    ) -> Option<(Ref, TensorType)> {
         if out.check_legal(bb.window).is_err() {
             return None;
         }
@@ -329,10 +348,11 @@ impl<'r> G<'r> {
 
     /// A partner operand broadcast-compatible with `s`: from the pool, or a new leaf.
     fn partner(&mut self, bb: &BB, s: &[Dim], dtype: Option<DType>) -> (Ref, TensorType) {
-        if self.rng.gen_bool(0.5) {
-            if let Some(v) = self.operand_where(bb, |t| ref2::types::broadcast_shapes(&t.shape, s).is_ok() && dtype.is_none_or(|d| d == t.dtype)) {
-                return v;
-            }
+        if self.rng.gen_bool(0.5)
+            && let Some(v) =
+                self.operand_where(bb, |t| ref2::types::broadcast_shapes(&t.shape, s).is_ok() && dtype.is_none_or(|d| d == t.dtype))
+        {
+            return v;
         }
         let cs = self.compatible_shape(s);
         let fixed: Vec<u32> = cs.iter().map(|d| if let Dim::Fixed(n) = d { *n } else { 1 }).collect();
@@ -459,7 +479,10 @@ impl<'r> G<'r> {
                 let (start, step) = if self.rng.gen_bool(0.8) {
                     (pick(self.rng, &[0i64, 1, -3, 5, -100, 17]), pick(self.rng, &[0i64, 1, -1, 2, 7, -3]))
                 } else {
-                    (pick(self.rng, &[i64::MIN, i64::MAX, -1000, 1 << 40, 1 << 31]), pick(self.rng, &[-100, i64::MAX, i64::MIN, 1 << 33, 1 << 31]))
+                    (
+                        pick(self.rng, &[i64::MIN, i64::MAX, -1000, 1 << 40, 1 << 31]),
+                        pick(self.rng, &[-100, i64::MAX, i64::MIN, 1 << 33, 1 << 31]),
+                    )
                 };
                 let dtype = any_dtype(self.rng);
                 self.push(bb, Prim::Iota { axis, start, step }, vec![], TensorType { dtype, shape }, false)
@@ -489,7 +512,13 @@ impl<'r> G<'r> {
                         let n: u32 = dims.iter().product();
                         let dt = pick(self.rng, &[DType::I32, DType::I64, DType::Idx, DType::I128, DType::I8]);
                         let vals: Vec<i128> = (0..n)
-                            .map(|_| clamp_to(dt, pick(self.rng, &[1i128, 2, 3, 4, 7, 16, 1 << 24, 1 << 31, (1 << 62) + 1, i64::MAX as i128])).max(1))
+                            .map(|_| {
+                                clamp_to(
+                                    dt,
+                                    pick(self.rng, &[1i128, 2, 3, 4, 7, 16, 1 << 24, 1 << 31, (1 << 62) + 1, i64::MAX as i128]),
+                                )
+                                .max(1)
+                            })
                             .collect();
                         self.new_const(dt, &dims, &vals)
                     }
@@ -614,12 +643,20 @@ impl<'r> G<'r> {
                 let n: u32 = dims.iter().product();
                 let idt = pick(self.rng, &[DType::Idx, DType::I32, DType::I64, DType::I8]);
                 let vals: Vec<i128> = (0..n)
-                    .map(|_| if self.rng.gen_bool(0.95) { self.rng.gen_range(0..extent) as i128 } else { pick(self.rng, &[-1i128, extent as i128]) })
+                    .map(|_| {
+                        if self.rng.gen_bool(0.95) {
+                            self.rng.gen_range(0..extent) as i128
+                        } else {
+                            pick(self.rng, &[-1i128, extent as i128])
+                        }
+                    })
                     .map(|v| clamp_to(idt, v))
                     .collect();
                 self.new_const(idt, &dims, &vals)
             }
-            1 if self.token_bound as u64 <= extent as u64 && b == 0 && self.rng.gen_bool(0.7) => (Ref::Input(0), TensorType { dtype: DType::Idx, shape: vec![] }),
+            1 if self.token_bound as u64 <= extent as u64 && b == 0 && self.rng.gen_bool(0.7) => {
+                (Ref::Input(0), TensorType { dtype: DType::Idx, shape: vec![] })
+            }
             _ => {
                 // Clamp{0, extent−1} of something whose leading b dims match.
                 let src = self.operand_where(bb, |t| t.shape.len() >= b && t.shape[..b] == dt.shape[..b] && t.shape.len() - b <= 2);
@@ -634,7 +671,13 @@ impl<'r> G<'r> {
                 let hi = (extent - 1) as i64;
                 let lo = if self.rng.gen_bool(0.05) { -1 } else { 0 };
                 let lo = if idt == DType::Idx { 0 } else { lo };
-                self.push(bb, Prim::Clamp { lo, hi }, vec![(sr, st.clone())], TensorType { dtype: idt, shape: st.shape.clone() }, false)?
+                self.push(
+                    bb,
+                    Prim::Clamp { lo, hi },
+                    vec![(sr, st.clone())],
+                    TensorType { dtype: idt, shape: st.shape.clone() },
+                    false,
+                )?
             }
         };
         if it.shape.len() < b || it.shape[..b] != dt.shape[..b] {
@@ -643,7 +686,13 @@ impl<'r> G<'r> {
         let mut shape = dt.shape[..a].to_vec();
         shape.extend_from_slice(&it.shape[b..]);
         shape.extend_from_slice(&dt.shape[a + 1..]);
-        self.push(bb, Prim::Gather { axis: a as u8, batch_dims: b as u8 }, vec![(dr, dt.clone()), (ir, it)], TensorType { dtype: dt.dtype, shape }, false)
+        self.push(
+            bb,
+            Prim::Gather { axis: a as u8, batch_dims: b as u8 },
+            vec![(dr, dt.clone()), (ir, it)],
+            TensorType { dtype: dt.dtype, shape },
+            false,
+        )
     }
 
     fn try_matmul(&mut self, bb: &mut BB) -> Option<(Ref, TensorType)> {
@@ -699,7 +748,13 @@ impl<'r> G<'r> {
         let (kr, kt) = self.operand_where(bb, |t| t.shape.len() == 2 && t.shape[0] == Dim::H && ok_dt(t.dtype))?;
         let d = kt.shape[1];
         // K^T: [d, H]
-        let (ktr, ktt) = self.push(bb, Prim::Transpose { perm: vec![1, 0] }, vec![(kr, kt.clone())], TensorType { dtype: kt.dtype, shape: vec![d, Dim::H] }, false)?;
+        let (ktr, ktt) = self.push(
+            bb,
+            Prim::Transpose { perm: vec![1, 0] },
+            vec![(kr, kt.clone())],
+            TensorType { dtype: kt.dtype, shape: vec![d, Dim::H] },
+            false,
+        )?;
         let Dim::Fixed(dn) = d else { return None };
         let rows = self.small_dim();
         let qdt = pick(self.rng, &[DType::I8, DType::I16, DType::I32]);
@@ -709,13 +764,32 @@ impl<'r> G<'r> {
         };
         let m = qt.shape[0];
         let sdt = pick(self.rng, &[DType::I32, DType::I64, DType::I64]);
-        let (sr, st) = self.push(bb, Prim::MatMul, vec![(qr, qt), (ktr, ktt)], TensorType { dtype: sdt, shape: vec![m, Dim::H] }, false)?;
+        let (sr, st) =
+            self.push(bb, Prim::MatMul, vec![(qr, qt), (ktr, ktt)], TensorType { dtype: sdt, shape: vec![m, Dim::H] }, false)?;
         // max along H, shifted scores, IntExp, sum along H.
-        let (mr, mt) = self.push(bb, Prim::ReduceMax { axis: 1 }, vec![(sr, st.clone())], TensorType { dtype: sdt, shape: vec![m, Dim::Fixed(1)] }, false)?;
-        let (dr, dt) = self.push(bb, Prim::Sub, vec![(sr, st.clone()), (mr, mt)], TensorType { dtype: DType::I64, shape: vec![m, Dim::H] }, false)?;
+        let (mr, mt) = self.push(
+            bb,
+            Prim::ReduceMax { axis: 1 },
+            vec![(sr, st.clone())],
+            TensorType { dtype: sdt, shape: vec![m, Dim::Fixed(1)] },
+            false,
+        )?;
+        let (dr, dt) = self.push(
+            bb,
+            Prim::Sub,
+            vec![(sr, st.clone()), (mr, mt)],
+            TensorType { dtype: DType::I64, shape: vec![m, Dim::H] },
+            false,
+        )?;
         let (er, et) = self.push(bb, Prim::IntExp, vec![(dr, dt)], TensorType { dtype: DType::I32, shape: vec![m, Dim::H] }, false)?;
         if self.rng.gen_bool(0.5) {
-            let _ = self.push(bb, Prim::ReduceSum { axis: 1 }, vec![(er, et.clone())], TensorType { dtype: DType::I64, shape: vec![m, Dim::Fixed(1)] }, true);
+            let _ = self.push(
+                bb,
+                Prim::ReduceSum { axis: 1 },
+                vec![(er, et.clone())],
+                TensorType { dtype: DType::I64, shape: vec![m, Dim::Fixed(1)] },
+                true,
+            );
         }
         // weights · V, contracting H.
         let odt = pick(self.rng, &[DType::I64, DType::I128]);
@@ -738,7 +812,9 @@ impl<'r> G<'r> {
         let prefer: Option<u16> = if self.cfg.double_global_write && bb.role == Role::Post {
             self.global_writer
                 .iter()
-                .find(|(j, b)| **b != bb.b && !bb.written.contains(j) && matches!(self.states[**j as usize].kind, StateKind::Fixed { .. }))
+                .find(|(j, b)| {
+                    **b != bb.b && !bb.written.contains(j) && matches!(self.states[**j as usize].kind, StateKind::Fixed { .. })
+                })
                 .map(|(j, _)| *j)
         } else {
             None
@@ -757,7 +833,11 @@ impl<'r> G<'r> {
         let cands: Vec<u16> = (0..self.states.len() as u16)
             .filter(|&j| {
                 let s = &self.states[j as usize];
-                s.per_layer == per_layer && matches!(s.kind, StateKind::Fixed { .. }) && s.shape == dims && !bb.written.contains(&j) && self.global_ok(bb, j)
+                s.per_layer == per_layer
+                    && matches!(s.kind, StateKind::Fixed { .. })
+                    && s.shape == dims
+                    && !bb.written.contains(&j)
+                    && self.global_ok(bb, j)
             })
             .collect();
         let j = if !cands.is_empty() && (self.rng.gen_bool(0.7) || !self.may_add_state(per_layer)) {
@@ -767,7 +847,13 @@ impl<'r> G<'r> {
         } else {
             let dtype = narrow_dtype(self.rng);
             let (lo, hi) = self.rand_state_range(dtype);
-            self.states.push(StateDecl { name: format!("s{}", self.states.len()), kind: StateKind::Fixed { lo, hi }, dtype, shape: dims.clone(), per_layer });
+            self.states.push(StateDecl {
+                name: format!("s{}", self.states.len()),
+                kind: StateKind::Fixed { lo, hi },
+                dtype,
+                shape: dims.clone(),
+                per_layer,
+            });
             (self.states.len() - 1) as u16
         };
         let s = &self.states[j as usize];
@@ -796,7 +882,13 @@ impl<'r> G<'r> {
         };
         let dtype = narrow_dtype(self.rng);
         let lim = pick(self.rng, &[7i64, 100, 1000]);
-        let row = self.push(bb, Prim::Clamp { lo: -lim, hi: lim }, vec![(v, tv.clone())], TensorType { dtype, shape: tv.shape.clone() }, true)?;
+        let row = self.push(
+            bb,
+            Prim::Clamp { lo: -lim, hi: lim },
+            vec![(v, tv.clone())],
+            TensorType { dtype, shape: tv.shape.clone() },
+            true,
+        )?;
         self.hist_append_row(bb, row)
     }
 
@@ -804,7 +896,8 @@ impl<'r> G<'r> {
         let w = bb.window?;
         // The row: a committed node or a carry-in of i8/i16/i32, no H, rank ≤ 3.
         let row_ok = |t: &TensorType| matches!(t.dtype, DType::I8 | DType::I16 | DType::I32) && !has_h(t) && t.shape.len() <= 3;
-        let cands: Vec<(Ref, TensorType)> = bb.pool.iter().filter(|(r, t)| row_ok(t) && matches!(r, Ref::Node(_) | Ref::CarryIn(_))).cloned().collect();
+        let cands: Vec<(Ref, TensorType)> =
+            bb.pool.iter().filter(|(r, t)| row_ok(t) && matches!(r, Ref::Node(_) | Ref::CarryIn(_))).cloned().collect();
         let (rr, rt) = if !cands.is_empty() && self.rng.gen_bool(0.5) {
             pick(self.rng, &cands)
         } else {
@@ -844,7 +937,13 @@ impl<'r> G<'r> {
         } else if !self.may_add_state(per_layer) {
             return None;
         } else {
-            self.states.push(StateDecl { name: format!("s{}", self.states.len()), kind: StateKind::Hist { window: w }, dtype: rt.dtype, shape: dims.clone(), per_layer });
+            self.states.push(StateDecl {
+                name: format!("s{}", self.states.len()),
+                kind: StateKind::Hist { window: w },
+                dtype: rt.dtype,
+                shape: dims.clone(),
+                per_layer,
+            });
             (self.states.len() - 1) as u16
         };
         let mut shape = vec![Dim::H];
@@ -869,7 +968,13 @@ impl<'r> G<'r> {
                 None => self.new_leaf(bb, None, &dims),
             };
             let (v, tv) = if tv.shape != want.shape {
-                match self.push(bb, Prim::Broadcast, vec![(v, tv.clone())], TensorType { dtype: tv.dtype, shape: want.shape.clone() }, false) {
+                match self.push(
+                    bb,
+                    Prim::Broadcast,
+                    vec![(v, tv.clone())],
+                    TensorType { dtype: tv.dtype, shape: want.shape.clone() },
+                    false,
+                ) {
                     Some(x) => x,
                     None => continue,
                 }
@@ -878,7 +983,13 @@ impl<'r> G<'r> {
             };
             let (v, tv) = if self.rng.gen_bool(0.5) {
                 let (o, to) = self.partner(bb, &want.shape, None);
-                match self.push(bb, Prim::Add, vec![(v, tv), (o, to)], TensorType { dtype: DType::I128, shape: want.shape.clone() }, false) {
+                match self.push(
+                    bb,
+                    Prim::Add,
+                    vec![(v, tv), (o, to)],
+                    TensorType { dtype: DType::I128, shape: want.shape.clone() },
+                    false,
+                ) {
                     Some(x) => x,
                     None => continue,
                 }
@@ -941,7 +1052,8 @@ impl<'r> G<'r> {
             let shape = self.rand_fixed_shape(2);
             let want = TensorType::fixed(committable_dtype(self.rng), &shape);
             if self.make_exact(&mut bb, &want).is_none() {
-                let _ = self.push(&mut bb, Prim::Iota { axis: 0, start: 1, step: 1 }, vec![], TensorType::fixed(DType::I32, &[2]), true);
+                let _ =
+                    self.push(&mut bb, Prim::Iota { axis: 0, start: 1, step: 1 }, vec![], TensorType::fixed(DType::I32, &[2]), true);
             }
         }
         bb
@@ -1075,12 +1187,12 @@ pub fn gen_params(rng: &mut R, p: &Program) -> Params {
                 if let Ref::Param(j) = *r {
                     let Some(d) = p.params.get(j as usize) else { continue };
                     let key = (j, if d.per_layer { layer } else { None });
-                    if !params.contains_key(&key) {
+                    if let std::collections::btree_map::Entry::Vacant(e) = params.entry(key) {
                         let shape: Vec<u64> = d.shape.iter().map(|&x| x as u64).collect();
                         if shape.iter().product::<u64>() > 4096 {
                             continue;
                         }
-                        params.insert(key, rand_tensor(rng, d.dtype, &shape));
+                        e.insert(rand_tensor(rng, d.dtype, &shape));
                     }
                 }
             }
@@ -1106,7 +1218,8 @@ pub fn gen_program(rng: &mut R, cfg: GenCfg) -> Generated {
     }
     layers.shuffle(rng);
     let windows = [1u32, 2, 3, 5, history_bound];
-    let mut g = G { rng, cfg, params: vec![], consts: vec![], states: vec![], history_bound, token_bound, global_writer: BTreeMap::new() };
+    let mut g =
+        G { rng, cfg, params: vec![], consts: vec![], states: vec![], history_bound, token_bound, global_writer: BTreeMap::new() };
     let mut blocks: Vec<Option<Block>> = vec![None; nblocks];
     let window_of = |g: &mut G| if g.rng.gen_bool(0.45) { Some(pick(g.rng, &windows)) } else { None };
     // pre
@@ -1116,7 +1229,8 @@ pub fn gen_program(rng: &mut R, cfg: GenCfg) -> Generated {
     let mut sig: Vec<TensorType> = Vec::new();
     let mut carry: Vec<u16> = Vec::new();
     for _ in 0..sig_n {
-        let cand: Vec<usize> = (0..bb.nodes.len()).filter(|&i| bb.nodes[i].out.dtype.committable() && !has_h(&bb.nodes[i].out)).collect();
+        let cand: Vec<usize> =
+            (0..bb.nodes.len()).filter(|&i| bb.nodes[i].out.dtype.committable() && !has_h(&bb.nodes[i].out)).collect();
         if cand.is_empty() || g.rng.gen_bool(0.2) {
             let shape = g.rand_fixed_shape(3);
             let want = TensorType::fixed(committable_dtype(g.rng), &shape);
@@ -1161,7 +1275,8 @@ pub fn gen_program(rng: &mut R, cfg: GenCfg) -> Generated {
     let logits = match g.make_exact(&mut bb, &want) {
         Some(i) => i,
         None => {
-            let (r, _) = g.push(&mut bb, Prim::Iota { axis: 0, start: 0, step: 1 }, vec![], TensorType::fixed(DType::I32, &[2]), true).unwrap();
+            let (r, _) =
+                g.push(&mut bb, Prim::Iota { axis: 0, start: 0, step: 1 }, vec![], TensorType::fixed(DType::I32, &[2]), true).unwrap();
             let Ref::Node(i) = r else { unreachable!() };
             i
         }

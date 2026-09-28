@@ -119,7 +119,7 @@ impl Wide {
         Wide::norm(!self.neg, self.mag)
     }
 
-    pub fn add(self, o: Wide) -> Option<Wide> {
+    pub fn checked_add(self, o: Wide) -> Option<Wide> {
         if self.neg == o.neg {
             return Some(Wide::norm(self.neg, mag_add(&self.mag, &o.mag)?));
         }
@@ -130,8 +130,8 @@ impl Wide {
         }
     }
 
-    pub fn sub(self, o: Wide) -> Option<Wide> {
-        self.add(o.negate())
+    pub fn checked_sub(self, o: Wide) -> Option<Wide> {
+        self.checked_add(o.negate())
     }
 
     /// The exact product of two `i128` values (always representable).
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(q.to_i128(), Some(i128::MIN));
         let r = Wide::mul_i128(i128::MIN, -1);
         assert_eq!(r.to_i128(), None);
-        assert_eq!(Wide::mul_i128(i128::MAX, i128::MAX).sub(Wide::mul_i128(i128::MAX, i128::MAX)), Some(Wide::ZERO));
+        assert_eq!(Wide::mul_i128(i128::MAX, i128::MAX).checked_sub(Wide::mul_i128(i128::MAX, i128::MAX)), Some(Wide::ZERO));
         assert_eq!(Wide::mul_i128(-3, 7).to_i128(), Some(-21));
         assert_eq!(Wide::mul_i128(0, -7), Wide::ZERO);
         assert!(!Wide::mul_i128(0, -7).is_negative());
@@ -193,10 +193,10 @@ mod tests {
     fn sums_cross_zero() {
         let a = Wide::from_i128(i128::MAX);
         let b = Wide::from_i128(i128::MIN);
-        assert_eq!(a.add(b).and_then(|w| w.to_i128()), Some(-1));
-        let c = a.add(Wide::from_i128(1)).unwrap();
+        assert_eq!(a.checked_add(b).and_then(|w| w.to_i128()), Some(-1));
+        let c = a.checked_add(Wide::from_i128(1)).unwrap();
         assert_eq!(c.to_i128(), None);
-        assert_eq!(c.sub(Wide::from_i128(1)).and_then(|w| w.to_i128()), Some(i128::MAX));
+        assert_eq!(c.checked_sub(Wide::from_i128(1)).and_then(|w| w.to_i128()), Some(i128::MAX));
         assert!(Wide::from_i128(-5).within(-5, -5));
         assert!(!Wide::from_i128(-6).within(-5, 10));
         assert!(Wide::from_u128(u128::MAX).cmp_wide(&Wide::from_i128(i128::MAX)) == Ordering::Greater);
@@ -218,8 +218,8 @@ mod tests {
             assert_eq!(w.to_i128(), a.checked_mul(b));
             let c = (next() as i128) << 64 | next() as i128;
             let d = (next() as i128) << 64 | next() as i128;
-            assert_eq!(Wide::from_i128(c).add(Wide::from_i128(d)).unwrap().to_i128(), c.checked_add(d));
-            assert_eq!(Wide::from_i128(c).sub(Wide::from_i128(d)).unwrap().to_i128(), c.checked_sub(d));
+            assert_eq!(Wide::from_i128(c).checked_add(Wide::from_i128(d)).unwrap().to_i128(), c.checked_add(d));
+            assert_eq!(Wide::from_i128(c).checked_sub(Wide::from_i128(d)).unwrap().to_i128(), c.checked_sub(d));
         }
     }
 }

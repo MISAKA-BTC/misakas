@@ -66,13 +66,13 @@ pub fn ref_type(p: &Program, b: usize, node_index: usize, r: &Ref) -> Option<Ten
 pub fn block_window(p: &Program, b: usize) -> Res<Option<u32>> {
     let mut w: Option<u32> = None;
     for n in &p.blocks[b].nodes {
-        if let Prim::HistAppend { state } = n.prim {
-            if let Some(StateDecl { kind: StateKind::Hist { window }, .. }) = p.states.get(state as usize) {
-                match w {
-                    None => w = Some(*window),
-                    Some(x) if x == *window => {}
-                    Some(_) => return nf("NF-13: a block appends to histories of different windows"),
-                }
+        if let Prim::HistAppend { state } = n.prim
+            && let Some(StateDecl { kind: StateKind::Hist { window }, .. }) = p.states.get(state as usize)
+        {
+            match w {
+                None => w = Some(*window),
+                Some(x) if x == *window => {}
+                Some(_) => return nf("NF-13: a block appends to histories of different windows"),
             }
         }
     }
@@ -238,7 +238,7 @@ pub fn check(p: &Program) -> Res<()> {
         }
         match s.kind {
             StateKind::Fixed { lo, hi } => {
-                if !(lo <= 0 && 0 <= hi) || !s.dtype.contains(lo as i128) || !s.dtype.contains(hi as i128) {
+                if !(lo <= 0 && 0 <= hi && s.dtype.contains(lo as i128) && s.dtype.contains(hi as i128)) {
                     return nf("NF-10: Fixed range does not contain 0 or leaves the dtype");
                 }
             }
@@ -276,12 +276,11 @@ pub fn check(p: &Program) -> Res<()> {
                     _ => {}
                 }
             }
-            if let Prim::StateWrite { state } | Prim::HistAppend { state } = n.prim {
-                if let Some(s) = p.states.get(state as usize) {
-                    if s.per_layer != (role == Role::Layer) {
-                        return nf("NF-15: state written from a block of the other role");
-                    }
-                }
+            if let Prim::StateWrite { state } | Prim::HistAppend { state } = n.prim
+                && let Some(s) = p.states.get(state as usize)
+                && s.per_layer != (role == Role::Layer)
+            {
+                return nf("NF-15: state written from a block of the other role");
             }
         }
     }

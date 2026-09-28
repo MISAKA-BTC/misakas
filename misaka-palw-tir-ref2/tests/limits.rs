@@ -64,7 +64,7 @@ fn cases() -> Vec<Case> {
         v.push(case(format!("token_bound {tb}"), &with(|b| b.p.token_bound = tb), ok));
     }
     v.push(case("version 0", &with(|b| b.p.version = 0), false));
-    // prim_set_id and logits_scheme_id: the text checks neither (see F-PRIMSET).
+    // prim_set_id and logits_scheme_id: the text checks neither (finding F14).
     v.push(case("prim_set_id all 0xFF", &with(|b| b.p.prim_set_id = [0xFF; 64]), true));
     v.push(case("logits_scheme_id all 0xFF", &with(|b| b.p.logits_scheme_id = [0xFF; 64]), true));
     // NF-2 blocks: 16 accepted, 17 refused (every block scheduled once as a layer).
@@ -116,8 +116,10 @@ fn cases() -> Vec<Case> {
         v.push(case(
             format!("{global} global + {per_layer} per-layer states"),
             &with(|b| {
-                let g: Vec<Ref> = (0..global).map(|i| Ref::State(b.fixed_state(&format!("g{i}"), DType::I8, &[1], 0, 1, false))).collect();
-                let pl: Vec<Ref> = (0..per_layer).map(|i| Ref::State(b.fixed_state(&format!("l{i}"), DType::I8, &[1], 0, 1, true))).collect();
+                let g: Vec<Ref> =
+                    (0..global).map(|i| Ref::State(b.fixed_state(&format!("g{i}"), DType::I8, &[1], 0, 1, false))).collect();
+                let pl: Vec<Ref> =
+                    (0..per_layer).map(|i| Ref::State(b.fixed_state(&format!("l{i}"), DType::I8, &[1], 0, 1, true))).collect();
                 use_all(b, 0, &g, DType::I8);
                 if per_layer > 0 {
                     let l = b.block("layer", vec![fixed(DType::I32, &[2])]);
@@ -148,7 +150,9 @@ fn cases() -> Vec<Case> {
         v.push(case(
             format!("{n} carries"),
             &with(|b| {
-                let outs: Vec<u16> = (0..n).map(|i| b.node(0, Prim::Iota { axis: 0, start: i as i64, step: 1 }, &[], fixed(DType::I32, &[2]), true)).collect();
+                let outs: Vec<u16> = (0..n)
+                    .map(|i| b.node(0, Prim::Iota { axis: 0, start: i as i64, step: 1 }, &[], fixed(DType::I32, &[2]), true))
+                    .collect();
                 b.carry_out(0, &outs);
                 b.p.blocks[1].carry_in = vec![fixed(DType::I32, &[2]); n];
             }),
@@ -303,11 +307,17 @@ fn cases() -> Vec<Case> {
             format!("Fixed state shape {shape:?}"),
             &with(|b| {
                 let s = b.fixed_state("s", DType::I8, &shape, 0, 0, false);
-                b.node(1, Prim::ReduceMax { axis: 0 }, &[Ref::State(s)], fixed(DType::I8, &{
-                    let mut o = shape.clone();
-                    o[0] = 1;
-                    o
-                }), true);
+                b.node(
+                    1,
+                    Prim::ReduceMax { axis: 0 },
+                    &[Ref::State(s)],
+                    fixed(DType::I8, &{
+                        let mut o = shape.clone();
+                        o[0] = 1;
+                        o
+                    }),
+                    true,
+                );
             }),
             ok,
         ));
@@ -338,11 +348,17 @@ fn cases() -> Vec<Case> {
             &with(|b| {
                 let row: Vec<u32> = vec![1; rank];
                 let h = b.hist_state("h", DType::I32, &row, w, false);
-                let r = b.node(0, Prim::Reshape, &[Ref::Node(0)], fixed(DType::I32, &{
-                    let mut x = row.clone();
-                    x[rank - 1] = 2;
-                    x
-                }), true);
+                let r = b.node(
+                    0,
+                    Prim::Reshape,
+                    &[Ref::Node(0)],
+                    fixed(DType::I32, &{
+                        let mut x = row.clone();
+                        x[rank - 1] = 2;
+                        x
+                    }),
+                    true,
+                );
                 let mut rs = row.clone();
                 rs[rank - 1] = 2;
                 b.p.states[h as usize].shape = rs.clone();
@@ -433,52 +449,96 @@ fn cases() -> Vec<Case> {
         }),
         false,
     ));
-    v.push(case("an i64 committed node", &with(|b| {
-        b.node(0, Prim::Cast, &[Ref::Node(0)], fixed(DType::I64, &[2]), true);
-    }), false));
-    v.push(case("TopK uncommitted", &with(|b| {
-        b.node(0, Prim::TopK { axis: 0, k: 1 }, &[Ref::Node(0)], fixed(DType::Idx, &[1]), false);
-        b.node(0, Prim::Cast, &[Ref::Node(1)], fixed(DType::I32, &[1]), true);
-    }), false));
-    v.push(case("two StateWrites of one state in a block", &with(|b| {
-        let s = b.fixed_state("s", DType::I32, &[2], -1, 1, false);
-        b.node(0, Prim::StateWrite { state: s }, &[Ref::Node(0)], fixed(DType::I32, &[2]), false);
-        b.node(0, Prim::StateWrite { state: s }, &[Ref::Node(0)], fixed(DType::I32, &[2]), false);
-    }), false));
-    v.push(case("StateWrite of a Hist state", &with(|b| {
-        let s = b.hist_state("h", DType::I32, &[2], 3, false);
-        b.node(0, Prim::StateWrite { state: s }, &[Ref::Node(0)], fixed(DType::I32, &[2]), false);
-    }), false));
-    v.push(case("a State ref to a Hist state", &with(|b| {
-        let s = b.hist_state("h", DType::I32, &[2], 3, false);
-        b.node(0, Prim::HistAppend { state: s }, &[Ref::Node(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
-        b.node(0, Prim::Cast, &[Ref::State(s)], fixed(DType::I32, &[2]), true);
-    }), false));
-    v.push(case("an unused Hist state", &with(|b| {
-        b.hist_state("h", DType::I32, &[2], 3, false);
-    }), false));
-    v.push(case("Input(2)", &with(|b| {
-        b.node(0, Prim::Cast, &[Ref::Input(2)], fixed(DType::I32, &[]), true);
-    }), false));
-    v.push(case("a node reading itself", &with(|b| {
-        b.node(0, Prim::Cast, &[Ref::Node(1)], fixed(DType::I32, &[2]), true);
-    }), false));
-    v.push(case("one block (pre = post)", &with(|b| {
-        b.p.blocks.truncate(1);
-        b.p.blocks[0].carry_out.clear();
-        b.schedule(0, &[], 0, 0);
-    }), false));
-    v.push(case("a layer block with windows 3 and 4", &with(|b| {
-        let h1 = b.hist_state("h1", DType::I32, &[2], 3, false);
-        let h2 = b.hist_state("h2", DType::I32, &[2], 4, false);
-        b.node(0, Prim::HistAppend { state: h1 }, &[Ref::Node(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
-        b.node(0, Prim::HistAppend { state: h2 }, &[Ref::Node(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
-    }), false));
-    v.push(case("a global Hist appended by pre and post", &with(|b| {
-        let h = b.hist_state("h", DType::I32, &[2], 3, false);
-        b.node(0, Prim::HistAppend { state: h }, &[Ref::Node(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
-        b.node(1, Prim::HistAppend { state: h }, &[Ref::CarryIn(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
-    }), true));
+    v.push(case(
+        "an i64 committed node",
+        &with(|b| {
+            b.node(0, Prim::Cast, &[Ref::Node(0)], fixed(DType::I64, &[2]), true);
+        }),
+        false,
+    ));
+    v.push(case(
+        "TopK uncommitted",
+        &with(|b| {
+            b.node(0, Prim::TopK { axis: 0, k: 1 }, &[Ref::Node(0)], fixed(DType::Idx, &[1]), false);
+            b.node(0, Prim::Cast, &[Ref::Node(1)], fixed(DType::I32, &[1]), true);
+        }),
+        false,
+    ));
+    v.push(case(
+        "two StateWrites of one state in a block",
+        &with(|b| {
+            let s = b.fixed_state("s", DType::I32, &[2], -1, 1, false);
+            b.node(0, Prim::StateWrite { state: s }, &[Ref::Node(0)], fixed(DType::I32, &[2]), false);
+            b.node(0, Prim::StateWrite { state: s }, &[Ref::Node(0)], fixed(DType::I32, &[2]), false);
+        }),
+        false,
+    ));
+    v.push(case(
+        "StateWrite of a Hist state",
+        &with(|b| {
+            let s = b.hist_state("h", DType::I32, &[2], 3, false);
+            b.node(0, Prim::StateWrite { state: s }, &[Ref::Node(0)], fixed(DType::I32, &[2]), false);
+        }),
+        false,
+    ));
+    v.push(case(
+        "a State ref to a Hist state",
+        &with(|b| {
+            let s = b.hist_state("h", DType::I32, &[2], 3, false);
+            b.node(0, Prim::HistAppend { state: s }, &[Ref::Node(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
+            b.node(0, Prim::Cast, &[Ref::State(s)], fixed(DType::I32, &[2]), true);
+        }),
+        false,
+    ));
+    v.push(case(
+        "an unused Hist state",
+        &with(|b| {
+            b.hist_state("h", DType::I32, &[2], 3, false);
+        }),
+        false,
+    ));
+    v.push(case(
+        "Input(2)",
+        &with(|b| {
+            b.node(0, Prim::Cast, &[Ref::Input(2)], fixed(DType::I32, &[]), true);
+        }),
+        false,
+    ));
+    v.push(case(
+        "a node reading itself",
+        &with(|b| {
+            b.node(0, Prim::Cast, &[Ref::Node(1)], fixed(DType::I32, &[2]), true);
+        }),
+        false,
+    ));
+    v.push(case(
+        "one block (pre = post)",
+        &with(|b| {
+            b.p.blocks.truncate(1);
+            b.p.blocks[0].carry_out.clear();
+            b.schedule(0, &[], 0, 0);
+        }),
+        false,
+    ));
+    v.push(case(
+        "a layer block with windows 3 and 4",
+        &with(|b| {
+            let h1 = b.hist_state("h1", DType::I32, &[2], 3, false);
+            let h2 = b.hist_state("h2", DType::I32, &[2], 4, false);
+            b.node(0, Prim::HistAppend { state: h1 }, &[Ref::Node(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
+            b.node(0, Prim::HistAppend { state: h2 }, &[Ref::Node(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
+        }),
+        false,
+    ));
+    v.push(case(
+        "a global Hist appended by pre and post",
+        &with(|b| {
+            let h = b.hist_state("h", DType::I32, &[2], 3, false);
+            b.node(0, Prim::HistAppend { state: h }, &[Ref::Node(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
+            b.node(1, Prim::HistAppend { state: h }, &[Ref::CarryIn(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
+        }),
+        true,
+    ));
     v
 }
 
@@ -537,9 +597,41 @@ fn the_program_byte_cap() {
         assert_eq!(bytes.len() as u32, target);
         let a = decode_canonical(&bytes);
         let f = first_decode(&bytes);
-        println!("program of {} bytes: ref2 {:?} / first {:?}", bytes.len(), a.as_ref().map(|_| ()).map_err(|e| e.class), f.clone().is_ok());
+        println!(
+            "program of {} bytes: ref2 {:?} / first {:?}",
+            bytes.len(),
+            a.as_ref().map(|_| ()).map_err(|e| e.class),
+            f.clone().is_ok()
+        );
         assert_eq!(a.is_ok(), ok);
         assert_eq!(f.is_ok(), ok);
     }
     let _ = StateKind::Hist { window: 1 };
+}
+
+#[test]
+fn utf8_edges_in_names() {
+    // §4.1: a String MUST be valid UTF-8. Edge encodings patched into the pre block's name bytes.
+    let cases: [(&str, &[u8], bool); 8] = [
+        ("NUL byte", b"a\x00b", true),
+        ("U+FFFF noncharacter", &[0xEF, 0xBF, 0xBF], true),
+        ("U+10FFFF", &[0xF4, 0x8F, 0xBF, 0xBF], true),
+        ("above U+10FFFF", &[0xF4, 0x90, 0x80, 0x80], false),
+        ("surrogate half", &[0xED, 0xA0, 0x80], false),
+        ("overlong NUL", &[0xC0, 0x80], false),
+        ("lone continuation", &[0x80], false),
+        ("truncated sequence", &[0xE2, 0x82], false),
+    ];
+    for (name, raw, ok) in cases {
+        let p = with(|b| b.p.blocks[0].name = "#".repeat(raw.len()));
+        let mut bytes = encode(&p);
+        let marker = "#".repeat(raw.len());
+        let at = bytes.windows(raw.len()).position(|w| w == marker.as_bytes()).unwrap();
+        bytes[at..at + raw.len()].copy_from_slice(raw);
+        let a = decode_canonical(&bytes).is_ok();
+        let f = first_decode(&bytes);
+        println!("block name {name:22}: text {} ref2 {} first {}", ok, a, f.is_ok());
+        assert_eq!(a, ok, "{name}");
+        assert_eq!(f.is_ok(), ok, "{name}");
+    }
 }

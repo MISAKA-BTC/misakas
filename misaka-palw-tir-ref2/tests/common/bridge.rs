@@ -156,7 +156,11 @@ pub fn state_to(s: &RunState) -> first::interp::RunState {
     first::interp::RunState {
         pos: s.pos as u32,
         fixed: s.fixed.iter().map(|((j, l), t)| ((*j, l.map(|x| x as u16)), tensor_to(t))).collect(),
-        hist: s.hist.iter().map(|((j, l), rows)| ((*j, l.map(|x| x as u16)), rows.iter().map(tensor_to).collect::<VecDeque<_>>())).collect(),
+        hist: s
+            .hist
+            .iter()
+            .map(|((j, l), rows)| ((*j, l.map(|x| x as u16)), rows.iter().map(tensor_to).collect::<VecDeque<_>>()))
+            .collect(),
     }
 }
 
@@ -200,10 +204,9 @@ pub fn first_step(
 
 pub fn ref2_step(p: &ref2::Program, params: &Params, st: &RunState, token: u64) -> (Outcome<(Tensor, Commits)>, Option<RunState>) {
     match ref2::eval::step(p, params, st, token) {
-        Ok((o, next)) => (
-            Outcome::Ok((o.logits, o.commits.into_iter().map(|c| (c.slot, c.block, c.layer, c.node, c.value)).collect())),
-            Some(next),
-        ),
+        Ok((o, next)) => {
+            (Outcome::Ok((o.logits, o.commits.into_iter().map(|c| (c.slot, c.block, c.layer, c.node, c.value)).collect())), Some(next))
+        }
         Err(e) => (Outcome::Err(e.class), None),
     }
 }

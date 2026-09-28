@@ -56,7 +56,13 @@ impl ProgBuilder {
     }
 
     pub fn fixed_state(&mut self, name: &str, dtype: DType, shape: &[u32], lo: i64, hi: i64, per_layer: bool) -> u16 {
-        self.p.states.push(StateDecl { name: name.into(), kind: StateKind::Fixed { lo, hi }, dtype, shape: shape.to_vec(), per_layer });
+        self.p.states.push(StateDecl {
+            name: name.into(),
+            kind: StateKind::Fixed { lo, hi },
+            dtype,
+            shape: shape.to_vec(),
+            per_layer,
+        });
         (self.p.states.len() - 1) as u16
     }
 

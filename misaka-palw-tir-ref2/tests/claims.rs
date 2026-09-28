@@ -22,10 +22,11 @@ fn exp_sweep(step: usize) {
         let xp = x.min(0);
         if xp > -31 * LN2_Q {
             let z = floor_div(-xp, LN2_Q);
-            if let Some((pz, pv)) = prev {
-                if pz == z && x <= 0 {
-                    assert!(v >= pv, "IntExp decreases inside bucket z = {z} at x = {x}");
-                }
+            if let Some((pz, pv)) = prev
+                && pz == z
+                && x <= 0
+            {
+                assert!(v >= pv, "IntExp decreases inside bucket z = {z} at x = {x}");
             }
             prev = Some((z, v));
         } else {
@@ -100,7 +101,7 @@ fn ln_sweep(step: usize) {
         let s = log2_floor(x) - 24;
         let v = int_ln(x);
         assert!(v >= s * LN2_Q && v < (s + 1) * LN2_Q);
-        assert!(v >= -24 * LN2_Q && v < 39 * LN2_Q);
+        assert!((-24 * LN2_Q..39 * LN2_Q).contains(&v));
     }
 }
 

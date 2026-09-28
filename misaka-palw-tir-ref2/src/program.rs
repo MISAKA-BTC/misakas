@@ -167,13 +167,7 @@ impl Prim {
         match self {
             Prim::Iota { .. } => (0, 0),
             Prim::Concat { .. } => (2, 8),
-            Prim::Gather { .. }
-            | Prim::Add
-            | Prim::Sub
-            | Prim::Mul
-            | Prim::MatMul
-            | Prim::Div { .. }
-            | Prim::Compare { .. } => (2, 2),
+            Prim::Gather { .. } | Prim::Add | Prim::Sub | Prim::Mul | Prim::MatMul | Prim::Div { .. } | Prim::Compare { .. } => (2, 2),
             Prim::Select => (3, 3),
             _ => (1, 1),
         }

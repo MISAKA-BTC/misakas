@@ -172,10 +172,10 @@ fn evaluate_nodes(
                         return err(Class::Missing, format!("Fixed state {j} not supplied"));
                     };
                     check_tensor(t, &TensorType::fixed(s.dtype, &s.shape), h, "Fixed state")?;
-                    if let StateKind::Fixed { lo, hi } = s.kind {
-                        if t.data.iter().any(|&v| v < lo as i128 || v > hi as i128) {
-                            return err(Class::Operand, format!("Fixed state {j} outside [{lo}, {hi}]"));
-                        }
+                    if let StateKind::Fixed { lo, hi } = s.kind
+                        && t.data.iter().any(|&v| v < lo as i128 || v > hi as i128)
+                    {
+                        return err(Class::Operand, format!("Fixed state {j} outside [{lo}, {hi}]"));
                     }
                     from_node.push(None);
                     owned.push(t.clone());
@@ -193,8 +193,14 @@ fn evaluate_nodes(
                 }
             }
         }
-        let ins: Vec<&Tensor> =
-            from_node.iter().zip(owned.iter()).map(|(f, o)| match f { Some(k) => vals[*k].as_ref().unwrap(), None => o }).collect();
+        let ins: Vec<&Tensor> = from_node
+            .iter()
+            .zip(owned.iter())
+            .map(|(f, o)| match f {
+                Some(k) => vals[*k].as_ref().unwrap(),
+                None => o,
+            })
+            .collect();
         let prior = match n.prim {
             Prim::HistAppend { state } => {
                 let Some(rows) = (leaves.hist)(state) else {
@@ -254,7 +260,13 @@ pub fn step_traced(p: &Program, params: &Params, st: &RunState, token: u64) -> R
     Ok((o, next, trace))
 }
 
-fn step_inner(p: &Program, params: &Params, st: &RunState, token: u64, mut trace: Option<&mut Vec<OccTrace>>) -> Res<(StepOutput, RunState)> {
+fn step_inner(
+    p: &Program,
+    params: &Params,
+    st: &RunState,
+    token: u64,
+    mut trace: Option<&mut Vec<OccTrace>>,
+) -> Res<(StepOutput, RunState)> {
     if st.pos >= p.history_bound as u64 {
         return err(Class::Position, format!("pos {} ≥ history_bound", st.pos));
     }
@@ -290,7 +302,9 @@ fn step_inner(p: &Program, params: &Params, st: &RunState, token: u64, mut trace
             .carry_out
             .iter()
             .enumerate()
-            .map(|(k, &c)| vals.get(c as usize).cloned().map(|v| (k as u8, v)).ok_or_else(|| TirError::new(Class::NormalForm, "carry-out")))
+            .map(|(k, &c)| {
+                vals.get(c as usize).cloned().map(|v| (k as u8, v)).ok_or_else(|| TirError::new(Class::NormalForm, "carry-out"))
+            })
             .collect::<Res<BTreeMap<u8, Tensor>>>()?;
         if let Some(t) = trace.as_deref_mut() {
             t.push(OccTrace { block: b, layer, slot_base, carry_in: carry.clone(), values: vals });
@@ -301,7 +315,9 @@ fn step_inner(p: &Program, params: &Params, st: &RunState, token: u64, mut trace
     let Some(logits) = logits else {
         return err(Class::NormalForm, "no logits");
     };
-    // Effects, only now that every node of every occurrence succeeded.
+    // Effects, only now that every node of every occurrence succeeded, in occurrence order: a global
+    // state written by pre and post takes post's value (the text is silent — finding F5; two
+    // appenders of one history are finding F6).
     let mut next = st.clone();
     for (prim, layer, v) in effects {
         match prim {
@@ -357,11 +373,12 @@ pub struct ConeEnv {
 
 /// §9.2 `eval_cone(block, layer, target, env)`.
 ///
-/// Readings taken where the text is silent (ref2-findings.md): the target is always recomputed
-/// (F-CONE-TARGET); `pos` must be a position (`< history_bound`) and a token the closure reads must
-/// be below `token_bound` (F-CONE-BOUNDS); every carry-in, state and history row the closure reads
-/// is checked against its declaration (F-CONE-CHECKS); a supplied index that is not a node of the
-/// block is refused.
+/// Readings taken where the text is silent (`docs/design/palw/tir/ref2-findings.md`): the target is
+/// always recomputed (F2); an absent `Fixed` value or history the closure needs fails `Missing`, even
+/// a history of zero rows (F1, F3); a supplied index that is not a node of the block is refused (F4);
+/// `pos` must be a position (`< history_bound`) and a token the closure reads must be below
+/// `token_bound` (F7); every carry-in, state and history row the closure reads is checked against
+/// its declaration (F8).
 pub fn eval_cone(p: &Program, params: &Params, block: u8, layer: Option<u32>, target: u16, env: &ConeEnv) -> Res<Tensor> {
     let bu = block as usize;
     let is_occurrence = match layer {

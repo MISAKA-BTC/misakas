@@ -145,10 +145,10 @@ impl TensorType {
             return err(Class::Shape, "more than one H in a shape");
         }
         for d in &self.shape {
-            if let Dim::Fixed(n) = d {
-                if *n == 0 || *n as u64 > MAX_DIM {
-                    return err(Class::Shape, format!("dimension {n} outside [1, 2^24]"));
-                }
+            if let Dim::Fixed(n) = d
+                && (*n == 0 || *n as u64 > MAX_DIM)
+            {
+                return err(Class::Shape, format!("dimension {n} outside [1, 2^24]"));
             }
         }
         let w = match (hs, window) {
