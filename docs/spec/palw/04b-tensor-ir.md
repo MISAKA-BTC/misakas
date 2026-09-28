@@ -1070,8 +1070,8 @@ part of the function on adversarial parameters, and the segments reproduce them.
 | gated delta rule step | decay (`Div_HAFZ(S·decay, 2^24)`, clamp ±(2^31−1)), `S·k` (MatMul), read narrowing, `sat64(v − w)`, `sat64(delta·β)`, delta narrowing clamped ±(2^24−1), rank-one write (`Mul` by `2^ws` or `Div_HAFZ` by `2^−ws`), `StateWrite`, `S·q`, out narrowing | `q36_gdn_step` |
 | router top-k | softmax (wide), `TopK` (committed), gather, exact sum, `IntRecip`, renormalise | `q36_router_topk` |
 | MoE combine | `MatMul(w[1,k], Y[k,width])` — ONE exact accumulator — then the A16 narrowing | `q36_moe_combine` |
-| head mapping `k → v` heads | grouping: `Reshape[k,1,d] → Broadcast[k,r,d] → Reshape[v,d]`; tiling: `Reshape[1,k,d] → Broadcast[r,k,d] → Reshape[v,d]` | (the live kernel tiles; §14) |
-| causal conv window | `Concat(State[w−1, C], row)` → `Slice` keeps the last `w−1` → `StateWrite`; `ReduceSum(window ⊙ taps)` | `q36_ssm_conv` (data layout differs; Gate 2) |
+| head mapping `k → v` heads | grouping: `Reshape[k,1,d] → Broadcast[k,r,d] → Reshape[v,d]`; tiling: `Reshape[1,k,d] → Broadcast[r,k,d] → Reshape[v,d]` | the live kernel tiles, over llama.cpp's V-reordered artifact — HF's function (corpus §5) |
+| causal conv window | `Concat(State[w−1, C], row)` → `Slice` keeps the last `w−1` → `StateWrite`; `ReduceSum(window ⊙ taps)` (`causal_conv`) | `q36_ssm_conv` (its own layout, as the segment of the same name) |
 
 ### 11.3 Long-context RoPE without a `history_bound × rope_dims` table
 
@@ -1085,13 +1085,20 @@ cos = Clamp(Div_Floor(ch·cl − sh·sl, 2^24), ±ONE);  sin = Clamp(Div_Floor(s
 ```
 
 Each product is `i64`; the sum is `i128`, because the tables are params and take the full `i32`
-range (two `i32·i32` products sum to `2^63`) — the pattern that overflows `i64` in the live
-`q36_rope_partial` (corpus §10.3).
+range (two `i32·i32` products sum to `2^63`) — the pattern that overflowed `i64` in the live
+`q36_rope_partial` (corpus §10.3; fixed on `rcore/hf-court-total` by forming the products in
+`i128`).
 
 At `2^18` positions that is two 512-row tables instead of one 262,144-row table (at `2^21`, three
 128-row tables). The gathers' index ranges are provable (`hi < 2^(18−b)`, `lo < 2^b`). YaRN, NTK,
 "llama3", LongRoPE and linear scaling only change `ω_j` (and an attention factor folded into the
-logit scale): they are table data, not primitives.
+logit scale): they are table data, not primitives (`rope_angles_two_level`).
+
+LongRoPE and dynamic NTK choose their frequencies by the forward call's length in HF. Their
+canonical semantics is **per-position decode** (RFC-0002 Gate 1 decision 4): the frequency set is a
+function of the absolute position — table sets selected by `Select` on a position threshold
+(`rope_angles_by_position`) — which is what HF computes when it decodes one position per call; the
+criterion-5 reference is pinned to `transformers` 5.17 with eager attention, decoding per position.
 
 ## 12. Golden vectors (`consensus-vectors/tir-v1/`, PALW-TIR-35)
 

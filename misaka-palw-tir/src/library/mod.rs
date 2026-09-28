@@ -108,7 +108,7 @@ pub const LIBRARY_V1: &[LibraryEntry] = &[
     ("gdn_step_q36", "legacy", "q36_gdn_step"),
     ("requantize_by_token", "legacy", "the fenced RequantizeByToken arm (ADR-0102)"),
     // Norms.
-    ("rms_norm_q24", "norm", "—"),
+    ("rms_norm_wide_q36 / rms_norm_wide_q36_exact", "norm", "the RMSNorm of any wide row (the legacy form is the general one)"),
     ("layer_norm_exact", "norm", "—"),
     ("group_norm_exact", "norm", "—"),
     ("l2_norm_eps", "norm", "—"),
