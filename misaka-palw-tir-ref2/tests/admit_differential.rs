@@ -640,3 +640,49 @@ fn shared_node_in_a_replay_closure() {
     }
     assert_eq!(am, af);
 }
+
+/// A per-layer state written by two layer blocks with different update costs (§10.3: "over the
+/// blocks that write j, the smallest C_j counts") — which block's closure and cost are reported.
+#[test]
+fn a_state_written_by_two_layer_blocks() {
+    use ref2::build::{ProgBuilder, fixed};
+    use ref2::{DType, Prim, Ref};
+    for heavy_first in [true, false] {
+        let mut b = ProgBuilder::new(1 << 18, 16);
+        let s = b.fixed_state("s", DType::I32, &[4, 3], -100, 100, true);
+        let w = b.param("w", DType::I8, &[3, 3], true);
+        let pre = b.block("pre", vec![]);
+        let o = b.node(pre, Prim::Iota { axis: 0, start: 0, step: 1 }, &[], fixed(DType::I32, &[2]), true);
+        b.carry_out(pre, &[o]);
+        let mut layer = |b: &mut ProgBuilder, name: &str, heavy: bool| {
+            let l = b.block(name, vec![fixed(DType::I32, &[2])]);
+            let x = if heavy {
+                let m = b.node(l, Prim::MatMul, &[Ref::State(s), Ref::Param(w)], fixed(DType::I64, &[4, 3]), false);
+                b.node(l, Prim::Clamp { lo: -5, hi: 5 }, &[Ref::Node(m)], fixed(DType::I32, &[4, 3]), false)
+            } else {
+                b.node(l, Prim::Clamp { lo: -5, hi: 5 }, &[Ref::State(s)], fixed(DType::I32, &[4, 3]), false)
+            };
+            b.node(l, Prim::StateWrite { state: s }, &[Ref::Node(x)], fixed(DType::I32, &[4, 3]), false);
+            let c = b.node(l, Prim::Clamp { lo: -9, hi: 9 }, &[Ref::CarryIn(0)], fixed(DType::I32, &[2]), true);
+            b.carry_out(l, &[c]);
+            l
+        };
+        let (la, lb) = if heavy_first { (layer(&mut b, "heavy", true), layer(&mut b, "light", false)) } else { (layer(&mut b, "light", false), layer(&mut b, "heavy", true)) };
+        let post = b.block("post", vec![fixed(DType::I32, &[2])]);
+        let m = b.node(post, Prim::Clamp { lo: -5, hi: 5 }, &[Ref::CarryIn(0)], fixed(DType::I32, &[2]), true);
+        b.schedule(pre, &[la, lb], post, m);
+        let bytes = ref2::codec::encode(&b.finish());
+        let mut inputs = legacy();
+        inputs.ceilings.max_tile_macs = 1000; // makes C_j differ between the two blocks
+        let a = admit_mine(&bytes, &inputs);
+        let f = admit_first(&bytes, &inputs);
+        for (who, o) in [("ref2", &a), ("first", &f)] {
+            if let AdmitOutcome::Admitted(v) = o {
+                println!("heavy first {heavy_first}: {who} states {:?} C {}", v.states, v.checkpoint_interval);
+            } else {
+                println!("heavy first {heavy_first}: {who} {}", short(o));
+            }
+        }
+        assert_eq!(a, f);
+    }
+}

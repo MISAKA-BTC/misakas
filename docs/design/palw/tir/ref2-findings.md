@@ -1,28 +1,162 @@
 # PALW-TIR v1 — findings of the independent second implementation (`misaka-palw-tir-ref2`)
 
 > Scope: RFC-0002 freeze criterion 4 (`reference evaluator == independent second implementation ==
-> every backend`) for `docs/spec/palw/04b-tensor-ir.md`. This file records where the normative text
-> is ambiguous, silent or wrong, and where the first implementation (`misaka-palw-tir`, observed only
-> as a black box through its public API) departs from the text. Branch `tir/ref2`: revision 1 of 04b
-> from `tir/core` b7492d601; **revision 2** from `tir/core` a2e6ec35a (merged as 5f852c190), which
-> applied F1–F15. Written without reading `misaka-palw-tir/`, the other files of this directory, or
-> the legacy kernels; the text changes were read as `git diff` of 04b only.
+> every backend`) for `docs/spec/palw/04b-tensor-ir.md`, and now its admission (`tir_admit_v1`,
+> §10.3 with §7 and §8). This file records where the normative text is ambiguous, silent or wrong,
+> and where the first implementation (`misaka-palw-tir`, observed only as a black box through its
+> public API) departs from the text. Branch `tir/ref2`: revision 1 of 04b from `tir/core`
+> b7492d601; revision 2 from a2e6ec35a (merged as 5f852c190); **admission** from ccd8f6aae
+> (merged as 34c9d92d3). Written without reading `misaka-palw-tir/` (its `tests/admit.rs`
+> included), the other files of this directory, or the legacy kernels; the text changes were read
+> as `git diff` of 04b only.
 
 ## 概要(日本語)
 
-- **改訂 2(a2e6ec35a)で F1〜F15 はすべて解消。** ref2 を改訂後の 04b だけから更新した(cone env の規則、
-  NF-1 の `PRIM_SET_ID_V1`、NF-2、NF-19、§9.3 の class 表、run-state の省略規則)。`PRIM_SET_ID_V1` は
-  RFC 7693 から書いた BLAKE2b で本文の定義どおりに計算し、本文に印字された値と一致した。
-- golden vector は **239/239**(primitive 134、program の step 34・cone 15・refusal 38、encoding 18)を
-  class まで一致して再現。
-- 前回と同じ規模(×25)の差分で **成功/失敗と値の不一致は 0 件**。class は「規則を 1 つだけ破る入力では
-  同じ、複数破る入力では破った規則の class のどれか」(§9.3)を、ref2 側で「破っている規則の集合」を
-  計算して検査し、違反 0 件。class が分かれたのは複数規則を破る入力(例: carry-out node の宣言 dtype を
-  変える → NF-16 と NF-5)だけ。cone の欠陥 18 種 36,025 件は本文 = ref2 = 第 1 実装。
-- 改訂 2 が残す点(いずれも両実装は一致): N1 cone env のうち closure が読まない `fixed`/`hist_prior`/
-  `carry_in` の扱い(両方無視、本文は supplied についてのみ明記)、N2 単独 primitive の arity 誤りの
-  class(両方 `Shape`、§9.3 の表は program の NF-14 だけ)、N3 §9.2 の表と §9.3 で「値」の検査の書き方が
-  不一致、N4 `graph_ir_root` の keyed hash(鍵・domain)がまだ 04b に無い(04b だけでは計算できない)。
+- **admission(`tir_admit_v1`)を 04b §10.3・§7・§8 だけから独立実装。** 区間解析、§8 の node cost と
+  1 position の量、cone と leaf、tile の box demand(history の prior rows、commit 済み leaf は 4 byte/lane)、
+  `H` 縮約の cone の `h_chunk` 分解、cone work(上限は costing 前に判定)、replay closure、group `G`、`C_j`。
+- corpus 5 本と自前の **Qwen2.5-1.5B 形 decoder**(28 層・`d = 1536`・語彙 151,936・window `2^18`)で、
+  公開 API が出す全ての派生量(区間・node cost・position・cone の nodes/leaves/tile/chunk/opened bytes/
+  operands・closure・groups・`C_j`・`C`・cone work)が第 1 実装と完全一致。
+- ×25 の差分(乱数 program・range-safe な乱数 program・変異・乱数 ceiling、計 487,500 件)で、
+  **一致しないのは 1 つの読み方(A1)だけ**: `Fixed` state の replay を `G` 個の group に分けてよいかの規則。
+  本文は「closure の update cone の全 node が aligned」とだけ書き、free な node の扱いを root とそれ以外で
+  区別しない。ref2 は一様に読み(free は妨げない)、第 1 実装は「全 member の `StateWrite` が aligned
+  (free 不可)、かつ closure の update cone に含まれる commit 点は leaf でなく node として辿る」。この規則を
+  スイッチで再現すると残りは 0 件。A1 は 30,319 件で groups・replay cost・`C_j` を変え、**22 件で受理/拒否が
+  逆になる**(consensus 分岐になりうる)。
+- 他に editorial: A2 拒否の limit 名が本文に無い(第 1 実装 "tile MACs"、ref2 はしきい値名)、A3 `C_j = 0`
+  拒否の値と `max_checkpoint_interval = 0` の扱い、A4 commit 済み `StateWrite` の cone work 二重計上の文言、
+  A5 `ConeV1.whole` が未定義、A6 §7 の義務違反の class、A7 誰も書かない `Fixed` state。
+- 改訂 2 の残り N1〜N4 は本文で解消済み(未読 entry は無視・単独 primitive の arity は `Shape`・値の検査・
+  `graph_ir_root` の鍵)。`graph_ir_root` は本文の定義から計算し、全 vector と §3.6 の印字値に一致。
+
+## Admission (`tir_admit_v1`, 04b at ccd8f6aae)
+
+### What was built
+
+`misaka-palw-tir-ref2/src/admit.rs`, from §10.3 in its stated order: the inputs' ranges (`tile_len`,
+`h_chunk`); decoding, normal form and types (§4.4, §5, §6); the §7 intervals, exact in 256-bit
+integers and checked against each obligation; the §8 node costs at `H = W` and the per-position
+cost (over the occurrences), state bytes (by instance), peak live bytes, commit lanes and step
+leaves; every commit point's cone (§10.2) with its leaves, whole cost, tiles, a tile's box demand
+(descending pass, demands capped, the `HistAppend` prior-row demand, committed leaves at 4 bytes a
+lane), its operands and — for a cone that reduces over `H` — the chunk at `H = min(h_chunk, W)`;
+the cone work over every commit point's cone and every `StateWrite`'s update cone, its cap checked
+before a cone is costed; the replay closures (a fixpoint over the states the update cones read), the
+alignment rules as a free / aligned / not-aligned lattice, `G`, one group's cost `⌈c / G⌉`, `C_j`
+and `C`. `graph_ir_root` (§3.6) with the BLAKE2b written for `prim_set_id`.
+
+### Results
+
+| test | result |
+| --- | --- |
+| golden vectors | 250/250: 138 primitive (incl. `error_arity_*`), 87 program (34 steps, 15 cones, 38 refusals), 18 encoding, 7 `graph_ir_root` (and the one printed in §3.6) |
+| corpus programs, legacy ceilings | dense GQA, sliding + global, GDN, Mamba-2, MoE admitted by both with every exposed quantity identical; `fixed-state-saturation` and `hist-window` refused by both (`Overflow`, §7) |
+| Qwen2.5-1.5B-shaped decoder (this crate's builder, 3,374 bytes) | admitted by both, identical (10 cones, cone work 307, `C` = cap); under 8 settings of `tile_len`/`h_chunk` and a variant with few commit points, the same verdicts, limits and values (e.g. both refuse `tile_len` 4096 at 100,663,296 tile MACs) |
+| one ceiling at a time (10 ceilings × caps 0, 1, 1000 × 6 programs) | identical verdict, limit and value |
+| random programs, ×25 | 37,500 under the legacy ceilings and 150,000 under random inputs: 0 disagreements beyond A1/A3 |
+| range-safe random programs, ×25 (the generator keeps only nodes whose §7 obligations hold) | 150,000: 103,491 admitted by both with every quantity compared, 42,050 refused past a ceiling (same limit and value, or A3), 4,459 input refusals; 0 disagreements beyond A1/A3 |
+| mutations of range-safe programs, ×25 | 150,000: 0 disagreements beyond A1/A3; a program refusal's class is always the class of a rule the program breaks |
+| coverage of the admitted programs (×25) | 1.23 M cones, 40,346 dissected, 87,901 with a history leaf, 95,897 `Fixed` replays, 7,196 closures of ≥ 2 states, 6,699 replays split into groups, 3,456 `C_j` below the cap |
+| probes | the group rule on hand-built update cones; a node shared by two update cones (costed once per cone by both — the literal text); a state written by two layer blocks (both report the smaller `C_j`'s replay); the replay refusal's value |
+
+Run: `cargo test --release -p misaka-palw-tir-ref2 --test admit_differential`; `TIR_REF2_CASES=25`
+for the scale above (≈ 30 s).
+
+### Findings
+
+| id | § | severity | first impl | ref2 | text supports |
+| --- | --- | --- | --- | --- | --- |
+| A1 | 10.3 groups | would-split-consensus | a replay splits only if every member's `StateWrite` is aligned (never free), following a commit point that is itself a node of the closure's update cones | free nodes never block a split, wherever they sit; a commit point is always a free leaf | ref2 (uniform); the first implementation's rule is not in the text |
+| A2 | 10.3 refusals | editorial | "tile MACs", "position MACs", … "one position's state replay (MACs or transcendentals)" | the ceiling names (`max_tile_macs`, …), `state_replay` | neither — the text names no limit |
+| A3 | 10.3 `C_j = 0` | editorial | reports the replay's MACs whenever there are any (also against a transcendental cap); `max_checkpoint_interval = 0` accepted as an input | the component past its cap (0 for a zero interval cap); same input rule | ref2 for the value ("names … the value and the cap"); neither for the zero cap |
+| A4 | 10.3 cone work | editorial (resolved) | a committed `StateWrite` counted twice (commit cone + update cone) | first read "counted once", then aligned to the literal Σ | the first implementation (literal) |
+| A5 | 10.3 outputs | editorial | `ConeV1.whole` = Σ §8 node costs of the cone at `H = W` | same | undefined |
+| A6 | 7, 10.3 step 2 | editorial | a broken obligation → `Overflow` (⊆ dtype), `Index` (Gather), `Divisor` (Div) | same | unstated (§9.3's classes of the rules the obligations stand for) |
+| A7 | 10.3 step 5 | editorial | a `Fixed` state no block writes has no `C_j` and is not listed | same | "derives every `Fixed` state's checkpoint interval" |
+
+#### A1 — which replays split into groups (§10.3) — would-split-consensus
+
+> "The replay is **split into `G` groups** when every member's shape has the same first dimension
+> `G > 1` and every node of the closure's update cones is *aligned* — its output's axis 0 has extent
+> `G`, and element `[g, …]` depends on the closure's states only through their elements `[g, …]` —
+> by these rules, with a leaf other than a closure state *free*: a node whose operands are all free
+> is free; …"
+
+The rules classify nodes as free, aligned or not aligned, and then require "every node … is
+aligned". Both implementations accept free nodes inside an update cone (a replay of
+`S ← S + Clamp(P)` splits in both). They part when a whole update is free: `S ← Clamp(P)`, or a
+member `m` of the closure whose update reads only commit points. **ref2** reads the rule uniformly —
+a free node is aligned in the text's own definition (its element `[g, …]` depends on no closure
+state) and never blocks, wherever it sits — and a commit point is always a free leaf ("a leaf other
+than a closure state"). **The first implementation**, observed exactly (a switch in ref2,
+`Readings { free_update_splits: false }`, reproduces every one of its answers at ×25): every
+member's `StateWrite` must be aligned, not free, and a commit point that is itself a node of the
+closure's update cones (another member's `StateWrite`) is followed as that node. Its rule is also
+internally uneven: the same free update cone splits as part of one state's closure and not in its
+own. Consequence: `groups`, the per-position replay cost `⌈c / G⌉` and `C_j` differ (30,319 cases
+at ×25) and so do `C` and the class's checkpoint layout; where `C_j` drops to 0 under one reading
+and not the other, one implementation admits what the other refuses (22 cases). Fix: state the
+rule for free nodes and for commit points inside a closure in one sentence — for example "a free
+node, a free `StateWrite` included, counts as aligned; a commit point is a free leaf even when it
+is a member's `StateWrite`" (ref2's reading), or the first implementation's two conditions.
+
+#### A2 — refusal names (§10.3) — editorial
+
+> "A refusal past a ceiling names the limit, where, the value and the cap"
+
+No names are given; the implementations use different strings for every ceiling (the differential
+maps them). If a refusal is ever recorded or compared across implementations (a registration
+receipt, an RPC error), the names should be fixed in the text, e.g. the ceilings' own names.
+
+#### A3 — a `C_j` of 0 (§10.3) — editorial
+
+> "Over the blocks that write `j`, the smallest `C_j` counts; a `C_j` of 0 is a refusal."
+
+Which value such a refusal reports is not said. When a replay's transcendentals break the tile
+ceiling and its MACs do not, the first implementation reports the MACs against the transcendental
+cap; ref2 reports the component past its cap (47 cases at ×25 differ only in this value). And a
+`max_checkpoint_interval` of 0 is not listed as out of range, yet makes every program with a
+written `Fixed` state a refusal (both accept it as an input and refuse the program). Fix: define the
+value (the component past its cap) and require `max_checkpoint_interval ≥ 1` among the inputs.
+
+#### A4 — the cone work of a committed `StateWrite` (§10.3) — editorial, resolved
+
+> "the **cone work** — `Σ`, over every commit point's cone (§10.2) and every `StateWrite`'s update
+> cone (below), …" / "the cone (§10.2) of its `StateWrite` node (counted once in the cone work)"
+
+A committed `StateWrite` is both a commit point and a `StateWrite`, and its two cones are the same
+set of nodes. ref2 first read "counted once" as "once in all"; the literal Σ over the two families
+counts it twice, which is what the first implementation does, and ref2 now does too. Fix: "a
+committed `StateWrite`'s cone counts in both terms".
+
+#### A5 — `ConeV1.whole` (§10.3) — editorial
+
+The public result carries a cone's whole cost, which the text does not define. Both compute Σ of
+§8's node costs over the cone's nodes at `H = W`. Fix: one sentence, or drop it from the result.
+
+#### A6 — the class of a range refusal (§7, §10.3 step 2) — editorial
+
+§10.3 step 1 names the §9.3 classes; step 2 names none. Both refuse a broken "⊆ out dtype" as
+`Overflow`, a `Gather` index obligation as `Index` and a divisor obligation as `Divisor` — the
+classes of the evaluation rules the obligations stand for. Fix: add a row to §9.3's table.
+
+#### A7 — a `Fixed` state no block writes (§10.3 step 5) — editorial
+
+> "derives every `Fixed` state's checkpoint interval (below)"
+
+A state that is read but never written needs no replay; both leave it out of the result and out of
+`C = min_j C_j`. Fix: "every written `Fixed` state".
+
+### Revision 2's open items N1–N4: resolved
+
+| id | text now | evidence |
+| --- | --- | --- |
+| N1 | §9.2: unread carry-in, `Fixed` and history entries are ignored, whatever their key, kind or type | `probes::p12` asserts both ignore all seven cases |
+| N2 | §9.3: outside a program, an arity error is `Shape` | the new `error_arity_*` primitive vectors reproduce (138/138) |
+| N3 | §9.2: every row checks values | `probes::p10` |
+| N4 | §3.6: `graph_ir_root = BLAKE2b-512(key "misaka-palw/tir/graph-ir-root/v1", encode(program))` | computed from the definition; all 7 vector roots and the value printed in §3.6 reproduce |
 
 ## Revision 2 (a2e6ec35a): status of F1–F15
 
@@ -44,7 +178,7 @@
 | F14 | §6.0 defines `PRIM_SET_ID_V1` (BLAKE2b-512 keyed by `misaka-palw/tir-prim-set-id/v1` over the rev2 descriptor); NF-1 requires it | **resolved** | ref2 computes it with its own BLAKE2b (RFC 7693 and KAT vectors pass) and obtains exactly the printed constant; `limits`: 0xFF, zero, one flipped bit and the rev1 descriptor's id are refused by both |
 | F15 | §9.3 table: one class per rule; several broken rules → the class of one of them | **resolved** | golden vectors' classes all reproduced; differential: the first implementation's class is always the class of a rule the input breaks (checked against ref2's violation sets, 0 exceptions); classes differ only on multi-rule inputs (C 3,636, D 3,620 of 360,154 / 178,519 failures) |
 
-## New after revision 2 (open)
+## New after revision 2 (resolved by ccd8f6aae, see "Revision 2's open items N1–N4" above)
 
 All four are places where the two implementations agree but the text is silent or inconsistent.
 
