@@ -1253,6 +1253,16 @@ catalogue plus the fenced kernel. `tests/kat_base0.rs` reproduces the frozen BAS
 seven float kernels are out of scope (an integer IR cannot express them), and the fenced Kimi K3 arms
 are recorded as defective (corpus-v1 §10.4) and are not a conformance target.
 
+Some templates have a **lean form** — the same values in fewer nodes, for blocks that would otherwise
+pass NF-12's 512 nodes (the gated-delta + MoE layers of Qwen3.5-MoE and Qwen3-Next, DeepSeek-V3's
+MLA + MoE): the narrowing without a zero term is `Clamp[lo, hi](HAFZ(x·m / 2^s))` (three nodes past
+its `Pow2` gather, not five — `Clamp_i64` then `+ 0` then `Clamp[lo, hi]` is `Clamp[lo, hi]`, since
+`[lo, hi] ⊆ i64`); `rms_unit_q24` (21 nodes, one `i64` eps) is `rms_norm_wide_q36`'s value and
+`l2_unit_q15` (17) is `l2_norm_q15`'s — the exponent is taken out only when positive, because
+`IntRsqrt` normalises a smaller argument to the same mantissa and returns its result as an exact
+left shift. The conformance crate holds each lean form equal to its template and to the live kernel
+on the template's own operand set.
+
 ### 11.1 The legacy rounding rules as segments
 
 | legacy rule (04a) | PALW-TIR segment | conformance |
