@@ -138,6 +138,10 @@ pub fn run_layer_major(
     let mut out = LayerMajorRun { stats: BTreeMap::new(), logits: vec![Vec::new(); seqs.len()] };
     for (oi, (bi, layer)) in occs.into_iter().enumerate() {
         let store = loader.load(bi, layer)?;
+        // The post block's outputs are the logits: when nobody wants them (a calibration), each
+        // is dropped as it is made — a 4,096-token sequence of a 248k vocabulary would otherwise
+        // hold 4 GB of rows only to discard them.
+        let keep = bi != prog.post || want_logits;
         let results: Vec<Result<(Vec<Vec<Vec<f32>>>, Option<BTreeMap<String, SiteStat>>)>> = seqs
             .par_iter()
             .zip(carries.par_iter())
@@ -146,9 +150,12 @@ pub fn run_layer_major(
                 if want_stats {
                     sess = sess.with_site_stats();
                 }
-                let mut outs = Vec::with_capacity(toks.len());
+                let mut outs = Vec::with_capacity(if keep { toks.len() } else { 0 });
                 for (p, t) in toks.iter().enumerate() {
-                    outs.push(sess.eval_occurrence(bi, layer, &cin[p], *t, p)?);
+                    let o = sess.eval_occurrence(bi, layer, &cin[p], *t, p)?;
+                    if keep {
+                        outs.push(o);
+                    }
                 }
                 Ok((outs, sess.sites.take()))
             })
