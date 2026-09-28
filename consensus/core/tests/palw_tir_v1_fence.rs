@@ -118,6 +118,12 @@ fn validate_refuses_every_value_this_build_cannot_run() {
     let mut late_court = ok.clone();
     late_court.palw_kary_court = Some(ForkActivation::new(AT + 1));
     assert!(late_court.validate_palw_tir_v1().is_err(), "the court must be in force at or below the fence");
+    let mut no_rcore = ok.clone();
+    no_rcore.palw_rcore_plus = None;
+    assert!(no_rcore.validate_palw_tir_v1().is_err(), "an IR claim's DA answers ride MaterialDisclosedV2, R-core+'s");
+    let mut late_rcore = ok.clone();
+    late_rcore.palw_rcore_plus = Some(ForkActivation::new(AT + 1));
+    assert!(late_rcore.validate_palw_tir_v1().is_err(), "R-core+ must be in force at or below the fence");
 
     let mut not_v2 = SIMNET_PARAMS;
     assert!(!matches!(not_v2.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));

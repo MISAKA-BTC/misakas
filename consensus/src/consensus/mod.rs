@@ -2444,6 +2444,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_registered_class_carriage_v1_impl(class_id)
     }
 
+    fn palw_tir_class_record_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1> {
+        self.palw_state_v2_tip()?.tir_class_v1(&class_id).cloned()
+    }
+
     fn palw_adopt_class_carriage_v1(&self, class_id: kaspa_hashes::Hash64, carriage: &[u8]) -> Result<(), String> {
         self.virtual_processor.palw_adopt_class_carriage_v1_impl(class_id, carriage)
     }
