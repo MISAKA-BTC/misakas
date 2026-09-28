@@ -112,6 +112,15 @@ pub struct PalwGenImageInputRefV1 {
     pub w: u32,
 }
 
+/// **A job's reference to its source ids** (RFC-0003 §II.2.2): the ids' commitment in the network's
+/// prompt-id form (`palw_prompt_ids_v1::prompt_token_ids_commitment_v1`, as the prompt's hash) and
+/// their count. The ids travel as the prompt's do; a dispute over a stage that reads them carries them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenSourceRefV1 {
+    pub token_ids_hash: Hash64,
+    pub tokens: u32,
+}
+
 /// Why a job's images are not the class's.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PalwGenJobImageErrorV1 {
@@ -165,6 +174,19 @@ pub struct PalwGenOffersV1 {
     /// The image slots, in image order: exactly the images the pipeline binds, each at its bound
     /// size (NF-P10). A job carries one image per slot.
     pub images: Vec<PalwGenImageOfferV1>,
+    /// **The longest source** (RFC-0003 §II.2.2: `TokenSource::Source`, an encoder–decoder's source
+    /// text); 0 when no rule reads the source. Only a text class reads one.
+    pub max_source_tokens: u32,
+    /// **The least a job's source is charged, in prompt tokens** (RFC-0003 open question 15, the
+    /// recommendation — PENDING USER CONFIRMATION with 13): a source is charged as prompt tokens, one
+    /// per id, and never below this — an encoder runs its whole padded width for any source. Declared
+    /// by the registrant and floored by admission at `⌈admitted source work / per-token work⌉`
+    /// ([`palw_gen_input_token_floors_v1`]); 0 on a class that reads no source.
+    pub source_token_floor: u32,
+    /// **The decoder's forced prefix** (RFC-0003 §II.2.2): the ids every prompt of the class starts
+    /// with (`decoder_start_token_id`, a forced target language) — declared by the class, carried at
+    /// the prompt's head. Empty for a class that forces none; only a text class may declare one.
+    pub forced_prompt_prefix: Vec<u32>,
 }
 
 /// **A generative class**: a pipeline of version-2 programs, its layouts, its output, its offers and
@@ -332,6 +354,9 @@ pub struct PalwGenClassReportV1 {
     /// A text class's per-slot price floor in prompt tokens ([`palw_gen_image_token_floor_v1`]);
     /// empty for every other class.
     pub image_token_floor: Vec<u32>,
+    /// A text class's source price floor in prompt tokens ([`palw_gen_input_token_floors_v1`]); 0 for
+    /// a class that reads no source, and for every class that is not a text class.
+    pub source_token_floor: u32,
 }
 
 /// Work in MAC-equivalents: ADR-0131's table over §8's three arithmetic counts (a MAC 1, an
@@ -343,27 +368,43 @@ pub fn palw_gen_work_units_v1(cost: &misaka_palw_tir::admit::CostV1) -> u128 {
         + cost.transcendentals as u128 * t.transcendental as u128
 }
 
-/// **The price floor of every image slot of a text class, in prompt tokens** (RFC-0003 open question
-/// 13's recommendation, PENDING USER CONFIRMATION): `⌈admitted per-image work / per-token work⌉`.
+/// **A text class's input price floors, in prompt tokens** — per image slot and for the source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwGenInputFloorsV1 {
+    /// Per image slot (open question 13's floor).
+    pub images: Vec<u32>,
+    /// The source's (open question 15's floor; 0 when no stage depends on the source).
+    pub source: u32,
+}
+
+/// **The price floors of a text class's inputs, in prompt tokens** (RFC-0003 open questions 13 and
+/// 15's recommendations, PENDING USER CONFIRMATION): `⌈admitted input work / per-token work⌉`.
 ///
-/// * **Per-image work.** Every stage but the text stage is image work: its admitted job work (every
-///   position, [`palw_gen_work_units_v1`]) is split evenly over the images it depends on — the images
-///   it binds and those of every earlier stage it reads — and slot `i`'s work is the sum of its
-///   shares, each rounded up.
+/// * **Input work.** Every stage but the text stage is input work: its admitted job work (every
+///   position, [`palw_gen_work_units_v1`]) is split evenly over the inputs it depends on — the images
+///   it binds, the source if it reads it (a token rule or a token binding over `TokenSource::Source`,
+///   RFC-0003 §II.2.2), and those of every earlier stage it reads — and an input's work is the sum of
+///   its shares, each rounded up.
 /// * **Per-token work.** The text stage's admitted work for one position: what a prompt token costs.
 ///
-/// `Err` names a stage of a text class that depends on no image: prefill no rule prices (RFC-0001's
-/// D10 pays decode leaves only), refused rather than carried free.
-pub fn palw_gen_image_token_floor_v1(
+/// `Err` names a stage of a text class that depends on no image and not on the source: prefill no
+/// rule prices (RFC-0001's D10 pays decode leaves only), refused rather than carried free.
+pub fn palw_gen_input_token_floors_v1(
     pipeline: &TirPipelineV1,
     admission: &TirPipelineAdmissionV1,
     images: usize,
-) -> Result<Vec<u32>, PalwGenClassErrorV1> {
+) -> Result<PalwGenInputFloorsV1, PalwGenClassErrorV1> {
+    /// The source's mark among a stage's dependencies, beside the image indices (at most 16).
+    const SOURCE: u8 = u8::MAX;
+    let reads_source = |rule: &TokenRule| rule.source == TokenSource::Source;
     let text = pipeline.output_stage as usize;
     let mut depends: Vec<std::collections::BTreeSet<u8>> = Vec::with_capacity(pipeline.stages.len());
-    let mut work = vec![0u128; images];
+    let (mut work, mut source_work) = (vec![0u128; images], 0u128);
     for (s, st) in pipeline.stages.iter().enumerate() {
         let mut set = std::collections::BTreeSet::new();
+        if st.tokens.as_ref().is_some_and(reads_source) {
+            set.insert(SOURCE);
+        }
         for b in &st.bind {
             match b {
                 Binding::JobImage { index } => {
@@ -372,19 +413,24 @@ pub fn palw_gen_image_token_floor_v1(
                 Binding::StageRows { stage, .. } | Binding::StageFinal { stage } | Binding::StageRowCount { stage, .. } => {
                     set.extend(depends[*stage as usize].iter().copied());
                 }
+                Binding::JobTokens { rule } | Binding::JobTokenCount { rule } if reads_source(rule) => {
+                    set.insert(SOURCE);
+                }
                 _ => {}
             }
         }
         if s != text {
             if set.is_empty() {
                 return Err(PalwGenClassErrorV1::Offers(format!(
-                    "stage {s} ({}) of a text class reads no image: prefill no rule prices",
+                    "stage {s} ({}) of a text class reads no image and no source: prefill no rule prices",
                     st.name
                 )));
             }
             let share = palw_gen_work_units_v1(&admission.stages[s].job_cost).div_ceil(set.len() as u128);
             for i in &set {
-                if let Some(w) = work.get_mut(*i as usize) {
+                if *i == SOURCE {
+                    source_work = source_work.saturating_add(share);
+                } else if let Some(w) = work.get_mut(*i as usize) {
                     *w = w.saturating_add(share);
                 }
             }
@@ -392,7 +438,19 @@ pub fn palw_gen_image_token_floor_v1(
         depends.push(set);
     }
     let per_token = palw_gen_work_units_v1(&admission.stages[text].admission.view.position.cost).max(1);
-    Ok(work.iter().map(|w| u32::try_from(w.div_ceil(per_token)).unwrap_or(u32::MAX)).collect())
+    let tokens = |w: u128| u32::try_from(w.div_ceil(per_token)).unwrap_or(u32::MAX);
+    Ok(PalwGenInputFloorsV1 { images: work.iter().map(|w| tokens(*w)).collect(), source: tokens(source_work) })
+}
+
+/// **The price floor of every image slot of a text class, in prompt tokens** (RFC-0003 open question
+/// 13's recommendation, PENDING USER CONFIRMATION): the image half of
+/// [`palw_gen_input_token_floors_v1`].
+pub fn palw_gen_image_token_floor_v1(
+    pipeline: &TirPipelineV1,
+    admission: &TirPipelineAdmissionV1,
+    images: usize,
+) -> Result<Vec<u32>, PalwGenClassErrorV1> {
+    palw_gen_input_token_floors_v1(pipeline, admission, images).map(|f| f.images)
 }
 
 fn fixed_shape(dims: &[Dim]) -> Option<Vec<u32>> {
@@ -482,11 +540,16 @@ fn check_offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2], offers: &Pa
     for (source, max, what) in [
         (TokenSource::Prompt, offers.max_prompt_tokens, "prompt"),
         (TokenSource::Negative, offers.max_negative_tokens, "negative prompt"),
+        (TokenSource::Source, offers.max_source_tokens, "source"),
     ] {
         let readers: Vec<(usize, u32)> =
             prompt_readers(pipeline).into_iter().filter(|(s, _, _)| *s == source).map(|(_, t, r)| (t, r)).collect();
         if readers.is_empty() && max != 0 {
             return bad(format!("a {what} is offered and no rule reads it"));
+        }
+        // A source is the job's input or nothing (RFC-0003 §II.2.2): a class that reads one offers one.
+        if source == TokenSource::Source && !readers.is_empty() && max == 0 {
+            return bad("a rule reads the source and no source is offered".into());
         }
         for (template, room) in readers {
             let need = template as u64 + max as u64;
@@ -496,8 +559,31 @@ fn check_offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2], offers: &Pa
         }
     }
     // A text stream starts with at least one prompt id: a text class offers a prompt.
-    if pipeline.stages.iter().any(|st| matches!(st.trip, TripRule::TextStream)) && offers.max_prompt_tokens == 0 {
+    let text_stage = pipeline.stages.iter().find(|st| matches!(st.trip, TripRule::TextStream));
+    if text_stage.is_some() && offers.max_prompt_tokens == 0 {
         return bad("a text class offers a prompt of at least one id".into());
+    }
+    // The source (RFC-0003 §II.2.2) is a text class's input — the V5 job carries it — and only a
+    // class that reads one prices one (its floor is checked with admission).
+    if offers.max_source_tokens > 0 && text_stage.is_none() {
+        return bad("a source is offered on a class that is not a text class".into());
+    }
+    if offers.max_source_tokens == 0 && offers.source_token_floor != 0 {
+        return bad("a source price on a class that reads no source".into());
+    }
+    // The forced prefix (RFC-0003 §II.2.2): only a text class's, ids its text stage takes, and a
+    // prompt long enough to start with it.
+    if !offers.forced_prompt_prefix.is_empty() {
+        let Some(text) = text_stage else {
+            return bad("a forced prompt prefix on a class that is not a text class".into());
+        };
+        let bound = programs[text.program as usize].token_bound;
+        if let Some(id) = offers.forced_prompt_prefix.iter().find(|id| **id >= bound) {
+            return bad(format!("the forced prefix's id {id} is past the text stage's token bound {bound}"));
+        }
+        if offers.forced_prompt_prefix.len() as u64 > offers.max_prompt_tokens as u64 {
+            return bad("the forced prefix is longer than the longest offered prompt".into());
+        }
     }
     Ok(())
 }
@@ -585,7 +671,15 @@ pub fn palw_gen_class_preflight_v1(
         }
         check_offers(&pipeline, &programs, &class.offers)?;
         let admission = admit_class(class, ceilings)?;
-        let image_token_floor = palw_gen_image_token_floor_v1(&pipeline, &admission, class.offers.images.len())?;
+        let floors = palw_gen_input_token_floors_v1(&pipeline, &admission, class.offers.images.len())?;
+        let image_token_floor = floors.images;
+        if class.offers.max_source_tokens > 0 && class.offers.source_token_floor < floors.source.max(1) {
+            return Err(PalwGenClassErrorV1::Offers(format!(
+                "the source is priced at no less than {} prompt tokens, below its floor {} (⌈source work / per-token work⌉)",
+                class.offers.source_token_floor,
+                floors.source.max(1)
+            )));
+        }
         for (i, (slot, floor)) in class.offers.images.iter().zip(&image_token_floor).enumerate() {
             if slot.token_equivalents < (*floor).max(1) {
                 return Err(PalwGenClassErrorV1::Offers(format!(
@@ -601,6 +695,7 @@ pub fn palw_gen_class_preflight_v1(
             output_tile_len: None,
             draws_randomness: draws_randomness(&programs),
             image_token_floor,
+            source_token_floor: floors.source,
         });
     }
     let post = &out_prog.blocks[out_prog.schedule.post as usize];
@@ -653,6 +748,7 @@ pub fn palw_gen_class_preflight_v1(
         output_tile_len: Some(output_tile_len),
         draws_randomness: draws_randomness(&programs),
         image_token_floor: Vec::new(),
+        source_token_floor: 0,
     })
 }
 
@@ -756,6 +852,9 @@ impl PalwGenClassRecordV1 {
                 max_prompt_tokens: 1,
                 max_negative_tokens: 0,
                 images: Vec::new(),
+                max_source_tokens: 0,
+                source_token_floor: 0,
+                forced_prompt_prefix: Vec::new(),
             },
             tokenizer_id: Hash64::from_bytes([seed; 64]),
         };

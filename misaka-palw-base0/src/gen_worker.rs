@@ -4,8 +4,9 @@
 //!
 //! * **The worker** holds a class — its `gen_classes` row and this node's weights, refused unless
 //!   they hash to the class's `artifact_root` ([`GenHeldClassV1::hold`]) — and runs a V5 job
-//!   ([`GenHeldClassV1::run_v5`]): the job held to the class, the prompt to the job's hash, every
-//!   image to its `input_root`, then the pipeline through FP Job V4's decoder. Its answer is the
+//!   ([`GenHeldClassV1::run_v5`]): the job held to the class, the prompt to the job's hash and to the
+//!   class's forced prefix, the source to the job's source reference (RFC-0003 §II.2.2), every image
+//!   to its `input_root`, then the pipeline through FP Job V4's decoder. Its answer is the
 //!   claim's binding (`PalwGenStepBindingV1`): the execution root a V5 commitment carries, the leaf
 //!   count and the generated ids. [`gen_worker_answer_v1`] is the serving loop's one step — one
 //!   request frame in, one answer out, a refusal never dropping the held class.
@@ -48,13 +49,15 @@ pub struct GenHeldClassV1<P: PipelineParams> {
     pub params: P,
 }
 
-/// **One V5 run**: the job, its prompt and images (the executor's inputs), the execution and the
-/// binding a commitment carries.
+/// **One V5 run**: the job, its prompt, images and source (the executor's inputs), the execution and
+/// the binding a commitment carries.
 #[derive(Clone, Debug)]
 pub struct GenWorkV1 {
     pub job: PalwFreePromptJobV5,
     pub prompt: Vec<u32>,
     pub images: Vec<JobImageV1>,
+    /// The source ids (RFC-0003 §II.2.2); empty for a job without a source.
+    pub source: Vec<u32>,
     pub execution: PalwGenExecutionV1,
     pub binding: PalwGenStepBindingV1,
 }
@@ -69,17 +72,31 @@ impl<P: PipelineParams> GenHeldClassV1<P> {
     }
 
     /// **Hold the inputs a V5 job names**: the job the class's (`palw_fp_v5_resolve_class_v1`), the
-    /// prompt the job's hash in the network's form, and every image the reference the job carries.
+    /// prompt the job's hash in the network's form and starting with the class's forced prefix, the
+    /// source the job's source reference (none when it carries none), and every image the reference
+    /// the job carries.
     fn check_inputs(
         &self,
         job: &PalwFreePromptJobV5,
         prompt: &[u32],
         images: &[JobImageV1],
+        source: &[u32],
         form: PalwPromptIdsFormV1,
     ) -> Result<(), String> {
         kaspa_consensus_core::palw_fp_job_v5::palw_fp_v5_resolve_class_v1(job, Some(&self.row), true).map_err(|e| e.to_string())?;
         if prompt.len() != job.v4.prompt_tokens as usize || !prompt_token_ids_match_v1(form, prompt, &job.v4.prompt_token_ids_hash) {
             return Err("the prompt is not the job's".into());
+        }
+        kaspa_consensus_core::palw_fp_job_v5::palw_fp_v5_prompt_head_admitted_v1(&self.row.class.offers, prompt)
+            .map_err(|e| e.to_string())?;
+        match job.source {
+            None if source.is_empty() => {}
+            None => return Err("a source for a job that carries none".into()),
+            Some(reference) => {
+                if source.len() != reference.tokens as usize || !prompt_token_ids_match_v1(form, source, &reference.token_ids_hash) {
+                    return Err("the source is not the job's".into());
+                }
+            }
         }
         if images.len() != job.images.len() {
             return Err(format!("{} images for a job of {}", images.len(), job.images.len()));
@@ -99,11 +116,13 @@ impl<P: PipelineParams> GenHeldClassV1<P> {
         job: &PalwFreePromptJobV5,
         prompt: &[u32],
         images: &[JobImageV1],
+        source: &[u32],
         form: PalwPromptIdsFormV1,
     ) -> Result<GenWorkV1, String> {
-        self.check_inputs(job, prompt, images, form)?;
+        self.check_inputs(job, prompt, images, source, form)?;
         let decode = PalwGenDecodeV1::of(job).ok_or("a V5 job decodes under V4's rules")?;
-        let run_job = PipelineJob { prompt: prompt.to_vec(), images: images.to_vec(), ..PipelineJob::default() };
+        let run_job =
+            PipelineJob { prompt: prompt.to_vec(), images: images.to_vec(), source: source.to_vec(), ..PipelineJob::default() };
         let execution = palw_gen_execute_v1(
             &self.pipeline,
             &self.programs,
@@ -115,7 +134,14 @@ impl<P: PipelineParams> GenHeldClassV1<P> {
         )
         .map_err(|e| e.to_string())?;
         let binding = PalwGenStepBindingV1::of(job, &execution.claim, execution.space.leaf_count());
-        Ok(GenWorkV1 { job: job.clone(), prompt: prompt.to_vec(), images: images.to_vec(), execution, binding })
+        Ok(GenWorkV1 {
+            job: job.clone(),
+            prompt: prompt.to_vec(),
+            images: images.to_vec(),
+            source: source.to_vec(),
+            execution,
+            binding,
+        })
     }
 }
 
@@ -129,6 +155,7 @@ impl GenWorkV1 {
             binding: &self.binding,
             prompt: &self.prompt,
             images: &self.images,
+            source: &self.source,
         }
     }
 
@@ -150,13 +177,15 @@ pub struct GenWireImageV1 {
     pub rgb: Vec<u8>,
 }
 
-/// **A V5 request**: the job, the prompt's ids and the images' bytes (which never ride a
-/// transaction — they travel to the worker, and with the capture to the panel).
+/// **A V5 request**: the job, the prompt's ids, the images' bytes and the source's ids (which never
+/// ride a transaction — they travel to the worker, and with the capture to the panel).
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwGenWorkerRequestV1 {
     pub job: PalwFreePromptJobV5,
     pub prompt_ids: Vec<u32>,
     pub images: Vec<GenWireImageV1>,
+    /// Empty for a job without a source.
+    pub source_ids: Vec<u32>,
 }
 
 /// **The worker's answer**: the binding (the commitment's execution root, the leaf count, the
@@ -179,7 +208,7 @@ pub fn gen_worker_answer_v1<P: PipelineParams>(
         Err(_) => return (PalwGenWorkerAnswerV1::Refused { why: "the request does not decode".into() }, None),
     };
     let images: Vec<JobImageV1> = request.images.into_iter().map(|i| JobImageV1 { h: i.h, w: i.w, rgb: i.rgb }).collect();
-    match held.run_v5(&request.job, &request.prompt_ids, &images, form) {
+    match held.run_v5(&request.job, &request.prompt_ids, &images, &request.source_ids, form) {
         Ok(work) => (PalwGenWorkerAnswerV1::Result { binding: work.binding.clone() }, Some(work)),
         Err(why) => (PalwGenWorkerAnswerV1::Refused { why }, None),
     }
@@ -208,9 +237,10 @@ pub fn gen_seat_judge_v1<P: PipelineParams>(
     job: &PalwFreePromptJobV5,
     prompt: &[u32],
     images: &[JobImageV1],
+    source: &[u32],
     form: PalwPromptIdsFormV1,
 ) -> GenSeatJudgmentV1 {
-    match held.run_v5(job, prompt, images, form) {
+    match held.run_v5(job, prompt, images, source, form) {
         Err(why) => GenSeatJudgmentV1::Unjudgeable(why),
         Ok(replay) if replay.execution_root() == *claim_execution_root => GenSeatJudgmentV1::Valid,
         Ok(replay) => {
@@ -231,6 +261,7 @@ pub struct GenCaptureV1 {
     pub job: PalwFreePromptJobV5,
     pub prompt: Vec<u32>,
     pub images: Vec<GenWireImageV1>,
+    pub source: Vec<u32>,
     pub generated: Vec<u32>,
     /// Per stage, every leaf's lanes, in leaf order.
     pub leaves: Vec<Vec<Vec<u8>>>,
@@ -251,6 +282,7 @@ impl GenCaptureV1 {
             job: work.job.clone(),
             prompt: work.prompt.clone(),
             images: work.images.iter().map(|i| GenWireImageV1 { h: i.h, w: i.w, rgb: i.rgb.clone() }).collect(),
+            source: work.source.clone(),
             generated: work.execution.claim.generated.clone(),
             leaves,
         })
@@ -261,7 +293,12 @@ impl GenCaptureV1 {
     /// execution the captured commitments describe, whatever computed them.
     pub fn rebuild<P: PipelineParams>(&self, held: &GenHeldClassV1<P>) -> Result<GenWorkV1, String> {
         let images: Vec<JobImageV1> = self.images.iter().map(|i| JobImageV1 { h: i.h, w: i.w, rgb: i.rgb.clone() }).collect();
-        let facts_job = PipelineJob { prompt: self.prompt.clone(), generated: self.generated.clone(), ..PipelineJob::default() };
+        let facts_job = PipelineJob {
+            prompt: self.prompt.clone(),
+            generated: self.generated.clone(),
+            source: self.source.clone(),
+            ..PipelineJob::default()
+        };
         let facts = stage_job_facts(&held.pipeline, &held.programs, &facts_job).map_err(|e| e.to_string())?;
         let trips: Vec<u32> = facts.iter().map(|f| f.trip).collect();
         let space = PalwGenStepSpaceV1::new(&held.pipeline, &held.programs, &held.row.class.layouts, &trips, self.prompt.len() as u32)
@@ -296,7 +333,7 @@ impl GenCaptureV1 {
             output: misaka_palw_tir::tensor::Tensor::zeros(misaka_palw_tir::types::DType::I32, &[0]),
         };
         let execution = PalwGenExecutionV1 { run, stop: None, space, leaf_values, leaf_hashes, claim };
-        Ok(GenWorkV1 { job: self.job.clone(), prompt: self.prompt.clone(), images, execution, binding })
+        Ok(GenWorkV1 { job: self.job.clone(), prompt: self.prompt.clone(), images, source: self.source.clone(), execution, binding })
     }
 }
 

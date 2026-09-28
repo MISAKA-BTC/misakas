@@ -123,6 +123,7 @@ pub fn palw_gen_yardstick_v1(
         scalars: offers.scalars.iter().map(|s| s.lo).collect(),
         images: Vec::new(),
         generated: vec![0; generated],
+        source: vec![0; offers.max_source_tokens as usize],
     };
     let facts = stage_job_facts(pipeline, programs, &job)
         .map_err(|e| PalwClassAdmissionError::GenClass(format!("the class's most expensive offered job does not run: {e}")))?;

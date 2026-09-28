@@ -82,6 +82,9 @@ fn vlm_class(vector: &str, tile: u32, h_tile: u32, checkpoint: u32) -> PalwGenCl
             max_prompt_tokens: 32,
             max_negative_tokens: 0,
             images: vec![PalwGenImageOfferV1 { h, w, tile_len: 64, token_equivalents: 1_000_000 }],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
         },
         tokenizer_id: Hash64::from_bytes([0x74; 64]),
     }

@@ -111,6 +111,9 @@ fn image_class() -> PalwGenClassV1 {
             max_prompt_tokens: encoder.max_trip - (rule.prefix.len() + rule.suffix.len()) as u32,
             max_negative_tokens: 0,
             images: vec![],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
         },
         output: OutputSpecV1::image_rgb8(2, 2),
         pipeline,
@@ -134,6 +137,9 @@ fn vlm_class() -> PalwGenClassV1 {
             max_prompt_tokens: 8,
             max_negative_tokens: 0,
             images: vec![PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4, token_equivalents: 1_000_000 }],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
         },
         output: OutputSpecV1::tokens(max_trip),
         pipeline,
@@ -356,7 +362,7 @@ fn v5_job(class: &PalwGenClassV1, root: &Hash64) -> PalwFreePromptJobV5 {
     v4.tokenizer_id = class.tokenizer_id;
     v4.prompt_tokens = 4;
     v4.decode_token_limit = 4;
-    PalwFreePromptJobV5 { v4, images: vec![PalwGenImageInputRefV1 { input_root: root_of(0x3b), h: 2, w: 3 }] }
+    PalwFreePromptJobV5 { v4, images: vec![PalwGenImageInputRefV1 { input_root: root_of(0x3b), h: 2, w: 3 }], source: None }
 }
 
 #[test]

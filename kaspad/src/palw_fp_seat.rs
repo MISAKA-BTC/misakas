@@ -1026,7 +1026,7 @@ mod tests {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            images: None,
+            v5: None,
         };
 
         // Nothing served: the producer's default arm, and never `Valid`.
@@ -1242,7 +1242,7 @@ mod fp_job_v4_panel_tests {
             sampling_seed: [0; 32],
             temperature_q: 0,
             decode: None,
-            images: None,
+            v5: None,
         }
     }
 

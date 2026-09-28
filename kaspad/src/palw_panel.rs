@@ -6392,7 +6392,7 @@ impl PalwPanelService {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            images: None,
+            v5: None,
         };
         // **RFC-0001 §A.4: past `Params::palw_fp_decode_rules` every new free-prompt job is FP Job
         // V4** — the network's own canonical job too, as the no-op V4 (it decodes exactly what the
@@ -18266,7 +18266,7 @@ mod seat_s_tests {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            images: None,
+            v5: None,
         };
         (job, ids)
     }
@@ -21264,7 +21264,7 @@ mod fp_job_v4_material_tests {
             sampling_seed: [0; 32],
             temperature_q: 0,
             decode: None,
-            images: None,
+            v5: None,
         };
         let greedy = backend.execute_free_prompt(&v3, &usize_prompt).unwrap();
         let v4 = v3.clone().into_v4(DecodeConfigV4 {

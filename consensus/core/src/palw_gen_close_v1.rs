@@ -27,7 +27,9 @@
 //! dtype the space gives the leaf ([`PalwGenLeafOpeningV1`]). The prompt ids ride only when the
 //! disputed stage reads them (the text stage, or a stage whose tokens or bindings read the prompt),
 //! whole, checked against the job's `prompt_token_ids_hash` in the network's form; a dispute
-//! anywhere else reveals nothing of the prompt.
+//! anywhere else reveals nothing of the prompt. The source ids (RFC-0003 §II.2.2, an
+//! encoder–decoder's source) ride by the same rule: only when the disputed stage reads them, whole,
+//! checked against the job's `source.token_ids_hash` in the same form.
 
 use crate::Hash64;
 use crate::palw_artifact::PalwArtifactOpeningV1;
@@ -175,6 +177,8 @@ pub struct PalwGenConeCloseV1 {
     pub binding: PalwGenStepBindingV1,
     /// The prompt ids, whole — carried exactly when the disputed stage reads them.
     pub prompt_ids: Vec<u32>,
+    /// The source ids, whole — carried exactly when the disputed stage reads them (RFC-0003 §II.2.2).
+    pub source_ids: Vec<u32>,
     pub disputed: PalwGenLeafOpeningV1,
     pub operands: Vec<PalwGenLeafOpeningV1>,
     pub image_tiles: Vec<PalwGenImageTileV1>,
@@ -208,6 +212,10 @@ pub enum PalwGenCloseErrorV1 {
     PromptNotCarried,
     #[error("the close carries a prompt the disputed stage does not read, or one that is not the job's")]
     PromptNotTheJobs,
+    #[error("the disputed stage reads the job's source, and the close does not carry it")]
+    SourceNotCarried,
+    #[error("the close carries a source the disputed stage does not read, or one that is not the job's")]
+    SourceNotTheJobs,
     #[error(transparent)]
     Refused(PalwGenCloseRefusalV1),
 }
@@ -242,17 +250,35 @@ pub fn palw_gen_stage_reads_prompt_v1(pipeline: &TirPipelineV1, stage: usize) ->
         || st.bind.iter().any(|b| matches!(b, Binding::JobTokens { rule } if rule.source == TokenSource::Prompt))
 }
 
+/// **Does stage `stage` read the job's source ids** (RFC-0003 §II.2.2)? A stage whose token run is
+/// the source, and a stage a job-token binding feeds the source to (a count binding reads only the
+/// length, which the job carries).
+pub fn palw_gen_stage_reads_source_v1(pipeline: &TirPipelineV1, stage: usize) -> bool {
+    let Some(st) = pipeline.stages.get(stage) else { return false };
+    st.tokens.as_ref().is_some_and(|r| r.source == TokenSource::Source)
+        || st.bind.iter().any(|b| matches!(b, Binding::JobTokens { rule } if rule.source == TokenSource::Source))
+}
+
+/// **The ids a binding check is given** — each `None` where it is not carried (zeros of the job's
+/// length stand in: the job's trips and positions depend on the lengths alone), `Some` where it is,
+/// and then the job's length.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PalwGenJobIdsV1<'a> {
+    pub prompt: Option<&'a [u32]>,
+    pub source: Option<&'a [u32]>,
+}
+
 /// **Verify a binding against the claim and the registry**: its version; its execution root the
 /// claim's; its job the claim's class's (`palw_fp_v5_resolve_class_v1` against the row); its stage
-/// roots the pipeline's count; the job's facts (with `prompt` where carried, zeros of the job's
-/// prompt length elsewhere — see the module doc); the step space; and the leaf count, which convicts
-/// when it is not canonical.
+/// roots the pipeline's count; the job's facts (with the prompt and the source where carried, zeros
+/// of the job's lengths elsewhere — see the module doc); the step space; and the leaf count, which
+/// convicts when it is not canonical.
 pub fn verify_gen_binding_v1(
     binding: &PalwGenStepBindingV1,
     row: &PalwGenClassRecordV1,
     claim_class_id: &Hash64,
     claim_execution_root: &Hash64,
-    prompt: Option<&[u32]>,
+    ids: PalwGenJobIdsV1<'_>,
 ) -> Result<PalwGenBindingOutcomeV1, PalwGenCloseErrorV1> {
     if binding.version != PALW_GEN_CLOSE_VERSION_V1 {
         return Err(PalwGenCloseErrorV1::Version(binding.version));
@@ -270,12 +296,18 @@ pub fn verify_gen_binding_v1(
         return Err(PalwGenCloseErrorV1::Binding("one root per stage".into()));
     }
     let prompt_len = binding.job.v4.prompt_tokens as usize;
-    let prompt_ids = match prompt {
+    let prompt_ids = match ids.prompt {
         Some(ids) if ids.len() == prompt_len => ids.to_vec(),
         Some(_) => return Err(PalwGenCloseErrorV1::PromptNotTheJobs),
         None => vec![0; prompt_len],
     };
-    let job = PipelineJob { prompt: prompt_ids, generated: binding.generated.clone(), ..PipelineJob::default() };
+    let source_len = binding.job.source.map_or(0, |s| s.tokens as usize);
+    let source_ids = match ids.source {
+        Some(ids) if ids.len() == source_len => ids.to_vec(),
+        Some(_) => return Err(PalwGenCloseErrorV1::SourceNotTheJobs),
+        None => vec![0; source_len],
+    };
+    let job = PipelineJob { prompt: prompt_ids, generated: binding.generated.clone(), source: source_ids, ..PipelineJob::default() };
     let facts = stage_job_facts(&pipeline, &programs, &job).map_err(|e| PalwGenCloseErrorV1::Binding(e.to_string()))?;
     let trips: Vec<u32> = facts.iter().map(|f| f.trip).collect();
     let space = PalwGenStepSpaceV1::new(&pipeline, &programs, &row.class.layouts, &trips, prompt_len as u32)
@@ -386,7 +418,22 @@ fn open_cone_close_v1(
         }
         (false, true) => None,
     };
-    let v = match verify_gen_binding_v1(&close.binding, row, claim_class_id, claim_execution_root, prompt)? {
+    // The source: by the same rule, against the job's source reference.
+    let reads = palw_gen_stage_reads_source_v1(&pipeline, close.disputed.coord.stage as usize);
+    let source = match (reads, close.source_ids.is_empty()) {
+        (true, true) => return Err(PalwGenCloseErrorV1::SourceNotCarried),
+        (false, false) => return Err(PalwGenCloseErrorV1::SourceNotTheJobs),
+        (true, false) => {
+            let Some(reference) = close.binding.job.source else { return Err(PalwGenCloseErrorV1::SourceNotTheJobs) };
+            if !crate::palw_prompt_ids_v1::prompt_token_ids_match_v1(prompt_form, &close.source_ids, &reference.token_ids_hash) {
+                return Err(PalwGenCloseErrorV1::SourceNotTheJobs);
+            }
+            Some(close.source_ids.as_slice())
+        }
+        (false, true) => None,
+    };
+    let ids = PalwGenJobIdsV1 { prompt, source };
+    let v = match verify_gen_binding_v1(&close.binding, row, claim_class_id, claim_execution_root, ids)? {
         PalwGenBindingOutcomeV1::Verified(v) => v,
         PalwGenBindingOutcomeV1::Convicted(fault) => return Ok(Err(fault)),
     };
@@ -473,8 +520,9 @@ pub fn palw_gen_root_claim_site_v1(
     narrowed: u64,
 ) -> Result<crate::palw_tir_dissect_v1::PalwTirDissectSiteV1, String> {
     let binding = &root.finalize.binding;
-    // The site needs the job's trips, never its prompt's values: zeros of its length stand in.
-    let v = match verify_gen_binding_v1(binding, row, claim_class_id, claim_execution_root, None).map_err(|e| e.to_string())? {
+    // The site needs the job's trips, never its ids' values: zeros of their lengths stand in.
+    let ids = PalwGenJobIdsV1::default();
+    let v = match verify_gen_binding_v1(binding, row, claim_class_id, claim_execution_root, ids).map_err(|e| e.to_string())? {
         PalwGenBindingOutcomeV1::Verified(v) => v,
         PalwGenBindingOutcomeV1::Convicted(fault) => return Err(format!("the binding convicts on its own ({fault:?})")),
     };
@@ -529,7 +577,7 @@ pub fn check_gen_decode_close_v1(
     if close.version != PALW_GEN_CLOSE_VERSION_V1 {
         return Err(PalwGenCloseErrorV1::Version(close.version));
     }
-    let v = match verify_gen_binding_v1(&close.binding, row, claim_class_id, claim_execution_root, None)? {
+    let v = match verify_gen_binding_v1(&close.binding, row, claim_class_id, claim_execution_root, PalwGenJobIdsV1::default())? {
         PalwGenBindingOutcomeV1::Verified(v) => v,
         PalwGenBindingOutcomeV1::Convicted(fault) => return Ok(Some(fault)),
     };
@@ -591,6 +639,8 @@ pub struct PalwGenEvidenceV1<'a> {
     pub binding: &'a PalwGenStepBindingV1,
     pub prompt: &'a [u32],
     pub images: &'a [misaka_palw_tir::pipeline::JobImageV1],
+    /// The job's source ids (RFC-0003 §II.2.2); empty for a job without a source.
+    pub source: &'a [u32],
 }
 
 impl PalwGenEvidenceV1<'_> {
@@ -600,7 +650,7 @@ impl PalwGenEvidenceV1<'_> {
             self.row,
             &self.row.class_id,
             &self.binding.committed_execution_root,
-            Some(self.prompt),
+            PalwGenJobIdsV1 { prompt: Some(self.prompt), source: Some(self.source) },
         )
         .map_err(|e| e.to_string())?
         {
@@ -632,15 +682,19 @@ impl PalwGenEvidenceV1<'_> {
         Ok(PalwGenCloseV1 { disputed: open(s as usize, i as usize)?, operands, image_tiles, params })
     }
 
-    /// A close as it rides: lanes, the binding, and the prompt exactly when the stage reads it.
+    /// A close as it rides: lanes, the binding, and the prompt and the source exactly when the stage
+    /// reads them.
     fn wire(&self, v: &PalwGenVerifiedBindingV1, close: &PalwGenCloseV1) -> Result<PalwGenConeCloseV1, String> {
         let lanes =
             |o: &PalwGenOpenedLeafV1| PalwGenLeafOpeningV1::of(&v.space, o).ok_or_else(|| format!("{:?} does not ride", o.coord));
-        let reads = palw_gen_stage_reads_prompt_v1(&v.pipeline, close.disputed.coord.stage as usize);
+        let stage = close.disputed.coord.stage as usize;
+        let reads = palw_gen_stage_reads_prompt_v1(&v.pipeline, stage);
+        let reads_source = palw_gen_stage_reads_source_v1(&v.pipeline, stage);
         Ok(PalwGenConeCloseV1 {
             version: PALW_GEN_CLOSE_VERSION_V1,
             binding: self.binding.clone(),
             prompt_ids: if reads { self.prompt.to_vec() } else { Vec::new() },
+            source_ids: if reads_source { self.source.to_vec() } else { Vec::new() },
             disputed: lanes(&close.disputed)?,
             operands: close.operands.iter().map(lanes).collect::<Result<_, _>>()?,
             image_tiles: close.image_tiles.clone(),

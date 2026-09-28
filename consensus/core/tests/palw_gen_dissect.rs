@@ -126,6 +126,9 @@ fn fixture() -> Fixture {
             max_prompt_tokens: 32,
             max_negative_tokens: 0,
             images: vec![PalwGenImageOfferV1 { h: image.h, w: image.w, tile_len: 64, token_equivalents: 1_000_000 }],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
         },
         tokenizer_id: Hash64::from_bytes([0x74; 64]),
     };
@@ -155,6 +158,7 @@ fn v5_job(f: &Fixture) -> PalwFreePromptJobV5 {
     PalwFreePromptJobV5 {
         v4,
         images: vec![PalwGenImageInputRefV1 { input_root: Hash64::from_bytes(input_root), h: f.image.h, w: f.image.w }],
+        source: None,
     }
 }
 
@@ -208,18 +212,24 @@ fn cone(f: &Fixture, e: &PalwGenExecutionV1, binding: &PalwGenStepBindingV1, ind
         operands,
         image_tiles,
         params: palw_gen_open_leaves_v1(&f.programs, &f.params, 0..count).unwrap(),
+        source_ids: vec![],
     }
 }
 
 /// The court's case and the in-memory close of a wire close.
 fn with_case<T>(f: &Fixture, close: &PalwGenConeCloseV1, run: impl FnOnce(&PalwGenCourtCaseV1<'_>, &PalwGenCloseV1) -> T) -> T {
-    let v =
-        match verify_gen_binding_v1(&close.binding, &f.row, &f.row.class_id, &close.binding.committed_execution_root, Some(&f.prompt))
-            .unwrap()
-        {
-            PalwGenBindingOutcomeV1::Verified(v) => v,
-            PalwGenBindingOutcomeV1::Convicted(fault) => panic!("the binding convicts: {fault:?}"),
-        };
+    let v = match verify_gen_binding_v1(
+        &close.binding,
+        &f.row,
+        &f.row.class_id,
+        &close.binding.committed_execution_root,
+        PalwGenJobIdsV1 { prompt: Some(&f.prompt), source: None },
+    )
+    .unwrap()
+    {
+        PalwGenBindingOutcomeV1::Verified(v) => v,
+        PalwGenBindingOutcomeV1::Convicted(fault) => panic!("the binding convicts: {fault:?}"),
+    };
     let opened = |o: &PalwGenLeafOpeningV1| o.opened(&v.space).unwrap();
     let mem = PalwGenCloseV1 {
         disputed: opened(&close.disputed),

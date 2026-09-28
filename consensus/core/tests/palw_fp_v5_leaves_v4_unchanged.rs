@@ -33,7 +33,9 @@ use kaspa_consensus_core::palw_freeprompt_v3::{
     PALW_FP_V3_ALL_DOMAINS, PALW_FP_V3_VERSION, PALW_FP_V4_VERSION, PalwFpDecodeRulesV1, PalwFpV3Error, PalwFreePromptJobV3,
     fp_job_id_v3, fp_job_id_v4,
 };
-use kaspa_consensus_core::palw_gen_class_v1::{PalwGenImageInputRefV1, PalwGenImageOfferV1, PalwGenJobImageErrorV1, PalwGenOffersV1};
+use kaspa_consensus_core::palw_gen_class_v1::{
+    PalwGenImageInputRefV1, PalwGenImageOfferV1, PalwGenJobImageErrorV1, PalwGenOffersV1, PalwGenSourceRefV1,
+};
 use kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1;
 
 fn unhex(s: &str) -> Vec<u8> {
@@ -81,6 +83,9 @@ fn offers(slots: &[(u32, u32, u32)]) -> PalwGenOffersV1 {
         max_prompt_tokens: 64,
         max_negative_tokens: 0,
         images: slots.iter().map(|(h, w, t)| PalwGenImageOfferV1 { h: *h, w: *w, tile_len: 4, token_equivalents: *t }).collect(),
+        max_source_tokens: 0,
+        forced_prompt_prefix: vec![],
+        source_token_floor: 0,
     }
 }
 
@@ -139,12 +144,14 @@ fn v4s_decoder_passes_every_golden_vector() {
 #[test]
 fn a_v5_job_is_a_v4_job_with_version_8_and_its_images() {
     for v4 in v4_jobs() {
-        let v5 = PalwFreePromptJobV5 { v4: v4.clone(), images: vec![image(2, 3), image(4, 4)] };
+        let v5 = PalwFreePromptJobV5 { v4: v4.clone(), images: vec![image(2, 3), image(4, 4)], source: None };
         let bytes = borsh::to_vec(&v5).unwrap();
         let v4_bytes = borsh::to_vec(&v4).unwrap();
         assert_eq!(bytes[..2], PALW_FP_V5_VERSION.to_le_bytes());
         assert_eq!(bytes[2..v4_bytes.len()], v4_bytes[2..], "every V4 field and its decode rules, unchanged");
-        assert_eq!(bytes[v4_bytes.len()..], borsh::to_vec(&v5.images).unwrap()[..], "then the images");
+        let tail = [borsh::to_vec(&v5.images).unwrap(), borsh::to_vec(&v5.source).unwrap()].concat();
+        assert_eq!(bytes[v4_bytes.len()..], tail[..], "then the images, then the source (none: one zero byte)");
+        assert_eq!(bytes.last(), Some(&0u8));
         let back: PalwFreePromptJobV5 = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, v5, "round trip, the embedded job a V4 job again");
         assert_eq!(back.v4.version, PALW_FP_V4_VERSION);
@@ -171,7 +178,7 @@ fn a_v5_job_is_a_v4_job_with_version_8_and_its_images() {
 #[test]
 fn v5s_own_rules_refuse_by_name() {
     let v4 = v4_jobs().remove(0);
-    let job = |images: Vec<PalwGenImageInputRefV1>| PalwFreePromptJobV5 { v4: v4.clone(), images };
+    let job = |images: Vec<PalwGenImageInputRefV1>| PalwFreePromptJobV5 { v4: v4.clone(), images, source: None };
     // The shape.
     let mut v3_inside = job(vec![image(2, 3)]);
     v3_inside.v4.version = PALW_FP_V3_VERSION;
@@ -209,6 +216,93 @@ fn v5s_own_rules_refuse_by_name() {
     assert_eq!(palw_fp_v5_image_tokens_v1(&two), 12);
     assert_eq!(palw_fp_v5_image_charge_v1(&two, 1_000), 12_000);
     assert_eq!(palw_fp_v5_image_tokens_v1(&text), 0);
+}
+
+/// **The source (RFC-0003 §II.2.2)**: a V5 job's second token list, after its images on the wire and
+/// in its id; a class that reads one takes V5 only (OQ14, extended), its job carries one of
+/// `1..=max_source_tokens` ids, and a job of any other class carries none; the forced prefix is the
+/// class's, and the prompt starts with it; the source is priced as prompt tokens (OQ15, PENDING
+/// USER CONFIRMATION with OQ13).
+#[test]
+fn a_source_rides_v5_after_its_images_and_is_priced_as_prompt_tokens() {
+    let v4 = v4_jobs().remove(0);
+    let src = |tokens: u32| PalwGenSourceRefV1 { token_ids_hash: Hash64::from_bytes([0x5e; 64]), tokens };
+    let job = |images: Vec<PalwGenImageInputRefV1>, source: Option<PalwGenSourceRefV1>| PalwFreePromptJobV5 {
+        v4: v4.clone(),
+        images,
+        source,
+    };
+    // The wire: the images (none), then the source; the lane's job type carries the same bytes.
+    let s2s = job(vec![], Some(src(9)));
+    let (bytes, v4_bytes) = (borsh::to_vec(&s2s).unwrap(), borsh::to_vec(&v4).unwrap());
+    assert_eq!(bytes[..2], PALW_FP_V5_VERSION.to_le_bytes());
+    assert_eq!(bytes[2..v4_bytes.len()], v4_bytes[2..]);
+    let tail = [borsh::to_vec(&Vec::<PalwGenImageInputRefV1>::new()).unwrap(), borsh::to_vec(&Some(src(9))).unwrap()].concat();
+    assert_eq!(bytes[v4_bytes.len()..], tail[..]);
+    assert_eq!(borsh::from_slice::<PalwFreePromptJobV5>(&bytes).unwrap(), s2s);
+    assert_eq!(borsh::from_slice::<PalwFreePromptJobV3>(&bytes).unwrap(), s2s.into_carried(), "the carried form");
+    assert_eq!(PalwFreePromptJobV5::from_carried(&s2s.into_carried()), Ok(s2s.clone()));
+    assert_eq!(s2s.validate_shape_v1(), Ok(()), "a source alone makes a V5 job");
+    let mut other = s2s.clone();
+    other.source = Some(src(10));
+    assert_ne!(fp_job_id_v5(&s2s), fp_job_id_v5(&other), "the source is in the id");
+    other.source = Some(PalwGenSourceRefV1 { token_ids_hash: Hash64::from_bytes([0x5f; 64]), tokens: 9 });
+    assert_ne!(fp_job_id_v5(&s2s), fp_job_id_v5(&other));
+    // A V3 or V4 job with a V5 tail is refused by name.
+    let mut v4_with_source = v4.clone();
+    v4_with_source.v5 = Some(PalwFpV5TailV1 { images: vec![], source: Some(src(9)) });
+    assert_eq!(PalwFpDecodeRulesV1::Active.check_job(&v4_with_source), Err(PalwFpV3Error::ImagesVersionMismatch { version: 7 }));
+    // OQ14, extended: a class that reads a source takes V5 only.
+    let s2s_offers = PalwGenOffersV1 { max_source_tokens: 12, ..offers(&[]) };
+    assert!(palw_gen_class_reads_source_v1(&s2s_offers) && !palw_gen_class_reads_source_v1(&offers(&[])));
+    assert_eq!(palw_fp_job_version_offered_v1(&s2s_offers, true), Ok(()));
+    assert_eq!(palw_fp_job_version_offered_v1(&s2s_offers, false), Err(PalwFpV5Error::JobVersionNotOffered { job: "FP Job V4" }));
+    // Admission: exactly one source on a job of a class that reads one, 1..=max ids, and none on any
+    // other class's job.
+    let context = v4.prompt_tokens + v4.decode_token_limit - 1;
+    assert_eq!(palw_fp_job_v5_admitted_v1(&s2s, &s2s_offers, context, true), Ok(()));
+    assert_eq!(palw_fp_job_v5_admitted_v1(&job(vec![], None), &s2s_offers, context, true), Err(PalwFpV5Error::ImageCount(0)));
+    assert_eq!(
+        palw_fp_job_v5_admitted_v1(&job(vec![], Some(src(0))), &s2s_offers, context, true),
+        Err(PalwFpV5Error::SourceLength { tokens: 0, max: 12 })
+    );
+    assert_eq!(
+        palw_fp_job_v5_admitted_v1(&job(vec![], Some(src(13))), &s2s_offers, context, true),
+        Err(PalwFpV5Error::SourceLength { tokens: 13, max: 12 })
+    );
+    assert_eq!(palw_fp_job_v5_admitted_v1(&job(vec![], Some(src(12))), &s2s_offers, context, true), Ok(()));
+    let both = PalwGenOffersV1 { max_source_tokens: 12, ..offers(&[(2, 3, 5)]) };
+    let with_both = job(vec![image(2, 3)], Some(src(9)));
+    assert_eq!(palw_fp_job_v5_admitted_v1(&with_both, &both, context, true), Ok(()));
+    assert!(matches!(
+        palw_fp_job_v5_admitted_v1(&job(vec![image(2, 3)], None), &both, context, true),
+        Err(PalwFpV5Error::Source("no source on a job of a class that reads one"))
+    ));
+    assert!(matches!(
+        palw_fp_job_v5_admitted_v1(&with_both, &offers(&[(2, 3, 5)]), context, true),
+        Err(PalwFpV5Error::Source("a source on a job of a class that reads none"))
+    ));
+    // The forced prefix: the class's, and the prompt long enough to start with it; where the ids are
+    // held, the prompt starts with it.
+    let forced = |n: usize| PalwGenOffersV1 { forced_prompt_prefix: vec![0; n], ..s2s_offers.clone() };
+    let p = v4.prompt_tokens as usize;
+    assert_eq!(palw_fp_job_v5_admitted_v1(&s2s, &forced(p), context, true), Ok(()));
+    assert_eq!(palw_fp_job_v5_admitted_v1(&s2s, &forced(p + 1), context, true), Err(PalwFpV5Error::PromptPrefix));
+    let head = PalwGenOffersV1 { forced_prompt_prefix: vec![2, 250_004], ..s2s_offers.clone() };
+    assert_eq!(palw_fp_v5_prompt_head_admitted_v1(&head, &[2, 250_004, 17]), Ok(()));
+    assert_eq!(palw_fp_v5_prompt_head_admitted_v1(&head, &[2, 250_004]), Ok(()), "the prefix alone");
+    assert_eq!(palw_fp_v5_prompt_head_admitted_v1(&head, &[2, 17, 250_004]), Err(PalwFpV5Error::PromptPrefix));
+    assert_eq!(palw_fp_v5_prompt_head_admitted_v1(&head, &[2]), Err(PalwFpV5Error::PromptPrefix));
+    assert_eq!(palw_fp_v5_prompt_head_admitted_v1(&s2s_offers, &[17]), Ok(()), "no prefix: any prompt");
+    // OQ15 (PENDING USER CONFIRMATION with OQ13): the source's ids as prompt tokens, never below the
+    // class's floor (a padded encoder's whole width).
+    assert_eq!(palw_fp_v5_source_tokens_v1(&s2s_offers, &s2s), 9);
+    assert_eq!(palw_fp_v5_source_tokens_v1(&s2s_offers, &job(vec![image(2, 3)], None)), 0);
+    let floored = PalwGenOffersV1 { source_token_floor: 11, ..s2s_offers.clone() };
+    assert_eq!(palw_fp_v5_source_tokens_v1(&floored, &s2s), 11, "a short source pays the floor");
+    assert_eq!(palw_fp_v5_source_tokens_v1(&floored, &job(vec![], Some(src(12)))), 12, "a long one its ids");
+    assert_eq!(palw_fp_v5_input_tokens_v1(&both, &with_both), 5 + 9);
+    assert_eq!(palw_fp_v5_input_charge_v1(&both, &with_both, 1_000), 14_000);
 }
 
 fn ids(p: &Params) -> (String, String, String) {
@@ -315,7 +409,7 @@ fn a_v5_job_rides_the_lanes_commitment_and_names_its_own_claim() {
         .into_iter()
         .find(|j| j.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA)
         .unwrap_or_else(|| v4_jobs().remove(0));
-    let v5 = PalwFreePromptJobV5 { v4: v4.clone(), images: vec![image(2, 3)] };
+    let v5 = PalwFreePromptJobV5 { v4: v4.clone(), images: vec![image(2, 3)], source: None };
     let carried = v5.into_carried();
     assert_eq!(borsh::to_vec(&carried).unwrap(), borsh::to_vec(&v5).unwrap(), "the carried form is the wire");
     assert_eq!(fp_job_id_v3(&carried), fp_job_id_v5(&v5), "the lane's one id function names V5 under V5's key");
@@ -324,7 +418,7 @@ fn a_v5_job_rides_the_lanes_commitment_and_names_its_own_claim() {
     assert!(carried.is_v5() && !carried.is_v4());
     // Images on a V3 or V4 job are refused by name, before anything else reads them.
     let mut v4_with_images = v4.clone();
-    v4_with_images.images = Some(vec![image(2, 3)]);
+    v4_with_images.v5 = Some(PalwFpV5TailV1 { images: vec![image(2, 3)], source: None });
     assert_eq!(PalwFpDecodeRulesV1::Active.check_job(&v4_with_images), Err(PalwFpV3Error::ImagesVersionMismatch { version: 7 }));
     // The payload and its claim.
     let p4 = payload_v4(&v4);

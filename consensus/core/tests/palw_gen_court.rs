@@ -117,8 +117,7 @@ fn toy() -> Toy {
         negative: v["job"]["negative"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u32).collect(),
         steps: v["job"]["steps"].as_u64().unwrap() as u32,
         scalars: ints(&v["job"]["scalars"]).into_iter().map(|x| x as i64).collect(),
-        images: vec![],
-        generated: vec![],
+        ..PipelineJob::default()
     };
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&unhex(v["seed_hex"].as_str().unwrap()));

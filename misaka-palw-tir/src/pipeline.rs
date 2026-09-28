@@ -52,11 +52,15 @@ pub enum TripRule {
     TextStream,
 }
 
-/// Which of the job's token lists a template wraps. Tags: `Prompt 0`, `Negative 1`.
+/// Which of the job's token lists a template wraps. Tags: `Prompt 0`, `Negative 1`, `Source 2`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum TokenSource {
     Prompt,
     Negative,
+    /// **The job's source ids** (RFC-0003 §II.2.2): the text an encoder–decoder's encoder reads, a
+    /// second list beside the decoder's stream. Appended: every pipeline that names no source
+    /// encodes as before.
+    Source,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -157,6 +161,9 @@ pub struct PipelineJob {
     /// The text stage's generated ids, as committed (a replay's and a court's view; a run that
     /// generates them is [`run_text_pipeline`]). Empty for a pipeline with no text stage.
     pub generated: Vec<u32>,
+    /// The job's source ids ([`TokenSource::Source`]): an encoder–decoder's source text. Empty for
+    /// a pipeline that reads none.
+    pub source: Vec<u32>,
 }
 
 /// **The text stage's token run**: the prompt ids, then every generated id but the last (never fed
@@ -479,6 +486,7 @@ fn pad_count(rule: &TokenRule, job: &PipelineJob) -> usize {
     let src = match rule.source {
         TokenSource::Prompt => job.prompt.len(),
         TokenSource::Negative => job.negative.len(),
+        TokenSource::Source => job.source.len(),
     };
     let unpadded = rule.prefix.len() + src + rule.suffix.len();
     rule.pad.map_or(0, |p| (p.to_len as usize).saturating_sub(unpadded))
@@ -488,6 +496,7 @@ fn apply_rule(rule: &TokenRule, job: &PipelineJob) -> TirResult<Vec<u32>> {
     let src = match rule.source {
         TokenSource::Prompt => &job.prompt,
         TokenSource::Negative => &job.negative,
+        TokenSource::Source => &job.source,
     };
     let mut seq: Vec<u32> = rule.prefix.iter().chain(src.iter()).chain(rule.suffix.iter()).copied().collect();
     if let Some(pad) = rule.pad {

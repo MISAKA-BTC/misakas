@@ -12,6 +12,9 @@
 //! * `pipelines/toy-vlm.json` — the vision-language pipeline (RFC-0003 §II.2.1): the image, a prompt
 //!   with two placeholder ids, the greedy selector's generated ids, and every stage's positions —
 //!   the text stage's logits rows included;
+//! * `pipelines/toy-encdec.json` — the encoder–decoder pipeline (RFC-0003 §II.2.2): the job's source
+//!   (`TokenSource::Source`) through the encoder, a prompt that starts with the class's forced start
+//!   id, the greedy selector's generated ids, and every stage's positions;
 //! * `encoding.json` — byte strings `TirProgramV2::decode_canonical` / `TirProgram::decode_canonical`
 //!   must accept or refuse, with the class.
 //!
@@ -390,6 +393,9 @@ struct JobJson {
     /// The text stage's generated ids (absent for a pipeline with no text stage).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     generated: Vec<u32>,
+    /// The job's source ids (RFC-0003 §II.2.2; absent for a job with none — every earlier file).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source: Vec<u32>,
 }
 
 /// A job image: what the executor holds (the bytes) and what the chain holds (`input_root`), with
@@ -516,6 +522,7 @@ fn pipelines() {
             scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
             images: vec![],
             generated: vec![],
+            source: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1229,6 +1236,7 @@ fn bidirectional_pipeline_vector() {
             scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
             images: vec![],
             generated: vec![],
+            source: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1315,6 +1323,7 @@ fn vision_pipeline_vector() {
             scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
             images,
             generated: vec![],
+            source: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1396,6 +1405,7 @@ fn vlm_pipeline_vector() {
             scalars: vec![],
             images,
             generated,
+            source: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1411,4 +1421,62 @@ fn vlm_pipeline_vector() {
         },
     };
     check_or_bless("pipelines/toy-vlm.json", serde_json::to_string_pretty(&file).unwrap());
+}
+
+/// `pipelines/toy-encdec.json` (RFC-0003 §II.2.2): the toy encoder–decoder — the source through the
+/// encoder, the prompt from the forced start id, greedy ids, every stage's positions.
+#[test]
+fn encdec_pipeline_vector() {
+    let (p, programs) = encdec_pipeline();
+    let params = ProgramParams(programs.iter().enumerate().map(|(i, prog)| materialize_v2(prog, 500 + i as u64)).collect());
+    let job = encdec_job();
+    let random = GenRandom { seed: [0; 32], position: 0 };
+    let (run, generated) = run_text_pipeline(&p, &programs, &params, &random, &job, &mut greedy(4)).unwrap();
+    let committed = PipelineJob { generated: generated.clone(), ..job.clone() };
+    assert_eq!(run_pipeline(&p, &programs, &params, &random, &committed).unwrap(), run);
+    let stages = run
+        .stages
+        .iter()
+        .zip(&p.stages)
+        .map(|(r, st)| {
+            let tokens = if r.tokens.is_empty() { vec![0; r.trip as usize] } else { r.tokens.clone() };
+            StageJson { name: st.name.clone(), trip: r.trip, tokens: r.tokens.clone(), steps: steps_json(&r.steps, &tokens) }
+        })
+        .collect();
+    let file = PipelineFileJson {
+        format: "palw-tir-v2/pipeline-vectors/1".into(),
+        spec: SPEC.into(),
+        name: "toy-encdec".into(),
+        pipeline_borsh_hex: hex(&p.encode()),
+        programs: programs
+            .iter()
+            .zip(&params.0)
+            .map(|(prog, m)| PipelineProgramJson {
+                program_borsh_hex: hex(&prog.encode()),
+                graph_ir_root_hex: root(&prog.encode()),
+                params: params_json(m),
+            })
+            .collect(),
+        job: JobJson {
+            prompt: job.prompt.clone(),
+            negative: vec![],
+            steps: job.steps,
+            scalars: vec![],
+            images: vec![],
+            generated,
+            source: job.source.clone(),
+        },
+        seed_hex: hex(&random.seed),
+        item_index: random.position,
+        random_inputs: vec![],
+        stages,
+        output: tj(&run.output),
+        output_image: OutputImageJson {
+            spec_borsh_hex: String::new(),
+            tile_len: 0,
+            canonical_hex: String::new(),
+            output_root_hex: String::new(),
+        },
+    };
+    check_or_bless("pipelines/toy-encdec.json", serde_json::to_string_pretty(&file).unwrap());
 }

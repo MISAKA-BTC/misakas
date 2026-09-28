@@ -7,17 +7,22 @@
 //! rule and method of it is the V4 lane's own: the V4 checks run on it verbatim
 //! ([`PalwFpDecodeRulesV1::check_job`]), its decoder is its `decoder_v1()`. What V5 adds is the job's
 //! images, each an [`PalwGenImageInputRefV1`] (`input_root`, `h`, `w`), exactly one per image slot of
-//! the class (PALW-GEN-11).
+//! the class (PALW-GEN-11), and — for a class that reads one (RFC-0003 §II.2.2, an encoder–decoder)
+//! — its source, a [`PalwGenSourceRefV1`] (the source ids' hash in the network's prompt-id form, and
+//! their count).
 //!
-//! **The wire.** `le16(8) ‖ the V4 job's bytes after its version word ‖ borsh(images)`: a V5 job is
-//! a V4 job whose version word says 8 and which is followed by its images. No V4 entry point decodes
+//! **The wire.** `le16(8) ‖ the V4 job's bytes after its version word ‖ borsh(images) ‖
+//! borsh(source)`: a V5 job is a V4 job whose version word says 8 and which is followed by its images
+//! and its source ([`PalwFpV5TailV1`]). No V4 entry point decodes
 //! it as a job it admits — every V3/V4 validator refuses version 8 by name (`UnsupportedVersion`) —
 //! and no V4 byte string decodes as a V5 job (version 7 is not 8). The id is the whole borsh under
 //! its own key, [`fp_job_id_v5`], a domain no V3/V4 id uses.
 //!
-//! **One encoding per behaviour** (RFC-0003 open question 14, decided 2026-09-29): a class with image
-//! slots takes V5 only; a class without them V4 only ([`palw_fp_job_version_offered_v1`]). `images`
-//! is never empty, so a text-only job has exactly one encoding, V4's.
+//! **One encoding per behaviour** (RFC-0003 open question 14, decided 2026-09-29; extended by §II.2.2):
+//! a class with image slots or a source takes V5 only; a class with neither V4 only
+//! ([`palw_fp_job_version_offered_v1`]). A V5 job carries images or a source, never neither, so a
+//! text-only job has exactly one encoding, V4's. The source's price is open question 15's (as prompt
+//! tokens, PENDING USER CONFIRMATION with 13: [`palw_fp_v5_source_tokens_v1`]).
 //!
 //! **The image price** (RFC-0003 open question 13 — the recommendation, **PENDING USER
 //! CONFIRMATION**): a V5 job's image stages are charged as prefill-equivalent prompt tokens — each
@@ -26,6 +31,14 @@
 //! price ([`palw_fp_v5_image_tokens_v1`], [`palw_fp_v5_image_charge_v1`]). Nothing in the lane reads
 //! them yet: RFC-0001's D10 still credits decode leaves only, and wiring this price into the lane's
 //! quanta waits for the user's confirmation.
+//!
+//! **The source price** (RFC-0003 open question 15 — the recommendation, **PENDING USER
+//! CONFIRMATION** with 13): a V5 job's source ids are charged as prompt tokens, one per id, and never
+//! below the class's `source_token_floor` — an encoder runs its whole padded width for any source, so
+//! a short source pays the encoder's admitted work (the floor admission checks, as it floors an image
+//! slot's price) ([`palw_fp_v5_source_tokens_v1`]); a job's whole input charge is its images' and its
+//! source's ([`palw_fp_v5_input_tokens_v1`], [`palw_fp_v5_input_charge_v1`]). Wired into nothing, as
+//! the image price.
 //!
 //! **The lane stays closed to V5**: a V5 claim's class resolves against the generative registry
 //! ([`palw_fp_v5_resolve_class_v1`], over the `gen_classes` rows `ClassRegisteredGenV1` writes past
@@ -39,7 +52,9 @@ use std::io::{Read, Write};
 use crate::Hash64;
 use crate::config::params::{ForkActivation, PalwPostLaunchFenceV1, Params};
 use crate::palw_freeprompt_v3::{PALW_FP_V4_VERSION, PalwFpDecodeRulesV1, PalwFpV3Error, PalwFreePromptJobV3, PalwFreePromptJobV4};
-use crate::palw_gen_class_v1::{PalwGenImageInputRefV1, PalwGenJobImageErrorV1, PalwGenOffersV1, palw_gen_job_images_admitted_v1};
+use crate::palw_gen_class_v1::{
+    PalwGenImageInputRefV1, PalwGenJobImageErrorV1, PalwGenOffersV1, PalwGenSourceRefV1, palw_gen_job_images_admitted_v1,
+};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 
 /// **The FP Job V5 version**: 8, the next unused job version (5 is V3, 6 ADR-0096 D8's constraint
@@ -51,13 +66,24 @@ pub const PALW_FP_V5_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-v5/job-id/v1";
 /// The most images a V5 job carries: the pipeline format's image cap.
 pub const PALW_FP_V5_MAX_IMAGES: usize = misaka_palw_tir::pipeline::MAX_JOB_IMAGES;
 
-/// **FP Job V5**: an FP Job V4, unchanged, and the job's images.
+/// **FP Job V5's tail**: what version 8 adds after the V4 job's bytes — its images, then its source.
+/// The lane's job type carries it as one field (`PalwFreePromptJobV3::v5`), so the carried bytes are
+/// this wrapper's.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpV5TailV1 {
+    pub images: Vec<PalwGenImageInputRefV1>,
+    pub source: Option<PalwGenSourceRefV1>,
+}
+
+/// **FP Job V5**: an FP Job V4, unchanged, and the job's images and source.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwFreePromptJobV5 {
     /// The FP Job V4 the job embeds: version 7, its `DecodeConfigV4` present.
     pub v4: PalwFreePromptJobV4,
-    /// One image per image slot of the class, in slot order: 1..=16.
+    /// One image per image slot of the class, in slot order: 0..=16 (none for a class without slots).
     pub images: Vec<PalwGenImageInputRefV1>,
+    /// The source ids' reference, exactly when the class reads a source (RFC-0003 §II.2.2).
+    pub source: Option<PalwGenSourceRefV1>,
 }
 
 impl borsh::BorshSerialize for PalwFreePromptJobV5 {
@@ -66,7 +92,8 @@ impl borsh::BorshSerialize for PalwFreePromptJobV5 {
         borsh::BorshSerialize::serialize(&PALW_FP_V5_VERSION, writer)?;
         // The V4 job's bytes after its version word (a u16): every V3 field, then its decode rules.
         writer.write_all(&v4[2..])?;
-        borsh::BorshSerialize::serialize(&self.images, writer)
+        borsh::BorshSerialize::serialize(&self.images, writer)?;
+        borsh::BorshSerialize::serialize(&self.source, writer)
     }
 }
 
@@ -82,7 +109,8 @@ impl borsh::BorshDeserialize for PalwFreePromptJobV5 {
         let mut chained = (&v4_word[..]).chain(&mut *reader);
         let v4 = PalwFreePromptJobV3::deserialize_reader(&mut chained)?;
         let images = borsh::BorshDeserialize::deserialize_reader(reader)?;
-        Ok(Self { v4, images })
+        let source = borsh::BorshDeserialize::deserialize_reader(reader)?;
+        Ok(Self { v4, images, source })
     }
 }
 
@@ -122,7 +150,7 @@ pub enum PalwFpV5Error {
     NotAV4Job { version: u16, decode_present: bool },
     #[error("the embedded V4 job is refused as V4 refuses it: {0}")]
     V4(PalwFpV3Error),
-    #[error("a V5 job carries 1..=16 images; this one carries {0}")]
+    #[error("a V5 job carries at most 16 images, and images or a source; this one carries {0} images and no source")]
     ImageCount(usize),
     #[error(transparent)]
     Images(PalwGenJobImageErrorV1),
@@ -138,45 +166,69 @@ pub enum PalwFpV5Error {
     NotATextClass { profile: u8 },
     #[error("the job's tokenizer {job} is not the class's {class}")]
     TokenizerNotTheClasss { job: Hash64, class: Hash64 },
+    #[error("the class reads a source: {0}")]
+    Source(&'static str),
+    #[error("the job carries {tokens} source ids; the class takes 1..={max}")]
+    SourceLength { tokens: u32, max: u32 },
+    #[error("the prompt does not start with the class's forced prefix (RFC-0003 §II.2.2)")]
+    PromptPrefix,
 }
 
 impl PalwFreePromptJobV5 {
     /// **A V5 job as the lane carries it**: its V4 job at version 8, the images its tail — the same
     /// bytes as this wrapper's.
     pub fn into_carried(&self) -> PalwFreePromptJobV3 {
-        PalwFreePromptJobV3 { version: PALW_FP_V5_VERSION, images: Some(self.images.clone()), ..self.v4.clone() }
+        let tail = PalwFpV5TailV1 { images: self.images.clone(), source: self.source };
+        PalwFreePromptJobV3 { version: PALW_FP_V5_VERSION, v5: Some(tail), ..self.v4.clone() }
     }
 
-    /// **The V5 job a carried job is**, if it is one: version 8, its decode rules and images present.
+    /// **The V5 job a carried job is**, if it is one: version 8, its decode rules and its tail present.
     pub fn from_carried(job: &PalwFreePromptJobV3) -> Result<Self, PalwFpV5Error> {
-        let Some(images) = job.images.clone().filter(|_| job.version == PALW_FP_V5_VERSION && job.decode.is_some()) else {
+        let Some(tail) = job.v5.clone().filter(|_| job.version == PALW_FP_V5_VERSION && job.decode.is_some()) else {
             return Err(PalwFpV5Error::NotAV5Job { version: job.version });
         };
-        Ok(Self { v4: PalwFreePromptJobV3 { version: PALW_FP_V4_VERSION, images: None, ..job.clone() }, images })
+        Ok(Self {
+            v4: PalwFreePromptJobV3 { version: PALW_FP_V4_VERSION, v5: None, ..job.clone() },
+            images: tail.images,
+            source: tail.source,
+        })
     }
 
-    /// **The V5 job's own shape**: its embedded job is an FP Job V4 that V4's own rules admit, and
-    /// it carries 1..=16 images.
+    /// **The V5 job's own shape**: its embedded job is an FP Job V4 that V4's own rules admit, and it
+    /// carries at most 16 images, and images or a source (never neither: that job is V4's).
     pub fn validate_shape_v1(&self) -> Result<(), PalwFpV5Error> {
         if self.v4.version != PALW_FP_V4_VERSION || self.v4.decode.is_none() {
             return Err(PalwFpV5Error::NotAV4Job { version: self.v4.version, decode_present: self.v4.decode.is_some() });
         }
         PalwFpDecodeRulesV1::Active.check_job(&self.v4).map_err(PalwFpV5Error::V4)?;
-        if self.images.is_empty() || self.images.len() > PALW_FP_V5_MAX_IMAGES {
+        if self.images.len() > PALW_FP_V5_MAX_IMAGES || (self.images.is_empty() && self.source.is_none()) {
             return Err(PalwFpV5Error::ImageCount(self.images.len()));
         }
         Ok(())
     }
 }
 
-/// **OQ14: which job a class takes** — a class with image slots takes FP Job V5 only, and a class
-/// without them FP Job V4 only. `v5` says which one is offered.
+/// **Does a class read a source** (RFC-0003 §II.2.2)? Its offer names one.
+pub fn palw_gen_class_reads_source_v1(offers: &PalwGenOffersV1) -> bool {
+    offers.max_source_tokens > 0
+}
+
+/// **OQ14 (extended by §II.2.2): which job a class takes** — a class with image slots or a source
+/// takes FP Job V5 only, and a class with neither FP Job V4 only. `v5` says which one is offered.
 pub fn palw_fp_job_version_offered_v1(offers: &PalwGenOffersV1, v5: bool) -> Result<(), PalwFpV5Error> {
-    match (offers.images.is_empty(), v5) {
-        (true, false) | (false, true) => Ok(()),
-        (false, false) => Err(PalwFpV5Error::JobVersionNotOffered { job: "FP Job V4" }),
-        (true, true) => Err(PalwFpV5Error::JobVersionNotOffered { job: "FP Job V5" }),
+    let takes_v5 = !offers.images.is_empty() || palw_gen_class_reads_source_v1(offers);
+    match (takes_v5, v5) {
+        (false, false) | (true, true) => Ok(()),
+        (true, false) => Err(PalwFpV5Error::JobVersionNotOffered { job: "FP Job V4" }),
+        (false, true) => Err(PalwFpV5Error::JobVersionNotOffered { job: "FP Job V5" }),
     }
+}
+
+/// **A prompt's head against the class's forced prefix** (RFC-0003 §II.2.2): where the ids are held
+/// (acceptance on `PublicDa`, the worker, a seat), the prompt must start with the class's
+/// `forced_prompt_prefix`.
+pub fn palw_fp_v5_prompt_head_admitted_v1(offers: &PalwGenOffersV1, prompt_ids: &[u32]) -> Result<(), PalwFpV5Error> {
+    if prompt_ids.starts_with(&offers.forced_prompt_prefix) { Ok(()) } else { Err(PalwFpV5Error::PromptPrefix) }
 }
 
 /// **A V5 job for a vision-language class** — everything checkable without chain state: the fence
@@ -195,6 +247,19 @@ pub fn palw_fp_job_v5_admitted_v1(
     job.validate_shape_v1()?;
     palw_fp_job_version_offered_v1(offers, true)?;
     palw_gen_job_images_admitted_v1(offers, &job.images).map_err(PalwFpV5Error::Images)?;
+    match (palw_gen_class_reads_source_v1(offers), &job.source) {
+        (false, None) => {}
+        (false, Some(_)) => return Err(PalwFpV5Error::Source("a source on a job of a class that reads none")),
+        (true, None) => return Err(PalwFpV5Error::Source("no source on a job of a class that reads one")),
+        (true, Some(source)) => {
+            if source.tokens == 0 || source.tokens > offers.max_source_tokens {
+                return Err(PalwFpV5Error::SourceLength { tokens: source.tokens, max: offers.max_source_tokens });
+            }
+        }
+    }
+    if (job.v4.prompt_tokens as usize) < offers.forced_prompt_prefix.len() {
+        return Err(PalwFpV5Error::PromptPrefix);
+    }
     let (prompt, decode) = (job.v4.prompt_tokens, job.v4.decode_token_limit);
     let need = (prompt as u64 + decode as u64).saturating_sub(1);
     if need > text_max_trip as u64 {
@@ -236,6 +301,25 @@ pub fn palw_fp_v5_image_tokens_v1(offers: &PalwGenOffersV1) -> u64 {
 /// at the job's per-token price.
 pub fn palw_fp_v5_image_charge_v1(offers: &PalwGenOffersV1, per_token_price: u64) -> u128 {
     palw_fp_v5_image_tokens_v1(offers) as u128 * per_token_price as u128
+}
+
+/// **The source's price in prompt tokens** (RFC-0003 open question 15's recommendation, PENDING USER
+/// CONFIRMATION with 13): a V5 job's source ids are charged as prompt tokens — their count, and never
+/// below the class's `source_token_floor`; 0 for a job without a source.
+pub fn palw_fp_v5_source_tokens_v1(offers: &PalwGenOffersV1, job: &PalwFreePromptJobV5) -> u64 {
+    job.source.map_or(0, |s| (s.tokens as u64).max(offers.source_token_floor as u64))
+}
+
+/// **Every input a V5 job is charged for, in prompt tokens** (open questions 13 and 15, PENDING USER
+/// CONFIRMATION): the images' token equivalents and the source's count.
+pub fn palw_fp_v5_input_tokens_v1(offers: &PalwGenOffersV1, job: &PalwFreePromptJobV5) -> u64 {
+    palw_fp_v5_image_tokens_v1(offers).saturating_add(palw_fp_v5_source_tokens_v1(offers, job))
+}
+
+/// **Every input's charge** (open questions 13 and 15, PENDING USER CONFIRMATION): the input tokens
+/// at the job's per-token price.
+pub fn palw_fp_v5_input_charge_v1(offers: &PalwGenOffersV1, job: &PalwFreePromptJobV5, per_token_price: u64) -> u128 {
+    palw_fp_v5_input_tokens_v1(offers, job) as u128 * per_token_price as u128
 }
 
 /// **The entry a drill arms FP Job V5 with** (`--palw-drill-fp-v5-at`,

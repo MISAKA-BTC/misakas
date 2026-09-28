@@ -119,6 +119,9 @@ fn fixture() -> Fixture {
             max_prompt_tokens: 8,
             max_negative_tokens: 0,
             images: vec![PalwGenImageOfferV1 { h: image.h, w: image.w, tile_len: 4, token_equivalents: 1_000_000 }],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
         },
         tokenizer_id: Hash64::from_bytes([0x72; 64]),
     };
@@ -153,7 +156,7 @@ fn v5_job(f: &Fixture) -> PalwFreePromptJobV5 {
     v4.temperature_q = PalwDecodeSamplingV2::GREEDY.temperature_q;
     let input_root = misaka_palw_gen::output::input_image_root_v1(f.image.h, f.image.w, 4, &f.image.rgb).unwrap();
     let images = vec![PalwGenImageInputRefV1 { input_root: Hash64::from_bytes(input_root), h: f.image.h, w: f.image.w }];
-    PalwFreePromptJobV5 { v4, images }
+    PalwFreePromptJobV5 { v4, images, source: None }
 }
 
 /// The worker's run of the job, and its binding.
@@ -204,6 +207,7 @@ fn cone(f: &Fixture, e: &PalwGenExecutionV1, binding: &PalwGenStepBindingV1, sta
         operands,
         image_tiles,
         params,
+        source_ids: vec![],
     }
 }
 
