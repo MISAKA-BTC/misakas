@@ -122,7 +122,44 @@ pub fn check_tower(name: &str, key: &str) -> Built {
         eprintln!("{name} integer vs HF `{key}`: cosine mean {mean:.6} min {min:.6}, rel {:.2e} ({} rows × {width})", rel(&got.concat(), &want.concat()), got.len());
         assert!(min > 0.999, "{name}: cosine min {min}");
     }
-    // 5. Admission.
+    // 5. The class's one-stage pipeline: the image bound by JobImage (rfc3/impl 4bd8f3b2b). It
+    // must give the standalone program's bytes.
+    let pipe = encoder::vision_pipeline();
+    let info = tir::pipeline::validate_pipeline(&pipe, std::slice::from_ref(&p2)).expect("pipeline normal form");
+    assert_eq!(info.images, vec![[s.h, s.w]], "{name}: one image slot of the tower's size");
+    struct One<'a>(&'a dyn tir::ParamSource);
+    impl tir::pipeline::PipelineParams for One<'_> {
+        fn params(&self, _: u16) -> &dyn tir::ParamSource {
+            self.0
+        }
+    }
+    struct NoRandom;
+    impl tir::pipeline::RandomSource for NoRandom {
+        fn random(&self, _: u16, _: tir::program_v2::RandomDist, _: u32, _: &[u32]) -> Option<tir::Tensor> {
+            None
+        }
+    }
+    for (img, _) in &fx.images {
+        let job = tir::pipeline::PipelineJob {
+            images: vec![tir::pipeline::JobImageV1 { h: s.h, w: s.w, rgb: img.clone() }],
+            ..Default::default()
+        };
+        let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &One(&params2), &NoRandom, &job).expect("pipeline run");
+        let mut inputs = tir::interp_v2::MapInputs::default();
+        let t = tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+        inputs.constant.insert(0, t);
+        let direct = interp.run_positions(&params2, &inputs, 1).expect("v2 run").remove(0).output;
+        assert_eq!(pr.output, direct, "{name}: the pipeline differs from the program");
+    }
+    let pa = tir::admit_v2::tir_admit_pipeline_v1(
+        &pipe.encode(),
+        &[p2.encode()],
+        &misaka_palw_tir_lower::admission::default_inputs(),
+        &tir::admit_v2::TirJobCeilingsV1::open_v1(),
+    )
+    .expect("tir_admit_pipeline_v1");
+    eprintln!("{name} pipeline (JobImage) admitted: job {:?}, {} step leaves", pa.job_cost, pa.job_step_leaves);
+    // 6. Admission of the program alone.
     let a = tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs()).expect("tir_admit_v2");
     eprintln!(
         "{name} admitted: {} nodes, {} cones, {} params, position {:?}",

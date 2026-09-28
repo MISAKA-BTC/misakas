@@ -250,3 +250,23 @@ pub fn vision_v2(lw: &Lowered) -> Result<TirProgramV2> {
         OutputDecl::Final { node: lw.program.logits },
     )
 }
+
+/// The one-stage pipeline of a vision class (RFC-0003 II.4, the Embedding profile): the tower's
+/// program over one position, its canonical image bound by `JobImage { index: 0 }`. The class
+/// declares the image slot `{h, w}` the tower was lowered for, and its output (`Final [n, d]`) is
+/// an `EmbeddingI32`.
+pub fn vision_pipeline() -> TirPipelineV1 {
+    use tir::pipeline::Binding;
+    TirPipelineV1 {
+        version: 1,
+        stages: vec![StageDecl {
+            name: "vision".into(),
+            program: 0,
+            trip: TripRule::Fixed { n: 1 },
+            max_trip: 1,
+            tokens: None,
+            bind: vec![Binding::JobImage { index: 0 }],
+        }],
+        output_stage: 0,
+    }
+}

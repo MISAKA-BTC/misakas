@@ -597,7 +597,10 @@ set is unchanged.
 On `rfc3/lower` (`lower::vision`, `tests/vision.rs`, `tools/gen_hf_vision_fixtures.py`). A tower is
 one position over a fixed patch axis. The canonical image enters as `input.image`, an `i16
 [H, W, 3]` lifted into an `External` input over `[0, 255]`, and the output rows are `Final`.
-`JobImage` (rfc3/impl, in progress) will bind the input; until then the programs run standalone.
+- A vision class is the one-stage pipeline `encoder::vision_pipeline()`: `Fixed { n: 1 }`, with
+  the image bound by `JobImage { index: 0 }` (rfc3/impl `4bd8f3b2b`).
+- Every tower's `run_pipeline` over a `PipelineJob` with the image equals its standalone program
+  byte for byte, and `tir_admit_pipeline_v1` admits the pipeline.
 
 **Preprocessing** (in the program, rank ≤ 4):
 - optional fixed-ratio box downscale: two `MatMul`s with pinned 0/1 matrices and an exact rounded
