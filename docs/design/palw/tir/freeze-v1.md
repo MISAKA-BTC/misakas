@@ -44,7 +44,7 @@ composites — plain primitives in the program bytes.
 
 **Every architecture and the primitives its program uses** (`misaka-palw-tir-lower/tests/admission.rs`,
 `every_lowered_architecture_uses_only_the_v1_primitives`, over the lowered programs of the 57 HF
-tiny fixtures; the full per-fixture list prints with `--nocapture`):
+tiny fixtures; per fixture in Appendix A):
 
 | family | architectures (HF `model_type`) | primitives used |
 | --- | --- | --- |
@@ -273,3 +273,69 @@ were accepted as inert (tir/lower `9ff0fc899`: the Mamba conversions' `d_model`/
 `docs/crescendo-guide.md`, `docs/connecting-ethereum-tooling.md`, `docs/node-liveness-probe.md`, two
 chunks each), evaluation 2 × 128 (`docs/README.md`, `docs/evm-differences-from-ethereum.md`), drift
 1 × 4,096 (`docs/palw-rc-threat-model.md`), each with the checkpoint's own `tokenizer.json`, offline.
+
+## Appendix A. The primitives of every lowered architecture
+
+From `every_lowered_architecture_uses_only_the_v1_primitives` (`tests/admission.rs`): the 57 HF
+tiny-fixture architectures (fixture directory names), their family, how many of the 25 primitives
+their lowered program uses, and which it does not use.
+
+| fixture | family | used | not used |
+| --- | --- | --- | --- |
+| `bloom` | C1/C2 | 16 | Slice, Concat, Broadcast, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `cohere` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `cohere2` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `deepseek_v2` | C3/C8 | 22 | Cast, IntLn, StateWrite |
+| `deepseek_v2_lite` | C3/C8 | 18 | Broadcast, Iota, Cast, IntLn, Compare, Select, StateWrite |
+| `deepseek_v3` | C3/C8 | 22 | Cast, IntLn, StateWrite |
+| `exaone4` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `falcon_alibi` | C1/C2 | 16 | Slice, Concat, Broadcast, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `falcon_mamba` | C5 | 19 | Broadcast, Iota, Cast, ReduceMax, TopK, HistAppend |
+| `falcon_mq` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `falcon_new` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `gemma` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `gemma2` | C1/C2 | 19 | Broadcast, Iota, Cast, IntLn, TopK, StateWrite |
+| `gemma3` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `gemma3_vlm` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `gpt2` | C1/C2 | 15 | Slice, Concat, Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `gpt_bigcode` | C1/C2 | 15 | Slice, Concat, Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `gpt_bigcode_mha` | C1/C2 | 15 | Slice, Concat, Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `gpt_neo` | C1/C2 | 15 | Slice, Concat, Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `gpt_neox` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `gpt_neox_seq` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `gpt_oss` | C3/C8 | 21 | Broadcast, Iota, IntLn, StateWrite |
+| `gptj` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `granite` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `granitemoe` | C3/C8 | 18 | Broadcast, Iota, Cast, IntLn, Compare, Select, StateWrite |
+| `jamba` | C7 | 22 | Broadcast, Iota, Cast |
+| `llama` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `llama_linear_tied` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `llava` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `mamba` | C5 | 19 | Broadcast, Iota, Cast, ReduceMax, TopK, HistAppend |
+| `mamba2` | C5 | 20 | Iota, Cast, ReduceMax, TopK, HistAppend |
+| `mistral3_vlm` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `mistral_window` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `mixtral` | C3/C8 | 18 | Broadcast, Iota, Cast, IntLn, Compare, Select, StateWrite |
+| `mpt` | C1/C2 | 16 | Slice, Concat, Broadcast, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `nemotron` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `olmo` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `olmo2` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `olmoe` | C3/C8 | 18 | Broadcast, Iota, Cast, IntLn, Compare, Select, StateWrite |
+| `opt` | C1/C2 | 15 | Slice, Concat, Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `opt_postln_proj` | C1/C2 | 15 | Slice, Concat, Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `phi` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `phi3_longrope` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `qwen2_dynamic` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `qwen2_moe` | C3/C8 | 18 | Broadcast, Iota, Cast, IntLn, Compare, Select, StateWrite |
+| `qwen2_sliding` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `qwen3_5` | C4/C7 | 22 | Iota, Cast, TopK |
+| `qwen3_5_moe` | C4/C7 | 23 | Iota, Cast |
+| `qwen3_5_vlm` | C4/C7 | 22 | Iota, Cast, TopK |
+| `qwen3_moe` | C3/C8 | 18 | Broadcast, Iota, Cast, IntLn, Compare, Select, StateWrite |
+| `qwen3_next` | C4/C7 | 23 | Iota, Cast |
+| `qwen3_yarn` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `rwkv` | C6 (RWKV-4) | 15 | Transpose, Slice, Concat, Broadcast, Iota, Cast, ReduceMax, IntLn, TopK, HistAppend |
+| `smollm3` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `stablelm` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `stablelm_parallel` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
+| `starcoder2` | C1/C2 | 17 | Broadcast, Iota, Cast, IntLn, Compare, Select, TopK, StateWrite |
