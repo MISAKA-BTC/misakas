@@ -2,6 +2,8 @@
 //! validated, run by the interpreter's cone evaluator) on vectors supplied as params.
 #![allow(dead_code)]
 
+pub mod models;
+
 use misaka_palw_tir::builder::{BlockBuilder, ProgramBuilder};
 use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
 use misaka_palw_tir::{ConeEnv, DType, Interpreter, MapParams, Ref, Tensor, TirResult};
