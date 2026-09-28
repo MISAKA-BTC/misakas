@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft, 2026-09-28 — text only; nothing here is implemented |
+| Status | Draft, 2026-09-28 — open questions 1–12 decided by the user on 2026-09-28 (see *Decision*); implementation of Part I and program version 2 started on `rfc3/impl` |
 | Author(s) | MISAKA core (drafted with Claude) |
 | Created | 2026-09-28 |
 | Affects | spec/palw 03 (registry: pipeline classes), 04b (PALW-TIR: program version 2 — input tensors, output kinds, `post` effects), 05 (canonical work: attention over a token axis), 07/08/09 (claims, verification, court: derived inputs, stage edges, output digest), 11 (job lanes: a generative job family), 16 (fences) · all networks (dormant until armed) · `consensus/core` (R, the job family, pipeline admission, court), `misaka-palw-tir`, `misaka-palw-tir-lower`, `misaka-palw-sdk`, gateway |
@@ -66,6 +66,7 @@
   正規化・patchify(と固定比のリサイズ)を整数 stage で行う(デコードは consensus 外)。音声 = PCM i16 を正準形に、
   mel 前処理を整数 stage に、生成は codec token の LM か latent flow。動画 = 画像の一般化(latent に時間軸)で、
   token 数が大きいので一般化 dissection が必須、現実性は commit 量が決める。
+- **決定(2026-09-28、ユーザー)。** 未決事項 1〜12 はすべて推奨どおり:鍵は seed、protocol 共通の 2^16 Gaussian 表、1 class 1 解像度、VAE は最初から on chain(最初は ≤ 512²)、profile ごとの上限、testnet は commit 量を受け入れる、画像の attention は `attention_prefill`、pipeline 登録は複数 carrier、最初の画像 class は小型(モデルカード確認後に選ぶ)、一般化 dissection は動画と一緒、音声の multi-codebook は後、画像 job の既定は `PanelDa`。
 - **オフチェーンの対応物。** MISAKA Studio の diffusers sidecar(別 session で構築中)は consensus 外のローカル生成。
 - **実装順序。** R と canonical output → TIR V2 → pipeline class と court 拡張(fence `palw_gen_v1`、休眠)→
   画像 profile(小型 class、埋め込みを smoke test に併用)→ ドリル → testnet → Phase G 後に 4B 級 → マルチモーダル入力
@@ -1397,4 +1398,21 @@ naming R's domain 0. Steps 1–8 take about 4–5 calendar months with two or th
 
 ## Decision
 
-<Open.>
+**2026-09-28 (user): open questions 1–12 are decided as recommended.**
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 1 | R's key | the job's **seed** (§I.1.3), not the job id |
+| 2 | Gaussian noise | the protocol-wide `Normal` input kind over the `2^16`-entry table `PALW_GAUSS_Q24_V1` (§I.1.5) |
+| 3 | resolutions | **one resolution per class** in v1 |
+| 4 | the decoder | the VAE decoder is **on chain from the start**; the first classes are **≤ 512²** |
+| 5 | ceilings | **per-profile** ceilings (per-job MACs and leaves, the per-position leaf cap, peak memory) |
+| 6 | commitment volume | **testnet accepts it**; packed lanes, a faster leaf hash and lazy commitment are separate later work |
+| 7 | canonical work | activation-by-activation `MatMul`s (image attention) count as **`attention_prefill`** |
+| 8 | registration carriage | **multi-carrier** pipeline registration comes with `palw_gen_v1` |
+| 9 | first image class | a **small** class, chosen after the model-card checklist (§II.1) |
+| 10 | generalised dissection | **with video** (§II.6), not with the first image fence |
+| 11 | multi-codebook audio | **later** (a later FP job version) |
+| 12 | privacy | image jobs **default to `PanelDa`**; `PublicDa` stays available when the user chooses it |
+
+The rest of the RFC (Parts I and II, the program surface, the activation order) stands as written.
