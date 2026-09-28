@@ -55,6 +55,7 @@
 //! commit point is added for cone size.
 
 pub mod bidir;
+pub mod encdec;
 pub mod vision;
 pub mod fill;
 
@@ -1278,7 +1279,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 StateKind::Fixed => return Err(LowerError::eval("internal: attention over a Fixed state")),
             };
             let shape = AttnDims { heads: *heads, kv: *kv_heads, d: *head_dim, dv: *v_head_dim, window };
-            let extra = AttnExtras { scale: *scale, softcap: *softcap, alibi: alibi.clone(), sinks: sink_param };
+            let extra = AttnExtras { scale: *scale, softcap: *softcap, alibi: alibi.clone(), sinks: sink_param, rel_bias: None };
             one(lower_attention(b, cx, lb, &q, (kw, kk), (vw, vk), shape, &extra, &site, &want)?)
         }
         Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale } => {
@@ -2367,6 +2368,20 @@ struct AttnExtras {
     alibi: Option<crate::rope::AlibiSpec>,
     /// gpt-oss: a learned per-head logit that joins the softmax and is dropped.
     sinks: Option<u32>,
+    /// T5's bias over bucketed relative positions ([`encdec`]'s decoder).
+    rel_bias: Option<RelBias>,
+}
+
+/// T5's relative-position bias on the causal scores: `table[bucket(pos − j)]` per head, in
+/// Q`LOGIT_Q` logit units. The distance is clamped at `max_d` (the bucket saturates there).
+#[derive(Clone, Copy)]
+struct RelBias {
+    /// `i32 [buckets, heads]`.
+    table: tir::Ref,
+    /// `idx [max_d + 1]`: the bucket of each distance.
+    buckets: tir::Ref,
+    max_d: u32,
+    n_buckets: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2385,7 +2400,7 @@ fn lower_attention(
     let AttnDims { heads, kv, d, dv, window } = dims;
     let g = heads / kv;
     let (kv32, g32, d32, dv32) = (kv as u32, g as u32, d as u32, dv as u32);
-    if ex.softcap.is_none() && ex.alibi.is_none() && dv == d {
+    if ex.softcap.is_none() && ex.alibi.is_none() && ex.rel_bias.is_none() && dv == d {
         return lower_attention_library(b, cx, lb, q, k, v, dims, ex, site, want);
     }
     let qg = b.reshape_fixed(q.r, &[kv32, g32, d32]);
@@ -2506,6 +2521,21 @@ fn lower_attention(
             let dist = b.sub(t, hm1, DType::I64);
             b.mul(slope, dist, DType::I64)
         };
+        let bias = b.reshape(bias, &[Dim::Fixed(kv32), Dim::Fixed(g32), Dim::H]);
+        let sum = b.add(logits, bias, DType::I64);
+        logits = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    }
+    if let Some(rb) = ex.rel_bias {
+        // Keys are `j = pos − (H − 1) + t`: the distance `pos − j = (H − 1) − t`.
+        let pos = tir::Ref::Input(INPUT_POS);
+        let hm1 = b.clamp(pos, 0, window as i64 - 1, DType::I64);
+        let t = b.iota(DType::I64, &[Dim::H], 0, 0, 1);
+        let dist = b.sub(hm1, t, DType::I64);
+        let dist = b.clamp(dist, 0, rb.max_d as i64, DType::Idx);
+        let bk = b.gather(rb.buckets, dist, 0, 0);
+        let bk = b.clamp(bk, 0, rb.n_buckets as i64 - 1, DType::Idx);
+        let bias = b.gather(rb.table, bk, 0, 0);
+        let bias = b.transpose(bias, &[1, 0]);
         let bias = b.reshape(bias, &[Dim::Fixed(kv32), Dim::Fixed(g32), Dim::H]);
         let sum = b.add(logits, bias, DType::I64);
         logits = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);

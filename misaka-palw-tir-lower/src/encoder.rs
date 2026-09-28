@@ -270,3 +270,65 @@ pub fn vision_pipeline() -> TirPipelineV1 {
         output_stage: 0,
     }
 }
+
+/// **An encoder-decoder's encoder stage** ([`crate::lower::encdec`]): `input.ids` (`idx [L]`, ids
+/// below `vocab`) and `input.count` (`idx []` in `[0, L]`) lifted into inputs, and the stacked
+/// cross keys and values `i16 [D, 2, L, inner]` as its `Final` output.
+pub fn encdec_encoder_v2(lw: &Lowered, vocab: u32, lmax: u32) -> Result<TirProgramV2> {
+    use crate::lower::encdec::{COUNT_PARAM, IDS_PARAM};
+    use tir::program_v2::InputSource;
+    lift_v2(
+        lw,
+        &[
+            (IDS_PARAM, InputSource::External { lo: 0, hi: vocab as i64 - 1 }),
+            (COUNT_PARAM, InputSource::External { lo: 0, hi: lmax as i64 }),
+        ],
+        OutputDecl::Final { node: lw.program.logits },
+    )
+}
+
+/// **An encoder-decoder's decoder**, the text stage: `input.xkv` (the encoder's codes, `i16` over
+/// `[−32767, 32767]`) and `input.enc_count` (`idx []` in `[0, L]`) lifted, its logits the
+/// `Logits` output.
+pub fn encdec_decoder_v2(lw: &Lowered, lmax: u32) -> Result<TirProgramV2> {
+    use crate::lower::encdec::{ENC_COUNT_PARAM, XKV_PARAM};
+    use tir::program_v2::InputSource;
+    lift_v2(
+        lw,
+        &[
+            (XKV_PARAM, InputSource::External { lo: -32767, hi: 32767 }),
+            (ENC_COUNT_PARAM, InputSource::External { lo: 0, hi: lmax as i64 }),
+        ],
+        OutputDecl::Logits { node: lw.program.logits, scheme_id: lw.program.logits_scheme_id },
+    )
+}
+
+/// The two-stage pipeline of an encoder-decoder class: the encoder over the source template
+/// (`JobTokens` and `JobTokenCount` of `source`, padded to `L`), once (`Fixed { n: 1 }`); then the
+/// decoder as the text stage (`TextStream`, the job's prompt its forced prefix: at least the
+/// decoder start id), reading the encoder's stacked K/V (`StageFinal`) and the same count.
+pub fn encdec_pipeline(source: TokenRule, max_trip: u32) -> TirPipelineV1 {
+    use tir::pipeline::Binding;
+    TirPipelineV1 {
+        version: 1,
+        stages: vec![
+            StageDecl {
+                name: "encoder".into(),
+                program: 0,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![Binding::JobTokens { rule: source.clone() }, Binding::JobTokenCount { rule: source.clone() }],
+            },
+            StageDecl {
+                name: "decoder".into(),
+                program: 1,
+                trip: TripRule::TextStream,
+                max_trip,
+                tokens: None,
+                bind: vec![Binding::StageFinal { stage: 0 }, Binding::JobTokenCount { rule: source }],
+            },
+        ],
+        output_stage: 1,
+    }
+}
