@@ -75,7 +75,13 @@ pub struct TirLayoutChoiceV1 {
 
 impl Default for TirLayoutChoiceV1 {
     fn default() -> Self {
-        Self { max_context: None, tile_len: IR_DEFAULT_TILE_LEN_V1, h_chunk: IR_DEFAULT_H_CHUNK_V1, logits_scheme: None, logits_tile: None }
+        Self {
+            max_context: None,
+            tile_len: IR_DEFAULT_TILE_LEN_V1,
+            h_chunk: IR_DEFAULT_H_CHUNK_V1,
+            logits_scheme: None,
+            logits_tile: None,
+        }
     }
 }
 
@@ -126,6 +132,44 @@ pub fn tir_default_layout_v1(params: &Params, program: &TirProgramV1, choice: &T
         commit_tiles,
         state_tiles: program.states.iter().map(|_| choice.tile_len).collect(),
     })
+}
+
+/// **What the logits node's terminal close weighs as carried** at `logits_tile` lanes, estimated from
+/// the program and the inventory: `tir_admit_v1`'s opened bytes for the worst tile, the close frame,
+/// and — which that count leaves out — the Merkle path every opened parameter piece rides with (the
+/// inventory's depth × 64 bytes; a head of `token_bound` rows opens `logits_tile` of them, every
+/// other parameter all of its rows). `None` where the program has no logits cone to measure. What
+/// PALW-TIR-38 holds a tile to (`palw_tir_carriable_close_bytes_v1`): at 2,048 lanes the 1.5B A16
+/// head's close is ≈ 5.9 MB against testnet-12's 3.2 MB.
+pub fn tir_logits_close_carried_estimate_v1(
+    params: &Params,
+    program: &TirProgramV1,
+    leaf_count: u32,
+    logits_tile: u32,
+    h_chunk: u32,
+) -> Option<u64> {
+    use misaka_palw_tir::admit::LeafV1;
+    let (ceilings, _, _) = tir_ceilings_v1(params);
+    let admitted =
+        misaka_palw_tir::admit::tir_admit_v1(&program.encode(), &tir_admit_inputs_v1(&ceilings, logits_tile, h_chunk)).ok()?;
+    let cone = admitted.cones.iter().find(|c| c.block == program.schedule.post && c.node == program.logits)?;
+    let depth = u64::from(u32::BITS - leaf_count.max(2).saturating_sub(1).leading_zeros());
+    let path_bytes = depth * 64;
+    let piece = kaspa_consensus_core::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1;
+    let mut pieces = 0u64;
+    for leaf in &cone.leaves {
+        let LeafV1::Param(j) = leaf else { continue };
+        let d = &program.params[*j as usize];
+        let rows = u64::from(d.shape.first().copied().unwrap_or(1));
+        let row_bytes = d.shape.iter().skip(1).map(|x| u64::from(*x)).product::<u64>() * d.dtype.width() as u64;
+        let opened_rows = if rows == u64::from(program.token_bound) { u64::from(logits_tile).min(rows) } else { rows };
+        pieces = pieces.saturating_add(opened_rows.saturating_mul(row_bytes.div_ceil(piece).max(1)));
+    }
+    Some(
+        kaspa_consensus_core::palw_tir_admission_v1::PALW_TIR_CLOSE_FRAME_BYTES_V1
+            .saturating_add(cone.tile_opened_bytes)
+            .saturating_add(pieces.saturating_mul(path_bytes)),
+    )
 }
 
 /// What [`tir_declare_layout_v1`] wrote.
@@ -277,7 +321,8 @@ pub fn tir_declare_layout_v1(
     let container = artifact.container();
     let program = &tir_program_with_scheme_v1(&container.program, choice.logits_scheme)?;
     let program_bytes = program.encode();
-    let (artifact_root, _) = artifact.inventory_root()?;
+    let (artifact_root, leaf_count) = artifact.inventory_root()?;
+    let carriable = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&bundle.court);
     let class_of = |layout: &PalwTirLayoutV1| PalwTirClassV1 {
         version: PALW_TIR_CLASS_VERSION_V1,
         program: program_bytes.clone(),
@@ -295,6 +340,14 @@ pub fn tir_declare_layout_v1(
     let mut first: Option<(PalwTirLayoutV1, Result<(), String>)> = None;
     let mut found: Option<(PalwTirLayoutV1, Result<(), String>)> = None;
     'tiles: for logits_tile in logits_tiles {
+        // PALW-TIR-38 with the paths counted: a tile whose close the chain cannot carry is never
+        // declared, whatever the admission's opened-bytes count says.
+        if let Some(t) = logits_tile
+            && choice.logits_tile.is_none()
+            && tir_logits_close_carried_estimate_v1(params, program, leaf_count, t, choice.h_chunk).is_some_and(|est| est > carriable)
+        {
+            continue;
+        }
         let mut layout = tir_default_layout_v1(params, program, &TirLayoutChoiceV1 { logits_tile, ..*choice })?;
         let mut admission = tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root);
         first.get_or_insert_with(|| (layout.clone(), admission.clone()));

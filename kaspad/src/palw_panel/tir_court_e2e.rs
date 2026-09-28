@@ -118,12 +118,25 @@ fn ir_class(tag: &str, tiled: bool) -> Ir {
     ir_class_with(tag, tiled, court(), FORM)
 }
 
+/// **A class with no dissected point** — the golden `moe-top2-shared` program (a routed MLP, no
+/// reduction over the history): what the bisection court's own tests run on, since F7 gives a class
+/// with a dissected cone its IR history dissection as the terminal move (a root claim at a dissected
+/// leaf, a declared close elsewhere), which the ladder below does not play.
+fn ir_class_undissected(tag: &str, tiled: bool) -> Ir {
+    ir_class_of("moe-top2-shared", tag, tiled, court(), FORM)
+}
+
 /// [`ir_class`] served under a network's own court and prompt form.
 fn ir_class_with(tag: &str, tiled: bool, court: PalwCourtParamsV2, form: PalwPromptIdsFormV1) -> Ir {
+    ir_class_of("dense-gqa-2layer", tag, tiled, court, form)
+}
+
+/// [`ir_class_with`] over the golden program vector `program`.
+fn ir_class_of(program: &str, tag: &str, tiled: bool, court: PalwCourtParamsV2, form: PalwPromptIdsFormV1) -> Ir {
     use kaspa_consensus_core::palw_step_refute::{PALW_LOGITS_TILE_LANES, flat_logits_scheme_id_v1, tiled_logits_scheme_id_v1};
     use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
     use misaka_palw_tir::TirProgramV1;
-    let vector = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v1/programs/dense-gqa-2layer.json");
+    let vector = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../consensus-vectors/tir-v1/programs/{program}.json"));
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&vector).expect("the golden program")).expect("json");
     let mut program = TirProgramV1::decode_canonical(&unhex(v["program_borsh_hex"].as_str().unwrap())).expect("canonical");
     let scheme = if tiled { tiled_logits_scheme_id_v1() } else { flat_logits_scheme_id_v1() };
@@ -442,7 +455,7 @@ fn open_court(s: &PalwChainStateV2, claim: &Claim, challenger: u64, daa: u64) ->
 #[test]
 fn an_honest_ir_claim_goes_final_and_a_false_accusation_is_defeated() {
     for tiled in [false, true] {
-        let ir = ir_class(if tiled { "honest-tiled" } else { "honest-flat" }, tiled);
+        let ir = ir_class_undissected(if tiled { "honest-tiled" } else { "honest-flat" }, tiled);
         let backend = ir.backend();
         let s = registry_with(&ir);
         let claim = produce(&ir, 1, None);
@@ -483,7 +496,7 @@ fn an_honest_ir_claim_goes_final_and_a_false_accusation_is_defeated() {
 #[test]
 fn a_planted_lie_in_an_ir_claim_is_convicted_by_the_ir_court() {
     for tiled in [false, true] {
-        let ir = ir_class(if tiled { "lie-tiled" } else { "lie-flat" }, tiled);
+        let ir = ir_class_undissected(if tiled { "lie-tiled" } else { "lie-flat" }, tiled);
         let backend = ir.backend();
         let s = registry_with(&ir);
         // The honest run of the same job names the leaf the lie moves (a mid-job commit tile).
