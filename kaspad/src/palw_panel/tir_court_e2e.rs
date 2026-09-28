@@ -863,6 +863,39 @@ fn an_ir_history_dissection_is_played_by_the_node() {
     }
 }
 
+/// **A node started with `--palw-verify-class-manifest` holds an IR artifact by its IR manifest**
+/// (Phase H: every testnet-12 seat runs the flag for its 8k artifact). The verification read every
+/// sidecar as the legacy manifest, so an IR artifact failed it either way — with no sidecar ("have no
+/// `.palwmanifest` beside them") and with the one `palw-class manifest` writes for a `PALWTIR1` file
+/// (another schema) — and the node refused to start. The IR sidecar is now checked as what it is: the
+/// inventory root re-derived from the file and compared; absent, or describing another file, is still
+/// the refusal.
+#[test]
+fn an_ir_artifact_passes_the_startup_manifest_verification_by_its_ir_manifest() {
+    use misaka_palw_sdk::tir_manifest::PalwTirManifestV1;
+    let ir = ir_class("manifest", true);
+    let holdings = ir.registry.holdings();
+    let path = holdings[0].path.clone().expect("a file");
+    let sidecar = misaka_palw_sdk::PalwClassManifestFileV1::path_beside(&path);
+    let verify = || crate::palw_backends::verify_class_manifests_v1(ir.registry.sdk(), holdings);
+    let absent = verify().expect_err("no sidecar: nothing verified");
+    assert!(absent.contains("no `.palwmanifest`"), "{absent}");
+    let m = PalwTirManifestV1::derive(&path).expect("the IR manifest");
+    std::fs::write(&sidecar, m.to_json()).unwrap();
+    assert_eq!(verify(), Ok(1), "the IR manifest re-derived from the file: one class verified");
+    // A sidecar that describes another file is refused (the digest), and so is a root that is not the file's.
+    let mut other = m.clone();
+    other.artifact_digest[0] ^= 1;
+    std::fs::write(&sidecar, other.to_json()).unwrap();
+    assert!(verify().expect_err("another file's manifest").contains("different file"));
+    let mut wrong_root = m.clone();
+    wrong_root.inventory_root = Hash64::from_u64_word(7);
+    std::fs::write(&sidecar, wrong_root.to_json()).unwrap();
+    assert!(verify().expect_err("a wrong root").contains("inventory root"));
+    std::fs::write(&sidecar, "{}").unwrap();
+    assert!(verify().is_err(), "a sidecar that does not parse");
+}
+
 /// **An IR claim answers its data-availability demands in the IR form** (F6 D): the node's own
 /// answering path (`palw_da_claim_answers_v1`: the kept capture verified against the claim, then each
 /// unit) discloses a trace event of an IR claim as a `TirEvent` — the row's tile opened under the
