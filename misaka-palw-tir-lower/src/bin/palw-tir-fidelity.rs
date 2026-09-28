@@ -85,6 +85,12 @@ struct Args {
     sites: usize,
     #[arg(long, default_value_t = 16)]
     site_positions: usize,
+    /// Keep at most this many positions of history in any block (`LowerOpts::max_window`): a
+    /// layout whose context is shorter than the history bound, whose attention cone is then
+    /// counted at this window. Evaluation sequences must not be longer (the float reference
+    /// keeps the model's own window).
+    #[arg(long)]
+    max_window: Option<u32>,
 }
 
 fn tokens(path: &Option<PathBuf>, vocab: usize, count: usize, seed: u64) -> Result<(Vec<Vec<usize>>, serde_json::Value), String> {
@@ -111,7 +117,8 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let t0 = Instant::now();
     let log = |m: String| eprintln!("[{:>7.1}s] {m}", t0.elapsed().as_secs_f64());
     let cfg = std::fs::read_to_string(a.model.join("config.json")).map_err(|e| format!("config.json: {e}"))?;
-    let prep = fidelity::prepare(&cfg, &LowerOpts::default()).map_err(|e| e.to_string())?;
+    let opts = LowerOpts { max_window: a.max_window, ..LowerOpts::default() };
+    let prep = fidelity::prepare(&cfg, &opts).map_err(|e| e.to_string())?;
     log(format!("{} — {}", prep.spec.architecture, program_summary(&prep.lowered.program).lines().next().unwrap_or("")));
     if let Some(p) = &a.tir_out {
         std::fs::write(p, prep.lowered.program.encode()).map_err(|e| e.to_string())?;
@@ -133,6 +140,11 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let calib = cut(calib, a.calib_seqs);
     let (eval, eval_src) = tokens(&a.eval, vocab, 2, 29)?;
     let eval = cut(eval, a.eval_seqs);
+    if let Some(w) = a.max_window {
+        if let Some(n) = eval.iter().map(Vec::len).max().filter(|n| *n > w as usize) {
+            return Err(format!("an evaluation sequence of {n} positions is longer than --max-window {w}"));
+        }
+    }
     // The calibration-length rule: a recurrent program is calibrated on a sequence as long as the
     // context it is evaluated at (with --stats-in, the statistics come from the --calib file).
     let context = eval.iter().map(Vec::len).max().unwrap_or(0);
@@ -186,6 +198,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             "policy": { "headroom16": policy.headroom16, "headroom32": policy.headroom32, "headroom_resid": policy.headroom_resid },
             "calibration": calib_src,
             "calibrated_context": calib.iter().map(Vec::len).max(),
+            "max_window": a.max_window,
         });
         // The checkpoint's tokenizer.json binds the artifact to its tokenizer (zero when absent).
         let tokenizer_id = match std::fs::read(a.model.join("tokenizer.json")) {
@@ -299,6 +312,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         "metrics": m,
         "drift": drift,
         "backend": if a.exec { "misaka-palw-tir-exec" } else { "misaka-palw-tir reference evaluator" },
+        "max_window": a.max_window,
         "seconds": t0.elapsed().as_secs_f64(),
     }))
 }

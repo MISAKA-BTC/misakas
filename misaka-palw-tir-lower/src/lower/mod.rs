@@ -261,12 +261,13 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         shared.extend(here.into_iter().filter(|(_, n)| *n > 1).map(|(p, _)| p));
     }
     shared.extend(uses.into_iter().filter(|(p, n)| *n > 1 && !hl.params[*p as usize].per_layer).map(|(p, _)| p));
+    // A gather's table is its SECOND input (`[Token | Pos, table]`).
     let tables: std::collections::BTreeSet<u32> = hl
         .blocks
         .iter()
         .flat_map(|b| b.nodes.iter())
         .filter(|n| matches!(n.op, Op::Embedding | Op::PosEmbedding { .. }))
-        .filter_map(|n| match n.inputs.first() {
+        .filter_map(|n| match n.inputs.get(1) {
             Some(hl::Ref::Param(p)) => Some(*p),
             _ => None,
         })

@@ -41,6 +41,11 @@ struct Args {
     /// Positions per canonical history chunk (a layout's `h_tile`; a power of two).
     #[arg(long, default_value_t = 64)]
     h_chunk: u32,
+    /// Keep at most this many positions of history in any block (`LowerOpts::max_window`): a
+    /// layout whose context is shorter than the history bound — admission then counts the
+    /// attention cone at this window (the same option as `palw-tir-fidelity --max-window`).
+    #[arg(long)]
+    max_window: Option<u32>,
     /// Print the ArchSpec, HL program and costs as JSON instead of text.
     #[arg(long)]
     json: bool,
@@ -54,7 +59,7 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
         } else {
             misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL
         },
-        ..Default::default()
+        max_window: a.max_window,
     };
     match lower::lower(&c.program, &opts) {
         Ok(lw) => {
@@ -78,6 +83,9 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
                 }
             }
             let mut text = String::from("\nPALW-TIR (Gate 2a lowering)\n");
+            if let Some(w) = a.max_window {
+                text.push_str(&format!("  lowered for a context of at most {w} positions (--max-window)\n"));
+            }
             text.push_str(&lw.summary());
             for (block, readers) in &lw.budget_fallbacks {
                 text.push_str(&format!(
@@ -101,6 +109,7 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
                     "admission": misaka_palw_tir_lower::admission::to_json(p, &inputs, &verdict),
                     "budget_fallbacks": lw.budget_fallbacks.iter().map(|(b, r)| serde_json::json!({"block": b, "max_readers": r})).collect::<Vec<_>>(),
                     "digest": digest,
+                    "max_window": a.max_window,
                     "written": written,
                 }),
                 text,
