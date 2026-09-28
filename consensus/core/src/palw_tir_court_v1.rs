@@ -56,7 +56,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Hash64;
-use crate::palw_artifact::{PalwArtifactOpeningV1, verify_artifact_opening_v1};
+use crate::palw_artifact::{
+    PalwArtifactMultiproofV1, PalwArtifactOpeningV1, palw_artifact_multiproof_borsh_len_v1, palw_artifact_multiproof_from_openings_v1,
+    palw_artifact_multiproof_sibling_count_v1, palw_artifact_opening_path_len_v1, palw_artifact_operand_borsh_len_v1,
+    verify_artifact_multiproof_v1,
+};
 use crate::palw_prompt_ids_v1::{PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, PalwPromptIdsOpeningV1, verify_prompt_ids_opening_v1};
 use crate::palw_step::PalwStepCoordinateV1;
 use crate::palw_step_leg::{
@@ -115,8 +119,11 @@ pub struct PalwTirConeRefutationV1 {
     /// Every step leaf the evaluation reads, ascending leaf index, as one row: preimages plus one
     /// sibling set per contiguous run the indices derive.
     pub operands: PalwStepInputRowV1,
-    /// The artifact openings of every inventory leaf the evaluation reads, ascending leaf index.
-    pub params: Vec<PalwArtifactOpeningV1>,
+    /// Every inventory leaf the evaluation reads, as ONE multiproof against the class's
+    /// `artifact_root` (ascending leaf index; a run of consecutive leaves shares its path, so a
+    /// vocabulary or head tile pays two boundary paths, not a path per row — design §2.12.1);
+    /// `None` exactly when the evaluation reads no inventory leaf.
+    pub params: Option<PalwArtifactMultiproofV1>,
     /// Flat prompt form: the whole prompt when the evaluation reads a prompt token, else empty.
     pub prompt_token_ids: Vec<u32>,
     /// Merkle prompt form: one opening per prompt tile the evaluation reads, ascending tile.
@@ -139,6 +146,14 @@ pub trait PalwTirEvidenceStoreV1 {
     fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>>;
     /// The artifact opening of inventory leaf `leaf`.
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1>;
+    /// **One multiproof of inventory leaves `leaves`** (ascending, distinct) against the class's
+    /// `artifact_root` — what a close carries. The default assembles it from [`Self::param_opening`]'s
+    /// paths ([`palw_artifact_multiproof_from_openings_v1`]); a store holding the inventory's leaf
+    /// hashes may build it directly (`palw_artifact_multiproof_v1`) — the bytes are the same.
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        let openings: Option<Vec<PalwArtifactOpeningV1>> = leaves.iter().map(|leaf| self.param_opening(*leaf)).collect();
+        palw_artifact_multiproof_from_openings_v1(&openings?)
+    }
     /// The whole prompt (flat form).
     fn prompt_token_ids(&self) -> Option<Vec<u32>>;
     /// The opening of prompt tile `tile` (Merkle form).
@@ -744,38 +759,89 @@ fn authenticate_operands(
     Ok(leaves)
 }
 
-/// The carried artifact openings, authenticated against the class's `artifact_root`: ascending,
-/// each exactly one whole inventory leaf of the class.
+/// The carried multiproof, authenticated against the class's `artifact_root`: of this class's
+/// inventory, ascending, each opened operand exactly one whole inventory leaf of the class, and the
+/// proof reaching the root. `None` carries nothing. Total on hostile input: every malformed proof —
+/// an empty one, another inventory's size, an index out of range, out of order or repeated, a
+/// sibling short, extra or altered, an operand not its leaf's piece — is refused, never a panic.
 fn authenticate_params(
     binding: &PalwTirStepBindingV1,
     v: &PalwTirVerifiedBindingV1,
     inventory: &PalwTirInventoryIndexV1,
-    openings: &[PalwArtifactOpeningV1],
+    proof: Option<&PalwArtifactMultiproofV1>,
 ) -> Result<BTreeMap<u32, (u32, Vec<u8>)>, PalwStepRefuteError> {
     let mut out = BTreeMap::new();
+    let Some(proof) = proof else { return Ok(out) };
+    if proof.opened.is_empty() {
+        return Err(bad("an artifact multiproof opens nothing (carry none instead)"));
+    }
+    if proof.leaf_count != inventory.leaf_count() {
+        return Err(bad("the artifact multiproof is of another inventory"));
+    }
     let mut last: Option<u32> = None;
-    for o in openings {
-        if last.is_some_and(|l| l >= o.leaf_index) {
-            return Err(bad("the artifact openings are not in ascending leaf order"));
+    for (index, operand) in &proof.opened {
+        if last.is_some_and(|l| l >= *index) {
+            return Err(bad("the artifact multiproof's leaves are not in ascending order"));
         }
-        last = Some(o.leaf_index);
-        if o.leaf_count != inventory.leaf_count() {
-            return Err(bad("an artifact opening is of another inventory"));
+        last = Some(*index);
+        let (param, layer, start, len) = inventory.piece_of(*index).ok_or(bad("the artifact multiproof names no leaf"))?;
+        let d = v.space.program.params.get(param as usize).ok_or(bad("the artifact multiproof names no leaf"))?;
+        if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize {
+            return Err(bad("an opened operand is not its leaf's canonical piece"));
         }
-        let (param, layer, start, len) = inventory.piece_of(o.leaf_index).ok_or(bad("an artifact opening names no leaf"))?;
-        let d = &v.space.program.params[param as usize];
-        if o.operand.tensor_name != d.name
-            || o.operand.layer != layer
-            || o.operand.row_start != start
-            || o.operand.bytes.len() != len as usize
-        {
-            return Err(bad("an artifact opening is not its leaf's canonical piece"));
-        }
-        verify_artifact_opening_v1(o, binding.artifact_root)
-            .map_err(|_| bad("an artifact opening does not reach the class's root"))?;
-        out.insert(o.leaf_index, (o.operand.row_start, o.operand.bytes.clone()));
+    }
+    verify_artifact_multiproof_v1(proof, binding.artifact_root)
+        .map_err(|_| bad("the artifact multiproof does not reach the class's root"))?;
+    for (index, operand) in &proof.opened {
+        out.insert(*index, (operand.row_start, operand.bytes.clone()));
     }
     Ok(out)
+}
+
+/// **How an IR close carries its parameter openings** — the parameter of
+/// [`palw_tir_param_carriage_bytes_v1`], so an admission price can compare the two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwTirParamCarriageV1 {
+    /// One `PalwArtifactOpeningV1` per leaf, each with its whole path (the format before §2.12.1).
+    PerLeafOpenings,
+    /// ONE `PalwArtifactMultiproofV1` (the carried format, [`PalwTirConeRefutationV1::params`]).
+    Multiproof,
+}
+
+/// **The borsh bytes of an IR close's parameter carriage** for inventory leaves `leaves` of
+/// `program`, in `format` — byte for byte what [`build_tir_cone_refutation_v1`] carries in
+/// [`PalwTirConeRefutationV1::params`] (`Multiproof`: the option's tag, then the proof, or the tag
+/// alone for no leaf), or what the per-leaf vector was (`PerLeafOpenings`). The one price of
+/// parameter bytes an admission rule may use (design §2.12.1). `leaves` ascending and distinct;
+/// `None` when the program has no inventory index or a leaf is not in it.
+pub fn palw_tir_param_carriage_bytes_v1(program: &TirProgramV1, format: PalwTirParamCarriageV1, leaves: &[u32]) -> Option<u64> {
+    if leaves.windows(2).any(|w| w[0] >= w[1]) {
+        return None;
+    }
+    let inventory = PalwTirInventoryIndexV1::new(program)?;
+    let mut operand_lens = Vec::with_capacity(leaves.len());
+    for leaf in leaves {
+        let (param, layer, _, len) = inventory.piece_of(*leaf)?;
+        let name = &program.params.get(param as usize)?.name;
+        operand_lens.push(palw_artifact_operand_borsh_len_v1(name.len(), layer.is_some(), len as usize));
+    }
+    match format {
+        PalwTirParamCarriageV1::Multiproof => {
+            if leaves.is_empty() {
+                return Some(1);
+            }
+            let siblings = palw_artifact_multiproof_sibling_count_v1(inventory.leaf_count(), leaves)?;
+            Some(1u64.saturating_add(palw_artifact_multiproof_borsh_len_v1(operand_lens, siblings)))
+        }
+        PalwTirParamCarriageV1::PerLeafOpenings => {
+            let mut total = 4u64;
+            for (leaf, operand) in leaves.iter().zip(operand_lens) {
+                let path = palw_artifact_opening_path_len_v1(inventory.leaf_count(), *leaf)?;
+                total = total.saturating_add(operand + 4 + 4 + 4 + 64 * path);
+            }
+            Some(total)
+        }
+    }
 }
 
 /// The carried prompt ids, authenticated in the network's form: position → id.
@@ -979,7 +1045,7 @@ fn check_carriage<'r>(
     // 5.
     let operands = authenticate_operands(binding, &v, &refutation.operands, out_index, rules.max_step_leaf_count)?;
     let inventory = PalwTirInventoryIndexV1::new(&v.space.program).ok_or(PalwStepRefuteError::Unadjudicable)?;
-    let params = authenticate_params(binding, &v, &inventory, &refutation.params)?;
+    let params = authenticate_params(binding, &v, &inventory, refutation.params.as_ref())?;
     let (prompt, prompt_tiles) =
         authenticate_prompt(&binding.job_context, rules.prompt_form, &refutation.prompt_token_ids, &refutation.prompt_ids_openings)?;
     let generated = match &refutation.decode_tokens {
@@ -1046,8 +1112,8 @@ impl CheckedCarriage<'_> {
         if used.steps.len() != self.operands.len() || !self.operands.iter().all(|(i, _)| used.steps.contains(i)) {
             return Err(bad("the operand row is not the set the evaluation reads"));
         }
-        if used.params.len() != r.params.len() {
-            return Err(bad("the artifact openings are not the set the evaluation reads"));
+        if used.params.len() != r.params.as_ref().map_or(0, |p| p.opened.len()) {
+            return Err(bad("the artifact multiproof is not the set the evaluation reads"));
         }
         match rules.prompt_form {
             PalwPromptIdsFormV1::Flat => {
@@ -1177,10 +1243,22 @@ fn assemble_carriage(
         );
         k += len;
     }
-    let mut params = Vec::with_capacity(used.params.len());
-    for leaf in &used.params {
-        params.push(store.param_opening(*leaf).ok_or_else(|| missing(format!("inventory leaf {leaf}")))?);
-    }
+    let params = if used.params.is_empty() {
+        None
+    } else {
+        let leaves: Vec<u32> = used.params.iter().copied().collect();
+        let proof = store
+            .param_multiproof(&leaves)
+            .ok_or_else(|| missing(format!("the multiproof of inventory leaves {}..={}", leaves[0], leaves[leaves.len() - 1])))?;
+        // A store whose paths disagree with the class's root would build a close the court refuses:
+        // say so here, where the store can be named.
+        if proof.opened.iter().map(|(i, _)| *i).ne(leaves.iter().copied())
+            || verify_artifact_multiproof_v1(&proof, binding.artifact_root).is_err()
+        {
+            return Err(missing("a multiproof of the read leaves that reaches the class's artifact root".into()));
+        }
+        Some(proof)
+    };
     let (mut prompt_token_ids, mut prompt_ids_openings) = (Vec::new(), Vec::new());
     if !used.prompt.is_empty() {
         match rules.prompt_form {
@@ -2301,6 +2379,38 @@ pub(crate) mod test_support {
             check_tir_cone_refutation_v1(&r, &rules).expect("convicted").fault,
             PalwStepFaultV1::ComputationMismatch { value_index: 1 }
         );
+    }
+
+    /// **The multiproof vectors on the tiny program** (design §2.12.1): its closes carry a single
+    /// inventory leaf (a `Fixed`-state checkpoint whose update reads the gathered embedding row), a run
+    /// (a matmul's whole weight) and none; every one is acquitted, is the builder's multiproof of the
+    /// leaves read, and is priced to the byte by `palw_tir_param_carriage_bytes_v1`.
+    #[test]
+    fn the_tiny_program_s_closes_carry_a_single_leaf_a_run_and_none() {
+        let rules =
+            PalwTirCourtRulesV1 { max_step_leaf_count: 1 << 26, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+        let x = tiny_execution(None);
+        let program = x.binding.class.decode_program().expect("decodes");
+        let hashes: Vec<Hash64> = x.ops.iter().map(crate::palw_artifact::artifact_leaf_v1).collect();
+        let (mut singles, mut runs, mut none) = (0, 0, 0);
+        for leaf in 0..x.preimages.len() as u64 {
+            let r = build_tir_cone_refutation_v1(&x.binding, leaf, &x, &rules).expect("buildable");
+            assert_eq!(check_tir_cone_refutation_v1(&r, &rules), Err(PalwStepRefuteError::NoFaultFound), "leaf {leaf}");
+            let leaves: Vec<u32> = r.params.iter().flat_map(|p| p.opened.iter().map(|(l, _)| *l)).collect();
+            if !leaves.is_empty() {
+                let opened: Vec<_> = leaves.iter().map(|l| (*l, x.ops[*l as usize].clone())).collect();
+                assert_eq!(r.params, crate::palw_artifact::palw_artifact_multiproof_v1(&hashes, &opened), "leaf {leaf}");
+            }
+            let carried = borsh::to_vec(&r.params).unwrap().len() as u64;
+            assert_eq!(palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::Multiproof, &leaves), Some(carried));
+            match leaves.len() {
+                0 => none += 1,
+                1 => singles += 1,
+                _ if leaves.windows(2).all(|w| w[1] == w[0] + 1) => runs += 1,
+                _ => {}
+            }
+        }
+        assert!(singles > 0 && runs > 0 && none > 0, "{singles} single-leaf closes, {runs} runs, {none} with none");
     }
 
     /// **A job at exactly `layout.max_context` positions, in the CANONICAL job context, end to end**
