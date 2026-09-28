@@ -553,3 +553,197 @@ pub fn check_gen_decode_close_v1(
         PalwGenVerdictV1::Convicted { fault, .. } => Ok(Some(fault)),
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// An executor's evidence: every court move built from its own run
+// ---------------------------------------------------------------------------------------------
+
+/// **An image's reference** as a V5 job carries it (its `input_root` at the slot's tile length).
+pub fn palw_gen_image_input_ref_v1(
+    image: &misaka_palw_tir::pipeline::JobImageV1,
+    tile_len: u32,
+) -> Result<crate::palw_gen_class_v1::PalwGenImageInputRefV1, String> {
+    let root = misaka_palw_gen::output::input_image_root_v1(image.h, image.w, tile_len, &image.rgb).map_err(|e| format!("{e:?}"))?;
+    Ok(crate::palw_gen_class_v1::PalwGenImageInputRefV1 { input_root: Hash64::from_bytes(root), h: image.h, w: image.w })
+}
+
+/// **Every input tile of an image**, each with its path under the image's `input_root`.
+pub fn palw_gen_image_tiles_v1(
+    image_index: u8,
+    image: &misaka_palw_tir::pipeline::JobImageV1,
+    tile_len: u32,
+) -> Result<Vec<PalwGenImageTileV1>, String> {
+    let tiles = misaka_palw_gen::output::input_image_tiles_v1(image.h, image.w, tile_len, &image.rgb).map_err(|e| format!("{e:?}"))?;
+    Ok(tiles
+        .into_iter()
+        .enumerate()
+        .map(|(t, (bytes, proof))| PalwGenImageTileV1 { image: image_index, tile: t as u64, bytes, proof })
+        .collect())
+}
+
+/// **An executor's evidence** — its class's row and weights, its run, its binding, and the job's
+/// prompt and images — from which it (or a challenger holding the same inputs) builds every court
+/// move, each carrying exactly the units the court's evaluation reads (the builders record them).
+pub struct PalwGenEvidenceV1<'a> {
+    pub row: &'a PalwGenClassRecordV1,
+    pub params: &'a dyn misaka_palw_tir::pipeline::PipelineParams,
+    pub execution: &'a crate::palw_gen_worker_v1::PalwGenExecutionV1,
+    pub binding: &'a PalwGenStepBindingV1,
+    pub prompt: &'a [u32],
+    pub images: &'a [misaka_palw_tir::pipeline::JobImageV1],
+}
+
+impl PalwGenEvidenceV1<'_> {
+    fn verified(&self) -> Result<Box<PalwGenVerifiedBindingV1>, String> {
+        match verify_gen_binding_v1(
+            self.binding,
+            self.row,
+            &self.row.class_id,
+            &self.binding.committed_execution_root,
+            Some(self.prompt),
+        )
+        .map_err(|e| e.to_string())?
+        {
+            PalwGenBindingOutcomeV1::Verified(v) => Ok(v),
+            PalwGenBindingOutcomeV1::Convicted(fault) => Err(format!("the binding convicts its own executor ({fault:?})")),
+        }
+    }
+
+    /// The close of leaf `index` (the claim's one order) holding EVERY unit: every leaf before it,
+    /// every image tile, every param leaf.
+    fn full_close(&self, v: &PalwGenVerifiedBindingV1, index: u64) -> Result<PalwGenCloseV1, String> {
+        let (s, i) = v.space.locate(index).ok_or_else(|| format!("{index} is no leaf of this execution"))?;
+        let open =
+            |s: usize, i: usize| self.execution.open(s as u8, i as u64).ok_or_else(|| format!("stage {s} leaf {i} does not open"));
+        let mut operands = Vec::new();
+        for st in 0..=s as usize {
+            let n = if st == s as usize { i as usize } else { v.space.stages[st].leaves().len() };
+            for k in 0..n {
+                operands.push(open(st, k)?);
+            }
+        }
+        let mut image_tiles = Vec::new();
+        for (k, (image, slot)) in self.images.iter().zip(&self.row.class.offers.images).enumerate() {
+            image_tiles.extend(palw_gen_image_tiles_v1(k as u8, image, slot.tile_len)?);
+        }
+        let count = v.inventory.leaf_count();
+        let params =
+            crate::palw_gen_artifact_v1::palw_gen_open_leaves_v1(&v.programs, self.params, 0..count).map_err(|e| e.to_string())?;
+        Ok(PalwGenCloseV1 { disputed: open(s as usize, i as usize)?, operands, image_tiles, params })
+    }
+
+    /// A close as it rides: lanes, the binding, and the prompt exactly when the stage reads it.
+    fn wire(&self, v: &PalwGenVerifiedBindingV1, close: &PalwGenCloseV1) -> Result<PalwGenConeCloseV1, String> {
+        let lanes =
+            |o: &PalwGenOpenedLeafV1| PalwGenLeafOpeningV1::of(&v.space, o).ok_or_else(|| format!("{:?} does not ride", o.coord));
+        let reads = palw_gen_stage_reads_prompt_v1(&v.pipeline, close.disputed.coord.stage as usize);
+        Ok(PalwGenConeCloseV1 {
+            version: PALW_GEN_CLOSE_VERSION_V1,
+            binding: self.binding.clone(),
+            prompt_ids: if reads { self.prompt.to_vec() } else { Vec::new() },
+            disputed: lanes(&close.disputed)?,
+            operands: close.operands.iter().map(lanes).collect::<Result<_, _>>()?,
+            image_tiles: close.image_tiles.clone(),
+            params: close.params.clone(),
+        })
+    }
+
+    /// **A cone close of leaf `index`**, carrying exactly what its cone reads.
+    pub fn cone_close(&self, index: u64, limits: &DemandLimits) -> Result<PalwGenConeCloseV1, String> {
+        let v = self.verified()?;
+        let case = v.case(self.row);
+        let full = self.full_close(&v, index)?;
+        let used = crate::palw_gen_court_v1::palw_gen_cone_units_v1(&case, &full, limits).map_err(|e| e.to_string())?;
+        self.wire(&v, &crate::palw_gen_court_v1::palw_gen_restrict_close_v1(&case, &full, &used))
+    }
+
+    /// **A decode close of generated id `t`**: every tile of its logits row.
+    pub fn decode_close(&self, t: u32) -> Result<PalwGenDecodeCloseV1, String> {
+        let v = self.verified()?;
+        let out = v.pipeline.output_stage as usize;
+        let program = &v.programs[v.pipeline.stages[out].program as usize];
+        let post = (program.occurrences().len() - 1) as u16;
+        let kind = PalwGenLeafKindV1::Commit { occurrence: post, node: program.output.node() };
+        let pos = self.binding.job.v4.prompt_tokens.saturating_sub(1) + t;
+        let leaves = v.space.stages[out].leaves();
+        let mut row = Vec::new();
+        for (i, leaf) in leaves.iter().enumerate() {
+            if leaf.coord.pos == pos && leaf.coord.kind == kind {
+                let opened = self.execution.open(out as u8, i as u64).ok_or("a row tile does not open")?;
+                row.push(PalwGenLeafOpeningV1::of(&v.space, &opened).ok_or("a row tile does not ride")?);
+            }
+        }
+        Ok(PalwGenDecodeCloseV1 { version: PALW_GEN_CLOSE_VERSION_V1, binding: self.binding.clone(), t, row })
+    }
+
+    /// **The responder's root claim at dissected leaf `index`**: the honest totals, the closure's
+    /// elements, and a finalize carrying exactly what the court reads to admit them.
+    pub fn root_claim(&self, index: u64, limits: &DemandLimits) -> Result<PalwGenRootClaimV1, String> {
+        let v = self.verified()?;
+        let case = v.case(self.row);
+        let full = self.full_close(&v, index)?;
+        let (elements, totals, used) =
+            crate::palw_gen_court_v1::palw_gen_build_root_claim_recorded_v1(&case, &full, limits).map_err(|e| e.to_string())?;
+        let finalize = self.wire(&v, &crate::palw_gen_court_v1::palw_gen_restrict_close_v1(&case, &full, &used))?;
+        Ok(PalwGenRootClaimV1 {
+            version: crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+            elements,
+            totals,
+            finalize: Box::new(finalize),
+        })
+    }
+
+    /// The history positions `[from, to)` of each child of the phase's disputed range.
+    fn child_positions(
+        &self,
+        v: &PalwGenVerifiedBindingV1,
+        phase: &crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+    ) -> Result<Vec<(usize, usize)>, String> {
+        let (s, _) = v.space.locate(phase.leaf_index()).ok_or("the phase's leaf is no leaf of this execution")?;
+        let tile = v.space.stages[s as usize].layout.h_tile.max(1) as u64;
+        let h = phase.history_positions() as u64;
+        Ok(phase
+            .child_ranges()
+            .into_iter()
+            .map(|(first, count)| ((first * tile) as usize, ((first + count) * tile).min(h) as usize))
+            .collect())
+    }
+
+    /// **The responder's round**: every child's honest partials (the others supplied from the root).
+    pub fn round(
+        &self,
+        phase: &crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+        limits: &DemandLimits,
+    ) -> Result<crate::palw_tir_dissect_v1::PalwTirDissectRoundV1, String> {
+        let v = self.verified()?;
+        let case = v.case(self.row);
+        let full = self.full_close(&v, phase.leaf_index())?;
+        let mut children = Vec::new();
+        for range in self.child_positions(&v, phase)? {
+            let claim = crate::palw_gen_court_v1::palw_gen_dissect_partials_v1(&case, &full, phase, range, limits)
+                .map_err(|e| e.to_string())?
+                .map_err(|v| format!("the carriage convicts its own executor: {v:?}"))?;
+            children.push(claim);
+        }
+        Ok(crate::palw_tir_dissect_v1::PalwTirDissectRoundV1 {
+            version: crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+            children,
+        })
+    }
+
+    /// **The bottom close** over the phase's terminal tile, carrying exactly what its evaluation reads.
+    pub fn bottom(
+        &self,
+        phase: &crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+        limits: &DemandLimits,
+    ) -> Result<PalwGenConeCloseV1, String> {
+        let v = self.verified()?;
+        let case = v.case(self.row);
+        let full = self.full_close(&v, phase.leaf_index())?;
+        let range = phase.terminal_range().ok_or("the dissection has no bottom yet")?;
+        let (out, used) = crate::palw_gen_court_v1::palw_gen_dissect_partials_recorded_v1(&case, &full, phase, range, limits)
+            .map_err(|e| e.to_string())?;
+        out.map_err(|v| format!("the carriage convicts its own executor: {v:?}"))?;
+        self.wire(&v, &crate::palw_gen_court_v1::palw_gen_restrict_close_v1(&case, &full, &used))
+    }
+}

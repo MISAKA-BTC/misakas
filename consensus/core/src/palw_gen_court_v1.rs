@@ -180,11 +180,21 @@ pub struct PalwGenStageSourceV1<'a> {
     /// The first carried edge value outside its upstream's proven interval: `(input, pos, index,
     /// value)` — the executor's PALW-TIR-33 fault.
     pub violation: Option<(u16, u32, usize, i128)>,
+    /// Every image tile a lane was read from: what a builder carries.
+    pub used_image_tiles: std::collections::BTreeSet<(u8, u64)>,
 }
 
 impl<'a> PalwGenStageSourceV1<'a> {
     pub fn new(inner: &'a mut dyn DemandSourceV2, answers: Vec<PalwGenInputAnswerV1>, draw: PalwGenDrawV1) -> Self {
-        Self { inner, answers, draw, images: Vec::new(), image_tiles: Default::default(), violation: None }
+        Self {
+            inner,
+            answers,
+            draw,
+            images: Vec::new(),
+            image_tiles: Default::default(),
+            violation: None,
+            used_image_tiles: Default::default(),
+        }
     }
 
     /// The job's images (their roots, sizes and the class's tile lengths), for the image answers.
@@ -233,6 +243,7 @@ impl DemandSourceV2 for PalwGenStageSourceV1<'_> {
                     .ok_or_else(|| TirError::new(TirErrorKind::Missing, format!("the job has no image {image}")))?
                     .tile_len as u64;
                 let (tile, lane) = (index as u64 / tile_len, (index as u64 % tile_len) as usize);
+                self.used_image_tiles.insert((image, tile));
                 self.image_tiles
                     .get(&(image, tile))
                     .and_then(|b| b.get(lane))
@@ -455,6 +466,17 @@ struct CarriageSource<'a, 'c> {
     stage: usize,
     leaves: &'a std::collections::BTreeMap<(u8, u64), Vec<i128>>,
     params: &'a crate::palw_gen_artifact_v1::PalwGenOpenedParamsV1,
+    /// Every leaf and every param leaf the evaluation read: what a builder carries.
+    used: PalwGenUsedUnitsV1,
+}
+
+/// **The units an evaluation read** — the leaves by `(stage, index)`, the class's param leaves and
+/// the job's image tiles: exactly what a close must carry for the court to repeat it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwGenUsedUnitsV1 {
+    pub leaves: std::collections::BTreeSet<(u8, u64)>,
+    pub params: std::collections::BTreeSet<u32>,
+    pub image_tiles: std::collections::BTreeSet<(u8, u64)>,
 }
 
 fn missing(m: String) -> TirError {
@@ -467,10 +489,14 @@ impl DemandSourceV2 for CarriageSource<'_, '_> {
         let (leaf, lane) = sp
             .commit_leaf_of(ctx, node, index as u64)
             .ok_or_else(|| TirError::new(TirErrorKind::Malformed, format!("node {node} at {ctx:?} is no commit leaf")))?;
+        self.used.leaves.insert((self.stage as u8, leaf));
         self.leaves.get(&(self.stage as u8, leaf)).and_then(|v| v.get(lane)).copied().ok_or_else(|| missing(format!("leaf {leaf}")))
     }
     fn param(&mut self, param: u16, layer: Option<u16>, index: usize) -> TirResult<i128> {
         let program = self.case.pipeline.stages[self.stage].program;
+        if let Some(leaf) = self.params.leaf_of_element(self.case.inventory, program, param, layer, index) {
+            self.used.params.insert(leaf);
+        }
         match self.params.element(self.case.inventory, program, param, layer, index) {
             Ok(Some(v)) => Ok(v),
             Ok(None) => Err(missing(format!("program {program} param {param} layer {layer:?} element {index}"))),
@@ -480,6 +506,7 @@ impl DemandSourceV2 for CarriageSource<'_, '_> {
     fn input(&mut self, _pos: u32, input: u16, index: usize) -> TirResult<i128> {
         let (up, leaf, lane) = edge_leaf(self.case, self.stage, input, index)
             .ok_or_else(|| missing(format!("input {input} is no edge the court reads")))?;
+        self.used.leaves.insert((up, leaf));
         self.leaves.get(&(up, leaf)).and_then(|v| v.get(lane)).copied().ok_or_else(|| missing(format!("stage {up} leaf {leaf}")))
     }
     fn state(&mut self, pos: u32, state: u16, layer: Option<u16>, index: usize) -> TirResult<StateSupply> {
@@ -498,6 +525,7 @@ impl DemandSourceV2 for CarriageSource<'_, '_> {
             tile: (index / tile) as u32,
         };
         let leaf = sp.leaf_index(&coord).ok_or_else(|| missing(format!("{coord:?}")))?;
+        self.used.leaves.insert((self.stage as u8, leaf));
         self.leaves
             .get(&(self.stage as u8, leaf))
             .and_then(|v| v.get(index % tile))
@@ -668,24 +696,39 @@ fn evaluate_with<T>(
     p: &ProvenCloseV1,
     run: impl FnOnce(&mut dyn DemandSourceV2) -> Result<T, DemandError>,
 ) -> Result<Result<T, PalwGenVerdictV1>, PalwGenCloseRefusalV1> {
+    evaluate_recording(case, close, p, run).map(|(out, _)| out)
+}
+
+/// [`evaluate_with`], and the units the evaluation read.
+fn evaluate_recording<T>(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    p: &ProvenCloseV1,
+    run: impl FnOnce(&mut dyn DemandSourceV2) -> Result<T, DemandError>,
+) -> Result<(Result<T, PalwGenVerdictV1>, PalwGenUsedUnitsV1), PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
-    let mut carriage = CarriageSource { case, stage: p.s, leaves: &p.leaves, params: &p.params };
+    let mut carriage = CarriageSource { case, stage: p.s, leaves: &p.leaves, params: &p.params, used: Default::default() };
     let mut source = PalwGenStageSourceV1::new(&mut carriage, p.answers.clone(), case.draw).with_images(case.images.to_vec());
     for t in &close.image_tiles {
         source.carry_image_tile(t.image, t.tile, &t.bytes, &t.proof).map_err(R::Image)?;
     }
     let out = run(&mut source);
-    if let Some((input, _pos, index, _value)) = source.violation {
+    let violation = source.violation;
+    let image_tiles = std::mem::take(&mut source.used_image_tiles);
+    drop(source);
+    let mut used = std::mem::take(&mut carriage.used);
+    used.image_tiles = image_tiles;
+    if let Some((input, _pos, index, _value)) = violation {
         // An edge value read outside its upstream's interval — carried leaves were all checked
         // already, so this names the upstream leaf the court read.
         if let Some((up, leaf, lane)) = edge_leaf(case, p.s, input, index) {
             let coord = case.space.stages[up as usize].leaves()[leaf as usize].coord;
             let fault = PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: lane as u32 };
-            return Ok(Err(PalwGenVerdictV1::Convicted { leaf: coord, fault }));
+            return Ok((Err(PalwGenVerdictV1::Convicted { leaf: coord, fault }), used));
         }
     }
     match out {
-        Ok(v) => Ok(Ok(v)),
+        Ok(v) => Ok((Ok(v), used)),
         Err(DemandError::Tir(t)) if t.kind == TirErrorKind::Missing => Err(R::Incomplete(t.to_string())),
         Err(e) => Err(R::Unadjudicable(format!("{e:?}"))),
     }
@@ -953,9 +996,20 @@ pub fn palw_gen_dissect_partials_v1(
     range: (usize, usize),
     limits: &DemandLimits,
 ) -> Result<Result<PalwTirRangeClaimV1, PalwGenVerdictV1>, PalwGenCloseRefusalV1> {
+    palw_gen_dissect_partials_recorded_v1(case, close, phase, range, limits).map(|(out, _)| out)
+}
+
+/// [`palw_gen_dissect_partials_v1`], and the units the evaluation read — a bottom's carriage.
+pub fn palw_gen_dissect_partials_recorded_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    phase: &PalwTirDissectPhaseV1,
+    range: (usize, usize),
+    limits: &DemandLimits,
+) -> Result<(Result<PalwTirRangeClaimV1, PalwGenVerdictV1>, PalwGenUsedUnitsV1), PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
     let p = match prove_close(case, close)? {
-        ProvedV1::Convicted(v) => return Ok(Err(v)),
+        ProvedV1::Convicted(v) => return Ok((Err(v), PalwGenUsedUnitsV1::default())),
         ProvedV1::Proven(p) => p,
     };
     let sp = &case.space.stages[p.s];
@@ -963,7 +1017,7 @@ pub fn palw_gen_dissect_partials_v1(
     if site.reductions != phase.reductions() || site.history_positions != phase.history_positions() {
         return Err(R::Unadjudicable("the leaf's site is not the phase's".into()));
     }
-    evaluate_with(case, close, &p, |inner| {
+    evaluate_recording(case, close, &p, |inner| {
         let mut source = SuppliedSourceV1 {
             inner,
             ctx: site.ctx,
@@ -1020,6 +1074,17 @@ pub fn palw_gen_build_root_claim_v1(
     close: &PalwGenCloseV1,
     limits: &DemandLimits,
 ) -> Result<(Vec<Vec<u32>>, PalwTirRangeClaimV1), PalwGenCloseRefusalV1> {
+    palw_gen_build_root_claim_recorded_v1(case, close, limits).map(|(elements, totals, _)| (elements, totals))
+}
+
+/// [`palw_gen_build_root_claim_v1`], and the units its finalize and closure read — the root claim's
+/// carriage (the honest totals' own evaluation over the whole history is the builder's, never the
+/// court's).
+pub fn palw_gen_build_root_claim_recorded_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    limits: &DemandLimits,
+) -> Result<(Vec<Vec<u32>>, PalwTirRangeClaimV1, PalwGenUsedUnitsV1), PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
     let p = match prove_close(case, close)? {
         ProvedV1::Convicted(v) => return Err(R::Unadjudicable(format!("the leaf convicts on its own: {v:?}"))),
@@ -1028,8 +1093,9 @@ pub fn palw_gen_build_root_claim_v1(
     let sp = &case.space.stages[p.s];
     let site = palw_gen_dissect_site_v1(sp, &close.disputed.coord).ok_or(R::Unadjudicable("the leaf is not dissected".into()))?;
     let wanted = disputed_elements(sp, &close.disputed.coord);
-    let out = evaluate_with(case, close, &p, |inner| {
-        // Every reduction's every element, computed whole (no node supplied): the honest totals.
+    let edge = |v: PalwGenVerdictV1| R::Unadjudicable(format!("an edge the finalize reads convicts: {v:?}"));
+    // Every reduction's every element, computed whole (no node supplied): the honest totals.
+    let full = evaluate_with(case, close, &p, |inner| {
         let mut full = std::collections::BTreeMap::new();
         for (node, count) in site.reductions.iter().zip(&site.counts) {
             let elements: Vec<usize> = (0..*count as usize).collect();
@@ -1039,6 +1105,12 @@ pub fn palw_gen_build_root_claim_v1(
                 full.insert((*node, e), v);
             }
         }
+        Ok(full)
+    })?
+    .map_err(edge)?;
+    // The finalize and the closure, with those totals supplied: the claim's elements, and what the
+    // court reads to admit it.
+    let (read, used) = evaluate_recording(case, close, &p, |inner| {
         let mut source = SuppliedSourceV1 {
             inner,
             ctx: site.ctx,
@@ -1047,14 +1119,66 @@ pub fn palw_gen_build_root_claim_v1(
             used: Default::default(),
         };
         finalize_and_closure(sp, &site, &wanted, &mut source, limits)?;
-        let mut elements = vec![Vec::new(); site.reductions.len()];
-        let mut totals = vec![Vec::new(); site.reductions.len()];
-        for (node, e) in &source.used {
-            let i = site.reductions.iter().position(|r| r == node).expect("a used value is a reduction's");
-            elements[i].push(*e as u32);
-            totals[i].push(full[&(*node, *e)]);
-        }
-        Ok((elements, PalwTirRangeClaimV1 { partials: totals }))
+        Ok(source.used)
     })?;
-    out.map_err(|v| R::Unadjudicable(format!("an edge the finalize reads convicts: {v:?}")))
+    let read = read.map_err(edge)?;
+    let mut elements = vec![Vec::new(); site.reductions.len()];
+    let mut totals = vec![Vec::new(); site.reductions.len()];
+    for (node, e) in &read {
+        let i = site.reductions.iter().position(|r| r == node).expect("a used value is a reduction's");
+        elements[i].push(*e as u32);
+        totals[i].push(full[&(*node, *e)]);
+    }
+    Ok((elements, PalwTirRangeClaimV1 { partials: totals }, used))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Builders: what a close must carry, and the close that carries exactly that
+// ---------------------------------------------------------------------------------------------
+
+/// **The units a cone close of the disputed leaf reads** — the court's own evaluation (step 4 of
+/// [`palw_gen_adjudicate_leaf_v1`]) over a carriage that holds everything, recorded. Refused for a
+/// carriage that convicts on its face (a builder builds an honest executor's evidence).
+pub fn palw_gen_cone_units_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    full: &PalwGenCloseV1,
+    limits: &DemandLimits,
+) -> Result<PalwGenUsedUnitsV1, PalwGenCloseRefusalV1> {
+    use PalwGenCloseRefusalV1 as R;
+    let p = match prove_close(case, full)? {
+        ProvedV1::Convicted(v) => return Err(R::Unadjudicable(format!("the carriage convicts on its face: {v:?}"))),
+        ProvedV1::Proven(p) => p,
+    };
+    let d = &full.disputed;
+    let sp = &case.space.stages[p.s];
+    let elements = disputed_elements(sp, &d.coord);
+    let target = match d.coord.kind {
+        PalwGenLeafKindV1::Commit { occurrence, node } => {
+            DemandTarget::Node { ctx: DemandContext { pos: d.coord.pos, occurrence }, node }
+        }
+        PalwGenLeafKindV1::State { state, layer } => DemandTarget::StateAfter { pos: d.coord.pos, state, layer },
+    };
+    let (out, used) = evaluate_recording(case, full, &p, |source| {
+        eval_demanded_v2(&sp.program, &sp.info, &DemandRequest { target, elements: &elements }, source, limits).map(|(v, _)| v)
+    })?;
+    out.map_err(|v| R::Unadjudicable(format!("an edge the cone reads convicts: {v:?}")))?;
+    Ok(used)
+}
+
+/// **A close cut down to the units in `used`**: the disputed leaf, the carried leaves the evaluation
+/// read, the param leaves it read and the image tiles it read — exactly what the court repeats it
+/// from.
+pub fn palw_gen_restrict_close_v1(case: &PalwGenCourtCaseV1<'_>, full: &PalwGenCloseV1, used: &PalwGenUsedUnitsV1) -> PalwGenCloseV1 {
+    let index_of = |o: &PalwGenOpenedLeafV1| case.space.stages.get(o.coord.stage as usize).and_then(|s| s.leaf_index(&o.coord));
+    PalwGenCloseV1 {
+        disputed: full.disputed.clone(),
+        operands: full
+            .operands
+            .iter()
+            .filter(|o| index_of(o).is_some_and(|i| used.leaves.contains(&(o.coord.stage, i))))
+            .cloned()
+            .collect(),
+        image_tiles: full.image_tiles.iter().filter(|t| used.image_tiles.contains(&(t.image, t.tile))).cloned().collect(),
+        params: full.params.iter().filter(|o| used.params.contains(&o.leaf_index)).cloned().collect(),
+    }
 }

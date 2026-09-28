@@ -52,7 +52,9 @@ use crate::Hash64;
 use crate::palw_gen_v1::{PalwGenFenceV1, PalwGenProfileV1};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwPwuRuleV2};
 use crate::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
-use misaka_palw_gen::OutputSpecV1;
+/// The canonical output header a class declares (re-exported: a node builds classes without naming
+/// the generative crate).
+pub use misaka_palw_gen::OutputSpecV1;
 use misaka_palw_tir::admit::{TirAdmitError, TirAdmitInputsV1, TirCeilingsV1};
 use misaka_palw_tir::admit_v2::{TirJobCeilingsV1, TirPipelineAdmissionV1, tir_admit_pipeline_staged_v1};
 use misaka_palw_tir::pipeline::{Binding, TirPipelineV1, TokenRule, TokenSource, TripRule};

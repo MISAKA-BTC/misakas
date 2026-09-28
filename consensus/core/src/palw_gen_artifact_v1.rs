@@ -295,6 +295,20 @@ impl PalwGenOpenedParamsV1 {
         Ok(Some(d.dtype.decode_le(element)))
     }
 
+    /// The inventory leaf element `index` of program `program`'s param instance `(param, layer)`
+    /// lives in, carried or not (`None`: no such element).
+    pub fn leaf_of_element(
+        &self,
+        inventory: &PalwGenInventoryIndexV1,
+        program: u16,
+        param: u16,
+        layer: Option<u16>,
+        index: usize,
+    ) -> Option<u32> {
+        let d = inventory.view(program)?.params.get(param as usize)?;
+        inventory.leaf_of(program, param, layer, (index as u64).saturating_mul(d.dtype.width() as u64))
+    }
+
     /// The carried leaves.
     pub fn leaves(&self) -> impl Iterator<Item = u32> + '_ {
         self.leaves.keys().copied()
