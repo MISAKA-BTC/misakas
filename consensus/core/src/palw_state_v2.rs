@@ -30839,6 +30839,17 @@ fn apply_object(
     if palw_object_is_tir_fence2_v1(object) && !builder.params.tir_fence2_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
     }
+    // **RFC-0004 §6.3: a composite artifact's sub-root openings** (the IR parameter carriage's
+    // appended tag 2) only past `palw_improvement_v1`: the acceptance walk drops a close carrying one
+    // first; this is the second lock.
+    if crate::palw_improve_composite_v1::palw_object_carries_composite_opening_v1(object)
+        && !builder.params.improve_active_at(ctx.daa_score)
+    {
+        return Err(PalwStateV2Error::ImprovementObjectRefused {
+            object: "an IR close with composite openings",
+            why: "before palw_improvement_v1 is in force (RFC-0004)",
+        });
+    }
     // **RFC-0004: an improvement object is refused by name, before any arm reads it** — below
     // `palw_improvement_v1`, and above it until the object's admission lands. The acceptance walk
     // drops it first (an older build cannot decode it and skips it), so this is the second lock,

@@ -448,3 +448,57 @@ fn every_carrier_of_a_composite_opening_is_named() {
         );
     }
 }
+
+/// **Below `palw_improvement_v1` the fold refuses a close carrying composite openings by name** —
+/// the second lock behind the acceptance walk's drop (an older build cannot decode the carriage and
+/// skips the object, A-2) — and past the fence the gate lets it through to the court's own rules.
+#[test]
+fn the_fold_refuses_composite_openings_below_the_improvement_fence() {
+    use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2 as P;
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2 as O, PalwCourtVerdictV2, PalwStateParamsV2, PalwStateV2Error,
+        PalwTransitionExtrasV1, apply_palw_transition_v2_with_extras,
+    };
+    let (f, r, split) = composites().into_iter().next().expect("a composite");
+    let x = f.honest();
+    let i = (0..f.leaves.len())
+        .find(|i| !refute_composite(&f, &x, &r, split, *i as u64).params.is_none())
+        .expect("a close reading params");
+    let close = O::CourtClosed {
+        session_id: SESSION,
+        verdict: PalwCourtVerdictV2::ChallengerDefeated,
+        proof: P::TirCone { refutation: Box::new(refute_composite(&f, &x, &r, split, i as u64)) },
+    };
+    let params = |improve: Option<u64>| {
+        PalwStateParamsV2::new(100, 10, 10, 20, 3_000, 1000, Hash64::from_bytes([1; 64]), 4, 1000, 100, 1000, 0)
+            .unwrap()
+            .with_tir_from_daa(Some(0))
+            .with_improve_from_daa(improve)
+    };
+    let ctx = PalwBlockContextV2 { block: Hash64::from_bytes([0xB1; 64]), daa_score: 50, blue_score: 50, subsidy: 0 };
+    let fold = |p: &PalwStateParamsV2| {
+        apply_palw_transition_v2_with_extras(
+            &PalwChainStateV2::genesis(),
+            p,
+            &ctx,
+            std::slice::from_ref(&close),
+            None,
+            false,
+            false,
+            false,
+            true,
+            &PalwTransitionExtrasV1::default(),
+        )
+        .map(|_| ())
+    };
+    let composite_refusal = |e: &PalwStateV2Error| {
+        matches!(e, PalwStateV2Error::ImprovementObjectRefused { object: "an IR close with composite openings", .. })
+    };
+    for below in [None, Some(51)] {
+        let refused = fold(&params(below)).expect_err("refused below the fence");
+        assert!(composite_refusal(&refused), "below the fence ({below:?}): {refused}");
+    }
+    // Past it the composite gate is silent; the close fails for the court's own reasons (no session).
+    let past = fold(&params(Some(0))).expect_err("no session to close");
+    assert!(!composite_refusal(&past), "past the fence the composite gate lets the close through: {past}");
+}

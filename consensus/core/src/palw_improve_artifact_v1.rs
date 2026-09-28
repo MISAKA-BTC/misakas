@@ -20,6 +20,17 @@ pub enum PalwTirArtifactRefV1 {
 }
 
 impl PalwTirArtifactRefV1 {
+    /// The composite reference, when the artifact is one — the form the court's sub-root openings
+    /// and the composite admission take ([`crate::palw_improve_composite_v1::PalwTirCompositeRefV1`]).
+    pub fn composite(&self) -> Option<crate::palw_improve_composite_v1::PalwTirCompositeRefV1> {
+        match *self {
+            PalwTirArtifactRefV1::Single { .. } => None,
+            PalwTirArtifactRefV1::Composite { parent_class, parent_root, adapter_root, p } => {
+                Some(crate::palw_improve_composite_v1::PalwTirCompositeRefV1 { parent_class, parent_root, adapter_root, p })
+            }
+        }
+    }
+
     /// The artifact root Phase F's class id hashes (`tir_class_id_v1`): the single root, or the
     /// composite root.
     pub fn artifact_root(&self) -> Hash64 {
@@ -61,6 +72,9 @@ mod tests {
         assert_ne!(base, palw_improve_composite_artifact_root_v1(&h(1), &h(2), &h(3), 11));
         let composite = PalwTirArtifactRefV1::Composite { parent_class: h(1), parent_root: h(2), adapter_root: h(3), p: 10 };
         assert_eq!(composite.artifact_root(), base);
+        // One spelling: the court's composite reference roots the same.
+        assert_eq!(composite.composite().expect("a composite").artifact_root(), base);
+        assert_eq!(PalwTirArtifactRefV1::Single { root: h(4) }.composite(), None);
         assert_eq!(PalwTirArtifactRefV1::Single { root: h(4) }.artifact_root(), h(4));
     }
 }

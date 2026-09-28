@@ -7335,6 +7335,18 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a second-IR-fence object was dropped by name below palw_tir_fence2, and the block stands (RFC-0002 Phase F)");
                 continue;
             }
+            // **RFC-0004 §6.3: an IR close carrying a composite artifact's sub-root openings** (the
+            // parameter carriage's appended tag 2) is dropped by name below `palw_improvement_v1` —
+            // an older build cannot decode the carriage and skips the object (A-2) — first, and
+            // charged nothing. The fold refuses it too, as the second lock.
+            if kaspa_consensus_core::palw_improve_composite_v1::palw_object_carries_composite_opening_v1(&object)
+                && !self.palw_improvement_at(point.daa_score)
+            {
+                info!(
+                    "Block {block}: an IR close with composite openings was dropped by name below palw_improvement_v1, and the block stands (RFC-0004)"
+                );
+                continue;
+            }
             // **RFC-0004: an improvement object (tags 70–82) is dropped by name** — below
             // `palw_improvement_v1` for the IR objects' reason above (an older build skips it
             // undecoded), and above it until the object's admission lands — first, and charged

@@ -43,25 +43,13 @@ use crate::palw_tir_class_v1::PalwTirClassV1;
 use crate::palw_tir_close_size_v1::PalwTirCloseBoundV1;
 use misaka_palw_tir::TirProgramV1;
 
-/// The key of a composite artifact root (RFC-0004 §6.3).
-pub const PALW_IMPROVE_COMPOSITE_ARTIFACT_DOMAIN_V1: &[u8] = b"misaka-palw/improve/composite-artifact/v1";
+/// The key of a composite artifact root (RFC-0004 §6.3) — one spelling, the reference type's module's.
+pub use crate::palw_improve_artifact_v1::PALW_IMPROVE_COMPOSITE_ARTIFACT_DOMAIN_V1;
 
-fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
-    let mut state = blake2b_simd::Params::new().hash_length(64).key(key).to_state();
-    for part in parts {
-        state.update(part);
-    }
-    let mut out = [0u8; 64];
-    out.copy_from_slice(state.finalize().as_bytes());
-    Hash64::from_bytes(out)
-}
-
-/// **A composite artifact root** over its four parts (RFC-0004 §6.3).
+/// **A composite artifact root** over its four parts (RFC-0004 §6.3) — the reference type's
+/// ([`crate::palw_improve_artifact_v1::palw_improve_composite_artifact_root_v1`]), one spelling.
 pub fn palw_improve_composite_root_v1(parent_class: &Hash64, parent_root: &Hash64, adapter_root: &Hash64, p: u32) -> Hash64 {
-    keyed64(
-        PALW_IMPROVE_COMPOSITE_ARTIFACT_DOMAIN_V1,
-        &[parent_class.as_byte_slice(), parent_root.as_byte_slice(), adapter_root.as_byte_slice(), &p.to_le_bytes()],
-    )
+    crate::palw_improve_artifact_v1::palw_improve_composite_artifact_root_v1(parent_class, parent_root, adapter_root, p)
 }
 
 /// **What a composite artifact is**: the parent class, the parent's inventory root, the adapter
