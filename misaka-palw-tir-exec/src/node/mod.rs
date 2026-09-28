@@ -8,4 +8,4 @@ pub mod mapped;
 pub mod run;
 
 pub use artifact::TirArtifactV1;
-pub use run::{TirClassRunnerV1, TirJobRunV1, TirLeafOutV1};
+pub use run::{TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};

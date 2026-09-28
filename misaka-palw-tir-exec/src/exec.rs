@@ -492,6 +492,25 @@ impl<'a> TirExecutor<'a> {
         }
     }
 
+    /// Replace the kept tail of the history instance of state `j` at `layer` (a resumed run's rows
+    /// from before its first position), oldest first; at most the kept length is retained.
+    pub fn set_hist_tail_rows(&mut self, j: u16, layer: Option<u16>, rows: &[Vec<i32>]) -> TirResult<()> {
+        let k = self
+            .plan
+            .instance(j, layer)
+            .ok_or_else(|| TirError::new(TirErrorKind::Missing, format!("no history instance {j} at {layer:?}")))?
+            as usize;
+        let row_len = self.run.hist[k].row;
+        if rows.iter().any(|r| r.len() != row_len) {
+            return Err(TirError::new(TirErrorKind::Operand, "a history row of the wrong length"));
+        }
+        let keep = self.run.tail_rows;
+        let tail = &mut self.run.tails[k];
+        tail.clear();
+        tail.extend(rows.iter().skip(rows.len().saturating_sub(keep)).cloned());
+        Ok(())
+    }
+
     /// The kept tail of the history instance of state `j` at `layer`: the last appended rows,
     /// oldest first, as lanes.
     pub fn hist_tail(&self, j: u16, layer: Option<u16>) -> Option<&std::collections::VecDeque<Vec<i32>>> {

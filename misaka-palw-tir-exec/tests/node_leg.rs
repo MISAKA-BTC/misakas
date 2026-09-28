@@ -330,3 +330,94 @@ fn a_mapped_container_runs_like_the_params_it_holds() {
     std::fs::remove_dir_all(&dir).ok();
     assert!(ran >= 5, "{ran} containers");
 }
+
+/// **Resume at every checkpoint** (design §2.6): a run records its resume points; from each —
+/// as recorded, and cut to the rows it must carry — a fresh executor continues the job, and its
+/// leaves from the point's index on, its logits rows and its tokens are the uninterrupted run's.
+/// A point cut below that never continues into different leaves: it is refused or, when no later
+/// window or tile reads the missing rows, it commits the same leaves.
+#[test]
+fn a_run_resumed_at_any_checkpoint_continues_leaf_for_leaf() {
+    let (mut resumed, mut refused, mut leaves) = (0usize, 0usize, 0u64);
+    for (name, program, params) in programs() {
+        let bytes = program.encode();
+        let plan = TirPlan::compile(&program).unwrap();
+        let tparams = TirParams::from_map(&plan, &params).unwrap();
+        for (seed, c, h, prefill, decode) in
+            [(7u32, 2u32, 2u32, 3u32, 3u32), (3, 1, 4, 5, 4), (5, 3, 1, 1, 6), (11, 4, 8, 6, 5), (13, 3, 4, 2, 7)]
+        {
+            let class = PalwTirClassV1 {
+                version: PALW_TIR_CLASS_VERSION_V1,
+                program: bytes.clone(),
+                layout: layout(&program, seed, c, h, 64),
+                tokenizer_id: Hash64::from_bytes([1; 64]),
+            };
+            let class_id = class.class_id(&Hash64::from_bytes([0xA7; 64]));
+            let space = PalwTirStepSpaceV1::new(&class).unwrap();
+            let ctx = job(prefill, decode, class_id);
+            let prompt: Vec<u32> = (0..prefill).map(|i| (i * 5 + 3) % program.token_bound).collect();
+            let runner = TirClassRunnerV1::new(&space, &plan, &tparams, class_id).unwrap();
+            let full = runner.run(&ctx, &prompt, u64::MAX, true, &mut |_| {}).unwrap();
+            let (recorded, points) = runner.run_recording(&ctx, &prompt, u64::MAX, &mut |_| {}).unwrap();
+            assert_eq!(recorded, full, "{name}: a recording run commits what a run commits");
+            let positions = prefill + decode - 1;
+            assert_eq!(points.len() as u32, positions / c, "{name}: one point per checkpoint position");
+            for point in &points {
+                let pos = point.position + 1;
+                assert_eq!(pos % c, 0);
+                let windows: Vec<usize> = space
+                    .hist_instances()
+                    .iter()
+                    .map(|i| match program.states[i.state as usize].kind {
+                        misaka_palw_tir::StateKind::Hist { window } => window as usize,
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                let need: Vec<usize> = windows.iter().map(|w| (pos as usize).min(w - 1).max((pos % h) as usize)).collect();
+                for (rows, n) in point.hist.iter().zip(&need) {
+                    assert!(rows.len() >= *n, "{name}: a point with {} rows of the {n} it must carry", rows.len());
+                }
+                let cut = |extra: usize| {
+                    let mut p = point.clone();
+                    for (rows, n) in p.hist.iter_mut().zip(&need) {
+                        let keep = n.saturating_sub(extra);
+                        rows.drain(..rows.len() - keep);
+                    }
+                    p
+                };
+                let selected = pos.saturating_sub(prefill - 1) as usize;
+                for p in [point.clone(), cut(0)] {
+                    let mut seen = Vec::new();
+                    let r = runner
+                        .resume(&ctx, &prompt, u64::MAX, &p, &mut |leaf| seen.push(leaf.index))
+                        .unwrap_or_else(|e| panic!("{name} (seed {seed}, C {c}, h {h}) at {}: {e}", point.position));
+                    let first = r.first_index as usize;
+                    assert_eq!(first as u64, space.running_total(&space.job_shape(&ctx).unwrap(), pos) as u64);
+                    assert_eq!(r.leaf_hashes, full.leaf_hashes[first..], "{name} at {}: the leaves", point.position);
+                    assert_eq!(seen, (first as u64..full.leaf_count).collect::<Vec<_>>(), "{name}: leaf indices");
+                    assert_eq!(r.logits_rows, full.logits_rows[selected..], "{name}: logits rows");
+                    assert_eq!(r.generated, full.generated, "{name}: tokens");
+                    resumed += 1;
+                    leaves += r.leaf_hashes.len() as u64;
+                }
+                if need.iter().any(|n| *n > 0) {
+                    match runner.resume(&ctx, &prompt, u64::MAX, &cut(1), &mut |_| {}) {
+                        Err(_) => refused += 1,
+                        Ok(r) => assert_eq!(r.leaf_hashes, full.leaf_hashes[r.first_index as usize..], "{name}: a short point"),
+                    }
+                }
+            }
+            // A point with a token too many, or past the job's end, is refused.
+            if let Some(point) = points.first() {
+                let mut p = point.clone();
+                p.generated.push(0);
+                assert!(runner.resume(&ctx, &prompt, u64::MAX, &p, &mut |_| {}).is_err(), "{name}: an extra token");
+                p = point.clone();
+                p.position = positions;
+                assert!(runner.resume(&ctx, &prompt, u64::MAX, &p, &mut |_| {}).is_err(), "{name}: a point past the end");
+            }
+        }
+    }
+    eprintln!("{resumed} resumed runs, {leaves} leaves; {refused} short points refused");
+    assert!(resumed >= 200 && refused > 0, "{resumed} resumed, {refused} refused");
+}
