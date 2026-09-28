@@ -300,6 +300,125 @@ impl PalwGenStepSpaceV1 {
     ) -> Result<Self, PalwGenStepErrorV1> {
         Self::new(pipeline, programs, &class.layouts, trips, prompt_len)
     }
+
+    /// **The job's leaf count, in closed form** — the count [`Self::new`] enumerates, without
+    /// enumerating: per commit point `Σ_p ⌈f · h(p) / t⌉` over the positions the stage runs it at
+    /// (Phase F's floor sum, `h(p) = min(p + 1, W)` in a windowed block and 1 elsewhere), plus
+    /// `⌊T / C⌋` checkpoints of every `Fixed` state not written in `post`. Admission counts with it,
+    /// so its cost is the programs' size, never the job's: `trips` may be a class's widest.
+    /// `consumed_from` overrides the text stage's first consumed position (`None`: `prompt_len − 1`).
+    pub fn leaf_count_v1(
+        pipeline: &TirPipelineV1,
+        programs: &[TirProgramV2],
+        layouts: &[PalwTirLayoutV1],
+        trips: &[u32],
+        consumed_from: Option<u32>,
+        prompt_len: u32,
+    ) -> Result<u128, PalwGenStepErrorV1> {
+        if layouts.len() != pipeline.stages.len() || trips.len() != pipeline.stages.len() {
+            return Err(PalwGenStepErrorV1::Class("one layout and one trip count per stage".into()));
+        }
+        let mut total = 0u128;
+        for (s, st) in pipeline.stages.iter().enumerate() {
+            let text = matches!(st.trip, TripRule::TextStream);
+            let consumed = text.then(|| consumed_from.unwrap_or(prompt_len.saturating_sub(1)));
+            let count = stage_leaf_count(s as u8, &programs[st.program as usize], &layouts[s], trips[s], consumed)?;
+            total = total.saturating_add(count);
+        }
+        Ok(total)
+    }
+}
+
+/// `Σ_{p ∈ [lo, hi)} ⌈f · h(p) / t⌉`, `h(p) = min(p + 1, W)` when the output has `H` in a windowed
+/// block and `1` otherwise (Phase F's `node_leaves_over`, over the generative enumeration).
+fn node_leaves_over(f: u64, has_h: bool, t: u32, window: Option<u32>, lo: u64, hi: u64) -> u128 {
+    if hi <= lo {
+        return 0;
+    }
+    let (t, f) = (t as u128, f as u128);
+    match (has_h, window) {
+        (true, Some(w)) => {
+            let w = w as u64;
+            // ⌈f(p + 1) / t⌉ = ⌊(f·p + f + t − 1) / t⌋ while p + 1 ≤ W, i.e. p < W.
+            let g = |n: u64| crate::palw_tir_step_v1::floor_sum(n as u128, t, f, f + t - 1);
+            let rising_hi = hi.min(w);
+            let rising = if rising_hi > lo { g(rising_hi).saturating_sub(g(lo)) } else { 0 };
+            let flat_lo = lo.max(w);
+            let flat = if hi > flat_lo { ((hi - flat_lo) as u128).saturating_mul((f * w as u128).div_ceil(t)) } else { 0 };
+            rising.saturating_add(flat)
+        }
+        _ => ((hi - lo) as u128).saturating_mul(f.div_ceil(t)),
+    }
+}
+
+/// One stage's leaf count in closed form (see [`PalwGenStepSpaceV1::leaf_count_v1`]).
+fn stage_leaf_count(
+    stage: u8,
+    program: &TirProgramV2,
+    layout: &PalwTirLayoutV1,
+    trip: u32,
+    consumed_from: Option<u32>,
+) -> Result<u128, PalwGenStepErrorV1> {
+    let bad = |msg: String| PalwGenStepErrorV1::Stage { stage, msg };
+    let info = validate_v2(program).map_err(|e| bad(e.to_string()))?;
+    if layout.checkpoint_interval == 0 {
+        return Err(bad("a zero checkpoint interval".into()));
+    }
+    // Every commit point's tile, in (block, node) order (Phase F D5), and its leaves over a range.
+    let mut tiles = BTreeMap::new();
+    let mut k = 0usize;
+    for (bi, block) in program.blocks.iter().enumerate() {
+        for (ni, node) in block.nodes.iter().enumerate() {
+            if node.commit {
+                let t = *layout.commit_tiles.get(k).ok_or_else(|| bad("fewer commit tiles than commit points".into()))?;
+                if t == 0 {
+                    return Err(bad("a zero commit tile".into()));
+                }
+                tiles.insert((bi as u8, ni as u16), t);
+                k += 1;
+            }
+        }
+    }
+    let block_leaves = |block: u8, lo: u64, hi: u64| -> Result<u128, PalwGenStepErrorV1> {
+        let window = info.v1.blocks.get(block as usize).and_then(|b| b.window);
+        let mut n = 0u128;
+        for (ni, node) in program.blocks[block as usize].nodes.iter().enumerate() {
+            if !node.commit {
+                continue;
+            }
+            let hs = node.out.shape.iter().filter(|d| matches!(d, misaka_palw_tir::types::Dim::H)).count();
+            if hs > 1 {
+                return Err(bad(format!("node {ni} has {hs} H dimensions")));
+            }
+            let f = node.out.elements_at(1);
+            n = n.saturating_add(node_leaves_over(f, hs == 1, tiles[&(block, ni as u16)], window, lo, hi));
+        }
+        Ok(n)
+    };
+    let occurrences = program.occurrences();
+    let post_occ = occurrences.len() - 1;
+    let trip64 = trip as u64;
+    let mut total = 0u128;
+    for (occ, (block, _)) in occurrences.iter().enumerate() {
+        let lo = if occ == post_occ { consumed_from.map_or(0, |c| c as u64) } else { 0 };
+        total = total.saturating_add(block_leaves(*block, lo, trip64)?);
+    }
+    let post_written: Vec<u16> = info.post_writes.iter().map(|(_, s)| *s).collect();
+    let mut per_checkpoint = 0u128;
+    for (j, st) in program.states.iter().enumerate() {
+        if !matches!(st.kind, StateKind::Fixed { .. }) || post_written.contains(&(j as u16)) {
+            continue;
+        }
+        let tile = *layout.state_tiles.get(j).ok_or_else(|| bad("fewer state tiles than states".into()))? as u64;
+        if tile == 0 {
+            return Err(bad("a zero state tile".into()));
+        }
+        let n: u64 = st.shape.iter().map(|d| *d as u64).product();
+        let layers = if st.per_layer { program.schedule.layers.len() as u128 } else { 1 };
+        per_checkpoint = per_checkpoint.saturating_add(layers.saturating_mul(n.div_ceil(tile) as u128));
+    }
+    let checkpoints = (trip / layout.checkpoint_interval) as u128;
+    Ok(total.saturating_add(checkpoints.saturating_mul(per_checkpoint)))
 }
 
 /// **A leaf's hash**: its coordinate, its count and its lanes (four little-endian bytes each).

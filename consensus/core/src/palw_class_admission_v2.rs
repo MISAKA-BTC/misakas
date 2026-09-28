@@ -1353,6 +1353,26 @@ pub enum PalwClassAdmissionError {
     /// §9.5.6), or a move of its dissection would not fit one carrier (RFC-0002 F7).
     #[error("block {block} commit point {node} cannot be dissected: {why}")]
     TirDissection { block: u8, node: u16, why: String },
+    // ---- RFC-0003: the pipeline admission, a generative class (`palw_gen_admission_v1`). ----
+    /// The class is a generative pipeline and this network has not armed `palw_gen_v1` at the block.
+    #[error("the class is a generative pipeline and this network has not armed palw_gen_v1")]
+    GenNeedsItsFence,
+    /// The preflight refused the class (`palw_gen_class_preflight_v1`, by name).
+    #[error("the generative class is refused: {0}")]
+    GenClass(String),
+    /// The declared class id is not `tir_pipeline_class_id_v1(class, artifact_root)`.
+    #[error("the declared generative class id {declared} is not the derived {derived}")]
+    GenClassIdIsNotDerived { declared: Hash64, derived: Hash64 },
+    /// A commit point's cone reduces over the history and does not fit the court whole; the
+    /// generative court dissects no history in v1 (RFC-0003 §II.1.5.6: court version 3).
+    #[error(
+        "stage {stage} block {block} commit point {node} reduces over the history and does not fit the court whole, and the generative court dissects no history"
+    )]
+    GenNeedsDissection { stage: u8, block: u8, node: u16 },
+    /// A generative class registers weightless: no attempt lane for pipelines exists, so no share
+    /// can be earned (ADR-0069 D5: registration at 0‰ is permissionless).
+    #[error("a generative class registers at 0‰ (it earns no attempt weight in this build); this one asks {share}‰")]
+    GenEarnsNoWeight { share: u16 },
 }
 
 impl PalwClassAdmissionError {
@@ -1394,6 +1414,11 @@ impl PalwClassAdmissionError {
             Self::TirCanonicalNotTheFormula(_) => "CLASS_NOT_ATTRIBUTABLE",
             Self::TirNeedsDissection { .. } => "TIR_NEEDS_DISSECTION",
             Self::TirDissection { .. } => "TIR_DISSECTION_REFUSED",
+            Self::GenNeedsItsFence => "FAMILY_FENCE_CLOSED",
+            Self::GenClass(_) => "GEN_CLASS_REFUSED",
+            Self::GenClassIdIsNotDerived { .. } => "GEN_CLASS_ID_IS_NOT_DERIVED",
+            Self::GenNeedsDissection { .. } => "GEN_NEEDS_DISSECTION",
+            Self::GenEarnsNoWeight { .. } => "GEN_EARNS_NO_WEIGHT",
         }
     }
 }

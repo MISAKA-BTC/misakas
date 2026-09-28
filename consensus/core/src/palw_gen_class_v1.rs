@@ -34,9 +34,11 @@
 //! (`PalwConsensusObjectV2::ClassRegisteredGenV1`, tag 67, from Phase F's allocation): an older build
 //! on a ruleset that declared `palw_audit_2026_09_11` skips a payload it cannot decode (A-2). A class
 //! larger than one carrier rides in `ObjectChunk`s (the user's decision 8, multi-carrier registration)
-//! once admission admits the kind. Until the pipeline admission lands this build drops the object by
-//! name at every height — below `palw_gen_v1` exactly as an older build skips it — and the fold
-//! refuses it as the second lock, so every network folds as before the variant existed.
+//! once admission admits the kind. Below `palw_gen_v1` this build drops the object by name exactly as
+//! an older build skips it, and the fold refuses it as the second lock, so every network folds as
+//! before the variant existed; past it the pipeline admission
+//! ([`crate::palw_gen_admission_v1::verify_gen_class_admission_v1`]) decides, and the fold writes the
+//! class's `gen_classes` row ([`PalwGenClassRecordV1`]).
 //!
 //! [`palw_gen_class_preflight_v1`] is the question a registrant asks first, and admission's first
 //! half: the class's structure against the fence — versions, the profile and its ceilings, the strict
@@ -692,5 +694,129 @@ fn admit_class(
         TirAdmitError::Program(e) => PalwGenClassErrorV1::Program(e.to_string()),
         TirAdmitError::Exceeds { limit, at, value, cap } => PalwGenClassErrorV1::AdmissionExceeds { limit, at, value, cap },
         TirAdmitError::Inputs(why) => PalwGenClassErrorV1::Layout(why.into()),
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
+// The registry row
+// ---------------------------------------------------------------------------------------------
+
+pub const PALW_GEN_CLASS_RECORD_VERSION_V1: u16 = 1;
+
+/// **What the chain keeps of an admitted generative class** (the `gen_classes` table's row): the
+/// facts a V5 job and a court read — the class id and its artifact root, the profile, the image
+/// slots, the text stage's context — and the class itself, which every generative object that
+/// names the class references instead of carrying.
+///
+/// **Rooted without the class's bytes**: [`Self::rooted_bytes_v1`] is every field but `class`, and the
+/// class is committed through `pipeline_root`, `terms_digest` and the class id; a carriage whose
+/// class does not hash to them is refused at load ([`Self::check_class_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenClassRecordV1 {
+    /// [`PALW_GEN_CLASS_RECORD_VERSION_V1`].
+    pub version: u16,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub profile: u8,
+    pub pipeline_root: Hash64,
+    pub terms_digest: Hash64,
+    pub tokenizer_id: Hash64,
+    /// The image slots a V5 job's images are held to.
+    pub images: Vec<PalwGenImageOfferV1>,
+    /// The text stage's `max_trip` — a V5 job's `prompt + decode − 1` bound — for a text class.
+    pub text_max_trip: Option<u32>,
+    /// The class's carried bytes, counted.
+    pub class_bytes: u64,
+    /// The class (rooted through the three hashes above, never by its bytes).
+    pub class: std::sync::Arc<PalwGenClassV1>,
+}
+
+impl PalwGenClassRecordV1 {
+    /// A self-consistent row over a class that decodes to nothing — for tests that need a row to
+    /// exist (its hashes are its class's, so it passes the load check).
+    #[cfg(test)]
+    pub(crate) fn test_row_v1(seed: u8) -> Self {
+        let class = PalwGenClassV1 {
+            version: PALW_GEN_CLASS_VERSION_V1,
+            profile: PalwGenProfileV1::Text as u8,
+            pipeline: vec![seed],
+            programs: Vec::new(),
+            layouts: Vec::new(),
+            output: OutputSpecV1::image_rgb8(1, 1),
+            offers: PalwGenOffersV1 {
+                steps: Vec::new(),
+                scalars: Vec::new(),
+                max_prompt_tokens: 1,
+                max_negative_tokens: 0,
+                images: Vec::new(),
+            },
+            tokenizer_id: Hash64::from_bytes([seed; 64]),
+        };
+        let artifact_root = Hash64::from_bytes([seed ^ 0x5A; 64]);
+        Self {
+            version: PALW_GEN_CLASS_RECORD_VERSION_V1,
+            class_id: class.class_id(&artifact_root),
+            artifact_root,
+            profile: class.profile,
+            pipeline_root: class.pipeline_root(),
+            terms_digest: class.terms_digest(),
+            tokenizer_id: class.tokenizer_id,
+            images: Vec::new(),
+            text_max_trip: Some(8),
+            class_bytes: class.carried_bytes(),
+            class: std::sync::Arc::new(class),
+        }
+    }
+
+    /// **The bytes the `gen_classes` root commits for this record**: every field but the class.
+    pub fn rooted_bytes_v1(&self) -> Vec<u8> {
+        borsh::to_vec(&(
+            self.version,
+            self.class_id,
+            self.artifact_root,
+            self.profile,
+            self.pipeline_root,
+            self.terms_digest,
+            self.tokenizer_id,
+            &self.images,
+            self.text_max_trip,
+            self.class_bytes,
+        ))
+        .expect("a record is borsh-serializable")
+    }
+
+    /// **The load check**: the class hashes to the recorded roots and id and is its recorded size.
+    pub fn check_class_v1(&self) -> Result<(), &'static str> {
+        if self.class.carried_bytes() != self.class_bytes {
+            return Err("a gen_classes row's class is not its recorded size");
+        }
+        if self.class.pipeline_root() != self.pipeline_root || self.class.terms_digest() != self.terms_digest {
+            return Err("a gen_classes row's class does not hash to its recorded roots");
+        }
+        if self.class.class_id(&self.artifact_root) != self.class_id {
+            return Err("a gen_classes row's class does not hash to its class id");
+        }
+        Ok(())
+    }
+}
+
+/// **The row a registration writes**, derived from the carried class alone (the class decodes, and
+/// its facts are read off it); `Err` when the class does not decode.
+pub fn palw_gen_class_record_v1(class: &PalwGenClassV1, artifact_root: &Hash64) -> Result<PalwGenClassRecordV1, PalwGenClassErrorV1> {
+    let (_, pipeline) = class.decode().map_err(|e| PalwGenClassErrorV1::Program(e.to_string()))?;
+    let out = &pipeline.stages[pipeline.output_stage as usize];
+    let text_max_trip = matches!(out.trip, TripRule::TextStream).then_some(out.max_trip);
+    Ok(PalwGenClassRecordV1 {
+        version: PALW_GEN_CLASS_RECORD_VERSION_V1,
+        class_id: class.class_id(artifact_root),
+        artifact_root: *artifact_root,
+        profile: class.profile,
+        pipeline_root: class.pipeline_root(),
+        terms_digest: class.terms_digest(),
+        tokenizer_id: class.tokenizer_id,
+        images: class.offers.images.clone(),
+        text_max_trip,
+        class_bytes: class.carried_bytes(),
+        class: std::sync::Arc::new(class.clone()),
     })
 }

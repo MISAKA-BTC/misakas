@@ -463,6 +463,8 @@ pub mod palw_gen_class_v1;
 pub mod palw_gen_court_v1;
 /// RFC-0003 §I.2.3: the one step tree of a pipeline claim — every stage's leaves, stage-major.
 pub mod palw_gen_step_v1;
+/// RFC-0003 activation step 4: the pipeline admission — the gate a generative class registration passes, its builder and the node's preflight.
+pub mod palw_gen_admission_v1;
 /// RFC-0003 §II.2.1: the worker and the panel of a pipeline class — a V5 job run into the step tree, and a seat's replay.
 pub mod palw_gen_worker_v1;
 /// RFC-0003 §II.2.1 (RFC-0001's lane): FP Job V5 — a V4 job with image inputs, for a vision-language class; dormant behind `palw_fp_job_v5`.

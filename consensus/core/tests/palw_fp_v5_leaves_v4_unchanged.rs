@@ -220,6 +220,7 @@ fn ids(p: &Params) -> (String, String, String) {
 fn t12_with_prerequisites(at: u64) -> Params {
     let mut p = palw_t12_shipped_params();
     p.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(ForkActivation::new(at - 10)));
+    p.sync_palw_gen_v1();
     p.palw_fp_decode_rules = Some(ForkActivation::new(at - 20));
     p.sync_palw_fp_decode_rules();
     p

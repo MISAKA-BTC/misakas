@@ -8839,6 +8839,47 @@ impl VirtualStateProcessor {
             }
             return Ok(());
         }
+        // **RFC-0003: a generative registration is signed over its own message** (the pipeline class
+        // in the profile's place, no canonical job), under its own context.
+        if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredGenV1 {
+            class_id,
+            share_permille,
+            admission,
+            activation_daa,
+            artifact_root,
+            slash_value_per_pwu,
+            initial_target,
+            pwu_rule,
+        } = object
+        {
+            let registrant = state
+                .bond(&admission.registrant_bond)
+                .ok_or_else(|| format!("generative class {class_id} is registered under a bond this chain does not have"))?;
+            if !matches!(registrant.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                return Err(format!("generative class {class_id} is registered under a bond that is not Active"));
+            }
+            let message = kaspa_consensus_core::palw_gen_class_v1::palw_gen_class_registration_message_v1(
+                self.palw_network_domain_v2(),
+                *class_id,
+                *share_permille,
+                *activation_daa,
+                &admission.registrant_bond,
+                *artifact_root,
+                *slash_value_per_pwu,
+                *initial_target,
+                pwu_rule,
+                &admission.class,
+            );
+            if !Self::verify_mldsa87_with_context_bool(
+                &registrant.pubkey,
+                message.as_byte_slice(),
+                &admission.signature,
+                kaspa_consensus_core::palw_gen_class_v1::PALW_GEN_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1,
+            ) {
+                return Err(format!("generative class {class_id}'s registration is not signed by the bond it names"));
+            }
+            return Ok(());
+        }
         let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
             class_id,
             share_permille,
@@ -8908,7 +8949,8 @@ impl VirtualStateProcessor {
     ) -> Result<(), String> {
         let (class_id, initial_target) = match object {
             kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, initial_target, .. }
-            | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, initial_target, .. } => {
+            | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, initial_target, .. }
+            | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredGenV1 { class_id, initial_target, .. } => {
                 (class_id, initial_target)
             }
             _ => return Ok(()),
@@ -11308,20 +11350,28 @@ impl VirtualStateProcessor {
                     }
                 }
                 Obj::FreePromptCommitted { .. } => {}
-                // **RFC-0003 (tag 67): a generative class registration is dropped by name, and the
-                // block stands.** Below `palw_gen_v1` exactly as an older build skips the payload it
-                // cannot decode (A-2; the walk dropped it first); above it until the pipeline admission
-                // lands. Never charged a registration slot: `palw_class_registration_buyer_v1` does not
-                // name it.
+                // **RFC-0003 (tag 67): a generative class registration.** Below `palw_gen_v1` it is
+                // dropped by name, exactly as an older build skips the payload it cannot decode (A-2;
+                // the walk dropped it first). Past it, the IR arm's order: the chain's target (one map
+                // read), the registrant's signature, then the pipeline admission — which decodes the
+                // class, counts its step tree and prices its court — and its share rule (0‰: no
+                // attempt lane exists for pipelines).
                 Obj::ClassRegisteredGenV1 { class_id, .. } => {
                     if !self.palw_gen_at(point.daa_score) {
                         return Err(format!(
                             "generative class {class_id} is refused: palw_gen_v1 is not in force at this block (RFC-0003)"
                         ));
                     }
-                    return Err(format!(
-                        "generative class {class_id} is refused: the pipeline admission is not in this build (RFC-0003)"
-                    ));
+                    let Some(bundle) = self.palw_v2_bundle.as_ref() else {
+                        return Err(format!("generative class {class_id} registered on a network with no V2 bundle"));
+                    };
+                    self.palw_v2_class_registration_starts_at_the_chains_target(state, object)?;
+                    self.palw_v2_class_registration_is_signed(state, object)?;
+                    let rules = kaspa_consensus_core::palw_gen_admission_v1::PalwGenAdmissionRulesV1 {
+                        fence: self.palw_gen_v1.expect("palw_gen_at said the fence is in force"),
+                    };
+                    kaspa_consensus_core::palw_gen_admission_v1::verify_gen_class_admission_v1(bundle, &rules, object)
+                        .map_err(|e| format!("generative class {class_id} is not admissible: {e}"))?;
                 }
                 // **RFC-0002 Phase F (tag 61): an IR class registration is dropped by name, and the
                 // block stands.** Below `palw_tir_v1` exactly as an older build skips the payload it

@@ -10,8 +10,9 @@
 //! first stop ending the answer. `R` (a stage's random inputs, if any) is keyed on the job's
 //! `sampling_seed`, item 0 — the V5 job's one seed.
 //!
-//! Dormant: nothing on chain can name a generative class yet (`ClassRegisteredGenV1` is refused at
-//! every height), so no node runs these for a claim until the pipeline admission lands.
+//! Dormant: a generative class registers only past `palw_gen_v1` (the pipeline admission,
+//! [`crate::palw_gen_admission_v1`]), and no V5 claim reaches a block until the lane opens for
+//! pipeline classes at `palw_fp_job_v5`.
 
 use crate::Hash64;
 use crate::palw_decode_pipeline_v4::{DecodeConfigV4, PalwFpDecodeStopV1, PalwFpDecoderV1};

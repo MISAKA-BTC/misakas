@@ -1,12 +1,13 @@
 //! **RFC-0003: the generative class, its identity, its preflight, and a registration object that
-//! changes nothing until the pipeline admission lands.**
+//! changes nothing below `palw_gen_v1`.**
 //!
 //! `ClassRegisteredGenV1` is APPENDED (tag 67, Phase F's allocation) so no earlier discriminant
 //! moves; it rides the stateless gate at every height (a block carrying it must be valid on this build
-//! and on an older one that skips it undecoded), rents nothing, is charged no registration slot, is
-//! not a carrier a halt must let through, and the fold refuses it by name — so a block carrying one
-//! folds exactly as the same block without it. The processor drops it by name below `palw_gen_v1`
-//! (and, until the pipeline admission, above it).
+//! and on an older one that skips it undecoded), rents nothing, is charged a registration slot like
+//! any bought registration (past the fence only: the walk drops it by name first below), is not a
+//! carrier a halt must let through, and below the fence the fold refuses it by name — so a block
+//! carrying one folds exactly as the same block without it. Past the fence the pipeline admission and
+//! the registry (`palw_gen_registration_fold.rs`).
 //!
 //! The class is the golden toy image pipeline (`consensus-vectors/tir-v2/pipelines/toy-image.json`:
 //! a causal text encoder, a denoiser over the job's steps, a decoder to `ImageRgb8 [2, 2, 3]`).
@@ -170,7 +171,11 @@ fn it_rides_statelessly_rents_nothing_and_takes_no_slot() {
     assert!(validate_palw_lifecycle_tx(&payload, false).is_ok());
     assert!(validate_palw_lifecycle_tx(&payload, true).is_ok());
     assert_eq!(palw_object_rent_ceiling_v1(&object), 0, "no rent: an older build that skips it burns nothing either");
-    assert_eq!(palw_class_registration_buyer_v1(&object), None, "never charged a registration slot before its admission lands");
+    assert_eq!(
+        palw_class_registration_buyer_v1(&object),
+        Some(PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(3))),
+        "a bought registration, as an IR one (the walk drops it by name below palw_gen_v1 before any slot)"
+    );
     assert!(!palw_h1_carrier_object_v1(&object), "a registration, not a conviction a halt must let through");
 
     // What an OLDER build meets: a tag its enum does not have — tolerated only under A-2.
@@ -182,7 +187,7 @@ fn it_rides_statelessly_rents_nothing_and_takes_no_slot() {
 }
 
 #[test]
-fn the_fold_refuses_it_by_name() {
+fn below_the_fence_the_fold_refuses_it_by_name() {
     let p = palw_t12_shipped_params();
     let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("testnet-12 is V2") };
     for daa_score in [10, 2_500, u64::MAX - 1] {

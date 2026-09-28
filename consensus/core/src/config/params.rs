@@ -20992,6 +20992,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_floor_refusal_retry();
     // RFC-0002 Phase F's IR fence, for the same reason and in the same place.
     params.sync_palw_tir_v1();
+    // RFC-0003's generative fence, likewise.
+    params.sync_palw_gen_v1();
     params.validate_palw_v2()?;
     Ok(params)
 }

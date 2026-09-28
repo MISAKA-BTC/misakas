@@ -27,10 +27,12 @@
 //! them yet: RFC-0001's D10 still credits decode leaves only, and wiring this price into the lane's
 //! quanta waits for the user's confirmation.
 //!
-//! **Not wired yet**: no commitment carries a V5 job, and no generative class can register
-//! (`ClassRegisteredGenV1` is refused at every height until the pipeline admission lands), so no V5
-//! job can reach a block. `tests/palw_fp_v5_leaves_v4_unchanged.rs` holds FP Job V4's wire, ids and
-//! validators byte for byte with this module compiled in.
+//! **The lane stays closed to V5**: a V5 claim's class resolves against the generative registry
+//! ([`palw_fp_v5_resolve_class_v1`], over the `gen_classes` rows `ClassRegisteredGenV1` writes past
+//! `palw_gen_v1`), but the free-prompt walk still skips every version-8 payload — the lane opens for
+//! pipeline classes at its own later fence (this one, `palw_fp_job_v5`), with OQ13's price confirmed.
+//! `tests/palw_fp_v5_leaves_v4_unchanged.rs` holds FP Job V4's wire, ids and validators byte for byte
+//! with this module compiled in.
 
 use std::io::{Read, Write};
 
@@ -130,6 +132,12 @@ pub enum PalwFpV5Error {
         "the prompt ({prompt}) and the decode budget ({decode}) need {need} positions; the class's text stage runs at most {max_trip}"
     )]
     ContextExceeded { prompt: u32, decode: u32, need: u64, max_trip: u32 },
+    #[error("the job names class {0}, which is no generative class on this chain")]
+    UnknownClass(Hash64),
+    #[error("the job names a generative class of profile {profile}, which is not a text class: an FP job runs a text class only")]
+    NotATextClass { profile: u8 },
+    #[error("the job's tokenizer {job} is not the class's {class}")]
+    TokenizerNotTheClasss { job: Hash64, class: Hash64 },
 }
 
 impl PalwFreePromptJobV5 {
@@ -193,6 +201,28 @@ pub fn palw_fp_job_v5_admitted_v1(
         return Err(PalwFpV5Error::ContextExceeded { prompt, decode, need, max_trip: text_max_trip });
     }
     Ok(())
+}
+
+/// **A V5 claim's class, resolved against the generative registry** (RFC-0003 §II.2.1): `row` is the
+/// `gen_classes` row the job's `class_id` names (`PalwChainStateV2::gen_class_v1`). The row must
+/// exist and be a text class, the job must use its tokenizer, and the class must admit the job
+/// ([`palw_fp_job_v5_admitted_v1`] under the row's offers and text stage). What the lane then charges
+/// is OQ13's, pending user confirmation — nothing here prices a job.
+pub fn palw_fp_v5_resolve_class_v1<'a>(
+    job: &PalwFreePromptJobV5,
+    row: Option<&'a crate::palw_gen_class_v1::PalwGenClassRecordV1>,
+    armed: bool,
+) -> Result<&'a crate::palw_gen_class_v1::PalwGenClassRecordV1, PalwFpV5Error> {
+    if !armed {
+        return Err(PalwFpV5Error::NotArmed);
+    }
+    let row = row.ok_or(PalwFpV5Error::UnknownClass(job.v4.class_id))?;
+    let text_max_trip = row.text_max_trip.ok_or(PalwFpV5Error::NotATextClass { profile: row.profile })?;
+    if job.v4.tokenizer_id != row.tokenizer_id {
+        return Err(PalwFpV5Error::TokenizerNotTheClasss { job: job.v4.tokenizer_id, class: row.tokenizer_id });
+    }
+    palw_fp_job_v5_admitted_v1(job, &row.class.offers, text_max_trip, armed)?;
+    Ok(row)
 }
 
 /// **The image stages' price in prompt tokens** (OQ13's recommendation, PENDING USER CONFIRMATION):

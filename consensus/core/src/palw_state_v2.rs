@@ -1534,6 +1534,13 @@ pub struct PalwStateParamsV2 {
     /// `floor_refusal_retry_from_daa`'s reason, and `validate_palw_v2` refuses a copy that disagrees.
     #[borsh(skip)]
     tir_from_daa: Option<u64>,
+    /// **RFC-0003: `Params::palw_gen_v1`'s height**, mirrored by `Params::sync_palw_gen_v1` because
+    /// the fold that admits a generative registration holds only these params: below the fence the
+    /// fold refuses one by name, as the second lock behind the acceptance walk's drop. `None` on every
+    /// shipped preset; skipped by borsh for `tir_from_daa`'s reason, and `validate_palw_v2` refuses a
+    /// copy that disagrees.
+    #[borsh(skip)]
+    gen_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1741,6 +1748,7 @@ impl PalwStateParamsV2 {
             final_lock_life_from_daa: None,
             floor_refusal_retry_from_daa: None,
             tir_from_daa: None,
+            gen_from_daa: None,
         })
     }
 
@@ -1917,6 +1925,23 @@ impl PalwStateParamsV2 {
     /// **Is `palw_tir_v1` in force at `daa_score`?** `false` on every shipped preset.
     pub fn tir_active_at(&self, daa_score: u64) -> bool {
         self.tir_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0003: the generative fence's mirror** — written by `Params::sync_palw_gen_v1` and by
+    /// nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_gen_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.gen_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_gen_v1`'s height, if the network arms it (the mirror).
+    pub fn gen_from_daa(&self) -> Option<u64> {
+        self.gen_from_daa
+    }
+
+    /// **Is `palw_gen_v1` in force at `daa_score`?** `false` on every shipped preset.
+    pub fn gen_active_at(&self, daa_score: u64) -> bool {
+        self.gen_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -7653,6 +7678,11 @@ pub fn palw_class_registration_buyer_v1(object: &PalwConsensusObjectV2) -> Optio
         PalwConsensusObjectV2::ClassRegisteredTirV1 { admission, .. } if admission.registrant_bond != palw_genesis_registrant_bond_v1() => {
             Some(admission.registrant_bond)
         }
+        // RFC-0003: a generative registration likewise (no genesis rows exist in v1). Below
+        // `palw_gen_v1` the acceptance walk drops it by name before this is read.
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { admission, .. } if admission.registrant_bond != palw_genesis_registrant_bond_v1() => {
+            Some(admission.registrant_bond)
+        }
         _ => None,
     }
 }
@@ -9353,8 +9383,8 @@ pub enum PalwStateV2Error {
     TirRegistrationRefused(&'static str),
     // ---- RFC-0003 ----
     /// **A generative class registration (tag 67) the fold does not take**: below
-    /// `Params::palw_gen_v1`, and until the pipeline admission lands above it. The acceptance walk
-    /// drops it first; this is the second lock.
+    /// `Params::palw_gen_v1` (the bundle's mirror), or a carried class that does not decode or is not
+    /// the declared id's. The acceptance walk drops it first; this is the second lock.
     #[error("a generative class registration (tag 67) is refused: {0}")]
     GenRegistrationRefused(&'static str),
 }
@@ -9896,6 +9926,13 @@ pub struct PalwChainStateV2 {
     /// before: its own Some-only root block (`tir_dissections/v1`) and carriage tail (`0xC1`). A row
     /// lives exactly as long as its session: `write_court` drops it when the session leaves.
     tir_dissections: BTreeMap<Hash64, Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
+    /// **RFC-0003: every admitted generative class's record** — the facts a V5 job and a court read
+    /// (the profile, the image slots, the text stage's context) and the class itself, derived from the
+    /// carried class when it registered ([`crate::palw_gen_class_v1::palw_gen_class_record_v1`]). Written
+    /// once per registration, never rewritten. Its own Some-only root block (`gen_classes/v1`) and
+    /// carriage tail (`0xC2`): empty below `palw_gen_v1`, so every network roots and carries exactly
+    /// as before.
+    gen_classes: BTreeMap<Hash64, crate::palw_gen_class_v1::PalwGenClassRecordV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -10058,6 +10095,7 @@ impl PalwChainStateV2 {
             operator_ring: BTreeMap::new(),
             tir_classes: BTreeMap::new(),
             tir_dissections: BTreeMap::new(),
+            gen_classes: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -11847,6 +11885,22 @@ impl PalwChainStateV2 {
         self.tir_dissections.get(session_id).map(|phase| phase.as_ref())
     }
 
+    /// **RFC-0003: a generative class's record**, or `None` for a class that is not a pipeline.
+    pub fn gen_class_v1(&self, class_id: &Hash64) -> Option<&crate::palw_gen_class_v1::PalwGenClassRecordV1> {
+        self.gen_classes.get(class_id)
+    }
+
+    /// **RFC-0003 §II.2.1: a V5 claim's class, resolved against the generative registry** — the row
+    /// its job names, holding the job to it (`palw_fp_v5_resolve_class_v1`). `armed` is
+    /// `Params::palw_fp_job_v5` in force at the judged height.
+    pub fn fp_v5_class_v1(
+        &self,
+        job: &crate::palw_fp_job_v5::PalwFreePromptJobV5,
+        armed: bool,
+    ) -> Result<&crate::palw_gen_class_v1::PalwGenClassRecordV1, crate::palw_fp_job_v5::PalwFpV5Error> {
+        crate::palw_fp_job_v5::palw_fp_v5_resolve_class_v1(job, self.gen_classes.get(&job.v4.class_id), armed)
+    }
+
     /// A test's way to stand a `tir_classes` row in (the fold writes rows only through a registration).
     #[cfg(test)]
     pub(crate) fn test_insert_tir_class_v1(&mut self, class_id: Hash64, record: crate::palw_tir_admission_v1::PalwTirClassRecordV1) {
@@ -12194,6 +12248,12 @@ impl PalwChainStateV2 {
         if !self.tir_dissections.is_empty() {
             state.update(b"tir_dissections/v1");
             state.update(collection_root(b"tir_dissections", &self.tir_dissections).as_byte_slice());
+        }
+        // **RFC-0003: the generative classes, ONE Some-only block** — empty until a generative class
+        // registers, which nothing below `palw_gen_v1` can do.
+        if !self.gen_classes.is_empty() {
+            state.update(b"gen_classes/v1");
+            state.update(palw_gen_classes_root_v1(&self.gen_classes).as_byte_slice());
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -13299,6 +13359,26 @@ fn palw_tir_classes_root_v1(map: &BTreeMap<Hash64, crate::palw_tir_admission_v1:
     finish(state)
 }
 
+/// **RFC-0003: the `gen_classes` collection's root** — [`collection_root`]'s form over each record's
+/// rooted bytes ([`crate::palw_gen_class_v1::PalwGenClassRecordV1::rooted_bytes_v1`]: the record
+/// without its class, which `pipeline_root`, `terms_digest` and the class id commit to).
+fn palw_gen_classes_root_v1(map: &BTreeMap<Hash64, crate::palw_gen_class_v1::PalwGenClassRecordV1>) -> Hash64 {
+    let mut state = keyed(PALW_STATE_V2_DOMAIN_COLLECTION);
+    let label: &[u8] = b"gen_classes";
+    state.update(&(label.len() as u64).to_le_bytes());
+    state.update(label);
+    state.update(&(map.len() as u64).to_le_bytes());
+    for (key, record) in map {
+        let key_bytes = borsh::to_vec(key).expect("state keys are borsh-serializable");
+        let value_bytes = record.rooted_bytes_v1();
+        state.update(&(key_bytes.len() as u64).to_le_bytes());
+        state.update(&key_bytes);
+        state.update(&(value_bytes.len() as u64).to_le_bytes());
+        state.update(&value_bytes);
+    }
+    finish(state)
+}
+
 fn collection_root<K: borsh::BorshSerialize, V: borsh::BorshSerialize>(label: &[u8], map: &BTreeMap<K, V>) -> Hash64 {
     let mut state = keyed(PALW_STATE_V2_DOMAIN_COLLECTION);
     state.update(&(label.len() as u64).to_le_bytes());
@@ -13850,6 +13930,13 @@ pub enum PalwDeltaEntryV2 {
         key: Hash64,
         old: Option<Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
         new: Option<Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
+    },
+    /// A generative class's record was written (90; RFC-0003, from Phase F's allocation,
+    /// [`crate::palw_gen_class_v1::PalwGenClassRecordV1`]).
+    GenClass {
+        key: Hash64,
+        old: Option<crate::palw_gen_class_v1::PalwGenClassRecordV1>,
+        new: Option<crate::palw_gen_class_v1::PalwGenClassRecordV1>,
     },
 }
 
@@ -17728,6 +17815,17 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::TirClass { key, old, new });
+        }
+    }
+
+    /// **RFC-0003: the one writer of `gen_classes`**, journaled `GenClass` (90).
+    fn write_gen_class(&mut self, key: Hash64, new: Option<crate::palw_gen_class_v1::PalwGenClassRecordV1>) {
+        let old = match new.clone() {
+            Some(record) => self.state.gen_classes.insert(key, record),
+            None => self.state.gen_classes.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::GenClass { key, old, new });
         }
     }
 
@@ -30335,6 +30433,9 @@ fn apply_object(
     if palw_object_is_tir_v1(object) && !builder.params.tir_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirRegistrationRefused("an IR object before palw_tir_v1 is in force (RFC-0002 Phase F)"));
     }
+    if palw_object_is_gen_v1(object) && !builder.params.gen_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::GenRegistrationRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
+    }
     match object {
         PalwConsensusObjectV2::BondRegistered {
             bond,
@@ -31147,12 +31248,48 @@ fn apply_object(
                 }
             }
         }
-        // **RFC-0003 (tag 67): a generative class registration.** Refused by name at every height: the
-        // acceptance walk drops it below `palw_gen_v1` (and, until the pipeline admission lands, above
-        // it), so a block that reaches the fold with one skipped the walk. Every network folds as
-        // before the variant.
-        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => {
-            return Err(PalwStateV2Error::GenRegistrationRefused("the pipeline admission is not in this build (RFC-0003)"));
+        // **RFC-0003 (tag 67): a generative class registration**, past `palw_gen_v1` (the lock above
+        // refuses it below). The pipeline admission ran at acceptance (ADR-0049 Decision H: no graph
+        // walk inside the transition); the fold derives what it keeps from the carried class — the
+        // `gen_classes` row by the one function admission derives it with — and folds the rest through
+        // the legacy registration's own body. The generative court dissects no history in v1 (a cone
+        // that reduces over it must fit whole), so no class owes a root claim; nothing is held; and a
+        // pipeline opens no registry lifecycle row in v1 (the registry's work model is a text
+        // model's).
+        PalwConsensusObjectV2::ClassRegisteredGenV1 {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille,
+            activation_daa,
+            admission,
+        } => {
+            let record = crate::palw_gen_class_v1::palw_gen_class_record_v1(&admission.class, artifact_root)
+                .map_err(|_| PalwStateV2Error::GenRegistrationRefused("the carried pipeline does not decode"))?;
+            if record.class_id != *class_id {
+                return Err(PalwStateV2Error::GenRegistrationRefused("the declared class id is not the carried class's"));
+            }
+            apply_class_registration_v1(
+                builder,
+                ctx,
+                object,
+                PalwClassRegistrationFoldV1 {
+                    class_id,
+                    artifact_root,
+                    slash_value_per_pwu,
+                    pwu_rule,
+                    initial_target,
+                    share_permille,
+                    activation_daa,
+                    registrant: Some(admission.registrant_bond),
+                    fused_attention: false,
+                    held: false,
+                    work: None,
+                },
+            )?;
+            builder.write_gen_class(*class_id, Some(record));
         }
         // **RFC-0002 Phase F (tag 61): an IR class registration**, past `palw_tir_v1` (the lock above
         // refuses it below). Admission v10 ran at acceptance (ADR-0049 Decision H: no graph walk
@@ -35549,6 +35686,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::OperatorRing { key, old, new } => swap_write!(state.operator_ring, key, old, new),
         PalwDeltaEntryV2::TirClass { key, old, new } => swap_write!(state.tir_classes, key, old, new),
         PalwDeltaEntryV2::TirDissection { key, old, new } => swap_write!(state.tir_dissections, key, old, new),
+        PalwDeltaEntryV2::GenClass { key, old, new } => swap_write!(state.gen_classes, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -35980,6 +36118,9 @@ pub struct PalwStateCarriageV2 {
     /// **RFC-0002 Phase F (F7): the open IR dissections.** A tagged tail (`0xC1`, after the IR
     /// classes'), encoded only when non-empty; rooted.
     pub tir_dissections: BTreeMap<Hash64, Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
+    /// **RFC-0003: the generative classes.** A tagged tail (`0xC2`, after the IR dissections'),
+    /// encoded only when non-empty; rooted (each row without its class, which its hashes commit to).
+    pub gen_classes: BTreeMap<Hash64, crate::palw_gen_class_v1::PalwGenClassRecordV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -36102,6 +36243,9 @@ const PALW_CARRIAGE_CAPACITY_N_TAIL_V1: u8 = 0xBA;
 const PALW_CARRIAGE_TIR_CLASSES_TAIL_V1: u8 = 0xC0;
 /// RFC-0002 Phase F (F7): the open IR dissections' tail, encoded only when one is open.
 const PALW_CARRIAGE_TIR_DISSECTIONS_TAIL_V1: u8 = 0xC1;
+/// RFC-0003: the generative classes' tail (Phase F's allocation), encoded only when one has
+/// registered — a carriage with none is byte-identical to one before this tail existed.
+const PALW_CARRIAGE_GEN_CLASSES_TAIL_V1: u8 = 0xC2;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -36320,6 +36464,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_TIR_DISSECTIONS_TAIL_V1.serialize(writer)?;
             self.tir_dissections.serialize(writer)?;
         }
+        if !self.gen_classes.is_empty() {
+            PALW_CARRIAGE_GEN_CLASSES_TAIL_V1.serialize(writer)?;
+            self.gen_classes.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -36447,6 +36595,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_tir_classes = false;
         let mut tir_dissections = BTreeMap::new();
         let mut seen_tir_dissections = false;
+        let mut gen_classes = BTreeMap::new();
+        let mut seen_gen_classes = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -36593,6 +36743,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_tir_dissections = true;
                     tir_dissections = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_GEN_CLASSES_TAIL_V1 if !seen_gen_classes => {
+                    seen_gen_classes = true;
+                    gen_classes = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -36700,6 +36854,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             operator_ring,
             tir_classes,
             tir_dissections,
+            gen_classes,
         })
     }
 }
@@ -36785,6 +36940,7 @@ impl PalwStateCarriageV2 {
             operator_ring: state.operator_ring.clone(),
             tir_classes: state.tir_classes.clone(),
             tir_dissections: state.tir_dissections.clone(),
+            gen_classes: state.gen_classes.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -36865,6 +37021,16 @@ impl PalwStateCarriageV2 {
         for (class_id, record) in &self.tir_classes {
             record.check_program_v1().map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("IR class {class_id}: {why}")))?;
         }
+        // RFC-0003: the root commits a generative class through its hashes, so a carriage is refused
+        // unless every row's class hashes to them (and is its row's size) and is keyed by its own id.
+        for (class_id, record) in &self.gen_classes {
+            record
+                .check_class_v1()
+                .map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("generative class {class_id}: {why}")))?;
+            if record.class_id != *class_id {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!("generative class {class_id}: a row under another id")));
+            }
+        }
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
             reserved_exposure: self.reserved_exposure,
@@ -36943,6 +37109,7 @@ impl PalwStateCarriageV2 {
             operator_ring: self.operator_ring,
             tir_classes: self.tir_classes,
             tir_dissections: self.tir_dissections,
+            gen_classes: self.gen_classes,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -53559,6 +53726,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::TirClass { .. } => "tir_class",
                     // RFC-0002 F7: its round trip is the IR dissection suite's.
                     PalwDeltaEntryV2::TirDissection { .. } => "tir_dissection",
+                    // RFC-0003: its round trip is the generative registration suite's.
+                    PalwDeltaEntryV2::GenClass { .. } => "gen_class",
                 });
             }
         }
@@ -53683,6 +53852,8 @@ pub(crate) mod tests {
             (88, PalwDeltaEntryV2::TirClass { key, old: None, new: None }),
             // RFC-0002 Phase F (F7), after F6's.
             (89, PalwDeltaEntryV2::TirDissection { key, old: None, new: None }),
+            // RFC-0003, from Phase F's allocation, after F7's.
+            (90, PalwDeltaEntryV2::GenClass { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -54305,6 +54476,8 @@ pub(crate) mod tests {
             tir_classes: _,
             // RFC-0002 F7: its own Some-only block, empty here.
             tir_dissections: _,
+            // RFC-0003: its own Some-only block, empty here.
+            gen_classes: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -54397,6 +54570,10 @@ pub(crate) mod tests {
             ("tir_dissections", Box::new(|s| {
                 let phase = crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1::test_phase_v1(block(0xC1));
                 s.tir_dissections.insert(block(0xC1), Box::new(phase));
+            })),
+            ("gen_classes", Box::new(|s| {
+                let row = crate::palw_gen_class_v1::PalwGenClassRecordV1::test_row_v1(0xC2);
+                s.gen_classes.insert(row.class_id, row);
             })),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),

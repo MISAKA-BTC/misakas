@@ -29,9 +29,12 @@
 //! build skips the APPENDED registration object), and arming without `palw_tir_v1` in force at or
 //! below it — the generative court is the IR court with version 2's additions.
 //!
-//! Until the pipeline class's admission is wired, the registration object is dropped by name at every
-//! height ([`crate::palw_state_v2::palw_object_is_gen_v1`]), so the fence arms nothing a block can
-//! carry yet — which is why it needs no bundle mirror (`palw_tir_v1`'s `tir_from_daa`) in this step.
+//! Past the fence a registration passes the pipeline admission
+//! ([`crate::palw_gen_admission_v1::verify_gen_class_admission_v1`]) and the fold writes its
+//! `gen_classes` row; below it the object is dropped by name
+//! ([`crate::palw_state_v2::palw_object_is_gen_v1`]) and the fold refuses it as the second lock, which
+//! reads the fence through the V2 bundle's mirror (`PalwStateParamsV2::gen_from_daa`, written by
+//! [`Params::sync_palw_gen_v1`] — `palw_tir_v1`'s `tir_from_daa` pattern).
 
 use crate::Hash64;
 use crate::config::params::{ForkActivation, PalwPostLaunchFenceV1, Params};
@@ -330,8 +333,13 @@ impl PalwGenFenceV1 {
 /// **The entry a drill arms the generative fence with** (`--palw-drill-gen-at`,
 /// [`crate::config::drill::palw_drill_gen_fence_at_v1`]). It is in NO testnet-12 flag-day list: the
 /// fence is dormant on every network (the coordinator's rule for this step).
-pub const PALW_DRILL_GEN_V1_ENTRY: PalwPostLaunchFenceV1 =
-    PalwPostLaunchFenceV1 { name: "palw_gen_v1", set: |params, at| params.palw_gen_v1 = at.map(PalwGenFenceV1::drill_v1) };
+pub const PALW_DRILL_GEN_V1_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_gen_v1",
+    set: |params, at| {
+        params.palw_gen_v1 = at.map(PalwGenFenceV1::drill_v1);
+        params.sync_palw_gen_v1();
+    },
+};
 
 /// The drill's one-entry list.
 pub const PALW_DRILL_GEN_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_DRILL_GEN_V1_ENTRY];
@@ -349,9 +357,32 @@ impl Params {
         self.palw_gen_v1_fence().is_some_and(|f| f.activation.is_active(daa_score))
     }
 
+    /// **The generative fence's mirror** on the V2 bundle's state params
+    /// (`PalwStateParamsV2::gen_from_daa`), which the fold reads: below the height a generative
+    /// registration is refused by name. Written here and nowhere else; `None` where the fence is not
+    /// armed (or is `never()`). Call it wherever the fence is set on an assembled ruleset;
+    /// [`Self::validate_palw_gen_v1`] refuses a ruleset whose copy disagrees.
+    pub fn sync_palw_gen_v1(&mut self) {
+        let from_daa = self.palw_gen_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+        if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_gen_from_daa(from_daa);
+        }
+    }
+
     /// **The generative fence's own refusals**, asked by [`Params::validate_palw_v2`]. A
     /// `Some(never())` value is dormant and passes (it collapses out of the identity).
     pub fn validate_palw_gen_v1(&self) -> Result<(), PalwModeV2Error> {
+        let mirror = match &self.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) => bundle.state.gen_from_daa(),
+            _ => None,
+        };
+        let armed = self.palw_gen_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+        if mirror != armed {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_gen_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_gen_v1 after the bundle is \
+                 assembled",
+            ));
+        }
         let Some(fence) = self.palw_gen_v1 else { return Ok(()) };
         if fence.activation == ForkActivation::never() {
             return Ok(());

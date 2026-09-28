@@ -71,6 +71,7 @@ fn rulesets() -> Vec<(&'static str, Params)> {
 fn t12_armed(at: ForkActivation) -> Params {
     let mut p = palw_t12_shipped_params();
     p.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(at));
+    p.sync_palw_gen_v1();
     p
 }
 
@@ -174,6 +175,7 @@ fn validate_refuses_every_value_this_build_cannot_run() {
         let mut fence = p.palw_gen_v1.unwrap();
         edit(&mut fence);
         p.palw_gen_v1 = Some(fence);
+        p.sync_palw_gen_v1();
         p.validate_palw_gen_v1()
     };
     let other = kaspa_consensus_core::Hash64::from_bytes([7u8; 64]);
@@ -214,7 +216,16 @@ fn validate_refuses_every_value_this_build_cannot_run() {
     assert!(never_tir.validate_palw_gen_v1().is_err(), "a dormant IR fence is no IR fence");
     let mut same_height = ok.clone();
     same_height.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(ForkActivation::new(2_000)));
+    same_height.sync_palw_gen_v1();
     assert!(same_height.validate_palw_gen_v1().is_ok(), "at the IR fence's own height");
+    // The fold reads the fence through the bundle's mirror: a ruleset whose copy disagrees is refused.
+    let mut stale = ok.clone();
+    stale.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(ForkActivation::new(AT + 5)));
+    assert!(stale.validate_palw_gen_v1().is_err(), "a stale mirror");
+    stale.sync_palw_gen_v1();
+    assert!(stale.validate_palw_gen_v1().is_ok(), "re-mirrored");
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &stale.palw_consensus_mode else { panic!("V2") };
+    assert_eq!(bundle.state.gen_from_daa(), Some(AT + 5), "the fold's copy of the height");
 
     let mut not_v2 = SIMNET_PARAMS;
     assert!(!matches!(not_v2.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
