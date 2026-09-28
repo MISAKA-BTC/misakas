@@ -9,15 +9,34 @@ Appends one line to $WORK_DIR/df.tsv and rewrites $WORK_DIR/df-state.json. Print
 each milestone is reached (Candidate, Prefetching, Probation, ActiveLimited, Active, the first Final after
 Active, and for D-F2 the first CourtFraud of the tampering producer) to $WORK_DIR/df-milestones.tsv.
 
-  dfwatch.py [--once] [--until active|final|df2]
-Exit (with --until): 0 when reached, 3 INCOMPLETE when --deadline-daa passes first."""
-import argparse, json, os, sys, time
+  dfwatch.py [--once] [--until prefetching|active|final|df2]
+Exit (with --until): 0 when reached, 3 INCOMPLETE when --deadline-daa passes first, 4 GUARDED (--until
+prefetching only) when the class sits at Candidate while the IR holders' logs name the interim F7 guard's
+readiness refusal (a release that cannot play the class's history dissection proves no readiness for it)."""
+import argparse, json, os, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rpc import call, pick
 
 WORK = os.path.expanduser(os.environ.get("WORK_DIR", "~/.misaka-palw-tir-drill"))
 PORT = int(os.environ.get("DF_PORT", str(int(os.environ.get("JSON_BASE", "58100")) + 3)))
 MILESTONES = ["Candidate", "Prefetching", "Probation", "ActiveLimited", "Active"]
+# The interim F7 guard's words (kaspad's PALW_TIR_DISSECTION_GUARD_WORDS_V1) and the nodes that hold the IR
+# artifact (lib-df.sh's ir column).
+GUARD_WORDS = "IR class with dissected points: this node cannot play the dissection yet"
+IR_HOLDERS = os.environ.get("IR_HOLDERS", "new0 new1 new2 new3 new4 new5 new6").split()
+
+
+def guarded_holders(cid):
+    """The IR holders whose log names the guard for this class (`... class <cid> dissects ...`)."""
+    logs = [f"{WORK}/{n}/kaspad.out" for n in IR_HOLDERS if os.path.exists(f"{WORK}/{n}/kaspad.out")]
+    if not logs:
+        return []
+    r = subprocess.run(["grep", "-lF", f"{cid} dissects", *logs], capture_output=True, text=True)
+    hits = []
+    for path in r.stdout.split():
+        if subprocess.run(["grep", "-qF", GUARD_WORDS, path]).returncode == 0:
+            hits.append(os.path.basename(os.path.dirname(path)))
+    return hits
 
 
 def class_id():
@@ -69,6 +88,7 @@ def main():
     if os.path.exists(f"{WORK}/df-milestones.tsv"):
         seen = {l.split("\t")[0] for l in open(f"{WORK}/df-milestones.tsv")}
     active_at = None
+    guard_samples = 0
     while True:
         s = sample(class_id())
         with open(f"{WORK}/df.tsv", "a") as f:
@@ -82,22 +102,33 @@ def main():
             marks.append("first-final-after-active")
         if s["claims"]["new0"]["court_fraud"]:
             marks.append("court-fraud")
+        # Stage 1's registration milestone: Prefetching (the admission jury seated) with seats proving
+        # readiness (ready > 0 on the row). A class already past it (Probation's gate is ready seats
+        # enough) has met it too. Marked before the marks are recorded, or the goal is never seen.
+        if (s["state"].startswith("Prefetching") and (s["ready"] or 0) > 0) or s["state"].startswith(("Probation", "Active")):
+            marks.append("prefetching-ready")
         for m in marks:
             if m not in seen:
                 seen.add(m)
                 with open(f"{WORK}/df-milestones.tsv", "a") as f:
                     f.write(f"{m}\t{s['daa']}\t{s['t']}\n")
                 print(f"{s['t']} DAA {s['daa']}: {m}", flush=True)
-        # Stage 1's registration milestone: Prefetching (the admission jury seated) with seats proving
-        # readiness (ready > 0 on the row).
-        # A class already past it (Probation's gate is ready seats enough) has met it too.
-        if (s["state"].startswith("Prefetching") and (s["ready"] or 0) > 0) or s["state"].startswith(("Probation", "Active")):
-            marks.append("prefetching-ready")
         goal = {"prefetching": "prefetching-ready", "active": "Active", "final": "first-final-after-active", "df2": "court-fraud"}.get(
             a.until or ""
         )
         if a.once or (goal and goal in seen):
             return 0
+        # The interim F7 guard: at Candidate with the holders refusing readiness by name, three samples
+        # running, the jury cannot seat — say so rather than wait out the deadline.
+        if goal == "prefetching-ready" and s["state"].startswith("Candidate"):
+            held = guarded_holders(class_id())
+            guard_samples = guard_samples + 1 if held else 0
+            if guard_samples >= 3:
+                print(f"GUARDED: DAA {s['daa']}: the class sits at Candidate; {len(held)} of {len(IR_HOLDERS)} IR holders "
+                      f"refuse readiness by name ({' '.join(held)}): '{GUARD_WORDS}'", flush=True)
+                with open(f"{WORK}/df-milestones.tsv", "a") as f:
+                    f.write(f"guarded-at-candidate\t{s['daa']}\t{s['t']}\n")
+                return 4
         if a.deadline_daa and s["daa"] >= a.deadline_daa:
             print(f"INCOMPLETE: DAA {s['daa']} passed {a.deadline_daa} before {goal}", flush=True)
             return 3

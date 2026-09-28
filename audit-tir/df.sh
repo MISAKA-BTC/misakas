@@ -16,7 +16,11 @@
 #   by name by the release and skipped by the old relay at identical tips; blocks above; the old peer refused
 #   past the fence) + the registration past the fence reaching Prefetching with seats proving readiness
 #   (Candidate → the admission jury → Prefetching) + df3 (8 of 8 forged-output attacks refused, the producer
-#   on the IR class). Its verdict is printed and written to $WORK_DIR/stage1.verdict on its own.
+#   on the IR class). Its verdict is printed and written to $WORK_DIR/stage1.verdict on its own. A release
+#   that carries the interim F7 guard (kaspad PALW_TIR_GUARD_REFUSES_READINESS_V1: no readiness for an IR
+#   class with dissected points until the node plays the history dissection) holds D-F1 at Candidate — the
+#   admission jury seats on readiness proofs — and the registration part then reads GUARDED (the IR holders
+#   name the refusal in their logs), not PASS: the stage is STAGE 1 GUARDED when df4 and df3 pass.
 #   STAGE 2 (on the same chain, after the fleet rollout): `stage2` = df1 (Active → claims → Final) + df2
 #   (representative commit-point kinds live, every kind offline with palw-class certify) + df4 court.
 #
@@ -143,6 +147,11 @@ PY
               | grep -E -- '--palw-drill|--listen=|--rpclisten=|--palw-produce$|--palw-producer-class|--palw-register-class|--palw-class-artifact|heartbeat-miner|--appdir|--ram-scale' | tr '\n' ' ')"
       done )
     rm -rf "$T"
+    # The interim F7 guard: a release that carries it proves no readiness for D-F1 (dissected history cones),
+    # so Stage 1's registration part reads GUARDED at Candidate rather than Prefetching.
+    if [ -x "$KASPAD_BIN" ] && grep -aqF "this node cannot play the dissection yet" "$KASPAD_BIN"; then
+        echo "== the release carries the interim F7 guard: D-F1 is held at Candidate, Stage 1 reads GUARDED at best"
+    fi
     echo "== DRY RUN done (preflight failures: $FAILED)"
     [ "$FAILED" = 0 ]
 }
@@ -233,8 +242,9 @@ phase_f() {
     bash "$s" "${2:-run}"
 }
 
-# One part's verdict: PASS (0), FAIL (1), INCOMPLETE (3), written beside the rest.
-verdict_of() { case $1 in 0) echo PASS ;; 3) echo INCOMPLETE ;; *) echo FAIL ;; esac; }
+# One part's verdict: PASS (0), FAIL (1), INCOMPLETE (3), GUARDED (4: held at Candidate by the interim F7
+# guard, named in the IR holders' logs), written beside the rest.
+verdict_of() { case $1 in 0) echo PASS ;; 3) echo INCOMPLETE ;; 4) echo GUARDED ;; *) echo FAIL ;; esac; }
 
 # STAGE 1, the arming gate: df4 (below, cross) + the registration to Prefetching with ready seats + df3.
 stage1() {
@@ -243,14 +253,21 @@ stage1() {
     ( cd "$A"; WORK_DIR=$WORK_DIR DF_PORT=$(jport new3) python3 dfwatch.py --until prefetching --deadline-daa "${STAGE1_DEADLINE_DAA:-400}" ) || rcr=$?
     phase_f df3 run || rc3=$?
     local v=PASS
-    for rc in $rc4 $rcr $rc3; do [ "$rc" = 0 ] || { [ "$rc" = 3 ] && [ "$v" = PASS ] && v=INCOMPLETE || v=FAIL; }; done
+    for rc in $rc4 $rcr $rc3; do
+        case $rc in
+            0) ;;
+            4) [ "$v" = PASS ] && v=GUARDED ;;
+            3) { [ "$v" = PASS ] || [ "$v" = GUARDED ]; } && v=INCOMPLETE ;;
+            *) v=FAIL ;;
+        esac
+    done
     {
         echo "STAGE 1 $v ($(date '+%F %T'), tip $(tip new3))"
         echo "  df4 (below/cross)                  $(verdict_of $rc4)"
         echo "  registration → Prefetching, ready  $(verdict_of $rcr) $(tr '\n' ' ' < "$WORK_DIR/df-milestones.tsv" 2>/dev/null)"
         echo "  df3 (8 forged outputs)             $(verdict_of $rc3)"
     } | tee "$WORK_DIR/stage1.verdict"
-    [ "$v" = PASS ]
+    case $v in PASS) return 0 ;; GUARDED) return 4 ;; INCOMPLETE) return 3 ;; *) return 1 ;; esac
 }
 
 # STAGE 2, on the same chain after the fleet rollout: df1 (Active → Final), df2, df4 court.
