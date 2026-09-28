@@ -1231,3 +1231,37 @@ fn value_bound_against_closures() {
         println!("{r}");
     }
 }
+
+/// The value bound on the corpus programs and the Qwen2.5-1.5B-shaped decoder.
+#[test]
+fn value_bound_on_the_corpus() {
+    let mut progs: Vec<(String, Program)> = Vec::new();
+    for e in std::fs::read_dir(common::vectors_dir().join("programs")).unwrap() {
+        let path = e.unwrap().path();
+        let d = common::read_json(&path);
+        let prog = ref2::codec::decode_canonical(&common::hex_decode(d["program_borsh_hex"].as_str().unwrap())).unwrap();
+        progs.push((path.file_name().unwrap().to_string_lossy().to_string(), prog));
+    }
+    progs.push(("qwen2.5-1.5b-shaped".into(), common::qwen::build(&common::qwen::QWEN25_1_5B)));
+    for (name, p) in &progs {
+        let Outcome::Ok(fp) = first_decode(&encode(p)) else { panic!("{name}") };
+        let mut rows = Vec::new();
+        for (b, blk) in p.blocks.iter().enumerate() {
+            for (n, node) in blk.nodes.iter().enumerate() {
+                if !node.commit || ref2::dissect::cone_reductions(p, b, n as u16).is_empty() {
+                    continue;
+                }
+                for tl in [64u64, 256] {
+                    let mv = value_bound(p, b, n as u16, tl);
+                    let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp.blocks[b], n as u16, tl as u32);
+                    let obl = obligations(p, b, n as u16);
+                    let fo = cc::palw_tir_dissect_v1::palw_tir_dissect_obligations_v1(&fp.blocks[b], n as u16);
+                    rows.push(format!("b{b} n{n} tile_len {tl}: V ref2 {mv} first {fv}; obligations ref2 {obl:?} first {fo:?}"));
+                    assert_eq!(mv, fv, "{name} b{b} n{n} tile_len {tl}");
+                    assert_eq!(obl.is_empty(), fo.is_ok(), "{name} b{b} n{n}");
+                }
+            }
+        }
+        println!("{name}: {} dissected (commit point, tile_len) pairs, V and obligations identical{}", rows.len(), if rows.is_empty() { String::new() } else { format!(" — e.g. {}", rows[0]) });
+    }
+}
