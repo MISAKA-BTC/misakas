@@ -65,6 +65,8 @@ struct Tally {
     cases: usize,
     ok: usize,
     failed: BTreeMap<&'static str, usize>,
+    /// Agreed failures whose two classes differ (each one the text allows: several elements fail).
+    other_class: usize,
     same_order: usize,
     boundary: usize,
     hostile: usize,
@@ -159,6 +161,9 @@ impl Tally {
                     Ok(_) => self.disagree("ref2 internal: exploration succeeds", what()),
                 }
                 *self.failed.entry(e2.name()).or_default() += 1;
+                if e1 != e2 {
+                    self.other_class += 1;
+                }
                 None
             }
             (DRes::Ok(v, w), DRes::Err(e)) => {
@@ -191,11 +196,12 @@ impl Tally {
 
     fn report(&self, name: &str) {
         println!(
-            "{name}: {} cases, {} both succeed (same first-asked order in {}), agreed failures {:?}, {} boundary triples, {} hostile, {} disagreements",
+            "{name}: {} cases, {} both succeed (same first-asked order in {}), agreed failures {:?} ({} with another allowed class), {} boundary triples, {} hostile, {} disagreements",
             self.cases,
             self.ok,
             self.same_order,
             self.failed,
+            self.other_class,
             self.boundary,
             self.hostile,
             self.disagreements.values().map(|d| d.0).sum::<usize>()
@@ -792,6 +798,22 @@ fn text_gap_probes() {
     show(&mut t, "state_after(3, v, 1), the source knows nothing of it", &pp, &Target::StateAfter { pos: 3, state: v, layer: Some(1) }, &[0], &m, Limits::UNLIMITED);
     show(&mut t, "state_after(3, v, 1), the source answers zeros", &pp, &Target::StateAfter { pos: 3, state: v, layer: Some(1) }, &[0], &zeros, Limits::UNLIMITED);
     show(&mut t, "state_after(3, v, 0), the referenced instance", &pp, &Target::StateAfter { pos: 3, state: v, layer: Some(0) }, &[0], &m, Limits::UNLIMITED);
+
+    // D4: a source refusal reported by the source with a class other than Missing.
+    println!("D4 — the source refuses with an error of another class (the text: the evaluation fails, class Missing):");
+    let prog = edge_program(false);
+    let pp = prepare(&prog).expect("normal form");
+    let tokens: Vec<u64> = (0..6).collect();
+    let m = Model::from_run(&prog, &Params::new(), &tokens, &|q| q == 0).unwrap();
+    let target = Target::Node { ctx: Ctx { pos: 5, occ: 3 }, node: 1 };
+    let mut gone = m.clone();
+    gone.nodes.remove(&(5, 2, 4));
+    for kind in [first::error::TirErrorKind::Missing, first::error::TirErrorKind::Operand, first::error::TirErrorKind::Position, first::error::TirErrorKind::Malformed] {
+        REFUSAL_KIND.with(|k| k.set(Some(kind)));
+        let f = first_demand(&pp.fp, &pp.info, &target, &[0], &gone, Limits::UNLIMITED);
+        println!("  the source's error {kind:?}: first reports {:?}", f.res);
+    }
+    REFUSAL_KIND.with(|k| k.set(None));
 
     t.report("text-gap probes");
     assert!(t.clean());

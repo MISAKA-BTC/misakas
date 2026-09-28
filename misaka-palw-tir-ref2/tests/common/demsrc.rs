@@ -193,8 +193,15 @@ pub struct Theirs<'a> {
     pub order: Vec<Question>,
 }
 
+thread_local! {
+    /// The kind of the error the first implementation's source returns for a refusal (the text
+    /// says a refusal fails the evaluation with class `Missing`, whatever the source reports).
+    pub static REFUSAL_KIND: std::cell::Cell<Option<first::error::TirErrorKind>> = const { std::cell::Cell::new(None) };
+}
+
 fn refused() -> first::error::TirError {
-    first::error::TirError::new(first::error::TirErrorKind::Missing, "the model refuses")
+    let kind = REFUSAL_KIND.with(|k| k.get()).unwrap_or(first::error::TirErrorKind::Missing);
+    first::error::TirError::new(kind, "the model refuses")
 }
 
 fn ctx_from(c: first::demand::DemandContext) -> Ctx {
