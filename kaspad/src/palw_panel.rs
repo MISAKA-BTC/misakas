@@ -3991,6 +3991,16 @@ impl PalwPanelService {
             // Asked of the moment, a 3.5 GiB seat replaying anything proved nothing for the 8k class
             // (3.37 GiB), its rows lapsed at the horizon and the class went HELD with two claims
             // voided `no_capable_panel`. A replay still reserves its own bytes when it starts.
+            //
+            // Ahead of it, the interim F7 guard's readiness half (RFC-0002): no proof for an IR class
+            // whose dissection this build cannot play — no panel of this seat's for a class whose
+            // producers it could not defend (`palw_tir_dissection_refusal_v1`), named once per change.
+            if crate::palw_producer::PALW_TIR_GUARD_REFUSES_READINESS_V1
+                && let Some(why) = crate::palw_producer::palw_tir_dissection_refusal_v1(session, class.class_id)
+            {
+                self.readiness_note(class.class_id, format!("no proof — {why}"));
+                continue;
+            }
             if let Err(why) = self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root))) {
                 self.readiness_note(class.class_id, format!("no proof — {why}"));
                 continue;
@@ -6321,6 +6331,11 @@ impl PalwPanelService {
         let rcore_plus =
             crate::palw_producer::palw_rcore_plus_reads_v1(&self.consensus_config.params, session, class_id, &bond, facts.daa_score);
         crate::palw_producer::palw_canonical_claim_room_v1(bond_facts, rcore_plus)?;
+        // The interim F7 guard (RFC-0002): no claim of an IR class whose dissection this build cannot
+        // play, refused before its backend is built (`palw_tir_dissection_refusal_v1`).
+        if let Some(refusal) = crate::palw_producer::palw_tir_dissection_refusal_v1(session, class_id) {
+            return Err(refusal);
+        }
         let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
         // The producer's guard, for the claim this node underwrites here too: no claim of a fused
         // class this build cannot defend at its dissection's turn — past `palw_offence_attribution`, no
