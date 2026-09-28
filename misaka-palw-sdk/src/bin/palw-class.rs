@@ -529,10 +529,33 @@ fn preflight(view: &NetworkView, path: &std::path::Path, wanted: Option<&str>) -
         let mut refused = false;
         for entry in tir.iter().filter(|e| wanted.is_none_or(|w| w == e.model_id)) {
             inspect_tir(view, entry);
+            // The registration a `--palw-register-class` run would build, judged by admission v10 at
+            // the point the fence arms (the genesis terms: the base class's pricing, weightless).
             let at = view.params.palw_tir_v1_fence().map(|f| f.activation.daa_score()).unwrap_or(0);
-            match misaka_palw_sdk::tir_registration::tir_registration_preflight_v1(&view.params, &view.bundle, entry, at) {
-                Ok(()) => println!(
-                    "  ADMISSIBLE (node-side preflight; admission v10 is consensus's, RFC-0002 F6)  {}  root {}",
+            let terms = kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2 {
+                min_grantable_share_permille: 0,
+                slash_value_per_pwu: 1,
+                initial_target: u128::MAX,
+                registered_class_ids: view.genesis_classes.iter().map(|(id, _)| *id).collect(),
+                registered_artifact_roots: view.genesis_classes.iter().map(|(_, root)| *root).collect(),
+                chain_certified_families: Vec::new(),
+            };
+            let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_bytes([0; 64]),
+                0,
+            ));
+            match misaka_palw_sdk::tir_registration::build_tir_registration_v1(
+                &view.params,
+                &view.bundle,
+                entry,
+                &terms,
+                0,
+                bond,
+                Vec::new(),
+                at,
+            ) {
+                Ok(_) => println!(
+                    "  ADMISSIBLE (admission v10 at DAA {at}; the live chain's terms decide the rest)  {}  root {}",
                     entry.model_id, entry.artifact_root
                 ),
                 Err(why) => {

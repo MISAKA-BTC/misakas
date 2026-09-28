@@ -7,25 +7,22 @@
 //! gate it, build `ClassRegisteredTirV1` with its admission carriage, and sign
 //! `palw_tir_class_registration_message_v1` over every field the object carries.
 //!
-//! **Two pieces here stand in for consensus functions F6 has not landed yet**, with the signatures
-//! requested from Phase F so the switch is a rename:
-//!
-//! * [`palw_tir_post_genesis_registration_stub_v1`] for `palw_tir_post_genesis_registration_v1`
-//!   (the object, counted as the gate recounts it: `pwu_per_inference` is the canonical job's step
-//!   leaf count under the ladder);
-//! * [`tir_registration_preflight_v1`] for the acceptance layer's v10 gate: the fence in force, the
-//!   fence's program and context ceilings, the IR conformance battery (`tir_admit_v1` and the step
-//!   space), and the canonical job at the formula.
+//! The object is consensus's (`palw_tir_admission_v1::palw_tir_post_genesis_registration_v1`: the
+//! class id derived from the class and its root, `pwu_per_inference` counted from the carried
+//! canonical job against the network's ladder, so the object and the gate's recount are one count),
+//! and the gate is the one the acceptance path runs (`palw_tir_registration_preflight_at_v1`:
+//! `palw_tir_v1` in force, then admission v10 under the rules at that height) — asked BEFORE the
+//! object is signed, so a class the chain would refuse never reaches the signer, the mempool or the
+//! fee.
 //!
 //! The share is 0‰: an IR class joins weightless until the chain can certify an IR family
 //! (design §2.4 item 10 — registration stays permissionless at 0‰).
 
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2;
-use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwPwuRuleV2, PalwRegistrationTermsV2};
-use kaspa_consensus_core::palw_tir_class_v1::{PalwTirAdmissionCarriageV1, PalwTirClassV1, palw_tir_class_registration_message_v1};
-use kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1;
-use kaspa_consensus_core::palw_v2::PalwJobContextV2;
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwRegistrationTermsV2};
+use kaspa_consensus_core::palw_tir_admission_v1::{palw_tir_post_genesis_registration_v1, palw_tir_registration_preflight_at_v1};
+use kaspa_consensus_core::palw_tir_class_v1::palw_tir_class_registration_message_v1;
 use kaspa_hashes::Hash64;
 
 use crate::lineage::{PalwLoadedArtifactV1, PalwTirClassEntryV1};
@@ -83,41 +80,6 @@ pub fn tir_registration_candidate_v1(
     }
 }
 
-/// **Stand-in for consensus's `palw_tir_post_genesis_registration_v1`** (requested from Phase F,
-/// same signature): the registration object for one IR class, its `pwu_per_inference` counted from
-/// the canonical job the carriage carries (the count the gate recounts), `class_id` derived from the
-/// class and its root. The signature is over [`tir_registration_message_v1`] of this object.
-#[allow(clippy::too_many_arguments)]
-pub fn palw_tir_post_genesis_registration_stub_v1(
-    class: PalwTirClassV1,
-    canonical: PalwJobContextV2,
-    artifact_root: Hash64,
-    share_permille: u16,
-    initial_target: u128,
-    slash_value_per_pwu: u64,
-    activation_daa: u64,
-    registrant_bond: PalwBondKeyV2,
-    signature: Vec<u8>,
-    ladder: u64,
-) -> Result<PalwConsensusObjectV2, String> {
-    let class_id = class.class_id(&artifact_root);
-    if canonical.shape_profile_id != class_id {
-        return Err("the canonical job names another class".into());
-    }
-    let space = PalwTirStepSpaceV1::new(&class).map_err(|e| format!("the class builds no step space: {e}"))?;
-    let counted = space.leaf_count_capped(&canonical, ladder).map_err(|e| format!("the canonical job does not count: {e}"))?;
-    Ok(PalwConsensusObjectV2::ClassRegisteredTirV1 {
-        class_id,
-        artifact_root,
-        slash_value_per_pwu,
-        pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },
-        initial_target,
-        share_permille,
-        activation_daa,
-        admission: Box::new(PalwTirAdmissionCarriageV1 { class, canonical, registrant_bond, signature }),
-    })
-}
-
 /// **The message the registrant bond signs** — `palw_tir_class_registration_message_v1` over every
 /// field `object` carries (never over a field assembled beside it). `None` for any other object.
 pub fn tir_registration_message_v1(network_domain: Hash64, object: &PalwConsensusObjectV2) -> Option<Hash64> {
@@ -149,45 +111,26 @@ pub fn tir_registration_message_v1(network_domain: Hash64, object: &PalwConsensu
     ))
 }
 
-/// **Stand-in for the acceptance layer's v10 gate** (F6): refuse before anything is signed what
-/// this network would refuse — the fence not in force at `daa`, a program or a context past the
-/// fence's ceilings, a class the IR battery refuses (`tir_admit_v1`, the step space, the range
-/// proof), or a canonical job other than the formula's.
+/// **The acceptance path's gate, asked of the unsigned object** (F6 B): `palw_tir_v1` in force at
+/// `daa`, then admission v10 at that height (`palw_tir_registration_preflight_at_v1`) with the
+/// chain's certified families. The error names the refusal by its code.
 pub fn tir_registration_preflight_v1(
     params: &Params,
     bundle: &PalwConsensusParamsV2,
-    entry: &PalwTirClassEntryV1,
+    object: &PalwConsensusObjectV2,
     daa: u64,
+    chain_certified: &[kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eFamilyV1],
 ) -> Result<(), String> {
-    let fence = params.palw_tir_v1_fence().ok_or("this network has not armed palw_tir_v1, so it registers no IR class")?;
-    if !fence.activation.is_active(daa) {
-        return Err(format!("palw_tir_v1 is not in force at DAA {daa} (it arms at {})", fence.activation.daa_score()));
-    }
-    let who = &entry.model_id;
-    if entry.class.program.len() as u64 > fence.ceilings.max_program_bytes as u64 {
-        return Err(format!(
-            "{who}: the program is {} bytes, past the network's {}",
-            entry.class.program.len(),
-            fence.ceilings.max_program_bytes
-        ));
-    }
-    if entry.class.layout.max_context > fence.ceilings.max_context {
-        return Err(format!(
-            "{who}: max_context {} is past the network's {}",
-            entry.class.layout.max_context, fence.ceilings.max_context
-        ));
-    }
-    crate::conformance::check_tir_entry_v1(TIR_LINEAGE_ID_V1, entry, &bundle.court)?;
-    if Some(entry.canonical_job) != kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(&entry.class) {
-        return Err(format!("{who}: the canonical job is not the formula's"));
-    }
-    Ok(())
+    palw_tir_registration_preflight_at_v1(params, bundle, object, daa, chain_certified)
+        .map(|_| ())
+        .map_err(|e| format!("{} ({e})", e.code()))
 }
 
-/// **Build the IR registration** for `entry` under the chain's `terms`: gated first
-/// ([`tir_registration_preflight_v1`]), then built at the network's own pricing (the base class's
-/// slash value and initial target), weightless, at the formula's canonical job. Call once with an
-/// empty signature to learn the object to sign, then again with the signature.
+/// **Build the IR registration** for `entry` under the chain's `terms`: the network's own pricing
+/// (the base class's slash value and initial target), weightless, at the canonical job admission
+/// v10 requires (`palw_tir_job_context_v1` at `palw_tir_attempt_canonical_v1`) — gated before it is
+/// returned. Call once with an empty signature to learn the message to sign
+/// ([`tir_registration_message_v1`]), then again with the signature.
 #[allow(clippy::too_many_arguments)]
 pub fn build_tir_registration_v1(
     params: &Params,
@@ -199,8 +142,7 @@ pub fn build_tir_registration_v1(
     signature: Vec<u8>,
     daa: u64,
 ) -> Result<PalwConsensusObjectV2, String> {
-    tir_registration_preflight_v1(params, bundle, entry, daa)?;
-    palw_tir_post_genesis_registration_stub_v1(
+    let object = palw_tir_post_genesis_registration_v1(
         entry.class.as_ref().clone(),
         entry.canonical_context(),
         entry.artifact_root,
@@ -212,5 +154,8 @@ pub fn build_tir_registration_v1(
         signature,
         bundle.court.max_step_leaf_count(),
     )
-    .map_err(|e| format!("{}: {e}", entry.model_id))
+    .map_err(|e| format!("{}: {} ({e})", entry.model_id, e.code()))?;
+    tir_registration_preflight_v1(params, bundle, &object, daa, &terms.chain_certified_families)
+        .map_err(|e| format!("{}: the admission gate refuses the registration: {e}", entry.model_id))?;
+    Ok(object)
 }

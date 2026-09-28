@@ -332,12 +332,12 @@ mod tests {
         let PalwConsensusMode::ConsensusV2(bundle) = &net.palw_consensus_mode else { panic!("t12 is V2") };
         let bond = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_bytes([4; 64]), 0));
         let build = |sig: Vec<u8>, daa: u64| build_tir_registration_v1(&net, bundle, &entry, &terms, 0, bond, sig, daa);
-        assert!(build(Vec::new(), 99).unwrap_err().contains("not in force"), "below the fence nothing is built");
+        let below = build(Vec::new(), 99).unwrap_err();
+        assert!(below.contains("FAMILY_FENCE_CLOSED"), "below the fence nothing is built: {below}");
         let unarmed = palw_t12_shipped_params();
         let PalwConsensusMode::ConsensusV2(b2) = &unarmed.palw_consensus_mode else { panic!() };
-        assert!(
-            build_tir_registration_v1(&unarmed, b2, &entry, &terms, 0, bond, Vec::new(), 1_000).unwrap_err().contains("not armed")
-        );
+        let never = build_tir_registration_v1(&unarmed, b2, &entry, &terms, 0, bond, Vec::new(), 1_000).unwrap_err();
+        assert!(never.contains("FAMILY_FENCE_CLOSED"), "an unarmed network registers no IR class: {never}");
 
         let unsigned = build(Vec::new(), 100).unwrap();
         let PalwConsensusObjectV2::ClassRegisteredTirV1 {
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(admission.class, *entry.class);
         assert_eq!(admission.canonical, entry.canonical_context());
         let space = PalwTirStepSpaceV1::new(&entry.class).unwrap();
-        let counted = space.leaf_count_capped(&admission.canonical, court().max_step_leaf_count()).unwrap();
+        let counted = space.leaf_count_capped(&admission.canonical, bundle.court.max_step_leaf_count()).unwrap();
         assert_eq!(*pwu_rule, PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted });
 
         // Signed by the bond's ML-DSA-87 key over the object's own message; the signed object is
