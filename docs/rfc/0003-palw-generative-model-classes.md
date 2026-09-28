@@ -1201,8 +1201,22 @@ the text stage's.
     leaf proven under the class's `artifact_root`, so an executor that ran other weights is convicted
     at its first divergent leaf.
 
-  Not yet built: the close proofs as consensus objects (`PalwCourtVerdictProofV2` 10/11) and their
-  fold; the node's worker and seat loops (kaspad, `misaka-palw-base0`) calling these.
+  - **the closes as consensus objects** (`palw_gen_close_v1`): a V5 claim's execution root binds
+    the job id, the class, the step leaf count, the step root and the generated ids; `GenCone` (tag
+    10) opens the leaf the ladder narrowed to (the claim's one stage-major order), `GenDecodeToken`
+    (tag 11) holds an id to its committed logits row. The prompt rides only when the disputed stage
+    reads it. Below `palw_gen_v1` both are dropped by name;
+  - **the history dissection, composed** (RFC-0002 F7, spec 04b §9.5): a text stage's attention
+    cone is dissected, not closed whole. Admission asks F7's obligations, value bound, sizing and
+    window of the stage's view verbatim; `CourtGenRootClaimed` (tag 68) opens F7's own phase, whose
+    rounds and choices are F7's objects unchanged; `GenDissection` (tag 12) is the bottom. A dissected
+    cone with a `TopK` is refused until ref2's H7 (the TopK row of §10.3's box demand) is fixed in
+    F7. Admission targets: tir-lower's lowered tiny LLaVA, Qwen2-VL and Qwen2.5-VL (`rfc3/lower`
+    4c25416a5), each admitted with its attention dissected; LLaVA's attention leaf is argued end to
+    end (an honest responder acquitted, a lie in the totals convicted wherever it hides).
+
+  Not yet built: the node's worker and seat loops (kaspad, `misaka-palw-base0`) calling these. The
+  V5 lane itself (the walk admitting version 8) waits for its fence and open question 13's price.
 
 **Order of implementation for this path.**
 
