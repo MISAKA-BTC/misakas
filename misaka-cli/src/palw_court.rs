@@ -1193,6 +1193,10 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         PalwCourtVerdictProofV2::TirDecodeToken { .. } => "TirDecodeToken",
         // RFC-0002 Phase F (F7): the bottom of an IR history dissection.
         PalwCourtVerdictProofV2::TirDissection { .. } => "TirDissection",
+        // RFC-0003: a generative class's closes and its dissection's bottom.
+        PalwCourtVerdictProofV2::GenCone { .. } => "GenCone",
+        PalwCourtVerdictProofV2::GenDecodeToken { .. } => "GenDecodeToken",
+        PalwCourtVerdictProofV2::GenDissection { .. } => "GenDissection",
     }
 }
 
