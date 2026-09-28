@@ -148,10 +148,13 @@ integer program vs the f32 reference, teacher-forced.
 | C1 Phi (partial rotary, parallel block) | `microsoft/phi-1_5` | 0.980 | 0.00046 (0.0057) | 94.98 → 95.08 (+0.10 %) | yes |
 | C3/C8 MoE (GraniteMoE: 32 experts, top-8) | `ibm-granite/granite-3.1-1b-a400m-instruct` | 0.969 | 0.01061 (0.3241) | 51.00 → 52.45 (+2.85 %) | yes |
 | C5 SSM (Mamba) | `state-spaces/mamba-370m-hf` | **0.758** | **0.20887** (0.6941) | 74.42 → 87.77 (**+17.94 %**) | **no** |
+| C7 hybrid (Jamba: attention + Mamba + MoE) | `ai21labs/Jamba-tiny-dev` | 0.973 | 0.00396 (0.0524) | 354.36 → 354.08 (-0.08 %) | yes |
+| C4/C7 gated delta + gated attention (Qwen3.5) | `Qwen/Qwen3.5-0.8B` | 0.953 | 0.00674 (0.0419) | 66.87 → 67.42 (+0.81 %) | yes |
 
 The integer side ran on the typed backend (`--exec`), each run cross-checked against the reference
-evaluator on its first two positions (equal); peak RSS 1.7–4.7 GB. (The rows still missing are filled
-from the runs in §9 as they complete.)
+evaluator on its first two positions (equal); peak RSS 1.7–4.7 GB, except Qwen3.5-0.8B's 7.7 GB,
+where the reference evaluator's `i128` copy of the 248,320-row embedding for the cross-check is most
+of it (Jamba-tiny-dev is AI21's development model: its float perplexity is 354).
 
 **Mamba misses its row** — a quantisation problem, not an IR one (corpus-v1 §9): the tiny Mamba
 fixtures (random weights) agree at 0.94–1.00 and the program is the reference evaluator's value on
