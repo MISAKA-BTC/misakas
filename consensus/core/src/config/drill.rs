@@ -608,11 +608,12 @@ pub fn palw_drill_post_launch_fences_v3_at_v1(
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_V3)
 }
 
-/// **A drill crosses the IR fence at a low height** (RFC-0002 Phase F, drills D-F1 and D-F4;
-/// `--palw-drill-tir-at`) — [`palw_drill_post_launch_fences_at_v1`] for the one entry
-/// [`crate::palw_tir_v1::PALW_T12_TIR_V1_ENTRY`], which no flag-day list arms yet: ARMS `palw_tir_v1`
-/// at `at` — testnet-12's IR ceilings and this build's primitive set, through the entry's own `set`,
-/// so the bundle's mirror follows — and moves nothing else. Every refusal of the post-launch moves
+/// **A drill crosses the IR flag day at a low height** (RFC-0002 Phase F, drills D-F1…D-F4;
+/// `--palw-drill-tir-at`) — [`palw_drill_post_launch_fences_at_v1`] for
+/// [`crate::config::params::PALW_T12_TIR_FLAG_DAY_FENCES_V1`]: MOVES `palw_tir_v1` from the release's
+/// DAA 2,000 to `at` (ARMS it on a ruleset that leaves it dormant) — testnet-12's IR ceilings and this
+/// build's primitive set, through the entry's own `set`, so the bundle's mirror follows — and moves
+/// nothing else. Every refusal of the post-launch moves
 /// applies, named for this flag, and `validate_palw_v2` refuses the result unless the IR fence's
 /// prerequisites are in force at or below `at`: `palw_audit_2026_09_11` declared, `palw_kary_court`
 /// and `palw_rcore_plus` armed at or below it (combine with `--palw-drill-fence-at` below `at` when the
@@ -641,7 +642,7 @@ const PALW_DRILL_FLAG_DAY_V3: PalwDrillFlagDayV1 =
 
 /// The IR fence alone (`--palw-drill-tir-at`, RFC-0002 Phase F).
 const PALW_DRILL_FLAG_DAY_TIR_V1: PalwDrillFlagDayV1 =
-    PalwDrillFlagDayV1 { list: &[crate::palw_tir_v1::PALW_T12_TIR_V1_ENTRY], flag: "--palw-drill-tir-at" };
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_TIR_FLAG_DAY_FENCES_V1, flag: "--palw-drill-tir-at" };
 
 /// The one body both flag days share — see [`palw_drill_post_launch_fences_at_v1`].
 fn palw_drill_move_fences_v1(
@@ -1238,7 +1239,8 @@ mod tests {
         let moves = palw_drill_tir_fence_at_v1(&mut moved, at).expect("past the prerequisites");
         assert_eq!(moves.len(), 1);
         assert_eq!(moves[0].name, "palw_tir_v1");
-        assert!(moves[0].was.is_none() && moves[0].to_string().contains("ARMED"));
+        assert_eq!(moves[0].was, crate::config::params::PALW_T12_TIR_FLAG_DAY_DAA, "the release's height");
+        assert!(moves[0].to_string().contains("MOVED"), "{}", moves[0]);
         assert!(moved.palw_tir_v1_active_at(at) && !moved.palw_tir_v1_active_at(at - 1));
         assert_ne!(moved.consensus_params_id(), drill.consensus_params_id());
         for ((name, before), (_, after)) in drill.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
