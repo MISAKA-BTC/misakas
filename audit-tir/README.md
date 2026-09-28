@@ -37,10 +37,10 @@ condition, on a class that runs in minutes):
 - **B**: new4 lies at an undissected leaf; the seats find it through its served annexes and convict.
 - **D**: new4 lies at the dissected kind; the named leaf opens F7's dissection and the challengers build its
   bottom from new4's root claim on chain.
-- **C**: B's lie with `--palw-drill-refuse-leaf-evidence` (no annex served): the seats demand on chain (an event
-  demand first, whose answer carries the claim's binding, then the leaf), taking the rounds in turn (a seat waits
-  on an open demand of the unit and staggers its own); new4's node answers; the seats read the disclosures back
-  and convict.
+- **C**: B's lie with `--palw-drill-refuse-leaf-evidence` (no annex served): the seats demand on chain
+  (`DefaultAccusedTirStep`, keyed by the claim alone) — the root, then the first frontier node their own tree
+  disputes (eight levels a session), then the leaf — taking the rounds in turn (a seat waits on an open demand of
+  the unit and staggers its own); new4's node answers each; the seats read the disclosures back and convict.
 - **C0**: C, and new4 stopped once a demand is on chain: its claim defaults (`ProducerWithholding`, counted by
   `dfwatch.py` as `withheld`).
 

@@ -9,9 +9,15 @@
 //! * **the `Select`-arm work credit**: the structural work vector credits each `Select`'s arm-only,
 //!   uncommitted work at the smaller arm's, the least any execution must do, where it credited both
 //!   (`crate::palw_tir_work_v1`);
-//! * **the IR data-availability unit `TirStepLeaf { index }`**: a session may demand one committed
-//!   step leaf of an IR claim — its preimage and its opening under the step root — and the accused
-//!   defaults if it does not disclose it inside `W_disclose` (`crate::palw_da_rcore_v1`).
+//! * **the IR data-availability units `TirStepLeaf { index }` and `TirStepNode { level, index }`**
+//!   (`crate::palw_da_rcore_v1`): a demand keyed by the claim alone (`DefaultAccusedTirStep`, no
+//!   binding, no draws) names one committed step leaf — answered by its preimage and its opening under
+//!   the step root — or one interior node of the step tree — answered by its frontier eight levels
+//!   down and its opening (`crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1`) — or, past the
+//!   claim's execution, by the claim's binding proving so (`TirStepOutOfRange`); the accused defaults
+//!   if it answers none inside `W_disclose`. A seat descends eight levels a session, so a 2^22-leaf
+//!   execution's first disputed leaf is three node sessions and one leaf session away: inside one
+//!   seat's four.
 //!
 //! Below the height every rule is the DAA-2,000 release's, byte for byte, and an object only this
 //! fence makes legal is one an older build cannot decode (A-2): the acceptance layer drops it by name,

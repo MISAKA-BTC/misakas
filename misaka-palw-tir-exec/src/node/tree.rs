@@ -126,6 +126,30 @@ impl TirStepTreeV1 {
         *self.levels.get(level)?.get(pos as usize)?
     }
 
+    /// **Node `(level, index)`'s frontier and opening** — `palw_tir_step_node_parts_v1`'s answer (the
+    /// second IR fence's `TirStepNode`), read off the held levels instead of re-folding every leaf: the
+    /// nodes [`kaspa_consensus_core::palw_tir_court_v1::PALW_TIR_STEP_NODE_DEPTH_V1`] levels below it (the
+    /// leaf nodes, when nearer) and its siblings up to the root, promotion as the tree folds. `None`
+    /// for a leaf (`level` 0), a node past the tree, or one this holder cannot derive.
+    pub fn node_parts(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        let (below, lo, hi) =
+            kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_node_frontier_v1(self.leaf_count(), level, index)?;
+        let frontier = self.levels.get(below as usize)?.get(lo as usize..hi as usize)?.iter().copied().collect::<Option<Vec<_>>>()?;
+        let mut siblings = Vec::new();
+        let mut position = index;
+        for row in self.levels.iter().skip(level as usize) {
+            let width = row.len() as u64;
+            if width == 1 {
+                break;
+            }
+            if !(width % 2 == 1 && position == width - 1) {
+                siblings.push((*row.get((position ^ 1) as usize)?)?);
+            }
+            position /= 2;
+        }
+        Some((frontier, siblings))
+    }
+
     /// **The opening of leaf `index`** — `step_opening_capped_v1`'s path.
     pub fn opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
         let leaf_hash = self.leaf_hash(index)?;
@@ -164,5 +188,43 @@ impl TirStepTreeV1 {
             b = b.div_ceil(2);
         }
         Some(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::palw_tir_court_v1::{
+        palw_tir_step_node_parts_v1, palw_tir_step_node_reaches_v1, palw_tir_step_tree_height_v1,
+    };
+
+    fn h(i: u64) -> Hash64 {
+        Hash64::from_u64_word(i.wrapping_mul(0x9E37_79B9).wrapping_add(7))
+    }
+
+    /// **A held tree answers every step node exactly as consensus builds it** — frontier and siblings
+    /// equal to `palw_tir_step_node_parts_v1` over the same leaves, for every node of trees of every
+    /// width up to 300 (odd levels promoted, heights past the eight-level frontier), each reaching the
+    /// root by the fold's own check; a leaf, and a node past the tree, answer nothing.
+    #[test]
+    fn a_held_tree_answers_every_step_node_as_consensus_builds_it() {
+        for n in (1u64..=40).chain([63, 64, 65, 255, 256, 257, 300]) {
+            let leaves: Vec<Hash64> = (0..n).map(h).collect();
+            let tree = TirStepTreeV1::full(&leaves);
+            let root = tree.root().expect("a root");
+            let height = palw_tir_step_tree_height_v1(n);
+            for level in 1..=height {
+                let width = tree.levels[level as usize].len() as u64;
+                for index in 0..width {
+                    let held = tree.node_parts(level, index).unwrap_or_else(|| panic!("n={n}: ({level}, {index})"));
+                    assert_eq!(Some(held.clone()), palw_tir_step_node_parts_v1(&leaves, level, index), "n={n}: ({level}, {index})");
+                    palw_tir_step_node_reaches_v1(n, &root, level, index, &held.0, &held.1)
+                        .unwrap_or_else(|e| panic!("n={n}: ({level}, {index}): {e}"));
+                }
+                assert!(tree.node_parts(level, width).is_none(), "n={n}: past the level");
+            }
+            assert!(tree.node_parts(0, 0).is_none(), "a leaf is a TirStepLeaf");
+            assert!(tree.node_parts(height + 1, 0).is_none(), "past the root");
+        }
     }
 }

@@ -471,6 +471,46 @@ impl TirBackendV1 {
         })
     }
 
+    /// **The answer to an IR step unit of this node's claim** (the second IR fence's DA units,
+    /// evidence transport C): a step leaf by its disclosure ([`Self::step_leaf_disclosure`]'s
+    /// builder), an interior step node by its frontier and opening
+    /// (`build_tir_step_node_disclosure_v1` over the store's tree), and a unit past this execution —
+    /// a leaf at or past its leaf count, a node past its tree — by the claim's binding proving so
+    /// (`TirStepOutOfRange`, the program stripped). Every answer is self-checked by the fold's own
+    /// check before it is returned.
+    pub fn step_unit_answer(
+        &self,
+        material: &[u8],
+        unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
+    ) -> Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String> {
+        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+        use kaspa_consensus_core::palw_tir_court_v1::{build_tir_step_node_disclosure_v1, palw_tir_step_tree_width_v1};
+        self.with_capture_store(material, self.prompt_ids_form, |store, binding| {
+            let count = binding.step_leaf_count;
+            let out_of_range = || {
+                let mut proof = binding.clone();
+                kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut proof);
+                Ok(PalwDaAnswerV1::TirStepOutOfRange(Box::new(proof)))
+            };
+            match unit {
+                PalwDaUnitV1::TirStepLeaf { index } if index >= count => out_of_range(),
+                PalwDaUnitV1::TirStepLeaf { index } => build_tir_step_leaf_disclosure_v1(binding, index, store, self.ladder)
+                    .map(|d| PalwDaAnswerV1::TirStepLeaf(Box::new(d)))
+                    .map_err(|e| format!("step leaf {index}: {e}")),
+                PalwDaUnitV1::TirStepNode { level: 0, index } => Err(format!("step node (0, {index}): a leaf is a TirStepLeaf")),
+                PalwDaUnitV1::TirStepNode { level, index } if palw_tir_step_tree_width_v1(count, level).is_none_or(|w| index >= w) => {
+                    out_of_range()
+                }
+                PalwDaUnitV1::TirStepNode { level, index } => {
+                    build_tir_step_node_disclosure_v1(binding, level, index, store, self.ladder)
+                        .map(|d| PalwDaAnswerV1::TirStepNode(Box::new(d)))
+                        .map_err(|e| format!("step node ({level}, {index}): {e}"))
+                }
+                other => Err(format!("{other:?} is not an IR step unit")),
+            }
+        })
+    }
+
     /// **A challenger's store over a served annex** — its own execution `own` of the same job for every
     /// leaf before the annex's, the annex's leaf and trace summary for the accused's. `binding` is the
     /// annex's, verified and filled ([`palw_tir_leaf_annex_verify_v1`]).

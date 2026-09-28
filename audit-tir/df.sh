@@ -20,9 +20,9 @@
 #     B   at an undissected leaf: the seats pursue it through new4's served annexes → convicted (CourtFraud)
 #     D   at the dissected kind: the named leaf opens F7's dissection, the challenger's bottom built from new4's
 #         root claim ON CHAIN → convicted
-#     C   B's lie, no annex served (--palw-drill-refuse-leaf-evidence): the seats demand on chain (the event
-#         demand for the binding, then the leaf's), new4's node answers, the seats read the disclosures back
-#         and convict
+#     C   B's lie, no annex served (--palw-drill-refuse-leaf-evidence): the seats demand on chain (the root,
+#         the first frontier node their own tree disputes — eight levels a session — then the leaf), new4's node
+#         answers each, the seats read the disclosures back and convict
 #     C0  C, and new4 stopped once a demand is on chain: its claim defaults (ProducerWithholding)
 #   Verdict in $WORK_DIR/bdc.verdict. BDC_LEAF / BDC_DISSECTED_LEAF override the leaves (small-leaves.txt).
 #
@@ -428,7 +428,9 @@ bdc() {
     after=$(bdc_wait convicted "$before")
     why=""; [ "$after" -gt "$before" ] || why="$why no conviction;"
     bdc_seat_logged "RFC-0002 evidence transport C" || why="$why no seat demanded on chain;"
+    bdc_logged new4 "TirStepNode" || why="$why new4 answered no step-node demand;"
     bdc_logged new4 "TirStepLeaf" || why="$why new4 answered no step-leaf demand;"
+    bdc_seat_logged "step-node answers move the descent" || why="$why no seat descended on the chain's node answers;"
     bdc_seat_logged "is disclosed on chain" || why="$why no seat read a disclosure back;"
     [ -z "$why" ] && rcc=0; echo "  C  (demand on chain)  $(verdict_of $rcc)${why:+ —$why}"
 

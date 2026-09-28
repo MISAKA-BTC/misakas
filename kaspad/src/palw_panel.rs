@@ -2083,16 +2083,18 @@ pub(crate) fn palw_da_unit_answer_v1(
             return Err("an IR claim answers no held unit: the held regime's units are the legacy families' (RFC-0002 Phase F)".into());
         }
         PalwDaUnitV1::Held(missing) => missing,
-        // **RFC-0002 Phase F's second IR fence: an IR step leaf** (evidence transport C), answered by
-        // the IR responder — consensus's one builder (`build_tir_step_leaf_disclosure_v1`) over this
-        // capture's store: a dense capture's own leaves, or this node's re-derivation of its fold (the
-        // executor answering for its own run) — self-checked by the fold's check, the program stripped.
-        PalwDaUnitV1::TirStepLeaf { index } => {
+        // **RFC-0002 Phase F's second IR fence: an IR step unit** (evidence transport C) — a step leaf,
+        // or an interior step node a seat's descent reached — answered by the IR responder
+        // (`TirBackendV1::step_unit_answer`): consensus's builders over this capture's store (a dense
+        // capture's own leaves, or this node's re-derivation of its fold: the executor answering for
+        // its own run), a unit past the execution by the binding proving so — each self-checked by
+        // the fold's check, the program stripped.
+        PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } => {
             if !tir_capture {
-                return Err(format!("step leaf {index} is an IR claim's unit, and this material is not an IR capture"));
+                return Err(format!("{unit:?} is an IR claim's unit, and this material is not an IR capture"));
             }
-            let tir = tir.ok_or_else(|| format!("IR step leaf {index}: the claim's IR class does not resolve on this node"))?;
-            return tir.step_leaf_disclosure(capture, index).map(|disclosure| PalwDaAnswerV1::TirStepLeaf(Box::new(disclosure)));
+            let tir = tir.ok_or_else(|| format!("{unit:?}: the claim's IR class does not resolve on this node"))?;
+            return tir.step_unit_answer(capture, unit);
         }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
@@ -12544,7 +12546,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
-        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
+        PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",
         PalwConsensusObjectV2::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared; the chain drops each until its owner lands it, and no
         // path in this node builds one yet.
@@ -14445,8 +14447,7 @@ impl PalwPanelService {
         // The second IR fence's step leaves are answered by the claim's IR backend (RFC-0002 evidence
         // transport C): resolved here, once, when a unit asks for one — a class this node does not
         // hold as IR answers them with the unit's own error.
-        let tir = if units.iter().any(|unit| matches!(unit, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::TirStepLeaf { .. }))
-        {
+        let tir = if units.iter().any(|unit| unit.is_tir_step_v1()) {
             match self.backends().resolve_tir_v1(class_id, artifact_root) {
                 Some(Ok(tir)) => Some(tir),
                 Some(Err(why)) => return Err(PalwDaClaimHoldV1::Material(format!("the claim's IR backend does not build: {why}"))),

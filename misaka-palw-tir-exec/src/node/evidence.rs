@@ -517,4 +517,11 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
         self.trace.pin(&self.binding.job_context, row, lane)
     }
+
+    /// **Step-tree node `(level, index)`'s frontier and opening** (the second IR fence's descent
+    /// unit), off this store's tree — whole for the executor's own capture or run; a challenger's
+    /// partial tree answers only the nodes it holds.
+    fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        self.tree.node_parts(level, index)
+    }
 }

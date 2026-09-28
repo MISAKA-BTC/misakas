@@ -100,8 +100,16 @@ pub enum PalwDaUnitV1 {
     Held(PalwHeldMissingV1),
     /// **One committed step leaf of an IR claim** (past `Params::palw_tir_fence2`; appended, so no
     /// earlier tag moves): its preimage and opening, with the claim's ids (and a logits tile's row
-    /// pin) — [`crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1`].
+    /// pin) — [`crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1`] — or, for an index at or past
+    /// the execution's leaves, the claim's binding proving so (`TirStepOutOfRange`).
     TirStepLeaf { index: u64 },
+    /// **One interior node of an IR claim's step tree** (past `Params::palw_tir_fence2`; appended):
+    /// level `level ≥ 1` above the leaf nodes, `index` from the left. Answered by its frontier —
+    /// the nodes [`crate::palw_tir_court_v1::PALW_TIR_STEP_NODE_DEPTH_V1`] levels below it — and its
+    /// opening ([`crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1`]), or, past the tree, by the
+    /// binding proving so. A seat descends eight levels a session to the first leaf its replay
+    /// disputes.
+    TirStepNode { level: u8, index: u64 },
 }
 
 impl PalwDaUnitV1 {
@@ -109,6 +117,11 @@ impl PalwDaUnitV1 {
     pub fn event_of_index(index: u32) -> Self {
         let (row, tile) = crate::palw_state_v2::palw_da_event_index_parts_v1(index);
         Self::Event { row, tile }
+    }
+
+    /// Is this a unit of an IR claim's step tree (the second IR fence's)?
+    pub fn is_tir_step_v1(&self) -> bool {
+        matches!(self, Self::TirStepLeaf { .. } | Self::TirStepNode { .. })
     }
 }
 
@@ -186,6 +199,14 @@ pub enum PalwDaAnswerV1 {
     /// **The second IR fence: one committed step leaf of an IR claim** (appended), answering a
     /// `TirStepLeaf { index }` unit. Dropped by name below `palw_tir_fence2`.
     TirStepLeaf(Box<crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1>),
+    /// **The second IR fence: one interior node of an IR claim's step tree** (appended), answering a
+    /// `TirStepNode { level, index }` unit: its frontier eight levels down and its opening.
+    TirStepNode(Box<crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1>),
+    /// **The second IR fence: the claim's binding, proving an IR step unit is not in its execution**
+    /// (appended) — a leaf at or past its leaf count, a node past its tree. The demand is keyed by the
+    /// claim alone (the fold cannot count an IR execution's leaves without the binding), so this is
+    /// how the accused answers a demand past its execution; the binding rides with its program EMPTY.
+    TirStepOutOfRange(Box<crate::palw_tir_step_v1::PalwTirStepBindingV1>),
 }
 
 impl PalwDaAnswerV1 {
@@ -195,7 +216,7 @@ impl PalwDaAnswerV1 {
         match self {
             Self::Event(disclosure) => Some(disclosure.binding()),
             Self::Held(carriage) => Some(&carriage.binding),
-            Self::TirEvent(_) | Self::TirStepLeaf(_) => None,
+            Self::TirEvent(_) | Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirStepOutOfRange(_) => None,
         }
     }
 
@@ -204,18 +225,20 @@ impl PalwDaAnswerV1 {
         match self {
             Self::TirEvent(disclosure) => Some(disclosure.binding()),
             Self::TirStepLeaf(disclosure) => Some(&disclosure.binding),
+            Self::TirStepNode(disclosure) => Some(&disclosure.binding),
+            Self::TirStepOutOfRange(binding) => Some(binding),
             _ => None,
         }
     }
 
     /// Is this an IR class's answer (RFC-0002 Phase F)? A move only past `palw_tir_v1`.
     pub fn is_tir_v1(&self) -> bool {
-        matches!(self, Self::TirEvent(_) | Self::TirStepLeaf(_))
+        matches!(self, Self::TirEvent(_) | Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirStepOutOfRange(_))
     }
 
     /// Is this the second IR fence's answer? A move only past `palw_tir_fence2`.
     pub fn is_tir_fence2_v1(&self) -> bool {
-        matches!(self, Self::TirStepLeaf(_))
+        matches!(self, Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirStepOutOfRange(_))
     }
 }
 
@@ -333,8 +356,6 @@ pub enum PalwDaDrawSpaceV1<'a> {
     /// `(checkpoint, chunk)`: a checkpoint uniform in `[0, checkpoints)`, then a chunk uniform in the
     /// chunks that checkpoint holds (`chunks_of`, from the binding).
     StateChunks { checkpoints: u32, chunks_of: &'a dyn Fn(u32) -> Option<u64> },
-    /// The second IR fence: an IR claim's committed step leaves `[0, leaves)`.
-    TirStepLeaves { leaves: u64 },
 }
 
 impl PalwDaDrawSpaceV1<'_> {
@@ -357,9 +378,6 @@ impl PalwDaDrawSpaceV1<'_> {
                 (0..*leaves).map(|first| PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first, count: 1 })).collect()
             }),
             Self::StateChunks { .. } => None,
-            Self::TirStepLeaves { leaves } => {
-                (*leaves <= limit).then(|| (0..*leaves).map(|index| PalwDaUnitV1::TirStepLeaf { index }).collect())
-            }
         }
     }
 
@@ -389,7 +407,6 @@ impl PalwDaDrawSpaceV1<'_> {
                 let chunk = scaled(draw_word(seed, 1, counter), chunks.min(1 << 32)) as u32;
                 Some(PalwDaUnitV1::Held(PalwHeldMissingV1::StateChunk { checkpoint, chunk }))
             }
-            Self::TirStepLeaves { leaves } => (*leaves > 0).then(|| PalwDaUnitV1::TirStepLeaf { index: scaled(word, *leaves) }),
         }
     }
 }
@@ -572,9 +589,12 @@ pub fn palw_da_answer_form_v1(claim: &Hash64, unit: &PalwDaUnitV1, answer: &Palw
                 Err("an IR answer's binding carries no program: the chain holds the registered class's")
             }
         }
-        // The second IR fence: a step leaf's binding carries no program either.
-        (PalwDaUnitV1::TirStepLeaf { .. }, PalwDaAnswerV1::TirStepLeaf(disclosure)) => {
-            if disclosure.binding.class.program.is_empty() {
+        // The second IR fence: a step leaf's, a step node's or an out-of-range proof's binding carries
+        // no program either.
+        (PalwDaUnitV1::TirStepLeaf { .. }, PalwDaAnswerV1::TirStepLeaf(_))
+        | (PalwDaUnitV1::TirStepNode { .. }, PalwDaAnswerV1::TirStepNode(_))
+        | (PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. }, PalwDaAnswerV1::TirStepOutOfRange(_)) => {
+            if answer.tir_binding().is_some_and(|binding| binding.class.program.is_empty()) {
                 Ok(())
             } else {
                 Err("an IR answer's binding carries no program: the chain holds the registered class's")
@@ -591,7 +611,9 @@ pub fn palw_da_answer_form_v1(claim: &Hash64, unit: &PalwDaUnitV1, answer: &Palw
                 Ok(())
             }
         }
-        _ => Err("an event unit is answered by an event disclosure, a held unit by a held carriage, a step leaf by its disclosure"),
+        _ => Err(
+            "an event unit is answered by an event disclosure, a held unit by a held carriage, an IR step unit by its disclosure or an out-of-range proof",
+        ),
     }
 }
 
@@ -777,6 +799,9 @@ pub enum PalwDaAccusationBuildErrorV1 {
     Unsigned,
     #[error("the accusation cannot ride a carrier: {0}")]
     CannotRide(&'static str),
+    /// An IR step demand names a step leaf or an interior step node inside the widest execution.
+    #[error("an IR step demand cannot name {0:?}: {1}")]
+    NotATirStepUnit(PalwDaUnitV1, &'static str),
 }
 
 /// **DA-1 / DA-3 (P2-6): the ONE builder of an event `DefaultAccused`** — what kaspad's seat files
@@ -889,58 +914,82 @@ pub const PALW_DA_RCORE_ALL_DOMAINS: &[&[u8]] = &[
 
 
 // ---------------------------------------------------------------------------------------------
-// The second IR fence: a DA demand for one committed step leaf of an IR claim (evidence transport C)
+// The second IR fence: a DA demand for one unit of an IR claim's step tree (evidence transport C)
 // ---------------------------------------------------------------------------------------------
 
-/// The accuser's ML-DSA-87 context for [`PalwTirLeafAccusationV1`].
-pub const PALW_TIR_LEAF_ACCUSATION_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/tir/da-leaf-accusation/mldsa87/v1";
+/// The accuser's ML-DSA-87 context for [`PalwTirStepAccusationV1`].
+pub const PALW_TIR_STEP_ACCUSATION_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/tir/da-step-accusation/mldsa87/v1";
 /// The accusation message's own domain.
-pub const PALW_TIR_LEAF_ACCUSATION_DOMAIN_V1: &[u8] = b"misaka-palw/tir/da-leaf-accusation/message/v1";
+pub const PALW_TIR_STEP_ACCUSATION_DOMAIN_V1: &[u8] = b"misaka-palw/tir/da-step-accusation/message/v1";
 
-/// **A data-availability demand for one committed step leaf of an IR claim** (the second IR fence's
-/// `DefaultAccusedTirLeaf`): the claim, the leaf, and the claim's IR binding — its program EMPTY, the
-/// chain holds the class's — which bounds the leaf (`index < step_leaf_count`) and pins the
-/// execution; signed by the accuser's bond over [`palw_tir_leaf_accusation_message_v1`].
+/// **Could `unit` be in SOME IR execution?** A step leaf below `PALW_STEP_LEG_MAX_LEAVES`, or an
+/// interior node (`level ≥ 1`) of the widest tree a binding may commit (22 levels). What the fold
+/// checks when it opens a binding-less demand — a unit past every execution is refused at the door
+/// rather than opening a session only an out-of-range proof ends; the claim's own bound is the
+/// accused's to prove (`TirStepOutOfRange`).
+pub fn palw_tir_step_unit_is_admissible_v1(unit: &PalwDaUnitV1) -> Result<(), &'static str> {
+    let widest = crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+    match *unit {
+        PalwDaUnitV1::TirStepLeaf { index } if index < widest => Ok(()),
+        PalwDaUnitV1::TirStepLeaf { .. } => Err("a step leaf past every execution's leaves"),
+        PalwDaUnitV1::TirStepNode { level: 0, .. } => Err("a step node is an interior node: a leaf is demanded as a TirStepLeaf"),
+        PalwDaUnitV1::TirStepNode { level, index } => match crate::palw_tir_court_v1::palw_tir_step_tree_width_v1(widest, level) {
+            Some(width) if index < width => Ok(()),
+            _ => Err("a step node past every execution's tree"),
+        },
+        _ => Err("an IR step demand names a step leaf or a step node"),
+    }
+}
+
+/// **A data-availability demand for one unit of an IR claim's step tree** (the second IR fence's
+/// `DefaultAccusedTirStep`), keyed by the claim alone: a step leaf, or an interior node the seat's
+/// descent reached. It carries NO binding — a seat facing a producer that served nothing holds none,
+/// and the claim's own roots are what every answer is checked against — so the fold bounds the unit
+/// only by the widest execution ([`palw_tir_step_unit_is_admissible_v1`]) and the accused answers a
+/// unit past its own execution with `TirStepOutOfRange`. Named only: no draws. Signed by the
+/// accuser's bond over [`palw_tir_step_accusation_message_v1`].
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
-pub struct PalwTirLeafAccusationV1 {
+pub struct PalwTirStepAccusationV1 {
     pub claim: Hash64,
-    pub index: u64,
-    pub binding: crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    pub unit: PalwDaUnitV1,
     pub accuser: PalwBondKeyV2,
     pub signature: Vec<u8>,
 }
 
-/// **What an IR leaf accusation is signed over**: `H(domain ‖ network ‖ claim ‖ index ‖ accuser)`.
-/// The binding is not in it — the fold holds it to the claim's own roots — and a replay of an
-/// answered demand opens nothing (the M3 review's F3 rule).
-pub fn palw_tir_leaf_accusation_message_v1(network_domain: Hash64, claim: &Hash64, index: u64, accuser: &PalwBondKeyV2) -> Hash64 {
-    let mut h = keyed(PALW_TIR_LEAF_ACCUSATION_DOMAIN_V1);
+/// **What an IR step demand is signed over**: `H(domain ‖ network ‖ claim ‖ borsh(unit) ‖ accuser)`.
+/// A replay of an answered demand opens nothing (the M3 review's F3 rule).
+pub fn palw_tir_step_accusation_message_v1(
+    network_domain: Hash64,
+    claim: &Hash64,
+    unit: &PalwDaUnitV1,
+    accuser: &PalwBondKeyV2,
+) -> Hash64 {
+    let mut h = keyed(PALW_TIR_STEP_ACCUSATION_DOMAIN_V1);
     h.update(network_domain.as_byte_slice());
     h.update(claim.as_byte_slice());
-    h.update(&index.to_le_bytes());
+    h.update(&borsh::to_vec(unit).expect("a unit serializes"));
     h.update(&borsh::to_vec(accuser).expect("a bond key serializes"));
     finish(h)
 }
 
-/// **The ONE builder of a `DefaultAccusedTirLeaf`** — what a seat files once its replay parts from
-/// the claim at leaf `index` and the producer has not served the leaf: the binding with its program
-/// stripped, signed by `sign(message, context)` with the accuser's key, held to the ride rule.
-pub fn palw_tir_leaf_accusation_object_v1(
+/// **The ONE builder of a `DefaultAccusedTirStep`** — what a seat files when its replay disputes the
+/// claim below `unit` and the producer has not served it: the unit held to
+/// [`palw_tir_step_unit_is_admissible_v1`], signed by `sign(message, context)` with the accuser's key,
+/// held to the ride rule.
+pub fn palw_tir_step_accusation_object_v1(
     network_domain: &Hash64,
     claim: Hash64,
-    index: u64,
-    binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    unit: PalwDaUnitV1,
     accuser: PalwBondKeyV2,
     sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
 ) -> Result<crate::palw_state_v2::PalwConsensusObjectV2, PalwDaAccusationBuildErrorV1> {
-    let message = palw_tir_leaf_accusation_message_v1(*network_domain, &claim, index, &accuser);
-    let signature = sign(message.as_byte_slice(), PALW_TIR_LEAF_ACCUSATION_MLDSA87_CONTEXT_V1)
+    palw_tir_step_unit_is_admissible_v1(&unit).map_err(|why| PalwDaAccusationBuildErrorV1::NotATirStepUnit(unit, why))?;
+    let message = palw_tir_step_accusation_message_v1(*network_domain, &claim, &unit, &accuser);
+    let signature = sign(message.as_byte_slice(), PALW_TIR_STEP_ACCUSATION_MLDSA87_CONTEXT_V1)
         .filter(|signature| !signature.is_empty())
         .ok_or(PalwDaAccusationBuildErrorV1::Unsigned)?;
-    let mut binding = binding.clone();
-    crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut binding);
-    let object = crate::palw_state_v2::PalwConsensusObjectV2::DefaultAccusedTirLeaf {
-        accusation: Box::new(PalwTirLeafAccusationV1 { claim, index, binding, accuser, signature }),
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::DefaultAccusedTirStep {
+        accusation: Box::new(PalwTirStepAccusationV1 { claim, unit, accuser, signature }),
     };
     crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(PalwDaAccusationBuildErrorV1::CannotRide)?;
     Ok(object)

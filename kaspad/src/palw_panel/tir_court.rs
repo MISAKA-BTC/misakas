@@ -397,7 +397,8 @@ pub(crate) const PALW_TIR_ANNEX_ASKS_V1: u32 = 5;
 pub(crate) struct PalwTirAnnexPursuitV1 {
     pub own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1>,
     pub own_tree: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirStepTreeV1>,
-    /// The leaf whose annex is asked, and the level the search is bounded below.
+    /// The leaf whose annex is asked, and the level the search is bounded below — the first leaf of
+    /// the subtree the descent stands at, and that subtree's level (`None`: the whole tree).
     pub leaf: u64,
     pub below: Option<usize>,
     /// `Some((row, token))` once the steps agree and the ids part: the annex asked is the logits leaf
@@ -407,27 +408,28 @@ pub(crate) struct PalwTirAnnexPursuitV1 {
     pub asks: u32,
     pub rounds: u32,
     /// **Option C's book.** The claim's binding (its program filled), once a served annex or an IR
-    /// answer on chain showed it — what an on-chain leaf demand carries.
+    /// answer on chain showed it.
     pub binding: Option<std::sync::Arc<kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1>>,
     /// Step leaves the chain disclosed (`TirStepLeaf` answers of anyone's session), as annexes that
-    /// verified against the claim — the named leaf and the fold's drawn ones.
+    /// verified against the claim.
     pub disclosed: std::collections::BTreeMap<u64, std::sync::Arc<misaka_palw_sdk::lineages::tir::PalwTirLeafAnnexV1>>,
-    /// The leaf this seat demanded on chain, and the DAA the demand was queued at.
-    pub demanded: Option<(u64, u64)>,
-    /// The event demand that brings the binding on chain (its DAA), where no annex ever showed it.
-    pub event_demanded: Option<u64>,
+    /// Step nodes the chain disclosed (`TirStepNode` answers of anyone's session): each node's
+    /// frontier, verified against the claim's step root.
+    pub nodes: std::collections::BTreeMap<(u8, u64), std::sync::Arc<Vec<Hash64>>>,
+    /// The unit this seat demanded on chain, and the DAA the demand was queued at.
+    pub demanded: Option<(kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1, u64)>,
     /// The sessions this seat queued on the claim (the fold lets a seat open four over a claim's life).
     pub sessions: u8,
-    /// When the chain was last read for the claim's IR answers.
+    /// When the chain was last read for the claim's IR answers and demands.
     pub looked_daa: Option<u64>,
-    /// Demands of the claim OTHER bonds filed (read off the chain), by leaf —
-    /// [`PALW_TIR_EVENT_DEMAND_KEY_V1`] for an event demand — with the DAA this seat first saw each:
-    /// while one is inside its window this seat waits for its answer rather than spend a session of
-    /// its own on the same unit.
-    pub pending: std::collections::BTreeMap<u64, u64>,
+    /// Demands of the claim OTHER bonds filed (read off the chain), by unit, with the DAA this seat
+    /// first saw each: while one is inside its window this seat waits for its answer rather than
+    /// spend a session of its own on the same unit.
+    pub pending: std::collections::BTreeMap<kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1, u64>,
     /// The unit this seat's withheld round stands at and the DAA it began (the stagger counts from it).
-    pub withheld_since: Option<(u64, u64)>,
-    /// The executor withheld an annex once: each later round asks it once before the chain does.
+    pub withheld_since: Option<(kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1, u64)>,
+    /// The executor withheld an annex once: the chain drives the descent from then on (a served
+    /// annex is still taken whenever one arrives).
     pub withheld: bool,
 }
 
@@ -445,8 +447,8 @@ impl PalwTirAnnexPursuitV1 {
             rounds: 0,
             binding: None,
             disclosed: Default::default(),
+            nodes: Default::default(),
             demanded: None,
-            event_demanded: None,
             sessions: 0,
             looked_daa: None,
             pending: Default::default(),
@@ -464,49 +466,59 @@ impl PalwTirAnnexPursuitV1 {
 pub(crate) const PALW_TIR_DEMAND_RELOOK_DAA_V1: u64 = 2;
 /// DAA past a demand's disclose window before the pursuit stops waiting for its answer.
 pub(crate) const PALW_TIR_DEMAND_SLACK_DAA_V1: u64 = 4;
-/// Disclosed leaves a pursuit keeps (the named leaf and the drawn ones of each session).
+/// Disclosed leaves and nodes a pursuit keeps.
 pub(crate) const PALW_TIR_DISCLOSED_KEPT_V1: usize = 64;
-/// The unit key [`PalwTirAnnexPursuitV1::pending`] notes an event demand of the claim under (the
-/// demand whose IR answer carries the claim's binding).
-pub(crate) const PALW_TIR_EVENT_DEMAND_KEY_V1: u64 = u64::MAX;
 /// **The seats' stagger**: a seat waits a slot of [`PALW_TIR_DEMAND_STAGGER_DAA_V1`] DAA, drawn by a
 /// hash of (its bond, the claim, the unit), before it demands a unit no other bond has demanded — so
 /// the first demand lands, the others read it off the chain and wait for its answer, and the seats of
-/// a panel take the rounds of one descent in turn (a seat opens at most four sessions on a claim; one
-/// descent takes up to ⌈log₂ n⌉ + 1 rounds).
+/// a panel take the rounds of one descent in turn.
 pub(crate) const PALW_TIR_DEMAND_STAGGER_SLOTS_V1: u64 = 8;
 pub(crate) const PALW_TIR_DEMAND_STAGGER_DAA_V1: u64 = 3;
 
 /// The stagger (DAA) of `bond`'s demand of `unit` of `claim` ([`PALW_TIR_DEMAND_STAGGER_SLOTS_V1`]).
-pub(crate) fn palw_tir_demand_stagger_v1(bond: &PalwBondKeyV2, claim: &Hash64, unit: u64) -> u64 {
+pub(crate) fn palw_tir_demand_stagger_v1(
+    bond: &PalwBondKeyV2,
+    claim: &Hash64,
+    unit: &kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
+) -> u64 {
     let mut h = blake2b_simd::Params::new().hash_length(32).key(b"misaka-node/tir-demand-stagger/v1").to_state();
     h.update(&borsh::to_vec(bond).expect("a bond key serializes"));
     h.update(claim.as_byte_slice());
-    h.update(&unit.to_le_bytes());
+    h.update(&borsh::to_vec(unit).expect("a unit serializes"));
     let word = u64::from_le_bytes(h.finalize().as_bytes()[..8].try_into().expect("eight bytes"));
     (word % PALW_TIR_DEMAND_STAGGER_SLOTS_V1) * PALW_TIR_DEMAND_STAGGER_DAA_V1
 }
 
-/// **What a pursuit does once its executor served no annex of the leaf** in
-/// [`PALW_TIR_ANNEX_ASKS_V1`] asks.
+/// **What a pursuit does once its executor served no annex** in [`PALW_TIR_ANNEX_ASKS_V1`] asks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PalwTirWithheldStepV1 {
     /// Nothing on chain can make the executor disclose (below `palw_tir_fence2`, or this seat's
-    /// sessions on the claim are spent): the pursuit ends.
+    /// sessions on the claim are spent and no other demand of the unit is open): the pursuit ends.
     GiveUp(&'static str),
-    /// No annex or answer has shown the claim's binding: demand an event (row 0, tile 0), whose IR
-    /// answer carries it — a demand the executor answers or defaults on like any other.
-    DemandEvent,
-    /// Demand this leaf on chain (`DefaultAccusedTirLeaf`).
-    DemandLeaf { leaf: u64 },
-    /// A demand is on chain: wait for its answer — silence past its window voids the claim.
+    /// Demand this unit on chain (`DefaultAccusedTirStep`).
+    Demand { unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1 },
+    /// A demand of the unit is on chain, or this seat's stagger has not run out: wait — the answer is
+    /// every seat's, and silence past its window voids the claim.
     Wait,
 }
 
-/// The unit a withheld pursuit stands at: the leaf, or — while no answer has shown the claim's
-/// binding — the event demand that brings it ([`PALW_TIR_EVENT_DEMAND_KEY_V1`]).
-pub(crate) fn palw_tir_withheld_unit_v1(pursuit: &PalwTirAnnexPursuitV1) -> u64 {
-    if pursuit.binding.is_none() { PALW_TIR_EVENT_DEMAND_KEY_V1 } else { pursuit.leaf }
+/// **The unit a pursuit stands at, as a demand on chain names it** (the second IR fence's descent):
+/// the step node over the subtree the descent stands at (`below`, whose first leaf is `leaf`; the
+/// whole tree's root at the start), or the leaf itself — at level 0, and for the decode-token door's
+/// logits leaf.
+pub(crate) fn palw_tir_withheld_unit_v1(pursuit: &PalwTirAnnexPursuitV1) -> kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1 {
+    use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+    let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(pursuit.own_tree.leaf_count());
+    let level = match (pursuit.token, pursuit.below) {
+        (Some(_), _) => 0,
+        (None, Some(below)) => below.min(usize::from(height)) as u8,
+        (None, None) => height,
+    };
+    if level == 0 {
+        PalwDaUnitV1::TirStepLeaf { index: pursuit.leaf }
+    } else {
+        PalwDaUnitV1::TirStepNode { level, index: pursuit.leaf >> level }
+    }
 }
 
 /// **The pursuit's next move while the executor withholds** — pure. `armed`: `palw_tir_fence2` and
@@ -516,7 +528,7 @@ pub(crate) fn palw_tir_withheld_unit_v1(pursuit: &PalwTirAnnexPursuitV1) -> u64 
 ///
 /// In order: this seat's own demand of the unit inside its window, or another bond's, is waited on
 /// (its answer is every seat's); a seat whose sessions are spent gives up; inside its stagger it
-/// waits; then it demands — the event that brings the binding while none is known, else the leaf.
+/// waits; then it demands the unit.
 pub(crate) fn palw_tir_withheld_step_v1(
     armed: bool,
     pursuit: &PalwTirAnnexPursuitV1,
@@ -526,15 +538,11 @@ pub(crate) fn palw_tir_withheld_step_v1(
     stagger: u64,
 ) -> PalwTirWithheldStepV1 {
     if !armed {
-        return PalwTirWithheldStepV1::GiveUp("below palw_tir_fence2 no demand on chain makes the executor disclose a step leaf");
+        return PalwTirWithheldStepV1::GiveUp("below palw_tir_fence2 no demand on chain makes the executor disclose its steps");
     }
     let waiting = |at: u64| current_daa <= at.saturating_add(window).saturating_add(PALW_TIR_DEMAND_SLACK_DAA_V1);
     let unit = palw_tir_withheld_unit_v1(pursuit);
-    let own = if unit == PALW_TIR_EVENT_DEMAND_KEY_V1 {
-        pursuit.event_demanded
-    } else {
-        pursuit.demanded.filter(|(leaf, _)| *leaf == unit).map(|(_, at)| at)
-    };
+    let own = pursuit.demanded.filter(|(demanded, _)| *demanded == unit).map(|(_, at)| at);
     if own.is_some_and(waiting) || pursuit.pending.get(&unit).is_some_and(|at| waiting(*at)) {
         return PalwTirWithheldStepV1::Wait;
     }
@@ -544,63 +552,36 @@ pub(crate) fn palw_tir_withheld_step_v1(
     if pursuit.withheld_since.is_some_and(|(at_unit, since)| at_unit == unit && current_daa < since.saturating_add(stagger)) {
         return PalwTirWithheldStepV1::Wait;
     }
-    if unit == PALW_TIR_EVENT_DEMAND_KEY_V1 {
-        PalwTirWithheldStepV1::DemandEvent
-    } else {
-        PalwTirWithheldStepV1::DemandLeaf { leaf: unit }
-    }
+    PalwTirWithheldStepV1::Demand { unit }
 }
 
-/// **What the chain's IR answers of the claim give a pursuit** — pure: every `TirStepLeaf`
-/// disclosure read as the annex of its leaf and kept once it verifies against the claim
-/// ([`misaka_palw_sdk::lineages::tir::palw_tir_leaf_annex_verify_v1`]), and the claim's binding from
-/// any IR answer (a disclosed leaf's, a `TirEvent`'s) whose parts reproduce the claim's roots.
-/// `program` is the class's; `ladder` the step ladder the claim's tree is capped at.
-pub(crate) fn palw_tir_pursuit_absorb_answers_v1(
-    pursuit: &mut PalwTirAnnexPursuitV1,
-    answers: &[(kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1, kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1)],
-    program: &[u8],
-    target: &PalwDisputableClaimV2,
-    ladder: u64,
-) {
-    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
-    use misaka_palw_sdk::lineages::tir::{PalwTirLeafAnnexV1, palw_tir_leaf_annex_verify_v1};
-    for (unit, answer) in answers {
-        match (unit, answer) {
-            (PalwDaUnitV1::TirStepLeaf { index }, PalwDaAnswerV1::TirStepLeaf(disclosure)) => {
-                if pursuit.disclosed.contains_key(index) || disclosure.opening.leaf_index != *index {
-                    continue;
-                }
-                let Ok(annex) = PalwTirLeafAnnexV1::from_step_leaf_disclosure_v1(disclosure) else { continue };
-                let Ok(binding) = palw_tir_leaf_annex_verify_v1(&annex, program, target.execution_root, target.trace_root, ladder)
-                else {
-                    continue;
-                };
-                pursuit.binding.get_or_insert_with(|| std::sync::Arc::new(binding));
-                if pursuit.disclosed.len() < PALW_TIR_DISCLOSED_KEPT_V1 || *index == pursuit.leaf {
-                    pursuit.disclosed.insert(*index, std::sync::Arc::new(annex));
-                }
-            }
-            (_, answer) if pursuit.binding.is_none() => {
-                let Some(carried) = answer.tir_binding() else { continue };
-                let mut binding = carried.clone();
-                binding.class.program = program.to_vec();
-                if binding.committed_execution_root == target.execution_root
-                    && binding.full_logits_trace_root == target.trace_root
-                    && kaspa_consensus_core::palw_tir_step_v1::verify_tir_binding_v1(&binding, ladder).is_ok()
-                {
-                    pursuit.binding = Some(std::sync::Arc::new(binding));
-                }
-            }
-            _ => {}
-        }
+/// **What a disclosed step node tells the descent** — pure: node `(level, index)`'s frontier (the
+/// chain's answer, verified), set against the seat's own tree at the frontier's level; the first node
+/// that differs is where the first differing leaf lies (every node before it agrees, which is what
+/// lets the close be built from the seat's own execution below the leaf). Returns the descent's next
+/// position — the first leaf of that node and its level — or `None` when the frontier agrees
+/// throughout (at the root: every step agrees, and a lie, if any, is in the trace).
+pub(crate) fn palw_tir_node_descent_v1(
+    own_tree: &misaka_palw_sdk::lineages::tir::TirStepTreeV1,
+    level: u8,
+    index: u64,
+    frontier: &[Hash64],
+) -> Option<(u64, usize)> {
+    let (below, first, end) =
+        kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_node_frontier_v1(own_tree.leaf_count(), level, index)?;
+    if frontier.len() as u64 != end - first {
+        return None;
     }
+    let k = (first..end).zip(frontier).position(|(position, theirs)| own_tree.node(below as usize, position) != Some(*theirs))?;
+    Some(((first + k as u64) << below, below as usize))
 }
 
-/// **What the chain says of the claim to a pursuit** — pure: every IR answer
-/// ([`palw_tir_pursuit_absorb_answers_v1`]), and every demand of the claim ANOTHER bond filed — a leaf
-/// demand under its leaf, an event demand under [`PALW_TIR_EVENT_DEMAND_KEY_V1`] — noted pending from
-/// `current_daa` (the first time it is seen).
+/// **What the chain says of the claim to a pursuit** — pure: every IR step answer of anyone's session
+/// verified against the claim and kept (a leaf's as the annex of its leaf,
+/// [`misaka_palw_sdk::lineages::tir::PalwTirLeafAnnexV1::from_step_leaf_disclosure_v1`]; a node's
+/// frontier by `check_tir_step_node_disclosure_v1`), the claim's binding from any of them, and every
+/// demand of the claim ANOTHER bond filed noted pending from `current_daa` (the first time it is
+/// seen). `program` is the class's; `ladder` the step ladder the claim's tree is capped at.
 pub(crate) fn palw_tir_pursuit_absorb_chain_v1(
     pursuit: &mut PalwTirAnnexPursuitV1,
     objects: &[PalwConsensusObjectV2],
@@ -610,31 +591,93 @@ pub(crate) fn palw_tir_pursuit_absorb_chain_v1(
     ladder: u64,
     current_daa: u64,
 ) {
-    let mut answers = Vec::new();
+    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+    use misaka_palw_sdk::lineages::tir::{PalwTirLeafAnnexV1, palw_tir_leaf_annex_verify_v1};
+    let filled = |binding: &kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1| {
+        let mut binding = binding.clone();
+        binding.class.program = program.to_vec();
+        binding
+    };
     for object in objects {
         match object {
             PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. } if *claim == target.claim_id => {
-                answers.push((*unit, answer.clone()));
+                match (unit, answer) {
+                    (PalwDaUnitV1::TirStepLeaf { index }, PalwDaAnswerV1::TirStepLeaf(disclosure)) => {
+                        if pursuit.disclosed.contains_key(index) || disclosure.opening.leaf_index != *index {
+                            continue;
+                        }
+                        let Ok(annex) = PalwTirLeafAnnexV1::from_step_leaf_disclosure_v1(disclosure) else { continue };
+                        let Ok(binding) =
+                            palw_tir_leaf_annex_verify_v1(&annex, program, target.execution_root, target.trace_root, ladder)
+                        else {
+                            continue;
+                        };
+                        pursuit.binding.get_or_insert_with(|| std::sync::Arc::new(binding));
+                        if pursuit.disclosed.len() < PALW_TIR_DISCLOSED_KEPT_V1 || *index == pursuit.leaf {
+                            pursuit.disclosed.insert(*index, std::sync::Arc::new(annex));
+                        }
+                    }
+                    (PalwDaUnitV1::TirStepNode { level, index }, PalwDaAnswerV1::TirStepNode(disclosure)) => {
+                        if pursuit.nodes.contains_key(&(*level, *index)) || pursuit.nodes.len() >= PALW_TIR_DISCLOSED_KEPT_V1 {
+                            continue;
+                        }
+                        let mut checked = disclosure.as_ref().clone();
+                        checked.binding = filled(&disclosure.binding);
+                        if kaspa_consensus_core::palw_tir_court_v1::check_tir_step_node_disclosure_v1(
+                            target.trace_root,
+                            target.execution_root,
+                            *level,
+                            *index,
+                            &checked,
+                            ladder,
+                        )
+                        .is_err()
+                        {
+                            continue;
+                        }
+                        pursuit.nodes.insert((*level, *index), std::sync::Arc::new(checked.frontier));
+                        pursuit.binding.get_or_insert_with(|| std::sync::Arc::new(checked.binding));
+                    }
+                    _ => {}
+                }
             }
-            PalwConsensusObjectV2::DefaultAccusedTirLeaf { accusation }
+            PalwConsensusObjectV2::DefaultAccusedTirStep { accusation }
                 if accusation.claim == target.claim_id && accusation.accuser != *me =>
             {
-                pursuit.pending.entry(accusation.index).or_insert(current_daa);
-            }
-            PalwConsensusObjectV2::DefaultAccused { claim, accuser, .. } if *claim == target.claim_id && accuser != me => {
-                pursuit.pending.entry(PALW_TIR_EVENT_DEMAND_KEY_V1).or_insert(current_daa);
+                pursuit.pending.entry(accusation.unit).or_insert(current_daa);
             }
             _ => {}
         }
     }
-    palw_tir_pursuit_absorb_answers_v1(pursuit, &answers, program, target, ladder);
+}
+
+/// **The descent, walked over what the chain disclosed** — pure: while the pursuit stands at a step
+/// node whose frontier is known ([`PalwTirAnnexPursuitV1::nodes`]), it moves to the first frontier
+/// node that differs from the seat's own ([`palw_tir_node_descent_v1`]). A root whose frontier agrees
+/// throughout sends it to leaf 0's disclosure (the steps agree: the ids decide, as a served first
+/// annex that `Agrees` does). Returns how many levels it moved.
+pub(crate) fn palw_tir_pursuit_descend_known_nodes_v1(pursuit: &mut PalwTirAnnexPursuitV1) -> u32 {
+    use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+    let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(pursuit.own_tree.leaf_count());
+    let mut moved = 0;
+    while let PalwDaUnitV1::TirStepNode { level, index } = palw_tir_withheld_unit_v1(pursuit) {
+        let Some(frontier) = pursuit.nodes.get(&(level, index)).cloned() else { break };
+        match palw_tir_node_descent_v1(&pursuit.own_tree, level, index, &frontier) {
+            Some((leaf, below)) => (pursuit.leaf, pursuit.below) = (leaf, Some(below)),
+            None if level == height && pursuit.token.is_none() => (pursuit.leaf, pursuit.below) = (0, Some(0)),
+            None => break,
+        }
+        pursuit.rounds += 1;
+        moved += 1;
+    }
+    moved
 }
 
 /// **Option C's chain read**: every object accepted since `not_before_daa` that says something of
-/// `claim` to a pursuit — an IR data-availability answer (`MaterialDisclosedV2` carrying a
-/// `TirStepLeaf` or `TirEvent`, anyone's session: the seats of one claim share what the chain made its
-/// executor disclose) and every demand of it (`DefaultAccusedTirLeaf`, an event `DefaultAccused`) —
-/// oldest first. Nothing here is taken on its word ([`palw_tir_pursuit_absorb_chain_v1`]).
+/// `claim` to a pursuit — an IR data-availability answer (`MaterialDisclosedV2` carrying an IR step
+/// answer, anyone's session: the seats of one claim share what the chain made its executor disclose)
+/// and every IR step demand of it (`DefaultAccusedTirStep`) — oldest first. Nothing here is taken on
+/// its word ([`palw_tir_pursuit_absorb_chain_v1`]).
 pub(crate) fn tir_da_chain_objects_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     claim_id: Hash64,
@@ -644,9 +687,8 @@ pub(crate) fn tir_da_chain_objects_v1(
     let mut found = Vec::new();
     super::walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
         let keep = match &object {
-            PalwConsensusObjectV2::MaterialDisclosedV2 { claim, answer, .. } => *claim == claim_id && answer.is_tir_v1(),
-            PalwConsensusObjectV2::DefaultAccusedTirLeaf { accusation } => accusation.claim == claim_id,
-            PalwConsensusObjectV2::DefaultAccused { claim, .. } => *claim == claim_id,
+            PalwConsensusObjectV2::MaterialDisclosedV2 { claim, answer, .. } => *claim == claim_id && answer.is_tir_fence2_v1(),
+            PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } => accusation.claim == claim_id,
             _ => false,
         };
         if keep {
@@ -658,8 +700,8 @@ pub(crate) fn tir_da_chain_objects_v1(
 }
 
 /// **The court queue's key of a demand this seat files on chain** (option C): the demand's own
-/// signed message — `(domain, claim, leaf, accuser)` for a leaf, the event accusation's for the
-/// binding's event — in the session-id slot, so no two demands and no court move share a key.
+/// signed message — `(domain, claim, unit, accuser)` — in the session-id slot, so no two demands and
+/// no court move share a key.
 pub(crate) fn palw_tir_demand_queue_key_v1(message: Hash64) -> (Hash64, u32, bool) {
     (message, 0, false)
 }
@@ -1021,14 +1063,16 @@ impl super::PalwPanelService {
         books.court_pending.push((session_id, 0, false, object));
     }
 
-    /// **Option C: one tick of a pursuit whose executor served no annex of the leaf** (RFC-0002
-    /// evidence transport C, past `palw_tir_fence2`). The chain's IR answers of the claim are read on a
-    /// throttle (anyone's session: a leaf disclosed to another seat is this seat's too, and its binding
-    /// is the claim's); then [`palw_tir_withheld_step_v1`] says what to file — the leaf's demand
-    /// (`DefaultAccusedTirLeaf`), or, where nothing has shown the claim's binding yet, an event demand
-    /// whose IR answer carries it — each rehearsed on the tip before a carrier is paid for
-    /// ([`Self::file_tir_demand_v1`]). The executor answers inside `W_disclose` or the fold voids its
-    /// claim; an answer is read back here and the descent goes on from it as from a served annex.
+    /// **Option C: one tick of a pursuit whose executor served no annex** (RFC-0002 evidence transport
+    /// C, past `palw_tir_fence2`). What the chain says of the claim is read on a throttle — every IR
+    /// step answer of anyone's session (a node or leaf disclosed to another seat is this seat's too)
+    /// and every demand of it another bond filed — and the descent walks every node already disclosed
+    /// ([`palw_tir_pursuit_descend_known_nodes_v1`]); then [`palw_tir_withheld_step_v1`] says whether
+    /// to demand the unit it stands at (`DefaultAccusedTirStep`: the root first, the first differing
+    /// frontier node next, eight levels a session, then the leaf), rehearsed on the tip before a
+    /// carrier is paid for ([`Self::file_tir_demand_v1`]). The executor answers inside `W_disclose`
+    /// or the fold voids its claim; a disclosed leaf is stepped like a served annex, to the
+    /// accusation built from this seat's own execution below the leaf and the leaf's disclosure.
     #[allow(clippy::too_many_arguments)]
     async fn tir_demand_tick_v1(
         &self,
@@ -1042,7 +1086,7 @@ impl super::PalwPanelService {
         ladder: u64,
         books: &mut PalwTirOneMoveBooksV1<'_>,
     ) {
-        use kaspa_consensus_core::palw_da_rcore_v1::{PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1, PalwDaUnitV1};
+        use kaspa_consensus_core::palw_da_rcore_v1::PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1;
         let claim = target.claim_id;
         let params = &self.consensus_config.params;
         let armed = params.palw_tir_fence2_active_at(current_daa) && params.palw_rcore_plus_active_at(current_daa);
@@ -1054,8 +1098,8 @@ impl super::PalwPanelService {
         };
         let Some(p) = books.pursuits.get_mut(&claim) else { return };
         p.withheld = true;
-        // What the chain says of the claim — its IR answers, and the demands other bonds filed — read on
-        // a throttle while a demand can be made, from where the last read ended.
+        // What the chain says of the claim, read on a throttle while a demand can be made, from where
+        // the last read ended.
         let relook = p.looked_daa.is_none_or(|at| current_daa >= at.saturating_add(PALW_TIR_DEMAND_RELOOK_DAA_V1));
         if armed && relook {
             let not_before = match p.looked_daa {
@@ -1067,101 +1111,75 @@ impl super::PalwPanelService {
             let Some(p) = books.pursuits.get_mut(&claim) else { return };
             p.looked_daa = Some(current_daa);
             palw_tir_pursuit_absorb_chain_v1(p, &objects, &bond_key, program, target, ladder, current_daa);
-            if p.disclosed.contains_key(&p.leaf) {
-                info!(
-                    "[{PALW_PANEL}] IR claim {claim}: leaf {} is disclosed on chain — the pursuit goes on from it (RFC-0002 evidence \
-                     transport C)",
-                    p.leaf
-                );
-                return;
-            }
+        }
+        let Some(p) = books.pursuits.get_mut(&claim) else { return };
+        let moved = palw_tir_pursuit_descend_known_nodes_v1(p);
+        if moved > 0 {
+            info!(
+                "[{PALW_PANEL}] IR claim {claim}: the chain's step-node answers move the descent {moved} round(s), to {:?} (RFC-0002 \
+                 evidence transport C)",
+                palw_tir_withheld_unit_v1(p)
+            );
+        }
+        // A disclosed leaf at the descent's position is stepped like a served annex (the tick's step 2).
+        if p.disclosed.contains_key(&p.leaf) {
+            info!(
+                "[{PALW_PANEL}] IR claim {claim}: leaf {} is disclosed on chain — the pursuit goes on from it (RFC-0002 evidence \
+                 transport C)",
+                p.leaf
+            );
+            return;
         }
         // The round's unit, when it began (the stagger counts from it), and this seat's slot for it.
-        let Some(p) = books.pursuits.get_mut(&claim) else { return };
         let unit = palw_tir_withheld_unit_v1(p);
         if p.withheld_since.is_none_or(|(at_unit, _)| at_unit != unit) {
             p.withheld_since = Some((unit, current_daa));
         }
         let pursuit = p.clone();
-        let stagger = palw_tir_demand_stagger_v1(&bond_key, &claim, unit);
+        let stagger = palw_tir_demand_stagger_v1(&bond_key, &claim, &unit);
         let step = palw_tir_withheld_step_v1(armed, &pursuit, current_daa, window, PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1, stagger);
-        let sign = |message: &[u8], context: &[u8]| self.sign(message, context);
-        let (object, key, what) = match step {
+        let unit = match step {
             PalwTirWithheldStepV1::Wait => return,
             PalwTirWithheldStepV1::GiveUp(why) => {
                 warn!(
-                    "[{PALW_PANEL}] IR claim {claim}: its executor served no annex of leaf {} — the pursuit ends ({why}); this seat's \
-                     replay withholds the licence",
-                    pursuit.leaf
+                    "[{PALW_PANEL}] IR claim {claim}: its executor served no annex and the descent stands at {unit:?} — the pursuit \
+                     ends ({why}); this seat's replay withholds the licence"
                 );
                 books.pursuits.remove(&claim);
                 books.accused.insert(claim);
                 return;
             }
-            PalwTirWithheldStepV1::DemandEvent => {
-                let unit = PalwDaUnitV1::Event { row: 0, tile: 0 };
-                let message = kaspa_consensus_core::palw_state_v2::palw_da_accusation_message_v2(
-                    network_domain,
-                    &claim,
-                    kaspa_consensus_core::palw_state_v2::palw_da_event_index_v1(0, 0),
-                    &bond_key,
-                );
-                match kaspa_consensus_core::palw_da_rcore_v1::palw_da_accusation_object_v1(
-                    &network_domain,
-                    claim,
-                    unit,
-                    bond_key,
-                    sign,
-                ) {
-                    Ok(object) => (object, palw_tir_demand_queue_key_v1(message), "the event demand that brings its binding on chain"),
-                    Err(why) => {
-                        warn!("[{PALW_PANEL}] IR claim {claim}: cannot build the event demand: {why}");
-                        return;
-                    }
-                }
-            }
-            PalwTirWithheldStepV1::DemandLeaf { leaf } => {
-                let Some(binding) = pursuit.binding.clone() else { return };
-                let message = kaspa_consensus_core::palw_da_rcore_v1::palw_tir_leaf_accusation_message_v1(
-                    network_domain,
-                    &claim,
-                    leaf,
-                    &bond_key,
-                );
-                match kaspa_consensus_core::palw_da_rcore_v1::palw_tir_leaf_accusation_object_v1(
-                    &network_domain,
-                    claim,
-                    leaf,
-                    &binding,
-                    bond_key,
-                    sign,
-                ) {
-                    Ok(object) => (object, palw_tir_demand_queue_key_v1(message), "the leaf's demand (DefaultAccusedTirLeaf)"),
-                    Err(why) => {
-                        warn!("[{PALW_PANEL}] IR claim {claim}: cannot build the demand of leaf {leaf}: {why}");
-                        return;
-                    }
-                }
+            PalwTirWithheldStepV1::Demand { unit } => unit,
+        };
+        let message =
+            kaspa_consensus_core::palw_da_rcore_v1::palw_tir_step_accusation_message_v1(network_domain, &claim, &unit, &bond_key);
+        let object = match kaspa_consensus_core::palw_da_rcore_v1::palw_tir_step_accusation_object_v1(
+            &network_domain,
+            claim,
+            unit,
+            bond_key,
+            |message, context| self.sign(message, context),
+        ) {
+            Ok(object) => object,
+            Err(why) => {
+                warn!("[{PALW_PANEL}] IR claim {claim}: cannot build the demand of {unit:?}: {why}");
+                return;
             }
         };
-        match self.file_tir_demand_v1(session, &object, key, due, books) {
+        match self.file_tir_demand_v1(session, &object, palw_tir_demand_queue_key_v1(message), due, books) {
             PalwTirDemandFiledV1::Filed => {
-                let leaf = pursuit.leaf;
                 if let Some(p) = books.pursuits.get_mut(&claim) {
-                    match step {
-                        PalwTirWithheldStepV1::DemandEvent => p.event_demanded = Some(current_daa),
-                        _ => p.demanded = Some((leaf, current_daa)),
-                    }
+                    p.demanded = Some((unit, current_daa));
                     p.sessions = p.sessions.saturating_add(1);
                 }
                 info!(
-                    "[{PALW_PANEL}] IR claim {claim}: its executor served no annex of leaf {leaf} — filing {what}; it answers inside \
-                     {window} DAA or the claim is voided (RFC-0002 evidence transport C)"
+                    "[{PALW_PANEL}] IR claim {claim}: its executor served no annex — demanding {unit:?} on chain (DefaultAccusedTirStep); \
+                     it answers inside {window} DAA or the claim is voided (RFC-0002 evidence transport C)"
                 );
             }
             PalwTirDemandFiledV1::Wait(why) => {
                 crate::palw_backends::note_throttled_v1("tir-demand-wait", || {
-                    format!("[{PALW_PANEL}] IR claim {claim}: {what} waits — {why}")
+                    format!("[{PALW_PANEL}] IR claim {claim}: the demand of {unit:?} waits — {why}")
                 });
                 // A refusal because the chain holds the answer is read back on the next look.
                 if let Some(p) = books.pursuits.get_mut(&claim) {
@@ -1169,7 +1187,7 @@ impl super::PalwPanelService {
                 }
             }
             PalwTirDemandFiledV1::Refused(why) => {
-                warn!("[{PALW_PANEL}] IR claim {claim}: the chain refuses {what} ({why}) — the pursuit ends");
+                warn!("[{PALW_PANEL}] IR claim {claim}: the chain refuses the demand of {unit:?} ({why}) — the pursuit ends");
                 books.pursuits.remove(&claim);
                 books.accused.insert(claim);
             }
@@ -1296,6 +1314,12 @@ impl super::PalwPanelService {
             .find_map(verified)
             .or_else(|| pursuit.disclosed.get(&pursuit.leaf).and_then(|annex| verified(annex.as_ref().clone())));
         let Some((annex, binding)) = held else {
+            // Option C: once the executor withheld, the chain drives the descent (a served annex is
+            // still taken whenever one arrives, above); before, it is asked and re-asked first.
+            if pursuit.withheld {
+                self.tir_demand_tick_v1(session, bond_key, network_domain, current_daa, target, due, &program, ladder, books).await;
+                return;
+            }
             if current_daa < pursuit.asked_daa.saturating_add(PALW_TIR_ANNEX_REASK_DAA_V1) {
                 return;
             }
