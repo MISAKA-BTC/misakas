@@ -572,8 +572,9 @@ integer operation of the requantisation, rotary and norm segments (report in
 
 * **Consensus artifact layout (the "TIR inventory").** Leaves in declaration order: for each param
   `j`, each instance (global, or each layer whose block references it, ascending), each axis-0 row
-  (split at 64 KiB): `PalwArtifactOperandV1 { tensor_name: ParamDecl.name, layer, row_start (byte
-  offset), bytes }`; root by the existing tree (`palw_artifact.rs:40-110, 248`). Lowerers store
+  (split at 32 KiB, so every leaf fits readiness V2's 40 KiB openable leaf):
+  `PalwArtifactOperandV1 { tensor_name: ParamDecl.name, layer, row_start (byte offset), bytes }`;
+  root by the existing tree (`palw_artifact.rs:40-110, 248`). Lowerers store
   matmul weights output-major (`[N, K]`, consumed through `Transpose`) so a vocabulary tile opens
   `tile_len` rows. The container `PALWTIR1` embeds the program, layout and tokenizer id; the
   `.palwmanifest` sidecar (`misaka-palw-sdk/src/class_manifest.rs`) records the inventory root.
