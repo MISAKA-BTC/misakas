@@ -33,7 +33,7 @@
 //! [`super::vision`]. The float references [`float_encoder`] and [`float_decoder`] use the
 //! lowerings' site names, and they calibrate.
 
-use super::bidir::{add_rows, codes_rows, hl_param, input_fill, linear_rows, norm_rows_kind, note_site, rows_val, site_key};
+use super::bidir::{add_rows, codes_rows, hl_param, input_fill, linear_rows, norm_rows_kind, note_site, rows_val, site_key, softmax_committed, split_softmax};
 use super::*;
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::weights::{Binding, Src};
@@ -1280,43 +1280,6 @@ fn ctx_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, o: tir::Ref,
     let ctx = b.transpose(ctx, &[1, 0, 2]);
     let ctx = b.reshape_fixed(ctx, &[n, h * dh]);
     Ok(rows_val(ctx, DType::I16, ck, (h * dh) as usize, site))
-}
-
-/// Whether the encoder's softmax over the source axis is split at commit points
-/// ([`softmax_committed`]). Admission charges a tile by box demand, and the softmax's row maximum
-/// and row sum, broadcast back over their rows, widen a context tile's demand to the whole
-/// `[h, L, L]` score matrix: `h·L²·dh` MACs and `h·L²` exponentials a tile. Past half the legacy
-/// court's tile ceilings the split is needed.
-pub fn split_softmax(h: u32, l: u32, dh: u32) -> bool {
-    let c = tir::admit::TirCeilingsV1::legacy_court_v1();
-    let (h, l, dh) = (h as u64, l as u64, dh as u64);
-    h * l * l * dh > c.max_tile_macs / 2 || h * l * l > c.max_tile_transcendentals / 2
-}
-
-/// The library's `softmax_shifted` over the last axis, bit for bit, with its input (the masked
-/// logits), the row maximum and the row reciprocal as commit points. A tile of anything downstream
-/// then recomputes `L` exponentials a demanded row and opens those rows; a logits tile costs one
-/// score's `dh` MACs. The reciprocal is `i32` (`[2^24 / L, 2^24]`: the row maximum contributes
-/// `IntExp(0) = 2^24` to the sum), so its clamp never fires.
-fn softmax_committed(b: &mut BlockBuilder<'_>, x: tir::Ref, up_bits: u32) -> tir::Ref {
-    b.commit(x);
-    let axis = b.shape(x).len() - 1;
-    let up = up_bits.min(62);
-    let max = b.reduce_max(x, axis);
-    b.commit(max);
-    let diff = b.sub(x, max, DType::I64);
-    let d = b.clamp(diff, (i32::MIN as i64) >> up, 0, DType::I64);
-    let scale = b.c(DType::I64, 1i128 << up);
-    let w = b.mul(d, scale, DType::I64);
-    let arg = b.clamp(w, i32::MIN as i64, 0, DType::I32);
-    let e = b.int_exp(arg);
-    let sum = b.reduce_sum(e, axis, DType::I64);
-    let recip = b.int_recip(sum);
-    let recip = b.clamp(recip, 0, i32::MAX as i64, DType::I32);
-    b.commit(recip);
-    let p = b.mul(e, recip, DType::I128);
-    let q = b.shr(p, tir::arith::K, Rounding::Floor, DType::I64);
-    b.clamp(q, 0, 1 << 25, DType::I32)
 }
 
 /// Lower the encoder stage: one position over `L = lmax` source rows, out the stacked cross keys

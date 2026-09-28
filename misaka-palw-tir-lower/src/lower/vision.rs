@@ -32,7 +32,7 @@
 //! binding see them per occurrence). The float reference [`float_forward`] uses the same site
 //! names, and it calibrates.
 
-use super::bidir::{add_rows, codes_rows, hl_param, input_fill, linear_rows, norm_rows_kind, note_site, rows_val, site_key};
+use super::bidir::{add_rows, codes_rows, hl_param, input_fill, linear_rows, norm_rows_kind, note_site, resid_commit_needed, rows_val, site_key, softmax_rows};
 use super::*;
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::weights::{Binding, Pick, Src};
@@ -1218,6 +1218,11 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                 note_resid(cx, &lb, &e);
             }
             if s.pre_norm {
+                // The norm reduces whole rows of the patch projection's output (see bidir's
+                // `resid_commit_needed`).
+                if resid_commit_needed(l as u32, d, pl_us) {
+                    b.commit(e.r);
+                }
                 e = norm_rows_kind(&mut b, cx, &mut lb, &e, NormKind::Layer, s.eps, "pre_norm", true, &resid_want())?;
                 note_resid(cx, &lb, &e);
             }
@@ -1280,7 +1285,7 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                 let neg = b.c(DType::I32, i32::MIN as i128);
                 logits = b.select(same, logits, neg, DType::I32);
             }
-            let pmat = b.softmax_shifted(logits, 24 - LOGIT_Q);
+            let pmat = softmax_rows(&mut b, logits, h, l as u32, dh);
             let o = b.matmul(pmat, v.r, DType::I64);
             let ck = site_key("attn.ctx");
             let (kv, kc) = (v.key.clone(), ck.clone());

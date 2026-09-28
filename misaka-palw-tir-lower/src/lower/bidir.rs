@@ -330,7 +330,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             let keep = b.compare(iota, count, tir::Cmp::Lt);
             let neg = b.c(DType::I32, i32::MIN as i128);
             let masked = b.select(keep, logits, neg, DType::I32);
-            let p = b.softmax_shifted(masked, 24 - LOGIT_Q);
+            let p = softmax_rows(&mut b, masked, h, l, dh);
             // Context: P·V (Q24 × codes, exact i64) back to codes, [h, L, dh] → [L, h·dh].
             let o = b.matmul(p, v.r, DType::I64);
             let ctx_key = site_key("attn.ctx");
@@ -353,6 +353,9 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             let att = linear_rows(&mut b, cx, &mut lb, &ctxv, "attn.o.w", Some("attn.o.b"), "attn.o", &Want { dt: DType::I32, key: resid.clone() })?;
             // Post-LN: x = LN(x + attn), x = LN(x + ffn).
             let r1 = add_rows(&mut b, cx, &lb, &x, &att, "resid.mix")?;
+            if resid_commit_needed(l, d, (h * dh) as usize) {
+                b.commit(r1.r);
+            }
             let x1 = norm_rows(&mut b, cx, &mut lb, &r1, a.eps_mix, "norm.mix", &Want { dt: DType::I32, key: resid.clone() })?;
             b.commit(x1.r);
             note_resid(cx, &lb, &x1);
@@ -363,6 +366,10 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             note_site(cx, tb, &act);
             let down = linear_rows(&mut b, cx, &mut lb, &act, "mlp.down.w", Some("mlp.down.b"), "mlp.down", &Want { dt: DType::I32, key: resid.clone() })?;
             let r2 = add_rows(&mut b, cx, &lb, &x1, &down, "resid.ffn")?;
+            let inter = hl.params[hl_param(hl, "mlp.down.w")? as usize].shape[1];
+            if resid_commit_needed(l, d, inter) {
+                b.commit(r2.r);
+            }
             let x2 = norm_rows(&mut b, cx, &mut lb, &r2, a.eps_ffn, "norm.ffn", &Want { dt: DType::I32, key: resid.clone() })?;
             note_resid(cx, &lb, &x2);
             note_site(cx, tb, &x2);
@@ -626,6 +633,68 @@ pub(super) fn norm_rows_kind(
         b.commit(r);
     }
     Ok(Val { r, dt: want.dt, key: want.key.clone(), len: n, site: site.to_string() })
+}
+
+// ───────────────────────────── admission at real sizes ─────────────────────────────
+//
+// Admission charges a commit point's tile by box demand (spec 04b §10.3): an operand of a `MatMul`
+// is demanded `d · contraction` elements for `d` demanded outputs, and a reduction's operand `d`
+// times the reduced axis. Over a fixed token axis that widens two cones past the legacy court's
+// tile ceilings at real sizes (BERT-base at 128 tokens: 75 Mi MACs a tile, against 16 Mi):
+// * the softmax's row maximum and row sum, broadcast back over their rows, reach the whole
+//   `[h, L, L]` score matrix from any tile downstream of it ([`split_softmax`]);
+// * a norm reduces a whole row, so a tile of it reaches `d` columns of every row of the projection
+//   its input came from ([`resid_commit_needed`]).
+// The fix is commit points, which change no value: the masked logits, the row maximum and the row
+// reciprocal, and the residual sum a norm reads.
+
+/// Whether a softmax over a fixed axis of `l` keys, `h` heads of `dh`, is split at commit points
+/// ([`softmax_committed`]): unsplit, a tile of anything downstream costs `h·L²·dh` MACs and `h·L²`
+/// exponentials. Past half the legacy court's tile ceilings it is split.
+pub(super) fn split_softmax(h: u32, l: u32, dh: u32) -> bool {
+    let c = tir::admit::TirCeilingsV1::legacy_court_v1();
+    let (h, l, dh) = (h as u64, l as u64, dh as u64);
+    h * l * l * dh > c.max_tile_macs / 2 || h * l * l > c.max_tile_transcendentals / 2
+}
+
+/// The library's `softmax_shifted` over the last axis, bit for bit, with its input (the masked
+/// logits), the row maximum and the row reciprocal as commit points. A tile of anything downstream
+/// then recomputes `L` exponentials a demanded row and opens those rows; a logits tile costs one
+/// score's `dh` MACs. The reciprocal is `i32` (`[2^24 / L, 2^24]`: the row maximum contributes
+/// `IntExp(0) = 2^24` to the sum), so its clamp never fires.
+pub(super) fn softmax_committed(b: &mut BlockBuilder<'_>, x: tir::Ref, up_bits: u32) -> tir::Ref {
+    b.commit(x);
+    let axis = b.shape(x).len() - 1;
+    let up = up_bits.min(62);
+    let max = b.reduce_max(x, axis);
+    b.commit(max);
+    let diff = b.sub(x, max, DType::I64);
+    let d = b.clamp(diff, (i32::MIN as i64) >> up, 0, DType::I64);
+    let scale = b.c(DType::I64, 1i128 << up);
+    let w = b.mul(d, scale, DType::I64);
+    let arg = b.clamp(w, i32::MIN as i64, 0, DType::I32);
+    let e = b.int_exp(arg);
+    let sum = b.reduce_sum(e, axis, DType::I64);
+    let recip = b.int_recip(sum);
+    let recip = b.clamp(recip, 0, i32::MAX as i64, DType::I32);
+    b.commit(recip);
+    let p = b.mul(e, recip, DType::I128);
+    let q = b.shr(p, tir::arith::K, tir::Rounding::Floor, DType::I64);
+    b.clamp(q, 0, 1 << 25, DType::I32)
+}
+
+/// The softmax of an encoder's attention over its `l` rows: split at commit points when
+/// [`split_softmax`] says so, else the library's.
+pub(super) fn softmax_rows(b: &mut BlockBuilder<'_>, x: tir::Ref, h: u32, l: u32, dh: u32) -> tir::Ref {
+    if split_softmax(h, l, dh) { softmax_committed(b, x, 24 - LOGIT_Q) } else { b.softmax_shifted(x, 24 - LOGIT_Q) }
+}
+
+/// Whether the residual sum a norm reads is committed: `x + y` with `y` a projection over a
+/// `contraction`-wide input, rows of `n`. Unsplit, a tile of the norm (64 lanes) reaches
+/// `min(64, L)·n` outputs of the projection, each `contraction` MACs.
+pub(super) fn resid_commit_needed(l: u32, n: usize, contraction: usize) -> bool {
+    let c = tir::admit::TirCeilingsV1::legacy_court_v1();
+    (l.min(64) as u64) * n as u64 * contraction as u64 > c.max_tile_macs / 2
 }
 
 // ───────────────────────────── the float reference ─────────────────────────────

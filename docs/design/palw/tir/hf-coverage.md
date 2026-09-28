@@ -589,8 +589,32 @@ set is unchanged.
 
   In every case the V2 program's run equals its pipeline's run byte for byte, and
   `tir_admit_program_v2` and `tir_admit_pipeline_v1` admit both.
-- **Not done.** T5-style encoder–decoders need relative position buckets and cross-attention over
-  an encoder's rows (a `StageRows` input), which is more than falls out of this.
+- **Admission at real sizes.** Admission charges a commit point's tile by box demand (04b §10.3):
+  a `MatMul` operand is demanded `d · contraction` elements for `d` outputs, and a reduction's
+  operand `d` times the reduced axis. Over the fixed token axis that widened two cones past the
+  legacy court's tile ceiling (16.8 M MACs, 1.05 M exponentials):
+  - the softmax's row maximum and row sum, broadcast back over their rows, reach the whole
+    `[h, L, L]` score matrix from any tile downstream of them;
+  - a post-LN norm reduces a whole row, so a tile of it reaches `d` columns of every row of the
+    projection its input came from.
+
+  A BERT-base-shaped encoder was refused at 128 tokens (75.5 M MACs a tile). The fix is commit
+  points, which change no value. Past half the ceilings (`bidir::split_softmax`,
+  `resid_commit_needed`), the masked logits, the row maximum and the row reciprocal are committed
+  (`softmax_committed`, the library softmax bit for bit), and so is each residual sum a norm
+  reads. The tiny fixtures stay below the thresholds, so their programs are unchanged. With
+  `real_encoders_lower_and_are_admitted_at_128_to_512_tokens` (hand-written hub configs, no
+  weights, mean pooling with L2, the one-stage pipeline):
+
+  | encoder | tokens | nodes (max per block) | commit points | job MACs | exponentials | step leaves |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | BERT-base (`bert-base-uncased` as `BertModel`) | 128 / 256 / 512 | 243 (168) | 22 | 1.12e10 / 2.30e10 / 4.83e10 | 2.4e6 / 9.5e6 / 3.8e7 | 426,084 / 925,860 / 2,146,596 |
+  | all-MiniLM-L6-v2 | 128 / 256 / 512 | 242–243 (168) | 19–22 | 1.43e9 / 3.02e9 / 6.64e9 | 1.2e6 / 4.7e6 / 1.9e7 | 97,554 / 269,394 / 686,226 |
+  | RoBERTa-base, XLM-R-base | 128 / 256 / 512 | 243 (168) | 22 | as BERT-base | as BERT-base | as BERT-base |
+
+  The per-position cap on step leaves is 4,194,304. The committed logits dominate them: `h·L²` lanes a
+  layer.
+- §17 has T5-style encoder–decoders (relative position buckets, cross-attention).
 
 ## 13. Vision input (RFC-0003 Part II.4)
 
@@ -618,12 +642,27 @@ one position over a fixed patch axis. The canonical image enters as `input.image
 | LLaVA tower (feature layer −2, CLS dropped) + projector | image rows `[16, 32]` | 3.3e-7 | 0.99988 |
 | CLIP behind a ×2 box downscale (56×56 input, pixels replicated 2×2) | `image_embeds` | — | 0.99991 |
 
+**Real sizes.** A tower's attention over its patch rows meets §12's box-demand widening, and so
+does a pre-norm over the patch projection's rows. CLIP ViT-B/16 was refused at 224×224 (115.6 M
+MACs a tile) and SigLIP-B/16 too (29.5 M). With §12's commit points (the split softmax, the
+committed patch rows) `real_size_towers_are_admitted` admits them at 224×224:
+
+| tower | rows | nodes (max per block) | MACs | step leaves |
+| --- | --- | --- | --- | --- |
+| CLIP ViT-B/16 | 197 | 242 (155) | 1.76e10 | 546,848 |
+| SigLIP-B/16 | 196 | 316 (155) | 1.77e10 | 548,448 |
+| Qwen2-VL-2B's tower | 256 | 238 (173) | 1.69e11 | 3,499,520 |
+
+The committed logits grow as `h·L²` a layer, so Qwen2-VL's tower reaches the 4,194,304 step-leaf cap
+just past 224×224. A larger image needs the cap raised, or a demand model that follows rows.
+
 **Image + text → generated ids** is the two-stage text pipeline of §16 (the off-chain check this
 paragraph described is superseded by it).
 
 ## 14. Next: cross-attention (T5, Whisper) — what `TirProgramV2` needs
 
-Not built. The analysis:
+Built for T5 and the BART family in §17, as planned here. Whisper (the audio input binding) is not.
+The analysis as written before:
 
 - **The encoder is a stage** like §12's bidirectional encoder. T5 needs:
   - RMSNorm without a mean;
@@ -760,3 +799,84 @@ index map; the interleaved layout has no VLM fixture yet). Text-only programs ar
   equal the placement's at every position of every stream.
 - Out of scope here: several images or videos (`video_grid_thw`, the temporal component), Qwen2.5-VL's
   `second_per_grid_t` (videos only), and a VLM whose tower size varies by job.
+
+## 17. Encoder–decoders (T5, BART, mBART, Marian, Pegasus)
+
+`lower::encdec`, `encoder::{encdec_encoder_v2, encdec_decoder_v2, encdec_pipeline}`, `tests/encdec.rs`,
+`tools/gen_hf_encdec_fixtures.py`. A sequence-to-sequence class is two stages, §14's plan:
+
+| stage | program | trip | bindings | output |
+| --- | --- | --- | --- | --- |
+| 0: encoder | one position over the padded source `[L, d]` | `Fixed { n: 1 }` | `JobTokens`, `JobTokenCount` of the source template | `Final`: every decoder layer's cross keys and values, `i16 [D, 2, L, inner]` |
+| 1: decoder | one position per stream id (the text stage) | `TextStream` | `StageFinal { stage: 0 }`, `JobTokenCount` (the same template) | `Logits` |
+
+- **The cross K/V.** The encoder's last rows (after its final norm) go through all `2·D` stacked
+  projections in ONE `MatMul`, channel `(l·2 + kv)·inner + j`. Each is narrowed per channel to
+  decoder layer `l`'s own code scale (statistics `post.xkv.L{l}.k`/`v`, recorded by the float
+  encoder; the decoder reads the same values as `L{l}.xattn.k`/`v`, so one calibration gives both
+  programs one scale). Each decoder layer picks its `[2, L, inner]` slice with a per-layer `idx`
+  param through `Gather`. Cross-attention runs over the fixed source axis, keys at or past the
+  count masked to `i32::MIN`.
+- **T5.** RMSNorm without a mean, pre-norm, and unscaled scores. Relative position buckets come
+  from layer 0's table, shared by every layer of a stack:
+  - encoder: bidirectional buckets, a pinned `[L, L]` bucket map;
+  - decoder: causal buckets, through `lower_attention`'s `RelBias`, a `[max_distance + 1]` bucket
+    table over `pos − j`, clamped where the bucket saturates.
+
+  `t5_bucket` is torch's `f32` arithmetic and equals HF's `_relative_position_bucket` over −40..40,
+  both directions. Also:
+  - ReLU or gated FFNs (`gated-gelu` is `gelu_new`);
+  - the decoder output scaled by `d^−½` before the head when `scale_decoder_outputs` (5.17 saves it;
+    older configs read `tie_word_embeddings`);
+  - the head from `lm_head.weight` when the checkpoint has it, else the shared table;
+  - q, k, cross-q and the cross keys take per-row `i16` weights (`encdec::wide_qk`): an unscaled
+    score multiplies their error by itself.
+- **The BART family.** Biases everywhere, LayerNorm (eps 1e-5), attention scaled by `head_dim^−½`,
+  the head tied to the shared table plus `final_logits_bias`.
+
+  | | norms | positions | `√d` scale | `layernorm_embedding` | final norms |
+  | --- | --- | --- | --- | --- | --- |
+  | BART | post | learned, `pos + 2` | config | yes | no |
+  | mBART | pre | learned, `pos + 2` | config | yes | yes |
+  | Marian | post | sinusoid, computed (not saved) | yes | no | no |
+  | Pegasus | pre | sinusoid, the checkpoint's table | yes | no | yes |
+
+- **Admission at real sizes** needs §12's commit points in the encoder (the split softmax past
+  half the tile ceilings) and every sublayer's residual sum committed.
+
+**Fidelity** (two sources of 10 and 7 ids, 8 greedy ids each, under an explicit
+`GenerationConfig`: no forced BOS/EOS, no EOS stop). The tiny tied models repeat ids, so the
+fixtures scale the embedding and the decoder's output norm. Every float reference equals HF within
+1e-6 (encoder rows, decoder logits on HF's stream and on a random one).
+
+| model | greedy ids vs HF `generate` | top-1 (HF stream + random stream) | mean KL | nodes: encoder / decoder (max per block) |
+| --- | --- | --- | --- | --- |
+| T5 (ReLU, tied, scaled) | 16/16 | 31/32 | 4.6e-5 | 182 / 266 (136 / 221) |
+| T5 v1.1 (gated-GELU, untied, `d_kv·h ≠ d`) | 11/16 | 28/32 | 1.1e-2 | 194 / 278 (148 / 233) |
+| BART | 16/16 | 32/32 | 8.5e-4 | 229 / 328 (167 / 262) |
+| mBART | 16/16 | 32/32 | 4.9e-5 | 247 / 341 (157 / 247) |
+| Marian | 11/16 | 30/32 | 7.4e-4 | 196 / 295 (167 / 262) |
+| Pegasus | 16/16 | 32/32 | 7.2e-4 | 214 / 308 (157 / 247) |
+
+- Every difference is a tie within the integer program's noise: HF's top-2 margin there is at most
+  1.3× the integer logits' RMS error (`tie_ratio`). Replays are exact.
+- T5 v1.1 is the weakest: its logits span 27 units, and its error is W8 accumulation (the per-site
+  diagnosis, `ENCDEC_DIAG=1`: ~0.5 % a projection, 1.8 % at the encoder's cross K/V, 4.5 % at the
+  logits). Nothing is wrong at any one site.
+- **Real configs** (`tests/configs/encdec/`: t5-small, flan-t5-base, bart-large-cnn,
+  mbart-large-50, opus-mt-en-de, pegasus-xsum) lower and are admitted at `L = 512`, `max_trip` 512:
+  - job MACs 3.6e10 (t5-small) to 3.3e11 (mbart-large-50, whose 250k-row head is 1.3e11 of it);
+  - 1.5 M to 7.5 M step leaves a job.
+
+**What the consensus side lacks** (not touched here):
+1. **A second token list.** The encoder reads the source through `TokenSource::Negative`, the only
+   other list a `PipelineJob` has; the tests put the source in `negative`. A text profile with an
+   encoder needs its own source field (a `TokenSource::Source`, or the profile admitting
+   `negative` for it), bound by `input_root` like the prompt.
+2. **The decoder's prompt is a forced prefix.** It is `decoder_start_token_id`, plus the target
+   language for mBART-50 (HF's `forced_bos_token_id`). A `TextStream` stage has no token rule, so
+   the class's template cannot supply it. Either the Text profile checks the prompt's head, or
+   `TextStream` gets a prefix.
+3. **Evidence size.** The cross K/V edge is `D·2·L·inner` codes (bart-large at 512: 12.6 M
+   lanes). A dispute over one of its leaves is the encoder's (PALW-TIR-33), and it rides the same
+   material limits as D-F1's captures.

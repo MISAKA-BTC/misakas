@@ -307,3 +307,33 @@ fn a_decoder_as_a_last_token_embedder_matches_its_hf_fixture() {
     tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
         .expect("tir_admit_pipeline_v1");
 }
+
+/// **Real configurations** (hand-written from the hub, `tests/configs/encoders/`), no weights:
+/// BERT-base, all-MiniLM-L6-v2, RoBERTa-base and XLM-R-base lower at 128, 256 and 512 tokens and
+/// are admitted with their one-stage pipeline (mean pooling, normalised). Past the tile ceilings the
+/// softmax is split at commit points and the residual sums the norms read are committed
+/// (`lower::bidir::split_softmax`, `resid_commit_needed`). The numbers are the program's.
+#[test]
+fn real_encoders_lower_and_are_admitted_at_128_to_512_tokens() {
+    use misaka_palw_tir_lower::lower::bidir::{self, BidirCfg, Pooling};
+    for (name, pad) in [("bert-base-uncased", 0u32), ("all-MiniLM-L6-v2", 0), ("roberta-base", 1), ("xlm-roberta-base", 1)] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/encoders").join(format!("{name}.json"));
+        let spec = misaka_palw_tir_lower::parse_config_str(&std::fs::read_to_string(path).expect("config")).expect("spec");
+        let hl = misaka_palw_tir_lower::hl::build_program(&spec).expect("hl");
+        for lmax in [128u32, 256, 512] {
+            let lw = bidir::lower_bidir(&hl, &spec, &BidirCfg { lmax, pooling: Pooling::Mean, normalize: true }).expect("lower");
+            let p2 = encoder::bidir_v2(&lw, spec.vocab_size as u32, lmax).expect("v2");
+            let pipe = encoder::bidir_pipeline(vec![], vec![], pad, lmax);
+            let inputs = misaka_palw_tir_lower::admission::default_inputs();
+            let pa = tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
+                .unwrap_or_else(|e| panic!("{name} at {lmax}: tir_admit_pipeline_v1: {e}"));
+            let nodes: usize = p2.blocks.iter().map(|b| b.nodes.len()).sum();
+            let most = p2.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
+            let commits: usize = p2.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum();
+            eprintln!(
+                "{name} at {lmax} tokens: admitted — {nodes} nodes (max {most}/block, {commits} commit points), job {:.3e} MACs, {:.3e} transcendentals, {} step leaves",
+                pa.job_cost.macs as f64, pa.job_cost.transcendentals as f64, pa.job_step_leaves
+            );
+        }
+    }
+}

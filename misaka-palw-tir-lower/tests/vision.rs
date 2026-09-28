@@ -560,3 +560,36 @@ fn a_fixed_ratio_downscale_stage_feeds_the_tower_exactly() {
     }
     tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs()).expect("tir_admit_v2");
 }
+
+/// **Real-size towers** (hub dimensions, no weights) are admitted at their usual input: CLIP
+/// ViT-B/16 and SigLIP-B/16 at 224×224, Qwen2-VL-2B's tower at 224×224. Past the tile ceilings the
+/// attention's softmax is split at commit points and the patch rows a pre-norm reads are committed
+/// (`lower::bidir::split_softmax`, `resid_commit_needed`); the tiny fixtures stay below both.
+#[test]
+fn real_size_towers_are_admitted() {
+    let clip_b16 = serde_json::json!({"architectures": ["CLIPVisionModelWithProjection"], "hidden_act": "quick_gelu", "hidden_size": 768,
+        "image_size": 224, "intermediate_size": 3072, "layer_norm_eps": 1e-5, "model_type": "clip_vision_model", "num_attention_heads": 12,
+        "num_channels": 3, "num_hidden_layers": 12, "patch_size": 16, "projection_dim": 512});
+    let siglip_b16 = serde_json::json!({"architectures": ["SiglipVisionModel"], "hidden_act": "gelu_pytorch_tanh", "hidden_size": 768,
+        "image_size": 224, "intermediate_size": 3072, "layer_norm_eps": 1e-6, "model_type": "siglip_vision_model", "num_attention_heads": 12,
+        "num_channels": 3, "num_hidden_layers": 12, "patch_size": 16, "vision_use_head": true});
+    let qwen2_vl_2b = serde_json::json!({"architectures": ["Qwen2VLForConditionalGeneration"], "vision_config": {"depth": 32, "embed_dim": 1280,
+        "hidden_size": 1536, "hidden_act": "quick_gelu", "mlp_ratio": 4, "num_heads": 16, "in_channels": 3, "patch_size": 14,
+        "spatial_merge_size": 2, "temporal_patch_size": 2}});
+    for (name, cfg) in [("CLIP ViT-B/16", clip_b16), ("SigLIP-B/16", siglip_b16), ("Qwen2-VL-2B tower", qwen2_vl_2b)] {
+        let s = vision::parse_vision(&cfg.to_string(), Some((224, 224)), None).expect("parse");
+        let (hl, _) = vision::hl_program(&s).expect("hl");
+        let lw = vision::lower_vision(&hl, &s).expect("lower");
+        let p2 = encoder::vision_v2(&lw).expect("v2");
+        let a = tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs())
+            .unwrap_or_else(|e| panic!("{name}: tir_admit_v2: {e}"));
+        let nodes: usize = p2.blocks.iter().map(|b| b.nodes.len()).sum();
+        let most = p2.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
+        eprintln!(
+            "{name} at 224×224 ({} rows): admitted — {nodes} nodes (max {most}/block), {:.3e} MACs, {} step leaves",
+            s.rows(),
+            a.view.position.cost.macs as f64,
+            a.view.position.step_leaves
+        );
+    }
+}
