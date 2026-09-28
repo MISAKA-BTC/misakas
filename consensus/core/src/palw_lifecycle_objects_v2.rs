@@ -172,6 +172,15 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::CourtTirChildChosen { .. } => {
             Err("an IR dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves")
         }
+        // The second IR fence: an IR step-leaf demand carries its accuser's signature and a binding
+        // whose program rides empty (the chain holds the registered class's).
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { accusation } if !accusation.binding.class.program.is_empty() => {
+            Err("an IR leaf demand's binding carries no program: the chain holds the registered class's")
+        }
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { accusation } if !accusation.signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => {
+            Err("an IR leaf demand must carry its accuser's signature — unsigned, anyone could spend a bond's DA budget")
+        }
         PalwConsensusObjectV2::CourtCloseDeclared { signature, .. } if !signature.is_empty() => Ok(()),
         // ADR-0087 Decision 3: a buy is bound to its carrier's sink output below; a sell must carry
         // the holder's signature, checked at acceptance against the payload it names.

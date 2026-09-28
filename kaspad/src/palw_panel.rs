@@ -2080,6 +2080,12 @@ pub(crate) fn palw_da_unit_answer_v1(
             return Err("an IR claim answers no held unit: the held regime's units are the legacy families' (RFC-0002 Phase F)".into());
         }
         PalwDaUnitV1::Held(missing) => missing,
+        // RFC-0002 Phase F's second IR fence (dormant): an IR step leaf is answered by the IR
+        // responder (`kaspa_consensus_core::palw_tir_court_v1::build_tir_step_leaf_disclosure_v1` over
+        // the claim's IR evidence store), which the node lane lands before the fence is armed.
+        PalwDaUnitV1::TirStepLeaf { index } => {
+            return Err(format!("IR step leaf {index}: answered by the IR responder, not the capture path (RFC-0002 Phase F)"));
+        }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
         (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(
@@ -12314,6 +12320,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
         PalwConsensusObjectV2::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared; the chain drops each until its owner lands it, and no
         // path in this node builds one yet.
