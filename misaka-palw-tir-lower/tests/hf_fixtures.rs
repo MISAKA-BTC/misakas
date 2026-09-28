@@ -166,4 +166,7 @@ fixtures!(
     falcon_mamba,
     mamba2,
     rwkv,
+    gemma3_vlm,
+    qwen3_5_vlm,
+    llava,
 );

@@ -230,7 +230,14 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         }
     };
 
-    let mut p = P { cfg: Cfg::new(arch.clone(), root, ""), notes: vec![], unsure: vec![], reference, layouts: Layouts::default() };
+    let mut p = P {
+        cfg: Cfg::new(arch.clone(), root, ""),
+        notes: vec![],
+        unsure: vec![],
+        reference,
+        layouts: Layouts::default(),
+        ignored_prefixes: vec![],
+    };
     p.cfg.inert(&["auto_map", "quantization_config", "is_encoder_decoder", "add_cross_attention"]);
     let spec = match arch.as_str() {
         "LlamaForCausalLM" => dense::llama(&mut p, Flavor::Llama)?,
@@ -344,12 +351,26 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
         ]
     };
     let root_tie = p.cfg.opt_bool("tie_word_embeddings")?;
+    // A text-only lowering never reads the vision tower, the projector or the MTP heads.
+    let vision: Vec<String> = [
+        "vision_tower.",
+        "multi_modal_projector.",
+        "model.vision_tower.",
+        "model.multi_modal_projector.",
+        "model.visual.",
+        "visual.",
+        "mtp.",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     let mut sub = P {
         cfg: Cfg::new(arch.to_string(), text, "text_config"),
         notes: vec![],
         unsure: vec![],
         reference: p.reference.clone(),
         layouts: Layouts::default(),
+        ignored_prefixes: vec![],
     };
     sub.cfg.inert(&["model_type"]);
     let mut spec = match tmt {
@@ -379,6 +400,7 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
             .push(format!("root tie_word_embeddings={t} disagrees with text_config's {}; the text config's is used", spec.head.tied));
     }
     spec.architecture = arch.to_string();
+    spec.hf.ignored_prefixes.extend(vision);
     spec.notes.push("text decoder only: vision tower, projector and image tokens are not lowered".into());
     spec.notes.extend(sub.notes);
     if let Confidence::Unsure(u) = &mut spec.confidence {
@@ -398,6 +420,8 @@ pub(crate) struct P<'a> {
     pub reference: Reference,
     /// Fused-weight layouts of this checkpoint (HF storage, see `HfStorage`).
     pub layouts: Layouts,
+    /// Tensor-name prefixes the lowering does not read by design (see `HfStorage`).
+    pub ignored_prefixes: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -501,6 +525,7 @@ impl P<'_> {
                 mlp: self.layouts.mlp,
                 experts: self.layouts.experts,
                 gdn: self.layouts.gdn,
+                ignored_prefixes: std::mem::take(&mut self.ignored_prefixes),
             },
             notes: std::mem::take(&mut self.notes),
         }

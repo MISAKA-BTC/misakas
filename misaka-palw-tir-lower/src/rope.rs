@@ -140,7 +140,10 @@ pub fn read_rope_config(cfg: &Cfg, theta_default: Option<f64>, layer_type: Optio
             Some(lt) => match p.get(lt) {
                 Some(Value::Object(o)) => Some(o.clone()),
                 _ => {
-                    return Err(LowerError::not_lowerable(format!("{}: rope_parameters has no entry for layer type `{lt}`", cfg.arch)));
+                    return Err(LowerError::not_lowerable(format!(
+                        "{}: rope_parameters has no entry for layer type `{lt}`",
+                        cfg.arch
+                    )));
                 }
             },
             None => {

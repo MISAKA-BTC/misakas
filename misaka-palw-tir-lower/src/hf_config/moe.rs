@@ -282,8 +282,20 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
     let moe_inter = p.cfg.usize_or("moe_intermediate_size", if v3 { 2048 } else { 1407 })?;
     let n = p.cfg.usize_or("num_hidden_layers", if v3 { 61 } else { 32 })?;
     let h = p.cfg.usize_or("num_attention_heads", if v3 { 128 } else { 32 })?;
-    // MLA has one latent KV "head"; num_key_value_heads is carried but unused by the math.
-    p.cfg.inert(&["num_key_value_heads", "head_dim", "qk_head_dim", "ep_size", "num_nextn_predict_layers", "pretraining_tp"]);
+    // `head_dim`/`qk_head_dim` are derived keys (qk_rope_head_dim, nope + rope).
+    p.cfg.inert(&["head_dim", "qk_head_dim", "ep_size", "pretraining_tp"]);
+    // transformers' eager attention repeats the expanded K/V by heads / num_key_value_heads, so
+    // anything but equality breaks the forward.
+    if let Some(kv) = p.cfg.opt_usize("num_key_value_heads")?
+        && kv != h
+    {
+        return Err(LowerError::not_lowerable(format!("deepseek: num_key_value_heads {kv} ≠ num_attention_heads {h}")));
+    }
+    // Multi-token-prediction layers ship as extra decoder layers after the last one.
+    let mtp = p.cfg.usize_or("num_nextn_predict_layers", 0)?;
+    for i in 0..mtp {
+        p.ignored_prefixes.push(format!("model.layers.{}.", n + i));
+    }
     let n_shared = p.cfg.usize_or("n_shared_experts", if v3 { 1 } else { 2 })?;
     let n_routed = p.cfg.alias_usize(&["n_routed_experts", "num_local_experts", "num_experts"])?.unwrap_or(if v3 { 256 } else { 64 });
     let rsf = p.cfg.f64_or("routed_scaling_factor", if v3 { 2.5 } else { 1.0 })?;

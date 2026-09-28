@@ -376,12 +376,19 @@ pub struct Resolver<'a> {
     pub src: &'a dyn TensorSource,
     pub aliases: Vec<(String, String)>,
     pub touched: RefCell<BTreeSet<String>>,
+    pub ignored_prefixes: Vec<String>,
     names: BTreeSet<String>,
 }
 
 impl<'a> Resolver<'a> {
     pub fn new(src: &'a dyn TensorSource, aliases: &[(String, String)]) -> Self {
-        Resolver { src, aliases: aliases.to_vec(), touched: RefCell::new(BTreeSet::new()), names: src.names().into_iter().collect() }
+        Resolver {
+            src,
+            aliases: aliases.to_vec(),
+            touched: RefCell::new(BTreeSet::new()),
+            ignored_prefixes: vec![],
+            names: src.names().into_iter().collect(),
+        }
     }
 
     pub fn resolve(&self, name: &str) -> Option<String> {
@@ -399,10 +406,19 @@ impl<'a> Resolver<'a> {
         None
     }
 
-    /// Tensors of the checkpoint the program never read.
+    pub fn with_ignored(mut self, prefixes: &[String]) -> Self {
+        self.ignored_prefixes = prefixes.to_vec();
+        self
+    }
+
+    /// Tensors of the checkpoint the program never read (excluding the ignored prefixes).
     pub fn untouched(&self) -> Vec<String> {
         let t = self.touched.borrow();
-        self.names.iter().filter(|n| !t.contains(*n)).cloned().collect()
+        self.names
+            .iter()
+            .filter(|n| !t.contains(*n) && !self.ignored_prefixes.iter().any(|p| n.starts_with(p.as_str())))
+            .cloned()
+            .collect()
     }
 }
 
@@ -589,6 +605,8 @@ pub fn layers_of_param(prog: &HlProgram, p: u32) -> Vec<usize> {
 pub struct Binding {
     pub srcs: Vec<Src>,
     pub aliases: Vec<(String, String)>,
+    /// Tensor-name prefixes that are unread by design and not reported as unused.
+    pub ignored_prefixes: Vec<String>,
 }
 
 /// A shape-only check of a checkpoint against a program.
@@ -600,7 +618,7 @@ pub struct WeightReport {
 }
 
 pub fn check_weights(prog: &HlProgram, binding: &Binding, source: &dyn TensorSource) -> WeightReport {
-    let r = Resolver::new(source, &binding.aliases);
+    let r = Resolver::new(source, &binding.aliases).with_ignored(&binding.ignored_prefixes);
     let mut rep = WeightReport::default();
     let none = BTreeMap::new();
     for (pi, d) in prog.params.iter().enumerate() {
@@ -640,7 +658,7 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
         }
     }
     let src = Names(names);
-    let r = Resolver::new(&src, &binding.aliases);
+    let r = Resolver::new(&src, &binding.aliases).with_ignored(&binding.ignored_prefixes);
     let mut rep = WeightReport::default();
     fn leaves(s: &Src, out: &mut Vec<(String, Vec<(char, usize)>)>) {
         match s {

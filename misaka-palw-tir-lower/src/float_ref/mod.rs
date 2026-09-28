@@ -43,7 +43,7 @@ impl ParamStore {
         if binding.srcs.len() != prog.params.len() {
             return Err(LowerError::eval("binding does not match the program's params"));
         }
-        let r = Resolver::new(source, &binding.aliases);
+        let r = Resolver::new(source, &binding.aliases).with_ignored(&binding.ignored_prefixes);
         let mut st = ParamStore::default();
         let none = BTreeMap::new();
         for (pi, d) in prog.params.iter().enumerate() {

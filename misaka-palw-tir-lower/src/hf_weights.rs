@@ -117,7 +117,7 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
                 .ok_or_else(|| LowerError::eval(format!("internal: HL param `{}` has no HF source", d.name)))?,
         );
     }
-    Ok(Binding { srcs, aliases: spec.hf.prefix_aliases.clone() })
+    Ok(Binding { srcs, aliases: spec.hf.prefix_aliases.clone(), ignored_prefixes: spec.hf.ignored_prefixes.clone() })
 }
 
 fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> Result<()> {

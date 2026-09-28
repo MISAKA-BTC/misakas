@@ -29,7 +29,7 @@ import torch
 
 try:
     import transformers
-    from transformers import AutoModelForCausalLM
+    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
     from transformers.models.auto.configuration_auto import CONFIG_MAPPING
 except ImportError as e:  # pragma: no cover
     sys.exit(f"transformers is required: {e}")
@@ -44,6 +44,8 @@ V = 64  # vocab
 
 L = dict(hidden_size=32, intermediate_size=64, num_attention_heads=4, num_key_value_heads=2, vocab_size=V)
 LNI = {k: v for k, v in L.items() if k != "intermediate_size"}
+VIS_SIGLIP = dict(model_type="siglip_vision_model", hidden_size=16, intermediate_size=32, num_hidden_layers=1,
+                  num_attention_heads=2, image_size=28, patch_size=14)
 
 
 def c(model_type, arch, *bases, **kw):
@@ -176,6 +178,23 @@ CONFIGS = {
                  num_heads=8, head_dim=8, n_groups=2, use_bias=True), {}),
     "rwkv": (c("rwkv", "RwkvForCausalLM", hidden_size=32, num_hidden_layers=4, vocab_size=V, attention_hidden_size=32,
                intermediate_size=64, rescale_every=2), {}),
+    # VLMs: only the text decoder is lowered; prompts are text-only (no pixel_values).
+    "gemma3_vlm": (c("gemma3", "Gemma3ForConditionalGeneration",
+                     text_config=dict(L, model_type="gemma3_text", num_hidden_layers=2, head_dim=8, sliding_window=4,
+                                      layer_types=["sliding_attention", "full_attention"]),
+                     vision_config=VIS_SIGLIP, mm_tokens_per_image=4, image_token_index=V - 4, boi_token_index=V - 3,
+                     eoi_token_index=V - 2), {"vlm": True}),
+    "qwen3_5_vlm": (c("qwen3_5", "Qwen3_5ForConditionalGeneration",
+                      text_config=dict(L, model_type="qwen3_5_text", num_hidden_layers=4, head_dim=8, linear_key_head_dim=8,
+                                       linear_value_head_dim=8, linear_num_key_heads=2, linear_num_value_heads=4),
+                      vision_config=dict(depth=1, hidden_size=16, intermediate_size=32, num_heads=2, out_hidden_size=32,
+                                         patch_size=4, spatial_merge_size=2, temporal_patch_size=2),
+                      image_token_id=V - 4, video_token_id=V - 3, vision_start_token_id=V - 2, vision_end_token_id=V - 1),
+                    {"vlm": True}),
+    "llava": (c("llava", "LlavaForConditionalGeneration", text_config=dict(L, model_type="llama", num_hidden_layers=2),
+                vision_config=dict(model_type="clip_vision_model", hidden_size=16, intermediate_size=32, num_hidden_layers=1,
+                                   num_attention_heads=2, image_size=28, patch_size=14, projection_dim=16),
+                image_token_index=V - 4), {"vlm": True}),
 }
 
 EMBED_HINTS = ("embed", "wte", "wpe", "word_embeddings", "embeddings.weight", "embed_in")
@@ -221,9 +240,11 @@ def make(name, cfg_dict, opts):
     cfg = CONFIG_MAPPING[model_type](**cfg_dict)
     cfg.architectures = arch
     torch.manual_seed(seed)
-    model = AutoModelForCausalLM.from_config(cfg)
+    auto = AutoModelForImageTextToText if opts.get("vlm") else AutoModelForCausalLM
+    model = auto.from_config(cfg)
     model.eval()
-    hidden = getattr(cfg, "hidden_size", None) or getattr(cfg, "n_embd", None) or getattr(cfg, "d_model")
+    tc = cfg.get_text_config()
+    hidden = getattr(tc, "hidden_size", None) or getattr(tc, "n_embd", None) or getattr(tc, "d_model")
     randomise(model, hidden, seed)
     ids = torch.tensor([[(seed * 7 + 13 * i + i * i) % V for i in range(T)]])
     d = os.path.join(FIX, name)
@@ -241,7 +262,7 @@ def make(name, cfg_dict, opts):
     # soft-cap); Falcon's eager ALiBi path adds the bias twice in transformers 5.17, so that one
     # fixture uses sdpa (see the options).
     impl = opts.get("attn", "eager")
-    fresh = AutoModelForCausalLM.from_pretrained(d, dtype=torch.float32, attn_implementation=impl)
+    fresh = auto.from_pretrained(d, dtype=torch.float32, attn_implementation=impl)
     fresh.eval()
     with torch.no_grad():
         full = fresh(input_ids=ids).logits[0].tolist()

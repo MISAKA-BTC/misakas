@@ -100,6 +100,7 @@ fn qwen_hybrid(p: &mut P, d_vocab: usize, d_hidden: usize, d_layers: usize, d_kv
     }
     // Multi-token-prediction heads are a separate module the next-token forward never runs.
     p.cfg.inert(&["mtp_num_hidden_layers", "mtp_use_dedicated_embeddings", "num_nextn_predict_layers"]);
+    p.ignored_prefixes.push("mtp.".into());
     p.layouts.gdn = layout;
     let gdn = GdnSpec { k_heads, v_heads, k_dim, v_dim, conv_kernel: conv, head_map: HeadMap::Group, norm_eps: eps, l2_eps: 1e-6 };
     Ok(QwenHybrid { vocab, hidden, n, h, kv, hd, act, max_pos, eps, tied, bias, rope, gdn, types })

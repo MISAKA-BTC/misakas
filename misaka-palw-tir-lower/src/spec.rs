@@ -488,6 +488,9 @@ pub struct HfStorage {
     pub mlp: MlpLayout,
     pub experts: MlpLayout,
     pub gdn: GdnLayout,
+    /// Checkpoint tensors a text-only lowering does not read by design (a VLM's vision tower
+    /// and projector, multi-token-prediction heads). Every OTHER unread tensor is reported.
+    pub ignored_prefixes: Vec<String>,
 }
 
 impl HfStorage {
