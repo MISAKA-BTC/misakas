@@ -1538,8 +1538,10 @@ fn lower_linear(
         let acc = b.reshape_fixed(acc, &[out as u32]);
         narrow(b, acc, m, s, z, want.dt)
     } else {
-        // `acc · 2^f` stays inside i64 for any i8 × i16 accumulator of `inp` terms.
-        let acc_bits = 22 + (inp as f64).log2().ceil() as i32;
+        // `acc · 2^f` stays inside i64 for any i8 × i16 (or, with `i16` main codes, i16 × i16)
+        // accumulator of `inp` terms.
+        let w16 = lb.w16_now;
+        let acc_bits = if w16 { 30 } else { 22 } + (inp as f64).log2().ceil() as i32;
         let f_max = (62 - acc_bits).clamp(0, 24);
         let (k1, k2, k3, k4) = (kx.clone(), kx.clone(), kx.clone(), kx.clone());
         let wt = decl(
@@ -1547,12 +1549,15 @@ fn lower_linear(
             cx,
             lb,
             &d.name,
-            DType::I8,
+            if w16 { DType::I16 } else { DType::I8 },
             &[out, inp],
             d.per_layer,
             Arc::new(move |c| {
-                let sc = c.split_rows(w, &k1, f_max)?;
-                Ok(IntTensor::i8(vec![sc.main.rows, sc.main.cols], sc.main.codes.clone()))
+                let sc = c.split_rows_as(w, &k1, f_max, w16)?;
+                Ok(match &sc.main16 {
+                    Some(m) => IntTensor::i16(vec![m.rows, m.cols], m.codes.clone()),
+                    None => IntTensor::i8(vec![sc.main.rows, sc.main.cols], sc.main.codes.clone()),
+                })
             }),
         )?;
         let oidx = decl(
@@ -1574,7 +1579,7 @@ fn lower_linear(
             &[out, k],
             pl,
             Arc::new(move |c| {
-                let sc = c.split_rows(w, &k3, f_max)?;
+                let sc = c.split_rows_as(w, &k3, f_max, w16)?;
                 Ok(IntTensor::i32(vec![out, k], sc.wo.clone()))
             }),
         )?;
@@ -1586,7 +1591,7 @@ fn lower_linear(
             DType::I8,
             &[out],
             pl,
-            Arc::new(move |c| Ok(IntTensor::i8(vec![out], c.split_rows(w, &k4, f_max)?.f.clone()))),
+            Arc::new(move |c| Ok(IntTensor::i8(vec![out], c.split_rows_as(w, &k4, f_max, w16)?.f.clone()))),
         )?;
         let (m, s) = decl_ms(
             b,
@@ -1595,7 +1600,7 @@ fn lower_linear(
             site,
             out,
             Arc::new(move |c| {
-                let sc = c.split_rows(w, &kx, f_max)?;
+                let sc = c.split_rows_as(w, &kx, f_max, w16)?;
                 let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, out)?);
                 Ok((0..out).map(|o| sc.main.scales[o] * sx / (2f64.powi(sc.f[o] as i32) * sy[o])).collect())
             }),
@@ -2532,6 +2537,9 @@ fn gdn_patterns(hl: &HlProgram, blk: &hl::Block, lb: &mut Lb) -> Result<()> {
                 return Err(bad());
             }
             lb.wants[j] = Some(Want { dt: DType::I32, key: ScaleKey::q24() });
+            // The decay and β set the state's forgetting, like a scan's step size: their weights
+            // are per-row `i16` (at `i8` the input-correlated rounding compounds over a context).
+            lb.w16[j] = true;
         }
         let _ = hl;
         lb.gdn.insert(i, GdnInputs { a: a as u32, dt_bias: *dtb, a_log_neg: *a_neg, b: bn as u32 });
