@@ -1252,8 +1252,11 @@ list a `PipelineJob` has.
   reads the source must hold the longest offered source and its template (the prompt's check). The
   class id covers it, and `source_token_floor` (below).
 - **The V5 job field [RFC-0001].** `source: Option<{ token_ids_hash, tokens }>`, after `images`:
-  `le16(8) ‖ borsh(v4)[2..] ‖ borsh(images) ‖ borsh(source)`. The ids travel as the prompt's do
-  (`PublicDa` or `PanelDa`), bound by `token_ids_hash` in the network's prompt-id form. **One
+  `le16(8) ‖ borsh(v4)[2..] ‖ borsh(images) ‖ borsh(source)`. **The ids travel as an image's bytes
+  do**, bound by `token_ids_hash` in the network's prompt-id form: to the worker and the panel, and in
+  a close whose stage reads them, never on the chain, under either privacy mode (a `PublicDa` job
+  publishes its prompt, not its source). A V5 payload's `prompt_token_ids` is therefore the prompt's
+  alone, and V4's payload rules and the fold's prompt accounting read it unchanged. **One
   encoding per behaviour extends open question 14's rule:** a class that has image slots **or reads
   a source** takes V5 only, and a class with neither takes V4 only. A V5 job carries one image per
   slot (none for a class without slots) and its source exactly when the class reads one, never
@@ -1286,7 +1289,8 @@ unchanged. The class fixes the head:
 
 - the preflight: the prefix only on a text class; every id below the text stage's `token_bound`; no
   longer than `max_prompt_tokens`;
-- acceptance: where the prompt's ids ride (`PublicDa`), the prompt starts with the prefix;
+- acceptance: where the prompt's ids ride (`PublicDa`), the prompt starts with the prefix
+  (`palw_fp_v5_accept_payload_v1`: the stateless V5 rules, the class resolved, then the head);
 - where they do not (`PanelDa`): the worker refuses a job whose prompt does not start with it, and a
   seat judges such a job as not the class's (it files nothing, so the claim is never licensed). The
   executor bears the consequence of running it.
