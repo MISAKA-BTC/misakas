@@ -237,6 +237,20 @@ pub fn tir_calibration_covers_context_v1(program: &TirProgramV1, meta: &serde_js
     }
 }
 
+/// **The lowering window covers the context**: a program lowered with `--max-window W` (the converter
+/// records `max_window` in its provenance) attends to at most the last `W` positions, which is the
+/// model only for jobs of at most `W` positions — so it is declared at no longer a context. A
+/// program lowered without one (no `max_window`, or `null`) keeps the model's own windows.
+pub fn tir_window_covers_context_v1(meta: &serde_json::Value, max_context: u32) -> Result<(), String> {
+    match meta.get("max_window").and_then(|w| w.as_u64()) {
+        Some(window) if u64::from(max_context) > window => Err(format!(
+            "the program was lowered for a window of {window} positions (--max-window) and is not declared at a context \
+             of {max_context}: past its window it attends to fewer positions than the model does"
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// **Write `input`'s program and tensors to `output` as a class** — under the logits scheme `choice`
 /// names ([`tir_program_with_scheme_v1`]) and a declared layout: `choice` tiled, its checkpoint
 /// interval the widest admission v10 accepts (halved from `min_j C_j` down to 1) — with `model_id`
@@ -274,6 +288,7 @@ pub fn tir_declare_layout_v1(
     }
     let mut meta = serde_json::from_str::<serde_json::Value>(&container.header.meta).unwrap_or_else(|_| serde_json::json!({}));
     tir_calibration_covers_context_v1(program, &meta, layout.max_context)?;
+    tir_window_covers_context_v1(&meta, layout.max_context)?;
     if !meta.is_object() {
         meta = serde_json::json!({ "provenance": meta });
     }

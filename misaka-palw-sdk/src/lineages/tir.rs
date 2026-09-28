@@ -371,6 +371,11 @@ mod tests {
             serde_json::json!({ "calibrated_context": 8, "calibration_length_rule": { "rule": "met", "longest": 8, "context": 8 } });
         assert!(covers(rec, &met, 64).is_err(), "met at 8 is not a waiver for 64");
         assert!(covers(att, &meta(serde_json::json!({})), 1 << 18).is_ok(), "attention is not bound");
+        // ... except by a lowering window: a program lowered for 64 positions is no 128-position class.
+        use crate::tir_layout::tir_window_covers_context_v1 as window;
+        assert!(window(&serde_json::json!({ "max_window": 64 }), 64).is_ok());
+        assert!(window(&serde_json::json!({ "max_window": 64 }), 128).unwrap_err().contains("window of 64"));
+        assert!(window(&serde_json::json!({ "max_window": null }), 1 << 18).is_ok(), "no lowering window");
     }
 
     /// **An IR family's certification, as the node's operator files it** (`palw-class certify`):
