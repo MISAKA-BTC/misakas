@@ -12,6 +12,12 @@
 //!   job's item index — never opened, never taken from either party (PALW-RND-2, PALW-RND-5);
 //! * **a job-bound input** (a scalar, a token run, a token or row count) is the accepted job's value
 //!   (`misaka_palw_tir::pipeline::stage_job_facts`): acceptance checked it, and nothing opens it;
+//! * **a job image** (RFC-0003 §II.4) is the one job input the chain does not hold: the job carries its
+//!   `input_root` and size, and the parties carry the input tiles a cone reads. Each carried tile is
+//!   verified against the job's `input_root` before any lane of it is read
+//!   ([`PalwGenStageSourceV1::carry_image_tile`]); a tile not proven under the root is refused — the
+//!   evidence, not a party's guilt — and a lane whose tile is not carried fails the evaluation
+//!   `Missing`;
 //! * **an edge from an earlier stage** is the one input the parties' carriage answers. A `StageRows`
 //!   element past the upstream's kept rows is the zero pad — a job fact, answered here. Every other
 //!   element is an upstream committed value, and it must lie in the upstream output's proven
@@ -65,6 +71,33 @@ pub fn palw_gen_random_element_v1(
     })
 }
 
+/// **A job image as the court knows it**: the job's `input_root` and size (`PalwGenImageInputRefV1`)
+/// and the class slot's input tile length (`PalwGenImageOfferV1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwGenImageRefV1 {
+    pub input_root: [u8; 64],
+    pub h: u32,
+    pub w: u32,
+    pub tile_len: u32,
+}
+
+impl PalwGenImageRefV1 {
+    pub fn of(image: &crate::palw_gen_class_v1::PalwGenImageInputRefV1, slot: &crate::palw_gen_class_v1::PalwGenImageOfferV1) -> Self {
+        let mut input_root = [0u8; 64];
+        input_root.copy_from_slice(image.input_root.as_byte_slice());
+        Self { input_root, h: image.h, w: image.w, tile_len: slot.tile_len }
+    }
+}
+
+/// Why a carried image tile is refused: the evidence fails, and nobody is convicted for it.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwGenImageRefusalV1 {
+    #[error("the job has no image {0}")]
+    UnknownImage(u8),
+    #[error("image {image}'s tile {tile} is not proven under the job's input root")]
+    TileNotProven { image: u8, tile: u64 },
+}
+
 /// How the court answers one input of a stage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwGenInputAnswerV1 {
@@ -75,15 +108,19 @@ pub enum PalwGenInputAnswerV1 {
     /// An earlier stage's committed output: elements `0..kept` carried, each within `[lo, hi]` (the
     /// upstream output's proven interval); every later element the zero pad.
     Edge { lo: i128, hi: i128, kept: u64 },
+    /// Job image `image`: every element a byte of a carried tile proven under its `input_root`.
+    Image { image: u8 },
 }
 
 /// **How the court answers every input of stage `stage`** of a job whose facts are `facts`
-/// (`stage_job_facts` of the same job). `programs` and `pipeline` must be a decoded class's.
+/// (`stage_job_facts` of the same job) and whose images are `images`. `programs` and `pipeline` must
+/// be a decoded class's.
 pub fn palw_gen_stage_answers_v1(
     pipeline: &TirPipelineV1,
     programs: &[TirProgramV2],
     stage: usize,
     facts: &[StageJobFacts],
+    images: &[PalwGenImageRefV1],
 ) -> TirResult<Vec<PalwGenInputAnswerV1>> {
     let missing = |m: String| TirError::new(TirErrorKind::Missing, m);
     let st = pipeline.stages.get(stage).ok_or_else(|| missing(format!("no stage {stage}")))?;
@@ -98,13 +135,24 @@ pub fn palw_gen_stage_answers_v1(
                     let up_prog = &programs[pipeline.stages[*up as usize].program as usize];
                     let iv = misaka_palw_tir::interval_v2::output_interval_v2(up_prog)?;
                     let per_row: u64 = d.shape[1..].iter().map(|x| *x as u64).product();
-                    let rows = facts.get(*up as usize).ok_or_else(|| missing(format!("no facts of stage {up}")))?.trip.saturating_sub(*drop);
+                    let rows =
+                        facts.get(*up as usize).ok_or_else(|| missing(format!("no facts of stage {up}")))?.trip.saturating_sub(*drop);
                     PalwGenInputAnswerV1::Edge { lo: iv.lo, hi: iv.hi, kept: rows as u64 * per_row }
                 }
                 Binding::StageFinal { stage: up } => {
                     let up_prog = &programs[pipeline.stages[*up as usize].program as usize];
                     let iv = misaka_palw_tir::interval_v2::output_interval_v2(up_prog)?;
                     PalwGenInputAnswerV1::Edge { lo: iv.lo, hi: iv.hi, kept: d.shape.iter().map(|x| *x as u64).product() }
+                }
+                Binding::JobImage { index } => {
+                    let image = images.get(*index as usize).ok_or_else(|| missing(format!("the job has no image {index}")))?;
+                    if d.shape[..] != [image.h, image.w, 3] {
+                        return Err(missing(format!(
+                            "the job's image {index} is {}×{}; input {k} is {:?}",
+                            image.h, image.w, d.shape
+                        )));
+                    }
+                    PalwGenInputAnswerV1::Image { image: *index }
                 }
                 _ => {
                     let facts = facts.get(stage).ok_or_else(|| missing(format!("no facts of stage {stage}")))?;
@@ -125,6 +173,10 @@ pub struct PalwGenStageSourceV1<'a> {
     inner: &'a mut dyn DemandSourceV2,
     answers: Vec<PalwGenInputAnswerV1>,
     draw: PalwGenDrawV1,
+    /// The job's images, by index.
+    images: Vec<PalwGenImageRefV1>,
+    /// Carried image tiles already proven under their image's `input_root`: `(image, tile) → bytes`.
+    image_tiles: std::collections::BTreeMap<(u8, u64), Vec<u8>>,
     /// The first carried edge value outside its upstream's proven interval: `(input, pos, index,
     /// value)` — the executor's PALW-TIR-33 fault.
     pub violation: Option<(u16, u32, usize, i128)>,
@@ -132,7 +184,25 @@ pub struct PalwGenStageSourceV1<'a> {
 
 impl<'a> PalwGenStageSourceV1<'a> {
     pub fn new(inner: &'a mut dyn DemandSourceV2, answers: Vec<PalwGenInputAnswerV1>, draw: PalwGenDrawV1) -> Self {
-        Self { inner, answers, draw, violation: None }
+        Self { inner, answers, draw, images: Vec::new(), image_tiles: Default::default(), violation: None }
+    }
+
+    /// The job's images (their roots, sizes and the class's tile lengths), for the image answers.
+    pub fn with_images(mut self, images: Vec<PalwGenImageRefV1>) -> Self {
+        self.images = images;
+        self
+    }
+
+    /// **Carry one input tile of job image `image`**: verified against the job's `input_root` (the
+    /// image's `ImageRgb8` header at the class's tile length) before any lane of it can be read.
+    pub fn carry_image_tile(&mut self, image: u8, tile: u64, bytes: &[u8], proof: &[[u8; 64]]) -> Result<(), PalwGenImageRefusalV1> {
+        let r = self.images.get(image as usize).ok_or(PalwGenImageRefusalV1::UnknownImage(image))?;
+        let spec = misaka_palw_gen::output::input_image_spec_v1(r.h, r.w);
+        if !misaka_palw_gen::output::verify_output_tile_v1(&r.input_root, &spec, r.tile_len, tile, bytes, proof) {
+            return Err(PalwGenImageRefusalV1::TileNotProven { image, tile });
+        }
+        self.image_tiles.insert((image, tile), bytes.to_vec());
+        Ok(())
     }
 }
 
@@ -144,7 +214,8 @@ impl DemandSourceV2 for PalwGenStageSourceV1<'_> {
         self.inner.param(param, layer, index)
     }
     fn input(&mut self, pos: u32, input: u16, index: usize) -> TirResult<i128> {
-        let answer = self.answers.get(input as usize).ok_or_else(|| TirError::new(TirErrorKind::Missing, format!("no input {input}")))?;
+        let answer =
+            self.answers.get(input as usize).ok_or_else(|| TirError::new(TirErrorKind::Missing, format!("no input {input}")))?;
         match answer {
             PalwGenInputAnswerV1::Random { domain, dist, per_step } => {
                 palw_gen_random_element_v1(*domain, *dist, *per_step, &self.draw, pos, index as u64)
@@ -154,6 +225,20 @@ impl DemandSourceV2 for PalwGenStageSourceV1<'_> {
                 .get(index)
                 .copied()
                 .ok_or_else(|| TirError::new(TirErrorKind::Missing, format!("input {input} has no element {index}"))),
+            PalwGenInputAnswerV1::Image { image } => {
+                let image = *image;
+                let tile_len = self
+                    .images
+                    .get(image as usize)
+                    .ok_or_else(|| TirError::new(TirErrorKind::Missing, format!("the job has no image {image}")))?
+                    .tile_len as u64;
+                let (tile, lane) = (index as u64 / tile_len, (index as u64 % tile_len) as usize);
+                self.image_tiles
+                    .get(&(image, tile))
+                    .and_then(|b| b.get(lane))
+                    .map(|b| *b as i128)
+                    .ok_or_else(|| TirError::new(TirErrorKind::Missing, format!("image {image}'s tile {tile} is not carried")))
+            }
             PalwGenInputAnswerV1::Edge { lo, hi, kept } => {
                 if index as u64 >= *kept {
                     return Ok(0);
@@ -186,7 +271,14 @@ impl DemandSourceV2 for PalwGenStageSourceV1<'_> {
 /// stage's step tile `t` at its last position (`trip − 1`) is output tile `t`; a `Rows` stage's step
 /// tile `t` at position `r` is output tile `r · (row / tile_len) + t` (the preflight requires a row to
 /// be whole tiles). `None` for a step tile no output tile holds.
-pub fn palw_gen_output_tile_of_v1(output: &OutputDecl, row_elements: u64, tile_len: u32, trip: u32, pos: u32, step_tile: u64) -> Option<u64> {
+pub fn palw_gen_output_tile_of_v1(
+    output: &OutputDecl,
+    row_elements: u64,
+    tile_len: u32,
+    trip: u32,
+    pos: u32,
+    step_tile: u64,
+) -> Option<u64> {
     let per_row = row_elements.div_ceil(tile_len as u64);
     if step_tile >= per_row || pos >= trip {
         return None;

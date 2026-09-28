@@ -4,9 +4,9 @@
 
 mod v2common;
 
-use misaka_palw_tir::TirErrorKind;
 use misaka_palw_tir::pipeline::*;
 use misaka_palw_tir::program_v2::*;
+use misaka_palw_tir::{DType, TirErrorKind};
 use v2common::*;
 
 fn params_for(programs: &[TirProgramV2]) -> ProgramParams {
@@ -217,4 +217,80 @@ fn stage_job_facts_are_what_the_run_used() {
     assert_eq!(stage_job_facts(&p, &programs, &long).unwrap_err().kind, TirErrorKind::Position);
     let none = PipelineJob { steps: 0, ..job };
     assert_eq!(stage_job_facts(&p, &programs, &none).unwrap_err().kind, TirErrorKind::Position);
+}
+
+/// **A job image** (RFC-0003 §II.4, NF-P10): bound as `i16 [h, w, 3]` over `[0, 255]`, run from the
+/// job's pixels, and never one of the job facts a court is handed (it opens the image's tiles).
+#[test]
+fn a_job_image_is_bound_run_and_refused_by_name() {
+    let (p, programs) = vision_pipeline();
+    let info = validate_pipeline(&p, &programs).unwrap();
+    assert_eq!(info.images, vec![[VIS_H, VIS_W]], "one image slot, 2 × 3");
+    let params = params_for(&programs);
+    let job = vision_job();
+    let random = GenRandom { seed: [0; 32], position: 0 };
+    let run = run_pipeline(&p, &programs, &params, &random, &job).unwrap();
+    assert_eq!(run.output.shape, vec![1, D as usize]);
+    // Another pixel, another embedding.
+    let mut other = job.clone();
+    other.images[0].rgb[4] ^= 0x40;
+    assert_ne!(run_pipeline(&p, &programs, &params, &random, &other).unwrap().output, run.output);
+    // The job's image at another size, or bytes that are not h · w · 3, is refused; a missing one too.
+    for (what, img) in [
+        ("3 × 2", JobImageV1 { h: 3, w: 2, rgb: job.images[0].rgb.clone() }),
+        ("a byte short", JobImageV1 { rgb: job.images[0].rgb[1..].to_vec(), ..job.images[0].clone() }),
+    ] {
+        let bad = PipelineJob { images: vec![img], ..job.clone() };
+        assert_eq!(run_pipeline(&p, &programs, &params, &random, &bad).unwrap_err().kind, TirErrorKind::Operand, "{what}");
+    }
+    let none = PipelineJob { images: vec![], ..job.clone() };
+    assert!(run_pipeline(&p, &programs, &params, &random, &none).is_err(), "no image");
+    // A court is not handed the pixels: the image is no job fact.
+    let facts = stage_job_facts(&p, &programs, &none).unwrap();
+    assert!(facts[0].inputs.is_empty());
+
+    // NF-P10, each by name.
+    let refused = |p: &TirPipelineV1, progs: &[TirProgramV2]| validate_pipeline(p, progs).unwrap_err().kind;
+    let with_input = |source: InputSource, dtype: DType, shape: Vec<u32>| {
+        let mut prog = vision_program();
+        prog.inputs[0].source = source;
+        prog.inputs[0].dtype = dtype;
+        prog.inputs[0].shape = shape;
+        vec![prog]
+    };
+    let ext = |lo, hi| InputSource::External { lo, hi };
+    assert_eq!(
+        refused(&p, &with_input(ext(0, 254), DType::I16, vec![VIS_H, VIS_W, 3])),
+        TirErrorKind::NormalForm,
+        "[0, 255] ⊄ [0, 254]"
+    );
+    assert_eq!(
+        refused(&p, &with_input(ext(1, 255), DType::I16, vec![VIS_H, VIS_W, 3])),
+        TirErrorKind::NormalForm,
+        "[0, 255] ⊄ [1, 255]"
+    );
+    let mut far = p.clone();
+    far.stages[0].bind = vec![Binding::JobImage { index: MAX_JOB_IMAGES as u8 }];
+    assert_eq!(refused(&far, &programs), TirErrorKind::NormalForm, "an index past the cap");
+    let mut gap = p.clone();
+    gap.stages[0].bind = vec![Binding::JobImage { index: 1 }];
+    assert_eq!(refused(&gap, &programs), TirErrorKind::NormalForm, "image 0 unbound while image 1 is");
+    // An image input whose type is not i16 [h, w, 3] (the program's own normal form may refuse it
+    // first; either way it is refused).
+    for (dtype, shape) in
+        [(DType::I32, vec![VIS_H, VIS_W, 3]), (DType::I16, vec![VIS_H * VIS_W, 3]), (DType::I16, vec![VIS_H, VIS_W, 4])]
+    {
+        assert!(validate_pipeline(&p, &with_input(ext(0, 255), dtype, shape.clone())).is_err(), "{} {shape:?}", dtype.name());
+    }
+    // Two images at their own sizes; one image at two sizes is refused.
+    let two = two_image_program();
+    let stage = |bind| TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![StageDecl { name: "two".into(), program: 0, trip: TripRule::Fixed { n: 1 }, max_trip: 1, tokens: None, bind }],
+        output_stage: 0,
+    };
+    let both = stage(vec![Binding::JobImage { index: 0 }, Binding::JobImage { index: 1 }]);
+    assert_eq!(validate_pipeline(&both, std::slice::from_ref(&two)).unwrap().images, vec![[2, 3], [3, 2]]);
+    let same = stage(vec![Binding::JobImage { index: 0 }, Binding::JobImage { index: 0 }]);
+    assert_eq!(refused(&same, std::slice::from_ref(&two)), TirErrorKind::NormalForm, "image 0 at 2 × 3 and at 3 × 2");
 }

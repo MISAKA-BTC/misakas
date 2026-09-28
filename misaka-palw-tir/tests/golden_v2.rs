@@ -6,6 +6,9 @@
 //! * `pipelines/toy-image.json` — the whole toy text-to-image pipeline: its bytes, the programs,
 //!   the job, the seed, every random input `R` drew, every stage's positions, the output tensor,
 //!   and the output's canonical `ImageRgb8` bytes and `output_root` (RFC-0003 §I.3);
+//! * `pipelines/toy-vision.json` — a one-stage image encoder over a job image (`JobImage`, RFC-0003
+//!   §II.4): the image's bytes, its `input_root`, every input tile with its path, the run, and the
+//!   `EmbeddingI32` output;
 //! * `encoding.json` — byte strings `TirProgramV2::decode_canonical` / `TirProgram::decode_canonical`
 //!   must accept or refuse, with the class.
 //!
@@ -378,6 +381,29 @@ struct JobJson {
     negative: Vec<u32>,
     steps: u32,
     scalars: Vec<String>,
+    /// Absent for a job with no image (the text-to-image and bidirectional files predate images).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<JobImageJson>,
+}
+
+/// A job image: what the executor holds (the bytes) and what the chain holds (`input_root`), with
+/// every input tile and its path — what a court opens (RFC-0003 §II.4).
+#[derive(Serialize)]
+struct JobImageJson {
+    h: u32,
+    w: u32,
+    rgb_hex: String,
+    /// The class's input tile length for this image's slot.
+    tile_len: u32,
+    input_root_hex: String,
+    tiles: Vec<InputTileJson>,
+}
+
+#[derive(Serialize)]
+struct InputTileJson {
+    tile: u64,
+    bytes_hex: String,
+    proof_hex: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -482,6 +508,7 @@ fn pipelines() {
             negative: job.negative.clone(),
             steps: job.steps,
             scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
+            images: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -904,6 +931,7 @@ fn admission() {
         ("toy-image", toy_pipeline(), open),
         ("toy-bidirectional (JobTokens + JobTokenCount)", bidirectional_pipeline(0), open),
         ("matmul (the job's MACs)", matmul_pipeline(), open),
+        ("toy-vision (JobImage: 1 byte a lane, an operand)", vision_pipeline(), open),
         ("refused: max_job_macs one short", matmul_pipeline(), TirJobCeilingsV1 { max_job_macs: 3 * 512 - 1, ..open }),
         ("refused: max_job_step_leaves one short", toy_pipeline(), TirJobCeilingsV1 { max_job_step_leaves: toy_leaves - 1, ..open }),
     ];
@@ -1190,6 +1218,7 @@ fn bidirectional_pipeline_vector() {
             negative: job.negative.clone(),
             steps: job.steps,
             scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
+            images: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1204,4 +1233,89 @@ fn bidirectional_pipeline_vector() {
         },
     };
     check_or_bless("pipelines/toy-bidirectional.json", serde_json::to_string_pretty(&file).unwrap());
+}
+
+#[test]
+fn vision_pipeline_vector() {
+    let (p, programs) = vision_pipeline();
+    let params = ProgramParams(programs.iter().enumerate().map(|(i, prog)| materialize_v2(prog, 300 + i as u64)).collect());
+    let job = vision_job();
+    let random = GenRandom { seed: [0; 32], position: 0 };
+    let run = run_pipeline(&p, &programs, &params, &random, &job).unwrap();
+    let tile_len = 4;
+    let images = job
+        .images
+        .iter()
+        .map(|img| {
+            let root = misaka_palw_gen::output::input_image_root_v1(img.h, img.w, tile_len, &img.rgb).unwrap();
+            let tiles = misaka_palw_gen::output::input_image_tiles_v1(img.h, img.w, tile_len, &img.rgb).unwrap();
+            let spec = misaka_palw_gen::output::input_image_spec_v1(img.h, img.w);
+            for (t, (bytes, proof)) in tiles.iter().enumerate() {
+                assert!(misaka_palw_gen::output::verify_output_tile_v1(&root, &spec, tile_len, t as u64, bytes, proof));
+            }
+            JobImageJson {
+                h: img.h,
+                w: img.w,
+                rgb_hex: hex(&img.rgb),
+                tile_len,
+                input_root_hex: hex(&root),
+                tiles: tiles
+                    .iter()
+                    .enumerate()
+                    .map(|(t, (bytes, proof))| InputTileJson {
+                        tile: t as u64,
+                        bytes_hex: hex(bytes),
+                        proof_hex: proof.iter().map(|h| hex(h)).collect(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    let stages = run
+        .stages
+        .iter()
+        .zip(&p.stages)
+        .map(|(r, st)| StageJson {
+            name: st.name.clone(),
+            trip: r.trip,
+            tokens: r.tokens.clone(),
+            steps: steps_json(&r.steps, &vec![0; r.trip as usize]),
+        })
+        .collect();
+    let spec = misaka_palw_gen::output::OutputSpecV1::embedding_i32(1, D, 0, false);
+    let values: Vec<i64> = run.output.data.iter().map(|v| *v as i64).collect();
+    let file = PipelineFileJson {
+        format: "palw-tir-v2/pipeline-vectors/1".into(),
+        spec: SPEC.into(),
+        name: "toy-vision".into(),
+        pipeline_borsh_hex: hex(&p.encode()),
+        programs: programs
+            .iter()
+            .zip(&params.0)
+            .map(|(prog, m)| PipelineProgramJson {
+                program_borsh_hex: hex(&prog.encode()),
+                graph_ir_root_hex: root(&prog.encode()),
+                params: params_json(m),
+            })
+            .collect(),
+        job: JobJson {
+            prompt: job.prompt.clone(),
+            negative: job.negative.clone(),
+            steps: job.steps,
+            scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
+            images,
+        },
+        seed_hex: hex(&random.seed),
+        item_index: random.position,
+        random_inputs: vec![],
+        stages,
+        output: tj(&run.output),
+        output_image: OutputImageJson {
+            spec_borsh_hex: hex(&spec.encode()),
+            tile_len: 4,
+            canonical_hex: hex(&spec.canonical_bytes(&values).unwrap()),
+            output_root_hex: hex(&misaka_palw_gen::output::output_root_v1(&spec, &values, 4).unwrap()),
+        },
+    };
+    check_or_bless("pipelines/toy-vision.json", serde_json::to_string_pretty(&file).unwrap());
 }

@@ -11303,9 +11303,13 @@ impl VirtualStateProcessor {
                 // name it.
                 Obj::ClassRegisteredGenV1 { class_id, .. } => {
                     if !self.palw_gen_at(point.daa_score) {
-                        return Err(format!("generative class {class_id} is refused: palw_gen_v1 is not in force at this block (RFC-0003)"));
+                        return Err(format!(
+                            "generative class {class_id} is refused: palw_gen_v1 is not in force at this block (RFC-0003)"
+                        ));
                     }
-                    return Err(format!("generative class {class_id} is refused: the pipeline admission is not in this build (RFC-0003)"));
+                    return Err(format!(
+                        "generative class {class_id} is refused: the pipeline admission is not in this build (RFC-0003)"
+                    ));
                 }
                 // **RFC-0002 Phase F (tag 61): an IR class registration is dropped by name, and the
                 // block stands.** Below `palw_tir_v1` exactly as an older build skips the payload it

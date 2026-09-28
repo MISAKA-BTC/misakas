@@ -7,7 +7,8 @@
 //!   place of a param's full dtype range; and
 //! * **how each input is opened at the court** ([`ParamLeafV1`]): an external input bound to an
 //!   earlier stage is a committed value (4 bytes a lane, a committed operand), one bound to job data
-//!   is 4 bytes a lane and no operand, and a random input or a row or token count is derived by the
+//!   is 4 bytes a lane and no operand, one bound to a job image is 1 byte a lane opened against the
+//!   image's `input_root` (an operand), and a random input or a row or token count is derived by the
 //!   court itself and opens nothing. A program admitted on its own, without a pipeline, takes the
 //!   conservative reading: every external input committed, every random input derived.
 //!
@@ -228,6 +229,7 @@ fn admit_pipeline<'a>(
                     Some(Binding::StageRows { .. } | Binding::StageFinal { .. }) => ParamLeafV1::Committed,
                     Some(Binding::JobScalar { .. } | Binding::JobTokens { .. }) => ParamLeafV1::JobData,
                     Some(Binding::StageRowCount { .. } | Binding::JobTokenCount { .. }) => ParamLeafV1::Derived,
+                    Some(Binding::JobImage { .. }) => ParamLeafV1::JobImage,
                     // Validated: one binding per external input.
                     None => ParamLeafV1::Committed,
                 },

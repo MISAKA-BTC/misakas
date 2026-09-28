@@ -248,7 +248,7 @@ pub fn pre_carry(p: &TirProgramV2, k: usize) -> u16 {
 }
 
 pub fn toy_job() -> PipelineJob {
-    PipelineJob { prompt: vec![5, 6, 7], negative: vec![], steps: 3, scalars: vec![24, 1] }
+    PipelineJob { prompt: vec![5, 6, 7], negative: vec![], steps: 3, scalars: vec![24, 1], images: vec![] }
 }
 
 /// A 64-bit LCG, so no vector depends on an RNG crate's stream.
@@ -398,6 +398,90 @@ pub fn bidirectional_pipeline(pad_id: u32) -> (TirPipelineV1, Vec<TirProgramV2>)
         output_stage: 0,
     };
     (p, vec![prog])
+}
+
+/// The toy vision image: `2 × 3` RGB.
+pub const VIS_H: u32 = 2;
+pub const VIS_W: u32 = 3;
+
+/// A toy image encoder (RFC-0003 §II.4): the job's `i16 [2, 3, 3]` image, each pixel centred
+/// (`2x − 255`, the per-channel normalisation), cut into six one-pixel patches, projected by an `i8
+/// [3, 4]` weight and summed: `Final [1, 4]`, an embedding.
+pub fn vision_program() -> TirProgramV2 {
+    let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+    let image = pb.param("vis.image", DType::I16, &[VIS_H, VIS_W, 3], false);
+    let w = pb.param("vis.w", DType::I8, &[3, D], false);
+    let pre = {
+        let mut b = pb.block("vis.pre", vec![]);
+        let x = b.cast(image, DType::I32);
+        let two = b.c(DType::I32, 2);
+        let x2 = b.mul(x, two, DType::I32);
+        let mid = b.c(DType::I32, 255);
+        let centred = b.sub(x2, mid, DType::I32);
+        let patches = b.reshape_fixed(centred, &[VIS_H * VIS_W, 3]);
+        let proj = b.matmul(patches, w, DType::I32);
+        let pooled = b.reduce_sum(proj, 0, DType::I32);
+        b.finish(&[pooled])
+    };
+    let carry = carry_of(&pb, pre);
+    let (post, out) = {
+        let mut b = pb.block("vis.post", carry);
+        let o = b.clamp(Ref::CarryIn(0), i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.commit(o);
+        (b.finish(&[]), node_of(o))
+    };
+    let v1 = pb.finish(pre, vec![], post, out);
+    TirProgramV2::from_v1_lifting_params(&v1, &[(0, InputSource::External { lo: 0, hi: 255 })], OutputDecl::Final { node: out })
+        .unwrap()
+}
+
+/// Two image inputs, `i16 [2, 3, 3]` and `i16 [3, 2, 3]`, flattened and added: `Final [1, 18]`.
+pub fn two_image_program() -> TirProgramV2 {
+    let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+    let a = pb.param("two.a", DType::I16, &[2, 3, 3], false);
+    let b2 = pb.param("two.b", DType::I16, &[3, 2, 3], false);
+    let pre = {
+        let mut b = pb.block("two.pre", vec![]);
+        let xa = b.cast(a, DType::I32);
+        let xb = b.cast(b2, DType::I32);
+        let ra = b.reshape_fixed(xa, &[1, 18]);
+        let rb = b.reshape_fixed(xb, &[1, 18]);
+        let s = b.add(ra, rb, DType::I32);
+        b.finish(&[s])
+    };
+    let carry = carry_of(&pb, pre);
+    let (post, out) = {
+        let mut b = pb.block("two.post", carry);
+        let o = b.clamp(Ref::CarryIn(0), i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.commit(o);
+        (b.finish(&[]), node_of(o))
+    };
+    let v1 = pb.finish(pre, vec![], post, out);
+    let px = InputSource::External { lo: 0, hi: 255 };
+    TirProgramV2::from_v1_lifting_params(&v1, &[(0, px), (1, px)], OutputDecl::Final { node: out }).unwrap()
+}
+
+/// The toy vision pipeline: one stage, once, over job image 0.
+pub fn vision_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
+    let p = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![StageDecl {
+            name: "vision".into(),
+            program: 0,
+            trip: TripRule::Fixed { n: 1 },
+            max_trip: 1,
+            tokens: None,
+            bind: vec![Binding::JobImage { index: 0 }],
+        }],
+        output_stage: 0,
+    };
+    (p, vec![vision_program()])
+}
+
+/// The toy vision job: one `2 × 3` image whose bytes are `(37 i + 11) mod 256`.
+pub fn vision_job() -> PipelineJob {
+    let rgb = (0..VIS_H * VIS_W * 3).map(|i| ((37 * i + 11) % 256) as u8).collect();
+    PipelineJob { images: vec![JobImageV1 { h: VIS_H, w: VIS_W, rgb }], ..PipelineJob::default() }
 }
 
 /// A one-stage pipeline whose `Final` program gathers an `i8` embedding by the job's 8 (padded) token

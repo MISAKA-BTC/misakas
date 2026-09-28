@@ -94,7 +94,13 @@ fn offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2]) -> PalwGenOffersV
     assert_eq!(rule.source, TokenSource::Prompt);
     let encoder = pipeline.stages.iter().find(|st| st.tokens.is_some()).unwrap();
     let max_prompt = encoder.max_trip - (rule.prefix.len() + rule.suffix.len()) as u32;
-    PalwGenOffersV1 { steps: (1..=steps_max).collect(), scalars, max_prompt_tokens: max_prompt, max_negative_tokens: 0 }
+    PalwGenOffersV1 {
+        steps: (1..=steps_max).collect(),
+        scalars,
+        max_prompt_tokens: max_prompt,
+        max_negative_tokens: 0,
+        images: vec![],
+    }
 }
 
 fn class() -> PalwGenClassV1 {
@@ -316,7 +322,9 @@ fn the_preflight_refuses_by_name() {
         palw_gen_class_preflight_v1(&ok, &g).expect_err("refused")
     };
     let bytes = ok.carried_bytes();
-    is(under(&|g| g.ceilings.image.max_class_bytes = bytes as u32 - 1), |e| matches!(e, PalwGenClassErrorV1::Exceeds { what: "class bytes", .. }));
+    is(under(&|g| g.ceilings.image.max_class_bytes = bytes as u32 - 1), |e| {
+        matches!(e, PalwGenClassErrorV1::Exceeds { what: "class bytes", .. })
+    });
     is(under(&|g| g.ceilings.image.max_stages = 2), |e| matches!(e, PalwGenClassErrorV1::Exceeds { what: "stages", .. }));
     let leaves = report.admission.job_step_leaves;
     is(under(&|g| g.ceilings.image.max_job_step_leaves = leaves - 1), |e| {
@@ -329,4 +337,86 @@ fn the_preflight_refuses_by_name() {
     let mut g = f;
     g.ceilings.video.max_stages = 1;
     assert!(palw_gen_class_preflight_v1(&ok, &g).is_ok(), "the image class is judged under the image ceilings");
+}
+
+/// The toy vision pipeline (`toy-vision.json`) as an Embedding class with one image slot.
+fn vision_class() -> PalwGenClassV1 {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v2/pipelines/toy-vision.json");
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("the vision vector")).expect("json");
+    let pipeline = unhex(v["pipeline_borsh_hex"].as_str().unwrap());
+    let programs: Vec<Vec<u8>> =
+        v["programs"].as_array().unwrap().iter().map(|p| unhex(p["program_borsh_hex"].as_str().unwrap())).collect();
+    let (p, progs) = decoded(&pipeline, &programs);
+    let img = &v["job"]["images"][0];
+    let slot = PalwGenImageOfferV1 {
+        h: img["h"].as_u64().unwrap() as u32,
+        w: img["w"].as_u64().unwrap() as u32,
+        tile_len: img["tile_len"].as_u64().unwrap() as u32,
+    };
+    PalwGenClassV1 {
+        version: PALW_GEN_CLASS_VERSION_V1,
+        profile: PalwGenProfileV1::Embedding as u8,
+        layouts: layouts(&p, &progs),
+        offers: PalwGenOffersV1 { steps: vec![], scalars: vec![], max_prompt_tokens: 0, max_negative_tokens: 0, images: vec![slot] },
+        output: OutputSpecV1::embedding_i32(1, 4, 0, false),
+        pipeline,
+        programs,
+        tokenizer_id: Hash64::from_bytes([0x71; 64]),
+    }
+}
+
+#[test]
+fn an_image_class_declares_its_slots_and_its_id_covers_them() {
+    let c = vision_class();
+    let report = palw_gen_class_preflight_v1(&c, &fence()).unwrap_or_else(|e| panic!("the vision class: {e}"));
+    assert_eq!(report.profile, PalwGenProfileV1::Embedding);
+    assert!(!report.draws_randomness, "an encoder draws no R: its jobs' seeds are zero (PALW-GEN-6)");
+    let slot = c.offers.images[0];
+    assert_eq!((slot.h, slot.w, slot.tile_len), (2, 3, 4));
+    // The slots are the pipeline's bound images exactly, each with a tile a digest can use.
+    let refused = |edit: &dyn Fn(&mut PalwGenClassV1)| {
+        let mut other = c.clone();
+        edit(&mut other);
+        palw_gen_class_preflight_v1(&other, &fence()).expect_err("refused")
+    };
+    for (what, e) in [
+        ("no slot", refused(&|c| c.offers.images.clear())),
+        ("a slot no stage reads", refused(&|c| c.offers.images.push(PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4 }))),
+        ("another size", refused(&|c| c.offers.images[0] = PalwGenImageOfferV1 { h: 3, w: 2, tile_len: 4 })),
+        ("a tile under 4", refused(&|c| c.offers.images[0].tile_len = 3)),
+        ("a tile over 2^16", refused(&|c| c.offers.images[0].tile_len = (1 << 16) + 1)),
+    ] {
+        assert!(matches!(e, PalwGenClassErrorV1::Offers(_)), "{what}: {e}");
+    }
+    // A slot declared on a class whose pipeline binds no image.
+    let mut text = class();
+    text.offers.images.push(slot);
+    assert!(matches!(palw_gen_class_preflight_v1(&text, &fence()), Err(PalwGenClassErrorV1::Offers(_))));
+    // The class id covers every slot's size and tile.
+    let root = Hash64::from_bytes([0xA9; 64]);
+    let id = c.class_id(&root);
+    for edit in [|c: &mut PalwGenClassV1| c.offers.images[0].tile_len = 8, |c: &mut PalwGenClassV1| c.offers.images[0].h = 4] {
+        let mut other = c.clone();
+        edit(&mut other);
+        assert_ne!(id, other.class_id(&root));
+    }
+}
+
+#[test]
+fn a_job_carries_exactly_one_image_per_slot_at_its_size() {
+    let offers = vision_class().offers;
+    let image = |h, w| PalwGenImageInputRefV1 { input_root: Hash64::from_bytes([0x33; 64]), h, w };
+    assert_eq!(palw_gen_job_images_admitted_v1(&offers, &[image(2, 3)]), Ok(()));
+    assert_eq!(palw_gen_job_images_admitted_v1(&offers, &[]), Err(PalwGenJobImageErrorV1::ImageCount { want: 1, got: 0 }));
+    assert_eq!(
+        palw_gen_job_images_admitted_v1(&offers, &[image(2, 3), image(2, 3)]),
+        Err(PalwGenJobImageErrorV1::ImageCount { want: 1, got: 2 })
+    );
+    assert_eq!(
+        palw_gen_job_images_admitted_v1(&offers, &[image(3, 2)]),
+        Err(PalwGenJobImageErrorV1::ImageSizeNotOffered { index: 0, h: 2, w: 3, got_h: 3, got_w: 2 })
+    );
+    // The reference is what the job carries: its root and size, never the bytes.
+    let bytes = borsh::to_vec(&image(2, 3)).unwrap();
+    assert_eq!(bytes.len(), 64 + 4 + 4);
 }

@@ -6,7 +6,8 @@
 //! `TirPipelineV1` (spec 04b §15.6) and of every `TirProgramV2` its stages run, in the pipeline's
 //! program order; one commitment layout per stage (Phase F's [`PalwTirLayoutV1`], D5 per stage); the
 //! canonical output header (`OutputSpecV1`, RFC-0003 §I.3); the job-parameter domains it offers
-//! ([`PalwGenOffersV1`]); and the tokenizer its prompts are ids of. Its identity is
+//! ([`PalwGenOffersV1`]: step counts, scalar intervals, prompt lengths and the image slots — each
+//! image's size and input tile, §II.4); and the tokenizer its prompts are ids of. Its identity is
 //!
 //! ```text
 //! pipeline_root            = H64(key "misaka-palw/gen/pipeline-root/v1",
@@ -63,6 +64,8 @@ pub const PALW_GEN_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/
 pub const PALW_GEN_CLASS_VERSION_V1: u16 = 1;
 /// The most step counts a class may offer (RFC-0003 §II.1.1: a bounded set).
 pub const PALW_GEN_MAX_OFFERED_STEPS_V1: usize = 8;
+/// The most images a job of a class may carry (RFC-0003 §II.4): the pipeline format's cap.
+pub const PALW_GEN_MAX_IMAGES_V1: usize = misaka_palw_tir::pipeline::MAX_JOB_IMAGES;
 
 fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(key).to_state();
@@ -72,6 +75,54 @@ fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
     let mut out = [0u8; 64];
     out.copy_from_slice(state.finalize().as_bytes());
     Hash64::from_bytes(out)
+}
+
+/// **One image slot of a class** (RFC-0003 §II.4): image `i` of every job is `u8` HWC RGB at exactly
+/// `h × w`, committed by its `input_root` over input tiles of `tile_len` bytes (§I.3.2's construction,
+/// `misaka_palw_gen::output::input_image_root_v1`). The gateway resizes or letterboxes to the declared
+/// size and says so; another size is another class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenImageOfferV1 {
+    pub h: u32,
+    pub w: u32,
+    /// Bytes per input tile, in `[4, 2^16]`: what a court opens against `input_root`.
+    pub tile_len: u32,
+}
+
+/// **A job's reference to one of its images** (RFC-0003 §II.4, `ImageInputRefV1`): the chain carries
+/// the image's `input_root` and size, never its bytes; the bytes travel like `PanelDa` prompt ids
+/// (with the capture to the panel), and a dispute opens tiles against the root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenImageInputRefV1 {
+    pub input_root: Hash64,
+    pub h: u32,
+    pub w: u32,
+}
+
+/// Why a job's images are not the class's.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwGenJobImageErrorV1 {
+    #[error("the job carries {got} images and the class takes exactly {want}")]
+    ImageCount { want: usize, got: usize },
+    #[error("image {index} is {got_h}×{got_w}; the class's slot {index} is {h}×{w}")]
+    ImageSizeNotOffered { index: usize, h: u32, w: u32, got_h: u32, got_w: u32 },
+}
+
+/// **Are a job's images the class's?** Exactly one per slot, each at its slot's size — every bound
+/// image is read (NF-P10), so none is optional; a class with fewer images is another class.
+pub fn palw_gen_job_images_admitted_v1(
+    offers: &PalwGenOffersV1,
+    images: &[PalwGenImageInputRefV1],
+) -> Result<(), PalwGenJobImageErrorV1> {
+    if images.len() != offers.images.len() {
+        return Err(PalwGenJobImageErrorV1::ImageCount { want: offers.images.len(), got: images.len() });
+    }
+    for (index, (slot, image)) in offers.images.iter().zip(images).enumerate() {
+        if (slot.h, slot.w) != (image.h, image.w) {
+            return Err(PalwGenJobImageErrorV1::ImageSizeNotOffered { index, h: slot.h, w: slot.w, got_h: image.h, got_w: image.w });
+        }
+    }
+    Ok(())
 }
 
 /// One job scalar's accepted interval, inclusive.
@@ -98,6 +149,9 @@ pub struct PalwGenOffersV1 {
     pub max_prompt_tokens: u32,
     /// The longest negative prompt; 0 when no rule reads it (no true CFG).
     pub max_negative_tokens: u32,
+    /// The image slots, in image order: exactly the images the pipeline binds, each at its bound
+    /// size (NF-P10). A job carries one image per slot.
+    pub images: Vec<PalwGenImageOfferV1>,
 }
 
 /// **A generative class**: a pipeline of version-2 programs, its layouts, its output, its offers and
@@ -322,10 +376,25 @@ fn check_offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2], offers: &Pa
     if let Some(i) = bound.iter().position(|b| !b) {
         return bad(format!("job scalar {i} is offered and bound to nothing (two job ids for one computation)"));
     }
+    // Images: one slot per bound image, at its bound size, with a tile a digest can use.
+    let info =
+        misaka_palw_tir::pipeline::validate_pipeline(pipeline, programs).map_err(|e| PalwGenClassErrorV1::Program(e.to_string()))?;
+    if offers.images.len() != info.images.len() {
+        return bad(format!("{} image slots are offered and the pipeline binds {}", offers.images.len(), info.images.len()));
+    }
+    for (i, (slot, [h, w])) in offers.images.iter().zip(&info.images).enumerate() {
+        if (slot.h, slot.w) != (*h, *w) {
+            return bad(format!("image slot {i} is {}×{} and the pipeline binds {h}×{w}", slot.h, slot.w));
+        }
+        if !(4..=1 << 16).contains(&slot.tile_len) {
+            return bad(format!("image slot {i}'s input tile {} is outside [4, 2^16]", slot.tile_len));
+        }
+    }
     // Prompts: an offered length fits every rule that reads it; nothing is offered that no rule reads.
-    for (source, max, what) in
-        [(TokenSource::Prompt, offers.max_prompt_tokens, "prompt"), (TokenSource::Negative, offers.max_negative_tokens, "negative prompt")]
-    {
+    for (source, max, what) in [
+        (TokenSource::Prompt, offers.max_prompt_tokens, "prompt"),
+        (TokenSource::Negative, offers.max_negative_tokens, "negative prompt"),
+    ] {
         let readers: Vec<(&TokenRule, u32)> = token_rules(pipeline).into_iter().filter(|(r, _)| r.source == source).collect();
         if readers.is_empty() && max != 0 {
             return bad(format!("a {what} is offered and no rule reads it"));
@@ -356,7 +425,8 @@ pub fn palw_gen_class_preflight_v1(
     }
     let profile = PalwGenProfileV1::from_tag(class.profile).ok_or(PalwGenClassErrorV1::Profile(class.profile))?;
     let ceilings = fence.ceilings.of(profile);
-    let exceeds = |what, value: u64, cap: u64| if value > cap { Err(PalwGenClassErrorV1::Exceeds { what, value, cap }) } else { Ok(()) };
+    let exceeds =
+        |what, value: u64, cap: u64| if value > cap { Err(PalwGenClassErrorV1::Exceeds { what, value, cap }) } else { Ok(()) };
     exceeds("class bytes", class.carried_bytes(), ceilings.max_class_bytes as u64)?;
 
     // 2. Every program and the pipeline, strictly; every program run, none twice, each the fence's set.
@@ -383,7 +453,10 @@ pub fn palw_gen_class_preflight_v1(
         let commits = prog.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum::<usize>();
         let what = format!("stage {s} ({})", st.name);
         if layout.max_context != st.max_trip {
-            return Err(PalwGenClassErrorV1::Layout(format!("{what}: max_context {} is not max_trip {}", layout.max_context, st.max_trip)));
+            return Err(PalwGenClassErrorV1::Layout(format!(
+                "{what}: max_context {} is not max_trip {}",
+                layout.max_context, st.max_trip
+            )));
         }
         if layout.commit_tiles.len() != commits || layout.state_tiles.len() != prog.states.len() {
             return Err(PalwGenClassErrorV1::Layout(format!(
@@ -420,7 +493,8 @@ pub fn palw_gen_class_preflight_v1(
     if class.output.shape != expected {
         return out(format!("shape {:?} is not the output stage's {expected:?}", class.output.shape));
     }
-    let interval = misaka_palw_tir::interval_v2::output_interval_v2(out_prog).map_err(|e| PalwGenClassErrorV1::Program(e.to_string()))?;
+    let interval =
+        misaka_palw_tir::interval_v2::output_interval_v2(out_prog).map_err(|e| PalwGenClassErrorV1::Program(e.to_string()))?;
     if interval.lo < layout.lo as i128 || interval.hi > layout.hi as i128 {
         return out(format!(
             "the output node's proven interval [{}, {}] is not inside the kind's domain [{}, {}] (PALW-OUT-2)",

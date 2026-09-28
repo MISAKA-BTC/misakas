@@ -299,8 +299,14 @@ impl PalwGenFenceV1 {
         h.write(self.court_version.to_le_bytes());
         self.ceilings.write_into(h);
         h.write(
-            palw_gen_court_root_v1(&self.prim_set_id, self.program_version, &self.rand_set_id, &self.output_set_id, self.court_version)
-                .as_byte_slice(),
+            palw_gen_court_root_v1(
+                &self.prim_set_id,
+                self.program_version,
+                &self.rand_set_id,
+                &self.output_set_id,
+                self.court_version,
+            )
+            .as_byte_slice(),
         );
     }
 }

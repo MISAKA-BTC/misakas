@@ -191,3 +191,25 @@ fn each_stage_may_be_admitted_under_its_own_network_inputs() {
     staged[2].h_chunk = 3;
     assert!(matches!(tir_admit_pipeline_staged_v1(&pb, &progs, &staged, &open), Err(TirAdmitError::Inputs(_))));
 }
+
+/// A job image is opened at 1 byte a lane against its `input_root`, and is an operand of its own.
+#[test]
+fn a_job_image_opens_one_byte_a_lane() {
+    let (p, progs) = vision_pipeline();
+    let (pb, bytes): (Vec<u8>, Vec<Vec<u8>>) = (p.encode(), progs.iter().map(|x| x.encode()).collect());
+    let a = tir_admit_pipeline_v1(&pb, &bytes, &inputs(), &TirJobCeilingsV1::open_v1()).unwrap();
+    let vis = &a.stages[0].admission;
+    assert_eq!(vis.inputs[0].leaf, ParamLeafV1::JobImage);
+    assert_eq!((vis.inputs[0].interval.lo, vis.inputs[0].interval.hi), (0, 255));
+    assert_eq!(ParamLeafV1::JobImage.width(misaka_palw_tir::DType::I16), 1, "a u8 pixel, whatever the input's dtype");
+    let standalone = tir_admit_program_v2(&progs[0], &inputs()).unwrap();
+    // The cone that reads the image: `pre`'s carry, a commit point of the view (§15.3).
+    let reads = misaka_palw_tir::admit::LeafV1::Param(vis.first_input_param);
+    let cone =
+        |adm: &TirAdmissionV2| adm.view.cones.iter().find(|c| c.leaves.contains(&reads)).cloned().expect("a cone reads the image");
+    let (img, alone) = (cone(vis), cone(&standalone));
+    assert_eq!(img.block, vis.program.schedule.pre, "pre's carry reads the image");
+    assert_eq!(img.operands, alone.operands, "an operand either way");
+    let lanes = (VIS_H * VIS_W * 3) as u64;
+    assert_eq!(alone.tile_opened_bytes - img.tile_opened_bytes, 3 * lanes, "1 byte a pixel where a committed value opens 4");
+}

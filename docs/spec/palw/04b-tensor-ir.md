@@ -1988,6 +1988,10 @@ additions:
     opened from a leaf and never taken from a challenger.
   - An `External` input's element is an earlier stage's committed element, or a job value, as the
     pipeline's binding says.
+  - A job image's element (`JobImage`, §15.6) is a byte of an input tile that the parties carry.
+    The court verifies the tile against the job's `input_root` before it reads any lane of it. A
+    tile that is not proven under the root is refused evidence and convicts nobody. A lane whose
+    tile nobody carried fails the evaluation `Missing`.
 
   A refused answer fails the evaluation with `Missing`, like every other refusal. An input the
   closure never reads (the operand a `Select` did not choose) is never asked.
@@ -2031,6 +2035,7 @@ Binding       := tag 0: JobScalar     · index u8
                | tag 3: StageFinal    · stage u8
                | tag 4: StageRowCount · stage u8 · drop u32
                | tag 5: JobTokenCount · rule TokenRule
+               | tag 6: JobImage      · index u8
 ```
 
 `Option<T>` is Borsh's: `0x00`, or `0x01` followed by `T`. `program` indexes the pipeline's program
@@ -2064,7 +2069,11 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
   - `StageRowCount`: `max(T − drop, 0)` of the earlier `Rows` stage;
   - `JobTokenCount`: `|prefix ‖ ids ‖ suffix|` **before** padding, a rank-0 `idx`. It is the count a
     bidirectional encoder's mask admits (`Compare(Iota < count)`). The mask then never depends on
-    the pad id, which a prompt may also contain.
+    the pad id, which a prompt may also contain;
+  - `JobImage`: the job's image `index`, its `u8` HWC RGB bytes as an `i16 [h, w, 3]` tensor. An
+    image of another size, or whose byte count is not `h · w · 3`, is `Operand`. The chain holds
+    only the image's `input_root` and size (RFC-0003 §II.4). The executor holds the bytes, and a
+    court opens them by tiles (§15.4).
 
   Every value is then held to the input's declaration (§15.4).
 - **Random inputs.** Random inputs are drawn by the caller: once, or at every position when
@@ -2096,6 +2105,10 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
   `[0, max_trip − drop]` lies inside the input's interval.
 - **NF-P9.** The output stage is a `Rows` or `Final` program, and every other stage feeds a later one
   (no dead stage).
+- **NF-P10.** A `JobImage` binds an `i16 [h, w, 3]` input whose interval contains `[0, 255]`, with
+  `index < 16`. One image is bound at one size wherever it is bound. The bound images are exactly
+  `0 … n − 1`, so a job carries `n` images and no index goes unread. `validate_pipeline` reports
+  each image's `[h, w]`, and the class declares one slot per image (RFC-0003 §II.4).
 
 ### 15.7 Randomness and outputs
 
@@ -2139,13 +2152,17 @@ root names its tiling.
 - **`pipelines/toy-bidirectional.json`** holds a one-stage bidirectional encoder over a padded token
   axis, masked by `JobTokenCount`. The same job under another pad id gives the same output. Its
   output is an `EmbeddingI32` with its `output_root`.
+- **`pipelines/toy-vision.json`** holds a one-stage image encoder over a job image (`JobImage`). It
+  records the image's bytes, its `input_root` at an input tile of 4 bytes, and every input tile with
+  its authentication path. It also records the run and the `EmbeddingI32` output with its
+  `output_root`.
 - **`admission.json`** (`palw-tir-v2/admission-vectors/1`) holds §15.9's derived numbers:
   - for each toy program admitted on its own: the inputs' intervals and openings, the `post`-written
     states, the per-position quantities, every cone with its leaves (inputs named `input:k`), the
     checkpoint intervals, and every node's interval;
   - for each pipeline (the toy image, the bidirectional encoder, a MatMul stage that carries the
-    job's MACs): every stage under its bindings' openings, the job's totals and the output's
-    interval;
+    job's MACs, the image encoder): every stage under its bindings' openings, the job's totals and
+    the output's interval;
   - refusals: an input interval that lets the update overflow, and each job ceiling one short.
 - **`demand/<program>.json`** (`palw-tir-v2/demand-vectors/1`) holds §15.4 over the run of
   `programs/<program>.json`:
@@ -2175,6 +2192,8 @@ intervals, and the ceilings. Two facts are supplied by version 2.
   (`ParamLeafV1`):
   - an earlier stage's committed output: 4 bytes a lane, and a committed operand;
   - job data (a job scalar, the job's token ids): 4 bytes a lane, and not an operand;
+  - a job image (`JobImage`): 1 byte a lane, a `u8` pixel opened by tiles against the image's
+    `input_root`. It is an operand of its own;
   - derived by the court (a random input, a row or token count): nothing opened.
 
   Every version-1 param remains an artifact tensor, opened at its dtype's width. A program admitted
@@ -2193,6 +2212,7 @@ intervals, by the program's own block and node indices.
    binding says:
    - `StageRows` and `StageFinal`: committed;
    - `JobScalar` and `JobTokens`: job data;
+   - `JobImage`: a job image;
    - `StageRowCount` and `JobTokenCount`: derived;
    - a random input: derived.
 
@@ -2214,8 +2234,9 @@ same. With the same inputs for every stage it is `tir_admit_pipeline_v1` exactly
 without running anything, the trip count, the token run and every input the court derives from the
 job: job scalars, token tensors, token counts and row counts (an earlier stage's row count is its
 trip count). It refuses what the run refuses. A court answers these inputs from it and never opens
-them. It answers random inputs from `R`. Only an edge's committed elements come from the carriage,
-and an edge's zero pad does not (§15.4).
+them. It answers random inputs from `R`. From the carriage come only an edge's committed elements
+(not its zero pad) and a job image's input tiles, each verified against `input_root` (§15.4). A job
+image is not among the job facts.
 
 ### 15.10 Rules
 
@@ -2244,13 +2265,18 @@ and an edge's zero pad does not (§15.4).
 - **PALW-TIR-47 (admission of version 2).** Admission MUST analyse the view with §15.5's intervals
   and open each input leaf as its binding says (§15.9), and MUST refuse a pipeline whose stage or
   job totals exceed their ceilings.
+- **PALW-TIR-48 (job images).** A job image MUST reach a program only through `JobImage` (NF-P10).
+  A court MUST read its elements only from input tiles proven under the job's `input_root`. A tile
+  not proven under the root MUST NOT convict anyone.
 
 ### 15.11 Open items
 
 Built in consensus, dormant on every network: the `palw_gen_v1` fence (`palw_gen_v1.rs`); the pipeline
 class, its identity, its registration object (tag 67, dropped by name at every height) and its
 preflight (`palw_gen_class_v1.rs`); and the court's answers — `R` recomputed, job facts, PALW-TIR-33
-on edges, the output-digest check and fault 21 (`palw_gen_court_v1.rs`).
+on edges, the output-digest check and fault 21 (`palw_gen_court_v1.rs`). Job images (`JobImage`,
+RFC-0003 §II.4) are built too: the class's image slots, the job's `(input_root, h, w)` reference and
+its check, and the court's reading of image lanes from proven tiles.
 
 The following are not yet built:
 

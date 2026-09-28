@@ -8,7 +8,10 @@
 //! * a carried edge value outside the upstream's proven interval is the executor's PALW-TIR-33 fault;
 //! * the output digest: every output tile agrees with the output node's step tile; a claim whose
 //!   output bytes differ from its step tiles is convicted by fault 21 at the lane; a step lane outside
-//!   the proven interval by PALW-TIR-33; evidence that is not under the root convicts nobody.
+//!   the proven interval by PALW-TIR-33; evidence that is not under the root convicts nobody;
+//! * a job image (`toy-vision.json`, RFC-0003 §II.4) is read only from input tiles proven under the
+//!   job's `input_root`: every commit point recomputes from them, a missing tile fails `Missing`, and a
+//!   forged tile is refused before any lane of it is read.
 
 use kaspa_consensus_core::palw_gen_court_v1::*;
 use kaspa_consensus_core::palw_step_leg::PalwStepFaultV1;
@@ -18,7 +21,9 @@ use misaka_palw_tir::demand::{DemandContext, DemandLimits, DemandRequest, Demand
 use misaka_palw_tir::demand_v2::{MapSourceV2, commit_occurrence_v2, eval_demanded_v2};
 use misaka_palw_tir::interp::{MapParams, ParamSource};
 use misaka_palw_tir::interp_v2::MapInputs;
-use misaka_palw_tir::pipeline::{PipelineJob, PipelineParams, PipelineRun, RandomSource, TirPipelineV1, run_pipeline, stage_job_facts};
+use misaka_palw_tir::pipeline::{
+    PipelineJob, PipelineParams, PipelineRun, RandomSource, TirPipelineV1, run_pipeline, stage_job_facts,
+};
 use misaka_palw_tir::program_v2::{OutputDecl, RandomDist, TirProgramV2};
 use misaka_palw_tir::tensor::Tensor;
 use misaka_palw_tir::types::DType;
@@ -40,7 +45,11 @@ fn vector() -> serde_json::Value {
 }
 
 fn ints(v: &serde_json::Value) -> Vec<i128> {
-    v.as_array().expect("an array").iter().map(|x| x.as_str().map_or_else(|| x.as_i64().unwrap() as i128, |s| s.parse().unwrap())).collect()
+    v.as_array()
+        .expect("an array")
+        .iter()
+        .map(|x| x.as_str().map_or_else(|| x.as_i64().unwrap() as i128, |s| s.parse().unwrap()))
+        .collect()
 }
 
 struct Params(Vec<MapParams>);
@@ -108,6 +117,7 @@ fn toy() -> Toy {
         negative: v["job"]["negative"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u32).collect(),
         steps: v["job"]["steps"].as_u64().unwrap() as u32,
         scalars: ints(&v["job"]["scalars"]).into_iter().map(|x| x as i64).collect(),
+        images: vec![],
     };
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&unhex(v["seed_hex"].as_str().unwrap()));
@@ -121,7 +131,7 @@ fn toy() -> Toy {
 fn r_inputs_are_recomputed_from_the_job_lane_by_lane() {
     let t = toy();
     let facts = stage_job_facts(&t.pipeline, &t.programs, &t.job).unwrap();
-    let answers = palw_gen_stage_answers_v1(&t.pipeline, &t.programs, 1, &facts).unwrap();
+    let answers = palw_gen_stage_answers_v1(&t.pipeline, &t.programs, 1, &facts, &[]).unwrap();
     for r in t.v["random_inputs"].as_array().unwrap() {
         let (input, step) = (r["input"].as_u64().unwrap() as u16, r["step"].as_u64().unwrap() as u32);
         let PalwGenInputAnswerV1::Random { domain, dist, per_step } = answers[input as usize] else {
@@ -129,8 +139,9 @@ fn r_inputs_are_recomputed_from_the_job_lane_by_lane() {
         };
         assert_eq!(domain as u64, r["domain"].as_u64().unwrap());
         let want = ints(&r["value"]["data"]);
-        let got: Vec<i128> =
-            (0..want.len() as u64).map(|lane| palw_gen_random_element_v1(domain, dist, per_step, &t.draw, step, lane).unwrap()).collect();
+        let got: Vec<i128> = (0..want.len() as u64)
+            .map(|lane| palw_gen_random_element_v1(domain, dist, per_step, &t.draw, step, lane).unwrap())
+            .collect();
         assert_eq!(got, want, "input {input} at step {step}");
         // Another seed or another item: another draw.
         let other = PalwGenDrawV1 { item_index: t.draw.item_index + 1, ..t.draw };
@@ -155,7 +166,7 @@ fn denoiser_carriage(t: &Toy) -> (MapSourceV2, Vec<PalwGenInputAnswerV1>) {
     let rows: Vec<i128> = t.run.stages[0].rows().iter().skip(1).flat_map(|r| r.data.clone()).collect();
     src.inputs.insert((IN_COND, None), rows);
     let facts = stage_job_facts(&t.pipeline, &t.programs, &t.job).unwrap();
-    (src, palw_gen_stage_answers_v1(&t.pipeline, &t.programs, 1, &facts).unwrap())
+    (src, palw_gen_stage_answers_v1(&t.pipeline, &t.programs, 1, &facts, &[]).unwrap())
 }
 
 #[test]
@@ -216,8 +227,13 @@ fn a_carried_edge_value_outside_the_upstream_interval_convicts_the_executor() {
         .product();
     let elements: Vec<usize> = (0..n).collect();
     let mut court = PalwGenStageSourceV1::new(&mut carriage, answers, t.draw);
-    let r =
-        eval_demanded_v2(prog, &info, &DemandRequest { target: DemandTarget::Node { ctx, node }, elements: &elements }, &mut court, &LIMITS);
+    let r = eval_demanded_v2(
+        prog,
+        &info,
+        &DemandRequest { target: DemandTarget::Node { ctx, node }, elements: &elements },
+        &mut court,
+        &LIMITS,
+    );
     assert!(r.is_err(), "the evaluation does not run on a value no execution produces");
     assert_eq!(court.violation, Some((IN_COND, 0, 0, hi + 1)), "recorded: the executor's PALW-TIR-33 fault, at the lane");
     // A random input is never the carriage's: withholding the noise changes nothing the court reads.
@@ -229,9 +245,14 @@ fn a_carried_edge_value_outside_the_upstream_interval_convicts_the_executor() {
     let ctx = DemandContext { pos: 0, occurrence: post_occ };
     clean.base.nodes.remove(&(ctx, write));
     let mut court = PalwGenStageSourceV1::new(&mut clean, answers, t.draw);
-    let (vals, _) =
-        eval_demanded_v2(prog, &info, &DemandRequest { target: DemandTarget::Node { ctx, node: write }, elements: &[0] }, &mut court, &LIMITS)
-            .expect("the court draws the noise itself");
+    let (vals, _) = eval_demanded_v2(
+        prog,
+        &info,
+        &DemandRequest { target: DemandTarget::Node { ctx, node: write }, elements: &[0] },
+        &mut court,
+        &LIMITS,
+    )
+    .expect("the court draws the noise itself");
     assert_eq!(vals[0], t.run.stages[1].steps[0].output.data[0]);
 }
 
@@ -317,4 +338,142 @@ fn fault_21_is_appended() {
     assert_eq!(tag(PalwStepFaultV1::TirOutputDigestMismatch { value_index: 7 }), 21);
     assert_eq!(tag(PalwStepFaultV1::TirLogitsTraceMismatch { value_index: 7 }), 20, "the previous last fault keeps its tag");
     assert_eq!(tag(PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: 7 }), 19);
+}
+
+/// The toy vision vector (`toy-vision.json`, RFC-0003 §II.4): the pipeline, its one program and
+/// params, and the job's image — its bytes (the executor's), its root and every tile with its path.
+struct Vision {
+    pipeline: TirPipelineV1,
+    programs: Vec<TirProgramV2>,
+    params: Params,
+    image: PalwGenImageRefV1,
+    tiles: Vec<(Vec<u8>, Vec<[u8; 64]>)>,
+    run: PipelineRun,
+}
+
+fn vision() -> Vision {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v2/pipelines/toy-vision.json");
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("the vision vector")).expect("json");
+    let programs: Vec<TirProgramV2> = v["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| TirProgramV2::decode_canonical(&unhex(p["program_borsh_hex"].as_str().unwrap())).unwrap())
+        .collect();
+    let pipeline = TirPipelineV1::decode_canonical(&unhex(v["pipeline_borsh_hex"].as_str().unwrap()), &programs).unwrap();
+    let params = Params(
+        v["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(&programs)
+            .map(|(pj, prog)| {
+                let mut m = MapParams::default();
+                for e in pj["params"].as_array().unwrap() {
+                    let j = e["param"].as_u64().unwrap() as u16;
+                    let decl = &prog.params[j as usize];
+                    let shape: Vec<usize> = decl.shape.iter().map(|d| *d as usize).collect();
+                    let layer = e["layer"].as_u64().map(|l| l as u16);
+                    m.tensors
+                        .insert((j, layer), Tensor::from_le_bytes(decl.dtype, &shape, &unhex(e["le_hex"].as_str().unwrap())).unwrap());
+                }
+                m
+            })
+            .collect(),
+    );
+    let img = &v["job"]["images"][0];
+    let (h, w, tile_len) =
+        (img["h"].as_u64().unwrap() as u32, img["w"].as_u64().unwrap() as u32, img["tile_len"].as_u64().unwrap() as u32);
+    let rgb = unhex(img["rgb_hex"].as_str().unwrap());
+    let mut input_root = [0u8; 64];
+    input_root.copy_from_slice(&unhex(img["input_root_hex"].as_str().unwrap()));
+    let tiles = img["tiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            let proof = t["proof_hex"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| {
+                    let mut h = [0u8; 64];
+                    h.copy_from_slice(&unhex(p.as_str().unwrap()));
+                    h
+                })
+                .collect();
+            (unhex(t["bytes_hex"].as_str().unwrap()), proof)
+        })
+        .collect();
+    let job = PipelineJob { images: vec![misaka_palw_tir::pipeline::JobImageV1 { h, w, rgb }], ..PipelineJob::default() };
+    let run = run_pipeline(&pipeline, &programs, &params, &Draws(PalwGenDrawV1 { seed: [0; 32], item_index: 0 }), &job).unwrap();
+    assert_eq!(run.output.data, ints(&v["output"]["data"]), "the vector's embedding, reproduced from its image");
+    Vision { pipeline, programs, params, image: PalwGenImageRefV1 { input_root, h, w, tile_len }, tiles, run }
+}
+
+#[test]
+fn a_job_image_is_read_only_from_tiles_proven_under_its_input_root() {
+    let t = vision();
+    let prog = &t.programs[0];
+    let info = validate_v2(prog).unwrap();
+    let no_pixels = PipelineJob::default();
+    let facts = stage_job_facts(&t.pipeline, &t.programs, &no_pixels).unwrap();
+    let answers = palw_gen_stage_answers_v1(&t.pipeline, &t.programs, 0, &facts, &[t.image]).unwrap();
+    assert_eq!(answers, vec![PalwGenInputAnswerV1::Image { image: 0 }], "the court holds the root, never the bytes");
+    // A job image at another size is not the input's: the answers refuse it.
+    let turned = PalwGenImageRefV1 { h: t.image.w, w: t.image.h, ..t.image };
+    assert!(palw_gen_stage_answers_v1(&t.pipeline, &t.programs, 0, &facts, &[turned]).is_err());
+    assert!(palw_gen_stage_answers_v1(&t.pipeline, &t.programs, 0, &facts, &[]).is_err(), "a job without its image");
+
+    let stage = &t.run.stages[0];
+    let carriage =
+        MapSourceV2::from_run(prog, &info, &t.params.0[0], &MapInputs::default(), &vec![0; stage.trip as usize], &stage.steps);
+    let draw = PalwGenDrawV1 { seed: [0; 32], item_index: 0 };
+    let every_commit = |drop_tile: Option<usize>| -> Result<usize, String> {
+        let mut read = 0;
+        for (pos, step) in stage.steps.iter().enumerate() {
+            for c in &step.commits {
+                let ctx = DemandContext { pos: pos as u32, occurrence: commit_occurrence_v2(prog, c.block, c.layer) };
+                let mut inner = carriage.clone();
+                inner.base.nodes.remove(&(ctx, c.node));
+                let mut court = PalwGenStageSourceV1::new(&mut inner, answers.clone(), draw).with_images(vec![t.image]);
+                for (k, (bytes, proof)) in t.tiles.iter().enumerate() {
+                    if Some(k) != drop_tile {
+                        court.carry_image_tile(0, k as u64, bytes, proof).map_err(|e| e.to_string())?;
+                    }
+                }
+                let elements: Vec<usize> = (0..c.value.data.len()).collect();
+                let (vals, _) = eval_demanded_v2(
+                    prog,
+                    &info,
+                    &DemandRequest { target: DemandTarget::Node { ctx, node: c.node }, elements: &elements },
+                    &mut court,
+                    &LIMITS,
+                )
+                .map_err(|e| format!("{e:?}"))?;
+                assert_eq!(vals, c.value.data, "position {pos} node {}", c.node);
+                assert!(inner.input_requests.is_empty(), "the carriage is never asked an input: the image is the court's");
+                read += 1;
+            }
+        }
+        Ok(read)
+    };
+    assert!(every_commit(None).unwrap() > 0, "every commit point recomputes from the proven tiles");
+    // A tile the cone reads and nobody carried: the evaluation cannot run.
+    assert!(every_commit(Some(2)).unwrap_err().contains("Missing"), "the pixels of tile 2 are read");
+
+    // A tile not proven under the root is refused before any lane is read; so is an unknown image.
+    let mut inner = carriage.clone();
+    let mut court = PalwGenStageSourceV1::new(&mut inner, answers.clone(), draw).with_images(vec![t.image]);
+    let (bytes, proof) = &t.tiles[1];
+    let mut forged = bytes.clone();
+    forged[0] ^= 1;
+    assert_eq!(court.carry_image_tile(0, 1, &forged, proof), Err(PalwGenImageRefusalV1::TileNotProven { image: 0, tile: 1 }));
+    assert_eq!(
+        court.carry_image_tile(0, 2, bytes, proof),
+        Err(PalwGenImageRefusalV1::TileNotProven { image: 0, tile: 2 }),
+        "another tile's bytes"
+    );
+    assert_eq!(court.carry_image_tile(1, 1, bytes, proof), Err(PalwGenImageRefusalV1::UnknownImage(1)));
+    assert_eq!(court.carry_image_tile(0, 1, bytes, proof), Ok(()));
 }
