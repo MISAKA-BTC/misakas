@@ -17,14 +17,11 @@
 #   past the fence) + the registration past the fence reaching Prefetching with seats proving readiness
 #   (Candidate → the admission jury → Prefetching) + df3 (8 of 8 forged-output attacks refused, the producer
 #   on the IR class). Its verdict is printed and written to $WORK_DIR/stage1.verdict on its own.
-#   The interim F7 guard (kaspad, until the F7 node update): the release produces no claims for an IR class
-#   with dissected points, so new0's producer HOLDS on D-F1 by name and Stage 2 waits for the node update.
-#   Its readiness half (PALW_TIR_GUARD_REFUSES_READINESS_V1) is off in the flag-day release; armed, it would
-#   hold D-F1 at Candidate (the admission jury seats on readiness proofs) and the registration part would
-#   read GUARDED (the IR holders name the refusal), making the stage STAGE 1 GUARDED when df4 and df3 pass.
-#   STAGE 2 (on the same chain, after the F7 node update): `stage2` = df1 (D-F1: Active → claims → Final) + df2
-#   (every commit-point kind of the SMALL class live — a 1.5B class's capture cannot reach a seat under the 16 MiB
-#   material cap; D-F1's kinds are certified offline with palw-class certify) + df4 court.
+#   STAGE 2 (the same chain and the same release — F7's node side ships in the DAA-2,000 release, no interim
+#   guard): `stage2` = df1 (D-F1: Active → claims → Final; new0 produces D-F1 from Probation on) + df2 (every
+#   commit-point kind of the SMALL class live, the node playing F7's dissection at its dissected kind — a 1.5B
+#   class's capture cannot reach a seat under the 16 MiB material cap, so D-F1's kinds are certified offline
+#   with palw-class certify) + df4 court.
 #
 #   dry     preflight (binaries, flags, tools, artifacts, ports, memory, disk, another drill) and the plan with
 #           every node's argv (salt redacted, a throwaway keyring stub) — nothing is created, nothing started
@@ -39,7 +36,9 @@
 #   df1     waits for Active and the first Final after it (dfwatch.py); PASS 0 / FAIL 1 / INCOMPLETE 3
 #   df2     the live court battery on the SMALL class (a 1.5B class's capture cannot reach a seat: 16 MiB cap),
 #           one commit-point kind at a time: new4 restarted with --palw-drill-tamper-leaf; PASS when every kind is
-#           convicted (a proof, or at a dissected kind F7's dissection) and new4's honest claims went Final
+#           convicted and new4's honest claims went Final — in one move (CourtFraud), or at the dissected kind by
+#           F7: the seats' named-leaf challenge opens the dissection, and the liar, whose root claim cannot
+#           finalize over its lie, defaults at the rung (CourtDefault)
 #   df3/4   Phase F's step scripts, `run`, with the layout exported
 #   down    SIGINT every node (never SIGKILL)
 set -euo pipefail
@@ -73,6 +72,17 @@ preflight() {
                  --palw-drill-tamper-leaf --palw-register-class --palw-producer-class --palw-class-artifact --palw-tir-fused-kernels; do
             grep -q -- "$f" <<<"$H" && ok "kaspad lists $f" || bad "kaspad lacks $f"
         done
+    fi
+    if [ -x "${KASPAD_BIN:-/nonexistent}" ]; then
+        # F7's node side ships in the DAA-2,000 release: Stage 2 needs the node's own dissection play, and a build
+        # carrying the interim guard (never released) would hold D-F1 and file nothing at a dissected leaf.
+        if grep -aqF "this node cannot play the dissection yet" "$KASPAD_BIN"; then
+            bad "kaspad carries the interim F7 guard (a pre-F7 build): the release under test must play the IR dissection"
+        elif grep -aqF "filing the IR dissection's" "$KASPAD_BIN"; then
+            ok "kaspad plays the IR history dissection (F7's node side)"
+        else
+            bad "kaspad has no F7 node side (no IR dissection moves): not the DAA-2,000 release"
+        fi
     fi
     if [ -x "${OLD_KASPAD_BIN:-/nonexistent}" ]; then
         local O; O=$("$OLD_KASPAD_BIN" --help 2>/dev/null || true)
@@ -159,11 +169,6 @@ PY
               | grep -E -- '--palw-drill|--listen=|--rpclisten=|--palw-produce$|--palw-producer-class|--palw-register-class|--palw-class-artifact|heartbeat-miner|--appdir|--ram-scale' | tr '\n' ' ')"
       done )
     rm -rf "$T"
-    # The interim F7 guard: a release that carries it produces no claims for D-F1 (dissected history cones)
-    # until the F7 node update — new0's producer holds on it by name, and Stage 2 waits for the update.
-    if [ -x "$KASPAD_BIN" ] && grep -aqF "this node cannot play the dissection yet" "$KASPAD_BIN"; then
-        echo "== the release carries the interim F7 guard: no D-F1 claims (new0 holds by name) until the F7 node update"
-    fi
     echo "== DRY RUN done (preflight failures: $FAILED)"
     [ "$FAILED" = 0 ]
 }
@@ -277,9 +282,8 @@ phase_f() {
     bash "$s" "${2:-run}"
 }
 
-# One part's verdict: PASS (0), FAIL (1), INCOMPLETE (3), GUARDED (4: held at Candidate by the interim F7
-# guard, named in the IR holders' logs), written beside the rest.
-verdict_of() { case $1 in 0) echo PASS ;; 3) echo INCOMPLETE ;; 4) echo GUARDED ;; *) echo FAIL ;; esac; }
+# One part's verdict: PASS (0), FAIL (1), INCOMPLETE (3), written beside the rest.
+verdict_of() { case $1 in 0) echo PASS ;; 3) echo INCOMPLETE ;; *) echo FAIL ;; esac; }
 
 # STAGE 1, the arming gate: df4 (below, cross) + the registration to Prefetching with ready seats + df3.
 stage1() {
@@ -288,21 +292,14 @@ stage1() {
     ( cd "$A"; WORK_DIR=$WORK_DIR DF_PORT=$(jport new3) python3 dfwatch.py --until prefetching --deadline-daa "${STAGE1_DEADLINE_DAA:-400}" ) || rcr=$?
     phase_f df3 run || rc3=$?
     local v=PASS
-    for rc in $rc4 $rcr $rc3; do
-        case $rc in
-            0) ;;
-            4) [ "$v" = PASS ] && v=GUARDED ;;
-            3) { [ "$v" = PASS ] || [ "$v" = GUARDED ]; } && v=INCOMPLETE ;;
-            *) v=FAIL ;;
-        esac
-    done
+    for rc in $rc4 $rcr $rc3; do [ "$rc" = 0 ] || { [ "$rc" = 3 ] && [ "$v" = PASS ] && v=INCOMPLETE || v=FAIL; }; done
     {
         echo "STAGE 1 $v ($(date '+%F %T'), tip $(tip new3))"
         echo "  df4 (below/cross)                  $(verdict_of $rc4)"
         echo "  registration → Prefetching, ready  $(verdict_of $rcr) $(tr '\n' ' ' < "$WORK_DIR/df-milestones.tsv" 2>/dev/null)"
         echo "  df3 (8 forged outputs)             $(verdict_of $rc3)"
     } | tee "$WORK_DIR/stage1.verdict"
-    case $v in PASS) return 0 ;; GUARDED) return 4 ;; INCOMPLETE) return 3 ;; *) return 1 ;; esac
+    case $v in PASS) return 0 ;; INCOMPLETE) return 3 ;; *) return 1 ;; esac
 }
 
 # STAGE 2, on the same chain after the fleet rollout: df1 (Active → Final), df2, df4 court.
