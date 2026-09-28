@@ -1,4 +1,4 @@
-# RFC-0002: Canonical ML IR v1 (PALW-TIR) — a bounded, deterministic integer tensor IR as the consensus VM, with optional fused kernels
+# RFC-0002: PALW Canonical Tensor IR v1 (PALW-TIR) — a bounded, deterministic integer tensor program as the consensus meaning of a class, with a reference evaluator and optional fused kernels
 
 | Field | Value |
 | --- | --- |
@@ -35,17 +35,28 @@
   移行。**fused kernel は最後。** 既存 45 kernel は捨てず、IR pattern の fused 実装としてビット一致すれば残す。
 - **工数感。** 2〜4 人で 6〜9 か月。既存の Qwen3.6-35B(16/32)も踏んでいる GDN の k≠v 不具合の修正は、本 RFC とは別の小さな
   修正として独立に進められる(§7 Phase 0)。
+- **名称と「VM ではない」こと(09-28)。** PALW-TIR は有限の静的グラフ + 静的な層スケジュール + 位置方向の scan だけで、実行中の
+  分岐・ループ・ジャンプ・呼び出しは無い。reference evaluator はそれを評価するだけで、program counter を持つ VM ではない。
+  題名を Canonical ML IR から **PALW Canonical Tensor IR** に改めたのはこの誤解を避けるため(crate 名 `misaka-palw-tir` は元から一致)。
+- **frontend とコンパイラ基盤(09-28 評価)。** 主経路は HF の `config.json` + `transformers` の modeling コード → lowerer。
+  ONNX・GGUF は v1 凍結後の任意の第 2 frontend(consensus 外)。MLIR は consensus にも参照ツールにも入れない — 誰が MLIR 等で
+  TIR を生成してもよく、正準エンコーディングと検証器がそのまま接点になる。採らない理由は Alternatives の表。
 
 ## Summary
 
 Replace the consensus meaning of a PALW class — today a layer-template graph whose nodes name one of
-45 hand-written kernels — with **Canonical ML IR v1 (PALW-TIR v1)**: a closed set of 30–50
+45 hand-written kernels — with **PALW Canonical Tensor IR v1 (PALW-TIR v1)**: a closed set of 30–50
 architecture-neutral integer primitives, and a class program that is a static, bounded DAG over them,
 carried as chain data. **v1 is frozen on an architecture corpus, not on a model**: it is accepted only
 when representatives of every major decoder family lower to it without a single model-specific
 primitive. Native kernels, including every kernel we have today, become optional fused kernels: node
-software that is byte-identical to the reference interpreter at every commit point and never part of
+software that is byte-identical to the reference evaluator at every commit point and never part of
 the identity. The court knows the primitives and nothing about models.
+
+**Terminology: an IR, not a VM.** A PALW-TIR program is a finite static DAG, a static layer schedule
+and a scan over positions whose trip count is the job's length. It has no program counter, branch,
+jump, loop or call, and every cost is known at registration. The *reference evaluator* evaluates such
+a program; it is an interpreter only in the sense that it walks the graph (in `misaka-palw-tir`).
 
 ## Motivation
 
@@ -158,7 +169,7 @@ fixed) at the moment they first hold together:
    primitive, v1 is not frozen: the new primitive must be general (useful to at least two families,
    or a standard mathematical operation), and the whole corpus is re-lowered.
 4. **Three-way bit identity.** For every corpus program, on every generated input:
-   `reference interpreter == independent second implementation == every backend that ships`, byte for
+   `reference evaluator == independent second implementation == every backend that ships`, byte for
    byte, at every commit point.
 5. **Fidelity against the float original.** The integer program is compared with the family's
    Hugging Face float reference on a fixed evaluation set — top-1 agreement, KL divergence and
@@ -178,18 +189,18 @@ and `32:128` are shape data, not kernels.
 ## 2. Architecture
 
 ```
-HF / GGUF / custom model definition
+HF config.json + transformers modeling code (primary) · ONNX / GGUF importers (optional) · custom
              │   (outside consensus: anyone may write these)
              ▼
    Architecture lowerer (per family, data-driven templates)
              ▼
    High-level ML graph (RMSNorm, attention, GDN, MoE … as library subgraphs)
              ▼
-   Canonical ML IR v1 (PALW-TIR)  ── tensor shape/index · integer arithmetic · reductions
+   PALW Canonical Tensor IR v1 (PALW-TIR) ── tensor shape/index · integer arithmetic · reductions
                                      routing/indexing · quantization boundaries · bounded state
 ═════════════════════ CONSENSUS BOUNDARY ═════════════════════
    Static verifier (types · ranges · costs · court cones)   → admission
-   Reference interpreter (slow, obviously correct)          → the court, the meaning of "correct"
+   Reference evaluator (slow, obviously correct)            → the court, the meaning of "correct"
              │
    Backends (CPU · Metal · CUDA), generic primitive kernels + fused kernels   → node software
 ```
@@ -197,10 +208,24 @@ HF / GGUF / custom model definition
 Consensus knows the IR and nothing above it. Who wrote a lowerer, an importer or a Metal kernel
 confers no protocol authority.
 
+**Frontends and compiler infrastructure.** The primary frontend is a Hugging Face checkpoint: its
+`config.json` read conservatively (every key that can change the math is understood or the model is
+refused, never silently ignored) and its semantics taken from the `transformers` modeling code, which a
+new architecture ships with on release day. ONNX and GGUF importers are optional secondary frontends
+after the v1 freeze; they target the same high-level graph and add nothing to consensus. No compiler
+infrastructure is a dependency of consensus or of the reference tools: anyone may produce TIR with
+MLIR, TVM or a script, because the canonical encoding (§4.1) and the verifier
+(`palw-class check-architecture --tir`) are the whole interface.
+
 ## 3. The primitive set (starting hypothesis)
 
 Phase A derives the final list from the corpus. The table below is the hypothesis Phase A starts from
 and must confirm, extend or shrink.
+
+**The granularity rule.** A primitive boundary sits at an exact integer operation or a named lossy
+site; everything above that is library (§3.3). Finer primitives do not raise the commitment cost,
+because commit points are chosen per cone (§6), not per node — the lower bound on granularity is
+exactness at the lossy sites, the upper bound is that no primitive knows an architecture.
 
 ### 3.1 Types and shapes
 
@@ -360,7 +385,7 @@ Each primitive has closed cost formulas. The analysis reports, per position and 
 - **state**: bytes of `Fixed` and `Hist` state per layer and in total;
 - **court worst case**: the largest terminal recomputation any single disputed tile can require (§6).
 
-The formulas upper-bound the reference interpreter's work; their coefficients are benchmarked with a
+The formulas upper-bound the reference evaluator's work; their coefficients are benchmarked with a
 margin in Phase D. Admission refuses a program over any network ceiling.
 
 ### 5.4 Court feasibility and size caps
@@ -401,7 +426,7 @@ runs.
   points until §5.4 passes.
 - **A cone is the unit of adjudication.** The terminal refutation opens one committed output tile and
   its cone's committed inputs, proves params against the artifact root (as today), and **interprets
-  the cone** with the reference interpreter. One court arm replaces the per-kernel arms (`qwen36_row`,
+  the cone** with the reference evaluator. One court arm replaces the per-kernel arms (`qwen36_row`,
   `base0_row`, `kimi_row`, …).
 - **The court knows no model.** It sees a node, its input commitments, its params, its output
   commitment and the primitive semantics. A4 becomes "the court covers PALW-TIR v1", proved once;
@@ -426,7 +451,7 @@ constraints (primitives, attributes, shapes, ranges) and native code for it.
 - **F-3 (outside the identity).** A fused kernel is node software. It appears in no object, class id
   or fingerprint, and needs no fence (ADR-0057 D1/D2). Shipping one is a node release.
 - **F-4 (the gate).** A fused kernel ships only with a differential gate that fires: random and
-  range-extreme inputs against the reference interpreter *and* the independent second implementation,
+  range-extreme inputs against the reference evaluator *and* the independent second implementation,
   per backend (ADR-0057 D3).
 - **F-5 (matching).** A pattern matches by structural equality after canonicalisation. An unmatched
   subgraph runs on generic primitive kernels.
@@ -495,12 +520,12 @@ Applies past `palw_tir_v1`. Legacy `PalwShapeProfileV3` classes keep chapter 04 
 - **PALW-TIR-16 (canonical work).** The work vector (PALW-WK-1) of an IR class MUST be derived from the
   program's structure; commit points and `tile_len` MUST NOT change it (PALW-WK-3).
 - **PALW-TIR-17 (backends).** A backend MAY implement any subgraph natively, provided every commit
-  point is byte-identical to the reference interpreter. A fused kernel MUST NOT appear in any
+  point is byte-identical to the reference evaluator. A fused kernel MUST NOT appear in any
   consensus object.
 
 ## Activation plan
 
-The order is the point: **corpus → semantics → reference interpreter → verifiers → lowerers → court →
+The order is the point: **corpus → semantics → reference evaluator → verifiers → lowerers → court →
 fused kernels → migration.** Fused kernels come last so that no performance need can pull a
 model-specific semantic back into the IR.
 
@@ -509,7 +534,7 @@ model-specific semantic back into the IR.
 | **0** (independent, may run now) | (a) fix GDN `k_heads ≠ v_heads` in the *live* kernels — it already affects Qwen3.6-35B (16/32); (b) `check-architecture` legacy mode | (a) its own small fence on testnet-12; (b) none | (a) a 16/32 and a 16/48 fixture replay and adjudicate end to end | 2–4 weeks |
 | **A. Corpus** | Lower every corpus family (§1.1) to a high-level graph and then, on paper and in a throwaway prototype, to candidate primitives; set fidelity thresholds per family | none | a primitive list that meets freeze criteria 1–3 on paper | 4–6 weeks |
 | **B. Semantics** | The normative definition of every primitive (types, shapes, exact integer semantics, rounding rule, range transfer function, cost formula); golden vectors `consensus-vectors/tir-v1/` | none | reviewed spec text; vectors for every primitive incl. range extremes | 3–4 weeks |
-| **C. Reference interpreter** | `misaka-palw-tir`: slow, obviously correct, no SIMD, no fusion; and an independent second implementation from the spec alone | none | both pass every golden vector; they agree on fuzzed programs | 4–6 weeks |
+| **C. Reference evaluator** | `misaka-palw-tir`: slow, obviously correct, no SIMD, no fusion; and an independent second implementation from the spec alone | none | both pass every golden vector; they agree on fuzzed programs | 4–6 weeks |
 | **D. Verifiers** | `tir_admit_v1`: types, ranges, costs, court cones, normal form, size caps; cost coefficients benchmarked; admission CPU time measured | none | every corpus program verifies; mutation tests (overflowing, OOB, oversized, non-dissectable programs) are all refused | 4–6 weeks |
 | **E. Lowerers** | Library templates and lowerers for C1–C8; quantisation/calibration tooling; fidelity runs; legacy conformance of the 45 kernels | none | freeze criteria 4–7; **v1 frozen, `prim_set_id` fixed** | 6–8 weeks (overlaps C/D) |
 | **F. Court and admission** | Interpreter court arm, generic `H` dissection, generic checkpoint replay, structural work derivation, admission v10 — all behind dormant `palw_tir_v1`; drills | dormant fence | devnet drill registering **Qwen2.5-A16 as an IR program** (same weights): same logits as the legacy class, same verdicts on the forged-output battery (8/8); a drill that crosses the fence on the shipping binary | 6–8 weeks |
@@ -531,6 +556,11 @@ after the capacity steps (ADR-0160), at a height chosen when Phase F's drill pas
 | A Turing-complete deterministic VM (WASM-like) | Halting and metering become runtime problems; the court must bound an arbitrary program; nothing an LLM needs requires it |
 | A zkML VM | Proving cost is orders of magnitude above re-execution; the unilateral court already gives safety |
 | ONNX / StableHLO as the consensus IR | Open op sets, float semantics, implementation-defined corners. Good lowerer *inputs*, not consensus |
+| ONNX importer as the primary frontend (evaluated 2026-09-28) | A new architecture reaches ONNX export later than `transformers`, sometimes never, which defeats day-one registration; exporter-specific decompositions (attention, RoPE, caches) must be pattern-matched back into composites; QDQ carries float scales and ties-to-even rounding and is re-quantized anyway. Kept as an optional secondary frontend after the freeze |
+| MLIR as the compiler infrastructure, a MISAKA dialect (evaluated 2026-09-28) | A C++/LLVM toolchain in a Rust node for an IR of ~40 primitives whose lowering is template expansion; consensus could not depend on it in any case. Allowed for third-party compilers (the encoding is the interface); revisit for Phase G code generation, outside the identity |
+| TOSA's integer profile as the semantic base | The closest existing integer specification and useful prior art, but its rescale rounding is not the frozen rules the live kernels use (ADR-0040 C1/C2), and it has no state, position scan, commit points or court cost |
+| Structured control inside a step (`BoundedMap`, `BoundedReduce` with a user body) | Heads, experts and channels are tensor axes, so batching needs no control flow; a user-body reduction is order-dependent unless proved associative and exact, which breaks §3.2. `BoundedScan`/`BoundedMap` enter only if the corpus needs them (Phase A) |
+| Bounded extension programs for what the IR cannot express | A second execution model for the court to adjudicate; revisit only if `NEEDS_PRIMITIVE` proves frequent after v1 |
 | A float IR with tolerances | ADR-0053: tolerance turns fraud proofs into votes on noise |
 | Every primitive committed | Multiplies step leaves several-fold against the 2^22 cap; cones give the same adjudicability at today's commitment cost |
 
@@ -544,7 +574,7 @@ after the capacity steps (ADR-0160), at a height chosen when Phase F's drill pas
   different reduction orders disagree, so an honest seat looks like a liar. Closed by §5.2 from
   type-worst-case inputs and partial-sum bounds; weights cannot escape a bound that does not trust them.
 - **Cost under-metering.** A program cheap on paper and slow in reality would stall panels. Cost
-  formulas upper-bound the reference interpreter, coefficients carry a benchmarked margin, and the
+  formulas upper-bound the reference evaluator, coefficients carry a benchmarked margin, and the
   worst-case step is capped. A registrant with a private fused kernel is faster than the network until
   the kernel is public — P5's "efficiency is rewarded" — while seats run generic kernels at the metered
   cost. Whether weight (ADR-0069) should also require a measured generic-backend throughput floor is

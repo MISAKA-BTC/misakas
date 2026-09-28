@@ -7,7 +7,7 @@ before it reaches `main`.
 | RFC | Title | Status | Where |
 | --- | --- | --- | --- |
 | 0001 | PALW inference surface gaps: deterministic decode controls, serving and input extensions (FP Job V4) | §A (the FP Job V4 release) Implementation Frozen, 2026-09-27 (G0). §0–§7 (P1–P3) Draft, for a later release | **Reserved here.** The text is `docs/rfc/0001-palw-inference-surface-gaps.md` on branch `rcore/fp-sampler` (`77a474a1c` when this index was written). It reaches `main` with that branch. Do not copy it here |
-| 0002 | Canonical ML IR v1 (PALW-TIR): a bounded, deterministic integer tensor IR as the consensus VM, with optional fused kernels; v1 frozen on an architecture corpus | Draft, 2026-09-28 | [0002-palw-tensor-ir.md](0002-palw-tensor-ir.md) (branch `rfc/0002-tensor-ir`) |
+| 0002 | PALW Canonical Tensor IR v1 (PALW-TIR): a bounded, deterministic integer tensor program as the consensus meaning of a class, with a reference evaluator and optional fused kernels; v1 frozen on an architecture corpus | Draft, 2026-09-28 | [0002-palw-tensor-ir.md](0002-palw-tensor-ir.md) (branch `rfc/0002-tensor-ir`) |
 
 **Next free number: RFC-0003.**
 
