@@ -555,3 +555,39 @@ cargo run --release -p misaka-palw-base0 --bin palw-a16-to-tir -- --artifact <51
 cargo run --release -p misaka-palw-sdk --bin palw-tir-equiv -- --network testnet-12 \
   --artifact <512-wide.palwart> --respan --tir genesis-8k.palwtir --prompts 32
 ```
+
+## 12. Encoders (RFC-0003 Part II.3, the Embedding profile)
+
+On `rfc3/lower`, over `rfc3/impl`'s `TirProgramV2` and `TirPipelineV1`. Programs are written with
+the version-1 builder, and future inputs are declared as global params. They are then lifted by
+`TirProgramV2::from_v1_lifting_params`, the interface agreed with the RFC-0003 agent. The primitive
+set is unchanged.
+
+| class shape | architectures | program | pipeline stage | output |
+| --- | --- | --- | --- | --- |
+| causal encoder | `CLIPTextModel`, `CLIPTextModelWithProjection` | the decoder lowering; `post` is final LN, then `text_projection` (`encoder::causal_v2`) | `TokenCount` over `bos ‖ prompt ‖ eos`, `max_trip` = the learned positions | `Final [1, d]`: the row at the first `eos` (a `Rows [d]` variant feeds a denoiser) |
+| last-token embedder | any lowerable decoder via `encoder::as_last_token_embedder` (Qwen3-Embedding's shape) | the decoder lowering without the head: final norm, L2 | `TokenCount` over `prompt ‖ end` | `Final [1, d]`, Q30 |
+| bidirectional encoder | `BertModel`, `RobertaModel`, `XLMRobertaModel` | `lower::bidir`: one position over `[L, d]` rows. Inputs `input.ids` (`[L]`) and `input.count` (`[]`). Full attention over the token axis, masked by `Compare(Iota < count)`. Post-LN layers. RoBERTa positions start at `padding_idx + 1` | `Fixed { n: 1 }`: `JobTokens` and `JobTokenCount` over `cls ‖ prompt ‖ sep`, padded to `L` | `Final [1, d]`: CLS or the masked mean, optionally L2 |
+
+- **Output fixed point** (`OutputSpecV1::embedding_i32(n, d, q, normalised)`). A normalised output
+  is Q30. An unnormalised one is in the smallest power-of-two unit at least its calibrated `i32`
+  scale (`Base::Pow2Site`, `q = 27` for the CLIP fixture).
+- **sentence-transformers** stacks (`modules.json`, `1_Pooling/config.json`,
+  `sentence_bert_config.json`) are read by `encoder::sentence_transformers`: `cls`, `mean`,
+  `lasttoken`, `Normalize` and `max_seq_length`. Other pooling modes and `Dense` modules are
+  refused by name.
+- **Fidelity.** The tiny HF fixtures (`tools/gen_hf_encoder_fixtures.py`, bf16-exact random
+  weights) run through `tests/encoders.rs`:
+
+  | fixture | float reference vs HF | integer cosine vs HF |
+  | --- | --- | --- |
+  | CLIP text | 1.5–2.0e-7 | 0.99997 – 0.99998 |
+  | Qwen3 as last-token embedder | 2.1–2.4e-7 | 0.99996 – 0.99997 |
+  | BERT (mean+L2, CLS) | 1.7–2.5e-7 | 0.99995 |
+  | RoBERTa (mean+L2) | 1.4–1.5e-7 | 0.99992 – 0.99994 |
+  | XLM-R (CLS+L2, mean) | 1.1–3.2e-7 | 0.99993 – 0.99995 |
+
+  In every case the V2 program's run equals its pipeline's run byte for byte, and
+  `tir_admit_program_v2` and `tir_admit_pipeline_v1` admit both.
+- **Not done.** T5-style encoder–decoders need relative position buckets and cross-attention over
+  an encoder's rows (a `StageRows` input), which is more than falls out of this.
