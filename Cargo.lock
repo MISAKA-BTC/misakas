@@ -6202,6 +6202,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-tir"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.64",
+]
+
+[[package]]
 name = "misaka-palw-tir-lower"
 version = "1.1.0"
 dependencies = [
