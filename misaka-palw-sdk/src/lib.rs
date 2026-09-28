@@ -40,13 +40,14 @@ pub mod lineage;
 pub mod lineages {
     pub mod dense;
     pub mod qwen36;
+    pub mod tir;
 }
 pub mod sdk;
 /// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
 pub mod tir_manifest;
 
 pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};
-pub use lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwWeightResidencyV1};
+pub use lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1, PalwWeightResidencyV1};
 pub use sdk::{PalwCandidateError, PalwClassSdk, PalwRegistrationCandidateV1, builtin_lineages_v1};
 
 #[cfg(test)]
