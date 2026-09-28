@@ -2086,6 +2086,11 @@ pub(crate) fn palw_da_unit_answer_v1(
         PalwDaUnitV1::TirStepLeaf { index } => {
             return Err(format!("IR step leaf {index}: answered by the IR responder, not the capture path (RFC-0002 Phase F)"));
         }
+        PalwDaUnitV1::TirStepNode { level, index } => {
+            return Err(format!(
+                "IR step node ({level}, {index}): answered by the IR responder, not the capture path (RFC-0002 Phase F)"
+            ));
+        }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
         (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(
@@ -12320,7 +12325,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
-        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
+        PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",
         PalwConsensusObjectV2::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared; the chain drops each until its owner lands it, and no
         // path in this node builds one yet.
