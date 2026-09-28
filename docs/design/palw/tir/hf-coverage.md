@@ -543,4 +543,12 @@ HF_HUB_OFFLINE=1 …/tir-venv/bin/python misaka-palw-tir-lower/tools/tokenize_do
 cargo run --release -p misaka-palw-tir-lower --bin palw-tir-fidelity -- ~/Downloads/Qwen2.5-1.5B-Instruct \
   --calib qwen25-calib.json --eval qwen25-eval.json --eval-seqs 2 --positions 128 \
   --artifact-out qwen25.palwtir --tir-out qwen25.tir --json
+# The same on the typed backend (byte-identical, ~300x faster at 1.5B), with a reference cross-check
+# and, for recurrent models, the 4,096-position drift:
+cargo run --release -p misaka-palw-tir-lower --bin palw-tir-fidelity -- <checkpoint> \
+  --calib calib.json --eval eval.json --exec --cross-check 2 [--eval drift.json --positions 4096 --drift]
+# The legacy dense row and its IR program, same logits and rows (D-F1, offline):
+cargo run --release -p misaka-palw-base0 --bin palw-a16-to-tir -- --artifact <512-wide.palwart> --respan 8192 --out genesis-8k.palwtir
+cargo run --release -p misaka-palw-sdk --bin palw-tir-equiv -- --network testnet-12 \
+  --artifact <512-wide.palwart> --respan --tir genesis-8k.palwtir --prompts 32
 ```
