@@ -1141,10 +1141,10 @@ mod tests {
             for preset in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS, &public] {
                 assert_eq!(height(preset, fence.name), None, "{} is dormant on {}", fence.name, preset.net);
             }
-            // testnet-12's third post-launch flag day arms the ρ = 10 package at 1,500 (the drill inherits it);
+            // testnet-12's third post-launch flag day arms the ρ = 10 package at 1,700 (the drill inherits it);
             // the later ρ steps stay dormant there too.
             let armed = PALW_T12_CAPACITY_RHO10_FENCES_V1.iter().any(|f| f.name == fence.name);
-            let expect = armed.then(|| ForkActivation::new(1_500));
+            let expect = armed.then(|| ForkActivation::new(1_700));
             assert_eq!(height(&shipped, fence.name), expect, "{} on testnet-12 as shipped", fence.name);
             assert_eq!(height(&drill, fence.name), expect, "{} on the release's drill", fence.name);
             let original = format!("{public:?}");
@@ -1188,7 +1188,7 @@ mod tests {
         assert_eq!(moves.iter().map(|m| m.name).collect::<Vec<_>>(), PALW_T12_CAPACITY_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>());
         let rho10 = |name: &str| crate::config::params::PALW_T12_CAPACITY_RHO10_FENCES_V1.iter().any(|f| f.name == name);
         assert!(moves.iter().all(|m| m.at == 1_234
-            && if rho10(m.name) { m.was == Some(1_500) && !m.to_string().contains("ARMED") } else { m.was.is_none() && m.to_string().contains("ARMED") }));
+            && if rho10(m.name) { m.was == Some(1_700) && !m.to_string().contains("ARMED") } else { m.was.is_none() && m.to_string().contains("ARMED") }));
         assert!(moved.palw_capacity_weight_cap_active_at(1_234) && !moved.palw_capacity_weight_cap_active_at(1_233));
         assert_ne!(moved.consensus_params_id(), drill.consensus_params_id());
         for ((name, before), (_, after)) in drill.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
@@ -1296,10 +1296,10 @@ mod tests {
         assert_eq!(moved.palw_reorg_strict_economic_win, Some(ForkActivation::new(40)), "the strict-economic-win reorg rule");
         // ADR-0160's capacity fences are NOT the post-launch release's (rcore/cap-s1): the release's drill
         // leaves them dormant; `palw_drill_capacity_fences_at_v1` crosses them.
-        // The third flag day's capacity package keeps its own height (1,500) under this flag;
+        // The third flag day's capacity package keeps its own height (1,700) under this flag;
         // `--palw-drill-fence3-at` moves it.
-        assert_eq!(moved.palw_capacity_weight_cap, Some(ForkActivation::new(1_500)), "the weight cap keeps the release's 1,500");
-        assert_eq!(bundle.state.capacity_weight_cap_from_daa(), Some(1_500), "and so does its fold mirror");
+        assert_eq!(moved.palw_capacity_weight_cap, Some(ForkActivation::new(1_700)), "the weight cap keeps the release's 1,700");
+        assert_eq!(bundle.state.capacity_weight_cap_from_daa(), Some(1_700), "and so does its fold mirror");
         assert_eq!(
             (moved.palw_bond_maturity_window_at(39), moved.palw_bond_maturity_window_at(40)),
             (None, Some(1_000)),
@@ -1318,10 +1318,10 @@ mod tests {
         assert!(moved.palw_slashing_evidence_utxo_genuine_at(40) && !moved.palw_slashing_evidence_utxo_genuine_at(39));
         assert!(moved.palw_pruning_proof_strict_economic_win.is_some_and(|f| f.is_active(40) && !f.is_active(39)));
         // ADR-0160 lane escrow (F-E) is a capacity fence, not the DAA-750 release's: it keeps the third flag
-        // day's 1,500 under this flag.
-        assert!(!moved.palw_capacity_escrow_active_at(40) && !moved.palw_capacity_escrow_active_at(1_499));
-        assert!(moved.palw_capacity_escrow_active_at(1_500));
-        assert_eq!(bundle.state.capacity_escrow_from_daa(), Some(1_500), "the escrow lane's mirror keeps 1,500");
+        // day's 1,700 under this flag.
+        assert!(!moved.palw_capacity_escrow_active_at(40) && !moved.palw_capacity_escrow_active_at(1_699));
+        assert!(moved.palw_capacity_escrow_active_at(1_700));
+        assert_eq!(bundle.state.capacity_escrow_from_daa(), Some(1_700), "the escrow lane's mirror keeps 1,700");
         assert_eq!(
             moved.palw_operator_anchor.as_ref().map(|rule| rule.operators.len()),
             Some(8),

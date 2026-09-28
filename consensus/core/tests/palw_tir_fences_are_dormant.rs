@@ -7,7 +7,11 @@
 //! every `Params::from(NetworkId)` door (which wraps `with_registered_models`), the testnet-11 and
 //! testnet-12 releases the fleet runs, the testnet-12 releases that a node which has not taken a
 //! flag day still runs, and a salted testnet-12 drill — at the values the tree had BEFORE the first
-//! Phase F field existed (`tir/phase-f` at `ebec854f4`).
+//! Phase F field existed (`tir/phase-f` at `ebec854f4`), with the three testnet-12 rows that
+//! `rcore/int-7` (`7aba8dd57`, the capacity flag day moved to DAA 1,700) moved taken at int-7's
+//! values: the shipped rows at int-7's own pins (params `770fb822…`, schedule `9410712f…`), and the
+//! salted drill (which int-7 does not pin) at its schedule `9410712f…` and params `31b913ef…` — the
+//! drill's move is the same flag day's (identities unchanged throughout).
 //!
 //! If a Phase F change turns this file red, the change is not dormant. A change that ARMS a Phase F
 //! fence on a preset re-pins the moved row here, in the commit that arms it.
@@ -101,9 +105,9 @@ const PINS: &[(&str, &str, &str, &str)] = &[
     ),
     (
         "from(testnet-12)",
-        "cbe9152fa73e1c57737918bbea1e48c3f57a53ca9ab36273cbfb3407c15e257f",
+        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "f78b02adad83fbd4e02790142a2a03462dddb8ec4df13ad9f613f21d2dd9294a",
+        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
     ),
     (
         "from(devnet)",
@@ -137,9 +141,9 @@ const PINS: &[(&str, &str, &str, &str)] = &[
     ),
     (
         "palw_t12_shipped_params",
-        "cbe9152fa73e1c57737918bbea1e48c3f57a53ca9ab36273cbfb3407c15e257f",
+        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "f78b02adad83fbd4e02790142a2a03462dddb8ec4df13ad9f613f21d2dd9294a",
+        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
     ),
     (
         "palw_t12_launch_params_v1",
@@ -161,9 +165,9 @@ const PINS: &[(&str, &str, &str, &str)] = &[
     ),
     (
         "palw_t12_drill_params_v1",
-        "d7c56c62be3727b52e32398fb8a6bf7ce5e2f3043f925a0b5b9498ebd7d09608",
+        "31b913ef15a1617472bc1764978763e530c021b116c98a77e6e5f6f47769faa4",
         "2254a5ae75cc1ed6fa70cc6f9a57281e7ab36aa8f80a820a545b81dad21549c6",
-        "f78b02adad83fbd4e02790142a2a03462dddb8ec4df13ad9f613f21d2dd9294a",
+        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
     ),
 ];
 

@@ -2962,4 +2962,222 @@ mod tests {
             assert_eq!(bundle.court.dissection_arity(), 2, "{name}: a shipped preset runs the binary ladder");
         }
     }
+
+    // ---------------------------------------------------------------------------------------
+    // Totality — every move of the dissection answers hostile input, never with a panic
+    // ---------------------------------------------------------------------------------------
+
+    /// [`fixture`] with the committed rows and the root claim the caller's, not an honest
+    /// execution's: every leaf is still committed in the step tree, so the bottom's openings verify
+    /// and the arithmetic behind them is what gets exercised.
+    fn committed_fixture(
+        d_head: usize,
+        q: Vec<i32>,
+        k: Vec<i32>,
+        v: Vec<i32>,
+        root: PalwAttnRangeClaimV1,
+        values: A16QuantParams,
+    ) -> Fixture {
+        let kv_dim = d_head;
+        let positions = k.len() / kv_dim;
+        let out_tile = a16_attn_finalize_v1(&root.v_acc, values);
+        let mut leaves: Vec<PalwStepTileLeafV1> = vec![leaf_of(&q, 0, 0)];
+        for p in 0..positions {
+            leaves.push(leaf_of(&k[p * kv_dim..(p + 1) * kv_dim], 1, p as u32));
+            leaves.push(leaf_of(&v[p * kv_dim..(p + 1) * kv_dim], 2, p as u32));
+        }
+        leaves.push(leaf_of(&out_tile, 3, 0));
+        let leaf_hashes: Vec<Hash64> = leaves.iter().map(|l| step_tile_leaf_hash_v1(&h64(JOB), &h64(SHAPE), l)).collect();
+        let step_root = step_merkle_root_v1(&leaf_hashes).expect("a tree over the committed rows");
+        Fixture {
+            d_head,
+            kv_dim,
+            positions,
+            lanes: (0, root.v_acc.len()),
+            q,
+            k,
+            v,
+            root,
+            out_tile,
+            binding: PalwAttnBottomBindingV1 {
+                job_context_hash: h64(JOB),
+                shape_profile_hash: h64(SHAPE),
+                step_root,
+                step_leaf_count: leaf_hashes.len() as u64,
+                max_step_leaf_count: 1 << 32,
+                checkpoint_merkle_root: h64(0),
+                checkpoint_leaf_count: 2,
+                checkpoint_profile_hash: h64(CKPT),
+                state_chunk_map_id: crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3(),
+            },
+            leaf_hashes,
+        }
+    }
+
+    /// One whole dissection against a responder that discloses `split`'s children and a challenger
+    /// that names `pick`, ending in the bottom on the route `anchored` names. Every refusal is
+    /// returned; the caller only asks that nothing panicked.
+    fn play_hostile(
+        fx: &Fixture,
+        site: &PalwAttnBottomSiteV1,
+        arity: u8,
+        split: u8,
+        pick: u8,
+        anchored: bool,
+        reached_bottom: &mut u64,
+    ) -> Result<PalwAttnCourtVerdictV1, PalwAttnCourtError> {
+        let lanes = fx.root.v_acc.len();
+        let root = PalwAttnRootClaimV1 {
+            version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
+            head: 0,
+            lane_first: 0,
+            lane_count: lanes as u16,
+            history_positions: fx.positions as u32,
+            claim: fx.root.clone(),
+        };
+        let mut phase = PalwAttnDissectPhaseV1::open_with_arity(
+            h64(9),
+            &root,
+            (0, 0, lanes as u16),
+            fx.positions as u32,
+            &fx.out_tile,
+            site.params.values,
+            arity,
+            TILE,
+            100,
+            30,
+            true,
+        )?;
+        let mut daa = 200u64;
+        while phase.turn() != PalwBisectTurnV1::Terminal {
+            let n = phase.child_ranges().len();
+            let parent = phase.claim().clone();
+            let children: Vec<PalwAttnRangeClaimV1> = (0..n)
+                .map(|i| match split {
+                    // Everything in the first child: folds exactly, whatever the parent holds.
+                    0 if i == 0 => parent.clone(),
+                    0 => PalwAttnRangeClaimV1 { max: i32::MIN, exp_sum: 0, v_acc: vec![0; lanes] },
+                    // Every field at its ceiling: the fold's own sums leave `i64`.
+                    _ => PalwAttnRangeClaimV1 { max: i32::MAX, exp_sum: i64::MAX, v_acc: vec![i64::MAX; lanes] },
+                })
+                .collect();
+            daa += 1;
+            phase.apply_round(&PalwAttnDissectRoundV1 { version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1, children }, daa, 30)?;
+            daa += 1;
+            let child = if pick == 0 { 0 } else { (n - 1) as u8 };
+            phase.apply_choice(
+                &PalwAttnDissectChoiceV1 {
+                    version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                    session_id: h64(9),
+                    round: phase.round(),
+                    child,
+                },
+                daa,
+                30,
+            )?;
+        }
+        let tile = phase.terminal_tile().ok_or(PalwAttnCourtError::AnchorCoversNothing)?;
+        *reached_bottom += 1;
+        if anchored {
+            let anchor = fx.anchor(fx.positions as u32);
+            let site = PalwAttnBottomSiteV1 { params: site.params, ..fx.site_anchored(&anchor) };
+            check_attn_dissect_bottom_v1(
+                &phase,
+                &fx.bottom_anchored(h64(9), tile, &anchor),
+                &fx.binding_anchored(&anchor),
+                &site,
+                true,
+            )
+        } else {
+            check_attn_dissect_bottom_v1(&phase, &fx.bottom(h64(9), tile), &fx.binding, site, true)
+        }
+    }
+
+    /// **The dissection answers a hostile producer, responder and registrant at every move — a
+    /// verdict or a refusal, never a panic** (RFC-0002 Step 1). The bottom runs in block processing
+    /// under `overflow-checks = true`, so a panic anywhere on this path halts every node that
+    /// processes the close.
+    ///
+    /// Committed rows at the `i32` rails and at the A16 rail, registered narrowings at the `i64`
+    /// rails and past the shift domain, root claims whose `m*` and `V*` are anything and whose `S*`
+    /// is at and outside its band, children that fold exactly and children that overflow the fold,
+    /// both routes to the bottom — and the tile kernel on its own, with the `S*` below the band the
+    /// phase refuses, because the kernel's totality must not lean on the caller's check.
+    #[test]
+    fn a_hostile_dissection_is_answered_at_every_move_and_never_panics() {
+        use crate::palw_step_refute::hostile_totality_tests::guarded;
+        let d_head = 8usize;
+        let rows: [fn(usize, u64) -> Vec<i32>; 5] =
+            [|n, _| vec![i32::MIN; n], |n, _| vec![i32::MAX; n], |n, _| vec![32_767; n], |n, _| vec![-32_767; n], |n, s| codes(n, s)];
+        let triples = [
+            A16QuantParams { multiplier: i64::MAX, shift: 0, zero: i64::MAX },
+            A16QuantParams { multiplier: i64::MIN, shift: 62, zero: i64::MIN },
+            A16QuantParams { multiplier: i64::MIN, shift: 0, zero: 0 },
+            A16QuantParams { multiplier: 1, shift: 255, zero: 0 },
+            params().scores,
+        ];
+        let unit = i64::from(crate::palw_base0::int_exp(0));
+        let mut panics: Vec<String> = Vec::new();
+        // How far the plays got: to the bottom at all, and to a verdict there — so a sweep that
+        // was refused at the door every time cannot pass for one that exercised the arithmetic.
+        let (mut reached_bottom, mut verdicts) = (0u64, 0u64);
+        for positions in [1usize, 17] {
+            for (qi, q_row) in rows.iter().enumerate() {
+                for (ki, kv_row) in rows.iter().enumerate() {
+                    let q = q_row(d_head, 1);
+                    let k = kv_row(positions * d_head, 2);
+                    let v = kv_row(positions * d_head, 3);
+                    for t in 0..triples.len() {
+                        let site_params = A16AttnFusedParamsV1 {
+                            scores: triples[t],
+                            probs: triples[(t + 1) % triples.len()],
+                            values: triples[(t + 2) % triples.len()],
+                            up_bits: [0u8, 2, 62, 255, 31][t],
+                        };
+                        // The kernel alone, at the S* the phase would refuse as well as at its band.
+                        for (m_star, s_star) in
+                            [(i32::MIN, 1i64), (i32::MAX, 1), (0, unit), (i32::MAX, i64::MAX), (i32::MIN, unit * positions as i64)]
+                        {
+                            let r = guarded(|| {
+                                a16_attn_tile_triple_v1(&q, &k, &v, d_head, 0, (0, d_head), site_params, m_star, s_star).map(|_| ())
+                            });
+                            if let Err(p) = r {
+                                panics.push(format!("tile kernel q{qi} kv{ki} t{t} m*={m_star} S*={s_star}: {p}"));
+                            }
+                        }
+                        for m_star in [i32::MIN, i32::MAX, 0] {
+                            for exp_sum in [unit, unit * positions as i64, i64::MAX, 1, 0] {
+                                for v_acc in [vec![i64::MIN; 4], vec![i64::MAX; 4], vec![0; 4], vec![1 << 62; 4]] {
+                                    let root = PalwAttnRangeClaimV1 { max: m_star, exp_sum, v_acc };
+                                    let fx = committed_fixture(d_head, q.clone(), k.clone(), v.clone(), root, site_params.values);
+                                    let site = PalwAttnBottomSiteV1 { params: site_params, ..fx.site() };
+                                    for (arity, split, pick, anchored) in
+                                        [(2u8, 0u8, 0u8, false), (2, 0, 1, true), (64, 0, 1, false), (2, 1, 0, false), (4, 0, 0, true)]
+                                    {
+                                        match guarded(|| play_hostile(&fx, &site, arity, split, pick, anchored, &mut reached_bottom)) {
+                                            Ok(Ok(_)) => verdicts += 1,
+                                            Ok(Err(_)) => {}
+                                            Err(p) => panics.push(format!(
+                                                "dissection positions {positions} q{qi} kv{ki} t{t} m*={m_star} S*={exp_sum} arity {arity} split {split} pick {pick} anchored {anchored}: {p}"
+                                            )),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            panics.is_empty(),
+            "{} hostile dissections panicked; first ten:\n{}",
+            panics.len(),
+            panics[..panics.len().min(10)].join("\n")
+        );
+        assert!(
+            reached_bottom > 0 && verdicts > 0,
+            "the sweep never reached the bottom's arithmetic: {reached_bottom} bottoms, {verdicts} verdicts"
+        );
+    }
 }
