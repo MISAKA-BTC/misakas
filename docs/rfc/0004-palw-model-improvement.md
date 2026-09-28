@@ -36,9 +36,14 @@
   setter セット。
 - **promotion。** 項目ごとの対比較、δ の差、下側信頼限界 > 0(ピン留めした二項表による整数の符号検定、候補数で Bonferroni)、
   回帰スイートと安全スイートで ε を超える後退なし。満たす候補がなければ現 head のまま。rollback の道がある。
-- **候補の成果物。** 完全な重み、または親 + adapter(IR グラフの中の unmerged LoRA 経路)。adapter なら seat は親の成果物を
-  再利用でき、prefetch は親の約 1 %(1.5B で約 18 MB)。artifact_root は親と overlay の合成 root で、class id は Phase F の
-  式のまま。
+- **候補の成果物。** 完全な重み、または親 + adapter(IR グラフの中の unmerged LoRA 経路。lowering は `tir/lower` a4bd7141f)。
+  (1) 候補の最初の P 個の param は親と byte 一致で、artifact_root は親の root と adapter 部の root を合成するので、親の tensor は
+  二度と commit しない。(2) class id は Phase F の式のまま合成 root にかかり、親 class・候補 program の root・adapter root・P を
+  束ねる。(3) 親の scale を再利用する:adapter が親の約 2 倍の余裕を超えて活性を動かせば clip し、それは候補の評価点に表れる
+  候補自身の危険。再較正は byte 一致の再利用を壊すので、完全な重みの候補として出す。(4) 1 射影あたり約 20 node 増えるので、
+  468 node の MoE・gated-delta block では `all-linear` が 512 node の上限に入らない。そういう line は狭い adapter か完全な重み。
+  DoRA・学習した bias・`modules_to_save`・`layers_to_transform`・融合射影・`fan_in_fan_out`・非正方 rsLoRA は v1 の外。
+  prefetch は親の約 3 %(1.5B で約 53 MB)。
 - **学習を IR で書くこと。** 理論上は可能(forward・backward・optimizer を compiler で 25 primitive に落とす。autodiff op は
   要らない)。v1 は学習を consensus に入れない(研究手法を凍結してしまうから)。将来の任意 profile として記録し、primitive で
   足りるか(optimizer state、勾配の累積、reduction、R による sampling、batching)を未決事項に残す。
@@ -57,7 +62,7 @@
   計算の貸し出し(ブリーフの "FLOP")・Virtuals との違いは、検証を先に置いた報酬と、チェーン自身の実行で測る改良。
 - **工数(Phase A、VM なし、rung A も待たない)。** 既存コードに対する実装項目 A1〜A15(line の改良 policy と promotion、
   epoch 状態機械、hard case・setter・opt-in、合成 artifact、評価 job 種別、採点 pipeline、promotion 演算、報酬と pool、node 側、
-  adapter の lowering、第 2 実装、drill、監査、soak)で合計 **61〜85 engineer-weeks(約 14〜20 EM)**。agent による実装は
+  adapter の lowering、第 2 実装、drill、監査、soak)で合計 **60〜84 engineer-weeks(約 14〜20 EM)**。agent による実装は
   約 3〜5 週、**mainnet-safe は開始から約 8〜11 か月**。前提は PALW-TIR(Phase F)と RFC-0003 の pipeline(step 3〜5)だけ。
 
 ## Summary
@@ -88,7 +93,7 @@ no EVM dependency.
 - **Candidates are cheap to carry**: full weights, or the parent plus an adapter — an unmerged LoRA
   path in the IR graph — whose composite artifact lets seats reuse the parent's bytes.
 - **Implementation.** The RFC ends with a plan against the existing code (spec 15's lines, the fold,
-  Phase F's IR classes and court, ADR-0160's capacity) of 61–85 engineer-weeks, about 3–5 weeks of
+  Phase F's IR classes and court, ADR-0160's capacity) of 60–84 engineer-weeks, about 3–5 weeks of
   agent implementation and 8–11 months to mainnet-safe use.
 
 ## Motivation
@@ -372,51 +377,126 @@ program the family rule accepts. It is registered as any IR class is (`ClassRegi
 burn, the per-block cap), and then entered in the epoch by `CandidateSubmitted` with its fees, bond and
 declarations. Its artifact is one of two kinds.
 
-- **Full weights.** A single artifact root. Allowed only if the policy allows it, and charged for the
-  seats' prefetch (§13).
+- **Full weights.** A single artifact root, with scales of its own. Allowed only if the policy allows it,
+  and charged for the seats' prefetch (§6.7, §13).
 - **Parent + adapter.** The candidate's program is the parent's program with an **unmerged LoRA path** at
-  each adapted weight, and its artifact is **composite**: the parent's inventory plus a small overlay.
+  each adapted projection, and its artifact is **composite**: the parent's inventory, reused byte for
+  byte, plus a small adapter section (§6.3–§6.6).
 
 ### 6.2 The adapter in the IR graph
 
-For an adapted weight `W` (an `i8` param with per-channel scales) and its input `x`, the parent computes
-`acc = MatMul(x, Wᵀ)` in `i32` and then its requantisation. The candidate computes, with every node a v1
-primitive:
+The lowering is `misaka-palw-tir-lower`'s (`crate::lora`, `lower::lower_lora`; `tir/lower` a4bd7141f,
+hf-coverage §12). It reads a PEFT adapter (`adapter_config.json`, `adapter_model.safetensors`) directly.
+Each targeted projection keeps its parent weight and adds an unmerged path:
 
 ```
-t    = MatMul(x, Aᵀ)                          i32, A: [r, d_in]  (overlay param)
-t'   = Clamp(Div_HAFZ(t, 2^s_A), i16)          a named lossy site
-u    = MatMul(t', Bᵀ)                         i32 (or i64), B: [d_out, r] (overlay param)
-acc' = Add(acc, Div_HAFZ(Mul(u, m_α), 2^s_α))  the adapter's scale α/r as a fixed-point multiplier
-…    = the parent's requantisation of acc'
+y = W·x (+ b) + (num/den) · B·(A·x)        A: [r, d_in], B: [d_out, r]
+num/den = lora_alpha / r   (rsLoRA: lora_alpha / √r, at a square rank) — an exact rational
 ```
 
-The lowerer (`misaka-palw-tir-lower`) writes it from the parent's program and the adapter's tensors.
-Merged and unmerged adapters do not round alike, so the candidate's semantics is the unmerged program's.
-Its fidelity to the trainer's float adapter is measured, never required (RFC-0002 criterion 5).
+In integers, with every node a v1 primitive:
+
+1. `A·x` is one exact `i32 × i16` product over the parent projection's own input codes. `A` is stored as
+   `A' = A·diag(s_x / s_x0)` at per-row `i32` codes, so a split input needs no extra columns. The result
+   is narrowed to `i16` at the adapter's own calibrated site `{site}.lora_a`.
+2. `B·a` uses per-row `i16` codes, exact in `i64`.
+3. `num/den` is applied as an integer `Mul` by `num` and a rounded `Div` by `den`.
+4. One narrowing takes the result into the projection's **output scale**. Then comes an `Add` to the
+   parent's narrowed output, and a `Clamp`.
+
+To the lowering the node stays a `Linear`, so no pattern changes. Each adapted projection adds about 20
+nodes. Merged and unmerged adapters do not round alike, so the candidate's semantics is the unmerged
+program's. On four PEFT fixtures (ranks 4–64; q/k/v/o and MLPs; `all-linear`; rsLoRA):
+
+- the unmerged float path matches `transformers`' merged weights to 3·10^−7;
+- the integer candidate reaches top-1 1.000 and KL 3–5·10^−5 against the merged logits;
+- the reference evaluator, the second implementation and the typed backend agree (hf-coverage §12).
+
+Fidelity is measured, never required (RFC-0002 criterion 5).
 
 ### 6.3 Composite artifacts and the class id
 
+The lowering orders params so that **the candidate's first `P` params are the parent program's,
+byte-identical in declaration and tensor** (`lower::adapter_params_last`). Params `P..` are the adapter
+section.
+
 ```
 PalwTirArtifactRefV1 = Single { root }
-                     | Composite { base: Hash64, overlay: Hash64, param_sources: bitmap }   // one bit per ParamDecl: base or overlay
+                     | Composite { parent_class: Hash64, parent_root: Hash64, adapter_root: Hash64, p: u32 }
 artifact_root(Composite) = H64(key "misaka-palw/improve/composite-artifact/v1",
-                               base ‖ overlay ‖ H64(param_sources))
+                               parent_class ‖ parent_root ‖ adapter_root ‖ le32(p))
 tir_class_id_v1 = H64(key "misaka-palw/tir/class-id/v1",
-                      graph_ir_root ‖ H64(layout) ‖ artifact_root ‖ tokenizer_id)       // Phase F's, unchanged
+                      graph_ir_root ‖ H64(layout) ‖ artifact_root ‖ tokenizer_id)      // Phase F's formula, unchanged
 ```
 
-- The class id formula is Phase F's; only the artifact root it hashes is composite.
-- **The base must be the parent's artifact root**, and every param sourced from the base must have the
-  parent's declaration (name, dtype, shape), so the parent's inventory leaves serve it unchanged.
-- **Court openings** of a param name its source and open under that sub-root (an appended variant of
-  Phase F's artifact opening).
-- **Prefetch.** A seat that holds the parent fetches only the overlay. With rank `r = 16` on the seven
-  projections of a Qwen2.5-1.5B-shaped decoder (28 layers), the overlay is `16 · Σ(d_in + d_out) · 28 ≈
-  18.5 M` parameters, about 18.5 MB in `i8` — roughly 1 % of the parent's 1.6 GB IR artifact. A
-  full-weight candidate costs the full 1.6 GB per seat.
-- **The added work** is `2 · r · (d_in + d_out)` MACs per adapted matrix per position, about 3 % of the
-  parent's MACs at `r = 16`.
+- **The parent is never re-committed.** The composite root composes the parent's artifact root with the
+  adapter section's root, which is an inventory over params `P..` only. Params `0..P` are served by the
+  parent's inventory leaves, unchanged.
+- **The class id binds four things** through Phase F's formula over the composite:
+  - the parent class (`parent_class`, and through it the parent's program, layout and tokenizer);
+  - the candidate's own program root (`graph_ir_root`: the parent's nodes plus the adapter paths);
+  - the adapter root;
+  - `P`.
+- **Admission checks** that:
+  - `parent_class` is the line's head, or another registered class of the line;
+  - `parent_root` is its artifact root;
+  - params `0..P` of the candidate's program carry exactly the parent program's declarations, in order;
+  - no param at or after `P` names a parent tensor.
+- **Court openings** of param `j` are made under `parent_root` if `j < P`, and under `adapter_root`
+  otherwise. This is an appended variant of Phase F's artifact opening.
+
+### 6.4 The calibration rule
+
+- **The parent's scales are reused.** Every narrowing param in `0..P` is the parent's, byte for byte.
+  That is what makes reuse possible.
+- **The adapter's own narrowing params** — the `{site}.lora_a` sites, and each path's output-scale
+  narrowing — are data in the adapter section, committed by `adapter_root`. The submitter calibrates them
+  however it likes. No calibration set is pinned, because admission's range analysis already takes
+  params at their dtype's full range.
+- **The rule for clipping.** An adapter that moves activations past the parent's calibrated headroom
+  (about 2×) **clips** at the parent's narrowing sites. That clip is the candidate's risk. It shows in the
+  candidate's evaluation score, and the protocol does nothing else about it.
+- **Recalibration makes a full-weight candidate.** Changing any parent-side narrowing param breaks
+  byte-identical reuse. A candidate that needs recalibrated scales is therefore submitted as full weights
+  (a `Single` artifact), if and only if the policy allows full-weight candidates, and it pays their
+  prefetch (§6.7).
+
+### 6.5 The node budget, and what an adapter may target
+
+- An adapted projection adds about 20 nodes, and a block holds at most 512 (04b NF-12).
+- The largest blocks of the corpus, MoE and gated-delta hybrids, already have 468 nodes. `all-linear`
+  does not fit there; about two adapted projections do.
+- **The rule.** An adapter may target any set of projections that keeps every block within 512 nodes.
+  Admission refuses anything else by name (`NormalForm`), and `palw-class check-architecture` reports
+  per block how many projections fit.
+- Lines whose blocks are near the limit take full-weight candidates for broad changes, or narrow
+  adapters (for example `q` and `v` only), until a leaner adapter form exists (open question 15).
+
+### 6.6 Adapter forms out of v1
+
+The lowering refuses these PEFT forms by name, so v1 tools cannot produce them as composite candidates:
+
+- DoRA;
+- trained biases (`bias ≠ none`, `lora_bias`);
+- `modules_to_save`;
+- `layers_to_transform` and `layers_pattern`;
+- targets on fused projections (`qkv_proj`, `gate_up_proj`, `c_attn`);
+- `fan_in_fan_out`;
+- rsLoRA at a non-square rank;
+- module-specific rank or alpha patterns.
+
+Consensus does not parse adapter configurations. It checks the composite rule (§6.3) and admission. A
+model trained with one of these forms therefore enters v1 only merged, as a full-weight candidate. Any
+of them may later become a specified adapter form.
+
+### 6.7 Prefetch and work
+
+- **Prefetch.** A seat holding the parent fetches only the adapter section. The lowering stores `A'` at
+  `i32` and `B` at `i16`, per row: `r · (4 · d_in + 2 · d_out)` bytes per adapted projection. At `r = 16`
+  on the seven projections of a Qwen2.5-1.5B-shaped decoder (28 layers), that is about 53 MB, roughly 3 %
+  of the parent's 1.6 GB IR artifact. A full-weight candidate costs the full 1.6 GB per seat.
+- **Work.** The adapter adds `r · (d_in + d_out)` MACs per adapted projection and position: about 2 % of a
+  1,536-wide model at `r = 16` (hf-coverage §12).
 
 ## 7. Evaluation
 
@@ -650,7 +730,7 @@ money not yet paid out is the only lever left.
   their own `n` subject jobs and pairwise jobs.
 - **Candidates per epoch** are capped by `k_max` and by the network's ceiling.
 - **Prefetch.** Every seat that may verify an evaluation claim must hold the subject's artifact. Adapters
-  cost about 1 % of the parent (§6.3), so four adapter candidates add about 74 MB to a 1.5B line; a
+  cost about 3 % of the parent (§6.7), so four adapter candidates add about 210 MB to a 1.5B line; a
   full-weight candidate adds 1.6 GB per seat, and is priced for it.
 - **A worked size.** A Qwen2.5-1.5B-shaped line, `n = 400`, four candidates plus the parent, 256 prompt
   and 256 generated tokens per item: 400 × 5 × 512 ≈ 1.0 × 10^6 positions. At the 17 tokens per second
@@ -719,12 +799,12 @@ on any VM.
 | A8 | Promotion: the pinned binomial table, paired counts, `δ`, `ε`, the suites, the judge guards, the winner, `NoChange` | a new `palw_improve_promotion_v1.rs` | A3, A6 | 2–3 | 1–2 days |
 | A9 | Rewards and the pool: `φ` (the `split_owner_leg_v1` precedent), fees, deposits, S1, S2 caps, vesting, forfeit, payouts | `palw_model_market_v1.rs`, `palw_model_lines_v1.rs` | A3, A8 | 5–7 | 2–4 days |
 | A10 | Node side: the epoch watcher, the evaluation executor (generation, teacher-forced, scoring), adapter prefetch, `palw-class improve` for cases, datasets and candidates | `misaka-palw-sdk`, `misaka-palw-tir-exec`, `kaspad/src/palw_panel.rs` | A5–A7 | 5–7 | 3–4 days |
-| A11 | Adapter lowering (the unmerged LoRA path) and its fidelity check | `misaka-palw-tir-lower` | Phase F | 2–3 | 1–2 days |
+| A11 | Adapter lowering: **landed** on `tir/lower` (a4bd7141f, hf-coverage §12). What remains is emitting the composite layout (`P`, the adapter-section inventory) and per-block node-budget reports in `check-architecture` | `misaka-palw-tir-lower`, `misaka-palw-sdk` | Phase F | 1–2 | about 1 day |
 | A12 | An independent second implementation of the scoring library, the promotion rule and the transitions; differential tests; a model-checked state machine | a ref2-style lane | A3, A7, A8 | 4–6 | 2–3 days |
 | A13 | Drills: D-M1 a whole epoch on a salted t12 chain with a small real model and an adapter that wins; D-M2 one that must not; D-M3 a court battery on evaluation claims; D-M4 rollback by the owner and by proof; D-M5 the fence crossing on the shipping binary; D-M6 copying, setter leakage, grinding, fee DoS | scripts, the drill harness | all | 5–7 | 3–5 days |
 | A14 | Two external audits (the state machine and the court; the economics) and their fixes | — | A1–A13 | 3–4 | — |
 | A15 | Testnet soak (at least 3 epochs), bounty, activation | — | A14 | 3–4 | — |
-| | **Total** | | | **61–85** (≈ 14–20 engineer-months) | implementation ≈ 3–5 weeks |
+| | **Total** | | | **60–84** (≈ 14–20 engineer-months) | implementation ≈ 3–5 weeks |
 
 - **Implementation with AI agents**: about **3–5 calendar weeks** for A1–A13, to a whole epoch passing
   D-M1…D-M6 on a salted testnet-12 chain, with two or three agents and a lead who reviews and
@@ -776,9 +856,11 @@ Applies past `palw_improvement_v1`.
   §7.5's rule, with the pinned table, and otherwise leave the head unchanged.
 - **PALW-MIP-14 (rollback).** The owner MAY roll a promotion back within `rollback_epochs`. Anyone MAY
   roll it back with a proof of §7.6's kinds.
-- **PALW-MIP-15 (composite artifacts).** A composite artifact's base MUST be the parent's artifact root,
-  and every param sourced from it MUST have the parent's declaration. Its root MUST be computed as §6.3
-  states.
+- **PALW-MIP-15 (composite artifacts).** A composite candidate's first `P` params MUST be the parent
+  program's params, in order, with the parent's declarations, served under the parent's artifact root.
+  Its artifact root MUST bind the parent class, the parent's artifact root, the adapter section's root
+  and `P`, as §6.3 states. A candidate that changes any parent-side param, its scales included, MUST be a
+  full-weight candidate (§6.4). Every block MUST stay within the 512-node limit (§6.5).
 - **PALW-MIP-16 (rewards).** Payouts MUST come only from the line's pool. S1 MUST pay only EXACT-verified
   artifacts. S2 MUST pay only registered datasets that the winner declared, within their caps. Trainer
   rewards MUST vest over `vest_epochs` and MUST be forfeited on a proof of §7.6's kinds.
@@ -867,6 +949,8 @@ without the A-2 tolerance.
 13. **Full-weight candidates**: allowed from the first epoch, or adapters only at first (recommended).
 14. **Cross-line teachers**: may another line's head teach a governed line as `SELF_PLAY`, and under
     which licences?
+15. **A leaner adapter form** for blocks near the 512-node limit (MoE and gated-delta hybrids at 468):
+    fewer nodes per adapted projection, or adapters shared across projections.
 
 ## Decision
 
