@@ -1729,6 +1729,188 @@ pub fn check_tir_decode_token_flat_v1(
     Err(PalwStepRefuteError::NoFaultFound)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Data availability: one event of an IR claim's logits trace, disclosed (F6 D)
+// ---------------------------------------------------------------------------------------------
+
+/// **What a data-availability answer opens for an IR claim: one event of its committed logits
+/// trace, in the form the class's scheme names** — the IR twin of
+/// [`crate::palw_step_refute::PalwTraceEventDisclosureV1`] (ADR-0062 SA-2), carrying the IR binding
+/// in place of the legacy one.
+///
+/// A separate type, carried by `PalwDaAnswerV1::TirEvent` (appended), rather than variants appended
+/// to the legacy disclosure: that one also rides offence evidence (`LogitsNotStepOutput`) and replay
+/// refutations, whose readers decode it with the tags they have — an IR variant there would be a
+/// payload one build decodes and another does not, inside objects whose other readers never learn
+/// about the fence. Here it rides exactly one object, `MaterialDisclosedV2`, which the acceptance
+/// layer drops by name below `palw_tir_v1`.
+///
+/// Every variant carries the claim's own binding, checked as the legacy disclosure's is: it must
+/// verify ([`verify_tir_binding_v1`]) and name the claim's trace root and execution root. Nothing
+/// here runs a model. An event is `(row, tile)`: a decode position and a tile of that row's logits.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwTirTraceEventDisclosureV1 {
+    /// The flat scheme: every row and every id (one keyed hash over all of them — no row opens
+    /// alone), authenticated against the claim's flat trace root.
+    Flat { binding: Box<PalwTirStepBindingV1>, pin: PalwBase0DecodeTokensV1 },
+    /// The tiled scheme: the generated ids (keyed into the outer root), the accused row's root and
+    /// its opening in the rows tree, and the accused tile's lanes and their opening in the row's
+    /// tile tree.
+    Tiled {
+        binding: Box<PalwTirStepBindingV1>,
+        generated_token_ids: Vec<u32>,
+        row_root: Hash64,
+        row_opening: PalwStepOpeningV1,
+        tile_lanes: Vec<i32>,
+        tile_opening: PalwStepOpeningV1,
+    },
+    /// The accused event is not in the committed run: a row past the decode count, or a tile past
+    /// the row's vocabulary (any tile but 0 on the flat scheme). The binding alone proves it.
+    OutOfRange { binding: Box<PalwTirStepBindingV1> },
+}
+
+impl PalwTirTraceEventDisclosureV1 {
+    /// The IR binding every variant carries — what the identity rule (J-5) reads.
+    pub fn binding(&self) -> &PalwTirStepBindingV1 {
+        match self {
+            Self::Flat { binding, .. } | Self::Tiled { binding, .. } | Self::OutOfRange { binding } => binding,
+        }
+    }
+
+    /// A flat answer carries every row, so it answers every in-run event at once.
+    pub fn is_flat(&self) -> bool {
+        matches!(self, Self::Flat { .. })
+    }
+}
+
+/// **Verify an IR claim's data-availability disclosure against the claim — by hash arithmetic,
+/// never by execution** (the IR twin of `check_trace_event_disclosure_v1`).
+///
+/// `claim_trace_root` and `claim_execution_root` are the claim record's pinned fields; `row` and
+/// `tile` the accused event. `Ok(())` refutes the accusation. An `Err` is a disclosure that is not an
+/// answer, never a verdict against the producer. In order: the binding verifies at
+/// `max_step_leaf_count` and names the claim's two roots; then the variant's own rule under the
+/// class's scheme (a variant of the other scheme is refused).
+pub fn check_tir_trace_event_disclosure_v1(
+    claim_trace_root: Hash64,
+    claim_execution_root: Hash64,
+    row: u32,
+    tile: u8,
+    disclosure: &PalwTirTraceEventDisclosureV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepRefuteError> {
+    let binding = disclosure.binding();
+    let v = crate::palw_tir_step_v1::verify_tir_binding_v1(binding, max_step_leaf_count)
+        .map_err(|_| bad("the IR binding does not verify"))?;
+    if binding.full_logits_trace_root != claim_trace_root {
+        return Err(bad("the disclosure binds to another trace root than the claim committed"));
+    }
+    if binding.committed_execution_root != claim_execution_root {
+        return Err(bad("the disclosure binds to another execution root than the claim committed"));
+    }
+    let ctx = &binding.job_context;
+    let decode = ctx.exact_decode_tokens;
+    let (vocab, scheme) = logits_shape(&v.space);
+    let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
+    match disclosure {
+        PalwTirTraceEventDisclosureV1::Flat { pin, .. } => {
+            if scheme != flat_logits_scheme_id_v1() {
+                return Err(bad("this class does not commit flat logits"));
+            }
+            check_flat_pin(binding, vocab, pin)?;
+            if tile != 0 {
+                return Err(bad("the flat scheme has one tile per row; an accused tile past it is answered by OutOfRange"));
+            }
+            if row >= decode {
+                return Err(bad("the accused row is past the committed run; it is answered by OutOfRange, not opened"));
+            }
+            Ok(())
+        }
+        PalwTirTraceEventDisclosureV1::Tiled { generated_token_ids, row_root, row_opening, tile_lanes, tile_opening, .. } => {
+            if scheme != tiled_logits_scheme_id_v1() {
+                return Err(bad("this class does not commit tiled logits"));
+            }
+            if generated_token_ids.len() as u64 != decode as u64 {
+                return Err(bad("the id count is not the context's decode count"));
+            }
+            if row >= decode {
+                return Err(bad("the row is past the decode count"));
+            }
+            let rows_root = step_opening_root_capped_v1(decode as u64, row_opening, max_step_leaf_count)
+                .map_err(|_| bad("the row opening does not walk"))?;
+            if row_opening.leaf_index != row as u64 || row_opening.leaf_hash != *row_root {
+                return Err(bad("the row opening does not open the named row's root"));
+            }
+            if tiled_logits_outer_root_v1(ctx, decode as u64, &rows_root, generated_token_ids) != binding.full_logits_trace_root {
+                return Err(bad("the carried material does not reproduce the claim's own trace root"));
+            }
+            tiled_tile_authenticate_v1(
+                &v.context_hash,
+                row,
+                vocab,
+                tiles,
+                row_root,
+                tile as u64,
+                tile_lanes,
+                tile_opening,
+                max_step_leaf_count,
+            )
+        }
+        PalwTirTraceEventDisclosureV1::OutOfRange { .. } => {
+            let out = if scheme == flat_logits_scheme_id_v1() {
+                row >= decode || tile != 0
+            } else if scheme == tiled_logits_scheme_id_v1() {
+                row >= decode || tile as u64 >= tiles
+            } else {
+                return Err(bad("this class commits under a scheme no disclosure form names"));
+            };
+            if out {
+                Ok(())
+            } else {
+                Err(bad("the accused event is inside the committed run; it must be opened, not declared absent"))
+            }
+        }
+    }
+}
+
+/// **Build the disclosure of event `(row, logits_tile)` from the rows the producer retained** —
+/// the prover's half of [`check_tir_trace_event_disclosure_v1`] (the IR twin of
+/// `logits_event_disclosure_v1`): `Flat` with every row and id for the flat scheme (its one tile is
+/// 0), `Tiled` with the row and tile openings otherwise. `None` when the event is not in the rows
+/// (the caller then answers `OutOfRange`), the program does not decode, or its scheme is neither.
+pub fn tir_logits_event_disclosure_v1(
+    binding: &PalwTirStepBindingV1,
+    logits_rows: &[Vec<i32>],
+    generated: &[u32],
+    row: u32,
+    logits_tile: u8,
+) -> Option<PalwTirTraceEventDisclosureV1> {
+    let program = binding.class.decode_program().ok()?;
+    let scheme = Hash64::from_bytes(program.logits_scheme_id);
+    if scheme == flat_logits_scheme_id_v1() {
+        if logits_tile != 0 || row as usize >= logits_rows.len() {
+            return None;
+        }
+        return Some(PalwTirTraceEventDisclosureV1::Flat {
+            binding: Box::new(binding.clone()),
+            pin: PalwBase0DecodeTokensV1 { logits_rows: logits_rows.to_vec(), generated_token_ids: generated.to_vec() },
+        });
+    }
+    if scheme != tiled_logits_scheme_id_v1() {
+        return None;
+    }
+    let (row_root, row_opening, tile_lanes, tile_opening) =
+        crate::palw_step_refute::tiled_trace_event_disclosure_v1(&binding.job_context, logits_rows, row, logits_tile)?;
+    Some(PalwTirTraceEventDisclosureV1::Tiled {
+        binding: Box::new(binding.clone()),
+        generated_token_ids: generated.to_vec(),
+        row_root,
+        row_opening,
+        tile_lanes,
+        tile_opening,
+    })
+}
+
 /// A tiny IR class and an honest (or single-lane forged) execution of it, for the court's wiring
 /// tests elsewhere in the crate: an embedding, one layer with a saturating running sum (a `Fixed`
 /// state, so checkpoints and replay occur) and a projection, and a tiled-logits head.
@@ -1955,5 +2137,233 @@ pub(crate) mod test_support {
             check_tir_cone_refutation_v1(&r, &rules).expect("convicted").fault,
             PalwStepFaultV1::ComputationMismatch { value_index: 1 }
         );
+    }
+}
+
+/// **F6 D: an IR claim's data-availability answer, and the identity rule over an IR binding.**
+#[cfg(test)]
+mod da_tests {
+    use super::test_support::{DECODE, TinyExecution, tiny_execution};
+    use super::*;
+    use crate::palw_offence_attribution_v1::{
+        PalwClaimSourceKindV1, PalwIdentityFaultV1, PalwIdentityRulesV1, PalwOffenceTargetV1, palw_tir_binding_identity_fault_v1,
+    };
+    use crate::palw_offence_v1::PalwOffenceVerifyError;
+    use crate::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_context_v1, palw_tir_attempt_prompt_root_v1};
+
+    const MAX: u64 = 1 << 26;
+
+    /// The same execution re-committed under the flat scheme: the class id, the context, every leaf
+    /// hash and the trace root follow the program's scheme bytes.
+    fn flat_of(x: &TinyExecution) -> PalwTirStepBindingV1 {
+        let mut b = x.binding.clone();
+        let mut program = b.class.decode_program().unwrap();
+        program.logits_scheme_id.copy_from_slice(flat_logits_scheme_id_v1().as_byte_slice());
+        b.class.program = program.encode();
+        let class_id = b.class.class_id(&b.artifact_root);
+        b.job_context.shape_profile_id = class_id;
+        b.job_context.trace_scheme_id = crate::palw_v2::trace_scheme_id_v2();
+        let ctx_hash = b.job_context.context_hash();
+        let hashes: Vec<Hash64> = x.preimages.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &class_id, p)).collect();
+        b.step_merkle_root = crate::palw_step_leg::step_merkle_root_v1(&hashes).unwrap();
+        b.full_logits_trace_root = base0_logits_trace_root_v1(&b.job_context, &x.rows, &x.generated);
+        b.committed_execution_root =
+            palw_tir_execution_root_v1(&ctx_hash, &b.full_logits_trace_root, &class_id, b.step_leaf_count, &b.step_merkle_root);
+        b
+    }
+
+    fn check(b: &PalwTirStepBindingV1, row: u32, tile: u8, d: &PalwTirTraceEventDisclosureV1) -> Result<(), PalwStepRefuteError> {
+        check_tir_trace_event_disclosure_v1(b.full_logits_trace_root, b.committed_execution_root, row, tile, d, MAX)
+    }
+
+    #[test]
+    fn an_ir_event_is_opened_in_its_class_s_scheme_and_nothing_else_answers() {
+        let x = tiny_execution(None);
+        let b = &x.binding;
+        let out = PalwTirTraceEventDisclosureV1::OutOfRange { binding: Box::new(b.clone()) };
+        // Tiled: every row's one tile opens; a bent lane, another row's claim and another claim's
+        // roots are refused.
+        for row in 0..DECODE {
+            let d = tir_logits_event_disclosure_v1(b, &x.rows, &x.generated, row, 0).expect("the event is in the run");
+            assert!(!d.is_flat());
+            assert_eq!(check(b, row, 0, &d), Ok(()), "row {row}");
+            assert!(check(b, (row + 1) % DECODE, 0, &d).is_err(), "row {row}: opened as another row");
+            assert!(check(b, row, 0, &out).is_err(), "row {row}: an event in the run is not declared absent");
+            let PalwTirTraceEventDisclosureV1::Tiled { mut tile_lanes, .. } = d.clone() else { unreachable!() };
+            tile_lanes[0] ^= 1;
+            let bent = match d.clone() {
+                PalwTirTraceEventDisclosureV1::Tiled { binding, generated_token_ids, row_root, row_opening, tile_opening, .. } => {
+                    PalwTirTraceEventDisclosureV1::Tiled {
+                        binding,
+                        generated_token_ids,
+                        row_root,
+                        row_opening,
+                        tile_lanes,
+                        tile_opening,
+                    }
+                }
+                _ => unreachable!(),
+            };
+            assert!(check(b, row, 0, &bent).is_err(), "row {row}: a bent lane");
+            let mut other = Hash64::from_bytes([9; 64]);
+            assert!(
+                check_tir_trace_event_disclosure_v1(other, b.committed_execution_root, row, 0, &d, MAX).is_err(),
+                "another trace root"
+            );
+            other = Hash64::from_bytes([8; 64]);
+            assert!(
+                check_tir_trace_event_disclosure_v1(b.full_logits_trace_root, other, row, 0, &d, MAX).is_err(),
+                "another execution root"
+            );
+        }
+        // Out of the run: a row past the decode count, a tile past the vocabulary's one tile.
+        assert!(tir_logits_event_disclosure_v1(b, &x.rows, &x.generated, DECODE, 0).is_none());
+        assert!(tir_logits_event_disclosure_v1(b, &x.rows, &x.generated, 0, 1).is_none());
+        assert_eq!(check(b, DECODE, 0, &out), Ok(()));
+        assert_eq!(check(b, 0, 1, &out), Ok(()));
+        // Flat: the whole pin answers every row's tile 0; the tiled form is not its scheme.
+        let f = flat_of(&x);
+        let d = tir_logits_event_disclosure_v1(&f, &x.rows, &x.generated, 1, 0).expect("in the run");
+        assert!(d.is_flat());
+        for row in 0..DECODE {
+            assert_eq!(check(&f, row, 0, &d), Ok(()), "flat row {row}");
+        }
+        assert!(check(&f, 0, 1, &d).is_err(), "the flat scheme has one tile");
+        let out_flat = PalwTirTraceEventDisclosureV1::OutOfRange { binding: Box::new(f.clone()) };
+        assert_eq!(check(&f, 0, 1, &out_flat), Ok(()));
+        assert_eq!(check(&f, DECODE, 0, &out_flat), Ok(()));
+        assert!(check(&f, 0, 0, &out_flat).is_err());
+        let tiled = tir_logits_event_disclosure_v1(b, &x.rows, &x.generated, 0, 0).unwrap();
+        let PalwTirTraceEventDisclosureV1::Tiled { generated_token_ids, row_root, row_opening, tile_lanes, tile_opening, .. } = tiled
+        else {
+            unreachable!()
+        };
+        let wrong_form = PalwTirTraceEventDisclosureV1::Tiled {
+            binding: Box::new(f.clone()),
+            generated_token_ids,
+            row_root,
+            row_opening,
+            tile_lanes,
+            tile_opening,
+        };
+        assert!(check(&f, 0, 0, &wrong_form).is_err(), "a tiled opening on a flat class");
+        // A binding that does not verify answers nothing.
+        let mut broken = f.clone();
+        broken.step_leaf_count += 1;
+        let d = PalwTirTraceEventDisclosureV1::OutOfRange { binding: Box::new(broken.clone()) };
+        assert!(check(&broken, DECODE, 0, &d).is_err());
+    }
+
+    /// A binding whose parts verify (the leaf count is the job's and the root recomputes), over a
+    /// class with a canonical job: the identity rule needs no execution, only a binding.
+    fn attempt_binding(anchor: Hash64, edit: impl FnOnce(&mut PalwJobContextV2)) -> (PalwTirStepBindingV1, PalwTirJobFactsV1) {
+        let x = tiny_execution(None);
+        let mut class = x.binding.class.clone();
+        class.layout.max_context = 64;
+        let class_id = class.class_id(&x.binding.artifact_root);
+        let facts = PalwTirJobFactsV1::of_class(&class, class_id).unwrap();
+        let canonical = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(&class).unwrap();
+        let root = palw_tir_attempt_prompt_root_v1(&facts, &anchor, canonical.0, PalwPromptIdsFormV1::Flat).unwrap();
+        let mut ctx = palw_tir_attempt_context_v1(&facts, &anchor, canonical, root);
+        edit(&mut ctx);
+        let space = PalwTirStepSpaceV1::new(&class).unwrap();
+        let count = space.leaf_count_capped(&ctx, MAX).unwrap();
+        let (trace, step_root) = (Hash64::from_bytes([0x71; 64]), Hash64::from_bytes([0x72; 64]));
+        let execution = palw_tir_execution_root_v1(&ctx.context_hash(), &trace, &class_id, count, &step_root);
+        let binding = PalwTirStepBindingV1 {
+            version: PALW_TIR_STEP_BINDING_VERSION_V1,
+            job_context: ctx,
+            class,
+            artifact_root: x.binding.artifact_root,
+            full_logits_trace_root: trace,
+            step_leaf_count: count,
+            step_merkle_root: step_root,
+            committed_execution_root: execution,
+        };
+        (binding, facts)
+    }
+
+    fn target_of(b: &PalwTirStepBindingV1, identity: Hash64) -> PalwOffenceTargetV1 {
+        PalwOffenceTargetV1 {
+            claim_id: Hash64::from_bytes([0xC1; 64]),
+            class_id: b.job_context.shape_profile_id,
+            artifact_root: b.artifact_root,
+            executor_bond: crate::palw_state_v2::PALW_BOND_KEY_V2_MIN,
+            execution_root: b.committed_execution_root,
+            lane: Some(PalwClaimSourceKindV1::Attempt),
+            segment_count: None,
+            phase: None,
+            job_identity: identity,
+            trace_root: b.full_logits_trace_root,
+            output_root: Hash64::default(),
+        }
+    }
+
+    #[test]
+    fn the_identity_rule_over_an_ir_binding() {
+        let rules = PalwIdentityRulesV1 {
+            prompt_ids_form: PalwPromptIdsFormV1::Flat,
+            base_class_id: Hash64::default(),
+            da_signer_liability: false,
+        };
+        let anchor = Hash64::from_bytes([0xA5; 64]);
+        let fault = |b: &PalwTirStepBindingV1, t: &PalwOffenceTargetV1| palw_tir_binding_identity_fault_v1(t, b, rules, true, MAX);
+        let (honest, _) = attempt_binding(anchor, |_| {});
+        let target = target_of(&honest, anchor);
+        assert_eq!(fault(&honest, &target), Ok(None), "the anchor's own canonical job");
+        // J2: another class recorded.
+        let mut t = target.clone();
+        t.class_id = Hash64::from_bytes([1; 64]);
+        assert_eq!(fault(&honest, &t), Ok(Some(PalwIdentityFaultV1::ClassNotTheClaims)));
+        // J1 / J3: the anchor is not the job's, or seeds another.
+        let other = Hash64::from_bytes([0xA6; 64]);
+        let (b, _) = attempt_binding(anchor, |ctx| ctx.job_id = other);
+        assert_eq!(fault(&b, &target_of(&b, anchor)), Ok(Some(PalwIdentityFaultV1::JobNotTheClaims)));
+        let (b, _) = attempt_binding(anchor, |ctx| ctx.execution_seed[0] ^= 1);
+        assert_eq!(fault(&b, &target_of(&b, anchor)), Ok(Some(PalwIdentityFaultV1::SeedNotTheJobs)));
+        // J5a: any other field of the context moved.
+        for (what, edit) in [
+            ("the decode count", Box::new(|c: &mut PalwJobContextV2| c.exact_decode_tokens = 2) as Box<dyn Fn(&mut PalwJobContextV2)>),
+            ("the network", Box::new(|c: &mut PalwJobContextV2| c.network_id = b"testnet-12".to_vec())),
+            ("the tokenizer", Box::new(|c: &mut PalwJobContextV2| c.tokenizer_id = Hash64::from_bytes([3; 64]))),
+            ("the scheme", Box::new(|c: &mut PalwJobContextV2| c.trace_scheme_id = crate::palw_v2::trace_scheme_id_v2())),
+        ] {
+            let (b, _) = attempt_binding(anchor, edit);
+            assert_eq!(fault(&b, &target_of(&b, anchor)), Ok(Some(PalwIdentityFaultV1::ContextNotCanonical)), "{what}");
+        }
+        // J5b: the prompt root is another anchor's.
+        let (b, facts) = attempt_binding(anchor, |_| {});
+        let wrong = palw_tir_attempt_prompt_root_v1(&facts, &other, 7, PalwPromptIdsFormV1::Flat).unwrap();
+        let (b2, _) = attempt_binding(anchor, |ctx| ctx.prompt_token_ids_hash = wrong);
+        assert_eq!(fault(&b2, &target_of(&b2, anchor)), Ok(Some(PalwIdentityFaultV1::PromptNotTheAnchors)));
+        assert_eq!(palw_tir_binding_identity_fault_v1(&target_of(&b2, anchor), &b2, rules, false, MAX), Ok(None), "J5b left out");
+        // J4: the claim committed another trace root.
+        let mut t = target_of(&b, anchor);
+        t.trace_root = Hash64::from_bytes([2; 64]);
+        assert_eq!(fault(&b, &t), Ok(Some(PalwIdentityFaultV1::TraceNotTheClaims)));
+        // Refusals: another execution, no identity, a binding that does not verify.
+        let mut t = target_of(&b, anchor);
+        t.execution_root = Hash64::from_bytes([4; 64]);
+        assert_eq!(fault(&b, &t), Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch));
+        assert_eq!(fault(&b, &target_of(&b, Hash64::default())), Err(PalwOffenceVerifyError::IdentityNotRecorded));
+        let mut broken = b.clone();
+        broken.step_leaf_count += 1;
+        assert_eq!(fault(&broken, &target_of(&b, anchor)), Err(PalwOffenceVerifyError::BindingUnverified));
+        // A class too narrow for the formula: every other check runs, then it is not derivable.
+        let x = tiny_execution(None);
+        let mut ctx = x.binding.job_context.clone();
+        ctx.job_id = anchor;
+        ctx.execution_seed.copy_from_slice(&anchor.as_byte_slice()[..32]);
+        let mut narrow = x.binding.clone();
+        narrow.job_context = ctx;
+        let class_id = narrow.class.class_id(&narrow.artifact_root);
+        narrow.committed_execution_root = palw_tir_execution_root_v1(
+            &narrow.job_context.context_hash(),
+            &narrow.full_logits_trace_root,
+            &class_id,
+            narrow.step_leaf_count,
+            &narrow.step_merkle_root,
+        );
+        assert_eq!(fault(&narrow, &target_of(&narrow, anchor)), Err(PalwOffenceVerifyError::IdentityNotDerivable));
     }
 }

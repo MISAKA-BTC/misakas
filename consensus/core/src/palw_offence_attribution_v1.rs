@@ -1104,6 +1104,85 @@ pub fn palw_binding_identity_fault_v1(
     Ok(None)
 }
 
+/// **F1's identity rule over an IR binding** (RFC-0002 Phase F; the twin of
+/// [`palw_binding_identity_fault_v1`]): does the IR execution the binding pins answer the job and
+/// class the claim RECORDED?
+///
+/// The same refusals and the same checks in the same order, over the IR class's facts
+/// ([`crate::palw_tir_attempt_v1::PalwTirJobFactsV1`], read from the binding's own class, which J2
+/// has pinned to the claim's): J2, J1, J3, J5a against
+/// [`crate::palw_tir_attempt_v1::palw_tir_attempt_context_v1`] at the class's canonical job, J5b
+/// (with `with_prompt_root`) against the anchor's prompt root in the class's form, J4. J6 and J7 do
+/// not exist for an IR class: its execution root has no activation leg and no checkpoint profile
+/// (its checkpoints are step leaves). The binding must verify at `ladder` (`BindingUnverified`).
+pub fn palw_tir_binding_identity_fault_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    rules: PalwIdentityRulesV1,
+    with_prompt_root: bool,
+    ladder: u64,
+) -> Result<Option<PalwIdentityFaultV1>, PalwOffenceVerifyError> {
+    use crate::palw_attempt_rules_v1::PALW_J5_INLINE_PROMPT_IDS_V1;
+    use crate::palw_tir_attempt_v1::{
+        PalwTirJobFactsV1, palw_tir_attempt_canonical_of_v1, palw_tir_attempt_context_v1, palw_tir_attempt_prompt_root_v1,
+    };
+    let verified =
+        crate::palw_tir_step_v1::verify_tir_binding_v1(binding, ladder).map_err(|_| PalwOffenceVerifyError::BindingUnverified)?;
+    if binding.committed_execution_root != target.execution_root {
+        return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
+    }
+    let identity = target.job_identity;
+    if identity == Hash64::default() {
+        return Err(PalwOffenceVerifyError::IdentityNotRecorded);
+    }
+    let lane = target.lane.ok_or(PalwOffenceVerifyError::LaneUnknown)?;
+    let ctx = &binding.job_context;
+    let mut not_derivable = false;
+    // J2 — the class: the id the carried class hashes to (which the context names).
+    if verified.class_id != target.class_id {
+        return Ok(Some(PalwIdentityFaultV1::ClassNotTheClaims));
+    }
+    match lane {
+        PalwClaimSourceKindV1::FreePrompt => {
+            if crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(ctx) != identity {
+                return Ok(Some(PalwIdentityFaultV1::JobNotTheClaims));
+            }
+        }
+        PalwClaimSourceKindV1::Attempt => {
+            if ctx.job_id != identity {
+                return Ok(Some(PalwIdentityFaultV1::JobNotTheClaims));
+            }
+            if ctx.execution_seed[..] != identity.as_byte_slice()[..32] {
+                return Ok(Some(PalwIdentityFaultV1::SeedNotTheJobs));
+            }
+            match palw_tir_attempt_canonical_of_v1(binding.class.layout.max_context) {
+                None => not_derivable = true,
+                Some(canonical) => {
+                    let facts = PalwTirJobFactsV1::of(&binding.class, &verified.space.program, verified.class_id);
+                    let expected = palw_tir_attempt_context_v1(&facts, &identity, canonical, ctx.prompt_token_ids_hash);
+                    if ctx.context_hash() != expected.context_hash() {
+                        return Ok(Some(PalwIdentityFaultV1::ContextNotCanonical));
+                    }
+                    if with_prompt_root && canonical.0 <= PALW_J5_INLINE_PROMPT_IDS_V1 {
+                        let root = palw_tir_attempt_prompt_root_v1(&facts, &identity, canonical.0, rules.prompt_ids_form)
+                            .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+                        if ctx.prompt_token_ids_hash != root {
+                            return Ok(Some(PalwIdentityFaultV1::PromptNotTheAnchors));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if binding.full_logits_trace_root != target.trace_root {
+        return Ok(Some(PalwIdentityFaultV1::TraceNotTheClaims));
+    }
+    if not_derivable {
+        return Err(PalwOffenceVerifyError::IdentityNotDerivable);
+    }
+    Ok(None)
+}
+
 /// **F1's output rule** (ADR-0152 v3.1 J-5, `OutputMismatch`; addendum §4-bis.4): is the claim's
 /// committed `output_root` the output its committed execution generated?
 ///
