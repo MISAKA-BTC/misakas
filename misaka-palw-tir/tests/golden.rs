@@ -225,7 +225,7 @@ fn random_i(rng: &mut Lcg, d: DType, n: usize) -> Vec<i128> {
 
 fn cases_for(tag: u8) -> Vec<Case> {
     use DType::*;
-    let mut rng = Lcg(0x7_1b_0000 + tag as u64);
+    let mut rng = Lcg(0x071b_0000 + tag as u64);
     let r = &mut rng;
     match tag {
         0 => vec![
@@ -1003,7 +1003,7 @@ fn every_primitive_has_vectors_including_its_edges() {
     assert_eq!(files.len(), 23, "the 23 stateless primitives; StateWrite and HistAppend are in programs/");
     for tag in 0u8..=22 {
         let cases = cases_for(tag);
-        assert!(cases.len() >= 1);
+        assert!(!cases.is_empty());
         let errors = cases.iter().filter(|c| eval_primitive(&c.prim, &c.inputs, c.out.0, &c.out.1).is_err()).count();
         // Only these cannot fail on well-typed operands.
         if ![16u8, 18, 19].contains(&tag) {
