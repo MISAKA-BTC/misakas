@@ -1263,10 +1263,12 @@ the commit point, unless every dissected cone meets:
   `H = 1` arriving at the cone's reductions: from the tile's `tile_len` elements (capped at the
   node's count), each computed node in descending index order passes `d · K` to each operand of a
   `MatMul` (`K` its first operand's last extent at `H = 1`, whatever that operand is — a node, a
-  carry-in, a param, a constant or a state), `d · x.shape[axis]` to a reduction's, `⌈d / k⌉ ·
-  x.shape[axis]` to a `TopK`'s and `d` to every other operand, each computed operand's demand capped
-  at its element count; `V` is the sum over the reductions of what arrives (capped likewise). `V` is
-  never below the closure a claim carries (the vectors pin both). Then `V ≤
+  carry-in, a param, a constant or a state), `d · x.shape[axis]` to a reduction's, the `TopK` row of
+  the table below to a `TopK`'s (the rows a run of `d` elements can touch, past `palw_tir_fence2`;
+  `⌈d / k⌉ · x.shape[axis]` before it) and `d` to every other operand, each computed operand's demand
+  capped at its element count; `V` is the sum over the reductions of what arrives (capped likewise).
+  `V` is never below the closure a claim carries (the vectors pin both; before `palw_tir_fence2` a
+  `TopK` tile that crosses rows can carry more than `V` — ref2's H7). Then `V ≤
   4096`; a round at the court's arity `k` — `6 + k · (4 + 4m + 16V)` bytes with `m` reductions, plus
   the move's frame of 4,764 bytes — fits one lifecycle carrier (100,000 bytes); so does the root
   claim — the 16 KiB close frame, the terminal's opened bytes, `20V` and the frame (the program is
@@ -1453,7 +1455,7 @@ with `d(i) > 0` passes to each operand `x` the demand
 | --- | --- |
 | `MatMul` | `d(i) · K` (for `a` and for `b`) |
 | `ReduceSum`, `ReduceMax` along axis `ax` | `d(i) · x.shape[ax]` |
-| `TopK` along `ax`, `k` | `⌈d(i) / k⌉ · x.shape[ax]` |
+| `TopK` along `ax`, `k` | the TopK rows a run of `d(i)` consecutive elements can touch, times `x.shape[ax]`: `min(R, d(i))` rows along an `ax` that is not the innermost axis, `min(R, ⌈d(i) / k⌉ + 1)` along the innermost, `R = E(x) / x.shape[ax]` the rows (past `palw_tir_fence2`; before it `⌈d(i) / k⌉ · x.shape[ax]`, which understates a tile that is unaligned or crosses rows — ref2's H7) |
 | every other primitive (including `Gather`'s data and indices, `HistAppend`'s row) | `d(i)` |
 
 A demand on a node of the cone adds to its `d` (capped at its `E`); a demand on anything else is a

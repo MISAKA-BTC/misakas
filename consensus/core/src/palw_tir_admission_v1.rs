@@ -50,7 +50,7 @@ use crate::palw_tir_step_v1::PalwTirStepSpaceV1;
 use crate::palw_tir_v1::PalwTirFenceV1;
 use crate::palw_v2::PalwJobContextV2;
 use misaka_palw_tir::TirProgramV1;
-use misaka_palw_tir::admit::{TirAdmissionV1, TirAdmitError, TirAdmitInputsV1, TirCeilingsV1, tir_admit_v1};
+use misaka_palw_tir::admit::{TirAdmissionV1, TirAdmitError, TirAdmitInputsV1, TirCeilingsV1};
 
 /// The most distinct commit tile lengths a layout may use: admission runs `tir_admit_v1` once per
 /// length, so this bounds its work at a small multiple of one run.
@@ -97,6 +97,9 @@ pub struct PalwTirAdmissionRulesV1 {
     /// its window): `None` where it is not armed. A cone that reduces over the history is dissected
     /// only under it (spec 04b §9.5, RFC-0002 F7); without it such a cone must fit the court whole.
     pub court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+    /// **The box-demand rules at the block** (spec 04b §10.3): the release's, or ref2's H7 `TopK`
+    /// row past `Params::palw_tir_fence2` — read by `tir_admit` and the value bound `V`.
+    pub demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
 }
 
 impl PalwTirAdmissionRulesV1 {
@@ -124,6 +127,7 @@ impl PalwTirAdmissionRulesV1 {
             held: PalwHeldAdmissionV1 { armed: held_armed, panel_da: params.palw_panel_da_at(daa_score) },
             prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
             court,
+            demand: params.palw_tir_demand_rules_at(daa_score),
         })
     }
 }
@@ -371,7 +375,7 @@ fn palw_tir_dissected_cone_admits_v1(
     let refused = |why: String| PalwClassAdmissionError::TirDissection { block: bi, node: ni, why };
     d::palw_tir_dissect_obligations_v1(block, ni).map_err(|e| refused(e.to_string()))?;
     let reductions = d::palw_tir_cone_reductions_v1(block, ni).len();
-    let values = d::palw_tir_dissect_value_bound_v1(program, block, ni, tile_len);
+    let values = d::palw_tir_dissect_value_bound_v2(program, block, ni, tile_len, rules.demand);
     if values > d::PALW_TIR_DISSECT_MAX_VALUES as u64 {
         return Err(refused(format!("a claim may carry {values} values; at most {}", d::PALW_TIR_DISSECT_MAX_VALUES)));
     }
@@ -487,7 +491,7 @@ pub fn verify_class_admission_v10(
     let mut runs: Vec<(u32, TirAdmissionV1)> = Vec::with_capacity(tile_lens.len());
     for &tile_len in &tile_lens {
         let inputs = TirAdmitInputsV1 { tile_len, h_chunk: layout.h_tile, ceilings: admit_ceilings };
-        let admitted = tir_admit_v1(&class.program, &inputs).map_err(|e| match e {
+        let admitted = misaka_palw_tir::admit::tir_admit_with_rules_v1(&class.program, &inputs, rules.demand).map_err(|e| match e {
             TirAdmitError::Program(e) => tir_program_error(e),
             TirAdmitError::Exceeds { limit, at, value, cap } => PalwClassAdmissionError::TirExceeds { limit, at, value, cap },
             TirAdmitError::Inputs(why) => PalwClassAdmissionError::TirLayout(why.into()),

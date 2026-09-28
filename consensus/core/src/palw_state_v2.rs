@@ -1519,6 +1519,11 @@ pub struct PalwStateParamsV2 {
     /// `floor_refusal_retry_from_daa`'s reason, and `validate_palw_v2` refuses a copy that disagrees.
     #[borsh(skip)]
     tir_from_daa: Option<u64>,
+    /// **RFC-0002 Phase F: `Params::palw_tir_fence2`'s height**, mirrored by
+    /// `Params::sync_palw_tir_fence2` for `tir_from_daa`'s reason (the fold reads the credited work,
+    /// the admission rules and the DA court's IR unit from it). `None` on every shipped preset.
+    #[borsh(skip)]
+    tir_fence2_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1725,6 +1730,7 @@ impl PalwStateParamsV2 {
             final_lock_life_from_daa: None,
             floor_refusal_retry_from_daa: None,
             tir_from_daa: None,
+            tir_fence2_from_daa: None,
         })
     }
 
@@ -1901,6 +1907,23 @@ impl PalwStateParamsV2 {
     /// **Is `palw_tir_v1` in force at `daa_score`?** `false` on every shipped preset.
     pub fn tir_active_at(&self, daa_score: u64) -> bool {
         self.tir_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0002 Phase F: the second IR fence's mirror** — written by `Params::sync_palw_tir_fence2`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_tir_fence2_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.tir_fence2_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_tir_fence2`'s height, if the network arms it (the mirror).
+    pub fn tir_fence2_from_daa(&self) -> Option<u64> {
+        self.tir_fence2_from_daa
+    }
+
+    /// **Is the second IR fence in force at `daa_score`?** `false` on every shipped preset.
+    pub fn tir_fence2_active_at(&self, daa_score: u64) -> bool {
+        self.tir_fence2_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.

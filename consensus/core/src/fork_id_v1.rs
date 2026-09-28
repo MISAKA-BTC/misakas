@@ -724,6 +724,7 @@ mod tests {
             "palw_kimi_k3" => params.palw_kimi_k3 = Some(at),
             // RFC-0002 Phase F: a fence with a value — the activation is what the probe moves.
             "palw_tir_v1" => params.palw_tir_v1 = Some(crate::palw_tir_v1::PalwTirFenceV1::testnet12_v1(at)),
+            "palw_tir_fence2" => params.palw_tir_fence2 = Some(at),
             "palw_canonical_work" => params.palw_canonical_work = Some(at),
             "palw_admission_independence" => params.palw_admission_independence = Some(at),
             "palw_seat_gate_possession" => params.palw_seat_gate_possession = Some(at),

@@ -11365,6 +11365,7 @@ impl VirtualStateProcessor {
                         },
                         prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
                         court,
+                        demand: kaspa_consensus_core::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(&bundle.state, point.daa_score),
                     };
                     // The network's committed certified families and the chain's own, as the legacy
                     // arm reads them (consensus never reads the drilled registry).
