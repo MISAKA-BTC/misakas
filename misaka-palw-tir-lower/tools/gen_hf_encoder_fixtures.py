@@ -119,6 +119,23 @@ def make(name):
             else:
                 raise RuntimeError(kind)
             out.append(rec)
+    if kind.startswith("bidir"):
+        # A sentence-transformers stack around the model: mean pooling, then Normalize.
+        st = {"modules.json": [
+                {"idx": 0, "name": "0", "path": "", "type": "sentence_transformers.models.Transformer"},
+                {"idx": 1, "name": "1", "path": "1_Pooling", "type": "sentence_transformers.models.Pooling"},
+                {"idx": 2, "name": "2", "path": "2_Normalize", "type": "sentence_transformers.models.Normalize"}],
+              "1_Pooling/config.json": {"word_embedding_dimension": cfg.hidden_size, "pooling_mode_cls_token": False,
+                                        "pooling_mode_mean_tokens": True, "pooling_mode_max_tokens": False,
+                                        "pooling_mode_mean_sqrt_len_tokens": False,
+                                        "pooling_mode_weightedmean_tokens": False, "pooling_mode_lasttoken": False,
+                                        "include_prompt": True},
+              "sentence_bert_config.json": {"max_seq_length": 12, "do_lower_case": False}}
+        for rel, body in st.items():
+            os.makedirs(os.path.dirname(os.path.join(d, rel)) or d, exist_ok=True)
+            with open(os.path.join(d, rel), "w") as f:
+                json.dump(body, f, indent=2)
+        os.makedirs(os.path.join(d, "2_Normalize"), exist_ok=True)
     meta = {"kind": kind, "sequences": out, "transformers": transformers.__version__, "torch": torch.__version__,
             "seed": seed, "weights": "bfloat16-exact (rounded before the forward)", "attn_implementation": "eager"}
     with open(os.path.join(d, "outputs.json"), "w") as f:

@@ -108,6 +108,7 @@ fn clip_text_encoder_matches_its_hf_fixture() {
         // Version 2: the same bytes.
         let toks: Vec<u32> = s.tokens.iter().map(|t| *t as u32).collect();
         let run = interp.run(&mat.params, &tir::interp_v2::MapInputs::default(), &toks).expect("v2 run");
+        assert_eq!(run.last().unwrap().output.shape.len(), 2, "an EmbeddingI32 output is [1, d]");
         assert_eq!(run.last().unwrap().output.data, v1_last, "version 2 differs from version 1");
         // The pipeline over the prompt alone: the same bytes.
         let job = tir::pipeline::PipelineJob { prompt: toks[1..toks.len() - 1].to_vec(), ..Default::default() };
@@ -236,4 +237,24 @@ fn roberta_mean_pooled_and_normalised_matches_its_hf_fixture() {
 fn xlm_roberta_cls_and_mean_match_their_hf_fixture() {
     bidir_case("xlm_roberta", 1, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, true, "cls_normalized");
     bidir_case("xlm_roberta", 1, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, false, "mean");
+}
+
+/// A sentence-transformers repository's module stack (Transformer → Pooling(mean) → Normalize,
+/// max_seq_length 12) is read into the class's choices, and the encoder lowered with them matches.
+#[test]
+fn a_sentence_transformers_stack_sets_the_pooling() {
+    use misaka_palw_tir_lower::encoder::{StPooling, sentence_transformers};
+    use misaka_palw_tir_lower::lower::bidir::Pooling;
+    for name in ["bert", "roberta", "xlm_roberta"] {
+        let st = sentence_transformers(&fixture_dir(name)).expect("read").expect("a sentence-transformers stack");
+        assert_eq!((st.pooling, st.normalize, st.max_seq_length), (StPooling::Mean, true, Some(12)), "{name}");
+        let pooling = match st.pooling {
+            StPooling::Mean => Pooling::Mean,
+            StPooling::Cls => Pooling::Cls,
+            StPooling::LastToken => unreachable!("a bidirectional encoder"),
+        };
+        bidir_case(name, if name == "bert" { 0 } else { 1 }, pooling, st.normalize, "mean_normalized");
+    }
+    // Not a sentence-transformers directory.
+    assert_eq!(sentence_transformers(&fixture_dir("clip_text")).expect("read"), None);
 }

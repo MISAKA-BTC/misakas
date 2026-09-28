@@ -34,7 +34,26 @@ pub fn causal_v2(lw: &Lowered, output: EncoderOutput) -> Result<TirProgramV2> {
         EncoderOutput::Final => OutputDecl::Final { node },
         EncoderOutput::Rows => OutputDecl::Rows { node },
     };
-    let p = TirProgramV2::from_v1_lifting_params(&lw.program, &[], decl).map_err(|e| LowerError::eval(e.to_string()))?;
+    let mut p = TirProgramV2::from_v1_lifting_params(&lw.program, &[], decl).map_err(|e| LowerError::eval(e.to_string()))?;
+    // An `EmbeddingI32` is `[n, d]`: a `Final` row `[d]` is output as `[1, d]` (a committed
+    // reshape of the committed row; a `Rows` output keeps `[d]` rows, stacked `[T, d]`).
+    if output == EncoderOutput::Final {
+        let post = p.schedule.post as usize;
+        let row = &p.blocks[post].nodes[node as usize];
+        let shape = row.out.shape.clone();
+        if shape.len() == 1 {
+            let dtype = row.out.dtype;
+            let mut s = vec![tir::Dim::Fixed(1)];
+            s.extend(shape);
+            p.blocks[post].nodes.push(tir::Node {
+                prim: tir::Prim::Reshape,
+                inputs: vec![tir::Ref::Node(node)],
+                out: tir::TensorType::new(dtype, s),
+                commit: true,
+            });
+            p.output = OutputDecl::Final { node: (p.blocks[post].nodes.len() - 1) as u16 };
+        }
+    }
     tir::validate_v2::validate_v2(&p).map_err(|e| LowerError::eval(format!("version-2 normal form: {e}")))?;
     Ok(p)
 }
@@ -115,4 +134,80 @@ pub fn bidir_pipeline(prefix: Vec<u32>, suffix: Vec<u32>, pad: u32, lmax: u32) -
         }],
         output_stage: 0,
     }
+}
+
+/// What a sentence-transformers repository says around the model: its pooling, whether a
+/// `Normalize` module follows, and `max_seq_length` (`modules.json`, the Pooling module's
+/// `config.json`, `sentence_bert_config.json`). `None` when the directory is not one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SentenceTransformers {
+    pub pooling: StPooling,
+    pub normalize: bool,
+    pub max_seq_length: Option<u32>,
+}
+
+/// The pooling modes the lowering models.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StPooling {
+    Cls,
+    Mean,
+    /// The last token's row (a causal embedder: the `Final` output).
+    LastToken,
+}
+
+/// Read a sentence-transformers repository's module stack (`Transformer` → `Pooling` →
+/// optional `Normalize`). A mode or module the lowering does not model (max, weighted-mean or
+/// sqrt-length pooling, `Dense` layers) is refused by name rather than ignored.
+pub fn sentence_transformers(dir: &std::path::Path) -> Result<Option<SentenceTransformers>> {
+    let read = |p: std::path::PathBuf| -> Result<serde_json::Value> {
+        let t = std::fs::read_to_string(&p).map_err(|e| LowerError::bad(format!("{}: {e}", p.display())))?;
+        serde_json::from_str(&t).map_err(|e| LowerError::bad(format!("{}: {e}", p.display())))
+    };
+    let mpath = dir.join("modules.json");
+    if !mpath.exists() {
+        return Ok(None);
+    }
+    let modules = read(mpath)?;
+    let list = modules.as_array().ok_or_else(|| LowerError::bad("modules.json is not a list"))?;
+    let (mut pooling, mut normalize) = (None, false);
+    for m in list {
+        let ty = m["type"].as_str().unwrap_or("");
+        let path = m["path"].as_str().unwrap_or("");
+        match ty.rsplit('.').next().unwrap_or("") {
+            "Transformer" => {}
+            "Pooling" => {
+                let c = read(dir.join(path).join("config.json"))?;
+                let on = |k: &str| c[k].as_bool().unwrap_or(false);
+                let modes: Vec<&str> = [
+                    ("pooling_mode_cls_token", "cls"),
+                    ("pooling_mode_mean_tokens", "mean"),
+                    ("pooling_mode_lasttoken", "lasttoken"),
+                    ("pooling_mode_max_tokens", "max"),
+                    ("pooling_mode_mean_sqrt_len_tokens", "mean_sqrt_len"),
+                    ("pooling_mode_weightedmean_tokens", "weightedmean"),
+                ]
+                .iter()
+                .filter(|(k, _)| on(k))
+                .map(|(_, n)| *n)
+                .collect();
+                pooling = Some(match modes.as_slice() {
+                    ["cls"] => StPooling::Cls,
+                    ["mean"] => StPooling::Mean,
+                    ["lasttoken"] => StPooling::LastToken,
+                    other => return Err(LowerError::not_lowerable(format!("sentence-transformers pooling {other:?} is not modelled"))),
+                });
+                if c["include_prompt"].as_bool() == Some(false) {
+                    return Err(LowerError::not_lowerable("sentence-transformers `include_prompt: false` is not modelled"));
+                }
+            }
+            "Normalize" => normalize = true,
+            other => return Err(LowerError::not_lowerable(format!("sentence-transformers module `{other}` is not modelled"))),
+        }
+    }
+    let pooling = pooling.ok_or_else(|| LowerError::not_lowerable("sentence-transformers stack without a Pooling module"))?;
+    let max_seq_length = match dir.join("sentence_bert_config.json") {
+        p if p.exists() => read(p)?["max_seq_length"].as_u64().map(|v| v as u32),
+        _ => None,
+    };
+    Ok(Some(SentenceTransformers { pooling, normalize, max_seq_length }))
 }
