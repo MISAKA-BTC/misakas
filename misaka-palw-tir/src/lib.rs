@@ -23,8 +23,9 @@
 //! * [`interval`] — the interval type and the range transfer functions of spec 04b §7 (the range
 //!   half of admission).
 //! * [`interp`] — one position step, a multi-position run, and cone evaluation.
-//! * [`builder`] — a small program builder and the first composite templates (the seed of
-//!   `tir_library_v1`).
+//! * [`builder`] — a small program builder (the primitives, with shape inference).
+//! * [`library`] — `tir_library_v1`: the composite templates (legacy kernels as segments, norms,
+//!   softmax variants, activations, RoPE, attention, routing, the recurrences).
 //!
 //! This is a leaf crate: it depends on nothing in this repository, so `kaspa-consensus-core` can
 //! depend on it for admission and the court. Identity hashing stays with the caller.
@@ -35,6 +36,7 @@ pub mod error;
 pub mod eval;
 pub mod interp;
 pub mod interval;
+pub mod library;
 pub mod prim;
 pub mod program;
 pub mod tensor;
