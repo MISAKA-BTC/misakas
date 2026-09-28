@@ -352,6 +352,15 @@ MODELS = {
                                              rope_scaling={"type": "longrope",
                                                            "short_factor": [1.0 + 0.1 * i for i in range(16)],
                                                            "long_factor": [2.0 + 0.5 * i for i in range(16)]})),
+    "qwen3moe": ("qwen3_moe", "Qwen3MoeForCausalLM", dict(hidden_size=64, intermediate_size=128, moe_intermediate_size=64,
+                                                        num_experts=4, num_experts_per_tok=2, norm_topk_prob=True,
+                                                        num_attention_heads=2, num_key_value_heads=1, head_dim=32, vocab_size=V,
+                                                        num_hidden_layers=2, max_position_embeddings=1024, rms_norm_eps=1e-6,
+                                                        tie_word_embeddings=False)),
+    "mixtral": ("mixtral", "MixtralForCausalLM", dict(hidden_size=64, intermediate_size=64, num_local_experts=4,
+                                                      num_experts_per_tok=2, num_attention_heads=2, num_key_value_heads=1,
+                                                      head_dim=32, vocab_size=V, num_hidden_layers=2, max_position_embeddings=1024,
+                                                      rms_norm_eps=1e-5, tie_word_embeddings=False, sliding_window=None)),
     "qwen35": ("qwen3_5_text", "Qwen3_5ForCausalLM", dict(hidden_size=64, intermediate_size=128, num_attention_heads=2,
                                                          num_key_value_heads=1, head_dim=32, vocab_size=V, num_hidden_layers=4,
                                                          max_position_embeddings=1024, rms_norm_eps=1e-6, tie_word_embeddings=True,
@@ -359,7 +368,7 @@ MODELS = {
                                                          linear_key_head_dim=16, linear_value_head_dim=16, linear_conv_kernel_dim=4)),
 }
 GGUF_ARCH = {"llama": "llama", "qwen2": "qwen2", "qwen3": "qwen3", "gemma": "gemma", "gemma2": "gemma2", "mistral": "llama",
-             "gemma3": "gemma3", "phi3": "phi3", "qwen35": "qwen35"}
+             "gemma3": "gemma3", "phi3": "phi3", "qwen35": "qwen35", "qwen3moe": "qwen3moe", "mixtral": "llama"}
 
 
 def use_more_bits(i, n):
@@ -412,6 +421,8 @@ CONFIGS = {
     "gguf_gemma3_q4_0": ("gemma3", fixed(Q4_0, embd=Q8_0), 2),
     "gguf_phi3_q8_0": ("phi3", fixed(Q8_0, out=Q4_0), 7),
     "gguf_qwen35_q8_0": ("qwen35", fixed(Q8_0, embd=Q4_0), 7),
+    "gguf_qwen3moe_q4_0": ("qwen3moe", fixed(Q4_0, embd=Q8_0, out=Q8_0), 2),
+    "gguf_mixtral_q8_0": ("mixtral", fixed(Q8_0), 7),
 }
 
 
@@ -433,6 +444,10 @@ def hf_to_gguf(name, arch):
         return "output.weight"
     p = name.split(".")
     l, rest = p[2], ".".join(p[3:])
+    moe = {"mlp.gate.weight": "ffn_gate_inp.weight", "mlp.experts.gate_proj3d": "ffn_gate_exps.weight",
+           "mlp.experts.up_proj3d": "ffn_up_exps.weight", "mlp.experts.down_proj": "ffn_down_exps.weight"}
+    if rest in moe:
+        return f"blk.{l}.{moe[rest]}"
     if arch == "phi3" and rest in ("self_attn.qkv_proj.weight", "mlp.gate_up_proj.weight"):
         return f"blk.{l}.{'attn_qkv' if 'qkv' in rest else 'ffn_up'}.weight"
     if arch == "qwen35" and rest.startswith("linear_attn."):
@@ -505,6 +520,14 @@ def build(name):
             return np.concatenate([np.arange(qk), qk + tiled(dv)])
     tensors, deq = [], {}
     types = {}
+    # transformers 5 keeps experts fused in memory (`experts.gate_up_proj [E, 2I, D]`); GGUF stores
+    # `ffn_gate_exps`/`ffn_up_exps [E, I, D]` and `ffn_down_exps [E, D, I]`.
+    fused = [k for k in sd if k.endswith("mlp.experts.gate_up_proj")]
+    for k in fused:
+        gu = sd.pop(k)
+        half = gu.shape[1] // 2
+        base = k[: -len("gate_up_proj")]
+        sd[base + "gate_proj3d"], sd[base + "up_proj3d"] = gu[:, :half, :], gu[:, half:, :]
     for k, w in sd.items():
         if cfg.tie_word_embeddings and k == "lm_head.weight":
             continue
@@ -537,6 +560,16 @@ def build(name):
             ty = F32
             raw = quantize(x.reshape(1, -1), F32)
             back = dequant(raw, F32, 1, x.shape[0]).reshape(-1)
+        elif x.ndim == 3:
+            ne, rows, ne0 = x.shape
+            ty = plan(gname, layer, n_layers, ne0)
+            raw = quantize(x.reshape(ne * rows, ne0), ty)
+            back = dequant(raw, ty, ne * rows, ne0).reshape(x.shape)
+        elif gname.endswith("ffn_gate_inp.weight"):
+            # llama.cpp keeps the router in float.
+            ty = F32
+            raw = quantize(x, F32)
+            back = dequant(raw, F32, *x.shape)
         else:
             rows, ne0 = x.shape
             # llama.cpp keeps the convolution kernels in float.
@@ -569,6 +602,12 @@ def build(name):
                 r = r[:, inv]
             r = r.reshape(w.shape)
         deq[k] = torch.from_numpy(r.astype(np.float32))
+    for k in fused:
+        base = k[: -len("gate_up_proj")]
+        deq[k] = torch.cat([deq.pop(base + "gate_proj3d"), deq.pop(base + "up_proj3d")], dim=1)
+        sd.pop(base + "gate_proj3d")
+        sd.pop(base + "up_proj3d")
+        sd[k] = deq[k].double().numpy()
     if cfg.tie_word_embeddings:
         # One parameter under two names: both must carry the dequantised table.
         deq["lm_head.weight"] = deq["model.embed_tokens.weight"]
@@ -615,6 +654,11 @@ def build(name):
         for which in ("long", "short"):
             f = np.asarray(rp[f"{which}_factor"], dtype=np.float32)
             tensors.append((f"rope_factors_{which}.weight", [len(f)], F32, f.astype("<f4").tobytes()))
+    ne = getattr(cfg, "num_experts", None) or getattr(cfg, "num_local_experts", None)
+    if ne:
+        kvs += [kv(p + "expert_count", GT_U32, ne), kv(p + "expert_used_count", GT_U32, cfg.num_experts_per_tok)]
+        if arch == "qwen3moe":
+            kvs.append(kv(p + "expert_feed_forward_length", GT_U32, cfg.moe_intermediate_size))
     if qwen35:
         kvs += [kv(p + "rope.dimension_sections", GT_ARR, (GT_I32, [11, 11, 10, 0])),
                 kv(p + "ssm.conv_kernel", GT_U32, cfg.linear_conv_kernel_dim),

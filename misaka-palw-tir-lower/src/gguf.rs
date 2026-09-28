@@ -401,6 +401,51 @@ impl GgufFile {
         Ok(Tensor::new(t.shape(), data))
     }
 
+    fn raw_range(&self, t: &GgufTensorInfo, start: u64, len: u64) -> Result<Vec<u8>> {
+        if start.checked_add(len).is_none_or(|e| e > t.bytes) {
+            return Err(LowerError::weights(format!("GGUF `{}`: a slice past the tensor", t.name)));
+        }
+        let mut f = std::fs::File::open(&self.path).map_err(|e| LowerError::Io(e.to_string()))?;
+        f.seek(SeekFrom::Start(t.offset + start)).map_err(|e| LowerError::Io(e.to_string()))?;
+        let mut b = vec![0u8; len as usize];
+        f.read_exact(&mut b).map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
+        Ok(b)
+    }
+
+    /// Expert `e` of a stacked `[ne0, ne1, E]` tensor: its `ne1` rows, and their byte range.
+    fn expert_rows(&self, name: &str, e: usize) -> Result<(&GgufTensorInfo, usize, usize, u64, u64)> {
+        let t = self.info(name)?;
+        if t.dims.len() != 3 || e as u64 >= t.dims[2] {
+            return Err(LowerError::weights(format!("GGUF `{name}` {:?} has no expert {e}", t.dims)));
+        }
+        let (be, bb) = t.ty.block().ok_or_else(|| LowerError::not_lowerable(format!("GGUF `{name}`: {} is not read", t.ty.name())))?;
+        let (inp, rows) = (t.dims[0] as usize, t.dims[1] as usize);
+        let row_bytes = (inp / be * bb) as u64;
+        Ok((t, inp, rows, e as u64 * rows as u64 * row_bytes, rows as u64 * row_bytes))
+    }
+
+    /// Expert `e` of a stacked block-quantised tensor, as stored.
+    pub fn qweight_expert(&self, name: &str, e: usize) -> Result<QWeight> {
+        let (t, inp, rows, start, len) = self.expert_rows(name, e)?;
+        if t.ty.is_float() {
+            return Err(LowerError::weights(format!("GGUF `{name}` is {}, not quantised", t.ty.name())));
+        }
+        unpack(t.ty, &self.raw_range(t, start, len)?, inp, rows, name)
+    }
+
+    /// Expert `e` of a stacked tensor as f32 `[rows, cols]`.
+    pub fn tensor_f32_expert(&self, name: &str, e: usize) -> Result<Tensor> {
+        let (t, inp, rows, start, len) = self.expert_rows(name, e)?;
+        let raw = self.raw_range(t, start, len)?;
+        let data: Vec<f32> = match t.ty {
+            GgmlType::F32 => raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
+            GgmlType::F16 => raw.chunks_exact(2).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
+            GgmlType::BF16 => raw.chunks_exact(2).map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16)).collect(),
+            ty => unpack(ty, &raw, inp, rows, name)?.dequant().data,
+        };
+        Ok(Tensor::new(vec![rows, inp], data))
+    }
+
     /// Tensor count by type (for reports).
     pub fn type_counts(&self) -> BTreeMap<String, usize> {
         let mut m = BTreeMap::new();
@@ -544,6 +589,8 @@ struct Source {
     rows: Option<Vec<usize>>,
     /// Hugging Face column `j` is GGUF column `cols[j]` (Qwen3.5's `out_proj` over tiled heads).
     cols: Option<Vec<usize>>,
+    /// Expert `e` of a stacked `[E, rows, cols]` tensor (`ffn_*_exps`).
+    expert: Option<usize>,
 }
 
 /// A GGUF checkpoint seen as the Hugging Face model it was converted from.
@@ -608,6 +655,15 @@ fn arch_keys(arch: &str) -> &'static [&'static str] {
         "gemma2" => &["attn_logit_softcapping", "final_logit_softcapping", "attention.sliding_window"],
         "gemma3" => &["final_logit_softcapping", "attention.sliding_window"],
         "phi3" => &["attention.sliding_window", "rope.scaling.attn_factor"],
+        "llama" | "qwen3moe" | "qwen2moe" => &[
+            "expert_count",
+            "expert_used_count",
+            "expert_feed_forward_length",
+            "expert_shared_feed_forward_length",
+            "expert_gating_func",
+            "expert_weights_scale",
+            "expert_weights_norm",
+        ],
         "qwen35" => &[
             "rope.dimension_sections",
             "ssm.conv_kernel",
@@ -660,9 +716,11 @@ impl GgufModel {
             "gemma3" => ("Gemma3ForCausalLM", "gemma3_text"),
             "phi3" => ("Phi3ForCausalLM", "phi3"),
             "qwen35" => ("Qwen3_5ForCausalLM", "qwen3_5_text"),
+            "qwen3moe" => ("Qwen3MoeForCausalLM", "qwen3_moe"),
+            "qwen2moe" => ("Qwen2MoeForCausalLM", "qwen2_moe"),
             other => {
                 return Err(LowerError::not_lowerable(format!(
-                    "GGUF architecture `{other}` has no mapping (llama, qwen2, qwen3, qwen35, gemma, gemma2, gemma3 and phi3 do)"
+                    "GGUF architecture `{other}` has no mapping (llama, qwen2, qwen3, qwen35, qwen2moe, qwen3moe, gemma, gemma2, gemma3 and phi3 do)"
                 )));
             }
         };
@@ -682,6 +740,16 @@ impl GgufModel {
         let need_u = |k: &str| -> Result<usize> {
             get(k).and_then(GValue::as_u64).map(|v| v as usize).ok_or_else(|| LowerError::bad(format!("GGUF: no `{pre}{k}`")))
         };
+        let experts = get("expert_count").and_then(GValue::as_u64).unwrap_or(0) as usize;
+        let (hf_arch, model_type) = if arch == "llama" && experts > 0 { ("MixtralForCausalLM", "mixtral") } else { (hf_arch, model_type) };
+        if experts > 0 {
+            if get("expert_gating_func").and_then(GValue::as_u64).is_some_and(|g| g != 1) {
+                return Err(LowerError::not_lowerable("GGUF: an expert gating function other than softmax"));
+            }
+            if get("expert_weights_scale").and_then(GValue::as_f64).is_some_and(|w| w != 1.0) {
+                return Err(LowerError::not_lowerable("GGUF: scaled expert weights"));
+            }
+        }
         let hidden = need_u("embedding_length")?;
         let layers = need_u("block_count")?;
         let ffn = need_u("feed_forward_length")?;
@@ -734,6 +802,40 @@ impl GgufModel {
             }
         };
         match arch.as_str() {
+            "llama" if experts > 0 => {
+                // Mixtral: every layer's feed-forward is the experts (`feed_forward_length` is
+                // theirs); llama.cpp renormalises the top-k weights, as Mixtral does.
+                o.insert("rope_theta".into(), json!(theta));
+                o.insert("hidden_act".into(), json!("silu"));
+                o.insert("num_local_experts".into(), json!(experts));
+                o.insert("num_experts_per_tok".into(), json!(need_u("expert_used_count")?));
+                o.insert("sliding_window".into(), Value::Null);
+                rope_scaling(o)?;
+            }
+            "qwen3moe" | "qwen2moe" => {
+                // llama.cpp: every layer is sparse; Qwen3-MoE renormalises the top-k weights and
+                // Qwen2-MoE does not (its shared expert has a sigmoid gate).
+                o.insert("rope_theta".into(), json!(theta));
+                o.insert("hidden_act".into(), json!("silu"));
+                o.insert("num_experts".into(), json!(experts));
+                o.insert("num_experts_per_tok".into(), json!(need_u("expert_used_count")?));
+                o.insert("moe_intermediate_size".into(), json!(need_u("expert_feed_forward_length")?));
+                o.insert("decoder_sparse_step".into(), json!(1));
+                o.insert("mlp_only_layers".into(), json!(Vec::<usize>::new()));
+                let v3 = arch == "qwen3moe";
+                o.insert("norm_topk_prob".into(), json!(v3));
+                if let Some(nw) = get("expert_weights_norm").and_then(|v| if let GValue::Bool(b) = v { Some(*b) } else { None })
+                    && nw != v3
+                {
+                    return Err(LowerError::not_lowerable("GGUF: expert weight normalisation differs from llama.cpp's for this architecture"));
+                }
+                if v3 {
+                    o.insert("attention_bias".into(), json!(has("blk.0.attn_q.bias")));
+                } else {
+                    o.insert("shared_expert_intermediate_size".into(), json!(need_u("expert_shared_feed_forward_length")?));
+                }
+                rope_scaling(o)?;
+            }
             "llama" | "qwen3" => {
                 o.insert("rope_theta".into(), json!(theta));
                 o.insert("attention_bias".into(), json!(has("blk.0.attn_q.bias")));
@@ -904,8 +1006,9 @@ impl GgufModel {
         }
         // Tensor names.
         let mut map: BTreeMap<String, Source> = BTreeMap::new();
+        let mut map_expert: Vec<(String, String, usize)> = Vec::new();
         let mut put = |hf: String, g: String, rows: Option<Vec<usize>>, cols: Option<Vec<usize>>| {
-            map.insert(hf, Source { gguf: g, rows, cols });
+            map.insert(hf, Source { gguf: g, rows, cols, expert: None });
         };
         put("model.embed_tokens.weight".into(), "token_embd.weight".into(), None, None);
         put("model.norm.weight".into(), "output_norm.weight".into(), None, None);
@@ -978,9 +1081,32 @@ impl GgufModel {
                 put(format!("{la}norm.weight"), format!("{b}ssm_norm.weight"), None, None);
                 put(format!("{la}out_proj.weight"), format!("{b}ssm_out.weight"), None, head_axis(dv));
             }
+            if experts > 0 {
+                let (moe, names): (&str, [&str; 3]) = if arch == "llama" {
+                    ("block_sparse_moe", ["w1", "w3", "w2"])
+                } else {
+                    ("mlp", ["gate_proj", "up_proj", "down_proj"])
+                };
+                put(format!("{m}{moe}.gate.weight"), format!("{b}ffn_gate_inp.weight"), None, None);
+                for (hfp, gp) in names.iter().zip(["ffn_gate_exps", "ffn_up_exps", "ffn_down_exps"]) {
+                    for e in 0..experts {
+                        map_expert.push((format!("{m}{moe}.experts.{e}.{hfp}.weight"), format!("{b}{gp}.weight"), e));
+                    }
+                }
+                if arch == "qwen2moe" {
+                    for (hfp, gp) in [("gate_proj", "ffn_gate_shexp"), ("up_proj", "ffn_up_shexp"), ("down_proj", "ffn_down_shexp")] {
+                        put(format!("{m}mlp.shared_expert.{hfp}.weight"), format!("{b}{gp}.weight"), None, None);
+                    }
+                    put(format!("{m}mlp.shared_expert_gate.weight"), format!("{b}ffn_gate_inp_shexp.weight"), None, None);
+                }
+                continue;
+            }
             for (hfp, gp) in [("gate_proj", "ffn_gate"), ("up_proj", "ffn_up"), ("down_proj", "ffn_down")] {
                 put(format!("{m}mlp.{hfp}.weight"), format!("{b}{gp}.weight"), None, None);
             }
+        }
+        for (hf, g, e) in map_expert {
+            map.insert(hf, Source { gguf: g, rows: None, cols: None, expert: Some(e) });
         }
         for (hf, s) in &map {
             if !file.tensors.contains_key(&s.gguf) {
@@ -1006,7 +1132,8 @@ impl GgufModel {
         for (hf, s) in &self.map {
             let Some(module) = hf.strip_suffix(".weight") else { continue };
             let t = &self.file.tensors[&s.gguf];
-            if t.dims.len() != 2 || module == "model.embed_tokens" || module.ends_with("conv1d") {
+            let dims = if s.expert.is_some() { t.dims.len() - 1 } else { t.dims.len() };
+            if dims != 2 || module == "model.embed_tokens" || module.ends_with("conv1d") {
                 continue;
             }
             let template = match module.strip_prefix("model.layers.") {
@@ -1143,11 +1270,15 @@ fn permute_rows_cols(t: Tensor, rows: Option<&[usize]>, cols: Option<&[usize]>) 
 impl TensorSource for GgufModel {
     fn shape(&self, name: &str) -> Option<Vec<usize>> {
         let s = self.map.get(name)?;
-        self.file.tensors.get(&s.gguf).map(GgufTensorInfo::shape)
+        let sh = self.file.tensors.get(&s.gguf).map(GgufTensorInfo::shape)?;
+        Some(if s.expert.is_some() { sh[1..].to_vec() } else { sh })
     }
     fn load(&self, name: &str) -> Result<Tensor> {
         let s = self.map.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
-        let t = self.file.tensor_f32(&s.gguf)?;
+        let t = match s.expert {
+            Some(e) => self.file.tensor_f32_expert(&s.gguf, e)?,
+            None => self.file.tensor_f32(&s.gguf)?,
+        };
         Ok(if s.rows.is_none() && s.cols.is_none() { t } else { permute_rows_cols(t, s.rows.as_deref(), s.cols.as_deref()) })
     }
     fn names(&self) -> Vec<String> {
@@ -1157,7 +1288,10 @@ impl TensorSource for GgufModel {
     }
     fn load_qweight(&self, name: &str) -> Result<QWeight> {
         let s = self.map.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
-        let mut q = self.file.qweight(&s.gguf)?;
+        let mut q = match s.expert {
+            Some(e) => self.file.qweight_expert(&s.gguf, e)?,
+            None => self.file.qweight(&s.gguf)?,
+        };
         if let Some(p) = &s.rows {
             q = q.take_rows(p)?;
         }

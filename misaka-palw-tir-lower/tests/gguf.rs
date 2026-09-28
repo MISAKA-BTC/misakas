@@ -178,6 +178,8 @@ gguf!(
     gguf_gemma3_q4_0,
     gguf_phi3_q8_0,
     gguf_qwen35_q8_0,
+    gguf_qwen3moe_q4_0,
+    gguf_mixtral_q8_0,
 );
 
 /// Hostile headers are errors, never panics or unbounded allocations.

@@ -82,6 +82,12 @@ fn a_real_gguf_maps_and_lowers() {
     eprintln!("config: {}", serde_json::to_string(&m.config).unwrap());
     let prep = m.prepare(&LowerOpts::default()).expect("lowered");
     eprintln!("{}", program_summary(&prep.lowered.program));
+    if let Ok(out) = std::env::var("PALW_TIR_OUT") {
+        std::fs::write(&out, prep.lowered.program.encode()).expect("write the program");
+        // The same model through the W8 path (the stored integers dequantised and re-quantised).
+        let w8 = misaka_palw_tir_lower::lower::lower(&prep.hl, &LowerOpts::default()).expect("W8 lowering");
+        std::fs::write(format!("{out}.w8"), w8.program.encode()).expect("write the W8 program");
+    }
     let quantised = prep.lowered.program.params.iter().filter(|p| p.name.ends_with(".qa")).count();
     let rep = misaka_palw_tir_lower::weights::check_weights(&prep.hl, &prep.binding, &m);
     eprintln!("{quantised} quantised projections; {} bindings, errors {:?}, unused {:?}", rep.bound, rep.errors, rep.unused);
