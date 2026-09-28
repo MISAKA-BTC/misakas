@@ -662,10 +662,22 @@ useful, never whether a claim is valid.
 | --- | --- | --- | --- | --- |
 | C1/C2 dense, A16 W8 | ≥ 0.85 | ≤ 0.10 | ≤ +5 % | — |
 | C3/C8 MoE | ≥ 0.80 | ≤ 0.15 | ≤ +8 % | — |
-| C4 GDN | ≥ 0.80 | ≤ 0.15 | ≤ +8 % | KL at position 4,096 ≤ 1.5 × KL at 128 |
+| C4 GDN | ≥ 0.80 | ≤ 0.15 | ≤ +8 % | KL at 4,096 ≤ 1.5 × KL at 128, **or** KL at 4,096 ≤ 0.01 (below) |
 | C5 SSM | ≥ 0.80 | ≤ 0.15 | ≤ +8 % | as C4 |
 | C6 RWKV | ≥ 0.75 | ≤ 0.20 | ≤ +10 % | as C4 |
 | C7 hybrid | the loosest of its components | | | as C4 |
+
+**The drift column, as measured and decided** (the RFC-0002 coordinator, 2026-09-29):
+
+- "KL at 128" is the mean KL over positions 64–192, and "KL at 4,096" the mean over positions
+  3,968–4,096, of each 4,096-token held-out sequence (`palw-tir-fidelity --drift`).
+- A row passes when the late KL is at most 1.5 × the early KL, **or** when the late KL is at most
+  **0.01 nats** (an absolute floor).
+- The floor exists because a ratio of two KLs near zero is not a meaningful gate. Mamba-370m's
+  final lowering cut both windows' KL 12–19× (to 2.1e-4 and 3.5e-4), and the ratio rose from
+  ×1.11 to ×1.67.
+- A recurrent program must be calibrated on at least one sequence as long as the evaluated context
+  (freeze-v1 §5.2).
 
 Anchors: the live A16 Qwen2.5-1.5B class measures top-1 0.877 calibrated and 0.917 held out (57/48
 positions, `palw_base0_a16.rs` header); the GDN integer recurrence measures 9.1e−4 → 1.1e−3 relative
