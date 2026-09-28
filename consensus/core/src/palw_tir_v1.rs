@@ -88,6 +88,10 @@ pub struct PalwTirCeilingsV1 {
     pub max_state_bytes: u64,
     /// Peak live bytes of one position in canonical order (spec 04b §8).
     pub max_peak_live_bytes: u64,
+    /// Admission's own work (spec 04b §10.3, `TirCeilingsV1::max_cone_work`): the nodes and operand
+    /// refs of every commit point's cone and every `StateWrite`'s update cone, refused at this cap
+    /// before it is spent. The format's cap is `2^20`; a Qwen2.5-1.5B-shaped decoder costs 905.
+    pub max_cone_work: u64,
 }
 
 impl PalwTirCeilingsV1 {
@@ -101,6 +105,7 @@ impl PalwTirCeilingsV1 {
         max_macs_per_position: u64::MAX,
         max_state_bytes: u64::MAX,
         max_peak_live_bytes: u64::MAX,
+        max_cone_work: 1 << 20,
     };
 
     /// Is every ceiling inside the format's cap? The one check a fence value must pass.
@@ -118,6 +123,9 @@ impl PalwTirCeilingsV1 {
         if self.max_macs_per_position == 0 || self.max_state_bytes == 0 || self.max_peak_live_bytes == 0 {
             return Err("a cost ceiling of zero admits no program");
         }
+        if self.max_cone_work == 0 || self.max_cone_work > caps.max_cone_work {
+            return Err("max_cone_work must be in [1, 2^20]");
+        }
         Ok(())
     }
 
@@ -129,12 +137,14 @@ impl PalwTirCeilingsV1 {
         h.write(self.max_macs_per_position.to_le_bytes());
         h.write(self.max_state_bytes.to_le_bytes());
         h.write(self.max_peak_live_bytes.to_le_bytes());
+        h.write(self.max_cone_work.to_le_bytes());
     }
 }
 
-/// **testnet-12's IR ceilings, v1 — PROVISIONAL.** The byte cap is the lead's decision (one carrier,
-/// design D3); the other five are placeholders at the format's scale until admission v10 (Phase F
-/// step F6) measures the corpus, and are fixed then. Nothing arms them: the fence is dormant.
+/// **testnet-12's IR ceilings, v1 — PROVISIONAL.** The byte cap (one carrier, design D3) and the
+/// cone-work cap (`2^16`: seventy times the 1.5B decoder's 905) are the lead's; the other five are
+/// placeholders at the format's scale until admission v10 (Phase F step F6) measures the corpus, and
+/// are fixed then. Nothing arms them: the fence is dormant.
 pub const PALW_T12_TIR_CEILINGS_V1: PalwTirCeilingsV1 = PalwTirCeilingsV1 {
     max_program_bytes: 88_000,
     max_unrolled_nodes: 1 << 18,
@@ -142,6 +152,7 @@ pub const PALW_T12_TIR_CEILINGS_V1: PalwTirCeilingsV1 = PalwTirCeilingsV1 {
     max_macs_per_position: 1 << 37,
     max_state_bytes: 1 << 40,
     max_peak_live_bytes: 1 << 36,
+    max_cone_work: 1 << 16,
 };
 
 /// **`Params::palw_tir_v1`'s value**: the fence and what it carries.

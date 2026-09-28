@@ -186,6 +186,7 @@ pub struct PalwTirCeilingsV1 {       // a network may only tighten the format ca
     pub max_macs_per_position: u64,  // §8 worst case at H = min(W, max_context)
     pub max_state_bytes: u64,        // Fixed + Hist at max_context (a seat's working set)
     pub max_peak_live_bytes: u64,
+    pub max_cone_work: u64,          // admission's own work (04b §10.3); t12 v1: 2^16; format cap 2^20
 }
 ```
 
