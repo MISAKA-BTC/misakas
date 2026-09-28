@@ -6970,6 +6970,9 @@ impl PalwPanelService {
             Hash64,
             (u64, Option<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1>),
         > = HashMap::new();
+        // RFC-0002's evidence transport, option B: the IR claims this seat pursues through served
+        // annexes (their capture never reaches it) — `tir_court::PalwTirAnnexPursuitV1`.
+        let mut tir_annex_pursuits: HashMap<Hash64, tir_court::PalwTirAnnexPursuitV1> = HashMap::new();
         // RFC-0002 F7, option D: the accused's IR root claim per session, read off the chain on the same
         // throttle — a challenger's bottom when it holds no accused capture.
         let mut tir_root_filings: HashMap<Hash64, (u64, Option<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirRootClaimV1>)> =
@@ -7674,7 +7677,7 @@ impl PalwPanelService {
             // move by an IR close instead (`TirShardCourtAccused`, `tir_court`).
             if !bisection_is_played
                 && self.consensus_config.params.palw_tir_v1_active_at(current_daa)
-                && (self.config.challenge || !seat_faulted.is_empty() || !replay_refuted.is_empty())
+                && (self.config.challenge || !seat_faulted.is_empty() || !replay_refuted.is_empty() || !tir_annex_pursuits.is_empty())
             {
                 self.tir_one_move_pass_v1(
                     &session,
@@ -7689,6 +7692,8 @@ impl PalwPanelService {
                         accused: &mut accused,
                         court_pending: &mut court_pending,
                         court_due: &mut court_due,
+                        pursuits: &mut tir_annex_pursuits,
+                        openings: &interval_openings,
                     },
                 )
                 .await;
@@ -13019,6 +13024,46 @@ impl PalwPanelService {
     ///
     /// Runs on a blocking thread (the transport arranges that): it reads a file and runs the
     /// family's opening arithmetic.
+    /// **Option B's serving half: the annex of leaf `leaf` of this node's own IR claim** — the class
+    /// resolved from the capture's binding, the annex built by the IR backend (a fold re-derived once,
+    /// through its memo), encoded under its magic. `None` (silence) where any step fails or the annex
+    /// would not fit the lane; the asking seat re-asks, then leaves the claim to the chain's demand.
+    fn serve_tir_leaf_annex_v1(&self, claim: Hash64, capture: &[u8], leaf: u64) -> Option<Vec<u8>> {
+        let started = std::time::Instant::now();
+        let decoded = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(capture).ok()?;
+        let binding = &decoded.binding;
+        let class_id = binding.class.class_id(&binding.artifact_root);
+        let tir = match self.backends().resolve_tir_v1(class_id, binding.artifact_root)? {
+            Ok(tir) => tir,
+            Err(why) => {
+                info!("[{PALW_PANEL}] claim {claim}: the annex of leaf {leaf} does not open here — the IR backend: {why}");
+                return None;
+            }
+        };
+        match tir.leaf_annex(capture, leaf) {
+            Ok(annex) => {
+                let bytes = annex.encode();
+                if bytes.len() > kaspa_p2p_flows::palw_gossip::PALW_INTERVAL_OPENING_MAX_BYTES {
+                    warn!(
+                        "[{PALW_PANEL}] claim {claim}: the annex of leaf {leaf} is {} bytes, past the lane's cap — not served",
+                        bytes.len()
+                    );
+                    return None;
+                }
+                info!(
+                    "[{PALW_PANEL}] claim {claim}: served the IR annex of leaf {leaf} ({} bytes, {:.0?}) — RFC-0002 evidence transport B",
+                    bytes.len(),
+                    started.elapsed()
+                );
+                Some(bytes)
+            }
+            Err(e) => {
+                info!("[{PALW_PANEL}] claim {claim}: the annex of leaf {leaf} does not open here: {e}");
+                None
+            }
+        }
+    }
+
     fn open_retained_interval(&self, claim: Hash64, interval_index: u32, leaf_index: Option<u64>) -> Option<Vec<u8>> {
         use misaka_palw_base0::fp_interval::{base0_fp_block_leaves_request_decode_v1, base0_fp_resume_request_decode_v1};
         // **ADR-0111 Decision 2: a leaf's evidence, on the lane's own authentication.** The seat
@@ -13032,6 +13077,14 @@ impl PalwPanelService {
                     "[{PALW_PANEL}] PALW DRILL: refusing the evidence of leaf {leaf} of claim {claim} — the seat must demand it on chain"
                 );
                 return None;
+            }
+            // **RFC-0002's evidence transport, option B: an IR claim's leaf is served as its annex**
+            // (`misaka_palw_sdk::lineages::tir::PalwTirLeafAnnexV1`) — the binding, the leaf's preimage and
+            // opening, the trace summary — built from this node's own retained capture, the executor's.
+            if let Some(capture) =
+                self.retained_capture(&claim).filter(|bytes| bytes.starts_with(&misaka_palw_sdk::lineages::tir::TirCaptureV1::MAGIC))
+            {
+                return self.serve_tir_leaf_annex_v1(claim, &capture, leaf);
             }
             let session = self.consensus_manager.consensus().unguarded_session();
             let started = std::time::Instant::now();

@@ -1006,6 +1006,148 @@ fn a_lie_is_accused_from_served_annexes_without_the_capture() {
     );
 }
 
+/// **The seat's annex pursuit, step by step** (option B's node half, `palw_tir_annex_step_v1`): from
+/// the first annex asked (leaf 0) the pursuit's own steps — each annex served by the executor's backend,
+/// under the request index the lane keys it by — reach the accusation the capture path would file: the
+/// cone close at an undissected lie (the gate convicts), the named leaf at a dissected one (it opens the
+/// dissection), and for a wrong token the decode-token door on the pin of the logits leaf holding the
+/// seat's own token. An honest claim's first annex ends the pursuit with nothing to file; an annex of
+/// another leaf than the one asked is not stepped on. And the panel wires it: the pass pursues a claim
+/// whose capture it does not hold, asks through the lane's leaf request, and the executor serves the
+/// annex of its own IR capture.
+#[test]
+fn a_seat_pursues_a_large_claim_through_served_annexes() {
+    use super::tir_court::{
+        PalwTirAnnexPursuitV1, PalwTirAnnexStepV1, palw_tir_annex_request_index_v1, palw_tir_annex_step_v1,
+        palw_tir_leaf_is_dissected_v1, palw_tir_one_move_accusation_to_file_v1,
+    };
+    use kaspa_consensus_core::palw_producer_v2::palw_disputable_claims_v2;
+    use kaspa_consensus_core::palw_tir_one_move_v1::{PalwTirOneMoveOutcomeV1, palw_tir_one_move_outcome_v1};
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1;
+    use misaka_palw_sdk::lineages::tir::{PalwTirLeafAnnexV1, palw_tir_leaf_annex_verify_v1};
+    let ir = ir_class("pursuit", true);
+    let tir = ir.tir();
+    let rules = tir.court_rules(&court());
+    let program = tir.class().program.clone();
+    let s = registry_with(&ir);
+    let honest = produce(&ir, 13, None);
+    let ctx = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).unwrap().binding.job_context;
+    let prompt: Vec<u32> = honest.prompt.iter().map(|t| *t as u32).collect();
+    let own = tir.retain_memo(&ctx, &prompt).expect("the seat's own run");
+    let n = own.leaf_hashes.len() as u64;
+    // The request index keys each leaf's answer on the lane: distinct leaves, distinct slots.
+    let idx: std::collections::HashSet<u32> = (0..n).map(palw_tir_annex_request_index_v1).collect();
+    assert_eq!(idx.len() as u64, n, "one lane slot per leaf of the job");
+    assert!(idx.iter().all(|i| kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_request_decode_v1(*i).is_some()));
+    // Drive the pursuit through the executor's served annexes.
+    let pursue = |claim: &Claim| -> (u32, PalwTirAnnexStepV1) {
+        let mut pursuit = PalwTirAnnexPursuitV1::new(own.clone(), 100);
+        for round in 0..64u32 {
+            let bytes = tir.leaf_annex(&claim.material, pursuit.leaf).expect("served").encode();
+            let annex = PalwTirLeafAnnexV1::decode(&bytes).unwrap();
+            let binding = palw_tir_leaf_annex_verify_v1(
+                &annex,
+                &program,
+                claim.env.attempt.execution_root,
+                claim.env.attempt.trace_root,
+                LADDER,
+            )
+            .expect("verified");
+            match palw_tir_annex_step_v1(&tir, &pursuit, &annex, &binding, &rules) {
+                PalwTirAnnexStepV1::Ask { leaf, below, token } => (pursuit.leaf, pursuit.below, pursuit.token) = (leaf, below, token),
+                end => return (round + 1, end),
+            }
+        }
+        panic!("the pursuit does not end")
+    };
+    // An honest claim: the first annex ends it, nothing to file.
+    assert!(matches!(pursue(&honest).1, PalwTirAnnexStepV1::Stop(_)));
+    // An annex of another leaf is not stepped on.
+    {
+        let pursuit = PalwTirAnnexPursuitV1::new(own.clone(), 100);
+        let other = PalwTirLeafAnnexV1::decode(&tir.leaf_annex(&honest.material, 1).unwrap().encode()).unwrap();
+        let b =
+            palw_tir_leaf_annex_verify_v1(&other, &program, honest.env.attempt.execution_root, honest.env.attempt.trace_root, LADDER)
+                .unwrap();
+        assert!(matches!(palw_tir_annex_step_v1(&tir, &pursuit, &other, &b, &rules), PalwTirAnnexStepV1::Stop(_)));
+    }
+    let depth = 64 - (n - 1).leading_zeros();
+    let dissected = (0..n).find(|&i| palw_tir_leaf_is_dissected_v1(&tir, &ctx, i)).expect("a dissected leaf");
+    let undissected = (dissected + 1..n)
+        .find(|&i| {
+            !palw_tir_leaf_is_dissected_v1(&tir, &ctx, i)
+                && tir.space().leaf_at(&ctx, i).is_some_and(|l| matches!(l.kind, PalwTirLeafKindV1::Commit { .. }))
+        })
+        .expect("an undissected commit leaf");
+    for (lie, at_dissected) in [(undissected, false), (dissected, true)] {
+        let liar = produce(&ir, 13, Some(lie));
+        let s = licensed(&s, &liar, 101);
+        let target = palw_disputable_claims_v2(&s, &[bond_key(SEAT)]).into_iter().find(|t| t.claim_id == liar.id).expect("disputable");
+        let (rounds, end) = pursue(&liar);
+        assert!(rounds <= depth + 1, "{rounds} annexes for {n} leaves");
+        let PalwTirAnnexStepV1::Accuse { leaf, candidates, .. } = end else { panic!("an accusation") };
+        assert_eq!(leaf, Some(lie), "the pursuit names the planted leaf");
+        let (label, mut accusation) =
+            palw_tir_one_move_accusation_to_file_v1(candidates, &target, &program, bond_key(SEAT), &court(), LADDER, FORM)
+                .expect("an accusation to file");
+        accusation.signature = vec![3; 16];
+        let claim = s.claim(&liar.id).expect("the claim");
+        let outcome = palw_tir_one_move_outcome_v1(&s, claim, &accusation, &court(), LADDER, FORM, true).expect("the gate reads it");
+        if at_dissected {
+            assert_eq!(label, super::tir_court::PALW_TIR_NAMED_LEAF_LABEL_V1);
+            assert_eq!(outcome, PalwTirOneMoveOutcomeV1::NeedsDissection { leaf: lie });
+        } else {
+            assert_eq!(label, "cone");
+            assert_eq!(outcome, PalwTirOneMoveOutcomeV1::Verdict(PalwCourtVerdictV2::ExecutorGuilty));
+        }
+    }
+    // A wrong token: the pursuit agrees on every step, asks the logits leaf holding its own token, and
+    // files the decode-token door.
+    let token_liar = craft(&ir, &honest, |c| c.generated[0] = (c.generated[0] + 1) % c.logits_rows[0].len() as u32);
+    let s2 = licensed(&s, &token_liar, 101);
+    let target =
+        palw_disputable_claims_v2(&s2, &[bond_key(SEAT)]).into_iter().find(|t| t.claim_id == token_liar.id).expect("disputable");
+    let (rounds, end) = pursue(&token_liar);
+    assert_eq!(rounds, 2, "the first annex agrees; the second is the logits leaf's");
+    let PalwTirAnnexStepV1::Accuse { row, candidates, .. } = end else { panic!("an accusation") };
+    assert_eq!(row, Some(0));
+    let (label, mut accusation) =
+        palw_tir_one_move_accusation_to_file_v1(candidates, &target, &program, bond_key(SEAT), &court(), LADDER, FORM).expect("filed");
+    assert_eq!(label, "decode token");
+    accusation.signature = vec![3; 16];
+    let claim = s2.claim(&token_liar.id).expect("the claim");
+    assert_eq!(
+        palw_tir_one_move_outcome_v1(&s2, claim, &accusation, &court(), LADDER, FORM, true).expect("read"),
+        PalwTirOneMoveOutcomeV1::Verdict(PalwCourtVerdictV2::ExecutorGuilty)
+    );
+
+    // The wiring: the pass pursues a claim whose capture it does not hold, through the lane's leaf
+    // request; the executor serves the annex of its own IR capture on that request.
+    let court_src = include_str!("tir_court.rs");
+    let court_src = &court_src[..court_src.find("\n#[cfg(test)]").unwrap_or(court_src.len())];
+    let pass = &court_src[court_src.find("    pub(super) async fn tir_one_move_pass_v1(").expect("the pass")..];
+    assert!(pass.contains(
+        "self.tir_annex_pursuit_tick_v1(session, bond_key, network_domain, current_daa, &target, due, tir, &mut books).await;"
+    ));
+    let tick = &court_src[court_src.find("    async fn tir_annex_pursuit_tick_v1(").expect("the tick")..];
+    assert!(
+        tick.contains(
+            "self.request_leaf_evidence_v1(network_domain, claim, palw_tir_annex_request_index_v1(0), 0, current_daa).await;"
+        )
+    );
+    assert!(tick.contains("palw_tir_leaf_annex_verify_v1("));
+    assert!(tick.contains("palw_tir_annex_step_v1(&tir, &task, &annex, &binding, &rules)"));
+    let panel = include_str!("../palw_panel.rs");
+    let open = &panel[panel.find("    fn open_retained_interval(").expect("the opener")..];
+    let serve =
+        open.find("return self.serve_tir_leaf_annex_v1(claim, &capture, leaf);").expect("an IR claim's leaf is served as its annex");
+    assert!(
+        serve < open.find("self.retained_leaf_evidence_v1(").expect("the legacy evidence"),
+        "the IR annex before the legacy evidence"
+    );
+    assert!(panel.contains("pursuits: &mut tir_annex_pursuits,") && panel.contains("openings: &interval_openings,"));
+}
+
 /// **F7's bottom from the accused's ON-CHAIN root claim** (RFC-0002's evidence transport, option D): a
 /// challenger that holds no accused capture builds the bottom close from its own execution and the leaf
 /// the accused's root claim carries (`TirBackendV1::dissect_bottom_from_root_claim`) — byte for byte the

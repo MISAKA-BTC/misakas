@@ -371,6 +371,124 @@ pub(crate) fn palw_tir_one_move_due_v1(
     super::palw_seat_court_filing_due_v1(licensed_daa.saturating_add(window), None, current_daa)
 }
 
+// ---------------------------------------------------------------------------------------------
+// RFC-0002's evidence transport, option B: a seat's pursuit of a claim whose capture it never holds
+// ---------------------------------------------------------------------------------------------
+
+/// **The interval-lane request index an IR annex of `leaf` is asked under** — the leaf-evidence kind
+/// (ADR-0111 Decision 2, bit 29) with the leaf's low bits as its "interval", so every leaf of one
+/// descent is its own `(claim, index)` slot on the lane and in the seat's pool. The leaf itself rides
+/// the request's signed field; the index only keys the answer.
+pub(crate) fn palw_tir_annex_request_index_v1(leaf: u64) -> u32 {
+    let low = (leaf & ((kaspa_consensus_core::palw_leaf_evidence_v1::PALW_LEAF_EVIDENCE_REQUEST_BIT_V1 as u64) - 1)) as u32;
+    kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_request_index_v1(low).expect("below the bit")
+}
+
+/// How many DAA a seat waits for an annex before asking again, and how many asks of one leaf it makes
+/// before it leaves the claim to the on-chain demand (option C) — an executor that does not serve is
+/// the liar C exists for.
+pub(crate) const PALW_TIR_ANNEX_REASK_DAA_V1: u64 = 3;
+pub(crate) const PALW_TIR_ANNEX_ASKS_V1: u32 = 5;
+
+/// **A seat's pursuit of one claim through served annexes.** The own execution and its tree are the
+/// seat's re-run of the claim's job (the process-wide memo keeps the run itself); the rest is where
+/// the descent stands.
+#[derive(Clone)]
+pub(crate) struct PalwTirAnnexPursuitV1 {
+    pub own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1>,
+    pub own_tree: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirStepTreeV1>,
+    /// The leaf whose annex is asked, and the level the search is bounded below.
+    pub leaf: u64,
+    pub below: Option<usize>,
+    /// `Some((row, token))` once the steps agree and the ids part: the annex asked is the logits leaf
+    /// whose tile holds the seat's own `token` at decode row `row` — the decode-token door's pin.
+    pub token: Option<(u32, u32)>,
+    pub asked_daa: u64,
+    pub asks: u32,
+    pub rounds: u32,
+}
+
+impl PalwTirAnnexPursuitV1 {
+    pub fn new(own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1>, current_daa: u64) -> Self {
+        let own_tree = std::sync::Arc::new(misaka_palw_sdk::lineages::tir::TirStepTreeV1::full(&own.leaf_hashes));
+        Self { own, own_tree, leaf: 0, below: None, token: None, asked_daa: current_daa, asks: 1, rounds: 0 }
+    }
+}
+
+/// **What one verified annex tells a pursuit to do next.**
+pub(crate) enum PalwTirAnnexStepV1 {
+    /// Ask this leaf's annex next (the descent's next round, or the decode-token door's logits leaf).
+    Ask { leaf: u64, below: Option<usize>, token: Option<(u32, u32)> },
+    /// The accusations the seat may file, in the order it tries them (each built, or refused).
+    Accuse { leaf: Option<u64>, row: Option<u32>, candidates: Vec<PalwTirCloseCandidateV1> },
+    /// Nothing the annexes can reach differs (a lie in the trace's lanes alone), or the annex is not
+    /// of this job: the claim is left to the on-chain demand.
+    Stop(&'static str),
+}
+
+/// **The pursuit's step on one annex** — pure, over the seat's own execution and one annex verified
+/// against the claim (`binding` is its filled binding).
+pub(crate) fn palw_tir_annex_step_v1(
+    tir: &TirBackendV1,
+    pursuit: &PalwTirAnnexPursuitV1,
+    annex: &misaka_palw_sdk::lineages::tir::PalwTirLeafAnnexV1,
+    binding: &kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1,
+    rules: &PalwTirCourtRulesV1,
+) -> PalwTirAnnexStepV1 {
+    use misaka_palw_sdk::lineages::tir::{TirDivergenceV1, tir_first_divergence_from_opening_v1};
+    let own = pursuit.own.as_ref();
+    if annex.leaf() != pursuit.leaf {
+        return PalwTirAnnexStepV1::Stop("the annex opens another leaf than the one asked");
+    }
+    // The decode-token door's round: the pin of the row, re-aimed at the seat's own token.
+    if let Some((row, token)) = pursuit.token {
+        let door = as_filed(tir.annex_decode_token_close(binding, annex, row, token));
+        return PalwTirAnnexStepV1::Accuse { leaf: None, row: Some(row), candidates: vec![("decode token", door)] };
+    }
+    match tir_first_divergence_from_opening_v1(&pursuit.own_tree, &annex.opening, pursuit.below) {
+        None => PalwTirAnnexStepV1::Stop("the annex's opening is not of this job's step tree"),
+        Some(TirDivergenceV1::Within { level, first }) => PalwTirAnnexStepV1::Ask { leaf: first, below: Some(level), token: None },
+        Some(TirDivergenceV1::At(leaf)) => {
+            let ctx = &binding.job_context;
+            let mut candidates = Vec::new();
+            if palw_tir_leaf_is_dissected_v1(tir, ctx, leaf) {
+                candidates.push((PALW_TIR_NAMED_LEAF_LABEL_V1, as_filed(tir.annex_named_leaf(binding, annex, own))));
+            } else {
+                candidates.push(("cone", as_filed(tir.annex_cone_close(binding, annex, own, rules))));
+            }
+            if tir.space().leaf_at(ctx, leaf).is_some_and(|l| is_logits_leaf(tir, &l.kind)) {
+                candidates.push(("logits", as_filed(tir.annex_logits_close(binding, annex, own))));
+            }
+            PalwTirAnnexStepV1::Accuse { leaf: Some(leaf), row: None, candidates }
+        }
+        Some(TirDivergenceV1::Agrees) => {
+            // Every step leaf is the seat's own: a lie, if any, is in the trace. The ids name a token
+            // row; the annex of the logits leaf whose tile holds the seat's own token there carries
+            // the decode-token door's pin.
+            let Some(row) = annex.generated().iter().zip(&own.generated).position(|(a, b)| a != b) else {
+                return PalwTirAnnexStepV1::Stop(
+                    "every step leaf and every id agrees: a lie in the trace's lanes alone, which no annex round reaches",
+                );
+            };
+            let token = own.generated[row];
+            let ctx = &binding.job_context;
+            let Some(position) = (ctx.declared_prefill_tokens + row as u32).checked_sub(1) else {
+                return PalwTirAnnexStepV1::Stop("a decode row before the first selecting position");
+            };
+            let space = tir.space();
+            let leaf = space.leaves_of_position(ctx, position).into_iter().find(|l| {
+                is_logits_leaf(tir, &l.kind)
+                    && matches!(l.kind, PalwTirLeafKindV1::Commit { first_element, .. }
+                        if (first_element..first_element + u64::from(l.value_count)).contains(&u64::from(token)))
+            });
+            match leaf {
+                Some(l) => PalwTirAnnexStepV1::Ask { leaf: l.index, below: None, token: Some((row as u32, token)) },
+                None => PalwTirAnnexStepV1::Stop("no logits leaf of that row holds the seat's own token"),
+            }
+        }
+    }
+}
+
 /// What the IR one-move pass reads and writes of the panel loop's bookkeeping.
 pub(super) struct PalwTirOneMoveBooksV1<'a> {
     /// Claims this node has judged and reproduced.
@@ -379,7 +497,15 @@ pub(super) struct PalwTirOneMoveBooksV1<'a> {
     pub accused: &'a mut HashSet<Hash64>,
     pub court_pending: &'a mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
     pub court_due: &'a mut HashMap<(Hash64, u32, bool), u64>,
+    /// Option B: the claims pursued through served annexes (their capture is not held).
+    pub pursuits: &'a mut HashMap<Hash64, PalwTirAnnexPursuitV1>,
+    /// The interval lane's served payloads, where the annexes asked for arrive.
+    pub openings: &'a HashMap<(Hash64, u32), Vec<Vec<u8>>>,
 }
+
+/// **How many claims a seat pursues through annexes at once** — each holds the seat's own run and its
+/// step tree (≈ 0.3 GB for a 1.5B class at 512 positions); the next waits for the first to end.
+pub(crate) const PALW_TIR_ANNEX_PURSUITS_V1: usize = 1;
 
 /// **The claim a seat duty names, as the one-move pass reads a target** — for a claim this seat's
 /// replay refuted before any licence: its block, class, roots and executor are the duty's.
@@ -457,7 +583,7 @@ impl super::PalwPanelService {
         materials: &HashMap<Hash64, Vec<Vec<u8>>>,
         seat_faulted: &HashSet<Hash64>,
         replay_refuted: &HashSet<Hash64>,
-        books: PalwTirOneMoveBooksV1<'_>,
+        mut books: PalwTirOneMoveBooksV1<'_>,
     ) {
         let mut targets: Vec<(PalwDisputableClaimV2, u64)> = session
             .palw_disputable_claims_v2(vec![bond_key])
@@ -478,6 +604,8 @@ impl super::PalwPanelService {
                 targets.push((palw_tir_duty_target_v1(&duty), due));
             }
         }
+        // Option B: a pursuit whose claim is no longer a target (Final, voided, accused) ends.
+        books.pursuits.retain(|claim, _| targets.iter().any(|(t, _)| t.claim_id == *claim) && !books.accused.contains(claim));
         for (target, due) in targets {
             if books.challenged.contains(&target.claim_id) || books.accused.contains(&target.claim_id) {
                 continue;
@@ -511,6 +639,9 @@ impl super::PalwPanelService {
                 })
                 .cloned()
             else {
+                // **Option B: no capture reaches this seat** (a large class's never does) — the claim
+                // is pursued through its executor's served annexes instead.
+                self.tir_annex_pursuit_tick_v1(session, bond_key, network_domain, current_daa, &target, due, tir, &mut books).await;
                 continue;
             };
             let Ok(backend) = self.resolve_backend(session, target.class_id, target.artifact_root) else { continue };
@@ -565,7 +696,7 @@ impl super::PalwPanelService {
             };
             // Tried once: a claim no IR close convicts is recorded, not filed.
             books.accused.insert(target.claim_id);
-            let (leaf, row, label, mut accusation) = match found {
+            let (leaf, row, label, accusation) = match found {
                 Ok((_, Some(found))) => found,
                 Ok((dissected, None)) => {
                     warn!(
@@ -589,32 +720,192 @@ impl super::PalwPanelService {
                     continue;
                 }
             };
-            let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
-                self.consensus_config.params.net.to_string().as_bytes(),
-                Some(self.consensus_config.genesis.hash),
-            );
-            let session_id = palw_tir_one_move_session_id_v1(domain.as_byte_slice(), &accusation);
-            let Some(signature) = self.sign(session_id.as_byte_slice(), PALW_TIR_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1) else {
-                continue;
+            self.file_tir_one_move_v1(&target, due, label, leaf, row, accusation, &mut books);
+        }
+    }
+
+    /// **Sign and queue an IR one-move accusation** — the session id over the network domain, the
+    /// accuser's signature, the carrier check, and the court's priority lane at `due`.
+    fn file_tir_one_move_v1(
+        &self,
+        target: &PalwDisputableClaimV2,
+        due: u64,
+        label: &str,
+        leaf: Option<u64>,
+        row: Option<u32>,
+        mut accusation: PalwTirOneMoveAccusationV1,
+        books: &mut PalwTirOneMoveBooksV1<'_>,
+    ) {
+        let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.consensus_config.params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
+        let session_id = palw_tir_one_move_session_id_v1(domain.as_byte_slice(), &accusation);
+        let Some(signature) = self.sign(session_id.as_byte_slice(), PALW_TIR_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1) else {
+            return;
+        };
+        accusation.signature = signature;
+        let object = PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(accusation) };
+        if let Err(why) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object) {
+            warn!("[{PALW_PANEL}] IR claim {}: the accusation cannot ride a carrier ({why}); recorded, not filed", target.claim_id);
+            return;
+        }
+        if books.court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
+            return;
+        }
+        info!(
+            "[{PALW_PANEL}] IR claim {}: filing its one-move accusation ({label} close; first divergent leaf {leaf:?}, token row {row:?})",
+            target.claim_id
+        );
+        books.court_due.insert((session_id, 0, false), due);
+        books.court_pending.push((session_id, 0, false, object));
+    }
+
+    /// **Option B: one tick of the annex pursuit of `target`** — the seat's own run first (once: if it
+    /// reproduces the claim, the claim is judged and nothing is asked), then the annex of the leaf the
+    /// descent stands at: asked, re-asked on [`PALW_TIR_ANNEX_REASK_DAA_V1`], given up after
+    /// [`PALW_TIR_ANNEX_ASKS_V1`] (the executor does not serve: option C's demand on chain is the path),
+    /// and — once one verifies against the claim — stepped ([`palw_tir_annex_step_v1`]) to the next
+    /// leaf or to the accusation, which is filed as the capture path files it.
+    #[allow(clippy::too_many_arguments)]
+    async fn tir_annex_pursuit_tick_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        bond_key: PalwBondKeyV2,
+        network_domain: Hash64,
+        current_daa: u64,
+        target: &PalwDisputableClaimV2,
+        due: u64,
+        tir: TirBackendV1,
+        books: &mut PalwTirOneMoveBooksV1<'_>,
+    ) {
+        let claim = target.claim_id;
+        let court = self.config.court;
+        let network_ladder = kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(
+            &court,
+            self.consensus_config.params.palw_court_ladder.is_some_and(|f| f.is_active(current_daa)),
+        );
+        let ladder = self.seat_refutation_ladder_v1(target.class_id, network_ladder, current_daa);
+        let form = self.config.prompt_ids_form;
+        let mut rules = tir.court_rules(&court);
+        rules.max_step_leaf_count = ladder;
+        let program = tir.class().program.clone();
+        // 1. The seat's own run of the claim's job, once — and the first ask.
+        if !books.pursuits.contains_key(&claim) {
+            if books.pursuits.len() >= PALW_TIR_ANNEX_PURSUITS_V1 {
+                return;
+            }
+            let Ok(backend) = self.resolve_backend(session, target.class_id, target.artifact_root) else { return };
+            let Some((job, prompt)) = self.attempt_job_for_claim(
+                session,
+                backend.as_ref(),
+                network_domain,
+                target.accepted_block,
+                target.class_id,
+                &target.executor_bond,
+            ) else {
+                return;
             };
-            accusation.signature = signature;
-            let object = PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(accusation) };
-            if let Err(why) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object) {
-                warn!(
-                    "[{PALW_PANEL}] IR claim {}: the accusation cannot ride a carrier ({why}); recorded, not filed",
-                    target.claim_id
-                );
-                continue;
+            drop(backend);
+            let Ok(prompt) = prompt.into_iter().map(u32::try_from).collect::<Result<Vec<u32>, _>>() else { return };
+            let Ok(Ok(own)) = tokio::task::spawn_blocking(move || tir.retain_memo(&job, &prompt)).await else { return };
+            if own.binding.committed_execution_root == target.execution_root && own.binding.full_logits_trace_root == target.trace_root
+            {
+                books.challenged.insert(claim);
+                return;
             }
-            if books.court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
-                continue;
-            }
-            info!(
-                "[{PALW_PANEL}] IR claim {}: filing its one-move accusation ({label} close; first divergent leaf {leaf:?}, token row {row:?})",
-                target.claim_id
+            warn!(
+                "[{PALW_PANEL}] IR claim {claim} committed an execution this node does not reproduce, and no capture of it reaches \
+                 this seat — asking its executor for served annexes (RFC-0002 evidence transport B)"
             );
-            books.court_due.insert((session_id, 0, false), due);
-            books.court_pending.push((session_id, 0, false, object));
+            books.pursuits.insert(claim, PalwTirAnnexPursuitV1::new(own, current_daa));
+            self.request_leaf_evidence_v1(network_domain, claim, palw_tir_annex_request_index_v1(0), 0, current_daa).await;
+            return;
+        }
+        let Some(pursuit) = books.pursuits.get(&claim).cloned() else { return };
+        // 2. The annex of the leaf asked, verified against the claim.
+        let index = palw_tir_annex_request_index_v1(pursuit.leaf);
+        let held = books
+            .openings
+            .get(&(claim, index))
+            .into_iter()
+            .flatten()
+            .filter_map(|bytes| misaka_palw_sdk::lineages::tir::PalwTirLeafAnnexV1::decode(bytes).ok())
+            .filter(|annex| annex.leaf() == pursuit.leaf)
+            .find_map(|annex| {
+                misaka_palw_sdk::lineages::tir::palw_tir_leaf_annex_verify_v1(
+                    &annex,
+                    &program,
+                    target.execution_root,
+                    target.trace_root,
+                    ladder,
+                )
+                .ok()
+                .map(|binding| (annex, binding))
+            });
+        let Some((annex, binding)) = held else {
+            if current_daa < pursuit.asked_daa.saturating_add(PALW_TIR_ANNEX_REASK_DAA_V1) {
+                return;
+            }
+            if pursuit.asks >= PALW_TIR_ANNEX_ASKS_V1 {
+                warn!(
+                    "[{PALW_PANEL}] IR claim {claim}: its executor served no annex of leaf {} in {} asks — left to the on-chain \
+                     demand (option C); this seat's replay withholds the licence",
+                    pursuit.leaf, pursuit.asks
+                );
+                books.pursuits.remove(&claim);
+                books.accused.insert(claim);
+                return;
+            }
+            if let Some(p) = books.pursuits.get_mut(&claim) {
+                p.asks += 1;
+                p.asked_daa = current_daa;
+            }
+            self.request_leaf_evidence_v1(network_domain, claim, index, pursuit.leaf, current_daa).await;
+            return;
+        };
+        // 3. The step, off the tick.
+        let task = pursuit.clone();
+        let Ok((tir, step)) = tokio::task::spawn_blocking(move || {
+            let step = palw_tir_annex_step_v1(&tir, &task, &annex, &binding, &rules);
+            (tir, step)
+        })
+        .await
+        else {
+            return;
+        };
+        drop(tir);
+        match step {
+            PalwTirAnnexStepV1::Ask { leaf, below, token } => {
+                if let Some(p) = books.pursuits.get_mut(&claim) {
+                    (p.leaf, p.below, p.token) = (leaf, below, token);
+                    (p.asks, p.asked_daa, p.rounds) = (1, current_daa, p.rounds + 1);
+                }
+                self.request_leaf_evidence_v1(network_domain, claim, palw_tir_annex_request_index_v1(leaf), leaf, current_daa).await;
+            }
+            PalwTirAnnexStepV1::Stop(why) => {
+                info!("[{PALW_PANEL}] IR claim {claim}: the annex pursuit ends without an accusation — {why}");
+                books.pursuits.remove(&claim);
+                books.accused.insert(claim);
+            }
+            PalwTirAnnexStepV1::Accuse { leaf, row, candidates } => {
+                books.pursuits.remove(&claim);
+                books.accused.insert(claim);
+                let found = palw_tir_one_move_accusation_to_file_v1(candidates, target, &program, bond_key, &court, ladder, form);
+                match found {
+                    Some((label, accusation)) => {
+                        info!(
+                            "[{PALW_PANEL}] IR claim {claim}: the annexes name leaf {leaf:?} / token row {row:?} after {} round(s)",
+                            pursuit.rounds + 1
+                        );
+                        self.file_tir_one_move_v1(target, due, label, leaf, row, accusation, books);
+                    }
+                    None => warn!(
+                        "[{PALW_PANEL}] IR claim {claim}: no accusation built from the annexes convicts (leaf {leaf:?}, row {row:?}); \
+                         recorded, not filed"
+                    ),
+                }
+            }
         }
     }
 }
