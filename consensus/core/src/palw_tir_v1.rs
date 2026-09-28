@@ -234,6 +234,8 @@ impl Params {
     ///   decode instead of failing the block (A-2, `palw_lifecycle_objects_v2`);
     /// * arming without `palw_kary_court` in force at or below it — an IR class's disputes include
     ///   history dissections, which that court plays;
+    /// * arming without `palw_rcore_plus` in force at or below it — an IR claim's data-availability
+    ///   answers ride `MaterialDisclosedV2`, which exists only there;
     /// * a V2 bundle whose mirror of the height (`PalwStateParamsV2::tir_from_daa`) is not the fence's.
     ///
     /// A `Some(never())` value is dormant and passes (it collapses out of the identity).
@@ -276,6 +278,18 @@ impl Params {
         if !court_ok {
             return Err(PalwModeV2Error::Invalid(
                 "palw_tir_v1 needs palw_kary_court in force at or below it: an IR class's disputes include history dissections",
+            ));
+        }
+        // An IR claim answers a data-availability demand only through `MaterialDisclosedV2`
+        // (`PalwDaAnswerV1::TirEvent`), and its one-move court's convictions are R-core+'s records:
+        // below `palw_rcore_plus` an IR producer could answer no DA session and would lose each by
+        // silence.
+        let rcore_ok =
+            self.palw_rcore_plus.is_some_and(|r| r != ForkActivation::never() && r.daa_score() <= fence.activation.daa_score());
+        if !rcore_ok {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_tir_v1 needs palw_rcore_plus in force at or below it: an IR claim's data-availability answers ride \
+                 MaterialDisclosedV2 (PalwDaAnswerV1::TirEvent), which exists only there",
             ));
         }
         Ok(())
