@@ -444,24 +444,27 @@ largest calibrated absmax; each gets its own activation scale and the projection
 the static int8 "outlier decomposition". Qwen2.5-1.5B's first-token MLP channels reach 1000× every
 other position; without the split, one static scale leaves ordinary tokens ~5 bits (KL 2.9 → 0.002).
 
-**The library.** Since tir/core a0d37ff92 the lowering emits `tir_library_v1` templates wherever
-one gives the values the lowering needs: `softmax_shifted` (attention and router softmax, lifted
-from Q14 by `up_bits` 10), `softmax_with_sink`, `int_sigmoid`, `int_recip`, `narrow_a16` (every
-narrowing with a zero term), `rope_pairs`, `rope_angles_two_level`, `causal_conv` (its taps stored
-window-major), `grouped_topk`, `selection_bias`, `moe_combine_q36`, `gdn_step_q36`, `decay_q36`,
-`softplus_q36` and `exp_refined_q36`. The four taken up after the merge (the conv, the sink,
-grouped top-k, the selection bias) left the metrics of all 57 fixtures identical to every printed
-digit. The lowering keeps its own composite where the library's is not the same function or does
-not fit:
+**The library.** The lowering emits `tir_library_v1` templates wherever one gives the values the
+lowering needs: `narrow` (every narrowing; three nodes without a zero term), `rms_unit_q24` and
+`l2_unit_q15` (the 21- and 17-node unit rows), `attention` (Q14 scores, the softmax lifted by
+`up_bits` 10, sinks), `softmax_shifted`, `softmax_with_sink`, `int_sigmoid`, `int_recip`,
+`rope_pairs`, `rope_angles_two_level`, `causal_conv` (taps stored window-major), `grouped_topk`,
+`selection_bias`, `renormalize_recip`, `moe_combine_q36`, `gdn_step_q36`, `decay_q36`,
+`softplus_q36` and `exp_refined_q36`. The lean narrowing and unit rows and the renormalisation's
+`[0, 2^25]` clamp were added to the library for this lowering (tir/core `23c6d4efd`): with the
+earlier 5-, 39- and 27-node forms Qwen3.5-MoE, Qwen3-Next and DeepSeek-V3 did not fit NF-12's 512
+nodes a block at all. Switching to them left every program's bytes unchanged (the renormalisation's
+shift is typed `i128` there: the MoE programs' bytes moved, their values did not), and switching
+attention left all 57 fixtures' metrics identical to every printed digit. The lowering keeps its own
+composite only where the function differs:
 
 | the lowering's own | why not the library's |
 | --- | --- |
-| narrowing without `z` (3 nodes), `rms_unit` (21), `l2_unit_q15` (17) | value-identical to `narrow`, `rms_norm_wide_q36`, `l2_norm_q15` (5, 39, 27 nodes; the exponent is taken out only when positive, `IntRsqrt` normalises the rest internally). NF-12 caps a block at 512 nodes: with the library's forms Qwen3.5-MoE, Qwen3-Next (gated delta + MoE) and DeepSeek-V3 (MLA + MoE) **do not lower at all** (past 512 with every outlier split dropped), DeepSeek-V2 keeps no split and Jamba one reader's (measured by swapping them in). Proposed for `tir_library_v1`: `narrow` with `z: None` emitting the 3-node form, and the two unit rows. |
-| the kept-weight renormalisation | `renormalize_recip`'s rounding, but clamped to `[0, 2^25]` (never fires) instead of `i32`: at DeepSeek-V3's width the `i32` interval makes the combine's `MatMul` overflow `i64` in the range analysis. Proposed: the same clamp in the library. |
-| attention | the library's `attention` is the same function given a Q14 score narrowing and `up_bits` 10; it switches when `narrow` has the 3-node form (4 nodes a layer today). |
 | soft-capping | `cap·tanh(s/cap)` formed in Q24 from the score's narrowing (no division), then narrowed to Q14; `softcap_q24` divides by the cap. |
 | ALiBi | Falcon's bfloat16-rounded `slope·j` table, and `slope·(j − pos)` (far keys stay small instead of relying on the maximum subtraction). |
-| LayerNorm | inputs of any width: the exact centring `n·x − Σx` is shifted into `i32` (`layer_norm_exact` needs `n·x` to fit). |
+| attention with a value width unlike the query's | the template reads one `head_dim` for both. |
+| MLA | the same contractions as `mla_absorbed` (the value half stored per row, not transposed), with commit points on the absorbed query and the latent context the template does not expose. |
+| LayerNorm | inputs of any width: the exact centring `n·x − Σx` is shifted into `i32` (`layer_norm_exact` needs `n·x` to fit) and normed by the 21-node unit row with one `i64` eps. |
 | partial rotary | YaRN's attention factor scales the pass-through lanes too; `rope_partial` passes them unchanged. |
 | RWKV-4 WKV, the selective scan | half-away rounding and a Q16 denominator (WKV); `D` folded into its narrowing and one decay form for Mamba-1 and -2 (the scan) — the same recurrences as `rwkv4_step`, `mamba1_step`/`mamba2_step`, rounded differently. |
 
@@ -540,4 +543,12 @@ HF_HUB_OFFLINE=1 …/tir-venv/bin/python misaka-palw-tir-lower/tools/tokenize_do
 cargo run --release -p misaka-palw-tir-lower --bin palw-tir-fidelity -- ~/Downloads/Qwen2.5-1.5B-Instruct \
   --calib qwen25-calib.json --eval qwen25-eval.json --eval-seqs 2 --positions 128 \
   --artifact-out qwen25.palwtir --tir-out qwen25.tir --json
+# The same on the typed backend (byte-identical, ~300x faster at 1.5B), with a reference cross-check
+# and, for recurrent models, the 4,096-position drift:
+cargo run --release -p misaka-palw-tir-lower --bin palw-tir-fidelity -- <checkpoint> \
+  --calib calib.json --eval eval.json --exec --cross-check 2 [--eval drift.json --positions 4096 --drift]
+# The legacy dense row and its IR program, same logits and rows (D-F1, offline):
+cargo run --release -p misaka-palw-base0 --bin palw-a16-to-tir -- --artifact <512-wide.palwart> --respan 8192 --out genesis-8k.palwtir
+cargo run --release -p misaka-palw-sdk --bin palw-tir-equiv -- --network testnet-12 \
+  --artifact <512-wide.palwart> --respan --tir genesis-8k.palwtir --prompts 32
 ```

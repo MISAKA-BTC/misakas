@@ -122,37 +122,45 @@ impl Question {
     }
 }
 
-/// A source that records every question asked of it — the evaluation's request set.
+/// A source that records every question asked of it — the evaluation's request set — and the order
+/// they were first asked in (which is not part of the result).
 pub struct Recorder<'a> {
     pub inner: &'a mut dyn Source,
     pub asked: BTreeSet<Question>,
+    pub order: Vec<Question>,
 }
 
 impl<'a> Recorder<'a> {
     pub fn new(inner: &'a mut dyn Source) -> Self {
-        Recorder { inner, asked: BTreeSet::new() }
+        Recorder { inner, asked: BTreeSet::new(), order: Vec::new() }
+    }
+
+    fn note(&mut self, q: Question) {
+        if self.asked.insert(q) {
+            self.order.push(q);
+        }
     }
 }
 
 impl Source for Recorder<'_> {
     fn node(&mut self, ctx: Ctx, node: u16, i: u64) -> Option<i128> {
-        self.asked.insert(Question::Node { ctx, node, i });
+        self.note(Question::Node { ctx, node, i });
         self.inner.node(ctx, node, i)
     }
     fn param(&mut self, param: u16, layer: Option<u32>, i: u64) -> Option<i128> {
-        self.asked.insert(Question::Param { param, layer, i });
+        self.note(Question::Param { param, layer, i });
         self.inner.param(param, layer, i)
     }
     fn state(&mut self, pos: u64, state: u16, layer: Option<u32>, i: u64) -> Option<Supply> {
-        self.asked.insert(Question::State { pos, state, layer, i });
+        self.note(Question::State { pos, state, layer, i });
         self.inner.state(pos, state, layer, i)
     }
     fn hist_row(&mut self, pos: u64, state: u16, layer: Option<u32>, row_pos: u64, i: u64) -> Option<i128> {
-        self.asked.insert(Question::HistRow { pos, state, layer, row_pos, i });
+        self.note(Question::HistRow { pos, state, layer, row_pos, i });
         self.inner.hist_row(pos, state, layer, row_pos, i)
     }
     fn token(&mut self, pos: u64) -> Option<u64> {
-        self.asked.insert(Question::Token { pos });
+        self.note(Question::Token { pos });
         self.inner.token(pos)
     }
 }

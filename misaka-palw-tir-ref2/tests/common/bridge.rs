@@ -457,11 +457,7 @@ pub fn view_first(a: &first::admit::TirAdmissionV1) -> AdmittedView {
 }
 
 pub fn admit_mine(bytes: &[u8], inputs: &AdmitInputs) -> AdmitOutcome {
-    admit_mine_with(bytes, inputs, ref2::admit::Readings::default())
-}
-
-pub fn admit_mine_with(bytes: &[u8], inputs: &AdmitInputs, readings: ref2::admit::Readings) -> AdmitOutcome {
-    match ref2::admit::admit_with(bytes, inputs, readings) {
+    match ref2::admit::admit(bytes, inputs) {
         Ok(a) => AdmitOutcome::Admitted(Box::new(view_mine(&a))),
         Err(AdmitError::Program(e)) => AdmitOutcome::Program(e.class),
         Err(AdmitError::Exceeds { limit, value, .. }) => AdmitOutcome::Exceeds(limit.to_string(), value),
@@ -484,10 +480,9 @@ pub fn admit_first(bytes: &[u8], inputs: &AdmitInputs) -> AdmitOutcome {
     }
 }
 
-/// The first implementation's refusal names, mapped onto this crate's (04b names no limit strings;
-/// this crate names each after its ceiling). A C_j of 0 is named once for MACs, transcendentals
-/// and a zero interval cap alike, so it maps to a shared name on both sides.
-pub fn limit_name(first_name: &str) -> &'static str {
+/// The first implementation's refusal names: since the A2 fix 04b names every ceiling by its field
+/// (`max_tile_macs`, …), as this crate does; the pre-fix strings are mapped for old builds.
+pub fn limit_name(first_name: &str) -> &str {
     match first_name {
         "tile MACs" => "max_tile_macs",
         "tile transcendentals" => "max_tile_transcendentals",
@@ -498,7 +493,6 @@ pub fn limit_name(first_name: &str) -> &'static str {
         "state bytes" => "max_state_bytes",
         "step leaves per position" => "max_step_leaves",
         "cone work" => "max_cone_work",
-        "one position's state replay (MACs or transcendentals)" => "state_replay",
-        _ => "UNKNOWN LIMIT NAME",
+        other => other,
     }
 }

@@ -190,10 +190,18 @@ impl Source for Mine<'_> {
 pub struct Theirs<'a> {
     pub m: &'a Model,
     pub asked: BTreeSet<Question>,
+    pub order: Vec<Question>,
+}
+
+thread_local! {
+    /// The kind of the error the first implementation's source returns for a refusal (the text
+    /// says a refusal fails the evaluation with class `Missing`, whatever the source reports).
+    pub static REFUSAL_KIND: std::cell::Cell<Option<first::error::TirErrorKind>> = const { std::cell::Cell::new(None) };
 }
 
 fn refused() -> first::error::TirError {
-    first::error::TirError::new(first::error::TirErrorKind::Missing, "the model refuses")
+    let kind = REFUSAL_KIND.with(|k| k.get()).unwrap_or(first::error::TirErrorKind::Missing);
+    first::error::TirError::new(kind, "the model refuses")
 }
 
 fn ctx_from(c: first::demand::DemandContext) -> Ctx {
@@ -201,8 +209,14 @@ fn ctx_from(c: first::demand::DemandContext) -> Ctx {
 }
 
 impl Theirs<'_> {
+    fn note(&mut self, q: Question) {
+        if self.asked.insert(q) {
+            self.order.push(q);
+        }
+    }
+
     fn val(&mut self, q: Question) -> first::error::TirResult<i128> {
-        self.asked.insert(q);
+        self.note(q);
         match self.m.answer(&q) {
             Some(Answer::Val(v)) => Ok(v),
             _ => Err(refused()),
@@ -225,7 +239,7 @@ impl first::demand::DemandSource for Theirs<'_> {
         index: usize,
     ) -> first::error::TirResult<first::demand::StateSupply> {
         let q = Question::State { pos: pos as u64, state, layer: layer.map(|l| l as u32), i: index as u64 };
-        self.asked.insert(q);
+        self.note(q);
         match self.m.answer(&q) {
             Some(Answer::Val(v)) => Ok(first::demand::StateSupply::Value(v)),
             Some(Answer::Replay) => Ok(first::demand::StateSupply::Replay),
@@ -250,7 +264,7 @@ impl first::demand::DemandSource for Theirs<'_> {
     }
     fn token(&mut self, pos: u32) -> first::error::TirResult<u32> {
         let q = Question::Token { pos: pos as u64 };
-        self.asked.insert(q);
+        self.note(q);
         match self.m.answer(&q) {
             Some(Answer::Val(v)) if (0..=u32::MAX as i128).contains(&v) => Ok(v as u32),
             _ => Err(refused()),
@@ -266,23 +280,25 @@ pub enum DRes {
     Panic(String),
 }
 
-/// One evaluation's result and request set.
+/// One evaluation's result, request set, and the order the questions were first asked in.
 #[derive(Clone, Debug)]
 pub struct Run {
     pub res: DRes,
     pub asked: BTreeSet<Question>,
+    pub order: Vec<Question>,
 }
 
 pub fn mine_demand(p: &Program, target: &Target, elements: &[u64], m: &Model, limits: Limits) -> Run {
     let mut src = Mine(m);
     let mut rec = ref2::demand::Recorder::new(&mut src);
-    let r = ref2::demand::eval_demanded(p, target, elements, &mut rec, limits);
-    let asked = rec.asked;
+    let r = catch_any(|| ref2::demand::eval_demanded(p, target, elements, &mut rec, limits));
+    let (asked, order) = (rec.asked, rec.order);
     let res = match r {
-        Ok((v, w)) => DRes::Ok(v, w),
-        Err(e) => DRes::Err(e),
+        Ok(Ok((v, w))) => DRes::Ok(v, w),
+        Ok(Err(e)) => DRes::Err(e),
+        Err(msg) => DRes::Panic(msg),
     };
-    Run { res, asked }
+    Run { res, asked, order }
 }
 
 /// Every outcome the text allows (this implementation's exploration).
@@ -321,16 +337,16 @@ pub fn first_demand(
     let els: Vec<usize> = elements.iter().map(|&e| e as usize).collect();
     let req = first::demand::DemandRequest { target: target_to(target), elements: &els };
     let lim = first::demand::DemandLimits { max_elements: limits.max_elements, max_terms: limits.max_terms };
-    let mut src = Theirs { m, asked: BTreeSet::new() };
+    let mut src = Theirs { m, asked: BTreeSet::new(), order: Vec::new() };
     let r = catch_any(|| first::demand::eval_demanded(fp, info, &req, &mut src, &lim));
-    let asked = src.asked;
+    let (asked, order) = (src.asked, src.order);
     let res = match r {
         Ok(Ok((v, w))) => DRes::Ok(v, Work { elements: w.elements, terms: w.terms }),
         Ok(Err(first::demand::DemandError::Tir(e))) => DRes::Err(DemandError::Class(class_from(e.kind))),
         Ok(Err(first::demand::DemandError::WorkLimit(_))) => DRes::Err(DemandError::WorkLimit),
         Err(msg) => DRes::Panic(msg),
     };
-    Run { res, asked }
+    Run { res, asked, order }
 }
 
 /// The request set grouped as the golden vectors print it: one line per question with every

@@ -4,8 +4,8 @@
 //!
 //! Structure (deliberately plain): intervals as exact `Wide` computations checked against the
 //! output dtype; costs as saturating `u64`; cones by a worklist; the tile's box demand in one
-//! descending pass; the replay closure as a fixpoint over states; the alignment rules as a
-//! three-valued lattice (free / aligned / not aligned) evaluated in node order.
+//! descending pass; the replay closure as a fixpoint over states; the group rule's classes
+//! (free / aligned / mixed) assigned in ascending node order, as §10.3 states it since the A1 fix.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,23 +38,6 @@ pub struct Ceilings {
     pub max_step_leaves: u64,
     pub max_checkpoint_interval: u32,
     pub max_cone_work: u64,
-}
-
-/// Readings of §10.3 where the text admits two; `Readings::default()` is this crate's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Readings {
-    /// Free nodes satisfy §10.3's "every node of the closure's update cones is aligned" wherever
-    /// they sit, a free `StateWrite` included, and a commit point is always a free leaf (ref2).
-    /// `false`: the first implementation's observed rule — every member's `StateWrite` must be
-    /// aligned (not free), and a commit point that is a node of the closure's update cones (another
-    /// member's `StateWrite`) is followed as that node.
-    pub free_update_splits: bool,
-}
-
-impl Default for Readings {
-    fn default() -> Self {
-        Readings { free_update_splits: true }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +111,7 @@ pub struct Cone {
     pub node: u16,
     pub nodes: Vec<u16>,
     pub leaves: Vec<Leaf>,
-    /// reading: the §8 cost of the cone's nodes at `H = W` (the text does not define it).
+    /// The cone's whole cost: `Σ` of its nodes' §8 costs at `H = W` (informative, §10.3).
     pub whole: Cost,
     pub tiles: u64,
     pub tile: Cost,
@@ -779,16 +762,17 @@ fn build_cone(p: &Program, b: usize, root: usize, inputs: &AdmitInputs) -> Cone 
 
 // ------------------------------------------------------------------ §10.3 replay, groups, C_j
 
+/// §10.3 "Groups": the class of a node of the union of the closure's update cones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Al {
     Free,
     Aligned,
-    Not,
+    Mixed,
 }
 
-/// The replay of Fixed state `j` in block `b`: its closure, groups and one group's cost of one
-/// position.
-fn replay(p: &Program, b: usize, j: u16, readings: Readings) -> (Vec<u16>, u64, Cost) {
+/// The replay of written `Fixed` state `j` in block `b`: its closure, its groups and one group's
+/// cost of one position.
+fn replay(p: &Program, b: usize, j: u16) -> (Vec<u16>, u64, Cost) {
     let block = &p.blocks[b];
     let writer = |m: u16| block.nodes.iter().position(|n| n.prim == Prim::StateWrite { state: m });
     let update_cone = |m: u16| writer(m).map(|s| cone(p, b, s).0);
@@ -808,133 +792,117 @@ fn replay(p: &Program, b: usize, j: u16, readings: Readings) -> (Vec<u16>, u64, 
             }
         }
     }
+    // The closure's update cones: those of the members this block writes.
     let cones: Vec<Vec<u16>> = closure.iter().filter_map(|&m| update_cone(m)).collect();
-    // reading: the per-position cost sums each update cone's nodes (a node shared by two update
-    // cones counts in each), as "Σ over the closure's update cones of their nodes' §8 costs".
     let h = worst_h(p, b);
-    let mut total = Cost::default();
-    for c in &cones {
-        for &i in c {
-            total.add(&node_cost(p, b, i as usize, h));
-        }
-    }
-    // Groups: every member's first dimension the same G > 1, and every node aligned (or free).
+    // G: every member (written or only read) has the same first dimension G > 1.
     let firsts: BTreeSet<Option<u32>> = closure.iter().map(|&m| p.states[m as usize].shape.first().copied()).collect();
     let g = match firsts.iter().next() {
         Some(Some(g)) if firsts.len() == 1 && *g > 1 => *g,
         _ => 0,
     };
-    let groups = if g > 1 {
-        let all: BTreeSet<u16> = cones.iter().flatten().copied().collect();
-        if readings.free_update_splits {
-            // ref2: every node aligned or free — a free node is "aligned" in the text's sense
-            // (element [g, …] depends on no closure state at all), wherever it sits.
-            let ok = all.iter().all(|&i| alignment(p, b, i as usize, g, &closure, None) != Al::Not);
-            if ok { g as u64 } else { 1 }
-        } else {
-            // The first implementation's observed rule: a Node ref into the closure's update cones
-            // is followed even when it is a commit point, and every member's StateWrite must be
-            // aligned (not free).
-            let u: BTreeSet<usize> = all.iter().map(|&i| i as usize).collect();
-            let ok = all.iter().all(|&i| alignment(p, b, i as usize, g, &closure, Some(&u)) != Al::Not);
-            let roots_aligned =
-                closure.iter().filter_map(|&m| writer(m)).all(|s| alignment(p, b, s, g, &closure, Some(&u)) == Al::Aligned);
-            if ok && roots_aligned { g as u64 } else { 1 }
-        }
+    let classes = if g > 1 {
+        let union: BTreeSet<u16> = cones.iter().flatten().copied().collect();
+        Some(classify(p, b, &union, g, &closure))
     } else {
-        1
+        None
     };
-    (closure.into_iter().collect(), groups, total.per_group(groups))
-}
-
-/// The alignment of node `i` (the rules of §10.3), computed over its operands recursively.
-fn alignment(p: &Program, b: usize, i: usize, g: u32, closure: &BTreeSet<u16>, follow: Option<&BTreeSet<usize>>) -> Al {
-    let mut memo: BTreeMap<usize, Al> = BTreeMap::new();
-    align_rec(p, b, i, g, closure, follow, &mut memo)
-}
-
-fn operand_al(
-    p: &Program,
-    b: usize,
-    i: usize,
-    r: &Ref,
-    g: u32,
-    closure: &BTreeSet<u16>,
-    follow: Option<&BTreeSet<usize>>,
-    memo: &mut BTreeMap<usize, Al>,
-) -> (Al, TensorType) {
-    let t = ref_type(p, b, i, r).unwrap();
-    let al = match *r {
-        // (The first implementation's reading follows a commit point that is a node of the
-        // closure's update cones.)
-        Ref::Node(k) if follow.is_some_and(|u| u.contains(&(k as usize))) => align_rec(p, b, k as usize, g, closure, follow, memo),
-        // A commit point is a leaf of the update cone (§10.2): free.
-        Ref::Node(k) if p.blocks[b].nodes[k as usize].commit => Al::Free,
-        Ref::Node(k) => align_rec(p, b, k as usize, g, closure, follow, memo),
-        // A closure state is aligned (its first dimension is G); any other leaf is free.
-        Ref::State(j) if closure.contains(&j) => Al::Aligned,
-        _ => Al::Free,
-    };
-    (al, t)
-}
-
-fn align_rec(
-    p: &Program,
-    b: usize,
-    i: usize,
-    g: u32,
-    closure: &BTreeSet<u16>,
-    follow: Option<&BTreeSet<usize>>,
-    memo: &mut BTreeMap<usize, Al>,
-) -> Al {
-    if let Some(&a) = memo.get(&i) {
-        return a;
-    }
-    let node = &p.blocks[b].nodes[i];
-    let ops: Vec<(Al, TensorType)> = node.inputs.iter().map(|r| operand_al(p, b, i, r, g, closure, follow, memo)).collect();
-    let out = &node.out;
-    let a = if ops.iter().all(|(a, _)| *a == Al::Free) {
-        // reading: a node with no operand (Iota) is free.
-        Al::Free
-    } else if ops.iter().any(|(a, _)| *a == Al::Not) || out.shape.first() != Some(&Dim::Fixed(g)) {
-        Al::Not
-    } else {
-        let in_place = |o: &(Al, TensorType)| {
-            o.0 == Al::Free || (o.0 == Al::Aligned && o.1.shape.len() == out.shape.len() && o.1.shape.first() == Some(&Dim::Fixed(g)))
-        };
-        let ok = match &node.prim {
-            Prim::Add
-            | Prim::Sub
-            | Prim::Mul
-            | Prim::Div { .. }
-            | Prim::Cast
-            | Prim::Clamp { .. }
-            | Prim::Log2Floor
-            | Prim::IntExp
-            | Prim::IntRsqrt
-            | Prim::IntLn
-            | Prim::Select
-            | Prim::Compare { .. }
-            | Prim::Broadcast
-            | Prim::StateWrite { .. } => ops.iter().all(in_place),
-            Prim::Transpose { perm } => perm.first() == Some(&0),
-            Prim::Slice { axis, .. } | Prim::Concat { axis } => *axis != 0 && ops.iter().all(in_place),
-            Prim::ReduceSum { axis } | Prim::ReduceMax { axis } | Prim::TopK { axis, .. } => *axis != 0,
-            Prim::Reshape => ops[0].1.shape.first() == Some(&Dim::Fixed(g)),
-            Prim::Gather { axis, .. } => *axis != 0 && ops[1].0 == Al::Free && in_place(&ops[0]),
-            Prim::MatMul => {
-                if out.shape.len() >= 3 {
-                    in_place(&ops[0]) && in_place(&ops[1])
-                } else {
-                    ops[1].0 == Al::Free && in_place(&ops[0])
-                }
+    let split = classes.as_ref().is_some_and(|c| c.values().all(|&a| a != Al::Mixed));
+    if !split {
+        // Unsplit: the whole sum over the cones, one cone at a time.
+        let mut total = Cost::default();
+        for c in &cones {
+            for &i in c {
+                total.add(&node_cost(p, b, i as usize, h));
             }
-            Prim::Iota { .. } | Prim::HistAppend { .. } => false,
+        }
+        return (closure.into_iter().collect(), 1, total);
+    }
+    let classes = classes.unwrap();
+    // One group pays ⌈aligned / G⌉ plus every free node whole, each sum over the cones one cone at a
+    // time (a node two cones share counts in each).
+    let (mut aligned, mut free) = (Cost::default(), Cost::default());
+    for c in &cones {
+        for &i in c {
+            let cost = node_cost(p, b, i as usize, h);
+            match classes[&i] {
+                Al::Aligned => aligned.add(&cost),
+                _ => free.add(&cost),
+            }
+        }
+    }
+    let mut per = aligned.per_group(g as u64);
+    per.add(&free);
+    (closure.into_iter().collect(), g as u64, per)
+}
+
+/// §10.3: every node of the union, in ascending index order, as free, aligned or mixed.
+fn classify(p: &Program, b: usize, union: &BTreeSet<u16>, g: u32, closure: &BTreeSet<u16>) -> BTreeMap<u16, Al> {
+    let block = &p.blocks[b];
+    let mut class: BTreeMap<u16, Al> = BTreeMap::new();
+    for &i in union {
+        let node = &block.nodes[i as usize];
+        let ops: Vec<(Al, TensorType)> = node
+            .inputs
+            .iter()
+            .map(|r| {
+                let t = ref_type(p, b, i as usize, r).expect("normal form");
+                let a = match *r {
+                    // A closure state is aligned.
+                    Ref::State(k) if closure.contains(&k) => Al::Aligned,
+                    // A commit point (another member's committed StateWrite included) is free.
+                    Ref::Node(k) if block.nodes[k as usize].commit => Al::Free,
+                    // Any other node: its class (reached only through the cone, so classified).
+                    Ref::Node(k) => *class.get(&k).expect("an uncommitted operand of a cone node is in the cone"),
+                    // Params, consts, inputs and carry-ins are free.
+                    _ => Al::Free,
+                };
+                (a, t)
+            })
+            .collect();
+        let out = &node.out;
+        let a = if ops.iter().all(|(a, _)| *a == Al::Free) {
+            Al::Free
+        } else if ops.iter().any(|(a, _)| *a == Al::Mixed) || out.shape.first() != Some(&Dim::Fixed(g)) {
+            Al::Mixed
+        } else {
+            // Aligned in place: free, or aligned with the output's rank.
+            let in_place = |o: &(Al, TensorType)| o.0 == Al::Free || (o.0 == Al::Aligned && o.1.shape.len() == out.shape.len());
+            let ok = match &node.prim {
+                Prim::Add
+                | Prim::Sub
+                | Prim::Mul
+                | Prim::Div { .. }
+                | Prim::Cast
+                | Prim::Clamp { .. }
+                | Prim::Log2Floor
+                | Prim::IntExp
+                | Prim::IntRsqrt
+                | Prim::IntLn
+                | Prim::Select
+                | Prim::Compare { .. }
+                | Prim::Broadcast
+                | Prim::StateWrite { .. } => ops.iter().all(in_place),
+                Prim::Transpose { perm } => perm.first() == Some(&0) && in_place(&ops[0]),
+                Prim::Slice { axis, .. } | Prim::Concat { axis } => *axis != 0 && ops.iter().all(in_place),
+                Prim::ReduceSum { axis } | Prim::ReduceMax { axis } | Prim::TopK { axis, .. } => *axis != 0 && in_place(&ops[0]),
+                Prim::Reshape => ops[0].1.shape.first() == Some(&Dim::Fixed(g)),
+                Prim::Gather { axis, .. } => *axis != 0 && ops[1].0 == Al::Free && in_place(&ops[0]),
+                Prim::MatMul => {
+                    if out.shape.len() >= 3 {
+                        in_place(&ops[0]) && in_place(&ops[1])
+                    } else {
+                        ops[1].0 == Al::Free && in_place(&ops[0])
+                    }
+                }
+                // Always free (no operand, or a committed row): unreachable here.
+                Prim::Iota { .. } | Prim::HistAppend { .. } => false,
+            };
+            if ok { Al::Aligned } else { Al::Mixed }
         };
-        if ok { Al::Aligned } else { Al::Not }
-    };
-    memo.insert(i, a);
-    a
+        class.insert(i, a);
+    }
+    class
 }
 
 // ------------------------------------------------------------------ admission
@@ -950,6 +918,9 @@ fn check_inputs(inputs: &AdmitInputs) -> Result<(), AdmitError> {
     if !(1..=(1 << 16)).contains(&inputs.h_chunk) || !inputs.h_chunk.is_power_of_two() {
         return Err(AdmitError::Inputs("h_chunk is not a power of two in [1, 2^16]"));
     }
+    if inputs.ceilings.max_checkpoint_interval < 1 {
+        return Err(AdmitError::Inputs("max_checkpoint_interval below 1"));
+    }
     Ok(())
 }
 
@@ -958,11 +929,6 @@ fn check_inputs(inputs: &AdmitInputs) -> Result<(), AdmitError> {
 /// first cone (in this crate's order) that passes it. Programs must already be in normal form and
 /// pass §7.
 pub fn broken_ceilings(p: &Program, inputs: &AdmitInputs) -> Vec<(&'static str, u64)> {
-    broken_ceilings_with(p, inputs, Readings::default())
-}
-
-/// [`broken_ceilings`] under given readings.
-pub fn broken_ceilings_with(p: &Program, inputs: &AdmitInputs, readings: Readings) -> Vec<(&'static str, u64)> {
     let c = &inputs.ceilings;
     let mut v = Vec::new();
     let node_costs: Vec<Vec<Cost>> =
@@ -1013,17 +979,12 @@ pub fn broken_ceilings_with(p: &Program, inputs: &AdmitInputs, readings: Reading
         }
         for b in 0..p.blocks.len() {
             if p.blocks[b].nodes.iter().any(|n| n.prim == Prim::StateWrite { state: j as u16 }) {
-                let (_, _, per) = replay(p, b, j as u16, readings);
-                if c_j(&per, c) == 0 {
-                    if per.macs > c.max_tile_macs {
-                        v.push(("state_replay", per.macs));
-                    }
-                    if per.transcendentals > c.max_tile_transcendentals {
-                        v.push(("state_replay", per.transcendentals));
-                    }
-                    if c.max_checkpoint_interval == 0 {
-                        v.push(("state_replay", 0));
-                    }
+                let (_, _, per) = replay(p, b, j as u16);
+                if per.macs > c.max_tile_macs {
+                    v.push(("max_tile_macs", per.macs));
+                }
+                if per.transcendentals > c.max_tile_transcendentals {
+                    v.push(("max_tile_transcendentals", per.transcendentals));
                 }
             }
         }
@@ -1061,24 +1022,19 @@ fn c_j(per: &Cost, c: &Ceilings) -> u64 {
 
 /// `tir_admit_v1`: the canonical bytes and the network inputs → the admission or a refusal.
 pub fn admit(bytes: &[u8], inputs: &AdmitInputs) -> Result<Admission, AdmitError> {
-    admit_with(bytes, inputs, Readings::default())
-}
-
-/// [`admit`] under given readings.
-pub fn admit_with(bytes: &[u8], inputs: &AdmitInputs, readings: Readings) -> Result<Admission, AdmitError> {
     check_inputs(inputs)?;
     let p = decode_canonical(bytes).map_err(AdmitError::Program)?;
-    admit_decoded(p, inputs, readings)
+    admit_decoded(p, inputs)
 }
 
 /// Admission of a program already decoded (its normal form is checked again).
 pub fn admit_program(p: &Program, inputs: &AdmitInputs) -> Result<Admission, AdmitError> {
     check_inputs(inputs)?;
     crate::normal_form::check(p).map_err(AdmitError::Program)?;
-    admit_decoded(p.clone(), inputs, Readings::default())
+    admit_decoded(p.clone(), inputs)
 }
 
-fn admit_decoded(p: Program, inputs: &AdmitInputs, readings: Readings) -> Result<Admission, AdmitError> {
+fn admit_decoded(p: Program, inputs: &AdmitInputs) -> Result<Admission, AdmitError> {
     let c = inputs.ceilings;
     // 2. ranges
     let intervals = ranges(&p).map_err(AdmitError::Program)?;
@@ -1131,9 +1087,9 @@ fn admit_decoded(p: Program, inputs: &AdmitInputs, readings: Readings) -> Result
             cones.push(cn);
         }
     }
-    // 5. every StateWrite's update cone — a committed StateWrite's too: the cone work is the Σ over
-    // every commit point's cone AND every StateWrite's update cone (the literal reading, which the
-    // first implementation also takes) — then the closures, groups and C_j.
+    // 5. every StateWrite's update cone against max_cone_work, by block then node — a committed
+    // StateWrite's cone counts in both terms (§10.3) — then every written Fixed state by state index,
+    // over the blocks that write it by block index, against its C_j.
     for b in 0..p.blocks.len() {
         for i in 0..p.blocks[b].nodes.len() {
             let n = &p.blocks[b].nodes[i];
@@ -1157,26 +1113,25 @@ fn admit_decoded(p: Program, inputs: &AdmitInputs, readings: Readings) -> Result
             if !p.blocks[b].nodes.iter().any(|n| n.prim == Prim::StateWrite { state: j }) {
                 continue;
             }
-            let (closure, groups, per) = replay(&p, b, j, readings);
+            let (closure, groups, per) = replay(&p, b, j);
             let cj = c_j(&per, &c);
             if cj == 0 {
-                // §10.3 step 5: "refuses a state one position of whose replay is past the terminal
-                // ceiling" — one refusal, whichever component (or a zero interval cap) caused it.
-                let (value, cap) = if per.macs > c.max_tile_macs {
-                    (per.macs, c.max_tile_macs)
-                } else if per.transcendentals > c.max_tile_transcendentals {
-                    (per.transcendentals, c.max_tile_transcendentals)
+                // §10.3: a C_j of 0 names the component past its cap — max_tile_macs if one group's
+                // replay of one position has more MACs than it, otherwise max_tile_transcendentals
+                // (max_checkpoint_interval ≥ 1 is an input rule).
+                let at = format!("the replay of state {j} in block {b}");
+                return Err(if per.macs > c.max_tile_macs {
+                    exceeds("max_tile_macs", at, per.macs, c.max_tile_macs)
                 } else {
-                    (0, 0)
-                };
-                return Err(exceeds("state_replay", format!("the replay of state {j} in block {b}"), value, cap));
+                    exceeds("max_tile_transcendentals", at, per.transcendentals, c.max_tile_transcendentals)
+                });
             }
             let ck = StateCkpt { state: j, closure, groups, per_position: per, interval: cj.min(u32::MAX as u64) as u32 };
             if best.as_ref().is_none_or(|x| ck.interval < x.interval) {
                 best = Some(ck);
             }
         }
-        // reading: a Fixed state no block writes needs no replay; it is not listed.
+        // §10.3 (A7): a Fixed state no block writes has no C_j and does not enter C.
         if let Some(ck) = best {
             states.push(ck);
         }

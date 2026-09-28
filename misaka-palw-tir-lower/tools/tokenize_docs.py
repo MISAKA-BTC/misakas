@@ -29,6 +29,10 @@ def main():
     from tokenizers import Tokenizer
 
     tok = Tokenizer.from_file(a.tokenizer)
+    # A tokenizer.json may carry a truncation or padding setting (state-spaces/mamba-370m-hf
+    # truncates at 1,024): a document is tokenised whole.
+    tok.no_truncation()
+    tok.no_padding()
     seqs, source = [], []
     for f in a.files:
         text = open(f, encoding="utf-8").read()
