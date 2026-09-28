@@ -1002,7 +1002,10 @@ fn cone_functions() {
                         let mv = value_bound(&prog, b, n16, tile_len as u64);
                         let fv = catch_any(|| cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(fb, n16, tile_len));
                         if Ok(mv) != fv {
-                            t.disagree("value bound", format!("{name} b{b} n{n} tile_len {tile_len}: ref2 {mv} first {fv:?}"));
+                            // Finding H2: the first implementation's V falls below the text's formula
+                            // (and below the real closure: `value_bound_against_closures`).
+                            let kind = if fv.as_ref().is_ok_and(|&f| f < mv) { "H2: first's value bound below the text's (and the real closure)" } else { "value bound" };
+                            t.disagree(kind, format!("{name} b{b} n{n} tile_len {tile_len}: ref2 {mv} first {fv:?}"));
                         }
                     }
                 }
@@ -1022,7 +1025,7 @@ fn cone_functions() {
     }
     println!("cone functions: {checked} commit points, obligations broken (first's names) {broken:?}");
     t.report("cone functions");
-    assert!(t.disagreements.is_empty());
+    assert!(t.disagreements.keys().all(|k| k.starts_with("H2")), "disagreements beyond finding H2");
 }
 
 
@@ -1100,5 +1103,131 @@ fn h1_empty_list_probe() {
         let els32: Vec<Vec<u32>> = l.iter().map(|x| x.iter().map(|&e| e as u32).collect()).collect();
         let theirs = cc::palw_tir_dissect_v1::palw_tir_dissect_check_claim_v1(&fsite, &els32, &to_range_claim(&root.totals));
         println!("H1 probe: tile {first_el}..{} reads lists {l:?}: ref2 {mine:?}, first's claim check {theirs:?}", first_el + 4);
+    }
+}
+
+/// §9.5.2's refusals of a malformed range request, on both implementations.
+#[test]
+fn range_request_refusals() {
+    let mut rng = R::seed_from_u64(0x9A9E);
+    let a = Attn { nh: 1, dh: 2, window: 16, layers: 1, commit_m: false, extra: false, select_o2: false, many: 1 };
+    let prog = attn_program(&mut rng, &a);
+    let pp = prepare(&prog).unwrap();
+    let tokens: Vec<u64> = (0..6).map(|i| i % 16).collect();
+    let m = Model::from_run(&prog, &Params::new(), &tokens, &|_| true).unwrap();
+    let ctx = Ctx { pos: 5, occ: 1 };
+    let b = prog.schedule.layers[0] as usize;
+    let reds: Vec<u16> = (0..prog.blocks[b].nodes.len() as u16).filter(|&i| ref2::demand::reduces_over_h(&prog, b, i as usize)).collect();
+    let r = reds[0];
+    let other = (0..prog.blocks[b].nodes.len() as u16).find(|&i| !reds.contains(&i)).unwrap();
+    let n = prog.blocks[b].nodes.len() as u16;
+    let h = 6u64;
+    let cases: Vec<(&str, u16, Vec<u16>, Option<(u64, u64)>)> = vec![
+        ("the target supplied", r, vec![r], None),
+        ("a supplied index that is no node", r, vec![n + 3], None),
+        ("a range on a node that does not reduce over H", other, vec![], Some((0, 1))),
+        ("from = to", r, vec![], Some((2, 2))),
+        ("from > to", r, vec![], Some((3, 2))),
+        ("to > H", r, vec![], Some((0, h + 1))),
+        ("the whole history", r, vec![], Some((0, h))),
+        ("one index", r, vec![], Some((h - 1, h))),
+    ];
+    for (what, target, sup, range) in cases {
+        let a = mine_range(&prog, ctx, target, &[0], &sup, range, &m, LIM);
+        let f = first_range(&pp.fp, &pp.info, ctx, target, &[0], &sup, range, &m, LIM);
+        println!("range request, {what}: ref2 {:?} / first {:?}", a.res, f.res);
+        assert_eq!(a.res, f.res, "{what}");
+    }
+}
+
+#[test]
+#[ignore]
+fn investigate_value_bound() {
+    let seed: u64 = std::env::var("SEED").unwrap_or("445".into()).parse().unwrap();
+    let blk: usize = std::env::var("BLK").unwrap_or("1".into()).parse().unwrap();
+    let node: u16 = std::env::var("NODE").unwrap_or("16".into()).parse().unwrap();
+    let mut rng = R::seed_from_u64(0xC0FE_0000 + seed);
+    let p = gen_program(&mut rng, GenCfg { range_safe: true, max_nodes: 30, ..GenCfg::default() }).prog;
+    let (cone_nodes, _) = ref2::admit::cone(&p, blk, node as usize);
+    for (n, x) in p.blocks[blk].nodes.iter().enumerate() {
+        let inc = cone_nodes.contains(&(n as u16));
+        println!(
+            "b{blk} n{n:<3} {}{} {:<36} ins {:?} out {:?}",
+            if x.commit { "C" } else { " " },
+            if inc { "*" } else { " " },
+            format!("{:?}", x.prim),
+            x.inputs,
+            x.out.shape
+        );
+    }
+    let fp = match first_decode(&encode(&p)) {
+        Outcome::Ok(f) => f,
+        _ => panic!(),
+    };
+    for tl in [1u64, 3, 64] {
+        println!(
+            "tile_len {tl}: ref2 V {} first V {:?}; reductions {:?}",
+            value_bound(&p, blk, node, tl),
+            cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp.blocks[blk], node, tl as u32),
+            ref2::dissect::cone_reductions(&p, blk, node)
+        );
+    }
+}
+
+/// The value bound against the real closure sizes, where the two bounds differ.
+#[test]
+#[ignore]
+fn value_bound_against_closures() {
+    let mut rows = Vec::new();
+    for seed in 0..(300 * scale() as u64) {
+        let mut rng = R::seed_from_u64(0xC0FE_0000 + seed);
+        let g = gen_program(&mut rng, GenCfg { range_safe: true, max_nodes: 30, ..GenCfg::default() });
+        let p = &g.prog;
+        let Outcome::Ok(fp) = first_decode(&encode(p)) else { continue };
+        if ref2::normal_form::check(p).is_err() || ranges(p).is_err() {
+            continue;
+        }
+        for (b, blk) in p.blocks.iter().enumerate() {
+            for (n, node) in blk.nodes.iter().enumerate() {
+                if !node.commit || ref2::dissect::cone_reductions(p, b, n as u16).is_empty() {
+                    continue;
+                }
+                for tl in [1u64, 3, 64] {
+                    let mv = value_bound(p, b, n as u16, tl);
+                    let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp.blocks[b], n as u16, tl as u32);
+                    if mv == fv {
+                        continue;
+                    }
+                    // The real closures: every tile of this commit point at the last position of a run.
+                    let occs = occurrences(p);
+                    let Some(o) = occs.iter().position(|&(bb, _)| bb == b) else { continue };
+                    let len = 7usize;
+                    let tokens: Vec<u64> = (0..len as u64).map(|i| i % (p.token_bound as u64).max(1)).collect();
+                    let Some(m) = Model::from_run(p, &g.params, &tokens, &|_| true) else { continue };
+                    let ctx = Ctx { pos: len as u64 - 1, occ: o as u32 };
+                    let Ok(Some(st)) = site(p, &ranges(p).unwrap(), ctx, n as u16, 1) else { continue };
+                    let e_count = ref2::tensor::count(&node.out.extents(history_h(p, b, ctx.pos)));
+                    let mut all_t: Values = Vec::new();
+                    for (i, &r) in st.reductions.iter().enumerate() {
+                        let els: Vec<u64> = (0..st.counts[i]).collect();
+                        all_t.push(eval_demanded(p, &Target::Node { ctx, node: r }, &els, &mut Mine(&m), LIM).unwrap().0);
+                    }
+                    let full = RootClaim { elements: st.counts.iter().map(|&k| (0..k).collect()).collect(), totals: all_t };
+                    let mut worst = 0usize;
+                    let mut start = 0;
+                    while start < e_count {
+                        let tile: Vec<u64> = (start..(start + tl).min(e_count)).collect();
+                        if let Ok(c) = closure(p, &st, &tile, &full, &mut Mine(&m), LIM) {
+                            worst = worst.max(c.iter().map(|s| s.len()).sum());
+                        }
+                        start += tl;
+                    }
+                    rows.push(format!("seed {seed} b{b} n{n} tile_len {tl}: ref2 V {mv}, first V {fv}, the largest real closure {worst}"));
+                }
+            }
+        }
+    }
+    for r in &rows {
+        println!("{r}");
     }
 }
