@@ -285,6 +285,8 @@ pub fn eval_demanded(
         pushes: 0,
         max_pushes: limits.max_pushes(),
         pending: Vec::new(),
+        supplied: Vec::new(),
+        range: None,
     };
     let mut out = Vec::with_capacity(request.elements.len());
     match request.target {
@@ -331,6 +333,104 @@ pub fn eval_demanded(
     Ok((out, engine.work))
 }
 
+/// **A range evaluation** (spec 04b §9.5 — the history dissection's arithmetic).
+///
+/// Elements `elements` of node `target` of context `ctx`, evaluated exactly as [`eval_demanded`]
+/// evaluates a `Node` target, except that
+///
+/// * every node of `ctx` listed in `supplied` is a LEAF — its elements come from
+///   [`DemandSource::node`] — as a commit point is: a dissection supplies the claimed totals of a
+///   cone's reductions over `H` this way;
+/// * with `range = Some((from, to))`, the target — which must be a reduction over `H` (a
+///   `ReduceSum` or `ReduceMax` along an `H` axis, or a `MatMul` contracting `H`) — reduces over the
+///   positions `from .. to` only (`from < to ≤ H`): its partial over that range. Its work is
+///   `to − from` terms per element.
+#[derive(Clone, Copy, Debug)]
+pub struct DemandRangeRequest<'a> {
+    pub ctx: DemandContext,
+    pub target: u16,
+    pub elements: &'a [usize],
+    pub supplied: &'a [u16],
+    pub range: Option<(usize, usize)>,
+}
+
+/// Whether node `node` of `block` reduces over `H`: a `ReduceSum`/`ReduceMax` along an `H` axis of
+/// its input, or a `MatMul` whose contraction (`a.shape[−1]`) is `H`.
+pub fn reduces_over_h_v1(block: &Block, node: u16) -> bool {
+    let Some(n) = block.nodes.get(node as usize) else { return false };
+    let input_dims = |r: Ref| -> Option<Vec<crate::types::Dim>> {
+        match r {
+            Ref::Node(j) => block.nodes.get(j as usize).map(|m| m.out.shape.clone()),
+            Ref::CarryIn(k) => block.carry_in.get(k as usize).map(|t| t.shape.clone()),
+            _ => None,
+        }
+    };
+    match n.prim {
+        Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => {
+            n.inputs.first().and_then(|r| input_dims(*r)).is_some_and(|s| s.get(axis as usize).is_some_and(|d| d.is_h()))
+        }
+        Prim::MatMul => n.inputs.first().and_then(|r| input_dims(*r)).is_some_and(|s| s.last().is_some_and(|d| d.is_h())),
+        _ => false,
+    }
+}
+
+/// **Evaluate a range request** ([`DemandRangeRequest`]). Refused up front (class `Malformed`) when
+/// the context, the target or a supplied node is not the program's, when the target is supplied,
+/// when a range is given for a target that does not reduce over `H` or is empty or past `H`, and
+/// when an element is outside the target.
+pub fn eval_demanded_range(
+    program: &TirProgramV1,
+    info: &ProgramInfo,
+    request: &DemandRangeRequest<'_>,
+    source: &mut dyn DemandSource,
+    limits: &DemandLimits,
+) -> DemandResult<(Vec<i128>, DemandWork)> {
+    let mut engine = Engine {
+        program,
+        info,
+        target: Some((request.ctx, request.target)),
+        contexts: BTreeMap::new(),
+        ctxs: Vec::new(),
+        state_memo: BTreeMap::new(),
+        source,
+        work: DemandWork::default(),
+        limits: *limits,
+        pushes: 0,
+        max_pushes: limits.max_pushes(),
+        pending: Vec::new(),
+        supplied: request.supplied.to_vec(),
+        range: request.range,
+    };
+    let ci = engine.context(request.ctx)?;
+    let block = &program.blocks[engine.ctxs[ci].block as usize];
+    let node = request.target;
+    if node as usize >= block.nodes.len() {
+        return fail(TirErrorKind::Malformed, "no such node");
+    }
+    if request.supplied.iter().any(|n| *n as usize >= block.nodes.len() || *n == node) {
+        return fail(TirErrorKind::Malformed, "a supplied node is not another node of the block");
+    }
+    if let Some((from, to)) = request.range {
+        if !reduces_over_h_v1(block, node) {
+            return fail(TirErrorKind::Malformed, "a range evaluation's target reduces over H");
+        }
+        let h = engine.ctxs[ci].h;
+        if from >= to || to > h {
+            return fail(TirErrorKind::Malformed, format!("the range {from}..{to} is not a non-empty range of 0..{h}"));
+        }
+    }
+    let count = engine.ctxs[ci].counts[node as usize];
+    if let Some(bad) = request.elements.iter().find(|e| **e >= count) {
+        return fail(TirErrorKind::Malformed, format!("element {bad} is outside the target's {count}"));
+    }
+    let mut out = Vec::with_capacity(request.elements.len());
+    for e in request.elements {
+        engine.run(Frame { ctx: ci, node, index: *e, charged: false })?;
+        out.push(engine.ctxs[ci].memo[node as usize][e]);
+    }
+    Ok((out, engine.work))
+}
+
 /// One element to compute. `charged` is set when its work has been counted.
 #[derive(Clone, Copy, Debug)]
 struct Frame {
@@ -370,6 +470,10 @@ struct Engine<'p, 's> {
     max_pushes: u64,
     /// Frames the last scan found missing, in operand order.
     pending: Vec<Frame>,
+    /// Range evaluation (§9.5): nodes of the target's context the source supplies as leaves.
+    supplied: Vec<u16>,
+    /// Range evaluation (§9.5): the `H` positions the target node's reduction runs over.
+    range: Option<(usize, usize)>,
 }
 
 fn unravel(mut i: usize, st: &[usize]) -> Vec<usize> {
@@ -457,7 +561,17 @@ impl Engine<'_, '_> {
     fn is_leaf(&self, ci: usize, node: u16) -> bool {
         let c = &self.ctxs[ci];
         let committed = self.program.blocks[c.block as usize].nodes.get(node as usize).is_some_and(|n| n.commit);
-        committed && self.target != Some((c.key, node))
+        let in_target_ctx = self.target.is_some_and(|(key, _)| key == c.key);
+        (committed && self.target != Some((c.key, node))) || (in_target_ctx && self.supplied.contains(&node))
+    }
+
+    /// The positions a reduction of node `node` of context `ci` runs over: the whole axis (`0..n`),
+    /// or, for the target of a range evaluation, its range.
+    fn reduction_span(&self, ci: usize, node: u16, n: usize) -> (usize, usize) {
+        match self.range {
+            Some((from, to)) if self.target == Some((self.ctxs[ci].key, node)) => (from.min(n), to.min(n)),
+            _ => (0, n),
+        }
     }
 
     fn memo_get(&self, f: &Frame) -> Option<i128> {
@@ -715,13 +829,21 @@ impl Engine<'_, '_> {
     }
 
     /// The reduction terms one element of `prim` costs.
-    fn terms_of(&self, ci: usize, prim: &Prim, inputs: &[Ref]) -> DemandResult<u64> {
+    fn terms_of(&self, ci: usize, node: u16, prim: &Prim, inputs: &[Ref]) -> DemandResult<u64> {
+        let span = |n: usize| {
+            let (from, to) = self.reduction_span(ci, node, n);
+            to.saturating_sub(from) as u64
+        };
         Ok(match prim {
             Prim::MatMul => {
                 let xs = self.operand_shape(ci, inputs[0])?;
-                xs.last().copied().unwrap_or(0) as u64
+                span(xs.last().copied().unwrap_or(0))
             }
-            Prim::ReduceSum { axis } | Prim::ReduceMax { axis } | Prim::TopK { axis, .. } => {
+            Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => {
+                let xs = self.operand_shape(ci, inputs[0])?;
+                span(xs.get(*axis as usize).copied().unwrap_or(0))
+            }
+            Prim::TopK { axis, .. } => {
                 let xs = self.operand_shape(ci, inputs[0])?;
                 xs.get(*axis as usize).copied().unwrap_or(0) as u64
             }
@@ -743,7 +865,7 @@ impl Engine<'_, '_> {
             return fail(TirErrorKind::Shape, format!("{name}: {} inputs", inputs.len()));
         }
         if !f.charged {
-            let terms = self.terms_of(ci, prim, inputs)?;
+            let terms = self.terms_of(ci, f.node, prim, inputs)?;
             self.tick(1, terms)?;
             f.charged = true;
         }
@@ -874,8 +996,9 @@ impl Engine<'_, '_> {
                 let xb = broadcast_index(batch, &xs[..xr - 2]);
                 let yb = broadcast_index(batch, &ys[..yr - 2]);
                 let (xo, yo) = (xb * m * kk + r * kk, yb * kk * nn + c);
-                let mut reqs = Vec::with_capacity(2 * kk);
-                for t in 0..kk {
+                let (from, to) = self.reduction_span(ci, f.node, kk);
+                let mut reqs = Vec::with_capacity(2 * (to - from));
+                for t in from..to {
                     reqs.push((inputs[0], xo + t));
                     reqs.push((inputs[1], yo + t * nn));
                 }
@@ -892,7 +1015,8 @@ impl Engine<'_, '_> {
                 let xs = self.operand_shape(ci, inputs[0])?;
                 let ist = strides(&xs);
                 let o = unravel(index, &ost);
-                let reqs: Vec<(Ref, usize)> = (0..xs[a])
+                let (from, to) = self.reduction_span(ci, f.node, xs[a]);
+                let reqs: Vec<(Ref, usize)> = (from..to)
                     .map(|t| {
                         let mut j = o.clone();
                         j[a] = t;

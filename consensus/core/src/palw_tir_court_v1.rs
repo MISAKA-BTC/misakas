@@ -479,6 +479,11 @@ struct TirSource<'a, 's> {
     before: u64,
     used: Requests,
     leaf_cache: BTreeMap<(DemandContext, u16, u64), u64>,
+    /// A range evaluation's supplied nodes (spec 04b §9.5): nodes of `supplied_ctx` whose elements
+    /// are a dissection claim's values, by `(node, element)`, and which of them were read.
+    supplied_ctx: Option<DemandContext>,
+    supplied: BTreeMap<(u16, usize), i128>,
+    used_supplied: BTreeSet<(u16, usize)>,
 }
 
 fn tir_err<T>(kind: TirErrorKind, msg: impl Into<String>) -> TirResult<T> {
@@ -536,6 +541,13 @@ impl TirSource<'_, '_> {
 
 impl DemandSource for TirSource<'_, '_> {
     fn node(&mut self, ctx: DemandContext, node: u16, index: usize) -> TirResult<i128> {
+        if self.supplied_ctx == Some(ctx) && self.supplied.range((node, 0)..=(node, usize::MAX)).next().is_some() {
+            let Some(v) = self.supplied.get(&(node, index)).copied() else {
+                return tir_err(TirErrorKind::Missing, format!("the claim has no value for element {index} of node {node}"));
+            };
+            self.used_supplied.insert((node, index));
+            return Ok(v);
+        }
         let Some(block) = occurrence_block(self.space, ctx.occurrence) else {
             return tir_err(TirErrorKind::Malformed, "no such occurrence");
         };
@@ -893,10 +905,59 @@ pub fn check_tir_cone_refutation_v1(
     refutation: &PalwTirConeRefutationV1,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    // 1–6.
+    let c = match check_carriage(refutation, rules)? {
+        CarriageStage::Convicted(verdict) => return Ok(verdict),
+        CarriageStage::Checked(c) => c,
+    };
+    // 7.
+    let mut source = c.source(rules);
+    let values = evaluate_leaf(&c.v.space, &c.leaf, &mut source, &rules.limits).map_err(|e| evaluation_refusal(&e))?;
+    // 8.
+    c.check_canonical(&source.used, rules)?;
+    // 9.
+    match c.first_difference(&values) {
+        Some(i) => {
+            let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
+            Ok(convict(&refutation.binding.committed_execution_root, PALW_TIR_EVIDENCE_KIND_CONE, c.out_index, fault))
+        }
+        None => Err(PalwStepRefuteError::NoFaultFound),
+    }
+}
+
+/// A refutation-form carriage after steps 1–6 of [`check_tir_cone_refutation_v1`]: every unit
+/// authenticated and every carried step leaf inside its proven interval — or the conviction one of
+/// those steps found.
+enum CarriageStage<'r> {
+    Convicted(PalwStepRefutationVerdictV1),
+    Checked(Box<CheckedCarriage<'r>>),
+}
+
+struct CheckedCarriage<'r> {
+    refutation: &'r PalwTirConeRefutationV1,
+    v: Box<PalwTirVerifiedBindingV1>,
+    leaf: PalwTirLeafV1,
+    out_index: u64,
+    intervals: Vec<Vec<Interval>>,
+    inventory: PalwTirInventoryIndexV1,
+    operands: Vec<(u64, PalwTirLeafV1)>,
+    params: BTreeMap<u32, (u32, Vec<u8>)>,
+    prompt: BTreeMap<u32, u32>,
+    prompt_tiles: BTreeSet<u32>,
+    generated: Option<Vec<u32>>,
+}
+
+/// Steps 1–6 of [`check_tir_cone_refutation_v1`], shared by every IR close and by the dissection's
+/// root claim: the binding, the disputed leaf, the intervals, PALW-TIR-33 on the leaf, the carriage,
+/// PALW-TIR-33 on every carried step leaf.
+fn check_carriage<'r>(
+    refutation: &'r PalwTirConeRefutationV1,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<CarriageStage<'r>, PalwStepRefuteError> {
     let binding = &refutation.binding;
     // 1.
     let v = match check_binding(binding)? {
-        BindingOutcome::Convicted(verdict) => return Ok(verdict),
+        BindingOutcome::Convicted(verdict) => return Ok(CarriageStage::Convicted(verdict)),
         BindingOutcome::Verified(v) => v,
     };
     let committed = &binding.committed_execution_root;
@@ -904,7 +965,7 @@ pub fn check_tir_cone_refutation_v1(
     let leaf =
         match check_output_leaf(binding, &v, &refutation.output_opening, &refutation.output_preimage, rules.max_step_leaf_count)? {
             Ok(leaf) => leaf,
-            Err(verdict) => return Ok(verdict),
+            Err(verdict) => return Ok(CarriageStage::Convicted(verdict)),
         };
     let out_index = refutation.output_opening.leaf_index;
     // 3.
@@ -913,7 +974,7 @@ pub fn check_tir_cone_refutation_v1(
     let out_interval = palw_tir_leaf_interval_v1(&v.space, &intervals, &leaf).ok_or(PalwStepRefuteError::Unadjudicable)?;
     if let Some(i) = first_outside(leaf.dtype, &refutation.output_preimage.values_le, out_interval) {
         let fault = PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: i };
-        return Ok(convict(committed, PALW_TIR_EVIDENCE_KIND_CONE, out_index, fault));
+        return Ok(CarriageStage::Convicted(convict(committed, PALW_TIR_EVIDENCE_KIND_CONE, out_index, fault)));
     }
     // 5.
     let operands = authenticate_operands(binding, &v, &refutation.operands, out_index, rules.max_step_leaf_count)?;
@@ -930,61 +991,90 @@ pub fn check_tir_cone_refutation_v1(
         let iv = palw_tir_leaf_interval_v1(&v.space, &intervals, operand_leaf).ok_or(PalwStepRefuteError::Unadjudicable)?;
         if let Some(i) = first_outside(operand_leaf.dtype, &preimage.values_le, iv) {
             let fault = PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: i };
-            return Ok(convict(committed, PALW_TIR_EVIDENCE_KIND_CONE, *index, fault));
+            return Ok(CarriageStage::Convicted(convict(committed, PALW_TIR_EVIDENCE_KIND_CONE, *index, fault)));
         }
     }
-    // 7.
-    let mut source = TirSource {
-        space: &v.space,
-        ctx: &binding.job_context,
-        job: v.job,
-        inventory: &inventory,
-        units: Units {
-            steps: operands.iter().zip(refutation.operands.preimages.iter()).map(|((i, _), p)| (*i, p.values_le.clone())).collect(),
-            params,
-            prompt,
-            generated,
-            store: None,
-            prompt_form: rules.prompt_form,
-        },
-        before: out_index,
-        used: Requests::default(),
-        leaf_cache: BTreeMap::new(),
-    };
-    let values = evaluate_leaf(&v.space, &leaf, &mut source, &rules.limits).map_err(|e| evaluation_refusal(&e))?;
-    // 8.
-    let used = &source.used;
-    if used.steps.len() != operands.len() || !operands.iter().all(|(i, _)| used.steps.contains(i)) {
-        return Err(bad("the operand row is not the set the evaluation reads"));
+    Ok(CarriageStage::Checked(Box::new(CheckedCarriage {
+        refutation,
+        v,
+        leaf,
+        out_index,
+        intervals,
+        inventory,
+        operands,
+        params,
+        prompt,
+        prompt_tiles,
+        generated,
+    })))
+}
+
+impl CheckedCarriage<'_> {
+    /// The court's source over the authenticated units (step 7).
+    fn source(&self, rules: &PalwTirCourtRulesV1) -> TirSource<'_, 'static> {
+        TirSource {
+            space: &self.v.space,
+            ctx: &self.refutation.binding.job_context,
+            job: self.v.job,
+            inventory: &self.inventory,
+            units: Units {
+                steps: self
+                    .operands
+                    .iter()
+                    .zip(self.refutation.operands.preimages.iter())
+                    .map(|((i, _), p)| (*i, p.values_le.clone()))
+                    .collect(),
+                params: self.params.clone(),
+                prompt: self.prompt.clone(),
+                generated: self.generated.clone(),
+                store: None,
+                prompt_form: rules.prompt_form,
+            },
+            before: self.out_index,
+            used: Requests::default(),
+            leaf_cache: BTreeMap::new(),
+            supplied_ctx: None,
+            supplied: BTreeMap::new(),
+            used_supplied: BTreeSet::new(),
+        }
     }
-    if used.params.len() != refutation.params.len() {
-        return Err(bad("the artifact openings are not the set the evaluation reads"));
-    }
-    match rules.prompt_form {
-        PalwPromptIdsFormV1::Flat => {
-            if used.prompt.is_empty() != refutation.prompt_token_ids.is_empty() {
-                return Err(bad("the prompt ids ride exactly when the evaluation reads one"));
+
+    /// Step 8: every carried unit was read, and the prompt and decode carriages are present exactly
+    /// when read.
+    fn check_canonical(&self, used: &Requests, rules: &PalwTirCourtRulesV1) -> Result<(), PalwStepRefuteError> {
+        let r = self.refutation;
+        if used.steps.len() != self.operands.len() || !self.operands.iter().all(|(i, _)| used.steps.contains(i)) {
+            return Err(bad("the operand row is not the set the evaluation reads"));
+        }
+        if used.params.len() != r.params.len() {
+            return Err(bad("the artifact openings are not the set the evaluation reads"));
+        }
+        match rules.prompt_form {
+            PalwPromptIdsFormV1::Flat => {
+                if used.prompt.is_empty() != r.prompt_token_ids.is_empty() {
+                    return Err(bad("the prompt ids ride exactly when the evaluation reads one"));
+                }
+            }
+            PalwPromptIdsFormV1::MerkleV1 => {
+                let read: BTreeSet<u32> = used.prompt.iter().map(|p| p / PALW_PROMPT_IDS_TILE_LEN).collect();
+                if read != self.prompt_tiles {
+                    return Err(bad("the prompt openings are not the tiles the evaluation reads"));
+                }
             }
         }
-        PalwPromptIdsFormV1::MerkleV1 => {
-            let read: BTreeSet<u32> = used.prompt.iter().map(|p| p / PALW_PROMPT_IDS_TILE_LEN).collect();
-            if read != prompt_tiles {
-                return Err(bad("the prompt openings are not the tiles the evaluation reads"));
-            }
+        if used.decode != r.decode_tokens.is_some() {
+            return Err(bad("the decode pin rides exactly when the evaluation reads a generated token"));
         }
+        Ok(())
     }
-    if used.decode != refutation.decode_tokens.is_some() {
-        return Err(bad("the decode pin rides exactly when the evaluation reads a generated token"));
+
+    /// Step 9: the first lane of the disputed leaf the evaluation disagrees with.
+    fn first_difference(&self, values: &[i128]) -> Option<usize> {
+        let committed: Vec<i128> = (0..self.leaf.value_count as usize)
+            .map(|i| lane(self.leaf.dtype, &self.refutation.output_preimage.values_le, i).unwrap_or(i128::MIN))
+            .collect();
+        (values.len() != committed.len()).then_some(0).or_else(|| values.iter().zip(committed.iter()).position(|(a, b)| a != b))
     }
-    // 9.
-    let committed_values: Vec<i128> = (0..leaf.value_count as usize)
-        .map(|i| lane(leaf.dtype, &refutation.output_preimage.values_le, i).unwrap_or(i128::MIN))
-        .collect();
-    if let Some(i) = values.iter().zip(committed_values.iter()).position(|(a, b)| a != b) {
-        let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
-        return Ok(convict(committed, PALW_TIR_EVIDENCE_KIND_CONE, out_index, fault));
-    }
-    Err(PalwStepRefuteError::NoFaultFound)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1001,6 +1091,17 @@ pub fn build_tir_cone_refutation_v1(
     store: &dyn PalwTirEvidenceStoreV1,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
+    let (v, leaf, inventory) = builder_prelude(binding, output_leaf)?;
+    let mut source = store_source(&v, &binding.job_context, &inventory, store, output_leaf, rules);
+    evaluate_leaf(&v.space, &leaf, &mut source, &rules.limits).map_err(|e| PalwTirEvidenceErrorV1::Evaluation(e.to_string()))?;
+    assemble_carriage(binding, output_leaf, &source.used, store, rules)
+}
+
+/// A builder's verified binding, the leaf, and the class's inventory index.
+fn builder_prelude(
+    binding: &PalwTirStepBindingV1,
+    output_leaf: u64,
+) -> Result<(Box<PalwTirVerifiedBindingV1>, PalwTirLeafV1, PalwTirInventoryIndexV1), PalwTirEvidenceErrorV1> {
     let v = match check_binding(binding) {
         Ok(BindingOutcome::Verified(v)) => v,
         Ok(BindingOutcome::Convicted(verdict)) => {
@@ -1011,11 +1112,23 @@ pub fn build_tir_cone_refutation_v1(
     let leaf = v.space.leaf_at(&binding.job_context, output_leaf).ok_or(PalwTirEvidenceErrorV1::NoSuchLeaf(output_leaf))?;
     let inventory = PalwTirInventoryIndexV1::new(&v.space.program)
         .ok_or_else(|| PalwTirEvidenceErrorV1::Binding("the class has no inventory".into()))?;
-    let mut source = TirSource {
+    Ok((v, leaf, inventory))
+}
+
+/// A source over a builder's store, recording what it reads.
+fn store_source<'a, 's>(
+    v: &'a PalwTirVerifiedBindingV1,
+    ctx: &'a PalwJobContextV2,
+    inventory: &'a PalwTirInventoryIndexV1,
+    store: &'s dyn PalwTirEvidenceStoreV1,
+    before: u64,
+    rules: &PalwTirCourtRulesV1,
+) -> TirSource<'a, 's> {
+    TirSource {
         space: &v.space,
-        ctx: &binding.job_context,
+        ctx,
         job: v.job,
-        inventory: &inventory,
+        inventory,
         units: Units {
             steps: BTreeMap::new(),
             params: BTreeMap::new(),
@@ -1024,12 +1137,24 @@ pub fn build_tir_cone_refutation_v1(
             store: Some(store),
             prompt_form: rules.prompt_form,
         },
-        before: output_leaf,
+        before,
         used: Requests::default(),
         leaf_cache: BTreeMap::new(),
-    };
-    evaluate_leaf(&v.space, &leaf, &mut source, &rules.limits).map_err(|e| PalwTirEvidenceErrorV1::Evaluation(e.to_string()))?;
-    let used = source.used;
+        supplied_ctx: None,
+        supplied: BTreeMap::new(),
+        used_supplied: BTreeSet::new(),
+    }
+}
+
+/// **The carriage of `used`**, in the canonical order: the step leaves as one range-proved row, the
+/// artifact openings, the prompt in the network's form, the decode pin.
+fn assemble_carriage(
+    binding: &PalwTirStepBindingV1,
+    output_leaf: u64,
+    used: &Requests,
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
     let missing = |what: String| PalwTirEvidenceErrorV1::Store(what);
     let output_opening = store.step_opening(output_leaf).ok_or_else(|| missing(format!("the opening of leaf {output_leaf}")))?;
     let output_preimage = store.step_leaf(output_leaf).ok_or_else(|| missing(format!("step leaf {output_leaf}")))?;
@@ -1081,6 +1206,300 @@ pub fn build_tir_cone_refutation_v1(
         prompt_ids_openings,
         decode_tokens,
     })
+}
+
+// ---------------------------------------------------------------------------------------------
+// The history dissection (F7): the root claim's finalize, the rounds, the bottom
+// ---------------------------------------------------------------------------------------------
+
+use crate::palw_tir_dissect_v1::{
+    PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirDissectPhaseV1, PalwTirDissectRoundV1, PalwTirDissectSiteV1, PalwTirRangeClaimV1,
+    PalwTirRootClaimV1, palw_tir_dissect_check_claim_v1, palw_tir_dissect_site_v1,
+};
+use misaka_palw_tir::demand::{DemandRangeRequest, eval_demanded_range};
+
+/// The supplied values of `reductions` (by `(node, element)`) from a claim aligned with `elements`.
+fn supplied_values(
+    reductions: &[u16],
+    elements: &[Vec<u32>],
+    claim: &PalwTirRangeClaimV1,
+    skip: Option<u16>,
+) -> BTreeMap<(u16, usize), i128> {
+    let mut out = BTreeMap::new();
+    for ((node, es), vs) in reductions.iter().zip(elements).zip(&claim.partials) {
+        if Some(*node) == skip {
+            continue;
+        }
+        for (e, v) in es.iter().zip(vs) {
+            out.insert((*node, *e as usize), *v);
+        }
+    }
+    out
+}
+
+fn leaf_elements(leaf: &PalwTirLeafV1) -> Vec<usize> {
+    match leaf.kind {
+        PalwTirLeafKindV1::Commit { first_element, .. } => {
+            (first_element..first_element + leaf.value_count as u64).map(|e| e as usize).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// **The finalize and the claim's element closure** (spec 04b §9.5): the leaf evaluated with every
+/// reduction over `H` supplied; then, until nothing new is read, one position's term (`H` range
+/// `0..1`) of each reduction's elements read so far, the other reductions supplied — the values of
+/// another reduction an `H`-local node reads (the softmax's `m*` inside `exp(s − m*)`) are read by
+/// every term alike, so one term names them. Everything read is recorded in `source`: the units in
+/// `used`, the supplied values in `used_supplied`, which is the claim's element set.
+fn finalize_and_closure(
+    space: &PalwTirStepSpaceV1,
+    site: &PalwTirDissectSiteV1,
+    leaf: &PalwTirLeafV1,
+    source: &mut TirSource<'_, '_>,
+    limits: &DemandLimits,
+) -> Result<Vec<i128>, DemandError> {
+    let elements = leaf_elements(leaf);
+    let request =
+        DemandRangeRequest { ctx: site.ctx, target: site.node, elements: &elements, supplied: &site.reductions, range: None };
+    let (values, _) = eval_demanded_range(&space.program, &space.info, &request, source, limits)?;
+    loop {
+        let before = source.used_supplied.len();
+        for node in &site.reductions {
+            let demanded: Vec<usize> = source.used_supplied.iter().filter(|(n, _)| n == node).map(|(_, e)| *e).collect();
+            if demanded.is_empty() {
+                continue;
+            }
+            let supplied: Vec<u16> = site.reductions.iter().copied().filter(|r| r != node).collect();
+            let request =
+                DemandRangeRequest { ctx: site.ctx, target: *node, elements: &demanded, supplied: &supplied, range: Some((0, 1)) };
+            eval_demanded_range(&space.program, &space.info, &request, source, limits)?;
+        }
+        if source.used_supplied.len() == before {
+            return Ok(values);
+        }
+    }
+}
+
+/// **Admit a root claim** (spec 04b §9.5; the acceptance layer's check, which holds the court's work
+/// limits): its carriage checks as a cone close's does, without a conviction (a leaf that convicts on
+/// its own is closed, not dissected); the leaf is the one the ladder narrowed to and is dissected;
+/// the claim's shape and values are the site's; and the leaf evaluated with every reduction over `H`
+/// SUPPLIED from the claim reproduces the committed leaf, reading exactly the carried units and
+/// exactly the claimed values. Returns the site the phase opens on.
+pub fn check_tir_root_claim_v1(
+    root: &PalwTirRootClaimV1,
+    narrowed: u64,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwTirDissectSiteV1, String> {
+    if root.version != PALW_TIR_DISSECT_OBJECT_VERSION_V1 {
+        return Err(format!("root claim version {} is not {PALW_TIR_DISSECT_OBJECT_VERSION_V1}", root.version));
+    }
+    let c = match check_carriage(&root.finalize, rules).map_err(|e| e.to_string())? {
+        CarriageStage::Convicted(verdict) => {
+            return Err(format!("the leaf convicts on its own ({:?}): it is closed, not dissected", verdict.fault));
+        }
+        CarriageStage::Checked(c) => c,
+    };
+    if c.out_index != narrowed {
+        return Err(format!("the root claim opens leaf {}, the ladder narrowed to {narrowed}", c.out_index));
+    }
+    let site = palw_tir_dissect_site_v1(&c.v.space, &c.intervals, &c.leaf).ok_or("the narrowed leaf is not dissected")?;
+    palw_tir_dissect_check_claim_v1(&site, &root.elements, &root.totals).map_err(|e| e.to_string())?;
+    let mut source = c.source(rules);
+    source.supplied_ctx = Some(site.ctx);
+    source.supplied = supplied_values(&site.reductions, &root.elements, &root.totals, None);
+    let values = finalize_and_closure(&c.v.space, &site, &c.leaf, &mut source, &rules.limits)
+        .map_err(|e| format!("the finalize does not evaluate: {e}"))?;
+    c.check_canonical(&source.used, rules).map_err(|e| e.to_string())?;
+    if source.used_supplied.len() != source.supplied.len() {
+        return Err("the claim carries values the dissection never reads".into());
+    }
+    if c.first_difference(&values).is_some() {
+        return Err("the root claim does not finalize to the committed leaf".into());
+    }
+    Ok(site)
+}
+
+/// **The bottom of an IR dissection** (`PalwCourtVerdictProofV2::TirDissection`): the carriage checks
+/// as a cone close's does (its convictions stand); the leaf is the phase's and the site unchanged;
+/// then every reduction `r_i` is evaluated over the terminal tile's positions only, the other
+/// reductions supplied from the ROOT's totals (spec 04b §9.5), reading exactly the carried units, and
+/// compared with the claim the dissection narrowed to: the first differing value (in reduction, then
+/// element order) convicts ([`PalwStepFaultV1::ComputationMismatch`], kind 5, the leaf); none is
+/// `NoFaultFound`.
+pub fn check_tir_dissect_bottom_v1(
+    phase: &PalwTirDissectPhaseV1,
+    bottom: &PalwTirConeRefutationV1,
+    narrowed: u64,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let range = phase.terminal_range().ok_or(bad("the dissection has not narrowed to one tile"))?;
+    let c = match check_carriage(bottom, rules)? {
+        CarriageStage::Convicted(verdict) => return Ok(verdict),
+        CarriageStage::Checked(c) => c,
+    };
+    if c.out_index != narrowed || narrowed != phase.leaf_index() {
+        return Err(bad("the bottom opens another leaf than the dissection's"));
+    }
+    let site = palw_tir_dissect_site_v1(&c.v.space, &c.intervals, &c.leaf).ok_or(bad("the leaf is not dissected"))?;
+    if site.reductions != phase.reductions() || site.history_positions != phase.history_positions() {
+        return Err(bad("the bottom's site is not the phase's"));
+    }
+    let mut source = c.source(rules);
+    source.supplied_ctx = Some(site.ctx);
+    let mut partials: Vec<i128> = Vec::new();
+    for (i, node) in site.reductions.iter().enumerate() {
+        source.supplied = supplied_values(&site.reductions, phase.elements(), phase.root(), Some(*node));
+        let supplied: Vec<u16> = site.reductions.iter().copied().filter(|r| r != node).collect();
+        let elements: Vec<usize> = phase.elements()[i].iter().map(|e| *e as usize).collect();
+        let request =
+            DemandRangeRequest { ctx: site.ctx, target: *node, elements: &elements, supplied: &supplied, range: Some(range) };
+        let (values, _) = eval_demanded_range(&c.v.space.program, &c.v.space.info, &request, &mut source, &rules.limits)
+            .map_err(|e| evaluation_refusal(&e))?;
+        partials.extend(values);
+    }
+    c.check_canonical(&source.used, rules)?;
+    let claimed: Vec<i128> = phase.claim().partials.iter().flatten().copied().collect();
+    match partials.iter().zip(claimed.iter()).position(|(a, b)| a != b).or((partials.len() != claimed.len()).then_some(0)) {
+        Some(i) => {
+            let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
+            Ok(convict(&bottom.binding.committed_execution_root, PALW_TIR_EVIDENCE_KIND_CONE, narrowed, fault))
+        }
+        None => Err(PalwStepRefuteError::NoFaultFound),
+    }
+}
+
+/// The site of `leaf` for a builder.
+fn builder_site(v: &PalwTirVerifiedBindingV1, leaf: &PalwTirLeafV1) -> Result<PalwTirDissectSiteV1, PalwTirEvidenceErrorV1> {
+    let intervals = analyze_ranges(&v.space.program).map_err(|e| PalwTirEvidenceErrorV1::Binding(e.to_string()))?;
+    palw_tir_dissect_site_v1(&v.space, &intervals, leaf)
+        .ok_or_else(|| PalwTirEvidenceErrorV1::Binding("the leaf is not dissected".into()))
+}
+
+/// **Build the responder's root claim** for the narrowed leaf from its own execution: every
+/// reduction's honest totals, the elements the finalize reads, and the finalize's carriage.
+pub fn build_tir_root_claim_v1(
+    binding: &PalwTirStepBindingV1,
+    narrowed: u64,
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwTirRootClaimV1, PalwTirEvidenceErrorV1> {
+    let (v, leaf, inventory) = builder_prelude(binding, narrowed)?;
+    let site = builder_site(&v, &leaf)?;
+    let eval_err = |e: DemandError| PalwTirEvidenceErrorV1::Evaluation(e.to_string());
+    // Every element of every reduction, computed whole (the builder's own work, not the court's).
+    let mut all = BTreeMap::new();
+    for (node, count) in site.reductions.iter().zip(&site.counts) {
+        let mut source = store_source(&v, &binding.job_context, &inventory, store, narrowed, rules);
+        let elements: Vec<usize> = (0..*count as usize).collect();
+        let request = DemandRequest { target: DemandTarget::Node { ctx: site.ctx, node: *node }, elements: &elements };
+        let (values, _) =
+            eval_demanded(&v.space.program, &v.space.info, &request, &mut source, &DemandLimits::UNLIMITED).map_err(eval_err)?;
+        for (e, value) in values.into_iter().enumerate() {
+            all.insert((*node, e), value);
+        }
+    }
+    // The finalize and its closure, with every total supplied: what they read is the claim's element set.
+    let mut source = store_source(&v, &binding.job_context, &inventory, store, narrowed, rules);
+    source.supplied_ctx = Some(site.ctx);
+    source.supplied = all;
+    finalize_and_closure(&v.space, &site, &leaf, &mut source, &rules.limits).map_err(eval_err)?;
+    let mut claim_elements = vec![Vec::new(); site.reductions.len()];
+    let mut totals = vec![Vec::new(); site.reductions.len()];
+    for (node, e) in &source.used_supplied {
+        let i = site.reductions.iter().position(|r| r == node).expect("a reduction of the site");
+        claim_elements[i].push(*e as u32);
+        totals[i].push(source.supplied[&(*node, *e)]);
+    }
+    let finalize = assemble_carriage(binding, narrowed, &source.used, store, rules)?;
+    Ok(PalwTirRootClaimV1 {
+        version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+        elements: claim_elements,
+        totals: PalwTirRangeClaimV1 { partials: totals },
+        finalize: Box::new(finalize),
+    })
+}
+
+/// **What a root claim finalizes to**: the leaf's values evaluated with every reduction over `H`
+/// supplied from `(elements, totals)` — the lanes the leaf must hold for the claim to be admitted.
+/// A tool's function; the court runs the same evaluation inside [`check_tir_root_claim_v1`].
+pub fn tir_root_claim_finalizes_to_v1(
+    binding: &PalwTirStepBindingV1,
+    narrowed: u64,
+    elements: &[Vec<u32>],
+    totals: &PalwTirRangeClaimV1,
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<Vec<i128>, PalwTirEvidenceErrorV1> {
+    let (v, leaf, inventory) = builder_prelude(binding, narrowed)?;
+    let site = builder_site(&v, &leaf)?;
+    let mut source = store_source(&v, &binding.job_context, &inventory, store, narrowed, rules);
+    source.supplied_ctx = Some(site.ctx);
+    source.supplied = supplied_values(&site.reductions, elements, totals, None);
+    let lanes = leaf_elements(&leaf);
+    let request = DemandRangeRequest { ctx: site.ctx, target: site.node, elements: &lanes, supplied: &site.reductions, range: None };
+    Ok(eval_demanded_range(&v.space.program, &v.space.info, &request, &mut source, &rules.limits)
+        .map_err(|e| PalwTirEvidenceErrorV1::Evaluation(e.to_string()))?
+        .0)
+}
+
+/// The partials of every reduction over the history positions `range`, the others supplied from the
+/// phase's root — the responder's round and the bottom's evaluation, over a builder's store.
+fn builder_partials(
+    binding: &PalwTirStepBindingV1,
+    phase: &PalwTirDissectPhaseV1,
+    range: (usize, usize),
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<(PalwTirRangeClaimV1, Requests), PalwTirEvidenceErrorV1> {
+    let (v, leaf, inventory) = builder_prelude(binding, phase.leaf_index())?;
+    let site = builder_site(&v, &leaf)?;
+    let mut source = store_source(&v, &binding.job_context, &inventory, store, phase.leaf_index(), rules);
+    source.supplied_ctx = Some(site.ctx);
+    let mut partials = Vec::with_capacity(site.reductions.len());
+    for (i, node) in site.reductions.iter().enumerate() {
+        source.supplied = supplied_values(&site.reductions, phase.elements(), phase.root(), Some(*node));
+        let supplied: Vec<u16> = site.reductions.iter().copied().filter(|r| r != node).collect();
+        let elements: Vec<usize> = phase.elements()[i].iter().map(|e| *e as usize).collect();
+        let request =
+            DemandRangeRequest { ctx: site.ctx, target: *node, elements: &elements, supplied: &supplied, range: Some(range) };
+        let (values, _) = eval_demanded_range(&v.space.program, &v.space.info, &request, &mut source, &rules.limits)
+            .map_err(|e| PalwTirEvidenceErrorV1::Evaluation(e.to_string()))?;
+        partials.push(values);
+    }
+    Ok((PalwTirRangeClaimV1 { partials }, source.used))
+}
+
+/// **Build the responder's round**: every child of the disputed range, its partials over the
+/// child's positions.
+pub fn build_tir_dissect_round_v1(
+    binding: &PalwTirStepBindingV1,
+    phase: &PalwTirDissectPhaseV1,
+    tile_positions: u32,
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwTirDissectRoundV1, PalwTirEvidenceErrorV1> {
+    let h = phase.history_positions() as u64;
+    let mut children = Vec::new();
+    for (first, count) in phase.child_ranges() {
+        let from = first * tile_positions as u64;
+        let to = ((first + count) * tile_positions as u64).min(h);
+        children.push(builder_partials(binding, phase, (from as usize, to as usize), store, rules)?.0);
+    }
+    Ok(PalwTirDissectRoundV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, children })
+}
+
+/// **Build the bottom close's carriage** over the terminal tile.
+pub fn build_tir_dissect_bottom_v1(
+    binding: &PalwTirStepBindingV1,
+    phase: &PalwTirDissectPhaseV1,
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
+    let range = phase.terminal_range().ok_or_else(|| PalwTirEvidenceErrorV1::Binding("the dissection has no bottom yet".into()))?;
+    let (_, used) = builder_partials(binding, phase, range, store, rules)?;
+    assemble_carriage(binding, phase.leaf_index(), &used, store, rules)
 }
 
 // ---------------------------------------------------------------------------------------------
