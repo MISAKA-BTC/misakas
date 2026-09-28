@@ -1588,7 +1588,7 @@ fn a_demanded_ir_step_leaf_is_answered_by_the_node_and_a_silent_executor_is_void
 fn a_withholding_liar_is_demanded_on_chain_and_convicted_from_its_disclosure() {
     use super::tir_court::{
         PalwTirAnnexPursuitV1, PalwTirAnnexStepV1, PalwTirWithheldStepV1, palw_tir_annex_step_v1, palw_tir_leaf_is_dissected_v1,
-        palw_tir_one_move_accusation_to_file_v1, palw_tir_one_move_verdict_stateless_v1, palw_tir_pursuit_absorb_answers_v1,
+        palw_tir_one_move_accusation_to_file_v1, palw_tir_one_move_verdict_stateless_v1, palw_tir_pursuit_absorb_chain_v1,
         palw_tir_withheld_step_v1,
     };
     use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaUnitV1, palw_da_accusation_object_v1, palw_tir_leaf_accusation_object_v1};
@@ -1625,58 +1625,68 @@ fn a_withholding_liar_is_demanded_on_chain_and_convicted_from_its_disclosure() {
         licensed_daa: 102,
         free_prompt: false,
     };
-    let answers_of =
-        |objects: &[PalwConsensusObjectV2]| -> Vec<(PalwDaUnitV1, kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1)> {
-            objects
-                .iter()
-                .filter_map(|o| match o {
-                    PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. } if *claim == liar.id => {
-                        Some((*unit, answer.clone()))
-                    }
-                    _ => None,
-                })
-                .collect()
-        };
     let window = 20; // params()'s challenge window: W_disclose
     let mut s = bound_c(&ir, &liar);
     let mut daa = C_FENCE2;
-    let mut pursuit = PalwTirAnnexPursuitV1::new(own.clone(), daa);
-    pursuit.asks = super::tir_court::PALW_TIR_ANNEX_ASKS_V1; // the executor served nothing
-    let mut chain_answers = Vec::new();
+    // Two seats of the panel, whose executor served neither an annex: SEAT demands, COLLUDER reads the
+    // chain — every demand and answer folded — and waits on SEAT's demands instead of filing its own.
+    let (mut first, mut second) = (PalwTirAnnexPursuitV1::new(own.clone(), daa), PalwTirAnnexPursuitV1::new(own.clone(), daa));
+    for p in [&mut first, &mut second] {
+        p.asks = super::tir_court::PALW_TIR_ANNEX_ASKS_V1;
+    }
+    let mut chain: Vec<PalwConsensusObjectV2> = Vec::new();
+    // The chain's objects into a pursuit, then its steps on every disclosed leaf it stands at.
+    let advance = |p: &mut PalwTirAnnexPursuitV1, me: u64, chain: &[PalwConsensusObjectV2], daa: u64| -> Option<PalwTirAnnexStepV1> {
+        palw_tir_pursuit_absorb_chain_v1(p, chain, &bond_key(me), &program, &target, LADDER, daa);
+        while let Some(annex) = p.disclosed.get(&p.leaf).cloned() {
+            let binding = p.binding.as_deref().expect("a disclosed leaf shows the binding").clone();
+            match palw_tir_annex_step_v1(&tir, p, &annex, &binding, &rules) {
+                PalwTirAnnexStepV1::Ask { leaf, below, token } => {
+                    (p.leaf, p.below, p.token) = (leaf, below, token);
+                    p.rounds += 1;
+                }
+                end => return Some(end),
+            }
+        }
+        None
+    };
     let mut silent_checked = false;
     let end = loop {
         assert!(daa < C_FENCE2 + 200, "the pursuit ends");
-        palw_tir_pursuit_absorb_answers_v1(&mut pursuit, &chain_answers, &program, &target, LADDER);
-        if let Some(annex) = pursuit.disclosed.get(&pursuit.leaf).cloned() {
-            let binding = pursuit.binding.as_deref().expect("a disclosed leaf shows the binding").clone();
-            match palw_tir_annex_step_v1(&tir, &pursuit, &annex, &binding, &rules) {
-                PalwTirAnnexStepV1::Ask { leaf, below, token } => {
-                    (pursuit.leaf, pursuit.below, pursuit.token) = (leaf, below, token);
-                    pursuit.rounds += 1;
-                    continue;
-                }
-                end => break end,
-            }
+        if let Some(end) = advance(&mut first, SEAT, &chain, daa) {
+            break end;
         }
-        let object = match palw_tir_withheld_step_v1(true, &pursuit, daa, window, 4) {
+        let object = match palw_tir_withheld_step_v1(true, &first, daa, window, 4, 0) {
             PalwTirWithheldStepV1::DemandEvent => {
-                assert!(pursuit.binding.is_none(), "the event demand only brings a binding the seat lacks");
-                pursuit.event_demanded = Some(daa);
+                assert!(first.binding.is_none(), "the event demand only brings a binding the seat lacks");
+                first.event_demanded = Some(daa);
                 palw_da_accusation_object_v1(&h64(999), liar.id, PalwDaUnitV1::Event { row: 0, tile: 0 }, bond_key(SEAT), |_, _| {
                     Some(vec![3; 16])
                 })
                 .expect("the event demand")
             }
             PalwTirWithheldStepV1::DemandLeaf { leaf } => {
-                pursuit.demanded = Some((leaf, daa));
-                let binding = pursuit.binding.clone().expect("a binding");
+                first.demanded = Some((leaf, daa));
+                let binding = first.binding.clone().expect("a binding");
                 palw_tir_leaf_accusation_object_v1(&h64(999), liar.id, leaf, &binding, bond_key(SEAT), |_, _| Some(vec![3; 16]))
                     .expect("the leaf demand")
             }
             other => panic!("the pursuit stalls: {other:?}"),
         };
-        pursuit.sessions += 1;
-        s = step_c(&s, daa, &[object.clone()], None).unwrap_or_else(|e| panic!("DAA {daa}: {object:?} opens a session: {e}"));
+        first.sessions += 1;
+        s = step_c(&s, daa, std::slice::from_ref(&object), None)
+            .unwrap_or_else(|e| panic!("DAA {daa}: {object:?} opens a session: {e}"));
+        chain.push(object);
+        // COLLUDER, at its own stagger's end, reads SEAT's demand pending and waits for its answer.
+        if advance(&mut second, COLLUDER, &chain, daa).is_none() {
+            let unit = super::tir_court::palw_tir_withheld_unit_v1(&second);
+            second.withheld_since.get_or_insert((unit, daa));
+            assert_eq!(
+                palw_tir_withheld_step_v1(true, &second, daa + 10, window, 4, 10),
+                PalwTirWithheldStepV1::Wait,
+                "the other seat waits on the open demand of the unit ({unit})"
+            );
+        }
         let (units, deadline) = session_c(&s, &liar.id, SEAT).expect("a session");
         // Once, on the first leaf demand: the liar silent past the window is voided.
         if !silent_checked && matches!(units[0], PalwDaUnitV1::TirStepLeaf { .. }) {
@@ -1684,28 +1694,32 @@ fn a_withholding_liar_is_demanded_on_chain_and_convicted_from_its_disclosure() {
             assert!(matches!(phase_of(&silent, &liar.id), PalwClaimPhaseV2::Voided { .. }), "a silent liar defaults");
             silent_checked = true;
         }
-        // The liar's node answers every unit from its capture (the lie included), and the seat reads
-        // the answers back off the chain.
+        // The liar's node answers every unit from its capture (the lie included); both seats read the
+        // answers back off the chain.
         let answers = node_answers_c(&ir, &liar, &units);
         daa += 1;
         s = step_c(&s, daa, &answers, None).unwrap_or_else(|e| panic!("DAA {daa}: the answers fold: {e}"));
         assert!(session_c(&s, &liar.id, SEAT).is_none(), "every unit answered: the session closes");
-        chain_answers.extend(answers_of(&answers));
+        chain.extend(answers);
         daa += 1;
     };
     assert!(silent_checked);
-    assert!(pursuit.sessions <= 4, "{} sessions", pursuit.sessions);
-    let PalwTirAnnexStepV1::Accuse { leaf, candidates, .. } = end else { panic!("an accusation, got another end") };
-    assert_eq!(leaf, Some(lie), "the chain's disclosures lead the descent to the planted leaf");
-    let (label, accusation) =
-        palw_tir_one_move_accusation_to_file_v1(candidates, &target, &program, bond_key(SEAT), &court(), LADDER, FORM)
-            .expect("an accusation to file");
-    assert_eq!(label, "cone");
-    assert_eq!(
-        palw_tir_one_move_verdict_stateless_v1(&accusation.proof, &target, &program, &court(), LADDER, FORM),
-        Some(PalwCourtVerdictV2::ExecutorGuilty),
-        "the cone close built from the disclosure convicts"
-    );
+    assert!(first.sessions <= 4, "{} sessions", first.sessions);
+    let other_end = advance(&mut second, COLLUDER, &chain, daa).expect("the other seat's descent ends on the same answers");
+    assert_eq!(second.sessions, 0, "the other seat spent no session of its own");
+    for (who, accuser, end) in [("SEAT", SEAT, end), ("COLLUDER", COLLUDER, other_end)] {
+        let PalwTirAnnexStepV1::Accuse { leaf, candidates, .. } = end else { panic!("{who}: an accusation, got another end") };
+        assert_eq!(leaf, Some(lie), "{who}: the chain's disclosures lead the descent to the planted leaf");
+        let (label, accusation) =
+            palw_tir_one_move_accusation_to_file_v1(candidates, &target, &program, bond_key(accuser), &court(), LADDER, FORM)
+                .expect("an accusation to file");
+        assert_eq!(label, "cone");
+        assert_eq!(
+            palw_tir_one_move_verdict_stateless_v1(&accusation.proof, &target, &program, &court(), LADDER, FORM),
+            Some(PalwCourtVerdictV2::ExecutorGuilty),
+            "{who}: the cone close built from the disclosure convicts"
+        );
+    }
 }
 
 /// **The withheld pursuit's decisions** (`palw_tir_withheld_step_v1`), and the wiring: the tick hands
@@ -1720,25 +1734,44 @@ fn a_withheld_pursuit_demands_on_chain_only_past_the_fence_and_within_its_sessio
     let ctx = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).unwrap().binding.job_context;
     let prompt: Vec<u32> = honest.prompt.iter().map(|t| *t as u32).collect();
     let own = tir.retain_memo(&ctx, &prompt).expect("the seat's own run");
+    use super::tir_court::{PALW_TIR_EVENT_DEMAND_KEY_V1 as EVENT, palw_tir_demand_stagger_v1};
     let (window, max) = (20, 4);
     let mut p = PalwTirAnnexPursuitV1::new(own, 100);
     p.leaf = 5;
-    assert!(matches!(step(false, &p, 100, window, max), W::GiveUp(_)), "below the fence");
-    assert_eq!(step(true, &p, 100, window, max), W::DemandEvent, "no binding yet");
-    p.event_demanded = Some(100);
-    assert_eq!(step(true, &p, 100 + window, window, max), W::Wait);
-    assert!(matches!(step(true, &p, 200, window, max), W::GiveUp(_)), "no binding ever reached the chain");
+    assert!(matches!(step(false, &p, 100, window, max, 0), W::GiveUp(_)), "below the fence");
+    assert_eq!(step(true, &p, 100, window, max, 0), W::DemandEvent, "no binding yet");
+    // The stagger: counted from the round's start, per unit.
+    p.withheld_since = Some((EVENT, 100));
+    assert_eq!(step(true, &p, 105, window, max, 9), W::Wait, "inside this seat's slot");
+    assert_eq!(step(true, &p, 109, window, max, 9), W::DemandEvent, "at its end");
+    // Another bond's event demand, read off the chain, is waited on — its answer carries the binding.
+    p.pending.insert(EVENT, 104);
+    assert_eq!(step(true, &p, 109, window, max, 9), W::Wait, "another's event demand is open");
+    assert_eq!(step(true, &p, 104 + window + 5, window, max, 9), W::DemandEvent, "past its window, unanswered");
+    p.pending.clear();
+    p.event_demanded = Some(110);
+    assert_eq!(step(true, &p, 110 + window, window, max, 0), W::Wait, "this seat's own event demand");
     let binding = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).unwrap().binding;
     p.binding = Some(std::sync::Arc::new(binding));
     p.sessions = 1;
-    assert_eq!(step(true, &p, 130, window, max), W::DemandLeaf { leaf: 5 });
+    assert_eq!(step(true, &p, 130, window, max, 0), W::DemandLeaf { leaf: 5 }, "the binding known: the leaf");
     p.demanded = Some((5, 130));
-    assert_eq!(step(true, &p, 150, window, max), W::Wait, "the demand's window");
-    assert_eq!(step(true, &p, 160, window, max), W::DemandLeaf { leaf: 5 }, "past it, unanswered and not voided: again");
+    assert_eq!(step(true, &p, 150, window, max, 0), W::Wait, "the demand's window");
+    assert_eq!(step(true, &p, 160, window, max, 0), W::DemandLeaf { leaf: 5 }, "past it, unanswered and not voided: again");
     p.leaf = 9;
-    assert_eq!(step(true, &p, 140, window, max), W::DemandLeaf { leaf: 9 }, "the next round's leaf");
+    assert_eq!(step(true, &p, 140, window, max, 0), W::DemandLeaf { leaf: 9 }, "the next round's leaf");
+    p.pending.insert(9, 138);
+    assert_eq!(step(true, &p, 140, window, max, 0), W::Wait, "another seat demanded leaf 9: its answer is this seat's");
     p.sessions = 4;
-    assert!(matches!(step(true, &p, 140, window, max), W::GiveUp(_)), "a seat's four sessions spent");
+    assert_eq!(step(true, &p, 140, window, max, 0), W::Wait, "sessions spent, but another's demand of the unit is open");
+    p.pending.clear();
+    assert!(matches!(step(true, &p, 140, window, max, 0), W::GiveUp(_)), "a seat's four sessions spent, nothing open");
+    // Seats draw different slots for one unit, and one seat different slots across a descent's units.
+    let slots: std::collections::BTreeSet<u64> = (0..16u64).map(|b| palw_tir_demand_stagger_v1(&bond_key(b), &honest.id, 5)).collect();
+    assert!(slots.len() > 3 && slots.iter().all(|s| s % 3 == 0 && *s < 24), "{slots:?}");
+    let units: std::collections::BTreeSet<u64> =
+        (0..16u64).map(|u| palw_tir_demand_stagger_v1(&bond_key(SEAT), &honest.id, u)).collect();
+    assert!(units.len() > 3, "{units:?}");
 
     let court_src = include_str!("tir_court.rs");
     let court_src = &court_src[..court_src.find("\n#[cfg(test)]").unwrap_or(court_src.len())];
@@ -1749,8 +1782,9 @@ fn a_withheld_pursuit_demands_on_chain_only_past_the_fence_and_within_its_sessio
     let demand = &court_src[court_src.find("    async fn tir_demand_tick_v1(").expect("the demand tick")..];
     let demand = &demand[..demand.find("\n    }\n").expect("its end")];
     for reached in [
-        "tir_da_answers_from_chain_v1(c, claim, not_before, span)",
-        "palw_tir_pursuit_absorb_answers_v1(p, &answers, program, target, ladder);",
+        "tir_da_chain_objects_v1(c, claim, not_before, span)",
+        "palw_tir_pursuit_absorb_chain_v1(p, &objects, &bond_key, program, target, ladder, current_daa);",
+        "let stagger = palw_tir_demand_stagger_v1(&bond_key, &claim, unit);",
         "palw_tir_leaf_accusation_object_v1(",
         "palw_da_accusation_object_v1(",
         "self.file_tir_demand_v1(session, &object, key, due, books)",
