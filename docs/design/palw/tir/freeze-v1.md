@@ -154,8 +154,18 @@ evaluator on its first two positions (equal); peak RSS 1.7–4.7 GB. (The rows s
 from the runs in §9 as they complete.)
 
 **Mamba misses its row** — a quantisation problem, not an IR one (corpus-v1 §9): the tiny Mamba
-fixtures (random weights) agree at 0.94–1.00, so the scan is lowered right, and the trained
-checkpoint's statistics are what one static scale per site does not hold. Diagnosis per site below.
+fixtures (random weights) agree at 0.94–1.00 and the program is the reference evaluator's value on
+both backends, so the scan is lowered right; it is the trained checkpoint's activations that 16-bit
+codes at one static scale per site do not hold. Diagnosis (`palw-tir-fidelity --sites 40
+--site-positions 12`, the traced float run against the reference evaluator): the error is already
+6–9 % (relative L2) inside layer 1 and flat from there — the gated product `y·SiLU(z)` 8–10 %, the
+scan output 6.5–8 %, the in-projection's `x` and `z` halves, the conv/SiLU gate and the next norms
+6.5–7 % — so it is not the `i32` scan state (its output error equals its input's) but the chain of
+16-bit elementwise sites between the in-projection and the out-projection, whose per-channel ranges
+a trained Mamba spreads far wider than a projection's inputs (where the outlier split holds them).
+The fix is in the lowering, not the IR: carry the mixer's per-channel path (`x_in` → causal conv →
+SiLU → scan → gate) on the `i32` rail, with the Q24 `silu` template instead of a 16-bit table —
+what the gated-delta lowering already does for its conv and decays. Open (§8).
 
 **Recurrence drift** (KL at position 4,096 ≤ 1.5 × KL at 128, C4–C7): not yet measured — needs one
 4,096-token evaluation per recurrent checkpoint, which the typed backend now makes cheap (§8).
@@ -220,8 +230,9 @@ provisional `palw_tir_v1` ceilings (`max_macs_per_position` 2^37, `max_cone_work
 
 ## 8. Open before the freeze
 
-1. **Real-checkpoint fidelity** for C3, C5, C6-adjacent, C7 and the gated-delta family (§5.2, §9),
-   and the **recurrence drift** column for C4–C7 (a 4,096-token evaluation each).
+1. **Mamba (C5) misses its real-checkpoint row** (top-1 0.758, KL 0.209, ppl +17.9 %): the mixer's
+   16-bit elementwise path loses the trained model's per-channel range (§5.2); the fix is a wide
+   (`i32`) mixer path in the lowering — no primitive, no IR change.
 2. **No real checkpoint under the download rules** for Gemma-3 (every official checkpoint is gated),
    Mamba-2 (no official HF-format checkpoint of ≤ 3B: `mistralai/Mamba-Codestral-7B-v0.1` is 7B,
    `state-spaces/mamba2-*` are `mamba_ssm` checkpoints in `.bin`) and RWKV-4 (every official `RWKV/`
