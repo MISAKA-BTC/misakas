@@ -56,6 +56,9 @@ pub struct NodePlan {
     /// The type the value is STORED in: the declared dtype, except that a computed `i128` node
     /// whose every successful value provably fits `i64` is held in `i64` (the same integers).
     pub store: DType,
+    /// The node returns its input's values unchanged: a `Clamp` whose input interval lies inside
+    /// `[lo, hi]`, a `Cast` that cannot fail. Its value is a view of its input.
+    pub identity: bool,
 }
 
 impl NodePlan {
@@ -76,6 +79,7 @@ impl NodePlan {
             checked_arith: false,
             check_operand: false,
             store: out,
+            identity: false,
         }
     }
 }
@@ -194,6 +198,12 @@ fn plan_block(p: &TirProgramV1, info: &ProgramInfo, consts: &[Buf], bi: usize, l
             checked_arith: false,
             check_operand: facts.needs_operand_check,
             store: o,
+            identity: false,
+        };
+        plan.identity = match n.prim {
+            Prim::Clamp { lo, hi } => within(plan.in_ivs[0], Interval::new(lo as i128, hi as i128)),
+            Prim::Cast => fits,
+            _ => false,
         };
         let computed = matches!(
             n.prim,

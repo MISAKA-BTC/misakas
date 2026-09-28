@@ -146,28 +146,21 @@ where
             }
             true
         }
-        Prim::Compare { cmp } => {
-            let c = *cmp;
-            map2(res, out_shape, av, sa, bv, sb, |x, y| Some(W::from_i64(holds(c, x, y) as i64)))
-        }
+        // One loop per relation, so no element branches on which relation it is.
+        Prim::Compare { cmp } => match cmp {
+            Cmp::Eq => map2(res, out_shape, av, sa, bv, sb, |x, y| Some(W::from_i64((x == y) as i64))),
+            Cmp::Ne => map2(res, out_shape, av, sa, bv, sb, |x, y| Some(W::from_i64((x != y) as i64))),
+            Cmp::Lt => map2(res, out_shape, av, sa, bv, sb, |x, y| Some(W::from_i64((x < y) as i64))),
+            Cmp::Le => map2(res, out_shape, av, sa, bv, sb, |x, y| Some(W::from_i64((x <= y) as i64))),
+            Cmp::Gt => map2(res, out_shape, av, sa, bv, sb, |x, y| Some(W::from_i64((x > y) as i64))),
+            Cmp::Ge => map2(res, out_shape, av, sa, bv, sb, |x, y| Some(W::from_i64((x >= y) as i64))),
+        },
         _ => return Err(TirError::new(TirErrorKind::Shape, format!("{name} is not binary"))),
     };
     if !ok {
         return overflow(&format!("{name}: past i128"));
     }
     narrow(res, out, node.store, node.check_out.then_some(node.out.dtype))
-}
-
-#[inline(always)]
-fn holds<W: Wide>(c: Cmp, a: W, b: W) -> bool {
-    match c {
-        Cmp::Eq => a == b,
-        Cmp::Ne => a != b,
-        Cmp::Lt => a < b,
-        Cmp::Le => a <= b,
-        Cmp::Gt => a > b,
-        Cmp::Ge => a >= b,
-    }
 }
 
 /// The class of a failed `Div`: that of its first failing element in output order, as the
@@ -261,8 +254,30 @@ where
     res.resize(n, W::default());
     let zero = W::default();
     Joint::<3>::new(out_shape, [&sc[..r], &sa[..r], &sb[..r]]).for_each(|pos, [cb, ab, bb], len, [ic, ia, ib]| {
-        for (i, o) in res[pos..pos + len].iter_mut().enumerate() {
-            *o = if cv[cb + i * ic] != zero { av[ab + i * ia] } else { bv[bb + i * ib] };
+        let o = &mut res[pos..pos + len];
+        match (ic, ia, ib) {
+            (1, 1, 1) => {
+                for (((r, c), a), b) in o.iter_mut().zip(&cv[cb..cb + len]).zip(&av[ab..ab + len]).zip(&bv[bb..bb + len]) {
+                    *r = if *c != zero { *a } else { *b };
+                }
+            }
+            (1, 1, 0) => {
+                let b = bv[bb];
+                for ((r, c), a) in o.iter_mut().zip(&cv[cb..cb + len]).zip(&av[ab..ab + len]) {
+                    *r = if *c != zero { *a } else { b };
+                }
+            }
+            (1, 0, 1) => {
+                let a = av[ab];
+                for ((r, c), b) in o.iter_mut().zip(&cv[cb..cb + len]).zip(&bv[bb..bb + len]) {
+                    *r = if *c != zero { a } else { *b };
+                }
+            }
+            _ => {
+                for (i, r) in o.iter_mut().enumerate() {
+                    *r = if cv[cb + i * ic] != zero { av[ab + i * ia] } else { bv[bb + i * ib] };
+                }
+            }
         }
     });
     narrow(res, out, node.store, node.check_out.then_some(node.out.dtype))
@@ -300,52 +315,87 @@ where
     match &node.prim {
         Prim::Cast => write_mapped(out, dt, xv, check, |v| v),
         Prim::Clamp { lo, hi } => {
-            let (lo, hi) = (*lo as i128, *hi as i128);
-            write_mapped(out, dt, xv, None, move |v| v.clamp_i128(lo, hi))
+            let (lo, hi) = (W::sat_from_i128(*lo as i128), W::sat_from_i128(*hi as i128));
+            write_mapped(out, dt, xv, None, move |v| v.clamp(lo, hi))
         }
         Prim::StateWrite { state } => {
             let StateKind::Fixed { lo, hi } = states[*state as usize].kind else {
                 return Err(TirError::new(TirErrorKind::Shape, "StateWrite on a Hist state"));
             };
-            let (lo, hi) = (lo as i128, hi as i128);
-            write_mapped(out, dt, xv, None, move |v| v.clamp_i128(lo, hi))
+            let (lo, hi) = (W::sat_from_i128(lo as i128), W::sat_from_i128(hi as i128));
+            write_mapped(out, dt, xv, None, move |v| v.clamp(lo, hi))
         }
         Prim::Log2Floor => write_mapped(out, dt, xv, check, W::log2_floor),
-        Prim::IntExp => write_mapped(out, dt, xv, check, W::int_exp),
-        Prim::IntRsqrt => write_mapped(out, dt, xv, check, W::int_rsqrt),
-        Prim::IntLn => write_mapped(out, dt, xv, check, W::int_ln),
+        // A transcendental costs ~10 ns an element: the pool pays for itself far below the
+        // threshold of the one-instruction ops.
+        Prim::IntExp => write_mapped_par(out, dt, xv, check, W::int_exp),
+        Prim::IntRsqrt => write_mapped_par(out, dt, xv, check, W::int_rsqrt),
+        Prim::IntLn => write_mapped_par(out, dt, xv, check, W::int_ln),
         other => Err(TirError::new(TirErrorKind::Shape, format!("{} is not unary", other.name()))),
     }
 }
 
 /// `out[i] = f(x[i])`, stored as `store`, checking the declared dtype when `check` names it.
 fn write_mapped<W: Wide>(out: &mut Buf, store: DType, x: &[W], check: Option<DType>, f: impl Fn(W) -> W + Sync) -> TirResult<()> {
-    crate::with_dtype!(store, T => write_mapped_t::<W, T>(out_vec::<T>(out), x, check, f))
+    crate::with_dtype!(store, T => write_mapped_t::<W, T>(out_vec::<T>(out), x, check, f, *super::PAR_ELEMS))
+}
+
+/// [`write_mapped`] for an expensive `f`: split across the pool from a few thousand elements.
+fn write_mapped_par<W: Wide>(out: &mut Buf, store: DType, x: &[W], check: Option<DType>, f: impl Fn(W) -> W + Sync) -> TirResult<()> {
+    let at = (*super::PAR_ELEMS).min(4096);
+    crate::with_dtype!(store, T => write_mapped_t::<W, T>(out_vec::<T>(out), x, check, f, at))
 }
 
 #[inline(always)]
-fn write_mapped_t<W: Wide, T: Elem>(o: &mut Vec<T>, x: &[W], check: Option<DType>, f: impl Fn(W) -> W + Sync) -> TirResult<()> {
+fn write_mapped_t<W: Wide, T: Elem>(
+    o: &mut Vec<T>,
+    x: &[W],
+    check: Option<DType>,
+    f: impl Fn(W) -> W + Sync,
+    par_at: usize,
+) -> TirResult<()> {
     use rayon::prelude::*;
-    o.clear();
-    o.resize(x.len(), T::default());
-    let (lo, hi) = check.map(W::bounds).unwrap_or((W::WMIN, W::WMAX));
-    let body = |o: &mut [T], x: &[W]| -> bool {
-        let mut bad = false;
-        for (r, v) in o.iter_mut().zip(x) {
-            let y = f(*v);
-            bad |= y < lo || y > hi;
-            *r = T::from_i128(y.to_i128());
+    let par = x.len() >= par_at;
+    match check {
+        None => {
+            if par {
+                o.clear();
+                o.resize(x.len(), T::default());
+                let chunk = super::par_chunk(x.len());
+                o.par_chunks_mut(chunk).zip(x.par_chunks(chunk)).for_each(|(o, x)| {
+                    for (r, v) in o.iter_mut().zip(x) {
+                        *r = f(*v).to_t::<T>();
+                    }
+                });
+            } else {
+                o.clear();
+                o.extend(x.iter().map(|v| f(*v).to_t::<T>()));
+            }
+            Ok(())
         }
-        bad
-    };
-    let bad = if x.len() >= *super::PAR_ELEMS {
-        let chunk = super::par_chunk(x.len());
-        o.par_chunks_mut(chunk).zip(x.par_chunks(chunk)).map(|(o, x)| body(o, x)).reduce(|| false, |a, b| a || b)
-    } else {
-        body(o, x)
-    };
-    if bad {
-        return overflow(&format!("a result outside {}", check.map(|d| d.name()).unwrap_or("its dtype")));
+        Some(dt) => {
+            let (lo, hi) = W::bounds(dt);
+            let body = |o: &mut [T], x: &[W]| -> bool {
+                let mut bad = false;
+                for (r, v) in o.iter_mut().zip(x) {
+                    let y = f(*v);
+                    bad |= y < lo || y > hi;
+                    *r = y.to_t::<T>();
+                }
+                bad
+            };
+            o.clear();
+            o.resize(x.len(), T::default());
+            let bad = if par {
+                let chunk = super::par_chunk(x.len());
+                o.par_chunks_mut(chunk).zip(x.par_chunks(chunk)).map(|(o, x)| body(o, x)).reduce(|| false, |a, b| a || b)
+            } else {
+                body(o, x)
+            };
+            if bad {
+                return overflow(&format!("a result outside {}", dt.name()));
+            }
+            Ok(())
+        }
     }
-    Ok(())
 }

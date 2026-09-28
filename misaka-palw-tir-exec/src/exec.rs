@@ -166,19 +166,17 @@ impl HistBuf {
 }
 
 fn copy_row<T: Elem>(dst: &mut [T], at: usize, row: &Opd<'_>) {
-    match T::slice_of(row.data) {
-        Some(src) => {
-            let mut i = at;
-            row.layout.for_each_run(|s, len, st| {
-                for t in 0..len {
-                    dst[i + t] = src[s + t * st];
-                }
-                i += len;
-            });
-        }
-        // The type rule makes the row the state's dtype; a mismatch cannot reach here.
-        None => debug_assert!(false, "a history row of another dtype"),
-    }
+    // The row's declared dtype is the state's (type rule); its storage may be narrower (a view of
+    // an operand of another width whose values provably fit), so it converts.
+    with_slice!(row.data, src => {
+        let mut i = at;
+        row.layout.for_each_run(|s, len, st| {
+            for t in 0..len {
+                dst[i + t] = T::from_i128(src[s + t * st].to_i128());
+            }
+            i += len;
+        });
+    });
 }
 
 /// Resolve a declared shape at the running `H`.
@@ -317,16 +315,32 @@ pub(crate) fn eval_compute(
             misc::iota(node, out_shape, out)?;
             Ok(None)
         }
+        Prim::Cast | Prim::Clamp { .. } if node.identity && rd.data(v(0)?.src)?.dtype() == node.store => {
+            // The value cannot change (the input interval lies inside the clamp, or the cast
+            // cannot fail) and is already held in this node's storage type: the output is the
+            // input.
+            Ok(Some(v(0)?))
+        }
+        Prim::Select => {
+            let c = o(0)?;
+            if c.numel() == 1 && !node.check_out {
+                // One condition for the whole output: it is one operand, whole, when its shape is
+                // the output's and it is held in this node's storage type (the first-position lane
+                // choosing a parameter set).
+                let pick = if c.data.get(c.layout.offset) != 0 { v(1)? } else { v(2)? };
+                if pick.layout.shape() == out_shape && rd.data(pick.src)?.dtype() == node.store {
+                    return Ok(Some(pick));
+                }
+            }
+            elementwise::select(node, &c, &o(1)?, &o(2)?, out_shape, out, scratch)?;
+            Ok(None)
+        }
         Prim::Cast | Prim::Clamp { .. } | Prim::Log2Floor | Prim::IntExp | Prim::IntRsqrt | Prim::IntLn => {
             elementwise::unary(node, &o(0)?, out, scratch, &plan.program.states)?;
             Ok(None)
         }
         Prim::Add | Prim::Sub | Prim::Mul | Prim::Div { .. } | Prim::Compare { .. } => {
             elementwise::binary(node, &o(0)?, &o(1)?, out_shape, out, scratch)?;
-            Ok(None)
-        }
-        Prim::Select => {
-            elementwise::select(node, &o(0)?, &o(1)?, &o(2)?, out_shape, out, scratch)?;
             Ok(None)
         }
         Prim::MatMul => {
@@ -390,6 +404,8 @@ struct WorkBufs {
     inputs: [u32; 2],
     /// Per primitive tag: nanoseconds and node evaluations (when profiling).
     profile: Option<Box<[(u64, u64); 25]>>,
+    /// Per `(block, node)`: nanoseconds (when profiling).
+    node_profile: Vec<Vec<u64>>,
 }
 
 /// Runs one program over positions, holding its run state.
@@ -425,6 +441,7 @@ impl<'a> TirExecutor<'a> {
                 logits_shape: Vec::new(),
                 inputs: [0, 0],
                 profile: None,
+                node_profile: (0..nb).map(|b| vec![0; plan.blocks[b].nodes.len()]).collect(),
             },
         })
     }
@@ -446,6 +463,11 @@ impl<'a> TirExecutor<'a> {
     /// `(nanoseconds, evaluations)` per primitive tag since profiling was switched on.
     pub fn profile(&self) -> Option<&[(u64, u64); 25]> {
         self.work.profile.as_deref()
+    }
+
+    /// Nanoseconds per `(block, node)` since profiling was switched on.
+    pub fn node_profile(&self) -> &[Vec<u64>] {
+        &self.work.node_profile
     }
 
     /// The last successful step's logits.
@@ -593,9 +615,11 @@ impl<'a> TirExecutor<'a> {
                 };
                 vals[ni] = val;
                 if let (Some(t0), Some(prof)) = (started, work.profile.as_mut()) {
+                    let ns = t0.elapsed().as_nanos() as u64;
                     let e = &mut prof[node.prim.tag() as usize];
-                    e.0 += t0.elapsed().as_nanos() as u64;
+                    e.0 += ns;
                     e.1 += 1;
+                    work.node_profile[block as usize][ni] += ns;
                 }
                 if node.commit || every {
                     let rd = Reader {

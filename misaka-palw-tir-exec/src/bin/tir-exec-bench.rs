@@ -304,6 +304,14 @@ fn main() {
         kernel(&g);
         return;
     }
+    if args.iter().any(|a| a == "--elementwise") {
+        elementwise_probe(&g);
+        return;
+    }
+    if args.iter().any(|a| a == "--mirror") {
+        mirror(&g, prefill, decode, profile);
+        return;
+    }
     let t = Instant::now();
     let (program, fills) = qwen2_program(&g);
     let plan = TirPlan::compile(&program).expect("the program validates");
@@ -404,6 +412,48 @@ fn kernel(g: &Geo) {
     }
 }
 
+/// A `[ff]` Clamp alone, and the same right after a pooled GEMV (rayon workers still spinning).
+fn elementwise_probe(g: &Geo) {
+    use misaka_palw_tir::Prim;
+    use misaka_palw_tir_exec::kernels::{Opd, Scratch, elementwise, matmul};
+    use misaka_palw_tir_exec::layout::Layout;
+    use misaka_palw_tir_exec::plan::{Acc, NodePlan};
+    use misaka_palw_tir_exec::{Buf, Slice};
+    let n = g.ff as usize;
+    let x: Vec<i8> = (0..n).map(|i| (i % 50) as i8).collect();
+    let xo = Opd { data: Slice::I8(&x), layout: Layout::contiguous(&[n]) };
+    let mut node = NodePlan::for_kernel(Prim::Clamp { lo: 0, hi: 62 }, DType::Idx, Acc::Fast64);
+    node.out = TensorType::fixed(DType::Idx, &[n as u32]);
+    let mut out = Buf::default();
+    let mut scratch = Scratch::default();
+    let iters = 20_000;
+    let t = Instant::now();
+    for _ in 0..iters {
+        elementwise::unary(&node, &xo, &mut out, &mut scratch, &[]).unwrap();
+    }
+    println!("Clamp [{n}] i8→idx alone: {:.2} ns/element", t.elapsed().as_secs_f64() * 1e9 / (iters * n) as f64);
+    let mut rng = Rng(7);
+    let (rows, cols) = (g.ff as usize, g.d as usize);
+    let w: Vec<i8> = (0..rows * cols).map(|_| (rng.next() % 255) as i8).collect();
+    let xs: Vec<i16> = (0..cols).map(|_| (rng.next() % 32767) as i16).collect();
+    let a = Opd { data: Slice::I8(&w), layout: Layout::contiguous(&[rows, cols]) };
+    let b = Opd { data: Slice::I16(&xs), layout: Layout::contiguous(&[cols, 1]) };
+    let mm = NodePlan::for_kernel(Prim::MatMul, DType::I64, Acc::Fast64);
+    let mut mo = Buf::default();
+    let (mut t_mm, mut t_ew) = (0f64, 0f64);
+    for _ in 0..200 {
+        let s = Instant::now();
+        matmul::matmul(&mm, &a, &b, &[rows, 1], &mut mo, &mut scratch).unwrap();
+        t_mm += s.elapsed().as_secs_f64();
+        let s = Instant::now();
+        for _ in 0..10 {
+            elementwise::unary(&node, &xo, &mut out, &mut scratch, &[]).unwrap();
+        }
+        t_ew += s.elapsed().as_secs_f64();
+    }
+    println!("after each pooled GEMV: Clamp {:.2} ns/element (GEMV {:.3} ms)", t_ew * 1e9 / (200 * 10 * n) as f64, t_mm * 1e3 / 200.0);
+}
+
 #[cfg(feature = "legacy-bench")]
 fn legacy_kernel(w: &[i8], x: &[i16], rows: usize, _cols: usize, iters: usize) {
     use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
@@ -470,6 +520,139 @@ fn legacy(g: &Geo, prefill: usize, decode: usize) {
         decode as f64 / dec.as_secs_f64(),
         rss_mib().unwrap_or(0)
     );
+}
+
+/// **The same function on both engines**: the legacy A16 artifact at this geometry, the TIR program
+/// that mirrors `A16Engine::forward_token` (`misaka_palw_base0::tir_a16`, tir/lower F3) over the
+/// converted tensors, and every logit of every position compared — then the speed of each.
+#[cfg(feature = "legacy-bench")]
+fn mirror(g: &Geo, prefill: usize, decode: usize, profile: bool) {
+    use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
+    use misaka_palw_base0::engine_a16::{A16Cache, A16Engine, derived_a16_store};
+    use misaka_palw_base0::tir_a16::{a16_mirror_program, a16_tir_tensor_bytes};
+    let shape = Base0ShapeV1 {
+        n_layers: g.layers as usize,
+        n_heads: g.heads as usize,
+        n_kv_heads: g.kv as usize,
+        d_head: g.hd as usize,
+        d_ff: g.ff as usize,
+        vocab: g.vocab as usize,
+        max_position: (prefill + decode).next_power_of_two().max(64),
+        ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+        eps_q: 1,
+    };
+    let t = Instant::now();
+    let artifact = Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+        .expect("a valid shape")
+        .with_a16_params(derived_a16_store(&shape))
+        .expect("the derived store");
+    let program = a16_mirror_program(&shape, HISTORY_BOUND_V1_SMALL).expect("the mirror program");
+    let bytes = a16_tir_tensor_bytes(&artifact, &program).expect("the conversion");
+    println!(
+        "legacy artifact derived and converted in {:.1} s; mirror program {} bytes, {} nodes",
+        t.elapsed().as_secs_f64(),
+        program.encode().len(),
+        program.blocks.iter().map(|b| b.nodes.len()).sum::<usize>()
+    );
+    let tokens: Vec<usize> = (0..prefill + decode).map(|i| (i * 7919 + 1013) % shape.vocab).collect();
+    // The legacy engine first; its logits kept, its artifact dropped before the backend runs.
+    let mut want: Vec<Vec<i32>> = Vec::with_capacity(tokens.len());
+    let legacy_decode = {
+        let engine = A16Engine::new(&artifact).expect("the store resolves");
+        let mut cache = A16Cache::new(shape.n_layers);
+        let mut times = Vec::new();
+        for (pos, tok) in tokens.iter().enumerate() {
+            let s = Instant::now();
+            want.push(engine.forward_token(&mut cache, *tok, pos).expect("a legacy step"));
+            if pos >= prefill {
+                times.push(s.elapsed().as_secs_f64());
+            }
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        times
+    };
+    drop(artifact);
+    let plan = TirPlan::compile(&program).expect("the mirror program validates");
+    let mut params = TirParams::new(&plan);
+    for ((j, layer), b) in &bytes {
+        let d = &program.params[*j as usize];
+        params
+            .insert(&plan, *j, *layer, ParamData::from_le_bytes(d.dtype, b).expect("whole elements"))
+            .expect("a param of its declaration");
+    }
+    let mut exec = TirExecutor::new(&plan, &params).expect("every param bound");
+    exec.set_profile(profile);
+    let mut times = Vec::new();
+    for (pos, tok) in tokens.iter().enumerate() {
+        let s = Instant::now();
+        exec.step(*tok as u32, &mut NoSink).expect("a TIR step");
+        if pos >= prefill {
+            times.push(s.elapsed().as_secs_f64());
+        }
+        let (_, got) = exec.logits();
+        let got: Vec<i128> = got.to_i128s();
+        let w: Vec<i128> = want[pos].iter().map(|v| *v as i128).collect();
+        assert_eq!(got, w, "position {pos}: the TIR backend's logits differ from the legacy engine's");
+    }
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!("logits identical to the legacy engine at all {} positions ({} logits each)", tokens.len(), shape.vocab);
+    let med = |t: &[f64]| t[t.len() / 2] * 1e3;
+    println!(
+        "decode median: legacy A16 engine {:.1} ms/token ({:.2} tok/s), TIR backend on the mirror program {:.1} ms/token ({:.2} tok/s) → {:.2}× ; RSS {} MiB",
+        med(&legacy_decode),
+        1e3 / med(&legacy_decode),
+        med(&times),
+        1e3 / med(&times),
+        med(&times) / med(&legacy_decode),
+        rss_mib().unwrap_or(0)
+    );
+    if std::env::var_os("TIR_EXEC_NODE_PROFILE").is_some() {
+        let mut rows: Vec<(u64, usize, usize)> = Vec::new();
+        for (bi, b) in exec.node_profile().iter().enumerate() {
+            for (ni, ns) in b.iter().enumerate() {
+                rows.push((*ns, bi, ni));
+            }
+        }
+        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        let refined = plan.refine(&|j, l| params.range(j, l));
+        for (ns, bi, ni) in rows.into_iter().take(25) {
+            let occ = plan.occurrences.iter().position(|(b, _)| *b as usize == bi).unwrap();
+            let np = &refined[occ].nodes[ni];
+            println!(
+                "  block {bi} node {ni:3} {:>10} {:7.3} ms/pos  out {:?} {:?} store {:?} identity {} work {:?} check {}",
+                np.prim.name(),
+                ns as f64 / 1e6 / tokens.len() as f64,
+                np.out.dtype,
+                np.out.shape,
+                np.store,
+                np.identity,
+                np.work,
+                np.check_out
+            );
+        }
+    }
+    if let Some(prof) = exec.profile() {
+        let total: u64 = prof.iter().map(|e| e.0).sum();
+        let n = tokens.len() as f64;
+        let mut rows: Vec<(usize, u64, u64)> = prof.iter().enumerate().filter(|(_, e)| e.1 > 0).map(|(i, e)| (i, e.0, e.1)).collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        println!("TIR profile over all {} positions (per position):", tokens.len());
+        for (tag, ns, count) in rows.into_iter().take(10) {
+            println!(
+                "  {:>10} {:7.2} ms {:5.1}%  {:6} nodes",
+                misaka_palw_tir::prim::PRIM_NAMES_V1[tag],
+                ns as f64 / 1e6 / n,
+                100.0 * ns as f64 / total as f64,
+                (count as f64 / n) as u64
+            );
+        }
+    }
+}
+
+#[cfg(not(feature = "legacy-bench"))]
+fn mirror(_: &Geo, _: usize, _: usize, _: bool) {
+    eprintln!("--mirror needs `--features legacy-bench` (the legacy engine and its converter live in misaka-palw-base0)");
+    std::process::exit(2);
 }
 
 #[cfg(not(feature = "legacy-bench"))]

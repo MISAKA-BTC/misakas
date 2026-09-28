@@ -82,6 +82,12 @@ pub trait Wide: Elem + std::ops::Add<Output = Self> {
     fn cmul(self, o: Self) -> Option<Self>;
     /// `self` clamped into an `i128` interval.
     fn clamp_i128(self, lo: i128, hi: i128) -> Self;
+    /// An `i128` bound as this width, saturated (a bound past the width cannot bind a value of it).
+    fn sat_from_i128(v: i128) -> Self {
+        Self::from_i128(v.clamp(Self::WMIN.to_i128(), Self::WMAX.to_i128()))
+    }
+    /// Convert to a narrower (or equal) element type; the caller proved the value fits.
+    fn to_t<T: Elem>(self) -> T;
     /// `round_rule(x / d)` for `d ≥ 1` (checked by the caller).
     fn div_rule(x: Self, d: Self, rule: Rounding) -> Self;
     /// `round_rule(x / 2^s)`.
@@ -136,6 +142,10 @@ impl Wide for i64 {
         let lo = lo.clamp(i64::MIN as i128, i64::MAX as i128) as i64;
         let hi = hi.clamp(i64::MIN as i128, i64::MAX as i128) as i64;
         self.clamp(lo, hi)
+    }
+    #[inline(always)]
+    fn to_t<T: Elem>(self) -> T {
+        T::from_i64(self)
     }
     #[inline(always)]
     fn div_rule(x: i64, d: i64, rule: Rounding) -> i64 {
@@ -201,6 +211,10 @@ impl Wide for i128 {
     #[inline(always)]
     fn clamp_i128(self, lo: i128, hi: i128) -> Self {
         self.clamp(lo, hi)
+    }
+    #[inline(always)]
+    fn to_t<T: Elem>(self) -> T {
+        T::from_i128(self)
     }
     #[inline(always)]
     fn div_rule(x: i128, d: i128, rule: Rounding) -> i128 {
@@ -299,12 +313,12 @@ pub fn narrow<W: Wide>(res: &mut Vec<W>, out: &mut Buf, store: DType, check: Opt
             let chunk = par_chunk(res.len());
             o.par_chunks_mut(chunk).zip(res.par_chunks(chunk)).for_each(|(o, r)| {
                 for (d, v) in o.iter_mut().zip(r) {
-                    *d = T::from_i128(v.to_i128());
+                    *d = v.to_t::<T>();
                 }
             });
         } else {
             for (d, v) in o.iter_mut().zip(res.iter()) {
-                *d = T::from_i128(v.to_i128());
+                *d = v.to_t::<T>();
             }
         }
     });
