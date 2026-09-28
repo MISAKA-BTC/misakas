@@ -107,7 +107,7 @@ fn reshape_compatible(a: &[Dim], b: &[Dim]) -> bool {
 }
 
 /// Infer (or, for the primitives whose target IS the declared type, check) one node's type.
-fn check_node_type(prim: &Prim, ins: &[TensorType], out: &TensorType, states: &[StateDecl]) -> Result<(), String> {
+pub(crate) fn check_node_type(prim: &Prim, ins: &[TensorType], out: &TensorType, states: &[StateDecl]) -> Result<(), String> {
     let same_dtype = |t: &TensorType| -> Result<(), String> {
         if t.dtype != out.dtype {
             Err(format!("out dtype {} must equal the input's {}", out.dtype.name(), t.dtype.name()))

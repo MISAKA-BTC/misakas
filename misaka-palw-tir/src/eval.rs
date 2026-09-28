@@ -276,3 +276,38 @@ pub(crate) fn eval_prim(
     debug_assert_eq!(data.len(), n_out);
     Ok(Tensor { dtype: out_dtype, shape: out_shape.to_vec(), data })
 }
+
+/// **One stateless primitive on concrete operands** — the unit the golden vectors pin
+/// (`consensus-vectors/tir-v1/primitives/`). Total: the operands' types are checked by the same
+/// rules [`crate::validate::validate`] applies to a node (with every dimension constant), then the
+/// primitive runs. `StateWrite` and `HistAppend` need a program and are refused here.
+pub fn eval_primitive(prim: &Prim, inputs: &[Tensor], out_dtype: DType, out_shape: &[usize]) -> TirResult<Tensor> {
+    use crate::types::{Dim, TensorType};
+    if matches!(prim, Prim::StateWrite { .. } | Prim::HistAppend { .. }) {
+        return err(TirErrorKind::Shape, "state primitives are evaluated inside a program");
+    }
+    let (lo, hi) = prim.arity();
+    if inputs.len() < lo || inputs.len() > hi {
+        return err(TirErrorKind::Shape, format!("{}: {} inputs, want {lo}..={hi}", prim.name(), inputs.len()));
+    }
+    let fixed = |dtype: DType, shape: &[usize]| -> TirResult<TensorType> {
+        if shape.len() > crate::types::MAX_RANK || shape.iter().any(|d| *d == 0 || *d > crate::types::MAX_DIM as usize) {
+            return err(TirErrorKind::Shape, format!("shape {shape:?} is not a legal tensor shape"));
+        }
+        Ok(TensorType::new(dtype, shape.iter().map(|d| Dim::Fixed(*d as u32)).collect()))
+    };
+    let mut ins = Vec::with_capacity(inputs.len());
+    for t in inputs {
+        if t.data.len() != element_count(&t.shape) || t.data.iter().any(|v| !t.dtype.contains(*v)) {
+            return err(TirErrorKind::Operand, "an operand is not a tensor of its dtype");
+        }
+        ins.push(fixed(t.dtype, &t.shape)?);
+    }
+    let out = fixed(out_dtype, out_shape)?;
+    if out.elements_at(1) > crate::types::MAX_ELEMENTS {
+        return err(TirErrorKind::Shape, "more than 2^28 output elements");
+    }
+    crate::validate::check_node_type(prim, &ins, &out, &[]).map_err(|m| crate::error::TirError::new(TirErrorKind::Shape, m))?;
+    let refs: Vec<&Tensor> = inputs.iter().collect();
+    eval_prim(prim, &refs, out_dtype, out_shape, &[])
+}
