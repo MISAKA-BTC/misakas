@@ -35,8 +35,12 @@ pub const MAX_JOB_SCALARS: usize = 16;
 pub const MAX_TEMPLATE_TOKENS: usize = 4096;
 /// Job images a pipeline may bind (`Binding::JobImage { index }`, `index < 16`; RFC-0003 §II.4).
 pub const MAX_JOB_IMAGES: usize = 16;
+/// Finalized claims a pipeline may read (`TokenSource::FinalizedOutput { claim }`, `claim < 8`;
+/// RFC-0004 §7.2 — a pairwise judge reads two).
+pub const MAX_FINALIZED_CLAIMS: u8 = 8;
 
-/// A stage's trip count `T`. Tags: `Fixed 0`, `JobSteps 1`, `TokenCount 2`, `TextStream 3`.
+/// A stage's trip count `T`. Tags: `Fixed 0`, `JobSteps 1`, `TokenCount 2`, `TextStream 3`,
+/// `Decode 4`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum TripRule {
     /// Always `n` positions (a decoder: `n = 1`).
@@ -50,9 +54,19 @@ pub enum TripRule {
     /// `T = |prompt| + max(|generated|, 1) − 1`. Only a pipeline's output stage, a `Logits`
     /// program, has it (NF-P9′).
     TextStream,
+    /// **A decode stage** (RFC-0004 §7.2, in RFC-0003's pipeline format): the text stage's stream
+    /// and trip count, in a stage that is NOT the output — a `Logits` program whose run ends before
+    /// the stages after it run. What it decoded (or, teacher-forced, was given) is the job's
+    /// `generated` list, which a later stage reads through [`TokenSource::Generated`]; its rows, to a
+    /// later `StageRows` / `StageRowCount`, are its consumed logits rows — position `|prompt| − 1`
+    /// on, one per generated id, row `r` the logits `generated[r]` was selected from. At most one
+    /// stream stage (this or `TextStream`) per pipeline.
+    Decode,
 }
 
-/// Which of the job's token lists a template wraps. Tags: `Prompt 0`, `Negative 1`, `Source 2`.
+/// Which of the job's token lists a template wraps. Tags: `Prompt 0`, `Negative 1`, `Source 2`,
+/// `Generated 3`, `Key 4`, `FinalizedOutput 5`. Appended: a pipeline that names none of the later
+/// ones encodes as before.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum TokenSource {
     Prompt,
@@ -61,6 +75,22 @@ pub enum TokenSource {
     /// second list beside the decoder's stream. Appended: every pipeline that names no source
     /// encodes as before.
     Source,
+    /// **What the pipeline's decode stage produced** (RFC-0004 §7.2): the job's `generated` list — a
+    /// claim's committed ids, or a teacher-forced job's given ones. Read only by a stage after the
+    /// [`TripRule::Decode`] stage.
+    Generated,
+    /// **The item's key** (RFC-0004 §7.3): the ids an exact-match scoring stage compares an answer
+    /// span with — the job's `key` list, a disclosed key's ids.
+    Key,
+    /// **A final claim's committed output** (RFC-0004 §7.2's `FinalizedOutput { claim, stage }`):
+    /// the generated ids of the job's `claim`-th finalized claim, from that claim's stream stage
+    /// `stage` — a pairwise judge reads the parent's and a candidate's generations without running
+    /// them again. The job carries the ids; the chain holds their commitment and a court opens the
+    /// ids against it.
+    FinalizedOutput {
+        claim: u8,
+        stage: u8,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -164,6 +194,10 @@ pub struct PipelineJob {
     /// The job's source ids ([`TokenSource::Source`]): an encoder–decoder's source text. Empty for
     /// a pipeline that reads none.
     pub source: Vec<u32>,
+    /// The item's key ids ([`TokenSource::Key`], RFC-0004 §7.3). Empty for a pipeline that reads none.
+    pub key: Vec<u32>,
+    /// The finalized claims' generated ids ([`TokenSource::FinalizedOutput`]), by `(claim, stage)`.
+    pub finalized: BTreeMap<(u8, u8), Vec<u32>>,
 }
 
 /// **The text stage's token run**: the prompt ids, then every generated id but the last (never fed
@@ -171,6 +205,23 @@ pub struct PipelineJob {
 pub fn text_stream_run(job: &PipelineJob) -> Vec<u32> {
     let fed = job.generated.len().saturating_sub(1);
     job.prompt.iter().chain(&job.generated[..fed]).copied().collect()
+}
+
+/// Is `trip` a stream stage's — the text stage's (`TextStream`) or a decode stage's (`Decode`)?
+pub fn is_stream(trip: TripRule) -> bool {
+    matches!(trip, TripRule::TextStream | TripRule::Decode)
+}
+
+/// **The pipeline's stream stage**, if it has one: its `TextStream` or `Decode` stage (at most one,
+/// NF-P9′).
+pub fn stream_stage(p: &TirPipelineV1) -> Option<usize> {
+    p.stages.iter().position(|st| is_stream(st.trip))
+}
+
+/// **The position a stage's rows start at, as an edge reads them**: `|prompt| − 1` for a stream stage
+/// (its consumed logits rows), 0 for every other stage (every position is a row).
+pub fn stage_rows_from(st: &StageDecl, job: &PipelineJob) -> u32 {
+    if is_stream(st.trip) { (job.prompt.len() as u32).saturating_sub(1) } else { 0 }
 }
 
 /// A selector's answer after a text-stage position whose logits the decode consumes (RFC-0001 §A,
@@ -233,6 +284,20 @@ fn check_rule(what: &str, rule: &TokenRule, token_bound: u32) -> TirResult<()> {
     Ok(())
 }
 
+/// Every token rule a stage reads: its token run's, then its bindings' (in order).
+fn stage_rules(st: &StageDecl) -> impl Iterator<Item = &TokenRule> {
+    st.tokens.iter().chain(st.bind.iter().filter_map(|b| match b {
+        Binding::JobTokens { rule } | Binding::JobTokenCount { rule } => Some(rule),
+        _ => None,
+    }))
+}
+
+/// Does an edge read rows of this upstream: a `Rows` stage's, or a decode stage's logits rows?
+fn rows_of(us: &StageDecl, up: &TirProgramV2) -> bool {
+    matches!(up.output, OutputDecl::Rows { .. })
+        || (matches!(us.trip, TripRule::Decode) && matches!(up.output, OutputDecl::Logits { .. }))
+}
+
 /// What validation learned: each stage's external inputs, in order, and the job's image slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PipelineInfo {
@@ -261,8 +326,24 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
     let mut consumed = vec![false; p.stages.len()];
     let mut externals = Vec::with_capacity(p.stages.len());
     let mut images: BTreeMap<u8, [u32; 2]> = BTreeMap::new();
+    // RFC-0004 §7.2: the decode stage, whose `generated` ids a later stage may read.
+    let decode = p.stages.iter().position(|st| matches!(st.trip, TripRule::Decode));
     for (s, st) in p.stages.iter().enumerate() {
         let what = format!("stage {s} ({})", st.name);
+        // The token sources a stage's rules read: `Generated` only after the decode stage (the ids
+        // exist once it has run), a finalized claim below the cap.
+        for rule in stage_rules(st) {
+            match rule.source {
+                TokenSource::Generated => match decode {
+                    Some(d) if d < s => consumed[d] = true,
+                    _ => return nf(format!("{what}: only a stage after the pipeline's Decode stage reads its generated ids")),
+                },
+                TokenSource::FinalizedOutput { claim, .. } if claim >= MAX_FINALIZED_CLAIMS => {
+                    return nf(format!("{what}: a finalized claim is below {MAX_FINALIZED_CLAIMS}"));
+                }
+                _ => {}
+            }
+        }
         if st.name.is_empty() || st.name.len() > MAX_NAME_BYTES || !names.insert(st.name.as_str()) {
             return nf(format!("{what}: stage names are 1..={MAX_NAME_BYTES} bytes and unique"));
         }
@@ -284,11 +365,11 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
                     return nf(format!("{what}: a padded token run has max_trip = its pad length"));
                 }
             }
-            (TripRule::TextStream, None, true) => {}
+            (TripRule::TextStream | TripRule::Decode, None, true) => {}
             _ => {
                 return nf(format!(
                     "{what}: Fixed (with max_trip = n) and JobSteps stages read no token; a TokenCount stage reads the token and has a \
-                     token rule; a TextStream stage reads the token and has none"
+                     token rule; a TextStream or Decode stage reads the token and has none"
                 ));
             }
         }
@@ -335,8 +416,8 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
                 Binding::StageRows { stage, drop, pad_to } => {
                     let (us, up) = upstream(*stage)?;
                     consumed[*stage as usize] = true;
-                    if !matches!(up.output, OutputDecl::Rows { .. }) {
-                        return nf(format!("{edge}: StageRows reads a Rows stage"));
+                    if !rows_of(us, up) {
+                        return nf(format!("{edge}: StageRows reads a Rows stage or a Decode stage's logits rows"));
                     }
                     let mut shape = vec![*pad_to];
                     shape.extend(output_shape(up));
@@ -370,8 +451,8 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
                 Binding::StageRowCount { stage, drop } => {
                     let (us, up) = upstream(*stage)?;
                     consumed[*stage as usize] = true;
-                    if !matches!(up.output, OutputDecl::Rows { .. }) {
-                        return nf(format!("{edge}: StageRowCount counts a Rows stage"));
+                    if !rows_of(us, up) {
+                        return nf(format!("{edge}: StageRowCount counts a Rows stage or a Decode stage's logits rows"));
                     }
                     if d.dtype != DType::Idx || !d.shape.is_empty() {
                         return nf(format!("{edge}: a row count is a rank-0 idx"));
@@ -413,16 +494,27 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
         externals.push(ext);
     }
     // NF-P9 (with NF-P9′): the output stage ends in a tensor or is the text stage — a Logits program
-    // over the text stream — and no other stage is either; no other stage is dead.
+    // over the text stream — and no other stage is either; a Logits program elsewhere is the decode
+    // stage (RFC-0004 §7.2), which is never the output; at most one stream stage; no other stage is
+    // dead.
     for (s, st) in p.stages.iter().enumerate() {
         let logits = matches!(programs[st.program as usize].output, OutputDecl::Logits { .. });
-        let text = matches!(st.trip, TripRule::TextStream);
-        if (logits || text) && !(logits && text && s == p.output_stage as usize) {
+        let output = s == p.output_stage as usize;
+        let ok = match st.trip {
+            TripRule::TextStream => logits && output,
+            TripRule::Decode => logits && !output,
+            _ => !logits,
+        };
+        if !ok {
             return nf(format!(
-                "stage {s} ({}): a Logits program is the text stage — the output stage, over TextStream — and only it is",
+                "stage {s} ({}): a Logits program is the text stage — the output stage, over TextStream — or the Decode stage, \
+                 which is not the output, and only these are",
                 st.name
             ));
         }
+    }
+    if p.stages.iter().filter(|st| is_stream(st.trip)).count() > 1 {
+        return nf("a pipeline has at most one stream stage (TextStream or Decode): one generated list");
     }
     if let Some(dead) = (0..p.stages.len()).find(|s| *s != p.output_stage as usize && !consumed[*s]) {
         return nf(format!("stage {dead} feeds no later stage and is not the output"));
@@ -481,23 +573,29 @@ pub struct PipelineRun {
     pub output: Tensor,
 }
 
-/// How many pad ids `apply_rule` appended.
-fn pad_count(rule: &TokenRule, job: &PipelineJob) -> usize {
-    let src = match rule.source {
-        TokenSource::Prompt => job.prompt.len(),
-        TokenSource::Negative => job.negative.len(),
-        TokenSource::Source => job.source.len(),
-    };
-    let unpadded = rule.prefix.len() + src + rule.suffix.len();
-    rule.pad.map_or(0, |p| (p.to_len as usize).saturating_sub(unpadded))
-}
-
-fn apply_rule(rule: &TokenRule, job: &PipelineJob) -> TirResult<Vec<u32>> {
-    let src = match rule.source {
+/// The job's list a token source names; a finalized claim the job does not carry is `Missing`.
+fn source_ids(source: TokenSource, job: &PipelineJob) -> TirResult<&[u32]> {
+    Ok(match source {
         TokenSource::Prompt => &job.prompt,
         TokenSource::Negative => &job.negative,
         TokenSource::Source => &job.source,
-    };
+        TokenSource::Generated => &job.generated,
+        TokenSource::Key => &job.key,
+        TokenSource::FinalizedOutput { claim, stage } => job.finalized.get(&(claim, stage)).ok_or_else(|| {
+            TirError::new(TirErrorKind::Missing, format!("the job carries no finalized output of claim {claim}, stage {stage}"))
+        })?,
+    })
+}
+
+/// How many pad ids `apply_rule` appended.
+fn pad_count(rule: &TokenRule, job: &PipelineJob) -> TirResult<usize> {
+    let src = source_ids(rule.source, job)?.len();
+    let unpadded = rule.prefix.len() + src + rule.suffix.len();
+    Ok(rule.pad.map_or(0, |p| (p.to_len as usize).saturating_sub(unpadded)))
+}
+
+fn apply_rule(rule: &TokenRule, job: &PipelineJob) -> TirResult<Vec<u32>> {
+    let src = source_ids(rule.source, job)?;
     let mut seq: Vec<u32> = rule.prefix.iter().chain(src.iter()).chain(rule.suffix.iter()).copied().collect();
     if let Some(pad) = rule.pad {
         if seq.len() > pad.to_len as usize {
@@ -519,6 +617,9 @@ pub struct StageJobFacts {
     pub tokens: Vec<u32>,
     /// Input index → its value.
     pub inputs: BTreeMap<u16, Tensor>,
+    /// The position its rows start at as an edge reads them ([`stage_rows_from`]): `|prompt| − 1`
+    /// for a stream stage, 0 otherwise.
+    pub rows_from: u32,
 }
 
 /// **The job facts of every stage**, in order — what [`run_pipeline`] computes before it runs a
@@ -549,11 +650,12 @@ pub fn stage_job_facts(p: &TirPipelineV1, programs: &[TirProgramV2], job: &Pipel
                     Tensor::new(DType::Idx, shape, seq.iter().map(|t| *t as i128).collect())?
                 }
                 Binding::JobTokenCount { rule } => {
-                    let n = apply_rule(rule, job)?.len() - pad_count(rule, job);
+                    let n = apply_rule(rule, job)?.len() - pad_count(rule, job)?;
                     Tensor::scalar(DType::Idx, n as i128)?
                 }
                 Binding::StageRowCount { stage, drop } => {
-                    Tensor::scalar(DType::Idx, facts[*stage as usize].trip.saturating_sub(*drop) as i128)?
+                    let up = &facts[*stage as usize];
+                    Tensor::scalar(DType::Idx, up.trip.saturating_sub(up.rows_from).saturating_sub(*drop) as i128)?
                 }
                 // An edge's values are an earlier stage's commitments, and an image's are opened
                 // against its `input_root`: neither is a fact the job fixes for the court.
@@ -561,7 +663,7 @@ pub fn stage_job_facts(p: &TirPipelineV1, programs: &[TirProgramV2], job: &Pipel
             };
             inputs.insert(k as u16, value);
         }
-        facts.push(StageJobFacts { trip, tokens, inputs });
+        facts.push(StageJobFacts { trip, tokens, inputs, rows_from: stage_rows_from(st, job) });
     }
     Ok(facts)
 }
@@ -596,7 +698,7 @@ pub fn run_pipeline(
     for st in &p.stages {
         let prog = &programs[st.program as usize];
         let (tokens, trip) = stage_tokens(st, job)?;
-        let inputs = stage_inputs(st, prog, &runs, job, random)?;
+        let inputs = stage_inputs(p, st, prog, &runs, job, random)?;
         let interp = InterpreterV2::new(prog)?;
         let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
         let (steps, fixed_after) = run_stage(&interp, params.params(st.program), &inputs, &run_tokens)?;
@@ -611,13 +713,13 @@ pub fn run_pipeline(
 fn stage_tokens(st: &StageDecl, job: &PipelineJob) -> TirResult<(Vec<u32>, u32)> {
     let tokens = match (&st.tokens, st.trip) {
         (Some(rule), _) => apply_rule(rule, job)?,
-        (None, TripRule::TextStream) => text_stream_run(job),
+        (None, TripRule::TextStream | TripRule::Decode) => text_stream_run(job),
         (None, _) => Vec::new(),
     };
     let trip = match st.trip {
         TripRule::Fixed { n } => n,
         TripRule::JobSteps => job.steps,
-        TripRule::TokenCount | TripRule::TextStream => tokens.len() as u32,
+        TripRule::TokenCount | TripRule::TextStream | TripRule::Decode => tokens.len() as u32,
     };
     if trip == 0 || trip > st.max_trip {
         return err(TirErrorKind::Position, format!("stage {}: trip count {trip} outside [1, {}]", st.name, st.max_trip));
@@ -642,12 +744,13 @@ fn pipeline_output(p: &TirPipelineV1, programs: &[TirProgramV2], runs: &[StageRu
     }
 }
 
-/// **Run a text pipeline, generating** (RFC-0003 §II.2.1): every stage before the text stage as
-/// [`run_pipeline`] runs it, then the text stage position by position over the prompt, asking
-/// `select` after each position whose logits the decode consumes (from `|prompt| − 1` on) for the
-/// next id — the RFC-0001 §A decoder's answer, which the IR never computes itself. Returns the run
-/// and the generated ids; [`run_pipeline`] over the same job with `generated` set replays it
-/// exactly.
+/// **Run a text pipeline, generating** (RFC-0003 §II.2.1; RFC-0004 §7.2): every stage before the
+/// stream stage (its `TextStream` output stage, or its `Decode` stage) as [`run_pipeline`] runs it,
+/// then the stream stage position by position over the prompt, asking `select` after each position
+/// whose logits the decode consumes (from `|prompt| − 1` on) for the next id — the RFC-0001 §A
+/// decoder's answer, which the IR never computes itself — and then, for a `Decode` stage, every stage
+/// after it with the generated ids as the job's `generated`. Returns the run and the generated ids;
+/// [`run_pipeline`] over the same job with `generated` set replays it exactly.
 pub fn run_text_pipeline(
     p: &TirPipelineV1,
     programs: &[TirProgramV2],
@@ -657,10 +760,9 @@ pub fn run_text_pipeline(
     select: &mut dyn FnMut(u32, &Tensor) -> TextSelectV1,
 ) -> TirResult<(PipelineRun, Vec<u32>)> {
     validate_pipeline(p, programs)?;
-    let text = p.output_stage as usize;
-    if !matches!(p.stages[text].trip, TripRule::TextStream) {
-        return nf("run_text_pipeline runs a pipeline whose output stage is the text stage");
-    }
+    let Some(text) = stream_stage(p) else {
+        return nf("run_text_pipeline runs a pipeline with a stream stage (TextStream or Decode)");
+    };
     if job.prompt.is_empty() {
         return err(TirErrorKind::Position, "a text stream starts with at least one prompt id");
     }
@@ -668,14 +770,14 @@ pub fn run_text_pipeline(
     for st in &p.stages[..text] {
         let prog = &programs[st.program as usize];
         let (tokens, trip) = stage_tokens(st, job)?;
-        let inputs = stage_inputs(st, prog, &runs, job, random)?;
+        let inputs = stage_inputs(p, st, prog, &runs, job, random)?;
         let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
         let (steps, fixed_after) = run_stage(&InterpreterV2::new(prog)?, params.params(st.program), &inputs, &run_tokens)?;
         runs.push(StageRun { trip, tokens, steps, fixed_after });
     }
     let st = &p.stages[text];
     let prog = &programs[st.program as usize];
-    let inputs = stage_inputs(st, prog, &runs, job, random)?;
+    let inputs = stage_inputs(p, st, prog, &runs, job, random)?;
     let interp = InterpreterV2::new(prog)?;
     let mut state = crate::interp::RunState::default();
     let (mut stream, mut generated, mut steps) = (job.prompt.clone(), Vec::new(), Vec::new());
@@ -706,12 +808,23 @@ pub fn run_text_pipeline(
     }
     let tokens = stream[..steps.len()].to_vec();
     runs.push(StageRun { trip: steps.len() as u32, tokens, steps, fixed_after });
+    // A decode stage's later stages read what it decoded (`TokenSource::Generated`).
+    let after = PipelineJob { generated: generated.clone(), ..job.clone() };
+    for st in &p.stages[text + 1..] {
+        let prog = &programs[st.program as usize];
+        let (tokens, trip) = stage_tokens(st, &after)?;
+        let inputs = stage_inputs(p, st, prog, &runs, &after, random)?;
+        let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
+        let (steps, fixed_after) = run_stage(&InterpreterV2::new(prog)?, params.params(st.program), &inputs, &run_tokens)?;
+        runs.push(StageRun { trip, tokens, steps, fixed_after });
+    }
     let output = pipeline_output(p, programs, &runs)?;
     Ok((PipelineRun { stages: runs, output }, generated))
 }
 
 /// A stage's inputs from its bindings, the earlier stages' runs, the job and `R`.
 fn stage_inputs<'a>(
+    p: &TirPipelineV1,
     st: &StageDecl,
     prog: &TirProgramV2,
     runs: &[StageRun],
@@ -742,7 +855,8 @@ fn stage_inputs<'a>(
                         }
                         Binding::StageRows { stage, drop, pad_to } => {
                             let rows = runs[*stage as usize].rows();
-                            let kept = rows.get(*drop as usize..).unwrap_or(&[]);
+                            let from = stage_rows_from(&p.stages[*stage as usize], job) as usize;
+                            let kept = rows.get(from.saturating_add(*drop as usize)..).unwrap_or(&[]);
                             if kept.len() > *pad_to as usize {
                                 return err(TirErrorKind::Operand, format!("{} rows exceed pad_to {pad_to}", kept.len()));
                             }
@@ -756,12 +870,13 @@ fn stage_inputs<'a>(
                         }
                         Binding::StageFinal { stage } => runs[*stage as usize].last().cloned(),
                         Binding::StageRowCount { stage, drop } => {
-                            let n = runs[*stage as usize].trip.saturating_sub(*drop);
+                            let from = stage_rows_from(&p.stages[*stage as usize], job);
+                            let n = runs[*stage as usize].trip.saturating_sub(from).saturating_sub(*drop);
                             Some(Tensor::scalar(DType::Idx, n as i128)?)
                         }
                         Binding::JobTokenCount { rule } => {
                             // The length before padding; `apply_rule` refuses a template longer than its pad.
-                            let n = apply_rule(rule, job)?.len() - pad_count(rule, job);
+                            let n = apply_rule(rule, job)?.len() - pad_count(rule, job)?;
                             Some(Tensor::scalar(DType::Idx, n as i128)?)
                         }
                         Binding::JobImage { index } => match job.images.get(*index as usize) {

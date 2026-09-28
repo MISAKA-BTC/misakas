@@ -705,6 +705,247 @@ pub fn encdec_job() -> PipelineJob {
     PipelineJob { prompt: vec![ENCDEC_START, PLACEHOLDER, PLACEHOLDER, 5], source: vec![7, 9, 11], ..PipelineJob::default() }
 }
 
+// ---- RFC-0004 §7: evaluation pipelines -------------------------------------------------------
+
+/// The generated ids' pad length an evaluation pipeline reads (the toy LM's stream holds 12).
+pub const EVAL_G: u32 = 8;
+/// The key's pad length.
+pub const EVAL_K: u32 = 4;
+/// The prompt's pad length a toy judge reads.
+pub const EVAL_P: u32 = 6;
+/// The toy LM's `max_trip` as a decode stage: its consumed rows fit a RefLogLik stage of 12.
+pub const EVAL_TRIP: u32 = 12;
+
+fn rule(source: TokenSource, to_len: u32) -> TokenRule {
+    TokenRule { prefix: vec![], source, suffix: vec![], pad: Some(TokenPad { id: 0, to_len }) }
+}
+
+/// The toy LM as a pipeline's decode stage (RFC-0004 §7.2): the subject.
+pub fn subject_stage() -> StageDecl {
+    StageDecl { name: "subject".into(), program: 0, trip: TripRule::Decode, max_trip: EVAL_TRIP, tokens: None, bind: vec![] }
+}
+
+/// **Generate, then ExactMatch** (RFC-0004 §7.3): the toy LM decodes, and the exact-match stage reads
+/// what it decoded (`Generated`), the item's key (`Key`) and the delimiters (job scalars 0 and 1).
+pub fn eval_exact_match_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
+    let em = misaka_palw_tir::scoring::exact_match_v1(misaka_palw_tir::scoring::ExactMatchShapeV1 {
+        gen_len: EVAL_G,
+        key_len: EVAL_K,
+        token_bound: TOK,
+    })
+    .unwrap();
+    let p = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![
+            subject_stage(),
+            StageDecl {
+                name: "score".into(),
+                program: 1,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![
+                    Binding::JobTokens { rule: rule(TokenSource::Generated, EVAL_G) },
+                    Binding::JobTokenCount { rule: rule(TokenSource::Generated, EVAL_G) },
+                    Binding::JobTokens { rule: rule(TokenSource::Key, EVAL_K) },
+                    Binding::JobTokenCount { rule: rule(TokenSource::Key, EVAL_K) },
+                    Binding::JobScalar { index: 0 },
+                    Binding::JobScalar { index: 1 },
+                ],
+            },
+        ],
+        output_stage: 1,
+    };
+    (p, vec![lm_program(false), em])
+}
+
+/// **Teacher-forced, then RefLogLik** (RFC-0004 §7.3): the toy LM runs over `prompt ‖ reference`
+/// (the reference is the job's `generated`, given), and the RefLogLik stage reads its consumed logits
+/// rows (`StageRows`, `StageRowCount`), the reference (`Generated`) and the logit scale (job scalar 0).
+pub fn eval_ref_loglik_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
+    let rl =
+        misaka_palw_tir::scoring::ref_loglik_v1(&misaka_palw_tir::scoring::RefLogLikShapeV1 { rows: EVAL_TRIP, row: vec![1, TOK] })
+            .unwrap();
+    let p = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![
+            subject_stage(),
+            StageDecl {
+                name: "score".into(),
+                program: 1,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![
+                    Binding::StageRows { stage: 0, drop: 0, pad_to: EVAL_TRIP },
+                    Binding::StageRowCount { stage: 0, drop: 0 },
+                    Binding::JobTokens { rule: rule(TokenSource::Generated, EVAL_TRIP) },
+                    Binding::JobTokenCount { rule: rule(TokenSource::Generated, EVAL_TRIP) },
+                    Binding::JobScalar { index: 0 },
+                ],
+            },
+        ],
+        output_stage: 1,
+    };
+    (p, vec![lm_program(false), rl])
+}
+
+/// A toy judge's masked embedding sum of a padded id list: `Σ_{i < count} emb[ids_i]` as `i32 [1, D]`.
+fn masked_sum(b: &mut misaka_palw_tir::builder::BlockBuilder<'_>, emb: Ref, ids: Ref, count: Ref, len: u32) -> Ref {
+    let e = b.gather(emb, ids, 0, 0);
+    let e = b.cast(e, DType::I32);
+    let iota = b.iota(DType::Idx, &[Dim::Fixed(len)], 0, 0, 1);
+    let mask = b.compare(iota, count, Cmp::Lt);
+    let mask = b.reshape_fixed(mask, &[len, 1]);
+    let zero = b.c(DType::I32, 0);
+    let kept = b.select(mask, e, zero, DType::I32);
+    b.reduce_sum(kept, 0, DType::I32)
+}
+
+/// **A toy judge class's program** (RFC-0004 §7.3, a registered judge's shape): it reads the item's
+/// prompt (`Prompt`) and a finalized claim's generation (`FinalizedOutput`), each with its count, and
+/// scores `(Σ emb[prompt] + 2 · Σ emb[response]) · w` — `Final i32 [1]`, the judge's scalar.
+pub fn toy_judge_program() -> TirProgramV2 {
+    let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+    let prompt = pb.param("jg.prompt", DType::Idx, &[EVAL_P], false);
+    let prompt_n = pb.param("jg.prompt_count", DType::Idx, &[], false);
+    let resp = pb.param("jg.response", DType::Idx, &[EVAL_G], false);
+    let resp_n = pb.param("jg.response_count", DType::Idx, &[], false);
+    let emb = pb.param("jg.emb", DType::I8, &[TOK, D], false);
+    let w = pb.param("jg.w", DType::I8, &[D, 1], false);
+    let pre = {
+        let mut b = pb.block("jg.pre", vec![]);
+        let sp = masked_sum(&mut b, emb, prompt, prompt_n, EVAL_P);
+        let sr = masked_sum(&mut b, emb, resp, resp_n, EVAL_G);
+        let two = b.c(DType::I32, 2);
+        let sr2 = b.mul(sr, two, DType::I32);
+        let x = b.add(sp, sr2, DType::I32);
+        let s = b.matmul(x, w, DType::I32);
+        let s = b.reshape_fixed(s, &[1]);
+        b.finish(&[s])
+    };
+    let carry = carry_of(&pb, pre);
+    let (post, out) = {
+        let mut b = pb.block("jg.post", carry);
+        let o = b.clamp(Ref::CarryIn(0), i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.commit(o);
+        (b.finish(&[]), node_of(o))
+    };
+    let v1 = pb.finish(pre, vec![], post, out);
+    let ext = |hi: i64| InputSource::External { lo: 0, hi };
+    TirProgramV2::from_v1_lifting_params(
+        &v1,
+        &[(0, ext(TOK as i64 - 1)), (1, ext(EVAL_P as i64)), (2, ext(TOK as i64 - 1)), (3, ext(EVAL_G as i64))],
+        OutputDecl::Final { node: out },
+    )
+    .unwrap()
+}
+
+/// **A toy pairwise judge's program**: it reads two finalized generations, `A` (claim 0) and `B`
+/// (claim 1), each with its count, and scores its preference of `A` over `B`, `(Σ emb[A] − Σ emb[B]) ·
+/// w` — `Final i32 [1]`.
+pub fn toy_pairwise_judge_program() -> TirProgramV2 {
+    let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+    let a = pb.param("pj.a", DType::Idx, &[EVAL_G], false);
+    let a_n = pb.param("pj.a_count", DType::Idx, &[], false);
+    let bb = pb.param("pj.b", DType::Idx, &[EVAL_G], false);
+    let b_n = pb.param("pj.b_count", DType::Idx, &[], false);
+    let emb = pb.param("pj.emb", DType::I8, &[TOK, D], false);
+    let w = pb.param("pj.w", DType::I8, &[D, 1], false);
+    let pre = {
+        let mut b = pb.block("pj.pre", vec![]);
+        let sa = masked_sum(&mut b, emb, a, a_n, EVAL_G);
+        let sb = masked_sum(&mut b, emb, bb, b_n, EVAL_G);
+        let x = b.sub(sa, sb, DType::I32);
+        let s = b.matmul(x, w, DType::I32);
+        let s = b.reshape_fixed(s, &[1]);
+        b.finish(&[s])
+    };
+    let carry = carry_of(&pb, pre);
+    let (post, out) = {
+        let mut b = pb.block("pj.post", carry);
+        let o = b.clamp(Ref::CarryIn(0), i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.commit(o);
+        (b.finish(&[]), node_of(o))
+    };
+    let v1 = pb.finish(pre, vec![], post, out);
+    let ext = |hi: i64| InputSource::External { lo: 0, hi };
+    TirProgramV2::from_v1_lifting_params(
+        &v1,
+        &[(0, ext(TOK as i64 - 1)), (1, ext(EVAL_G as i64)), (2, ext(TOK as i64 - 1)), (3, ext(EVAL_G as i64))],
+        OutputDecl::Final { node: out },
+    )
+    .unwrap()
+}
+
+/// **A judge job** (RFC-0004 §7.3): the toy judge over the item's prompt and finalized claim 0's
+/// generation (its stage 0), then the Judge stage, clamped to `[−2^20, 2^20]`.
+pub fn eval_judge_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
+    let fin = TokenSource::FinalizedOutput { claim: 0, stage: 0 };
+    let p = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![
+            StageDecl {
+                name: "judge".into(),
+                program: 0,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![
+                    Binding::JobTokens { rule: rule(TokenSource::Prompt, EVAL_P) },
+                    Binding::JobTokenCount { rule: rule(TokenSource::Prompt, EVAL_P) },
+                    Binding::JobTokens { rule: rule(fin, EVAL_G) },
+                    Binding::JobTokenCount { rule: rule(fin, EVAL_G) },
+                ],
+            },
+            StageDecl {
+                name: "score".into(),
+                program: 1,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![Binding::StageFinal { stage: 0 }],
+            },
+        ],
+        output_stage: 1,
+    };
+    (p, vec![toy_judge_program(), misaka_palw_tir::scoring::judge_v1(-(1 << 20), 1 << 20).unwrap()])
+}
+
+/// **A pairwise job** (RFC-0004 §7.3): the toy pairwise judge over finalized claims 0 (`A`) and 1
+/// (`B`), then the Pairwise stage with R's order (job scalar 0) and the margin (job scalar 1).
+pub fn eval_pairwise_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
+    let (a, b) = (TokenSource::FinalizedOutput { claim: 0, stage: 0 }, TokenSource::FinalizedOutput { claim: 1, stage: 0 });
+    let p = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![
+            StageDecl {
+                name: "judge".into(),
+                program: 0,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![
+                    Binding::JobTokens { rule: rule(a, EVAL_G) },
+                    Binding::JobTokenCount { rule: rule(a, EVAL_G) },
+                    Binding::JobTokens { rule: rule(b, EVAL_G) },
+                    Binding::JobTokenCount { rule: rule(b, EVAL_G) },
+                ],
+            },
+            StageDecl {
+                name: "score".into(),
+                program: 1,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![Binding::StageFinal { stage: 0 }, Binding::JobScalar { index: 0 }, Binding::JobScalar { index: 1 }],
+            },
+        ],
+        output_stage: 1,
+    };
+    (p, vec![toy_pairwise_judge_program(), misaka_palw_tir::scoring::pairwise_v1().unwrap()])
+}
+
 /// A greedy selector (the argmax, the lowest id on ties) that ends after `limit` ids — a stand-in for
 /// RFC-0001's decoder at temperature 0 with no controls.
 pub fn greedy(limit: usize) -> impl FnMut(u32, &Tensor) -> TextSelectV1 {
