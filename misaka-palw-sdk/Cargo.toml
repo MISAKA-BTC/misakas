@@ -21,6 +21,11 @@ misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
 misaka-palw-tir-lower = { path = "../misaka-palw-tir-lower" }
 # A PALWTIR1 container's declared layout is `borsh(PalwTirLayoutV1)`; the manifest decodes it.
 borsh.workspace = true
+# `palw-tir-equiv` (D-F1 offline): the IR side of a 1.5B class runs on the typed backend, the
+# random prompts are seeded.
+misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec" }
+rand.workspace = true
+rand_chacha.workspace = true
 # ADR-0100 `palw-class measure` / `verify`: the Measured Model Artifact is JSON, signed by the
 # adder's bond key and verified by anyone holding the public key.
 kaspa-pq-validator-core.workspace = true
@@ -30,3 +35,7 @@ serde_json.workspace = true
 [[bin]]
 name = "palw-class"
 path = "src/bin/palw-class.rs"
+
+[[bin]]
+name = "palw-tir-equiv"
+path = "src/bin/palw-tir-equiv.rs"

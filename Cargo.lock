@@ -6185,7 +6185,10 @@ dependencies = [
  "misaka-palw-base0",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
+ "misaka-palw-tir-exec",
  "misaka-palw-tir-lower",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
  "serde_json",
 ]
 
