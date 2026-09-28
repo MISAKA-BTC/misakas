@@ -30,7 +30,7 @@ use misaka_palw_tir::{
 use serde::Serialize;
 
 const FORMAT_PRIM: &str = "palw-tir-v1/primitive-vectors/1";
-const FORMAT_PROGRAM: &str = "palw-tir-v1/program-vectors/1";
+const FORMAT_PROGRAM: &str = "palw-tir-v1/program-vectors/2";
 const FORMAT_ENCODING: &str = "palw-tir-v1/encoding-vectors/1";
 const SPEC: &str = "docs/spec/palw/04b-tensor-ir.md";
 
@@ -127,6 +127,23 @@ struct ConeJson {
     expect: TensorJson,
 }
 
+/// A cone the evaluator must REFUSE (spec 04b §9.2): an honest environment with one defect, and
+/// the class of the refusal (§9.3's table).
+#[derive(Serialize)]
+struct RefusalJson {
+    what: String,
+    block: u8,
+    layer: Option<u16>,
+    target: u16,
+    token: Option<u32>,
+    pos: u32,
+    carry_in: Vec<NamedTensorJson>,
+    fixed: Vec<NamedTensorJson>,
+    hist_prior: Vec<HistJson>,
+    supplied: Vec<NamedTensorJson>,
+    expect_error: String,
+}
+
 #[derive(Serialize)]
 struct ProgramFileJson {
     format: String,
@@ -137,6 +154,7 @@ struct ProgramFileJson {
     params: Vec<ParamJson>,
     steps: Vec<StepJson>,
     cones: Vec<ConeJson>,
+    refusals: Vec<RefusalJson>,
 }
 
 #[derive(Serialize)]
@@ -735,14 +753,185 @@ fn commit_json(c: &CommitRecord) -> CommitJson {
     CommitJson { slot: c.slot, block: c.block, layer: c.layer, node: c.node, value: tj(&c.value) }
 }
 
+/// The honest environment of the first layer occurrence at one position, and its commit points.
+struct HonestEnv {
+    block: u8,
+    layer: Option<u16>,
+    env: ConeEnv,
+    commits: std::collections::BTreeMap<u16, Tensor>,
+}
+
+fn honest_env(program: &TirProgramV1, before: &RunState, out: &misaka_palw_tir::StepOutput, token: u32) -> HonestEnv {
+    let bases = program.occurrence_slot_bases();
+    let (block, layer) = (program.schedule.layers[0], Some(0u16));
+    let carry_in: std::collections::BTreeMap<u8, Tensor> = program.blocks[program.schedule.pre as usize]
+        .carry_out
+        .iter()
+        .enumerate()
+        .map(|(k, n)| (k as u8, out.commits.iter().find(|c| c.block == program.schedule.pre && c.node == *n).unwrap().value.clone()))
+        .collect();
+    let commits: std::collections::BTreeMap<u16, Tensor> = out
+        .commits
+        .iter()
+        .filter(|c| c.block == block && c.layer == layer && c.slot >= bases[1])
+        .map(|c| (c.node, c.value.clone()))
+        .collect();
+    let occurrence_states = |j: u16| {
+        program.blocks[block as usize].nodes.iter().any(|n| {
+            n.inputs.contains(&Ref::State(j))
+                || matches!(n.prim, Prim::StateWrite { state } | Prim::HistAppend { state } if state == j)
+        })
+    };
+    // Every state instance the occurrence touches is supplied — a run state may omit a never-written
+    // one, a cone's environment may not (§9.1, §9.2).
+    let mut fixed = std::collections::BTreeMap::new();
+    let mut hist_prior = std::collections::BTreeMap::new();
+    for (j, s) in program.states.iter().enumerate() {
+        let j = j as u16;
+        if !s.per_layer || !occurrence_states(j) {
+            continue;
+        }
+        match s.kind {
+            misaka_palw_tir::StateKind::Fixed { .. } => {
+                let v = before
+                    .fixed
+                    .get(&(j, layer))
+                    .cloned()
+                    .unwrap_or_else(|| Tensor::zeros(s.dtype, &s.shape.iter().map(|d| *d as usize).collect::<Vec<_>>()));
+                fixed.insert(j, v);
+            }
+            misaka_palw_tir::StateKind::Hist { .. } => {
+                hist_prior.insert(j, before.hist.get(&(j, layer)).map(|r| r.iter().cloned().collect()).unwrap_or_default());
+            }
+        }
+    }
+    let env = ConeEnv { token: Some(token), pos: before.pos, carry_in, fixed, hist_prior, supplied: Default::default() };
+    HonestEnv { block, layer, env, commits }
+}
+
+fn refusal_json(what: &str, h: &HonestEnv, target: u16, env: &ConeEnv, class: misaka_palw_tir::TirErrorKind) -> RefusalJson {
+    RefusalJson {
+        what: what.into(),
+        block: h.block,
+        layer: h.layer,
+        target,
+        token: env.token,
+        pos: env.pos,
+        carry_in: env.carry_in.iter().map(|(k, v)| NamedTensorJson { index: *k as u16, value: tj(v) }).collect(),
+        fixed: named(&env.fixed),
+        hist_prior: env.hist_prior.iter().map(|(j, rows)| HistJson { state: *j, rows: rows.iter().map(tj).collect() }).collect(),
+        supplied: named(&env.supplied),
+        expect_error: format!("{class:?}"),
+    }
+}
+
+/// The refusals of spec 04b §9.2, each an honest environment with one defect (ref2 F1–F4, F7,
+/// F10), at the position the defect needs: every one must fail, with the class §9.3 names.
+fn refusals(program: &TirProgramV1, interp: &Interpreter<'_>, params: &MapParams, envs: &[HonestEnv]) -> Vec<RefusalJson> {
+    use misaka_palw_tir::TirErrorKind as K;
+    let mut out = Vec::new();
+    let mut expect = |what: &str, h: &HonestEnv, target: u16, env: ConeEnv, class: K| {
+        let e = interp.eval_cone(h.block, h.layer, target, params, &env).expect_err(what);
+        assert_eq!(e.kind, class, "{what}: {e}");
+        out.push(refusal_json(what, h, target, &env, class));
+    };
+    let reads = |target: u16, h: &HonestEnv, pred: &dyn Fn(&misaka_palw_tir::Node) -> bool| -> bool {
+        // Does the closure of `target` (stopping at the other commit points) contain a node with `pred`?
+        let b = &program.blocks[h.block as usize];
+        let mut seen = vec![false; b.nodes.len()];
+        let mut stack = vec![target as usize];
+        while let Some(i) = stack.pop() {
+            if std::mem::replace(&mut seen[i], true) {
+                continue;
+            }
+            if pred(&b.nodes[i]) {
+                return true;
+            }
+            if i != target as usize && h.commits.contains_key(&(i as u16)) {
+                continue;
+            }
+            for r in &b.nodes[i].inputs {
+                if let Ref::Node(j) = r {
+                    stack.push(*j as usize);
+                }
+            }
+        }
+        false
+    };
+    let (first, last) = (&envs[0], envs.last().unwrap());
+    let target = *last.commits.keys().max().unwrap();
+    let honest = |h: &HonestEnv, target: u16| {
+        let mut env = h.env.clone();
+        env.supplied = h.commits.clone();
+        env.supplied.remove(&target);
+        env
+    };
+    // F2: the target's own value is supplied.
+    let mut env = honest(last, target);
+    env.supplied.insert(target, last.commits[&target].clone());
+    expect("the target is supplied (F2)", last, target, env, K::Malformed);
+    // F4: a supplied index that is no node of the block.
+    let mut env = honest(last, target);
+    let n = program.blocks[last.block as usize].nodes.len() as u16;
+    env.supplied.insert(n, last.commits[&target].clone());
+    expect("a supplied index that is no node (F4)", last, target, env, K::Malformed);
+    // F7: the position bound applies to a cone.
+    let mut env = honest(last, target);
+    env.pos = program.history_bound;
+    expect("pos = history_bound (F7)", last, target, env, K::Position);
+    // F1 and F3: a state value or a history the closure reads, absent — at the last position, and
+    // for a history also at position 0, where zero rows are needed.
+    for (j, _) in program.states.iter().enumerate() {
+        let j = j as u16;
+        for (h, when) in [(last, "last"), (first, "position 0")] {
+            let Some(t) = h.commits.keys().copied().filter(|t| reads(*t, h, &|n| n.inputs.contains(&Ref::State(j)))).max() else {
+                continue;
+            };
+            if when == "last" && h.env.fixed.contains_key(&j) {
+                let mut env = honest(h, t);
+                env.fixed.remove(&j);
+                expect(&format!("state {j}'s value is absent (F1)"), h, t, env, K::Missing);
+            }
+        }
+        for (h, when) in [(last, "the last position"), (first, "position 0, zero rows needed")] {
+            let Some(t) = h
+                .commits
+                .keys()
+                .copied()
+                .filter(|t| reads(*t, h, &|n| matches!(n.prim, Prim::HistAppend { state } if state == j)))
+                .max()
+            else {
+                continue;
+            };
+            let mut env = honest(h, t);
+            env.hist_prior.remove(&j);
+            expect(&format!("history {j} is absent at {when} (F3)"), h, t, env, K::Missing);
+        }
+    }
+    // F10: the token, when the closure reads it — absent, then out of bound.
+    if let Some(t) = last.commits.keys().copied().filter(|t| reads(*t, last, &|n| n.inputs.contains(&Ref::Input(INPUT_TOKEN)))).max() {
+        let mut env = honest(last, t);
+        env.token = None;
+        expect("the token is absent and the closure reads it (F10)", last, t, env, K::Missing);
+        let mut env = honest(last, t);
+        env.token = Some(program.token_bound);
+        expect("the token is at token_bound (F10)", last, t, env, K::Operand);
+    }
+    out
+}
+
 fn program_file(name: &str, description: &str, program: &TirProgramV1, params: &MapParams, tokens: &[u32]) -> (String, String) {
     let interp = Interpreter::new(program).expect("valid");
     let mut state = RunState::default();
     let mut steps = Vec::new();
     let mut cones = Vec::new();
+    let mut envs: Vec<HonestEnv> = Vec::new();
     for (i, tk) in tokens.iter().enumerate() {
         let before = state.clone();
         let out = interp.step(params, &mut state, *tk).expect("step");
+        if !program.schedule.layers.is_empty() && (i == 0 || i + 1 == tokens.len()) {
+            envs.push(honest_env(program, &before, &out, *tk));
+        }
         // Cones at the LAST position: every commit point of the first layer occurrence, from the
         // others (at most 3 cases, to keep the file small).
         if i + 1 == tokens.len() && !program.schedule.layers.is_empty() {
@@ -762,10 +951,8 @@ fn program_file(name: &str, description: &str, program: &TirProgramV1, params: &
                 .filter(|c| c.block == block && c.layer == layer && c.slot >= bases[1])
                 .map(|c| (c.node, c.value.clone()))
                 .collect();
-            let fixed: std::collections::BTreeMap<u16, Tensor> =
-                before.fixed.iter().filter(|((_, l), _)| *l == layer).map(|((j, _), v)| (*j, v.clone())).collect();
-            let hist: std::collections::BTreeMap<u16, Vec<Tensor>> =
-                before.hist.iter().filter(|((_, l), _)| *l == layer).map(|((j, _), v)| (*j, v.iter().cloned().collect())).collect();
+            let h = envs.last().expect("the last position's environment");
+            let (fixed, hist) = (h.env.fixed.clone(), h.env.hist_prior.clone());
             let targets: Vec<u16> = {
                 let mut v: Vec<u16> = commits.keys().copied().collect();
                 v.sort_unstable_by(|a, b| b.cmp(a));
@@ -815,6 +1002,7 @@ fn program_file(name: &str, description: &str, program: &TirProgramV1, params: &
         params: pj(program, params),
         steps,
         cones,
+        refusals: if envs.is_empty() { Vec::new() } else { refusals(program, &interp, params, &envs) },
     };
     (format!("programs/{name}.json"), serde_json::to_string_pretty(&file).unwrap() + "\n")
 }
@@ -881,6 +1069,42 @@ fn program_files() -> Vec<(String, String)> {
 }
 
 // ---- encodings -----------------------------------------------------------------------------------
+
+/// A global state (`Fixed` of `[1]`, or a `Hist` of window 3) written by pre, by post, or by both.
+fn global_state_program(pre_writes: bool, post_writes: bool, hist: bool) -> TirProgramV1 {
+    let mut pb = ProgramBuilder::new(4, HISTORY_BOUND_V1_SMALL);
+    let s =
+        if hist { pb.hist_state("g", DType::I32, &[1], 3, false) } else { pb.fixed_state("g", DType::I32, &[1], -100, 100, false) };
+    let carry = vec![TensorType::fixed(DType::I32, &[1])];
+    let write = |b: &mut misaka_palw_tir::builder::BlockBuilder<'_>, x: Ref| {
+        if hist {
+            b.commit(x);
+            b.hist_append(s, x)
+        } else {
+            b.state_write(s, x)
+        }
+    };
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let tk = b.cast(Ref::Input(INPUT_TOKEN), DType::I32);
+        let tk = b.reshape_fixed(tk, &[1]);
+        let tk = b.commit(tk);
+        if pre_writes {
+            write(&mut b, tk);
+        }
+        b.finish(&[tk])
+    };
+    let post = {
+        let mut b = pb.block("post", carry);
+        let l = b.reshape_fixed(Ref::CarryIn(0), &[1]);
+        b.commit(l);
+        if post_writes {
+            write(&mut b, l);
+        }
+        b.finish(&[])
+    };
+    pb.finish(pre, vec![], post, 0)
+}
 
 fn encoding_file() -> (String, String) {
     let (p, _) = fixed_state_program();
@@ -949,6 +1173,32 @@ fn encoding_file() -> (String, String) {
     let mut per_layer_in_pre = p.clone();
     per_layer_in_pre.states[0].per_layer = false;
     push("per_layer_state_flag_mismatch", per_layer_in_pre.encode());
+    // NF-1: the prim set is PALW-TIR v1's (ref2 F14).
+    let mut other_set = p.clone();
+    other_set.prim_set_id = [0u8; 64];
+    push("prim_set_id_not_v1", other_set.encode());
+    // NF-2: two blocks at least — pre and post are distinct (ref2 F13).
+    let mut one = p.clone();
+    one.blocks.truncate(1);
+    one.schedule = misaka_palw_tir::Schedule { pre: 0, layers: vec![], post: 0 };
+    push("one_block", one.encode());
+    // NF-19: no two nodes of one step write one state instance; post writes nothing (ref2 F5/F6).
+    push("valid_pre_writes_a_global_state", global_state_program(true, false, false).encode());
+    push("post_writes_a_global_state", global_state_program(false, true, false).encode());
+    push("pre_and_post_write_one_global_state", global_state_program(true, true, false).encode());
+    push("pre_and_post_append_one_global_history", global_state_program(true, true, true).encode());
+    for (name, want) in [
+        ("valid", "ok"),
+        ("prim_set_id_not_v1", "NormalForm"),
+        ("one_block", "NormalForm"),
+        ("valid_pre_writes_a_global_state", "ok"),
+        ("post_writes_a_global_state", "NormalForm"),
+        ("pre_and_post_write_one_global_state", "NormalForm"),
+        ("pre_and_post_append_one_global_history", "NormalForm"),
+    ] {
+        let c = cases.iter().find(|c| c.name == name).expect(name);
+        assert_eq!(c.expect, want, "{name}");
+    }
     let file = EncodingFileJson { format: FORMAT_ENCODING.into(), spec: SPEC.into(), cases };
     ("encoding.json".into(), serde_json::to_string_pretty(&file).unwrap() + "\n")
 }
@@ -1011,4 +1261,14 @@ fn every_primitive_has_vectors_including_its_edges() {
         }
         assert!(errors < cases.len(), "primitive {tag} has no success vector");
     }
+}
+
+/// `prim_set_id` is the keyed BLAKE2b-512 of the descriptor, under the chain's `Hash64` id
+/// discipline (spec 04b §6.0) — recomputed here, since the crate itself hashes nothing.
+#[test]
+fn prim_set_id_is_the_keyed_hash_of_the_descriptor() {
+    use misaka_palw_tir::prim::{PRIM_SET_ID_DOMAIN_V1, PRIM_SET_ID_V1, prim_set_descriptor_v1};
+    let h = blake2b_simd::Params::new().hash_length(64).key(PRIM_SET_ID_DOMAIN_V1).hash(&prim_set_descriptor_v1());
+    assert_eq!(h.as_bytes(), &PRIM_SET_ID_V1[..]);
+    assert!(prim_set_descriptor_v1().starts_with(b"palw-tir/v1/spec=04b-tensor-ir/rev2/q=24/prims=0:Reshape,1:Transpose,"));
 }

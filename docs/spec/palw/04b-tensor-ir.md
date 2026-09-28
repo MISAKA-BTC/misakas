@@ -14,7 +14,11 @@
 > and 04a unchanged. The integer rules of [04a](04a-integer-arithmetic.md) are reused exactly where
 > the legacy kernels use them; §10 shows how each legacy rule is an IR segment.
 >
-> Status: **Draft for review (Gate 1)**. `prim_set_id` is not fixed until freeze (RFC §1.2).
+> Status: **Draft for review (Gate 2)**, revision 2: the findings F1–F15 of the independent second
+> implementation (`docs/design/palw/tir/ref2-findings.md`) are applied — the cone environment (§9.2),
+> the state-writer rule (NF-19), `prim_set_id` (§6.0, NF-1) and the error-class table (§9.3) — and the
+> single step tree of Phase F (D7, §10.1). The primitive set and its semantics are frozen only at
+> RFC-0002 Phase E; `prim_set_id` names this revision (§6.0).
 
 Contents: §0 conventions · §1 terminology · §2 types · §3 the program · §4 the encoding ·
 §5 normal form · §6 primitives · §7 ranges · §8 costs · §9 evaluation · §10 commitment and the court ·
@@ -32,8 +36,10 @@ Contents: §0 conventions · §1 terminology · §2 types · §3 the program · 
   is at linear position `Σ_k i_k · s_k` with `s_(r−1) = 1`, `s_k = s_(k+1) · d_(k+1)`. A rank-0
   tensor (scalar) has exactly one element.
 - `ONE = 2^24`. "Q24" means an integer read as `value / 2^24`.
-- An *error* aborts the whole evaluation it occurs in (§9.1). Which error class is reported is
-  diagnostic; **only success versus error is normative** (PALW-TIR-34).
+- An *error* aborts the whole evaluation it occurs in (§9.1). **Success versus error is
+  normative** (PALW-TIR-34); every rule names the class of its refusal (§9.3), so two conforming
+  implementations also report the same class for an input that breaks one rule, and no class ever
+  decides a verdict (§9.3).
 
 ## 1. Terminology — an IR, not a VM
 
@@ -51,7 +57,7 @@ registration (PALW-TIR-18).
 | step | the evaluation of one position: `pre`, then every layer block in schedule order, then `post` |
 | occurrence | one block evaluated at one place in the schedule: `(block, layer)`; `layer` is `None` for `pre`/`post` |
 | run | steps at positions `0, 1, …, T−1` from the initial state |
-| commit point | a node with `commit = true`; its value is committed in the step leg |
+| commit point | a node with `commit = true`; its value is committed as leaves of the step tree |
 | cone | the part of an occurrence a commit point's value depends on, back to other commit points and leaves (§10.2) |
 | reference evaluator | the implementation that walks the graph (§9); `misaka-palw-tir` is the first one |
 
@@ -87,8 +93,11 @@ a block that appends to none has no window and no tensor of it may contain `H`).
 H = min(pos + 1, W)
 ```
 
-The worst case used by the size caps and by §7/§8 is `H = W`. Every tensor's element count at the
-worst case MUST be `≤ 2^28`.
+The worst case used by the size caps and by §7/§8 is `H = W`. Every **node output**'s element count
+at the worst case MUST be `≤ 2^28`; so is every const's and every state's (NF-8). A `Hist` state's
+row has rank `≤ 3` and `≤ 2^28` elements, and its window is capped through its `HistAppend` output
+`[W] ++ row` (a row of 1,024 elements admits a window of `2^18`, one of 1,025 does not). Params are
+artifact tensors and are capped at `2^40` elements instead (NF-8, §14 deviation 7).
 
 ### 2.3 Broadcasting (PALW-TIR-22)
 
@@ -105,7 +114,7 @@ for every output index along that axis.
 ```
 TirProgramV1 {
   version:          u16                 = 1
-  prim_set_id:      [u8; 64]            the network's hash of the prim-set descriptor (§6.0)
+  prim_set_id:      [u8; 64]            PRIM_SET_ID_V1, the keyed hash of the prim-set descriptor (§6.0)
   token_bound:      u32                 tokens are idx values in [0, token_bound)
   history_bound:    u32                 2^18 or 2^21; positions are in [0, history_bound)
   params:           [ParamDecl]         tensors bound to the artifact inventory
@@ -175,6 +184,12 @@ indexed by the layer number `l`.
 A `Fixed` or `Hist` state's `per_layer` MUST equal the role of every block that uses it: per-layer
 states only in layer blocks, global states only in `pre`/`post`.
 
+**No two nodes of one step write the same state instance** (NF-19). A block writes a state at most
+once (one `StateWrite` or one `HistAppend`), and `post` writes no state at all — so a global state is
+written only by `pre` (`post` may read it) and a per-layer instance only by the one occurrence of its
+layer. The next position's value of every instance is therefore defined by exactly one node, whatever
+order an implementation applies effects in.
+
 ### 3.5 Params and consts
 
 A param is bound to the artifact inventory by `name` (per-layer params at each layer that runs a
@@ -188,7 +203,8 @@ A const is `data`, the little-endian encoding of `Π shape` elements of `dtype`.
 
 `graph_ir_root = H(encode(program))` for the network's keyed hash. The canonical encoding (§4) is the
 program: every field above is part of the identity, including names, the order of nodes (it fixes
-the node slots) and the commit flags. The identity MUST NOT depend on anything outside the program:
+the node slots), the commit flags, `prim_set_id` (which MUST be `PRIM_SET_ID_V1`, NF-1) and
+`logits_scheme_id`. The identity MUST NOT depend on anything outside the program:
 thread counts, repacking, backends, fused kernels, tile shapes a backend chooses, or the physical
 layout of the artifact beyond the param binding.
 
@@ -283,8 +299,9 @@ A decoded program is in normal form iff every rule below holds. Violations are r
 panics.
 
 **Program**
-- NF-1 `version = 1`; `history_bound ∈ {2^18, 2^21}`; `token_bound ≥ 1`.
-- NF-2 `1 ≤ |blocks| ≤ 16`; `|schedule.layers| ≤ 1024`; `|params| ≤ 4096`; `|states| ≤ 64`, of which
+- NF-1 `version = 1`; `prim_set_id = PRIM_SET_ID_V1` (§6.0); `history_bound ∈ {2^18, 2^21}`;
+  `token_bound ≥ 1`.
+- NF-2 `2 ≤ |blocks| ≤ 16` (`pre` and `post` are distinct, NF-3); `|schedule.layers| ≤ 1024`; `|params| ≤ 4096`; `|states| ≤ 64`, of which
   at most 16 are `per_layer`.
 - NF-3 `pre`, `post` and every `layers[l]` index an existing block; `pre ≠ post`; neither `pre` nor
   `post` appears in `layers`; every block is `pre`, `post` or in `layers`.
@@ -320,7 +337,9 @@ panics.
   and equals the type the primitive's type rule (§6) gives for its operand types.
 - NF-17 A committed node has a committable dtype (PALW-TIR-5).
 - NF-18 Every `TopK` node is committed (PALW-TIR-11).
-- NF-19 At most one `StateWrite` per state per block and at most one `HistAppend` per state per block.
+- NF-19 **No two nodes of one step write the same state instance**: at most one `StateWrite` per
+  state per block, at most one `HistAppend` per state per block, and **`post` contains no
+  `StateWrite` and no `HistAppend`** (so a global state is written only by `pre`, NF-15; §3.4).
 - NF-20 The input of every `HistAppend` is a committed node or a carry-in (PALW-TIR-14).
 - NF-21 Every carry-out node is committed.
 - NF-22 **No dead node**: every node is reachable backwards (through `Node` refs) from a root — a
@@ -328,7 +347,7 @@ panics.
 
 Canonical attribute forms are enforced by the type rules: a `Transpose` permutation is a
 permutation, a `Clamp` has `lo ≤ hi` inside `out.dtype`, and so on (§6). NF-1..22 are exactly the
-checks of `misaka_palw_tir::validate::validate`.
+checks of `misaka_palw_tir::validate::validate`; §9.3 gives the class each one reports.
 
 ## 6. The primitives (PALW-TIR-1)
 
@@ -339,8 +358,22 @@ model (freeze criterion 1). The *prim-set descriptor* whose network hash is `pri
 ASCII string
 
 ```
-palw-tir/v1/spec=04b-tensor-ir/rev1/q=24/prims=0:Reshape,1:Transpose,2:Slice,3:Concat,4:Broadcast,5:Iota,6:Gather,7:Cast,8:Add,9:Sub,10:Mul,11:MatMul,12:ReduceSum,13:ReduceMax,14:Div,15:Clamp,16:Log2Floor,17:IntExp,18:IntRsqrt,19:IntLn,20:Compare,21:Select,22:TopK,23:StateWrite,24:HistAppend
+palw-tir/v1/spec=04b-tensor-ir/rev2/q=24/prims=0:Reshape,1:Transpose,2:Slice,3:Concat,4:Broadcast,5:Iota,6:Gather,7:Cast,8:Add,9:Sub,10:Mul,11:MatMul,12:ReduceSum,13:ReduceMax,14:Div,15:Clamp,16:Log2Floor,17:IntExp,18:IntRsqrt,19:IntLn,20:Compare,21:Select,22:TopK,23:StateWrite,24:HistAppend
 ```
+
+and `prim_set_id` is its keyed hash under the chain's `Hash64` id discipline (the one
+`kernel_semantics_id_v1` uses): **BLAKE2b with a 64-byte output, keyed by the 30 ASCII bytes
+`misaka-palw/tir-prim-set-id/v1`, over the descriptor's ASCII bytes** (no length prefix, no
+terminator):
+
+```
+PRIM_SET_ID_V1 = 61fa4aa57adfc79053c5e517515e50c7ae7c036abc43ff931053144691ba31c9
+                 212539a93514f831a8472ca75a39b094177736aa5818eeae547bb31fbf89f589
+```
+
+A program MUST declare exactly this value (NF-1; `encoding.json` case `prim_set_id_not_v1`). The
+`rev` component names the revision of this text; revision 2 is the text after the second
+implementation's findings.
 
 | kind | primitives | may sit in an order-free region |
 | --- | --- | --- |
@@ -475,8 +508,9 @@ the only narrowing that loses information.
 
 ### 6.5 Integer transcendentals (kind T, PALW-TIR-26)
 
-All three read and write **Q24**; their inputs MUST NOT be `i128` (the value is used as a 64-bit
-quantity); their outputs obey the exact-result rule. Constants (all decimal integers):
+*Type* (all three): 1 input, of any dtype but `i128` (the value is used as a 64-bit quantity);
+`out.shape = x.shape`; any `out.dtype`. All three read and write **Q24**, elementwise; their outputs
+obey the exact-result rule. Constants (all decimal integers):
 
 ```
 K = 24, ONE = 16777216, LN2_Q = 11629080
@@ -536,7 +570,10 @@ return 2·sum + s·LN2_Q
 ```
 
 For `x ≥ 1`, `IntLn(x) ∈ [s·LN2_Q, (s+1)·LN2_Q)`; over `i64` inputs the output is in
-`[−24·LN2_Q, 39·LN2_Q)`.
+`[−24·LN2_Q, 39·LN2_Q)`. *Margin (informative):* the series part `2·sum` stays in
+`[0, 11,629,070]` for every mantissa in `[2^24, 2^25)` — only **10 units** below `LN2_Q` (checked
+exhaustively by the second implementation). The half-open bound, and so §7's `IntLn` interval, rests
+on that margin; a change of constants must re-check it.
 
 These are bit-for-bit `palw_base0::int_exp`, `palw_base0::int_rsqrt` and
 `palw_qwen36_ops::q36_int_ln` (the latter returns "no value" for `x ≤ 0`; PALW-TIR defines 0, which is
@@ -639,9 +676,15 @@ carry these clamps.
 
 **Committed operands (PALW-TIR-33).** A node's proven interval is also the domain of its committed
 value: when the court opens a commit point, a value outside the node's proven interval is a
-malformed commitment (the committer loses), exactly as a value outside the dtype is today. This is
-what makes the analysis sound for cones evaluated from committed values rather than recomputed
-ones. (The Gate 1 evaluator checks dtypes; it gains the interval check with `tir_admit_v1`.)
+malformed commitment, exactly as a value outside the dtype is. **Every committed operand is the
+executor's statement** — step leaves (commit points), state checkpoint leaves (inside `[lo, hi]`),
+Hist tile leaves (inside the row node's interval), carry-ins (the previous occurrence's carry-out, a
+commit point) — so a violation convicts the executor, whichever leaf the challenger disputed; a
+challenger cannot manufacture one, because the values are opened against the executor's roots.
+Params are not committed operands: they take their dtype's full range (the registrant's, §3.5). This
+is what makes the analysis sound for cones evaluated from committed values rather than recomputed
+ones: after the check, no cone value can leave its interval, so no evaluation of an admitted program
+can overflow.
 
 ## 8. Cost formulas (PALW-TIR-12)
 
@@ -672,8 +715,9 @@ benchmarked in Phase D; these formulas upper-bound the reference evaluator's wor
 
 Input: the program, the params, the run state `(pos, Fixed values, Hist rows)`, and `token`.
 
-1. Fail (class `Position`) if `pos ≥ history_bound`; fail (class `Operand`) if the token is needed
-   and `token ≥ token_bound`.
+1. Fail (class `Position`) if `pos ≥ history_bound`. The token is **needed** when some node of the
+   program reads `Input(0)`; then fail (class `Operand`) if `token ≥ token_bound`. Both checks come
+   before any node is evaluated, so the class never depends on evaluation order.
 2. For each occurrence in order (§3.3): evaluate every node in index order; a node's operands are
    the values of its refs (§3.2) — a missing per-layer or global param, or one whose dtype, shape
    or values do not match its declaration, fails (class `Missing`/`Operand`); a `Fixed` state's value
@@ -687,26 +731,86 @@ Input: the program, the params, the run state `(pos, Fixed values, Hist rows)`, 
 The initial run state is `pos = 0`, every `Fixed` instance all zeros, every `Hist` instance empty.
 A run is steps at positions `0 … T−1`.
 
+**Run-state completeness.** An implementation's run state MAY omit a `Fixed` instance that has never
+been written (its value is then all zeros) and a `Hist` instance with no rows (then empty); from the
+initial state the runs are identical either way. This convenience belongs to the run state only: a
+cone's environment is opened from commitments, and there an absent value is never implied (§9.2).
+
 ### 9.2 Cone evaluation (PALW-TIR-30)
 
 `eval_cone(block, layer, target, env)` evaluates one node of one occurrence from supplied values —
-the court's entry point. `env` gives: the token and `pos`; the carry-in values; the `Fixed` values at
-the start of the position; for each `Hist` state the prior rows (exactly `min(pos, window − 1)`,
-oldest first); and **supplied** values for any nodes of the occurrence. The evaluator computes the
-backward closure of `target` that stops at every supplied node (a supplied node's value is taken, not
-recomputed, after checking it has the node's declared dtype and shape at the running `H`), in node
-index order, by §6 and §9.1(2). A value the closure needs and nobody supplied fails (class
-`Missing`). `(block, layer)` MUST be an occurrence of the schedule. Effects are not applied.
+the court's entry point. Effects are not applied.
+
+**The request.** `(block, layer)` MUST be an occurrence of the schedule and `target` a node of
+`block`; otherwise the request is refused (class `Malformed`).
+
+**The environment** gives: the token (or none) and `pos`; the carry-in values; the `Fixed` values
+at the start of the position, by state; for each `Hist` state, its prior rows — exactly
+`min(pos, window − 1)` of them, oldest first, **possibly none**; and **supplied** values for nodes of
+the occurrence. Two environments are malformed and refused (class `Malformed`) before anything is
+evaluated:
+
+- one that supplies **`target` itself**: the target is always evaluated — a court that took the
+  disputed value from the environment would "recompute" exactly the claim under dispute;
+- one with an entry at an index that is **not a node of `block`**.
+
+Entries for nodes of `block` that the closure does not reach are ignored, whatever their type.
+
+**The closure** is the backward closure of `target` through `Node` refs that stops at every supplied
+node; it is evaluated in node index order by §6. Before any node is evaluated: fail (class
+`Position`) if `pos ≥ history_bound`; and if a node of the closure reads `Input(0)`, fail (class
+`Missing`) if the environment has no token and (class `Operand`) if `token ≥ token_bound`. Then every
+value the closure reads is checked as in §9.1(2):
+
+| value read | absent | ill-formed |
+| --- | --- | --- |
+| a supplied node | — (then it is computed) | declared dtype and shape at the running `H`, else `Operand` |
+| a carry-in | `Missing` | declared dtype, shape and values, else `Operand` |
+| a `Fixed` value (`Ref::State`) | **`Missing` — never implied** (not zeros, not the initial value) | declared dtype and shape, values in `[lo, hi]`, else `Operand` |
+| a history (a `HistAppend` in the closure) | **`Missing`, even when zero rows are needed** (`pos = 0`, or `window = 1`): the court always supplies it, possibly empty | exactly `min(pos, window − 1)` rows, else `Position`; each row's dtype and shape, else `Operand` |
+| a param | `Missing` | declared dtype and shape, else `Operand` |
+| a node value nobody supplied that the closure needs | `Missing` | — |
 
 Evaluating a commit point's cone with every other commit point of the occurrence supplied from an
-honest step reproduces the step's committed value — `tests/programs.rs` checks this for every commit
-point of every position of five programs.
+honest step — and every carry-in, `Fixed` value and history of the occurrence supplied — reproduces
+the step's committed value.
+
+`tests/programs.rs` checks this for every commit point of every position of five programs; the
+`refusals[]` of the program vectors (§12) pin every refusal above.
 
 ### 9.3 Errors (PALW-TIR-34)
 
 Every malformed program, every out-of-range value, every overflow and every missing operand is an
-error, never an abort of the implementation. The classes (diagnostic): `Encoding`, `NormalForm`,
-`Shape`, `Overflow`, `Index`, `Divisor`, `Operand`, `Missing`, `Position`.
+error, never an abort of the implementation. Each rule reports exactly one class:
+
+| rule | class |
+| --- | --- |
+| §4.4 decoding: the 262,144-byte cap, a truncated or trailing byte, an unknown tag, a `bool` not 0/1, invalid UTF-8, bytes that do not re-encode to themselves | `Encoding` |
+| NF-1 … NF-15, NF-17 … NF-22 (including NF-14's arity and `Ref` existence) | `NormalForm` |
+| NF-16: a type rule of §6 fails, or a declared `out` differs from the inferred type | `Shape` |
+| the exact-result rule (§6.1), the order-free sum rule (§6.3) | `Overflow` |
+| a `Gather` index outside its axis (§6.2) | `Index` |
+| a `Div` divisor below 1 (§6.4) | `Divisor` |
+| a value handed to the evaluator that is not what its declaration says: a param, carry-in, `Fixed` value (or one outside `[lo, hi]`), history row or supplied node of the wrong dtype, shape or values; a token `≥ token_bound` | `Operand` |
+| a value the evaluation needs and nobody provided: a param, a token a cone reads, a carry-in, a `Fixed` value or a history in a cone, a node value | `Missing` |
+| `pos ≥ history_bound`; a history with the wrong number of prior rows | `Position` |
+| a cone request that names no occurrence or no node; an environment that supplies the target or an index that is no node (§9.2) | `Malformed` |
+
+An input that breaks exactly one rule reports that rule's class (every vector breaks one); an input
+that breaks several reports the class of one of them.
+
+**What a class leads to (Phase F).** No class decides a verdict — the class is a label, and the
+success-versus-failure bit is what consensus reads:
+
+- at registration, any failure of decoding, normal form or `tir_admit_v1` refuses the class
+  (`TirProgram(class)`), whatever the class;
+- in the court, the arm runs the evaluator only after verifying every opened unit and checking every
+  committed operand against its proven interval (PALW-TIR-33, which convicts the executor BEFORE any
+  evaluation). After that, `Missing` and `Malformed` are the only classes honest bytes can meet — the
+  evidence does not serve the cone — and the close is refused (`InputSetNotCanonical`, nobody
+  slashed); `Overflow`, `Index`, `Divisor`, `Operand` and `Position` are unreachable for an admitted
+  program, and meeting one is an interpreter defect that also refuses the close (`Unadjudicable`,
+  nobody slashed). Neither refusal convicts or acquits anyone.
 
 ## 10. Commitment and the court
 
@@ -718,8 +822,13 @@ Required commit points, enforced by normal form:
 - every `TopK` (NF-18) — a selection is an opened value, never a bisection target (ADR-0052 B);
 - the input row of every `HistAppend` (NF-20), so later positions' cones can open it.
 
-**State.** A `Fixed` state is committed at checkpoint positions in the checkpoint leg (every `C_j`
-positions for state `j`), not at every position; between checkpoints the court replays the state's
+**State — one step tree (Phase F D7).** An IR class has ONE step tree and no separate checkpoint
+leg. A `Fixed` state is committed at checkpoint positions — every `C` positions of the class's
+declared commitment layout, `C ≤ C_j` for every state `j` (§10.3) — as ordinary **step leaves**
+(state checkpoint leaves, tiled like any row), not at every position; a `Hist` state's rows are the
+per-position commit points of NF-20 and are also committed, every `h_tile` positions, as **Hist tile
+leaves** of the same tree. All leaves are in position order, so the ladder's first divergent leaf is
+always adjudicable from leaves that precede it. Between checkpoints the court replays the state's
 update cone from the per-position commit points it reads. For that replay to be possible, every leaf
 of a `StateWrite`'s cone other than `State`, `Param`, `Const` and `Input` refs MUST be a commit point
 or a carry-in — which holds by construction, because a cone stops at commit points and carry-ins are
@@ -733,8 +842,8 @@ are (PALW-TIR-5).
 The cone of commit point `n` in occurrence `o` is the set of nodes of `o` reachable backwards from
 `n` through `Node` refs without passing through another commit point, together with its *leaves*:
 the other commit points it reaches (opened values), params (opened against the artifact root),
-consts, `State` values (from the checkpoint leg or replay), carry-ins (the previous occurrence's
-committed carry-out), inputs, and — for a `HistAppend` in the cone — the history's prior rows (each
+consts, `State` values (from a state checkpoint leaf, advanced by replay), carry-ins (the previous
+occurrence's committed carry-out), inputs, and — for a `HistAppend` in the cone — the history's prior rows (each
 the committed row of an earlier position). The court opens the leaves and runs §9.2.
 
 ### 10.3 Court feasibility
@@ -843,12 +952,16 @@ tensors are `{"dtype": "i32", "shape": [2, 3], "data": ["1", "-2", …]}` in row
   1)` regression), `i32`/`i64`/`i128` minima and maxima, every `IntExp` range-reduction bucket edge,
   the `IntRsqrt` seed basin, the order-free rule (a `MatMul` whose total fits but whose positive
   terms do not), `TopK` ties, and every error class a primitive can raise; plus seeded random cases.
-- **`programs/name.json`** (`format = palw-tir-v1/program-vectors/1`): `program_borsh_hex` (a
+- **`programs/name.json`** (`format = palw-tir-v1/program-vectors/2`): `program_borsh_hex` (a
   canonical program, §4), `params` (`param`, `layer` or null, `le_hex` = the tensor's little-endian
   bytes; dtype and shape from the declaration), `steps[]` (for each position: `pos`, `token`,
-  `logits`, and `commits[]` = every commit point with `slot`, `block`, `layer`, `node`, `value`), and
+  `logits`, and `commits[]` = every commit point with `slot`, `block`, `layer`, `node`, `value`),
   `cones[]` (an `eval_cone` case: `block`, `layer`, `target`, `token`, `pos`, `carry_in`, `fixed`,
-  `hist_prior`, `supplied`, `expect`). The state primitives are pinned here: `fixed-state-saturation`
+  `hist_prior`, `supplied`, `expect`; the environment is complete, §9.2), and `refusals[]` (an
+  honest cone environment with one defect — `what` names it — and `expect_error` = the class of §9.3:
+  the target supplied, an index that is no node, `pos = history_bound`, a `Fixed` value absent, a
+  history absent at the last position and at position 0 where zero rows are needed, the token absent
+  or at `token_bound`; `token` is null when absent). The state primitives are pinned here: `fixed-state-saturation`
   (`StateWrite`, per-layer instances), `hist-window` (`HistAppend` with window 3, an `Iota` over `H`),
   and five whole models (dense GQA 2-layer, sliding + global, GDN with 2 key / 4 value heads, Mamba2,
   top-2 MoE with a shared expert).
@@ -856,7 +969,8 @@ tensors are `{"dtype": "i32", "shape": [2, 3], "data": ["1", "-2", …]}` in row
   `ok` or the refusal class — a valid program and its mutations (trailing byte, truncation, version 2,
   a `bool` of 2, an unknown primitive tag, a dead node, a forward reference, a declared shape that is
   not the inferred one, a per-layer mismatch, an uncommitted logits node, a forbidden
-  `history_bound`).
+  `history_bound`, a `prim_set_id` other than `PRIM_SET_ID_V1`, a single block), and the NF-19 cases:
+  a global state written by `pre` (valid), by `post`, by both, and a global history appended by both.
 
 `cargo test -p misaka-palw-tir --test golden` regenerates every file and requires identical bytes;
 `TIR_BLESS=1` rewrites them, which is a change of the semantics and is reviewed as one.
@@ -923,10 +1037,11 @@ tensors are `{"dtype": "i32", "shape": [2, 3], "data": ["1", "-2", …]}` in row
   which defines `H` for the block.
 - **PALW-TIR-32 (dissectability).** Every reduction over `H` is dissectable (§10.3); admission need
   not search for violations, because the type rules exclude them.
-- **PALW-TIR-33 (committed operands).** A committed value outside its node's proven interval is a
-  malformed commitment.
+- **PALW-TIR-33 (committed operands).** A committed value outside its node's proven interval (a
+  state checkpoint leaf outside `[lo, hi]`) is a malformed commitment and convicts the executor, who
+  committed it.
 - **PALW-TIR-34 (totality).** Every failure is an error, never an abort. Success versus failure is
-  normative; the error class is diagnostic.
+  normative; each rule reports the class §9.3 names, and no class decides a verdict.
 - **PALW-TIR-35 (golden vectors).** An implementation MUST reproduce every vector of §12.
 - **PALW-TIR-36 (no structured control).** v1 has no `BoundedScan`, `BoundedMap` or `BoundedReduce`:
   no corpus family has a recurrence inside a position, heads/experts/channels are batched as tensor
@@ -946,10 +1061,11 @@ Deviations (each argued in `docs/design/palw/tir/corpus-v1.md`):
    renormalisation); `Iota` over `H`; `Gather` with `batch_dims`.
 3. **`HistAppend` returns the window** (`HistRead` merged into it) — one node per history, with the
    dependency order explicit.
-4. **Fixed state is committed at checkpoints, not per position.** RFC §6's "the input of every
-   StateWrite" as a per-position commit point would exceed the step-leaf cap for a GDN state
-   (`v_heads · d_v · d_k` lanes per layer per position); the per-position commit points are the
-   update cone's inputs instead (§10.1).
+4. **Fixed state is committed at checkpoints, not per position, as leaves of the one step tree.**
+   RFC §6's "the input of every StateWrite" as a per-position commit point would exceed the step-leaf
+   cap for a GDN state (`v_heads · d_v · d_k` lanes per layer per position); the per-position commit
+   points are the update cone's inputs instead, and the checkpoints are step leaves — no checkpoint
+   leg (§10.1, Phase F D7).
 5. **`token_bound`** is a program field (the embedding `Gather` needs a provable index range).
 6. **Committed operands are checked against proven intervals** (PALW-TIR-33), so the range analysis
    is sound for cones evaluated from commitments; CarryIn takes the full dtype range.
@@ -957,7 +1073,17 @@ Deviations (each argued in `docs/design/palw/tir/corpus-v1.md`):
    "any tensor") it would refuse every real vocabulary embedding and every large MoE layer; params
    get a sanity bound of 2^40 elements instead (NF-8).
 
-Open items for Gate 2 and later: the param binding for per-layer params and for legacy 17-byte A16
-triples (the IR artifact stores `m`, `s`, `z` as separate tensors); the checkpoint leg's encoding of
-`Fixed` states; `tile_len` per commit point and the canonical chunking of `H`; the cost coefficients
-(Phase D); the court's operand-interval check (PALW-TIR-33) and who loses on it.
+Revision 2 (this text) applied the second implementation's findings: a cone never implies a
+`Fixed` value or a history (F1, F3), never takes its target from the environment (F2), refuses an
+index that is no node (F4); NF-19 forbids two writers of one state instance and any write in `post`
+(F5, F6); the position and token bounds and the carry-in checks of a cone are stated (F7, F8); the
+transcendentals have a type clause (F9); "needed" is defined (F10); the run state may omit untouched
+instances (F11); the caps sentence (F12) and the block count (F13) are corrected; `prim_set_id` is
+defined and checked (F14); every rule has a class (F15).
+
+Open items for Gate 2 and later: the param binding for per-layer params (the IR artifact stores a
+legacy 17-byte A16 triple as three typed tensors `m`, `s`, `z`, repacked at conversion — a re-registered
+legacy class gets a new inventory root with the same numbers); `tile_len` per commit point and the
+canonical chunking of `H` (`tir_admit_v1`); the cost coefficients (Phase D). PALW-TIR-33 is settled:
+every committed operand — step leaves, state checkpoint leaves, carry-ins — is the executor's, and a
+value outside its node's proven interval convicts the executor (Phase F §2.7).

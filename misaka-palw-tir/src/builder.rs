@@ -87,7 +87,7 @@ impl ProgramBuilder {
     pub fn finish(self, pre: u8, layers: Vec<u8>, post: u8, logits: u16) -> TirProgramV1 {
         TirProgramV1 {
             version: TIR_PROGRAM_VERSION_V1,
-            prim_set_id: [0u8; 64],
+            prim_set_id: crate::prim::PRIM_SET_ID_V1,
             token_bound: self.token_bound,
             history_bound: self.history_bound,
             params: self.params,
