@@ -6001,6 +6001,8 @@ dependencies = [
  "kaspa-txscript",
  "libc",
  "misaka-palw",
+ "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
  "rayon",
  "serde_json",
  "unicode-normalization",
