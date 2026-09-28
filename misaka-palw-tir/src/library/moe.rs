@@ -85,14 +85,19 @@ impl BlockBuilder<'_> {
     }
 
     /// **The legacy renormalisation** `(w · IntRecip(Σw)) >> 24` along the last axis (the form
-    /// `q36_router_topk` uses).
+    /// `q36_router_topk` uses), for kept weights `w ≥ 0`.
+    ///
+    /// Clamped to `[0, 2^25]`, the router's own clamp, and it never fires: with `0 ≤ w ≤ Σw`,
+    /// `IntRecip(Σw) ≈ 2^48 / Σw` and the product is at most `2^24` plus `IntRecip`'s slack. The
+    /// clamp is the range fact the analysis cannot see (§7): an `i32` clamp here left the combine's
+    /// `MatMul` over DeepSeek-V3's width past `i64` in the range analysis (tir/lower's request).
     pub fn renormalize_recip(&mut self, w: Ref) -> Ref {
         let axis = self.shape(w).len() - 1;
         let sum = self.reduce_sum(w, axis, DType::I64);
         let recip = self.int_recip(sum);
         let p = self.mul(w, recip, DType::I128);
         let q = self.shr(p, K, Rounding::Floor, DType::I128);
-        self.clamp(q, i32::MIN as i64, i32::MAX as i64, DType::I32)
+        self.clamp(q, 0, 1 << 25, DType::I32)
     }
 
     /// `(w · f) >> 24` for a Q24 factor `f` (DeepSeek's `routed_scaling_factor`), `i32` out.
