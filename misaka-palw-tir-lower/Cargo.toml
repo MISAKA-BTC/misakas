@@ -14,15 +14,24 @@ repository.workspace = true
 name = "palw-tir-check"
 path = "src/bin/palw-tir-check.rs"
 
+[[bin]]
+name = "palw-tir-fidelity"
+path = "src/bin/palw-tir-fidelity.rs"
+
 # Deliberately light: no kaspa-consensus-core, no misaka-palw-base0. This crate reads a Hugging
-# Face checkpoint and describes it; nothing here is on a validation path.
+# Face checkpoint, lowers it to a PALW-TIR program plus integer params, and measures fidelity;
+# nothing here is on a validation path. `misaka-palw-tir` is the IR itself (a leaf crate): the
+# builder, the canonical encoding, the range analysis and the reference evaluator.
 [dependencies]
+misaka-palw-tir = { path = "../misaka-palw-tir" }
 serde = { workspace = true }
 serde_json.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 clap = { workspace = true, features = ["derive"] }
+rayon.workspace = true
+blake2b_simd.workspace = true
 
 [lints]
 workspace = true

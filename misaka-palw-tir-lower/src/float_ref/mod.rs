@@ -21,6 +21,8 @@ use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::collections::BTreeMap;
 
+pub mod stream;
+
 /// Bound params: globals, and per-layer params by `(param, layer)`.
 #[derive(Default, Clone)]
 pub struct ParamStore {
@@ -120,6 +122,12 @@ pub struct SiteStat {
 }
 
 impl SiteStat {
+    /// Fold another run's statistics of the same site into this one.
+    pub fn merge(&mut self, o: &SiteStat) {
+        self.absmax = self.absmax.max(o.absmax);
+        self.sum_sq += o.sum_sq;
+        self.count += o.count;
+    }
     fn observe(&mut self, v: &[f32]) {
         for x in v {
             let a = (*x as f64).abs();
@@ -155,6 +163,25 @@ impl<'a> Session<'a> {
     }
     pub fn position(&self) -> usize {
         self.pos
+    }
+
+    /// Evaluate one block occurrence at an explicit position, for drivers that run a sequence
+    /// LAYER by layer (every position through layer `l` before layer `l+1`): positions of one
+    /// occurrence must arrive in increasing order, because histories and recurrent states are
+    /// this session's. Returns the block's outputs (carries, or `[logits]` for `post`).
+    pub fn eval_occurrence(
+        &mut self,
+        bi: usize,
+        layer: Option<usize>,
+        carries: &[Vec<f32>],
+        token: usize,
+        pos: usize,
+    ) -> Result<Vec<Vec<f32>>> {
+        if token >= self.prog.vocab {
+            return Err(LowerError::eval(format!("token {token} ≥ vocab {}", self.prog.vocab)));
+        }
+        self.pos = pos;
+        self.eval_block(bi, layer, carries, token)
     }
 
     /// Logits for `token` at the current position; advances the position.
@@ -193,6 +220,13 @@ impl<'a> Session<'a> {
             (_, Some(l)) => format!("L{l}."),
             _ => String::new(),
         };
+        if let Some(stats) = self.sites.as_mut() {
+            // The block's inputs get a site of their own (`carry0`, …): a lowering that needs the
+            // residual stream at code resolution reads its range here.
+            for (k, c) in carries.iter().enumerate() {
+                stats.entry(format!("{prefix}carry{k}")).or_default().observe(c);
+            }
+        }
         let mut vals: Vec<Vec<Vec<f32>>> = Vec::with_capacity(block.nodes.len());
         for node in &block.nodes {
             let out = self.eval_node(node, &vals, carries, layer, token, &prefix)?;
@@ -499,14 +533,16 @@ fn operand<'v>(r: Ref, vals: &'v [Vec<Vec<f32>>], carries: &'v [Vec<f32>]) -> Re
 // ───────────────────────────── kernels ─────────────────────────────
 
 pub fn linear_raw(x: &[f32], w: &[f32], out: usize, b: Option<&[f32]>) -> Vec<f32> {
+    use rayon::prelude::*;
     let n = x.len();
-    (0..out)
-        .map(|o| {
-            let row = &w[o * n..(o + 1) * n];
-            let s: f64 = row.iter().zip(x).map(|(a, b)| *a as f64 * *b as f64).sum();
-            (s + b.map(|b| b[o] as f64).unwrap_or(0.0)) as f32
-        })
-        .collect()
+    let row = |o: usize| -> f32 {
+        let r = &w[o * n..(o + 1) * n];
+        let s: f64 = r.iter().zip(x).map(|(a, b)| *a as f64 * *b as f64).sum();
+        (s + b.map(|b| b[o] as f64).unwrap_or(0.0)) as f32
+    };
+    // Rows are independent and each is summed in one fixed order, so the parallel result is the
+    // sequential one bit for bit; small products stay on one thread.
+    if out * n >= 1 << 16 { (0..out).into_par_iter().map(row).collect() } else { (0..out).map(row).collect() }
 }
 
 fn linear(x: &[f32], w: &Tensor, b: Option<&[f32]>) -> Vec<f32> {
