@@ -438,3 +438,76 @@ fn kdesc_q36_gdn_step() {
         }
     }
 }
+
+// ---- tir/lower's lean forms: the same values in fewer nodes ------------------------------------
+
+/// **The 21-node unit row is the template's value, and the live kernel's**, on
+/// [`kdesc_q36_rms_norm_wide`]'s operand set — every row, every eps whose `mantissa · 2^shift` fits
+/// the one `i64` param the lean form takes (a mantissa past it is cut to the largest that does, at
+/// the same shift, so every shift of the set is still probed).
+#[test]
+fn kdesc_q36_rms_norm_wide_lean_form() {
+    let hd = 16u32;
+    let mut rng = Lcg(44);
+    let mut xs = rng.vec((T * hd) as usize, i32::MIN as i128, i32::MAX as i128, I32X);
+    xs[..hd as usize].iter_mut().for_each(|v| *v = 0);
+    xs[hd as usize..2 * hd as usize].iter_mut().enumerate().for_each(|(i, v)| *v = if i == 2 { 3 } else { 0 });
+    let ez = rng.vec(T as usize, 0, i64::MAX as i128, &[0, 1, 1 << 30, i64::MAX as i128]);
+    let es = shifts(&mut rng, T as usize);
+    let ez: Vec<i128> = ez.iter().zip(&es).map(|(z, s)| (*z).min(i64::MAX as i128 >> s)).collect();
+    let eps: Vec<i128> = ez.iter().zip(&es).map(|(z, s)| z << s).collect();
+    assert!(eps.iter().all(|e| *e <= i64::MAX as i128));
+    let lean = run_pos(
+        &[arg("x", DType::I32, &[T, hd], xs.clone()), arg("eps", DType::I64, &[T, 1], eps.clone())],
+        &[],
+        T,
+        |b, r, _, pos| {
+            let (x, e) = (row(b, r[0], pos), row(b, r[1], pos));
+            let e = b.reshape_fixed(e, &[]);
+            b.rms_unit_q24(x, e)
+        },
+    );
+    let args = [
+        arg("x", DType::I32, &[T, hd], xs.clone()),
+        arg("ez", DType::I64, &[T, 1], ez.clone()),
+        arg("es", DType::I8, &[T, 1], es.clone()),
+    ];
+    let template = run_pos(&args, &[], T, |b, r, _, pos| {
+        let (x, z, s) = (row(b, r[0], pos), row(b, r[1], pos), row(b, r[2], pos));
+        b.rms_norm_wide_q36_exact(x, z, s)
+    });
+    for p in 0..T as usize {
+        let x = i32s(&xs[p * hd as usize..(p + 1) * hd as usize]);
+        let live = wide(&q36::q36_rms_norm_wide(&x, triple(1, es[p], ez[p])).unwrap());
+        assert_eq!(lean[p], template[p], "eps {}·2^{} position {p}: the lean form is the template's value", ez[p], es[p]);
+        assert_eq!(lean[p], live, "position {p}: and the live kernel's");
+    }
+}
+
+/// **The 17-node L2 row is the template's value, and the live kernel's**, on
+/// [`kdesc_q36_l2_norm`]'s operand set (a zero head and a one-lane head included).
+#[test]
+fn kdesc_q36_l2_norm_lean_form() {
+    let (heads, hd) = (4u32, 8u32);
+    let mut rng = Lcg(40);
+    let mut xs = rng.vec((T * heads * hd) as usize, -32767, 32767, CODEX);
+    xs[..hd as usize].iter_mut().for_each(|v| *v = 0);
+    xs[hd as usize..2 * hd as usize].iter_mut().enumerate().for_each(|(i, v)| *v = if i == 1 { 1 } else { 0 });
+    let form = |lean: bool| {
+        run_pos(&[arg("x", DType::I16, &[T, heads * hd], xs.clone())], &[], T, |b, r, _, pos| {
+            let x = row(b, r[0], pos);
+            let x = b.reshape_fixed(x, &[heads, hd]);
+            let y = if lean { b.l2_unit_q15(x) } else { b.l2_norm_q15(x) };
+            b.reshape_fixed(y, &[heads * hd])
+        })
+    };
+    let (lean, template) = (form(true), form(false));
+    for p in 0..T as usize {
+        let live: Vec<i32> = xs[p * (heads * hd) as usize..(p + 1) * (heads * hd) as usize]
+            .chunks(hd as usize)
+            .flat_map(|h| q36::q36_l2_norm(&i32s(h)).unwrap())
+            .collect();
+        assert_eq!(lean[p], template[p], "position {p}: the lean form is the template's value");
+        assert_eq!(lean[p], wide(&live), "position {p}: and the live kernel's");
+    }
+}

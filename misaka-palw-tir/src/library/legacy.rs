@@ -615,6 +615,74 @@ impl BlockBuilder<'_> {
         self.reshape_fixed(o, &[h, dv])
     }
 
+    /// **The unit row `x / √(mean(x²) + eps)` in Q24 along the last axis, in 21 nodes** —
+    /// [`Self::rms_norm_wide_q36`]'s value (and so `q36_rms_norm_wide`'s) for any `eps` that fits one
+    /// `i64` param (the template's `eps_zero · 2^eps_shift`), for rows of `i32` values.
+    ///
+    /// The mean's exponent is taken out only when it is positive, `h = max(0, ⌊(log2 mean − 24)/2⌋)`:
+    /// for a smaller mean `IntRsqrt` normalises internally — its mantissa is the template's
+    /// left-shifted one — and returns `y · 2^(−e)` as an exact left shift, which is what the
+    /// template's left-shift branch reassembles, so the two give the same integers; a zero mean
+    /// gives `IntRsqrt(0) = 0` and a zero row, as the template's select does. (tir/lower's request:
+    /// the gated-delta + MoE layers of Qwen3.5-MoE and Qwen3-Next and DeepSeek-V3's MLA + MoE layers
+    /// do not fit NF-12's 512 nodes with the 39-node form.)
+    pub fn rms_unit_q24(&mut self, x: Ref, eps: Ref) -> Ref {
+        let shape = self.shape(x);
+        let axis = shape.len() - 1;
+        let n = fixed_last(self, x);
+        let sq = self.mul(x, x, DType::I64);
+        let sum = self.reduce_sum(sq, axis, DType::I128);
+        let one = self.c(DType::I64, ONE);
+        let scaled = self.mul(sum, one, DType::I128);
+        let nn = self.c(DType::I64, n as i128);
+        let mean0 = self.div(scaled, nn, Rounding::Floor, DType::I128);
+        let e = self.clamp(eps, 0, i64::MAX, DType::I64);
+        let mean = self.add(mean0, e, DType::I128);
+        let bit = self.log2_floor(mean, DType::I32);
+        let k = self.c(DType::I32, K as i128);
+        let t = self.sub(bit, k, DType::I32);
+        let two = self.c(DType::I32, 2);
+        let h = self.div(t, two, Rounding::Floor, DType::I32);
+        let h = self.clamp(h, 0, 51, DType::I32);
+        let h2 = self.mul(h, two, DType::I32);
+        let p2 = self.pow2_128_of(h2, 102);
+        let m = self.div(mean, p2, Rounding::Floor, DType::I128);
+        let m = self.clamp(m, 0, i64::MAX, DType::I64);
+        let r = self.int_rsqrt(m);
+        let prod = self.mul(x, r, DType::I128);
+        let p1 = self.pow2_128_of(h, 51);
+        let y = self.div(prod, p1, Rounding::Floor, DType::I128);
+        self.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32)
+    }
+
+    /// **`x / ‖x‖` in Q15 codes along the last axis, in 17 nodes** — [`Self::l2_norm_q15`]'s value
+    /// (and `q36_l2_norm`'s) for rows of A16 codes: `IntRsqrt(Σx² / 2^2h) · x / 2^(h + 21)` with
+    /// `h = max(0, ⌊(log2 Σx² − 24)/2⌋)`. Below `h = 0` the template shifts the sum left into
+    /// `[2^24, 2^26)` and divides by `2^(21 − k)`; `IntRsqrt` normalises the unshifted sum to the same
+    /// mantissa and returns the result `k` bits up exactly, so the floors agree; a zero row stays
+    /// zero (`IntRsqrt(0) = 0`).
+    pub fn l2_unit_q15(&mut self, x: Ref) -> Ref {
+        let axis = self.shape(x).len() - 1;
+        let sq = self.mul(x, x, DType::I64);
+        let sum = self.reduce_sum(sq, axis, DType::I64);
+        let bit = self.log2_floor(sum, DType::I32);
+        let k = self.c(DType::I32, K as i128);
+        let t = self.sub(bit, k, DType::I32);
+        let two = self.c(DType::I32, 2);
+        let h = self.div(t, two, Rounding::Floor, DType::I32);
+        let h = self.clamp(h, 0, 20, DType::I32);
+        let h2 = self.mul(h, two, DType::I32);
+        let p2 = self.pow2_128_of(h2, 40);
+        let m = self.div(sum, p2, Rounding::Floor, DType::I64);
+        let r = self.int_rsqrt(m);
+        let prod = self.mul(x, r, DType::I64);
+        let off = self.c(DType::I32, 21);
+        let sh = self.add(h, off, DType::I32);
+        let p1 = self.pow2_128_of(sh, 41);
+        let y = self.div(prod, p1, Rounding::Floor, DType::I64);
+        self.clamp(y, -32767, 32767, DType::I16)
+    }
+
     /// `palw_qwen36_ops::q36_rms_norm_wide` along the last axis for a registered `eps` whose
     /// mantissa is at most `2^30` and whose shift is at most 96 — the form lowerers store: the RMS
     /// norm of a WIDE `i32` row, `eps = eps_zero · 2^eps_shift` at the caller's scale, the mean's
