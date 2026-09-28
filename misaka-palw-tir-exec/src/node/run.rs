@@ -87,6 +87,8 @@ pub struct TirClassRunnerV1<'a> {
     pub class_id: Hash64,
     /// `tile_len` per `(block, node)`; 0 for a node that is not committed.
     tiles: Vec<Vec<u32>>,
+    /// Run the fused kernels (RFC-0002 §7, `TirExecutor::set_fused`): byte-identical, off by default.
+    fused: bool,
 }
 
 /// The leaf lanes of values of `dtype` (PALW-TIR-5): `i8`/`i16`/`i32` as little-endian `i32`,
@@ -126,7 +128,15 @@ impl<'a> TirClassRunnerV1<'a> {
             }
             tiles.push(row);
         }
-        Ok(TirClassRunnerV1 { space, plan, params, class_id, tiles })
+        Ok(TirClassRunnerV1 { space, plan, params, class_id, tiles, fused: false })
+    }
+
+    /// **With the fused kernels on (or off)** — every executor this runner drives runs the regions
+    /// its plan matched fused (`TirExecutor::set_fused`); byte-identical either way (tir-lower's
+    /// `fused_gate`), and a step whose sink reads every node runs generic throughout.
+    pub fn with_fused(mut self, on: bool) -> Self {
+        self.fused = on;
+        self
     }
 
     /// **Run one job** and commit to it. `prompt` is the job's `P` prompt ids; `cap` the class's
@@ -244,6 +254,9 @@ impl<'a> TirClassRunnerV1<'a> {
         let h_tile = space.layout.h_tile as usize;
         let mut exec = TirExecutor::new(self.plan, self.params).map_err(|e| e.to_string())?;
         exec.set_hist_tail(h_tile);
+        if self.fused {
+            exec.set_fused(true);
+        }
         let (first_position, mut generated) = match start {
             None => (0u32, Vec::with_capacity(ctx.exact_decode_tokens as usize)),
             Some(point) => {

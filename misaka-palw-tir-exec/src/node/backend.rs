@@ -55,6 +55,22 @@ pub const TIR_CAPTURE_MAGIC_V1: [u8; 8] = *b"PALWTIRC";
 /// cap is in bytes, not leaves.)
 pub const TIR_DENSE_CAPTURE_BYTES_V1: usize = 64 << 20;
 
+/// Whether a new [`TirBackendV1`] runs the fused kernels ([`set_tir_fused_kernels_default_v1`]).
+static TIR_FUSED_KERNELS_DEFAULT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// **Run the fused kernels in every IR backend built from now on** (RFC-0002 §7, Phase G) — the
+/// node's `--palw-tir-fused-kernels`, set once at start-up. Node software in no consensus object:
+/// byte-identical to the generic kernels (tir-lower's `fused_gate`), so it moves speed and nothing
+/// else. OFF by default, and kept off until the D-F drills pass with it on.
+pub fn set_tir_fused_kernels_default_v1(on: bool) {
+    TIR_FUSED_KERNELS_DEFAULT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// What a new [`TirBackendV1`] starts with ([`set_tir_fused_kernels_default_v1`]).
+pub fn tir_fused_kernels_default_v1() -> bool {
+    TIR_FUSED_KERNELS_DEFAULT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// **Why an IR class takes no free prompt** (RFC-0002): its free-prompt lane stays closed until
 /// Phase H. The node's backend, the RPC's pricing and the CLI refuse with these words.
 pub const TIR_FREE_PROMPT_CLOSED_V1: &str =
@@ -136,6 +152,8 @@ pub struct TirBackendV1 {
     fold_hashes: std::sync::Mutex<Option<(Hash64, Arc<Vec<Hash64>>)>>,
     /// The lane bytes up to which a capture is dense ([`TIR_DENSE_CAPTURE_BYTES_V1`] by default).
     dense_capture_bytes: usize,
+    /// Run the fused kernels ([`set_tir_fused_kernels_default_v1`], [`Self::with_fused_kernels`]).
+    fused: bool,
 }
 
 impl TirBackendV1 {
@@ -175,7 +193,18 @@ impl TirBackendV1 {
             attempt_rules: PalwAttemptRulesV1::CoreV1,
             fold_hashes: std::sync::Mutex::new(None),
             dense_capture_bytes: TIR_DENSE_CAPTURE_BYTES_V1,
+            fused: tir_fused_kernels_default_v1(),
         })
+    }
+
+    /// Run the fused kernels (or not), whatever the process default says.
+    pub fn with_fused_kernels(mut self, on: bool) -> Self {
+        self.fused = on;
+        self
+    }
+
+    pub fn fused_kernels(&self) -> bool {
+        self.fused
     }
 
     /// Keep captures dense only while their lanes fit `bytes` (0: every capture is a fold).
@@ -211,6 +240,7 @@ impl TirBackendV1 {
     pub fn runner(&self) -> TirClassRunnerV1<'_> {
         TirClassRunnerV1::new(&self.space, self.artifact.plan(), self.artifact.params(), self.class_id)
             .expect("the space and the plan are of one program")
+            .with_fused(self.fused)
     }
 
     fn ids(prompt: &[usize]) -> Result<Vec<u32>, String> {

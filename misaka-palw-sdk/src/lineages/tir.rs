@@ -24,7 +24,10 @@ use misaka_palw_tir_exec::node::TirArtifactV1;
 use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1};
 
 /// The IR backend and its capture, for the node's IR-only verbs (the IR court's close proofs).
-pub use misaka_palw_tir_exec::node::{TirBackendV1, TirCaptureV1, tir_trace_event_disclosure_of_capture_v1};
+pub use misaka_palw_tir_exec::node::{
+    TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_fused_kernels_default_v1, tir_fused_kernels_default_v1,
+    tir_trace_event_disclosure_of_capture_v1,
+};
 
 /// The lineage's id.
 pub const TIR_LINEAGE_ID_V1: &str = "palw-tir-v1";
@@ -287,6 +290,61 @@ mod tests {
         let path = write(&dir, &format!("{name}-nolayout"), &p, &params, Vec::new());
         let err = sdk.load_artifact(&path).unwrap_err();
         assert!(err.contains("declared layout"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The fused kernels change nothing a node commits** (RFC-0002 Phase G, the node's
+    /// `--palw-tir-fused-kernels`): the tiny Qwen3.5 hybrid — whose gated delta step the fused layer
+    /// matches — lowered, declared and loaded as an IR class, runs its canonical job to the same
+    /// capture with the fused kernels on as off, and on is really on (regions run fused).
+    #[test]
+    fn an_ir_class_runs_the_same_with_the_fused_kernels_on() {
+        use misaka_palw_tir_lower::float_ref::ParamStore;
+        use misaka_palw_tir_lower::float_ref::stream::Resident;
+        use misaka_palw_tir_lower::lower::{LowerOpts, materialise};
+        use misaka_palw_tir_lower::quant::QuantPolicy;
+        use misaka_palw_tir_lower::weights::Checkpoint;
+        use misaka_palw_tir_lower::{artifact, fidelity};
+        const CONTEXT: u32 = 32;
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../misaka-palw-tir-lower/tests/fixtures/hf/qwen3_5");
+        if !fixture.join("model.safetensors").exists() {
+            eprintln!("the qwen3_5 fixture is missing: skipped");
+            return;
+        }
+        let config = std::fs::read_to_string(fixture.join("config.json")).unwrap();
+        let prep = fidelity::prepare(&config, &LowerOpts { max_window: Some(CONTEXT), ..Default::default() }).expect("lowered");
+        let ck = Checkpoint::open(&fixture).unwrap();
+        let (params, _) = ParamStore::from_source(&prep.hl, &prep.binding, &ck).unwrap();
+        let loader = Resident(Arc::new(params));
+        let calib = fidelity::random_sequences(prep.hl.vocab, 2, CONTEXT as usize, 7);
+        let quiet = |_: usize, _: usize| {};
+        let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).unwrap();
+        let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).unwrap();
+        let dir = std::env::temp_dir().join(format!("palw-sdk-tir-fused-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lowered = dir.join("q35.palwtir");
+        let meta = serde_json::json!({ "calibrated_context": CONTEXT, "model_id": "test/qwen3_5-tiny" });
+        artifact::write(&lowered, &prep.lowered.program, &mat.params, [0u8; 64], meta).unwrap();
+        let declared = dir.join("q35.class.palwtir");
+        let net = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &net.palw_consensus_mode else { panic!() };
+        let choice = crate::tir_layout::TirLayoutChoiceV1 { max_context: Some(CONTEXT), ..Default::default() };
+        crate::tir_layout::tir_declare_layout_v1(&net, bundle, &lowered, &declared, &choice, None).expect("declared");
+        let entry = TirLineageV1::open_entry(&declared).expect("an IR class");
+        let mut exec = misaka_palw_tir_exec::TirExecutor::new(entry.artifact.plan(), entry.artifact.params()).unwrap();
+        exec.set_fused(true);
+        assert!(exec.fused_summary().iter().any(|(_, regions)| *regions > 0), "a kernel matched: {:?}", exec.fused_summary());
+        let form = PalwPromptIdsFormV1::Flat;
+        let off = TirLineageV1::backend(&entry, &court(), form).unwrap().with_fused_kernels(false);
+        let on = TirLineageV1::backend(&entry, &court(), form).unwrap().with_fused_kernels(true);
+        assert!(on.fused_kernels() && !off.fused_kernels());
+        let (job, prompt) = PalwExecutionBackendV1::job_for_anchor(&off, Hash64::from_bytes([7; 64])).unwrap();
+        let (a, b) = (
+            PalwExecutionBackendV1::execute(&off, &job, &prompt).unwrap(),
+            PalwExecutionBackendV1::execute(&on, &job, &prompt).unwrap(),
+        );
+        assert_eq!((a.execution_root, a.trace_root), (b.execution_root, b.trace_root), "the same roots");
+        assert_eq!(a.material, b.material, "the same capture, byte for byte");
         std::fs::remove_dir_all(&dir).ok();
     }
 
