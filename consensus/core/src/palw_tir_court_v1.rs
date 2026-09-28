@@ -2042,6 +2042,40 @@ pub(crate) mod test_support {
     /// The class, the job and an execution — honest, or with lane `lane` of leaf `forge` moved by
     /// one (inside its proven interval).
     pub(crate) fn tiny_execution(forge: Option<(usize, usize)>) -> TinyExecution {
+        tiny_execution_in(
+            |class, class_id, prompt| {
+                let z = Hash64::from_bytes([0u8; 64]);
+                PalwJobContextV2 {
+                    version: 2,
+                    network_id: b"testnet-12".to_vec(),
+                    job_id: Hash64::from_bytes([5; 64]),
+                    job_nullifier: z,
+                    assignment_id: z,
+                    execution_seed: [0u8; 32],
+                    model_profile_id: z,
+                    runtime_manifest_hash: z,
+                    runtime_class_id: z,
+                    shape_profile_id: class_id,
+                    trace_scheme_id: tiled_logits_scheme_id_v1(),
+                    cu_ruleset_id: z,
+                    tokenizer_id: class.tokenizer_id,
+                    prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(prompt),
+                    declared_prefill_tokens: PREFILL,
+                    exact_decode_tokens: DECODE,
+                    max_context_tokens: 64,
+                }
+            },
+            forge,
+        )
+    }
+
+    /// [`tiny_execution`] in the job context `ctx_of(class, class_id, prompt)` builds — a
+    /// `(PREFILL, DECODE)` job over the tiny class, whose layout allows exactly the
+    /// `PREFILL + DECODE − 1` positions the job touches.
+    pub(crate) fn tiny_execution_in(
+        ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
+        forge: Option<(usize, usize)>,
+    ) -> TinyExecution {
         let (program, params) = program_and_params();
         let bytes = program.encode();
         let class = PalwTirClassV1 {
@@ -2076,26 +2110,8 @@ pub(crate) mod test_support {
                 rows.push(row);
             }
         }
-        let z = Hash64::from_bytes([0u8; 64]);
-        let ctx = PalwJobContextV2 {
-            version: 2,
-            network_id: b"testnet-12".to_vec(),
-            job_id: Hash64::from_bytes([5; 64]),
-            job_nullifier: z,
-            assignment_id: z,
-            execution_seed: [0u8; 32],
-            model_profile_id: z,
-            runtime_manifest_hash: z,
-            runtime_class_id: z,
-            shape_profile_id: class_id,
-            trace_scheme_id: tiled_logits_scheme_id_v1(),
-            cu_ruleset_id: z,
-            tokenizer_id: class.tokenizer_id,
-            prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(&prompt),
-            declared_prefill_tokens: PREFILL,
-            exact_decode_tokens: DECODE,
-            max_context_tokens: 64,
-        };
+        let ctx = ctx_of(&class, class_id, &prompt);
+        assert_eq!((ctx.declared_prefill_tokens, ctx.exact_decode_tokens), (PREFILL, DECODE), "the tiny job");
         let space = PalwTirStepSpaceV1::new(&class).expect("the layout fits");
         let occ = space.occurrences().to_vec();
         let mut preimages = Vec::new();
@@ -2195,6 +2211,66 @@ pub(crate) mod test_support {
             check_tir_cone_refutation_v1(&r, &rules).expect("convicted").fault,
             PalwStepFaultV1::ComputationMismatch { value_index: 1 }
         );
+    }
+
+    /// **A job at exactly `layout.max_context` positions, in the CANONICAL job context, end to end**
+    /// (ref2's Phase F observation, `tir/ref2` 533e7b7fa, item 7). The context carries a TOKEN budget
+    /// (`prefill + decode ≤ max_context_tokens`, the v2 family's rule every court path checks) and the
+    /// layout a POSITION bound (`prefill + decode − 1 ≤ max_context`: the last emitted token is never
+    /// fed back), so the canonical context states `max_context + 1` tokens. Here the job touches all
+    /// `max_context` positions: the context passes the family's shape rule, the binding verifies, every
+    /// honest leaf — the last position's logits included — is acquitted, a lie at the last position is
+    /// convicted, and one more decode token is refused by both rules at the same boundary.
+    #[test]
+    fn a_job_at_exactly_max_context_positions_runs_end_to_end_in_the_canonical_context() {
+        use crate::palw_tir_attempt_v1::palw_tir_canonical_context_v1;
+        const MAX: u64 = 1 << 26;
+        let rules = PalwTirCourtRulesV1 {
+            max_step_leaf_count: MAX,
+            prompt_form: PalwPromptIdsFormV1::Flat,
+            limits: DemandLimits::UNLIMITED,
+        };
+        let canonical = |class: &PalwTirClassV1, class_id: Hash64, prompt: &[u32]| {
+            let mut ctx = palw_tir_canonical_context_v1(class, class_id, (PREFILL, DECODE)).expect("the tiny program decodes");
+            ctx.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(prompt);
+            ctx
+        };
+        let honest = tiny_execution_in(canonical, None);
+        let b = &honest.binding;
+        let max_context = b.class.layout.max_context;
+        assert_eq!(PREFILL + DECODE - 1, max_context, "the job touches exactly max_context positions");
+        assert_eq!(b.job_context.max_context_tokens, max_context + 1, "the canonical budget in tokens: positions + 1");
+        crate::palw_slash::check_job_context_shape(&b.job_context).expect("the family's token budget admits the longest job");
+        let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(b, MAX).expect("the binding verifies at max_context positions");
+        assert_eq!(verified.job.positions, max_context);
+        for leaf in 0..honest.preimages.len() as u64 {
+            let r = build_tir_cone_refutation_v1(b, leaf, &honest, &rules).expect("buildable");
+            assert_eq!(check_tir_cone_refutation_v1(&r, &rules), Err(PalwStepRefuteError::NoFaultFound), "leaf {leaf}");
+        }
+        // A lie in the last position's first leaf.
+        let space = PalwTirStepSpaceV1::new(&b.class).expect("the layout fits");
+        let last = honest.preimages.len() - space.leaves_of_position(&b.job_context, max_context - 1).len();
+        let forged = tiny_execution_in(canonical, Some((last, 0)));
+        let r = build_tir_cone_refutation_v1(&forged.binding, last as u64, &forged, &rules).expect("buildable");
+        check_tir_cone_refutation_v1(&r, &rules).expect("a lie at the last position is convicted");
+        // One more decode token: refused by the token budget and by the position bound alike.
+        let mut over = b.job_context.clone();
+        over.exact_decode_tokens += 1;
+        assert!(crate::palw_slash::check_job_context_shape(&over).is_err(), "over the token budget");
+        assert!(space.job_shape(&over).is_err(), "over the position bound");
+        // …and the two rules agree on every split of the budget.
+        for prefill in 1..=max_context {
+            let mut ctx = b.job_context.clone();
+            ctx.declared_prefill_tokens = prefill;
+            for decode in 1..=max_context + 2 {
+                ctx.exact_decode_tokens = decode;
+                assert_eq!(
+                    crate::palw_slash::check_job_context_shape(&ctx).is_ok(),
+                    space.job_shape(&ctx).is_ok(),
+                    "({prefill}, {decode}): the token budget and the position bound disagree"
+                );
+            }
+        }
     }
 }
 
