@@ -31152,7 +31152,10 @@ fn apply_object(
             if record.facts.class_id != *class_id {
                 return Err(PalwStateV2Error::TirRegistrationRefused("the declared class id is not the carried class's"));
             }
-            let work = || crate::palw_tir_work_v1::palw_tir_model_work_v1(&program, &admission.canonical).ok();
+            // RFC-0002 Phase F's second IR fence: past it the registry records the `Select`-arm credit
+            // (each arm-only region at the smaller arm's work); below it, the release's vector.
+            let min_select_arms = builder.params.tir_fence2_active_at(ctx.daa_score);
+            let work = || crate::palw_tir_work_v1::palw_tir_model_work_v2(&program, &admission.canonical, min_select_arms).ok();
             apply_class_registration_v1(
                 builder,
                 ctx,
