@@ -350,6 +350,31 @@ table (the state-only facts the court clock and the lane need; `step_shape` is p
 time is measured with `consensus/core/tests/dos_l2_registration.rs`'s harness; the existing 4 per
 block and 1 MSK burn apply.
 
+**As built (F6, `palw_tir_admission_v1.rs`).** Where the implementation settled what the sketch above
+left open:
+
+* `tir_admit_v1` takes one `tile_len`; a layout tiles each commit point at its own. Admission runs it
+  once per distinct commit tile length (at most 8, else refused), with the per-tile ceilings disabled,
+  and checks each commit point's cone at its own length against the court: its tile MACs within
+  `max_terminal_macs`, and its evaluation (the tile's MACs, elementwise and transcendental work plus
+  `C − 1` positions of the worst `Fixed`-state replay it reads) within `palw_tir_court_limits_v1`. A
+  per-commit-point `tile_len` in `TirAdmitInputsV1` would make this one run (a tir/core follow-up).
+* A cone that reduces over `H` is adjudicated whole until F7 wires the dissection: its tile at
+  `H = W` must fit like any other, else `TirNeedsDissection`.
+* The close-bytes check (program + frame + the worst tile's opened operand bytes ≤ `max_close_bytes`)
+  is a necessary condition only: `tir_admit_v1` reports element-granular demand, and a close carries
+  whole step leaves and whole inventory pieces with their paths. A sufficient bound needs per-leaf
+  demand from `tir_admit_v1` (the same follow-up).
+* The canonical job must BE the attempt formula's yardstick context (`palw_tir_job_context_v1` at
+  `(f − 1, 2)`) on every network, and a canonical prompt past J5b's inline bound must be committed in
+  the Merkle form — the legacy attributability rule, unconditional for a class type with no legacy.
+* A program at the held history bound is refused in v1: the held regime's accusations and answers
+  carry legacy bindings. The class's ladder is the network's.
+* The weight check reads `reachable_kernels = { kernel_semantics_id_v1("palw-tir/v1/prim=<Name>") }`.
+* On the corpus at a 64-position context (testnet-12's court): the five models are admitted in
+  6–50 ms each (debug build); the dense and sliding-window models' attention cones, adjudicated whole
+  at `H = W`, open 16.8 MB, just under testnet-12's 16.82 MB close ceiling.
+
 ### 2.5 The step space of an IR class
 
 **Positions.** Absolute position `a`: prefill `p` is `a = p` at coordinate `(call 0, position p)`;
