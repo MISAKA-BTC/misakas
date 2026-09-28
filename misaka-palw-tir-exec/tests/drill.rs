@@ -170,6 +170,22 @@ fn the_drill_certifies_every_tiny_class() {
         assert!(reachable.is_subset(&cert.covered_kernels), "{name}: the node's coverage is the chain's");
         assert_eq!(graded.family.drilled_class_id, backend.class_id(), "{name}");
         assert_eq!(graded.family.family_id, misaka_palw_tir_exec::node::tir_family_id_v1(&reachable), "{name}");
+        // PALW-TIR-38's differential entry point: every terminal close the node builds, as carried,
+        // at a size and under the most the chain can carry; a dissected point is named, not built.
+        let sizes = misaka_palw_tir_exec::node::tir_terminal_close_sizes_v1(&backend, &outcome.material, &rules)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let cap = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&court);
+        let dissected = kaspa_consensus_core::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&backend.space().program);
+        assert!(sizes.iter().any(|s| s.door == "cone"), "{name}: a cone close is measured");
+        for s in &sizes {
+            assert_eq!(s.door == "dissected", s.carried_bytes == 0, "{name}: {s:?}");
+            assert!(s.carried_bytes <= cap, "{name}: {s:?} over {cap}");
+        }
+        assert_eq!(
+            sizes.iter().filter(|s| s.door == "dissected").count() > 0,
+            !dissected.is_empty(),
+            "{name}: dissected points named"
+        );
         let calls: BTreeSet<_> = cert.units.iter().map(|u| u.call).collect();
         assert_eq!(calls, [TirDrillCallV1::Prefill, TirDrillCallV1::Decode].into_iter().collect(), "{name}: both call classes");
         for u in &cert.units {

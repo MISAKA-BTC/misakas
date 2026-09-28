@@ -38,6 +38,7 @@ USAGE:
     palw-class check-architecture --network <id> --tir <program.tir> [--tile-len N] [--h-chunk N] [--json]
     palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
     palw-class drill-leaves --network <id> [--model-id <model-id>] [--decode N] <artifact-path>
+    palw-class close-sizes --network <id> [--anchor <hex>] [--json] <artifact-path>
     palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
                          [--logits-scheme tiled|flat] [--logits-tile N] [--model-id <model-id>] <lowered.palwtir>
 
@@ -46,6 +47,13 @@ prefill, --decode tokens (1 where the network draws one forward, the default; 2 
 step leaf of every commit-point kind (each committed node, each Fixed state's checkpoint, each history
 tile) in prefill and decode: the leaves a live court battery tampers at with --palw-drill-tamper-leaf,
 one kind at a time. One line per leaf: `<leaf> <call> <kind>`.
+
+`close-sizes` (RFC-0002 Phase F, PALW-TIR-38) runs an IR class's attempt job for --anchor (zero unless
+given) on this build's backend and measures every terminal close the node would file for it — the cone
+close at the first leaf of every commit-point kind, and at the logits the logits and decode-token
+closes — as carried (program stripped, borsh bytes), against the most the chain can carry
+(palw_tir_carriable_close_bytes_v1). A dissected point is listed without a size (its terminal move is
+the dissection's). Exits 0 when every close fits, 2 otherwise.
 
 `declare-layout` (RFC-0002 Phase F) makes a lowered artifact a class: `palw-tir-fidelity --artifact-out`
 writes the program and its integer tensors with no layout, and an IR class is its program under a
@@ -224,6 +232,20 @@ fn run(args: &[String]) -> Result<(), String> {
             let json = args.iter().any(|a| a == "--json");
             let flags = ArchFlags { legacy, held, json, tile_len, h_chunk };
             match check_architecture(&view, config.as_deref(), tir.as_deref(), &flags)? {
+                true => Ok(()),
+                false => std::process::exit(2),
+            }
+        }
+        "close-sizes" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let anchor = match take_flag(&mut args, "--anchor") {
+                Some(hex) => hex.trim_start_matches("0x").parse::<Hash64>().map_err(|e| format!("--anchor {hex}: {e:?}"))?,
+                None => Hash64::default(),
+            };
+            let json = args.iter().any(|a| a == "--json");
+            args.retain(|a| a != "--json");
+            let path = PathBuf::from(args.first().ok_or(USAGE)?);
+            match close_sizes(&view, &path, anchor, json)? {
                 true => Ok(()),
                 false => std::process::exit(2),
             }
@@ -593,6 +615,66 @@ fn inspect(view: &NetworkView, path: &std::path::Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// `close-sizes`: every terminal close the node builds for the class's job, as carried, against the cap.
+fn close_sizes(view: &NetworkView, path: &std::path::Path, anchor: Hash64, json: bool) -> Result<bool, String> {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    let entry = misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(path)?;
+    let court = view.bundle.court;
+    // Dense up to 1 GiB, so every close is built from the capture's own leaves (never a replay).
+    let backend = misaka_palw_sdk::lineages::tir::TirLineageV1::backend(&entry, &court, view.params.palw_prompt_ids_form_v1())?
+        .with_dense_capture_bytes(1 << 30);
+    let (job, prompt) = backend.job_for_anchor(anchor)?;
+    let started = std::time::Instant::now();
+    let run = backend.execute(&job, &prompt)?;
+    eprintln!(
+        "{}: job {} + {} ran in {:.1} s ({} capture bytes)",
+        entry.model_id,
+        job.declared_prefill_tokens,
+        job.exact_decode_tokens,
+        started.elapsed().as_secs_f64(),
+        run.material.len()
+    );
+    let rules = backend.court_rules(&court);
+    let sizes = misaka_palw_sdk::lineages::tir::tir_terminal_close_sizes_v1(&backend, &run.material, &rules)?;
+    let cap = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&court);
+    let over: Vec<_> = sizes.iter().filter(|s| s.carried_bytes > cap).collect();
+    let worst = sizes.iter().max_by_key(|s| s.carried_bytes);
+    if json {
+        let rows: Vec<_> = sizes
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "leaf": s.leaf, "call": format!("{:?}", s.call), "kind": format!("{:?}", s.kind),
+                    "door": s.door, "carried_bytes": s.carried_bytes,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "misaka.palw-class.close-sizes.v1", "class_id": entry.class_id().to_string(), "model_id": entry.model_id,
+                "cap": cap, "fits": over.is_empty(), "closes": rows,
+            })
+        );
+    } else {
+        for s in &sizes {
+            println!("{:>10} {:<12} {:>9} {:?} {:?}", s.carried_bytes, s.door, s.leaf, s.call, s.kind);
+        }
+        match worst {
+            Some(w) => println!(
+                "{} closes; worst {} bytes ({} at leaf {}); cap {cap} (palw_tir_carriable_close_bytes_v1): {}",
+                sizes.len(),
+                w.carried_bytes,
+                w.door,
+                w.leaf,
+                if over.is_empty() { "every close fits".to_string() } else { format!("{} OVER", over.len()) }
+            ),
+            None => println!("no close measured"),
+        }
+    }
+    Ok(over.is_empty())
 }
 
 /// `drill-leaves`: the first leaf of every commit-point kind of the class's attempt job.

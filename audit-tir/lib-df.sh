@@ -13,7 +13,10 @@ set -euo pipefail
 A=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)          # audit-tir/
 WT=$(cd "$A/.." && pwd)
 WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-tir-drill}
-KASPAD_BIN=${KASPAD_BIN:-}
+# BIN_DIR: the release under test (kaspad, misaka, palw-class, palw-a16-to-tir, palw-tir-equiv, redteam) —
+# the one parameter a run points at a build; each binary can still be named on its own.
+BIN_DIR=${BIN_DIR:-}
+KASPAD_BIN=${KASPAD_BIN:-${BIN_DIR:+$BIN_DIR/kaspad}}
 CLI_BIN=${CLI_BIN:-$(dirname "${KASPAD_BIN:-/nonexistent/kaspad}")/misaka}
 OLD_KASPAD_BIN=${OLD_KASPAD_BIN:-}
 # The offline tools (palw-class, palw-a16-to-tir, palw-tir-equiv): beside kaspad unless named.
@@ -26,12 +29,14 @@ IR_DIR=$WORK_DIR/ir
 # (validate_palw_v2: all four heights distinct, fence1 <= fence3).
 FENCE_AT=${FENCE_AT:-6}; FENCE2_AT=${FENCE2_AT:-10}; FENCE3_AT=${FENCE3_AT:-14}; TIR_AT=${TIR_AT:-20}
 
-# The IR class: the Qwen2.5-1.5B A16 artifact converted to PALW-TIR (its mirror program, windowed to the
-# class's context), declared at IR_CONTEXT positions. A16_ARTIFACT is the legacy .palwart it comes from
-# (and what its logits are compared against); IR_ARTIFACT the declared class (built by `df.sh class`).
+# The IR class: the Qwen2.5-1.5B A16 artifact converted to PALW-TIR (its mirror program, unwindowed: F7
+# dissects its history cones), declared at IR_CONTEXT positions with its logits tiled at IR_LOGITS_TILE
+# lanes (1,024: at 2,048 its terminal close is ~5.9 MB as carried, over testnet-12's 3.2 MB — PALW-TIR-38).
+# A16_ARTIFACT is the legacy .palwart it comes from (and what its logits are compared against);
+# IR_ARTIFACT the declared class (built by `df.sh class`).
 A16_ARTIFACT=${A16_ARTIFACT:-}
 IR_CONTEXT=${IR_CONTEXT:-512}
-IR_WINDOW=${IR_WINDOW:-$IR_CONTEXT}
+IR_LOGITS_TILE=${IR_LOGITS_TILE:-1024}
 IR_MODEL_ID=${IR_MODEL_ID:-Qwen/Qwen2.5-1.5B/a16-ir}
 IR_ARTIFACT=${IR_ARTIFACT:-$IR_DIR/qwen25-a16.class.palwtir}
 IR_LOWERED=$IR_DIR/qwen25-a16.lowered.palwtir

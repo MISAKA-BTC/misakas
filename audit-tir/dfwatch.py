@@ -62,7 +62,7 @@ def sample(cid):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true")
-    ap.add_argument("--until", choices=["active", "final", "df2"])
+    ap.add_argument("--until", choices=["prefetching", "active", "final", "df2"])
     ap.add_argument("--deadline-daa", type=int, default=0)
     a = ap.parse_args()
     seen = set()
@@ -88,7 +88,14 @@ def main():
                 with open(f"{WORK}/df-milestones.tsv", "a") as f:
                     f.write(f"{m}\t{s['daa']}\t{s['t']}\n")
                 print(f"{s['t']} DAA {s['daa']}: {m}", flush=True)
-        goal = {"active": "Active", "final": "first-final-after-active", "df2": "court-fraud"}.get(a.until or "")
+        # Stage 1's registration milestone: Prefetching (the admission jury seated) with seats proving
+        # readiness (ready > 0 on the row).
+        # A class already past it (Probation's gate is ready seats enough) has met it too.
+        if (s["state"].startswith("Prefetching") and (s["ready"] or 0) > 0) or s["state"].startswith(("Probation", "Active")):
+            marks.append("prefetching-ready")
+        goal = {"prefetching": "prefetching-ready", "active": "Active", "final": "first-final-after-active", "df2": "court-fraud"}.get(
+            a.until or ""
+        )
         if a.once or (goal and goal in seen):
             return 0
         if a.deadline_daa and s["daa"] >= a.deadline_daa:

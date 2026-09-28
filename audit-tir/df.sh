@@ -7,14 +7,24 @@
 #         (TirShardCourtAccused, the seat that refuted it or a challenger), and honest claims go Final;
 #   D-F3/D-F4 are Phase F's step scripts (scripts/misaka-palw-tir-drill-df{3,4}.sh), called with the layout.
 #
-#   KASPAD_BIN=<release kaspad> [CLI_BIN=…] [OLD_KASPAD_BIN=<fleet kaspad>] [TOOLS_BIN=<palw-class…>] \
-#   A16_ARTIFACT=<qwen2.5-1.5B A16 .palwart> [WORK_DIR=~/.misaka-palw-tir-drill] [TIR_AT=20] \
-#     bash audit-tir/df.sh dry | class | up | df1 | df2 | df3 | df4 | status | down
+#   bash audit-tir/df.sh <command> --bin-dir <release dir>      (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
+#     OLD_KASPAD_BIN=<the fleet's release kaspad>  A16_ARTIFACT=<qwen2.5-1.5B A16 .palwart>
+#     [WORK_DIR=~/.misaka-palw-tir-drill] [TIR_AT=20] [IR_CONTEXT=512] [IR_LOGITS_TILE=1024]
+#   commands: dry | class | up | stage1 | stage2 | df1 | df2 | df3 | df4 | status | down
+#
+#   STAGE 1 (the arming gate, ~2-3 h from `up`): `stage1` = df4 (below the fence the IR registration dropped
+#   by name by the release and skipped by the old relay at identical tips; blocks above; the old peer refused
+#   past the fence) + the registration past the fence reaching Prefetching with seats proving readiness
+#   (Candidate → the admission jury → Prefetching) + df3 (8 of 8 forged-output attacks refused, the producer
+#   on the IR class). Its verdict is printed and written to $WORK_DIR/stage1.verdict on its own.
+#   STAGE 2 (on the same chain, after the fleet rollout): `stage2` = df1 (Active → claims → Final) + df2
+#   (representative commit-point kinds live, every kind offline with palw-class certify) + df4 court.
 #
 #   dry     preflight (binaries, flags, tools, artifacts, ports, memory, disk, another drill) and the plan with
 #           every node's argv (salt redacted, a throwaway keyring stub) — nothing is created, nothing started
-#   class   OFFLINE: A16 → PALW-TIR at the class's window (palw-a16-to-tir --max-window), declare-layout
-#           (ADMISSIBLE required), drill-leaves, logits vs the legacy class (palw-tir-equiv: EQUAL required);
+#   class   OFFLINE: A16 → PALW-TIR (palw-a16-to-tir, unwindowed), declare-layout at IR_CONTEXT with the
+#           logits at IR_LOGITS_TILE (ADMISSIBLE required), drill-leaves, every terminal close as carried
+#           under the cap (palw-class close-sizes), logits vs the legacy class (palw-tir-equiv: EQUAL);
 #           writes ir-class.id and ir-artifact.root
 #   up      salt (0600, never printed), keyring (the release kaspad writes it), every node (clocks first, the old
 #           relay last), the signed below-the-fence IR registration for D-F4 (ir-registration.obj), the sampler
@@ -25,8 +35,17 @@
 #   down    SIGINT every node (never SIGKILL)
 set -euo pipefail
 A=$(cd "$(dirname "$0")" && pwd)
-. "$A/lib-df.sh"
 cmd=${1:-dry}
+shift || true
+# --bin-dir <dir>: the release under test (before lib-df.sh derives every binary from it).
+while [ $# -gt 0 ]; do
+    case $1 in
+        --bin-dir) BIN_DIR=$2; export BIN_DIR; shift 2 ;;
+        --bin-dir=*) BIN_DIR=${1#--bin-dir=}; export BIN_DIR; shift ;;
+        *) echo "unknown argument $1"; exit 2 ;;
+    esac
+done
+. "$A/lib-df.sh"
 FAILED=0
 ok() { echo "  ok   $*"; }
 bad() { echo "  FAIL $*"; FAILED=1; }
@@ -59,21 +78,19 @@ preflight() {
     done
     if [ -x "$TOOLS_BIN/palw-class" ]; then
         local U; U=$("$TOOLS_BIN/palw-class" 2>&1 || true)
-        for s in declare-layout drill-leaves certify; do grep -q "palw-class $s" <<<"$U" && ok "palw-class $s" || bad "palw-class lacks $s"; done
+        for s in declare-layout drill-leaves close-sizes certify; do grep -q "palw-class $s" <<<"$U" && ok "palw-class $s" || bad "palw-class lacks $s"; done
     fi
+    [ -x "$(dirname "${KASPAD_BIN:-/nonexistent/kaspad}")/redteam" ] && ok "redteam beside kaspad (D-F3)" \
+        || bad "no redteam beside kaspad (D-F3: cargo build --release -p misaminer --bin redteam)"
+    for step in df3 df4; do
+        [ -f "$WT/scripts/misaka-palw-tir-drill-$step.sh" ] && ok "Phase F's $step script" || bad "scripts/misaka-palw-tir-drill-$step.sh missing (Phase F's)"
+    done
     if [ -s "$IR_ARTIFACT" ] && [ -s "$WORK_DIR/ir-class.id" ]; then
         ok "IR class built: $IR_ARTIFACT (class $(cut -c1-16 "$WORK_DIR/ir-class.id")…)"
     else
         [ -n "$A16_ARTIFACT" ] && [ -s "$A16_ARTIFACT" ] && ok "A16 artifact $(basename "$A16_ARTIFACT") ($(du -h "$A16_ARTIFACT" | cut -f1))" \
             || bad "A16_ARTIFACT unset or missing (the Qwen2.5-1.5B A16 .palwart the IR class is converted from)"
-        if [ -x "$TOOLS_BIN/palw-a16-to-tir" ]; then
-            "$TOOLS_BIN/palw-a16-to-tir" 2>&1 | grep -q -- "--max-window" && ok "palw-a16-to-tir --max-window" \
-                || bad "palw-a16-to-tir has no --max-window: the A16 mirror keeps W = 2^18 and admission v10 refuses its attention cones (TirNeedsDissection) until F7"
-        fi
-        if [ -x "$TOOLS_BIN/palw-tir-equiv" ]; then
-            "$TOOLS_BIN/palw-tir-equiv" 2>&1 | grep -q -- "--max-window" && ok "palw-tir-equiv --max-window" \
-                || bad "palw-tir-equiv has no --max-window: the logits comparison cannot read a windowed class yet"
-        fi
+
     fi
     for n in $(all_nodes); do [ -d "$WORK_DIR/$n/app" ] && { [ "$real" = 1 ] && [ -s "$WORK_DIR/.up" ] || bad "$WORK_DIR/$n/app exists (a drill already created here — refusing to reuse)"; }; done
     local busy="" k base
@@ -133,18 +150,21 @@ PY
 class_build() {
     [ -n "$A16_ARTIFACT" ] && [ -s "$A16_ARTIFACT" ] || die "A16_ARTIFACT unset or missing"
     mkdir -p "$IR_DIR"
-    say "A16 → PALW-TIR at a window of $IR_WINDOW positions"
-    "$TOOLS_BIN/palw-a16-to-tir" --artifact "$A16_ARTIFACT" --out "$IR_LOWERED" --max-window "$IR_WINDOW" --check 4
-    say "declare-layout at $IR_CONTEXT positions"
-    "$TOOLS_BIN/palw-class" declare-layout --network testnet-12 --max-context "$IR_CONTEXT" --model-id "$IR_MODEL_ID" \
-        --out "$IR_ARTIFACT" "$IR_LOWERED" | tee "$IR_DIR/declare.txt"
+    say "A16 → PALW-TIR (the mirror program, unwindowed: F7 dissects its history cones)"
+    "$TOOLS_BIN/palw-a16-to-tir" --artifact "$A16_ARTIFACT" --out "$IR_LOWERED"
+    say "declare-layout at $IR_CONTEXT positions, logits tile $IR_LOGITS_TILE"
+    "$TOOLS_BIN/palw-class" declare-layout --network testnet-12 --max-context "$IR_CONTEXT" --logits-tile "$IR_LOGITS_TILE" \
+        --model-id "$IR_MODEL_ID" --out "$IR_ARTIFACT" "$IR_LOWERED" | tee "$IR_DIR/declare.txt"
     grep -q "ADMISSIBLE" "$IR_DIR/declare.txt" || die "admission v10 refuses the declared class (see $IR_DIR/declare.txt)"
     awk '/class id/ {print $3}' "$IR_DIR/declare.txt" > "$WORK_DIR/ir-class.id"
     awk '/inventory root/ {print $3}' "$IR_DIR/declare.txt" > "$WORK_DIR/ir-artifact.root"
     "$TOOLS_BIN/palw-class" drill-leaves --network testnet-12 "$IR_ARTIFACT" > "$IR_DIR/leaves.txt"
     say "$(wc -l < "$IR_DIR/leaves.txt" | tr -d ' ') commit-point kinds for D-F2"
+    say "every terminal close as carried, against the cap (palw-class close-sizes)"
+    "$TOOLS_BIN/palw-class" close-sizes --network testnet-12 "$IR_ARTIFACT" | tee "$IR_DIR/close-sizes.txt"
+    grep -q "every close fits" "$IR_DIR/close-sizes.txt" || die "a terminal close does not fit what the chain can carry (see $IR_DIR/close-sizes.txt)"
     say "logits against the legacy class (palw-tir-equiv, $EQUIV_PROMPTS prompts)"
-    "$TOOLS_BIN/palw-tir-equiv" --network testnet-12 --artifact "$A16_ARTIFACT" --tir "$IR_ARTIFACT" --max-window "$IR_WINDOW" \
+    "$TOOLS_BIN/palw-tir-equiv" --network testnet-12 --artifact "$A16_ARTIFACT" --tir "$IR_ARTIFACT" \
         --prompts "$EQUIV_PROMPTS" --max-prefill "$((IR_CONTEXT - 1))" | tee "$IR_DIR/equiv.txt"
     grep -q "EQUAL" "$IR_DIR/equiv.txt" || die "the IR class's logits are not the legacy class's (see $IR_DIR/equiv.txt)"
     say "class $(cut -c1-16 "$WORK_DIR/ir-class.id")… built, admitted, logits equal"
@@ -213,15 +233,54 @@ phase_f() {
     bash "$s" "${2:-run}"
 }
 
+# One part's verdict: PASS (0), FAIL (1), INCOMPLETE (3), written beside the rest.
+verdict_of() { case $1 in 0) echo PASS ;; 3) echo INCOMPLETE ;; *) echo FAIL ;; esac; }
+
+# STAGE 1, the arming gate: df4 (below, cross) + the registration to Prefetching with ready seats + df3.
+stage1() {
+    local rc4=0 rcr=0 rc3=0
+    phase_f df4 run || rc4=$?
+    ( cd "$A"; WORK_DIR=$WORK_DIR DF_PORT=$(jport new3) python3 dfwatch.py --until prefetching --deadline-daa "${STAGE1_DEADLINE_DAA:-400}" ) || rcr=$?
+    phase_f df3 run || rc3=$?
+    local v=PASS
+    for rc in $rc4 $rcr $rc3; do [ "$rc" = 0 ] || { [ "$rc" = 3 ] && [ "$v" = PASS ] && v=INCOMPLETE || v=FAIL; }; done
+    {
+        echo "STAGE 1 $v ($(date '+%F %T'), tip $(tip new3))"
+        echo "  df4 (below/cross)                  $(verdict_of $rc4)"
+        echo "  registration → Prefetching, ready  $(verdict_of $rcr) $(tr '\n' ' ' < "$WORK_DIR/df-milestones.tsv" 2>/dev/null)"
+        echo "  df3 (8 forged outputs)             $(verdict_of $rc3)"
+    } | tee "$WORK_DIR/stage1.verdict"
+    [ "$v" = PASS ]
+}
+
+# STAGE 2, on the same chain after the fleet rollout: df1 (Active → Final), df2, df4 court.
+stage2() {
+    local rc1=0 rc2=0 rcc=0
+    df1 || rc1=$?
+    df2 || rc2=$?
+    phase_f df4 court || rcc=$?
+    local v=PASS
+    for rc in $rc1 $rc2 $rcc; do [ "$rc" = 0 ] || { [ "$rc" = 3 ] && [ "$v" = PASS ] && v=INCOMPLETE || v=FAIL; }; done
+    {
+        echo "STAGE 2 $v ($(date '+%F %T'), tip $(tip new3))"
+        echo "  df1 (Active → claims → Final)      $(verdict_of $rc1)"
+        echo "  df2 (court battery)                $(verdict_of $rc2)"
+        echo "  df4 court (a close past the fence) $(verdict_of $rcc)"
+    } | tee "$WORK_DIR/stage2.verdict"
+    [ "$v" = PASS ]
+}
+
 case $cmd in
     dry) dry ;;
     class) class_build ;;
     up) up ;;
+    stage1) stage1 ;;
+    stage2) stage2 ;;
     df1) df1 ;;
     df2) df2 ;;
     df3) phase_f df3 ;;
     df4) phase_f df4 ;;
     status) bash "$A/nodes.sh" status; [ -s "$WORK_DIR/df-state.json" ] && cat "$WORK_DIR/df-state.json" ;;
     down) bash "$A/nodes.sh" stop; [ -s "$WORK_DIR/dfwatch.pid" ] && kill "$(cat "$WORK_DIR/dfwatch.pid")" 2>/dev/null; rm -f "$WORK_DIR/.up" ;;
-    *) sed -n '2,32p' "$0"; exit 2 ;;
+    *) sed -n '2,45p' "$0"; exit 2 ;;
 esac
