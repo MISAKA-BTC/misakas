@@ -7335,6 +7335,18 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a second-IR-fence object was dropped by name below palw_tir_fence2, and the block stands (RFC-0002 Phase F)");
                 continue;
             }
+            // **RFC-0004: an improvement object (tags 70–82) is dropped by name** — below
+            // `palw_improvement_v1` for the IR objects' reason above (an older build skips it
+            // undecoded), and above it until the object's admission lands — first, and charged
+            // nothing. The fold refuses it too, as the second lock.
+            if let Some(name) = kaspa_consensus_core::palw_state_v2::palw_improvement_object_name_v1(&object) {
+                if self.palw_improvement_at(point.daa_score) {
+                    info!("Block {block}: {name} was dropped by name: its admission has not landed, and the block stands (RFC-0004)");
+                } else {
+                    info!("Block {block}: {name} was dropped by name below palw_improvement_v1, and the block stands (RFC-0004)");
+                }
+                continue;
+            }
             if tir_registration_gated
                 && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
             {
@@ -11621,6 +11633,31 @@ impl VirtualStateProcessor {
                         return Err(format!("IR class {class_id}'s lane certification is refused: palw_tir_v1 is not in force"));
                     }
                 }
+                // RFC-0004 (tags 70–82): the acceptance walk drops every improvement object by name
+                // before this gate, below the fence and — until each object's admission lands —
+                // above it; refused here too, as the fold refuses it, so no door takes one early.
+                Obj::ModelLineImprovementPolicySet { .. }
+                | Obj::HardCaseSubmitted { .. }
+                | Obj::DataUseOptIn { .. }
+                | Obj::SetterSetCommitted { .. }
+                | Obj::SetterSetRevealed { .. }
+                | Obj::SetterKeysRevealed { .. }
+                | Obj::DatasetRegistered { .. }
+                | Obj::TeachingArtifactCommitted { .. }
+                | Obj::TeachingArtifactRevealed { .. }
+                | Obj::TeacherLicenceRegistered { .. }
+                | Obj::CandidateSubmitted { .. }
+                | Obj::LineageHeadRolledBack { .. }
+                | Obj::ImprovementPoolFunded { .. } => {
+                    let name = kaspa_consensus_core::palw_state_v2::palw_improvement_object_name_v1(object)
+                        .unwrap_or("an improvement object");
+                    let why = if self.palw_improvement_at(point.daa_score) {
+                        "its admission has not landed"
+                    } else {
+                        "palw_improvement_v1 is not in force at this block"
+                    };
+                    return Err(format!("{name} is refused: {why} (RFC-0004)"));
+                }
                 // **ADR-0078: a derivation is authorised by the key it declares, on this chain.**
                 // The ride list proved a signature is present and the shape is the object's; here
                 // the signature is verified under the declared executor key, over the object's own
@@ -13017,6 +13054,12 @@ impl VirtualStateProcessor {
     /// which `validate_palw_v2` holds equal to `Params::palw_tir_fence2`).
     fn palw_tir_fence2_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.tir_fence2_active_at(daa_score))
+    }
+
+    /// **RFC-0004's improvement fence, read off the bundle's mirror** (`improve_from_daa`, which
+    /// `validate_palw_v2` holds equal to `Params::palw_improvement_v1`).
+    fn palw_improvement_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.improve_active_at(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
@@ -18953,6 +18996,20 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtTirDissected { .. } => "CourtTirDissected",
         O::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         O::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
+        // RFC-0004 (tags 70–82): dropped at acceptance until each admission lands.
+        O::ModelLineImprovementPolicySet { .. } => "ModelLineImprovementPolicySet",
+        O::HardCaseSubmitted { .. } => "HardCaseSubmitted",
+        O::DataUseOptIn { .. } => "DataUseOptIn",
+        O::SetterSetCommitted { .. } => "SetterSetCommitted",
+        O::SetterSetRevealed { .. } => "SetterSetRevealed",
+        O::SetterKeysRevealed { .. } => "SetterKeysRevealed",
+        O::DatasetRegistered { .. } => "DatasetRegistered",
+        O::TeachingArtifactCommitted { .. } => "TeachingArtifactCommitted",
+        O::TeachingArtifactRevealed { .. } => "TeachingArtifactRevealed",
+        O::TeacherLicenceRegistered { .. } => "TeacherLicenceRegistered",
+        O::CandidateSubmitted { .. } => "CandidateSubmitted",
+        O::LineageHeadRolledBack { .. } => "LineageHeadRolledBack",
+        O::ImprovementPoolFunded { .. } => "ImprovementPoolFunded",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
         O::ReporterCommitted { .. } => "ReporterCommitted",

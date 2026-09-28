@@ -158,7 +158,22 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::PanelUnavailableQuorum { .. }
         // ADR-0152-adjacent (Activation Pool, tag 58): a sponsor's top-up is market traffic, not a
         // conviction a halt must let through — it stays in the fee market.
-        | O::ActivationPoolFunded { .. } => false,
+        | O::ActivationPoolFunded { .. }
+        // RFC-0004 (tags 70–82): the improvement protocol's objects are registrations, material and
+        // market traffic — none is a conviction or a court move a halt must let through.
+        | O::ModelLineImprovementPolicySet { .. }
+        | O::HardCaseSubmitted { .. }
+        | O::DataUseOptIn { .. }
+        | O::SetterSetCommitted { .. }
+        | O::SetterSetRevealed { .. }
+        | O::SetterKeysRevealed { .. }
+        | O::DatasetRegistered { .. }
+        | O::TeachingArtifactCommitted { .. }
+        | O::TeachingArtifactRevealed { .. }
+        | O::TeacherLicenceRegistered { .. }
+        | O::CandidateSubmitted { .. }
+        | O::LineageHeadRolledBack { .. }
+        | O::ImprovementPoolFunded { .. } => false,
     }
 }
 
