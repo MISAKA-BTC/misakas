@@ -239,8 +239,31 @@ code, formats and sizes against the hub and records the revision):
 | C7 Jamba | `ai21labs/Jamba-tiny-dev` | ~0.6–1.3 GB | believed Apache-2.0 and not gated; checked |
 | C4/C7 gated delta | `Qwen/Qwen3.5-0.8B` (`Qwen/Qwen3.5-2B`) | ~1.7 GB (~4.5) | Apache-2.0, not gated; existence checked |
 
-**Downloaded** (filled by the download command's own record):
+**What the hub said** (the download command, 2026-09-28, `huggingface_hub` 1.33.0, no token sent):
+`google/gemma-3-1b-it` is gated (`manual`) — not downloaded. Every official RWKV-4 repository
+(`RWKV/rwkv-4-169m-pile`, `-430m-pile`, `-1b5-pile`, `-3b-pile`, `rwkv-raven-1b5`) and the official
+Mamba-2 checkpoints (`state-spaces/mamba2-130m`, `-370m`) carry only `pytorch_model*.bin` — not
+downloaded (never `*.bin`). The other six passed every rule (not gated, `*.safetensors` at the top
+level, no `auto_map`).
 
-| repo | revision | files | bytes |
+**Downloaded** — `~/Downloads/MISAKA-wt-b/hf-ckpt/<repo>/`, pinned to the revision, the download
+command's own record (bytes as written):
+
+| repo | revision | files (bytes) | total bytes |
 | --- | --- | --- | --- |
-| (pending) | | | |
+| `state-spaces/mamba-370m-hf` | `b519127f5bfaaa1c27dd938dad051ec360972b23` | `config.json` 917, `generation_config.json` 137, `model.safetensors` 1,486,118,288, `tokenizer.json` 2,113,837, `tokenizer_config.json` 4,793 | 1,488,237,972 |
+| `ai21labs/Jamba-tiny-dev` | `ed303361004ac875426a61675edecf8e9d976882` | `config.json` 1,005, `generation_config.json` 132, `model.safetensors` 637,428,728, `special_tokens_map.json` 946, `tokenizer.json` 4,245,070, `tokenizer.model` 1,124,714, `tokenizer_config.json` 14,283 | 642,814,878 |
+| `Qwen/Qwen3.5-0.8B` | `2fc06364715b967f1860aea9cf38778875588b17` | `config.json` 2,907, `merges.txt` 3,353,259, `model.safetensors-00001-of-00001.safetensors` 1,746,942,600, `model.safetensors.index.json` 50,900, `tokenizer.json` 12,807,982, `tokenizer_config.json` 16,709, `vocab.json` 6,722,759 | 1,769,897,116 |
+| `microsoft/phi-1_5` | `77aa61eeac94fbf33d492b9f2744c98b42d5b5eb` | `added_tokens.json` 1,080, `config.json` 736, `generation_config.json` 74, `merges.txt` 456,318, `model.safetensors` 2,836,578,696, `special_tokens_map.json` 99, `tokenizer.json` 2,114,924, `tokenizer_config.json` 237, `vocab.json` 798,156 | 2,839,950,320 |
+| `ibm-granite/granite-3.1-1b-a400m-instruct` | `0da7a48b0276d500ce5922fd2b33944091fc6c09` | `added_tokens.json` 87, `config.json` 889, `generation_config.json` 132, `merges.txt` 441,810, `model.safetensors` 2,669,283,096, `special_tokens_map.json` 701, `tokenizer.json` 3,475,806, `tokenizer_config.json` 8,072, `vocab.json` 776,995 | 2,673,987,588 |
+| `HuggingFaceTB/SmolLM2-1.7B-Instruct` | `31b70e2e869a7173562077fd711b654946d38674` | `config.json` 908, `generation_config.json` 132, `merges.txt` 466,391, `model.safetensors` 3,422,777,952, `special_tokens_map.json` 655, `tokenizer.json` 2,104,556, `tokenizer_config.json` 3,764, `vocab.json` 800,662 | 3,426,155,020 |
+| **all six** | | | **12,841,042,894** (of the 20 GB allowed) |
+
+Each lowers, binds every checkpoint tensor (0 unused) and is admitted by `tir_admit_v1`
+(`palw-tir-check --weights`), after three config keys each of which `transformers` 5.17 does not read
+were accepted as inert (tir/lower `9ff0fc899`: the Mamba conversions' `d_model`/`d_inner`/`dt_rank`/
+`ssm_cfg`, Qwen3.5's `mlp_only_layers`/`mamba_ssm_dtype`/`attn_output_gate: true`, SmolLM2's
+`transformers.js_config`). Token files: calibration 8 × 128 tokens (`docs/archival.md`,
+`docs/crescendo-guide.md`, `docs/connecting-ethereum-tooling.md`, `docs/node-liveness-probe.md`, two
+chunks each), evaluation 2 × 128 (`docs/README.md`, `docs/evm-differences-from-ethereum.md`), drift
+1 × 4,096 (`docs/palw-rc-threat-model.md`), each with the checkpoint's own `tokenizer.json`, offline.
