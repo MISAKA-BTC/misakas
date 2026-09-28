@@ -278,7 +278,7 @@ pub struct PalwTirClassV1 {
 }
 pub struct PalwTirLayoutV1 {
     pub version: u16,
-    pub max_context: u32,             // positions a job may touch (legacy n_ctx); ≤ history_bound
+    pub max_context: u32,             // positions a job may touch (prefill + decode − 1); ≤ history_bound
     pub checkpoint_interval: u32,     // C: Fixed state leaves every C positions (§2.6)
     pub h_tile: u32,                  // canonical history chunk: dissection bottom and Hist tiles
     pub commit_tiles: Vec<u32>,       // tile_len per committed node, (block, node) order
@@ -368,6 +368,15 @@ left open:
 * The canonical job must BE the attempt formula's yardstick context (`palw_tir_job_context_v1` at
   `(f − 1, 2)`) on every network, and a canonical prompt past J5b's inline bound must be committed in
   the Merkle form — the legacy attributability rule, unconditional for a class type with no legacy.
+* **Tokens against positions (ref2, `tir/ref2` 533e7b7fa item 7).** The job context counts a job in
+  TOKENS — `prefill + decode ≤ max_context_tokens`, the v2 family's rule (`check_job_context_shape`)
+  that every court path runs — and the layout in POSITIONS — `prefill + decode − 1 ≤ max_context`
+  (`job_shape`): the last emitted token is produced by the last position's logits and never fed
+  back. The yardstick context therefore states `max_context_tokens = max_context + 1`, and the two
+  rules agree on every `(prefill, decode)`: the longest job, all `max_context` positions, is admitted
+  by both and runs end to end (`a_job_at_exactly_max_context_positions_runs_end_to_end_in_the_canonical_context`).
+  The legacy context states `n_ctx` (its stricter reading); that one field is the IR context's only
+  difference from the legacy one over the same facts.
 * A program at the held history bound is refused in v1: the held regime's accusations and answers
   carry legacy bindings. The class's ladder is the network's.
 * The weight check reads `reachable_kernels = { kernel_semantics_id_v1("palw-tir/v1/prim=<Name>") }`.

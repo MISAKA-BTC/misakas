@@ -155,7 +155,7 @@ impl PalwTirCeilingsV1 {
 /// * peak live `2^32` bytes — 7.8× the 3B's;
 /// * admission work `2^16` — seventy-eight times the decoders' 838.
 ///
-/// Nothing arms them: the fence is dormant until its flag day (a single list entry).
+/// Armed on testnet-12 by its IR flag day (`PALW_T12_TIR_FLAG_DAY_FENCES_V1` at DAA 2,000).
 pub const PALW_T12_TIR_CEILINGS_V1: PalwTirCeilingsV1 = PalwTirCeilingsV1 {
     max_program_bytes: 88_000,
     max_unrolled_nodes: 1 << 16,
@@ -197,9 +197,10 @@ impl PalwTirFenceV1 {
     }
 }
 
-/// **The entry a testnet-12 flag-day list takes to arm the IR** — in NO list yet: the height is
-/// chosen at deployment, after the Phase F drill crosses it (design §4, D-F4). One line in a list
-/// arms it, through this `set`, exactly as the capacity entries wait for theirs.
+/// **The entry a testnet-12 flag-day list takes to arm the IR** — the one entry of
+/// `config::params::PALW_T12_TIR_FLAG_DAY_FENCES_V1`, testnet-12's IR flag day at DAA 2,000 (the
+/// user's decision of 2026-09-28), which a drill moves with `--palw-drill-tir-at` (D-F4 crosses it).
+/// The list arms it through this `set`, which writes the bundle's mirror.
 pub const PALW_T12_TIR_V1_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
     name: "palw_tir_v1",
     set: |params, at| {
