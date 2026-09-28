@@ -113,6 +113,8 @@ const PALW_PANEL: &str = "palw-panel";
 mod held_court;
 /// RFC-0002 Phase F (F6, node half): an IR class's court close.
 mod tir_court;
+#[cfg(test)]
+mod tir_court_e2e;
 /// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
 #[cfg(test)]
 mod held_court_e2e;
