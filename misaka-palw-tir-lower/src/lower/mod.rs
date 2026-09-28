@@ -608,8 +608,17 @@ fn split_plan(hl: &HlProgram, blk: &hl::Block, shared: &std::collections::BTreeS
     }
     (0..n)
         .map(|i| {
-            let capable =
-                matches!(blk.nodes[i].op, Op::Norm { .. } | Op::Mul | Op::Attention { .. } | Op::Linear { .. } | Op::GatedRmsNorm { .. });
+            let capable = matches!(
+                blk.nodes[i].op,
+                Op::Norm { .. }
+                    | Op::Mul
+                    | Op::Attention { .. }
+                    | Op::Linear { .. }
+                    | Op::GatedRmsNorm { .. }
+                    | Op::MlaAttention { .. }
+                    | Op::Lerp
+                    | Op::Wkv4
+            );
             let all_linear = !consumers[i].is_empty()
                 && consumers[i].iter().all(|(c, k)| {
                     *c != usize::MAX
@@ -911,7 +920,8 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         Op::Route { router, experts, top_k } => {
             let l = operand(lb, node.inputs[0])?;
             let l = coerce(b, cx, lb, &l, DType::I32, &q14())?;
-            let (idx, w) = lower_route(b, lb, &l, router, *experts, *top_k)?;
+            let sel_bias = if node.inputs.len() > 1 { Some(pidx(node.inputs[1])?) } else { None };
+            let (idx, w) = lower_route(b, cx, lb, &l, sel_bias, router, *experts, *top_k, &site)?;
             b.commit(w);
             let wkey = ScaleKey::q24().times(router.scale);
             Ok(vec![
@@ -972,6 +982,93 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let shape = AttnDims { heads: *heads, kv: *kv_heads, d: *head_dim, dv: *v_head_dim, window };
             let extra = AttnExtras { scale: *scale, softcap: *softcap, alibi: alibi.clone(), sinks: sink_param };
             one(lower_attention(b, cx, lb, &q, (kw, kk), (vw, vk), shape, &extra, &site, &want)?)
+        }
+        Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale } => {
+            let q = operand(lb, node.inputs[0])?;
+            let q = codes(b, cx, lb, &q)?;
+            let (hl::Ref::State(ls), hl::Ref::State(rs)) = (node.inputs[1], node.inputs[2]) else {
+                return Err(LowerError::eval("internal: MLA without states"));
+            };
+            let lat = lb.windows.get(&ls).cloned().ok_or_else(|| LowerError::eval("internal: latent read before its append"))?;
+            let kr = lb.windows.get(&rs).cloned().ok_or_else(|| LowerError::eval("internal: rope key read before its append"))?;
+            let kvb = pidx(node.inputs[3])?;
+            let dims = MlaDims { heads: *heads, nope: *nope, rope: *rope, vd: *v_dim, r: *kv_lora };
+            let want =
+                if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            one(lower_mla(b, cx, lb, &q, lat, kr, kvb, dims, *scale, &site, &want)?)
+        }
+        Op::TokenShift => {
+            // The previous position's row (zeros at position 0, as the state starts), and this
+            // row becomes the state: a `Fixed` code row read before it is written.
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let hl::Ref::State(st) = node.inputs[1] else { return Err(LowerError::eval("internal: token shift without a state")) };
+            let sd = &hl.states[st as usize];
+            let ts = match cx.tstate.get(&st) {
+                Some(t) => *t,
+                None => {
+                    let t = b.pb.fixed_state(&sd.name, DType::I16, &u32s(&sd.shape), -32767, 32767, true);
+                    cx.tstate.insert(st, t);
+                    t
+                }
+            };
+            let row = ensure_node(b, &x);
+            let row = Val { r: b.commit(row.r), ..row };
+            b.state_write(ts, row.r);
+            let prev = b.clamp(tir::Ref::State(ts), -32767, 32767, DType::I16);
+            one(Val { r: prev, ..x })
+        }
+        Op::Lerp => {
+            // `a + (b − a)·t` = `a·(1 − t) + b·t`, `t` a per-channel param in Q24.
+            let a = operand(lb, node.inputs[0])?;
+            let c = operand(lb, node.inputs[1])?;
+            let a = codes(b, cx, lb, &a)?;
+            let c = coerce(b, cx, lb, &c, DType::I16, &a.key)?;
+            let tp = pidx(node.inputs[2])?;
+            let n = out_len;
+            let t = decl(
+                b,
+                cx,
+                lb,
+                &format!("{site}.t"),
+                DType::I32,
+                &[n],
+                per_layer(lb),
+                Arc::new(move |f| Ok(IntTensor::i32(vec![n], f.f(tp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))),
+            )?;
+            let one_ = b.c(DType::I64, 1 << 24);
+            let omt = b.sub(one_, t, DType::I64);
+            let pa = b.mul(a.r, omt, DType::I64);
+            let pc = b.mul(c.r, t, DType::I64);
+            let sum = b.add(pa, pc, DType::I64);
+            let (ka, ko) = (a.key.clone(), want.key.clone());
+            let per = if ko.split() > 0 { n } else { 1 };
+            let (m, s) = decl_ms(
+                b,
+                cx,
+                lb,
+                &site,
+                per,
+                Arc::new(move |f| {
+                    let sa = f.scale(&ka)? / (1u64 << 24) as f64;
+                    Ok(f.scale_vec(&ko, per)?.iter().map(|so| sa / so).collect())
+                }),
+            )?;
+            let r = narrow(b, sum, m, s, None, want.dt);
+            b.commit(r);
+            one(Val { r, dt: want.dt, key: want.key.clone(), len: n, site })
+        }
+        Op::Wkv4 => {
+            let k = operand(lb, node.inputs[0])?;
+            let k = codes(b, cx, lb, &k)?;
+            let v = operand(lb, node.inputs[1])?;
+            let v = codes(b, cx, lb, &v)?;
+            let (wp, up) = (pidx(node.inputs[2])?, pidx(node.inputs[3])?);
+            let sts: Vec<u32> = node.inputs[4..7]
+                .iter()
+                .map(|r| if let hl::Ref::State(s) = r { Ok(*s) } else { Err(LowerError::eval("internal: WKV without states")) })
+                .collect::<Result<_>>()?;
+            one(lower_wkv4(b, cx, lb, &k, &v, wp, up, &sts, &site, &want)?)
         }
         Op::Slice { start, len } => {
             let x = operand(lb, node.inputs[0])?;
@@ -1906,38 +2003,90 @@ fn lower_attention(
 }
 
 /// Expert selection from Q14 router logits (library `router_topk_q36` pattern): the softmax over
-/// all experts then `TopK` (committed; lowest index on ties, index order), or `TopK` on the
-/// logits then the softmax over the kept ones; renormalised through `IntRecip` when asked. The
-/// weights are Q24; `routed_scaling_factor` lives in their scale.
+/// all experts then `TopK` (committed; lowest index on ties, index order), `TopK` on the logits then
+/// the softmax over the kept ones, or DeepSeek-V3's sigmoid scores with a selection-only bias;
+/// group-limited routing keeps the `topk_group` best groups (their max, or the sum of their top two)
+/// and masks the rest (`ReduceMax(Compare(Iota, kept, Eq))`, corpus §6.1 — no scatter). Weights are
+/// Q24, renormalised through `IntRecip` when the config asks; `routed_scaling_factor` lives in their
+/// scale.
 fn lower_route(
     b: &mut BlockBuilder<'_>,
-    _lb: &mut Lb,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
     l: &Val,
+    sel_bias: Option<u32>,
     r: &crate::spec::RouterSpec,
-    _experts: usize,
+    experts: usize,
     k: usize,
+    site: &str,
 ) -> Result<(tir::Ref, tir::Ref)> {
-    use crate::spec::Scoring;
-    if r.groups.is_some() || r.selection_bias {
-        return Err(LowerError::not_lowerable("group-limited or bias-corrected routing is not in Gate 2a"));
-    }
+    use crate::spec::{GroupScore, Scoring};
     if r.normalize && r.norm_eps > 1e-9 {
         return Err(LowerError::not_lowerable(format!("router renormalisation epsilon {} is not in Gate 2a", r.norm_eps)));
     }
     let up = 24 - LOGIT_Q;
-    let (idx, kept) = match r.scoring {
+    // (scores the weights are read from, choice scores the selection ranks, the value a masked
+    // expert takes)
+    let (scores, choice, fill): (tir::Ref, tir::Ref, i64) = match r.scoring {
         Scoring::Softmax => {
             let probs = b.softmax_shifted(l.r, up);
-            let idx = b.topk(probs, 0, k as u32);
-            (idx, b.gather(probs, idx, 0, 0))
+            (probs, probs, 0)
         }
-        Scoring::TopKThenSoftmax => {
-            let idx = b.topk(l.r, 0, k as u32);
-            let kl = b.gather(l.r, idx, 0, 0);
-            (idx, b.softmax_shifted(kl, up))
+        Scoring::TopKThenSoftmax => (l.r, l.r, i32::MIN as i64),
+        Scoring::Sigmoid => {
+            let c = b.c(DType::I64, 1i128 << up);
+            let y = b.mul(l.r, c, DType::I64);
+            let y = b.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32);
+            let sig = b.int_sigmoid(y);
+            let choice = match sel_bias {
+                Some(bp) => {
+                    let bias = decl(
+                        b,
+                        cx,
+                        lb,
+                        &format!("{site}.sel_bias"),
+                        DType::I32,
+                        &[experts],
+                        per_layer(lb),
+                        Arc::new(move |c| {
+                            Ok(IntTensor::i32(vec![experts], c.f(bp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))
+                        }),
+                    )?;
+                    let s = b.add(sig, bias, DType::I64);
+                    b.clamp(s, i32::MIN as i64, i32::MAX as i64, DType::I32)
+                }
+                None => sig,
+            };
+            (sig, choice, i32::MIN as i64)
         }
-        Scoring::Sigmoid => return Err(LowerError::not_lowerable("sigmoid routing is not in Gate 2a")),
     };
+    let choice = match &r.groups {
+        None => choice,
+        Some(g) => {
+            let (ng, per) = (g.n_group as u32, (experts / g.n_group) as u32);
+            let cg = b.reshape_fixed(choice, &[ng, per]);
+            let gs = match g.score {
+                GroupScore::Max => b.reduce_max(cg, 1),
+                GroupScore::Top2Sum => {
+                    let t2 = b.topk(cg, 1, 2.min(per));
+                    let v = b.gather(cg, t2, 1, 1);
+                    b.reduce_sum(v, 1, DType::I64)
+                }
+            };
+            let gs = b.reshape_fixed(gs, &[ng]);
+            let keep = b.topk(gs, 0, g.topk_group as u32);
+            let ids = b.iota(DType::Idx, &[Dim::Fixed(ng), Dim::Fixed(1)], 0, 0, 1);
+            let kr = b.reshape_fixed(keep, &[1, g.topk_group as u32]);
+            let eq = b.compare(ids, kr, tir::Cmp::Eq);
+            let mask = b.reduce_max(eq, 1);
+            let f = b.c(DType::I32, fill as i128);
+            let masked = b.select(mask, cg, f, DType::I32);
+            b.reshape_fixed(masked, &[experts as u32])
+        }
+    };
+    let idx = b.topk(choice, 0, k as u32);
+    let kept = b.gather(scores, idx, 0, 0);
+    let kept = if r.scoring == Scoring::TopKThenSoftmax { b.softmax_shifted(kept, up) } else { kept };
     let w = if r.normalize {
         let sum = b.reduce_sum(kept, 0, DType::I64);
         let recip = b.int_recip(sum);
@@ -2618,7 +2767,8 @@ fn lower_ssm(
     let sp = match dt.clamp {
         Some((lo, hi)) => {
             let lo = (lo * (1u64 << 24) as f64).round().clamp(0.0, i32::MAX as f64) as i64;
-            let hi = if hi.is_finite() { (hi * (1u64 << 24) as f64).round().clamp(0.0, i32::MAX as f64) as i64 } else { i32::MAX as i64 };
+            let hi =
+                if hi.is_finite() { (hi * (1u64 << 24) as f64).round().clamp(0.0, i32::MAX as f64) as i64 } else { i32::MAX as i64 };
             b.clamp(sp, lo, hi.max(lo), DType::I32)
         }
         None => b.clamp(sp, 0, i32::MAX as i64, DType::I32),
@@ -2635,7 +2785,12 @@ fn lower_ssm(
         DType::I64,
         &[an],
         pl,
-        Arc::new(move |c| Ok(IntTensor::i64(vec![an], c.f(ap)?.data.iter().map(|v| (-(*v as f64) * (1u64 << 24) as f64).round().max(0.0) as i64).collect()))),
+        Arc::new(move |c| {
+            Ok(IntTensor::i64(
+                vec![an],
+                c.f(ap)?.data.iter().map(|v| (-(*v as f64) * (1u64 << 24) as f64).round().max(0.0) as i64).collect(),
+            ))
+        }),
     )?;
     let cr = if per_state_decay { b.reshape_fixed(cpar, &[h32, 1, n32]) } else { b.reshape_fixed(cpar, &[h32, 1, 1]) };
     let spr = b.reshape_fixed(sp, &[h32, 1, 1]);
@@ -2767,6 +2922,308 @@ fn lower_gated_norm_first(
         b.commit(r);
     }
     Ok(Val { r, dt: want.dt, key: want.key.clone(), len: n, site: site.to_string() })
+}
+
+struct MlaDims {
+    heads: usize,
+    nope: usize,
+    rope: usize,
+    vd: usize,
+    r: usize,
+}
+
+/// Multi-head latent attention in the absorbed form (DeepSeek-V2/V3): the latent rows and the shared
+/// rotary key are the histories; per head `q̃ = W_kᵀ q_nope` (`kv_b`'s key half quantised per
+/// (head, latent column), since the contraction runs over its rows), logits
+/// `q̃·latent + q_rope·k_rope` in Q14, the softmax, the latent context `P·latent`, and
+/// `W_v · ctx` (the value half per (head, row)).
+#[allow(clippy::too_many_arguments)]
+fn lower_mla(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    q: &Val,
+    lat: (tir::Ref, ScaleKey),
+    kr: (tir::Ref, ScaleKey),
+    kvb: u32,
+    dims: MlaDims,
+    scale: f64,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let MlaDims { heads, nope, rope, vd, r } = dims;
+    let (h32, n32, ro32, v32, r32) = (heads as u32, nope as u32, rope as u32, vd as u32, r as u32);
+    let pl = per_layer(lb);
+    let pd = &cx.hl.params[kvb as usize];
+    let base = pd.name.trim_end_matches(".w").to_string();
+    // kv_b rows: head h's key half then its value half.
+    let half = move |c: &FillCtx<'_>, value: bool| -> Result<(Vec<f32>, usize)> {
+        let t = c.f(kvb)?;
+        let (rows_per, off, len) = (nope + vd, if value { nope } else { 0 }, if value { vd } else { nope });
+        let mut out = Vec::with_capacity(heads * len * r);
+        for hh in 0..heads {
+            let start = (hh * rows_per + off) * r;
+            out.extend_from_slice(&t.data[start..start + len * r]);
+        }
+        Ok((out, len))
+    };
+    // Key half: codes per (head, column).
+    let kcodes = move |c: &FillCtx<'_>| -> Result<(Vec<i8>, Vec<f64>)> {
+        let (w, len) = half(c, false)?;
+        let mut codes = vec![0i8; w.len()];
+        let mut scales = vec![1.0f64; heads * r];
+        for hh in 0..heads {
+            for col in 0..r {
+                let amax = (0..len).fold(0f64, |m, i| m.max((w[(hh * len + i) * r + col] as f64).abs()));
+                let sc = if amax > 0.0 { amax / 127.0 } else { 1.0 };
+                scales[hh * r + col] = sc;
+                for i in 0..len {
+                    let k = (hh * len + i) * r + col;
+                    codes[k] = (w[k] as f64 / sc).round().clamp(-127.0, 127.0) as i8;
+                }
+            }
+        }
+        Ok((codes, scales))
+    };
+    let kc1 = kcodes;
+    let wk = decl(
+        b,
+        cx,
+        lb,
+        &format!("{base}.k"),
+        DType::I8,
+        &[heads, nope, r],
+        pl,
+        Arc::new(move |c| Ok(IntTensor::i8(vec![heads, nope, r], kc1(c)?.0))),
+    )?;
+    let vrows = move |c: &FillCtx<'_>| -> Result<crate::quant::RowCodes> {
+        let (w, len) = half(c, true)?;
+        Ok(crate::quant::quantize_rows(&w, heads * len, r, None))
+    };
+    let vr1 = vrows;
+    let wv = decl(
+        b,
+        cx,
+        lb,
+        &format!("{base}.v"),
+        DType::I8,
+        &[heads, vd, r],
+        pl,
+        Arc::new(move |c| Ok(IntTensor::i8(vec![heads, vd, r], vr1(c)?.codes))),
+    )?;
+    let q3 = b.reshape_fixed(q.r, &[h32, n32 + ro32]);
+    let qn = b.slice(q3, 1, 0, n32);
+    let qn = b.reshape_fixed(qn, &[h32, 1, n32]);
+    let qr = b.slice(q3, 1, n32, ro32);
+    let qr = b.reshape_fixed(qr, &[h32, 1, ro32]);
+    // q̃ per (head, latent column).
+    let qt_key = ScaleKey::site(vec![format!("{site}.qt")], false);
+    let acc = b.matmul(qn, wk, DType::I64);
+    let (kq, kt) = (q.key.clone(), qt_key.clone());
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.qt"),
+        heads * r,
+        Arc::new(move |c| {
+            let (_, sc) = kcodes(c)?;
+            let (sq, st) = (c.scale(&kq)?, c.scale(&kt)?);
+            Ok(sc.iter().map(|v| v * sq / st).collect())
+        }),
+    )?;
+    let m = b.reshape_fixed(m, &[h32, 1, r32]);
+    let s = b.reshape_fixed(s, &[h32, 1, r32]);
+    let qt = narrow(b, acc, m, s, None, DType::I16);
+    let qt = b.commit(qt);
+    // Logits over the latent history and the rotary keys, in Q14.
+    let lw = b.reshape(lat.0, &[Dim::H, Dim::Fixed(r32)]);
+    let lt = b.transpose(lw, &[1, 0]);
+    let s1 = b.matmul(qt, lt, DType::I64);
+    let kw = b.reshape(kr.0, &[Dim::H, Dim::Fixed(ro32)]);
+    let kt2 = b.transpose(kw, &[1, 0]);
+    let s2 = b.matmul(qr, kt2, DType::I64);
+    let (kt1, kl) = (qt_key.clone(), lat.1.clone());
+    let (m1, sh1) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.scores"),
+        1,
+        Arc::new(move |c| Ok(vec![c.scale(&kt1)? * c.scale(&kl)? * scale * (1u64 << LOGIT_Q) as f64])),
+    )?;
+    let (kq2, kk2) = (q.key.clone(), kr.1.clone());
+    let (m2, sh2) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.scores_rope"),
+        1,
+        Arc::new(move |c| Ok(vec![c.scale(&kq2)? * c.scale(&kk2)? * scale * (1u64 << LOGIT_Q) as f64])),
+    )?;
+    let l1 = narrow(b, s1, m1, sh1, None, DType::I32);
+    let l2 = narrow(b, s2, m2, sh2, None, DType::I32);
+    let ls = b.add(l1, l2, DType::I64);
+    let logits = b.clamp(ls, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    let probs = b.softmax_shifted(logits, 24 - LOGIT_Q);
+    // Latent context, then the value half.
+    let ctx = b.matmul(probs, lw, DType::I64);
+    let ck = ScaleKey::site(vec![format!("{site}.latent_ctx")], false);
+    let (kl2, kc) = (lat.1.clone(), ck.clone());
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.latent_ctx"),
+        1,
+        Arc::new(move |c| Ok(vec![c.scale(&kl2)? / (1u64 << 24) as f64 / c.scale(&kc)?])),
+    )?;
+    let ctx = narrow(b, ctx, m, s, None, DType::I16);
+    let ctx = b.commit(ctx);
+    let ctxt = b.transpose(ctx, &[0, 2, 1]);
+    let acc = b.matmul(wv, ctxt, DType::I64);
+    let acc = b.reshape_fixed(acc, &[(heads * vd) as u32]);
+    let (kc2, ko) = (ck.clone(), want.key.clone());
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        site,
+        heads * vd,
+        Arc::new(move |c| {
+            let rc = vrows(c)?;
+            let sc = c.scale(&kc2)?;
+            let so = c.scale_vec(&ko, heads * vd)?;
+            Ok(rc.scales.iter().zip(&so).map(|(sw, so)| sw * sc / so).collect())
+        }),
+    )?;
+    let o = narrow(b, acc, m, s, None, DType::I16);
+    let o = b.commit(o);
+    let _ = v32;
+    Ok(Val { r: o, dt: DType::I16, key: want.key.clone(), len: heads * vd, site: site.to_string() })
+}
+
+/// RWKV-4's WKV with its (num, den, max) state, in the log domain HF keeps it in:
+///
+/// ```text
+/// ww = u + k;  p = max(m, ww);  e1 = IntExp(m − p);  e2 = IntExp(ww − p)                 Q24
+/// out = (e1·num + e2·v) · 2^16 / (e1·den + e2·2^16)                                    v's code scale
+/// ww' = m + w; p' = max(ww', k); num ← (e1'·num + e2'·v) >> 24; den ← (e1'·den + e2'·2^16) >> 24; m ← p'
+/// ```
+///
+/// `num` is `i32` at v's code scale, `den` Q16 (so it can count 32,768 undecayed steps), `m` Q24.
+/// The TIR state starts at zeros where HF starts `m` at −∞: with `num = den = 0` the true values
+/// `num·e^m`, `den·e^m` are zero either way, and every later step is invariant to the common
+/// factor, so the outputs are the same function.
+#[allow(clippy::too_many_arguments)]
+fn lower_wkv4(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    k: &Val,
+    v: &Val,
+    wp: u32,
+    up: u32,
+    sts: &[u32],
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let hl = cx.hl;
+    let n = k.len;
+    let pl = per_layer(lb);
+    let mut ts = Vec::new();
+    for s in sts {
+        let sd = &hl.states[*s as usize];
+        let t = match cx.tstate.get(s) {
+            Some(t) => *t,
+            None => {
+                let t = b.pb.fixed_state(&sd.name, DType::I32, &[n as u32], i32::MIN as i64 + 1, i32::MAX as i64, true);
+                cx.tstate.insert(*s, t);
+                t
+            }
+        };
+        ts.push(t);
+    }
+    let (num, den, mx) = (tir::Ref::State(ts[0]), tir::Ref::State(ts[1]), tir::Ref::State(ts[2]));
+    let q24p = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, name: &str, p: u32| -> Result<tir::Ref> {
+        decl(
+            b,
+            cx,
+            lb,
+            name,
+            DType::I32,
+            &[n],
+            pl,
+            Arc::new(move |c| Ok(IntTensor::i32(vec![n], c.f(p)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))),
+        )
+    };
+    let w = q24p(b, cx, lb, &format!("{site}.w"), wp)?;
+    let u = q24p(b, cx, lb, &format!("{site}.u"), up)?;
+    // k in Q24 (a logit-like exponent).
+    let kk = k.key.clone();
+    let (m, s) = decl_ms(b, cx, lb, &format!("{site}.k"), 1, Arc::new(move |c| Ok(vec![c.scale(&kk)? * (1u64 << 24) as f64])))?;
+    let kq = narrow(b, k.r, m, s, None, DType::I32);
+    let kq = b.commit(kq);
+    let exp_diff = |b: &mut BlockBuilder<'_>, a: tir::Ref, p: tir::Ref| -> tir::Ref {
+        let d = b.sub(a, p, DType::I64);
+        let d = b.clamp(d, i32::MIN as i64, 0, DType::I32);
+        b.int_exp(d)
+    };
+    let max2 = |b: &mut BlockBuilder<'_>, a: tir::Ref, c: tir::Ref| -> tir::Ref {
+        let gt = b.compare(a, c, tir::Cmp::Gt);
+        b.select(gt, a, c, DType::I32)
+    };
+    let s16 = b.c(DType::I64, 1 << 16);
+    // Output.
+    let ww = b.add(u, kq, DType::I64);
+    let ww = b.clamp(ww, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    let p = max2(b, mx, ww);
+    let e1 = exp_diff(b, mx, p);
+    let e2 = exp_diff(b, ww, p);
+    let a1 = b.mul(e1, num, DType::I64);
+    let a2 = b.mul(e2, v.r, DType::I64);
+    let numer = b.add(a1, a2, DType::I64);
+    let d1 = b.mul(e1, den, DType::I64);
+    let d2 = b.mul(e2, s16, DType::I64);
+    let denom = b.add(d1, d2, DType::I64);
+    let denom = b.clamp(denom, 1, i64::MAX, DType::I64);
+    let nu = b.mul(numer, s16, DType::I128);
+    // A weighted mean of v codes: the clamp states the range the analysis cannot see.
+    let o = b.div(nu, denom, Rounding::HalfAwayFromZero, DType::I128);
+    let o = b.clamp(o, i32::MIN as i64, i32::MAX as i64, DType::I64);
+    let (kv_, ko) = (v.key.clone(), want.key.clone());
+    let per = if ko.split() > 0 { n } else { 1 };
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        site,
+        per,
+        Arc::new(move |c| {
+            let sv = c.scale(&kv_)?;
+            Ok(c.scale_vec(&ko, per)?.iter().map(|so| sv / so).collect())
+        }),
+    )?;
+    let out = narrow(b, o, m, s, None, want.dt);
+    b.commit(out);
+    // State update.
+    let ww2 = b.add(mx, w, DType::I64);
+    let ww2 = b.clamp(ww2, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    let p2 = max2(b, ww2, kq);
+    let f1 = exp_diff(b, ww2, p2);
+    let f2 = exp_diff(b, kq, p2);
+    let b1 = b.mul(f1, num, DType::I64);
+    let b2 = b.mul(f2, v.r, DType::I64);
+    let nn = b.add(b1, b2, DType::I64);
+    let nn = b.shr(nn, 24, Rounding::HalfAwayFromZero, DType::I64);
+    b.state_write(ts[0], nn);
+    let c1 = b.mul(f1, den, DType::I64);
+    let c2 = b.mul(f2, s16, DType::I64);
+    let dn = b.add(c1, c2, DType::I64);
+    let dn = b.shr(dn, 24, Rounding::HalfAwayFromZero, DType::I64);
+    b.state_write(ts[1], dn);
+    b.state_write(ts[2], p2);
+    Ok(Val { r: out, dt: want.dt, key: want.key.clone(), len: n, site: site.to_string() })
 }
 
 /// Occurrence prefixes in program order: `pre.`, `L0.` … `L{n−1}.`, `post.`.

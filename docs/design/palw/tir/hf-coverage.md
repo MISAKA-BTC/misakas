@@ -456,16 +456,14 @@ BLAKE2b-512 over the program digest and every tensor). Phase F (F3) grows it int
 
 **Fidelity on the tiny fixtures** (`tests/fidelity_tiny.rs`: calibration 6×32 random tokens, evaluation
 3×24 others; reference evaluator vs the f32 reference, which matches transformers 5.17 to ~1e-6):
-every one of the 49 lowerable fixtures passes the 04b §7 range analysis and agrees at
+all 57 fixtures lower, pass the 04b §7 range analysis and agree at top-1 ≥ 0.90 (mean 0.98), mean
+KL median 1.4e-4 (max 0.012, Qwen3.5-MoE), |perplexity Δ| ≤ 2.1 %:
 
 | group | fixtures | top-1 | mean KL (nats) |
 | --- | --- | --- | --- |
 | dense (Llama, Mistral, Qwen2/3, Gemma 1/2/3, Phi, GPT-2/J/Neo/NeoX, Falcon incl. ALiBi, BLOOM, MPT, OPT, StarCoder2, StableLM, OLMo 1/2, Cohere 1/2, Nemotron, EXAONE-4, Granite, SmolLM3, VLM text decoders) | 39 | 0.90–1.00 | ≤ 2.3e-3 |
-| MoE (Mixtral, Qwen2/3-MoE, OLMoE, GraniteMoE, gpt-oss) | 6 | 0.97–1.00 | ≤ 2.6e-4 |
-| GDN hybrids (Qwen3-Next, Qwen3.5, Qwen3.5-MoE, Qwen3.5-VL) | 4 | 0.93–0.99 | ≤ 1.2e-2 |
-
-Not lowered yet (NOT_LOWERABLE, named): MLA / DeepSeek (and group-limited or sigmoid routing),
-Mamba, Mamba2, Jamba, RWKV-4.
+| MoE (Mixtral, Qwen2/3-MoE, OLMoE, GraniteMoE, gpt-oss, DeepSeek-V2/V2-Lite/V3 with MLA and group-limited or sigmoid routing) | 9 | 0.97–1.00 | ≤ 5.2e-4 |
+| recurrent / hybrid (Qwen3-Next, Qwen3.5 dense/MoE/VL — gated delta; Mamba, FalconMamba, Mamba2, Jamba; RWKV-4) | 9 | 0.93–1.00 | ≤ 1.2e-2 |
 
 ## 11. Reproducing
 

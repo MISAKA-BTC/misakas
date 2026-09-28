@@ -138,7 +138,7 @@ macro_rules! moe {
     )*};
 }
 
-moe!(mixtral, qwen2_moe, qwen3_moe, olmoe, granitemoe, gpt_oss);
+moe!(mixtral, qwen2_moe, qwen3_moe, olmoe, granitemoe, gpt_oss, deepseek_v2, deepseek_v2_lite, deepseek_v3);
 
 macro_rules! recurrent {
     ($($name:ident),* $(,)?) => {$(
@@ -149,7 +149,7 @@ macro_rules! recurrent {
     )*};
 }
 
-recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm, mamba, falcon_mamba, mamba2, jamba);
+recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm, mamba, falcon_mamba, mamba2, jamba, rwkv);
 
 /// Per-site errors of one fixture (debugging aid): `PALW_SITES=qwen3_5 cargo test … -- --ignored`.
 #[test]

@@ -434,7 +434,12 @@ impl<'a> Session<'a> {
                 let kvb = self.param(ins[3], layer)?;
                 let lat: &[Vec<f32>] = self.hist.get(&(ls, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let kr: &[Vec<f32>] = self.hist.get(&(rs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
-                one(mla(&q, &kvb.data, lat, kr, *heads, *nope, *rope, *v_dim, *kv_lora, *scale))
+                let (mut qt, mut ctx) = (Vec::new(), Vec::new());
+                let out = mla_traced(&q, &kvb.data, lat, kr, *heads, *nope, *rope, *v_dim, *kv_lora, *scale, &mut qt, &mut ctx);
+                // The absorbed query and the latent context: where an integer MLA narrows.
+                self.sub_site(prefix, &node.site, "qt", &qt);
+                self.sub_site(prefix, &node.site, "latent_ctx", &ctx);
+                one(out)
             }
             Op::CausalConv1d { channels, kernel, bias, act: a } => {
                 let Ref::State(s) = ins[1] else { return Err(LowerError::eval("conv without state")) };
@@ -864,6 +869,26 @@ pub fn mla(
     r: usize,
     scale: f64,
 ) -> Vec<f32> {
+    let (mut a, mut b) = (Vec::new(), Vec::new());
+    mla_traced(q, kvb, lat, kr, heads, nope, rope, vd, r, scale, &mut a, &mut b)
+}
+
+/// [`mla`], also returning every head's absorbed query `W_kᵀ q_nope` and latent context.
+#[allow(clippy::too_many_arguments)]
+pub fn mla_traced(
+    q: &[f32],
+    kvb: &[f32],
+    lat: &[Vec<f32>],
+    kr: &[Vec<f32>],
+    heads: usize,
+    nope: usize,
+    rope: usize,
+    vd: usize,
+    r: usize,
+    scale: f64,
+    qt_out: &mut Vec<f32>,
+    ctx_out: &mut Vec<f32>,
+) -> Vec<f32> {
     let qd = nope + rope;
     let mut out = vec![0f32; heads * vd];
     for h in 0..heads {
@@ -881,6 +906,8 @@ pub fn mla(
             .collect();
         let p = softmax_with_sink(&sc, None);
         let ctx: Vec<f64> = (0..r).map(|c| (0..lat.len()).map(|j| p[j] * lat[j][c] as f64).sum()).collect();
+        qt_out.extend(qt.iter().map(|v| *v as f32));
+        ctx_out.extend(ctx.iter().map(|v| *v as f32));
         for i in 0..vd {
             out[h * vd + i] = (0..r).map(|c| wv[i * r + c] as f64 * ctx[c]).sum::<f64>() as f32;
         }
