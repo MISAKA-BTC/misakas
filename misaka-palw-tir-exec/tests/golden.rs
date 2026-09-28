@@ -114,6 +114,12 @@ fn primitive_program(prim: &Prim, inputs: &[Tensor], out: &TensorType, as_params
 
 /// The executor's value of node 0, or the failure.
 fn run_primitive(prim: &Prim, inputs: &[Tensor], out: &TensorType, as_params: bool) -> Result<Tensor, TirError> {
+    // Outside a program there is no normal form: a wrong number of operands fails the
+    // primitive's type rule, `Shape` (spec 04b §9.3). Wrapped in a program it would be NF-14's.
+    let (lo, hi) = prim.arity();
+    if inputs.len() < lo || inputs.len() > hi {
+        return Err(TirError::new(misaka_palw_tir::TirErrorKind::Shape, format!("{} operands, arity {lo}..={hi}", inputs.len())));
+    }
     let (program, map) = primitive_program(prim, inputs, out, as_params);
     let plan = TirPlan::compile(&program)?;
     let params = TirParams::from_map(&plan, &map)?;
