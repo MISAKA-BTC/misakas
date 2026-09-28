@@ -77,6 +77,26 @@ CONFIGS = {
         [[0, 11, 25, 7, 2], [0, 40, 9, 17, 33, 21, 8, 2]],
         "bidir:1:12",
     ),
+    # MPNet (all-mpnet-base-v2's model): RoBERTa's positions (padding_idx 1), no token types, and a
+    # relative-position bias over 32 buckets shared by every layer. <s> 0, </s> 2, <pad> 1.
+    "mpnet": (
+        "MPNetConfig",
+        "MPNetModel",
+        dict(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4,
+             max_position_embeddings=34, hidden_act="gelu", layer_norm_eps=1e-5, relative_attention_num_buckets=32,
+             pad_token_id=1, bos_token_id=0, eos_token_id=2),
+        [[0, 11, 25, 7, 2], [0, 40, 9, 17, 33, 21, 8, 30, 12, 2]],
+        "bidir:1:12",
+    ),
+    # DistilBERT: BERT without token types under its own names. [CLS] 2, [SEP] 3, [PAD] 0.
+    "distilbert": (
+        "DistilBertConfig",
+        "DistilBertModel",
+        dict(vocab_size=V, dim=32, hidden_dim=64, n_layers=2, n_heads=4, max_position_embeddings=32, activation="gelu",
+             pad_token_id=0),
+        [[2, 11, 25, 7, 3], [2, 40, 9, 17, 33, 21, 8, 3]],
+        "bidir:0:12",
+    ),
     # XLM-R: RoBERTa's model under its own class (the tokenizer is what differs).
     "xlm_roberta": (
         "XLMRobertaConfig",
@@ -95,7 +115,7 @@ def make(name):
     seed = sum(ord(ch) for ch in name)
     torch.manual_seed(seed)
     cfg = getattr(transformers, cfg_cls)(**kw)
-    extra = {"add_pooling_layer": False} if kind.startswith("bidir") else {}
+    extra = {"add_pooling_layer": False} if kind.startswith("bidir") and model_cls != "DistilBertModel" else {}
     model = getattr(transformers, model_cls)(cfg, **extra)
     model.eval()
     randomise(model, cfg.hidden_size, seed)

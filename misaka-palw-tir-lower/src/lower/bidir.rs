@@ -54,6 +54,8 @@ struct Arch {
     eps_ffn: f64,
     act: crate::spec::Act,
     pos_offset: usize,
+    /// MPNet's bias over bucketed relative positions.
+    rel: Option<crate::spec::RelBiasSpec>,
 }
 
 fn arch_of(spec: &ArchSpec) -> Result<Arch> {
@@ -92,6 +94,7 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
         eps_ffn: layer_eps(ffn_norm)?,
         act: mlp.act,
         pos_offset: pos.offset,
+        rel: e.rel_bias,
     })
 }
 
@@ -319,7 +322,39 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                 1,
                 Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * sc * (1u64 << LOGIT_Q) as f64])),
             )?;
-            let logits = narrow(&mut b, s, m, sh, None, DType::I32);
+            let mut logits = narrow(&mut b, s, m, sh, None, DType::I32);
+            // MPNet: `table[bucket(j − i), head]` in Q`LOGIT_Q` on the scaled scores, one table and
+            // one pinned `[L, L]` bucket map for every layer.
+            if let Some(rb) = a.rel {
+                let tp = hl_param(hl, "attn.rel_bias")?;
+                let (nb, hh) = (rb.buckets, h as usize);
+                let table = decl(
+                    &mut b,
+                    cx,
+                    &lb,
+                    "attn.rel_bias.q",
+                    DType::I32,
+                    &[nb, hh],
+                    false,
+                    Arc::new(move |c| {
+                        let t = c.f(tp)?;
+                        Ok(IntTensor::i32(
+                            vec![nb, hh],
+                            t.data.iter().map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32).collect(),
+                        ))
+                    }),
+                )?;
+                let lu = l as usize;
+                let ids: Vec<u32> = (0..lu)
+                    .flat_map(|i| (0..lu).map(move |j| super::encdec::t5_bucket(j as i64 - i as i64, true, rb.buckets, rb.max_distance) as u32))
+                    .collect();
+                let bk = decl(&mut b, cx, &lb, "attn.buckets", DType::Idx, &[lu, lu], false, Arc::new(move |_| Ok(IntTensor::idx(vec![lu, lu], ids.clone()))))?;
+                let bk = b.clamp(bk, 0, nb as i64 - 1, DType::Idx);
+                let bias = b.gather(table, bk, 0, 0); // [L, L, h]
+                let bias = b.transpose(bias, &[2, 0, 1]);
+                let sum = b.add(logits, bias, DType::I64);
+                logits = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);
+            }
             // The mask: keys at or past `count` score i32::MIN, which IntExp maps to exactly 0.
             let count = b.pb.params.iter().position(|p| p.name == COUNT_PARAM);
             let count = match count {
@@ -789,11 +824,20 @@ pub fn float_forward(
         observe(format!("{pre}attn.q"), &q[..n_real]);
         observe(format!("{pre}attn.k"), &k[..n_real]);
         observe(format!("{pre}attn.v"), &v[..n_real]);
+        let rel = match a.rel {
+            Some(rb) => Some((p("attn.rel_bias", None)?, rb)),
+            None => None,
+        };
         let mut ctx = vec![vec![0f64; h * dh]; l];
         for hh in 0..h {
             for i in 0..l {
                 let sc: Vec<f64> = (0..n_real)
-                    .map(|j| (0..dh).map(|t| q[i][hh * dh + t] * k[j][hh * dh + t]).sum::<f64>() * a.scale)
+                    .map(|j| {
+                        let bias = rel.as_ref().map_or(0.0, |(t, rb)| {
+                            t[super::encdec::t5_bucket(j as i64 - i as i64, true, rb.buckets, rb.max_distance) * h + hh]
+                        });
+                        (0..dh).map(|t| q[i][hh * dh + t] * k[j][hh * dh + t]).sum::<f64>() * a.scale + bias
+                    })
                     .collect();
                 let mx = sc.iter().cloned().fold(f64::MIN, f64::max);
                 let e: Vec<f64> = sc.iter().map(|s| (s - mx).exp()).collect();

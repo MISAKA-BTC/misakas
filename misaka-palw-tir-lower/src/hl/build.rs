@@ -236,6 +236,10 @@ impl Builder<'_> {
         if let Some(rows) = e.type_rows {
             self.param("embed.type_table", vec![rows, d], false, Init::Normal(0.2))?;
         }
+        // Declared for the binding only, like the token types: `lower::bidir` adds it to the scores.
+        if let Some(rb) = e.rel_bias {
+            self.param("attn.rel_bias", vec![rb.buckets, rb.heads], false, Init::Normal(0.2))?;
+        }
         self.blocks.push(Block { name: "pre".into(), role: BlockRole::Pre, nodes: bk.nodes, outputs: vec![x] });
         Ok(self.blocks.len() - 1)
     }

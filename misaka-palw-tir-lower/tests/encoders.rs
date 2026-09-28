@@ -234,6 +234,17 @@ fn roberta_mean_pooled_and_normalised_matches_its_hf_fixture() {
 }
 
 #[test]
+fn mpnet_with_its_relative_bias_matches_its_hf_fixture() {
+    bidir_case("mpnet", 1, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, true, "mean_normalized");
+}
+
+#[test]
+fn distilbert_mean_and_cls_match_their_hf_fixture() {
+    bidir_case("distilbert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, true, "mean_normalized");
+    bidir_case("distilbert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, false, "cls");
+}
+
+#[test]
 fn xlm_roberta_cls_and_mean_match_their_hf_fixture() {
     bidir_case("xlm_roberta", 1, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, true, "cls_normalized");
     bidir_case("xlm_roberta", 1, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, false, "mean");
@@ -309,14 +320,22 @@ fn a_decoder_as_a_last_token_embedder_matches_its_hf_fixture() {
 }
 
 /// **Real configurations** (hand-written from the hub, `tests/configs/encoders/`), no weights:
-/// BERT-base, all-MiniLM-L6-v2, RoBERTa-base and XLM-R-base lower at 128, 256 and 512 tokens and
+/// BERT-base, all-MiniLM-L6-v2, RoBERTa-base, XLM-R-base, all-mpnet-base-v2 and DistilBERT-base lower
+/// at 128, 256 and 512 tokens and
 /// are admitted with their one-stage pipeline (mean pooling, normalised). Past the tile ceilings the
 /// softmax is split at commit points and the residual sums the norms read are committed
 /// (`lower::bidir::split_softmax`, `resid_commit_needed`). The numbers are the program's.
 #[test]
 fn real_encoders_lower_and_are_admitted_at_128_to_512_tokens() {
     use misaka_palw_tir_lower::lower::bidir::{self, BidirCfg, Pooling};
-    for (name, pad) in [("bert-base-uncased", 0u32), ("all-MiniLM-L6-v2", 0), ("roberta-base", 1), ("xlm-roberta-base", 1)] {
+    for (name, pad) in [
+        ("bert-base-uncased", 0u32),
+        ("all-MiniLM-L6-v2", 0),
+        ("roberta-base", 1),
+        ("xlm-roberta-base", 1),
+        ("all-mpnet-base-v2", 1),
+        ("distilbert-base-uncased", 0),
+    ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/encoders").join(format!("{name}.json"));
         let spec = misaka_palw_tir_lower::parse_config_str(&std::fs::read_to_string(path).expect("config")).expect("spec");
         let hl = misaka_palw_tir_lower::hl::build_program(&spec).expect("hl");
@@ -331,9 +350,11 @@ fn real_encoders_lower_and_are_admitted_at_128_to_512_tokens() {
             let most = p2.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
             let commits: usize = p2.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum();
             eprintln!(
-                "{name} at {lmax} tokens: admitted — {nodes} nodes (max {most}/block, {commits} commit points), job {:.3e} MACs, {:.3e} transcendentals, {} step leaves",
-                pa.job_cost.macs as f64, pa.job_cost.transcendentals as f64, pa.job_step_leaves
+                "{name} at {lmax} tokens: admitted — {nodes} nodes (max {most}/block, {commits} commit points), job {:.3e} MACs, {:.3e} transcendentals, {} step leaves, cone work {}",
+                pa.job_cost.macs as f64, pa.job_cost.transcendentals as f64, pa.job_step_leaves, pa.cone_work
             );
+            // testnet-12's palw_tir_v1 caps admission's own work at 2^16.
+            assert!(pa.cone_work <= 1 << 16, "{name} at {lmax}: cone work {} past testnet-12's 65,536", pa.cone_work);
         }
     }
 }

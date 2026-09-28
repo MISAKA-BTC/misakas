@@ -431,6 +431,17 @@ pub struct EmbeddingSpec {
     /// A token-type table of this many rows (BERT's `token_type_embeddings`); a single-segment
     /// encoder adds row 0 to every position.
     pub type_rows: Option<usize>,
+    /// A bidirectional encoder's bias over bucketed relative positions, one table shared by every
+    /// layer (MPNet: T5's bidirectional buckets). Read by `lower::bidir` only.
+    pub rel_bias: Option<RelBiasSpec>,
+}
+
+/// `table[bucket(j − i), head]` added to the scaled scores of query `i` and key `j`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct RelBiasSpec {
+    pub buckets: usize,
+    pub max_distance: usize,
+    pub heads: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
