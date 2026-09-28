@@ -289,13 +289,6 @@ struct AdmitTally {
     program_same_class: usize,
     by_limit: BTreeMap<String, usize>,
     disagreements: Vec<String>,
-    /// Cases whose only difference is finding A1 (a free update cone's groups); compared under the
-    /// first implementation's reading instead.
-    free_update_reading: usize,
-    /// Of those, cases where the reading changes the verdict (admit versus refuse).
-    free_update_verdict: usize,
-    /// Both refuse a replay (C_j = 0) and report different values (finding A3).
-    replay_value_undefined: usize,
     /// Coverage of the admitted programs: cones, dissected cones, states, split replays,
     /// multi-state closures, cones with a history leaf.
     cov: BTreeMap<&'static str, usize>,
@@ -306,22 +299,6 @@ impl AdmitTally {
         self.cases += 1;
         let a = admit_mine(bytes, inputs);
         let f = admit_first(bytes, inputs);
-        if a != f {
-            // Is the difference exactly the free-update group reading (finding A1)?
-            let other = ref2::admit::Readings { free_update_splits: false };
-            let b = admit_mine_with(bytes, inputs, other);
-            let explained = match (&b, &f) {
-                (AdmitOutcome::Admitted(x), AdmitOutcome::Admitted(y)) => diff(x, y).is_empty(),
-                _ => b == f,
-            };
-            if explained {
-                self.free_update_reading += 1;
-                if !matches!(a, AdmitOutcome::Admitted(_)) || !matches!(f, AdmitOutcome::Admitted(_)) {
-                    self.free_update_verdict += 1;
-                }
-                return self.record_outcomes(what, bytes, inputs, &b, &f);
-            }
-        }
         self.record_outcomes(what, bytes, inputs, &a, &f)
     }
 
@@ -363,19 +340,16 @@ impl AdmitTally {
                 *self.by_limit.entry(l2.clone()).or_default() += 1;
                 if (l1, v1) == (l2, v2) {
                     self.exceeds_same += 1;
-                } else if l1 == "state_replay" && l2 == "state_replay" {
-                    // Finding A3: the text does not say which value a C_j = 0 refusal reports.
-                    self.replay_value_undefined += 1;
                 } else {
-                    // "Which of several broken ceilings a refusal names is not normative."
+                    // Since the A2 fix the check order is stated, so the name and the value are
+                    // determined; a mismatch is a disagreement even when the first implementation's
+                    // limit is another broken ceiling (which alone would not be normative).
                     let p = ref2::codec::decode_canonical(bytes).unwrap();
-                    let mut set = ref2::admit::broken_ceilings(&p, inputs);
-                    set.extend(ref2::admit::broken_ceilings_with(&p, inputs, ref2::admit::Readings { free_update_splits: false }));
+                    let set = ref2::admit::broken_ceilings(&p, inputs);
                     if set.iter().any(|(l, v)| *l == l2.as_str() && v == v2) {
                         self.exceeds_in_set += 1;
-                    } else {
-                        self.disagreements.push(format!("{what}: ref2 {l1} {v1} / first {l2} {v2}; ref2's broken ceilings {set:?}"));
                     }
+                    self.disagreements.push(format!("{what}: ref2 {l1} {v1} / first {l2} {v2}; ref2's broken ceilings {set:?}"));
                 }
             }
             (AdmitOutcome::Inputs, AdmitOutcome::Inputs) => self.both_inputs += 1,
@@ -385,7 +359,7 @@ impl AdmitTally {
 
     fn report(&self, name: &str) {
         println!(
-            "{name}: {} cases — {} both admit (every derived quantity compared), {} both refuse the program ({} same class), {} both refuse past a ceiling ({} same limit and value, {} another broken ceiling), {} both refuse the inputs; {} disagreements",
+            "{name}: {} cases — {} both admit (every derived quantity compared), {} both refuse the program ({} same class), {} both refuse past a ceiling ({} same limit and value, {} another broken ceiling — each a disagreement), {} both refuse the inputs; {} disagreements",
             self.cases,
             self.both_admit,
             self.both_program,
@@ -395,10 +369,6 @@ impl AdmitTally {
             self.exceeds_in_set,
             self.both_inputs,
             self.disagreements.len()
-        );
-        println!(
-            "    finding A1 (a free update cone's groups): {} cases differ only by it, {} of them in the verdict; finding A3 (a replay refusal's value): {}",
-            self.free_update_reading, self.free_update_verdict, self.replay_value_undefined
         );
         println!("    refusals by limit: {:?}", self.by_limit);
         println!("    coverage of the admitted programs: {:?}", self.cov);
@@ -467,9 +437,6 @@ fn investigate() {
             println!("  cone work ref2 {} first {}", x.cone_work, y.cone_work);
             println!("  states ref2  {:?}", x.states);
             println!("  states first {:?}", y.states);
-            if let AdmitOutcome::Admitted(z) = admit_mine_with(&bytes, &inputs, ref2::admit::Readings { free_update_splits: false }) {
-                println!("  states ref2 (A1 switched) {:?}", z.states);
-            }
         } else {
             println!("  ref2 {} first {}", short(&a), short(&f));
         }
@@ -654,7 +621,7 @@ fn a_state_written_by_two_layer_blocks() {
         let pre = b.block("pre", vec![]);
         let o = b.node(pre, Prim::Iota { axis: 0, start: 0, step: 1 }, &[], fixed(DType::I32, &[2]), true);
         b.carry_out(pre, &[o]);
-        let mut layer = |b: &mut ProgBuilder, name: &str, heavy: bool| {
+        let layer = |b: &mut ProgBuilder, name: &str, heavy: bool| {
             let l = b.block(name, vec![fixed(DType::I32, &[2])]);
             let x = if heavy {
                 let m = b.node(l, Prim::MatMul, &[Ref::State(s), Ref::Param(w)], fixed(DType::I64, &[4, 3]), false);

@@ -1,37 +1,203 @@
 # PALW-TIR v1 — findings of the independent second implementation (`misaka-palw-tir-ref2`)
 
 > Scope: RFC-0002 freeze criterion 4 (`reference evaluator == independent second implementation ==
-> every backend`) for `docs/spec/palw/04b-tensor-ir.md`, and now its admission (`tir_admit_v1`,
-> §10.3 with §7 and §8). This file records where the normative text is ambiguous, silent or wrong,
-> and where the first implementation (`misaka-palw-tir`, observed only as a black box through its
-> public API) departs from the text. Branch `tir/ref2`: revision 1 of 04b from `tir/core`
-> b7492d601; revision 2 from a2e6ec35a (merged as 5f852c190); **admission** from ccd8f6aae
-> (merged as 34c9d92d3). Written without reading `misaka-palw-tir/` (its `tests/admit.rs`
-> included), the other files of this directory, or the legacy kernels; the text changes were read
-> as `git diff` of 04b only.
+> every backend`) for `docs/spec/palw/04b-tensor-ir.md`: its evaluator, its admission
+> (`tir_admit_v1`, §10.3 with §7 and §8) and now its demand evaluation (`eval_demanded`, §9.4). This
+> file records where the normative text is ambiguous, silent or wrong, and where the first
+> implementation (`misaka-palw-tir`, observed only as a black box through its public API) departs
+> from it. Branch `tir/ref2`: revision 1 of 04b from `tir/core` b7492d601; revision 2 from a2e6ec35a
+> (merged as 5f852c190); admission from ccd8f6aae (merged as 34c9d92d3); **demand evaluation** from
+> `tir/phase-f` 23cf9235c (merged as ef0ad0984); **the A1–A7 fix** from `tir/core` b9d75a4e5 (merged
+> as 564546f52). Written without reading `misaka-palw-tir/` (its tests included), the other files of
+> this directory, or the legacy kernels; the text changes were read as `git diff` of 04b only.
 
 ## 概要(日本語)
 
-- **admission(`tir_admit_v1`)を 04b §10.3・§7・§8 だけから独立実装。** 区間解析、§8 の node cost と
-  1 position の量、cone と leaf、tile の box demand(history の prior rows、commit 済み leaf は 4 byte/lane)、
-  `H` 縮約の cone の `h_chunk` 分解、cone work(上限は costing 前に判定)、replay closure、group `G`、`C_j`。
-- corpus 5 本と自前の **Qwen2.5-1.5B 形 decoder**(28 層・`d = 1536`・語彙 151,936・window `2^18`)で、
-  公開 API が出す全ての派生量(区間・node cost・position・cone の nodes/leaves/tile/chunk/opened bytes/
-  operands・closure・groups・`C_j`・`C`・cone work)が第 1 実装と完全一致。
-- ×25 の差分(乱数 program・range-safe な乱数 program・変異・乱数 ceiling、計 487,500 件)で、
-  **一致しないのは 1 つの読み方(A1)だけ**: `Fixed` state の replay を `G` 個の group に分けてよいかの規則。
-  本文は「closure の update cone の全 node が aligned」とだけ書き、free な node の扱いを root とそれ以外で
-  区別しない。ref2 は一様に読み(free は妨げない)、第 1 実装は「全 member の `StateWrite` が aligned
-  (free 不可)、かつ closure の update cone に含まれる commit 点は leaf でなく node として辿る」。この規則を
-  スイッチで再現すると残りは 0 件。A1 は 30,319 件で groups・replay cost・`C_j` を変え、**22 件で受理/拒否が
-  逆になる**(consensus 分岐になりうる)。
-- 他に editorial: A2 拒否の limit 名が本文に無い(第 1 実装 "tile MACs"、ref2 はしきい値名)、A3 `C_j = 0`
-  拒否の値と `max_checkpoint_interval = 0` の扱い、A4 commit 済み `StateWrite` の cone work 二重計上の文言、
-  A5 `ConeV1.whole` が未定義、A6 §7 の義務違反の class、A7 誰も書かない `Fixed` state。
-- 改訂 2 の残り N1〜N4 は本文で解消済み(未読 entry は無視・単独 primitive の arity は `Shape`・値の検査・
-  `graph_ir_root` の鍵)。`graph_ir_root` は本文の定義から計算し、全 vector と §3.6 の印字値に一致。
+- **demand 評価(`eval_demanded`、§9.4)を本文だけから独立実装。** context `(p, o)`・2 種の target・
+  要求の事前拒否(`Position`/`Malformed`)・5 つの source 質問・leaf(target は常に計算)・全 primitive の
+  index map(表の順)・`Fixed` state の replay(writer の `p − 1`、誰も書かない instance は `p − q` を運ぶ)・
+  work(要素 1 回・TopK は行ごと・`K`/`n`/運んだ position 数)を operand より先に課金・frame 上限・class。
+  明示スタックで再帰なし(`history_bound − 1` からの 26 万 position の replay も両実装で成功)。
+- **golden vector 672/672 を再現**(値・work・request 集合の grouping と並び・拒否 class)。
+- **×25 の差分 776,251 件で不一致 0**: 乱数 program(range-safe と無保証)× 乱数 target × 乱数要素集合、
+  replay window(一部 position だけ state を供給、0 に無い場合も)、敵対的 source(拒否・dtype 外・`[lo, hi]` 外・
+  供給値への `Replay`・`token_bound` の token・不整合な値/極値、最大 3 か所)、work 上限ちょうどと 1 つ手前
+  (171,418 組)。成功 510,277 件は値・work・request 集合がすべて一致(問い合わせの初出順も 97.4% で一致。順序は
+  本文上 結果に含まれない)。失敗 265,974 件はすべて本文が許す class(複数要素が失敗しうる 150 件だけ class が
+  異なり、どちらも許容集合内)。全 25 primitive と `state_after` が target として成功側で網羅。
+- 本文の穴(D 系列): **D1** commit 済み writer の値の `[lo, hi]` 検査が replay にはあり `state_after` には無い
+  (両実装とも字義どおり: 100 を state の値として返し、replay では `Operand`)。**D2** 値が見つからない carried
+  walk の terms が未定義(両実装とも通過 position ごとに 1 課金 → 上限次第で `WorkLimit`/`Missing`)。
+  **D3** どの block も参照しない instance の `state_after` が拒否されない。**D4 第 1 実装の逸脱(label のみ)**:
+  source の拒否 class をそのまま返す(本文は `Missing`)。court では `InputSetNotCanonical` と
+  `Unadjudicable` の取り違えになりうるが、どちらも close 拒否・slash なし。**D5** vector の「最重 case」は
+  実際には「terms 最大の最初の case」。
+- **admission の A1〜A7 は b9d75a4e5 で本文が確定。** 新本文だけから ref2 を更新(free/aligned/mixed の分類、
+  1 group = `⌈aligned / G⌉` + free 全額、`C_j = 0` の拒否名、`max_checkpoint_interval ≥ 1`、拒否の順序)し、
+  切替スイッチ(旧 A1 の読み)は削除。**admission.json 29/29 を再現**、**×25 の 487,500 件で不一致 0**
+  (拒否は limit 名と値まで完全一致、受理は全派生量一致)。**本文が全 case を決めている。**
+- 評価器: golden 250/250、両 merge(phase-f・A1 fix)後の ×25 差分(primitive 100 万・step・cone 312 万・変異ほか)も
+  不一致 0。改訂 1・2 の F1〜F15・N1〜N4 は解消済み。
 
-## Admission (`tir_admit_v1`, 04b at ccd8f6aae)
+## Demand evaluation (`eval_demanded`, 04b §9.4 at 23cf9235c)
+
+### What was built
+
+`misaka-palw-tir-ref2/src/demand.rs`, from §9.4 (and the rest of 04b) alone: contexts `(p, o)` with
+`H = min(p + 1, W)` per block; the two targets; the request refusals before anything is read
+(`Position` for `p ≥ history_bound`; `Malformed` for an occurrence, node, element, state or instance
+that does not exist — every applicable class kept for comparison); the five source questions behind
+a trait, with a recorder for the request set; leaves (commit points, except the target of a `node`
+request in its context); every primitive's index map in the table's order (`Select` reads only the
+chosen operand, `Gather` reads the data only after the `Index` check, `MatMul` interleaves `a` and
+`b` per `t`, `TopK` evaluates a whole row once, `HistAppend` reads the input or `hist_row`); the
+values of §6 element by element (the order-free sums, the exact-result rule, `Divisor`, the
+transcendentals); `Fixed`-state replay (a supplied value checked against dtype and `[lo, hi]`;
+`Replay` at 0 is `Missing`; the writer at `p − 1` as a leaf or computed and checked against
+`[lo, hi]`; an instance nothing writes carried from the largest `q ≤ p` with a value); work — one
+element per computed element (a `TopK` row once), `K` / `n` terms, and `p − q` per distinct need of a
+carried value — charged when an element is first scanned, before its operands, stopping as soon as a
+count exceeds its limit; and the frame cap `6 · max_terms + 24 · max_elements`. It runs on an explicit
+stack of frames (no native recursion). `demand_outcomes` evaluates everything the request can reach
+without stopping and returns the set of failures the text allows (every failing element's class,
+plus `WorkLimit` when the work exceeds the limits) — the yardstick for comparing refusal classes.
+
+The differential calls `misaka_palw_tir::demand::eval_demanded` through `validate` and a
+`DemandSource` implemented over the same answer model (`tests/common/demsrc.rs`), so both see
+exactly the same answers, and records the questions each one asks.
+
+### Results
+
+| test | result |
+| --- | --- |
+| golden vectors (`demand/*.json`, 7 files) | **672/672**: values, work (`elements`, `terms`), the grouped request set in the stated order, and every `expect_error` |
+| random range-safe programs × targets × element sets, ×25 | 330,431 cases (205,939 both succeed), 0 disagreements |
+| random programs without the range guarantee, ×25 | 180,040 cases (105,853 both succeed; `Overflow` 304, `Index` 53, `Divisor` 17 agreed), 0 disagreements |
+| replay windows (states supplied every `k`, at random, at 0 only, or never at 0; 6–20 positions), ×25 | 261,322 cases (196,325 both succeed, 159,419 of them `state_after`), 0 disagreements |
+| history rows through a committed node and through a carry-in (per layer), windows 1–`2^18` | 3,960 cases, 0 disagreements |
+| edges (482 cases) and the text-gap probes (16): a replay from `history_bound − 1` down to 0 (1,048,576 elements through uncommitted writers; 524,286 carried terms), 1,500-position replays through committed and uncommitted writers, zero limits on zero work, 5,000 repeated elements at exact limits, the empty request, `Replay` at 0, 15 request refusals alone and together | 0 disagreements |
+| hostile sources (a refusal, a value outside the dtype or `[lo, hi]`, `Replay` for a supplied value, a token at `token_bound`, an inconsistent or extreme value; 1–3 at once) | 124,068 of the cases above, 0 disagreements |
+| work limits at the boundary: exactly the work succeeds, one element or one term short fails `WorkLimit` | 171,418 triples, 0 disagreements |
+| totals ×25 | **776,251 cases, 0 disagreements**; 510,277 successes identical in values, work and request set; 265,974 failures each with a class the text allows (150 with the other of two allowed classes); every primitive covered as a successful target |
+
+On "the ordered leaf requests": §9.4 makes the requests a **set** ("the order it asks in is not
+part of the result"), and the golden vectors print it grouped and sorted; the sets, compared in that
+sorted form, agree in every success. The order in which the questions are first asked also coincides in
+497,007 of the 510,277 successes (97.4%); where it differs, it differs as the text allows.
+
+The frame cap claim ("the cap is never reached while the work is within the limits") holds for
+both: zero limits on a zero-work request (a supplied carried value, a committed writer's leaf)
+succeed, and so do 5,000 repeats of two elements at exactly the work of two.
+
+Run: `cargo test --release -p misaka-palw-tir-ref2 --test demand_golden --test demand_differential`;
+`TIR_REF2_CASES=25` for the scale above (≈ 20 s).
+
+### Findings (D-series)
+
+| id | § | severity | first impl | ref2 | text supports |
+| --- | --- | --- | --- | --- | --- |
+| D1 | 9.4 replay / `state_after` | editorial | a committed writer's value in its dtype but outside `[lo, hi]` is returned as `state_after` and refused (`Operand`) when replayed | same | the letter, which checks `[lo, hi]` only in the replay |
+| D2 | 9.4 work | editorial | a carried walk charges one term per position it passes, also when it never finds a value | same | undefined: terms are `p − q` for a `q` that may not exist |
+| D3 | 9.4 request | editorial | `state_after` of an instance its `per_layer` has but no block references is asked of the source | same | the letter (no refusal); no run defines its value except completeness's zeros |
+| D4 | 9.4 source | label only (court: which refusal) | a source's refusal fails the evaluation with **the source's own class** (`Operand`, `Position`, `Malformed` pass through) | `Missing` | ref2: "the evaluation then fails (class `Missing`)" |
+| D5 | 9.4 golden vectors | editorial | the boundary cases use the first case with the most terms, not the heaviest | — | "the heaviest case at exactly its work" |
+
+#### D1 — `[lo, hi]` for a committed writer's value (§9.4)
+
+> replay: "its element `i` in context `(p − 1, that occurrence)`, a leaf if the writer is a commit
+> point and computed otherwise, and in `[lo, hi]` (else `Operand`)" / "A `state_after(p, j, l)`
+> target's element `i` is the writer's element `i` in context `(p, the writer's occurrence)` — a
+> leaf if the writer is committed"
+
+With a committed `StateWrite` of a state in `[-5, 5]` answering 100 at position 2 (in `i16`), both
+implementations return 100 for `state_after(2, w)` ("what a checkpoint at 2 holds") and refuse the
+replay at position 3 that reads the same leaf (`Operand`); a node reading that leaf as a `Node`
+operand also gets 100 (the leaf rule checks only the dtype). In the court PALW-TIR-33 convicts such a
+value before any evaluation (the `StateWrite`'s interval is inside `[lo, hi]`), so no verdict turns
+on it; standalone, the evaluator can report a `Fixed` value outside its declared range. Fix: check
+`[lo, hi]` for the `state_after` leaf too, or say that the replay's check is the only one.
+
+#### D2 — the terms of a carried walk that finds no value (§9.4 "Work", "Charging")
+
+> "the number of positions the value is carried across: `p − q` for the largest `q ≤ p` at which the
+> source answers a value"
+
+When the source answers `Replay` all the way down to position 0, there is no `q`; the evaluation
+fails (`Missing`), but how many terms it has spent — and so whether a small `max_terms` makes it
+`WorkLimit` first — is not defined. Both implementations charge one term per position as the walk
+passes it: `state_after(9, u)` with nothing supplied is `WorkLimit` under `max_terms = 3` and
+`Missing` under 9, in both. Success is unaffected (either way it fails). Fix: "a carried value is
+charged one term for each position its walk passes".
+
+#### D3 — an instance no block references (§9.4 "The request")
+
+> "`state_after` names a state that is not `Fixed` or an instance its `per_layer` does not have (a
+> layer for a global state; none, or a layer `≥ L`, for a per-layer one)"
+
+A per-layer state read and written only by the block of layer 0 still "has" an instance at layer 1,
+so `state_after(p, v, 1)` is not refused: nothing writes it, and its value is asked of the source
+(both implementations: `Missing` from a source that knows nothing of it, the source's value
+otherwise). No run holds that instance (§9.1's completeness would read it as zeros), the golden
+vectors' `states` list only referenced instances, and the court's checkpoints never contain it.
+Fix: refuse (`Malformed`) an instance no occurrence's block references, or define its value.
+
+#### D4 — the class of a source refusal (§9.4 "The source") — the first implementation departs
+
+> "Any answer may be a refusal; the evaluation then fails (class `Missing`) and never substitutes a
+> value."
+
+The first implementation's `DemandSource` returns `TirResult`, and `eval_demanded` passes the
+error's class through: a source refusing with `Operand`, `Position` or `Malformed` makes the
+evaluation fail with that class (probe `text_gap_probes`, D4). ref2 reports `Missing` for any
+refusal, as written. Success versus failure is the same, so no verdict splits; but §9.3's court
+rule maps `Missing` to `InputSetNotCanonical` and `Operand`/`Position` to `Unadjudicable`, so a court
+source that refuses with another class changes which refusal the close gets (nobody is slashed
+either way). Fix: map every source error to `Missing` in `eval_demanded`, or say in §9.4 that a
+refusal carries the source's class.
+
+#### D5 — "the heaviest case" of the golden vectors (§9.4 "Golden vectors")
+
+The boundary cases (exactly the work, one element short, one term short) are built on the first
+case with the most terms, which is not the heaviest by elements in five of seven files (e.g.
+`gdn-k2-v4-grouped`: position 1's commit, 6,380 elements, while position 3's has 6,390; both 1,080
+terms). The vectors are right; the sentence describing them is loose. Fix: "the first case with the
+most terms".
+
+## Admission (`tir_admit_v1`, 04b at ccd8f6aae; A1–A7 resolved by b9d75a4e5)
+
+### After the fix (b9d75a4e5, merged as 564546f52)
+
+The new §10.3 states the split rule whole, and ref2 now follows it from the text alone: every node of
+the union of the closure's update cones is classified free / aligned / mixed in ascending order (a
+closure state is aligned; a commit point — another member's committed `StateWrite` included — a
+param, const, input or carry-in is free); the replay splits when every member has the same first
+dimension `G > 1` and no node is mixed; one group pays `⌈aligned / G⌉` plus every free node whole,
+each summed cone by cone. A `C_j` of 0 names `max_tile_macs` (if one group's MACs pass it) or else
+`max_tile_transcendentals`, with that component's value; `max_checkpoint_interval ≥ 1` is an input
+rule; refusals follow the stated order, so the differential now requires the same limit AND value
+(no more "another broken ceiling"). The `Readings` switch that reproduced the old A1 behaviour is
+removed: there is one reading.
+
+| id | text now | status | evidence |
+| --- | --- | --- | --- |
+| A1 | the split rule stated whole (free / aligned / mixed; free nodes paid whole by every group) | **resolved** | `admission.json` `a1-*` cases reproduce; ×25: 32,746 split replays among 95,897 range-safe replays, all identical |
+| A2 | refusals name the ceiling by field, in a stated order, so name and value are determined | **resolved** | every ×25 refusal (54,243) has the same limit and value in both |
+| A3 | `C_j = 0` names the component past its cap; `max_checkpoint_interval ≥ 1` among the inputs | **resolved** | `a3-*` vectors; the zero cap is an input refusal in both |
+| A4 | a committed `StateWrite`'s cone counts in both cone-work terms | **resolved** | `cone_work` identical in every admitted case |
+| A5 | a cone's `whole` cost is defined (informative) | **resolved** | `whole` identical in every cone |
+| A6 | a failed range obligation has the class of the rule it stands for (§9.3 row) | **resolved** | `a6-overflow`, `a6-index`, `a6-divisor` vectors |
+| A7 | only written `Fixed` states have a `C_j`; `C` = the cap if none is written | **resolved** | `a1-a-member-of-another-width-a7-a-state-nobody-writes` |
+
+| test | result |
+| --- | --- |
+| `admission.json` (29 cases) | **29/29**: every admitted case's checkpoint interval, cone work, per-position quantities, states (closure, groups, per-position cost, interval), cones (nodes, leaves in order, whole, tiles, tile, opened bytes, operands, `H` reductions, chunk) and every node's cost and interval; every refusal's kind, limit, value and cap, or class |
+| random programs, legacy ceilings, ×25 | 37,500: 0 disagreements |
+| random programs, random inputs, ×25 | 150,000: 22,336 admitted, 12,021 refused past a ceiling (all same limit and value), 0 disagreements |
+| range-safe random programs, ×25 | 150,000: 102,882 admitted with every quantity identical, 37,270 refused past a ceiling (all same limit and value), 0 disagreements |
+| mutations, ×25 | 150,000: 0 disagreements (program refusals: same class, or another class of a rule the program breaks) |
+
+The findings below are the record of what the text said at ccd8f6aae.
+
 
 ### What was built
 
