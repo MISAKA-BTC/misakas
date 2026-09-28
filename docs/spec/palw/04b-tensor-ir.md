@@ -875,11 +875,17 @@ primitives and nothing about models.
 
 ## 11. Library templates (informative)
 
-The composite operations every family needs are subgraphs. The first templates live in
-`misaka_palw_tir::builder`; they grow into `tir_library_v1` in Gate 2. Where a template reproduces a
-live kernel, conformance is **tested**: `tests/kat_base0.rs` (the frozen BASE-0 KAT digest) and
-`tests/legacy_mirror.rs` (verbatim transcriptions of the A16/Q36 kernels, on random and
-type-extreme inputs).
+The composite operations every family needs are subgraphs: `tir_library_v1`,
+`misaka_palw_tir::library` — builders that append plain primitives, so a program built with a template
+and the same program written out by hand are the same bytes (its catalogue is `LIBRARY_V1`). Where a
+template reproduces a live kernel, conformance is **tested against the live code**: the crate
+`misaka-palw-tir-conformance` (test-only, a dependency of nothing) runs every integer kernel of the
+court's catalogue — all 38 — and the fenced `RequantizeByToken` against its segment, byte for byte, on
+seeded random operands and the type extremes of each kernel's own domain, and checks every segment
+admissible under §7; its coverage test hashes the list and requires it to be exactly the integer
+catalogue plus the fenced kernel. `tests/kat_base0.rs` reproduces the frozen BASE-0 KAT digest. The
+seven float kernels are out of scope (an integer IR cannot express them), and the fenced Kimi K3 arms
+are recorded as defective (corpus-v1 §10.4) and are not a conformance target.
 
 ### 11.1 The legacy rounding rules as segments
 
@@ -891,8 +897,8 @@ type-extreme inputs).
 | `Requantize(acc, m, s, z)` (BASE-0 op 2) | `Clamp[−128,127](Add(Div_HAFZ(SRDHM(acc, m), 2^min(s,31)), z))` | KAT digest |
 | `Rescale(acc, m, s)` (BASE-0 op 9) | `Clamp_i32(Div_HAFZ(Mul(acc, m), 2^min(s,62)))` | KAT digest |
 | `IntRecip(v)` | `Div_Floor(Mul_i128(IntRsqrt(v), IntRsqrt(v)), 2^24)` | KAT digest |
-| A16 narrowing `a16_scale_round(x,m,s).saturating_add(z).clamp(lo,hi)` | `Clamp[lo,hi](Add_i128(Clamp_i64(Div_HAFZ(Mul_i128(x, m), 2^min(s,62))), z))` | mirror |
-| a variable shift `s` (per channel, per token — the lift of ADR-0102) | `2^s = Gather([2^0 … 2^62], Clamp_idx(s, 0, 62))`, then `Div` or `Mul` | mirror |
+| A16 narrowing `a16_scale_round(x,m,s).saturating_add(z).clamp(lo,hi)` | `Clamp[lo,hi](Add_i128(Clamp_i64(Div_HAFZ(Mul_i128(x, m), 2^min(s,62))), z))` | conformance crate |
+| a variable shift `s` (per channel, per token — the lift of ADR-0102) | `2^s = Gather([2^0 … 2^62], Clamp_idx(s, 0, 62))`, then `Div` or `Mul` | conformance crate |
 
 The intermediate `i64` saturations of the A16 kernels are `Clamp` nodes on `i128` values; they are
 part of the function on adversarial parameters, and the segments reproduce them.
