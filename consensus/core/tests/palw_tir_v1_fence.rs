@@ -120,6 +120,11 @@ fn the_ids_are_keyed_hashes_of_what_they_name() {
     let descriptor = misaka_palw_tir::prim::prim_set_descriptor_v1();
     let expected = blake2b_simd::Params::new().hash_length(64).key(PALW_TIR_PRIM_SET_DOMAIN_V1).hash(&descriptor);
     assert_eq!(palw_tir_prim_set_id_v1().as_byte_slice(), expected.as_bytes(), "prim_set_id = H_key(descriptor)");
+    assert_eq!(
+        palw_tir_prim_set_id_v1().as_byte_slice(),
+        &misaka_palw_tir::prim::PRIM_SET_ID_V1[..],
+        "the network's id is the one normal form requires every program to declare (NF-1)"
+    );
     let id = palw_tir_prim_set_id_v1();
     assert_ne!(palw_tir_court_root_v1(&id, 1), palw_tir_court_root_v1(&id, 2), "the court version is inside the root");
     assert_ne!(
