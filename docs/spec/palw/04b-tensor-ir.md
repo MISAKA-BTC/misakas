@@ -1464,18 +1464,22 @@ claimed, how they fold, what the bottom evaluates — and the obligations admiss
 **Every terminal close is carriable (PALW-TIR-38).** A class with a dissected tile clocks its
 executor at every terminal leaf (ADR-0082 C-5: the clock cannot tell a dissected leaf from another),
 so the acquitting close of every tile — the whole tile's for a cone that is not dissected, the
-bottom's for one that is — MUST be one the chain can carry: its bytes as carried (the close frame,
-16 KiB, and the tile's opened bytes; the program is referenced by the class, never carried) at most
+bottom's for one that is — MUST be one the chain can carry: its bytes AS CARRIED at most
 `min(max_close_chunks, 32) × 100,000` — the chunks the fold assembles (its bitmap addresses 32) of
 one carrier each, 3,200,000 bytes on testnet-12, whose ruleset's close ceiling (202 chunks) is wider
-than that. A class past it is refused, naming the bytes and the cap; the registrant declares smaller
+than that. As carried, a close is the close frame (16 KiB) and every opened unit whole: an inventory
+leaf's bytes, its full path (64 bytes a level) and its header; a step leaf's preimage and its share
+of its run's siblings; the prompt's ids or openings. The program is referenced by the class, never
+carried. A class past it is refused, naming the bytes and the cap; the registrant declares smaller
 tiles. Under the tiled logits scheme the logits node's tile length MUST divide the scheme's 4,096
 lanes (a step tile then lies inside one trace tile, at an offset, and the logits consistency check
 compares it with that part), so a large vocabulary's head can be tiled finer: at `d_model = 1,536`
-(Qwen2.5-1.5B A16) a logits tile reads 1,536 weight bytes a lane and 2,048 lanes is the largest
-admissible divisor. The boundary, on that class's FFN gate tile (1,536 weight bytes and its
-per-channel tables a lane): 2,045 lanes are admitted, 2,046 refused (3,200,470 bytes as carried >
-3,200,000) — `misaka-palw-base0/tests/tir_a16_admission_dissected.rs` pins both.
+(Qwen2.5-1.5B A16, a 20-level inventory) a logits lane carries one 1,536-byte row with its path and
+header, ≈ 2,860 bytes, and the D-F1 class declares 1,024 lanes (≈ 2.93 MB with the frame; 2,048
+would be ≈ 5.9 MB). Admission v10 prices the opened bytes element by element until `tir_admit_v1`
+reports the carried units (§14); the boundary it pins now, on that class's FFN gate tile, is 2,045
+lanes admitted and 2,046 refused (3,200,470 bytes > 3,200,000) —
+`misaka-palw-base0/tests/tir_a16_admission_dissected.rs`.
 
 **Checkpoint intervals.** The *update cone* of `Fixed` state `j` in a block that writes it is the
 cone (§10.2) of its `StateWrite` node (counted once in the cone work). Replaying `j` over positions
@@ -1773,7 +1777,11 @@ are applied too: unread environment entries are ignored whatever their key (N1, 
 error outside a program is `Shape` (N2, §9.3), every row of §9.2's table checks values (N3), and
 `graph_ir_root`'s hash and key are stated, with a vector (N4, §3.6).
 
-Open items: the param binding for per-layer params (the IR artifact stores a legacy 17-byte A16
+Open items: **admission prices a terminal close element by element** (the tile's opened bytes plus
+the frame) where PALW-TIR-38 prices every opened unit whole with its path — a lower bound, exact
+only when every unit is opened whole with a negligible path; `tir_admit_v1` is to report each commit
+point's close in carried units (Phase F, `TirCloseDemandV1`, with per-commit-point tile lengths), and
+v10 then applies PALW-TIR-38 exactly. The param binding for per-layer params (the IR artifact stores a legacy 17-byte A16
 triple as three typed tensors `m`, `s`, `z`, repacked at conversion — a re-registered legacy class
 gets a new inventory root with the same numbers); the cost coefficients (Phase D); the network values
 of the admission ceilings (Phase F's `palw_tir_v1` fence — the legacy terminal ceiling of 16 Mi MACs

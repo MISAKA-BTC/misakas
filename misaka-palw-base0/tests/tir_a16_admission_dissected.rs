@@ -68,10 +68,13 @@ fn program() -> TirProgramV1 {
     program
 }
 
-/// The logits tile the t12 dense row's IR class declares: the largest divisor of the tiled scheme's
-/// 4,096 lanes whose close (2,048 weight rows of 1,536 bytes, the final norm's row, the frame) the
-/// chain can carry.
-const LOGITS_TILE: u32 = 2048;
+/// The logits tile the t12 dense row's IR class declares: 1,024 lanes. As CARRIED, a logits tile's
+/// close holds one inventory leaf per output row — the row's 1,536 bytes, its 20-sibling path (1,280
+/// bytes) and a header, ≈ 2,860 bytes a lane (Phase F's measurement) — so 1,024 lanes are ≈ 2.93 MB
+/// with the frame, inside testnet-12's 3.2 MB, and 2,048 (≈ 5.9 MB) are not. Admission's measure is
+/// element-granular until it prices carried units (`TirCloseDemandV1`), so it would still pass 2,048;
+/// the class declares the tile that is carriable by the exact count.
+const LOGITS_TILE: u32 = 1024;
 
 /// The class at `h_tile`: 128-lane commit tiles (the FFN gate's at `gate`), the logits at `logits`,
 /// a history's rows whole.
@@ -195,7 +198,7 @@ fn the_qwen25_1_5b_a16_program_is_admitted_with_its_history_cones_dissected() {
 /// 3,200,000 bytes. The class's executor is clocked at every terminal leaf (it has dissected points),
 /// so a close past that is refused by name with its value and the cap:
 /// * the tiled scheme's full 4,096-lane logits tile reads 4,096 weight rows (6.3 MB) and is refused;
-///   its 2,048-lane divisor is admitted;
+///   the D-F1 layout's 1,024-lane divisor is admitted;
 /// * the boundary: the FFN gate's tile (a row of 1,536 weight bytes a lane) is admitted at `L*`
 ///   lanes and refused at `L* + 1`.
 #[test]
@@ -216,7 +219,7 @@ fn every_terminal_close_of_the_1_5b_class_is_carriable() {
         matches!(full, Err(E::CourtCostExceedsCeiling { what: "IR terminal close bytes as carried", got, ceiling }) if got > ceiling && ceiling == cap),
         "the 4,096-lane logits close is not carriable: {full:?}"
     );
-    assert_eq!(admit(LOGITS_TILE, 128), Ok(()), "the 2,048-lane logits tile is");
+    assert_eq!(admit(LOGITS_TILE, 128), Ok(()), "the 1,024-lane logits tile is");
 
     // The boundary, on the FFN gate's tile.
     let ff = QWEN25_1_5B.ffn_dim;
