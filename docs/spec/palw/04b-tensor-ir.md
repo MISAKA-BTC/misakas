@@ -17,8 +17,10 @@
 > Status: **Draft for review (Gate 2)**, revision 2: the findings F1–F15 of the independent second
 > implementation (`docs/design/palw/tir/ref2-findings.md`) are applied — the cone environment (§9.2),
 > the state-writer rule (NF-19), `prim_set_id` (§6.0, NF-1) and the error-class table (§9.3) — and the
-> single step tree of Phase F (D7, §10.1). The primitive set and its semantics are frozen only at
-> RFC-0002 Phase E; `prim_set_id` names this revision (§6.0).
+> single step tree of Phase F (D7, §10.1). The review's editorial follow-ups N1–N4 (§9.2, §9.3, §12,
+> §3.6) are in this text too; they change no value any program or primitive evaluates to, so the
+> descriptor's `rev` stays 2. The primitive set and its semantics are frozen only at RFC-0002
+> Phase E; `prim_set_id` names this revision (§6.0).
 
 Contents: §0 conventions · §1 terminology · §2 types · §3 the program · §4 the encoding ·
 §5 normal form · §6 primitives · §7 ranges · §8 costs · §9 evaluation · §10 commitment and the court ·
@@ -201,12 +203,37 @@ A const is `data`, the little-endian encoding of `Π shape` elements of `dtype`.
 
 ### 3.6 Identity (PALW-TIR-7)
 
-`graph_ir_root = H(encode(program))` for the network's keyed hash. The canonical encoding (§4) is the
-program: every field above is part of the identity, including names, the order of nodes (it fixes
-the node slots), the commit flags, `prim_set_id` (which MUST be `PRIM_SET_ID_V1`, NF-1) and
-`logits_scheme_id`. The identity MUST NOT depend on anything outside the program:
-thread counts, repacking, backends, fused kernels, tile shapes a backend chooses, or the physical
-layout of the artifact beyond the param binding.
+A program's identity is the keyed hash of its canonical encoding (§4), under the chain's `Hash64` id
+discipline — **BLAKE2b with a 64-byte output, keyed by the 32 ASCII bytes
+`misaka-palw/tir/graph-ir-root/v1`, over `encode(program)`** (no length prefix, no terminator):
+
+```
+graph_ir_root = BLAKE2b-512(key = "misaka-palw/tir/graph-ir-root/v1", encode(program))
+prim_set_id   = BLAKE2b-512(key = "misaka-palw/tir-prim-set-id/v1",   prim-set descriptor)   (§6.0)
+```
+
+The second line is §6.0's definition, repeated: the same discipline, keyed by the 30 ASCII bytes
+`misaka-palw/tir-prim-set-id/v1`, over the descriptor's ASCII bytes, giving `PRIM_SET_ID_V1`.
+
+The canonical encoding is the program: every field above is part of the identity, including names,
+the order of nodes (it fixes the node slots), the commit flags, `prim_set_id` (which MUST be
+`PRIM_SET_ID_V1`, NF-1) and `logits_scheme_id`. The identity MUST NOT depend on anything outside the
+program: thread counts, repacking, backends, fused kernels, tile shapes a backend chooses, or the
+physical layout of the artifact beyond the param binding.
+
+*Vector.* Every program vector of §12 carries its `graph_ir_root_hex`; the 470-byte program of
+`programs/fixed-state-saturation.json` (its `program_borsh_hex`) has
+
+```
+graph_ir_root = dcc4422a07d843bd575c689b18c8b2e41812d69589ca97749d722b2ba987ea80
+                eb8ad3ffa4dcac6672befc8ecc0c909f6f0bc09711336095def307d6cfa89c88
+```
+
+A *class* is more than its program — its commitment layout, its weights (the artifact root) and its
+tokenizer — and its identity is Phase F's `tir_class_id_v1`, which hashes `graph_ir_root` with them
+under a key of its own (`docs/design/palw/tir/phase-f-integration.md` §2.3,
+`consensus/core/src/palw_tir_class_v1.rs`). The IR itself never hashes: `misaka-palw-tir` exposes the
+canonical bytes and the caller keys them.
 
 ## 4. The canonical byte encoding — the public interface (PALW-TIR-19)
 
@@ -754,7 +781,11 @@ evaluated:
   disputed value from the environment would "recompute" exactly the claim under dispute;
 - one with an entry at an index that is **not a node of `block`**.
 
-Entries for nodes of `block` that the closure does not reach are ignored, whatever their type.
+Entries for nodes of `block` that the closure does not reach are ignored, whatever their type. So
+are the carry-in, `Fixed` and history entries the closure does not read, whatever their key, kind or
+type: a key that names no carry-in or no state, a `Fixed` entry keyed by a `Hist` state or the
+reverse, a history of any length for a `HistAppend` that is supplied rather than evaluated. Only what
+the closure reads is checked (the table below).
 
 **The closure** is the backward closure of `target` through `Node` refs that stops at every supplied
 node; it is evaluated in node index order by §6. Before any node is evaluated: fail (class
@@ -764,12 +795,15 @@ value the closure reads is checked as in §9.1(2):
 
 | value read | absent | ill-formed |
 | --- | --- | --- |
-| a supplied node | — (then it is computed) | declared dtype and shape at the running `H`, else `Operand` |
+| a supplied node | — (then it is computed) | declared dtype, shape (at the running `H`) and values, else `Operand` |
 | a carry-in | `Missing` | declared dtype, shape and values, else `Operand` |
-| a `Fixed` value (`Ref::State`) | **`Missing` — never implied** (not zeros, not the initial value) | declared dtype and shape, values in `[lo, hi]`, else `Operand` |
-| a history (a `HistAppend` in the closure) | **`Missing`, even when zero rows are needed** (`pos = 0`, or `window = 1`): the court always supplies it, possibly empty | exactly `min(pos, window − 1)` rows, else `Position`; each row's dtype and shape, else `Operand` |
-| a param | `Missing` | declared dtype and shape, else `Operand` |
+| a `Fixed` value (`Ref::State`) | **`Missing` — never implied** (not zeros, not the initial value) | declared dtype, shape and values, and every value in `[lo, hi]`, else `Operand` |
+| a history (a `HistAppend` in the closure) | **`Missing`, even when zero rows are needed** (`pos = 0`, or `window = 1`): the court always supplies it, possibly empty | exactly `min(pos, window − 1)` rows, else `Position`; each row's dtype, shape and values, else `Operand` |
+| a param | `Missing` | declared dtype, shape and values, else `Operand` |
 | a node value nobody supplied that the closure needs | `Missing` | — |
+
+*Values* means: exactly `Π shape` elements, each a value of the declared dtype (an `i8` param holding
+200, a supplied node outside `i32`, a supplied node with too few elements — all `Operand`).
 
 Evaluating a commit point's cone with every other commit point of the occurrence supplied from an
 honest step — and every carry-in, `Fixed` value and history of the occurrence supplied — reproduces
@@ -798,6 +832,12 @@ error, never an abort of the implementation. Each rule reports exactly one class
 
 An input that breaks exactly one rule reports that rule's class (every vector breaks one); an input
 that breaks several reports the class of one of them.
+
+**Outside a program** — a primitive evaluated alone, as the primitive vectors of §12 are — there is
+no normal form, and a wrong number of operands (an `Add` of one, a `Concat` of nine) is a failure of
+the primitive's §6 type rule: `Shape` (vectors `error_arity_1` of `Add`/`Sub`/`Mul`, `error_arity_9`
+of `Concat`). Inside a program the same defect is NF-14's, `NormalForm`: the normal form is checked
+before any type.
 
 **What a class leads to (Phase F).** No class decides a verdict — the class is a label, and the
 success-versus-failure bit is what consensus reads:
@@ -957,20 +997,22 @@ tensors are `{"dtype": "i32", "shape": [2, 3], "data": ["1", "-2", …]}` in row
   halves under all three division rules (including the SRDHM halves and the `RoundingShiftRight(−64,
   1)` regression), `i32`/`i64`/`i128` minima and maxima, every `IntExp` range-reduction bucket edge,
   the `IntRsqrt` seed basin, the order-free rule (a `MatMul` whose total fits but whose positive
-  terms do not), `TopK` ties, and every error class a primitive can raise; plus seeded random cases.
-- **`programs/name.json`** (`format = palw-tir-v1/program-vectors/2`): `program_borsh_hex` (a
-  canonical program, §4), `params` (`param`, `layer` or null, `le_hex` = the tensor's little-endian
-  bytes; dtype and shape from the declaration), `steps[]` (for each position: `pos`, `token`,
-  `logits`, and `commits[]` = every commit point with `slot`, `block`, `layer`, `node`, `value`),
-  `cones[]` (an `eval_cone` case: `block`, `layer`, `target`, `token`, `pos`, `carry_in`, `fixed`,
-  `hist_prior`, `supplied`, `expect`; the environment is complete, §9.2), and `refusals[]` (an
-  honest cone environment with one defect — `what` names it — and `expect_error` = the class of §9.3:
-  the target supplied, an index that is no node, `pos = history_bound`, a `Fixed` value absent, a
-  history absent at the last position and at position 0 where zero rows are needed, the token absent
-  or at `token_bound`; `token` is null when absent). The state primitives are pinned here: `fixed-state-saturation`
-  (`StateWrite`, per-layer instances), `hist-window` (`HistAppend` with window 3, an `Iota` over `H`),
-  and five whole models (dense GQA 2-layer, sliding + global, GDN with 2 key / 4 value heads, Mamba2,
-  top-2 MoE with a shared expert).
+  terms do not), `TopK` ties, every error class a primitive can raise, and a wrong operand count
+  (`error_arity_*`: `Shape` outside a program, §9.3); plus seeded random cases.
+- **`programs/name.json`** (`format = palw-tir-v1/program-vectors/3`): `program_borsh_hex` (a
+  canonical program, §4), `graph_ir_root_hex` (its identity, §3.6), `params` (`param`, `layer` or
+  null, `le_hex` = the tensor's little-endian bytes; dtype and shape from the declaration),
+  `steps[]` (for each position: `pos`, `token`, `logits`, and `commits[]` = every commit point with
+  `slot`, `block`, `layer`, `node`, `value`), `cones[]` (an `eval_cone` case: `block`, `layer`,
+  `target`, `token`, `pos`, `carry_in`, `fixed`, `hist_prior`, `supplied`, `expect`; the environment
+  is complete, §9.2), and `refusals[]` (an honest cone environment with one defect — `what` names it
+  — and `expect_error` = the class of §9.3: the target supplied, an index that is no node, `pos =
+  history_bound`, a `Fixed` value absent, a history absent at the last position and at position 0
+  where zero rows are needed, the token absent or at `token_bound`; `token` is null when absent).
+  The state primitives are pinned here: `fixed-state-saturation` (`StateWrite`, per-layer
+  instances), `hist-window` (`HistAppend` with window 3, an `Iota` over `H`), and five whole models
+  (dense GQA 2-layer, sliding + global, GDN with 2 key / 4 value heads, Mamba2, top-2 MoE with a
+  shared expert).
 - **`encoding.json`** (`format = palw-tir-v1/encoding-vectors/1`): byte strings with `expect` =
   `ok` or the refusal class — a valid program and its mutations (trailing byte, truncation, version 2,
   a `bool` of 2, an unknown primitive tag, a dead node, a forward reference, a declared shape that is
@@ -1085,7 +1127,10 @@ index that is no node (F4); NF-19 forbids two writers of one state instance and 
 (F5, F6); the position and token bounds and the carry-in checks of a cone are stated (F7, F8); the
 transcendentals have a type clause (F9); "needed" is defined (F10); the run state may omit untouched
 instances (F11); the caps sentence (F12) and the block count (F13) are corrected; `prim_set_id` is
-defined and checked (F14); every rule has a class (F15).
+defined and checked (F14); every rule has a class (F15). The editorial items left after revision 2
+are applied too: unread environment entries are ignored whatever their key (N1, §9.2), an arity
+error outside a program is `Shape` (N2, §9.3), every row of §9.2's table checks values (N3), and
+`graph_ir_root`'s hash and key are stated, with a vector (N4, §3.6).
 
 Open items for Gate 2 and later: the param binding for per-layer params (the IR artifact stores a
 legacy 17-byte A16 triple as three typed tensors `m`, `s`, `z`, repacked at conversion — a re-registered

@@ -291,6 +291,33 @@
       "expect_error": "Shape"
     },
     {
+      "name": "error_arity_1",
+      "prim": {
+        "name": "Sub",
+        "attrs": [],
+        "borsh_hex": "09"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2
+          ],
+          "data": [
+            "1",
+            "2"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          2
+        ]
+      },
+      "expect_error": "Shape"
+    },
+    {
       "name": "random_i32_into_i64",
       "prim": {
         "name": "Sub",
