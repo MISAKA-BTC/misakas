@@ -54,6 +54,7 @@
 //! measures it (`tests/admission.rs`; the worst, Falcon-40B's, is 2.6 Mi MACs of 16 Mi), so no
 //! commit point is added for cone size.
 
+pub mod bidir;
 pub mod fill;
 
 use crate::error::{LowerError, Result};

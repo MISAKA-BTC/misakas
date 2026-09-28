@@ -222,6 +222,11 @@ impl Builder<'_> {
         if let Some(n) = e.norm {
             x = self.full_norm(&mut bk, x, n, "embed.norm", d, false)?;
         }
+        // Declared for the binding only: a bidirectional encoder's lowering (`lower::bidir`) folds
+        // row 0 into its position rows; a per-position program never reads it.
+        if let Some(rows) = e.type_rows {
+            self.param("embed.type_table", vec![rows, d], false, Init::Normal(0.2))?;
+        }
         self.blocks.push(Block { name: "pre".into(), role: BlockRole::Pre, nodes: bk.nodes, outputs: vec![x] });
         Ok(self.blocks.len() - 1)
     }
@@ -246,7 +251,8 @@ impl Builder<'_> {
                 x = bk.f(Op::L2Norm { groups: 1, eps: 1e-24 }, vec![x], width, "embed.normed");
             }
             if !matches!(x, Ref::Node(..)) {
-                return Err(LowerError::not_lowerable("an encoder whose output is its carry (no final norm, projection or normalisation)"));
+                // The output is the carry itself (a bidirectional encoder pools in its own `post`).
+                x = bk.f(Op::Scale { c: 1.0 }, vec![x], width, "embed.out");
             }
             self.blocks.push(Block { name: "post".into(), role: BlockRole::Post, nodes: bk.nodes, outputs: vec![x] });
             return Ok(self.blocks.len() - 1);

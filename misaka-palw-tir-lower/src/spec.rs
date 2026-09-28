@@ -428,6 +428,9 @@ pub struct EmbeddingSpec {
     pub norm: Option<NormSpec>,
     /// `project_in` (OPT-350m).
     pub proj_in: bool,
+    /// A token-type table of this many rows (BERT's `token_type_embeddings`); a single-segment
+    /// encoder adds row 0 to every position.
+    pub type_rows: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

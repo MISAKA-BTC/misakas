@@ -82,6 +82,9 @@ pub const SUPPORTED: &[(&str, &str)] = &[
     ("RwkvForCausalLM", "C6"),
     ("CLIPTextModel", "E1 (encoder: RFC-0003 Embedding profile)"),
     ("CLIPTextModelWithProjection", "E1 (encoder: RFC-0003 Embedding profile)"),
+    ("BertModel", "E2 (bidirectional encoder: RFC-0003 Embedding profile)"),
+    ("RobertaModel", "E2 (bidirectional encoder: RFC-0003 Embedding profile)"),
+    ("XLMRobertaModel", "E2 (bidirectional encoder: RFC-0003 Embedding profile)"),
 ];
 
 /// Architectures refused on purpose, with the reason (printed instead of "unknown").
@@ -299,6 +302,8 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         "RWKV7ForCausalLM" => hybrid::rwkv7(&mut p)?,
         "CLIPTextModel" => encoder::clip_text(&mut p, false)?,
         "CLIPTextModelWithProjection" => encoder::clip_text(&mut p, true)?,
+        "BertModel" => encoder::bert_like(&mut p, encoder::BertFlavor::Bert)?,
+        "RobertaModel" | "XLMRobertaModel" => encoder::bert_like(&mut p, encoder::BertFlavor::Roberta)?,
         other => {
             return Err(LowerError::not_lowerable(format!(
                 "`{other}` has no lowerer template (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet)"
@@ -586,7 +591,7 @@ pub(crate) fn llama_names(model: &str, lm_head: &str) -> BTreeMap<String, String
 }
 
 pub(crate) fn plain_embedding(dim: usize) -> EmbeddingSpec {
-    EmbeddingSpec { dim, scale: 1.0, positions: None, norm: None, proj_in: false }
+    EmbeddingSpec { dim, scale: 1.0, positions: None, norm: None, proj_in: false, type_rows: None }
 }
 
 pub(crate) fn plain_head(tied: bool) -> HeadSpec {

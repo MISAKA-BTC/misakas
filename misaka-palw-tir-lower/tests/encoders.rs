@@ -141,3 +141,99 @@ fn clip_text_encoder_matches_its_hf_fixture() {
     // The output is an `EmbeddingI32` in Q(q): its proven interval lies inside i32.
     assert!(pa.output_interval.lo >= i32::MIN as i128 && pa.output_interval.hi <= i32::MAX as i128);
 }
+
+/// A bidirectional encoder over a padded token axis, pooled and normalised as sentence-transformers
+/// does it, against its HF fixture: the float reference, the version-2 program on `InterpreterV2`,
+/// the one-stage pipeline (JobTokens + JobTokenCount), and admission.
+fn bidir_case(name: &str, pad: u32, pooling: misaka_palw_tir_lower::lower::bidir::Pooling, normalize: bool, key: &str) {
+    use misaka_palw_tir_lower::lower::bidir::{self, BidirCfg, Padded};
+    let dir = fixture_dir(name);
+    let cfg_text = std::fs::read_to_string(dir.join("config.json")).expect("config");
+    let spec = misaka_palw_tir_lower::parse_config_str(&cfg_text).expect("spec");
+    let hl = misaka_palw_tir_lower::hl::build_program(&spec).expect("hl");
+    let binding = misaka_palw_tir_lower::hf_weights::bind(&spec, &hl).expect("bind");
+    let ck = Checkpoint::open(&dir).expect("checkpoint");
+    let (params_f, _) = ParamStore::from_source(&hl, &binding, &ck).expect("params");
+    let lmax = 12u32;
+    let cfg = BidirCfg { lmax, pooling, normalize };
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("outputs.json")).unwrap()).unwrap();
+    let seqs: Vec<(Padded, Vec<f64>)> = v["sequences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            let ids = s["padded"].as_array().unwrap().iter().map(|t| t.as_u64().unwrap() as usize).collect();
+            let count = s["count"].as_u64().unwrap() as usize;
+            (Padded { ids, count }, s[key].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect())
+        })
+        .collect();
+    // 1. The float reference is the HF model.
+    for (p, want) in &seqs {
+        let got = bidir::float_forward(&hl, &spec, &cfg, &params_f, p, None).expect("float");
+        let r = rel(&got, want);
+        eprintln!("{name} float reference vs HF `{key}`: rel {r:.2e}");
+        assert!(r < 1e-4, "{name}: float vs HF rel {r}");
+    }
+    // 2. Calibrate on random templated sequences of several lengths; materialise.
+    let (cls, sep) = (seqs[0].0.ids[0], seqs[0].0.ids[seqs[0].0.count - 1]);
+    let mut stats = std::collections::BTreeMap::new();
+    for (i, body) in fidelity::random_sequences(spec.vocab_size, 8, lmax as usize - 2, 11).into_iter().enumerate() {
+        let n = 2 + (i % (lmax as usize - 2)) + 1;
+        let mut ids: Vec<usize> = std::iter::once(cls).chain(body.into_iter().take(n - 2)).chain(std::iter::once(sep)).collect();
+        let count = ids.len().min(lmax as usize);
+        ids.truncate(lmax as usize);
+        ids.resize(lmax as usize, pad as usize);
+        bidir::float_forward(&hl, &spec, &cfg, &params_f, &Padded { ids, count }, Some(&mut stats)).expect("calibration");
+    }
+    let lw = bidir::lower_bidir(&hl, &spec, &cfg).expect("lower");
+    let loader = Resident(Arc::new(params_f));
+    let quiet = |_: usize, _: usize| {};
+    let mat = materialise(&lw, &hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialise");
+    // 3. Version 2 and its pipeline.
+    let p2 = encoder::bidir_v2(&lw, spec.vocab_size as u32, lmax).expect("v2");
+    let params2 = encoder::lifted_params(&lw.program, &[bidir::IDS_PARAM, bidir::COUNT_PARAM], &mat.params);
+    let pipe = encoder::bidir_pipeline(vec![cls as u32], vec![sep as u32], pad, lmax);
+    tir::pipeline::validate_pipeline(&pipe, std::slice::from_ref(&p2)).expect("pipeline normal form");
+    let interp = tir::interp_v2::InterpreterV2::new(&p2).expect("interpreter v2");
+    for (p, want) in &seqs {
+        let mut inputs = tir::interp_v2::MapInputs::default();
+        inputs.constant.insert(0, tir::Tensor::new(tir::DType::Idx, vec![lmax as usize], p.ids.iter().map(|t| *t as i128).collect()).unwrap());
+        inputs.constant.insert(1, tir::Tensor::scalar(tir::DType::Idx, p.count as i128).unwrap());
+        let run = interp.run_positions(&params2, &inputs, 1).expect("v2 run");
+        let out = &run[0].output;
+        let job = tir::pipeline::PipelineJob { prompt: p.ids[1..p.count - 1].iter().map(|t| *t as u32).collect(), ..Default::default() };
+        let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &OneProgram(&params2), &NoRandom, &job).expect("pipeline");
+        assert_eq!(pr.output.data, out.data, "{name}: the pipeline differs from the program");
+        let got: Vec<f64> = out.data.iter().map(|c| *c as f64 * mat.logits_scale).collect();
+        let (c, r) = (cosine(&got, want), rel(&got, want));
+        eprintln!("{name} integer vs HF `{key}` ({} real of {lmax}): cosine {c:.6}, rel {r:.2e}", p.count);
+        assert!(c > 0.999, "{name}: cosine {c}, rel {r}");
+    }
+    // 4. Admission of the program and the pipeline.
+    let inputs = misaka_palw_tir_lower::admission::default_inputs();
+    tir::admit_v2::tir_admit_program_v2(&p2, &inputs).expect("tir_admit_v2");
+    let pa = tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
+        .expect("tir_admit_pipeline_v1");
+    eprintln!("{name} admitted: job {:?}, {} step leaves, cone work {}", pa.job_cost, pa.job_step_leaves, pa.cone_work);
+}
+
+#[test]
+fn bert_mean_pooled_and_normalised_matches_its_hf_fixture() {
+    bidir_case("bert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, true, "mean_normalized");
+}
+
+#[test]
+fn bert_cls_pooled_unnormalised_matches_its_hf_fixture() {
+    bidir_case("bert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, false, "cls");
+}
+
+#[test]
+fn roberta_mean_pooled_and_normalised_matches_its_hf_fixture() {
+    bidir_case("roberta", 1, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, true, "mean_normalized");
+}
+
+#[test]
+fn xlm_roberta_cls_and_mean_match_their_hf_fixture() {
+    bidir_case("xlm_roberta", 1, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, true, "cls_normalized");
+    bidir_case("xlm_roberta", 1, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, false, "mean");
+}

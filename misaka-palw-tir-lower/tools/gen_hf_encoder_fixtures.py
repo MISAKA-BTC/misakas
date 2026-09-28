@@ -46,6 +46,37 @@ CONFIGS = {
         [[62, 5, 17, 33, 8, 63], [62, 40, 2, 29, 11, 50, 7, 21, 63]],
         "clip_text",
     ),
+    # Bidirectional encoders over a padded token axis (L_max = 12), sentence-transformers pooling
+    # applied by hand: masked mean (and CLS), then L2 normalisation. [CLS] 2, [SEP] 3.
+    "bert": (
+        "BertConfig",
+        "BertModel",
+        dict(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4,
+             max_position_embeddings=32, type_vocab_size=2, hidden_act="gelu", layer_norm_eps=1e-12,
+             pad_token_id=0),
+        [[2, 11, 25, 7, 3], [2, 40, 9, 17, 33, 21, 8, 3]],
+        "bidir:0:12",
+    ),
+    # RoBERTa: positions start at padding_idx + 1 = 2; one token type. <s> 0, </s> 2, <pad> 1.
+    "roberta": (
+        "RobertaConfig",
+        "RobertaModel",
+        dict(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4,
+             max_position_embeddings=34, type_vocab_size=1, hidden_act="gelu", layer_norm_eps=1e-5,
+             pad_token_id=1, bos_token_id=0, eos_token_id=2),
+        [[0, 11, 25, 7, 2], [0, 40, 9, 17, 33, 21, 8, 2]],
+        "bidir:1:12",
+    ),
+    # XLM-R: RoBERTa's model under its own class (the tokenizer is what differs).
+    "xlm_roberta": (
+        "XLMRobertaConfig",
+        "XLMRobertaModel",
+        dict(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=3, num_attention_heads=4,
+             max_position_embeddings=34, type_vocab_size=1, hidden_act="gelu", layer_norm_eps=1e-5,
+             pad_token_id=1, bos_token_id=0, eos_token_id=2),
+        [[0, 5, 2], [0, 40, 9, 17, 33, 21, 8, 30, 12, 2]],
+        "bidir:1:12",
+    ),
 }
 
 
@@ -54,7 +85,8 @@ def make(name):
     seed = sum(ord(ch) for ch in name)
     torch.manual_seed(seed)
     cfg = getattr(transformers, cfg_cls)(**kw)
-    model = getattr(transformers, model_cls)(cfg)
+    extra = {"add_pooling_layer": False} if kind.startswith("bidir") else {}
+    model = getattr(transformers, model_cls)(cfg, **extra)
     model.eval()
     randomise(model, cfg.hidden_size, seed)
     d = os.path.join(FIX, name)
@@ -66,11 +98,24 @@ def make(name):
     out = []
     with torch.no_grad():
         for s in seqs:
-            ids = torch.tensor([s])
-            o = fresh(input_ids=ids, output_hidden_states=False)
             if kind == "clip_text":
+                o = fresh(input_ids=torch.tensor([s]))
                 rec = {"tokens": s, "hidden": o.last_hidden_state[0].tolist(),
                        "embeds": o.text_embeds[0].tolist()}
+            elif kind.startswith("bidir"):
+                _, pad, lmax = kind.split(":")
+                pad, lmax = int(pad), int(lmax)
+                ids = torch.tensor([s + [pad] * (lmax - len(s))])
+                mask = torch.tensor([[1] * len(s) + [0] * (lmax - len(s))])
+                o = fresh(input_ids=ids, attention_mask=mask)
+                h = o.last_hidden_state[0]
+                m = mask[0].unsqueeze(-1).float()
+                mean = (h * m).sum(0) / m.sum(0).clamp(min=1e-9)
+                rec = {"tokens": s, "padded": ids[0].tolist(), "count": len(s), "hidden": h.tolist(),
+                       "cls": h[0].tolist(), "mean": mean.tolist(),
+                       "mean_normalized": torch.nn.functional.normalize(mean, p=2, dim=0).tolist(),
+                       "cls_normalized": torch.nn.functional.normalize(h[0], p=2, dim=0).tolist(),
+                       "embeds": torch.nn.functional.normalize(mean, p=2, dim=0).tolist()}
             else:
                 raise RuntimeError(kind)
             out.append(rec)

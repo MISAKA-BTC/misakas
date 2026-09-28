@@ -87,3 +87,115 @@ pub(crate) fn clip_text(p: &mut P, projection: bool) -> Result<ArchSpec> {
     spec.output = OutputSpec::Embedding { proj: projection.then_some((proj_dim, false)), normalize: false };
     Ok(spec)
 }
+
+/// The BERT lineage the bidirectional lowering (`lower::bidir`) models.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BertFlavor {
+    /// BERT: positions from 0.
+    Bert,
+    /// RoBERTa and XLM-R: positions from `padding_idx + 1`
+    /// (`create_position_ids_from_input_ids`; a pad slot's position is masked out anyway).
+    Roberta,
+}
+
+/// BERT, RoBERTa and XLM-R encoders (`BertModel`, `RobertaModel`, `XLMRobertaModel`): post-LN
+/// layers over word + position + token-type-0 embeddings and an embedding LayerNorm. Bidirectional:
+/// they lower through `lower::bidir` as one position over a padded token axis. The spec's layers
+/// are those of the per-position view, whose params and binding the bidirectional program shares.
+pub(crate) fn bert_like(p: &mut P, flavor: BertFlavor) -> Result<ArchSpec> {
+    let vocab = p.cfg.usize_or("vocab_size", 30522)?;
+    let hidden = p.cfg.usize_or("hidden_size", 768)?;
+    let inter = p.cfg.usize_or("intermediate_size", 3072)?;
+    let n = p.cfg.usize_or("num_hidden_layers", 12)?;
+    let h = p.cfg.usize_or("num_attention_heads", 12)?;
+    let max_pos = p.cfg.usize_or("max_position_embeddings", 512)?;
+    let types = p.cfg.usize_or("type_vocab_size", 2)?;
+    let act = p.act("hidden_act", "gelu")?;
+    let eps = p.cfg.f64_or("layer_norm_eps", 1e-12)?;
+    let pad = p.cfg.usize_or("pad_token_id", if flavor == BertFlavor::Bert { 0 } else { 1 })?;
+    if p.cfg.bool_or("is_decoder", false)? {
+        return Err(LowerError::not_lowerable(format!("{}: is_decoder (a causal BERT) is not modelled", p.cfg.arch)));
+    }
+    if let Some(t) = p.cfg.opt_str("position_embedding_type")?
+        && t != "absolute"
+    {
+        return Err(LowerError::not_lowerable(format!("{}: position_embedding_type `{t}` is not modelled", p.cfg.arch)));
+    }
+    p.cfg.inert(&[
+        "attention_probs_dropout_prob",
+        "hidden_dropout_prob",
+        "classifier_dropout",
+        "initializer_range",
+        "use_cache",
+        "bos_token_id",
+        "eos_token_id",
+        "tie_word_embeddings",
+        "position_embedding_type",
+        "is_decoder",
+    ]);
+    if hidden % h != 0 {
+        return Err(LowerError::bad(format!("{}: hidden_size {hidden} not divisible by {h} heads", p.cfg.arch)));
+    }
+    let hd = hidden / h;
+    let norm = NormSpec::layer(eps);
+    let layers = (0..n)
+        .map(|_| {
+            let mut at = attn(h, h, hd, Position::None, (true, true));
+            at.scale = 1.0 / (hd as f64).sqrt();
+            LayerSpec {
+                mixer: Mixer::Attention(at),
+                ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
+                residual: Residual::PostNorm { mixer_norm: norm, ffn_norm: norm },
+                post_scale: 1.0,
+            }
+        })
+        .collect();
+    let l = "encoder.layer.{L}.";
+    let nm = names(&[
+        ("embed", "embeddings.word_embeddings".into()),
+        ("pos_embed", "embeddings.position_embeddings".into()),
+        ("type_embed", "embeddings.token_type_embeddings".into()),
+        ("embed_norm", "embeddings.LayerNorm".into()),
+        ("attn.q", format!("{l}attention.self.query")),
+        ("attn.k", format!("{l}attention.self.key")),
+        ("attn.v", format!("{l}attention.self.value")),
+        ("attn.o", format!("{l}attention.output.dense")),
+        ("norm.mix", format!("{l}attention.output.LayerNorm")),
+        ("mlp.up", format!("{l}intermediate.dense")),
+        ("mlp.down", format!("{l}output.dense")),
+        ("norm.ffn", format!("{l}output.LayerNorm")),
+    ]);
+    let offset = match flavor {
+        BertFlavor::Bert => 0,
+        BertFlavor::Roberta => pad + 1,
+    };
+    if offset >= max_pos {
+        return Err(LowerError::bad(format!("{}: position offset {offset} leaves no position", p.cfg.arch)));
+    }
+    let mut emb = plain_embedding(hidden);
+    emb.positions = Some(LearnedPositions { rows: max_pos, offset });
+    emb.norm = Some(norm);
+    emb.type_rows = Some(types);
+    let model_type = match flavor {
+        BertFlavor::Bert => "bert",
+        BertFlavor::Roberta => "roberta",
+    };
+    // A task head or the pooler (`pooler.dense`, `cls.*`, `lm_head.*`) is not part of the encoder.
+    p.ignored_prefixes.extend(["pooler.".to_string(), "cls.".to_string(), "lm_head.".to_string()]);
+    let mut spec = p.finish_spec(SpecParts {
+        model_type,
+        families: vec!["E2"],
+        vocab,
+        hidden,
+        max_pos: Some(max_pos - offset),
+        embedding: emb,
+        layers,
+        final_norm: None,
+        head: plain_head(false),
+        names: nm,
+        prefix_aliases: vec![],
+        conv1d: false,
+    });
+    spec.output = OutputSpec::Embedding { proj: None, normalize: false };
+    Ok(spec)
+}

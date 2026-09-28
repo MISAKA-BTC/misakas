@@ -452,7 +452,7 @@ pub fn pow2_unit(s: f64) -> f64 {
 
 /// The fractional bits `q` of [`pow2_unit`]`(s)`.
 pub fn output_q(s: f64) -> Option<u8> {
-    if !(s > 0.0) || !s.is_finite() {
+    if s.is_nan() || s <= 0.0 || !s.is_finite() {
         return None;
     }
     Some((-s.log2().ceil()).clamp(0.0, 31.0) as u8)

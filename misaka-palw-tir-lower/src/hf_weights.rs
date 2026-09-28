@@ -82,6 +82,9 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     if let Some(n) = &spec.embedding.norm {
         m.norm("embed.norm", "embed_norm", n)?;
     }
+    if spec.embedding.type_rows.is_some() {
+        m.put("embed.type_table", Src::t(format!("{}.weight", m.role("type_embed")?)))?;
+    }
     if let Some(n) = &spec.final_norm {
         m.norm("final_norm", "final_norm", n)?;
     }
