@@ -305,6 +305,7 @@ fn palw_tir_dissected_cone_admits_v1(
     bundle: &PalwConsensusParamsV2,
     rules: &PalwTirAdmissionRulesV1,
     class: &PalwTirClassV1,
+    program: &TirProgramV1,
     block: &misaka_palw_tir::program::Block,
     bi: u8,
     ni: u16,
@@ -316,7 +317,7 @@ fn palw_tir_dissected_cone_admits_v1(
     let refused = |why: String| PalwClassAdmissionError::TirDissection { block: bi, node: ni, why };
     d::palw_tir_dissect_obligations_v1(block, ni).map_err(|e| refused(e.to_string()))?;
     let reductions = d::palw_tir_cone_reductions_v1(block, ni).len();
-    let values = d::palw_tir_dissect_value_bound_v1(block, ni, tile_len);
+    let values = d::palw_tir_dissect_value_bound_v1(program, block, ni, tile_len);
     if values > d::PALW_TIR_DISSECT_MAX_VALUES as u64 {
         return Err(refused(format!("a claim may carry {values} values; at most {}", d::PALW_TIR_DISSECT_MAX_VALUES)));
     }
@@ -482,7 +483,9 @@ pub fn verify_class_admission_v10(
                             return Err(PalwClassAdmissionError::TirNeedsDissection { block: bi as u8, node: ni as u16 });
                         }
                     }
-                    Some(k) => palw_tir_dissected_cone_admits_v1(bundle, rules, class, block, bi as u8, ni as u16, tile_len, cone, k)?,
+                    Some(k) => palw_tir_dissected_cone_admits_v1(
+                        bundle, rules, class, &program, block, bi as u8, ni as u16, tile_len, cone, k,
+                    )?,
                 }
             }
             let (tile, opened) = if dissected { (cone.terminal(), cone.terminal_opened_bytes()) } else { (&cone.tile, cone.tile_opened_bytes) };

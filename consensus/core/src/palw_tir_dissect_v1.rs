@@ -297,7 +297,7 @@ pub fn palw_tir_dissect_obligations_v1(block: &Block, node: u16) -> Result<(), P
 /// the probes read at most that many of its elements, whatever the values (a count, not a set, so a
 /// value-chosen read in the `H`-free region is bounded too). What admission sizes a round, a root
 /// claim and the value cap against.
-pub fn palw_tir_dissect_value_bound_v1(block: &Block, node: u16, tile_len: u32) -> u64 {
+pub fn palw_tir_dissect_value_bound_v1(program: &TirProgramV1, block: &Block, node: u16, tile_len: u32) -> u64 {
     let computed = palw_tir_cone_computed_v1(block, node);
     let n = block.nodes.len();
     if node as usize >= n {
@@ -306,11 +306,18 @@ pub fn palw_tir_dissect_value_bound_v1(block: &Block, node: u16, tile_len: u32) 
     let count = |i: usize| block.nodes[i].out.elements_at(1);
     let mut demand = vec![0u64; n];
     demand[node as usize] = (tile_len as u64).min(count(node as usize));
+    // Every operand's shape at `H = 1`, whatever it refers to — a param, a constant or a state is as
+    // much a `MatMul`'s first operand as a node is, and its `K` passes `d · K` to the second (ref2's
+    // H2: a leaf's shape read as absent passed only `d`).
     let operand_shape = |r: &Ref| -> Option<Vec<usize>> {
+        let fixed = |shape: &[u32]| shape.iter().map(|d| *d as usize).collect::<Vec<_>>();
         match r {
             Ref::Node(j) => block.nodes.get(*j as usize).map(|m| m.out.resolve(1)),
             Ref::CarryIn(k) => block.carry_in.get(*k as usize).map(|t| t.resolve(1)),
-            _ => None,
+            Ref::Param(j) => program.params.get(*j as usize).map(|p| fixed(&p.shape)),
+            Ref::Const(j) => program.consts.get(*j as usize).map(|c| fixed(&c.shape)),
+            Ref::State(j) => program.states.get(*j as usize).map(|s| fixed(&s.shape)),
+            Ref::Input(_) => Some(Vec::new()),
         }
     };
     for i in (0..n).rev() {
@@ -440,7 +447,10 @@ fn check_shape(site: &PalwTirDissectSiteV1, elements: &[Vec<u32>], claim: &PalwT
     }
     let mut total = 0usize;
     for (i, e) in elements.iter().enumerate() {
-        if e.is_empty() || e.windows(2).any(|w| w[0] >= w[1]) || e.last().is_some_and(|x| *x as u64 >= site.counts[i]) {
+        // A list may be EMPTY (ref2's H1): a tile that reads none of a reduction of its cone — a
+        // `Concat`, `Slice` or `Gather` routing its rows around it — claims nothing of it, and the
+        // exact-closure check (spec 04b §9.5.3 step 5) is what then requires the empty list.
+        if e.windows(2).any(|w| w[0] >= w[1]) || e.last().is_some_and(|x| *x as u64 >= site.counts[i]) {
             return Err(PalwTirDissectError::Shape("a reduction's elements are ascending, distinct and inside it"));
         }
         if claim.partials[i].len() != e.len() {

@@ -20,8 +20,12 @@ use kaspa_consensus_core::palw_tir_court_v1::{
 };
 use kaspa_consensus_core::palw_tir_dissect_v1::{
     PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirDissectChoiceV1, PalwTirDissectPhaseV1, PalwTirFoldV1, palw_tir_dissect_site_v1,
+    palw_tir_dissect_value_bound_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1;
+use misaka_palw_tir::builder::ProgramBuilder;
+use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+use misaka_palw_tir::{DType, MapParams, Ref, Tensor, TensorType, TirProgramV1};
 use serde_json::{Value, json};
 
 const SESSION: Hash64 = Hash64::from_bytes([0x5E; 64]);
@@ -38,8 +42,104 @@ fn lists<T: ToString + Copy>(v: &[Vec<T>]) -> Value {
     Value::Array(v.iter().map(|x| list(x)).collect())
 }
 
-/// The vector file of one fixture, or `None` for a model with no dissected leaf.
-fn vectors(f: &Fixture) -> Option<Value> {
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The tile length the layout declares for committed node `node` of block `block`.
+fn commit_tile_len(program: &TirProgramV1, tiles: &[u32], block: u8, node: u16) -> u32 {
+    let index = program
+        .blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, b)| b.nodes.iter().enumerate().filter(|(_, n)| n.commit).map(move |(ni, _)| (bi, ni)))
+        .position(|(bi, ni)| bi == block as usize && ni == node as usize)
+        .expect("a committed node");
+    tiles[index]
+}
+
+type Body = fn(&mut misaka_palw_tir::builder::BlockBuilder<'_>, Ref) -> Ref;
+
+/// A one-layer program over a 4-lane history of clamped rows, whose layer commits `body`'s cone.
+fn synthetic_program(name: &str, body: Body) -> (String, TirProgramV1, MapParams, Vec<u32>) {
+    let mut pb = ProgramBuilder::new(8, HISTORY_BOUND_V1_SMALL);
+    let embed = pb.param("embed", DType::I8, &[8, 4], false);
+    let head = pb.param("head", DType::I8, &[8, 4], false);
+    let hist = pb.hist_state("rows", DType::I32, &[4], 64, true);
+    let carry = vec![TensorType::fixed(DType::I32, &[4])];
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let x = b.gather(embed, Ref::Input(0), 0, 0);
+        let x = b.cast(x, DType::I32);
+        b.finish(&[x])
+    };
+    let layer = {
+        let mut b = pb.block("layer", carry.clone());
+        let row = b.clamp(Ref::CarryIn(0), -64, 64, DType::I32);
+        let rows = b.hist_append(hist, row);
+        let out = body(&mut b, rows);
+        let out = b.clamp(out, -1000, 1000, DType::I32);
+        b.finish(&[out])
+    };
+    let (post, logits) = {
+        let mut b = pb.block("post", carry);
+        let x = b.reshape_fixed(Ref::CarryIn(0), &[4, 1]);
+        let l = b.matmul(head, x, DType::I64);
+        let l = b.clamp(l, i32::MIN as i64, i32::MAX as i64, DType::I32);
+        let l = b.reshape_fixed(l, &[8]);
+        let l = b.commit(l);
+        let Ref::Node(i) = l else { unreachable!() };
+        (b.finish(&[]), i)
+    };
+    let program = pb.finish(pre, vec![layer], post, logits);
+    let mut params = MapParams::default();
+    let fill = |n: usize, k: i128| (0..n as i128).map(|i| ((i * 37 + k) % 255) - 127).collect::<Vec<_>>();
+    params.tensors.insert((0, None), Tensor::new(DType::I8, vec![8, 4], fill(32, 5)).unwrap());
+    params.tensors.insert((1, None), Tensor::new(DType::I8, vec![8, 4], fill(32, 17)).unwrap());
+    (name.to_string(), program, params, vec![1, 6, 3, 2, 5])
+}
+
+/// **The two programs ref2's findings H1 and H2 are about**, carried inline in their vector files.
+///
+/// * `h1-concat-maxima`: two maxima over the history, concatenated and committed at the fixture
+///   layout's 6-lane tile — the second tile reads only the second maximum, so its root claim's list
+///   for the first is EMPTY.
+/// * `h2-matmul-const-first`: a maximum `m1` over the history, the history shifted by it and
+///   transposed, contracted with a constant `[2, 4]` (a `MatMul` whose first operand is a leaf), and a
+///   maximum of that over the history — whose closure reads all four elements of `m1`.
+fn synthetic() -> Vec<(String, TirProgramV1, MapParams, Vec<u32>)> {
+    fn h1(b: &mut misaka_palw_tir::builder::BlockBuilder<'_>, rows: Ref) -> Ref {
+        let m1 = b.reduce_max(rows, 0); // [1, 4]
+        let seven = b.c(DType::I32, 7);
+        let shifted = b.add(rows, seven, DType::I32);
+        let m2 = b.reduce_max(shifted, 0); // [1, 4]
+        let cat = b.concat(&[m1, m2], 1); // [1, 8]
+        let cat = b.commit(cat);
+        let half = b.slice(cat, 1, 0, 4);
+        b.reshape_fixed(half, &[4])
+    }
+    fn h2(b: &mut misaka_palw_tir::builder::BlockBuilder<'_>, rows: Ref) -> Ref {
+        let m1 = b.reduce_max(rows, 0); // [1, 4]
+        let d = b.sub(rows, m1, DType::I32); // [H, 4]
+        let xt = b.transpose(d, &[1, 0]); // [4, H]
+        let a = b.pb.konst(DType::I32, &[2, 4], &[1, -2, 3, -1, 2, 1, -3, 2]);
+        let mm = b.matmul(a, xt, DType::I64); // [2, H]: the first operand a constant
+        let r2 = b.reduce_max(mm, 1); // [2, 1]
+        let r2 = b.clamp(r2, -100_000, 100_000, DType::I32);
+        let r2 = b.commit(r2);
+        let r2 = b.reshape_fixed(r2, &[2]);
+        let m = b.reshape_fixed(m1, &[4]);
+        let head = b.slice(m, 0, 0, 2);
+        let tail = b.slice(m, 0, 2, 2);
+        let head = b.add(head, r2, DType::I32);
+        b.concat(&[head, tail], 0)
+    }
+    vec![synthetic_program("h1-concat-maxima", h1), synthetic_program("h2-matmul-const-first", h2)]
+}
+
+/// The vector file of one fixture, or `None` for a model with no dissected leaf; `inline` carries a
+/// synthetic program's params (its bytes are the fixture's).
+fn vectors(f: &Fixture, inline: Option<&MapParams>) -> Option<Value> {
     let intervals = f.intervals.as_ref()?;
     let x = f.honest();
     let store = Store { f, x: &x };
@@ -51,11 +151,18 @@ fn vectors(f: &Fixture) -> Option<Value> {
         if leaf.position + 2 < positions {
             continue;
         }
-        let PalwTirLeafKindV1::Commit { occurrence, node, first_element, .. } = leaf.kind else {
+        let PalwTirLeafKindV1::Commit { occurrence, block, node, first_element, .. } = leaf.kind else {
             unreachable!("a dissected leaf commits")
         };
         let index = i as u64;
         let root = build_tir_root_claim_v1(&x.binding, index, &store, &RULES).expect("the honest root claim");
+        // O-5's bound on the values a claim carries, at the node's tile length: never below the
+        // closure the claim actually carries (ref2's H2).
+        let program = &f.space.program;
+        let tile_len = commit_tile_len(program, &f.class.layout.commit_tiles, block, node);
+        let value_bound = palw_tir_dissect_value_bound_v1(program, &program.blocks[block as usize], node, tile_len);
+        let carried: u64 = root.elements.iter().map(|e| e.len() as u64).sum();
+        assert!(carried <= value_bound, "{}: leaf {i}: the claim carries {carried} values, the bound is {value_bound}", f.name);
         assert_eq!(check_tir_root_claim_v1(&root, index, &RULES).as_ref(), Ok(&site), "{}: leaf {i} is admitted", f.name);
         let finalize =
             tir_root_claim_finalizes_to_v1(&x.binding, index, &root.elements, &root.totals, &store, &RULES).expect("finalizes");
@@ -110,6 +217,7 @@ fn vectors(f: &Fixture) -> Option<Value> {
                 "h_tile": s(site.tile_positions),
                 "counts": list(&site.counts),
             },
+            "value_bound": s(value_bound),
             "elements": lists(&root.elements),
             "totals": lists(&root.totals.partials),
             "finalize": list(&finalize),
@@ -123,11 +231,24 @@ fn vectors(f: &Fixture) -> Option<Value> {
     if cases.is_empty() {
         return None;
     }
+    let (program, inline) = match inline {
+        None => (json!(format!("programs/{}.json", f.name)), Value::Null),
+        Some(params) => {
+            let mut rows: Vec<Value> = params
+                .tensors
+                .iter()
+                .map(|((j, layer), t)| json!({ "param": s(j), "layer": layer.map(s), "le_hex": hex(&t.to_le_bytes()) }))
+                .collect();
+            rows.sort_by_key(|v| v.to_string());
+            (Value::Null, json!({ "program_borsh_hex": hex(&f.space.program.encode()), "params": rows }))
+        }
+    };
     Some(json!({
         "format": "palw-tir-v1/dissect-vectors/1",
         "spec": "docs/spec/palw/04b-tensor-ir.md §9.5",
         "name": f.name,
-        "program": format!("programs/{}.json", f.name),
+        "program": program,
+        "inline": inline,
         "job": {
             "prefill": s(PREFILL),
             "decode": s(DECODE),
@@ -147,8 +268,14 @@ fn the_dissect_vectors_are_the_court_s() {
         std::fs::create_dir_all(&dir).expect("the vector directory");
     }
     let mut written = Vec::new();
-    for f in fixtures() {
-        let Some(v) = vectors(&f) else { continue };
+    let corpus = fixtures().into_iter().map(|f| (f, None));
+    let synthetic = synthetic().into_iter().map(|(name, program, params, tokens)| {
+        let f = fixture(name, program, params.clone(), tokens);
+        assert!(f.intervals.is_some(), "{}: the range analysis proves it", f.name);
+        (f, Some(params))
+    });
+    for (f, inline) in corpus.chain(synthetic) {
+        let Some(v) = vectors(&f, inline.as_ref()) else { continue };
         let bytes = serde_json::to_string_pretty(&v).expect("json") + "\n";
         let path = dir.join(format!("{}.json", f.name));
         if bless {
@@ -160,7 +287,29 @@ fn the_dissect_vectors_are_the_court_s() {
         written.push((f.name.clone(), v["cases"].as_array().map(Vec::len).unwrap_or(0)));
     }
     eprintln!("dissect vectors: {written:?}");
-    assert!(written.len() >= 2, "the dense and the sliding + global models have dissected leaves");
+    // ref2's H1 and H2, pinned: an admitted claim with an EMPTY list, and a `V` through a constant
+    // `MatMul` operand equal to the closure it bounds.
+    let read = |name: &str| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join(format!("{name}.json"))).expect("the file")).expect("json")
+    };
+    let h1 = read("h1-concat-maxima");
+    assert!(
+        h1["cases"].as_array().unwrap().iter().any(|c| c["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e.as_array().unwrap().is_empty())),
+        "H1: some admitted root claim carries an empty list"
+    );
+    let h2 = read("h2-matmul-const-first");
+    assert!(
+        h2["cases"].as_array().unwrap().iter().any(|c| {
+            let carried: usize = c["elements"].as_array().unwrap().iter().map(|e| e.as_array().unwrap().len()).sum();
+            c["site"]["reductions"].as_array().unwrap().len() == 2 && c["value_bound"] == s(carried) && carried == 6
+        }),
+        "H2: V counts d · K through the constant operand and equals the closure (6)"
+    );
+    assert!(written.len() >= 4, "the dense and the sliding + global models, and ref2's H1 and H2 programs");
     let on_disk: Vec<String> = std::fs::read_dir(&dir)
         .expect("the vector directory")
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

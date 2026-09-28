@@ -1093,7 +1093,10 @@ The **site** of a dissected tile is, per reduction `r_i`:
 - its **element count** `E_i`: the element count of `r_i`'s output at the context's `H`;
 
 and, for the whole site, `H = min(p + 1, W)` of block `b` (§9.4, *Contexts*) and the class's
-`h_tile` (positions per history tile of its commitment layout, `≥ 1`). The site is a function of the
+`h_tile` (positions per history tile of its commitment layout). The dissection's arithmetic needs
+only `h_tile ≥ 1`; the Phase F commitment layout (`PalwTirLayoutV1`) further requires `h_tile` to be
+a power of two in `[1, 4096]`, and every commit and state tile to be `[4, 2^16]` lanes (under the
+tiled logits scheme the logits tile divides 4,096, §10.3). The site is a function of the
 program, the layout and the tile's coordinate; nothing in it is supplied by a mover. A site with
 `m > 16` is refused (`PALW_TIR_DISSECT_MAX_REDUCTIONS`); admission refuses a program that has one
 (§9.5.6).
@@ -1104,7 +1107,8 @@ program, the layout and the tile's coordinate; nothing in it is supplied by a mo
 `node(p, o, target)` with two changes:
 
 1. **Supplied nodes.** `supplied` is a set of node indices of the target's block, none equal to
-   `target`. In the target's context `(p, o)` — and only there — every node of `supplied` is a *leaf*
+   `target` (a supplied set holding the target, or an index that is no node of the block, refuses
+   the request, class `Malformed`, before anything is read). In the target's context `(p, o)` — and only there — every node of `supplied` is a *leaf*
    exactly as a commit point is: its element `i` is `source.node(p, o, n, i)`, which must be a value
    of the node's dtype (else `Operand`); it is never computed, costs nothing and its operands are
    never read. (A supplied node that the evaluation never reaches is never asked for.)
@@ -1166,8 +1170,11 @@ failure refuses the claim — a refused MOVE, never a verdict; the order decides
 is reported:
 
 1. the tile is dissected and is the one the dispute narrowed to;
-2. shape: `m` lists and `m` value lists; each `L_i` strictly ascending with every element `< E_i`;
-   `|v_i| = |L_i|`; `Σ |L_i| ≤ 4096` (`PALW_TIR_DISSECT_MAX_VALUES`);
+2. shape: `m` lists and `m` value lists; each `L_i` strictly ascending with every element `< E_i` —
+   possibly EMPTY: a tile that reads none of a reduction of its cone (a `Concat`, `Slice` or `Gather`
+   routing its rows around it) claims nothing of it, and step 5 then requires `L_i = ∅`; a round's
+   children and the bottom carry and compare nothing for it; `|v_i| = |L_i|`; `Σ |L_i| ≤ 4096`
+   (`PALW_TIR_DISSECT_MAX_VALUES`);
 3. every `T_i[e]` lies in `r_i`'s bound;
 4. the finalize, with `T` supplied, **reproduces the committed tile** value for value, reading
    exactly the evidence the claim carries;
@@ -1243,7 +1250,10 @@ the commit point, unless every dissected cone meets:
   chooses. An `H`-free read is the same at every history index, so only these matter; with O-2 the
   one-index probe of §9.5.3 names every element any history index reads, and the element closure is
   exact.
-- **O-3 (`H`-free totals).** Every reduction over `H` of the cone has an `H`-free output.
+- **O-3 (`H`-free totals).** Every reduction over `H` of the cone has an `H`-free output. This
+  follows from §2.2 (a shape holds at most one `H`): a `ReduceSum`/`ReduceMax` over `H` keeps its axis
+  as 1, and a `MatMul` contracting `H` has `H` only in `K`. It is kept as a guard; no program that
+  passes §2.2 breaks it.
 - **O-4 (the bottom fits).** The cone's terminal is one history tile — the box demand of the tile at
   `H = min(h_tile, W)` (§10.3, *Dissection*) — and its work, its opened bytes and its
   multiply-accumulates fit the court's ceilings, as every terminal does; its close, as carried, is
@@ -1251,17 +1261,23 @@ the commit point, unless every dissected cone meets:
 - **O-5 (the exchange fits).** The claim's value count is bounded by `V`, the box demand of §10.3 at
   `H = 1` arriving at the cone's reductions: from the tile's `tile_len` elements (capped at the
   node's count), each computed node in descending index order passes `d · K` to each operand of a
-  `MatMul` (`K` its first operand's last extent), `d · x.shape[axis]` to a reduction's, `⌈d / k⌉ ·
-  x.shape[axis]` to a `TopK`'s and `d` to every other operand, each operand's demand capped at its
-  element count; `V` is the sum over the reductions of what arrives (capped likewise). Then `V ≤
+  `MatMul` (`K` its first operand's last extent at `H = 1`, whatever that operand is — a node, a
+  carry-in, a param, a constant or a state), `d · x.shape[axis]` to a reduction's, `⌈d / k⌉ ·
+  x.shape[axis]` to a `TopK`'s and `d` to every other operand, each computed operand's demand capped
+  at its element count; `V` is the sum over the reductions of what arrives (capped likewise). `V` is
+  never below the closure a claim carries (the vectors pin both). Then `V ≤
   4096`; a round at the court's arity `k` — `6 + k · (4 + 4m + 16V)` bytes with `m` reductions, plus
   the move's frame of 4,764 bytes — fits one lifecycle carrier (100,000 bytes); so does the root
   claim — the 16 KiB close frame, the terminal's opened bytes, `20V` and the frame (the program is
   referenced by the class, never carried); and
-  the whole exchange over `⌈max_context / h_tile⌉` tiles at arity `k` fits the court window, by the
-  rule that sizes the network's arity (ADR-0082 Z4: its moves at one rung window each, plus the
-  close's assembly reserve, strictly inside the window; under the held regime without the ladder's
-  rounds).
+  the whole exchange fits strictly inside the court window `window_court`:
+  `(2 · (B + R) + t + 1) · D + 2 · 4 · max_close_chunks < window_court`, with `R` the rounds of the
+  cut at arity `k` from `⌈max_context / h_tile⌉` tiles (§9.5.4), `B = rounds(max_step_leaf_count)`
+  of the binary leaf ladder (the same recurrence at arity 2; `B = 0` under the held regime, where the
+  dispute opens at the named leaf), `t` the court's terminal rounds, `D` its rung window (each round
+  is two clocked moves, the root claim one), and the last term the DAA reserved for assembling
+  closes of `max_close_chunks` chunks (`palw_close_assembly_daa_v1`: 2 · 4 per chunk) — the rule that
+  sizes the network's arity (ADR-0082 Z4).
 
 #### 9.5.7 Why a lie is always convictable (informative)
 
@@ -1287,12 +1303,17 @@ cut from — the program vector's model on the prompt `prompt` (`prefill` tokens
 back (`decode` tokens), history tiles of `h_tile` positions. Each case is a dissected tile of the
 last two positions: `leaf` (its step-leaf `index`, `pos`, `occurrence`, `node`, `first_element` and
 `values`, the tile's length), `site` (`reductions`, `folds` = `sum`/`max`, `bounds` = the proven
-`{lo, hi}` of each, `h`, `h_tile`, `counts` = each `E_i`), the element closure `elements` (the
-lists `L_i`), the honest `totals`, `finalize` (the tile the totals finalize to — the committed one),
+`{lo, hi}` of each, `h`, `h_tile`, `counts` = each `E_i`), `value_bound` (O-5's `V` at the node's
+tile length), the element closure `elements` (the lists `L_i`, some possibly empty), the honest
+`totals`, `finalize` (the tile the totals finalize to — the committed one),
 `cut` (the first cut at arity 2: each child's `tiles` = `[first, count]`, its `positions` = `[from,
 to)` and its `partials`, every other reduction supplied from the totals), and `bottom` (the last
 tile, reached by naming the last child at every round: its `positions` and the partials the court
-evaluates there). `cargo test -p kaspa-consensus-core --test palw_tir_dissect_vectors` regenerates
+evaluates there). Two files carry their program inline (`program: null`, `inline` =
+`{program_borsh_hex, params}` in the program vectors' form) — the second implementation's findings
+H1 and H2: `h1-concat-maxima` (two maxima concatenated, committed at a 6-lane tile: the second tile
+claims an EMPTY list for the first maximum) and `h2-matmul-const-first` (a maximum over a
+constant-by-history `MatMul` whose `V` counts `d · K` through the constant, equal to its closure). `cargo test -p kaspa-consensus-core --test palw_tir_dissect_vectors` regenerates
 every file and requires identical bytes, checking each case against the court as it goes (the root
 claim is admitted, every round folds, the bottom finds no fault); `TIR_BLESS=1` rewrites them, which
 is a change of the semantics and is reviewed as one.
