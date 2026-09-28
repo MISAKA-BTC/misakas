@@ -93,3 +93,50 @@ fn a_real_gguf_maps_and_lowers() {
     eprintln!("{quantised} quantised projections; {} bindings, errors {:?}, unused {:?}", rep.bound, rep.errors, rep.unused);
     assert!(rep.errors.is_empty() && rep.unused.is_empty());
 }
+
+/// The state replay's per-position cost of a program (`PALW_TIR_PROGRAM=…`): what admission v10's
+/// cone-work check charges `C − 1` times.
+#[test]
+#[ignore]
+fn state_replay_costs() {
+    let Ok(path) = std::env::var("PALW_TIR_PROGRAM") else {
+        eprintln!("set PALW_TIR_PROGRAM");
+        return;
+    };
+    let bytes = std::fs::read(&path).expect("program");
+    let inputs = misaka_palw_tir_lower::admission::default_inputs();
+    let a = misaka_palw_tir::admit::tir_admit_v1(&bytes, &inputs).expect("admitted");
+    for s in &a.states {
+        let pp = &s.per_position;
+        eprintln!(
+            "state {} groups {} interval {}: per position a group {} MACs {} elementwise {} transcendentals → (C−1)·work {}",
+            s.state,
+            s.groups,
+            s.interval,
+            pp.macs,
+            pp.elementwise,
+            pp.transcendentals,
+            (s.interval as u64 - 1) * (pp.macs + pp.elementwise + pp.transcendentals)
+        );
+    }
+}
+
+/// The nodes of a program's block (`PALW_TIR_PROGRAM=… PALW_BLOCK=1 PALW_FROM=400`): what a close
+/// report's `Commit { block, node }` is.
+#[test]
+#[ignore]
+fn print_block_nodes() {
+    let Ok(path) = std::env::var("PALW_TIR_PROGRAM") else { return };
+    let p = misaka_palw_tir::TirProgramV1::decode_canonical(&std::fs::read(&path).unwrap()).unwrap();
+    let bi: usize = std::env::var("PALW_BLOCK").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let from: usize = std::env::var("PALW_FROM").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    for (i, n) in p.blocks[bi].nodes.iter().enumerate().skip(from) {
+        let ins: Vec<String> = n.inputs.iter().map(|r| format!("{r:?}")).collect();
+        let pn: Vec<String> = n
+            .inputs
+            .iter()
+            .filter_map(|r| if let misaka_palw_tir::Ref::Param(j) = r { Some(p.params[*j as usize].name.clone()) } else { None })
+            .collect();
+        eprintln!("{i:>4} {:<10} {:?} {}{} {:?}", n.prim.name(), n.out.shape, if n.commit { "COMMIT " } else { "" }, ins.join(","), pn);
+    }
+}

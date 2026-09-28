@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! xg   = Reshape(Gather(x, order), [G, gs, 1])             -- GPTQ: every group contiguous
-//! acc  = MatMul(codes:i8[G, out, gs], xg) → i64 [G, out]   -- Σ_{i∈g} code[i, o]·x[i], exact
+//! acc  = MatMul(codes:i8[out, G, 1, gs], xg) → i64 [out, G]  -- Σ_{i∈g} code[i, o]·x[i], exact
 //! t    = a[g, o] · acc  (− c[g, o] · Σ_{i∈g} x[i])         -- the per-group scales, exact integers
 //! T[o] = Σ_g t[g, o]  (+ the outlier columns, see below)
 //! y    = N(T; m, s, z)                                     -- the one rounding, as every projection
@@ -51,11 +51,12 @@ pub const G_MAX: u32 = 19;
 pub struct QInts {
     pub groups: usize,
     pub gs: usize,
-    /// `[G, out, gs]`, the columns in the gathered order.
+    /// `[out, G, gs]`, the columns in the gathered order. Row-major, so a tile of rows is one
+    /// contiguous span of the param (its close opens only those rows).
     pub codes: Vec<i8>,
-    /// `[G, out]`.
+    /// `[out, G]`.
     pub a: Vec<i32>,
-    /// `[G, out]` (empty without the offset term).
+    /// `[out, G]` (empty without the offset term).
     pub c: Vec<i32>,
     /// `[in]`: the column order (empty when the layout has none).
     pub order: Vec<u32>,
@@ -132,9 +133,9 @@ pub fn build(q: &QWeight, layout: QLayout, outliers: &[usize], ratio: &[f64]) ->
         for o in 0..out {
             let (s, z) = (q.scale[o * fg + f], q.zero[o * fg + f]);
             let m = q.min.as_ref().map_or(0.0, |m| m[o * fg + f]);
-            af[k * out + o] = s;
+            af[o * groups + k] = s;
             let shift = if layout.offset_term {
-                cf[k * out + o] = s * (z - off) as f64 + m;
+                cf[o * groups + k] = s * (z - off) as f64 + m;
                 off
             } else {
                 z
@@ -144,7 +145,7 @@ pub fn build(q: &QWeight, layout: QLayout, outliers: &[usize], ratio: &[f64]) ->
                 // An outlier column goes through `wo`: its code is 0, and with an offset term its
                 // input is zeroed for the main product too (the `qkeep` mask), so `c · Σx` skips it.
                 let v = if is_outlier[col] { 0 } else { q.q[o * inp + col] - shift };
-                codes[(k * out + o) * gs + j] = i8::try_from(v).map_err(|_| {
+                codes[(o * groups + k) * gs + j] = i8::try_from(v).map_err(|_| {
                     LowerError::not_lowerable(format!("quantised weight ({}): code {v} outside i8 (layout {layout:?})", q.label))
                 })?;
             }
@@ -155,8 +156,8 @@ pub fn build(q: &QWeight, layout: QLayout, outliers: &[usize], ratio: &[f64]) ->
     let mut c = vec![0i32; cf.len()];
     let mut inexact = 0usize;
     for o in 0..out {
-        let amax = (0..groups).fold(0f64, |m, k| m.max(af[k * out + o].abs()));
-        let cmax = (0..cf.len() / out.max(1)).fold(0f64, |m, k| m.max(cf[k * out + o].abs()));
+        let amax = (0..groups).fold(0f64, |m, k| m.max(af[o * groups + k].abs()));
+        let cmax = (0..cf.len() / out.max(1)).fold(0f64, |m, k| m.max(cf[o * groups + k].abs()));
         let eo = match (unit_exp(amax, A_BITS), unit_exp(cmax, C_BITS)) {
             (Some(x), Some(y)) => x.max(y),
             (Some(x), None) | (None, Some(x)) => x,
@@ -166,9 +167,9 @@ pub fn build(q: &QWeight, layout: QLayout, outliers: &[usize], ratio: &[f64]) ->
         let unit = 2f64.powi(eo);
         let mut inexact_row = 0usize;
         for k in 0..groups {
-            a[k * out + o] = round_exact(af[k * out + o] / unit, &mut inexact_row) as i32;
+            a[o * groups + k] = round_exact(af[o * groups + k] / unit, &mut inexact_row) as i32;
             if !cf.is_empty() {
-                c[k * out + o] = round_exact(cf[k * out + o] / unit, &mut inexact_row) as i32;
+                c[o * groups + k] = round_exact(cf[o * groups + k] / unit, &mut inexact_row) as i32;
             }
         }
         inexact += inexact_row;
@@ -272,9 +273,9 @@ pub(super) fn lower_linear_q(
         lb,
         &d.name,
         DType::I8,
-        &[groups, out, gs],
+        &[out, groups, 1, gs],
         d.per_layer,
-        Arc::new(move |c| Ok(IntTensor::i8(vec![groups, out, gs], f(c)?.codes.clone()))),
+        Arc::new(move |c| Ok(IntTensor::i8(vec![out, groups, 1, gs], f(c)?.codes.clone()))),
     )?;
     // With an offset term the outlier channels leave the main product entirely (their `c · x`
     // would remain otherwise): `x · keep`, `keep ∈ {0, 1}`.
@@ -319,9 +320,12 @@ pub(super) fn lower_linear_q(
     } else {
         xm
     };
+    // `[out, G, 1, gs] × [G, gs, 1]`: one dot product per (row, group), batched over rows and
+    // groups. The codes are declared row-major (axis 0 is the output row), so an inventory leaf is
+    // one row and a tile of rows opens only its rows.
     let xg = b.reshape_fixed(xin, &[groups as u32, gs as u32, 1]);
     let acc = b.matmul(codes, xg, DType::I64);
-    let acc = b.reshape_fixed(acc, &[groups as u32, out as u32]);
+    let acc = b.reshape_fixed(acc, &[out as u32, groups as u32]);
     let f = ints.clone();
     let ap = decl(
         b,
@@ -329,15 +333,15 @@ pub(super) fn lower_linear_q(
         lb,
         &format!("{site}.qa"),
         DType::I32,
-        &[groups, out],
+        &[out, groups],
         pl,
-        Arc::new(move |c| Ok(IntTensor::i32(vec![groups, out], f(c)?.a.clone()))),
+        Arc::new(move |c| Ok(IntTensor::i32(vec![out, groups], f(c)?.a.clone()))),
     )?;
     let ac = b.clamp(ap, -(1i64 << A_BITS), 1i64 << A_BITS, DType::I32);
     let mut t = b.mul(ac, acc, DType::I64);
     if layout.offset_term {
         let xs = b.reduce_sum(xg, 1, DType::I64);
-        let xs = b.reshape_fixed(xs, &[groups as u32, 1]);
+        let xs = b.reshape_fixed(xs, &[groups as u32]);
         let f = ints.clone();
         let cp = decl(
             b,
@@ -345,15 +349,15 @@ pub(super) fn lower_linear_q(
             lb,
             &format!("{site}.qc"),
             DType::I32,
-            &[groups, out],
+            &[out, groups],
             pl,
-            Arc::new(move |c| Ok(IntTensor::i32(vec![groups, out], f(c)?.c.clone()))),
+            Arc::new(move |c| Ok(IntTensor::i32(vec![out, groups], f(c)?.c.clone()))),
         )?;
         let cc = b.clamp(cp, -(1i64 << C_BITS), 1i64 << C_BITS, DType::I32);
         let offs = b.mul(cc, xs, DType::I64);
         t = b.sub(t, offs, DType::I64);
     }
-    let t = if groups > 1 { b.reduce_sum(t, 0, DType::I64) } else { t };
+    let t = if groups > 1 { b.reduce_sum(t, 1, DType::I64) } else { t };
     let mut total = b.reshape_fixed(t, &[out as u32]);
     if k > 0 {
         let kk = kx.clone();
@@ -421,8 +425,8 @@ pub(super) fn lower_linear_q(
     Ok(v)
 }
 
-/// One projection of the selected experts from their stored integers: `codes:i8[E, G, rows, gs]`,
-/// `a`/`c:i32[E, G, rows]` (and GPTQ's `order:idx[E, cols]`) gathered by the `k` expert ids, the
+/// One projection of the selected experts from their stored integers: `codes:i8[E, rows, G, gs]`,
+/// `a`/`c:i32[E, rows, G]` (and GPTQ's `order:idx[E, cols]`) gathered by the `k` expert ids, the
 /// grouped MatMul against `input` (`[cols, 1]` shared by every expert, or `[k, cols, 1]`), the
 /// per-group scales exact, the groups summed, and one narrowing per (expert, row) — the W8 path's
 /// `m`/`s` gathered the same way. An expert's input is never split, so there is no outlier path.
@@ -460,9 +464,9 @@ pub(super) fn lower_experts_q(
         lb,
         &pd.name,
         DType::I8,
-        &[e, groups, rows, gs],
+        &[e, rows, groups, gs],
         pd.per_layer,
-        Arc::new(move |c| Ok(IntTensor::i8(vec![e, groups, rows, gs], cat8(|q| &q.codes, &f(c)?)))),
+        Arc::new(move |c| Ok(IntTensor::i8(vec![e, rows, groups, gs], cat8(|q| &q.codes, &f(c)?)))),
     )?;
     let f = ints.clone();
     let ap = decl(
@@ -471,9 +475,9 @@ pub(super) fn lower_experts_q(
         lb,
         &format!("{name}.qa"),
         DType::I32,
-        &[e, groups, rows],
+        &[e, rows, groups],
         pl,
-        Arc::new(move |c| Ok(IntTensor::i32(vec![e, groups, rows], f(c)?.iter().flat_map(|q| q.a.iter().copied()).collect()))),
+        Arc::new(move |c| Ok(IntTensor::i32(vec![e, rows, groups], f(c)?.iter().flat_map(|q| q.a.iter().copied()).collect()))),
     )?;
     // The shared input `[cols]`, or one row per selected expert `[k, cols]`.
     let shape = b.shape(input);
@@ -497,15 +501,21 @@ pub(super) fn lower_experts_q(
     } else {
         flat
     };
-    let xg = if per_expert || layout.order {
+    // The codes and scales are stored row-major per expert (`[E, rows, G, gs]`, `[E, rows, G]`:
+    // a tile of rows is contiguous in each selected expert); the product runs group-major,
+    // `[k, G, rows, gs] × [(k,) G, gs, 1]`, after one transpose of the selected experts.
+    let own = per_expert || layout.order;
+    let xg = if own {
         b.reshape_fixed(xin, &[k as u32, groups as u32, gs as u32, 1])
     } else {
         b.reshape_fixed(xin, &[groups as u32, gs as u32, 1])
     };
     let sel = b.gather(codes, idx, 0, 0);
+    let sel = b.transpose(sel, &[0, 2, 1, 3]);
     let acc = b.matmul(sel, xg, DType::I64);
     let acc = b.reshape_fixed(acc, &[k as u32, groups as u32, rows as u32]);
     let asel = b.gather(ap, idx, 0, 0);
+    let asel = b.transpose(asel, &[0, 2, 1]);
     let ac = b.clamp(asel, -(1i64 << A_BITS), 1i64 << A_BITS, DType::I32);
     let mut t = b.mul(ac, acc, DType::I64);
     if layout.offset_term {
@@ -516,18 +526,15 @@ pub(super) fn lower_experts_q(
             lb,
             &format!("{name}.qc"),
             DType::I32,
-            &[e, groups, rows],
+            &[e, rows, groups],
             pl,
-            Arc::new(move |c| Ok(IntTensor::i32(vec![e, groups, rows], f(c)?.iter().flat_map(|q| q.c.iter().copied()).collect()))),
+            Arc::new(move |c| Ok(IntTensor::i32(vec![e, rows, groups], f(c)?.iter().flat_map(|q| q.c.iter().copied()).collect()))),
         )?;
         let csel = b.gather(cp, idx, 0, 0);
+        let csel = b.transpose(csel, &[0, 2, 1]);
         let cc = b.clamp(csel, -(1i64 << C_BITS), 1i64 << C_BITS, DType::I32);
-        let xs = b.reduce_sum(xg, if per_expert || layout.order { 2 } else { 1 }, DType::I64);
-        let xs = if per_expert || layout.order {
-            b.reshape_fixed(xs, &[k as u32, groups as u32, 1])
-        } else {
-            b.reshape_fixed(xs, &[groups as u32, 1])
-        };
+        let xs = b.reduce_sum(xg, if own { 2 } else { 1 }, DType::I64);
+        let xs = if own { b.reshape_fixed(xs, &[k as u32, groups as u32, 1]) } else { b.reshape_fixed(xs, &[groups as u32, 1]) };
         let offs = b.mul(cc, xs, DType::I64);
         t = b.sub(t, offs, DType::I64);
     }
@@ -625,10 +632,10 @@ mod tests {
                     let col = qi.order[kg * qi.gs + j] as usize;
                     // The outlier channels are masked out of the main product (`qkeep`).
                     let xv = if outl.contains(&col) { 0.0 } else { x[col] };
-                    acc += qi.codes[(kg * out + o) * qi.gs + j] as f64 * xv;
+                    acc += qi.codes[(o * qi.groups + kg) * qi.gs + j] as f64 * xv;
                     xs += xv;
                 }
-                t += qi.a[kg * out + o] as f64 * acc - qi.c[kg * out + o] as f64 * xs;
+                t += qi.a[o * qi.groups + kg] as f64 * acc - qi.c[o * qi.groups + kg] as f64 * xs;
             }
             for (j, col) in outl.iter().enumerate() {
                 t += qi.wo[o * 2 + j] as f64 * 2f64.powi(qi.og[o] as i32) * x[*col] / ratio[j];
