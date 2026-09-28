@@ -93,8 +93,10 @@ pub fn tir_attempt_canonical_v1(class: &PalwTirClassV1) -> Option<(u32, u32)> {
 }
 
 /// **The context of an IR class's job `(prefill, decode)`**: the model classes' `rc_job_context`
-/// with the IR class id in the profile's place, the class's context bound and tokenizer, and the
-/// trace scheme its logits scheme pins (the flat scheme runs under the v2 trace id).
+/// with the IR class id in the profile's place and the class's context bound — its identity
+/// discipline kept (network id `misaka-palw-rc`, tokenizer id zero: the class id already commits the
+/// tokenizer) — and the trace scheme its logits scheme pins (the flat scheme runs under the v2 trace
+/// id). Stand-in for consensus's `palw_tir_canonical_context_v1` (Phase F, F6 A).
 pub fn tir_job_context_v1(class: &PalwTirClassV1, class_id: Hash64, prefill: u32, decode: u32) -> PalwJobContextV2 {
     let tiled = misaka_palw_tir::TirProgramV1::decode_canonical(&class.program)
         .map(|p| Hash64::from_bytes(p.logits_scheme_id) == tiled_logits_scheme_id_v1())
@@ -112,12 +114,18 @@ pub fn tir_job_context_v1(class: &PalwTirClassV1, class_id: Hash64, prefill: u32
         shape_profile_id: class_id,
         trace_scheme_id: if tiled { tiled_logits_scheme_id_v1() } else { kaspa_consensus_core::palw_v2::trace_scheme_id_v2() },
         cu_ruleset_id: Hash64::default(),
-        tokenizer_id: class.tokenizer_id,
+        tokenizer_id: Hash64::default(),
         prompt_token_ids_hash: Hash64::default(),
         declared_prefill_tokens: prefill,
         exact_decode_tokens: decode,
         max_context_tokens: class.layout.max_context,
     }
+}
+
+/// **The prompt form an IR class commits its prompt ids in**: the Merkle form for a program of the
+/// held history bound, the network's otherwise (the legacy `palw_prompt_ids_form_of_class_v1` rule).
+pub fn tir_class_prompt_ids_form_v1(program: &misaka_palw_tir::TirProgramV1, network: PalwPromptIdsFormV1) -> PalwPromptIdsFormV1 {
+    if program.history_bound == misaka_palw_tir::program::HISTORY_BOUND_V1_HELD { PalwPromptIdsFormV1::MerkleV1 } else { network }
 }
 
 /// **The job an anchor implies for an IR class** — the canonical context with the anchor's id and
@@ -170,6 +178,7 @@ impl TirBackendV1 {
     ) -> Result<Self, String> {
         let class = artifact.class()?;
         let space = PalwTirStepSpaceV1::new(&class).map_err(|e| e.to_string())?;
+        let prompt_ids_form = tir_class_prompt_ids_form_v1(&space.program, prompt_ids_form);
         let class_id = class.class_id(&artifact_root);
         if canonical.shape_profile_id != class_id {
             return Err("the canonical job names another class".into());
