@@ -6266,6 +6266,8 @@ dependencies = [
  "clap 4.5.51",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
+ "misaka-palw-tir-exec",
+ "misaka-palw-tir-ref2",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rayon",

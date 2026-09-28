@@ -34,5 +34,11 @@ clap = { workspace = true, features = ["derive"] }
 rayon.workspace = true
 blake2b_simd.workspace = true
 
+[dev-dependencies]
+# Freeze criterion 4 on the lowered programs (tests/three_way.rs): the second implementation and
+# the typed backend beside the reference evaluator. Tests only.
+misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec" }
+misaka-palw-tir-ref2 = { path = "../misaka-palw-tir-ref2" }
+
 [lints]
 workspace = true
