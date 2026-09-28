@@ -13,7 +13,7 @@ use crate::error::{LowerError, Result};
 use crate::float_ref::stream::OccParams;
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::hl::HlProgram;
-use crate::quant::{CODE16_MAX, CODE32_MAX, QuantPolicy, RowCodes, code_scale, quantize_rows};
+use crate::quant::{CODE16_MAX, CODE32_MAX, QuantPolicy, RowCodes, RowCodes16, code_scale, quantize_rows, quantize_rows16};
 use crate::weights::Tensor;
 use misaka_palw_tir as tir;
 use std::collections::{BTreeMap, BTreeSet};
@@ -145,6 +145,7 @@ pub struct FillCtx<'a> {
     pub resid: f64,
     pub policy: &'a QuantPolicy,
     memo: Mutex<BTreeMap<u32, Arc<RowCodes>>>,
+    memo16: Mutex<BTreeMap<u32, Arc<RowCodes16>>>,
     split_memo: Mutex<BTreeMap<String, Arc<SplitCodes>>>,
 }
 
@@ -169,6 +170,7 @@ impl<'a> FillCtx<'a> {
             resid,
             policy,
             memo: Mutex::new(BTreeMap::new()),
+            memo16: Mutex::new(BTreeMap::new()),
             split_memo: Mutex::new(BTreeMap::new()),
         }
     }
@@ -281,6 +283,21 @@ impl<'a> FillCtx<'a> {
         Ok(rc)
     }
 
+    /// Per-row `i16` codes of a gathered table (an embedding, and a head tied to it).
+    pub fn rows16(&self, p: u32) -> Result<Arc<RowCodes16>> {
+        if let Some(r) = self.memo16.lock().expect("memo").get(&p) {
+            return Ok(r.clone());
+        }
+        let t = self.f(p)?;
+        if t.shape.len() < 2 {
+            return Err(LowerError::eval(format!("param {p}: row codes of a {:?} tensor", t.shape)));
+        }
+        let cols = *t.shape.last().expect("rank ≥ 2");
+        let rc = Arc::new(quantize_rows16(&t.data, t.data.len() / cols, cols));
+        self.memo16.lock().expect("memo").insert(p, rc.clone());
+        Ok(rc)
+    }
+
     /// The split form of an HL `[out, in]` weight read by a split input `kx`: the main codes (the
     /// outlier columns zeroed, per-row scale over the rest), and the outlier columns in `i32`
     /// fixed point relative to each row's main unit, `wo[o][j] = W[o, c_j] · t_{c_j} /
@@ -390,6 +407,7 @@ pub fn materialise(
             resid,
             policy,
             memo: Mutex::new(BTreeMap::new()),
+            memo16: Mutex::new(BTreeMap::new()),
             split_memo: Mutex::new(BTreeMap::new()),
         };
         for &pi in &used[tb] {

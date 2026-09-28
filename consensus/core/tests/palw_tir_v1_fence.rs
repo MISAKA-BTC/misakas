@@ -4,9 +4,11 @@
 //! ceilings than the format allows, or prerequisites the ruleset lacks.
 //!
 //! The byte-identity of every shipped ruleset is pinned in `palw_tir_fences_are_dormant.rs`; this
-//! file checks what the fence does once it is set.
+//! file checks what the fence does once it is set, over testnet-12's DAA-1,700 release
+//! (`palw_t12_release_v3_params`: the ruleset before its IR flag day, the fence dormant). testnet-12
+//! as shipped arms it at DAA 2,000 — `palw_tir_flag_day_t12.rs`.
 
-use kaspa_consensus_core::config::params::{ForkActivation, Params, SIMNET_PARAMS, palw_t12_shipped_params};
+use kaspa_consensus_core::config::params::{ForkActivation, Params, SIMNET_PARAMS, palw_t12_release_v3_params};
 use kaspa_consensus_core::fork_id_v1::fork_id_gate_fences_v1;
 use kaspa_consensus_core::palw_tir_v1::{
     PALW_T12_TIR_CEILINGS_V1, PALW_T12_TIR_V1_ENTRY, PALW_TIR_COURT_VERSION_V1, PALW_TIR_PRIM_SET_DOMAIN_V1, PalwTirCeilingsV1,
@@ -21,7 +23,7 @@ fn ids(p: &Params) -> (String, String, String) {
 }
 
 fn t12_armed(at: ForkActivation) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v3_params();
     p.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(at));
     p.sync_palw_tir_v1();
     p
@@ -29,8 +31,8 @@ fn t12_armed(at: ForkActivation) -> Params {
 
 #[test]
 fn testnet_12_leaves_it_dormant_and_the_accessor_agrees() {
-    let t12 = palw_t12_shipped_params();
-    assert!(t12.palw_tir_v1.is_none(), "no ruleset arms the IR until its flag day is chosen");
+    let t12 = palw_t12_release_v3_params();
+    assert!(t12.palw_tir_v1.is_none(), "the release before the IR flag day leaves it dormant");
     assert!(t12.palw_tir_v1_fence().is_none());
     assert!(!t12.palw_tir_v1_active_at(u64::MAX));
     assert!(t12.palw_fences_v1().contains(&("palw_tir_v1", None)), "the exhaustive fence list names it");
@@ -38,7 +40,7 @@ fn testnet_12_leaves_it_dormant_and_the_accessor_agrees() {
 
 #[test]
 fn a_scheduled_fence_moves_the_ruleset_and_the_schedule_and_never_the_identity() {
-    let base = ids(&palw_t12_shipped_params());
+    let base = ids(&palw_t12_release_v3_params());
     let armed = t12_armed(ForkActivation::new(AT));
     armed.validate_palw_v2().unwrap_or_else(|e| panic!("testnet-12 can arm it: {e}"));
     let moved = ids(&armed);
@@ -50,7 +52,7 @@ fn a_scheduled_fence_moves_the_ruleset_and_the_schedule_and_never_the_identity()
 
 #[test]
 fn never_is_absence_for_the_identity_and_genesis_is_a_rule() {
-    let base = palw_t12_shipped_params();
+    let base = palw_t12_release_v3_params();
     let never = t12_armed(ForkActivation::never());
     assert_eq!(never.consensus_identity_id(), base.consensus_identity_id(), "Some(never()) collapses whole in the normaliser");
     never.validate_palw_v2().unwrap_or_else(|e| panic!("a dormant value validates: {e}"));
@@ -82,7 +84,7 @@ fn the_value_is_fingerprinted_and_the_height_alone_is_what_the_identity_normalis
 fn the_fork_id_gate_names_it_at_its_height() {
     let armed = t12_armed(ForkActivation::new(AT));
     assert!(fork_id_gate_fences_v1(&armed).contains(&AT), "past its height an un-upgraded node is refused");
-    assert!(!fork_id_gate_fences_v1(&palw_t12_shipped_params()).contains(&AT));
+    assert!(!fork_id_gate_fences_v1(&palw_t12_release_v3_params()).contains(&AT));
     assert!(armed.palw_fences_v1().contains(&("palw_tir_v1", Some(ForkActivation::new(AT)))));
 }
 
@@ -160,7 +162,7 @@ fn the_fold_reads_the_height_through_a_mirror_the_ruleset_must_agree_with() {
     assert_eq!(bundle.state.tir_from_daa(), Some(AT), "the fold's copy of the height");
     assert!(!bundle.state.tir_active_at(AT - 1) && bundle.state.tir_active_at(AT));
     // A fence set without its mirror is refused before a peer is dialed.
-    let mut unsynced = palw_t12_shipped_params();
+    let mut unsynced = palw_t12_release_v3_params();
     unsynced.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(ForkActivation::new(AT)));
     assert!(unsynced.validate_palw_tir_v1().is_err(), "the mirror disagrees with the fence");
     // A mirror without its fence, too.
@@ -168,7 +170,7 @@ fn the_fold_reads_the_height_through_a_mirror_the_ruleset_must_agree_with() {
     stale.palw_tir_v1 = None;
     assert!(stale.validate_palw_tir_v1().is_err(), "a mirror with no fence");
     stale.sync_palw_tir_v1();
-    assert_eq!(ids(&stale), ids(&palw_t12_shipped_params()), "and re-synced it is the shipped ruleset");
+    assert_eq!(ids(&stale), ids(&palw_t12_release_v3_params()), "and re-synced it is the release");
     // Dormant (`never()`) mirrors as absent.
     let never = t12_armed(ForkActivation::never());
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &never.palw_consensus_mode else { panic!() };
@@ -177,10 +179,10 @@ fn the_fold_reads_the_height_through_a_mirror_the_ruleset_must_agree_with() {
 
 #[test]
 fn the_flag_day_entry_sets_the_field_it_names() {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v3_params();
     (PALW_T12_TIR_V1_ENTRY.set)(&mut p, Some(ForkActivation::new(AT)));
     assert_eq!(p.palw_tir_v1, Some(PalwTirFenceV1::testnet12_v1(ForkActivation::new(AT))));
     assert!(p.palw_fences_v1().iter().any(|(name, _)| *name == PALW_T12_TIR_V1_ENTRY.name), "the entry's name is a fence's");
     (PALW_T12_TIR_V1_ENTRY.set)(&mut p, None);
-    assert_eq!(ids(&p), ids(&palw_t12_shipped_params()), "setting it back is the shipped ruleset, byte for byte");
+    assert_eq!(ids(&p), ids(&palw_t12_release_v3_params()), "setting it back is the release, byte for byte");
 }

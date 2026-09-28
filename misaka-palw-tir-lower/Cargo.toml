@@ -33,6 +33,14 @@ rand_chacha.workspace = true
 clap = { workspace = true, features = ["derive"] }
 rayon.workspace = true
 blake2b_simd.workspace = true
+# palw-tir-fidelity --exec: the integer program on the typed backend (node software, no consensus;
+# byte-identical to the reference evaluator — tests/three_way.rs).
+misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec" }
+
+[dev-dependencies]
+# Freeze criterion 4 on the lowered programs (tests/three_way.rs): the second implementation beside
+# the reference evaluator and the typed backend. Tests only.
+misaka-palw-tir-ref2 = { path = "../misaka-palw-tir-ref2" }
 
 [lints]
 workspace = true

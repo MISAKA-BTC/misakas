@@ -11,9 +11,10 @@
 //!   is never the base class, so the floor's own canonical job never applies.
 //! * **The yardstick context** is `rc_job_context`'s: `network_id = "misaka-palw-rc"`, every identity
 //!   field zero (the tokenizer too: the class id already commits it), `shape_profile_id` = the IR
-//!   class id, `max_context_tokens = layout.max_context`, and the tiled trace scheme when the
-//!   program commits tiled logits (`trace_scheme_id_v2()` otherwise — the only two a job context's
-//!   shape check admits).
+//!   class id, `max_context_tokens = layout.max_context + 1` (the context counts a job in tokens,
+//!   `prefill + decode`, the layout in positions, `prefill + decode − 1`: the longest job carries one
+//!   token more than it touches positions), and the tiled trace scheme when the program commits tiled
+//!   logits (`trace_scheme_id_v2()` otherwise — the only two a job context's shape check admits).
 //! * **The prompt** an anchor names is `palw_attempt_prompt_ids_v1(anchor, token_bound, prefill)`,
 //!   committed in the class's form: the Merkle root for a program of the held history bound
 //!   (`HISTORY_BOUND_V1_HELD`, the held regime, ADR-0118 Decision 3), the network's form otherwise.
@@ -38,8 +39,8 @@ use misaka_palw_tir::TirProgramV1;
 pub struct PalwTirJobFactsV1 {
     /// `tir_class_id_v1(class, artifact_root)` — the job context's `shape_profile_id`.
     pub class_id: Hash64,
-    /// `layout.max_context`: the most positions a job may touch, and the context's
-    /// `max_context_tokens`.
+    /// `layout.max_context`: the most positions a job may touch (`prefill + decode − 1`); the
+    /// context's `max_context_tokens` is one more, in tokens.
     pub max_context: u32,
     /// The program's `token_bound`: prompt ids are drawn in `[0, token_bound)`.
     pub token_bound: u32,
@@ -114,7 +115,12 @@ pub fn palw_tir_job_context_v1(facts: &PalwTirJobFactsV1, canonical: (u32, u32))
         prompt_token_ids_hash: Hash64::default(),
         declared_prefill_tokens: canonical.0,
         exact_decode_tokens: canonical.1,
-        max_context_tokens: facts.max_context,
+        // The v2 context family counts a job in TOKENS (`prefill + decode ≤ max_context_tokens`,
+        // `check_job_context_shape`, run by every court path); the layout counts POSITIONS
+        // (`prefill + decode − 1 ≤ max_context`, `PalwTirStepSpaceV1::job_shape`: the last emitted
+        // token is never fed back). The longest job the class admits carries one token more than it
+        // touches positions (ref2, 533e7b7fa item 7).
+        max_context_tokens: facts.max_context.saturating_add(1),
     }
 }
 
@@ -203,7 +209,11 @@ mod tests {
 
     /// **The IR rules are the legacy rules with the profile's facts replaced.** For a legacy
     /// profile, the facts it would have as an IR class (its id, `n_ctx`, vocabulary, scheme, held
-    /// map) derive the same canonical job, the same contexts and the same prompt, byte for byte.
+    /// map) derive the same canonical job and the same prompt, byte for byte, and the same contexts
+    /// but for ONE field by design: the legacy context states `n_ctx` as its token budget (the
+    /// stricter reading, `prefill + decode ≤ n_ctx`), an IR class's layout counts POSITIONS, so its
+    /// context states `max_context + 1` tokens — the budget of the longest job the layout admits
+    /// (ref2, 533e7b7fa item 7).
     #[test]
     fn the_ir_rules_are_the_legacy_rules_over_the_same_facts() {
         use crate::palw_qwen25_profile::{QWEN25_1_5B, qwen25_a16_profile_v7};
@@ -219,16 +229,21 @@ mod tests {
         assert_eq!(palw_tir_attempt_canonical_of_v1(facts.max_context), Some(canonical));
         for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
             for a in [anchor(1), anchor(0xA7)] {
-                let (legacy_ctx, legacy_ids) = palw_attempt_job_for_anchor_v1(&profile, &a, canonical, form).expect("a prompt");
+                let (mut legacy_ctx, legacy_ids) = palw_attempt_job_for_anchor_v1(&profile, &a, canonical, form).expect("a prompt");
                 let (ir_ctx, ir_ids) = palw_tir_attempt_job_for_anchor_of_v1(&facts, &a, canonical, form).expect("a prompt");
-                assert_eq!(ir_ctx, legacy_ctx, "the undrawn context");
+                assert_eq!(legacy_ctx.max_context_tokens, profile.n_ctx);
+                assert_eq!(ir_ctx.max_context_tokens, facts.max_context + 1, "the IR budget in tokens: positions + 1");
+                legacy_ctx.max_context_tokens = ir_ctx.max_context_tokens;
+                assert_eq!(ir_ctx, legacy_ctx, "the undrawn context, every other field");
                 assert_eq!(ir_ids.iter().map(|x| *x as usize).collect::<Vec<_>>(), legacy_ids, "the prompt");
                 let root = ir_ctx.prompt_token_ids_hash;
                 assert_eq!(palw_tir_attempt_prompt_root_v1(&facts, &a, canonical.0, form), Some(root));
+                let mut legacy_j5 = palw_attempt_context_v1(&profile, &a, canonical, root);
+                legacy_j5.max_context_tokens = facts.max_context + 1;
                 assert_eq!(
                     palw_tir_attempt_context_v1(&facts, &a, canonical, root).context_hash(),
-                    palw_attempt_context_v1(&profile, &a, canonical, root).context_hash(),
-                    "J5's expected context"
+                    legacy_j5.context_hash(),
+                    "J5's expected context, the budget apart"
                 );
             }
         }

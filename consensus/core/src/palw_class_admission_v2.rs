@@ -1347,8 +1347,12 @@ pub enum PalwClassAdmissionError {
     TirCanonicalNotTheFormula(String),
     /// A commit point's cone reduces over the history and does not fit the court whole; its
     /// adjudication is the history dissection (step F7), which this build has not wired.
-    #[error("block {block} commit point {node} needs the history dissection, which this build does not play yet (RFC-0002 F7)")]
+    #[error("block {block} commit point {node} reduces over the history and does not fit the court whole, and no k-ary court dissects it here")]
     TirNeedsDissection { block: u8, node: u16 },
+    /// A dissected commit point's cone breaks an obligation of the history dissection (spec 04b
+    /// §9.5.6), or a move of its dissection would not fit one carrier (RFC-0002 F7).
+    #[error("block {block} commit point {node} cannot be dissected: {why}")]
+    TirDissection { block: u8, node: u16, why: String },
 }
 
 impl PalwClassAdmissionError {
@@ -1389,6 +1393,7 @@ impl PalwClassAdmissionError {
             Self::TirClassIdIsNotDerived { .. } => "TIR_CLASS_ID_IS_NOT_DERIVED",
             Self::TirCanonicalNotTheFormula(_) => "CLASS_NOT_ATTRIBUTABLE",
             Self::TirNeedsDissection { .. } => "TIR_NEEDS_DISSECTION",
+            Self::TirDissection { .. } => "TIR_DISSECTION_REFUSED",
         }
     }
 }

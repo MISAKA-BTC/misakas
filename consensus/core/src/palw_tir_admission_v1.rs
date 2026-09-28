@@ -24,8 +24,9 @@
 //!    (`palw_court_v2::palw_tir_court_limits_v1`), so an honest close is never refused for its work;
 //!    the program, the opened operand bytes and the frame within `max_close_bytes`;
 //! 6. the canonical job: exactly the attempt formula's yardstick context
-//!    ([`crate::palw_tir_attempt_v1::palw_tir_job_context_v1`] at `(f − 1, 2)`), a wide prompt in the
-//!    Merkle form; the deepest legal job within the ladder; `pwu_per_inference` the canonical count;
+//!    ([`crate::palw_tir_attempt_v1::palw_tir_job_context_v1`] at `(f − 1, 2)`), its prompt within
+//!    J5b's inline bound (4,096 ids — the only prompt check an IR claim has); the deepest legal job
+//!    within the ladder; `pwu_per_inference` the canonical count;
 //! 7. the class id is `tir_class_id_v1(class, artifact_root)`;
 //! 8. weight: a nonzero share needs a certified family covering the program's primitives
 //!    (`family_certified_for_weight_v2` over the `palw-tir/v1/prim=<Name>` ids) — registration at
@@ -92,6 +93,10 @@ pub struct PalwTirAdmissionRulesV1 {
     pub held: PalwHeldAdmissionV1,
     /// `Params::palw_prompt_ids_form_at` at the block.
     pub prompt_ids_form: PalwPromptIdsFormV1,
+    /// **The k-ary court at the block** (`Params::palw_kary_court`, the arity the ruleset derives,
+    /// its window): `None` where it is not armed. A cone that reduces over the history is dissected
+    /// only under it (spec 04b §9.5, RFC-0002 F7); without it such a cone must fit the court whole.
+    pub court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
 }
 
 impl PalwTirAdmissionRulesV1 {
@@ -99,20 +104,41 @@ impl PalwTirAdmissionRulesV1 {
     /// is then dropped by name, as an older build skips it).
     pub fn at(params: &crate::config::params::Params, daa_score: u64) -> Option<Self> {
         let fence = params.palw_tir_v1_fence().filter(|f| f.activation.is_active(daa_score))?;
+        let held_armed = params.palw_held_context_active_at(daa_score);
+        // The court the acceptance path resolves (`palw_court_params_at`), as the legacy shape reads
+        // it (`palw_admission_shape_at_v1`): held, its arity is derived with no leaf ladder.
+        let court = match &params.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) if params.palw_kary_court_active_at(daa_score) => {
+                crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, held_armed).ok().map(|derived| {
+                    crate::palw_class_admission_v2::PalwKaryCourtV1 {
+                        dissection_arity: derived.dissection_arity(),
+                        prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
+                        window_court_daa: bundle.state.window_court(),
+                    }
+                })
+            }
+            _ => None,
+        };
         Some(Self {
             fence,
-            held: PalwHeldAdmissionV1 {
-                armed: params.palw_held_context_active_at(daa_score),
-                panel_da: params.palw_panel_da_at(daa_score),
-            },
+            held: PalwHeldAdmissionV1 { armed: held_armed, panel_da: params.palw_panel_da_at(daa_score) },
             prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
+            court,
         })
     }
 }
 
 /// **What the chain keeps of an admitted IR class** (the `tir_classes` table's row): the facts its
-/// attempt jobs, its DA draws and its court read, so none of them decodes a program. Every field is
-/// derived by admission from the carried class; none is declared.
+/// attempt jobs, its DA draws and its court read, so none of them decodes a program — and the
+/// program itself, which every IR object that carries a binding references by class instead of
+/// carrying (the coordinator's decision of 2026-09-28: an accusation fits one carrier whatever the
+/// program's size). Every field is derived by admission from the carried class; none is declared.
+///
+/// **Rooted without the program's bytes**: [`Self::rooted_bytes_v1`] is the record with `program`
+/// emptied, and `graph_ir_root` — the keyed hash of the program — commits to it; a carriage whose
+/// program does not hash to its `graph_ir_root` is refused at load ([`Self::check_program_v1`]).
+/// So a state root costs nothing per program byte, and the program stays shared (`Arc`) across the
+/// candidate states a node holds.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwTirClassRecordV1 {
     /// [`PALW_TIR_CLASS_RECORD_VERSION_V1`].
@@ -125,8 +151,17 @@ pub struct PalwTirClassRecordV1 {
     pub prim_set_id: Hash64,
     /// The logits row's width: what a trace event's tile index is bounded by.
     pub logits_vocab: u32,
-    /// The program's canonical bytes, counted (what every IR close carries).
+    /// The program's canonical bytes, counted.
     pub program_bytes: u32,
+    /// **The dissected commit points** (spec 04b §9.5.1), `(block, node)` in block then node order:
+    /// the commit points whose cone reduces over `H`
+    /// ([`crate::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1`]). A class with any owes
+    /// the terminal move of its court (`PalwClassStateV2::fused_attention`): a root claim at a
+    /// dissected leaf, an acquitting close at any other.
+    pub dissected: Vec<(u8, u16)>,
+    /// The program's canonical bytes (`graph_ir_root` is their keyed hash): what the chain puts
+    /// back into every IR binding an object carries with its program empty.
+    pub program: std::sync::Arc<Vec<u8>>,
 }
 
 impl PalwTirClassRecordV1 {
@@ -142,7 +177,29 @@ impl PalwTirClassRecordV1 {
             prim_set_id: crate::palw_tir_v1::palw_tir_prim_set_id_v1(),
             logits_vocab: 8,
             program_bytes: 1,
+            dissected: Vec::new(),
+            program: std::sync::Arc::new(Vec::new()),
         }
+    }
+
+    /// **The bytes the `tir_classes` root commits for this record**: the record with its program
+    /// emptied (any field added later is committed with it, by construction). The program is
+    /// committed through `graph_ir_root`.
+    pub fn rooted_bytes_v1(&self) -> Vec<u8> {
+        let view = Self { program: std::sync::Arc::new(Vec::new()), ..self.clone() };
+        borsh::to_vec(&view).expect("a record is borsh-serializable")
+    }
+
+    /// **The load check**: the program hashes to `graph_ir_root` and has the recorded length — what
+    /// makes rooting the record without the program's bytes a commitment to them.
+    pub fn check_program_v1(&self) -> Result<(), &'static str> {
+        if self.program.len() as u64 != self.program_bytes as u64 {
+            return Err("a tir_classes row's program is not its recorded length");
+        }
+        if crate::palw_tir_artifact_v1::palw_tir_graph_ir_root_v1(&self.program) != self.graph_ir_root {
+            return Err("a tir_classes row's program does not hash to its graph_ir_root");
+        }
+        Ok(())
     }
 
     /// Logits tiles per row under the class's scheme: one for the flat scheme, `⌈vocab / 4096⌉` for
@@ -176,8 +233,34 @@ pub fn palw_tir_class_record_v1(
         prim_set_id: Hash64::from_bytes(program.prim_set_id),
         logits_vocab: u32::try_from(logits_vocab).unwrap_or(u32::MAX),
         program_bytes: u32::try_from(class.program.len()).unwrap_or(u32::MAX),
+        dissected: crate::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&program),
+        program: std::sync::Arc::new(class.program.clone()),
     };
     Ok((record, program))
+}
+
+/// **An IR binding as the chain adjudicates it**: the binding an object carried — its class's
+/// program EMPTY, as every IR object carries it (the program is the registered class's, held in
+/// its `tir_classes` row) — with the record's program put back. Refused when the object carried a
+/// program (one encoding per object; the chain already holds the bytes). Whether the filled class
+/// IS the registered class is then the binding check's: its id must be the one the job context
+/// names and the claim recorded.
+pub fn palw_tir_binding_with_program_v1(
+    binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    record: &PalwTirClassRecordV1,
+) -> Result<crate::palw_tir_step_v1::PalwTirStepBindingV1, &'static str> {
+    if !binding.class.program.is_empty() {
+        return Err("an IR binding on chain carries no program: the chain holds the registered class's");
+    }
+    let mut filled = binding.clone();
+    filled.class.program = record.program.as_ref().clone();
+    Ok(filled)
+}
+
+/// **Empties a binding's program** — what a filer does to every IR binding before an object carries
+/// it ([`palw_tir_binding_with_program_v1`] is the chain's inverse).
+pub fn palw_tir_binding_strip_program_v1(binding: &mut crate::palw_tir_step_v1::PalwTirStepBindingV1) {
+    binding.class.program = Vec::new();
 }
 
 fn tir_program_error(e: misaka_palw_tir::TirError) -> PalwClassAdmissionError {
@@ -186,6 +269,84 @@ fn tir_program_error(e: misaka_palw_tir::TirError) -> PalwClassAdmissionError {
 
 fn exceeds(what: &'static str, got: u64, ceiling: u64) -> Result<(), PalwClassAdmissionError> {
     if got > ceiling { Err(PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling }) } else { Ok(()) }
+}
+
+/// **The most bytes one close can be carried in** (decision (1) of 2026-09-28): the chunks the fold
+/// assembles — the ruleset's `max_close_chunks`, never more than the structural
+/// [`crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS`] its bitmap addresses — of one carrier
+/// ([`crate::palw_state_v2::PALW_COURT_CLOSE_CHUNK_MAX_BYTES`]) each.
+pub fn palw_tir_carriable_close_bytes_v1(court: &crate::palw_mode_v2::PalwCourtParamsV2) -> u64 {
+    let chunks = court.max_close_chunks().min(crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS as u64);
+    chunks.saturating_mul(crate::palw_state_v2::PALW_COURT_CLOSE_CHUNK_MAX_BYTES as u64)
+}
+
+/// **What one lifecycle object may weigh on the wire**: every dissection move rides one carrier (only
+/// a `FamilyCertified` rides in chunks), whose payload is at most one object chunk.
+pub const PALW_TIR_DISSECT_CARRIER_BYTES_V1: u64 = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
+
+/// **The object frame of a dissection move beside its payload**: the variant tag, the session id,
+/// the arity or round, and the mover's ML-DSA-87 signature (4,627 bytes) with its length prefix.
+pub const PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1: u64 = 1 + 64 + 4 + 4 + 4_627 + 64;
+
+/// **Admission's part of the history dissection, for one dissected cone** (spec 04b §9.5.6):
+///
+/// * O-1 to O-3 ([`crate::palw_tir_dissect_v1::palw_tir_dissect_obligations_v1`]);
+/// * the claim's values, bounded by the box demand at `H = 1`
+///   ([`crate::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1`]), within the claim cap;
+/// * a round at the court's arity fits one carrier, and so does the root claim — the close frame, the
+///   chunk's opened operands (what the finalize and its probes read, bounded by one chunk) and the
+///   claim; the program is referenced, never carried — both NECESSARY conditions, as the close
+///   check is;
+/// * O-5: the whole exchange inside `window_court` at the court's arity, on the network's clock
+///   (the held clock opens at the accusation's leaf: no ladder rounds), over `max_context` positions
+///   in `h_tile` tiles — the legacy fused row's window rule applied to this site.
+#[allow(clippy::too_many_arguments)]
+fn palw_tir_dissected_cone_admits_v1(
+    bundle: &PalwConsensusParamsV2,
+    rules: &PalwTirAdmissionRulesV1,
+    class: &PalwTirClassV1,
+    program: &TirProgramV1,
+    block: &misaka_palw_tir::program::Block,
+    bi: u8,
+    ni: u16,
+    tile_len: u32,
+    cone: &misaka_palw_tir::admit::ConeV1,
+    k: crate::palw_class_admission_v2::PalwKaryCourtV1,
+) -> Result<(), PalwClassAdmissionError> {
+    use crate::palw_tir_dissect_v1 as d;
+    let refused = |why: String| PalwClassAdmissionError::TirDissection { block: bi, node: ni, why };
+    d::palw_tir_dissect_obligations_v1(block, ni).map_err(|e| refused(e.to_string()))?;
+    let reductions = d::palw_tir_cone_reductions_v1(block, ni).len();
+    let values = d::palw_tir_dissect_value_bound_v1(program, block, ni, tile_len);
+    if values > d::PALW_TIR_DISSECT_MAX_VALUES as u64 {
+        return Err(refused(format!("a claim may carry {values} values; at most {}", d::PALW_TIR_DISSECT_MAX_VALUES)));
+    }
+    let round = d::palw_tir_dissect_round_bytes_v1(k.dissection_arity, reductions, values).saturating_add(PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1);
+    exceeds("IR dissection round bytes", round, PALW_TIR_DISSECT_CARRIER_BYTES_V1)?;
+    // The root claim references the registered program (its binding rides with the program empty),
+    // so what it weighs is the close frame, the opened evidence, the claim and the move's frame.
+    let root = PALW_TIR_CLOSE_FRAME_BYTES_V1
+        .saturating_add(cone.terminal_opened_bytes())
+        .saturating_add(values.saturating_mul(20))
+        .saturating_add(PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1);
+    exceeds("IR dissection root claim bytes", root, PALW_TIR_DISSECT_CARRIER_BYTES_V1)?;
+    let played = bundle
+        .court
+        .with_dissection_arity(k.dissection_arity)
+        .map_err(|e| refused(format!("the court's dissection arity is not legal: {e}")))?;
+    let history = class.layout.max_context as u64;
+    let tile = class.layout.h_tile.max(1);
+    let admits = if rules.held.armed {
+        crate::palw_attn_court_v1::palw_attn_court_admits_row_held_v1(&played, history, tile, k.window_court_daa)
+    } else {
+        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa)
+    };
+    admits.map(|_| ()).map_err(|e| match e {
+        crate::palw_attn_court_v1::PalwAttnCourtError::OverrunsWindow { moves, deadline, reserve, window_court } => {
+            PalwClassAdmissionError::CourtWindowTooShort { needed: moves.saturating_mul(deadline).saturating_add(reserve), window: window_court }
+        }
+        _ => PalwClassAdmissionError::CourtWindowTooShort { needed: u64::MAX, window: k.window_court_daa },
+    })
 }
 
 /// **Admission v10: may this IR class registration join?** Returns the catalog entry and the
@@ -307,15 +468,27 @@ pub fn verify_class_admission_v10(
                 .iter()
                 .find(|c| c.block as usize == bi && c.node as usize == ni)
                 .expect("tir_admit_v1 costs every commit point");
+            // **A cone that reduces over the history is DISSECTED under the k-ary court** (spec 04b
+            // §9.5, RFC-0002 F7): its terminal is one `h_tile` chunk (`cone.terminal()`), and what
+            // admission owes the court is that the exchange can be played — the obligations of
+            // §9.5.6, a round and a root claim that each fit one carrier, the whole dispute inside
+            // `window_court`. Without the court nothing dissects, so such a cone is adjudicated whole
+            // and its tile at `H = W` must fit like any other.
+            let dissected = !cone.h_reductions.is_empty() && rules.court.is_some();
             if !cone.h_reductions.is_empty() {
-                // Until F7's dissection is wired, a history-reducing cone is adjudicated whole: its
-                // tile at H = W must fit the court like any other.
-                let whole = cone.tile.macs.saturating_add(cone.tile.elementwise).saturating_add(cone.tile.transcendentals);
-                if cone.tile.macs > bundle.court.max_terminal_macs() || whole > work_limit {
-                    return Err(PalwClassAdmissionError::TirNeedsDissection { block: bi as u8, node: ni as u16 });
+                match rules.court {
+                    None => {
+                        let whole = cone.tile.macs.saturating_add(cone.tile.elementwise).saturating_add(cone.tile.transcendentals);
+                        if cone.tile.macs > bundle.court.max_terminal_macs() || whole > work_limit {
+                            return Err(PalwClassAdmissionError::TirNeedsDissection { block: bi as u8, node: ni as u16 });
+                        }
+                    }
+                    Some(k) => palw_tir_dissected_cone_admits_v1(
+                        bundle, rules, class, &program, block, bi as u8, ni as u16, tile_len, cone, k,
+                    )?,
                 }
             }
-            let tile = &cone.tile;
+            let (tile, opened) = if dissected { (cone.terminal(), cone.terminal_opened_bytes()) } else { (&cone.tile, cone.tile_opened_bytes) };
             exceeds("IR tile multiply-accumulates", tile.macs, bundle.court.max_terminal_macs())?;
             let mut work = tile.macs.saturating_add(tile.elementwise).saturating_add(tile.transcendentals);
             for leaf in &cone.leaves {
@@ -328,9 +501,16 @@ pub fn verify_class_admission_v10(
                 }
             }
             exceeds("IR cone evaluation work (tile and state replay)", work, work_limit)?;
-            let close =
-                (class.program.len() as u64).saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1).saturating_add(cone.tile_opened_bytes);
+            let close = (class.program.len() as u64).saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1).saturating_add(opened);
             exceeds("IR close bytes", close, bundle.court.max_close_bytes())?;
+            // **Every terminal close an executor can be clocked for is CARRIABLE** (decision (1) of
+            // 2026-09-28; spec 04b §10.3). An IR class with a dissected point clocks its executor at
+            // every terminal leaf (ADR-0082 C-5), so its acquitting close there — the whole tile, or a
+            // dissected cone's bottom — must be one the chain can carry: at most the chunks the fold
+            // assembles, of one carrier each, the program referenced (never carried). The ruleset's
+            // close ceiling above may be wider than that; this is the bound that holds.
+            let carried = PALW_TIR_CLOSE_FRAME_BYTES_V1.saturating_add(opened);
+            exceeds("IR terminal close bytes as carried", carried, palw_tir_carriable_close_bytes_v1(&bundle.court))?;
             worst_close = worst_close.max(close);
             worst_macs = worst_macs.max(tile.macs);
             worst_operands = worst_operands.max(cone.operands);
@@ -353,14 +533,19 @@ pub fn verify_class_admission_v10(
             formula.0, formula.1
         )));
     }
-    if formula.0 > crate::palw_attempt_rules_v1::PALW_J5_INLINE_PROMPT_IDS_V1
-        && facts.prompt_ids_form(rules.prompt_ids_form) != PalwPromptIdsFormV1::MerkleV1
-    {
+    // **Every IR claim's prompt is attributable.** The identity rule recomputes the anchor's prompt
+    // root inline (J5b) up to 4,096 ids, and no IR route opens a longer prompt tile by tile (the
+    // legacy `PromptNotAnchored` carries a legacy binding): so an IR class's canonical prompt is at
+    // most the inline bound — `max_context` ≤ 32,783 — until such a route exists.
+    if formula.0 > crate::palw_attempt_rules_v1::PALW_J5_INLINE_PROMPT_IDS_V1 {
         return Err(PalwClassAdmissionError::TirCanonicalNotTheFormula(format!(
-            "a {}-id canonical prompt is past J5b's inline bound and this network commits prompt ids flat",
-            formula.0
+            "a {}-id canonical prompt is past J5b's inline bound of {} ids, and no IR route attributes a longer one \
+             (max_context at most 32,783)",
+            formula.0,
+            crate::palw_attempt_rules_v1::PALW_J5_INLINE_PROMPT_IDS_V1
         )));
     }
+    let _ = rules.prompt_ids_form;
     let ladder = bundle.court.max_step_leaf_count();
     let deepest = PalwJobContextV2 {
         declared_prefill_tokens: 1,

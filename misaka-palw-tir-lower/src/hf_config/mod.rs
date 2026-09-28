@@ -237,6 +237,9 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         ignored_prefixes: vec![],
     };
     p.cfg.inert(&["auto_map", "quantization_config", "is_encoder_decoder", "add_cross_attention"]);
+    // Another library's settings (transformers.js: the ONNX export's dtype and kv-cache options,
+    // SmolLM2's configs carry them); nothing in transformers reads the key.
+    p.cfg.inert(&["transformers.js_config"]);
     let spec = match arch.as_str() {
         "LlamaForCausalLM" => dense::llama(&mut p, Flavor::Llama)?,
         "MistralForCausalLM" => dense::llama(&mut p, Flavor::Mistral)?,

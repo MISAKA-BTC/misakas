@@ -67,20 +67,20 @@ const UNMOVED: &[(&str, &str, &str, &str)] = &[
 /// `palw_offence_attribution_is_t12_only`, `evm_bridge_ledger_is_t12_only` and
 /// `t12_mainnet_values_moved_only_these` hold unchanged with it taken away — so nothing else moved).
 /// The re-pin (`scripts/t12_repin.py`, `maturity.*`) moves it with every other twin.
-// re-pin 2026-09-28 @ea80b2e88867: third post-launch flag day moved to DAA 1,700 (the DAA-1,500 release was never rolled out; the chain passed 1,500 on the DAA-1,300 rules) (was 072d97f5…, e0ec5e25…)
+// re-pin 2026-09-28 @f41ba5bbb979: int-8: palw_tir_v1 (RFC-0002 PALW-TIR) armed on testnet-12 at DAA 2,000 (PALW_T12_TIR_FLAG_DAY_FENCES_V1) (was 49b3212e…, 17c2e129…)
 const T12_WITHOUT_THE_MATURITY: (&str, &str, &str) = (
-    "49b3212e98c20724123aa1e338a339ae8807971f1a79f1a53da2a9b899769d7d",
+    "fb8aeb95c048923d8f34c9666cfd35e6d6860b2e64ddfc9c729356962f5bdde2",
     "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53",
-    "17c2e129dd164773ab048971a1782734011e23ec91283e42f2a147fd4253c46c",
+    "85a754a2d3bf469649599ce4609dae37412c3a8a8f35c10683c240c40fee0c3a",
 );
 
 /// testnet-12 with the 120-DAA maturity: the shipped preset's full ids (= `palw_readiness_horizon_is_t12_only`'s
 /// `T12_WITH_THE_HORIZON`). Taken from this test's own output.
-// re-pin 2026-09-28 @ea80b2e88867: third post-launch flag day moved to DAA 1,700 (the DAA-1,500 release was never rolled out; the chain passed 1,500 on the DAA-1,300 rules) (was cbe9152f…, f78b02ad…)
+// re-pin 2026-09-28 @f41ba5bbb979: int-8: palw_tir_v1 (RFC-0002 PALW-TIR) armed on testnet-12 at DAA 2,000 (PALW_T12_TIR_FLAG_DAY_FENCES_V1) (was 770fb822…, 9410712f…)
 const T12_WITH_THE_MATURITY: (&str, &str, &str) = (
-    "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
+    "3db42ea638f3c4274f326b4049aa1ef82408cb044c03f4ccf52848446a77702a",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+    "9d6b83fe744b6374daf0fabeed391b612e9ac5c1faa2f1bd17712657d1478b67",
 );
 
 fn shipped(name: &str) -> Params {

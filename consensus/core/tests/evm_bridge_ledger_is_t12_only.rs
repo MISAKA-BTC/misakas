@@ -35,11 +35,11 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
-// re-pin 2026-09-28 @ea80b2e88867: third post-launch flag day moved to DAA 1,700 (the DAA-1,500 release was never rolled out; the chain passed 1,500 on the DAA-1,300 rules) (was 9d65a3f9…, f81b411f…)
+// re-pin 2026-09-28 @f41ba5bbb979: int-8: palw_tir_v1 (RFC-0002 PALW-TIR) armed on testnet-12 at DAA 2,000 (PALW_T12_TIR_FLAG_DAY_FENCES_V1) (was 1cb4947a…, ea2f9852…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "1cb4947a63e91580e1773c65dce45313dc660989d9888e1822214ecb137c86f0",
+    "76a3bfaf05b1afa179085bd67ea7a23d84a5c6f2fd723b0fbf6d899b128b3705",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "ea2f9852ede504084c873557902f202456b354c33879110229ba52800c5ad1b5",
+    "3f4f9cdc9fc5b80b333abd499229910e4b022b7992599cd086629e0a21d3160d",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

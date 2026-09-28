@@ -24,6 +24,23 @@ pub fn program_digest(p: &TirProgramV1) -> String {
     hex(blake2b_simd::Params::new().hash_length(64).hash(&p.encode()).as_bytes())
 }
 
+/// The key of the tokenizer commitment — `misaka_palw_base0::artifact::PALW_BASE0_TOKENIZER_DOMAIN`,
+/// spelled again because this crate does not depend on base0; `misaka-palw-sdk` holds the two
+/// equal (`tir_manifest` tests).
+pub const TOKENIZER_COMMITMENT_DOMAIN_V1: &[u8] = b"MISAKA/PALW/BASE0/TOKENIZER/V1\0\0";
+
+/// **The tokenizer id a class binds**: the legacy tokenizer commitment of a `tokenizer.json`'s
+/// bytes, `BLAKE2b-512(key, len_le64 ‖ bytes)` — the id an A16 artifact converted to `PALWTIR1`
+/// carries, so an HF-lowered artifact of the same tokenizer carries the same one.
+pub fn tokenizer_id_of(tokenizer_bytes: &[u8]) -> [u8; 64] {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(TOKENIZER_COMMITMENT_DOMAIN_V1).to_state();
+    state.update(&(tokenizer_bytes.len() as u64).to_le_bytes());
+    state.update(tokenizer_bytes);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    out
+}
+
 /// Write `params` for `program` as a `PALWTIR1` container; returns the file digest (hex).
 /// `meta` is provenance (scales, calibration set) and enters no identity.
 pub fn write(

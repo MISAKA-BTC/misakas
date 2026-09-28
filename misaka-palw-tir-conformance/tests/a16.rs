@@ -369,3 +369,35 @@ fn kdesc_a16_attn_fused() {
         }
     }
 }
+
+/// **The narrowing without a zero term, in three nodes** (tir/lower's request): `narrow` with
+/// `z: None` is `Clamp[lo, hi](HAFZ(x·m / 2^s))`, the template's value with `z = 0`
+/// (`narrow_a16(.., 0, ..)`) and the live `a16_requant`'s with every zero point 0 — on
+/// [`kdesc_a16_requantize`]'s rows, multipliers and shifts.
+#[test]
+fn kdesc_a16_requantize_lean_form_without_a_zero_term() {
+    let n = 11u32;
+    let mut rng = Lcg(15);
+    let xs = rng.vec((T * n) as usize, i32::MIN as i128, i32::MAX as i128, I32X);
+    let m = rng.vec((T * n) as usize, i64::MIN as i128, i64::MAX as i128, I64X);
+    let s = shifts(&mut rng, (T * n) as usize);
+    let args =
+        [arg("x", DType::I32, &[T, n], xs.clone()), arg("m", DType::I64, &[T, n], m.clone()), arg("s", DType::I8, &[T, n], s.clone())];
+    let lean = run_pos(&args, &[], T, |b, r, _, pos| {
+        let (x, m, s) = (row(b, r[0], pos), row(b, r[1], pos), row(b, r[2], pos));
+        b.narrow_codes(x, &Narrowing::new(m, s, None))
+    });
+    let template = run_pos(&args, &[], T, |b, r, _, pos| {
+        let (x, m, s) = (row(b, r[0], pos), row(b, r[1], pos), row(b, r[2], pos));
+        let p2 = b.pow2_of(s);
+        let zero = b.c(DType::I64, 0);
+        b.narrow_a16(x, m, p2, zero, -32767, 32767, DType::I16)
+    });
+    for p in 0..T as usize {
+        let at = |v: &Vec<i128>, i: usize| v[p * n as usize + i];
+        let params: Vec<_> = (0..n as usize).map(|i| triple(at(&m, i), at(&s, i), 0)).collect();
+        let x = i32s(&xs[p * n as usize..(p + 1) * n as usize]);
+        assert_eq!(lean[p], template[p], "position {p}: the three-node form is the template's value");
+        assert_eq!(lean[p], wide(&a16::a16_requant(&x, &params).unwrap()), "position {p}: and the live kernel's");
+    }
+}

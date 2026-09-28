@@ -1122,6 +1122,30 @@ enum PalwCmd {
         #[arg(long, requires = "material_out")]
         dsl_payload: Option<std::path::PathBuf>,
     },
+    /// **Write a signed IR class registration** (RFC-0002 Phase F: `ClassRegisteredTirV1`) for a
+    /// PALWTIR1 artifact with a declared layout (`palw-class declare-layout`), at the connected
+    /// chain's live pricing (`getPalwRegistrationTerms`), weightless, the registrant bond named by
+    /// `--bond` and signed with this key under the chain's own domain (a drill's with
+    /// `--palw-drill-genesis-salt`). Nothing is submitted: file it with `misaka palw submit-object
+    /// --object <out> --yes`. The node's own gate is NOT asked first, so an object for a height the
+    /// IR fence does not cover yet can be written (a drill's below-the-fence check); `misaka model
+    /// preflight <artifact>` asks the gate.
+    TirRegistration {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The IR class artifact (a PALWTIR1 container with a declared layout).
+        #[arg(long)]
+        artifact: std::path::PathBuf,
+        /// The registrant bond, `<txid>:<index>` (its key is the one --key-file names).
+        #[arg(long)]
+        bond: String,
+        /// Where to write the borsh `PalwConsensusObjectV2`.
+        #[arg(long)]
+        out: std::path::PathBuf,
+        /// The class's model id, when the artifact declares more than one class.
+        #[arg(long)]
+        model_id: Option<String>,
+    },
     /// Submit a PALW lifecycle object written by `palw-certify` — the ADR-0075 certification
     /// objects `FamilyCertified` (a family's drill evidence, graded on chain) and
     /// `ClassLaneCertified` (a class bound to a chain-certified family) — funded from this key.
@@ -2682,6 +2706,9 @@ async fn main() -> std::process::ExitCode {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await.map(|_| ()),
+        Command::Palw(PalwCmd::TirRegistration { key, artifact, bond, out, model_id }) => {
+            palw_model_ops::tir_registration_object(&ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await
+        }
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Inspect { manifest, json })) => palw_extension::inspect(&ctx, &manifest, json),
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Verify { manifest, depth, receipt_out, key, json })) => {
             palw_extension::verify(&ctx, &manifest, depth.depth(), receipt_out.as_deref(), key.source_opt(), json)

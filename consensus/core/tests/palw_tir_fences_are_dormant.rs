@@ -13,22 +13,70 @@
 //! salted drill (which int-7 does not pin) at its schedule `9410712f…` and params `31b913ef…` — the
 //! drill's move is the same flag day's (identities unchanged throughout).
 //!
+//! **testnet-12's IR flag day** (`PALW_T12_TIR_FLAG_DAY_FENCES_V1`, `palw_tir_v1` at DAA 2,000, the
+//! user's decision of 2026-09-28) arms the one fence on the three testnet-12 rows that follow the
+//! shipped assembly — `from(testnet-12)`, `palw_t12_shipped_params` and the salted drill. Those rows are
+//! pinned here with that ONE list set back to dormant (at int-7's values still: the list is all the IR
+//! release moves), beside the new `palw_t12_release_v3_params` (int-7's shipped ids); the armed rows are
+//! held against them in `every_armed_row_is_its_pinned_row_with_the_ir_flag_day_at_2000` and, fence by
+//! fence, in `palw_tir_flag_day_t12.rs`. The ids the armed rows carry are `t12-repin.sh`'s to pin.
+//!
 //! If a Phase F change turns this file red, the change is not dormant. A change that ARMS a Phase F
 //! fence on a preset re-pins the moved row here, in the commit that arms it.
 
-use kaspa_consensus_core::config::drill::PalwDrillSaltV1;
+use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1};
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params,
-    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
-    palw_t12_release_v2_params, palw_t12_shipped_params,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS,
+    TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_drill_params_v1,
+    palw_t12_launch_params_v1, palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params,
+    palw_t12_shipped_params,
 };
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 
-/// A fixed drill salt: the drill's ids are a function of its salt, so the pin needs one.
-const DRILL_SALT_HEX: &str = "7a1f0000000000000000000000000000000000000000000000000000000000a5";
+/// A fixed drill salt, `7a1f00…00a5`: the drill's ids are a function of its salt, so the pin needs one.
+/// Built from bytes (a quoted 64-hex literal in this file would read to `t12-repin.sh` as a pin).
+fn drill_salt() -> PalwDrillSaltV1 {
+    let mut bytes = [0u8; PALW_DRILL_SALT_LEN_V1];
+    bytes[0] = 0x7a;
+    bytes[1] = 0x1f;
+    bytes[PALW_DRILL_SALT_LEN_V1 - 1] = 0xa5;
+    PalwDrillSaltV1::from_bytes(bytes).expect("the pinned salt is a legal salt")
+}
+
+/// The key `t12-repin.sh` harvests a row's id under: `tirdorm.<slug>.<id>`, the slug the row name's
+/// ASCII letters and digits, lowercased, every other run one `_` (`scripts/t12_repin.py`, `_tirdorm_slug`).
+fn slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
+/// `p` with testnet-12's IR flag day set back to dormant (its one list, through each entry's `set`).
+fn without_the_ir_flag_day(mut p: Params) -> Params {
+    for f in PALW_T12_TIR_FLAG_DAY_FENCES_V1 {
+        (f.set)(&mut p, None);
+    }
+    p
+}
+
+/// The three testnet-12 rows the IR flag day arms, as they ship.
+fn armed_rows() -> [(&'static str, Params); 3] {
+    let salt = drill_salt();
+    [
+        ("from(testnet-12)", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))),
+        ("palw_t12_shipped_params", palw_t12_shipped_params()),
+        ("palw_t12_drill_params_v1", palw_t12_drill_params_v1(&salt)),
+    ]
+}
 
 fn rulesets() -> Vec<(&'static str, Params)> {
-    let salt = PalwDrillSaltV1::from_hex(DRILL_SALT_HEX).expect("the pinned salt is a legal salt");
+    let salt = drill_salt();
     vec![
         ("MAINNET_PARAMS", MAINNET_PARAMS),
         ("TESTNET_PARAMS", TESTNET_PARAMS),
@@ -38,17 +86,18 @@ fn rulesets() -> Vec<(&'static str, Params)> {
         ("from(mainnet)", Params::from(NetworkId::new(NetworkType::Mainnet))),
         ("from(testnet-10)", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 10))),
         ("from(testnet-11)", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11))),
-        ("from(testnet-12)", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))),
+        ("from(testnet-12) − IR flag day", without_the_ir_flag_day(Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)))),
         ("from(devnet)", Params::from(NetworkId::new(NetworkType::Devnet))),
         ("from(simnet)", Params::from(NetworkId::new(NetworkType::Simnet))),
         ("mainnet_shipped_params", mainnet_shipped_params()),
         ("devnet_shipped_params", devnet_shipped_params()),
         ("palw_rc_shipped_params", palw_rc_shipped_params()),
-        ("palw_t12_shipped_params", palw_t12_shipped_params()),
+        ("palw_t12_shipped_params − IR flag day", without_the_ir_flag_day(palw_t12_shipped_params())),
         ("palw_t12_launch_params_v1", palw_t12_launch_params_v1()),
         ("palw_t12_release_v1_params", palw_t12_release_v1_params()),
         ("palw_t12_release_v2_params", palw_t12_release_v2_params()),
-        ("palw_t12_drill_params_v1", palw_t12_drill_params_v1(&salt)),
+        ("palw_t12_release_v3_params", palw_t12_release_v3_params()),
+        ("palw_t12_drill_params_v1 − IR flag day", without_the_ir_flag_day(palw_t12_drill_params_v1(&salt))),
     ]
 }
 
@@ -104,7 +153,7 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
-        "from(testnet-12)",
+        "from(testnet-12) − IR flag day",
         "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
         "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
@@ -140,7 +189,7 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
-        "palw_t12_shipped_params",
+        "palw_t12_shipped_params − IR flag day",
         "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
         "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
@@ -164,7 +213,13 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
     ),
     (
-        "palw_t12_drill_params_v1",
+        "palw_t12_release_v3_params",
+        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
+        "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
+        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+    ),
+    (
+        "palw_t12_drill_params_v1 − IR flag day",
         "31b913ef15a1617472bc1764978763e530c021b116c98a77e6e5f6f47769faa4",
         "2254a5ae75cc1ed6fa70cc6f9a57281e7ab36aa8f80a820a545b81dad21549c6",
         "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
@@ -178,6 +233,13 @@ fn ids(p: &Params) -> (String, String, String) {
 #[test]
 fn every_shipped_ruleset_keeps_its_three_ids() {
     let measured: Vec<(&str, (String, String, String))> = rulesets().iter().map(|(name, p)| (*name, ids(p))).collect();
+    // What `t12-repin.sh` harvests (printed before any assertion, so a drift still reports its value).
+    for (name, (params, identity, schedule)) in &measured {
+        let key = slug(name);
+        println!("REPIN tirdorm.{key}.params_id {params}");
+        println!("REPIN tirdorm.{key}.identity_id {identity}");
+        println!("REPIN tirdorm.{key}.schedule_id {schedule}");
+    }
     let listing: String = measured
         .iter()
         .map(|(name, (params, identity, schedule))| format!("    (\"{name}\", \"{params}\", \"{identity}\", \"{schedule}\"),\n"))
@@ -200,4 +262,22 @@ fn every_shipped_ruleset_keeps_its_three_ids() {
         })
         .collect();
     assert!(moved.is_empty(), "a Phase F change moved a shipped ruleset:\n{}\nmeasured:\n{listing}", moved.join("\n"));
+}
+
+/// **The IR flag day is the whole of the three armed rows' move**: each is its pinned row with the one
+/// list at DAA 2,000 — to the three ids — and not its pinned row (the flag day is real).
+#[test]
+fn every_armed_row_is_its_pinned_row_with_the_ir_flag_day_at_2000() {
+    let at = PALW_T12_TIR_FLAG_DAY_DAA.expect("testnet-12's IR flag day has a height");
+    for (name, armed) in armed_rows() {
+        let dormant = without_the_ir_flag_day(armed.clone());
+        let mut rearmed = dormant.clone();
+        for f in PALW_T12_TIR_FLAG_DAY_FENCES_V1 {
+            (f.set)(&mut rearmed, Some(ForkActivation::new(at)));
+        }
+        assert_eq!(ids(&armed), ids(&rearmed), "{name}: the pinned row with the IR flag day at {at}");
+        assert_ne!(ids(&armed).0, ids(&dormant).0, "{name}: the flag day moves the params id");
+        assert_ne!(ids(&armed).2, ids(&dormant).2, "{name}: and the schedule id");
+        assert_eq!(ids(&armed).1, ids(&dormant).1, "{name}: not the identity");
+    }
 }

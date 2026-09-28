@@ -29,6 +29,13 @@ use crate::sdk::PalwClassSdk;
 pub fn check_lineage_v1(lineage: &dyn PalwModelLineageV1, court: &PalwCourtParamsV2) -> Result<(), String> {
     let entries = lineage.classes(court);
     let mut seen_ids = std::collections::BTreeSet::new();
+    // The IR classes the lineage holds (RFC-0002 Phase F): their own battery, one id space.
+    for entry in lineage.tir_classes() {
+        if !seen_ids.insert(entry.class_id()) {
+            return Err(format!("{}: shares a class id with another entry — two models must be two classes", entry.model_id));
+        }
+        check_tir_entry_v1(lineage.lineage_id(), &entry, court)?;
+    }
     for entry in &entries {
         let who = entry.model_id;
         if entry.lineage_id != lineage.lineage_id() {
@@ -110,6 +117,71 @@ pub fn check_lineage_v1(lineage: &dyn PalwModelLineageV1, court: &PalwCourtParam
     Ok(())
 }
 
+/// **The battery for one IR class** (RFC-0002 Phase F): the adjudicability invariants the IR
+/// admission gate (v10, F6) will enforce, minus the per-network pieces — as the legacy battery is.
+///
+/// * the program decodes under v1 (strict Borsh, re-encode identity, the normal form, `prim_set_id`)
+///   and names a logits scheme the court commits under;
+/// * the layout builds the class's step space (F4: tiles, `h_tile`, `C`, the tiled logits width);
+/// * the range analysis proves every node (PALW-TIR-9: no committed value the court cannot bound);
+/// * `tir_admit_v1` admits it under the court's v1 ceilings (the terminal tile cone, the per-
+///   position costs; spec 04b §10.3), and the layout's `C` is within the `min_j C_j` it derives;
+/// * the canonical job counts under the court's ladder, commits a leaf, and fits the context;
+/// * the class the artifact declares, under the root derived from its bytes, is the entry's — and
+///   the generic backend serves it.
+pub fn check_tir_entry_v1(
+    lineage_id: &str,
+    entry: &crate::lineage::PalwTirClassEntryV1,
+    court: &PalwCourtParamsV2,
+) -> Result<(), String> {
+    use kaspa_consensus_core::palw_step_refute::{flat_logits_scheme_id_v1, tiled_logits_scheme_id_v1};
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1;
+    use misaka_palw_tir::admit::{TirAdmitInputsV1, TirCeilingsV1, tir_admit_program_v1};
+    let who = &entry.model_id;
+    if entry.lineage_id != lineage_id {
+        return Err(format!("{who}: stamped lineage {} inside lineage {lineage_id}", entry.lineage_id));
+    }
+    let program = entry.class.decode_program().map_err(|e| format!("{who}: the program does not decode under v1: {e}"))?;
+    let scheme = kaspa_hashes::Hash64::from_bytes(program.logits_scheme_id);
+    if scheme != flat_logits_scheme_id_v1() && scheme != tiled_logits_scheme_id_v1() {
+        return Err(format!("{who}: the program names no logits scheme the court commits under"));
+    }
+    let space = PalwTirStepSpaceV1::new(&entry.class).map_err(|e| format!("{who}: the layout does not build a step space: {e}"))?;
+    misaka_palw_tir::interval::analyze_ranges(&program)
+        .map_err(|e| format!("{who}: the range analysis does not prove the program: {e}"))?;
+    let layout = &entry.class.layout;
+    let inputs = TirAdmitInputsV1 {
+        tile_len: layout.commit_tiles.iter().copied().max().unwrap_or(1),
+        h_chunk: layout.h_tile,
+        ceilings: TirCeilingsV1::legacy_court_v1(),
+    };
+    let admission = tir_admit_program_v1(&program, &inputs).map_err(|e| format!("{who}: tir_admit_v1 refuses the class: {e}"))?;
+    if layout.checkpoint_interval > admission.checkpoint_interval {
+        return Err(format!(
+            "{who}: checkpoint interval {} past the {} a state's replay fits the terminal ceiling in",
+            layout.checkpoint_interval, admission.checkpoint_interval
+        ));
+    }
+    let canonical = entry.canonical_context();
+    space.job_shape(&canonical).map_err(|e| format!("{who}: the canonical job does not fit the class: {e}"))?;
+    let counted = space
+        .leaf_count_capped(&canonical, court.max_step_leaf_count())
+        .map_err(|e| format!("{who}: the canonical job does not count: {e}"))?;
+    if counted == 0 {
+        return Err(format!("{who}: the canonical job commits no step leaves"));
+    }
+    if (canonical.declared_prefill_tokens as u64 + canonical.exact_decode_tokens as u64) > canonical.max_context_tokens as u64 {
+        return Err(format!("{who}: the canonical job's tokens exceed its context"));
+    }
+    let (root, _) = entry.artifact.inventory_root().map_err(|e| format!("{who}: the artifact does not root: {e}"))?;
+    if root != entry.artifact_root || *entry.class != entry.artifact.class().map_err(|e| format!("{who}: {e}"))? {
+        return Err(format!("{who}: the entry is not the class its artifact declares under the root its bytes derive"));
+    }
+    crate::lineages::tir::TirLineageV1::backend(entry, court, kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+        .map_err(|e| format!("{who}: the generic backend does not serve the class: {e}"))?;
+    Ok(())
+}
+
 /// The cross-lineage half: class ids distinct across the WHOLE ledger, and every lineage passing
 /// its own battery. This is the one call a build's test suite needs.
 pub fn check_sdk_v1(sdk: &PalwClassSdk) -> Result<(), String> {
@@ -118,7 +190,12 @@ pub fn check_sdk_v1(sdk: &PalwClassSdk) -> Result<(), String> {
     }
     let mut seen = std::collections::BTreeMap::new();
     for entry in sdk.ledger() {
-        if let Some(other) = seen.insert(entry.class_id(), entry.model_id) {
+        if let Some(other) = seen.insert(entry.class_id(), entry.model_id.to_string()) {
+            return Err(format!("{} and {other} derive one class id — two models must be two classes", entry.model_id));
+        }
+    }
+    for entry in sdk.tir_ledger() {
+        if let Some(other) = seen.insert(entry.class_id(), entry.model_id.clone()) {
             return Err(format!("{} and {other} derive one class id — two models must be two classes", entry.model_id));
         }
     }

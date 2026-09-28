@@ -337,6 +337,17 @@ pub struct Args {
     /// (`config::drill::palw_drill_post_launch_fences_v3_at_v1`). Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_fence3_at: Option<u64>,
+    /// **DRILL ONLY: arm testnet-12's IR fence (`palw_tir_v1`, RFC-0002 Phase F) at this DAA** — with
+    /// the salt, `PALW_T12_TIR_V1_ENTRY` is armed, or moved, to this height on the drill chain, after
+    /// the flag days' moves and at a height of its own (`config::drill::palw_drill_tir_fence_at_v1`,
+    /// which refuses a height below the fence's prerequisites). The D-F drills' flag. Command line
+    /// only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_tir_at: Option<u64>,
+    /// **Run the IR fused kernels** (RFC-0002 §7, Phase G): every IR backend this node builds runs
+    /// the regions its plan matched fused. Node software in no consensus object, byte-identical to the
+    /// generic kernels; OFF by default, and kept off until the D-F drills pass with it on.
+    pub palw_tir_fused_kernels: bool,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
@@ -556,6 +567,8 @@ impl Default for Args {
             palw_drill_fence_at: None,
             palw_drill_fence2_at: None,
             palw_drill_fence3_at: None,
+            palw_drill_tir_at: None,
+            palw_tir_fused_kernels: false,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
@@ -713,6 +726,12 @@ impl Args {
         if let Some(at) = self.palw_drill_fence3_at {
             let moves = kaspa_consensus_core::config::drill::palw_drill_post_launch_fences_v3_at_v1(&mut config.params, at)
                 .unwrap_or_else(|e| panic!("--palw-drill-fence3-at: {e} (validate_args refuses this first)"));
+            config.palw_drill_fence_moves.extend(moves);
+        }
+        // **And the IR fence** (`--palw-drill-tir-at`, RFC-0002 Phase F's D-F drills), after the flag days.
+        if let Some(at) = self.palw_drill_tir_at {
+            let moves = kaspa_consensus_core::config::drill::palw_drill_tir_fence_at_v1(&mut config.params, at)
+                .unwrap_or_else(|e| panic!("--palw-drill-tir-at: {e} (validate_args refuses this first)"));
             config.palw_drill_fence_moves.extend(moves);
         }
 
@@ -1525,6 +1544,27 @@ pub fn cli() -> Command {
                     "With --palw-drill-genesis-salt only: move every fence of testnet-12's third post-launch flag day (the \
                      capacity architecture at rho 10) to this DAA on the drill chain, after the first two flag days. Nothing \
                      else moves. Refused without the salt, at 0, and at a height another fence uses.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-tir-at")
+                .long("palw-drill-tir-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm testnet-12's IR fence (palw_tir_v1, RFC-0002) at this DAA on the \
+                     drill chain, after the flag days, so a drill registers and serves an IR class with the shipping binary. \
+                     Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and below the fence's \
+                     prerequisites (palw_kary_court and palw_rcore_plus in force).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-fused-kernels")
+                .long("palw-tir-fused-kernels")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW (RFC-0002 Phase G): run the IR fused kernels in every IR backend this node builds — byte-identical to \
+                     the generic kernels, node software in no consensus object. Off by default until the D-F drills pass with it on.",
                 ),
         )
         .arg(
@@ -2449,6 +2489,8 @@ impl Args {
             palw_drill_fence_at: m.get_one::<u64>("palw-drill-fence-at").copied(),
             palw_drill_fence2_at: m.get_one::<u64>("palw-drill-fence2-at").copied(),
             palw_drill_fence3_at: m.get_one::<u64>("palw-drill-fence3-at").copied(),
+            palw_drill_tir_at: m.get_one::<u64>("palw-drill-tir-at").copied(),
+            palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m

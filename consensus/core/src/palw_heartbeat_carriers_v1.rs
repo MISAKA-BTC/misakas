@@ -71,9 +71,11 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
     use PalwConsensusObjectV2 as O;
     match object {
         O::ObjectiveOffence { kind, .. } => match kind {
-            PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted => {
-                true
-            }
+            PalwOffenceKindV1::ExecutorEquivocation
+            | PalwOffenceKindV1::PanelFalseValidV2
+            | PalwOffenceKindV1::ExecutorRefuted
+            // RFC-0002 Phase F: the IR executor's identity conviction, kind 4's twin.
+            | PalwOffenceKindV1::TirIdentityMismatch => true,
             PalwOffenceKindV1::PanelFalseValid
             | PalwOffenceKindV1::CourtExecutorGuilty
             | PalwOffenceKindV1::DaDefault
@@ -94,6 +96,9 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::CourtAttnRootClaimedHeld { .. }
         | O::CourtAttnDissected { .. }
         | O::CourtAttnChildChosen { .. } => true,
+        // RFC-0002 Phase F (F7, tags 64–66): the IR history dissection's moves, court moves like
+        // the ADR-0082 ones above.
+        O::CourtTirRootClaimed { .. } | O::CourtTirDissected { .. } | O::CourtTirChildChosen { .. } => true,
         // ADR-0152 §4-ter: the held dissection's opening and step 6's checkpoint conviction.
         O::ShardCourtAccused { .. } | O::CheckpointAccused { .. } => true,
         // RFC-0002 Phase F (tag 62): the IR one-move accusation, a court opening like the one above.

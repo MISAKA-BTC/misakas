@@ -195,6 +195,13 @@ pub(crate) fn qwen3_5_text(
     } else {
         qwen_hybrid(p, 248320, 4096, 32, 4, GdnLayout::Split)?
     };
+    // Keys the released Qwen3.5 configs carry that transformers 5.17 does not read:
+    // `mlp_only_layers` (deleted by Qwen3_5(Moe)TextConfig's __post_init__), `mamba_ssm_dtype` (the
+    // authors' kernel's state dtype; the f32 reference keeps the state in f32); and
+    // `attn_output_gate`, which only agrees with the reference as `true` (its attention always
+    // gates its output).
+    p.cfg.inert(&["mlp_only_layers", "mamba_ssm_dtype"]);
+    p.cfg.require_eq("attn_output_gate", &serde_json::json!(true), "transformers' Qwen3.5 attention always gates its output")?;
     let ffn = if moe_variant {
         let e = p.cfg.alias_usize(&["num_experts", "num_local_experts"])?.unwrap_or(256);
         let k = p.cfg.usize_or("num_experts_per_tok", 8)?;
@@ -426,6 +433,17 @@ pub(crate) fn mamba(p: &mut P, falcon: bool) -> Result<ArchSpec> {
     }
     p.cfg.inert(&["fused_add_norm", "pad_vocab_size_multiple"]);
     p.cfg.require_eq("rms_norm", &serde_json::json!(true), "transformers' Mamba always uses RMSNorm")?;
+    // mamba_ssm's own names, which the -hf conversions also carry and transformers 5.17 reads none
+    // of: `d_model` (must agree with hidden_size), `dt_rank` (`time_step_rank` is what is read),
+    // `d_inner` (not the inner width — state-spaces/mamba-370m-hf says 160 for 2,048) and `ssm_cfg`
+    // (must be empty: a mamba_ssm layer choice the reference would not honour).
+    if let Some(dm) = p.cfg.opt_usize("d_model")?
+        && dm != hidden
+    {
+        return Err(LowerError::bad(format!("mamba: d_model {dm} ≠ hidden_size {hidden}")));
+    }
+    p.cfg.inert(&["d_inner", "dt_rank"]);
+    p.cfg.forbid("ssm_cfg", "a mamba_ssm layer configuration transformers does not read")?;
     let dt_rank = time_step_rank(p, hidden)?;
     let inner = expand * hidden;
     if let Some(i) = p.cfg.opt_usize("intermediate_size")?

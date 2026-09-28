@@ -177,3 +177,52 @@ fn site_errors_of_one_fixture() {
         eprintln!("{:>32}  rel {:.5}  max|Δ| {:.4e}  |f|max {:.4e}", e.key, e.rel_l2, e.max_abs, e.float_absmax);
     }
 }
+
+/// The calibration-length rule (freeze-v1 §5.2): a recurrent program refuses a calibration shorter
+/// than its evaluated context; an attention-only one is not bound by it.
+#[test]
+fn a_recurrent_program_is_calibrated_as_long_as_its_context() {
+    let hl_of = |name: &str| {
+        let cfg = std::fs::read_to_string(fixture_dir(name).join("config.json")).expect("config");
+        let spec = misaka_palw_tir_lower::parse_config_str(&cfg).expect("spec");
+        misaka_palw_tir_lower::hl::build_program(&spec).expect("hl")
+    };
+    let short = vec![vec![1usize; 32]; 4];
+    for recurrent in ["mamba", "falcon_mamba", "mamba2", "jamba", "qwen3_5", "qwen3_next", "rwkv"] {
+        let hl = hl_of(recurrent);
+        assert!(fidelity::check_calibration_length(&hl, &short, 64).is_err(), "{recurrent}");
+        assert_eq!(fidelity::check_calibration_length(&hl, &short, 32), Ok(Some(32)), "{recurrent}");
+    }
+    assert_eq!(fidelity::check_calibration_length(&hl_of("llama"), &short, 4096), Ok(None));
+}
+
+/// A head tied to the embedding reads the table the gather reads: ONE `i16` param. (Until
+/// 2026-09-28 the table set looked at a gather's FIRST input — the token — so it was empty, and
+/// every tied head declared a second, `i8` copy of the table; Mamba-370m's top-1 fell from 0.97
+/// to 0.74 on that alone.)
+#[test]
+fn a_tied_head_reads_the_gathered_tables_i16_codes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf");
+    let mut names: Vec<_> = std::fs::read_dir(&root).expect("fixtures").map(|e| e.expect("entry").path()).collect();
+    names.sort();
+    let mut tied = Vec::new();
+    for dir in names {
+        let Ok(cfg) = std::fs::read_to_string(dir.join("config.json")) else { continue };
+        let prep = fidelity::prepare(&cfg, &LowerOpts::default()).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+        if !prep.spec.head.tied {
+            continue;
+        }
+        let tables: Vec<_> = prep
+            .lowered
+            .program
+            .params
+            .iter()
+            .filter(|p| p.name.starts_with("embed.table"))
+            .map(|p| (p.name.clone(), p.dtype))
+            .collect();
+        assert_eq!(tables, vec![("embed.table".to_string(), misaka_palw_tir::DType::I16)], "{}", dir.display());
+        tied.push(dir.file_name().unwrap_or_default().to_string_lossy().to_string());
+    }
+    eprintln!("tied heads on the table's i16 codes: {}", tied.join(" "));
+    assert!(tied.len() >= 5, "only {} tied fixtures: {tied:?}", tied.len());
+}

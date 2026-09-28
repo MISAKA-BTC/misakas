@@ -285,6 +285,11 @@ pub enum PalwCourtV2Error {
     NoAdmissibleArity { window_court: u64 },
     #[error("the root claim declares dissection arity {declared}; this ruleset derives {derived} at this block")]
     ArityIsNotTheDerivedOne { declared: u8, derived: u8 },
+    /// **RFC-0002 F7: an IR dissection move the court refuses** — a root claim that does not
+    /// finalize to the committed tile, a session about a class that is not an IR program, a round or
+    /// a choice about no IR phase. A refused MOVE, never a verdict.
+    #[error("the IR dissection refused the move: {0}")]
+    TirDissectionRefused(String),
     // ---------------------------------------------------------------------------------------
     // ADR-0080 design A, W6 — the split close's declaration
     // ---------------------------------------------------------------------------------------
@@ -474,6 +479,14 @@ pub enum PalwCourtVerdictProofV2 {
         pin: crate::palw_step_refute::PalwBase0DecodeTokensV1,
         position: u32,
     },
+    /// **RFC-0002 Phase F (F7): the bottom of an IR history dissection** (spec 04b §9.5.5) — the
+    /// carriage of one history tile of the dissected leaf's cone, in a cone close's form, against
+    /// which every reduction over `H` is evaluated over that tile's positions (the others supplied
+    /// from the root's totals) and compared with the claim the dissection narrowed to
+    /// ([`crate::palw_tir_court_v1::check_tir_dissect_bottom_v1`]). Like `AttnDissection`, it is
+    /// graded against its session's phase, never against the claim alone. Appended (tag 9), so no
+    /// earlier discriminant moves; below `palw_tir_v1` it is dropped by name as every IR close is.
+    TirDissection { bottom: Box<crate::palw_tir_court_v1::PalwTirConeRefutationV1> },
 }
 
 impl PalwCourtVerdictProofV2 {
@@ -490,7 +503,28 @@ impl PalwCourtVerdictProofV2 {
             Self::TirCone { refutation } => Some(&refutation.binding),
             Self::TirLogits { accusation } => Some(&accusation.binding),
             Self::TirDecodeTokenTiled { binding, .. } | Self::TirDecodeToken { binding, .. } => Some(binding),
+            Self::TirDissection { bottom } => Some(&bottom.binding),
             _ => None,
+        }
+    }
+
+    /// The IR binding an IR close carries, mutably — where the chain puts the registered program back
+    /// ([`crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1`]) and a filer strips it.
+    pub fn tir_binding_mut_v1(&mut self) -> Option<&mut crate::palw_tir_step_v1::PalwTirStepBindingV1> {
+        match self {
+            Self::TirCone { refutation } => Some(&mut refutation.binding),
+            Self::TirLogits { accusation } => Some(&mut accusation.binding),
+            Self::TirDecodeTokenTiled { binding, .. } | Self::TirDecodeToken { binding, .. } => Some(binding),
+            Self::TirDissection { bottom } => Some(&mut bottom.binding),
+            _ => None,
+        }
+    }
+
+    /// **Empties an IR close's carried program** — what a filer does before the close rides (the chain
+    /// holds the registered class's program and refuses a carried one). A no-op on a legacy close.
+    pub fn tir_strip_program_v1(&mut self) {
+        if let Some(binding) = self.tir_binding_mut_v1() {
+            crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(binding);
         }
     }
 }
@@ -629,6 +663,138 @@ where
     }
     let bond = state.bond(&session.challenger_bond).ok_or(PalwCourtV2Error::ChallengerMissing(session.challenger_bond))?;
     let message = borsh::to_vec(choice).expect("a dissection choice is borsh-serializable");
+    if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT) {
+        return Err(PalwCourtV2Error::RungSignatureInvalid);
+    }
+    Ok(())
+}
+
+// =================================================================================================
+// RFC-0002 Phase F, F7 — the IR history dissection's three moves, at acceptance (spec 04b §9.5)
+//
+// ADR-0082's split, unchanged: the FENCE (the k-ary court; `palw_tir_v1` is the acceptance walk's,
+// by name), the party's SIGNATURE under the ADR-0082 contexts — over messages that open with their
+// own IR domains — and, for the root claim, the arity against the ruleset and the FINALIZE, a demand
+// evaluation bounded by the IR court's limits. What the fold enforces on its own is the phase's.
+// =================================================================================================
+
+/// **The IR dissection's moves exist only where the k-ary court does** (`palw_attn_move_is_admissible_v2`'s
+/// fence, for the three IR moves).
+pub fn palw_tir_dissection_move_is_admissible_v1(
+    object: &crate::palw_state_v2::PalwConsensusObjectV2,
+    kary_court_active: bool,
+) -> Result<(), PalwCourtV2Error> {
+    if crate::palw_state_v2::palw_object_is_tir_dissection_move_v1(object) && !kary_court_active {
+        Err(PalwCourtV2Error::KaryCourtDormant)
+    } else {
+        Ok(())
+    }
+}
+
+/// **The responder's root claim, under the responder's key**: the claim's bond, the ADR-0082
+/// responder context, over [`crate::palw_tir_dissect_v1::palw_tir_root_claim_message_v1`].
+pub fn check_court_tir_root_claim_acceptance_v1<V>(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    root: &crate::palw_tir_dissect_v1::PalwTirRootClaimV1,
+    signature: &[u8],
+    verify_mldsa87: V,
+) -> Result<(), PalwCourtV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    let (_session, claim) = resolve_court_session_v2(state, session_id)?;
+    let bond = state.bond(&claim.bond).ok_or(PalwCourtV2Error::ChallengerMissing(claim.bond))?;
+    let message = crate::palw_tir_dissect_v1::palw_tir_root_claim_message_v1(session_id, root);
+    if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT) {
+        return Err(PalwCourtV2Error::RungSignatureInvalid);
+    }
+    Ok(())
+}
+
+/// **The root claim, admitted** (spec 04b §9.5.3) — where the court's limits are: the session's
+/// ladder terminal and no phase open on it, the claim's class an IR program, the binding the
+/// claim's, the declared arity the ruleset's derived one, and the finalize
+/// ([`crate::palw_tir_court_v1::check_tir_root_claim_v1`]) at the IR court's limits and the step
+/// ladder of the block. Returns the site the phase will open on (the fold derives the same one).
+#[allow(clippy::too_many_arguments)]
+pub fn check_court_tir_root_claim_admits_v1(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    root: &crate::palw_tir_dissect_v1::PalwTirRootClaimV1,
+    arity: u8,
+    derived_arity: u8,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder: u64,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<crate::palw_tir_dissect_v1::PalwTirDissectSiteV1, PalwCourtV2Error> {
+    let (session, claim) = resolve_court_session_v2(state, session_id)?;
+    if session.dissection.is_some() || state.tir_dissection_v1(session_id).is_some() {
+        return Err(PalwCourtV2Error::DissectionAlreadyOpen(*session_id));
+    }
+    let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
+    if state.tir_class_v1(&claim.class_id).is_none() {
+        return Err(PalwCourtV2Error::TirDissectionRefused(
+            "the session disputes a claim of a class that is not an IR program".into(),
+        ));
+    }
+    if arity != derived_arity {
+        return Err(PalwCourtV2Error::ArityIsNotTheDerivedOne { declared: arity, derived: derived_arity });
+    }
+    let mut filled = root.clone();
+    filled.finalize.binding = tir_binding_filled_v1(state, claim, &root.finalize.binding)?;
+    check_tir_binding_is_the_claims_v1(state, claim, &filled.finalize.binding)?;
+    let rules = crate::palw_tir_court_v1::PalwTirCourtRulesV1 {
+        max_step_leaf_count: step_ladder,
+        prompt_form: prompt_ids_form,
+        limits: palw_tir_court_limits_v1(court),
+    };
+    crate::palw_tir_court_v1::check_tir_root_claim_v1(&filled, narrowed, &rules).map_err(PalwCourtV2Error::TirDissectionRefused)
+}
+
+/// **One round of children, under the responder's key**, at the IR phase's own round
+/// ([`crate::palw_tir_dissect_v1::palw_tir_round_message_v1`]).
+pub fn check_court_tir_round_acceptance_v1<V>(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    round: &crate::palw_tir_dissect_v1::PalwTirDissectRoundV1,
+    signature: &[u8],
+    verify_mldsa87: V,
+) -> Result<(), PalwCourtV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    let (_session, claim) = resolve_court_session_v2(state, session_id)?;
+    let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
+    let bond = state.bond(&claim.bond).ok_or(PalwCourtV2Error::ChallengerMissing(claim.bond))?;
+    let message = crate::palw_tir_dissect_v1::palw_tir_round_message_v1(session_id, phase.round(), round);
+    if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT) {
+        return Err(PalwCourtV2Error::RungSignatureInvalid);
+    }
+    Ok(())
+}
+
+/// **The challenger's child, under the challenger's key** — the session's challenger bond, the
+/// ADR-0082 challenger context, over [`crate::palw_tir_dissect_v1::palw_tir_choice_message_v1`].
+pub fn check_court_tir_choice_acceptance_v1<V>(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    choice: &crate::palw_tir_dissect_v1::PalwTirDissectChoiceV1,
+    signature: &[u8],
+    verify_mldsa87: V,
+) -> Result<(), PalwCourtV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    let (session, _claim) = resolve_court_session_v2(state, session_id)?;
+    if choice.session_id != *session_id {
+        return Err(PalwCourtV2Error::SessionIdMismatch);
+    }
+    if state.tir_dissection_v1(session_id).is_none() {
+        return Err(PalwCourtV2Error::NoDissection(*session_id));
+    }
+    let bond = state.bond(&session.challenger_bond).ok_or(PalwCourtV2Error::ChallengerMissing(session.challenger_bond))?;
+    let message = crate::palw_tir_dissect_v1::palw_tir_choice_message_v1(choice);
     if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT) {
         return Err(PalwCourtV2Error::RungSignatureInvalid);
     }
@@ -812,7 +978,8 @@ fn binding_of(proof: &PalwCourtVerdictProofV2) -> Option<&crate::palw_step_leg::
         PalwCourtVerdictProofV2::TirCone { .. }
         | PalwCourtVerdictProofV2::TirLogits { .. }
         | PalwCourtVerdictProofV2::TirDecodeTokenTiled { .. }
-        | PalwCourtVerdictProofV2::TirDecodeToken { .. } => None,
+        | PalwCourtVerdictProofV2::TirDecodeToken { .. }
+        | PalwCourtVerdictProofV2::TirDissection { .. } => None,
     }
 }
 
@@ -1041,6 +1208,27 @@ pub fn adjudicate_court_close_v3(
         PalwCourtVerdictProofV2::TirDecodeToken { binding, position, .. } => {
             tir_decode_close_door_v1(binding, narrowed, *position, decode_close_convicts_only)?;
         }
+        // **RFC-0002 F7: the IR dissection's bottom, graded against the IR phase** (spec 04b
+        // §9.5.5), for `AttnDissection`'s reason: the tile it may open, the claim it is compared with
+        // and the totals the other reductions are supplied from are all facts of the phase. The
+        // phase exists only because the k-ary court was armed when its root claim was admitted, so,
+        // as there, the fence is read off the session and not resolved again.
+        PalwCourtVerdictProofV2::TirDissection { bottom } => {
+            let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
+            let mut bottom = bottom.as_ref().clone();
+            bottom.binding = tir_binding_filled_v1(state, claim, &bottom.binding)?;
+            check_tir_binding_is_the_claims_v1(state, claim, &bottom.binding)?;
+            let opened = bottom.output_opening.leaf_index;
+            if opened != narrowed {
+                return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened, narrowed });
+            }
+            let rules = crate::palw_tir_court_v1::PalwTirCourtRulesV1 {
+                max_step_leaf_count: step_ladder,
+                prompt_form: prompt_ids_form,
+                limits: palw_tir_court_limits_v1(court),
+            };
+            return map_refutation_outcome(crate::palw_tir_court_v1::check_tir_dissect_bottom_v1(phase, &bottom, narrowed, &rules));
+        }
         // **ADR-0082 Decision 2: the fused terminal is not a recompute, it is the end of an
         // exchange — so it is adjudicated HERE, where the phase it answers lives.**
         //
@@ -1133,23 +1321,29 @@ fn tir_decode_close_door_v1(
 fn adjudicate_tir_close_proof_v1(
     state: &PalwChainStateV2,
     claim: &crate::palw_state_v2::PalwClaimStateV2,
-    proof: &PalwCourtVerdictProofV2,
-    binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    carried: &PalwCourtVerdictProofV2,
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
     step_ladder: u64,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     use crate::palw_tir_court_v1 as tir;
-    let declared = binding.class.class_id(&binding.artifact_root);
-    if declared != claim.class_id {
-        return Err(PalwCourtV2Error::CloseProfileIsNotTheClass { class_id: claim.class_id, declared });
+    // **The program is the registered class's** (the coordinator's decision of 2026-09-28): an IR
+    // close carries its binding with the program empty, and the chain puts back the program its
+    // `tir_classes` row holds before anything reads the binding — so every pin below runs on the
+    // filled binding, and a close about a claim of a class that is not an IR program adjudicates
+    // nothing.
+    let record = state
+        .tir_class_v1(&claim.class_id)
+        .ok_or_else(|| PalwCourtV2Error::DoesNotAdjudicate(format!("claim {}'s class is not an IR program", claim.class_id)))?;
+    let mut filled = carried.clone();
+    {
+        let slot = filled.tir_binding_mut_v1().ok_or_else(|| PalwCourtV2Error::DoesNotAdjudicate("not an IR close".into()))?;
+        *slot = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(slot, record)
+            .map_err(|why| PalwCourtV2Error::DoesNotAdjudicate(why.into()))?;
     }
-    let class = state.class(&claim.class_id).ok_or(PalwCourtV2Error::MissingClass(claim.class_id))?;
-    if class.artifact_root != binding.artifact_root {
-        return Err(PalwCourtV2Error::OperandProofInvalid("the IR binding names another artifact root than the class's".into()));
-    }
-    check_arithmetic_close_binding(claim.trace_root, binding.full_logits_trace_root)?;
-    check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+    let proof = &filled;
+    let binding = proof.tir_binding_v1().expect("filled above");
+    check_tir_binding_is_the_claims_v1(state, claim, binding)?;
     let rules = tir::PalwTirCourtRulesV1 {
         max_step_leaf_count: step_ladder,
         prompt_form: prompt_ids_form,
@@ -1162,8 +1356,48 @@ fn adjudicate_tir_close_proof_v1(
         PalwCourtVerdictProofV2::TirDecodeToken { binding, pin, position } => {
             tir::check_tir_decode_token_flat_v1(binding, pin, *position)
         }
+        // RFC-0002 F7: graded against its phase, in `adjudicate_court_close_v3` — refused here, never
+        // read as "no fault found" (which would acquit).
+        PalwCourtVerdictProofV2::TirDissection { .. } => return Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
         _ => return Err(PalwCourtV2Error::DoesNotAdjudicate("not an IR close".into())),
     })
+}
+
+/// **An IR binding as the chain reads it** (the coordinator's decision of 2026-09-28): the carried
+/// binding, whose program is empty, with the registered program of the claim's class put back from
+/// its `tir_classes` row — refused for a claim of a class that is not an IR program and for a binding
+/// that carries a program. Every IR dissection move reads its binding through it.
+pub fn tir_binding_filled_v1(
+    state: &PalwChainStateV2,
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    carried: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+) -> Result<crate::palw_tir_step_v1::PalwTirStepBindingV1, PalwCourtV2Error> {
+    let record = state
+        .tir_class_v1(&claim.class_id)
+        .ok_or_else(|| PalwCourtV2Error::DoesNotAdjudicate(format!("claim {}'s class is not an IR program", claim.class_id)))?;
+    crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(carried, record)
+        .map_err(|why| PalwCourtV2Error::DoesNotAdjudicate(why.into()))
+}
+
+/// **An IR binding is the claim's** (RFC-0002 Phase F): its class hashes to the claim's class id
+/// (so the program, the layout and the tokenizer are the class's), it names the class's registered
+/// artifact root, and it is the execution the claim committed — its logits trace root and its
+/// execution root. Every IR close and every IR dissection move asks it before it reads the binding.
+pub fn check_tir_binding_is_the_claims_v1(
+    state: &PalwChainStateV2,
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+) -> Result<(), PalwCourtV2Error> {
+    let declared = binding.class.class_id(&binding.artifact_root);
+    if declared != claim.class_id {
+        return Err(PalwCourtV2Error::CloseProfileIsNotTheClass { class_id: claim.class_id, declared });
+    }
+    let class = state.class(&claim.class_id).ok_or(PalwCourtV2Error::MissingClass(claim.class_id))?;
+    if class.artifact_root != binding.artifact_root {
+        return Err(PalwCourtV2Error::OperandProofInvalid("the IR binding names another artifact root than the class's".into()));
+    }
+    check_arithmetic_close_binding(claim.trace_root, binding.full_logits_trace_root)?;
+    check_execution_root_binding(claim.execution_root, binding.committed_execution_root)
 }
 
 /// The arithmetic half of a close: given the CLAIM the dispute is about, what verdict does this
@@ -1191,8 +1425,8 @@ pub fn adjudicate_close_proof_v2(
     check_close_speaks_the_networks_prompt_form(proof, prompt_ids_form)?;
     // An IR close carries its class whole, re-hashed to the claim's class id before anything reads
     // it — the same bound, in the IR's spelling.
-    if let Some(binding) = proof.tir_binding_v1() {
-        return adjudicate_tir_close_proof_v1(state, claim, proof, binding, court, step_ladder, prompt_ids_form);
+    if proof.is_tir_v1() {
+        return adjudicate_tir_close_proof_v1(state, claim, proof, court, step_ladder, prompt_ids_form);
     }
     // Before ANY arm reads geometry out of the binding. See the function's own docs: this is the
     // bound that does not have to be repeated at each consumer.
@@ -1255,7 +1489,8 @@ pub fn adjudicate_close_proof_v2(
         PalwCourtVerdictProofV2::TirCone { .. }
         | PalwCourtVerdictProofV2::TirLogits { .. }
         | PalwCourtVerdictProofV2::TirDecodeTokenTiled { .. }
-        | PalwCourtVerdictProofV2::TirDecodeToken { .. } => Err(PalwCourtV2Error::DoesNotAdjudicate("an IR close".into())),
+        | PalwCourtVerdictProofV2::TirDecodeToken { .. }
+        | PalwCourtVerdictProofV2::TirDissection { .. } => Err(PalwCourtV2Error::DoesNotAdjudicate("an IR close".into())),
     }
 }
 
@@ -1884,7 +2119,8 @@ pub fn check_close_cost_v2(
         PalwCourtVerdictProofV2::TirCone { .. }
         | PalwCourtVerdictProofV2::TirLogits { .. }
         | PalwCourtVerdictProofV2::TirDecodeTokenTiled { .. }
-        | PalwCourtVerdictProofV2::TirDecodeToken { .. } => {
+        | PalwCourtVerdictProofV2::TirDecodeToken { .. }
+        | PalwCourtVerdictProofV2::TirDissection { .. } => {
             let bytes = borsh::to_vec(proof).map(|b| b.len() as u64).unwrap_or(u64::MAX);
             if bytes > court.max_close_bytes() {
                 return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });
@@ -3529,14 +3765,18 @@ mod tests {
         };
         let judge = |x: &crate::palw_tir_court_v1::test_support::TinyExecution, leaf: u64| {
             let b = &x.binding;
-            let (state, claim_id) = licensed_state_of(
+            let (mut state, claim_id) = licensed_state_of(
                 b.job_context.shape_profile_id,
                 b.artifact_root,
                 b.full_logits_trace_root,
                 b.committed_execution_root,
             );
+            // The class's `tir_classes` row, as its registration writes it: the program is the chain's.
+            let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&b.class, &b.artifact_root).expect("decodes");
+            state.test_insert_tir_class_v1(b.job_context.shape_profile_id, record);
             let refutation = build_tir_cone_refutation_v1(b, leaf, x, &rules).expect("buildable");
-            let proof = PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+            let mut proof = PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+            proof.tir_strip_program_v1();
             let claim = state.claim(&claim_id).unwrap().clone();
             (adjudicate_close_proof_v2(&state, &claim, &proof, &court(), LADDER, form), state, claim, proof)
         };
@@ -3548,11 +3788,13 @@ mod tests {
         let (verdict, state, claim, proof) = judge(&forged, 7);
         assert_eq!(verdict, Ok(PalwCourtVerdictV2::ExecutorGuilty), "the forged leaf convicts");
 
-        // The same close against a claim of another class, and of another execution.
+        // The same close against a claim of another IR class, and of another execution.
         let mut other_class = claim.clone();
         other_class.class_id = h64(1);
+        let mut with_other = state.clone();
+        with_other.test_insert_tir_class_v1(h64(1), state.tir_class_v1(&claim.class_id).unwrap().clone());
         assert!(matches!(
-            adjudicate_close_proof_v2(&state, &other_class, &proof, &court(), LADDER, form),
+            adjudicate_close_proof_v2(&with_other, &other_class, &proof, &court(), LADDER, form),
             Err(PalwCourtV2Error::CloseProfileIsNotTheClass { .. })
         ));
         let mut other_run = claim.clone();
@@ -3567,6 +3809,27 @@ mod tests {
             adjudicate_close_proof_v2(&state, &other_trace, &proof, &court(), LADDER, form),
             Err(PalwCourtV2Error::TraceRootMismatch)
         );
+
+        // The program is referenced, not carried: a close that carries it is refused, and a claim of a
+        // class with no IR row adjudicates nothing.
+        let mut carrying = proof.clone();
+        carrying.tir_binding_mut_v1().unwrap().class.program = forged.binding.class.program.clone();
+        assert!(matches!(
+            adjudicate_close_proof_v2(&state, &claim, &carrying, &court(), LADDER, form),
+            Err(PalwCourtV2Error::DoesNotAdjudicate(why)) if why.contains("carries no program")
+        ));
+        let (bare, bare_claim) = licensed_state_of(
+            claim.class_id,
+            forged.binding.artifact_root,
+            forged.binding.full_logits_trace_root,
+            forged.binding.committed_execution_root,
+        );
+        let bare_claim = bare.claim(&bare_claim).unwrap().clone();
+        assert!(matches!(
+            adjudicate_close_proof_v2(&bare, &bare_claim, &proof, &court(), LADDER, form),
+            Err(PalwCourtV2Error::DoesNotAdjudicate(why)) if why.contains("not an IR program")
+        ));
+        assert!(proof.tir_binding_v1().unwrap().class.program.is_empty(), "the carried close is the stripped one");
 
         // Appended: tags 5..=8, after `ArithmeticOpened` (4); and measured whole by the cost gate.
         assert!(proof.is_tir_v1());

@@ -8,8 +8,14 @@
 //!
 //! ```json
 //! { "schema": "misaka.palw.tir-manifest.v1", "artifact_digest": …, "artifact_bytes": …,
-//!   "graph_ir_root": …, "inventory_root": …, "leaf_count": …, "tokenizer_id": …, "program_bytes": … }
+//!   "graph_ir_root": …, "inventory_root": …, "leaf_count": …, "tokenizer_id": …, "program_bytes": …,
+//!   "layout_digest": … | null, "class_id": … | null }
 //! ```
+//!
+//! When the container declares a commitment layout (`borsh(PalwTirLayoutV1)`, F2) the sidecar also
+//! records the layout's digest and the IR class id it makes with this artifact —
+//! `PalwTirClassV1 { program, layout, tokenizer_id }.class_id(inventory_root)`, the id a registration
+//! of this file under that layout must carry. A layout that does not decode is refused.
 //!
 //! Like the legacy manifest it is a cache, not an authority: [`PalwTirManifestV1::derive`] is the
 //! one derivation (the consensus inventory, streamed from the container one tensor at a time), and
@@ -17,6 +23,7 @@
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_tir_artifact_v1::{PalwTirTensorSourceV1, palw_tir_graph_ir_root_v1, palw_tir_inventory_root_v1};
+use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1, PalwTirLayoutV1};
 use misaka_palw_tir_artifact::{PalwTirContainerV1, file_digest_v1};
 use std::borrow::Cow;
 use std::path::Path;
@@ -42,6 +49,9 @@ pub struct PalwTirManifestV1 {
     pub leaf_count: u32,
     pub tokenizer_id: [u8; 64],
     pub program_bytes: u64,
+    /// With a declared layout: its digest (as the class id binds it) and the class id.
+    pub layout_digest: Option<Hash64>,
+    pub class_id: Option<Hash64>,
 }
 
 fn hex(b: &[u8]) -> String {
@@ -66,6 +76,20 @@ impl PalwTirManifestV1 {
         let c = PalwTirContainerV1::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let (inventory_root, leaf_count) =
             palw_tir_inventory_root_v1(&c.program, &PalwTirContainerSourceV1(&c)).map_err(|e| format!("{}: {e}", path.display()))?;
+        let (layout_digest, class_id) = match c.header.layout.is_empty() {
+            true => (None, None),
+            false => {
+                let layout: PalwTirLayoutV1 = borsh::from_slice(&c.header.layout)
+                    .map_err(|e| format!("{}: the container's layout is not a PalwTirLayoutV1: {e}", path.display()))?;
+                let class = PalwTirClassV1 {
+                    version: PALW_TIR_CLASS_VERSION_V1,
+                    program: c.header.program.clone(),
+                    layout,
+                    tokenizer_id: Hash64::from_bytes(c.header.tokenizer_id),
+                };
+                (Some(class.layout_digest()), Some(class.class_id(&inventory_root)))
+            }
+        };
         Ok(Self {
             artifact_digest: file_digest_v1(path).map_err(|e| e.to_string())?,
             artifact_bytes: c.file_len,
@@ -74,6 +98,8 @@ impl PalwTirManifestV1 {
             leaf_count,
             tokenizer_id: c.header.tokenizer_id,
             program_bytes: c.header.program.len() as u64,
+            layout_digest,
+            class_id,
         })
     }
 
@@ -94,15 +120,18 @@ impl PalwTirManifestV1 {
 
     /// Canonical JSON: one shape, fixed field order.
     pub fn to_json(&self) -> String {
+        let opt = |h: &Option<Hash64>| h.map_or("null".to_string(), |h| format!("\"{h}\""));
         format!(
-            "{{\n  \"schema\": \"{PALW_TIR_MANIFEST_SCHEMA_V1}\",\n  \"artifact_digest\": \"{}\",\n  \"artifact_bytes\": {},\n  \"graph_ir_root\": \"{}\",\n  \"inventory_root\": \"{}\",\n  \"leaf_count\": {},\n  \"tokenizer_id\": \"{}\",\n  \"program_bytes\": {}\n}}\n",
+            "{{\n  \"schema\": \"{PALW_TIR_MANIFEST_SCHEMA_V1}\",\n  \"artifact_digest\": \"{}\",\n  \"artifact_bytes\": {},\n  \"graph_ir_root\": \"{}\",\n  \"inventory_root\": \"{}\",\n  \"leaf_count\": {},\n  \"tokenizer_id\": \"{}\",\n  \"program_bytes\": {},\n  \"layout_digest\": {},\n  \"class_id\": {}\n}}\n",
             hex(&self.artifact_digest),
             self.artifact_bytes,
             self.graph_ir_root,
             self.inventory_root,
             self.leaf_count,
             hex(&self.tokenizer_id),
-            self.program_bytes
+            self.program_bytes,
+            opt(&self.layout_digest),
+            opt(&self.class_id)
         )
     }
 
@@ -114,6 +143,13 @@ impl PalwTirManifestV1 {
         let text = |k: &str| v[k].as_str().ok_or_else(|| format!("`{k}` missing"));
         let num = |k: &str| v[k].as_u64().ok_or_else(|| format!("`{k}` missing"));
         let hash = |k: &str| -> Result<Hash64, String> { Ok(Hash64::from_bytes(unhex64(text(k)?)?)) };
+        let opt_hash = |k: &str| -> Result<Option<Hash64>, String> {
+            match &v[k] {
+                serde_json::Value::Null => Ok(None),
+                serde_json::Value::String(t) => Ok(Some(Hash64::from_bytes(unhex64(t)?))),
+                _ => Err(format!("`{k}` is neither a hash nor null")),
+            }
+        };
         Ok(Self {
             artifact_digest: unhex64(text("artifact_digest")?)?,
             artifact_bytes: num("artifact_bytes")?,
@@ -122,6 +158,8 @@ impl PalwTirManifestV1 {
             leaf_count: u32::try_from(num("leaf_count")?).map_err(|e| e.to_string())?,
             tokenizer_id: unhex64(text("tokenizer_id")?)?,
             program_bytes: num("program_bytes")?,
+            layout_digest: opt_hash("layout_digest")?,
+            class_id: opt_hash("class_id")?,
         })
     }
 
@@ -186,6 +224,67 @@ mod tests {
             assert_eq!(palw_tir_leaf_index_v1(&c.program, j, o.operand.layer, o.operand.row_start as u64), Some(index));
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_lowerer_binds_the_tokenizer_commitment_base0_binds() {
+        // One rule in two crates (the lowerer does not depend on base0): the same key, the same id.
+        assert_eq!(
+            misaka_palw_tir_lower::artifact::TOKENIZER_COMMITMENT_DOMAIN_V1,
+            misaka_palw_base0::artifact::PALW_BASE0_TOKENIZER_DOMAIN
+        );
+        for bytes in [&b""[..], b"{\"model\":{\"type\":\"BPE\"}}", &[7u8; 4099][..]] {
+            assert_eq!(
+                &misaka_palw_tir_lower::artifact::tokenizer_id_of(bytes)[..],
+                Base0ArtifactV1::tokenizer_commitment_of(bytes).as_byte_slice()
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_layout_gives_the_class_id_a_registration_must_carry() {
+        let path = converted("layout");
+        let c = PalwTirContainerV1::open(&path).expect("opens");
+        assert!(PalwTirManifestV1::derive(&path).expect("derived").class_id.is_none(), "no layout, no class id");
+        let layout = PalwTirLayoutV1 {
+            version: kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_LAYOUT_VERSION_V1,
+            max_context: 16,
+            checkpoint_interval: 1,
+            h_tile: 16,
+            commit_tiles: vec![64; c.program.blocks.iter().flat_map(|b| &b.nodes).filter(|n| n.commit).count()],
+            state_tiles: vec![16; c.program.states.len()],
+        };
+        let with = path.with_extension("layout.palwtir");
+        let mut tensor = |p: u16, l: Option<u16>| c.read_tensor_bytes(p, l).map_err(|e| e.to_string());
+        misaka_palw_tir_artifact::write_container_v1(
+            &with,
+            &c.program,
+            borsh::to_vec(&layout).expect("borsh"),
+            [5u8; 64],
+            "{}".into(),
+            &mut tensor,
+        )
+        .expect("written");
+        let m = PalwTirManifestV1::derive(&with).expect("derived");
+        let class = PalwTirClassV1 {
+            version: PALW_TIR_CLASS_VERSION_V1,
+            program: c.header.program.clone(),
+            layout,
+            tokenizer_id: Hash64::from_bytes([5u8; 64]),
+        };
+        // The same tensors, so the same inventory root; the class id binds program, layout, root, tokenizer.
+        assert_eq!(m.inventory_root, PalwTirManifestV1::derive(&path).expect("derived").inventory_root);
+        assert_eq!(m.class_id, Some(class.class_id(&m.inventory_root)));
+        assert_eq!(m.layout_digest, Some(class.layout_digest()));
+        assert_eq!(PalwTirManifestV1::from_json(&m.to_json()).expect("parses"), m);
+        // A layout that is not a PalwTirLayoutV1 is refused.
+        let bad = path.with_extension("badlayout.palwtir");
+        misaka_palw_tir_artifact::write_container_v1(&bad, &c.program, vec![9, 9, 9], [0u8; 64], "{}".into(), &mut tensor)
+            .expect("written");
+        assert!(PalwTirManifestV1::derive(&bad).expect_err("refused").contains("not a PalwTirLayoutV1"));
+        for p in [&path, &with, &bad] {
+            let _ = std::fs::remove_file(p);
+        }
     }
 
     #[test]

@@ -1023,3 +1023,33 @@ fn the_catalogue_is_complete_and_the_constants_are_the_specs() {
     assert_eq!(names.len(), LIBRARY_V1.len(), "no template is listed twice");
     assert_eq!((K, ONE, LN2_Q), (24, 1 << 24, 11_629_080));
 }
+
+/// **The lean forms are as lean as tir/lower needs them** (NF-12's 512 nodes a block): the narrowing
+/// without a zero term is three nodes past its `Pow2` gather, the unit rows 21 and 17 — against the
+/// templates' 5, 38 and 25 (counted here as the nodes a call appends). Their values are the templates' (`misaka-palw-tir-conformance`).
+#[test]
+fn the_lean_forms_have_the_node_counts_the_lowering_needs() {
+    use misaka_palw_tir::builder::ProgramBuilder;
+    use misaka_palw_tir::library::Narrowing;
+    use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+    // The count is the index the next node takes.
+    let n = |build: &dyn Fn(&mut misaka_palw_tir::builder::BlockBuilder<'_>, &[Ref]) -> Ref| {
+        let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+        let x32 = pb.param("x32", DType::I32, &[16], false);
+        let x16 = pb.param("x16", DType::I16, &[16], false);
+        let m = pb.param("m", DType::I64, &[16], false);
+        let s = pb.param("s", DType::I8, &[16], false);
+        let e = pb.param("e", DType::I64, &[], false);
+        let mut b = pb.block("pre", vec![]);
+        let _ = build(&mut b, &[x32, x16, m, s, e]);
+        let probe = b.iota(DType::I32, &[misaka_palw_tir::Dim::Fixed(1)], 0, 0, 0);
+        let Ref::Node(i) = probe else { unreachable!() };
+        i as usize
+    };
+    assert_eq!(n(&|b, r| b.narrow_codes(r[0], &Narrowing::new(r[2], r[3], None))), 2 + 3, "Pow2 (2) + mul, div, clamp");
+    assert_eq!(n(&|b, r| b.narrow_codes(r[0], &Narrowing::new(r[2], r[3], Some(r[2])))), 2 + 5, "with a zero term: the template");
+    assert_eq!(n(&|b, r| b.rms_unit_q24(r[0], r[4])), 21);
+    assert_eq!(n(&|b, r| b.l2_unit_q15(r[1])), 17);
+    assert_eq!(n(&|b, r| b.rms_norm_wide_q36(r[0], r[2], r[3])), 38, "the template it replaces");
+    assert_eq!(n(&|b, r| b.l2_norm_q15(r[1])), 25, "the template it replaces");
+}

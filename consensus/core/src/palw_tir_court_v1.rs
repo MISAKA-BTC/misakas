@@ -1259,10 +1259,7 @@ fn finalize_and_closure(
     source: &mut TirSource<'_, '_>,
     limits: &DemandLimits,
 ) -> Result<Vec<i128>, DemandError> {
-    let elements = leaf_elements(leaf);
-    let request =
-        DemandRangeRequest { ctx: site.ctx, target: site.node, elements: &elements, supplied: &site.reductions, range: None };
-    let (values, _) = eval_demanded_range(&space.program, &space.info, &request, source, limits)?;
+    let values = finalize_values(space, site, &leaf_elements(leaf), source, limits)?;
     loop {
         let before = source.used_supplied.len();
         for node in &site.reductions {
@@ -1279,6 +1276,26 @@ fn finalize_and_closure(
             return Ok(values);
         }
     }
+}
+
+/// **The finalize** (spec 04b §9.5.3): the tile's `elements` evaluated with every reduction over `H`
+/// supplied from the source's claimed values. A commit point that itself reduces over `H` is its
+/// own finalize — the tile IS that reduction's totals, so the claimed values are the values, read
+/// through the source, which records them as read (it cannot be both the target and a supplied node
+/// of one range request: §9.5.2 refuses that, and the honest responder's root claim would be refused
+/// with it).
+fn finalize_values(
+    space: &PalwTirStepSpaceV1,
+    site: &PalwTirDissectSiteV1,
+    elements: &[usize],
+    source: &mut TirSource<'_, '_>,
+    limits: &DemandLimits,
+) -> Result<Vec<i128>, DemandError> {
+    if site.reductions.contains(&site.node) {
+        return elements.iter().map(|e| source.node(site.ctx, site.node, *e).map_err(DemandError::from)).collect();
+    }
+    let request = DemandRangeRequest { ctx: site.ctx, target: site.node, elements, supplied: &site.reductions, range: None };
+    Ok(eval_demanded_range(&space.program, &space.info, &request, source, limits)?.0)
 }
 
 /// **Admit a root claim** (spec 04b §9.5; the acceptance layer's check, which holds the court's work
@@ -1370,6 +1387,75 @@ pub fn check_tir_dissect_bottom_v1(
     }
 }
 
+/// **The site a root claim opens on, as the fold derives it** (spec 04b §9.5.1): the binding the
+/// claim carries verified at its own canonical count, the leaf it opens the one the ladder narrowed
+/// to, and that leaf's site from the class's program — no carriage read, no evaluation. The claim's
+/// pins (class, artifact root, roots) are the caller's, and the finalize is the acceptance layer's
+/// ([`check_tir_root_claim_v1`], at the court's limits); what the fold needs is the site, which
+/// nothing a mover supplies may choose.
+pub fn palw_tir_root_claim_site_v1(root: &PalwTirRootClaimV1, narrowed: u64) -> Result<PalwTirDissectSiteV1, String> {
+    let binding = &root.finalize.binding;
+    let v = crate::palw_tir_step_v1::verify_tir_binding_v1(binding, binding.step_leaf_count).map_err(|e| e.to_string())?;
+    if root.finalize.output_opening.leaf_index != narrowed {
+        return Err(format!(
+            "the root claim opens leaf {}, the ladder narrowed to {narrowed}",
+            root.finalize.output_opening.leaf_index
+        ));
+    }
+    let leaf = v.space.leaf_at(&binding.job_context, narrowed).ok_or_else(|| format!("{narrowed} is not a leaf of this execution"))?;
+    let intervals = analyze_ranges(&v.space.program).map_err(|e| e.to_string())?;
+    palw_tir_dissect_site_v1(&v.space, &intervals, &leaf).ok_or_else(|| "the narrowed leaf is not dissected".to_string())
+}
+
+/// **Is a cone close's leaf a dissected leaf of its execution?** (spec 04b §9.5.1; the held
+/// regime's one-move court, ADR-0103 Decision 5.) Steps 1–4 of [`check_tir_cone_refutation_v1`] at
+/// the binding's own canonical count — the binding verifies, the leaf opens under it, and neither
+/// the binding, the leaf's structure nor its lanes' interval convicts on its face — then the leaf's
+/// site: `Some(leaf index)` when its cone reduces over `H`. `Ok(None)` for a leaf that is not
+/// dissected and for one those steps convict (the whole close convicts it, cheaply, without an
+/// evaluation); `Err` for evidence about another execution. Reads no operand: the accusation names
+/// the leaf, and the dissection it opens is where its cone is argued.
+pub fn palw_tir_named_dissected_leaf_v1(refutation: &PalwTirConeRefutationV1) -> Result<Option<u64>, PalwStepRefuteError> {
+    let binding = &refutation.binding;
+    let v = match check_binding(binding)? {
+        BindingOutcome::Convicted(_) => return Ok(None),
+        BindingOutcome::Verified(v) => v,
+    };
+    let leaf = match check_output_leaf(binding, &v, &refutation.output_opening, &refutation.output_preimage, binding.step_leaf_count)?
+    {
+        Ok(leaf) => leaf,
+        Err(_) => return Ok(None),
+    };
+    let intervals = analyze_ranges(&v.space.program).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+    let out = palw_tir_leaf_interval_v1(&v.space, &intervals, &leaf).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    if first_outside(leaf.dtype, &refutation.output_preimage.values_le, out).is_some() {
+        return Ok(None);
+    }
+    Ok(palw_tir_dissect_site_v1(&v.space, &intervals, &leaf).map(|_| refutation.output_opening.leaf_index))
+}
+
+/// **A cone close that names a leaf and carries nothing else** — the binding, the leaf's opening
+/// and preimage, no operand: the proof of a one-move accusation at a dissected leaf under the held
+/// regime, where the accusation opens a dissection rather than being adjudicated
+/// ([`palw_tir_named_dissected_leaf_v1`]).
+pub fn build_tir_named_leaf_refutation_v1(
+    binding: &PalwTirStepBindingV1,
+    leaf: u64,
+    store: &dyn PalwTirEvidenceStoreV1,
+) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
+    let missing = |what: String| PalwTirEvidenceErrorV1::Store(what);
+    Ok(PalwTirConeRefutationV1 {
+        binding: binding.clone(),
+        output_opening: store.step_opening(leaf).ok_or_else(|| missing(format!("the opening of leaf {leaf}")))?,
+        output_preimage: store.step_leaf(leaf).ok_or_else(|| missing(format!("step leaf {leaf}")))?,
+        operands: PalwStepInputRowV1 { preimages: Vec::new(), run_siblings: Vec::new() },
+        params: Vec::new(),
+        prompt_token_ids: Vec::new(),
+        prompt_ids_openings: Vec::new(),
+        decode_tokens: None,
+    })
+}
+
 /// The site of `leaf` for a builder.
 fn builder_site(v: &PalwTirVerifiedBindingV1, leaf: &PalwTirLeafV1) -> Result<PalwTirDissectSiteV1, PalwTirEvidenceErrorV1> {
     let intervals = analyze_ranges(&v.space.program).map_err(|e| PalwTirEvidenceErrorV1::Binding(e.to_string()))?;
@@ -1437,11 +1523,8 @@ pub fn tir_root_claim_finalizes_to_v1(
     let mut source = store_source(&v, &binding.job_context, &inventory, store, narrowed, rules);
     source.supplied_ctx = Some(site.ctx);
     source.supplied = supplied_values(&site.reductions, elements, totals, None);
-    let lanes = leaf_elements(&leaf);
-    let request = DemandRangeRequest { ctx: site.ctx, target: site.node, elements: &lanes, supplied: &site.reductions, range: None };
-    Ok(eval_demanded_range(&v.space.program, &v.space.info, &request, &mut source, &rules.limits)
-        .map_err(|e| PalwTirEvidenceErrorV1::Evaluation(e.to_string()))?
-        .0)
+    finalize_values(&v.space, &site, &leaf_elements(&leaf), &mut source, &rules.limits)
+        .map_err(|e| PalwTirEvidenceErrorV1::Evaluation(e.to_string()))
 }
 
 /// The partials of every reduction over the history positions `range`, the others supplied from the
@@ -1600,8 +1683,10 @@ pub fn check_tir_logits_consistency_v1(
             if tiled_logits_outer_root_v1(ctx, decode, &rows_root, generated_token_ids) != binding.full_logits_trace_root {
                 return Err(bad("the carried material does not reproduce the claim's own tiled trace root"));
             }
-            // The layout tiles the logits node at the scheme's width (F4), so step tile t is trace tile t.
+            // The layout tiles the logits node at a divisor of the scheme's width (F4, decision (1) of
+            // 2026-09-28), so a step tile lies inside one trace tile, at an offset in it.
             let tile = first_element / PALW_LOGITS_TILE_LANES as u64;
+            let offset = (first_element % PALW_LOGITS_TILE_LANES as u64) as usize;
             let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
             tiled_tile_authenticate_v1(
                 &v.context_hash,
@@ -1614,7 +1699,12 @@ pub fn check_tir_logits_consistency_v1(
                 tile_opening,
                 rules.max_step_leaf_count,
             )?;
-            tile_lanes.iter().map(|x| *x as i128).collect()
+            tile_lanes
+                .get(offset..offset + leaf.value_count as usize)
+                .ok_or(bad("the step tile is past its trace tile"))?
+                .iter()
+                .map(|x| *x as i128)
+                .collect()
         }
     };
     if trace_lanes.len() != step_lanes.len() {
@@ -1780,6 +1870,27 @@ impl PalwTirTraceEventDisclosureV1 {
     /// A flat answer carries every row, so it answers every in-run event at once.
     pub fn is_flat(&self) -> bool {
         matches!(self, Self::Flat { .. })
+    }
+
+    fn binding_mut(&mut self) -> &mut PalwTirStepBindingV1 {
+        match self {
+            Self::Flat { binding, .. } | Self::Tiled { binding, .. } | Self::OutOfRange { binding } => binding,
+        }
+    }
+
+    /// **Empties the carried program** — what a discloser does before the answer rides (the chain
+    /// holds the registered class's program and refuses a carried one).
+    pub fn strip_program_v1(&mut self) {
+        crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(self.binding_mut());
+    }
+
+    /// The disclosure with the registered class's program put back
+    /// ([`crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1`]); refused when it carried one.
+    pub fn with_program_v1(&self, record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1) -> Result<Self, &'static str> {
+        let mut filled = self.clone();
+        let slot = filled.binding_mut();
+        *slot = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(slot, record)?;
+        Ok(filled)
     }
 }
 
@@ -2021,6 +2132,40 @@ pub(crate) mod test_support {
     /// The class, the job and an execution — honest, or with lane `lane` of leaf `forge` moved by
     /// one (inside its proven interval).
     pub(crate) fn tiny_execution(forge: Option<(usize, usize)>) -> TinyExecution {
+        tiny_execution_in(
+            |class, class_id, prompt| {
+                let z = Hash64::from_bytes([0u8; 64]);
+                PalwJobContextV2 {
+                    version: 2,
+                    network_id: b"testnet-12".to_vec(),
+                    job_id: Hash64::from_bytes([5; 64]),
+                    job_nullifier: z,
+                    assignment_id: z,
+                    execution_seed: [0u8; 32],
+                    model_profile_id: z,
+                    runtime_manifest_hash: z,
+                    runtime_class_id: z,
+                    shape_profile_id: class_id,
+                    trace_scheme_id: tiled_logits_scheme_id_v1(),
+                    cu_ruleset_id: z,
+                    tokenizer_id: class.tokenizer_id,
+                    prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(prompt),
+                    declared_prefill_tokens: PREFILL,
+                    exact_decode_tokens: DECODE,
+                    max_context_tokens: 64,
+                }
+            },
+            forge,
+        )
+    }
+
+    /// [`tiny_execution`] in the job context `ctx_of(class, class_id, prompt)` builds — a
+    /// `(PREFILL, DECODE)` job over the tiny class, whose layout allows exactly the
+    /// `PREFILL + DECODE − 1` positions the job touches.
+    pub(crate) fn tiny_execution_in(
+        ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
+        forge: Option<(usize, usize)>,
+    ) -> TinyExecution {
         let (program, params) = program_and_params();
         let bytes = program.encode();
         let class = PalwTirClassV1 {
@@ -2055,26 +2200,8 @@ pub(crate) mod test_support {
                 rows.push(row);
             }
         }
-        let z = Hash64::from_bytes([0u8; 64]);
-        let ctx = PalwJobContextV2 {
-            version: 2,
-            network_id: b"testnet-12".to_vec(),
-            job_id: Hash64::from_bytes([5; 64]),
-            job_nullifier: z,
-            assignment_id: z,
-            execution_seed: [0u8; 32],
-            model_profile_id: z,
-            runtime_manifest_hash: z,
-            runtime_class_id: z,
-            shape_profile_id: class_id,
-            trace_scheme_id: tiled_logits_scheme_id_v1(),
-            cu_ruleset_id: z,
-            tokenizer_id: class.tokenizer_id,
-            prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(&prompt),
-            declared_prefill_tokens: PREFILL,
-            exact_decode_tokens: DECODE,
-            max_context_tokens: 64,
-        };
+        let ctx = ctx_of(&class, class_id, &prompt);
+        assert_eq!((ctx.declared_prefill_tokens, ctx.exact_decode_tokens), (PREFILL, DECODE), "the tiny job");
         let space = PalwTirStepSpaceV1::new(&class).expect("the layout fits");
         let occ = space.occurrences().to_vec();
         let mut preimages = Vec::new();
@@ -2119,6 +2246,43 @@ pub(crate) mod test_support {
         TinyExecution { binding, preimages, hashes, ops, prompt, rows, generated }
     }
 
+    /// A binding whose parts verify (the leaf count is the job's and the root recomputes), over a
+    /// class with a canonical job: the identity rule needs no execution, only a binding.
+    /// A binding whose parts verify (the leaf count is the job's and the root recomputes) over the
+    /// tiny class widened to 64 positions (so it has a canonical job), at the anchor's J5 context with
+    /// `edit` applied: the identity rule needs no execution, only a binding.
+    pub(crate) fn attempt_binding(
+        anchor: Hash64,
+        edit: impl FnOnce(&mut PalwJobContextV2),
+    ) -> (PalwTirStepBindingV1, crate::palw_tir_attempt_v1::PalwTirJobFactsV1) {
+        use crate::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_context_v1, palw_tir_attempt_prompt_root_v1};
+        const MAX: u64 = 1 << 26;
+        let x = tiny_execution(None);
+        let mut class = x.binding.class.clone();
+        class.layout.max_context = 64;
+        let class_id = class.class_id(&x.binding.artifact_root);
+        let facts = PalwTirJobFactsV1::of_class(&class, class_id).unwrap();
+        let canonical = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(&class).unwrap();
+        let root = palw_tir_attempt_prompt_root_v1(&facts, &anchor, canonical.0, PalwPromptIdsFormV1::Flat).unwrap();
+        let mut ctx = palw_tir_attempt_context_v1(&facts, &anchor, canonical, root);
+        edit(&mut ctx);
+        let space = PalwTirStepSpaceV1::new(&class).unwrap();
+        let count = space.leaf_count_capped(&ctx, MAX).unwrap();
+        let (trace, step_root) = (Hash64::from_bytes([0x71; 64]), Hash64::from_bytes([0x72; 64]));
+        let execution = palw_tir_execution_root_v1(&ctx.context_hash(), &trace, &class_id, count, &step_root);
+        let binding = PalwTirStepBindingV1 {
+            version: PALW_TIR_STEP_BINDING_VERSION_V1,
+            job_context: ctx,
+            class,
+            artifact_root: x.binding.artifact_root,
+            full_logits_trace_root: trace,
+            step_leaf_count: count,
+            step_merkle_root: step_root,
+            committed_execution_root: execution,
+        };
+        (binding, facts)
+    }
+
     #[test]
     fn the_tiny_execution_is_adjudicable_both_ways() {
         let rules = PalwTirCourtRulesV1 {
@@ -2138,18 +2302,78 @@ pub(crate) mod test_support {
             PalwStepFaultV1::ComputationMismatch { value_index: 1 }
         );
     }
+
+    /// **A job at exactly `layout.max_context` positions, in the CANONICAL job context, end to end**
+    /// (ref2's Phase F observation, `tir/ref2` 533e7b7fa, item 7). The context carries a TOKEN budget
+    /// (`prefill + decode ≤ max_context_tokens`, the v2 family's rule every court path checks) and the
+    /// layout a POSITION bound (`prefill + decode − 1 ≤ max_context`: the last emitted token is never
+    /// fed back), so the canonical context states `max_context + 1` tokens. Here the job touches all
+    /// `max_context` positions: the context passes the family's shape rule, the binding verifies, every
+    /// honest leaf — the last position's logits included — is acquitted, a lie at the last position is
+    /// convicted, and one more decode token is refused by both rules at the same boundary.
+    #[test]
+    fn a_job_at_exactly_max_context_positions_runs_end_to_end_in_the_canonical_context() {
+        use crate::palw_tir_attempt_v1::palw_tir_canonical_context_v1;
+        const MAX: u64 = 1 << 26;
+        let rules = PalwTirCourtRulesV1 {
+            max_step_leaf_count: MAX,
+            prompt_form: PalwPromptIdsFormV1::Flat,
+            limits: DemandLimits::UNLIMITED,
+        };
+        let canonical = |class: &PalwTirClassV1, class_id: Hash64, prompt: &[u32]| {
+            let mut ctx = palw_tir_canonical_context_v1(class, class_id, (PREFILL, DECODE)).expect("the tiny program decodes");
+            ctx.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(prompt);
+            ctx
+        };
+        let honest = tiny_execution_in(canonical, None);
+        let b = &honest.binding;
+        let max_context = b.class.layout.max_context;
+        assert_eq!(PREFILL + DECODE - 1, max_context, "the job touches exactly max_context positions");
+        assert_eq!(b.job_context.max_context_tokens, max_context + 1, "the canonical budget in tokens: positions + 1");
+        crate::palw_slash::check_job_context_shape(&b.job_context).expect("the family's token budget admits the longest job");
+        let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(b, MAX).expect("the binding verifies at max_context positions");
+        assert_eq!(verified.job.positions, max_context);
+        for leaf in 0..honest.preimages.len() as u64 {
+            let r = build_tir_cone_refutation_v1(b, leaf, &honest, &rules).expect("buildable");
+            assert_eq!(check_tir_cone_refutation_v1(&r, &rules), Err(PalwStepRefuteError::NoFaultFound), "leaf {leaf}");
+        }
+        // A lie in the last position's first leaf.
+        let space = PalwTirStepSpaceV1::new(&b.class).expect("the layout fits");
+        let last = honest.preimages.len() - space.leaves_of_position(&b.job_context, max_context - 1).len();
+        let forged = tiny_execution_in(canonical, Some((last, 0)));
+        let r = build_tir_cone_refutation_v1(&forged.binding, last as u64, &forged, &rules).expect("buildable");
+        check_tir_cone_refutation_v1(&r, &rules).expect("a lie at the last position is convicted");
+        // One more decode token: refused by the token budget and by the position bound alike.
+        let mut over = b.job_context.clone();
+        over.exact_decode_tokens += 1;
+        assert!(crate::palw_slash::check_job_context_shape(&over).is_err(), "over the token budget");
+        assert!(space.job_shape(&over).is_err(), "over the position bound");
+        // …and the two rules agree on every split of the budget.
+        for prefill in 1..=max_context {
+            let mut ctx = b.job_context.clone();
+            ctx.declared_prefill_tokens = prefill;
+            for decode in 1..=max_context + 2 {
+                ctx.exact_decode_tokens = decode;
+                assert_eq!(
+                    crate::palw_slash::check_job_context_shape(&ctx).is_ok(),
+                    space.job_shape(&ctx).is_ok(),
+                    "({prefill}, {decode}): the token budget and the position bound disagree"
+                );
+            }
+        }
+    }
 }
 
 /// **F6 D: an IR claim's data-availability answer, and the identity rule over an IR binding.**
 #[cfg(test)]
 mod da_tests {
-    use super::test_support::{DECODE, TinyExecution, tiny_execution};
+    use super::test_support::{DECODE, TinyExecution, attempt_binding, tiny_execution};
     use super::*;
     use crate::palw_offence_attribution_v1::{
         PalwClaimSourceKindV1, PalwIdentityFaultV1, PalwIdentityRulesV1, PalwOffenceTargetV1, palw_tir_binding_identity_fault_v1,
     };
     use crate::palw_offence_v1::PalwOffenceVerifyError;
-    use crate::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_context_v1, palw_tir_attempt_prompt_root_v1};
+    use crate::palw_tir_attempt_v1::palw_tir_attempt_prompt_root_v1;
 
     const MAX: u64 = 1 << 26;
 
@@ -2252,35 +2476,6 @@ mod da_tests {
         broken.step_leaf_count += 1;
         let d = PalwTirTraceEventDisclosureV1::OutOfRange { binding: Box::new(broken.clone()) };
         assert!(check(&broken, DECODE, 0, &d).is_err());
-    }
-
-    /// A binding whose parts verify (the leaf count is the job's and the root recomputes), over a
-    /// class with a canonical job: the identity rule needs no execution, only a binding.
-    fn attempt_binding(anchor: Hash64, edit: impl FnOnce(&mut PalwJobContextV2)) -> (PalwTirStepBindingV1, PalwTirJobFactsV1) {
-        let x = tiny_execution(None);
-        let mut class = x.binding.class.clone();
-        class.layout.max_context = 64;
-        let class_id = class.class_id(&x.binding.artifact_root);
-        let facts = PalwTirJobFactsV1::of_class(&class, class_id).unwrap();
-        let canonical = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(&class).unwrap();
-        let root = palw_tir_attempt_prompt_root_v1(&facts, &anchor, canonical.0, PalwPromptIdsFormV1::Flat).unwrap();
-        let mut ctx = palw_tir_attempt_context_v1(&facts, &anchor, canonical, root);
-        edit(&mut ctx);
-        let space = PalwTirStepSpaceV1::new(&class).unwrap();
-        let count = space.leaf_count_capped(&ctx, MAX).unwrap();
-        let (trace, step_root) = (Hash64::from_bytes([0x71; 64]), Hash64::from_bytes([0x72; 64]));
-        let execution = palw_tir_execution_root_v1(&ctx.context_hash(), &trace, &class_id, count, &step_root);
-        let binding = PalwTirStepBindingV1 {
-            version: PALW_TIR_STEP_BINDING_VERSION_V1,
-            job_context: ctx,
-            class,
-            artifact_root: x.binding.artifact_root,
-            full_logits_trace_root: trace,
-            step_leaf_count: count,
-            step_merkle_root: step_root,
-            committed_execution_root: execution,
-        };
-        (binding, facts)
     }
 
     fn target_of(b: &PalwTirStepBindingV1, identity: Hash64) -> PalwOffenceTargetV1 {

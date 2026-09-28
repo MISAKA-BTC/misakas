@@ -444,11 +444,49 @@ largest calibrated absmax; each gets its own activation scale and the projection
 the static int8 "outlier decomposition". Qwen2.5-1.5B's first-token MLP channels reach 1000× every
 other position; without the split, one static scale leaves ordinary tokens ~5 bits (KL 2.9 → 0.002).
 
-**Node economy.** NF-12 caps a block at 512 nodes. The lowering uses 21- and 17-node RMS/L2 unit-row
-composites that give the library templates' exact values (the exponent is taken out only when
-positive; `IntRsqrt` normalises the rest internally) and 3-node narrowings when there is no zero
-term; when a block still does not fit (GDN + MoE layers), it drops the splits of the most-read values
-and retries. Proposed for `tir_library_v1`: the lean norms.
+**The library.** The lowering emits `tir_library_v1` templates wherever one gives the values the
+lowering needs: `narrow` (every narrowing; three nodes without a zero term), `rms_unit_q24` and
+`l2_unit_q15` (the 21- and 17-node unit rows), `attention` (Q14 scores, the softmax lifted by
+`up_bits` 10, sinks), `softmax_shifted`, `softmax_with_sink`, `int_sigmoid`, `int_recip`,
+`rope_pairs`, `rope_angles_two_level`, `causal_conv` (taps stored window-major), `grouped_topk`,
+`selection_bias`, `renormalize_recip`, `moe_combine_q36`, `gdn_step_q36`, `decay_q36`,
+`softplus_q36` and `exp_refined_q36`. The lean narrowing and unit rows and the renormalisation's
+`[0, 2^25]` clamp were added to the library for this lowering (tir/core `23c6d4efd`): with the
+earlier 5-, 39- and 27-node forms Qwen3.5-MoE, Qwen3-Next and DeepSeek-V3 did not fit NF-12's 512
+nodes a block at all. Switching to them left every program's bytes unchanged (the renormalisation's
+shift is typed `i128` there: the MoE programs' bytes moved, their values did not), and switching
+attention left all 57 fixtures' metrics identical to every printed digit. The lowering keeps its own
+composite only where the function differs:
+
+| the lowering's own | why not the library's |
+| --- | --- |
+| soft-capping | `cap·tanh(s/cap)` formed in Q24 from the score's narrowing (no division), then narrowed to Q14; `softcap_q24` divides by the cap. |
+| ALiBi | Falcon's bfloat16-rounded `slope·j` table, and `slope·(j − pos)` (far keys stay small instead of relying on the maximum subtraction). |
+| attention with a value width unlike the query's | the template reads one `head_dim` for both. |
+| MLA | the same contractions as `mla_absorbed` (the value half stored per row, not transposed), with commit points on the absorbed query and the latent context the template does not expose. |
+| LayerNorm | inputs of any width: the exact centring `n·x − Σx` is shifted into `i32` (`layer_norm_exact` needs `n·x` to fit) and normed by the 21-node unit row with one `i64` eps. |
+| partial rotary | YaRN's attention factor scales the pass-through lanes too; `rope_partial` passes them unchanged. |
+| RWKV-4 WKV, the selective scan | half-away rounding and a Q16 denominator (WKV); `D` folded into its narrowing and one decay form for Mamba-1 and -2 (the scan) — the same recurrences as `rwkv4_step`, `mamba1_step`/`mamba2_step`, rounded differently. |
+
+**Node economy.** When a block still does not fit (the gated-delta + MoE layers of Qwen3.5-MoE and
+Qwen3-Next), the lowering drops the outlier splits of the most-read values and retries;
+`Lowered::budget_fallbacks` names such blocks (today only those two, at 467 nodes with splits for
+values read by at most three projections).
+
+**History windows (NF-8).** A node output has at most `2^28` elements at the worst case, so a
+history row of more than 1,024 lanes does not fit a `2^18` window. The lowering caps a block's
+window at the largest power of two its widest history row fits (a 4,096-lane MHA row: `2^16`):
+up to that window the program is the model, and a layout whose `max_context` stays inside it never
+sees the cap. Before the cap, 17 real configurations (every MHA 7B, Phi-2/3.5/4, Gemma-7B/2-9B, OLMo,
+Pythia …) did not lower at all.
+
+**Admission.** `tir_admit_v1` (tir/core, spec 04b §10.3) admits every lowered program the tools
+produce: all 57 fixtures and every lowerable real configuration at the legacy court's ceilings
+(`tile_len` 64, `h_chunk` 64; `tests/admission.rs`), except DeepSeek-V3, refused by name (2.26e12
+MACs a position at a `2^18` window, past `2^40`). The worst terminal tile is Falcon-40B's 2.6 Mi
+MACs of 16 Mi, so no commit point is added for cone size. `palw-tir-check` prints the admission
+(costs, windows, cones, `C`, cone work, or the refusal), and `palw-class check-architecture`'s IR
+mode takes its verdict from it under the network's `palw_tir_v1` ceilings.
 
 **Artifact.** `artifact::write` writes a `PALWTIR1` container (`misaka-palw-tir-artifact`, Phase F
 F3): the program, its layout and tokenizer id, and every param tensor typed little-endian in
@@ -466,13 +504,51 @@ KL median 1.4e-4 (max 0.012, Qwen3.5-MoE), |perplexity Δ| ≤ 2.1 %:
 | MoE (Mixtral, Qwen2/3-MoE, OLMoE, GraniteMoE, gpt-oss, DeepSeek-V2/V2-Lite/V3 with MLA and group-limited or sigmoid routing) | 9 | 0.97–1.00 | ≤ 5.2e-4 |
 | recurrent / hybrid (Qwen3-Next, Qwen3.5 dense/MoE/VL — gated delta; Mamba, FalconMamba, Mamba2, Jamba; RWKV-4) | 9 | 0.93–1.00 | ≤ 1.2e-2 |
 
+**Qwen2.5-1.5B-Instruct** (the on-disk checkpoint, BF16 safetensors; no download). Calibration:
+8 sequences × 128 tokens of repository text (`docs/archival.md`, `docs/crescendo-guide.md`,
+`docs/connecting-ethereum-tooling.md`, `docs/node-liveness-probe.md`, two chunks each, tokenised
+offline by `tools/tokenize_docs.py`), streamed layer by layer: 300 s, 1.7 GB peak. Artifact:
+1,636 tensors, 1,527.9 MiB, a `PALWTIR1` container bound to the checkpoint's `tokenizer.json` (the
+legacy tokenizer commitment); `palw-class manifest` streams its inventory root over 1,445,615
+leaves in ~6 s. Residual scale 1.348e-5, logit scale 6.052e-8. Program:
+312 nodes, 13,903 bytes, one `attn+mlp` block of 270 nodes ×28, admitted (2.41e10 MACs a
+position at `W = 2^18`, 17 cones, the worst tile 0.57 Mi MACs). Evaluation on held-out text
+(the first 128 tokens of `docs/README.md` and of `docs/evm-differences-from-ethereum.md`), the
+integer program on the reference evaluator against the f32 reference:
+
+| positions | top-1 | mean KL (max) | perplexity float → integer |
+| --- | --- | --- | --- |
+| 256 (2 × 128) | 0.973 | 0.00138 (0.0063) | 60.37 → 60.69 (+0.53 %) |
+
+The 256-position run used the program as it was before the lean norms (388 nodes, the same values
+by construction); the final program (312 nodes, after the tir/core merge and the library switch)
+reproduces the 16-position check of `docs/README.md` exactly — top-1 1.000, KL 0.00161 (max
+0.0057), perplexity 185.51 → 189.46 — and writes the tensors whose inventory root the manifest
+above records.
+
+The reference evaluator (every value an `i128`) takes ~20 s a position at 1.5B and peaks at
+7.4 GB with a 128-row history; the typed backend (tir/node, F9) is the fast path.
+
 ## 11. Reproducing
 
 ```sh
 export CARGO_TARGET_DIR=…/tir-lower-target CARGO_BUILD_JOBS=4
-cargo test -p misaka-palw-tir-lower            # 128 tests; HF fixtures are skipped if absent
+cargo test --release -p misaka-palw-tir-lower  # 190 tests; HF fixtures are skipped if absent
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
   …/tir-venv/bin/python misaka-palw-tir-lower/tools/gen_hf_fixtures.py [name …]   # regenerate
 cargo run -p misaka-palw-tir-lower --bin palw-tir-check -- \
-  --config misaka-palw-tir-lower/tests/configs/real/qwen3-next-80b-a3b-instruct.json
+  --config misaka-palw-tir-lower/tests/configs/real/qwen3-next-80b-a3b-instruct.json [--tile-len 64 --h-chunk 64]
+# The real checkpoint (one process at a time; ~7.4 GB peak):
+HF_HUB_OFFLINE=1 …/tir-venv/bin/python misaka-palw-tir-lower/tools/tokenize_docs.py …   # calib / eval token files
+cargo run --release -p misaka-palw-tir-lower --bin palw-tir-fidelity -- ~/Downloads/Qwen2.5-1.5B-Instruct \
+  --calib qwen25-calib.json --eval qwen25-eval.json --eval-seqs 2 --positions 128 \
+  --artifact-out qwen25.palwtir --tir-out qwen25.tir --json
+# The same on the typed backend (byte-identical, ~300x faster at 1.5B), with a reference cross-check
+# and, for recurrent models, the 4,096-position drift:
+cargo run --release -p misaka-palw-tir-lower --bin palw-tir-fidelity -- <checkpoint> \
+  --calib calib.json --eval eval.json --exec --cross-check 2 [--eval drift.json --positions 4096 --drift]
+# The legacy dense row and its IR program, same logits and rows (D-F1, offline):
+cargo run --release -p misaka-palw-base0 --bin palw-a16-to-tir -- --artifact <512-wide.palwart> --respan 8192 --out genesis-8k.palwtir
+cargo run --release -p misaka-palw-sdk --bin palw-tir-equiv -- --network testnet-12 \
+  --artifact <512-wide.palwart> --respan --tir genesis-8k.palwtir --prompts 32
 ```
