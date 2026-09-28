@@ -26,7 +26,7 @@ use crate::Hash64;
 use crate::palw_gen_class_v1::PalwGenClassV1;
 use crate::palw_tir_class_v1::PalwTirLayoutV1;
 use misaka_palw_tir::demand::{DemandContext, history_length_v1};
-use misaka_palw_tir::pipeline::{StageRun, TirPipelineV1, TripRule};
+use misaka_palw_tir::pipeline::{StageRun, TirPipelineV1};
 use misaka_palw_tir::program::StateKind;
 use misaka_palw_tir::program_v2::TirProgramV2;
 use misaka_palw_tir::types::DType;
@@ -282,7 +282,9 @@ impl PalwGenStepSpaceV1 {
             .iter()
             .enumerate()
             .map(|(s, st)| {
-                let text = matches!(st.trip, TripRule::TextStream);
+                // A stream stage's logits (the text stage's, or a decode stage's: RFC-0004 §7.2) are
+                // leaves only where the decode consumes them.
+                let text = misaka_palw_tir::pipeline::is_stream(st.trip);
                 let consumed = text.then(|| prompt_len.saturating_sub(1));
                 PalwGenStageSpaceV1::new(s as u8, &programs[st.program as usize], &layouts[s], trips[s], consumed)
             })
@@ -345,7 +347,7 @@ impl PalwGenStepSpaceV1 {
         }
         let mut total = 0u128;
         for (s, st) in pipeline.stages.iter().enumerate() {
-            let text = matches!(st.trip, TripRule::TextStream);
+            let text = misaka_palw_tir::pipeline::is_stream(st.trip);
             let consumed = text.then(|| consumed_from.unwrap_or(prompt_len.saturating_sub(1)));
             let count = stage_leaf_count(s as u8, &programs[st.program as usize], &layouts[s], trips[s], consumed)?;
             total = total.saturating_add(count);

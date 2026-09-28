@@ -44,7 +44,7 @@ use crate::palw_gen_worker_v1::{PalwGenClaimRootsV1, PalwGenDecodeV1};
 use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use crate::palw_step_leg::PalwStepFaultV1;
 use misaka_palw_tir::demand::DemandLimits;
-use misaka_palw_tir::pipeline::{Binding, PipelineJob, StageJobFacts, TirPipelineV1, TokenSource, TripRule, stage_job_facts};
+use misaka_palw_tir::pipeline::{Binding, PipelineJob, StageJobFacts, TirPipelineV1, TokenSource, stage_job_facts};
 use misaka_palw_tir::program_v2::TirProgramV2;
 
 /// Wire version of every object in this module.
@@ -245,7 +245,7 @@ pub enum PalwGenBindingOutcomeV1 {
 /// stage whose token run is the prompt's, and a stage a job-token binding feeds the prompt to.
 pub fn palw_gen_stage_reads_prompt_v1(pipeline: &TirPipelineV1, stage: usize) -> bool {
     let Some(st) = pipeline.stages.get(stage) else { return false };
-    matches!(st.trip, TripRule::TextStream)
+    misaka_palw_tir::pipeline::is_stream(st.trip)
         || st.tokens.as_ref().is_some_and(|r| r.source == TokenSource::Prompt)
         || st.bind.iter().any(|b| matches!(b, Binding::JobTokens { rule } if rule.source == TokenSource::Prompt))
 }
@@ -585,7 +585,8 @@ pub fn check_gen_decode_close_v1(
     if let Some(narrowed) = narrowed {
         let (stage, local) = v.space.locate(narrowed).ok_or(PalwGenCloseErrorV1::NotTheNarrowedLeaf { opened: u64::MAX, narrowed })?;
         let leaf = v.space.stages[stage as usize].leaves()[local as usize];
-        let out = v.pipeline.output_stage;
+        let out = misaka_palw_tir::pipeline::stream_stage(&v.pipeline)
+            .ok_or_else(|| PalwGenCloseErrorV1::Binding("the pipeline has no stream stage".into()))? as u8;
         let program = &v.programs[v.pipeline.stages[out as usize].program as usize];
         let post = (program.occurrences().len() - 1) as u16;
         let row_kind = PalwGenLeafKindV1::Commit { occurrence: post, node: program.output.node() };
@@ -714,7 +715,7 @@ impl PalwGenEvidenceV1<'_> {
     /// **A decode close of generated id `t`**: every tile of its logits row.
     pub fn decode_close(&self, t: u32) -> Result<PalwGenDecodeCloseV1, String> {
         let v = self.verified()?;
-        let out = v.pipeline.output_stage as usize;
+        let out = misaka_palw_tir::pipeline::stream_stage(&v.pipeline).ok_or("the pipeline has no stream stage")?;
         let program = &v.programs[v.pipeline.stages[out].program as usize];
         let post = (program.occurrences().len() - 1) as u16;
         let kind = PalwGenLeafKindV1::Commit { occurrence: post, node: program.output.node() };

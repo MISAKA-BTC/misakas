@@ -15,6 +15,12 @@
 //! * `pipelines/toy-encdec.json` — the encoder–decoder pipeline (RFC-0003 §II.2.2): the job's source
 //!   (`TokenSource::Source`) through the encoder, a prompt that starts with the class's forced start
 //!   id, the greedy selector's generated ids, and every stage's positions;
+//! * `pipelines/eval-{exact-match,ref-loglik,judge,pairwise}.json` — RFC-0004 §7's evaluation
+//!   pipelines: a decode stage and an exact-match stage over what it decoded; a teacher-forced decode
+//!   stage and RefLogLik over its consumed rows; a judge over a finalized claim's generation; a
+//!   pairwise judge over two — each with its score digest (`TensorLe i32`);
+//! * `scoring/{exact-match,ref-loglik,judge,pairwise}.json` — the scoring library (RFC-0004 §7.3):
+//!   each program's canonical bytes and identity, its inputs, and cases (inputs → score);
 //! * `encoding.json` — byte strings `TirProgramV2::decode_canonical` / `TirProgram::decode_canonical`
 //!   must accept or refuse, with the class.
 //!
@@ -396,6 +402,20 @@ struct JobJson {
     /// The job's source ids (RFC-0003 §II.2.2; absent for a job with none — every earlier file).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     source: Vec<u32>,
+    /// The item's key ids (RFC-0004 §7.3; absent for a job with none).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    key: Vec<u32>,
+    /// The finalized claims' generated ids a job reads (RFC-0004 §7.2; absent for a job with none).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    finalized: Vec<FinalizedJson>,
+}
+
+/// One finalized claim's generated ids, as a job carries them (`TokenSource::FinalizedOutput`).
+#[derive(Serialize)]
+struct FinalizedJson {
+    claim: u8,
+    stage: u8,
+    ids: Vec<u32>,
 }
 
 /// A job image: what the executor holds (the bytes) and what the chain holds (`input_root`), with
@@ -523,6 +543,8 @@ fn pipelines() {
             images: vec![],
             generated: vec![],
             source: vec![],
+            key: vec![],
+            finalized: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1237,6 +1259,8 @@ fn bidirectional_pipeline_vector() {
             images: vec![],
             generated: vec![],
             source: vec![],
+            key: vec![],
+            finalized: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1324,6 +1348,8 @@ fn vision_pipeline_vector() {
             images,
             generated: vec![],
             source: vec![],
+            key: vec![],
+            finalized: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1406,6 +1432,8 @@ fn vlm_pipeline_vector() {
             images,
             generated,
             source: vec![],
+            key: vec![],
+            finalized: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1465,6 +1493,8 @@ fn encdec_pipeline_vector() {
             images: vec![],
             generated,
             source: job.source.clone(),
+            key: vec![],
+            finalized: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1479,4 +1509,313 @@ fn encdec_pipeline_vector() {
         },
     };
     check_or_bless("pipelines/toy-encdec.json", serde_json::to_string_pretty(&file).unwrap());
+}
+
+// ---------------------------------------------------------------------------------------------
+// RFC-0004 §7: the scoring library and the evaluation pipelines
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct ScoringInputJson {
+    name: String,
+    dtype: String,
+    shape: Vec<u32>,
+    interval: [String; 2],
+}
+
+#[derive(Serialize)]
+struct ScoringCaseJson {
+    name: String,
+    inputs: Vec<TensorJson>,
+    output: TensorJson,
+}
+
+#[derive(Serialize)]
+struct ScoringFileJson {
+    format: String,
+    spec: String,
+    name: String,
+    library_version: u16,
+    shape: String,
+    program_borsh_hex: String,
+    graph_ir_root_hex: String,
+    inputs: Vec<ScoringInputJson>,
+    cases: Vec<ScoringCaseJson>,
+}
+
+const SCORING_SPEC: &str = "docs/rfc/0004-palw-model-improvement.md §7.3";
+
+fn scoring_file(name: &str, shape: String, p: &TirProgramV2, cases: Vec<(&str, Vec<Tensor>)>) -> ScoringFileJson {
+    let interp = InterpreterV2::new(p).unwrap();
+    let cases = cases
+        .into_iter()
+        .map(|(case, inputs)| {
+            let mut m = MapInputs::default();
+            for (k, t) in inputs.iter().enumerate() {
+                m.constant.insert(k as u16, t.clone());
+            }
+            let out = interp.step(&MapParams::default(), &m, &mut RunState::default(), 0).unwrap().output;
+            ScoringCaseJson { name: case.into(), inputs: inputs.iter().map(tj).collect(), output: tj(&out) }
+        })
+        .collect();
+    ScoringFileJson {
+        format: "palw-tir-v2/scoring-vectors/1".into(),
+        spec: SCORING_SPEC.into(),
+        name: name.into(),
+        library_version: misaka_palw_tir::scoring::SCORING_LIBRARY_VERSION_V1,
+        shape,
+        program_borsh_hex: hex(&p.encode()),
+        graph_ir_root_hex: root(&p.encode()),
+        inputs: p
+            .inputs
+            .iter()
+            .map(|d| {
+                let (lo, hi) = d.interval();
+                ScoringInputJson {
+                    name: d.name.clone(),
+                    dtype: d.dtype.name().into(),
+                    shape: d.shape.clone(),
+                    interval: [lo.to_string(), hi.to_string()],
+                }
+            })
+            .collect(),
+        cases,
+    }
+}
+
+fn idx_t(v: &[u32], len: u32) -> Tensor {
+    let mut data: Vec<i128> = v.iter().map(|x| *x as i128).collect();
+    data.resize(len as usize, 0);
+    Tensor::new(DType::Idx, vec![len as usize], data).unwrap()
+}
+
+fn sc(dtype: DType, v: i128) -> Tensor {
+    Tensor::scalar(dtype, v).unwrap()
+}
+
+#[test]
+fn scoring_vectors() {
+    use misaka_palw_tir::scoring::*;
+    // ExactMatch at G = 8, K = 4, ids below 16.
+    let em = exact_match_v1(ExactMatchShapeV1 { gen_len: 8, key_len: 4, token_bound: 16 }).unwrap();
+    let case = |generated: &[u32], key: &[u32], open: i64, close: i64| {
+        let inputs = vec![
+            idx_t(generated, 8),
+            sc(DType::Idx, generated.len() as i128),
+            idx_t(key, 4),
+            sc(DType::Idx, key.len() as i128),
+            sc(DType::I32, open as i128),
+            sc(DType::I32, close as i128),
+        ];
+        assert_eq!(
+            misaka_palw_tir::scoring::exact_match_reference_v1(generated, key, open, close),
+            {
+                let interp = InterpreterV2::new(&em).unwrap();
+                let mut m = MapInputs::default();
+                for (k, t) in inputs.iter().enumerate() {
+                    m.constant.insert(k as u16, t.clone());
+                }
+                interp.step(&MapParams::default(), &m, &mut RunState::default(), 0).unwrap().output.data[0] == 1
+            },
+            "{generated:?} {key:?} {open} {close}"
+        );
+        inputs
+    };
+    let em_cases = vec![
+        ("delimited, the key", case(&[9, 1, 4, 7, 2, 11], &[4, 7], 1, 2)),
+        ("delimited, another span", case(&[9, 1, 4, 8, 2, 11], &[4, 7], 1, 2)),
+        ("no delimiters: the whole output", case(&[4, 7, 5], &[4, 7, 5], -1, -1)),
+        ("no opening delimiter to find", case(&[4, 7, 2], &[4, 7], 1, 2)),
+        ("no closing delimiter to find", case(&[1, 4, 7], &[4, 7], 1, 2)),
+        ("no closing delimiter named: to the count", case(&[3, 1, 4, 7], &[4, 7], 1, -1)),
+        ("an empty key between adjacent delimiters", case(&[1, 2, 9], &[], 1, 2)),
+        ("the span longer than the key", case(&[1, 4, 7, 7, 2], &[4, 7], 1, 2)),
+        ("the first opening delimiter counts", case(&[1, 5, 2, 1, 4, 7, 2], &[5], 1, 2)),
+        ("one id delimits both ends", case(&[3, 6, 3, 9], &[6], 3, 3)),
+        ("a delimiter id in the pad past the count is not read", case(&[1, 4, 7], &[4, 7], 1, 0)),
+        ("an empty output", case(&[], &[], -1, -1)),
+        ("a full output, a full key", case(&[1, 10, 11, 12, 13, 2, 0, 0], &[10, 11, 12, 13], 1, 2)),
+    ];
+    let file = scoring_file("exact-match", "G = 8, K = 4, token_bound = 16".into(), &em, em_cases);
+    check_or_bless("scoring/exact-match.json", serde_json::to_string_pretty(&file).unwrap());
+
+    // RefLogLik at R = 4 rows of [1, 8].
+    let rl = ref_loglik_v1(&RefLogLikShapeV1 { rows: 4, row: vec![1, 8] }).unwrap();
+    let rows_t = |rows: &[[i32; 8]]| {
+        let mut data: Vec<i128> = rows.iter().flatten().map(|x| *x as i128).collect();
+        data.resize(4 * 8, 0);
+        Tensor::new(DType::I32, vec![4, 1, 8], data).unwrap()
+    };
+    let rl_case = |rows: &[[i32; 8]], refs: &[u32], scale: i64| {
+        let want = ref_loglik_reference_v1(&rows.iter().map(|r| r.to_vec()).collect::<Vec<_>>(), refs, scale);
+        let inputs = vec![
+            rows_t(rows),
+            sc(DType::Idx, rows.len() as i128),
+            idx_t(refs, 4),
+            sc(DType::Idx, refs.len() as i128),
+            sc(DType::I32, scale as i128),
+        ];
+        let interp = InterpreterV2::new(&rl).unwrap();
+        let mut m = MapInputs::default();
+        for (k, t) in inputs.iter().enumerate() {
+            m.constant.insert(k as u16, t.clone());
+        }
+        let out = interp.step(&MapParams::default(), &m, &mut RunState::default(), 0).unwrap().output;
+        assert_eq!(ref_loglik_join_v1(out.data[0] as i32, out.data[1] as i32), want);
+        inputs
+    };
+    let uniform = [[0i32; 8]; 3];
+    let steep = [[0, 0, 0, 5000, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 5000]];
+    let mixed = [[-3, 12, 7, 0, 1, -40, 22, 5], [100_000, -100_000, 0, 1, 2, 3, 4, 5], [i32::MAX, i32::MIN, 0, 0, 0, 0, 0, 0], [7; 8]];
+    let rl_cases = vec![
+        ("uniform rows: 3 · −ln 8", rl_case(&uniform, &[0, 5, 7], 1 << 24)),
+        ("scale 0: every row uniform", rl_case(&mixed, &[1, 2, 3, 4], 0)),
+        ("the reference each row's maximum: near 0", rl_case(&steep, &[3, 7], 1 << 20)),
+        ("the reference below each row's maximum", rl_case(&steep, &[0, 0], 1 << 20)),
+        ("mixed rows at 2^16", rl_case(&mixed, &[6, 0, 1, 2], 1 << 16)),
+        ("mixed rows at the largest scale", rl_case(&mixed, &[0, 1, 0, 7], i32::MAX as i64)),
+        ("no reference: 0", rl_case(&mixed[..0], &[], 1 << 24)),
+    ];
+    let file = scoring_file("ref-loglik", "R = 4, row = [1, 8]".into(), &rl, rl_cases);
+    check_or_bless("scoring/ref-loglik.json", serde_json::to_string_pretty(&file).unwrap());
+
+    // Judge, clamped to [−1000, 1000].
+    let jd = judge_v1(-1000, 1000).unwrap();
+    let one = |v: i128| vec![Tensor::new(DType::I32, vec![1], vec![v]).unwrap()];
+    let file = scoring_file(
+        "judge",
+        "lo = −1000, hi = 1000".into(),
+        &jd,
+        vec![("inside", one(-17)), ("at the top", one(1000)), ("above", one(1 << 30)), ("below", one(i32::MIN as i128))],
+    );
+    check_or_bless("scoring/judge.json", serde_json::to_string_pretty(&file).unwrap());
+
+    // Pairwise.
+    let pw = pairwise_v1().unwrap();
+    let pc = |pref: i128, order: i128, margin: i128| {
+        vec![Tensor::new(DType::I32, vec![1], vec![pref]).unwrap(), sc(DType::I32, order), sc(DType::I32, margin)]
+    };
+    let file = scoring_file(
+        "pairwise",
+        "—".into(),
+        &pw,
+        vec![
+            ("A preferred, A the candidate", pc(40, 0, 5)),
+            ("A preferred, A the parent", pc(40, 1, 5)),
+            ("B preferred, A the candidate", pc(-40, 0, 5)),
+            ("B preferred, A the parent", pc(-40, 1, 5)),
+            ("within the margin: a tie", pc(5, 0, 5)),
+            ("just past the margin", pc(-6, 1, 5)),
+            ("margin 0, preference 0", pc(0, 0, 0)),
+        ],
+    );
+    check_or_bless("scoring/pairwise.json", serde_json::to_string_pretty(&file).unwrap());
+}
+
+/// One evaluation pipeline's vector: its run under `job` (generated by `select` when given), every
+/// stage's positions, and the score's digest (`TensorLe i32`, tile 4).
+fn eval_file(
+    name: &str,
+    (p, programs): (TirPipelineV1, Vec<TirProgramV2>),
+    seed: u64,
+    job: PipelineJob,
+    select: Option<usize>,
+) -> PipelineFileJson {
+    let params = ProgramParams(programs.iter().enumerate().map(|(i, prog)| materialize_v2(prog, seed + i as u64)).collect());
+    let random = GenRandom { seed: [0; 32], position: 0 };
+    let (run, job) = match select {
+        Some(limit) => {
+            let (run, generated) = run_text_pipeline(&p, &programs, &params, &random, &job, &mut greedy(limit)).unwrap();
+            let committed = PipelineJob { generated, ..job };
+            assert_eq!(run_pipeline(&p, &programs, &params, &random, &committed).unwrap(), run, "{name}: the replay");
+            (run, committed)
+        }
+        None => (run_pipeline(&p, &programs, &params, &random, &job).unwrap(), job),
+    };
+    let stages = run
+        .stages
+        .iter()
+        .zip(&p.stages)
+        .map(|(r, st)| {
+            let tokens = if r.tokens.is_empty() { vec![0; r.trip as usize] } else { r.tokens.clone() };
+            StageJson { name: st.name.clone(), trip: r.trip, tokens: r.tokens.clone(), steps: steps_json(&r.steps, &tokens) }
+        })
+        .collect();
+    let spec = misaka_palw_gen::output::OutputSpecV1::tensor_le(2, vec![run.output.data.len() as u32], 0);
+    let values: Vec<i64> = run.output.data.iter().map(|v| *v as i64).collect();
+    PipelineFileJson {
+        format: "palw-tir-v2/pipeline-vectors/1".into(),
+        spec: SCORING_SPEC.into(),
+        name: name.into(),
+        pipeline_borsh_hex: hex(&p.encode()),
+        programs: programs
+            .iter()
+            .zip(&params.0)
+            .map(|(prog, m)| PipelineProgramJson {
+                program_borsh_hex: hex(&prog.encode()),
+                graph_ir_root_hex: root(&prog.encode()),
+                params: params_json(m),
+            })
+            .collect(),
+        job: JobJson {
+            prompt: job.prompt.clone(),
+            negative: vec![],
+            steps: job.steps,
+            scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
+            images: vec![],
+            generated: job.generated.clone(),
+            source: vec![],
+            key: job.key.clone(),
+            finalized: job
+                .finalized
+                .iter()
+                .map(|((claim, stage), ids)| FinalizedJson { claim: *claim, stage: *stage, ids: ids.clone() })
+                .collect(),
+        },
+        seed_hex: hex(&random.seed),
+        item_index: random.position,
+        random_inputs: vec![],
+        stages,
+        output: tj(&run.output),
+        output_image: OutputImageJson {
+            spec_borsh_hex: hex(&spec.encode()),
+            tile_len: 4,
+            canonical_hex: hex(&spec.canonical_bytes(&values).unwrap()),
+            output_root_hex: hex(&misaka_palw_gen::output::output_root_v1(&spec, &values, 4).unwrap()),
+        },
+    }
+}
+
+#[test]
+fn eval_pipeline_vectors() {
+    // Generate, then ExactMatch: the key is the span between the first and the fourth generated id.
+    let (p, programs) = eval_exact_match_pipeline();
+    let params = ProgramParams(programs.iter().enumerate().map(|(i, prog)| materialize_v2(prog, 600 + i as u64)).collect());
+    let random = GenRandom { seed: [0; 32], position: 0 };
+    let probe = PipelineJob { prompt: vec![3, 5, 7], scalars: vec![-1, -1], ..PipelineJob::default() };
+    let (_, g) = run_text_pipeline(&p, &programs, &params, &random, &probe, &mut greedy(4)).unwrap();
+    let job = PipelineJob {
+        prompt: vec![3, 5, 7],
+        key: g[1..3].to_vec(),
+        scalars: vec![g[0] as i64, g[3] as i64],
+        ..PipelineJob::default()
+    };
+    let file = eval_file("eval-exact-match", (p, programs), 600, job, Some(4));
+    check_or_bless("pipelines/eval-exact-match.json", serde_json::to_string_pretty(&file).unwrap());
+    // Teacher-forced, then RefLogLik.
+    let job = PipelineJob { prompt: vec![3, 5], generated: vec![7, 2, 9, 9], scalars: vec![1 << 12], ..PipelineJob::default() };
+    let file = eval_file("eval-ref-loglik", eval_ref_loglik_pipeline(), 700, job, None);
+    check_or_bless("pipelines/eval-ref-loglik.json", serde_json::to_string_pretty(&file).unwrap());
+    // A judge over the prompt and claim 0's generation.
+    let job = PipelineJob { prompt: vec![4, 5], finalized: BTreeMap::from([((0, 0), vec![3, 9, 1, 1])]), ..PipelineJob::default() };
+    let file = eval_file("eval-judge", eval_judge_pipeline(), 800, job, None);
+    check_or_bless("pipelines/eval-judge.json", serde_json::to_string_pretty(&file).unwrap());
+    // A pairwise judge over claims 0 and 1, R's order 1 (A is the parent), margin 0.
+    let job = PipelineJob {
+        scalars: vec![1, 0],
+        finalized: BTreeMap::from([((0, 0), vec![3, 9, 1, 1]), ((1, 0), vec![2, 2, 8])]),
+        ..PipelineJob::default()
+    };
+    let file = eval_file("eval-pairwise", eval_pairwise_pipeline(), 900, job, None);
+    check_or_bless("pipelines/eval-pairwise.json", serde_json::to_string_pretty(&file).unwrap());
 }

@@ -135,8 +135,9 @@ pub fn palw_gen_stage_answers_v1(
                     let up_prog = &programs[pipeline.stages[*up as usize].program as usize];
                     let iv = misaka_palw_tir::interval_v2::output_interval_v2(up_prog)?;
                     let per_row: u64 = d.shape[1..].iter().map(|x| *x as u64).product();
-                    let rows =
-                        facts.get(*up as usize).ok_or_else(|| missing(format!("no facts of stage {up}")))?.trip.saturating_sub(*drop);
+                    // A decode stage's rows start at its first consumed position (RFC-0004 §7.2).
+                    let up_facts = facts.get(*up as usize).ok_or_else(|| missing(format!("no facts of stage {up}")))?;
+                    let rows = up_facts.trip.saturating_sub(up_facts.rows_from).saturating_sub(*drop);
                     PalwGenInputAnswerV1::Edge { lo: iv.lo, hi: iv.hi, kept: rows as u64 * per_row }
                 }
                 Binding::StageFinal { stage: up } => {
@@ -449,7 +450,9 @@ fn edge_leaf(case: &PalwGenCourtCaseV1<'_>, stage: usize, input: u16, index: usi
         Binding::StageRows { stage: u, drop, .. } => {
             let prog = &case.programs[case.pipeline.stages[stage].program as usize];
             let row: u64 = prog.inputs[input as usize].shape[1..].iter().map(|d| *d as u64).product();
-            (*u, (index as u64 / row) as u32 + drop, index as u64 % row)
+            // A decode stage's rows are its consumed logits rows (RFC-0004 §7.2).
+            let from = case.space.stages[*u as usize].consumed_from.unwrap_or(0);
+            (*u, (index as u64 / row) as u32 + drop + from, index as u64 % row)
         }
         _ => return None,
     };
@@ -746,7 +749,9 @@ pub fn palw_gen_decode_door_v1(
     row: &[PalwGenOpenedLeafV1],
 ) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
-    let s = case.pipeline.output_stage as usize;
+    // The stream stage: the text stage, or a decode stage before a pipeline's scoring (RFC-0004 §7.2).
+    let s = misaka_palw_tir::pipeline::stream_stage(case.pipeline)
+        .ok_or_else(|| R::Incomplete("the pipeline has no stream stage".into()))?;
     let sp = &case.space.stages[s];
     let prog = &sp.program;
     let post_occ = (prog.occurrences().len() - 1) as u16;
