@@ -71,6 +71,12 @@ pub enum PalwQwen36OpError {
     LengthMismatch { a: usize, b: usize },
     /// An A16 row carried a lane outside `±A16_CODE_MAX`.
     NotA16Codes,
+    /// An intermediate left `i64` — where it used to PANIC, under the release profile's
+    /// `overflow-checks = true`, inside block processing when the court recomputed the step. Only
+    /// operands no honest execution produces reach it (committed lanes at the `i32` rails, a
+    /// registered table at its rails), and refusing exactly the inputs that panicked, and no
+    /// other, is what keeps every answer the court gave before unchanged.
+    Overflow,
 }
 
 impl From<PalwA16OpError> for PalwQwen36OpError {
@@ -200,9 +206,19 @@ pub fn q36_moe_combine(outputs: &[i32], weights: &[i32], width: usize, params: A
     if outputs.is_empty() {
         return Err(PalwQwen36OpError::Empty);
     }
+    //
+    // **That bound is the honest one, not the one the court is handed.** The routing weights are
+    // at most `ONE` only when the router computed them; in the court they are the committed lanes
+    // of the routing row, any `i32`, and `k` products of `i32 · i32` sum past `i64` from `k = 2`.
+    // The sum used to be `Iterator::sum`, which PANICKED there — in block processing, on every
+    // node, from nothing but a producer's own committed rows. Summed in the same order with each
+    // step checked, it refuses exactly the inputs that panicked and returns every other sum
+    // unchanged. (Each product is `≤ 2^62` in magnitude and cannot overflow on its own.)
     let mut out = Vec::with_capacity(width);
     for lane in 0..width {
-        let acc: i64 = (0..k).map(|e| weights[e] as i64 * outputs[e * width + lane] as i64).sum();
+        let acc = (0..k)
+            .try_fold(0i64, |acc, e| acc.checked_add(weights[e] as i64 * outputs[e * width + lane] as i64))
+            .ok_or(PalwQwen36OpError::Overflow)?;
         out.push(a16_scale_round(acc, params.multiplier, params.shift).saturating_add(params.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX)
             as i32);
     }
@@ -558,10 +574,18 @@ pub fn q36_rope_partial(
     for head in x.chunks_exact(head_dim) {
         // The rotated half, in interleaved (even, odd) pairs — the layout the pinned table
         // indexes and the one `rope_table` already uses.
+        //
+        // **Formed in `i128` and narrowed with a check.** The rotated lanes are A16 codes when an
+        // engine computed them, but the court is handed the COMMITTED row — any `i32` — and the
+        // table is the registrant's. Each product is at most `2^62` in magnitude, and exactly one
+        // combination of rails, `a = b = c = s = i32::MIN`, sums two of them to `2^63`: that
+        // PANICKED in `i64`, in block processing, on every node. Every other input gives the
+        // value it gave before; that one is refused.
         for p in 0..pairs {
-            let (a, b) = (head[2 * p] as i64, head[2 * p + 1] as i64);
-            let (c, s) = (cos_q[p] as i64, sin_q[p] as i64);
+            let (a, b) = (head[2 * p] as i128, head[2 * p + 1] as i128);
+            let (c, s) = (cos_q[p] as i128, sin_q[p] as i128);
             for acc in [a * c - b * s, a * s + b * c] {
+                let acc = i64::try_from(acc).map_err(|_| PalwQwen36OpError::Overflow)?;
                 out.push(
                     a16_scale_round(acc, clamp.multiplier, clamp.shift).saturating_add(clamp.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX)
                         as i32,
@@ -990,8 +1014,12 @@ pub fn q36_gdn_step(
     if !(0..=ONE).contains(&decay_q) || !(0..=ONE).contains(&beta_q) {
         return Err(PalwQwen36OpError::Empty);
     }
+    // `unsigned_abs`, not `abs`: the multipliers are the REGISTRANT's triples, and `i64::MIN.abs()`
+    // PANICKED — in block processing, on every node, at any dispute over a recurrence step of a
+    // class that registered one, whatever the producer committed. The comparison is the same
+    // number for every other multiplier, and `i64::MIN` is now refused with them.
     for m in [params.read.multiplier, params.out.multiplier, params.delta.multiplier] {
-        if m.abs() > QWEN36_STATE_MULT_MAX {
+        if m.unsigned_abs() > QWEN36_STATE_MULT_MAX.unsigned_abs() {
             return Err(PalwQwen36OpError::Empty);
         }
     }
@@ -1559,5 +1587,58 @@ mod tests {
         // Refusals.
         assert!(q36_rope_partial(&x, head_dim, 5, &[one_q, one_q], &[0, 0], clamp).is_err(), "an odd rotary width is refused");
         assert!(q36_rope_partial(&x, head_dim, head_dim + 2, &[], &[], clamp).is_err(), "a rotation wider than the head is refused");
+    }
+
+    /// **The three court-path panics refuse exactly the inputs that panicked, and nothing else.**
+    ///
+    /// Each of these used to panic under `overflow-checks = true` inside block processing, where
+    /// the court recomputes a disputed step (`palw_step_refute::hostile_totality_tests` sweeps
+    /// every arm). A fix that answered differently for ANY input that did not panic would be a
+    /// consensus change; these pin the boundary on both sides.
+    #[test]
+    fn the_court_totality_fixes_refuse_exactly_what_panicked() {
+        let unity = A16QuantParams { multiplier: 1, shift: 0, zero: 0 };
+        let min = i32::MIN;
+
+        // Rope: `a·s + b·c` reaches `2^63` only at all four rails; one step inside, the `i64`
+        // arithmetic held, and the answer is the exact one.
+        assert_eq!(q36_rope_partial(&[min, min], 2, 2, &[min], &[min], unity), Err(PalwQwen36OpError::Overflow));
+        let inside = q36_rope_partial(&[min, min], 2, 2, &[min], &[min + 1], unity).expect("one step inside the rail");
+        let exact = |v: i128| v.clamp(-(A16_CODE_MAX as i128), A16_CODE_MAX as i128) as i32;
+        let (a, b, c, s) = (min as i128, min as i128, min as i128, (min + 1) as i128);
+        assert_eq!(inside, vec![exact(a * c - b * s), exact(a * s + b * c)]);
+
+        // Combine: `k` products of the `i32` rails leave `i64` from `k = 2` — refused; a sum whose
+        // partial sums stay inside is the sum it always was, and the check runs in the sum's own
+        // order, so `+, +, −` (whose SECOND partial sum overflowed) is refused as it panicked.
+        let big = 1i32 << 30;
+        assert_eq!(q36_moe_combine(&[min, min], &[min, min], 1, unity), Err(PalwQwen36OpError::Overflow));
+        assert_eq!(q36_moe_combine(&[min, min], &[min, -min.wrapping_add(1)], 1, unity).map(|v| v.len()), Ok(1));
+        assert_eq!(
+            q36_moe_combine(&[big, big, big], &[big, big, -big], 1, unity).map(|v| v.len()),
+            Ok(1),
+            "partial sums inside i64 are summed as before"
+        );
+        assert_eq!(
+            q36_moe_combine(&[min, min, min], &[min, min, i32::MAX], 1, unity),
+            Err(PalwQwen36OpError::Overflow),
+            "the second partial sum overflowed and the old sum panicked there, whatever the third term"
+        );
+
+        // GDN: a registered multiplier of `i64::MIN` is refused like every other past the ceiling;
+        // the ceiling itself is unchanged.
+        let mut state = Qwen36GdnStateV1 { d_v: 1, d_k: 1, s: vec![0] };
+        let at = |m: i64| Qwen36GdnParamsV1 {
+            read: A16QuantParams { multiplier: m, shift: 0, zero: 0 },
+            delta: unity,
+            write_shift: 0,
+            out: unity,
+        };
+        assert_eq!(q36_gdn_step(&mut state, &[1], &[1], &[1], 0, 0, at(i64::MIN)), Err(PalwQwen36OpError::Empty));
+        assert_eq!(q36_gdn_step(&mut state, &[1], &[1], &[1], 0, 0, at(-QWEN36_STATE_MULT_MAX - 1)), Err(PalwQwen36OpError::Empty));
+        assert!(
+            q36_gdn_step(&mut state, &[1], &[1], &[1], 0, 0, at(-QWEN36_STATE_MULT_MAX)).is_ok(),
+            "the ceiling is inclusive, as before"
+        );
     }
 }
