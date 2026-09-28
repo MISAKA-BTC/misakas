@@ -41,6 +41,11 @@ pub struct Model {
     /// Per `Hist` instance, the appending occurrence and the row's committed node.
     pub hist_src: BTreeMap<(u16, Option<u32>), (u32, HistIn)>,
     pub faults: BTreeMap<Question, Fault>,
+    /// Questions refused whatever their element index (keys as `Question::split` gives them).
+    pub withheld: BTreeSet<Question>,
+    /// Node values stated by a claim (a dissection's supplied reductions): listed elements are
+    /// answered, every other element of the node is refused. Overrides `nodes`.
+    pub claimed: BTreeMap<(u64, u32, u16), BTreeMap<u64, i128>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +89,9 @@ pub fn hist_sources(p: &Program) -> BTreeMap<(u16, Option<u32>), (u32, HistIn)> 
 
 impl Model {
     pub fn answer(&self, q: &Question) -> Option<Answer> {
+        if self.withheld.contains(&q.split().0) {
+            return None;
+        }
         if let Some(f) = self.faults.get(q) {
             return match f {
                 Fault::Refuse => None,
@@ -93,7 +101,12 @@ impl Model {
         }
         let at = |v: &Vec<i128>, i: u64| v.get(i as usize).copied().map(Answer::Val);
         match *q {
-            Question::Node { ctx, node, i } => at(self.nodes.get(&(ctx.pos, ctx.occ, node))?, i),
+            Question::Node { ctx, node, i } => {
+                if let Some(c) = self.claimed.get(&(ctx.pos, ctx.occ, node)) {
+                    return c.get(&i).copied().map(Answer::Val);
+                }
+                at(self.nodes.get(&(ctx.pos, ctx.occ, node))?, i)
+            }
             Question::Param { param, layer, i } => at(self.params.get(&(param, layer))?, i),
             Question::State { pos, state, layer, i } => match self.states.get(&(pos, state, layer)) {
                 Some(v) => at(v, i),
@@ -396,4 +409,62 @@ pub fn fixed_range(p: &Program, j: u16) -> Option<(i128, i128)> {
         StateKind::Fixed { lo, hi } => Some((lo as i128, hi as i128)),
         StateKind::Hist { .. } => None,
     }
+}
+
+/// The first implementation's §9.5.2 range evaluation, as a black box, on the same answers.
+#[allow(clippy::too_many_arguments)]
+pub fn first_range(
+    fp: &first::program::TirProgramV1,
+    info: &first::validate::ProgramInfo,
+    ctx: Ctx,
+    target: u16,
+    elements: &[u64],
+    supplied: &[u16],
+    range: Option<(u64, u64)>,
+    m: &Model,
+    limits: Limits,
+) -> Run {
+    let els: Vec<usize> = elements.iter().map(|&e| e as usize).collect();
+    let req = first::demand::DemandRangeRequest {
+        ctx: first::demand::DemandContext { pos: ctx.pos as u32, occurrence: ctx.occ as u16 },
+        target,
+        elements: &els,
+        supplied,
+        range: range.map(|(a, b)| (a as usize, b as usize)),
+    };
+    let lim = first::demand::DemandLimits { max_elements: limits.max_elements, max_terms: limits.max_terms };
+    let mut src = Theirs { m, asked: BTreeSet::new(), order: Vec::new() };
+    let r = catch_any(|| first::demand::eval_demanded_range(fp, info, &req, &mut src, &lim));
+    let (asked, order) = (src.asked, src.order);
+    let res = match r {
+        Ok(Ok((v, w))) => DRes::Ok(v, Work { elements: w.elements, terms: w.terms }),
+        Ok(Err(first::demand::DemandError::Tir(e))) => DRes::Err(DemandError::Class(class_from(e.kind))),
+        Ok(Err(first::demand::DemandError::WorkLimit(_))) => DRes::Err(DemandError::WorkLimit),
+        Err(msg) => DRes::Panic(msg),
+    };
+    Run { res, asked, order }
+}
+
+/// This crate's §9.5.2 range evaluation on the same answers.
+#[allow(clippy::too_many_arguments)]
+pub fn mine_range(
+    p: &Program,
+    ctx: Ctx,
+    target: u16,
+    elements: &[u64],
+    supplied: &[u16],
+    range: Option<(u64, u64)>,
+    m: &Model,
+    limits: Limits,
+) -> Run {
+    let mut src = Mine(m);
+    let mut rec = ref2::demand::Recorder::new(&mut src);
+    let r = catch_any(|| ref2::demand::eval_range(p, ctx, target, elements, supplied, range, &mut rec, limits));
+    let (asked, order) = (rec.asked, rec.order);
+    let res = match r {
+        Ok(Ok((v, w))) => DRes::Ok(v, w),
+        Ok(Err(e)) => DRes::Err(e),
+        Err(msg) => DRes::Panic(msg),
+    };
+    Run { res, asked, order }
 }
