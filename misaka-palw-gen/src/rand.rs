@@ -263,14 +263,7 @@ pub enum RandDistV1 {
 }
 
 /// Lanes `0..n` of a random input's values: the words, or the words through the Gaussian table.
-pub fn rand_values_v1(
-    domain: u16,
-    dist: RandDistV1,
-    seed: &Seed,
-    step: u32,
-    position: u32,
-    n: u64,
-) -> Result<Vec<i64>, RandErrorV1> {
+pub fn rand_values_v1(domain: u16, dist: RandDistV1, seed: &Seed, step: u32, position: u32, n: u64) -> Result<Vec<i64>, RandErrorV1> {
     let d = rand_domain_v1(domain).ok_or(RandErrorV1::UnknownDomain(domain))?;
     if dist == RandDistV1::Normal && d.word_bits != 16 {
         return Err(RandErrorV1::NormalNeedsSixteenBitWords(domain));
@@ -436,11 +429,17 @@ mod tests {
             *b = (i as u8).wrapping_mul(37).wrapping_add(11);
         }
         for k in 0..32 {
-            assert_eq!(digest_word_v1(&digest, 16, k), Some(u16::from_be_bytes([digest[2 * k as usize], digest[2 * k as usize + 1]]) as u32));
+            assert_eq!(
+                digest_word_v1(&digest, 16, k),
+                Some(u16::from_be_bytes([digest[2 * k as usize], digest[2 * k as usize + 1]]) as u32)
+            );
         }
         for k in 0..16 {
             let i = 4 * k as usize;
-            assert_eq!(digest_word_v1(&digest, 32, k), Some(u32::from_be_bytes([digest[i], digest[i + 1], digest[i + 2], digest[i + 3]])));
+            assert_eq!(
+                digest_word_v1(&digest, 32, k),
+                Some(u32::from_be_bytes([digest[i], digest[i + 1], digest[i + 2], digest[i + 3]]))
+            );
         }
         assert_eq!(digest_word_v1(&digest, 13, 0), Some((u16::from_be_bytes([digest[0], digest[1]]) >> 3) as u32));
         assert_eq!(digest_word_v1(&digest, 16, 32), None, "past the 512 bits");
@@ -454,8 +453,14 @@ mod tests {
         assert_eq!(rand_word_v1(8, &seed, 0, 0, 0), Err(RandErrorV1::UnknownDomain(8)));
         assert_eq!(rand_word_v1(IMAGE_INIT_NOISE_V1, &seed, 1, 0, 0), Err(RandErrorV1::StepNotAllowed { domain: 1, step: 1 }));
         assert_eq!(rand_word_v1(TEXT_GUMBEL_V1, &seed, 1, 0, 0), Err(RandErrorV1::StepNotAllowed { domain: 0, step: 1 }));
-        assert_eq!(rand_values_v1(CLASS_UNIFORM_V1, RandDistV1::Normal, &seed, 0, 0, 1), Err(RandErrorV1::NormalNeedsSixteenBitWords(7)));
-        assert_eq!(rand_words_v1(IMAGE_INIT_NOISE_V1, &seed, 0, 0, RAND_MAX_LANES_V1 + 1), Err(RandErrorV1::TooManyLanes(RAND_MAX_LANES_V1 + 1)));
+        assert_eq!(
+            rand_values_v1(CLASS_UNIFORM_V1, RandDistV1::Normal, &seed, 0, 0, 1),
+            Err(RandErrorV1::NormalNeedsSixteenBitWords(7))
+        );
+        assert_eq!(
+            rand_words_v1(IMAGE_INIT_NOISE_V1, &seed, 0, 0, RAND_MAX_LANES_V1 + 1),
+            Err(RandErrorV1::TooManyLanes(RAND_MAX_LANES_V1 + 1))
+        );
         assert!(rand_words_v1(IMAGE_STEP_NOISE_V1, &seed, 9, 0, 1).is_ok());
         assert!(rand_words_v1(CLASS_UNIFORM_V1, &seed, 9, 0, 1).is_ok(), "a declared step may be the scan position");
     }

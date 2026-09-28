@@ -102,9 +102,15 @@ pub enum OutputErrorV1 {
     /// The metadata does not fit the kind.
     Meta(String),
     /// The number of values is not the shape's element count.
-    Count { want: u64, got: u64 },
+    Count {
+        want: u64,
+        got: u64,
+    },
     /// A value outside the kind's value domain (a pixel above 255, a sample outside i16, …).
-    Domain { index: u64, value: i64 },
+    Domain {
+        index: u64,
+        value: i64,
+    },
     /// `tile_len` outside `[4, 2^16]`.
     TileLen(u32),
 }

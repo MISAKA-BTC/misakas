@@ -28,6 +28,10 @@
 //! * [`builder`] — a small program builder (the primitives, with shape inference).
 //! * [`library`] — `tir_library_v1`: the composite templates (legacy kernels as segments, norms,
 //!   softmax variants, activations, RoPE, attention, routing, the recurrences).
+//! * [`program_v2`], [`validate_v2`], [`interp_v2`], [`interval_v2`], [`pipeline`] — program
+//!   version 2 (RFC-0003 §I.2.3, spec 04b §15): input tensors, the `Logits`/`Rows`/`Final` output
+//!   kinds, `post` writes in `Rows`/`Final` programs, and pipelines of programs. Additive: version 1
+//!   is untouched, and version 2 runs over a version-1 view with the same primitive set.
 //!
 //! This is a leaf crate: it depends on nothing in this repository, so `kaspa-consensus-core` can
 //! depend on it for admission and the court. Identity hashing stays with the caller.
@@ -39,13 +43,18 @@ pub mod demand;
 pub mod error;
 pub mod eval;
 pub mod interp;
+pub mod interp_v2;
 pub mod interval;
+pub mod interval_v2;
 pub mod library;
+pub mod pipeline;
 pub mod prim;
 pub mod program;
+pub mod program_v2;
 pub mod tensor;
 pub mod types;
 pub mod validate;
+pub mod validate_v2;
 
 pub use error::{TirError, TirErrorKind, TirResult};
 pub use interp::{ConeEnv, Interpreter, MapParams, ParamSource, RunState, StepOutput};

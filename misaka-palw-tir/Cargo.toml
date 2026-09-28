@@ -21,6 +21,9 @@ thiserror.workspace = true
 # Reproduces the frozen BASE-0 KAT digest (`misaka_palw_base0::kat::KAT_DIGEST`) through the IR's
 # primitives without depending on the crate that generated it.
 blake2b_simd.workspace = true
+# RFC-0003's R (random inputs of version-2 programs) and canonical outputs, for the version-2 vectors;
+# the IR itself never hashes — a caller supplies random inputs.
+misaka-palw-gen.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 serde.workspace = true

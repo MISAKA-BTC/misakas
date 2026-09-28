@@ -67,7 +67,8 @@ struct D11 {
 
 fn parse_d11() -> D11 {
     let domain = between(D11_SOURCE, "pub const PALW_DECODE_SELECT_V2_GUMBEL_DOMAIN: &[u8] = b\"", "\";").as_bytes().to_vec();
-    let index_bits = between(D11_SOURCE, "pub const PALW_GUMBEL_TABLE_INDEX_BITS: u32 = ", ";").trim().parse().expect("the index width");
+    let index_bits =
+        between(D11_SOURCE, "pub const PALW_GUMBEL_TABLE_INDEX_BITS: u32 = ", ";").trim().parse().expect("the index width");
     let digest_hex = between(D11_SOURCE, "pub const PALW_GUMBEL_Q24_V1_DIGEST_HEX: &str =", ";").trim().trim_matches('"').to_string();
     let table = between(D11_SOURCE, "pub static PALW_GUMBEL_Q24_V1: [i32; PALW_GUMBEL_TABLE_LEN] = [", "];")
         .split(',')
@@ -117,9 +118,11 @@ fn check_1_the_source_is_what_domain_0_claims() {
     }
     assert_eq!(hex(state.finalize().as_bytes()), d11.digest_hex, "the parsed table is the pinned one");
     assert_eq!(d11.digest_hex, GUMBEL_Q24_V1_DIGEST_HEX, "the rand set names D11's table by its pin");
-    for (name, text) in
-        [("gumbel_index_v1", D11_GUMBEL_INDEX_V1), ("gumbel_q24_v1", D11_GUMBEL_Q24_V1), ("decode_lane_key_v2", D11_DECODE_LANE_KEY_V2)]
-    {
+    for (name, text) in [
+        ("gumbel_index_v1", D11_GUMBEL_INDEX_V1),
+        ("gumbel_q24_v1", D11_GUMBEL_Q24_V1),
+        ("decode_lane_key_v2", D11_DECODE_LANE_KEY_V2),
+    ] {
         assert!(D11_SOURCE.contains(text), "{name} is no longer the function this proof transcribes");
     }
     assert!(D11_SOURCE.contains("pub const PALW_DECODE_T_ONE: i64 = 1i64 << K;"));
@@ -203,7 +206,14 @@ fn lane_key(table: &[i32], value: i32, seed: &[u8; 32], position: u32, lane: usi
 
 /// The argmax over the lanes that carry a value and are admitted, ties to the LOWEST index
 /// (`decode_lane_beats_v2`).
-fn select(table: &[i32], values: &[Option<i32>], admitted: &dyn Fn(usize) -> bool, seed: &[u8; 32], position: u32, t: u32) -> Option<usize> {
+fn select(
+    table: &[i32],
+    values: &[Option<i32>],
+    admitted: &dyn Fn(usize) -> bool,
+    seed: &[u8; 32],
+    position: u32,
+    t: u32,
+) -> Option<usize> {
     let mut best: Option<(usize, i64)> = None;
     for (lane, v) in values.iter().enumerate() {
         let Some(v) = v else { continue };
@@ -221,7 +231,8 @@ fn select(table: &[i32], values: &[Option<i32>], admitted: &dyn Fn(usize) -> boo
 #[test]
 fn check_3_rfc0001_golden_selections_replay_through_domain_0() {
     let d11 = parse_d11();
-    let file: ProcessorFile = serde_json::from_str(include_str!("data/rfc0001-fp-v4/processor_order.json")).expect("processor_order.json");
+    let file: ProcessorFile =
+        serde_json::from_str(include_str!("data/rfc0001-fp-v4/processor_order.json")).expect("processor_order.json");
     let mut sampled = 0;
     for c in &file.cases {
         let seed = seed_from_hex(&c.seed);
@@ -230,7 +241,8 @@ fn check_3_rfc0001_golden_selections_replay_through_domain_0() {
         assert_eq!(got, c.expected_lane, "processor_order {}: T {}", c.name, c.temperature_q);
         sampled += (c.temperature_q != 0) as usize;
     }
-    let noop: NoopFile = serde_json::from_str(include_str!("data/rfc0001-fp-v4/v4_noop_equals_v3.json")).expect("v4_noop_equals_v3.json");
+    let noop: NoopFile =
+        serde_json::from_str(include_str!("data/rfc0001-fp-v4/v4_noop_equals_v3.json")).expect("v4_noop_equals_v3.json");
     for (i, c) in noop.cases.iter().enumerate() {
         let seed = seed_from_hex(&c.seed);
         let values: Vec<Option<i32>> = c.row.iter().map(|v| Some(*v)).collect();

@@ -39,7 +39,8 @@ fn check_or_bless(rel: &str, json: String) {
         std::fs::write(&path, &json).unwrap();
         return;
     }
-    let on_disk = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} is missing; run with PALW_GEN_BLESS=1", path.display()));
+    let on_disk =
+        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} is missing; run with PALW_GEN_BLESS=1", path.display()));
     assert!(on_disk == json, "{} differs from the regenerated vectors", path.display());
 }
 
@@ -193,7 +194,13 @@ fn words() {
         RefusalJson { name: "unknown-domain".into(), domain: 8, step: 0, lanes: 1, expect_error: "UnknownDomain".into() },
         RefusalJson { name: "step-on-a-zero-rule".into(), domain: 1, step: 1, lanes: 1, expect_error: "StepNotAllowed".into() },
         RefusalJson { name: "step-on-domain-0".into(), domain: 0, step: 1, lanes: 1, expect_error: "StepNotAllowed".into() },
-        RefusalJson { name: "more-lanes-than-a-tensor".into(), domain: 1, step: 0, lanes: (1 << 28) + 1, expect_error: "TooManyLanes".into() },
+        RefusalJson {
+            name: "more-lanes-than-a-tensor".into(),
+            domain: 1,
+            step: 0,
+            lanes: (1 << 28) + 1,
+            expect_error: "TooManyLanes".into(),
+        },
     ];
     for r in &refusals {
         let e = rand_words_v1(r.domain, &seed_of(0), r.step, 0, r.lanes).unwrap_err();

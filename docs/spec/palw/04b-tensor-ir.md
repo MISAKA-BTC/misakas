@@ -24,7 +24,8 @@
 
 Contents: §0 conventions · §1 terminology · §2 types · §3 the program · §4 the encoding ·
 §5 normal form · §6 primitives · §7 ranges · §8 costs · §9 evaluation · §10 commitment and the court ·
-§11 library templates (informative) · §12 golden vectors · §13 rules · §14 deviations from RFC-0002.
+§11 library templates (informative) · §12 golden vectors · §13 rules · §14 deviations from RFC-0002 ·
+§15 program version 2 and pipelines (RFC-0003).
 
 ---
 
@@ -1443,3 +1444,302 @@ per tile and a cone work of `2^20` are the starting points); vectors of admissio
 demand evaluator), which may split a replay that §10.3's axis-0 rule conservatively keeps whole. PALW-TIR-33 is settled:
 every committed operand — step leaves, state checkpoint leaves, carry-ins — is the executor's, and a
 value outside its node's proven interval convicts the executor (Phase F §2.7).
+
+## 15. Program version 2 and pipelines (RFC-0003)
+
+> **Draft (RFC-0003 §I.2.3, decided 2026-09-28).** Applies to version-2 programs, which are admitted
+> only past a dormant fence `palw_gen_v1` that is not yet defined. **Version 1 is unchanged:**
+> §0–§14 hold for version-1 programs exactly as written, a version-1 program decodes, validates and
+> evaluates byte for byte as before, and `prim_set_id` does not move. Version 2 adds what the
+> generative profiles need — input tensors, output kinds, and state writes in `post` — and a
+> pipeline of programs. It adds no primitive. Code: `misaka_palw_tir::{program_v2, validate_v2,
+> interp_v2, interval_v2, pipeline}`.
+
+### 15.1 The program `TirProgramV2` (PALW-TIR-37, PALW-TIR-38)
+
+```
+TirProgramV2 := version u16 (= 2) · prim_set_id [u8;64] · token_bound u32 · history_bound u32 ·
+                inputs [InputDecl] · params [ParamDecl] · consts [ConstDecl] · states [StateDecl] ·
+                blocks [Block] · schedule Schedule · output OutputDecl
+InputDecl    := name String · dtype DType · shape [u32] · source InputSource
+InputSource  := tag 0: External · lo i64 · hi i64
+              | tag 1: Random   · domain u16 · dist RandomDist · per_step bool
+RandomDist   := tag 0: Uniform · bits u8
+              | tag 1: Normal
+OutputDecl   := tag 0: Logits · node u16 · scheme_id [u8;64]
+              | tag 1: Rows   · node u16
+              | tag 2: Final  · node u16
+```
+
+Every other type is §4.2's. The encoding rules are §4.1's, and the canonical encoding is the
+program (§3.6). `graph_ir_root` is §3.6's keyed hash over these bytes. The version field makes a
+version-1 and a version-2 encoding disjoint.
+
+- **Inputs.** `Ref::Input(0)` is the token and `Ref::Input(1)` the position, as in §3.2.
+  `Ref::Input(2 + k)` is `inputs[k]`, of its declared dtype and shape at every `H`.
+  - An `External` input is bound by the pipeline (§15.6) to a job value or to an earlier stage's
+    output. Every element lies in `[lo, hi]`.
+  - A `Random` input is RFC-0003's `R` over a registered domain (§15.7). Its element `e` at position
+    `p` is `dist(R(seed, domain, step, position, e))`, with `step = p` when `per_step` and 0
+    otherwise. `Uniform` gives the word, an `idx` in `[0, 2^bits − 1]`. `Normal` gives
+    `PALW_GAUSS_Q24_V1[word]`, an `i32` in Q24.
+  - Inputs are constant over the scan, except per-step random inputs.
+- **Output kinds.** `Logits` is version 1's `logits` and `logits_scheme_id`, unchanged: `post` runs
+  where logits are consumed and writes no state. `Rows` is the output node's value at every
+  position (an encoder's hidden rows). `Final` is its value at the last position of the run (a
+  latent, an image). A `Rows` or `Final` program runs `post` at every position.
+- **Decoding** (`TirProgramV2::decode_canonical`) is §4.4 with the version prefix `2`.
+  `TirProgram::decode_canonical` dispatches on the first two bytes: `1` goes to §4.4 exactly as
+  before, `2` to this section, and any other version is refused (`NormalForm`; a short prefix is
+  `Encoding`).
+
+### 15.2 Normal form (NF-23 … NF-29)
+
+A version-2 program is in normal form iff NF-23 … NF-29 hold **and** NF-1 … NF-22 hold for its
+version-1 view (§15.3). The version-2 rules are checked first; the class of every refusal is
+`NormalForm`, except the `StateWrite` type rule of NF-29 (`Shape`).
+
+- **NF-23** `version = 2`.
+- **NF-24** `|inputs| ≤ 16`, and `|params| + |inputs| ≤ 4096`. Input names are 1..=128 bytes and
+  unique among the inputs **and the params** (one name space). An input's shape has rank `≤ 4`,
+  dimensions in `[1, 2^24]` and at most `2^28` elements.
+- **NF-25** An `External` input is `i8`, `i16`, `i32` or `idx`, with `lo ≤ hi`, both inside the dtype.
+- **NF-26** A `Random` input names a registered program-input domain: `1 … 7` of RFC-0003 §I.1.4.
+  Domain 0, the text sampler, is not a program input.
+  - `Uniform` is `idx`, and its `bits` equal the domain's word width.
+  - `Normal` is `i32` over a domain of 16-bit words.
+  - `per_step` is `false` for a `Zero` domain and `true` for a `PerStep` one, and either for a
+    `Declared` one (`CLASS_UNIFORM_V1`).
+  - A program declares each domain at most once.
+- **NF-27** Every `Ref::Input(j)` has `j < 2 + |inputs|`, and every input is referenced by some node.
+- **NF-28** The output node is a node of `post` and a commit point. This is checked on the version-2
+  program itself, because the view commits every `post` write. NF-6 (committable dtype, no `H`)
+  then holds through the view.
+- **NF-29** For `Rows` and `Final` outputs, `post` MAY contain `StateWrite` nodes, and no
+  `HistAppend`. A `post` `StateWrite` must meet five conditions:
+  - it targets a global `Fixed` state;
+  - `post` writes that state once;
+  - `pre` does not write that state (NF-19's one writer per instance per step);
+  - some node reads the state (`Ref::State`);
+  - it meets the `StateWrite` type rule of §6.7 (class `Shape`).
+
+  For a `Logits` output, NF-19 holds unchanged: `post` writes nothing.
+
+### 15.3 The version-1 view
+
+The **view** of a version-2 program is the version-1 program obtained by four rewrites:
+
+1. **Inputs become params.** `inputs[k]` is appended to `params` as a global param with the same
+   name, dtype and shape, and every `Ref::Input(2 + k)` becomes `Ref::Param(|params| + k)`.
+2. **The output node becomes the logits node.** `logits` is the output node, and
+   `logits_scheme_id` is the `Logits` scheme or 64 zero bytes.
+3. **`post` writes become clamps.** In a `Rows` or `Final` program, each `post` `StateWrite { state }`
+   becomes `Clamp { lo, hi }` of that state's range, with the same operand and output type, and is
+   marked a commit point.
+4. **Everything else is copied.**
+
+The rewrite in step 3 changes no value: §6.7 defines `StateWrite`'s value as `clamp(x, lo, hi)`,
+which is `Clamp`'s value (§6.4). Normal form (NF-1 … NF-22), types (§6), ranges (§7) and evaluation
+(§9.1, §9.2) of a version-2 program are those of its view, with §15.4 and §15.5's additions.
+Lifting params into inputs changes no value: the decoder corpus program, with its embedding and a
+RoPE table as inputs, commits the same bytes at every commit point of every position
+(`tests/program_v2.rs`).
+
+### 15.4 Evaluation (PALW-TIR-42)
+
+**A step** of a version-2 program at position `p`:
+
+1. If `p ≥ history_bound`: `Position`. The token is checked as in §9.1.
+2. **Every input is fetched at `p` and held to its declaration** (a full step reads every input,
+   NF-27). An absent input is `Missing`. A value of another dtype or shape, or with an element
+   outside the input's interval (§15.5), is `Operand`.
+3. The occurrences are evaluated as in §9.1, over the view.
+4. **Only if the whole step succeeded**, the effects apply: §9.1's, and each `post` write's value
+   (the view's `Clamp`) becomes its state's value for the next position.
+5. The step's **output** is the output node's value. Its **commit points** are the version-2
+   program's. The view's commit flags on uncommitted `post` writes are not reported.
+
+A run of a `Rows` program yields one row per position; a `Final` program's result is its last
+position's output.
+
+**A cone** (§9.2) of a version-2 program is evaluated over the view. Only the inputs the closure
+reads are fetched, each held to its declaration as in step 2. A `post` `StateWrite` target evaluates
+to the value it writes.
+
+**Demand evaluation (§9.4) and the court** are specified here but not yet implemented: they come
+with the court extension of RFC-0003. The source answers a sixth question, `input(p, k, i)`:
+- a `Random` input's element is computed by the court from the claim's job (`R`), never opened
+  from a leaf and never taken from a challenger;
+- an `External` input's element is an earlier stage's committed element, or a job value.
+
+The writer of a global `Fixed` state is occurrence 0's `StateWrite` or occurrence `L + 1`'s, and
+NF-29 makes it unique.
+
+### 15.5 Ranges (PALW-TIR-9 for version 2)
+
+§7's transfer functions run over the view. An input is a leaf with a declared interval, not a param
+of its dtype's full range:
+
+- `External { lo, hi }` gives `[lo, hi]`;
+- `Uniform { bits }` gives `[0, 2^bits − 1]`;
+- `Normal` gives `[−72,560,101, 72,560,101]`, the ends of `PALW_GAUSS_Q24_V1`.
+
+A `post` write's interval is its `Clamp`'s, which is §7's `StateWrite` interval. PALW-TIR-33 carries
+over, and extends across stages: an earlier stage's output bound to an external input is admitted
+only if its proven interval lies inside the input's declared one (§15.6, NF-P7). A value outside it
+is therefore always the executor's malformed commitment.
+
+### 15.6 Pipelines of programs — the IR half (PALW-TIR-43, PALW-TIR-44)
+
+```
+TirPipelineV1 := version u16 (= 1) · stages [StageDecl] · output_stage u8
+StageDecl     := name String · program u16 · trip TripRule · max_trip u32 · tokens Option<TokenRule> · bind [Binding]
+TripRule      := tag 0: Fixed · n u32 | tag 1: JobSteps | tag 2: TokenCount
+TokenRule     := prefix [u32] · source TokenSource · suffix [u32] · pad Option<TokenPad>
+TokenSource   := tag 0: Prompt | tag 1: Negative
+TokenPad      := id u32 · to_len u32
+Binding       := tag 0: JobScalar     · index u8
+               | tag 1: JobTokens     · rule TokenRule
+               | tag 2: StageRows     · stage u8 · drop u32 · pad_to u32
+               | tag 3: StageFinal    · stage u8
+               | tag 4: StageRowCount · stage u8 · drop u32
+```
+
+`Option<T>` is Borsh's: `0x00`, or `0x01` followed by `T`. `program` indexes the pipeline's program
+list. The class object that carries programs by `graph_ir_root` — with per-stage layouts, the
+artifact and the tokenizer — belongs to consensus (`palw_gen_v1`).
+
+**A pipeline is not a VM.** Its stages run in declared order, always. Each runs over a trip count
+fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per stage).
+
+- **Trip counts.** A stage runs over:
+  - `Fixed { n }`: `n` positions;
+  - `JobSteps`: the job's step count;
+  - `TokenCount`: the length of `prefix ‖ ids ‖ suffix`, padded with `pad.id` to `pad.to_len`
+    when there is a pad. A sequence longer than the pad is `Operand`.
+
+  A trip count outside `[1, max_trip]` is `Position`.
+- **Tokens.** A `TokenCount` stage's `Input(0)` at position `p` is its sequence's `p`-th id. No other
+  stage reads a token.
+- **Bindings.** Each external input of the stage's program, in declaration order, takes its value
+  from its binding:
+  - `JobScalar`: `job.scalars[index]` as a rank-0 tensor of the input's dtype;
+  - `JobTokens`: the rule applied to the job's ids, padded to its length;
+  - `StageRows`: rows `drop … T − 1` of the earlier `Rows` stage, zero-padded to `pad_to`;
+  - `StageFinal`: the earlier `Final` stage's output;
+  - `StageRowCount`: `max(T − drop, 0)` of the earlier `Rows` stage.
+
+  Every value is then held to the input's declaration (§15.4).
+- **Random inputs.** Random inputs are drawn by the caller: once, or at every position when
+  `per_step`.
+- **The pipeline's output.** A `Final` output stage gives its last position's value. A `Rows` output
+  stage gives its rows stacked `[T] ++ row shape`.
+
+**Normal form** (`validate_pipeline`, class `NormalForm`):
+
+- **NF-P1.** `version = 1`; `1 ≤ |stages| ≤ 16`; `output_stage` exists; every program validates (§15.2).
+- **NF-P2.** Stage names are 1..=128 bytes and unique, and every program index exists.
+- **NF-P3.** `1 ≤ max_trip ≤ history_bound`, with one shape per kind of stage:
+  - a `Fixed { n }` stage has `max_trip = n` and reads no token;
+  - a `JobSteps` stage reads no token;
+  - a `TokenCount` stage reads the token and has a token rule. Its template ids are below
+    `token_bound`, its pad (if any) is no shorter than the template, and a padded run has
+    `max_trip = pad.to_len`.
+- **NF-P4.** One random input per domain across the whole pipeline (PALW-RND-7).
+- **NF-P5.** One binding per external input. An edge reads only an earlier stage.
+- **NF-P6.** A `JobScalar` binds a rank-0 input, with `index < 16`. A `JobTokens` binds an
+  `idx [pad.to_len]` input, and its template ids lie inside the input's interval.
+- **NF-P7.** A `StageRows` edge reads a `Rows` stage, and its shape is `[pad_to] ++ row shape` of the
+  row dtype, with `pad_to ≥ max(max_trip − drop, 1)`. The rows' proven interval (§15.5), with 0 for
+  the pad, lies inside the input's. A `StageFinal` edge reads a `Final` stage, with that output's
+  type, and its proven interval lies inside the input's.
+- **NF-P8.** A `StageRowCount` edge reads a `Rows` stage, binds a rank-0 `idx`, and
+  `[0, max_trip − drop]` lies inside the input's interval.
+- **NF-P9.** The output stage is a `Rows` or `Final` program, and every other stage feeds a later one
+  (no dead stage).
+
+### 15.7 Randomness and outputs
+
+`R`, its domain table, the transforms and the Gaussian table are RFC-0003 §I.1, implemented in
+`misaka-palw-gen` (`rand`; vectors `consensus-vectors/rand-v1/`). Three facts about them matter
+here:
+
+- The table `PALW_GAUSS_Q24_V1` is generated by `scripts/palw-gauss-table.py` and pinned by
+  BLAKE2b-512 keyed `misaka-palw/rand/gauss-q24/v1`: `0b3c29bd…85aa4`.
+- Domain 0 is RFC-0001's D11 sampler byte for byte, proved against its source and its golden
+  vectors (`misaka-palw-gen/tests/d11_domain0.rs`).
+- The IR never hashes. A random input's value is supplied by the caller, and by definition it is
+  `R`'s.
+
+A `Declared` domain's step rule is fixed per input by `per_step` (RFC-0003 §I.1.4's "0 or `p`
+(declared)").
+
+A class's output bytes and `output_root` are RFC-0003 §I.3, implemented in `misaka-palw-gen`
+(`output`; vectors `consensus-vectors/output-v1/`). The root's preimage also binds `tile_len`, so a
+root names its tiling.
+
+### 15.8 Golden vectors (`consensus-vectors/tir-v2/`)
+
+- **`programs/<name>.json`** (`palw-tir-v2/program-vectors/1`) holds the three toy stage programs: a
+  causal encoder (`Rows`, a `Hist` window), a denoiser (`Final`, with every input kind including a
+  per-step `Normal`, and the latent written in `post`) and a decoder (`Final`, pixels proved in
+  `[0, 255]`). Each file records:
+  - the canonical bytes, `graph_ir_root` and params;
+  - every input at every position;
+  - every position's output and commit points;
+  - the `Fixed` states after the run;
+  - cone cases (§15.4);
+  - input refusals, each with its class.
+- **`pipelines/toy-image.json`** (`palw-tir-v2/pipeline-vectors/1`) holds the three stages as one
+  pipeline. It records:
+  - the pipeline and program bytes;
+  - the job, the seed and the item index;
+  - every value `R` drew;
+  - every stage's positions and the output tensor;
+  - the output's canonical `ImageRgb8` bytes and `output_root` at `tile_len = 4`.
+- **`encoding.json`** (`palw-tir-v2/encoding-vectors/1`) holds byte strings with `ok`, `ok-v1` or the
+  refusal class. They include valid programs, a trailing byte, a truncation, version 3, unknown
+  `InputSource` and `OutputDecl` tags, a `per_step` byte of 2, domain 0 as an input, an unused
+  input, a `Logits` program writing in `post`, an uncommitted output, and a version-1 program
+  through the dispatcher.
+
+`cargo test -p misaka-palw-tir --test golden_v2` regenerates them and requires identical bytes.
+`TIR_V2_BLESS=1` rewrites them. It is a separate switch from `TIR_BLESS`, so blessing one version
+never rewrites the other's vectors.
+
+### 15.9 Rules
+
+- **PALW-TIR-37 (inputs).** An input MUST be `External` with a declared interval, or `Random` over a
+  registered domain. Range analysis MUST use the declared interval, the word range or the table
+  range.
+- **PALW-TIR-38 (output kinds).** The output MUST be `Logits`, `Rows` or `Final`, and MUST be a
+  committed node of `post` with a committable dtype and no `H`.
+- **PALW-TIR-39 (`post` effects).** In a `Rows`/`Final` program, `post` MAY write a global `Fixed`
+  state that `pre` does not write. `post` MUST NOT append to a history. A `Logits` program's `post`
+  MUST write nothing.
+- **PALW-TIR-40 (the view).** A version-2 program's normal form, types, ranges and evaluation MUST be
+  its view's (§15.3), with §15.4 and §15.5's additions.
+- **PALW-TIR-41 (no new primitive).** A version-2 program MUST declare `PRIM_SET_ID_V1`.
+- **PALW-TIR-42 (inputs checked).** Every input read MUST be present and MUST have its declared
+  dtype, shape and interval; otherwise the evaluation fails (`Missing` or `Operand`).
+- **PALW-TIR-43 (pipelines are structural).** A pipeline's stages MUST run in declared order over
+  trip counts fixed at acceptance. An edge MUST be a structural map of committed elements, job
+  values and zero pads, and MUST read only earlier stages.
+- **PALW-TIR-44 (edges are proved).** Admission MUST prove every edge's shape, dtype and interval
+  (NF-P7, NF-P8).
+- **PALW-TIR-45 (random inputs are `R`, never commitments).** A random input's value MUST be
+  RFC-0003's `R` for the job's seed and item index. It MUST NOT be committed, and a court MUST
+  recompute every element a cone reads.
+
+### 15.10 Open items
+
+The following are not yet built:
+
+- admission of version-2 programs and pipelines (`tir_admit_v1`'s costs, cones and ceilings over
+  the view, with the `post` writes' commit points and per-profile ceilings);
+- demand evaluation over version 2 (§15.4);
+- the pipeline class object, its step tree and identity;
+- the court extension (derived inputs, stage edges, `TirOutputDigestMismatch`);
+- the `palw_gen_v1` fence;
+- generalised dissection over a declared reduction axis (RFC-0003 §II.1.5.6, decided to come with
+  video).
