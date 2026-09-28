@@ -48,7 +48,7 @@ pub fn open_model(path: &std::path::Path, opts: &LowerOpts) -> Result<(Prepared,
     match gguf {
         Some(g) => {
             let m = crate::gguf::GgufModel::open(&g)?;
-            let prep = prepare_spec(m.spec()?, opts)?;
+            let prep = m.prepare(opts)?;
             Ok((prep, Box::new(m)))
         }
         None => {

@@ -411,6 +411,20 @@ impl QWeight {
         }
         Ok(QWeight { out: rows.len(), q, scale, zero, min, gidx: self.gidx.clone(), label: self.label.clone(), ..*self })
     }
+    /// The columns in the order `cols` (column `j` of the result is column `cols[j]`): the codes
+    /// and each column's group move together, so the weight is unchanged column for column.
+    pub fn permute_cols(&self, cols: &[usize]) -> Result<QWeight> {
+        if cols.len() != self.inp || cols.iter().any(|c| *c >= self.inp) {
+            return Err(LowerError::weights(format!("quantised weight: a column order of {} for {} columns", cols.len(), self.inp)));
+        }
+        let mut q = Vec::with_capacity(self.q.len());
+        for o in 0..self.out {
+            let row = &self.q[o * self.inp..(o + 1) * self.inp];
+            q.extend(cols.iter().map(|c| row[*c]));
+        }
+        let gidx = cols.iter().map(|c| self.gidx[*c]).collect();
+        Ok(QWeight { q, gidx, scale: self.scale.clone(), zero: self.zero.clone(), min: self.min.clone(), label: self.label.clone(), ..*self })
+    }
     /// The column order in which every group is contiguous: columns sorted by group, stable. Every
     /// group must have exactly `group` columns.
     pub fn order(&self) -> Result<Vec<u32>> {

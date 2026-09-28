@@ -536,14 +536,23 @@ fn unpack(ty: GgmlType, raw: &[u8], inp: usize, out: usize, name: &str) -> Resul
 
 // ───────────────────────────── the Hugging Face view ─────────────────────────────
 
+/// Where a Hugging Face tensor comes from in the file.
+#[derive(Clone, Debug)]
+struct Source {
+    gguf: String,
+    /// Hugging Face row `i` is GGUF row `rows[i]` (llama's q/k, Qwen3.5's tiled value heads).
+    rows: Option<Vec<usize>>,
+    /// Hugging Face column `j` is GGUF column `cols[j]` (Qwen3.5's `out_proj` over tiled heads).
+    cols: Option<Vec<usize>>,
+}
+
 /// A GGUF checkpoint seen as the Hugging Face model it was converted from.
 pub struct GgufModel {
     pub file: GgufFile,
     pub arch: String,
     /// The Hugging Face `config.json` of the model (`hf_config::parse_config` reads it).
     pub config: Value,
-    /// Hugging Face tensor name → (GGUF tensor name, the Hugging Face rows' order in it).
-    map: BTreeMap<String, (String, Option<Vec<usize>>)>,
+    map: BTreeMap<String, Source>,
     /// Every GGUF tensor the view consumed (the rest is reported as unread).
     consumed: std::collections::BTreeSet<String>,
 }
@@ -561,9 +570,22 @@ fn unpermute(heads: usize, rows: usize) -> Vec<usize> {
         .collect()
 }
 
-/// `{arch}.*` metadata keys each architecture's mapping reads; any other `{arch}.*` key is a
-/// refusal (it may change the math). `general.*`, `tokenizer.*` and `quantize.*` are provenance.
-const ARCH_KEYS: &[&str] = &[
+/// Qwen3.5's value heads: Hugging Face groups them by key head `[k][v][d]`, llama.cpp tiles them
+/// `[v][k][d]` (`_reorder_v_heads`). Hugging Face index `i` of a `[nk · r · d]` axis is GGUF index
+/// `untile[i]`.
+fn untile(nk: usize, r: usize, d: usize) -> Vec<usize> {
+    (0..nk * r * d)
+        .map(|i| {
+            let (k, rest) = (i / (r * d), i % (r * d));
+            let (v, e) = (rest / d, rest % d);
+            v * nk * d + k * d + e
+        })
+        .collect()
+}
+
+/// `{arch}.*` metadata keys each mapping reads; any other `{arch}.*` key is a refusal (it may
+/// change the math). `general.*`, `tokenizer.*` and `quantize.*` are provenance.
+const COMMON_KEYS: &[&str] = &[
     "context_length",
     "embedding_length",
     "block_count",
@@ -579,10 +601,25 @@ const ARCH_KEYS: &[&str] = &[
     "rope.scaling.factor",
     "rope.scaling.original_context_length",
     "vocab_size",
-    "attn_logit_softcapping",
-    "final_logit_softcapping",
-    "attention.sliding_window",
 ];
+
+fn arch_keys(arch: &str) -> &'static [&'static str] {
+    match arch {
+        "gemma2" => &["attn_logit_softcapping", "final_logit_softcapping", "attention.sliding_window"],
+        "gemma3" => &["final_logit_softcapping", "attention.sliding_window"],
+        "phi3" => &["attention.sliding_window", "rope.scaling.attn_factor"],
+        "qwen35" => &[
+            "rope.dimension_sections",
+            "ssm.conv_kernel",
+            "ssm.state_size",
+            "ssm.group_count",
+            "ssm.time_step_rank",
+            "ssm.inner_size",
+            "full_attention_interval",
+        ],
+        _ => &[],
+    }
+}
 
 /// Llama-3's rotary frequency factors (`rope_freqs.weight`) are stored as a tensor; a factor set
 /// maps back to its `rope_scaling` only when it is one of these (checked value by value).
@@ -620,9 +657,12 @@ impl GgufModel {
             "qwen3" => ("Qwen3ForCausalLM", "qwen3"),
             "gemma" => ("GemmaForCausalLM", "gemma"),
             "gemma2" => ("Gemma2ForCausalLM", "gemma2"),
+            "gemma3" => ("Gemma3ForCausalLM", "gemma3_text"),
+            "phi3" => ("Phi3ForCausalLM", "phi3"),
+            "qwen35" => ("Qwen3_5ForCausalLM", "qwen3_5_text"),
             other => {
                 return Err(LowerError::not_lowerable(format!(
-                    "GGUF architecture `{other}` has no mapping (llama, qwen2, qwen3, gemma and gemma2 do)"
+                    "GGUF architecture `{other}` has no mapping (llama, qwen2, qwen3, qwen35, gemma, gemma2, gemma3 and phi3 do)"
                 )));
             }
         };
@@ -632,7 +672,8 @@ impl GgufModel {
         let pre = format!("{arch}.");
         for k in file.meta.keys() {
             if let Some(rest) = k.strip_prefix(&pre)
-                && !ARCH_KEYS.contains(&rest)
+                && !COMMON_KEYS.contains(&rest)
+                && !arch_keys(&arch).contains(&rest)
             {
                 return Err(LowerError::not_lowerable(format!("GGUF metadata `{k}` is not mapped (it may change the math)")));
             }
@@ -650,7 +691,9 @@ impl GgufModel {
         if get("attention.value_length").and_then(GValue::as_u64).is_some_and(|v| v as usize != head_dim) {
             return Err(LowerError::not_lowerable("GGUF: value heads of another size than the key heads"));
         }
-        if get("rope.dimension_count").and_then(GValue::as_u64).is_some_and(|v| v as usize != head_dim) {
+        let rope_dim = get("rope.dimension_count").and_then(GValue::as_u64).map_or(head_dim, |v| v as usize);
+        let partial = rope_dim as f64 / head_dim as f64;
+        if rope_dim != head_dim && !matches!(arch.as_str(), "phi3" | "qwen35") {
             return Err(LowerError::not_lowerable("GGUF: partial rotary for this architecture"));
         }
         let eps = get("attention.layer_norm_rms_epsilon").and_then(GValue::as_f64).ok_or_else(|| LowerError::bad("GGUF: no RMS epsilon"))?;
@@ -661,8 +704,8 @@ impl GgufModel {
             Some(v) => v as usize,
             None => embd.dims.get(1).copied().unwrap_or(0) as usize,
         };
-        let has = |n: String| file.tensors.contains_key(&n);
-        let tied = !has("output.weight".into());
+        let has = |n: &str| file.tensors.contains_key(n);
+        let tied = !has("output.weight");
         let mut cfg = json!({
             "architectures": [hf_arch],
             "model_type": model_type,
@@ -673,62 +716,185 @@ impl GgufModel {
             "num_key_value_heads": kv,
             "head_dim": head_dim,
             "rms_norm_eps": eps,
-            "rope_theta": theta,
             "max_position_embeddings": ctx,
             "vocab_size": vocab,
             "tie_word_embeddings": tied,
         });
+        let mut consumed = std::collections::BTreeSet::new();
         let o = cfg.as_object_mut().expect("object");
-        match arch.as_str() {
-            "llama" => {
-                o.insert("attention_bias".into(), json!(has("blk.0.attn_q.bias".into())));
-                o.insert("mlp_bias".into(), json!(false));
-                o.insert("hidden_act".into(), json!("silu"));
+        let rope_scaling = |o: &mut serde_json::Map<String, Value>| -> Result<()> {
+            match get("rope.scaling.type").and_then(GValue::as_str) {
+                None | Some("none") => Ok(()),
+                Some("linear") => {
+                    let f = get("rope.scaling.factor").and_then(GValue::as_f64).ok_or_else(|| LowerError::bad("GGUF: linear rope without a factor"))?;
+                    o.insert("rope_scaling".into(), json!({"rope_type": "linear", "factor": f}));
+                    Ok(())
+                }
+                Some(t) => Err(LowerError::not_lowerable(format!("GGUF rope scaling `{t}` is not mapped"))),
             }
-            "qwen3" => {
-                o.insert("attention_bias".into(), json!(has("blk.0.attn_q.bias".into())));
+        };
+        match arch.as_str() {
+            "llama" | "qwen3" => {
+                o.insert("rope_theta".into(), json!(theta));
+                o.insert("attention_bias".into(), json!(has("blk.0.attn_q.bias")));
+                if arch == "llama" {
+                    o.insert("mlp_bias".into(), json!(false));
+                }
                 o.insert("hidden_act".into(), json!("silu"));
+                rope_scaling(o)?;
             }
             "qwen2" => {
+                o.insert("rope_theta".into(), json!(theta));
                 o.insert("hidden_act".into(), json!("silu"));
+                rope_scaling(o)?;
             }
             "gemma" => {
+                o.insert("rope_theta".into(), json!(theta));
                 o.insert("hidden_activation".into(), json!("gelu_pytorch_tanh"));
+                rope_scaling(o)?;
             }
-            _ => {
-                // gemma2: llama.cpp scales the queries by 1/√head_dim, except for the 27B (46
-                // layers, 1/√(hidden/heads)) — the GGUF carries no query_pre_attn_scalar.
+            "gemma2" => {
+                // llama.cpp scales the queries by 1/√head_dim, except for the 27B (46 layers,
+                // 1/√(hidden/heads)) — the GGUF carries no query_pre_attn_scalar.
                 let qpas = if layers == 46 { hidden / heads } else { head_dim };
+                o.insert("rope_theta".into(), json!(theta));
                 o.insert("hidden_activation".into(), json!("gelu_pytorch_tanh"));
                 o.insert("query_pre_attn_scalar".into(), json!(qpas));
-                for (k, hk) in [("attn_logit_softcapping", "attn_logit_softcapping"), ("final_logit_softcapping", "final_logit_softcapping")] {
+                for k in ["attn_logit_softcapping", "final_logit_softcapping"] {
                     if let Some(v) = get(k).and_then(GValue::as_f64) {
-                        o.insert(hk.into(), json!(v));
+                        o.insert(k.into(), json!(v));
                     }
                 }
                 let sw = get("attention.sliding_window").and_then(GValue::as_u64).ok_or_else(|| LowerError::bad("GGUF gemma2: no sliding window"))?;
                 o.insert("sliding_window".into(), json!(sw));
+                rope_scaling(o)?;
+            }
+            "gemma3" => {
+                // llama.cpp: every 6th layer global (`set_swa_pattern(6)`), local layers at base
+                // 10,000 unscaled, global ones at `rope.freq_base` with the file's scaling; the
+                // 27B (62 layers) scales queries by 1/√(hidden/heads).
+                let qpas = if layers == 62 { hidden / heads } else { head_dim };
+                o.insert("hidden_activation".into(), json!("gelu_pytorch_tanh"));
+                o.insert("query_pre_attn_scalar".into(), json!(qpas));
+                if let Some(v) = get("final_logit_softcapping").and_then(GValue::as_f64) {
+                    o.insert("final_logit_softcapping".into(), json!(v));
+                }
+                match get("attention.sliding_window").and_then(GValue::as_u64) {
+                    Some(sw) => {
+                        o.insert("sliding_window".into(), json!(sw));
+                        let types: Vec<&str> =
+                            (0..layers).map(|i| if (i + 1) % 6 != 0 { "sliding_attention" } else { "full_attention" }).collect();
+                        o.insert("layer_types".into(), json!(types));
+                    }
+                    None => {
+                        o.insert("sliding_window".into(), Value::Null);
+                        o.insert("layer_types".into(), json!(vec!["full_attention"; layers]));
+                    }
+                }
+                let mut full = serde_json::Map::new();
+                full.insert("rope_theta".into(), json!(theta));
+                match get("rope.scaling.type").and_then(GValue::as_str) {
+                    None | Some("none") => {
+                        full.insert("rope_type".into(), json!("default"));
+                    }
+                    Some("linear") => {
+                        let f = get("rope.scaling.factor").and_then(GValue::as_f64).ok_or_else(|| LowerError::bad("GGUF: linear rope without a factor"))?;
+                        full.insert("rope_type".into(), json!("linear"));
+                        full.insert("factor".into(), json!(f));
+                    }
+                    Some(t) => return Err(LowerError::not_lowerable(format!("GGUF gemma3 rope scaling `{t}` is not mapped"))),
+                }
+                o.insert(
+                    "rope_parameters".into(),
+                    json!({"sliding_attention": {"rope_type": "default", "rope_theta": 10000.0}, "full_attention": Value::Object(full)}),
+                );
+            }
+            "phi3" => {
+                // transformers' Phi-3 derives the head size (hidden / heads) and has no key for it.
+                if head_dim != hidden / heads.max(1) {
+                    return Err(LowerError::not_lowerable("GGUF phi3: a head size other than hidden / heads"));
+                }
+                o.remove("head_dim");
+                o.insert("rope_theta".into(), json!(theta));
+                o.insert("hidden_act".into(), json!("silu"));
+                if rope_dim != head_dim {
+                    o.insert("partial_rotary_factor".into(), json!(partial));
+                }
+                let sw = get("attention.sliding_window").and_then(GValue::as_u64).unwrap_or(0);
+                o.insert("sliding_window".into(), if sw == 0 { Value::Null } else { json!(sw) });
+                let orig = get("rope.scaling.original_context_length").and_then(GValue::as_u64).unwrap_or(ctx);
+                o.insert("original_max_position_embeddings".into(), json!(orig));
+                if let (Some(l), Some(s)) = (file.tensors.get("rope_factors_long.weight"), file.tensors.get("rope_factors_short.weight")) {
+                    let long: Vec<f64> = file.tensor_f32(&l.name)?.data.iter().map(|v| *v as f64).collect();
+                    let short: Vec<f64> = file.tensor_f32(&s.name)?.data.iter().map(|v| *v as f64).collect();
+                    // The attention factor transformers derives from the context ratio must be the
+                    // one the file carries.
+                    let scale = ctx as f64 / orig as f64;
+                    let want = if scale > 1.0 { (1.0 + scale.ln() / (orig as f64).ln()).sqrt() } else { 1.0 };
+                    if let Some(af) = get("rope.scaling.attn_factor").and_then(GValue::as_f64)
+                        && (af - want).abs() > 1e-6 * want
+                    {
+                        return Err(LowerError::not_lowerable(format!("GGUF phi3: attn_factor {af} is not LongRoPE's {want}")));
+                    }
+                    o.insert("rope_scaling".into(), json!({"rope_type": "longrope", "long_factor": long, "short_factor": short}));
+                    consumed.insert(l.name.clone());
+                    consumed.insert(s.name.clone());
+                }
+            }
+            _ => {
+                // qwen35: the hybrid gated-delta decoder.
+                let interval = get("full_attention_interval").and_then(GValue::as_u64).unwrap_or(4) as usize;
+                let (nk, nv) = (need_u("ssm.group_count")?, need_u("ssm.time_step_rank")?);
+                let dk = need_u("ssm.state_size")?;
+                let dv = need_u("ssm.inner_size")? / nv.max(1);
+                let types: Vec<&str> =
+                    (0..layers).map(|i| if (i + 1) % interval == 0 { "full_attention" } else { "linear_attention" }).collect();
+                for (i, t) in types.iter().enumerate() {
+                    let is_full = has(&format!("blk.{i}.attn_q.weight"));
+                    if is_full != (*t == "full_attention") {
+                        return Err(LowerError::not_lowerable(format!("GGUF qwen35: layer {i}'s tensors disagree with full_attention_interval {interval}")));
+                    }
+                }
+                let sections: Vec<u64> = get("rope.dimension_sections")
+                    .and_then(GValue::as_arr)
+                    .map(|a| a.iter().filter_map(GValue::as_u64).collect())
+                    .unwrap_or_else(|| vec![11, 11, 10, 0]);
+                let sec: Vec<u64> = sections.iter().copied().take(3).collect();
+                if sections.get(3).is_some_and(|s| *s != 0) {
+                    return Err(LowerError::not_lowerable("GGUF qwen35: a fourth M-RoPE section"));
+                }
+                let gate_rows = file.tensors.iter().find(|(k, _)| k.ends_with(".attn_q.weight")).map(|(_, t)| t.dims[1] as usize);
+                if gate_rows.is_some_and(|r| r != 2 * heads * head_dim) {
+                    return Err(LowerError::not_lowerable("GGUF qwen35: attention without its output gate"));
+                }
+                o.insert("hidden_act".into(), json!("silu"));
+                o.insert("attention_bias".into(), json!(false));
+                o.insert("attn_output_gate".into(), json!(true));
+                o.insert("full_attention_interval".into(), json!(interval));
+                o.insert("layer_types".into(), json!(types));
+                o.insert("linear_conv_kernel_dim".into(), json!(need_u("ssm.conv_kernel")?));
+                o.insert("linear_key_head_dim".into(), json!(dk));
+                o.insert("linear_value_head_dim".into(), json!(dv));
+                o.insert("linear_num_key_heads".into(), json!(nk));
+                o.insert("linear_num_value_heads".into(), json!(nv));
+                o.insert(
+                    "rope_parameters".into(),
+                    json!({"mrope_interleaved": true, "mrope_section": sec, "rope_type": "default", "rope_theta": theta,
+                           "partial_rotary_factor": partial}),
+                );
             }
         }
-        // Rotary scaling.
-        match get("rope.scaling.type").and_then(GValue::as_str) {
-            None | Some("none") => {}
-            Some("linear") => {
-                let f = get("rope.scaling.factor").and_then(GValue::as_f64).ok_or_else(|| LowerError::bad("GGUF: linear rope without a factor"))?;
-                o.insert("rope_scaling".into(), json!({"rope_type": "linear", "factor": f}));
-            }
-            Some(t) => return Err(LowerError::not_lowerable(format!("GGUF rope scaling `{t}` is not mapped"))),
-        }
-        let mut consumed = std::collections::BTreeSet::new();
         if let Some(rf) = file.tensors.get("rope_freqs.weight") {
+            if arch != "llama" {
+                return Err(LowerError::not_lowerable(format!("GGUF {arch}: rope_freqs.weight is not mapped")));
+            }
             let got = file.tensor_f32(&rf.name)?.data;
             let hit = LLAMA3_ROPES.iter().find(|c| {
                 let want = llama3_factors(head_dim, theta, **c);
                 want.len() == got.len() && want.iter().zip(&got).all(|(a, b)| (a - b).abs() <= 1e-6 * a.abs().max(1.0))
             });
-            let (factor, lo, hi, orig) = *hit.ok_or_else(|| {
-                LowerError::not_lowerable("GGUF rope_freqs.weight is not a Llama-3 factor set this mapping recognises")
-            })?;
+            let (factor, lo, hi, orig) =
+                *hit.ok_or_else(|| LowerError::not_lowerable("GGUF rope_freqs.weight is not a Llama-3 factor set this mapping recognises"))?;
             o.insert(
                 "rope_scaling".into(),
                 json!({"rope_type": "llama3", "factor": factor, "low_freq_factor": lo, "high_freq_factor": hi,
@@ -737,49 +903,90 @@ impl GgufModel {
             consumed.insert(rf.name.clone());
         }
         // Tensor names.
-        let mut map: BTreeMap<String, (String, Option<Vec<usize>>)> = BTreeMap::new();
-        let mut put = |hf: String, g: String, perm: Option<Vec<usize>>| {
-            map.insert(hf, (g, perm));
+        let mut map: BTreeMap<String, Source> = BTreeMap::new();
+        let mut put = |hf: String, g: String, rows: Option<Vec<usize>>, cols: Option<Vec<usize>>| {
+            map.insert(hf, Source { gguf: g, rows, cols });
         };
-        put("model.embed_tokens.weight".into(), "token_embd.weight".into(), None);
-        put("model.norm.weight".into(), "output_norm.weight".into(), None);
+        put("model.embed_tokens.weight".into(), "token_embd.weight".into(), None, None);
+        put("model.norm.weight".into(), "output_norm.weight".into(), None, None);
         if !tied {
-            put("lm_head.weight".into(), "output.weight".into(), None);
+            put("lm_head.weight".into(), "output.weight".into(), None, None);
         }
-        let gemma2 = arch == "gemma2";
+        let qwen35 = arch == "qwen35";
+        let (nk, nv, dk, dv) = if qwen35 {
+            let (nk, nv) = (need_u("ssm.group_count")?, need_u("ssm.time_step_rank")?);
+            (nk, nv, need_u("ssm.state_size")?, need_u("ssm.inner_size")? / nv.max(1))
+        } else {
+            (0, 0, 0, 0)
+        };
+        // Qwen3.5 with more value heads than key heads: the value-head axis back to grouped order.
+        let r = if qwen35 && nk > 0 { nv / nk } else { 1 };
+        let tiled = qwen35 && r > 1;
+        let head_axis = |d: usize| if tiled { Some(untile(nk, r, d)) } else { None };
+        let qkv_rows = |extra: usize| {
+            head_axis(dv).map(|v| {
+                let qk = 2 * nk * dk;
+                let mut p: Vec<usize> = (0..qk).collect();
+                p.extend(v.iter().map(|i| qk + i));
+                let _ = extra;
+                p
+            })
+        };
         for l in 0..layers {
             let (b, m) = (format!("blk.{l}."), format!("model.layers.{l}."));
-            put(format!("{m}input_layernorm.weight"), format!("{b}attn_norm.weight"), None);
+            let norm2 = match arch.as_str() {
+                "gemma2" | "gemma3" | "qwen35" => "post_attention_norm",
+                _ => "ffn_norm",
+            };
+            put(format!("{m}input_layernorm.weight"), format!("{b}attn_norm.weight"), None, None);
+            put(format!("{m}post_attention_layernorm.weight"), format!("{b}{norm2}.weight"), None, None);
+            if matches!(arch.as_str(), "gemma2" | "gemma3") {
+                put(format!("{m}pre_feedforward_layernorm.weight"), format!("{b}ffn_norm.weight"), None, None);
+                put(format!("{m}post_feedforward_layernorm.weight"), format!("{b}post_ffw_norm.weight"), None, None);
+            }
+            if arch == "phi3" {
+                put(format!("{m}self_attn.qkv_proj.weight"), format!("{b}attn_qkv.weight"), None, None);
+                put(format!("{m}self_attn.o_proj.weight"), format!("{b}attn_output.weight"), None, None);
+                put(format!("{m}mlp.gate_up_proj.weight"), format!("{b}ffn_up.weight"), None, None);
+                put(format!("{m}mlp.down_proj.weight"), format!("{b}ffn_down.weight"), None, None);
+                continue;
+            }
             for (hfp, gp, n) in [("q_proj", "attn_q", heads), ("k_proj", "attn_k", kv), ("v_proj", "attn_v", 0), ("o_proj", "attn_output", 0)] {
                 for suffix in ["weight", "bias"] {
                     let g = format!("{b}{gp}.{suffix}");
                     if let Some(t) = file.tensors.get(&g) {
                         let rows = *t.shape().first().unwrap_or(&0);
                         let perm = (arch == "llama" && n > 0).then(|| unpermute(n, rows));
-                        put(format!("{m}self_attn.{hfp}.{suffix}"), g, perm);
+                        put(format!("{m}self_attn.{hfp}.{suffix}"), g, perm, None);
                     }
                 }
             }
-            if arch == "qwen3" {
-                put(format!("{m}self_attn.q_norm.weight"), format!("{b}attn_q_norm.weight"), None);
-                put(format!("{m}self_attn.k_norm.weight"), format!("{b}attn_k_norm.weight"), None);
+            if has(&format!("{b}attn_q_norm.weight")) {
+                put(format!("{m}self_attn.q_norm.weight"), format!("{b}attn_q_norm.weight"), None, None);
+                put(format!("{m}self_attn.k_norm.weight"), format!("{b}attn_k_norm.weight"), None, None);
             }
-            if gemma2 {
-                put(format!("{m}post_attention_layernorm.weight"), format!("{b}post_attention_norm.weight"), None);
-                put(format!("{m}pre_feedforward_layernorm.weight"), format!("{b}ffn_norm.weight"), None);
-                put(format!("{m}post_feedforward_layernorm.weight"), format!("{b}post_ffw_norm.weight"), None);
-            } else {
-                put(format!("{m}post_attention_layernorm.weight"), format!("{b}ffn_norm.weight"), None);
+            if qwen35 && has(&format!("{b}attn_qkv.weight")) {
+                let la = format!("{m}linear_attn.");
+                put(format!("{la}in_proj_qkv.weight"), format!("{b}attn_qkv.weight"), qkv_rows(0), None);
+                put(format!("{la}in_proj_z.weight"), format!("{b}attn_gate.weight"), head_axis(dv), None);
+                put(format!("{la}in_proj_a.weight"), format!("{b}ssm_alpha.weight"), head_axis(1), None);
+                put(format!("{la}in_proj_b.weight"), format!("{b}ssm_beta.weight"), head_axis(1), None);
+                put(format!("{la}conv1d.weight"), format!("{b}ssm_conv1d.weight"), qkv_rows(0), None);
+                // The file stores −exp(A_log); the binding reads it as is (`fix_binding`).
+                put(format!("{la}A_log.neg_exp"), format!("{b}ssm_a"), head_axis(1), None);
+                put(format!("{la}dt_bias"), format!("{b}ssm_dt.bias"), head_axis(1), None);
+                put(format!("{la}norm.weight"), format!("{b}ssm_norm.weight"), None, None);
+                put(format!("{la}out_proj.weight"), format!("{b}ssm_out.weight"), None, head_axis(dv));
             }
             for (hfp, gp) in [("gate_proj", "ffn_gate"), ("up_proj", "ffn_up"), ("down_proj", "ffn_down")] {
-                put(format!("{m}mlp.{hfp}.weight"), format!("{b}{gp}.weight"), None);
+                put(format!("{m}mlp.{hfp}.weight"), format!("{b}{gp}.weight"), None, None);
             }
         }
-        for (hf, (g, _)) in &map {
-            if !file.tensors.contains_key(g) {
-                return Err(LowerError::weights(format!("GGUF: `{g}` (for `{hf}`) is missing")));
+        for (hf, s) in &map {
+            if !file.tensors.contains_key(&s.gguf) {
+                return Err(LowerError::weights(format!("GGUF: `{}` (for `{hf}`) is missing", s.gguf)));
             }
-            consumed.insert(g.clone());
+            consumed.insert(s.gguf.clone());
         }
         Ok(GgufModel { file, arch, config: cfg, map, consumed })
     }
@@ -791,14 +998,15 @@ impl GgufModel {
 
     /// The quantisation this checkpoint's projections carry: for each Hugging Face module (a
     /// template over layers, `{L}`) whose tensors are block-quantised, the program layout over every
-    /// layer's type (the finest group; an offset term if any layer's type has minimums). A module
-    /// that is float in some layers and quantised in others is refused.
+    /// layer's type (the finest group; an offset term if any layer's type has minimums; a column
+    /// order when the columns are permuted). A module that is float in some layers and quantised in
+    /// others is refused.
     pub fn quant_config(&self) -> Result<QuantConfig> {
-        let mut per: BTreeMap<String, Vec<GgmlType>> = BTreeMap::new();
-        for (hf, (g, _)) in &self.map {
+        let mut per: BTreeMap<String, (Vec<GgmlType>, bool)> = BTreeMap::new();
+        for (hf, s) in &self.map {
             let Some(module) = hf.strip_suffix(".weight") else { continue };
-            let t = &self.file.tensors[g];
-            if t.dims.len() != 2 || module == "model.embed_tokens" {
+            let t = &self.file.tensors[&s.gguf];
+            if t.dims.len() != 2 || module == "model.embed_tokens" || module.ends_with("conv1d") {
                 continue;
             }
             let template = match module.strip_prefix("model.layers.") {
@@ -808,10 +1016,12 @@ impl GgufModel {
                 }
                 None => module.to_string(),
             };
-            per.entry(template).or_default().push(t.ty);
+            let e = per.entry(template).or_insert((Vec::new(), false));
+            e.0.push(t.ty);
+            e.1 |= s.cols.is_some();
         }
         let mut per_module = BTreeMap::new();
-        for (m, types) in per {
+        for (m, (types, cols)) in per {
             let floats = types.iter().filter(|t| t.is_float()).count();
             if floats == types.len() {
                 continue;
@@ -820,11 +1030,14 @@ impl GgufModel {
                 return Err(LowerError::not_lowerable(format!("GGUF: `{m}` is float in some layers and quantised in others")));
             }
             if let Some(t) = types.iter().find(|t| t.block().is_none()) {
-                return Err(LowerError::not_lowerable(format!("GGUF: `{m}` is {} (Q8_0, Q4_0/1, Q5_0/1, Q4_K, Q5_K, Q6_K are read)", t.name())));
+                return Err(LowerError::not_lowerable(format!(
+                    "GGUF: `{m}` is {} (Q8_0, Q4_0/1, Q5_0/1, Q4_K, Q5_K, Q6_K are read)",
+                    t.name()
+                )));
             }
             let group = types.iter().map(|t| t.group()).min().unwrap_or(32);
             let offset_term = types.iter().any(|t| t.has_min());
-            per_module.insert(m, QLayout { group, order: false, offset_term });
+            per_module.insert(m, QLayout { group, order: cols, offset_term });
         }
         Ok(QuantConfig {
             fmt: QFormat::Gguf { layout: QLayout { group: 32, order: false, offset_term: false } },
@@ -836,11 +1049,11 @@ impl GgufModel {
     }
 
     /// The spec of this checkpoint: `config` through `hf_config`, then what GGUF stores
-    /// differently — Gemma's norm gains as `1 + w` (multiplied as stored), and the quantised
-    /// modules' layouts.
+    /// differently — RMSNorm gains of the `1 + w` form stored as `1 + w` (Gemma, Qwen3.5: the spec
+    /// multiplies by the stored value), and the quantised modules' layouts.
     pub fn spec(&self) -> Result<ArchSpec> {
         let mut spec = crate::parse_config(&self.config)?;
-        if self.arch.starts_with("gemma") {
+        if self.arch.starts_with("gemma") || self.arch == "qwen35" {
             let w = |n: &mut NormSpec| {
                 if n.gain == Gain::OnePlusW {
                     n.gain = Gain::W;
@@ -864,11 +1077,16 @@ impl GgufModel {
                         w(ffn_norm);
                     }
                 }
+                if let crate::spec::Mixer::Attention(a) = &mut ls.mixer
+                    && let Some(qk) = a.qk_norm.as_mut()
+                {
+                    w(&mut qk.norm);
+                }
             }
             if let Some(n) = spec.final_norm.as_mut() {
                 w(n);
             }
-            spec.notes.push("GGUF: Gemma's norm gains are stored as 1 + w and multiplied as stored".into());
+            spec.notes.push("GGUF: RMSNorm gains of the 1 + w form are stored as 1 + w and multiplied as stored".into());
         }
         let q = self.quant_config()?;
         if !q.per_module.is_empty() {
@@ -876,27 +1094,53 @@ impl GgufModel {
         }
         Ok(spec)
     }
+
+    /// Bind the params as this file stores them: Qwen3.5's `A = −exp(A_log)` is stored as `A`, so
+    /// the param reads it directly rather than through `−exp(log(−A))`.
+    pub fn fix_binding(&self, binding: &mut crate::weights::Binding) {
+        use crate::weights::{MapFn, Src};
+        for s in binding.srcs.iter_mut() {
+            if let Src::Map { src, f: MapFn::NegExp } = s
+                && let Src::Tensor(t) = src.as_ref()
+                && t.ends_with(".A_log")
+            {
+                *s = Src::Tensor(format!("{t}.neg_exp"));
+            }
+        }
+    }
+
+    /// `fidelity::prepare` for this file: its spec, lowered, and its binding fixed.
+    pub fn prepare(&self, opts: &crate::lower::LowerOpts) -> Result<crate::fidelity::Prepared> {
+        let mut prep = crate::fidelity::prepare_spec(self.spec()?, opts)?;
+        self.fix_binding(&mut prep.binding);
+        Ok(prep)
+    }
+}
+
+fn permute_rows_cols(t: Tensor, rows: Option<&[usize]>, cols: Option<&[usize]>) -> Tensor {
+    let r = t.shape.first().copied().unwrap_or(1);
+    let c: usize = t.shape[1..].iter().product();
+    let mut data = Vec::with_capacity(t.data.len());
+    for i in 0..r {
+        let src = rows.map_or(i, |p| p[i]);
+        let row = &t.data[src * c..(src + 1) * c];
+        match cols {
+            None => data.extend_from_slice(row),
+            Some(p) => data.extend(p.iter().map(|j| row[*j])),
+        }
+    }
+    Tensor::new(t.shape, data)
 }
 
 impl TensorSource for GgufModel {
     fn shape(&self, name: &str) -> Option<Vec<usize>> {
-        let (g, _) = self.map.get(name)?;
-        self.file.tensors.get(g).map(GgufTensorInfo::shape)
+        let s = self.map.get(name)?;
+        self.file.tensors.get(&s.gguf).map(GgufTensorInfo::shape)
     }
     fn load(&self, name: &str) -> Result<Tensor> {
-        let (g, perm) = self.map.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
-        let t = self.file.tensor_f32(g)?;
-        Ok(match perm {
-            None => t,
-            Some(p) => {
-                let cols: usize = t.shape[1..].iter().product();
-                let mut data = Vec::with_capacity(t.data.len());
-                for r in p {
-                    data.extend_from_slice(&t.data[r * cols..(r + 1) * cols]);
-                }
-                Tensor::new(t.shape.clone(), data)
-            }
-        })
+        let s = self.map.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
+        let t = self.file.tensor_f32(&s.gguf)?;
+        Ok(if s.rows.is_none() && s.cols.is_none() { t } else { permute_rows_cols(t, s.rows.as_deref(), s.cols.as_deref()) })
     }
     fn names(&self) -> Vec<String> {
         let mut v: Vec<String> = self.map.keys().cloned().collect();
@@ -904,12 +1148,15 @@ impl TensorSource for GgufModel {
         v
     }
     fn load_qweight(&self, name: &str) -> Result<QWeight> {
-        let (g, perm) = self.map.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
-        let q = self.file.qweight(g)?;
-        match perm {
-            None => Ok(q),
-            Some(p) => q.take_rows(p),
+        let s = self.map.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
+        let mut q = self.file.qweight(&s.gguf)?;
+        if let Some(p) = &s.rows {
+            q = q.take_rows(p)?;
         }
+        if let Some(p) = &s.cols {
+            q = q.permute_cols(p)?;
+        }
+        Ok(q)
     }
 }
 

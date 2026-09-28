@@ -336,8 +336,30 @@ MODELS = {
     # Mistral converts to llama.cpp's `llama` architecture.
     "mistral": ("mistral", "MistralForCausalLM", dict(BASE, intermediate_size=288, tie_word_embeddings=False, sliding_window=None,
                                                       rms_norm_eps=1e-5, rope_theta=1000000.0)),
+    # 32-wide rows (Q8_0/Q4_0 blocks) keep these small: Gemma-3 needs six layers for llama.cpp's
+    # fixed pattern (every 6th global), Qwen3.5 two value heads per key head (the tiled order).
+    "gemma3": ("gemma3_text", "Gemma3ForCausalLM", dict(hidden_size=64, intermediate_size=128, num_attention_heads=2,
+                                                        num_key_value_heads=1, head_dim=32, vocab_size=V, num_hidden_layers=6,
+                                                        max_position_embeddings=1024, sliding_window=4, query_pre_attn_scalar=32,
+                                                        rms_norm_eps=1e-6, tie_word_embeddings=True,
+                                                        rope_parameters={"sliding_attention": {"rope_type": "default", "rope_theta": 10000.0},
+                                                                         "full_attention": {"rope_type": "linear", "factor": 8.0,
+                                                                                            "rope_theta": 1000000.0}})),
+    "phi3": ("phi3", "Phi3ForCausalLM", dict(hidden_size=64, intermediate_size=128, num_attention_heads=2, num_key_value_heads=2,
+                                             vocab_size=V, num_hidden_layers=2, max_position_embeddings=256,
+                                             original_max_position_embeddings=64, sliding_window=None, rms_norm_eps=1e-5,
+                                             tie_word_embeddings=False, pad_token_id=0, bos_token_id=1, eos_token_id=2,
+                                             rope_scaling={"type": "longrope",
+                                                           "short_factor": [1.0 + 0.1 * i for i in range(16)],
+                                                           "long_factor": [2.0 + 0.5 * i for i in range(16)]})),
+    "qwen35": ("qwen3_5_text", "Qwen3_5ForCausalLM", dict(hidden_size=64, intermediate_size=128, num_attention_heads=2,
+                                                         num_key_value_heads=1, head_dim=32, vocab_size=V, num_hidden_layers=4,
+                                                         max_position_embeddings=1024, rms_norm_eps=1e-6, tie_word_embeddings=True,
+                                                         full_attention_interval=2, linear_num_key_heads=2, linear_num_value_heads=4,
+                                                         linear_key_head_dim=16, linear_value_head_dim=16, linear_conv_kernel_dim=4)),
 }
-GGUF_ARCH = {"llama": "llama", "qwen2": "qwen2", "qwen3": "qwen3", "gemma": "gemma", "gemma2": "gemma2", "mistral": "llama"}
+GGUF_ARCH = {"llama": "llama", "qwen2": "qwen2", "qwen3": "qwen3", "gemma": "gemma", "gemma2": "gemma2", "mistral": "llama",
+             "gemma3": "gemma3", "phi3": "phi3", "qwen35": "qwen35"}
 
 
 def use_more_bits(i, n):
@@ -387,6 +409,9 @@ CONFIGS = {
     "gguf_gemma_q4_0": ("gemma", fixed(Q4_0, embd=Q8_0), 2),
     "gguf_gemma2_q6_k": ("gemma2", fixed(Q6_K), 18),
     "gguf_mistral_mix": ("mistral", mistral_mix, 1),
+    "gguf_gemma3_q4_0": ("gemma3", fixed(Q4_0, embd=Q8_0), 2),
+    "gguf_phi3_q8_0": ("phi3", fixed(Q8_0, out=Q4_0), 7),
+    "gguf_qwen35_q8_0": ("qwen35", fixed(Q8_0, embd=Q4_0), 7),
 }
 
 
@@ -408,6 +433,13 @@ def hf_to_gguf(name, arch):
         return "output.weight"
     p = name.split(".")
     l, rest = p[2], ".".join(p[3:])
+    if arch == "phi3" and rest in ("self_attn.qkv_proj.weight", "mlp.gate_up_proj.weight"):
+        return f"blk.{l}.{'attn_qkv' if 'qkv' in rest else 'ffn_up'}.weight"
+    if arch == "qwen35" and rest.startswith("linear_attn."):
+        la = {"in_proj_qkv.weight": "attn_qkv.weight", "in_proj_z.weight": "attn_gate.weight", "in_proj_a.weight": "ssm_alpha.weight",
+              "in_proj_b.weight": "ssm_beta.weight", "conv1d.weight": "ssm_conv1d.weight", "A_log": "ssm_a", "dt_bias": "ssm_dt.bias",
+              "norm.weight": "ssm_norm.weight", "out_proj.weight": "ssm_out.weight"}
+        return f"blk.{l}.{la[rest[len('linear_attn.'):]]}"
     table = {
         "input_layernorm.weight": "attn_norm.weight",
         "self_attn.q_norm.weight": "attn_q_norm.weight",
@@ -419,10 +451,12 @@ def hf_to_gguf(name, arch):
     for proj, g in (("q_proj", "attn_q"), ("k_proj", "attn_k"), ("v_proj", "attn_v"), ("o_proj", "attn_output")):
         for sfx in ("weight", "bias"):
             table[f"self_attn.{proj}.{sfx}"] = f"{g}.{sfx}"
-    if arch == "gemma2":
+    if arch in ("gemma2", "gemma3"):
         table.update({"post_attention_layernorm.weight": "post_attention_norm.weight",
                       "pre_feedforward_layernorm.weight": "ffn_norm.weight",
                       "post_feedforward_layernorm.weight": "post_ffw_norm.weight"})
+    elif arch == "qwen35":
+        table["post_attention_layernorm.weight"] = "post_attention_norm.weight"
     else:
         table["post_attention_layernorm.weight"] = "ffn_norm.weight"
     return f"blk.{l}.{table[rest]}"
@@ -452,7 +486,23 @@ def build(name):
             p.copy_(p.to(torch.bfloat16).to(torch.float32))
     sd = {k: v.double().numpy() for k, v in model.state_dict().items()}
     n_layers, heads, kvh = cfg.num_hidden_layers, cfg.num_attention_heads, cfg.num_key_value_heads
+    hd = getattr(cfg, "head_dim", None) or cfg.hidden_size // heads
     gemma = arch.startswith("gemma")
+    qwen35 = arch == "qwen35"
+    # `1 + w` RMSNorms stored as `1 + w` (convert_hf_to_gguf.py): Gemma, and Qwen3.5 except its
+    # gated norm.
+    shifted = lambda k: k.endswith("norm.weight") and (gemma or (qwen35 and not k.endswith("linear_attn.norm.weight")))
+    if qwen35:
+        nk, nv = cfg.linear_num_key_heads, cfg.linear_num_value_heads
+        dk, dv, rr = cfg.linear_key_head_dim, cfg.linear_value_head_dim, nv // nk
+
+        def tiled(d):
+            # GGUF position j = (v, k, e) holds HF index (k, v, e): `_reorder_v_heads`.
+            return np.array([(k * rr + v) * d + e for v in range(rr) for k in range(nk) for e in range(d)])
+
+        def qkv_perm():
+            qk = 2 * nk * dk
+            return np.concatenate([np.arange(qk), qk + tiled(dv)])
     tensors, deq = [], {}
     types = {}
     for k, w in sd.items():
@@ -463,15 +513,34 @@ def build(name):
         x = w.copy()
         if arch == "llama" and (".q_proj." in k or ".k_proj." in k):
             x = permute(x, heads if ".q_proj." in k else kvh)
-        if gemma and k.endswith("norm.weight"):
+        if shifted(k):
             x = (x.astype(np.float32) + np.float32(1.0)).astype(np.float64)
+        rows_perm, cols_perm = None, None
+        if qwen35 and ".linear_attn." in k:
+            if k.endswith("conv1d.weight"):
+                x = x.reshape(x.shape[0], x.shape[-1])
+            if k.endswith(("in_proj_qkv.weight", "conv1d.weight")):
+                rows_perm = qkv_perm()
+            elif k.endswith("in_proj_z.weight"):
+                rows_perm = tiled(dv)
+            elif k.endswith(("in_proj_a.weight", "in_proj_b.weight", "A_log", "dt_bias")):
+                rows_perm = tiled(1)
+            elif k.endswith("out_proj.weight"):
+                cols_perm = tiled(dv)
+            if rows_perm is not None:
+                x = x[rows_perm]
+            if cols_perm is not None:
+                x = x[:, cols_perm]
+            if k.endswith("A_log"):
+                x = -np.exp(x.astype(np.float32)).astype(np.float64)
         if x.ndim == 1:
             ty = F32
             raw = quantize(x.reshape(1, -1), F32)
             back = dequant(raw, F32, 1, x.shape[0]).reshape(-1)
         else:
             rows, ne0 = x.shape
-            ty = plan(gname, layer, n_layers, ne0)
+            # llama.cpp keeps the convolution kernels in float.
+            ty = F32 if gname.endswith("ssm_conv1d.weight") else plan(gname, layer, n_layers, ne0)
             raw = quantize(x, ty)
             back = dequant(raw, ty, rows, ne0)
         types[gname] = TNAME[ty]
@@ -482,11 +551,23 @@ def build(name):
         assert rel <= bound, f"{name}: {gname} ({TNAME[ty]}) decodes to relative error {rel:.4f} > {bound}"
         tensors.append((gname, list(reversed(x.shape)), ty, raw))
         # The reference weight: the dequantised tensor in Hugging Face's parameterisation.
-        r = back
+        r = back.reshape(x.shape)
         if arch == "llama" and (".q_proj." in k or ".k_proj." in k):
             r = unpermute(r, heads if ".q_proj." in k else kvh)
-        if gemma and k.endswith("norm.weight"):
+        if shifted(k):
             r = (r.astype(np.float32) - np.float32(1.0)).astype(np.float64)
+        if qwen35 and ".linear_attn." in k:
+            if k.endswith("A_log"):
+                r = np.log(-r.astype(np.float32)).astype(np.float64)
+            if rows_perm is not None:
+                inv = np.empty_like(rows_perm)
+                inv[rows_perm] = np.arange(len(rows_perm))
+                r = r[inv]
+            if cols_perm is not None:
+                inv = np.empty_like(cols_perm)
+                inv[cols_perm] = np.arange(len(cols_perm))
+                r = r[:, inv]
+            r = r.reshape(w.shape)
         deq[k] = torch.from_numpy(r.astype(np.float32))
     if cfg.tie_word_embeddings:
         # One parameter under two names: both must carry the dequantised table.
@@ -505,20 +586,43 @@ def build(name):
         kv(p + "attention.head_count", GT_U32, heads),
         kv(p + "attention.head_count_kv", GT_U32, kvh),
         kv(p + "attention.layer_norm_rms_epsilon", GT_F32, cfg.rms_norm_eps),
-        kv(p + "attention.key_length", GT_U32, cfg.head_dim),
-        kv(p + "attention.value_length", GT_U32, cfg.head_dim),
-        kv(p + "rope.dimension_count", GT_U32, cfg.head_dim),
+        kv(p + "attention.key_length", GT_U32, hd),
+        kv(p + "attention.value_length", GT_U32, hd),
+        kv(p + "rope.dimension_count", GT_U32, int(hd * (cfg.rope_parameters or {}).get("partial_rotary_factor", 1.0))),
         kv(p + "vocab_size", GT_U32, V),
         kv("tokenizer.ggml.model", GT_STR, "gpt2"),
         kv("tokenizer.ggml.tokens", GT_ARR, (GT_STR, [f"<t{i}>" for i in range(V)])),
         kv("tokenizer.ggml.token_type", GT_ARR, (GT_I32, [1] * V)),
     ]
-    theta = getattr(cfg, "rope_theta", None) or (cfg.rope_parameters or {}).get("rope_theta", 10000.0)
+    rp = cfg.rope_parameters or {}
+    theta = getattr(cfg, "rope_theta", None) or rp.get("full_attention", rp).get("rope_theta", 10000.0)
     kvs.append(kv(p + "rope.freq_base", GT_F32, float(theta)))
     if arch == "gemma2":
         kvs += [kv(p + "attn_logit_softcapping", GT_F32, cfg.attn_logit_softcapping),
                 kv(p + "final_logit_softcapping", GT_F32, cfg.final_logit_softcapping),
                 kv(p + "attention.sliding_window", GT_U32, cfg.sliding_window)]
+    if arch == "gemma3":
+        kvs.append(kv(p + "attention.sliding_window", GT_U32, cfg.sliding_window))
+        full = rp["full_attention"]
+        if full.get("rope_type") == "linear":
+            kvs += [kv(p + "rope.scaling.type", GT_STR, "linear"), kv(p + "rope.scaling.factor", GT_F32, full["factor"])]
+    if arch == "phi3":
+        orig = cfg.original_max_position_embeddings
+        scale = cfg.max_position_embeddings / orig
+        kvs += [kv(p + "attention.sliding_window", GT_U32, cfg.sliding_window or 0),
+                kv(p + "rope.scaling.original_context_length", GT_U32, orig),
+                kv(p + "rope.scaling.attn_factor", GT_F32, math.sqrt(1 + math.log(scale) / math.log(orig)))]
+        for which in ("long", "short"):
+            f = np.asarray(rp[f"{which}_factor"], dtype=np.float32)
+            tensors.append((f"rope_factors_{which}.weight", [len(f)], F32, f.astype("<f4").tobytes()))
+    if qwen35:
+        kvs += [kv(p + "rope.dimension_sections", GT_ARR, (GT_I32, [11, 11, 10, 0])),
+                kv(p + "ssm.conv_kernel", GT_U32, cfg.linear_conv_kernel_dim),
+                kv(p + "ssm.state_size", GT_U32, dk),
+                kv(p + "ssm.group_count", GT_U32, nk),
+                kv(p + "ssm.time_step_rank", GT_U32, nv),
+                kv(p + "ssm.inner_size", GT_U32, nv * dv),
+                kv(p + "full_attention_interval", GT_U32, cfg.layer_types.index("full_attention") + 1)]
     return model, cfg, kvs, tensors, types, seed
 
 

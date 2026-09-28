@@ -347,13 +347,14 @@ pub(crate) fn attach_quant(spec: &mut ArchSpec, q: crate::prequant::QuantConfig)
             "{arch}: a pre-quantised checkpoint of this kind (only decoders with nn.Linear projections)"
         )));
     }
-    if spec.hf.names.keys().any(|k| k.starts_with("vision") || k.contains("projector")) || !spec.hf.ignored_prefixes.is_empty() {
+    let visual = |k: &str| k.contains("vision") || k.contains("visual") || k.contains("projector");
+    if spec.hf.names.keys().any(|k| visual(k)) || spec.hf.ignored_prefixes.iter().any(|k| visual(k)) {
         return Err(LowerError::not_lowerable(format!("{arch}: a pre-quantised multimodal checkpoint")));
     }
     for (l, ls) in spec.layers.iter().enumerate() {
-        if !matches!(ls.mixer, Mixer::Attention(_)) || !matches!(ls.ffn, Ffn::Mlp(_)) {
+        if !matches!(ls.mixer, Mixer::Attention(_) | Mixer::GatedDeltaNet(_)) || !matches!(ls.ffn, Ffn::Mlp(_)) {
             return Err(LowerError::not_lowerable(format!(
-                "{arch}: layer {l} of a pre-quantised checkpoint is not attention + MLP (quantised experts, latent attention and recurrent mixers are not lowered from their integers yet)"
+                "{arch}: layer {l} of a pre-quantised checkpoint is not attention or gated delta + MLP (quantised experts, latent attention and the other recurrent mixers are not lowered from their integers yet)"
             )));
         }
     }

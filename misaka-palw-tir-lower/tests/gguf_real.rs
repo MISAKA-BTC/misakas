@@ -66,3 +66,24 @@ fn a_real_q4_k_m_file_decodes_to_its_f16_twin() {
         assert!(*max < 0.2, "{ty}: a tensor decodes to noise ({max:.3})");
     }
 }
+
+/// The real file's mapping: its Hugging Face config, the lowered program, every tensor bound by
+/// shape (nothing loaded): `PALW_GGUF_Q=… cargo test --release --test gguf_real maps -- --ignored`.
+#[test]
+#[ignore]
+fn a_real_gguf_maps_and_lowers() {
+    use misaka_palw_tir_lower::gguf::GgufModel;
+    use misaka_palw_tir_lower::lower::{LowerOpts, program_summary};
+    let Ok(q) = std::env::var("PALW_GGUF_Q") else {
+        eprintln!("set PALW_GGUF_Q");
+        return;
+    };
+    let m = GgufModel::open(&PathBuf::from(q)).expect("mapped");
+    eprintln!("config: {}", serde_json::to_string(&m.config).unwrap());
+    let prep = m.prepare(&LowerOpts::default()).expect("lowered");
+    eprintln!("{}", program_summary(&prep.lowered.program));
+    let quantised = prep.lowered.program.params.iter().filter(|p| p.name.ends_with(".qa")).count();
+    let rep = misaka_palw_tir_lower::weights::check_weights(&prep.hl, &prep.binding, &m);
+    eprintln!("{quantised} quantised projections; {} bindings, errors {:?}, unused {:?}", rep.bound, rep.errors, rep.unused);
+    assert!(rep.errors.is_empty() && rep.unused.is_empty());
+}

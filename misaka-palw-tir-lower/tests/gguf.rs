@@ -76,8 +76,7 @@ fn run(name: &str) -> Result<Outcome, String> {
     let hf_cfg: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("hf_config.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     same_config(&model.config, &hf_cfg)?;
-    let spec = model.spec().map_err(|e| format!("spec: {e}"))?;
-    let prep = fidelity::prepare_spec(spec, &LowerOpts::default()).map_err(|e| format!("prepare: {e}"))?;
+    let prep = model.prepare(&LowerOpts::default()).map_err(|e| format!("prepare: {e}"))?;
     let quantised = prep.lowered.program.params.iter().filter(|p| p.name.ends_with(".qa")).count();
     let block_nodes = prep.lowered.program.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
     analyze_ranges(&prep.lowered.program).map_err(|e| format!("range analysis refuses the program: {e}"))?;
@@ -169,7 +168,17 @@ macro_rules! gguf {
     )*};
 }
 
-gguf!(gguf_llama_q4_k_m, gguf_qwen2_q5_k_m, gguf_qwen3_q8_0, gguf_gemma_q4_0, gguf_gemma2_q6_k, gguf_mistral_mix);
+gguf!(
+    gguf_llama_q4_k_m,
+    gguf_qwen2_q5_k_m,
+    gguf_qwen3_q8_0,
+    gguf_gemma_q4_0,
+    gguf_gemma2_q6_k,
+    gguf_mistral_mix,
+    gguf_gemma3_q4_0,
+    gguf_phi3_q8_0,
+    gguf_qwen35_q8_0,
+);
 
 /// Hostile headers are errors, never panics or unbounded allocations.
 #[test]
