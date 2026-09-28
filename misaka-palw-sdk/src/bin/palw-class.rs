@@ -37,8 +37,15 @@ USAGE:
     palw-class check-architecture --network <id> --config <config.json> [--legacy] [--held] [--tile-len N] [--h-chunk N] [--json]
     palw-class check-architecture --network <id> --tir <program.tir> [--tile-len N] [--h-chunk N] [--json]
     palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
+    palw-class drill-leaves --network <id> [--model-id <model-id>] [--decode N] <artifact-path>
     palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
                          [--logits-scheme tiled|flat] [--model-id <model-id>] <lowered.palwtir>
+
+`drill-leaves` (RFC-0002 Phase F, drill D-F2) prints, for an IR class's attempt job — its canonical
+prefill, --decode tokens (1 where the network draws one forward, the default; 2 otherwise) — the first
+step leaf of every commit-point kind (each committed node, each Fixed state's checkpoint, each history
+tile) in prefill and decode: the leaves a live court battery tampers at with --palw-drill-tamper-leaf,
+one kind at a time. One line per leaf: `<leaf> <call> <kind>`.
 
 `declare-layout` (RFC-0002 Phase F) makes a lowered artifact a class: `palw-tir-fidelity --artifact-out`
 writes the program and its integer tensors with no layout, and an IR class is its program under a
@@ -219,6 +226,16 @@ fn run(args: &[String]) -> Result<(), String> {
                 true => Ok(()),
                 false => std::process::exit(2),
             }
+        }
+        "drill-leaves" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let wanted = take_flag(&mut args, "--model-id");
+            let decode = match take_flag(&mut args, "--decode") {
+                Some(v) => v.parse::<u32>().map_err(|e| format!("--decode {v}: {e}"))?,
+                None => 1,
+            };
+            let path = PathBuf::from(args.first().ok_or(USAGE)?);
+            drill_leaves(&view, &path, wanted.as_deref(), decode)
         }
         "declare-layout" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
@@ -572,6 +589,31 @@ fn inspect(view: &NetworkView, path: &std::path::Path) -> Result<(), String> {
             }
             Err(why) => println!("  no      {}  — {why}", entry.model_id),
         }
+    }
+    Ok(())
+}
+
+/// `drill-leaves`: the first leaf of every commit-point kind of the class's attempt job.
+fn drill_leaves(view: &NetworkView, path: &std::path::Path, wanted: Option<&str>, decode: u32) -> Result<(), String> {
+    let entry = misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(path)?;
+    if wanted.is_some_and(|w| w != entry.model_id) {
+        return Err(format!("{} declares {}, not the --model-id asked for", path.display(), entry.model_id));
+    }
+    let mut job = entry.canonical_context();
+    job.exact_decode_tokens = decode.max(1);
+    let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(&entry.class).map_err(|e| e.to_string())?;
+    let count = space.leaf_count_capped(&job, view.bundle.court.max_step_leaf_count()).map_err(|e| e.to_string())?;
+    let leaves = misaka_palw_sdk::lineages::tir::tir_drill_covering_leaves_v1(&space, &job, count)?;
+    eprintln!(
+        "{}: class {}, job {} + {} ({count} step leaves), {} commit-point kinds",
+        entry.model_id,
+        entry.class_id(),
+        job.declared_prefill_tokens,
+        job.exact_decode_tokens,
+        leaves.len()
+    );
+    for ((kind, call), leaf) in leaves {
+        println!("{leaf} {call:?} {kind:?}");
     }
     Ok(())
 }

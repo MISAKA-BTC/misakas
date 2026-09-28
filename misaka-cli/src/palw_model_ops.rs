@@ -224,6 +224,100 @@ fn inspect_tir(
     Ok(())
 }
 
+/// **`misaka palw tir-registration`**: a signed `ClassRegisteredTirV1` for `artifact`'s IR class at
+/// the connected chain's live pricing, weightless, signed by `key` for the registrant `bond` over
+/// `palw_tir_class_registration_message_v1` under the chain's domain (`NodeView::params`, a drill's
+/// genesis with the salt), written to `out`. The gate is not asked: the object may be for a height
+/// the IR fence does not cover yet.
+pub(crate) async fn tir_registration_object(
+    ctx: &Ctx,
+    key: &crate::keys::KeySource,
+    artifact: &Path,
+    bond: &str,
+    out: &Path,
+    model_id: Option<&str>,
+) -> CliResult {
+    let nv = connect(ctx).await?;
+    let params = nv.params.clone();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
+        return Err(CliError::new(exit::CONFIG, format!("{} has no PALW classes", params.net)));
+    };
+    let entry = misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(artifact).map_err(|e| CliError::new(exit::MODEL, e))?;
+    if model_id.is_some_and(|m| m != entry.model_id) {
+        return Err(CliError::new(
+            exit::MODEL,
+            format!("{} declares {}, not the --model-id given", artifact.display(), entry.model_id),
+        ));
+    }
+    let (txid, index) =
+        bond.split_once(':').ok_or_else(|| CliError::new(exit::CONFIG, format!("--bond {bond}: not <txid>:<index>")))?;
+    let registrant = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+        txid.parse().map_err(|_| CliError::new(exit::CONFIG, format!("--bond {bond}: not a transaction id")))?,
+        index.parse().map_err(|_| CliError::new(exit::CONFIG, format!("--bond {bond}: not an index")))?,
+    ));
+    let terms_resp = nv
+        .client
+        .get_palw_registration_terms()
+        .await
+        .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwRegistrationTerms: {e}")))?;
+    let (terms, _) = crate::operator::model_add::decode_terms(&terms_resp).map_err(|e| CliError::new(exit::GENERIC, e))?;
+    let build = |signature: Vec<u8>| {
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_post_genesis_registration_v1(
+            entry.class.as_ref().clone(),
+            entry.canonical_context(),
+            entry.artifact_root,
+            0,
+            terms.initial_target,
+            terms.slash_value_per_pwu,
+            0,
+            registrant,
+            signature,
+            bundle.court.max_step_leaf_count(),
+        )
+        .map_err(|e| CliError::new(exit::MODEL, format!("{}: {} ({e})", entry.model_id, e.code())))
+    };
+    let unsigned = build(Vec::new())?;
+    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        params.net.to_string().as_bytes(),
+        Some(params.genesis.hash),
+    );
+    let message = misaka_palw_sdk::tir_registration::tir_registration_message_v1(domain, &unsigned)
+        .ok_or_else(|| CliError::new(exit::GENERIC, "the builder returned another object than an IR registration"))?;
+    let key = key.load_key()?;
+    let signature = key.sign_with_context(
+        message.as_byte_slice(),
+        kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1,
+    );
+    let object = build(signature.to_vec())?;
+    let bytes = borsh::to_vec(&object).map_err(|e| CliError::new(exit::GENERIC, e.to_string()))?;
+    std::fs::write(out, &bytes).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", out.display())))?;
+    if ctx.output == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "misaka.palw.tir-registration.v1",
+                "out": out.display().to_string(),
+                "bytes": bytes.len(),
+                "class_id": entry.class_id().to_string(),
+                "artifact_root": entry.artifact_root.to_string(),
+                "model_id": entry.model_id,
+                "registrant_bond": bond,
+            })
+        );
+    } else {
+        println!(
+            "wrote {} ({} bytes): ClassRegisteredTirV1 for {} — signed by bond {bond}",
+            out.display(),
+            bytes.len(),
+            entry.model_id
+        );
+        println!("class_id       {}", entry.class_id());
+        println!("artifact_root  {}", entry.artifact_root);
+        println!("file it with: misaka palw submit-object --object {} --yes", out.display());
+    }
+    Ok(())
+}
+
 trait FitRowLabel {
     fn verdict_label(&self) -> &'static str;
 }

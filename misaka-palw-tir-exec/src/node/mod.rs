@@ -18,8 +18,8 @@ pub use backend::{
     tir_fused_kernels_default_v1, tir_trace_event_disclosure_of_capture_v1,
 };
 pub use drill::{
-    TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_family_drill_v1, tir_family_evidence_v1,
-    tir_family_id_v1, tir_prim_kernel_id_v1,
+    TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_drill_covering_leaves_v1, tir_family_drill_v1,
+    tir_family_evidence_v1, tir_family_id_v1, tir_prim_kernel_id_v1,
 };
 pub use evidence::{TirEvidenceV1, TirRetainedJobV1, tir_bisect_prefix_state_v1, tir_first_divergence_v1};
 pub use inventory::{TirHeldInventoryV1, TirInventoryTreeV1, TirParamOpenerV1, TirParamsSourceV1};

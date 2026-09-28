@@ -93,6 +93,29 @@ impl TirFamilyCertificateV1 {
     }
 }
 
+/// **The drill's covering set** — the first leaf of every `(unit, call class)` among a job's first
+/// `count` step leaves: every committed node's tiles, every `Fixed` state's checkpoint and every
+/// history's tile, in prefill and in decode. What a drill plants its lies at, and what a live court
+/// battery (D-F2) tampers at, one commit-point kind at a time.
+pub fn tir_drill_covering_leaves_v1(
+    space: &kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1,
+    job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    count: u64,
+) -> Result<BTreeMap<(TirDrillUnitKindV1, TirDrillCallV1), u64>, String> {
+    let mut candidates: BTreeMap<(TirDrillUnitKindV1, TirDrillCallV1), u64> = BTreeMap::new();
+    for i in 0..count {
+        let leaf = space.leaf_at(job, i).ok_or_else(|| format!("leaf {i} is not in the step space"))?;
+        let kind = match leaf.kind {
+            PalwTirLeafKindV1::Commit { block, node, .. } => TirDrillUnitKindV1::Commit { block, node },
+            PalwTirLeafKindV1::State { state, .. } => TirDrillUnitKindV1::Checkpoint { state },
+            PalwTirLeafKindV1::HistTile { state, .. } => TirDrillUnitKindV1::HistTile { state },
+        };
+        let call = if leaf.position < job.declared_prefill_tokens { TirDrillCallV1::Prefill } else { TirDrillCallV1::Decode };
+        candidates.entry((kind, call)).or_insert(i);
+    }
+    Ok(candidates)
+}
+
 /// The kernel id of an IR primitive (design §2.7).
 pub fn tir_prim_kernel_id_v1(name: &str) -> Hash64 {
     kernel_semantics_id_v1(&format!("palw-tir/v1/prim={name}"))
@@ -180,17 +203,7 @@ pub fn tir_family_evidence_v1(
     let count = honest_capture.binding.step_leaf_count;
 
     // The covering set: the first leaf of every (unit, call class).
-    let mut candidates: BTreeMap<(TirDrillUnitKindV1, TirDrillCallV1), u64> = BTreeMap::new();
-    for i in 0..count {
-        let leaf = space.leaf_at(&job, i).ok_or_else(|| format!("leaf {i} is not in the step space"))?;
-        let kind = match leaf.kind {
-            PalwTirLeafKindV1::Commit { block, node, .. } => TirDrillUnitKindV1::Commit { block, node },
-            PalwTirLeafKindV1::State { state, .. } => TirDrillUnitKindV1::Checkpoint { state },
-            PalwTirLeafKindV1::HistTile { state, .. } => TirDrillUnitKindV1::HistTile { state },
-        };
-        let call = if leaf.position < job.declared_prefill_tokens { TirDrillCallV1::Prefill } else { TirDrillCallV1::Decode };
-        candidates.entry((kind, call)).or_insert(i);
-    }
+    let candidates = tir_drill_covering_leaves_v1(space, &job, count)?;
 
     let mut units = Vec::with_capacity(candidates.len());
     let mut vectors = Vec::with_capacity(candidates.len());
