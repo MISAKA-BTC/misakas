@@ -361,8 +361,12 @@ pub fn validate(p: &TirProgramV1) -> TirResult<ProgramInfo> {
     if p.token_bound == 0 {
         return nf("token_bound must be at least 1");
     }
-    if p.blocks.is_empty() || p.blocks.len() > MAX_BLOCKS {
-        return nf(format!("1..={MAX_BLOCKS} blocks"));
+    if p.prim_set_id != crate::prim::PRIM_SET_ID_V1 {
+        return nf("prim_set_id is not PALW-TIR v1's (NF-1)");
+    }
+    // Two at least: `pre` and `post` are distinct blocks (NF-3).
+    if p.blocks.len() < 2 || p.blocks.len() > MAX_BLOCKS {
+        return nf(format!("2..={MAX_BLOCKS} blocks"));
     }
     if p.schedule.layers.len() > MAX_LAYERS {
         return nf(format!("at most {MAX_LAYERS} layers"));
@@ -508,7 +512,7 @@ pub fn validate(p: &TirProgramV1) -> TirResult<ProgramInfo> {
         for (ni, n) in b.nodes.iter().enumerate() {
             let (lo, hi) = n.prim.arity();
             if n.inputs.len() < lo || n.inputs.len() > hi || n.inputs.len() > MAX_NODE_INPUTS {
-                return shape_err(bi, ni, &n.prim, format!("{} inputs, want {lo}..={hi}", n.inputs.len()));
+                return nf(format!("block {bi} node {ni} ({}): {} inputs, want {lo}..={hi} (NF-14)", n.prim.name(), n.inputs.len()));
             }
             check_tensor_type(&n.out, window).or_else(|m| shape_err(bi, ni, &n.prim, m))?;
             let mut ins = Vec::with_capacity(n.inputs.len());
@@ -560,6 +564,13 @@ pub fn validate(p: &TirProgramV1) -> TirResult<ProgramInfo> {
             match n.prim {
                 Prim::TopK { .. } if !n.commit => {
                     return nf(format!("block {bi} node {ni}: every TopK is a commit point (PALW-TIR-11)"));
+                }
+                // NF-19: no two nodes of one step write the same state instance. Per block that is
+                // one write per state; across blocks, `post` writes nothing, so a global state
+                // (NF-15: pre or post only) is written by `pre` alone and a per-layer instance by
+                // its layer's one occurrence.
+                Prim::StateWrite { .. } | Prim::HistAppend { .. } if info[bi].is_post => {
+                    return nf(format!("block {bi} node {ni}: the post block writes no state (NF-19)"));
                 }
                 Prim::StateWrite { state } => {
                     if p.states[state as usize].per_layer != layer_block {
