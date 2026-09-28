@@ -285,8 +285,9 @@ pub fn palw_tir_carriable_close_bytes_v1(court: &crate::palw_mode_v2::PalwCourtP
 /// what the court's own evaluation reads, priced as carried, the parameters in the multiproof the
 /// close carries — within `carriable` bytes, and every dissected point's worst root claim within one
 /// carrier; `court` says whether history cones are dissected. A sizing past `work_cap` steps is
-/// refused rather than run (`TirExceeds { limit: "IR close sizing work" }`). Returns the bounds, one
-/// per commit point.
+/// refused rather than run (`TirExceeds { limit: "IR close sizing work" }`), and the sizing stops at
+/// the first commit point past either bound, which is refused by name. Returns the bounds, one per
+/// commit point sized.
 pub fn palw_tir_carried_closes_admit_v1(
     space: &PalwTirStepSpaceV1,
     program: &TirProgramV1,
@@ -298,7 +299,12 @@ pub fn palw_tir_carried_closes_admit_v1(
     use crate::palw_tir_close_size_v1 as z;
     let inventory = crate::palw_tir_court_v1::PalwTirInventoryIndexV1::new(program)
         .ok_or_else(|| PalwClassAdmissionError::TirLayout("the class's inventory has no index".into()))?;
-    let sizing = z::PalwTirCloseSizingV1 { form: z::PalwTirParamFormV1::Multiproof, court, cap: work_cap };
+    let sizing = z::PalwTirCloseSizingV1 {
+        form: z::PalwTirParamFormV1::Multiproof,
+        court,
+        cap: work_cap,
+        stop_above: Some((carriable, PALW_TIR_DISSECT_CARRIER_BYTES_V1)),
+    };
     let bounds = z::palw_tir_worst_closes_v1(space, &inventory, longest, &sizing).map_err(|e| {
         if e == z::PALW_TIR_CLOSE_SIZING_OVER_CAP_V1 {
             PalwClassAdmissionError::TirExceeds {

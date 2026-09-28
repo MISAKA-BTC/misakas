@@ -66,10 +66,14 @@ use misaka_palw_tir::demand::{DemandContext, carry_in_node_v1, hist_row_node_v1,
 use misaka_palw_tir::program::StateKind;
 use misaka_palw_tir::{Prim, Ref};
 
-/// **The most work one class's close sizing may do** (element steps of the twin, summed over every
-/// read): admission refuses a class whose sizing would do more, by name, rather than run it. The
-/// Qwen2.5-1.5B A16 class at 8,192 positions (D-F1) sizes in about 1/8 of it.
-pub const PALW_TIR_CLOSE_SIZING_WORK_CAP_V1: u64 = 1 << 28;
+/// **The most work one class's close sizing may do**: admission refuses a class whose sizing would do
+/// more, by name, rather than run it — a registration's CPU is bounded before it is spent (one IR
+/// registration counts per block). Work is counted in steps that track the time they take: an
+/// element read or visited, a context made (a step a node), a request seeded (a step an element), a
+/// step leaf placed (`16` plus the program's commit points and occurrences, what its index costs), a
+/// union or count outside the twin (a step an entry). The Qwen2.5-1.5B A16 class at 8,192 positions
+/// (D-F1) sizes in 53.2 M steps, four fifths of it; the sizing stops at its first refusal.
+pub const PALW_TIR_CLOSE_SIZING_WORK_CAP_V1: u64 = 1 << 26;
 
 /// The refusal of a sizing that would pass [`PALW_TIR_CLOSE_SIZING_WORK_CAP_V1`] (or the cap it was
 /// given), exactly as [`palw_tir_worst_closes_v1`] returns it.
@@ -180,6 +184,9 @@ struct Twin<'a> {
     /// The per-row pattern, when recorded: the history tiles `(instance, lane tile) → lanes` and the
     /// row commits `(occurrence, node, tile) → lanes` a row is read through.
     pattern: Option<HistPattern>,
+    /// The work of placing one step leaf (its index walks the program's commit points and
+    /// occurrences).
+    leaf_cost: u64,
     work: u64,
     cap: u64,
 }
@@ -257,6 +264,7 @@ impl Twin<'_> {
         let (block, layer) = self.block_of(key.occurrence)?;
         let h = history_length_v1(&self.space.info, block, key.pos).ok_or("the program's info does not cover the block")?;
         let b = &self.space.program.blocks[block as usize];
+        self.tick(b.nodes.len() as u64)?;
         let shapes: Vec<Vec<usize>> = b.nodes.iter().map(|n| n.out.resolve(h)).collect();
         let demand = vec![BTreeSet::new(); b.nodes.len()];
         self.ctxs.insert(k, CtxState { block, layer, h, shapes, demand });
@@ -280,7 +288,7 @@ impl Twin<'_> {
         if !self.placed.insert((self.in_hist, coord.call_index, coord.node_slot, coord.position, coord.tile_index)) {
             return Ok(());
         }
-        self.tick(16)?;
+        self.tick(self.leaf_cost)?;
         let i = self.space.leaf_index(self.job_ctx, &coord).ok_or_else(|| format!("{coord:?} is no leaf of the job"))?;
         let marks = h_tile && !self.in_hist;
         let sink = self.sink();
@@ -721,8 +729,16 @@ struct Split {
     work: u64,
 }
 
+/// The work of placing one step leaf of `space`: its index walks the program's commit points and
+/// occurrences.
+fn leaf_cost_of(space: &PalwTirStepSpaceV1) -> u64 {
+    let commits: u64 = space.program.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count() as u64).sum();
+    16 + commits + space.occurrences().len() as u64
+}
+
 /// The twin's reads of `request`, split — history-only (`hist_only`) or recording the row pattern
 /// (`pattern`) when asked.
+#[allow(clippy::too_many_arguments)]
 fn close_reads_split(
     space: &PalwTirStepSpaceV1,
     job_ctx: &PalwJobContextV2,
@@ -731,6 +747,7 @@ fn close_reads_split(
     cap: u64,
     hist_only: bool,
     pattern: bool,
+    leaf_cost: u64,
 ) -> Result<Split, String> {
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let (block, _) = space.occurrences().get(request.ctx.occurrence as usize).copied().ok_or("no such occurrence")?;
@@ -755,9 +772,14 @@ fn close_reads_split(
         reaches_hist: if hist_only { reaches_hist(&space.program.blocks[block as usize], request.target) } else { Vec::new() },
         hist_nodes: HashMap::new(),
         pattern: pattern.then(HistPattern::default),
+        leaf_cost,
         work: 0,
         cap,
     };
+    // A request's setup: its seed, and (history-only) the block's reach.
+    twin.tick(
+        32 + request.elements.len() as u64 + if hist_only { space.program.blocks[block as usize].nodes.len() as u64 } else { 0 },
+    )?;
     twin.ctx(request.ctx)?;
     {
         let st = twin.ctxs.get_mut(&(request.ctx.pos, request.ctx.occurrence)).expect("made above");
@@ -783,7 +805,8 @@ pub fn palw_tir_close_reads_v1(
     request: &PalwTirCloseRequestV1<'_>,
     cap: u64,
 ) -> Result<(PalwTirCloseReadsV1, u64), String> {
-    let Split { mut reads, hist, work, .. } = close_reads_split(space, job_ctx, inventory, request, cap, false, false)?;
+    let Split { mut reads, hist, work, .. } =
+        close_reads_split(space, job_ctx, inventory, request, cap, false, false, leaf_cost_of(space))?;
     reads.merge(&hist);
     Ok((reads, work))
 }
@@ -1031,10 +1054,18 @@ pub struct PalwTirCloseSizingV1 {
     pub court: bool,
     /// The most work the whole sizing may do.
     pub cap: u64,
+    /// `(close, root claim)`: stop at the first commit point whose worst close or root claim passes
+    /// these (admission needs no more than its first refusal); `None` sizes every commit point.
+    pub stop_above: Option<(u64, u64)>,
 }
 
 fn tile_elements(first: usize, len: usize) -> Vec<usize> {
     (first..first + len).collect()
+}
+
+/// The entries of a read set (what merging or pricing it walks).
+fn size_of_reads(reads: &PalwTirCloseReadsV1) -> u64 {
+    (reads.steps.len() + reads.loose_steps.len() + reads.params.len() + reads.wild_rows.len() + reads.supplied.len()) as u64
 }
 
 /// The contiguous runs of step leaves a read set holds (a unit moved by an alignment adds at most one
@@ -1093,7 +1124,17 @@ pub fn palw_tir_worst_closes_work_v1(
         let widest = reads.steps.values().chain(reads.loose_steps.iter()).copied().max().unwrap_or(0);
         step_runs(reads) * (step_preimage_bytes(widest) + 4 + 2 * 64 * price.depth)
     };
-    let mut budget = sizing.cap;
+    // The work left, shared by the twin's reads and the counting outside them.
+    let budget = std::cell::Cell::new(sizing.cap);
+    let leaf_cost = leaf_cost_of(space);
+    let charge = |n: u64| -> Result<(), String> {
+        let left = budget.get();
+        if n > left {
+            return Err(PALW_TIR_CLOSE_SIZING_OVER_CAP_V1.to_string());
+        }
+        budget.set(left - n);
+        Ok(())
+    };
     let occurrences: Vec<(u8, Option<u16>)> = space.occurrences().to_vec();
     // One occurrence per block kind and predecessor: `pre`, the first two layers, `post`.
     let mut chosen: Vec<u16> = Vec::new();
@@ -1126,9 +1167,10 @@ pub fn palw_tir_worst_closes_work_v1(
             };
             let h_at = |pos: u32| history_length_v1(&space.info, bi8, pos).unwrap_or(1);
             let count_at = |pos: u32| element_count(&node.out.resolve(h_at(pos)));
-            let tiles_at = |pos: u32| -> Vec<Vec<usize>> {
+            // Every tile of `pos`, `(first element, length)`: its elements are made one tile at a time.
+            let tiles_at = |pos: u32| {
                 let count = count_at(pos);
-                (0..count).step_by(tile_len).map(|first| tile_elements(first, tile_len.min(count - first))).collect()
+                (0..count).step_by(tile_len).map(move |first| (first, tile_len.min(count - first)))
             };
             // The first position at which a tile spans at most two row-parts.
             let mut p_late = 0u32;
@@ -1144,18 +1186,18 @@ pub fn palw_tir_worst_closes_work_v1(
             let local = !dissected && has_h && reductions.is_empty() && !has_fixed && p_late <= p_max;
             let mut worst = PalwTirCloseBoundV1 { block: bi8, node: ni16, dissected, close_bytes: 0, root_claim_bytes: 0 };
             for occ in chosen.iter().copied().filter(|o| occurrences[*o as usize].0 == bi8) {
-                let mut twin = |pos: u32,
-                                elements: &[usize],
-                                supplied: &[u16],
-                                target: u16,
-                                range: Option<(usize, usize)>,
-                                both: bool,
-                                hist_only: bool,
-                                pattern: bool| {
+                let twin = |pos: u32,
+                            elements: &[usize],
+                            supplied: &[u16],
+                            target: u16,
+                            range: Option<(usize, usize)>,
+                            both: bool,
+                            hist_only: bool,
+                            pattern: bool| {
                     let request =
                         PalwTirCloseRequestV1 { ctx: DemandContext { pos, occurrence: occ }, target, elements, supplied, range, both };
-                    let split = close_reads_split(space, job_ctx, inventory, &request, budget, hist_only, pattern)?;
-                    budget = budget.saturating_sub(split.work);
+                    let split = close_reads_split(space, job_ctx, inventory, &request, budget.get(), hist_only, pattern, leaf_cost)?;
+                    budget.set(budget.get().saturating_sub(split.work));
                     Ok::<_, String>(split)
                 };
                 // A whole read: `(everything but the history rows, the history rows)`.
@@ -1197,15 +1239,19 @@ pub fn palw_tir_worst_closes_work_v1(
                     }
                     // The rows `lo..=hi` outside the history: the union of their windows.
                     let mut outside_of: BTreeMap<(usize, usize), u64> = BTreeMap::new();
-                    let mut outside = |lo: usize, hi: usize| -> u64 {
-                        *outside_of.entry((lo, hi)).or_insert_with(|| {
-                            let mut u = PalwTirCloseReadsV1::default();
-                            for o in lo..=hi {
-                                u.merge(&ends[o]);
-                                u.merge(&starts[o]);
-                            }
-                            price.units(&u, false) + price.h_allowance(&u)
-                        })
+                    let mut outside = |lo: usize, hi: usize| -> Result<u64, String> {
+                        if let Some(units) = outside_of.get(&(lo, hi)) {
+                            return Ok(*units);
+                        }
+                        let mut u = PalwTirCloseReadsV1::default();
+                        for o in lo..=hi {
+                            charge(16 + size_of_reads(&ends[o]) + size_of_reads(&starts[o]))?;
+                            u.merge(&ends[o]);
+                            u.merge(&starts[o]);
+                        }
+                        let units = price.units(&u, false) + price.h_allowance(&u);
+                        outside_of.insert((lo, hi), units);
+                        Ok(units)
                     };
                     // Early: every tile at every position, its history rows counted exactly (a row
                     // through its complete history tile, or its row's commit before).
@@ -1219,9 +1265,12 @@ pub fn palw_tir_worst_closes_work_v1(
                             let mut tiles: BTreeSet<(u32, usize, u64)> = BTreeSet::new();
                             let mut commits: BTreeSet<(u32, u16, u16, u32)> = BTreeSet::new();
                             let mut hist_cost = 0u64;
+                            charge(16 + (o_hi - o_lo + 1) as u64)?;
                             for (o, pattern) in patterns.iter().enumerate().take(o_hi + 1).skip(o_lo) {
                                 let t_lo = if o == o_lo { (first % row_len) / inner } else { 0 };
                                 let t_hi = if o == o_hi { (last % row_len) / inner + 1 } else { hp };
+                                let rows = t_hi.min(hp.saturating_sub(1)).saturating_sub(t_lo) as u64;
+                                charge(rows * (1 + (pattern.tiles.len() + pattern.commits.len()) as u64))?;
                                 for t in t_lo..t_hi.min(hp.saturating_sub(1)) {
                                     let row_pos = (p as usize + 1 - hp + t) as u32;
                                     let group = row_pos / h_tile as u32;
@@ -1240,7 +1289,7 @@ pub fn palw_tir_worst_closes_work_v1(
                                     }
                                 }
                             }
-                            let close = price.frame((last + 1 - first) as u32) + outside(o_lo, o_hi) + hist_cost;
+                            let close = price.frame((last + 1 - first) as u32) + outside(o_lo, o_hi)? + hist_cost;
                             worst.close_bytes = worst.close_bytes.max(close);
                         }
                     }
@@ -1251,9 +1300,9 @@ pub fn palw_tir_worst_closes_work_v1(
                     let part = |o: usize| t_len as u64 * commits_cost[o] + groups as u64 * tiles_cost[o];
                     let mut late = 0u64;
                     for o in 0..outer {
-                        late = late.max(outside(o, o) + part(o));
+                        late = late.max(outside(o, o)? + part(o));
                         if o + 1 < outer {
-                            late = late.max(outside(o, o + 1) + part(o) + part(o + 1));
+                            late = late.max(outside(o, o + 1)? + part(o) + part(o + 1));
                         }
                     }
                     worst.close_bytes = worst.close_bytes.max(price.frame(tile_len as u32) + late);
@@ -1274,7 +1323,8 @@ pub fn palw_tir_worst_closes_work_v1(
                                 allowance: bool|
                  -> Result<u64, String> {
                     let mut worst = 0u64;
-                    for tile in tiles_at(pos) {
+                    for (first, len) in tiles_at(pos) {
+                        let tile = tile_elements(first, len);
                         let (mut reads, hist) = read(pos, &tile, &[], ni16, None, false)?;
                         reads.merge(&hist);
                         let extra = if allowance { price.h_allowance(&reads) } else { 0 };
@@ -1379,7 +1429,8 @@ pub fn palw_tir_worst_closes_work_v1(
                     let parts = if late_h { 2 } else { 1 };
                     let mut root_worst = 0u64;
                     let mut bottom_worst = 0u64;
-                    for tile in tiles_at(pos) {
+                    for (first, len) in tiles_at(pos) {
+                        let tile = tile_elements(first, len);
                         let supplied: Vec<u16> = reductions.iter().copied().filter(|r| *r != ni16).collect();
                         let (mut finalize, hist) = read!(pos, &tile, &supplied, ni16, None, false);
                         finalize.merge(&hist);
@@ -1449,8 +1500,14 @@ pub fn palw_tir_worst_closes_work_v1(
                     worst.close_bytes = worst.close_bytes.max(price.frame(tile_len as u32) + bottom_worst);
                 }
             }
+            let past = sizing
+                .stop_above
+                .is_some_and(|(close, root)| worst.close_bytes > close || (worst.dissected && worst.root_claim_bytes > root));
             out.push(worst);
+            if past {
+                return Ok((out, sizing.cap - budget.get()));
+            }
         }
     }
-    Ok((out, sizing.cap - budget))
+    Ok((out, sizing.cap - budget.get()))
 }

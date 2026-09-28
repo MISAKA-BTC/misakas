@@ -63,7 +63,11 @@ fn shape(g: PalwQwen25GeometryV1) -> Base0ShapeV1 {
 }
 
 fn program() -> TirProgramV1 {
-    let mut program = a16_mirror_program(&shape(QWEN25_1_5B), HISTORY_BOUND_V1_SMALL).expect("the A16 program");
+    program_of(QWEN25_1_5B)
+}
+
+fn program_of(g: PalwQwen25GeometryV1) -> TirProgramV1 {
+    let mut program = a16_mirror_program(&shape(g), HISTORY_BOUND_V1_SMALL).expect("the A16 program");
     program.logits_scheme_id.copy_from_slice(tiled_logits_scheme_id_v1().as_byte_slice());
     program
 }
@@ -224,7 +228,12 @@ fn every_terminal_close_of_the_1_5b_class_is_carriable() {
     .expect("the longest job");
     // What v10 runs (`palw_tir_carried_closes_admit_v1`), with the work it takes.
     let inventory = PalwTirInventoryIndexV1::new(&space.program).expect("an inventory");
-    let sizing = PalwTirCloseSizingV1 { form: PalwTirParamFormV1::Multiproof, court: true, cap: PALW_TIR_CLOSE_SIZING_WORK_CAP_V1 };
+    let sizing = PalwTirCloseSizingV1 {
+        form: PalwTirParamFormV1::Multiproof,
+        court: true,
+        cap: PALW_TIR_CLOSE_SIZING_WORK_CAP_V1,
+        stop_above: None,
+    };
     let started = std::time::Instant::now();
     let (bounds, work) = palw_tir_worst_closes_work_v1(&space, &inventory, &longest, &sizing).expect("sized within the cap");
     eprintln!(
@@ -232,7 +241,7 @@ fn every_terminal_close_of_the_1_5b_class_is_carriable() {
         bounds.len(),
         started.elapsed()
     );
-    assert!(work <= PALW_TIR_CLOSE_SIZING_WORK_CAP_V1 / 4, "D-F1 sizes well inside the work cap: {work}");
+    assert!(work <= PALW_TIR_CLOSE_SIZING_WORK_CAP_V1, "D-F1 sizes inside the work cap: {work}");
     assert_eq!(palw_tir_carried_close_bounds_admit_v1(&bounds, cap), Ok(()), "every close within the cap");
     let mut by_size = bounds.clone();
     by_size.sort_by_key(|b| std::cmp::Reverse(b.close_bytes));
@@ -260,4 +269,59 @@ fn every_terminal_close_of_the_1_5b_class_is_carriable() {
         matches!(under, Err(E::CourtCostExceedsCeiling { what: "IR terminal close bytes as carried", got, ceiling }) if got == worst && ceiling == worst - 1),
         "one byte under refuses: {under:?}"
     );
+}
+
+/// **Admission's CPU is bounded before it is spent**: sizing every terminal close of a class is refused
+/// past `PALW_TIR_CLOSE_SIZING_WORK_CAP_V1` steps and stops at its first refusal, and both A16 decoders
+/// (the D-F1 layout: 8,192 positions, `h_tile` 64, 1,024 logits lanes) are decided inside it — the
+/// 1.5B admitted, the 3B refused BY NAME for its closes (one attention tile of its first positions
+/// reads all 16 heads' `W_q`, 4.2 MB), never for its sizing. The work and the time are printed; at
+/// most one IR registration counts per block, so the cap is admission's worst per block.
+#[test]
+fn both_a16_classes_are_decided_inside_the_work_cap() {
+    use kaspa_consensus_core::palw_qwen25_profile::QWEN25_3B;
+    use kaspa_consensus_core::palw_tir_admission_v1::{
+        PALW_TIR_DISSECT_CARRIER_BYTES_V1, palw_tir_carriable_close_bytes_v1, palw_tir_carried_close_bounds_admit_v1,
+    };
+    use kaspa_consensus_core::palw_tir_close_size_v1::{
+        PALW_TIR_CLOSE_SIZING_WORK_CAP_V1, PalwTirCloseSizingV1, PalwTirParamFormV1, palw_tir_worst_closes_work_v1,
+    };
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1;
+    let cap = palw_tir_carriable_close_bytes_v1(&bundle(&params()).court);
+    for (name, g, admitted) in [("Qwen2.5-1.5B", QWEN25_1_5B, true), ("Qwen2.5-3B", QWEN25_3B, false)] {
+        let program = program_of(g);
+        let class = class_with(&program, 64, LOGITS_TILE, 128);
+        let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(&class).expect("a step space");
+        let longest = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(
+            &class,
+            class.class_id(&Hash64::from_bytes([0xA1; 64])),
+            (1, CONTEXT),
+        )
+        .expect("the longest job");
+        let inventory = PalwTirInventoryIndexV1::new(&space.program).expect("an inventory");
+        // What v10 runs (`palw_tir_carried_closes_admit_v1`).
+        let sizing = PalwTirCloseSizingV1 {
+            form: PalwTirParamFormV1::Multiproof,
+            court: true,
+            cap: PALW_TIR_CLOSE_SIZING_WORK_CAP_V1,
+            stop_above: Some((cap, PALW_TIR_DISSECT_CARRIER_BYTES_V1)),
+        };
+        let started = std::time::Instant::now();
+        let (bounds, work) = palw_tir_worst_closes_work_v1(&space, &inventory, &longest, &sizing)
+            .unwrap_or_else(|e| panic!("{name}: decided inside the work cap: {e}"));
+        let verdict = palw_tir_carried_close_bounds_admit_v1(&bounds, cap);
+        eprintln!(
+            "{name}: {work} steps of {PALW_TIR_CLOSE_SIZING_WORK_CAP_V1} ({:.0}%) in {:?}: {verdict:?}",
+            100.0 * work as f64 / PALW_TIR_CLOSE_SIZING_WORK_CAP_V1 as f64,
+            started.elapsed(),
+        );
+        if admitted {
+            assert_eq!(verdict, Ok(()), "{name}");
+        } else {
+            assert!(
+                matches!(verdict, Err(E::CourtCostExceedsCeiling { what: "IR terminal close bytes as carried", got, ceiling }) if got > ceiling && ceiling == cap),
+                "{name}: refused by name for its closes: {verdict:?}"
+            );
+        }
+    }
 }

@@ -17,7 +17,9 @@ use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwCourtVerdictV2};
 use kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1;
-use kaspa_consensus_core::palw_tir_close_size_v1::{PalwTirCloseSizingV1, PalwTirParamFormV1, palw_tir_worst_closes_v1};
+use kaspa_consensus_core::palw_tir_close_size_v1::{
+    PALW_TIR_CLOSE_SIZING_WORK_CAP_V1, PalwTirCloseSizingV1, PalwTirParamFormV1, palw_tir_worst_closes_work_v1,
+};
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirInventoryIndexV1, build_tir_cone_refutation_v1, build_tir_dissect_bottom_v1, build_tir_dissect_round_v1,
     build_tir_root_claim_v1,
@@ -47,13 +49,20 @@ fn every_built_close_is_within_its_bound() {
         let positions = f.class.layout.max_context;
         let longest = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&f.class, f.class_id, (1, positions))
             .expect("the longest job");
-        let bounds = palw_tir_worst_closes_v1(
+        // Within admission's own work cap: every corpus class sizes inside it.
+        let (bounds, work) = palw_tir_worst_closes_work_v1(
             &f.space,
             &inventory,
             &longest,
-            &PalwTirCloseSizingV1 { form: PalwTirParamFormV1::Multiproof, court: true, cap: 1 << 36 },
+            &PalwTirCloseSizingV1 {
+                form: PalwTirParamFormV1::Multiproof,
+                court: true,
+                cap: PALW_TIR_CLOSE_SIZING_WORK_CAP_V1,
+                stop_above: None,
+            },
         )
         .unwrap_or_else(|e| panic!("{}: {e}", f.name));
+        eprintln!("{:>24}: sized in {work} steps of {PALW_TIR_CLOSE_SIZING_WORK_CAP_V1}", f.name);
         let bound_of = |block: u8, node: u16| bounds.iter().find(|b| b.block == block && b.node == node).expect("every commit point");
         let mut worst: std::collections::BTreeMap<(u8, u16), (u64, u64)> = Default::default();
         for (i, leaf) in f.leaves.iter().enumerate() {

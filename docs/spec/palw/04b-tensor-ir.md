@@ -1509,18 +1509,24 @@ builds (`TirCloseDemandV1`, `palw_tir_close_size_v1`), over every job of the lay
   value), the move's ML-DSA-87 signature and its carrier's key reference.
 
 A class past either bound is refused, naming the bytes and the cap (`CourtCostExceedsCeiling { what:
-"IR terminal close bytes as carried" }`, `{ what: "IR dissection root claim bytes" }`); a sizing
-that would take more than `2^28` steps is refused rather than run (`TirExceeds { limit: "IR close
-sizing work" }`). The registrant declares smaller tiles. Under the tiled logits scheme the logits
-node's tile length MUST divide the scheme's 4,096 lanes (a step tile then lies inside one trace tile,
-at an offset, and the logits consistency check compares it with that part), so a large vocabulary's
-head can be tiled finer. At `d_model = 1,536` (Qwen2.5-1.5B A16 at 8,192 positions, `h_tile` 64, a
-20-level inventory) the D-F1 class declares 1,024 logits lanes and is admitted: its largest carried
-closes are the attention scores tile's at the first positions — 2,519,468 bytes, where one 128-lane
-tile covers all twelve heads and reads all of `W_q` — the logits tile's (1,626,216: a run of 1,024
-head rows shares its two boundary paths) and the layer output's (1,273,759); its dissected context's
-bottom is 441,871 bytes and its root claim 84,688. At 2,048 lanes the logits tile carries 3,233,896
-bytes and the class is refused. Sizing D-F1 takes 42.9 M of the `2^28` steps. Every close the court's
+"IR terminal close bytes as carried" }`, `{ what: "IR dissection root claim bytes" }`) — the sizing
+stops at the first commit point past either. Admission's CPU is bounded before it is spent: a sizing
+that would take more than `2^26` steps is refused rather than run (`TirExceeds { limit: "IR close
+sizing work" }`), a step counting what it costs — an element read or visited, a context made (a step
+a node), a request seeded (a step an element), a step leaf placed (16 plus the program's commit points
+and occurrences, what its index walks), an entry united or counted outside the twin — and at most one
+IR registration counts per block. The registrant declares smaller tiles. Under the tiled logits
+scheme the logits node's tile length MUST divide the scheme's 4,096 lanes (a step tile then lies
+inside one trace tile, at an offset, and the logits consistency check compares it with that part), so
+a large vocabulary's head can be tiled finer. At `d_model = 1,536` (Qwen2.5-1.5B A16 at 8,192
+positions, `h_tile` 64, a 20-level inventory) the D-F1 class declares 1,024 logits lanes and is
+admitted: its largest carried closes are the attention scores tile's at the first positions —
+2,519,468 bytes, where one 128-lane tile covers all twelve heads and reads all of `W_q` — the logits
+tile's (1,626,216: a run of 1,024 head rows shares its two boundary paths) and the layer output's
+(1,273,759); its dissected context's bottom is 441,871 bytes and its root claim 84,688. At 2,048 lanes
+the logits tile carries 3,233,896 bytes and the class is refused. Sizing D-F1 takes 53.2 M of the
+`2^26` steps; the Qwen2.5-3B A16 class at the same layout is refused inside the cap for its closes (its
+first positions' attention tile reads all 16 heads' `W_q`: 4,371,616 bytes). Every close the court's
 own builders make on the corpus (a whole tile's cone close, a dissected leaf's root claim and its
 bottom played to the first and to the last tile) is within its bound —
 `consensus/core/tests/palw_tir_close_size.rs`; D-F1 in
