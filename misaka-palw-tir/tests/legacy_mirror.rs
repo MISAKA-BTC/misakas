@@ -219,6 +219,76 @@ mod legacy {
             })
             .collect()
     }
+    pub fn q36_rms_norm_wide(x: &[i32], eps_zero: i64, eps_shift: u8) -> Option<Vec<i32>> {
+        let n = x.len() as i128;
+        let sum: i128 = x.iter().map(|v| (*v as i128) * (*v as i128)).sum();
+        if eps_zero < 0 {
+            return None;
+        }
+        let mut mean = ((sum << K) / n) + ((eps_zero as i128) << eps_shift.min(96));
+        if mean <= 0 {
+            return Some(vec![0; x.len()]);
+        }
+        let mut halvings: i32 = 0;
+        while mean >= 4 * ONE as i128 {
+            mean >>= 2;
+            halvings += 1;
+        }
+        while mean < ONE as i128 {
+            mean <<= 2;
+            halvings -= 1;
+            if halvings < -40 {
+                return None;
+            }
+        }
+        let r = int_rsqrt(mean as i64) as i128;
+        Some(
+            x.iter()
+                .map(|v| {
+                    let product = (*v as i128) * r;
+                    let scaled = if halvings >= 0 { product >> halvings } else { product << (-halvings) };
+                    scaled.clamp(i32::MIN as i128, i32::MAX as i128) as i32
+                })
+                .collect(),
+        )
+    }
+    /// `(expert, weight_q)`, sorted by expert.
+    pub fn q36_router_topk(logits: &[i32], k: usize, up_bits: u8) -> Vec<(u16, i32)> {
+        let experts = logits.len();
+        let probs = softmax_shifted(logits, up_bits);
+        let mut chosen = Vec::with_capacity(k);
+        let mut taken = vec![false; experts];
+        for _ in 0..k {
+            let mut best = usize::MAX;
+            for (i, p) in probs.iter().enumerate() {
+                if taken[i] {
+                    continue;
+                }
+                if best == usize::MAX || *p > probs[best] {
+                    best = i;
+                }
+            }
+            taken[best] = true;
+            chosen.push(best);
+        }
+        chosen.sort_unstable();
+        let sum: i64 = chosen.iter().map(|i| probs[*i] as i64).sum();
+        if sum <= 0 {
+            let uniform = (ONE / k as i64) as i32;
+            return chosen.iter().map(|i| (*i as u16, uniform)).collect();
+        }
+        let recip = int_recip(sum);
+        chosen.iter().map(|i| (*i as u16, ((probs[*i] as i64 * recip) >> K) as i32)).collect()
+    }
+    pub fn q36_moe_combine(outputs: &[i32], weights: &[i32], width: usize, p: P) -> Vec<i32> {
+        let k = outputs.len() / width;
+        let mut out = Vec::with_capacity(width);
+        for lane in 0..width {
+            let acc: i64 = (0..k).map(|e| weights[e] as i64 * outputs[e * width + lane] as i64).sum();
+            out.push(a16_scale_round(acc, p.m, p.s).saturating_add(p.z).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32);
+        }
+        out
+    }
     #[derive(Clone, Copy)]
     pub struct P {
         pub m: i64,
@@ -553,4 +623,92 @@ fn the_gated_delta_step_is_q36_gdn_step() {
         assert_eq!(s.data, i128s(&flat), "state after position {pos}");
     }
     let _ = (TK, Rounding::Floor, ConeEnv::default());
+}
+
+#[test]
+fn rms_norm_wide_is_q36_rms_norm_wide() {
+    let mut rng = Lcg(31);
+    for n in [1usize, 4, 32, 128] {
+        for trial in 0..8 {
+            let x: Vec<i32> = match trial {
+                0 => vec![0; n],
+                1 => vec![i32::MIN; n],
+                2 => vec![i32::MAX; n],
+                3 => (0..n).map(|i| if i == 0 { 1 } else { 0 }).collect(),
+                _ => (0..n).map(|_| rng.range(i32::MIN as i128, i32::MAX as i128) as i32 >> (trial * 4)).collect(),
+            };
+            for (ez, es) in [(0i64, 0u8), (1, 0), (1, 24), (3, 60), (1_000_000, 96), (5, 200)] {
+                let want = legacy::q36_rms_norm_wide(&x, ez, es).expect("in the legacy domain");
+                let got = eval_graph(
+                    &[
+                        arg("x", DType::I32, i128s(&x)),
+                        arg("ez", DType::I64, vec![ez as i128]),
+                        arg("es", DType::I16, vec![es as i128]),
+                    ],
+                    |b, r| b.rms_norm_wide_q36(r[0], r[1], r[2]),
+                );
+                // `x` has n lanes and the eps params one: pad eps to n by broadcast inside the graph.
+                let got = match got {
+                    Ok(t) => t,
+                    Err(e) => panic!("n {n} trial {trial} eps ({ez}, {es}): {e}"),
+                };
+                assert_eq!(got.data, i128s(&want), "n {n} trial {trial} eps ({ez}, {es})");
+            }
+        }
+    }
+}
+
+#[test]
+fn router_and_combine_are_q36_router_topk_and_q36_moe_combine() {
+    let mut rng = Lcg(37);
+    for (experts, k) in [(8usize, 2u32), (16, 4), (4, 4), (32, 8)] {
+        for up in [0u8, 2, 16, 31] {
+            let mut logits: Vec<i32> = (0..experts).map(|_| rng.range(-32767, 32767) as i32).collect();
+            if up == 2 {
+                // Exact ties and underflowing tails: only the index rule decides.
+                for (i, l) in logits.iter_mut().enumerate() {
+                    *l = if i % 3 == 0 { 30000 } else { -32767 };
+                }
+            }
+            let want = legacy::q36_router_topk(&logits, k as usize, up);
+            // The legacy committed row: expert ids, then weights.
+            let row = eval_graph(&[arg("l", DType::I16, i128s(&logits))], |b, r| {
+                let (idx, w) = b.router_topk_q36(r[0], k, up as u32);
+                let ids = b.cast(idx, DType::I32);
+                b.concat(&[ids, w], 0)
+            })
+            .unwrap();
+            let mut want_row: Vec<i128> = want.iter().map(|(e, _)| *e as i128).collect();
+            want_row.extend(want.iter().map(|(_, w)| *w as i128));
+            assert_eq!(row.data, want_row, "experts {experts} k {k} up {up}");
+            // The combine over those weights, with wide expert rows and an adversarial narrowing.
+            let width = 6usize;
+            let rows: Vec<i32> =
+                (0..k as usize * width).map(|i| if i % 7 == 0 { i32::MIN } else { rng.range(-(1 << 30), 1 << 30) as i32 }).collect();
+            let ws: Vec<i32> = want.iter().map(|(_, w)| *w).collect();
+            for p in [
+                legacy::P { m: 1, s: 24, z: 0 },
+                legacy::P { m: i64::MAX, s: 3, z: -9 },
+                legacy::P { m: -(1 << 40), s: 62, z: i64::MIN },
+            ] {
+                let want_c = legacy::q36_moe_combine(&rows, &ws, width, p);
+                let got = eval_graph(
+                    &[
+                        arg("rows", DType::I32, i128s(&rows)),
+                        arg("w", DType::I32, i128s(&ws)),
+                        arg("m", DType::I64, vec![p.m as i128]),
+                        arg("s", DType::I8, vec![p.s as i128]),
+                        arg("z", DType::I64, vec![p.z as i128]),
+                    ],
+                    |b, r| {
+                        let y = b.reshape_fixed(r[0], &[k, width as u32]);
+                        let p2 = b.pow2_of(r[3]);
+                        b.moe_combine_q36(y, r[1], r[2], p2, r[4], -32767, 32767, DType::I16)
+                    },
+                )
+                .unwrap();
+                assert_eq!(got.data, i128s(&want_c));
+            }
+        }
+    }
 }

@@ -653,6 +653,120 @@ impl<'a> BlockBuilder<'a> {
         let o = self.narrow_a16(acc, om, os, oz, i32::MIN as i64, i32::MAX as i64, DType::I32);
         self.reshape_fixed(o, &[h, dv])
     }
+
+    /// `2^s` as `i128` for shift amounts known to lie in `[0, max]` (`max ≤ 126`): a gather from the
+    /// pinned table `[2^0, …, 2^126]`.
+    pub fn pow2_128_of(&mut self, s: Ref, max: u32) -> Ref {
+        assert!(max <= 126);
+        let table: Vec<i128> = (0..=126).map(|i| 1i128 << i).collect();
+        let t = self.pb.konst(DType::I128, &[127], &table);
+        let s = self.clamp(s, 0, max as i64, DType::Idx);
+        self.gather(t, s, 0, 0)
+    }
+
+    /// `palw_qwen36_ops::q36_rms_norm_wide` along the last axis: the RMS norm of a WIDE `i32` row,
+    /// with `eps = eps_zero · 2^min(eps_shift, 96)` at the caller's scale (`eps_zero ≥ 0`) and the
+    /// mean's exponent taken out before `IntRsqrt` — `Log2Floor` finds the even shift that lands
+    /// the mean in `[2^24, 2^26)`, and the product is shifted back. A zero mean gives a zero row.
+    pub fn rms_norm_wide_q36(&mut self, x: Ref, eps_zero: Ref, eps_shift: Ref) -> Ref {
+        let sh = self.shape(x);
+        let axis = sh.len() - 1;
+        let Dim::Fixed(n) = sh[axis] else { panic!("norm over H") };
+        let sq = self.mul(x, x, DType::I64);
+        let sum = self.reduce_sum(sq, axis, DType::I128);
+        let one = self.c(DType::I64, ONE);
+        let scaled = self.mul(sum, one, DType::I128);
+        let nn = self.c(DType::I64, n as i128);
+        let mean0 = self.div(scaled, nn, Rounding::Floor, DType::I128);
+        let ez = self.clamp(eps_zero, 0, i64::MAX, DType::I64);
+        let es = self.pow2_128_of(eps_shift, 96);
+        let eps = self.mul(ez, es, DType::I128);
+        let mean = self.add(mean0, eps, DType::I128);
+        let bit = self.log2_floor(mean, DType::I32);
+        let k = self.c(DType::I32, K as i128);
+        let t = self.sub(bit, k, DType::I32);
+        let two = self.c(DType::I32, 2);
+        let h = self.div(t, two, Rounding::Floor, DType::I32);
+        let two_h = self.mul(h, two, DType::I32);
+        let zero = self.c(DType::I32, 0);
+        let rp = self.pow2_128_of(two_h, 126);
+        let right = self.div(mean, rp, Rounding::Floor, DType::I128);
+        let neg2h = self.sub(zero, two_h, DType::I32);
+        let lp = self.pow2_128_of(neg2h, 24);
+        let small = self.clamp(mean, 0, ONE as i64, DType::I64);
+        let left = self.mul(small, lp, DType::I128);
+        let ge = self.compare(two_h, zero, Cmp::Ge);
+        let m = self.select(ge, right, left, DType::I128);
+        let m = self.clamp(m, 0, i64::MAX, DType::I64);
+        let r = self.int_rsqrt(m);
+        let prod = self.mul(x, r, DType::I128);
+        let dp = self.pow2_128_of(h, 126);
+        let rshift = self.div(prod, dp, Rounding::Floor, DType::I128);
+        let negh = self.sub(zero, h, DType::I32);
+        let up = self.pow2_128_of(negh, 12);
+        let lshift = self.mul(prod, up, DType::I128);
+        let hge = self.compare(h, zero, Cmp::Ge);
+        let y = self.select(hge, rshift, lshift, DType::I128);
+        let y = self.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32);
+        let empty = self.compare(mean, zero, Cmp::Le);
+        self.select(empty, zero, y, DType::I32)
+    }
+
+    /// `palw_qwen36_ops::q36_router_topk` over the last axis of a logit row: `softmax_shifted`,
+    /// `TopK` (committed; lowest index on ties, index order), the kept probabilities renormalised
+    /// through `IntRecip`. Returns `(indices [k], weights [k] Q24)`. Legacy's uniform fallback for
+    /// a zero kept sum is dead — the row maximum is always kept and its probability is positive —
+    /// and has no node.
+    pub fn router_topk_q36(&mut self, logits: Ref, k: u32, up_bits: u32) -> (Ref, Ref) {
+        let axis = self.shape(logits).len() - 1;
+        let probs = self.softmax_shifted(logits, up_bits);
+        let idx = self.topk(probs, axis, k);
+        let kept = self.gather(probs, idx, axis, axis);
+        let sum = self.reduce_sum(kept, axis, DType::I64);
+        let recip = self.int_recip(sum);
+        let p = self.mul(kept, recip, DType::I128);
+        let w = self.shr(p, K, Rounding::Floor, DType::I64);
+        let w = self.clamp(w, 0, 1 << 25, DType::I32);
+        (idx, w)
+    }
+
+    /// `palw_qwen36_ops::q36_moe_combine`: `Σ_e w_e · y_e` in ONE exact accumulator (a `MatMul`
+    /// of the weights `[k]` against the expert rows `[k, width]`), narrowed once.
+    #[allow(clippy::too_many_arguments)]
+    pub fn moe_combine_q36(&mut self, y: Ref, w: Ref, m: Ref, pow2_s: Ref, z: Ref, lo: i64, hi: i64, dtype: DType) -> Ref {
+        let s = self.shape(y);
+        let (Dim::Fixed(k), Dim::Fixed(width)) = (s[0], s[1]) else { panic!("static") };
+        let wr = self.reshape_fixed(w, &[1, k]);
+        let acc = self.matmul(wr, y, DType::I64);
+        let acc = self.reshape_fixed(acc, &[width]);
+        self.narrow_a16(acc, m, pow2_s, z, lo, hi, dtype)
+    }
+
+    /// RoPE angles for position `pos` from TWO pinned tables of `2^lo_bits` rows each — the
+    /// long-context strategy (spec 04b §9.4): `pos = hi·2^lo_bits + lo`, and the angle-addition
+    /// formulas combine the rows in Q24 (floor). A `history_bound` of `2^18` needs two 512-row
+    /// tables instead of one 262,144-row table. Returns `(cos, sin)`, `i32` Q24.
+    pub fn rope_angles_two_level(&mut self, pos: Ref, cos_hi: Ref, sin_hi: Ref, cos_lo: Ref, sin_lo: Ref, lo_bits: u32) -> (Ref, Ref) {
+        let d = self.c(DType::I64, 1i128 << lo_bits);
+        let hi = self.div(pos, d, Rounding::Floor, DType::Idx);
+        let back = self.mul(hi, d, DType::I64);
+        let lo = self.sub(pos, back, DType::Idx);
+        let ch = self.gather(cos_hi, hi, 0, 0);
+        let sh = self.gather(sin_hi, hi, 0, 0);
+        let cl = self.gather(cos_lo, lo, 0, 0);
+        let sl = self.gather(sin_lo, lo, 0, 0);
+        let a = self.mul(ch, cl, DType::I64);
+        let b = self.mul(sh, sl, DType::I64);
+        let c = self.sub(a, b, DType::I64);
+        let c = self.shr(c, K, Rounding::Floor, DType::I64);
+        let c = self.clamp(c, -(ONE as i64), ONE as i64, DType::I32);
+        let e = self.mul(sh, cl, DType::I64);
+        let f = self.mul(ch, sl, DType::I64);
+        let s = self.add(e, f, DType::I64);
+        let s = self.shr(s, K, Rounding::Floor, DType::I64);
+        let s = self.clamp(s, -(ONE as i64), ONE as i64, DType::I32);
+        (c, s)
+    }
 }
 
 /// A per-head vector `[h]` as `[h, 1, 1]`, to broadcast against `[h, rows, cols]`.
