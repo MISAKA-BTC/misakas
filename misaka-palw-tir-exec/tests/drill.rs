@@ -14,8 +14,14 @@ use std::sync::Arc;
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwMaterialVerdictV1};
+use kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT;
+use kaspa_consensus_core::palw_court_v2::{PalwCourtVerdictProofV2, check_close_cost_v2};
+use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
-use kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1;
+use kaspa_consensus_core::palw_step_refute::PalwStepRefuteError;
+use kaspa_consensus_core::palw_tir_court_v1::{
+    check_tir_cone_refutation_v1, check_tir_decode_token_flat_v1, check_tir_decode_token_tiled_v1,
+};
 use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir::demand::DemandLimits;
 use misaka_palw_tir::interval::analyze_ranges;
@@ -57,7 +63,10 @@ fn the_drill_certifies_every_tiny_class() {
         let canonical = tir_job_context_v1(&class, class.class_id(&root), 4, 3);
         let backend =
             TirBackendV1::new(name.clone(), artifact, root, canonical, form, 1 << 26).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let rules = PalwTirCourtRulesV1 { max_step_leaf_count: 1 << 26, prompt_form: form, limits: DemandLimits::UNLIMITED };
+        // The rules the court's IR arm grades under: its ladder, the prompt form, its work limits.
+        let court = PalwCourtParamsV2::new(PALW_RC_COURT_MAX_STEP_LEAF_COUNT, 4, 2).expect("the shipped court");
+        let rules = backend.court_rules(&court);
+        assert_ne!(rules.limits, DemandLimits::UNLIMITED);
 
         // A seat's check of the honest capture, and of captures that answer something else.
         let anchor = Hash64::from_bytes([0x3C ^ k as u8; 64]);
@@ -98,6 +107,27 @@ fn the_drill_certifies_every_tiny_class() {
             let r = folding.cone_refutation(&fold.material, i, &rules).unwrap_or_else(|e| panic!("{name}: fold leaf {i}: {e}"));
             assert_eq!(r, backend.cone_refutation(&outcome.material, i, &rules).unwrap(), "{name}: fold leaf {i}");
         }
+
+        // The close objects a CourtClosed carries: within the court's byte ceiling, and graded
+        // by the IR court (cone and logits closes acquit the honest execution; the decode door
+        // finds the honest token).
+        for i in [0, n / 2, n - 1] {
+            let close = backend.cone_close(&outcome.material, i, &rules).unwrap();
+            assert!(close.is_tir_v1());
+            check_close_cost_v2(&close, &court).unwrap_or_else(|e| panic!("{name}: close of leaf {i}: {e}"));
+            let PalwCourtVerdictProofV2::TirCone { refutation } = &close else { unreachable!() };
+            assert_eq!(check_tir_cone_refutation_v1(refutation, &rules), Err(PalwStepRefuteError::NoFaultFound));
+        }
+        let decode = backend.decode_token_close(&outcome.material, 0, 1).unwrap();
+        check_close_cost_v2(&decode, &court).unwrap();
+        let verdict = match &decode {
+            PalwCourtVerdictProofV2::TirDecodeTokenTiled { binding, pin } => check_tir_decode_token_tiled_v1(binding, pin, &rules),
+            PalwCourtVerdictProofV2::TirDecodeToken { binding, pin, position } => {
+                check_tir_decode_token_flat_v1(binding, pin, *position)
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(verdict, Err(PalwStepRefuteError::NoFaultFound), "{name}: the decode door");
 
         let cert = tir_family_drill_v1(&backend, anchor, &rules).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(cert.holds(), "{name}: {:?} of {:?} covered", cert.covered_prims, cert.reachable_prims);

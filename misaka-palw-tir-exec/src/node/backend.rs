@@ -5,18 +5,20 @@
 //!   (`palw_attempt_job_for_anchor_v1`): the class's canonical context with the anchor's id and seed,
 //!   and the anchor's prompt ids over the program's `token_bound`, committed in the network's form.
 //! * `execute` — the job run into its step leg and roots ([`super::run`]); the material is a
-//!   [`TirCaptureV1`]: the binding, the prompt, the committed logits trace, and — up to a leaf cap —
+//!   [`TirCaptureV1`]: the binding, the prompt, the committed logits trace, and — within a byte cap —
 //!   every leaf preimage (a DENSE capture, which anyone holding it opens at any leaf, as the legacy
 //!   families' captures are); past the cap a FOLD, whose leaves are re-derived by replay.
 //! * `verify_material` — a seat's check: the capture answers the claim's job, roots and output root,
 //!   its binding verifies, and a re-execution of its job commits exactly its roots.
 //! * `bisect_prefix_state` — [`super::evidence::tir_bisect_prefix_state_v1`] over the capture's
 //!   leaves (a dense capture's own, a fold's replayed).
-//! * The IR court's objects (`PalwTirConeRefutationV1`, the logits-consistency accusation, the
-//!   decode pins) are built by inherent methods here over [`super::evidence::TirEvidenceV1`]. The
-//!   legacy court verbs (`refutation_for_index` → `PalwExecutionStepRefutationV1`) cannot carry an
-//!   IR close, so `supports_court` stays `false` until the processor's `TirCone` arm (F6) routes a
-//!   dispute here.
+//! * The IR court's close proofs — `PalwCourtVerdictProofV2::TirCone`, `TirLogits`,
+//!   `TirDecodeTokenTiled` / `TirDecodeToken` (F5, appended to the close proofs) — are built by
+//!   inherent methods here ([`TirBackendV1::cone_close`], [`TirBackendV1::logits_close`],
+//!   [`TirBackendV1::decode_token_close`]) over [`super::evidence::TirEvidenceV1`], under the rules
+//!   the court grades them by ([`TirBackendV1::court_rules`]). The trait's legacy court verbs
+//!   (`refutation_for_index` → `PalwExecutionStepRefutationV1`) cannot carry an IR close, so
+//!   `supports_court` stays `false` until the node's court flow asks these builders (F6's node half).
 
 use std::sync::Arc;
 
@@ -26,6 +28,7 @@ use kaspa_consensus_core::palw_attempt_rules_v1::{PalwAttemptRulesV1, palw_attem
 use kaspa_consensus_core::palw_backend::{
     PalwCaptureShapeV1, PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1,
 };
+use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1, prompt_token_ids_match_v1};
 use kaspa_consensus_core::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1, step_merkle_root_capped_v1, step_tile_leaf_hash_v1};
 use kaspa_consensus_core::palw_step_refute::{PalwTiledDecodePinV1, tiled_logits_scheme_id_v1};
@@ -425,6 +428,44 @@ impl TirBackendV1 {
             beat_lane,
         )
         .ok_or_else(|| "the capture's trace has no such row or lane".into())
+    }
+
+    /// **The rules the court grades this class's closes under** (`adjudicate_close_proof_v2`'s IR
+    /// arm): this backend's ladder and prompt form, and the court's IR work limits
+    /// (`palw_tir_court_limits_v1`).
+    pub fn court_rules(&self, court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2) -> PalwTirCourtRulesV1 {
+        PalwTirCourtRulesV1 {
+            max_step_leaf_count: self.ladder,
+            prompt_form: self.prompt_ids_form,
+            limits: kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(court),
+        }
+    }
+
+    /// **The IR cone close of leaf `index`** — `PalwCourtVerdictProofV2::TirCone`, what a
+    /// `CourtClosed` carries (the same object whichever party files it).
+    pub fn cone_close(&self, material: &[u8], index: u64, rules: &PalwTirCourtRulesV1) -> Result<PalwCourtVerdictProofV2, String> {
+        Ok(PalwCourtVerdictProofV2::TirCone { refutation: Box::new(self.cone_refutation(material, index, rules)?) })
+    }
+
+    /// **The IR logits close** over logits leaf `index` (`PalwCourtVerdictProofV2::TirLogits`).
+    pub fn logits_close(&self, material: &[u8], index: u64) -> Result<PalwCourtVerdictProofV2, String> {
+        Ok(PalwCourtVerdictProofV2::TirLogits { accusation: Box::new(self.logits_consistency(material, index)?) })
+    }
+
+    /// **The IR decode-token close** of decode row `row` in the class's scheme: the tiled door with
+    /// `beat_lane` as the lane said to beat the committed token, or the flat door over every row.
+    pub fn decode_token_close(&self, material: &[u8], row: u32, beat_lane: u32) -> Result<PalwCourtVerdictProofV2, String> {
+        let capture = self.decode_capture(material)?;
+        let binding = Box::new(capture.binding.clone());
+        if Hash64::from_bytes(self.space.program.logits_scheme_id) == tiled_logits_scheme_id_v1() {
+            Ok(PalwCourtVerdictProofV2::TirDecodeTokenTiled { binding, pin: self.decode_token_pin(material, row, beat_lane)? })
+        } else {
+            let pin = kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 {
+                logits_rows: capture.logits_rows,
+                generated_token_ids: capture.generated,
+            };
+            Ok(PalwCourtVerdictProofV2::TirDecodeToken { binding, pin, position: row })
+        }
     }
 
     /// The step opening of leaf `index` of a capture (the disclosure the bisection's last rung asks).
