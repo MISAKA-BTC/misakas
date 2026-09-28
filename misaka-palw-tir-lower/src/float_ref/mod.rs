@@ -328,12 +328,13 @@ impl<'a> Session<'a> {
                 };
                 let q = x(0)?.to_vec();
                 let sinks_v = if *sinks { Some(self.param(ins[3], layer)?.data.clone()) } else { None };
-                let keys = self.hist.get(&(ks, lyr)).cloned().unwrap_or_default();
-                let values = self.hist.get(&(vs, lyr)).cloned().unwrap_or_default();
+                // Borrowed, not cloned: a clone would copy the whole history every layer and step.
+                let keys: &[Vec<f32>] = self.hist.get(&(ks, lyr)).map(Vec::as_slice).unwrap_or(&[]);
+                let values: &[Vec<f32>] = self.hist.get(&(vs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let shape = AttnShape { heads: *heads, kv_heads: *kv_heads, head_dim: *head_dim, v_head_dim: *v_head_dim };
                 let want = self.sites.is_some();
                 let (out, scores, probs) =
-                    attention(&q, &keys, &values, shape, *scale, *softcap, *window, alibi.as_ref(), sinks_v.as_deref(), want);
+                    attention(&q, keys, values, shape, *scale, *softcap, *window, alibi.as_ref(), sinks_v.as_deref(), want);
                 self.sub_site(prefix, &node.site, "scores", &scores);
                 self.sub_site(prefix, &node.site, "probs", &probs);
                 one(out)
@@ -342,9 +343,9 @@ impl<'a> Session<'a> {
                 let (Ref::State(ls), Ref::State(rs)) = (ins[1], ins[2]) else { return Err(LowerError::eval("MLA without states")) };
                 let q = x(0)?.to_vec();
                 let kvb = self.param(ins[3], layer)?;
-                let lat = self.hist.get(&(ls, lyr)).cloned().unwrap_or_default();
-                let kr = self.hist.get(&(rs, lyr)).cloned().unwrap_or_default();
-                one(mla(&q, &kvb.data, &lat, &kr, *heads, *nope, *rope, *v_dim, *kv_lora, *scale))
+                let lat: &[Vec<f32>] = self.hist.get(&(ls, lyr)).map(Vec::as_slice).unwrap_or(&[]);
+                let kr: &[Vec<f32>] = self.hist.get(&(rs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
+                one(mla(&q, &kvb.data, lat, kr, *heads, *nope, *rope, *v_dim, *kv_lora, *scale))
             }
             Op::CausalConv1d { channels, kernel, bias, act: a } => {
                 let Ref::State(s) = ins[1] else { return Err(LowerError::eval("conv without state")) };
