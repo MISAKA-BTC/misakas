@@ -43,6 +43,18 @@ IR_ARTIFACT=${IR_ARTIFACT:-$IR_DIR/qwen25-a16.class.palwtir}
 IR_LOWERED=$IR_DIR/qwen25-a16.lowered.palwtir
 EQUIV_PROMPTS=${EQUIV_PROMPTS:-8}
 
+# The small IR class, D-F2's live court battery (the coordinator, 2026-09-28): a 1.5B class's capture does not
+# fit the 16 MiB material cap (an honest fold carries ~39.5 MB of logits rows), so no seat holds the accused
+# capture and no court can convict there until the IR evidence transport lands
+# (docs/design/palw/tir/evidence-transport-scope.md). The tiny HF llama fixture — lowered unwindowed (its
+# history cone dissected: F7 live), declared at SMALL_CONTEXT positions — has ~38 KB captures. new4 registers
+# and produces it; the same seven IR holders load both artifacts (no artifact node is added).
+SMALL_FIXTURE=${SMALL_FIXTURE:-$WT/misaka-palw-tir-lower/tests/fixtures/hf/llama}
+SMALL_CONTEXT=${SMALL_CONTEXT:-32}
+SMALL_MODEL_ID=${SMALL_MODEL_ID:-test/llama-tiny-ir}
+SMALL_LOWERED=$IR_DIR/small.lowered.palwtir
+SMALL_ARTIFACT=${SMALL_ARTIFACT:-$IR_DIR/small.class.palwtir}
+
 # Ports: disjoint from drill A (46100+), drill D (51100+), the lifecycle audit (36100+) and public nodes.
 P2P_BASE=${P2P_BASE:-56100}; BORSH_BASE=${BORSH_BASE:-57100}; JSON_BASE=${JSON_BASE:-58100}
 EVM_BASE=${EVM_BASE:-59100}; GRPC_BASE=${GRPC_BASE:-55100}
@@ -51,11 +63,11 @@ SHARE_MIB=${SHARE_MIB:-3072}      # each node's replay share: the IR artifact (~
 
 # The node table:  name k seat role hb ir grpc
 #   seat  the genesis bond (keyring seats[n]); '-' = no keys
-#   role  ir     the IR class's registrant and producer (--palw-register-class, --palw-producer-class)
-#         ir2    a second IR producer, honest, for D-F2's acquittals (produces once the class is Active)
+#   role  ir     D-F1's registrant and producer (--palw-register-class, --palw-producer-class)
+#         ir2    the small class's registrant and producer (D-F2's live battery lies here, one kind at a time)
 #         floor  a floor producer (the chain's clock between heartbeats, and the admission jury's anchor)
 #         seat   a seat only;   old  the fleet's release, keyless, a relay peered to new0 (D-F4)
-#   hb    1 = a heartbeat clock;  ir  1 = loads the IR artifact (a ready seat: t12 needs 5 + 2 of them)
+#   hb    1 = a heartbeat clock;  ir  1 = loads the IR artifacts (a ready seat: t12 needs 5 + 2 of them)
 #   grpc  1 = gRPC on (D-F3's red-team speaks gRPC to new0)
 # Seven IR holders — the fewest t12's registry admits (seat_count 5 + spare 2 ready seats) and under this
 # Mac's eight-artifact-node limit; new7 and the old relay hold none.
@@ -92,6 +104,7 @@ salt() {
 }
 manifest() { python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print($1)" "$KR/manifest.json"; }
 ir_class_id() { tr -d ' \n' < "$WORK_DIR/ir-class.id"; }
+small_class_id() { tr -d ' \n' < "$WORK_DIR/small-class.id"; }
 
 # The shared ports and logs, exported for Phase F's step scripts.
 export_layout() {
@@ -130,10 +143,12 @@ node_args() {
             "--palw-fee-outpoint=$(manifest "m['seats'][$seat]['fee_float_outpoint']")")
     fi
     [ "$ir" = 1 ] && a+=("--palw-class-artifact=$IR_ARTIFACT")
+    [ "$ir" = 1 ] && [ -s "$SMALL_ARTIFACT" ] && a+=("--palw-class-artifact=$SMALL_ARTIFACT")
     case $role in
         floor) a+=(--palw-produce) ;;
         ir) a+=(--palw-produce "--palw-register-class=$IR_MODEL_ID" "--palw-producer-class=$(ir_class_id)") ;;
-        ir2) [ -s "$d/produce-ir" ] && a+=(--palw-produce "--palw-producer-class=$(ir_class_id)") ;;
+        ir2) [ -s "$WORK_DIR/small-class.id" ] &&
+            a+=(--palw-produce "--palw-register-class=$SMALL_MODEL_ID" "--palw-producer-class=$(small_class_id)") ;;
     esac
     [ "$hb" = 1 ] && a+=("--palw-heartbeat-miner-address=$(manifest "m['heartbeat'][$k]['address']")" --enable-unsynced-mining)
     local m; for m in $(new_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done

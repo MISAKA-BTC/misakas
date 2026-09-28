@@ -10,7 +10,7 @@
 #   bash audit-tir/df.sh <command> --bin-dir <release dir>      (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
 #     OLD_KASPAD_BIN=<the fleet's release kaspad>  A16_ARTIFACT=<qwen2.5-1.5B A16 .palwart>
 #     [WORK_DIR=~/.misaka-palw-tir-drill] [TIR_AT=20] [IR_CONTEXT=512] [IR_LOGITS_TILE=1024]
-#   commands: dry | class | up | stage1 | stage2 | df1 | df2 | df3 | df4 | status | down
+#   commands: dry | class | small | up | stage1 | stage2 | df1 | df2 | df3 | df4 | status | down
 #
 #   STAGE 1 (the arming gate, ~2-3 h from `up`): `stage1` = df4 (below the fence the IR registration dropped
 #   by name by the release and skipped by the old relay at identical tips; blocks above; the old peer refused
@@ -22,20 +22,24 @@
 #   Its readiness half (PALW_TIR_GUARD_REFUSES_READINESS_V1) is off in the flag-day release; armed, it would
 #   hold D-F1 at Candidate (the admission jury seats on readiness proofs) and the registration part would
 #   read GUARDED (the IR holders name the refusal), making the stage STAGE 1 GUARDED when df4 and df3 pass.
-#   STAGE 2 (on the same chain, after the fleet rollout): `stage2` = df1 (Active → claims → Final) + df2
-#   (representative commit-point kinds live, every kind offline with palw-class certify) + df4 court.
+#   STAGE 2 (on the same chain, after the F7 node update): `stage2` = df1 (D-F1: Active → claims → Final) + df2
+#   (every commit-point kind of the SMALL class live — a 1.5B class's capture cannot reach a seat under the 16 MiB
+#   material cap; D-F1's kinds are certified offline with palw-class certify) + df4 court.
 #
 #   dry     preflight (binaries, flags, tools, artifacts, ports, memory, disk, another drill) and the plan with
 #           every node's argv (salt redacted, a throwaway keyring stub) — nothing is created, nothing started
 #   class   OFFLINE: A16 → PALW-TIR (palw-a16-to-tir, unwindowed), declare-layout at IR_CONTEXT with the
 #           logits at IR_LOGITS_TILE (ADMISSIBLE required), drill-leaves, every terminal close as carried
 #           under the cap (palw-class close-sizes), logits vs the legacy class (palw-tir-equiv: EQUAL);
-#           writes ir-class.id and ir-artifact.root
+#           writes ir-class.id and ir-artifact.root; then the small class (D-F2's live battery): the tiny HF llama
+#           fixture lowered unwindowed (palw-tir-fidelity), declared at SMALL_CONTEXT (ADMISSIBLE), its drill leaves
+#           and closes, its capture under the 16 MiB material cap; writes small-class.id and small-artifact.root
 #   up      salt (0600, never printed), keyring (the release kaspad writes it), every node (clocks first, the old
 #           relay last), the signed below-the-fence IR registration for D-F4 (ir-registration.obj), the sampler
 #   df1     waits for Active and the first Final after it (dfwatch.py); PASS 0 / FAIL 1 / INCOMPLETE 3
-#   df2     the court battery, one commit-point kind at a time: new0 restarted with --palw-drill-tamper-leaf,
-#           new4 producing honestly; PASS when every kind is convicted and new4's claims go Final
+#   df2     the live court battery on the SMALL class (a 1.5B class's capture cannot reach a seat: 16 MiB cap),
+#           one commit-point kind at a time: new4 restarted with --palw-drill-tamper-leaf; PASS when every kind is
+#           convicted (a proof, or at a dissected kind F7's dissection) and new4's honest claims went Final
 #   df3/4   Phase F's step scripts, `run`, with the layout exported
 #   down    SIGINT every node (never SIGKILL)
 set -euo pipefail
@@ -78,7 +82,7 @@ preflight() {
     if [ -x "${CLI_BIN:-/nonexistent}" ]; then
         HOME=${TMPDIR:-/tmp} "$CLI_BIN" palw tir-registration --help >/dev/null 2>&1 && ok "misaka palw tir-registration" || bad "misaka lacks palw tir-registration"
     fi
-    for t in palw-class palw-a16-to-tir palw-tir-equiv; do
+    for t in palw-class palw-a16-to-tir palw-tir-equiv palw-tir-fidelity; do
         [ -x "$TOOLS_BIN/$t" ] && ok "$TOOLS_BIN/$t" || bad "tool missing: $TOOLS_BIN/$t (TOOLS_BIN)"
     done
     if [ -x "$TOOLS_BIN/palw-class" ]; then
@@ -96,6 +100,12 @@ preflight() {
         [ -n "$A16_ARTIFACT" ] && [ -s "$A16_ARTIFACT" ] && ok "A16 artifact $(basename "$A16_ARTIFACT") ($(du -h "$A16_ARTIFACT" | cut -f1))" \
             || bad "A16_ARTIFACT unset or missing (the Qwen2.5-1.5B A16 .palwart the IR class is converted from)"
 
+    fi
+    if [ -s "$SMALL_ARTIFACT" ] && [ -s "$WORK_DIR/small-class.id" ]; then
+        ok "small class built: $SMALL_ARTIFACT (class $(cut -c1-16 "$WORK_DIR/small-class.id")…)"
+    else
+        [ -s "$SMALL_FIXTURE/model.safetensors" ] && ok "the small class's fixture: $SMALL_FIXTURE" \
+            || bad "the small class's HF fixture is missing: $SMALL_FIXTURE (SMALL_FIXTURE)"
     fi
     for n in $(all_nodes); do [ -d "$WORK_DIR/$n/app" ] && { [ "$real" = 1 ] && [ -s "$WORK_DIR/.up" ] || bad "$WORK_DIR/$n/app exists (a drill already created here — refusing to reuse)"; }; done
     local busy="" k base
@@ -117,15 +127,16 @@ preflight() {
 plan() {
     cat <<EOF
 == plan (one chain; the drill runs the release under test, Phase F's scripts read the same layout)
-  1. up      keyring + new0..new7 (new1, new2 heartbeat clocks; new3 floor producer; new0 the IR registrant and producer;
-             new0, new1..new6 hold the IR artifact: seven ready seats, t12's 5 + 2) + old (the fleet's release, keyless,
-             peered to new0); the signed below-the-fence IR registration → \$WORK_DIR/ir-registration.obj
+  1. up      keyring + new0..new7 (new1, new2 heartbeat clocks; new3 floor producer; new0 D-F1's registrant and producer;
+             new4 the small class's; new0, new1..new6 hold both IR artifacts: seven ready seats, t12's 5 + 2) + old (the
+             fleet's release, keyless, peered to new0); the signed below-the-fence IR registration → \$WORK_DIR/ir-registration.obj
   2. df4     (Phase F) DAA < $TIR_AT: the IR registration dropped by name by the new nodes, skipped by the old one;
              crossing $TIR_AT: WrongForkId between new0 and old
   3. df1     past $TIR_AT new0 registers the class → Candidate → jury readiness → Prefetching → Probation (10 probes)
              → ActiveLimited → Active → claims → Final; logits already compared offline (class, palw-tir-equiv)
-  4. df2     per commit-point kind (ir/leaves.txt): new0 lies at that leaf, the refuting seats accuse it at once
-             (TirShardCourtAccused, one move past the fence), new4 produces honestly and its claims go Final
+  4. df2     on the small class, per commit-point kind (ir/small-leaves.txt): new4 lies at that leaf, the refuting
+             seats accuse it at once (TirShardCourtAccused past the fence; at a dissected kind the named-leaf challenge
+             and F7's dissection); new4's honest claims went Final first (its probation)
   5. df3     (Phase F) the red-team against new0's gRPC, 8 of 8 refused, no node panics
 EOF
 }
@@ -178,6 +189,27 @@ class_build() {
         --prompts "$EQUIV_PROMPTS" --max-prefill "$((IR_CONTEXT - 1))" | tee "$IR_DIR/equiv.txt"
     grep -q "EQUAL" "$IR_DIR/equiv.txt" || die "the IR class's logits are not the legacy class's (see $IR_DIR/equiv.txt)"
     say "class $(cut -c1-16 "$WORK_DIR/ir-class.id")… built, admitted, logits equal"
+    small_class_build
+}
+
+# The small IR class for D-F2's live battery: the tiny HF llama, lowered unwindowed, declared at SMALL_CONTEXT.
+small_class_build() {
+    [ -s "$SMALL_FIXTURE/model.safetensors" ] || die "the small class's fixture is missing: $SMALL_FIXTURE"
+    mkdir -p "$IR_DIR"
+    say "the small class: $SMALL_FIXTURE lowered unwindowed (palw-tir-fidelity), declared at $SMALL_CONTEXT positions"
+    "$TOOLS_BIN/palw-tir-fidelity" "$SMALL_FIXTURE" --artifact-out "$SMALL_LOWERED" > "$IR_DIR/small-fidelity.txt" 2>&1 \
+        || die "palw-tir-fidelity failed (see $IR_DIR/small-fidelity.txt)"
+    "$TOOLS_BIN/palw-class" declare-layout --network testnet-12 --max-context "$SMALL_CONTEXT" --model-id "$SMALL_MODEL_ID" \
+        --out "$SMALL_ARTIFACT" "$SMALL_LOWERED" | tee "$IR_DIR/small-declare.txt"
+    grep -q "ADMISSIBLE" "$IR_DIR/small-declare.txt" || die "admission v10 refuses the small class (see $IR_DIR/small-declare.txt)"
+    awk '/class id/ {print $3}' "$IR_DIR/small-declare.txt" > "$WORK_DIR/small-class.id"
+    awk '/inventory root/ {print $3}' "$IR_DIR/small-declare.txt" > "$WORK_DIR/small-artifact.root"
+    "$TOOLS_BIN/palw-class" drill-leaves --network testnet-12 "$SMALL_ARTIFACT" > "$IR_DIR/small-leaves.txt"
+    "$TOOLS_BIN/palw-class" close-sizes --network testnet-12 "$SMALL_ARTIFACT" > "$IR_DIR/small-close-sizes.txt" 2> "$IR_DIR/small-close-sizes.err"
+    grep -q "every close fits" "$IR_DIR/small-close-sizes.txt" || die "a small-class close does not fit (see $IR_DIR/small-close-sizes.txt)"
+    local bytes; bytes=$(sed -n 's/.*(\([0-9]*\) capture bytes).*/\1/p' "$IR_DIR/small-close-sizes.err" | head -1)
+    [ -n "$bytes" ] && [ "$bytes" -lt $((16 << 20)) ] || die "the small class's capture ($bytes bytes) does not fit the 16 MiB material cap"
+    say "small class $(cut -c1-16 "$WORK_DIR/small-class.id")… admitted: $(wc -l < "$IR_DIR/small-leaves.txt" | tr -d ' ') kinds, capture $bytes bytes, $(grep -c dissected "$IR_DIR/small-close-sizes.txt") dissected point(s)"
 }
 
 up() {
@@ -212,26 +244,28 @@ df1() {
 }
 
 df2() {
-    [ -s "$IR_DIR/leaves.txt" ] || die "no leaves: run \`df.sh class\`"
-    touch "$WORK_DIR/new4/produce-ir"; bash "$A/nodes.sh" stop new4; bash "$A/nodes.sh" start new4
+    [ -s "$IR_DIR/small-leaves.txt" ] || die "no small-class leaves: run \`df.sh class\`"
+    # The small class Active first (new4's honest probation claims go Final on the way).
+    ( cd "$A"; WORK_DIR=$WORK_DIR DF_PORT=$(jport new3) python3 dfwatch.py --until small-active --deadline-daa "${DF2_ACTIVE_DEADLINE_DAA:-3000}" ) \
+        || { echo "D-F2 INCOMPLETE: the small class is not Active"; return 3; }
+    local honest; honest=$(python3 -c "import json; print(json.load(open('$WORK_DIR/df-state.json'))['small']['claims']['new4']['final'])")
     local convicted=0 kinds=0 leaf call kind before after
     while read -r leaf call kind; do
         kinds=$((kinds + 1))
-        before=$(python3 -c "import json; print(json.load(open('$WORK_DIR/df-state.json'))['claims']['new0']['court_fraud'])")
-        say "D-F2 $kind ($call): new0 lies at leaf $leaf"
-        echo "--palw-drill-tamper-leaf=$leaf" > "$WORK_DIR/new0/extra-args"
-        bash "$A/nodes.sh" stop new0; bash "$A/nodes.sh" start new0
+        before=$(python3 -c "import json; print(json.load(open('$WORK_DIR/df-state.json'))['small']['claims']['new4']['convicted'])")
+        say "D-F2 $kind ($call): new4 lies at leaf $leaf of the small class"
+        echo "--palw-drill-tamper-leaf=$leaf" > "$WORK_DIR/new4/extra-args"
+        bash "$A/nodes.sh" stop new4; bash "$A/nodes.sh" start new4
         after=$before
         for i in $(seq 1 "${DF2_WAIT_SAMPLES:-240}"); do
             sleep 30
-            after=$(python3 -c "import json; print(json.load(open('$WORK_DIR/df-state.json'))['claims']['new0']['court_fraud'])")
+            after=$(python3 -c "import json; print(json.load(open('$WORK_DIR/df-state.json'))['small']['claims']['new4']['convicted'])")
             [ "$after" -gt "$before" ] && break
         done
         if [ "$after" -gt "$before" ]; then convicted=$((convicted + 1)); echo "  CONVICTED leaf $leaf $kind"; else echo "  NOT CONVICTED leaf $leaf $kind"; fi
-    done < "$IR_DIR/leaves.txt"
-    : > "$WORK_DIR/new0/extra-args"; bash "$A/nodes.sh" stop new0; bash "$A/nodes.sh" start new0
-    local honest; honest=$(python3 -c "import json; print(json.load(open('$WORK_DIR/df-state.json'))['claims']['new4']['final'])")
-    echo "D-F2: $convicted of $kinds commit-point kinds convicted; new4's honest Finals: $honest"
+    done < "$IR_DIR/small-leaves.txt"
+    : > "$WORK_DIR/new4/extra-args"; bash "$A/nodes.sh" stop new4; bash "$A/nodes.sh" start new4
+    echo "D-F2: $convicted of $kinds commit-point kinds of the small class convicted; new4's honest Finals before the battery: $honest"
     [ "$convicted" = "$kinds" ] && [ "$honest" -gt 0 ] && { echo "D-F2 PASS"; return 0; }
     echo "D-F2 FAIL"; return 1
 }
@@ -291,6 +325,7 @@ stage2() {
 case $cmd in
     dry) dry ;;
     class) class_build ;;
+    small) small_class_build ;;
     up) up ;;
     stage1) stage1 ;;
     stage2) stage2 ;;
