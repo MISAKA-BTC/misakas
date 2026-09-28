@@ -40,11 +40,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-09-28 @ea80b2e88867: third post-launch flag day moved to DAA 1,700 (the DAA-1,500 release was never rolled out; the chain passed 1,500 on the DAA-1,300 rules) (was 53078c91…, 33743259…)
+// re-pin 2026-09-28 @f41ba5bbb979: int-8: palw_tir_v1 (RFC-0002 PALW-TIR) armed on testnet-12 at DAA 2,000 (PALW_T12_TIR_FLAG_DAY_FENCES_V1) (was 69130124…, e2b14ac6…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "69130124bbd7450dba758f2c8baa260fe6b5faa09b3b7d865cd347bb510934d5",
+    "a61d8533c151a35ee7bf1ab331a8d59d79c025fef4f0500c9f759725c4fb8bed",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "e2b14ac682c5d3d59a15501b41b87a8d46932867a1f6fb65a0049b991f6b40b2",
+    "4711c15a4b84c3418f6459d12a5b07bba00782160d2ab7d4da58dd9a7119db46",
 );
 
 #[test]
