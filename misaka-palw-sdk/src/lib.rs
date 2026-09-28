@@ -44,6 +44,7 @@ pub mod lineages {
 }
 pub mod sdk;
 /// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
+pub mod tir_equiv;
 pub mod tir_manifest;
 
 pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};

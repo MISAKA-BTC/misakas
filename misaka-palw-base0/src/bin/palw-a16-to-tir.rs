@@ -4,12 +4,16 @@
 //! (RFC-0002 Phase F, F3; `misaka_palw_base0::tir_a16`).
 //!
 //! ```text
-//! palw-a16-to-tir --artifact <in.palwart> --out <out.palwtir> [--held] [--check N]
+//! palw-a16-to-tir --artifact <in.palwart> --out <out.palwtir> [--respan N] [--held] [--check N]
 //! ```
 //!
-//! `--held` lowers with the long history bound (2^21) instead of 2^18. `--check N` runs the first
-//! `N` positions of a fixed token row through the A16 engine and through the converted program on
-//! the reference evaluator (from the written file) and refuses unless every logit code agrees.
+//! `--held` lowers with the long history bound (2^21) instead of 2^18. `--respan N` first widens
+//! (or narrows) the artifact to `N` positions: the rotary table is a function of the shape, so it
+//! is regenerated and nothing else changes (testnet-12's genesis `graph-v7@8192` artifact is the
+//! 512-wide genesis artifact respanned to 8,192 — `palw-tir-equiv` checks the pairing). `--check N`
+//! runs the first `N` positions of a fixed token row through the A16 engine and through the
+//! converted program on the reference evaluator (from the written file) and refuses unless every
+//! logit code agrees.
 
 use misaka_palw_base0::artifact::decode_artifact_file_mapped_v1;
 use misaka_palw_base0::engine_a16::{A16Cache, A16Engine};
@@ -30,13 +34,21 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let usage = "usage: palw-a16-to-tir --artifact <in.palwart> --out <out.palwtir> [--held] [--check N]";
+    let usage = "usage: palw-a16-to-tir --artifact <in.palwart> --out <out.palwtir> [--respan N] [--held] [--check N]";
     let input = PathBuf::from(flag(&args, "--artifact").unwrap_or_else(|| die(usage.into())));
     let out = PathBuf::from(flag(&args, "--out").unwrap_or_else(|| die(usage.into())));
     let hb = if args.iter().any(|a| a == "--held") { HISTORY_BOUND_V1_HELD } else { HISTORY_BOUND_V1_SMALL };
     let check: usize = flag(&args, "--check").and_then(|v| v.parse().ok()).unwrap_or(0);
     let map = Arc::new(ReadOnlyMap::open(&input).unwrap_or_else(|e| die(format!("{}: {e}", input.display()))));
-    let artifact = decode_artifact_file_mapped_v1(map).unwrap_or_else(|e| die(format!("{}: {e}", input.display())));
+    let mut artifact = decode_artifact_file_mapped_v1(map).unwrap_or_else(|e| die(format!("{}: {e}", input.display())));
+    if let Some(n) = flag(&args, "--respan") {
+        let n: usize = n.parse().unwrap_or_else(|_| die(format!("--respan {n}: not a number")));
+        let s = &mut artifact.shape;
+        println!("respan: the rotary table regenerated from {} to {n} positions", s.max_position);
+        s.max_position = n;
+        artifact.rope = misaka_palw_base0::rope::RopeTableV1::generate(s.d_head, n, s.ln_theta_gen_q)
+            .unwrap_or_else(|e| die(format!("regenerating the rotary table: {e:?}")));
+    }
     if artifact.a16_params.is_none() {
         die(format!("{} carries no A16 parameter store (not an A16 class artifact)", input.display()));
     }

@@ -164,8 +164,38 @@ fn softmax_up(b: &mut BlockBuilder<'_>, x: Ref, up: Ref) -> Ref {
     b.clamp(q, 0, 1 << 25, DType::I32)
 }
 
+/// **Where each legacy node row lives in the mirror program**: for the shape profile's `pre_nodes`,
+/// `attn_nodes` (graph v5/v7 numbering, twenty-four a layer) and `post_nodes`, the node of the
+/// program's `pre`, layer and `post` block that computes that row. Every one of them is a commit
+/// point, so the IR class commits every row the legacy class commits (the fused attention site is
+/// one row, as in v5/v7; the program also commits the site's logits and probability codes, which
+/// the legacy row keeps inside its kernel).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct A16MirrorRowsV1 {
+    pub pre: Vec<u16>,
+    pub layer: Vec<u16>,
+    pub post: Vec<u16>,
+}
+
+/// The `pre`, layer and `post` blocks of the mirror program.
+pub const A16_MIRROR_PRE_BLOCK: u8 = 0;
+pub const A16_MIRROR_LAYER_BLOCK: u8 = 1;
+pub const A16_MIRROR_POST_BLOCK: u8 = 2;
+
+fn node_of(r: Ref) -> u16 {
+    match r {
+        Ref::Node(j) => j,
+        other => panic!("a legacy row is a node of the mirror, not {other:?}"),
+    }
+}
+
 /// **The A16 engine as a TIR program** for one shape. `history_bound` is `2^18` or `2^21`.
 pub fn a16_mirror_program(shape: &Base0ShapeV1, history_bound: u32) -> Result<TirProgramV1, String> {
+    a16_mirror_program_with_rows(shape, history_bound).map(|(p, _)| p)
+}
+
+/// [`a16_mirror_program`] and the node of every legacy row ([`A16MirrorRowsV1`]).
+pub fn a16_mirror_program_with_rows(shape: &Base0ShapeV1, history_bound: u32) -> Result<(TirProgramV1, A16MirrorRowsV1), String> {
     let (d, kv, ff, v) = (shape.d_model(), shape.kv_dim(), shape.d_ff, shape.vocab);
     let (h, kvh, dh) = (shape.n_heads, shape.n_kv_heads, shape.d_head);
     if h == 0 || kvh == 0 || !h.is_multiple_of(kvh) || dh % 2 != 0 || shape.n_layers == 0 || shape.max_position == 0 {
@@ -191,11 +221,21 @@ pub fn a16_mirror_program(shape: &Base0ShapeV1, history_bound: u32) -> Result<Ti
     let carry = vec![TensorType::fixed(DType::I16, &[d as u32])];
     let ix = |name: &str| LAYER_TRIPLES.iter().position(|(t, _)| tir_base(t) == name).expect("a known table");
 
-    // pre: the int8 row, lifted onto the A16 stream.
+    let mut rows = A16MirrorRowsV1 { pre: Vec::new(), layer: Vec::new(), post: Vec::new() };
+    // Commit a node that is a legacy row, and record it.
+    let row_of = |b: &mut BlockBuilder<'_>, table: &mut Vec<u16>, r: Ref| -> Ref {
+        let r = b.commit(r);
+        table.push(node_of(r));
+        r
+    };
+
+    // pre: the int8 row (graph row 0), lifted onto the A16 stream (row 1).
     let pre = {
         let mut b = pb.block("pre", vec![]);
         let row = b.gather(embed, Ref::Input(INPUT_TOKEN), 0, 0);
+        row_of(&mut b, &mut rows.pre, row);
         let x = codes(&mut b, row, t3(&globals[0]));
+        row_of(&mut b, &mut rows.pre, x);
         b.finish(&[x])
     };
 
@@ -205,24 +245,31 @@ pub fn a16_mirror_program(shape: &Base0ShapeV1, history_bound: u32) -> Result<Ti
         let zero = b.c(DType::Idx, 0);
         let pos0 = b.compare(Ref::Input(INPUT_POS), zero, Cmp::Eq);
         let t = |name: &str| t3(&lt[ix(name)]);
-        // Attention.
+        let r = &mut rows.layer;
+        // Attention (graph rows 0–7).
         let unit = b.rms_norm_a16(x, shape.eps_q);
+        row_of(&mut b, r, unit);
         let normed = codes(&mut b, unit, t("blk.attn_norm.a16"));
-        let normed = b.commit(normed);
+        let normed = row_of(&mut b, r, normed);
         let q = matvec(&mut b, weights[0], normed, d, d);
         let q = codes(&mut b, q, t("blk.attn_q.weight.a16"));
+        row_of(&mut b, r, q);
         let k = matvec(&mut b, weights[1], normed, kv, d);
         let k = codes(&mut b, k, t("blk.attn_k.weight.a16"));
+        row_of(&mut b, r, k);
         let vv = matvec(&mut b, weights[2], normed, kv, d);
         let vv = codes(&mut b, vv, t("blk.attn_v.weight.a16"));
+        row_of(&mut b, r, vv);
         let at = b.clamp(Ref::Input(INPUT_POS), 0, shape.max_position as i64 - 1, DType::Idx);
         let cos = b.gather(rope_cos, at, 0, 0);
         let sin = b.gather(rope_sin, at, 0, 0);
         let qh = b.reshape_fixed(q, &[h as u32, dh as u32]);
         let q_rot = b.rope_pairs(qh, cos, sin, -32767, 32767, DType::I16);
+        row_of(&mut b, r, q_rot);
         let kh = b.reshape_fixed(k, &[kvh as u32, dh as u32]);
         let k_rot = b.rope_pairs(kh, cos, sin, -32767, 32767, DType::I16);
         let k_row = b.reshape_fixed(k_rot, &[kv as u32]);
+        row_of(&mut b, r, k_row);
         let keys = b.hist_append(k_hist, k_row);
         let vals = b.hist_append(v_hist, vv);
         let qg = b.reshape_fixed(q_rot, &[kvh as u32, g as u32, dh as u32]);
@@ -239,57 +286,73 @@ pub fn a16_mirror_program(shape: &Base0ShapeV1, history_bound: u32) -> Result<Ti
         let ctx = b.matmul(p15, vt, DType::I64);
         let ctx = codes(&mut b, ctx, t("blk.attn_values.a16"));
         let ctx = b.reshape_fixed(ctx, &[d as u32]);
-        let ctx = b.commit(ctx);
+        // The fused attention site (graph row 7), then the output projection and the residual
+        // (rows 8–11).
+        let ctx = row_of(&mut b, r, ctx);
         let delta = matvec(&mut b, weights[3], ctx, d, d);
         let wo = lane(&mut b, pos0, &lt[ix("blk.attn_output.weight.a16.sink0")], &lt[ix("blk.attn_output.weight.a16")]);
         let delta = codes(&mut b, delta, wo);
+        row_of(&mut b, r, delta);
         let al = lane(&mut b, pos0, &lt[ix("blk.attn_align.a16.sink0")], &lt[ix("blk.attn_align.a16")]);
         let aligned = codes(&mut b, x, al);
+        row_of(&mut b, r, aligned);
         let sum = b.add(aligned, delta, DType::I32);
+        row_of(&mut b, r, sum);
         let x1 = codes(&mut b, sum, t("blk.attn_residual.a16"));
-        let x1 = b.commit(x1);
-        // SwiGLU.
+        let x1 = row_of(&mut b, r, x1);
+        // SwiGLU (rows 12–23).
         let unit = b.rms_norm_a16(x1, shape.eps_q);
+        row_of(&mut b, r, unit);
         let normed = codes(&mut b, unit, t("blk.ffn_norm.a16"));
-        let normed = b.commit(normed);
+        let normed = row_of(&mut b, r, normed);
         let gate = matvec(&mut b, weights[4], normed, ff, d);
         let gate = narrow(&mut b, gate, t("blk.ffn_gate.weight.a16"), i32::MIN as i64, i32::MAX as i64, DType::I32);
-        let gate = b.commit(gate);
+        let gate = row_of(&mut b, r, gate);
         let up = matvec(&mut b, weights[5], normed, ff, d);
         let upl = lane(&mut b, pos0, &lt[ix("blk.ffn_up.weight.a16.sink0")], &lt[ix("blk.ffn_up.weight.a16")]);
         let up = codes(&mut b, up, upl);
-        let up = b.commit(up);
+        let up = row_of(&mut b, r, up);
         let silu = b.silu(gate);
+        row_of(&mut b, r, silu);
         let sl = lane(&mut b, pos0, &lt[ix("blk.ffn_silu.a16.sink0")], &lt[ix("blk.ffn_silu.a16")]);
         let s16 = codes(&mut b, silu, sl);
+        row_of(&mut b, r, s16);
         let prod = b.mul(s16, up, DType::I32);
+        row_of(&mut b, r, prod);
         let gl = lane(&mut b, pos0, &lt[ix("blk.ffn_gated.a16.sink0")], &lt[ix("blk.ffn_gated.a16")]);
         let gated = codes(&mut b, prod, gl);
-        let gated = b.commit(gated);
+        let gated = row_of(&mut b, r, gated);
         let down = matvec(&mut b, weights[6], gated, d, ff);
         let dl = lane(&mut b, pos0, &lt[ix("blk.ffn_down.weight.a16.sink0")], &lt[ix("blk.ffn_down.weight.a16")]);
         let down = codes(&mut b, down, dl);
+        row_of(&mut b, r, down);
         let fl = lane(&mut b, pos0, &lt[ix("blk.ffn_align.a16.sink0")], &lt[ix("blk.ffn_align.a16")]);
         let aligned = codes(&mut b, x1, fl);
+        row_of(&mut b, r, aligned);
         let sum = b.add(aligned, down, DType::I32);
+        row_of(&mut b, r, sum);
         let x2 = codes(&mut b, sum, t("blk.ffn_residual.a16"));
+        row_of(&mut b, r, x2);
         b.finish(&[x2])
     };
 
     let post = {
         let mut b = pb.block("post", carry);
         let unit = b.rms_norm_a16(Ref::CarryIn(0), shape.eps_q);
+        row_of(&mut b, &mut rows.post, unit);
         let fin = codes(&mut b, unit, t3(&globals[1]));
-        let fin = b.commit(fin);
+        let fin = row_of(&mut b, &mut rows.post, fin);
         let acc = matvec(&mut b, unembed, fin, v, d);
         let logits = codes(&mut b, acc, t3(&globals[2]));
-        b.commit(logits);
+        row_of(&mut b, &mut rows.post, logits);
         b.finish(&[])
     };
     let logits = (pb.blocks[post as usize].nodes.len() - 1) as u16;
+    debug_assert_eq!((pre, layer, post), (A16_MIRROR_PRE_BLOCK, A16_MIRROR_LAYER_BLOCK, A16_MIRROR_POST_BLOCK));
+    debug_assert_eq!((rows.pre.len(), rows.layer.len(), rows.post.len()), (2, 24, 3));
     let program = pb.finish(pre, vec![layer; shape.n_layers], post, logits);
     misaka_palw_tir::validate::validate(&program).map_err(|e| format!("the mirror program is not in normal form: {e}"))?;
-    Ok(program)
+    Ok((program, rows))
 }
 
 /// Why an artifact did not convert.

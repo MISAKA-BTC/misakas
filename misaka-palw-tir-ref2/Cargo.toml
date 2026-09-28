@@ -1,0 +1,26 @@
+[package]
+name = "misaka-palw-tir-ref2"
+description = "PALW-TIR v1 verification: an independent second implementation of the Canonical Tensor IR (spec/palw/04b), written from the normative text alone, with exact wide arithmetic, a hand-written codec, the golden vectors and a differential fuzzer against misaka-palw-tir. Test/verification-only — never a consensus dependency"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# No normal dependencies: the codec, the wide integers and the evaluator are written here from
+# 04b, so nothing the first implementation chose (a derive, a helper) can leak into this one.
+
+[dev-dependencies]
+serde_json.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+# The first implementation, used ONLY as a black box by the differential tests (decode, validate,
+# evaluate through its public API). A dev-dependency and only that: a normal dependency would let a
+# future edit here reach for the first implementation's answer.
+misaka-palw-tir = { path = "../misaka-palw-tir" }
+
+[lints]
+workspace = true

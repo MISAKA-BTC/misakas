@@ -79,6 +79,43 @@ pub fn int_logits(
     Ok(out)
 }
 
+/// [`int_logits`] on the typed backend (`misaka-palw-tir-exec`, byte-identical to the reference
+/// evaluator: freeze criterion 4, `tests/three_way.rs`) — the same logits, about 300× faster at
+/// 1.5B. The params are borrowed, not copied.
+pub fn int_logits_exec(
+    program: &tir::TirProgramV1,
+    params: &IntParams,
+    seq: &[usize],
+    logits_scale: f64,
+    progress: &dyn Fn(usize),
+) -> Result<Vec<Vec<f64>>> {
+    use crate::lower::IntData;
+    use misaka_palw_tir_exec::{NoSink, ParamData, TirExecutor, TirParams, TirPlan};
+    use std::borrow::Cow;
+    let fail = |e: tir::TirError| LowerError::eval(format!("typed backend: {e}"));
+    let plan = TirPlan::compile(program).map_err(fail)?;
+    let mut xp = TirParams::new(&plan);
+    for ((j, layer), t) in &params.tensors {
+        let data = match &t.data {
+            IntData::I8(v) => ParamData::I8(Cow::Borrowed(v)),
+            IntData::I16(v) => ParamData::I16(Cow::Borrowed(v)),
+            IntData::I32(v) => ParamData::I32(Cow::Borrowed(v)),
+            IntData::I64(v) => ParamData::I64(Cow::Borrowed(v)),
+            IntData::Idx(v) => ParamData::Idx(Cow::Borrowed(v)),
+        };
+        xp.insert(&plan, *j, *layer, data).map_err(fail)?;
+    }
+    let mut exec = TirExecutor::new(&plan, &xp).map_err(fail)?;
+    let mut out = Vec::with_capacity(seq.len());
+    for (p, t) in seq.iter().enumerate() {
+        exec.step(*t as u32, &mut NoSink).map_err(|e| LowerError::eval(format!("position {p}: {e}")))?;
+        let (_, l) = exec.logits();
+        out.push(l.to_i128s().iter().map(|v| *v as f64 * logits_scale).collect());
+        progress(p);
+    }
+    Ok(out)
+}
+
 /// Fidelity of one set of sequences.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Metrics {

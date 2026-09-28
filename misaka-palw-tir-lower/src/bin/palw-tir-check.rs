@@ -54,6 +54,7 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
         } else {
             misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL
         },
+        ..Default::default()
     };
     match lower::lower(&c.program, &opts) {
         Ok(lw) => {
