@@ -80,6 +80,8 @@ pub mod rope;
 /// ADR-0133 S1, authenticated (SEAT-S4): the V2 segment opening a partial seat replays, tied to
 /// the claim before one step runs.
 pub mod segment_opening;
+/// RFC-0002 Phase F: the A16 engine as a PALW-TIR program, and A16 → TIR artifact conversion.
+pub mod tir_a16;
 pub mod tokenizer;
 
 pub mod convert;

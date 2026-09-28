@@ -1,0 +1,38 @@
+[package]
+name = "misaka-palw-tir-lower"
+description = "RFC-0002 lowerer, Hugging Face side: config.json -> ArchSpec -> high-level ML graph (HL), safetensors weight mapping, and an f32 reference of the HL graph. Non-consensus tooling."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "palw-tir-check"
+path = "src/bin/palw-tir-check.rs"
+
+[[bin]]
+name = "palw-tir-fidelity"
+path = "src/bin/palw-tir-fidelity.rs"
+
+# Deliberately light: no kaspa-consensus-core, no misaka-palw-base0. This crate reads a Hugging
+# Face checkpoint, lowers it to a PALW-TIR program plus integer params, and measures fidelity;
+# nothing here is on a validation path. `misaka-palw-tir` is the IR itself (a leaf crate): the
+# builder, the canonical encoding, the range analysis and the reference evaluator.
+[dependencies]
+misaka-palw-tir = { path = "../misaka-palw-tir" }
+misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
+serde = { workspace = true }
+serde_json.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+clap = { workspace = true, features = ["derive"] }
+rayon.workspace = true
+blake2b_simd.workspace = true
+
+[lints]
+workspace = true
