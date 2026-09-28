@@ -191,11 +191,10 @@ pub const PRIM_NAMES_V1: [&str; 25] = [
     "HistAppend",
 ];
 
-/// The canonical bytes a consensus crate hashes into `prim_set_id` (keyed BLAKE2b-512 under the
-/// caller's domain). They name the set, the spec revision whose text defines the semantics, and
-/// every primitive in tag order.
+/// The prim-set descriptor (spec 04b §6.0): the set, the revision of the spec text that defines
+/// the semantics, and every primitive in tag order.
 pub fn prim_set_descriptor_v1() -> Vec<u8> {
-    let mut s = String::from("palw-tir/v1/spec=04b-tensor-ir/rev1/q=24/prims=");
+    let mut s = String::from("palw-tir/v1/spec=04b-tensor-ir/rev2/q=24/prims=");
     for (i, n) in PRIM_NAMES_V1.iter().enumerate() {
         if i > 0 {
             s.push(',');
@@ -204,6 +203,21 @@ pub fn prim_set_descriptor_v1() -> Vec<u8> {
     }
     s.into_bytes()
 }
+
+/// The key of the keyed hash that turns the descriptor into `prim_set_id` — the discipline of every
+/// other `Hash64` id of the chain (`kernel_semantics_id_v1`: BLAKE2b, 64-byte output, keyed by a
+/// `misaka-palw/…/v1` domain tag).
+pub const PRIM_SET_ID_DOMAIN_V1: &[u8] = b"misaka-palw/tir-prim-set-id/v1";
+
+/// `prim_set_id` of PALW-TIR v1: `BLAKE2b-512(key = PRIM_SET_ID_DOMAIN_V1, prim_set_descriptor_v1())`.
+/// A program declares exactly this value (normal form NF-1); the hashing itself stays with consensus
+/// (this crate has no hash dependency) and `tests/golden.rs` recomputes the constant.
+pub const PRIM_SET_ID_V1: [u8; 64] = [
+    0x61, 0xfa, 0x4a, 0xa5, 0x7a, 0xdf, 0xc7, 0x90, 0x53, 0xc5, 0xe5, 0x17, 0x51, 0x5e, 0x50, 0xc7, 0xae, 0x7c, 0x03, 0x6a, 0xbc,
+    0x43, 0xff, 0x93, 0x10, 0x53, 0x14, 0x46, 0x91, 0xba, 0x31, 0xc9, 0x21, 0x25, 0x39, 0xa9, 0x35, 0x14, 0xf8, 0x31, 0xa8, 0x47,
+    0x2c, 0xa7, 0x5a, 0x39, 0xb0, 0x94, 0x17, 0x77, 0x36, 0xaa, 0x58, 0x18, 0xee, 0xae, 0x54, 0x7b, 0xb3, 0x1f, 0xbf, 0x89, 0xf5,
+    0x89,
+];
 
 impl Prim {
     pub fn tag(&self) -> u8 {
