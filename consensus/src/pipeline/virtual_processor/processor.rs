@@ -8919,6 +8919,13 @@ impl VirtualStateProcessor {
                 Obj::MaterialDisclosedV2 { claim, unit, answer, discloser, signature }
                     if state_params.rcore_plus_active_at(point.daa_score) =>
                 {
+                    // RFC-0002 Phase F: an IR class's answer is dropped by name below `palw_tir_v1`,
+                    // exactly as an older build skips the payload it cannot decode (A-2).
+                    if answer.is_tir_v1() && !self.palw_tir_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim}: an IR answer is refused: palw_tir_v1 is not in force at this block (RFC-0002 Phase F)"
+                        ));
+                    }
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
                     }

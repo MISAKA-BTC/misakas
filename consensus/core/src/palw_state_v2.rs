@@ -19903,6 +19903,31 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    /// [`Self::da_binding_answers_another_job_v1`] over an IR binding (RFC-0002 Phase F): the same
+    /// identity rule, J5 derived from the IR class's facts
+    /// (`palw_offence_attribution_v1::palw_tir_binding_identity_fault_v1`).
+    fn da_tir_binding_answers_another_job_v1(
+        &self,
+        now_daa: u64,
+        claim_id: &Hash64,
+        binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    ) -> Option<String> {
+        if !self.extras.offence_attribution_active {
+            return None;
+        }
+        let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&self.state, claim_id)?;
+        match crate::palw_offence_attribution_v1::palw_tir_binding_identity_fault_v1(
+            &target,
+            binding,
+            self.identity_rules_v1(now_daa),
+            false,
+            crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+        ) {
+            Ok(Some(fault)) => Some(format!("the IR binding answers another job or class ({})", fault.code())),
+            Ok(None) | Err(_) => None,
+        }
+    }
+
     /// The identity rules the attribution adjudicators read: the network's prompt-id form and the
     /// base class (F1's J5 derives the base class's canonical job).
     /// **The heavy prompt budget, charged before the adjudicator computes** (addendum §4-bis.3): a
@@ -26479,6 +26504,28 @@ fn apply_da_answer_v1(
                 return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
             }
             matches!(disclosure, crate::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. })
+        }
+        // **RFC-0002 Phase F: an IR claim's event**, checked as a legacy event is — hash arithmetic
+        // against the claim's roots, then the identity rule over the IR binding. Below
+        // `palw_tir_v1` the acceptance layer drops the object by name (an older build cannot decode
+        // it); reaching the fold there is refused, the second lock.
+        (PalwDaUnitV1::Event { row, tile }, PalwDaAnswerV1::TirEvent(disclosure)) => {
+            if !builder.params.tir_active_at(ctx.daa_score) {
+                return Err(malformed("an IR answer before palw_tir_v1 is in force"));
+            }
+            crate::palw_tir_court_v1::check_tir_trace_event_disclosure_v1(
+                claim.trace_root,
+                claim.execution_root,
+                *row,
+                *tile,
+                disclosure,
+                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            )
+            .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
+            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, disclosure.binding()) {
+                return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
+            }
+            disclosure.is_flat()
         }
         (PalwDaUnitV1::Held(missing), PalwDaAnswerV1::Held(carriage)) => {
             let Some(network_ladder) = builder.extras.held_context_ladder else {
