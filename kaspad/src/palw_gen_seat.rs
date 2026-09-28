@@ -16,11 +16,12 @@
 
 use kaspa_consensus_core::config::params::Params;
 
-/// The loops' bodies, from the node's worker crate (tested there): the held class and its V5 runs,
-/// the seat's judgment and receipt, the capture, and a party's court moves and the objects it files.
+/// The loops' bodies, from the node's worker crate (tested there): the held class (from memory or its
+/// `PALWTIR2` file) and its V5 runs, the seat's judgment and receipt, the capture, and a party's court
+/// moves and the objects it files.
 pub use misaka_palw_base0::gen_worker::{
     GenCaptureV1, GenCourtMoveV1, GenHeldClassV1, GenSeatJudgmentV1, GenWorkV1, gen_court_candidates_v1, gen_court_object_v1,
-    gen_first_divergence_v1, gen_seat_judge_v1, gen_seat_receipt_v1, gen_worker_answer_v1,
+    gen_first_divergence_v1, gen_seat_judge_v1, gen_seat_receipt_v1, gen_worker_answer_v1, gen_write_container_v1,
 };
 
 /// **Is the lane open for pipeline classes at `daa_score`?** Both fences in force: `palw_gen_v1`

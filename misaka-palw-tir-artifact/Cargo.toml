@@ -18,5 +18,8 @@ borsh.workspace = true
 blake2b_simd.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true

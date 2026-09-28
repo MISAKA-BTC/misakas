@@ -517,3 +517,45 @@ fn an_encoder_decoder_job_runs_on_its_source_from_the_forced_start() {
     assert!(close.source_ids.is_empty() && close.prompt_ids == c.prompt);
     assert_eq!(check_gen_cone_close_v1(&close, &held.row, &held.row.class_id, &root, Some(decoder_leaf), FORM, &LIMITS), Ok(None));
 }
+
+/// **A pipeline class from its `PALWTIR2` file** (RFC-0003): written from the held weights, the file
+/// streams the class's `artifact_root`, the node holds the class from it, and a job runs to the same
+/// binding as from memory; a file of another class, or with other weights, is not held.
+#[test]
+fn a_class_is_held_from_its_pipeline_container_and_runs_as_from_memory() {
+    let v = toy();
+    let c = encdec();
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("gen-worker-{}.palwtir2", std::process::id()));
+    let digest = gen_write_container_v1(&path, &v.row, &v.params, "{\"test\":1}".into()).unwrap();
+    assert_eq!(misaka_palw_tir_artifact::file_digest_v1(&path).unwrap(), digest);
+    let container = misaka_palw_tir_artifact::PalwTirContainerV2::open(&path).unwrap();
+    let (programs, _) = v.row.class.decode().unwrap();
+    let (root, _) = palw_gen_inventory_root_v1(&programs, &container).unwrap();
+    assert_eq!(root, v.row.artifact_root, "the file streams the class's artifact root");
+    assert!(misaka_palw_tir_artifact::PalwTirContainerV1::open(&path).is_err(), "a PALWTIR1 reader refuses it");
+    let held = GenHeldClassV1::hold_container(v.row.clone(), &path).unwrap();
+    let job = v5_job(&v, 4);
+    let from_file = held.run_v5(&job, &v.prompt, std::slice::from_ref(&v.image), &[], FORM).unwrap();
+    let memory = GenHeldClassV1::hold(v.row.clone(), v.params.clone()).unwrap();
+    let from_memory = memory.run_v5(&job, &v.prompt, std::slice::from_ref(&v.image), &[], FORM).unwrap();
+    assert_eq!(from_file.binding, from_memory.binding, "the same claim from the file as from memory");
+    // Another class's file, or this class's programs with other weights, is not held.
+    let refused = GenHeldClassV1::hold_container(c.row.clone(), &path).err().unwrap();
+    assert!(refused.contains("not the registered class's"), "{refused}");
+    let mut other = v.params.clone();
+    let t = other.0[1].tensors.values_mut().next().unwrap();
+    t.data[0] = if t.data[0] > 0 { t.data[0] - 1 } else { t.data[0] + 1 };
+    gen_write_container_v1(&path, &v.row, &other, String::new()).unwrap();
+    let refused = GenHeldClassV1::hold_container(v.row.clone(), &path).err().unwrap();
+    assert!(refused.contains("artifact root"), "{refused}");
+    // The encoder–decoder's file too: its root, and its source-reading job from the file.
+    gen_write_container_v1(&path, &c.row, &c.params, String::new()).unwrap();
+    let held = GenHeldClassV1::hold_container(c.row.clone(), &path).unwrap();
+    let job = encdec_job(&c, &c.prompt);
+    let from_file = held.run_v5(&job, &c.prompt, &[], &c.source, FORM).unwrap();
+    let from_memory =
+        GenHeldClassV1::hold(c.row.clone(), c.params.clone()).unwrap().run_v5(&job, &c.prompt, &[], &c.source, FORM).unwrap();
+    assert_eq!(from_file.binding, from_memory.binding);
+    let _ = std::fs::remove_file(&path);
+}

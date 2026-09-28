@@ -33,6 +33,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+/// **`PALWTIR2`**: a pipeline class's container (RFC-0003) — N programs and one tensor table in the
+/// pipeline inventory's order. A PALWTIR1 reader refuses it by its magic.
+pub mod v2;
+pub use v2::{
+    PALW_TIR_CONTAINER_MAGIC_V2, PALW_TIR_CONTAINER_VERSION_V2, PalwTirContainerHeaderV2, PalwTirContainerProgramV2,
+    PalwTirContainerV2, PalwTirTensorEntryV2, pipeline_instances_v2, write_container_v2,
+};
+
 pub const PALW_TIR_CONTAINER_MAGIC_V1: &[u8; 8] = b"PALWTIR1";
 pub const PALW_TIR_CONTAINER_VERSION_V1: u16 = 1;
 /// Every tensor starts at a multiple of this.

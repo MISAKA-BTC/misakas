@@ -3,7 +3,9 @@
 //! `palw_fp_job_v5` (the walk skips version 8 before it).
 //!
 //! * **The worker** holds a class — its `gen_classes` row and this node's weights, refused unless
-//!   they hash to the class's `artifact_root` ([`GenHeldClassV1::hold`]) — and runs a V5 job
+//!   they hash to the class's `artifact_root` ([`GenHeldClassV1::hold`]; from a `PALWTIR2` file,
+//!   [`GenHeldClassV1::hold_container`], whose pipeline, programs, class and tokenizer must be the
+//!   row's) — and runs a V5 job
 //!   ([`GenHeldClassV1::run_v5`]): the job held to the class, the prompt to the job's hash and to the
 //!   class's forced prefix, the source to the job's source reference (RFC-0003 §II.2.2), every image
 //!   to its `input_root`, then the pipeline through FP Job V4's decoder. Its answer is the
@@ -143,6 +145,55 @@ impl<P: PipelineParams> GenHeldClassV1<P> {
             binding,
         })
     }
+}
+
+impl GenHeldClassV1<misaka_palw_tir_artifact::PalwTirContainerV2> {
+    /// **Hold a registered class from its `PALWTIR2` file**: the file's pipeline and programs are the
+    /// row's class's byte for byte, its declared class (when it declares one) is the row's, its
+    /// tokenizer the row's — and then [`GenHeldClassV1::hold`]: its tensors hash to the row's
+    /// `artifact_root`, streamed from the file in the inventory's order.
+    pub fn hold_container(row: PalwGenClassRecordV1, path: &std::path::Path) -> Result<Self, String> {
+        let container = misaka_palw_tir_artifact::PalwTirContainerV2::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let h = &container.header;
+        if h.pipeline != row.class.pipeline || h.programs != row.class.programs {
+            return Err("the container's pipeline or programs are not the registered class's".into());
+        }
+        if !h.class.is_empty() && borsh::to_vec(&*row.class).map_err(|e| e.to_string())? != h.class {
+            return Err("the container declares another class".into());
+        }
+        if h.tokenizer_id != row.tokenizer_id.as_bytes() {
+            return Err("the container's tokenizer is not the class's".into());
+        }
+        Self::hold(row, container)
+    }
+}
+
+/// **Write a registered class's `PALWTIR2` file** from weights held in any form: the row's pipeline,
+/// programs, class and tokenizer, and every tensor in the inventory's order. Returns the file digest.
+pub fn gen_write_container_v1<P: PipelineParams>(
+    path: &std::path::Path,
+    row: &PalwGenClassRecordV1,
+    params: &P,
+    meta: String,
+) -> Result<[u8; 64], String> {
+    let (programs, pipeline) = row.class.decode().map_err(|e| e.to_string())?;
+    let class = borsh::to_vec(&*row.class).map_err(|e| e.to_string())?;
+    misaka_palw_tir_artifact::write_container_v2(
+        path,
+        &pipeline,
+        &programs,
+        class,
+        row.tokenizer_id.as_bytes(),
+        meta,
+        &mut |k, j, l| {
+            params
+                .params(k)
+                .param(j, l)
+                .map(|t| t.to_le_bytes())
+                .ok_or_else(|| format!("program {k} param {j} layer {l:?} is not held"))
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
 impl GenWorkV1 {
