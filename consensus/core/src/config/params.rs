@@ -2822,6 +2822,17 @@ pub struct Params {
     /// refused unless this fence is armed from genesis.
     pub palw_kimi_k3: Option<ForkActivation>,
 
+    /// **RFC-0002 Phase F — PALW-TIR v1: a class may be a Canonical Tensor IR program.**
+    ///
+    /// Past it a registration may carry a `TirProgramV1` (admission v10) and the IR court arms
+    /// are admissible; before it every IR object is dropped by name with the block standing. The
+    /// value carries the network's `prim_set_id`, the IR court version and the IR ceilings
+    /// ([`crate::palw_tir_v1::PalwTirFenceV1`]). `None` on every preset; hashed Some-only in both
+    /// fingerprints with the value, the activation alone visited by `for_each_fence`, and the whole
+    /// option collapsed from `Some(never())` by the identity's normaliser — the `palw_heartbeat`
+    /// shape. [`Self::validate_palw_tir_v1`] holds its refusals.
+    pub palw_tir_v1: Option<crate::palw_tir_v1::PalwTirFenceV1>,
+
     /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
     ///
     /// A dissection tries ONE head's softmax, so a fused output tile wider than a head (or not a
@@ -3791,6 +3802,8 @@ impl Params {
                  under a counter that pre-fence Finals already moved",
             ));
         }
+        // **RFC-0002 Phase F: the IR fence's own refusals** (`crate::palw_tir_v1`).
+        self.validate_palw_tir_v1()?;
         // **ADR-0152 v2 F2: the offence-attribution fence is armed at genesis or not at all.** Past
         // it the V1 `PanelFalseValid` is refused and a kind the chain never consumed before is; a
         // later crossing would leave pre-fence V1 rows beside V2 rows keyed differently for the
@@ -5994,6 +6007,12 @@ impl Params {
         }
         if self.palw_kimi_k3 == Some(ForkActivation::never()) {
             self.palw_kimi_k3 = None;
+        }
+        // RFC-0002 Phase F: the WHOLE option collapses (the D1 rule) — a present `never()` would
+        // carry the prim set and the ceilings into `consensus_params_id`, bytes an unset build never
+        // writes, and scheduling the IR would partition the fleet at deploy.
+        if self.palw_tir_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_tir_v1 = None;
         }
         // ADR-0093 Decision 6, likewise.
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
@@ -9070,6 +9089,7 @@ impl Params {
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
+            palw_tir_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -9300,6 +9320,7 @@ impl Params {
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
             ("palw_kimi_k3", *palw_kimi_k3),
+            ("palw_tir_v1", palw_tir_v1.map(|fence| fence.activation)),
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
@@ -9531,6 +9552,13 @@ impl Params {
         if let Some(kimi) = self.palw_kimi_k3 {
             h.write(b"palw_kimi_k3");
             h.write(kimi.daa_score().to_le_bytes());
+        }
+        // RFC-0002 Phase F, NAMED likewise, with its value reported (not gated): two operators
+        // scheduling the IR at one height with different ceilings see different schedule ids.
+        if let Some(fence) = self.palw_tir_v1 {
+            h.write(b"palw_tir_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
         }
         // ADR-0093 Decision 6's fence, NAMED likewise: it changes which classes may register.
         if let Some(dissectable) = self.palw_fused_dissectable {
@@ -10022,6 +10050,7 @@ impl Params {
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
+            palw_tir_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -10693,6 +10722,12 @@ impl Params {
         if let Some(activation) = palw_kimi_k3.as_mut() {
             fork(activation, visit);
         }
+        // RFC-0002 Phase F. Some-only, and the ACTIVATION only: the value (prim set, court
+        // version, ceilings) is a limit set, and normalising it to 0/u64::MAX would make two builds
+        // shipping different ceilings fingerprint alike (the palw_heartbeat rule).
+        if let Some(fence) = palw_tir_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // ADR-0093 Decision 6. Some-only, likewise.
         if let Some(activation) = palw_fused_dissectable.as_mut() {
             fork(activation, visit);
@@ -11116,6 +11151,7 @@ impl Params {
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
+            palw_tir_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -11819,6 +11855,16 @@ impl Params {
             h.write(b"palw_kimi_k3");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // RFC-0002 Phase F, Some-only: every shipped preset leaves it `None` and fingerprints
+        // byte-identically to a build without the field. Armed, the ruleset states its primitive set,
+        // its IR court version, its ceilings and the IR court root — the "court_catalog_root gains
+        // prim_set_id" of the RFC, carried here rather than in the bundle, whose root is identity on
+        // every network.
+        if let Some(fence) = palw_tir_v1 {
+            h.write(b"palw_tir_v1/court-v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
         // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
         // byte-identically to a build without the field.
         if let Some(activation) = palw_fused_dissectable {
@@ -12460,6 +12506,7 @@ impl Params {
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
             palw_kimi_k3: self.palw_kimi_k3,
+            palw_tir_v1: self.palw_tir_v1,
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
@@ -13512,6 +13559,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_tir_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -13761,6 +13809,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_tir_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -13992,6 +14041,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_tir_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -20957,6 +21007,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_tir_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,

@@ -451,6 +451,8 @@ pub mod palw_step_leg;
 /// one-step conviction — canonical-input derivation, the kernel-program catalog, and the
 /// three-way verdict (convicted / NoFaultFound / unadjudicable). Land-stage, consensus-inert.
 pub mod palw_step_refute;
+/// RFC-0002 Phase F: PALW-TIR v1 on chain — the dormant `palw_tir_v1` fence and the network's IR constants.
+pub mod palw_tir_v1;
 pub mod palw_terminal;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
