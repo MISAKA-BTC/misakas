@@ -1256,7 +1256,8 @@ the commit point, unless every dissected cone meets:
   element count; `V` is the sum over the reductions of what arrives (capped likewise). Then `V ≤
   4096`; a round at the court's arity `k` — `6 + k · (4 + 4m + 16V)` bytes with `m` reductions, plus
   the move's frame of 4,764 bytes — fits one lifecycle carrier (100,000 bytes); so does the root
-  claim — the program, the 16 KiB close frame, the terminal's opened bytes, `20V` and the frame; and
+  claim — the 16 KiB close frame, the terminal's opened bytes, `20V` and the frame (the program is
+  referenced by the class, never carried); and
   the whole exchange over `⌈max_context / h_tile⌉` tiles at arity `k` fits the court window, by the
   rule that sizes the network's arity (ADR-0082 Z4: its moves at one rung window each, plus the
   close's assembly reserve, strictly inside the window; under the held regime without the ladder's
@@ -1305,7 +1306,9 @@ not armed):
 - `CourtTirRootClaimed { session_id, root, arity, signature }` (object tag 64): the root claim
   `{ version = 1, elements, totals, finalize }` (`elements: Vec<Vec<u32>>`, `totals` a range claim
   `{ partials: Vec<Vec<i128>> }`, `finalize` the carriage above); `arity` MUST be the ruleset's
-  derived dissection arity;
+  derived dissection arity. Like every IR binding on the chain, the carriage's binding carries its
+  class with the program EMPTY: the chain puts back the registered class's program before reading
+  it, and refuses a carried one;
 - `CourtTirDissected { session_id, round, signature }` (65): `round = { version = 1, children }`,
   one range claim per child of the cut, in order;
 - `CourtTirChildChosen { session_id, choice, signature }` (66):

@@ -10449,6 +10449,41 @@ impl VirtualStateProcessor {
                                 }
                                 continue;
                             }
+                            // **RFC-0002 Phase F: an IR executor's identity conviction** — kind 4's gate over
+                            // the IR adjudicator: past `palw_tir_v1` (the walk dropped it below), the same
+                            // no-receipt, no-signature reading, and one offence per claim.
+                            PalwOffenceKindV1::TirIdentityMismatch => {
+                                if !self.palw_tir_at(point.daa_score) {
+                                    return Err(
+                                        "an IR identity conviction is refused: palw_tir_v1 is not in force (RFC-0002)".to_string()
+                                    );
+                                }
+                                if evidence.is_empty() {
+                                    return Err(PalwOffenceVerifyError::EvidenceEmpty.to_string());
+                                }
+                                if kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id {
+                                    return Err(PalwOffenceVerifyError::EvidenceIdMismatch.to_string());
+                                }
+                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_tir_identity_mismatch_v1(
+                                    state,
+                                    accused,
+                                    evidence,
+                                    false,
+                                    self.palw_identity_rules_v1(point.daa_score),
+                                )
+                                .map_err(|e| e.to_string())?;
+                                let offence_id = kaspa_consensus_core::palw_offence_attribution_v1::palw_tir_identity_offence_id_v1(
+                                    &accused.0,
+                                    &finding.target.claim_id,
+                                );
+                                if state.consumed_offence(&offence_id).is_some() {
+                                    return Err(format!(
+                                        "claim {}'s IR executor is already convicted of its identity: one offence per claim",
+                                        finding.target.claim_id
+                                    ));
+                                }
+                                continue;
+                            }
                             PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
                             // Refused above; listed so a routing change that forgets them fails to compile.
                             PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {}
@@ -10457,6 +10492,7 @@ impl VirtualStateProcessor {
                         kind,
                         kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2
                             | kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted
+                            | kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::TirIdentityMismatch
                     ) {
                         return Err(kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string());
                     }

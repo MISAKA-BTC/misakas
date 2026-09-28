@@ -5,7 +5,7 @@
 //! * **The window.** A dissected cone is admitted only if the whole exchange — the root claim, the
 //!   rounds and choices over `max_context` positions in `h_tile` tiles, the bottom's assembly — fits
 //!   strictly inside the court window at the court's arity (O-5). The dense GQA model's need grows
-//!   with its context, fits testnet-12's window up to the format's `2^18`-position history, and a
+//!   with its context, fits testnet-12's window up to the longest context admission v10 takes (a 4,096-id canonical prompt), and a
 //!   window of exactly what the exchange takes is refused by name.
 //! * **Without the k-ary court nothing dissects**, so the same cone must fit the court whole at
 //!   `H = W`: under a terminal ceiling that one history tile fits and the whole history does not, the
@@ -139,7 +139,7 @@ fn the_window_decides_a_dissected_cone_s_admission() {
     let dissected = palw_tir_dissected_commit_points_v1(&program);
     assert!(!dissected.is_empty(), "the attention output reduces over the history");
     let mut previous = 0;
-    for context in [64u32, 4096, 262_144] {
+    for context in [64u32, 4096, 32_768] {
         let object = registration(&program, root, context);
         let record = admit(&b, &r, &object).unwrap_or_else(|e| panic!("{context} positions: {e}"));
         assert_eq!(record.dissected, dissected, "the record names the class's dissected commit points");
@@ -157,7 +157,7 @@ fn the_window_decides_a_dissected_cone_s_admission() {
             "{context} positions: a window of exactly the exchange"
         );
         assert!(needed > previous, "{context} positions: a longer history needs more rounds");
-        assert!(needed < court.window_court_daa, "testnet-12's window fits the format's longest history");
+        assert!(needed < court.window_court_daa, "testnet-12's window fits the longest context v10 admits");
         eprintln!("{context:>7} positions: the exchange needs {needed} of {} DAA", court.window_court_daa);
         previous = needed;
     }
@@ -168,7 +168,7 @@ fn without_the_court_a_history_cone_must_fit_whole() {
     let (p, r) = (params(), rules());
     let b = bundle(&p);
     let (program, root) = dense();
-    let long = registration(&program, root, 262_144);
+    let long = registration(&program, root, 32_768);
     let mut none = r;
     none.court = None;
     // The least terminal ceiling each rule admits the long class under.

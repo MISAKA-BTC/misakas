@@ -156,6 +156,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         ),
         // RFC-0002 Phase F (F7, tags 64–66): the IR history dissection's three moves ride as the
         // ADR-0082 moves do, each carrying its party's signature, checked at acceptance.
+        // The root claim's finalize carriage references the registered program: it rides empty.
+        PalwConsensusObjectV2::CourtTirRootClaimed { root, .. } if !root.finalize.binding.class.program.is_empty() => {
+            Err("an IR root claim's binding carries no program: the chain holds the registered class's")
+        }
         PalwConsensusObjectV2::CourtTirRootClaimed { signature, .. }
         | PalwConsensusObjectV2::CourtTirDissected { signature, .. }
         | PalwConsensusObjectV2::CourtTirChildChosen { signature, .. }

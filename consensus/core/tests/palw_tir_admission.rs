@@ -366,6 +366,21 @@ fn every_mutation_is_refused_by_its_name() {
         admission.canonical.network_id = b"testnet-12".to_vec();
     }
     assert!(matches!(admit(&b, &r, &named), Err(E::TirCanonicalNotTheFormula(_))), "the yardstick's identity fields are fixed");
+    // A class whose canonical prompt is past J5b's inline bound: no IR route could attribute it.
+    let mut wide_prompt = registration(case, 0);
+    if let PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, artifact_root, admission, .. } = &mut wide_prompt {
+        admission.class.layout.max_context = 32_784;
+        *class_id = admission.class.class_id(artifact_root);
+        let facts = PalwTirJobFactsV1::of_class(&admission.class, *class_id).unwrap();
+        let canonical = palw_tir_attempt_canonical_v1(&admission.class).unwrap();
+        assert_eq!(canonical, (4_097, 2), "the formula's prompt, one past the inline bound");
+        admission.canonical = palw_tir_job_context_v1(&facts, canonical);
+    }
+    assert!(
+        matches!(admit(&b, &r, &wide_prompt), Err(E::TirCanonicalNotTheFormula(ref why)) if why.contains("inline")),
+        "{:?}",
+        admit(&b, &r, &wide_prompt)
+    );
     // A 15-position class has no canonical job: the formula needs max_context / 8 ≥ 2.
     let mut too_narrow = registration(case, 0);
     if let PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, artifact_root, admission, .. } = &mut too_narrow {

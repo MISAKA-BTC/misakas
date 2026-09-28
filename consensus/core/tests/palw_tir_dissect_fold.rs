@@ -347,8 +347,16 @@ fn court_at_leaf(run: &mut Run, claim_id: Hash64, x: &Execution, leaf: u64) -> H
 // The moves, through the acceptance layer's checks
 // =================================================================================================
 
+/// A root claim as it rides: its finalize carriage references the class's registered program (the
+/// binding's program is emptied — the chain puts it back).
+fn carried(mut root: PalwTirRootClaimV1) -> PalwTirRootClaimV1 {
+    kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut root.finalize.binding);
+    root
+}
+
 /// The responder's root claim, signed, and admitted as the processor admits it.
 fn root_claimed(run: &Run, sid: Hash64, root: PalwTirRootClaimV1, arity: u8) -> PalwConsensusObjectV2 {
+    let root = carried(root);
     let signature =
         sign(&pubkey(PRODUCER), &palw_tir_root_claim_message_v1(&sid, &root), PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT);
     let object = PalwConsensusObjectV2::CourtTirRootClaimed {
@@ -446,7 +454,8 @@ fn play(run: &mut Run, w: &World, x: &Execution, sid: Hash64, push: bool) -> End
     let phase = run.phase(&sid);
     assert_eq!(phase.turn(), PalwBisectTurnV1::Terminal, "one tile left: the bottom");
     let bottom = build_tir_dissect_bottom_v1(&x.binding, &phase, &Store { f: &w.f, x }, &RULES).expect("the bottom's carriage");
-    let proof = PalwCourtVerdictProofV2::TirDissection { bottom: Box::new(bottom) };
+    let mut proof = PalwCourtVerdictProofV2::TirDissection { bottom: Box::new(bottom) };
+    proof.tir_strip_program_v1();
     assert!(palw_object_is_tir_v1(&PalwConsensusObjectV2::CourtClosed {
         session_id: sid,
         verdict: PalwCourtVerdictV2::ExecutorGuilty,
@@ -545,7 +554,7 @@ fn an_honest_executor_is_acquitted_at_the_bottom_whichever_child_is_named() {
 
 /// The root claim object without the acceptance layer's checks — for the fold's own refusals.
 fn root_claimed_unchecked(sid: Hash64, root: PalwTirRootClaimV1, arity: u8) -> PalwConsensusObjectV2 {
-    PalwConsensusObjectV2::CourtTirRootClaimed { session_id: sid, root: Box::new(root), arity, signature: vec![1; 8] }
+    PalwConsensusObjectV2::CourtTirRootClaimed { session_id: sid, root: Box::new(carried(root)), arity, signature: vec![1; 8] }
 }
 
 #[test]
@@ -730,6 +739,23 @@ fn every_move_is_refused_out_of_turn_by_the_wrong_party_and_below_the_fence() {
         "nor does the acceptance layer admit it"
     );
 
+    // The root claim rides with its program referenced, never carried: one that carries it is refused
+    // where it rides, at acceptance and at the fold.
+    let with_program = root.clone();
+    assert!(!with_program.finalize.binding.class.program.is_empty());
+    let object = PalwConsensusObjectV2::CourtTirRootClaimed {
+        session_id: sid,
+        root: Box::new(with_program.clone()),
+        arity: 2,
+        signature: vec![1; 8],
+    };
+    assert!(kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).is_err());
+    assert!(
+        check_court_tir_root_claim_admits_v1(&run.s, &sid, &with_program, 2, 2, &court(), LADDER, PalwPromptIdsFormV1::Flat).is_err()
+    );
+    assert!(matches!(run.refused(&[object]), PalwStateV2Error::DissectionRefused(..)));
+    let root = carried(root);
+
     // The root claim: the responder's key only, the ruleset's arity only, about the narrowed leaf only.
     let message = palw_tir_root_claim_message_v1(&sid, &root);
     let by_the_challenger = sign(&pubkey(CHALLENGER), &message, PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT);
@@ -772,7 +798,7 @@ fn every_move_is_refused_out_of_turn_by_the_wrong_party_and_below_the_fence() {
     let mut forged_run = forged_run;
     let forged_sid = court_at_leaf(&mut forged_run, forged_claim, &forged, w.leaf);
     let carriage = build_tir_root_claim_v1(&forged.binding, w.leaf, &Store { f: &w.f, x: &forged }, &RULES).expect("a carriage");
-    let honest_totals = PalwTirRootClaimV1 { totals: root.totals.clone(), elements: root.elements.clone(), ..carriage };
+    let honest_totals = carried(PalwTirRootClaimV1 { totals: root.totals.clone(), elements: root.elements.clone(), ..carriage });
     assert!(
         check_court_tir_root_claim_admits_v1(
             &forged_run.s,
@@ -873,7 +899,8 @@ fn a_leaf_that_is_not_dissected_is_answered_by_a_declared_close() {
     let store = Store { f: &w.f, x: &w.honest };
     let refutation = kaspa_consensus_core::palw_tir_court_v1::build_tir_cone_refutation_v1(&w.honest.binding, other, &store, &RULES)
         .expect("a close");
-    let proof = PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+    let mut proof = PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+    proof.tir_strip_program_v1();
 
     for delivers in [true, false] {
         let (mut run, claim_id) = licensed(&w, &w.honest);

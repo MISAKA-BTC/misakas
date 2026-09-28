@@ -71,9 +71,11 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
     use PalwConsensusObjectV2 as O;
     match object {
         O::ObjectiveOffence { kind, .. } => match kind {
-            PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted => {
-                true
-            }
+            PalwOffenceKindV1::ExecutorEquivocation
+            | PalwOffenceKindV1::PanelFalseValidV2
+            | PalwOffenceKindV1::ExecutorRefuted
+            // RFC-0002 Phase F: the IR executor's identity conviction, kind 4's twin.
+            | PalwOffenceKindV1::TirIdentityMismatch => true,
             PalwOffenceKindV1::PanelFalseValid
             | PalwOffenceKindV1::CourtExecutorGuilty
             | PalwOffenceKindV1::DaDefault

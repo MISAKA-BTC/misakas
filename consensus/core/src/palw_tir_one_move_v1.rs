@@ -16,6 +16,10 @@
 //! convicts the claim as the legacy one-move court does; `ChallengerDefeated` charges the accuser what
 //! a legacy false accusation costs (`palw_shard_court_false_accusation_charge_v1`).
 //!
+//! **The program is referenced, not carried**: the proof's binding carries its class with the
+//! program EMPTY and the chain puts back the registered class's program (its `tir_classes` row)
+//! before adjudicating — so an accusation fits one carrier whatever the program's size.
+//!
 //! **Signed over everything.** The accuser's ML-DSA-87 covers [`palw_tir_one_move_session_id_v1`] —
 //! the network, every field and the proof's digest — under its own context, so an accusation cannot be
 //! re-attributed, re-targeted or re-filled.
@@ -105,6 +109,9 @@ pub fn palw_tir_one_move_shape_v1(a: &PalwTirOneMoveAccusationV1) -> Result<(), 
     if binding.committed_execution_root != a.execution_root || binding.full_logits_trace_root != a.trace_root {
         return Err("the proof's binding speaks about other roots than the accusation names");
     }
+    if !binding.class.program.is_empty() {
+        return Err("the proof's binding carries no program: the chain holds the registered class's");
+    }
     if a.executor_bond == a.accuser_bond {
         return Err("an executor does not accuse its own claim");
     }
@@ -151,8 +158,10 @@ pub fn palw_tir_one_move_dissected_leaf_v1(
     let PalwCourtVerdictProofV2::TirCone { refutation } = &a.proof else {
         return Ok(None);
     };
-    crate::palw_court_v2::check_tir_binding_is_the_claims_v1(state, claim, &refutation.binding)?;
-    crate::palw_tir_court_v1::palw_tir_named_dissected_leaf_v1(refutation)
+    let mut filled = refutation.as_ref().clone();
+    filled.binding = crate::palw_court_v2::tir_binding_filled_v1(state, claim, &refutation.binding)?;
+    crate::palw_court_v2::check_tir_binding_is_the_claims_v1(state, claim, &filled.binding)?;
+    crate::palw_tir_court_v1::palw_tir_named_dissected_leaf_v1(&filled)
         .map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(format!("the named leaf is not this claim's: {e}")))
 }
 
@@ -182,15 +191,17 @@ pub fn palw_tir_one_move_outcome_v1(
 }
 
 /// **An accusation to sign** — the node's builder: the claim's roots and bond, the accuser, the
-/// proof and the verdict it supports, with an empty signature (sign
-/// [`palw_tir_one_move_session_id_v1`] under [`PALW_TIR_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1`], then set it).
+/// proof (its program stripped here: the chain holds the registered class's) and the verdict it
+/// supports, with an empty signature (sign [`palw_tir_one_move_session_id_v1`] under
+/// [`PALW_TIR_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1`], then set it).
 pub fn palw_tir_one_move_accusation_v1(
     claim_id: Hash64,
     claim: &PalwClaimStateV2,
     accuser_bond: PalwBondKeyV2,
     verdict: PalwCourtVerdictV2,
-    proof: PalwCourtVerdictProofV2,
+    mut proof: PalwCourtVerdictProofV2,
 ) -> PalwTirOneMoveAccusationV1 {
+    proof.tir_strip_program_v1();
     PalwTirOneMoveAccusationV1 {
         version: PALW_TIR_ONE_MOVE_VERSION_V1,
         claim: claim_id,
