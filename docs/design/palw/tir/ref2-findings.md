@@ -197,8 +197,8 @@ Both implementations use `out.shape = x.shape`, any output dtype, input any dtyp
 ### F10 — "if the token is needed" (§9.1(1)) — editorial
 
 Undefined. The first implementation checks the token when a node reads `Input(0)` (so a step whose
-earlier node overflows reports `Overflow`); ref2 checks up front whenever any node of the program
-reads it. Success versus failure is identical, because a step evaluates every node (1,743 steps of
+earlier node overflows reports `Overflow`, although the text's order — step 1 before step 2 — implies
+`Operand`); ref2 checks up front whenever any node of the program reads it. Success versus failure is identical, because a step evaluates every node (1,743 steps of
 B differ only in the reported class). Fix: "if some node of the program reads `Input(0)`".
 
 ### F11 — completeness of the run state (§9.1) — editorial
@@ -210,7 +210,8 @@ API accepts a run state without instances and treats absence as the initial valu
 ref2 materialises every instance at pos 0 and treats absence as `Missing`. From the initial state
 the runs are identical (B: 72,196 run states equal after every step); they differ only on a
 hand-made incomplete state (`probes::p05`, `p09`). Fix: say whether an implementation's run state
-may omit never-written instances (then absent = initial value, and F1 should not follow from it).
+may omit never-written instances (absent = initial value) — and that this convenience does not carry
+over to a cone's env, where the value is opened from a commitment (F1).
 
 ### F12 — the element caps (§2.2, NF-8) — editorial
 
