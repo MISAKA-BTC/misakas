@@ -49,10 +49,11 @@
 //!
 //! Commit points: every carry-out, the logits, the K/V rows (normal form), and every `i16` code
 //! row at a matmul boundary (norm outputs, projection outputs, the attention context, the GLU
-//! hidden) plus the mid-layer residual — the pattern of corpus §2.4. Court cone sizing is
-//! `tir_admit_v1`'s job and is not attempted here.
+//! hidden) plus the mid-layer residual — the pattern of corpus §2.4. With these commit points
+//! every cone of every lowered program fits the legacy court's terminal ceiling as `tir_admit_v1`
+//! measures it (`tests/admission.rs`; the worst, Falcon-40B's, is 2.6 Mi MACs of 16 Mi), so no
+//! commit point is added for cone size.
 
-pub mod cost;
 pub mod fill;
 
 use crate::error::{LowerError, Result};
@@ -73,11 +74,15 @@ pub use fill::{FillCtx, IntData, IntParams, IntTensor, Materialised, materialise
 pub struct LowerOpts {
     /// `2^18` (the default) or `2^21`.
     pub history_bound: u32,
+    /// The longest history window any block keeps (`None`: the history bound, or the NF-8 cap).
+    /// A class whose layout bounds its jobs below the history bound can keep a shorter window —
+    /// the attention is the model's up to it — and its per-position cost scales with it.
+    pub max_window: Option<u32>,
 }
 
 impl Default for LowerOpts {
     fn default() -> Self {
-        Self { history_bound: tir::program::HISTORY_BOUND_V1_SMALL }
+        Self { history_bound: tir::program::HISTORY_BOUND_V1_SMALL, max_window: None }
     }
 }
 
@@ -154,6 +159,10 @@ pub struct Lowered {
     /// `(TIR block, node)` → the HL site whose float value the node holds, its scale and width:
     /// what a per-site comparison against the float reference decodes committed values with.
     pub site_nodes: BTreeMap<(u8, u16), (String, ScaleKey, usize)>,
+    /// HL blocks that did not fit NF-12's 512 nodes with every outlier split, and the reader limit
+    /// they were lowered at instead (a split is kept only for values at most this many projections
+    /// read) — empty when every block kept every split.
+    pub budget_fallbacks: Vec<(String, usize)>,
 }
 
 impl Lowered {
@@ -252,15 +261,28 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         shared.extend(here.into_iter().filter(|(_, n)| *n > 1).map(|(p, _)| p));
     }
     shared.extend(uses.into_iter().filter(|(p, n)| *n > 1 && !hl.params[*p as usize].per_layer).map(|(p, _)| p));
+    // A gather's table is its SECOND input (`[Token | Pos, table]`).
+    let tables: std::collections::BTreeSet<u32> = hl
+        .blocks
+        .iter()
+        .flat_map(|b| b.nodes.iter())
+        .filter(|n| matches!(n.op, Op::Embedding | Op::PosEmbedding { .. }))
+        .filter_map(|n| match n.inputs.get(1) {
+            Some(hl::Ref::Param(p)) => Some(*p),
+            _ => None,
+        })
+        .collect();
     let mut cx = Cx {
         hl,
         fills: Vec::new(),
         resid_sites: BTreeMap::new(),
         tstate: BTreeMap::new(),
         history_bound: hb,
+        max_window: opts.max_window.unwrap_or(u32::MAX).max(1),
         logits_key: None,
         site_nodes: BTreeMap::new(),
         shared,
+        tables,
         split_max_readers: usize::MAX,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
@@ -273,6 +295,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     order.push(hl.post);
     let mut logits = None;
+    let mut budget_fallbacks = Vec::new();
     for &hbk in &order {
         // The builder panics on a block past NF-12's node cap. The lowering then gives up the
         // outlier splits of the most-read values first and tries again (the program stays a
@@ -291,10 +314,16 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
                 cx.logits_key.clone(),
             );
             cx.split_max_readers = readers;
+            quiet_budget_hook();
+            QUIET_BUDGET.with(|q| q.set(true));
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower_block(&mut pb, &mut cx, hbk)));
+            QUIET_BUDGET.with(|q| q.set(false));
             match r {
                 Ok(v) => {
                     result = Some(v?);
+                    if readers != usize::MAX {
+                        budget_fallbacks.push((hl.blocks[hbk].name.clone(), readers));
+                    }
                     break;
                 }
                 Err(p) => {
@@ -326,7 +355,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     let logits = logits.ok_or_else(|| LowerError::eval("internal: post block produced no logits"))?;
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
-    let mut program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], logits);
+    let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], logits);
     // `prim_set_id` is the builder's default, `misaka_palw_tir::prim::PRIM_SET_ID_V1` (NF-1).
     tir::validate::validate(&program)
         .map_err(|e| LowerError::eval(format!("internal: lowered program is not in normal form: {e}")))?;
@@ -336,7 +365,32 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no logits scale"))?;
-    Ok(Lowered { program, fills, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes })
+    Ok(Lowered { program, fills, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks })
+}
+
+thread_local! {
+    /// Set while this thread tries a block against NF-12's node cap (the builder panics past it,
+    /// and the lowering catches that to retry with fewer splits).
+    static QUIET_BUDGET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A panic hook, installed once, that keeps the builder's "exceeds 512 nodes" panic quiet while
+/// the lowering is catching it on this thread — a fallback is reported in
+/// [`Lowered::budget_fallbacks`], not as a panic message on stderr. Every other panic, and that one
+/// anywhere else, goes to the hook that was installed before.
+fn quiet_budget_hook() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let p = info.payload();
+            let msg = p.downcast_ref::<String>().map(String::as_str).or_else(|| p.downcast_ref::<&str>().copied()).unwrap_or("");
+            if QUIET_BUDGET.with(|q| q.get()) && msg.contains("exceeds") && msg.contains("nodes") {
+                return;
+            }
+            prev(info)
+        }));
+    });
 }
 
 // ───────────────────────────── lowering state ─────────────────────────────
@@ -349,11 +403,16 @@ struct Cx<'h> {
     /// HL state → TIR state.
     tstate: BTreeMap<u32, u16>,
     history_bound: u32,
+    /// [`LowerOpts::max_window`].
+    max_window: u32,
     logits_key: Option<ScaleKey>,
     site_nodes: BTreeMap<(u8, u16), (String, ScaleKey, usize)>,
     /// HL params read by more than one node (a tied embedding): a projection over them keeps the
     /// plain per-row codes the other reader shares.
     shared: std::collections::BTreeSet<u32>,
+    /// HL params gathered by row (embeddings, learned positions): stored as per-row `i16` codes,
+    /// and so is a head that reads the same tensor.
+    tables: std::collections::BTreeSet<u32>,
     /// Split a value's outlier channels only when at most this many projections read it: each
     /// split projection costs 9 nodes more, and a block has 512 (NF-12).
     split_max_readers: usize,
@@ -390,6 +449,32 @@ fn code_bounds(dt: DType) -> (i64, i64) {
 
 fn u32s(shape: &[usize]) -> Vec<u32> {
     shape.iter().map(|d| *d as u32).collect()
+}
+
+/// The window `W` a `Hist` state of HL block `hbk` is lowered with: the model's own (a sliding
+/// window) or the history bound — capped so that every history the block appends to fits NF-8's
+/// `2^28` elements at the worst case (`[W] ++ row`: a row of 1,024 lanes admits `2^18`, one of
+/// 4,096 lanes `2^16`). Every `Hist` state a block appends to shares this window (spec 04b §2.2),
+/// and the cap is a power of two so a canonical `H` chunk divides it. Up to `W` positions the
+/// program is the model; a class whose layout's `max_context` stays within `W` never sees the cap.
+pub fn hist_window_cap(row_lanes: usize) -> u32 {
+    let most = (tir::types::MAX_ELEMENTS / row_lanes.max(1) as u64).max(1);
+    1u32 << (63 - most.leading_zeros()).min(31)
+}
+
+fn hist_window(cx: &Cx<'_>, hbk: usize, window: Option<usize>) -> u32 {
+    let hl = cx.hl;
+    let widest = hl.blocks[hbk]
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.op, Op::HistAppend))
+        .filter_map(|n| match n.inputs.get(1) {
+            Some(hl::Ref::State(s)) => Some(hl.states[*s as usize].shape.iter().product::<usize>()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(1);
+    window.map(|w| w as u32).unwrap_or(cx.history_bound).min(cx.history_bound).min(hist_window_cap(widest)).min(cx.max_window)
 }
 
 /// Per-block lowering state.
@@ -736,20 +821,11 @@ fn decl_ms(
     Ok((m, s))
 }
 
-/// The narrowing `N(x; m, 2^s, z)` into `(dt, lo..hi)`.
+/// The narrowing `N(x; m, 2^s, z)` into `(dt, lo..hi)` — the library's `narrow` (three nodes past
+/// the `Pow2` gather when there is no zero term).
 fn narrow(b: &mut BlockBuilder<'_>, x: tir::Ref, m: tir::Ref, s: tir::Ref, z: Option<tir::Ref>, dt: DType) -> tir::Ref {
     let (lo, hi) = code_bounds(dt);
-    let p2 = b.pow2_of(s);
-    match z {
-        Some(z) => b.narrow_a16(x, m, p2, z, lo, hi, dt),
-        // Without a zero term the template's `Clamp_i64 → Add 0 → Clamp[lo,hi]` is exactly
-        // `Clamp[lo,hi]` (`[lo, hi] ⊆ i64`): two nodes fewer, every value identical.
-        None => {
-            let p = b.mul(x, m, DType::I128);
-            let q = b.div(p, p2, Rounding::HalfAwayFromZero, DType::I128);
-            b.clamp(q, lo, hi, dt)
-        }
-    }
+    b.narrow(x, &tir::library::Narrowing::new(m, s, z), lo, hi, dt)
 }
 
 /// Re-express `v` in `(dt, key)`: one uniform narrowing (the identity when it already is).
@@ -952,7 +1028,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let x = codes(b, cx, lb, &x)?;
             let sd = &hl.states[s as usize];
             let StateKind::Hist { window } = sd.kind else { return Err(LowerError::eval("internal: HistAppend on a Fixed state")) };
-            let w = window.map(|w| w as u32).unwrap_or(cx.history_bound).min(cx.history_bound);
+            let w = hist_window(cx, lb.hb, window);
             let ts = match cx.tstate.get(&s) {
                 Some(t) => *t,
                 None => {
@@ -978,7 +1054,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let want =
                 if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
             let window = match hl.states[ks as usize].kind {
-                StateKind::Hist { window } => window.map(|w| w as u32).unwrap_or(cx.history_bound).min(cx.history_bound),
+                StateKind::Hist { window } => hist_window(cx, lb.hb, window),
                 StateKind::Fixed => return Err(LowerError::eval("internal: attention over a Fixed state")),
             };
             let shape = AttnDims { heads: *heads, kv: *kv_heads, d: *head_dim, dv: *v_head_dim, window };
@@ -1183,7 +1259,7 @@ fn lower_row_lookup(
     let hl = cx.hl;
     let d = &hl.params[tp as usize];
     let (rows, cols) = (d.shape[0], d.shape[1]);
-    let table = decl(b, cx, lb, &d.name, DType::I8, &[rows, cols], d.per_layer, weight_codes(tp))?;
+    let table = decl(b, cx, lb, &d.name, DType::I16, &[rows, cols], d.per_layer, table_codes(tp))?;
     let key = want.key.clone();
     let (m, s) = decl_ms(
         b,
@@ -1192,7 +1268,7 @@ fn lower_row_lookup(
         site,
         rows,
         Arc::new(move |c| {
-            let rc = c.rows(tp)?;
+            let rc = c.rows16(tp)?;
             let to = c.scale(&key)?;
             Ok(rc.scales.iter().map(|sw| sw / to).collect())
         }),
@@ -1207,6 +1283,14 @@ fn lower_row_lookup(
     let v = Val { r, dt: want.dt, key: want.key.clone(), len: cols, site: site.to_string() };
     note_resid(cx, lb, &v);
     Ok(v)
+}
+
+/// Per-row `i16` codes of a gathered table (and of a head tied to it).
+fn table_codes(p: u32) -> FillFn {
+    Arc::new(move |c| {
+        let rc = c.rows16(p)?;
+        Ok(IntTensor::i16(c.f(p)?.shape.clone(), rc.codes.clone()))
+    })
 }
 
 /// Weight codes of an HL `[out, in]` param (per-row scales).
@@ -1274,8 +1358,14 @@ fn lower_linear(
         None => None,
     };
     let xc = b.reshape_fixed(x.r, &[inp as u32, 1]);
+    let table = cx.tables.contains(&w);
+    if table && k != 0 {
+        return Err(LowerError::eval(format!("internal: a split input reads the table `{}`", d.name)));
+    }
     let r = if k == 0 {
-        let wt = decl(b, cx, lb, &d.name, DType::I8, &[out, inp], d.per_layer, weight_codes(w))?;
+        // A head tied to an embedding reads the table's `i16` codes (the same param).
+        let (dt, fill) = if table { (DType::I16, table_codes(w)) } else { (DType::I8, weight_codes(w)) };
+        let wt = decl(b, cx, lb, &d.name, dt, &[out, inp], d.per_layer, fill)?;
         let (m, s) = decl_ms(
             b,
             cx,
@@ -1283,9 +1373,9 @@ fn lower_linear(
             site,
             out,
             Arc::new(move |c| {
-                let rc = c.rows(w)?;
+                let scales = if table { c.rows16(w)?.scales.clone() } else { c.rows(w)?.scales.clone() };
                 let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, out)?);
-                Ok(rc.scales.iter().zip(&sy).map(|(sw, sy)| sw * sx / sy).collect())
+                Ok(scales.iter().zip(&sy).map(|(sw, sy)| sw * sx / sy).collect())
             }),
         )?;
         let acc = b.matmul(wt, xc, DType::I64);
@@ -1507,65 +1597,16 @@ fn decl_eps(
     )
 }
 
-/// The unit row `x / √(mean(x²) + eps)` in Q24 along the last axis, for rows of any width up to
-/// `i32` — the value of the library's `rms_norm_wide_q36` in 21 nodes instead of 39.
-///
-/// The mean's exponent is taken out only when it is positive (`h = max(0, ⌊(log2 mean − 24)/2⌋)`):
-/// for a smaller mean `IntRsqrt` normalises internally and returns `y · 2^−e` exactly as the
-/// template's left-shift branch reassembles it, so both give the same integers; the eps is one
-/// `i64` param instead of a mantissa and a shift. (Proposed for `tir_library_v1`: the GDN + MoE
-/// hybrid layers of Qwen3-Next/3.5 do not fit NF-12's 512 nodes with the 39-node form.)
+/// The unit row `x / √(mean(x²) + eps)` in Q24 along the last axis — the library's `rms_unit_q24`
+/// (21 nodes, one `i64` eps; the value of `rms_norm_wide_q36`).
 fn rms_unit(b: &mut BlockBuilder<'_>, x: tir::Ref, eps: tir::Ref) -> tir::Ref {
-    let shape = b.shape(x);
-    let axis = shape.len() - 1;
-    let Dim::Fixed(n) = shape[axis] else { panic!("norm over H") };
-    let sq = b.mul(x, x, DType::I64);
-    let sum = b.reduce_sum(sq, axis, DType::I128);
-    let one = b.c(DType::I64, 1 << 24);
-    let scaled = b.mul(sum, one, DType::I128);
-    let nn = b.c(DType::I64, n as i128);
-    let mean0 = b.div(scaled, nn, Rounding::Floor, DType::I128);
-    let e = b.clamp(eps, 0, i64::MAX, DType::I64);
-    let mean = b.add(mean0, e, DType::I128);
-    let bit = b.log2_floor(mean, DType::I32);
-    let k = b.c(DType::I32, 24);
-    let t = b.sub(bit, k, DType::I32);
-    let two = b.c(DType::I32, 2);
-    let h = b.div(t, two, Rounding::Floor, DType::I32);
-    let h = b.clamp(h, 0, 51, DType::I32);
-    let h2 = b.mul(h, two, DType::I32);
-    let p2 = b.pow2_128_of(h2, 102);
-    let m = b.div(mean, p2, Rounding::Floor, DType::I128);
-    let m = b.clamp(m, 0, i64::MAX, DType::I64);
-    let r = b.int_rsqrt(m);
-    let prod = b.mul(x, r, DType::I128);
-    let p1 = b.pow2_128_of(h, 51);
-    let y = b.div(prod, p1, Rounding::Floor, DType::I128);
-    b.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32)
+    b.rms_unit_q24(x, eps)
 }
 
-/// `x / ‖x‖` in Q15 codes along the last axis (the library's `l2_norm_q15`, a zero row stays
-/// zero) in 17 nodes: `IntRsqrt(Σx² / 2^2h) · x / 2^(h + 21)`, `h = max(0, ⌊(log2 Σx² − 24)/2⌋)`.
+/// `x / ‖x‖` in Q15 codes along the last axis — the library's `l2_unit_q15` (17 nodes; the value
+/// of `l2_norm_q15`, a zero row stays zero).
 fn l2_unit_q15(b: &mut BlockBuilder<'_>, x: tir::Ref) -> tir::Ref {
-    let axis = b.shape(x).len() - 1;
-    let sq = b.mul(x, x, DType::I64);
-    let sum = b.reduce_sum(sq, axis, DType::I64);
-    let bit = b.log2_floor(sum, DType::I32);
-    let k = b.c(DType::I32, 24);
-    let t = b.sub(bit, k, DType::I32);
-    let two = b.c(DType::I32, 2);
-    let h = b.div(t, two, Rounding::Floor, DType::I32);
-    let h = b.clamp(h, 0, 20, DType::I32);
-    let h2 = b.mul(h, two, DType::I32);
-    let p2 = b.pow2_128_of(h2, 40);
-    let m = b.div(sum, p2, Rounding::Floor, DType::I64);
-    let r = b.int_rsqrt(m);
-    let prod = b.mul(x, r, DType::I64);
-    let off = b.c(DType::I32, 21);
-    let sh = b.add(h, off, DType::I32);
-    let p1 = b.pow2_128_of(sh, 41);
-    let y = b.div(prod, p1, Rounding::Floor, DType::I64);
-    b.clamp(y, -32767, 32767, DType::I16)
+    b.l2_unit_q15(x)
 }
 
 /// The float function an activation table tabulates.
@@ -1833,6 +1874,9 @@ fn lower_attention(
     let AttnDims { heads, kv, d, dv, window } = dims;
     let g = heads / kv;
     let (kv32, g32, d32, dv32) = (kv as u32, g as u32, d as u32, dv as u32);
+    if ex.softcap.is_none() && ex.alibi.is_none() && dv == d {
+        return lower_attention_library(b, cx, lb, q, k, v, dims, ex, site, want);
+    }
     let qg = b.reshape_fixed(q.r, &[kv32, g32, d32]);
     let kw = b.reshape(k.0, &[Dim::H, Dim::Fixed(kv32), Dim::Fixed(d32)]);
     let kt = b.transpose(kw, &[1, 2, 0]);
@@ -1958,27 +2002,9 @@ fn lower_attention(
     let probs = match ex.sinks {
         None => b.softmax_shifted(logits, 24 - LOGIT_Q),
         Some(sp) => {
-            let sink = decl(
-                b,
-                cx,
-                lb,
-                &format!("{site}.sinks"),
-                DType::I32,
-                &[heads],
-                per_layer(lb),
-                Arc::new(move |c| {
-                    let t = c.f(sp)?;
-                    Ok(IntTensor::i32(
-                        vec![t.data.len()],
-                        t.data
-                            .iter()
-                            .map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
-                            .collect(),
-                    ))
-                }),
-            )?;
+            let sink = decl_sinks(b, cx, lb, site, heads, sp)?;
             let sink = b.reshape_fixed(sink, &[kv32, g32, 1]);
-            softmax_with_sink(b, logits, sink, 24 - LOGIT_Q)
+            b.softmax_with_sink(logits, sink, 24 - LOGIT_Q)
         }
     };
     let vw = b.reshape(v.0, &[Dim::H, Dim::Fixed(kv32), Dim::Fixed(dv32)]);
@@ -2002,6 +2028,99 @@ fn lower_attention(
     let r = narrow(b, o, m, s, None, DType::I16);
     b.commit(r);
     Ok(Val { r, dt: DType::I16, key: out_key, len: heads * dv, site: site.to_string() })
+}
+
+/// The attention sink logits `[heads]`, Q`LOGIT_Q` (gpt-oss).
+fn decl_sinks(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, site: &str, heads: usize, sp: u32) -> Result<tir::Ref> {
+    decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.sinks"),
+        DType::I32,
+        &[heads],
+        per_layer(lb),
+        Arc::new(move |c| {
+            let t = c.f(sp)?;
+            Ok(IntTensor::i32(
+                vec![t.data.len()],
+                t.data
+                    .iter()
+                    .map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
+                    .collect(),
+            ))
+        }),
+    )
+}
+
+/// **Attention through the library's `attention` template** (grouped-query, sliding window, sinks):
+/// the score narrowing to Q`LOGIT_Q` logits, the softmax lifted by `2^(24 − LOGIT_Q)`, the value
+/// narrowing back to codes (per channel when the output is split). The lowering's own form is kept
+/// only where the function differs: soft-capping (Q24 then Q14, no division), ALiBi (Falcon's
+/// bfloat16 table, the distance form) and a value head width unlike the query's.
+#[allow(clippy::too_many_arguments)]
+fn lower_attention_library(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    q: &Val,
+    k: (tir::Ref, ScaleKey),
+    v: (tir::Ref, ScaleKey),
+    dims: AttnDims,
+    ex: &AttnExtras,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let AttnDims { heads, kv, d, .. } = dims;
+    let g = heads / kv;
+    let (kq, kk) = (q.key.clone(), k.1.clone());
+    let scale = ex.scale;
+    let (ms, ss) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.scores"),
+        1,
+        Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])),
+    )?;
+    let sink = match ex.sinks {
+        Some(sp) => Some(decl_sinks(b, cx, lb, site, heads, sp)?),
+        None => None,
+    };
+    let out_key = want.key.clone();
+    let (kv_, ko) = (v.1.clone(), out_key.clone());
+    let n = if ko.split() > 0 { heads * d } else { 1 };
+    let (mv, sv) = decl_ms(
+        b,
+        cx,
+        lb,
+        site,
+        n,
+        Arc::new(move |c| {
+            let sv = c.scale(&kv_)? / (1u64 << 24) as f64;
+            Ok(c.scale_vec(&ko, n)?.iter().map(|so| sv / so).collect())
+        }),
+    )?;
+    let (mv, sv) = if n > 1 {
+        let shape = [kv as u32, g as u32, d as u32];
+        (b.reshape_fixed(mv, &shape), b.reshape_fixed(sv, &shape))
+    } else {
+        (mv, sv)
+    };
+    let cfg = tir::library::attn::AttnCfg {
+        heads: heads as u32,
+        kv_heads: kv as u32,
+        head_dim: d as u32,
+        score: tir::library::Narrowing::new(ms, ss, None),
+        softcap: None,
+        alibi: None,
+        sink,
+        up_bits: 24 - LOGIT_Q,
+        value: tir::library::Narrowing::new(mv, sv, None),
+    };
+    let r = b.attention(q.r, k.0, v.0, &cfg);
+    let r = b.commit(r);
+    Ok(Val { r, dt: DType::I16, key: out_key, len: heads * d, site: site.to_string() })
 }
 
 /// Expert selection from Q14 router logits (library `router_topk_q36` pattern): the softmax over
@@ -2054,50 +2173,29 @@ fn lower_route(
                             Ok(IntTensor::i32(vec![experts], c.f(bp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))
                         }),
                     )?;
-                    let s = b.add(sig, bias, DType::I64);
-                    b.clamp(s, i32::MIN as i64, i32::MAX as i64, DType::I32)
+                    b.selection_bias(sig, bias)
                 }
                 None => sig,
             };
             (sig, choice, i32::MIN as i64)
         }
     };
-    let choice = match &r.groups {
-        None => choice,
+    // Group-limited routing is the library's `grouped_topk` (its top-two group score needs groups
+    // of two or more experts; a group of one scores by its one expert, which is `Max`).
+    let idx = match &r.groups {
+        None => b.topk(choice, 0, k as u32),
         Some(g) => {
-            let (ng, per) = (g.n_group as u32, (experts / g.n_group) as u32);
-            let cg = b.reshape_fixed(choice, &[ng, per]);
-            let gs = match g.score {
-                GroupScore::Max => b.reduce_max(cg, 1),
-                GroupScore::Top2Sum => {
-                    let t2 = b.topk(cg, 1, 2.min(per));
-                    let v = b.gather(cg, t2, 1, 1);
-                    b.reduce_sum(v, 1, DType::I64)
-                }
+            let per = experts / g.n_group;
+            let rule = match g.score {
+                GroupScore::Top2Sum if per >= 2 => tir::library::moe::GroupScore::Top2Sum,
+                _ => tir::library::moe::GroupScore::Max,
             };
-            let gs = b.reshape_fixed(gs, &[ng]);
-            let keep = b.topk(gs, 0, g.topk_group as u32);
-            let ids = b.iota(DType::Idx, &[Dim::Fixed(ng), Dim::Fixed(1)], 0, 0, 1);
-            let kr = b.reshape_fixed(keep, &[1, g.topk_group as u32]);
-            let eq = b.compare(ids, kr, tir::Cmp::Eq);
-            let mask = b.reduce_max(eq, 1);
-            let f = b.c(DType::I32, fill as i128);
-            let masked = b.select(mask, cg, f, DType::I32);
-            b.reshape_fixed(masked, &[experts as u32])
+            b.grouped_topk(choice, g.n_group as u32, g.topk_group as u32, k as u32, rule, fill)
         }
     };
-    let idx = b.topk(choice, 0, k as u32);
     let kept = b.gather(scores, idx, 0, 0);
     let kept = if r.scoring == Scoring::TopKThenSoftmax { b.softmax_shifted(kept, up) } else { kept };
-    let w = if r.normalize {
-        let sum = b.reduce_sum(kept, 0, DType::I64);
-        let recip = b.int_recip(sum);
-        let p = b.mul(kept, recip, DType::I128);
-        let q = b.shr(p, 24, Rounding::Floor, DType::I64);
-        b.clamp(q, 0, 1 << 25, DType::I32)
-    } else {
-        kept
-    };
+    let w = if r.normalize { b.renormalize_recip(kept) } else { kept };
     Ok((idx, w))
 }
 
@@ -2229,36 +2327,6 @@ fn lower_moe(
     Ok(Val { r, dt: want.dt, key: want.key.clone(), len: d, site: site.to_string() })
 }
 
-/// `softmax_shifted` over the last axis with one extra logit per row that joins the maximum and
-/// the sum and is then dropped (gpt-oss's sinks) — the template's steps and roundings, one term
-/// more: `m = max(max_j x_j, s)`, `e_j = IntExp(clamp(x_j − m) · 2^up)`,
-/// `p_j = (e_j · IntRecip(Σe + IntExp(clamp(s − m) · 2^up))) >> 24`.
-fn softmax_with_sink(b: &mut BlockBuilder<'_>, x: tir::Ref, sink: tir::Ref, up: u32) -> tir::Ref {
-    use tir::Cmp;
-    let axis = b.shape(x).len() - 1;
-    let mx = b.reduce_max(x, axis);
-    let gt = b.compare(mx, sink, Cmp::Gt);
-    let m = b.select(gt, mx, sink, DType::I32);
-    let floor = (i32::MIN as i64) >> up;
-    let scale = b.c(DType::I64, 1i128 << up);
-    let arg = |b: &mut BlockBuilder<'_>, v: tir::Ref| {
-        let d = b.sub(v, m, DType::I64);
-        let d = b.clamp(d, floor, 0, DType::I64);
-        let w = b.mul(d, scale, DType::I64);
-        b.clamp(w, i32::MIN as i64, 0, DType::I32)
-    };
-    let ax = arg(b, x);
-    let e = b.int_exp(ax);
-    let sa = arg(b, sink);
-    let es = b.int_exp(sa);
-    let sum = b.reduce_sum(e, axis, DType::I64);
-    let sum = b.add(sum, es, DType::I64);
-    let recip = b.int_recip(sum);
-    let p = b.mul(e, recip, DType::I128);
-    let q = b.shr(p, 24, Rounding::Floor, DType::I64);
-    b.clamp(q, 0, 1 << 25, DType::I32)
-}
-
 /// Where a gated-delta node's decay and beta come from: `g = A · softplus(a + dt_bias)` and
 /// `β = σ(b)`, matched in the HL graph and computed by the library's `decay_q36` and
 /// `int_sigmoid` on the Q24 projections instead of node by node.
@@ -2364,17 +2432,31 @@ fn lower_conv(
             t
         }
     };
-    let row = b.reshape_fixed(x.r, &[1, ch as u32]);
+    let row = ensure_node(b, x).r;
     let row = b.commit(row);
-    let win = b.concat(&[tir::Ref::State(ts), row], 0);
-    let keep = b.slice(win, 0, 1, (kernel - 1) as u32);
-    b.state_write(ts, keep);
+    // The taps are stored window-major (`[kernel, ch]`, oldest first), the library's layout: the
+    // checkpoint's per-channel codes, transposed at fill time.
     let pd = &hl.params[w as usize];
-    let taps = decl(b, cx, lb, &pd.name, DType::I8, &[ch, kernel], pd.per_layer, weight_codes(w))?;
-    let tt = b.transpose(taps, &[1, 0]);
-    let prod = b.mul(win, tt, DType::I32);
-    let acc = b.reduce_sum(prod, 0, DType::I64);
-    let acc = b.reshape_fixed(acc, &[ch as u32]);
+    let taps = decl(
+        b,
+        cx,
+        lb,
+        &pd.name,
+        DType::I8,
+        &[kernel, ch],
+        pd.per_layer,
+        Arc::new(move |c| {
+            let rc = c.rows(w)?;
+            let mut t = vec![0i8; kernel * ch];
+            for (c_, row) in rc.codes.chunks(kernel).enumerate() {
+                for (k_, v) in row.iter().enumerate() {
+                    t[k_ * ch + c_] = *v;
+                }
+            }
+            Ok(IntTensor::i8(vec![kernel, ch], t))
+        }),
+    )?;
+    let acc = b.causal_conv(ts, row, taps);
     let pre_key = ScaleKey::site(vec![format!("{site}.pre")], false);
     let (kx, kp) = (x.key.clone(), pre_key.clone());
     let (m, s) = decl_ms(

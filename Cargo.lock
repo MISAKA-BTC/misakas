@@ -5282,6 +5282,9 @@ dependencies = [
  "misaka-palw-base0",
  "misaka-palw-pow-driver",
  "misaka-palw-sdk",
+ "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
+ "misaka-palw-tir-lower",
  "num_cpus",
  "rand 0.8.6",
  "rayon",
@@ -6177,14 +6180,20 @@ dependencies = [
 name = "misaka-palw-sdk"
 version = "1.1.0"
 dependencies = [
+ "blake2b_simd",
+ "borsh",
  "kaspa-consensus-core",
  "kaspa-hashes",
  "kaspa-pq-validator-core",
  "kaspa-txscript",
+ "libcrux-ml-dsa",
  "misaka-palw-base0",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
+ "misaka-palw-tir-exec",
  "misaka-palw-tir-lower",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
  "serde_json",
 ]
 
@@ -6239,6 +6248,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-tir-exec"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "kaspa-consensus-core",
+ "libc",
+ "misaka-palw-base0",
+ "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "rayon",
+ "serde_json",
+]
+
+[[package]]
 name = "misaka-palw-tir-lower"
 version = "1.1.0"
 dependencies = [
@@ -6246,12 +6272,24 @@ dependencies = [
  "clap 4.5.51",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
+ "misaka-palw-tir-exec",
+ "misaka-palw-tir-ref2",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rayon",
  "serde",
  "serde_json",
  "thiserror 1.0.64",
+]
+
+[[package]]
+name = "misaka-palw-tir-ref2"
+version = "1.1.0"
+dependencies = [
+ "misaka-palw-tir",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,0 +1,48 @@
+[package]
+name = "misaka-palw-tir-exec"
+description = "RFC-0002 PALW-TIR v1, node side: a typed execution backend that compiles a TirProgramV1 into a plan over native integer storage and evaluates it byte-identically to the reference evaluator (misaka-palw-tir). Node software — never a consensus dependency"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "tir-exec-bench"
+path = "src/bin/tir-exec-bench.rs"
+
+# The IR itself (a leaf crate) and a thread pool. Nothing of consensus: this crate is a fast
+# implementation of the reference evaluator's function, and `kaspa-consensus-core` must never
+# depend on it — the court runs the reference, a node runs this, and the tests hold them equal.
+[dependencies]
+misaka-palw-tir = { path = "../misaka-palw-tir" }
+rayon.workspace = true
+# `node`: the executor as a node runs a class — the PALWTIR1 container mapped in place, the step
+# leg of Phase F (F4) streamed from an execution, the roots a claim commits. It needs the consensus
+# types those are defined in; the executor itself does not, so it stays a feature.
+kaspa-consensus-core = { workspace = true, optional = true }
+misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact", optional = true }
+libc = { workspace = true, optional = true }
+borsh = { workspace = true, optional = true }
+# The node-side bisection prefix state is a keyed BLAKE2b-512 (as the legacy families' is).
+blake2b_simd = { workspace = true, optional = true }
+# Only for `tir-exec-bench --legacy/--mirror`: the legacy A16 engine at the same geometry, the
+# comparison the Phase F plan names (F9).
+misaka-palw-base0 = { workspace = true, optional = true }
+
+[features]
+node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:libc", "dep:borsh", "dep:blake2b_simd"]
+legacy-bench = ["node", "dep:misaka-palw-base0"]
+
+[dev-dependencies]
+# The golden vectors carry each primitive as its canonical Borsh encoding.
+borsh.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

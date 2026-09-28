@@ -1690,6 +1690,12 @@ Do you confirm? (y/n)";
     // service just below.
     #[cfg(feature = "evm")]
     let flow_context_for_eth = flow_context.clone();
+    // RFC-0002 Phase G: the IR fused kernels, for every IR backend this node builds from here on —
+    // byte-identical, off unless `--palw-tir-fused-kernels` (kept off until the D-F drills pass with it on).
+    misaka_palw_sdk::lineages::tir::set_tir_fused_kernels_default_v1(args.palw_tir_fused_kernels);
+    if args.palw_tir_fused_kernels {
+        info!("PALW: IR fused kernels ON (--palw-tir-fused-kernels): byte-identical to the generic kernels, node software only");
+    }
     // Kept for the PALW panel service below — `rpc_core_service` consumes the originals.
     let flow_context_for_palw_panel = flow_context.clone();
     let config_for_palw_panel = config.clone();

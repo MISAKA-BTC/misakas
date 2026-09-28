@@ -74,6 +74,53 @@ pub struct LayerMajorRun {
 
 /// Run `seqs` through the program, one occurrence at a time. `progress` is called after each
 /// occurrence with its index and the total.
+/// **The float reference up to the `post` block**: the post block's inputs for every sequence and
+/// position (the final residual stream, `hidden` floats a position). The post block writes no
+/// state (NF-19), so a caller evaluates it one position at a time ([`post_logits`]) — a long
+/// evaluation never holds `positions × vocabulary` logits.
+pub fn run_to_post(
+    prog: &HlProgram,
+    loader: &dyn OccParams,
+    seqs: &[Vec<usize>],
+    progress: &dyn Fn(usize, usize),
+) -> Result<Vec<Vec<Vec<Vec<f32>>>>> {
+    let mut occs: Vec<(usize, Option<usize>)> = vec![(prog.pre, None)];
+    occs.extend(prog.schedule.iter().enumerate().map(|(l, k)| (*k as usize, Some(l))));
+    let total = occs.len() + 1;
+    let mut carries: Vec<Vec<Vec<Vec<f32>>>> = seqs.iter().map(|s| vec![Vec::new(); s.len()]).collect();
+    for (oi, (bi, layer)) in occs.into_iter().enumerate() {
+        let store = loader.load(bi, layer)?;
+        let results: Vec<Result<Vec<Vec<Vec<f32>>>>> = seqs
+            .par_iter()
+            .zip(carries.par_iter())
+            .map(|(toks, cin)| {
+                let mut sess = Session::new(prog, &store);
+                let mut outs = Vec::with_capacity(toks.len());
+                for (p, t) in toks.iter().enumerate() {
+                    outs.push(sess.eval_occurrence(bi, layer, &cin[p], *t, p)?);
+                }
+                Ok(outs)
+            })
+            .collect();
+        for (si, r) in results.into_iter().enumerate() {
+            carries[si] = r?;
+        }
+        progress(oi + 1, total);
+    }
+    Ok(carries)
+}
+
+/// The float logits of one position from its `post` inputs ([`run_to_post`]); `store` is
+/// `loader.load(prog.post, None)`.
+pub fn post_logits(prog: &HlProgram, store: &ParamStore, post_in: &[Vec<f32>], token: usize, pos: usize) -> Result<Vec<f32>> {
+    let mut sess = Session::new(prog, store);
+    let mut outs = sess.eval_occurrence(prog.post, None, post_in, token, pos)?;
+    if outs.is_empty() {
+        return Err(LowerError::eval("the post block produced no logits"));
+    }
+    Ok(outs.swap_remove(0))
+}
+
 pub fn run_layer_major(
     prog: &HlProgram,
     loader: &dyn OccParams,
@@ -91,6 +138,10 @@ pub fn run_layer_major(
     let mut out = LayerMajorRun { stats: BTreeMap::new(), logits: vec![Vec::new(); seqs.len()] };
     for (oi, (bi, layer)) in occs.into_iter().enumerate() {
         let store = loader.load(bi, layer)?;
+        // The post block's outputs are the logits: when nobody wants them (a calibration), each
+        // is dropped as it is made — a 4,096-token sequence of a 248k vocabulary would otherwise
+        // hold 4 GB of rows only to discard them.
+        let keep = bi != prog.post || want_logits;
         let results: Vec<Result<(Vec<Vec<Vec<f32>>>, Option<BTreeMap<String, SiteStat>>)>> = seqs
             .par_iter()
             .zip(carries.par_iter())
@@ -99,9 +150,12 @@ pub fn run_layer_major(
                 if want_stats {
                     sess = sess.with_site_stats();
                 }
-                let mut outs = Vec::with_capacity(toks.len());
+                let mut outs = Vec::with_capacity(if keep { toks.len() } else { 0 });
                 for (p, t) in toks.iter().enumerate() {
-                    outs.push(sess.eval_occurrence(bi, layer, &cin[p], *t, p)?);
+                    let o = sess.eval_occurrence(bi, layer, &cin[p], *t, p)?;
+                    if keep {
+                        outs.push(o);
+                    }
                 }
                 Ok((outs, sess.sites.take()))
             })

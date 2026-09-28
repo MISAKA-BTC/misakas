@@ -2,6 +2,7 @@
 //! validated, run by the reference evaluator's cone evaluator) on vectors supplied as params.
 #![allow(dead_code)]
 
+pub mod admission;
 pub mod models;
 
 use misaka_palw_tir::builder::{BlockBuilder, ProgramBuilder};

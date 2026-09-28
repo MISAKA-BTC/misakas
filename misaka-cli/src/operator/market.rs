@@ -76,6 +76,12 @@ fn class_contexts_by_id(
     classes.into_iter().map(|context| (context.class_id.clone(), context)).collect()
 }
 
+/// **Is this an IR class** (RFC-0002: a PALW-TIR program, e.g. a lowered Hugging Face model)? The
+/// node's class-context read says so by its source (`chain_ir_registration`).
+pub(crate) fn context_is_ir(context: Option<&kaspa_rpc_core::RpcPalwClassContext>) -> bool {
+    context.is_some_and(|c| c.source == "chain_ir_registration")
+}
+
 /// `ctx 8`, or `—` for a class whose context neither the chain nor this node's build knows.
 fn context_cell(context: Option<&kaspa_rpc_core::RpcPalwClassContext>) -> String {
     match context {
@@ -134,6 +140,7 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
                     "market_open": m.as_ref().map(|m| market_from_response(m).is_open()), "seed_pledged_sompi": m.as_ref().map(|m| m.seed_pledged_sompi), "price_sompi_per_position": m.as_ref().map(|m| m.price_sompi_per_position),
                     "reserve_sompi": m.as_ref().map(|m| m.msk_reserve),
                     "context": contexts.as_ref().and_then(|all| all.get(&c.class_id)).map(context_json),
+                    "ir": context_is_ir(contexts.as_ref().and_then(|all| all.get(&c.class_id))),
                 })
             })
             .collect();
@@ -172,6 +179,9 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
         let context = contexts.as_ref().map(|all| format!("{:<11}", context_cell(all.get(&c.class_id)))).unwrap_or_default();
         if c.held {
             label.push_str(" (held)");
+        }
+        if context_is_ir(contexts.as_ref().and_then(|all| all.get(&c.class_id))) {
+            label.push_str(" (IR)");
         }
         let n_ctx = contexts.as_ref().and_then(|all| all.get(&c.class_id)).filter(|c| c.source != "unknown").map(|c| c.n_ctx);
         if let Some(n_ctx) = n_ctx {

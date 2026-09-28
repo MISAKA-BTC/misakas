@@ -254,6 +254,11 @@ pub struct PalwClassLedgerContext {
     pub max_context_tokens: u32,
 }
 
+/// **Why an IR class takes no free prompt** (RFC-0002): its free-prompt lane stays closed until
+/// Phase H — the same words the node's IR backend and the CLI refuse with.
+const PALW_TIR_FREE_PROMPT_CLOSED_V1: &str =
+    "free-prompt claims of an IR class are closed until RFC-0002 Phase H — an IR class serves attempts only";
+
 /// The numbers a class declaration the chain registered fixes: its graph's `n_ctx` and its canonical
 /// job's token counts.
 struct PalwRegisteredClassContext {
@@ -261,6 +266,25 @@ struct PalwRegisteredClassContext {
     canonical_prefill_tokens: u32,
     canonical_decode_tokens: u32,
     max_context_tokens: u32,
+    /// An IR class (RFC-0002): read off its `tir_classes` record, not a legacy carriage.
+    ir: bool,
+}
+
+/// **An IR class's context, from the record the chain keeps** (RFC-0002 Phase F): its layout's
+/// `max_context` is its window and its canonical job's context bound, and the canonical job is the
+/// attempt formula's `(f − 1, 2)` at that window — the job admission v10 required it to carry.
+fn palw_tir_registered_class_context(
+    record: &kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1,
+) -> PalwRegisteredClassContext {
+    let n_ctx = record.facts.max_context;
+    let (prefill, decode) = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(n_ctx).unwrap_or((0, 0));
+    PalwRegisteredClassContext {
+        n_ctx,
+        canonical_prefill_tokens: prefill,
+        canonical_decode_tokens: decode,
+        max_context_tokens: n_ctx,
+        ir: true,
+    }
 }
 
 /// **One `getPalwClassContexts` row**: the registered declaration first — with the ledger's model id
@@ -287,7 +311,9 @@ fn palw_class_context_row(
             canonical_decode_tokens: declared.canonical_decode_tokens,
             canonical_footprint_positions: footprint(declared.canonical_prefill_tokens, declared.canonical_decode_tokens),
             max_context_tokens: declared.max_context_tokens,
-            source: "chain_registration".to_string(),
+            // An IR class's registration is its own source name, so a reader (`misaka model list`)
+            // can tell an HF-lowered class from a legacy one without a second call.
+            source: if declared.ir { "chain_ir_registration" } else { "chain_registration" }.to_string(),
         },
         (None, Some(ledger)) => RpcPalwClassContext {
             class_id: class_id.to_string(),
@@ -533,6 +559,7 @@ impl RpcCoreService {
     )> {
         let class_id = match object {
             kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, .. } => *class_id,
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, .. } => *class_id,
             _ => return Err(RpcError::General("the object is not a ClassRegistered".into())),
         };
         let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
@@ -545,6 +572,14 @@ impl RpcCoreService {
             .filter(|(lane, _, _)| *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt)
             .map(|(_, _, record)| record.family)
             .collect();
+        // RFC-0002 Phase F: an IR registration is judged by the gate its acceptance path runs —
+        // `palw_tir_v1` in force at the tip, then admission v10 with the chain's certified families.
+        if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }) {
+            return Ok((
+                palw_tir_preflight_report(&self.config.params, bundle, object, &chain_certified, tip_daa, already),
+                class_row,
+            ));
+        }
         let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
         let report = kaspa_consensus_core::palw_model_registration_v1::palw_model_preflight_v1(
             &self.config.params,
@@ -2024,13 +2059,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 c.palw_v2_class_table()
                     .into_iter()
                     .map(|row| {
-                        let declared =
-                            c.palw_registered_class_carriage_v1(row.class_id).map(|(profile, canonical)| PalwRegisteredClassContext {
+                        let declared = c
+                            .palw_registered_class_carriage_v1(row.class_id)
+                            .map(|(profile, canonical)| PalwRegisteredClassContext {
                                 n_ctx: profile.n_ctx,
                                 canonical_prefill_tokens: canonical.declared_prefill_tokens,
                                 canonical_decode_tokens: canonical.exact_decode_tokens,
                                 max_context_tokens: canonical.max_context_tokens,
-                            });
+                                ir: false,
+                            })
+                            .or_else(|| c.palw_tir_class_record_v1(row.class_id).map(|r| palw_tir_registered_class_context(&r)));
                         (row.class_id, declared)
                     })
                     .collect::<Vec<_>>()
@@ -2323,6 +2361,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let GetPalwFreePromptPriceRequest { prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, .. } = request;
         let session = self.consensus_manager.consensus().unguarded_session();
+        // RFC-0002: an IR class's free-prompt lane stays closed until Phase H — refused by name here,
+        // before a gateway prices a commitment the transition refuses (`FreePromptLaneUncertified`).
+        if session.clone().spawn_blocking(move |c| c.palw_tir_class_record_v1(class_id)).await.is_some() {
+            return Err(RpcError::General(format!("class {class_id}: {PALW_TIR_FREE_PROMPT_CLOSED_V1}")));
+        }
         let answer = session
             .spawn_blocking(move |c| {
                 c.palw_fp_commitment_price_v1(class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond)
@@ -2692,9 +2735,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) else {
             return Ok(GetPalwModelResponse { available: true, tip_daa, found: false, class_id: class_id.to_string(), ..Default::default() });
         };
+        // An IR class's window is its record's (RFC-0002 Phase F): it registered no legacy carriage.
         let n_ctx = session
             .clone()
-            .spawn_blocking(move |c| c.palw_registered_class_carriage_v1(class_id).map(|(profile, _)| profile.n_ctx))
+            .spawn_blocking(move |c| {
+                c.palw_registered_class_carriage_v1(class_id)
+                    .map(|(profile, _)| profile.n_ctx)
+                    .or_else(|| c.palw_tir_class_record_v1(class_id).map(|r| r.facts.max_context))
+            })
             .await
             .unwrap_or(0);
         let registry = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await;
@@ -4922,10 +4970,62 @@ fn decode_class_registered_hex(hex: &str) -> RpcResult<kaspa_consensus_core::pal
     faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(format!("objectHex: {e}")))?;
     let object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 =
         borsh::from_slice(&bytes).map_err(|e| RpcError::General(format!("objectHex is not a ClassRegistered: {e}")))?;
-    if !matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { .. }) {
-        return Err(RpcError::General("objectHex is not a ClassRegistered".into()));
+    // RFC-0002 Phase F: an IR class registers through its own object (`ClassRegisteredTirV1`).
+    if !matches!(
+        object,
+        kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { .. }
+            | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }
+    ) {
+        return Err(RpcError::General("objectHex is not a ClassRegistered or a ClassRegisteredTirV1".into()));
     }
     Ok(object)
+}
+
+/// **The preflight report of an IR registration** (`ClassRegisteredTirV1`, RFC-0002 Phase F): the
+/// class's facts read off the object's carried class, and ONE check — the acceptance path's own gate,
+/// `palw_tir_registration_preflight_at_v1` at `tip_daa` (the IR fence, then admission v10) — named by
+/// its refusal code; a class already registered is refused as the legacy report refuses it.
+fn palw_tir_preflight_report(
+    params: &kaspa_consensus_core::config::params::Params,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    chain_certified: &[kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    tip_daa: u64,
+    already: bool,
+) -> kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightReportV1 {
+    use kaspa_consensus_core::palw_model_registration_v1::{PalwModelPreflightCheckV1, PalwModelPreflightReportV1};
+    let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 {
+        class_id, artifact_root, admission, ..
+    } = object
+    else {
+        return PalwModelPreflightReportV1::empty();
+    };
+    let mut report = PalwModelPreflightReportV1::empty();
+    report.class_id = *class_id;
+    report.artifact_root = *artifact_root;
+    report.n_ctx = admission.class.layout.max_context;
+    report.layer_count =
+        admission.class.decode_program().map(|p| u16::try_from(p.schedule.layers.len()).unwrap_or(u16::MAX)).unwrap_or(0);
+    report.graph_profile = format!("palw-tir/v1 graph {}", admission.class.graph_ir_root());
+    report.canonical_prefill = admission.canonical.declared_prefill_tokens;
+    report.canonical_decode = admission.canonical.exact_decode_tokens;
+    let gate = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_registration_preflight_at_v1(
+        params,
+        bundle,
+        object,
+        tip_daa,
+        chain_certified,
+    );
+    let (ok, code, message) = match (&gate, already) {
+        (_, true) => (false, "CLASS_ALREADY_REGISTERED".to_string(), "the chain already holds this class id".to_string()),
+        (Ok(_), false) => (true, "ADMISSION_OK".to_string(), "admission v10 admits the IR class at the tip".to_string()),
+        (Err(e), false) => (false, e.code().to_string(), e.to_string()),
+    };
+    report.checks.push(PalwModelPreflightCheckV1 { code: "TIR_ADMISSION_V10".to_string(), ok, message: message.clone() });
+    report.admissible = ok;
+    report.processor_verdict = if ok { "ADMISSION_OK".to_string() } else { format!("{code}: {message}") };
+    report.reject_code = if ok { String::new() } else { code };
+    report
 }
 
 fn rpc_preflight_check(check: &kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightCheckV1) -> RpcPalwModelPreflightCheck {
@@ -5356,7 +5456,7 @@ mod palw_class_context_tests {
 
     /// This build's Qwen3.6-35B-A3B row: a (7, 2) canonical job at `n_ctx` 8 — a footprint of 8, valid.
     fn declared() -> PalwRegisteredClassContext {
-        PalwRegisteredClassContext { n_ctx: 8, canonical_prefill_tokens: 7, canonical_decode_tokens: 2, max_context_tokens: 8 }
+        PalwRegisteredClassContext { n_ctx: 8, canonical_prefill_tokens: 7, canonical_decode_tokens: 2, max_context_tokens: 8, ir: false }
     }
 
     /// **The chain's declaration outranks the build's ledger, the ledger names the model, and a class
@@ -5404,8 +5504,13 @@ mod palw_class_context_tests {
             (unknown.n_ctx, unknown.canonical_footprint_positions, unknown.max_context_tokens, unknown.model_id.as_str()),
             (0, 0, 0, "")
         );
-        let decode_free =
-            PalwRegisteredClassContext { n_ctx: 8, canonical_prefill_tokens: 8, canonical_decode_tokens: 0, max_context_tokens: 8 };
+        let decode_free = PalwRegisteredClassContext {
+            n_ctx: 8,
+            canonical_prefill_tokens: 8,
+            canonical_decode_tokens: 0,
+            max_context_tokens: 8,
+            ir: false,
+        };
         assert_eq!(
             palw_class_context_row(one, Some(decode_free), None).canonical_footprint_positions,
             8,
@@ -5413,6 +5518,36 @@ mod palw_class_context_tests {
         );
         let no_ledger = palw_class_context_row(two, None, None);
         assert_eq!(no_ledger.source, "unknown", "a node built without a ledger answers from the chain alone");
+    }
+
+    /// **An IR class's context is its record's** (RFC-0002 Phase F): the layout's window is `n_ctx`
+    /// and the canonical job's bound, the canonical job is the attempt formula's `(f − 1, 2)` there —
+    /// the job admission v10 made the registration carry — and the row names its own source, so a
+    /// reader tells an HF-lowered class from a legacy one.
+    #[test]
+    fn an_ir_class_context_is_read_off_its_record() {
+        use kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1;
+        use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_of_v1};
+        let class_id = kaspa_hashes::Hash64::from_u64_word(9);
+        let record = PalwTirClassRecordV1 {
+            version: 1,
+            facts: PalwTirJobFactsV1 { class_id, max_context: 64, token_bound: 64, tiled: true, held: false },
+            graph_ir_root: class_id,
+            layout_digest: class_id,
+            tokenizer_id: class_id,
+            prim_set_id: kaspa_consensus_core::palw_tir_v1::palw_tir_prim_set_id_v1(),
+            logits_vocab: 64,
+            program_bytes: 14_637,
+            program: Default::default(),
+        };
+        let row = palw_class_context_row(class_id, Some(palw_tir_registered_class_context(&record)), None);
+        let (prefill, decode) = palw_tir_attempt_canonical_of_v1(64).expect("a canonical job at 64");
+        assert_eq!(row.source, "chain_ir_registration");
+        assert_eq!(
+            (row.n_ctx, row.canonical_prefill_tokens, row.canonical_decode_tokens, row.max_context_tokens),
+            (64, prefill, decode, 64)
+        );
+        assert!(row.canonical_footprint_positions <= row.n_ctx, "the canonical job fits its window");
     }
 }
 

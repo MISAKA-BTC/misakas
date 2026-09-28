@@ -104,8 +104,8 @@ plain primitives, is admissible at full param ranges and is checked against a fl
 
 | template | builders |
 | --- | --- |
-| `N`, `Lin` | `narrow`, `narrow_codes`, `narrow_wide` (the `Narrowing { m, s, z }`); legacy `narrow_a16`, `a16_matmul`, `base0_matmul`, `requantize_base0`, `rescale_base0`, `q36_matmul_grouped` (Q4_K-style group scales), `requantize_by_token` |
-| `RMS`, `RMSw`, `LN`, `L2` | `rms_norm_wide_q36` / `rms_norm_wide_q36_exact` (any wide row; the legacy form is the general one), `layer_norm_exact`, `group_norm_exact`, `l2_norm_eps`; legacy `rms_norm_a16`, `base0_rms_norm`, `l2_norm_q15` |
+| `N`, `Lin` | `narrow`, `narrow_codes`, `narrow_wide` (the `Narrowing { m, s, z }`; three nodes past the `Pow2` gather when `z` is `None`); legacy `narrow_a16`, `a16_matmul`, `base0_matmul`, `requantize_base0`, `rescale_base0`, `q36_matmul_grouped` (Q4_K-style group scales), `requantize_by_token` |
+| `RMS`, `RMSw`, `LN`, `L2` | `rms_norm_wide_q36` / `rms_norm_wide_q36_exact` (any wide row; the legacy form is the general one), `rms_unit_q24` (its 21-node lean form, one `i64` eps), `layer_norm_exact`, `group_norm_exact`, `l2_norm_eps`; legacy `rms_norm_a16`, `base0_rms_norm`, `l2_norm_q15` and its 17-node lean form `l2_unit_q15` |
 | `Sig`, `SiLU`, `Tanh`, `GELUtanh`, `Table` | legacy `int_sigmoid`, `int_recip`, `silu`; `tanh_q24`, `gelu_tanh_q24`, `gelu_erf_q24`, `quick_gelu_q24`, `relu`, `relu2_q24`, `swiglu_clamped_q24`, `act_table`, `act_table_wide` |
 | `Softmax_up` | legacy `softmax_shifted`; `softmax_with_sink`, `softcap_q24` |
 | `RoPE`, `Angles` | `rope_half`, `rope_partial`, `rope_angles_two_level`, `rope_angles_by_position` (a frequency set chosen by absolute position — LongRoPE, dynamic NTK), `alibi`; legacy `rope_pairs`, `rope_pairs_wide`, `q36_rope_partial` |

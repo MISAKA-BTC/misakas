@@ -34,6 +34,7 @@ const FORMAT_PROGRAM: &str = "palw-tir-v1/program-vectors/3";
 /// The key of `graph_ir_root` (spec 04b §3.6), the one `palw_tir_class_v1` hashes under.
 const GRAPH_IR_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/tir/graph-ir-root/v1";
 const FORMAT_ENCODING: &str = "palw-tir-v1/encoding-vectors/1";
+const FORMAT_ADMISSION: &str = "palw-tir-v1/admission-vectors/1";
 const SPEC: &str = "docs/spec/palw/04b-tensor-ir.md";
 
 // ---- JSON shapes (struct field order is the file's key order) ---------------------------------
@@ -178,6 +179,374 @@ struct EncodingFileJson {
 /// canonical bytes. The crate itself never hashes (identity stays with the caller); the vectors pin it.
 fn graph_ir_root(bytes: &[u8]) -> blake2b_simd::Hash {
     blake2b_simd::Params::new().hash_length(64).key(GRAPH_IR_ROOT_DOMAIN_V1).hash(bytes)
+}
+
+// ---- admission vectors (spec 04b §10.3, §12) ------------------------------------------------------
+
+#[derive(Serialize)]
+struct CostJson {
+    macs: String,
+    elementwise: String,
+    transcendentals: String,
+    bytes_read: String,
+    bytes_written: String,
+}
+
+fn cost_json(c: &misaka_palw_tir::admit::CostV1) -> CostJson {
+    CostJson {
+        macs: c.macs.to_string(),
+        elementwise: c.elementwise.to_string(),
+        transcendentals: c.transcendentals.to_string(),
+        bytes_read: c.bytes_read.to_string(),
+        bytes_written: c.bytes_written.to_string(),
+    }
+}
+
+#[derive(Serialize)]
+struct CeilingsJson {
+    max_tile_macs: String,
+    max_tile_transcendentals: String,
+    max_tile_opened_bytes: String,
+    max_tile_operands: String,
+    max_position_macs: String,
+    max_position_transcendentals: String,
+    max_state_bytes: String,
+    max_step_leaves: String,
+    max_checkpoint_interval: String,
+    max_cone_work: String,
+}
+
+#[derive(Serialize)]
+struct AdmitInputsJson {
+    tile_len: String,
+    h_chunk: String,
+    ceilings: CeilingsJson,
+}
+
+#[derive(Serialize)]
+struct PositionJson {
+    cost: CostJson,
+    state_bytes: String,
+    peak_live_bytes: String,
+    commit_lanes: String,
+    step_leaves: String,
+}
+
+#[derive(Serialize)]
+struct StateCkptJson {
+    state: String,
+    closure: Vec<String>,
+    groups: String,
+    per_position: CostJson,
+    interval: String,
+}
+
+#[derive(Serialize)]
+struct ConeCaseJson {
+    block: String,
+    node: String,
+    nodes: Vec<String>,
+    leaves: Vec<String>,
+    whole: CostJson,
+    tiles: String,
+    tile: CostJson,
+    tile_opened_bytes: String,
+    operands: String,
+    h_reductions: Vec<String>,
+    chunk: Option<CostJson>,
+    chunk_opened_bytes: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AdmissionJson {
+    checkpoint_interval: String,
+    cone_work: String,
+    position: PositionJson,
+    states: Vec<StateCkptJson>,
+    cones: Vec<ConeCaseJson>,
+    node_costs: Vec<Vec<CostJson>>,
+    intervals: Vec<Vec<[String; 2]>>,
+}
+
+#[derive(Serialize)]
+struct RefusalCaseJson {
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cap: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    class: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AdmissionCaseJson {
+    name: String,
+    description: String,
+    program_borsh_hex: String,
+    inputs: AdmitInputsJson,
+    expect: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<RefusalCaseJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admission: Option<AdmissionJson>,
+}
+
+#[derive(Serialize)]
+struct AdmissionFileJson {
+    format: String,
+    spec: String,
+    cases: Vec<AdmissionCaseJson>,
+}
+
+fn leaf_text(l: &misaka_palw_tir::admit::LeafV1) -> String {
+    use misaka_palw_tir::admit::LeafV1 as L;
+    match l {
+        L::Commit(n) => format!("commit:{n}"),
+        L::CarryIn(k) => format!("carry_in:{k}"),
+        L::State(s) => format!("state:{s}"),
+        L::History(s) => format!("history:{s}"),
+        L::Param(j) => format!("param:{j}"),
+        L::Const(j) => format!("const:{j}"),
+        L::Input(j) => format!("input:{j}"),
+    }
+}
+
+fn admission_case(
+    name: &str,
+    description: &str,
+    program: &TirProgramV1,
+    inputs: misaka_palw_tir::admit::TirAdmitInputsV1,
+) -> AdmissionCaseJson {
+    use misaka_palw_tir::admit::{TirAdmitError, tir_admit_v1};
+    let bytes = program.encode();
+    let c = &inputs.ceilings;
+    let inputs_json = AdmitInputsJson {
+        tile_len: inputs.tile_len.to_string(),
+        h_chunk: inputs.h_chunk.to_string(),
+        ceilings: CeilingsJson {
+            max_tile_macs: c.max_tile_macs.to_string(),
+            max_tile_transcendentals: c.max_tile_transcendentals.to_string(),
+            max_tile_opened_bytes: c.max_tile_opened_bytes.to_string(),
+            max_tile_operands: c.max_tile_operands.to_string(),
+            max_position_macs: c.max_position_macs.to_string(),
+            max_position_transcendentals: c.max_position_transcendentals.to_string(),
+            max_state_bytes: c.max_state_bytes.to_string(),
+            max_step_leaves: c.max_step_leaves.to_string(),
+            max_checkpoint_interval: c.max_checkpoint_interval.to_string(),
+            max_cone_work: c.max_cone_work.to_string(),
+        },
+    };
+    let (expect, refusal, admission) = match tir_admit_v1(&bytes, &inputs) {
+        Ok(a) => {
+            let admission = AdmissionJson {
+                checkpoint_interval: a.checkpoint_interval.to_string(),
+                cone_work: a.cone_work.to_string(),
+                position: PositionJson {
+                    cost: cost_json(&a.position.cost),
+                    state_bytes: a.position.state_bytes.to_string(),
+                    peak_live_bytes: a.position.peak_live_bytes.to_string(),
+                    commit_lanes: a.position.commit_lanes.to_string(),
+                    step_leaves: a.position.step_leaves.to_string(),
+                },
+                states: a
+                    .states
+                    .iter()
+                    .map(|s| StateCkptJson {
+                        state: s.state.to_string(),
+                        closure: s.closure.iter().map(|t| t.to_string()).collect(),
+                        groups: s.groups.to_string(),
+                        per_position: cost_json(&s.per_position),
+                        interval: s.interval.to_string(),
+                    })
+                    .collect(),
+                cones: a
+                    .cones
+                    .iter()
+                    .map(|k| ConeCaseJson {
+                        block: k.block.to_string(),
+                        node: k.node.to_string(),
+                        nodes: k.nodes.iter().map(|n| n.to_string()).collect(),
+                        leaves: k.leaves.iter().map(leaf_text).collect(),
+                        whole: cost_json(&k.whole),
+                        tiles: k.tiles.to_string(),
+                        tile: cost_json(&k.tile),
+                        tile_opened_bytes: k.tile_opened_bytes.to_string(),
+                        operands: k.operands.to_string(),
+                        h_reductions: k.h_reductions.iter().map(|n| n.to_string()).collect(),
+                        chunk: k.chunk.as_ref().map(cost_json),
+                        chunk_opened_bytes: k.chunk_opened_bytes.map(|b| b.to_string()),
+                    })
+                    .collect(),
+                node_costs: a.node_costs.iter().map(|b| b.iter().map(cost_json).collect()).collect(),
+                intervals: a.intervals.iter().map(|b| b.iter().map(|i| [i.lo.to_string(), i.hi.to_string()]).collect()).collect(),
+            };
+            ("admitted".to_string(), None, Some(admission))
+        }
+        Err(TirAdmitError::Exceeds { limit, value, cap, .. }) => (
+            "refused".to_string(),
+            Some(RefusalCaseJson {
+                kind: "exceeds".into(),
+                limit: Some(limit.to_string()),
+                value: Some(value.to_string()),
+                cap: Some(cap.to_string()),
+                class: None,
+            }),
+            None,
+        ),
+        Err(TirAdmitError::Program(e)) => (
+            "refused".to_string(),
+            Some(RefusalCaseJson {
+                kind: "program".into(),
+                limit: None,
+                value: None,
+                cap: None,
+                class: Some(format!("{:?}", e.kind)),
+            }),
+            None,
+        ),
+        Err(TirAdmitError::Inputs(_)) => (
+            "refused".to_string(),
+            Some(RefusalCaseJson { kind: "inputs".into(), limit: None, value: None, cap: None, class: None }),
+            None,
+        ),
+    };
+    AdmissionCaseJson {
+        name: name.into(),
+        description: description.into(),
+        program_borsh_hex: hex(&bytes),
+        inputs: inputs_json,
+        expect,
+        refusal,
+        admission,
+    }
+}
+
+fn admission_file() -> (String, String) {
+    use common::admission::*;
+    use misaka_palw_tir::admit::{TirAdmitInputsV1, TirCeilingsV1};
+    let base = TirAdmitInputsV1 { tile_len: 64, h_chunk: 16, ceilings: TirCeilingsV1::legacy_court_v1() };
+    let with = |f: &dyn Fn(&mut TirCeilingsV1)| {
+        let mut c = base.ceilings;
+        f(&mut c);
+        TirAdmitInputsV1 { ceilings: c, ..base }
+    };
+    let dense2 = dense(&[HISTORY_BOUND_V1_SMALL, HISTORY_BOUND_V1_SMALL]).0;
+    let cases = vec![
+        admission_case("dense-gqa-2layer", "the corpus's dense GQA decoder, two global layers", &dense2, base),
+        admission_case("sliding-global", "sliding + global attention", &dense(&[3, HISTORY_BOUND_V1_SMALL, 3]).0, base),
+        admission_case(
+            "gdn-k2-v4-grouped",
+            "GDN, 2 key / 4 value heads, grouping; the conv window replays with S (G = 1)",
+            &gdn_program(true).0,
+            base,
+        ),
+        admission_case("mamba2", "Mamba-2's selective scan", &mamba2_program().0, base),
+        admission_case("moe-top2-shared", "top-2 MoE with a shared expert", &moe_program().0, base),
+        admission_case(
+            "head-local-delta-rule",
+            "a delta rule whose per-position operands are committed: S splits per head",
+            &head_local_delta_rule(8, 16, 16),
+            base,
+        ),
+        admission_case(
+            "a1-free-update",
+            "S <- Clamp(P): every node free, four groups, each paying the free nodes whole",
+            &free_update(),
+            base,
+        ),
+        admission_case(
+            "a1-free-node-in-an-aligned-update",
+            "S <- S + Clamp(P): ceil(aligned / 4) + free",
+            &free_node_in_an_aligned_update(),
+            base,
+        ),
+        admission_case(
+            "a1-a-committed-member-write-is-a-free-leaf",
+            "S2 <- S2 + S1 + Reshape(Transpose(w1)) with w1 = S1's committed StateWrite: a free leaf, so S2 splits",
+            &a_committed_member_write_is_a_free_leaf(),
+            base,
+        ),
+        admission_case(
+            "a1-a-reduction-across-groups",
+            "S <- Broadcast(ReduceSum(S, 0)): mixed, G = 1",
+            &a_reduction_across_groups(),
+            base,
+        ),
+        admission_case(
+            "a1-a-member-of-another-width-a7-a-state-nobody-writes",
+            "S's closure holds T[2, 8] (G = 1); T is never written: no C_j",
+            &a_member_of_another_width_and_a_state_nobody_writes(),
+            base,
+        ),
+        admission_case(
+            "a1-free-nodes-are-paid-whole",
+            "S <- Clamp(P1 . P2): the free product, 512 MACs whole in every group, against 256: refused",
+            &a_free_product_update(),
+            with(&|c| c.max_tile_macs = 256),
+        ),
+        admission_case(
+            "a1-the-commit-point-rule-decides-the-split",
+            "S2's closure {S1, S2}: 512 aligned MACs, 128 a group because w1 is a free leaf, against 128 (16-lane tiles): C_j = 1",
+            &a_committed_member_write_decides_the_split(),
+            TirAdmitInputsV1 { tile_len: 16, ..with(&|c| c.max_tile_macs = 128) },
+        ),
+        admission_case(
+            "a3-a-replay-at-the-mac-ceiling",
+            "64 MACs a group against a cap of 64: C_j = 1",
+            &a_replay_of_matmuls(),
+            with(&|c| c.max_tile_macs = 64),
+        ),
+        admission_case(
+            "a3-a-replay-past-the-mac-ceiling",
+            "64 MACs a group against 63: max_tile_macs",
+            &a_replay_of_matmuls(),
+            with(&|c| c.max_tile_macs = 63),
+        ),
+        admission_case(
+            "a3-a-replay-past-the-transcendental-ceiling",
+            "4 transcendentals a group against 3 (no MACs): max_tile_transcendentals",
+            &a_replay_of_transcendentals(),
+            with(&|c| c.max_tile_transcendentals = 3),
+        ),
+        admission_case(
+            "a3-a-zero-interval-cap",
+            "max_checkpoint_interval = 0 is out of range",
+            &free_update(),
+            with(&|c| c.max_checkpoint_interval = 0),
+        ),
+        admission_case("a2-max-tile-macs", "the dense LM head tile past 1,000 MACs", &dense2, with(&|c| c.max_tile_macs = 1_000)),
+        admission_case("a2-max-cone-work", "admission's own work past 10", &dense2, with(&|c| c.max_cone_work = 10)),
+        admission_case("a2-max-step-leaves", "one position's commit tiles past 2", &dense2, with(&|c| c.max_step_leaves = 2)),
+        admission_case("a2-max-position-macs", "one position's MACs past 1,000", &dense2, with(&|c| c.max_position_macs = 1_000)),
+        admission_case(
+            "a2-max-position-transcendentals",
+            "one position's transcendentals past 100",
+            &dense2,
+            with(&|c| c.max_position_transcendentals = 100),
+        ),
+        admission_case("a2-max-state-bytes", "the run's state past 1,000 bytes", &dense2, with(&|c| c.max_state_bytes = 1_000)),
+        admission_case(
+            "a2-max-tile-transcendentals",
+            "a softmax tile's exponentials past 10",
+            &dense2,
+            with(&|c| c.max_tile_transcendentals = 10),
+        ),
+        admission_case("a2-max-tile-opened-bytes", "a tile opening past 100 bytes", &dense2, with(&|c| c.max_tile_opened_bytes = 100)),
+        admission_case(
+            "a2-max-tile-operands",
+            "a cone reading more than one committed operand",
+            &dense2,
+            with(&|c| c.max_tile_operands = 1),
+        ),
+        admission_case("a6-overflow", "i32 x i32 into i32", &an_overflow(), base),
+        admission_case("a6-index", "a 4-row table gathered by the position", &an_index_out_of_range(), base),
+        admission_case("a6-divisor", "a divisor interval reaching below 1", &a_divisor_below_one(), base),
+    ];
+    let file = AdmissionFileJson { format: FORMAT_ADMISSION.into(), spec: SPEC.into(), cases };
+    ("admission.json".into(), serde_json::to_string_pretty(&file).unwrap() + "\n")
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -1229,6 +1598,7 @@ fn the_golden_vectors_are_reproduced_byte_for_byte() {
     let mut files = primitive_files();
     files.extend(program_files());
     files.push(encoding_file());
+    files.push(admission_file());
     let bless = std::env::var("TIR_BLESS").is_ok_and(|v| v == "1");
     let mut mismatched = Vec::new();
     for (rel, content) in &files {
@@ -1255,6 +1625,7 @@ fn the_golden_vectors_are_reproduced_byte_for_byte() {
         }
     }
     on_disk.push("encoding.json".into());
+    on_disk.push("admission.json".into());
     for f in on_disk {
         assert!(files.iter().any(|(rel, _)| *rel == f), "{f} is not generated by this test");
     }
