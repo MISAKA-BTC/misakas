@@ -8,8 +8,9 @@ before it reaches `main`.
 | --- | --- | --- | --- |
 | 0001 | PALW inference surface gaps: deterministic decode controls, serving and input extensions (FP Job V4) | §A (the FP Job V4 release) Implementation Frozen, 2026-09-27 (G0). §0–§7 (P1–P3) Draft, for a later release | **Reserved here.** The text is `docs/rfc/0001-palw-inference-surface-gaps.md` on branch `rcore/fp-sampler` (`77a474a1c` when this index was written). It reaches `main` with that branch. Do not copy it here |
 | 0002 | PALW Canonical Tensor IR v1 (PALW-TIR): a bounded, deterministic integer tensor program as the consensus meaning of a class, with a reference evaluator and optional fused kernels; v1 frozen on an architecture corpus | Draft, 2026-09-28 | [0002-palw-tensor-ir.md](0002-palw-tensor-ir.md) (branch `rfc/0002-tensor-ir`) |
+| 0003 | PALW Generative Model Classes: one job, determinism and output layer (deterministic randomness R, canonical tensors and why no execution profile, canonical outputs), and the class profiles on top of it (image generation in detail; text, embedding, multimodal input, audio, video) | Draft, 2026-09-28 | [0003-palw-generative-model-classes.md](0003-palw-generative-model-classes.md) (branch `rfc/0003-image-generation`) |
 
-**Next free number: RFC-0003.**
+**Next free number: RFC-0004.**
 
 ## ADRs that read as proposals
 
