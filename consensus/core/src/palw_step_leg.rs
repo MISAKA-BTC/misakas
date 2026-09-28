@@ -2028,6 +2028,12 @@ pub enum PalwStepFaultV1 {
     TirLogitsTraceMismatch {
         value_index: u32,
     } = 20,
+    /// **PALW-OUT-4** (RFC-0003): a generative claim's two commitments to one output lane — the output
+    /// node's step tile and the output tile of the claim's `output_root` — differ at `value_index`
+    /// (discriminants 0-20 unmoved; 21 is RFC-0003's in Phase F's allocation).
+    TirOutputDigestMismatch {
+        value_index: u32,
+    } = 21,
 }
 
 impl PalwStepFaultV1 {
@@ -2054,6 +2060,7 @@ impl PalwStepFaultV1 {
             PalwStepFaultV1::JobExceedsClassContext => (18, 0),
             PalwStepFaultV1::TirValueOutsideProvenInterval { value_index } => (19, value_index),
             PalwStepFaultV1::TirLogitsTraceMismatch { value_index } => (20, value_index),
+            PalwStepFaultV1::TirOutputDigestMismatch { value_index } => (21, value_index),
         }
     }
 }

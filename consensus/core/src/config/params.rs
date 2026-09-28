@@ -2833,6 +2833,17 @@ pub struct Params {
     /// shape. [`Self::validate_palw_tir_v1`] holds its refusals.
     pub palw_tir_v1: Option<crate::palw_tir_v1::PalwTirFenceV1>,
 
+    /// **RFC-0003 — generative model classes: a class may be a PIPELINE of PALW-TIR version-2
+    /// programs** (image, embedding, audio, video; spec 04b §15).
+    ///
+    /// The value carries the program version, the primitive set, the rand and output sets, the
+    /// generative court version and per-profile ceilings ([`crate::palw_gen_v1::PalwGenFenceV1`]).
+    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only in both
+    /// fingerprints with the value, the activation alone visited by `for_each_fence`, and the whole
+    /// option collapsed from `Some(never())` — `palw_tir_v1`'s shape. [`Self::validate_palw_gen_v1`]
+    /// holds its refusals.
+    pub palw_gen_v1: Option<crate::palw_gen_v1::PalwGenFenceV1>,
+
     /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
     ///
     /// A dissection tries ONE head's softmax, so a fused output tile wider than a head (or not a
@@ -3804,6 +3815,8 @@ impl Params {
         }
         // **RFC-0002 Phase F: the IR fence's own refusals** (`crate::palw_tir_v1`).
         self.validate_palw_tir_v1()?;
+        // **RFC-0003: the generative fence's own refusals** (`crate::palw_gen_v1`).
+        self.validate_palw_gen_v1()?;
         // **ADR-0152 v2 F2: the offence-attribution fence is armed at genesis or not at all.** Past
         // it the V1 `PanelFalseValid` is refused and a kind the chain never consumed before is; a
         // later crossing would leave pre-fence V1 rows beside V2 rows keyed differently for the
@@ -5045,6 +5058,14 @@ impl Params {
                 "this ruleset's genesis set registers an IR class: IR genesis rows arrive with RFC-0002 Phase H",
             ));
         }
+        // **RFC-0003: no generative class at genesis.** A genesis row is checked against the
+        // committed catalog, which has no pipeline entry form; a generative class registers past
+        // `palw_gen_v1`, through the pipeline admission.
+        if crate::palw_gen_class_v1::palw_genesis_registers_gen_class_v1(bundle) {
+            return Err(PalwModeV2Error::Invalid(
+                "this ruleset's genesis set registers a generative class: RFC-0003 v1 has no generative genesis rows",
+            ));
+        }
         if crate::palw_class_admission_v2::palw_genesis_reaches_kimi_kernel_v1(bundle)
             && !self.palw_kimi_k3.is_some_and(|f| f != ForkActivation::never() && f.is_active(0))
         {
@@ -6020,6 +6041,10 @@ impl Params {
         // writes, and scheduling the IR would partition the fleet at deploy.
         if self.palw_tir_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_tir_v1 = None;
+        }
+        // RFC-0003, likewise: the WHOLE option collapses from `Some(never())`.
+        if self.palw_gen_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_gen_v1 = None;
         }
         // ADR-0093 Decision 6, likewise.
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
@@ -9097,6 +9122,7 @@ impl Params {
             palw_token_lift,
             palw_kimi_k3,
             palw_tir_v1,
+            palw_gen_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -9328,6 +9354,7 @@ impl Params {
             ("palw_token_lift", *palw_token_lift),
             ("palw_kimi_k3", *palw_kimi_k3),
             ("palw_tir_v1", palw_tir_v1.map(|fence| fence.activation)),
+            ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
@@ -9564,6 +9591,12 @@ impl Params {
         // scheduling the IR at one height with different ceilings see different schedule ids.
         if let Some(fence) = self.palw_tir_v1 {
             h.write(b"palw_tir_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
+        // RFC-0003, NAMED likewise, with its value reported (not gated).
+        if let Some(fence) = self.palw_gen_v1 {
+            h.write(b"palw_gen_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
@@ -10058,6 +10091,7 @@ impl Params {
             palw_token_lift,
             palw_kimi_k3,
             palw_tir_v1,
+            palw_gen_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -10735,6 +10769,10 @@ impl Params {
         if let Some(fence) = palw_tir_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        // RFC-0003. Some-only, and the ACTIVATION only (the value is a limit set).
+        if let Some(fence) = palw_gen_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // ADR-0093 Decision 6. Some-only, likewise.
         if let Some(activation) = palw_fused_dissectable.as_mut() {
             fork(activation, visit);
@@ -11159,6 +11197,7 @@ impl Params {
             palw_token_lift,
             palw_kimi_k3,
             palw_tir_v1,
+            palw_gen_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -11872,6 +11911,15 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
+        // RFC-0003, Some-only: every shipped preset leaves it `None` and fingerprints
+        // byte-identically to a build without the field. Armed, the ruleset states its program
+        // version, primitive, rand and output sets, generative court version, per-profile ceilings
+        // and the generative court root.
+        if let Some(fence) = palw_gen_v1 {
+            h.write(b"palw_gen_v1/court-v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
         // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
         // byte-identically to a build without the field.
         if let Some(activation) = palw_fused_dissectable {
@@ -12514,6 +12562,7 @@ impl Params {
             palw_token_lift: self.palw_token_lift,
             palw_kimi_k3: self.palw_kimi_k3,
             palw_tir_v1: self.palw_tir_v1,
+            palw_gen_v1: self.palw_gen_v1,
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
@@ -13567,6 +13616,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
+    palw_gen_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -13817,6 +13867,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
+    palw_gen_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14049,6 +14100,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
+    palw_gen_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -21065,6 +21117,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
+    palw_gen_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,

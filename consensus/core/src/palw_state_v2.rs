@@ -7225,6 +7225,29 @@ pub enum PalwConsensusObjectV2 {
         choice: crate::palw_tir_dissect_v1::PalwTirDissectChoiceV1,
         signature: Vec<u8>,
     },
+    // ---- RFC-0003: tag 67, from Phase F's allocation (the next free after F7's 66). ----
+    /// **A generative class registered as a pipeline of PALW-TIR version-2 programs** (tag 67;
+    /// RFC-0003 §I.2.3): `ClassRegistered`'s fields with the pipeline carriage — the pipeline's and
+    /// every program's canonical bytes, the per-stage layouts, the output header, the offers and the
+    /// tokenizer ([`crate::palw_gen_class_v1::PalwGenClassV1`]). `class_id` must be
+    /// `tir_pipeline_class_id_v1(class, artifact_root)`.
+    ///
+    /// Appended so no earlier discriminant moves: an older build on a ruleset that declared
+    /// `palw_audit_2026_09_11` cannot decode it and skips it (A-2). This build lets it ride (the
+    /// stateless gate says yes, as it must for a block to be valid on both) and drops it by name in the
+    /// acceptance walk below `Params::palw_gen_v1` — and, until the pipeline admission lands, above it
+    /// too — so every network folds exactly as before this variant existed. The fold refuses it as the
+    /// second lock.
+    ClassRegisteredGenV1 {
+        class_id: Hash64,
+        artifact_root: Hash64,
+        slash_value_per_pwu: u64,
+        pwu_rule: PalwPwuRuleV2,
+        initial_target: u128,
+        share_permille: u16,
+        activation_daa: u64,
+        admission: Box<crate::palw_gen_class_v1::PalwGenAdmissionCarriageV1>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7247,6 +7270,14 @@ pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
         }
         _ => false,
     }
+}
+
+/// **Is this object an RFC-0003 generative move** — an appended generative variant (today the
+/// pipeline class registration, tag 67) that an older build cannot decode and skips (A-2)? Below
+/// `palw_gen_v1` the acceptance walk drops every such object by name before any slot, rent or budget
+/// is charged for it, and the fold refuses it as the second lock.
+pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::ClassRegisteredGenV1 { .. })
 }
 
 /// **Is this object a move of an IR history dissection** (RFC-0002 F7, tags 64–66)?
@@ -9291,6 +9322,12 @@ pub enum PalwStateV2Error {
     /// until admission v10 lands above it. The acceptance walk drops it first; this is the second lock.
     #[error("an IR class registration (tag 61) is refused: {0}")]
     TirRegistrationRefused(&'static str),
+    // ---- RFC-0003 ----
+    /// **A generative class registration (tag 67) the fold does not take**: below
+    /// `Params::palw_gen_v1`, and until the pipeline admission lands above it. The acceptance walk
+    /// drops it first; this is the second lock.
+    #[error("a generative class registration (tag 67) is refused: {0}")]
+    GenRegistrationRefused(&'static str),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -31080,6 +31117,13 @@ fn apply_object(
                     builder.write_bond(*bond, Some(retiring));
                 }
             }
+        }
+        // **RFC-0003 (tag 67): a generative class registration.** Refused by name at every height: the
+        // acceptance walk drops it below `palw_gen_v1` (and, until the pipeline admission lands, above
+        // it), so a block that reaches the fold with one skipped the walk. Every network folds as
+        // before the variant.
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => {
+            return Err(PalwStateV2Error::GenRegistrationRefused("the pipeline admission is not in this build (RFC-0003)"));
         }
         // **RFC-0002 Phase F (tag 61): an IR class registration**, past `palw_tir_v1` (the lock above
         // refuses it below). Admission v10 ran at acceptance (ADR-0049 Decision H: no graph walk

@@ -2206,6 +2206,17 @@ intervals, by the program's own block and node indices.
 It returns every stage's admission, the job's totals and the proven interval of the class's output.
 The class object checks that interval against its output kind's value domain (PALW-OUT-2).
 
+A class commits each stage under its own layout, so `tir_admit_pipeline_staged_v1` takes one set of
+network inputs per stage (tile length, history chunk, checkpoint interval) and is otherwise the
+same. With the same inputs for every stage it is `tir_admit_pipeline_v1` exactly.
+
+**What a job fixes.** `stage_job_facts(pipeline, programs, job)` computes, for every stage and
+without running anything, the trip count, the token run and every input the court derives from the
+job: job scalars, token tensors, token counts and row counts (an earlier stage's row count is its
+trip count). It refuses what the run refuses. A court answers these inputs from it and never opens
+them. It answers random inputs from `R`. Only an edge's committed elements come from the carriage,
+and an edge's zero pad does not (§15.4).
+
 ### 15.10 Rules
 
 - **PALW-TIR-37 (inputs).** An input MUST be `External` with a declared interval, or `Random` over a
@@ -2236,10 +2247,16 @@ The class object checks that interval against its output kind's value domain (PA
 
 ### 15.11 Open items
 
+Built in consensus, dormant on every network: the `palw_gen_v1` fence (`palw_gen_v1.rs`); the pipeline
+class, its identity, its registration object (tag 67, dropped by name at every height) and its
+preflight (`palw_gen_class_v1.rs`); and the court's answers — `R` recomputed, job facts, PALW-TIR-33
+on edges, the output-digest check and fault 21 (`palw_gen_court_v1.rs`).
+
 The following are not yet built:
 
-- the pipeline class object, its step tree and identity (in consensus);
-- the court extension (derived inputs, stage edges, `TirOutputDigestMismatch`);
-- the `palw_gen_v1` fence;
+- the one step tree of a pipeline (stage-major leaf numbering) and the admission that counts its
+  leaves exactly; the preflight's leaf check is a necessary condition only;
+- the generative job (`PalwGenJobV1`), its acceptance, and the close that carries the court's
+  answers (with `PalwCourtVerdictProofV2` 10/11 from Phase F's allocation);
 - generalised dissection over a declared reduction axis (RFC-0003 §II.1.5.6, decided to come with
   video).
