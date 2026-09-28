@@ -759,7 +759,8 @@ fn an_ir_claims_trace_events_are_answered_in_the_ir_form() {
 /// registered by the node's own object, its lifecycle row walked `Candidate → Prefetching →
 /// Probation → ActiveLimited → Active` by the chain's registry — the admission jury seated on the
 /// node's readiness V2 proofs, the probation passed by IR claims the node produced going `Final` —
-/// an honest claim of the `Active` class going `Final`, and a planted lie convicted in one move.
+/// an honest claim of the `Active` class going `Final`, planted lies convicted in one move (licensed,
+/// and refused its licence), and a borrowed root convicted by kind 7 (`TirIdentityMismatch`).
 /// testnet-12's fold harness (`consensus/core/tests/rcore_common.rs`: the real fold with the
 /// processor's extras, every block re-applied, reverted and reloaded).
 #[path = "../../../consensus/core/tests/rcore_common.rs"]
@@ -810,12 +811,28 @@ mod t12_walk {
     /// and canonical-work height, the import every node runs (the harness's `step_at` reloads with
     /// the fixtures' `into_state`, whose weight rule a weightless class's `Final` does not obey).
     fn step(c: &mut rcore::Chain, daa: u64, objects: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, subsidy: u64) {
+        step_anchored(c, daa, objects, work, key, subsidy, Hash64::default())
+    }
+
+    /// [`step`], the block's own attempt carried with its header's execution anchor (`job_anchor`,
+    /// the processor's `extras.own_job_anchor`): past `palw_offence_attribution` the claim records it
+    /// as its job identity, which an identity offence (kind 4, kind 7) is judged against.
+    fn step_anchored(
+        c: &mut rcore::Chain,
+        daa: u64,
+        objects: &[PalwConsensusObjectV2],
+        work: PalwBlockWorkV3<'_>,
+        key: Hash64,
+        subsidy: u64,
+        job_anchor: Hash64,
+    ) {
         use kaspa_consensus_core::palw_state_v2::{PalwStateCarriageV2, apply_delta_v2, revert_delta_v2};
         assert!(daa > c.daa, "DAA moves forward");
         let at = rcore::ctx(0xCA_0000 + daa, daa, daa, subsidy);
         let parent = c.s.clone();
         let (child, delta, skips) =
-            c.try_fold(&parent, &at, objects, work, key).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
+            rcore::fold_with(&c.p, &c.sp, &parent, &at, objects, work, key, &rcore::tape_extras(c, false, daa, job_anchor))
+                .unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
         assert!(skips.is_empty(), "nothing skipped at {daa}: {skips:?}");
         assert_eq!(apply_delta_v2(&parent, &delta, &c.sp).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
         assert_eq!(revert_delta_v2(&child, &delta, &c.sp).expect("reverts"), parent, "DAA {daa}: the delta reverts");
@@ -917,6 +934,21 @@ mod t12_walk {
         daa: u64,
         lie: Option<u64>,
     ) -> Option<(Hash64, Vec<u8>, PalwClaimRootsV1)> {
+        ir_claim_of(c, ir, n, seed, daa, lie, None)
+    }
+
+    /// [`ir_claim_lying`], the committed execution borrowed — when `borrowed` names an anchor — from
+    /// that anchor's job instead of the one the claim's own anchor names (an honest run of the wrong
+    /// question: kind 7's J1).
+    fn ir_claim_of(
+        c: &mut rcore::Chain,
+        ir: &Ir,
+        n: u64,
+        seed: u64,
+        daa: u64,
+        lie: Option<u64>,
+        borrowed: Option<Hash64>,
+    ) -> Option<(Hash64, Vec<u8>, PalwClaimRootsV1)> {
         let backend = ir.backend();
         let bond = rcore::bond_key(n);
         let (pre_pow, nonce) = (0x7C0_0000 + seed, 7u64);
@@ -929,7 +961,7 @@ mod t12_walk {
                 kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(nonce),
             )
             .expect("an anchor");
-        let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor's job");
+        let (job, prompt) = backend.job_for_anchor(borrowed.unwrap_or(anchor)).expect("the anchor's job");
         let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, false);
         let run = match lie {
             None => backend.execute(&job, &prompt),
@@ -955,17 +987,16 @@ mod t12_walk {
         };
         let env =
             PalwAttemptEnvelopeV2 { attempt, signature: vec![0u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] };
-        let key = execution_commitment_v3(
-            &env.attempt,
-            execution_anchor_v3(rcore::h(rcore::NET), rcore::h(pre_pow), ir.class_id, &bond.0, nonce),
-        );
+        let execution_anchor = execution_anchor_v3(rcore::h(rcore::NET), rcore::h(pre_pow), ir.class_id, &bond.0, nonce);
+        let key = execution_commitment_v3(&env.attempt, execution_anchor);
         let id = attempt_id_v2(&env.attempt);
         let at = rcore::ctx(0xCA_0000 + daa, daa, daa, rcore::T12_BLOCK_SUBSIDY_SOMPI);
-        if let Err(e) = c.try_fold(&c.s.clone(), &at, &[], PalwBlockWorkV3::Attempt(&env), key) {
+        let extras = rcore::tape_extras(c, false, daa, execution_anchor);
+        if let Err(e) = rcore::fold_with(&c.p, &c.sp, &c.s.clone(), &at, &[], PalwBlockWorkV3::Attempt(&env), key, &extras) {
             eprintln!("DAA {daa}: the class gate refuses the IR attempt: {e}");
             return None;
         }
-        step(c, daa, &[], PalwBlockWorkV3::Attempt(&env), key, rcore::T12_BLOCK_SUBSIDY_SOMPI);
+        step_anchored(c, daa, &[], PalwBlockWorkV3::Attempt(&env), key, rcore::T12_BLOCK_SUBSIDY_SOMPI, execution_anchor);
         let roots = PalwClaimRootsV1 {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
@@ -981,6 +1012,8 @@ mod t12_walk {
     fn an_ir_class_walks_to_active_on_testnet_12_its_claims_go_final_and_a_lie_is_convicted_in_one_move() {
         let mut c = rcore::Chain::new(armed());
         c.room = true;
+        // testnet-12 arms `palw_offence_attribution` at genesis: its fold runs with it, as here.
+        c.attribution = true;
         let bundle = rcore::bundle(&c.p);
         let ir = super::ir_class_with("t12-walk", false, bundle.court, c.p.palw_prompt_ids_form_v1());
         let backend = ir.backend();
@@ -1264,6 +1297,45 @@ mod t12_walk {
         );
         assert!(c.s.bond(&producer).expect("the producer").collateral < before, "the producer is charged again");
         eprintln!("walk: an unlicensed lie at leaf {lie} is convicted in one move by the seat that refuted it");
+
+        // 9. Kind 7: a claim whose committed execution is an honest run of ANOTHER job (a borrowed
+        //    root) — the seat's J1 probe finds it (`palw_tir_borrowed_root_binding_v1`), the identity
+        //    check the gate will run names the fault (`palw_tir_identity_fault_v1`), and the object the
+        //    node files (`palw_tir_identity_object_v1`, the program stripped) folds: the claim is voided
+        //    and its producer charged.
+        keep_ready(&mut c, &ir, registrant);
+        let (id, material, roots) = loop {
+            seed += 1;
+            let daa = c.daa + 1;
+            if let Some(claim) = ir_claim_of(&mut c, &ir, 1, seed, daa, None, Some(rcore::h(0xB0B0))) {
+                break claim;
+            }
+            empty(&mut c, daa);
+        };
+        bind(&mut c, id, &seats);
+        let duty = kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&c.s, &c.sp, &[seats[2].0])
+            .into_iter()
+            .find(|d| d.claim_id == id)
+            .expect("the seat's duty on the borrowed claim");
+        let binding = crate::palw_panel::reporter_filer::palw_tir_borrowed_root_binding_v1(backend.as_ref(), &material, roots)
+            .expect("the capture reproduces the claim's roots under another job");
+        let rules = kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+            prompt_ids_form: form,
+            base_class_id: bundle.base_class_id,
+            da_signer_liability: false,
+        };
+        let fault = crate::palw_panel::reporter_filer::palw_tir_identity_fault_v1(&duty, &binding, rules).expect("an identity fault");
+        let object = kaspa_consensus_core::palw_offence_attribution_v1::palw_tir_identity_object_v1(duty.executor_bond, id, &binding);
+        let before = c.s.bond(&producer).expect("the producer").collateral;
+        let next = c.daa + 1;
+        step(&mut c, next, &[object], PalwBlockWorkV3::None, Hash64::default(), 0);
+        assert!(
+            matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { .. }),
+            "the borrowed claim is voided: {:?}",
+            c.claim(&id).phase
+        );
+        assert!(c.s.bond(&producer).expect("the producer").collateral < before, "its producer is charged");
+        eprintln!("walk: a borrowed IR root is convicted by kind 7 ({fault:?})");
     }
 
     /// **A Hugging Face model through the operator's path, to a registration on testnet-12's fold**
