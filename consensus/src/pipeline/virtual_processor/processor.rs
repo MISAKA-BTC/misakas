@@ -7070,6 +7070,7 @@ impl VirtualStateProcessor {
     fn palw_v2_graded_vector_count(
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        tir_active: bool,
     ) -> Option<usize> {
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
         match object {
@@ -7091,7 +7092,9 @@ impl VirtualStateProcessor {
                     whole.extend_from_slice(parts.get(&i)?);
                 }
                 match borsh::from_slice::<Obj>(&whole) {
-                    Ok(Obj::FamilyCertified { evidence }) => Some(evidence.vector_count()),
+                    // RFC-0002 Phase F: an IR drill below `palw_tir_v1` does not decode on an older
+                    // build, so it is not graded (nor charged) here either.
+                    Ok(Obj::FamilyCertified { evidence }) if tir_active || !evidence.is_tir_v1() => Some(evidence.vector_count()),
                     _ => None,
                 }
             }
@@ -7289,6 +7292,14 @@ impl VirtualStateProcessor {
                 refund,
                 unrefundable,
             });
+            // **RFC-0002 Phase F: below `palw_tir_v1` an IR object is dropped by name before any rule
+            // below reads it.** An older build cannot decode it and skips it (A-2) without charging it
+            // a registration slot, the court's adjudication slot or any budget — so it is dropped
+            // here, first, and charged nothing either. The gate's own arms and the fold refuse it too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_tir_v1(&object) && !self.palw_tir_at(point.daa_score) {
+                info!("Block {block}: an IR object was dropped by name below palw_tir_v1, and the block stands (RFC-0002 Phase F)");
+                continue;
+            }
             // **ADR-0075 SA-1: a chunk group's opener pays for the SLOT it takes.**
             //
             // A group holds one of `PALW_OBJECT_CHUNK_MAX_GROUPS` rows in the state root for up to
@@ -7435,8 +7446,14 @@ impl VirtualStateProcessor {
                         // Armed, and only here does anything touch the payload: the transition's
                         // own completion test, and the grading work the object it assembles to
                         // will cost.
-                        chunk_vectors =
-                            Self::palw_chunk_completes_a_certification_v1(pending.map(|p| &p.parts), *index, *count, bytes, group);
+                        chunk_vectors = Self::palw_chunk_completes_a_certification_v1(
+                            pending.map(|p| &p.parts),
+                            *index,
+                            *count,
+                            bytes,
+                            group,
+                            self.palw_tir_at(point.daa_score),
+                        );
                         chunk_vectors.is_some()
                     }
                 }
@@ -7466,7 +7483,8 @@ impl VirtualStateProcessor {
             // decides which objects a block accepts and therefore its state root — an upgraded and
             // an un-upgraded node must never answer that differently in silence. Dormant, the
             // count is skipped entirely and the predicate below is the one that shipped.
-            let graded_vectors = rent_armed.then(|| Self::palw_v2_graded_vector_count(&folded, &object)).flatten();
+            let graded_vectors =
+                rent_armed.then(|| Self::palw_v2_graded_vector_count(&folded, &object, self.palw_tir_at(point.daa_score))).flatten();
             // Which of the two fences answers depends on which is armed, and they compose in one
             // direction: `palw_chunk_completes_a_certification_v1` (D14) also demands the assembled
             // bytes hash to the declared group id, so anything it calls a completion
@@ -8757,6 +8775,52 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Result<(), String> {
+        // **RFC-0002 Phase F: an IR registration is signed over its own message**, which carries the
+        // class (program, layout, tokenizer) in the profile's place, under its own context — so
+        // neither form's signature can be lifted onto the other.
+        if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 {
+            class_id,
+            share_permille,
+            admission,
+            activation_daa,
+            artifact_root,
+            slash_value_per_pwu,
+            initial_target,
+            pwu_rule,
+        } = object
+        {
+            let registrant = state
+                .bond(&admission.registrant_bond)
+                .ok_or_else(|| format!("IR class {class_id} is registered under a bond this chain does not have"))?;
+            if !matches!(registrant.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                return Err(format!("IR class {class_id} is registered under a bond that is not Active"));
+            }
+            let message = kaspa_consensus_core::palw_tir_class_v1::palw_tir_class_registration_message_v1(
+                kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                    self.network_id_bytes.as_slice(),
+                    Some(self.genesis.hash),
+                ),
+                *class_id,
+                *share_permille,
+                *activation_daa,
+                &admission.registrant_bond,
+                *artifact_root,
+                *slash_value_per_pwu,
+                *initial_target,
+                pwu_rule,
+                &admission.canonical,
+                &admission.class,
+            );
+            if !Self::verify_mldsa87_with_context_bool(
+                &registrant.pubkey,
+                message.as_byte_slice(),
+                &admission.signature,
+                kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1,
+            ) {
+                return Err(format!("IR class {class_id}'s registration is not signed by the bond it names"));
+            }
+            return Ok(());
+        }
         let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
             class_id,
             share_permille,
@@ -8824,9 +8888,12 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Result<(), String> {
-        let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, initial_target, .. } = object
-        else {
-            return Ok(());
+        let (class_id, initial_target) = match object {
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, initial_target, .. }
+            | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, initial_target, .. } => {
+                (class_id, initial_target)
+            }
+            _ => return Ok(()),
         };
         let Some(bundle) = self.palw_v2_bundle.as_ref() else { return Ok(()) };
         if let Some(base_target) = state.class_target(&bundle.base_class_id)
@@ -8919,6 +8986,13 @@ impl VirtualStateProcessor {
                 Obj::MaterialDisclosedV2 { claim, unit, answer, discloser, signature }
                     if state_params.rcore_plus_active_at(point.daa_score) =>
                 {
+                    // RFC-0002 Phase F: an IR class's answer is dropped by name below `palw_tir_v1`,
+                    // exactly as an older build skips the payload it cannot decode (A-2).
+                    if answer.is_tir_v1() && !self.palw_tir_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim}: an IR answer is refused: palw_tir_v1 is not in force at this block (RFC-0002 Phase F)"
+                        ));
+                    }
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
                     }
@@ -9131,7 +9205,14 @@ impl VirtualStateProcessor {
                             kaspa_consensus_core::palw_state_v2::palw_court_close_chunk_digest_v1(&assembled) == group.close_digest;
                         let decoded = assembles
                             .then(|| borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&assembled).ok())
-                            .flatten();
+                            .flatten()
+                            // RFC-0002 Phase F: below `palw_tir_v1` an IR proof does not decode on an
+                            // older build, so here it is bytes that do not decode as well — admitted,
+                            // and the transition convicts the declarer exactly as the older build does.
+                            .filter(|object| {
+                                !matches!(object, Obj::CourtClosed { proof, .. }
+                                    if proof.is_tir_v1() && !self.palw_tir_at(point.daa_score))
+                            });
                         // Only when the bytes ARE this session's close does the adjudication run;
                         // anything else is the transition's conviction, not this layer's refusal.
                         if let Some(Obj::CourtClosed { session_id: decoded_session, verdict, proof }) = &decoded
@@ -9447,6 +9528,13 @@ impl VirtualStateProcessor {
                     .map_err(|e| e.to_string())?;
                 }
                 Obj::CourtClosed { session_id, verdict, proof } => {
+                    // RFC-0002 Phase F: an IR close is dropped by name below `palw_tir_v1`, exactly
+                    // as an older build skips the payload it cannot decode (A-2).
+                    if proof.is_tir_v1() && !self.palw_tir_at(point.daa_score) {
+                        return Err(format!(
+                            "court {session_id}: an IR close is refused: palw_tir_v1 is not in force at this block (RFC-0002 Phase F)"
+                        ));
+                    }
                     // The close carries its proof now, so there is something to adjudicate. The
                     // node re-derives the verdict from the proof and compares: a declared verdict
                     // that its own proof does not produce is refused, in EITHER direction — an
@@ -9567,6 +9655,93 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| format!("session {session_id}: {e}"))?;
                     kaspa_consensus_core::palw_court_v2::check_court_attn_choice_acceptance_v2(
+                        state,
+                        session_id,
+                        choice,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                // -------------------------------------------------------------------------
+                // RFC-0002 Phase F, F7 — the IR history dissection's three moves (spec 04b §9.5).
+                //
+                // ADR-0082's gates: the FENCE (the k-ary court — `palw_tir_v1` dropped the object by
+                // name above), the party's SIGNATURE, and for the root claim the arity against the
+                // ruleset and the FINALIZE: the tile evaluated from the claimed totals must be the
+                // committed one, a demand evaluation at the IR court's limits and this block's step
+                // ladder — the same the close of its bottom is judged at — which is why the move
+                // takes the block's adjudication slot (`palw_court_move_spends_the_slot_v1`).
+                // -------------------------------------------------------------------------
+                Obj::CourtTirRootClaimed { session_id, root, arity, signature } => {
+                    kaspa_consensus_core::palw_court_v2::palw_tir_dissection_move_is_admissible_v1(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    let derived = self
+                        .palw_court_params_at(point.daa_score)
+                        .ok_or_else(|| "an IR dissection move on a network with no V2 bundle".to_string())?
+                        .map_err(|e| format!("session {session_id}: {e}"))?;
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "an IR dissection move on a network with no V2 court parameters".to_string())?;
+                    kaspa_consensus_core::palw_court_v2::check_court_tir_root_claim_acceptance_v1(
+                        state,
+                        session_id,
+                        root,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                    // The claim's CLASS ladder, as every held court arm reads it (an IR class records
+                    // none, so it is the network's; a missing session is refused by the check below).
+                    let bare = self.palw_court_step_ladder_at(point.daa_score, court);
+                    let ladder = state
+                        .court_session(session_id)
+                        .and_then(|session| state.claim(&session.claim))
+                        .map_or(bare, |claim| state.class_step_ladder_v1(&claim.class_id, bare));
+                    kaspa_consensus_core::palw_court_v2::check_court_tir_root_claim_admits_v1(
+                        state,
+                        session_id,
+                        root,
+                        *arity,
+                        derived.dissection_arity(),
+                        court,
+                        ladder,
+                        self.palw_prompt_ids_form_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                }
+                Obj::CourtTirDissected { session_id, round, signature } => {
+                    kaspa_consensus_core::palw_court_v2::palw_tir_dissection_move_is_admissible_v1(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    kaspa_consensus_core::palw_court_v2::check_court_tir_round_acceptance_v1(
+                        state,
+                        session_id,
+                        round,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::CourtTirChildChosen { session_id, choice, signature } => {
+                    kaspa_consensus_core::palw_court_v2::palw_tir_dissection_move_is_admissible_v1(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    kaspa_consensus_core::palw_court_v2::check_court_tir_choice_acceptance_v1(
                         state,
                         session_id,
                         choice,
@@ -10545,6 +10720,87 @@ impl VirtualStateProcessor {
                 // refused, because its verdict convicts nobody; an accusation whose refutation does
                 // not adjudicate is refused too — P0-8's rule on both sides. The FENCE is checked
                 // here as well as in the fold, for the DA court's reason.
+                // **RFC-0002 Phase F (tag 62): an IR claim accused in one move.** Signed over its
+                // session id by the accuser's registered key; about a live claim of an IR class,
+                // its executor and roots the claim's; and the verdict it DECLARES is the one its proof
+                // produces under this block's court (`palw_tir_one_move_verdict_v1`, the court close's
+                // own adjudication) — refused in either direction otherwise, so the fold may apply it.
+                Obj::TirShardCourtAccused { accusation } => {
+                    let claim_id = accusation.claim;
+                    if !self.palw_tir_at(point.daa_score) {
+                        return Err(format!("claim {claim_id}: an IR accusation is refused: palw_tir_v1 is not in force (RFC-0002)"));
+                    }
+                    kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(accusation)
+                        .map_err(|e| format!("claim {claim_id}: {e}"))?;
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "an IR one-move accusation on a network with no V2 court parameters".to_string())?;
+                    let record = state
+                        .bond(&accusation.accuser_bond)
+                        .ok_or_else(|| format!("an accusation names bond {:?} this chain does not have", accusation.accuser_bond))?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    let session_id = kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_session_id_v1(
+                        domain.as_byte_slice(),
+                        accusation,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        session_id.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_tir_one_move_v1::PALW_TIR_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1,
+                    ) {
+                        return Err(format!("claim {claim_id}'s IR accusation is not signed by the bond it names"));
+                    }
+                    let claim = state
+                        .claim(&claim_id)
+                        .ok_or_else(|| format!("an accusation names claim {claim_id} this chain does not have"))?;
+                    if state.tir_class_v1(&claim.class_id).is_none() {
+                        return Err(format!("claim {claim_id} is not a claim of an IR class"));
+                    }
+                    if claim.bond != accusation.executor_bond
+                        || claim.execution_root != accusation.execution_root
+                        || claim.trace_root != accusation.trace_root
+                    {
+                        return Err(format!("claim {claim_id}: the accusation's executor or roots are not the claim's"));
+                    }
+                    let ladder = state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
+                    // RFC-0002 F7: under the held regime a cone accusation at a dissected leaf opens a
+                    // dissection there (the fold asks the same question); it declares the conviction
+                    // it is prosecuting. Every other accusation's verdict is re-derived and compared.
+                    let outcome = kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_outcome_v1(
+                        state,
+                        claim,
+                        accusation,
+                        court,
+                        ladder,
+                        self.palw_prompt_ids_form_at(point.daa_score),
+                        self.palw_held_context_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("claim {claim_id}: the IR accusation does not adjudicate: {e}"))?;
+                    match outcome {
+                        kaspa_consensus_core::palw_tir_one_move_v1::PalwTirOneMoveOutcomeV1::Verdict(derived) => {
+                            if derived != accusation.verdict {
+                                return Err(format!(
+                                    "claim {claim_id}: the IR accusation declares {:?} and its proof produces {derived:?}",
+                                    accusation.verdict
+                                ));
+                            }
+                        }
+                        kaspa_consensus_core::palw_tir_one_move_v1::PalwTirOneMoveOutcomeV1::NeedsDissection { leaf } => {
+                            if accusation.verdict != kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty {
+                                return Err(format!(
+                                    "claim {claim_id}: an IR accusation at dissected leaf {leaf} opens a dissection and declares \
+                                     ExecutorGuilty, not {:?}",
+                                    accusation.verdict
+                                ));
+                            }
+                        }
+                    }
+                }
                 Obj::ShardCourtAccused { accusation } => {
                     let claim_id = accusation.claim;
                     if !self.palw_shard_court_at(point.daa_score) {
@@ -10998,18 +11254,89 @@ impl VirtualStateProcessor {
                 // block stands.** Below `palw_tir_v1` exactly as an older build skips the payload it
                 // cannot decode (A-2); above it until admission v10 lands (step F6). Never charged a
                 // registration slot: `palw_class_registration_buyer_v1` does not name it.
-                Obj::ClassRegisteredTirV1 { class_id, .. } => {
+                Obj::ClassRegisteredTirV1 { class_id, share_permille, .. } => {
                     if !self.palw_tir_at(point.daa_score) {
                         return Err(format!(
                             "IR class {class_id} is refused: palw_tir_v1 is not in force at this block (RFC-0002 Phase F)"
                         ));
                     }
-                    return Err(format!("IR class {class_id} is refused: admission v10 is not in this build (RFC-0002 Phase F, F6)"));
+                    let Some(bundle) = self.palw_v2_bundle.as_ref() else {
+                        return Err(format!("IR class {class_id} registered on a network with no V2 bundle"));
+                    };
+                    // The legacy arm's order, the graph gate last: the chain's target (one map
+                    // read), the registrant's signature, then admission v10 — which decodes the
+                    // program and derives the primitives the share rule reads.
+                    self.palw_v2_class_registration_starts_at_the_chains_target(state, object)?;
+                    self.palw_v2_class_registration_is_signed(state, object)?;
+                    // RFC-0002 F7: the k-ary court at this block, resolved as the legacy arm resolves
+                    // it — a cone that reduces over the history is dissected only under it.
+                    let court = match self.palw_kary_court_active_at(point.daa_score) {
+                        false => None,
+                        true => {
+                            let derived = self
+                                .palw_court_params_at(point.daa_score)
+                                .ok_or_else(|| format!("IR class {class_id} is registered on a chain with no V2 ruleset"))?
+                                .map_err(|e| format!("IR class {class_id} is judged under a court with no shape: {e}"))?;
+                            Some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+                                dissection_arity: derived.dissection_arity(),
+                                prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
+                                window_court_daa: bundle.state.window_court(),
+                            })
+                        }
+                    };
+                    let rules = kaspa_consensus_core::palw_tir_admission_v1::PalwTirAdmissionRulesV1 {
+                        fence: self.palw_tir_v1.expect("palw_tir_at said the fence is in force"),
+                        held: kaspa_consensus_core::palw_class_admission_v2::PalwHeldAdmissionV1 {
+                            armed: self.palw_held_context_at(point.daa_score),
+                            panel_da: self.palw_panel_da_at(point.daa_score),
+                        },
+                        prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
+                        court,
+                    };
+                    // The network's committed certified families and the chain's own, as the legacy
+                    // arm reads them (consensus never reads the drilled registry).
+                    let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+                    let chain_certified =
+                        state.chain_certified_families(kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt);
+                    let (entry, _) = kaspa_consensus_core::palw_tir_admission_v1::verify_class_admission_v10(
+                        bundle,
+                        &rules,
+                        object,
+                        &certified,
+                        &chain_certified,
+                    )
+                    .map_err(|e| format!("IR class {class_id} is not admissible: {e}"))?;
+                    // Decision H's and ADR-0069's share rule, as the legacy arm states it: the
+                    // minimum grantable share for a class a certified family covers (below
+                    // `palw_admission_independence`), nothing otherwise.
+                    let prosecutable = kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v2(
+                        bundle.court_e2e_root,
+                        &certified,
+                        &chain_certified,
+                        &entry.reachable_kernels,
+                    )
+                    .map_err(|e| format!("IR class {class_id}: {e}"))?
+                    .is_some();
+                    let independence = self.palw_admission_independence_at(point.daa_score);
+                    let required = if prosecutable && !independence { state_params.min_grantable_share_permille() } else { 0 };
+                    if *share_permille != required {
+                        return Err(format!(
+                            "IR class {class_id} registers at {share_permille}‰; the share rule requires {required}‰ (ADR-0049 \
+                             Decision H, ADR-0069 Decision 6, ADR-0145 §7)"
+                        ));
+                    }
                 }
                 // ADR-0075: both certification objects are judged entirely by the transition —
                 // the evidence by the court's grader, the class binding by the class's own profile
                 // hash and kernel coverage — and neither needs a signature, a bundle or a store.
                 Obj::FamilyCertified { .. } | Obj::ClassLaneCertified { .. } | Obj::ObjectChunk { .. } => {}
+                // RFC-0002 Phase F (tag 63): judged by the transition like the legacy lane object;
+                // below `palw_tir_v1` dropped by name (the acceptance walk drops it first).
+                Obj::ClassLaneCertifiedTirV1 { class_id, .. } => {
+                    if !self.palw_tir_at(point.daa_score) {
+                        return Err(format!("IR class {class_id}'s lane certification is refused: palw_tir_v1 is not in force"));
+                    }
+                }
                 // **ADR-0078: a derivation is authorised by the key it declares, on this chain.**
                 // The ride list proved a signature is present and the shape is the object's; here
                 // the signature is verified under the declared executor key, over the object's own
@@ -12557,6 +12884,7 @@ impl VirtualStateProcessor {
         count: u8,
         bytes: &[u8],
         group: &kaspa_consensus_core::Hash64,
+        tir_active: bool,
     ) -> Option<usize> {
         let mut whole: Vec<u8> = Vec::new();
         for i in 0..count {
@@ -12571,7 +12899,11 @@ impl VirtualStateProcessor {
             return None;
         }
         match borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&whole) {
-            Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { evidence }) => {
+            // RFC-0002 Phase F: below `palw_tir_v1` an IR drill is bytes an older build cannot decode,
+            // so it is none here either — it is graded, and charged, only past the fence.
+            Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { evidence })
+                if tir_active || !evidence.is_tir_v1() =>
+            {
                 Some(evidence.vector_count())
             }
             _ => None,
@@ -18303,6 +18635,11 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         O::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         O::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
+        O::TirShardCourtAccused { .. } => "TirShardCourtAccused",
+        O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
+        O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
+        O::CourtTirDissected { .. } => "CourtTirDissected",
+        O::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
         O::ReporterCommitted { .. } => "ReporterCommitted",

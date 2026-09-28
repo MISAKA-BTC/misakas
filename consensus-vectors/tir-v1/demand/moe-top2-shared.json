@@ -6292,6 +6292,96 @@
         "max_terms": "18446744073709551615"
       },
       "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a node question (saying Operand)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "35"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "withhold": [
+        {
+          "node": {
+            "pos": "0",
+            "occurrence": "0",
+            "node": "5"
+          },
+          "raises": "Operand"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a param question (saying Position)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "withhold": [
+        {
+          "param": {
+            "param": "0",
+            "layer": null
+          },
+          "raises": "Position"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a token question (saying Position)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "withhold": [
+        {
+          "token": {
+            "pos": "0"
+          },
+          "raises": "Position"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
     }
   ]
 }

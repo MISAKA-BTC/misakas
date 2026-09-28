@@ -455,12 +455,24 @@ pub mod palw_step_refute;
 pub mod palw_tir_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
+/// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
+pub mod palw_tir_admission_v1;
+/// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).
+pub mod palw_tir_attempt_v1;
+/// RFC-0002 Phase F step F6: the IR family certifier — drill evidence graded by the shipped IR court into a family over the program's primitives.
+pub mod palw_tir_certify_v1;
 /// RFC-0002 Phase F step F2: an IR class — the program, its commitment layout, its identity and its registration carriage.
 pub mod palw_tir_class_v1;
 /// RFC-0002 Phase F step F5: the IR court — one committed leaf adjudicated by demand evaluation of its cone, PALW-TIR-33, logits consistency and the decode-token door.
 pub mod palw_tir_court_v1;
+/// RFC-0002 Phase F step F6: the IR one-move court — an IR claim accused at a named leaf and decided in one move.
+pub mod palw_tir_one_move_v1;
+/// RFC-0002 Phase F step F7: the generic history dissection of an IR class — every reduction over H of the disputed cone, folded exactly.
+pub mod palw_tir_dissect_v1;
 /// RFC-0002 Phase F step F4: the step space of an IR class — commit-point tiles, Fixed-state checkpoints and history tiles as step leaves, in closed form.
 pub mod palw_tir_step_v1;
+/// RFC-0002 Phase F step F8: an IR class's canonical work vector, classified and priced by structure alone.
+pub mod palw_tir_work_v1;
 pub mod palw_terminal;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in

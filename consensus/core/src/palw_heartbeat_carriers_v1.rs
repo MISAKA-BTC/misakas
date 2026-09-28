@@ -94,8 +94,13 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::CourtAttnRootClaimedHeld { .. }
         | O::CourtAttnDissected { .. }
         | O::CourtAttnChildChosen { .. } => true,
+        // RFC-0002 Phase F (F7, tags 64–66): the IR history dissection's moves, court moves like
+        // the ADR-0082 ones above.
+        O::CourtTirRootClaimed { .. } | O::CourtTirDissected { .. } | O::CourtTirChildChosen { .. } => true,
         // ADR-0152 §4-ter: the held dissection's opening and step 6's checkpoint conviction.
         O::ShardCourtAccused { .. } | O::CheckpointAccused { .. } => true,
+        // RFC-0002 Phase F (tag 62): the IR one-move accusation, a court opening like the one above.
+        O::TirShardCourtAccused { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }
@@ -109,6 +114,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::FreePromptCommitted { .. }
         | O::FamilyCertified { .. }
         | O::ClassLaneCertified { .. }
+        | O::ClassLaneCertifiedTirV1 { .. }
         | O::ObjectChunk { .. }
         | O::DerivedArtifactV1 { .. }
         | O::MaterialDisclosed { .. }
@@ -253,6 +259,7 @@ pub fn palw_h1_carrier_lane_key_v1(object: &PalwConsensusObjectV2) -> Option<Pal
         O::ReporterCommitted { reporter, .. } | O::ReporterRevealed { reporter, .. } => Some(PalwH1LaneKeyV1::Reporter(*reporter)),
         O::CourtOpened { claim, .. } => Some(PalwH1LaneKeyV1::CourtOpening(*claim)),
         O::ShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
+        O::TirShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
         O::CheckpointAccused { accusation } => Some(PalwH1LaneKeyV1::CheckpointConviction(accusation.claim)),
         _ => None,
     }

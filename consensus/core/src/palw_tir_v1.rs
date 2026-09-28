@@ -189,8 +189,13 @@ impl PalwTirFenceV1 {
 /// **The entry a testnet-12 flag-day list takes to arm the IR** — in NO list yet: the height is
 /// chosen at deployment, after the Phase F drill crosses it (design §4, D-F4). One line in a list
 /// arms it, through this `set`, exactly as the capacity entries wait for theirs.
-pub const PALW_T12_TIR_V1_ENTRY: PalwPostLaunchFenceV1 =
-    PalwPostLaunchFenceV1 { name: "palw_tir_v1", set: |params, at| params.palw_tir_v1 = at.map(PalwTirFenceV1::testnet12_v1) };
+pub const PALW_T12_TIR_V1_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_tir_v1",
+    set: |params, at| {
+        params.palw_tir_v1 = at.map(PalwTirFenceV1::testnet12_v1);
+        params.sync_palw_tir_v1();
+    },
+};
 
 impl Params {
     /// `palw_tir_v1`, resolved: `Some` only on a `ConsensusV2` network that armed it — the ONE place
@@ -206,6 +211,18 @@ impl Params {
         self.palw_tir_v1_fence().is_some_and(|f| f.activation.is_active(daa_score))
     }
 
+    /// **The IR fence's mirror** on the V2 bundle's state params (`PalwStateParamsV2::tir_from_daa`),
+    /// which the fold reads: below the height an assembled court close carrying an IR proof reads as
+    /// bytes that do not decode, as on an older build. Written here and nowhere else; `None` where the
+    /// fence is not armed (or is `never()`). Call it wherever the fence is set on an assembled
+    /// ruleset; [`Self::validate_palw_tir_v1`] refuses a ruleset whose copy disagrees.
+    pub fn sync_palw_tir_v1(&mut self) {
+        let from_daa = self.palw_tir_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+        if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_tir_from_daa(from_daa);
+        }
+    }
+
     /// **The IR fence's own refusals**, asked by [`Params::validate_palw_v2`] before a peer is dialed:
     ///
     /// * a value naming another build's `prim_set_id` or court version — a build adjudicates only
@@ -216,10 +233,22 @@ impl Params {
     ///   objects, and only under that declaration does an older build skip a payload it cannot
     ///   decode instead of failing the block (A-2, `palw_lifecycle_objects_v2`);
     /// * arming without `palw_kary_court` in force at or below it — an IR class's disputes include
-    ///   history dissections, which that court plays.
+    ///   history dissections, which that court plays;
+    /// * a V2 bundle whose mirror of the height (`PalwStateParamsV2::tir_from_daa`) is not the fence's.
     ///
     /// A `Some(never())` value is dormant and passes (it collapses out of the identity).
     pub fn validate_palw_tir_v1(&self) -> Result<(), PalwModeV2Error> {
+        let mirror = match &self.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) => bundle.state.tir_from_daa(),
+            _ => None,
+        };
+        let armed = self.palw_tir_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+        if mirror != armed {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_tir_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_tir_v1 after the bundle is \
+                 assembled",
+            ));
+        }
         let Some(fence) = self.palw_tir_v1 else { return Ok(()) };
         if fence.activation == ForkActivation::never() {
             return Ok(());
