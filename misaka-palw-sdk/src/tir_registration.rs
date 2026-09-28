@@ -178,7 +178,7 @@ pub fn tir_registration_preflight_v1(
         ));
     }
     crate::conformance::check_tir_entry_v1(TIR_LINEAGE_ID_V1, entry, &bundle.court)?;
-    if Some(entry.canonical_job) != misaka_palw_tir_exec::node::tir_attempt_canonical_v1(&entry.class) {
+    if Some(entry.canonical_job) != kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(&entry.class) {
         return Err(format!("{who}: the canonical job is not the formula's"));
     }
     Ok(())

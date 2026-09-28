@@ -455,6 +455,16 @@ fn an_honest_ir_claim_goes_final_and_a_false_accusation_is_defeated() {
         let backend = ir.backend();
         let s = registry_with(&ir);
         let claim = produce(&ir, 1, None);
+        // The producer's job is the chain's J5 context for the anchor (`palw_tir_attempt_v1`), drawn.
+        {
+            use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_context_v1};
+            let tir = ir.tir();
+            let facts = PalwTirJobFactsV1::of_class(tir.class(), ir.class_id).expect("the class decodes");
+            let canonical = (claim.job.declared_prefill_tokens, claim.job.exact_decode_tokens);
+            let expected = palw_tir_attempt_context_v1(&facts, &claim.job.job_id, canonical, claim.job.prompt_token_ids_hash);
+            let drawn = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(claim.job.clone(), true);
+            assert_eq!(drawn.context_hash(), expected.context_hash(), "tiled {tiled}: the producer's job is J5's");
+        }
         // The seats' two checks: the served capture answers for the claim, and their own replay
         // reproduces its roots.
         assert_eq!(backend.verify_material(&claim.material, claim.roots()), PalwMaterialVerdictV1::Matches);

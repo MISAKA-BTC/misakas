@@ -25,9 +25,7 @@ use kaspa_consensus_core::palw_tir_court_v1::{
 use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir::demand::DemandLimits;
 use misaka_palw_tir::interval::analyze_ranges;
-use misaka_palw_tir_exec::node::{
-    TirArtifactV1, TirBackendV1, TirCaptureV1, TirDrillCallV1, TirDrillUnitKindV1, tir_family_drill_v1, tir_job_context_v1,
-};
+use misaka_palw_tir_exec::node::{TirArtifactV1, TirBackendV1, TirCaptureV1, TirDrillCallV1, TirDrillUnitKindV1, tir_family_drill_v1};
 use node_common::{layout, programs, tiled};
 
 #[test]
@@ -60,7 +58,8 @@ fn the_drill_certifies_every_tiny_class() {
         let artifact = Arc::new(TirArtifactV1::open(&path).unwrap_or_else(|e| panic!("{name}: {e}")));
         let (root, _) = artifact.inventory_root().unwrap();
         let class = artifact.class().unwrap();
-        let canonical = tir_job_context_v1(&class, class.class_id(&root), 4, 3);
+        let canonical =
+            kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
         let backend =
             TirBackendV1::new(name.clone(), artifact, root, canonical, form, 1 << 26).unwrap_or_else(|e| panic!("{name}: {e}"));
         // The rules the court's IR arm grades under: its ladder, the prompt form, its work limits.

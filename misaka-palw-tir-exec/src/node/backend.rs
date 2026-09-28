@@ -1,9 +1,10 @@
 //! **The generic IR backend** (RFC-0002 Phase F, F9; design §2.10): one IR class, served through
 //! `PalwExecutionBackendV1` from a mapped PALWTIR1 artifact by the typed executor.
 //!
-//! * `job_for_anchor` — the IR twin of the model classes' `CoreV1` derivation
-//!   (`palw_attempt_job_for_anchor_v1`): the class's canonical context with the anchor's id and seed,
-//!   and the anchor's prompt ids over the program's `token_bound`, committed in the network's form.
+//! * `job_for_anchor` — the chain's own J5 derivation for an IR class
+//!   (`palw_tir_attempt_v1::palw_tir_attempt_job_for_anchor_of_v1` over the class's cached job
+//!   facts): the canonical context with the anchor's id and seed, and the anchor's prompt ids over
+//!   the program's `token_bound`, committed in the class's form.
 //! * `execute` — the job run into its step leg and roots ([`super::run`]); the material is a
 //!   [`TirCaptureV1`]: the binding, the prompt, the committed logits trace, and — within a byte cap —
 //!   every leaf preimage (a DENSE capture, which anyone holding it opens at any leaf, as the legacy
@@ -26,14 +27,15 @@ use std::sync::Arc;
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
-use kaspa_consensus_core::palw_attempt_rules_v1::{PalwAttemptRulesV1, palw_attempt_output_root_v1, palw_attempt_prompt_ids_v1};
+use kaspa_consensus_core::palw_attempt_rules_v1::{PalwAttemptRulesV1, palw_attempt_output_root_v1};
 use kaspa_consensus_core::palw_backend::{
     PalwCaptureShapeV1, PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1,
 };
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
-use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1, prompt_token_ids_match_v1};
+use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1};
 use kaspa_consensus_core::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1, step_merkle_root_capped_v1, step_tile_leaf_hash_v1};
 use kaspa_consensus_core::palw_step_refute::{PalwTiledDecodePinV1, tiled_logits_scheme_id_v1};
+use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_job_for_anchor_of_v1};
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirLogitsConsistencyV1};
 use kaspa_consensus_core::palw_tir_step_v1::{
@@ -83,67 +85,6 @@ impl TirCaptureV1 {
     }
 }
 
-/// **The canonical job `(prefill, decode)` of an IR class**: the model classes' `CoreV1` formula
-/// (`palw_attempt_canonical_v1`) over the layout's `max_context` — `(f − 1, 2)` with `f` =
-/// `palw_canonical_footprint_floor_v1(max_context)` — and `None` for a context too narrow for it.
-pub fn tir_attempt_canonical_v1(class: &PalwTirClassV1) -> Option<(u32, u32)> {
-    let floor =
-        u32::try_from(kaspa_consensus_core::palw_context_ladder::palw_canonical_footprint_floor_v1(class.layout.max_context)).ok()?;
-    (floor >= 2).then_some((floor - 1, 2))
-}
-
-/// **The context of an IR class's job `(prefill, decode)`**: the model classes' `rc_job_context`
-/// with the IR class id in the profile's place and the class's context bound — its identity
-/// discipline kept (network id `misaka-palw-rc`, tokenizer id zero: the class id already commits the
-/// tokenizer) — and the trace scheme its logits scheme pins (the flat scheme runs under the v2 trace
-/// id). Stand-in for consensus's `palw_tir_canonical_context_v1` (Phase F, F6 A).
-pub fn tir_job_context_v1(class: &PalwTirClassV1, class_id: Hash64, prefill: u32, decode: u32) -> PalwJobContextV2 {
-    let tiled = misaka_palw_tir::TirProgramV1::decode_canonical(&class.program)
-        .map(|p| Hash64::from_bytes(p.logits_scheme_id) == tiled_logits_scheme_id_v1())
-        .unwrap_or(false);
-    PalwJobContextV2 {
-        version: kaspa_consensus_core::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
-        network_id: b"misaka-palw-rc".to_vec(),
-        job_id: Hash64::default(),
-        job_nullifier: Hash64::default(),
-        assignment_id: Hash64::default(),
-        execution_seed: [0; 32],
-        model_profile_id: Hash64::default(),
-        runtime_manifest_hash: Hash64::default(),
-        runtime_class_id: Hash64::default(),
-        shape_profile_id: class_id,
-        trace_scheme_id: if tiled { tiled_logits_scheme_id_v1() } else { kaspa_consensus_core::palw_v2::trace_scheme_id_v2() },
-        cu_ruleset_id: Hash64::default(),
-        tokenizer_id: Hash64::default(),
-        prompt_token_ids_hash: Hash64::default(),
-        declared_prefill_tokens: prefill,
-        exact_decode_tokens: decode,
-        max_context_tokens: class.layout.max_context,
-    }
-}
-
-/// **The prompt form an IR class commits its prompt ids in**: the Merkle form for a program of the
-/// held history bound, the network's otherwise (the legacy `palw_prompt_ids_form_of_class_v1` rule).
-pub fn tir_class_prompt_ids_form_v1(program: &misaka_palw_tir::TirProgramV1, network: PalwPromptIdsFormV1) -> PalwPromptIdsFormV1 {
-    if program.history_bound == misaka_palw_tir::program::HISTORY_BOUND_V1_HELD { PalwPromptIdsFormV1::MerkleV1 } else { network }
-}
-
-/// **The job an anchor implies for an IR class** — the canonical context with the anchor's id and
-/// seed, and the anchor's prompt over `token_bound`, committed under `form`.
-pub fn tir_job_for_anchor_v1(
-    canonical: &PalwJobContextV2,
-    token_bound: u32,
-    anchor: &Hash64,
-    form: PalwPromptIdsFormV1,
-) -> Option<(PalwJobContextV2, Vec<u32>)> {
-    let prompt = palw_attempt_prompt_ids_v1(anchor, u64::from(token_bound), canonical.declared_prefill_tokens);
-    let mut ctx = canonical.clone();
-    ctx.job_id = *anchor;
-    ctx.execution_seed = anchor.as_byte_slice()[..32].try_into().expect("a 64-byte hash has 32 bytes");
-    ctx.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &prompt).ok()?;
-    Some((ctx, prompt))
-}
-
 /// One IR class served from a mapped artifact.
 pub struct TirBackendV1 {
     model_id: String,
@@ -153,6 +94,11 @@ pub struct TirBackendV1 {
     artifact_root: Hash64,
     class_id: Hash64,
     canonical: PalwJobContextV2,
+    /// What the class's attempt jobs are a function of (consensus's `PalwTirJobFactsV1`, cached).
+    facts: PalwTirJobFactsV1,
+    /// The network's prompt form; the class's own is `facts.prompt_ids_form(network_form)`.
+    network_form: PalwPromptIdsFormV1,
+    /// The form this class commits its prompt ids in.
     prompt_ids_form: PalwPromptIdsFormV1,
     /// The ruleset's `max_step_leaf_count` (the ladder every opening and root is capped at).
     ladder: u64,
@@ -178,8 +124,10 @@ impl TirBackendV1 {
     ) -> Result<Self, String> {
         let class = artifact.class()?;
         let space = PalwTirStepSpaceV1::new(&class).map_err(|e| e.to_string())?;
-        let prompt_ids_form = tir_class_prompt_ids_form_v1(&space.program, prompt_ids_form);
         let class_id = class.class_id(&artifact_root);
+        let facts = PalwTirJobFactsV1::of(&class, &space.program, class_id);
+        let network_form = prompt_ids_form;
+        let prompt_ids_form = facts.prompt_ids_form(network_form);
         if canonical.shape_profile_id != class_id {
             return Err("the canonical job names another class".into());
         }
@@ -192,6 +140,8 @@ impl TirBackendV1 {
             artifact_root,
             class_id,
             canonical,
+            facts,
+            network_form,
             prompt_ids_form,
             ladder,
             attempt_rules: PalwAttemptRulesV1::CoreV1,
@@ -507,7 +457,9 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
     }
 
     fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
-        let (ctx, prompt) = tir_job_for_anchor_v1(&self.canonical, self.space.program.token_bound, &anchor, self.prompt_ids_form)
+        // The chain's J5 derivation (`palw_tir_attempt_v1`), from the cached facts.
+        let canonical = (self.canonical.declared_prefill_tokens, self.canonical.exact_decode_tokens);
+        let (ctx, prompt) = palw_tir_attempt_job_for_anchor_of_v1(&self.facts, &anchor, canonical, self.network_form)
             .ok_or("the anchor's prompt does not commit")?;
         Ok((ctx, prompt.into_iter().map(|t| t as usize).collect()))
     }

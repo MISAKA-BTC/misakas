@@ -17,8 +17,9 @@ use std::sync::{Arc, RwLock};
 
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+use kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1;
 use kaspa_hashes::Hash64;
-use misaka_palw_tir_exec::node::{TirArtifactV1, tir_attempt_canonical_v1};
+use misaka_palw_tir_exec::node::TirArtifactV1;
 
 use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1};
 
@@ -55,7 +56,7 @@ impl TirLineageV1 {
             format!("{}: {e} — an IR class needs a declared layout (`palw-class check-architecture` derives one)", path.display())
         })?;
         let (artifact_root, _) = artifact.inventory_root().map_err(|e| format!("{}: {e}", path.display()))?;
-        let canonical_job = tir_attempt_canonical_v1(&class).ok_or_else(|| {
+        let canonical_job = palw_tir_attempt_canonical_v1(&class).ok_or_else(|| {
             format!("{}: a context of {} positions is too narrow for a canonical job", path.display(), class.layout.max_context)
         })?;
         Ok(PalwTirClassEntryV1 {
