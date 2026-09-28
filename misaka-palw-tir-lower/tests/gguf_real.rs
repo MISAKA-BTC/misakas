@@ -6,10 +6,11 @@
 //! ```
 //!
 //! Every tensor of the quantised file is dequantised by `crate::gguf` and compared with the same
-//! tensor of the F16 file. The errors are the quantisation's own: ≈ 3–4 % relative RMS for 4-bit
-//! blocks, ≈ 1 % for 6-bit, ≈ 0.2 % for 8-bit. A wrong nibble order, scale packing or block layout
-//! reads as noise (≈ 100 % and more). Tensors of more than 2^26 values (the embedding) are skipped
-//! to stay under the memory rule.
+//! tensor of the F16 file. The errors are the quantisation's own, halving with every bit: on
+//! Qwen3.5-2B-Q4_K_M (2026-09-29) `Q4_K` 7.5 % relative RMS (98 tensors, max 9.3 %), `Q5_K` 3.8 %,
+//! `Q6_K` 1.9 %, `Q8_0` 0.64 %. A wrong nibble order, scale packing or block layout reads as noise
+//! (≈ 100 % and more). Tensors of more than 2^26 values (the embedding) are skipped to stay under
+//! the memory rule.
 
 use misaka_palw_tir_lower::gguf::GgufFile;
 use std::collections::BTreeMap;

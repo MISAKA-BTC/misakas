@@ -947,7 +947,7 @@ are §2's estimates, adjusted for 2026 families not in that table.
     offline fixture;
   - GGUF and pre-quantised checkpoints: an importer, not a lowering.
 
-## 19. Pre-quantised checkpoints: GPTQ and AWQ (GGUF next)
+## 19. Pre-quantised checkpoints: GPTQ, AWQ and GGUF
 
 A GPTQ or AWQ checkpoint stores each projection as small integers. Every group of input columns
 has a scale and a zero point: `W[o, i] = s[g, o] · (q[i, o] − z[g, o])`. These projections are
@@ -1027,3 +1027,113 @@ checkpoint, through the W8 path.
 - Against the checkpoints: fp16 is 2 bytes a weight, a 4-bit GPTQ/AWQ file ≈ 0.52. The IR has no
   type narrower than `i8`, so a 4-bit code costs a byte: ≈ 0.5× the fp16 artifact, ≈ 2× the
   packed file.
+
+### 19.1 GGUF (llama.cpp)
+
+A GGUF file is read directly (`crate::gguf`), with no gguf package and no llama.cpp:
+- the header (v2/v3), its metadata and its tensor table, every count and length bounded before
+  anything is allocated;
+- each block format unpacked to its stored integers, with per-group scales, zero points and float
+  minimums, exactly.
+
+The projections then lower through the same `lower::qlinear` as GPTQ/AWQ. The float view is the
+exact value rounded once, which is what llama.cpp's `dequantize_row_*` computes.
+
+| type | group | `W = scale · (q − zero) − min` | program codes | offset term |
+| --- | --- | --- | --- | --- |
+| `Q8_0` | 32 | `d · q` (signed) | `q` | no |
+| `Q4_0`, `Q5_0` | 32 | `d · (q − 8)`, `d · (q − 16)` | `q − z` | no |
+| `Q4_1`, `Q5_1` | 32 | `d · q + m` | `q` | `c = −m` |
+| `Q4_K`, `Q5_K` | 32 | `d·sc · q − dmin·m` (6-bit `sc`, `m`) | `q` | `c = dmin·m` |
+| `Q6_K` | 16 | `d·sc · (q − 32)` (signed 8-bit `sc`) | `q − 32` | no |
+
+- **Per-layer types.** A Q4_K_M/Q5_K_M mix stores `attn_v` and `ffn_down` as Q6_K on llama.cpp's
+  `use_more_bits` layers and as the base type elsewhere. A module's program layout takes the finest
+  group over its layers (16) and an offset term if any layer's type has minimums. Every layer's
+  integers are placed in that layout, with nothing rounded.
+- **Outlier channels with an offset term** leave the main product through an input mask
+  (`qkeep`), because `a · 0 − c · x` would not vanish. They are added back exactly through `wo`.
+- **Embeddings.** A quantised `token_embd` is dequantised and stored as the table's per-row `i16`
+  codes. The re-coding error is ≤ 2^−16 of the row's absmax, about 2,000× finer than a 4-bit
+  step. An exact gathered form is possible but not built.
+
+**The Hugging Face view** (`GgufModel`). The metadata of `llama` (also Mistral, which converts to
+it), `qwen2`, `qwen3`, `gemma` and `gemma2` becomes the Hugging Face `config.json` of the same
+model. That config goes through `hf_config` as any other, so the lowering downstream is unchanged.
+- Every other `{arch}.*` key is refused, since it may change the math.
+- Llama-3's `rope_freqs.weight` becomes its `rope_scaling`, but only when it equals a known factor
+  set value by value.
+- Gemma-2's query scale follows llama.cpp: `1/√head_dim`, except the 27B's `1/√(hidden/heads)`.
+
+What llama.cpp's converter stores differently is undone exactly:
+- `llama`'s q/k rows are permuted `[heads, 2, d/2] → [heads, d/2, 2]` for its interleaved rotary;
+  the rows are taken back.
+- Gemma's RMSNorm gains are stored as `1 + w`, and the spec multiplies by the stored value.
+
+**Fixtures** (`tools/gen_gguf_fixtures.py`). Six tiny models are written to GGUF in numpy per the
+file format and `ggml-common.h`:
+- each block type has its own quantiser, checked against its decoder;
+- the reference is transformers (eager attention) with the weights decoded from the packed bytes by
+  an independent numpy decoder, llama's q/k rows permuted back.
+
+| fixture | types | float vs HF | int vs float: top-1, KL (twin) | end to end at 512: greedy (twin), TF KL (twin), worst close |
+| --- | --- | --- | --- | --- |
+| `gguf_llama_q4_k_m` | Q4_K + Q6_K mix, untied Q6_K head | 2.4e-6 | 1.000, 0 (1.000, 8e-5) | 36/36 (36/36), 2.2e-7 (7.7e-5), 116 KB |
+| `gguf_qwen3_q8_0` | Q8_0, q/k norms | 2.9e-6 | 1.000, 0 (0.972, 7e-5) | 36/36 (36/36), 2.2e-7 (6.7e-5), 105 KB |
+| `gguf_mistral_mix` | F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q4_K, Q8_0 | 2.4e-6 | 0.986, 2e-5 (0.986, 9e-5) | 36/36 (28/36), 2.3e-5 (8.8e-5), 109 KB |
+| `gguf_gemma2_q6_k` | Q6_K; soft-caps, sliding window, post norms | 1.8e-5 of 30 | 1.000, 0 | 36/36 (36/36), 1.1e-6 (2.7e-6), 98 KB |
+| `gguf_qwen2_q5_k_m`, `gguf_gemma_q4_0` | Q5_K + Q6_K; Q4_0 + Q8_0 (tied) | ≤ 4.6e-5 of logits ≈ 200 | 1.000, 0 | 36/36 each (saturated softmax), ≤ 146 KB |
+
+- **Admission.** All six are ADMISSIBLE at 512 on testnet-12 (the int-8 `palw-class`), and every
+  close fits.
+- **Checks.** Every GGUF tensor is read, and the mapped configs equal the configs the models were
+  built from. The reference evaluator, ref2 and exec agree byte for byte on all 17 pre-quantised
+  fixtures (`tests/three_way.rs`).
+- **Cost.** The layer block grows from 266 to 330–340 nodes (Llama-shaped; the 8-bit asymmetric
+  GPTQ case was 356).
+
+**A real file.** The decoders read a real llama.cpp file and match its F16 twin within the
+quantisation's own error (`tests/gguf_real.rs`, ignored; local files only):
+- the file is Qwen3.5-2B-Q4_K_M, the local copy under `~/Downloads/misaka-palw-runtime/models`,
+  compared with the F16 GGUF of the same model; nothing was copied from the hosts;
+- relative RMS error: `Q4_K` 7.5 %, `Q5_K` 3.8 %, `Q6_K` 1.9 %, `Q8_0` 0.64 %, halving with every
+  bit (a wrong layout reads as ≈ 100 %).
+
+Its `qwen35` architecture (hybrid Gated DeltaNet) has no GGUF mapping yet. With one, the hosts'
+copy of the same file is the later real-file test end to end.
+
+**Size**, in artifact bytes per projection weight against the packed file:
+
+| format | artifact | file | ratio | against fp16 |
+| --- | --- | --- | --- | --- |
+| `Q8_0` | 1.125 | 1.0625 | 1.06× | 0.56× |
+| `Q6_K` | 1.25 | 0.82 | 1.5× | 0.63× |
+| `Q5_K` | 1.25 | 0.69 | 1.8× | 0.63× |
+| `Q4_K` | 1.25 | 0.56 | 2.2× | 0.63× |
+| `Q4_0` | 1.125 | 0.56 | 2.0× | 0.56× |
+| GPTQ/AWQ 4-bit, g128 | 1.03 | 0.52 | 2.0× | 0.52× |
+
+- A code costs a byte: v1 has no `i4`. That is the v2 candidate recorded in freeze-v1 §8.
+- The per-group scales are `i32`, with the K-quants' minimums beside them. A two-level scale (fp16
+  `d` per 256, `i8` sub-scales) would cut 0.25 bytes to ≈ 0.07 with no dtype change: open lowering
+  work.
+- Whole artifacts are 1.06–1.15× the W8 twins' on the fixtures.
+
+### 19.2 The registrable share, with pre-quantised repositories counted
+
+The hub counts are §18's (2026-09-28). The GPTQ/AWQ repo count and the GGUF architecture mix are
+estimates, not measured.
+
+| population | repos | registrable | how |
+| --- | --- | --- | --- |
+| text-generation, float safetensors | 325,599 × 0.9 | ≈ 260 k | §18: covered architecture × not pre-quantised |
+| text-generation, GPTQ/AWQ safetensors | ≈ 20 k of the ≈ 33 k pre-quantised | ≈ 16 k | dense attention + MLP of a covered family (× 0.8); bitsandbytes, fp8, compressed-tensors, EXL2 and MLX are not read |
+| GGUF (`library=gguf`) | 207,184 | ≈ 120 k | `llama`/`qwen2`/`qwen3`/`gemma`/`gemma2` dense (≈ 0.6) × a Q8_0/Q6_K/Q5_K/Q4_K/Q4_0/Q5_0/Q4_1/Q5_1 file (≈ 0.97) |
+| **text generation in all** | | **≈ 395 k** | **≈ 12.7 % of all 3.10 M HF repos** (was 8.4 %) |
+| + RFC-0003 classes (§18) | | + ≈ 82 k | **≈ 477 k, ≈ 15.4 %** (was 11 %) |
+
+The largest pre-quantised gaps:
+- GGUF `gemma3`, `phi3`, `qwen35`/`qwen3moe`/`llama4`/`gpt-oss`, Mixtral-in-`llama` (experts) and
+  the IQ types;
+- bitsandbytes-4bit and MLX repos (both numerous);
+- quantised MoE experts in GPTQ/AWQ.
