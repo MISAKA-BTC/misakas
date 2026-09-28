@@ -7070,6 +7070,7 @@ impl VirtualStateProcessor {
     fn palw_v2_graded_vector_count(
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        tir_active: bool,
     ) -> Option<usize> {
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
         match object {
@@ -7091,7 +7092,9 @@ impl VirtualStateProcessor {
                     whole.extend_from_slice(parts.get(&i)?);
                 }
                 match borsh::from_slice::<Obj>(&whole) {
-                    Ok(Obj::FamilyCertified { evidence }) => Some(evidence.vector_count()),
+                    // RFC-0002 Phase F: an IR drill below `palw_tir_v1` does not decode on an older
+                    // build, so it is not graded (nor charged) here either.
+                    Ok(Obj::FamilyCertified { evidence }) if tir_active || !evidence.is_tir_v1() => Some(evidence.vector_count()),
                     _ => None,
                 }
             }
@@ -7443,8 +7446,14 @@ impl VirtualStateProcessor {
                         // Armed, and only here does anything touch the payload: the transition's
                         // own completion test, and the grading work the object it assembles to
                         // will cost.
-                        chunk_vectors =
-                            Self::palw_chunk_completes_a_certification_v1(pending.map(|p| &p.parts), *index, *count, bytes, group);
+                        chunk_vectors = Self::palw_chunk_completes_a_certification_v1(
+                            pending.map(|p| &p.parts),
+                            *index,
+                            *count,
+                            bytes,
+                            group,
+                            self.palw_tir_at(point.daa_score),
+                        );
                         chunk_vectors.is_some()
                     }
                 }
@@ -7474,7 +7483,8 @@ impl VirtualStateProcessor {
             // decides which objects a block accepts and therefore its state root — an upgraded and
             // an un-upgraded node must never answer that differently in silence. Dormant, the
             // count is skipped entirely and the predicate below is the one that shipped.
-            let graded_vectors = rent_armed.then(|| Self::palw_v2_graded_vector_count(&folded, &object)).flatten();
+            let graded_vectors =
+                rent_armed.then(|| Self::palw_v2_graded_vector_count(&folded, &object, self.palw_tir_at(point.daa_score))).flatten();
             // Which of the two fences answers depends on which is armed, and they compose in one
             // direction: `palw_chunk_completes_a_certification_v1` (D14) also demands the assembled
             // bytes hash to the declared group id, so anything it calls a completion
@@ -11199,6 +11209,13 @@ impl VirtualStateProcessor {
                 // the evidence by the court's grader, the class binding by the class's own profile
                 // hash and kernel coverage — and neither needs a signature, a bundle or a store.
                 Obj::FamilyCertified { .. } | Obj::ClassLaneCertified { .. } | Obj::ObjectChunk { .. } => {}
+                // RFC-0002 Phase F (tag 63): judged by the transition like the legacy lane object;
+                // below `palw_tir_v1` dropped by name (the acceptance walk drops it first).
+                Obj::ClassLaneCertifiedTirV1 { class_id, .. } => {
+                    if !self.palw_tir_at(point.daa_score) {
+                        return Err(format!("IR class {class_id}'s lane certification is refused: palw_tir_v1 is not in force"));
+                    }
+                }
                 // **ADR-0078: a derivation is authorised by the key it declares, on this chain.**
                 // The ride list proved a signature is present and the shape is the object's; here
                 // the signature is verified under the declared executor key, over the object's own
@@ -12746,6 +12763,7 @@ impl VirtualStateProcessor {
         count: u8,
         bytes: &[u8],
         group: &kaspa_consensus_core::Hash64,
+        tir_active: bool,
     ) -> Option<usize> {
         let mut whole: Vec<u8> = Vec::new();
         for i in 0..count {
@@ -12760,7 +12778,11 @@ impl VirtualStateProcessor {
             return None;
         }
         match borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&whole) {
-            Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { evidence }) => {
+            // RFC-0002 Phase F: below `palw_tir_v1` an IR drill is bytes an older build cannot decode,
+            // so it is none here either — it is graded, and charged, only past the fence.
+            Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { evidence })
+                if tir_active || !evidence.is_tir_v1() =>
+            {
                 Some(evidence.vector_count())
             }
             _ => None,
@@ -18493,6 +18515,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         O::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         O::TirShardCourtAccused { .. } => "TirShardCourtAccused",
+        O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
         O::ReporterCommitted { .. } => "ReporterCommitted",

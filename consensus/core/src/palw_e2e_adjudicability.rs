@@ -506,6 +506,14 @@ pub fn certify_e2e_family_v1(evidence: &PalwE2eDrillEvidenceV1) -> Result<PalwE2
     Ok(PalwE2eCertificateV1 { family, family_digest, _sealed: () })
 }
 
+/// **The seal, for a sibling grader in this crate** (RFC-0002 Phase F's IR certifier,
+/// `palw_tir_certify_v1`): a certificate is minted only by a function that re-ran the shipped
+/// court over drill evidence, so the constructor is crate-private and its only callers are graders.
+pub(crate) fn palw_e2e_certificate_sealed_v1(family: PalwE2eFamilyV1) -> PalwE2eCertificateV1 {
+    let family_digest = family.digest();
+    PalwE2eCertificateV1 { family, family_digest, _sealed: () }
+}
+
 /// Which table a global node slot belongs to — the inverse of the `pre ‖ layers ‖ post` walk
 /// `canonical_step_coordinates` enumerates in.
 ///

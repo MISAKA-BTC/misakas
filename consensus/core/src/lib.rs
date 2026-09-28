@@ -459,6 +459,8 @@ pub mod palw_tir_artifact_v1;
 pub mod palw_tir_admission_v1;
 /// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).
 pub mod palw_tir_attempt_v1;
+/// RFC-0002 Phase F step F6: the IR family certifier — drill evidence graded by the shipped IR court into a family over the program's primitives.
+pub mod palw_tir_certify_v1;
 /// RFC-0002 Phase F step F2: an IR class — the program, its commitment layout, its identity and its registration carriage.
 pub mod palw_tir_class_v1;
 /// RFC-0002 Phase F step F5: the IR court — one committed leaf adjudicated by demand evaluation of its cone, PALW-TIR-33, logits consistency and the decode-token door.

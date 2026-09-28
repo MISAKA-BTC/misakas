@@ -12226,6 +12226,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         PalwConsensusObjectV2::TirShardCourtAccused { .. } => "TirShardCourtAccused",
+        PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         PalwConsensusObjectV2::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared; the chain drops each until its owner lands it, and no
         // path in this node builds one yet.
