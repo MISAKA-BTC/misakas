@@ -92,6 +92,10 @@ pub struct PalwTirAdmissionRulesV1 {
     pub held: PalwHeldAdmissionV1,
     /// `Params::palw_prompt_ids_form_at` at the block.
     pub prompt_ids_form: PalwPromptIdsFormV1,
+    /// **The k-ary court at the block** (`Params::palw_kary_court`, the arity the ruleset derives,
+    /// its window): `None` where it is not armed. A cone that reduces over the history is dissected
+    /// only under it (spec 04b §9.5, RFC-0002 F7); without it such a cone must fit the court whole.
+    pub court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
 }
 
 impl PalwTirAdmissionRulesV1 {
@@ -99,13 +103,26 @@ impl PalwTirAdmissionRulesV1 {
     /// is then dropped by name, as an older build skips it).
     pub fn at(params: &crate::config::params::Params, daa_score: u64) -> Option<Self> {
         let fence = params.palw_tir_v1_fence().filter(|f| f.activation.is_active(daa_score))?;
+        let held_armed = params.palw_held_context_active_at(daa_score);
+        // The court the acceptance path resolves (`palw_court_params_at`), as the legacy shape reads
+        // it (`palw_admission_shape_at_v1`): held, its arity is derived with no leaf ladder.
+        let court = match &params.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) if params.palw_kary_court_active_at(daa_score) => {
+                crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, held_armed).ok().map(|derived| {
+                    crate::palw_class_admission_v2::PalwKaryCourtV1 {
+                        dissection_arity: derived.dissection_arity(),
+                        prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
+                        window_court_daa: bundle.state.window_court(),
+                    }
+                })
+            }
+            _ => None,
+        };
         Some(Self {
             fence,
-            held: PalwHeldAdmissionV1 {
-                armed: params.palw_held_context_active_at(daa_score),
-                panel_da: params.palw_panel_da_at(daa_score),
-            },
+            held: PalwHeldAdmissionV1 { armed: held_armed, panel_da: params.palw_panel_da_at(daa_score) },
             prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
+            court,
         })
     }
 }
@@ -127,6 +144,12 @@ pub struct PalwTirClassRecordV1 {
     pub logits_vocab: u32,
     /// The program's canonical bytes, counted (what every IR close carries).
     pub program_bytes: u32,
+    /// **The dissected commit points** (spec 04b §9.5.1), `(block, node)` in block then node order:
+    /// the commit points whose cone reduces over `H`
+    /// ([`crate::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1`]). A class with any owes
+    /// the terminal move of its court (`PalwClassStateV2::fused_attention`): a root claim at a
+    /// dissected leaf, an acquitting close at any other.
+    pub dissected: Vec<(u8, u16)>,
 }
 
 impl PalwTirClassRecordV1 {
@@ -142,6 +165,7 @@ impl PalwTirClassRecordV1 {
             prim_set_id: crate::palw_tir_v1::palw_tir_prim_set_id_v1(),
             logits_vocab: 8,
             program_bytes: 1,
+            dissected: Vec::new(),
         }
     }
 
@@ -176,6 +200,7 @@ pub fn palw_tir_class_record_v1(
         prim_set_id: Hash64::from_bytes(program.prim_set_id),
         logits_vocab: u32::try_from(logits_vocab).unwrap_or(u32::MAX),
         program_bytes: u32::try_from(class.program.len()).unwrap_or(u32::MAX),
+        dissected: crate::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&program),
     };
     Ok((record, program))
 }
@@ -186,6 +211,72 @@ fn tir_program_error(e: misaka_palw_tir::TirError) -> PalwClassAdmissionError {
 
 fn exceeds(what: &'static str, got: u64, ceiling: u64) -> Result<(), PalwClassAdmissionError> {
     if got > ceiling { Err(PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling }) } else { Ok(()) }
+}
+
+/// **What one lifecycle object may weigh on the wire**: every dissection move rides one carrier (only
+/// a `FamilyCertified` rides in chunks), whose payload is at most one object chunk.
+pub const PALW_TIR_DISSECT_CARRIER_BYTES_V1: u64 = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
+
+/// **The object frame of a dissection move beside its payload**: the variant tag, the session id,
+/// the arity or round, and the mover's ML-DSA-87 signature (4,627 bytes) with its length prefix.
+pub const PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1: u64 = 1 + 64 + 4 + 4 + 4_627 + 64;
+
+/// **Admission's part of the history dissection, for one dissected cone** (spec 04b §9.5.6):
+///
+/// * O-1 to O-3 ([`crate::palw_tir_dissect_v1::palw_tir_dissect_obligations_v1`]);
+/// * the claim's values, bounded by the box demand at `H = 1`
+///   ([`crate::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1`]), within the claim cap;
+/// * a round at the court's arity fits one carrier, and so does the root claim — the program, the
+///   close frame, the chunk's opened operands (what the finalize and its probes read, bounded by one
+///   chunk) and the claim — both NECESSARY conditions, as the close check is;
+/// * O-5: the whole exchange inside `window_court` at the court's arity, on the network's clock
+///   (the held clock opens at the accusation's leaf: no ladder rounds), over `max_context` positions
+///   in `h_tile` tiles — the legacy fused row's window rule applied to this site.
+#[allow(clippy::too_many_arguments)]
+fn palw_tir_dissected_cone_admits_v1(
+    bundle: &PalwConsensusParamsV2,
+    rules: &PalwTirAdmissionRulesV1,
+    class: &PalwTirClassV1,
+    block: &misaka_palw_tir::program::Block,
+    bi: u8,
+    ni: u16,
+    tile_len: u32,
+    cone: &misaka_palw_tir::admit::ConeV1,
+    k: crate::palw_class_admission_v2::PalwKaryCourtV1,
+) -> Result<(), PalwClassAdmissionError> {
+    use crate::palw_tir_dissect_v1 as d;
+    let refused = |why: String| PalwClassAdmissionError::TirDissection { block: bi, node: ni, why };
+    d::palw_tir_dissect_obligations_v1(block, ni).map_err(|e| refused(e.to_string()))?;
+    let reductions = d::palw_tir_cone_reductions_v1(block, ni).len();
+    let values = d::palw_tir_dissect_value_bound_v1(block, ni, tile_len);
+    if values > d::PALW_TIR_DISSECT_MAX_VALUES as u64 {
+        return Err(refused(format!("a claim may carry {values} values; at most {}", d::PALW_TIR_DISSECT_MAX_VALUES)));
+    }
+    let round = d::palw_tir_dissect_round_bytes_v1(k.dissection_arity, reductions, values).saturating_add(PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1);
+    exceeds("IR dissection round bytes", round, PALW_TIR_DISSECT_CARRIER_BYTES_V1)?;
+    let root = (class.program.len() as u64)
+        .saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1)
+        .saturating_add(cone.terminal_opened_bytes())
+        .saturating_add(values.saturating_mul(20))
+        .saturating_add(PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1);
+    exceeds("IR dissection root claim bytes", root, PALW_TIR_DISSECT_CARRIER_BYTES_V1)?;
+    let played = bundle
+        .court
+        .with_dissection_arity(k.dissection_arity)
+        .map_err(|e| refused(format!("the court's dissection arity is not legal: {e}")))?;
+    let history = class.layout.max_context as u64;
+    let tile = class.layout.h_tile.max(1);
+    let admits = if rules.held.armed {
+        crate::palw_attn_court_v1::palw_attn_court_admits_row_held_v1(&played, history, tile, k.window_court_daa)
+    } else {
+        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa)
+    };
+    admits.map(|_| ()).map_err(|e| match e {
+        crate::palw_attn_court_v1::PalwAttnCourtError::OverrunsWindow { moves, deadline, reserve, window_court } => {
+            PalwClassAdmissionError::CourtWindowTooShort { needed: moves.saturating_mul(deadline).saturating_add(reserve), window: window_court }
+        }
+        _ => PalwClassAdmissionError::CourtWindowTooShort { needed: u64::MAX, window: k.window_court_daa },
+    })
 }
 
 /// **Admission v10: may this IR class registration join?** Returns the catalog entry and the
@@ -307,15 +398,25 @@ pub fn verify_class_admission_v10(
                 .iter()
                 .find(|c| c.block as usize == bi && c.node as usize == ni)
                 .expect("tir_admit_v1 costs every commit point");
+            // **A cone that reduces over the history is DISSECTED under the k-ary court** (spec 04b
+            // §9.5, RFC-0002 F7): its terminal is one `h_tile` chunk (`cone.terminal()`), and what
+            // admission owes the court is that the exchange can be played — the obligations of
+            // §9.5.6, a round and a root claim that each fit one carrier, the whole dispute inside
+            // `window_court`. Without the court nothing dissects, so such a cone is adjudicated whole
+            // and its tile at `H = W` must fit like any other.
+            let dissected = !cone.h_reductions.is_empty() && rules.court.is_some();
             if !cone.h_reductions.is_empty() {
-                // Until F7's dissection is wired, a history-reducing cone is adjudicated whole: its
-                // tile at H = W must fit the court like any other.
-                let whole = cone.tile.macs.saturating_add(cone.tile.elementwise).saturating_add(cone.tile.transcendentals);
-                if cone.tile.macs > bundle.court.max_terminal_macs() || whole > work_limit {
-                    return Err(PalwClassAdmissionError::TirNeedsDissection { block: bi as u8, node: ni as u16 });
+                match rules.court {
+                    None => {
+                        let whole = cone.tile.macs.saturating_add(cone.tile.elementwise).saturating_add(cone.tile.transcendentals);
+                        if cone.tile.macs > bundle.court.max_terminal_macs() || whole > work_limit {
+                            return Err(PalwClassAdmissionError::TirNeedsDissection { block: bi as u8, node: ni as u16 });
+                        }
+                    }
+                    Some(k) => palw_tir_dissected_cone_admits_v1(bundle, rules, class, block, bi as u8, ni as u16, tile_len, cone, k)?,
                 }
             }
-            let tile = &cone.tile;
+            let (tile, opened) = if dissected { (cone.terminal(), cone.terminal_opened_bytes()) } else { (&cone.tile, cone.tile_opened_bytes) };
             exceeds("IR tile multiply-accumulates", tile.macs, bundle.court.max_terminal_macs())?;
             let mut work = tile.macs.saturating_add(tile.elementwise).saturating_add(tile.transcendentals);
             for leaf in &cone.leaves {
@@ -328,8 +429,7 @@ pub fn verify_class_admission_v10(
                 }
             }
             exceeds("IR cone evaluation work (tile and state replay)", work, work_limit)?;
-            let close =
-                (class.program.len() as u64).saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1).saturating_add(cone.tile_opened_bytes);
+            let close = (class.program.len() as u64).saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1).saturating_add(opened);
             exceeds("IR close bytes", close, bundle.court.max_close_bytes())?;
             worst_close = worst_close.max(close);
             worst_macs = worst_macs.max(tile.macs);

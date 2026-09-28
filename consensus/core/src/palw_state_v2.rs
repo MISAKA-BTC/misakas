@@ -30701,9 +30701,11 @@ fn apply_object(
         // refuses it below). Admission v10 ran at acceptance (ADR-0049 Decision H: no graph walk
         // inside the transition); the fold derives what it keeps from the carried class — the
         // `tir_classes` row by the one function v10 derives it with, and the registry work from the
-        // program — and folds the rest through the legacy registration's own body. An IR class owes
-        // no root claim until the history dissection is wired (v10 admits no dissected commit point)
-        // and records no held ladder (v10 admits no held program).
+        // program — and folds the rest through the legacy registration's own body. A class with a
+        // dissected commit point (spec 04b §9.5.1: a cone that reduces over the history) owes its
+        // court's terminal move — a root claim at a dissected leaf, an acquitting close at any other
+        // — exactly as a legacy fused class does (`fused_attention`, ADR-0082 C-5; RFC-0002 F7). It
+        // records no held ladder (v10 admits no held program).
         PalwConsensusObjectV2::ClassRegisteredTirV1 {
             class_id,
             artifact_root,
@@ -30733,7 +30735,7 @@ fn apply_object(
                     share_permille,
                     activation_daa,
                     registrant: Some(admission.registrant_bond),
-                    fused_attention: false,
+                    fused_attention: !record.dissected.is_empty(),
                     held: false,
                     work: Some(&work),
                 },

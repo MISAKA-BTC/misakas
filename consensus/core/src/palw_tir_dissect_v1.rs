@@ -272,6 +272,70 @@ pub fn palw_tir_dissect_obligations_v1(block: &Block, node: u16) -> Result<(), P
     Ok(())
 }
 
+/// **An upper bound on the values one claim of a dissected tile of commit point `node` carries** —
+/// `Σ_i |L_i|` of spec 04b §9.5.3 — by the box demand of §10.3 at `H = 1`: the tile's `tile_len`
+/// elements demand, for the cone's computed nodes in descending index order, `d · K` of each
+/// `MatMul` operand, `d · x.shape[axis]` of a reduction's, `⌈d / k⌉ · x.shape[axis]` of a `TopK`'s and
+/// `d` of every other operand (each capped at the operand's element count), and a reduction over
+/// `H` passes on exactly what its one-history-index probe reads. The bound is the sum over the
+/// cone's reductions of the demand arriving at each (capped at its element count): the finalize and
+/// the probes read at most that many of its elements, whatever the values (a count, not a set, so a
+/// value-chosen read in the `H`-free region is bounded too). What admission sizes a round, a root
+/// claim and the value cap against.
+pub fn palw_tir_dissect_value_bound_v1(block: &Block, node: u16, tile_len: u32) -> u64 {
+    let computed = palw_tir_cone_computed_v1(block, node);
+    let n = block.nodes.len();
+    if node as usize >= n {
+        return 0;
+    }
+    let count = |i: usize| block.nodes[i].out.elements_at(1);
+    let mut demand = vec![0u64; n];
+    demand[node as usize] = (tile_len as u64).min(count(node as usize));
+    let operand_shape = |r: &Ref| -> Option<Vec<usize>> {
+        match r {
+            Ref::Node(j) => block.nodes.get(*j as usize).map(|m| m.out.resolve(1)),
+            Ref::CarryIn(k) => block.carry_in.get(*k as usize).map(|t| t.resolve(1)),
+            _ => None,
+        }
+    };
+    for i in (0..n).rev() {
+        let d = demand[i];
+        if d == 0 || !computed[i] {
+            continue;
+        }
+        let nd = &block.nodes[i];
+        let first = nd.inputs.first().and_then(|r| operand_shape(r));
+        let per_operand = match nd.prim {
+            Prim::MatMul => d.saturating_mul(first.as_ref().and_then(|s| s.last()).copied().unwrap_or(1) as u64),
+            Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => {
+                d.saturating_mul(first.as_ref().and_then(|s| s.get(axis as usize)).copied().unwrap_or(1) as u64)
+            }
+            Prim::TopK { axis, k } => d
+                .div_ceil(k.max(1) as u64)
+                .saturating_mul(first.as_ref().and_then(|s| s.get(axis as usize)).copied().unwrap_or(1) as u64),
+            _ => d,
+        };
+        for r in &nd.inputs {
+            if let Ref::Node(j) = r
+                && computed[*j as usize]
+            {
+                let j = *j as usize;
+                demand[j] = demand[j].saturating_add(per_operand).min(count(j));
+            }
+        }
+    }
+    (0..n).filter(|i| computed[*i] && reduces_over_h_v1(block, *i as u16)).map(|i| demand[i].min(count(i))).sum()
+}
+
+/// **The bytes one round of a dissection weighs on the wire** at arity `arity`, each child claiming
+/// `values` values — the borsh encoding of [`PalwTirDissectRoundV1`] with `arity` children of one
+/// claim each, every reduction's list prefixed (`reductions` of them): what admission compares with
+/// one carrier.
+pub fn palw_tir_dissect_round_bytes_v1(arity: u8, reductions: usize, values: u64) -> u64 {
+    let child = 4u64.saturating_add(4u64.saturating_mul(reductions as u64)).saturating_add(values.saturating_mul(16));
+    2u64.saturating_add(4).saturating_add((arity as u64).saturating_mul(child))
+}
+
 /// **The site of a commit leaf, if its cone reduces over `H`** (`None` otherwise: the leaf is closed
 /// by a cone close, not dissected).
 pub fn palw_tir_dissect_site_v1(

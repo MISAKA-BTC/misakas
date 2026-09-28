@@ -11164,6 +11164,22 @@ impl VirtualStateProcessor {
                     // program and derives the primitives the share rule reads.
                     self.palw_v2_class_registration_starts_at_the_chains_target(state, object)?;
                     self.palw_v2_class_registration_is_signed(state, object)?;
+                    // RFC-0002 F7: the k-ary court at this block, resolved as the legacy arm resolves
+                    // it — a cone that reduces over the history is dissected only under it.
+                    let court = match self.palw_kary_court_active_at(point.daa_score) {
+                        false => None,
+                        true => {
+                            let derived = self
+                                .palw_court_params_at(point.daa_score)
+                                .ok_or_else(|| format!("IR class {class_id} is registered on a chain with no V2 ruleset"))?
+                                .map_err(|e| format!("IR class {class_id} is judged under a court with no shape: {e}"))?;
+                            Some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+                                dissection_arity: derived.dissection_arity(),
+                                prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
+                                window_court_daa: bundle.state.window_court(),
+                            })
+                        }
+                    };
                     let rules = kaspa_consensus_core::palw_tir_admission_v1::PalwTirAdmissionRulesV1 {
                         fence: self.palw_tir_v1.expect("palw_tir_at said the fence is in force"),
                         held: kaspa_consensus_core::palw_class_admission_v2::PalwHeldAdmissionV1 {
@@ -11171,6 +11187,7 @@ impl VirtualStateProcessor {
                             panel_da: self.palw_panel_da_at(point.daa_score),
                         },
                         prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
+                        court,
                     };
                     // The network's committed certified families and the chain's own, as the legacy
                     // arm reads them (consensus never reads the drilled registry).
