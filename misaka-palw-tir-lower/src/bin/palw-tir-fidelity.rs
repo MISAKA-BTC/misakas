@@ -49,9 +49,16 @@ struct Args {
     /// Write the per-site calibration statistics (JSON).
     #[arg(long)]
     stats_out: Option<PathBuf>,
+    /// Read calibration statistics written by `--stats-out` instead of calibrating (they must
+    /// come from the same checkpoint and calibration set).
+    #[arg(long, conflicts_with = "stats_out")]
+    stats_in: Option<PathBuf>,
     /// Headroom of i16 codes over the calibrated absmax.
     #[arg(long, default_value_t = 2.0)]
     headroom16: f64,
+    /// Stop after calibration (with `--stats-out`, a statistics dump).
+    #[arg(long)]
+    calibrate_only: bool,
     /// Print the result as JSON.
     #[arg(long)]
     json: bool,
@@ -108,10 +115,21 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             eprintln!("[{:>7.1}s]   {what} {d}/{n}", t0.elapsed().as_secs_f64());
         }
     };
-    log(format!("calibrating on {} sequences, {} positions", calib.len(), calib.iter().map(Vec::len).sum::<usize>()));
-    let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &progress("calibration")).map_err(|e| e.to_string())?;
+    let stats = match &a.stats_in {
+        Some(p) => {
+            log(format!("calibration statistics from {}", p.display()));
+            serde_json::from_slice(&std::fs::read(p).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?
+        }
+        None => {
+            log(format!("calibrating on {} sequences, {} positions", calib.len(), calib.iter().map(Vec::len).sum::<usize>()));
+            fidelity::calibrate(&prep.hl, &loader, &calib, &progress("calibration")).map_err(|e| e.to_string())?
+        }
+    };
     if let Some(p) = &a.stats_out {
         std::fs::write(p, serde_json::to_vec_pretty(&stats).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    if a.calibrate_only {
+        return Ok(serde_json::json!({ "architecture": prep.spec.architecture, "sites": stats.len(), "metrics": {} }));
     }
     let policy = QuantPolicy { headroom16: a.headroom16, ..QuantPolicy::default() };
     log("materialising the integer artifact".into());

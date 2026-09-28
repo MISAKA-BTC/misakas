@@ -114,11 +114,19 @@ fn sample(rng: &mut ChaCha8Rng, init: Init) -> f32 {
 }
 
 /// Activation statistics of one site over a run (what calibration reads).
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SiteStat {
     pub absmax: f64,
     pub sum_sq: f64,
     pub count: u64,
+    /// Absmax at position 0 alone, and over every later position: a first-token "sink" with
+    /// massive activations shows up as `pos0_absmax ≫ rest_absmax`.
+    pub pos0_absmax: f64,
+    pub rest_absmax: f64,
+    /// Per-channel absmax, when every observation of the site had the same length (empty for
+    /// ragged sites such as attention scores over a growing history).
+    pub chan_absmax: Vec<f32>,
+    pub ragged: bool,
 }
 
 impl SiteStat {
@@ -126,15 +134,47 @@ impl SiteStat {
     pub fn merge(&mut self, o: &SiteStat) {
         self.absmax = self.absmax.max(o.absmax);
         self.sum_sq += o.sum_sq;
+        self.pos0_absmax = self.pos0_absmax.max(o.pos0_absmax);
+        self.rest_absmax = self.rest_absmax.max(o.rest_absmax);
+        if self.count == 0 {
+            self.chan_absmax = o.chan_absmax.clone();
+            self.ragged = o.ragged;
+        } else if o.count > 0 {
+            if self.ragged || o.ragged || self.chan_absmax.len() != o.chan_absmax.len() {
+                self.ragged = true;
+                self.chan_absmax.clear();
+            } else {
+                for (a, b) in self.chan_absmax.iter_mut().zip(&o.chan_absmax) {
+                    *a = a.max(*b);
+                }
+            }
+        }
         self.count += o.count;
     }
-    fn observe(&mut self, v: &[f32]) {
+    fn observe(&mut self, v: &[f32], pos: usize) {
+        let mut row = 0f64;
         for x in v {
             let a = (*x as f64).abs();
-            if a > self.absmax {
-                self.absmax = a;
-            }
+            row = row.max(a);
             self.sum_sq += a * a;
+        }
+        self.absmax = self.absmax.max(row);
+        if pos == 0 {
+            self.pos0_absmax = self.pos0_absmax.max(row);
+        } else {
+            self.rest_absmax = self.rest_absmax.max(row);
+        }
+        if self.count == 0 {
+            self.chan_absmax = v.iter().map(|x| x.abs()).collect();
+        } else if !self.ragged {
+            if self.chan_absmax.len() == v.len() {
+                for (a, x) in self.chan_absmax.iter_mut().zip(v) {
+                    *a = a.max(x.abs());
+                }
+            } else {
+                self.ragged = true;
+                self.chan_absmax.clear();
+            }
         }
         self.count += v.len() as u64;
     }
@@ -224,14 +264,14 @@ impl<'a> Session<'a> {
             // The block's inputs get a site of their own (`carry0`, …): a lowering that needs the
             // residual stream at code resolution reads its range here.
             for (k, c) in carries.iter().enumerate() {
-                stats.entry(format!("{prefix}carry{k}")).or_default().observe(c);
+                stats.entry(format!("{prefix}carry{k}")).or_default().observe(c, self.pos);
             }
         }
         let mut vals: Vec<Vec<Vec<f32>>> = Vec::with_capacity(block.nodes.len());
         for node in &block.nodes {
             let out = self.eval_node(node, &vals, carries, layer, token, &prefix)?;
             if let (Some(site), Some(stats)) = (&node.site, self.sites.as_mut()) {
-                stats.entry(format!("{prefix}{site}")).or_default().observe(&out[0]);
+                stats.entry(format!("{prefix}{site}")).or_default().observe(&out[0], self.pos);
             }
             vals.push(out);
         }
@@ -240,7 +280,7 @@ impl<'a> Session<'a> {
 
     fn sub_site(&mut self, prefix: &str, site: &Option<String>, sub: &str, v: &[f32]) {
         if let (Some(s), Some(stats)) = (site, self.sites.as_mut()) {
-            stats.entry(format!("{prefix}{s}.{sub}")).or_default().observe(v);
+            stats.entry(format!("{prefix}{s}.{sub}")).or_default().observe(v, self.pos);
         }
     }
 

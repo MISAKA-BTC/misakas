@@ -34,9 +34,14 @@ pub enum IntData {
     I16(Vec<i16>),
     I32(Vec<i32>),
     I64(Vec<i64>),
+    /// `idx` (unsigned 32-bit) — selection indices.
+    Idx(Vec<u32>),
 }
 
 impl IntTensor {
+    pub fn idx(shape: Vec<usize>, v: Vec<u32>) -> Self {
+        Self { dtype: DType::Idx, shape, data: IntData::Idx(v) }
+    }
     pub fn i8(shape: Vec<usize>, v: Vec<i8>) -> Self {
         Self { dtype: DType::I8, shape, data: IntData::I8(v) }
     }
@@ -55,6 +60,7 @@ impl IntTensor {
             IntData::I16(v) => v.len(),
             IntData::I32(v) => v.len(),
             IntData::I64(v) => v.len(),
+            IntData::Idx(v) => v.len(),
         }
     }
     pub fn is_empty(&self) -> bool {
@@ -67,6 +73,7 @@ impl IntTensor {
             IntData::I16(v) => v[i] as i64,
             IntData::I32(v) => v[i] as i64,
             IntData::I64(v) => v[i],
+            IntData::Idx(v) => v[i] as i64,
         }
     }
     /// The evaluator's tensor (every element widened to `i128`).
@@ -76,6 +83,7 @@ impl IntTensor {
             IntData::I16(v) => v.iter().map(|x| *x as i128).collect(),
             IntData::I32(v) => v.iter().map(|x| *x as i128).collect(),
             IntData::I64(v) => v.iter().map(|x| *x as i128).collect(),
+            IntData::Idx(v) => v.iter().map(|x| *x as i128).collect(),
         };
         tir::Tensor { dtype: self.dtype, shape: self.shape.clone(), data }
     }
@@ -86,6 +94,7 @@ impl IntTensor {
             IntData::I16(v) => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
             IntData::I32(v) => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
             IntData::I64(v) => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+            IntData::Idx(v) => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
         }
     }
     /// The inverse of [`Self::le_bytes`].
@@ -100,6 +109,7 @@ impl IntTensor {
             DType::I16 => Self::i16(shape, b.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect()),
             DType::I32 => Self::i32(shape, b.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().expect("4"))).collect()),
             DType::I64 => Self::i64(shape, b.chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().expect("8"))).collect()),
+            DType::Idx => Self::idx(shape, b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().expect("4"))).collect()),
             other => return Err(LowerError::bad(format!("no artifact tensors of {}", other.name()))),
         })
     }
@@ -135,6 +145,7 @@ pub struct FillCtx<'a> {
     pub resid: f64,
     pub policy: &'a QuantPolicy,
     memo: Mutex<BTreeMap<u32, Arc<RowCodes>>>,
+    split_memo: Mutex<BTreeMap<String, Arc<SplitCodes>>>,
 }
 
 impl FillCtx<'_> {
@@ -149,16 +160,23 @@ impl FillCtx<'_> {
         self.stats.get(&k).map(|s| s.absmax).ok_or_else(|| LowerError::eval(format!("calibration has no statistics for `{k}`")))
     }
 
-    /// The float value of one integer unit under `key`, in this occurrence.
+    /// The float value of one integer unit under `key`, in this occurrence. For a split key this is
+    /// the scale every non-outlier channel shares.
     pub fn scale(&self, key: &ScaleKey) -> Result<f64> {
         let base = match &key.base {
             Base::Resid => self.resid,
             Base::Q24 => 1.0 / (1u64 << 24) as f64,
-            Base::Site { names, wide } => {
-                let mut a = 0f64;
-                for n in names {
-                    a = a.max(self.absmax(n)?);
-                }
+            Base::Site { names, wide, split } => {
+                let a = if *split == 0 {
+                    let mut a = 0f64;
+                    for n in names {
+                        a = a.max(self.absmax(n)?);
+                    }
+                    a
+                } else {
+                    let (amax, out) = self.split_of(names, *split)?;
+                    amax.iter().enumerate().filter(|(c, _)| out.binary_search(c).is_err()).fold(0f64, |m, (_, v)| m.max(*v))
+                };
                 if *wide {
                     code_scale(a, CODE32_MAX, self.policy.headroom32)
                 } else {
@@ -167,6 +185,59 @@ impl FillCtx<'_> {
             }
         };
         Ok(base * key.factor)
+    }
+
+    /// Per-channel scales of an `n`-channel value under `key` (all equal unless the key is split).
+    pub fn scale_vec(&self, key: &ScaleKey, n: usize) -> Result<Vec<f64>> {
+        let common = self.scale(key)?;
+        let mut v = vec![common; n];
+        if let Base::Site { names, wide: false, split } = &key.base
+            && *split > 0
+        {
+            let (amax, out) = self.split_of(names, *split)?;
+            if amax.len() != n {
+                return Err(LowerError::eval(format!("split scales: {} channels calibrated, {n} used", amax.len())));
+            }
+            for c in out {
+                v[c] = code_scale(amax[c], CODE16_MAX, self.policy.headroom16).max(common / key.factor) * key.factor;
+            }
+        }
+        Ok(v)
+    }
+
+    /// The outlier channels of a split key, ascending.
+    pub fn outliers(&self, key: &ScaleKey) -> Result<Vec<usize>> {
+        match &key.base {
+            Base::Site { names, split, .. } if *split > 0 => Ok(self.split_of(names, *split)?.1),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Per-channel absmax over `names` and the `k` largest channels (lowest index on ties),
+    /// ascending.
+    fn split_of(&self, names: &[String], k: usize) -> Result<(Vec<f64>, Vec<usize>)> {
+        let mut amax: Vec<f64> = Vec::new();
+        for n in names {
+            let key = format!("{}{n}", self.prefix);
+            let st = self.stats.get(&key).ok_or_else(|| LowerError::eval(format!("calibration has no statistics for `{key}`")))?;
+            if st.ragged || st.chan_absmax.is_empty() {
+                return Err(LowerError::eval(format!("`{key}` has no per-channel statistics")));
+            }
+            if amax.is_empty() {
+                amax = st.chan_absmax.iter().map(|x| *x as f64).collect();
+            } else if amax.len() == st.chan_absmax.len() {
+                for (a, b) in amax.iter_mut().zip(&st.chan_absmax) {
+                    *a = a.max(*b as f64);
+                }
+            } else {
+                return Err(LowerError::eval(format!("`{key}`: channel counts differ across the sites of one scale")));
+            }
+        }
+        let mut order: Vec<usize> = (0..amax.len()).collect();
+        order.sort_by(|a, b| amax[*b].partial_cmp(&amax[*a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(b)));
+        let mut out: Vec<usize> = order.into_iter().take(k.min(amax.len())).collect();
+        out.sort_unstable();
+        Ok((amax, out))
     }
 
     /// Per-row `i8` codes of an HL `[out, in]` param, computed once per occurrence.
@@ -182,6 +253,51 @@ impl FillCtx<'_> {
         self.memo.lock().expect("memo").insert(p, rc.clone());
         Ok(rc)
     }
+
+    /// The split form of an HL `[out, in]` weight read by a split input `kx`: the main codes (the
+    /// outlier columns zeroed, per-row scale over the rest), and the outlier columns in `i32`
+    /// fixed point relative to each row's main unit, `wo[o][j] = W[o, c_j] · t_{c_j} /
+    /// (sw[o] · t_main) · 2^f[o]`, with `f[o] ≤ f_max` as large as keeps them inside `±2^30`.
+    pub fn split_rows(&self, p: u32, kx: &ScaleKey, f_max: i32) -> Result<Arc<SplitCodes>> {
+        let out = self.outliers(kx)?;
+        let mk = format!("{p}:{out:?}:{f_max}");
+        if let Some(r) = self.split_memo.lock().expect("memo").get(&mk) {
+            return Ok(r.clone());
+        }
+        let t = self.f(p)?;
+        let (rows, cols) = (t.shape[0], t.shape[1]);
+        let mut masked = t.data.clone();
+        for r in 0..rows {
+            for c in &out {
+                masked[r * cols + c] = 0.0;
+            }
+        }
+        let main = quantize_rows(&masked, rows, cols, None);
+        let tv = self.scale_vec(kx, cols)?;
+        let tn = self.scale(kx)?;
+        let mut wo = Vec::with_capacity(rows * out.len());
+        let mut f = Vec::with_capacity(rows);
+        for r in 0..rows {
+            let vals: Vec<f64> = out.iter().map(|c| t.data[r * cols + c] as f64 * tv[*c] / (main.scales[r] * tn)).collect();
+            let mx = vals.iter().fold(0f64, |m, v| m.max(v.abs()));
+            let fr = if mx > 0.0 { (30 - mx.log2().ceil() as i32).clamp(0, f_max) } else { f_max };
+            f.push(fr as i8);
+            wo.extend(vals.iter().map(|v| (v * 2f64.powi(fr)).round().clamp(-(1i64 << 31) as f64 + 1.0, (1i64 << 31) as f64 - 1.0) as i32));
+        }
+        let sc = Arc::new(SplitCodes { main, outliers: out, wo, f });
+        self.split_memo.lock().expect("memo").insert(mk, sc.clone());
+        Ok(sc)
+    }
+}
+
+/// A weight in split form (see [`FillCtx::split_rows`]).
+#[derive(Clone, Debug)]
+pub struct SplitCodes {
+    pub main: RowCodes,
+    pub outliers: Vec<usize>,
+    /// `[rows, outliers]`, row-major.
+    pub wo: Vec<i32>,
+    pub f: Vec<i8>,
 }
 
 /// The artifact of a lowered program, and the two scales a reader of its logits needs.
@@ -236,7 +352,17 @@ pub fn materialise(
     for (oi, (hbk, layer, prefix)) in occs.into_iter().enumerate() {
         let tb = lw.block_map[hbk] as usize;
         let store = loader.load(hbk, layer)?;
-        let ctx = FillCtx { hl, params: &store, layer, prefix: &prefix, stats, resid, policy, memo: Mutex::new(BTreeMap::new()) };
+        let ctx = FillCtx {
+            hl,
+            params: &store,
+            layer,
+            prefix: &prefix,
+            stats,
+            resid,
+            policy,
+            memo: Mutex::new(BTreeMap::new()),
+            split_memo: Mutex::new(BTreeMap::new()),
+        };
         for &pi in &used[tb] {
             let d = &lw.program.params[pi as usize];
             let key = (pi, if d.per_layer { layer.map(|l| l as u16) } else { None });

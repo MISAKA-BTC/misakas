@@ -86,8 +86,13 @@ pub enum Base {
     /// The residual stream: ONE `i32` scale for every block and layer.
     Resid,
     /// A site's calibrated scale in this occurrence: the max absmax over `names`, for `i16` codes
-    /// (`wide = false`) or `i32` values (`wide = true`).
-    Site { names: Vec<String>, wide: bool },
+    /// (`wide = false`) or `i32` values (`wide = true`). With `split = k > 0` the scale is PER
+    /// CHANNEL: the `k` channels with the largest calibrated absmax (the outliers, lowest index on
+    /// ties) each get their own scale, every other channel shares the scale of the largest of them
+    /// ([`FillCtx::scale_vec`], [`FillCtx::outliers`]). Only a value consumed by projections alone
+    /// is split: the projection routes the outlier channels through their own high-precision
+    /// columns (see `lower_linear`).
+    Site { names: Vec<String>, wide: bool, split: usize },
     /// Q24 fixed point (`2^−24`).
     Q24,
 }
@@ -107,7 +112,18 @@ impl ScaleKey {
         Self { base: Base::Q24, factor: 1.0 }
     }
     pub fn site(names: Vec<String>, wide: bool) -> Self {
-        Self { base: Base::Site { names, wide }, factor: 1.0 }
+        Self { base: Base::Site { names, wide, split: 0 }, factor: 1.0 }
+    }
+    /// `i16` codes with `split` outlier channels scaled on their own.
+    pub fn site_split(names: Vec<String>, split: usize) -> Self {
+        Self { base: Base::Site { names, wide: false, split }, factor: 1.0 }
+    }
+    /// The number of channels with their own scale (0: one scale for the tensor).
+    pub fn split(&self) -> usize {
+        match &self.base {
+            Base::Site { split, .. } => *split,
+            _ => 0,
+        }
     }
     pub fn times(&self, c: f64) -> Self {
         Self { base: self.base.clone(), factor: self.factor * c }
@@ -204,7 +220,26 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     let token_bound = u32::try_from(hl.vocab).map_err(|_| LowerError::not_lowerable("vocabulary beyond u32"))?;
     let mut pb = ProgramBuilder::new(token_bound, hb);
-    let mut cx = Cx { hl, fills: Vec::new(), resid_sites: BTreeMap::new(), tstate: BTreeMap::new(), history_bound: hb, logits_key: None };
+    let mut uses: BTreeMap<u32, usize> = BTreeMap::new();
+    for blk in &hl.blocks {
+        for n in &blk.nodes {
+            for r in &n.inputs {
+                if let hl::Ref::Param(p) = r {
+                    *uses.entry(*p).or_default() += 1;
+                }
+            }
+        }
+    }
+    let shared = uses.into_iter().filter(|(_, n)| *n > 1).map(|(p, _)| p).collect();
+    let mut cx = Cx {
+        hl,
+        fills: Vec::new(),
+        resid_sites: BTreeMap::new(),
+        tstate: BTreeMap::new(),
+        history_bound: hb,
+        logits_key: None,
+        shared,
+    };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     // HL order is pre, layer kinds, post; TIR keeps it.
     let mut order: Vec<usize> = vec![hl.pre];
@@ -246,6 +281,9 @@ struct Cx<'h> {
     tstate: BTreeMap<u32, u16>,
     history_bound: u32,
     logits_key: Option<ScaleKey>,
+    /// HL params read by more than one node (a tied embedding): a projection over them keeps the
+    /// plain per-row codes the other reader shares.
+    shared: std::collections::BTreeSet<u32>,
 }
 
 /// A lowered value: a TIR operand, its dtype, its scale, and the HL site whose statistics
@@ -265,6 +303,9 @@ struct Want {
     dt: DType,
     key: ScaleKey,
 }
+
+/// Attention logits are `i32` in Q`LOGIT_Q` fixed point.
+pub const LOGIT_Q: u32 = 14;
 
 fn code_bounds(dt: DType) -> (i64, i64) {
     match dt {
@@ -287,6 +328,8 @@ struct Lb {
     vals: Vec<Vec<Option<Val>>>,
     wants: Vec<Option<Want>>,
     rope_sites: Vec<Vec<String>>,
+    /// Outlier channels a node's codes split off (0: one scale), see [`Base::Site`].
+    split: Vec<usize>,
     windows: BTreeMap<u32, (tir::Ref, ScaleKey)>,
     angles: BTreeMap<u32, (tir::Ref, tir::Ref)>,
     requants: usize,
@@ -316,6 +359,7 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
         vals: Vec::with_capacity(blk.nodes.len()),
         wants: plan(hl, hbk),
         rope_sites: rope_consumer_sites(blk),
+        split: split_plan(hl, blk, &cx.shared),
         windows: BTreeMap::new(),
         angles: BTreeMap::new(),
         requants: 0,
@@ -435,6 +479,45 @@ fn rope_consumer_sites(blk: &hl::Block) -> Vec<Vec<String>> {
     out
 }
 
+/// Outlier channels to split off, per node: only for a value whose every consumer is the input of
+/// a projection over an unshared weight, and whose producer narrows per channel (a norm, a
+/// projection, an elementwise product, an attention context).
+fn split_plan(hl: &HlProgram, blk: &hl::Block, shared: &std::collections::BTreeSet<u32>) -> Vec<usize> {
+    let n = blk.nodes.len();
+    let mut consumers: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
+    for (i, node) in blk.nodes.iter().enumerate() {
+        for (k, r) in node.inputs.iter().enumerate() {
+            if let hl::Ref::Node(j, _) = r {
+                consumers[*j as usize].push((i, k));
+            }
+        }
+    }
+    for o in &blk.outputs {
+        if let hl::Ref::Node(j, _) = o {
+            consumers[*j as usize].push((usize::MAX, 0));
+        }
+    }
+    (0..n)
+        .map(|i| {
+            let capable = matches!(blk.nodes[i].op, Op::Norm { .. } | Op::Mul | Op::Attention { .. } | Op::Linear { .. });
+            let all_linear = !consumers[i].is_empty()
+                && consumers[i].iter().all(|(c, k)| {
+                    *c != usize::MAX
+                        && *k == 0
+                        && matches!(blk.nodes[*c].op, Op::Linear { .. })
+                        && matches!(blk.nodes[*c].inputs[1], hl::Ref::Param(p) if !shared.contains(&p) && hl.params[p as usize].shape.len() == 2)
+                });
+            let width: usize = blk.nodes[i].outs.first().map(|s| s.iter().product()).unwrap_or(0);
+            if capable && all_linear { split_size(width) } else { 0 }
+        })
+        .collect()
+}
+
+/// How many outlier channels a projection input of `n` channels splits off.
+fn split_size(n: usize) -> usize {
+    if n >= 16 { (n / 4).min(16) } else { 0 }
+}
+
 fn operand(lb: &Lb, r: hl::Ref) -> Result<Val> {
     match r {
         hl::Ref::Node(i, o) => lb
@@ -548,7 +631,22 @@ fn coerce(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, v: &Val, dt: D
     lb.requants += 1;
     let name = format!("{}.rq{}", v.site, lb.requants);
     let (from, to) = (v.key.clone(), key.clone());
-    let (m, s) = decl_ms(b, cx, lb, &name, 1, Arc::new(move |c| Ok(vec![c.scale(&from)? / c.scale(&to)?])))?;
+    let per_channel = from.split() > 0 || to.split() > 0;
+    let n = if per_channel { v.len } else { 1 };
+    if per_channel && n == 0 {
+        return Err(LowerError::eval("internal: a per-channel change of scale of a value of unknown width"));
+    }
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        &name,
+        n,
+        Arc::new(move |c| {
+            let (f, t) = (c.scale_vec(&from, n)?, c.scale_vec(&to, n)?);
+            Ok(f.iter().zip(&t).map(|(a, b)| a / b).collect())
+        }),
+    )?;
     let r = narrow(b, v.r, m, s, None, dt);
     if dt == DType::I16 {
         b.commit(r);
@@ -572,7 +670,8 @@ fn codes(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, v: &Val) -> Res
 fn default_want(lb: &Lb, i: usize, site: &str) -> Want {
     let mut names = vec![site.to_string()];
     names.extend(lb.rope_sites[i].iter().cloned());
-    Want { dt: DType::I16, key: ScaleKey::site(names, false) }
+    let key = if lb.split[i] > 0 { ScaleKey::site_split(names, lb.split[i]) } else { ScaleKey::site(names, false) };
+    Want { dt: DType::I16, key }
 }
 
 // ───────────────────────────── node lowering ─────────────────────────────
@@ -645,12 +744,17 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         Op::Act(a) => {
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
-            one(lower_table(b, cx, lb, &x, TableFn::Act(*a), &site)?)
+            one(lower_table(b, cx, lb, i, &x, TableFn::Act(*a), &site)?)
         }
         Op::Softcap { cap } => {
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
-            one(lower_table(b, cx, lb, &x, TableFn::Softcap(*cap), &site)?)
+            one(lower_table(b, cx, lb, i, &x, TableFn::Softcap(*cap), &site)?)
+        }
+        Op::Clamp { lo, hi } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            one(lower_table(b, cx, lb, i, &x, TableFn::Clamp(*lo, *hi), &site)?)
         }
         Op::Mul => {
             let a = operand(lb, node.inputs[0])?;
@@ -660,8 +764,23 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let p = b.mul(a.r, c.r, DType::I32);
             let key = if want.dt == DType::I16 { want.key.clone() } else { ScaleKey::site(vec![site.clone()], false) };
             let (ka, kc, ko) = (a.key.clone(), c.key.clone(), key.clone());
-            let (m, s) =
-                decl_ms(b, cx, lb, &site, 1, Arc::new(move |f| Ok(vec![f.scale(&ka)? * f.scale(&kc)? / f.scale(&ko)?])))?;
+            let per_channel = ka.split() > 0 || kc.split() > 0 || ko.split() > 0;
+            let n = if per_channel { out_len } else { 1 };
+            let (la, lc) = (a.len, c.len);
+            let (m, s) = decl_ms(
+                b,
+                cx,
+                lb,
+                &site,
+                n,
+                Arc::new(move |f| {
+                    let at = |k: &ScaleKey, len: usize| -> Result<Vec<f64>> {
+                        if n == 1 || len == 1 { Ok(vec![f.scale(k)?; n]) } else { f.scale_vec(k, n) }
+                    };
+                    let (va, vc, vo) = (at(&ka, la)?, at(&kc, lc)?, f.scale_vec(&ko, n)?);
+                    Ok((0..n).map(|i| va[i] * vc[i] / vo[i]).collect())
+                }),
+            )?;
             let r = narrow(b, p, m, s, None, DType::I16);
             b.commit(r);
             one(Val { r, dt: DType::I16, key, len: out_len, site })
@@ -692,14 +811,8 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             Ok(vec![None])
         }
         Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window: _, alibi, sinks } => {
-            if alibi.is_some() {
-                return Err(LowerError::not_lowerable("ALiBi attention is not in Gate 2a"));
-            }
             if *sinks {
                 return Err(LowerError::not_lowerable("attention sinks are not in Gate 2a"));
-            }
-            if softcap.is_some() {
-                return Err(LowerError::not_lowerable("attention logit soft-capping is not in Gate 2a"));
             }
             let q = operand(lb, node.inputs[0])?;
             let q = codes(b, cx, lb, &q)?;
@@ -708,7 +821,14 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             };
             let (kw, kk) = lb.windows.get(&ks).cloned().ok_or_else(|| LowerError::eval("internal: K read before its append"))?;
             let (vw, vk) = lb.windows.get(&vs).cloned().ok_or_else(|| LowerError::eval("internal: V read before its append"))?;
-            one(lower_attention(b, cx, lb, &q, (kw, kk), (vw, vk), *heads, *kv_heads, *head_dim, *v_head_dim, *scale, &site)?)
+            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            let window = match hl.states[ks as usize].kind {
+                StateKind::Hist { window } => window.map(|w| w as u32).unwrap_or(cx.history_bound).min(cx.history_bound),
+                StateKind::Fixed => return Err(LowerError::eval("internal: attention over a Fixed state")),
+            };
+            let shape = AttnDims { heads: *heads, kv: *kv_heads, d: *head_dim, dv: *v_head_dim, window };
+            let extra = AttnExtras { scale: *scale, softcap: *softcap, alibi: alibi.clone() };
+            one(lower_attention(b, cx, lb, &q, (kw, kk), (vw, vk), shape, &extra, &site, &want)?)
         }
         Op::Slice { start, len } => {
             let x = operand(lb, node.inputs[0])?;
@@ -776,6 +896,19 @@ fn weight_codes(p: u32) -> FillFn {
     })
 }
 
+/// `W·x (+ b)`. With a split input (`x.key.split() = k`) the `k` outlier channels — each at its
+/// own activation scale — go through their own columns in `i32` fixed point, the rest through
+/// the `i8` main codes (outlier columns zeroed), and the two accumulators meet exactly:
+///
+/// ```text
+/// acc  = MatMul(W8:i8[out,in], x:i16[in,1])            -- main (outlier columns are 0)
+/// acco = MatMul(Wo:i32[out,k], Gather(x, oidx):[k,1])   -- outliers, in main units · 2^f[o]
+/// y    = N(acc · 2^f[o] + acco; m, s, z)
+/// ```
+///
+/// This is the static form of the int8 "outlier decomposition": a massive activation in a few
+/// fixed channels (Qwen2.5's first-token MLP channels reach 1000× the others) costs those
+/// channels nothing and the rest keep their precision.
 #[allow(clippy::too_many_arguments)]
 fn lower_linear(
     b: &mut BlockBuilder<'_>,
@@ -794,20 +927,8 @@ fn lower_linear(
         return Err(LowerError::eval(format!("internal: linear `{}` reads {} values, weight has {inp} columns", d.name, x.len)));
     }
     let pl = per_layer(lb);
-    let wt = decl(b, cx, lb, &d.name, DType::I8, &[out, inp], d.per_layer, weight_codes(w))?;
+    let k = x.key.split();
     let (kx, ky) = (x.key.clone(), want.key.clone());
-    let (m, s) = decl_ms(
-        b,
-        cx,
-        lb,
-        site,
-        out,
-        Arc::new(move |c| {
-            let rc = c.rows(w)?;
-            let (sx, sy) = (c.scale(&kx)?, c.scale(&ky)?);
-            Ok(rc.scales.iter().map(|sw| sw * sx / sy).collect())
-        }),
-    )?;
     let z = match bias {
         Some(bp) => {
             let ky = want.key.clone();
@@ -821,17 +942,107 @@ fn lower_linear(
                 pl,
                 Arc::new(move |c| {
                     let bv = c.f(bp)?;
-                    let sy = c.scale(&ky)?;
-                    Ok(IntTensor::i64(vec![bv.data.len()], bv.data.iter().map(|v| (*v as f64 / sy).round() as i64).collect()))
+                    let sy = c.scale_vec(&ky, bv.data.len())?;
+                    Ok(IntTensor::i64(vec![bv.data.len()], bv.data.iter().zip(&sy).map(|(v, s)| (*v as f64 / s).round() as i64).collect()))
                 }),
             )?)
         }
         None => None,
     };
     let xc = b.reshape_fixed(x.r, &[inp as u32, 1]);
-    let acc = b.matmul(wt, xc, DType::I64);
-    let acc = b.reshape_fixed(acc, &[out as u32]);
-    let r = narrow(b, acc, m, s, z, want.dt);
+    let r = if k == 0 {
+        let wt = decl(b, cx, lb, &d.name, DType::I8, &[out, inp], d.per_layer, weight_codes(w))?;
+        let (m, s) = decl_ms(
+            b,
+            cx,
+            lb,
+            site,
+            out,
+            Arc::new(move |c| {
+                let rc = c.rows(w)?;
+                let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, out)?);
+                Ok(rc.scales.iter().zip(&sy).map(|(sw, sy)| sw * sx / sy).collect())
+            }),
+        )?;
+        let acc = b.matmul(wt, xc, DType::I64);
+        let acc = b.reshape_fixed(acc, &[out as u32]);
+        narrow(b, acc, m, s, z, want.dt)
+    } else {
+        // `acc · 2^f` stays inside i64 for any i8 × i16 accumulator of `inp` terms.
+        let acc_bits = 22 + (inp as f64).log2().ceil() as i32;
+        let f_max = (62 - acc_bits).clamp(0, 24);
+        let (k1, k2, k3, k4) = (kx.clone(), kx.clone(), kx.clone(), kx.clone());
+        let wt = decl(
+            b,
+            cx,
+            lb,
+            &d.name,
+            DType::I8,
+            &[out, inp],
+            d.per_layer,
+            Arc::new(move |c| {
+                let sc = c.split_rows(w, &k1, f_max)?;
+                Ok(IntTensor::i8(vec![sc.main.rows, sc.main.cols], sc.main.codes.clone()))
+            }),
+        )?;
+        let oidx = decl(
+            b,
+            cx,
+            lb,
+            &format!("{site}.oidx"),
+            DType::Idx,
+            &[k],
+            pl,
+            Arc::new(move |c| Ok(IntTensor::idx(vec![k], c.outliers(&k2)?.iter().map(|c| *c as u32).collect()))),
+        )?;
+        let wo = decl(
+            b,
+            cx,
+            lb,
+            &format!("{site}.wo"),
+            DType::I32,
+            &[out, k],
+            pl,
+            Arc::new(move |c| {
+                let sc = c.split_rows(w, &k3, f_max)?;
+                Ok(IntTensor::i32(vec![out, k], sc.wo.clone()))
+            }),
+        )?;
+        let fo = decl(
+            b,
+            cx,
+            lb,
+            &format!("{site}.of"),
+            DType::I8,
+            &[out],
+            pl,
+            Arc::new(move |c| Ok(IntTensor::i8(vec![out], c.split_rows(w, &k4, f_max)?.f.clone()))),
+        )?;
+        let (m, s) = decl_ms(
+            b,
+            cx,
+            lb,
+            site,
+            out,
+            Arc::new(move |c| {
+                let sc = c.split_rows(w, &kx, f_max)?;
+                let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, out)?);
+                Ok((0..out).map(|o| sc.main.scales[o] * sx / (2f64.powi(sc.f[o] as i32) * sy[o])).collect())
+            }),
+        )?;
+        let acc = b.matmul(wt, xc, DType::I64);
+        let acc = b.reshape_fixed(acc, &[out as u32]);
+        // The outlier indices are a param: state their range for the analysis (never fires).
+        let oi = b.clamp(oidx, 0, inp as i64 - 1, DType::Idx);
+        let xo = b.gather(x.r, oi, 0, 0);
+        let xo = b.reshape_fixed(xo, &[k as u32, 1]);
+        let acco = b.matmul(wo, xo, DType::I64);
+        let acco = b.reshape_fixed(acco, &[out as u32]);
+        let p2f = b.pow2_128_of(fo, f_max as u32);
+        let shifted = b.mul(acc, p2f, DType::I64);
+        let sum = b.add(shifted, acco, DType::I64);
+        narrow(b, sum, m, s, z, want.dt)
+    };
     if want.dt == DType::I16 {
         b.commit(r);
     }
@@ -921,7 +1132,7 @@ fn lower_norm(
         site,
         n,
         Arc::new(move |c| {
-            let sy = c.scale(&ky)?;
+            let sy = c.scale_vec(&ky, n)?;
             let unit = 1.0 / (1u64 << 24) as f64;
             let gv: Option<Vec<f32>> = match gain {
                 Some(p) => Some(c.f(p)?.data.clone()),
@@ -935,7 +1146,7 @@ fn lower_norm(
                         (_, Some(w)) => w as f64,
                         (_, None) => 1.0,
                     };
-                    g * unit / sy
+                    g * unit / sy[i]
                 })
                 .collect())
         }),
@@ -953,8 +1164,8 @@ fn lower_norm(
                 pl,
                 Arc::new(move |c| {
                     let bv = c.f(bp)?;
-                    let sy = c.scale(&ky)?;
-                    Ok(IntTensor::i64(vec![n], (0..n).map(|i| (bv.data[if bv.data.len() == n { i } else { i % bv.data.len() }] as f64 / sy).round() as i64).collect()))
+                    let sy = c.scale_vec(&ky, n)?;
+                    Ok(IntTensor::i64(vec![n], (0..n).map(|i| (bv.data[if bv.data.len() == n { i } else { i % bv.data.len() }] as f64 / sy[i]).round() as i64).collect()))
                 }),
             )?)
         }
@@ -972,6 +1183,7 @@ fn lower_norm(
 enum TableFn {
     Act(Act),
     Softcap(f64),
+    Clamp(f64, f64),
 }
 
 impl TableFn {
@@ -979,14 +1191,18 @@ impl TableFn {
         match self {
             TableFn::Act(a) => crate::float_ref::act(a, x as f32) as f64,
             TableFn::Softcap(c) => (x / c).tanh() * c,
+            TableFn::Clamp(lo, hi) => x.clamp(lo, hi),
         }
     }
 }
 
 /// `Table(x; T)`: `Gather(T, Cast_idx(x + 32768))`, `T` the float function on the code grid,
 /// rounded to the output site's codes.
-fn lower_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, f: TableFn, site: &str) -> Result<Val> {
-    let out_key = ScaleKey::site(vec![site.to_string()], false);
+fn lower_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, x: &Val, f: TableFn, site: &str) -> Result<Val> {
+    // A table has one output scale (its own site's, and any RoPE's that rotates it).
+    let mut names = vec![site.to_string()];
+    names.extend(lb.rope_sites[i].iter().cloned());
+    let out_key = ScaleKey::site(names, false);
     let (kx, ko) = (x.key.clone(), out_key.clone());
     let t = decl(
         b,
@@ -1113,13 +1329,24 @@ fn lower_rope(
             b.concat(&[re, im], 1)
         }
     };
+    // HF multiplies cos and sin — the ROTATED dims — by the attention factor and leaves the
+    // pass-through dims alone. The rotated codes carry the factor in their scale (`x.key · f`), so
+    // a pass-through part is narrowed by `1/f` to share that scale.
+    let pass = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, start: usize, len: usize| -> Result<tir::Ref> {
+        let p = b.slice(x2, 1, start as u32, len as u32);
+        if (f - 1.0).abs() < 1e-12 {
+            return Ok(p);
+        }
+        let (m, s) = decl_ms(b, cx, lb, &format!("{}.rope_pass{start}", x.site), 1, Arc::new(move |_c| Ok(vec![1.0 / f])))?;
+        Ok(narrow(b, p, m, s, None, DType::I16))
+    };
     let mut parts = Vec::new();
     if off > 0 {
-        parts.push(b.slice(x2, 1, 0, off as u32));
+        parts.push(pass(b, cx, lb, 0, off)?);
     }
     parts.push(rot);
     if off + rd < hd {
-        parts.push(b.slice(x2, 1, (off + rd) as u32, (hd - off - rd) as u32));
+        parts.push(pass(b, cx, lb, off + rd, hd - off - rd)?);
     }
     let y = if parts.len() > 1 { b.concat(&parts, 1) } else { rot };
     let r = b.reshape_fixed(y, &[(heads * hd) as u32]);
@@ -1127,6 +1354,21 @@ fn lower_rope(
     // The tables rotate only; HF's attention factor multiplies cos and sin, so it lives in the
     // scale of the rotated codes.
     Ok(Val { r, dt: DType::I16, key: x.key.times(f), len: heads * hd, site: x.site.clone() })
+}
+
+struct AttnDims {
+    heads: usize,
+    kv: usize,
+    d: usize,
+    dv: usize,
+    /// The history window `W` of the block (`H = min(pos + 1, W)`).
+    window: u32,
+}
+
+struct AttnExtras {
+    scale: f64,
+    softcap: Option<f64>,
+    alibi: Option<crate::rope::AlibiSpec>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1137,45 +1379,152 @@ fn lower_attention(
     q: &Val,
     k: (tir::Ref, ScaleKey),
     v: (tir::Ref, ScaleKey),
-    heads: usize,
-    kv: usize,
-    d: usize,
-    dv: usize,
-    scale: f64,
+    dims: AttnDims,
+    ex: &AttnExtras,
     site: &str,
+    want: &Want,
 ) -> Result<Val> {
+    let AttnDims { heads, kv, d, dv, window } = dims;
     let g = heads / kv;
-    let (h, kv32, g32, d32, dv32) = (heads as u32, kv as u32, g as u32, d as u32, dv as u32);
-    let _ = h;
+    let (kv32, g32, d32, dv32) = (kv as u32, g as u32, d as u32, dv as u32);
     let qg = b.reshape_fixed(q.r, &[kv32, g32, d32]);
     let kw = b.reshape(k.0, &[Dim::H, Dim::Fixed(kv32), Dim::Fixed(d32)]);
     let kt = b.transpose(kw, &[1, 2, 0]);
     let scores = b.matmul(qg, kt, DType::I64);
-    // Scores straight to Q24 logits: `S_q · S_k · scale · 2^24`.
     let (kq, kk) = (q.key.clone(), k.1.clone());
-    let (m, s) = decl_ms(
-        b,
-        cx,
-        lb,
-        &format!("{site}.scores"),
-        1,
-        Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << 24) as f64])),
-    )?;
-    let logits = narrow(b, scores, m, s, None, DType::I32);
-    let probs = b.softmax_shifted(logits, 0);
+    let scale = ex.scale;
+    let mut logits = match ex.softcap {
+        // Scores to logits in Q14 (`S_q · S_k · scale · 2^14`): ±131,072 in logit units, because a
+        // layer's logits can be huge (Qwen2.5's layer 0 reaches 24,000 through its key biases), at
+        // a resolution of 6e-5 — far below anything `IntExp` resolves. The softmax lifts
+        // differences to Q24 by `2^(24 − 14)`.
+        None => {
+            let (m, s) = decl_ms(
+                b,
+                cx,
+                lb,
+                &format!("{site}.scores"),
+                1,
+                Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])),
+            )?;
+            narrow(b, scores, m, s, None, DType::I32)
+        }
+        // Gemma 2: `cap · tanh(score / cap)`, with `tanh(y) = 2σ(2y) − 1` through the library's
+        // integer sigmoid on `y = score / cap` in Q24 (the scores' range is ±128·cap there).
+        Some(cap) => {
+            let (m, s) = decl_ms(
+                b,
+                cx,
+                lb,
+                &format!("{site}.scores"),
+                1,
+                Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << 24) as f64 / cap])),
+            )?;
+            let y = narrow(b, scores, m, s, None, DType::I32);
+            let two = b.c(DType::I64, 2);
+            let y2 = b.mul(y, two, DType::I64);
+            let y2 = b.clamp(y2, i32::MIN as i64, i32::MAX as i64, DType::I32);
+            let sig = b.int_sigmoid(y2);
+            let s2 = b.mul(sig, two, DType::I64);
+            let one = b.c(DType::I64, 1 << 24);
+            let t = b.sub(s2, one, DType::I64);
+            let t = b.clamp(t, -(1 << 24), 1 << 24, DType::I32);
+            let (m, s) = decl_ms(
+                b,
+                cx,
+                lb,
+                &format!("{site}.softcap"),
+                1,
+                Arc::new(move |_c| Ok(vec![cap * (1u64 << LOGIT_Q) as f64 / (1u64 << 24) as f64])),
+            )?;
+            narrow(b, t, m, s, None, DType::I32)
+        }
+    };
+    if let Some(al) = &ex.alibi {
+        // ALiBi as the key's distance behind the query, `bias_j − bias_pos` (a per-row constant
+        // away from HF's `slope · j`): recent keys stay small, and far ones saturate towards
+        // `exp = 0` instead of overflowing. Keys are `j = pos − (H − 1) + t`, `H − 1 = min(pos, W − 1)`.
+        let hb = cx.history_bound;
+        let pos = tir::Ref::Input(INPUT_POS);
+        let hm1 = b.clamp(pos, 0, window as i64 - 1, DType::I64);
+        let t = b.iota(DType::I64, &[Dim::H], 0, 0, 1);
+        let (hs, al2) = (heads, al.clone());
+        let bias = if al.bf16_bias {
+            // Falcon rounds `slope` and `slope · j` to bfloat16: one row of pinned values per head.
+            let tab = decl(
+                b,
+                cx,
+                lb,
+                &format!("{site}.alibi"),
+                DType::I64,
+                &[heads, hb as usize],
+                false,
+                Arc::new(move |_c| {
+                    let mut v = Vec::with_capacity(hs * hb as usize);
+                    for h in 0..hs {
+                        for j in 0..hb as usize {
+                            let bj = crate::rope::bf16_round(crate::rope::bf16_round(al2.slopes[h] as f32) * j as f32) as f64;
+                            let bj = if al2.scaled_by_softmax_scale { bj * scale } else { bj };
+                            v.push((bj * (1u64 << LOGIT_Q) as f64).round() as i64);
+                        }
+                    }
+                    Ok(IntTensor::i64(vec![hs, hb as usize], v))
+                }),
+            )?;
+            let base = b.sub(pos, hm1, DType::I64);
+            let j = b.add(base, t, DType::I64);
+            let j = b.clamp(j, 0, hb as i64 - 1, DType::Idx);
+            let bj = b.gather(tab, j, 1, 0);
+            let bj = b.clamp(bj, -(1i64 << 40), 1 << 40, DType::I64);
+            let bp = b.gather(tab, pos, 1, 0);
+            let bp = b.clamp(bp, -(1i64 << 40), 1 << 40, DType::I64);
+            let bp = b.reshape_fixed(bp, &[heads as u32, 1]);
+            b.sub(bj, bp, DType::I64)
+        } else {
+            let slope = decl(
+                b,
+                cx,
+                lb,
+                &format!("{site}.alibi"),
+                DType::I64,
+                &[heads, 1],
+                false,
+                Arc::new(move |_c| {
+                    Ok(IntTensor::i64(
+                        vec![hs, 1],
+                        al2.slopes
+                            .iter()
+                            .map(|sl| (sl * if al2.scaled_by_softmax_scale { scale } else { 1.0 } * (1u64 << LOGIT_Q) as f64).round() as i64)
+                            .collect(),
+                    ))
+                }),
+            )?;
+            let slope = b.clamp(slope, -(1i64 << 31), 1 << 31, DType::I64);
+            let dist = b.sub(t, hm1, DType::I64);
+            b.mul(slope, dist, DType::I64)
+        };
+        let bias = b.reshape(bias, &[Dim::Fixed(kv32), Dim::Fixed(g32), Dim::H]);
+        let sum = b.add(logits, bias, DType::I64);
+        logits = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    }
+    let probs = b.softmax_shifted(logits, 24 - LOGIT_Q);
     let vw = b.reshape(v.0, &[Dim::H, Dim::Fixed(kv32), Dim::Fixed(dv32)]);
     let vt = b.transpose(vw, &[1, 0, 2]);
     let o = b.matmul(probs, vt, DType::I64);
     let o = b.reshape_fixed(o, &[(heads * dv) as u32]);
-    let out_key = ScaleKey::site(vec![site.to_string()], false);
+    let out_key = want.key.clone();
     let (kv_, ko) = (v.1.clone(), out_key.clone());
+    let n = if ko.split() > 0 { heads * dv } else { 1 };
     let (m, s) = decl_ms(
         b,
         cx,
         lb,
         site,
-        1,
-        Arc::new(move |c| Ok(vec![c.scale(&kv_)? / (1u64 << 24) as f64 / c.scale(&ko)?])),
+        n,
+        Arc::new(move |c| {
+            let sv = c.scale(&kv_)? / (1u64 << 24) as f64;
+            Ok(c.scale_vec(&ko, n)?.iter().map(|so| sv / so).collect())
+        }),
     )?;
     let r = narrow(b, o, m, s, None, DType::I16);
     b.commit(r);

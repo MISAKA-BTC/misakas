@@ -29,8 +29,10 @@ fn run(name: &str) -> Result<fidelity::Metrics, String> {
     let (params, _) = ParamStore::from_source(&prep.hl, &prep.binding, &ck).map_err(|e| e.to_string())?;
     let loader = Resident(Arc::new(params));
     let vocab = prep.hl.vocab;
-    let calib = fidelity::random_sequences(vocab, 6, 32, 7);
-    let eval = fidelity::random_sequences(vocab, 3, 24, 1234);
+    // A learned position table bounds the sequence (HF indexes past it).
+    let max_len = prep.spec.embedding.positions.as_ref().map_or(usize::MAX, |p| p.rows - p.offset);
+    let calib = fidelity::random_sequences(vocab, 6, 32.min(max_len), 7);
+    let eval = fidelity::random_sequences(vocab, 3, 24.min(max_len), 1234);
     let quiet = |_: usize, _: usize| {};
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).map_err(|e| format!("calibrate: {e}"))?;
     let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
@@ -84,4 +86,44 @@ macro_rules! dense {
     )*};
 }
 
-dense!(llama, llama_linear_tied, mistral_window, qwen2_sliding, smollm3, granite);
+dense!(
+    llama,
+    llama_linear_tied,
+    mistral_window,
+    qwen2_sliding,
+    qwen2_dynamic,
+    qwen3_yarn,
+    smollm3,
+    granite,
+    gemma,
+    gemma2,
+    gemma3,
+    gemma3_vlm,
+    llava,
+    mistral3_vlm,
+    phi3_longrope,
+    olmo,
+    olmo2,
+    cohere,
+    cohere2,
+    stablelm,
+    stablelm_parallel,
+    starcoder2,
+    exaone4,
+    nemotron,
+    phi,
+    gpt2,
+    gpt_neo,
+    gpt_neox,
+    gpt_neox_seq,
+    gptj,
+    falcon_new,
+    falcon_mq,
+    falcon_alibi,
+    bloom,
+    mpt,
+    opt,
+    opt_postln_proj,
+    gpt_bigcode,
+    gpt_bigcode_mha,
+);
