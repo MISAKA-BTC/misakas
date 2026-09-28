@@ -39,7 +39,7 @@ USAGE:
     palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
     palw-class drill-leaves --network <id> [--model-id <model-id>] [--decode N] <artifact-path>
     palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
-                         [--logits-scheme tiled|flat] [--model-id <model-id>] <lowered.palwtir>
+                         [--logits-scheme tiled|flat] [--logits-tile N] [--model-id <model-id>] <lowered.palwtir>
 
 `drill-leaves` (RFC-0002 Phase F, drill D-F2) prints, for an IR class's attempt job — its canonical
 prefill, --decode tokens (1 where the network draws one forward, the default; 2 otherwise) — the first
@@ -55,7 +55,8 @@ scheme's 4,096 lanes), the history at --h-chunk rows (64 and 64 unless given), t
 checkpoint interval admission v10 accepts (tir_admit_v1's min C_j, halved until the gate admits),
 then writes the container to --out with --model-id in its provenance. The class commits its logits
 under --logits-scheme (the program's own if it names one, else tiled: the lowerer leaves it unset,
-and a class under no scheme has no decode court). The path from a Hugging Face
+and a class under no scheme has no decode court), its logits node tiled at --logits-tile lanes (a
+divisor of 4,096; unless given, the widest whose terminal close the chain can carry, PALW-TIR-38). The path from a Hugging Face
 checkpoint to a registration: check-architecture → palw-tir-fidelity → declare-layout → preflight →
 kaspad --palw-class-artifact <out> --palw-register-class <model-id>.
 
@@ -249,6 +250,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 max_context: number(take_flag(&mut args, "--max-context"), "--max-context")?,
                 tile_len: number(take_flag(&mut args, "--tile-len"), "--tile-len")?.unwrap_or(default.tile_len),
                 h_chunk: number(take_flag(&mut args, "--h-chunk"), "--h-chunk")?.unwrap_or(default.h_chunk),
+                logits_tile: number(take_flag(&mut args, "--logits-tile"), "--logits-tile")?,
                 logits_scheme: match take_flag(&mut args, "--logits-scheme") {
                     Some(s) => Some(
                         misaka_palw_sdk::tir_layout::TirLogitsSchemeV1::parse(&s)

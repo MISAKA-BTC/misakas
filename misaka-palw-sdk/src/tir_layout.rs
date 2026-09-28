@@ -67,11 +67,15 @@ pub struct TirLayoutChoiceV1 {
     /// scheme for a program that names none — the lowerer leaves the field zero, and a class under
     /// no scheme has no decode court (admission v10 refuses it by name).
     pub logits_scheme: Option<TirLogitsSchemeV1>,
+    /// The logits node's tile under the tiled scheme: a divisor of the scheme's 4,096 lanes.
+    /// `None` searches from 4,096 down for the widest one whose terminal close the chain can carry
+    /// (PALW-TIR-38: 4,096 weight rows of a 1,536-wide head are 6.3 MB against testnet-12's 3.2 MB).
+    pub logits_tile: Option<u32>,
 }
 
 impl Default for TirLayoutChoiceV1 {
     fn default() -> Self {
-        Self { max_context: None, tile_len: IR_DEFAULT_TILE_LEN_V1, h_chunk: IR_DEFAULT_H_CHUNK_V1, logits_scheme: None }
+        Self { max_context: None, tile_len: IR_DEFAULT_TILE_LEN_V1, h_chunk: IR_DEFAULT_H_CHUNK_V1, logits_scheme: None, logits_tile: None }
     }
 }
 
@@ -104,7 +108,11 @@ pub fn tir_default_layout_v1(params: &Params, program: &TirProgramV1, choice: &T
         for (ni, node) in block.nodes.iter().enumerate() {
             if node.commit {
                 let logits = bi == program.schedule.post as usize && ni == program.logits as usize;
-                commit_tiles.push(if logits && tiled { PALW_LOGITS_TILE_LANES as u32 } else { choice.tile_len });
+                commit_tiles.push(if logits && tiled {
+                    choice.logits_tile.unwrap_or(PALW_LOGITS_TILE_LANES as u32)
+                } else {
+                    choice.tile_len
+                });
             }
         }
     }
@@ -252,9 +260,10 @@ pub fn tir_window_covers_context_v1(meta: &serde_json::Value, max_context: u32) 
 }
 
 /// **Write `input`'s program and tensors to `output` as a class** — under the logits scheme `choice`
-/// names ([`tir_program_with_scheme_v1`]) and a declared layout: `choice` tiled, its checkpoint
-/// interval the widest admission v10 accepts (halved from `min_j C_j` down to 1) — with `model_id`
-/// recorded in the container's provenance when given. The inventory root is the input's (the scheme
+/// names ([`tir_program_with_scheme_v1`]) and a declared layout: `choice` tiled, the logits at the
+/// widest divisor of 4,096 lanes whose terminal close the chain can carry (PALW-TIR-38), its
+/// checkpoint interval the widest admission v10 accepts (halved from `min_j C_j` down to 1) — with
+/// `model_id` recorded in the container's provenance when given. The inventory root is the input's (the scheme
 /// and the layout enter the class id, never the root).
 pub fn tir_declare_layout_v1(
     params: &Params,
@@ -269,23 +278,44 @@ pub fn tir_declare_layout_v1(
     let program = &tir_program_with_scheme_v1(&container.program, choice.logits_scheme)?;
     let program_bytes = program.encode();
     let (artifact_root, _) = artifact.inventory_root()?;
-    let mut layout = tir_default_layout_v1(params, program, choice)?;
     let class_of = |layout: &PalwTirLayoutV1| PalwTirClassV1 {
         version: PALW_TIR_CLASS_VERSION_V1,
         program: program_bytes.clone(),
         layout: layout.clone(),
         tokenizer_id: Hash64::from_bytes(container.header.tokenizer_id),
     };
-    let mut admission = tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root);
-    while admission.is_err() && layout.checkpoint_interval > 1 {
-        layout.checkpoint_interval /= 2;
-        admission = tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root);
+    // The logits tiles to try: the one asked for, else — under the tiled scheme — every divisor of
+    // the scheme's 4,096 lanes, widest first, until the terminal close is one the chain can carry.
+    let tiled = Hash64::from_bytes(program.logits_scheme_id) == tiled_logits_scheme_id_v1();
+    let logits_tiles: Vec<Option<u32>> = match (choice.logits_tile, tiled) {
+        (Some(t), _) => vec![Some(t)],
+        (None, true) => (2..=12).rev().map(|k| Some(1u32 << k)).collect(),
+        (None, false) => vec![None],
+    };
+    let mut first: Option<(PalwTirLayoutV1, Result<(), String>)> = None;
+    let mut found: Option<(PalwTirLayoutV1, Result<(), String>)> = None;
+    'tiles: for logits_tile in logits_tiles {
+        let mut layout = tir_default_layout_v1(params, program, &TirLayoutChoiceV1 { logits_tile, ..*choice })?;
+        let mut admission = tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root);
+        first.get_or_insert_with(|| (layout.clone(), admission.clone()));
+        while let Err(why) = &admission {
+            // A close too wide to carry is the logits tile's to fix; anything else, the interval's.
+            if why.contains("close bytes") {
+                continue 'tiles;
+            }
+            if layout.checkpoint_interval <= 1 {
+                break;
+            }
+            layout.checkpoint_interval /= 2;
+            admission = tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root);
+        }
+        if admission.is_ok() {
+            found = Some((layout, admission));
+            break;
+        }
     }
-    if admission.is_err() {
-        // Every interval refused: keep the widest, whose refusal is the one an operator acts on.
-        layout = tir_default_layout_v1(params, program, choice)?;
-        admission = tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root);
-    }
+    // None admitted: keep the widest, whose refusal is the one an operator acts on.
+    let (layout, admission) = found.or(first).ok_or("no layout to try")?;
     let mut meta = serde_json::from_str::<serde_json::Value>(&container.header.meta).unwrap_or_else(|_| serde_json::json!({}));
     tir_calibration_covers_context_v1(program, &meta, layout.max_context)?;
     tir_window_covers_context_v1(&meta, layout.max_context)?;
