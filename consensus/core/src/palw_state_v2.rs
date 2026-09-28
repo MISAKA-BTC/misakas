@@ -7121,6 +7121,28 @@ pub enum PalwConsensusObjectV2 {
         entries: Vec<crate::palw_audit_door_v1::PalwAuditEntryV1>,
         signature: Vec<u8>,
     },
+    // ---- RFC-0002 Phase F: tag 61, the next free after the audit batch's 60. ----
+    /// **A class registered as a PALW-TIR v1 program** (tag 61; `docs/design/palw/tir/phase-f-integration.md`
+    /// §2.2–§2.4): `ClassRegistered`'s fields with the IR carriage — the program's canonical bytes, its
+    /// commitment layout and its tokenizer ([`crate::palw_tir_class_v1::PalwTirClassV1`]) — in place of
+    /// a shape profile. `class_id` must be `tir_class_id_v1(class, artifact_root)`.
+    ///
+    /// Appended so no earlier discriminant moves: an older build on a ruleset that declared
+    /// `palw_audit_2026_09_11` cannot decode it and skips it (A-2). This build lets it ride (the
+    /// stateless gate says yes, as it must for a block to be valid on both) and drops it by name in the
+    /// acceptance walk until `Params::palw_tir_v1` is armed — and, until admission v10 lands, after it
+    /// too — so every network folds exactly as before this variant existed. The fold refuses it as the
+    /// second lock.
+    ClassRegisteredTirV1 {
+        class_id: Hash64,
+        artifact_root: Hash64,
+        slash_value_per_pwu: u64,
+        pwu_rule: PalwPwuRuleV2,
+        initial_target: u128,
+        share_permille: u16,
+        activation_daa: u64,
+        admission: Box<crate::palw_tir_class_v1::PalwTirAdmissionCarriageV1>,
+    },
 }
 
 /// **The name of a v22-skeleton object (ADR-0152 v3.1 §6 row 24, tags 53–56)**, or `None` for
@@ -9104,6 +9126,11 @@ pub enum PalwStateV2Error {
          Params::palw_readiness_v2_max_age_spans"
     )]
     ReadinessProofNotNewer { bond: PalwBondKeyV2, class_id: Hash64, span: u64, row_span: u64 },
+    // ---- RFC-0002 Phase F ----
+    /// **An IR class registration (tag 61) the fold does not take**: below `Params::palw_tir_v1`, and
+    /// until admission v10 lands above it. The acceptance walk drops it first; this is the second lock.
+    #[error("an IR class registration (tag 61) is refused: {0}")]
+    TirRegistrationRefused(&'static str),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -29960,6 +29987,12 @@ fn apply_object(
                     builder.write_bond(*bond, Some(retiring));
                 }
             }
+        }
+        // **RFC-0002 Phase F (tag 61): an IR class registration.** Refused by name: the acceptance walk
+        // drops it below `palw_tir_v1` (and, until admission v10 lands, above it), so a block that
+        // reaches the fold with one skipped the walk. Every network folds as before the variant.
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => {
+            return Err(PalwStateV2Error::TirRegistrationRefused("admission v10 is not in this build (RFC-0002 Phase F, F6)"));
         }
         PalwConsensusObjectV2::ClassRegistered {
             class_id,

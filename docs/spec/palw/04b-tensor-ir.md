@@ -866,6 +866,179 @@ success-versus-failure bit is what consensus reads:
   program, and meeting one is an interpreter defect that also refuses the close (`Unadjudicable`,
   nobody slashed). Neither refusal convicts or acquits anyone.
 
+### 9.4 Demand evaluation (PALW-TIR-30)
+
+`eval_demanded(target, elements, source, limits)` computes chosen elements of one tensor of a run
+from exactly the elements they read — the court's evaluator (Phase F, `palw_tir_court_v1`). Its
+values are §6's: every element is defined independently of every other (§6.1), so each value is the
+element `eval_cone` computes from the same values. A verdict depends on three more things, which this
+section fixes as well: **which values the evaluation reads** (its requests — the operand set a
+refutation must carry), **what it costs** (its work) and **when it refuses**. An implementation that
+follows this section reproduces all three for every request; the golden vectors below pin them.
+
+**Contexts.** A node runs in a *context* `(p, o)`: a position `p` and an occurrence `o` — an index
+into the occurrence list of §3.3 (`0` is `pre`, `1 + l` is layer `l`, `L + 1` is `post`). In a
+context, `H = min(p + 1, W)` for the block's window `W` (`H = 1` in a block that appends to no
+history), and every tensor has its shape at that `H`. The context's *layer* is `o − 1` for a layer
+occurrence and none otherwise; a per-layer param or state is read at the context's layer, a global
+one as its single instance.
+
+**The request** is a *target*, a list of element indices (row-major at the target's `H`; the values
+are returned in list order; repeats are allowed and cost nothing) and *limits*
+`(max_elements, max_terms)`. The target is either
+
+- `node(p, o, n)` — node `n` of context `(p, o)`; or
+- `state_after(p, j, l)` — `Fixed` state `j`'s instance at layer `l` (none for a global state) after
+  position `p`, which is what a checkpoint at `p` holds.
+
+The request is refused before anything is read: class `Position` if `p ≥ history_bound`; class
+`Malformed` if `o` names no occurrence, `n` no node of its block, an element is not below the
+target's element count, or `state_after` names a state that is not `Fixed` or an instance its
+`per_layer` does not have (a layer for a global state; none, or a layer `≥ L`, for a per-layer one).
+
+**The source** answers five questions, and nothing else is ever read:
+
+| question | answer |
+| --- | --- |
+| `node(p, o, n, i)` | element `i` of committed node `n` of context `(p, o)` |
+| `param(j, l, i)` | element `i` of param `j`'s instance at `l` |
+| `state(p, j, l, i)` | element `i` of `Fixed` instance `(j, l)` at the START of `p` — a value, or `Replay` |
+| `hist_row(p, j, l, r, i)` | element `i` of the row appended to `Hist` instance `(j, l)` at position `r`, as read at `p` (`r < p`) |
+| `token(p)` | the token of position `p` |
+
+Any answer may be a refusal; the evaluation then fails (class `Missing`) and never substitutes a
+value. The questions asked, with their arguments, are the evaluation's **requests**. They are a
+**set**: an implementation may ask a question twice, and the order it asks in is not part of the
+result.
+
+**Leaves.** A node `n` of a context `c` is a *leaf* iff it is a commit point — except the target of a
+`node` request, in the target's context, which is always computed (a court that read the disputed
+value would "recompute" the claim under dispute). A leaf's element `i` is `source.node(c, n, i)`,
+which must be a value of the node's dtype (else `Operand`). Every other element is computed by §6
+from the operand elements its index map names (below). Each element of each context — leaf or
+computed — is evaluated at most once per request.
+
+**Operands.** An operand element of a node of context `(p, o)` is:
+
+- `Node(m)`, element `i`: element `i` of node `m` of `(p, o)` — a leaf or computed, as above;
+- `CarryIn(k)`, element `i`: element `i` of node `carry_out[k]` of the previous occurrence's block, in
+  context `(p, o − 1)` — a commit point (NF-21), hence a leaf — which must be a value of the carry-in's
+  declared dtype (else `Operand`);
+- `Param(j)`, element `i`: `source.param(j, l, i)` with `l` the context's layer for a per-layer param
+  and none otherwise; a value of the param's dtype (else `Operand`);
+- `Const(j)`, element `i`: the declared data;
+- `State(j)`, element `i`: the instance's value at the start of `p` (Fixed-state replay, below);
+- `Input(0)`: `source.token(p)`, which must be `< token_bound` (else `Operand`); `Input(1)`: `p`.
+
+**Index maps.** For an output element with multi-index `o` over the output's shape at the context's
+`H` (flat index `e`), the operand elements read are, in this order:
+
+| primitive | operand elements read |
+| --- | --- |
+| `Reshape`, `Cast`, `Clamp`, `Log2Floor`, `IntExp`, `IntRsqrt`, `IntLn`, `StateWrite` | `x` at the same flat index `e` |
+| `Transpose perm` | `x[j]` with `j[perm[k]] = o[k]` for every `k` |
+| `Slice axis, start` | `x[o′]`, `o′` = `o` with `o′[axis] = o[axis] + start` |
+| `Concat axis` | input `q`, the first whose cumulative extent along `axis` exceeds `o[axis]`, at `o` with `o[axis]` reduced by the extents of the inputs before `q` |
+| `Broadcast` | `x[bc(o)]` |
+| `Iota` | none |
+| `Add`, `Sub`, `Mul`, `Div`, `Compare` | `a[bc(o)]`, then `b[bc(o)]` |
+| `Select` | `c[bc(o)]`; then ONLY the chosen operand: `a[bc(o)]` if `c ≠ 0`, else `b[bc(o)]` |
+| `Gather A, B` | `v = indices[o[0..B] ++ o[A..A+m]]` (`m = rank(indices) − B`); then, unless §6.2's `Index` check fails, `data[o[0..A] ++ [v] ++ o[A+m..]]` |
+| `MatMul` | for `t = 0 … K − 1`: `a[β_a, r, t]` and `b[β_b, t, c]` (`K = a.shape[−1]`) |
+| `ReduceSum axis`, `ReduceMax axis` | `x[o′]` for `o′` = `o` with `o′[axis] = t`, `t = 0 … n − 1` |
+| `TopK axis, k` | the whole row: `x[o′]` for `o′[axis] = t`, `t = 0 … n − 1`; the row's `k` selected indices are every slot of the row at once |
+| `HistAppend state` | with `R` = the row's element count, row `t = e div R`, lane `w = e mod R`: if `t = H − 1`, the input's element `w` in this context; otherwise `source.hist_row(p, j, l, p + 1 − H + t, w)` (`j` the state, `l` the context's layer for a per-layer history), a value of the state's dtype (else `Operand`) |
+
+`bc(o)` maps `o` into an operand by broadcasting (§2.3: dimensions aligned on the right; an operand
+dimension of extent 1 is read at 0). For `MatMul`, `(r, c)` are `o`'s last two indices and `β` its
+batch prefix, mapped into each operand by broadcasting. `n` is the reduced extent at the context's
+`H`.
+
+**Fixed-state replay.** The value of instance `(j, l)` at the start of `p`, element `i`, is
+`source.state(p, j, l, i)`:
+
+- **a value** — which must be of the state's dtype and in `[lo, hi]` (else `Operand`);
+- **`Replay`** — then: if `p = 0`, the evaluation fails (class `Missing`: nothing precedes position 0;
+  a source supplies the initial zero at position 0 itself). Otherwise the value is the instance's
+  **writer**'s output at `p − 1`: the `StateWrite` of state `j` in the block of occurrence `1 + l`
+  (per-layer) or `0` (global) — unique by NF-19 — its element `i` in context `(p − 1, that occurrence)`,
+  a leaf if the writer is a commit point and computed otherwise, and in `[lo, hi]` (else `Operand`). If
+  nothing writes the instance, its value is carried unchanged: the value at the start of `p − 1`, asked
+  of the source in turn.
+
+A `state_after(p, j, l)` target's element `i` is the writer's element `i` in context
+`(p, the writer's occurrence)` — a leaf if the writer is committed — or, for an instance nothing
+writes, the value at the start of `p`.
+
+**Work** is two counts:
+
+- `elements`: one per computed (non-leaf) element — each counted once, however often it is read; a
+  `TopK` counts once per ROW, since one evaluation determines every slot of the row;
+- `terms`: for each computed element, `K` for a `MatMul`, the reduced extent `n` (at the context's
+  `H`) for a `ReduceSum`, a `ReduceMax` or a `TopK` row, and 0 otherwise; plus, for each distinct
+  `(p, j, l, i)` whose value at the start of `p` the evaluation needs for an instance nothing writes
+  (a `State` operand in a context at `p`, or an element of `state_after(p, j, l)`), the number of
+  positions the value is carried across: `p − q` for the largest `q ≤ p` at which the source answers
+  a value.
+
+Leaves, params, consts, tokens, history rows and supplied state values cost nothing.
+
+**The boundary.** The evaluation **succeeds** iff every element it evaluates succeeds (§6, and every
+check above, every source question answered) and its work is within the limits:
+`elements ≤ max_elements` and `terms ≤ max_terms`. Otherwise it **fails**, with the class of a failing
+element or `WorkLimit`. In the court both are refusals (§9.3), and as everywhere the class is a label:
+success-versus-failure is what consensus reads. A successful evaluation's values, work and request set
+are functions of the request and the source's answers alone — not of the order an implementation
+evaluates in — because every element and every answer is.
+
+**Charging.** An implementation MUST stop, with `WorkLimit`, no later than when a count first
+exceeds its limit, and SHOULD charge an element before it reads the element's operands, so that no
+request makes a verifier spend more than the limits. The reference evaluator
+(`misaka_palw_tir::demand`) charges each element when it first scans it, before any operand is
+fetched, and evaluates with an explicit stack of frames `(context, node, element)` rather than native
+recursion (a 512-node chain, or a replay across thousands of positions, costs no native stack). It
+caps the frames it pushes at `6 · max_terms + 24 · max_elements`; one scan of an element pushes at
+most `2 · terms + 2` frames, so the cap is never reached while the work is within the limits and it
+is not part of the boundary.
+
+`tests/demand.rs` checks the values against `eval_cone` for every node of every position of every
+program vector, the replay against the run, and the order-independence of the work.
+
+**Golden vectors** (`demand/<program>.json`, `format = palw-tir-v1/demand-vectors/1`). One file per
+program vector:
+
+- `program` names the program vector whose `params` and `steps` are the source's committed data:
+  `node(p, o, n, i)` is element `i` of the commit of `steps[p]` whose `(block, layer)` is occurrence
+  `o`'s and whose `node` is `n`; `token(p)` is `steps[p].token`; `hist_row(p, j, l, r, i)` is element
+  `i` of the committed node the row is — the `HistAppend`'s input node in context `(r, 1 + l)` (or
+  `(r, 0)` for a global history), or, when the input is `CarryIn(k)`, node `carry_out[k]` of the
+  previous occurrence at `r`; `param(j, l, i)` is from `params`.
+- `states` lists the `Fixed` values the source supplies — `pos`, `state`, `layer` (or null) and
+  `value` — here every instance a block references, at every even position (the initial zeros at 0
+  included); every other `(p, j, l)` answers `Replay`. A case may carry its own `states`, which then
+  replaces the file's.
+- A question the files do not answer is refused (`Missing`).
+- `cases[]`: `name`, `target` (`{"node": {pos, occurrence, node}}` or
+  `{"state_after": {pos, state, layer}}`), `elements`, `limits` (`max_elements`, `max_terms`), and
+  either `expect` — `values` (in `elements`' order), `work` (`elements`, `terms`) and `requests`, the
+  request set grouped by question: one entry per question with every argument but the element index
+  (`{"node": {pos, occurrence, node}}`, `{"param": {param, layer}}`,
+  `{"state": {pos, state, layer}}`, `{"hist_row": {pos, state, layer, row_pos}}` or
+  `{"token": {pos}}`) and `indices`, the indices asked as inclusive runs (`"0-3,7"`; absent for a
+  token), sorted by question in that order and then by argument (a null layer first) — or
+  `expect_error` (a class of §9.3, or `WorkLimit`).
+- The cases: every commit point of every position (the first, second, middle and last two
+  elements, or all of them when there are at most six), a sample of uncommitted nodes at the last
+  position, every referenced `Fixed` instance after every position (the odd positions replay from the
+  even one before), the heaviest case at exactly its work and one short in each count, and the
+  refusals — an element outside the target, an occurrence or a node that does not exist,
+  `p = history_bound`, a position the run did not reach, `Replay` at position 0, a `Hist` state named
+  by `state_after`.
+
+`cargo test -p misaka-palw-tir --test demand_vectors` regenerates every file from the program vectors
+and requires identical bytes; `TIR_BLESS=1` rewrites them, which is a change of the semantics and is
+reviewed as one.
+
 ## 10. Commitment and the court
 
 ### 10.1 Commit points (PALW-TIR-14)
@@ -1070,8 +1243,8 @@ part of the function on adversarial parameters, and the segments reproduce them.
 | gated delta rule step | decay (`Div_HAFZ(S·decay, 2^24)`, clamp ±(2^31−1)), `S·k` (MatMul), read narrowing, `sat64(v − w)`, `sat64(delta·β)`, delta narrowing clamped ±(2^24−1), rank-one write (`Mul` by `2^ws` or `Div_HAFZ` by `2^−ws`), `StateWrite`, `S·q`, out narrowing | `q36_gdn_step` |
 | router top-k | softmax (wide), `TopK` (committed), gather, exact sum, `IntRecip`, renormalise | `q36_router_topk` |
 | MoE combine | `MatMul(w[1,k], Y[k,width])` — ONE exact accumulator — then the A16 narrowing | `q36_moe_combine` |
-| head mapping `k → v` heads | grouping: `Reshape[k,1,d] → Broadcast[k,r,d] → Reshape[v,d]`; tiling: `Reshape[1,k,d] → Broadcast[r,k,d] → Reshape[v,d]` | (the live kernel tiles; §14) |
-| causal conv window | `Concat(State[w−1, C], row)` → `Slice` keeps the last `w−1` → `StateWrite`; `ReduceSum(window ⊙ taps)` | `q36_ssm_conv` (data layout differs; Gate 2) |
+| head mapping `k → v` heads | grouping: `Reshape[k,1,d] → Broadcast[k,r,d] → Reshape[v,d]`; tiling: `Reshape[1,k,d] → Broadcast[r,k,d] → Reshape[v,d]` | the live kernel tiles, over llama.cpp's V-reordered artifact — HF's function (corpus §5) |
+| causal conv window | `Concat(State[w−1, C], row)` → `Slice` keeps the last `w−1` → `StateWrite`; `ReduceSum(window ⊙ taps)` (`causal_conv`) | `q36_ssm_conv` (its own layout, as the segment of the same name) |
 
 ### 11.3 Long-context RoPE without a `history_bound × rope_dims` table
 
@@ -1085,13 +1258,20 @@ cos = Clamp(Div_Floor(ch·cl − sh·sl, 2^24), ±ONE);  sin = Clamp(Div_Floor(s
 ```
 
 Each product is `i64`; the sum is `i128`, because the tables are params and take the full `i32`
-range (two `i32·i32` products sum to `2^63`) — the pattern that overflows `i64` in the live
-`q36_rope_partial` (corpus §10.3).
+range (two `i32·i32` products sum to `2^63`) — the pattern that overflowed `i64` in the live
+`q36_rope_partial` (corpus §10.3; fixed on `rcore/hf-court-total` by forming the products in
+`i128`).
 
 At `2^18` positions that is two 512-row tables instead of one 262,144-row table (at `2^21`, three
 128-row tables). The gathers' index ranges are provable (`hi < 2^(18−b)`, `lo < 2^b`). YaRN, NTK,
 "llama3", LongRoPE and linear scaling only change `ω_j` (and an attention factor folded into the
-logit scale): they are table data, not primitives.
+logit scale): they are table data, not primitives (`rope_angles_two_level`).
+
+LongRoPE and dynamic NTK choose their frequencies by the forward call's length in HF. Their
+canonical semantics is **per-position decode** (RFC-0002 Gate 1 decision 4): the frequency set is a
+function of the absolute position — table sets selected by `Select` on a position threshold
+(`rope_angles_by_position`) — which is what HF computes when it decodes one position per call; the
+criterion-5 reference is pinned to `transformers` 5.17 with eager attention, decoding per position.
 
 ## 12. Golden vectors (`consensus-vectors/tir-v1/`, PALW-TIR-35)
 

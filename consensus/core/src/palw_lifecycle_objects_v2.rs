@@ -246,6 +246,11 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // covers, fits the ladder, costs what the ruleset allows and counts the pwu it declares is
         // `verify_class_admission_v2`'s, at acceptance, where the bundle is in hand.
         PalwConsensusObjectV2::ClassRegistered { admission: Some(_), .. } => Ok(()),
+        // RFC-0002 Phase F (tag 61): an IR registration carries its program, so it is checkable
+        // whenever it is admitted. It RIDES at every height — a block carrying it must be valid on
+        // this build and on an older one that skips it undecoded (A-2) — and the acceptance walk
+        // drops it by name until `palw_tir_v1` is armed.
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => Ok(()),
         PalwConsensusObjectV2::ClassRegistered { admission: None, .. } => Err(
             "a class registered on a running chain must carry its shape profile and canonical job —              without them nothing can check its coverage, its ladder depth or its declared pwu",
         ),
