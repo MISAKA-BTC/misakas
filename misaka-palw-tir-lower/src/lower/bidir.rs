@@ -132,6 +132,7 @@ pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lo
         site_nodes: BTreeMap::new(),
         shared: Default::default(),
         tables: Default::default(),
+        image_rows: None,
         split_max_readers: 0,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
