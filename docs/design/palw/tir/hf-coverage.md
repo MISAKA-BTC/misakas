@@ -946,3 +946,84 @@ are §2's estimates, adjusted for 2026 families not in that table.
   - the remote-code families (ChatGLM, InternLM2, Baichuan, MiniCPM, EXAONE-3), which have no
     offline fixture;
   - GGUF and pre-quantised checkpoints: an importer, not a lowering.
+
+## 19. Pre-quantised checkpoints: GPTQ and AWQ (GGUF next)
+
+A GPTQ or AWQ checkpoint stores each projection as small integers. Every group of input columns
+has a scale and a zero point: `W[o, i] = s[g, o] · (q[i, o] − z[g, o])`. These projections are
+lowered **from the stored integers, with nothing re-quantised** (`crate::prequant`,
+`lower::qlinear`). The float reference, and HF's reference for the fixtures, is the same model
+with the dequantised weights substituted.
+
+**Formats read** (`quantization_config`; every key is read, known inert, or a refusal):
+
+| format | bits | groups | column order | zero point |
+| --- | --- | --- | --- | --- |
+| GPTQ `gptq` (v1), `gptq_v2` | 2, 4, 8 | any, or −1 (one per row) | `g_idx` (act-order permutes it) | v1 stores `z − 1` mod `2^b` |
+| AWQ, GEMM packing | 4 | any dividing `in` | `i / group` | as stored; words interleaved `[0,2,4,6,1,3,5,7]` |
+
+- Honoured: `modules_in_block_to_quantize`, `modules_to_not_convert`, GPTQModel's `lm_head`.
+- Refused, with the reason:
+  - GPTQ 3-bit (its words straddle int32 boundaries), the Marlin and BitBLAS repacks, `dynamic`
+    per-module overrides, and packing into anything but int32;
+  - AWQ GEMV, GEMV-fast and LLM-AWQ, and the model types where AutoAWQ adds its per-channel
+    activation scale (`ScaledActivation`);
+  - bitsandbytes, fp8, compressed-tensors and every other method.
+- Decoders whose layers are attention + MLP. Quantised MoE experts, MLA and recurrent mixers are
+  refused for now.
+
+**The program, per projection:**
+
+```text
+xg   = Reshape(Gather(x, order), [G, gs, 1])          GPTQ: the g_idx order, every group contiguous
+acc  = MatMul(codes:i8[G, out, gs], xg) → i64 [G, out]   exact
+t    = a[g, o] · acc − c[g, o] · Σ_{i∈g} x[i]          the per-group scales, as exact integers
+T[o] = Σ_g t[g, o] + acco[o] · 2^g[o]                  the outlier channels, as in the W8 path's split
+y    = N(T; m, s, z)                                   the one rounding, as for every projection
+```
+
+- **Codes.** A code is `q − z` when that fits `i8` (every format up to 7 bits, and symmetric
+  8-bit), and then the `c` term does not exist. An 8-bit asymmetric code is `q − 128`, with
+  `c = s · (z − 128)`.
+- **Scales.** Each row's fp16 scales become integers at one unit `2^e[o]` per row. The unit puts
+  the row's largest `|a|` in `(2^19, 2^20]`, and `2^e[o]` goes into the output narrowing.
+  - fp16 has 11 significant bits, so every scale within `2^9` of its row's largest is exact.
+  - A smaller one would be rounded at `2^−20` of the row's largest. Such roundings are counted
+    (`Materialised::quant_inexact`); there are none on any fixture.
+- **Ranges.** Clamps state `|a| ≤ 2^20`, `|c| ≤ 2^28` and `|wo| ≤ 2^24`, so the sum stays inside
+  `i64` for every `in ≤ 2^16` (spec 04b §7).
+- **Cost.** MACs are the W8 path's (`out · in`). The layer block grows by 29 nodes (AWQ) up to 90
+  (8-bit asymmetric with act-order): 266 → 295–356 on the 2-layer fixtures, against NF-12's 512.
+
+**Fidelity and admission.** There are 11 fixtures (`tools/gen_quant_fixtures.py`):
+- tiny Llama and Qwen2 models, quantised in numpy per each format's spec;
+- their reference dequantises the packed tensors independently of the quantiser.
+
+Every one is admitted end to end at 512 (§18's pipeline: the int-8 `palw-class`, testnet-12
+ceilings, every close fits, worst 89 KB). The "twin" is the same dequantised weights as a float
+checkpoint, through the W8 path.
+
+| fixture | float vs HF | int vs float: top-1, KL (twin) | end to end: greedy (twin), TF KL (twin) |
+| --- | --- | --- | --- |
+| `gptq_b4_g32` | 2.4e-6 | 1.000, 2e-5 (0.986, 7e-5) | 36/36 (31/36), 1.6e-5 (7.1e-5) |
+| `gptq_b4_g64_act` | 1.8e-6 | 0.958, 2e-5 (0.958, 8e-5) | 36/36 (32/36), 1.8e-5 (7.5e-5) |
+| `gptq_b4_perrow` | 1.9e-6 | 0.972, 2e-5 (0.944, 7e-5) | 36/36 (36/36), 1.7e-5 (7.6e-5) |
+| `gptq_b8_g128` | 2.4e-6 | 0.986, 2e-5 (0.972, 4e-5) | 36/36 (25/36), 1.7e-5 (4.6e-5) |
+| `gptq_b2_g32` | 2.4e-6 | 1.000, 2e-5 (1.000, 7e-5) | 36/36 (36/36), 1.7e-5 (7.0e-5) |
+| `awq_g32` | 1.9e-6 | 0.986, 2e-5 (0.972, 8e-5) | 36/36 (33/36), 1.7e-5 (7.8e-5) |
+| `awq_g128` | 1.9e-6 | 1.000, 2e-5 (0.986, 8e-5) | 36/36 (27/36), 1.6e-5 (7.7e-5) |
+| `gptq_b4_g128_act_asym`, `gptq_b8_g32_asym_act`, `gptq_v2_b4_g64`, `awq_g64` (Qwen2, tied) | ≤ 3.8e-5 of logits ≈ 100 | 1.000, 0 | 36/36 each; saturated softmax |
+
+- Greedy: 396/396 identical to HF, against 356/396 for the twins.
+- Teacher-forced KL is 4× lower than the twins' on every Llama fixture.
+- The twins' departures are near-ties the W8 re-quantisation tips.
+
+**Size.**
+- Per projection weight, the artifact holds 1 byte of code and `4/gs` bytes of scale (twice that
+  for 8-bit asymmetric), plus GPTQ's order at `4/out`. The W8 path holds 1 byte and `9/in`.
+  - At group 128 that is +3 % over the W8 artifact; at group 32, +12.5 %.
+  - On the fixtures, whose activation tables and embeddings dominate, whole artifacts are
+    1.01–1.09× the twins'.
+- Against the checkpoints: fp16 is 2 bytes a weight, a 4-bit GPTQ/AWQ file ≈ 0.52. The IR has no
+  type narrower than `i8`, so a 4-bit code costs a byte: ≈ 0.5× the fp16 artifact, ≈ 2× the
+  packed file.
