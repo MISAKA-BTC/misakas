@@ -2229,6 +2229,79 @@ fn fp_capture_view(
 /// and each rebuild spends a fee. Long enough that a retry means the object really was dropped.
 const CLASS_REGISTRATION_RETRY_DAA: u64 = 200;
 
+/// **How long a class-registration carrier that has LEFT this node's mempool gets before the panel
+/// concludes its object did not stand** (the D-F drill of 2026-09-29: two IR registrations rode one
+/// block, the second was dropped with the block standing, and its node waited out
+/// [`CLASS_REGISTRATION_RETRY_DAA`] — hours — before trying again). A carrier leaves the mempool when a
+/// block takes it (or when it is evicted), and the fold registers the class in that same block, so a
+/// few DAA past it with no class means the object was dropped inside its block or the carrier is gone.
+/// Doubled per consecutive such drop, up to [`CLASS_REGISTRATION_RETRY_DAA`]: a registration the chain
+/// keeps refusing costs one fee per growing interval, never one per block.
+const CLASS_REGISTRATION_LEFT_POOL_GRACE_DAA: u64 = 3;
+
+/// **What the panel does with its in-flight class registration this tick.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwClassRegistrationStepV1 {
+    /// The class is on the chain: done.
+    Landed,
+    /// Keep waiting — the carrier is queued, or it only just left the mempool.
+    Wait,
+    /// Rebuild the object (a fresh sample of the live terms) and submit a new carrier.
+    Retry(PalwClassRegistrationRetryV1),
+}
+
+/// Why an in-flight class registration is retried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwClassRegistrationRetryV1 {
+    /// The carrier left the mempool — taken by a block, or evicted — and the class did not appear.
+    LeftThePoolWithoutTheClass,
+    /// The carrier is still queued [`CLASS_REGISTRATION_RETRY_DAA`] after it was sent.
+    StillQueuedPastTheHorizon,
+}
+
+/// **The in-flight class registration's next step**, from what the tick reads: whether the class is
+/// on the chain, whether the carrier is still in this node's mempool, when it was sent, when this node
+/// first saw it gone from the mempool (`left_pool_daa`, kept by the caller) and how many carriers in a
+/// row left the mempool without the class (`drops`).
+pub(crate) fn palw_class_registration_step_v1(
+    landed: bool,
+    in_mempool: bool,
+    sent_daa: u64,
+    left_pool_daa: Option<u64>,
+    drops: u32,
+    current_daa: u64,
+) -> PalwClassRegistrationStepV1 {
+    use PalwClassRegistrationStepV1::{Landed, Retry, Wait};
+    if landed {
+        return Landed;
+    }
+    if !in_mempool {
+        let since = left_pool_daa.unwrap_or(current_daa);
+        let grace = CLASS_REGISTRATION_LEFT_POOL_GRACE_DAA.saturating_mul(1u64 << drops.min(16)).min(CLASS_REGISTRATION_RETRY_DAA);
+        return if current_daa.saturating_sub(since) >= grace {
+            Retry(PalwClassRegistrationRetryV1::LeftThePoolWithoutTheClass)
+        } else {
+            Wait
+        };
+    }
+    if current_daa.saturating_sub(sent_daa) > CLASS_REGISTRATION_RETRY_DAA {
+        Retry(PalwClassRegistrationRetryV1::StillQueuedPastTheHorizon)
+    } else {
+        Wait
+    }
+}
+
+/// **Does the panel skip the rest of its tick for the class registration?** Only while a built
+/// registration waits for its funding: that is the stall the skip exists for (a duty sweep that ran
+/// for minutes before the object was ever submitted, and on a 2M registrant never ended). Not while
+/// the chain's gate refuses to build it (an IR class below `palw_tir_v1`: nothing to submit), not while
+/// its carrier waits for a block, and not once the class is on the chain — a registrant is a seat, and
+/// skipping its duties there silenced it for as long as the registration took, and after a restart of a
+/// node whose class had landed, for good.
+pub(crate) fn palw_class_registration_holds_the_tick_v1(registering: bool, done: bool, built: bool, in_flight: bool) -> bool {
+    registering && !done && built && !in_flight
+}
+
 /// submitted 791 carriers with zero mempool refusals, the producer received 492 and mined 302, and
 /// of 300 `CourtOpened` exactly ONE ever reached a block — while `ReceiptLicensed` kept landing,
 /// because those were the ones near the confirmed end of the chain.
@@ -7060,6 +7133,14 @@ impl PalwPanelService {
         // from the mempool without one (try again).
         let mut class_registration_inflight: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = None;
         let mut class_registration_done = false;
+        // When this node first saw the in-flight carrier gone from its mempool, and how many carriers
+        // in a row left it without the class (`palw_class_registration_step_v1`).
+        let mut class_registration_left_pool: Option<u64> = None;
+        let mut class_registration_drops: u32 = 0;
+        // The class id this node registers, derived once (`class_registration_id` re-pairs the
+        // holdings, which a 2M legacy class pays in minutes) — what tells a restarted registrant its
+        // class already stands on the chain.
+        let mut class_registration_known_id: Option<Option<Hash64>> = None;
         // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
         // appears in the virtual UTXO set, which is the only honest signal that it was mined.
         let mut inflight: usize = 0;
@@ -7255,7 +7336,8 @@ impl PalwPanelService {
                 // learn a Hash64 we signed. A court-capable A16 registration that paid that walk
                 // to submit would then pay it every tick until the carrier landed.
                 let landed = match (session.palw_v2_registration_terms(), &class_registration) {
-                    (Some(terms), Some(PalwConsensusObjectV2::ClassRegistered { class_id, .. })) => {
+                    (Some(terms), Some(PalwConsensusObjectV2::ClassRegistered { class_id, .. }))
+                    | (Some(terms), Some(PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, .. })) => {
                         terms.registered_class_ids.contains(class_id)
                     }
                     (Some(terms), _) => self.class_registration_id().is_some_and(|id| terms.registered_class_ids.contains(&id)),
@@ -7263,22 +7345,65 @@ impl PalwPanelService {
                     // "cannot tell", and the retry horizon below is what keeps that from latching.
                     _ => false,
                 };
-                if landed {
-                    info!("[{PALW_PANEL}] the class registration in tx {txid} is on the chain");
-                    class_registration_inflight = None;
-                    class_registration_done = true;
-                } else if current_daa.saturating_sub(sent_daa) > CLASS_REGISTRATION_RETRY_DAA {
-                    // The carrier had a generous window to be mined and the class still is not
-                    // there, so the object was dropped inside a block that stood (the acceptance
-                    // gate refuses a target the epoch retarget has since moved) — or the carrier
-                    // never made it. Both are "the registration did not happen", and believing a
-                    // MEMPOOL receipt forever is what made that loss permanent and silent.
-                    warn!(
-                        "[{PALW_PANEL}] the class registration carrier {txid} was sent at daa {sent_daa} and the class is still \
-                         not registered at {current_daa} — rebuilding and retrying"
-                    );
-                    class_registration_inflight = None;
-                    class_registration = None;
+                // **Is the carrier still queued here?** A carrier leaves the mempool when a block
+                // takes it (or when it is evicted); the fold registers the class in that same block,
+                // so a carrier gone from the pool with no class a few DAA later was dropped inside
+                // its block (the D-F drill of 2026-09-29: a second IR registration in one block) or
+                // is gone — and waiting out the whole horizon for it is what left that node silent.
+                let in_mempool = landed
+                    || self
+                        .flow_context
+                        .mining_manager()
+                        .clone()
+                        .has_transaction(txid, kaspa_mining::model::tx_query::TransactionQuery::All)
+                        .await;
+                if in_mempool {
+                    class_registration_left_pool = None;
+                } else if class_registration_left_pool.is_none() {
+                    class_registration_left_pool = Some(current_daa);
+                }
+                match palw_class_registration_step_v1(
+                    landed,
+                    in_mempool,
+                    sent_daa,
+                    class_registration_left_pool,
+                    class_registration_drops,
+                    current_daa,
+                ) {
+                    PalwClassRegistrationStepV1::Landed => {
+                        info!("[{PALW_PANEL}] the class registration in tx {txid} is on the chain");
+                        class_registration_inflight = None;
+                        class_registration_done = true;
+                        class_registration_drops = 0;
+                    }
+                    PalwClassRegistrationStepV1::Wait => {}
+                    PalwClassRegistrationStepV1::Retry(why) => {
+                        match why {
+                            // The object did not stand in the block that took its carrier (or the
+                            // carrier was evicted): rebuilt from the live terms and sent again now.
+                            PalwClassRegistrationRetryV1::LeftThePoolWithoutTheClass => {
+                                class_registration_drops = class_registration_drops.saturating_add(1);
+                                warn!(
+                                    "[{PALW_PANEL}] the class registration carrier {txid} (sent at daa {sent_daa}) left the \
+                                     mempool at daa {} and the class is not registered at {current_daa}: its object was \
+                                     dropped inside the block that took it (that block's \"a class registration was \
+                                     dropped\" line says why) or the carrier was evicted — rebuilding and resubmitting \
+                                     (drop {class_registration_drops} in a row)",
+                                    class_registration_left_pool.unwrap_or(current_daa)
+                                );
+                            }
+                            // The carrier had a generous window to be mined and the class still is
+                            // not there. Believing a MEMPOOL receipt forever is what made that loss
+                            // permanent and silent.
+                            PalwClassRegistrationRetryV1::StillQueuedPastTheHorizon => warn!(
+                                "[{PALW_PANEL}] the class registration carrier {txid} was sent at daa {sent_daa} and the class is \
+                                 still not registered at {current_daa} — rebuilding and retrying"
+                            ),
+                        }
+                        class_registration_inflight = None;
+                        class_registration_left_pool = None;
+                        class_registration = None;
+                    }
                 }
             }
             if self.config.register_class.is_some()
@@ -7291,11 +7416,30 @@ impl PalwPanelService {
                         info!("[{PALW_PANEL}] built a class registration for this node's worker");
                         class_registration = Some(object);
                     }
-                    // Once a minute: a gate that refuses (an IR class below `palw_tir_v1`, say) refuses
-                    // every tick until the chain moves, and the retry each tick is what registers it then.
-                    Err(e) => crate::palw_backends::note_throttled_v1("class-registration-build", || {
-                        format!("[{PALW_PANEL}] cannot register this node's class: {e}")
-                    }),
+                    Err(e) => {
+                        // **A class already on the chain is done.** The builder refuses a class the
+                        // chain holds, and nothing else ever set `done` — so a registrant restarted
+                        // after its class landed (or one whose carrier stood while it was down)
+                        // refused every tick, for good, and skipped its duties behind it.
+                        let id = *class_registration_known_id.get_or_insert_with(|| self.class_registration_id());
+                        let on_chain = id
+                            .zip(session.palw_v2_registration_terms())
+                            .is_some_and(|(id, terms)| terms.registered_class_ids.contains(&id));
+                        if on_chain {
+                            info!(
+                                "[{PALW_PANEL}] this node's class {} is already registered on the chain — nothing to register",
+                                id.unwrap_or_default()
+                            );
+                            class_registration_done = true;
+                        } else {
+                            // Once a minute: a gate that refuses (an IR class below `palw_tir_v1`, say)
+                            // refuses every tick until the chain moves, and the retry each tick is what
+                            // registers it then.
+                            crate::palw_backends::note_throttled_v1("class-registration-build", || {
+                                format!("[{PALW_PANEL}] cannot register this node's class: {e}")
+                            })
+                        }
+                    }
                 }
             }
             // **Submit HERE, before the duty sweep.** The funded carrier used to be built at the
@@ -7331,6 +7475,7 @@ impl PalwPanelService {
                                     Ok(()) => {
                                         info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
                                         class_registration_inflight = Some((txid, current_daa));
+                                        class_registration_left_pool = None;
                                         let next = TransactionOutpoint::new(txid, 0);
                                         self.persist_fee_outpoint(next);
                                         chained_funding = Some((
@@ -7360,9 +7505,17 @@ impl PalwPanelService {
                     });
                 }
             }
-            // Do not spend the rest of the tick on a foreign duty backlog while this node's class
-            // is still unregistered — that is the stall that left the 2M object unsent.
-            if self.config.register_class.is_some() && !class_registration_done {
+            // Do not spend the rest of the tick on a foreign duty backlog while this node's built
+            // registration waits for its funding — that is the stall that left the 2M object unsent.
+            // Only then (`palw_class_registration_holds_the_tick_v1`): a registrant is a seat, and
+            // while its gate refuses, its carrier waits for a block, or its class already stands, it
+            // does its duties.
+            if palw_class_registration_holds_the_tick_v1(
+                self.config.register_class.is_some(),
+                class_registration_done,
+                class_registration.is_some(),
+                class_registration_inflight.is_some(),
+            ) {
                 continue;
             }
 
@@ -11408,6 +11561,7 @@ impl PalwPanelService {
                                     Ok(()) => {
                                         info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
                                         class_registration_inflight = Some((txid, current_daa));
+                                        class_registration_left_pool = None;
                                         let next = TransactionOutpoint::new(txid, 0);
                                         self.persist_fee_outpoint(next);
                                         funding = Some((
@@ -15240,6 +15394,65 @@ const MARKER_SEAT_S: &str = "mod tests {\n    use super::*;";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A class registration whose object did not stand is sent again — promptly** (the D-F drill of
+    /// 2026-09-29: two IR registrations rode one block, the second was dropped with the block standing,
+    /// and its node waited out the 200-DAA horizon). The carrier leaving the mempool without the class
+    /// is the signal: a few DAA of grace (the fold registers the class in the block that takes the
+    /// carrier), doubled per consecutive drop up to the horizon; a carrier still queued keeps the
+    /// horizon. A registrant whose class already stands is done, and a registrant is a seat: only a
+    /// built registration waiting for its funding holds the rest of the tick.
+    #[test]
+    fn a_dropped_class_registration_is_resubmitted_and_a_registrant_keeps_its_duties() {
+        use PalwClassRegistrationRetryV1::{LeftThePoolWithoutTheClass, StillQueuedPastTheHorizon};
+        use PalwClassRegistrationStepV1::{Landed, Retry, Wait};
+        let step = palw_class_registration_step_v1;
+        let grace = CLASS_REGISTRATION_LEFT_POOL_GRACE_DAA;
+        // The class appeared: done, whatever else is true.
+        assert_eq!(step(true, false, 100, Some(101), 3, 500), Landed);
+        assert_eq!(step(true, true, 100, None, 0, 101), Landed);
+        // Queued: wait, up to the horizon, then rebuild.
+        assert_eq!(step(false, true, 100, None, 0, 100 + CLASS_REGISTRATION_RETRY_DAA), Wait);
+        assert_eq!(step(false, true, 100, None, 0, 101 + CLASS_REGISTRATION_RETRY_DAA), Retry(StillQueuedPastTheHorizon));
+        // Gone from the pool with no class (the drill's case): the grace, then at once.
+        assert_eq!(step(false, false, 100, Some(104), 0, 104), Wait, "the block that took it may still be folding");
+        assert_eq!(step(false, false, 100, Some(104), 0, 104 + grace - 1), Wait);
+        assert_eq!(step(false, false, 100, Some(104), 0, 104 + grace), Retry(LeftThePoolWithoutTheClass));
+        assert!(104 + grace < 100 + CLASS_REGISTRATION_RETRY_DAA, "long before the horizon");
+        // A registration the chain keeps dropping: the grace doubles per drop, capped at the horizon.
+        assert_eq!(step(false, false, 100, Some(104), 1, 104 + grace), Wait);
+        assert_eq!(step(false, false, 100, Some(104), 1, 104 + 2 * grace), Retry(LeftThePoolWithoutTheClass));
+        assert_eq!(step(false, false, 100, Some(104), 3, 104 + 8 * grace), Retry(LeftThePoolWithoutTheClass));
+        assert_eq!(step(false, false, 100, Some(104), 30, 103 + CLASS_REGISTRATION_RETRY_DAA), Wait);
+        assert_eq!(step(false, false, 100, Some(104), 30, 104 + CLASS_REGISTRATION_RETRY_DAA), Retry(LeftThePoolWithoutTheClass));
+        // Unrecorded departure (the first tick that sees it): counted from now.
+        assert_eq!(step(false, false, 100, None, 0, 150), Wait);
+
+        // The tick is held only for a built registration waiting for funding.
+        let holds = palw_class_registration_holds_the_tick_v1;
+        assert!(holds(true, false, true, false), "built, not yet sent: the stall the hold exists for");
+        assert!(!holds(true, false, false, false), "the gate refuses (below palw_tir_v1): the seat does its duties");
+        assert!(!holds(true, false, true, true), "its carrier waits for a block: the seat does its duties");
+        assert!(!holds(true, true, false, false), "the class stands");
+        assert!(!holds(false, false, true, false), "not a registrant");
+
+        // The loop asks the mempool, applies the step, treats a class already on the chain as done,
+        // matches the IR object's own class id, and holds the tick by the rule.
+        let whole = include_str!("palw_panel.rs");
+        let production = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the tests")];
+        let worker = &production[production.find("    pub async fn worker(").expect("the worker")..];
+        let flight =
+            &worker[worker.find("if let Some((txid, sent_daa)) = class_registration_inflight {").expect("the in-flight read")..];
+        let flight = &flight[..flight.find("\n            }\n").expect("its end")];
+        assert!(flight.contains(".has_transaction(txid, kaspa_mining::model::tx_query::TransactionQuery::All)"));
+        assert!(flight.contains("palw_class_registration_step_v1("));
+        assert!(flight.contains("Some(PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, .. })"));
+        assert!(worker.contains("class_registration_known_id.get_or_insert_with(|| self.class_registration_id())"));
+        assert!(!worker.contains("if self.config.register_class.is_some() && !class_registration_done {\n                continue;"));
+        assert!(worker.contains("if palw_class_registration_holds_the_tick_v1("));
+        assert_eq!(worker.matches("class_registration_inflight = Some((txid, current_daa));").count(), 2, "both submit sites");
+        assert_eq!(worker.matches("class_registration_left_pool = None;").count(), 4, "reset on submit (x2), in pool, retry");
+    }
 
     /// The two-output bond carrier this node builds: one collateral output to the payee, one
     /// change output back to the funding script, one input.
