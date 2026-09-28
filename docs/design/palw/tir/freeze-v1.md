@@ -144,8 +144,18 @@ integer program vs the f32 reference, teacher-forced.
 | family | checkpoint | top-1 | mean KL (max) | ppl float → integer | meets |
 | --- | --- | --- | --- | --- | --- |
 | C1 dense (Qwen2 arch) | Qwen/Qwen2.5-1.5B-Instruct (on disk) | 0.973 | 0.00138 (0.0063) | 60.37 → 60.69 (+0.53 %) | yes |
+| C1 dense (Llama architecture) | `HuggingFaceTB/SmolLM2-1.7B-Instruct` | 0.973 | 0.00303 (0.0246) | 47.98 → 47.71 (−0.56 %) | yes |
+| C1 Phi (partial rotary, parallel block) | `microsoft/phi-1_5` | 0.980 | 0.00046 (0.0057) | 94.98 → 95.08 (+0.10 %) | yes |
+| C3/C8 MoE (GraniteMoE: 32 experts, top-8) | `ibm-granite/granite-3.1-1b-a400m-instruct` | 0.969 | 0.01061 (0.3241) | 51.00 → 52.45 (+2.85 %) | yes |
+| C5 SSM (Mamba) | `state-spaces/mamba-370m-hf` | **0.758** | **0.20887** (0.6941) | 74.42 → 87.77 (**+17.94 %**) | **no** |
 
-(The remaining rows are filled from the runs in §9 as they complete.)
+The integer side ran on the typed backend (`--exec`), each run cross-checked against the reference
+evaluator on its first two positions (equal); peak RSS 1.7–4.7 GB. (The rows still missing are filled
+from the runs in §9 as they complete.)
+
+**Mamba misses its row** — a quantisation problem, not an IR one (corpus-v1 §9): the tiny Mamba
+fixtures (random weights) agree at 0.94–1.00, so the scan is lowered right, and the trained
+checkpoint's statistics are what one static scale per site does not hold. Diagnosis per site below.
 
 **Recurrence drift** (KL at position 4,096 ≤ 1.5 × KL at 128, C4–C7): not yet measured — needs one
 4,096-token evaluation per recurrent checkpoint, which the typed backend now makes cheap (§8).

@@ -74,6 +74,13 @@ struct Args {
     /// (corpus-v1 §9: at 4,096 positions, within 1.5×).
     #[arg(long)]
     drift: bool,
+    /// Diagnose: the N sites with the largest relative error (‖int − float‖ / ‖float‖ over the
+    /// first `--site-positions` positions of the first evaluation sequence), from a traced float
+    /// run and the reference evaluator. Loads every weight as f32: small models.
+    #[arg(long, default_value_t = 0)]
+    sites: usize,
+    #[arg(long, default_value_t = 16)]
+    site_positions: usize,
 }
 
 fn tokens(path: &Option<PathBuf>, vocab: usize, count: usize, seed: u64) -> Result<(Vec<Vec<usize>>, serde_json::Value), String> {
@@ -215,6 +222,15 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())?
     };
     let m = fidelity::compare(&fl, &il, &eval);
+    if a.sites > 0 {
+        log(format!("site errors over the first {} positions (every weight as f32)", a.site_positions));
+        let (params_f, _) = misaka_palw_tir_lower::float_ref::ParamStore::from_source(&prep.hl, &prep.binding, &ck).map_err(|e| e.to_string())?;
+        let seq = &eval[0][..a.site_positions.min(eval[0].len())];
+        let errs = fidelity::site_errors(&prep, &params_f, &stats, &policy, &mat, seq).map_err(|e| e.to_string())?;
+        for e in errs.iter().take(a.sites) {
+            eprintln!("  site {:>40}  rel {:.5}  max|Δ| {:.4e}  |f|max {:.4e}", e.key, e.rel_l2, e.max_abs, e.float_absmax);
+        }
+    }
     let drift = a.drift.then(|| fidelity::drift(&fl, &il, (64, 192), 128));
     if let Some(d) = &drift {
         log(format!(
