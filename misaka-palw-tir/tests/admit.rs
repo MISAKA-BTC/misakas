@@ -8,6 +8,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
+use common::admission::head_local_delta_rule;
 use common::models::*;
 use misaka_palw_tir::admit::{
     LeafV1, TirAdmissionV1, TirAdmitError, TirAdmitInputsV1, TirCeilingsV1, tir_admit_program_v1, tir_admit_v1,
@@ -211,72 +212,6 @@ fn the_corpus_programs_and_a_qwen25_1_5b_sized_decoder_are_admitted_in_bounded_t
     assert!(worst < Duration::from_secs(10), "admission is a registration-time computation, not a search");
 }
 
-/// A delta-rule layer whose per-position operands arrive committed (here: params, gathered by
-/// position): the update of `S[heads, d_v, d_k]` is head-local, so its replay splits per head.
-fn head_local_delta_rule(heads: u32, dv: u32, dk: u32) -> TirProgramV1 {
-    let t = 16u32;
-    let mut pb = ProgramBuilder::new(4, HISTORY_BOUND_V1_SMALL);
-    let k = pb.param("k", DType::I16, &[t, heads * dk], false);
-    let v = pb.param("v", DType::I16, &[t, heads * dv], false);
-    let q = pb.param("q", DType::I16, &[t, heads * dk], false);
-    let dec = pb.param("decay", DType::I32, &[t, heads], false);
-    let beta = pb.param("beta", DType::I32, &[t, heads], false);
-    let tri: Vec<Ref> = ["r.m", "r.s", "r.z", "d.m", "d.s", "d.z", "ws", "o.m", "o.s", "o.z"]
-        .iter()
-        .map(|n| {
-            pb.param(
-                n,
-                if n.ends_with(".s") {
-                    DType::I8
-                } else if *n == "ws" {
-                    DType::I32
-                } else {
-                    DType::I64
-                },
-                &[heads],
-                true,
-            )
-        })
-        .collect();
-    let s = pb.fixed_state("S", DType::I32, &[heads, dv, dk], -(i32::MAX as i64), i32::MAX as i64, true);
-    let carry = vec![TensorType::fixed(DType::I32, &[heads * dv])];
-    let pre = {
-        let mut b = pb.block("pre", vec![]);
-        let z = b.iota(DType::I32, &[Dim::Fixed(heads * dv)], 0, 0, 0);
-        let z = b.commit(z);
-        b.finish(&[z])
-    };
-    let layer = {
-        let mut b = pb.block("delta", carry.clone());
-        let pos = b.clamp(Ref::Input(INPUT_POS), 0, t as i64 - 1, DType::Idx);
-        let at = |b: &mut misaka_palw_tir::builder::BlockBuilder<'_>, table: Ref, shape: &[u32]| {
-            let r = b.gather(table, pos, 0, 0);
-            let r = b.reshape_fixed(r, shape);
-            b.commit(r)
-        };
-        let (kk, vv, qq) = (at(&mut b, k, &[heads, dk]), at(&mut b, v, &[heads, dv]), at(&mut b, q, &[heads, dk]));
-        let dd = at(&mut b, dec, &[heads]);
-        let dd = b.clamp(dd, 0, 1 << 24, DType::I32);
-        let bb = at(&mut b, beta, &[heads]);
-        let bb = b.clamp(bb, 0, 1 << 24, DType::I32);
-        let rs = b.pow2_of(tri[1]);
-        let ds = b.pow2_of(tri[4]);
-        let os = b.pow2_of(tri[8]);
-        let o = b.gdn_step_q36(s, kk, vv, qq, dd, bb, (tri[0], rs, tri[2]), (tri[3], ds, tri[5]), tri[6], (tri[7], os, tri[9]));
-        let o = b.reshape_fixed(o, &[heads * dv]);
-        let out = b.add(o, Ref::CarryIn(0), DType::I64);
-        let out = b.clamp(out, i32::MIN as i64, i32::MAX as i64, DType::I32);
-        b.finish(&[out])
-    };
-    let post = {
-        let mut b = pb.block("post", carry);
-        let l = b.reshape_fixed(Ref::CarryIn(0), &[heads * dv]);
-        b.commit(l);
-        b.finish(&[])
-    };
-    pb.finish(pre, vec![layer, layer], post, 0)
-}
-
 #[test]
 fn state_replay_splits_into_groups_where_the_update_is_head_local() {
     let p = head_local_delta_rule(8, 16, 16);
@@ -467,11 +402,11 @@ fn a_cone_or_a_replay_past_its_ceiling_is_refused_by_name() {
     assert!(tir_admit_program_v1(&p, &base).is_ok());
     // The LM head tile: 64 rows of 256 MACs = 16,384 > 10,000.
     let tight = TirAdmitInputsV1 { ceilings: TirCeilingsV1 { max_tile_macs: 10_000, ..base.ceilings }, ..base };
-    assert!(matches!(tir_admit_program_v1(&p, &tight), Err(TirAdmitError::Exceeds { limit: "tile MACs", .. })));
+    assert!(matches!(tir_admit_program_v1(&p, &tight), Err(TirAdmitError::Exceeds { limit: "max_tile_macs", .. })));
     let few = TirAdmitInputsV1 { ceilings: TirCeilingsV1 { max_tile_operands: 1, ..base.ceilings }, ..base };
-    assert!(matches!(tir_admit_program_v1(&p, &few), Err(TirAdmitError::Exceeds { limit: "tile operands", .. })));
+    assert!(matches!(tir_admit_program_v1(&p, &few), Err(TirAdmitError::Exceeds { limit: "max_tile_operands", .. })));
     let leaves = TirAdmitInputsV1 { ceilings: TirCeilingsV1 { max_step_leaves: 10, ..base.ceilings }, ..base };
-    assert!(matches!(tir_admit_program_v1(&p, &leaves), Err(TirAdmitError::Exceeds { limit: "step leaves per position", .. })));
+    assert!(matches!(tir_admit_program_v1(&p, &leaves), Err(TirAdmitError::Exceeds { limit: "max_step_leaves", .. })));
     // A recurrence whose one-position replay is past the terminal ceiling.
     let (g, _) = gdn_program(true);
     let starved = TirAdmitInputsV1 { ceilings: TirCeilingsV1 { max_tile_macs: 8, ..base.ceilings }, ..base };
@@ -550,7 +485,7 @@ fn admission_work_is_capped_and_the_worst_case_of_the_normal_form_is_refused_by_
     let t0 = Instant::now();
     let e = admit(&p).expect_err("past the default cone-work ceiling");
     let refused_in = t0.elapsed();
-    assert!(matches!(e, TirAdmitError::Exceeds { limit: "cone work", .. }), "{e}");
+    assert!(matches!(e, TirAdmitError::Exceeds { limit: "max_cone_work", .. }), "{e}");
     // The ceiling is exact: the program's own work admits it, one less refuses it.
     assert!(tir_admit_program_v1(&p, &uncapped(a.cone_work)).is_ok());
     assert!(tir_admit_program_v1(&p, &uncapped(a.cone_work - 1)).is_err());
@@ -565,4 +500,104 @@ fn admission_work_is_capped_and_the_worst_case_of_the_normal_form_is_refused_by_
     let q = admit(&dense_sized(28, 1536, 12, 2, 128, 8960, 151_936)).unwrap();
     assert!(q.cone_work * 100 < TirCeilingsV1::legacy_court_v1().max_cone_work, "{}", q.cone_work);
     eprintln!("qwen2.5-1.5b-sized cone work {}", q.cone_work);
+}
+
+// ---- §10.3's split rule and the refusals ref2 read differently (A1–A7) -----------------------
+
+fn state_of<'a>(a: &'a TirAdmissionV1, p: &TirProgramV1, name: &str) -> Option<&'a misaka_palw_tir::admit::StateCkptV1> {
+    let j = p.states.iter().position(|s| s.name == name).expect("a declared state") as u16;
+    a.states.iter().find(|c| c.state == j)
+}
+
+/// `Σ` of the §8 costs of `nodes` of the layer block (block 1), component by component.
+fn cost_of(a: &TirAdmissionV1, nodes: &[usize]) -> misaka_palw_tir::admit::CostV1 {
+    let mut c = misaka_palw_tir::admit::CostV1::default();
+    for i in nodes {
+        let n = &a.node_costs[1][*i];
+        c.macs += n.macs;
+        c.elementwise += n.elementwise;
+        c.transcendentals += n.transcendentals;
+        c.bytes_read += n.bytes_read;
+        c.bytes_written += n.bytes_written;
+    }
+    c
+}
+
+/// **A1**: a free node never blocks the split, a commit point is a free leaf (another member's
+/// committed `StateWrite` too), and one group pays `⌈aligned / G⌉ + free`, every free node whole.
+#[test]
+fn the_split_rule_on_the_readings_that_differed() {
+    use common::admission::*;
+    // A free update splits, and each group pays the free nodes whole: Clamp (0), StateWrite (1).
+    let p = free_update();
+    let a = admit(&p).unwrap();
+    let s = state_of(&a, &p, "S").unwrap();
+    assert_eq!(s.groups, 4, "a free update splits");
+    assert_eq!(s.per_position, cost_of(&a, &[0, 1]), "every free node whole, per group");
+    // A free node inside an aligned update: ⌈(Add + StateWrite) / 4⌉ + Clamp.
+    let p = free_node_in_an_aligned_update();
+    let a = admit(&p).unwrap();
+    let s = state_of(&a, &p, "S").unwrap();
+    assert_eq!(s.groups, 4);
+    let (aligned, free) = (cost_of(&a, &[1, 2]), cost_of(&a, &[0]));
+    assert_eq!(s.per_position.elementwise, aligned.elementwise.div_ceil(4) + free.elementwise);
+    assert_eq!(s.per_position.bytes_read, aligned.bytes_read.div_ceil(4) + free.bytes_read);
+    // A committed member write is a free leaf: S2's closure is {S1, S2} and it splits.
+    let p = a_committed_member_write_is_a_free_leaf();
+    let a = admit(&p).unwrap();
+    let s2 = state_of(&a, &p, "S2").unwrap();
+    assert_eq!((s2.closure.len(), s2.groups), (2, 4), "the Transpose of an opened value is free");
+    assert_eq!(state_of(&a, &p, "S1").unwrap().groups, 4);
+    // A reduction across groups keeps the replay whole.
+    let p = a_reduction_across_groups();
+    let a = admit(&p).unwrap();
+    assert_eq!(state_of(&a, &p, "S").unwrap().groups, 1);
+    // A member of another width keeps it whole too, and a state nobody writes has no C_j (A7).
+    let p = a_member_of_another_width_and_a_state_nobody_writes();
+    let a = admit(&p).unwrap();
+    let s = state_of(&a, &p, "S").unwrap();
+    assert_eq!((s.closure.len(), s.groups), (2, 1));
+    assert!(state_of(&a, &p, "T").is_none(), "T is read and never written: no C_j");
+    assert_eq!(a.checkpoint_interval, s.interval, "C is S's alone");
+    // Where the rule decides the verdict: a free product is paid whole by every group ...
+    let tight = |macs: u64| TirAdmitInputsV1 { ceilings: TirCeilingsV1 { max_tile_macs: macs, ..inputs().ceilings }, ..inputs() };
+    let p = a_free_product_update();
+    let s = state_of(&admit(&p).unwrap(), &p, "S").unwrap().clone();
+    assert_eq!((s.groups, s.per_position.macs), (4, 512), "the free product, whole, per group");
+    let e = tir_admit_program_v1(&p, &tight(256)).unwrap_err();
+    assert!(matches!(e, TirAdmitError::Exceeds { limit: "max_tile_macs", value: 512, cap: 256, .. }), "{e}");
+    // ... and a committed member write splits the replay four ways: 512 aligned MACs, 128 a group.
+    // (Tiles of 16 lanes, so the committed w1's own tile — 16 x 4 MACs — is inside the ceiling and
+    // only the replay is at it.)
+    let p = a_committed_member_write_decides_the_split();
+    let a = tir_admit_program_v1(&p, &TirAdmitInputsV1 { tile_len: 16, ..tight(128) }).expect("admitted at C_j = 1");
+    let s2 = state_of(&a, &p, "S2").unwrap();
+    assert_eq!((s2.closure.len(), s2.groups, s2.per_position.macs, s2.interval), (2, 4, 128, 1));
+    assert_eq!(a.checkpoint_interval, 1);
+}
+
+/// **A3**: a `C_j` of 0 names the component past its cap, MACs first, and a zero interval cap is an
+/// input refusal; **A2**: every refusal names a ceiling by its field.
+#[test]
+fn a_replay_past_its_ceiling_names_the_component_and_a_zero_interval_is_an_input() {
+    use common::admission::*;
+    let base = inputs();
+    let with = |f: &dyn Fn(&mut TirCeilingsV1)| {
+        let mut c = base.ceilings;
+        f(&mut c);
+        TirAdmitInputsV1 { ceilings: c, ..base }
+    };
+    let p = a_replay_of_matmuls();
+    let one = state_of(&admit(&p).unwrap(), &p, "S").unwrap().clone();
+    assert_eq!((one.groups, one.per_position.macs), (2, 64), "128 MACs a position, 64 a group");
+    let e = tir_admit_program_v1(&p, &with(&|c| c.max_tile_macs = 63)).unwrap_err();
+    assert!(matches!(e, TirAdmitError::Exceeds { limit: "max_tile_macs", value: 64, cap: 63, .. }), "{e}");
+    assert!(tir_admit_program_v1(&p, &with(&|c| c.max_tile_macs = 64)).is_ok(), "one position fits exactly");
+    let p = a_replay_of_transcendentals();
+    let one = state_of(&admit(&p).unwrap(), &p, "S").unwrap().clone();
+    assert_eq!((one.groups, one.per_position.transcendentals, one.per_position.macs), (2, 4, 0));
+    let e = tir_admit_program_v1(&p, &with(&|c| c.max_tile_transcendentals = 3)).unwrap_err();
+    assert!(matches!(e, TirAdmitError::Exceeds { limit: "max_tile_transcendentals", value: 4, cap: 3, .. }), "{e}");
+    let e = tir_admit_program_v1(&p, &with(&|c| c.max_checkpoint_interval = 0)).unwrap_err();
+    assert!(matches!(e, TirAdmitError::Inputs(_)), "{e}");
 }
