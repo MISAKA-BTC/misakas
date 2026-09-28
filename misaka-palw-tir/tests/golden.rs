@@ -30,7 +30,9 @@ use misaka_palw_tir::{
 use serde::Serialize;
 
 const FORMAT_PRIM: &str = "palw-tir-v1/primitive-vectors/1";
-const FORMAT_PROGRAM: &str = "palw-tir-v1/program-vectors/2";
+const FORMAT_PROGRAM: &str = "palw-tir-v1/program-vectors/3";
+/// The key of `graph_ir_root` (spec 04b §3.6), the one `palw_tir_class_v1` hashes under.
+const GRAPH_IR_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/tir/graph-ir-root/v1";
 const FORMAT_ENCODING: &str = "palw-tir-v1/encoding-vectors/1";
 const SPEC: &str = "docs/spec/palw/04b-tensor-ir.md";
 
@@ -151,6 +153,7 @@ struct ProgramFileJson {
     name: String,
     description: String,
     program_borsh_hex: String,
+    graph_ir_root_hex: String,
     params: Vec<ParamJson>,
     steps: Vec<StepJson>,
     cones: Vec<ConeJson>,
@@ -169,6 +172,12 @@ struct EncodingFileJson {
     format: String,
     spec: String,
     cases: Vec<EncodingCaseJson>,
+}
+
+/// `graph_ir_root` (spec 04b §3.6): BLAKE2b-512 keyed by [`GRAPH_IR_ROOT_DOMAIN_V1`] over the
+/// canonical bytes. The crate itself never hashes (identity stays with the caller); the vectors pin it.
+fn graph_ir_root(bytes: &[u8]) -> blake2b_simd::Hash {
+    blake2b_simd::Params::new().hash_length(64).key(GRAPH_IR_ROOT_DOMAIN_V1).hash(bytes)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -298,6 +307,8 @@ fn cases_for(tag: u8) -> Vec<Case> {
                 I32,
                 &[2, 2],
             ),
+            // Nine operands: past the eight a node may have, and alone that is `Shape` (§9.3).
+            case("error_arity_9", Prim::Concat { axis: 0 }, (1..=9).map(|v| t(I32, &[1], &[v])).collect(), I32, &[9]),
         ],
         4 => vec![
             case("row_to_matrix", Prim::Broadcast, vec![t(I32, &[3], &[1, 2, 3])], I32, &[2, 3]),
@@ -405,6 +416,9 @@ fn cases_for(tag: u8) -> Vec<Case> {
                 ),
                 case("error_overflow_i128", p.clone(), vec![t(I128, &[1], &[i128::MAX]), t(I128, &[1], &[i128::MAX])], I128, &[1]),
                 case("error_no_broadcast", p.clone(), vec![t(I32, &[2], &[1, 2]), t(I32, &[3], &[1, 2, 3])], I32, &[3]),
+                // Outside a program there is no normal form: a wrong operand count is the type
+                // rule's failure (`Shape`, spec 04b §9.3), not NF-14's.
+                case("error_arity_1", p.clone(), vec![t(I32, &[2], &[1, 2])], I32, &[2]),
             ];
             let a = random_i(r, I32, 32);
             let b = random_i(r, I32, 32);
@@ -999,6 +1013,7 @@ fn program_file(name: &str, description: &str, program: &TirProgramV1, params: &
         name: name.into(),
         description: description.into(),
         program_borsh_hex: hex(&program.encode()),
+        graph_ir_root_hex: hex(graph_ir_root(&program.encode()).as_bytes()),
         params: pj(program, params),
         steps,
         cones,

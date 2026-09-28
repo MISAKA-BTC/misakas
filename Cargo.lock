@@ -6215,6 +6215,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-tir-conformance"
+version = "1.1.0"
+dependencies = [
+ "kaspa-consensus-core",
+ "misaka-palw-tir",
+]
+
+[[package]]
 name = "misaka-palw-tir-ref2"
 version = "1.1.0"
 dependencies = [

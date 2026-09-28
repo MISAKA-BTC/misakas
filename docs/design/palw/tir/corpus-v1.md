@@ -15,8 +15,10 @@
 > sliding + global, GDN with unequal heads, Mamba2, top-2 MoE with a shared expert); all five pass the
 > range rules of spec 04b §7 (`tests/intervals.rs`: no exact primitive of theirs can overflow on any
 > weights, token or position) and run to completion under full-range hostile weights
-> (`tests/totality.rs`). The legacy kernels' lossy chains are shown byte-identical as IR segments in
-> `tests/kat_base0.rs` and `tests/legacy_mirror.rs`. Everything else in this file is decomposition on paper, which is what
+> (`tests/totality.rs`). Every integer kernel of the live court's catalogue is byte-identical to its
+> `tir_library_v1` segment against the LIVE code (`misaka-palw-tir-conformance`; the BASE-0 KAT digest
+> in `tests/kat_base0.rs`), and every template of the library is admissible and checked against a float
+> reference (`tests/library.rs`). Everything else in this file is decomposition on paper, which is what
 > Phase A asks for; Phase E turns each row into a lowering and a fidelity run.
 
 ## 0. Scope
@@ -232,7 +234,7 @@ index (the canonical-work rule "a `MatMul` whose `Param` passes through a `Gathe
 combine as one `MatMul`.
 
 **Tested:** `tests/programs.rs::a_top2_moe_layer_with_a_shared_expert_routes_through_committed_selections`
-and the router/combine mirror in `tests/legacy_mirror.rs` (ties among underflowing probabilities
+and the router/combine conformance in `misaka-palw-tir-conformance` (ties among underflowing probabilities
 decided by index alone, reproduced).
 
 ### C4 — Linear attention: the gated delta rule (Qwen3-Next, Qwen3.5/3.6/3.8)
@@ -288,8 +290,8 @@ checkpoints only (a per-position commitment of `S` is `v_heads·dv·dk` lanes pe
 
 **Tested:** `tests/programs.rs::a_gdn_layer_with_unequal_key_and_value_heads_runs_and_the_head_mapping_is_data`
 (2 key / 4 value heads; grouping and tiling are different programs and, at `k ≠ v`, different
-functions; at `k = v` they coincide) and `tests/legacy_mirror.rs::the_gated_delta_step_is_q36_gdn_step`
-(byte-identical to the live kernel over 12 positions with adversarial narrowings).
+functions; at `k = v` they coincide) and `misaka-palw-tir-conformance::q36::kdesc_q36_gdn_step`
+(byte-identical to the live kernel over 36 positions, three seeds, with adversarial narrowings).
 
 ### C5 — State-space models (Mamba, Mamba2)
 
@@ -468,7 +470,7 @@ program that tiles is a different class with a different id. The legacy conventi
 | --- | --- | --- |
 | `Scatter` | **out** | Every use in the corpus is a mask or a one-hot: DeepSeek's `group_mask.scatter_` is `ReduceMax(Compare(Iota, idx, Eq))`; KV writes are `HistAppend`; state updates are whole-tensor. No family scatters data. |
 | `Sort` | **out** | Only `TopK` (a partial selection) is needed; top-p / min-p are sampling (RFC-0001). The Kimi legacy router's "remainder to the last-selected expert" is recoverable with `Compare`/`Select` (the last selected is the minimum kept probability, highest index among equals). |
-| `IntSigmoid` | **library** | `IntExp`, `IntRecip` (= `IntRsqrt` + `Mul` + `Div`), `Select`, `Mul`, `Div` — byte-identical to `int_sigmoid` (`tests/legacy_mirror.rs`), same transcendental count as a primitive would have. |
+| `IntSigmoid` | **library** | `IntExp`, `IntRecip` (= `IntRsqrt` + `Mul` + `Div`), `Select`, `Mul`, `Div` — byte-identical to `int_sigmoid` (`misaka-palw-tir-conformance`), same transcendental count as a primitive would have. |
 | `BoundedScan` | **out** | No family has a recurrence inside one position; every recurrence is over positions (`Fixed` state). Chunked prefill (SSD, chunked GDN) is a fused kernel. |
 | `BoundedMap` | **out** | Heads, experts, groups and channels are tensor axes: `MatMul` batch dimensions, broadcasting, `Gather` with `batch_dims`. No family needs a per-element body. |
 | `BoundedReduce` (user body) | **refused** | Order-dependent unless proved associative and exact, which breaks order-free regions (spec 04b §6.8); the exact reductions are `ReduceSum`, `ReduceMax`, `MatMul`. |

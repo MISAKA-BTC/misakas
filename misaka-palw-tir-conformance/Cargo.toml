@@ -1,0 +1,21 @@
+[package]
+name = "misaka-palw-tir-conformance"
+description = "RFC-0002 freeze criterion 6, tested: every integer kernel of the live court catalogue (and the fenced RequantizeByToken) against its PALW-TIR segment from tir_library_v1, byte for byte. Test-only; a dependency of nothing."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Test-only. It depends on the live kernels (kaspa-consensus-core) and on the IR (misaka-palw-tir)
+# so that the conformance claim is checked against the code that runs, not against a transcription
+# of it; neither of the two depends on this crate.
+[dependencies]
+kaspa-consensus-core.workspace = true
+misaka-palw-tir = { path = "../misaka-palw-tir" }
+
+[lints]
+workspace = true

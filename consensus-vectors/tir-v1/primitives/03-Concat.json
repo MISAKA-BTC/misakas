@@ -218,6 +218,109 @@
         ]
       },
       "expect_error": "Shape"
+    },
+    {
+      "name": "error_arity_9",
+      "prim": {
+        "name": "Concat",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ]
+        ],
+        "borsh_hex": "0300"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "1"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "2"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "3"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "4"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "5"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "6"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "7"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "8"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "9"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          9
+        ]
+      },
+      "expect_error": "Shape"
     }
   ]
 }
