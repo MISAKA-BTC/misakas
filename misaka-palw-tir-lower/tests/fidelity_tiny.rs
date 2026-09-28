@@ -177,3 +177,21 @@ fn site_errors_of_one_fixture() {
         eprintln!("{:>32}  rel {:.5}  max|Δ| {:.4e}  |f|max {:.4e}", e.key, e.rel_l2, e.max_abs, e.float_absmax);
     }
 }
+
+/// The calibration-length rule (freeze-v1 §5.2): a recurrent program refuses a calibration shorter
+/// than its evaluated context; an attention-only one is not bound by it.
+#[test]
+fn a_recurrent_program_is_calibrated_as_long_as_its_context() {
+    let hl_of = |name: &str| {
+        let cfg = std::fs::read_to_string(fixture_dir(name).join("config.json")).expect("config");
+        let spec = misaka_palw_tir_lower::parse_config_str(&cfg).expect("spec");
+        misaka_palw_tir_lower::hl::build_program(&spec).expect("hl")
+    };
+    let short = vec![vec![1usize; 32]; 4];
+    for recurrent in ["mamba", "falcon_mamba", "mamba2", "jamba", "qwen3_5", "qwen3_next", "rwkv"] {
+        let hl = hl_of(recurrent);
+        assert!(fidelity::check_calibration_length(&hl, &short, 64).is_err(), "{recurrent}");
+        assert_eq!(fidelity::check_calibration_length(&hl, &short, 32), Ok(Some(32)), "{recurrent}");
+    }
+    assert_eq!(fidelity::check_calibration_length(&hl_of("llama"), &short, 4096), Ok(None));
+}
