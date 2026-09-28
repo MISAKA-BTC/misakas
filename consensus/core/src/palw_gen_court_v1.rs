@@ -352,7 +352,6 @@ use crate::palw_gen_worker_v1::{PalwGenClaimRootsV1, PalwGenDecodeV1};
 use misaka_palw_tir::demand::{DemandError, DemandLimits, DemandRequest, DemandTarget, hist_row_node_v1};
 use misaka_palw_tir::demand_v2::eval_demanded_v2;
 use misaka_palw_tir::interval::Interval;
-use misaka_palw_tir::pipeline::PipelineParams;
 use misaka_palw_tir::program::StateKind;
 
 /// One carried input tile of a job image, with its path under the job's `input_root`.
@@ -365,23 +364,27 @@ pub struct PalwGenImageTileV1 {
 }
 
 /// **A generative close**: the disputed leaf and every unit its cone reads, opened — leaves of the
-/// disputed stage that precede it, leaves of earlier stages (the edges), and job-image tiles.
+/// disputed stage that precede it, leaves of earlier stages (the edges), job-image tiles, and the
+/// class's param leaves (whole leaves of its pipeline inventory, ascending, each with its path to
+/// the class's `artifact_root`: [`crate::palw_gen_artifact_v1`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwGenCloseV1 {
     pub disputed: PalwGenOpenedLeafV1,
     pub operands: Vec<PalwGenOpenedLeafV1>,
     pub image_tiles: Vec<PalwGenImageTileV1>,
+    pub params: Vec<crate::palw_artifact::PalwArtifactOpeningV1>,
 }
 
-/// **What the court holds of a claim**: its class (the space, the pipeline, the programs and the
-/// artifact's params — authenticated against the class's artifact root, the Phase F inventory's
-/// work), the job's facts (its prompt and committed ids, never an image's bytes), its images' roots,
-/// its draw, and the claim's roots.
+/// **What the court holds of a claim**: its class (the space, the pipeline, the programs, the
+/// class's `artifact_root` and its pipeline inventory's index — the params themselves are the
+/// close's, authenticated against the root), the job's facts (its prompt and committed ids, never an
+/// image's bytes), its images' roots, its draw, and the claim's roots.
 pub struct PalwGenCourtCaseV1<'a> {
     pub space: &'a PalwGenStepSpaceV1,
     pub pipeline: &'a TirPipelineV1,
     pub programs: &'a [TirProgramV2],
-    pub params: &'a dyn PipelineParams,
+    pub artifact_root: crate::Hash64,
+    pub inventory: &'a crate::palw_gen_artifact_v1::PalwGenInventoryIndexV1,
     pub facts: &'a [StageJobFacts],
     pub images: &'a [PalwGenImageRefV1],
     pub draw: PalwGenDrawV1,
@@ -408,6 +411,8 @@ pub enum PalwGenCloseRefusalV1 {
     NotPreceding(PalwGenLeafCoordV1),
     #[error(transparent)]
     Image(PalwGenImageRefusalV1),
+    #[error(transparent)]
+    Params(crate::palw_gen_artifact_v1::PalwGenParamRefusalV1),
     #[error("the evaluation reads a unit the close does not carry: {0}")]
     Incomplete(String),
     #[error("the close is unadjudicable: {0}")]
@@ -444,11 +449,12 @@ fn edge_leaf(case: &PalwGenCourtCaseV1<'_>, stage: usize, input: u16, index: usi
     Some((up, leaf, lane))
 }
 
-/// The court's source for one stage: the carried, authenticated leaves and the class's params.
+/// The court's source for one stage: the carried, authenticated leaves and params.
 struct CarriageSource<'a, 'c> {
     case: &'a PalwGenCourtCaseV1<'c>,
     stage: usize,
     leaves: &'a std::collections::BTreeMap<(u8, u64), Vec<i128>>,
+    params: &'a crate::palw_gen_artifact_v1::PalwGenOpenedParamsV1,
 }
 
 fn missing(m: String) -> TirError {
@@ -465,12 +471,11 @@ impl DemandSourceV2 for CarriageSource<'_, '_> {
     }
     fn param(&mut self, param: u16, layer: Option<u16>, index: usize) -> TirResult<i128> {
         let program = self.case.pipeline.stages[self.stage].program;
-        self.case
-            .params
-            .params(program)
-            .param(param, layer)
-            .and_then(|t| t.data.get(index).copied())
-            .ok_or_else(|| missing(format!("param {param} layer {layer:?} element {index}")))
+        match self.params.element(self.case.inventory, program, param, layer, index) {
+            Ok(Some(v)) => Ok(v),
+            Ok(None) => Err(missing(format!("program {program} param {param} layer {layer:?} element {index}"))),
+            Err(e) => Err(TirError::new(TirErrorKind::Malformed, e)),
+        }
     }
     fn input(&mut self, _pos: u32, input: u16, index: usize) -> TirResult<i128> {
         let (up, leaf, lane) = edge_leaf(self.case, self.stage, input, index)
@@ -539,10 +544,12 @@ fn first_outside(values: &[i128], iv: Interval) -> Option<u32> {
 ///    earlier stage's (every earlier stage precedes, PALW-GEN-3);
 /// 2. **PALW-TIR-33** on the disputed leaf and then on every carried leaf, in (stage, index) order:
 ///    the first lane outside its node's proven interval convicts;
-/// 3. the image tiles, verified against the job's `input_root`s (a failure refuses the close);
+/// 3. the class's param leaves, verified against its `artifact_root` (the pipeline inventory), and the
+///    image tiles, verified against the job's `input_root`s (a failure refuses the close);
 /// 4. the disputed leaf's elements re-evaluated from the carried leaves alone (spec 04b §15.4): its
-///    own stage's earlier leaves, the class's params, `R` recomputed, the job's facts, edges read from
-///    the earlier stages' leaves (PALW-TIR-33 again, as read), image lanes from the proven tiles;
+///    own stage's earlier leaves, the class's params from the proven leaves, `R` recomputed, the job's
+///    facts, edges read from the earlier stages' leaves (PALW-TIR-33 again, as read), image lanes from
+///    the proven tiles;
 /// 5. the first lane that differs convicts (`ComputationMismatch`); none acquits.
 ///
 /// A unit the evaluation reads and the close does not carry refuses the close (`Incomplete`); an
@@ -597,7 +604,10 @@ pub fn palw_gen_adjudicate_leaf_v1(
     // The stage's inputs as the court answers them.
     let answers = palw_gen_stage_answers_v1(case.pipeline, case.programs, s, case.facts, case.images)
         .map_err(|e| R::Incomplete(format!("the job does not fix the stage's inputs: {e}")))?;
-    let mut carriage = CarriageSource { case, stage: s, leaves: &leaves };
+    // The class's params: the carried inventory leaves, each proven under its artifact root.
+    let params = crate::palw_gen_artifact_v1::PalwGenOpenedParamsV1::authenticate(case.inventory, &case.artifact_root, &close.params)
+        .map_err(R::Params)?;
+    let mut carriage = CarriageSource { case, stage: s, leaves: &leaves, params: &params };
     let mut source = PalwGenStageSourceV1::new(&mut carriage, answers, case.draw).with_images(case.images.to_vec());
     for t in &close.image_tiles {
         source.carry_image_tile(t.image, t.tile, &t.bytes, &t.proof).map_err(R::Image)?;

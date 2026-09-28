@@ -12,8 +12,10 @@
 //!   its upstream's interval is convicted by PALW-TIR-33; and evidence that fails convicts nobody.
 
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
 use kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2;
+use kaspa_consensus_core::palw_gen_artifact_v1::*;
 use kaspa_consensus_core::palw_gen_court_v1::*;
 use kaspa_consensus_core::palw_gen_step_v1::*;
 use kaspa_consensus_core::palw_gen_worker_v1::*;
@@ -45,6 +47,11 @@ struct Class {
     layouts: Vec<PalwTirLayoutV1>,
     params: Params,
     v: serde_json::Value,
+    /// The class's `artifact_root` over its params (the pipeline inventory), its index, and every
+    /// leaf opened — what a close carries of the params (the simplest complete close).
+    root: Hash64,
+    inventory: PalwGenInventoryIndexV1,
+    openings: Vec<PalwArtifactOpeningV1>,
 }
 
 fn class(vector: &str) -> Class {
@@ -93,7 +100,10 @@ fn class(vector: &str) -> Class {
             }
         })
         .collect();
-    Class { pipeline, programs, layouts, params, v }
+    let (root, count) = palw_gen_inventory_root_v1(&programs, &params).expect("the toy weights have an inventory");
+    let inventory = PalwGenInventoryIndexV1::new(&programs).expect("an index");
+    let openings = palw_gen_open_leaves_v1(&programs, &params, 0..count).expect("every leaf opens");
+    Class { pipeline, programs, layouts, params, v, root, inventory, openings }
 }
 
 fn vlm_job(c: &Class) -> (PipelineJob, PalwGenImageRefV1, Vec<(Vec<u8>, Vec<[u8; 64]>)>) {
@@ -123,8 +133,9 @@ fn lie(e: &PalwGenExecutionV1, stage: usize, index: usize, lane: usize, delta: i
     l
 }
 
-/// The close of leaf `(stage, index)` carrying every leaf before it and every image tile.
-fn close(e: &PalwGenExecutionV1, stage: usize, index: usize, tiles: &[(Vec<u8>, Vec<[u8; 64]>)]) -> PalwGenCloseV1 {
+/// The close of leaf `(stage, index)` carrying every leaf before it, every image tile and every param
+/// leaf.
+fn close(c: &Class, e: &PalwGenExecutionV1, stage: usize, index: usize, tiles: &[(Vec<u8>, Vec<[u8; 64]>)]) -> PalwGenCloseV1 {
     let mut operands = Vec::new();
     for s in 0..=stage {
         let n = if s == stage { index } else { e.space.stages[s].leaves().len() };
@@ -137,7 +148,7 @@ fn close(e: &PalwGenExecutionV1, stage: usize, index: usize, tiles: &[(Vec<u8>, 
         .enumerate()
         .map(|(t, (bytes, proof))| PalwGenImageTileV1 { image: 0, tile: t as u64, bytes: bytes.clone(), proof: proof.clone() })
         .collect();
-    PalwGenCloseV1 { disputed: e.open(stage as u8, index as u64).unwrap(), operands, image_tiles }
+    PalwGenCloseV1 { disputed: e.open(stage as u8, index as u64).unwrap(), operands, image_tiles, params: c.openings.clone() }
 }
 
 fn judge(
@@ -154,7 +165,8 @@ fn judge(
         space: &e.space,
         pipeline: &c.pipeline,
         programs: &c.programs,
-        params: &c.params,
+        artifact_root: c.root,
+        inventory: &c.inventory,
         facts: &facts,
         images: &images,
         draw: PalwGenDrawV1 { seed: [0; 32], item_index: 0 },
@@ -211,7 +223,7 @@ fn every_leaf_of_both_stages_is_acquitted_from_the_leaves_before_it() {
     let mut judged = 0;
     for s in 0..2 {
         for i in 0..e.space.stages[s].leaves().len() {
-            let verdict = judge(&c, &e, &job, image, &close(&e, s, i, &tiles));
+            let verdict = judge(&c, &e, &job, image, &close(&c, &e, s, i, &tiles));
             assert_eq!(verdict, Ok(PalwGenVerdictV1::Acquitted), "stage {s} leaf {i} {:?}", e.space.stages[s].leaves()[i].coord);
             judged += 1;
         }
@@ -253,7 +265,7 @@ fn a_lie_in_any_stage_is_convicted_at_its_leaf() {
     for (what, stage, index) in cases {
         let lied = lie(&e, stage, index, 0, 1);
         let coord = e.space.stages[stage].leaves()[index].coord;
-        match judge(&c, &lied, &job, image, &close(&lied, stage, index, &tiles)) {
+        match judge(&c, &lied, &job, image, &close(&c, &lied, stage, index, &tiles)) {
             Ok(PalwGenVerdictV1::Convicted { leaf, fault }) => {
                 assert_eq!(leaf, coord, "{what}");
                 assert!(
@@ -273,7 +285,7 @@ fn a_lie_in_any_stage_is_convicted_at_its_leaf() {
     let row_leaf = find(0, &|k| k.tile == 0 && matches!(k.kind, PalwGenLeafKindV1::Commit { occurrence, .. } if occurrence > 0));
     let lied = lie(&e, 0, row_leaf, 0, 1 << 20);
     let reader = find(1, &|k| k.pos == 1 && matches!(k.kind, PalwGenLeafKindV1::Commit { occurrence: 0, .. }));
-    assert!(matches!(judge(&c, &lied, &job, image, &close(&lied, 1, reader, &tiles)), Ok(PalwGenVerdictV1::Convicted { .. })));
+    assert!(matches!(judge(&c, &lied, &job, image, &close(&c, &lied, 1, reader, &tiles)), Ok(PalwGenVerdictV1::Convicted { .. })));
 }
 
 #[test]
@@ -289,7 +301,8 @@ fn the_decode_door_convicts_an_id_the_decode_would_not_select() {
             space: &e.space,
             pipeline: &c.pipeline,
             programs: &c.programs,
-            params: &c.params,
+            artifact_root: c.root,
+            inventory: &c.inventory,
             facts: &facts,
             images: &images,
             draw: PalwGenDrawV1 { seed: [0; 32], item_index: 0 },
@@ -334,7 +347,8 @@ fn an_edge_value_outside_its_upstream_interval_is_convicted_across_stages() {
             space: &e.space,
             pipeline: &c.pipeline,
             programs: &c.programs,
-            params: &c.params,
+            artifact_root: c.root,
+            inventory: &c.inventory,
             facts: &facts,
             images: &images,
             draw: PalwGenDrawV1 { seed: [0x2a; 32], item_index: 0 },
@@ -342,7 +356,7 @@ fn an_edge_value_outside_its_upstream_interval_is_convicted_across_stages() {
         };
         palw_gen_adjudicate_leaf_v1(&case, close, &LIMITS)
     };
-    assert_eq!(judge_toy(&e, &close(&e, 2, dec_leaf, &[])), Ok(PalwGenVerdictV1::Acquitted));
+    assert_eq!(judge_toy(&e, &close(&c, &e, 2, dec_leaf, &[])), Ok(PalwGenVerdictV1::Acquitted));
     // The denoiser's last latent pushed past its proven interval: PALW-TIR-33 names that leaf.
     let post = (c.programs[1].occurrences().len() - 1) as u16;
     let last = e.space.stages[1].trip - 1;
@@ -352,7 +366,7 @@ fn an_edge_value_outside_its_upstream_interval_is_convicted_across_stages() {
         .position(|l| l.coord.pos == last && matches!(l.coord.kind, PalwGenLeafKindV1::Commit { occurrence, node } if occurrence == post && node == c.programs[1].output.node()))
         .unwrap();
     let lied = lie(&e, 1, latent, 0, 1 << 22);
-    match judge_toy(&lied, &close(&lied, 2, dec_leaf, &[])) {
+    match judge_toy(&lied, &close(&c, &lied, 2, dec_leaf, &[])) {
         Ok(PalwGenVerdictV1::Convicted { leaf, fault: PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: 0 } }) => {
             assert_eq!(leaf, e.space.stages[1].leaves()[latent].coord);
         }
@@ -370,7 +384,7 @@ fn evidence_that_fails_convicts_nobody() {
         .iter()
         .position(|l| l.coord.pos == 1 && matches!(l.coord.kind, PalwGenLeafKindV1::Commit { occurrence: 0, .. }))
         .unwrap();
-    let good = close(&e, 1, reader, &tiles);
+    let good = close(&c, &e, 1, reader, &tiles);
     // A disputed leaf not under the root.
     let mut forged = good.clone();
     forged.disputed.values[0] += 1;
@@ -384,7 +398,7 @@ fn evidence_that_fails_convicts_nobody() {
     thin.operands.retain(|o| o.coord.stage == 1);
     assert!(matches!(judge(&c, &e, &job, image, &thin), Err(PalwGenCloseRefusalV1::Incomplete(_))));
     // A forged image tile.
-    let vision = close(&e, 0, 0, &tiles);
+    let vision = close(&c, &e, 0, 0, &tiles);
     let mut bad_tile = vision.clone();
     bad_tile.image_tiles[1].bytes[0] ^= 1;
     assert!(matches!(
@@ -395,4 +409,132 @@ fn evidence_that_fails_convicts_nobody() {
     let mut unbound = e.clone();
     unbound.claim.stage_roots[0] = Hash64::from_bytes([1; 64]);
     assert_eq!(judge(&c, &unbound, &job, image, &good), Err(PalwGenCloseRefusalV1::RootsNotBound));
+}
+
+/// **The pipeline inventory is a closed form of the declarations**: every program's params, in the
+/// pipeline's program order, laid out as Phase F lays out one program's, each leaf named `p<k>/…`;
+/// its root is the ordinary artifact tree over that walk.
+#[test]
+fn the_pipeline_inventory_is_a_closed_form_of_the_declarations() {
+    use kaspa_consensus_core::palw_artifact::{artifact_leaf_v1, artifact_root_v1};
+    for vector in ["toy-vlm.json", "toy-image.json"] {
+        let c = class(vector);
+        let operands = palw_gen_inventory_operands_v1(&c.programs, &c.params).unwrap();
+        assert_eq!(operands.len() as u32, c.inventory.leaf_count(), "{vector}");
+        let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+        assert_eq!(artifact_root_v1(&leaves), Some(c.root), "{vector}: the root is the artifact tree over the walk");
+        let mut programs_seen = std::collections::BTreeSet::new();
+        for (i, o) in operands.iter().enumerate() {
+            let (k, j, layer, start, len) = c.inventory.piece_of(i as u32).unwrap();
+            programs_seen.insert(k);
+            assert_eq!((o.layer, o.row_start, o.bytes.len() as u32), (layer, start, len), "{vector} leaf {i}");
+            assert_eq!(o.tensor_name, format!("p{k}/{}", c.programs[k as usize].params[j as usize].name));
+            assert_eq!(c.inventory.leaf_of(k, j, layer, start as u64), Some(i as u32), "{vector}: the index inverts");
+        }
+        let with_params = c.programs.iter().filter(|p| !p.params.is_empty()).count();
+        assert_eq!(programs_seen.len(), with_params, "{vector}: every program's weights, none else");
+        assert_eq!(palw_gen_artifact_matches_v1(&c.programs, &c.params, &c.root), Ok(()));
+        assert_eq!(
+            palw_gen_artifact_matches_v1(&c.programs, &c.params, &Hash64::from_bytes([3; 64])),
+            Err(PalwGenParamRefusalV1::NotTheRoot)
+        );
+    }
+}
+
+/// **A param the court reads is a leaf proven under the class's `artifact_root`**: a close whose param
+/// openings fail the root, the order or the canonical piece convicts nobody, and a close without them
+/// cannot be evaluated.
+#[test]
+fn a_param_the_court_reads_is_proven_under_the_artifact_root() {
+    let c = class("toy-vlm.json");
+    let (job, image, tiles) = vlm_job(&c);
+    let e = palw_gen_execute_v1(&c.pipeline, &c.programs, &c.layouts, &c.params, &job, &decode(), [0; 32]).unwrap();
+    let good = close(&c, &e, 0, 0, &tiles);
+    assert_eq!(judge(&c, &e, &job, image, &good), Ok(PalwGenVerdictV1::Acquitted));
+    assert!(good.params.len() >= 2, "the toy weights span leaves");
+    let refused = |edit: &dyn Fn(&mut PalwGenCloseV1)| {
+        let mut other = good.clone();
+        edit(&mut other);
+        judge(&c, &e, &job, image, &other)
+    };
+    assert_eq!(
+        refused(&|x| x.params[0].operand.bytes[0] ^= 1),
+        Err(PalwGenCloseRefusalV1::Params(PalwGenParamRefusalV1::NotUnderTheRoot(0)))
+    );
+    assert_eq!(refused(&|x| x.params.swap(0, 1)), Err(PalwGenCloseRefusalV1::Params(PalwGenParamRefusalV1::NotAscending)));
+    assert_eq!(
+        refused(&|x| x.params[0].operand.tensor_name = "w".into()),
+        Err(PalwGenCloseRefusalV1::Params(PalwGenParamRefusalV1::NotCanonical(0)))
+    );
+    assert!(matches!(
+        refused(&|x| x.params[0].leaf_count += 1),
+        Err(PalwGenCloseRefusalV1::Params(PalwGenParamRefusalV1::AnotherInventory { .. }))
+    ));
+    assert!(matches!(refused(&|x| x.params.clear()), Err(PalwGenCloseRefusalV1::Incomplete(_))), "a weight the close does not carry");
+    // Another class's root: the same openings reach nothing.
+    let mut bytes = c.root.as_bytes();
+    bytes[0] ^= 1;
+    let other_root = Hash64::from_bytes(bytes);
+    let facts = stage_job_facts(
+        &c.pipeline,
+        &c.programs,
+        &PipelineJob { images: vec![], generated: e.claim.generated.clone(), ..job.clone() },
+    )
+    .unwrap();
+    let images = [image];
+    let case = PalwGenCourtCaseV1 {
+        space: &e.space,
+        pipeline: &c.pipeline,
+        programs: &c.programs,
+        artifact_root: other_root,
+        inventory: &c.inventory,
+        facts: &facts,
+        images: &images,
+        draw: PalwGenDrawV1 { seed: [0; 32], item_index: 0 },
+        claim: &e.claim,
+    };
+    assert!(matches!(
+        palw_gen_adjudicate_leaf_v1(&case, &good, &LIMITS),
+        Err(PalwGenCloseRefusalV1::Params(PalwGenParamRefusalV1::NotUnderTheRoot(0)))
+    ));
+}
+
+/// **An executor that ran other weights than the registered ones is convicted** at its first
+/// divergent leaf: the court evaluates from the weights the class's `artifact_root` commits to.
+#[test]
+fn an_executor_that_ran_other_weights_is_convicted_at_its_first_divergent_leaf() {
+    let c = class("toy-vlm.json");
+    let (job, image, tiles) = vlm_job(&c);
+    let honest = palw_gen_execute_v1(&c.pipeline, &c.programs, &c.layouts, &c.params, &job, &decode(), [0; 32]).unwrap();
+    let mut convicted = 0;
+    for program in 0..c.params.0.len() {
+        let keys: Vec<(u16, Option<u16>)> = c.params.0[program].tensors.keys().copied().collect();
+        for key in keys {
+            let mut other = Params(c.params.0.clone());
+            let t = other.0[program].tensors.get_mut(&key).unwrap();
+            t.data[0] = if t.data[0] > 0 { t.data[0] - 1 } else { t.data[0] + 1 };
+            assert_eq!(
+                palw_gen_artifact_matches_v1(&c.programs, &other, &c.root),
+                Err(PalwGenParamRefusalV1::NotTheRoot),
+                "program {program} param {key:?}: not the registered weights"
+            );
+            let Ok(lied) = palw_gen_execute_v1(&c.pipeline, &c.programs, &c.layouts, &other, &job, &decode(), [0; 32]) else {
+                continue;
+            };
+            // The first divergent leaf, stage-major (a changed weight may change nothing the job reads).
+            let first = (0..honest.leaf_hashes.len()).find_map(|s| {
+                let (h, l) = (&honest.leaf_hashes[s], lied.leaf_hashes.get(s)?);
+                (0..h.len().min(l.len())).find(|i| h[*i] != l[*i]).map(|i| (s, i))
+            });
+            let Some((s, i)) = first else { continue };
+            let verdict = judge(&c, &lied, &job, image, &close(&c, &lied, s, i, &tiles));
+            let coord = lied.space.stages[s].leaves()[i].coord;
+            assert!(
+                matches!(verdict, Ok(PalwGenVerdictV1::Convicted { leaf, .. }) if leaf == coord),
+                "program {program} param {key:?}: stage {s} leaf {i}: {verdict:?}"
+            );
+            convicted += 1;
+        }
+    }
+    assert!(convicted > 0, "some weight of the toy class reaches a leaf");
 }

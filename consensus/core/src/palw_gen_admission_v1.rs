@@ -7,7 +7,9 @@
 //! 1. the class's structure under the fence's ceilings for its profile — versions, the strict
 //!    decoding of every program and the pipeline (NF-P1…P10), the layouts, the output header, the
 //!    offers against the bindings, the IR's admission of the pipeline and, for a text class, each
-//!    image slot's price floor ([`palw_gen_class_preflight_v1`]);
+//!    image slot's price floor ([`palw_gen_class_preflight_v1`]); and the weights' pipeline
+//!    inventory ([`crate::palw_gen_artifact_v1`]) — every param byte a court reads has a leaf of the
+//!    class's `artifact_root` to be proven under;
 //! 2. **the one step tree's leaf count, exactly** ([`PalwGenStepSpaceV1::leaf_count_v1`], in closed
 //!    form): the WIDEST job — every stage at its `max_trip`, a text stage's logits leaves at every
 //!    position — within the court's ladder and the profile's `max_job_step_leaves` (a bound every
@@ -186,6 +188,13 @@ pub fn verify_gen_class_admission_v1(
     let report = palw_gen_class_preflight_v1(class, &rules.fence).map_err(preflight_error)?;
     let ceilings = rules.fence.ceilings.of(report.profile);
     let (programs, pipeline) = (&report.admission.programs, &report.admission.pipeline);
+    // The weights have an inventory (a closed form of the declarations): every param byte a court
+    // reads has a leaf of the class's `artifact_root` to be proven under.
+    crate::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(programs).ok_or_else(|| {
+        PalwClassAdmissionError::GenClass(
+            "the class's params have no pipeline inventory (no param, a tensor past 4 GiB, or past a u32 of leaves)".into(),
+        )
+    })?;
 
     // 2. The step tree: the widest job within the ladder and the profile; the yardstick's count.
     let ladder = bundle.court.max_step_leaf_count();
