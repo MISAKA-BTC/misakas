@@ -334,3 +334,53 @@ fn the_prompt_starts_with_the_forced_prefix_and_the_source_is_priced_as_prompt_t
     assert_eq!(palw_fp_v5_input_tokens_v1(offers, &job), SOURCE_FLOOR as u64, "no image slots: the source alone");
     assert_eq!(palw_fp_v5_input_charge_v1(offers, &job, 250), 250 * SOURCE_FLOOR as u128);
 }
+
+/// A commitment payload carrying `job` (the lane's shape, the wire test's fixture fields) and, for
+/// `PublicDa`, the prompt's ids.
+fn payload(job: &PalwFreePromptJobV5, prompt: &[u32]) -> kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 {
+    use kaspa_consensus_core::palw_freeprompt_v3::*;
+    let h = |w: u64| Hash64::from_u64_word(w);
+    let commitment = PalwFreePromptCommitmentV3 {
+        job: job.into_carried(),
+        trace_root: h(0x7A),
+        output_root: h(0x0B),
+        schedule_root: h(0x5C),
+        execution_root: h(0x4E),
+        decode_tokens_executed: 3,
+        stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+        work_leaves: 64,
+        trace_manifest_root: h(0x3F),
+        trace_chunk_count: 1,
+        trace_retention_daa: 505_000,
+    };
+    let ids = palw_fp_carried_prompt_ids_v1(&job.v4, prompt);
+    PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: ids, signature: vec![0x5A; 4627] }
+}
+
+/// **Acceptance on `PublicDa`**: the prompt rides the payload, and it starts with the class's forced
+/// prefix or the claim is refused by name; the source never rides it.
+#[test]
+fn acceptance_holds_a_public_prompt_to_the_forced_prefix() {
+    use kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA;
+    let f = fixture();
+    let mut job = v5_job(&f);
+    job.v4.privacy_mode = PALW_FP_PRIVACY_PUBLIC_DA;
+    let accept = |job: &PalwFreePromptJobV5, prompt: &[u32]| {
+        let p = payload(job, prompt);
+        palw_fp_v5_accept_payload_v1(&p, Some(&f.row), job.v4.network_domain, true, 1 << 26, None, FORM, true).map(|(j, _)| j)
+    };
+    let stateless = palw_fp_v5_validate_payload_v1(&payload(&job, &f.prompt), job.v4.network_domain, true, 1 << 26, None, FORM, true);
+    assert_eq!(stateless.as_ref().map(|j| j.source), Ok(job.source), "the fixture payload passes V4's rules: {stateless:?}");
+    assert_eq!(accept(&job, &f.prompt), Ok(job.clone()));
+    assert_eq!(payload(&job, &f.prompt).prompt_token_ids, f.prompt, "the prompt rides; the source does not");
+    let unforced = vec![5, 15, 15, 5];
+    let mut other = job.clone();
+    other.v4.prompt_token_ids_hash = prompt_token_ids_commitment_v1(FORM, &unforced).unwrap();
+    assert_eq!(accept(&other, &unforced), Err(PalwFpV5Error::PromptPrefix));
+    let mut unknown = job.clone();
+    unknown.v4.class_id = Hash64::from_bytes([0x11; 64]);
+    assert!(matches!(
+        palw_fp_v5_accept_payload_v1(&payload(&unknown, &f.prompt), None, job.v4.network_domain, true, 1 << 26, None, FORM, true),
+        Err(PalwFpV5Error::UnknownClass(_))
+    ));
+}

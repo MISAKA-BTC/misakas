@@ -13,7 +13,9 @@
 //!
 //! **The wire.** `le16(8) ‖ the V4 job's bytes after its version word ‖ borsh(images) ‖
 //! borsh(source)`: a V5 job is a V4 job whose version word says 8 and which is followed by its images
-//! and its source ([`PalwFpV5TailV1`]). No V4 entry point decodes
+//! and its source ([`PalwFpV5TailV1`]). The source's ids never ride the chain: like the images'
+//! bytes they travel to the worker and the panel, bound by the reference's hash, under either privacy
+//! mode (a `PublicDa` job publishes its prompt, not its source). No V4 entry point decodes
 //! it as a job it admits — every V3/V4 validator refuses version 8 by name (`UnsupportedVersion`) —
 //! and no V4 byte string decodes as a V5 job (version 7 is not 8). The id is the whole borsh under
 //! its own key, [`fp_job_id_v5`], a domain no V3/V4 id uses.
@@ -320,6 +322,40 @@ pub fn palw_fp_v5_input_tokens_v1(offers: &PalwGenOffersV1, job: &PalwFreePrompt
 /// at the job's per-token price.
 pub fn palw_fp_v5_input_charge_v1(offers: &PalwGenOffersV1, job: &PalwFreePromptJobV5, per_token_price: u64) -> u128 {
     palw_fp_v5_input_tokens_v1(offers, job) as u128 * per_token_price as u128
+}
+
+/// **A V5 payload against its class** (the acceptance layer's composition past `palw_fp_job_v5`): the
+/// stateless rules ([`palw_fp_v5_validate_payload_v1`]), the job the class's
+/// ([`palw_fp_v5_resolve_class_v1`]), and — where the prompt's ids ride the payload (`PublicDa`, the
+/// user's prompt mode: `palw_fp_carried_prompt_ids_v1`) — the prompt starting with the class's forced
+/// prefix (RFC-0003 §II.2.2). A payload never carries the source's ids: they travel as the images'
+/// bytes do, so V4's payload, its checks and the fold's prompt accounting read the prompt alone.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_v5_accept_payload_v1<'a>(
+    payload: &crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3,
+    row: Option<&'a crate::palw_gen_class_v1::PalwGenClassRecordV1>,
+    network_domain: Hash64,
+    panel_da_armed: bool,
+    max_step_leaf_count: u64,
+    ruleset_caps: Option<(u32, u32)>,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    armed: bool,
+) -> Result<(PalwFreePromptJobV5, &'a crate::palw_gen_class_v1::PalwGenClassRecordV1), PalwFpV5Error> {
+    let job = palw_fp_v5_validate_payload_v1(
+        payload,
+        network_domain,
+        panel_da_armed,
+        max_step_leaf_count,
+        ruleset_caps,
+        prompt_ids_form,
+        armed,
+    )?;
+    let row = palw_fp_v5_resolve_class_v1(&job, row, armed)?;
+    let carried = crate::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&job.v4, &payload.prompt_token_ids);
+    if !carried.is_empty() {
+        palw_fp_v5_prompt_head_admitted_v1(&row.class.offers, &carried)?;
+    }
+    Ok((job, row))
 }
 
 /// **The entry a drill arms FP Job V5 with** (`--palw-drill-fp-v5-at`,
