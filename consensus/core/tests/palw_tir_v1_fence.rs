@@ -66,6 +66,13 @@ fn the_value_is_fingerprinted_and_the_height_alone_is_what_the_identity_normalis
         PalwTirCeilingsV1 { max_program_bytes: 64_000, ..PALW_T12_TIR_CEILINGS_V1 },
     ));
     assert_ne!(a.consensus_params_id(), b.consensus_params_id(), "different ceilings are a different ruleset");
+    let mut c = a.clone();
+    c.palw_tir_v1 = Some(PalwTirFenceV1::this_build_v1(
+        ForkActivation::new(AT),
+        PalwTirCeilingsV1 { max_cone_work: 1 << 17, ..PALW_T12_TIR_CEILINGS_V1 },
+    ));
+    assert_ne!(a.consensus_params_id(), c.consensus_params_id(), "the cone-work cap is part of the value");
+    assert_eq!(PALW_T12_TIR_CEILINGS_V1.max_cone_work, 1 << 16, "testnet-12's admission work cap");
     assert_ne!(a.consensus_schedule_id(), b.consensus_schedule_id(), "and the schedule report says so");
     assert_eq!(a.consensus_identity_id(), b.consensus_identity_id(), "while the height is in the future they peer");
 }
@@ -96,6 +103,8 @@ fn validate_refuses_every_value_this_build_cannot_run() {
     assert!(with(&|f| f.ceilings.max_context = (1 << 21) + 1).is_err(), "past history_bound");
     assert!(with(&|f| f.ceilings.max_unrolled_nodes = 525_313).is_err(), "past the format's occurrences");
     assert!(with(&|f| f.ceilings.max_macs_per_position = 0).is_err(), "a zero cost ceiling");
+    assert!(with(&|f| f.ceilings.max_cone_work = (1 << 20) + 1).is_err(), "past admission's own work cap");
+    assert!(with(&|f| f.ceilings.max_cone_work = 0).is_err(), "a zero work cap admits nothing");
     assert!(with(&|f| f.activation = ForkActivation::never()).is_ok(), "a dormant value is never refused");
 
     let mut no_audit = ok.clone();

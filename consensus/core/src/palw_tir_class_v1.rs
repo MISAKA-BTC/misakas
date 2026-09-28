@@ -28,7 +28,9 @@ use crate::Hash64;
 use crate::palw_state_v2::{PalwBondKeyV2, PalwPwuRuleV2};
 use crate::palw_v2::PalwJobContextV2;
 
-pub const PALW_TIR_GRAPH_IR_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/tir/graph-ir-root/v1";
+/// The key of `graph_ir_root` — one spelling, the inventory module's (F3), which checks a
+/// container's embedded program against it.
+pub use crate::palw_tir_artifact_v1::PALW_TIR_GRAPH_IR_ROOT_DOMAIN_V1;
 pub const PALW_TIR_LAYOUT_DOMAIN_V1: &[u8] = b"misaka-palw/tir/layout/v1";
 pub const PALW_TIR_CLASS_ID_DOMAIN_V1: &[u8] = b"misaka-palw/tir/class-id/v1";
 pub const PALW_TIR_CLASS_REGISTRATION_DOMAIN_V1: &[u8] = b"misaka-palw/tir/class-registration/message/v1";
@@ -85,7 +87,7 @@ pub struct PalwTirClassV1 {
 impl PalwTirClassV1 {
     /// `graph_ir_root`: the keyed hash of the program's canonical bytes (PALW-TIR-7).
     pub fn graph_ir_root(&self) -> Hash64 {
-        keyed64(PALW_TIR_GRAPH_IR_ROOT_DOMAIN_V1, &[&self.program])
+        crate::palw_tir_artifact_v1::palw_tir_graph_ir_root_v1(&self.program)
     }
 
     /// The layout's digest, as the class id binds it.

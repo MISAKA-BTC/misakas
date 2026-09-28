@@ -344,6 +344,22 @@ impl PalwTirStepSpaceV1 {
         self.program_slots
     }
 
+    /// The tile length the layout gives committed node `node` of `block`, or `None` if the node is
+    /// not a commit point.
+    pub fn commit_tile_len(&self, block: u8, node: u16) -> Option<u32> {
+        self.blocks.get(block as usize)?.commits.iter().find(|c| c.node == node).map(|c| c.tile_len)
+    }
+
+    /// The index of `Fixed` instance `(state, layer)` among [`Self::fixed_instances`].
+    pub fn fixed_instance_index(&self, state: u16, layer: Option<u16>) -> Option<usize> {
+        self.fixed.iter().position(|s| s.state == state && s.layer == layer)
+    }
+
+    /// The index of `Hist` instance `(state, layer)` among [`Self::hist_instances`].
+    pub fn hist_instance_index(&self, state: u16, layer: Option<u16>) -> Option<usize> {
+        self.hist.iter().position(|s| s.state == state && s.layer == layer)
+    }
+
     /// The occurrences of a position, `(block, layer)`, in schedule order.
     pub fn occurrences(&self) -> &[(u8, Option<u16>)] {
         &self.occurrences
@@ -410,10 +426,10 @@ impl PalwTirStepSpaceV1 {
             }
             n = n.saturating_add(self.block_leaves_at(*b, a));
         }
-        if (a + 1) % self.layout.checkpoint_interval == 0 {
+        if (a + 1).is_multiple_of(self.layout.checkpoint_interval) {
             n = n.saturating_add(self.fixed_leaves_per_checkpoint());
         }
-        if (a + 1) % self.layout.h_tile == 0 {
+        if (a + 1).is_multiple_of(self.layout.h_tile) {
             n = n.saturating_add(self.hist_leaves_per_tile());
         }
         n
@@ -544,7 +560,7 @@ impl PalwTirStepSpaceV1 {
             }
             return None;
         }
-        if (a + 1) % self.layout.checkpoint_interval == 0 {
+        if (a + 1).is_multiple_of(self.layout.checkpoint_interval) {
             for (k, s) in self.fixed.iter().enumerate() {
                 let tiles = s.tiles();
                 if offset >= tiles {
@@ -567,7 +583,7 @@ impl PalwTirStepSpaceV1 {
                 });
             }
         }
-        if (a + 1) % self.layout.h_tile == 0 {
+        if (a + 1).is_multiple_of(self.layout.h_tile) {
             for (k, s) in self.hist.iter().enumerate() {
                 let tiles = s.tiles();
                 if offset >= tiles {
@@ -637,7 +653,7 @@ impl PalwTirStepSpaceV1 {
                 offset += self.block_leaves_at(*b, a);
             }
             let reserved = coord.node_slot - self.program_slots;
-            let checkpoint = (a + 1) % self.layout.checkpoint_interval == 0;
+            let checkpoint = (a + 1).is_multiple_of(self.layout.checkpoint_interval);
             if (reserved as usize) < self.fixed.len() {
                 if !checkpoint {
                     return None;
@@ -648,7 +664,7 @@ impl PalwTirStepSpaceV1 {
                 (tile < self.fixed[reserved as usize].tiles()).then_some(offset + tile)?
             } else {
                 let k = reserved as usize - self.fixed.len();
-                if k >= self.hist.len() || (a + 1) % self.layout.h_tile != 0 {
+                if k >= self.hist.len() || !(a + 1).is_multiple_of(self.layout.h_tile) {
                     return None;
                 }
                 if checkpoint {
@@ -699,7 +715,7 @@ pub fn palw_tir_lanes_le_v1(dtype: DType, values: &[i128]) -> Result<Vec<u8>, Pa
 /// other dtype's as `i32`. Whether each value is one its node can produce is PALW-TIR-33's
 /// question, asked by the court against the node's proven interval (which lies inside the dtype).
 pub fn palw_tir_lane_values_v1(dtype: DType, bytes: &[u8]) -> Result<Vec<i128>, PalwTirStepError> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(PalwTirStepError::NotCanonical("a lane is four bytes".into()));
     }
     Ok(bytes

@@ -106,7 +106,8 @@ pub const IR_DEFAULT_TILE_LEN_V1: u32 = 64;
 pub const IR_DEFAULT_H_CHUNK_V1: u32 = 64;
 
 /// **The inputs `tir_admit_v1` runs with on this network**: the layout facts, tir/core's terminal
-/// ceilings, and the network's per-position MACs and state bytes in place of tir/core's.
+/// ceilings, and the network's per-position MACs, state bytes and admission work cap in place of
+/// tir/core's.
 pub fn tir_admit_inputs_v1(ceilings: &PalwTirCeilingsV1, tile_len: u32, h_chunk: u32) -> TirAdmitInputsV1 {
     TirAdmitInputsV1 {
         tile_len,
@@ -114,6 +115,7 @@ pub fn tir_admit_inputs_v1(ceilings: &PalwTirCeilingsV1, tile_len: u32, h_chunk:
         ceilings: TirCeilingsV1 {
             max_position_macs: ceilings.max_macs_per_position,
             max_state_bytes: ceilings.max_state_bytes,
+            max_cone_work: ceilings.max_cone_work,
             ..TirCeilingsV1::legacy_court_v1()
         },
     }
