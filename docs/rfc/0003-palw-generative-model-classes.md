@@ -1073,6 +1073,98 @@ embeds V4 unchanged plus image inputs.
 This RFC sits *under* RFC-0001 (its randomness is domain 0) and *beside* it (canonical outputs), and
 changes nothing in it.
 
+### II.2.1 Text pipelines and the vision-language job (the VLM path)
+
+Scheduled by the coordinator on 2026-09-29, after `JobImage` (§II.4). Everything here is dormant
+under `palw_gen_v1`. Items that belong to RFC-0001's live text lane are marked **[RFC-0001]**; none
+is built before that lane's owner agrees.
+
+**The text stage.** A TIR text class is a pipeline whose **output stage is its language model**. That
+stage is a `Logits` program, with RFC-0002's `TirProgramV1` meaning lifted as version 2
+(`Logits { node, scheme_id }`), and its trip rule is **`TextStream`** (04b §15.6, `TripRule` tag 3):
+
+- Its positions are the text job's stream, one position per id: the prompt ids, then the generated
+  ids. `T = |prompt| + |generated| − 1`, because the last generated id is never fed back.
+- Its `Input(0)` at position `p` is the stream's `p`-th id. It has no token rule; the stream is the
+  job's.
+- It reads earlier stages through the ordinary bindings (`StageFinal`, `StageRows`); a text-only
+  class has no earlier stage.
+- Its `max_trip` is the class's `max_context`, Phase F's `prefill + decode − 1` bound.
+- Only the output stage may be `TextStream`, and it must be a `Logits` program. A `Logits` program
+  may only be that stage (NF-P9′). Every other stage keeps PALW-GEN-1's trip count fixed at
+  acceptance. The text stage's trip count is the claim's committed stream length, within the job's
+  limits, exactly as a Phase F text class's is.
+
+Nothing else about text changes (PALW-GEN-10 stands):
+
+- the job of a class with no image slot is **FP Job V4** (RFC-0001 §A), unchanged;
+- selection, the decode controls and stop are RFC-0001 §A.3's. They are applied outside the program
+  to the committed logits, with `R`'s domain 0 (§I.1.6);
+- the court over the text stage is Phase F's: `TirCone`, H dissection, `TirLogits` and
+  `TirDecodeToken`;
+- a job whose `prompt_tokens + decode_token_limit − 1` exceeds `max_context` is refused at acceptance,
+  as Phase F refuses it.
+
+**The vision-language job: FP Job V5 (image inputs) [RFC-0001].** A class with image slots takes this
+job, which embeds V4 unchanged:
+
+```
+PalwFreePromptJobV5 = every PalwFreePromptJobV4 field (V3's fields, then `decode: DecodeConfigV4`),
+                      in order and unchanged in meaning, at version 8,
+                      then images: Vec<ImageInputRefV1>        // 1..=16: one per image slot, at its size
+fp_job_id_v5        = H64(key "misaka-palw/fp-v5/job-id/v1", le64(|bytes|) ‖ bytes)   // the whole borsh
+```
+
+- **One encoding per behaviour.** A class with image slots takes V5 only, and a class without slots
+  takes V4 only (`JobVersionNotOffered`). `images` is never empty, so a text job has exactly one
+  encoding.
+- `images` satisfies PALW-GEN-11: exactly one image per slot, at the slot's size.
+- **Where images travel.** Image bytes never ride a transaction, whatever `privacy_mode` says about the
+  prompt ids. They travel with the capture to the panel, and a dispute opens tiles against
+  `input_root`. `PublicDa` makes a V5 job's prompt ids public, not its images.
+- **Price [RFC-0001].** RFC-0001's D10 pays decode leaves only (prefill is 0). A V5 job's image stages
+  and its image-row prefill are real work. Proposal: price them as a per-job constant of the class,
+  the image stages' admitted job cost converted by the canonical work rule (§Compute), added to the
+  claim's quanta. This changes FP pricing, so it is RFC-0001's owner's decision (open question 13).
+- **Numbering.** The version number and the name are RFC-0001's to assign at freeze. RFC-0001 §A.8
+  keeps "V5" for an emergency fence of V4; if that fence comes first, this job takes the next free
+  version. Nothing here binds a name.
+
+**Placement by placeholder ids (no job field).** This replaces §II.4's `start` job scalar.
+
+- The image rows enter the text stage through one `StageFinal` edge from the vision stage: rows
+  `[N_img, d_text]`, every slot's rows concatenated in slot order.
+- The LM program places them itself. A `Fixed` state `cursor` counts the class's image placeholder id
+  (a constant of the program) as it passes. At a position whose token is the placeholder, the input
+  embedding is `Gather(image_rows, min(cursor, N_img − 1))` and the cursor advances. At any other
+  position it is the token's embedding.
+- Placement is therefore a total, deterministic function of the prompt ids. It needs no job field
+  and no acceptance rule, and a court replays it like any other state. A prompt with fewer
+  placeholders than image rows uses fewer rows; one with more re-reads the last. The class's chat
+  template (the gateway's) emits exactly `N_img`.
+
+**The step tree and the court.** One tree, stage-major (PALW-GEN-3): the image stages' leaves, then
+the text stage's.
+
+- A dispute over a text-stage leaf is Phase F's. Its cone may read image rows, which are the vision
+  stage's committed output, carried under PALW-TIR-33 (a `StageFinal` edge). A dispute over a row is
+  a dispute over the vision stage's leaf, adjudicated at the first divergent leaf.
+- The vision stage's own cones read image lanes from tiles proven under `input_root`
+  (PALW-TIR-48).
+
+**Order of implementation for this path.**
+
+1. 04b: `TextStream` and NF-P9′, and the IR's text run (a selector supplies each generated id). IR
+   only, dormant.
+2. Consensus, dormant under `palw_gen_v1`:
+   - the class profile `Text` (a text pipeline, with or without image slots). Its canonical output is
+     the committed generated ids, with no output root (§I.3.3);
+   - its preflight (the output stage is the text stage, and `max_context`);
+   - the placement pattern's conformance vector.
+3. **[RFC-0001]** FP Job V5's wire type, id and acceptance; the image-stage price; the worker and the
+   panel executing a pipeline class; the court's composition. The V4 job type lives on
+   `rcore/fp-sampler`, so V5 is built on top of it, after that lane's owner agrees.
+
 ## II.3 Embedding / encoder
 
 **Job fields.** The body is `EmbeddingBodyV1`:
@@ -1144,10 +1236,10 @@ evidence and convicts nobody. A lane whose tile nobody carried fails the evaluat
 - patchify as `Reshape`/`Transpose`.
 
 A vision encoder over patches (attention over a `Fixed` patch axis) follows, with a `Rows`/`Final`
-output. The LM stage reads that output through an `External` input and places patch embeddings at
-placeholder positions: `Select(is_image_pos, Gather(img_emb, pos − start), Gather(tok_emb, token))`,
-with `start` a job scalar. Dynamic-resolution encoders become one class per resolution bucket, as
-images are.
+output. The LM stage (the text stage, §II.2.1) reads that output through a `StageFinal` edge. It
+places patch embeddings where the prompt's image placeholder ids are, counted by a `Fixed` cursor
+(§II.2.1), so no job scalar is needed. Dynamic-resolution encoders become one class per resolution
+bucket, as images are.
 
 **What the IR lacks.** Nothing beyond Part I.
 
@@ -1294,6 +1386,11 @@ A new chapter `spec/palw/04c-generative-classes.md`, plus additions to 04b. Appl
   class, at the slot's size. An image's `input_root` MUST be §I.3.2's construction over its bytes
   (`ImageRgb8 [h, w, 3]`, the slot's `tile_len`). A court MUST read image lanes only from tiles
   proven under `input_root` (PALW-TIR-48).
+- **PALW-GEN-12 (the text stage).** A text pipeline's output stage MUST be a `Logits` program whose trip
+  rule is `TextStream`, and no other stage may be either. Its positions MUST be the text job's stream.
+  Selection, the decode controls and stop MUST be RFC-0001 §A's.
+- **PALW-GEN-13 (the vision-language job).** A class with image slots MUST take FP Job V5 only, and a
+  class without slots FP Job V4 only. V5 MUST embed every V4 field unchanged.
 
 ## Alternatives
 
@@ -1382,6 +1479,11 @@ A new chapter `spec/palw/04c-generative-classes.md`, plus additions to 04b. Appl
 11. **Multi-codebook audio tokens:** a later FP job version for several logits rows per position.
 12. **Privacy of reproducible outputs:** is the `PublicDa` or `PanelDa` choice enough, or should image
     jobs default to `PanelDa`?
+13. **The price of a V5 job's image stages** (§II.2.1) [RFC-0001]: a per-job class constant from the image
+    stages' admitted cost (proposed), or a change to D10 that counts prefill.
+14. **May a class with image slots also take text-only V4 jobs?** Proposed: no. A class with slots
+    takes V5 only, and the text-only use registers the text-only class (the same weights, another
+    pipeline), so each behaviour keeps one encoding.
 
 ## Activation plan and order of implementation
 
@@ -1408,7 +1510,7 @@ output kinds (§I.3.3).
 | 8 | **Drills**: devnet, then a salted t12 chain; register tiny image and embedding classes; jobs; replay; disputes (a partial-sum cone included); crossing the fence on the shipping binary | — | RFC-0002 Phase F's D-F1…D-F4 pattern | 3 weeks |
 | 9 | **testnet-12**: arm `palw_gen_v1` after `palw_tir_v1`; the first Example-C-sized image class | fence | registration → panel → `Final` | — |
 | 10 | **RFC-0002 Phase G**: GPU integer backend, exact two-pass attention, GPU leaf hashing; then a 4B-class distilled image class | node releases | F-4 gates per backend; the throughput report | — |
-| 11 | **Multimodal input** (§II.4), then image-editing bodies. Built on `rfc3/impl` (2026-09-29), dormant: `JobImage`, the slots, the image leaf, the court's tile reading | fence value | — | — |
+| 11 | **Multimodal input** (§II.4), then image-editing bodies. Built on `rfc3/impl` (2026-09-29), dormant: `JobImage`, the slots, the image leaf, the court's tile reading. Then the **VLM path** (§II.2.1): the text stage in the IR and the `Text` profile, dormant; FP Job V5 in RFC-0001's lane after its owner agrees | fence value; **[RFC-0001]** for V5 | — | — |
 | 12 | **Audio** (§II.5) | fence value | — | — |
 | 13 | **Generalised dissection** (§II.1.5.6, court version 3), then **video** (§II.6), subject to open question 6 | fence | — | — |
 
