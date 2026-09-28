@@ -7498,6 +7498,31 @@ impl PalwPanelService {
                 }
             }
 
+            // **RFC-0002 Phase F (F6): an IR claim's court where no bisection is played.** The
+            // held regime's court for a legacy claim is its seat's capture arm (`ShardCourtAccused`
+            // over a legacy refutation), which no IR execution has; an IR claim is accused in one
+            // move by an IR close instead (`TirShardCourtAccused`, `tir_court`).
+            if !bisection_is_played
+                && self.consensus_config.params.palw_tir_v1_active_at(current_daa)
+                && (self.config.challenge || !seat_faulted.is_empty())
+            {
+                self.tir_one_move_pass_v1(
+                    &session,
+                    bond_key,
+                    network_domain,
+                    current_daa,
+                    &materials,
+                    &seat_faulted,
+                    tir_court::PalwTirOneMoveBooksV1 {
+                        challenged: &mut challenged,
+                        accused: &mut accused,
+                        court_pending: &mut court_pending,
+                        court_due: &mut court_due,
+                    },
+                )
+                .await;
+            }
+
             // --- the court's half: answer the disputes this bond is a party to ---
             //
             // Nothing in this tree used to construct a `CourtDisclosed`. A challenger could open a

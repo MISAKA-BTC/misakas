@@ -7,15 +7,19 @@
 //! replay, bisection) and `resolve_tir_v1` (the IR close). The chain is the real transition
 //! (`apply_palw_transition_v2_with_extras`) and the real adjudicator (`adjudicate_court_close_v3`).
 //!
-//! * **Registration and the walk to `Active`** (`t12_walk`, on testnet-12's own fold with
-//!   `palw_tir_v1` armed): the node's `ClassRegisteredTirV1` folds to a `Candidate` row; the
-//!   admission jury is seated on the node's readiness V2 proofs; `Prefetching → Probation →
-//!   ActiveLimited → Active` on IR probe claims the node produced going `Final`; an honest claim of
-//!   the `Active` class goes `Final`. Every block is re-applied, reverted and reloaded through the
-//!   import a node runs.
+//! * **Registration, the walk to `Active`, and the one-move court** (`t12_walk`, on testnet-12's
+//!   own fold with `palw_tir_v1` armed): the node's `ClassRegisteredTirV1` folds to a `Candidate`
+//!   row; the admission jury is seated on the node's readiness V2 proofs; `Prefetching → Probation
+//!   → ActiveLimited → Active` on IR probe claims the node produced going `Final`; an honest claim
+//!   of the `Active` class goes `Final`; a planted lie licensed by its panel is convicted by the IR
+//!   one-move court (`TirShardCourtAccused`, the node's case and pre-check, the gate's verdict) and
+//!   voided. Every block is re-applied, reverted and reloaded through the import a node runs.
+//! * **The one-move doors a bisection terminal does not reach** — a wrong generated token over an
+//!   honest row (the decode-token door) and a trace row the steps did not compute (the logits door),
+//!   each accused as the chain's one-move gate convicts it.
 //! * **The bisection court** (below, on a ruleset without the held regime, which plays no bisection
-//!   on testnet-12: there the IR one-move accusation is Phase F's next landing) — the class stood in
-//!   by a carriage-less registration of its `(class_id, artifact_root)`:
+//!   on testnet-12) — the class stood in by a carriage-less registration of its
+//!   `(class_id, artifact_root)`:
 //!   * **an honest claim goes `Final`** — produced from the anchor's job, the served capture answers
 //!   for the claim's roots, the seats' replay reproduces them, the panel licenses it; a false
 //!   accusation against it walks the ladder to a leaf the responder's `TirCone` close acquits
@@ -486,11 +490,11 @@ fn a_planted_lie_in_an_ir_claim_is_convicted_by_the_ir_court() {
         {
             let tir = ir.tir();
             let rules = tir.court_rules(&court());
-            let (leaf, candidates) =
+            let case =
                 super::tir_court::palw_tir_one_move_case_v1(&tir, &liar.material, &honest.material, &rules).unwrap().expect("a case");
-            assert_eq!(leaf, lie, "tiled {tiled}: the one-move case names the lie");
-            assert!(matches!(candidates.first(), Some(("cone", Ok(_)))));
-            assert_eq!(super::tir_court::palw_tir_one_move_case_v1(&tir, &honest.material, &honest.material, &rules).unwrap(), None);
+            assert_eq!(case.leaf, Some(lie), "tiled {tiled}: the one-move case names the lie");
+            assert!(matches!(case.candidates.first(), Some(("cone", Ok(_)))));
+            assert!(super::tir_court::palw_tir_one_move_case_v1(&tir, &honest.material, &honest.material, &rules).unwrap().is_none());
         }
         // The seat opens; the ladder, from both parties' own captures, lands on the lie.
         let (s, sid) = open_court(&s, &liar, SEAT, 104);
@@ -519,6 +523,110 @@ fn a_planted_lie_in_an_ir_claim_is_convicted_by_the_ir_court() {
         let s = step(&s, daa, &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict, proof }]).expect("the conviction");
         assert!(matches!(phase_of(&s, &liar.id), PalwClaimPhaseV2::Voided { .. }), "tiled {tiled}: {:?}", phase_of(&s, &liar.id));
         assert!(collateral(&s, PRODUCER) < before, "tiled {tiled}: the producer is charged");
+    }
+}
+
+/// **A claim whose producer computed honestly and committed a different answer** — the honest
+/// capture edited by `edit` (its generated tokens or its trace rows), the trace and execution roots
+/// re-derived over the edit, as a producer lying about its trace commits: every step leaf is the
+/// honest execution's.
+fn craft(ir: &Ir, honest: &Claim, edit: impl FnOnce(&mut misaka_palw_sdk::lineages::tir::TirCaptureV1)) -> Claim {
+    use kaspa_consensus_core::palw_step_refute::{base0_logits_trace_root_v1, tiled_logits_scheme_id_v1, tiled_logits_trace_root_v1};
+    let mut capture = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).expect("an IR capture");
+    edit(&mut capture);
+    let ctx = capture.binding.job_context.clone();
+    let trace_root = if Hash64::from_bytes(ir.tir().space().program.logits_scheme_id) == tiled_logits_scheme_id_v1() {
+        tiled_logits_trace_root_v1(&ctx, &capture.logits_rows, &capture.generated).expect("the rows build a trace")
+    } else {
+        base0_logits_trace_root_v1(&ctx, &capture.logits_rows, &capture.generated)
+    };
+    let b = &mut capture.binding;
+    b.full_logits_trace_root = trace_root;
+    b.committed_execution_root = kaspa_consensus_core::palw_tir_step_v1::palw_tir_execution_root_v1(
+        &ctx.context_hash(),
+        &trace_root,
+        &ir.class_id,
+        b.step_leaf_count,
+        &b.step_merkle_root,
+    );
+    let mut env = honest.env.clone();
+    env.attempt.trace_root = trace_root;
+    env.attempt.execution_root = b.committed_execution_root;
+    env.attempt.output_root = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&ctx, &capture.generated);
+    env.attempt.trace_manifest_root = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(trace_root, 1);
+    let id = attempt_id_v2(&env.attempt);
+    Claim { env, id, job: honest.job.clone(), prompt: honest.prompt.clone(), material: capture.encode() }
+}
+
+/// **The one-move doors a bisection terminal does not reach** (F6, the node's one-move case): a
+/// wrong answer over honest arithmetic. Every step leaf of these claims is the honest execution's,
+/// so no step leaf parts from a challenger's own run; the case finds the lie where it is —
+///
+/// * a generated token that is not the greedy selection of its (honest) row: the decode-token door,
+///   the challenger's own token the lane that beats it;
+/// * a committed trace row that is not the one the steps computed (the selection unchanged): the
+///   logits door over the step tile holding the first lane that differs;
+///
+/// and the accusation the node would file is the one the chain's one-move gate derives
+/// `ExecutorGuilty` from (`palw_tir_one_move_verdict_v1` on the claim's state). An accusation of an
+/// honest claim finds nothing to file.
+#[test]
+fn a_wrong_answer_over_honest_arithmetic_is_accused_in_one_move() {
+    use super::tir_court::{palw_tir_one_move_accusation_to_file_v1, palw_tir_one_move_case_v1};
+    use kaspa_consensus_core::palw_producer_v2::palw_disputable_claims_v2;
+    use kaspa_consensus_core::palw_tir_one_move_v1::{palw_tir_one_move_shape_v1, palw_tir_one_move_verdict_v1};
+    for tiled in [false, true] {
+        let ir = ir_class(if tiled { "om-tiled" } else { "om-flat" }, tiled);
+        let tir = ir.tir();
+        let rules = tir.court_rules(&court());
+        let s = registry_with(&ir);
+        let honest = produce(&ir, 5, None);
+        let greedy = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).unwrap().generated[0];
+        let lies: [(&str, Box<dyn Fn(&mut misaka_palw_sdk::lineages::tir::TirCaptureV1)>); 2] = [
+            ("decode token", Box::new(|c| c.generated[0] = (c.generated[0] + 1) % c.logits_rows[0].len() as u32)),
+            (
+                "logits",
+                Box::new(|c| {
+                    let lane = if c.generated[0] == 0 { 1 } else { 0 };
+                    c.logits_rows[0][lane] = c.logits_rows[0][lane].wrapping_sub(1);
+                }),
+            ),
+        ];
+        for (door, edit) in lies {
+            let liar = craft(&ir, &honest, edit);
+            assert_ne!(liar.env.attempt.execution_root, honest.env.attempt.execution_root, "{door}: the lie is committed");
+            let s = licensed(&s, &liar, 101);
+            let case = palw_tir_one_move_case_v1(&tir, &liar.material, &honest.material, &rules).unwrap().expect("a case");
+            assert_eq!(case.leaf, None, "tiled {tiled}, {door}: every step leaf is the honest execution's");
+            assert_eq!(case.row.is_some(), door == "decode token", "tiled {tiled}, {door}: the selection moved or it did not");
+            let target =
+                palw_disputable_claims_v2(&s, &[bond_key(SEAT)]).into_iter().find(|t| t.claim_id == liar.id).expect("disputable");
+            let (label, mut accusation) =
+                palw_tir_one_move_accusation_to_file_v1(case.candidates, &target, bond_key(SEAT), &court(), LADDER, FORM)
+                    .unwrap_or_else(|| panic!("tiled {tiled}, {door}: a close convicts"));
+            assert_eq!(label, door, "tiled {tiled}");
+            accusation.signature = vec![3; 16];
+            palw_tir_one_move_shape_v1(&accusation).expect("the shape");
+            let claim = s.claim(&liar.id).expect("the claim");
+            assert_eq!(
+                palw_tir_one_move_verdict_v1(&s, claim, &accusation, &court(), LADDER, FORM),
+                Ok(PalwCourtVerdictV2::ExecutorGuilty),
+                "tiled {tiled}, {door}: the chain derives the node's verdict"
+            );
+        }
+        // The honest claim: no case, and an accusation built against it anyway finds nothing to file.
+        assert!(palw_tir_one_move_case_v1(&tir, &honest.material, &honest.material, &rules).unwrap().is_none());
+        let s = licensed(&s, &honest, 101);
+        let target = palw_disputable_claims_v2(&s, &[bond_key(SEAT)]).into_iter().find(|t| t.claim_id == honest.id).unwrap();
+        let wrong_beat = (greedy + 1) % 4;
+        let against = vec![
+            ("cone", tir.cone_close(&honest.material, 3, &rules)),
+            ("decode token", tir.decode_token_close(&honest.material, 0, wrong_beat)),
+        ];
+        assert!(
+            palw_tir_one_move_accusation_to_file_v1(against, &target, bond_key(SEAT), &court(), LADDER, FORM).is_none(),
+            "tiled {tiled}: nothing convicts an honest claim"
+        );
     }
 }
 
@@ -597,11 +705,11 @@ fn an_ir_claims_trace_events_are_answered_in_the_ir_form() {
     }
 }
 
-/// **The whole walk on testnet-12's own fold** (F6 C(1)–C(3)): the IR class registered by the
-/// node's own object, its lifecycle row walked `Candidate → Prefetching → Probation → ActiveLimited
-/// → Active` by the chain's registry — the admission jury seated on the node's readiness V2
-/// proofs, the probation passed by IR claims the node produced going `Final` — and an honest claim
-/// of the `Active` class going `Final`.
+/// **The whole walk on testnet-12's own fold** (F6 C(1)–C(3) and the one-move court): the IR class
+/// registered by the node's own object, its lifecycle row walked `Candidate → Prefetching →
+/// Probation → ActiveLimited → Active` by the chain's registry — the admission jury seated on the
+/// node's readiness V2 proofs, the probation passed by IR claims the node produced going `Final` —
+/// an honest claim of the `Active` class going `Final`, and a planted lie convicted in one move.
 /// testnet-12's fold harness (`consensus/core/tests/rcore_common.rs`: the real fold with the
 /// processor's extras, every block re-applied, reverted and reloaded).
 #[path = "../../../consensus/core/tests/rcore_common.rs"]
@@ -746,6 +854,19 @@ mod t12_walk {
     /// committed in the attempt envelope; accepted in its own block at `daa` (or `None` where the
     /// class gate refuses it at that height).
     fn ir_claim(c: &mut rcore::Chain, ir: &Ir, n: u64, seed: u64, daa: u64) -> Option<(Hash64, Vec<u8>, PalwClaimRootsV1)> {
+        ir_claim_lying(c, ir, n, seed, daa, None)
+    }
+
+    /// [`ir_claim`], the run lying at step leaf `lie` (one lane moved, the commitment re-derived
+    /// over it) where one is named.
+    fn ir_claim_lying(
+        c: &mut rcore::Chain,
+        ir: &Ir,
+        n: u64,
+        seed: u64,
+        daa: u64,
+        lie: Option<u64>,
+    ) -> Option<(Hash64, Vec<u8>, PalwClaimRootsV1)> {
         let backend = ir.backend();
         let bond = rcore::bond_key(n);
         let (pre_pow, nonce) = (0x7C0_0000 + seed, 7u64);
@@ -760,7 +881,11 @@ mod t12_walk {
             .expect("an anchor");
         let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor's job");
         let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, false);
-        let run = backend.execute(&job, &prompt).expect("the IR run");
+        let run = match lie {
+            None => backend.execute(&job, &prompt),
+            Some(leaf) => backend.execute_with_injected_fault(&job, &prompt, leaf),
+        }
+        .expect("the IR run");
         let attempt = PalwAttemptUnsignedV2 {
             version: PALW_ATTEMPT_V2_VERSION,
             network_domain: rcore::h(rcore::NET),
@@ -803,7 +928,7 @@ mod t12_walk {
     }
 
     #[test]
-    fn an_ir_class_walks_from_candidate_to_active_on_testnet_12_and_its_claims_go_final() {
+    fn an_ir_class_walks_to_active_on_testnet_12_its_claims_go_final_and_a_lie_is_convicted_in_one_move() {
         let mut c = rcore::Chain::new(armed());
         c.room = true;
         let bundle = rcore::bundle(&c.p);
@@ -939,6 +1064,91 @@ mod t12_walk {
         advance_to(&mut c, &ir, registrant, deadline + 1);
         assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::Final { .. }), "the Active class's claim is Final");
         assert_eq!(lifecycle(&c, &ir.class_id), Some(PalwModelLifecycleV1::Active));
+
+        // 7. A planted lie in a claim of the Active class — licensed by a panel that signed it
+        //    anyway — is convicted by the IR court in one move (the held regime plays no bisection:
+        //    `CourtOpened` is refused on testnet-12). The challenger's steps are the node's
+        //    (`tir_one_move_pass_v1`): the claim as `palw_disputable_claims_v2` lists it, its own run
+        //    of the job the claim's anchor names, the one-move case against the served capture, the
+        //    first close its pre-check convicts on; the chain's gate derives the same verdict and the
+        //    fold voids the claim and charges its producer.
+        let honest_leaves = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&material).unwrap().binding.step_leaf_count;
+        let lie = honest_leaves / 2;
+        keep_ready(&mut c, &ir, registrant);
+        let (id, material, roots) = loop {
+            seed += 1;
+            let daa = c.daa + 1;
+            if let Some(claim) = ir_claim_lying(&mut c, &ir, 1, seed, daa, Some(lie)) {
+                break claim;
+            }
+            empty(&mut c, daa);
+        };
+        assert_eq!(backend.verify_material(&material, roots), PalwMaterialVerdictV1::Matches, "the lie answers for its own roots");
+        let bound = bind(&mut c, id, &seats);
+        let receipts = seats.iter().map(|(k, _)| rcore::valid(id, *k, bound)).collect();
+        step(
+            &mut c,
+            bound + 1,
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts }],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+            0,
+        );
+        assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the lie is licensed");
+        assert!(c.p.palw_held_context_active_at(c.daa), "testnet-12's court plays no bisection");
+
+        let accuser = seats[0].0;
+        let target = kaspa_consensus_core::palw_producer_v2::palw_disputable_claims_v2(&c.s, &[accuser])
+            .into_iter()
+            .find(|t| t.claim_id == id)
+            .expect("the licensed lie is disputable");
+        let (job, prompt) = backend.job_for_anchor(roots.anchor).expect("the anchor's job");
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, false);
+        let own = backend.execute(&job, &prompt).expect("the challenger's own run");
+        assert_ne!(own.execution_root, target.execution_root, "the challenger does not reproduce the claim");
+        let court = bundle.court;
+        let ladder = c.s.class_step_ladder_v1(
+            &ir.class_id,
+            kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(
+                &court,
+                c.p.palw_court_ladder.is_some_and(|f| f.is_active(c.daa)),
+            ),
+        );
+        let form = c.p.palw_prompt_ids_form_v1();
+        let tir = ir.tir();
+        let mut rules = tir.court_rules(&court);
+        rules.max_step_leaf_count = ladder;
+        let case = super::super::tir_court::palw_tir_one_move_case_v1(&tir, &material, &own.material, &rules)
+            .expect("the case builds")
+            .expect("the lie is a case");
+        assert_eq!(case.leaf, Some(lie), "the case names the planted leaf");
+        let (label, mut accusation) =
+            super::super::tir_court::palw_tir_one_move_accusation_to_file_v1(case.candidates, &target, accuser, &court, ladder, form)
+                .expect("a close convicts");
+        accusation.signature = vec![5; 16];
+        kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(&accusation).expect("the shape");
+        assert_eq!(
+            kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_verdict_v1(
+                &c.s,
+                c.s.claim(&id).expect("the claim"),
+                &accusation,
+                &court,
+                ladder,
+                form
+            ),
+            Ok(kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty),
+            "the gate derives the node's verdict"
+        );
+        let object = PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(accusation) };
+        kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).expect("it rides a carrier");
+        let producer = rcore::bond_key(1);
+        let before = c.s.bond(&producer).expect("the producer").collateral;
+        let next = c.daa + 1;
+        step(&mut c, next, &[object], PalwBlockWorkV3::None, Hash64::default(), 0);
+        assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { .. }), "the lie is voided: {:?}", c.claim(&id).phase);
+        let after = c.s.bond(&producer).expect("the producer").collateral;
+        eprintln!("walk: the lie is convicted in one move ({label} close at leaf {lie}); producer collateral {before} -> {after}");
+        assert!(after < before, "the producer is charged");
     }
 
     /// Re-prove every non-registrant genesis seat's readiness for the current span, unless their
