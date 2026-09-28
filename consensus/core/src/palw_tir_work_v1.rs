@@ -350,12 +350,11 @@ pub fn palw_tir_node_work_v1(p: &TirProgramV1, block: usize, node: usize, kind: 
 pub fn palw_tir_work_shape_v1(p: &TirProgramV1) -> Result<PalwTirWorkShapeV1, PalwTirWorkError> {
     let info = misaka_palw_tir::validate::validate(p).map_err(|e| PalwTirWorkError::Program(e.to_string()))?;
     let mut blocks = Vec::with_capacity(p.blocks.len());
-    for (bi, b) in p.blocks.iter().enumerate() {
+    for bi in 0..p.blocks.len() {
         let kinds = palw_tir_work_kinds_v1(p, bi);
         let windowed = info.blocks[bi].window.is_some();
         let mut w = BlockWorkV1::default();
-        for ni in 0..b.nodes.len() {
-            let kind = kinds[ni];
+        for (ni, &kind) in kinds.iter().enumerate() {
             let sample = |h: u64| palw_tir_node_work_v1(p, bi, ni, kind, h);
             let affine: [Affine; 4] = if windowed {
                 let (s1, s2, s3) = (sample(1), sample(2), sample(3));

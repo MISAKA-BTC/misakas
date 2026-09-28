@@ -258,8 +258,7 @@ fn check_shape(site: &PalwTirDissectSiteV1, elements: &[Vec<u32>], claim: &PalwT
         return Err(PalwTirDissectError::Shape("one element list and one value list per reduction"));
     }
     let mut total = 0usize;
-    for i in 0..n {
-        let e = &elements[i];
+    for (i, e) in elements.iter().enumerate() {
         if e.is_empty() || e.windows(2).any(|w| w[0] >= w[1]) || e.last().is_some_and(|x| *x as u64 >= site.counts[i]) {
             return Err(PalwTirDissectError::Shape("a reduction's elements are ascending, distinct and inside it"));
         }
