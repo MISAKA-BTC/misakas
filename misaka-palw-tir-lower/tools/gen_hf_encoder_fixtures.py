@@ -46,6 +46,16 @@ CONFIGS = {
         [[62, 5, 17, 33, 8, 63], [62, 40, 2, 29, 11, 50, 7, 21, 63]],
         "clip_text",
     ),
+    # A decoder-only embedder (Qwen3-Embedding's shape): the final-norm row at the last token (the
+    # template's end token, 63), L2-normalised: sentence-transformers' lasttoken pooling + Normalize.
+    "qwen3_embed": (
+        "Qwen3Config",
+        "Qwen3ForCausalLM",
+        dict(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4,
+             num_key_value_heads=2, head_dim=8, max_position_embeddings=64, tie_word_embeddings=True),
+        [[5, 17, 33, 8, 63], [40, 2, 29, 11, 50, 7, 21, 63]],
+        "last_token",
+    ),
     # Bidirectional encoders over a padded token axis (L_max = 12), sentence-transformers pooling
     # applied by hand: masked mean (and CLS), then L2 normalisation. [CLS] 2, [SEP] 3.
     "bert": (
@@ -102,6 +112,10 @@ def make(name):
                 o = fresh(input_ids=torch.tensor([s]))
                 rec = {"tokens": s, "hidden": o.last_hidden_state[0].tolist(),
                        "embeds": o.text_embeds[0].tolist()}
+            elif kind == "last_token":
+                h = fresh.model(input_ids=torch.tensor([s])).last_hidden_state[0]
+                rec = {"tokens": s, "hidden": h.tolist(),
+                       "embeds": torch.nn.functional.normalize(h[-1], p=2, dim=0).tolist()}
             elif kind.startswith("bidir"):
                 _, pad, lmax = kind.split(":")
                 pad, lmax = int(pad), int(lmax)

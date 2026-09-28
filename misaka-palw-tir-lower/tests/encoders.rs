@@ -258,3 +258,52 @@ fn a_sentence_transformers_stack_sets_the_pooling() {
     // Not a sentence-transformers directory.
     assert_eq!(sentence_transformers(&fixture_dir("clip_text")).expect("read"), None);
 }
+
+/// A decoder as a last-token embedder (Qwen3-Embedding's shape): the final-norm row at the template's
+/// end token, L2-normalised, as a `Final` output of the causal scan.
+#[test]
+fn a_decoder_as_a_last_token_embedder_matches_its_hf_fixture() {
+    let dir = fixture_dir("qwen3_embed");
+    let cfg = std::fs::read_to_string(dir.join("config.json")).expect("config");
+    let spec = encoder::as_last_token_embedder(misaka_palw_tir_lower::parse_config_str(&cfg).expect("spec"), true);
+    let hl = misaka_palw_tir_lower::hl::build_program(&spec).expect("hl");
+    let binding = misaka_palw_tir_lower::hf_weights::bind(&spec, &hl).expect("bind");
+    let lw = misaka_palw_tir_lower::lower::lower(&hl, &LowerOpts { max_window: Some(64), ..LowerOpts::default() }).expect("lower");
+    let ck = Checkpoint::open(&dir).expect("checkpoint");
+    let (params_f, _) = ParamStore::from_source(&hl, &binding, &ck).expect("params");
+    let seqs = outputs("qwen3_embed");
+    for s in &seqs {
+        let rows = Session::new(&hl, &params_f).run(&s.tokens).expect("float");
+        let last: Vec<f64> = rows.last().unwrap().iter().map(|x| *x as f64).collect();
+        let r = rel(&last, &s.embeds);
+        eprintln!("qwen3_embed float reference vs HF: rel {r:.2e}");
+        assert!(r < 1e-5, "float vs HF: rel {r}");
+    }
+    let loader = Resident(Arc::new(params_f));
+    let calib: Vec<Vec<usize>> = fidelity::random_sequences(hl.vocab - 1, 6, 12, 7)
+        .into_iter()
+        .map(|p| p.into_iter().chain(std::iter::once(63)).collect())
+        .collect();
+    let quiet = |_: usize, _: usize| {};
+    let stats = fidelity::calibrate(&hl, &loader, &calib, &quiet).expect("calibrate");
+    let mat = materialise(&lw, &hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialise");
+    assert_eq!(mat.logits_scale, 1.0 / (1u64 << 30) as f64, "a normalised embedding is Q30");
+    let p2 = encoder::causal_v2(&lw, EncoderOutput::Final).expect("v2");
+    let pipe = encoder::causal_pipeline(vec![], vec![63], None, 64);
+    let interp = tir::interp_v2::InterpreterV2::new(&p2).expect("interpreter v2");
+    for s in &seqs {
+        let toks: Vec<u32> = s.tokens.iter().map(|t| *t as u32).collect();
+        let run = interp.run(&mat.params, &tir::interp_v2::MapInputs::default(), &toks).expect("v2 run");
+        let out = &run.last().unwrap().output;
+        let job = tir::pipeline::PipelineJob { prompt: toks[..toks.len() - 1].to_vec(), ..Default::default() };
+        let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &OneProgram(&mat.params), &NoRandom, &job).expect("pipeline");
+        assert_eq!(pr.output.data, out.data);
+        let got: Vec<f64> = out.data.iter().map(|c| *c as f64 * mat.logits_scale).collect();
+        let (c, r) = (cosine(&got, &s.embeds), rel(&got, &s.embeds));
+        eprintln!("qwen3_embed integer vs HF ({} tokens): cosine {c:.6}, rel {r:.2e}", s.tokens.len());
+        assert!(c > 0.999, "cosine {c}");
+    }
+    let inputs = misaka_palw_tir_lower::admission::default_inputs();
+    tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
+        .expect("tir_admit_pipeline_v1");
+}

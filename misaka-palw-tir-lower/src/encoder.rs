@@ -211,3 +211,12 @@ pub fn sentence_transformers(dir: &std::path::Path) -> Result<Option<SentenceTra
     };
     Ok(Some(SentenceTransformers { pooling, normalize, max_seq_length }))
 }
+
+/// A decoder read as a last-token embedder (Qwen3-Embedding's shape; sentence-transformers'
+/// `lasttoken` pooling): the same layers and final norm, no head, the final-norm row as the output,
+/// L2-normalised when the class says. Its program is a causal encoder's ([`causal_v2`], `Final`).
+pub fn as_last_token_embedder(mut spec: crate::spec::ArchSpec, normalize: bool) -> crate::spec::ArchSpec {
+    spec.output = crate::spec::OutputSpec::Embedding { proj: None, normalize };
+    spec.notes.push("read as a last-token embedder: the head is not part of the class".into());
+    spec
+}
