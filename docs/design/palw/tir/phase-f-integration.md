@@ -539,10 +539,14 @@ sum, value sum).
 
 ### 2.9 The structural work vector
 
-`tir_canonical_shape_v1(program, layout) -> PalwCanonicalShapeV1` (a constructor added in
-`palw_canonical_work_v1.rs`, whose shape type is private), then the existing
-`palw_canonical_work_from_shape_v1` (`:594-640`) turns it into the vector for the executed facts.
-Per node, spec 04b §8's formulas, affine in `H`, classified by structure only:
+As built (F8, `palw_tir_work_v1`): `palw_tir_work_shape_v1(program) -> PalwTirWorkShapeV1`, its own
+type — the legacy `PalwCanonicalShapeV1` is affine in the kv length and cannot hold a window, while an
+IR block costs `c₀ + c₁ · min(a + 1, W)` — and `work_v1(facts)` sums the executed positions in
+closed form into the same `PalwCanonicalWorkVectorV1`. Per node, spec 04b §8's formulas (affinity in
+`H` checked, not assumed), classified by structure only, in the precedence dense/routed matmul >
+normalization > recurrence > attention > other; "recurrence" is refined to the nodes on a path from a
+`State` read to a `StateWrite` plus the matmuls reading the state (so a projection feeding the update
+stays a weight matmul):
 
 | dimension | nodes |
 | --- | --- |
@@ -556,7 +560,11 @@ Per node, spec 04b §8's formulas, affine in `H`, classified by structure only:
 | `kv_read_bytes` / `kv_write_bytes` | `H × row bytes` read through each `HistAppend` output; the appended row's bytes |
 
 Nothing reads `commit`, `tile_len`, `h_tile`, `C` or node names (PALW-TIR-16, PALW-WK-3; a test
-re-tiles and re-commits a program and requires an identical vector). The registry's
+re-tiles and re-commits a program and requires an identical vector). Qwen2.5-1.5B-A16 as an IR
+program (tir/lower's `a16_mirror_program`) prices `dense_matmul` and `weight_traffic_bytes` exactly as
+the legacy graph-v7 class does; its total arithmetic is 1.3-2.1 % higher, because the IR counts every
+integer operation of the requantisation, rotary and norm segments (report in
+`misaka-palw-base0/tests/tir_a16_work_vs_legacy.rs`). The registry's
 `PalwModelWorkV1` comes from the same walk (`tir_model_work_v1`); `palw_economic_compute_v1.rs:
 297-325`'s name heuristics are never reached by an IR class.
 

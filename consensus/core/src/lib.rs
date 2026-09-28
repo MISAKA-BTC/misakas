@@ -461,6 +461,8 @@ pub mod palw_tir_class_v1;
 pub mod palw_tir_court_v1;
 /// RFC-0002 Phase F step F4: the step space of an IR class — commit-point tiles, Fixed-state checkpoints and history tiles as step leaves, in closed form.
 pub mod palw_tir_step_v1;
+/// RFC-0002 Phase F step F8: an IR class's canonical work vector, classified and priced by structure alone.
+pub mod palw_tir_work_v1;
 pub mod palw_terminal;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
