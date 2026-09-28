@@ -2636,7 +2636,13 @@ fn lower_gdn(
     };
     let qh = to_v_heads(b, q.r);
     let kh = to_v_heads(b, k.r);
+    // `v` enters the step `GDN_V_FRAC_BITS` finer than its code: the read `w = S·k`, `v − w` and
+    // the β product's rounding then sit on that grid, not on `v`'s 16-bit one. On `v`'s grid those
+    // roundings are written back into the state at every step and pile up: Qwen3.5-0.8B's late
+    // layers drift x1.3–x3.0 over 4,096 positions in a float replay of the step, flat 8 bits finer.
     let vh = b.reshape_fixed(v.r, &[nv32, dv32]);
+    let vf = b.c(DType::I32, 1i128 << GDN_V_FRAC_BITS);
+    let vh = b.mul(vh, vf, DType::I32);
     let pl = per_layer(lb);
     // decay = exp(−c · softplus(dt)), c = −A ≥ 0, dt = a + dt_bias, all Q24.
     let (dtb, an) = (gi.dt_bias, gi.a_log_neg);
@@ -2688,7 +2694,7 @@ fn lower_gdn(
     let (sn, dn) = (format!("{site}.state"), format!("{site}.delta"));
     let kv = v.key.clone();
     let scales = Arc::new(move |c: &FillCtx<'_>| -> Result<(f64, f64, i32, f64)> {
-        let sv = c.scale(&kv)?;
+        let sv = c.scale(&kv)? / (1u64 << GDN_V_FRAC_BITS) as f64;
         let su = crate::quant::code_scale(c.absmax(&dn)?, ((1u64 << 24) - 1) as f64, c.policy.headroom32);
         let target = crate::quant::code_scale(c.absmax(&sn)?, crate::quant::CODE32_MAX, c.policy.headroom32);
         let ws = (su / 32768.0 / target).log2().floor().clamp(-62.0, 20.0) as i32;
@@ -2756,6 +2762,9 @@ fn lower_gdn(
     let o = b.commit(o);
     Ok(Val { r: o, dt: DType::I32, key: want.key.clone(), len: nv * dv, site: site.to_string() })
 }
+
+/// Fractional bits `v` gains on its way into the gated-delta step (see `lower_gdn`).
+const GDN_V_FRAC_BITS: u32 = 8;
 
 fn q24_wide(v: f64) -> i32 {
     (v * (1u64 << 24) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32
