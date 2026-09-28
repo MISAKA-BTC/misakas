@@ -3,10 +3,10 @@
 //!
 //! `ClassRegisteredTirV1` is APPENDED (tag 61) so no earlier discriminant moves; it rides the
 //! stateless gate at every height (a block carrying it must be valid on this build and on an older one
-//! that skips it undecoded), rents nothing, is charged no registration slot, is not a carrier a halt
-//! must let through, and the fold refuses it by name — so a block carrying one folds exactly as the
-//! same block without it. The processor's acceptance walk drops it by name below `palw_tir_v1` (and,
-//! until admission v10, above it); that arm is exercised end to end with F6.
+//! that skips it undecoded), rents nothing, and is not a carrier a halt must let through. Below
+//! `palw_tir_v1` the processor's acceptance walk drops it by name before any slot is charged and the
+//! fold refuses it — so a block carrying one folds exactly as the same block without it; past the
+//! fence admission v10 decides (`palw_tir_admission.rs`) and it folds (`palw_tir_registration_fold.rs`).
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
@@ -118,7 +118,13 @@ fn it_rides_statelessly_rents_nothing_and_takes_no_slot() {
     assert!(validate_palw_lifecycle_tx(&payload, false).is_ok());
     assert!(validate_palw_lifecycle_tx(&payload, true).is_ok());
     assert_eq!(palw_object_rent_ceiling_v1(&object), 0, "no rent: an older build that skips it burns nothing either");
-    assert_eq!(palw_class_registration_buyer_v1(&object), None, "never charged a registration slot before its admission lands");
+    // Past the fence it is a bought registration (a slot, the burn); below it the acceptance walk
+    // drops it by name before any slot is charged (`palw_object_is_tir_v1`).
+    assert_eq!(
+        palw_class_registration_buyer_v1(&object),
+        Some(PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(3)))
+    );
+    assert!(kaspa_consensus_core::palw_state_v2::palw_object_is_tir_v1(&object));
     assert!(!palw_h1_carrier_object_v1(&object), "a registration, not a conviction a halt must let through");
 
     // What an OLDER build meets: a tag its enum does not have. Under the audit declaration it is
@@ -130,8 +136,10 @@ fn it_rides_statelessly_rents_nothing_and_takes_no_slot() {
     assert!(validate_palw_lifecycle_tx(&unknown, false).is_err(), "…and refused where it is not, which is why the fence needs it");
 }
 
+/// Below `palw_tir_v1` (dormant on testnet-12): the fold's second lock. Past it the registration
+/// folds (`palw_tir_registration_fold.rs`).
 #[test]
-fn the_fold_refuses_it_by_name() {
+fn the_fold_refuses_it_by_name_below_the_fence() {
     let p = palw_t12_shipped_params();
     let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("testnet-12 is V2") };
     let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: 10, blue_score: 10, subsidy: 0 };

@@ -7170,6 +7170,19 @@ pub enum PalwConsensusObjectV2 {
     },
 }
 
+/// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
+/// registration, an IR court close, an IR data-availability answer), which an older build cannot
+/// decode and skips (A-2)? Below `palw_tir_v1` the acceptance walk drops every such object by name
+/// before any slot, rent or budget is charged for it, and the fold refuses it as the second lock.
+pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
+    match object {
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => true,
+        PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_tir_v1(),
+        PalwConsensusObjectV2::MaterialDisclosedV2 { answer, .. } => answer.is_tir_v1(),
+        _ => false,
+    }
+}
+
 /// **The name of a v22-skeleton object (ADR-0152 v3.1 §6 row 24, tags 53–56)**, or `None` for
 /// every object a network could fold before v22. One predicate for the fold's refusal and the
 /// processor's gate, so the two cannot disagree about which objects are declared-not-landed.
@@ -7485,6 +7498,12 @@ pub fn palw_class_registration_buyer_v1(object: &PalwConsensusObjectV2) -> Optio
             if carriage.registrant_bond != palw_genesis_registrant_bond_v1() =>
         {
             Some(carriage.registrant_bond)
+        }
+        // RFC-0002 Phase F: an IR registration is always bought (IR genesis rows arrive in Phase H),
+        // and counts and burns as a legacy one does. Below `palw_tir_v1` it never reaches a reader of
+        // this: the acceptance walk drops it by name first.
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { admission, .. } if admission.registrant_bond != palw_genesis_registrant_bond_v1() => {
+            Some(admission.registrant_bond)
         }
         _ => None,
     }
@@ -9681,6 +9700,13 @@ pub struct PalwChainStateV2 {
     network_demand: BTreeMap<(PalwBondKeyV2, Hash64), u64>,
     /// By DAA: the chain blocks whose own work was an operator's attempt, over the last 32 DAA (`ā_op`).
     operator_ring: BTreeMap<u64, u32>,
+    /// **RFC-0002 Phase F (F6): every admitted IR class's record** — the facts its attempt jobs
+    /// (J5), its data-availability draws and its court read, derived from the carried class when it
+    /// registered ([`crate::palw_tir_admission_v1::palw_tir_class_record_v1`]), so no later reader
+    /// decodes a program. Written once per registration, never rewritten. Its own Some-only root
+    /// block (`tir_classes/v1`) and carriage tail (`0xC0`): empty below `palw_tir_v1`, so every
+    /// network roots and carries exactly as before.
+    tir_classes: BTreeMap<Hash64, crate::palw_tir_admission_v1::PalwTirClassRecordV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -9841,6 +9867,7 @@ impl PalwChainStateV2 {
             issuance_buckets: BTreeMap::new(),
             network_demand: BTreeMap::new(),
             operator_ring: BTreeMap::new(),
+            tir_classes: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -11620,6 +11647,11 @@ impl PalwChainStateV2 {
         &self.operator_ring
     }
 
+    /// **RFC-0002 Phase F: an IR class's record**, or `None` for a class that is not an IR program.
+    pub fn tir_class_v1(&self, class_id: &Hash64) -> Option<&crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
+        self.tir_classes.get(class_id)
+    }
+
     /// **ADR-0160 F-S: `bond`'s issuance bucket**, if it has one (a bond with none holds a full bucket).
     pub fn issuance_bucket_of_v1(&self, bond: &PalwBondKeyV2) -> Option<&crate::palw_issuance_slots_v1::PalwIssuanceBucketV1> {
         self.issuance_buckets.get(bond)
@@ -11949,6 +11981,12 @@ impl PalwChainStateV2 {
             state.update(b"capacity_n/v1");
             state.update(collection_root(b"network_demand", &self.network_demand).as_byte_slice());
             state.update(collection_root(b"operator_ring", &self.operator_ring).as_byte_slice());
+        }
+        // **RFC-0002 Phase F (F6): the IR classes, ONE Some-only block** — empty until an IR class
+        // registers, which nothing below `palw_tir_v1` can do.
+        if !self.tir_classes.is_empty() {
+            state.update(b"tir_classes/v1");
+            state.update(collection_root(b"tir_classes", &self.tir_classes).as_byte_slice());
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -13559,6 +13597,13 @@ pub enum PalwDeltaEntryV2 {
     NetworkDemand { key: (PalwBondKeyV2, Hash64), old: Option<u64>, new: Option<u64> },
     /// The operator ring's count for a DAA was written or dropped (87; ADR-0160 F-N, stage 4).
     OperatorRing { key: u64, old: Option<u32>, new: Option<u32> },
+    /// An IR class's record was written (88; RFC-0002 Phase F, F6,
+    /// [`crate::palw_tir_admission_v1::PalwTirClassRecordV1`]).
+    TirClass {
+        key: Hash64,
+        old: Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1>,
+        new: Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -17419,6 +17464,17 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    /// **RFC-0002 Phase F: the one writer of `tir_classes`**, journaled `TirClass` (88).
+    fn write_tir_class(&mut self, key: Hash64, new: Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1>) {
+        let old = match new.clone() {
+            Some(record) => self.state.tir_classes.insert(key, record),
+            None => self.state.tir_classes.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::TirClass { key, old, new });
+        }
+    }
+
     /// **ADR-0160 F-N: the one writer of `operator_ring`**, journaled `OperatorRing` (87).
     fn write_operator_ring_v1(&mut self, key: u64, new: Option<u32>) {
         let old = match new {
@@ -20997,8 +21053,7 @@ impl<'a> TransitionBuilder<'a> {
         &mut self,
         ctx: &PalwBlockContextV2,
         class_id: Hash64,
-        profile: &crate::palw_step::PalwShapeProfileV3,
-        canonical: &crate::palw_v2::PalwJobContextV2,
+        work: &dyn Fn() -> Option<crate::palw_model_registry_v1::PalwModelWorkV1>,
         initial_target: u128,
     ) {
         use crate::palw_model_registry_v1 as registry;
@@ -21013,7 +21068,7 @@ impl<'a> TransitionBuilder<'a> {
             return;
         }
         let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, fold.span_daa);
-        let work = registry::palw_model_work_from_carriage_v1(profile, canonical);
+        let work = work();
         // The 2026-09-25 sweep's V03(2)/V05: a row rewritten to its entry state starts no probation
         // it had, so whatever the old row's probation remembered goes with it.
         if self.state.probation_memory.contains_key(&class_id) {
@@ -26334,9 +26389,14 @@ fn open_da_session_rcore_v1(
             } else {
                 PalwDaDrawSpaceV1::Events {
                     rows: crate::palw_da_rcore_v1::palw_da_in_run_rows_v1(&claim, builder.extras.fp_da_pins_active),
-                    tiles: crate::palw_da_rcore_v1::palw_da_row_tiles_v1(
-                        builder.state.fp_work_profiles.get(&claim.class_id).map(|profile| profile.as_ref()),
-                    ),
+                    // RFC-0002 Phase F: an IR class's tiles come from its record (it has no fp
+                    // profile); the same clamp as the legacy rule.
+                    tiles: match builder.state.tir_classes.get(&claim.class_id) {
+                        Some(record) => record.logits_tiles().clamp(1, 256),
+                        None => crate::palw_da_rcore_v1::palw_da_row_tiles_v1(
+                            builder.state.fp_work_profiles.get(&claim.class_id).map(|profile| profile.as_ref()),
+                        ),
+                    },
                 }
             };
             palw_da_draw_units_v1(&seed, &named, &space)
@@ -29299,6 +29359,426 @@ fn apply_receipt_licensed_v2(
     Ok(())
 }
 
+/// **What the fold reads of a class registration, whichever door it came through** — the legacy
+/// `ClassRegistered` (its optional carriage's profile) or RFC-0002's `ClassRegisteredTirV1` (its
+/// program): the object's fields, the carriage's registrant, and the three facts the fold derives
+/// from the carried graph. One body ([`apply_class_registration_v1`]) folds both, so the two doors
+/// cannot drift.
+struct PalwClassRegistrationFoldV1<'a> {
+    class_id: &'a Hash64,
+    artifact_root: &'a Hash64,
+    slash_value_per_pwu: &'a u64,
+    pwu_rule: &'a PalwPwuRuleV2,
+    initial_target: &'a u128,
+    share_permille: &'a u16,
+    activation_daa: &'a u64,
+    /// The carriage's registrant bond; `None` for a registration with no carriage.
+    registrant: Option<PalwBondKeyV2>,
+    /// ADR-0082 Decision 2: whether the class's terminal leaf owes a root claim.
+    fused_attention: bool,
+    /// ADR-0119 Decision 2: whether the class records the held ladder.
+    held: bool,
+    /// ADR-0135: the registry work its lifecycle row opens with, computed only if the row is
+    /// written; `None` for a registration with no carriage.
+    work: Option<&'a dyn Fn() -> Option<crate::palw_model_registry_v1::PalwModelWorkV1>>,
+}
+
+/// The body of a class registration's fold (see [`PalwClassRegistrationFoldV1`]).
+fn apply_class_registration_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    registration: PalwClassRegistrationFoldV1<'_>,
+) -> Result<(), PalwStateV2Error> {
+    let PalwClassRegistrationFoldV1 {
+        class_id,
+        artifact_root,
+        slash_value_per_pwu,
+        pwu_rule,
+        initial_target,
+        share_permille,
+        activation_daa,
+        registrant,
+        fused_attention,
+        held,
+        work,
+    } = registration;
+    // **ADR-0056 Decision 5: a Dormant class is the one id that may be registered twice.**
+    //
+    // It was reclaimed for producing nothing, not convicted of anything, so the way back is
+    // the way in: a fresh signature, a fresh exposure reservation, a fresh soak, and the
+    // grant floor again. Every other status refuses — including `Frozen`, which is a
+    // verdict and must not be escapable by re-registering.
+    match builder.state.classes.get(class_id).map(|record| &record.status) {
+        None => {}
+        Some(PalwClassStatusV2::Dormant { .. }) => {}
+        Some(_) => return Err(PalwStateV2Error::DuplicateClass(*class_id)),
+    }
+    // **2026-09-24 DoS audit #12 (b): at most four bought registrations a block, and each
+    // burns 1 MSK of its registrant's bond** (the user's decisions; past
+    // `palw_audit_2026_09_23` only, genesis rows exempt). The cap is the fold's second lock
+    // — the acceptance walk drops the fifth first, with the block standing — see
+    // `PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`. The burn is checked below with the
+    // exposure it sits on top of, and taken where the reservation is.
+    let bought_by = if builder.extras.audit_2026_09_23_active { palw_class_registration_buyer_v1(object) } else { None };
+    if bought_by.is_some() {
+        if builder.class_registrations >= PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1 {
+            return Err(PalwStateV2Error::ClassRegistrationsPerBlockExceeded {
+                class: *class_id,
+                max: PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1,
+            });
+        }
+        builder.class_registrations += 1;
+    }
+    if *initial_target == 0 {
+        return Err(PalwStateV2Error::ZeroClassTarget(*class_id));
+    }
+    // **Audit H3.** `reserved = pwu_per_inference × slash_value_per_pwu` is the collateral a claim puts
+    // at risk, and admission's ceiling (Decision 6 item 8) compares it against the bond's
+    // headroom. At zero every claim reserves zero, so ANY number of immature claims fits
+    // under ANY ceiling — the per-bond exposure cap, which is the whole of P0-10's remedy,
+    // silently evaluates to no cap at all. A class whose work cannot be slashed is not a
+    // cheap class, it is an unbonded one.
+    if *slash_value_per_pwu == 0 {
+        return Err(PalwStateV2Error::ZeroSlashValue(*class_id));
+    }
+    // **One slash value for the network, because it sets weight-per-collateral.**
+    //
+    // A claim contributes `pwu * beta` of weight and reserves `pwu * slash_value_per_pwu`
+    // of collateral, so the weight a bond buys per sompi at risk is `beta /
+    // slash_value_per_pwu` — and the denominator was picked by whoever registered the
+    // class. A registrant naming 1 where the floor names 5 gets five times the finality
+    // weight for the same money at risk, which is finality sold at a discount to the party
+    // that set its own price.
+    //
+    // The per-class cost differences already have a home: `pwu_per_inference` is what says
+    // one class's inference is worth more work than another's. `slash_value_per_pwu` is a
+    // UNIT — sompi per work unit — and a network with two units has no single meaning for
+    // either quantity. So every class carries the liveness floor's, and the floor's own
+    // registration is the one that sets it.
+    if let Some(base) = builder.state.classes.get(&builder.params.base_class_id)
+        && *slash_value_per_pwu != base.slash_value_per_pwu
+    {
+        return Err(PalwStateV2Error::SlashValueNotTheNetworks {
+            class: *class_id,
+            got: *slash_value_per_pwu,
+            want: base.slash_value_per_pwu,
+        });
+    }
+    // ADR-0045 Decision 1: both rule shapes must license SOMETHING. A `DerivedV1` with a
+    // zero per-inference cost would derive pwu = 0 for every attempt while the stateless
+    // layer requires pwu ≥ 1 — a class nobody can ever mine, registered as if it worked.
+    // A zero ceiling is the same dead class in the older costume.
+    match pwu_rule {
+        PalwPwuRuleV2::MaxPerAttempt(0) => return Err(PalwStateV2Error::ZeroPwuCeiling(*class_id)),
+        PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 0 } => {
+            return Err(PalwStateV2Error::ZeroPwuPerInference(*class_id));
+        }
+        _ => {}
+    }
+    // **A registration with a future activation takes no share yet (condition 12).**
+    //
+    // The share table is validated here either way — a registration whose share could
+    // never be granted must fail at registration, not silently at the activation edge
+    // where nobody is watching — but it is only WRITTEN when the class becomes active.
+    // **A registration must activate soon, and a pending one already costs share**
+    // (audit M2-8).
+    //
+    // A weightless registration wrote no permille, so `class_shares` never moved and the
+    // NEXT weightless registration was checked against the identical table — the check
+    // never accumulated and therefore never refused. Nothing removes a `Registered` row
+    // either: activation only touches rows whose height has come, and reclamation walks
+    // share holders, which a pending class is not. One Active bond at the minimum could
+    // therefore write unbounded permanent rows into `classes`, `class_targets` and
+    // `receipt_targets` — every one of them re-hashed into the state root on every block —
+    // for a transaction fee each, with a re-genesis as the only remedy.
+    //
+    // Two bounds, both cheap: the activation height must be within a window of this block,
+    // so a registration cannot park forever; and the pending grants of classes that have
+    // not activated yet are counted alongside the live table, so N of them accumulate and
+    // the (N+1)-th is refused by the same arithmetic that refuses an over-grant today.
+    if activation_daa.saturating_sub(ctx.daa_score) > PALW_CLASS_ACTIVATION_MAX_LOOKAHEAD_DAA {
+        return Err(PalwStateV2Error::ClassActivationTooFarAhead {
+            class: *class_id,
+            activation_daa: *activation_daa,
+            now: ctx.daa_score,
+            max_lookahead: PALW_CLASS_ACTIVATION_MAX_LOOKAHEAD_DAA,
+        });
+    }
+    // **The registry's price must actually be affordable** (audit M2-16). The reservation
+    // is TAKEN at :move_registration_exposure and never checked against anything, so a bond
+    // at the minimum could register unbounded classes while its ledger recorded exposure
+    // far past its collateral. The attempt path's full ceiling (collateral x ratio) needs
+    // the admission params, which the transition does not hold; the weaker invariant that
+    // IS reachable here — total exposure may not exceed the collateral itself — is the one
+    // that makes the price real, and it is strictly implied by the ratio ceiling.
+    if let Some(carriage_bond) = registrant {
+        // Whether the bond EXISTS is `move_registration_exposure`'s question, asked below
+        // and with its own error; this check is about affordability and says nothing when
+        // there is no bond to ask about.
+        if let Some(bond_record) = builder.state.bonds.get(&carriage_bond) {
+            let collateral = bond_record.collateral;
+            // ADR-0071 SA-2: a declaration's reservation is real only if it is counted
+            // wherever the ceiling is applied — otherwise declaring sixteen classes would
+            // cost nothing the next registration or claim could feel. Derived from the
+            // bond's own `capable_classes`, and zero while the fence is off.
+            let declared = if builder.capability_bound { palw_bond_capability_exposure_v1(bond_record) } else { 0 };
+            // ADR-0152 (the S review's L4): past `palw_rcore_plus` the one ledger (locks'
+            // excess included) and the accuser ledger, so this 100% check keeps
+            // `committed + accuser + declared ≤ C`; below it, the claim ledger as before.
+            let backing = if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                builder
+                    .committed_at(&carriage_bond, ctx.daa_score)
+                    .saturating_add(builder.read().accuser_ledger_v1(&carriage_bond, ctx.daa_score))
+            } else {
+                builder
+                    .state
+                    .reserved_exposure(&carriage_bond)
+                    .checked_add(builder.state.registration_exposure(&carriage_bond))
+                    .ok_or(PalwStateV2Error::Overflow("total exposure"))?
+            };
+            let already = backing.checked_add(declared).ok_or(PalwStateV2Error::Overflow("total exposure"))?;
+            let price = builder.params.registration_exposure_sompi() as u128;
+            if already.saturating_add(price) > collateral as u128 {
+                return Err(PalwStateV2Error::RegistrationExposureUnaffordable { class: *class_id, already, price, collateral });
+            }
+            // #12 (b): the burn comes out of the same collateral the exposure is measured
+            // against, so it must fit on top of everything the bond already stands behind
+            // AND this registration's own reservation — a bond left backing more than it
+            // holds would be the M2-16 defect again, one MSK at a time.
+            if bought_by.is_some() {
+                let burn = PALW_CLASS_REGISTRATION_BURN_SOMPI_V1 as u128;
+                if already.saturating_add(price).saturating_add(burn) > collateral as u128 {
+                    return Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable {
+                        class: *class_id,
+                        bond: carriage_bond,
+                        burn: PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
+                        already,
+                        collateral,
+                    });
+                }
+                // **And it must leave every LIVE slashable lock covered** (review of #12).
+                // A seat's Valid lock is admitted against `collateral − live locks`
+                // (`slashable_available`), not against the reservations summed above, so
+                // the two budgets overlap by design and the check above never saw the
+                // locks: a bond holding 10 MSK under a 9.9996 MSK live lock paid the burn,
+                // fell to 9 MSK, and a later `PanelFalseValid` on that lock took only what
+                // was left (`slash_bond` clamps to the collateral). A seat expecting
+                // conviction could spend the money behind its lock on registrations. The
+                // lock is read on both clocks at the escaped depth, as `lock_valid_seat`
+                // reads it; bought registrations exist only past the fence.
+                let locked = builder.slashable_live_locked(&carriage_bond, ctx.daa_score);
+                if locked.saturating_add(burn) > collateral as u128 {
+                    return Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable {
+                        class: *class_id,
+                        bond: carriage_bond,
+                        burn: PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
+                        already: locked,
+                        collateral,
+                    });
+                }
+            }
+        }
+    }
+    // **Outstanding grants are CHECKED against the table, never written into it**
+    // (audit3 S-03). M2-8's remediation built a merged live+pending view and handed the
+    // whole result to the live writer. Two things went wrong with that, and both are
+    // unrecoverable once they land:
+    //
+    // * a class still `Registered` ended up holding a live cadence permille, which is
+    //   exactly what `assert_internal_consistency` forbids — `share_bearing` excludes
+    //   `Registered`/`Dormant`, so the class set and the share table disagree from that
+    //   block on. Nothing on the block path asserts it, so every node commits the corrupt
+    //   state deterministically and only the pruning-point IBD refuses — forever, against
+    //   every peer, because every peer serves the same chain-committed state; and
+    // * the merged view sums to `1000 + Σ pending`, and `granted_share_table_v2` is
+    //   written for a `current` that sums to 1000. Its `let deficit = keep - distributed;`
+    //   underflows once the excess outgrows what integer division absorbs — a panic under
+    //   `overflow-checks`, i.e. a chain halt rather than a wrong number. Then at the
+    //   activation edge the entrant is granted against a table that already contains it,
+    //   the final `insert` overwrites its scaled value, and the denominator settles at
+    //   999‰ permanently.
+    //
+    // The property M2-8 wanted is that a pending grant occupies capacity, so registrations
+    // cannot be minted for free against a table that cannot afford them. That is a
+    // QUESTION about the live table, not a mutation of it: ask whether the live classes
+    // could still honour every outstanding promise plus this one, by pricing them as a
+    // single aggregate grant. Conservative (the aggregate dilutes at least as hard as the
+    // promises would one at a time), 1000-conserving by construction, and it leaves the
+    // live table alone until a class actually activates — which is where ADR-0045
+    // Decision 3 says the second and last mutation belongs.
+    let outstanding: u32 = builder
+        .state
+        .classes
+        .iter()
+        .filter(|(id, _)| *id != class_id && !builder.state.class_shares.contains_key(*id))
+        .filter_map(|(_, record)| match record.status {
+            PalwClassStatusV2::Registered { pending_share_permille, .. } => Some(pending_share_permille as u32),
+            _ => None,
+        })
+        .sum();
+    // **ADR-0145 I4, past `Params::palw_admission_independence`: a registration buys
+    // existence, never cadence.** A permille granted here is not the new class's to take:
+    // `granted_share_table_v2` funds it by donation from every incumbent, so a stranger's
+    // registration moves the weight, the budget and — through
+    // `attempt_target_seed_v1(share, pwu)` — the difficulty of classes that never heard of
+    // it. Past the fence a bought class registers at zero and earns its share the way the
+    // registry grants one, from an admission it has passed.
+    //
+    // A genesis class is exempt, for the reason the record below spells out: the assembly
+    // decided it, nobody bought it, and the shipped card grants the floor's 1000 ‰ in
+    // exactly this arm. The zero still WRITES a share row (`Some(0)`), which is what keeps
+    // the class eligible for the registry's later redistribution — a class with no row at
+    // all is skipped by it for ever.
+    if builder.extras.admission_independence_at(ctx.daa_score)
+        && *share_permille > 0
+        && registrant.is_some_and(|bond| bond != palw_genesis_registrant_bond_v1())
+    {
+        return Err(PalwStateV2Error::RegistrationTakesNoShare { class: *class_id, requested: *share_permille });
+    }
+    // The write. Priced against the LIVE table alone, so it conserves 1000‰ over the
+    // classes that actually bear weight. Computed FIRST so that a grant which is simply
+    // out of range is reported as `ShareOutOfRange` by the arithmetic that owns that
+    // question, rather than being swallowed by the capacity check below.
+    let table = granted_share_table_v2(builder.params, &builder.state.class_shares, *class_id, *share_permille)?;
+    // The capacity check. Its table is discarded; only its refusals matter, and it is
+    // asked only when something is actually outstanding — with nothing pending it would
+    // re-ask the question the line above already answered.
+    if outstanding > 0 {
+        let committed =
+            outstanding.checked_add(*share_permille as u32).ok_or(PalwStateV2Error::Overflow("outstanding pending shares"))?;
+        if committed > 1000 {
+            return Err(PalwStateV2Error::PendingSharesExceedTable { outstanding, requested: *share_permille });
+        }
+        granted_share_table_v2(
+            builder.params,
+            &builder.state.class_shares,
+            *class_id,
+            u16::try_from(committed).expect("committed is bounded by 1000 above"),
+        )?;
+    }
+    let weightless = *activation_daa > ctx.daa_score;
+    if !weightless {
+        // ADR-0045 Decision 3: the share table mutates HERE and at the activation edge,
+        // and nowhere else. The first class funds the liveness floor whole; every later
+        // entrant is funded by donation, and these writes are the only way a permille
+        // moves.
+        for (id, share) in table {
+            if builder.state.class_shares.get(&id).copied() != Some(share) {
+                builder.write_share(id, Some(share));
+            }
+        }
+    }
+    // **ADR-0143 Decision 4: the founding root is reserved in the transition that writes
+    // the class.** There is no moment when a class's root is registered and unowned, so the
+    // window between announcing this fence and reaching it cannot be squatted. The founding
+    // line's id IS the class id (ADR-0088 Decision 1), and its version is 1, which is what
+    // the synthesised founding line answers with.
+    //
+    // A root another line already owns refuses the registration outright: a class that
+    // could exist holding a root it does not own would have its own attribution paid to a
+    // stranger, which is the defect, not a milder form of it.
+    builder.claim_artifact_root(artifact_root, class_id, *class_id, 1)?;
+    builder.write_class(
+        *class_id,
+        Some(PalwClassStateV2 {
+            artifact_root: *artifact_root,
+            slash_value_per_pwu: *slash_value_per_pwu,
+            pwu_rule: *pwu_rule,
+            status: if weightless {
+                PalwClassStatusV2::Registered { activation_daa: *activation_daa, pending_share_permille: *share_permille }
+            } else {
+                PalwClassStatusV2::Active
+            },
+            registered_daa: ctx.daa_score,
+            // ADR-0056 Decision 3: whose bond paid for this to exist. The carriage is the
+            // post-genesis form and names its registrant; a genesis registration has none,
+            // and pays nothing, because the network itself decided it — and since ADR-0082
+            // a genesis row may have to CARRY a profile anyway (`fused_attention` below is
+            // readable from nowhere else), so "carries a carriage" stopped implying "was
+            // bought". `palw_genesis_registrant_bond_v1` is what the two are separated by;
+            // its doc has the failure this repaired.
+            registrant_bond: registrant.filter(|bond| *bond != palw_genesis_registrant_bond_v1()),
+            // **ADR-0082 Decision 2 / audit A C-5: does this class's terminal leaf owe a
+            // root claim?** Read off the graph the registration CARRIES, by the one
+            // predicate the court and the admission gate both ask
+            // (`palw_profile_has_fused_attention_v1`) — never declared, because a class
+            // that declared its own adjudication rule would be choosing its own court.
+            //
+            // A registration with no carriage (the genesis form, "the catalog IS the
+            // profile in committed form") folds `false`: the fold holds no catalog and
+            // there is nothing here to read. What makes that honest is the boot gate,
+            // where the catalog IS in hand — `verify_palw_genesis_v2` refuses a genesis
+            // row whose catalogued graph reaches the fused kernel and carries no profile,
+            // and refuses a carriage that disagrees with the catalog either way. Deriving
+            // it here from a table of the rows THIS BUILD ships would be worse than a gap:
+            // the fold's answer would be a function of the binary rather than of the
+            // chain, and two builds shipping different row sets would root the same
+            // genesis differently.
+            fused_attention,
+        }),
+    );
+    // **ADR-0119 Decision 2: a class under the held map records its ladder, now.** The
+    // carriage is the one place the fold ever holds the class's profile; every later reader
+    // of a claim's ladder holds this state instead. Written only for a held class — which
+    // the gate admits only past `Params::palw_held_context` — so a network that registers
+    // none roots exactly as before.
+    if held {
+        builder.write_class_step_ladder(*class_id, Some(crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1));
+    }
+    // **Decision 3: the registry's price, taken now and held while the class lives.** A
+    // re-registration of a Dormant class takes it again — the previous reservation was
+    // released at reclamation, so this is one live class and one reservation, always.
+    // The sentinel pays nothing (`palw_genesis_registrant_bond_v1`), and it must, or the
+    // release sites — every one of which reads `record.registrant_bond` — would have
+    // nothing to give back and the reservation would be permanent.
+    if let Some(bond) = registrant
+        && bond != palw_genesis_registrant_bond_v1()
+    {
+        builder.move_registration_exposure(bond, true)?;
+    }
+    // **#12 (b): the burn, taken.** Through `slash_bond`'s write — `collateral` down,
+    // `slashed` up — because `slashed` is what the bond's release spend must destroy
+    // (`palw_bond_burn_obligation_v2`): the sompi leave the bond now, stop counting as
+    // stake now, and are never minted back to anyone. A registrant bond the state does not
+    // hold is `MissingBond`, never a free registration.
+    if let Some(registrant) = bought_by {
+        builder.burn_registration_fee(registrant, PALW_CLASS_REGISTRATION_BURN_SOMPI_V1)?;
+    }
+    // A returning class starts its walk over: the counters are about the CURRENT
+    // registration's production and nothing before it.
+    builder.write_class_walk(*class_id, None);
+    builder.write_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }));
+    // The receipt lane seeds at the uniform 2^-1, NOT from the class's `initial_target`.
+    // It used to (ADR-0044: "one registration field, two slots"), and that was right while
+    // every genesis target was 2^-1. The attempt lane's seed is now tuned per class to the
+    // draw supply of INFERENCES (a floor at milliseconds per inference sits ~2^14 below a
+    // 9-second model), but a receipt draw is one QUANTUM of real demand — a user's job or a
+    // canonical claim — whose supply has nothing to do with how fast the class runs its
+    // canonical job. Seeding the receipt lane from a floor target of 2^-14 would put the
+    // one free-prompt-certified class's lane at one win per 16,384 quanta for the ~7
+    // epochs the receipt retarget needs to crawl back. The two retargets separate the
+    // lanes from here, against their own censuses.
+    builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: PALW_RECEIPT_TARGET_SEED_V1 }));
+    // ADR-0135: a class registered with its carriage gets its lifecycle row from the graph.
+    if builder.extras.model_registry.is_some()
+        && let Some(work) = work
+    {
+        builder.open_model_lifecycle(ctx, *class_id, work, *initial_target);
+    }
+    // **ADR-0152-adjacent (Activation Pool): a bought class's pool opens with its listing**, at
+    // a zero balance — the waiting bonus's ramp starts at the registration, so a listing that
+    // has waited offers its preparers more. A re-registration of a Dormant class keeps the pool
+    // it had (the design's B5: the id is the listing).
+    if builder.extras.activation_pool.is_some()
+        && palw_class_registration_buyer_v1(object).is_some()
+        && !builder.state.activation_pools.contains_key(class_id)
+    {
+        builder.write_activation_pool(*class_id, crate::palw_activation_pool_v1::PalwActivationPoolV1::opened_at(ctx.daa_score));
+    }
+    Ok(())
+}
+
 fn apply_object(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -29311,6 +29791,12 @@ fn apply_object(
         && let Some((claim, seat)) = palw_object_sampled_receipt_v1(object)
     {
         return Err(PalwStateV2Error::SampledBelowRcore { claim, seat });
+    }
+    // **RFC-0002 Phase F: below `palw_tir_v1` an IR object is refused by name, before any arm reads
+    // it** — the acceptance layer drops it first (an older build cannot decode it and skips it), so
+    // this is the second lock, and every network below the fence folds exactly as before.
+    if palw_object_is_tir_v1(object) && !builder.params.tir_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::TirRegistrationRefused("an IR object before palw_tir_v1 is in force (RFC-0002 Phase F)"));
     }
     match object {
         PalwConsensusObjectV2::BondRegistered {
@@ -30060,11 +30546,48 @@ fn apply_object(
                 }
             }
         }
-        // **RFC-0002 Phase F (tag 61): an IR class registration.** Refused by name: the acceptance walk
-        // drops it below `palw_tir_v1` (and, until admission v10 lands, above it), so a block that
-        // reaches the fold with one skipped the walk. Every network folds as before the variant.
-        PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => {
-            return Err(PalwStateV2Error::TirRegistrationRefused("admission v10 is not in this build (RFC-0002 Phase F, F6)"));
+        // **RFC-0002 Phase F (tag 61): an IR class registration**, past `palw_tir_v1` (the lock above
+        // refuses it below). Admission v10 ran at acceptance (ADR-0049 Decision H: no graph walk
+        // inside the transition); the fold derives what it keeps from the carried class — the
+        // `tir_classes` row by the one function v10 derives it with, and the registry work from the
+        // program — and folds the rest through the legacy registration's own body. An IR class owes
+        // no root claim until the history dissection is wired (v10 admits no dissected commit point)
+        // and records no held ladder (v10 admits no held program).
+        PalwConsensusObjectV2::ClassRegisteredTirV1 {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille,
+            activation_daa,
+            admission,
+        } => {
+            let (record, program) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&admission.class, artifact_root)
+                .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?;
+            if record.facts.class_id != *class_id {
+                return Err(PalwStateV2Error::TirRegistrationRefused("the declared class id is not the carried class's"));
+            }
+            let work = || crate::palw_tir_work_v1::palw_tir_model_work_v1(&program, &admission.canonical).ok();
+            apply_class_registration_v1(
+                builder,
+                ctx,
+                object,
+                PalwClassRegistrationFoldV1 {
+                    class_id,
+                    artifact_root,
+                    slash_value_per_pwu,
+                    pwu_rule,
+                    initial_target,
+                    share_permille,
+                    activation_daa,
+                    registrant: Some(admission.registrant_bond),
+                    fused_attention: false,
+                    held: false,
+                    work: Some(&work),
+                },
+            )?;
+            builder.write_tir_class(*class_id, Some(record));
         }
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
@@ -30085,393 +30608,33 @@ fn apply_object(
             // business, and the only place the fact exists.
             admission,
         } => {
-            // **ADR-0056 Decision 5: a Dormant class is the one id that may be registered twice.**
-            //
-            // It was reclaimed for producing nothing, not convicted of anything, so the way back is
-            // the way in: a fresh signature, a fresh exposure reservation, a fresh soak, and the
-            // grant floor again. Every other status refuses — including `Frozen`, which is a
-            // verdict and must not be escapable by re-registering.
-            match builder.state.classes.get(class_id).map(|record| &record.status) {
-                None => {}
-                Some(PalwClassStatusV2::Dormant { .. }) => {}
-                Some(_) => return Err(PalwStateV2Error::DuplicateClass(*class_id)),
-            }
-            // **2026-09-24 DoS audit #12 (b): at most four bought registrations a block, and each
-            // burns 1 MSK of its registrant's bond** (the user's decisions; past
-            // `palw_audit_2026_09_23` only, genesis rows exempt). The cap is the fold's second lock
-            // — the acceptance walk drops the fifth first, with the block standing — see
-            // `PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`. The burn is checked below with the
-            // exposure it sits on top of, and taken where the reservation is.
-            let bought_by = if builder.extras.audit_2026_09_23_active { palw_class_registration_buyer_v1(object) } else { None };
-            if bought_by.is_some() {
-                if builder.class_registrations >= PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1 {
-                    return Err(PalwStateV2Error::ClassRegistrationsPerBlockExceeded {
-                        class: *class_id,
-                        max: PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1,
-                    });
-                }
-                builder.class_registrations += 1;
-            }
-            if *initial_target == 0 {
-                return Err(PalwStateV2Error::ZeroClassTarget(*class_id));
-            }
-            // **Audit H3.** `reserved = pwu_per_inference × slash_value_per_pwu` is the collateral a claim puts
-            // at risk, and admission's ceiling (Decision 6 item 8) compares it against the bond's
-            // headroom. At zero every claim reserves zero, so ANY number of immature claims fits
-            // under ANY ceiling — the per-bond exposure cap, which is the whole of P0-10's remedy,
-            // silently evaluates to no cap at all. A class whose work cannot be slashed is not a
-            // cheap class, it is an unbonded one.
-            if *slash_value_per_pwu == 0 {
-                return Err(PalwStateV2Error::ZeroSlashValue(*class_id));
-            }
-            // **One slash value for the network, because it sets weight-per-collateral.**
-            //
-            // A claim contributes `pwu * beta` of weight and reserves `pwu * slash_value_per_pwu`
-            // of collateral, so the weight a bond buys per sompi at risk is `beta /
-            // slash_value_per_pwu` — and the denominator was picked by whoever registered the
-            // class. A registrant naming 1 where the floor names 5 gets five times the finality
-            // weight for the same money at risk, which is finality sold at a discount to the party
-            // that set its own price.
-            //
-            // The per-class cost differences already have a home: `pwu_per_inference` is what says
-            // one class's inference is worth more work than another's. `slash_value_per_pwu` is a
-            // UNIT — sompi per work unit — and a network with two units has no single meaning for
-            // either quantity. So every class carries the liveness floor's, and the floor's own
-            // registration is the one that sets it.
-            if let Some(base) = builder.state.classes.get(&builder.params.base_class_id)
-                && *slash_value_per_pwu != base.slash_value_per_pwu
-            {
-                return Err(PalwStateV2Error::SlashValueNotTheNetworks {
-                    class: *class_id,
-                    got: *slash_value_per_pwu,
-                    want: base.slash_value_per_pwu,
-                });
-            }
-            // ADR-0045 Decision 1: both rule shapes must license SOMETHING. A `DerivedV1` with a
-            // zero per-inference cost would derive pwu = 0 for every attempt while the stateless
-            // layer requires pwu ≥ 1 — a class nobody can ever mine, registered as if it worked.
-            // A zero ceiling is the same dead class in the older costume.
-            match pwu_rule {
-                PalwPwuRuleV2::MaxPerAttempt(0) => return Err(PalwStateV2Error::ZeroPwuCeiling(*class_id)),
-                PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 0 } => {
-                    return Err(PalwStateV2Error::ZeroPwuPerInference(*class_id));
-                }
-                _ => {}
-            }
-            // **A registration with a future activation takes no share yet (condition 12).**
-            //
-            // The share table is validated here either way — a registration whose share could
-            // never be granted must fail at registration, not silently at the activation edge
-            // where nobody is watching — but it is only WRITTEN when the class becomes active.
-            // **A registration must activate soon, and a pending one already costs share**
-            // (audit M2-8).
-            //
-            // A weightless registration wrote no permille, so `class_shares` never moved and the
-            // NEXT weightless registration was checked against the identical table — the check
-            // never accumulated and therefore never refused. Nothing removes a `Registered` row
-            // either: activation only touches rows whose height has come, and reclamation walks
-            // share holders, which a pending class is not. One Active bond at the minimum could
-            // therefore write unbounded permanent rows into `classes`, `class_targets` and
-            // `receipt_targets` — every one of them re-hashed into the state root on every block —
-            // for a transaction fee each, with a re-genesis as the only remedy.
-            //
-            // Two bounds, both cheap: the activation height must be within a window of this block,
-            // so a registration cannot park forever; and the pending grants of classes that have
-            // not activated yet are counted alongside the live table, so N of them accumulate and
-            // the (N+1)-th is refused by the same arithmetic that refuses an over-grant today.
-            if activation_daa.saturating_sub(ctx.daa_score) > PALW_CLASS_ACTIVATION_MAX_LOOKAHEAD_DAA {
-                return Err(PalwStateV2Error::ClassActivationTooFarAhead {
-                    class: *class_id,
-                    activation_daa: *activation_daa,
-                    now: ctx.daa_score,
-                    max_lookahead: PALW_CLASS_ACTIVATION_MAX_LOOKAHEAD_DAA,
-                });
-            }
-            // **The registry's price must actually be affordable** (audit M2-16). The reservation
-            // is TAKEN at :move_registration_exposure and never checked against anything, so a bond
-            // at the minimum could register unbounded classes while its ledger recorded exposure
-            // far past its collateral. The attempt path's full ceiling (collateral x ratio) needs
-            // the admission params, which the transition does not hold; the weaker invariant that
-            // IS reachable here — total exposure may not exceed the collateral itself — is the one
-            // that makes the price real, and it is strictly implied by the ratio ceiling.
-            if let Some(carriage) = admission.as_ref() {
-                let carriage_bond = carriage.registrant_bond;
-                // Whether the bond EXISTS is `move_registration_exposure`'s question, asked below
-                // and with its own error; this check is about affordability and says nothing when
-                // there is no bond to ask about.
-                if let Some(bond_record) = builder.state.bonds.get(&carriage_bond) {
-                    let collateral = bond_record.collateral;
-                    // ADR-0071 SA-2: a declaration's reservation is real only if it is counted
-                    // wherever the ceiling is applied — otherwise declaring sixteen classes would
-                    // cost nothing the next registration or claim could feel. Derived from the
-                    // bond's own `capable_classes`, and zero while the fence is off.
-                    let declared = if builder.capability_bound { palw_bond_capability_exposure_v1(bond_record) } else { 0 };
-                    // ADR-0152 (the S review's L4): past `palw_rcore_plus` the one ledger (locks'
-                    // excess included) and the accuser ledger, so this 100% check keeps
-                    // `committed + accuser + declared ≤ C`; below it, the claim ledger as before.
-                    let backing = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                        builder
-                            .committed_at(&carriage_bond, ctx.daa_score)
-                            .saturating_add(builder.read().accuser_ledger_v1(&carriage_bond, ctx.daa_score))
-                    } else {
-                        builder
-                            .state
-                            .reserved_exposure(&carriage_bond)
-                            .checked_add(builder.state.registration_exposure(&carriage_bond))
-                            .ok_or(PalwStateV2Error::Overflow("total exposure"))?
-                    };
-                    let already = backing.checked_add(declared).ok_or(PalwStateV2Error::Overflow("total exposure"))?;
-                    let price = builder.params.registration_exposure_sompi() as u128;
-                    if already.saturating_add(price) > collateral as u128 {
-                        return Err(PalwStateV2Error::RegistrationExposureUnaffordable {
-                            class: *class_id,
-                            already,
-                            price,
-                            collateral,
-                        });
-                    }
-                    // #12 (b): the burn comes out of the same collateral the exposure is measured
-                    // against, so it must fit on top of everything the bond already stands behind
-                    // AND this registration's own reservation — a bond left backing more than it
-                    // holds would be the M2-16 defect again, one MSK at a time.
-                    if bought_by.is_some() {
-                        let burn = PALW_CLASS_REGISTRATION_BURN_SOMPI_V1 as u128;
-                        if already.saturating_add(price).saturating_add(burn) > collateral as u128 {
-                            return Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable {
-                                class: *class_id,
-                                bond: carriage_bond,
-                                burn: PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
-                                already,
-                                collateral,
-                            });
-                        }
-                        // **And it must leave every LIVE slashable lock covered** (review of #12).
-                        // A seat's Valid lock is admitted against `collateral − live locks`
-                        // (`slashable_available`), not against the reservations summed above, so
-                        // the two budgets overlap by design and the check above never saw the
-                        // locks: a bond holding 10 MSK under a 9.9996 MSK live lock paid the burn,
-                        // fell to 9 MSK, and a later `PanelFalseValid` on that lock took only what
-                        // was left (`slash_bond` clamps to the collateral). A seat expecting
-                        // conviction could spend the money behind its lock on registrations. The
-                        // lock is read on both clocks at the escaped depth, as `lock_valid_seat`
-                        // reads it; bought registrations exist only past the fence.
-                        let locked = builder.slashable_live_locked(&carriage_bond, ctx.daa_score);
-                        if locked.saturating_add(burn) > collateral as u128 {
-                            return Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable {
-                                class: *class_id,
-                                bond: carriage_bond,
-                                burn: PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
-                                already: locked,
-                                collateral,
-                            });
-                        }
-                    }
-                }
-            }
-            // **Outstanding grants are CHECKED against the table, never written into it**
-            // (audit3 S-03). M2-8's remediation built a merged live+pending view and handed the
-            // whole result to the live writer. Two things went wrong with that, and both are
-            // unrecoverable once they land:
-            //
-            // * a class still `Registered` ended up holding a live cadence permille, which is
-            //   exactly what `assert_internal_consistency` forbids — `share_bearing` excludes
-            //   `Registered`/`Dormant`, so the class set and the share table disagree from that
-            //   block on. Nothing on the block path asserts it, so every node commits the corrupt
-            //   state deterministically and only the pruning-point IBD refuses — forever, against
-            //   every peer, because every peer serves the same chain-committed state; and
-            // * the merged view sums to `1000 + Σ pending`, and `granted_share_table_v2` is
-            //   written for a `current` that sums to 1000. Its `let deficit = keep - distributed;`
-            //   underflows once the excess outgrows what integer division absorbs — a panic under
-            //   `overflow-checks`, i.e. a chain halt rather than a wrong number. Then at the
-            //   activation edge the entrant is granted against a table that already contains it,
-            //   the final `insert` overwrites its scaled value, and the denominator settles at
-            //   999‰ permanently.
-            //
-            // The property M2-8 wanted is that a pending grant occupies capacity, so registrations
-            // cannot be minted for free against a table that cannot afford them. That is a
-            // QUESTION about the live table, not a mutation of it: ask whether the live classes
-            // could still honour every outstanding promise plus this one, by pricing them as a
-            // single aggregate grant. Conservative (the aggregate dilutes at least as hard as the
-            // promises would one at a time), 1000-conserving by construction, and it leaves the
-            // live table alone until a class actually activates — which is where ADR-0045
-            // Decision 3 says the second and last mutation belongs.
-            let outstanding: u32 = builder
-                .state
-                .classes
-                .iter()
-                .filter(|(id, _)| *id != class_id && !builder.state.class_shares.contains_key(*id))
-                .filter_map(|(_, record)| match record.status {
-                    PalwClassStatusV2::Registered { pending_share_permille, .. } => Some(pending_share_permille as u32),
-                    _ => None,
-                })
-                .sum();
-            // **ADR-0145 I4, past `Params::palw_admission_independence`: a registration buys
-            // existence, never cadence.** A permille granted here is not the new class's to take:
-            // `granted_share_table_v2` funds it by donation from every incumbent, so a stranger's
-            // registration moves the weight, the budget and — through
-            // `attempt_target_seed_v1(share, pwu)` — the difficulty of classes that never heard of
-            // it. Past the fence a bought class registers at zero and earns its share the way the
-            // registry grants one, from an admission it has passed.
-            //
-            // A genesis class is exempt, for the reason the record below spells out: the assembly
-            // decided it, nobody bought it, and the shipped card grants the floor's 1000 ‰ in
-            // exactly this arm. The zero still WRITES a share row (`Some(0)`), which is what keeps
-            // the class eligible for the registry's later redistribution — a class with no row at
-            // all is skipped by it for ever.
-            if builder.extras.admission_independence_at(ctx.daa_score)
-                && *share_permille > 0
-                && admission.as_ref().is_some_and(|carriage| carriage.registrant_bond != palw_genesis_registrant_bond_v1())
-            {
-                return Err(PalwStateV2Error::RegistrationTakesNoShare { class: *class_id, requested: *share_permille });
-            }
-            // The write. Priced against the LIVE table alone, so it conserves 1000‰ over the
-            // classes that actually bear weight. Computed FIRST so that a grant which is simply
-            // out of range is reported as `ShareOutOfRange` by the arithmetic that owns that
-            // question, rather than being swallowed by the capacity check below.
-            let table = granted_share_table_v2(builder.params, &builder.state.class_shares, *class_id, *share_permille)?;
-            // The capacity check. Its table is discarded; only its refusals matter, and it is
-            // asked only when something is actually outstanding — with nothing pending it would
-            // re-ask the question the line above already answered.
-            if outstanding > 0 {
-                let committed =
-                    outstanding.checked_add(*share_permille as u32).ok_or(PalwStateV2Error::Overflow("outstanding pending shares"))?;
-                if committed > 1000 {
-                    return Err(PalwStateV2Error::PendingSharesExceedTable { outstanding, requested: *share_permille });
-                }
-                granted_share_table_v2(
-                    builder.params,
-                    &builder.state.class_shares,
-                    *class_id,
-                    u16::try_from(committed).expect("committed is bounded by 1000 above"),
-                )?;
-            }
-            let weightless = *activation_daa > ctx.daa_score;
-            if !weightless {
-                // ADR-0045 Decision 3: the share table mutates HERE and at the activation edge,
-                // and nowhere else. The first class funds the liveness floor whole; every later
-                // entrant is funded by donation, and these writes are the only way a permille
-                // moves.
-                for (id, share) in table {
-                    if builder.state.class_shares.get(&id).copied() != Some(share) {
-                        builder.write_share(id, Some(share));
-                    }
-                }
-            }
-            // **ADR-0143 Decision 4: the founding root is reserved in the transition that writes
-            // the class.** There is no moment when a class's root is registered and unowned, so the
-            // window between announcing this fence and reaching it cannot be squatted. The founding
-            // line's id IS the class id (ADR-0088 Decision 1), and its version is 1, which is what
-            // the synthesised founding line answers with.
-            //
-            // A root another line already owns refuses the registration outright: a class that
-            // could exist holding a root it does not own would have its own attribution paid to a
-            // stranger, which is the defect, not a milder form of it.
-            builder.claim_artifact_root(artifact_root, class_id, *class_id, 1)?;
-            builder.write_class(
-                *class_id,
-                Some(PalwClassStateV2 {
-                    artifact_root: *artifact_root,
-                    slash_value_per_pwu: *slash_value_per_pwu,
-                    pwu_rule: *pwu_rule,
-                    status: if weightless {
-                        PalwClassStatusV2::Registered { activation_daa: *activation_daa, pending_share_permille: *share_permille }
-                    } else {
-                        PalwClassStatusV2::Active
-                    },
-                    registered_daa: ctx.daa_score,
-                    // ADR-0056 Decision 3: whose bond paid for this to exist. The carriage is the
-                    // post-genesis form and names its registrant; a genesis registration has none,
-                    // and pays nothing, because the network itself decided it — and since ADR-0082
-                    // a genesis row may have to CARRY a profile anyway (`fused_attention` below is
-                    // readable from nowhere else), so "carries a carriage" stopped implying "was
-                    // bought". `palw_genesis_registrant_bond_v1` is what the two are separated by;
-                    // its doc has the failure this repaired.
-                    registrant_bond: admission
-                        .as_ref()
-                        .map(|carriage| carriage.registrant_bond)
-                        .filter(|bond| *bond != palw_genesis_registrant_bond_v1()),
-                    // **ADR-0082 Decision 2 / audit A C-5: does this class's terminal leaf owe a
-                    // root claim?** Read off the graph the registration CARRIES, by the one
-                    // predicate the court and the admission gate both ask
-                    // (`palw_profile_has_fused_attention_v1`) — never declared, because a class
-                    // that declared its own adjudication rule would be choosing its own court.
-                    //
-                    // A registration with no carriage (the genesis form, "the catalog IS the
-                    // profile in committed form") folds `false`: the fold holds no catalog and
-                    // there is nothing here to read. What makes that honest is the boot gate,
-                    // where the catalog IS in hand — `verify_palw_genesis_v2` refuses a genesis
-                    // row whose catalogued graph reaches the fused kernel and carries no profile,
-                    // and refuses a carriage that disagrees with the catalog either way. Deriving
-                    // it here from a table of the rows THIS BUILD ships would be worse than a gap:
-                    // the fold's answer would be a function of the binary rather than of the
-                    // chain, and two builds shipping different row sets would root the same
-                    // genesis differently.
+            // One body for both registration doors (`apply_class_registration_v1`): the carriage's
+            // registrant, and the three facts the fold reads off the profile it carries.
+            let work = admission.as_ref().map(|carriage| {
+                move || crate::palw_model_registry_v1::palw_model_work_from_carriage_v1(&carriage.profile, &carriage.canonical)
+            });
+            apply_class_registration_v1(
+                builder,
+                ctx,
+                object,
+                PalwClassRegistrationFoldV1 {
+                    class_id,
+                    artifact_root,
+                    slash_value_per_pwu,
+                    pwu_rule,
+                    initial_target,
+                    share_permille,
+                    activation_daa,
+                    registrant: admission.as_ref().map(|carriage| carriage.registrant_bond),
                     fused_attention: admission.as_ref().is_some_and(|carriage| {
                         crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&carriage.profile)
                     }),
-                }),
-            );
-            // **ADR-0119 Decision 2: a class under the held map records its ladder, now.** The
-            // carriage is the one place the fold ever holds the class's profile; every later reader
-            // of a claim's ladder holds this state instead. Written only for a held class — which
-            // the gate admits only past `Params::palw_held_context` — so a network that registers
-            // none roots exactly as before.
-            if let Some(carriage) = admission.as_ref()
-                && crate::palw_state_chunk_map::palw_profile_is_held_v4(&carriage.profile)
-            {
-                builder.write_class_step_ladder(*class_id, Some(crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1));
-            }
-            // **Decision 3: the registry's price, taken now and held while the class lives.** A
-            // re-registration of a Dormant class takes it again — the previous reservation was
-            // released at reclamation, so this is one live class and one reservation, always.
-            // The sentinel pays nothing (`palw_genesis_registrant_bond_v1`), and it must, or the
-            // release sites — every one of which reads `record.registrant_bond` — would have
-            // nothing to give back and the reservation would be permanent.
-            if let Some(carriage) = admission.as_ref()
-                && carriage.registrant_bond != palw_genesis_registrant_bond_v1()
-            {
-                builder.move_registration_exposure(carriage.registrant_bond, true)?;
-            }
-            // **#12 (b): the burn, taken.** Through `slash_bond`'s write — `collateral` down,
-            // `slashed` up — because `slashed` is what the bond's release spend must destroy
-            // (`palw_bond_burn_obligation_v2`): the sompi leave the bond now, stop counting as
-            // stake now, and are never minted back to anyone. A registrant bond the state does not
-            // hold is `MissingBond`, never a free registration.
-            if let Some(registrant) = bought_by {
-                builder.burn_registration_fee(registrant, PALW_CLASS_REGISTRATION_BURN_SOMPI_V1)?;
-            }
-            // A returning class starts its walk over: the counters are about the CURRENT
-            // registration's production and nothing before it.
-            builder.write_class_walk(*class_id, None);
-            builder.write_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }));
-            // The receipt lane seeds at the uniform 2^-1, NOT from the class's `initial_target`.
-            // It used to (ADR-0044: "one registration field, two slots"), and that was right while
-            // every genesis target was 2^-1. The attempt lane's seed is now tuned per class to the
-            // draw supply of INFERENCES (a floor at milliseconds per inference sits ~2^14 below a
-            // 9-second model), but a receipt draw is one QUANTUM of real demand — a user's job or a
-            // canonical claim — whose supply has nothing to do with how fast the class runs its
-            // canonical job. Seeding the receipt lane from a floor target of 2^-14 would put the
-            // one free-prompt-certified class's lane at one win per 16,384 quanta for the ~7
-            // epochs the receipt retarget needs to crawl back. The two retargets separate the
-            // lanes from here, against their own censuses.
-            builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: PALW_RECEIPT_TARGET_SEED_V1 }));
-            // ADR-0135: a class registered with its carriage gets its lifecycle row from the graph.
-            if builder.extras.model_registry.is_some()
-                && let Some(carriage) = admission.as_ref()
-            {
-                builder.open_model_lifecycle(ctx, *class_id, &carriage.profile, &carriage.canonical, *initial_target);
-            }
-            // **ADR-0152-adjacent (Activation Pool): a bought class's pool opens with its listing**, at
-            // a zero balance — the waiting bonus's ramp starts at the registration, so a listing that
-            // has waited offers its preparers more. A re-registration of a Dormant class keeps the pool
-            // it had (the design's B5: the id is the listing).
-            if builder.extras.activation_pool.is_some()
-                && palw_class_registration_buyer_v1(object).is_some()
-                && !builder.state.activation_pools.contains_key(class_id)
-            {
-                builder
-                    .write_activation_pool(*class_id, crate::palw_activation_pool_v1::PalwActivationPoolV1::opened_at(ctx.daa_score));
-            }
+                    held: admission
+                        .as_ref()
+                        .is_some_and(|carriage| crate::palw_state_chunk_map::palw_profile_is_held_v4(&carriage.profile)),
+                    work: work.as_ref().map(|f| f as &dyn Fn() -> Option<crate::palw_model_registry_v1::PalwModelWorkV1>),
+                },
+            )?;
         }
         // **ADR-0078 Decision 4: a derivation is committed beside its claim; the thing never
         // rides.** The chain checks what it can check — the claim exists on this chain (any phase
@@ -34703,6 +34866,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         // ADR-0160 stage 4 (F-N): the registered demand and the operator ring, verify-then-install.
         PalwDeltaEntryV2::NetworkDemand { key, old, new } => swap_write!(state.network_demand, key, old, new),
         PalwDeltaEntryV2::OperatorRing { key, old, new } => swap_write!(state.operator_ring, key, old, new),
+        PalwDeltaEntryV2::TirClass { key, old, new } => swap_write!(state.tir_classes, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -35128,6 +35292,9 @@ pub struct PalwStateCarriageV2 {
     /// encoded only when one of the two holds a row; rooted.
     pub network_demand: BTreeMap<(PalwBondKeyV2, Hash64), u64>,
     pub operator_ring: BTreeMap<u64, u32>,
+    /// **RFC-0002 Phase F (F6): the IR classes.** A tagged tail (`0xC0`, clear of the capacity
+    /// package's `0xB*` run), encoded only when non-empty; rooted.
+    pub tir_classes: BTreeMap<Hash64, crate::palw_tir_admission_v1::PalwTirClassRecordV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -35244,6 +35411,10 @@ const PALW_CARRIAGE_BOND_FREEZES_TAIL_V1: u8 = 0xB8;
 const PALW_CARRIAGE_CAPACITY_QS_TAIL_V1: u8 = 0xB9;
 /// ADR-0160 stage 4 (F-N): the registered demand and the operator ring, one tail after stage 2's.
 const PALW_CARRIAGE_CAPACITY_N_TAIL_V1: u8 = 0xBA;
+/// RFC-0002 Phase F (F6): the IR classes' tail, encoded only when one has registered — a carriage
+/// with none is byte-identical to one before this tail existed. `0xC0`, clear of the capacity
+/// package's sequential `0xB*` run, so the two lines cannot collide when they are integrated.
+const PALW_CARRIAGE_TIR_CLASSES_TAIL_V1: u8 = 0xC0;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -35454,6 +35625,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.network_demand.serialize(writer)?;
             self.operator_ring.serialize(writer)?;
         }
+        if !self.tir_classes.is_empty() {
+            PALW_CARRIAGE_TIR_CLASSES_TAIL_V1.serialize(writer)?;
+            self.tir_classes.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -35577,6 +35752,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut network_demand = BTreeMap::new();
         let mut operator_ring = BTreeMap::new();
         let mut seen_capacity_n = false;
+        let mut tir_classes = BTreeMap::new();
+        let mut seen_tir_classes = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -35715,6 +35892,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     network_demand = BTreeMap::deserialize_reader(reader)?;
                     operator_ring = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_TIR_CLASSES_TAIL_V1 if !seen_tir_classes => {
+                    seen_tir_classes = true;
+                    tir_classes = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -35820,6 +36001,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             issuance_buckets,
             network_demand,
             operator_ring,
+            tir_classes,
         })
     }
 }
@@ -35903,6 +36085,7 @@ impl PalwStateCarriageV2 {
             issuance_buckets: state.issuance_buckets.clone(),
             network_demand: state.network_demand.clone(),
             operator_ring: state.operator_ring.clone(),
+            tir_classes: state.tir_classes.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -36054,6 +36237,7 @@ impl PalwStateCarriageV2 {
             issuance_buckets: self.issuance_buckets,
             network_demand: self.network_demand,
             operator_ring: self.operator_ring,
+            tir_classes: self.tir_classes,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -52611,6 +52795,7 @@ pub(crate) mod tests {
                     // ADR-0160 stage 4: their round trips are the stage-4 suite's.
                     PalwDeltaEntryV2::NetworkDemand { .. } => "network_demand",
                     PalwDeltaEntryV2::OperatorRing { .. } => "operator_ring",
+                    PalwDeltaEntryV2::TirClass { .. } => "tir_class",
                 });
             }
         }
@@ -52731,6 +52916,8 @@ pub(crate) mod tests {
             // ADR-0160 stage 4, after stage 2's.
             (86, PalwDeltaEntryV2::NetworkDemand { key: (bond_key(1), Hash64::default()), old: None, new: None }),
             (87, PalwDeltaEntryV2::OperatorRing { key: 7, old: None, new: None }),
+            // RFC-0002 Phase F (F6), after stage 4's.
+            (88, PalwDeltaEntryV2::TirClass { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -53350,6 +53537,7 @@ pub(crate) mod tests {
             // ADR-0160 stage 4: one Some-only block of two, empty here.
             network_demand: _,
             operator_ring: _,
+            tir_classes: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -53435,6 +53623,9 @@ pub(crate) mod tests {
             })),
             ("operator_ring", Box::new(|s| {
                 s.operator_ring.insert(9, 1);
+            })),
+            ("tir_classes", Box::new(|s| {
+                s.tir_classes.insert(block(0xC0), crate::palw_tir_admission_v1::PalwTirClassRecordV1::test_row_v1(block(0xC0)));
             })),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),
