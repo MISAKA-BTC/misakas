@@ -10623,6 +10623,70 @@ impl VirtualStateProcessor {
                 // refused, because its verdict convicts nobody; an accusation whose refutation does
                 // not adjudicate is refused too — P0-8's rule on both sides. The FENCE is checked
                 // here as well as in the fold, for the DA court's reason.
+                // **RFC-0002 Phase F (tag 62): an IR claim accused in one move.** Signed over its
+                // session id by the accuser's registered key; about a live claim of an IR class,
+                // its executor and roots the claim's; and the verdict it DECLARES is the one its proof
+                // produces under this block's court (`palw_tir_one_move_verdict_v1`, the court close's
+                // own adjudication) — refused in either direction otherwise, so the fold may apply it.
+                Obj::TirShardCourtAccused { accusation } => {
+                    let claim_id = accusation.claim;
+                    if !self.palw_tir_at(point.daa_score) {
+                        return Err(format!("claim {claim_id}: an IR accusation is refused: palw_tir_v1 is not in force (RFC-0002)"));
+                    }
+                    kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(accusation)
+                        .map_err(|e| format!("claim {claim_id}: {e}"))?;
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "an IR one-move accusation on a network with no V2 court parameters".to_string())?;
+                    let record = state
+                        .bond(&accusation.accuser_bond)
+                        .ok_or_else(|| format!("an accusation names bond {:?} this chain does not have", accusation.accuser_bond))?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    let session_id = kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_session_id_v1(
+                        domain.as_byte_slice(),
+                        accusation,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        session_id.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_tir_one_move_v1::PALW_TIR_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1,
+                    ) {
+                        return Err(format!("claim {claim_id}'s IR accusation is not signed by the bond it names"));
+                    }
+                    let claim = state
+                        .claim(&claim_id)
+                        .ok_or_else(|| format!("an accusation names claim {claim_id} this chain does not have"))?;
+                    if state.tir_class_v1(&claim.class_id).is_none() {
+                        return Err(format!("claim {claim_id} is not a claim of an IR class"));
+                    }
+                    if claim.bond != accusation.executor_bond
+                        || claim.execution_root != accusation.execution_root
+                        || claim.trace_root != accusation.trace_root
+                    {
+                        return Err(format!("claim {claim_id}: the accusation's executor or roots are not the claim's"));
+                    }
+                    let ladder = state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
+                    let derived = kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_verdict_v1(
+                        state,
+                        claim,
+                        accusation,
+                        court,
+                        ladder,
+                        self.palw_prompt_ids_form_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("claim {claim_id}: the IR accusation does not adjudicate: {e}"))?;
+                    if derived != accusation.verdict {
+                        return Err(format!(
+                            "claim {claim_id}: the IR accusation declares {:?} and its proof produces {derived:?}",
+                            accusation.verdict
+                        ));
+                    }
+                }
                 Obj::ShardCourtAccused { accusation } => {
                     let claim_id = accusation.claim;
                     if !self.palw_shard_court_at(point.daa_score) {
@@ -18428,6 +18492,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         O::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         O::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
+        O::TirShardCourtAccused { .. } => "TirShardCourtAccused",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
         O::ReporterCommitted { .. } => "ReporterCommitted",
