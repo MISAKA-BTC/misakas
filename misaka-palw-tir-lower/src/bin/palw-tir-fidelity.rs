@@ -198,6 +198,9 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             "policy": { "headroom16": policy.headroom16, "headroom32": policy.headroom32, "headroom_resid": policy.headroom_resid },
             "calibration": calib_src,
             "calibrated_context": calib.iter().map(Vec::len).max(),
+            // `{rule: met | not recurrent | waived, longest, context}` — the calibration-length rule
+            // as this run applied it (`waived` under --allow-short-calibration).
+            "calibration_length_rule": calibrated,
             "max_window": a.max_window,
         });
         // The checkpoint's tokenizer.json binds the artifact to its tokenizer (zero when absent).
