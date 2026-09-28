@@ -278,16 +278,39 @@ pub(super) struct PalwTirOneMoveBooksV1<'a> {
     pub court_due: &'a mut HashMap<(Hash64, u32, bool), u64>,
 }
 
+/// **The claim a seat duty names, as the one-move pass reads a target** — for a claim this seat's
+/// replay refuted before any licence: its block, class, roots and executor are the duty's.
+pub(crate) fn palw_tir_duty_target_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2) -> PalwDisputableClaimV2 {
+    PalwDisputableClaimV2 {
+        accepted_block: duty.accepted_block,
+        claim_id: duty.claim_id,
+        class_id: duty.class_id,
+        artifact_root: duty.artifact_root,
+        executor_bond: duty.executor_bond,
+        trace_root: duty.trace_root,
+        execution_root: duty.execution_root,
+        licensed_daa: duty.bound_daa,
+        free_prompt: duty.free_prompt,
+    }
+}
+
 impl super::PalwPanelService {
     /// **RFC-0002 Phase F (F6): the IR one-move pass — an IR claim's court where the held regime
-    /// plays no bisection.** For each licensed claim of an IR class this node may dispute (every
-    /// claim with `--palw-challenge`; otherwise the ones its seat's replay refuted, ADR-0085
-    /// Decision 4): the capture the claim's producer served that answers for the claim's roots, this
-    /// node's own execution of the job the claim's block asked for, and — where they part — the
-    /// first IR close the court convicts on, checked as the gate derives it, signed over its
-    /// session id and queued on the court's carrier path, dated before the claim's `Final`. Once per
-    /// claim: a reproduced claim is judged, an accused one (or one no close convicts) is not tried
-    /// again.
+    /// plays no bisection.** Its targets:
+    ///
+    /// * every licensed claim of an IR class this node may dispute — each with `--palw-challenge`,
+    ///   otherwise the ones its seat faulted (ADR-0085 Decision 4) — dated before the claim's `Final`;
+    /// * **and at once, licensed or not, every IR claim this seat's replay refuted** (ADR-0098
+    ///   Decision 2, ADR-0099 Decision 5: a seat that found a lie files it). Seats that replay refuse
+    ///   the lie its licence, so a lie a seat found would otherwise meet no court at all — it would
+    ///   only fail to license. Always on: the seat's duty, not a flag. Dated before the receipt
+    ///   deadline, as the legacy capture arm's accusation is.
+    ///
+    /// For each: the capture the claim's producer served that answers for the claim's roots, this
+    /// node's own execution of the job the claim's block asked for, and — where they part — the first
+    /// IR close the court convicts on, checked as the gate derives it, signed over its session id and
+    /// queued on the court's carrier path. Once per claim: a reproduced claim is judged, an accused
+    /// one (or one no close convicts) is not tried again.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn tir_one_move_pass_v1(
         &self,
@@ -297,13 +320,30 @@ impl super::PalwPanelService {
         current_daa: u64,
         materials: &HashMap<Hash64, Vec<Vec<u8>>>,
         seat_faulted: &HashSet<Hash64>,
+        replay_refuted: &HashSet<Hash64>,
         books: PalwTirOneMoveBooksV1<'_>,
     ) {
-        for target in session.palw_disputable_claims_v2(vec![bond_key]) {
-            if books.challenged.contains(&target.claim_id) || books.accused.contains(&target.claim_id) {
-                continue;
+        let mut targets: Vec<(PalwDisputableClaimV2, u64)> = session
+            .palw_disputable_claims_v2(vec![bond_key])
+            .into_iter()
+            .filter(|t| self.config.challenge || seat_faulted.contains(&t.claim_id))
+            .map(|t| {
+                let due = palw_tir_one_move_due_v1(&self.consensus_config.params, t.licensed_daa, current_daa);
+                (t, due)
+            })
+            .collect();
+        if !replay_refuted.is_empty() {
+            for duty in session.palw_seat_duties_v2(vec![bond_key]) {
+                if !replay_refuted.contains(&duty.claim_id) || targets.iter().any(|(t, _)| t.claim_id == duty.claim_id) {
+                    continue;
+                }
+                let earliest_final = super::palw_seat_claim_earliest_final_v1(&self.consensus_config.params, duty.bound_daa);
+                let due = super::palw_seat_court_filing_due_v1(duty.receipt_deadline, earliest_final, current_daa);
+                targets.push((palw_tir_duty_target_v1(&duty), due));
             }
-            if !self.config.challenge && !seat_faulted.contains(&target.claim_id) {
+        }
+        for (target, due) in targets {
+            if books.challenged.contains(&target.claim_id) || books.accused.contains(&target.claim_id) {
                 continue;
             }
             // Only an IR class is tried here: a legacy claim's held court is its seat's capture arm.
@@ -426,10 +466,7 @@ impl super::PalwPanelService {
                 "[{PALW_PANEL}] IR claim {}: filing its one-move accusation ({label} close; first divergent leaf {leaf:?}, token row {row:?})",
                 target.claim_id
             );
-            books.court_due.insert(
-                (session_id, 0, false),
-                palw_tir_one_move_due_v1(&self.consensus_config.params, target.licensed_daa, current_daa),
-            );
+            books.court_due.insert((session_id, 0, false), due);
             books.court_pending.push((session_id, 0, false, object));
         }
     }

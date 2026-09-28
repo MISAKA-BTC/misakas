@@ -1149,6 +1149,57 @@ mod t12_walk {
         let after = c.s.bond(&producer).expect("the producer").collateral;
         eprintln!("walk: the lie is convicted in one move ({label} close at leaf {lie}); producer collateral {before} -> {after}");
         assert!(after < before, "the producer is charged");
+
+        // 8. A lie its seats refuse to license meets the court anyway: the seat whose replay refuted
+        //    it accuses it at once from its duty (`palw_tir_duty_target_v1`), before any licence — so
+        //    a planted fault is convicted whether or not a panel was fooled.
+        let lie = honest_leaves / 3;
+        keep_ready(&mut c, &ir, registrant);
+        let (id, material, roots) = loop {
+            seed += 1;
+            let daa = c.daa + 1;
+            if let Some(claim) = ir_claim_lying(&mut c, &ir, 1, seed, daa, Some(lie)) {
+                break claim;
+            }
+            empty(&mut c, daa);
+        };
+        bind(&mut c, id, &seats);
+        let seat = seats[1].0;
+        let duty = kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&c.s, &c.sp, &[seat])
+            .into_iter()
+            .find(|d| d.claim_id == id)
+            .expect("the seat's duty on the bound lie");
+        let (job, prompt) = backend.job_for_anchor(roots.anchor).expect("the anchor's job");
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, false);
+        let replay = backend.execute_for_verdict(&job, &prompt).expect("the seat's replay");
+        assert_ne!(replay.execution_root, roots.execution_root, "the seat's replay refutes the claim");
+        let own = backend.execute(&job, &prompt).expect("the seat's own run");
+        let target = super::super::tir_court::palw_tir_duty_target_v1(&duty);
+        let case = super::super::tir_court::palw_tir_one_move_case_v1(&tir, &material, &own.material, &rules)
+            .expect("the case builds")
+            .expect("the lie is a case");
+        assert_eq!(case.leaf, Some(lie));
+        let (_, mut accusation) =
+            super::super::tir_court::palw_tir_one_move_accusation_to_file_v1(case.candidates, &target, seat, &court, ladder, form)
+                .expect("a close convicts");
+        accusation.signature = vec![6; 16];
+        let before = c.s.bond(&producer).expect("the producer").collateral;
+        let next = c.daa + 1;
+        step(
+            &mut c,
+            next,
+            &[PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(accusation) }],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+            0,
+        );
+        assert!(
+            matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { .. }),
+            "the unlicensed lie is voided: {:?}",
+            c.claim(&id).phase
+        );
+        assert!(c.s.bond(&producer).expect("the producer").collateral < before, "the producer is charged again");
+        eprintln!("walk: an unlicensed lie at leaf {lie} is convicted in one move by the seat that refuted it");
     }
 
     /// **A Hugging Face model through the operator's path, to a registration on testnet-12's fold**

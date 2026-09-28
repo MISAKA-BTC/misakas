@@ -7504,7 +7504,7 @@ impl PalwPanelService {
             // move by an IR close instead (`TirShardCourtAccused`, `tir_court`).
             if !bisection_is_played
                 && self.consensus_config.params.palw_tir_v1_active_at(current_daa)
-                && (self.config.challenge || !seat_faulted.is_empty())
+                && (self.config.challenge || !seat_faulted.is_empty() || !replay_refuted.is_empty())
             {
                 self.tir_one_move_pass_v1(
                     &session,
@@ -7513,6 +7513,7 @@ impl PalwPanelService {
                     current_daa,
                     &materials,
                     &seat_faulted,
+                    &replay_refuted,
                     tir_court::PalwTirOneMoveBooksV1 {
                         challenged: &mut challenged,
                         accused: &mut accused,
