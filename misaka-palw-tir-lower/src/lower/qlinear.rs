@@ -20,9 +20,10 @@
 //!   is rounded at `2^−20` of the row's largest (counted: [`QInts::inexact`], zero on every
 //!   checkpoint seen so far). `2^e[o]` goes into the output narrowing's multiplier.
 //! * **Outlier channels.** A split input (a few channels at their own coarser activation scale,
-//!   `lower_linear`) gives those columns the neutral code (their weight is zero in the main
-//!   product) and routes them through `wo:i32[out, k]` — the exact weights times the channel's scale
-//!   ratio, in the row's unit `2^(e[o] + g[o])` — added as `acco · 2^g[o]`.
+//!   `lower_linear`) gives those columns code 0 — with an offset term their input is masked out of
+//!   the main product as well (`qkeep`) — and routes them through `wo:i32[out, k]`: the exact
+//!   weights times the channel's scale ratio, in the row's unit `2^(e[o] + g[o])`, added as
+//!   `acco · 2^g[o]`.
 //!
 //! Ranges (spec 04b §7, with `|a| ≤ 2^20`, `|c| ≤ 2^28`, `|wo| ≤ 2^24` stated by clamps): the sum
 //! stays within `in · 2^43.6 + 2^62`, inside `i64` for every `in ≤ 2^16`.
@@ -113,7 +114,12 @@ pub fn build(q: &QWeight, layout: QLayout, outliers: &[usize], ratio: &[f64]) ->
         }
         fmt_group.push(f as usize);
     }
-    let off: i16 = if layout.offset_term && q.bits == 8 { 128 } else { 0 };
+    // With the offset term, codes are the stored integers shifted into `i8` (unsigned 8-bit ones
+    // by 128) and the zero point and float offset move into `c`.
+    let off: i16 = if layout.offset_term && q.bits == 8 && !q.signed { 128 } else { 0 };
+    if !layout.offset_term && q.min.is_some() {
+        return Err(LowerError::eval(format!("internal: quantised weight ({}) has float offsets but its layout has no offset term", q.label)));
+    }
     let mut is_outlier = vec![false; inp];
     for c in outliers {
         is_outlier[*c] = true;
@@ -125,16 +131,19 @@ pub fn build(q: &QWeight, layout: QLayout, outliers: &[usize], ratio: &[f64]) ->
         let f = fmt_group[k];
         for o in 0..out {
             let (s, z) = (q.scale[o * fg + f], q.zero[o * fg + f]);
+            let m = q.min.as_ref().map_or(0.0, |m| m[o * fg + f]);
             af[k * out + o] = s;
-            let (shift, neutral) = if layout.offset_term {
-                cf[k * out + o] = s * (z - off) as f64;
-                (off, z - off)
+            let shift = if layout.offset_term {
+                cf[k * out + o] = s * (z - off) as f64 + m;
+                off
             } else {
-                (z, 0)
+                z
             };
             for j in 0..gs {
                 let col = order[k * gs + j] as usize;
-                let v = if is_outlier[col] { neutral } else { q.q[o * inp + col] - shift };
+                // An outlier column goes through `wo`: its code is 0, and with an offset term its
+                // input is zeroed for the main product too (the `qkeep` mask), so `c · Σx` skips it.
+                let v = if is_outlier[col] { 0 } else { q.q[o * inp + col] - shift };
                 codes[(k * out + o) * gs + j] = i8::try_from(v).map_err(|_| {
                     LowerError::not_lowerable(format!("quantised weight ({}): code {v} outside i8 (layout {layout:?})", q.label))
                 })?;
@@ -267,6 +276,31 @@ pub(super) fn lower_linear_q(
         d.per_layer,
         Arc::new(move |c| Ok(IntTensor::i8(vec![groups, out, gs], f(c)?.codes.clone()))),
     )?;
+    // With an offset term the outlier channels leave the main product entirely (their `c · x`
+    // would remain otherwise): `x · keep`, `keep ∈ {0, 1}`.
+    let xm = if layout.offset_term && k > 0 {
+        let kk = kx.clone();
+        let keep = decl(
+            b,
+            cx,
+            lb,
+            &format!("{site}.qkeep"),
+            DType::I8,
+            &[inp],
+            pl,
+            Arc::new(move |c| {
+                let mut v = vec![1i8; inp];
+                for o in c.outliers(&kk)? {
+                    v[o] = 0;
+                }
+                Ok(IntTensor::i8(vec![inp], v))
+            }),
+        )?;
+        let keep = b.clamp(keep, 0, 1, DType::I8);
+        b.mul(x.r, keep, DType::I16)
+    } else {
+        x.r
+    };
     let xin = if layout.order {
         let f = ints.clone();
         let ord = decl(
@@ -281,9 +315,9 @@ pub(super) fn lower_linear_q(
         )?;
         // A param's range is its dtype's: state it for the analysis (never fires).
         let oi = b.clamp(ord, 0, inp as i64 - 1, DType::Idx);
-        b.gather(x.r, oi, 0, 0)
+        b.gather(xm, oi, 0, 0)
     } else {
-        x.r
+        xm
     };
     let xg = b.reshape_fixed(xin, &[groups as u32, gs as u32, 1]);
     let acc = b.matmul(codes, xg, DType::I64);
@@ -434,8 +468,10 @@ mod tests {
                 let (mut acc, mut xs) = (0f64, 0f64);
                 for j in 0..qi.gs {
                     let col = qi.order[kg * qi.gs + j] as usize;
-                    acc += qi.codes[(kg * out + o) * qi.gs + j] as f64 * x[col];
-                    xs += x[col];
+                    // The outlier channels are masked out of the main product (`qkeep`).
+                    let xv = if outl.contains(&col) { 0.0 } else { x[col] };
+                    acc += qi.codes[(kg * out + o) * qi.gs + j] as f64 * xv;
+                    xs += xv;
                 }
                 t += qi.a[kg * out + o] as f64 * acc - qi.c[kg * out + o] as f64 * xs;
             }

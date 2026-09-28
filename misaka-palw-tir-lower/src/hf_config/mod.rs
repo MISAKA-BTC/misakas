@@ -333,14 +333,14 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
     p.cfg.finish()?;
     let mut spec = spec;
     if let Some(q) = quant {
-        quantised_spec(&mut spec, q)?;
+        attach_quant(&mut spec, q)?;
     }
     Ok(spec)
 }
 
 /// Attach a pre-quantised checkpoint's config to a parsed spec: dense attention + MLP decoders,
 /// the checkpoint's projections read as stored integers (`crate::prequant`).
-fn quantised_spec(spec: &mut ArchSpec, q: crate::prequant::QuantConfig) -> Result<()> {
+pub(crate) fn attach_quant(spec: &mut ArchSpec, q: crate::prequant::QuantConfig) -> Result<()> {
     let arch = spec.architecture.clone();
     if !matches!(spec.output, OutputSpec::Logits) || spec.hf.conv1d_weights || spec.adapter.is_some() {
         return Err(LowerError::not_lowerable(format!(

@@ -32,7 +32,35 @@ pub struct Prepared {
 }
 
 pub fn prepare(config_text: &str, opts: &LowerOpts) -> Result<Prepared> {
-    let spec = crate::parse_config_str(config_text)?;
+    prepare_spec(crate::parse_config_str(config_text)?, opts)
+}
+
+/// A checkpoint on disk, prepared: a Hugging Face directory (`config.json` + safetensors), or a
+/// GGUF file (a `.gguf` path, or a directory holding `model.gguf` and no `config.json`), whose
+/// tensors are then served under their Hugging Face names (`crate::gguf::GgufModel`).
+pub fn open_model(path: &std::path::Path, opts: &LowerOpts) -> Result<(Prepared, Box<dyn crate::weights::TensorSource + Sync>)> {
+    let gguf = if path.is_dir() {
+        let g = path.join("model.gguf");
+        (g.exists() && !path.join("config.json").exists()).then_some(g)
+    } else {
+        (path.extension().and_then(|e| e.to_str()) == Some("gguf")).then(|| path.to_path_buf())
+    };
+    match gguf {
+        Some(g) => {
+            let m = crate::gguf::GgufModel::open(&g)?;
+            let prep = prepare_spec(m.spec()?, opts)?;
+            Ok((prep, Box::new(m)))
+        }
+        None => {
+            let cfg = std::fs::read_to_string(path.join("config.json")).map_err(|e| LowerError::Io(format!("config.json: {e}")))?;
+            let prep = prepare(&cfg, opts)?;
+            Ok((prep, Box::new(crate::weights::Checkpoint::open(path)?)))
+        }
+    }
+}
+
+/// [`prepare`] from a spec (a GGUF checkpoint's, `crate::gguf::GgufModel::spec`).
+pub fn prepare_spec(spec: ArchSpec, opts: &LowerOpts) -> Result<Prepared> {
     let hl = crate::hl::build_program(&spec)?;
     let binding = crate::hf_weights::bind(&spec, &hl)?;
     // A pre-quantised checkpoint's projections lower from their stored integers.

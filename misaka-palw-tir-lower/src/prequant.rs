@@ -41,18 +41,17 @@ pub enum QFormat {
     Gptq { bits: u8, group: usize, desc_act: bool, sym: bool, v2: bool },
     /// AWQ, GEMM packing (AutoAWQ).
     Awq { bits: u8, group: usize },
+    /// GGUF (llama.cpp) block formats: the program layout of one module over every layer's tensor
+    /// type (`crate::gguf`).
+    Gguf { layout: QLayout },
 }
 
 impl QFormat {
-    pub fn bits(&self) -> u8 {
-        match self {
-            QFormat::Gptq { bits, .. } | QFormat::Awq { bits, .. } => *bits,
-        }
-    }
     /// Columns per group, `0` for one group per row.
     pub fn group(&self) -> usize {
         match self {
             QFormat::Gptq { group, .. } | QFormat::Awq { group, .. } => *group,
+            QFormat::Gguf { layout } => layout.group,
         }
     }
     pub fn label(&self) -> String {
@@ -66,6 +65,7 @@ impl QFormat {
                 if *sym { " sym" } else { " asym" }
             ),
             QFormat::Awq { bits, group } => format!("awq b{bits} {}", g(*group)),
+            QFormat::Gguf { layout } => format!("gguf {}{}", g(layout.group), if layout.offset_term { " +min" } else { "" }),
         }
     }
     /// The program structure this format lowers to ([`QLayout`]).
@@ -77,6 +77,7 @@ impl QFormat {
                 QLayout { group: *group, order: true, offset_term: *bits == 8 && !*sym }
             }
             QFormat::Awq { group, .. } => QLayout { group: *group, order: false, offset_term: false },
+            QFormat::Gguf { layout } => *layout,
         }
     }
 }
@@ -104,6 +105,9 @@ pub struct QuantConfig {
     pub skip: Vec<String>,
     /// GPTQ's `modules_in_block_to_quantize`, flattened; `None`: every linear of a block.
     pub only: Option<Vec<String>>,
+    /// GGUF: the layout of each quantised module (an HF module-name template with `{L}`), from the
+    /// file's tensor types; every other module is float.
+    pub per_module: std::collections::BTreeMap<String, QLayout>,
 }
 
 impl QuantConfig {
@@ -308,6 +312,7 @@ pub fn parse_quant_config(q: &Value, arch: &str, model_type: &str) -> Result<Qua
             lm_head,
             skip: Vec::new(),
             only,
+            per_module: Default::default(),
         })
     } else {
         if bits != 4 {
@@ -336,12 +341,13 @@ pub fn parse_quant_config(q: &Value, arch: &str, model_type: &str) -> Result<Qua
                 .collect::<Result<_>>()?,
             Some(_) => return Err(LowerError::bad("modules_to_not_convert is not a list")),
         };
-        Ok(QuantConfig { fmt: QFormat::Awq { bits: 4, group }, lm_head: false, skip, only: None })
+        Ok(QuantConfig { fmt: QFormat::Awq { bits: 4, group }, lm_head: false, skip, only: None, per_module: Default::default() })
     }
 }
 
 /// A group-quantised `[out, in]` weight, as stored: `W[o, i] = scale[o, g] · (q[o, i] −
-/// zero[o, g])`, `g = gidx[i]`.
+/// zero[o, g]) − min[o, g]`, `g = gidx[i]` (`min`: GGUF's float offsets — K-quant minimums,
+/// `Q4_1`/`Q5_1`'s `m`; absent for GPTQ and AWQ).
 #[derive(Clone, Debug, PartialEq)]
 pub struct QWeight {
     pub out: usize,
@@ -354,9 +360,13 @@ pub struct QWeight {
     pub scale: Vec<f64>,
     /// `[out, G]`: each (row, group)'s integer zero point.
     pub zero: Vec<i16>,
+    /// `[out, G]`: a float offset subtracted after the scale (exact: an fp16 times a small integer).
+    pub min: Option<Vec<f64>>,
     /// `[in]`: the group of each input column.
     pub gidx: Vec<u32>,
     pub bits: u8,
+    /// The codes are signed (`Q8_0`), else `[0, 2^bits)`.
+    pub signed: bool,
     /// The format (for reports).
     pub label: String,
 }
@@ -369,7 +379,8 @@ impl QWeight {
     pub fn value(&self, o: usize, i: usize) -> f64 {
         let g = self.gidx[i] as usize;
         let k = o * self.groups() + g;
-        self.scale[k] * (self.q[o * self.inp + i] as f64 - self.zero[k] as f64)
+        let m = self.min.as_ref().map_or(0.0, |m| m[k]);
+        self.scale[k] * (self.q[o * self.inp + i] as f64 - self.zero[k] as f64) - m
     }
     /// The float weight the format defines, `[out, in]`.
     pub fn dequant(&self) -> Tensor {
@@ -389,12 +400,16 @@ impl QWeight {
         }
         let mut q = Vec::with_capacity(rows.len() * self.inp);
         let (mut scale, mut zero) = (Vec::with_capacity(rows.len() * g), Vec::with_capacity(rows.len() * g));
+        let mut min = self.min.as_ref().map(|_| Vec::with_capacity(rows.len() * g));
         for &r in rows {
             q.extend_from_slice(&self.q[r * self.inp..(r + 1) * self.inp]);
             scale.extend_from_slice(&self.scale[r * g..(r + 1) * g]);
             zero.extend_from_slice(&self.zero[r * g..(r + 1) * g]);
+            if let (Some(dst), Some(src)) = (min.as_mut(), self.min.as_ref()) {
+                dst.extend_from_slice(&src[r * g..(r + 1) * g]);
+            }
         }
-        Ok(QWeight { out: rows.len(), q, scale, zero, gidx: self.gidx.clone(), label: self.label.clone(), ..*self })
+        Ok(QWeight { out: rows.len(), q, scale, zero, min, gidx: self.gidx.clone(), label: self.label.clone(), ..*self })
     }
     /// The column order in which every group is contiguous: columns sorted by group, stable. Every
     /// group must have exactly `group` columns.
@@ -489,7 +504,7 @@ pub fn unpack_gptq(
             scale[o * ng + g] = scales.data[g * out + o] as f64;
         }
     }
-    Ok(QWeight { out, inp, group: gs, q, scale, zero, gidx, bits, label: fmt.label() })
+    Ok(QWeight { out, inp, group: gs, q, scale, zero, min: None, gidx, bits, signed: false, label: fmt.label() })
 }
 
 /// AWQ's GEMM packing: slot `k` of a word holds output `8·c + AWQ_ORDER[k]`.
@@ -535,7 +550,7 @@ pub fn unpack_awq(fmt: &QFormat, qweight: (&[usize], &[i32]), qzeros: (&[usize],
         }
     }
     let gidx = (0..inp).map(|i| (i / gs) as u32).collect();
-    Ok(QWeight { out, inp, group: gs, q, scale, zero, gidx, bits, label: fmt.label() })
+    Ok(QWeight { out, inp, group: gs, q, scale, zero, min: None, gidx, bits, signed: false, label: fmt.label() })
 }
 
 #[cfg(test)]

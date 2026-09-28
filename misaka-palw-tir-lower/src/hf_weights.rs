@@ -50,6 +50,13 @@ impl M<'_> {
         const PROJECTIONS: &[&str] =
             &["attn.q", "attn.k", "attn.v", "attn.qkv", "attn.o", "mlp.gate", "mlp.up", "mlp.gate_up", "mlp.down"];
         let Some(q) = &self.st.quant else { return Ok(None) };
+        // GGUF: every tensor has its own type; the modules stored block-quantised are listed.
+        if let crate::prequant::QFormat::Gguf { .. } = q.fmt {
+            return Ok(match self.st.name(role) {
+                Some(t) => q.per_module.get(t).map(|layout| crate::prequant::QFormat::Gguf { layout: *layout }),
+                None => None,
+            });
+        }
         if role == "lm_head" {
             return Ok(q.lm_head.then(|| q.fmt.clone()));
         }

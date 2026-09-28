@@ -42,6 +42,10 @@ pub trait TensorSource {
     fn load_i32(&self, name: &str) -> Result<(Vec<usize>, Vec<i32>)> {
         Err(LowerError::weights(format!("`{name}`: this source holds no integer tensors")))
     }
+    /// A block-quantised weight's stored integers (a GGUF tensor, `crate::gguf`).
+    fn load_qweight(&self, name: &str) -> Result<QWeight> {
+        Err(LowerError::weights(format!("`{name}`: this source holds no block-quantised tensors")))
+    }
 }
 
 /// Two sources read as one: `over` (an adapter's tensors) before `base` (the parent checkpoint).
@@ -66,6 +70,9 @@ impl TensorSource for Overlay<'_> {
     }
     fn load_i32(&self, name: &str) -> Result<(Vec<usize>, Vec<i32>)> {
         if self.over.shape(name).is_some() { self.over.load_i32(name) } else { self.base.load_i32(name) }
+    }
+    fn load_qweight(&self, name: &str) -> Result<QWeight> {
+        if self.over.shape(name).is_some() { self.over.load_qweight(name) } else { self.base.load_qweight(name) }
     }
 }
 
@@ -625,6 +632,13 @@ pub fn src_shape(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<
             }
             Ok(shape.clone())
         }
+        Src::Quant { module, fmt: QFormat::Gguf { .. } } => {
+            let m = expand(module, layer, vars)?;
+            let n = format!("{m}.weight");
+            let rn = r.resolve(&n).ok_or_else(|| LowerError::weights(format!("missing tensor `{n}`")))?;
+            r.touched.borrow_mut().insert(rn.clone());
+            r.src.shape(&rn).ok_or_else(|| LowerError::weights(format!("no shape for `{rn}`")))
+        }
         Src::Quant { module, fmt } => {
             let m = expand(module, layer, vars)?;
             let names = quant_names(&m, r)?;
@@ -665,6 +679,12 @@ fn quant_names(module: &str, r: &Resolver) -> Result<Vec<String>> {
 /// Read a quantised module's integers.
 fn load_quant(module: &str, fmt: &QFormat, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<QWeight> {
     let m = expand(module, layer, vars)?;
+    if let QFormat::Gguf { .. } = fmt {
+        let n = format!("{m}.weight");
+        let rn = r.resolve(&n).ok_or_else(|| LowerError::weights(format!("missing tensor `{n}`")))?;
+        r.touched.borrow_mut().insert(rn.clone());
+        return r.src.load_qweight(&rn).map_err(|e| LowerError::weights(format!("`{m}`: {e}")));
+    }
     let names = quant_names(&m, r)?;
     for n in &names {
         r.touched.borrow_mut().insert(n.clone());
@@ -681,6 +701,7 @@ fn load_quant(module: &str, fmt: &QFormat, r: &Resolver, layer: Option<usize>, v
             unpack_gptq(fmt, (&qs, &qw), (&zs, &qz), &sc, g.as_ref().map(|(s, v)| (s.as_slice(), v.as_slice())))
         }
         QFormat::Awq { .. } => unpack_awq(fmt, (&qs, &qw), (&zs, &qz), &sc),
+        QFormat::Gguf { .. } => unreachable!("returned above"),
     };
     w.map_err(|e| LowerError::weights(format!("`{m}`: {e}")))
 }
@@ -839,6 +860,7 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
     fn leaves(s: &Src, out: &mut Vec<(String, Vec<(char, usize)>)>) {
         match s {
             Src::Tensor(t) => out.push((t.clone(), vec![])),
+            Src::Quant { module, fmt: QFormat::Gguf { .. } } => out.push((format!("{module}.weight"), vec![])),
             Src::Quant { module, .. } => {
                 for part in ["qweight", "qzeros", "scales"] {
                     out.push((format!("{module}.{part}"), vec![]));

@@ -38,6 +38,7 @@ pub mod encoder;
 pub mod error;
 pub mod fidelity;
 pub mod float_ref;
+pub mod gguf;
 pub mod hf_config;
 pub mod hf_weights;
 pub mod hl;
