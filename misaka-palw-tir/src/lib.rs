@@ -22,19 +22,24 @@
 //! * [`arith`], [`eval`] — the primitives' integer semantics.
 //! * [`interval`] — the interval type and the range transfer functions of spec 04b §7 (the range
 //!   half of admission).
+//! * [`admit`] — `tir_admit_v1`: normal form, types, ranges, costs, court cones with their tile and
+//!   chunk costs, state replay groups and checkpoint intervals, and the ceilings (spec 04b §10.3).
 //! * [`interp`] — one position step, a multi-position run, and cone evaluation.
-//! * [`builder`] — a small program builder and the first composite templates (the seed of
-//!   `tir_library_v1`).
+//! * [`builder`] — a small program builder (the primitives, with shape inference).
+//! * [`library`] — `tir_library_v1`: the composite templates (legacy kernels as segments, norms,
+//!   softmax variants, activations, RoPE, attention, routing, the recurrences).
 //!
 //! This is a leaf crate: it depends on nothing in this repository, so `kaspa-consensus-core` can
 //! depend on it for admission and the court. Identity hashing stays with the caller.
 
+pub mod admit;
 pub mod arith;
 pub mod builder;
 pub mod error;
 pub mod eval;
 pub mod interp;
 pub mod interval;
+pub mod library;
 pub mod prim;
 pub mod program;
 pub mod tensor;

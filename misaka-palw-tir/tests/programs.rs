@@ -62,10 +62,33 @@ fn run_and_check_cones(program: &TirProgramV1, params: &MapParams, tokens: &[u32
                     })
                     .collect()
             };
-            let fixed: BTreeMap<u16, Tensor> =
-                before.fixed.iter().filter(|((_, l), _)| *l == *layer).map(|((j, _), v)| (*j, v.clone())).collect();
-            let hist_prior: BTreeMap<u16, Vec<Tensor>> =
-                before.hist.iter().filter(|((_, l), _)| *l == *layer).map(|((j, _), v)| (*j, v.iter().cloned().collect())).collect();
+            // The court's environment is COMPLETE (spec 04b §9.2): every state instance of the
+            // occurrence's role is supplied — a never-written one as its initial value, a history
+            // with no rows as an empty list — because a cone never implies one (ref2 F1/F3).
+            let is_layer = layer.is_some();
+            let fixed: BTreeMap<u16, Tensor> = program
+                .states
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.per_layer == is_layer && matches!(s.kind, misaka_palw_tir::StateKind::Fixed { .. }))
+                .map(|(j, s)| {
+                    let v = before
+                        .fixed
+                        .get(&(j as u16, *layer))
+                        .cloned()
+                        .unwrap_or_else(|| Tensor::zeros(s.dtype, &s.shape.iter().map(|d| *d as usize).collect::<Vec<_>>()));
+                    (j as u16, v)
+                })
+                .collect();
+            let hist_prior: BTreeMap<u16, Vec<Tensor>> = program
+                .states
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.per_layer == is_layer && matches!(s.kind, misaka_palw_tir::StateKind::Hist { .. }))
+                .map(|(j, _)| {
+                    (j as u16, before.hist.get(&(j as u16, *layer)).map(|r| r.iter().cloned().collect()).unwrap_or_default())
+                })
+                .collect();
             for (node, value) in &commits {
                 let mut supplied = commits.clone();
                 supplied.remove(node);
