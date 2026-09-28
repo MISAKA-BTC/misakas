@@ -433,7 +433,7 @@ calibration statistics (`lower::fill`), so a recalibration moves the artifact, n
 | --- | --- |
 | residual stream (the carry) | `i32`, ONE scale for the program (first-token massive activations need no position-0 lane) |
 | matmul inputs, op boundaries | A16: `i16` codes `±32767`, static scale per site and layer (headroom 2× over the calibrated absmax) |
-| weights | W8: `i8` per output row; `(m, s, z)` as three typed per-channel params (`i64`, `i8`, `i64`) |
+| weights | W8: `i8` per output row. A table gathered by row (an embedding, a learned position table) is `i16` per row, and a head tied to it reads the same codes (`i16 × i16`, exact in `i64`). `(m, s, z)` are three typed per-channel params (`i64`, `i8`, `i64`) |
 | norm unit rows, softmax probabilities, decays, gates | Q24 `i32` |
 | attention and router logits | Q14 `i32` (±131,072: Qwen2.5's layer-0 logits reach 24,000) |
 | activations | `Table(x; T)`: 65,536 `i16` entries per site and layer, the float function rounded on the code grid |
@@ -532,8 +532,8 @@ The reference evaluator (every value an `i128`) takes ~20 s a position at 1.5B a
 ## 11. Reproducing
 
 ```sh
-export CARGO_TARGET_DIR=…/tir-lower-target CARGO_BUILD_JOBS=4
-cargo test --release -p misaka-palw-tir-lower  # 190 tests; HF fixtures are skipped if absent
+export CARGO_TARGET_DIR=…/tir-lower-target CARGO_BUILD_JOBS=3
+cargo test --release -p misaka-palw-tir-lower  # HF fixtures are skipped if absent
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
   …/tir-venv/bin/python misaka-palw-tir-lower/tools/gen_hf_fixtures.py [name …]   # regenerate
 cargo run -p misaka-palw-tir-lower --bin palw-tir-check -- \
@@ -544,9 +544,12 @@ cargo run --release -p misaka-palw-tir-lower --bin palw-tir-fidelity -- ~/Downlo
   --calib qwen25-calib.json --eval qwen25-eval.json --eval-seqs 2 --positions 128 \
   --artifact-out qwen25.palwtir --tir-out qwen25.tir --json
 # The same on the typed backend (byte-identical, ~300x faster at 1.5B), with a reference cross-check
-# and, for recurrent models, the 4,096-position drift:
+# and, for recurrent models, the 4,096-position drift. A recurrent model must be calibrated on a
+# sequence as long as the evaluated context (freeze-v1 §5.2), so the drift run takes a calibration
+# file with one held-out 4,096-token sequence; --max-window N lowers for a layout's shorter context
+# (the same option on palw-tir-check):
 cargo run --release -p misaka-palw-tir-lower --bin palw-tir-fidelity -- <checkpoint> \
-  --calib calib.json --eval eval.json --exec --cross-check 2 [--eval drift.json --positions 4096 --drift]
+  --calib calib.json --eval eval.json --exec --cross-check 2 [--calib calib-long.json --eval drift.json --positions 4096 --drift]
 # The legacy dense row and its IR program, same logits and rows (D-F1, offline):
 cargo run --release -p misaka-palw-base0 --bin palw-a16-to-tir -- --artifact <512-wide.palwart> --respan 8192 --out genesis-8k.palwtir
 cargo run --release -p misaka-palw-sdk --bin palw-tir-equiv -- --network testnet-12 \
