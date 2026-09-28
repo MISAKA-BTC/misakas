@@ -38,11 +38,14 @@ fn run(name: &str) -> Result<fidelity::Metrics, String> {
     let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet)
         .map_err(|e| format!("materialise: {e}"))?;
     // The artifact round-trips through the file format with its digest.
-    let tmp = std::env::temp_dir().join(format!("palw-tir-{name}-{}.art", std::process::id()));
-    let digest = artifact::write(&tmp, &prep.lowered.program, &mat.params, serde_json::json!({})).map_err(|e| e.to_string())?;
-    let (h, back) = artifact::read(&tmp, &prep.lowered.program).map_err(|e| e.to_string())?;
+    let tmp = std::env::temp_dir().join(format!("palw-tir-{name}-{}.palwtir", std::process::id()));
+    let digest =
+        artifact::write(&tmp, &prep.lowered.program, &mat.params, [0u8; 64], serde_json::json!({})).map_err(|e| e.to_string())?;
+    let (c, back) = artifact::read(&tmp, &prep.lowered.program).map_err(|e| e.to_string())?;
+    let file = misaka_palw_tir_artifact::file_digest_v1(&tmp).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&tmp);
-    if h.digest != digest || back.tensors != mat.params.tensors {
+    let hex: String = file.iter().map(|b| format!("{b:02x}")).collect();
+    if hex != digest || back.tensors != mat.params.tensors || c.program != prep.lowered.program {
         return Err("artifact round trip".into());
     }
     let fl = fidelity::float_logits(&prep.hl, &loader, &eval, &quiet).map_err(|e| e.to_string())?;

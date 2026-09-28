@@ -222,6 +222,19 @@ pub fn program_summary(p: &TirProgramV1) -> String {
     s
 }
 
+/// Key of the network's `prim_set_id` (`kaspa_consensus_core::palw_tir_v1::PALW_TIR_PRIM_SET_DOMAIN_V1`).
+pub const PRIM_SET_DOMAIN_V1: &[u8] = b"misaka-palw/tir/prim-set/v1";
+
+/// The `prim_set_id` every program this lowerer emits carries: BLAKE2b-512 keyed with
+/// [`PRIM_SET_DOMAIN_V1`] over the spec 04b §6.0 descriptor — the bytes
+/// `palw_tir_prim_set_id_v1()` computes in consensus (this crate does not depend on consensus).
+pub fn prim_set_id_v1() -> [u8; 64] {
+    let h = blake2b_simd::Params::new().hash_length(64).key(PRIM_SET_DOMAIN_V1).hash(&tir::prim::prim_set_descriptor_v1());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.as_bytes());
+    out
+}
+
 /// Lower an HL program.
 pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     let hb = opts.history_bound;
@@ -325,7 +338,8 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     let logits = logits.ok_or_else(|| LowerError::eval("internal: post block produced no logits"))?;
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
-    let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], logits);
+    let mut program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], logits);
+    program.prim_set_id = prim_set_id_v1();
     tir::validate::validate(&program)
         .map_err(|e| LowerError::eval(format!("internal: lowered program is not in normal form: {e}")))?;
     let fills: Vec<FillFn> = cx.fills;

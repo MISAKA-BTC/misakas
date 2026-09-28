@@ -450,9 +450,10 @@ positive; `IntRsqrt` normalises the rest internally) and 3-node narrowings when 
 term; when a block still does not fit (GDN + MoE layers), it drops the splits of the most-read values
 and retries. Proposed for `tir_library_v1`: the lean norms.
 
-**Artifact.** `artifact::write` — a crate-local container (`PALWTIRA`: JSON header, typed
-little-endian tensors in `(param, layer)` order, per-tensor BLAKE2b-256, whole-artifact
-BLAKE2b-512 over the program digest and every tensor). Phase F (F3) grows it into `PALWTIR1`.
+**Artifact.** `artifact::write` writes a `PALWTIR1` container (`misaka-palw-tir-artifact`, Phase F
+F3): the program, its layout and tokenizer id, and every param tensor typed little-endian in
+inventory order, 64-byte aligned; the consensus inventory root (`palw_tir_artifact_v1`) hashes it
+front to back. (Gate 2a's crate-local `PALWTIRA` grew into it.)
 
 **Fidelity on the tiny fixtures** (`tests/fidelity_tiny.rs`: calibration 6×32 random tokens, evaluation
 3×24 others; reference evaluator vs the f32 reference, which matches transformers 5.17 to ~1e-6):

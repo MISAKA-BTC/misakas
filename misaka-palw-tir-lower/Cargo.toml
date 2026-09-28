@@ -24,6 +24,7 @@ path = "src/bin/palw-tir-fidelity.rs"
 # builder, the canonical encoding, the range analysis and the reference evaluator.
 [dependencies]
 misaka-palw-tir = { path = "../misaka-palw-tir" }
+misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
 serde = { workspace = true }
 serde_json.workspace = true
 thiserror.workspace = true

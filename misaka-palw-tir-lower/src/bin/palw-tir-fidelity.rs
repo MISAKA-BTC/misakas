@@ -43,7 +43,7 @@ struct Args {
     /// Write the TIR program (canonical encoding).
     #[arg(long)]
     tir_out: Option<PathBuf>,
-    /// Write the integer artifact.
+    /// Write the integer artifact (a `PALWTIR1` container: program, tensors, provenance).
     #[arg(long)]
     artifact_out: Option<PathBuf>,
     /// Write the per-site calibration statistics (JSON).
@@ -152,7 +152,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             "policy": { "headroom16": policy.headroom16, "headroom32": policy.headroom32, "headroom_resid": policy.headroom_resid },
             "calibration": calib_src,
         });
-        digest = Some(artifact::write(p, &prep.lowered.program, &mat.params, meta).map_err(|e| e.to_string())?);
+        digest = Some(artifact::write(p, &prep.lowered.program, &mat.params, [0u8; 64], meta).map_err(|e| e.to_string())?);
     }
     log(format!("float reference on {} sequences", eval.len()));
     let fl = fidelity::float_logits(&prep.hl, &loader, &eval, &progress("float")).map_err(|e| e.to_string())?;
