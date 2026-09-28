@@ -513,6 +513,17 @@ fn a_planted_lie_in_an_ir_claim_is_convicted_by_the_ir_court() {
         let collateral = |s: &PalwChainStateV2, n: u64| s.bond(&bond_key(n)).expect("the bond").collateral;
         let before = collateral(&s, PRODUCER);
 
+        // The seat's one-move case names the same leaf the ladder will (the court that plays no
+        // bisection is accused at it directly).
+        {
+            let tir = ir.tir();
+            let rules = tir.court_rules(&court());
+            let (leaf, candidates) =
+                super::tir_court::palw_tir_one_move_case_v1(&tir, &liar.material, &honest.material, &rules).unwrap().expect("a case");
+            assert_eq!(leaf, lie, "tiled {tiled}: the one-move case names the lie");
+            assert!(matches!(candidates.first(), Some(("cone", Ok(_)))));
+            assert_eq!(super::tir_court::palw_tir_one_move_case_v1(&tir, &honest.material, &honest.material, &rules).unwrap(), None);
+        }
         // The seat opens; the ladder, from both parties' own captures, lands on the lie.
         let (s, sid) = open_court(&s, &liar, SEAT, 104);
         let (s, daa) = play_ladder(&ir, s, sid, &liar.material, &honest.material, SEAT, false, 105);

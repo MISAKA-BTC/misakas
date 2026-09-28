@@ -414,6 +414,19 @@ impl TirBackendV1 {
         .ok_or_else(|| "the capture's trace has no such row or lane".into())
     }
 
+    /// **The first step leaf at which an accused capture parts from this node's own execution of
+    /// the same job** — found as the ladder finds it (`tir_first_divergence_v1` over both captures'
+    /// leaves: a dense capture's own, a fold's re-derived). `None` when every leaf agrees (a lie in
+    /// the trace alone is the logits or the decode-token door's). What a one-move accusation names.
+    pub fn first_divergent_leaf(&self, accused: &[u8], own: &[u8]) -> Result<Option<u64>, String> {
+        let (a, o) = (self.decode_capture(accused)?, self.decode_capture(own)?);
+        if a.binding.job_context != o.binding.job_context {
+            return Err("the two captures are of different jobs".into());
+        }
+        let (ha, ho) = (self.capture_leaf_hashes(&a)?, self.capture_leaf_hashes(&o)?);
+        Ok(super::evidence::tir_first_divergence_v1(&a.binding.job_context, &ha, &ho))
+    }
+
     /// **The rules the court grades this class's closes under** (`adjudicate_close_proof_v2`'s IR
     /// arm): this backend's ladder and prompt form, and the court's IR work limits
     /// (`palw_tir_court_limits_v1`).

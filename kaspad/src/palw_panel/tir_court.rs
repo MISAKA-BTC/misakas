@@ -69,3 +69,19 @@ pub(crate) fn palw_tir_close_is_mine_v1(verdict: PalwCourtVerdictV2, i_am_respon
 pub(crate) fn palw_tir_close_note_v1(session_id: &Hash64, label: &str, verdict: PalwCourtVerdictV2, index: u64) -> String {
     format!("session {session_id} closes as {verdict:?} on IR step {index} ({label} close)")
 }
+
+/// **A seat's one-move case against an IR claim** (the input of an IR one-move accusation, on
+/// chains whose court plays no bisection): the first step leaf at which the accused capture parts
+/// from this seat's own execution of the job, and the IR closes that may convict there, in the
+/// order a challenger tries them. `Ok(None)` when every step leaf agrees. (The object that carries
+/// it, `TirShardCourtAccused`, is Phase F's next landing; until then only the tests call this.)
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn palw_tir_one_move_case_v1(
+    tir: &TirBackendV1,
+    accused: &[u8],
+    own: &[u8],
+    rules: &PalwTirCourtRulesV1,
+) -> Result<Option<(u64, Vec<(&'static str, Result<PalwCourtVerdictProofV2, String>)>)>, String> {
+    let Some(leaf) = tir.first_divergent_leaf(accused, own)? else { return Ok(None) };
+    Ok(Some((leaf, palw_tir_close_candidates_v1(tir, accused, Some(own), leaf, rules, true))))
+}
