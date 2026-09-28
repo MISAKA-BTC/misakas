@@ -522,7 +522,7 @@ fn features(p: &Program) -> Vec<String> {
                     Ref::Input(0) => f.push("reads the token".into()),
                     Ref::Input(_) => f.push("reads pos".into()),
                     Ref::Param(j) if p.params[*j as usize].per_layer => f.push("per-layer param".into()),
-                    Ref::State(j) => f.push(format!("State read in {:?}", role)),
+                    Ref::State(_) => f.push(format!("State read in {:?}", role)),
                     _ => {}
                 }
             }
@@ -1096,4 +1096,191 @@ fn d_structural_mutations() {
     runs.report("D. steps of mutants both accept");
     assert!(t.disagreements.is_empty() && t.panics_first.is_empty());
     assert!(runs.disagreements.is_empty() && runs.panics_first.is_empty());
+}
+
+// =============================================================== B3. hostile cone environments
+
+/// The nodes a cone evaluates: the backward closure of `target` stopping at supplied nodes (the
+/// target itself always evaluated), in this crate's reading of §9.2.
+fn closure(p: &Program, b: usize, target: u16, supplied: &BTreeMap<u16, Tensor>) -> Vec<bool> {
+    let nodes = &p.blocks[b].nodes;
+    let mut todo = vec![false; nodes.len()];
+    todo[target as usize] = true;
+    for i in (0..=target as usize).rev() {
+        if todo[i] {
+            for r in &nodes[i].inputs {
+                if let Ref::Node(k) = *r {
+                    if !supplied.contains_key(&k) {
+                        todo[k as usize] = true;
+                    }
+                }
+            }
+        }
+    }
+    todo
+}
+
+#[test]
+fn b3_hostile_cone_envs() {
+    // Each perturbation of an honest court environment, and what 04b §9.2 says about it:
+    const KINDS: [(&str, &str); 11] = [
+        ("drop a needed carry-in", "fails (Missing)"),
+        ("drop a needed Fixed value", "fails (Missing)"),
+        ("drop a needed history of 0 rows (pos 0 or window 1)", "fails (Missing)"),
+        ("supply the target with a wrong value", "silent"),
+        ("supply an index that is no node", "silent"),
+        ("a wrong-shaped supplied node inside the closure", "fails"),
+        ("pos = history_bound", "silent"),
+        ("one history row too many", "fails"),
+        ("a wrong-shaped supplied node outside the closure", "silent"),
+        ("a Fixed value outside [lo, hi]", "fails (§9.1(2))"),
+        ("drop a needed history of ≥ 1 row", "fails (Missing)"),
+    ];
+    let n = 600 * scale() as u64;
+    let mut per: Vec<(usize, usize, usize, usize, usize)> = vec![(0, 0, 0, 0, 0); KINDS.len()]; // (applicable, agree-ok, agree-err, ref2 ok/first err, ref2 err/first ok)
+    let mut examples: Vec<Vec<String>> = vec![Vec::new(); KINDS.len()];
+    for seed in 0..n {
+        let mut rng = R::seed_from_u64(0xB3B3_0000 + seed);
+        let g = gen_program(&mut rng, GenCfg::default());
+        let p = &g.prog;
+        let Outcome::Ok(fp) = first_decode(&encode(p)) else { continue };
+        let fparams = params_to(&g.params);
+        let mut st = initial_state(p);
+        for _ in 0..rng.gen_range(1..=4) {
+            let token = rng.gen_range(0..p.token_bound.min(64) as u64);
+            let Ok((_, next, trace)) = step_traced(p, &g.params, &st, token) else { break };
+            for occ in &trace {
+                let b = occ.block as usize;
+                let block = &p.blocks[b];
+                let commits: Vec<u16> = (0..block.nodes.len() as u16).filter(|&i| block.nodes[i as usize].commit).collect();
+                if commits.is_empty() {
+                    continue;
+                }
+                let target = pick(&mut rng, &commits);
+                let inst = |j: u16| if p.states[j as usize].per_layer { occ.layer } else { None };
+                let mut env = ConeEnv { token, pos: st.pos, carry_in: occ.carry_in.clone(), ..Default::default() };
+                for nd in &block.nodes {
+                    for r in &nd.inputs {
+                        if let Ref::State(j) = *r {
+                            if let Some(v) = st.fixed.get(&(j, inst(j))) {
+                                env.fixed.insert(j, v.clone());
+                            }
+                        }
+                    }
+                    if let Prim::HistAppend { state } = nd.prim {
+                        env.hist_prior.insert(state, st.hist.get(&(state, inst(state))).cloned().unwrap_or_default());
+                    }
+                }
+                for &c in &commits {
+                    if c != target {
+                        env.supplied.insert(c, occ.values[c as usize].clone());
+                    }
+                }
+                let todo = closure(p, b, target, &env.supplied);
+                let needed_carry: Vec<u8> = block.nodes.iter().enumerate().filter(|(i, _)| todo[*i]).flat_map(|(_, nd)| nd.inputs.iter().filter_map(|r| if let Ref::CarryIn(k) = r { Some(*k) } else { None })).collect();
+                let needed_fixed: Vec<u16> = block.nodes.iter().enumerate().filter(|(i, _)| todo[*i]).flat_map(|(_, nd)| nd.inputs.iter().filter_map(|r| if let Ref::State(j) = r { Some(*j) } else { None })).collect();
+                let needed_hist: Vec<u16> = block.nodes.iter().enumerate().filter(|(i, _)| todo[*i]).filter_map(|(_, nd)| if let Prim::HistAppend { state } = nd.prim { Some(state) } else { None }).collect();
+                let outside: Vec<u16> = (0..block.nodes.len() as u16).filter(|&i| !todo[i as usize] && !env.supplied.contains_key(&i)).collect();
+                let inside: Vec<u16> = (0..target).filter(|&i| todo[i as usize]).collect();
+                let mut k = rng.gen_range(0..KINDS.len() - 1);
+                if k == 2 {
+                    let rows_needed = needed_hist.first().map(|&j| match p.states[j as usize].kind {
+                        StateKind::Hist { window } => st.pos.min(window as u64 - 1),
+                        _ => 0,
+                    });
+                    if rows_needed.is_some_and(|r| r > 0) {
+                        k = 10;
+                    }
+                }
+                let mut e = env.clone();
+                let wrong = Tensor::new(DType::I8, vec![7], vec![1; 7]).unwrap();
+                let applicable = match k {
+                    0 => needed_carry.first().map(|c| e.carry_in.remove(c)).is_some(),
+                    1 => needed_fixed.first().map(|j| e.fixed.remove(j)).is_some(),
+                    2 | 10 => needed_hist.first().map(|j| e.hist_prior.remove(j)).is_some(),
+                    3 => {
+                        let mut v = occ.values[target as usize].clone();
+                        if let Some(x) = v.data.first_mut() {
+                            *x = if *x == v.dtype.min() { *x + 1 } else { *x - 1 };
+                        }
+                        e.supplied.insert(target, v);
+                        true
+                    }
+                    4 => {
+                        e.supplied.insert(block.nodes.len() as u16 + 3, wrong.clone());
+                        true
+                    }
+                    5 => inside.first().map(|&i| e.supplied.insert(i, wrong.clone())).is_some(),
+                    6 => {
+                        e.pos = p.history_bound as u64;
+                        true
+                    }
+                    7 => needed_hist.first().map(|j| e.hist_prior.get_mut(j).unwrap().push(occ.values[0].clone())).is_some() && !needed_hist.is_empty(),
+                    8 => outside.first().map(|&i| e.supplied.insert(i, wrong.clone())).is_some(),
+                    _ => {
+                        let mut done = false;
+                        if let Some(&j) = needed_fixed.first() {
+                            if let StateKind::Fixed { hi, .. } = p.states[j as usize].kind {
+                                let d = p.states[j as usize].dtype;
+                                if (hi as i128) < d.max() {
+                                    let v = e.fixed.get_mut(&j).unwrap();
+                                    v.data[0] = hi as i128 + 1;
+                                    done = true;
+                                }
+                            }
+                        }
+                        done
+                    }
+                };
+                if !applicable {
+                    continue;
+                }
+                let a = mine(eval_cone(p, &g.params, occ.block, occ.layer, target, &e));
+                let f = first_cone(&fp, &fparams, occ.block, occ.layer, target, &env_to(&e, true));
+                let slot = &mut per[k];
+                slot.0 += 1;
+                match (a.is_ok(), f.is_ok()) {
+                    (true, true) => {
+                        if a == f {
+                            slot.1 += 1
+                        } else {
+                            slot.3 += 1;
+                            if examples[k].len() < 2 {
+                                examples[k].push(format!("seed {seed}: both ok, values differ: ref2 {} / first {}", brief(&a), brief(&f)));
+                            }
+                        }
+                    }
+                    (false, false) => slot.2 += 1,
+                    (true, false) => {
+                        slot.3 += 1;
+                        if examples[k].len() < 2 {
+                            examples[k].push(format!("seed {seed} pos {}: ref2 {} / first {}", st.pos, brief(&a), brief(&f)));
+                        }
+                    }
+                    (false, true) => {
+                        slot.4 += 1;
+                        if examples[k].len() < 2 {
+                            examples[k].push(format!("seed {seed} pos {}: ref2 {} / first {}", st.pos, brief(&a), brief(&f)));
+                        }
+                    }
+                }
+            }
+            st = next;
+        }
+    }
+    println!("B3. hostile cone environments (each an honest court env with one perturbation):");
+    println!("    {:52} {:18} {:>6} {:>8} {:>8} {:>10} {:>10}", "perturbation", "04b says", "cases", "both ok", "both err", "ref2 ok", "first ok");
+    for (i, (name, says)) in KINDS.iter().enumerate() {
+        let (c, ok, er, a_only, f_only) = per[i];
+        println!("    {:52} {:18} {:>6} {:>8} {:>8} {:>10} {:>10}", name, says, c, ok, er, a_only, f_only);
+        for e in &examples[i] {
+            println!("        e.g. {e}");
+        }
+    }
+    // Where 04b is explicit, this implementation follows it; the first implementation's
+    // departures are findings (ref2-findings.md), reported above, not asserted.
+    assert_eq!(per[5].3 + per[5].4, 0);
+    assert_eq!(per[7].3 + per[7].4, 0);
+    assert_eq!(per[9].3 + per[9].4, 0);
+    assert_eq!(per[10].3 + per[10].4, 0);
 }
