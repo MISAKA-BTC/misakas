@@ -1315,6 +1315,38 @@ the worker, seat and capture, with the golden toy encoder–decoder
 (`consensus-vectors/tir-v2/pipelines/toy-encdec.json`) as its vector; the conformance test on the
 lowered models waits for their vectors.
 
+### II.2.3 Evaluation pipelines: the `Decode` stage and finalized outputs (RFC-0004 §7.2)
+
+RFC-0004's open question 8 recommends that its two additions to the pipeline format live here. They
+are built dormant (`rfc4/eval`, 2026-09-29), appended to the format so that every earlier pipeline
+encodes as before:
+
+- **The `Decode` stage kind** (`TripRule` tag 4). It is the text stage's stream and trip count
+  (`prompt ‖ generated`, `T = |prompt| + max(|generated|, 1) − 1`) in a stage that is **not** the
+  output. An evaluation pipeline's subject stage decodes (Generate), or is given the ids
+  (teacher-forced: its `generated` list is the reference), and the scoring stages after it read:
+  - **what it decoded**, through the token source `Generated` (tag 3), which only a stage after the
+    `Decode` stage may name;
+  - **its consumed logits rows**, through `StageRows` / `StageRowCount`: position `|prompt| − 1` on,
+    row `r` the one `generated[r]` came from, which are exactly the stage's committed logits leaves.
+
+  NF-P9′ becomes: the `TextStream` stage is the output, the `Decode` stage never is, and a pipeline
+  has at most one of them. The court treats a `Decode` stage as the text stage: its consumed logits
+  are its leaves, and the decode door holds each id it selected (in Generate mode).
+- **`FinalizedOutput { claim, stage }`** (token source tag 5). It is the generated ids of the job's
+  `claim`-th finalized claim (`claim < 8`), from that claim's stream stage `stage`. It is a token
+  source rather than a new binding, so a template, its padding and its count are the existing
+  `JobTokens` / `JobTokenCount` bindings'. A pairwise judge reads two, and RFC-0005's `Tests` kind one.
+  The job carries the ids and the chain holds their commitment. Where that commitment lives and how a
+  close carries the ids is the evaluation job family's (RFC-0004 A6).
+- **The key** (token source `Key`, tag 4): an evaluation item's key ids, which an exact-match stage
+  compares an answer span with. RFC-0004 §7.2 names two additions and nothing else, but an exact
+  match needs the key as a list, so this is a third. It is flagged there.
+
+The scoring stages themselves (ExactMatch, RefLogLik, Judge, Pairwise) are ordinary programs of the
+scoring library (`misaka_palw_tir::scoring`, vectors `consensus-vectors/tir-v2/scoring/` and
+`pipelines/eval-*.json`), adjudicated as any committed leaf (04b PALW-TIR-50).
+
 ## II.3 Embedding / encoder
 
 **Job fields.** The body is `EmbeddingBodyV1`:
