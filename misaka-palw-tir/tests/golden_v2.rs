@@ -9,6 +9,9 @@
 //! * `pipelines/toy-vision.json` — a one-stage image encoder over a job image (`JobImage`, RFC-0003
 //!   §II.4): the image's bytes, its `input_root`, every input tile with its path, the run, and the
 //!   `EmbeddingI32` output;
+//! * `pipelines/toy-vlm.json` — the vision-language pipeline (RFC-0003 §II.2.1): the image, a prompt
+//!   with two placeholder ids, the greedy selector's generated ids, and every stage's positions —
+//!   the text stage's logits rows included;
 //! * `encoding.json` — byte strings `TirProgramV2::decode_canonical` / `TirProgram::decode_canonical`
 //!   must accept or refuse, with the class.
 //!
@@ -384,6 +387,9 @@ struct JobJson {
     /// Absent for a job with no image (the text-to-image and bidirectional files predate images).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     images: Vec<JobImageJson>,
+    /// The text stage's generated ids (absent for a pipeline with no text stage).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    generated: Vec<u32>,
 }
 
 /// A job image: what the executor holds (the bytes) and what the chain holds (`input_root`), with
@@ -509,6 +515,7 @@ fn pipelines() {
             steps: job.steps,
             scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
             images: vec![],
+            generated: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -932,6 +939,8 @@ fn admission() {
         ("toy-bidirectional (JobTokens + JobTokenCount)", bidirectional_pipeline(0), open),
         ("matmul (the job's MACs)", matmul_pipeline(), open),
         ("toy-vision (JobImage: 1 byte a lane, an operand)", vision_pipeline(), open),
+        ("toy-text (the text stage: Logits over TextStream)", text_pipeline(), open),
+        ("toy-vlm (image rows into the text stage)", vlm_pipeline(), open),
         ("refused: max_job_macs one short", matmul_pipeline(), TirJobCeilingsV1 { max_job_macs: 3 * 512 - 1, ..open }),
         ("refused: max_job_step_leaves one short", toy_pipeline(), TirJobCeilingsV1 { max_job_step_leaves: toy_leaves - 1, ..open }),
     ];
@@ -1219,6 +1228,7 @@ fn bidirectional_pipeline_vector() {
             steps: job.steps,
             scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
             images: vec![],
+            generated: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1304,6 +1314,7 @@ fn vision_pipeline_vector() {
             steps: job.steps,
             scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
             images,
+            generated: vec![],
         },
         seed_hex: hex(&random.seed),
         item_index: random.position,
@@ -1318,4 +1329,86 @@ fn vision_pipeline_vector() {
         },
     };
     check_or_bless("pipelines/toy-vision.json", serde_json::to_string_pretty(&file).unwrap());
+}
+
+#[test]
+fn vlm_pipeline_vector() {
+    let (p, programs) = vlm_pipeline();
+    let params = ProgramParams(programs.iter().enumerate().map(|(i, prog)| materialize_v2(prog, 400 + i as u64)).collect());
+    let job = PipelineJob { prompt: vec![3, PLACEHOLDER, PLACEHOLDER, 5], ..vision_job() };
+    let random = GenRandom { seed: [0; 32], position: 0 };
+    let (run, generated) = run_text_pipeline(&p, &programs, &params, &random, &job, &mut greedy(4)).unwrap();
+    // The committed ids replay the run exactly.
+    let committed = PipelineJob { generated: generated.clone(), ..job.clone() };
+    assert_eq!(run_pipeline(&p, &programs, &params, &random, &committed).unwrap(), run);
+    let tile_len = 4;
+    let images = job
+        .images
+        .iter()
+        .map(|img| {
+            let root = misaka_palw_gen::output::input_image_root_v1(img.h, img.w, tile_len, &img.rgb).unwrap();
+            let tiles = misaka_palw_gen::output::input_image_tiles_v1(img.h, img.w, tile_len, &img.rgb).unwrap();
+            JobImageJson {
+                h: img.h,
+                w: img.w,
+                rgb_hex: hex(&img.rgb),
+                tile_len,
+                input_root_hex: hex(&root),
+                tiles: tiles
+                    .iter()
+                    .enumerate()
+                    .map(|(t, (bytes, proof))| InputTileJson {
+                        tile: t as u64,
+                        bytes_hex: hex(bytes),
+                        proof_hex: proof.iter().map(|h| hex(h)).collect(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    let stages = run
+        .stages
+        .iter()
+        .zip(&p.stages)
+        .map(|(r, st)| {
+            let tokens = if r.tokens.is_empty() { vec![0; r.trip as usize] } else { r.tokens.clone() };
+            StageJson { name: st.name.clone(), trip: r.trip, tokens: r.tokens.clone(), steps: steps_json(&r.steps, &tokens) }
+        })
+        .collect();
+    let file = PipelineFileJson {
+        format: "palw-tir-v2/pipeline-vectors/1".into(),
+        spec: SPEC.into(),
+        name: "toy-vlm".into(),
+        pipeline_borsh_hex: hex(&p.encode()),
+        programs: programs
+            .iter()
+            .zip(&params.0)
+            .map(|(prog, m)| PipelineProgramJson {
+                program_borsh_hex: hex(&prog.encode()),
+                graph_ir_root_hex: root(&prog.encode()),
+                params: params_json(m),
+            })
+            .collect(),
+        job: JobJson {
+            prompt: job.prompt.clone(),
+            negative: job.negative.clone(),
+            steps: job.steps,
+            scalars: vec![],
+            images,
+            generated,
+        },
+        seed_hex: hex(&random.seed),
+        item_index: random.position,
+        random_inputs: vec![],
+        stages,
+        output: tj(&run.output),
+        // A text class's output is its generated ids: no output root (RFC-0003 §I.3.3).
+        output_image: OutputImageJson {
+            spec_borsh_hex: String::new(),
+            tile_len: 0,
+            canonical_hex: String::new(),
+            output_root_hex: String::new(),
+        },
+    };
+    check_or_bless("pipelines/toy-vlm.json", serde_json::to_string_pretty(&file).unwrap());
 }

@@ -118,6 +118,7 @@ fn toy() -> Toy {
         steps: v["job"]["steps"].as_u64().unwrap() as u32,
         scalars: ints(&v["job"]["scalars"]).into_iter().map(|x| x as i64).collect(),
         images: vec![],
+        generated: vec![],
     };
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&unhex(v["seed_hex"].as_str().unwrap()));
@@ -476,4 +477,87 @@ fn a_job_image_is_read_only_from_tiles_proven_under_its_input_root() {
     );
     assert_eq!(court.carry_image_tile(1, 1, bytes, proof), Err(PalwGenImageRefusalV1::UnknownImage(1)));
     assert_eq!(court.carry_image_tile(0, 1, bytes, proof), Ok(()));
+}
+
+/// **The vision-language court** (`toy-vlm.json`, RFC-0003 §II.2.1): every commit point of the text
+/// stage recomputes under the generative court's source, its tokens the committed stream and its
+/// image rows the vision stage's committed output carried as a `StageFinal` edge — the only input the
+/// carriage is ever asked — with the placement cursor replayed like any other state.
+#[test]
+fn the_text_stage_of_a_vision_language_claim_recomputes_under_the_court() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v2/pipelines/toy-vlm.json");
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("the VLM vector")).expect("json");
+    let programs: Vec<TirProgramV2> = v["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| TirProgramV2::decode_canonical(&unhex(p["program_borsh_hex"].as_str().unwrap())).unwrap())
+        .collect();
+    let pipeline = TirPipelineV1::decode_canonical(&unhex(v["pipeline_borsh_hex"].as_str().unwrap()), &programs).unwrap();
+    let params = Params(
+        v["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(&programs)
+            .map(|(pj, prog)| {
+                let mut m = MapParams::default();
+                for e in pj["params"].as_array().unwrap() {
+                    let j = e["param"].as_u64().unwrap() as u16;
+                    let decl = &prog.params[j as usize];
+                    let shape: Vec<usize> = decl.shape.iter().map(|d| *d as usize).collect();
+                    let layer = e["layer"].as_u64().map(|l| l as u16);
+                    m.tensors
+                        .insert((j, layer), Tensor::from_le_bytes(decl.dtype, &shape, &unhex(e["le_hex"].as_str().unwrap())).unwrap());
+                }
+                m
+            })
+            .collect(),
+    );
+    let ids = |k: &str| -> Vec<u32> { v["job"][k].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u32).collect() };
+    let img = &v["job"]["images"][0];
+    let (h, w) = (img["h"].as_u64().unwrap() as u32, img["w"].as_u64().unwrap() as u32);
+    let rgb = unhex(img["rgb_hex"].as_str().unwrap());
+    let job = PipelineJob {
+        prompt: ids("prompt"),
+        generated: ids("generated"),
+        images: vec![misaka_palw_tir::pipeline::JobImageV1 { h, w, rgb }],
+        ..PipelineJob::default()
+    };
+    let draw = PalwGenDrawV1 { seed: [0; 32], item_index: 0 };
+    let run = run_pipeline(&pipeline, &programs, &params, &Draws(draw), &job).unwrap();
+    assert_eq!(run.output.data, ints(&v["output"]["data"]), "the vector's logits rows, replayed from the committed ids");
+
+    // The court's view of the job: the prompt and the committed ids, never the pixels.
+    let court_job = PipelineJob { images: vec![], ..job.clone() };
+    let facts = stage_job_facts(&pipeline, &programs, &court_job).unwrap();
+    let image = PalwGenImageRefV1 { input_root: [0; 64], h, w, tile_len: 4 };
+    let answers = palw_gen_stage_answers_v1(&pipeline, &programs, 1, &facts, &[image]).unwrap();
+    assert!(matches!(answers[0], PalwGenInputAnswerV1::Edge { kept: 8, .. }), "the rows: an edge, every lane carried");
+    let lm = &programs[1];
+    let info = validate_v2(lm).unwrap();
+    let stage = &run.stages[1];
+    assert_eq!(stage.tokens, facts[1].tokens, "the committed stream is the job's fact");
+    let mut carriage = MapSourceV2::from_run(lm, &info, &params.0[1], &MapInputs::default(), &stage.tokens, &stage.steps);
+    carriage.inputs.insert((0, None), run.stages[0].steps[0].output.data.clone());
+    for (pos, step) in stage.steps.iter().enumerate() {
+        for c in &step.commits {
+            let ctx = DemandContext { pos: pos as u32, occurrence: commit_occurrence_v2(lm, c.block, c.layer) };
+            let mut inner = carriage.clone();
+            inner.base.nodes.remove(&(ctx, c.node));
+            let mut court = PalwGenStageSourceV1::new(&mut inner, answers.clone(), draw).with_images(vec![image]);
+            let elements: Vec<usize> = (0..c.value.data.len()).collect();
+            let (vals, _) = eval_demanded_v2(
+                lm,
+                &info,
+                &DemandRequest { target: DemandTarget::Node { ctx, node: c.node }, elements: &elements },
+                &mut court,
+                &LIMITS,
+            )
+            .unwrap_or_else(|e| panic!("position {pos} node {}: {e:?}", c.node));
+            assert_eq!(vals, c.value.data, "position {pos} node {}", c.node);
+            assert!(court.violation.is_none());
+            assert!(inner.input_requests.iter().all(|(_, k, _)| *k == 0), "only the edge is carried");
+        }
+    }
 }

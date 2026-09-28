@@ -3,7 +3,10 @@
 //!
 //! `Params::palw_gen_v1` is the one fence under which a class may be a PIPELINE of PALW-TIR version-2
 //! programs (spec [04b](../../../docs/spec/palw/04b-tensor-ir.md) §15) — an image, embedding, audio
-//! or video class (RFC-0003 Part II); text keeps RFC-0001's FP lane. It ships DORMANT: `None` on every
+//! or video class (RFC-0003 Part II), or a text pipeline whose output stage is its language model
+//! (the `Text` profile, §II.2.1; with image slots, a vision-language class). Text jobs keep RFC-0001's
+//! FP lane: a text pipeline's job is FP Job V4, and a vision-language class's the image-carrying FP
+//! Job V5, which that lane builds. It ships DORMANT: `None` on every
 //! preset and in no testnet-12 flag-day list, hashed Some-only into `consensus_params_id` and
 //! `consensus_schedule_id`, collapsed whole from `Some(never())` by the identity's normaliser, its
 //! activation alone visited by `for_each_fence` — `palw_tir_v1`'s shape exactly
@@ -93,11 +96,20 @@ pub enum PalwGenProfileV1 {
     Embedding = 2,
     Audio = 3,
     Video = 4,
+    /// **A text pipeline** (RFC-0003 §II.2.1): its output stage is the text stage, a `Logits`
+    /// program over the text job's stream; with image slots, a vision-language class. Its output is
+    /// the committed generated ids, with no output root.
+    Text = 5,
 }
 
 impl PalwGenProfileV1 {
-    pub const ALL: [PalwGenProfileV1; 4] =
-        [PalwGenProfileV1::Image, PalwGenProfileV1::Embedding, PalwGenProfileV1::Audio, PalwGenProfileV1::Video];
+    pub const ALL: [PalwGenProfileV1; 5] = [
+        PalwGenProfileV1::Image,
+        PalwGenProfileV1::Embedding,
+        PalwGenProfileV1::Audio,
+        PalwGenProfileV1::Video,
+        PalwGenProfileV1::Text,
+    ];
 
     pub fn from_tag(tag: u8) -> Option<Self> {
         Self::ALL.iter().copied().find(|p| *p as u8 == tag)
@@ -110,6 +122,7 @@ impl PalwGenProfileV1 {
             PalwGenProfileV1::Embedding => misaka_palw_gen::OutputKindV1::EmbeddingI32,
             PalwGenProfileV1::Audio => misaka_palw_gen::OutputKindV1::PcmI16,
             PalwGenProfileV1::Video => misaka_palw_gen::OutputKindV1::VideoRgb8,
+            PalwGenProfileV1::Text => misaka_palw_gen::OutputKindV1::Tokens,
         }
     }
 }
@@ -209,6 +222,7 @@ pub struct PalwGenCeilingsV1 {
     pub embedding: PalwGenProfileCeilingsV1,
     pub audio: PalwGenProfileCeilingsV1,
     pub video: PalwGenProfileCeilingsV1,
+    pub text: PalwGenProfileCeilingsV1,
 }
 
 impl PalwGenCeilingsV1 {
@@ -218,6 +232,7 @@ impl PalwGenCeilingsV1 {
             PalwGenProfileV1::Embedding => &self.embedding,
             PalwGenProfileV1::Audio => &self.audio,
             PalwGenProfileV1::Video => &self.video,
+            PalwGenProfileV1::Text => &self.text,
         }
     }
 
@@ -256,6 +271,7 @@ pub const PALW_DRILL_GEN_CEILINGS_V1: PalwGenCeilingsV1 = PalwGenCeilingsV1 {
     embedding: PALW_DRILL_GEN_PROFILE_CEILINGS_V1,
     audio: PALW_DRILL_GEN_PROFILE_CEILINGS_V1,
     video: PALW_DRILL_GEN_PROFILE_CEILINGS_V1,
+    text: PALW_DRILL_GEN_PROFILE_CEILINGS_V1,
 };
 
 /// **`Params::palw_gen_v1`'s value**: the fence and what it carries.
