@@ -152,7 +152,12 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             "policy": { "headroom16": policy.headroom16, "headroom32": policy.headroom32, "headroom_resid": policy.headroom_resid },
             "calibration": calib_src,
         });
-        digest = Some(artifact::write(p, &prep.lowered.program, &mat.params, [0u8; 64], meta).map_err(|e| e.to_string())?);
+        // The checkpoint's tokenizer.json binds the artifact to its tokenizer (zero when absent).
+        let tokenizer_id = match std::fs::read(a.model.join("tokenizer.json")) {
+            Ok(bytes) => artifact::tokenizer_id_of(&bytes),
+            Err(_) => [0u8; 64],
+        };
+        digest = Some(artifact::write(p, &prep.lowered.program, &mat.params, tokenizer_id, meta).map_err(|e| e.to_string())?);
     }
     log(format!("float reference on {} sequences", eval.len()));
     let fl = fidelity::float_logits(&prep.hl, &loader, &eval, &progress("float")).map_err(|e| e.to_string())?;

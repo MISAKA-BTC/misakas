@@ -227,6 +227,21 @@ mod tests {
     }
 
     #[test]
+    fn the_lowerer_binds_the_tokenizer_commitment_base0_binds() {
+        // One rule in two crates (the lowerer does not depend on base0): the same key, the same id.
+        assert_eq!(
+            misaka_palw_tir_lower::artifact::TOKENIZER_COMMITMENT_DOMAIN_V1,
+            misaka_palw_base0::artifact::PALW_BASE0_TOKENIZER_DOMAIN
+        );
+        for bytes in [&b""[..], b"{\"model\":{\"type\":\"BPE\"}}", &[7u8; 4099][..]] {
+            assert_eq!(
+                &misaka_palw_tir_lower::artifact::tokenizer_id_of(bytes)[..],
+                Base0ArtifactV1::tokenizer_commitment_of(bytes).as_byte_slice()
+            );
+        }
+    }
+
+    #[test]
     fn a_declared_layout_gives_the_class_id_a_registration_must_carry() {
         let path = converted("layout");
         let c = PalwTirContainerV1::open(&path).expect("opens");
