@@ -1,6 +1,8 @@
 //! Shared helpers of the integration tests: golden-vector JSON (04b §12) into this crate's types.
 #![allow(dead_code)]
 
+pub mod bridge;
+
 use std::path::PathBuf;
 
 use misaka_palw_tir_ref2::{DType, Tensor};
