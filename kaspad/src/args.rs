@@ -344,6 +344,13 @@ pub struct Args {
     /// only, like the salt.
     #[serde(skip)]
     pub palw_drill_tir_at: Option<u64>,
+    /// **DRILL ONLY: arm testnet-12's second IR fence (`palw_tir_fence2`) at this DAA** — with the salt,
+    /// `palw_tir_fence2` (the consensus half of the fixes after the DAA-2,000 release: ref2's H7 TopK row,
+    /// the IR DA unit `TirStepLeaf`, ...) is armed at this height on the drill chain, after the first IR
+    /// fence (`config::drill::palw_drill_tir_fence2_at_v1`; the ruleset refuses it below `palw_tir_v1`, so
+    /// combine it with `--palw-drill-tir-at`). Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_tir2_at: Option<u64>,
     /// **Run the IR fused kernels** (RFC-0002 §7, Phase G): every IR backend this node builds runs
     /// the regions its plan matched fused. Node software in no consensus object, byte-identical to the
     /// generic kernels; OFF by default, and kept off until the D-F drills pass with it on.
@@ -568,6 +575,7 @@ impl Default for Args {
             palw_drill_fence2_at: None,
             palw_drill_fence3_at: None,
             palw_drill_tir_at: None,
+            palw_drill_tir2_at: None,
             palw_tir_fused_kernels: false,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
@@ -732,6 +740,12 @@ impl Args {
         if let Some(at) = self.palw_drill_tir_at {
             let moves = kaspa_consensus_core::config::drill::palw_drill_tir_fence_at_v1(&mut config.params, at)
                 .unwrap_or_else(|e| panic!("--palw-drill-tir-at: {e} (validate_args refuses this first)"));
+            config.palw_drill_fence_moves.extend(moves);
+        }
+        // **And the second IR fence** (`--palw-drill-tir2-at`, `palw_tir_fence2`), after the first.
+        if let Some(at) = self.palw_drill_tir2_at {
+            let moves = kaspa_consensus_core::config::drill::palw_drill_tir_fence2_at_v1(&mut config.params, at)
+                .unwrap_or_else(|e| panic!("--palw-drill-tir2-at: {e} (validate_args refuses this first)"));
             config.palw_drill_fence_moves.extend(moves);
         }
 
@@ -1556,6 +1570,17 @@ pub fn cli() -> Command {
                      drill chain, after the flag days, so a drill registers and serves an IR class with the shipping binary. \
                      Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and below the fence's \
                      prerequisites (palw_kary_court and palw_rcore_plus in force).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-tir2-at")
+                .long("palw-drill-tir2-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm testnet-12's second IR fence (palw_tir_fence2 — the consensus \
+                     half of the fixes after the DAA-2,000 release) at this DAA on the drill chain, after --palw-drill-tir-at. \
+                     Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and below palw_tir_v1.",
                 ),
         )
         .arg(
@@ -2490,6 +2515,7 @@ impl Args {
             palw_drill_fence2_at: m.get_one::<u64>("palw-drill-fence2-at").copied(),
             palw_drill_fence3_at: m.get_one::<u64>("palw-drill-fence3-at").copied(),
             palw_drill_tir_at: m.get_one::<u64>("palw-drill-tir-at").copied(),
+            palw_drill_tir2_at: m.get_one::<u64>("palw-drill-tir2-at").copied(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
