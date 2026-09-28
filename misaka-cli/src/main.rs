@@ -1122,10 +1122,6 @@ enum PalwCmd {
         #[arg(long, requires = "material_out")]
         dsl_payload: Option<std::path::PathBuf>,
     },
-    /// Submit a PALW lifecycle object written by `palw-certify` — the ADR-0075 certification
-    /// objects `FamilyCertified` (a family's drill evidence, graded on chain) and
-    /// `ClassLaneCertified` (a class bound to a chain-certified family) — funded from this key.
-    /// Nothing signs: the court grades the evidence and the fee is the rent. Dry-run unless --yes.
     /// **Write a signed IR class registration** (RFC-0002 Phase F: `ClassRegisteredTirV1`) for a
     /// PALWTIR1 artifact with a declared layout (`palw-class declare-layout`), at the connected
     /// chain's live pricing (`getPalwRegistrationTerms`), weightless, the registrant bond named by
@@ -1150,6 +1146,10 @@ enum PalwCmd {
         #[arg(long)]
         model_id: Option<String>,
     },
+    /// Submit a PALW lifecycle object written by `palw-certify` — the ADR-0075 certification
+    /// objects `FamilyCertified` (a family's drill evidence, graded on chain) and
+    /// `ClassLaneCertified` (a class bound to a chain-certified family) — funded from this key.
+    /// Nothing signs: the court grades the evidence and the fee is the rent. Dry-run unless --yes.
     SubmitObject {
         #[command(flatten)]
         key: KeyArgs,
