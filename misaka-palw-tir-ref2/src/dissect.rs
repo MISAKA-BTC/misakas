@@ -480,8 +480,23 @@ pub fn obligations(p: &Program, b: usize, n: u16) -> Vec<Obligation> {
             Prim::Gather { .. } if carries_h(&ty(i, &node.inputs[1])) && dep(&node.inputs[0]) => {
                 out.push(Obligation::DataDependentRead { node: i });
             }
-            Prim::Select if carries_h(&ty(i, &node.inputs[0])) && (dep(&node.inputs[1]) || dep(&node.inputs[2])) => {
-                out.push(Obligation::DataDependentRead { node: i });
+            Prim::Select if carries_h(&ty(i, &node.inputs[0])) => {
+                // A value operand the condition reads itself at the same element is exempt: the
+                // condition a Compare of the Select's shape with that operand — of the same shape —
+                // as a direct input (the shifted softmax's clamp-by-select).
+                let exempt = |v: &Ref| match node.inputs[0] {
+                    Ref::Node(c) => {
+                        let cn = &block.nodes[c as usize];
+                        matches!(cn.prim, Prim::Compare { .. })
+                            && cn.out.shape == node.out.shape
+                            && cn.inputs.contains(v)
+                            && ty(i, v).shape == node.out.shape
+                    }
+                    _ => false,
+                };
+                if (dep(&node.inputs[1]) && !exempt(&node.inputs[1])) || (dep(&node.inputs[2]) && !exempt(&node.inputs[2])) {
+                    out.push(Obligation::DataDependentRead { node: i });
+                }
             }
             _ => {}
         }

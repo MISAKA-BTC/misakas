@@ -72,6 +72,8 @@ struct Attn {
     commit_m: bool,
     extra: bool,
     select_o2: bool,
+    /// O-2's exemption: `select(x − m < floor, floor, x − m)` before the exponent.
+    select_exempt: bool,
     many: usize,
 }
 
@@ -111,6 +113,13 @@ fn attn_program(rng: &mut R, a: &Attn) -> Program {
     let sc = b.node(lay, Prim::MatMul, &[Ref::Node(q3), Ref::Node(kt)], ty(DType::I32, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
     let m = b.node(lay, Prim::ReduceMax { axis: 2 }, &[Ref::Node(sc)], fixed(DType::I32, &[a.nh, 1, 1]), a.commit_m);
     let diff = b.node(lay, Prim::Sub, &[Ref::Node(sc), Ref::Node(m)], ty(DType::I64, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
+    let diff = if a.select_exempt {
+        let floor = b.konst(DType::I64, &[1], &[-(1i128 << 22)]);
+        let cmp = b.node(lay, Prim::Compare { cmp: ref2::Cmp::Lt }, &[Ref::Node(diff), Ref::Const(floor)], ty(DType::I8, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
+        b.node(lay, Prim::Select, &[Ref::Node(cmp), Ref::Const(floor), Ref::Node(diff)], ty(DType::I64, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false)
+    } else {
+        diff
+    };
     let e = b.node(lay, Prim::IntExp, &[Ref::Node(diff)], ty(DType::I32, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
     let e_used = if a.select_o2 {
         // O-2: a Select whose condition carries H, with a value operand that depends on m.
@@ -414,7 +423,7 @@ fn dummy_carriage(pp: &Prepared) -> cc::palw_tir_court_v1::PalwTirConeRefutation
         output_opening: cc::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: h, siblings: vec![] },
         output_preimage: cc::palw_step_leg::PalwStepTileLeafV1 { version: 1, coord, value_count: 0, values_le: vec![] },
         operands: cc::palw_step_refute::PalwStepInputRowV1 { preimages: vec![], run_siblings: vec![] },
-        params: vec![],
+        params: None,
         prompt_token_ids: vec![],
         prompt_ids_openings: vec![],
         decode_tokens: None,
@@ -890,6 +899,7 @@ fn attention_long_h() {
             commit_m: rng.gen_bool(0.3),
             extra: rng.gen_bool(0.4),
             select_o2: false,
+            select_exempt: rng.gen_bool(0.3),
             many: 1,
         };
         let prog = attn_program(&mut rng, &a);
@@ -956,6 +966,7 @@ fn cone_functions() {
                 commit_m: rng.gen_bool(0.5),
                 extra: rng.gen_bool(0.5),
                 select_o2: rng.gen_bool(0.5),
+                select_exempt: rng.gen_bool(0.5),
                 many: if rng.gen_bool(0.3) { rng.gen_range(14..=18) } else { 1 },
             };
             progs.push((format!("attn {seed}"), attn_program(&mut rng, &a)));
@@ -1000,7 +1011,7 @@ fn cone_functions() {
                 if !mine_r.is_empty() {
                     for tile_len in [1u32, 3, 64] {
                         let mv = value_bound(&prog, b, n16, tile_len as u64);
-                        let fv = catch_any(|| cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(fb, n16, tile_len));
+                        let fv = catch_any(|| cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, fb, n16, tile_len));
                         if Ok(mv) != fv {
                             // Finding H2: the first implementation's V falls below the text's formula
                             // (and below the real closure: `value_bound_against_closures`).
@@ -1110,7 +1121,7 @@ fn h1_empty_list_probe() {
 #[test]
 fn range_request_refusals() {
     let mut rng = R::seed_from_u64(0x9A9E);
-    let a = Attn { nh: 1, dh: 2, window: 16, layers: 1, commit_m: false, extra: false, select_o2: false, many: 1 };
+    let a = Attn { nh: 1, dh: 2, window: 16, layers: 1, commit_m: false, extra: false, select_o2: false, select_exempt: false, many: 1 };
     let prog = attn_program(&mut rng, &a);
     let pp = prepare(&prog).unwrap();
     let tokens: Vec<u64> = (0..6).map(|i| i % 16).collect();
@@ -1168,7 +1179,7 @@ fn investigate_value_bound() {
         println!(
             "tile_len {tl}: ref2 V {} first V {:?}; reductions {:?}",
             value_bound(&p, blk, node, tl),
-            cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp.blocks[blk], node, tl as u32),
+            cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, &fp.blocks[blk], node, tl as u32),
             ref2::dissect::cone_reductions(&p, blk, node)
         );
     }
@@ -1179,6 +1190,8 @@ fn investigate_value_bound() {
 #[ignore]
 fn value_bound_against_closures() {
     let mut rows = Vec::new();
+    let mut h7 = Vec::new();
+    let mut checked_v = 0usize;
     for seed in 0..(300 * scale() as u64) {
         let mut rng = R::seed_from_u64(0xC0FE_0000 + seed);
         let g = gen_program(&mut rng, GenCfg { range_safe: true, max_nodes: 30, ..GenCfg::default() });
@@ -1194,10 +1207,8 @@ fn value_bound_against_closures() {
                 }
                 for tl in [1u64, 3, 64] {
                     let mv = value_bound(p, b, n as u16, tl);
-                    let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp.blocks[b], n as u16, tl as u32);
-                    if mv == fv {
-                        continue;
-                    }
+                    let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, &fp.blocks[b], n as u16, tl as u32);
+                    checked_v += 1;
                     // The real closures: every tile of this commit point at the last position of a run.
                     let occs = occurrences(p);
                     let Some(o) = occs.iter().position(|&(bb, _)| bb == b) else { continue };
@@ -1222,14 +1233,26 @@ fn value_bound_against_closures() {
                         }
                         start += tl;
                     }
-                    rows.push(format!("seed {seed} b{b} n{n} tile_len {tl}: ref2 V {mv}, first V {fv}, the largest real closure {worst}"));
+                    if mv != fv {
+                        rows.push(format!("seed {seed} b{b} n{n} tile_len {tl}: ref2 V {mv}, first V {fv}, the largest real closure {worst}"));
+                    } else if (mv as usize) < worst {
+                        // Finding H7: both follow the text, and the text's V (the TopK row of the
+                        // box demand) falls below a real closure.
+                        h7.push(format!("seed {seed} b{b} n{n} tile_len {tl}: V {mv} (both), the largest real closure {worst}"));
+                    }
                 }
             }
         }
     }
-    for r in &rows {
+    println!(
+        "value bound against the real closures: {checked_v} (commit point, tile_len) pairs; V differs between the implementations in {}; V (equal in both) below a real closure in {} (H7)",
+        rows.len(),
+        h7.len()
+    );
+    for r in rows.iter().chain(h7.iter().take(6)) {
         println!("{r}");
     }
+    assert!(rows.is_empty());
 }
 
 /// The value bound on the corpus programs and the Qwen2.5-1.5B-shaped decoder.
@@ -1253,7 +1276,7 @@ fn value_bound_on_the_corpus() {
                 }
                 for tl in [64u64, 256] {
                     let mv = value_bound(p, b, n as u16, tl);
-                    let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp.blocks[b], n as u16, tl as u32);
+                    let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, &fp.blocks[b], n as u16, tl as u32);
                     let obl = obligations(p, b, n as u16);
                     let fo = cc::palw_tir_dissect_v1::palw_tir_dissect_obligations_v1(&fp.blocks[b], n as u16);
                     rows.push(format!("b{b} n{n} tile_len {tl}: V ref2 {mv} first {fv}; obligations ref2 {obl:?} first {fo:?}"));
