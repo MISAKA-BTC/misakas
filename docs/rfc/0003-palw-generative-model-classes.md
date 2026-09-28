@@ -1247,9 +1247,10 @@ list a `PipelineJob` has.
 - **The binding.** `TokenSource::Source` (tag 2; `Prompt` 0 and `Negative` 1 unchanged) is the job's
   source ids. Any `TokenRule` reads it as it reads the prompt: a stage's token run, `JobTokens`,
   `JobTokenCount`. `PipelineJob` gains `source`. A pipeline that names no source encodes as before.
-- **The class offer.** `max_source_tokens` (0 when no rule reads the source). Every rule that reads
-  the source must hold the longest offered source and its template (the prompt's check). The class id
-  covers it.
+- **The class offer.** `max_source_tokens`: 0 exactly when no rule reads the source (a class that
+  reads one offers one), and only a text class offers one (the V5 job carries it). Every rule that
+  reads the source must hold the longest offered source and its template (the prompt's check). The
+  class id covers it, and `source_token_floor` (below).
 - **The V5 job field [RFC-0001].** `source: Option<{ token_ids_hash, tokens }>`, after `images`:
   `le16(8) ‖ borsh(v4)[2..] ‖ borsh(images) ‖ borsh(source)`. The ids travel as the prompt's do
   (`PublicDa` or `PanelDa`), bound by `token_ids_hash` in the network's prompt-id form. **One
@@ -1260,9 +1261,16 @@ list a `PipelineJob` has.
 - **The court.** A close carries the source ids whole exactly when the disputed stage reads them (the
   prompt's carriage rule, §II.2.1); a dispute elsewhere reveals nothing of the source.
 - **Price — recommendation, pending user confirmation (open question 15, with open question 13).**
-  Source tokens are priced as prompt tokens: a V5 job is charged `source.tokens` prompt tokens more,
-  at the job's per-token price (the encoder's work per source token is prefill work). Built as a pure
-  function; nothing in the lane reads it until the user confirms.
+  Source tokens are priced as prompt tokens, one per id, at the job's per-token price, **and never
+  below the class's `source_token_floor`**. The floor is there because the lowered encoders run one
+  position over the padded source axis: their work is the whole width whatever the source's length,
+  so a short source charged per id would carry most of the encoder free. The registrant declares the
+  floor and the preflight holds it at or above `⌈admitted source work / per-token work⌉`, the image
+  slot's rule (open question 13): every stage but the text stage is input work, split evenly over
+  the inputs it depends on, images and the source alike, and a text-class stage that depends on
+  neither is refused (prefill no rule prices). A job is charged `max(source.tokens,
+  source_token_floor)` prompt tokens for its source. Built as a pure function; nothing in the lane
+  reads it until the user confirms.
 
 **(b) The forced decoder prefix, declared per class.** A sequence-to-sequence decoder starts from
 fixed ids: `decoder_start_token_id`, and for mBART-50 the target language (`forced_bos_token_id`). The
@@ -1286,7 +1294,10 @@ unchanged. The class fixes the head:
 **Order of implementation for this path.** The IR's `TokenSource::Source`; the class offer and the
 preflight; the V5 field, its acceptance and the lane's version-8 tail; the prefix's checks; the
 carriage of source ids in a close; the worker, seat and capture; a conformance test on the lowered
-encoder–decoders once their vectors are exported.
+encoder–decoders once their vectors are exported. Built dormant on `rfc3/fp-v5` (2026-09-29) through
+the worker, seat and capture, with the golden toy encoder–decoder
+(`consensus-vectors/tir-v2/pipelines/toy-encdec.json`) as its vector; the conformance test on the
+lowered models waits for their vectors.
 
 ## II.3 Embedding / encoder
 
@@ -1611,7 +1622,8 @@ A new chapter `spec/palw/04c-generative-classes.md`, plus additions to 04b. Appl
     that reads a source takes V5 only as well.
 15. **The price of a V5 job's source tokens** (§II.2.2) [RFC-0001]. Recommendation, **pending user
     confirmation** alongside 13: source tokens are priced as prompt tokens, at the job's per-token
-    price.
+    price, never below the class's `source_token_floor` (at or above `⌈admitted source work /
+    per-token work⌉`: a padded encoder does its whole width for any source).
 
 ## Activation plan and order of implementation
 
@@ -1677,6 +1689,6 @@ naming R's domain 0. Steps 1–8 take about 4–5 calendar months with two or th
 | 12 | privacy | image jobs **default to `PanelDa`**; `PublicDa` stays available when the user chooses it |
 | 13 | V5 image price | **pending user confirmation** — recommendation: prefill-equivalent tokens per slot, floored at `⌈per-image work / per-token work⌉`, at the job's per-token price |
 | 14 | V4 jobs on a class with image slots | **no** (2026-09-29): a class with slots takes V5 only; likewise a class that reads a source (§II.2.2) |
-| 15 | V5 source-token price | **pending user confirmation** — recommendation: priced as prompt tokens, at the job's per-token price |
+| 15 | V5 source-token price | **pending user confirmation** — recommendation: priced as prompt tokens, at the job's per-token price, never below the class's floor `⌈source work / per-token work⌉` |
 
 The rest of the RFC (Parts I and II, the program surface, the activation order) stands as written.
