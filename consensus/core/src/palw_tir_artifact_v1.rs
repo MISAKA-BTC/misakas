@@ -9,7 +9,7 @@
 //! * a row is one axis-0 slice of the tensor (`prod(shape[1..]) · width(dtype)` bytes) when the rank
 //!   is at least 2, and the whole tensor when the rank is 0 or 1 — a per-channel vector (a narrowing's
 //!   `m`, `s` or `z`) is opened whole, as the legacy per-channel tables are (`(0, 9·channels)`);
-//! * a row longer than [`PALW_TIR_ROW_PIECE_BYTES_V1`] (64 KiB) is split into consecutive pieces of
+//! * a row longer than [`PALW_TIR_ROW_PIECE_BYTES_V1`] (32 KiB) is split into consecutive pieces of
 //!   that size, the last one shorter;
 //! * each leaf is the existing artifact leaf ([`artifact_leaf_parts_v1`]) over
 //!   `PalwArtifactOperandV1 { tensor_name: ParamDecl.name, layer, row_start: byte offset of the piece
@@ -31,8 +31,15 @@ use misaka_palw_tir::{Ref, TirProgramV1};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-/// The largest leaf: a row longer than this is split into pieces of this size.
-pub const PALW_TIR_ROW_PIECE_BYTES_V1: u64 = 65_536;
+/// **The largest leaf: a row longer than this is split into pieces of this size.**
+///
+/// 32 KiB, so every leaf of an IR inventory can be opened by a readiness-V2 possession proof, whose
+/// largest openable leaf is `PALW_READINESS_V2_LEAF_MAX_BYTES_V1` (40 KiB): a leaf above that can
+/// never be proved, and a class holding one could never seat. (It was 64 KiB before F3 shipped: a
+/// per-channel vector over a 151,936-token vocabulary would have been such a leaf.) A power of two
+/// under the ceiling, with the ceiling's slack left for the frame.
+pub const PALW_TIR_ROW_PIECE_BYTES_V1: u64 = 32_768;
+const _: () = assert!(PALW_TIR_ROW_PIECE_BYTES_V1 as usize <= crate::palw_model_registry_v1::PALW_READINESS_V2_LEAF_MAX_BYTES_V1);
 
 /// Key of [`palw_tir_graph_ir_root_v1`] (design §2.3).
 pub const PALW_TIR_GRAPH_IR_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/tir/graph-ir-root/v1";
@@ -328,7 +335,7 @@ mod tests {
     use misaka_palw_tir::{DType, TensorType};
     use std::collections::BTreeMap;
 
-    /// A two-layer program whose params cover every row rule: a matrix with rows past 64 KiB, a
+    /// A two-layer program whose params cover every row rule: a matrix with rows past 32 KiB, a
     /// per-layer matrix, a per-layer vector, a scalar, and a param only the second layer kind reads.
     fn program() -> TirProgramV1 {
         let mut pb = ProgramBuilder::new(40_000, HISTORY_BOUND_V1_SMALL);
@@ -409,10 +416,14 @@ mod tests {
         let mut rows = Vec::new();
         palw_tir_visit_inventory_rows_v1(&p, &mut |r| rows.push(r)).expect("rows");
         assert_eq!(rows.len() as u32, palw_tir_inventory_leaf_count_v1(&p).expect("count"));
-        // big.w rows are 80,000 bytes: two pieces, 65,536 then 14,464.
+        // big.w rows are 80,000 bytes: three pieces, 32,768, 32,768 then 14,464.
         let big: Vec<_> = rows.iter().filter(|r| r.param == 1).collect();
-        assert_eq!(big.len(), 6);
-        assert_eq!((big[0].row_start, big[0].len, big[1].row_start, big[1].len), (0, 65_536, 65_536, 14_464));
+        assert_eq!(big.len(), 9);
+        assert_eq!(
+            [(big[0].row_start, big[0].len), (big[1].row_start, big[1].len), (big[2].row_start, big[2].len)],
+            [(0, 32_768), (32_768, 32_768), (65_536, 14_464)]
+        );
+        assert_eq!(big[3].row_start, 80_000, "the second row starts where the first ends");
         // Vectors and scalars are one leaf per instance.
         assert_eq!(rows.iter().filter(|r| r.param == 3).count(), 3);
         assert_eq!(rows.iter().filter(|r| r.param == 5).count(), 1);
