@@ -702,6 +702,7 @@ pub(crate) fn gemma(p: &mut P) -> Result<ArchSpec> {
     let eps = p.cfg.f64_or("rms_norm_eps", 1e-6)?;
     let tied = p.cfg.bool_or("tie_word_embeddings", true)?;
     let bias = p.cfg.bool_or("attention_bias", false)?;
+    p.cfg.forbid("use_bidirectional_attention", "bidirectional attention is not a causal LM")?;
     let rope = p.rope(hd, RopeStyle::Half, Some(10000.0), None, 1.0, Some(max_pos), None)?;
     let norm = NormSpec::rms_1p(eps);
     let layers = (0..n)
@@ -752,6 +753,7 @@ pub(crate) fn gemma2(p: &mut P) -> Result<ArchSpec> {
     let sw = p.cfg.usize_or_null("sliding_window", Some(4096))?;
     let final_cap = p.cfg.f64_or_null("final_logit_softcapping", Some(30.0))?;
     let attn_cap = p.cfg.f64_or_null("attn_logit_softcapping", Some(50.0))?;
+    p.cfg.forbid("use_bidirectional_attention", "bidirectional attention is not a causal LM")?;
     p.cfg.inert(&["cache_implementation"]);
     let types = p.layer_types(n, &["full_attention", "sliding_attention"], |i| if (i + 1) % 2 != 0 { "sliding_attention" } else { "full_attention" })?;
     let rope = p.rope(hd, RopeStyle::Half, Some(10000.0), None, 1.0, Some(max_pos), None)?;
