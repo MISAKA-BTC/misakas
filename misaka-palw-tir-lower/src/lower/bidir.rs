@@ -211,6 +211,8 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
         gdn: BTreeMap::new(),
         ssm: BTreeMap::new(),
         wide: vec![false; n],
+        w16: vec![false; n],
+        w16_now: false,
         suffix,
     };
     let tb = pb.blocks.len() as u8;

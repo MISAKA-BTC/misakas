@@ -503,6 +503,10 @@ struct Lb {
     ssm: BTreeMap<usize, SsmDt>,
     /// Products carried on the `i32` rail into their projection ([`wide_products`]).
     wide: Vec<bool>,
+    /// Projections read at per-row `i16` ([`scan_param_linears`]).
+    w16: Vec<bool>,
+    /// Set by the `Linear` dispatch for the node being lowered: its weights are per-row `i16`.
+    w16_now: bool,
     /// Name suffix for per-layer params whose base name another block already declared.
     suffix: String,
 }
@@ -539,12 +543,15 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
         gdn: BTreeMap::new(),
         ssm: BTreeMap::new(),
         wide: wide_products(blk),
+        w16: scan_param_linears(blk),
+        w16_now: false,
         suffix,
     };
     gdn_patterns(hl, blk, &mut lb)?;
     ssm_patterns(blk, &mut lb)?;
     concat_wants(blk, &mut lb);
     wide_wants(blk, &mut lb);
+    w16_inputs_unsplit(blk, &mut lb);
     let tb = pb.blocks.len() as u8;
     let mut b = pb.block(&blk.name, if blk.role == BlockRole::Pre { vec![] } else { carry_sig });
     for (i, node) in blk.nodes.iter().enumerate() {
@@ -777,6 +784,68 @@ fn wide_products(blk: &hl::Block) -> Vec<bool> {
         .collect()
 }
 
+/// The projections that set a selective scan's step size and `B`/`C` (Mamba's `x_proj` parts and
+/// `dt_proj`, through an optional norm). Their weights are read at per-row `i16`. At `i8` their
+/// rounding is input-correlated: it biases the step size, so each channel's decay rate is slightly
+/// off, and that compounds over a long context. In float, Mamba-370m's `x_proj` alone at per-row
+/// `i8` drifts x5.8 over 4,096 positions; `x_proj` and `dt_proj` at 16 bits give x1.10. The cost is
+/// small: these matrices are thin (15.7 MB at 16 bits on Mamba-370m).
+fn scan_param_linears(blk: &hl::Block) -> Vec<bool> {
+    let mut out = vec![false; blk.nodes.len()];
+    let node_of = |r: hl::Ref| if let hl::Ref::Node(j, 0) = r { Some(j as usize) } else { None };
+    let linear_through_norm = |j: usize| -> Option<usize> {
+        match blk.nodes[j].op {
+            Op::Linear { .. } => Some(j),
+            Op::Norm { .. } => node_of(blk.nodes[j].inputs[0]).filter(|k| matches!(blk.nodes[*k].op, Op::Linear { .. })),
+            _ => None,
+        }
+    };
+    for n in &blk.nodes {
+        if !matches!(n.op, Op::SelectiveScan { .. }) {
+            continue;
+        }
+        // The step size: [Clamp] → Softplus → [+ bias] → dt_proj → [norm] → x_proj's dt rows.
+        let mut at = node_of(n.inputs[1]);
+        while let Some(j) = at {
+            match blk.nodes[j].op {
+                Op::Clamp { .. } | Op::Act(Act::Softplus) | Op::Add => at = node_of(blk.nodes[j].inputs[0]),
+                Op::Linear { .. } => {
+                    out[j] = true;
+                    if let Some(k) = node_of(blk.nodes[j].inputs[0]).and_then(linear_through_norm) {
+                        out[k] = true;
+                    }
+                    break;
+                }
+                _ => break,
+            }
+        }
+        for r in [n.inputs[2], n.inputs[3]] {
+            if let Some(k) = node_of(r).and_then(linear_through_norm) {
+                out[k] = true;
+            }
+        }
+    }
+    out
+}
+
+/// An `i16`-weight projection reads its input unsplit: the outlier split's high-precision columns
+/// exist for `i8` weights (a value read only by such projections keeps one scale).
+fn w16_inputs_unsplit(blk: &hl::Block, lb: &mut Lb) {
+    let mut readers: Vec<Vec<usize>> = vec![Vec::new(); blk.nodes.len()];
+    for (i, n) in blk.nodes.iter().enumerate() {
+        for r in &n.inputs {
+            if let hl::Ref::Node(j, _) = r {
+                readers[*j as usize].push(i);
+            }
+        }
+    }
+    for j in 0..blk.nodes.len() {
+        if lb.split[j] > 0 && !readers[j].is_empty() && readers[j].iter().all(|c| lb.w16[*c]) {
+            lb.split[j] = 0;
+        }
+    }
+}
+
 /// The wide rail's key for site `site`.
 fn wide_key(site: &str) -> ScaleKey {
     ScaleKey::site(vec![site.to_string()], true).times(WIDE_RECURRENT_HEADROOM)
@@ -994,7 +1063,10 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let x = if wide_in { x } else { codes(b, cx, lb, &x)? };
             let w = pidx(node.inputs[1])?;
             let bp = if *bias { Some(pidx(node.inputs[2])?) } else { None };
-            one(lower_linear(b, cx, lb, &x, w, bp, &site, &want)?)
+            lb.w16_now = lb.w16[i];
+            let v = lower_linear(b, cx, lb, &x, w, bp, &site, &want);
+            lb.w16_now = false;
+            one(v?)
         }
         Op::Add | Op::Sub => {
             let a = operand(lb, node.inputs[0])?;
@@ -1461,7 +1533,7 @@ fn lower_linear(
     // too: the wide input gives up the outlier split, whose high-precision weight columns carried
     // most of such an input's energy (Mamba-370m: KL 0.0012 → 0.0041 at `i8`). `i16 × i32` over
     // `inp ≤ 2^16` terms stays inside `i64`.
-    let wide16 = x.dt == DType::I32;
+    let wide16 = x.dt == DType::I32 || lb.w16_now;
     let r = if k == 0 {
         // A head tied to an embedding reads the table's `i16` codes (the same param).
         let rows16 = table || wide16;
