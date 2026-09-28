@@ -7247,6 +7247,9 @@ impl VirtualStateProcessor {
         let mut court_closes_completed = 0usize;
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
         let mut class_registrations_charged = 0usize;
+        // RFC-0002 Phase F: whether this block has handed an IR class registration to the gate
+        // (admission v10) — at most one is (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`).
+        let mut tir_registration_gated = false;
         // ADR-0152 v3.1 addendum §4-bis.3: prompt ids charged for whole-prompt recomputations, and
         // the claims already charged (a claim is charged once per block).
         let mut heavy_prompt_ids_charged = 0u64;
@@ -7298,6 +7301,22 @@ impl VirtualStateProcessor {
             // here, first, and charged nothing either. The gate's own arms and the fold refuse it too.
             if kaspa_consensus_core::palw_state_v2::palw_object_is_tir_v1(&object) && !self.palw_tir_at(point.daa_score) {
                 info!("Block {block}: an IR object was dropped by name below palw_tir_v1, and the block stands (RFC-0002 Phase F)");
+                continue;
+            }
+            // **RFC-0002 Phase F: one IR class registration a block reaches admission v10**
+            // (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`). Sizing an IR program costs every node up to
+            // seconds, so a further `ClassRegisteredTirV1` is dropped by name HERE — before any rent,
+            // slot or fee is read or charged, exactly as the below-fence drop above — and the block
+            // stands. The place is taken by the one handed to the gate (see there), whatever the gate
+            // then decides; one dropped before the gate (unsigned, at a stale target, refused by the
+            // rehearsal, over the slot cap) never took it. The fold refuses a second as its second lock.
+            if tir_registration_gated
+                && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
+            {
+                info!(
+                    "Block {block}: a second IR class registration was dropped by name, and the block stands: one a block reaches \
+                     admission v10 (PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1, RFC-0002 Phase F)"
+                );
                 continue;
             }
             // **ADR-0075 SA-1: a chunk group's opener pays for the SLOT it takes.**
@@ -7810,6 +7829,23 @@ impl VirtualStateProcessor {
                     kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
                 );
                 continue;
+            }
+            // RFC-0002 Phase F: the IR registration handed to the gate takes the block's one place at
+            // admission v10. One the slot accounting above did not see (a network without the
+            // 2026-09-23 audit, or the genesis registrant named) is first put to the gate's own two
+            // O(1) refusals, so a copy nobody signed never takes the place.
+            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }) {
+                if bought_registration.is_none() {
+                    if let Err(why) = self.palw_v2_class_registration_starts_at_the_chains_target(&folded, &object) {
+                        info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
+                        continue;
+                    }
+                    if let Err(why) = self.palw_v2_class_registration_is_signed(&folded, &object) {
+                        info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
+                        continue;
+                    }
+                }
+                tir_registration_gated = true;
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
@@ -11286,10 +11322,11 @@ impl VirtualStateProcessor {
                     }
                 }
                 Obj::FreePromptCommitted { .. } => {}
-                // **RFC-0002 Phase F (tag 61): an IR class registration is dropped by name, and the
-                // block stands.** Below `palw_tir_v1` exactly as an older build skips the payload it
-                // cannot decode (A-2); above it until admission v10 lands (step F6). Never charged a
-                // registration slot: `palw_class_registration_buyer_v1` does not name it.
+                // **RFC-0002 Phase F (tag 61): an IR class registration.** Below `palw_tir_v1` it is
+                // refused by name (the walk drops it first, exactly as an older build skips the payload
+                // it cannot decode, A-2); above it, a bought registration (a slot and the 1 MSK burn)
+                // judged in the legacy arm's order and then by admission v10 — at most one a block
+                // reaches here (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`, the walk's by-name drop).
                 Obj::ClassRegisteredTirV1 { class_id, share_permille, .. } => {
                     if !self.palw_tir_at(point.daa_score) {
                         return Err(format!(
@@ -11328,6 +11365,7 @@ impl VirtualStateProcessor {
                         },
                         prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
                         court,
+                        demand: kaspa_consensus_core::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(&bundle.state, point.daa_score),
                     };
                     // The network's committed certified families and the chain's own, as the legacy
                     // arm reads them (consensus never reads the drilled registry).

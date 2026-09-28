@@ -24,7 +24,7 @@ use crate::prims::{OrderFree, cmp_holds, divide, fit, fit_i};
 use crate::program::{Node, Prim, Program, Ref, StateKind};
 use crate::tensor::{Tensor, count, ravel, unravel};
 use crate::transcendental::{int_exp, int_ln, int_rsqrt, log2_floor};
-use crate::types::DType;
+use crate::types::{DType, Dim};
 use crate::wide::Wide;
 
 /// A context `(p, o)`: a position and an index into the occurrence list of §3.3 (`0` is `pre`,
@@ -229,6 +229,35 @@ fn writer(p: &Program, g: &Geo, j: u16, l: Option<u32>) -> Option<(u32, u16)> {
     p.blocks[b].nodes.iter().position(|n| n.prim == Prim::StateWrite { state: j }).map(|w| (occ, w as u16))
 }
 
+/// Whether block `b` reads (`Ref::State`), writes (`StateWrite`) or appends to (`HistAppend`) state `j`.
+fn block_references(p: &Program, b: usize, j: u16) -> bool {
+    p.blocks[b].nodes.iter().any(|n| {
+        matches!(n.prim, Prim::StateWrite { state } | Prim::HistAppend { state } if state == j) || n.inputs.contains(&Ref::State(j))
+    })
+}
+
+/// §9.5.1: node `i` of block `b` reduces over `H` — a `ReduceSum` or `ReduceMax` whose operand's
+/// declared shape has `H` at its axis, or a `MatMul` whose first operand's declared shape has `H`
+/// last; the operand a `Node` or a `CarryIn` (any other ref has no `H`).
+pub fn reduces_over_h(p: &Program, b: usize, i: usize) -> bool {
+    let block = &p.blocks[b];
+    let node = &block.nodes[i];
+    let operand = |r: &Ref| -> Option<&crate::types::TensorType> {
+        match *r {
+            Ref::Node(j) => block.nodes.get(j as usize).map(|n| &n.out),
+            Ref::CarryIn(k) => block.carry_in.get(k as usize),
+            _ => None,
+        }
+    };
+    match node.prim {
+        Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => {
+            operand(&node.inputs[0]).is_some_and(|t| t.shape.get(axis as usize) == Some(&Dim::H))
+        }
+        Prim::MatMul => operand(&node.inputs[0]).is_some_and(|t| t.shape.last() == Some(&Dim::H)),
+        _ => false,
+    }
+}
+
 /// The request's refusals (§9.4, "refused before anything is read"): every class that applies,
 /// empty when none does.
 pub fn request_refusals(p: &Program, target: &Target, elements: &[u64]) -> BTreeSet<Class> {
@@ -259,9 +288,12 @@ pub fn request_refusals(p: &Program, target: &Target, elements: &[u64]) -> BTree
             }
             match p.states.get(state as usize) {
                 Some(s) if matches!(s.kind, StateKind::Fixed { .. }) => {
+                    // An instance a run holds: a global state's one instance always (normal form
+                    // uses every declared state); a per-layer one only at a layer whose scheduled
+                    // block reads, writes or appends to the state.
                     let has = match (s.per_layer, layer) {
                         (false, None) => true,
-                        (true, Some(l)) => (l as u64) < layers,
+                        (true, Some(l)) => (l as u64) < layers && block_references(p, p.schedule.layers[l as usize] as usize, state),
                         _ => false,
                     };
                     if !has {
@@ -371,6 +403,10 @@ struct Ev<'p, 's> {
     needs: HashSet<SKey>,
     /// The target of a `node` request, which is computed even when committed.
     root: Option<(Ctx, u16)>,
+    /// §9.5.2: nodes of the target's block that are leaves in the target's context.
+    supplied: BTreeSet<u16>,
+    /// §9.5.2: the history range the target reduces over, `[from, to)`.
+    range: Option<(u64, u64)>,
     stack: Vec<Frame>,
 }
 
@@ -411,8 +447,15 @@ impl<'p, 's> Ev<'p, 's> {
             smemo: HashMap::new(),
             needs: HashSet::new(),
             root,
+            supplied: BTreeSet::new(),
+            range: None,
             stack: Vec::new(),
         }
+    }
+
+    /// Whether frame key `k` is the target evaluated over a range.
+    fn ranged(&self, k: &NKey) -> Option<(u64, u64)> {
+        if self.root == Some((k.ctx, k.node)) { self.range } else { None }
     }
 
     /// A failing check: stop, or (exploring) record the class and go on.
@@ -447,7 +490,10 @@ impl<'p, 's> Ev<'p, 's> {
 
     /// §9.4 "Leaves": a commit point, except the target of a `node` request in its context.
     fn is_leaf(&self, k: &NKey) -> bool {
-        self.node_of(k).commit && self.root != Some((k.ctx, k.node))
+        if self.root == Some((k.ctx, k.node)) {
+            return false;
+        }
+        self.node_of(k).commit || (self.root.is_some_and(|(c, _)| c == k.ctx) && self.supplied.contains(&k.node))
     }
 
     /// Element `k.e` of node `k.node` in `k.ctx`: memoized, a leaf, or a frame to push.
@@ -677,6 +723,10 @@ impl<'p, 's> Ev<'p, 's> {
     /// The terms of one computed element (§9.4 "Work"): `K` for a `MatMul`, the reduced extent `n`
     /// for a `ReduceSum`, a `ReduceMax` or a `TopK` row, and 0 otherwise.
     fn terms_of(&self, f: &Frame) -> u64 {
+        if let Some((from, to)) = self.ranged(&f.key) {
+            // §9.5.2: `to − from` terms per computed element of the target.
+            return to - from;
+        }
         match self.node_of(&f.key).prim {
             Prim::MatMul => *f.shapes[0].last().unwrap(),
             Prim::ReduceSum { axis } | Prim::ReduceMax { axis } | Prim::TopK { axis, .. } => f.shapes[0][axis as usize],
@@ -807,11 +857,12 @@ impl<'p, 's> Ev<'p, 's> {
             }
             Prim::MatMul => {
                 let (sa, sb) = (&f.shapes[0], &f.shapes[1]);
-                let kk = sa[sa.len() - 1] as usize;
+                let (from, to) = self.ranged(&f.key).unwrap_or((0, sa[sa.len() - 1]));
+                let kk = (to - from) as usize;
                 if s >= 2 * kk {
                     return Next::Done;
                 }
-                let t = (s / 2) as u64;
+                let t = from + (s / 2) as u64;
                 let r = o.len();
                 let beta = &o[..r - 2];
                 let (row, col) = (o[r - 2], o[r - 1]);
@@ -828,11 +879,12 @@ impl<'p, 's> Ev<'p, 's> {
             }
             Prim::ReduceSum { axis } | Prim::ReduceMax { axis } | Prim::TopK { axis, .. } => {
                 let a = *axis as usize;
-                if s as u64 >= f.shapes[0][a] {
+                let (from, to) = self.ranged(&f.key).unwrap_or((0, f.shapes[0][a]));
+                if s as u64 >= to - from {
                     return Next::Done;
                 }
                 let mut j = o.clone();
-                j[a] = s as u64;
+                j[a] = from + s as u64;
                 rd(0, ravel(&j, &f.shapes[0]))
             }
             Prim::HistAppend { .. } => {
@@ -1020,11 +1072,18 @@ impl<'p, 's> Ev<'p, 's> {
                 (self.node_elem(k)?, Some(k))
             }
             Target::StateAfter { pos, state, layer } => match writer(self.p, &self.g, state, layer) {
-                // reading: a committed writer is a leaf here, checked against the node's dtype only
-                // (the text states `[lo, hi]` for the replay, not for this target).
+                // The writer's element, a leaf if committed, which must lie in [lo, hi] (else
+                // Operand) as every Fixed value the evaluation reads does (§9.4, since 827187f34).
                 Some((wocc, wnode)) => {
                     let k = NKey { ctx: Ctx { pos, occ: wocc }, node: wnode, e };
-                    (self.node_elem(k)?, Some(k))
+                    let g = match self.node_elem(k)? {
+                        Got::Val(v) => {
+                            let StateKind::Fixed { lo, hi } = self.p.states[state as usize].kind else { unreachable!() };
+                            if (lo as i128..=hi as i128).contains(&v) { Got::Val(v) } else { self.fail(Class::Operand)? }
+                        }
+                        other => other,
+                    };
+                    (g, Some(k))
                 }
                 None => (self.carried(SKey { pos, state, layer, i: e })?, None),
             },
@@ -1104,4 +1163,62 @@ pub fn demand_outcomes(
         set.insert(DemandError::WorkLimit);
     }
     if set.is_empty() { Ok((out.into_iter().map(|v| v.expect("no failure")).collect(), ev.work)) } else { Err(set) }
+}
+
+/// §9.5.2's refusals of a range request before anything is read: §9.4's for `node(p, o, target)`,
+/// then — reading: a supplied index that is the target or no node of the block is `Malformed`, as
+/// §9.2's environment malformations are — and, with a range, the target must reduce over `H` and
+/// `0 ≤ from < to ≤ H` (else `Malformed`).
+pub fn range_refusals(p: &Program, ctx: Ctx, target: u16, elements: &[u64], supplied: &[u16], range: Option<(u64, u64)>) -> BTreeSet<Class> {
+    let mut out = request_refusals(p, &Target::Node { ctx, node: target }, elements);
+    if ctx.occ as usize >= p.schedule.layers.len() + 2 {
+        return out;
+    }
+    let g = Geo::new(p);
+    let b = g.block(ctx);
+    let n = p.blocks[b].nodes.len();
+    if (target as usize) >= n {
+        return out;
+    }
+    if supplied.iter().any(|&s| s == target || s as usize >= n) {
+        out.insert(Class::Malformed);
+    }
+    if let Some((from, to)) = range
+        && (!reduces_over_h(p, b, target as usize) || from >= to || to > g.h(ctx))
+    {
+        out.insert(Class::Malformed);
+    }
+    out
+}
+
+/// §9.5.2 `eval_range(ctx, target, elements, supplied, range)`: §9.4's `eval_demanded` of
+/// `node(p, o, target)` with the supplied nodes leaves in the target's context, and the target
+/// reducing over the history indices `[from, to)` only.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_range(
+    p: &Program,
+    ctx: Ctx,
+    target: u16,
+    elements: &[u64],
+    supplied: &[u16],
+    range: Option<(u64, u64)>,
+    source: &mut dyn Source,
+    limits: Limits,
+) -> Result<(Vec<i128>, Work), DemandError> {
+    if let Some(&c) = range_refusals(p, ctx, target, elements, supplied, range).iter().next() {
+        return Err(DemandError::Class(c));
+    }
+    let t = Target::Node { ctx, node: target };
+    let mut ev = Ev::new(p, source, limits, false, &t);
+    ev.supplied = supplied.iter().copied().collect();
+    ev.range = range;
+    let mut out = Vec::with_capacity(elements.len());
+    for &e in elements {
+        match ev.root(&t, e) {
+            Ok(Some(v)) => out.push(v),
+            Ok(None) => unreachable!("a failure stops the evaluation"),
+            Err(s) => return Err(stop(s)),
+        }
+    }
+    Ok((out, ev.work))
 }

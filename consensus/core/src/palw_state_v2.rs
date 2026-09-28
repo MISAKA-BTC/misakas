@@ -1519,6 +1519,11 @@ pub struct PalwStateParamsV2 {
     /// `floor_refusal_retry_from_daa`'s reason, and `validate_palw_v2` refuses a copy that disagrees.
     #[borsh(skip)]
     tir_from_daa: Option<u64>,
+    /// **RFC-0002 Phase F: `Params::palw_tir_fence2`'s height**, mirrored by
+    /// `Params::sync_palw_tir_fence2` for `tir_from_daa`'s reason (the fold reads the credited work,
+    /// the admission rules and the DA court's IR unit from it). `None` on every shipped preset.
+    #[borsh(skip)]
+    tir_fence2_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1725,6 +1730,7 @@ impl PalwStateParamsV2 {
             final_lock_life_from_daa: None,
             floor_refusal_retry_from_daa: None,
             tir_from_daa: None,
+            tir_fence2_from_daa: None,
         })
     }
 
@@ -1901,6 +1907,23 @@ impl PalwStateParamsV2 {
     /// **Is `palw_tir_v1` in force at `daa_score`?** `false` on every shipped preset.
     pub fn tir_active_at(&self, daa_score: u64) -> bool {
         self.tir_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0002 Phase F: the second IR fence's mirror** — written by `Params::sync_palw_tir_fence2`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_tir_fence2_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.tir_fence2_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_tir_fence2`'s height, if the network arms it (the mirror).
+    pub fn tir_fence2_from_daa(&self) -> Option<u64> {
+        self.tir_fence2_from_daa
+    }
+
+    /// **Is the second IR fence in force at `daa_score`?** `false` on every shipped preset.
+    pub fn tir_fence2_active_at(&self, daa_score: u64) -> bool {
+        self.tir_fence2_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -7558,6 +7581,14 @@ pub const PALW_CERTIFICATION_MAX_PER_BLOCK: usize = 2;
 /// folded. Four is one registration per model tier the network carries today plus the floor.
 pub const PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1: usize = 4;
 
+/// **RFC-0002 Phase F: at most ONE IR class registration (tag 61) a block reaches admission v10.**
+/// Sizing an IR program (`tir_admit_v1` under its work cap) costs up to seconds of every node's time,
+/// so four a block — the registration cap above — would be a validation DoS. The acceptance walk
+/// DROPS a further `ClassRegisteredTirV1` by name, first, with the block standing (before any rent,
+/// slot or fee is read), exactly as it drops one below `palw_tir_v1`; the fold holds the same number
+/// as its second lock (`TirRegistrationsPerBlockExceeded`). Counted within the four above.
+pub const PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1: usize = 1;
+
 /// **2026-09-24 DoS audit #12 (b): what a bought class registration destroys** — 1 MSK
 /// (`SOMPI_PER_KASPA` sompi), the user's decision; past `palw_audit_2026_09_23` only.
 ///
@@ -9291,6 +9322,10 @@ pub enum PalwStateV2Error {
     /// until admission v10 lands above it. The acceptance walk drops it first; this is the second lock.
     #[error("an IR class registration (tag 61) is refused: {0}")]
     TirRegistrationRefused(&'static str),
+    /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
+    /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
+    #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
+    TirRegistrationsPerBlockExceeded { class: Hash64, max: usize },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -16169,6 +16204,9 @@ struct TransitionBuilder<'a> {
     /// against [`PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`]. Not state: one builder is one block's
     /// fold, and the count is the block's.
     class_registrations: usize,
+    /// **IR class registrations (tag 61) this builder has folded** (RFC-0002 Phase F), against
+    /// [`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]. Not state: one builder is one block's fold.
+    tir_registrations: usize,
     /// **Prompt ids this builder has recomputed whole for `PromptNotAnchored { Whole }`** (ADR-0152
     /// v3.1 addendum §4-bis.3), charged BEFORE the adjudicator runs, against
     /// [`crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1`]. The processor's
@@ -16595,6 +16633,7 @@ impl<'a> TransitionBuilder<'a> {
             own_attempt_fit: false,
             room_exempt_class: None,
             class_registrations: 0,
+            tir_registrations: 0,
             heavy_prompt_ids_charged: 0,
             heavy_prompt_claims: BTreeSet::new(),
         }
@@ -31100,6 +31139,14 @@ fn apply_object(
             activation_daa,
             admission,
         } => {
+            // One a block: the acceptance walk drops a second by name first; the second lock.
+            if builder.tir_registrations >= PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1 {
+                return Err(PalwStateV2Error::TirRegistrationsPerBlockExceeded {
+                    class: *class_id,
+                    max: PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1,
+                });
+            }
+            builder.tir_registrations += 1;
             let (record, program) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&admission.class, artifact_root)
                 .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?;
             if record.facts.class_id != *class_id {

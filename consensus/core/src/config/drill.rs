@@ -622,6 +622,16 @@ pub fn palw_drill_tir_fence_at_v1(params: &mut crate::config::params::Params, at
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_TIR_V1)
 }
 
+/// **A drill crosses the second IR flag day at a low height** (`--palw-drill-tir2-at`) —
+/// [`palw_drill_post_launch_fences_at_v1`] for
+/// [`crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1`]: ARMS `palw_tir_fence2` at `at` (its
+/// height is `None` on the release), through the entry's own `set`, and moves nothing else. Every
+/// refusal of the post-launch moves applies, named for this flag, and `validate_palw_v2` refuses the
+/// result unless `palw_tir_v1` is in force at or below `at` (combine with `--palw-drill-tir-at`).
+pub fn palw_drill_tir_fence2_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1)
+}
+
 /// One post-launch flag day a drill may cross: its list and the command-line flag that moves it.
 struct PalwDrillFlagDayV1 {
     list: &'static [crate::config::params::PalwPostLaunchFenceV1],
@@ -643,6 +653,10 @@ const PALW_DRILL_FLAG_DAY_V3: PalwDrillFlagDayV1 =
 /// The IR fence alone (`--palw-drill-tir-at`, RFC-0002 Phase F).
 const PALW_DRILL_FLAG_DAY_TIR_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_TIR_FLAG_DAY_FENCES_V1, flag: "--palw-drill-tir-at" };
+
+/// The second IR fence alone (`--palw-drill-tir2-at`).
+const PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1, flag: "--palw-drill-tir2-at" };
 
 /// The one body both flag days share — see [`palw_drill_post_launch_fences_at_v1`].
 fn palw_drill_move_fences_v1(
@@ -1207,6 +1221,40 @@ mod tests {
     /// public testnet-12's genesis, at 0 / never and at another fence's height; below its prerequisites
     /// the result does not validate; at a free height past them `palw_tir_v1` alone is ARMED (live from
     /// the height, not below it, its bundle mirror following), nothing else moves and the params id moves.
+    /// **A drill arms the second IR fence and nothing else**: refused on public testnet-12, at 0 and at
+    /// `u64::MAX`; below the IR fence (moved low with `--palw-drill-tir-at`) the result does not
+    /// validate; past it `palw_tir_fence2` alone is ARMED, its mirror follows, and the params id moves.
+    #[test]
+    fn a_drill_arms_the_second_ir_fence_and_nothing_else_moves() {
+        use crate::config::params::palw_t12_shipped_params;
+        let mut drill = crate::config::params::palw_t12_drill_params_v1(&salt(0x55));
+        palw_drill_tir_fence_at_v1(&mut drill, 1_020).expect("the IR fence low");
+        let mut public = palw_t12_shipped_params();
+        assert!(palw_drill_tir_fence2_at_v1(&mut public, 1_234).unwrap_err().contains("PUBLIC testnet-12"));
+        for bad in [0, u64::MAX] {
+            let mut p = drill.clone();
+            assert!(palw_drill_tir_fence2_at_v1(&mut p, bad).is_err(), "{bad}");
+            assert_eq!(format!("{p:?}"), format!("{drill:?}"), "a refusal leaves the ruleset untouched");
+        }
+        let mut early = drill.clone();
+        assert!(palw_drill_tir_fence2_at_v1(&mut early, 1_019).unwrap_err().contains("does not validate"), "below palw_tir_v1");
+        let mut moved = drill.clone();
+        let moves = palw_drill_tir_fence2_at_v1(&mut moved, 1_030).expect("past the IR fence");
+        assert_eq!(moves.len(), 1);
+        assert_eq!((moves[0].name, moves[0].was), ("palw_tir_fence2", None));
+        assert!(moves[0].to_string().contains("ARMED"), "{}", moves[0]);
+        assert!(moved.palw_tir_fence2_active_at(1_030) && !moved.palw_tir_fence2_active_at(1_029));
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &moved.palw_consensus_mode else { panic!("V2") };
+        assert_eq!(bundle.state.tir_fence2_from_daa(), Some(1_030), "the fold's mirror");
+        assert_ne!(moved.consensus_params_id(), drill.consensus_params_id());
+        assert_eq!(moved.consensus_identity_id(), drill.consensus_identity_id());
+        for ((name, before), (_, after)) in drill.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
+            if *name != "palw_tir_fence2" {
+                assert_eq!(before, after, "{name} did not move");
+            }
+        }
+    }
+
     #[test]
     fn a_drill_crosses_the_ir_fence_and_nothing_else_moves() {
         use crate::config::params::{palw_t12_drill_params_v1, palw_t12_shipped_params};

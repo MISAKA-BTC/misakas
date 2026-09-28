@@ -85,6 +85,14 @@ struct Args {
     sites: usize,
     #[arg(long, default_value_t = 16)]
     site_positions: usize,
+    /// Diagnose the drift: per-site errors in each position window of the first evaluation
+    /// sequence (`64..192,3968..4096`), from a traced float run and the typed backend, the `--sites`
+    /// sites whose error grows most from the first window to the last. Loads every weight as f32.
+    #[arg(long, value_delimiter = ',')]
+    site_windows: Vec<String>,
+    /// With `--site-windows`: write every site's errors (JSON) here.
+    #[arg(long)]
+    site_windows_out: Option<PathBuf>,
     /// Keep at most this many positions of history in any block (`LowerOpts::max_window`): a
     /// layout whose context is shorter than the history bound, whose attention cone is then
     /// counted at this window. Evaluation sequences must not be longer (the float reference
@@ -210,6 +218,40 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         };
         digest = Some(artifact::write(p, &prep.lowered.program, &mat.params, tokenizer_id, meta).map_err(|e| e.to_string())?);
     }
+    if !a.site_windows.is_empty() {
+        let windows: Vec<(usize, usize)> = a
+            .site_windows
+            .iter()
+            .map(|w| {
+                let (lo, hi) = w.split_once("..").ok_or_else(|| format!("--site-windows: `{w}` is not LO..HI"))?;
+                let (lo, hi) = (lo.parse::<usize>().map_err(|e| e.to_string())?, hi.parse::<usize>().map_err(|e| e.to_string())?);
+                if lo >= hi { Err(format!("--site-windows: `{w}` is empty")) } else { Ok((lo, hi)) }
+            })
+            .collect::<Result<_, String>>()?;
+        log(format!("site errors in windows {windows:?} of the first evaluation sequence (every weight as f32, typed backend)"));
+        let (params_f, _) =
+            misaka_palw_tir_lower::float_ref::ParamStore::from_source(&prep.hl, &prep.binding, &ck).map_err(|e| e.to_string())?;
+        let every = |p: usize| {
+            if (p + 1) % 256 == 0 {
+                eprintln!("[{:>7.1}s]   sites: {}", t0.elapsed().as_secs_f64(), p + 1);
+            }
+        };
+        let mut errs = fidelity::site_errors_windows(&prep, &params_f, &stats, &policy, &mat, &eval[0], &windows, &every)
+            .map_err(|e| e.to_string())?;
+        let growth = |v: &Vec<f64>| v.last().copied().unwrap_or(0.0) / v.first().copied().unwrap_or(0.0).max(1e-300);
+        errs.sort_by(|a, b| growth(&b.1).partial_cmp(&growth(&a.1)).unwrap_or(std::cmp::Ordering::Equal));
+        for (k, v) in errs.iter().take(a.sites.max(20)) {
+            let cols: Vec<String> = v.iter().map(|e| format!("{e:.5}")).collect();
+            eprintln!("  site {k:>40}  rel {}  (x{:.2})", cols.join("  "), growth(v));
+        }
+        if let Some(dir) = &a.site_windows_out {
+            let rows: Vec<serde_json::Value> = errs.iter().map(|(k, v)| serde_json::json!({ "site": k, "rel": v })).collect();
+            std::fs::write(dir, serde_json::to_vec_pretty(&serde_json::json!({ "windows": windows, "sites": rows })).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        }
+        // The diagnosis replaces the evaluation (it is one of its own).
+        return Ok(serde_json::json!({ "architecture": prep.spec.architecture, "site_windows": windows, "metrics": {} }));
+    }
     log(format!("float reference on {} sequences", eval.len()));
     // On the typed backend both sides are compared a position at a time: the float reference runs
     // to the post block's inputs and the post block (stateless) is evaluated per position.
@@ -279,7 +321,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             .map_err(|e| e.to_string())?;
         (fidelity::compare(&fl, &il, &eval), a.drift.then(|| fidelity::drift(&fl, &il, (64, 192), 128)))
     };
-    if a.sites > 0 {
+    if a.sites > 0 && a.site_windows.is_empty() {
         log(format!("site errors over the first {} positions (every weight as f32)", a.site_positions));
         let (params_f, _) =
             misaka_palw_tir_lower::float_ref::ParamStore::from_source(&prep.hl, &prep.binding, &ck).map_err(|e| e.to_string())?;
@@ -326,6 +368,8 @@ fn main() {
         Ok(v) => {
             if a.json {
                 println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            } else if v.get("site_windows").is_some() || a.calibrate_only {
+                println!("{}: done (no evaluation)", v["architecture"].as_str().unwrap_or("?"));
             } else {
                 let m = &v["metrics"];
                 println!(

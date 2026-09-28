@@ -226,3 +226,29 @@ fn a_tied_head_reads_the_gathered_tables_i16_codes() {
     eprintln!("tied heads on the table's i16 codes: {}", tied.join(" "));
     assert!(tied.len() >= 5, "only {} tied fixtures: {tied:?}", tied.len());
 }
+
+/// A selective scan's gated output reaches its projection on the `i32` rail. The scan's value is
+/// wide, the product with the gate's code is exact in `i64`, and it is narrowed once. Mamba-370m's
+/// layer-29 product reached 4.5x its calibrated absmax late in a 4,096-token document, and a
+/// 16-bit site saturated there: the drift. No 16-bit code remains between the scan and `out_proj`.
+#[test]
+fn a_scans_gated_output_is_carried_wide_into_its_projection() {
+    use misaka_palw_tir_lower::lower::Base;
+    for name in ["mamba", "falcon_mamba", "jamba"] {
+        let cfg = std::fs::read_to_string(fixture_dir(name).join("config.json")).expect("config");
+        let prep = fidelity::prepare(&cfg, &LowerOpts::default()).expect("prepare");
+        let wide: Vec<_> = prep
+            .lowered
+            .site_nodes
+            .iter()
+            .filter(|(_, (s, _, _))| s == "mamba.gated" || s == "mamba.scan")
+            .map(|((b, n), (s, k, _))| (*b, *n, s.clone(), k.clone()))
+            .collect();
+        assert!(wide.len() >= 2, "{name}: {wide:?}");
+        for (b, n, s, k) in &wide {
+            assert!(matches!(k.base, Base::Site { wide: true, split: 0, .. }) && k.factor == 256.0, "{name} {s}: {k:?}");
+            let dt = prep.lowered.program.blocks[*b as usize].nodes[*n as usize].out.dtype;
+            assert_eq!(dt, misaka_palw_tir::DType::I32, "{name} {s}");
+        }
+    }
+}

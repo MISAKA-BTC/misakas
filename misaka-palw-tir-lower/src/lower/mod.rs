@@ -497,6 +497,12 @@ struct Lb {
     gdn: BTreeMap<usize, GdnInputs>,
     /// For each scan node (Mamba, Mamba2): where its step size comes from.
     ssm: BTreeMap<usize, SsmDt>,
+    /// Products carried on the `i32` rail into their projection ([`wide_products`]).
+    wide: Vec<bool>,
+    /// Projections read at per-row `i16` ([`scan_param_linears`]).
+    w16: Vec<bool>,
+    /// Set by the `Linear` dispatch for the node being lowered: its weights are per-row `i16`.
+    w16_now: bool,
     /// Name suffix for per-layer params whose base name another block already declared.
     suffix: String,
 }
@@ -532,11 +538,16 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
         absorbed: vec![false; blk.nodes.len()],
         gdn: BTreeMap::new(),
         ssm: BTreeMap::new(),
+        wide: wide_products(blk),
+        w16: scan_param_linears(blk),
+        w16_now: false,
         suffix,
     };
     gdn_patterns(hl, blk, &mut lb)?;
     ssm_patterns(blk, &mut lb)?;
     concat_wants(blk, &mut lb);
+    wide_wants(blk, &mut lb);
+    w16_inputs_unsplit(blk, &mut lb);
     let tb = pb.blocks.len() as u8;
     let mut b = pb.block(&blk.name, if blk.role == BlockRole::Pre { vec![] } else { carry_sig });
     for (i, node) in blk.nodes.iter().enumerate() {
@@ -717,6 +728,125 @@ fn split_plan(hl: &HlProgram, blk: &hl::Block, shared: &std::collections::BTreeS
             if capable && all_linear && consumers[i].len() <= max_readers { split_size(width) } else { 0 }
         })
         .collect()
+}
+
+/// Headroom of a recurrence's output path on the `i32` rail, over the `i32` policy headroom. A
+/// scan's output grows with the context it has integrated. Calibrated on shorter contexts, one
+/// static 16-bit scale saturates. Mamba-370m's layer-29 gated product reached 4.5x its calibrated
+/// absmax at position 3,569 of a 4,096-token document, drifting x5.6. The `i32` rail has the bits:
+/// at x256 its unit is still 2^14 finer than the 16-bit code it replaces.
+const WIDE_RECURRENT_HEADROOM: f64 = 256.0;
+
+/// The products carried on the `i32` rail into their projection. A recurrence's output (a
+/// selective scan) gated by an elementwise product, `y · silu(z)`, feeding projections only. The
+/// product of the scan's `i32` value and the gate's code is exact in `i64`, is narrowed ONCE to
+/// `i32`, and the projection reads it wide (`i8 × i32` into `i64`).
+fn wide_products(blk: &hl::Block) -> Vec<bool> {
+    let n = blk.nodes.len();
+    let mut consumers: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
+    for (i, node) in blk.nodes.iter().enumerate() {
+        for (k, r) in node.inputs.iter().enumerate() {
+            if let hl::Ref::Node(j, _) = r {
+                consumers[*j as usize].push((i, k));
+            }
+        }
+    }
+    let outputs: std::collections::BTreeSet<usize> =
+        blk.outputs.iter().filter_map(|o| if let hl::Ref::Node(j, _) = o { Some(*j as usize) } else { None }).collect();
+    (0..n)
+        .map(|i| {
+            let node = &blk.nodes[i];
+            let from_scan = matches!(node.inputs.first(), Some(hl::Ref::Node(j, 0))
+                if matches!(blk.nodes[*j as usize].op, Op::SelectiveScan { .. }) && consumers[*j as usize].len() == 1);
+            matches!(node.op, Op::Mul)
+                && from_scan
+                && !outputs.contains(&i)
+                && !consumers[i].is_empty()
+                && consumers[i].iter().all(|(c, k)| *k == 0 && matches!(blk.nodes[*c].op, Op::Linear { .. }))
+        })
+        .collect()
+}
+
+/// The projections that set a selective scan's step size and `B`/`C` (Mamba's `x_proj` parts and
+/// `dt_proj`, through an optional norm). Their weights are read at per-row `i16`. At `i8` their
+/// rounding is input-correlated: it biases the step size, so each channel's decay rate is slightly
+/// off, and that compounds over a long context. In float, Mamba-370m's `x_proj` alone at per-row
+/// `i8` drifts x5.8 over 4,096 positions; `x_proj` and `dt_proj` at 16 bits give x1.10. The cost is
+/// small: these matrices are thin (15.7 MB at 16 bits on Mamba-370m).
+fn scan_param_linears(blk: &hl::Block) -> Vec<bool> {
+    let mut out = vec![false; blk.nodes.len()];
+    let node_of = |r: hl::Ref| if let hl::Ref::Node(j, 0) = r { Some(j as usize) } else { None };
+    let linear_through_norm = |j: usize| -> Option<usize> {
+        match blk.nodes[j].op {
+            Op::Linear { .. } => Some(j),
+            Op::Norm { .. } => node_of(blk.nodes[j].inputs[0]).filter(|k| matches!(blk.nodes[*k].op, Op::Linear { .. })),
+            _ => None,
+        }
+    };
+    for n in &blk.nodes {
+        if !matches!(n.op, Op::SelectiveScan { .. }) {
+            continue;
+        }
+        // The step size: [Clamp] → Softplus → [+ bias] → dt_proj → [norm] → x_proj's dt rows.
+        let mut at = node_of(n.inputs[1]);
+        while let Some(j) = at {
+            match blk.nodes[j].op {
+                Op::Clamp { .. } | Op::Act(Act::Softplus) | Op::Add => at = node_of(blk.nodes[j].inputs[0]),
+                Op::Linear { .. } => {
+                    out[j] = true;
+                    if let Some(k) = node_of(blk.nodes[j].inputs[0]).and_then(linear_through_norm) {
+                        out[k] = true;
+                    }
+                    break;
+                }
+                _ => break,
+            }
+        }
+        for r in [n.inputs[2], n.inputs[3]] {
+            if let Some(k) = node_of(r).and_then(linear_through_norm) {
+                out[k] = true;
+            }
+        }
+    }
+    out
+}
+
+/// An `i16`-weight projection reads its input unsplit: the outlier split's high-precision columns
+/// exist for `i8` weights (a value read only by such projections keeps one scale).
+fn w16_inputs_unsplit(blk: &hl::Block, lb: &mut Lb) {
+    let mut readers: Vec<Vec<usize>> = vec![Vec::new(); blk.nodes.len()];
+    for (i, n) in blk.nodes.iter().enumerate() {
+        for r in &n.inputs {
+            if let hl::Ref::Node(j, _) = r {
+                readers[*j as usize].push(i);
+            }
+        }
+    }
+    for j in 0..blk.nodes.len() {
+        if lb.split[j] > 0 && !readers[j].is_empty() && readers[j].iter().all(|c| lb.w16[*c]) {
+            lb.split[j] = 0;
+        }
+    }
+}
+
+/// The wide rail's key for site `site`.
+fn wide_key(site: &str) -> ScaleKey {
+    ScaleKey::site(vec![site.to_string()], true).times(WIDE_RECURRENT_HEADROOM)
+}
+
+/// A wide product's scan delivers its output on the `i32` rail too.
+fn wide_wants(blk: &hl::Block, lb: &mut Lb) {
+    for i in 0..blk.nodes.len() {
+        if !lb.wide[i] {
+            continue;
+        }
+        lb.split[i] = 0;
+        if let Some(hl::Ref::Node(j, 0)) = blk.nodes[i].inputs.first() {
+            let j = *j as usize;
+            let site = blk.nodes[j].site.clone().unwrap_or_default();
+            lb.wants[j] = Some(Want { dt: DType::I32, key: wide_key(&site) });
+        }
+    }
 }
 
 /// How many outlier channels a projection input of `n` channels splits off.
@@ -912,10 +1042,14 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         }
         Op::Linear { bias } => {
             let x = operand(lb, node.inputs[0])?;
-            let x = codes(b, cx, lb, &x)?;
+            let wide_in = matches!(node.inputs[0], hl::Ref::Node(j, 0) if lb.wide[j as usize]);
+            let x = if wide_in { x } else { codes(b, cx, lb, &x)? };
             let w = pidx(node.inputs[1])?;
             let bp = if *bias { Some(pidx(node.inputs[2])?) } else { None };
-            one(lower_linear(b, cx, lb, &x, w, bp, &site, &want)?)
+            lb.w16_now = lb.w16[i];
+            let v = lower_linear(b, cx, lb, &x, w, bp, &site, &want);
+            lb.w16_now = false;
+            one(v?)
         }
         Op::Add | Op::Sub => {
             let a = operand(lb, node.inputs[0])?;
@@ -963,6 +1097,22 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             one(lower_table(b, cx, lb, i, &x, TableFn::Clamp(*lo, *hi), &site)?)
+        }
+        Op::Mul if lb.wide[i] => {
+            // `y · g`: the scan's `i32` value times the gate's code, exact in `i64`, narrowed once.
+            let a = operand(lb, node.inputs[0])?;
+            let c = operand(lb, node.inputs[1])?;
+            let c = codes(b, cx, lb, &c)?;
+            if a.dt != DType::I32 {
+                return Err(LowerError::eval(format!("internal: the wide product `{site}` reads a {:?} scan", a.dt)));
+            }
+            let p = b.mul(a.r, c.r, DType::I64);
+            let key = wide_key(&site);
+            let (ka, kc, ko) = (a.key.clone(), c.key.clone(), key.clone());
+            let (m, s) = decl_ms(b, cx, lb, &site, 1, Arc::new(move |f| Ok(vec![f.scale(&ka)? * f.scale(&kc)? / f.scale(&ko)?])))?;
+            let r = narrow(b, p, m, s, None, DType::I32);
+            b.commit(r);
+            one(Val { r, dt: DType::I32, key, len: out_len, site })
         }
         Op::Mul => {
             let a = operand(lb, node.inputs[0])?;
@@ -1362,9 +1512,15 @@ fn lower_linear(
     if table && k != 0 {
         return Err(LowerError::eval(format!("internal: a split input reads the table `{}`", d.name)));
     }
+    // A projection reading the `i32` rail (a scan's gated output) has its weights at per-row `i16`
+    // too: the wide input gives up the outlier split, whose high-precision weight columns carried
+    // most of such an input's energy (Mamba-370m: KL 0.0012 → 0.0041 at `i8`). `i16 × i32` over
+    // `inp ≤ 2^16` terms stays inside `i64`.
+    let wide16 = x.dt == DType::I32 || lb.w16_now;
     let r = if k == 0 {
         // A head tied to an embedding reads the table's `i16` codes (the same param).
-        let (dt, fill) = if table { (DType::I16, table_codes(w)) } else { (DType::I8, weight_codes(w)) };
+        let rows16 = table || wide16;
+        let (dt, fill) = if rows16 { (DType::I16, table_codes(w)) } else { (DType::I8, weight_codes(w)) };
         let wt = decl(b, cx, lb, &d.name, dt, &[out, inp], d.per_layer, fill)?;
         let (m, s) = decl_ms(
             b,
@@ -1373,7 +1529,7 @@ fn lower_linear(
             site,
             out,
             Arc::new(move |c| {
-                let scales = if table { c.rows16(w)?.scales.clone() } else { c.rows(w)?.scales.clone() };
+                let scales = if rows16 { c.rows16(w)?.scales.clone() } else { c.rows(w)?.scales.clone() };
                 let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, out)?);
                 Ok(scales.iter().zip(&sy).map(|(sw, sy)| sw * sx / sy).collect())
             }),
@@ -2558,7 +2714,13 @@ fn lower_gdn(
     };
     let qh = to_v_heads(b, q.r);
     let kh = to_v_heads(b, k.r);
+    // `v` enters the step `GDN_V_FRAC_BITS` finer than its code: the read `w = S·k`, `v − w` and
+    // the β product's rounding then sit on that grid, not on `v`'s 16-bit one. On `v`'s grid those
+    // roundings are written back into the state at every step and pile up: Qwen3.5-0.8B's late
+    // layers drift x1.3–x3.0 over 4,096 positions in a float replay of the step, flat 8 bits finer.
     let vh = b.reshape_fixed(v.r, &[nv32, dv32]);
+    let vf = b.c(DType::I32, 1i128 << GDN_V_FRAC_BITS);
+    let vh = b.mul(vh, vf, DType::I32);
     let pl = per_layer(lb);
     // decay = exp(−c · softplus(dt)), c = −A ≥ 0, dt = a + dt_bias, all Q24.
     let (dtb, an) = (gi.dt_bias, gi.a_log_neg);
@@ -2610,7 +2772,7 @@ fn lower_gdn(
     let (sn, dn) = (format!("{site}.state"), format!("{site}.delta"));
     let kv = v.key.clone();
     let scales = Arc::new(move |c: &FillCtx<'_>| -> Result<(f64, f64, i32, f64)> {
-        let sv = c.scale(&kv)?;
+        let sv = c.scale(&kv)? / (1u64 << GDN_V_FRAC_BITS) as f64;
         let su = crate::quant::code_scale(c.absmax(&dn)?, ((1u64 << 24) - 1) as f64, c.policy.headroom32);
         let target = crate::quant::code_scale(c.absmax(&sn)?, crate::quant::CODE32_MAX, c.policy.headroom32);
         let ws = (su / 32768.0 / target).log2().floor().clamp(-62.0, 20.0) as i32;
@@ -2678,6 +2840,9 @@ fn lower_gdn(
     let o = b.commit(o);
     Ok(Val { r: o, dt: DType::I32, key: want.key.clone(), len: nv * dv, site: site.to_string() })
 }
+
+/// Fractional bits `v` gains on its way into the gated-delta step (see `lower_gdn`).
+const GDN_V_FRAC_BITS: u32 = 8;
 
 fn q24_wide(v: f64) -> i32 {
     (v * (1u64 << 24) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32

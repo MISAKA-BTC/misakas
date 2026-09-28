@@ -453,6 +453,8 @@ pub mod palw_step_leg;
 pub mod palw_step_refute;
 /// RFC-0002 Phase F: PALW-TIR v1 on chain — the dormant `palw_tir_v1` fence and the network's IR constants.
 pub mod palw_tir_v1;
+/// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA unit `TirStepLeaf`.
+pub mod palw_tir_fence2_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
@@ -469,6 +471,8 @@ pub mod palw_tir_court_v1;
 pub mod palw_tir_one_move_v1;
 /// RFC-0002 Phase F step F7: the generic history dissection of an IR class — every reduction over H of the disputed cone, folded exactly.
 pub mod palw_tir_dissect_v1;
+/// RFC-0002 Phase F step F7 (PALW-TIR-38): the carried size of every terminal close of an IR class — the court's own read set, priced as carried.
+pub mod palw_tir_close_size_v1;
 /// RFC-0002 Phase F step F4: the step space of an IR class — commit-point tiles, Fixed-state checkpoints and history tiles as step leaves, in closed form.
 pub mod palw_tir_step_v1;
 /// RFC-0002 Phase F step F8: an IR class's canonical work vector, classified and priced by structure alone.
