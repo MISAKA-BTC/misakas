@@ -107,7 +107,19 @@ pub trait DemandSource {
     fn hist_row(&mut self, pos: u32, state: u16, layer: Option<u16>, row_pos: u32, index: usize) -> TirResult<i128>;
     /// The token of position `pos` (`Input(0)`).
     fn token(&mut self, pos: u32) -> TirResult<u32>;
+    /// Element `index` of param `param` as read at position `pos`. A version-1 param is the same at
+    /// every position, so this is [`DemandSource::param`]; a version-2 program's view reads its
+    /// inputs — a per-step random input among them — through here (spec 04b §15.4).
+    fn param_at(&mut self, pos: u32, param: u16, layer: Option<u16>, index: usize) -> TirResult<i128> {
+        let _ = pos;
+        self.param(param, layer, index)
+    }
 }
+
+/// `(state, (occurrence, node))`: writers of global `Fixed` states that [`state_writer_v1`] does not
+/// see — a version-2 program's `post` writes, which its view expresses as committed `Clamp`s
+/// (spec 04b §15.3–15.4). Empty for a version-1 program.
+pub type ExtraWritersV1<'a> = &'a [(u16, (u16, u16))];
 
 /// The work an evaluation did: computed (non-leaf) elements, and reduction terms.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -268,6 +280,19 @@ pub fn eval_demanded(
     source: &mut dyn DemandSource,
     limits: &DemandLimits,
 ) -> DemandResult<(Vec<i128>, DemandWork)> {
+    eval_demanded_ext(program, info, request, source, limits, &[])
+}
+
+/// [`eval_demanded`] with writers [`state_writer_v1`] does not see (a version-2 program's view,
+/// spec 04b §15.4).
+pub fn eval_demanded_ext<'p>(
+    program: &'p TirProgramV1,
+    info: &'p ProgramInfo,
+    request: &DemandRequest<'_>,
+    source: &mut dyn DemandSource,
+    limits: &DemandLimits,
+    extra_writers: ExtraWritersV1<'p>,
+) -> DemandResult<(Vec<i128>, DemandWork)> {
     let target_node = match request.target {
         DemandTarget::Node { ctx, node } => Some((ctx, node)),
         DemandTarget::StateAfter { .. } => None,
@@ -287,6 +312,7 @@ pub fn eval_demanded(
         pending: Vec::new(),
         supplied: Vec::new(),
         range: None,
+        extra_writers,
     };
     let mut out = Vec::with_capacity(request.elements.len());
     match request.target {
@@ -385,6 +411,18 @@ pub fn eval_demanded_range(
     source: &mut dyn DemandSource,
     limits: &DemandLimits,
 ) -> DemandResult<(Vec<i128>, DemandWork)> {
+    eval_demanded_range_ext(program, info, request, source, limits, &[])
+}
+
+/// [`eval_demanded_range`] with writers [`state_writer_v1`] does not see (spec 04b §15.4).
+pub fn eval_demanded_range_ext<'p>(
+    program: &'p TirProgramV1,
+    info: &'p ProgramInfo,
+    request: &DemandRangeRequest<'_>,
+    source: &mut dyn DemandSource,
+    limits: &DemandLimits,
+    extra_writers: ExtraWritersV1<'p>,
+) -> DemandResult<(Vec<i128>, DemandWork)> {
     let mut engine = Engine {
         program,
         info,
@@ -400,6 +438,7 @@ pub fn eval_demanded_range(
         pending: Vec::new(),
         supplied: request.supplied.to_vec(),
         range: request.range,
+        extra_writers,
     };
     let ci = engine.context(request.ctx)?;
     let block = &program.blocks[engine.ctxs[ci].block as usize];
@@ -474,6 +513,8 @@ struct Engine<'p, 's> {
     supplied: Vec<u16>,
     /// Range evaluation (§9.5): the `H` positions the target node's reduction runs over.
     range: Option<(usize, usize)>,
+    /// Writers [`state_writer_v1`] does not see (a version-2 program's `post` writes).
+    extra_writers: ExtraWritersV1<'p>,
 }
 
 fn unravel(mut i: usize, st: &[usize]) -> Vec<usize> {
@@ -518,6 +559,17 @@ fn refused(e: TirError) -> DemandError {
 }
 
 impl Engine<'_, '_> {
+    /// The node writing `Fixed` instance `(state, layer)`: an extra writer of a global state first,
+    /// then [`state_writer_v1`].
+    fn writer(&self, state: u16, layer: Option<u16>) -> Option<(u16, u16)> {
+        if layer.is_none()
+            && let Some((_, w)) = self.extra_writers.iter().find(|(s, _)| *s == state)
+        {
+            return Some(*w);
+        }
+        state_writer_v1(self.program, state, layer)
+    }
+
     /// The index of context `key`, created on first use.
     fn context(&mut self, key: DemandContext) -> DemandResult<usize> {
         if let Some(i) = self.contexts.get(&key) {
@@ -685,7 +737,7 @@ impl Engine<'_, '_> {
                     if at == 0 {
                         return fail(TirErrorKind::Missing, format!("state {}: nothing precedes position 0", s.name));
                     }
-                    match state_writer_v1(program, state, layer) {
+                    match self.writer(state, layer) {
                         Some((occ, w)) => {
                             let ci = self.context(DemandContext { pos: at - 1, occurrence: occ })?;
                             return match self.node_value(ci, w, index)? {
@@ -715,7 +767,7 @@ impl Engine<'_, '_> {
     /// write is clamped into it; a committed one is checked), or, for an unwritten instance, its value
     /// at the start of `pos`.
     fn state_after(&mut self, pos: u32, state: u16, layer: Option<u16>, index: usize) -> DemandResult<Fetch> {
-        match state_writer_v1(self.program, state, layer) {
+        match self.writer(state, layer) {
             Some((occ, w)) => {
                 let ci = self.context(DemandContext { pos, occurrence: occ })?;
                 match self.node_value(ci, w, index)? {
@@ -764,7 +816,7 @@ impl Engine<'_, '_> {
                 let d =
                     p.params.get(j as usize).ok_or_else(|| DemandError::Tir(TirError::new(TirErrorKind::Operand, "no such param")))?;
                 let layer = if d.per_layer { self.ctxs[ci].layer } else { None };
-                let v = self.source.param(j, layer, index).map_err(refused)?;
+                let v = self.source.param_at(self.ctxs[ci].key.pos, j, layer, index).map_err(refused)?;
                 if !d.dtype.contains(v) {
                     return operand_err(format!("param {}: {v} is not a {}", d.name, d.dtype.name()));
                 }

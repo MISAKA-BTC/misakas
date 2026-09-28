@@ -161,11 +161,18 @@ pub fn validate_v2(p: &TirProgramV2) -> TirResult<ProgramInfoV2> {
     let post_writes = p.post_writes();
     if !post_writes.is_empty() {
         let pre = p.blocks.get(p.schedule.pre as usize);
+        let post_nodes = &p.blocks[p.schedule.post as usize].nodes;
         let mut seen = BTreeSet::new();
         for (node, state) in &post_writes {
             let ok = p.states.get(*state as usize).is_some_and(|s| matches!(s.kind, StateKind::Fixed { .. }) && !s.per_layer);
             if !ok {
                 return nf(format!("post node {node}: a post StateWrite targets a global Fixed state"));
+            }
+            // A post write is a commit point: the state's next value is then a leaf of the step tree
+            // (the court reads the latent at `p` as the committed write at `p − 1`, never a replay of
+            // `post`), and the view's commit points are exactly the program's.
+            if !post_nodes[*node as usize].commit {
+                return nf(format!("post node {node}: a post StateWrite is a commit point"));
             }
             if !seen.insert(*state) {
                 return nf(format!("post writes state {state} twice"));

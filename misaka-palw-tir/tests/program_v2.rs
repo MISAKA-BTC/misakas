@@ -158,15 +158,18 @@ fn the_denoiser_writes_its_latent_in_post() {
 }
 
 #[test]
-fn an_uncommitted_post_write_still_writes_and_is_not_reported() {
-    let committed = denoiser_variant(true, false);
-    let uncommitted = denoiser_variant(false, false);
-    let (a, sa, _) = run_denoiser(&committed, 3);
-    let (b, sb, _) = run_denoiser(&uncommitted, 3);
-    assert_eq!(sa.fixed, sb.fixed, "the write happens either way");
+fn a_post_write_is_a_commit_point_and_a_separate_output_leaves_the_write_as_is() {
+    // NF-29: a post write that is not a commit point is refused, output or not.
+    assert_eq!(kind(&denoiser_variant(false, false)), Some(TirErrorKind::NormalForm), "an uncommitted write beside the output");
+    assert_eq!(kind(&denoiser_variant(false, true)), Some(TirErrorKind::NormalForm), "an uncommitted write as the output");
+    // A committed write with a separate output node runs as the write-as-output program does: the same
+    // states and outputs, and one more commit point (the separate output).
+    let (a, sa, _) = run_denoiser(&denoiser_program(), 3);
+    let (b, sb, _) = run_denoiser(&denoiser_variant(true, false), 3);
+    assert_eq!(sa.fixed, sb.fixed);
     for (x, y) in a.iter().zip(&b) {
         assert_eq!(x.output, y.output);
-        assert_eq!(x.commits.len(), y.commits.len() + 1, "only the committed write is reported");
+        assert_eq!(x.commits.len() + 1, y.commits.len());
     }
 }
 

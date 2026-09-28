@@ -1926,8 +1926,10 @@ version-1 view (§15.3). The version-2 rules are checked first; the class of eve
   program itself, because the view commits every `post` write. NF-6 (committable dtype, no `H`)
   then holds through the view.
 - **NF-29** For `Rows` and `Final` outputs, `post` MAY contain `StateWrite` nodes, and no
-  `HistAppend`. A `post` `StateWrite` must meet five conditions:
+  `HistAppend`. A `post` `StateWrite` must meet six conditions:
   - it targets a global `Fixed` state;
+  - it is a **commit point**, so the state's value at the start of `p` is a leaf (the write at
+    `p − 1`), never a replay of `post`, and the view's commit points are exactly the program's;
   - `post` writes that state once;
   - `pre` does not write that state (NF-19's one writer per instance per step);
   - some node reads the state (`Ref::State`);
@@ -1976,14 +1978,29 @@ position's output.
 reads are fetched, each held to its declaration as in step 2. A `post` `StateWrite` target evaluates
 to the value it writes.
 
-**Demand evaluation (§9.4) and the court** are specified here but not yet implemented: they come
-with the court extension of RFC-0003. The source answers a sixth question, `input(p, k, i)`:
-- a `Random` input's element is computed by the court from the claim's job (`R`), never opened
-  from a leaf and never taken from a challenger;
-- an `External` input's element is an earlier stage's committed element, or a job value.
+**Demand evaluation** (§9.4, `eval_demanded_v2`) runs §9.4 unchanged over the view, with two
+additions:
 
-The writer of a global `Fixed` state is occurrence 0's `StateWrite` or occurrence `L + 1`'s, and
-NF-29 makes it unique.
+- **The input question.** The source answers a sixth question, `input(p, k, i)`: element `i` of
+  input `k` at position `p`. The view reads its param `|params| + k` through this question, at the
+  context's position.
+  - A `Random` input's element is computed by the court from the claim's job (`R`). It is never
+    opened from a leaf and never taken from a challenger.
+  - An `External` input's element is an earlier stage's committed element, or a job value, as the
+    pipeline's binding says.
+
+  A refused answer fails the evaluation with `Missing`, like every other refusal. An input the
+  closure never reads (the operand a `Select` did not choose) is never asked.
+- **The writer of a global `Fixed` state.** It is occurrence 0's `StateWrite`, or the committed
+  `post` write of occurrence `L + 1` (unique by NF-19 and NF-29). The value of a `post`-written
+  state at the start of `p` is therefore the leaf `node(p − 1, L + 1, write)`, and it costs no work.
+
+The range evaluation of §9.5 (`eval_demanded_range_v2`) is extended the same way.
+
+The version-1 demand API is unchanged:
+- the source's positioned param question (`param_at`) defaults to `param`;
+- the extra writers are empty for a version-1 program;
+- `consensus-vectors/tir-v1/demand` and `dissect` are byte-identical.
 
 ### 15.5 Ranges (PALW-TIR-9 for version 2)
 
@@ -2013,10 +2030,17 @@ Binding       := tag 0: JobScalar     · index u8
                | tag 2: StageRows     · stage u8 · drop u32 · pad_to u32
                | tag 3: StageFinal    · stage u8
                | tag 4: StageRowCount · stage u8 · drop u32
+               | tag 5: JobTokenCount · rule TokenRule
 ```
 
 `Option<T>` is Borsh's: `0x00`, or `0x01` followed by `T`. `program` indexes the pipeline's program
-list. The class object that carries programs by `graph_ir_root` — with per-stage layouts, the
+list.
+
+`TirPipelineV1::decode_canonical(bytes, programs)` decodes strictly, like §4.4:
+- at most 65,536 bytes;
+- every byte consumed and every tag known;
+- re-encoding reproduces the bytes;
+- `validate_pipeline` passes over the decoded programs. The class object that carries programs by `graph_ir_root` — with per-stage layouts, the
 artifact and the tokenizer — belongs to consensus (`palw_gen_v1`).
 
 **A pipeline is not a VM.** Its stages run in declared order, always. Each runs over a trip count
@@ -2037,7 +2061,10 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
   - `JobTokens`: the rule applied to the job's ids, padded to its length;
   - `StageRows`: rows `drop … T − 1` of the earlier `Rows` stage, zero-padded to `pad_to`;
   - `StageFinal`: the earlier `Final` stage's output;
-  - `StageRowCount`: `max(T − drop, 0)` of the earlier `Rows` stage.
+  - `StageRowCount`: `max(T − drop, 0)` of the earlier `Rows` stage;
+  - `JobTokenCount`: `|prefix ‖ ids ‖ suffix|` **before** padding, a rank-0 `idx`. It is the count a
+    bidirectional encoder's mask admits (`Compare(Iota < count)`). The mask then never depends on
+    the pad id, which a prompt may also contain.
 
   Every value is then held to the input's declaration (§15.4).
 - **Random inputs.** Random inputs are drawn by the caller: once, or at every position when
@@ -2058,7 +2085,9 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
 - **NF-P4.** One random input per domain across the whole pipeline (PALW-RND-7).
 - **NF-P5.** One binding per external input. An edge reads only an earlier stage.
 - **NF-P6.** A `JobScalar` binds a rank-0 input, with `index < 16`. A `JobTokens` binds an
-  `idx [pad.to_len]` input, and its template ids lie inside the input's interval.
+  `idx [pad.to_len]` input, and its template ids lie inside the input's interval. A
+  `JobTokenCount`'s template is padded, and it binds a rank-0 `idx` whose interval contains
+  `[0, pad.to_len]`.
 - **NF-P7.** A `StageRows` edge reads a `Rows` stage, and its shape is `[pad_to] ++ row shape` of the
   row dtype, with `pad_to ≥ max(max_trip − drop, 1)`. The rows' proven interval (§15.5), with 0 for
   the pad, lies inside the input's. A `StageFinal` edge reads a `Final` stage, with that output's
@@ -2107,6 +2136,23 @@ root names its tiling.
   - every value `R` drew;
   - every stage's positions and the output tensor;
   - the output's canonical `ImageRgb8` bytes and `output_root` at `tile_len = 4`.
+- **`pipelines/toy-bidirectional.json`** holds a one-stage bidirectional encoder over a padded token
+  axis, masked by `JobTokenCount`. The same job under another pad id gives the same output. Its
+  output is an `EmbeddingI32` with its `output_root`.
+- **`admission.json`** (`palw-tir-v2/admission-vectors/1`) holds §15.9's derived numbers:
+  - for each toy program admitted on its own: the inputs' intervals and openings, the `post`-written
+    states, the per-position quantities, every cone with its leaves (inputs named `input:k`), the
+    checkpoint intervals, and every node's interval;
+  - for each pipeline (the toy image, the bidirectional encoder, a MatMul stage that carries the
+    job's MACs): every stage under its bindings' openings, the job's totals and the output's
+    interval;
+  - refusals: an input interval that lets the update overflow, and each job ceiling one short.
+- **`demand/<program>.json`** (`palw-tir-v2/demand-vectors/1`) holds §15.4 over the run of
+  `programs/<program>.json`:
+  - every commit point of every position, at three elements, with values, work and the input
+    questions asked;
+  - every post-written state after every position (a leaf: no work);
+  - each input withheld in turn, where only an input the closure reads fails `Missing`.
 - **`encoding.json`** (`palw-tir-v2/encoding-vectors/1`) holds byte strings with `ok`, `ok-v1` or the
   refusal class. They include valid programs, a trailing byte, a truncation, version 3, unknown
   `InputSource` and `OutputDecl` tags, a `per_step` byte of 2, domain 0 as an input, an unused
@@ -2117,7 +2163,50 @@ root names its tiling.
 `TIR_V2_BLESS=1` rewrites them. It is a separate switch from `TIR_BLESS`, so blessing one version
 never rewrites the other's vectors.
 
-### 15.9 Rules
+### 15.9 Admission (`tir_admit_v2`, `tir_admit_pipeline_v1`)
+
+**A program.** A version-2 program is admitted by §10.3's analyses, unchanged, over its view:
+costs, per-position quantities, cones with box demand, dissection chunks over `H`, checkpoint
+intervals, and the ceilings. Two facts are supplied by version 2.
+
+- **Intervals.** Its intervals are §15.5's: the inputs' declared intervals, not their dtypes' full
+  ranges.
+- **Leaf openings.** Every leaf that is one of its inputs is opened as what it is
+  (`ParamLeafV1`):
+  - an earlier stage's committed output: 4 bytes a lane, and a committed operand;
+  - job data (a job scalar, the job's token ids): 4 bytes a lane, and not an operand;
+  - derived by the court (a random input, a row or token count): nothing opened.
+
+  Every version-1 param remains an artifact tensor, opened at its dtype's width. A program admitted
+  on its own reads every external input as committed and every random input as derived. This is
+  conservative for opened bytes and operands.
+
+A `post`-written state is a leaf at every position (NF-29), so it has no replay closure and no
+checkpoint interval. Admission reports it among `post_written`. PALW-TIR-33's domains are the view's
+intervals, by the program's own block and node indices.
+
+**A pipeline.** `tir_admit_pipeline_v1(pipeline, programs, inputs, job)` proceeds in four steps:
+
+1. It decodes every program (§15.1) and the pipeline (§15.6). The edges are proved there
+   (NF-P1 … NF-P9).
+2. It admits every stage's program under the per-position ceilings, with each input opened as its
+   binding says:
+   - `StageRows` and `StageFinal`: committed;
+   - `JobScalar` and `JobTokens`: job data;
+   - `StageRowCount` and `JobTokenCount`: derived;
+   - a random input: derived.
+
+   A refusal names the stage.
+3. It sums `max_trip ×` each stage's per-position cost and step leaves, and admission's own cone
+   work over the stages.
+4. It checks the job's totals against the job ceilings: `max_job_macs`, `max_job_transcendentals`,
+   `max_job_step_leaves` and `max_job_cone_work`. These are the network's caps per profile, which
+   `palw_gen_v1` carries.
+
+It returns every stage's admission, the job's totals and the proven interval of the class's output.
+The class object checks that interval against its output kind's value domain (PALW-OUT-2).
+
+### 15.10 Rules
 
 - **PALW-TIR-37 (inputs).** An input MUST be `External` with a declared interval, or `Random` over a
   registered domain. Range analysis MUST use the declared interval, the word range or the table
@@ -2140,15 +2229,16 @@ never rewrites the other's vectors.
 - **PALW-TIR-45 (random inputs are `R`, never commitments).** A random input's value MUST be
   RFC-0003's `R` for the job's seed and item index. It MUST NOT be committed, and a court MUST
   recompute every element a cone reads.
+- **PALW-TIR-46 (post writes are committed).** A `post` `StateWrite` MUST be a commit point.
+- **PALW-TIR-47 (admission of version 2).** Admission MUST analyse the view with §15.5's intervals
+  and open each input leaf as its binding says (§15.9), and MUST refuse a pipeline whose stage or
+  job totals exceed their ceilings.
 
-### 15.10 Open items
+### 15.11 Open items
 
 The following are not yet built:
 
-- admission of version-2 programs and pipelines (`tir_admit_v1`'s costs, cones and ceilings over
-  the view, with the `post` writes' commit points and per-profile ceilings);
-- demand evaluation over version 2 (§15.4);
-- the pipeline class object, its step tree and identity;
+- the pipeline class object, its step tree and identity (in consensus);
 - the court extension (derived inputs, stage edges, `TirOutputDigestMismatch`);
 - the `palw_gen_v1` fence;
 - generalised dissection over a declared reduction axis (RFC-0003 §II.1.5.6, decided to come with

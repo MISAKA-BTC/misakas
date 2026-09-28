@@ -1,0 +1,416 @@
+{
+  "format": "palw-tir-v2/demand-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md §15",
+  "program": "programs/encoder-rows.json",
+  "limits": {
+    "elements": "1048576",
+    "terms": "16777216"
+  },
+  "cases": [
+    {
+      "name": "node pos 0 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "-1774",
+          "-1126",
+          "-1335"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 0 node 4",
+      "target": {
+        "node": {
+          "node": 4,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "-1774",
+          "-1126",
+          "-1335"
+        ],
+        "work": {
+          "elements": "12",
+          "terms": "3"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 1 node 2",
+      "target": {
+        "node": {
+          "node": 2,
+          "occurrence": 1,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "-1771",
+          "-1123",
+          "-1332"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 0,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "-58",
+          "-1623",
+          "2711"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 0 node 4",
+      "target": {
+        "node": {
+          "node": 4,
+          "occurrence": 0,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "-1832",
+          "-2749",
+          "1376"
+        ],
+        "work": {
+          "elements": "15",
+          "terms": "6"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 1 node 2",
+      "target": {
+        "node": {
+          "node": 2,
+          "occurrence": 1,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "-1829",
+          "-2746",
+          "1379"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 0,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2893",
+          "1344",
+          "-116"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 0 node 4",
+      "target": {
+        "node": {
+          "node": 4,
+          "occurrence": 0,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "1061",
+          "-1405",
+          "1260"
+        ],
+        "work": {
+          "elements": "18",
+          "terms": "9"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 1 node 2",
+      "target": {
+        "node": {
+          "node": 2,
+          "occurrence": 1,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "1064",
+          "-1402",
+          "1263"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 3 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 0,
+          "pos": 3
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "-813",
+          "-595",
+          "2750"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 3 occurrence 0 node 4",
+      "target": {
+        "node": {
+          "node": 4,
+          "occurrence": 0,
+          "pos": 3
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "248",
+          "-2000",
+          "4010"
+        ],
+        "work": {
+          "elements": "21",
+          "terms": "12"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 3 occurrence 1 node 2",
+      "target": {
+        "node": {
+          "node": 2,
+          "occurrence": 1,
+          "pos": 3
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "251",
+          "-1997",
+          "4013"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 4 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 0,
+          "pos": 4
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "451",
+          "-1904",
+          "997"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 4 occurrence 0 node 4",
+      "target": {
+        "node": {
+          "node": 4,
+          "occurrence": 0,
+          "pos": 4
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2473",
+          "-2778",
+          "6342"
+        ],
+        "work": {
+          "elements": "21",
+          "terms": "12"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 4 occurrence 1 node 2",
+      "target": {
+        "node": {
+          "node": 2,
+          "occurrence": 1,
+          "pos": 4
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2476",
+          "-2775",
+          "6345"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    }
+  ]
+}

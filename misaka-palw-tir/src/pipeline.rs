@@ -69,7 +69,7 @@ pub struct TokenRule {
 }
 
 /// Where an external input's value comes from. Tags: `JobScalar 0`, `JobTokens 1`, `StageRows 2`,
-/// `StageFinal 3`, `StageRowCount 4`.
+/// `StageFinal 3`, `StageRowCount 4`, `JobTokenCount 5`.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Binding {
     /// `job.scalars[index]`, a rank-0 input.
@@ -82,6 +82,9 @@ pub enum Binding {
     StageFinal { stage: u8 },
     /// `max(T − drop, 0)` of an earlier `Rows` stage, a rank-0 `idx` (the rows a mask admits).
     StageRowCount { stage: u8, drop: u32 },
+    /// `|prefix ‖ ids ‖ suffix|` — the template's length BEFORE padding, a rank-0 `idx`: the tokens a
+    /// bidirectional encoder's mask admits (`Compare(Iota < count)`), whatever ids the pad uses.
+    JobTokenCount { rule: TokenRule },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -110,7 +113,25 @@ impl TirPipelineV1 {
     pub fn encode(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("encoding into a Vec cannot fail")
     }
+
+    /// Decode bytes that must be the unique encoding of a pipeline in normal form over `programs`:
+    /// within [`MAX_PIPELINE_BYTES`], strict Borsh, re-encoding byte-identical, and
+    /// [`validate_pipeline`] passing (spec 04b §15.6).
+    pub fn decode_canonical(bytes: &[u8], programs: &[TirProgramV2]) -> TirResult<Self> {
+        if bytes.len() > MAX_PIPELINE_BYTES {
+            return err(TirErrorKind::Encoding, format!("{} bytes exceed the {MAX_PIPELINE_BYTES}-byte cap", bytes.len()));
+        }
+        let p: TirPipelineV1 = borsh::from_slice(bytes).map_err(|e| TirError::new(TirErrorKind::Encoding, e.to_string()))?;
+        if p.encode() != bytes {
+            return err(TirErrorKind::Encoding, "re-encoding differs: not the canonical encoding");
+        }
+        validate_pipeline(&p, programs)?;
+        Ok(p)
+    }
 }
+
+/// A pipeline's encoding is small (stages reference programs by index): 64 KiB is generous.
+pub const MAX_PIPELINE_BYTES: usize = 64 * 1024;
 
 /// The job facts a pipeline reads (the profile layer maps its job body onto these).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -303,6 +324,16 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
                         return nf(format!("{edge}: [0, {}] exceeds [{lo}, {hi}]", us.max_trip.saturating_sub(*drop)));
                     }
                 }
+                Binding::JobTokenCount { rule } => {
+                    check_rule(&edge, rule, u32::MAX)?;
+                    let Some(pad) = rule.pad else { return nf(format!("{edge}: a token count is of a padded template")) };
+                    if d.dtype != DType::Idx || !d.shape.is_empty() {
+                        return nf(format!("{edge}: a token count is a rank-0 idx"));
+                    }
+                    if lo > 0 || hi < pad.to_len as i128 {
+                        return nf(format!("{edge}: [0, {}] exceeds [{lo}, {hi}]", pad.to_len));
+                    }
+                }
             }
         }
         externals.push(ext);
@@ -344,6 +375,16 @@ pub struct PipelineRun {
     /// The output stage's result: a `Final` stage's last value, or a `Rows` stage's rows stacked
     /// `[T] ++ row shape`.
     pub output: Tensor,
+}
+
+/// How many pad ids `apply_rule` appended.
+fn pad_count(rule: &TokenRule, job: &PipelineJob) -> usize {
+    let src = match rule.source {
+        TokenSource::Prompt => job.prompt.len(),
+        TokenSource::Negative => job.negative.len(),
+    };
+    let unpadded = rule.prefix.len() + src + rule.suffix.len();
+    rule.pad.map_or(0, |p| (p.to_len as usize).saturating_sub(unpadded))
 }
 
 fn apply_rule(rule: &TokenRule, job: &PipelineJob) -> TirResult<Vec<u32>> {
@@ -440,6 +481,11 @@ pub fn run_pipeline(
                         Binding::StageFinal { stage } => runs[*stage as usize].last().cloned(),
                         Binding::StageRowCount { stage, drop } => {
                             let n = runs[*stage as usize].trip.saturating_sub(*drop);
+                            Some(Tensor::scalar(DType::Idx, n as i128)?)
+                        }
+                        Binding::JobTokenCount { rule } => {
+                            // The length before padding; `apply_rule` refuses a template longer than its pad.
+                            let n = apply_rule(rule, job)?.len() - pad_count(rule, job);
                             Some(Tensor::scalar(DType::Idx, n as i128)?)
                         }
                     }

@@ -342,3 +342,112 @@ pub fn params_by_name(from: &misaka_palw_tir::TirProgramV1, params: &MapParams, 
     }
     out
 }
+
+/// A one-stage bidirectional "encoder" at one position over a padded token axis: the embeddings of
+/// the tokens its `JobTokenCount` mask admits, summed. The pad id must not matter.
+pub fn bidirectional_pipeline(pad_id: u32) -> (TirPipelineV1, Vec<TirProgramV2>) {
+    use misaka_palw_tir::builder::ProgramBuilder;
+    use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+    use misaka_palw_tir::{Cmp, DType, Dim, Ref};
+    let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+    let tokens = pb.param("bi.tokens", DType::Idx, &[6], false);
+    let count = pb.param("bi.count", DType::Idx, &[], false);
+    let embed = pb.param("bi.embed", DType::I16, &[TOK, D], false);
+    let pre = {
+        let mut b = pb.block("bi.pre", vec![]);
+        let e = b.gather(embed, tokens, 0, 0);
+        let iota = b.iota(DType::Idx, &[Dim::Fixed(6)], 0, 0, 1);
+        let mask = b.compare(iota, count, Cmp::Lt);
+        let mask = b.reshape_fixed(mask, &[6, 1]);
+        let e32 = b.cast(e, DType::I32);
+        let zero = b.c(DType::I32, 0);
+        let kept = b.select(mask, e32, zero, DType::I32);
+        let s = b.reduce_sum(kept, 0, DType::I32);
+        b.finish(&[s])
+    };
+    let carry = {
+        let b = &pb.blocks[pre as usize];
+        vec![b.nodes[b.carry_out[0] as usize].out.clone()]
+    };
+    let (post, out) = {
+        let mut b = pb.block("bi.post", carry);
+        let o = b.clamp(Ref::CarryIn(0), i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.commit(o);
+        let Ref::Node(n) = o else { unreachable!() };
+        (b.finish(&[]), n)
+    };
+    let v1 = pb.finish(pre, vec![], post, out);
+    let prog = misaka_palw_tir::program_v2::TirProgramV2::from_v1_lifting_params(
+        &v1,
+        &[(0, InputSource::External { lo: 0, hi: TOK as i64 - 1 }), (1, InputSource::External { lo: 0, hi: 6 })],
+        OutputDecl::Final { node: out },
+    )
+    .unwrap();
+    let rule =
+        TokenRule { prefix: vec![1], source: TokenSource::Prompt, suffix: vec![2], pad: Some(TokenPad { id: pad_id, to_len: 6 }) };
+    let p = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![StageDecl {
+            name: "encode".into(),
+            program: 0,
+            trip: TripRule::Fixed { n: 1 },
+            max_trip: 1,
+            tokens: None,
+            bind: vec![Binding::JobTokens { rule: rule.clone() }, Binding::JobTokenCount { rule }],
+        }],
+        output_stage: 0,
+    };
+    (p, vec![prog])
+}
+
+/// A one-stage pipeline whose `Final` program gathers an `i8` embedding by the job's 8 (padded) token
+/// ids and multiplies it by an `[8, 8]` weight: 512 MACs a position, three positions. The toy stages
+/// have no MatMul, so this one carries the job's MACs.
+pub fn matmul_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
+    use misaka_palw_tir::builder::ProgramBuilder;
+    use misaka_palw_tir::pipeline::*;
+    use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+    use misaka_palw_tir::{DType, Ref};
+    let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+    let tokens = pb.param("mm.tokens", DType::Idx, &[8], false);
+    let emb = pb.param("mm.emb", DType::I8, &[TOK, 8], false);
+    let w = pb.param("mm.w", DType::I8, &[8, 8], false);
+    let pre = {
+        let mut b = pb.block("mm.pre", vec![]);
+        let x = b.gather(emb, tokens, 0, 0);
+        let y = b.matmul(x, w, DType::I32);
+        b.finish(&[y])
+    };
+    let carry = {
+        let b = &pb.blocks[pre as usize];
+        vec![b.nodes[b.carry_out[0] as usize].out.clone()]
+    };
+    let (post, out) = {
+        let mut b = pb.block("mm.post", carry);
+        let o = b.clamp(Ref::CarryIn(0), i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.commit(o);
+        let Ref::Node(n) = o else { unreachable!() };
+        (b.finish(&[]), n)
+    };
+    let v1 = pb.finish(pre, vec![], post, out);
+    let prog = TirProgramV2::from_v1_lifting_params(
+        &v1,
+        &[(0, InputSource::External { lo: 0, hi: TOK as i64 - 1 })],
+        OutputDecl::Final { node: out },
+    )
+    .unwrap();
+    let rule = TokenRule { prefix: vec![], source: TokenSource::Prompt, suffix: vec![], pad: Some(TokenPad { id: 0, to_len: 8 }) };
+    let p = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![StageDecl {
+            name: "mm".into(),
+            program: 0,
+            trip: TripRule::Fixed { n: 3 },
+            max_trip: 3,
+            tokens: None,
+            bind: vec![Binding::JobTokens { rule }],
+        }],
+        output_stage: 0,
+    };
+    (p, vec![prog])
+}

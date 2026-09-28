@@ -158,6 +158,34 @@ impl LeafV1 {
     }
 }
 
+/// How a param leaf is opened at the court (spec 04b §10.3, §15.5). Every version-1 param is an
+/// artifact tensor. A version-2 program's inputs are params of its view (§15.3), and each is opened
+/// as what it is: an earlier stage's committed output, job data, or a value the court derives itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ParamLeafV1 {
+    /// An artifact tensor: opened at its dtype's width against the artifact root; not a committed
+    /// operand.
+    Artifact,
+    /// A committed value of an earlier stage: 4 bytes a lane, and a committed operand.
+    Committed,
+    /// Job data (a job scalar, the job's token ids): 4 bytes a lane; not a committed operand.
+    JobData,
+    /// Derived by the court from the job and the step space (a random input, a row or token count):
+    /// nothing opened.
+    Derived,
+}
+
+impl ParamLeafV1 {
+    /// Bytes one element of the leaf opens.
+    pub fn width(self, dtype: DType) -> u64 {
+        match self {
+            ParamLeafV1::Artifact => dtype.width() as u64,
+            ParamLeafV1::Committed | ParamLeafV1::JobData => 4,
+            ParamLeafV1::Derived => 0,
+        }
+    }
+}
+
 /// One commit point's court cone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConeV1 {
@@ -423,7 +451,15 @@ fn demanded_cost(p: &TirProgramV1, block: usize, node: usize, d: u64, ins: &[u64
 
 /// The box demand of one tile of `root` at `H = h`: `(cost, opened bytes, leaves with positive
 /// demand)`.
-fn tile_demand(p: &TirProgramV1, block: usize, root: usize, cone: &[u16], tile_len: u64, h: u64) -> (CostV1, u64, Vec<LeafV1>) {
+fn tile_demand(
+    p: &TirProgramV1,
+    block: usize,
+    root: usize,
+    cone: &[u16],
+    tile_len: u64,
+    h: u64,
+    param_leaf: &dyn Fn(u16) -> ParamLeafV1,
+) -> (CostV1, u64, Vec<LeafV1>) {
     let b = &p.blocks[block];
     let mut in_cone = vec![false; b.nodes.len()];
     for i in cone {
@@ -475,7 +511,7 @@ fn tile_demand(p: &TirProgramV1, block: usize, root: usize, cone: &[u16], tile_l
         leaves.push(*leaf);
         let width = match leaf {
             LeafV1::Commit(_) | LeafV1::CarryIn(_) | LeafV1::State(_) | LeafV1::History(_) => 4,
-            LeafV1::Param(j) => p.params[*j as usize].dtype.width() as u64,
+            LeafV1::Param(j) => param_leaf(*j).width(p.params[*j as usize].dtype),
             LeafV1::Const(j) => p.consts[*j as usize].dtype.width() as u64,
             LeafV1::Input(_) => 4,
         };
@@ -593,6 +629,15 @@ fn exceeds(limit: &'static str, at: impl Into<String>, value: u64, cap: u64) -> 
 
 /// **`tir_admit_v1`**: admit the canonical bytes of a program, or refuse them by rule and number.
 pub fn tir_admit_v1(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<TirAdmissionV1, TirAdmitError> {
+    check_admit_inputs(inputs)?;
+    let p = TirProgramV1::decode_canonical(program_bytes)?;
+    let info = validate(&p)?;
+    let intervals = analyze_ranges(&p)?;
+    admit_core(p, info, intervals, inputs, &|_| ParamLeafV1::Artifact)
+}
+
+/// The network inputs' own rules (spec 04b §10.3), checked before anything else.
+pub(crate) fn check_admit_inputs(inputs: &TirAdmitInputsV1) -> Result<(), TirAdmitError> {
     if !(1..=1 << 16).contains(&inputs.tile_len) {
         return Err(TirAdmitError::Inputs("tile_len outside [1, 2^16]"));
     }
@@ -602,9 +647,20 @@ pub fn tir_admit_v1(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<T
     if inputs.ceilings.max_checkpoint_interval == 0 {
         return Err(TirAdmitError::Inputs("max_checkpoint_interval is 0"));
     }
-    let p = TirProgramV1::decode_canonical(program_bytes)?;
-    let info = validate(&p)?;
-    let intervals = analyze_ranges(&p)?;
+    Ok(())
+}
+
+/// **Admission's analyses** (spec 04b §8, §10.2, §10.3) of a validated program with its proven
+/// intervals: costs, per-position quantities, cones and checkpoint intervals, each against its
+/// ceiling. `param_leaf` says how each param leaf is opened — every version-1 param is
+/// [`ParamLeafV1::Artifact`]; a version-2 program passes its view and its inputs' kinds (§15.5).
+pub(crate) fn admit_core(
+    p: TirProgramV1,
+    info: ProgramInfo,
+    intervals: Vec<Vec<Interval>>,
+    inputs: &TirAdmitInputsV1,
+    param_leaf: &dyn Fn(u16) -> ParamLeafV1,
+) -> Result<TirAdmissionV1, TirAdmitError> {
     let ceil = &inputs.ceilings;
     let tile_len = inputs.tile_len as u64;
     let window = |bi: usize| info.blocks[bi].window.unwrap_or(1) as u64;
@@ -745,14 +801,17 @@ pub fn tir_admit_v1(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<T
             }
             leaves.sort_unstable();
             leaves.dedup();
-            let (tile, tile_opened_bytes, _) = tile_demand(&p, bi, ni, &nodes, tile_len, h);
-            let chunked =
-                (!h_reductions.is_empty()).then(|| tile_demand(&p, bi, ni, &nodes, tile_len, (inputs.h_chunk as u64).min(h)));
+            let (tile, tile_opened_bytes, _) = tile_demand(&p, bi, ni, &nodes, tile_len, h, param_leaf);
+            let chunked = (!h_reductions.is_empty())
+                .then(|| tile_demand(&p, bi, ni, &nodes, tile_len, (inputs.h_chunk as u64).min(h), param_leaf));
             let (chunk, chunk_opened_bytes) = match chunked {
                 Some((c, o, _)) => (Some(c), Some(o)),
                 None => (None, None),
             };
-            let operands = leaves.iter().filter(|l| l.is_committed()).count() as u64;
+            let operands = leaves
+                .iter()
+                .filter(|l| l.is_committed() || matches!(l, LeafV1::Param(j) if param_leaf(*j) == ParamLeafV1::Committed))
+                .count() as u64;
             let cone = ConeV1 {
                 block: bi as u8,
                 node: ni as u16,

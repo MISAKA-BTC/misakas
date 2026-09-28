@@ -1,0 +1,1208 @@
+{
+  "format": "palw-tir-v2/demand-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md §15",
+  "program": "programs/denoiser-final.json",
+  "limits": {
+    "elements": "1048576",
+    "terms": "16777216"
+  },
+  "cases": [
+    {
+      "name": "node pos 0 occurrence 0 node 3",
+      "target": {
+        "node": {
+          "node": 3,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "-4088",
+          "-2389",
+          "-1887"
+        ],
+        "work": {
+          "elements": "10",
+          "terms": "0"
+        },
+        "input_requests": [
+          [
+            0,
+            0,
+            "0,6,11"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 0 node 4",
+      "target": {
+        "node": {
+          "node": 4,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "-4088",
+          "-2389",
+          "-1887"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 0 node 11",
+      "target": {
+        "node": {
+          "node": 11,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2086",
+          "-1118",
+          "-258"
+        ],
+        "work": {
+          "elements": "45",
+          "terms": "15"
+        },
+        "input_requests": [
+          [
+            0,
+            1,
+            "0,2-4,6-8,10-11"
+          ],
+          [
+            0,
+            2,
+            "0"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 1 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 1,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "-4088",
+          "-2389",
+          "-1887"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 1 node 9",
+      "target": {
+        "node": {
+          "node": 9,
+          "occurrence": 1,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "-24846",
+          "-2004",
+          "-13743"
+        ],
+        "work": {
+          "elements": "25",
+          "terms": "4"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 1 node 10",
+      "target": {
+        "node": {
+          "node": 10,
+          "occurrence": 1,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2086",
+          "-1118",
+          "-258"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 2 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 2,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "-4088",
+          "-2389",
+          "-1887"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 2 node 9",
+      "target": {
+        "node": {
+          "node": 9,
+          "occurrence": 2,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "-102552",
+          "-9206",
+          "-3498"
+        ],
+        "work": {
+          "elements": "25",
+          "terms": "4"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 2 node 10",
+      "target": {
+        "node": {
+          "node": 10,
+          "occurrence": 2,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2086",
+          "-1118",
+          "-258"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 0 occurrence 3 node 17",
+      "target": {
+        "node": {
+          "node": 17,
+          "occurrence": 3,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "83028",
+          "4164",
+          "-282"
+        ],
+        "work": {
+          "elements": "42",
+          "terms": "0"
+        },
+        "input_requests": [
+          [
+            0,
+            3,
+            "0"
+          ],
+          [
+            0,
+            4,
+            "0"
+          ],
+          [
+            0,
+            5,
+            "0,6,11"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 0 node 3",
+      "target": {
+        "node": {
+          "node": 3,
+          "occurrence": 0,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "83028",
+          "4164",
+          "-282"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 0 node 4",
+      "target": {
+        "node": {
+          "node": 4,
+          "occurrence": 0,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "83028",
+          "4164",
+          "-282"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 0 node 11",
+      "target": {
+        "node": {
+          "node": 11,
+          "occurrence": 0,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2086",
+          "-1118",
+          "-258"
+        ],
+        "work": {
+          "elements": "45",
+          "terms": "15"
+        },
+        "input_requests": [
+          [
+            1,
+            1,
+            "0,2-4,6-8,10-11"
+          ],
+          [
+            1,
+            2,
+            "0"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 1 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 1,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "83028",
+          "4164",
+          "-282"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 1 node 9",
+      "target": {
+        "node": {
+          "node": 9,
+          "occurrence": 1,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "503295",
+          "3321",
+          "-2107"
+        ],
+        "work": {
+          "elements": "25",
+          "terms": "4"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 1 node 10",
+      "target": {
+        "node": {
+          "node": 10,
+          "occurrence": 1,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2086",
+          "-1118",
+          "-258"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 2 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 2,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "83028",
+          "4164",
+          "-282"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 2 node 9",
+      "target": {
+        "node": {
+          "node": 9,
+          "occurrence": 2,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "2076029",
+          "15090",
+          "-589"
+        ],
+        "work": {
+          "elements": "25",
+          "terms": "4"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 2 node 10",
+      "target": {
+        "node": {
+          "node": 10,
+          "occurrence": 2,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2086",
+          "-1118",
+          "-258"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 1 occurrence 3 node 17",
+      "target": {
+        "node": {
+          "node": 17,
+          "occurrence": 3,
+          "pos": 1
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "1048576",
+          "13273",
+          "-508"
+        ],
+        "work": {
+          "elements": "42",
+          "terms": "0"
+        },
+        "input_requests": [
+          [
+            1,
+            3,
+            "0"
+          ],
+          [
+            1,
+            4,
+            "0"
+          ],
+          [
+            1,
+            5,
+            "0,6,11"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 0 node 3",
+      "target": {
+        "node": {
+          "node": 3,
+          "occurrence": 0,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "1048576",
+          "13273",
+          "-508"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 0 node 4",
+      "target": {
+        "node": {
+          "node": 4,
+          "occurrence": 0,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "1048576",
+          "13273",
+          "-508"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 0 node 11",
+      "target": {
+        "node": {
+          "node": 11,
+          "occurrence": 0,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2086",
+          "-1118",
+          "-258"
+        ],
+        "work": {
+          "elements": "45",
+          "terms": "15"
+        },
+        "input_requests": [
+          [
+            2,
+            1,
+            "0,2-4,6-8,10-11"
+          ],
+          [
+            2,
+            2,
+            "0"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 1 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 1,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "1048576",
+          "13273",
+          "-508"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 1 node 9",
+      "target": {
+        "node": {
+          "node": 9,
+          "occurrence": 1,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "6356930",
+          "10722",
+          "-3746"
+        ],
+        "work": {
+          "elements": "25",
+          "terms": "4"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 1 node 10",
+      "target": {
+        "node": {
+          "node": 10,
+          "occurrence": 1,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2086",
+          "-1118",
+          "-258"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 2 node 0",
+      "target": {
+        "node": {
+          "node": 0,
+          "occurrence": 2,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "1048576",
+          "13273",
+          "-508"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 2 node 9",
+      "target": {
+        "node": {
+          "node": 9,
+          "occurrence": 2,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "26222274",
+          "48857",
+          "-999"
+        ],
+        "work": {
+          "elements": "25",
+          "terms": "4"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 2 node 10",
+      "target": {
+        "node": {
+          "node": 10,
+          "occurrence": 2,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        2,
+        3
+      ],
+      "expect": {
+        "values": [
+          "2086",
+          "-1118",
+          "-258"
+        ],
+        "work": {
+          "elements": "3",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "node pos 2 occurrence 3 node 17",
+      "target": {
+        "node": {
+          "node": 17,
+          "occurrence": 3,
+          "pos": 2
+        }
+      },
+      "elements": [
+        0,
+        6,
+        11
+      ],
+      "expect": {
+        "values": [
+          "-1048576",
+          "1269",
+          "-464"
+        ],
+        "work": {
+          "elements": "42",
+          "terms": "0"
+        },
+        "input_requests": [
+          [
+            2,
+            3,
+            "0"
+          ],
+          [
+            2,
+            4,
+            "0"
+          ],
+          [
+            2,
+            5,
+            "0,6,11"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "state den.latent after 0",
+      "target": {
+        "state_after": {
+          "layer": null,
+          "pos": 0,
+          "state": 0
+        }
+      },
+      "elements": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "expect": {
+        "values": [
+          "83028",
+          "-22743",
+          "-49138",
+          "-360536",
+          "-4394",
+          "96061",
+          "4164",
+          "2328",
+          "172506",
+          "678",
+          "-93902",
+          "-282"
+        ],
+        "work": {
+          "elements": "0",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "state den.latent after 1",
+      "target": {
+        "state_after": {
+          "layer": null,
+          "pos": 1,
+          "state": 0
+        }
+      },
+      "elements": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "expect": {
+        "values": [
+          "1048576",
+          "-206846",
+          "234211",
+          "1048576",
+          "-73215",
+          "-1004467",
+          "13273",
+          "5187",
+          "-1048576",
+          "905",
+          "-1048576",
+          "-508"
+        ],
+        "work": {
+          "elements": "0",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "state den.latent after 2",
+      "target": {
+        "state_after": {
+          "layer": null,
+          "pos": 2,
+          "state": 0
+        }
+      },
+      "elements": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "expect": {
+        "values": [
+          "-1048576",
+          "447993",
+          "763467",
+          "1048576",
+          "376307",
+          "-1048576",
+          "1269",
+          "2252",
+          "-1048576",
+          "766",
+          "1048576",
+          "-464"
+        ],
+        "work": {
+          "elements": "0",
+          "terms": "0"
+        },
+        "input_requests": []
+      }
+    },
+    {
+      "name": "pre carry 0 at position 0 with input 0 withheld",
+      "target": {
+        "node": {
+          "node": 3,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0
+      ],
+      "withhold_input": 0,
+      "expect_error": "Missing"
+    },
+    {
+      "name": "pre carry 0 at position 0 with input 1 withheld",
+      "target": {
+        "node": {
+          "node": 3,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0
+      ],
+      "withhold_input": 1,
+      "expect": {
+        "values": [
+          "-4088"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "input_requests": [
+          [
+            0,
+            0,
+            "0"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "pre carry 0 at position 0 with input 2 withheld",
+      "target": {
+        "node": {
+          "node": 3,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0
+      ],
+      "withhold_input": 2,
+      "expect": {
+        "values": [
+          "-4088"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "input_requests": [
+          [
+            0,
+            0,
+            "0"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "pre carry 0 at position 0 with input 3 withheld",
+      "target": {
+        "node": {
+          "node": 3,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0
+      ],
+      "withhold_input": 3,
+      "expect": {
+        "values": [
+          "-4088"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "input_requests": [
+          [
+            0,
+            0,
+            "0"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "pre carry 0 at position 0 with input 4 withheld",
+      "target": {
+        "node": {
+          "node": 3,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0
+      ],
+      "withhold_input": 4,
+      "expect": {
+        "values": [
+          "-4088"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "input_requests": [
+          [
+            0,
+            0,
+            "0"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "pre carry 0 at position 0 with input 5 withheld",
+      "target": {
+        "node": {
+          "node": 3,
+          "occurrence": 0,
+          "pos": 0
+        }
+      },
+      "elements": [
+        0
+      ],
+      "withhold_input": 5,
+      "expect": {
+        "values": [
+          "-4088"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "input_requests": [
+          [
+            0,
+            0,
+            "0"
+          ]
+        ]
+      }
+    }
+  ]
+}

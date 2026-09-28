@@ -606,3 +606,602 @@ fn encoding() {
     let file = EncodingFileJson { format: "palw-tir-v2/encoding-vectors/1".into(), spec: SPEC.into(), cases };
     check_or_bless("encoding.json", serde_json::to_string_pretty(&file).unwrap());
 }
+
+// ---- admission (spec 04b §15.9) ------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct CostJson {
+    macs: String,
+    elementwise: String,
+    transcendentals: String,
+    bytes_read: String,
+    bytes_written: String,
+}
+
+fn cost_json(c: &misaka_palw_tir::admit::CostV1) -> CostJson {
+    CostJson {
+        macs: c.macs.to_string(),
+        elementwise: c.elementwise.to_string(),
+        transcendentals: c.transcendentals.to_string(),
+        bytes_read: c.bytes_read.to_string(),
+        bytes_written: c.bytes_written.to_string(),
+    }
+}
+
+#[derive(Serialize)]
+struct PositionJson {
+    cost: CostJson,
+    state_bytes: String,
+    peak_live_bytes: String,
+    commit_lanes: String,
+    step_leaves: String,
+}
+
+fn position_json(p: &misaka_palw_tir::admit::PositionV1) -> PositionJson {
+    PositionJson {
+        cost: cost_json(&p.cost),
+        state_bytes: p.state_bytes.to_string(),
+        peak_live_bytes: p.peak_live_bytes.to_string(),
+        commit_lanes: p.commit_lanes.to_string(),
+        step_leaves: p.step_leaves.to_string(),
+    }
+}
+
+#[derive(Serialize)]
+struct ConeJson2 {
+    block: String,
+    node: String,
+    leaves: Vec<String>,
+    tiles: String,
+    tile: CostJson,
+    tile_opened_bytes: String,
+    operands: String,
+    h_reductions: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct InputAdmissionJson {
+    interval: [String; 2],
+    leaf: String,
+}
+
+#[derive(Serialize)]
+struct StateCkptJson {
+    state: String,
+    closure: Vec<String>,
+    groups: String,
+    interval: String,
+}
+
+#[derive(Serialize)]
+struct ProgramAdmissionJson {
+    first_input_param: String,
+    inputs: Vec<InputAdmissionJson>,
+    post_written: Vec<String>,
+    checkpoint_interval: String,
+    cone_work: String,
+    position: PositionJson,
+    states: Vec<StateCkptJson>,
+    cones: Vec<ConeJson2>,
+    intervals: Vec<Vec<[String; 2]>>,
+}
+
+#[derive(Serialize)]
+struct AdmitRefusalJson {
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cap: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    class: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ProgramAdmissionCaseJson {
+    name: String,
+    program_borsh_hex: String,
+    expect: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<AdmitRefusalJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admission: Option<ProgramAdmissionJson>,
+}
+
+#[derive(Serialize)]
+struct StageAdmissionJson {
+    stage: String,
+    max_trip: String,
+    inputs: Vec<InputAdmissionJson>,
+    position: PositionJson,
+    job_cost: CostJson,
+    job_step_leaves: String,
+    cones: Vec<ConeJson2>,
+}
+
+#[derive(Serialize)]
+struct PipelineAdmissionJson {
+    job_cost: CostJson,
+    job_step_leaves: String,
+    cone_work: String,
+    output_interval: [String; 2],
+    stages: Vec<StageAdmissionJson>,
+}
+
+#[derive(Serialize)]
+struct PipelineAdmissionCaseJson {
+    name: String,
+    pipeline_borsh_hex: String,
+    programs_borsh_hex: Vec<String>,
+    job_ceilings: JobCeilingsJson,
+    expect: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<AdmitRefusalJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admission: Option<PipelineAdmissionJson>,
+}
+
+#[derive(Serialize)]
+struct CeilingsJson {
+    max_tile_macs: String,
+    max_tile_transcendentals: String,
+    max_tile_opened_bytes: String,
+    max_tile_operands: String,
+    max_position_macs: String,
+    max_position_transcendentals: String,
+    max_state_bytes: String,
+    max_step_leaves: String,
+    max_checkpoint_interval: String,
+    max_cone_work: String,
+}
+
+#[derive(Serialize)]
+struct JobCeilingsJson {
+    max_job_macs: String,
+    max_job_transcendentals: String,
+    max_job_step_leaves: String,
+    max_job_cone_work: String,
+}
+
+#[derive(Serialize)]
+struct AdmissionFileJson {
+    format: String,
+    spec: String,
+    tile_len: String,
+    h_chunk: String,
+    ceilings: CeilingsJson,
+    programs: Vec<ProgramAdmissionCaseJson>,
+    pipelines: Vec<PipelineAdmissionCaseJson>,
+}
+
+fn leaf_text(l: &misaka_palw_tir::admit::LeafV1, first_input: u16) -> String {
+    use misaka_palw_tir::admit::LeafV1 as L;
+    match l {
+        L::Commit(n) => format!("commit:{n}"),
+        L::CarryIn(k) => format!("carry_in:{k}"),
+        L::State(s) => format!("state:{s}"),
+        L::History(s) => format!("history:{s}"),
+        L::Param(j) if *j >= first_input => format!("input:{}", j - first_input),
+        L::Param(j) => format!("param:{j}"),
+        L::Const(j) => format!("const:{j}"),
+        L::Input(j) => format!("ref_input:{j}"),
+    }
+}
+
+fn cones_json(a: &misaka_palw_tir::admit_v2::TirAdmissionV2) -> Vec<ConeJson2> {
+    a.view
+        .cones
+        .iter()
+        .map(|k| ConeJson2 {
+            block: k.block.to_string(),
+            node: k.node.to_string(),
+            leaves: k.leaves.iter().map(|l| leaf_text(l, a.first_input_param)).collect(),
+            tiles: k.tiles.to_string(),
+            tile: cost_json(&k.tile),
+            tile_opened_bytes: k.tile_opened_bytes.to_string(),
+            operands: k.operands.to_string(),
+            h_reductions: k.h_reductions.iter().map(|n| n.to_string()).collect(),
+        })
+        .collect()
+}
+
+fn inputs_admission_json(a: &misaka_palw_tir::admit_v2::TirAdmissionV2) -> Vec<InputAdmissionJson> {
+    a.inputs
+        .iter()
+        .map(|i| InputAdmissionJson {
+            interval: [i.interval.lo.to_string(), i.interval.hi.to_string()],
+            leaf: format!("{:?}", i.leaf),
+        })
+        .collect()
+}
+
+fn refusal_json(e: &misaka_palw_tir::admit::TirAdmitError) -> AdmitRefusalJson {
+    use misaka_palw_tir::admit::TirAdmitError as E;
+    match e {
+        E::Exceeds { limit, at, value, cap } => AdmitRefusalJson {
+            kind: "exceeds".into(),
+            limit: Some(limit.to_string()),
+            at: Some(at.clone()),
+            value: Some(value.to_string()),
+            cap: Some(cap.to_string()),
+            class: None,
+        },
+        E::Program(t) => AdmitRefusalJson {
+            kind: "program".into(),
+            limit: None,
+            at: None,
+            value: None,
+            cap: None,
+            class: Some(format!("{:?}", t.kind)),
+        },
+        E::Inputs(_) => AdmitRefusalJson { kind: "inputs".into(), limit: None, at: None, value: None, cap: None, class: None },
+    }
+}
+
+#[test]
+fn admission() {
+    use misaka_palw_tir::admit::{TirAdmitInputsV1, TirCeilingsV1};
+    use misaka_palw_tir::admit_v2::*;
+    let inputs = TirAdmitInputsV1 { tile_len: 64, h_chunk: 16, ceilings: TirCeilingsV1::legacy_court_v1() };
+    let c = &inputs.ceilings;
+    let mut wide = denoiser_program();
+    wide.inputs[IN_GUIDANCE as usize].source = InputSource::External { lo: 0, hi: i32::MAX as i64 };
+    let programs: Vec<(&str, TirProgramV2)> = vec![
+        ("encoder-rows", encoder_program()),
+        ("denoiser-final", denoiser_program()),
+        ("decoder-final", decoder_program()),
+        ("refused: guidance up to i32::MAX overflows the update", wide),
+    ];
+    let programs = programs
+        .into_iter()
+        .map(|(name, p)| {
+            let bytes = p.encode();
+            let (expect, refusal, admission) = match tir_admit_v2(&bytes, &inputs) {
+                Ok(a) => {
+                    let adm = ProgramAdmissionJson {
+                        first_input_param: a.first_input_param.to_string(),
+                        inputs: inputs_admission_json(&a),
+                        post_written: a.post_written.iter().map(|s| s.to_string()).collect(),
+                        checkpoint_interval: a.view.checkpoint_interval.to_string(),
+                        cone_work: a.view.cone_work.to_string(),
+                        position: position_json(&a.view.position),
+                        states: a
+                            .view
+                            .states
+                            .iter()
+                            .map(|s| StateCkptJson {
+                                state: s.state.to_string(),
+                                closure: s.closure.iter().map(|t| t.to_string()).collect(),
+                                groups: s.groups.to_string(),
+                                interval: s.interval.to_string(),
+                            })
+                            .collect(),
+                        cones: cones_json(&a),
+                        intervals: a
+                            .view
+                            .intervals
+                            .iter()
+                            .map(|b| b.iter().map(|i| [i.lo.to_string(), i.hi.to_string()]).collect())
+                            .collect(),
+                    };
+                    ("admitted".to_string(), None, Some(adm))
+                }
+                Err(e) => ("refused".to_string(), Some(refusal_json(&e)), None),
+            };
+            ProgramAdmissionCaseJson { name: name.into(), program_borsh_hex: hex(&bytes), expect, refusal, admission }
+        })
+        .collect();
+    let open = TirJobCeilingsV1::open_v1();
+    let toy = toy_pipeline();
+    let toy_leaves = tir_admit_pipeline_v1(&toy.0.encode(), &toy.1.iter().map(|p| p.encode()).collect::<Vec<_>>(), &inputs, &open)
+        .unwrap()
+        .job_step_leaves;
+    let pipelines: Vec<(&str, (TirPipelineV1, Vec<TirProgramV2>), TirJobCeilingsV1)> = vec![
+        ("toy-image", toy_pipeline(), open),
+        ("toy-bidirectional (JobTokens + JobTokenCount)", bidirectional_pipeline(0), open),
+        ("matmul (the job's MACs)", matmul_pipeline(), open),
+        ("refused: max_job_macs one short", matmul_pipeline(), TirJobCeilingsV1 { max_job_macs: 3 * 512 - 1, ..open }),
+        ("refused: max_job_step_leaves one short", toy_pipeline(), TirJobCeilingsV1 { max_job_step_leaves: toy_leaves - 1, ..open }),
+    ];
+    let pipelines = pipelines
+        .into_iter()
+        .map(|(name, (p, progs), job)| {
+            let pb = p.encode();
+            let bytes: Vec<Vec<u8>> = progs.iter().map(|x| x.encode()).collect();
+            let (expect, refusal, admission) = match tir_admit_pipeline_v1(&pb, &bytes, &inputs, &job) {
+                Ok(a) => {
+                    let adm = PipelineAdmissionJson {
+                        job_cost: cost_json(&a.job_cost),
+                        job_step_leaves: a.job_step_leaves.to_string(),
+                        cone_work: a.cone_work.to_string(),
+                        output_interval: [a.output_interval.lo.to_string(), a.output_interval.hi.to_string()],
+                        stages: a
+                            .stages
+                            .iter()
+                            .map(|s| StageAdmissionJson {
+                                stage: s.stage.to_string(),
+                                max_trip: s.max_trip.to_string(),
+                                inputs: inputs_admission_json(&s.admission),
+                                position: position_json(&s.admission.view.position),
+                                job_cost: cost_json(&s.job_cost),
+                                job_step_leaves: s.job_step_leaves.to_string(),
+                                cones: cones_json(&s.admission),
+                            })
+                            .collect(),
+                    };
+                    ("admitted".to_string(), None, Some(adm))
+                }
+                Err(e) => ("refused".to_string(), Some(refusal_json(&e)), None),
+            };
+            PipelineAdmissionCaseJson {
+                name: name.into(),
+                pipeline_borsh_hex: hex(&pb),
+                programs_borsh_hex: bytes.iter().map(|b| hex(b)).collect(),
+                job_ceilings: JobCeilingsJson {
+                    max_job_macs: job.max_job_macs.to_string(),
+                    max_job_transcendentals: job.max_job_transcendentals.to_string(),
+                    max_job_step_leaves: job.max_job_step_leaves.to_string(),
+                    max_job_cone_work: job.max_job_cone_work.to_string(),
+                },
+                expect,
+                refusal,
+                admission,
+            }
+        })
+        .collect();
+    let file = AdmissionFileJson {
+        format: "palw-tir-v2/admission-vectors/1".into(),
+        spec: SPEC.into(),
+        tile_len: inputs.tile_len.to_string(),
+        h_chunk: inputs.h_chunk.to_string(),
+        ceilings: CeilingsJson {
+            max_tile_macs: c.max_tile_macs.to_string(),
+            max_tile_transcendentals: c.max_tile_transcendentals.to_string(),
+            max_tile_opened_bytes: c.max_tile_opened_bytes.to_string(),
+            max_tile_operands: c.max_tile_operands.to_string(),
+            max_position_macs: c.max_position_macs.to_string(),
+            max_position_transcendentals: c.max_position_transcendentals.to_string(),
+            max_state_bytes: c.max_state_bytes.to_string(),
+            max_step_leaves: c.max_step_leaves.to_string(),
+            max_checkpoint_interval: c.max_checkpoint_interval.to_string(),
+            max_cone_work: c.max_cone_work.to_string(),
+        },
+        programs,
+        pipelines,
+    };
+    check_or_bless("admission.json", serde_json::to_string_pretty(&file).unwrap());
+}
+
+// ---- demand evaluation (spec 04b §15.4) ------------------------------------------------------------
+
+#[derive(Serialize)]
+struct DemandWorkJson {
+    elements: String,
+    terms: String,
+}
+
+#[derive(Serialize)]
+struct DemandExpectJson {
+    values: Vec<String>,
+    work: DemandWorkJson,
+    /// `[pos, input, indices]`, the input questions asked, grouped (indices as inclusive runs).
+    input_requests: Vec<(u32, u16, String)>,
+}
+
+#[derive(Serialize)]
+struct DemandCaseJson {
+    name: String,
+    target: serde_json::Value,
+    elements: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    withhold_input: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expect: Option<DemandExpectJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expect_error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DemandFileJson {
+    format: String,
+    spec: String,
+    /// The program vector whose params, inputs, tokens and steps are the source's committed data;
+    /// the source answers `Fixed` values at position 0 (the initial zeros) and `Replay` elsewhere.
+    program: String,
+    limits: DemandWorkJson,
+    cases: Vec<DemandCaseJson>,
+}
+
+fn runs(indices: &[usize]) -> String {
+    let mut v: Vec<usize> = indices.to_vec();
+    v.sort_unstable();
+    v.dedup();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < v.len() {
+        let mut j = i;
+        while j + 1 < v.len() && v[j + 1] == v[j] + 1 {
+            j += 1;
+        }
+        out.push(if i == j { v[i].to_string() } else { format!("{}-{}", v[i], v[j]) });
+        i = j + 1;
+    }
+    out.join(",")
+}
+
+fn demand_file(name: &str, c: &ProgramCase) -> String {
+    use misaka_palw_tir::demand::{DemandContext, DemandError, DemandLimits, DemandRequest, DemandTarget};
+    use misaka_palw_tir::demand_v2::{MapSourceV2, commit_occurrence_v2, eval_demanded_v2};
+    use misaka_palw_tir::validate_v2::validate_v2;
+    let p = &c.program;
+    let info = validate_v2(p).unwrap();
+    let interp = InterpreterV2::new(p).unwrap();
+    let mut state = RunState::default();
+    let steps: Vec<StepOutputV2> = c.tokens.iter().map(|t| interp.step(&c.params, &c.inputs, &mut state, *t).unwrap()).collect();
+    let limits = DemandLimits { max_elements: 1 << 20, max_terms: 1 << 24 };
+    let mut cases = Vec::new();
+    let mut case = |name: String, target: DemandTarget, json: serde_json::Value, elements: Vec<usize>, withhold: Option<u16>| {
+        let mut src = MapSourceV2::from_run(p, &info, &c.params, &c.inputs, &c.tokens, &steps);
+        if let DemandTarget::Node { ctx, node } = target {
+            src.base.nodes.remove(&(ctx, node));
+        }
+        if let Some(k) = withhold {
+            src.withheld_inputs.insert(k, TirErrorKind::Operand);
+        }
+        let r = eval_demanded_v2(p, &info, &DemandRequest { target, elements: &elements }, &mut src, &limits);
+        let (expect, expect_error) = match r {
+            Ok((vals, work)) => {
+                let mut groups: BTreeMap<(u32, u16), Vec<usize>> = BTreeMap::new();
+                for (pos, k, i) in &src.input_requests {
+                    groups.entry((*pos, *k)).or_default().push(*i);
+                }
+                (
+                    Some(DemandExpectJson {
+                        values: vals.iter().map(|v| v.to_string()).collect(),
+                        work: DemandWorkJson { elements: work.elements.to_string(), terms: work.terms.to_string() },
+                        input_requests: groups.into_iter().map(|((pos, k), is)| (pos, k, runs(&is))).collect(),
+                    }),
+                    None,
+                )
+            }
+            Err(DemandError::Tir(t)) => (None, Some(format!("{:?}", t.kind))),
+            Err(DemandError::WorkLimit(_)) => (None, Some("WorkLimit".into())),
+        };
+        cases.push(DemandCaseJson { name, target: json, elements, withhold_input: withhold, expect, expect_error });
+    };
+    for (pos, step) in steps.iter().enumerate() {
+        for rec in &step.commits {
+            let occ = commit_occurrence_v2(p, rec.block, rec.layer);
+            let ctx = DemandContext { pos: pos as u32, occurrence: occ };
+            let n = rec.value.data.len();
+            let mut elements = vec![0, n / 2, n - 1];
+            elements.dedup();
+            case(
+                format!("node pos {pos} occurrence {occ} node {}", rec.node),
+                DemandTarget::Node { ctx, node: rec.node },
+                serde_json::json!({"node": {"pos": pos, "occurrence": occ, "node": rec.node}}),
+                elements,
+                None,
+            );
+        }
+    }
+    for (j, s) in p.states.iter().enumerate() {
+        if matches!(s.kind, misaka_palw_tir::program::StateKind::Fixed { .. }) && !s.per_layer {
+            let n: usize = s.shape.iter().map(|d| *d as usize).product();
+            for pos in 0..steps.len() as u32 {
+                case(
+                    format!("state {} after {pos}", s.name),
+                    DemandTarget::StateAfter { pos, state: j as u16, layer: None },
+                    serde_json::json!({"state_after": {"pos": pos, "state": j, "layer": null}}),
+                    (0..n).collect(),
+                    None,
+                );
+            }
+        }
+    }
+    for k in 0..p.inputs.len() as u16 {
+        let x = pre_carry(p, 0);
+        case(
+            format!("pre carry 0 at position 0 with input {k} withheld"),
+            DemandTarget::Node { ctx: DemandContext { pos: 0, occurrence: 0 }, node: x },
+            serde_json::json!({"node": {"pos": 0, "occurrence": 0, "node": x}}),
+            vec![0],
+            Some(k),
+        );
+    }
+    let file = DemandFileJson {
+        format: "palw-tir-v2/demand-vectors/1".into(),
+        spec: SPEC.into(),
+        program: format!("programs/{name}.json"),
+        limits: DemandWorkJson { elements: limits.max_elements.to_string(), terms: limits.max_terms.to_string() },
+        cases,
+    };
+    serde_json::to_string_pretty(&file).unwrap()
+}
+
+#[test]
+fn demand() {
+    let random = GenRandom { seed: [0x2a; 32], position: 0 };
+    let enc = encoder_program();
+    let enc_case = ProgramCase {
+        name: "encoder-rows",
+        params: materialize_v2(&enc, 100),
+        program: enc,
+        inputs: MapInputs::default(),
+        tokens: vec![1, 5, 6, 7, 2],
+    };
+    check_or_bless("demand/encoder-rows.json", demand_file("encoder-rows", &enc_case));
+    let den = denoiser_program();
+    let mut rng = Lcg(99);
+    let den_inputs = denoiser_inputs(&random, cond_rows(&mut rng), 3, 24, 1, 3);
+    let den_case = ProgramCase {
+        name: "denoiser-final",
+        params: materialize_v2(&den, 101),
+        program: den,
+        inputs: den_inputs,
+        tokens: vec![0; 3],
+    };
+    check_or_bless("demand/denoiser-final.json", demand_file("denoiser-final", &den_case));
+}
+
+#[test]
+fn bidirectional_pipeline_vector() {
+    let (p, programs) = bidirectional_pipeline(0);
+    let params = ProgramParams(programs.iter().enumerate().map(|(i, prog)| materialize_v2(prog, 200 + i as u64)).collect());
+    let job = PipelineJob { prompt: vec![5, 6], ..toy_job() };
+    let random = GenRandom { seed: [0; 32], position: 0 };
+    let run = run_pipeline(&p, &programs, &params, &random, &job).unwrap();
+    // The same job under another pad id: the same output (the mask is the count, not the pad).
+    let (p7, programs7) = bidirectional_pipeline(7);
+    assert_eq!(run_pipeline(&p7, &programs7, &params, &random, &job).unwrap().output, run.output);
+    let stages = run
+        .stages
+        .iter()
+        .zip(&p.stages)
+        .map(|(r, st)| StageJson {
+            name: st.name.clone(),
+            trip: r.trip,
+            tokens: r.tokens.clone(),
+            steps: steps_json(&r.steps, &vec![0; r.trip as usize]),
+        })
+        .collect();
+    let spec = misaka_palw_gen::output::OutputSpecV1::embedding_i32(1, D, 0, false);
+    let values: Vec<i64> = run.output.data.iter().map(|v| *v as i64).collect();
+    let file = PipelineFileJson {
+        format: "palw-tir-v2/pipeline-vectors/1".into(),
+        spec: SPEC.into(),
+        name: "toy-bidirectional".into(),
+        pipeline_borsh_hex: hex(&p.encode()),
+        programs: programs
+            .iter()
+            .zip(&params.0)
+            .map(|(prog, m)| PipelineProgramJson {
+                program_borsh_hex: hex(&prog.encode()),
+                graph_ir_root_hex: root(&prog.encode()),
+                params: params_json(m),
+            })
+            .collect(),
+        job: JobJson {
+            prompt: job.prompt.clone(),
+            negative: job.negative.clone(),
+            steps: job.steps,
+            scalars: job.scalars.iter().map(|v| v.to_string()).collect(),
+        },
+        seed_hex: hex(&random.seed),
+        item_index: random.position,
+        random_inputs: vec![],
+        stages,
+        output: tj(&run.output),
+        output_image: OutputImageJson {
+            spec_borsh_hex: hex(&spec.encode()),
+            tile_len: 4,
+            canonical_hex: hex(&spec.canonical_bytes(&values).unwrap()),
+            output_root_hex: hex(&misaka_palw_gen::output::output_root_v1(&spec, &values, 4).unwrap()),
+        },
+    };
+    check_or_bless("pipelines/toy-bidirectional.json", serde_json::to_string_pretty(&file).unwrap());
+}

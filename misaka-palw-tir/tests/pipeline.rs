@@ -138,3 +138,59 @@ fn every_pipeline_rule_refuses_by_name() {
         assert_eq!(e.kind, TirErrorKind::NormalForm, "{what}: {e}");
     }
 }
+
+#[test]
+fn a_token_count_masks_by_length_whatever_the_pad_id() {
+    let job = PipelineJob { prompt: vec![5, 6], ..toy_job() };
+    let run_with = |pad_id: u32| {
+        let (p, progs) = bidirectional_pipeline(pad_id);
+        run_pipeline(&p, &progs, &params_for(&progs), &GenRandom { seed: [0; 32], position: 0 }, &job).unwrap()
+    };
+    let (a, b) = (run_with(0), run_with(7));
+    assert_eq!(a.output, b.output, "the mask is the count, not the pad id");
+    // The output is the sum of the embeddings of [1, 5, 6, 2] — four admitted rows.
+    let (_, progs) = bidirectional_pipeline(0);
+    let embed = &params_for(&progs).0[0].tensors[&(0, None)];
+    let want: Vec<i128> = (0..D as usize).map(|c| [1usize, 5, 6, 2].iter().map(|t| embed.data[t * D as usize + c]).sum()).collect();
+    assert_eq!(a.output.data, want);
+    // A template longer than its pad is refused at run time.
+    let (p, progs) = bidirectional_pipeline(0);
+    let long = PipelineJob { prompt: vec![5; 5], ..toy_job() };
+    let e = run_pipeline(&p, &progs, &params_for(&progs), &GenRandom { seed: [0; 32], position: 0 }, &long).unwrap_err();
+    assert_eq!(e.kind, TirErrorKind::Operand);
+}
+
+#[test]
+fn token_count_rules_refuse_by_name() {
+    let (base, progs) = bidirectional_pipeline(0);
+    assert!(validate_pipeline(&base, &progs).is_ok());
+    let mut no_pad = base.clone();
+    if let Binding::JobTokenCount { rule } = &mut no_pad.stages[0].bind[1] {
+        rule.pad = None;
+    }
+    assert_eq!(validate_pipeline(&no_pad, &progs).unwrap_err().kind, TirErrorKind::NormalForm, "a count of an unpadded template");
+    let mut narrow = progs.clone();
+    narrow[0].inputs[1].source = InputSource::External { lo: 0, hi: 5 };
+    assert_eq!(validate_pipeline(&base, &narrow).unwrap_err().kind, TirErrorKind::NormalForm, "[0, 6] does not fit [0, 5]");
+    let mut ranked = base.clone();
+    ranked.stages[0].bind[1] = Binding::JobTokenCount {
+        rule: TokenRule { prefix: vec![], source: TokenSource::Prompt, suffix: vec![], pad: Some(TokenPad { id: 0, to_len: 6 }) },
+    };
+    ranked.stages[0].bind.swap(0, 1);
+    assert_eq!(validate_pipeline(&ranked, &progs).unwrap_err().kind, TirErrorKind::NormalForm, "a count bound to the token tensor");
+}
+
+#[test]
+fn a_pipeline_round_trips_its_canonical_bytes() {
+    let (p, progs) = toy_pipeline();
+    let bytes = p.encode();
+    assert_eq!(TirPipelineV1::decode_canonical(&bytes, &progs).unwrap(), p);
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert_eq!(TirPipelineV1::decode_canonical(&trailing, &progs).unwrap_err().kind, TirErrorKind::Encoding);
+    assert_eq!(TirPipelineV1::decode_canonical(&bytes[..bytes.len() - 1], &progs).unwrap_err().kind, TirErrorKind::Encoding);
+    let mut bad = p.clone();
+    bad.output_stage = 9;
+    assert_eq!(TirPipelineV1::decode_canonical(&bad.encode(), &progs).unwrap_err().kind, TirErrorKind::NormalForm);
+    assert_eq!(TirPipelineV1::decode_canonical(&vec![0u8; MAX_PIPELINE_BYTES + 1], &progs).unwrap_err().kind, TirErrorKind::Encoding);
+}
