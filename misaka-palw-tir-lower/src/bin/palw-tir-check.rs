@@ -78,6 +78,11 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
             }
             let mut text = String::from("\nPALW-TIR (Gate 2a lowering)\n");
             text.push_str(&lw.summary());
+            for (block, readers) in &lw.budget_fallbacks {
+                text.push_str(&format!(
+                    "  node budget (NF-12, 512 a block): block `{block}` keeps outlier splits only for values at most {readers} projections read\n"
+                ));
+            }
             text.push_str(&misaka_palw_tir_lower::admission::render(p, &inputs, &verdict));
             text.push_str(&format!("  program digest (BLAKE2b-512 of the encoding): {digest}\n"));
             if let Some(w) = &written {
@@ -93,6 +98,7 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
                     "params": p.params.len(),
                     "states": p.states.len(),
                     "admission": misaka_palw_tir_lower::admission::to_json(p, &inputs, &verdict),
+                    "budget_fallbacks": lw.budget_fallbacks.iter().map(|(b, r)| serde_json::json!({"block": b, "max_readers": r})).collect::<Vec<_>>(),
                     "digest": digest,
                     "written": written,
                 }),

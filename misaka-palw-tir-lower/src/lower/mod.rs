@@ -297,7 +297,10 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
                 cx.logits_key.clone(),
             );
             cx.split_max_readers = readers;
+            quiet_budget_hook();
+            QUIET_BUDGET.with(|q| q.set(true));
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower_block(&mut pb, &mut cx, hbk)));
+            QUIET_BUDGET.with(|q| q.set(false));
             match r {
                 Ok(v) => {
                     result = Some(v?);
@@ -346,6 +349,31 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no logits scale"))?;
     Ok(Lowered { program, fills, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks })
+}
+
+thread_local! {
+    /// Set while this thread tries a block against NF-12's node cap (the builder panics past it,
+    /// and the lowering catches that to retry with fewer splits).
+    static QUIET_BUDGET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A panic hook, installed once, that keeps the builder's "exceeds 512 nodes" panic quiet while
+/// the lowering is catching it on this thread — a fallback is reported in
+/// [`Lowered::budget_fallbacks`], not as a panic message on stderr. Every other panic, and that one
+/// anywhere else, goes to the hook that was installed before.
+fn quiet_budget_hook() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let p = info.payload();
+            let msg = p.downcast_ref::<String>().map(String::as_str).or_else(|| p.downcast_ref::<&str>().copied()).unwrap_or("");
+            if QUIET_BUDGET.with(|q| q.get()) && msg.contains("exceeds") && msg.contains("nodes") {
+                return;
+            }
+            prev(info)
+        }));
+    });
 }
 
 // ───────────────────────────── lowering state ─────────────────────────────
