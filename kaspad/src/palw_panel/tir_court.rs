@@ -406,13 +406,191 @@ pub(crate) struct PalwTirAnnexPursuitV1 {
     pub asked_daa: u64,
     pub asks: u32,
     pub rounds: u32,
+    /// **Option C's book.** The claim's binding (its program filled), once a served annex or an IR
+    /// answer on chain showed it — what an on-chain leaf demand carries.
+    pub binding: Option<std::sync::Arc<kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1>>,
+    /// Step leaves the chain disclosed (`TirStepLeaf` answers of anyone's session), as annexes that
+    /// verified against the claim — the named leaf and the fold's drawn ones.
+    pub disclosed: std::collections::BTreeMap<u64, std::sync::Arc<misaka_palw_sdk::lineages::tir::PalwTirLeafAnnexV1>>,
+    /// The leaf this seat demanded on chain, and the DAA the demand was queued at.
+    pub demanded: Option<(u64, u64)>,
+    /// The event demand that brings the binding on chain (its DAA), where no annex ever showed it.
+    pub event_demanded: Option<u64>,
+    /// The sessions this seat queued on the claim (the fold lets a seat open four over a claim's life).
+    pub sessions: u8,
+    /// When the chain was last read for the claim's IR answers.
+    pub looked_daa: Option<u64>,
 }
 
 impl PalwTirAnnexPursuitV1 {
     pub fn new(own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1>, current_daa: u64) -> Self {
         let own_tree = std::sync::Arc::new(misaka_palw_sdk::lineages::tir::TirStepTreeV1::full(&own.leaf_hashes));
-        Self { own, own_tree, leaf: 0, below: None, token: None, asked_daa: current_daa, asks: 1, rounds: 0 }
+        Self {
+            own,
+            own_tree,
+            leaf: 0,
+            below: None,
+            token: None,
+            asked_daa: current_daa,
+            asks: 1,
+            rounds: 0,
+            binding: None,
+            disclosed: Default::default(),
+            demanded: None,
+            event_demanded: None,
+            sessions: 0,
+            looked_daa: None,
+        }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Option C: the executor that serves nothing is made to disclose on chain (the second IR fence)
+// ---------------------------------------------------------------------------------------------
+
+/// How often (DAA) a pursuit in option C reads the chain for the claim's IR answers.
+pub(crate) const PALW_TIR_DEMAND_RELOOK_DAA_V1: u64 = 2;
+/// DAA past a demand's disclose window before the pursuit stops waiting for its answer.
+pub(crate) const PALW_TIR_DEMAND_SLACK_DAA_V1: u64 = 4;
+/// Disclosed leaves a pursuit keeps (the named leaf and the drawn ones of each session).
+pub(crate) const PALW_TIR_DISCLOSED_KEPT_V1: usize = 64;
+
+/// **What a pursuit does once its executor served no annex of the leaf** in
+/// [`PALW_TIR_ANNEX_ASKS_V1`] asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwTirWithheldStepV1 {
+    /// Nothing on chain can make the executor disclose (below `palw_tir_fence2`, or this seat's
+    /// sessions on the claim are spent): the pursuit ends.
+    GiveUp(&'static str),
+    /// No annex or answer has shown the claim's binding: demand an event (row 0, tile 0), whose IR
+    /// answer carries it — a demand the executor answers or defaults on like any other.
+    DemandEvent,
+    /// Demand this leaf on chain (`DefaultAccusedTirLeaf`).
+    DemandLeaf { leaf: u64 },
+    /// A demand is on chain: wait for its answer — silence past its window voids the claim.
+    Wait,
+}
+
+/// **The pursuit's next move while the executor withholds** — pure. `armed`: `palw_tir_fence2` and
+/// R-core+ in force now; `window`: the DA disclose window (`W_disclose`); `max_sessions`: the fold's
+/// cap on a seat's sessions over a claim's life.
+pub(crate) fn palw_tir_withheld_step_v1(
+    armed: bool,
+    pursuit: &PalwTirAnnexPursuitV1,
+    current_daa: u64,
+    window: u64,
+    max_sessions: u8,
+) -> PalwTirWithheldStepV1 {
+    if !armed {
+        return PalwTirWithheldStepV1::GiveUp("below palw_tir_fence2 no demand on chain makes the executor disclose a step leaf");
+    }
+    let waiting = |at: u64| current_daa <= at.saturating_add(window).saturating_add(PALW_TIR_DEMAND_SLACK_DAA_V1);
+    if let Some((leaf, at)) = pursuit.demanded
+        && leaf == pursuit.leaf
+        && waiting(at)
+    {
+        return PalwTirWithheldStepV1::Wait;
+    }
+    if pursuit.binding.is_none() {
+        return match pursuit.event_demanded {
+            Some(at) if waiting(at) => PalwTirWithheldStepV1::Wait,
+            Some(_) => PalwTirWithheldStepV1::GiveUp("no IR answer carrying the claim's binding reached the chain"),
+            None if pursuit.sessions >= max_sessions => PalwTirWithheldStepV1::GiveUp("this seat's sessions on the claim are spent"),
+            None => PalwTirWithheldStepV1::DemandEvent,
+        };
+    }
+    if pursuit.sessions >= max_sessions {
+        return PalwTirWithheldStepV1::GiveUp("this seat's sessions on the claim are spent");
+    }
+    PalwTirWithheldStepV1::DemandLeaf { leaf: pursuit.leaf }
+}
+
+/// **What the chain's IR answers of the claim give a pursuit** — pure: every `TirStepLeaf`
+/// disclosure read as the annex of its leaf and kept once it verifies against the claim
+/// ([`misaka_palw_sdk::lineages::tir::palw_tir_leaf_annex_verify_v1`]), and the claim's binding from
+/// any IR answer (a disclosed leaf's, a `TirEvent`'s) whose parts reproduce the claim's roots.
+/// `program` is the class's; `ladder` the step ladder the claim's tree is capped at.
+pub(crate) fn palw_tir_pursuit_absorb_answers_v1(
+    pursuit: &mut PalwTirAnnexPursuitV1,
+    answers: &[(kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1, kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1)],
+    program: &[u8],
+    target: &PalwDisputableClaimV2,
+    ladder: u64,
+) {
+    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+    use misaka_palw_sdk::lineages::tir::{PalwTirLeafAnnexV1, palw_tir_leaf_annex_verify_v1};
+    for (unit, answer) in answers {
+        match (unit, answer) {
+            (PalwDaUnitV1::TirStepLeaf { index }, PalwDaAnswerV1::TirStepLeaf(disclosure)) => {
+                if pursuit.disclosed.contains_key(index) || disclosure.opening.leaf_index != *index {
+                    continue;
+                }
+                let Ok(annex) = PalwTirLeafAnnexV1::from_step_leaf_disclosure_v1(disclosure) else { continue };
+                let Ok(binding) = palw_tir_leaf_annex_verify_v1(&annex, program, target.execution_root, target.trace_root, ladder)
+                else {
+                    continue;
+                };
+                pursuit.binding.get_or_insert_with(|| std::sync::Arc::new(binding));
+                if pursuit.disclosed.len() < PALW_TIR_DISCLOSED_KEPT_V1 || *index == pursuit.leaf {
+                    pursuit.disclosed.insert(*index, std::sync::Arc::new(annex));
+                }
+            }
+            (_, answer) if pursuit.binding.is_none() => {
+                let Some(carried) = answer.tir_binding() else { continue };
+                let mut binding = carried.clone();
+                binding.class.program = program.to_vec();
+                if binding.committed_execution_root == target.execution_root
+                    && binding.full_logits_trace_root == target.trace_root
+                    && kaspa_consensus_core::palw_tir_step_v1::verify_tir_binding_v1(&binding, ladder).is_ok()
+                {
+                    pursuit.binding = Some(std::sync::Arc::new(binding));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// **Option C's chain read**: every data-availability answer of `claim` accepted since
+/// `not_before_daa` that carries an IR answer (`MaterialDisclosedV2` with a `TirStepLeaf` or
+/// `TirEvent`, anyone's session — the seats of one claim share what the chain made its executor
+/// disclose), oldest first. Nothing here is taken on its word: the pursuit verifies each
+/// ([`palw_tir_pursuit_absorb_answers_v1`]).
+pub(crate) fn tir_da_answers_from_chain_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    claim_id: Hash64,
+    not_before_daa: u64,
+    max_chain_blocks: usize,
+) -> Vec<(kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1, kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1)> {
+    let mut found = Vec::new();
+    super::walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
+        if let PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. } = object
+            && claim == claim_id
+            && answer.is_tir_v1()
+        {
+            found.push((unit, answer));
+        }
+    });
+    found.reverse();
+    found
+}
+
+/// **The court queue's key of a demand this seat files on chain** (option C): the demand's own
+/// signed message — `(domain, claim, leaf, accuser)` for a leaf, the event accusation's for the
+/// binding's event — in the session-id slot, so no two demands and no court move share a key.
+pub(crate) fn palw_tir_demand_queue_key_v1(message: Hash64) -> (Hash64, u32, bool) {
+    (message, 0, false)
+}
+
+/// What became of a demand this seat tried to file (option C).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PalwTirDemandFiledV1 {
+    /// Rehearsed and queued for the priority lane.
+    Filed,
+    /// Not now (this seat's previous session still open, the answer on chain already, queued already).
+    Wait(String),
+    /// The chain refuses it for a reason no wait changes.
+    Refused(String),
 }
 
 /// **What one verified annex tells a pursuit to do next.**
@@ -761,6 +939,185 @@ impl super::PalwPanelService {
         books.court_pending.push((session_id, 0, false, object));
     }
 
+    /// **Option C: one tick of a pursuit whose executor served no annex of the leaf** (RFC-0002
+    /// evidence transport C, past `palw_tir_fence2`). The chain's IR answers of the claim are read on a
+    /// throttle (anyone's session: a leaf disclosed to another seat is this seat's too, and its binding
+    /// is the claim's); then [`palw_tir_withheld_step_v1`] says what to file — the leaf's demand
+    /// (`DefaultAccusedTirLeaf`), or, where nothing has shown the claim's binding yet, an event demand
+    /// whose IR answer carries it — each rehearsed on the tip before a carrier is paid for
+    /// ([`Self::file_tir_demand_v1`]). The executor answers inside `W_disclose` or the fold voids its
+    /// claim; an answer is read back here and the descent goes on from it as from a served annex.
+    #[allow(clippy::too_many_arguments)]
+    async fn tir_demand_tick_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        bond_key: PalwBondKeyV2,
+        network_domain: Hash64,
+        current_daa: u64,
+        target: &PalwDisputableClaimV2,
+        due: u64,
+        program: &[u8],
+        ladder: u64,
+        books: &mut PalwTirOneMoveBooksV1<'_>,
+    ) {
+        use kaspa_consensus_core::palw_da_rcore_v1::{PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1, PalwDaUnitV1};
+        let claim = target.claim_id;
+        let params = &self.consensus_config.params;
+        let armed = params.palw_tir_fence2_active_at(current_daa) && params.palw_rcore_plus_active_at(current_daa);
+        let window = match &params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&bundle.state)
+            }
+            _ => 0,
+        };
+        // The chain's IR answers of the claim, read on a throttle while a demand can be made.
+        let relook = books
+            .pursuits
+            .get(&claim)
+            .is_some_and(|p| p.looked_daa.is_none_or(|at| current_daa >= at.saturating_add(PALW_TIR_DEMAND_RELOOK_DAA_V1)));
+        if armed && relook {
+            let not_before = target.licensed_daa.saturating_sub(window);
+            let span = current_daa.saturating_sub(not_before).saturating_add(64).min(1 << 14) as usize;
+            let answers = session.clone().spawn_blocking(move |c| tir_da_answers_from_chain_v1(c, claim, not_before, span)).await;
+            let Some(p) = books.pursuits.get_mut(&claim) else { return };
+            p.looked_daa = Some(current_daa);
+            palw_tir_pursuit_absorb_answers_v1(p, &answers, program, target, ladder);
+            if p.disclosed.contains_key(&p.leaf) {
+                info!(
+                    "[{PALW_PANEL}] IR claim {claim}: leaf {} is disclosed on chain — the pursuit goes on from it (RFC-0002 evidence \
+                     transport C)",
+                    p.leaf
+                );
+                return;
+            }
+        }
+        let Some(pursuit) = books.pursuits.get(&claim).cloned() else { return };
+        let step = palw_tir_withheld_step_v1(armed, &pursuit, current_daa, window, PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1);
+        let sign = |message: &[u8], context: &[u8]| self.sign(message, context);
+        let (object, key, what) = match step {
+            PalwTirWithheldStepV1::Wait => return,
+            PalwTirWithheldStepV1::GiveUp(why) => {
+                warn!(
+                    "[{PALW_PANEL}] IR claim {claim}: its executor served no annex of leaf {} — the pursuit ends ({why}); this seat's \
+                     replay withholds the licence",
+                    pursuit.leaf
+                );
+                books.pursuits.remove(&claim);
+                books.accused.insert(claim);
+                return;
+            }
+            PalwTirWithheldStepV1::DemandEvent => {
+                let unit = PalwDaUnitV1::Event { row: 0, tile: 0 };
+                let message = kaspa_consensus_core::palw_state_v2::palw_da_accusation_message_v2(
+                    network_domain,
+                    &claim,
+                    kaspa_consensus_core::palw_state_v2::palw_da_event_index_v1(0, 0),
+                    &bond_key,
+                );
+                match kaspa_consensus_core::palw_da_rcore_v1::palw_da_accusation_object_v1(
+                    &network_domain,
+                    claim,
+                    unit,
+                    bond_key,
+                    sign,
+                ) {
+                    Ok(object) => (object, palw_tir_demand_queue_key_v1(message), "the event demand that brings its binding on chain"),
+                    Err(why) => {
+                        warn!("[{PALW_PANEL}] IR claim {claim}: cannot build the event demand: {why}");
+                        return;
+                    }
+                }
+            }
+            PalwTirWithheldStepV1::DemandLeaf { leaf } => {
+                let Some(binding) = pursuit.binding.clone() else { return };
+                let message = kaspa_consensus_core::palw_da_rcore_v1::palw_tir_leaf_accusation_message_v1(
+                    network_domain,
+                    &claim,
+                    leaf,
+                    &bond_key,
+                );
+                match kaspa_consensus_core::palw_da_rcore_v1::palw_tir_leaf_accusation_object_v1(
+                    &network_domain,
+                    claim,
+                    leaf,
+                    &binding,
+                    bond_key,
+                    sign,
+                ) {
+                    Ok(object) => (object, palw_tir_demand_queue_key_v1(message), "the leaf's demand (DefaultAccusedTirLeaf)"),
+                    Err(why) => {
+                        warn!("[{PALW_PANEL}] IR claim {claim}: cannot build the demand of leaf {leaf}: {why}");
+                        return;
+                    }
+                }
+            }
+        };
+        match self.file_tir_demand_v1(session, &object, key, due, books) {
+            PalwTirDemandFiledV1::Filed => {
+                let leaf = pursuit.leaf;
+                if let Some(p) = books.pursuits.get_mut(&claim) {
+                    match step {
+                        PalwTirWithheldStepV1::DemandEvent => p.event_demanded = Some(current_daa),
+                        _ => p.demanded = Some((leaf, current_daa)),
+                    }
+                    p.sessions = p.sessions.saturating_add(1);
+                }
+                info!(
+                    "[{PALW_PANEL}] IR claim {claim}: its executor served no annex of leaf {leaf} — filing {what}; it answers inside \
+                     {window} DAA or the claim is voided (RFC-0002 evidence transport C)"
+                );
+            }
+            PalwTirDemandFiledV1::Wait(why) => {
+                crate::palw_backends::note_throttled_v1("tir-demand-wait", || {
+                    format!("[{PALW_PANEL}] IR claim {claim}: {what} waits — {why}")
+                });
+                // A refusal because the chain holds the answer is read back on the next look.
+                if let Some(p) = books.pursuits.get_mut(&claim) {
+                    p.looked_daa = None;
+                }
+            }
+            PalwTirDemandFiledV1::Refused(why) => {
+                warn!("[{PALW_PANEL}] IR claim {claim}: the chain refuses {what} ({why}) — the pursuit ends");
+                books.pursuits.remove(&claim);
+                books.accused.insert(claim);
+            }
+        }
+    }
+
+    /// **A demand, rehearsed on the tip and queued** (option C) — node policy's "never pay a carrier
+    /// for what the fold refuses": the acceptance layer and the fold's own arm
+    /// (`palw_object_rehearsal_v1`), then the court queue under the demand's own key.
+    fn file_tir_demand_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        object: &PalwConsensusObjectV2,
+        key: (Hash64, u32, bool),
+        due: u64,
+        books: &mut PalwTirOneMoveBooksV1<'_>,
+    ) -> PalwTirDemandFiledV1 {
+        use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
+        use kaspa_consensus_core::palw_state_v2::PalwStateV2Error;
+        if books.court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
+            return PalwTirDemandFiledV1::Wait("queued already".into());
+        }
+        match session.palw_object_rehearsal_v1(object) {
+            Some(PalwObjectRehearsalV1::Accepted) => {
+                books.court_due.insert(key, due);
+                books.court_pending.push((key.0, key.1, key.2, object.clone()));
+                PalwTirDemandFiledV1::Filed
+            }
+            Some(PalwObjectRehearsalV1::Refused(PalwStateV2Error::DaSessionAlreadyOpen { .. })) => {
+                PalwTirDemandFiledV1::Wait("this seat's session on the claim is still open".into())
+            }
+            Some(PalwObjectRehearsalV1::Refused(PalwStateV2Error::DaUnitAlreadyAnswered(_))) => {
+                PalwTirDemandFiledV1::Wait("the chain holds the unit's answer already".into())
+            }
+            Some(PalwObjectRehearsalV1::Refused(e)) => PalwTirDemandFiledV1::Refused(e.to_string()),
+            Some(PalwObjectRehearsalV1::NotAccepted(why)) => PalwTirDemandFiledV1::Refused(why),
+            None => PalwTirDemandFiledV1::Wait("no V2 state at the tip to rehearse on".into()),
+        }
+    }
+
     /// **Option B: one tick of the annex pursuit of `target`** — the seat's own run first (once: if it
     /// reproduces the claim, the claim is judged and nothing is asked), then the annex of the leaf the
     /// descent stands at: asked, re-asked on [`PALW_TIR_ANNEX_REASK_DAA_V1`], given up after
@@ -823,8 +1180,20 @@ impl super::PalwPanelService {
             return;
         }
         let Some(pursuit) = books.pursuits.get(&claim).cloned() else { return };
-        // 2. The annex of the leaf asked, verified against the claim.
+        // 2. The annex of the leaf asked, verified against the claim: served by the executor (option
+        //    B), or disclosed on chain (option C: a `TirStepLeaf` answer, read into the pursuit).
         let index = palw_tir_annex_request_index_v1(pursuit.leaf);
+        let verified = |annex: misaka_palw_sdk::lineages::tir::PalwTirLeafAnnexV1| {
+            misaka_palw_sdk::lineages::tir::palw_tir_leaf_annex_verify_v1(
+                &annex,
+                &program,
+                target.execution_root,
+                target.trace_root,
+                ladder,
+            )
+            .ok()
+            .map(|binding| (annex, binding))
+        };
         let held = books
             .openings
             .get(&(claim, index))
@@ -832,29 +1201,15 @@ impl super::PalwPanelService {
             .flatten()
             .filter_map(|bytes| misaka_palw_sdk::lineages::tir::PalwTirLeafAnnexV1::decode(bytes).ok())
             .filter(|annex| annex.leaf() == pursuit.leaf)
-            .find_map(|annex| {
-                misaka_palw_sdk::lineages::tir::palw_tir_leaf_annex_verify_v1(
-                    &annex,
-                    &program,
-                    target.execution_root,
-                    target.trace_root,
-                    ladder,
-                )
-                .ok()
-                .map(|binding| (annex, binding))
-            });
+            .find_map(verified)
+            .or_else(|| pursuit.disclosed.get(&pursuit.leaf).and_then(|annex| verified(annex.as_ref().clone())));
         let Some((annex, binding)) = held else {
             if current_daa < pursuit.asked_daa.saturating_add(PALW_TIR_ANNEX_REASK_DAA_V1) {
                 return;
             }
             if pursuit.asks >= PALW_TIR_ANNEX_ASKS_V1 {
-                warn!(
-                    "[{PALW_PANEL}] IR claim {claim}: its executor served no annex of leaf {} in {} asks — left to the on-chain \
-                     demand (option C); this seat's replay withholds the licence",
-                    pursuit.leaf, pursuit.asks
-                );
-                books.pursuits.remove(&claim);
-                books.accused.insert(claim);
+                // Option C: the executor serves nothing of this leaf — the chain makes it disclose.
+                self.tir_demand_tick_v1(session, bond_key, network_domain, current_daa, target, due, &program, ladder, books).await;
                 return;
             }
             if let Some(p) = books.pursuits.get_mut(&claim) {
@@ -864,6 +1219,12 @@ impl super::PalwPanelService {
             self.request_leaf_evidence_v1(network_domain, claim, index, pursuit.leaf, current_daa).await;
             return;
         };
+        // The claim's binding, kept for a demand on chain later in the descent (option C).
+        if let Some(p) = books.pursuits.get_mut(&claim)
+            && p.binding.is_none()
+        {
+            p.binding = Some(std::sync::Arc::new(binding.clone()));
+        }
         // 3. The step, off the tick.
         let task = pursuit.clone();
         let Ok((tir, step)) = tokio::task::spawn_blocking(move || {

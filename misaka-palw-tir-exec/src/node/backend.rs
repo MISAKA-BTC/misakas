@@ -38,8 +38,9 @@ use kaspa_consensus_core::palw_step_refute::{PalwDecodeTokenPinV1, PalwTiledDeco
 use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_job_for_anchor_of_v1};
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
-    PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirLogitsConsistencyV1, build_tir_dissect_bottom_v1, build_tir_dissect_round_v1,
-    build_tir_named_leaf_refutation_v1, build_tir_root_claim_v1,
+    PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirLogitsConsistencyV1, PalwTirStepLeafDisclosureV1,
+    build_tir_dissect_bottom_v1, build_tir_dissect_round_v1, build_tir_named_leaf_refutation_v1, build_tir_root_claim_v1,
+    build_tir_step_leaf_disclosure_v1,
 };
 use kaspa_consensus_core::palw_tir_dissect_v1::{PalwTirDissectPhaseV1, PalwTirDissectRoundV1, PalwTirRootClaimV1};
 use kaspa_consensus_core::palw_tir_step_v1::{
@@ -456,6 +457,18 @@ impl TirBackendV1 {
         let trace = tir_annex_trace_v1(&self.space, &binding.job_context, &capture.logits_rows, &capture.generated, leaf)?;
         kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut binding);
         Ok(PalwTirLeafAnnexV1 { version: PALW_TIR_LEAF_ANNEX_VERSION_V1, binding, opening, preimage, trace })
+    }
+
+    /// **The answer to a `TirStepLeaf { index }` data-availability unit of this node's claim** (RFC-0002
+    /// evidence transport C, the second IR fence): consensus's ONE builder
+    /// (`build_tir_step_leaf_disclosure_v1`) over this capture's store — a dense capture's own
+    /// preimages, or this node's re-derivation of its fold (the executor answering for its own claim) —
+    /// with the row pin exactly where the fold asks for one, self-checked by the fold's own check, the
+    /// program stripped.
+    pub fn step_leaf_disclosure(&self, material: &[u8], index: u64) -> Result<PalwTirStepLeafDisclosureV1, String> {
+        self.with_capture_store(material, self.prompt_ids_form, |store, binding| {
+            build_tir_step_leaf_disclosure_v1(binding, index, store, self.ladder).map_err(|e| format!("step leaf {index}: {e}"))
+        })
     }
 
     /// **A challenger's store over a served annex** — its own execution `own` of the same job for every

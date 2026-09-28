@@ -1584,7 +1584,7 @@ fn rcore_answer_of(
 ) -> PalwConsensusObjectV2 {
     let facts = attempt_facts(forger, claim);
     let material = super::PalwDaCaptureV1::Attempt(forger.material.clone());
-    let answer = super::palw_da_unit_answer_v1(&forger.backend, &facts, &material, unit)
+    let answer = super::palw_da_unit_answer_v1(&forger.backend, &facts, &material, unit, None)
         .unwrap_or_else(|e| panic!("the forger answers {unit:?}: {e}"));
     kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
         &h64(999),

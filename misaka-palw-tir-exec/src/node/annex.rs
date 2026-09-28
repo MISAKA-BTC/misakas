@@ -36,9 +36,10 @@ use kaspa_consensus_core::palw_step_leg::{
     PalwStepOpeningV1, PalwStepTileLeafV1, step_opening_root_capped_v1, step_tile_leaf_hash_v1,
 };
 use kaspa_consensus_core::palw_step_refute::{
-    PalwTiledDecodePinV1, base0_logits_trace_root_v1, flat_logits_scheme_id_v1, tiled_decode_pin_v1, tiled_logits_outer_root_v1,
-    tiled_logits_rows_root_v1, tiled_logits_scheme_id_v1,
+    PalwDecodeTokenPinV1, PalwTiledDecodePinV1, base0_logits_trace_root_v1, flat_logits_scheme_id_v1, tiled_decode_pin_v1,
+    tiled_logits_outer_root_v1, tiled_logits_rows_root_v1, tiled_logits_scheme_id_v1,
 };
+use kaspa_consensus_core::palw_tir_court_v1::PalwTirStepLeafDisclosureV1;
 use kaspa_consensus_core::palw_tir_step_v1::{PalwTirLeafKindV1, PalwTirStepBindingV1, PalwTirStepSpaceV1, verify_tir_binding_v1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 
@@ -96,6 +97,36 @@ impl PalwTirLeafAnnexV1 {
                 generated_token_ids
             }
         }
+    }
+
+    /// **An on-chain `TirStepLeaf` answer, read as the annex of its leaf** (RFC-0002 evidence transport
+    /// C, the second IR fence): the chain's disclosure carries what the served annex does — the
+    /// binding (program empty), the leaf's preimage and opening, the ids in the class's scheme and, at
+    /// a logits tile of a decode row, that row's pin aimed at the tile's first lane — so a seat whose
+    /// executor served nothing pursues the claim on what the chain made it disclose, through the same
+    /// step ([`palw_tir_leaf_annex_verify_v1`], then the descent). `Err` for ids in a scheme no IR class
+    /// commits (`FloatV2`).
+    pub fn from_step_leaf_disclosure_v1(disclosure: &PalwTirStepLeafDisclosureV1) -> Result<Self, String> {
+        let trace = match &disclosure.decode {
+            PalwDecodeTokenPinV1::TiledV1(tiled) => PalwTirAnnexTraceV1::Tiled {
+                rows_root: tiled.rows_root,
+                generated_token_ids: tiled.generated_token_ids.clone(),
+                pin: disclosure.row_pin.clone(),
+            },
+            PalwDecodeTokenPinV1::Base0V1(flat) if disclosure.row_pin.is_none() => PalwTirAnnexTraceV1::Flat {
+                logits_rows: flat.logits_rows.clone(),
+                generated_token_ids: flat.generated_token_ids.clone(),
+            },
+            PalwDecodeTokenPinV1::Base0V1(_) => return Err("a flat-scheme disclosure carries no row pin".into()),
+            PalwDecodeTokenPinV1::FloatV2(_) => return Err("an IR class commits no float-scheme ids".into()),
+        };
+        Ok(Self {
+            version: PALW_TIR_LEAF_ANNEX_VERSION_V1,
+            binding: disclosure.binding.clone(),
+            opening: disclosure.opening.clone(),
+            preimage: disclosure.preimage.clone(),
+            trace,
+        })
     }
 }
 

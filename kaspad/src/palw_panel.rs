@@ -2049,12 +2049,15 @@ fn palw_fp_held_disclosure_v1(
 /// capture with the canonical prompt its block's anchor implies — the fold draws held units on
 /// attempt claims too (a `DefaultAccusedHeld` on any class draws width-1 step ranges beside a named
 /// leaf) — and the capture's own binding, read off an out-of-range event disclosure (every family's DA
-/// responder carries it there, and the fold's checkers read that binding).
+/// responder carries it there, and the fold's checkers read that binding). An IR claim's step leaf
+/// (the second IR fence's `TirStepLeaf`) by the IR responder `tir`, the claim's class's IR backend
+/// ([`misaka_palw_sdk::lineages::tir::TirBackendV1::step_leaf_disclosure`]).
 pub(crate) fn palw_da_unit_answer_v1(
     backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
     facts: &PalwDaClaimFactsV1,
     material: &PalwDaCaptureV1,
     unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
+    tir: Option<&misaka_palw_sdk::lineages::tir::TirBackendV1>,
 ) -> Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String> {
     use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_held_answer_v1};
     let capture: &[u8] = match material {
@@ -2080,11 +2083,16 @@ pub(crate) fn palw_da_unit_answer_v1(
             return Err("an IR claim answers no held unit: the held regime's units are the legacy families' (RFC-0002 Phase F)".into());
         }
         PalwDaUnitV1::Held(missing) => missing,
-        // RFC-0002 Phase F's second IR fence (dormant): an IR step leaf is answered by the IR
-        // responder (`kaspa_consensus_core::palw_tir_court_v1::build_tir_step_leaf_disclosure_v1` over
-        // the claim's IR evidence store), which the node lane lands before the fence is armed.
+        // **RFC-0002 Phase F's second IR fence: an IR step leaf** (evidence transport C), answered by
+        // the IR responder — consensus's one builder (`build_tir_step_leaf_disclosure_v1`) over this
+        // capture's store: a dense capture's own leaves, or this node's re-derivation of its fold (the
+        // executor answering for its own run) — self-checked by the fold's check, the program stripped.
         PalwDaUnitV1::TirStepLeaf { index } => {
-            return Err(format!("IR step leaf {index}: answered by the IR responder, not the capture path (RFC-0002 Phase F)"));
+            if !tir_capture {
+                return Err(format!("step leaf {index} is an IR claim's unit, and this material is not an IR capture"));
+            }
+            let tir = tir.ok_or_else(|| format!("IR step leaf {index}: the claim's IR class does not resolve on this node"))?;
+            return tir.step_leaf_disclosure(capture, index).map(|disclosure| PalwDaAnswerV1::TirStepLeaf(Box::new(disclosure)));
         }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
@@ -2136,6 +2144,7 @@ pub(crate) struct PalwDaClaimAnswersV1 {
 /// dropped when this returns: the panel's tick never holds a claim's capture past its own answers, nor
 /// one beside the next claim's (the P2-7 review's MEDIUM: a per-tick cache of every claim's whole
 /// capture, cloned once a unit). `flat` says a `Flat` of this claim is already queued or sent.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn palw_da_claim_answers_v1(
     backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
     facts: &PalwDaClaimFactsV1,
@@ -2144,6 +2153,7 @@ pub(crate) fn palw_da_claim_answers_v1(
     units: &[kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1],
     in_run_rows: u32,
     mut flat: bool,
+    tir: Option<&misaka_palw_sdk::lineages::tir::TirBackendV1>,
 ) -> Result<PalwDaClaimAnswersV1, String> {
     use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, palw_da_flat_answers_unit_v1};
     use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
@@ -2154,7 +2164,7 @@ pub(crate) fn palw_da_claim_answers_v1(
             answers.push(None);
             continue;
         }
-        let answer = palw_da_unit_answer_v1(backend, facts, &material, *unit);
+        let answer = palw_da_unit_answer_v1(backend, facts, &material, *unit, tir);
         flat |= matches!(answer, Ok(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })))
             || matches!(&answer, Ok(PalwDaAnswerV1::TirEvent(disclosure)) if disclosure.is_flat());
         answers.push(Some(answer));
@@ -14425,6 +14435,19 @@ impl PalwPanelService {
         let foreign = dir.join("foreign");
         let units: Vec<kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1> = duties.iter().map(|duty| duty.unit).collect();
         let in_run_rows = first.in_run_rows;
+        // The second IR fence's step leaves are answered by the claim's IR backend (RFC-0002 evidence
+        // transport C): resolved here, once, when a unit asks for one — a class this node does not
+        // hold as IR answers them with the unit's own error.
+        let tir = if units.iter().any(|unit| matches!(unit, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::TirStepLeaf { .. }))
+        {
+            match self.backends().resolve_tir_v1(class_id, artifact_root) {
+                Some(Ok(tir)) => Some(tir),
+                Some(Err(why)) => return Err(PalwDaClaimHoldV1::Material(format!("the claim's IR backend does not build: {why}"))),
+                None => None,
+            }
+        } else {
+            None
+        };
         let built = offload_shared(backend, move |b| {
             let _held_for_the_answers = reserved;
             palw_da_claim_answers_v1(
@@ -14435,6 +14458,7 @@ impl PalwPanelService {
                 &units,
                 in_run_rows,
                 flat_queued,
+                tir.as_ref(),
             )
         })
         .await
@@ -19681,7 +19705,7 @@ mod p2_7_disclosure_policy {
         flat: bool,
     ) -> (Result<PalwDaClaimAnswersV1, String>, Option<Vec<u8>>) {
         let mut kept_back = None;
-        let built = palw_da_claim_answers_v1(backend, facts, kept, |bytes| kept_back = Some(bytes.to_vec()), units, 2, flat);
+        let built = palw_da_claim_answers_v1(backend, facts, kept, |bytes| kept_back = Some(bytes.to_vec()), units, 2, flat, None);
         (built, kept_back)
     }
 

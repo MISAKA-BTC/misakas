@@ -510,4 +510,11 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
             _ => None,
         }
     }
+
+    /// **The tiled row pin of decode row `row`, aimed at lane `lane`** (the second IR fence's
+    /// `TirStepLeaf` answer): from the rows (a capture's, or this node's own run), or from a held pin
+    /// of that row whose beat tile holds the lane (a served annex's, an on-chain disclosure's).
+    fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
+        self.trace.pin(&self.binding.job_context, row, lane)
+    }
 }
