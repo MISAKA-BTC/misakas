@@ -432,9 +432,10 @@ fn random_programs_and_inputs() {
 #[ignore]
 fn investigate() {
     let seeds: Vec<u64> = std::env::var("SEEDS").unwrap_or("12".into()).split(',').map(|s| s.parse().unwrap()).collect();
+    let safe = std::env::var("SAFE").is_ok();
     for seed in seeds {
-        let mut rng = R::seed_from_u64(0xAD41_0000 + seed);
-        let g = gen_program(&mut rng, GenCfg::default());
+        let mut rng = R::seed_from_u64(if safe { 0x5AFE_0000 } else { 0xAD41_0000 } + seed);
+        let g = gen_program(&mut rng, GenCfg { range_safe: safe, ..GenCfg::default() });
         let p = &g.prog;
         let bytes = ref2::codec::encode(p);
         let inputs = legacy();
@@ -466,6 +467,9 @@ fn investigate() {
             println!("  cone work ref2 {} first {}", x.cone_work, y.cone_work);
             println!("  states ref2  {:?}", x.states);
             println!("  states first {:?}", y.states);
+            if let AdmitOutcome::Admitted(z) = admit_mine_with(&bytes, &inputs, ref2::admit::Readings { free_update_splits: false }) {
+                println!("  states ref2 (A1 switched) {:?}", z.states);
+            }
         } else {
             println!("  ref2 {} first {}", short(&a), short(&f));
         }
@@ -602,4 +606,37 @@ fn range_safe_programs_and_mutations() {
     t.report("range-safe random programs");
     m.report("mutations of range-safe programs");
     assert!(t.disagreements.is_empty() && m.disagreements.is_empty());
+}
+
+/// Two update cones of one replay closure sharing a node: is it costed once or per cone?
+#[test]
+fn shared_node_in_a_replay_closure() {
+    use ref2::build::{ProgBuilder, fixed};
+    use ref2::{DType, Prim, Ref};
+    let mut b = ProgBuilder::new(1 << 18, 16);
+    let s1 = b.fixed_state("s1", DType::I32, &[4, 3], -100, 100, false);
+    let s2 = b.fixed_state("s2", DType::I32, &[4, 3], -100, 100, false);
+    let pre = b.block("pre", vec![]);
+    let t = fixed(DType::I32, &[4, 3]);
+    let a = b.node(pre, Prim::Add, &[Ref::State(s1), Ref::State(s2)], fixed(DType::I64, &[4, 3]), false);
+    let x = b.node(pre, Prim::Clamp { lo: -5, hi: 5 }, &[Ref::Node(a)], t.clone(), false); // shared
+    b.node(pre, Prim::StateWrite { state: s1 }, &[Ref::Node(x)], t.clone(), false);
+    let y = b.node(pre, Prim::Mul, &[Ref::Node(x), Ref::Node(x)], fixed(DType::I64, &[4, 3]), false);
+    b.node(pre, Prim::StateWrite { state: s2 }, &[Ref::Node(y)], t.clone(), false);
+    let o = b.node(pre, Prim::Iota { axis: 0, start: 0, step: 1 }, &[], fixed(DType::I32, &[2]), true);
+    b.carry_out(pre, &[o]);
+    let post = b.block("post", vec![fixed(DType::I32, &[2])]);
+    let m = b.node(post, Prim::Clamp { lo: -5, hi: 5 }, &[Ref::CarryIn(0)], fixed(DType::I32, &[2]), true);
+    b.schedule(pre, &[], post, m);
+    let bytes = ref2::codec::encode(&b.finish());
+    let am = admit_mine(&bytes, &legacy());
+    let af = admit_first(&bytes, &legacy());
+    for (who, o) in [("ref2", &am), ("first", &af)] {
+        if let AdmitOutcome::Admitted(v) = o {
+            println!("{who}: states {:?} cone work {}", v.states, v.cone_work);
+        } else {
+            println!("{who}: {}", short(o));
+        }
+    }
+    assert_eq!(am, af);
 }

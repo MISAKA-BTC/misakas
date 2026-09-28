@@ -43,9 +43,11 @@ pub struct Ceilings {
 /// Readings of §10.3 where the text admits two; `Readings::default()` is this crate's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Readings {
-    /// An update cone that depends on no closure state (its `StateWrite` is free) splits into the
-    /// `G` groups like any other (ref2: free nodes satisfy "every node ... is aligned" wherever
-    /// they are; `false`: the first implementation's observed rule, a free root keeps `G = 1`).
+    /// Free nodes satisfy §10.3's "every node of the closure's update cones is aligned" wherever
+    /// they sit, a free `StateWrite` included, and a commit point is always a free leaf (ref2).
+    /// `false`: the first implementation's observed rule — every member's `StateWrite` must be
+    /// aligned (not free), and a commit point that is a node of the closure's update cones (another
+    /// member's `StateWrite`) is followed as that node.
     pub free_update_splits: bool,
 }
 
@@ -824,11 +826,21 @@ fn replay(p: &Program, b: usize, j: u16, readings: Readings) -> (Vec<u16>, u64, 
     };
     let groups = if g > 1 {
         let all: BTreeSet<u16> = cones.iter().flatten().copied().collect();
-        let ok = all.iter().all(|&i| alignment(p, b, i as usize, g, &closure) != Al::Not);
-        // The other reading: a StateWrite that is free (its update reads no closure state) does
-        // not split.
-        let free_roots = closure.iter().filter_map(|&m| writer(m)).any(|s| alignment(p, b, s, g, &closure) == Al::Free);
-        if ok && (readings.free_update_splits || !free_roots) { g as u64 } else { 1 }
+        if readings.free_update_splits {
+            // ref2: every node aligned or free — a free node is "aligned" in the text's sense
+            // (element [g, …] depends on no closure state at all), wherever it sits.
+            let ok = all.iter().all(|&i| alignment(p, b, i as usize, g, &closure, None) != Al::Not);
+            if ok { g as u64 } else { 1 }
+        } else {
+            // The first implementation's observed rule: a Node ref into the closure's update cones
+            // is followed even when it is a commit point, and every member's StateWrite must be
+            // aligned (not free).
+            let u: BTreeSet<usize> = all.iter().map(|&i| i as usize).collect();
+            let ok = all.iter().all(|&i| alignment(p, b, i as usize, g, &closure, Some(&u)) != Al::Not);
+            let roots_aligned =
+                closure.iter().filter_map(|&m| writer(m)).all(|s| alignment(p, b, s, g, &closure, Some(&u)) == Al::Aligned);
+            if ok && roots_aligned { g as u64 } else { 1 }
+        }
     } else {
         1
     };
@@ -836,9 +848,9 @@ fn replay(p: &Program, b: usize, j: u16, readings: Readings) -> (Vec<u16>, u64, 
 }
 
 /// The alignment of node `i` (the rules of §10.3), computed over its operands recursively.
-fn alignment(p: &Program, b: usize, i: usize, g: u32, closure: &BTreeSet<u16>) -> Al {
+fn alignment(p: &Program, b: usize, i: usize, g: u32, closure: &BTreeSet<u16>, follow: Option<&BTreeSet<usize>>) -> Al {
     let mut memo: BTreeMap<usize, Al> = BTreeMap::new();
-    align_rec(p, b, i, g, closure, &mut memo)
+    align_rec(p, b, i, g, closure, follow, &mut memo)
 }
 
 fn operand_al(
@@ -848,13 +860,17 @@ fn operand_al(
     r: &Ref,
     g: u32,
     closure: &BTreeSet<u16>,
+    follow: Option<&BTreeSet<usize>>,
     memo: &mut BTreeMap<usize, Al>,
 ) -> (Al, TensorType) {
     let t = ref_type(p, b, i, r).unwrap();
     let al = match *r {
+        // (The first implementation's reading follows a commit point that is a node of the
+        // closure's update cones.)
+        Ref::Node(k) if follow.is_some_and(|u| u.contains(&(k as usize))) => align_rec(p, b, k as usize, g, closure, follow, memo),
         // A commit point is a leaf of the update cone (§10.2): free.
         Ref::Node(k) if p.blocks[b].nodes[k as usize].commit => Al::Free,
-        Ref::Node(k) => align_rec(p, b, k as usize, g, closure, memo),
+        Ref::Node(k) => align_rec(p, b, k as usize, g, closure, follow, memo),
         // A closure state is aligned (its first dimension is G); any other leaf is free.
         Ref::State(j) if closure.contains(&j) => Al::Aligned,
         _ => Al::Free,
@@ -862,12 +878,20 @@ fn operand_al(
     (al, t)
 }
 
-fn align_rec(p: &Program, b: usize, i: usize, g: u32, closure: &BTreeSet<u16>, memo: &mut BTreeMap<usize, Al>) -> Al {
+fn align_rec(
+    p: &Program,
+    b: usize,
+    i: usize,
+    g: u32,
+    closure: &BTreeSet<u16>,
+    follow: Option<&BTreeSet<usize>>,
+    memo: &mut BTreeMap<usize, Al>,
+) -> Al {
     if let Some(&a) = memo.get(&i) {
         return a;
     }
     let node = &p.blocks[b].nodes[i];
-    let ops: Vec<(Al, TensorType)> = node.inputs.iter().map(|r| operand_al(p, b, i, r, g, closure, memo)).collect();
+    let ops: Vec<(Al, TensorType)> = node.inputs.iter().map(|r| operand_al(p, b, i, r, g, closure, follow, memo)).collect();
     let out = &node.out;
     let a = if ops.iter().all(|(a, _)| *a == Al::Free) {
         // reading: a node with no operand (Iota) is free.
