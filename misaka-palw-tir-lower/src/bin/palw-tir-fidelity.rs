@@ -70,6 +70,10 @@ struct Args {
     /// reference evaluator and refuse unless every logit is equal.
     #[arg(long, default_value_t = 0)]
     cross_check: usize,
+    /// Report the recurrence drift: the mean KL over positions [64, 192) against the last 128
+    /// (corpus-v1 §9: at 4,096 positions, within 1.5×).
+    #[arg(long)]
+    drift: bool,
 }
 
 fn tokens(path: &Option<PathBuf>, vocab: usize, count: usize, seed: u64) -> Result<(Vec<Vec<usize>>, serde_json::Value), String> {
@@ -211,6 +215,13 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())?
     };
     let m = fidelity::compare(&fl, &il, &eval);
+    let drift = a.drift.then(|| fidelity::drift(&fl, &il, (64, 192), 128));
+    if let Some(d) = &drift {
+        log(format!(
+            "drift: mean KL {:.5} over positions {}..{}, {:.5} over {}..{} (×{:.2})",
+            d.kl_early, d.early_window.0, d.early_window.1, d.kl_late, d.late_window.0, d.late_window.1, d.ratio
+        ));
+    }
     log(format!(
         "top-1 {:.4}  KL mean {:.5} max {:.4}  ppl float {:.3} int {:.3} (Δ {:+.2}%)",
         m.top1_agreement,
@@ -229,6 +240,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         "calibration": { "source": calib_src, "sequences": calib.len(), "positions": calib.iter().map(Vec::len).sum::<usize>() },
         "evaluation": { "source": eval_src, "sequences": eval.len(), "positions": eval.iter().map(Vec::len).sum::<usize>() },
         "metrics": m,
+        "drift": drift,
         "backend": if a.exec { "misaka-palw-tir-exec" } else { "misaka-palw-tir reference evaluator" },
         "seconds": t0.elapsed().as_secs_f64(),
     }))

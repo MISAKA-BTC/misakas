@@ -180,6 +180,42 @@ pub fn compare(float: &[Vec<Vec<f32>>], int: &[Vec<Vec<f64>>], seqs: &[Vec<usize
     m
 }
 
+/// **Recurrence drift** (corpus-v1 §9's column for C4–C7): the mean KL over positions
+/// `[early.0, early.1)` and over the last `late` positions, across every sequence, and their ratio
+/// (the criterion is `late ≤ 1.5 × early` at 4,096 against 128).
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Drift {
+    pub early_window: (usize, usize),
+    pub late_window: (usize, usize),
+    pub kl_early: f64,
+    pub kl_late: f64,
+    pub ratio: f64,
+}
+
+pub fn drift(float: &[Vec<Vec<f32>>], int: &[Vec<Vec<f64>>], early: (usize, usize), late: usize) -> Drift {
+    let (mut e, mut ne, mut l, mut nl) = (0f64, 0usize, 0f64, 0usize);
+    let mut late_window = (usize::MAX, 0);
+    for (fs, is) in float.iter().zip(int) {
+        let n = fs.len().min(is.len());
+        let late_from = n.saturating_sub(late);
+        late_window = (late_window.0.min(late_from), late_window.1.max(n));
+        for (p, (f, i)) in fs.iter().zip(is).enumerate() {
+            let (lf, li) = (log_softmax(f), log_softmax(i));
+            let kl: f64 = lf.iter().zip(&li).map(|(a, b)| a.exp() * (a - b)).sum();
+            if p >= early.0 && p < early.1 {
+                e += kl;
+                ne += 1;
+            }
+            if p >= late_from {
+                l += kl;
+                nl += 1;
+            }
+        }
+    }
+    let (kl_early, kl_late) = (e / ne.max(1) as f64, l / nl.max(1) as f64);
+    Drift { early_window: early, late_window, kl_early, kl_late, ratio: if kl_early > 0.0 { kl_late / kl_early } else { f64::NAN } }
+}
+
 /// The error of one site of one occurrence: every committed node that holds an HL site's value,
 /// decoded with its scale, against the float reference's value at the same position.
 #[derive(Clone, Debug, Serialize)]
