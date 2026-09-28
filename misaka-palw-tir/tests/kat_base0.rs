@@ -3,7 +3,7 @@
 //! `misaka_palw_base0::kat` enumerates 10,000+ vectors for the nine ADR-0040 primitives and pins
 //! their BLAKE2b-256 digest (`KAT_DIGEST`). This test regenerates the same argument sets (the
 //! generators below are a transcription of `kat.rs`'s tables), computes every output through IR
-//! PROGRAMS — the builder's composite templates, validated, run by the interpreter — and requires
+//! PROGRAMS — the builder's composite templates, validated, run by the reference evaluator — and requires
 //! the identical digest. So `RoundingShiftRight`, `SRDHM`, `Requantize(WithZero)`, `Rescale` and
 //! `IntRecip`, none of which is a primitive of PALW-TIR v1, are byte-identical as IR segments, and
 //! `IntExp`/`IntRsqrt` as primitives, on the whole published set.

@@ -1,5 +1,5 @@
 //! Shared helpers for the integration tests: evaluate a composite GRAPH (built with the builder,
-//! validated, run by the interpreter's cone evaluator) on vectors supplied as params.
+//! validated, run by the reference evaluator's cone evaluator) on vectors supplied as params.
 #![allow(dead_code)]
 
 pub mod models;

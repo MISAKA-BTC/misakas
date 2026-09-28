@@ -1,7 +1,7 @@
 //! Element types, dimensions and tensor types (spec 04b §2, PALW-TIR-20..24).
 //!
 //! Tensors are raw integers. There is no float type, no scale type and no unsigned type other than
-//! `idx`. Every value the interpreter holds is a mathematical integer carried in an `i128`; the
+//! `idx`. Every value the reference evaluator holds is a mathematical integer carried in an `i128`; the
 //! dtype is the interval that value must lie in.
 
 use borsh::{BorshDeserialize, BorshSerialize};

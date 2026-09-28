@@ -75,7 +75,7 @@ fn binary(a: &Tensor, b: &Tensor, out_shape: &[usize], mut f: impl FnMut(i128, i
     ma.iter().zip(&mb).map(|(i, j)| f(a.data[*i], b.data[*j])).collect()
 }
 
-/// Evaluate one node. `HistAppend` is the interpreter's (it needs the history); everything else is
+/// Evaluate one node. `HistAppend` is the evaluator's (it needs the history); everything else is
 /// here. `out_shape` is the declared shape resolved at the running `H`.
 pub(crate) fn eval_prim(
     prim: &Prim,
@@ -271,7 +271,7 @@ pub(crate) fn eval_prim(
             };
             ins[0].data.iter().map(|v| (*v).clamp(lo as i128, hi as i128)).collect()
         }
-        Prim::HistAppend { .. } => return err(TirErrorKind::Shape, "HistAppend is evaluated by the interpreter"),
+        Prim::HistAppend { .. } => return err(TirErrorKind::Shape, "HistAppend is evaluated by the reference evaluator"),
     };
     debug_assert_eq!(data.len(), n_out);
     Ok(Tensor { dtype: out_dtype, shape: out_shape.to_vec(), data })

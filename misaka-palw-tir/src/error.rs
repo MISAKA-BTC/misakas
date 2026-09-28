@@ -25,7 +25,7 @@ pub enum TirErrorKind {
     Index,
     /// A `Div` divisor below one.
     Divisor,
-    /// A value handed to the interpreter (param, committed operand, state, token) is not a value
+    /// A value handed to the reference evaluator (param, committed operand, state, token) is not a value
     /// of its declared type, or has the wrong shape.
     Operand,
     /// A cone evaluation needed a value nobody supplied.

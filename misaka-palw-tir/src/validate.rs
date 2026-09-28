@@ -1,6 +1,6 @@
 //! Structural normal form and type/shape inference (spec 04b §3.4–3.6, PALW-TIR-6/7/8).
 //!
-//! This is the part of admission the interpreter itself needs in order to be total: after
+//! This is the part of admission the reference evaluator itself needs in order to be total: after
 //! [`validate`] passes, every node's operands exist, have the types the primitive requires, and
 //! produce exactly the declared output shape at every `H`. The range, cost and court-cone analyses
 //! (PALW-TIR-9/12/13) are `tir_admit_v1`, Gate 2.
@@ -328,7 +328,7 @@ pub(crate) fn check_node_type(prim: &Prim, ins: &[TensorType], out: &TensorType,
     }
 }
 
-/// Validate structure and types; return what the interpreter needs.
+/// Validate structure and types; return what the reference evaluator needs.
 pub fn validate(p: &TirProgramV1) -> TirResult<ProgramInfo> {
     if p.version != TIR_PROGRAM_VERSION_V1 {
         return nf(format!("version {} is not {TIR_PROGRAM_VERSION_V1}", p.version));

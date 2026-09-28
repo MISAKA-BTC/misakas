@@ -3,7 +3,7 @@
 //! The functions in `mod legacy` are VERBATIM transcriptions (test-only) of the live kernels in
 //! `kaspa-consensus-core` at `rcore/int-6` 08481e720 — `palw_base0.rs`, `palw_base0_ops.rs`,
 //! `palw_base0_a16.rs`, `palw_qwen36_ops.rs` — copied so this leaf crate need not depend on the
-//! consensus crate. Each test runs the builder's composite template through the interpreter and
+//! consensus crate. Each test runs the builder's composite template through the reference evaluator and
 //! requires byte identity with the transcription on seeded random inputs AND on the type
 //! extremes (i32::MIN, ±32767, adversarial multipliers and zero points).
 //!

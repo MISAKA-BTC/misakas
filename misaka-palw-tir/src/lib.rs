@@ -1,4 +1,9 @@
-//! **PALW-TIR v1 — the canonical integer tensor IR (RFC-0002), and its reference interpreter.**
+//! **PALW-TIR v1 — the PALW Canonical Tensor IR (RFC-0002), and its reference evaluator.**
+//!
+//! **An IR, not a VM.** A program is a finite static DAG, a static layer schedule and a scan over
+//! positions: no program counter, branch, jump, loop or call, and every cost is known at
+//! registration. The *reference evaluator* ([`interp::Interpreter`] — the type keeps its first
+//! name) walks that graph; it is the meaning of "correct" for the court.
 //!
 //! A class program is data: a static DAG over a closed set of twenty-five integer primitives
 //! ([`prim::Prim`]), carried as a [`program::TirProgramV1`] whose canonical Borsh bytes are its
@@ -13,7 +18,7 @@
 //!
 //! * [`types`], [`prim`], [`program`] — the IR and its wire form.
 //! * [`validate`] — structural normal form and shape/type inference (the part of admission the
-//!   interpreter needs to be total; ranges, costs and cones are Gate 2).
+//!   evaluator needs to be total; ranges, costs and cones are Gate 2).
 //! * [`arith`], [`eval`] — the primitives' integer semantics.
 //! * [`interp`] — one position step, a multi-position run, and cone evaluation.
 //! * [`builder`] — a small program builder and the first composite templates (the seed of

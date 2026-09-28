@@ -1,4 +1,4 @@
-//! The reference interpreter (RFC §4.2, spec 04b §8): one position step over Fixed and Hist
+//! The reference evaluator (RFC §4.2, spec 04b §8): one position step over Fixed and Hist
 //! states, a multi-position run, and cone evaluation from supplied committed values — the court's
 //! future entry point.
 //!
