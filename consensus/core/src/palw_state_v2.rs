@@ -7168,6 +7168,14 @@ pub enum PalwConsensusObjectV2 {
         activation_daa: u64,
         admission: Box<crate::palw_tir_class_v1::PalwTirAdmissionCarriageV1>,
     },
+    /// **RFC-0002 Phase F (tag 62): an IR claim accused in one move** — the IR twin of
+    /// `ShardCourtAccused` for chains that play no bisection (the held regime), carrying an IR close
+    /// proof and the verdict it supports ([`crate::palw_tir_one_move_v1::PalwTirOneMoveAccusationV1`]).
+    /// The acceptance layer re-derives the verdict (`adjudicate_close_proof_v2`) and refuses a
+    /// mismatch; the fold applies it. Appended; dropped by name below `palw_tir_v1`.
+    TirShardCourtAccused {
+        accusation: Box<crate::palw_tir_one_move_v1::PalwTirOneMoveAccusationV1>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7179,6 +7187,7 @@ pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => true,
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_tir_v1(),
         PalwConsensusObjectV2::MaterialDisclosedV2 { answer, .. } => answer.is_tir_v1(),
+        PalwConsensusObjectV2::TirShardCourtAccused { .. } => true,
         _ => false,
     }
 }
@@ -8158,6 +8167,11 @@ pub fn palw_court_close_chunk_digest_v1(bytes: &[u8]) -> Hash64 {
 /// blocks (audit M-01's shape).
 pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &PalwConsensusObjectV2) -> bool {
     use crate::palw_bisect::PalwBisectTurnV1;
+    // RFC-0002 Phase F: an IR one-move accusation is adjudicated whole at acceptance — a demand
+    // evaluation bounded by the IR court's limits, not by its bytes — so it takes the block's slot.
+    if matches!(object, PalwConsensusObjectV2::TirShardCourtAccused { .. }) {
+        return true;
+    }
     let session_id = match object {
         PalwConsensusObjectV2::CourtAttnRootClaimed { session_id, .. }
         | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { session_id, .. }
@@ -29913,6 +29927,54 @@ fn apply_object(
         // below it, and past `palw_offence_attribution` for a held class no honest party can dissect
         // inside a turn (ADR-0152 §4-ter), it is refused — the acceptance layer refuses it first,
         // and this arm is the second lock on that door.
+        // **RFC-0002 Phase F (tag 62): an IR claim accused in one move.** The legacy one-move court's
+        // gates in its order — a live claim, the executor and the roots the claim's, an accuser that
+        // is not the producer, the open-session rule, an Active accuser at or above the floor — on a
+        // claim of an IR class; then the verdict the acceptance layer re-derived from the proof
+        // (`palw_tir_one_move_v1`), applied as the legacy court applies its own.
+        PalwConsensusObjectV2::TirShardCourtAccused { accusation } => {
+            let claim_id = accusation.claim;
+            let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+            if claim.phase.is_terminal() {
+                return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "TirShardCourtAccused" });
+            }
+            if !builder.state.tir_classes.contains_key(&claim.class_id) {
+                return Err(PalwStateV2Error::TirRegistrationRefused(
+                    "an IR one-move accusation names a claim of a class that is not an IR program",
+                ));
+            }
+            if accusation.executor_bond != claim.bond {
+                return Err(PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(claim_id));
+            }
+            if accusation.execution_root != claim.execution_root || accusation.trace_root != claim.trace_root {
+                return Err(PalwStateV2Error::ShardCourtRootsDiffer(claim_id));
+            }
+            let accuser = accusation.accuser_bond;
+            if accuser == claim.bond {
+                return Err(PalwStateV2Error::ShardCourtAccuserIsTheProducer(accuser));
+            }
+            let open_session = builder.state.court_sessions.iter().find(|(_, s)| s.claim == claim_id).map(|(id, _)| *id);
+            if let Some(session) = open_session
+                && !builder.extras.offence_attribution_active
+            {
+                return Err(PalwStateV2Error::ShardCourtClaimUnderSession { claim: claim_id, session });
+            }
+            let accuser_record = builder.state.bonds.get(&accuser).ok_or(PalwStateV2Error::MissingBond(accuser))?.clone();
+            if !matches!(accuser_record.status, PalwBondStatusV2::Active) {
+                return Err(PalwStateV2Error::BondNotActive(accuser));
+            }
+            let floor = builder.params.min_collateral_sompi();
+            if accuser_record.collateral < floor {
+                return Err(PalwStateV2Error::BondBelowFloor { bond: accuser, collateral: accuser_record.collateral, floor });
+            }
+            match accusation.verdict {
+                PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
+                PalwCourtVerdictV2::ChallengerDefeated => {
+                    let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
+                    builder.slash_seat(accuser, charge, floor)?;
+                }
+            }
+        }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
                 return Err(PalwStateV2Error::ShardCourtDormant);
@@ -54528,6 +54590,148 @@ pub(crate) mod tests {
                 .0
         };
         assert_eq!(fold(&armed).state_root(), fold(&dormant).state_root(), "the fence alone moves no root");
+    }
+
+    /// **RFC-0002 Phase F (F6): the IR one-move court.** An IR class registered past `palw_tir_v1`,
+    /// an attempt claim whose roots are an IR execution's, and accusations carrying `TirCone` proofs:
+    /// the verdict function (the court close's adjudication) acquits an honest leaf and convicts a
+    /// forged one; the fold applies the declared verdict — the forged claim voided `CourtFraud`, the
+    /// false accuser charged — after the legacy one-move gates, each refused by name; and below the
+    /// fence the object is refused before any arm reads it.
+    #[test]
+    fn the_ir_one_move_court_convicts_a_forged_leaf_and_charges_a_false_accuser() {
+        use crate::palw_court_v2::PalwCourtVerdictProofV2;
+        use crate::palw_tir_court_v1::test_support::tiny_execution;
+        use crate::palw_tir_court_v1::{PalwTirCourtRulesV1, build_tir_cone_refutation_v1};
+        use crate::palw_tir_one_move_v1::{
+            PalwTirOneMoveAccusationV1, palw_tir_one_move_accusation_v1, palw_tir_one_move_session_id_v1, palw_tir_one_move_shape_v1,
+            palw_tir_one_move_verdict_v1,
+        };
+        let p = params().with_tir_from_daa(Some(0));
+        let honest = tiny_execution(None);
+        let forged = tiny_execution(Some((7, 1)));
+        let class = honest.binding.class.clone();
+        let artifact_root = honest.binding.artifact_root;
+        let class_id = class.class_id(&artifact_root);
+        // The base class and the producer's bond, the accuser's bond, and the IR class.
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+        let canonical = honest.binding.job_context.clone();
+        objects.push(PalwConsensusObjectV2::ClassRegisteredTirV1 {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 40 },
+            initial_target: u128::MAX / 2,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: Box::new(crate::palw_tir_class_v1::PalwTirAdmissionCarriageV1 {
+                class,
+                canonical,
+                registrant_bond: bond_key(1),
+                signature: vec![9; 8],
+            }),
+        });
+        let (s1, _) = apply_da(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+        assert!(s1.tir_class_v1(&class_id).is_some(), "the IR class is registered");
+        // Two claims of the IR class: one committing the honest execution, one the forged.
+        let claim_of = |parent: &PalwChainStateV2, x: &crate::palw_tir_court_v1::test_support::TinyExecution, nonce: u64, daa: u64| {
+            let mut env = attempt_for_class(40, nonce, class_id, bond_key(1), vec![7; 4], op_id(21), artifact_root);
+            env.attempt.trace_root = x.binding.full_logits_trace_root;
+            env.attempt.execution_root = x.binding.committed_execution_root;
+            env.attempt.trace_chunk_count = 1;
+            env.attempt.trace_retention_daa = 999_999;
+            let id = attempt_id_v2(&env.attempt);
+            let (s, _) = apply_da(parent, &p, &ctx(daa, daa + 100, daa), &[], Some(&env));
+            (s, id)
+        };
+        let (s2, honest_claim) = claim_of(&s1, &honest, 1, 2);
+        let (s3, forged_claim) = claim_of(&s2, &forged, 2, 3);
+        let rules = PalwTirCourtRulesV1 {
+            max_step_leaf_count: 1 << 26,
+            prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            limits: misaka_palw_tir::demand::DemandLimits::UNLIMITED,
+        };
+        let court = crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 26, 10, 2).expect("a court");
+        let accuse = |state: &PalwChainStateV2, claim_id: Hash64, x: &crate::palw_tir_court_v1::test_support::TinyExecution| {
+            let refutation = build_tir_cone_refutation_v1(&x.binding, 7, x, &rules).expect("buildable");
+            let proof = PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+            let claim = state.claim(&claim_id).expect("live").clone();
+            let mut a = palw_tir_one_move_accusation_v1(claim_id, &claim, bond_key(2), PalwCourtVerdictV2::ChallengerDefeated, proof);
+            a.verdict =
+                palw_tir_one_move_verdict_v1(state, &claim, &a, &court, 1 << 26, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                    .expect("adjudicates");
+            a.signature = vec![9; 8];
+            a
+        };
+        let on_honest = accuse(&s3, honest_claim, &honest);
+        let on_forged = accuse(&s3, forged_claim, &forged);
+        assert_eq!(on_honest.verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest leaf acquits");
+        assert_eq!(on_forged.verdict, PalwCourtVerdictV2::ExecutorGuilty, "a forged leaf convicts");
+        assert_eq!(palw_tir_one_move_shape_v1(&on_forged), Ok(()));
+        let object = |a: &PalwTirOneMoveAccusationV1| PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(a.clone()) };
+        assert_eq!(borsh::to_vec(&object(&on_forged)).unwrap()[0], 62, "tag 62, after the IR registration's 61");
+        // The session id binds every field.
+        let id = |a: &PalwTirOneMoveAccusationV1| palw_tir_one_move_session_id_v1(b"net", a);
+        let mut other = on_forged.clone();
+        other.verdict = PalwCourtVerdictV2::ChallengerDefeated;
+        assert_ne!(id(&other), id(&on_forged), "the verdict");
+        let mut other = on_forged.clone();
+        other.accuser_bond = bond_key(3);
+        assert_ne!(id(&other), id(&on_forged), "the accuser");
+        assert_ne!(id(&on_forged), palw_tir_one_move_session_id_v1(b"other", &on_forged), "the network");
+
+        // The fold: the forged claim is voided `CourtFraud`; the false accuser is charged.
+        let (s4, _) = apply_da(&s3, &p, &ctx(4, 110, 4), &[object(&on_forged)], None);
+        assert!(
+            matches!(s4.claim(&forged_claim).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "{:?}",
+            s4.claim(&forged_claim).unwrap().phase
+        );
+        let before = s3.bond(&bond_key(2)).unwrap().collateral;
+        let (s5, _) = apply_da(&s3, &p, &ctx(4, 110, 4), &[object(&on_honest)], None);
+        assert!(s5.bond(&bond_key(2)).unwrap().collateral < before, "a false accusation costs its accuser");
+        assert!(!s5.claim(&honest_claim).unwrap().phase.is_terminal(), "the honest claim stands");
+
+        // The gates, by name.
+        let refused = |a: &PalwTirOneMoveAccusationV1| {
+            apply_palw_transition_v2_with_policies(&s3, &p, &ctx(4, 110, 4), &[object(a)], None, false, false, false, true)
+                .expect_err("refused")
+        };
+        let mut wrong = on_forged.clone();
+        wrong.executor_bond = bond_key(2);
+        assert!(matches!(refused(&wrong), PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(c) if c == forged_claim));
+        let mut wrong = on_forged.clone();
+        wrong.trace_root = h64(5);
+        assert!(matches!(refused(&wrong), PalwStateV2Error::ShardCourtRootsDiffer(c) if c == forged_claim));
+        let mut wrong = on_forged.clone();
+        wrong.accuser_bond = bond_key(1);
+        assert!(matches!(refused(&wrong), PalwStateV2Error::ShardCourtAccuserIsTheProducer(_)));
+        let mut wrong = on_forged.clone();
+        wrong.claim = h64(404);
+        assert!(matches!(refused(&wrong), PalwStateV2Error::MissingClaim(_)));
+        // Below the fence: refused before any arm reads it.
+        let below = apply_palw_transition_v2_with_policies(
+            &s3,
+            &params(),
+            &ctx(4, 110, 4),
+            &[object(&on_forged)],
+            None,
+            false,
+            false,
+            false,
+            true,
+        )
+        .expect_err("refused below the fence");
+        assert!(matches!(below, PalwStateV2Error::TirRegistrationRefused(_)), "{below:?}");
     }
 
     // ---------------------------------------------------------------------------------------------
