@@ -615,6 +615,91 @@ pub fn palw_artifact_multiproof_sibling_count_v1(leaf_count: u32, indices: &[u32
     Some(count)
 }
 
+/// **The path length of a single-leaf opening** of leaf `index` in an inventory of `leaf_count`: one
+/// sibling a level, except where the leaf's ancestor is promoted ([`open_artifact_leaf_v1`]).
+/// `None` for an index outside the inventory.
+pub fn palw_artifact_opening_path_len_v1(leaf_count: u32, index: u32) -> Option<u64> {
+    if index >= leaf_count {
+        return None;
+    }
+    let mut at = index as u64;
+    let mut len = 0u64;
+    for width in level_widths_v1(leaf_count as u64) {
+        if !(at == width - 1 && width % 2 == 1) {
+            len += 1;
+        }
+        at /= 2;
+    }
+    Some(len)
+}
+
+/// **A multiproof assembled from single-leaf openings** of one inventory — the proof
+/// [`palw_artifact_multiproof_v1`] builds over the same leaves, sibling for sibling, from the paths
+/// the openings already carry (every supplied sibling is on the path of each opened leaf under the
+/// node it completes). What an evidence store that answers single-leaf openings gives a court that
+/// carries one multiproof. `None` for no opening, a duplicate or out-of-range index, openings of
+/// different inventories, or a path whose length is not its leaf's; the result is NOT verified here
+/// (a path that does not reach the root yields a proof that does not either).
+pub fn palw_artifact_multiproof_from_openings_v1(openings: &[PalwArtifactOpeningV1]) -> Option<PalwArtifactMultiproofV1> {
+    let leaf_count = openings.first()?.leaf_count;
+    if leaf_count == 0 {
+        return None;
+    }
+    let mut sorted: Vec<&PalwArtifactOpeningV1> = openings.iter().collect();
+    sorted.sort_by_key(|o| o.leaf_index);
+    if sorted.windows(2).any(|w| w[0].leaf_index == w[1].leaf_index)
+        || sorted.iter().any(|o| o.leaf_count != leaf_count || o.leaf_index >= leaf_count)
+    {
+        return None;
+    }
+    let widths = level_widths_v1(leaf_count as u64);
+    // Per opening, per level: the position of that level's sibling in its path (`None` where its
+    // ancestor is promoted and the path has none).
+    let mut positions: Vec<Vec<Option<usize>>> = Vec::with_capacity(sorted.len());
+    for o in &sorted {
+        let (mut at, mut k) = (o.leaf_index as u64, 0usize);
+        let mut row = Vec::with_capacity(widths.len());
+        for &width in &widths {
+            if at == width - 1 && width % 2 == 1 {
+                row.push(None);
+            } else {
+                row.push(Some(k));
+                k += 1;
+            }
+            at /= 2;
+        }
+        if o.path.len() != k {
+            return None;
+        }
+        positions.push(row);
+    }
+    // (the node's index at this level, an opening under it)
+    let mut known: Vec<(u64, usize)> = sorted.iter().enumerate().map(|(j, o)| (o.leaf_index as u64, j)).collect();
+    let mut siblings = Vec::new();
+    for (level, &width) in widths.iter().enumerate() {
+        let mut next: Vec<(u64, usize)> = Vec::with_capacity(known.len());
+        let mut i = 0;
+        while i < known.len() {
+            let (index, j) = known[i];
+            if index == width - 1 && width % 2 == 1 {
+                next.push((index / 2, j));
+                i += 1;
+                continue;
+            }
+            if known.get(i + 1).map(|k| k.0) == Some(index ^ 1) {
+                i += 2;
+            } else {
+                siblings.push(sorted[j].path[positions[j][level]?]);
+                i += 1;
+            }
+            next.push((index / 2, j));
+        }
+        next.dedup_by_key(|k| k.0);
+        known = next;
+    }
+    Some(PalwArtifactMultiproofV1 { leaf_count, opened: sorted.iter().map(|o| (o.leaf_index, o.operand.clone())).collect(), siblings })
+}
+
 /// **The borsh bytes of one [`PalwArtifactOperandV1`]**: its name (a 4-byte length and the bytes),
 /// its layer (a 1-byte tag, and 2 bytes when present), its byte offset (4) and its bytes (a 4-byte
 /// length and the bytes).
@@ -1702,6 +1787,52 @@ mod multiproof_size_tests {
                     assert!(count <= 2 * depth, "a run pays at most its two boundary paths: {count} > 2 x {depth}");
                 }
             }
+        }
+    }
+
+    /// **Assembled from single-leaf openings, the multiproof is the builder's**, and each opening's
+    /// path is as long as the closed form says: runs, gaps and single leaves over odd-width trees.
+    #[test]
+    fn a_multiproof_from_openings_is_the_builders_and_paths_have_their_closed_form_length() {
+        let mut x = 0xD1B5_4A32_D192_ED03u64;
+        for leaf_count in [1u32, 2, 3, 5, 9, 33, 100, 257, 1_000] {
+            let operands: Vec<PalwArtifactOperandV1> = (0..leaf_count).map(|i| operand(i, (i % 4) as usize + 2, None)).collect();
+            let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+            let root = artifact_root_v1(&leaves).unwrap();
+            for index in 0..leaf_count.min(64) {
+                let o = open_artifact_leaf_v1(&operands, index).unwrap();
+                assert_eq!(palw_artifact_opening_path_len_v1(leaf_count, index), Some(o.path.len() as u64));
+            }
+            assert_eq!(palw_artifact_opening_path_len_v1(leaf_count, leaf_count), None);
+            let mut subsets: Vec<Vec<u32>> = vec![vec![leaf_count / 2], (0..leaf_count.min(7)).collect()];
+            for _ in 0..8 {
+                let a = (next(&mut x) % leaf_count as u64) as u32;
+                subsets.push((a..(a + 1 + (next(&mut x) % 17) as u32).min(leaf_count)).collect());
+                let mut gaps: Vec<u32> = (0..leaf_count).filter(|_| next(&mut x) % 5 == 0).collect();
+                gaps.dedup();
+                if !gaps.is_empty() {
+                    subsets.push(gaps);
+                }
+            }
+            for indices in subsets {
+                let openings: Vec<PalwArtifactOpeningV1> = indices.iter().rev().map(|i| open_artifact_leaf_v1(&operands, *i).unwrap()).collect();
+                let assembled = palw_artifact_multiproof_from_openings_v1(&openings).expect("assembles");
+                let opened: Vec<(u32, PalwArtifactOperandV1)> = indices.iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+                assert_eq!(assembled, palw_artifact_multiproof_v1(&leaves, &opened).unwrap(), "{leaf_count} leaves, {indices:?}");
+                verify_artifact_multiproof_v1(&assembled, root).expect("verifies");
+            }
+            // Malformed inputs assemble nothing.
+            let o = open_artifact_leaf_v1(&operands, 0).unwrap();
+            assert_eq!(palw_artifact_multiproof_from_openings_v1(&[]), None);
+            assert_eq!(palw_artifact_multiproof_from_openings_v1(&[o.clone(), o.clone()]), None, "a duplicate");
+            let mut short = o.clone();
+            if short.path.pop().is_some() {
+                assert_eq!(palw_artifact_multiproof_from_openings_v1(&[short]), None, "a path of the wrong length");
+            }
+            let mut other = o;
+            other.leaf_count += 1;
+            assert_eq!(palw_artifact_multiproof_from_openings_v1(&[other, open_artifact_leaf_v1(&operands, leaf_count - 1).unwrap()])
+                .filter(|_| leaf_count > 1), None, "two inventories");
         }
     }
 

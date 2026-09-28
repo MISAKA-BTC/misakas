@@ -23,13 +23,16 @@ use fixture::*;
 use std::collections::BTreeMap;
 
 use kaspa_consensus_core::Hash64;
-use kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1;
+use kaspa_consensus_core::palw_artifact::{
+    PalwArtifactMultiproofV1, PalwArtifactOpeningV1, artifact_leaf_v1, open_artifact_leaf_v1, palw_artifact_multiproof_v1,
+};
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_consensus_core::palw_step_leg::{PalwStepFaultV1, step_merkle_root_v1, step_opening_v1, step_tile_leaf_hash_v1};
 use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, tiled_decode_pin_v1};
 use kaspa_consensus_core::palw_tir_artifact_v1::{palw_tir_leaf_index_v1, palw_tir_visit_inventory_rows_v1};
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirEvidenceStoreV1, PalwTirInventoryIndexV1, PalwTirLogitsConsistencyV1,
+    PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_v1,
     PalwTirTraceLanesV1, check_tir_cone_refutation_v1, check_tir_decode_token_tiled_v1, check_tir_logits_consistency_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::{PalwTirLeafKindV1, palw_tir_execution_root_v1};
@@ -144,7 +147,7 @@ fn a_carriage_that_is_not_the_canonical_set_is_refused() {
             .rev()
             .find(|i| {
                 let r = refute(&f, &x, *i as u64);
-                !r.operands.preimages.is_empty() && (f.ops.is_empty() || !r.params.is_empty())
+                !r.operands.preimages.is_empty() && (f.ops.is_empty() || r.params.is_some())
             })
             .expect("a leaf with operands");
         let honest = refute(&f, &x, target as u64);
@@ -170,21 +173,23 @@ fn a_carriage_that_is_not_the_canonical_set_is_refused() {
             r.operands.preimages.swap(0, 1);
             assert!(not_canonical(check_tir_cone_refutation_v1(&r, &RULES)), "{}: out of order", f.name);
         }
-        // A param dropped or added.
-        if !honest.params.is_empty() {
+        // A param dropped or added (each a valid multiproof of the wrong set).
+        if let Some(proof) = &honest.params {
+            let held: Vec<u32> = proof.opened.iter().map(|(i, _)| *i).collect();
             let mut r = honest.clone();
-            r.params.pop();
+            r.params = multiproof(&f, &held[..held.len() - 1]);
             assert!(not_canonical(check_tir_cone_refutation_v1(&r, &RULES)), "{}: a param dropped", f.name);
-            let mut r = honest.clone();
-            let held: Vec<u32> = r.params.iter().map(|o| o.leaf_index).collect();
             if let Some(extra) = (0..f.ops.len() as u32).find(|l| !held.contains(l)) {
-                r.params.push(open_artifact_leaf_v1(&f.ops, extra).unwrap());
-                r.params.sort_by_key(|o| o.leaf_index);
+                let mut more = held.clone();
+                more.push(extra);
+                more.sort_unstable();
+                let mut r = honest.clone();
+                r.params = multiproof(&f, &more);
                 assert!(not_canonical(check_tir_cone_refutation_v1(&r, &RULES)), "{}: a param added", f.name);
             }
-            // A param opening of the right leaf with a byte changed does not reach the root.
+            // The right leaf with a byte changed does not reach the root.
             let mut r = honest.clone();
-            r.params[0].operand.bytes[0] ^= 1;
+            r.params.as_mut().unwrap().opened[0].1.bytes[0] ^= 1;
             assert!(not_canonical(check_tir_cone_refutation_v1(&r, &RULES)), "{}: a param byte changed", f.name);
         }
         // A prompt or a pin the evaluation does not read; or one it reads, withheld.
@@ -419,4 +424,125 @@ fn hostile_refutations_never_panic_the_court() {
         }
     }
     assert!(decoded > 100, "{decoded} mutated refutations adjudicated without a panic");
+}
+
+/// A multiproof of inventory leaves `leaves` of `f` (`None` for none), built from the whole inventory.
+fn multiproof(f: &Fixture, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+    if leaves.is_empty() {
+        return None;
+    }
+    let hashes: Vec<Hash64> = f.ops.iter().map(artifact_leaf_v1).collect();
+    let opened: Vec<_> = leaves.iter().map(|i| (*i, f.ops[*i as usize].clone())).collect();
+    palw_artifact_multiproof_v1(&hashes, &opened)
+}
+
+/// **The parameter carriage's vectors (design §2.12.1)**: across the corpus's honest closes, the
+/// carried multiproof opens a run of consecutive leaves, a set with gaps, and a single leaf; each is
+/// the builder's multiproof of exactly the leaves read, its borsh bytes are
+/// `palw_tir_param_carriage_bytes_v1(Multiproof)` and the per-leaf vector's are
+/// `…(PerLeafOpenings)` to the byte, and a set of two or more leaves never costs more than per-leaf.
+#[test]
+fn the_parameter_carriage_is_one_multiproof_priced_to_the_byte() {
+    let (mut runs, mut gaps, mut singles, mut none) = (0usize, 0usize, 0usize, 0usize);
+    let (mut per_leaf_total, mut multiproof_total) = (0u64, 0u64);
+    for f in fixtures() {
+        let x = f.honest();
+        let program = f.class.decode_program().expect("the fixture's program");
+        for i in 0..f.leaves.len() {
+            let r = refute(&f, &x, i as u64);
+            let leaves: Vec<u32> = r.params.iter().flat_map(|p| p.opened.iter().map(|(l, _)| *l)).collect();
+            assert_eq!(r.params, multiproof(&f, &leaves), "{} leaf {i}: the builder's multiproof of the leaves read", f.name);
+            let carried = borsh::to_vec(&r.params).unwrap().len() as u64;
+            assert_eq!(palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::Multiproof, &leaves), Some(carried), "{} leaf {i}", f.name);
+            let openings: Vec<PalwArtifactOpeningV1> = leaves.iter().map(|l| open_artifact_leaf_v1(&f.ops, *l).unwrap()).collect();
+            let per_leaf = borsh::to_vec(&openings).unwrap().len() as u64;
+            assert_eq!(palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::PerLeafOpenings, &leaves), Some(per_leaf));
+            match leaves.len() {
+                0 => none += 1,
+                1 => singles += 1,
+                _ => {
+                    assert!(carried <= per_leaf + 1, "{} leaf {i}: {carried} > {per_leaf}", f.name);
+                    if leaves.windows(2).all(|w| w[1] == w[0] + 1) {
+                        runs += 1;
+                    } else {
+                        gaps += 1;
+                    }
+                }
+            }
+            per_leaf_total += per_leaf;
+            multiproof_total += carried;
+        }
+    }
+    println!("closes: {runs} runs, {gaps} with gaps, {singles} single leaves, {none} with none; bytes {multiproof_total} vs {per_leaf_total} per leaf");
+    // The corpus's closes read runs and gapped sets (the single-leaf close is the tiny program's:
+    // `palw_tir_court_v1`'s `the_tiny_program_s_closes_carry_a_single_leaf_a_run_and_none`).
+    assert!(runs > 0 && gaps > 0 && none > 0, "every shape occurs: {runs} runs, {gaps} gaps, {none} none");
+    assert!(multiproof_total < per_leaf_total, "the multiproof is the smaller carriage over the corpus");
+}
+
+/// **A malformed multiproof is refused, never a panic, never a conviction** (the rcore/hf-court-total
+/// pattern: the court runs inside block processing, where a panic halts the node). Every structural
+/// mutation of an honest close's multiproof — its size, its index set, its siblings, its operands —
+/// under `catch_unwind`.
+#[test]
+fn a_malformed_multiproof_is_refused_never_a_panic() {
+    let mut adjudicated = 0usize;
+    for f in fixtures() {
+        let x = f.honest();
+        let Some(i) = (0..f.leaves.len()).find(|i| refute(&f, &x, *i as u64).params.as_ref().is_some_and(|p| p.opened.len() >= 2)) else {
+            continue;
+        };
+        let honest = refute(&f, &x, i as u64);
+        assert_eq!(check_tir_cone_refutation_v1(&honest, &RULES), Err(PalwStepRefuteError::NoFaultFound));
+        let proof = honest.params.clone().unwrap();
+        let mut mutations: Vec<(String, Option<PalwArtifactMultiproofV1>)> = vec![("none at all".into(), None)];
+        let mut add = |what: &str, edit: &dyn Fn(&mut PalwArtifactMultiproofV1)| {
+            let mut p = proof.clone();
+            edit(&mut p);
+            mutations.push((what.into(), Some(p)));
+        };
+        add("empty", &|p| p.opened.clear());
+        add("leaf count 0", &|p| p.leaf_count = 0);
+        add("leaf count 1", &|p| p.leaf_count = 1);
+        add("leaf count + 1", &|p| p.leaf_count += 1);
+        add("leaf count - 1", &|p| p.leaf_count -= 1);
+        add("leaf count max", &|p| p.leaf_count = u32::MAX);
+        add("reversed", &|p| p.opened.reverse());
+        add("duplicate", &|p| {
+            let first = p.opened[0].clone();
+            p.opened.insert(0, first);
+        });
+        add("index = leaf count", &|p| p.opened.last_mut().unwrap().0 = p.leaf_count);
+        add("index max", &|p| p.opened.last_mut().unwrap().0 = u32::MAX);
+        add("index shifted", &|p| p.opened[0].0 = p.opened[0].0.wrapping_add(1));
+        add("siblings empty", &|p| p.siblings.clear());
+        add("a sibling short", &|p| {
+            p.siblings.pop();
+        });
+        add("a sibling extra", &|p| p.siblings.push(Hash64::from_bytes([7; 64])));
+        add("an operand renamed", &|p| p.opened[0].1.tensor_name.push('x'));
+        add("an operand relayered", &|p| p.opened[0].1.layer = Some(p.opened[0].1.layer.map_or(0, |l| l.wrapping_add(1))));
+        add("an operand moved", &|p| p.opened[0].1.row_start = p.opened[0].1.row_start.wrapping_add(1));
+        add("an operand truncated", &|p| {
+            p.opened[0].1.bytes.pop();
+        });
+        add("an operand extended", &|p| p.opened[0].1.bytes.push(0));
+        add("an operand emptied", &|p| p.opened[0].1.bytes.clear());
+        for k in 0..proof.siblings.len() {
+            add(&format!("sibling {k} altered"), &|p| {
+                let mut b = p.siblings[k].as_bytes();
+                b[k % 64] ^= 0x5a;
+                p.siblings[k] = Hash64::from_bytes(b);
+            });
+        }
+        for (what, params) in mutations {
+            let mut r = honest.clone();
+            r.params = params;
+            let verdict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check_tir_cone_refutation_v1(&r, &RULES)))
+                .unwrap_or_else(|_| panic!("{}: {what}: the court panicked", f.name));
+            assert!(verdict.is_err(), "{}: {what}: a malformed multiproof convicted an honest executor: {verdict:?}", f.name);
+            adjudicated += 1;
+        }
+    }
+    assert!(adjudicated > 50, "{adjudicated} malformed multiproofs adjudicated");
 }
