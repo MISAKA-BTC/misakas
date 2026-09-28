@@ -224,7 +224,8 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let m = fidelity::compare(&fl, &il, &eval);
     if a.sites > 0 {
         log(format!("site errors over the first {} positions (every weight as f32)", a.site_positions));
-        let (params_f, _) = misaka_palw_tir_lower::float_ref::ParamStore::from_source(&prep.hl, &prep.binding, &ck).map_err(|e| e.to_string())?;
+        let (params_f, _) =
+            misaka_palw_tir_lower::float_ref::ParamStore::from_source(&prep.hl, &prep.binding, &ck).map_err(|e| e.to_string())?;
         let seq = &eval[0][..a.site_positions.min(eval[0].len())];
         let errs = fidelity::site_errors(&prep, &params_f, &stats, &policy, &mat, seq).map_err(|e| e.to_string())?;
         for e in errs.iter().take(a.sites) {
