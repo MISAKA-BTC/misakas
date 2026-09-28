@@ -1119,6 +1119,73 @@ copy of the same file is the later real-file test end to end.
   work.
 - Whole artifacts are 1.06–1.15× the W8 twins' on the fixtures.
 
+### 19.1b More GGUF architectures, and quantised experts (2026-09-29)
+
+**GGUF mappings added.** Each has a numpy-written fixture that passes the float-vs-HF check and the
+integer check, and is admitted end to end at 512 on testnet-12 (every close fits):
+
+| GGUF arch | Hugging Face | what the file stores differently (undone exactly) | float vs HF | greedy (twin) |
+| --- | --- | --- | --- | --- |
+| `qwen35` | `Qwen3_5ForCausalLM` | `ssm_a = −exp(A_log)`, read as stored (`fix_binding`); value heads tiled `[v][k]` when there are more of them than key heads (rows, `conv1d` channels, `A`, `dt_bias`, and `out_proj`'s columns taken back); `1 + w` gains except the gated norm; `conv1d` squeezed | 2.1e-5 of 45 | 36/36 (36/36) |
+| `gemma3` | `Gemma3ForCausalLM` | llama.cpp's fixed pattern (every 6th layer global), local rope base 10,000 unscaled, `1 + w` gains incl. q/k norms, the 27B's query scale | 1.1e-5 of 64 | 36/36 (36/36) |
+| `phi3` | `Phi3ForCausalLM` | LongRoPE from `rope_factors_long/short` (its `attn_factor` checked), sliding window 0 = none, fused `qkv` and `gate_up` | 1.8e-6 | 36/36 (29/36) |
+| `qwen3moe`, `qwen2moe` | `Qwen3MoeForCausalLM`, `Qwen2MoeForCausalLM` | experts stacked `[E, rows, cols]` (each read as its slice), llama.cpp's top-k renormalisation (Qwen3: yes, Qwen2: no) | 1.4e-6 | 36/36 (36/36) |
+| `llama` + experts | `MixtralForCausalLM` | the same, and llama's q/k permutation | 1.7e-6 | 34/36 (34/36) |
+
+**Quantised experts** (GPTQ, AWQ, GGUF). Each expert is its own stored module (one per expert, or one
+slice of GGUF's stacked tensor). The selected experts' codes, scales and (GPTQ) column orders are
+gathered by the router's ids, then multiplied exactly as for a dense projection.
+- Storage is row-major per expert (`[E, rows, G, gs]`); the product runs group-major after one
+  transpose.
+- Fixtures: `gptq_qwen3moe_b4_g32_act`, `awq_mixtral_g64`, `gguf_qwen3moe_q4_0`,
+  `gguf_mixtral_q8_0`. All are admitted end to end.
+- Integer against float: KL 2e-5 to 5e-4. Routing near-ties dominate, as for every MoE (§18).
+
+**Quantised params are row-major.** A codes param is `[out, G, 1, gs]` (experts
+`[E, rows, G, gs]`), and its scales are `[out, G]`. An inventory leaf is then one output row, and a
+tile of rows opens only those rows.
+- The first layout, group-major `[G, out, gs]`, made every group a leaf. A 64-row tile opened the
+  whole weight: the real Q4_K_M class below had closes of 19 MB, 20 of them over the 3.2 MB cap.
+- The tiny fixtures could not show it, since their tensors fit in a few leaves.
+
+The reference evaluator, ref2 and exec agree byte for byte on all 24 pre-quantised fixtures.
+
+### 19.1c A real file: Qwen3.5-2B-Q4_K_M
+
+The file is the local copy under `~/Downloads/misaka-palw-runtime/models` (Unsloth's
+Qwen3.5-2B-Q4_K_M, with imatrix), read only; nothing was copied from the hosts. It holds 320
+tensors: Q4_K 98, Q5_K 36, Q6_K 17, Q8_0 36, F32 133.
+- **Mapping.** The config maps (24 layers, 18 gated-delta, 6 full attention). All 362 bindings
+  resolve by shape and no tensor is left unread.
+- **Program.** 963 nodes; the gated-delta block has 474, against 512.
+- **Class at 512.** Calibrated on 4 × 512 real tokens (the Qwen3.5 tokenizer, MISAKA's docs). The
+  integer class against the float reference of the same Q4_K_M weights, over 2 × 128 held-out
+  tokens: top-1 0.953, KL 0.0057 (max 0.096), perplexity 49.25 → 49.62 (+0.74 %). The artifact is
+  2.73 GiB.
+- **Against its F16 twin** (the same model in F16, the ollama blob, through the W8 path):
+  - The twin's own class (W8, calibrated the same way) against its F16 float: top-1 0.938, KL
+    0.0104 (max 0.584), perplexity 49.97 → 51.18 (+2.44 %). The exact Q4_K_M path's error against
+    its own float is about half of that. Its artifact is 2.34 GiB against the Q4_K_M class's 2.73
+    GiB (per-group `a`/`c` of the K-quant layouts at groups of 16 and 32).
+  - The two classes against each other on the same 256 positions: top-1 0.910, KL 0.024 (max
+    0.387). That is mostly the Q4_K_M quantisation itself (llama.cpp's 4.5 bits), measured here
+    through both classes.
+- **Admission: REFUSED on testnet-12**, and not because of the quantisation:
+  - The refusal is `COURT_COST_EXCEEDS_CEILING`: cone evaluation work 69,139,968 against 2^26.
+  - Its cause is the state replay at the declared checkpoint interval C = 1,024. The gated-delta
+    block's conv window costs 67,584 elementwise operations a position (0 MACs), charged 1,023
+    times. The recurrent state `gdn.S` costs 200,944 a position per head group, which would be
+    205.6 M.
+  - `tir_admit_v1`'s `C_j` bounds only MACs and transcendentals, so C stays 1,024, and
+    `palw-class declare-layout` does not halve C for this check.
+  - The W8 program of the same model has identical state costs. Every real-size Qwen3.5 class
+    (0.8B included, whose gated-delta dimensions are the same) is refused the same way.
+  - C ≤ 256 would admit. The fix belongs to admission: `C_j` bounding elementwise work too, or
+    `declare-layout` halving on this refusal.
+- **Closes** (`palw-class close-sizes`, row-major layout): all 92 fit the 3.2 MB cap. The worst is
+  1.14 MB (the logits tile over the tied `i16` table); the layer carry-outs are 667 KB. With the
+  first, group-major layout, 20 closes were over the cap, the worst 18.98 MB.
+
 ### 19.2 The registrable share, with pre-quantised repositories counted
 
 The hub counts are §18's (2026-09-28). The GPTQ/AWQ repo count and the GGUF architecture mix are
@@ -1137,3 +1204,16 @@ The largest pre-quantised gaps:
   the IQ types;
 - bitsandbytes-4bit and MLX repos (both numerous);
 - quantised MoE experts in GPTQ/AWQ.
+
+**Updated after §19.1b** (the same counts; the factors are estimates):
+
+| population | registrable | change |
+| --- | --- | --- |
+| text-generation, float safetensors | ≈ 253 k | −7 k: Qwen3.5 and Qwen3-Next classes are refused by admission at real sizes (§19.1c) until admission bounds C by its elementwise work |
+| GPTQ/AWQ safetensors | ≈ 18 k | quantised experts (× 0.9) |
+| GGUF | ≈ 150 k | + `gemma3`, `phi3`, `qwen3moe`, `qwen2moe`, Mixtral (≈ 0.75 of the repos; `qwen35` mapped but refused like its float class) |
+| **text generation in all** | **≈ 420 k, ≈ 13.5 % of HF** | |
+| + RFC-0003 classes | **≈ 500 k, ≈ 16 %** | |
+
+The GDN admission fix would add back ≈ 7 k float repos and the `qwen35` GGUF repos (≈ 5 % of GGUF,
+≈ 10 k).
