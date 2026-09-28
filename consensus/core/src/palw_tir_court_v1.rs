@@ -1781,6 +1781,27 @@ impl PalwTirTraceEventDisclosureV1 {
     pub fn is_flat(&self) -> bool {
         matches!(self, Self::Flat { .. })
     }
+
+    fn binding_mut(&mut self) -> &mut PalwTirStepBindingV1 {
+        match self {
+            Self::Flat { binding, .. } | Self::Tiled { binding, .. } | Self::OutOfRange { binding } => binding,
+        }
+    }
+
+    /// **Empties the carried program** — what a discloser does before the answer rides (the chain
+    /// holds the registered class's program and refuses a carried one).
+    pub fn strip_program_v1(&mut self) {
+        crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(self.binding_mut());
+    }
+
+    /// The disclosure with the registered class's program put back
+    /// ([`crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1`]); refused when it carried one.
+    pub fn with_program_v1(&self, record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1) -> Result<Self, &'static str> {
+        let mut filled = self.clone();
+        let slot = filled.binding_mut();
+        *slot = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(slot, record)?;
+        Ok(filled)
+    }
 }
 
 /// **Verify an IR claim's data-availability disclosure against the claim — by hash arithmetic,
@@ -2119,6 +2140,43 @@ pub(crate) mod test_support {
         TinyExecution { binding, preimages, hashes, ops, prompt, rows, generated }
     }
 
+    /// A binding whose parts verify (the leaf count is the job's and the root recomputes), over a
+    /// class with a canonical job: the identity rule needs no execution, only a binding.
+    /// A binding whose parts verify (the leaf count is the job's and the root recomputes) over the
+    /// tiny class widened to 64 positions (so it has a canonical job), at the anchor's J5 context with
+    /// `edit` applied: the identity rule needs no execution, only a binding.
+    pub(crate) fn attempt_binding(
+        anchor: Hash64,
+        edit: impl FnOnce(&mut PalwJobContextV2),
+    ) -> (PalwTirStepBindingV1, crate::palw_tir_attempt_v1::PalwTirJobFactsV1) {
+        use crate::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_context_v1, palw_tir_attempt_prompt_root_v1};
+        const MAX: u64 = 1 << 26;
+        let x = tiny_execution(None);
+        let mut class = x.binding.class.clone();
+        class.layout.max_context = 64;
+        let class_id = class.class_id(&x.binding.artifact_root);
+        let facts = PalwTirJobFactsV1::of_class(&class, class_id).unwrap();
+        let canonical = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(&class).unwrap();
+        let root = palw_tir_attempt_prompt_root_v1(&facts, &anchor, canonical.0, PalwPromptIdsFormV1::Flat).unwrap();
+        let mut ctx = palw_tir_attempt_context_v1(&facts, &anchor, canonical, root);
+        edit(&mut ctx);
+        let space = PalwTirStepSpaceV1::new(&class).unwrap();
+        let count = space.leaf_count_capped(&ctx, MAX).unwrap();
+        let (trace, step_root) = (Hash64::from_bytes([0x71; 64]), Hash64::from_bytes([0x72; 64]));
+        let execution = palw_tir_execution_root_v1(&ctx.context_hash(), &trace, &class_id, count, &step_root);
+        let binding = PalwTirStepBindingV1 {
+            version: PALW_TIR_STEP_BINDING_VERSION_V1,
+            job_context: ctx,
+            class,
+            artifact_root: x.binding.artifact_root,
+            full_logits_trace_root: trace,
+            step_leaf_count: count,
+            step_merkle_root: step_root,
+            committed_execution_root: execution,
+        };
+        (binding, facts)
+    }
+
     #[test]
     fn the_tiny_execution_is_adjudicable_both_ways() {
         let rules = PalwTirCourtRulesV1 {
@@ -2143,13 +2201,13 @@ pub(crate) mod test_support {
 /// **F6 D: an IR claim's data-availability answer, and the identity rule over an IR binding.**
 #[cfg(test)]
 mod da_tests {
-    use super::test_support::{DECODE, TinyExecution, tiny_execution};
+    use super::test_support::{DECODE, TinyExecution, attempt_binding, tiny_execution};
     use super::*;
     use crate::palw_offence_attribution_v1::{
         PalwClaimSourceKindV1, PalwIdentityFaultV1, PalwIdentityRulesV1, PalwOffenceTargetV1, palw_tir_binding_identity_fault_v1,
     };
     use crate::palw_offence_v1::PalwOffenceVerifyError;
-    use crate::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_context_v1, palw_tir_attempt_prompt_root_v1};
+    use crate::palw_tir_attempt_v1::palw_tir_attempt_prompt_root_v1;
 
     const MAX: u64 = 1 << 26;
 
@@ -2252,35 +2310,6 @@ mod da_tests {
         broken.step_leaf_count += 1;
         let d = PalwTirTraceEventDisclosureV1::OutOfRange { binding: Box::new(broken.clone()) };
         assert!(check(&broken, DECODE, 0, &d).is_err());
-    }
-
-    /// A binding whose parts verify (the leaf count is the job's and the root recomputes), over a
-    /// class with a canonical job: the identity rule needs no execution, only a binding.
-    fn attempt_binding(anchor: Hash64, edit: impl FnOnce(&mut PalwJobContextV2)) -> (PalwTirStepBindingV1, PalwTirJobFactsV1) {
-        let x = tiny_execution(None);
-        let mut class = x.binding.class.clone();
-        class.layout.max_context = 64;
-        let class_id = class.class_id(&x.binding.artifact_root);
-        let facts = PalwTirJobFactsV1::of_class(&class, class_id).unwrap();
-        let canonical = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(&class).unwrap();
-        let root = palw_tir_attempt_prompt_root_v1(&facts, &anchor, canonical.0, PalwPromptIdsFormV1::Flat).unwrap();
-        let mut ctx = palw_tir_attempt_context_v1(&facts, &anchor, canonical, root);
-        edit(&mut ctx);
-        let space = PalwTirStepSpaceV1::new(&class).unwrap();
-        let count = space.leaf_count_capped(&ctx, MAX).unwrap();
-        let (trace, step_root) = (Hash64::from_bytes([0x71; 64]), Hash64::from_bytes([0x72; 64]));
-        let execution = palw_tir_execution_root_v1(&ctx.context_hash(), &trace, &class_id, count, &step_root);
-        let binding = PalwTirStepBindingV1 {
-            version: PALW_TIR_STEP_BINDING_VERSION_V1,
-            job_context: ctx,
-            class,
-            artifact_root: x.binding.artifact_root,
-            full_logits_trace_root: trace,
-            step_leaf_count: count,
-            step_merkle_root: step_root,
-            committed_execution_root: execution,
-        };
-        (binding, facts)
     }
 
     fn target_of(b: &PalwTirStepBindingV1, identity: Hash64) -> PalwOffenceTargetV1 {

@@ -493,6 +493,25 @@ impl PalwCourtVerdictProofV2 {
             _ => None,
         }
     }
+
+    /// The IR binding an IR close carries, mutably — where the chain puts the registered program back
+    /// ([`crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1`]) and a filer strips it.
+    pub fn tir_binding_mut_v1(&mut self) -> Option<&mut crate::palw_tir_step_v1::PalwTirStepBindingV1> {
+        match self {
+            Self::TirCone { refutation } => Some(&mut refutation.binding),
+            Self::TirLogits { accusation } => Some(&mut accusation.binding),
+            Self::TirDecodeTokenTiled { binding, .. } | Self::TirDecodeToken { binding, .. } => Some(binding),
+            _ => None,
+        }
+    }
+
+    /// **Empties an IR close's carried program** — what a filer does before the close rides (the chain
+    /// holds the registered class's program and refuses a carried one). A no-op on a legacy close.
+    pub fn tir_strip_program_v1(&mut self) {
+        if let Some(binding) = self.tir_binding_mut_v1() {
+            crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(binding);
+        }
+    }
 }
 
 /// **The court's work limits for one IR close**: four times the ruleset's terminal MAC ceiling, in
@@ -1133,13 +1152,28 @@ fn tir_decode_close_door_v1(
 fn adjudicate_tir_close_proof_v1(
     state: &PalwChainStateV2,
     claim: &crate::palw_state_v2::PalwClaimStateV2,
-    proof: &PalwCourtVerdictProofV2,
-    binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    carried: &PalwCourtVerdictProofV2,
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
     step_ladder: u64,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     use crate::palw_tir_court_v1 as tir;
+    // **The program is the registered class's** (the coordinator's decision of 2026-09-28): an IR
+    // close carries its binding with the program empty, and the chain puts back the program its
+    // `tir_classes` row holds before anything reads the binding — so every pin below runs on the
+    // filled binding, and a close about a claim of a class that is not an IR program adjudicates
+    // nothing.
+    let record = state
+        .tir_class_v1(&claim.class_id)
+        .ok_or_else(|| PalwCourtV2Error::DoesNotAdjudicate(format!("claim {}'s class is not an IR program", claim.class_id)))?;
+    let mut filled = carried.clone();
+    {
+        let slot = filled.tir_binding_mut_v1().ok_or_else(|| PalwCourtV2Error::DoesNotAdjudicate("not an IR close".into()))?;
+        *slot = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(slot, record)
+            .map_err(|why| PalwCourtV2Error::DoesNotAdjudicate(why.into()))?;
+    }
+    let proof = &filled;
+    let binding = proof.tir_binding_v1().expect("filled above");
     let declared = binding.class.class_id(&binding.artifact_root);
     if declared != claim.class_id {
         return Err(PalwCourtV2Error::CloseProfileIsNotTheClass { class_id: claim.class_id, declared });
@@ -1191,8 +1225,8 @@ pub fn adjudicate_close_proof_v2(
     check_close_speaks_the_networks_prompt_form(proof, prompt_ids_form)?;
     // An IR close carries its class whole, re-hashed to the claim's class id before anything reads
     // it — the same bound, in the IR's spelling.
-    if let Some(binding) = proof.tir_binding_v1() {
-        return adjudicate_tir_close_proof_v1(state, claim, proof, binding, court, step_ladder, prompt_ids_form);
+    if proof.is_tir_v1() {
+        return adjudicate_tir_close_proof_v1(state, claim, proof, court, step_ladder, prompt_ids_form);
     }
     // Before ANY arm reads geometry out of the binding. See the function's own docs: this is the
     // bound that does not have to be repeated at each consumer.
@@ -3529,14 +3563,18 @@ mod tests {
         };
         let judge = |x: &crate::palw_tir_court_v1::test_support::TinyExecution, leaf: u64| {
             let b = &x.binding;
-            let (state, claim_id) = licensed_state_of(
+            let (mut state, claim_id) = licensed_state_of(
                 b.job_context.shape_profile_id,
                 b.artifact_root,
                 b.full_logits_trace_root,
                 b.committed_execution_root,
             );
+            // The class's `tir_classes` row, as its registration writes it: the program is the chain's.
+            let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&b.class, &b.artifact_root).expect("decodes");
+            state.test_insert_tir_class_v1(b.job_context.shape_profile_id, record);
             let refutation = build_tir_cone_refutation_v1(b, leaf, x, &rules).expect("buildable");
-            let proof = PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+            let mut proof = PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+            proof.tir_strip_program_v1();
             let claim = state.claim(&claim_id).unwrap().clone();
             (adjudicate_close_proof_v2(&state, &claim, &proof, &court(), LADDER, form), state, claim, proof)
         };
@@ -3548,11 +3586,13 @@ mod tests {
         let (verdict, state, claim, proof) = judge(&forged, 7);
         assert_eq!(verdict, Ok(PalwCourtVerdictV2::ExecutorGuilty), "the forged leaf convicts");
 
-        // The same close against a claim of another class, and of another execution.
+        // The same close against a claim of another IR class, and of another execution.
         let mut other_class = claim.clone();
         other_class.class_id = h64(1);
+        let mut with_other = state.clone();
+        with_other.test_insert_tir_class_v1(h64(1), state.tir_class_v1(&claim.class_id).unwrap().clone());
         assert!(matches!(
-            adjudicate_close_proof_v2(&state, &other_class, &proof, &court(), LADDER, form),
+            adjudicate_close_proof_v2(&with_other, &other_class, &proof, &court(), LADDER, form),
             Err(PalwCourtV2Error::CloseProfileIsNotTheClass { .. })
         ));
         let mut other_run = claim.clone();
@@ -3567,6 +3607,27 @@ mod tests {
             adjudicate_close_proof_v2(&state, &other_trace, &proof, &court(), LADDER, form),
             Err(PalwCourtV2Error::TraceRootMismatch)
         );
+
+        // The program is referenced, not carried: a close that carries it is refused, and a claim of a
+        // class with no IR row adjudicates nothing.
+        let mut carrying = proof.clone();
+        carrying.tir_binding_mut_v1().unwrap().class.program = forged.binding.class.program.clone();
+        assert!(matches!(
+            adjudicate_close_proof_v2(&state, &claim, &carrying, &court(), LADDER, form),
+            Err(PalwCourtV2Error::DoesNotAdjudicate(why)) if why.contains("carries no program")
+        ));
+        let (bare, bare_claim) = licensed_state_of(
+            claim.class_id,
+            forged.binding.artifact_root,
+            forged.binding.full_logits_trace_root,
+            forged.binding.committed_execution_root,
+        );
+        let bare_claim = bare.claim(&bare_claim).unwrap().clone();
+        assert!(matches!(
+            adjudicate_close_proof_v2(&bare, &bare_claim, &proof, &court(), LADDER, form),
+            Err(PalwCourtV2Error::DoesNotAdjudicate(why)) if why.contains("not an IR program")
+        ));
+        assert!(proof.tir_binding_v1().unwrap().class.program.is_empty(), "the carried close is the stripped one");
 
         // Appended: tags 5..=8, after `ArithmeticOpened` (4); and measured whole by the cost gate.
         assert!(proof.is_tir_v1());

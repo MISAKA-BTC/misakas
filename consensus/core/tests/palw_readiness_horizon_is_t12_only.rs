@@ -57,11 +57,11 @@ const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[
 /// Re-pinned 2026-09-25 (`rcore/exec-maturity-120`): testnet-12's 120-DAA execution-quantum maturity
 /// (`palw_exec_maturity_is_t12_only`) is in this twin — and so are c6ffd812's mainnet values, which the
 /// merge `2004c588` left un-re-pinned here. Previous: `fd7353c0…` / `a7fe561c…` / `28d866f1…`.
-// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day (2026-09-27): the capacity architecture at rho 10 (ADR-0160 F-W, F-E, F-L, F-B, F-R, F-Q, F-S, F-N) armed at DAA 1,500 (was 4bcf92cc…, ab31d089…)
+// re-pin 2026-09-28 @ea80b2e88867: third post-launch flag day moved to DAA 1,700 (the DAA-1,500 release was never rolled out; the chain passed 1,500 on the DAA-1,300 rules) (was f29df545…, 393be90f…)
 const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
-    "f29df5458a5dc04c3449728457d5ed5a9c80d82a253dd9b1a47eb541ebaafeed",
+    "6916b00196959ea530e4a43239588e9c66e1531b5f7a4aa85225508dd139af8d",
     "9f267fb1794c366a70a9b9008773bc470f8d0ab03ebb0ca26e9a28eaacb70ab4",
-    "393be90f51b2499c76d1bfac9786db3902dd3f3bf89648fce7f5984cdbec3750",
+    "a3e657df2f327af3f955a44594d0a5a81928e87850aced9cf84b9fc74b74e0be",
 );
 
 /// testnet-12 with the horizon, on the same tree (at `3e9ae4ba`, before the pool and int-3 merges:
@@ -71,11 +71,11 @@ const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
 /// (= `palw_exec_maturity_is_t12_only`'s `T12_WITH_THE_MATURITY`; at `2004c588` they were `2790d7ce…` /
 /// `1fd06c99…` / `e0af0218…`, which this pin never caught up with). Previous: `4d38b3f1…` / `2477a803…` /
 /// `06dd5566…`.
-// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day (2026-09-27): the capacity architecture at rho 10 (ADR-0160 F-W, F-E, F-L, F-B, F-R, F-Q, F-S, F-N) armed at DAA 1,500 (was 24e1aec3…, d263d7f2…)
+// re-pin 2026-09-28 @ea80b2e88867: third post-launch flag day moved to DAA 1,700 (the DAA-1,500 release was never rolled out; the chain passed 1,500 on the DAA-1,300 rules) (was cbe9152f…, f78b02ad…)
 const T12_WITH_THE_HORIZON: (&str, &str, &str) = (
-    "cbe9152fa73e1c57737918bbea1e48c3f57a53ca9ab36273cbfb3407c15e257f",
+    "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "f78b02adad83fbd4e02790142a2a03462dddb8ec4df13ad9f613f21d2dd9294a",
+    "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
 );
 
 fn shipped(name: &str) -> Params {

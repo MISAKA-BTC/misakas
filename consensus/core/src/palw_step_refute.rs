@@ -1016,6 +1016,15 @@ fn kimi_row(
             let q = as_i32(&inputs[2]);
             let decay = *inputs[3].first().ok_or(PalwStepRefuteError::Unadjudicable)? as i32 as i64;
             let beta = *inputs[4].first().ok_or(PalwStepRefuteError::Unadjudicable)? as i32 as i64;
+            // The state is sized by the OPENED rows' lengths, which the producer's leaves decide,
+            // and it is allocated before the kernel checks anything — so it takes the recurrence
+            // arms' ceilings first, rather than a `v × k` allocation large enough to abort.
+            if k.len() > PALW_GDN_MAX_DIM
+                || v.len() > PALW_GDN_MAX_DIM
+                || v.len().checked_mul(k.len()).is_none_or(|n| n > PALW_GDN_MAX_STATE_WORDS)
+            {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
             let mut state = kimi::KimiK3KdaStateV1::zeros(v.len(), k.len());
             let scale = A16QuantParams { multiplier: 1, shift: 0, zero: 0 };
             Ok(out(kimi::kimi_k3_kda_step(&mut state, &k, &v, &q, decay, beta, scale).map_err(shape)?))
@@ -4849,6 +4858,14 @@ fn run_program(
         }
         KernelProgram::RmsNormFused => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("rmsnorm needs one input row"))?;
+            // An empty row is a row of zero-lane leaves, which only a producer committing garbage
+            // writes. It reached `i64_to_f64_bits(0)`, whose `debug_assert!` fired (a test-build
+            // panic; release computed a mean over "n = 0.5" and returned an empty row, which the
+            // comparison one frame up refused as "recomputed row is shorter than the tile claims").
+            // Refused here, by name, with the same outcome: the court cannot adjudicate it.
+            if x.is_empty() {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("rmsnorm's input row is empty"));
+            }
             // Four bytes per value: the fused norm's gain is an f32 lane.
             let wrow = weights
                 .operand_bytes(
@@ -5321,6 +5338,9 @@ fn i32_len_to_f32_bits(n: u32) -> u32 {
 // =============================================================================================
 // Tests
 // =============================================================================================
+
+#[cfg(test)]
+pub(crate) mod hostile_totality_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {
