@@ -1,5 +1,31 @@
 # PALW-TIR v1 — the freeze (RFC-0002 Phase E)
 
+## Freeze declaration
+
+**PALW-TIR v1 is frozen as of 2026-09-28.** The RFC-0002 coordinator decided it on this document's
+evidence.
+
+* **`prim_set_id` (final):**
+  `61fa4aa57adfc79053c5e517515e50c7ae7c036abc43ff931053144691ba31c9212539a93514f831a8472ca75a39b094177736aa5818eeae547bb31fbf89f589`.
+  It is `BLAKE2b-512`, keyed `misaka-palw/tir-prim-set-id/v1`, over `prim_set_descriptor_v1()`
+  (`palw-tir/v1/spec=04b-tensor-ir/rev2/q=24/prims=…`). That descriptor covers the 25 primitives of
+  `misaka-palw-tir/src/prim.rs` (`PRIM_SET_ID_V1`; the set was last touched in `a2e6ec35a`).
+* **The criteria** (RFC-0002 §1.2; the table under Summary):
+  * Criteria 1–4, 6 and 7 hold.
+  * Criterion 5 holds for every family's fidelity row: 57/57 tiny fixtures and 7/7 real
+    checkpoints.
+  * Its recurrence-drift column holds for Jamba (C7). It misses for Qwen3.5-0.8B (C4/C7, ×4.00)
+    and Mamba-370m (C5, ×5.64) at 4,096 positions. Both are recorded as **quantisation gap,
+    lowering work open**, as RFC-0002 open question 3 prescribes: a family that cannot meet its
+    thresholds "is a quantisation problem, not an IR problem". The measured causes are in §5.2 and
+    the work in §8.
+* **What the freeze fixes, and what it leaves open.** Fixed: the primitive set, its semantics (spec
+  04b rev2) and the descriptor; a change to any of them is v2, with a new `prim_set_id`. Open: the
+  lowering, calibration, library forms and quantisation. Those change programs and artifacts, never
+  `prim_set_id`.
+
+## The evidence
+
 RFC-0002 §1.2: PALW-TIR v1 is frozen, its `prim_set_id` fixed, the moment freeze criteria 1–7 first
 hold together. This document states, criterion by criterion, the evidence (commits, tests, numbers)
 and what is still open. It is written on `tir/lower` and cites the other lanes at these heads:
@@ -12,8 +38,8 @@ and what is still open. It is written on `tir/lower` and cites the other lanes a
 | consensus integration | `tir/phase-f` | `0b22fd8e4` (F5), `23cf9235c` and `827187f34` (04b §9.4) |
 | HF lowerer, F3, F10, D-F1 offline | `tir/lower` | this commit |
 
-`prim_set_id` of the candidate: `PRIM_SET_ID_V1` = `61fa4aa57adfc79053c5e517515e50c7…` (BLAKE2b-512
-keyed `misaka-palw/tir-prim-set-id/v1` over the descriptor `rev2`, `misaka-palw-tir/src/prim.rs`).
+`prim_set_id` (final since 2026-09-28): `PRIM_SET_ID_V1` = `61fa4aa57adfc79053c5e517515e50c7…`, in
+full under the freeze declaration above.
 
 ## Summary
 
@@ -23,20 +49,14 @@ keyed `misaka-palw/tir-prim-set-id/v1` over the descriptor `rev2`, `misaka-palw-
 | 2 | minimality | **holds** (25 < the 30–50 target, argued) | corpus-v1 §8.2 per primitive; nothing added since Gate 1 |
 | 3 | stability under the last family | **holds** | the last families (MLA + group-limited routing, RWKV-4; RWKV-6/7 in the library) forced no primitive; `prim.rs` has held 25 since `ac7b96ae7` |
 | 4 | three-way bit identity | **holds** | golden 239/239 on ref2; 1,824 positions × 57 HF programs equal on reference/ref2/exec; admission and demand differentials 0 disagreements; D-F1: 13,846 positions of the genesis 8k artifact equal to the legacy engine |
-| 5 | fidelity | **not yet**: every fidelity row is met (57/57 fixtures, 7/7 real checkpoints; Mamba-370m's miss was a tied-head bug, fixed); the drift column is not — at 4,096 positions Jamba ×0.32 meets ×1.5, while Qwen3.5-0.8B ×4.00 and Mamba-370m ×5.64 miss with the calibration-length rule met. The causes are lowering precision, not IR (§5.2, §8) | Mamba-370m 0.988 / KL 0.0012 / ppl −0.23 %; Qwen2.5-1.5B 0.980 / 0.0008 / +0.53 % |
+| 5 | fidelity | **holds** for every fidelity row: 57/57 fixtures and 7/7 real checkpoints (Mamba-370m's earlier miss was a tied-head bug, fixed). Drift at 4,096 positions: Jamba ×0.32 meets ×1.5. **Qwen3.5-0.8B ×4.00 and Mamba-370m ×5.64: quantisation gap, lowering work open** (§5.2, §8) | Mamba-370m 0.988 / KL 0.0012 / ppl −0.23 %; Qwen2.5-1.5B 0.980 / 0.0008 / +0.53 % |
 | 6 | legacy conformance | **holds** | 38 integer catalogue kernels + `RequantizeByToken` byte-identical on the live code; the whole dense A16 tier by D-F1 (9,373,742 legacy node rows equal) |
 | 7 | static verifiability | **holds with one stated window** | `tir_admit_v1` admits every corpus and HF-lowered program at the legacy court's ceilings; DeepSeek-V3 needs a window ≤ `2^16` |
 
-**Verdict (2026-09-28): v1 cannot be frozen yet.** Criteria 1–4, 6 and 7 hold. Criterion 5 holds
-for every family's fidelity row, but not for the drift column: Qwen3.5-0.8B (C4/C7) drifts ×4.00 and
-Mamba-370m (C5) ×5.64 at 4,096 positions, against ×1.5.
-
-Nothing measured asks for a primitive. Both drift causes are lowering precision (§5.2), and every
-earlier miss was fixed without touching the IR: Mamba's tied head, and Jamba's calibration.
-`prim_set_id` `61fa4aa5…` stays the candidate. Once the two drift runs meet ×1.5 on a fixed lowering,
-the criteria hold together, and `prim_set_id` can be declared final unchanged. The alternative is to
-freeze it now under RFC-0002 open question 3 ("a quantisation problem, not an IR problem"), leaving
-the drift as lowering work. That is a decision for the RFC's owners, not this document's.
+This document's own verdict, before the decision, was "not yet": the drift column misses for C4 and
+C5. The coordinator froze v1 instead under RFC-0002 open question 3. Both misses are lowering
+precision (§5.2), and every earlier miss was fixed without touching the IR: Mamba's tied head, and
+Jamba's calibration.
 
 ## 1. Criterion 1 — no model-specific primitive
 
@@ -247,8 +267,8 @@ different document from the evaluation's).
 | family | checkpoint | lowering, calibration | KL 64–192 | KL 3,968–4,096 | ratio | over all 4,096 positions | meets |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | C4/C7 gated delta | `Qwen/Qwen3.5-0.8B` | first lowering, 8 × 128 | 0.00614 | 0.02150 | 3.50 | top-1 0.938, KL 0.0131, ppl +0.14 % | no |
-| C4/C7 gated delta | `Qwen/Qwen3.5-0.8B` | `da38f3b03`, long | 0.00620 | 0.02480 | **4.00** | top-1 0.938, KL 0.0148, ppl +0.52 % | **no** |
-| C5 SSM | `state-spaces/mamba-370m-hf` | `da38f3b03`, long | 0.00113 | 0.00640 | **5.64** | top-1 0.970, KL 0.0025, ppl −0.57 % | **no** |
+| C4/C7 gated delta | `Qwen/Qwen3.5-0.8B` | `da38f3b03`, long | 0.00620 | 0.02480 | **4.00** | top-1 0.938, KL 0.0148, ppl +0.52 % | **no — quantisation gap, lowering work open** |
+| C5 SSM | `state-spaces/mamba-370m-hf` | `da38f3b03`, long | 0.00113 | 0.00640 | **5.64** | top-1 0.970, KL 0.0025, ppl −0.57 % | **no — quantisation gap, lowering work open** |
 | C7 hybrid | `ai21labs/Jamba-tiny-dev` | first lowering, 8 × 128 | 0.00212 | 0.41083 | 193 | top-1 0.914, KL 0.0736, ppl −2.86 % | no |
 | C7 hybrid | `ai21labs/Jamba-tiny-dev` | `da38f3b03` (untied: same program), long | 0.00253 | 0.00081 | **0.32** | top-1 0.984, KL 0.00136, ppl +0.08 % | **yes** |
 
@@ -283,7 +303,7 @@ integer program:
 
 Both remedies are precision choices in the lowering: a wider `v` into the gated-delta state, and
 16-bit rows (and a wide `dt_in`) for the projections that set a scan's step size and `B`/`C`.
-Neither needs a primitive. Both are open (§8).
+Neither needs a primitive. Both are open (§8): quantisation gap, lowering work open.
 
 ## 6. Criterion 6 — legacy conformance
 
@@ -345,7 +365,7 @@ provisional `palw_tir_v1` ceilings (`max_macs_per_position` 2^37, `max_cone_work
 `check-architecture` refuses by name the models whose position exceeds 2^37 MACs at `2^18`
 (Falcon-40B, DeepSeek-V3): a network's ceiling, not v1's.
 
-## 8. Open before the freeze
+## 8. Open after the freeze (lowering work; none of it changes `prim_set_id`)
 
 1. **Recurrence drift of C4 and C5** (§5.2). At 4,096 positions Qwen3.5-0.8B drifts ×4.00 and
    Mamba-370m ×5.64, against a limit of ×1.5, with the calibration-length rule met. The simulated
