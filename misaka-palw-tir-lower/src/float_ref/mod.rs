@@ -517,7 +517,9 @@ impl<'a> Session<'a> {
                 };
                 let (e_i, e_d) = (g.shape[1], g.shape[2]);
                 let mut y = vec![0f64; e_d];
-                let mut hidden_all = Vec::new();
+                // Sub-sites over the selected experts: what a lowering scales each stage by.
+                let (mut gate_all, mut up_all, mut act_all, mut hidden_all, mut out_all) =
+                    (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
                 for (j, &e) in idx.iter().enumerate().take(*top_k) {
                     let slice = |t: &Tensor, e: usize| -> Vec<f32> {
                         let per: usize = t.shape[1..].iter().product();
@@ -535,15 +537,21 @@ impl<'a> Session<'a> {
                             gv.iter().zip(&uv).map(|(g, u)| clamped_swiglu(*g, *u, *alpha, *limit)).collect()
                         }
                     };
-                    if self.sites.is_some() {
-                        hidden_all.extend_from_slice(&hv);
-                    }
                     let ov = linear_raw(&hv, &dw, e_d, db.as_deref());
+                    if self.sites.is_some() {
+                        gate_all.extend_from_slice(&gv);
+                        up_all.extend_from_slice(&uv);
+                        act_all.extend(gv.iter().map(|g| act(*a, *g)));
+                        hidden_all.extend_from_slice(&hv);
+                        out_all.extend_from_slice(&ov);
+                    }
                     for (yy, o) in y.iter_mut().zip(&ov) {
                         *yy += w[j] as f64 * *o as f64;
                     }
                 }
-                self.sub_site(prefix, &node.site, "hidden", &hidden_all);
+                for (sub, v) in [("gate", &gate_all), ("up", &up_all), ("act", &act_all), ("hidden", &hidden_all), ("out", &out_all)] {
+                    self.sub_site(prefix, &node.site, sub, v);
+                }
                 one(y.into_iter().map(|v| v as f32).collect())
             }
         }

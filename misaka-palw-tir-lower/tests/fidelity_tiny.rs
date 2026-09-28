@@ -127,3 +127,14 @@ dense!(
     gpt_bigcode,
     gpt_bigcode_mha,
 );
+
+macro_rules! moe {
+    ($($name:ident),* $(,)?) => {$(
+        #[test]
+        fn $name() {
+            check(stringify!($name), 0.85, 0.02);
+        }
+    )*};
+}
+
+moe!(mixtral, qwen2_moe, qwen3_moe, olmoe, granitemoe);

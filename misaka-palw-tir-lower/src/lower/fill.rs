@@ -246,10 +246,12 @@ impl FillCtx<'_> {
             return Ok(r.clone());
         }
         let t = self.f(p)?;
-        if t.shape.len() != 2 {
+        if t.shape.len() < 2 {
             return Err(LowerError::eval(format!("param {p}: row codes of a {:?} tensor", t.shape)));
         }
-        let rc = Arc::new(quantize_rows(&t.data, t.shape[0], t.shape[1], None));
+        // Rows are the last axis; leading axes (experts) stack rows.
+        let cols = *t.shape.last().expect("rank ≥ 2");
+        let rc = Arc::new(quantize_rows(&t.data, t.data.len() / cols, cols, None));
         self.memo.lock().expect("memo").insert(p, rc.clone());
         Ok(rc)
     }

@@ -459,9 +459,21 @@ fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
             _ => {}
         }
     }
-    // A post block's wide want applies only to the value that IS the logits (or feeds them
-    // through Scale/Add); a norm or projection deeper in keeps its default.
+    // A router's logits come straight out of their projection in the attention logits' Q14.
+    for n in &blk.nodes {
+        if let Op::Route { .. } = n.op
+            && let hl::Ref::Node(j, 0) = n.inputs[0]
+            && want[j as usize].is_none()
+        {
+            want[j as usize] = Some(Want { dt: DType::I32, key: q14() });
+        }
+    }
     want
+}
+
+/// Q14 fixed point (`2^−14`), the logits' format.
+fn q14() -> ScaleKey {
+    ScaleKey::q24().times((1u64 << (24 - LOGIT_Q)) as f64)
 }
 
 /// For each node, the sites of the RoPE nodes that consume it: its codes must also hold the
@@ -762,7 +774,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let a = codes(b, cx, lb, &a)?;
             let c = codes(b, cx, lb, &c)?;
             let p = b.mul(a.r, c.r, DType::I32);
-            let key = if want.dt == DType::I16 { want.key.clone() } else { ScaleKey::site(vec![site.clone()], false) };
+            let key = want.key.clone();
             let (ka, kc, ko) = (a.key.clone(), c.key.clone(), key.clone());
             let per_channel = ka.split() > 0 || kc.split() > 0 || ko.split() > 0;
             let n = if per_channel { out_len } else { 1 };
@@ -781,9 +793,35 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                     Ok((0..n).map(|i| va[i] * vc[i] / vo[i]).collect())
                 }),
             )?;
-            let r = narrow(b, p, m, s, None, DType::I16);
+            let r = narrow(b, p, m, s, None, want.dt);
             b.commit(r);
-            one(Val { r, dt: DType::I16, key, len: out_len, site })
+            let v = Val { r, dt: want.dt, key, len: out_len, site };
+            note_resid(cx, lb, &v);
+            one(v)
+        }
+        Op::Route { router, experts, top_k } => {
+            let l = operand(lb, node.inputs[0])?;
+            let l = coerce(b, cx, lb, &l, DType::I32, &q14())?;
+            let (idx, w) = lower_route(b, lb, &l, router, *experts, *top_k)?;
+            b.commit(w);
+            let wkey = ScaleKey::q24().times(router.scale);
+            Ok(vec![
+                Some(Val { r: idx, dt: DType::Idx, key: ScaleKey::q24(), len: *top_k, site: format!("{site}.idx") }),
+                Some(Val { r: w, dt: DType::I32, key: wkey, len: *top_k, site: format!("{site}.w") }),
+            ])
+        }
+        Op::MoeExperts { top_k, act, glu, bias } => {
+            if *glu != crate::spec::Glu::Standard {
+                return Err(LowerError::not_lowerable("the clamped SwiGLU of gpt-oss experts is not in Gate 2a"));
+            }
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let idx = operand(lb, node.inputs[1])?;
+            let w = operand(lb, node.inputs[2])?;
+            let ps: Vec<u32> = (3..if *bias { 9 } else { 6 }).map(|k| pidx(node.inputs[k])).collect::<Result<_>>()?;
+            let v = lower_moe(b, cx, lb, &x, &idx, &w, &ps, *top_k, *act, &site, &want)?;
+            note_resid(cx, lb, &v);
+            one(v)
         }
         Op::Rope { heads, head_dim, rotary_dim, offset, style, table } => {
             let x = operand(lb, node.inputs[0])?;
@@ -892,7 +930,7 @@ fn lower_row_lookup(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, tp: 
 fn weight_codes(p: u32) -> FillFn {
     Arc::new(move |c| {
         let rc = c.rows(p)?;
-        Ok(IntTensor::i8(vec![rc.rows, rc.cols], rc.codes.clone()))
+        Ok(IntTensor::i8(c.f(p)?.shape.clone(), rc.codes.clone()))
     })
 }
 
@@ -1228,6 +1266,34 @@ fn lower_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize,
     Ok(Val { r, dt: DType::I16, key: out_key, len: x.len, site: site.to_string() })
 }
 
+/// [`lower_table`] for a value that is not an HL node's output (a sub-site of a composite).
+fn lower_table_named(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, f: TableFn, site: &str) -> Result<Val> {
+    let out_key = ScaleKey::site(vec![site.to_string()], false);
+    let (kx, ko) = (x.key.clone(), out_key.clone());
+    let t = decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.table"),
+        DType::I16,
+        &[65536],
+        per_layer(lb),
+        Arc::new(move |c| {
+            let (sx, so) = (c.scale(&kx)?, c.scale(&ko)?);
+            Ok(IntTensor::i16(
+                vec![65536],
+                (0..65536i64).map(|i| (f.eval((i - 32768) as f64 * sx) / so).round().clamp(-32767.0, 32767.0) as i16).collect(),
+            ))
+        }),
+    )?;
+    let off = b.c(DType::I32, 32768);
+    let at = b.add(x.r, off, DType::I32);
+    let at = b.cast(at, DType::Idx);
+    let r = b.gather(t, at, 0, 0);
+    b.commit(r);
+    Ok(Val { r, dt: DType::I16, key: out_key, len: x.len, site: site.to_string() })
+}
+
 /// The `(cos, sin)` Q24 rows for RoPE table `t` at this position, once per block.
 fn rope_angles(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32) -> Result<(tir::Ref, tir::Ref)> {
     if let Some(a) = lb.angles.get(&t) {
@@ -1529,6 +1595,157 @@ fn lower_attention(
     let r = narrow(b, o, m, s, None, DType::I16);
     b.commit(r);
     Ok(Val { r, dt: DType::I16, key: out_key, len: heads * dv, site: site.to_string() })
+}
+
+/// Expert selection from Q14 router logits (library `router_topk_q36` pattern): the softmax over
+/// all experts then `TopK` (committed; lowest index on ties, index order), or `TopK` on the
+/// logits then the softmax over the kept ones; renormalised through `IntRecip` when asked. The
+/// weights are Q24; `routed_scaling_factor` lives in their scale.
+fn lower_route(
+    b: &mut BlockBuilder<'_>,
+    _lb: &mut Lb,
+    l: &Val,
+    r: &crate::spec::RouterSpec,
+    _experts: usize,
+    k: usize,
+) -> Result<(tir::Ref, tir::Ref)> {
+    use crate::spec::Scoring;
+    if r.groups.is_some() || r.selection_bias {
+        return Err(LowerError::not_lowerable("group-limited or bias-corrected routing is not in Gate 2a"));
+    }
+    if r.normalize && r.norm_eps > 1e-9 {
+        return Err(LowerError::not_lowerable(format!("router renormalisation epsilon {} is not in Gate 2a", r.norm_eps)));
+    }
+    let up = 24 - LOGIT_Q;
+    let (idx, kept) = match r.scoring {
+        Scoring::Softmax => {
+            let probs = b.softmax_shifted(l.r, up);
+            let idx = b.topk(probs, 0, k as u32);
+            (idx, b.gather(probs, idx, 0, 0))
+        }
+        Scoring::TopKThenSoftmax => {
+            let idx = b.topk(l.r, 0, k as u32);
+            let kl = b.gather(l.r, idx, 0, 0);
+            (idx, b.softmax_shifted(kl, up))
+        }
+        Scoring::Sigmoid => return Err(LowerError::not_lowerable("sigmoid routing is not in Gate 2a")),
+    };
+    let w = if r.normalize {
+        let sum = b.reduce_sum(kept, 0, DType::I64);
+        let recip = b.int_recip(sum);
+        let p = b.mul(kept, recip, DType::I128);
+        let q = b.shr(p, 24, Rounding::Floor, DType::I64);
+        b.clamp(q, 0, 1 << 25, DType::I32)
+    } else {
+        kept
+    };
+    Ok((idx, w))
+}
+
+/// The routed experts, batched over the `k` selected: every expert tensor is a param `[E, …]`
+/// gathered by the committed selection, so one `MatMul` with a batch of `k` computes every
+/// expert's projection; per-(expert, row) weight scales are gathered the same way. The expert
+/// outputs meet in ONE exact accumulator (`moe_combine_q36`: `w[1,k] × y[k,D]`), narrowed once.
+#[allow(clippy::too_many_arguments)]
+fn lower_moe(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    idx: &Val,
+    w: &Val,
+    ps: &[u32],
+    k: usize,
+    act: Act,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let hl = cx.hl;
+    let (gp, upp, dp) = (ps[0], ps[1], ps[2]);
+    let (e, i, d) = (hl.params[gp as usize].shape[0], hl.params[gp as usize].shape[1], hl.params[gp as usize].shape[2]);
+    let pl = per_layer(lb);
+    let sub = |s: &str| format!("{site}.{s}");
+    let kx = x.key.clone();
+    // One projection over the selected experts: `[E, rows, cols]` codes, `(m, s, z)` per
+    // (expert, row), gathered by `idx`.
+    let proj = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, p: u32, bias: Option<u32>, input: tir::Ref, in_key: ScaleKey, name: &str, out: ScaleKey, dt: DType| -> Result<tir::Ref> {
+        let pd = &hl.params[p as usize];
+        let (rows, cols) = (pd.shape[1], pd.shape[2]);
+        let codes = decl(b, cx, lb, &pd.name, DType::I8, &[e, rows, cols], pd.per_layer, weight_codes(p))?;
+        let (ki, ko) = (in_key.clone(), out.clone());
+        let (m, s) = decl_ms(
+            b,
+            cx,
+            lb,
+            name,
+            e * rows,
+            Arc::new(move |c| {
+                let rc = c.rows(p)?;
+                let (si, so) = (c.scale(&ki)?, c.scale(&ko)?);
+                Ok(rc.scales.iter().map(|sw| sw * si / so).collect())
+            }),
+        )?;
+        let z = match bias {
+            Some(bp) => {
+                let ko = out.clone();
+                let zp = decl(
+                    b,
+                    cx,
+                    lb,
+                    &format!("{name}.z"),
+                    DType::I64,
+                    &[e * rows],
+                    pl,
+                    Arc::new(move |c| {
+                        let bv = c.f(bp)?;
+                        let so = c.scale(&ko)?;
+                        Ok(IntTensor::i64(vec![bv.data.len()], bv.data.iter().map(|v| (*v as f64 / so).round() as i64).collect()))
+                    }),
+                )?;
+                let zp = b.reshape_fixed(zp, &[e as u32, rows as u32]);
+                Some(b.gather(zp, idx.r, 0, 0))
+            }
+            None => None,
+        };
+        let sel = b.gather(codes, idx.r, 0, 0);
+        let acc = b.matmul(sel, input, DType::I64);
+        let acc = b.reshape_fixed(acc, &[k as u32, rows as u32]);
+        let m = b.reshape_fixed(m, &[e as u32, rows as u32]);
+        let s = b.reshape_fixed(s, &[e as u32, rows as u32]);
+        let mk = b.gather(m, idx.r, 0, 0);
+        let sk = b.gather(s, idx.r, 0, 0);
+        Ok(narrow(b, acc, mk, sk, z, dt))
+    };
+    let (gb, ub, db) = if ps.len() > 3 { (Some(ps[3]), Some(ps[4]), Some(ps[5])) } else { (None, None, None) };
+    let xb = b.reshape_fixed(x.r, &[d as u32, 1]);
+    let (gk, uk) = (ScaleKey::site(vec![sub("gate")], false), ScaleKey::site(vec![sub("up")], false));
+    let g16 = proj(b, cx, lb, gp, gb, xb, kx.clone(), &sub("gate"), gk.clone(), DType::I16)?;
+    b.commit(g16);
+    let u16_ = proj(b, cx, lb, upp, ub, xb, kx.clone(), &sub("up"), uk.clone(), DType::I16)?;
+    b.commit(u16_);
+    let gv = Val { r: g16, dt: DType::I16, key: gk, len: k * i, site: sub("gate") };
+    let a16 = lower_table_named(b, cx, lb, &gv, TableFn::Act(act), &sub("act"))?;
+    let hk = ScaleKey::site(vec![sub("hidden")], false);
+    let p = b.mul(a16.r, u16_, DType::I32);
+    let (ka, ku, kh) = (a16.key.clone(), uk.clone(), hk.clone());
+    let (m, s) = decl_ms(b, cx, lb, &sub("hidden"), 1, Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kh)?])))?;
+    let hid = narrow(b, p, m, s, None, DType::I16);
+    b.commit(hid);
+    let hb = b.reshape_fixed(hid, &[k as u32, i as u32, 1]);
+    let ok = ScaleKey::site(vec![sub("out")], true);
+    let y = proj(b, cx, lb, dp, db, hb, hk, &sub("out"), ok.clone(), DType::I32)?;
+    b.commit(y);
+    // Σ_j w_j · y_j in one accumulator, narrowed once to the wanted scale.
+    let (kw, ko2, kt) = (w.key.clone(), ok, want.key.clone());
+    let (m, s) = decl_ms(b, cx, lb, site, 1, Arc::new(move |c| Ok(vec![c.scale(&kw)? * c.scale(&ko2)? / c.scale(&kt)?])))?;
+    let (lo, hi) = code_bounds(want.dt);
+    let p2 = b.pow2_of(s);
+    let z = b.c(DType::I64, 0);
+    let r = b.moe_combine_q36(y, w.r, m, p2, z, lo, hi, want.dt);
+    if want.dt == DType::I16 {
+        b.commit(r);
+    }
+    Ok(Val { r, dt: want.dt, key: want.key.clone(), len: d, site: site.to_string() })
 }
 
 /// Occurrence prefixes in program order: `pre.`, `L0.` … `L{n−1}.`, `post.`.
