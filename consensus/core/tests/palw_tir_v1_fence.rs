@@ -23,6 +23,7 @@ fn ids(p: &Params) -> (String, String, String) {
 fn t12_armed(at: ForkActivation) -> Params {
     let mut p = palw_t12_shipped_params();
     p.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(at));
+    p.sync_palw_tir_v1();
     p
 }
 
@@ -94,6 +95,7 @@ fn validate_refuses_every_value_this_build_cannot_run() {
         let mut fence = p.palw_tir_v1.unwrap();
         edit(&mut fence);
         p.palw_tir_v1 = Some(fence);
+        p.sync_palw_tir_v1();
         p.validate_palw_tir_v1()
     };
     assert!(with(&|f| f.prim_set_id = kaspa_consensus_core::Hash64::from_bytes([7u8; 64])).is_err(), "another primitive set");
@@ -141,6 +143,30 @@ fn the_ids_are_keyed_hashes_of_what_they_name() {
         kaspa_consensus_core::palw_catalog_coverage::palw_court_catalog_root_v1(),
         "and the IR root is not the bundle's root"
     );
+}
+
+#[test]
+fn the_fold_reads_the_height_through_a_mirror_the_ruleset_must_agree_with() {
+    let armed = t12_armed(ForkActivation::new(AT));
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else {
+        panic!("testnet-12 is V2")
+    };
+    assert_eq!(bundle.state.tir_from_daa(), Some(AT), "the fold's copy of the height");
+    assert!(!bundle.state.tir_active_at(AT - 1) && bundle.state.tir_active_at(AT));
+    // A fence set without its mirror is refused before a peer is dialed.
+    let mut unsynced = palw_t12_shipped_params();
+    unsynced.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(ForkActivation::new(AT)));
+    assert!(unsynced.validate_palw_tir_v1().is_err(), "the mirror disagrees with the fence");
+    // A mirror without its fence, too.
+    let mut stale = armed.clone();
+    stale.palw_tir_v1 = None;
+    assert!(stale.validate_palw_tir_v1().is_err(), "a mirror with no fence");
+    stale.sync_palw_tir_v1();
+    assert_eq!(ids(&stale), ids(&palw_t12_shipped_params()), "and re-synced it is the shipped ruleset");
+    // Dormant (`never()`) mirrors as absent.
+    let never = t12_armed(ForkActivation::never());
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &never.palw_consensus_mode else { panic!() };
+    assert_eq!(bundle.state.tir_from_daa(), None);
 }
 
 #[test]

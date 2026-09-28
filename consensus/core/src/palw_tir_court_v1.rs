@@ -1306,3 +1306,232 @@ pub fn check_tir_decode_token_flat_v1(
     }
     Err(PalwStepRefuteError::NoFaultFound)
 }
+
+/// A tiny IR class and an honest (or single-lane forged) execution of it, for the court's wiring
+/// tests elsewhere in the crate: an embedding, one layer with a saturating running sum (a `Fixed`
+/// state, so checkpoints and replay occur) and a projection, and a tiled-logits head.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use crate::palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, open_artifact_leaf_v1};
+    use crate::palw_step_leg::{step_merkle_range_siblings_v1, step_merkle_root_v1, step_opening_v1};
+    use crate::palw_step_refute::{PalwTiledDecodeTokensV1, base0_decode_token_select_v1, tiled_logits_rows_root_v1};
+    use crate::palw_tir_artifact_v1::{PalwTirTensorSourceV1, palw_tir_inventory_operands_v1};
+    use crate::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PALW_TIR_LAYOUT_VERSION_V1, PalwTirClassV1, PalwTirLayoutV1};
+    use crate::palw_tir_step_v1::palw_tir_leaf_preimage_v1;
+    use misaka_palw_tir::builder::ProgramBuilder;
+    use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+    use misaka_palw_tir::{Interpreter, MapParams, Ref, RunState, Tensor, TensorType};
+    use std::borrow::Cow;
+
+    pub(crate) const PREFILL: u32 = 3;
+    pub(crate) const DECODE: u32 = 2;
+
+    /// A committed IR execution and everything a store answers from.
+    pub(crate) struct TinyExecution {
+        pub(crate) binding: PalwTirStepBindingV1,
+        pub(crate) preimages: Vec<PalwStepTileLeafV1>,
+        pub(crate) hashes: Vec<Hash64>,
+        pub(crate) ops: Vec<PalwArtifactOperandV1>,
+        pub(crate) prompt: Vec<u32>,
+        pub(crate) rows: Vec<Vec<i32>>,
+        pub(crate) generated: Vec<u32>,
+    }
+
+    impl PalwTirEvidenceStoreV1 for TinyExecution {
+        fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
+            self.preimages.get(index as usize).cloned()
+        }
+        fn step_opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
+            step_opening_v1(&self.hashes, index).ok()
+        }
+        fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>> {
+            step_merkle_range_siblings_v1(&self.hashes, first as usize, count as usize).ok()
+        }
+        fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
+            open_artifact_leaf_v1(&self.ops, leaf)
+        }
+        fn prompt_token_ids(&self) -> Option<Vec<u32>> {
+            Some(self.prompt.clone())
+        }
+        fn prompt_ids_opening(&self, _tile: u32) -> Option<PalwPromptIdsOpeningV1> {
+            None
+        }
+        fn decode_pin(&self) -> Option<PalwDecodeTokenPinV1> {
+            Some(PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 {
+                rows_root: tiled_logits_rows_root_v1(&self.binding.job_context, &self.rows)?,
+                generated_token_ids: self.generated.clone(),
+            }))
+        }
+    }
+
+    struct Src<'a>(&'a MapParams);
+    impl PalwTirTensorSourceV1 for Src<'_> {
+        fn tensor_bytes(&self, param: u16, layer: Option<u16>) -> Option<Cow<'_, [u8]>> {
+            self.0.tensors.get(&(param, layer)).map(|t| Cow::Owned(t.to_le_bytes()))
+        }
+    }
+
+    fn program_and_params() -> (TirProgramV1, MapParams) {
+        let mut pb = ProgramBuilder::new(8, HISTORY_BOUND_V1_SMALL);
+        let embed = pb.param("embed", DType::I8, &[8, 4], false);
+        let w = pb.param("w", DType::I8, &[4, 4], true);
+        let head = pb.param("head", DType::I8, &[8, 4], false);
+        let sum = pb.fixed_state("sum", DType::I32, &[4], -1000, 1000, true);
+        let carry = vec![TensorType::fixed(DType::I32, &[4])];
+        let pre = {
+            let mut b = pb.block("pre", vec![]);
+            let x = b.gather(embed, Ref::Input(0), 0, 0);
+            let x = b.cast(x, DType::I32);
+            b.finish(&[x])
+        };
+        let layer = {
+            let mut b = pb.block("layer", carry.clone());
+            let s = b.add(Ref::State(sum), Ref::CarryIn(0), DType::I64);
+            let s = b.state_write(sum, s);
+            let s = b.reshape_fixed(s, &[4, 1]);
+            let y = b.matmul(w, s, DType::I32);
+            let y = b.reshape_fixed(y, &[4]);
+            b.finish(&[y])
+        };
+        let (post, logits) = {
+            let mut b = pb.block("post", carry);
+            let x = b.reshape_fixed(Ref::CarryIn(0), &[4, 1]);
+            let l = b.matmul(head, x, DType::I64);
+            let l = b.clamp(l, i32::MIN as i64, i32::MAX as i64, DType::I32);
+            let l = b.reshape_fixed(l, &[8]);
+            let l = b.commit(l);
+            let Ref::Node(i) = l else { unreachable!() };
+            (b.finish(&[]), i)
+        };
+        let mut program = pb.finish(pre, vec![layer], post, logits);
+        program.logits_scheme_id.copy_from_slice(crate::palw_step_refute::tiled_logits_scheme_id_v1().as_byte_slice());
+        let mut params = MapParams::default();
+        let fill = |n: usize, k: i128| (0..n as i128).map(|i| ((i * 37 + k) % 255) - 127).collect::<Vec<_>>();
+        params.tensors.insert((0, None), Tensor::new(DType::I8, vec![8, 4], fill(32, 5)).unwrap());
+        params.tensors.insert((1, Some(0)), Tensor::new(DType::I8, vec![4, 4], fill(16, 11)).unwrap());
+        params.tensors.insert((2, None), Tensor::new(DType::I8, vec![8, 4], fill(32, 17)).unwrap());
+        (program, params)
+    }
+
+    /// The class, the job and an execution — honest, or with lane `lane` of leaf `forge` moved by
+    /// one (inside its proven interval).
+    pub(crate) fn tiny_execution(forge: Option<(usize, usize)>) -> TinyExecution {
+        let (program, params) = program_and_params();
+        let bytes = program.encode();
+        let class = PalwTirClassV1 {
+            version: PALW_TIR_CLASS_VERSION_V1,
+            program: bytes,
+            layout: PalwTirLayoutV1 {
+                version: PALW_TIR_LAYOUT_VERSION_V1,
+                max_context: PREFILL + DECODE - 1,
+                checkpoint_interval: 2,
+                h_tile: 1,
+                commit_tiles: vec![4, 4, 4096],
+                state_tiles: vec![4],
+            },
+            tokenizer_id: Hash64::from_bytes([3; 64]),
+        };
+        let ops = palw_tir_inventory_operands_v1(&program, &Src(&params)).expect("inventory");
+        let artifact_root = artifact_root_v1(&ops.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).expect("root");
+        let class_id = class.class_id(&artifact_root);
+        let prompt = vec![1u32, 6, 3];
+        let interp = Interpreter::new(&program).expect("valid");
+        let mut state = RunState::default();
+        let positions = PREFILL + DECODE - 1;
+        let (mut commits, mut after, mut rows, mut generated) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for a in 0..positions {
+            let token = if a < PREFILL { prompt[a as usize] } else { generated[(a - PREFILL) as usize] };
+            let step = interp.step(&params, &mut state, token).expect("an honest step");
+            commits.push(step.commits);
+            after.push(state.clone());
+            if a + 1 >= PREFILL {
+                let row: Vec<i32> = step.logits.data.iter().map(|v| *v as i32).collect();
+                generated.push(base0_decode_token_select_v1(&row) as u32);
+                rows.push(row);
+            }
+        }
+        let z = Hash64::from_bytes([0u8; 64]);
+        let ctx = PalwJobContextV2 {
+            version: 2,
+            network_id: b"testnet-12".to_vec(),
+            job_id: Hash64::from_bytes([5; 64]),
+            job_nullifier: z,
+            assignment_id: z,
+            execution_seed: [0u8; 32],
+            model_profile_id: z,
+            runtime_manifest_hash: z,
+            runtime_class_id: z,
+            shape_profile_id: class_id,
+            trace_scheme_id: tiled_logits_scheme_id_v1(),
+            cu_ruleset_id: z,
+            tokenizer_id: class.tokenizer_id,
+            prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(&prompt),
+            declared_prefill_tokens: PREFILL,
+            exact_decode_tokens: DECODE,
+            max_context_tokens: 64,
+        };
+        let space = PalwTirStepSpaceV1::new(&class).expect("the layout fits");
+        let occ = space.occurrences().to_vec();
+        let mut preimages = Vec::new();
+        for a in 0..positions {
+            for leaf in space.leaves_of_position(&ctx, a) {
+                let n = leaf.value_count as usize;
+                let mut values: Vec<i128> = match leaf.kind {
+                    PalwTirLeafKindV1::Commit { occurrence, node, first_element, .. } => {
+                        let (block, layer) = occ[occurrence as usize];
+                        let c = commits[a as usize].iter().find(|c| c.block == block && c.layer == layer && c.node == node).unwrap();
+                        c.value.data[first_element as usize..first_element as usize + n].to_vec()
+                    }
+                    PalwTirLeafKindV1::State { state: j, layer, first_element, .. } => {
+                        let t = after[a as usize].fixed.get(&(j, layer)).expect("written every position");
+                        t.data[first_element as usize..first_element as usize + n].to_vec()
+                    }
+                    PalwTirLeafKindV1::HistTile { .. } => unreachable!("no history"),
+                };
+                if let Some((i, lane)) = forge
+                    && i == preimages.len()
+                {
+                    values[lane] += if values[lane] < 0 { 1 } else { -1 };
+                }
+                preimages.push(palw_tir_leaf_preimage_v1(&leaf, &values).expect("a lane of its dtype"));
+            }
+        }
+        let ctx_hash = ctx.context_hash();
+        let hashes: Vec<Hash64> = preimages.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &class_id, p)).collect();
+        let root = step_merkle_root_v1(&hashes).expect("root");
+        let trace = crate::palw_step_refute::tiled_logits_trace_root_v1(&ctx, &rows, &generated).expect("trace");
+        let count = hashes.len() as u64;
+        let binding = PalwTirStepBindingV1 {
+            version: PALW_TIR_STEP_BINDING_VERSION_V1,
+            job_context: ctx,
+            class,
+            artifact_root,
+            full_logits_trace_root: trace,
+            step_leaf_count: count,
+            step_merkle_root: root,
+            committed_execution_root: palw_tir_execution_root_v1(&ctx_hash, &trace, &class_id, count, &root),
+        };
+        TinyExecution { binding, preimages, hashes, ops, prompt, rows, generated }
+    }
+
+    #[test]
+    fn the_tiny_execution_is_adjudicable_both_ways() {
+        let rules = PalwTirCourtRulesV1 {
+            max_step_leaf_count: 1 << 26,
+            prompt_form: PalwPromptIdsFormV1::Flat,
+            limits: DemandLimits::UNLIMITED,
+        };
+        let honest = tiny_execution(None);
+        for leaf in 0..honest.preimages.len() as u64 {
+            let r = build_tir_cone_refutation_v1(&honest.binding, leaf, &honest, &rules).expect("buildable");
+            assert_eq!(check_tir_cone_refutation_v1(&r, &rules), Err(PalwStepRefuteError::NoFaultFound), "leaf {leaf}");
+        }
+        let forged = tiny_execution(Some((7, 1)));
+        let r = build_tir_cone_refutation_v1(&forged.binding, 7, &forged, &rules).expect("buildable");
+        assert_eq!(
+            check_tir_cone_refutation_v1(&r, &rules).expect("convicted").fault,
+            PalwStepFaultV1::ComputationMismatch { value_index: 1 }
+        );
+    }
+}

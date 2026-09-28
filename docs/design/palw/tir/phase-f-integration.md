@@ -429,11 +429,18 @@ ctx_hash ‖ full_logits_trace_root ‖ step_leg_root_v1(ctx_hash, class_id, lea
 
 ### 2.7 The generic court arm and PALW-TIR-33
 
-**Object.** `PalwCourtVerdictProofV2::TirCone { refutation: Box<PalwTirConeRefutationV1>,
-operand_openings: Vec<PalwArtifactOpeningV1>, prompt_ids_opening: Option<PalwPromptIdsOpeningV1> }`
-(appended), with `PalwTirConeRefutationV1 { binding: PalwTirStepBindingV1, output_opening,
-output_preimage, operands: Vec<PalwStepInputRowV1>, prompt_token_ids, decode_tokens }`
-(Appendix A).
+**Object.** `PalwCourtVerdictProofV2::TirCone { refutation: Box<PalwTirConeRefutationV1> }`
+(appended, tag 5), the refutation carrying every unit it needs: `PalwTirConeRefutationV1 { binding:
+PalwTirStepBindingV1, output_opening, output_preimage, operands: PalwStepInputRowV1, params:
+Vec<PalwArtifactOpeningV1>, prompt_token_ids, prompt_ids_openings, decode_tokens }` (Appendix A;
+as built in F5, `palw_tir_court_v1`). Beside it, appended in the same step: `TirLogits` (6, the
+logits-consistency accusation), `TirDecodeTokenTiled` (7) and `TirDecodeToken` (8), the decode-token
+door over an IR binding. Below `palw_tir_v1` the acceptance layer drops an IR close by name, and the
+fold — through the `#[borsh(skip)]` mirror `PalwStateParamsV2::tir_from_daa`, synced by
+`Params::sync_palw_tir_v1` and checked by `validate_palw_tir_v1` — reads an assembled one as bytes
+that do not decode, exactly as an older build reads a variant its enum lacks. The court's work
+limits for one IR close are `4 × max_terminal_macs` in both counts (`palw_tir_court_limits_v1`);
+admission v10 (F6) must refuse a class whose worst cone would not fit them.
 
 **Check order** (in `palw_tir_court_v1::check_tir_cone_refutation_v1`, called from
 `adjudicate_court_close_v3`/`adjudicate_close_proof_v2` for a claim whose class is in
@@ -532,10 +539,14 @@ sum, value sum).
 
 ### 2.9 The structural work vector
 
-`tir_canonical_shape_v1(program, layout) -> PalwCanonicalShapeV1` (a constructor added in
-`palw_canonical_work_v1.rs`, whose shape type is private), then the existing
-`palw_canonical_work_from_shape_v1` (`:594-640`) turns it into the vector for the executed facts.
-Per node, spec 04b §8's formulas, affine in `H`, classified by structure only:
+As built (F8, `palw_tir_work_v1`): `palw_tir_work_shape_v1(program) -> PalwTirWorkShapeV1`, its own
+type — the legacy `PalwCanonicalShapeV1` is affine in the kv length and cannot hold a window, while an
+IR block costs `c₀ + c₁ · min(a + 1, W)` — and `work_v1(facts)` sums the executed positions in
+closed form into the same `PalwCanonicalWorkVectorV1`. Per node, spec 04b §8's formulas (affinity in
+`H` checked, not assumed), classified by structure only, in the precedence dense/routed matmul >
+normalization > recurrence > attention > other; "recurrence" is refined to the nodes on a path from a
+`State` read to a `StateWrite` plus the matmuls reading the state (so a projection feeding the update
+stays a weight matmul):
 
 | dimension | nodes |
 | --- | --- |
@@ -549,7 +560,11 @@ Per node, spec 04b §8's formulas, affine in `H`, classified by structure only:
 | `kv_read_bytes` / `kv_write_bytes` | `H × row bytes` read through each `HistAppend` output; the appended row's bytes |
 
 Nothing reads `commit`, `tile_len`, `h_tile`, `C` or node names (PALW-TIR-16, PALW-WK-3; a test
-re-tiles and re-commits a program and requires an identical vector). The registry's
+re-tiles and re-commits a program and requires an identical vector). Qwen2.5-1.5B-A16 as an IR
+program (tir/lower's `a16_mirror_program`) prices `dense_matmul` and `weight_traffic_bytes` exactly as
+the legacy graph-v7 class does; its total arithmetic is 1.3-2.1 % higher, because the IR counts every
+integer operation of the requantisation, rotary and norm segments (report in
+`misaka-palw-base0/tests/tir_a16_work_vs_legacy.rs`). The registry's
 `PalwModelWorkV1` comes from the same walk (`tir_model_work_v1`); `palw_economic_compute_v1.rs:
 297-325`'s name heuristics are never reached by an IR class.
 
@@ -841,9 +856,11 @@ pub struct PalwTirAdmissionCarriageV1 {
     pub signature: Vec<u8>,           // ML-DSA-87 over palw_tir_class_registration_message_v1
 }
 
-// PalwCourtVerdictProofV2, appended:
-TirCone { refutation: Box<PalwTirConeRefutationV1>, operand_openings: Vec<PalwArtifactOpeningV1>,
-          prompt_ids_opening: Option<PalwPromptIdsOpeningV1> },
+// PalwCourtVerdictProofV2, appended (as built in F5; TirDissection with F7):
+TirCone { refutation: Box<PalwTirConeRefutationV1> },                                    // 5
+TirLogits { accusation: Box<PalwTirLogitsConsistencyV1> },                              // 6
+TirDecodeTokenTiled { binding: Box<PalwTirStepBindingV1>, pin: PalwTiledDecodePinV1 },   // 7
+TirDecodeToken { binding: Box<PalwTirStepBindingV1>, pin: PalwBase0DecodeTokensV1, position: u32 }, // 8
 TirDissection { binding: Box<PalwTirStepBindingV1>, bottom: Box<PalwTirDissectBottomV1>,
                 operand_openings: Vec<PalwArtifactOpeningV1> },
 
@@ -861,14 +878,22 @@ pub struct PalwTirConeRefutationV1 {
     pub binding: PalwTirStepBindingV1,
     pub output_opening: PalwStepOpeningV1,
     pub output_preimage: PalwStepTileLeafV1,
-    pub operands: Vec<PalwStepInputRowV1>,      // the recorded demand set, canonical order
-    pub prompt_token_ids: Vec<u32>,
-    pub decode_tokens: Option<PalwDecodeTokenPinV1>,
+    pub operands: PalwStepInputRowV1,           // every step leaf read, ascending, range-proved
+    pub params: Vec<PalwArtifactOpeningV1>,     // every inventory leaf read, ascending
+    pub prompt_token_ids: Vec<u32>,             // flat form: whole, iff a prompt id is read
+    pub prompt_ids_openings: Vec<PalwPromptIdsOpeningV1>, // Merkle form: the tiles read
+    pub decode_tokens: Option<PalwDecodeTokenPinV1>,      // iff a generated id is read
+}
+pub struct PalwTirLogitsConsistencyV1 {
+    pub binding: PalwTirStepBindingV1,
+    pub step_opening: PalwStepOpeningV1,        // a tile of the logits node, a >= P - 1
+    pub step_preimage: PalwStepTileLeafV1,
+    pub trace: PalwTirTraceLanesV1,             // Flat(pin) | Tiled { ids, row root + opening, tile + opening }
 }
 pub struct PalwTirRootClaimV1 { pub totals: Vec<Vec<i128>> }        // per H-reduction, demanded elements
 pub struct PalwTirRangeClaimV1 { pub partials: Vec<Vec<i128>> }
 
 // PalwStepFaultV1, appended: TirValueOutsideProvenInterval { value_index } = 19,
-//                            TirLogitsTraceMismatch { value_index } = 20.
+//                            TirLogitsTraceMismatch { value_index } = 20 (evidence kind 7).
 // New state tables (rooted only once written): tir_classes, tir_dissections.
 ```
