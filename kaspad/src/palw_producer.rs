@@ -943,12 +943,8 @@ impl PalwProducerService {
             // free-prompt claims.
             // ADR-0135: the registry's class-local gate, read before a draw is built. Not a rule of
             // this node's — the fold refuses what it refuses — but a draw for a HELD class or one at
-            // its inflight cap is a block the chain will not take, so it is not built. Ahead of it, the
-            // interim F7 guard (node policy): no claim of an IR class whose dissection this build cannot
-            // play (`palw_tir_dissection_refusal_v1`).
-            if let Some(detail) =
-                palw_tir_dissection_refusal_v1(&session, self.config.class_id).or_else(|| self.registry_holds_class(&session))
-            {
+            // its inflight cap is a block the chain will not take, so it is not built.
+            if let Some(detail) = self.registry_holds_class(&session) {
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if last_hold.as_deref() != Some(detail.as_str()) || stale {
@@ -1310,12 +1306,6 @@ impl PalwProducerService {
         // BOTH. The floor is derived so it resolves from nothing; a converted class resolves from
         // a file the operator deployed. Derive, never declare (ADR-0046): the producer proves it
         // has what the chain named rather than asserting it.
-        //
-        // The interim F7 guard first (the loop's gate asks it too): an IR class with a dissected
-        // point is refused before its backend is built.
-        if let Some(refusal) = palw_tir_dissection_refusal_v1(session, facts.class_id) {
-            return Err(refusal);
-        }
         let backend = self
             .backends()
             .resolve_or_chain(facts.class_id, facts.artifact_root, |id| {
@@ -1674,67 +1664,6 @@ pub(crate) fn palw_dissection_refusal_v1(
     })
 }
 
-/// **Does this build play an IR class's held dissection?** — the compile-time switch of the INTERIM
-/// guard shipped in the DAA-2,000 flag-day release (RFC-0002 F7).
-///
-/// Under the held regime a one-move accusation at a DISSECTED leaf of an IR claim (a commit point whose
-/// cone reduces over the history, `PalwTirClassRecordV1::dissected`) is the challenge itself: the fold
-/// opens a session at `Terminal` on that leaf, and its first clocked move is the producer's IR root claim
-/// (`CourtTirRootClaimed`), then the rounds, the child choices and the bottom close. This build files
-/// none of those moves, so an honest producer of such a class would lose, by the clock, to anyone who
-/// names the leaf, and this node's seats could not name one. Until the F7 node side is in, the node
-/// produces no claims for such a class ([`palw_tir_dissection_refusal_v1`]); its seats still prove
-/// readiness ([`PALW_TIR_GUARD_REFUSES_READINESS_V1`] is off) but file no cone accusation at a dissected
-/// leaf (`palw_panel::tir_court::palw_tir_one_move_case_guarded_v1`: the chain would open a dissection
-/// there with the seat as its challenger, whose choices this build cannot file — its replay withholds
-/// the licence instead). **The F7 node-side commit removes this switch and the guard.**
-pub(crate) const PALW_TIR_NODE_PLAYS_DISSECTION_V1: bool = false;
-
-/// **The guard's readiness half — OFF in the flag-day release** (the coordinator, 2026-09-28). Set, a
-/// seat of this build would prove no readiness for such a class, so the class could not leave
-/// `Candidate` (its admission jury seats on readiness proofs, `palw_lifecycle_step_v1`). It is off
-/// because the production half is what protects: honest producers stay out; a modified producer's lie
-/// is not licensed, because honest seats withhold on a replay that does not match; and conviction
-/// arrives with the F7 node update, before any such class can go `Active` (it cannot pass probation
-/// without probe claims, and this build files none).
-pub(crate) const PALW_TIR_GUARD_REFUSES_READINESS_V1: bool = false;
-
-/// What the guard refuses by, word for word (the D-F kit greps the node logs for it).
-pub(crate) const PALW_TIR_DISSECTION_GUARD_WORDS_V1: &str = "IR class with dissected points: this node cannot play the dissection yet";
-
-/// **The interim F7 guard's refusal for `class_id`**, from the chain's own IR class row: `Some` for an
-/// IR class with a dissected commit point while [`PALW_TIR_NODE_PLAYS_DISSECTION_V1`] is off; `None` for
-/// every other class (not IR, or IR with no dissected point). Node policy only: which claims this node
-/// files and which proofs it signs, never what a block accepts.
-pub(crate) fn palw_tir_dissection_refusal_of_v1(
-    class_id: Hash64,
-    record: Option<&kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1>,
-) -> Option<String> {
-    if PALW_TIR_NODE_PLAYS_DISSECTION_V1 {
-        return None;
-    }
-    let record = record?;
-    if record.dissected.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "{PALW_TIR_DISSECTION_GUARD_WORDS_V1} — class {class_id} dissects {} commit point(s) {:?} over its history (RFC-0002 \
-         F7), a claim accused at one of them is answered by an IR root claim this build cannot file, so this node produces \
-         no claims for the class{} until the F7 node update",
-        record.dissected.len(),
-        record.dissected,
-        if PALW_TIR_GUARD_REFUSES_READINESS_V1 { " and proves no readiness for it" } else { "" }
-    ))
-}
-
-/// [`palw_tir_dissection_refusal_of_v1`] against the chain's IR class row for `class_id`.
-pub(crate) fn palw_tir_dissection_refusal_v1(session: &kaspa_consensusmanager::ConsensusProxy, class_id: Hash64) -> Option<String> {
-    if PALW_TIR_NODE_PLAYS_DISSECTION_V1 {
-        return None;
-    }
-    palw_tir_dissection_refusal_of_v1(class_id, session.palw_tir_class_record_v1(class_id).as_ref())
-}
-
 /// **Can this producer build on the lane the template declares?**
 ///
 /// A free function because the answer has to be checkable: as a `!=` against one constant inside an
@@ -1900,83 +1829,6 @@ mod retention_tests {
 #[cfg(test)]
 mod tests {
     use super::palw_da_court_in_force_v1;
-
-    /// **The interim F7 guard** (RFC-0002; the DAA-2,000 flag-day release): until the node plays an IR
-    /// class's held dissection, an IR class with a dissected commit point is refused by name — no claim
-    /// produced (the readiness half is off in this release) — and every other class is not; the
-    /// producer's gate and draw and the panel's canonical claim ask it ahead of the backend, and the
-    /// readiness duty asks it only under the readiness half's switch.
-    #[test]
-    fn an_ir_class_with_dissected_points_is_refused_until_the_node_plays_the_dissection() {
-        use super::{
-            PALW_TIR_DISSECTION_GUARD_WORDS_V1, PALW_TIR_GUARD_REFUSES_READINESS_V1, PALW_TIR_NODE_PLAYS_DISSECTION_V1,
-            palw_tir_dissection_refusal_of_v1,
-        };
-        use kaspa_consensus_core::palw_tir_admission_v1::{PALW_TIR_CLASS_RECORD_VERSION_V1, PalwTirClassRecordV1};
-        use kaspa_consensus_core::palw_tir_attempt_v1::PalwTirJobFactsV1;
-        use kaspa_hashes::Hash64;
-
-        let class = Hash64::from_u64_word(7);
-        let row = |dissected: Vec<(u8, u16)>| PalwTirClassRecordV1 {
-            version: PALW_TIR_CLASS_RECORD_VERSION_V1,
-            facts: PalwTirJobFactsV1 { class_id: class, max_context: 512, token_bound: 151_936, tiled: true, held: true },
-            graph_ir_root: Hash64::default(),
-            layout_digest: Hash64::default(),
-            tokenizer_id: Hash64::default(),
-            prim_set_id: Hash64::default(),
-            logits_vocab: 151_936,
-            program_bytes: 0,
-            dissected,
-            program: Default::default(),
-        };
-        // The F7 node side is not in this build (the production guard is armed), and the flag-day release
-        // proves readiness (Candidate → Prefetching runs; the readiness half is off).
-        assert_eq!([PALW_TIR_NODE_PLAYS_DISSECTION_V1, PALW_TIR_GUARD_REFUSES_READINESS_V1], [false, false]);
-        // D-F1's two history cones (block 1, nodes 127 and 138).
-        let refusal = palw_tir_dissection_refusal_of_v1(class, Some(&row(vec![(1, 127), (1, 138)]))).expect("refused");
-        assert!(refusal.starts_with(PALW_TIR_DISSECTION_GUARD_WORDS_V1), "{refusal}");
-        assert!(refusal.contains("(1, 127)") && refusal.contains(&class.to_string()), "{refusal}");
-        assert!(refusal.contains("produces no claims") && !refusal.contains("readiness"), "{refusal}");
-        assert_eq!(palw_tir_dissection_refusal_of_v1(class, Some(&row(vec![]))), None, "an IR class with no dissected point");
-        assert_eq!(palw_tir_dissection_refusal_of_v1(class, None), None, "a class with no IR row");
-
-        // The sites, each ahead of the backend it would have built.
-        let producer = include_str!("palw_producer.rs");
-        let producer = &producer[..producer.find("\n#[cfg(test)]\nmod ").expect("the tests")];
-        let body = |source: &'static str, signature: &str| -> String {
-            let rest = &source[source.find(signature).unwrap_or_else(|| panic!("no `{signature}`"))..];
-            rest[..rest.find("\n    }\n").expect("its end")].to_string()
-        };
-        assert!(
-            producer.contains(
-                "palw_tir_dissection_refusal_v1(&session, self.config.class_id).or_else(|| self.registry_holds_class(&session))"
-            ),
-            "the producer's loop holds on it, by name"
-        );
-        let draw = body(producer, "    async fn produce_one(");
-        assert!(
-            draw.find("palw_tir_dissection_refusal_v1(session, facts.class_id)").expect("the draw")
-                < draw.find(".resolve_or_chain(").unwrap()
-        );
-        let panel = include_str!("palw_panel.rs");
-        let canonical = body(panel, "    async fn build_canonical_claim(");
-        assert!(
-            canonical.find("palw_producer::palw_tir_dissection_refusal_v1(session, class_id)").expect("the canonical claim")
-                < canonical.find("self.resolve_backend(").unwrap()
-        );
-        // The seat half: the one-move pass drops a cone accusation at a dissected leaf before it files.
-        let court = include_str!("palw_panel/tir_court.rs");
-        let pass = body(court, "    pub(super) async fn tir_one_move_pass_v1(");
-        assert!(
-            pass.find("palw_tir_one_move_case_guarded_v1(&tir, &accused, case)").expect("the seat half")
-                < pass.find("palw_tir_one_move_accusation_to_file_v1(").unwrap()
-        );
-        let readiness = body(panel, "    fn readiness_duties(");
-        assert!(
-            readiness.find("palw_producer::palw_tir_dissection_refusal_v1(session, class.class_id)").expect("the readiness duty")
-                < readiness.find("self.replay_memory_capacity_v1(").unwrap()
-        );
-    }
 
     /// **A producer misconfiguration never takes the node down** (the route-matrix re-audit's #11).
     /// The unproducible-class refusal called `process::exit(1)` from the constructor, which under

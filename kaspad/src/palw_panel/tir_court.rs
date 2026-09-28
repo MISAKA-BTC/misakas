@@ -191,29 +191,68 @@ pub(crate) fn palw_tir_leaf_is_dissected_v1(tir: &TirBackendV1, ctx: &PalwJobCon
     kaspa_consensus_core::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&space.program).contains(&(block, node))
 }
 
-/// **The interim F7 guard, a seat's half** (RFC-0002; the DAA-2,000 flag-day release): until this node
-/// plays an IR class's held dissection (`crate::palw_producer::PALW_TIR_NODE_PLAYS_DISSECTION_V1`), a
-/// one-move case whose first divergent leaf is DISSECTED loses its cone candidate. Under the held regime
-/// the chain answers a cone accusation there by opening a dissection with the accuser as its challenger,
-/// whose choices this build cannot file — and a challenger's silence is its own loss. The lie is still
-/// not licensed: this seat's replay withheld the licence already. The other doors (decode token, logits)
-/// are adjudicated in one move and stay. `true` beside the case when a candidate was dropped.
-pub(crate) fn palw_tir_one_move_case_guarded_v1(
+/// The label a one-move case gives its NAMED-LEAF proof (a dissected leaf's challenge).
+pub(crate) const PALW_TIR_NAMED_LEAF_LABEL_V1: &str = "named leaf";
+
+/// **A one-move case at a DISSECTED leaf** (RFC-0002 F7): under the held regime a cone accusation at a
+/// leaf whose cone reduces over the history is not adjudicated — the chain opens a dissection there
+/// with the accuser as its challenger (`palw_tir_one_move_outcome_v1` → `NeedsDissection`). So the
+/// case's cone candidate becomes the NAMED-LEAF proof ([`TirBackendV1::named_leaf_refutation`]: the
+/// accused's leaf and its opening, nothing else), filed as the challenge, and this node plays the
+/// challenger's side of the dissection it opens (`palw_panel::tir_dissect`). The proof is built from the
+/// accused's capture — a dense one, or a fold this node reproduces — and the bottom will be too, so a
+/// case this node could not finish is never opened. The other doors (decode token, logits) are
+/// adjudicated in one move and stay behind it. `Some(leaf)` beside the case when the first divergent
+/// leaf is dissected.
+pub(crate) fn palw_tir_one_move_case_at_dissected_leaf_v1(
     tir: &TirBackendV1,
     accused: &[u8],
     mut case: PalwTirOneMoveCaseV1,
-) -> (PalwTirOneMoveCaseV1, bool) {
-    if crate::palw_producer::PALW_TIR_NODE_PLAYS_DISSECTION_V1 {
-        return (case, false);
-    }
-    let (Some(leaf), Ok(capture)) = (case.leaf, TirCaptureV1::decode(accused)) else { return (case, false) };
+    rules: &PalwTirCourtRulesV1,
+) -> (PalwTirOneMoveCaseV1, Option<u64>) {
+    let (Some(leaf), Ok(capture)) = (case.leaf, TirCaptureV1::decode(accused)) else { return (case, None) };
     if !palw_tir_leaf_is_dissected_v1(tir, &capture.binding.job_context, leaf) {
-        return (case, false);
+        return (case, None);
     }
-    let before = case.candidates.len();
     case.candidates.retain(|(label, _)| *label != "cone");
-    let dropped = case.candidates.len() != before;
-    (case, dropped)
+    let named = as_filed(
+        tir.named_leaf_refutation(accused, leaf, rules)
+            .map(|refutation| PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) }),
+    );
+    case.candidates.insert(0, (PALW_TIR_NAMED_LEAF_LABEL_V1, named));
+    (case, Some(leaf))
+}
+
+/// **Does `proof` name a DISSECTED leaf of `target`'s claim?** — the chain's first gate on a named-leaf
+/// accusation (`palw_tir_one_move_dissected_leaf_v1`), derived as the node holds it: the proof within
+/// the court's byte ceiling and riding without its program, the node's program put back, the binding
+/// naming the claim's class, artifact root and roots, and the leaf dissected and not convicted on its
+/// face (`palw_tir_named_dissected_leaf_v1`). Such an accusation declares `ExecutorGuilty` and opens a
+/// dissection; nothing else about it is adjudicated in one move.
+pub(crate) fn palw_tir_one_move_names_a_dissected_leaf_v1(
+    proof: &PalwCourtVerdictProofV2,
+    target: &PalwDisputableClaimV2,
+    program: &[u8],
+    court: &PalwCourtParamsV2,
+) -> bool {
+    if kaspa_consensus_core::palw_court_v2::check_close_cost_v2(proof, court).is_err() {
+        return false;
+    }
+    let PalwCourtVerdictProofV2::TirCone { refutation } = proof else { return false };
+    if !refutation.binding.class.program.is_empty() {
+        return false;
+    }
+    let mut filled = refutation.as_ref().clone();
+    filled.binding.class.program = program.to_vec();
+    let binding = &filled.binding;
+    if binding.class.class_id(&binding.artifact_root) != target.class_id
+        || binding.artifact_root != target.artifact_root
+        || binding.committed_execution_root != target.execution_root
+        || binding.full_logits_trace_root != target.trace_root
+    {
+        return false;
+    }
+    matches!(kaspa_consensus_core::palw_tir_court_v1::palw_tir_named_dissected_leaf_v1(&filled), Ok(Some(_)))
 }
 
 /// **The verdict an IR close proof supports against a claim, as far as a node derives it without
@@ -290,9 +329,14 @@ pub(crate) fn palw_tir_one_move_accusation_to_file_v1(
 ) -> Option<(&'static str, PalwTirOneMoveAccusationV1)> {
     candidates.into_iter().find_map(|(label, built)| {
         let proof = built.ok()?;
-        (palw_tir_one_move_verdict_stateless_v1(&proof, target, program, court, step_ladder, prompt_form)
-            == Some(PalwCourtVerdictV2::ExecutorGuilty))
-        .then(|| {
+        // A named leaf is the challenge of a dissection, not a verdict: the chain opens the session.
+        let files = if label == PALW_TIR_NAMED_LEAF_LABEL_V1 {
+            palw_tir_one_move_names_a_dissected_leaf_v1(&proof, target, program, court)
+        } else {
+            palw_tir_one_move_verdict_stateless_v1(&proof, target, program, court, step_ladder, prompt_form)
+                == Some(PalwCourtVerdictV2::ExecutorGuilty)
+        };
+        files.then(|| {
             (
                 label,
                 PalwTirOneMoveAccusationV1 {
@@ -354,6 +398,39 @@ pub(crate) fn palw_tir_duty_target_v1(duty: &kaspa_consensus_core::palw_producer
 }
 
 impl super::PalwPanelService {
+    /// **The rules and arity an IR dissection move is built under at `current_daa`** (RFC-0002 F7) —
+    /// what the processor admits it by: the network's court limits, the claim's step ladder (an IR
+    /// class records none, so the network's), the network's prompt form, and the arity the ruleset
+    /// derives there (`palw_court_params_held_at_v2`, held-aware — the one a root claim must declare).
+    /// `None` on a network with no V2 bundle.
+    pub(super) fn tir_dissection_rules_v1(
+        &self,
+        tir: &TirBackendV1,
+        class_id: Hash64,
+        current_daa: u64,
+    ) -> Option<(PalwTirCourtRulesV1, u8)> {
+        let params = &self.consensus_config.params;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            return None;
+        };
+        let arity = kaspa_consensus_core::palw_court_v2::palw_court_params_held_at_v2(
+            bundle,
+            params.palw_kary_court_active_at(current_daa),
+            params.palw_held_context_active_at(current_daa),
+        )
+        .ok()?
+        .dissection_arity();
+        let court = self.config.court;
+        let network_ladder = kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(
+            &court,
+            params.palw_court_ladder.is_some_and(|f| f.is_active(current_daa)),
+        );
+        let mut rules = tir.court_rules(&court);
+        rules.max_step_leaf_count = self.seat_refutation_ladder_v1(class_id, network_ladder, current_daa);
+        rules.prompt_form = self.config.prompt_ids_form;
+        Some((rules, arity))
+    }
+
     /// **RFC-0002 Phase F (F6): the IR one-move pass — an IR claim's court where the held regime
     /// plays no bisection.** Its targets:
     ///
@@ -474,13 +551,13 @@ impl super::PalwPanelService {
                 let Some(case) = palw_tir_one_move_case_v1(&tir, &accused, &own, &rules)? else {
                     return Ok::<_, String>((None, None));
                 };
-                // The interim F7 guard's seat half: no cone accusation at a dissected leaf.
-                let (case, guarded) = palw_tir_one_move_case_guarded_v1(&tir, &accused, case);
+                // RFC-0002 F7: at a dissected leaf the accusation is the named-leaf challenge.
+                let (case, dissected) = palw_tir_one_move_case_at_dissected_leaf_v1(&tir, &accused, case, &rules);
                 let program = tir.class().program.clone();
                 let (leaf, row) = (case.leaf, case.row);
                 let found = palw_tir_one_move_accusation_to_file_v1(case.candidates, &facts, &program, bond_key, &court, ladder, form)
                     .map(|(label, accusation)| (leaf, row, label, accusation));
-                Ok((guarded.then_some(leaf).flatten(), found))
+                Ok((dissected, found))
             })
             .await
             else {
@@ -488,24 +565,20 @@ impl super::PalwPanelService {
             };
             // Tried once: a claim no IR close convicts is recorded, not filed.
             books.accused.insert(target.claim_id);
-            if let Ok((Some(leaf), _)) = &found {
-                warn!(
-                    "[{PALW_PANEL}] IR claim {}: its first divergent leaf {leaf} is a dissected leaf — {} (RFC-0002 F7): its cone \
-                     accusation is not filed, and this seat's replay withholds the claim's licence",
-                    target.claim_id,
-                    crate::palw_producer::PALW_TIR_DISSECTION_GUARD_WORDS_V1
-                );
-            }
             let (leaf, row, label, mut accusation) = match found {
                 Ok((_, Some(found))) => found,
-                Ok((guarded, None)) => {
-                    if guarded.is_none() {
-                        warn!(
-                            "[{PALW_PANEL}] IR claim {}: no IR close convicts where this node's execution parts from it; recorded, not \
-                             filed",
-                            target.claim_id
-                        );
-                    }
+                Ok((dissected, None)) => {
+                    warn!(
+                        "[{PALW_PANEL}] IR claim {}: {}; recorded, not filed",
+                        target.claim_id,
+                        match dissected {
+                            Some(leaf) => format!(
+                                "its first divergent leaf {leaf} is dissected and its named-leaf challenge does not build from the \
+                                 accused capture held here (a fold this node does not reproduce opens no leaf)"
+                            ),
+                            None => "no IR close convicts where this node's execution parts from it".to_string(),
+                        }
+                    );
                     continue;
                 }
                 Err(why) => {

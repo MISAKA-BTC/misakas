@@ -113,6 +113,8 @@ const PALW_PANEL: &str = "palw-panel";
 mod held_court;
 /// RFC-0002 Phase F (F6, node half): an IR class's court close.
 mod tir_court;
+/// RFC-0002 F7's node side: an IR class's history dissection, played.
+mod tir_dissect;
 #[cfg(test)]
 mod tir_court_e2e;
 /// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
@@ -3163,10 +3165,12 @@ pub(crate) fn palw_disclosure_answer_due_v1(duty: &kaspa_consensus_core::palw_pr
 fn court_move_round_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2) -> u32 {
     const DISSECTION: u32 = 1 << 31;
     const ROOT_CLAIM: u32 = 1 << 30;
-    match &duty.dissection {
-        Some(phase) => DISSECTION | phase.round(),
-        None if duty.fused_class && duty.terminal_index.is_some() => ROOT_CLAIM,
-        None => duty.round,
+    match (&duty.dissection, &duty.tir_dissection) {
+        (Some(phase), _) => DISSECTION | phase.round(),
+        // RFC-0002 F7: an IR class's phase, beside the session — keyed as the legacy phase is.
+        (None, Some(phase)) => DISSECTION | phase.round(),
+        (None, None) if duty.fused_class && duty.terminal_index.is_some() => ROOT_CLAIM,
+        (None, None) => duty.round,
     }
 }
 /// Submission attempts per assembled object before giving up (each tick retries).
@@ -3991,16 +3995,6 @@ impl PalwPanelService {
             // Asked of the moment, a 3.5 GiB seat replaying anything proved nothing for the 8k class
             // (3.37 GiB), its rows lapsed at the horizon and the class went HELD with two claims
             // voided `no_capable_panel`. A replay still reserves its own bytes when it starts.
-            //
-            // Ahead of it, the interim F7 guard's readiness half (RFC-0002), OFF in the flag-day release
-            // (`PALW_TIR_GUARD_REFUSES_READINESS_V1`): armed, no proof for an IR class whose dissection
-            // this build cannot play (`palw_tir_dissection_refusal_v1`), named once per change.
-            if crate::palw_producer::PALW_TIR_GUARD_REFUSES_READINESS_V1
-                && let Some(why) = crate::palw_producer::palw_tir_dissection_refusal_v1(session, class.class_id)
-            {
-                self.readiness_note(class.class_id, format!("no proof — {why}"));
-                continue;
-            }
             if let Err(why) = self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root))) {
                 self.readiness_note(class.class_id, format!("no proof — {why}"));
                 continue;
@@ -6331,11 +6325,6 @@ impl PalwPanelService {
         let rcore_plus =
             crate::palw_producer::palw_rcore_plus_reads_v1(&self.consensus_config.params, session, class_id, &bond, facts.daa_score);
         crate::palw_producer::palw_canonical_claim_room_v1(bond_facts, rcore_plus)?;
-        // The interim F7 guard (RFC-0002): no claim of an IR class whose dissection this build cannot
-        // play, refused before its backend is built (`palw_tir_dissection_refusal_v1`).
-        if let Some(refusal) = crate::palw_producer::palw_tir_dissection_refusal_v1(session, class_id) {
-            return Err(refusal);
-        }
         let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
         // The producer's guard, for the claim this node underwrites here too: no claim of a fused
         // class this build cannot defend at its dissection's turn — past `palw_offence_attribution`, no
@@ -7608,7 +7597,9 @@ impl PalwPanelService {
                     materials: &materials,
                     open_claims: &HashMap::new(),
                 };
-                if held_court.routes_v1(&held_host, duty, current_daa) {
+                // An IR class's history dissection is F7's (`tir_dissect`, below) — never the attention
+                // held route's, whose windowed builders an IR program has none of.
+                if session.palw_tir_class_record_v1(duty.class_id).is_none() && held_court.routes_v1(&held_host, duty, current_daa) {
                     held_duties.push(duty.clone());
                     continue;
                 }
@@ -7885,6 +7876,74 @@ impl PalwPanelService {
                     trace!("[{PALW_PANEL}] session {} needs a move but this node holds no matching capture", duty.session_id);
                     continue;
                 };
+                // ---- RFC-0002 F7: an IR class's history dissection ---------------------------------
+                //
+                // At a dissected leaf of an IR class the responder owes the IR root claim, then a round
+                // per disclosure; the challenger names a child per round; at the bottom a close finishes
+                // it (`palw_panel::tir_dissect`). Built off the tick from the party's own capture (the
+                // responder's is the claim's; a challenger's its own execution) and, for the bottom, the
+                // ACCUSED capture; signed here, and queued as every court move is.
+                if let Some(mv) = tir_dissect::palw_tir_dissect_move_of_duty_v1(duty)
+                    && let Some(tir) = self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root)
+                {
+                    let tir = match tir {
+                        Ok(tir) => tir,
+                        Err(why) => {
+                            *court_stalls.entry("the IR backend does not build for the class").or_default() += 1;
+                            warn!("[{PALW_PANEL}] session {}: {why}", duty.session_id);
+                            continue;
+                        }
+                    };
+                    let Some((rules, arity)) = self.tir_dissection_rules_v1(&tir, duty.class_id, current_daa) else {
+                        *court_stalls.entry("no V2 court parameters for an IR dissection").or_default() += 1;
+                        continue;
+                    };
+                    let name = tir_dissect::palw_tir_dissect_move_name_v1(mv);
+                    let (own, accused, task_duty) = (capture.to_vec(), accused_capture.as_deref().map(|c| c.to_vec()), duty.clone());
+                    let built = tokio::task::spawn_blocking(move || {
+                        tir_dissect::palw_tir_dissect_build_v1(&tir, &task_duty, mv, &own, accused.as_deref(), &rules)
+                    })
+                    .await;
+                    let built = match built {
+                        Ok(Ok(built)) => built,
+                        Ok(Err(why)) => {
+                            *court_stalls.entry("an IR dissection move does not build").or_default() += 1;
+                            crate::palw_backends::note_throttled_v1(&format!("tir-dissect-{}-{name}", duty.session_id), || {
+                                format!("[{PALW_PANEL}] session {}: the IR dissection's {name} does not build: {why}", duty.session_id)
+                            });
+                            continue;
+                        }
+                        Err(_) => {
+                            *court_stalls.entry("the IR dissection move's task did not finish").or_default() += 1;
+                            continue;
+                        }
+                    };
+                    let object = tir_dissect::palw_tir_dissect_object_v1(
+                        built,
+                        duty,
+                        arity,
+                        &|message, context| self.sign(message, context),
+                        &|sid, proof| session.palw_court_close_verdict_v2(sid, proof),
+                    );
+                    let object = match object {
+                        Ok(Some(object)) => object,
+                        Ok(None) => {
+                            *court_stalls.entry("the IR bottom does not win this party's side").or_default() += 1;
+                            continue;
+                        }
+                        Err(why) => {
+                            *court_stalls.entry("an IR dissection move cannot be filed").or_default() += 1;
+                            crate::palw_backends::note_throttled_v1(&format!("tir-dissect-{}-{name}", duty.session_id), || {
+                                format!("[{PALW_PANEL}] session {}: the IR dissection's {name}: {why}", duty.session_id)
+                            });
+                            continue;
+                        }
+                    };
+                    info!("[{PALW_PANEL}] session {}: filing the IR dissection's {name} (round {})", duty.session_id, duty.round);
+                    court_due.insert((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
+                    court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
+                    continue;
+                }
                 // ---- ADR-0093 as built: the fused site's dissection -------------------------------
                 //
                 // At a fused terminal the ladder's close is not the move: the responder owes a ROOT
