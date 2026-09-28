@@ -1,0 +1,28 @@
+[package]
+name = "misaka-palw-tir-lower"
+description = "RFC-0002 lowerer, Hugging Face side: config.json -> ArchSpec -> high-level ML graph (HL), safetensors weight mapping, and an f32 reference of the HL graph. Non-consensus tooling."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "palw-tir-check"
+path = "src/bin/palw-tir-check.rs"
+
+# Deliberately light: no kaspa-consensus-core, no misaka-palw-base0. This crate reads a Hugging
+# Face checkpoint and describes it; nothing here is on a validation path.
+[dependencies]
+serde = { workspace = true }
+serde_json.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+clap = { workspace = true, features = ["derive"] }
+
+[lints]
+workspace = true
