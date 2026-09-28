@@ -24,6 +24,14 @@
 //! the network, every field and the proof's digest — under its own context, so an accusation cannot be
 //! re-attributed, re-targeted or re-filled.
 //!
+//! **A dissected leaf is never tried in one move under the held regime** (RFC-0002 F7; ADR-0103
+//! Decision 5 for an IR program). A leaf whose cone reduces over the history (spec 04b §9.5.1) costs
+//! `O(H)` to recompute, so a cone accusation there is the CHALLENGE: bound to the claim — the binding
+//! the claim's, the leaf opened under it and not convicting on its face — it opens a session at
+//! `Terminal` on that leaf ([`PalwTirOneMoveOutcomeV1::NeedsDissection`]), and the responder's IR root
+//! claim is its first move. Such an accusation declares `ExecutorGuilty` and carries only the leaf
+//! ([`crate::palw_tir_court_v1::build_tir_named_leaf_refutation_v1`]).
+//!
 //! The object (`PalwConsensusObjectV2::TirShardCourtAccused`, tag 62) is appended; below
 //! `palw_tir_v1` the acceptance walk drops it by name and the fold refuses it. It spends the block's
 //! adjudication slot (`PALW_COURT_CLOSE_MAX_PER_BLOCK`): its evaluation is bounded by the IR court's
@@ -126,6 +134,60 @@ pub fn palw_tir_one_move_verdict_v1(
         return Err(PalwCourtV2Error::DoesNotAdjudicate("not an IR close".into()));
     }
     crate::palw_court_v2::adjudicate_close_proof_v2(state, claim, &a.proof, court, step_ladder, prompt_ids_form)
+}
+
+/// **What an IR one-move accusation decides**: a verdict, or — a cone accusation at a dissected leaf
+/// under the held regime — the dissection it opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwTirOneMoveOutcomeV1 {
+    /// The proof adjudicates; the fold applies this verdict.
+    Verdict(PalwCourtVerdictV2),
+    /// The named leaf is dissected: the accusation opens a dissection at `leaf`.
+    NeedsDissection { leaf: u64 },
+}
+
+/// **The dissected leaf a cone accusation names, if it names one** — the proof a `TirCone`, its
+/// binding the claim's ([`crate::palw_court_v2::check_tir_binding_is_the_claims_v1`]), and the leaf
+/// a dissected leaf of that execution ([`crate::palw_tir_court_v1::palw_tir_named_dissected_leaf_v1`]).
+/// `Ok(None)` for any other proof and any other leaf. No evaluation: the fold asks it too.
+pub fn palw_tir_one_move_dissected_leaf_v1(
+    state: &PalwChainStateV2,
+    claim: &PalwClaimStateV2,
+    a: &PalwTirOneMoveAccusationV1,
+) -> Result<Option<u64>, PalwCourtV2Error> {
+    let PalwCourtVerdictProofV2::TirCone { refutation } = &a.proof else {
+        return Ok(None);
+    };
+    let mut filled = refutation.as_ref().clone();
+    filled.binding = crate::palw_court_v2::tir_binding_filled_v1(state, claim, &refutation.binding)?;
+    crate::palw_court_v2::check_tir_binding_is_the_claims_v1(state, claim, &filled.binding)?;
+    crate::palw_tir_court_v1::palw_tir_named_dissected_leaf_v1(&filled)
+        .map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(format!("the named leaf is not this claim's: {e}")))
+}
+
+/// **What the accusation decides against `claim`** — under the held regime (`held_regime`, the
+/// caller's `palw_held_context` at the block), a cone accusation at a dissected leaf opens a
+/// dissection there after the close ceiling; every other accusation is
+/// [`palw_tir_one_move_verdict_v1`]'s.
+pub fn palw_tir_one_move_outcome_v1(
+    state: &PalwChainStateV2,
+    claim: &PalwClaimStateV2,
+    a: &PalwTirOneMoveAccusationV1,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder: u64,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    held_regime: bool,
+) -> Result<PalwTirOneMoveOutcomeV1, PalwCourtV2Error> {
+    if !a.proof.is_tir_v1() {
+        return Err(PalwCourtV2Error::DoesNotAdjudicate("not an IR close".into()));
+    }
+    if held_regime {
+        crate::palw_court_v2::check_close_cost_v2(&a.proof, court)?;
+        if let Some(leaf) = palw_tir_one_move_dissected_leaf_v1(state, claim, a)? {
+            return Ok(PalwTirOneMoveOutcomeV1::NeedsDissection { leaf });
+        }
+    }
+    palw_tir_one_move_verdict_v1(state, claim, a, court, step_ladder, prompt_ids_form).map(PalwTirOneMoveOutcomeV1::Verdict)
 }
 
 /// **An accusation to sign** — the node's builder: the claim's roots and bond, the accuser, the
