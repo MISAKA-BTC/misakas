@@ -25,8 +25,8 @@ use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1,
 
 /// The IR backend and its capture, for the node's IR-only verbs (the IR court's close proofs).
 pub use misaka_palw_tir_exec::node::{
-    TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_fused_kernels_default_v1, tir_drill_covering_leaves_v1,
-    tir_fused_kernels_default_v1, tir_trace_event_disclosure_of_capture_v1,
+    TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, TirCloseSizeV1, set_tir_fused_kernels_default_v1, tir_dissect_choice_v1,
+    tir_drill_covering_leaves_v1, tir_fused_kernels_default_v1, tir_terminal_close_sizes_v1, tir_trace_event_disclosure_of_capture_v1,
 };
 
 /// The lineage's id.

@@ -37,7 +37,11 @@ use kaspa_consensus_core::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1,
 use kaspa_consensus_core::palw_step_refute::{PalwTiledDecodePinV1, tiled_logits_scheme_id_v1};
 use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_job_for_anchor_of_v1};
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
-use kaspa_consensus_core::palw_tir_court_v1::{PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirLogitsConsistencyV1};
+use kaspa_consensus_core::palw_tir_court_v1::{
+    PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirLogitsConsistencyV1, build_tir_dissect_bottom_v1, build_tir_dissect_round_v1,
+    build_tir_named_leaf_refutation_v1, build_tir_root_claim_v1,
+};
+use kaspa_consensus_core::palw_tir_dissect_v1::{PalwTirDissectPhaseV1, PalwTirDissectRoundV1, PalwTirRootClaimV1};
 use kaspa_consensus_core::palw_tir_step_v1::{
     PalwTirStepBindingV1, PalwTirStepSpaceV1, palw_tir_execution_root_v1, verify_tir_binding_v1,
 };
@@ -75,6 +79,18 @@ pub fn tir_fused_kernels_default_v1() -> bool {
 /// Phase H. The node's backend, the RPC's pricing and the CLI refuse with these words.
 pub const TIR_FREE_PROMPT_CLOSED_V1: &str =
     "free-prompt claims of an IR class are closed until RFC-0002 Phase H — an IR class serves attempts only";
+
+/// **The child a challenger disputes** (RFC-0002 F7): the first of `phase`'s pending children whose
+/// claimed partials are not the ones `honest` computes — the challenger's own round over the same
+/// range, against the same root ([`TirBackendV1::dissect_round`] over its own execution). `None` when
+/// every child agrees (the responder's children are the truth there) or the two rounds are not of one
+/// shape.
+pub fn tir_dissect_choice_v1(phase: &PalwTirDissectPhaseV1, honest: &PalwTirDissectRoundV1) -> Option<u8> {
+    if phase.pending().len() != honest.children.len() {
+        return None;
+    }
+    phase.pending().iter().zip(&honest.children).position(|(claimed, truth)| claimed != truth).and_then(|i| u8::try_from(i).ok())
+}
 
 /// **What an IR producer retains and serves for one execution** — the material of its outcome.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -360,6 +376,20 @@ impl TirBackendV1 {
         index: u64,
         rules: &PalwTirCourtRulesV1,
     ) -> Result<PalwTirConeRefutationV1, String> {
+        self.with_capture_store(material, rules.prompt_form, |store, _| store.cone_refutation(index, rules).map_err(|e| e.to_string()))
+    }
+
+    /// **The evidence store over a capture, and the capture's binding** — a dense capture's own
+    /// preimages, or — for a fold — this node's re-execution, which must be the capture's execution
+    /// (a fold of an execution this node does not reproduce opens nothing here). What every builder
+    /// that speaks for a capture's commitments reads: the cone close, and F7's root claim, rounds and
+    /// bottom.
+    fn with_capture_store<R>(
+        &self,
+        material: &[u8],
+        prompt_form: PalwPromptIdsFormV1,
+        f: impl FnOnce(&TirEvidenceV1<'_>, &PalwTirStepBindingV1) -> Result<R, String>,
+    ) -> Result<R, String> {
         let capture = self.decode_capture(material)?;
         let runner = self.runner();
         if capture.is_dense() {
@@ -371,17 +401,71 @@ impl TirBackendV1 {
                 &capture.generated,
                 &capture.leaves,
                 self.artifact.as_ref(),
-                rules.prompt_form,
+                prompt_form,
                 self.ladder,
             )?;
-            return store.cone_refutation(index, rules).map_err(|e| e.to_string());
+            return f(&store, &capture.binding);
         }
         let own = self.retain(&capture.binding.job_context, &capture.prompt)?;
         if own.binding != capture.binding {
             return Err("a fold of an execution this node does not reproduce: open it as a challenger".into());
         }
-        let store = TirEvidenceV1::own(&runner, &own, self.artifact.as_ref(), rules.prompt_form, self.ladder)?;
-        store.cone_refutation(index, rules).map_err(|e| e.to_string())
+        let store = TirEvidenceV1::own(&runner, &own, self.artifact.as_ref(), prompt_form, self.ladder)?;
+        f(&store, &own.binding)
+    }
+
+    /// **RFC-0002 F7: the responder's IR root claim** at the narrowed dissected leaf `narrowed` of its
+    /// own capture (`build_tir_root_claim_v1`): every reduction over `H`'s honest totals, the elements
+    /// the finalize reads, and the finalize's carriage. The program rides in its binding; a filer
+    /// strips it.
+    pub fn root_claim(&self, material: &[u8], narrowed: u64, rules: &PalwTirCourtRulesV1) -> Result<PalwTirRootClaimV1, String> {
+        self.with_capture_store(material, rules.prompt_form, |store, binding| {
+            build_tir_root_claim_v1(binding, narrowed, store, rules).map_err(|e| e.to_string())
+        })
+    }
+
+    /// **RFC-0002 F7: one round's children of `phase`'s disputed range**, from a capture's commitments
+    /// (`build_tir_dissect_round_v1` at the class's history tile): what the responder files from its
+    /// own capture, and what a challenger computes from ITS own execution to find the child it
+    /// disputes ([`tir_dissect_choice_v1`]).
+    pub fn dissect_round(
+        &self,
+        material: &[u8],
+        phase: &PalwTirDissectPhaseV1,
+        rules: &PalwTirCourtRulesV1,
+    ) -> Result<PalwTirDissectRoundV1, String> {
+        let tile = self.space.layout.h_tile;
+        self.with_capture_store(material, rules.prompt_form, |store, binding| {
+            build_tir_dissect_round_v1(binding, phase, tile, store, rules).map_err(|e| e.to_string())
+        })
+    }
+
+    /// **RFC-0002 F7: the bottom close's carriage** over `phase`'s terminal tile, from the ACCUSED's
+    /// capture (`build_tir_dissect_bottom_v1`) — the same object whichever party builds it; the court
+    /// decides which way it reads (`PalwCourtVerdictProofV2::TirDissection`).
+    pub fn dissect_bottom(
+        &self,
+        accused: &[u8],
+        phase: &PalwTirDissectPhaseV1,
+        rules: &PalwTirCourtRulesV1,
+    ) -> Result<PalwTirConeRefutationV1, String> {
+        self.with_capture_store(accused, rules.prompt_form, |store, binding| {
+            build_tir_dissect_bottom_v1(binding, phase, store, rules).map_err(|e| e.to_string())
+        })
+    }
+
+    /// **RFC-0002 F7: a one-move accusation's proof at a DISSECTED leaf** — the accused's leaf `index`
+    /// named and nothing else (`build_tir_named_leaf_refutation_v1`): under the held regime the chain
+    /// opens the dissection there instead of adjudicating.
+    pub fn named_leaf_refutation(
+        &self,
+        accused: &[u8],
+        index: u64,
+        rules: &PalwTirCourtRulesV1,
+    ) -> Result<PalwTirConeRefutationV1, String> {
+        self.with_capture_store(accused, rules.prompt_form, |store, binding| {
+            build_tir_named_leaf_refutation_v1(binding, index, store).map_err(|e| e.to_string())
+        })
     }
 
     /// **A challenger's refutation of the accused's leaf `disputed_opening.leaf_index`**: this

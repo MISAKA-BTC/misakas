@@ -2065,6 +2065,7 @@ mod tests {
             free_prompt: false,
             fused_class: true,
             dissection: None,
+            tir_dissection: None,
             panel_seat_count: 2,
         }
     }
@@ -2255,7 +2256,12 @@ mod tests {
         let production = &panel[..panel.find("#[cfg(test)]\nmod tests {").expect("the unit tests follow the code")];
         let begin =
             production.find("held_court.begin_tick_v1(&court_duties, current_daa).await;").expect("the tick collects held builds");
-        let route = production.find("if held_court.routes_v1(&held_host, duty, current_daa) {").expect("the held route");
+        let route = production.find("held_court.routes_v1(&held_host, duty, current_daa) {").expect("the held route");
+        // RFC-0002 F7: an IR class's dissection is never this route's (its own, `tir_dissect`).
+        assert!(
+            production[..route].ends_with("if session.palw_tir_class_record_v1(duty.class_id).is_none() && "),
+            "an IR class is kept off the held route"
+        );
         let pushed = production[route..].find("held_duties.push(duty.clone());").expect("routed") + route;
         let dense_resolve = production[route..]
             .find("let mut backend = match self.resolve_backend(&session, duty.class_id, duty.artifact_root)")

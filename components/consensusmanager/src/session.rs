@@ -360,6 +360,14 @@ impl ConsensusSessionOwned {
         self.consensus.palw_registered_class_carriage_v1(class_id)
     }
 
+    /// The chain's IR class row (RFC-0002 Phase F), `None` for a class that is not an IR class.
+    pub fn palw_tir_class_record_v1(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1> {
+        self.consensus.palw_tir_class_record_v1(class_id)
+    }
+
     pub fn palw_adopt_class_carriage_v1(&self, class_id: kaspa_consensus_core::Hash64, carriage: &[u8]) -> Result<(), String> {
         self.consensus.palw_adopt_class_carriage_v1(class_id, carriage)
     }
