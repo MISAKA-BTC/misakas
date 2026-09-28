@@ -13,12 +13,18 @@ repository.workspace = true
 name = "misaminer"
 path = "src/main.rs"
 
+# The 2026-09-07 forged-output red-team (8 attacks against a live node; RFC-0002 drill D-F3).
+[[bin]]
+name = "redteam"
+path = "src/redteam.rs"
+
 [dependencies]
 kaspa-addresses.workspace = true
 kaspa-bip32.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-core.workspace = true
 kaspa-grpc-client.workspace = true
+kaspa-hashes.workspace = true
 kaspa-wallet-keys.workspace = true
 kaspa-notify.workspace = true
 kaspa-pow.workspace = true

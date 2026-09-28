@@ -6278,6 +6278,7 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-core",
  "kaspa-grpc-client",
+ "kaspa-hashes",
  "kaspa-notify",
  "kaspa-pow",
  "kaspa-rpc-core",
