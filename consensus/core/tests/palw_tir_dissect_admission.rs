@@ -8,8 +8,9 @@
 //!   with its context, fits testnet-12's window up to the longest context admission v10 takes (a 4,096-id canonical prompt), and a
 //!   window of exactly what the exchange takes is refused by name.
 //! * **Without the k-ary court nothing dissects**, so the same cone must fit the court whole at
-//!   `H = W`: under a terminal ceiling that one history tile fits and the whole history does not, the
-//!   class is admitted with the court and refused without it (`TirNeedsDissection`).
+//!   `H = W`: under a terminal ceiling that one history tile fits, the class is admitted with the
+//!   court and refused without it — and whole, at any ceiling, its close reads the whole history,
+//!   which no carrier holds (PALW-TIR-38).
 //! * **The obligations** (O-1, O-2): more than sixteen reductions over `H` in a cone, and a read of a
 //!   reduction's output chosen by a history-varying value (a `Gather`'s indices, a `Select`'s
 //!   condition), are refused by name; the same cone without the defect is admitted.
@@ -171,22 +172,26 @@ fn without_the_court_a_history_cone_must_fit_whole() {
     let long = registration(&program, root, 32_768);
     let mut none = r;
     none.court = None;
-    // The least terminal ceiling each rule admits the long class under.
+    // The least terminal ceiling the court admits the long class under: one history tile.
     let dissected = least(1, b.court.max_terminal_macs(), |m| admit(&with_terminal_macs(&b, m), &r, &long).is_ok());
-    let whole = least(1, u64::MAX >> 8, |m| admit(&with_terminal_macs(&b, m), &none, &long).is_ok());
-    eprintln!("the long class needs a {dissected}-MAC terminal dissected and {whole} MACs whole");
-    assert!(dissected < whole, "one history tile is cheaper than the whole history");
+    eprintln!("the long class needs a {dissected}-MAC terminal dissected");
     let tight = with_terminal_macs(&b, dissected);
     assert!(admit(&tight, &r, &long).is_ok(), "dissected under the court");
+    let refused = admit(&tight, &none, &long);
     assert!(
-        matches!(admit(&tight, &none, &long), Err(E::TirNeedsDissection { .. })),
-        "without the court the history cone does not fit whole: {:?}",
-        admit(&tight, &none, &long)
+        matches!(
+            refused,
+            Err(E::TirNeedsDissection { .. } | E::CourtCostExceedsCeiling { what: "IR terminal close bytes as carried", .. })
+        ),
+        "without the court the history cone does not fit whole: {refused:?}"
     );
-    // The whole cone is costed at the program's own window `W` (spec 04b §10.3), whatever the
-    // layout's `max_context`: a short-context class of this program needs the same ceiling whole.
-    let short = registration(&program, root, 64);
-    assert_eq!(least(1, u64::MAX >> 8, |m| admit(&with_terminal_macs(&b, m), &none, &short).is_ok()), whole);
+    // At ANY terminal ceiling: whole, the cone reads the whole history (costed at the program's own
+    // window `W`, spec 04b §10.3), a close no carrier holds (PALW-TIR-38).
+    let unbounded = admit(&with_terminal_macs(&b, u64::MAX >> 8), &none, &long);
+    assert!(
+        matches!(unbounded, Err(E::CourtCostExceedsCeiling { what: "IR terminal close bytes as carried", got, ceiling }) if got > ceiling),
+        "{unbounded:?}"
+    );
 }
 
 // -------------------------------------------------------------------------------------------------

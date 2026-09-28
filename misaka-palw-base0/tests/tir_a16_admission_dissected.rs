@@ -3,9 +3,9 @@
 //!
 //! `a16_mirror_program` commits two tensors whose cones reduce over the history in every layer: the
 //! attention probabilities (the softmax's maximum and exponent sum over `H`) and the attention context
-//! (the value contraction over `H`). Whole, at `H = W = 2^18`, each costs 33.5 M MACs a tile against
-//! testnet-12's 16 Mi terminal, so without the k-ary court the class is refused
-//! (`TirNeedsDissection`). Under the court (testnet-12 arms it) each is dissected: its terminal is one
+//! (the value contraction over `H`). Whole, at `H = W = 2^18`, neither can be closed — the context's tile
+//! costs 33.5 M MACs against testnet-12's 16 Mi terminal, the probabilities' reads a whole row of
+//! scores, a close no carrier holds — so without the k-ary court the class is refused. Under the court (testnet-12 arms it) each is dissected: its terminal is one
 //! `h_tile` chunk, its claims and rounds fit one carrier, and the exchange fits the court window —
 //! the class is admitted, and its record names both dissected commit points.
 //!
@@ -68,14 +68,31 @@ fn program() -> TirProgramV1 {
     program
 }
 
-/// The class at `h_tile`: 128-lane commit tiles, the logits at 4,096, a history's rows whole.
-fn class(program: &TirProgramV1, h_tile: u32) -> PalwTirClassV1 {
+/// The logits tile the t12 dense row's IR class declares: the largest divisor of the tiled scheme's
+/// 4,096 lanes whose close (2,048 weight rows of 1,536 bytes, the final norm's row, the frame) the
+/// chain can carry.
+const LOGITS_TILE: u32 = 2048;
+
+/// The class at `h_tile`: 128-lane commit tiles (the FFN gate's at `gate`), the logits at `logits`,
+/// a history's rows whole.
+fn class_with(program: &TirProgramV1, h_tile: u32, logits: u32, gate: u32) -> PalwTirClassV1 {
+    let ff = QWEN25_1_5B.ffn_dim as u64;
     let mut commit_tiles = Vec::new();
+    let mut gate_seen = false;
     for (bi, block) in program.blocks.iter().enumerate() {
         for (ni, node) in block.nodes.iter().enumerate() {
             if node.commit {
                 let is_logits = bi == program.schedule.post as usize && ni == program.logits as usize;
-                commit_tiles.push(if is_logits { 4096 } else { 128 });
+                // The first committed `[d_ff]` node of the layer is the FFN gate.
+                let is_gate = !gate_seen && node.out.elements_at(1) == ff;
+                gate_seen |= is_gate;
+                commit_tiles.push(if is_logits {
+                    logits
+                } else if is_gate {
+                    gate
+                } else {
+                    128
+                });
             }
         }
     }
@@ -100,6 +117,10 @@ fn class(program: &TirProgramV1, h_tile: u32) -> PalwTirClassV1 {
         },
         tokenizer_id: Hash64::from_bytes([0x70; 64]),
     }
+}
+
+fn class(program: &TirProgramV1, h_tile: u32) -> PalwTirClassV1 {
+    class_with(program, h_tile, LOGITS_TILE, 128)
 }
 
 fn registration(class: PalwTirClassV1) -> PalwConsensusObjectV2 {
@@ -154,9 +175,66 @@ fn the_qwen25_1_5b_a16_program_is_admitted_with_its_history_cones_dissected() {
     assert!(!admitted.is_empty(), "some history tile admits the 1.5B decoder under testnet-12's ceilings");
     assert!(admitted.contains(&64), "the 64-position history tile does: {admitted:?}");
 
-    // Without the k-ary court nothing dissects, and the whole cone does not fit the terminal.
+    // Without the k-ary court nothing dissects, and the history cones cannot be closed whole: the
+    // probabilities' tile reads its whole row of scores over `H` (a close no carrier holds), the
+    // context's costs 33.5 M MACs against the 16 Mi terminal.
     let mut none = r;
     none.court = None;
     let whole = verify_class_admission_v10(&b, &none, &registration(class(&program, 64)), &[], &[]).map(|_| ());
-    assert!(matches!(whole, Err(E::TirNeedsDissection { .. })), "{whole:?}");
+    assert!(
+        matches!(
+            whole,
+            Err(E::TirNeedsDissection { .. } | E::CourtCostExceedsCeiling { what: "IR terminal close bytes as carried", .. })
+        ),
+        "{whole:?}"
+    );
+}
+
+/// **Decision (1) of 2026-09-28: every terminal close an executor can be clocked for is carriable**
+/// (spec 04b §10.3) — at most the fold's chunks (testnet-12: `min(202, 32)`) of one carrier each,
+/// 3,200,000 bytes. The class's executor is clocked at every terminal leaf (it has dissected points),
+/// so a close past that is refused by name with its value and the cap:
+/// * the tiled scheme's full 4,096-lane logits tile reads 4,096 weight rows (6.3 MB) and is refused;
+///   its 2,048-lane divisor is admitted;
+/// * the boundary: the FFN gate's tile (a row of 1,536 weight bytes a lane) is admitted at `L*`
+///   lanes and refused at `L* + 1`.
+#[test]
+fn every_terminal_close_of_the_1_5b_class_is_carriable() {
+    use kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1;
+    let p = params();
+    let b = bundle(&p);
+    let r = PalwTirAdmissionRulesV1::at(&p, AT).expect("the fence is in force");
+    let cap = palw_tir_carriable_close_bytes_v1(&b.court);
+    assert_eq!(cap, 32 * 100_000, "testnet-12 carries a close in the fold's 32 chunks, not its ruleset's 202");
+    let program = program();
+    let admit = |logits: u32, gate: u32| {
+        verify_class_admission_v10(&b, &r, &registration(class_with(&program, 64, logits, gate)), &[], &[]).map(|_| ())
+    };
+
+    let full = admit(4096, 128);
+    assert!(
+        matches!(full, Err(E::CourtCostExceedsCeiling { what: "IR terminal close bytes as carried", got, ceiling }) if got > ceiling && ceiling == cap),
+        "the 4,096-lane logits close is not carriable: {full:?}"
+    );
+    assert_eq!(admit(LOGITS_TILE, 128), Ok(()), "the 2,048-lane logits tile is");
+
+    // The boundary, on the FFN gate's tile.
+    let ff = QWEN25_1_5B.ffn_dim;
+    let lanes = {
+        let (mut lo, mut hi) = (128u32, ff);
+        assert!(admit(LOGITS_TILE, lo).is_ok() && admit(LOGITS_TILE, hi).is_err());
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if admit(LOGITS_TILE, mid).is_ok() { lo = mid } else { hi = mid }
+        }
+        lo
+    };
+    let over = admit(LOGITS_TILE, lanes + 1);
+    eprintln!("the FFN gate's tile: {lanes} lanes admitted, {} refused: {over:?}", lanes + 1);
+    assert!(
+        matches!(over, Err(E::CourtCostExceedsCeiling { what: "IR terminal close bytes as carried", got, ceiling }) if got > ceiling && ceiling == cap),
+        "one lane over is refused by name: {over:?}"
+    );
+    assert_eq!(admit(LOGITS_TILE, lanes), Ok(()), "one lane under is admitted");
+    assert!((2000..2100).contains(&lanes), "about 3.2 MB of 1,536-byte rows: {lanes}");
 }

@@ -1245,9 +1245,9 @@ the commit point, unless every dissected cone meets:
   exact.
 - **O-3 (`H`-free totals).** Every reduction over `H` of the cone has an `H`-free output.
 - **O-4 (the bottom fits).** The cone's terminal is one history tile — the box demand of the tile at
-  `H = min(h_tile, W)` (§10.3, *Dissection*) — and its work, its opened bytes (as a close: the program
-  and the close frame beside them) and its multiply-accumulates fit the court's ceilings, as every
-  terminal does.
+  `H = min(h_tile, W)` (§10.3, *Dissection*) — and its work, its opened bytes and its
+  multiply-accumulates fit the court's ceilings, as every terminal does; its close, as carried, is
+  carriable (PALW-TIR-38).
 - **O-5 (the exchange fits).** The claim's value count is bounded by `V`, the box demand of §10.3 at
   `H = 1` arriving at the cone's reductions: from the tile's `tile_len` elements (capped at the
   node's count), each computed node in descending index order passes `d · K` to each operand of a
@@ -1439,6 +1439,22 @@ index space, and its terminal step recomputes one chunk. Its terminal cost is th
 tile at `H = min(h_chunk, W)`; a cone with no such reduction has the terminal cost of its tile at
 `H = W`. Each terminal cost MUST fit the tile ceilings. §9.5 defines the exchange — which values are
 claimed, how they fold, what the bottom evaluates — and the obligations admission checks for it.
+
+**Every terminal close is carriable (PALW-TIR-38).** A class with a dissected tile clocks its
+executor at every terminal leaf (ADR-0082 C-5: the clock cannot tell a dissected leaf from another),
+so the acquitting close of every tile — the whole tile's for a cone that is not dissected, the
+bottom's for one that is — MUST be one the chain can carry: its bytes as carried (the close frame,
+16 KiB, and the tile's opened bytes; the program is referenced by the class, never carried) at most
+`min(max_close_chunks, 32) × 100,000` — the chunks the fold assembles (its bitmap addresses 32) of
+one carrier each, 3,200,000 bytes on testnet-12, whose ruleset's close ceiling (202 chunks) is wider
+than that. A class past it is refused, naming the bytes and the cap; the registrant declares smaller
+tiles. Under the tiled logits scheme the logits node's tile length MUST divide the scheme's 4,096
+lanes (a step tile then lies inside one trace tile, at an offset, and the logits consistency check
+compares it with that part), so a large vocabulary's head can be tiled finer: at `d_model = 1,536`
+(Qwen2.5-1.5B A16) a logits tile reads 1,536 weight bytes a lane and 2,048 lanes is the largest
+admissible divisor. The boundary, on that class's FFN gate tile (1,536 weight bytes and its
+per-channel tables a lane): 2,045 lanes are admitted, 2,046 refused (3,200,470 bytes as carried >
+3,200,000) — `misaka-palw-base0/tests/tir_a16_admission_dissected.rs` pins both.
 
 **Checkpoint intervals.** The *update cone* of `Fixed` state `j` in a block that writes it is the
 cone (§10.2) of its `StateWrite` node (counted once in the cone work). Replaying `j` over positions
@@ -1685,6 +1701,9 @@ tensors are `{"dtype": "i32", "shape": [2, 3], "data": ["1", "-2", …]}` in row
 - **PALW-TIR-36 (no structured control).** v1 has no `BoundedScan`, `BoundedMap` or `BoundedReduce`:
   no corpus family has a recurrence inside a position, heads/experts/channels are batched as tensor
   axes, and a reduction with a user body is order-dependent unless proved associative and exact.
+- **PALW-TIR-38 (carriable closes).** As §10.3: every terminal close of a class — a whole tile's or a
+  dissected cone's bottom — fits the chunks the chain assembles; under the tiled logits scheme the
+  logits tile length divides 4,096.
 - **PALW-TIR-37 (H dissection).** A committed tile whose cone reduces over `H` is dissected as §9.5
   states: its reductions and site are the program's; a root claim is admitted only if it finalizes
   to the committed tile and its element lists are exactly the element closure; every round folds

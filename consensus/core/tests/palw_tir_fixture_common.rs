@@ -146,13 +146,20 @@ pub fn fixture(name: String, program: TirProgramV1, params: MapParams, tokens: V
 
 /// [`fixture`] with a job of `prefill` prompt tokens and `decode` generated ones — a longer history
 /// for the dissection's chain runs (RFC-0002 F7).
-pub fn fixture_with(
+pub fn fixture_with(name: String, program: TirProgramV1, params: MapParams, tokens: Vec<u32>, prefill: u32, decode: u32) -> Fixture {
+    fixture_tiled(name, program, params, tokens, prefill, decode, 4096)
+}
+
+/// [`fixture_with`] with the logits node tiled at `logits_tile` lanes (a divisor of the tiled
+/// scheme's 4,096: spec 04b §10.3's carriable-close rule lets a class tile its logits finer).
+pub fn fixture_tiled(
     name: String,
     mut program: TirProgramV1,
     params: MapParams,
     tokens: Vec<u32>,
     prefill: u32,
     decode: u32,
+    logits_tile: u32,
 ) -> Fixture {
     program.logits_scheme_id.copy_from_slice(tiled_logits_scheme_id_v1().as_byte_slice());
     let bytes = program.encode();
@@ -193,7 +200,15 @@ pub fn fixture_with(
         }
     }
     // The class and its artifact.
-    let lay = layout(&program, positions);
+    let mut lay = layout(&program, positions);
+    let logits_index = program
+        .blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, b)| b.nodes.iter().enumerate().filter(|(_, n)| n.commit).map(move |(ni, _)| (bi, ni)))
+        .position(|(bi, ni)| bi == program.schedule.post as usize && ni == program.logits as usize)
+        .expect("the logits node commits");
+    lay.commit_tiles[logits_index] = logits_tile;
     let class =
         PalwTirClassV1 { version: PALW_TIR_CLASS_VERSION_V1, program: bytes, layout: lay, tokenizer_id: Hash64::from_bytes([3; 64]) };
     let (ops, artifact_root) = if program.params.is_empty() {

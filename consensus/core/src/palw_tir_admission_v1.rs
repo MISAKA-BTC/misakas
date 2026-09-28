@@ -271,6 +271,15 @@ fn exceeds(what: &'static str, got: u64, ceiling: u64) -> Result<(), PalwClassAd
     if got > ceiling { Err(PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling }) } else { Ok(()) }
 }
 
+/// **The most bytes one close can be carried in** (decision (1) of 2026-09-28): the chunks the fold
+/// assembles — the ruleset's `max_close_chunks`, never more than the structural
+/// [`crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS`] its bitmap addresses — of one carrier
+/// ([`crate::palw_state_v2::PALW_COURT_CLOSE_CHUNK_MAX_BYTES`]) each.
+pub fn palw_tir_carriable_close_bytes_v1(court: &crate::palw_mode_v2::PalwCourtParamsV2) -> u64 {
+    let chunks = court.max_close_chunks().min(crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS as u64);
+    chunks.saturating_mul(crate::palw_state_v2::PALW_COURT_CLOSE_CHUNK_MAX_BYTES as u64)
+}
+
 /// **What one lifecycle object may weigh on the wire**: every dissection move rides one carrier (only
 /// a `FamilyCertified` rides in chunks), whose payload is at most one object chunk.
 pub const PALW_TIR_DISSECT_CARRIER_BYTES_V1: u64 = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
@@ -491,6 +500,14 @@ pub fn verify_class_admission_v10(
             exceeds("IR cone evaluation work (tile and state replay)", work, work_limit)?;
             let close = (class.program.len() as u64).saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1).saturating_add(opened);
             exceeds("IR close bytes", close, bundle.court.max_close_bytes())?;
+            // **Every terminal close an executor can be clocked for is CARRIABLE** (decision (1) of
+            // 2026-09-28; spec 04b §10.3). An IR class with a dissected point clocks its executor at
+            // every terminal leaf (ADR-0082 C-5), so its acquitting close there — the whole tile, or a
+            // dissected cone's bottom — must be one the chain can carry: at most the chunks the fold
+            // assembles, of one carrier each, the program referenced (never carried). The ruleset's
+            // close ceiling above may be wider than that; this is the bound that holds.
+            let carried = PALW_TIR_CLOSE_FRAME_BYTES_V1.saturating_add(opened);
+            exceeds("IR terminal close bytes as carried", carried, palw_tir_carriable_close_bytes_v1(&bundle.court))?;
             worst_close = worst_close.max(close);
             worst_macs = worst_macs.max(tile.macs);
             worst_operands = worst_operands.max(cone.operands);

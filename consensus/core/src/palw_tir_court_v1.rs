@@ -1683,8 +1683,10 @@ pub fn check_tir_logits_consistency_v1(
             if tiled_logits_outer_root_v1(ctx, decode, &rows_root, generated_token_ids) != binding.full_logits_trace_root {
                 return Err(bad("the carried material does not reproduce the claim's own tiled trace root"));
             }
-            // The layout tiles the logits node at the scheme's width (F4), so step tile t is trace tile t.
+            // The layout tiles the logits node at a divisor of the scheme's width (F4, decision (1) of
+            // 2026-09-28), so a step tile lies inside one trace tile, at an offset in it.
             let tile = first_element / PALW_LOGITS_TILE_LANES as u64;
+            let offset = (first_element % PALW_LOGITS_TILE_LANES as u64) as usize;
             let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
             tiled_tile_authenticate_v1(
                 &v.context_hash,
@@ -1697,7 +1699,12 @@ pub fn check_tir_logits_consistency_v1(
                 tile_opening,
                 rules.max_step_leaf_count,
             )?;
-            tile_lanes.iter().map(|x| *x as i128).collect()
+            tile_lanes
+                .get(offset..offset + leaf.value_count as usize)
+                .ok_or(bad("the step tile is past its trace tile"))?
+                .iter()
+                .map(|x| *x as i128)
+                .collect()
         }
     };
     if trace_lanes.len() != step_lanes.len() {
