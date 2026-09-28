@@ -1231,6 +1231,63 @@ the text stage's.
    panel executing a pipeline class; the court's composition. The V4 job type lives on
    `rcore/fp-sampler`, so V5 is built on top of it, after that lane's owner agrees.
 
+### II.2.2 Encoder–decoder text classes: the source input and the forced prefix
+
+Scheduled by the coordinator on 2026-09-29, after the node's loops; dormant under `palw_gen_v1` and
+`palw_fp_job_v5`, marked **[RFC-0001]** where it touches the lane. tir-lower lowers T5, BART, mBART,
+Marian and Pegasus as two-stage pipelines (`rfc3/lower` 8addd5224, hf-coverage §17): an encoder stage
+over the source text (`Fixed { n: 1 }`, the source template bound through `JobTokens` and
+`JobTokenCount`), then the decoder as the text stage over `TextStream`, reading every layer's cross
+keys and values through `StageFinal`. Two things the lowering had to borrow are defined here.
+
+**(a) The source input.** A sequence-to-sequence job has two texts: the source the encoder reads and
+the decoder's stream. The lowering carried the source in the job's `negative` list, the only second
+list a `PipelineJob` has.
+
+- **The binding.** `TokenSource::Source` (tag 2; `Prompt` 0 and `Negative` 1 unchanged) is the job's
+  source ids. Any `TokenRule` reads it as it reads the prompt: a stage's token run, `JobTokens`,
+  `JobTokenCount`. `PipelineJob` gains `source`. A pipeline that names no source encodes as before.
+- **The class offer.** `max_source_tokens` (0 when no rule reads the source). Every rule that reads
+  the source must hold the longest offered source and its template (the prompt's check). The class id
+  covers it.
+- **The V5 job field [RFC-0001].** `source: Option<{ token_ids_hash, tokens }>`, after `images`:
+  `le16(8) ‖ borsh(v4)[2..] ‖ borsh(images) ‖ borsh(source)`. The ids travel as the prompt's do
+  (`PublicDa` or `PanelDa`), bound by `token_ids_hash` in the network's prompt-id form. **One
+  encoding per behaviour extends open question 14's rule:** a class that has image slots **or reads
+  a source** takes V5 only, and a class with neither takes V4 only. A V5 job carries one image per
+  slot (none for a class without slots) and its source exactly when the class reads one, never
+  neither. Acceptance holds `tokens` to `[1, max_source_tokens]`.
+- **The court.** A close carries the source ids whole exactly when the disputed stage reads them (the
+  prompt's carriage rule, §II.2.1); a dispute elsewhere reveals nothing of the source.
+- **Price — recommendation, pending user confirmation (open question 15, with open question 13).**
+  Source tokens are priced as prompt tokens: a V5 job is charged `source.tokens` prompt tokens more,
+  at the job's per-token price (the encoder's work per source token is prefill work). Built as a pure
+  function; nothing in the lane reads it until the user confirms.
+
+**(b) The forced decoder prefix, declared per class.** A sequence-to-sequence decoder starts from
+fixed ids: `decoder_start_token_id`, and for mBART-50 the target language (`forced_bos_token_id`). The
+lowering carried them as the job's prompt. They are the class's, not the job's choice, so **the class
+declares them**: `forced_prompt_prefix` in its offers (the class id covers it). **They ride as the
+prompt's head, and the class fixes what that head is.** This is the hf-coverage option of checking
+the prompt's head, not a prefix inside `TextStream`, for one reason: the job is FP Job V4 underneath,
+and V4 refuses an empty prompt (`EmptyPrompt`) and hashes, prices and discloses the prompt as it
+stands. A seq2seq job's decoder prompt is otherwise empty, so a prefix the IR supplied would leave
+the V4 envelope a prompt it refuses, and V4 must not move. With the prefix at the prompt's head the
+stream is still `prompt ‖ generated`, and every V4 rule, the step tree and the court read it
+unchanged. The class fixes the head:
+
+- the preflight: the prefix only on a text class; every id below the text stage's `token_bound`; no
+  longer than `max_prompt_tokens`;
+- acceptance: where the prompt's ids ride (`PublicDa`), the prompt starts with the prefix;
+- where they do not (`PanelDa`): the worker refuses a job whose prompt does not start with it, and a
+  seat judges such a job as not the class's (it files nothing, so the claim is never licensed). The
+  executor bears the consequence of running it.
+
+**Order of implementation for this path.** The IR's `TokenSource::Source`; the class offer and the
+preflight; the V5 field, its acceptance and the lane's version-8 tail; the prefix's checks; the
+carriage of source ids in a close; the worker, seat and capture; a conformance test on the lowered
+encoder–decoders once their vectors are exported.
+
 ## II.3 Embedding / encoder
 
 **Job fields.** The body is `EmbeddingBodyV1`:
@@ -1550,7 +1607,11 @@ A new chapter `spec/palw/04c-generative-classes.md`, plus additions to 04b. Appl
     `⌈admitted per-image work / per-token work⌉` and charged at the job's per-token price.
 14. **May a class with image slots also take text-only V4 jobs?** Decided 2026-09-29: no. A class with
     slots takes V5 only, and the text-only use registers the text-only class (the same weights,
-    another pipeline), so each behaviour keeps one encoding.
+    another pipeline), so each behaviour keeps one encoding. Extended 2026-09-29 (§II.2.2): a class
+    that reads a source takes V5 only as well.
+15. **The price of a V5 job's source tokens** (§II.2.2) [RFC-0001]. Recommendation, **pending user
+    confirmation** alongside 13: source tokens are priced as prompt tokens, at the job's per-token
+    price.
 
 ## Activation plan and order of implementation
 
@@ -1615,6 +1676,7 @@ naming R's domain 0. Steps 1–8 take about 4–5 calendar months with two or th
 | 11 | multi-codebook audio | **later** (a later FP job version) |
 | 12 | privacy | image jobs **default to `PanelDa`**; `PublicDa` stays available when the user chooses it |
 | 13 | V5 image price | **pending user confirmation** — recommendation: prefill-equivalent tokens per slot, floored at `⌈per-image work / per-token work⌉`, at the job's per-token price |
-| 14 | V4 jobs on a class with image slots | **no** (2026-09-29): a class with slots takes V5 only |
+| 14 | V4 jobs on a class with image slots | **no** (2026-09-29): a class with slots takes V5 only; likewise a class that reads a source (§II.2.2) |
+| 15 | V5 source-token price | **pending user confirmation** — recommendation: priced as prompt tokens, at the job's per-token price |
 
 The rest of the RFC (Parts I and II, the program surface, the activation order) stands as written.
