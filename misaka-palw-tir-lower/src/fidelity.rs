@@ -127,6 +127,77 @@ pub fn compare(float: &[Vec<Vec<f32>>], int: &[Vec<Vec<f64>>], seqs: &[Vec<usize
     m
 }
 
+/// The error of one site of one occurrence: every committed node that holds an HL site's value,
+/// decoded with its scale, against the float reference's value at the same position.
+#[derive(Clone, Debug, Serialize)]
+pub struct SiteError {
+    pub key: String,
+    /// `‖int − float‖ / ‖float‖` over every position.
+    pub rel_l2: f64,
+    pub max_abs: f64,
+    pub float_absmax: f64,
+}
+
+/// Per-site errors along one sequence (position-major float run with a trace, so small models
+/// only), worst first.
+#[allow(clippy::too_many_arguments)]
+pub fn site_errors(
+    prep: &Prepared,
+    params_f: &crate::float_ref::ParamStore,
+    stats: &BTreeMap<String, SiteStat>,
+    policy: &crate::quant::QuantPolicy,
+    mat: &crate::lower::Materialised,
+    seq: &[usize],
+) -> Result<Vec<SiteError>> {
+    use crate::lower::FillCtx;
+    let hl = &prep.hl;
+    let lw = &prep.lowered;
+    let p = &lw.program;
+    let interp = tir::Interpreter::new(p).map_err(|e| LowerError::eval(e.to_string()))?;
+    let mut state = tir::RunState::default();
+    let mut sess = crate::float_ref::Session::new(hl, params_f).with_trace();
+    let empty = crate::float_ref::ParamStore::default();
+    // (key) → (Σ(a−b)², Σb², max|a−b|, max|b|)
+    let mut acc: BTreeMap<String, (f64, f64, f64, f64)> = BTreeMap::new();
+    for t in seq {
+        sess.step(*t)?;
+        let tr = sess.trace.clone().unwrap_or_default();
+        let step = interp.step(&mat.params, &mut state, *t as u32).map_err(|e| LowerError::eval(e.to_string()))?;
+        for c in &step.commits {
+            let Some((site, key, len)) = lw.site_nodes.get(&(c.block, c.node)) else { continue };
+            let prefix = if c.block == p.schedule.pre {
+                "pre.".to_string()
+            } else if c.block == p.schedule.post {
+                "post.".to_string()
+            } else {
+                format!("L{}.", c.layer.unwrap_or(0))
+            };
+            let k = format!("{prefix}{site}");
+            let Some(fv) = tr.get(&k) else { continue };
+            if fv.len() != c.value.data.len() {
+                continue;
+            }
+            let ctx = FillCtx::for_scales(hl, &empty, c.layer.map(|l| l as usize), &prefix, stats, mat.resid_scale, policy);
+            let sv = if key.split() > 0 { ctx.scale_vec(key, *len)? } else { vec![ctx.scale(key)?; fv.len()] };
+            let e = acc.entry(k).or_insert((0.0, 0.0, 0.0, 0.0));
+            for (i, (iv, f)) in c.value.data.iter().zip(fv).enumerate() {
+                let a = *iv as f64 * sv[i % sv.len()];
+                let d = a - *f as f64;
+                e.0 += d * d;
+                e.1 += (*f as f64) * (*f as f64);
+                e.2 = e.2.max(d.abs());
+                e.3 = e.3.max((*f as f64).abs());
+            }
+        }
+    }
+    let mut out: Vec<SiteError> = acc
+        .into_iter()
+        .map(|(key, (dd, bb, mx, fm))| SiteError { key, rel_l2: (dd / bb.max(1e-300)).sqrt(), max_abs: mx, float_absmax: fm })
+        .collect();
+    out.sort_by(|a, b| b.rel_l2.partial_cmp(&a.rel_l2).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(out)
+}
+
 /// Seeded pseudo-random token sequences (tiny models have no text).
 pub fn random_sequences(vocab: usize, count: usize, len: usize, seed: u64) -> Vec<Vec<usize>> {
     use rand::{Rng, SeedableRng};

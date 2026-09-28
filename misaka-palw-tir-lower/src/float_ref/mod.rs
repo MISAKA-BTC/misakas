@@ -191,14 +191,21 @@ pub struct Session<'a> {
     hist: BTreeMap<(u32, usize), Vec<Vec<f32>>>,
     pos: usize,
     pub sites: Option<BTreeMap<String, SiteStat>>,
+    /// Every site's output of the current step, when tracing (cleared by each `step`).
+    pub trace: Option<BTreeMap<String, Vec<f32>>>,
 }
 
 impl<'a> Session<'a> {
     pub fn new(prog: &'a HlProgram, params: &'a ParamStore) -> Self {
-        Session { prog, params, fixed: BTreeMap::new(), hist: BTreeMap::new(), pos: 0, sites: None }
+        Session { prog, params, fixed: BTreeMap::new(), hist: BTreeMap::new(), pos: 0, sites: None, trace: None }
     }
     pub fn with_site_stats(mut self) -> Self {
         self.sites = Some(BTreeMap::new());
+        self
+    }
+    /// Record every site's output of each step (keys as in the statistics: `L3.attn.q`).
+    pub fn with_trace(mut self) -> Self {
+        self.trace = Some(BTreeMap::new());
         self
     }
     pub fn position(&self) -> usize {
@@ -226,6 +233,9 @@ impl<'a> Session<'a> {
 
     /// Logits for `token` at the current position; advances the position.
     pub fn step(&mut self, token: usize) -> Result<Vec<f32>> {
+        if let Some(t) = self.trace.as_mut() {
+            t.clear();
+        }
         if token >= self.prog.vocab {
             return Err(LowerError::eval(format!("token {token} ≥ vocab {}", self.prog.vocab)));
         }
@@ -272,6 +282,9 @@ impl<'a> Session<'a> {
             let out = self.eval_node(node, &vals, carries, layer, token, &prefix)?;
             if let (Some(site), Some(stats)) = (&node.site, self.sites.as_mut()) {
                 stats.entry(format!("{prefix}{site}")).or_default().observe(&out[0], self.pos);
+            }
+            if let (Some(site), Some(tr)) = (&node.site, self.trace.as_mut()) {
+                tr.insert(format!("{prefix}{site}"), out[0].clone());
             }
             vals.push(out);
         }
@@ -372,6 +385,8 @@ impl<'a> Session<'a> {
             }
             Op::GatedRmsNorm { eps, groups, gate_first } => {
                 let w = self.param(ins[2], layer)?;
+                let gate: Vec<f32> = x(1)?.iter().map(|z| act(Act::Silu, *z)).collect();
+                self.sub_site(prefix, &node.site, "gate", &gate);
                 one(gated_rms_norm(x(0)?, x(1)?, &w.data, *eps, *groups, *gate_first))
             }
             Op::L2Norm { groups, eps } => {
@@ -427,16 +442,23 @@ impl<'a> Session<'a> {
                 let b = if *bias { Some(self.param(ins[3], layer)?.data.clone()) } else { None };
                 let xv = x(0)?.to_vec();
                 let st = self.fixed_mut(s, lyr);
-                let out = causal_conv(&xv, st, &w, b.as_deref(), *channels, *kernel, *a);
-                one(out)
+                let pre = causal_conv(&xv, st, &w, b.as_deref(), *channels, *kernel, None);
+                // The pre-activation is a sub-site: an integer conv narrows there before its table.
+                self.sub_site(prefix, &node.site, "pre", &pre);
+                one(match a {
+                    Some(a) => pre.iter().map(|v| act(*a, *v)).collect(),
+                    None => pre,
+                })
             }
             Op::GatedDelta { k_heads, v_heads, dk, dv, head_map, q_scale } => {
                 let Ref::State(s) = ins[5] else { return Err(LowerError::eval("GDN without state")) };
                 let (q, k, v, g, beta) = (x(0)?.to_vec(), x(1)?.to_vec(), x(2)?.to_vec(), x(3)?.to_vec(), x(4)?.to_vec());
                 let st = self.fixed_mut(s, lyr);
-                let out = gated_delta(&q, &k, &v, &g, &beta, st, *k_heads, *v_heads, *dk, *dv, *head_map, *q_scale);
+                let mut deltas = Vec::new();
+                let out = gated_delta_traced(&q, &k, &v, &g, &beta, st, *k_heads, *v_heads, *dk, *dv, *head_map, *q_scale, &mut deltas);
                 let snap = if self.sites.is_some() { self.fixed[&(s, lyr)].clone() } else { vec![] };
                 self.sub_site(prefix, &node.site, "state", &snap);
+                self.sub_site(prefix, &node.site, "delta", &deltas);
                 one(out)
             }
             Op::SelectiveScan { inner, state } => {
@@ -904,6 +926,27 @@ pub fn gated_delta(
     map: HeadMap,
     q_scale: f64,
 ) -> Vec<f32> {
+    let mut unused = Vec::new();
+    gated_delta_traced(q, k, v, g, beta, s, nk, nv, dk, dv, map, q_scale, &mut unused)
+}
+
+/// [`gated_delta`], also returning every head's delta `β(v − Sᵀk)` in `deltas`.
+#[allow(clippy::too_many_arguments)]
+pub fn gated_delta_traced(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    g: &[f32],
+    beta: &[f32],
+    s: &mut [f32],
+    nk: usize,
+    nv: usize,
+    dk: usize,
+    dv: usize,
+    map: HeadMap,
+    q_scale: f64,
+    deltas: &mut Vec<f32>,
+) -> Vec<f32> {
     let rep = nv / nk;
     let mut out = vec![0f32; nv * dv];
     for vh in 0..nv {
@@ -922,6 +965,7 @@ pub fn gated_delta(
             let mem: f64 = (0..dk).map(|i| st[i * dv + j] as f64 * kv[i] as f64).sum();
             *dj = (vv[j] as f64 - mem) * beta[vh] as f64;
         }
+        deltas.extend(delta.iter().map(|d| *d as f32));
         for i in 0..dk {
             for j in 0..dv {
                 st[i * dv + j] = (st[i * dv + j] as f64 + kv[i] as f64 * delta[j]) as f32;

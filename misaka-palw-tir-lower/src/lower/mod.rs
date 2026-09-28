@@ -95,6 +95,8 @@ pub enum Base {
     Site { names: Vec<String>, wide: bool, split: usize },
     /// Q24 fixed point (`2^−24`).
     Q24,
+    /// A scale known when lowering (a value with a proven range, e.g. `clamp(up, −l, l) + 1`).
+    Fixed(f64),
 }
 
 /// The float value of one integer unit: `resolve(base) · factor`.
@@ -148,6 +150,9 @@ pub struct Lowered {
     pub logits_key: ScaleKey,
     /// TIR block index of each HL block.
     pub block_map: Vec<u8>,
+    /// `(TIR block, node)` → the HL site whose float value the node holds, its scale and width:
+    /// what a per-site comparison against the float reference decodes committed values with.
+    pub site_nodes: BTreeMap<(u8, u16), (String, ScaleKey, usize)>,
 }
 
 impl Lowered {
@@ -220,17 +225,24 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     let token_bound = u32::try_from(hl.vocab).map_err(|_| LowerError::not_lowerable("vocabulary beyond u32"))?;
     let mut pb = ProgramBuilder::new(token_bound, hb);
+    // A param read twice in one occurrence (a tied embedding: the pre gather and the post head)
+    // must keep the plain codes its other reader shares. A per-layer param read by two layer KINDS
+    // is never read twice in one occurrence.
     let mut uses: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut shared: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
     for blk in &hl.blocks {
+        let mut here: BTreeMap<u32, usize> = BTreeMap::new();
         for n in &blk.nodes {
             for r in &n.inputs {
                 if let hl::Ref::Param(p) = r {
                     *uses.entry(*p).or_default() += 1;
+                    *here.entry(*p).or_default() += 1;
                 }
             }
         }
+        shared.extend(here.into_iter().filter(|(_, n)| *n > 1).map(|(p, _)| p));
     }
-    let shared = uses.into_iter().filter(|(_, n)| *n > 1).map(|(p, _)| p).collect();
+    shared.extend(uses.into_iter().filter(|(p, n)| *n > 1 && !hl.params[*p as usize].per_layer).map(|(p, _)| p));
     let mut cx = Cx {
         hl,
         fills: Vec::new(),
@@ -238,7 +250,9 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         tstate: BTreeMap::new(),
         history_bound: hb,
         logits_key: None,
+        site_nodes: BTreeMap::new(),
         shared,
+        split_max_readers: usize::MAX,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     // HL order is pre, layer kinds, post; TIR keeps it.
@@ -251,7 +265,47 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     order.push(hl.post);
     let mut logits = None;
     for &hbk in &order {
-        let (tb, lg) = lower_block(&mut pb, &mut cx, hbk)?;
+        // The builder panics on a block past NF-12's node cap. The lowering then gives up the
+        // outlier splits of the most-read values first and tries again (the program stays a
+        // function of the architecture); a block that does not fit even so is a refusal.
+        let mut result = None;
+        for readers in [usize::MAX, 3, 1, 0] {
+            let snap = (
+                pb.params.len(),
+                pb.consts.len(),
+                pb.states.len(),
+                pb.blocks.len(),
+                cx.fills.len(),
+                cx.tstate.clone(),
+                cx.resid_sites.clone(),
+                cx.site_nodes.clone(),
+                cx.logits_key.clone(),
+            );
+            cx.split_max_readers = readers;
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower_block(&mut pb, &mut cx, hbk)));
+            match r {
+                Ok(v) => {
+                    result = Some(v?);
+                    break;
+                }
+                Err(p) => {
+                    let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                    pb.params.truncate(snap.0);
+                    pb.consts.truncate(snap.1);
+                    pb.states.truncate(snap.2);
+                    pb.blocks.truncate(snap.3);
+                    cx.fills.truncate(snap.4);
+                    cx.tstate = snap.5;
+                    cx.resid_sites = snap.6;
+                    cx.site_nodes = snap.7;
+                    cx.logits_key = snap.8;
+                    if !msg.contains("exceeds") || readers == 0 {
+                        return Err(LowerError::not_lowerable(format!("block `{}`: {msg}", hl.blocks[hbk].name)));
+                    }
+                }
+            }
+        }
+        let (tb, lg) = result.expect("a lowering attempt returns or refuses");
         block_map[hbk] = tb;
         if lg.is_some() {
             logits = lg;
@@ -267,7 +321,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no logits scale"))?;
-    Ok(Lowered { program, fills, resid_sites, logits_key, block_map })
+    Ok(Lowered { program, fills, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes })
 }
 
 // ───────────────────────────── lowering state ─────────────────────────────
@@ -281,9 +335,13 @@ struct Cx<'h> {
     tstate: BTreeMap<u32, u16>,
     history_bound: u32,
     logits_key: Option<ScaleKey>,
+    site_nodes: BTreeMap<(u8, u16), (String, ScaleKey, usize)>,
     /// HL params read by more than one node (a tied embedding): a projection over them keeps the
     /// plain per-row codes the other reader shares.
     shared: std::collections::BTreeSet<u32>,
+    /// Split a value's outlier channels only when at most this many projections read it: each
+    /// split projection costs 9 nodes more, and a block has 512 (NF-12).
+    split_max_readers: usize,
 }
 
 /// A lowered value: a TIR operand, its dtype, its scale, and the HL site whose statistics
@@ -333,6 +391,10 @@ struct Lb {
     windows: BTreeMap<u32, (tir::Ref, ScaleKey)>,
     angles: BTreeMap<u32, (tir::Ref, tir::Ref)>,
     requants: usize,
+    /// Nodes a composite reads through a pattern and that produce no TIR node of their own.
+    absorbed: Vec<bool>,
+    /// For each GatedDelta node: where its decay and beta come from.
+    gdn: BTreeMap<usize, GdnInputs>,
     /// Name suffix for per-layer params whose base name another block already declared.
     suffix: String,
 }
@@ -359,12 +421,17 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
         vals: Vec::with_capacity(blk.nodes.len()),
         wants: plan(hl, hbk),
         rope_sites: rope_consumer_sites(blk),
-        split: split_plan(hl, blk, &cx.shared),
+        split: split_plan(hl, blk, &cx.shared, cx.split_max_readers),
         windows: BTreeMap::new(),
         angles: BTreeMap::new(),
         requants: 0,
+        absorbed: vec![false; blk.nodes.len()],
+        gdn: BTreeMap::new(),
         suffix,
     };
+    gdn_patterns(hl, blk, &mut lb)?;
+    concat_wants(blk, &mut lb);
+    let tb = pb.blocks.len() as u8;
     let mut b = pb.block(&blk.name, if blk.role == BlockRole::Pre { vec![] } else { carry_sig });
     for (i, node) in blk.nodes.iter().enumerate() {
         let out = lower_node(&mut b, cx, &mut lb, i, node)
@@ -372,6 +439,16 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
                 LowerError::NotLowerable(m) => LowerError::NotLowerable(format!("block `{}` node {i} ({}): {m}", blk.name, node.op.name())),
                 other => other,
             })?;
+        if std::env::var_os("PALW_TIR_DEBUG").is_some() {
+            let last = out.iter().flatten().filter_map(|v| if let tir::Ref::Node(n) = v.r { Some(n) } else { None }).max();
+            eprintln!("  [{}] {i:>3} {:<14} {:<22} → node {last:?}", blk.name, node.op.name(), node.site.as_deref().unwrap_or(""));
+        }
+        if let (Some(site), Some(Some(v))) = (&node.site, out.first())
+            && let tir::Ref::Node(n) = v.r
+            && v.dt != DType::Idx
+        {
+            cx.site_nodes.entry((tb, n)).or_insert((site.clone(), v.key.clone(), v.len));
+        }
         lb.vals.push(out);
     }
     match blk.role {
@@ -494,7 +571,7 @@ fn rope_consumer_sites(blk: &hl::Block) -> Vec<Vec<String>> {
 /// Outlier channels to split off, per node: only for a value whose every consumer is the input of
 /// a projection over an unshared weight, and whose producer narrows per channel (a norm, a
 /// projection, an elementwise product, an attention context).
-fn split_plan(hl: &HlProgram, blk: &hl::Block, shared: &std::collections::BTreeSet<u32>) -> Vec<usize> {
+fn split_plan(hl: &HlProgram, blk: &hl::Block, shared: &std::collections::BTreeSet<u32>, max_readers: usize) -> Vec<usize> {
     let n = blk.nodes.len();
     let mut consumers: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
     for (i, node) in blk.nodes.iter().enumerate() {
@@ -511,7 +588,8 @@ fn split_plan(hl: &HlProgram, blk: &hl::Block, shared: &std::collections::BTreeS
     }
     (0..n)
         .map(|i| {
-            let capable = matches!(blk.nodes[i].op, Op::Norm { .. } | Op::Mul | Op::Attention { .. } | Op::Linear { .. });
+            let capable =
+                matches!(blk.nodes[i].op, Op::Norm { .. } | Op::Mul | Op::Attention { .. } | Op::Linear { .. } | Op::GatedRmsNorm { .. });
             let all_linear = !consumers[i].is_empty()
                 && consumers[i].iter().all(|(c, k)| {
                     *c != usize::MAX
@@ -520,7 +598,7 @@ fn split_plan(hl: &HlProgram, blk: &hl::Block, shared: &std::collections::BTreeS
                         && matches!(blk.nodes[*c].inputs[1], hl::Ref::Param(p) if !shared.contains(&p) && hl.params[p as usize].shape.len() == 2)
                 });
             let width: usize = blk.nodes[i].outs.first().map(|s| s.iter().product()).unwrap_or(0);
-            if capable && all_linear { split_size(width) } else { 0 }
+            if capable && all_linear && consumers[i].len() <= max_readers { split_size(width) } else { 0 }
         })
         .collect()
 }
@@ -631,8 +709,16 @@ fn decl_ms(
 fn narrow(b: &mut BlockBuilder<'_>, x: tir::Ref, m: tir::Ref, s: tir::Ref, z: Option<tir::Ref>, dt: DType) -> tir::Ref {
     let (lo, hi) = code_bounds(dt);
     let p2 = b.pow2_of(s);
-    let z = z.unwrap_or_else(|| b.c(DType::I64, 0));
-    b.narrow_a16(x, m, p2, z, lo, hi, dt)
+    match z {
+        Some(z) => b.narrow_a16(x, m, p2, z, lo, hi, dt),
+        // Without a zero term the template's `Clamp_i64 → Add 0 → Clamp[lo,hi]` is exactly
+        // `Clamp[lo,hi]` (`[lo, hi] ⊆ i64`): two nodes fewer, every value identical.
+        None => {
+            let p = b.mul(x, m, DType::I128);
+            let q = b.div(p, p2, Rounding::HalfAwayFromZero, DType::I128);
+            b.clamp(q, lo, hi, dt)
+        }
+    }
 }
 
 /// Re-express `v` in `(dt, key)`: one uniform narrowing (the identity when it already is).
@@ -697,6 +783,9 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         if let hl::Ref::Param(p) = r { Ok(p) } else { Err(LowerError::eval(format!("internal: expected a param, got {r:?}"))) }
     };
     let out_len = node.outs.first().map(|s| s.iter().product::<usize>()).unwrap_or(0);
+    if lb.absorbed[i] {
+        return Ok(vec![None; node.outs.len()]);
+    }
     match &node.op {
         Op::Embedding => {
             let tp = pidx(node.inputs[1])?;
@@ -811,15 +900,12 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             ])
         }
         Op::MoeExperts { top_k, act, glu, bias } => {
-            if *glu != crate::spec::Glu::Standard {
-                return Err(LowerError::not_lowerable("the clamped SwiGLU of gpt-oss experts is not in Gate 2a"));
-            }
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             let idx = operand(lb, node.inputs[1])?;
             let w = operand(lb, node.inputs[2])?;
             let ps: Vec<u32> = (3..if *bias { 9 } else { 6 }).map(|k| pidx(node.inputs[k])).collect::<Result<_>>()?;
-            let v = lower_moe(b, cx, lb, &x, &idx, &w, &ps, *top_k, *act, &site, &want)?;
+            let v = lower_moe(b, cx, lb, &x, &idx, &w, &ps, *top_k, *act, *glu, &site, &want)?;
             note_resid(cx, lb, &v);
             one(v)
         }
@@ -849,9 +935,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             Ok(vec![None])
         }
         Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window: _, alibi, sinks } => {
-            if *sinks {
-                return Err(LowerError::not_lowerable("attention sinks are not in Gate 2a"));
-            }
+            let sink_param = if *sinks { Some(pidx(node.inputs[3])?) } else { None };
             let q = operand(lb, node.inputs[0])?;
             let q = codes(b, cx, lb, &q)?;
             let (hl::Ref::State(ks), hl::Ref::State(vs)) = (node.inputs[1], node.inputs[2]) else {
@@ -865,7 +949,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 StateKind::Fixed => return Err(LowerError::eval("internal: attention over a Fixed state")),
             };
             let shape = AttnDims { heads: *heads, kv: *kv_heads, d: *head_dim, dv: *v_head_dim, window };
-            let extra = AttnExtras { scale: *scale, softcap: *softcap, alibi: alibi.clone() };
+            let extra = AttnExtras { scale: *scale, softcap: *softcap, alibi: alibi.clone(), sinks: sink_param };
             one(lower_attention(b, cx, lb, &q, (kw, kk), (vw, vk), shape, &extra, &site, &want)?)
         }
         Op::Slice { start, len } => {
@@ -885,7 +969,52 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 return Err(LowerError::not_lowerable("a concat of more than 8 values"));
             }
             let r = b.concat(&refs, 0);
+            let site = if site.is_empty() { first.site.clone() } else { site };
             one(Val { r, len: out_len, site, ..first })
+        }
+        Op::CausalConv1d { channels, kernel, bias, act } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let hl::Ref::State(st) = node.inputs[1] else { return Err(LowerError::eval("internal: conv without a state")) };
+            let w = pidx(node.inputs[2])?;
+            let bp = if *bias { Some(pidx(node.inputs[3])?) } else { None };
+            one(lower_conv(b, cx, lb, i, &x, st, w, bp, *channels, *kernel, *act, &site)?)
+        }
+        Op::L2Norm { groups, eps: _ } => {
+            // `x·rsqrt(Σx² + eps)`: the library's Q15 L2 norm (a zero row stays zero; eps ≈ 1e-6
+            // is below code resolution for every other row).
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let g = out_len / groups;
+            let xr = b.reshape_fixed(x.r, &[*groups as u32, g as u32]);
+            let y = l2_unit_q15(b, xr);
+            let r = b.reshape_fixed(y, &[out_len as u32]);
+            b.commit(r);
+            one(Val { r, dt: DType::I16, key: ScaleKey { base: Base::Fixed(1.0 / 32768.0), factor: 1.0 }, len: out_len, site })
+        }
+        Op::GatedDelta { k_heads, v_heads, dk, dv, head_map, q_scale } => {
+            let q = operand(lb, node.inputs[0])?;
+            let k = operand(lb, node.inputs[1])?;
+            let v = operand(lb, node.inputs[2])?;
+            let v = codes(b, cx, lb, &v)?;
+            let hl::Ref::State(st) = node.inputs[5] else { return Err(LowerError::eval("internal: GDN without a state")) };
+            let gi = lb.gdn.get(&i).cloned().ok_or_else(|| LowerError::eval("internal: GDN inputs not matched"))?;
+            let a = lb.vals[gi.a as usize][0].clone().ok_or_else(|| LowerError::eval("internal: GDN `a` not lowered"))?;
+            let bb = lb.vals[gi.b as usize][0].clone().ok_or_else(|| LowerError::eval("internal: GDN `b` not lowered"))?;
+            let dims = GdnDims { nk: *k_heads, nv: *v_heads, dk: *dk, dv: *dv, map: *head_map, q_scale: *q_scale };
+            one(lower_gdn(b, cx, lb, &q, &k, &v, &a, &bb, &gi, st, dims, &site, &want)?)
+        }
+        Op::GatedRmsNorm { eps, groups, gate_first } => {
+            if *gate_first {
+                return Err(LowerError::not_lowerable("the gate-first gated RMSNorm (Mamba2) is not in Gate 2a"));
+            }
+            let x = operand(lb, node.inputs[0])?;
+            let z = operand(lb, node.inputs[1])?;
+            let z = codes(b, cx, lb, &z)?;
+            let gain = pidx(node.inputs[2])?;
+            let v = lower_gated_norm(b, cx, lb, &x, &z, gain, *eps, *groups, &site, &want)?;
+            note_resid(cx, lb, &v);
+            one(v)
         }
         other => {
             Err(LowerError::not_lowerable(format!("op {} is not in Gate 2a (dense decoders only)", other.name())))
@@ -1127,29 +1256,9 @@ fn lower_norm(
             NormKind::Layer => base * (g * g) as f64 / 4f64.powi(k as i32),
         })
     });
-    let e1 = eps_q.clone();
-    let ez = decl(
-        b,
-        cx,
-        lb,
-        &format!("{site}.eps_m"),
-        DType::I64,
-        &[1],
-        pl,
-        Arc::new(move |c| Ok(IntTensor::i64(vec![1], vec![crate::quant::eps_pair(e1(c)?).0]))),
-    )?;
-    let es = decl(
-        b,
-        cx,
-        lb,
-        &format!("{site}.eps_s"),
-        DType::I8,
-        &[1],
-        pl,
-        Arc::new(move |c| Ok(IntTensor::i8(vec![1], vec![crate::quant::eps_pair(eps_q(c)?).1]))),
-    )?;
+    let eps_p = decl_eps(b, cx, lb, site, eps_q)?;
     let u = match kind {
-        NormKind::Rms => b.rms_norm_wide_q36(xr, ez, es),
+        NormKind::Rms => rms_unit(b, xr, eps_p),
         NormKind::Layer => {
             let axis = if groups > 1 { 1 } else { 0 };
             let gg = b.c(DType::I64, g as i128);
@@ -1158,7 +1267,7 @@ fn lower_norm(
             let c = b.sub(nx, sum, DType::I64);
             let c = if k > 0 { b.shr(c, k, Rounding::HalfAwayFromZero, DType::I64) } else { c };
             let c = b.clamp(c, i32::MIN as i64, i32::MAX as i64, DType::I32);
-            b.rms_norm_wide_q36(c, ez, es)
+            rms_unit(b, c, eps_p)
         }
     };
     let u = if groups > 1 { b.reshape_fixed(u, &[n as u32]) } else { u };
@@ -1216,12 +1325,97 @@ fn lower_norm(
     Ok(Val { r, dt: want.dt, key: want.key.clone(), len: n, site: site.to_string() })
 }
 
+/// The norm's epsilon at the input's code scale, `eps · 2^24 / S_x²`, as one `i64` param.
+fn decl_eps(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    site: &str,
+    eps_q: Arc<dyn Fn(&FillCtx<'_>) -> Result<f64> + Send + Sync>,
+) -> Result<tir::Ref> {
+    decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.eps"),
+        DType::I64,
+        &[1],
+        per_layer(lb),
+        Arc::new(move |c| Ok(IntTensor::i64(vec![1], vec![eps_q(c)?.round().clamp(0.0, i64::MAX as f64) as i64]))),
+    )
+}
+
+/// The unit row `x / √(mean(x²) + eps)` in Q24 along the last axis, for rows of any width up to
+/// `i32` — the value of the library's `rms_norm_wide_q36` in 21 nodes instead of 39.
+///
+/// The mean's exponent is taken out only when it is positive (`h = max(0, ⌊(log2 mean − 24)/2⌋)`):
+/// for a smaller mean `IntRsqrt` normalises internally and returns `y · 2^−e` exactly as the
+/// template's left-shift branch reassembles it, so both give the same integers; the eps is one
+/// `i64` param instead of a mantissa and a shift. (Proposed for `tir_library_v1`: the GDN + MoE
+/// hybrid layers of Qwen3-Next/3.5 do not fit NF-12's 512 nodes with the 39-node form.)
+fn rms_unit(b: &mut BlockBuilder<'_>, x: tir::Ref, eps: tir::Ref) -> tir::Ref {
+    let shape = b.shape(x);
+    let axis = shape.len() - 1;
+    let Dim::Fixed(n) = shape[axis] else { panic!("norm over H") };
+    let sq = b.mul(x, x, DType::I64);
+    let sum = b.reduce_sum(sq, axis, DType::I128);
+    let one = b.c(DType::I64, 1 << 24);
+    let scaled = b.mul(sum, one, DType::I128);
+    let nn = b.c(DType::I64, n as i128);
+    let mean0 = b.div(scaled, nn, Rounding::Floor, DType::I128);
+    let e = b.clamp(eps, 0, i64::MAX, DType::I64);
+    let mean = b.add(mean0, e, DType::I128);
+    let bit = b.log2_floor(mean, DType::I32);
+    let k = b.c(DType::I32, 24);
+    let t = b.sub(bit, k, DType::I32);
+    let two = b.c(DType::I32, 2);
+    let h = b.div(t, two, Rounding::Floor, DType::I32);
+    let h = b.clamp(h, 0, 51, DType::I32);
+    let h2 = b.mul(h, two, DType::I32);
+    let p2 = b.pow2_128_of(h2, 102);
+    let m = b.div(mean, p2, Rounding::Floor, DType::I128);
+    let m = b.clamp(m, 0, i64::MAX, DType::I64);
+    let r = b.int_rsqrt(m);
+    let prod = b.mul(x, r, DType::I128);
+    let p1 = b.pow2_128_of(h, 51);
+    let y = b.div(prod, p1, Rounding::Floor, DType::I128);
+    b.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32)
+}
+
+/// `x / ‖x‖` in Q15 codes along the last axis (the library's `l2_norm_q15`, a zero row stays
+/// zero) in 17 nodes: `IntRsqrt(Σx² / 2^2h) · x / 2^(h + 21)`, `h = max(0, ⌊(log2 Σx² − 24)/2⌋)`.
+fn l2_unit_q15(b: &mut BlockBuilder<'_>, x: tir::Ref) -> tir::Ref {
+    let axis = b.shape(x).len() - 1;
+    let sq = b.mul(x, x, DType::I64);
+    let sum = b.reduce_sum(sq, axis, DType::I64);
+    let bit = b.log2_floor(sum, DType::I32);
+    let k = b.c(DType::I32, 24);
+    let t = b.sub(bit, k, DType::I32);
+    let two = b.c(DType::I32, 2);
+    let h = b.div(t, two, Rounding::Floor, DType::I32);
+    let h = b.clamp(h, 0, 20, DType::I32);
+    let h2 = b.mul(h, two, DType::I32);
+    let p2 = b.pow2_128_of(h2, 40);
+    let m = b.div(sum, p2, Rounding::Floor, DType::I64);
+    let r = b.int_rsqrt(m);
+    let prod = b.mul(x, r, DType::I64);
+    let off = b.c(DType::I32, 21);
+    let sh = b.add(h, off, DType::I32);
+    let p1 = b.pow2_128_of(sh, 41);
+    let y = b.div(prod, p1, Rounding::Floor, DType::I64);
+    b.clamp(y, -32767, 32767, DType::I16)
+}
+
 /// The float function an activation table tabulates.
 #[derive(Clone, Copy, Debug)]
 enum TableFn {
     Act(Act),
     Softcap(f64),
     Clamp(f64, f64),
+    /// gpt-oss's gate half: `g·σ(α·g)` with `g = min(gate, limit)`.
+    ClampedGlu { alpha: f64, limit: f64 },
+    /// gpt-oss's up half: `clamp(up, −limit, limit) + 1`.
+    ClampedUp { limit: f64 },
 }
 
 impl TableFn {
@@ -1230,6 +1424,11 @@ impl TableFn {
             TableFn::Act(a) => crate::float_ref::act(a, x as f32) as f64,
             TableFn::Softcap(c) => (x / c).tanh() * c,
             TableFn::Clamp(lo, hi) => x.clamp(lo, hi),
+            TableFn::ClampedGlu { alpha, limit } => {
+                let g = x.min(limit);
+                g / (1.0 + (-(g * alpha)).exp())
+            }
+            TableFn::ClampedUp { limit } => x.clamp(-limit, limit) + 1.0,
         }
     }
 }
@@ -1258,9 +1457,9 @@ fn lower_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize,
             ))
         }),
     )?;
+    // `code + 32768` straight into `idx` (every i16 code lands in [0, 65535]).
     let off = b.c(DType::I32, 32768);
-    let at = b.add(x.r, off, DType::I32);
-    let at = b.cast(at, DType::Idx);
+    let at = b.add(x.r, off, DType::Idx);
     let r = b.gather(t, at, 0, 0);
     b.commit(r);
     Ok(Val { r, dt: DType::I16, key: out_key, len: x.len, site: site.to_string() })
@@ -1268,7 +1467,11 @@ fn lower_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize,
 
 /// [`lower_table`] for a value that is not an HL node's output (a sub-site of a composite).
 fn lower_table_named(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, f: TableFn, site: &str) -> Result<Val> {
-    let out_key = ScaleKey::site(vec![site.to_string()], false);
+    lower_table_keyed(b, cx, lb, x, f, site, ScaleKey::site(vec![site.to_string()], false))
+}
+
+/// A table whose output scale is given (not a calibrated site).
+fn lower_table_keyed(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, f: TableFn, site: &str, out_key: ScaleKey) -> Result<Val> {
     let (kx, ko) = (x.key.clone(), out_key.clone());
     let t = decl(
         b,
@@ -1286,9 +1489,9 @@ fn lower_table_named(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: 
             ))
         }),
     )?;
+    // `code + 32768` straight into `idx` (every i16 code lands in [0, 65535]).
     let off = b.c(DType::I32, 32768);
-    let at = b.add(x.r, off, DType::I32);
-    let at = b.cast(at, DType::Idx);
+    let at = b.add(x.r, off, DType::Idx);
     let r = b.gather(t, at, 0, 0);
     b.commit(r);
     Ok(Val { r, dt: DType::I16, key: out_key, len: x.len, site: site.to_string() })
@@ -1435,6 +1638,8 @@ struct AttnExtras {
     scale: f64,
     softcap: Option<f64>,
     alibi: Option<crate::rope::AlibiSpec>,
+    /// gpt-oss: a learned per-head logit that joins the softmax and is dropped.
+    sinks: Option<u32>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1573,7 +1778,29 @@ fn lower_attention(
         let sum = b.add(logits, bias, DType::I64);
         logits = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);
     }
-    let probs = b.softmax_shifted(logits, 24 - LOGIT_Q);
+    let probs = match ex.sinks {
+        None => b.softmax_shifted(logits, 24 - LOGIT_Q),
+        Some(sp) => {
+            let sink = decl(
+                b,
+                cx,
+                lb,
+                &format!("{site}.sinks"),
+                DType::I32,
+                &[heads],
+                per_layer(lb),
+                Arc::new(move |c| {
+                    let t = c.f(sp)?;
+                    Ok(IntTensor::i32(
+                        vec![t.data.len()],
+                        t.data.iter().map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32).collect(),
+                    ))
+                }),
+            )?;
+            let sink = b.reshape_fixed(sink, &[kv32, g32, 1]);
+            softmax_with_sink(b, logits, sink, 24 - LOGIT_Q)
+        }
+    };
     let vw = b.reshape(v.0, &[Dim::H, Dim::Fixed(kv32), Dim::Fixed(dv32)]);
     let vt = b.transpose(vw, &[1, 0, 2]);
     let o = b.matmul(probs, vt, DType::I64);
@@ -1657,6 +1884,7 @@ fn lower_moe(
     ps: &[u32],
     k: usize,
     act: Act,
+    glu: crate::spec::Glu,
     site: &str,
     want: &Want,
 ) -> Result<Val> {
@@ -1723,8 +1951,19 @@ fn lower_moe(
     b.commit(g16);
     let u16_ = proj(b, cx, lb, upp, ub, xb, kx.clone(), &sub("up"), uk.clone(), DType::I16)?;
     b.commit(u16_);
-    let gv = Val { r: g16, dt: DType::I16, key: gk, len: k * i, site: sub("gate") };
-    let a16 = lower_table_named(b, cx, lb, &gv, TableFn::Act(act), &sub("act"))?;
+    let gv = Val { r: g16, dt: DType::I16, key: gk.clone(), len: k * i, site: sub("gate") };
+    let (a16, u16_, uk) = match glu {
+        crate::spec::Glu::Standard => (lower_table_named(b, cx, lb, &gv, TableFn::Act(act), &sub("act"))?, u16_, uk),
+        // gpt-oss: two single-input tables — `|g·σ(αg)| ≤ |g|` keeps the gate's scale, and the
+        // clamped up half lies in `[1 − l, 1 + l]`.
+        crate::spec::Glu::ClampedSwiGlu { alpha, limit } => {
+            let a = lower_table_keyed(b, cx, lb, &gv, TableFn::ClampedGlu { alpha, limit }, &sub("glu"), gk.clone())?;
+            let uv = Val { r: u16_, dt: DType::I16, key: uk.clone(), len: k * i, site: sub("up") };
+            let ukey = ScaleKey { base: Base::Fixed((limit + 1.0) * 2.0 / crate::quant::CODE16_MAX), factor: 1.0 };
+            let u = lower_table_keyed(b, cx, lb, &uv, TableFn::ClampedUp { limit }, &sub("up1"), ukey.clone())?;
+            (a, u.r, ukey)
+        }
+    };
     let hk = ScaleKey::site(vec![sub("hidden")], false);
     let p = b.mul(a16.r, u16_, DType::I32);
     let (ka, ku, kh) = (a16.key.clone(), uk.clone(), hk.clone());
@@ -1746,6 +1985,398 @@ fn lower_moe(
         b.commit(r);
     }
     Ok(Val { r, dt: want.dt, key: want.key.clone(), len: d, site: site.to_string() })
+}
+
+/// `softmax_shifted` over the last axis with one extra logit per row that joins the maximum and
+/// the sum and is then dropped (gpt-oss's sinks) — the template's steps and roundings, one term
+/// more: `m = max(max_j x_j, s)`, `e_j = IntExp(clamp(x_j − m) · 2^up)`,
+/// `p_j = (e_j · IntRecip(Σe + IntExp(clamp(s − m) · 2^up))) >> 24`.
+fn softmax_with_sink(b: &mut BlockBuilder<'_>, x: tir::Ref, sink: tir::Ref, up: u32) -> tir::Ref {
+    use tir::Cmp;
+    let axis = b.shape(x).len() - 1;
+    let mx = b.reduce_max(x, axis);
+    let gt = b.compare(mx, sink, Cmp::Gt);
+    let m = b.select(gt, mx, sink, DType::I32);
+    let floor = (i32::MIN as i64) >> up;
+    let scale = b.c(DType::I64, 1i128 << up);
+    let arg = |b: &mut BlockBuilder<'_>, v: tir::Ref| {
+        let d = b.sub(v, m, DType::I64);
+        let d = b.clamp(d, floor, 0, DType::I64);
+        let w = b.mul(d, scale, DType::I64);
+        b.clamp(w, i32::MIN as i64, 0, DType::I32)
+    };
+    let ax = arg(b, x);
+    let e = b.int_exp(ax);
+    let sa = arg(b, sink);
+    let es = b.int_exp(sa);
+    let sum = b.reduce_sum(e, axis, DType::I64);
+    let sum = b.add(sum, es, DType::I64);
+    let recip = b.int_recip(sum);
+    let p = b.mul(e, recip, DType::I128);
+    let q = b.shr(p, 24, Rounding::Floor, DType::I64);
+    b.clamp(q, 0, 1 << 25, DType::I32)
+}
+
+/// Where a gated-delta node's decay and beta come from: `g = A · softplus(a + dt_bias)` and
+/// `β = σ(b)`, matched in the HL graph and computed by the library's `decay_q36` and
+/// `int_sigmoid` on the Q24 projections instead of node by node.
+#[derive(Clone, Debug)]
+struct GdnInputs {
+    a: u32,
+    dt_bias: u32,
+    a_log_neg: u32,
+    b: u32,
+}
+
+/// Match every GatedDelta's decay/beta chains; the chain nodes are absorbed and the two
+/// projections feeding them narrow to Q24.
+fn gdn_patterns(hl: &HlProgram, blk: &hl::Block, lb: &mut Lb) -> Result<()> {
+    let mut consumers = vec![0usize; blk.nodes.len()];
+    for n in &blk.nodes {
+        for r in &n.inputs {
+            if let hl::Ref::Node(j, _) = r {
+                consumers[*j as usize] += 1;
+            }
+        }
+    }
+    let node_of = |r: hl::Ref| if let hl::Ref::Node(j, 0) = r { Some(j as usize) } else { None };
+    for (i, n) in blk.nodes.iter().enumerate() {
+        if !matches!(n.op, Op::GatedDelta { .. }) {
+            continue;
+        }
+        let bad = || LowerError::not_lowerable("a gated delta whose decay is not A·softplus(a + dt_bias) and beta σ(b)");
+        let gl = node_of(n.inputs[3]).ok_or_else(bad)?;
+        let (Op::Mul, [sp, hl::Ref::Param(a_neg)]) = (&blk.nodes[gl].op, blk.nodes[gl].inputs.as_slice()) else { return Err(bad()) };
+        let sp = node_of(*sp).ok_or_else(bad)?;
+        let (Op::Act(Act::Softplus), [t]) = (&blk.nodes[sp].op, blk.nodes[sp].inputs.as_slice()) else { return Err(bad()) };
+        let t = node_of(*t).ok_or_else(bad)?;
+        let (Op::Add, [a, hl::Ref::Param(dtb)]) = (&blk.nodes[t].op, blk.nodes[t].inputs.as_slice()) else { return Err(bad()) };
+        let a = node_of(*a).ok_or_else(bad)?;
+        let be = node_of(n.inputs[4]).ok_or_else(bad)?;
+        let (Op::Act(Act::Sigmoid), [bn]) = (&blk.nodes[be].op, blk.nodes[be].inputs.as_slice()) else { return Err(bad()) };
+        let bn = node_of(*bn).ok_or_else(bad)?;
+        for j in [gl, sp, t, be] {
+            if consumers[j] != 1 {
+                return Err(bad());
+            }
+            lb.absorbed[j] = true;
+        }
+        for j in [a, bn] {
+            if !matches!(blk.nodes[j].op, Op::Linear { .. }) || consumers[j] != 1 {
+                return Err(bad());
+            }
+            lb.wants[j] = Some(Want { dt: DType::I32, key: ScaleKey::q24() });
+        }
+        let _ = hl;
+        lb.gdn.insert(i, GdnInputs { a: a as u32, dt_bias: *dtb, a_log_neg: *a_neg, b: bn as u32 });
+    }
+    Ok(())
+}
+
+/// Projections concatenated into one row share one scale (the max over their sites), so the
+/// concat needs no change of scale.
+fn concat_wants(blk: &hl::Block, lb: &mut Lb) {
+    for n in &blk.nodes {
+        if !matches!(n.op, Op::Concat) {
+            continue;
+        }
+        let parts: Vec<usize> = n.inputs.iter().filter_map(|r| if let hl::Ref::Node(j, 0) = r { Some(*j as usize) } else { None }).collect();
+        if parts.len() != n.inputs.len() || parts.iter().any(|j| !matches!(blk.nodes[*j].op, Op::Linear { .. }) || lb.wants[*j].is_some()) {
+            continue;
+        }
+        let names: Vec<String> = parts.iter().filter_map(|j| blk.nodes[*j].site.clone()).collect();
+        for j in parts {
+            lb.wants[j] = Some(Want { dt: DType::I16, key: ScaleKey::site(names.clone(), false) });
+        }
+    }
+}
+
+/// Depthwise causal conv over the last `kernel` rows: `Fixed` state `[kernel − 1, C]` of codes,
+/// `Concat(state, row)`, the new state its last `kernel − 1` rows, `Σ_t taps[c,t] · window[t,c]`
+/// exactly, one per-channel narrowing to the pre-activation scale, then the activation table.
+#[allow(clippy::too_many_arguments)]
+fn lower_conv(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    i: usize,
+    x: &Val,
+    st: u32,
+    w: u32,
+    bias: Option<u32>,
+    ch: usize,
+    kernel: usize,
+    act: Option<Act>,
+    site: &str,
+) -> Result<Val> {
+    let hl = cx.hl;
+    let sd = &hl.states[st as usize];
+    let ts = match cx.tstate.get(&st) {
+        Some(t) => *t,
+        None => {
+            let t = b.pb.fixed_state(&sd.name, DType::I16, &[(kernel - 1) as u32, ch as u32], -32767, 32767, true);
+            cx.tstate.insert(st, t);
+            t
+        }
+    };
+    let row = b.reshape_fixed(x.r, &[1, ch as u32]);
+    let row = b.commit(row);
+    let win = b.concat(&[tir::Ref::State(ts), row], 0);
+    let keep = b.slice(win, 0, 1, (kernel - 1) as u32);
+    b.state_write(ts, keep);
+    let pd = &hl.params[w as usize];
+    let taps = decl(b, cx, lb, &pd.name, DType::I8, &[ch, kernel], pd.per_layer, weight_codes(w))?;
+    let tt = b.transpose(taps, &[1, 0]);
+    let prod = b.mul(win, tt, DType::I32);
+    let acc = b.reduce_sum(prod, 0, DType::I64);
+    let acc = b.reshape_fixed(acc, &[ch as u32]);
+    let pre_key = ScaleKey::site(vec![format!("{site}.pre")], false);
+    let (kx, kp) = (x.key.clone(), pre_key.clone());
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.pre"),
+        ch,
+        Arc::new(move |c| {
+            let rc = c.rows(w)?;
+            let (sx, sp) = (c.scale(&kx)?, c.scale(&kp)?);
+            Ok(rc.scales.iter().map(|sw| sw * sx / sp).collect())
+        }),
+    )?;
+    let z = match bias {
+        Some(bp) => {
+            let kp = pre_key.clone();
+            Some(decl(
+                b,
+                cx,
+                lb,
+                &format!("{site}.pre.z"),
+                DType::I64,
+                &[ch],
+                per_layer(lb),
+                Arc::new(move |c| {
+                    let bv = c.f(bp)?;
+                    let sp = c.scale(&kp)?;
+                    Ok(IntTensor::i64(vec![ch], bv.data.iter().map(|v| (*v as f64 / sp).round() as i64).collect()))
+                }),
+            )?)
+        }
+        None => None,
+    };
+    let pre = narrow(b, acc, m, s, z, DType::I16);
+    let pv = Val { r: pre, dt: DType::I16, key: pre_key, len: ch, site: format!("{site}.pre") };
+    match act {
+        Some(a) => lower_table(b, cx, lb, i, &pv, TableFn::Act(a), site),
+        None => {
+            b.commit(pre);
+            Ok(Val { site: site.to_string(), ..pv })
+        }
+    }
+}
+
+struct GdnDims {
+    nk: usize,
+    nv: usize,
+    dk: usize,
+    dv: usize,
+    map: crate::spec::HeadMap,
+    q_scale: f64,
+}
+
+/// The gated delta rule, one position (library `gdn_step_q36`), from the HL pieces: q and k as
+/// Q15 unit codes mapped to the value heads (grouping = `repeat_interleave`, tiling = modulo),
+/// v codes, the decay `exp(A·softplus(a + dt_bias))` by `decay_q36`, beta by `int_sigmoid`, and
+/// the state `S [heads, d_v, d_k]` in `i32` at a calibrated scale that is a power-of-two multiple
+/// of the delta's (`write_shift`).
+#[allow(clippy::too_many_arguments)]
+fn lower_gdn(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    q: &Val,
+    k: &Val,
+    v: &Val,
+    a: &Val,
+    bb: &Val,
+    gi: &GdnInputs,
+    st: u32,
+    dims: GdnDims,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let hl = cx.hl;
+    let GdnDims { nk, nv, dk, dv, map, q_scale } = dims;
+    let (nk32, nv32, dk32, dv32) = (nk as u32, nv as u32, dk as u32, dv as u32);
+    let r = (nv / nk) as u32;
+    let unit = ScaleKey { base: Base::Fixed(1.0 / 32768.0), factor: 1.0 };
+    for (name, x) in [("q", q), ("k", k)] {
+        if x.dt != DType::I16 || !x.key.same(&unit) {
+            return Err(LowerError::not_lowerable(format!("gated delta `{name}` is not an L2-normalised row")));
+        }
+    }
+    let to_v_heads = |b: &mut BlockBuilder<'_>, x: tir::Ref| -> tir::Ref {
+        match map {
+            crate::spec::HeadMap::Group => {
+                let y = b.reshape_fixed(x, &[nk32, 1, dk32]);
+                let y = b.broadcast(y, &[Dim::Fixed(nk32), Dim::Fixed(r), Dim::Fixed(dk32)]);
+                b.reshape_fixed(y, &[nv32, dk32])
+            }
+            crate::spec::HeadMap::Tile => {
+                let y = b.reshape_fixed(x, &[1, nk32, dk32]);
+                let y = b.broadcast(y, &[Dim::Fixed(r), Dim::Fixed(nk32), Dim::Fixed(dk32)]);
+                b.reshape_fixed(y, &[nv32, dk32])
+            }
+        }
+    };
+    let qh = to_v_heads(b, q.r);
+    let kh = to_v_heads(b, k.r);
+    let vh = b.reshape_fixed(v.r, &[nv32, dv32]);
+    let pl = per_layer(lb);
+    // decay = exp(−c · softplus(dt)), c = −A ≥ 0, dt = a + dt_bias, all Q24.
+    let (dtb, an) = (gi.dt_bias, gi.a_log_neg);
+    let dtp = decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.dt_bias"),
+        DType::I32,
+        &[nv],
+        pl,
+        Arc::new(move |c| Ok(IntTensor::i32(vec![nv], c.f(dtb)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))),
+    )?;
+    let cp = decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.decay_c"),
+        DType::I64,
+        &[nv],
+        pl,
+        Arc::new(move |c| Ok(IntTensor::i64(vec![nv], c.f(an)?.data.iter().map(|v| (-(*v as f64) * (1u64 << 24) as f64).round().max(0.0) as i64).collect()))),
+    )?;
+    let dt = b.add(a.r, dtp, DType::I64);
+    let dt = b.clamp(dt, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    let decay = b.decay_q36(dt, cp);
+    let decay = b.commit(decay);
+    let beta = b.int_sigmoid(bb.r);
+    let beta = b.commit(beta);
+    let _ = hl;
+    // The state and its scales: S at `s_s` (i32), the delta u at `s_u` (±2^24). The rank-one
+    // write `u ⊗ k` is at `s_u · 2^−15` and is shifted LEFT by `ws` (right when negative) into the
+    // state, so `s_s = s_u · 2^−15 / 2^ws` — `ws` the largest shift that keeps the calibrated state
+    // inside i32 with the policy's headroom.
+    let tsd = &hl.states[st as usize];
+    let ts = match cx.tstate.get(&st) {
+        Some(t) => *t,
+        None => {
+            let t = b.pb.fixed_state(&tsd.name, DType::I32, &[nv32, dv32, dk32], -(i32::MAX as i64), i32::MAX as i64, true);
+            cx.tstate.insert(st, t);
+            t
+        }
+    };
+    let (sn, dn) = (format!("{site}.state"), format!("{site}.delta"));
+    let kv = v.key.clone();
+    let scales = Arc::new(move |c: &FillCtx<'_>| -> Result<(f64, f64, i32, f64)> {
+        let sv = c.scale(&kv)?;
+        let su = crate::quant::code_scale(c.absmax(&dn)?, ((1u64 << 24) - 1) as f64, c.policy.headroom32);
+        let target = crate::quant::code_scale(c.absmax(&sn)?, crate::quant::CODE32_MAX, c.policy.headroom32);
+        let ws = (su / 32768.0 / target).log2().floor().clamp(-62.0, 20.0) as i32;
+        let ss = su / 32768.0 / 2f64.powi(ws);
+        Ok((sv, su, ws, ss))
+    });
+    let head_ms = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, name: &str, f: Arc<dyn Fn(&FillCtx<'_>) -> Result<f64> + Send + Sync>| -> Result<(tir::Ref, tir::Ref, tir::Ref)> {
+        let (m, s) = decl_ms(b, cx, lb, name, nv, Arc::new(move |c| Ok(vec![f(c)?; nv])))?;
+        let p2 = b.pow2_of(s);
+        let z = b.c(DType::I64, 0);
+        let z = b.broadcast(z, &[Dim::Fixed(nv32)]);
+        Ok((m, p2, z))
+    };
+    let s1 = scales.clone();
+    let read = head_ms(b, cx, lb, &format!("{site}.read"), Arc::new(move |c| {
+        let (sv, _, _, ss) = s1(c)?;
+        Ok(ss / 32768.0 / sv)
+    }))?;
+    let s2 = scales.clone();
+    let delta = head_ms(b, cx, lb, &format!("{site}.delta"), Arc::new(move |c| {
+        let (sv, su, _, _) = s2(c)?;
+        Ok(sv / su)
+    }))?;
+    let (s3, ko) = (scales.clone(), want.key.clone());
+    let out = head_ms(b, cx, lb, &format!("{site}.out"), Arc::new(move |c| {
+        let (_, _, _, ss) = s3(c)?;
+        Ok(ss / 32768.0 * q_scale / c.scale(&ko)?)
+    }))?;
+    let s4 = scales.clone();
+    let ws = decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.write_shift"),
+        DType::I32,
+        &[nv],
+        pl,
+        Arc::new(move |c| Ok(IntTensor::i32(vec![nv], vec![s4(c)?.2; nv]))),
+    )?;
+    let o = b.gdn_step_q36(ts, kh, vh, qh, decay, beta, read, delta, ws, out);
+    let o = b.reshape_fixed(o, &[(nv * dv) as u32]);
+    let o = b.commit(o);
+    Ok(Val { r: o, dt: DType::I32, key: want.key.clone(), len: nv * dv, site: site.to_string() })
+}
+
+fn q24_wide(v: f64) -> i32 {
+    (v * (1u64 << 24) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32
+}
+
+/// `RMSNorm(x) · w · silu(z)` per group (Qwen3-Next's output norm): the wide RMS template on the
+/// `i32` rows, the gate through a SiLU table, their product narrowed per channel with the gain.
+#[allow(clippy::too_many_arguments)]
+fn lower_gated_norm(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    z: &Val,
+    gain: u32,
+    eps: f64,
+    groups: usize,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let n = x.len;
+    let g = n / groups;
+    let pl = per_layer(lb);
+    let xr = b.reshape_fixed(x.r, &[groups as u32, g as u32]);
+    let kx = x.key.clone();
+    let eps_q = Arc::new(move |c: &FillCtx<'_>| -> Result<f64> {
+        let sx = c.scale(&kx)?;
+        Ok(eps * (1u64 << 24) as f64 / (sx * sx))
+    });
+    let _ = pl;
+    let eps_p = decl_eps(b, cx, lb, site, eps_q)?;
+    let u = rms_unit(b, xr, eps_p);
+    let u = b.reshape_fixed(u, &[n as u32]);
+    let gate = lower_table_named(b, cx, lb, z, TableFn::Act(Act::Silu), &format!("{site}.gate"))?;
+    let p = b.mul(u, gate.r, DType::I64);
+    let (kg, ky) = (gate.key.clone(), want.key.clone());
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        site,
+        n,
+        Arc::new(move |c| {
+            let w = c.f(gain)?.data.clone();
+            let sg = c.scale(&kg)?;
+            let sy = c.scale_vec(&ky, n)?;
+            Ok((0..n).map(|i| w[if w.len() == n { i } else { i % w.len() }] as f64 * sg / (1u64 << 24) as f64 / sy[i]).collect())
+        }),
+    )?;
+    let r = narrow(b, p, m, s, None, want.dt);
+    if want.dt == DType::I16 {
+        b.commit(r);
+    }
+    Ok(Val { r, dt: want.dt, key: want.key.clone(), len: n, site: site.to_string() })
 }
 
 /// Occurrence prefixes in program order: `pre.`, `L0.` … `L{n−1}.`, `post.`.

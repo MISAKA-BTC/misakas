@@ -137,4 +137,39 @@ macro_rules! moe {
     )*};
 }
 
-moe!(mixtral, qwen2_moe, qwen3_moe, olmoe, granitemoe);
+moe!(mixtral, qwen2_moe, qwen3_moe, olmoe, granitemoe, gpt_oss);
+
+macro_rules! recurrent {
+    ($($name:ident),* $(,)?) => {$(
+        #[test]
+        fn $name() {
+            check(stringify!($name), 0.8, 0.03);
+        }
+    )*};
+}
+
+recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm);
+
+/// Per-site errors of one fixture (debugging aid): `PALW_SITES=qwen3_5 cargo test … -- --ignored`.
+#[test]
+#[ignore]
+fn site_errors_of_one_fixture() {
+    let name = std::env::var("PALW_SITES").unwrap_or_else(|_| "llama".into());
+    let dir = fixture_dir(&name);
+    let cfg = std::fs::read_to_string(dir.join("config.json")).unwrap();
+    let prep = fidelity::prepare(&cfg, &LowerOpts::default()).unwrap();
+    let ck = Checkpoint::open(&dir).unwrap();
+    let (params, _) = ParamStore::from_source(&prep.hl, &prep.binding, &ck).unwrap();
+    let params = Arc::new(params);
+    let loader = Resident(params.clone());
+    let calib = fidelity::random_sequences(prep.hl.vocab, 6, 32, 7);
+    let quiet = |_: usize, _: usize| {};
+    let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).unwrap();
+    let policy = QuantPolicy::default();
+    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &policy, &quiet).unwrap();
+    let seq = fidelity::random_sequences(prep.hl.vocab, 1, 12, 1234).remove(0);
+    let errs = fidelity::site_errors(&prep, &params, &stats, &policy, &mat, &seq).unwrap();
+    for e in errs.iter().filter(|e| std::env::var("PALW_PREFIX").map(|p| e.key.starts_with(&p)).unwrap_or(true)).take(40) {
+        eprintln!("{:>32}  rel {:.5}  max|Δ| {:.4e}  |f|max {:.4e}", e.key, e.rel_l2, e.max_abs, e.float_absmax);
+    }
+}

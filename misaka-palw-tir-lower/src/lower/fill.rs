@@ -148,7 +148,31 @@ pub struct FillCtx<'a> {
     split_memo: Mutex<BTreeMap<String, Arc<SplitCodes>>>,
 }
 
-impl FillCtx<'_> {
+impl<'a> FillCtx<'a> {
+    /// A context that resolves scales only (decoding committed values; `params` may be empty).
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_scales(
+        hl: &'a HlProgram,
+        params: &'a ParamStore,
+        layer: Option<usize>,
+        prefix: &'a str,
+        stats: &'a BTreeMap<String, SiteStat>,
+        resid: f64,
+        policy: &'a QuantPolicy,
+    ) -> Self {
+        FillCtx {
+            hl,
+            params,
+            layer,
+            prefix,
+            stats,
+            resid,
+            policy,
+            memo: Mutex::new(BTreeMap::new()),
+            split_memo: Mutex::new(BTreeMap::new()),
+        }
+    }
+
     /// A float param of this occurrence.
     pub fn f(&self, p: u32) -> Result<&Tensor> {
         self.params.get(p, self.layer)
@@ -166,6 +190,7 @@ impl FillCtx<'_> {
         let base = match &key.base {
             Base::Resid => self.resid,
             Base::Q24 => 1.0 / (1u64 << 24) as f64,
+            Base::Fixed(v) => *v,
             Base::Site { names, wide, split } => {
                 let a = if *split == 0 {
                     let mut a = 0f64;
