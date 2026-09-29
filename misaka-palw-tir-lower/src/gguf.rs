@@ -1211,6 +1211,11 @@ impl GgufModel {
                         w(mixer_norm);
                         w(ffn_norm);
                     }
+                    Residual::Sandwich { pre_mixer, post_mixer, pre_ffn, post_ffn, .. } => {
+                        for n in [pre_mixer, post_mixer, pre_ffn, post_ffn] {
+                            w(n);
+                        }
+                    }
                 }
                 if let crate::spec::Mixer::Attention(a) = &mut ls.mixer
                     && let Some(qk) = a.qk_norm.as_mut()

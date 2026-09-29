@@ -524,6 +524,7 @@ pub fn hl_program(s: &VisionSpec) -> Result<(HlProgram, Binding)> {
         blocks,
         pre: 0,
         post: post_i,
+        layer_of: (0..schedule.len()).collect(),
         schedule,
     };
     hl.validate().map_err(|e| LowerError::eval(format!("internal: the tower's HL program: {e}")))?;

@@ -190,6 +190,14 @@ CONFIGS = {
                  rope_parameters={"rope_type": "llama3", "factor": 8.0, "low_freq_factor": 1.0,
                                   "high_freq_factor": 4.0, "original_max_position_embeddings": 16,
                                   "rope_theta": 500000.0}, max_position_embeddings=128), {}),
+    # Gemma-4 (text): a wider head on the full-attention layer (per_layer_config), K = V there
+    # (attention_k_eq_v) with one KV head, a weightless V norm, proportional rope, per-layer inputs,
+    # the parallel MoE block beside the MLP, final soft-cap.
+    "gemma4": (c("gemma4_text", "Gemma4ForCausalLM", L, num_hidden_layers=3, head_dim=8, global_head_dim=16,
+                 num_global_key_value_heads=1, attention_k_eq_v=True, sliding_window=4,
+                 layer_types=["sliding_attention", "sliding_attention", "full_attention"],
+                 hidden_size_per_layer_input=8, vocab_size_per_layer_input=V, enable_moe_block=True, num_experts=4,
+                 top_k_experts=2, moe_intermediate_size=16, final_logit_softcapping=5.0), {}),
     "gpt_oss": (c("gpt_oss", "GptOssForCausalLM", L, num_hidden_layers=2, head_dim=8, num_local_experts=4,
                   num_experts_per_tok=2, intermediate_size=16, sliding_window=4,
                   rope_scaling={"rope_type": "yarn", "factor": 4.0, "beta_fast": 32.0, "beta_slow": 1.0,

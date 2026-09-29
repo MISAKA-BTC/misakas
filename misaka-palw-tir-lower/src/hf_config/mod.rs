@@ -76,6 +76,7 @@ pub const SUPPORTED: &[(&str, &str)] = &[
     ("Glm4MoeForCausalLM", "C3 C8"),
     ("PhimoeForCausalLM", "C3 C8"),
     ("Llama4ForCausalLM", "C1 C3 C8"),
+    ("Gemma4ForCausalLM", "C1 C2 (C3 C8 with its MoE block)"),
     ("Llama4ForConditionalGeneration", "C1 C3 C8 (text decoder only)"),
     ("GptOssForCausalLM", "C2 C3 C8"),
     ("Qwen3NextForCausalLM", "C3 C4 C7"),
@@ -306,6 +307,7 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         "Glm4MoeForCausalLM" => moe::glm4_moe(&mut p)?,
         "PhimoeForCausalLM" => moe::phimoe(&mut p)?,
         "Llama4ForCausalLM" => moe::llama4_text(&mut p, "model.", "lm_head")?,
+        "Gemma4ForCausalLM" => dense::gemma4_text(&mut p, "model.", "lm_head")?,
         "GptOssForCausalLM" => moe::gpt_oss(&mut p)?,
         "Qwen3NextForCausalLM" => hybrid::qwen3_next(&mut p)?,
         "Qwen3_5ForCausalLM" => hybrid::qwen3_5_text(&mut p, false, "model.", "lm_head", vec![])?,
@@ -738,6 +740,9 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         output_gate: false,
         chunk: None,
         q_temperature: None,
+        v_norm: None,
+        v_from_k: false,
+        param_prefix: None,
     }
 }
 

@@ -109,9 +109,14 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                 | Op::Zeros
                 | Op::HistAppend
                 | Op::TokenShift => {}
-                Op::Add | Op::Sub | Op::Mul | Op::Scale { .. } | Op::Clamp { .. } | Op::Lerp | Op::PosScale { .. } => {
-                    c.elementwise += out
-                }
+                Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Scale { .. }
+                | Op::Clamp { .. }
+                | Op::Lerp
+                | Op::PosScale { .. }
+                | Op::ScaleParam => c.elementwise += out,
             }
         }
         per_block.push(c);

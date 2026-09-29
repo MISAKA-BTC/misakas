@@ -201,6 +201,7 @@ fn ffn(f: &Ffn) -> String {
             s
         }
         Ffn::RwkvChannel(c) => format!("RWKV-{} channel mix {}", c.version, c.intermediate),
+        Ffn::MlpMoe(mm) => format!("{} beside {}", ffn(&Ffn::Mlp(mm.mlp.clone())), ffn(&Ffn::Moe(mm.moe.clone()))),
     }
 }
 
@@ -219,6 +220,12 @@ fn residual(r: &Residual) -> String {
             format!("parallel ({}{})", norm(n), ffn_norm.as_ref().map(|f| format!(" / {}", norm(f))).unwrap_or_default())
         }
         Residual::PostNorm { mixer_norm, .. } => format!("post-LN ({})", norm(mixer_norm)),
+        Residual::Sandwich { pre_mixer, ple, layer_scalar, .. } => format!(
+            "sandwich ({}){}{}",
+            norm(pre_mixer),
+            ple.as_ref().map(|p| format!(", per-layer input {}", p.dim)).unwrap_or_default(),
+            if *layer_scalar { ", × layer scalar" } else { "" }
+        ),
     }
 }
 

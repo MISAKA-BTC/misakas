@@ -518,6 +518,7 @@ fn synth(s: &EncDecSpec, name: &str, table: Table, layers: usize, rows: usize, p
         pre: 0,
         post: 2,
         schedule: vec![1; layers],
+        layer_of: (0..layers).collect(),
     };
     hl.validate().map_err(|e| LowerError::eval(format!("internal: the {name}'s HL program: {e}")))?;
     let binding = Binding { srcs: table.into_iter().map(|(_, _, _, src)| src).collect(), aliases: vec![], ignored_prefixes: ignored(s) };

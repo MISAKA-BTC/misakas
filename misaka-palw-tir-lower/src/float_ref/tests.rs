@@ -150,6 +150,7 @@ fn router(scoring: Scoring, normalize: bool) -> RouterSpec {
         norm_eps: 0.0,
         scale: 1.0,
         jitter_eps: 0.0,
+        per_expert_scale: false,
     }
 }
 

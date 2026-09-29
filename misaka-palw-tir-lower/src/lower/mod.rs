@@ -705,6 +705,14 @@ fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
                     want[j as usize] = Some(Want { dt: w.dt, key: w.key.times(1.0 / c) });
                 }
             }
+            // `x · p` keeps the key: the product is formed in integers.
+            Op::ScaleParam => {
+                if let hl::Ref::Node(j, 0) = n.inputs[0]
+                    && want[j as usize].is_none()
+                {
+                    want[j as usize] = Some(w.clone());
+                }
+            }
             _ => {}
         }
     }
@@ -1226,8 +1234,36 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         Op::Route { router, experts, top_k } => {
             let l = operand(lb, node.inputs[0])?;
             let l = coerce(b, cx, lb, &l, DType::I32, &q14())?;
-            let sel_bias = if node.inputs.len() > 1 { Some(pidx(node.inputs[1])?) } else { None };
-            let (idx, w) = lower_route(b, cx, lb, &l, sel_bias, router, *experts, *top_k, &site)?;
+            let sel_bias = if router.selection_bias { Some(pidx(node.inputs[1])?) } else { None };
+            let (idx, mut w) = lower_route(b, cx, lb, &l, sel_bias, router, *experts, *top_k, &site)?;
+            // Gemma-4: each selected weight times its expert's learned scale (Q24).
+            if router.per_expert_scale {
+                let pp = pidx(node.inputs[1 + usize::from(router.selection_bias)])?;
+                let e = *experts;
+                let pes = decl(
+                    b,
+                    cx,
+                    lb,
+                    &format!("{site}.expert_scale"),
+                    DType::I32,
+                    &[e],
+                    per_layer(lb),
+                    Arc::new(move |c| {
+                        let v = &c.f(pp)?.data;
+                        // The combine's exact accumulator holds weights up to 2^27 (a scale of 4)
+                        // against i32 expert rows; a checkpoint past it is refused, never clipped.
+                        if let Some(bad) = v.iter().find(|x| !(0.0..=4.0).contains(*x)) {
+                            return Err(LowerError::not_lowerable(format!("per_expert_scale {bad} outside [0, 4]")));
+                        }
+                        Ok(IntTensor::i32(vec![e], v.iter().map(|x| q24_wide(*x as f64)).collect()))
+                    }),
+                )?;
+                let pes = b.clamp(pes, 0, 1 << 26, DType::I32);
+                let g = b.gather(pes, idx, 0, 0);
+                let p = b.mul(w, g, DType::I64);
+                let p = b.shr(p, 24, Rounding::HalfAwayFromZero, DType::I64);
+                w = b.clamp(p, 0, 1 << 27, DType::I32);
+            }
             b.commit(w);
             let wkey = ScaleKey::q24().times(router.scale);
             Ok(vec![
@@ -1254,6 +1290,30 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             one(lower_pos_scale(b, cx, lb, &x, *temp, &site, &want)?)
+        }
+        Op::ScaleParam => {
+            // Gemma-4's `layer_scalar`: `x · p` at x's own scale, `p` in Q24.
+            let x = operand(lb, node.inputs[0])?;
+            let x = coerce(b, cx, lb, &x, want.dt, &want.key)?;
+            let pp = pidx(node.inputs[1])?;
+            let c = decl(
+                b,
+                cx,
+                lb,
+                &format!("{site}.c"),
+                DType::I32,
+                &[1],
+                per_layer(lb),
+                Arc::new(move |c| Ok(IntTensor::i32(vec![1], vec![q24_wide(c.f(pp)?.data[0] as f64)]))),
+            )?;
+            let p = b.mul(x.r, c, DType::I64);
+            let p = b.shr(p, 24, Rounding::HalfAwayFromZero, DType::I64);
+            let (lo, hi) = code_bounds(x.dt);
+            let r = b.clamp(p, lo, hi, x.dt);
+            b.commit(r);
+            let v = Val { r, dt: x.dt, key: x.key.clone(), len: out_len, site };
+            note_resid(cx, lb, &v);
+            one(v)
         }
         Op::HistAppend => {
             let hl::Ref::State(s) = node.inputs[1] else { return Err(LowerError::eval("internal: HistAppend without a state")) };

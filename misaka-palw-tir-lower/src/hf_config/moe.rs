@@ -15,6 +15,7 @@ fn router(scoring: Scoring, normalize: bool) -> RouterSpec {
         norm_eps: 0.0,
         scale: 1.0,
         jitter_eps: 0.0,
+        per_expert_scale: false,
     }
 }
 
@@ -431,6 +432,7 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
         norm_eps: if normalize { 1e-20 } else { 0.0 },
         scale: rsf,
         jitter_eps: 0.0,
+        per_expert_scale: false,
     };
     let mut m = moe(n_routed, k, moe_inter, act, r);
     m.shared = (n_shared > 0).then_some(SharedExpertSpec { intermediate: moe_inter * n_shared, sigmoid_gate: false });
@@ -537,6 +539,7 @@ pub(crate) fn glm4_moe(p: &mut P) -> Result<ArchSpec> {
         norm_eps: if normalize { 1e-20 } else { 0.0 },
         scale: rsf,
         jitter_eps: 0.0,
+        per_expert_scale: false,
     };
     let mut m = moe(e, k, moe_inter, act, r);
     m.shared = (n_shared > 0).then_some(SharedExpertSpec { intermediate: moe_inter * n_shared, sigmoid_gate: false });
@@ -879,6 +882,7 @@ pub(crate) fn gpt_oss(p: &mut P) -> Result<ArchSpec> {
         norm_eps: 0.0,
         scale: 1.0,
         jitter_eps: 0.0,
+        per_expert_scale: false,
     };
     let m = MoeSpec {
         experts: e,

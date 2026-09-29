@@ -188,6 +188,14 @@ pub struct AttnSpec {
     pub chunk: Option<usize>,
     /// Llama-4's attention temperature on its NoPE layers: `q ·= ln(1 + ⌊(p + 1) / floor⌋)·scale + 1`.
     pub q_temperature: Option<QTemperature>,
+    /// A norm on each value head (Gemma-4: RMS without a gain).
+    pub v_norm: Option<QkNorm>,
+    /// The values are the key projection's output, before its norm and rotation (Gemma-4's
+    /// `attention_k_eq_v`): no `v_proj`.
+    pub v_from_k: bool,
+    /// The HL name of this attention's params and histories (`attn` unless given): layers whose
+    /// projections differ in shape (Gemma-4's wider global heads) need names of their own.
+    pub param_prefix: Option<String>,
 }
 
 /// Llama-4's `attn_temperature_tuning` (`floor_scale`, `attn_scale`).
@@ -393,6 +401,9 @@ pub struct RouterSpec {
     pub scale: f64,
     /// `sparsemixer`'s `router_jitter_noise` (0 for every other scoring).
     pub jitter_eps: f64,
+    /// Gemma-4: each selected weight times a learned per-expert scale (`per_expert_scale[e]`), after
+    /// the renormalisation.
+    pub per_expert_scale: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -417,12 +428,44 @@ pub struct MoeSpec {
     pub input_scaled: bool,
 }
 
+/// Gemma-4's MoE block beside its MLP: `f = mlp_post(mlp(pre_ffn(x))) + moe_post(moe(moe_pre(x)))`,
+/// the router reading `router_norm(x)·router_scale` — every branch from the layer's residual `x`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct MlpMoeSpec {
+    pub mlp: MlpSpec,
+    pub moe: MoeSpec,
+    pub mlp_post: NormSpec,
+    pub moe_pre: NormSpec,
+    pub moe_post: NormSpec,
+    /// A weightless RMSNorm times a learned vector: a `Gain::W` norm whose gain is that vector.
+    pub router_norm: NormSpec,
+    pub router_scale: f64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Ffn {
     None,
     Mlp(MlpSpec),
     Moe(MoeSpec),
     RwkvChannel(RwkvChannelSpec),
+    /// Gemma-4 (only under [`Residual::Sandwich`]).
+    MlpMoe(Box<MlpMoeSpec>),
+}
+
+/// Gemma-3n/4's per-layer input (PLE), for layer `l` from the token and its scaled embedding `e`:
+/// `ple = (norm(P_l·e·proj_scale) + T_l[token]·table_scale)·combine_scale`, then
+/// `x += post_norm(W_out·(act(W_gate·x) ⊙ ple))`. `P_l` and `T_l` are the layer's slices of two
+/// tensors packed over the layers.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PleSpec {
+    pub dim: usize,
+    pub vocab: usize,
+    pub table_scale: f64,
+    pub proj_scale: f64,
+    pub norm: NormSpec,
+    pub combine_scale: f64,
+    pub act: Act,
+    pub post_norm: NormSpec,
 }
 
 /// The residual wiring of one layer.
@@ -440,6 +483,17 @@ pub enum Residual {
     Parallel { norm: NormSpec, ffn_norm: Option<NormSpec> },
     /// Post-LN: `x = n1(x + mixer(x))`, `x = n2(x + ffn(x))` (OPT-350m).
     PostNorm { mixer_norm: NormSpec, ffn_norm: NormSpec },
+    /// Gemma-4: Gemma's four norms around the mixer and the FFN (an [`Ffn::MlpMoe`] reads the
+    /// residual itself), then the per-layer input as a branch of its own, then the layer's output
+    /// times a learned per-layer scalar (`layer_scalar`).
+    Sandwich {
+        pre_mixer: NormSpec,
+        post_mixer: NormSpec,
+        pre_ffn: NormSpec,
+        post_ffn: NormSpec,
+        ple: Option<PleSpec>,
+        layer_scalar: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

@@ -176,7 +176,9 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
         for d in &prog.params {
             for (suffix, b) in [(".lora_a", false), (".lora_b", true)] {
                 if let Some(role) = d.name.strip_suffix(suffix) {
-                    let t = ad.tensor(role, b).ok_or_else(|| LowerError::eval(format!("internal: adapter role `{role}` has no module")))?;
+                    let t = ad
+                        .tensor(role, b)
+                        .ok_or_else(|| LowerError::eval(format!("internal: adapter role `{role}` has no module")))?;
                     m.put(d.name.clone(), Src::t(t))?;
                 }
             }
@@ -215,6 +217,25 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
             m.norm("norm.mix", "norm.mix", mixer_norm)?;
             m.norm("norm.ffn", "norm.ffn", ffn_norm)?;
         }
+        Residual::Sandwich { pre_mixer, post_mixer, pre_ffn, post_ffn, ple, layer_scalar } => {
+            for (n, name) in
+                [(pre_mixer, "norm.mix"), (post_mixer, "norm.post_mix"), (pre_ffn, "norm.ffn"), (post_ffn, "norm.post_ffn")]
+            {
+                m.norm(name, name, n)?;
+            }
+            if let Some(p) = ple {
+                // The layer's slices of the two tensors packed over the layers.
+                m.put("ple.proj.w", Src::t(format!("{}.weight", m.role("ple.proj")?)).take(0, Pick::PerLayer { len: p.dim }))?;
+                m.put("ple.table", Src::t(format!("{}.weight", m.role("ple.table")?)).take(1, Pick::PerLayer { len: p.dim }))?;
+                m.norm("ple.norm", "ple.norm", &p.norm)?;
+                m.lin("ple.gate", "ple.gate", false)?;
+                m.lin("ple.out", "ple.out", false)?;
+                m.norm("ple.post_norm", "ple.post_norm", &p.post_norm)?;
+            }
+            if *layer_scalar {
+                m.put("layer.scalar", Src::t(m.role("layer.scalar")?))?;
+            }
+        }
     }
     match &ls.mixer {
         Mixer::Attention(a) => attention(m, a)?,
@@ -229,6 +250,17 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
         Ffn::Mlp(mm) => mlp(m, mm, "mlp", m.st.mlp)?,
         Ffn::Moe(mm) => moe(m, mm)?,
         Ffn::RwkvChannel(c) => rwkv_channel(m, c, rescale, spec.hidden_size)?,
+        Ffn::MlpMoe(mm) => {
+            mlp(m, &mm.mlp, "mlp", m.st.mlp)?;
+            moe(m, &mm.moe)?;
+            for (n, name) in [(&mm.mlp_post, "norm.post_mlp"), (&mm.moe_pre, "norm.moe"), (&mm.moe_post, "norm.post_moe")] {
+                m.norm(name, name, n)?;
+            }
+            // Gemma-4 stores the router's gain as a bare vector (`router.scale`).
+            if mm.router_norm.gain != Gain::None {
+                m.put("moe.router_norm.gain", Src::t(m.role("moe.router_norm")?))?;
+            }
+        }
     }
     Ok(())
 }
@@ -236,6 +268,9 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
 fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
     let (h, kv, hd, vd) = (a.heads, a.kv_heads, a.head_dim, a.v_head_dim);
     let (qn, kn, vn) = (h * hd, kv * hd, kv * vd);
+    // The HL names (`AttnSpec::param_prefix`); the checkpoint roles stay `attn.*`.
+    let pf = a.param_prefix.clone().unwrap_or_else(|| "attn".into());
+    let n = |s: &str| format!("{pf}.{s}");
     match m.st.qkv {
         QkvLayout::Separate => {
             if a.output_gate {
@@ -250,10 +285,16 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
                     m.put("attn.q.b", b.rows(qp))?;
                 }
             } else {
-                m.lin("attn.q", "attn.q", a.q_bias)?;
+                m.lin(&n("q"), "attn.q", a.q_bias)?;
             }
-            m.lin("attn.k", "attn.k", a.k_bias)?;
-            m.lin("attn.v", "attn.v", a.v_bias)?;
+            m.lin(&n("k"), "attn.k", a.k_bias)?;
+            // Gemma-4's `attention_k_eq_v`: no v_proj; the values are the key projection.
+            if !a.v_from_k {
+                m.lin(&n("v"), "attn.v", a.v_bias)?;
+            }
+        }
+        _ if a.param_prefix.is_some() || a.v_from_k => {
+            return Err(LowerError::eval("internal: named or key-valued attention over a fused qkv"));
         }
         layout => {
             let (pq, pk, pv) = match layout {
@@ -291,10 +332,13 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
             }
         }
     }
-    m.lin("attn.o", "attn.o", a.o_bias)?;
-    if let Some(qk) = &a.qk_norm {
-        for (name, heads) in [("attn.q_norm", h), ("attn.k_norm", kv)] {
-            let role = m.role(name)?;
+    m.lin(&n("o"), "attn.o", a.o_bias)?;
+    let norms = [(a.qk_norm, "q_norm", h), (a.qk_norm, "k_norm", kv), (a.v_norm, "v_norm", kv)];
+    for (qk, which, heads) in norms {
+        let Some(qk) = qk else { continue };
+        if qk.norm.gain != Gain::None || qk.norm.bias {
+            let (name, role) = (n(which), m.role(&format!("attn.{which}"))?);
+            let name = name.as_str();
             if qk.norm.gain != Gain::None {
                 let src = match qk.scope {
                     // StableLM keeps one LayerNorm module per head.
@@ -313,7 +357,7 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
         }
     }
     if a.sinks {
-        m.put("attn.sinks", Src::t(m.role("attn.sinks")?))?;
+        m.put(n("sinks"), Src::t(m.role("attn.sinks")?))?;
     }
     Ok(())
 }
@@ -499,6 +543,9 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
     m.lin("moe.router", "moe.router", s.router.linear_bias)?;
     if s.router.selection_bias {
         m.put("moe.sel_bias", Src::t(m.role("moe.sel_bias")?))?;
+    }
+    if s.router.per_expert_scale {
+        m.put("moe.expert_scale", Src::t(m.role("moe.expert_scale")?))?;
     }
     match m.st.experts {
         MlpLayout::Separate => {

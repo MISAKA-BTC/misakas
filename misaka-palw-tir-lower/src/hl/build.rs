@@ -24,17 +24,25 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
     };
     let carries = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size] }];
     let pre = b.pre_block()?;
-    let mut kinds: Vec<(LayerSpec, u16)> = Vec::new();
+    let mut kinds: Vec<(LayerSpec, Vec<u16>)> = Vec::new();
     let mut schedule = Vec::with_capacity(spec.layers.len());
-    for ls in &spec.layers {
-        match kinds.iter().find(|(s, _)| s == ls) {
-            Some((_, bi)) => schedule.push(*bi),
+    let mut layer_of = Vec::with_capacity(spec.layers.len());
+    for (li, ls) in spec.layers.iter().enumerate() {
+        let bis = match kinds.iter().find(|(s, _)| s == ls) {
+            Some((_, bis)) => bis.clone(),
             None => {
-                let bi = b.layer_block(ls, kinds.len())?;
-                let bi = u16::try_from(bi).map_err(|_| LowerError::not_lowerable("more than 65535 blocks"))?;
-                kinds.push((ls.clone(), bi));
-                schedule.push(bi);
+                let bis = b
+                    .layer_blocks(ls, kinds.len())?
+                    .into_iter()
+                    .map(|bi| u16::try_from(bi).map_err(|_| LowerError::not_lowerable("more than 65535 blocks")))
+                    .collect::<Result<Vec<u16>>>()?;
+                kinds.push((ls.clone(), bis.clone()));
+                bis
             }
+        };
+        for bi in bis {
+            schedule.push(bi);
+            layer_of.push(li);
         }
     }
     let post = b.post_block()?;
@@ -54,6 +62,7 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
         pre,
         post,
         schedule,
+        layer_of,
     };
     p.validate().map_err(|e| LowerError::eval(format!("internal: built program is malformed: {e}")))?;
     Ok(p)
@@ -301,6 +310,27 @@ impl Builder<'_> {
 
     // ───────────────────────────── layers ─────────────────────────────
 
+    /// The blocks one layer runs as, in order: one, or — a [`Residual::Sandwich`] layer — its
+    /// mixer half and its FFN half (with the per-layer input and the layer scalar), the residual
+    /// carried between them.
+    fn layer_blocks(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<Vec<usize>> {
+        if let Residual::Sandwich { pre_mixer, post_mixer, .. } = &ls.residual {
+            let d = self.s.hidden_size;
+            let mut bk = Bk { nodes: vec![] };
+            let x = Ref::Carry(0);
+            let n1 = self.full_norm(&mut bk, x, *pre_mixer, "norm.mix", d, true)?;
+            let m = self.mixer(&mut bk, &ls.mixer, n1)?;
+            let m = self.full_norm(&mut bk, m, *post_mixer, "norm.post_mix", d, true)?;
+            let h = bk.f(Op::Add, vec![x, m], d, "resid.mix");
+            let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
+            self.blocks.push(Block { name: format!("{name}.mix"), role: BlockRole::Layer, nodes: bk.nodes, outputs: vec![h] });
+            let a = self.blocks.len() - 1;
+            let f = self.layer_block(ls, kind_index)?;
+            return Ok(vec![a, f]);
+        }
+        Ok(vec![self.layer_block(ls, kind_index)?])
+    }
+
     fn layer_block(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<usize> {
         let d = self.s.hidden_size;
         let mut bk = Bk { nodes: vec![] };
@@ -354,11 +384,53 @@ impl Builder<'_> {
                 let h = bk.f(Op::Add, vec![h, f], d, "resid.ffn");
                 self.full_norm(&mut bk, h, *ffn_norm, "norm.ffn", d, true)?
             }
+            // The FFN half: the mixer half ([`Builder::layer_blocks`]) carries in `x + mix`.
+            Residual::Sandwich { pre_ffn, post_ffn, ple, layer_scalar, .. } => {
+                let x1 = x;
+                let f = match &ls.ffn {
+                    Ffn::None => return Err(LowerError::eval("internal: a sandwich layer without an FFN")),
+                    // Gemma-4's MoE block beside the MLP: the router and the experts read the residual.
+                    Ffn::MlpMoe(mm) => {
+                        let n2 = self.full_norm(&mut bk, x1, *pre_ffn, "norm.ffn", d, true)?;
+                        let a = self.mlp(&mut bk, &mm.mlp, n2, "mlp")?;
+                        let a = self.full_norm(&mut bk, a, mm.mlp_post, "norm.post_mlp", d, true)?;
+                        let rn = self.full_norm(&mut bk, x1, mm.router_norm, "moe.router_norm", d, true)?;
+                        let rn = bk.f(Op::Scale { c: mm.router_scale }, vec![rn], d, "moe.router_in");
+                        let en = self.full_norm(&mut bk, x1, mm.moe_pre, "norm.moe", d, true)?;
+                        let e = self.moe_split(&mut bk, &mm.moe, rn, en)?;
+                        let e = self.full_norm(&mut bk, e, mm.moe_post, "norm.post_moe", d, true)?;
+                        bk.f(Op::Add, vec![a, e], d, "ffn.sum")
+                    }
+                    other => {
+                        let n2 = self.full_norm(&mut bk, x1, *pre_ffn, "norm.ffn", d, true)?;
+                        self.ffn(&mut bk, other, n2)?
+                    }
+                };
+                let f = self.full_norm(&mut bk, f, *post_ffn, "norm.post_ffn", d, true)?;
+                let mut h = bk.f(Op::Add, vec![x1, f], d, "resid.ffn");
+                if let Some(p) = ple {
+                    let pv = self.ple(&mut bk, p)?;
+                    let g = self.linear(&mut bk, h, "ple.gate", p.dim, d, false, true, "ple.gate")?;
+                    let g = bk.f(Op::Act(p.act), vec![g], p.dim, "ple.act");
+                    let gm = bk.f(Op::Mul, vec![g, pv], p.dim, "ple.gated");
+                    let o = self.linear(&mut bk, gm, "ple.out", d, p.dim, false, true, "ple.out")?;
+                    let o = self.full_norm(&mut bk, o, p.post_norm, "ple.post_norm", d, true)?;
+                    h = bk.f(Op::Add, vec![h, o], d, "resid.ple");
+                }
+                if *layer_scalar {
+                    let sp = self.param("layer.scalar", vec![1], true, Init::Uniform(0.8, 1.2))?;
+                    h = bk.f(Op::ScaleParam, vec![h, sp], d, "resid.scaled");
+                }
+                h
+            }
         };
         if ls.post_scale != 1.0 {
             h = bk.f(Op::Scale { c: ls.post_scale }, vec![h], d, "resid.rescaled");
         }
-        let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
+        let mut name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
+        if matches!(ls.residual, Residual::Sandwich { .. }) {
+            name.push_str(".ffn");
+        }
         self.blocks.push(Block { name, role: BlockRole::Layer, nodes: bk.nodes, outputs: vec![h] });
         Ok(self.blocks.len() - 1)
     }
@@ -380,7 +452,28 @@ impl Builder<'_> {
             Ffn::Mlp(m) => self.mlp(bk, m, x, "mlp"),
             Ffn::Moe(m) => self.moe(bk, m, x),
             Ffn::RwkvChannel(c) => self.rwkv_channel(bk, c, x),
+            Ffn::MlpMoe(_) => Err(LowerError::eval("internal: an MLP+MoE block outside a sandwich layer")),
         }
+    }
+
+    /// Gemma-3n/4's per-layer input of this layer ([`PleSpec`]), from the token: the token's
+    /// scaled embedding projected by the layer's slice and normed, plus the layer's own table row.
+    fn ple(&mut self, bk: &mut Bk, p: &PleSpec) -> Result<Ref> {
+        let s = self.s;
+        let d = s.hidden_size;
+        let table = self.param("embed.table", vec![s.vocab_size, s.embedding.dim], false, Init::Normal(0.5))?;
+        let mut e = bk.f(Op::Embedding, vec![Ref::Token, table], s.embedding.dim, "ple.embed");
+        if s.embedding.scale != 1.0 {
+            e = bk.f(Op::Scale { c: s.embedding.scale }, vec![e], d, "ple.embed_scaled");
+        }
+        let pr = self.linear(bk, e, "ple.proj", p.dim, d, false, true, "ple.proj")?;
+        let pr = bk.f(Op::Scale { c: p.proj_scale }, vec![pr], p.dim, "ple.proj_scaled");
+        let pr = self.full_norm(bk, pr, p.norm, "ple.norm", p.dim, false)?;
+        let tt = self.param("ple.table", vec![p.vocab, p.dim], true, Init::Normal(0.5))?;
+        let te = bk.f(Op::Embedding, vec![Ref::Token, tt], p.dim, "ple.token");
+        let te = bk.f(Op::Scale { c: p.table_scale }, vec![te], p.dim, "ple.token_scaled");
+        let sum = bk.f(Op::Add, vec![pr, te], p.dim, "ple.sum");
+        Ok(bk.f(Op::Scale { c: p.combine_scale }, vec![sum], p.dim, "ple"))
     }
 
     // ───────────────────────────── attention ─────────────────────────────
@@ -389,18 +482,31 @@ impl Builder<'_> {
         let d = self.s.hidden_size;
         let (h, kv, hd, vd) = (a.heads, a.kv_heads, a.head_dim, a.v_head_dim);
         let (qn, kn, vn) = (h * hd, kv * hd, kv * vd);
-        let mut q = self.linear(bk, x, "attn.q", qn, d, a.q_bias, true, "attn.q")?;
-        let mut k = self.linear(bk, x, "attn.k", kn, d, a.k_bias, true, "attn.k")?;
-        let mut v = self.linear(bk, x, "attn.v", vn, d, a.v_bias, true, "attn.v")?;
-        let gate = if a.output_gate { Some(self.linear(bk, x, "attn.gate", qn, d, false, true, "attn.gate")?) } else { None };
+        let pf = a.param_prefix.clone().unwrap_or_else(|| "attn".into());
+        let n = |s: &str| format!("{pf}.{s}");
+        let mut q = self.linear(bk, x, &n("q"), qn, d, a.q_bias, true, &n("q"))?;
+        let mut k = self.linear(bk, x, &n("k"), kn, d, a.k_bias, true, &n("k"))?;
+        // Gemma-4's `attention_k_eq_v`: the values are the raw key projection.
+        let mut v = if a.v_from_k {
+            if vd != hd {
+                return Err(LowerError::eval("internal: values from keys of another width"));
+            }
+            k
+        } else {
+            self.linear(bk, x, &n("v"), vn, d, a.v_bias, true, &n("v"))?
+        };
+        let gate = if a.output_gate { Some(self.linear(bk, x, &n("gate"), qn, d, false, true, &n("gate"))?) } else { None };
         if let Some(c) = a.clip_qkv {
-            q = bk.f(Op::Clamp { lo: -c, hi: c }, vec![q], qn, "attn.q_clip");
-            k = bk.f(Op::Clamp { lo: -c, hi: c }, vec![k], kn, "attn.k_clip");
-            v = bk.f(Op::Clamp { lo: -c, hi: c }, vec![v], vn, "attn.v_clip");
+            q = bk.f(Op::Clamp { lo: -c, hi: c }, vec![q], qn, &n("q_clip"));
+            k = bk.f(Op::Clamp { lo: -c, hi: c }, vec![k], kn, &n("k_clip"));
+            v = bk.f(Op::Clamp { lo: -c, hi: c }, vec![v], vn, &n("v_clip"));
         }
         if let Some(qk) = &a.qk_norm {
-            q = self.qk_norm(bk, q, qk, "attn.q_norm", h, hd)?;
-            k = self.qk_norm(bk, k, qk, "attn.k_norm", kv, hd)?;
+            q = self.qk_norm(bk, q, qk, &n("q_norm"), h, hd)?;
+            k = self.qk_norm(bk, k, qk, &n("k_norm"), kv, hd)?;
+        }
+        if let Some(vn_) = &a.v_norm {
+            v = self.qk_norm(bk, v, vn_, &n("v_norm"), kv, vd)?;
         }
         let mut alibi = None;
         match &a.position {
@@ -410,29 +516,29 @@ impl Builder<'_> {
                     Op::Rope { heads: h, head_dim: hd, rotary_dim: r.rotary_dim, offset: r.offset, style: r.style, table: t },
                     vec![q, Ref::Pos],
                     qn,
-                    "attn.q_rope",
+                    &n("q_rope"),
                 );
                 k = bk.f(
                     Op::Rope { heads: kv, head_dim: hd, rotary_dim: r.rotary_dim, offset: r.offset, style: r.style, table: t },
                     vec![k, Ref::Pos],
                     kn,
-                    "attn.k_rope",
+                    &n("k_rope"),
                 );
             }
             Position::Alibi(al) => alibi = Some(al.clone()),
             Position::None => {}
         }
         if let Some(t) = a.q_temperature {
-            q = bk.f(Op::PosScale { temp: t }, vec![q, Ref::Pos], qn, "attn.q_temp");
+            q = bk.f(Op::PosScale { temp: t }, vec![q, Ref::Pos], qn, &n("q_temp"));
         }
         let suffix = a.window.map(|w| format!(".w{w}")).unwrap_or_default();
-        let ks = self.state(&format!("attn.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![kn], 0.0)?;
-        let vs = self.state(&format!("attn.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![vn], 0.0)?;
+        let ks = self.state(&format!("{pf}.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![kn], 0.0)?;
+        let vs = self.state(&format!("{pf}.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![vn], 0.0)?;
         bk.append(k, ks);
         bk.append(v, vs);
         let mut ins = vec![q, ks, vs];
         if a.sinks {
-            ins.push(self.param("attn.sinks", vec![h], true, Init::Normal(1.0))?);
+            ins.push(self.param(&n("sinks"), vec![h], true, Init::Normal(1.0))?);
         }
         let op = Op::Attention {
             heads: h,
@@ -446,12 +552,12 @@ impl Builder<'_> {
             sinks: a.sinks,
             chunk: a.chunk,
         };
-        let mut o = bk.f(op, ins, h * vd, "attn.ctx");
+        let mut o = bk.f(op, ins, h * vd, &n("ctx"));
         if let Some(g) = gate {
-            let s = bk.f(Op::Act(Act::Sigmoid), vec![g], qn, "attn.gate_act");
-            o = bk.f(Op::Mul, vec![o, s], qn, "attn.gated");
+            let s = bk.f(Op::Act(Act::Sigmoid), vec![g], qn, &n("gate_act"));
+            o = bk.f(Op::Mul, vec![o, s], qn, &n("gated"));
         }
-        self.linear(bk, o, "attn.o", d, h * vd, a.o_bias, true, "attn.out")
+        self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"))
     }
 
     fn qk_norm(&mut self, bk: &mut Bk, x: Ref, qk: &QkNorm, name: &str, heads: usize, hd: usize) -> Result<Ref> {
@@ -700,12 +806,20 @@ impl Builder<'_> {
     }
 
     fn moe(&mut self, bk: &mut Bk, m: &MoeSpec, x: Ref) -> Result<Ref> {
+        self.moe_split(bk, m, x, x)
+    }
+
+    /// The MoE block with its router reading `rx` and its experts `x` (Gemma-4 feeds them apart).
+    fn moe_split(&mut self, bk: &mut Bk, m: &MoeSpec, rx: Ref, x: Ref) -> Result<Ref> {
         let d = self.s.hidden_size;
         let (e, i) = (m.experts, m.intermediate);
-        let logits = self.linear(bk, x, "moe.router", e, d, m.router.linear_bias, true, "moe.router")?;
+        let logits = self.linear(bk, rx, "moe.router", e, d, m.router.linear_bias, true, "moe.router")?;
         let mut rins = vec![logits];
         if m.router.selection_bias {
             rins.push(self.param("moe.sel_bias", vec![e], true, Init::Uniform(-0.05, 0.05))?);
+        }
+        if m.router.per_expert_scale {
+            rins.push(self.param("moe.expert_scale", vec![e], true, Init::Uniform(0.5, 1.5))?);
         }
         let route = bk.push(
             Op::Route { router: m.router.clone(), experts: e, top_k: m.top_k },
@@ -776,6 +890,7 @@ fn block_name(ls: &LayerSpec) -> String {
         Ffn::Mlp(_) => "+mlp".into(),
         Ffn::Moe(_) => "+moe".into(),
         Ffn::RwkvChannel(_) => "+cmix".into(),
+        Ffn::MlpMoe(_) => "+mlp|moe".into(),
     };
     format!("{mix}{ffn}")
 }

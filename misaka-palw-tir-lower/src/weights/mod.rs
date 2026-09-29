@@ -354,20 +354,30 @@ pub enum Pick {
         len: usize,
         groups: usize,
     },
+    /// The layer's own `len` indices, `layer·len .. (layer + 1)·len`: a per-layer slice of a tensor
+    /// packed over the layers (Gemma-3n/4's per-layer embeddings and their projection).
+    PerLayer {
+        len: usize,
+    },
 }
 
 impl Pick {
-    pub fn indices(&self) -> Vec<usize> {
-        match self {
+    /// The indices at `layer` (only [`Pick::PerLayer`] reads it, and needs one).
+    pub fn indices_at(&self, layer: Option<usize>) -> Result<Vec<usize>> {
+        Ok(match self {
             Pick::Range { start, len } => (*start..start + len).collect(),
             Pick::Strided { block, offset, len, groups } => {
                 (0..*groups).flat_map(|g| (g * block + offset)..(g * block + offset + len)).collect()
             }
-        }
+            Pick::PerLayer { len } => {
+                let l = layer.ok_or_else(|| LowerError::weights("a per-layer slice outside a layer"))?;
+                (l * len..(l + 1) * len).collect()
+            }
+        })
     }
     pub fn count(&self) -> usize {
         match self {
-            Pick::Range { len, .. } => *len,
+            Pick::Range { len, .. } | Pick::PerLayer { len } => *len,
             Pick::Strided { len, groups, .. } => len * groups,
         }
     }
@@ -592,7 +602,7 @@ pub fn src_shape(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<
             if *axis >= s.len() {
                 return Err(LowerError::weights("take axis out of range"));
             }
-            let max = pick.indices().into_iter().max().unwrap_or(0);
+            let max = pick.indices_at(layer)?.into_iter().max().unwrap_or(0);
             if pick_count(pick) > 0 && max >= s[*axis] {
                 return Err(LowerError::weights(format!("slice reaches {max} of an axis of {} (shape {s:?})", s[*axis])));
             }
@@ -714,7 +724,7 @@ pub fn eval_qsrc(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<
     match src {
         Src::Quant { module, fmt } => Ok(Some(vec![load_quant(module, fmt, r, layer, vars)?])),
         Src::Take { src: inner, axis: 0, pick } => match eval_qsrc(inner, r, layer, vars)? {
-            Some(v) if v.len() == 1 => Ok(Some(vec![v[0].take_rows(&pick.indices())?])),
+            Some(v) if v.len() == 1 => Ok(Some(vec![v[0].take_rows(&pick.indices_at(layer)?)?])),
             Some(_) => Err(LowerError::not_lowerable("a row slice across stacked quantised experts")),
             None => Ok(None),
         },
@@ -760,7 +770,7 @@ pub fn eval_src(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<c
             r.touched.borrow_mut().insert(rn.clone());
             r.src.load(&rn)
         }
-        Src::Take { src, axis, pick } => take(&eval_src(src, r, layer, vars)?, *axis, &pick.indices()),
+        Src::Take { src, axis, pick } => take(&eval_src(src, r, layer, vars)?, *axis, &pick.indices_at(layer)?),
         Src::Transpose(src) => transpose_last2(&eval_src(src, r, layer, vars)?),
         Src::Stack { src, var, count } => {
             let mut shape = None;

@@ -101,8 +101,8 @@ impl ParamStore {
             let pi = pi as u32;
             if d.per_layer {
                 for l in layers_of_param(prog, pi) {
-                    let (t, q) = bind_one(&binding.srcs[pi as usize], &r, Some(l))
-                        .map_err(|e| LowerError::weights(format!("param `{}` layer {l}: {e}", d.name)))?;
+                    let (t, q) = bind_one(&binding.srcs[pi as usize], &r, Some(prog.model_layer(l)))
+                        .map_err(|e| LowerError::weights(format!("param `{}` layer {}: {e}", d.name, prog.model_layer(l))))?;
                     check_shape(&d.name, &t, &d.shape)?;
                     st.insert(pi, Some(l), t, q);
                 }
@@ -497,6 +497,10 @@ impl<'a> Session<'a> {
                 let t = temp.at(pos);
                 one(x(0)?.iter().map(|v| v * t).collect())
             }
+            Op::ScaleParam => {
+                let c = self.param(ins[1], layer)?.data[0];
+                one(x(0)?.iter().map(|v| v * c).collect())
+            }
             Op::HistAppend => {
                 let Ref::State(s) = ins[1] else { return Err(LowerError::eval("HistAppend without a state")) };
                 let row = x(0)?.to_vec();
@@ -626,8 +630,15 @@ impl<'a> Session<'a> {
             }
             Op::Route { router, experts, top_k } => {
                 let logits = x(0)?.to_vec();
-                let sel_bias = if ins.len() > 1 { Some(self.param(ins[1], layer)?.data.clone()) } else { None };
-                let (idx, w) = route(&logits, sel_bias.as_deref(), router, *experts, *top_k);
+                let sel_bias = if router.selection_bias { Some(self.param(ins[1], layer)?.data.clone()) } else { None };
+                let (idx, mut w) = route(&logits, sel_bias.as_deref(), router, *experts, *top_k);
+                // Gemma-4: a learned per-expert scale on each selected weight.
+                if router.per_expert_scale {
+                    let pes = self.param(ins[1 + usize::from(router.selection_bias)], layer)?;
+                    for (wj, e) in w.iter_mut().zip(&idx) {
+                        *wj *= pes.data[*e];
+                    }
+                }
                 self.sub_site(prefix, &node.site, "logits", &logits);
                 Ok(vec![idx.iter().map(|i| *i as f32).collect(), w])
             }

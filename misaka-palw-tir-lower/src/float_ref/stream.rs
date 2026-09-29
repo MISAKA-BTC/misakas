@@ -47,8 +47,10 @@ impl OccParams for Streamed<'_> {
             let d = &self.prog.params[pi as usize];
             if d.per_layer {
                 let l = layer.ok_or_else(|| LowerError::eval(format!("per-layer param `{}` outside a layer", d.name)))?;
-                let (t, q) = bind_one(&self.binding.srcs[pi as usize], &r, Some(l))
-                    .map_err(|e| LowerError::weights(format!("param `{}` layer {l}: {e}", d.name)))?;
+                // Keyed by the occurrence, read at the model layer it belongs to.
+                let ml = self.prog.model_layer(l);
+                let (t, q) = bind_one(&self.binding.srcs[pi as usize], &r, Some(ml))
+                    .map_err(|e| LowerError::weights(format!("param `{}` layer {ml}: {e}", d.name)))?;
                 check_shape(&d.name, &t, &d.shape)?;
                 st.insert(pi, Some(l), t, q);
             } else {

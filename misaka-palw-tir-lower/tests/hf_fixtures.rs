@@ -162,6 +162,7 @@ fixtures!(
     phimoe,
     llama4,
     llama4_vlm,
+    gemma4,
     deepseek_v2,
     deepseek_v2_lite,
     deepseek_v3,
