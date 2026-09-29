@@ -524,6 +524,7 @@ impl P<'_> {
             layers: s.layers,
             final_norm: s.final_norm,
             head: s.head,
+            adapter: None,
             hf: HfStorage {
                 names: s.names,
                 prefix_aliases: s.prefix_aliases,

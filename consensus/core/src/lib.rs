@@ -509,6 +509,8 @@ pub mod palw_tir_one_move_v1;
 pub mod palw_tir_dissect_v1;
 /// RFC-0002 Phase F step F7 (PALW-TIR-38): the carried size of every terminal close of an IR class — the court's own read set, priced as carried.
 pub mod palw_tir_close_size_v1;
+/// RFC-0004 §6.3 (PALW-MIP-15): composite artifacts — a candidate as its parent plus an adapter section, the parent never re-committed; sub-root openings, the composite and family rules, admission.
+pub mod palw_improve_composite_v1;
 /// RFC-0002 Phase F step F4: the step space of an IR class — commit-point tiles, Fixed-state checkpoints and history tiles as step leaves, in closed form.
 pub mod palw_tir_step_v1;
 /// RFC-0002 Phase F step F8: an IR class's canonical work vector, classified and priced by structure alone.

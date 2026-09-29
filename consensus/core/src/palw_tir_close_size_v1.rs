@@ -94,6 +94,24 @@ pub enum PalwTirParamFormV1 {
     /// ONE `PalwArtifactMultiproofV1` for all of them (`PalwTirConeRefutationV1::params`, the carried
     /// format).
     Multiproof,
+    /// A composite artifact's sub-root openings (RFC-0004 §6.3,
+    /// [`crate::palw_improve_composite_v1::PalwTirCompositeOpeningV1`]): the reference, and one
+    /// multiproof per section read — the leaves of params `0..p` under the parent's root, those of
+    /// params `p..` under the adapter section's.
+    Composite { p: u32 },
+}
+
+/// The borsh bytes of a composite reference ([`crate::palw_improve_composite_v1::PalwTirCompositeRefV1`]):
+/// three roots and `p`.
+pub const PALW_TIR_COMPOSITE_REF_BYTES_V1: u64 = 3 * 64 + 4;
+
+/// A composite form's sections: where the adapter's leaves begin, `p`, and each section's depth.
+#[derive(Clone, Copy, Debug)]
+struct CompositeSections {
+    split: u32,
+    p: u32,
+    parent_depth: u64,
+    adapter_depth: u64,
 }
 
 /// **What one terminal close reads**, in the units it carries.
@@ -834,6 +852,7 @@ pub struct PalwTirClosePriceV1<'a> {
     depth: u64,
     inv_depth: u64,
     form: PalwTirParamFormV1,
+    composite: Option<CompositeSections>,
     /// A read token's carriage: the larger of the prompt's and the decode pin's.
     token_bytes: u64,
     /// `CourtClosed` with a cone close that opens nothing, its leaf of no lane.
@@ -882,7 +901,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
                 values_le: Vec::new(),
             },
             operands: PalwStepInputRowV1 { preimages: Vec::new(), run_siblings: Vec::new() },
-            params: None,
+            params: crate::palw_tir_court_v1::PalwTirParamOpeningV1::None,
             prompt_token_ids: Vec::new(),
             prompt_ids_openings: Vec::new(),
             decode_tokens: None,
@@ -904,12 +923,29 @@ impl<'a> PalwTirClosePriceV1<'a> {
             arity: 0,
             signature: vec![0; MOVE_SIGNATURE_BYTES],
         })? + MOVE_CARRIER_EXTRA_BYTES;
+        let composite = match form {
+            PalwTirParamFormV1::Composite { p } => {
+                let split = u16::try_from(p)
+                    .ok()
+                    .and_then(|p| inventory.leaves_before(p))
+                    .ok_or_else(|| format!("a composite split at param {p}, past every param"))?;
+                let adapter = inventory.leaf_count() - split;
+                Some(CompositeSections {
+                    split,
+                    p,
+                    parent_depth: ceil_log2(split.max(1) as u64),
+                    adapter_depth: ceil_log2(adapter.max(1) as u64),
+                })
+            }
+            _ => None,
+        };
         Ok(Self {
             space,
             inventory,
             depth,
             inv_depth: ceil_log2(inventory.leaf_count().max(1) as u64),
             form,
+            composite,
             token_bytes: 64 + 16 + 4 * (space.layout.max_context as u64 + 1) + 64 * 64,
             frame,
             root_frame,
@@ -946,30 +982,38 @@ impl<'a> PalwTirClosePriceV1<'a> {
     /// are at most the sum of its runs'). A location-free row's pieces are a run of their own.
     pub fn params(&self, reads: &PalwTirCloseReadsV1) -> u64 {
         let program = &self.space.program;
-        let run_siblings = |len: u64| if len == 1 { self.inv_depth } else { 2 * self.inv_depth };
-        let mut lens: Vec<u64> = Vec::with_capacity(reads.params.len());
-        let mut siblings = 0u64;
-        let mut run = 0u64;
+        // Per section — one, or a composite's two — the operands and the siblings.
+        let (mut lens, mut siblings): ([Vec<u64>; 2], [u64; 2]) = ([Vec::with_capacity(reads.params.len()), Vec::new()], [0, 0]);
+        let depth = |side: usize| match self.composite {
+            Some(c) if side == 0 => c.parent_depth,
+            Some(c) => c.adapter_depth,
+            None => self.inv_depth,
+        };
+        let run_siblings = |side: usize, len: u64| if len == 1 { depth(side) } else { 2 * depth(side) };
+        let side_of_leaf = |leaf: u32| usize::from(self.composite.is_some_and(|c| leaf >= c.split));
+        let (mut run, mut run_side) = (0u64, 0usize);
         let mut last: Option<u32> = None;
         for leaf in &reads.params {
             let (p, layer, _, len) = self.inventory.piece_of(*leaf).unwrap_or((0, Some(0), 0, PALW_TIR_ROW_PIECE_BYTES_V1 as u32));
             let name = program.params.get(p as usize).map_or(256, |d| d.name.len());
-            lens.push(palw_artifact_operand_borsh_len_v1(name, layer.is_some(), len as usize));
-            if last.is_some_and(|l| l.wrapping_add(1) == *leaf) {
+            let side = side_of_leaf(*leaf);
+            lens[side].push(palw_artifact_operand_borsh_len_v1(name, layer.is_some(), len as usize));
+            if last.is_some_and(|l| l.wrapping_add(1) == *leaf) && side == run_side {
                 run += 1;
             } else {
                 if run > 0 {
-                    siblings += run_siblings(run);
+                    siblings[run_side] += run_siblings(run_side, run);
                 }
-                run = 1;
+                (run, run_side) = (1, side);
             }
             last = Some(*leaf);
         }
         if run > 0 {
-            siblings += run_siblings(run);
+            siblings[run_side] += run_siblings(run_side, run);
         }
         for ((p, layer, _), pieces) in &reads.wild_rows {
             let d = &program.params[*p as usize];
+            let side = usize::from(self.composite.is_some_and(|c| *p as u32 >= c.p));
             let row_bytes = if d.shape.len() >= 2 {
                 d.shape[1..].iter().map(|x| *x as u64).product::<u64>() * d.dtype.width() as u64
             } else {
@@ -977,18 +1021,28 @@ impl<'a> PalwTirClosePriceV1<'a> {
             };
             for k in pieces {
                 let len = row_bytes.saturating_sub(k * PALW_TIR_ROW_PIECE_BYTES_V1).min(PALW_TIR_ROW_PIECE_BYTES_V1);
-                lens.push(palw_artifact_operand_borsh_len_v1(d.name.len(), layer.is_some(), len as usize));
+                lens[side].push(palw_artifact_operand_borsh_len_v1(d.name.len(), layer.is_some(), len as usize));
             }
-            siblings += run_siblings(pieces.len() as u64);
+            siblings[side] += run_siblings(side, pieces.len() as u64);
         }
-        if lens.is_empty() {
+        if lens.iter().all(|l| l.is_empty()) {
             return 0;
         }
         match self.form {
             // One opening per leaf, each with a whole path (`palw_artifact_opening_path_len_v1` is at
             // most the depth).
-            PalwTirParamFormV1::PerLeaf => 4 + lens.iter().map(|operand| operand + 4 + 4 + 4 + 64 * self.inv_depth).sum::<u64>(),
-            PalwTirParamFormV1::Multiproof => palw_artifact_multiproof_borsh_len_v1(lens, siblings),
+            PalwTirParamFormV1::PerLeaf => 4 + lens[0].iter().map(|operand| operand + 4 + 4 + 4 + 64 * self.inv_depth).sum::<u64>(),
+            PalwTirParamFormV1::Multiproof => palw_artifact_multiproof_borsh_len_v1(lens[0].iter().copied(), siblings[0]),
+            // The reference and the two options' tags (the enum's own tag is the frame's), then one
+            // multiproof per section read.
+            PalwTirParamFormV1::Composite { .. } => {
+                PALW_TIR_COMPOSITE_REF_BYTES_V1
+                    + 2
+                    + (0..2)
+                        .filter(|side| !lens[*side].is_empty())
+                        .map(|side| palw_artifact_multiproof_borsh_len_v1(lens[side].iter().copied(), siblings[side]))
+                        .sum::<u64>()
+            }
         }
     }
 

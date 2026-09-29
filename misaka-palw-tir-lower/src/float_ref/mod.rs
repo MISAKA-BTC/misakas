@@ -343,10 +343,23 @@ impl<'a> Session<'a> {
                 one(v)
             }
             Op::Zeros => one(vec![0.0; node.outs[0].iter().product()]),
-            Op::Linear { bias } => {
+            Op::Linear { bias, lora } => {
                 let w = self.param(ins[1], layer)?;
                 let b = if *bias { Some(self.param(ins[2], layer)?) } else { None };
-                one(linear(x(0)?, w, b.map(|t| t.data.as_slice())))
+                let mut y = linear(x(0)?, w, b.map(|t| t.data.as_slice()));
+                if let Some(l) = lora {
+                    // Unmerged: y += (num/den)·B·(A·x), in f64 over the f32 operands.
+                    let at = if *bias { 3 } else { 2 };
+                    let (a, bm) = (self.param(ins[at], layer)?, self.param(ins[at + 1], layer)?);
+                    let ax = linear(x(0)?, a, None);
+                    self.sub_site(prefix, &node.site, "lora_a", &ax);
+                    let bax = linear(&ax, bm, None);
+                    let s = l.num as f64 / l.den as f64;
+                    for (yo, d) in y.iter_mut().zip(&bax) {
+                        *yo = (*yo as f64 + s * *d as f64) as f32;
+                    }
+                }
+                one(y)
             }
             Op::Add | Op::Sub | Op::Mul => {
                 let a = self.operand_any(ins[0], vals, carries, layer)?;

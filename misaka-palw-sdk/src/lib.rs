@@ -52,6 +52,8 @@ pub mod tir_equiv;
 pub mod tir_manifest;
 /// RFC-0002 Phase F (F6, node half): registering an IR class.
 pub mod tir_certification;
+/// RFC-0004 §6.3 (PALW-MIP-15): a LoRA candidate's container as a composite of its parent's.
+pub mod tir_composite;
 pub mod tir_layout;
 pub mod tir_registration;
 
