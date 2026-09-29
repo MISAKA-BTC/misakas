@@ -7340,12 +7340,15 @@ impl VirtualStateProcessor {
             // undecoded), and above it until the object's admission lands — first, and charged
             // nothing. The fold refuses it too, as the second lock.
             if let Some(name) = kaspa_consensus_core::palw_state_v2::palw_improvement_object_name_v1(&object) {
-                if self.palw_improvement_at(point.daa_score) {
-                    info!("Block {block}: {name} was dropped by name: its admission has not landed, and the block stands (RFC-0004)");
-                } else {
+                let active = self.palw_improvement_at(point.daa_score);
+                if !active {
                     info!("Block {block}: {name} was dropped by name below palw_improvement_v1, and the block stands (RFC-0004)");
+                    continue;
                 }
-                continue;
+                if !kaspa_consensus_core::palw_state_v2::palw_improvement_object_landed_v1(&object) {
+                    info!("Block {block}: {name} was dropped by name: its admission has not landed, and the block stands (RFC-0004)");
+                    continue;
+                }
             }
             if tir_registration_gated
                 && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
@@ -11636,8 +11639,46 @@ impl VirtualStateProcessor {
                 // RFC-0004 (tags 70–82): the acceptance walk drops every improvement object by name
                 // before this gate, below the fence and — until each object's admission lands —
                 // above it; refused here too, as the fold refuses it, so no door takes one early.
-                Obj::ModelLineImprovementPolicySet { .. }
-                | Obj::HardCaseSubmitted { .. }
+                // RFC-0004 (spec 17 §17.4.2): the owner's policy object, signed by the spec 15 owner's key.
+                Obj::ModelLineImprovementPolicySet { payload, signature } => {
+                    if !self.palw_improvement_at(point.daa_score) {
+                        return Err(format!("{} is refused: palw_improvement_v1 is not in force at this block (RFC-0004)", "a policy object"));
+                    }
+                    let owner = self.palw_model_line_role(state, &payload.line_id, "owner")?;
+                    let message = kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_policy_message_v1(
+                        self.palw_network_domain_v2(),
+                        &payload.line_id,
+                        payload.sequence,
+                        payload.policy.as_ref(),
+                    );
+                    self.palw_improvement_check_bond_signature(
+                        state,
+                        &owner,
+                        &message,
+                        signature,
+                        kaspa_consensus_core::palw_improve_policy_v1::PALW_IMPROVE_POLICY_MLDSA87_CONTEXT,
+                        "a policy object",
+                    )?;
+                }
+                // RFC-0004 (spec 17 §17.10.1): a rollback, signed by its filer bond's key.
+                Obj::LineageHeadRolledBack { payload, filer, signature } => {
+                    if !self.palw_improvement_at(point.daa_score) {
+                        return Err(format!("{} is refused: palw_improvement_v1 is not in force at this block (RFC-0004)", "a rollback"));
+                    }
+                    let message = kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_rollback_message_v1(
+                        self.palw_network_domain_v2(),
+                        payload,
+                    );
+                    self.palw_improvement_check_bond_signature(
+                        state,
+                        filer,
+                        &message,
+                        signature,
+                        kaspa_consensus_core::palw_improve_policy_v1::PALW_IMPROVE_ROLLBACK_MLDSA87_CONTEXT,
+                        "a rollback",
+                    )?;
+                }
+                Obj::HardCaseSubmitted { .. }
                 | Obj::DataUseOptIn { .. }
                 | Obj::SetterSetCommitted { .. }
                 | Obj::SetterSetRevealed { .. }
@@ -11647,7 +11688,6 @@ impl VirtualStateProcessor {
                 | Obj::TeachingArtifactRevealed { .. }
                 | Obj::TeacherLicenceRegistered { .. }
                 | Obj::CandidateSubmitted { .. }
-                | Obj::LineageHeadRolledBack { .. }
                 | Obj::ImprovementPoolFunded { .. } => {
                     let name = kaspa_consensus_core::palw_state_v2::palw_improvement_object_name_v1(object)
                         .unwrap_or("an improvement object");
@@ -11816,6 +11856,27 @@ impl VirtualStateProcessor {
             _ => line.developer_bond(),
         };
         bond.ok_or_else(|| format!("line {line_id} has no {role}: nobody may act on it"))
+    }
+
+    /// RFC-0004: an improvement object's signature, checked against the stored key of the bond it is
+    /// attributed to, under the object's own ML-DSA-87 context.
+    fn palw_improvement_check_bond_signature(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        message: &kaspa_hashes::Hash64,
+        signature: &[u8],
+        context: &[u8],
+        what: &str,
+    ) -> Result<(), String> {
+        let record = state.bond(bond).ok_or_else(|| format!("{what} is attributed to a bond this chain does not have"))?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err(format!("{what} is attributed to a bond that is not Active"));
+        }
+        if !Self::verify_mldsa87_with_context_bool(&record.pubkey, message.as_byte_slice(), signature, context) {
+            return Err(format!("{what} carries a signature the attributed bond's key does not verify"));
+        }
+        Ok(())
     }
 
     /// ADR-0088: the signature of a registry object, checked against the stored key of the bond

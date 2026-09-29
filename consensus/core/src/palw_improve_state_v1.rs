@@ -167,12 +167,38 @@ pub struct PalwEpochWindowsV1 {
     pub court_margin: u64,
 }
 
+/// **A scoring stage's parameters** (spec 17 §17.4.3): the chain derives the stage's program from its
+/// kind, these parameters and the subject's shape, with the builders `scoring_set_id` pins (A7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwScoringParamsV1 {
+    /// The answer span between `open` and `close` (−1: no delimiter), compared with a key of at most
+    /// `key_cap` ids.
+    ExactMatch { open: i32, close: i32, key_cap: u32 },
+    /// The subject's logits in Q24 nats per unit (the line's output interface).
+    RefLogLik { logit_scale_q24: i32 },
+    /// The judge's scalar range.
+    Judge { lo: i32, hi: i32 },
+    /// The preference margin the stage applies inside the circuit.
+    Pairwise { margin: i32 },
+}
+
+impl PalwScoringParamsV1 {
+    /// The kind these parameters belong to.
+    pub const fn kind(&self) -> PalwScoringKindV1 {
+        match self {
+            PalwScoringParamsV1::ExactMatch { .. } => PalwScoringKindV1::ExactMatch,
+            PalwScoringParamsV1::RefLogLik { .. } => PalwScoringKindV1::RefLogLik,
+            PalwScoringParamsV1::Judge { .. } => PalwScoringKindV1::Judge,
+            PalwScoringParamsV1::Pairwise { .. } => PalwScoringKindV1::Pairwise,
+        }
+    }
+}
+
 /// One scoring stage of the evaluation spec.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwScoringStageV1 {
     pub kind: PalwScoringKindV1,
-    /// The stage program's `graph_ir_root` in the scoring library.
-    pub program_root: Hash64,
+    pub params: PalwScoringParamsV1,
 }
 
 /// **The evaluation spec** (RFC-0004 §7).
@@ -201,6 +227,8 @@ pub struct PalwEvalSpecV1 {
     pub stop_ids: Vec<u32>,
     /// `κ`: the most a submitter or steward supplies of an epoch's items, in permille.
     pub setter_cap_permille: u16,
+    /// The policy's cap on an epoch's evaluation positions (PALW-MIP-20), within the network's ceiling.
+    pub max_eval_positions: u64,
 }
 
 /// **The fees and bonds** (RFC-0004 §13), in sompi.
@@ -213,6 +241,10 @@ pub struct PalwImprovementFeesV1 {
     pub artifact_bond: u64,
     pub setter_bond: u64,
     pub dataset_bond: u64,
+    /// S1: the bounty for an exact-match case's first matching `Answer` (§17.11.3).
+    pub s1_bounty: u64,
+    /// S1: the reward for a `SyntheticProblem` or `HardCaseVariant` the head verifiably fails.
+    pub s1_setter_reward: u64,
 }
 
 /// **The provenance policy** (RFC-0004 §2.1 check 2, §9).
@@ -241,6 +273,8 @@ pub struct PalwImprovementPolicyV1 {
     pub phi_permille: u16,
     /// The share of the pool S1 may spend in an epoch, in permille.
     pub bounty_share_permille: u16,
+    /// S2: the share of the pool a promotion pays out (trainer and data), in permille.
+    pub promotion_share_permille: u16,
     /// S2: the trainer's share of the winner's epoch reward, and the caps per dataset and contributor.
     pub s2_trainer_permille: u16,
     pub s2_dataset_cap_permille: u16,
@@ -260,7 +294,7 @@ pub fn palw_improvement_policy_digest_v1(policy: &PalwImprovementPolicyV1) -> Ha
     keyed64(PALW_IMPROVE_POLICY_DOMAIN_V1, &[&bytes])
 }
 
-// ---- the governed line's row: `improvement_lines` (RFC-0004 §3, §4) ----
+// ---- the governed line's row: `improvement_lines` (spec 17 §17.3.1) ----
 
 /// Why a head moved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -274,52 +308,135 @@ pub enum PalwHeadCauseV1 {
     RolledBackByProof = 3,
 }
 
+/// **One head change** (spec 17 §17.4.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwLineageHeadEntryV1 {
+    /// The epoch that made the change (0 for the opt-in).
     pub epoch: u64,
+    /// The head from this entry on.
     pub class_id: Hash64,
+    /// The head before it.
     pub previous: Option<Hash64>,
     pub daa: u64,
     pub cause: PalwHeadCauseV1,
 }
 
-/// **The line's pool** (RFC-0004 §8.5), in sompi.
+/// **The line's pool** (spec 17 §17.11), in sompi. `balance` is spendable; `held` is bonds and
+/// escrows owed back or forfeitable; `unvested` is granted and not yet paid. The in/out counters are
+/// the conservation ledger (§17.11.5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwImprovementPoolV1 {
     pub balance: u64,
+    pub held: u64,
+    pub unvested: u64,
+    /// What S1 may still pay in the current period (set at each opening).
+    pub s1_budget: u64,
     pub deposited: u128,
-    pub paid: u128,
+    pub fees_in: u128,
+    pub phi_in: u128,
+    pub held_in: u128,
     pub forfeited_in: u128,
+    pub paid: u128,
     pub refunded: u128,
 }
 
-/// **A governed line's row** in `improvement_lines`, keyed by the line id.
+/// A governed line's status (spec 17 §17.4.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwImprovementLineStatusV1 {
+    Governed,
+    /// Opting out: no epoch opens; from `effective_daa` the line is no longer governed. `None` while
+    /// an epoch is still open (the effective DAA is set when it ends).
+    OptingOut {
+        effective_daa: Option<u64>,
+    },
+    /// Opted out and settled: the line's other rows are gone; the header stays so its policy sequence
+    /// continues (an old signed opt-in cannot be replayed).
+    Dissolved,
+}
+
+/// **The material frontier** (spec 17 §17.6.1): an RFC 6962 Merkle tree kept as the roots of its
+/// perfect subtrees, largest first — at most 32 hashes for `count < 2^32`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwMaterialFrontierV1 {
+    pub count: u32,
+    pub frontier: Vec<Hash64>,
+}
+
+/// **A governed line's header** in `improvement_lines`, keyed by the line id (spec 17 §17.3.1). O(1):
+/// the policy, the usage counter, the head history, the pool and the material live in their own
+/// keyed tables, so a frequent write (a usage count, a fee) journals a few hundred bytes.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwImprovementLineV1 {
     pub line_id: Hash64,
-    pub owner: PalwBondKeyV2,
-    pub policy: PalwImprovementPolicyV1,
+    /// The line's IR class at opt-in (spec 15's `PalwModelLineV1.class_id`).
+    pub class_id: Hash64,
+    /// The digest of the policy in force (`improvement_policies`).
     pub policy_digest: Hash64,
+    /// The sequence of the last accepted policy object (§17.4.2).
+    pub policy_sequence: u64,
+    pub status: PalwImprovementLineStatusV1,
     pub governed_from_daa: u64,
-    /// A policy signed during an epoch, in force from the next `Idle`.
-    pub pending_policy: Option<Box<PalwImprovementPolicyV1>>,
-    /// Opting out takes effect after this epoch and the delay.
-    pub opt_out_after_epoch: Option<u64>,
-    /// The current head: the line's current version's class (§3).
+    /// The head: an IR class id (§17.4.1).
     pub head: Hash64,
-    pub head_history: Vec<PalwLineageHeadEntryV1>,
-    /// The head's usage counter when the last epoch opened (the trigger's baseline).
-    pub usage_baseline: u128,
+    /// How many head entries were ever appended; the history keeps `(line, seq)` for the last
+    /// [`PALW_IMPROVE_HEAD_HISTORY_MAX_V1`] of them.
+    pub head_seq: u32,
+    /// The next epoch's number (epochs count from 1).
     pub next_epoch: u64,
     pub open_epoch: Option<u64>,
-    pub pool: PalwImprovementPoolV1,
-    /// Submitters barred until an epoch, after a rollback (§7.6).
-    pub barred_submitters: Vec<(PalwBondKeyV2, u64)>,
+    /// When the fold next advances the line (§17.5.2).
+    pub next_due_daa: u64,
+    /// Submitters barred after a rollback, each with the DAA its bar ends (§17.10.3), at most
+    /// [`PALW_IMPROVE_BARRED_MAX_V1`]; an expired bar is pruned when the line is advanced.
+    pub barred: Vec<(PalwBondKeyV2, u64)>,
+    /// The epoch of the head's latest promotion — kept (with its winner's row) while a rollback can
+    /// name it (§17.10).
+    pub last_promotion: Option<u64>,
+    /// The epoch that ran the regression check of the latest promotion, kept for its proof.
+    pub regression_epoch: Option<u64>,
+    /// The predecessor the next epoch evaluates as `Previous` (§17.10.2), set at a promotion.
+    pub regression_check: Option<Hash64>,
 }
 
-// ---- the epoch's row: `improvement_epochs` (RFC-0004 §4) ----
+/// The most bars a line keeps (the oldest-ending is dropped past it).
+pub const PALW_IMPROVE_BARRED_MAX_V1: usize = 16;
 
-/// **The epoch's states** (RFC-0004 §4). `Idle` is the line's, not an epoch's.
+/// **A line's policy record** in `improvement_policies` (spec 17 §17.3.1): the policy in force and a
+/// pending one.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwImprovementPolicyRecordV1 {
+    pub policy: PalwImprovementPolicyV1,
+    /// A policy accepted while an epoch was open, in force from the epoch's end.
+    pub pending: Option<Box<PalwImprovementPolicyV1>>,
+}
+
+/// **A line's usage counter** in `improvement_usage` (spec 17 §17.4.5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwImprovementUsageV1 {
+    pub usage: u128,
+    pub since_daa: u64,
+}
+
+impl PalwImprovementLineV1 {
+    /// Is the line governed at `daa` (opted in and not yet out)?
+    pub fn governed_at(&self, daa: u64) -> bool {
+        match self.status {
+            PalwImprovementLineStatusV1::Governed => true,
+            PalwImprovementLineStatusV1::OptingOut { effective_daa } => effective_daa.is_none_or(|at| daa < at),
+            PalwImprovementLineStatusV1::Dissolved => false,
+        }
+    }
+
+    /// Is `bond` barred from submitting at `daa`?
+    pub fn is_barred(&self, bond: &PalwBondKeyV2, daa: u64) -> bool {
+        self.barred.iter().any(|(b, until)| b == bond && daa < *until)
+    }
+}
+
+// ---- the epoch's row: `improvement_epochs` (spec 17 §17.3.2) ----
+
+/// **The epoch's states** (spec 17 §17.5.1). The line is idle when it has no open epoch; `Vesting` is
+/// not a state [E13].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -327,14 +444,15 @@ pub enum PalwEpochStateV1 {
     Open = 1,
     Submission = 2,
     HoldOut = 3,
-    Drawn = 4,
+    /// Past `t_draw`, waiting for the first block at `t_draw + beacon_delay` [E3].
+    Drawing = 4,
     Evaluating = 5,
-    Scoring = 6,
+    /// Past `t_eval`, waiting for the evaluation claims to finalise, at the latest `t_score` [E4].
+    Closing = 6,
     Decided = 7,
-    Vesting = 8,
-    Closed = 9,
 }
 
+/// The epoch's times, fixed at its opening (spec 17 §17.5.3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwEpochTimesV1 {
     pub t_open: u64,
@@ -342,9 +460,11 @@ pub struct PalwEpochTimesV1 {
     pub t_close: u64,
     pub t_draw: u64,
     pub t_eval: u64,
+    /// `t_eval + court_margin`: scoring happens at the latest here.
+    pub t_score: u64,
 }
 
-/// **A candidate as the epoch keeps it** (RFC-0004 §6): what `CandidateSubmitted` writes.
+/// **A candidate as the epoch keeps it** (spec 17 §17.7): what `CandidateSubmitted` writes.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwEpochCandidateV1 {
     pub class_id: Hash64,
@@ -352,47 +472,62 @@ pub struct PalwEpochCandidateV1 {
     pub artifact: crate::palw_improve_artifact_v1::PalwTirArtifactRefV1,
     /// The digest of the submission's declarations (datasets, licences, teacher classes).
     pub declarations_digest: Hash64,
-    pub fees_paid: u64,
+    /// Registered datasets the candidate declared, with their weights in permille (S2).
+    pub datasets: Vec<(Hash64, u16)>,
+    /// The registration fee it paid (to the pool's balance).
+    pub fee_paid: u64,
+    /// Its bond (held).
     pub bond: u64,
+    /// Its evaluation escrow (held), and what the executors have been paid from it.
+    pub escrow: u64,
+    pub escrow_spent: u64,
     pub submitted_daa: u64,
+    /// Its counts and eligibility, once scored (§17.9.3).
+    pub counts: Option<PalwPromotionCountsV1>,
 }
 
-/// Where an evaluation item came from (RFC-0004 §7.1).
+/// Where an evaluation item came from (spec 17 §17.8.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwItemSourceV1 {
     HoldOut,
-    Setter { set_id: Hash64 },
-    Regression,
-    Safety,
-    Anchor,
+    Setter { set_id: Hash64, index: u32 },
+    Regression { index: u32 },
+    Safety { index: u32 },
 }
 
-/// **A drawn item** (RFC-0004 §7.1–7.2).
+/// **A drawn item** (spec 17 §17.8.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwEvalItemV1 {
     pub item: u32,
+    /// The case id, the setter item's id or the suite item's id.
     pub case_id: Hash64,
     pub source: PalwItemSourceV1,
+    pub supplier: Option<PalwBondKeyV2>,
     /// [`palw_improve_eval_seed_v1`]: the same for every subject.
     pub seed: Hash64,
     /// The judge drawn for the item, when the spec has judged stages.
     pub judge: Option<Hash64>,
+    /// Dropped for every subject (a setter that never revealed).
+    pub dropped: bool,
 }
 
-/// **The subject of an evaluation job** (RFC-0004 §7.2).
+/// **The subject of an evaluation job** (spec 17 §17.8.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 pub enum PalwEvalSubjectV1 {
     Parent,
     Candidate(Hash64),
+    /// The head's predecessor, in the regression check (§17.10.2).
+    Previous(Hash64),
 }
 
-/// **A final score** (RFC-0004 §7.3): a scoring stage's committed output, from a final claim.
+/// **A final score** (spec 17 §17.8.3): a scoring stage's committed output, from a final claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwEvalScoreV1 {
     pub job_id: Hash64,
     pub claim: Hash64,
     pub kind: PalwScoringKindV1,
-    /// ExactMatch: 0 or 1. RefLogLik: Q24 log-likelihood. Judge: the judge's scalar. Pairwise: −1, 0, 1.
+    /// ExactMatch: 1 pass, 0 fail. RefLogLik: the Q24 log-likelihood. Judge: the judge's scalar.
+    /// Pairwise: the stage's committed outcome from the candidate's side (+1, 0, −1).
     pub value: i64,
 }
 
@@ -404,7 +539,7 @@ pub struct PalwEvalResultV1 {
     pub scores: Vec<PalwEvalScoreV1>,
 }
 
-/// **An item's paired outcome** for a candidate against the parent (RFC-0004 §7.5).
+/// **An item's paired outcome** for a candidate against the parent (spec 17 §17.9.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -414,6 +549,7 @@ pub enum PalwItemOutcomeV1 {
     Tie = 3,
 }
 
+/// Wins, losses and ties of one count (spec 17 §17.9.3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPairedCountsV1 {
     pub wins: u32,
@@ -421,15 +557,34 @@ pub struct PalwPairedCountsV1 {
     pub ties: u32,
 }
 
-/// **A candidate's counts** (RFC-0004 §7.5): primary, regression, safety and the judge guards.
+impl PalwPairedCountsV1 {
+    pub fn add(&mut self, outcome: PalwItemOutcomeV1) {
+        match outcome {
+            PalwItemOutcomeV1::Win => self.wins += 1,
+            PalwItemOutcomeV1::Loss => self.losses += 1,
+            PalwItemOutcomeV1::Tie => self.ties += 1,
+        }
+    }
+
+    /// Every counted item.
+    pub fn total(&self) -> u32 {
+        self.wins + self.losses + self.ties
+    }
+}
+
+/// **A candidate's counts** (spec 17 §17.9.3): primary, the two suites and the two guards.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPromotionCountsV1 {
     pub primary: PalwPairedCountsV1,
     pub regression: PalwPairedCountsV1,
     pub safety: PalwPairedCountsV1,
     pub judge: PalwPairedCountsV1,
+    pub pairwise: PalwPairedCountsV1,
+    /// Whether the candidate met every rule of §17.9.4.
+    pub eligible: bool,
 }
 
+/// Why an epoch changed nothing (spec 17 §17.9.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -437,17 +592,20 @@ pub enum PalwNoChangeReasonV1 {
     NoCandidate = 1,
     TooFewItems = 2,
     NoneEligible = 3,
-    EvaluationIncomplete = 4,
+    /// A rollback aborted the epoch [E11].
+    Aborted = 4,
+    /// The pool could not cover the parent's evaluation escrow.
+    PoolInsufficient = 5,
 }
 
-/// **The epoch's decision** (RFC-0004 §7.5).
+/// **The epoch's decision** (spec 17 §17.9.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwPromotionOutcomeV1 {
     Promoted { class_id: Hash64, wins: u32, losses: u32 },
     NoChange { reason: PalwNoChangeReasonV1 },
 }
 
-/// **What a reward pays for** (RFC-0004 §8).
+/// **What a grant pays for** (spec 17 §17.11.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -456,24 +614,39 @@ pub enum PalwRewardStageV1 {
     S1Setter = 2,
     S2Trainer = 3,
     S2Dataset = 4,
+    /// Reserved: S3 stays on testnets and has no v1 path.
     S3Ablation = 5,
-    EvalFee = 6,
+    /// The winner's candidate bond, which vests with its grant.
+    WinnerBond = 6,
 }
 
-/// **A grant from the pool** (RFC-0004 §8): who, for what, how much, on what it rests, and its vesting.
+/// **A grant** (spec 17 §17.11.3–4): who, for what, how much, on what it rests, and its vesting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwRewardGrantV1 {
     pub recipient: PalwBondKeyV2,
     pub stage: PalwRewardStageV1,
     pub amount: u64,
     pub label: PalwTrustLabelV1,
-    pub vest_from_epoch: u64,
+    pub vest_from_daa: u64,
+    /// The policy's `L_e` when the grant was made.
+    pub vest_unit_daa: u64,
     pub vest_epochs: u32,
     pub vested: u64,
     pub forfeited: bool,
 }
 
-/// **An epoch's row** in `improvement_epochs`, keyed by `(line id, epoch number)`.
+/// The evaluation escrow the pool pays for the parent and the regression check (spec 17 §17.11.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwEpochEscrowV1 {
+    pub parent: u64,
+    pub parent_spent: u64,
+    pub previous: u64,
+    pub previous_spent: u64,
+}
+
+/// **An epoch's header** in `improvement_epochs`, keyed by `(line id, epoch number)` (spec 17
+/// §17.3.2). O(1): candidates, pool entries, items, results and grants live in their own keyed tables
+/// under `(line, epoch, …)`, and the header keeps their counts.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwImprovementEpochV1 {
     pub line_id: Hash64,
@@ -482,23 +655,57 @@ pub struct PalwImprovementEpochV1 {
     pub times: PalwEpochTimesV1,
     /// The head when the epoch opened: every candidate's parent.
     pub parent: Hash64,
-    /// The training material admitted while `Open`: a running accumulator and its count.
-    pub material_acc: Hash64,
-    pub material_count: u32,
-    /// Fixed at `t_fix` (RFC-0004 §4).
+    /// The head's predecessor, when this epoch runs the regression check (§17.10.2).
+    pub previous: Option<Hash64>,
+    /// The policy the epoch runs under.
+    pub policy_digest: Hash64,
+    /// Fixed at `t_fix` (§17.6.1).
     pub dataset_root: Option<Hash64>,
-    /// Hard cases admitted in `HoldOut`: the evaluation pool.
-    pub holdout_cases: Vec<Hash64>,
-    /// Setter sets committed before `t_close`.
-    pub setter_sets: Vec<Hash64>,
-    pub candidates: Vec<PalwEpochCandidateV1>,
-    /// The epoch seed: the beacon at the first block `beacon_delay` past `t_draw`.
+    /// `improvement_candidates[(line, epoch, 0..candidates)]`.
+    pub candidates: u32,
+    /// `improvement_pool_entries[(line, epoch, 0..pool_entries)]`: hold-out cases and setter sets.
+    pub pool_entries: u32,
+    pub holdout_cases: u32,
+    pub setter_sets: u32,
+    /// The epoch seed (§17.8.1).
     pub seed: Option<Hash64>,
-    pub items: Vec<PalwEvalItemV1>,
-    pub results: Vec<PalwEvalResultV1>,
-    pub counts: Vec<(Hash64, PalwPromotionCountsV1)>,
+    /// `improvement_items[(line, epoch, 0..items)]`.
+    pub items: u32,
+    pub previous_counts: Option<PalwPromotionCountsV1>,
     pub outcome: Option<PalwPromotionOutcomeV1>,
-    pub grants: Vec<PalwRewardGrantV1>,
+    pub escrow: PalwEpochEscrowV1,
+    /// `improvement_grants[(line, epoch, 0..grants)]`.
+    pub grants: u32,
+    pub decided_daa: Option<u64>,
+    /// The retirement sweep's progress once decided (§17.5.4): detail rows below it are gone.
+    pub retire: PalwEpochRetireV1,
+}
+
+/// **The retirement sweep's cursor** for one decided epoch (spec 17 §17.5.4): pool entries, then
+/// items, then results, each in key order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwEpochRetireV1 {
+    /// Not decided, or decided and not yet started.
+    #[default]
+    Pending,
+    /// Deleting detail rows; resumes at the next key.
+    Sweeping,
+    /// Every pool entry, item and result is gone.
+    Done,
+}
+
+/// **An evaluation-pool entry** in `improvement_pool_entries` (spec 17 §17.6.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwPoolEntryV2 {
+    HoldOut { id: Hash64, supplier: PalwBondKeyV2 },
+    SetterSet { set_id: Hash64, setter: PalwBondKeyV2, items: u32 },
+}
+
+impl PalwImprovementEpochV1 {
+    /// Is the epoch past its decision?
+    pub fn is_decided(&self) -> bool {
+        self.state == PalwEpochStateV1::Decided
+    }
 }
 
 // ---- the evaluation job (RFC-0004 §7.2) ----
@@ -537,11 +744,14 @@ pub fn palw_improve_eval_job_id_v1(line_id: &Hash64, epoch: u64, item: u32, subj
 
 // ---- the payloads of the core lane's own objects (tags 70, 81, 82) ----
 
-/// **`ImprovementPolicySet` (tag 70)**: a line opts in, or changes its policy between epochs.
+/// **`ModelLineImprovementPolicySet` (tag 70)** (spec 17 §17.4.2): a line opts in (`Some`, no row),
+/// changes its policy (`Some`, a row) or opts out (`None`). `sequence` is the row's
+/// `policy_sequence + 1` (1 for the opt-in), so an old signed policy cannot be replayed.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwImprovementPolicySetV1 {
     pub line_id: Hash64,
-    pub policy: PalwImprovementPolicyV1,
+    pub sequence: u64,
+    pub policy: Option<PalwImprovementPolicyV1>,
 }
 
 /// Why a rollback happens (RFC-0004 §7.6).
@@ -597,109 +807,147 @@ pub(crate) mod test_rows {
     }
 
     pub(crate) fn policy_v1(seed: u8) -> PalwImprovementPolicyV1 {
-        PalwImprovementPolicyV1 {
-            version: PALW_IMPROVEMENT_POLICY_VERSION_V1,
-            usage: PalwUsageThresholdV1 { measure: PalwUsageMeasureV1::Claims, value: 1_000 + seed as u128 },
-            windows: PalwEpochWindowsV1 {
-                grid: 1_000,
-                w_collect: 400,
-                w_submit: 400,
-                w_holdout: 200,
-                w_eval: 600,
-                beacon_delay: 10,
-                court_margin: 300,
-            },
-            eval: PalwEvalSpecV1 {
-                stages: vec![PalwScoringStageV1 { kind: PalwScoringKindV1::ExactMatch, program_root: h(seed, 1) }],
-                regression_suite_root: h(seed, 2),
-                regression_items: 64,
-                safety_suite_root: h(seed, 3),
-                safety_items: 32,
-                judge_set: vec![h(seed, 4)],
-                anchor_floor_permille: 900,
-                n: 256,
-                n_min: 64,
-                delta_permille: 20,
-                epsilon_permille: 10,
-                epsilon_safety_permille: 0,
-                alpha_permille: 50,
-                max_new_tokens: 256,
-                stop_ids: vec![2],
-                setter_cap_permille: 250,
-            },
-            k_max: 4,
-            fees: PalwImprovementFeesV1 {
-                registration_fee: 1_000,
-                candidate_bond: 10_000,
-                eval_fee_per_job: 10,
-                hard_case_fee: 5,
-                artifact_bond: 100,
-                setter_bond: 1_000,
-                dataset_bond: 1_000,
-            },
-            phi_permille: 100,
-            bounty_share_permille: 200,
-            s2_trainer_permille: 500,
-            s2_dataset_cap_permille: 300,
-            s2_contributor_cap_permille: 400,
-            provenance: PalwProvenancePolicyV1 {
-                teacher_classes: PalwTeacherClassV1::OpenDistill.bit() | PalwTeacherClassV1::PublicData.bit(),
-                licence_classes: vec![h(seed, 5)],
-                full_weight_candidates: false,
-                base_licence_class: h(seed, 6),
-            },
-            rollback_epochs: 2,
-            vest_epochs: 4,
-            ban_epochs: 8,
-        }
+        let mut policy = crate::palw_improve_policy_v1::palw_improvement_policy_example_v1();
+        policy.usage.value += seed as u128;
+        policy
     }
 
     pub(crate) fn line_v1(seed: u8) -> PalwImprovementLineV1 {
-        let policy = policy_v1(seed);
         PalwImprovementLineV1 {
             line_id: h(seed, 10),
-            owner: bond(seed),
-            policy_digest: palw_improvement_policy_digest_v1(&policy),
-            policy,
+            class_id: h(seed, 11),
+            policy_digest: palw_improvement_policy_digest_v1(&policy_v1(seed)),
+            policy_sequence: 1,
+            status: PalwImprovementLineStatusV1::Governed,
             governed_from_daa: 5_000,
-            pending_policy: None,
-            opt_out_after_epoch: None,
             head: h(seed, 11),
-            head_history: vec![PalwLineageHeadEntryV1 {
-                epoch: 0,
-                class_id: h(seed, 11),
-                previous: None,
-                daa: 5_000,
-                cause: PalwHeadCauseV1::OptIn,
-            }],
-            usage_baseline: 0,
-            next_epoch: 1,
-            open_epoch: None,
-            pool: PalwImprovementPoolV1::default(),
-            barred_submitters: Vec::new(),
+            head_seq: 1,
+            next_epoch: 2,
+            open_epoch: Some(1),
+            next_due_daa: 6_400,
+            barred: vec![(bond(seed), 9_000)],
+            last_promotion: None,
+            regression_epoch: None,
+            regression_check: None,
         }
+    }
+
+    pub(crate) fn policy_record_v1(seed: u8) -> PalwImprovementPolicyRecordV1 {
+        PalwImprovementPolicyRecordV1 { policy: policy_v1(seed), pending: None }
+    }
+
+    pub(crate) fn usage_v1(seed: u8) -> PalwImprovementUsageV1 {
+        PalwImprovementUsageV1 { usage: 3 + seed as u128, since_daa: 5_000 }
+    }
+
+    pub(crate) fn head_v1(seed: u8) -> PalwLineageHeadEntryV1 {
+        PalwLineageHeadEntryV1 { epoch: 0, class_id: h(seed, 11), previous: None, daa: 5_000, cause: PalwHeadCauseV1::OptIn }
+    }
+
+    pub(crate) fn pool_v1(seed: u8) -> PalwImprovementPoolV1 {
+        PalwImprovementPoolV1 { balance: 7 + seed as u64, deposited: 7 + seed as u128, ..Default::default() }
+    }
+
+    pub(crate) fn material_v1(seed: u8) -> PalwMaterialFrontierV1 {
+        PalwMaterialFrontierV1 { count: 1, frontier: vec![h(seed, 12)] }
     }
 
     pub(crate) fn epoch_v1(seed: u8) -> PalwImprovementEpochV1 {
         PalwImprovementEpochV1 {
             line_id: h(seed, 10),
             epoch: 1,
-            state: PalwEpochStateV1::Open,
-            times: PalwEpochTimesV1 { t_open: 6_000, t_fix: 6_400, t_close: 6_800, t_draw: 7_000, t_eval: 7_600 },
+            state: PalwEpochStateV1::Submission,
+            times: PalwEpochTimesV1 { t_open: 6_000, t_fix: 6_400, t_close: 6_800, t_draw: 7_000, t_eval: 7_600, t_score: 7_900 },
             parent: h(seed, 11),
-            material_acc: h(seed, 12),
-            material_count: 1,
-            dataset_root: None,
-            holdout_cases: Vec::new(),
-            setter_sets: Vec::new(),
-            candidates: Vec::new(),
+            previous: None,
+            policy_digest: h(seed, 13),
+            dataset_root: Some(h(seed, 14)),
+            candidates: 1,
+            pool_entries: 1,
+            holdout_cases: 1,
+            setter_sets: 0,
             seed: None,
-            items: Vec::new(),
-            results: Vec::new(),
-            counts: Vec::new(),
+            items: 1,
+            previous_counts: None,
             outcome: None,
-            grants: Vec::new(),
+            escrow: PalwEpochEscrowV1::default(),
+            grants: 1,
+            decided_daa: None,
+            retire: PalwEpochRetireV1::Pending,
         }
+    }
+
+    pub(crate) fn candidate_v1(seed: u8) -> PalwEpochCandidateV1 {
+        PalwEpochCandidateV1 {
+            class_id: h(seed, 20),
+            submitter: bond(seed),
+            artifact: crate::palw_improve_artifact_v1::PalwTirArtifactRefV1::Single { root: h(seed, 21) },
+            declarations_digest: h(seed, 22),
+            datasets: vec![(h(seed, 23), 1_000)],
+            fee_paid: 1,
+            bond: 2,
+            escrow: 3,
+            escrow_spent: 0,
+            submitted_daa: 6_500,
+            counts: None,
+        }
+    }
+
+    pub(crate) fn pool_entry_v1(seed: u8) -> PalwPoolEntryV2 {
+        PalwPoolEntryV2::HoldOut { id: h(seed, 30), supplier: bond(seed) }
+    }
+
+    pub(crate) fn item_v1(seed: u8) -> PalwEvalItemV1 {
+        PalwEvalItemV1 {
+            item: 0,
+            case_id: h(seed, 30),
+            source: PalwItemSourceV1::HoldOut,
+            supplier: Some(bond(seed)),
+            seed: h(seed, 31),
+            judge: None,
+            dropped: false,
+        }
+    }
+
+    pub(crate) fn result_v1(seed: u8) -> PalwEvalResultV1 {
+        PalwEvalResultV1 {
+            item: 0,
+            subject: PalwEvalSubjectV1::Parent,
+            scores: vec![PalwEvalScoreV1 { job_id: h(seed, 40), claim: h(seed, 41), kind: PalwScoringKindV1::ExactMatch, value: 1 }],
+        }
+    }
+
+    pub(crate) fn grant_v1(seed: u8) -> PalwRewardGrantV1 {
+        PalwRewardGrantV1 {
+            recipient: bond(seed),
+            stage: PalwRewardStageV1::S2Trainer,
+            amount: 100,
+            label: PalwTrustLabelV1::Trusted,
+            vest_from_daa: 7_900,
+            vest_unit_daa: 1_900,
+            vest_epochs: 4,
+            vested: 0,
+            forfeited: false,
+        }
+    }
+
+    /// One governed line with every row it carries, and one epoch with one of every detail row —
+    /// a state the carriage's consistency accepts.
+    pub(crate) fn populate_v1(state: &mut crate::palw_state_v2::PalwChainStateV2, seed: u8) {
+        state.insert_improvement_rows_for_test_v1(
+            line_v1(seed),
+            policy_record_v1(seed),
+            usage_v1(seed),
+            head_v1(seed),
+            pool_v1(seed),
+            material_v1(seed),
+            epoch_v1(seed),
+            candidate_v1(seed),
+            pool_entry_v1(seed),
+            item_v1(seed),
+            result_v1(seed),
+            grant_v1(seed),
+        );
     }
 }
 

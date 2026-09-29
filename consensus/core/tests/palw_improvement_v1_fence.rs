@@ -38,10 +38,8 @@ use kaspa_consensus_core::palw_improve_material_v1::{
     PalwSetterSetCommitmentV1, PalwSetterSetRevealV1, PalwTeacherLicenceV1, PalwTeachingArtifactCommitV1, PalwTeachingArtifactV1,
 };
 use kaspa_consensus_core::palw_improve_state_v1::{
-    PALW_IMPROVEMENT_POLICY_VERSION_V1, PalwEpochWindowsV1, PalwEvalSpecV1, PalwImprovementFeesV1, PalwImprovementPolicySetV1,
-    PalwImprovementPolicyV1, PalwImprovementPoolFundingV1, PalwLineageRollbackV1, PalwProvenancePolicyV1, PalwRollbackCauseV1,
-    PalwScoringKindV1, PalwScoringStageV1, PalwTeacherClassV1, PalwTeachingArtifactKindV1, PalwUsageMeasureV1, PalwUsageThresholdV1,
-    PalwVerificationTypeV1,
+    PalwImprovementPolicySetV1, PalwImprovementPolicyV1, PalwImprovementPoolFundingV1, PalwLineageRollbackV1, PalwRollbackCauseV1,
+    PalwTeacherClassV1, PalwTeachingArtifactKindV1, PalwVerificationTypeV1,
 };
 use kaspa_consensus_core::palw_improve_v1::{
     PALW_DRILL_IMPROVE_CEILINGS_V1, PALW_DRILL_IMPROVE_FENCES_V1, PALW_DRILL_IMPROVE_V1_ENTRY, PALW_IMPROVE_COURT_VERSION_V1,
@@ -54,6 +52,9 @@ use kaspa_consensus_core::palw_state_v2::{
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
 use kaspa_consensus_core::tx::TransactionOutpoint;
 
+/// The second IR fence's height in these cases (a prerequisite since the coordinator's decision of
+/// 2026-09-29): above testnet-12's IR flag day, used by no fence.
+const FENCE2_AT: u64 = 9_999_985;
 /// The generative fence's height in these cases: above testnet-12's IR flag day, used by no fence.
 const GEN_AT: u64 = 9_999_990;
 /// The improvement fence's: above the generative fence's, used by no fence.
@@ -93,9 +94,12 @@ fn rulesets() -> Vec<(&'static str, Params)> {
     ]
 }
 
-/// Testnet-12 as shipped with the generative fence armed at [`GEN_AT`]: every prerequisite in force.
+/// Testnet-12 as shipped with the second IR fence at [`FENCE2_AT`] and the generative fence at
+/// [`GEN_AT`]: every prerequisite in force.
 fn t12_with_gen() -> Params {
     let mut p = palw_t12_shipped_params();
+    p.palw_tir_fence2 = Some(ForkActivation::new(FENCE2_AT));
+    p.sync_palw_tir_fence2();
     p.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(ForkActivation::new(GEN_AT)));
     p.sync_palw_gen_v1();
     p.validate_palw_v2().unwrap_or_else(|e| panic!("testnet-12 past its IR flag day can arm the generative fence: {e}"));
@@ -267,6 +271,15 @@ fn validate_refuses_every_value_this_build_cannot_run() {
     same_height.palw_improvement_v1 = Some(PalwImprovementFenceV1::drill_v1(ForkActivation::new(GEN_AT)));
     same_height.sync_palw_improvement_v1();
     assert!(same_height.validate_palw_improvement_v1().is_ok(), "at the generative fence's own height");
+    // The second IR fence (every evaluation pipeline sized under H7; no verdict flips mid-epoch).
+    let mut no_fence2 = ok.clone();
+    no_fence2.palw_tir_fence2 = None;
+    no_fence2.sync_palw_tir_fence2();
+    assert!(no_fence2.validate_palw_improvement_v1().is_err(), "palw_tir_fence2 is a prerequisite");
+    let mut late_fence2 = ok.clone();
+    late_fence2.palw_tir_fence2 = Some(ForkActivation::new(AT + 1));
+    late_fence2.sync_palw_tir_fence2();
+    assert!(late_fence2.validate_palw_improvement_v1().is_err(), "the second IR fence must be in force at or below it");
     // The k-ary court.
     let mut no_kary = ok.clone();
     no_kary.palw_kary_court = None;
@@ -292,18 +305,15 @@ fn validate_refuses_every_value_this_build_cannot_run() {
 #[test]
 fn the_ids_are_keyed_hashes_of_their_descriptors() {
     let keyed = |key: &[u8], bytes: &[u8]| blake2b_simd::Params::new().hash_length(64).key(key).hash(bytes).as_bytes().to_vec();
-    use kaspa_consensus_core::palw_improve_v1::{
-        PALW_IMPROVE_SCORING_SET_DESCRIPTOR_V1, PALW_IMPROVE_SCORING_SET_DOMAIN_V1, PALW_IMPROVE_SIGN_TABLE_DESCRIPTOR_V1,
-        PALW_IMPROVE_SIGN_TABLE_DOMAIN_V1,
-    };
+    use kaspa_consensus_core::palw_improve_v1::{PALW_IMPROVE_SCORING_SET_DESCRIPTOR_V1, PALW_IMPROVE_SCORING_SET_DOMAIN_V1};
     assert_eq!(
         palw_improve_scoring_set_id_v1().as_byte_slice(),
         &keyed(PALW_IMPROVE_SCORING_SET_DOMAIN_V1, PALW_IMPROVE_SCORING_SET_DESCRIPTOR_V1.as_bytes())[..]
     );
-    assert_eq!(
-        palw_improve_sign_table_id_v1().as_byte_slice(),
-        &keyed(PALW_IMPROVE_SIGN_TABLE_DOMAIN_V1, PALW_IMPROVE_SIGN_TABLE_DESCRIPTOR_V1.as_bytes())[..]
-    );
+    // The sign table's id is the pinned digest of the whole table (spec 17 §17.9.2); the promotion
+    // module's `the_pinned_sign_table_is_the_definition` recomputes it.
+    let pinned = kaspa_consensus_core::palw_improve_promotion_v1::PALW_IMPROVE_SIGN_TABLE_ID_HEX_V1;
+    assert_eq!(palw_improve_sign_table_id_v1().to_string(), pinned, "the fence reads the pin");
     assert_ne!(palw_improve_scoring_set_id_v1(), palw_improve_sign_table_id_v1());
     let fence = PalwImprovementFenceV1::drill_v1(ForkActivation::new(AT));
     assert_eq!(fence.court_version, PALW_IMPROVE_COURT_VERSION_V1);
@@ -329,7 +339,8 @@ fn the_drill_entry_sets_the_field_it_names() {
 #[test]
 fn the_drill_mover_arms_it_on_a_salted_drill_and_nowhere_else() {
     let mut drill = palw_t12_drill_params_v1(&salt());
-    palw_drill_gen_fence_at_v1(&mut drill, 2_345).expect("the generative fence first, above the drill's IR flag day");
+    kaspa_consensus_core::config::drill::palw_drill_tir_fence2_at_v1(&mut drill, 2_300).expect("the second IR fence first");
+    palw_drill_gen_fence_at_v1(&mut drill, 2_345).expect("the generative fence, above the drill's IR flag day");
     // Above the generative fence: armed, the one fence, and the result validates.
     let mut moved = drill.clone();
     let moves = palw_drill_improve_fence_at_v1(&mut moved, 2_400).expect("a salted drill arms it above palw_gen_v1");
@@ -348,7 +359,8 @@ fn the_drill_mover_arms_it_on_a_salted_drill_and_nowhere_else() {
     assert_eq!(ids(&moved).1, ids(&drill).1, "a future height: the identity is the drill's");
     // Refusals leave the ruleset as it came.
     for (at, why) in [
-        (2_300, "below the generative fence"),
+        (2_330, "below the generative fence"),
+        (2_300, "palw_tir_fence2's own height"),
         (2_345, "palw_gen_v1's own height"),
         (2_000, "palw_tir_v1's own height"),
         (0, "genesis"),
@@ -378,61 +390,7 @@ fn bond(byte: u8) -> PalwBondKeyV2 {
 }
 
 fn policy() -> PalwImprovementPolicyV1 {
-    PalwImprovementPolicyV1 {
-        version: PALW_IMPROVEMENT_POLICY_VERSION_V1,
-        usage: PalwUsageThresholdV1 { measure: PalwUsageMeasureV1::WorkLeaves, value: 1 << 20 },
-        windows: PalwEpochWindowsV1 {
-            grid: 1_000,
-            w_collect: 300,
-            w_submit: 300,
-            w_holdout: 100,
-            w_eval: 500,
-            beacon_delay: 10,
-            court_margin: 200,
-        },
-        eval: PalwEvalSpecV1 {
-            stages: vec![PalwScoringStageV1 { kind: PalwScoringKindV1::RefLogLik, program_root: h(1) }],
-            regression_suite_root: h(2),
-            regression_items: 32,
-            safety_suite_root: h(3),
-            safety_items: 16,
-            judge_set: Vec::new(),
-            anchor_floor_permille: 900,
-            n: 128,
-            n_min: 32,
-            delta_permille: 20,
-            epsilon_permille: 10,
-            epsilon_safety_permille: 0,
-            alpha_permille: 50,
-            max_new_tokens: 64,
-            stop_ids: vec![2],
-            setter_cap_permille: 250,
-        },
-        k_max: 4,
-        fees: PalwImprovementFeesV1 {
-            registration_fee: 1,
-            candidate_bond: 2,
-            eval_fee_per_job: 3,
-            hard_case_fee: 4,
-            artifact_bond: 5,
-            setter_bond: 6,
-            dataset_bond: 7,
-        },
-        phi_permille: 100,
-        bounty_share_permille: 200,
-        s2_trainer_permille: 500,
-        s2_dataset_cap_permille: 300,
-        s2_contributor_cap_permille: 400,
-        provenance: PalwProvenancePolicyV1 {
-            teacher_classes: PalwTeacherClassV1::PublicData.bit(),
-            licence_classes: Vec::new(),
-            full_weight_candidates: false,
-            base_licence_class: h(4),
-        },
-        rollback_epochs: 2,
-        vest_epochs: 4,
-        ban_epochs: 8,
-    }
+    kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_policy_example_v1()
 }
 
 /// One of each improvement object, in tag order.
@@ -440,7 +398,7 @@ fn improvement_objects() -> Vec<PalwConsensusObjectV2> {
     let sig = vec![0xAA; 4];
     vec![
         PalwConsensusObjectV2::ModelLineImprovementPolicySet {
-            payload: Box::new(PalwImprovementPolicySetV1 { line_id: h(10), policy: policy() }),
+            payload: Box::new(PalwImprovementPolicySetV1 { line_id: h(10), sequence: 1, policy: Some(policy()) }),
             signature: sig.clone(),
         },
         PalwConsensusObjectV2::HardCaseSubmitted {

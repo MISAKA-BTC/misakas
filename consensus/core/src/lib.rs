@@ -485,6 +485,12 @@ pub mod palw_improve_artifact_v1;
 pub mod palw_improve_candidate_v1;
 /// RFC-0004 §5, §9, §10: the material's wire payloads (the candidates lane's).
 pub mod palw_improve_material_v1;
+/// **RFC-0004 §3 / spec 17 §17.4: the policy check, the owner's policy message and an example policy.**
+pub mod palw_improve_policy_v1;
+/// **RFC-0004 §7.5 / spec 17 §17.9: promotion — the pinned sign table, the counts and the decision.**
+pub mod palw_improve_promotion_v1;
+/// **RFC-0004 §4 / spec 17 §17.5–§17.8: the epoch's pure functions — times, the material tree, the seed, the draw.**
+pub mod palw_improve_epoch_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
