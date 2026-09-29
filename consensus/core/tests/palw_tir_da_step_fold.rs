@@ -1080,13 +1080,17 @@ fn a_trace_only_liar_is_convicted_by_one_seat_down_the_rows_tree() {
             let own_tiles: Vec<Hash64> = f.rows[index as usize]
                 .chunks(kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES)
                 .enumerate()
-                .map(|(t, lanes)| kaspa_consensus_core::palw_step_refute::tiled_logits_tile_leaf_v1(&ctx_hash, index as u32, t as u32, lanes))
+                .map(|(t, lanes)| {
+                    kaspa_consensus_core::palw_step_refute::tiled_logits_tile_leaf_v1(&ctx_hash, index as u32, t as u32, lanes)
+                })
                 .collect();
             let t = d.frontier.iter().zip(&own_tiles).position(|(a, b)| a != b).expect("the row differs, so a tile does");
             break (index as u32, t as u8);
         }
         let (below, first, end) = palw_tir_step_node_frontier_v1(decode as u64, level, index).expect("a node");
-        let k = (first..end).find(|p| own.levels[below as usize][*p as usize] != d.frontier[(*p - first) as usize]).expect("a node differs")
+        let k = (first..end)
+            .find(|p| own.levels[below as usize][*p as usize] != d.frontier[(*p - first) as usize])
+            .expect("a node differs")
             - first;
         unit = PalwDaUnitV1::TirRowNode { level: below, index: first + k };
     };
@@ -1151,7 +1155,10 @@ fn a_trace_only_liar_is_convicted_by_one_seat_down_the_rows_tree() {
     assert!(palw_accuser_exposure_v1(&run.s, &bond_key(SEAT)) > 0);
     run.step(&[PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(one_move) }]);
     assert!(
-        matches!(run.s.claim(&claim_id).map(|c| &c.phase), Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. })),
+        matches!(
+            run.s.claim(&claim_id).map(|c| &c.phase),
+            Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. })
+        ),
         "the trace liar is voided for fraud"
     );
     assert_eq!(palw_accuser_exposure_v1(&run.s, &bond_key(SEAT)), 0, "the seat's refuted exposure is refunded");
@@ -1170,10 +1177,19 @@ fn an_inconsistent_rows_answer_is_refused_and_a_row_past_the_trace_is_proven_so(
     rows[r][0] += 1;
     let accused = f.commit(&f.values, &rows, &f.generated);
     let (mut run, claim_id) = claimed(&f, &accused);
-    run.at(FENCE2, &[], None);
     let unit = PalwDaUnitV1::TirRowNode { level: 0, index: r as u64 };
-    run.step(&[demand(claim_id, unit, OTHER)]);
-    let refused = |object: PalwConsensusObjectV2, what: &str| {
+    // Below the fence a rows-tree demand and its answer are refused by name (the acceptance walk's
+    // drop reads the same predicate).
+    let row_demand = demand(claim_id, unit, OTHER);
+    assert!(palw_object_is_tir_fence2_v1(&row_demand));
+    assert!(palw_object_is_tir_fence2_v1(&row_answer(&f, &accused, claim_id, 0, r as u64)));
+    assert!(matches!(run.try_at(FENCE2 - 1, std::slice::from_ref(&row_demand), None), Err(PalwStateV2Error::TirFence2Refused(_))));
+    assert!(matches!(
+        run.try_at(FENCE2 - 1, &[row_answer(&f, &accused, claim_id, 0, r as u64)], None),
+        Err(PalwStateV2Error::TirFence2Refused(_))
+    ));
+    run.at(FENCE2, &[row_demand], None);
+    let refused = |run: &Run, object: PalwConsensusObjectV2, what: &str| {
         let e = run.refused(&[object]);
         assert!(matches!(e, PalwStateV2Error::DaOpeningRefused { .. } | PalwStateV2Error::DaAnswerMalformed { .. }), "{what}: {e}");
     };
@@ -1186,16 +1202,18 @@ fn an_inconsistent_rows_answer_is_refused_and_a_row_past_the_trace_is_proven_so(
         edit(&mut d);
         disclosed(claim_id, unit, PalwDaAnswerV1::TirRowNode(d))
     };
-    refused(tampered(&|d| d.frontier[0] = h64(0xF00)), "a tile leaf flipped");
-    refused(tampered(&|d| d.frontier.push(h64(0xF01))), "a tile leaf added");
-    refused(tampered(&|d| d.siblings[0] = h64(0xF02)), "a sibling flipped");
-    refused(tampered(&|d| d.generated_token_ids[0] ^= 1), "an id changed");
-    let PalwConsensusObjectV2::MaterialDisclosedV2 { answer: neighbour, .. } = row_answer(&f, &accused, claim_id, 0, (r as u64 + 1) % decode) else {
+    refused(&run, tampered(&|d| d.frontier[0] = h64(0xF00)), "a tile leaf flipped");
+    refused(&run, tampered(&|d| d.frontier.push(h64(0xF01))), "a tile leaf added");
+    refused(&run, tampered(&|d| d.siblings[0] = h64(0xF02)), "a sibling flipped");
+    refused(&run, tampered(&|d| d.generated_token_ids[0] ^= 1), "an id changed");
+    let PalwConsensusObjectV2::MaterialDisclosedV2 { answer: neighbour, .. } =
+        row_answer(&f, &accused, claim_id, 0, (r as u64 + 1) % decode)
+    else {
         unreachable!()
     };
-    refused(disclosed(claim_id, unit, neighbour), "another row's answer");
-    refused(row_answer(&f, &honest, claim_id, 0, r as u64), "the honest trace's answer");
-    refused(out_of_range(&accused, claim_id, unit), "an out-of-range proof of a row inside the trace");
+    refused(&run, disclosed(claim_id, unit, neighbour), "another row's answer");
+    refused(&run, row_answer(&f, &honest, claim_id, 0, r as u64), "the honest trace's answer");
+    refused(&run, out_of_range(&accused, claim_id, unit), "an out-of-range proof of a row inside the trace");
     run.step(&[row_answer(&f, &accused, claim_id, 0, r as u64)]);
     assert!(run.session_units(&claim_id, OTHER).is_none(), "the honest answer refutes the session");
     // Past the trace: the binding proves it.
@@ -1204,7 +1222,10 @@ fn an_inconsistent_rows_answer_is_refused_and_a_row_past_the_trace_is_proven_so(
         PalwDaUnitV1::TirRowNode { level: palw_tir_step_tree_height_v1(decode) + 1, index: 0 },
     ] {
         run.step(&[demand(claim_id, unit, OTHER)]);
-        refused(row_answer(&f, &accused, claim_id, 0, 0), "a row's answer for a unit past the trace");
+        let PalwConsensusObjectV2::MaterialDisclosedV2 { answer: first_row, .. } = row_answer(&f, &accused, claim_id, 0, 0) else {
+            unreachable!()
+        };
+        refused(&run, disclosed(claim_id, unit, first_row), "a row's answer for a unit past the trace");
         run.step(&[out_of_range(&accused, claim_id, unit)]);
         assert!(run.session_units(&claim_id, OTHER).is_none(), "{unit:?}: proven past the trace");
     }

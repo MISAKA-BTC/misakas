@@ -250,7 +250,10 @@ impl PalwDaAnswerV1 {
 
     /// Is this an IR class's answer (RFC-0002 Phase F)? A move only past `palw_tir_v1`.
     pub fn is_tir_v1(&self) -> bool {
-        matches!(self, Self::TirEvent(_) | Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirRowNode(_) | Self::TirStepOutOfRange(_))
+        matches!(
+            self,
+            Self::TirEvent(_) | Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirRowNode(_) | Self::TirStepOutOfRange(_)
+        )
     }
 
     /// Is this the second IR fence's answer? A move only past `palw_tir_fence2`.

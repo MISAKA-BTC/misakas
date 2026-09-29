@@ -2505,7 +2505,12 @@ pub fn build_tir_step_node_disclosure_v1(
 /// frontier and opening ([`palw_tir_step_node_parts_v1`]); at level 0 row `index`'s tile leaves
 /// (`tiled_logits_tile_leaf_v1`, one per 4,096 lanes) and the row's opening in the rows tree. `None`
 /// for a row or node past the trace, or rows that build no tree.
-pub fn palw_tir_row_node_parts_v1(ctx: &PalwJobContextV2, rows: &[Vec<i32>], level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+pub fn palw_tir_row_node_parts_v1(
+    ctx: &PalwJobContextV2,
+    rows: &[Vec<i32>],
+    level: u8,
+    index: u64,
+) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
     let ctx_hash = ctx.context_hash();
     let row_roots: Vec<Hash64> = rows
         .iter()
@@ -2590,9 +2595,8 @@ pub fn check_tir_row_node_disclosure_v1(
         if disclosure.frontier.len() != vocab.div_ceil(PALW_LOGITS_TILE_LANES) {
             return Err(bad("a row's frontier is its tile leaves, one per 4,096 lanes of the vocabulary"));
         }
-        let row_root =
-            crate::palw_step_leg::step_merkle_root_capped_v1(&disclosure.frontier, max_step_leaf_count)
-                .map_err(|_| bad("the row's tiles build no tree"))?;
+        let row_root = crate::palw_step_leg::step_merkle_root_capped_v1(&disclosure.frontier, max_step_leaf_count)
+            .map_err(|_| bad("the row's tiles build no tree"))?;
         let opening = PalwStepOpeningV1 { leaf_index: index, leaf_hash: row_root, siblings: disclosure.siblings.clone() };
         step_opening_root_capped_v1(rows, &opening, max_step_leaf_count).map_err(|_| bad("the row's opening does not walk"))?
     };
@@ -3298,7 +3302,9 @@ mod step_leaf_da_tests {
             f.binding.class.program = x.binding.class.program.clone();
             f
         };
-        let check = |level: u8, index: u64, d: &PalwTirRowNodeDisclosureV1| check_tir_row_node_disclosure_v1(trace, execution, level, index, d, MAX);
+        let check = |level: u8, index: u64, d: &PalwTirRowNodeDisclosureV1| {
+            check_tir_row_node_disclosure_v1(trace, execution, level, index, d, MAX)
+        };
         let height = palw_tir_step_tree_height_v1(rows);
         for level in 0..=height {
             let width = palw_tir_step_tree_width_v1(rows, level).unwrap();
@@ -3322,14 +3328,25 @@ mod step_leaf_da_tests {
                     siblings.siblings[0] = Hash64::from_bytes([0xF1; 64]);
                     assert!(check(level, index, &siblings).is_err(), "a tampered sibling");
                 }
-                let past = check_tir_step_out_of_range_v1(trace, execution, &PalwDaUnitV1::TirRowNode { level, index }, &x.binding, MAX);
+                let past =
+                    check_tir_step_out_of_range_v1(trace, execution, &PalwDaUnitV1::TirRowNode { level, index }, &x.binding, MAX);
                 assert!(past.is_err(), "({level}, {index}) is in the trace");
             }
-            let past = check_tir_step_out_of_range_v1(trace, execution, &PalwDaUnitV1::TirRowNode { level, index: width }, &x.binding, MAX);
+            let past =
+                check_tir_step_out_of_range_v1(trace, execution, &PalwDaUnitV1::TirRowNode { level, index: width }, &x.binding, MAX);
             assert!(past.is_ok(), "past level {level}'s width");
             assert!(build_tir_row_node_disclosure_v1(&x.binding, level, width, &x, MAX).is_err());
         }
-        assert!(check_tir_step_out_of_range_v1(trace, execution, &PalwDaUnitV1::TirRowNode { level: height + 1, index: 0 }, &x.binding, MAX).is_ok());
+        assert!(
+            check_tir_step_out_of_range_v1(
+                trace,
+                execution,
+                &PalwDaUnitV1::TirRowNode { level: height + 1, index: 0 },
+                &x.binding,
+                MAX
+            )
+            .is_ok()
+        );
         // A row's frontier is exactly its tiles: one short is refused.
         let row = build_tir_row_node_disclosure_v1(&x.binding, 0, 0, &x, MAX).unwrap();
         let mut short = filled(&row);

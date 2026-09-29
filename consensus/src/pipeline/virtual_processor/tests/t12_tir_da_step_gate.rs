@@ -1,8 +1,9 @@
 //! **The second IR fence's DA demand at the processor's gate** (`DefaultAccusedTirStep`, evidence
 //! transport C), on testnet-12 as launched with harness keys on the eight cards: refused by name
 //! below `palw_tir_fence2`; past it, admitted only when the accuser's registered key signed the demand
-//! over the network, the claim, the unit and the accuser, and when the unit is a step leaf or an
-//! interior step node inside the widest execution a binding may commit. The demand carries no
+//! over the network, the claim, the unit and the accuser, and when the unit is a step leaf, an
+//! interior step node or a rows-tree node (a row at level 0) inside the widest execution a binding may
+//! commit. The demand carries no
 //! binding: the claim and its class are the fold's, and a unit past the claim's own execution is the
 //! accused's to prove (`palw_tir_da_step_fold`).
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
@@ -48,7 +49,12 @@ async fn t12_an_ir_step_demand_is_signed_by_its_accuser_and_refused_below_the_fe
         };
         let claim = Hash64::from_bytes([0x5C; 64]);
         let gate = |object: &Obj| vp.palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(object));
-        for unit in [PalwDaUnitV1::TirStepLeaf { index: 7 }, PalwDaUnitV1::TirStepNode { level: 22, index: 0 }] {
+        for unit in [
+            PalwDaUnitV1::TirStepLeaf { index: 7 },
+            PalwDaUnitV1::TirStepNode { level: 22, index: 0 },
+            PalwDaUnitV1::TirRowNode { level: 0, index: 7 },
+            PalwDaUnitV1::TirRowNode { level: 22, index: 0 },
+        ] {
             let signed = palw_tir_step_accusation_object_v1(&domain, claim, unit, chain.bonds[card], sign).expect("the builder");
             if !fence2 {
                 let refused = gate(&signed).expect_err("below the fence");
@@ -76,13 +82,21 @@ async fn t12_an_ir_step_demand_is_signed_by_its_accuser_and_refused_below_the_fe
                 ("a node above every tree", edit(&|a| a.unit = PalwDaUnitV1::TirStepNode { level: 23, index: 0 })),
                 ("a node past its level", edit(&|a| a.unit = PalwDaUnitV1::TirStepNode { level: 22, index: 1 })),
                 ("a leaf named as a node", edit(&|a| a.unit = PalwDaUnitV1::TirStepNode { level: 0, index: 7 })),
+                ("a row past every trace", edit(&|a| a.unit = PalwDaUnitV1::TirRowNode { level: 0, index: 1 << 22 })),
+                ("a rows node above every tree", edit(&|a| a.unit = PalwDaUnitV1::TirRowNode { level: 23, index: 0 })),
+                ("a rows node past its level", edit(&|a| a.unit = PalwDaUnitV1::TirRowNode { level: 22, index: 1 })),
             ] {
                 assert!(gate(&object).is_err(), "{what} is refused at the gate");
             }
         }
         if fence2 {
             // The builder refuses what the gate would.
-            for unit in [PalwDaUnitV1::TirStepNode { level: 0, index: 0 }, PalwDaUnitV1::TirStepLeaf { index: 1 << 22 }] {
+            for unit in [
+                PalwDaUnitV1::TirStepNode { level: 0, index: 0 },
+                PalwDaUnitV1::TirStepLeaf { index: 1 << 22 },
+                PalwDaUnitV1::TirRowNode { level: 23, index: 0 },
+                PalwDaUnitV1::TirRowNode { level: 0, index: 1 << 22 },
+            ] {
                 assert!(palw_tir_step_accusation_object_v1(&domain, claim, unit, chain.bonds[card], sign).is_err(), "{unit:?}");
             }
         }
