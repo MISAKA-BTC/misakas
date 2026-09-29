@@ -1217,3 +1217,44 @@ The largest pre-quantised gaps:
 
 The GDN admission fix would add back ≈ 7 k float repos and the `qwen35` GGUF repos (≈ 5 % of GGUF,
 ≈ 10 k).
+
+## 20. The 2026 families (2026-09-29): Llama-4, GLM-4.5, Phi-3.5-MoE, Gemma-4, Ministral-3
+
+Each family has a tiny fixture built from transformers 5.17's own config class
+(`tools/gen_hf_fixtures.py`), a float check against HF over 10 positions, integer fidelity, and
+`tir_admit_v1` with the three-way equality (reference, ref2, exec). Every one of its features is
+switched on inside the 10 positions. The real shapes below are transformers' default configs, which
+are the published models' shapes (GLM-4.5 with its `head_dim` 128).
+
+| family | what it needed | float vs HF | integer (top-1, KL) | real shape, per-layer blocks |
+| --- | --- | --- | --- | --- |
+| `Glm4MoeForCausalLM` (GLM-4.5/4.6) | DeepSeek-V3 routing over GQA with q/k/v biases, per-head QK-norm, partial NeoX rotary | 1.1e-6 | 0.958, 6e-5 | 272 / 358 nodes, admitted |
+| `PhimoeForCausalLM` (Phi-3.5-MoE) | `sparsemixer` top-2 (`Scoring::SparseMixer`: two committed TopKs, the jitter threshold in exact i64); LongRoPE as 5.17 runs it (short factors, mscale) | 7.2e-7 | 0.944, 7.4e-3 | 339 nodes, admitted |
+| `Llama4ForCausalLM`, text of `Llama4ForConditionalGeneration` | chunked attention, exact (the keys before the query's chunk masked over an iota of H); the NoPE layers' query temperature (`Op::PosScale`, a Q24 table over ⌊(p+1)/floor⌋); top-k sigmoid experts that scale their INPUT (`MoeSpec::input_scaled`); L2 QK-norm moved before the rotation (it keeps the RMS) | 1.2e-6, 8.3e-7 | 0.986, 1.000 | 408 / 296 nodes, admitted |
+| `Gemma4ForCausalLM` | wider full-attention heads with their own KV heads, K = V, a weightless V-norm, the proportional rope, per-layer inputs recomputed per layer from the token (`Pick::PerLayer` slices), the MoE block beside the MLP with a per-expert scale, `layer_scalar`; a layer runs as two blocks (its mixer half and its FFN half, `HlProgram::layer_of`) since it is ≈ 750 nodes | 3.3e-6 | 1.000, 1e-4 | 289 + 244 nodes (451 with the MoE block), admitted |
+| `Ministral3ForCausalLM` | Mistral with Llama-4's query scaling over the original length (`llama_4_scaling_beta`) | 1.0e-6 | 1.000, 7e-5 | 276 nodes, admitted |
+
+**Refused by name, with what it takes:**
+- Gemma-4 layers that reuse an earlier layer's keys and values (`num_kv_shared_layers`, the E
+  models): a second carry between layers. The lowering carries only the residual. The shared rows
+  would ride from the source layer to each consumer, which appends them to a history of its own.
+- Gemma-3n: that, plus AltUp's four residual streams mixed by a per-token tanh router, Laurel's
+  low-rank residual, the Gaussian top-k activation sparsity, and the streams' magnitude-matched
+  projections in and out.
+- Mistral-4 (MLA + MoE + the same query scaling) is not attempted yet.
+
+**What "admitted" still means.** It means `tir_admit_v1` (normal form, ranges, per-position costs,
+cones). A class also passes admission v10's close sizing. At real sizes, the sizing's 2^26-step
+cap refuses these models until `palw_tir_fence2`'s range twin lands. This holds for most models
+above ≈ 1.5 B (§19.1c and the LoRA budget's measurements).
+
+**The share, updated** (the same counts as §19.2; the new families are few by repo count and
+large by downloads):
+
+| population | registrable | change |
+| --- | --- | --- |
+| text-generation, float safetensors | ≈ 256 k | + ≈ 3 k: GLM-4.5, Phi-3.5-MoE, Llama-4, Ministral-3 and the non-E Gemma-4 (≈ 1.1 % of 325.6 k × 0.9) |
+| GPTQ/AWQ, GGUF | ≈ 168 k | unchanged (no `llama4`/`glm4moe`/`phimoe` GGUF mapping yet) |
+| **text generation in all** | **≈ 423 k, ≈ 13.6 % of HF** | by `tir_admit_v1`; the sizing cap lowers it until fence2 |
+| + RFC-0003 classes | **≈ 505 k, ≈ 16.3 %** | |
+
