@@ -85,9 +85,12 @@ pub struct PalwImprovementCeilingsV1 {
     pub max_governed_lines: u32,
     /// The largest policy an owner may sign, in bytes.
     pub max_policy_bytes: u32,
-    /// The most epochs open at once across the network — with the two above, the bound on live
-    /// items and results every block's root rehashes (spec 17 §17.3).
+    /// The most epochs open at once across the network (spec 17 §17.3).
     pub max_open_epochs: u32,
+    /// **The product bound** (spec 17 §17.3): the most result rows the network holds at once, over
+    /// every epoch whose results may still exist — what every block's root rehash pays. An epoch
+    /// reserves `(n + suites) × (k_max + 2)` when it opens and frees it when its results retire.
+    pub max_live_results: u32,
 }
 
 impl PalwImprovementCeilingsV1 {
@@ -100,6 +103,7 @@ impl PalwImprovementCeilingsV1 {
         max_governed_lines: 1_024,
         max_policy_bytes: 16_384,
         max_open_epochs: 64,
+        max_live_results: 1 << 17,
     };
 
     /// Is every ceiling inside the format's cap, and none zero?
@@ -113,6 +117,7 @@ impl PalwImprovementCeilingsV1 {
             self.max_governed_lines as u64,
             self.max_policy_bytes as u64,
             self.max_open_epochs as u64,
+            self.max_live_results as u64,
         ];
         if nonzero.contains(&0) {
             return Err("an improvement ceiling of zero admits no epoch");
@@ -138,6 +143,9 @@ impl PalwImprovementCeilingsV1 {
         if self.max_open_epochs > caps.max_open_epochs {
             return Err("max_open_epochs must be at most 64");
         }
+        if self.max_live_results > caps.max_live_results {
+            return Err("max_live_results must be at most 2^17");
+        }
         Ok(())
     }
 
@@ -149,6 +157,7 @@ impl PalwImprovementCeilingsV1 {
         h.write(self.max_governed_lines.to_le_bytes());
         h.write(self.max_policy_bytes.to_le_bytes());
         h.write(self.max_open_epochs.to_le_bytes());
+        h.write(self.max_live_results.to_le_bytes());
     }
 }
 
@@ -162,6 +171,7 @@ pub const PALW_DRILL_IMPROVE_CEILINGS_V1: PalwImprovementCeilingsV1 = PalwImprov
     max_governed_lines: 64,
     max_policy_bytes: 16_384,
     max_open_epochs: 8,
+    max_live_results: 1 << 14,
 };
 
 /// **`Params::palw_improvement_v1`'s value**: the fence and what it carries.

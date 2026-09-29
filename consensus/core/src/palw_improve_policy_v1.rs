@@ -48,6 +48,13 @@ pub fn palw_improvement_epoch_length_v1(w: &PalwEpochWindowsV1) -> u64 {
     w.w_collect.saturating_add(w.w_submit).saturating_add(w.w_holdout).saturating_add(w.w_eval).saturating_add(w.court_margin)
 }
 
+/// **The result rows an epoch of this policy reserves** (spec 17 §17.3): `(n + regression_items +
+/// safety_items) × (k_max + 2)` — every item, for the parent, every candidate and the regression check.
+pub fn palw_improvement_results_bound_v1(policy: &PalwImprovementPolicyV1) -> u64 {
+    let items = policy.eval.n as u64 + policy.eval.regression_items as u64 + policy.eval.safety_items as u64;
+    items * (policy.k_max as u64 + 2)
+}
+
 /// Does the spec have a stage of `kind`?
 pub fn palw_improvement_has_stage_v1(eval: &PalwEvalSpecV1, kind: PalwScoringKindV1) -> bool {
     eval.stages.iter().any(|stage| stage.kind == kind)
@@ -196,6 +203,10 @@ pub fn palw_improvement_policy_check_v1(
     // 13
     if e.max_eval_positions == 0 || e.max_eval_positions > ceilings.max_eval_positions_per_epoch {
         return Err("max_eval_positions is 1 to the network's max_eval_positions_per_epoch");
+    }
+    // 13b: the product bound — an epoch this policy opens must fit the network's live results.
+    if palw_improvement_results_bound_v1(policy) > ceilings.max_live_results as u64 {
+        return Err("(n + suites) × (k_max + 2) exceeds the network's max_live_results");
     }
     // 14
     let k_cap = (ceilings.max_candidates_per_epoch as u32).min(PALW_IMPROVE_SIGN_K_MAX_V1);

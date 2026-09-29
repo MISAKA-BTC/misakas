@@ -32,6 +32,7 @@ impl TransactionValidator {
         self.check_transaction_outputs_in_isolation(tx)?;
         self.check_transaction_pq_output_classes(tx)?;
         self.check_activation_sink_outputs_in_isolation(tx)?;
+        self.check_improvement_sink_outputs_in_isolation(tx)?;
         self.check_coinbase_in_isolation(tx)?;
 
         check_transaction_output_value_ranges(tx)?;
@@ -121,6 +122,13 @@ impl TransactionValidator {
             {
                 continue;
             }
+            // RFC-0004 (spec 17 §17.11.1): the improvement sink, legal only on a ruleset that declares
+            // `palw_improvement_v1` — and there only when bound (below).
+            if self.palw_improvement_fence.is_some()
+                && kaspa_consensus_core::palw_improve_pool_v1::palw_improvement_sink_line_v1(&output.script_public_key).is_some()
+            {
+                continue;
+            }
             if !class.is_pq_standard() {
                 return Err(TxRuleError::NonPqStandardOutputClass(i));
             }
@@ -142,6 +150,18 @@ impl TransactionValidator {
         }
         match kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_binding_refusal_v1(tx) {
             Some((index, why)) => Err(TxRuleError::ActivationSinkUnbound(index, why)),
+            None => Ok(()),
+        }
+    }
+
+    /// **RFC-0004 (spec 17 §17.11.1): an improvement sink is block-valid only bound**, on a ruleset
+    /// that declares `palw_improvement_v1` — the activation sink's rule for the improvement pool.
+    fn check_improvement_sink_outputs_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
+        if self.palw_improvement_fence.is_none() {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_improve_pool_v1::palw_improvement_sink_binding_refusal_v1(tx) {
+            Some((index, why)) => Err(TxRuleError::ImprovementSinkUnbound(index, why)),
             None => Ok(()),
         }
     }

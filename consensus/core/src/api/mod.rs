@@ -1257,6 +1257,12 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// RFC-0004 (spec 17): every open improvement epoch at the tip, as a node reads it — the line,
+    /// its policy, the epoch's header, candidates and items. Empty off ConsensusV2 and below the fence.
+    fn palw_improvement_open_epochs_v1(&self) -> Vec<crate::palw_improve_state_v1::PalwImprovementEpochViewV1> {
+        Vec::new()
+    }
+
     /// ADR-0067 Decision 6: adopt a class declaration this node did not watch arrive (the
     /// pruned-sync path). Self-authenticating against chain state — see the processor's impl.
     fn palw_adopt_class_carriage_v1(&self, _class_id: kaspa_hashes::Hash64, _carriage: &[u8]) -> Result<(), String> {

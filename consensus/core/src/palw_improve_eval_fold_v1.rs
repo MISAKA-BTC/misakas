@@ -292,7 +292,11 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     if c.prompt_token_ids != prompt.as_slice() {
         return Err(refused("the claim's prompt is not the item's"));
     }
-    // The roots are the tail's (the extractor checked them; the fold holds them again).
+    // The stage parameters are the policy's; the roots are the tail's (the extractor checked them; the
+    // fold holds them again, over the policy's parameters and the item's prompt).
+    if tail.params != params {
+        return Err(refused("the claim's stage parameters are not the policy's"));
+    }
     if tail.generated.len() as u64 != c.decode_tokens_executed as u64
         || palw_improve_eval_generated_root_v1(&tail.generated) != *c.output_root
         || tail.score.len() != palw_improve_eval_score_lanes_v1(kind)
@@ -301,6 +305,9 @@ pub(super) fn apply_improvement_eval_commitment_v1(
             c.class_id,
             c.work_leaves,
             c.trace_root,
+            &palw_improve_eval_prompt_root_v1(&prompt),
+            prompt.len() as u32,
+            &params,
             c.output_root,
             &palw_improve_eval_finalized_root_v1(&[]),
             &tail.score,
@@ -462,7 +469,6 @@ impl TransitionBuilder<'_> {
         let Some(mut taken) = row.claim.filter(|c| c.claim_id == *claim_id && c.final_daa.is_none()) else { return Ok(()) };
         taken.final_daa = Some(final_daa);
         row.claim = Some(taken);
-        let job_id = row.job.id();
         self.write_improvement_eval_job(key, Some(row));
         let (line_id, epoch, item, subject, kind) = key;
         let scoring = self.improvement_eval_takes_score_v1(&line_id, epoch, item, &subject, kind);
@@ -470,13 +476,7 @@ impl TransitionBuilder<'_> {
             return Ok(());
         }
         if let Some(value) = taken.score {
-            self.record_improvement_score_v1(
-                &line_id,
-                epoch,
-                item,
-                subject,
-                PalwEvalScoreV1 { job_id, claim: *claim_id, kind, value },
-            )?;
+            self.record_improvement_score_v1(&line_id, epoch, item, subject, PalwEvalScoreV1 { kind, value })?;
         }
         self.pay_improvement_eval_fee_v1(&line_id, epoch, &subject, &claim.bond)?;
         Ok(())
@@ -512,7 +512,7 @@ impl TransitionBuilder<'_> {
             if !self.improvement_eval_takes_score_v1(line_id, epoch, item, &subject, kind) {
                 continue;
             }
-            let score = PalwEvalScoreV1 { job_id: row.job.id(), claim: claim.claim_id, kind, value };
+            let score = PalwEvalScoreV1 { kind, value };
             self.record_improvement_score_v1(line_id, epoch, item, subject, score)?;
         }
         Ok(())
@@ -794,7 +794,9 @@ mod tests {
             context.seed,
         )
         .unwrap();
-        let binding = PalwEvalBindingV1::of(&job, class, &layout, &e.claim, e.space.leaf_count(), vec![], vec![]);
+        let params = PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 };
+        let binding =
+            PalwEvalBindingV1::of(&job, class, &layout, &e.claim, e.space.leaf_count(), &probe.prompt, params, vec![], vec![]);
         let roots = binding.claim_roots();
         PalwConsensusObjectV2::FreePromptCommitted {
             claim: h(claim_word),
@@ -815,7 +817,7 @@ mod tests {
             job_pin: Hash64::default(),
             eval: Some(Box::new(PalwFpEvalCarriageV1 {
                 job,
-                tail: PalwEvalClaimTailV1 { generated: e.claim.generated.clone(), score: vec![], subject_layout: layout },
+                tail: PalwEvalClaimTailV1 { generated: e.claim.generated.clone(), score: vec![], subject_layout: layout, params },
             })),
         }
     }
@@ -982,12 +984,10 @@ mod tests {
         assert_ne!(key, generated_of(&cand), "the premise: other weights, another answer");
         let (s, _) = at(&s, &p, 1_700, |b| b.score_improvement_exact_match_v1(&h(LINE), 1, 0, &key).unwrap());
         let score = |subject: PalwEvalSubjectV1| {
-            s.improvement_result(&h(LINE), 1, 0, &subject)
-                .and_then(|r| r.scores.first().copied())
-                .map(|sc| (sc.kind, sc.value, sc.claim))
+            s.improvement_result(&h(LINE), 1, 0, &subject).and_then(|r| r.scores.first().copied()).map(|sc| (sc.kind, sc.value))
         };
-        assert_eq!(score(PalwEvalSubjectV1::Parent), Some((PalwScoringKindV1::ExactMatch, 1, h(0xC0))));
-        assert_eq!(score(PalwEvalSubjectV1::Candidate(h(CAND_A))), Some((PalwScoringKindV1::ExactMatch, 0, h(0xC1))));
+        assert_eq!(score(PalwEvalSubjectV1::Parent), Some((PalwScoringKindV1::ExactMatch, 1)));
+        assert_eq!(score(PalwEvalSubjectV1::Candidate(h(CAND_A))), Some((PalwScoringKindV1::ExactMatch, 0)));
         assert!(!s.improvement_eval_pending_v1(&h(LINE), 1), "nothing left to come");
         // A second reveal of the same item is refused: a score of a kind is taken once.
         let extras = PalwTransitionExtrasV1::default();

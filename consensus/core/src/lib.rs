@@ -493,6 +493,8 @@ pub mod palw_improve_policy_v1;
 pub mod palw_improve_promotion_v1;
 /// **RFC-0004 §4 / spec 17 §17.5–§17.8: the epoch's pure functions — times, the material tree, the seed, the draw.**
 pub mod palw_improve_epoch_v1;
+/// **RFC-0004 §8.5 / spec 17 §17.11.1: the improvement sink a sponsor's deposit pays into, and its binding.**
+pub mod palw_improve_pool_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.

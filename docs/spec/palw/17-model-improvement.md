@@ -133,9 +133,10 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 
 | Space | Reserved | Last used before |
 | --- | --- | --- |
-| `PalwCourtVerdictProofV2` tags | 13 and up, for evaluation-claim proofs if A6/A7 need one | 12 (`GenDissection`, RFC-0003) |
+| `PalwCourtVerdictProofV2` tags | 13 `EvalCone`, 14 `EvalDecodeToken`, 15 `EvalDissection` (the evaluation lane's: an evaluation claim's court moves carry its `PalwEvalBindingV1` and composite parameter openings); 16 and up free | 12 (`GenDissection`, RFC-0003) |
 | `PalwStepFaultV1` discriminants | 22 and up | 21 (`TirOutputDigestMismatch`, RFC-0003) |
-| `PalwDaUnitV1` tags | 4–7, for Phase F's pipeline-claim units (step leaf, step node, row node, one spare) | 3 (`TirStepNode`, `tir/fence-2`) |
+| `PalwDaUnitV1` tags | 5–6 for Phase F's pipeline-claim units (step leaf, step node; an evaluation claim has no rows unit), 7 spare | 4 (`TirRowNode { level, index }`, the second IR fence's) |
+| `PalwDaAnswerV1` tags | 7 and up for the pipeline-claim answers (the out-of-range proof is an answer of tag 5's shape, generic over the claim kind) | 6 (the row node's answer, after `TirStepOutOfRange` 5) |
 
 Evaluation jobs are RFC-0003 pipeline jobs, adjudicated by the courts that already exist. A new proof
 or fault is added only if A6/A7 show one is needed, and takes the next number here. Object tag 83 and
@@ -150,12 +151,12 @@ one.
 | Value | `{ activation, scoring_set_id, sign_table_id, court_version, ceilings: PalwImprovementCeilingsV1 }` |
 | `consensus_params_id` | Some-only: `"palw_improvement_v1/protocol-v1"`, the activation (LE u64), then the value |
 | `consensus_schedule_id` | Some-only: `"palw_improvement_v1"`, the activation, then the value |
-| Value bytes | `scoring_set_id` (64) ‖ `sign_table_id` (64) ‖ LE u16 `court_version` ‖ u8 `max_candidates_per_epoch` ‖ LE u32 `max_items_per_epoch` ‖ LE u64 `max_eval_positions_per_epoch` ‖ LE u16 `max_eval_budget_permille` ‖ LE u32 `max_governed_lines` ‖ LE u32 `max_policy_bytes` ‖ LE u32 `max_open_epochs` |
+| Value bytes | `scoring_set_id` (64) ‖ `sign_table_id` (64) ‖ LE u16 `court_version` ‖ u8 `max_candidates_per_epoch` ‖ LE u32 `max_items_per_epoch` ‖ LE u64 `max_eval_positions_per_epoch` ‖ LE u16 `max_eval_budget_permille` ‖ LE u32 `max_governed_lines` ‖ LE u32 `max_policy_bytes` ‖ LE u32 `max_open_epochs` ‖ LE u32 `max_live_results` |
 | Normaliser | `Some(never())` collapses to `None`; `for_each_fence` visits the activation only |
 | Fork id | listed in `palw_fences_v1` as `("palw_improvement_v1", activation)` |
 | Mirror | `PalwStateParamsV2::improve_from_daa` and `improve_ceilings` (borsh-skipped), written by `Params::sync_palw_improvement_v1` only |
 | Drill | `--palw-drill-improve-at` (`palw_drill_improve_fence_at_v1`, list `PALW_DRILL_IMPROVE_FENCES_V1`, ceilings `PALW_DRILL_IMPROVE_CEILINGS_V1`) |
-| Format caps | candidates ≤ 16, items ≤ 4,096 per epoch, positions ≤ 2^40 per epoch, budget ≤ 1,000 ‰, lines ≤ 1,024, policy ≤ 16,384 bytes, open epochs ≤ 64; none zero. Live results are at most `max_open_epochs × max_items_per_epoch × (max_candidates_per_epoch + 2)` network-wide, the bound every block's root rehash pays; the drill's ceilings (8, 1,024, 2^32, 500, 64, 16,384, 8) give 81,920 |
+| Format caps | candidates ≤ 16, items ≤ 4,096 per epoch, positions ≤ 2^40 per epoch, budget ≤ 1,000 ‰, lines ≤ 1,024, policy ≤ 16,384 bytes, open epochs ≤ 64, **live results ≤ 2^17**; none zero. `max_live_results` is the product bound every block's root rehash pays: an epoch reserves `(n + regression_items + safety_items) × (k_max + 2)` result rows when it opens (the policy check refuses a policy whose epoch could never fit), and frees them when its results retire; an epoch opens only if the reservation fits. The drill's ceilings are (8, 1,024, 2^32, 500, 64, 16,384, 8, 2^14) |
 | Prerequisites | a `ConsensusV2` ruleset (checked first); `palw_audit_2026_09_11` declared; `palw_tir_v1`, **`palw_tir_fence2`**, `palw_gen_v1` and `palw_kary_court` in force at or below the activation (the second IR fence since 2026-09-29: every evaluation pipeline sized under H7, and no verdict may flip mid-epoch) |
 | Shipped | `None` on every preset and in no testnet-12 flag-day list |
 
@@ -443,7 +444,9 @@ Let `W` be the policy's windows. All times are fixed when the epoch opens.
    - With a pool too small for the parent's escrow: `NoChange(PoolInsufficient)`.
 6. **`Evaluating → Closing` at `t_eval`.** No evaluation claim is accepted from here on.
 7. **Scoring**, at the first DAA ≥ `t_eval` at which the evaluation lane reports every evaluation claim
-   of the epoch final and every key revealed or forfeited, and at the latest at `t_score` [E4]. The
+   of the epoch final and the material lane reports no drawn set or case owing a reveal, and at the
+   latest at `t_score` [E4]. Just before it, the material lane drops every drawn item still owing a
+   reveal (§17.9.1). The
    fold computes the counts and the decision (§17.9), and applies it (§17.9.5, §17.11). The epoch is
    `Decided`.
 8. **The epoch's end** (whenever an epoch becomes `Decided`, whatever the path):
@@ -504,8 +507,12 @@ refusal.
 - **Hold-out cases.** A hard case admitted while the epoch is in `HoldOut` enters `holdout` with its
   submitter bond. At most `4·n` entries (`PALW_IMPROVE_HOLDOUT_FACTOR_V1 = 4`); a further case in
   `HoldOut` is refused by name.
-- **Setter sets.** A `SetterSetCommitted` before `t_close` enters `setter_sets` as `{ set_id, setter,
-  items }`, at most 16 sets. Its items are `(set_id, i)` for `i < items`.
+- **Setter sets.** A `SetterSetCommitted` before `t_close` enters the pool as `{ set_id, setter,
+  items }`, at most 16 sets. Its items are `(set_id, i)` for `i < items`. In v1 setter items are
+  generated only: an ExactMatch key, or an empty key for a judged item. Likelihood items come from
+  hold-out cases with a continuation reference, disclosed from the draw by `HardCaseKeyRevealed` —
+  one hash commits a set's keys, so a set cannot disclose a reference at the draw apart from its keys
+  (PALW-MIP-9).
 
 ## 17.7 Candidates
 
@@ -597,7 +604,10 @@ job family is the evaluation lane's (A6):
 
 The evaluation lane records each final score into the epoch row, through the core's one function
 (`TransitionBuilder::record_improvement_score_v1`), as `PalwEvalResultV1 { item, subject, scores }`.
-Each score is `PalwEvalScoreV1 { job_id, claim, kind, value }`:
+Each score is recorded by kind:
+
+Each score is `PalwEvalScoreV1 { kind, value }`: the job id is derivable from `(line, epoch, item,
+subject, kind)`, and the claim is the evaluation lane's job row's.
 
 | Kind | `value` |
 | --- | --- |
@@ -631,8 +641,11 @@ Read the item's score of the kind in question for both subjects (`s_C`, `s_H`).
   otherwise.
 - Pairwise: the recorded value is already the outcome (the stage applied the order and the margin):
   Win if it is +1, Loss if −1, Tie if 0. A8 does not apply the margin again. A missing value is a Loss.
-- **Dropped items** — a setter item whose prompts or keys were never revealed — are excluded from every
-  count, for every subject.
+- **Dropped items** — a setter item whose prompts or keys were never revealed, or a hold-out case whose
+  committed key or reference was never revealed — are excluded from every count, for every subject: a
+  supplier that never reveals cannot veto a promotion by making every candidate lose its item. The
+  material lane drops them just before scoring (`drop_improvement_item_v1`) and forfeits a
+  non-revealing setter's hold.
 - The **primary** kind of an item is read from the recorded scores: ExactMatch if any subject has an
   ExactMatch score on it, else RefLogLik if any has a RefLogLik score; an item with neither but with a
   guard score is judged-only; an item with no score at all is a primary item every subject misses, so it
@@ -794,9 +807,13 @@ Three paths bring money into the pool.
    - `SetterSetCommitted`: `setter_bond` (held).
    - `DatasetRegistered`: `dataset_bond` (held).
 2. **Sponsor deposits** (tag 82). The carrier pays exactly `amount` to the improvement sink
-   `OP_RETURN <b"MSKIMP01"> <line_id>` at `sink_index`, bound as `ModelBuy` binds its sink. The fold
-   credits the balance. A line that is not governed refuses the deposit; the sink is then unbound, and
-   the block's carrier is refused.
+   `OP_RETURN OP_DATA8 "MSKIMP01" OP_DATA64 <line_id>` at `sink_index`, bound as `ModelBuy` binds its
+   sink. The sink has two doors, as the activation sink has: isolation admits the output class on a
+   ruleset that declares `palw_improvement_v1` and refuses any sink not bound to its carrier's
+   `ImprovementPoolFunded` (index, line, value) or on a carrier paying no P2PKH-ML-DSA-87 output; the
+   header context refuses the sink below the fence's height. The fold credits a governed line's
+   balance; a deposit to a line that is not governed is refused, and P-B1's refund route pays it back
+   to the carrier's first P2PKH-ML-DSA-87 output (also when the walk drops it).
 3. **φ** [RFC §8.5]. Where spec 15 pays a governed line's owner leg (`split_owner_leg_v1`'s owner
    part), `⌊owner_part · φ / 1000⌋` goes to the pool's balance and the rest to the owner.
 
@@ -876,6 +893,12 @@ Nothing is minted; nothing goes below zero; nothing vests past its amount.
 When an opting-out line is past its effective DAA with no epoch open, no unvested grant and nothing
 held: the balance goes to the spec 15 owner's earnings; every row of the line is deleted but its header,
 which stays `Dissolved`.
+
+### 17.11.6 The read door
+
+A node reads the open epochs through `ConsensusApi::palw_improvement_open_epochs_v1`: per open epoch
+(at most `max_open_epochs`), the line's header and policy, the epoch's header, its candidates in
+acceptance order, and its items in item order (dropped ones included).
 
 ## 17.12 Rules
 

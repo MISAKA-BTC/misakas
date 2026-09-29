@@ -701,6 +701,8 @@ pub fn palw_model_carrier_refund_v1(
         // class it was for (the refund row's `line_id` field is a log label; the row is keyed by
         // the carrier).
         PalwConsensusObjectV2::ActivationPoolFunded { class_id, amount, .. } => (*class_id, *amount),
+        // RFC-0004 (spec 17 §17.11.1): a deposit the fold refuses goes back the same way.
+        PalwConsensusObjectV2::ImprovementPoolFunded { payload } => (payload.line_id, payload.amount),
         _ => return None,
     };
     if amount == 0 {
@@ -772,6 +774,11 @@ pub fn palw_lifecycle_objects_from_accepted_txs_v2(txs: &[Transaction]) -> PalwL
             continue;
         }
         if let Err(reason) = palw_activation_pool_binds_its_carrier_v1(tx, &payload.object) {
+            out.skipped.push((id, reason));
+            continue;
+        }
+        // RFC-0004 (spec 17 §17.11.1): a deposit is bound to its carrier's improvement sink.
+        if let Err(reason) = crate::palw_improve_pool_v1::palw_improvement_pool_binds_its_carrier_v1(tx, &payload.object) {
             out.skipped.push((id, reason));
             continue;
         }

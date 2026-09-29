@@ -199,11 +199,18 @@ fn an_exact_match_job_derives_runs_binds_and_is_adjudicable() {
     let e = palw_gen_execute_v1(&ctx.pipeline, &ctx.programs, &ctx.layouts, &params, &probe, &decode, ctx.seed).unwrap();
     assert_eq!(e.claim.generated.len(), 4);
     // The binding: the execution root over the stage roots and the ids; no score is committed.
-    let binding = PalwEvalBindingV1::of(&j, subject.class_id, &layout, &e.claim, e.space.leaf_count(), vec![], vec![]);
+    let stage = PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 };
+    let binding = PalwEvalBindingV1::of(&j, subject.class_id, &layout, &e.claim, e.space.leaf_count(), &prompt, stage, vec![], vec![]);
     assert_eq!(binding.execution_root(), binding.committed_execution_root);
     assert!(binding.score_value().is_err(), "an ExactMatch claim commits no score");
     let roots = binding.claim_roots();
     assert_eq!(roots.trace_root, e.claim.step_root, "the claim's trace root is the step root");
+    // The binding alone derives the step space (the prompt by its length), and the closed-form count.
+    let space = palw_improve_eval_step_space_of_binding_v1(&ctx, &binding).unwrap();
+    assert_eq!(space.leaf_count(), e.space.leaf_count());
+    assert_eq!(palw_improve_eval_step_leaves_v1(&ctx, &prompt, &e.claim.generated, &[]), Ok(e.space.leaf_count() as u128));
+    let other_length = PalwEvalBindingV1 { prompt_tokens: 4, ..binding.clone() };
+    assert_ne!(other_length.execution_root(), binding.committed_execution_root, "the prompt's length is in the root");
     assert_eq!(roots.output_root, palw_improve_eval_generated_root_v1(&e.claim.generated));
     let mut other = binding.clone();
     other.generated[0] ^= 1;
@@ -295,7 +302,8 @@ fn a_ref_loglik_job_is_teacher_forced_over_the_reference() {
     let want = ref_loglik_reference_v1(&rows, &reference, 1 << 12);
     let score: Vec<i32> = e.run.output.data.iter().map(|v| *v as i32).collect();
     assert_eq!(ref_loglik_join_v1(score[0], score[1]), want);
-    let binding = PalwEvalBindingV1::of(&j, subject.class_id, &layout, &e.claim, e.space.leaf_count(), vec![], score);
+    let stage = PalwEvalStageParamsV1::RefLogLik { logit_scale_q24: 1 << 12 };
+    let binding = PalwEvalBindingV1::of(&j, subject.class_id, &layout, &e.claim, e.space.leaf_count(), &prompt, stage, vec![], score);
     assert_eq!(binding.score_value(), Ok(want));
     assert_eq!(binding.generated, reference, "teacher-forced: the ids are the reference");
     let judged = every_leaf_acquitted(&ctx, &params, &e, &pj);

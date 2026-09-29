@@ -2455,6 +2455,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_adopt_class_carriage_v1_impl(class_id, carriage)
     }
 
+    fn palw_improvement_open_epochs_v1(&self) -> Vec<kaspa_consensus_core::palw_improve_state_v1::PalwImprovementEpochViewV1> {
+        self.palw_state_v2_tip().map(|state| state.improvement_open_epoch_views_v1()).unwrap_or_default()
+    }
+
     fn palw_class_carriages_for_sync_v1(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
         self.virtual_processor.palw_class_carriages_for_sync_v1_impl()
     }

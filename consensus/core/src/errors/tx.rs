@@ -203,6 +203,17 @@ pub enum TxRuleError {
     #[error("transaction output #{0} is an activation sink before the pool's activation (daa {1})")]
     ActivationSinkBeforePoolActivation(usize, u64),
 
+    /// **RFC-0004 (spec 17 §17.11.1): an improvement sink nothing binds.** On a ruleset that declares
+    /// `palw_improvement_v1`, every `OP_RETURN "MSKIMP01" <line>` output must be the one its lifecycle
+    /// carrier's `ImprovementPoolFunded` names, with its value and its line, on a carrier that pays a
+    /// refund payee — or the transaction, and a block carrying it, is invalid.
+    #[error("transaction output #{0} is an unbound improvement sink: {1}")]
+    ImprovementSinkUnbound(usize, &'static str),
+
+    /// RFC-0004: the height-indexed half — an improvement sink below `palw_improvement_v1`.
+    #[error("transaction output #{0} is an improvement sink before palw_improvement_v1 (daa {1})")]
+    ImprovementSinkBeforeActivation(usize, u64),
+
     /// **Lane sink (the 2026-09-25 Position review's #1): a model sink nothing binds.** In a block at
     /// or past `Params::palw_model_sink_bound`, every `OP_RETURN "MSKMDL01" <line>` output must be the
     /// one its lifecycle carrier's `ModelBuy` or `ModelSeed` names, with its value and its line, on a

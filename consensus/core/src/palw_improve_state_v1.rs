@@ -516,11 +516,11 @@ pub enum PalwEvalSubjectV1 {
     Previous(Hash64),
 }
 
-/// **A final score** (spec 17 §17.8.3): a scoring stage's committed output, from a final claim.
+/// **A final score** (spec 17 §17.8.3): a scoring stage's committed output. Slim (the reviewer's note):
+/// the job id is derivable from `(line, epoch, item, subject, kind)`, and the claim is the evaluation
+/// lane's job row's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwEvalScoreV1 {
-    pub job_id: Hash64,
-    pub claim: Hash64,
     pub kind: PalwScoringKindV1,
     /// ExactMatch: 1 pass, 0 fail. RefLogLik: the Q24 log-likelihood. Judge: the judge's scalar.
     /// Pairwise: the stage's committed outcome from the candidate's side (+1, 0, −1).
@@ -667,6 +667,9 @@ pub struct PalwImprovementEpochV1 {
     pub seed: Option<Hash64>,
     /// `improvement_items[(line, epoch, 0..items)]`.
     pub items: u32,
+    /// The result rows the epoch reserved against `max_live_results` when it opened:
+    /// `(n + regression_items + safety_items) × (k_max + 2)`.
+    pub results_bound: u32,
     pub previous_counts: Option<PalwPromotionCountsV1>,
     pub outcome: Option<PalwPromotionOutcomeV1>,
     pub escrow: PalwEpochEscrowV1,
@@ -702,6 +705,18 @@ impl PalwImprovementEpochV1 {
     pub fn is_decided(&self) -> bool {
         self.state == PalwEpochStateV1::Decided
     }
+}
+
+/// **An open epoch, as a node reads it** (the read door, `ConsensusApi::palw_improvement_open_epochs_v1`):
+/// the line's header and policy, the epoch's header, its candidates in acceptance order and its items
+/// in item order (dropped ones included). One per open epoch — at most `max_open_epochs`.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwImprovementEpochViewV1 {
+    pub line: PalwImprovementLineV1,
+    pub policy: PalwImprovementPolicyV1,
+    pub epoch: PalwImprovementEpochV1,
+    pub candidates: Vec<PalwEpochCandidateV1>,
+    pub items: Vec<PalwEvalItemV1>,
 }
 
 // ---- the evaluation job (RFC-0004 §7.2) ----
@@ -836,6 +851,7 @@ pub(crate) mod test_rows {
             setter_sets: 0,
             seed: None,
             items: 1,
+            results_bound: 3,
             previous_counts: None,
             outcome: None,
             escrow: PalwEpochEscrowV1::default(),
@@ -881,7 +897,7 @@ pub(crate) mod test_rows {
         PalwEvalResultV1 {
             item: 0,
             subject: PalwEvalSubjectV1::Parent,
-            scores: vec![PalwEvalScoreV1 { job_id: h(seed, 40), claim: h(seed, 41), kind: PalwScoringKindV1::ExactMatch, value: 1 }],
+            scores: vec![PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value: 1 }],
         }
     }
 

@@ -73,6 +73,8 @@ pub const PALW_FP_EVAL_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/improve/fp-eval/job-
 pub const PALW_IMPROVE_EVAL_GENERATED_DOMAIN_V1: &[u8] = b"misaka-palw/improve/eval-generated/v1";
 /// Key of [`palw_improve_eval_finalized_root_v1`].
 pub const PALW_IMPROVE_EVAL_FINALIZED_DOMAIN_V1: &[u8] = b"misaka-palw/improve/eval-finalized/v1";
+/// Key of [`palw_improve_eval_prompt_root_v1`].
+pub const PALW_IMPROVE_EVAL_PROMPT_DOMAIN_V1: &[u8] = b"misaka-palw/improve/eval-prompt/v1";
 /// Key of [`palw_improve_answer_span_hash_v1`].
 pub const PALW_IMPROVE_ANSWER_SPAN_DOMAIN_V1: &[u8] = b"misaka-palw/improve/answer-span/v1";
 /// **The most ids an evaluation job's stream carries** — a generating job's budget, a teacher-forced
@@ -175,8 +177,10 @@ pub fn palw_improve_eval_mode_v1(
 // ---------------------------------------------------------------------------------------------
 
 /// **The scoring stage's parameters** as the context reads them — the policy's
-/// `PalwScoringParamsV1` (rfc4/core), field for field.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `PalwScoringParamsV1` (rfc4/core) less the revealed key's length bound, which no context reads.
+/// Committed in the claim's execution root, so a court or a data-availability answer derives the
+/// context from what the claim bound, whatever the policy says later.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwEvalStageParamsV1 {
     /// The answer span's delimiters (−1: none) — read by the fold at the key's reveal
     /// ([`palw_improve_answer_of_v1`]); an ExactMatch job's pipeline is its generation alone.
@@ -427,6 +431,13 @@ pub fn palw_improve_eval_generated_root_v1(generated: &[u32]) -> Hash64 {
     keyed64(PALW_IMPROVE_EVAL_GENERATED_DOMAIN_V1, &[&ids_bytes(generated)])
 }
 
+/// **The prompt's root** — `H64(key, le32 n ‖ le32 ids)` over the item's disclosed prompt, in the
+/// claim's execution root: a court or a data-availability answer carries the ids a cone reads and
+/// proves them under it.
+pub fn palw_improve_eval_prompt_root_v1(prompt: &[u32]) -> Hash64 {
+    keyed64(PALW_IMPROVE_EVAL_PROMPT_DOMAIN_V1, &[&ids_bytes(prompt)])
+}
+
 /// **The finalized outputs' root** — `H64(key, le32 m ‖ root_0 ‖ …)` over the `output_root` of each
 /// final claim a job reads (`FinalizedOutput { claim, .. }`), in claim-index order. The fold derives
 /// the list from the job table, never from the claim; a job that reads none commits `m = 0`.
@@ -440,13 +451,20 @@ pub fn palw_improve_eval_finalized_root_v1(output_roots: &[Hash64]) -> Hash64 {
 }
 
 /// **An evaluation claim's execution root**: `H64(key, job_id ‖ subject class ‖ le64 leaves ‖
-/// step_root ‖ generated_root ‖ finalized_root ‖ le32 |score| ‖ le32 lanes)` — the job, the class it
-/// ran, the tree, the answer, what it read and the score.
+/// step_root ‖ prompt_root ‖ le32 prompt_tokens ‖ borsh(params) ‖ generated_root ‖ finalized_root ‖
+/// le32 |score| ‖ le32 lanes)` — the job, the class it ran, the tree, the prompt (and its length, so a
+/// step space derives without its ids), the stage's parameters, the answer, what it read and the
+/// score: every input a context is derived from beside the class row, so the claim alone fixes its
+/// context.
+#[allow(clippy::too_many_arguments)]
 pub fn palw_improve_eval_execution_root_v1(
     job_id: &Hash64,
     subject_class: &Hash64,
     step_leaf_count: u64,
     step_root: &Hash64,
+    prompt_root: &Hash64,
+    prompt_tokens: u32,
+    params: &PalwEvalStageParamsV1,
     generated_root: &Hash64,
     finalized_root: &Hash64,
     score: &[i32],
@@ -463,6 +481,9 @@ pub fn palw_improve_eval_execution_root_v1(
             subject_class.as_byte_slice(),
             &step_leaf_count.to_le_bytes(),
             step_root.as_byte_slice(),
+            prompt_root.as_byte_slice(),
+            &prompt_tokens.to_le_bytes(),
+            &borsh::to_vec(params).expect("stage params serialize"),
             generated_root.as_byte_slice(),
             finalized_root.as_byte_slice(),
             &lanes,
@@ -497,6 +518,13 @@ pub struct PalwEvalBindingV1 {
     /// Every stage's root, in stage order.
     pub stage_roots: Vec<Hash64>,
     pub step_leaf_count: u64,
+    /// The item's prompt's root ([`palw_improve_eval_prompt_root_v1`]); the ids ride where a cone
+    /// reads them, proven under it.
+    pub prompt_root: Hash64,
+    /// The prompt's length: what the step space's trip counts read, without the ids.
+    pub prompt_tokens: u32,
+    /// The scoring stage's parameters the context was derived with.
+    pub params: PalwEvalStageParamsV1,
     /// The stream stage's ids: decoded (Generate) or given (the reference, TeacherForced).
     pub generated: Vec<u32>,
     /// What the job's `FinalizedOutput` bindings read: each final claim's generated ids, in
@@ -509,12 +537,15 @@ pub struct PalwEvalBindingV1 {
 
 impl PalwEvalBindingV1 {
     /// The binding of what an executor committed.
+    #[allow(clippy::too_many_arguments)]
     pub fn of(
         job: &PalwEvalJobV1,
         subject_class: Hash64,
         subject_layout: &PalwTirLayoutV1,
         roots: &crate::palw_gen_worker_v1::PalwGenClaimRootsV1,
         step_leaf_count: u64,
+        prompt: &[u32],
+        params: PalwEvalStageParamsV1,
         finalized: Vec<Vec<u32>>,
         score: Vec<i32>,
     ) -> Self {
@@ -525,6 +556,9 @@ impl PalwEvalBindingV1 {
             subject_layout: subject_layout.clone(),
             stage_roots: roots.stage_roots.clone(),
             step_leaf_count,
+            prompt_root: palw_improve_eval_prompt_root_v1(prompt),
+            prompt_tokens: prompt.len() as u32,
+            params,
             generated: roots.generated.clone(),
             finalized,
             score,
@@ -557,6 +591,9 @@ impl PalwEvalBindingV1 {
             &self.subject_class,
             self.step_leaf_count,
             &self.step_root(),
+            &self.prompt_root,
+            self.prompt_tokens,
+            &self.params,
             &self.generated_root(),
             &self.finalized_root(),
             &self.score,
@@ -707,6 +744,9 @@ pub struct PalwEvalClaimTailV1 {
     /// checks it against — so acceptance derives the claim's leaf count, and its reservation, from
     /// the chain's context rather than the executor's word.
     pub subject_layout: PalwTirLayoutV1,
+    /// The scoring stage's parameters the claim ran with: the fold holds them to the policy's, and
+    /// the execution root binds them.
+    pub params: PalwEvalStageParamsV1,
 }
 
 /// **What an evaluation claim carries into the fold** (the `FreePromptCommitted` object's `eval`):
@@ -745,18 +785,23 @@ pub fn palw_fp_eval_payload_decode_v1(bytes: &[u8]) -> Result<(PalwFpCommitmentT
 }
 
 /// **An evaluation claim's commitment against its tail** — the job's shape
-/// ([`palw_fp_eval_job_shape_v1`]), then: the tail's ids hash to the committed `output_root`, one per
-/// executed decode position and within the job's limit; the score has the kind's lanes; no schedule
-/// root; and the committed `execution_root` is the one the job, the class, the leaves, the step root
-/// (`trace_root`), the ids, `finalized_roots` and the score produce. `finalized_roots` is the output
+/// ([`palw_fp_eval_job_shape_v1`]), then: the tail's stage parameters are its kind's; its ids hash to
+/// the committed `output_root`, one per executed decode position and within the job's limit; the
+/// score has the kind's lanes; no schedule root and the DA trio; and the committed `execution_root` is
+/// the one the job, the class, the leaves, the step root (`trace_root`), the payload's `prompt`, the
+/// parameters, the ids, `finalized_roots` and the score produce. `finalized_roots` is the output
 /// roots of the final claims the job reads, as the fold derives them (empty for a job that reads
 /// none).
 pub fn palw_fp_eval_claim_check_v1<'a>(
     commitment: &'a PalwFreePromptCommitmentV3,
+    prompt: &[u32],
     tail: &PalwEvalClaimTailV1,
     finalized_roots: &[Hash64],
 ) -> Result<&'a PalwEvalJobV1, PalwEvalErrorV1> {
     let eval = palw_fp_eval_job_shape_v1(&commitment.job)?;
+    if tail.params.kind() != eval.kind {
+        return Err(PalwEvalErrorV1::KindMismatch);
+    }
     let job = &commitment.job;
     if tail.generated.is_empty()
         || tail.generated.len() as u64 != commitment.decode_tokens_executed as u64
@@ -788,6 +833,9 @@ pub fn palw_fp_eval_claim_check_v1<'a>(
         &job.class_id,
         commitment.work_leaves,
         &commitment.trace_root,
+        &palw_improve_eval_prompt_root_v1(prompt),
+        prompt.len() as u32,
+        &tail.params,
         &commitment.output_root,
         &palw_improve_eval_finalized_root_v1(finalized_roots),
         &tail.score,
@@ -991,6 +1039,17 @@ pub fn palw_improve_eval_step_space_v1(
     let trips: Vec<u32> = facts.iter().map(|f| f.trip).collect();
     crate::palw_gen_step_v1::PalwGenStepSpaceV1::new(&ctx.pipeline, &ctx.programs, &ctx.layouts, &trips, prompt.len() as u32)
         .map_err(|e| PalwEvalErrorV1::Binding(e.to_string()))
+}
+
+/// **An evaluation claim's step space from its binding alone**: the prompt enters the space only by
+/// its length (the stream stage's trip, its first consumed row), so a data-availability answer derives
+/// it from `binding.prompt_tokens` without carrying the ids (any ids of that length give one space).
+pub fn palw_improve_eval_step_space_of_binding_v1(
+    ctx: &PalwEvalContextV1,
+    binding: &PalwEvalBindingV1,
+) -> Result<crate::palw_gen_step_v1::PalwGenStepSpaceV1, PalwEvalErrorV1> {
+    let placeholder = vec![0u32; binding.prompt_tokens as usize];
+    palw_improve_eval_step_space_v1(ctx, &placeholder, &binding.generated, &binding.finalized)
 }
 
 /// **An evaluation claim's leaf count, in closed form** — what [`palw_improve_eval_step_space_v1`]
@@ -1321,7 +1380,10 @@ mod tests {
             commit_tiles: vec![4],
             state_tiles: vec![],
         };
-        let tail_of = |generated: Vec<u32>, score: Vec<i32>| PalwEvalClaimTailV1 { generated, score, subject_layout: layout.clone() };
+        let params = PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 };
+        let prompt = vec![1u32, 2, 3];
+        let tail_of =
+            |generated: Vec<u32>, score: Vec<i32>| PalwEvalClaimTailV1 { generated, score, subject_layout: layout.clone(), params };
         let commitment = |generated: &[u32], score: &[i32]| PalwFreePromptCommitmentV3 {
             job: job.clone(),
             trace_root: step_root,
@@ -1332,6 +1394,9 @@ mod tests {
                 &job.class_id,
                 40,
                 &step_root,
+                &palw_improve_eval_prompt_root_v1(&prompt),
+                prompt.len() as u32,
+                &params,
                 &palw_improve_eval_generated_root_v1(generated),
                 &palw_improve_eval_finalized_root_v1(&[]),
                 score,
@@ -1345,7 +1410,7 @@ mod tests {
         };
         let c = commitment(&generated, &[]);
         let tail = tail_of(generated.clone(), vec![]);
-        assert_eq!(palw_fp_eval_claim_check_v1(&c, &tail, &[]).map(|e| e.id()), Ok(eval.id()));
+        assert_eq!(palw_fp_eval_claim_check_v1(&c, &prompt, &tail, &[]).map(|e| e.id()), Ok(eval.id()));
         // The payload: the FP payload's bytes, then the tail — which an FP decoder refuses outright.
         let payload =
             PalwFpCommitmentTxPayloadV3 { version: 1, commitment: c.clone(), prompt_token_ids: vec![1, 2, 3], signature: vec![0; 8] };
@@ -1364,8 +1429,16 @@ mod tests {
         ));
         // Every part is bound.
         let refused = |c: &PalwFreePromptCommitmentV3, t: &PalwEvalClaimTailV1, f: &[Hash64]| {
-            matches!(palw_fp_eval_claim_check_v1(c, t, f), Err(PalwEvalErrorV1::Carriage(_)))
+            matches!(palw_fp_eval_claim_check_v1(c, &prompt, t, f), Err(PalwEvalErrorV1::Carriage(_)))
         };
+        assert!(
+            matches!(palw_fp_eval_claim_check_v1(&c, &[1, 2, 4], &tail, &[]), Err(PalwEvalErrorV1::Carriage(_))),
+            "the prompt is in the root"
+        );
+        let other_params = PalwEvalClaimTailV1 { params: PalwEvalStageParamsV1::ExactMatch { open: 7, close: -1 }, ..tail.clone() };
+        assert!(refused(&c, &other_params, &[]), "the stage parameters are in the root");
+        let other_kind = PalwEvalClaimTailV1 { params: PalwEvalStageParamsV1::RefLogLik { logit_scale_q24: 1 }, ..tail.clone() };
+        assert_eq!(palw_fp_eval_claim_check_v1(&c, &prompt, &other_kind, &[]).err(), Some(PalwEvalErrorV1::KindMismatch));
         assert!(refused(&c, &tail_of(vec![5, 6, 8], vec![]), &[]), "ids not the output_root's");
         assert!(refused(&c, &tail_of(vec![5, 6], vec![]), &[]), "ids not the executed count");
         assert!(refused(&c, &tail_of(generated.clone(), vec![1]), &[]), "ExactMatch commits no score");
@@ -1394,7 +1467,7 @@ mod tests {
             stage_roots: vec![Hash64::from_bytes([0x41; 64])],
             generated: generated.clone(),
         };
-        let binding = PalwEvalBindingV1::of(&eval, job.class_id, &layout, &roots, 40, vec![], vec![]);
+        let binding = PalwEvalBindingV1::of(&eval, job.class_id, &layout, &roots, 40, &prompt, params, vec![], vec![]);
         let r = binding.claim_roots();
         let bound = PalwFreePromptCommitmentV3 {
             trace_root: r.trace_root,
@@ -1403,7 +1476,7 @@ mod tests {
             work_leaves: r.work_leaves,
             ..c.clone()
         };
-        assert_eq!(palw_fp_eval_claim_check_v1(&bound, &tail, &[]).map(|e| e.id()), Ok(eval.id()));
+        assert_eq!(palw_fp_eval_claim_check_v1(&bound, &prompt, &tail, &[]).map(|e| e.id()), Ok(eval.id()));
         let read = PalwEvalBindingV1 { finalized: vec![vec![1, 2]], ..binding.clone() };
         assert_ne!(read.execution_root(), binding.execution_root(), "a finalized read is in the root");
         assert_eq!(read.finalized_root(), palw_improve_eval_finalized_root_v1(&[palw_improve_eval_generated_root_v1(&[1, 2])]));
