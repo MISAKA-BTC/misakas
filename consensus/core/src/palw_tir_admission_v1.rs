@@ -300,15 +300,33 @@ pub fn palw_tir_carried_closes_admit_v1(
     carriable: u64,
     work_cap: u64,
 ) -> Result<Vec<crate::palw_tir_close_size_v1::PalwTirCloseBoundV1>, PalwClassAdmissionError> {
+    palw_tir_carried_closes_admit_form_v1(
+        space,
+        program,
+        longest,
+        crate::palw_tir_close_size_v1::PalwTirParamFormV1::Multiproof,
+        court,
+        carriable,
+        work_cap,
+    )
+}
+
+/// [`palw_tir_carried_closes_admit_v1`] with the parameters carried in `form` — the one-root
+/// multiproof of every IR class, or a composite artifact's sub-root openings (RFC-0004 §6.3).
+pub fn palw_tir_carried_closes_admit_form_v1(
+    space: &PalwTirStepSpaceV1,
+    program: &TirProgramV1,
+    longest: &PalwJobContextV2,
+    form: crate::palw_tir_close_size_v1::PalwTirParamFormV1,
+    court: bool,
+    carriable: u64,
+    work_cap: u64,
+) -> Result<Vec<crate::palw_tir_close_size_v1::PalwTirCloseBoundV1>, PalwClassAdmissionError> {
     use crate::palw_tir_close_size_v1 as z;
     let inventory = crate::palw_tir_court_v1::PalwTirInventoryIndexV1::new(program)
         .ok_or_else(|| PalwClassAdmissionError::TirLayout("the class's inventory has no index".into()))?;
-    let sizing = z::PalwTirCloseSizingV1 {
-        form: z::PalwTirParamFormV1::Multiproof,
-        court,
-        cap: work_cap,
-        stop_above: Some((carriable, PALW_TIR_DISSECT_CARRIER_BYTES_V1)),
-    };
+    let sizing =
+        z::PalwTirCloseSizingV1 { form, court, cap: work_cap, stop_above: Some((carriable, PALW_TIR_DISSECT_CARRIER_BYTES_V1)) };
     let bounds = z::palw_tir_worst_closes_v1(space, &inventory, longest, &sizing).map_err(|e| {
         if e == z::PALW_TIR_CLOSE_SIZING_OVER_CAP_V1 {
             PalwClassAdmissionError::TirExceeds {

@@ -39,6 +39,40 @@ pub fn prepare(config_text: &str, opts: &LowerOpts) -> Result<Prepared> {
     Ok(Prepared { spec, hl, binding, lowered })
 }
 
+/// **A LoRA candidate of `parent`** (RFC-0004 §6.2–§6.3, PALW-MIP-15's composite artifact): the
+/// parent's spec with the PEFT adapter (`adapter_config.json`'s text) attached, lowered with the
+/// adapter's params last (`lower::adapter_params_last`). Returns the candidate and `P`, the parent's
+/// param count: the candidate's params `0..P` are the parent program's, declaration for declaration
+/// (refused otherwise), so materialised with the parent's calibration plus the adapter's own sites
+/// ([`candidate_stats`]) its first `P` params' tensors are the parent artifact's, byte for byte, and
+/// its params `P..` are the adapter's section. Its weights are the parent checkpoint under the
+/// adapter's tensors (`weights::Overlay`).
+pub fn prepare_candidate(parent: &Prepared, adapter_config: &str, opts: &LowerOpts) -> Result<(Prepared, usize)> {
+    let mut spec = parent.spec.clone();
+    crate::lora::attach(&mut spec, adapter_config)?;
+    let hl = crate::hl::build_program(&spec)?;
+    let binding = crate::hf_weights::bind(&spec, &hl)?;
+    let mut lowered = lower(&hl, opts)?;
+    let p = crate::lower::adapter_params_last(&mut lowered)?;
+    if lowered.program.params[..p] != parent.lowered.program.params[..] {
+        return Err(LowerError::bad(format!(
+            "the candidate's first {p} params are not the parent's {}: the adapter changed a parent declaration",
+            parent.lowered.program.params.len()
+        )));
+    }
+    Ok((Prepared { spec, hl, binding, lowered }, p))
+}
+
+/// **A candidate's calibration**: the parent's statistics for every parent site, and the
+/// candidate's own (a float run of parent + adapter) only at the adapter's sites (keys holding
+/// [`crate::lower::LORA_MARK`]) — every parent tensor then keeps the scales it has in the parent's
+/// artifact.
+pub fn candidate_stats(parent: &BTreeMap<String, SiteStat>, candidate: BTreeMap<String, SiteStat>) -> BTreeMap<String, SiteStat> {
+    let mut out = parent.clone();
+    out.extend(candidate.into_iter().filter(|(k, _)| k.contains(crate::lower::LORA_MARK)));
+    out
+}
+
 /// Per-site statistics of the float reference over `seqs` (keys `pre.embed`, `L3.attn.q`, …).
 pub fn calibrate(
     hl: &HlProgram,

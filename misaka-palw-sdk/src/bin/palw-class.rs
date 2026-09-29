@@ -36,6 +36,10 @@ USAGE:
     palw-class manifest  --network <id> [--out <path>] [--check] <artifact-path>
     palw-class check-architecture --network <id> --config <config.json> [--legacy] [--held] [--tile-len N] [--h-chunk N] [--json]
     palw-class check-architecture --network <id> --tir <program.tir> [--tile-len N] [--h-chunk N] [--json]
+    palw-class check-architecture --network <id> --config <config.json> --lora-budget [--lora-rank R] [--max-context N]
+                         [--logits-tile N] [--max-window N] [--checkpoint-interval N] [--held] [--tile-len N]
+                         [--h-chunk N] [--json]
+    palw-class composite --parent <parent.palwtir> [--parent-class <hex>] [--out <path>] <candidate.palwtir>
     palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
     palw-class drill-leaves --network <id> [--model-id <model-id>] [--decode N] <artifact-path>
     palw-class close-sizes --network <id> [--anchor <hex>] [--json] <artifact-path>
@@ -103,6 +107,31 @@ express it (dense A16, Qwen3.6 hybrid) and runs the processor-same admission gat
 row — the shipped rows at the config's geometry, else the family's graph projected at its
 dimensions. Verdicts: ADMISSIBLE, EXCEEDS(limit, value, cap), NEEDS_PRIMITIVE, NOT_LOWERABLE,
 REFUSED, UNVERIFIED, NEEDS_KERNEL. Exits 0 on ADMISSIBLE, 2 otherwise.
+
+`check-architecture --lora-budget` (RFC-0004 §6.3) answers a different question: which LoRA adapters
+of this model a composite candidate can carry. Each module kind an adapter can target is lowered
+alone, then the attention set, the MLP set and PEFT's all-linear. Each is lowered at rank
+--lora-rank (16 unless given; lora_alpha twice it), with its params after the parent's, as
+palw-tir-fidelity --adapter lowers a candidate. For each, it reports:
+* the adapter section's params and bytes;
+* every block's nodes against the 512 a block may hold (NF-12, the composite rule);
+* the work of admission's close sizing of the composite: every terminal close in the Composite{p}
+  form, over the longest job at --max-context (2,048 unless given), against the 2^26-step cap.
+The logits tile is --logits-tile, or else the widest tile whose closes the parent's sizing finds
+carriable. --max-window N lowers as palw-tir-fidelity --max-window does. --checkpoint-interval N
+sizes at a declared interval narrower than min C_j. When all-linear is past any budget, a greedy
+fallback follows: the targets, in order, that keep every budget.
+
+`composite` (RFC-0004 §6.3, PALW-MIP-15) makes a LoRA candidate's container a composite artifact
+of its parent's. palw-tir-fidelity --adapter writes the candidate with the parent's params first
+and records composite.p. This checks the candidate against the parent's container (its tokenizer,
+token bound, primitive set and logits row; the composite rule; the candidate's params 0..P rooting
+to the parent's inventory root) and derives the adapter section's root. It prints both, and the
+composite artifact root when --parent-class names the parent's class id. With --out it writes the
+candidate again with the record in its provenance:
+composite: {p, parent_root, adapter_root, parent_leaves, adapter_leaves[, parent_class]} (hex:
+lowercase, 128 characters). Every root comes from the consensus functions. Exits 1 on a
+refusal.
 
 NETWORKS: a network id with a PALW V2 bundle, e.g. testnet-11 or devnet.
 
@@ -230,11 +259,38 @@ fn run(args: &[String]) -> Result<(), String> {
             let legacy = args.iter().any(|a| a == "--legacy");
             let held = args.iter().any(|a| a == "--held");
             let json = args.iter().any(|a| a == "--json");
+            if args.iter().any(|a| a == "--lora-budget") {
+                let config = config.as_deref().ok_or("--lora-budget needs --config (an adapter attaches to a Hugging Face config)")?;
+                let optional = |v: Option<String>, name: &str| -> Result<Option<u32>, String> {
+                    v.map(|v| v.parse::<u32>().map_err(|e| format!("{name} {v}: {e}"))).transpose()
+                };
+                let choice = misaka_palw_sdk::check_architecture::LoraBudgetChoiceV1 {
+                    rank: number(take_flag(&mut args, "--lora-rank"), "--lora-rank", 16)? as usize,
+                    context: optional(take_flag(&mut args, "--max-context"), "--max-context")?,
+                    logits_tile: optional(take_flag(&mut args, "--logits-tile"), "--logits-tile")?,
+                    tile_len,
+                    h_chunk,
+                    long_history: held,
+                    max_window: optional(take_flag(&mut args, "--max-window"), "--max-window")?,
+                    checkpoint_interval: optional(take_flag(&mut args, "--checkpoint-interval"), "--checkpoint-interval")?,
+                };
+                return lora_budget(&view, config, &choice, json);
+            }
             let flags = ArchFlags { legacy, held, json, tile_len, h_chunk };
             match check_architecture(&view, config.as_deref(), tir.as_deref(), &flags)? {
                 true => Ok(()),
                 false => std::process::exit(2),
             }
+        }
+        "composite" => {
+            let parent = take_flag(&mut args, "--parent").ok_or(USAGE)?;
+            let parent_class = match take_flag(&mut args, "--parent-class") {
+                Some(hex) => Some(hex.trim_start_matches("0x").parse::<Hash64>().map_err(|e| format!("--parent-class {hex}: {e:?}"))?),
+                None => None,
+            };
+            let out = take_flag(&mut args, "--out");
+            let path = PathBuf::from(args.first().ok_or(USAGE)?);
+            composite(&PathBuf::from(parent), parent_class, &path, out.as_deref().map(std::path::Path::new))
         }
         "close-sizes" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
@@ -390,6 +446,57 @@ fn check_architecture(view: &NetworkView, config: Option<&str>, tir: Option<&str
         }
     }
     Ok(r.verdict.is_admissible())
+}
+
+/// `check-architecture --lora-budget`: the report, text or JSON.
+fn lora_budget(
+    view: &NetworkView,
+    config: &str,
+    choice: &misaka_palw_sdk::check_architecture::LoraBudgetChoiceV1,
+    json: bool,
+) -> Result<(), String> {
+    let text = std::fs::read_to_string(config).map_err(|e| format!("{config}: {e}"))?;
+    let r = misaka_palw_sdk::check_architecture::check_lora_budget_v1(&view.params, &view.bundle, &text, choice)?;
+    if json {
+        let mut v = r.to_json();
+        v["network"] = serde_json::Value::String(view.network_id.to_string());
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    } else {
+        println!("on {}", view.network_id);
+        print!("{}", r.render());
+    }
+    Ok(())
+}
+
+/// `composite`: a LoRA candidate's container checked against its parent's, its sections rooted, and
+/// (with `out`) written again with the record in its provenance.
+fn composite(
+    parent: &std::path::Path,
+    parent_class: Option<Hash64>,
+    candidate: &std::path::Path,
+    out: Option<&std::path::Path>,
+) -> Result<(), String> {
+    use misaka_palw_sdk::tir_composite::{tir_composite_derive_v1, tir_composite_write_v1};
+    use misaka_palw_tir_artifact::PalwTirContainerV1;
+    let pc = PalwTirContainerV1::open(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    let cc = PalwTirContainerV1::open(candidate).map_err(|e| format!("{}: {e}", candidate.display()))?;
+    let c = tir_composite_derive_v1(&pc, &cc, parent_class)?;
+    println!("composite of {} over {}", candidate.display(), parent.display());
+    println!("  P               {} (the parent's params), then {} of the adapter's", c.p, cc.program.params.len() as u32 - c.p);
+    println!("  parent root     {} ({} leaves: the candidate's params 0..P, byte for byte)", c.parent_root, c.parent_leaves);
+    println!("  adapter root    {} ({} leaves)", c.adapter_root, c.adapter_leaves);
+    match (c.parent_class, c.artifact_root()) {
+        (Some(pcid), Some(root)) => {
+            println!("  parent class    {pcid}");
+            println!("  artifact root   {root} (what the candidate's class id commits to)");
+        }
+        _ => println!("  parent class    not given (--parent-class <hex> derives the composite artifact root)"),
+    }
+    if let Some(out) = out {
+        let digest = tir_composite_write_v1(&cc, &c, out)?;
+        println!("wrote {} (file digest {})", out.display(), Hash64::from_bytes(digest));
+    }
+    Ok(())
 }
 
 /// **ADR-0096 Decision 10: bind a tokenizer into a converted artifact, and MEASURE that the
