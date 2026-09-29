@@ -8,25 +8,31 @@
 //! it last saw each line's epoch in, for the log — and what the node holds.
 //!
 //! **Dormant**: nothing here runs below the fence ([`palw_improve_watch_armed_v1`]), and the chain
-//! view is read through the one door the core lane exposes for it (the rows are the core lane's and
-//! may move: items and results into keyed tables — this module never names a row's field).
+//! view is read through the one door the core lane exposes for it
+//! (`ConsensusApi::palw_improvement_open_epochs_v1`, read into the SDK's `PalwImproveViewsChainV1` —
+//! this module never names a row's field).
 //!
-//! **Not yet on the panel's loop**: the loop calls [`PalwImproveWatchV1::tick`] once the core lane's
-//! read door for the improvement tables lands (A2/A3); until then the module is exercised by its tests
-//! alone, hence the `dead_code` allowance outside them.
-#![cfg_attr(not(test), allow(dead_code))]
+//! **On the panel's loop**: every [`PALW_IMPROVE_READ_EVERY_V1`] the loop reads the door and ticks the
+//! watcher ([`PalwImproveWatchV1::tick_views`]); it logs each epoch's state change and the plan. The
+//! plan is not run yet — the prefetch transport (the candidates lane's carriage) and the evaluation
+//! claims (the evaluation lane's job type) are the next steps — so the loop plans prefetch only.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
-use kaspa_consensus_core::palw_improve_state_v1::PalwEpochStateV1;
+use kaspa_consensus_core::palw_improve_state_v1::{PalwEpochStateV1, PalwEvalItemV1, PalwImprovementEpochViewV1};
+use kaspa_core::{info, trace};
 use misaka_palw_sdk::improve::{
-    PalwImproveChainV1, PalwImproveDutyV1, PalwImproveNodeV1, palw_improve_duties_v1, palw_improve_epoch_moved_v1,
+    PalwImproveChainV1, PalwImproveDutyV1, PalwImproveNodeV1, PalwImproveViewsChainV1, palw_improve_duties_v1,
+    palw_improve_epoch_moved_v1,
 };
 
 /// The most evaluation jobs one tick plans (each is a whole run of a subject class).
 pub(crate) const PALW_IMPROVE_JOBS_PER_TICK_V1: usize = 4;
+
+/// How often the panel's loop reads the improvement door (epochs move in tens of DAA).
+pub(crate) const PALW_IMPROVE_READ_EVERY_V1: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// **Is the watcher armed at `daa_score`?** Only past `palw_improvement_v1` — `None` on every shipped
 /// preset, so on every network today the watcher does nothing.
@@ -79,6 +85,40 @@ impl PalwImproveWatchV1 {
         tick.duties = palw_improve_duties_v1(chain, node, current_daa, PALW_IMPROVE_JOBS_PER_TICK_V1);
         tick
     }
+
+    /// **One tick over the node's read door** (`ConsensusApi::palw_improvement_open_epochs_v1`): the
+    /// chain view its open epochs make. No case and no claimed job is read yet — the candidates' and
+    /// the evaluation lanes' readers land beside the door — so an item's evaluation is planned only
+    /// once its case can be read, and every job counts as open.
+    pub(crate) fn tick_views(
+        &mut self,
+        views: &[PalwImprovementEpochViewV1],
+        node: &PalwImproveNodeV1,
+        current_daa: u64,
+    ) -> PalwImproveTickV1 {
+        let case = |_: &Hash64, _: u64, _: &PalwEvalItemV1| None;
+        let claimed = |_: &Hash64| false;
+        self.tick(&PalwImproveViewsChainV1 { views, case: &case, claimed: &claimed }, node, current_daa)
+    }
+}
+
+/// **A tick, logged**: each epoch's state change once (with the plan's size then), each epoch that
+/// closed or line that left governance; the plan itself at trace level. Nothing in the plan runs yet.
+pub(crate) fn palw_improve_log_tick_v1(tick: &PalwImproveTickV1) {
+    let prefetch = tick.duties.iter().filter(|d| matches!(d, PalwImproveDutyV1::Prefetch { .. })).count();
+    let evaluate = tick.duties.len() - prefetch;
+    for (line, epoch, state) in &tick.moved {
+        info!(
+            "[palw-improve] line {line}: epoch {epoch} is {state:?} — this node plans {prefetch} prefetch(es) and {evaluate} \
+             evaluation(s), not run yet (RFC-0004 A10)"
+        );
+    }
+    for line in &tick.gone {
+        info!("[palw-improve] line {line}: its open epoch closed, or the line left governance (RFC-0004)");
+    }
+    for duty in &tick.duties {
+        trace!("[palw-improve] planned: {duty:?}");
+    }
 }
 
 #[cfg(test)]
@@ -93,8 +133,9 @@ mod tests {
 
     /// **The watcher follows an epoch through its states and serves it**: each state change is logged
     /// once; in `Submission` it plans the composite candidate's adapter section; in `Evaluating` the
-    /// tasks of the classes it holds, at most the tick's budget; the epoch's close is noticed; and below
-    /// the fence the watcher is not armed on any shipped preset.
+    /// tasks of the classes it holds, at most the tick's budget; the epoch's close is noticed; an empty
+    /// read door plans nothing; the panel's loop ticks it over the door behind the fence; and below the
+    /// fence the watcher is not armed on any shipped preset.
     #[test]
     fn the_watcher_follows_an_epoch_and_plans_its_prefetch_and_evaluation() {
         let mut chain: PalwImproveMemChainV1 = misaka_palw_sdk::improve::testing::chain(PalwEpochStateV1::Submission, false);
@@ -119,6 +160,17 @@ mod tests {
         let tick = watch.tick(&chain, &node, 400);
         assert_eq!(tick.gone, vec![line], "the epoch closed");
         assert!(tick.duties.is_empty());
+        // The read door with no open epoch: nothing moves, nothing is planned.
+        let tick = watch.tick_views(&[], &node, 401);
+        assert!(tick.moved.is_empty() && tick.gone.is_empty() && tick.duties.is_empty());
+        // The panel's loop reads the door behind the fence and ticks the watcher over it.
+        let panel = include_str!("palw_panel.rs");
+        let at = panel
+            .find("crate::palw_improve_watch::palw_improve_watch_armed_v1(&self.consensus_config.params, current_daa)")
+            .expect("armed");
+        let read = &panel[at..at + 1400];
+        assert!(read.contains(".spawn_blocking(|c| c.palw_improvement_open_epochs_v1())"));
+        assert!(read.contains("palw_improve_log_tick_v1(&improve_watch.tick_views(&views, &node, current_daa))"));
         let _ = PalwTirArtifactRefV1::Single { root: h(0) };
         assert!(palw_improve_held_classes_v1(&[]).is_empty(), "a node with no IR artifact holds no class");
         for net in [

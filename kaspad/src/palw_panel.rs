@@ -7143,6 +7143,9 @@ impl PalwPanelService {
         // move in hundreds of DAA).
         let mut own_phases: std::collections::HashMap<kaspa_hashes::Hash64, String> = std::collections::HashMap::new();
         let mut own_phases_read: Option<std::time::Instant> = None;
+        // RFC-0004 (A10): the improvement epochs this node follows, read through the core's door.
+        let mut improve_watch = crate::palw_improve_watch::PalwImproveWatchV1::default();
+        let mut improve_read: Option<std::time::Instant> = None;
 
         loop {
             if !self.tick(std::time::Duration::from_secs(2)).await {
@@ -7218,6 +7221,26 @@ impl PalwPanelService {
                 continue;
             }
             let current_daa = session.get_virtual_daa_score();
+            // **RFC-0004 (A10): the improvement epochs** — past `palw_improvement_v1` only (dormant on
+            // every shipped preset): the open epochs read through the core's door, the watcher's plan
+            // logged. Prefetch only: the evaluation claims wait for the evaluation lane's job type.
+            if crate::palw_improve_watch::palw_improve_watch_armed_v1(&self.consensus_config.params, current_daa)
+                && improve_read.is_none_or(|at| at.elapsed() >= crate::palw_improve_watch::PALW_IMPROVE_READ_EVERY_V1)
+            {
+                improve_read = Some(std::time::Instant::now());
+                let views = self
+                    .consensus_manager
+                    .consensus()
+                    .unguarded_session()
+                    .spawn_blocking(|c| c.palw_improvement_open_epochs_v1())
+                    .await;
+                let node = misaka_palw_sdk::improve::PalwImproveNodeV1 {
+                    holds: crate::palw_improve_watch::palw_improve_held_classes_v1(self.backends().holdings()),
+                    evaluates: false,
+                    prefetch_full: false,
+                };
+                crate::palw_improve_watch::palw_improve_log_tick_v1(&improve_watch.tick_views(&views, &node, current_daa));
+            }
             if own_phases_read.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(30)) {
                 own_phases_read = Some(std::time::Instant::now());
                 // Its own session: `spawn_blocking` takes the handle, and this tick still needs one.

@@ -32,7 +32,7 @@ use kaspa_consensus_core::palw_improve_artifact_v1::PalwTirArtifactRefV1;
 use kaspa_consensus_core::palw_improve_material_v1::PalwCaseReferenceV1;
 use kaspa_consensus_core::palw_improve_state_v1::{
     PalwEpochCandidateV1, PalwEpochStateV1, PalwEpochTimesV1, PalwEvalItemV1, PalwEvalModeV1, PalwEvalSubjectV1,
-    PalwImprovementPolicyV1, PalwScoringKindV1, palw_improve_eval_job_id_v1, palw_improve_eval_seed_v1,
+    PalwImprovementEpochViewV1, PalwImprovementPolicyV1, PalwScoringKindV1, palw_improve_eval_job_id_v1, palw_improve_eval_seed_v1,
 };
 use kaspa_consensus_core::palw_state_v2::PalwChainStateV2;
 
@@ -139,6 +139,72 @@ impl PalwImproveChainV1 for PalwImproveStateChainV1<'_> {
 
     fn items(&self, line_id: &Hash64, epoch: u64) -> Vec<PalwEvalItemV1> {
         self.state.improvement_items(line_id, epoch).into_iter().copied().collect()
+    }
+
+    fn case(&self, line_id: &Hash64, epoch: u64, item: &PalwEvalItemV1) -> Option<PalwEvalCaseViewV1> {
+        (self.case)(line_id, epoch, item)
+    }
+
+    fn job_claimed(&self, job_id: &Hash64) -> bool {
+        (self.claimed)(job_id)
+    }
+}
+
+/// **The node's read door as a chain view** (`ConsensusApi::palw_improvement_open_epochs_v1`, the core
+/// lane's A9): one view per open epoch — the line's header and policy, the epoch's header, its
+/// candidates in acceptance order and its items in item order. The door lists open epochs only, so a
+/// line is governed here exactly while it has one (the watcher serves nothing else); the cases and the
+/// claimed jobs come through the readers the candidates' and the evaluation lanes supply.
+pub struct PalwImproveViewsChainV1<'a> {
+    pub views: &'a [PalwImprovementEpochViewV1],
+    pub case: &'a dyn Fn(&Hash64, u64, &PalwEvalItemV1) -> Option<PalwEvalCaseViewV1>,
+    pub claimed: &'a dyn Fn(&Hash64) -> bool,
+}
+
+impl PalwImproveViewsChainV1<'_> {
+    fn view(&self, line_id: &Hash64) -> Option<&PalwImprovementEpochViewV1> {
+        self.views.iter().find(|v| v.line.line_id == *line_id)
+    }
+}
+
+impl PalwImproveChainV1 for PalwImproveViewsChainV1<'_> {
+    fn governed_lines(&self) -> Vec<Hash64> {
+        let mut lines: Vec<Hash64> = Vec::with_capacity(self.views.len());
+        for v in self.views {
+            if !lines.contains(&v.line.line_id) {
+                lines.push(v.line.line_id);
+            }
+        }
+        lines
+    }
+
+    fn line(&self, line_id: &Hash64) -> Option<PalwImproveLineViewV1> {
+        let v = self.view(line_id)?;
+        Some(PalwImproveLineViewV1 {
+            line_id: v.line.line_id,
+            head: v.line.head,
+            policy: v.policy.clone(),
+            open_epoch: v.line.open_epoch,
+        })
+    }
+
+    fn epoch(&self, line_id: &Hash64, epoch: u64) -> Option<PalwImproveEpochViewV1> {
+        let v = self.view(line_id).filter(|v| v.epoch.epoch == epoch)?;
+        let header = &v.epoch;
+        Some(PalwImproveEpochViewV1 {
+            line_id: header.line_id,
+            epoch: header.epoch,
+            state: header.state,
+            times: header.times,
+            parent: header.parent,
+            previous: header.previous,
+            candidates: v.candidates.clone(),
+            seed: header.seed,
+        })
+    }
+
+    fn items(&self, line_id: &Hash64, epoch: u64) -> Vec<PalwEvalItemV1> {
+        self.view(line_id).filter(|v| v.epoch.epoch == epoch).map(|v| v.items.clone()).unwrap_or_default()
     }
 
     fn case(&self, line_id: &Hash64, epoch: u64, item: &PalwEvalItemV1) -> Option<PalwEvalCaseViewV1> {
@@ -739,7 +805,8 @@ mod tests {
     /// **The chain state's readers as the view** (the core lane's keyed layout): a state carrying one
     /// governed line, its policy, its open epoch's header, candidates and items reads back through
     /// [`PalwImproveStateChainV1`] exactly as the rows say — the subjects in the chain's own order
-    /// (`improvement_subjects`) — and plans the same tasks as the in-memory view.
+    /// (`improvement_subjects`) — and plans the same tasks as the in-memory view; so does the node's
+    /// read door ([`PalwImproveViewsChainV1`] over `improvement_open_epoch_views_v1`).
     #[test]
     fn the_state_readers_are_the_same_view_as_the_rows() {
         use kaspa_consensus_core::palw_improve_state_v1::{
@@ -791,6 +858,7 @@ mod tests {
                 setter_sets: 0,
                 seed: epoch.seed,
                 items: 3,
+                results_bound: 0,
                 previous_counts: None,
                 outcome: None,
                 escrow: PalwEpochEscrowV1::default(),
@@ -820,5 +888,16 @@ mod tests {
         assert_eq!(subjects, state.improvement_subjects(&h(LINE), 3), "the chain's own subject order");
         let node = PalwImproveNodeV1 { holds: [h(HEAD), h(0xC1), h(PREVIOUS)].into(), evaluates: true, prefetch_full: false };
         assert_eq!(palw_improve_duties_v1(&view, &node, 250, 64), palw_improve_duties_v1(&mem, &node, 250, 64));
+        // The node's read door (`improvement_open_epoch_views_v1`, what `ConsensusApi` serves) reads back
+        // the same view, and plans the same.
+        let views = state.improvement_open_epoch_views_v1();
+        assert_eq!(views.len(), 1, "one open epoch");
+        let door = PalwImproveViewsChainV1 { views: &views, case: &case, claimed: &claimed };
+        assert_eq!(door.governed_lines(), vec![h(LINE)]);
+        assert_eq!(door.line(&h(LINE)).as_ref(), Some(line));
+        assert_eq!(door.epoch(&h(LINE), 3).as_ref(), Some(epoch));
+        assert!(door.epoch(&h(LINE), 2).is_none(), "only the open epoch");
+        assert_eq!(door.items(&h(LINE), 3), mem.items[&(h(LINE), 3)]);
+        assert_eq!(palw_improve_duties_v1(&door, &node, 250, 64), palw_improve_duties_v1(&mem, &node, 250, 64));
     }
 }
