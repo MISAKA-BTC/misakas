@@ -185,6 +185,8 @@ pub struct TirDeclaredLayoutV1 {
     pub admission_at: String,
     /// The file digest of the container written.
     pub file_digest: [u8; 64],
+    /// A LoRA candidate's composite (RFC-0004 §6.3): `artifact_root` is then its composite root.
+    pub composite: Option<kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1>,
 }
 
 /// **The ruleset an offline admission is asked under**: the network's own where `palw_tir_v1` is
@@ -317,12 +319,127 @@ pub fn tir_declare_layout_v1(
     choice: &TirLayoutChoiceV1,
     model_id: Option<&str>,
 ) -> Result<TirDeclaredLayoutV1, String> {
+    tir_declare_layout_with_parent_v1(params, bundle, input, output, choice, model_id, None)
+}
+
+/// A LoRA candidate's composite, as the class binding reads it: the recorded `P` and parent class,
+/// its two section roots derived again from the file (the record's roots are a convenience and must
+/// agree), and — given the parent's declared container — the parent class and root it is judged
+/// against.
+struct CompositeBinding {
+    r: kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1,
+    parent: Option<(PalwTirClassV1, Hash64)>,
+}
+
+fn composite_binding(
+    container: &misaka_palw_tir_artifact::PalwTirContainerV1,
+    program: &TirProgramV1,
+    meta: &serde_json::Value,
+    parent: Option<&Path>,
+) -> Result<Option<CompositeBinding>, String> {
+    use kaspa_consensus_core::palw_improve_composite_v1::{PalwTirCompositeRefV1, palw_tir_composite_section_roots_v1};
+    let Some(rec) = meta.get("composite") else {
+        return match parent {
+            Some(_) => Err("--parent names a parent, but the container is no composite candidate (no meta.composite)".into()),
+            None => Ok(None),
+        };
+    };
+    let p = rec.get("p").and_then(|v| v.as_u64()).and_then(|v| u32::try_from(v).ok()).ok_or("meta.composite records no P")?;
+    let hash = |k: &str| -> Result<Option<Hash64>, String> {
+        rec.get(k)
+            .map(|v| {
+                v.as_str()
+                    .ok_or(format!("meta.composite.{k} is not hex"))
+                    .and_then(|h| h.parse::<Hash64>().map_err(|e| format!("meta.composite.{k}: {e:?}")))
+            })
+            .transpose()
+    };
+    let parent_class = hash("parent_class")?.ok_or(
+        "a composite candidate without its parent class cannot name a class: record it with palw-class composite --parent-class <hex>",
+    )?;
+    let ((parent_root, _), (adapter_root, _)) =
+        palw_tir_composite_section_roots_v1(program, p, &crate::tir_manifest::PalwTirContainerSourceV1(container))
+            .map_err(|e| e.to_string())?;
+    for (k, derived) in [("parent_root", parent_root), ("adapter_root", adapter_root)] {
+        if let Some(named) = hash(k)?
+            && named != derived
+        {
+            return Err(format!("meta.composite.{k} is {named}; the file's section roots to {derived}"));
+        }
+    }
+    let r = PalwTirCompositeRefV1 { parent_class, parent_root, adapter_root, p };
+    let parent = match parent {
+        None => None,
+        Some(path) => {
+            let art = misaka_palw_tir_exec::node::TirArtifactV1::open(path)?;
+            let class = art.class().map_err(|e| format!("{}: {e} (pass the parent's DECLARED container)", path.display()))?;
+            let (root, _) = art.inventory_root()?;
+            let id = class.class_id(&root);
+            if id != parent_class {
+                return Err(format!("--parent is class {id}; the composite names parent class {parent_class}"));
+            }
+            if root != parent_root {
+                return Err(format!("the candidate's params 0..{p} root to {parent_root}, not to the parent's inventory root {root}"));
+            }
+            Some((class, root))
+        }
+    };
+    Ok(Some(CompositeBinding { r, parent }))
+}
+
+/// [`tir_declare_layout_v1`] for a container that may be a LoRA candidate (RFC-0004 §6.3). A
+/// candidate (`meta.composite`) names the class `class_id(composite root)`, never one over its whole
+/// inventory. It must record its parent class, and it is refused otherwise. Given `parent`, the
+/// parent's declared container, the layout is judged by the composite admission
+/// (`palw_tir_composite_admits_v1`); without it, the layout is written unjudged, and the result says
+/// so.
+pub fn tir_declare_layout_with_parent_v1(
+    params: &Params,
+    bundle: &PalwConsensusParamsV2,
+    input: &Path,
+    output: &Path,
+    choice: &TirLayoutChoiceV1,
+    model_id: Option<&str>,
+    parent: Option<&Path>,
+) -> Result<TirDeclaredLayoutV1, String> {
     let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(input)?;
     let container = artifact.container();
     let program = &tir_program_with_scheme_v1(&container.program, choice.logits_scheme)?;
     let program_bytes = program.encode();
-    let (artifact_root, leaf_count) = artifact.inventory_root()?;
+    let (inventory_root, leaf_count) = artifact.inventory_root()?;
+    let meta0 = serde_json::from_str::<serde_json::Value>(&container.header.meta).unwrap_or_else(|_| serde_json::json!({}));
+    let composite = composite_binding(container, program, &meta0, parent)?;
+    let artifact_root = composite.as_ref().map_or(inventory_root, |c| c.r.artifact_root());
     let carriable = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&bundle.court);
+    // The gate a layout is judged by: the registration's, or the composite's.
+    let judge = |class: &PalwTirClassV1| -> Result<(), String> {
+        match &composite {
+            None => tir_class_admission_offline_v1(params, bundle, class, artifact_root),
+            Some(CompositeBinding { parent: None, .. }) => {
+                Err("not judged: a composite is admitted against its parent class (pass --parent <the parent's declared container>)"
+                    .into())
+            }
+            Some(CompositeBinding { r, parent: Some((pc, proot)) }) => {
+                let rules = kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeAdmissionV1 {
+                    court: true,
+                    carriable,
+                    work_cap: kaspa_consensus_core::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1,
+                };
+                kaspa_consensus_core::palw_improve_composite_v1::palw_tir_composite_admits_v1(
+                    pc,
+                    &r.parent_class,
+                    proot,
+                    class,
+                    &class.class_id(&artifact_root),
+                    &artifact_root,
+                    r,
+                    &rules,
+                )
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+            }
+        }
+    };
     let class_of = |layout: &PalwTirLayoutV1| PalwTirClassV1 {
         version: PALW_TIR_CLASS_VERSION_V1,
         program: program_bytes.clone(),
@@ -349,9 +466,13 @@ pub fn tir_declare_layout_v1(
             continue;
         }
         let mut layout = tir_default_layout_v1(params, program, &TirLayoutChoiceV1 { logits_tile, ..*choice })?;
-        let mut admission = tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root);
+        let mut admission = judge(&class_of(&layout));
         first.get_or_insert_with(|| (layout.clone(), admission.clone()));
         while let Err(why) = &admission {
+            // Nothing to search when nothing judges.
+            if why.starts_with("not judged") {
+                break 'tiles;
+            }
             // A close too wide to carry is the logits tile's to fix; anything else, the interval's.
             if why.contains("close bytes") {
                 continue 'tiles;
@@ -360,7 +481,7 @@ pub fn tir_declare_layout_v1(
                 break;
             }
             layout.checkpoint_interval /= 2;
-            admission = tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root);
+            admission = judge(&class_of(&layout));
         }
         if admission.is_ok() {
             found = Some((layout, admission));
@@ -392,6 +513,17 @@ pub fn tir_declare_layout_v1(
     )
     .map_err(|e| format!("{}: {e}", output.display()))?;
     let class_id = class_of(&layout).class_id(&artifact_root);
-    let admission_at = TirOfflineGateV1::of(params).note();
-    Ok(TirDeclaredLayoutV1 { layout, class_id, artifact_root, admission, admission_at, file_digest })
+    let admission_at = match &composite {
+        Some(_) => "by the composite admission (palw_tir_composite_admits_v1)".to_string(),
+        None => TirOfflineGateV1::of(params).note(),
+    };
+    Ok(TirDeclaredLayoutV1 {
+        layout,
+        class_id,
+        artifact_root,
+        admission,
+        admission_at,
+        file_digest,
+        composite: composite.map(|c| c.r),
+    })
 }

@@ -210,6 +210,64 @@ fn a_llama_rank_16_candidate_container_is_a_composite_of_its_parents() {
     check("llama_r16");
 }
 
+/// declare-layout on a candidate names the class over its COMPOSITE root and judges it by the
+/// composite admission against the parent's declared container; a candidate without its parent
+/// class is refused, and one declared without the parent is written unjudged.
+#[test]
+fn a_candidate_is_declared_over_its_composite_root() {
+    use misaka_palw_sdk::tir_layout::{TirLayoutChoiceV1, tir_declare_layout_v1, tir_declare_layout_with_parent_v1};
+    let net = params();
+    let PalwConsensusMode::ConsensusV2(bundle) = &net.palw_consensus_mode else { panic!("testnet-12 is a V2 network") };
+    let c = converted("llama_r16");
+    let dir = Scratch::new("declare");
+    let tokenizer = [0x61u8; 64];
+    let d = |n: &str| dir.0.join(n);
+    artifact::write(&d("parent.palwtir"), &c.parent_program, &c.parent_params, tokenizer, meta(None)).unwrap();
+    artifact::write(&d("cand.palwtir"), &c.candidate_program, &c.candidate_params, tokenizer, meta(Some(c.p))).unwrap();
+    let choice = TirLayoutChoiceV1 { max_context: Some(64), ..TirLayoutChoiceV1::default() };
+    let parent =
+        tir_declare_layout_v1(&net, bundle, &d("parent.palwtir"), &d("parent.class.palwtir"), &choice, None).expect("the parent");
+    assert!(parent.admission.is_ok() && parent.composite.is_none(), "{:?}", parent.admission);
+    // Recorded without a parent class: refused, never declared over the whole inventory.
+    let e = tir_declare_layout_v1(&net, bundle, &d("cand.palwtir"), &d("x.palwtir"), &choice, None).unwrap_err();
+    assert!(e.contains("parent class"), "{e}");
+    // With the parent class recorded.
+    let pc = PalwTirContainerV1::open(&d("parent.palwtir")).unwrap();
+    let cc = PalwTirContainerV1::open(&d("cand.palwtir")).unwrap();
+    let comp = tir_composite_derive_v1(&pc, &cc, Some(parent.class_id)).unwrap();
+    tir_composite_write_v1(&cc, &comp, &d("cand.c.palwtir")).unwrap();
+    let judged = tir_declare_layout_with_parent_v1(
+        &net,
+        bundle,
+        &d("cand.c.palwtir"),
+        &d("cand.class.palwtir"),
+        &choice,
+        None,
+        Some(&d("parent.class.palwtir")),
+    )
+    .expect("the candidate");
+    assert_eq!(judged.admission, Ok(()), "the composite admission passes");
+    assert_eq!(Some(judged.artifact_root), comp.artifact_root(), "the composite root, not the inventory's");
+    let class = misaka_palw_tir_exec::node::TirArtifactV1::open(&d("cand.class.palwtir")).unwrap().class().unwrap();
+    assert_eq!(judged.class_id, class.class_id(&comp.artifact_root().unwrap()), "Phase F's formula over the composite root");
+    // Without the parent: written, unjudged.
+    let unjudged = tir_declare_layout_v1(&net, bundle, &d("cand.c.palwtir"), &d("cand.u.palwtir"), &choice, None).unwrap();
+    assert!(unjudged.admission.as_ref().is_err_and(|e| e.starts_with("not judged")), "{:?}", unjudged.admission);
+    assert_eq!(unjudged.class_id, judged.class_id);
+    // Another parent than the one recorded.
+    let e = tir_declare_layout_with_parent_v1(
+        &net,
+        bundle,
+        &d("cand.c.palwtir"),
+        &d("y.palwtir"),
+        &choice,
+        None,
+        Some(&d("cand.class.palwtir")),
+    )
+    .unwrap_err();
+    assert!(e.contains("names parent class"), "{e}");
+}
+
 #[test]
 fn a_qwen2_all_linear_candidate_container_is_a_composite_of_its_parents() {
     check("qwen2_all_r4");
