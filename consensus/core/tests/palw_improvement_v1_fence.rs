@@ -34,8 +34,9 @@ use kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1;
 use kaspa_consensus_core::palw_improve_artifact_v1::PalwTirArtifactRefV1;
 use kaspa_consensus_core::palw_improve_candidate_v1::{PalwCandidateDeclarationsV1, PalwCandidateSubmissionV1};
 use kaspa_consensus_core::palw_improve_material_v1::{
-    PalwCaseReferenceV1, PalwCaseSourceV1, PalwDataUseOptInV1, PalwDatasetV1, PalwHardCaseV1, PalwSetterKeysRevealV1,
-    PalwSetterSetCommitmentV1, PalwSetterSetRevealV1, PalwTeacherLicenceV1, PalwTeachingArtifactCommitV1, PalwTeachingArtifactV1,
+    PalwCaseReferenceV1, PalwCaseSourceV1, PalwDataUseOptInV1, PalwDatasetV1, PalwFpJobFactsV1, PalwHardCaseV1,
+    PalwSetterKeysRevealV1, PalwSetterSetCommitmentV1, PalwSetterSetRevealV1, PalwTeacherLicenceV1, PalwTeachingArtifactCommitV1,
+    PalwTeachingArtifactV1,
 };
 use kaspa_consensus_core::palw_improve_state_v1::{
     PalwImprovementPolicySetV1, PalwImprovementPolicyV1, PalwImprovementPoolFundingV1, PalwLineageRollbackV1, PalwRollbackCauseV1,
@@ -416,7 +417,22 @@ fn improvement_objects() -> Vec<PalwConsensusObjectV2> {
             submitter: bond(1),
             signature: sig.clone(),
         },
-        PalwConsensusObjectV2::DataUseOptIn { payload: Box::new(PalwDataUseOptInV1 { job_pin: h(13) }), signature: sig.clone() },
+        PalwConsensusObjectV2::DataUseOptIn {
+            payload: Box::new(PalwDataUseOptInV1 {
+                job_pin: h(13),
+                claim: h(34),
+                job: PalwFpJobFactsV1 {
+                    job_id: h(35),
+                    execution_seed: [7; 32],
+                    tokenizer_id: h(36),
+                    prompt_token_ids_hash: h(37),
+                    prompt_tokens: 3,
+                    decode_tokens_executed: 5,
+                    max_context_tokens: 64,
+                },
+            }),
+            signature: sig.clone(),
+        },
         PalwConsensusObjectV2::SetterSetCommitted {
             payload: Box::new(PalwSetterSetCommitmentV1 {
                 line_id: h(10),

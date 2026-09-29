@@ -21,7 +21,9 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_artifact::{
     PalwArtifactMultiproofV1, PalwArtifactOpeningV1, artifact_leaf_v1, artifact_root_v1, palw_artifact_multiproof_v1,
 };
-use kaspa_consensus_core::palw_improve_composite_v1::{PalwTirCompositeOpeningV1, PalwTirCompositeRefV1, palw_tir_composite_split_v1};
+use kaspa_consensus_core::palw_improve_composite_v1::{
+    PalwTirCompositeOpeningV1, PalwTirCompositeRefV1, palw_tir_composite_carriage_v1, palw_tir_composite_split_v1,
+};
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsOpeningV1;
 use kaspa_consensus_core::palw_step_leg::{PalwStepFaultV1, PalwStepOpeningV1, PalwStepTileLeafV1};
 use kaspa_consensus_core::palw_step_refute::{PalwDecodeTokenPinV1, PalwStepRefuteError};
@@ -61,18 +63,6 @@ fn composites() -> Vec<(Fixture, PalwTirCompositeRefV1, u32)> {
         .collect()
 }
 
-/// The two sections' multiproofs of `leaves` (the class's inventory indices).
-fn sections(f: &Fixture, split: u32, leaves: &[u32]) -> (Option<PalwArtifactMultiproofV1>, Option<PalwArtifactMultiproofV1>) {
-    let hashes: Vec<Hash64> = f.ops.iter().map(artifact_leaf_v1).collect();
-    let (s, all) = (split as usize, hashes.as_slice());
-    let pick = |range: std::ops::Range<usize>, base: u32| {
-        let opened: Vec<_> =
-            leaves.iter().filter(|l| range.contains(&(**l as usize))).map(|l| (*l - base, f.ops[*l as usize].clone())).collect();
-        if opened.is_empty() { None } else { palw_artifact_multiproof_v1(&all[range.clone()], &opened) }
-    };
-    (pick(0..s, 0), pick(s..all.len(), split))
-}
-
 /// A store answering the composite form.
 struct CompositeStore<'a> {
     inner: Store<'a>,
@@ -93,9 +83,14 @@ impl PalwTirEvidenceStoreV1 for CompositeStore<'_> {
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
         self.inner.param_opening(leaf)
     }
+    /// The production builder, over the two sections' leaf hashes (what a node's composite store
+    /// supplies from the parent's loaded artifact and the fetched adapter section).
     fn param_carriage(&self, leaves: &[u32]) -> Option<PalwTirParamOpeningV1> {
-        let (parent, adapter) = sections(self.inner.f, self.split, leaves);
-        Some(PalwTirParamOpeningV1::Composite(Box::new(PalwTirCompositeOpeningV1 { artifact: self.r, parent, adapter })))
+        let f = self.inner.f;
+        let hashes: Vec<Hash64> = f.ops.iter().map(artifact_leaf_v1).collect();
+        let opened: Vec<_> = leaves.iter().map(|l| (*l, f.ops[*l as usize].clone())).collect();
+        let s = self.split as usize;
+        palw_tir_composite_carriage_v1(&self.r, self.split, &hashes[..s], &hashes[s..], &opened)
     }
     fn prompt_token_ids(&self) -> Option<Vec<u32>> {
         self.inner.prompt_token_ids()
@@ -447,4 +442,96 @@ fn every_carrier_of_a_composite_opening_is_named() {
             named
         );
     }
+}
+
+/// **Below `palw_improvement_v1` the fold refuses a close carrying composite openings by name** —
+/// the second lock behind the acceptance walk's drop (an older build cannot decode the carriage and
+/// skips the object, A-2) — and past the fence the gate lets it through to the court's own rules.
+#[test]
+fn the_fold_refuses_composite_openings_below_the_improvement_fence() {
+    use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2 as P;
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2 as O, PalwCourtVerdictV2, PalwStateParamsV2, PalwStateV2Error,
+        PalwTransitionExtrasV1, apply_palw_transition_v2_with_extras,
+    };
+    let (f, r, split) = composites().into_iter().next().expect("a composite");
+    let x = f.honest();
+    let i = (0..f.leaves.len())
+        .find(|i| !refute_composite(&f, &x, &r, split, *i as u64).params.is_none())
+        .expect("a close reading params");
+    let close = O::CourtClosed {
+        session_id: SESSION,
+        verdict: PalwCourtVerdictV2::ChallengerDefeated,
+        proof: P::TirCone { refutation: Box::new(refute_composite(&f, &x, &r, split, i as u64)) },
+    };
+    let params = |improve: Option<u64>| {
+        PalwStateParamsV2::new(100, 10, 10, 20, 3_000, 1000, Hash64::from_bytes([1; 64]), 4, 1000, 100, 1000, 0)
+            .unwrap()
+            .with_tir_from_daa(Some(0))
+            .with_improve_from_daa(improve)
+    };
+    let ctx = PalwBlockContextV2 { block: Hash64::from_bytes([0xB1; 64]), daa_score: 50, blue_score: 50, subsidy: 0 };
+    let fold = |p: &PalwStateParamsV2| {
+        apply_palw_transition_v2_with_extras(
+            &PalwChainStateV2::genesis(),
+            p,
+            &ctx,
+            std::slice::from_ref(&close),
+            None,
+            false,
+            false,
+            false,
+            true,
+            &PalwTransitionExtrasV1::default(),
+        )
+        .map(|_| ())
+    };
+    let composite_refusal = |e: &PalwStateV2Error| {
+        matches!(e, PalwStateV2Error::ImprovementObjectRefused { object: "an IR close with composite openings", .. })
+    };
+    for below in [None, Some(51)] {
+        let refused = fold(&params(below)).expect_err("refused below the fence");
+        assert!(composite_refusal(&refused), "below the fence ({below:?}): {refused}");
+        assert!(refused.to_string().contains("before palw_improvement_v1"), "{refused}");
+    }
+    // Past it, decision 7a: a class no governed line admitted as a composite candidate (none here) is
+    // refused its composite closes — it was never sized in that form.
+    let past = fold(&params(Some(0))).expect_err("an unadmitted composite class");
+    assert!(composite_refusal(&past), "past the fence the candidate-path gate refuses it: {past}");
+    assert!(past.to_string().contains("no governed line admitted"), "{past}");
+}
+
+/// **Decision 7a, the rule itself**: a composite opening rides only for a class recorded as a composite
+/// candidate, and only with the reference it was recorded with; an object with no composite opening is
+/// never asked.
+#[test]
+fn a_composite_opening_rides_only_for_a_recorded_candidate_class() {
+    use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2 as P;
+    use kaspa_consensus_core::palw_improve_composite_v1::{
+        palw_composite_openings_admitted_v1 as admitted, palw_object_composite_openings_v1,
+    };
+    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2 as O, PalwCourtVerdictV2};
+    let (f, r, split) = composites().into_iter().next().expect("a composite");
+    let x = f.honest();
+    let i = (0..f.leaves.len())
+        .find(|i| !refute_composite(&f, &x, &r, split, *i as u64).params.is_none())
+        .expect("a close reading params");
+    let close = O::CourtClosed {
+        session_id: SESSION,
+        verdict: PalwCourtVerdictV2::ChallengerDefeated,
+        proof: P::TirCone { refutation: Box::new(refute_composite(&f, &x, &r, split, i as u64)) },
+    };
+    let openings = palw_object_composite_openings_v1(&close);
+    assert_eq!(openings, vec![(f.class_id, &r)], "the opening names the binding's class and carries its reference");
+    assert_eq!(admitted(&close, |c| (*c == f.class_id).then_some(r)), Ok(()), "a recorded class, its reference");
+    assert!(admitted(&close, |_| None).is_err(), "no record");
+    let other = PalwTirCompositeRefV1 { p: r.p + 1, ..r };
+    assert!(admitted(&close, |c| (*c == f.class_id).then_some(other)).is_err(), "another reference");
+    let plain_f = fixtures().into_iter().find(|g| g.name == f.name).expect("the fixture");
+    let plain = O::CourtClosed {
+        session_id: SESSION,
+        verdict: PalwCourtVerdictV2::ChallengerDefeated,
+        proof: P::TirCone { refutation: Box::new(refute(&plain_f, &plain_f.honest(), i as u64)) },
+    };
+    assert_eq!(admitted(&plain, |_| None), Ok(()), "a one-root close is never asked");
 }

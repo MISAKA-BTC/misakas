@@ -7335,6 +7335,27 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a second-IR-fence object was dropped by name below palw_tir_fence2, and the block stands (RFC-0002 Phase F)");
                 continue;
             }
+            // **RFC-0004 §6.3: an IR close carrying a composite artifact's sub-root openings** (the
+            // parameter carriage's appended tag 2) is dropped by name below `palw_improvement_v1` —
+            // an older build cannot decode the carriage and skips the object (A-2) — first, and
+            // charged nothing. The fold refuses it too, as the second lock.
+            if kaspa_consensus_core::palw_improve_composite_v1::palw_object_carries_composite_opening_v1(&object)
+                && !self.palw_improvement_at(point.daa_score)
+            {
+                info!(
+                    "Block {block}: an IR close with composite openings was dropped by name below palw_improvement_v1, and the block stands (RFC-0004)"
+                );
+                continue;
+            }
+            // **Decision 7a: a composite opening only for a class a governed line admitted as a composite
+            // candidate**, with its recorded reference — dropped first and charged nothing otherwise; the
+            // fold refuses it too.
+            if let Err(why) = kaspa_consensus_core::palw_improve_composite_v1::palw_composite_openings_admitted_v1(&object, |class| {
+                folded.improvement_composite_class(class)
+            }) {
+                info!("Block {block}: an IR close with composite openings was dropped, and the block stands: {why} (RFC-0004)");
+                continue;
+            }
             // **RFC-0004: an improvement object (tags 70–82) is dropped by name** — below
             // `palw_improvement_v1` for the IR objects' reason above (an older build skips it
             // undecoded), and above it until the object's admission lands — first, and charged
@@ -7349,6 +7370,20 @@ impl VirtualStateProcessor {
                     info!("Block {block}: {name} was dropped by name: its admission has not landed, and the block stands (RFC-0004)");
                     continue;
                 }
+            }
+            // **RFC-0004 A5: a composite candidate's admission sizes an IR program too**, so it shares the
+            // block's one place at admission sizing with the IR registrations: a second is dropped by name.
+            let sizes_a_composite = matches!(
+                &object,
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CandidateSubmitted { payload, .. }
+                    if payload.artifact.composite().is_some()
+            );
+            if tir_registration_gated && sizes_a_composite {
+                info!(
+                    "Block {block}: a second composite candidate or IR registration was dropped by name, and the block stands: one a \
+                     block reaches admission sizing (RFC-0004 A5, PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1)"
+                );
+                continue;
             }
             if tir_registration_gated
                 && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
@@ -7884,6 +7919,18 @@ impl VirtualStateProcessor {
                         info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
                         continue;
                     }
+                }
+                tir_registration_gated = true;
+            }
+            // A composite candidate takes the place only once its signature holds, so a copy nobody
+            // signed never takes it.
+            if sizes_a_composite {
+                if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CandidateSubmitted { payload, submitter, signature } =
+                    &object
+                    && let Err(why) = self.palw_improvement_candidate_is_signed(&folded, payload, submitter, signature)
+                {
+                    info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
+                    continue;
                 }
                 tir_registration_gated = true;
             }
@@ -11686,24 +11733,93 @@ impl VirtualStateProcessor {
                         "a rollback",
                     )?;
                 }
-                Obj::HardCaseSubmitted { .. }
-                | Obj::DataUseOptIn { .. }
-                | Obj::SetterSetCommitted { .. }
-                | Obj::SetterSetRevealed { .. }
-                | Obj::SetterKeysRevealed { .. }
-                | Obj::DatasetRegistered { .. }
-                | Obj::TeachingArtifactCommitted { .. }
-                | Obj::TeachingArtifactRevealed { .. }
-                | Obj::TeacherLicenceRegistered { .. }
-                | Obj::CandidateSubmitted { .. } => {
-                    let name = kaspa_consensus_core::palw_state_v2::palw_improvement_object_name_v1(object)
-                        .unwrap_or("an improvement object");
-                    let why = if self.palw_improvement_at(point.daa_score) {
-                        "its admission has not landed"
-                    } else {
-                        "palw_improvement_v1 is not in force at this block"
+                // RFC-0004 A4 (spec 17 §17.6): a bond-signed material object, signed under the material
+                // context over its tag, the network, the payload and the signing bond. Everything else —
+                // the line, the epoch, the references, the money — is the fold's.
+                Obj::HardCaseSubmitted { payload, submitter, signature } => {
+                    self.palw_improvement_material_is_signed(state, point, 71, payload.as_ref(), submitter, signature, "a hard case")?;
+                }
+                Obj::SetterSetCommitted { payload, setter, signature } => {
+                    self.palw_improvement_material_is_signed(state, point, 73, payload.as_ref(), setter, signature, "a setter set")?;
+                }
+                Obj::DatasetRegistered { payload, registrant, signature } => {
+                    self.palw_improvement_material_is_signed(state, point, 76, payload.as_ref(), registrant, signature, "a dataset")?;
+                }
+                Obj::TeachingArtifactCommitted { payload, teacher, signature } => {
+                    self.palw_improvement_material_is_signed(
+                        state,
+                        point,
+                        77,
+                        payload.as_ref(),
+                        teacher,
+                        signature,
+                        "an artifact commitment",
+                    )?;
+                }
+                // RFC-0004 §10 (PALW-MIP-19): the opt-in is its job's committer's — the bond of the
+                // free-prompt claim it names, whose recorded job the fold compares with the pin.
+                Obj::DataUseOptIn { payload, signature } => {
+                    let claim = state
+                        .claim(&payload.claim)
+                        .ok_or_else(|| "a data-use opt-in names a claim this chain does not have".to_string())?;
+                    let committer = claim.bond;
+                    self.palw_improvement_material_is_signed(
+                        state,
+                        point,
+                        72,
+                        payload.as_ref(),
+                        &committer,
+                        signature,
+                        "a data-use opt-in",
+                    )?;
+                }
+                // Reveals are unsigned: each opens a commitment only its maker's salt opens (the fold's).
+                Obj::SetterSetRevealed { .. } | Obj::SetterKeysRevealed { .. } | Obj::TeachingArtifactRevealed { .. } => {
+                    if !self.palw_improvement_at(point.daa_score) {
+                        return Err("a reveal is refused: palw_improvement_v1 is not in force at this block (RFC-0004)".to_string());
+                    }
+                }
+                // RFC-0004 §9 (PALW-MIP-18): a licence, signed by its rights holder's own ML-DSA-87 key.
+                Obj::TeacherLicenceRegistered { payload, signature } => {
+                    if !self.palw_improvement_at(point.daa_score) {
+                        return Err(
+                            "a teacher licence is refused: palw_improvement_v1 is not in force at this block (RFC-0004)".to_string()
+                        );
+                    }
+                    let message = kaspa_consensus_core::palw_improve_material_v1::palw_improve_material_message_v1(
+                        79,
+                        &self.palw_network_domain_v2(),
+                        payload.as_ref(),
+                        None,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &payload.rights_holder_key,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_improve_material_v1::PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1,
+                    ) {
+                        return Err("a teacher licence carries a signature its rights holder's key does not verify".to_string());
+                    }
+                }
+                // RFC-0004 §6 (A5, PALW-MIP-8, PALW-MIP-15): the submitter's signature, then the
+                // acceptance half — the declarations' form, the parent, and the artifact's admission (a
+                // composite sized in the composite form: the walk hands one a block to this gate).
+                Obj::CandidateSubmitted { payload, submitter, signature } => {
+                    if !self.palw_improvement_at(point.daa_score) {
+                        return Err("a candidate is refused: palw_improvement_v1 is not in force at this block (RFC-0004)".to_string());
+                    }
+                    self.palw_improvement_candidate_is_signed(state, payload.as_ref(), submitter, signature)?;
+                    let Some(bundle) = self.palw_v2_bundle.as_ref() else {
+                        return Err("a candidate on a network with no V2 bundle".to_string());
                     };
-                    return Err(format!("{name} is refused: {why} (RFC-0004)"));
+                    let rules = kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeAdmissionV1 {
+                        court: self.palw_kary_court_active_at(point.daa_score),
+                        carriable: kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&bundle.court),
+                        work_cap: kaspa_consensus_core::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1,
+                    };
+                    state
+                        .improvement_candidate_acceptance_v1(payload, rules)
+                        .map_err(|why| format!("candidate {} is not admissible: {why} (RFC-0004 §6)", payload.class_id))?;
                 }
                 // **ADR-0078: a derivation is authorised by the key it declares, on this chain.**
                 // The ride list proved a signature is present and the shape is the object's; here
@@ -11867,6 +11983,63 @@ impl VirtualStateProcessor {
 
     /// RFC-0004: an improvement object's signature, checked against the stored key of the bond it is
     /// attributed to, under the object's own ML-DSA-87 context.
+    /// **RFC-0004 A4: a bond-signed material object's signature** — the fence, then the signing bond's
+    /// key over `palw_improve_material_message_v1(tag, network, payload, bond)` under the material
+    /// context.
+    #[allow(clippy::too_many_arguments)]
+    fn palw_improvement_material_is_signed<T: borsh::BorshSerialize>(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        tag: u8,
+        payload: &T,
+        bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        signature: &[u8],
+        what: &str,
+    ) -> Result<(), String> {
+        if !self.palw_improvement_at(point.daa_score) {
+            return Err(format!("{what} is refused: palw_improvement_v1 is not in force at this block (RFC-0004)"));
+        }
+        let message = kaspa_consensus_core::palw_improve_material_v1::palw_improve_material_message_v1(
+            tag,
+            &self.palw_network_domain_v2(),
+            payload,
+            Some(bond),
+        );
+        self.palw_improvement_check_bond_signature(
+            state,
+            bond,
+            &message,
+            signature,
+            kaspa_consensus_core::palw_improve_material_v1::PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1,
+            what,
+        )
+    }
+
+    /// **RFC-0004 A5: a candidate's signature** by its submitter bond, over
+    /// `palw_candidate_submission_message_v1` under the candidate context.
+    fn palw_improvement_candidate_is_signed(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        payload: &kaspa_consensus_core::palw_improve_candidate_v1::PalwCandidateSubmissionV1,
+        submitter: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        let message = kaspa_consensus_core::palw_improve_candidate_v1::palw_candidate_submission_message_v1(
+            &self.palw_network_domain_v2(),
+            payload,
+            submitter,
+        );
+        self.palw_improvement_check_bond_signature(
+            state,
+            submitter,
+            &message,
+            signature,
+            kaspa_consensus_core::palw_improve_candidate_v1::PALW_IMPROVE_CANDIDATE_MLDSA87_CONTEXT_V1,
+            "a candidate",
+        )
+    }
+
     fn palw_improvement_check_bond_signature(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,

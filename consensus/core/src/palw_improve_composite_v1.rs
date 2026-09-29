@@ -43,25 +43,13 @@ use crate::palw_tir_class_v1::PalwTirClassV1;
 use crate::palw_tir_close_size_v1::PalwTirCloseBoundV1;
 use misaka_palw_tir::TirProgramV1;
 
-/// The key of a composite artifact root (RFC-0004 §6.3).
-pub const PALW_IMPROVE_COMPOSITE_ARTIFACT_DOMAIN_V1: &[u8] = b"misaka-palw/improve/composite-artifact/v1";
+/// The key of a composite artifact root (RFC-0004 §6.3) — one spelling, the reference type's module's.
+pub use crate::palw_improve_artifact_v1::PALW_IMPROVE_COMPOSITE_ARTIFACT_DOMAIN_V1;
 
-fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
-    let mut state = blake2b_simd::Params::new().hash_length(64).key(key).to_state();
-    for part in parts {
-        state.update(part);
-    }
-    let mut out = [0u8; 64];
-    out.copy_from_slice(state.finalize().as_bytes());
-    Hash64::from_bytes(out)
-}
-
-/// **A composite artifact root** over its four parts (RFC-0004 §6.3).
+/// **A composite artifact root** over its four parts (RFC-0004 §6.3) — the reference type's
+/// ([`crate::palw_improve_artifact_v1::palw_improve_composite_artifact_root_v1`]), one spelling.
 pub fn palw_improve_composite_root_v1(parent_class: &Hash64, parent_root: &Hash64, adapter_root: &Hash64, p: u32) -> Hash64 {
-    keyed64(
-        PALW_IMPROVE_COMPOSITE_ARTIFACT_DOMAIN_V1,
-        &[parent_class.as_byte_slice(), parent_root.as_byte_slice(), adapter_root.as_byte_slice(), &p.to_le_bytes()],
-    )
+    crate::palw_improve_artifact_v1::palw_improve_composite_artifact_root_v1(parent_class, parent_root, adapter_root, p)
 }
 
 /// **What a composite artifact is**: the parent class, the parent's inventory root, the adapter
@@ -187,7 +175,9 @@ pub fn palw_tir_family_rule_v1(
 /// past them, none of whose params names a parent tensor; and every block holds at most 512 nodes.
 pub fn palw_tir_composite_rule_v1(parent: &TirProgramV1, candidate: &TirProgramV1, p: u32) -> Result<(), PalwTirCompositeErrorV1> {
     type E = PalwTirCompositeErrorV1;
-    if p as usize != parent.params.len() {
+    // Both sections are non-empty: a parent of no params has no inventory to reuse (and `p = 0` would
+    // leave the parent root over nothing), and all-parent params are no adapter (refused below).
+    if p == 0 || p as usize != parent.params.len() {
         return Err(E::NotTheParentsParams { p, parent: parent.params.len() });
     }
     let p = p as usize;
@@ -243,6 +233,43 @@ pub fn palw_tir_composite_ref_v1(
 ) -> Result<PalwTirCompositeRefV1, PalwTirCompositeErrorV1> {
     let ((parent_root, _), (adapter_root, _)) = palw_tir_composite_section_roots_v1(candidate, p, src)?;
     Ok(PalwTirCompositeRefV1 { parent_class, parent_root, adapter_root, p })
+}
+
+/// **A composite class's parameter carriage** (RFC-0004 §6.3) — what an evidence store answers
+/// `param_carriage` with for a class in `improvement_composite_classes`: the opened inventory leaves
+/// below `split` (the parent's, `leaves_before(p)` of the candidate's inventory) in a multiproof over
+/// the parent section's leaf hashes at their own indices, the rest rebased by `split` in a multiproof
+/// over the adapter section's, `None` for a side that opens nothing — exactly the form the court's
+/// authentication reads. `opened` is `(inventory leaf, its canonical piece)`; `None` when nothing is
+/// opened, a leaf lies past both sections, the parent section is not `split` leaves long, or a
+/// multiproof cannot be built.
+pub fn palw_tir_composite_carriage_v1(
+    r: &PalwTirCompositeRefV1,
+    split: u32,
+    parent_hashes: &[Hash64],
+    adapter_hashes: &[Hash64],
+    opened: &[(u32, crate::palw_artifact::PalwArtifactOperandV1)],
+) -> Option<crate::palw_tir_court_v1::PalwTirParamOpeningV1> {
+    use crate::palw_artifact::palw_artifact_multiproof_v1;
+    if opened.is_empty() || parent_hashes.len() != split as usize {
+        return None;
+    }
+    let total = parent_hashes.len().checked_add(adapter_hashes.len())?;
+    if opened.iter().any(|(leaf, _)| *leaf as usize >= total) {
+        return None;
+    }
+    let side = |below: bool, base: u32, hashes: &[Hash64]| -> Option<Option<crate::palw_artifact::PalwArtifactMultiproofV1>> {
+        let picked: Vec<_> =
+            opened.iter().filter(|(leaf, _)| (*leaf < split) == below).map(|(leaf, op)| (*leaf - base, op.clone())).collect();
+        if picked.is_empty() { Some(None) } else { palw_artifact_multiproof_v1(hashes, &picked).map(Some) }
+    };
+    let parent = side(true, 0, parent_hashes)?;
+    let adapter = side(false, split, adapter_hashes)?;
+    Some(crate::palw_tir_court_v1::PalwTirParamOpeningV1::Composite(Box::new(PalwTirCompositeOpeningV1 {
+        artifact: *r,
+        parent,
+        adapter,
+    })))
 }
 
 /// What a composite's admission reads beside the two classes.
@@ -308,30 +335,69 @@ pub fn palw_tir_composite_admits_v1(
     .map_err(|e| E::Admission(e.to_string()))
 }
 
-/// **Whether `object` carries a composite parameter opening** anywhere an IR close rides — a court
-/// close, a one-move accusation's proof, a root claim's finalize, an IR certification drill's
-/// refutations. The composite form is APPENDED (tag 2 of
-/// [`crate::palw_tir_court_v1::PalwTirParamOpeningV1`]): an older build cannot decode it and skips
-/// the payload (A-2), so this build drops such an object by name below `palw_improvement_v1` — the
-/// same outcome, byte for byte.
-pub fn palw_object_carries_composite_opening_v1(object: &crate::palw_state_v2::PalwConsensusObjectV2) -> bool {
+/// **Every composite parameter opening `object` carries, with the class each is of** — anywhere an
+/// IR close rides: a court close, a one-move accusation's proof, a root claim's finalize, an IR
+/// certification drill's refutations. The class is the one the close's binding names
+/// (`job_context.shape_profile_id`, which the court re-derives from the carried class and root and
+/// refuses otherwise), so a reader needs no state to know what each opening claims to be of.
+pub fn palw_object_composite_openings_v1(
+    object: &crate::palw_state_v2::PalwConsensusObjectV2,
+) -> Vec<(Hash64, &PalwTirCompositeRefV1)> {
     use crate::palw_court_v2::PalwCourtVerdictProofV2 as P;
     use crate::palw_state_v2::{PalwCertificationEvidenceV1 as Ev, PalwConsensusObjectV2 as O};
-    let proof = |p: &P| match p {
-        P::TirCone { refutation } => refutation.params.is_composite(),
-        P::TirDissection { bottom } => bottom.params.is_composite(),
-        _ => false,
-    };
-    match object {
-        O::CourtClosed { proof: p, .. } => proof(p),
-        O::TirShardCourtAccused { accusation } => proof(&accusation.proof),
-        O::CourtTirRootClaimed { root, .. } => root.finalize.params.is_composite(),
-        O::FamilyCertified { evidence } => match evidence.as_ref() {
-            Ev::TirAttempt(drill) => drill.vectors.iter().any(|v| v.honest.params.is_composite() || v.guilty.params.is_composite()),
-            _ => false,
-        },
-        _ => false,
+    use crate::palw_tir_court_v1::{PalwTirConeRefutationV1, PalwTirParamOpeningV1};
+    fn of(r: &PalwTirConeRefutationV1) -> Option<(Hash64, &PalwTirCompositeRefV1)> {
+        match &r.params {
+            PalwTirParamOpeningV1::Composite(c) => Some((r.binding.job_context.shape_profile_id, &c.artifact)),
+            _ => None,
+        }
     }
+    fn proof(p: &P) -> Option<&PalwTirConeRefutationV1> {
+        match p {
+            P::TirCone { refutation } => Some(refutation),
+            P::TirDissection { bottom } => Some(bottom),
+            _ => None,
+        }
+    }
+    match object {
+        O::CourtClosed { proof: p, .. } => proof(p).and_then(of).into_iter().collect(),
+        O::TirShardCourtAccused { accusation } => proof(&accusation.proof).and_then(of).into_iter().collect(),
+        O::CourtTirRootClaimed { root, .. } => of(&root.finalize).into_iter().collect(),
+        O::FamilyCertified { evidence } => match evidence.as_ref() {
+            Ev::TirAttempt(drill) => drill.vectors.iter().flat_map(|v| [of(&v.honest), of(&v.guilty)]).flatten().collect(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// **Whether `object` carries a composite parameter opening** at all. The composite form is APPENDED
+/// (tag 2 of [`crate::palw_tir_court_v1::PalwTirParamOpeningV1`]): an older build cannot decode it and
+/// skips the payload (A-2), so this build drops such an object by name below `palw_improvement_v1` —
+/// the same outcome, byte for byte.
+pub fn palw_object_carries_composite_opening_v1(object: &crate::palw_state_v2::PalwConsensusObjectV2) -> bool {
+    !palw_object_composite_openings_v1(object).is_empty()
+}
+
+/// **A composite opening rides only for a class the candidate path admitted in composite form**
+/// (RFC-0004 §6.3; main's decision 7a of 2026-09-29): every composite opening's class must be in
+/// `improvement_composite_classes` — written when a governed line admits a candidate, whose
+/// admission sized its closes in the composite form ([`palw_tir_composite_admits_v1`]) — and carry
+/// exactly the reference recorded there. A class registered with a composite root any other way
+/// was sized as one tree, so it is never adjudicated in the form it was not sized in: its composite
+/// closes are refused, not believed. `recorded` reads the table.
+pub fn palw_composite_openings_admitted_v1(
+    object: &crate::palw_state_v2::PalwConsensusObjectV2,
+    recorded: impl Fn(&Hash64) -> Option<PalwTirCompositeRefV1>,
+) -> Result<(), &'static str> {
+    for (class_id, artifact) in palw_object_composite_openings_v1(object) {
+        match recorded(&class_id) {
+            None => return Err("a composite opening for a class no governed line admitted as a composite candidate"),
+            Some(r) if r != *artifact => return Err("a composite opening's reference is not the one its class was admitted with"),
+            Some(_) => {}
+        }
+    }
+    Ok(())
 }
 
 /// **A candidate's artifact, as its submission names it** (RFC-0004 §6.1): full weights under one
