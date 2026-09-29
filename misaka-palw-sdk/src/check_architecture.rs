@@ -855,8 +855,9 @@ pub fn check_lora_budget_v1(
     };
     // A sizing that fails (past its reach, most often) ends the search: a narrower tile only adds
     // closes. With none carriable, the widest tile's result is the one reported.
-    let mut widest_tried: Option<(u32, Result<(LoraSizedV1, u32), String>)> = None;
-    let mut carriable_at: Option<(u32, Result<(LoraSizedV1, u32), String>)> = None;
+    type Tried = (u32, Result<(LoraSizedV1, u32), String>);
+    let mut widest_tried: Option<Tried> = None;
+    let mut carriable_at: Option<Tried> = None;
     for t in tiles {
         let sized =
             close_sizing(params, &parent, &layout_at(t), choice.checkpoint_interval, PalwTirParamFormV1::Multiproof, carriable);
@@ -872,7 +873,14 @@ pub fn check_lora_budget_v1(
     }
     let (logits_tile, parent_sized) = carriable_at.or(widest_tried).ok_or("no logits tile to size at")?;
     let layout_choice = layout_at(logits_tile);
-    let checkpoint_interval = parent_sized.as_ref().map(|(_, c)| *c).unwrap_or(0);
+    // The interval sized at: the one given, else the layout's (`min_j C_j`); 0 when none derives.
+    let checkpoint_interval = match (&parent_sized, choice.checkpoint_interval) {
+        (Ok((_, c)), _) => *c,
+        (Err(_), Some(c)) => c,
+        (Err(_), None) => {
+            crate::tir_layout::tir_default_layout_v1(params, &parent, &layout_choice).map_or(0, |l| l.checkpoint_interval)
+        }
+    };
     // A composite's closes are its parent's and more: past the cap with the parent, past it with any
     // adapter.
     let parent_past = match &parent_sized {
