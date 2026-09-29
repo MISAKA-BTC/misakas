@@ -144,9 +144,36 @@ impl PalwChainStateV2 {
         self.improvement_open_epochs
     }
 
+    /// Result rows reserved network-wide (the `max_live_results` ceiling).
+    pub fn improvement_live_results(&self) -> u64 {
+        self.improvement_live_results
+    }
+
     /// Lines governed at `daa`, network-wide (the `max_governed_lines` ceiling).
     pub fn improvement_governed_count(&self, daa: u64) -> usize {
         self.improvement_lines.values().filter(|line| line.governed_at(daa)).count()
+    }
+
+    /// **Every open epoch, as a node reads it** (the read door): the line, its policy, the epoch's
+    /// header, its candidates and its items. Bounded by `max_open_epochs`.
+    pub fn improvement_open_epoch_views_v1(&self) -> Vec<PalwImprovementEpochViewV1> {
+        self.improvement_lines
+            .values()
+            .filter_map(|line| {
+                let epoch = self.improvement_epoch(&line.line_id, line.open_epoch?)?.clone();
+                Some(PalwImprovementEpochViewV1 {
+                    line: line.clone(),
+                    policy: self.improvement_policy(&line.line_id)?.clone(),
+                    candidates: self
+                        .improvement_candidates(&line.line_id, epoch.epoch)
+                        .into_iter()
+                        .map(|(_, row)| row.clone())
+                        .collect(),
+                    items: self.improvement_items(&line.line_id, epoch.epoch).into_iter().copied().collect(),
+                    epoch,
+                })
+            })
+            .collect()
     }
 
     /// **The subjects of an epoch** (spec 17 §17.8.2): the parent, every candidate in acceptance order,
@@ -191,6 +218,25 @@ impl PalwImproveScoresV1 for EpochScores<'_> {
 /// then every epoch scores at `t_score`.
 fn palw_improve_eval_pending_hook_v1(_state: &PalwChainStateV2, _line_id: &Hash64, _epoch: u64) -> bool {
     true
+}
+
+/// **The material lane's reveal hook** (spec 17 §17.5.3 step 7): does a drawn setter set or hold-out
+/// case still owe a reveal (prompts, a key or a reference)? The material lane (A4) replaces this body;
+/// until then nothing is owed.
+fn palw_improve_material_pending_hook_v1(_state: &PalwChainStateV2, _line_id: &Hash64, _epoch: u64) -> bool {
+    false
+}
+
+/// **The material lane's settlement before scoring** (spec 17 §17.9.1): drop every drawn item whose
+/// prompts, key or reference was never revealed (`drop_improvement_item_v1`) and forfeit the
+/// non-revealing setters' holds. The material lane (A4) replaces this body; until then nothing is
+/// dropped.
+fn palw_improve_material_before_scoring_hook_v1(
+    _builder: &mut TransitionBuilder<'_>,
+    _line_id: &Hash64,
+    _epoch: u64,
+) -> Result<(), PalwStateV2Error> {
+    Ok(())
 }
 
 /// **The material lane's dataset reader** (spec 17 §17.11.3): a registered dataset's registrant. The
@@ -458,18 +504,19 @@ impl TransitionBuilder<'_> {
             return Err(refused("the line is not governed"));
         }
         let policy = self.improvement_policy_of_v1(line_id)?;
+        let open = line.open_epoch.map(|e| self.improvement_epoch_of_v1(line_id, e)).transpose()?;
+        let into_holdout = open.as_ref().is_some_and(|h| h.state == PalwEpochStateV1::HoldOut) && kind == PalwMaterialKindV1::HardCase;
+        if into_holdout
+            && open.as_ref().is_some_and(|h| h.holdout_cases >= policy.eval.n.saturating_mul(PALW_IMPROVE_HOLDOUT_FACTOR_V1))
+        {
+            return Err(refused("the epoch's hold-out pool is full (4·n)"));
+        }
         if kind == PalwMaterialKindV1::HardCase {
             self.debit_improvement_fee_v1(line_id, supplier, policy.fees.hard_case_fee, daa)?;
         }
-        let open = line.open_epoch.map(|e| self.improvement_epoch_of_v1(line_id, e)).transpose()?;
         if let Some(header) = &open
-            && kind == PalwMaterialKindV1::HardCase
-            && header.state == PalwEpochStateV1::HoldOut
+            && into_holdout
         {
-            let cap = policy.eval.n.saturating_mul(PALW_IMPROVE_HOLDOUT_FACTOR_V1);
-            if header.holdout_cases >= cap {
-                return Err(refused("the epoch's hold-out pool is full (4·n)"));
-            }
             let mut header = header.clone();
             let index = header.pool_entries;
             self.write_improvement_pool_entry(
@@ -825,6 +872,27 @@ fn move_head_v1(
     builder.write_improvement_usage(line.line_id, Some(PalwImprovementUsageV1 { usage: 0, since_daa: daa }));
 }
 
+// ---- the sponsor's deposit (tag 82, spec 17 §17.11.1) --------------------------------------------
+
+/// A deposit credits a governed line's pool; anything else is refused, and P-B1 pays it back.
+pub(super) fn apply_improvement_pool_funded_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    payload: &PalwImprovementPoolFundingV1,
+) -> Result<(), PalwStateV2Error> {
+    if payload.amount == 0 {
+        return Err(refused("a deposit of nothing"));
+    }
+    if !builder.state.improvement_governed_at(&payload.line_id, ctx.daa_score) {
+        return Err(refused("a deposit to a line that is not governed"));
+    }
+    let mut pool = builder.improvement_pool_of_v1(&payload.line_id);
+    pool.balance = pool.balance.checked_add(payload.amount).ok_or(PalwStateV2Error::Overflow("improvement balance"))?;
+    pool.deposited += payload.amount as u128;
+    builder.write_improvement_pool(payload.line_id, Some(pool));
+    Ok(())
+}
+
 // ---- the rollback (tag 81, spec 17 §17.10) -----------------------------------------------------
 
 pub(super) fn apply_lineage_rollback_v1(
@@ -906,7 +974,10 @@ pub(super) fn apply_lineage_rollback_v1(
         }
     }
     move_head_v1(builder, &mut line, promoted_epoch, payload.to_class, daa, cause);
+    // The promotion can no longer be named: its rows retire once their grants settle.
     line.regression_check = None;
+    line.last_promotion = None;
+    line.regression_epoch = None;
     line.next_due_daa = line.next_due_daa.min(palw_improve_next_boundary_v1(daa, policy.windows.grid));
     builder.write_improvement_line(line_id, Some(line));
     Ok(())
@@ -1077,7 +1148,11 @@ fn step_idle_v1(
     let g = palw_improve_grid_floor_v1(daa, policy.windows.grid);
     let usage = builder.state.improvement_usage.get(&line.line_id).copied().unwrap_or_default();
     let ceilings = builder.improvement_ceilings_v1()?;
-    if usage.usage < policy.usage.value || builder.state.improvement_open_epochs >= ceilings.max_open_epochs {
+    let results_bound = palw_improvement_results_bound_v1(&policy);
+    if usage.usage < policy.usage.value
+        || builder.state.improvement_open_epochs >= ceilings.max_open_epochs
+        || builder.state.improvement_live_results.saturating_add(results_bound) > ceilings.max_live_results as u64
+    {
         return Ok(false);
     }
     let epoch = line.next_epoch;
@@ -1097,6 +1172,7 @@ fn step_idle_v1(
         setter_sets: 0,
         seed: None,
         items: 0,
+        results_bound: u32::try_from(results_bound).unwrap_or(u32::MAX),
         previous_counts: None,
         outcome: None,
         escrow: PalwEpochEscrowV1::default(),
@@ -1153,7 +1229,12 @@ fn step_epoch_v1(
             return draw_epoch_v1(builder, ctx, line, header, &policy);
         }
         PalwEpochStateV1::Evaluating if daa >= t.t_eval => header.state = PalwEpochStateV1::Closing,
-        PalwEpochStateV1::Closing if daa >= t.t_score || !palw_improve_eval_pending_hook_v1(&builder.state, &line_id, epoch) => {
+        PalwEpochStateV1::Closing
+            if daa >= t.t_score
+                || !(palw_improve_eval_pending_hook_v1(&builder.state, &line_id, epoch)
+                    || palw_improve_material_pending_hook_v1(&builder.state, &line_id, epoch)) =>
+        {
+            palw_improve_material_before_scoring_hook_v1(builder, &line_id, epoch)?;
             let outcome = score_epoch_v1(builder, &line_id, &header, &policy)?;
             decide_epoch_v1(builder, ctx, line, epoch, outcome)?;
             return Ok(true);
@@ -1567,6 +1648,11 @@ fn dissolve_if_done_v1(
     if pool.held > 0 {
         return Ok(false);
     }
+    // Every decided epoch's detail rows must be gone first (the bounded sweep), or dissolving would
+    // leave items and results under an epoch that no longer exists.
+    if builder.state.improvement_epochs.range((line_id, 0)..=(line_id, u64::MAX)).any(|(_, e)| e.retire != PalwEpochRetireV1::Done) {
+        return Ok(false);
+    }
     if let Some(owner) = builder.state.model_line_or_founding(&line_id).and_then(|l| l.owner) {
         builder.credit_improvement_earnings_v1(&owner, pool.balance);
     }
@@ -1827,13 +1913,12 @@ mod tests {
                     (PalwEvalSubjectV1::Candidate(h(CAND_A)), 1),
                     (PalwEvalSubjectV1::Candidate(h(CAND_B)), 0),
                 ] {
-                    let score =
-                        PalwEvalScoreV1 { job_id: h(item as u8), claim: h(item as u8), kind: PalwScoringKindV1::ExactMatch, value };
+                    let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
                     b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
                     assert!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL)).unwrap() > 0);
                 }
             }
-            let dup = PalwEvalScoreV1 { job_id: h(0), claim: h(0), kind: PalwScoringKindV1::ExactMatch, value: 1 };
+            let dup = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value: 1 };
             assert!(b.record_improvement_score_v1(&h(LINE), 1, 0, PalwEvalSubjectV1::Parent, dup).is_err(), "a score recorded twice");
         });
         conserved(&s, &h(LINE));
@@ -1942,7 +2027,7 @@ mod tests {
         let s = at(&s, &p, 1_510, |b| {
             for item in 0..8u32 {
                 for (subject, value) in [(PalwEvalSubjectV1::Parent, 0), (PalwEvalSubjectV1::Candidate(h(CAND_A)), 1)] {
-                    let score = PalwEvalScoreV1 { job_id: h(0), claim: h(0), kind: PalwScoringKindV1::ExactMatch, value };
+                    let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
                     b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
                 }
             }
@@ -1995,6 +2080,199 @@ mod tests {
                 .filter(|(_, g)| matches!(g.stage, PalwRewardStageV1::S2Trainer | PalwRewardStageV1::WinnerBond))
                 .all(|(_, g)| g.forfeited)
         );
+        conserved(&s, &h(LINE));
+    }
+
+    /// **Spec 17 §17.13: `transitions.json` and `pool.json`** — the end-to-end epoch above, traced
+    /// block by block (state, head, pool), compared with the files; `IMPROVE_BLESS=1` rewrites them.
+    #[test]
+    fn the_transition_and_pool_vectors_are_the_folds() {
+        use serde_json::json;
+        let p = params();
+        let mut trace = Vec::new();
+        let mut pool_rows = Vec::new();
+        let mut record = |s: &PalwChainStateV2, daa: u64, event: &str| {
+            let line = s.improvement_line(&h(LINE)).unwrap();
+            let epoch = line.open_epoch.or(line.next_epoch.checked_sub(1)).and_then(|e| s.improvement_epoch(&h(LINE), e));
+            trace.push(json!({
+                "daa": daa,
+                "event": event,
+                "epoch": epoch.map(|e| e.epoch),
+                "state": epoch.map(|e| format!("{:?}", e.state)),
+                "outcome": epoch.and_then(|e| e.outcome).map(|o| format!("{o:?}")),
+                "head": line.head.to_string(),
+                "next_due_daa": line.next_due_daa,
+            }));
+            let pool = s.improvement_pool(&h(LINE)).unwrap();
+            pool_rows.push(json!({
+                "daa": daa,
+                "balance": pool.balance, "held": pool.held, "unvested": pool.unvested,
+                "fees_in": pool.fees_in.to_string(), "held_in": pool.held_in.to_string(), "deposited": pool.deposited.to_string(),
+                "paid": pool.paid.to_string(), "refunded": pool.refunded.to_string(), "forfeited_in": pool.forfeited_in.to_string(),
+            }));
+        };
+        let mut s = opted_in(500);
+        record(&s, 500, "opt in (policy: n 8, n_min 4, k_max 2, grid 1000)");
+        s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
+        let s = at(&s, &p, 1_000, |b| {
+            let deposit = PalwImprovementPoolFundingV1 { line_id: h(LINE), amount: 50_000_000_000, sink_index: 1 };
+            apply_improvement_pool_funded_v1(b, &ctx(1_000), &deposit).unwrap();
+        });
+        record(&s, 1_000, "grid boundary: usage 5 ≥ 2 opens epoch 1; a sponsor deposits 500 MSK");
+        let s = at(&s, &p, 1_200, |b| {
+            for (class, who) in [(CAND_A, ALICE), (CAND_B, BOB)] {
+                b.admit_improvement_candidate_v1(
+                    &h(LINE),
+                    1,
+                    &h(class),
+                    &bond(who),
+                    crate::palw_improve_artifact_v1::PalwTirArtifactRefV1::Single { root: h(class) },
+                    h(0x50),
+                    Vec::new(),
+                    1_200,
+                )
+                .unwrap();
+            }
+        });
+        record(&s, 1_200, "t_fix: dataset_root fixed; candidates A and B enter");
+        let s = at(&s, &p, 1_400, |b| {
+            for i in 0..8u8 {
+                b.note_improvement_material_v1(
+                    &h(LINE),
+                    PalwMaterialKindV1::HardCase,
+                    &h(0x60 + i),
+                    &bond(if i % 2 == 0 { CAROL } else { OWNER }),
+                    1_400,
+                )
+                .unwrap();
+            }
+        });
+        record(&s, 1_400, "t_close: frozen; eight hold-out cases");
+        let s = at(&s, &p, 1_510, |b| {
+            for item in 0..8u32 {
+                for (subject, value) in [
+                    (PalwEvalSubjectV1::Parent, 0),
+                    (PalwEvalSubjectV1::Candidate(h(CAND_A)), 1),
+                    (PalwEvalSubjectV1::Candidate(h(CAND_B)), 0),
+                ] {
+                    let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
+                    b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
+                    b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL)).unwrap();
+                }
+            }
+        });
+        record(&s, 1_510, "t_draw + d: drawn; every score recorded and every job paid");
+        let s = at(&s, &p, 1_800, |_| {});
+        record(&s, 1_800, "t_eval: closing");
+        let s = at(&s, &p, 1_950, |_| {});
+        record(&s, 1_950, "t_score: A promoted 8–0; B refunded; grants made");
+        let s = at(&s, &p, 1_950 + 950, |_| {});
+        record(&s, 2_900, "one vesting unit later (L_e = 950): a quarter vested");
+        let s = at(&s, &p, 1_950 + 4 * 950, |_| {});
+        record(&s, 5_750, "four units: every grant vested");
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/improve-v1");
+        let bless = std::env::var("IMPROVE_BLESS").is_ok_and(|v| v == "1");
+        for (name, rows) in [("transitions", trace), ("pool", pool_rows)] {
+            let value = json!({ "scenario": "palw_improve_fold_v1 tests: the end-to-end epoch (spec 17 §17.13)", "rows": rows });
+            let bytes = serde_json::to_string_pretty(&value).unwrap() + "\n";
+            let path = dir.join(format!("{name}.json"));
+            if bless {
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(&path, &bytes).unwrap();
+            } else {
+                let on_disk =
+                    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (IMPROVE_BLESS=1 writes it)", path.display()));
+                assert!(on_disk == bytes, "{} differs from the fold's (IMPROVE_BLESS=1 rewrites it)", path.display());
+            }
+        }
+        conserved(&s, &h(LINE));
+        assert_eq!(s.improvement_pool(&h(LINE)).unwrap().unvested, 0, "everything vested");
+    }
+
+    /// **Every step replays and reverts by its delta, indices included** (the reviewer's invariant):
+    /// the due index, the heads index, the open-epoch count, the live results and the retiring index
+    /// all follow `apply_delta_v2` / `revert_delta_v2` through an epoch's whole life and its retirement.
+    #[test]
+    fn every_step_replays_and_reverts_by_its_delta() {
+        let p = params();
+        let step = |parent: &PalwChainStateV2, daa: u64, f: &dyn Fn(&mut TransitionBuilder<'_>)| -> PalwChainStateV2 {
+            let extras = PalwTransitionExtrasV1::default();
+            let mut builder = TransitionBuilder::new(parent, &p, false, false, false, false, &extras);
+            advance_improvement_v1(&mut builder, &ctx(daa)).unwrap();
+            f(&mut builder);
+            let child = builder.checkpoint().0;
+            let delta = PalwStateDeltaV2 { point: ctx(daa), entries: builder.entries.clone() };
+            assert_eq!(apply_delta_v2(parent, &delta, &p).unwrap(), child, "DAA {daa}: the delta replays");
+            assert_eq!(revert_delta_v2(&child, &delta, &p).unwrap(), *parent, "DAA {daa}: the delta reverts");
+            child
+        };
+        let mut s = opted_in(500);
+        s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
+        rebuild_improvement_indices_v1(&mut s);
+        let s = step(&s, 1_000, &|_| {});
+        assert_eq!(s.improvement_open_epoch_count(), 1);
+        assert!(s.improvement_live_results() > 0, "the epoch reserved its results");
+        let s = step(&s, 1_200, &|b| {
+            b.admit_improvement_candidate_v1(
+                &h(LINE),
+                1,
+                &h(CAND_A),
+                &bond(ALICE),
+                crate::palw_improve_artifact_v1::PalwTirArtifactRefV1::Single { root: h(1) },
+                h(0x50),
+                Vec::new(),
+                1_200,
+            )
+            .unwrap();
+        });
+        let s = step(&s, 1_400, &|b| {
+            for i in 0..8u8 {
+                b.note_improvement_material_v1(
+                    &h(LINE),
+                    PalwMaterialKindV1::HardCase,
+                    &h(0x60 + i),
+                    &bond(if i % 2 == 0 { CAROL } else { OWNER }),
+                    1_400,
+                )
+                .unwrap();
+            }
+        });
+        let s = step(&s, 1_510, &|b| {
+            for item in 0..8u32 {
+                for (subject, value) in [(PalwEvalSubjectV1::Parent, 0), (PalwEvalSubjectV1::Candidate(h(CAND_A)), 1)] {
+                    b.record_improvement_score_v1(
+                        &h(LINE),
+                        1,
+                        item,
+                        subject,
+                        PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value },
+                    )
+                    .unwrap();
+                }
+            }
+        });
+        let s = step(&s, 1_950, &|_| {});
+        assert_eq!(s.improvement_open_epoch_count(), 0);
+        assert_eq!(s.improvement_retiring.len(), 1, "the decided epoch's details wait for the sweep");
+        let s = step(&s, 1_951, &|_| {});
+        assert!(s.improvement_retiring.is_empty() && s.improvement_live_results() == 0, "retired, and the reservation freed");
+        assert_eq!(s.improvement_lines_headed_by(&h(CAND_A)), vec![h(LINE)], "the heads index follows the promotion");
+    }
+
+    #[test]
+    fn a_deposit_credits_a_governed_pool_and_nothing_else() {
+        let p = params();
+        let s = opted_in(500);
+        let s = at(&s, &p, 600, |b| {
+            let deposit = PalwImprovementPoolFundingV1 { line_id: h(LINE), amount: 5_000, sink_index: 1 };
+            apply_improvement_pool_funded_v1(b, &ctx(600), &deposit).unwrap();
+            let stranger = PalwImprovementPoolFundingV1 { line_id: h(CAND_A), amount: 5_000, sink_index: 1 };
+            assert!(apply_improvement_pool_funded_v1(b, &ctx(600), &stranger).is_err(), "not a governed line");
+            let nothing = PalwImprovementPoolFundingV1 { line_id: h(LINE), amount: 0, sink_index: 1 };
+            assert!(apply_improvement_pool_funded_v1(b, &ctx(600), &nothing).is_err());
+        });
+        let pool = s.improvement_pool(&h(LINE)).unwrap();
+        assert_eq!((pool.balance, pool.deposited), (5_000, 5_000));
         conserved(&s, &h(LINE));
     }
 
