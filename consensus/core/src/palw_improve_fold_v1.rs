@@ -193,15 +193,10 @@ fn palw_improve_eval_pending_hook_v1(_state: &PalwChainStateV2, _line_id: &Hash6
     true
 }
 
-/// **The material lane's dataset reader** (spec 17 §17.11.3): a registered dataset's registrant. The
-/// material lane (A4) replaces this body with its dataset table's answer; until then S2's data share
-/// finds no contributor and returns to the balance.
-fn palw_improve_dataset_registrant_hook_v1(
-    _state: &PalwChainStateV2,
-    _line_id: &Hash64,
-    _dataset_id: &Hash64,
-) -> Option<PalwBondKeyV2> {
-    None
+/// **The material lane's dataset reader** (spec 17 §17.11.3): a registered dataset's registrant — the
+/// material lane's (A4) dataset table.
+fn palw_improve_dataset_registrant_hook_v1(state: &PalwChainStateV2, line_id: &Hash64, dataset_id: &Hash64) -> Option<PalwBondKeyV2> {
+    state.improvement_dataset(line_id, dataset_id).map(|record| record.registrant)
 }
 
 /// **The evaluation lane's claim predicate** (spec 17 §17.4.5): is the claim an evaluation claim (which

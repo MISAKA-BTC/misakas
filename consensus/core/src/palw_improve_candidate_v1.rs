@@ -55,7 +55,7 @@ pub fn palw_candidate_declarations_digest_v1(declarations: &PalwCandidateDeclara
 /// Key of [`palw_candidate_submission_message_v1`].
 pub const PALW_IMPROVE_CANDIDATE_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/improve/candidate-submitted/message/v1";
 /// The ML-DSA-87 context a submitter bond signs a `CandidateSubmitted` under.
-pub const PALW_IMPROVE_CANDIDATE_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/improve/candidate-submitted/mldsa87/v1";
+pub const PALW_IMPROVE_CANDIDATE_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw-improve-candidate-v1";
 /// The most datasets and licences a candidate may declare (each list), so its declarations stay a
 /// bounded read for the fold and the reward path.
 pub const PALW_IMPROVE_CANDIDATE_MAX_DECLARED_V1: usize = 64;
