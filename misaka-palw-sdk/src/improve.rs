@@ -791,6 +791,7 @@ mod tests {
                 setter_sets: 0,
                 seed: epoch.seed,
                 items: 3,
+                results_bound: 0,
                 previous_counts: None,
                 outcome: None,
                 escrow: PalwEpochEscrowV1::default(),
