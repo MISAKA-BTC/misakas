@@ -205,6 +205,16 @@ CONFIGS = {
                  layer_types=["sliding_attention", "sliding_attention", "full_attention"],
                  hidden_size_per_layer_input=8, vocab_size_per_layer_input=V, enable_moe_block=True, num_experts=4,
                  top_k_experts=2, moe_intermediate_size=16, final_logit_softcapping=5.0), {}),
+    # Gemma-4's E models: the last three layers compute no keys or values and attend over those of
+    # the last earlier layer of their type (a sliding one, and the K = V full one), with an MLP
+    # twice as wide.
+    "gemma4_kvshare": (c("gemma4_text", "Gemma4ForCausalLM", L, num_hidden_layers=6, head_dim=8, global_head_dim=16,
+                         num_global_key_value_heads=1, attention_k_eq_v=True, sliding_window=4,
+                         layer_types=["sliding_attention", "sliding_attention", "full_attention",
+                                      "sliding_attention", "sliding_attention", "full_attention"],
+                         num_kv_shared_layers=3, use_double_wide_mlp=True,
+                         hidden_size_per_layer_input=8, vocab_size_per_layer_input=V,
+                         final_logit_softcapping=5.0), {}),
     "gpt_oss": (c("gpt_oss", "GptOssForCausalLM", L, num_hidden_layers=2, head_dim=8, num_local_experts=4,
                   num_experts_per_tok=2, intermediate_size=16, sliding_window=4,
                   rope_scaling={"rope_type": "yarn", "factor": 4.0, "beta_fast": 32.0, "beta_slow": 1.0,

@@ -113,6 +113,7 @@ dense!(
     glm4,
     ministral,
     ministral3,
+    gemma4_kvshare,
     cohere,
     cohere2,
     stablelm,

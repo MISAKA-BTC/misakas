@@ -1218,7 +1218,7 @@ The largest pre-quantised gaps:
 The GDN admission fix would add back ≈ 7 k float repos and the `qwen35` GGUF repos (≈ 5 % of GGUF,
 ≈ 10 k).
 
-## 20. The 2026 families (2026-09-29): Llama-4, GLM-4.5, Phi-3.5-MoE, Gemma-4, Ministral-3
+## 20. The 2026 families (2026-09-29): Llama-4, GLM-4.5, Phi-3.5-MoE, Gemma-4 (its KV-sharing E models too), Ministral-3
 
 Each family has a tiny fixture built from transformers 5.17's own config class
 (`tools/gen_hf_fixtures.py`), a float check against HF over 10 positions, integer fidelity, and
@@ -1234,13 +1234,29 @@ are the published models' shapes (GLM-4.5 with its `head_dim` 128).
 | `Gemma4ForCausalLM` | wider full-attention heads with their own KV heads, K = V, a weightless V-norm, the proportional rope, per-layer inputs recomputed per layer from the token (`Pick::PerLayer` slices), the MoE block beside the MLP with a per-expert scale, `layer_scalar`; a layer runs as two blocks (its mixer half and its FFN half, `HlProgram::layer_of`) since it is ≈ 750 nodes | 3.3e-6 | 1.000, 1e-4 | 289 + 244 nodes (451 with the MoE block), admitted |
 | `Ministral3ForCausalLM` | Mistral with Llama-4's query scaling over the original length (`llama_4_scaling_beta`) | 1.0e-6 | 1.000, 7e-5 | 276 nodes, admitted |
 
+**KV sharing (Gemma-4's E models, `num_kv_shared_layers`)** is lowered as more carries. The last
+`num_kv_shared_layers` layers project queries only. Each attends over the keys and values of the
+last earlier layer of its own type (transformers' `store_full_length_kv`). With
+`use_double_wide_mlp`, its MLP is twice as wide (its own HL name, `mlp2x`).
+- The HL program carries the residual and then, per KV slot (one per layer type that has sharing
+  layers), a key row and a value row (`KvShare::{Source, Consumer}`; at most 8 carries, NF-4).
+- The pre block carries zeros. The source layer carries out the very row it appended, which is
+  already committed. Every other block passes the rows through with an identity clamp. A sharing
+  layer appends the carry-in to a history of its own; NF-20 admits a carry-in as an appended row.
+- The rows' scale is the source occurrence's. `Base::At { prefix, base }` resolves a scale at a
+  fixed occurrence, whichever occurrence reads it. A source block that runs as more than one layer
+  is refused.
+- Fixture `gemma4_kvshare`: 6 layers, the last 3 sharing (two sliding and one K = V full, over two
+  slots), a double-wide MLP, per-layer inputs, a window of 4 inside the 72 positions. Float vs HF
+  8.0e-6; integer top-1 1.000, KL 1.3e-4; three-way equal over 32 positions; admitted.
+- Real shape: transformers' default Gemma-4 with 10 of 30 layers sharing and the double-wide MLP
+  lowers to 5 carries. The largest block is 293 nodes (a source's mixer half is 291, a sharing
+  layer's 188). It is admitted by `tir_admit_v1`.
+
 **Refused by name, with what it takes:**
-- Gemma-4 layers that reuse an earlier layer's keys and values (`num_kv_shared_layers`, the E
-  models): a second carry between layers. The lowering carries only the residual. The shared rows
-  would ride from the source layer to each consumer, which appends them to a history of its own.
-- Gemma-3n: that, plus AltUp's four residual streams mixed by a per-token tanh router, Laurel's
-  low-rank residual, the Gaussian top-k activation sparsity, and the streams' magnitude-matched
-  projections in and out.
+- Gemma-3n: KV sharing as above, plus AltUp's four residual streams mixed by a per-token tanh
+  router, Laurel's low-rank residual, the Gaussian top-k activation sparsity, and the streams'
+  magnitude-matched projections in and out.
 - Mistral-4 (MLA + MoE + the same query scaling) is not attempted yet.
 
 **What "admitted" still means.** It means `tir_admit_v1` (normal form, ranges, per-position costs,
@@ -1253,7 +1269,7 @@ large by downloads):
 
 | population | registrable | change |
 | --- | --- | --- |
-| text-generation, float safetensors | ≈ 256 k | + ≈ 3 k: GLM-4.5, Phi-3.5-MoE, Llama-4, Ministral-3 and the non-E Gemma-4 (≈ 1.1 % of 325.6 k × 0.9) |
+| text-generation, float safetensors | ≈ 256 k | + ≈ 3 k: GLM-4.5, Phi-3.5-MoE, Llama-4, Ministral-3 and Gemma-4, the E models included (≈ 1.1 % of 325.6 k × 0.9) |
 | GPTQ/AWQ, GGUF | ≈ 168 k | unchanged (no `llama4`/`glm4moe`/`phimoe` GGUF mapping yet) |
 | **text generation in all** | **≈ 423 k, ≈ 13.6 % of HF** | by `tir_admit_v1`; the sizing cap lowers it until fence2 |
 | + RFC-0003 classes | **≈ 505 k, ≈ 16.3 %** | |

@@ -140,6 +140,7 @@ pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lo
         image_cursor_layer: None,
         split_max_readers: 0,
         quant: BTreeMap::new(),
+        carry_keys: BTreeMap::new(),
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];
@@ -222,6 +223,8 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
         w16_now: false,
         mrope_pos: None,
         suffix,
+        appended: BTreeMap::new(),
+        carry_in: Vec::new(),
     };
     let tb = pb.blocks.len() as u8;
     let mut b = pb.block(&blk.name, if blk.role == BlockRole::Pre { vec![] } else { carry_sig });

@@ -1013,18 +1013,31 @@ pub(crate) fn gemma4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchS
         None | Some("vision") => {}
         Some(o) => return Err(LowerError::not_lowerable(format!("gemma4: use_bidirectional_attention `{o}` is not a causal LM"))),
     }
+    // The last `num_kv_shared_layers` layers project no keys or values: each attends over those of
+    // the last earlier layer of its own type (transformers' `store_full_length_kv`), and with
+    // `use_double_wide_mlp` its MLP is twice as wide.
     let kv_shared = p.cfg.usize_or("num_kv_shared_layers", 0)?;
-    if kv_shared > 0 {
-        return Err(LowerError::not_lowerable(format!(
-            "gemma4: {kv_shared} layers reuse an earlier layer's keys and values (num_kv_shared_layers); a second carry between layers is not modelled yet"
-        )));
+    let double_wide = p.cfg.bool_or("use_double_wide_mlp", false)?;
+    let first_shared =
+        n.checked_sub(kv_shared).ok_or_else(|| LowerError::bad(format!("gemma4: {kv_shared} KV-sharing layers of {n}")))?;
+    if kv_shared > 0 && first_shared == 0 {
+        return Err(LowerError::not_lowerable("gemma4: every layer shares keys and values, and no layer computes them"));
     }
-    // Doubles the MLP of the KV-sharing layers only.
-    p.cfg.inert(&["use_double_wide_mlp"]);
     let k_eq_v = p.cfg.bool_or("attention_k_eq_v", false)?;
     let types = p.layer_types(n, &["sliding_attention", "full_attention"], |i| {
         if (i + 1) % 6 == 0 || i + 1 == n { "full_attention" } else { "sliding_attention" }
     })?;
+    // One KV slot per layer type that has sharing layers, numbered by where its source is.
+    let mut kv_source: BTreeMap<&str, usize> = BTreeMap::new();
+    for t in &types[first_shared..] {
+        let src = types[..first_shared].iter().rposition(|u| u == t).ok_or_else(|| {
+            LowerError::not_lowerable(format!("gemma4: a KV-sharing `{t}` layer, and no earlier `{t}` layer computes keys and values"))
+        })?;
+        kv_source.insert(t.as_str(), src);
+    }
+    let mut sources: Vec<usize> = kv_source.values().copied().collect();
+    sources.sort_unstable();
+    let slot_of_source = |i: usize| sources.iter().position(|s| *s == i);
     // The full layers' head width and KV heads: `per_layer_config` as transformers saves it, else
     // the keys its constructor reads.
     let mut per_layer: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
@@ -1170,7 +1183,24 @@ pub(crate) fn gemma4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchS
         if (hd_i, kv_i) != (hd, kv) {
             at.param_prefix = Some(format!("attn{hd_i}x{kv_i}"));
         }
-        let mlp = gated_mlp(inter, act, false);
+        let shares = i >= first_shared;
+        if shares {
+            let src = kv_source[t.as_str()];
+            let slot = slot_of_source(src).expect("a source has a slot");
+            if per_layer.get(&src).copied().unwrap_or((hd, kv)) != (hd_i, kv_i) {
+                return Err(LowerError::bad(format!("gemma4: layer {i} shares the keys of layer {src}, whose heads differ")));
+            }
+            // It projects queries only: the K = V and V-norm facts are its source's.
+            at.kv_share = Some(KvShare::Consumer { slot });
+            at.v_from_k = false;
+            at.v_norm = None;
+        } else if let Some(slot) = slot_of_source(i) {
+            at.kv_share = Some(KvShare::Source { slot });
+        }
+        let mut mlp = gated_mlp(if shares && double_wide { 2 * inter } else { inter }, act, false);
+        if shares && double_wide {
+            mlp.name = Some("mlp2x".into());
+        }
         let ffn = match &moe_spec {
             Some(m) => Ffn::MlpMoe(Box::new(MlpMoeSpec {
                 mlp,

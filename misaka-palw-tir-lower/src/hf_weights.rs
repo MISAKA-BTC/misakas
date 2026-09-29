@@ -273,8 +273,8 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
     let n = |s: &str| format!("{pf}.{s}");
     // A KV-sharing layer projects no keys or values of its own.
     if let Some(crate::spec::KvShare::Consumer { .. }) = a.kv_share {
-        if m.st.qkv != QkvLayout::Separate || a.output_gate {
-            return Err(LowerError::eval("internal: a KV-sharing layer over a fused qkv or a gated query"));
+        if m.st.qkv != QkvLayout::Separate || a.output_gate || a.qk_norm.is_some_and(|q| q.scope == QkNormScope::PerHeadSeparate) {
+            return Err(LowerError::eval("internal: a KV-sharing layer over a fused qkv, a gated query or per-head norm modules"));
         }
         m.lin(&n("q"), "attn.q", a.q_bias)?;
         m.lin(&n("o"), "attn.o", a.o_bias)?;
@@ -607,8 +607,15 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
         }
     }
     if let Some(sh) = &s.shared {
-        let spec =
-            MlpSpec { intermediate: sh.intermediate, act: s.act, gated: true, glu: Glu::Standard, up_bias: false, down_bias: false, name: None };
+        let spec = MlpSpec {
+            intermediate: sh.intermediate,
+            act: s.act,
+            gated: true,
+            glu: Glu::Standard,
+            up_bias: false,
+            down_bias: false,
+            name: None,
+        };
         mlp(m, &spec, "moe.shared", MlpLayout::Separate)?;
         if sh.sigmoid_gate {
             m.lin("moe.shared_gate", "moe.shared_gate", false)?;

@@ -89,17 +89,28 @@ struct Builder<'a> {
 /// slot a [`KvShare::Source`] layer fills.
 fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
     let mut out = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size] }];
-    let mut slots: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
-    for ls in &spec.layers {
-        if let Mixer::Attention(a) = &ls.mixer
-            && let Some(KvShare::Source { slot }) = a.kv_share
-        {
-            let dims = (a.kv_heads * a.head_dim, a.kv_heads * a.v_head_dim);
-            if slots.insert(slot, dims).is_some_and(|d| d != dims) {
-                return Err(LowerError::eval(format!("internal: KV slot {slot} filled at two widths")));
+    // slot → the (kv heads, head width, value width) of the one layer that fills it.
+    let mut slots: BTreeMap<usize, (usize, usize, usize)> = BTreeMap::new();
+    for (li, ls) in spec.layers.iter().enumerate() {
+        let Mixer::Attention(a) = &ls.mixer else { continue };
+        let dims = (a.kv_heads, a.head_dim, a.v_head_dim);
+        match a.kv_share {
+            Some(KvShare::Source { slot }) => {
+                if slots.insert(slot, dims).is_some() {
+                    return Err(LowerError::eval(format!("internal: KV slot {slot} is filled by two layers")));
+                }
             }
+            Some(KvShare::Consumer { slot }) => match slots.get(&slot) {
+                None => return Err(LowerError::eval(format!("internal: layer {li} reads KV slot {slot} before any layer fills it"))),
+                Some(d) if *d != dims => {
+                    return Err(LowerError::eval(format!("internal: layer {li} reads KV slot {slot} at other head shapes")));
+                }
+                Some(_) => {}
+            },
+            None => {}
         }
     }
+    let slots: BTreeMap<usize, (usize, usize)> = slots.into_iter().map(|(s, (kv, hd, vd))| (s, (kv * hd, kv * vd))).collect();
     for (i, (slot, (k, v))) in slots.into_iter().enumerate() {
         if slot != i {
             return Err(LowerError::eval("internal: KV slots are not numbered from 0"));

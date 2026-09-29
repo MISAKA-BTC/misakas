@@ -248,6 +248,10 @@ impl<'a> FillCtx<'a> {
             Base::Resid => self.resid,
             Base::Q24 => 1.0 / (1u64 << 24) as f64,
             Base::Fixed(v) => *v,
+            Base::At { prefix, base } => {
+                let at = FillCtx::for_scales(self.hl, self.params, None, prefix, self.stats, self.resid, self.policy);
+                at.scale(&ScaleKey { base: (**base).clone(), factor: 1.0 })?
+            }
             Base::Pow2Site { names } => {
                 let mut a = 0f64;
                 for n in names {

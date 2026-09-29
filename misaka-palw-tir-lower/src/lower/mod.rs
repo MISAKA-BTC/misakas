@@ -141,6 +141,9 @@ pub enum Base {
     Pow2Site { names: Vec<String> },
     /// A scale known when lowering (a value with a proven range, e.g. `clamp(up, −l, l) + 1`).
     Fixed(f64),
+    /// `base` resolved in the occurrence with statistics prefix `prefix`, whatever occurrence
+    /// reads it: the scale of a value one layer writes and later layers read (a KV-sharing carry).
+    At { prefix: String, base: Box<Base> },
 }
 
 /// The float value of one integer unit: `resolve(base) · factor`.
@@ -276,8 +279,15 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     if hb != tir::program::HISTORY_BOUND_V1_SMALL && hb != tir::program::HISTORY_BOUND_V1_HELD {
         return Err(LowerError::bad(format!("history_bound {hb} is neither 2^18 nor 2^21")));
     }
-    if hl.carries.len() != 1 {
-        return Err(LowerError::not_lowerable("a program with more than one carry"));
+    if hl.carries.len() > tir::program::MAX_CARRY {
+        return Err(LowerError::not_lowerable(format!(
+            "{} carries (TIR carries at most {})",
+            hl.carries.len(),
+            tir::program::MAX_CARRY
+        )));
+    }
+    if hl.carries.iter().any(|c| c.shape.len() != 1) || hl.carries.first().map(|c| c.shape.as_slice()) != Some(&[hl.hidden][..]) {
+        return Err(LowerError::eval("internal: the carries are the residual, then rows"));
     }
     let token_bound = u32::try_from(hl.vocab).map_err(|_| LowerError::not_lowerable("vocabulary beyond u32"))?;
     let mut pb = ProgramBuilder::new(token_bound, hb);
@@ -326,6 +336,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         image_cursor_layer: None,
         split_max_readers: usize::MAX,
         quant: opts.quant.clone(),
+        carry_keys: BTreeMap::new(),
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     // HL order is pre, layer kinds, post; TIR keeps it.
@@ -354,6 +365,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
                 cx.resid_sites.clone(),
                 cx.site_nodes.clone(),
                 cx.logits_key.clone(),
+                cx.carry_keys.clone(),
             );
             cx.split_max_readers = readers;
             quiet_budget_hook();
@@ -383,6 +395,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
                     cx.resid_sites = snap.6;
                     cx.site_nodes = snap.7;
                     cx.logits_key = snap.8;
+                    cx.carry_keys = snap.9;
                     if !msg.contains("exceeds") || readers == 0 {
                         return Err(LowerError::not_lowerable(format!("block `{}`: {msg}", hl.blocks[hbk].name)));
                     }
@@ -467,6 +480,9 @@ struct Cx<'h> {
     split_max_readers: usize,
     /// [`LowerOpts::quant`].
     quant: BTreeMap<u32, crate::prequant::QLayout>,
+    /// The scale of each carry past the residual (a KV slot's rows), fixed by the one layer that
+    /// fills it ([`carry_out`]).
+    carry_keys: BTreeMap<usize, ScaleKey>,
 }
 
 /// A lowered value: a TIR operand, its dtype, its scale, and the HL site whose statistics
@@ -558,13 +574,26 @@ struct Lb {
     mrope_pos: Option<[tir::Ref; 3]>,
     /// Name suffix for per-layer params whose base name another block already declared.
     suffix: String,
+    /// The row each `HistAppend` appended, by the HL value it appended: a carry that goes out with
+    /// the same value reuses the committed row.
+    appended: BTreeMap<(u32, u8), Val>,
+    /// Per carry past the residual: its width, and its scale once the layer that fills it is
+    /// lowered.
+    carry_in: Vec<(usize, Option<ScaleKey>)>,
 }
 
 fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(u8, Option<u16>)> {
     let hl = cx.hl;
     let blk = &hl.blocks[hbk];
-    let d = hl.hidden;
-    let carry_sig = vec![TensorType::fixed(DType::I32, &[d as u32])];
+    // The residual (`i32`), then any KV slot's key and value rows (`i16` codes).
+    let carry_sig: Vec<TensorType> = hl
+        .carries
+        .iter()
+        .enumerate()
+        .map(|(c, cd)| TensorType::fixed(if c == 0 { DType::I32 } else { DType::I16 }, &u32s(&cd.shape)))
+        .collect();
+    let carry_in: Vec<(usize, Option<ScaleKey>)> =
+        hl.carries.iter().enumerate().map(|(c, cd)| (cd.shape.iter().product(), cx.carry_keys.get(&c).cloned())).collect();
     let prefixes: Vec<String> = match blk.role {
         BlockRole::Pre => vec!["pre.".into()],
         BlockRole::Post => vec!["post.".into()],
@@ -596,6 +625,8 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
         w16_now: false,
         mrope_pos: None,
         suffix,
+        appended: BTreeMap::new(),
+        carry_in,
     };
     gdn_patterns(hl, blk, &mut lb)?;
     ssm_patterns(blk, &mut lb)?;
@@ -639,8 +670,57 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
             let v = coerce(&mut b, cx, &mut lb, &v, DType::I32, &ScaleKey::resid())?;
             let v = ensure_node(&mut b, &v);
             note_resid(cx, &lb, &v);
-            Ok((b.finish(&[v.r]), None))
+            let mut outs = vec![v.r];
+            for (c, o) in blk.outputs.iter().enumerate().skip(1) {
+                outs.push(carry_out(&mut b, cx, &mut lb, c, *o)?);
+            }
+            Ok((b.finish(&outs), None))
         }
+    }
+}
+
+/// Carry `c ≥ 1` (a KV slot's key or value rows, `i16` codes) out of a block. A block that does
+/// not fill it passes it through (an identity clamp: a carry-out is a node). The one layer that
+/// fills it carries out the row it appended to its own history, and the scale of that row in
+/// that layer's occurrence becomes the carry's ([`Base::At`]) for every layer that reads it.
+fn carry_out(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, c: usize, o: hl::Ref) -> Result<tir::Ref> {
+    match o {
+        hl::Ref::Carry(k) if k as usize == c => {
+            let (lo, hi) = code_bounds(DType::I16);
+            Ok(b.clamp(tir::Ref::CarryIn(c as u8), lo, hi, DType::I16))
+        }
+        hl::Ref::Node(i, oo) => {
+            let v = match lb.appended.get(&(i, oo)) {
+                Some(v) => v.clone(),
+                None => {
+                    let v = operand(lb, o)?;
+                    let v = codes(b, cx, lb, &v)?;
+                    ensure_node(b, &v)
+                }
+            };
+            if v.len != lb.carry_in[c].0 {
+                return Err(LowerError::eval(format!("internal: carry {c} of {} lanes gets {}", lb.carry_in[c].0, v.len)));
+            }
+            if lb.role == BlockRole::Pre {
+                // The pre block's rows are zeros, which no layer reads before the slot is filled.
+                return Ok(v.r);
+            }
+            let [prefix] = lb.prefixes.as_slice() else {
+                return Err(LowerError::not_lowerable("a KV slot filled by a block that runs as more than one layer"));
+            };
+            if v.key.split() > 0 {
+                return Err(LowerError::eval("internal: a KV slot's rows at per-channel scales"));
+            }
+            let key = ScaleKey { base: Base::At { prefix: prefix.clone(), base: Box::new(v.key.base.clone()) }, factor: v.key.factor };
+            if let Some(k) = cx.carry_keys.get(&c)
+                && !k.same(&key)
+            {
+                return Err(LowerError::not_lowerable(format!("KV carry {c} is filled by two layers")));
+            }
+            cx.carry_keys.insert(c, key);
+            Ok(v.r)
+        }
+        other => Err(LowerError::eval(format!("internal: carry {c} goes out as {other:?}"))),
     }
 }
 
@@ -680,10 +760,9 @@ fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
     } else {
         Want { dt: DType::I32, key: ScaleKey::resid() }
     };
-    for o in &blk.outputs {
-        if let hl::Ref::Node(i, 0) = o {
-            want[*i as usize] = Some(out_want.clone());
-        }
+    // The residual (or the logits); a carry past it is `i16` codes at the scale it comes with.
+    if let Some(hl::Ref::Node(i, 0)) = blk.outputs.first() {
+        want[*i as usize] = Some(out_want.clone());
     }
     for i in (0..blk.nodes.len()).rev() {
         let Some(w) = want[i].clone() else { continue };
@@ -939,6 +1018,12 @@ fn operand(lb: &Lb, r: hl::Ref) -> Result<Val> {
             .ok_or_else(|| LowerError::eval(format!("internal: node {i}.{o} has no lowered value"))),
         hl::Ref::Carry(0) => {
             Ok(Val { r: tir::Ref::CarryIn(0), dt: DType::I32, key: ScaleKey::resid(), len: 0, site: "carry0".into() })
+        }
+        hl::Ref::Carry(c) => {
+            let (len, key) =
+                lb.carry_in.get(c as usize).cloned().ok_or_else(|| LowerError::eval(format!("internal: no carry {c}")))?;
+            let key = key.ok_or_else(|| LowerError::not_lowerable(format!("carry {c} is read before the layer that fills it")))?;
+            Ok(Val { r: tir::Ref::CarryIn(c), dt: DType::I16, key, len, site: format!("carry{c}") })
         }
         other => Err(LowerError::eval(format!("internal: operand {other:?} is not a value"))),
     }
@@ -1330,9 +1415,13 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                     t
                 }
             };
-            let row = ensure_node(b, &x);
+            // A carry-in is appended as it is (it was committed where it was carried out).
+            let row = if matches!(x.r, tir::Ref::CarryIn(_)) { x.clone() } else { ensure_node(b, &x) };
             let win = b.hist_append(ts, row.r);
             lb.windows.insert(s, (win, x.key.clone()));
+            if let hl::Ref::Node(j, o) = node.inputs[0] {
+                lb.appended.insert((j, o), row);
+            }
             Ok(vec![None])
         }
         Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window: _, alibi, sinks, chunk } => {
@@ -1539,6 +1628,12 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let dt = lb.ssm.get(&i).cloned().ok_or_else(|| LowerError::eval("internal: scan step size not matched"))?;
             let dims = SsmDims { heads: *heads, p: *head_dim, groups: *groups, n: *state, per_state_decay: false };
             one(lower_ssm(b, cx, lb, &x, &bb, &cc, ap, dp, st, &dt, dims, &site, &want)?)
+        }
+        Op::Zeros => {
+            let n: usize = node.outs[0].iter().product();
+            let dt = if want.dt == DType::I32 { DType::I32 } else { DType::I16 };
+            let r = b.iota(dt, &[Dim::Fixed(n as u32)], 0, 0, 0);
+            one(Val { r, dt, key: ScaleKey { base: Base::Fixed(1.0), factor: 1.0 }, len: n, site })
         }
         other => Err(LowerError::not_lowerable(format!("op {} is not in Gate 2a (dense decoders only)", other.name()))),
     }
