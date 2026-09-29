@@ -102,7 +102,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// and the tables and writes them only through their one writers (spec 17).
 #[path = "palw_improve_fold_v1.rs"]
 mod palw_improve_fold_v1;
+#[path = "palw_improve_material_fold_v1.rs"]
+mod palw_improve_material_fold_v1;
 pub use palw_improve_fold_v1::{PALW_STATE_V2_IMPROVE_PAYOUT_KEY_PREFIX, PalwMaterialPlacementV1};
+pub use palw_improve_material_fold_v1::PALW_IMPROVE_MATERIAL_SWEEP_ROWS_PER_BLOCK_V1;
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
@@ -7552,7 +7555,24 @@ pub fn palw_object_is_improvement_v1(object: &PalwConsensusObjectV2) -> bool {
 /// their admission lands.
 pub fn palw_improvement_object_landed_v1(object: &PalwConsensusObjectV2) -> bool {
     use PalwConsensusObjectV2 as O;
-    matches!(object, O::ModelLineImprovementPolicySet { .. } | O::LineageHeadRolledBack { .. } | O::ImprovementPoolFunded { .. })
+    matches!(
+        object,
+        O::ModelLineImprovementPolicySet { .. }
+            | O::LineageHeadRolledBack { .. }
+            // The candidates lane's (A4, A5).
+            | O::HardCaseSubmitted { .. }
+            | O::DataUseOptIn { .. }
+            | O::SetterSetCommitted { .. }
+            | O::SetterSetRevealed { .. }
+            | O::SetterKeysRevealed { .. }
+            | O::DatasetRegistered { .. }
+            | O::TeachingArtifactCommitted { .. }
+            | O::TeachingArtifactRevealed { .. }
+            | O::TeacherLicenceRegistered { .. }
+            | O::CandidateSubmitted { .. }
+            // The core lane's A9.
+            | O::ImprovementPoolFunded { .. }
+    )
 }
 
 /// **The name and tag of an RFC-0004 improvement object**, or `None` for every other object. One
@@ -10257,6 +10277,20 @@ pub struct PalwChainStateV2 {
     improvement_grants: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwRewardGrantV1>,
     /// RFC-0004: what the pools owe each bond, not yet flushed into a payout (spec 17 §17.11.5).
     improvement_earnings: BTreeMap<PalwBondKeyV2, u64>,
+    /// RFC-0004 A4: hard cases, by `(line, case_id)` (spec 17 §17.6).
+    improvement_cases: BTreeMap<(Hash64, Hash64), crate::palw_improve_material_v1::PalwHardCaseRecordV1>,
+    /// RFC-0004 A4: data-use opt-ins, by job pin (RFC-0004 §10).
+    improvement_opt_ins: BTreeMap<Hash64, crate::palw_improve_material_v1::PalwDataUseOptInRecordV1>,
+    /// RFC-0004 A4: setter sets, by `(line, set_id)` (spec 17 §17.6.2).
+    improvement_setter_sets: BTreeMap<(Hash64, Hash64), crate::palw_improve_material_v1::PalwSetterSetRecordV1>,
+    /// RFC-0004 A4: registered datasets, by `(line, dataset_id)`.
+    improvement_datasets: BTreeMap<(Hash64, Hash64), crate::palw_improve_material_v1::PalwDatasetRecordV1>,
+    /// RFC-0004 A4: teaching artifacts, by `(line, commitment)`.
+    improvement_artifacts: BTreeMap<(Hash64, Hash64), crate::palw_improve_material_v1::PalwTeachingArtifactRecordV1>,
+    /// RFC-0004 A4: teacher licences, by licence id.
+    improvement_licences: BTreeMap<Hash64, crate::palw_improve_material_v1::PalwTeacherLicenceRecordV1>,
+    /// RFC-0004 A5 (decision 7a): the classes admitted as composite candidates, with their references.
+    improvement_composite_classes: BTreeMap<Hash64, crate::palw_improve_composite_v1::PalwTirCompositeRefV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
@@ -10272,6 +10306,20 @@ pub struct PalwChainStateV2 {
     /// RFC-0004: the result rows reserved by every epoch whose results may still exist (the
     /// `max_live_results` ceiling, spec 17 §17.3).
     improvement_live_results: u64,
+    /// RFC-0004 A4: revealed artifacts by `(line, output_hash, committed_daa, commit)` — an output's
+    /// original is its earliest commit.
+    improvement_artifact_outputs: BTreeSet<(Hash64, Hash64, u64, Hash64)>,
+    /// RFC-0004 A4: revealed `Answer`s by `(line, task_id, committed_daa, commit)` — the S1 bounty's order.
+    improvement_artifact_answers: BTreeSet<(Hash64, Hash64, u64, Hash64)>,
+    /// RFC-0004 A4: unrevealed commitments by `(reveal_by_daa, line, commit)` — the sweep's deadlines.
+    improvement_artifact_deadlines: BTreeSet<(u64, Hash64, Hash64)>,
+    /// RFC-0004 A4: cases, setter sets and revealed artifacts by `(line, epoch, table, id)` — what
+    /// retires with each decided epoch.
+    improvement_material_epochs: BTreeSet<(Hash64, u64, u8, Hash64)>,
+    /// RFC-0004 A4: opt-ins by `(expires_daa, job_pin)`.
+    improvement_opt_in_expiries: BTreeSet<(u64, Hash64)>,
+    /// RFC-0004 A4: licences by `(expiry_daa, licence_id)`.
+    improvement_licence_expiries: BTreeSet<(u64, Hash64)>,
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
     deadlines: BTreeSet<(u64, Hash64)>,
     /// `(accepted_blue_score, claim)` for every non-terminal claim — what the frontier reads.
@@ -10446,11 +10494,24 @@ impl PalwChainStateV2 {
             improvement_results: BTreeMap::new(),
             improvement_grants: BTreeMap::new(),
             improvement_earnings: BTreeMap::new(),
+            improvement_cases: BTreeMap::new(),
+            improvement_opt_ins: BTreeMap::new(),
+            improvement_setter_sets: BTreeMap::new(),
+            improvement_datasets: BTreeMap::new(),
+            improvement_artifacts: BTreeMap::new(),
+            improvement_licences: BTreeMap::new(),
+            improvement_composite_classes: BTreeMap::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
             improvement_open_epochs: 0,
             improvement_live_results: 0,
+            improvement_artifact_outputs: BTreeSet::new(),
+            improvement_artifact_answers: BTreeSet::new(),
+            improvement_artifact_deadlines: BTreeSet::new(),
+            improvement_material_epochs: BTreeSet::new(),
+            improvement_opt_in_expiries: BTreeSet::new(),
+            improvement_licence_expiries: BTreeSet::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -12682,6 +12743,19 @@ impl PalwChainStateV2 {
             state.update(collection_root(b"improvement_grants", &self.improvement_grants).as_byte_slice());
             state.update(collection_root(b"improvement_earnings", &self.improvement_earnings).as_byte_slice());
         }
+        // **RFC-0004 A4/A5: the material and candidates lane's tables, ONE Some-only block** after
+        // `improvement/v1` (spec 17 §17.0) — empty until a governed line takes material, a licence
+        // registers or a composite candidate is admitted, which nothing below `palw_improvement_v1` can do.
+        if self.has_improvement_material_rows_v1() {
+            state.update(b"improvement-material/v1");
+            state.update(collection_root(b"improvement_cases", &self.improvement_cases).as_byte_slice());
+            state.update(collection_root(b"improvement_opt_ins", &self.improvement_opt_ins).as_byte_slice());
+            state.update(collection_root(b"improvement_setter_sets", &self.improvement_setter_sets).as_byte_slice());
+            state.update(collection_root(b"improvement_datasets", &self.improvement_datasets).as_byte_slice());
+            state.update(collection_root(b"improvement_artifacts", &self.improvement_artifacts).as_byte_slice());
+            state.update(collection_root(b"improvement_licences", &self.improvement_licences).as_byte_slice());
+            state.update(collection_root(b"improvement_composite_classes", &self.improvement_composite_classes).as_byte_slice());
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -14391,6 +14465,49 @@ pub enum PalwDeltaEntryV2 {
     /// entry for every detail table, so a table added later takes a table id and not a delta
     /// discriminant (the lanes' 93–103 stay theirs).
     ImprovementRow { table: u8, key: Vec<u8>, old: Option<Vec<u8>>, new: Option<Vec<u8>> },
+    // ---- RFC-0004 A4/A5: the candidates lane's reserved 93–99 (spec 17 §17.0), rows boxed ----
+    /// **93: a hard case** (`improvement_cases`).
+    ImprovementCase {
+        key: (Hash64, Hash64),
+        old: Option<Box<crate::palw_improve_material_v1::PalwHardCaseRecordV1>>,
+        new: Option<Box<crate::palw_improve_material_v1::PalwHardCaseRecordV1>>,
+    },
+    /// **94: a data-use opt-in** (`improvement_opt_ins`).
+    ImprovementOptIn {
+        key: Hash64,
+        old: Option<Box<crate::palw_improve_material_v1::PalwDataUseOptInRecordV1>>,
+        new: Option<Box<crate::palw_improve_material_v1::PalwDataUseOptInRecordV1>>,
+    },
+    /// **95: a setter set** (`improvement_setter_sets`).
+    ImprovementSetterSet {
+        key: (Hash64, Hash64),
+        old: Option<Box<crate::palw_improve_material_v1::PalwSetterSetRecordV1>>,
+        new: Option<Box<crate::palw_improve_material_v1::PalwSetterSetRecordV1>>,
+    },
+    /// **96: a registered dataset** (`improvement_datasets`).
+    ImprovementDataset {
+        key: (Hash64, Hash64),
+        old: Option<Box<crate::palw_improve_material_v1::PalwDatasetRecordV1>>,
+        new: Option<Box<crate::palw_improve_material_v1::PalwDatasetRecordV1>>,
+    },
+    /// **97: a teaching artifact** (`improvement_artifacts`).
+    ImprovementArtifact {
+        key: (Hash64, Hash64),
+        old: Option<Box<crate::palw_improve_material_v1::PalwTeachingArtifactRecordV1>>,
+        new: Option<Box<crate::palw_improve_material_v1::PalwTeachingArtifactRecordV1>>,
+    },
+    /// **98: a teacher licence** (`improvement_licences`).
+    ImprovementLicence {
+        key: Hash64,
+        old: Option<Box<crate::palw_improve_material_v1::PalwTeacherLicenceRecordV1>>,
+        new: Option<Box<crate::palw_improve_material_v1::PalwTeacherLicenceRecordV1>>,
+    },
+    /// **99: a composite candidate's class** (`improvement_composite_classes`, decision 7a).
+    ImprovementCompositeClass {
+        key: Hash64,
+        old: Option<crate::palw_improve_composite_v1::PalwTirCompositeRefV1>,
+        new: Option<crate::palw_improve_composite_v1::PalwTirCompositeRefV1>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -26119,8 +26236,10 @@ pub fn palw_v2_pre_object_base_v1(
     apply_work_target(&mut builder, parent, ctx);
     apply_class_share_growth(&mut builder, parent, ctx);
     apply_class_reclamation(&mut builder, parent, ctx)?;
-    // RFC-0004 (spec 17 §17.5.2): the improvement sweep, as the fold's step 2e does.
+    // RFC-0004 (spec 17 §17.5.2): the improvement sweep, as the fold's step 2e does, then the material
+    // lane's.
     palw_improve_fold_v1::advance_improvement_v1(&mut builder, ctx)?;
+    palw_improve_material_fold_v1::settle_improvement_material_v1(&mut builder, ctx)?;
     Ok(builder.checkpoint().0)
 }
 
@@ -26528,8 +26647,10 @@ pub fn apply_palw_transition_v7(
     // 2e. RFC-0004 (spec 17 §17.5.2): the improvement protocol's sweep — the bounded retirement, every
     //     due line's transitions and vesting, the bounded earnings flush — before this block's objects,
     //     so a candidate or a case here meets the epoch at this DAA. Mirrored in
-    //     `palw_v2_pre_object_base_v1`. A no-op below `palw_improvement_v1`.
+    //     `palw_v2_pre_object_base_v1`. A no-op below `palw_improvement_v1`. Then the material lane's
+    //     sweep: artifact deadlines, expiries and the bounded retirement of decided epochs' material.
     palw_improve_fold_v1::advance_improvement_v1(&mut builder, ctx)?;
+    palw_improve_material_fold_v1::settle_improvement_material_v1(&mut builder, ctx)?;
 
     // 3. The block's accepted objects, in consensus acceptance order.
     //
@@ -31124,6 +31245,22 @@ fn apply_object(
     if palw_object_is_tir_fence2_v1(object) && !builder.params.tir_fence2_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
     }
+    // **RFC-0004 §6.3: a composite artifact's sub-root openings** (the IR parameter carriage's
+    // appended tag 2) only past `palw_improvement_v1`: the acceptance walk drops a close carrying one
+    // first; this is the second lock.
+    if crate::palw_improve_composite_v1::palw_object_carries_composite_opening_v1(object)
+        && !builder.params.improve_active_at(ctx.daa_score)
+    {
+        return Err(PalwStateV2Error::ImprovementObjectRefused {
+            object: "an IR close with composite openings",
+            why: "before palw_improvement_v1 is in force (RFC-0004)",
+        });
+    }
+    // **Decision 7a: past the fence, only for a class the candidate path admitted in composite form**,
+    // with the reference recorded there. A class registered with a composite root any other way was
+    // sized as one tree, so its composite closes are refused, never believed. The acceptance walk
+    // drops such an object first; this is the second lock.
+    palw_improve_material_fold_v1::composite_openings_admitted_v1(&builder.state, object)?;
     // **RFC-0004: an improvement object is refused by name, before any arm reads it** — below
     // `palw_improvement_v1`, and above it until the object's admission lands. The acceptance walk
     // drops it first (an older build cannot decode it and skips it), so this is the second lock,
@@ -31143,25 +31280,39 @@ fn apply_object(
         PalwConsensusObjectV2::LineageHeadRolledBack { payload, filer, signature: _ } => {
             palw_improve_fold_v1::apply_lineage_rollback_v1(builder, ctx, payload, filer)?;
         }
+        // ---- RFC-0004: the candidates lane's objects (spec 17 §17.6, §17.7; A4, A5) ----
+        PalwConsensusObjectV2::HardCaseSubmitted { payload, submitter, signature: _ } => {
+            palw_improve_material_fold_v1::apply_hard_case_v1(builder, ctx, payload, submitter)?;
+        }
+        PalwConsensusObjectV2::DataUseOptIn { payload, signature: _ } => {
+            palw_improve_material_fold_v1::apply_data_use_opt_in_v1(builder, ctx, payload)?;
+        }
+        PalwConsensusObjectV2::SetterSetCommitted { payload, setter, signature: _ } => {
+            palw_improve_material_fold_v1::apply_setter_set_committed_v1(builder, ctx, payload, setter)?;
+        }
+        PalwConsensusObjectV2::SetterSetRevealed { payload } => {
+            palw_improve_material_fold_v1::apply_setter_set_revealed_v1(builder, ctx, payload)?;
+        }
+        PalwConsensusObjectV2::SetterKeysRevealed { payload } => {
+            palw_improve_material_fold_v1::apply_setter_keys_revealed_v1(builder, ctx, payload)?;
+        }
+        PalwConsensusObjectV2::DatasetRegistered { payload, registrant, signature: _ } => {
+            palw_improve_material_fold_v1::apply_dataset_registered_v1(builder, ctx, payload, registrant)?;
+        }
+        PalwConsensusObjectV2::TeachingArtifactCommitted { payload, teacher, signature: _ } => {
+            palw_improve_material_fold_v1::apply_artifact_committed_v1(builder, ctx, payload, teacher)?;
+        }
+        PalwConsensusObjectV2::TeachingArtifactRevealed { payload } => {
+            palw_improve_material_fold_v1::apply_artifact_revealed_v1(builder, ctx, payload)?;
+        }
+        PalwConsensusObjectV2::TeacherLicenceRegistered { payload, signature: _ } => {
+            palw_improve_material_fold_v1::apply_teacher_licence_v1(builder, ctx, payload)?;
+        }
+        PalwConsensusObjectV2::CandidateSubmitted { payload, submitter, signature: _ } => {
+            palw_improve_material_fold_v1::apply_candidate_submitted_v1(builder, ctx, payload, submitter)?;
+        }
         PalwConsensusObjectV2::ImprovementPoolFunded { payload } => {
             palw_improve_fold_v1::apply_improvement_pool_funded_v1(builder, ctx, payload)?;
-        }
-        // RFC-0004: refused by name above, before any arm reads it, until each object's admission lands
-        // (the candidates lane's A4/A5, this lane's A9).
-        PalwConsensusObjectV2::HardCaseSubmitted { .. }
-        | PalwConsensusObjectV2::DataUseOptIn { .. }
-        | PalwConsensusObjectV2::SetterSetCommitted { .. }
-        | PalwConsensusObjectV2::SetterSetRevealed { .. }
-        | PalwConsensusObjectV2::SetterKeysRevealed { .. }
-        | PalwConsensusObjectV2::DatasetRegistered { .. }
-        | PalwConsensusObjectV2::TeachingArtifactCommitted { .. }
-        | PalwConsensusObjectV2::TeachingArtifactRevealed { .. }
-        | PalwConsensusObjectV2::TeacherLicenceRegistered { .. }
-        | PalwConsensusObjectV2::CandidateSubmitted { .. } => {
-            return Err(PalwStateV2Error::ImprovementObjectRefused {
-                object: palw_improvement_object_name_v1(object).unwrap_or("an improvement object"),
-                why: "its admission has not landed (RFC-0004 step 0)",
-            });
         }
         PalwConsensusObjectV2::BondRegistered {
             bond,
@@ -36540,6 +36691,33 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             swap_write!(state.improvement_lines, key, &old, &new)
         }
         PalwDeltaEntryV2::ImprovementRow { table, key, old, new } => apply_improvement_row_v1(state, *table, key, old, new, revert)?,
+        PalwDeltaEntryV2::ImprovementCase { key, old, new } => {
+            let (old, new) = (old.as_deref().cloned(), new.as_deref().cloned());
+            swap_write!(state.improvement_cases, key, &old, &new)
+        }
+        PalwDeltaEntryV2::ImprovementOptIn { key, old, new } => {
+            let (old, new) = (old.as_deref().cloned(), new.as_deref().cloned());
+            swap_write!(state.improvement_opt_ins, key, &old, &new)
+        }
+        PalwDeltaEntryV2::ImprovementSetterSet { key, old, new } => {
+            let (old, new) = (old.as_deref().cloned(), new.as_deref().cloned());
+            swap_write!(state.improvement_setter_sets, key, &old, &new)
+        }
+        PalwDeltaEntryV2::ImprovementDataset { key, old, new } => {
+            let (old, new) = (old.as_deref().cloned(), new.as_deref().cloned());
+            swap_write!(state.improvement_datasets, key, &old, &new)
+        }
+        PalwDeltaEntryV2::ImprovementArtifact { key, old, new } => {
+            let (old, new) = (old.as_deref().cloned(), new.as_deref().cloned());
+            swap_write!(state.improvement_artifacts, key, &old, &new)
+        }
+        PalwDeltaEntryV2::ImprovementLicence { key, old, new } => {
+            let (old, new) = (old.as_deref().cloned(), new.as_deref().cloned());
+            swap_write!(state.improvement_licences, key, &old, &new)
+        }
+        PalwDeltaEntryV2::ImprovementCompositeClass { key, old, new } => {
+            swap_write!(state.improvement_composite_classes, key, old, new)
+        }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -36712,6 +36890,7 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
     state.da_deadlines = da_deadlines;
     state.da_by_accuser = da_by_accuser;
     rebuild_improvement_indices_v1(state);
+    palw_improve_material_fold_v1::rebuild_improvement_material_indices_v1(state);
 }
 
 /// **The two DA indexes (M3), from the rooted maps alone** — the one derivation the rebuild, the
@@ -37014,6 +37193,13 @@ pub struct PalwStateCarriageV2 {
     pub improvement_results: BTreeMap<(Hash64, u64, u32, crate::palw_improve_state_v1::PalwEvalSubjectV1), crate::palw_improve_state_v1::PalwEvalResultV1>,
     pub improvement_grants: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwRewardGrantV1>,
     pub improvement_earnings: BTreeMap<PalwBondKeyV2, u64>,
+    pub improvement_cases: BTreeMap<(Hash64, Hash64), crate::palw_improve_material_v1::PalwHardCaseRecordV1>,
+    pub improvement_opt_ins: BTreeMap<Hash64, crate::palw_improve_material_v1::PalwDataUseOptInRecordV1>,
+    pub improvement_setter_sets: BTreeMap<(Hash64, Hash64), crate::palw_improve_material_v1::PalwSetterSetRecordV1>,
+    pub improvement_datasets: BTreeMap<(Hash64, Hash64), crate::palw_improve_material_v1::PalwDatasetRecordV1>,
+    pub improvement_artifacts: BTreeMap<(Hash64, Hash64), crate::palw_improve_material_v1::PalwTeachingArtifactRecordV1>,
+    pub improvement_licences: BTreeMap<Hash64, crate::palw_improve_material_v1::PalwTeacherLicenceRecordV1>,
+    pub improvement_composite_classes: BTreeMap<Hash64, crate::palw_improve_composite_v1::PalwTirCompositeRefV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -37154,6 +37340,15 @@ const PALW_CARRIAGE_IMPROVEMENT_ITEMS_TAIL_V1: u8 = 0xD7;
 const PALW_CARRIAGE_IMPROVEMENT_RESULTS_TAIL_V1: u8 = 0xD8;
 const PALW_CARRIAGE_IMPROVEMENT_GRANTS_TAIL_V1: u8 = 0xD9;
 const PALW_CARRIAGE_IMPROVEMENT_EARNINGS_TAIL_V1: u8 = 0xDA;
+/// RFC-0004 A4/A5: the material and candidates lane's tails (spec 17 §17.0: `0xC5`–`0xCB`), each encoded
+/// only when its table holds a row.
+const PALW_CARRIAGE_IMPROVEMENT_CASES_TAIL_V1: u8 = 0xC5;
+const PALW_CARRIAGE_IMPROVEMENT_OPT_INS_TAIL_V1: u8 = 0xC6;
+const PALW_CARRIAGE_IMPROVEMENT_SETTER_SETS_TAIL_V1: u8 = 0xC7;
+const PALW_CARRIAGE_IMPROVEMENT_DATASETS_TAIL_V1: u8 = 0xC8;
+const PALW_CARRIAGE_IMPROVEMENT_ARTIFACTS_TAIL_V1: u8 = 0xC9;
+const PALW_CARRIAGE_IMPROVEMENT_LICENCES_TAIL_V1: u8 = 0xCA;
+const PALW_CARRIAGE_IMPROVEMENT_COMPOSITE_CLASSES_TAIL_V1: u8 = 0xCB;
 
 /// **RFC-0004: the improvement tables' consistency** (spec 17 §17.3): every row under its own key,
 /// every governed line with exactly its policy, usage and pool, every detail row under an existing
@@ -37471,6 +37666,34 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_IMPROVEMENT_EARNINGS_TAIL_V1.serialize(writer)?;
             self.improvement_earnings.serialize(writer)?;
         }
+        if !self.improvement_cases.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_CASES_TAIL_V1.serialize(writer)?;
+            self.improvement_cases.serialize(writer)?;
+        }
+        if !self.improvement_opt_ins.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_OPT_INS_TAIL_V1.serialize(writer)?;
+            self.improvement_opt_ins.serialize(writer)?;
+        }
+        if !self.improvement_setter_sets.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_SETTER_SETS_TAIL_V1.serialize(writer)?;
+            self.improvement_setter_sets.serialize(writer)?;
+        }
+        if !self.improvement_datasets.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_DATASETS_TAIL_V1.serialize(writer)?;
+            self.improvement_datasets.serialize(writer)?;
+        }
+        if !self.improvement_artifacts.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_ARTIFACTS_TAIL_V1.serialize(writer)?;
+            self.improvement_artifacts.serialize(writer)?;
+        }
+        if !self.improvement_licences.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_LICENCES_TAIL_V1.serialize(writer)?;
+            self.improvement_licences.serialize(writer)?;
+        }
+        if !self.improvement_composite_classes.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_COMPOSITE_CLASSES_TAIL_V1.serialize(writer)?;
+            self.improvement_composite_classes.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -37626,6 +37849,20 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_improvement_grants = false;
         let mut improvement_earnings = BTreeMap::new();
         let mut seen_improvement_earnings = false;
+        let mut improvement_cases = BTreeMap::new();
+        let mut seen_improvement_cases = false;
+        let mut improvement_opt_ins = BTreeMap::new();
+        let mut seen_improvement_opt_ins = false;
+        let mut improvement_setter_sets = BTreeMap::new();
+        let mut seen_improvement_setter_sets = false;
+        let mut improvement_datasets = BTreeMap::new();
+        let mut seen_improvement_datasets = false;
+        let mut improvement_artifacts = BTreeMap::new();
+        let mut seen_improvement_artifacts = false;
+        let mut improvement_licences = BTreeMap::new();
+        let mut seen_improvement_licences = false;
+        let mut improvement_composite_classes = BTreeMap::new();
+        let mut seen_improvement_composite_classes = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -37828,6 +38065,34 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_improvement_earnings = true;
                     improvement_earnings = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_IMPROVEMENT_CASES_TAIL_V1 if !seen_improvement_cases => {
+                    seen_improvement_cases = true;
+                    improvement_cases = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_OPT_INS_TAIL_V1 if !seen_improvement_opt_ins => {
+                    seen_improvement_opt_ins = true;
+                    improvement_opt_ins = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_SETTER_SETS_TAIL_V1 if !seen_improvement_setter_sets => {
+                    seen_improvement_setter_sets = true;
+                    improvement_setter_sets = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_DATASETS_TAIL_V1 if !seen_improvement_datasets => {
+                    seen_improvement_datasets = true;
+                    improvement_datasets = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_ARTIFACTS_TAIL_V1 if !seen_improvement_artifacts => {
+                    seen_improvement_artifacts = true;
+                    improvement_artifacts = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_LICENCES_TAIL_V1 if !seen_improvement_licences => {
+                    seen_improvement_licences = true;
+                    improvement_licences = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_COMPOSITE_CLASSES_TAIL_V1 if !seen_improvement_composite_classes => {
+                    seen_improvement_composite_classes = true;
+                    improvement_composite_classes = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -37949,6 +38214,13 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             improvement_results,
             improvement_grants,
             improvement_earnings,
+            improvement_cases,
+            improvement_opt_ins,
+            improvement_setter_sets,
+            improvement_datasets,
+            improvement_artifacts,
+            improvement_licences,
+            improvement_composite_classes,
         })
     }
 }
@@ -38048,6 +38320,13 @@ impl PalwStateCarriageV2 {
             improvement_results: state.improvement_results.clone(),
             improvement_grants: state.improvement_grants.clone(),
             improvement_earnings: state.improvement_earnings.clone(),
+            improvement_cases: state.improvement_cases.clone(),
+            improvement_opt_ins: state.improvement_opt_ins.clone(),
+            improvement_setter_sets: state.improvement_setter_sets.clone(),
+            improvement_datasets: state.improvement_datasets.clone(),
+            improvement_artifacts: state.improvement_artifacts.clone(),
+            improvement_licences: state.improvement_licences.clone(),
+            improvement_composite_classes: state.improvement_composite_classes.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -38141,6 +38420,9 @@ impl PalwStateCarriageV2 {
         // RFC-0004: every row sits under its own key, every line has its policy, usage and pool, and
         // every detail row sits under a line (and, past the material, an epoch) that exists.
         palw_improvement_carriage_consistent_v1(&self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        // RFC-0004 A4/A5: the material tables likewise, and every revealed artifact opens its own key.
+        palw_improve_material_fold_v1::palw_improvement_material_carriage_consistent_v1(&self)
+            .map_err(PalwStateV2Error::CarriageInconsistent)?;
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
             reserved_exposure: self.reserved_exposure,
@@ -38233,11 +38515,24 @@ impl PalwStateCarriageV2 {
             improvement_results: self.improvement_results,
             improvement_grants: self.improvement_grants,
             improvement_earnings: self.improvement_earnings,
+            improvement_cases: self.improvement_cases,
+            improvement_opt_ins: self.improvement_opt_ins,
+            improvement_setter_sets: self.improvement_setter_sets,
+            improvement_datasets: self.improvement_datasets,
+            improvement_artifacts: self.improvement_artifacts,
+            improvement_licences: self.improvement_licences,
+            improvement_composite_classes: self.improvement_composite_classes,
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
             improvement_open_epochs: 0,
             improvement_live_results: 0,
+            improvement_artifact_outputs: BTreeSet::new(),
+            improvement_artifact_answers: BTreeSet::new(),
+            improvement_artifact_deadlines: BTreeSet::new(),
+            improvement_material_epochs: BTreeSet::new(),
+            improvement_opt_in_expiries: BTreeSet::new(),
+            improvement_licence_expiries: BTreeSet::new(),
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -54859,6 +55154,14 @@ pub(crate) mod tests {
                     // RFC-0004: their round trips are the improvement suites' (A2, A3).
                     PalwDeltaEntryV2::ImprovementLine { .. } => "improvement_line",
                     PalwDeltaEntryV2::ImprovementRow { .. } => "improvement_row",
+                    // RFC-0004 A4/A5: their round trips are the material lane's suite's.
+                    PalwDeltaEntryV2::ImprovementCase { .. } => "improvement_case",
+                    PalwDeltaEntryV2::ImprovementOptIn { .. } => "improvement_opt_in",
+                    PalwDeltaEntryV2::ImprovementSetterSet { .. } => "improvement_setter_set",
+                    PalwDeltaEntryV2::ImprovementDataset { .. } => "improvement_dataset",
+                    PalwDeltaEntryV2::ImprovementArtifact { .. } => "improvement_artifact",
+                    PalwDeltaEntryV2::ImprovementLicence { .. } => "improvement_licence",
+                    PalwDeltaEntryV2::ImprovementCompositeClass { .. } => "improvement_composite_class",
                 });
             }
         }
@@ -54988,6 +55291,14 @@ pub(crate) mod tests {
             // RFC-0004, after RFC-0003's: a governed line and an epoch.
             (91, PalwDeltaEntryV2::ImprovementLine { key, old: None, new: None }),
             (92, PalwDeltaEntryV2::ImprovementRow { table: PALW_IMPROVE_TABLE_EPOCHS_V1, key: Vec::new(), old: None, new: None }),
+            // RFC-0004 A4/A5, the candidates lane's reserved 93–99 (spec 17 §17.0).
+            (93, PalwDeltaEntryV2::ImprovementCase { key: (key, key), old: None, new: None }),
+            (94, PalwDeltaEntryV2::ImprovementOptIn { key, old: None, new: None }),
+            (95, PalwDeltaEntryV2::ImprovementSetterSet { key: (key, key), old: None, new: None }),
+            (96, PalwDeltaEntryV2::ImprovementDataset { key: (key, key), old: None, new: None }),
+            (97, PalwDeltaEntryV2::ImprovementArtifact { key: (key, key), old: None, new: None }),
+            (98, PalwDeltaEntryV2::ImprovementLicence { key, old: None, new: None }),
+            (99, PalwDeltaEntryV2::ImprovementCompositeClass { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -55625,6 +55936,13 @@ pub(crate) mod tests {
             improvement_results: _,
             improvement_grants: _,
             improvement_earnings: _,
+            improvement_cases: _,
+            improvement_opt_ins: _,
+            improvement_setter_sets: _,
+            improvement_datasets: _,
+            improvement_artifacts: _,
+            improvement_licences: _,
+            improvement_composite_classes: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -55773,6 +56091,37 @@ pub(crate) mod tests {
             })),
             ("improvement_earnings", Box::new(|s| {
                 s.improvement_earnings.insert(bond_key(0xDA), 5);
+            })),
+            // RFC-0004 A4/A5: the material block's seven tables (spec 17 §17.0).
+            ("improvement_cases", Box::new(|s| {
+                let r = crate::palw_improve_material_v1::test_rows::case_v1(0xC5);
+                s.improvement_cases.insert((r.case.line_id, r.case.case_id), r);
+            })),
+            ("improvement_opt_ins", Box::new(|s| {
+                s.improvement_opt_ins.insert(Hash64::from_bytes([0xC6; 64]), crate::palw_improve_material_v1::test_rows::opt_in_v1(0xC6));
+            })),
+            ("improvement_setter_sets", Box::new(|s| {
+                let r = crate::palw_improve_material_v1::test_rows::setter_set_v1(0xC7);
+                s.improvement_setter_sets.insert((r.commitment.line_id, r.commitment.set_id), r);
+            })),
+            ("improvement_datasets", Box::new(|s| {
+                let r = crate::palw_improve_material_v1::test_rows::dataset_v1(0xC8);
+                s.improvement_datasets.insert((r.dataset.line_id, r.dataset.dataset_id), r);
+            })),
+            ("improvement_artifacts", Box::new(|s| {
+                let r = crate::palw_improve_material_v1::test_rows::artifact_v1(0xC9);
+                s.improvement_artifacts.insert((r.commit.line_id, r.commit.commit), r);
+            })),
+            ("improvement_licences", Box::new(|s| {
+                let r = crate::palw_improve_material_v1::test_rows::licence_v1(0xCA);
+                s.improvement_licences.insert(r.licence.licence_id, r);
+            })),
+            ("improvement_composite_classes", Box::new(|s| {
+                let c = Hash64::from_bytes([0xCB; 64]);
+                s.improvement_composite_classes.insert(
+                    c,
+                    crate::palw_improve_composite_v1::PalwTirCompositeRefV1 { parent_class: c, parent_root: c, adapter_root: c, p: 1 },
+                );
             })),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),

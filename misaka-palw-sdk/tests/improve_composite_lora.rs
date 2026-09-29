@@ -188,6 +188,42 @@ fn check(name: &str) {
         "{name}: full weights under another class's id"
     );
 
+    // The acceptance layer's half of `CandidateSubmitted`, over the same records.
+    {
+        use kaspa_consensus_core::palw_improve_artifact_v1::PalwTirArtifactRefV1 as A;
+        use kaspa_consensus_core::palw_improve_candidate_v1::{
+            PalwCandidateAcceptanceV1, PalwCandidateDeclarationsV1, PalwCandidateSubmissionV1, palw_candidate_acceptance_v1,
+        };
+        let payload = PalwCandidateSubmissionV1 {
+            line_id: Hash64::from_bytes([0x4c; 64]),
+            epoch: 1,
+            class_id: id,
+            artifact: A::Composite { parent_class: r.parent_class, parent_root: r.parent_root, adapter_root: r.adapter_root, p: r.p },
+            layout: class.layout.clone(),
+            declarations: PalwCandidateDeclarationsV1 { datasets: vec![], licences: vec![], teacher_classes: 0 },
+        };
+        let accept = PalwCandidateAcceptanceV1 {
+            head: parent_id,
+            line_classes: &[],
+            full_weight_candidates: false,
+            allowed_teacher_classes: 0,
+            record: &record,
+            artifact_root: root,
+            parent_record: &parent_record,
+            parent_root,
+            rules,
+        };
+        assert_eq!(palw_candidate_acceptance_v1(&payload, &accept), Ok(()), "{name}: the candidate is accepted");
+        let off_line = PalwCandidateAcceptanceV1 { head: Hash64::from_bytes([0x99; 64]), ..accept };
+        assert!(palw_candidate_acceptance_v1(&payload, &off_line).is_err(), "{name}: a composite over a class not of the line");
+        let mut headed = payload.clone();
+        headed.class_id = parent_id;
+        assert!(palw_candidate_acceptance_v1(&headed, &accept).is_err(), "{name}: the head as its own candidate");
+        let mut declared = payload.clone();
+        declared.declarations.teacher_classes = 1;
+        assert!(palw_candidate_acceptance_v1(&declared, &accept).is_err(), "{name}: a teacher class the policy does not allow");
+    }
+
     // Refusals, by name.
     let admit =
         |pc: &PalwTirClassV1, c: &PalwTirClassV1, r: &kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1| {
