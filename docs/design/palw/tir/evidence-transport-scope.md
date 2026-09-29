@@ -59,6 +59,30 @@ and accuses from the disclosure; the producer's silence is the default. Everythi
 built over the existing `TirEvidenceV1::challenger` store, so no new court object is needed. The
 one-move accusation and every close stay exactly as the chain adjudicates them today.
 
+## C as built (`palw_tir_fence2`, 2026-09-29)
+
+- **The demand is keyed by the claim alone** (`DefaultAccusedTirStep { claim, unit, accuser, signature }`,
+  no binding, no draws): a seat facing a producer that served nothing holds no binding, and the fold cannot
+  count an IR execution's leaves without one (the class record keeps its layout's digest). The fold refuses
+  only a unit past every execution (a leaf at or past 2^22, a node above 22 levels or past the widest
+  level's width); a unit past the claim's own execution is answered by the claim's binding proving so
+  (`TirStepOutOfRange`), and that session is refuted like any other.
+- **The descent unit `TirStepNode { level, index }`** is answered by the node's frontier — the nodes eight
+  levels below it, or the leaf nodes when nearer (≤ 256 hashes, 16 KiB) — and its opening; the chain folds
+  the frontier by the tree's own rule (pairs, an odd last node promoted) and walks it to the committed step
+  root. A session's units are fixed when it opens, so "eight nodes along a path" cannot be named up front;
+  the frontier carries the same information for whichever path the seat then takes. The seat names the
+  root, then the first frontier node its own tree disagrees with, then that leaf: ⌈h / 8⌉ node sessions and
+  one leaf session — four for a 2^22-leaf (D-F1) execution, inside one seat's budget of four.
+- **The close from the disclosure alone.** The descent takes the FIRST differing node at every level, so
+  every accused node wholly before the disputed leaf `L` is the seat's own; the nodes on `L`'s path follow
+  from the disclosed leaf and its opening, and so do their right siblings. Every opening and run the cone of
+  `L` reads names only such nodes, so the seat builds the cone close from its own execution plus `L`'s
+  disclosure even when the accused garbled every leaf after `L` (it may not rebuild the accused's tree as
+  "mine with one leaf replaced"). Tests: `palw_tir_da_step_fold` (one seat convicts a withholding liar that
+  answers every demand; an inconsistent node answer is refused and the silence defaults the claim),
+  `palw_tir_step_node` (a 2^22-leaf descent in four sessions).
+
 ## Estimate
 
 | part | who | size |

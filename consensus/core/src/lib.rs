@@ -453,6 +453,8 @@ pub mod palw_step_leg;
 pub mod palw_step_refute;
 /// RFC-0002 Phase F: PALW-TIR v1 on chain — the dormant `palw_tir_v1` fence and the network's IR constants.
 pub mod palw_tir_v1;
+/// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA units `TirStepLeaf` and `TirStepNode`.
+pub mod palw_tir_fence2_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.

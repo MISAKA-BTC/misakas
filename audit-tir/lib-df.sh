@@ -29,6 +29,12 @@ IR_DIR=$WORK_DIR/ir
 # The flag days, moved below the IR fence so the drill runs the rules the live chain has when the fence arms
 # (validate_palw_v2: all four heights distinct, fence1 <= fence3).
 FENCE_AT=${FENCE_AT:-6}; FENCE2_AT=${FENCE2_AT:-10}; FENCE3_AT=${FENCE3_AT:-14}; TIR_AT=${TIR_AT:-20}
+# The second IR fence (palw_tir_fence2: the IR DA units of evidence transport C), for the B/D/C piece: set at
+# `up` or never — a stored drill chain is only reopened under the same height (the datadir marker's tir2_at).
+TIR2_AT=${TIR2_AT:-}
+# DF1=0: the B/D/C piece's lighter chain — no node loads or produces D-F1 (the 1.5B class); the seven holders
+# load the small class alone and new0 is a plain seat.
+DF1=${DF1:-1}
 
 # The IR class: the Qwen2.5-1.5B A16 artifact converted to PALW-TIR (its mirror program, unwindowed: F7
 # dissects its history cones), declared at IR_CONTEXT positions with its logits tiled at IR_LOGITS_TILE
@@ -105,10 +111,20 @@ salt() {
 manifest() { python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print($1)" "$KR/manifest.json"; }
 ir_class_id() { tr -d ' \n' < "$WORK_DIR/ir-class.id"; }
 small_class_id() { tr -d ' \n' < "$WORK_DIR/small-class.id"; }
+# Is the class already on the drill chain (getPalwModelRegistry through new3)? Then its registrant is restarted
+# WITHOUT --palw-register-class: the int-8 release (tir/node up to 7a9ab18da) builds nothing for a class the
+# chain holds, never marks its registration done, and skips every duty after it in the panel's tick — readiness
+# proofs included — for as long as the process lives (fixed on tir/node after 7a9ab18da). Not reachable (the
+# chain is not up yet): the flag stays, as the first registration needs it.
+class_on_chain() {
+    local cid=$1
+    [ -n "$cid" ] || return 1
+    python3 "$A/rpc.py" call --port "$(jport new3)" getPalwModelRegistry '{}' 2>/dev/null | grep -q "$cid"
+}
 
 # The shared ports and logs, exported for Phase F's step scripts.
 export_layout() {
-    export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TIR_AT FENCE_AT FENCE2_AT FENCE3_AT
+    export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TIR_AT TIR2_AT FENCE_AT FENCE2_AT FENCE3_AT
     NEW0_P2P=$(p2p new0); NEW0_RPC=$(borsh new0); NEW0_GRPC=$(gport new0); NEW0_LOG=$WORK_DIR/new0/kaspad.out
     OLD_P2P=$(p2p old); OLD_RPC=$(borsh old); OLD_LOG=$WORK_DIR/old/kaspad.out
     export NEW0_P2P NEW0_RPC NEW0_GRPC NEW0_LOG OLD_P2P OLD_RPC OLD_LOG
@@ -137,18 +153,24 @@ node_args() {
     fi
     a+=("--ram-scale=$RAM_SCALE" "--palw-host-memory-share=$(( $(cat "$d/share-mib" 2>/dev/null || echo "$SHARE_MIB") * 1048576))"
         "--palw-drill-tir-at=$TIR_AT")
+    [ -n "$TIR2_AT" ] && a+=("--palw-drill-tir2-at=$TIR2_AT")
     if [ "$seat" != - ]; then
         a+=("--palw-producer-key=$KR/bond-$seat.seed"
             "--palw-producer-bond=$(manifest "m['seats'][$seat]['bond_outpoint']")"
             "--palw-fee-outpoint=$(manifest "m['seats'][$seat]['fee_float_outpoint']")")
     fi
-    [ "$ir" = 1 ] && a+=("--palw-class-artifact=$IR_ARTIFACT")
+    [ "$ir" = 1 ] && [ "$DF1" = 1 ] && a+=("--palw-class-artifact=$IR_ARTIFACT")
     [ "$ir" = 1 ] && [ -s "$SMALL_ARTIFACT" ] && a+=("--palw-class-artifact=$SMALL_ARTIFACT")
     case $role in
         floor) a+=(--palw-produce) ;;
-        ir) a+=(--palw-produce "--palw-register-class=$IR_MODEL_ID" "--palw-producer-class=$(ir_class_id)") ;;
-        ir2) [ -s "$WORK_DIR/small-class.id" ] &&
-            a+=(--palw-produce "--palw-register-class=$SMALL_MODEL_ID" "--palw-producer-class=$(small_class_id)") ;;
+        ir) if [ "$DF1" = 1 ]; then
+                a+=(--palw-produce "--palw-producer-class=$(ir_class_id)")
+                class_on_chain "$(ir_class_id)" || a+=("--palw-register-class=$IR_MODEL_ID")
+            fi ;;
+        ir2) if [ -s "$WORK_DIR/small-class.id" ]; then
+                a+=(--palw-produce "--palw-producer-class=$(small_class_id)")
+                class_on_chain "$(small_class_id)" || a+=("--palw-register-class=$SMALL_MODEL_ID")
+            fi ;;
     esac
     [ "$hb" = 1 ] && a+=("--palw-heartbeat-miner-address=$(manifest "m['heartbeat'][$k]['address']")" --enable-unsynced-mining)
     local m; for m in $(new_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done

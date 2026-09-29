@@ -191,3 +191,32 @@ fn a_second_ir_registration_in_one_block_is_refused_by_the_folds_second_lock() {
     chain.step_at(AT + 1, &[b.clone()], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert!(chain.s.tir_class_v1(&id(&a)).is_some() && chain.s.tir_class_v1(&id(&b)).is_some(), "one a block: both land");
 }
+
+/// **A registration past the second IR fence records the `Select`-arm credit** (`palw_tir_fence2`):
+/// the registry's work row is `palw_tir_model_work_v2(.., true)` at or past the fence's height and the
+/// release's vector below it — and for this class (six `Select`s) the two differ.
+#[test]
+fn a_registration_past_the_second_ir_fence_records_the_select_arm_credit() {
+    use kaspa_consensus_core::palw_tir_work_v1::palw_tir_model_work_v2;
+    let mut rows = Vec::new();
+    for (fence2, min_select_arms) in [(AT, true), (AT + 50, false)] {
+        let mut p = armed();
+        p.palw_tir_fence2 = Some(ForkActivation::new(fence2));
+        p.sync_palw_tir_fence2();
+        p.validate_palw_v2().expect("the second IR fence at or past palw_tir_v1");
+        let mut chain = Chain::new(p);
+        chain.room = true;
+        let (registrant, _, _) = floor_producer(&chain.p);
+        let object = registration(&chain, registrant, AT);
+        let PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, admission, .. } = &object else { unreachable!() };
+        let (class_id, admission) = (*class_id, admission.clone());
+        chain.step_at(AT, &[object.clone()], PalwBlockWorkV3::None, Hash64::default(), 0);
+        let program = admission.class.decode_program().expect("decodes");
+        let want = palw_tir_model_work_v2(&program, &admission.canonical, min_select_arms).expect("a work row");
+        let row = chain.s.model_lifecycle(&class_id).expect("the registry's row").work.clone();
+        assert_eq!(row, want, "fence2 at {fence2}: the {} vector", if min_select_arms { "credited" } else { "release's" });
+        rows.push(row);
+    }
+    assert_ne!(rows[0], rows[1], "the class's arm-only work is credited at the smaller arm past the fence");
+    assert!(rows[0].verification_ccu <= rows[1].verification_ccu && rows[0].economic_ccu_per_claim <= rows[1].economic_ccu_per_claim);
+}

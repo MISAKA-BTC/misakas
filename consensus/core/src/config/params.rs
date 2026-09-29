@@ -2833,6 +2833,16 @@ pub struct Params {
     /// shape. [`Self::validate_palw_tir_v1`] holds its refusals.
     pub palw_tir_v1: Option<crate::palw_tir_v1::PalwTirFenceV1>,
 
+    /// **RFC-0002 Phase F, the second IR fence** (`crate::palw_tir_fence2_v1`): the consensus half of
+    /// the fixes after the DAA-2,000 release — ref2's H7 (the `TopK` row of the box demand and the
+    /// value bound `V`), the `Select`-arm work credit, and the IR data-availability units
+    /// `TirStepLeaf { index }` and `TirStepNode { level, index }`. A bare height; `None` on every preset (testnet-12 included) until a
+    /// later flag day arms it. Hashed Some-only in every writer with the `never()` collapse, so a build
+    /// that carries the field fingerprints and peers exactly as one that does not. Refused by
+    /// [`Self::validate_palw_tir_fence2`] off ConsensusV2, without `palw_tir_v1` in force at or below
+    /// it, or with the bundle's mirror unsynced.
+    pub palw_tir_fence2: Option<ForkActivation>,
+
     /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
     ///
     /// A dissection tries ONE head's softmax, so a fused output tile wider than a head (or not a
@@ -3804,6 +3814,8 @@ impl Params {
         }
         // **RFC-0002 Phase F: the IR fence's own refusals** (`crate::palw_tir_v1`).
         self.validate_palw_tir_v1()?;
+        // **RFC-0002 Phase F, the second IR fence's refusals** (`crate::palw_tir_fence2_v1`).
+        self.validate_palw_tir_fence2()?;
         // **ADR-0152 v2 F2: the offence-attribution fence is armed at genesis or not at all.** Past
         // it the V1 `PanelFalseValid` is refused and a kind the chain never consumed before is; a
         // later crossing would leave pre-fence V1 rows beside V2 rows keyed differently for the
@@ -6020,6 +6032,10 @@ impl Params {
         // writes, and scheduling the IR would partition the fleet at deploy.
         if self.palw_tir_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_tir_v1 = None;
+        }
+        // RFC-0002 Phase F's second IR fence: Some-only hashed, so the same collapse.
+        if self.palw_tir_fence2 == Some(ForkActivation::never()) {
+            self.palw_tir_fence2 = None;
         }
         // ADR-0093 Decision 6, likewise.
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
@@ -9097,6 +9113,7 @@ impl Params {
             palw_token_lift,
             palw_kimi_k3,
             palw_tir_v1,
+            palw_tir_fence2,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -9328,6 +9345,7 @@ impl Params {
             ("palw_token_lift", *palw_token_lift),
             ("palw_kimi_k3", *palw_kimi_k3),
             ("palw_tir_v1", palw_tir_v1.map(|fence| fence.activation)),
+            ("palw_tir_fence2", *palw_tir_fence2),
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
@@ -9566,6 +9584,12 @@ impl Params {
             h.write(b"palw_tir_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
+        }
+        // RFC-0002 Phase F's second IR fence, NAMED likewise: it changes admission, the credited work
+        // and the DA court from its height.
+        if let Some(activation) = self.palw_tir_fence2 {
+            h.write(b"palw_tir_fence2");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0093 Decision 6's fence, NAMED likewise: it changes which classes may register.
         if let Some(dissectable) = self.palw_fused_dissectable {
@@ -10058,6 +10082,7 @@ impl Params {
             palw_token_lift,
             palw_kimi_k3,
             palw_tir_v1,
+            palw_tir_fence2,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -10735,6 +10760,10 @@ impl Params {
         if let Some(fence) = palw_tir_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        // RFC-0002 Phase F's second IR fence: Some-only, a bare height.
+        if let Some(activation) = palw_tir_fence2.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0093 Decision 6. Some-only, likewise.
         if let Some(activation) = palw_fused_dissectable.as_mut() {
             fork(activation, visit);
@@ -11159,6 +11188,7 @@ impl Params {
             palw_token_lift,
             palw_kimi_k3,
             palw_tir_v1,
+            palw_tir_fence2,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -11872,6 +11902,12 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
+        // RFC-0002 Phase F's second IR fence, Some-only: every shipped preset leaves it `None` and
+        // fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_tir_fence2 {
+            h.write(b"palw_tir_fence2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
         // byte-identically to a build without the field.
         if let Some(activation) = palw_fused_dissectable {
@@ -12514,6 +12550,7 @@ impl Params {
             palw_token_lift: self.palw_token_lift,
             palw_kimi_k3: self.palw_kimi_k3,
             palw_tir_v1: self.palw_tir_v1,
+            palw_tir_fence2: self.palw_tir_fence2,
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
@@ -13567,6 +13604,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
+    palw_tir_fence2: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -13817,6 +13855,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
+    palw_tir_fence2: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14049,6 +14088,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
+    palw_tir_fence2: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -18977,8 +19017,9 @@ pub fn palw_t12_launch_params_v1() -> Params {
     let mut params = palw_t12_shipped_params();
     // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
     // DAA-750 list: testnet-12 as it launched carries neither.
-    for fence in PALW_T12_TIR_FLAG_DAY_FENCES_V1
+    for fence in PALW_T12_TIR_FENCE2_FENCES_V1
         .iter()
+        .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V3)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V2)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V1)
@@ -19532,12 +19573,34 @@ fn palw_t12_arm_tir_flag_day_v1(params: &mut Params) {
     }
 }
 
+/// **testnet-12's second IR flag day: the fixes after DAA 2,000** — `palw_tir_fence2` alone
+/// ([`crate::palw_tir_fence2_v1`]: ref2's H7 `TopK` row, the `Select`-arm work credit, the IR DA units
+/// `TirStepLeaf` and `TirStepNode`). Its prerequisite is the IR flag day's `palw_tir_v1` at or below it
+/// (`validate_palw_tir_fence2`).
+pub const PALW_T12_TIR_FENCE2_FENCES_V1: &[PalwPostLaunchFenceV1] = &[crate::palw_tir_fence2_v1::PALW_T12_TIR_FENCE2_ENTRY];
+
+/// **The second IR flag day's height — `None` until the user sets it.** While `None` the list is
+/// dormant on every ruleset, the shipped one included, and a drill crosses it with
+/// `--palw-drill-tir2-at`. It must be a height no other fence uses (not 750, 1,000, 1,300, 1,700 or
+/// 2,000): the fork id names heights, not fences.
+pub const PALW_T12_TIR_FENCE2_DAA: Option<u64> = None;
+
+/// **The second IR flag day, armed** — every entry of [`PALW_T12_TIR_FENCE2_FENCES_V1`] at
+/// [`PALW_T12_TIR_FENCE2_DAA`], on the ASSEMBLED ruleset, after the IR flag day; a no-op while the
+/// height is `None`.
+fn palw_t12_arm_tir_fence2_v1(params: &mut Params) {
+    let Some(at) = PALW_T12_TIR_FENCE2_DAA else { return };
+    for fence in PALW_T12_TIR_FENCE2_FENCES_V1 {
+        (fence.set)(params, Some(ForkActivation::new(at)));
+    }
+}
+
 /// **testnet-12 as its DAA-1,700 release (int-7, `7aba8dd57`) ships it** — [`palw_t12_shipped_params`] with
 /// the IR flag day's list set back to dormant: the ruleset a node that has not taken the IR release runs
 /// (the fleet's, params `770fb822…`, schedule `9410712f…`), and the baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_TIR_FLAG_DAY_FENCES_V1 {
+    for fence in PALW_T12_TIR_FENCE2_FENCES_V1.iter().chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1) {
         (fence.set)(&mut params, None);
     }
     params
@@ -19549,7 +19612,7 @@ pub fn palw_t12_release_v3_params() -> Params {
 /// against.
 pub fn palw_t12_release_v2_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_TIR_FLAG_DAY_FENCES_V1.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V3) {
+    for fence in PALW_T12_TIR_FENCE2_FENCES_V1.iter().chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1).chain(PALW_T12_POST_LAUNCH_FENCES_V3) {
         (fence.set)(&mut params, None);
     }
     params
@@ -19561,7 +19624,12 @@ pub fn palw_t12_release_v2_params() -> Params {
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_TIR_FLAG_DAY_FENCES_V1.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V3).chain(PALW_T12_POST_LAUNCH_FENCES_V2) {
+    for fence in PALW_T12_TIR_FENCE2_FENCES_V1
+        .iter()
+        .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
+        .chain(PALW_T12_POST_LAUNCH_FENCES_V3)
+        .chain(PALW_T12_POST_LAUNCH_FENCES_V2)
+    {
         (fence.set)(&mut params, None);
     }
     params
@@ -19608,6 +19676,8 @@ fn palw_t12_params_with_registry_v1(
     // **The IR flag day** (RFC-0002 PALW-TIR v1, 2026-09-28): `palw_tir_v1` at `PALW_T12_TIR_FLAG_DAY_DAA`,
     // after the third list, on the same assembled ruleset (its prerequisites are genesis rules here).
     palw_t12_arm_tir_flag_day_v1(&mut params);
+    // RFC-0002 Phase F's second IR flag day (dormant while its height is `None`).
+    palw_t12_arm_tir_fence2_v1(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or
@@ -20816,6 +20886,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_floor_refusal_retry();
     // RFC-0002 Phase F's IR fence, for the same reason and in the same place.
     params.sync_palw_tir_v1();
+    // RFC-0002 Phase F's second IR fence, likewise.
+    params.sync_palw_tir_fence2();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -21065,6 +21137,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
+    palw_tir_fence2: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,

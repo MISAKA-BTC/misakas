@@ -101,6 +101,12 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
                  --palw-drill-genesis-salt: on a real network the fences are the release's, and every node must agree on them"
             )));
         }
+        if let Some(at) = args.palw_drill_tir2_at {
+            return Err(refused(format!(
+                "--palw-drill-tir2-at={at} arms testnet-12's second IR fence (palw_tir_fence2) on a DRILL chain and needs \
+                 --palw-drill-genesis-salt: on a real network the fences are the release's, and every node must agree on them"
+            )));
+        }
         return Ok(());
     };
     let network = args.network();
@@ -118,6 +124,7 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
         || args.palw_drill_fence2_at.is_some()
         || args.palw_drill_fence3_at.is_some()
         || args.palw_drill_tir_at.is_some()
+        || args.palw_drill_tir2_at.is_some()
     {
         let mut params = kaspa_consensus_core::config::drill::palw_chain_params_v1(network, Some(&salt)).map_err(refused)?;
         if let Some(at) = args.palw_drill_fence_at {
@@ -132,6 +139,11 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
         // RFC-0002 Phase F: the IR fence after the flag days, as `apply_to_config` arms it.
         if let Some(at) = args.palw_drill_tir_at {
             kaspa_consensus_core::config::drill::palw_drill_tir_fence_at_v1(&mut params, at).map_err(refused)?;
+        }
+        // The second IR fence after the first, as `apply_to_config` arms it (the move validates the
+        // ruleset, so a height below `palw_tir_v1` is a start-up refusal here, not a panic there).
+        if let Some(at) = args.palw_drill_tir2_at {
+            kaspa_consensus_core::config::drill::palw_drill_tir_fence2_at_v1(&mut params, at).map_err(refused)?;
         }
     }
     // The export writes files and exits; it dials nobody and signs nothing, so the node-only
@@ -326,6 +338,23 @@ pub fn palw_drill_datadir_guard_v3(
     fence3_at: Option<u64>,
     tir_at: Option<u64>,
 ) -> Result<(), String> {
+    palw_drill_datadir_guard_v4(prefixed_dir, salt, genesis_hash, fence_at, fence2_at, fence3_at, tir_at, None)
+}
+
+/// [`palw_drill_datadir_guard_v3`] with the second IR fence (`--palw-drill-tir2-at`, `palw_tir_fence2`):
+/// the marker also names it (`tir2_at=`, `none` when absent — also what a marker written before the
+/// flag existed counts as), and a stored chain is reopened only under the same one.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_drill_datadir_guard_v4(
+    prefixed_dir: &Path,
+    salt: Option<&PalwDrillSaltV1>,
+    genesis_hash: &str,
+    fence_at: Option<u64>,
+    fence2_at: Option<u64>,
+    fence3_at: Option<u64>,
+    tir_at: Option<u64>,
+    tir2_at: Option<u64>,
+) -> Result<(), String> {
     let marker_path = prefixed_dir.join(PALW_DRILL_DATADIR_MARKER_V1);
     let marker = std::fs::read_to_string(&marker_path).ok();
     let marker_line = |key: &str| {
@@ -338,12 +367,13 @@ pub fn palw_drill_datadir_guard_v3(
     // also what a marker written before the flag existed counts as.
     let fence3_text = palw_drill_marker_fence_text_v1(fence3_at);
     let tir_text = palw_drill_marker_fence_text_v1(tir_at);
+    let tir2_text = palw_drill_marker_fence_text_v1(tir2_at);
     let write_marker = |salt: &PalwDrillSaltV1| {
         std::fs::create_dir_all(prefixed_dir).map_err(|e| format!("cannot create {}: {e}", prefixed_dir.display()))?;
         std::fs::write(
             &marker_path,
             format!(
-                "salt_id={}\ngenesis={genesis_hash}\nfence_at={fence_text}\nfence2_at={fence2_text}\nfence3_at={fence3_text}\ntir_at={tir_text}\n",
+                "salt_id={}\ngenesis={genesis_hash}\nfence_at={fence_text}\nfence2_at={fence2_text}\nfence3_at={fence3_text}\ntir_at={tir_text}\ntir2_at={tir2_text}\n",
                 salt.id()
             ),
         )
@@ -367,7 +397,13 @@ pub fn palw_drill_datadir_guard_v3(
             let recorded2 = marker_line("fence2_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
             let recorded3 = marker_line("fence3_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
             let recorded_tir = marker_line("tir_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
-            if recorded == fence_text && recorded2 == fence2_text && recorded3 == fence3_text && recorded_tir == tir_text {
+            let recorded_tir2 = marker_line("tir2_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
+            if recorded == fence_text
+                && recorded2 == fence2_text
+                && recorded3 == fence3_text
+                && recorded_tir == tir_text
+                && recorded_tir2 == tir2_text
+            {
                 return Ok(());
             }
             let started = std::fs::read_dir(prefixed_dir)
@@ -400,6 +436,9 @@ pub fn palw_drill_datadir_guard_v3(
                 }
                 if recorded_tir != tir_text {
                     named = format!("{named} and a different --palw-drill-tir-at (recorded {recorded_tir}, now {tir_text})");
+                }
+                if recorded_tir2 != tir2_text {
+                    named = format!("{named} and a different --palw-drill-tir2-at (recorded {recorded_tir2}, now {tir2_text})");
                 }
                 named
             };
@@ -482,6 +521,20 @@ pub fn palw_drill_write_keyring_v3(
     fence3_at: Option<u64>,
     tir_at: Option<u64>,
 ) -> Result<PathBuf, String> {
+    palw_drill_write_keyring_v4(salt, dir, fence_at, fence2_at, fence3_at, tir_at, None)
+}
+
+/// [`palw_drill_write_keyring_v3`] with the second IR fence (`--palw-drill-tir2-at`), armed after the
+/// first as `apply_to_config` arms it; the manifest names it (`tir2_at`, `null` without the flag).
+pub fn palw_drill_write_keyring_v4(
+    salt: &PalwDrillSaltV1,
+    dir: &Path,
+    fence_at: Option<u64>,
+    fence2_at: Option<u64>,
+    fence3_at: Option<u64>,
+    tir_at: Option<u64>,
+    tir2_at: Option<u64>,
+) -> Result<PathBuf, String> {
     let manifest_path = dir.join("manifest.json");
     if let Ok(existing) = std::fs::read_to_string(&manifest_path) {
         let existing: serde_json::Value = serde_json::from_str(&existing).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
@@ -514,6 +567,10 @@ pub fn palw_drill_write_keyring_v3(
     if let Some(at) = tir_at {
         kaspa_consensus_core::config::drill::palw_drill_tir_fence_at_v1(&mut params, at)
             .map_err(|e| format!("--palw-drill-tir-at: {e}"))?;
+    }
+    if let Some(at) = tir2_at {
+        kaspa_consensus_core::config::drill::palw_drill_tir_fence2_at_v1(&mut params, at)
+            .map_err(|e| format!("--palw-drill-tir2-at: {e}"))?;
     }
     let public = kaspa_consensus_core::config::params::Params::from(palw_drill_network_v1());
     let main = palw_t12_drill_main_key_v1(salt);
@@ -552,6 +609,7 @@ pub fn palw_drill_write_keyring_v3(
         "fence2_at": fence2_at,
         "fence3_at": fence3_at,
         "tir_at": tir_at,
+        "tir2_at": tir2_at,
         "public_genesis_hash": public.genesis.hash.to_string(),
         "public_consensus_params_id": public.consensus_params_id().to_string(),
         "premine_txid": kaspa_consensus_core::config::premine::palw_t12_drill_premine_txid_v1(salt).to_string(),
@@ -641,13 +699,14 @@ pub fn palw_drill_preflight_v1(args: &Args) {
     }
     let salt = palw_drill_salt_of_v1(args).ok().flatten();
     if let (Some(salt), Some(dir)) = (salt.as_ref(), args.palw_drill_write_keyring.as_deref()) {
-        match palw_drill_write_keyring_v3(
+        match palw_drill_write_keyring_v4(
             salt,
             Path::new(dir),
             args.palw_drill_fence_at,
             args.palw_drill_fence2_at,
             args.palw_drill_fence3_at,
             args.palw_drill_tir_at,
+            args.palw_drill_tir2_at,
         ) {
             Ok(manifest) => {
                 println!("testnet-12 drill {} keyring written: {}", salt.id(), manifest.display());
@@ -669,7 +728,7 @@ pub fn palw_drill_datadir_guard_or_exit_v1(args: &Args, salt: Option<&PalwDrillS
     let prefixed = crate::daemon::get_app_dir_from_args(args).join(args.network().to_prefixed());
     let genesis =
         salt.map(|s| kaspa_consensus_core::config::drill::palw_t12_drill_genesis_block_v1(s).hash.to_string()).unwrap_or_default();
-    if let Err(e) = palw_drill_datadir_guard_v3(
+    if let Err(e) = palw_drill_datadir_guard_v4(
         &prefixed,
         salt,
         &genesis,
@@ -677,6 +736,7 @@ pub fn palw_drill_datadir_guard_or_exit_v1(args: &Args, salt: Option<&PalwDrillS
         args.palw_drill_fence2_at,
         args.palw_drill_fence3_at,
         args.palw_drill_tir_at,
+        args.palw_drill_tir2_at,
     ) {
         println!("{e}");
         std::process::exit(1);
@@ -996,10 +1056,14 @@ mod tests {
         let source = include_str!("palw_drill.rs");
         let wrapper = &source[source.find("pub fn palw_drill_datadir_guard_or_exit_v1(").unwrap()..];
         let wrapper = &wrapper[..wrapper.find("\n}\n").unwrap()];
-        assert!(wrapper.contains("palw_drill_datadir_guard_v3("), "{wrapper}");
-        for flag in
-            ["args.palw_drill_fence_at,", "args.palw_drill_fence2_at,", "args.palw_drill_fence3_at,", "args.palw_drill_tir_at,"]
-        {
+        assert!(wrapper.contains("palw_drill_datadir_guard_v4("), "{wrapper}");
+        for flag in [
+            "args.palw_drill_fence_at,",
+            "args.palw_drill_fence2_at,",
+            "args.palw_drill_fence3_at,",
+            "args.palw_drill_tir_at,",
+            "args.palw_drill_tir2_at,",
+        ] {
             assert!(wrapper.contains(flag), "the guard passes {flag}: {wrapper}");
         }
     }
@@ -1024,6 +1088,69 @@ mod tests {
         let unsalted = parse(&["--testnet", "--netsuffix=12", "--palw-drill-tir-at=100"]);
         let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
         assert!(refused.contains("--palw-drill-tir-at=100") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
+    }
+
+    /// **The second IR fence is a drill flag day of its own too** (`--palw-drill-tir2-at`,
+    /// `palw_tir_fence2`): the marker names it (`tir2_at=`), a stored chain is never reopened under
+    /// another one, the keyring's manifest names it and announces the fingerprint it moves, and the flag
+    /// is refused without the salt and — by the ruleset's own check — without the first IR fence below it.
+    #[test]
+    fn the_second_ir_fence_is_a_drill_flag_day_of_its_own() {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        let a = salt();
+        let root = tempfile::tempdir().unwrap();
+        let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
+        let dir = root.path().join("tir2/misaka-testnet-12");
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), Some(130)).expect("a fresh app dir");
+        assert!(marker_of(&dir).contains("tir2_at=130\n"), "{}", marker_of(&dir));
+        std::fs::create_dir_all(dir.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), Some(130)).expect("the same start");
+        let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), Some(140)).unwrap_err();
+        assert!(why.contains("--palw-drill-tir2-at (recorded 130, now 140)"), "{why}");
+        let why = palw_drill_datadir_guard_v3(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100)).unwrap_err();
+        assert!(why.contains("recorded 130, now none"), "dropped over a stored chain: {why}");
+        // `apply_to_config` arms it after the first IR fence — the drill's own heights (audit-tir's
+        // lib-df.sh: flag days 6/10/14, IR fence 20) — with the mirror the fold reads, and the keyring
+        // names the fingerprint the node on the same command line announces.
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let salted = format!("--palw-drill-genesis-salt={SALT}");
+        let days = ["--palw-drill-fence-at=6", "--palw-drill-fence2-at=10", "--palw-drill-fence3-at=14", "--palw-drill-tir-at=20"];
+        let argv = |extra: &[&str]| -> Vec<String> {
+            base.iter().copied().chain([salted.as_str()]).chain(days).chain(extra.iter().copied()).map(str::to_owned).collect()
+        };
+        let parsed = |extra: &[&str]| {
+            let v = argv(extra);
+            parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        let with = config_of(&parsed(&["--palw-drill-tir2-at=30"]));
+        let without = config_of(&parsed(&[]));
+        assert_eq!(with.params.palw_tir_fence2, Some(ForkActivation::new(30)));
+        assert!(without.params.palw_tir_fence2.is_none_or(|f| f == ForkActivation::never()), "dormant on the release");
+        assert!(with.params.palw_tir_fence2_active_at(30) && !with.params.palw_tir_fence2_active_at(29));
+        assert_eq!(with.palw_drill_fence_moves.len(), without.palw_drill_fence_moves.len() + 1, "the fence alone moves");
+        with.params.validate_palw_v2().expect("the drill crossing both IR fences validates");
+        assert_ne!(with.params.consensus_params_id(), without.params.consensus_params_id(), "the fence moves the fingerprint");
+        palw_drill_validate_args_v1(&parsed(&["--palw-drill-tir2-at=30"])).expect("with the first IR fence below it");
+        let keys = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), Some(30)).expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["tir2_at"], serde_json::json!(30));
+        assert_eq!(manifest["consensus_params_id"], with.params.consensus_params_id().to_string().as_str());
+        let keys_without = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v3(&a, keys_without.path(), Some(6), Some(10), Some(14), Some(20)).expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["tir2_at"], serde_json::Value::Null);
+        assert_eq!(manifest["consensus_params_id"], without.params.consensus_params_id().to_string().as_str());
+        // Refused without the salt, and — by the ruleset's own check, at start-up and in the keyring
+        // export — below `palw_tir_v1` (the release arms it at DAA 2,000; here without --palw-drill-tir-at).
+        let unsalted = parse(&["--testnet", "--netsuffix=12", "--palw-drill-tir2-at=130"]);
+        let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
+        assert!(refused.contains("--palw-drill-tir2-at=130") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
+        let alone: Vec<&str> = base.iter().copied().chain([salted.as_str(), "--palw-drill-tir2-at=130"]).collect();
+        let refused = palw_drill_validate_args_v1(&parse(&alone)).unwrap_err().to_string();
+        assert!(refused.contains("palw_tir_fence2 needs palw_tir_v1"), "{refused}");
+        let why = palw_drill_write_keyring_v4(&a, tempfile::tempdir().unwrap().path(), None, None, None, None, Some(130)).unwrap_err();
+        assert!(why.contains("--palw-drill-tir2-at") || why.contains("palw_tir_fence2 needs palw_tir_v1"), "{why}");
     }
 
     /// **The keyring export is the binary's own answer**: seeds kaspad accepts (0600, the seat's
