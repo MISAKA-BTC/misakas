@@ -110,6 +110,14 @@ pub enum PalwDaUnitV1 {
     /// binding proving so. A seat descends eight levels a session to the first leaf its replay
     /// disputes.
     TirStepNode { level: u8, index: u64 },
+    /// **One node of an IR claim's tiled logits trace's rows tree** (past `Params::palw_tir_fence2`;
+    /// appended): at `level ≥ 1` answered by its frontier eight levels down and its opening, at level 0
+    /// (a row) by the row's tile leaves and its opening — both with the ids that tie the rows root to
+    /// the trace root ([`crate::palw_tir_court_v1::PalwTirRowNodeDisclosureV1`]) — or, past the trace
+    /// or on a flat one, by the binding proving so. A seat whose replay disputes the claim's trace but
+    /// not its steps descends to the first row and tile it disputes, and demands that tile's lanes as
+    /// an event unit.
+    TirRowNode { level: u8, index: u64 },
 }
 
 impl PalwDaUnitV1 {
@@ -119,9 +127,14 @@ impl PalwDaUnitV1 {
         Self::Event { row, tile }
     }
 
-    /// Is this a unit of an IR claim's step tree (the second IR fence's)?
+    /// Is this a unit of an IR claim's step tree?
     pub fn is_tir_step_v1(&self) -> bool {
         matches!(self, Self::TirStepLeaf { .. } | Self::TirStepNode { .. })
+    }
+
+    /// Is this a unit only the second IR fence names — the step tree's, or the trace's rows tree's?
+    pub fn is_tir_fence2_v1(&self) -> bool {
+        matches!(self, Self::TirStepLeaf { .. } | Self::TirStepNode { .. } | Self::TirRowNode { .. })
     }
 }
 
@@ -207,6 +220,9 @@ pub enum PalwDaAnswerV1 {
     /// claim alone (the fold cannot count an IR execution's leaves without the binding), so this is
     /// how the accused answers a demand past its execution; the binding rides with its program EMPTY.
     TirStepOutOfRange(Box<crate::palw_tir_step_v1::PalwTirStepBindingV1>),
+    /// **The second IR fence: one node of an IR claim's tiled trace's rows tree** (appended), answering
+    /// a `TirRowNode { level, index }` unit.
+    TirRowNode(Box<crate::palw_tir_court_v1::PalwTirRowNodeDisclosureV1>),
 }
 
 impl PalwDaAnswerV1 {
@@ -216,7 +232,7 @@ impl PalwDaAnswerV1 {
         match self {
             Self::Event(disclosure) => Some(disclosure.binding()),
             Self::Held(carriage) => Some(&carriage.binding),
-            Self::TirEvent(_) | Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirStepOutOfRange(_) => None,
+            Self::TirEvent(_) | Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirRowNode(_) | Self::TirStepOutOfRange(_) => None,
         }
     }
 
@@ -226,6 +242,7 @@ impl PalwDaAnswerV1 {
             Self::TirEvent(disclosure) => Some(disclosure.binding()),
             Self::TirStepLeaf(disclosure) => Some(&disclosure.binding),
             Self::TirStepNode(disclosure) => Some(&disclosure.binding),
+            Self::TirRowNode(disclosure) => Some(&disclosure.binding),
             Self::TirStepOutOfRange(binding) => Some(binding),
             _ => None,
         }
@@ -233,12 +250,15 @@ impl PalwDaAnswerV1 {
 
     /// Is this an IR class's answer (RFC-0002 Phase F)? A move only past `palw_tir_v1`.
     pub fn is_tir_v1(&self) -> bool {
-        matches!(self, Self::TirEvent(_) | Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirStepOutOfRange(_))
+        matches!(
+            self,
+            Self::TirEvent(_) | Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirRowNode(_) | Self::TirStepOutOfRange(_)
+        )
     }
 
     /// Is this the second IR fence's answer? A move only past `palw_tir_fence2`.
     pub fn is_tir_fence2_v1(&self) -> bool {
-        matches!(self, Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirStepOutOfRange(_))
+        matches!(self, Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirRowNode(_) | Self::TirStepOutOfRange(_))
     }
 }
 
@@ -593,7 +613,11 @@ pub fn palw_da_answer_form_v1(claim: &Hash64, unit: &PalwDaUnitV1, answer: &Palw
         // no program either.
         (PalwDaUnitV1::TirStepLeaf { .. }, PalwDaAnswerV1::TirStepLeaf(_))
         | (PalwDaUnitV1::TirStepNode { .. }, PalwDaAnswerV1::TirStepNode(_))
-        | (PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. }, PalwDaAnswerV1::TirStepOutOfRange(_)) => {
+        | (PalwDaUnitV1::TirRowNode { .. }, PalwDaAnswerV1::TirRowNode(_))
+        | (
+            PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. },
+            PalwDaAnswerV1::TirStepOutOfRange(_),
+        ) => {
             if answer.tir_binding().is_some_and(|binding| binding.class.program.is_empty()) {
                 Ok(())
             } else {
@@ -922,8 +946,9 @@ pub const PALW_TIR_STEP_ACCUSATION_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/tir
 /// The accusation message's own domain.
 pub const PALW_TIR_STEP_ACCUSATION_DOMAIN_V1: &[u8] = b"misaka-palw/tir/da-step-accusation/message/v1";
 
-/// **Could `unit` be in SOME IR execution?** A step leaf below `PALW_STEP_LEG_MAX_LEAVES`, or an
-/// interior node (`level ≥ 1`) of the widest tree a binding may commit (22 levels). What the fold
+/// **Could `unit` be in SOME IR execution?** A step leaf below `PALW_STEP_LEG_MAX_LEAVES`, an
+/// interior node (`level ≥ 1`) of the widest tree a binding may commit (22 levels), or a node of the
+/// widest rows tree (a row, at level 0). What the fold
 /// checks when it opens a binding-less demand — a unit past every execution is refused at the door
 /// rather than opening a session only an out-of-range proof ends; the claim's own bound is the
 /// accused's to prove (`TirStepOutOfRange`).
@@ -937,13 +962,18 @@ pub fn palw_tir_step_unit_is_admissible_v1(unit: &PalwDaUnitV1) -> Result<(), &'
             Some(width) if index < width => Ok(()),
             _ => Err("a step node past every execution's tree"),
         },
-        _ => Err("an IR step demand names a step leaf or a step node"),
+        // The rows tree holds at most a row a step leaf: its widest tree is the step tree's.
+        PalwDaUnitV1::TirRowNode { level, index } => match crate::palw_tir_court_v1::palw_tir_step_tree_width_v1(widest, level) {
+            Some(width) if index < width => Ok(()),
+            _ => Err("a rows-tree node past every trace's tree"),
+        },
+        _ => Err("an IR step demand names a step leaf, a step node or a rows-tree node"),
     }
 }
 
-/// **A data-availability demand for one unit of an IR claim's step tree** (the second IR fence's
-/// `DefaultAccusedTirStep`), keyed by the claim alone: a step leaf, or an interior node the seat's
-/// descent reached. It carries NO binding — a seat facing a producer that served nothing holds none,
+/// **A data-availability demand for one unit of an IR claim's step tree or trace** (the second IR
+/// fence's `DefaultAccusedTirStep`), keyed by the claim alone: a step leaf, an interior node the seat's
+/// descent reached, or a node of the tiled trace's rows tree. It carries NO binding — a seat facing a producer that served nothing holds none,
 /// and the claim's own roots are what every answer is checked against — so the fold bounds the unit
 /// only by the widest execution ([`palw_tir_step_unit_is_admissible_v1`]) and the accused answers a
 /// unit past its own execution with `TirStepOutOfRange`. Named only: no draws. Signed by the

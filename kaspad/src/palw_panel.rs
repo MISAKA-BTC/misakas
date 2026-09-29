@@ -2096,6 +2096,11 @@ pub(crate) fn palw_da_unit_answer_v1(
             let tir = tir.ok_or_else(|| format!("{unit:?}: the claim's IR class does not resolve on this node"))?;
             return tir.step_unit_answer(capture, unit);
         }
+        PalwDaUnitV1::TirRowNode { level, index } => {
+            return Err(format!(
+                "IR rows-tree node ({level}, {index}): answered by the IR responder, not the capture path (RFC-0002 Phase F)"
+            ));
+        }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
         (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(

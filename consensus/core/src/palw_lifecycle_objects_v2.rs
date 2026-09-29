@@ -173,8 +173,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             Err("an IR dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves")
         }
         // The second IR fence: an IR step demand names a step unit and carries its accuser's signature.
-        PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } if !accusation.unit.is_tir_step_v1() => {
-            Err("an IR step demand names a step leaf or a step node")
+        PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } if !accusation.unit.is_tir_fence2_v1() => {
+            Err("an IR step demand names a step leaf, a step node or a rows-tree node")
         }
         PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } if !accusation.signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => {
