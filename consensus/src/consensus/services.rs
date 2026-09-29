@@ -196,6 +196,9 @@ impl ConsensusServices {
         // ADR-0152-adjacent (Activation Pool): the activation sink's two doors, where the ruleset
         // declares the pool (testnet-12 alone).
         .with_activation_pool_fence(params.palw_activation_pool_fence().map(|pool| pool.activation))
+        // RFC-0004 (spec 17 §17.11.1): the improvement sink's two doors, where the ruleset arms the
+        // improvement fence. `None` on every shipped preset.
+        .with_improvement_fence(params.palw_improvement_v1_fence().map(|fence| fence.activation))
         // Lane sink (the model sink binding, post-launch): past its height an unbound model sink is
         // refused in the header context. `None` on every shipped preset until the operator arms it.
         .with_model_sink_bound_fence(params.palw_model_sink_bound_fence())

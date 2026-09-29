@@ -501,3 +501,168 @@ mod pin {
         assert_eq!(digest.to_string(), PALW_IMPROVE_SIGN_TABLE_ID_HEX_V1, "the sign table moved: re-pin it and say why");
     }
 }
+
+#[cfg(test)]
+mod rule_tests {
+    use super::*;
+    use crate::Hash64;
+    use crate::palw_improve_state_v1::{PalwEvalItemV1, PalwEvalSubjectV1, PalwItemOutcomeV1, PalwItemSourceV1, PalwScoringKindV1};
+    use std::collections::BTreeMap;
+
+    #[derive(Default)]
+    struct Scores(BTreeMap<(u32, PalwEvalSubjectV1, u8), i64>);
+
+    impl Scores {
+        fn put(&mut self, item: u32, subject: PalwEvalSubjectV1, kind: PalwScoringKindV1, value: i64) {
+            self.0.insert((item, subject, kind as u8), value);
+        }
+    }
+
+    impl PalwImproveScoresV1 for Scores {
+        fn score(&self, item: u32, subject: &PalwEvalSubjectV1, kind: PalwScoringKindV1) -> Option<i64> {
+            self.0.get(&(item, *subject, kind as u8)).copied()
+        }
+        fn any_score(&self, item: u32, kind: PalwScoringKindV1) -> bool {
+            self.0.keys().any(|(i, _, k)| *i == item && *k == kind as u8)
+        }
+    }
+
+    fn h(byte: u8) -> Hash64 {
+        Hash64::from_bytes([byte; 64])
+    }
+
+    fn item(i: u32, source: PalwItemSourceV1, judge: Option<Hash64>) -> PalwEvalItemV1 {
+        PalwEvalItemV1 { item: i, case_id: h(i as u8), source, supplier: None, seed: h(0), judge, dropped: false }
+    }
+
+    fn rule() -> PalwImproveRuleV1 {
+        PalwImproveRuleV1 {
+            n_min: 4,
+            delta_permille: 100,
+            epsilon_permille: 0,
+            epsilon_safety_permille: 0,
+            alpha_permille: 50,
+            has_judge: false,
+            has_pairwise: false,
+        }
+    }
+
+    const PARENT: PalwEvalSubjectV1 = PalwEvalSubjectV1::Parent;
+
+    #[test]
+    fn item_outcomes_count_for_the_incumbent() {
+        use PalwItemOutcomeV1::*;
+        use PalwScoringKindV1::*;
+        assert_eq!(palw_improve_item_outcome_v1(ExactMatch, Some(0), Some(1)), Win);
+        assert_eq!(palw_improve_item_outcome_v1(ExactMatch, Some(1), Some(1)), Tie);
+        assert_eq!(palw_improve_item_outcome_v1(RefLogLik, Some(-5), Some(-9)), Loss);
+        assert_eq!(palw_improve_item_outcome_v1(ExactMatch, None, Some(1)), Loss, "the parent's missing is a parent win");
+        assert_eq!(palw_improve_item_outcome_v1(ExactMatch, Some(0), None), Loss, "the subject's missing is a loss");
+        assert_eq!(palw_improve_item_outcome_v1(Pairwise, None, Some(1)), Win, "pairwise reads the stage's own outcome");
+        assert_eq!(palw_improve_item_outcome_v1(Pairwise, Some(9), Some(0)), Tie);
+        assert_eq!(palw_improve_item_outcome_v1(Pairwise, None, Some(-1)), Loss);
+        assert_eq!(palw_improve_item_outcome_v1(Pairwise, None, None), Loss);
+    }
+
+    #[test]
+    fn counts_skip_dropped_items_and_judged_only_items_and_count_unevaluated_ones_for_the_parent() {
+        let c = PalwEvalSubjectV1::Candidate(h(9));
+        let mut s = Scores::default();
+        let mut items = Vec::new();
+        for i in 0..6 {
+            items.push(item(i, PalwItemSourceV1::HoldOut, None));
+        }
+        // 0..3: candidate wins; 3: dropped; 4: judged only (a Judge score, no primary); 5: nobody scored.
+        for i in 0..3 {
+            s.put(i, PARENT, PalwScoringKindV1::ExactMatch, 0);
+            s.put(i, c, PalwScoringKindV1::ExactMatch, 1);
+        }
+        items[3].dropped = true;
+        s.put(3, c, PalwScoringKindV1::ExactMatch, 1);
+        s.put(4, c, PalwScoringKindV1::Judge, 1);
+        items.push(item(6, PalwItemSourceV1::Regression { index: 0 }, None));
+        s.put(6, PARENT, PalwScoringKindV1::RefLogLik, -10);
+        s.put(6, c, PalwScoringKindV1::RefLogLik, -12);
+        let counts = palw_improve_counts_v1(&s, &items, &c, &rule(), &|_| false);
+        assert_eq!((counts.primary.wins, counts.primary.losses, counts.primary.ties), (3, 1, 0), "items 0–2 win, item 5 is a loss");
+        assert_eq!((counts.regression.wins, counts.regression.losses), (0, 1));
+        assert_eq!(palw_improve_item_primary_v1(&s, 4), None, "judged only");
+        assert_eq!(palw_improve_item_primary_v1(&s, 5), Some(PalwScoringKindV1::ExactMatch), "unevaluated counts");
+    }
+
+    #[test]
+    fn eligibility_reads_every_rule() {
+        let mut c = PalwPromotionCountsV1::default();
+        c.primary = PalwPairedCountsV1 { wins: 8, losses: 0, ties: 0 };
+        assert!(palw_improve_eligible_v1(&c, &rule(), 1));
+        assert!(!palw_improve_eligible_v1(&c, &rule(), 64), "K = 64 needs more than 8 of 8 at 5 %");
+        let mut few = c;
+        few.primary = PalwPairedCountsV1 { wins: 3, losses: 0, ties: 0 };
+        assert!(!palw_improve_eligible_v1(&few, &rule(), 1), "n below n_min");
+        let mut small_margin = c;
+        small_margin.primary = PalwPairedCountsV1 { wins: 10, losses: 5, ties: 85 };
+        assert!(!palw_improve_eligible_v1(&small_margin, &rule(), 1), "b − c = 5 < δ·n = 10");
+        let mut regressed = c;
+        regressed.regression = PalwPairedCountsV1 { wins: 0, losses: 1, ties: 9 };
+        assert!(!palw_improve_eligible_v1(&regressed, &rule(), 1), "ε = 0 allows no net regression");
+        let mut loose = rule();
+        loose.epsilon_permille = 100;
+        assert!(palw_improve_eligible_v1(&regressed, &loose, 1), "one net loss in ten is within 10 %");
+        let mut judged = c;
+        judged.judge = PalwPairedCountsV1 { wins: 0, losses: 8, ties: 0 };
+        let mut guarded = rule();
+        guarded.has_judge = true;
+        assert!(!palw_improve_eligible_v1(&judged, &guarded, 1), "a judge's significant loss blocks");
+        judged.judge = PalwPairedCountsV1 { wins: 8, losses: 0, ties: 0 };
+        assert!(palw_improve_eligible_v1(&judged, &guarded, 1), "and a judge's win does not make one — it only fails to block");
+    }
+
+    #[test]
+    fn the_winner_is_the_largest_margin_and_ties_go_to_the_earliest() {
+        let counts = |w: u32, l: u32, eligible: bool| PalwPromotionCountsV1 {
+            primary: PalwPairedCountsV1 { wins: w, losses: l, ties: 0 },
+            eligible,
+            ..Default::default()
+        };
+        let list =
+            vec![(h(1), counts(8, 1, true)), (h(2), counts(9, 0, true)), (h(3), counts(9, 0, true)), (h(4), counts(10, 0, false))];
+        assert_eq!(palw_improve_decide_v1(&list, &rule()), PalwPromotionOutcomeV1::Promoted { class_id: h(2), wins: 9, losses: 0 });
+        let none = vec![(h(1), counts(8, 1, false))];
+        assert_eq!(
+            palw_improve_decide_v1(&none, &rule()),
+            PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::NoneEligible }
+        );
+        let few = vec![(h(1), counts(2, 0, false))];
+        assert_eq!(
+            palw_improve_decide_v1(&few, &rule()),
+            PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::TooFewItems }
+        );
+        assert_eq!(
+            palw_improve_decide_v1(&[], &rule()),
+            PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::NoCandidate }
+        );
+    }
+
+    #[test]
+    fn a_judge_failing_its_anchors_is_excluded() {
+        let judge = h(7);
+        let (a, b) = (PalwEvalSubjectV1::Candidate(h(1)), PalwEvalSubjectV1::Candidate(h(2)));
+        let subjects = [PARENT, a, b];
+        let items: Vec<PalwEvalItemV1> = (0..4).map(|i| item(i, PalwItemSourceV1::HoldOut, Some(judge))).collect();
+        let mut honest = Scores::default();
+        let mut liar = Scores::default();
+        for i in 0..4 {
+            for (subject, pass) in [(PARENT, 0), (a, 1), (b, 1)] {
+                for s in [&mut honest, &mut liar] {
+                    s.put(i, subject, PalwScoringKindV1::ExactMatch, pass);
+                }
+                honest.put(i, subject, PalwScoringKindV1::Judge, if pass == 1 { 9 } else { 1 });
+                liar.put(i, subject, PalwScoringKindV1::Judge, if pass == 1 { 1 } else { 9 });
+            }
+        }
+        // Four items × two passing subjects × one failing = 8 pairs.
+        assert!(!palw_improve_judge_excluded_v1(&honest, &items, &subjects, &judge, 900), "8 correct pairs of 8");
+        assert!(palw_improve_judge_excluded_v1(&liar, &items, &subjects, &judge, 900), "0 correct pairs of 8");
+        assert!(palw_improve_judge_excluded_v1(&honest, &items[..3], &subjects, &judge, 900), "6 pairs are too few");
+    }
+}

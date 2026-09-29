@@ -191,6 +191,8 @@ fn the_value_is_fingerprinted_field_by_field() {
         ("max_eval_budget_permille", Box::new(|f| f.ceilings.max_eval_budget_permille -= 1)),
         ("max_governed_lines", Box::new(|f| f.ceilings.max_governed_lines -= 1)),
         ("max_policy_bytes", Box::new(|f| f.ceilings.max_policy_bytes -= 1)),
+        ("max_open_epochs", Box::new(|f| f.ceilings.max_open_epochs -= 1)),
+        ("max_live_results", Box::new(|f| f.ceilings.max_live_results -= 1)),
     ];
     let mut seen = std::collections::BTreeSet::new();
     seen.insert(a.consensus_params_id().to_string());
