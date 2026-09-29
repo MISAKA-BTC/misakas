@@ -2204,6 +2204,10 @@ mod tests {
             let delta = PalwStateDeltaV2 { point: ctx(daa), entries: builder.entries.clone() };
             assert_eq!(apply_delta_v2(parent, &delta, &p).unwrap(), child, "DAA {daa}: the delta replays");
             assert_eq!(revert_delta_v2(&child, &delta, &p).unwrap(), *parent, "DAA {daa}: the delta reverts");
+            // The incremental indices are exactly what a restarted node rebuilds from the rows.
+            let mut rebuilt = child.clone();
+            rebuild_improvement_indices_v1(&mut rebuilt);
+            assert_eq!(rebuilt, child, "DAA {daa}: the incremental indices are the rebuilt ones");
             child
         };
         let mut s = opted_in(500);

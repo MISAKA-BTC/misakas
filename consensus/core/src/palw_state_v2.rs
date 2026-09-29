@@ -18352,10 +18352,16 @@ impl<'a> TransitionBuilder<'a> {
         let open = |e: &Option<crate::palw_improve_state_v1::PalwImprovementEpochV1>| e.as_ref().is_some_and(|e| !e.is_decided());
         match (open(&old), open(&new)) {
             (false, true) => self.state.improvement_open_epochs += 1,
-            (true, false) => self.state.improvement_open_epochs = self.state.improvement_open_epochs.saturating_sub(1),
+            (true, false) => {
+                // The index counts what the rows hold; a drift is a restart split (the rebuild would
+                // disagree), so tests fail loudly on it rather than saturate over it.
+                debug_assert!(self.state.improvement_open_epochs > 0, "the open-epoch index drifted below its rows");
+                self.state.improvement_open_epochs = self.state.improvement_open_epochs.saturating_sub(1)
+            }
             _ => {}
         }
         let live = |e: &Option<crate::palw_improve_state_v1::PalwImprovementEpochV1>| e.as_ref().map_or(0, palw_improvement_live_results_of_v1);
+        debug_assert!(self.state.improvement_live_results >= live(&old), "the live-results index drifted below its rows");
         self.state.improvement_live_results = self.state.improvement_live_results.saturating_sub(live(&old)).saturating_add(live(&new));
         if let Some(entry) = old.as_ref().and_then(palw_improvement_retiring_entry_v1) {
             self.state.improvement_retiring.remove(&entry);

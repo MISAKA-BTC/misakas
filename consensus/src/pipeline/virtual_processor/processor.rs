@@ -14757,7 +14757,8 @@ impl VirtualStateProcessor {
                 // class, under the least top-up) is paid back by the same route, against the same cap.
                 MObj::ActivationPoolFunded { amount, .. } => *amount,
                 // RFC-0004 (spec 17 §17.11.1): a deposit the fold refuses (a line not governed) is
-                // paid back by the same route — also when the walk drops it below the fence.
+                // paid back by the same route. (Only a bound carrier the walk extracted reaches here; below
+                // the fence no carrier can bind an improvement sink, so none is ever refunded there.)
                 MObj::ImprovementPoolFunded { payload } => payload.amount,
                 _ => 0,
             };
