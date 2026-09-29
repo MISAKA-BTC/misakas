@@ -129,6 +129,75 @@ fn interval_bound_refusal(why: &str) -> bool {
     TIR_INTERVAL_REFUSALS_V1.iter().any(|what| why.contains(what))
 }
 
+/// The text admission v10's refusal of a dissected cone's root claim carries (step 9).
+const TIR_ROOT_CLAIM_REFUSAL_V1: &str = "IR dissection root claim bytes";
+
+/// **The refusals a narrower history tile can fix** (spec 04b §10.3): a dissected cone's root claim
+/// probes the history's first row, which the court reads through its complete history tile — `h_tile`
+/// rows of every sub-row the probe touches — and the close sizing walks every alignment of the history
+/// tiles, so both shrink with `h_tile`. Measured at 512 positions on testnet-12's court: Gemma-3-1B's
+/// root claim is 114,604 bytes at `h_tile` 64 and 74,036 at 32 against the 100,000-byte carrier;
+/// Qwen3-8B's 109,804 and 85,228; Qwen3.5's 105,797 and 64,837.
+const TIR_H_TILE_REFUSALS_V1: [&str; 2] = [TIR_ROOT_CLAIM_REFUSAL_V1, "IR close sizing work"];
+
+fn h_tile_bound_refusal(why: &str) -> bool {
+    TIR_H_TILE_REFUSALS_V1.iter().any(|what| why.contains(what))
+}
+
+/// **The search declare-layout runs**, over the gate `admit`: the logits tiles in order (the caller
+/// has dropped any whose close is estimated past the carriage); for each, the history tile from
+/// `h_chunk`, halved while the refusal is one a narrower history tile fixes; at each, the court's
+/// checkpoint interval (`interval`), halved while the refusal is one a narrower interval fixes — for a
+/// `recurrent` program only: without a `Fixed` state the interval changes no leaf and no close. The
+/// first layout admitted is returned, at the widest logits tile, history tile and interval that admit;
+/// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
+/// the one an operator acts on.
+fn tir_declare_search_v1(
+    layout_for: &mut dyn FnMut(Option<u32>, u32) -> Result<PalwTirLayoutV1, String>,
+    interval: &mut dyn FnMut(&PalwTirLayoutV1) -> Result<u32, String>,
+    admit: &mut dyn FnMut(&PalwTirLayoutV1) -> Result<(), String>,
+    logits_tiles: &[Option<u32>],
+    h_chunk: u32,
+    recurrent: bool,
+) -> Result<(PalwTirLayoutV1, Result<(), String>), String> {
+    let mut first: Option<(PalwTirLayoutV1, Result<(), String>)> = None;
+    for &logits_tile in logits_tiles {
+        let mut h_tile = h_chunk.max(1);
+        loop {
+            let mut layout = layout_for(logits_tile, h_tile)?;
+            let mut admission = match interval(&layout) {
+                Ok(c) => {
+                    layout.checkpoint_interval = c;
+                    admit(&layout)
+                }
+                Err(why) => Err(why),
+            };
+            let at_bound = (layout.clone(), admission.clone());
+            while let Err(why) = &admission {
+                if !recurrent || !interval_bound_refusal(why) || layout.checkpoint_interval <= 1 {
+                    break;
+                }
+                layout.checkpoint_interval /= 2;
+                admission = admit(&layout);
+            }
+            let why = match admission {
+                Ok(()) => return Ok((layout, Ok(()))),
+                Err(why) => why,
+            };
+            first.get_or_insert(at_bound);
+            // A root claim past its carrier, or a sizing past its work, at every interval: the next,
+            // narrower history tile at the same logits tile.
+            if h_tile_bound_refusal(&why) && h_tile > 1 {
+                h_tile /= 2;
+                continue;
+            }
+            // A close too wide to carry is the logits tile's to fix: the next, narrower one.
+            break;
+        }
+    }
+    first.ok_or_else(|| "no layout to try".to_string())
+}
+
 /// **The layout's tiles, its history chunk and its context** — everything but the checkpoint
 /// interval, which is left at [`TIR_DECLARED_MAX_CHECKPOINT_INTERVAL_V1`] for the caller to size.
 pub fn tir_layout_tiles_v1(params: &Params, program: &TirProgramV1, choice: &TirLayoutChoiceV1) -> Result<PalwTirLayoutV1, String> {
@@ -422,12 +491,13 @@ pub fn tir_window_covers_context_v1(meta: &serde_json::Value, max_context: u32) 
 
 /// **Write `input`'s program and tensors to `output` as a class** — under the logits scheme `choice`
 /// names ([`tir_program_with_scheme_v1`]) and a declared layout: `choice` tiled, the logits at the
-/// widest divisor of 4,096 lanes whose terminal close the chain can carry (PALW-TIR-38), its
-/// checkpoint interval the widest the court's cone-work check admits
-/// ([`tir_court_checkpoint_interval_v1`], stepped down only if the gate still refuses that check) —
-/// with `model_id` recorded in the container's provenance when given. A refusal is reported at the
-/// interval declared, so it names what blocks the class there. The inventory root is the input's (the
-/// scheme and the layout enter the class id, never the root).
+/// widest divisor of 4,096 lanes whose terminal close the chain can carry (PALW-TIR-38), its history
+/// tile `choice.h_chunk` halved while a root claim or the sizing's work is refused, its checkpoint
+/// interval the widest the court's cone-work check admits ([`tir_court_checkpoint_interval_v1`],
+/// stepped down only if the gate still refuses a recurrent class for what a narrower interval fixes;
+/// [`tir_declare_search_v1`]) — with `model_id` recorded in the container's provenance when given. A
+/// refusal is reported at the widest layout tried, so it names what blocks the class there. The
+/// inventory root is the input's (the scheme and the layout enter the class id, never the root).
 pub fn tir_declare_layout_v1(
     params: &Params,
     bundle: &PalwConsensusParamsV2,
@@ -456,52 +526,27 @@ pub fn tir_declare_layout_v1(
         (None, true) => (2..=12).rev().map(|k| Some(1u32 << k)).collect(),
         (None, false) => vec![None],
     };
-    let mut first: Option<(PalwTirLayoutV1, Result<(), String>)> = None;
-    let mut found: Option<(PalwTirLayoutV1, Result<(), String>)> = None;
-    'tiles: for logits_tile in logits_tiles {
-        // PALW-TIR-38 with the paths counted: a tile whose close the chain cannot carry is never
-        // declared, whatever the admission's opened-bytes count says.
-        if let Some(t) = logits_tile
-            && choice.logits_tile.is_none()
-            && tir_logits_close_carried_estimate_v1(params, program, leaf_count, t, choice.h_chunk).is_some_and(|est| est > carriable)
-        {
-            continue;
-        }
-        let mut layout = tir_layout_tiles_v1(params, program, &TirLayoutChoiceV1 { logits_tile, ..*choice })?;
-        let mut admission = match tir_court_checkpoint_interval_v1(params, bundle, program, &layout) {
-            Ok(interval) => {
-                layout.checkpoint_interval = interval;
-                tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root)
-            }
-            Err(why) => Err(why),
-        };
-        // The court's bound, as declared: what a refusal is reported at if no narrower interval
-        // admits the class (the one an operator acts on).
-        let at_bound = (layout.clone(), admission.clone());
-        // Step the interval down while a refusal is one a narrower interval can fix; any other refusal
-        // only grows with more checkpoints.
-        while let Err(why) = &admission {
-            if !interval_bound_refusal(why) || layout.checkpoint_interval <= 1 {
-                break;
-            }
-            layout.checkpoint_interval /= 2;
-            admission = tir_class_admission_offline_v1(params, bundle, &class_of(&layout), artifact_root);
-        }
-        if admission.is_ok() {
-            found = Some((layout, admission));
-            break;
-        }
-        let why = admission.as_ref().err().cloned().unwrap_or_default();
-        first.get_or_insert(at_bound);
-        // A close too wide to carry at every interval is the logits tile's to fix: the next, narrower
-        // one. The whole-close ceiling, likewise.
-        if why.contains("close bytes") {
-            continue 'tiles;
-        }
-    }
-    // None admitted: keep the widest logits tile's, refused at the court's interval — the refusal an
-    // operator acts on.
-    let (layout, admission) = found.or(first).ok_or("no layout to try")?;
+    // PALW-TIR-38 with the paths counted: a logits tile whose close the chain cannot carry is never
+    // declared, whatever the admission's opened-bytes count says.
+    let logits_tiles: Vec<Option<u32>> = logits_tiles
+        .into_iter()
+        .filter(|t| {
+            !(t.is_some()
+                && choice.logits_tile.is_none()
+                && t.and_then(|t| tir_logits_close_carried_estimate_v1(params, program, leaf_count, t, choice.h_chunk))
+                    .is_some_and(|est| est > carriable))
+        })
+        .collect();
+    let recurrent = program.states.iter().any(|s| matches!(s.kind, misaka_palw_tir::program::StateKind::Fixed { .. }));
+    // The widest layout the gate admits, else the refusal at the widest one tried.
+    let (layout, admission) = tir_declare_search_v1(
+        &mut |logits_tile, h_chunk| tir_layout_tiles_v1(params, program, &TirLayoutChoiceV1 { logits_tile, h_chunk, ..*choice }),
+        &mut |layout| tir_court_checkpoint_interval_v1(params, bundle, program, layout),
+        &mut |layout| tir_class_admission_offline_v1(params, bundle, &class_of(layout), artifact_root),
+        &logits_tiles,
+        choice.h_chunk,
+        recurrent,
+    )?;
     let mut meta = serde_json::from_str::<serde_json::Value>(&container.header.meta).unwrap_or_else(|_| serde_json::json!({}));
     tir_calibration_covers_context_v1(program, &meta, layout.max_context)?;
     tir_window_covers_context_v1(&meta, layout.max_context)?;
@@ -537,6 +582,117 @@ mod tests {
     use std::sync::Arc;
 
     const CONTEXT: u32 = 32;
+
+    /// A layout of one commit tile and the logits tile, at `h_tile`, the interval left for the search.
+    fn stub_layout(logits_tile: Option<u32>, h_tile: u32) -> Result<PalwTirLayoutV1, String> {
+        Ok(PalwTirLayoutV1 {
+            version: PALW_TIR_LAYOUT_VERSION_V1,
+            max_context: 512,
+            checkpoint_interval: TIR_DECLARED_MAX_CHECKPOINT_INTERVAL_V1,
+            h_tile,
+            commit_tiles: vec![64, logits_tile.unwrap_or(4096)],
+            state_tiles: vec![64],
+        })
+    }
+
+    fn root_claim_refusal(bytes: u64) -> String {
+        format!(
+            "COURT_COST_EXCEEDS_CEILING (the class's {TIR_ROOT_CLAIM_REFUSAL_V1} of {bytes} exceeds the ruleset's ceiling of 100000)"
+        )
+    }
+
+    /// **declare-layout halves `h_tile` on a root-claim refusal and halts at the first history tile
+    /// that admits** — Gemma-3-1B's shape (spec 04b §10.3: its root claim reads the history's first row
+    /// through a whole history tile): refused at 64 for its root claim, admitted at 32, so declared at
+    /// 32 — 16 is never asked, the interval is never stepped for it, and the logits tile stays the
+    /// widest.
+    #[test]
+    fn a_root_claim_refusal_halves_h_tile_and_halts_at_the_first_admissible() {
+        let mut asked: Vec<(Option<u32>, u32, u32)> = Vec::new();
+        let (layout, verdict) = tir_declare_search_v1(
+            &mut stub_layout,
+            &mut |_| Ok(256),
+            &mut |l| {
+                asked.push((Some(l.commit_tiles[1]), l.h_tile, l.checkpoint_interval));
+                if l.h_tile > 32 { Err(root_claim_refusal(114_604)) } else { Ok(()) }
+            },
+            &[Some(4096), Some(2048)],
+            64,
+            true,
+        )
+        .expect("a layout");
+        assert_eq!(verdict, Ok(()));
+        assert_eq!((layout.h_tile, layout.checkpoint_interval, layout.commit_tiles[1]), (32, 256, 4096));
+        assert_eq!(asked, vec![(Some(4096), 64, 256), (Some(4096), 32, 256)], "halted at the first admissible h_tile");
+    }
+
+    /// **A class no history tile admits is refused at the widest**, having asked every history tile
+    /// down to 1 once per logits tile (a refusal a narrower tile cannot fix stops the halving: the next
+    /// logits tile); a recurrent class's interval is stepped first, a non-recurrent one's never.
+    #[test]
+    fn the_history_tile_search_stops_at_one_and_reports_the_widest_refusal() {
+        let mut asked: Vec<(u32, u32)> = Vec::new();
+        let (layout, verdict) = tir_declare_search_v1(
+            &mut stub_layout,
+            &mut |_| Ok(8),
+            &mut |l| {
+                asked.push((l.h_tile, l.checkpoint_interval));
+                Err(root_claim_refusal(200_000 + u64::from(l.h_tile)))
+            },
+            &[Some(4096)],
+            64,
+            false,
+        )
+        .expect("a verdict");
+        assert_eq!(verdict, Err(root_claim_refusal(200_064)), "the widest history tile's refusal");
+        assert_eq!(layout.h_tile, 64);
+        assert_eq!(asked.iter().map(|a| a.0).collect::<Vec<_>>(), vec![64, 32, 16, 8, 4, 2, 1], "every history tile down to 1, once");
+        assert!(asked.iter().all(|a| a.1 == 8), "a non-recurrent class's interval is never stepped");
+
+        // The close sizing's work, at every interval of a recurrent class: the interval first, then h_tile.
+        let mut asked: Vec<(u32, u32)> = Vec::new();
+        let (layout, verdict) = tir_declare_search_v1(
+            &mut stub_layout,
+            &mut |_| Ok(4),
+            &mut |l| {
+                asked.push((l.h_tile, l.checkpoint_interval));
+                if l.h_tile > 16 {
+                    Err("TIR_EXCEEDS_CEILING (the IR program's IR close sizing work of 67108865 exceeds the ceiling 67108864)".into())
+                } else {
+                    Ok(())
+                }
+            },
+            &[Some(1024)],
+            64,
+            true,
+        )
+        .expect("a layout");
+        assert_eq!(verdict, Ok(()));
+        assert_eq!((layout.h_tile, layout.checkpoint_interval), (16, 4));
+        assert_eq!(asked, vec![(64, 4), (64, 2), (64, 1), (32, 4), (32, 2), (32, 1), (16, 4)]);
+
+        // A refusal no history tile fixes moves to the next logits tile at once.
+        let mut asked: Vec<(u32, u32)> = Vec::new();
+        let (layout, verdict) = tir_declare_search_v1(
+            &mut stub_layout,
+            &mut |_| Ok(1),
+            &mut |l| {
+                asked.push((l.commit_tiles[1], l.h_tile));
+                if l.commit_tiles[1] > 1024 {
+                    Err("COURT_COST_EXCEEDS_CEILING (the class's IR terminal close bytes as carried of 4000000 exceeds 3200000)"
+                        .into())
+                } else {
+                    Ok(())
+                }
+            },
+            &[Some(4096), Some(2048), Some(1024)],
+            64,
+            false,
+        )
+        .expect("a layout");
+        assert_eq!((verdict, layout.commit_tiles[1], layout.h_tile), (Ok(()), 1024, 64));
+        assert_eq!(asked, vec![(4096, 64), (2048, 64), (1024, 64)]);
+    }
 
     /// The tiny Qwen3.5 hybrid — a convolution window and a gated-delta state in each linear-attention
     /// layer: `Fixed` states whose replay is mostly elementwise work — lowered and written without a
