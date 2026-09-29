@@ -117,7 +117,12 @@ pub fn palw_tir_tensor_bytes_v1(p: &TirProgramV1, j: u16) -> u64 {
     d.shape.iter().map(|x| *x as u64).product::<u64>() * d.dtype.width() as u64
 }
 
-/// Bytes of one row of param `j` (an axis-0 slice at rank ≥ 2, the whole tensor below).
+/// Bytes of one row of param `j` (an axis-0 slice at rank ≥ 2, the whole tensor below) — what one
+/// leaf holds when the row is at most [`PALW_TIR_ROW_PIECE_BYTES_V1`].
+pub fn palw_tir_row_bytes_v1(p: &TirProgramV1, j: u16) -> u64 {
+    row_bytes(p, j)
+}
+
 fn row_bytes(p: &TirProgramV1, j: u16) -> u64 {
     let d = &p.params[j as usize];
     if d.shape.len() >= 2 {
@@ -238,6 +243,36 @@ pub fn palw_tir_inventory_root_v1(p: &TirProgramV1, src: &dyn PalwTirTensorSourc
         }
     }
     debug_assert_eq!(frontier.leaf_count(), count as u64);
+    Ok((frontier.root().ok_or(PalwTirInventoryError::Empty)?, count))
+}
+
+/// **The leaves of params `params` alone, and their root** — a SECTION of the inventory: the leaves
+/// [`palw_tir_inventory_root_v1`] would push for those params, in the same order, as a tree of their
+/// own (RFC-0004 §6.3: a composite candidate's adapter section is the section of its params `P..`,
+/// and its parent's inventory is the section `0..P` of the candidate's). `(root, leaf_count)`;
+/// `Empty` for a section with no leaf.
+pub fn palw_tir_inventory_section_root_v1(
+    p: &TirProgramV1,
+    params: std::ops::Range<u16>,
+    src: &dyn PalwTirTensorSourceV1,
+) -> Result<(Hash64, u32), PalwTirInventoryError> {
+    palw_tir_inventory_leaf_count_v1(p)?;
+    let mut frontier = PalwArtifactMerkleFrontierV1::new();
+    for (j, inst) in palw_tir_param_instances_v1(p).into_iter().enumerate().filter(|(j, _)| params.contains(&(*j as u16))) {
+        let j = j as u16;
+        let name = &p.params[j as usize].name;
+        let r = row_bytes(p, j) as usize;
+        for layer in inst {
+            let bytes = instance(p, src, j, layer)?;
+            for (ri, row) in bytes.chunks(r).enumerate() {
+                for (pi, piece) in row.chunks(PALW_TIR_ROW_PIECE_BYTES_V1 as usize).enumerate() {
+                    let start = ri * r + pi * PALW_TIR_ROW_PIECE_BYTES_V1 as usize;
+                    frontier.push(artifact_leaf_parts_v1(name, layer, start as u32, piece));
+                }
+            }
+        }
+    }
+    let count = u32::try_from(frontier.leaf_count()).map_err(|_| PalwTirInventoryError::TooManyLeaves(frontier.leaf_count()))?;
     Ok((frontier.root().ok_or(PalwTirInventoryError::Empty)?, count))
 }
 

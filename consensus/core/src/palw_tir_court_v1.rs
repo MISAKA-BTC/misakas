@@ -121,9 +121,10 @@ pub struct PalwTirConeRefutationV1 {
     pub operands: PalwStepInputRowV1,
     /// Every inventory leaf the evaluation reads, as ONE multiproof against the class's
     /// `artifact_root` (ascending leaf index; a run of consecutive leaves shares its path, so a
-    /// vocabulary or head tile pays two boundary paths, not a path per row — design §2.12.1);
-    /// `None` exactly when the evaluation reads no inventory leaf.
-    pub params: Option<PalwArtifactMultiproofV1>,
+    /// vocabulary or head tile pays two boundary paths, not a path per row — design §2.12.1) — or,
+    /// for a composite artifact (RFC-0004 §6.3), under its parent's and its adapter section's roots;
+    /// [`PalwTirParamOpeningV1::None`] exactly when the evaluation reads no inventory leaf.
+    pub params: PalwTirParamOpeningV1,
     /// Flat prompt form: the whole prompt when the evaluation reads a prompt token, else empty.
     pub prompt_token_ids: Vec<u32>,
     /// Merkle prompt form: one opening per prompt tile the evaluation reads, ascending tile.
@@ -131,6 +132,50 @@ pub struct PalwTirConeRefutationV1 {
     /// The generated ids, pinned through the class's logits scheme, when the evaluation reads a
     /// decode position's token.
     pub decode_tokens: Option<PalwDecodeTokenPinV1>,
+}
+
+/// **How an IR close carries the inventory leaves its evaluation reads** (design §2.12.1; RFC-0004
+/// §6.3). Its first two variants encode exactly as the `Option<PalwArtifactMultiproofV1>` this field
+/// was (`0` for none, `1` and the proof for one) — every close built before RFC-0004 is these bytes
+/// — and the composite form is APPENDED as tag `2`, dropped by name below `palw_improvement_v1`.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwTirParamOpeningV1 {
+    /// No inventory leaf is read.
+    None,
+    /// ONE multiproof against the class's `artifact_root` (Phase F).
+    Single(PalwArtifactMultiproofV1),
+    /// A composite artifact's leaves under its sub-roots
+    /// ([`crate::palw_improve_composite_v1::PalwTirCompositeOpeningV1`]).
+    Composite(Box<crate::palw_improve_composite_v1::PalwTirCompositeOpeningV1>),
+}
+
+impl PalwTirParamOpeningV1 {
+    /// No inventory leaf rides.
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// The inventory leaves opened, over every root.
+    pub fn opened_count(&self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::Single(proof) => proof.opened.len(),
+            Self::Composite(c) => c.parent.as_ref().map_or(0, |p| p.opened.len()) + c.adapter.as_ref().map_or(0, |p| p.opened.len()),
+        }
+    }
+
+    /// The single-root multiproof, when that is the form.
+    pub fn single(&self) -> Option<&PalwArtifactMultiproofV1> {
+        match self {
+            Self::Single(proof) => Some(proof),
+            _ => None,
+        }
+    }
+
+    /// Whether this is the composite form (appended by RFC-0004).
+    pub fn is_composite(&self) -> bool {
+        matches!(self, Self::Composite(_))
+    }
 }
 
 /// **What an evidence builder reads from its own retained execution** — the executor's committed
@@ -153,6 +198,12 @@ pub trait PalwTirEvidenceStoreV1 {
     fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
         let openings: Option<Vec<PalwArtifactOpeningV1>> = leaves.iter().map(|leaf| self.param_opening(*leaf)).collect();
         palw_artifact_multiproof_from_openings_v1(&openings?)
+    }
+    /// **The carriage of inventory leaves `leaves`** (ascending, distinct; the class's inventory
+    /// indices) as a close carries it: [`Self::param_multiproof`] against the class's one root by
+    /// default; a store holding a composite artifact (RFC-0004 §6.3) answers the composite form.
+    fn param_carriage(&self, leaves: &[u32]) -> Option<PalwTirParamOpeningV1> {
+        self.param_multiproof(leaves).map(PalwTirParamOpeningV1::Single)
     }
     /// The whole prompt (flat form).
     fn prompt_token_ids(&self) -> Option<Vec<u32>>;
@@ -240,6 +291,15 @@ impl PalwTirInventoryIndexV1 {
     /// Leaves of the inventory.
     pub fn leaf_count(&self) -> u32 {
         self.leaf_count
+    }
+
+    /// The leaves of every param before `param`: where its own begin, and — at `param` = the
+    /// program's param count — the whole inventory. `None` past that.
+    pub fn leaves_before(&self, param: u16) -> Option<u32> {
+        match self.params.get(param as usize) {
+            Some(p) => u32::try_from(p.base).ok(),
+            None => (param as usize == self.params.len()).then_some(self.leaf_count),
+        }
     }
 
     /// The leaf holding byte `byte` of instance `(param, layer)`.
@@ -776,14 +836,61 @@ fn authenticate_params(
     binding: &PalwTirStepBindingV1,
     v: &PalwTirVerifiedBindingV1,
     inventory: &PalwTirInventoryIndexV1,
-    proof: Option<&PalwArtifactMultiproofV1>,
+    opening: &PalwTirParamOpeningV1,
 ) -> Result<BTreeMap<u32, (u32, Vec<u8>)>, PalwStepRefuteError> {
     let mut out = BTreeMap::new();
-    let Some(proof) = proof else { return Ok(out) };
+    match opening {
+        PalwTirParamOpeningV1::None => {}
+        PalwTirParamOpeningV1::Single(proof) => {
+            check_opened_leaves(v, inventory, proof, 0, inventory.leaf_count())?;
+            verify_artifact_multiproof_v1(proof, binding.artifact_root)
+                .map_err(|_| bad("the artifact multiproof does not reach the class's root"))?;
+            for (index, operand) in &proof.opened {
+                out.insert(*index, (operand.row_start, operand.bytes.clone()));
+            }
+        }
+        // RFC-0004 §6.3: the parent's leaves (params `0..p`) under the parent's root at their own
+        // indices, the adapter section's (params `p..`) under the adapter's root, rebased to it — the
+        // reference hashing to the class's artifact root, so nothing is believed.
+        PalwTirParamOpeningV1::Composite(c) => {
+            if c.artifact.artifact_root() != binding.artifact_root {
+                return Err(bad("the composite opening is not of the class's artifact"));
+            }
+            if c.parent.is_none() && c.adapter.is_none() {
+                return Err(bad("a composite opening opens nothing (carry none instead)"));
+            }
+            let p = u16::try_from(c.artifact.p).map_err(|_| bad("a composite split past every param"))?;
+            let split = inventory.leaves_before(p).ok_or(bad("a composite split past every param"))?;
+            for (proof, base, count, root) in [
+                (&c.parent, 0, split, c.artifact.parent_root),
+                (&c.adapter, split, inventory.leaf_count() - split, c.artifact.adapter_root),
+            ] {
+                let Some(proof) = proof else { continue };
+                check_opened_leaves(v, inventory, proof, base, count)?;
+                verify_artifact_multiproof_v1(proof, root).map_err(|_| bad("a composite multiproof does not reach its sub-root"))?;
+                for (index, operand) in &proof.opened {
+                    out.insert(base + *index, (operand.row_start, operand.bytes.clone()));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A multiproof of the `count` leaves of the class's inventory from leaf `base` on (the whole
+/// inventory, or a composite section): its tree's size, its leaves ascending, and each opened
+/// operand the canonical piece of its leaf.
+fn check_opened_leaves(
+    v: &PalwTirVerifiedBindingV1,
+    inventory: &PalwTirInventoryIndexV1,
+    proof: &PalwArtifactMultiproofV1,
+    base: u32,
+    count: u32,
+) -> Result<(), PalwStepRefuteError> {
     if proof.opened.is_empty() {
         return Err(bad("an artifact multiproof opens nothing (carry none instead)"));
     }
-    if proof.leaf_count != inventory.leaf_count() {
+    if proof.leaf_count != count {
         return Err(bad("the artifact multiproof is of another inventory"));
     }
     let mut last: Option<u32> = None;
@@ -792,18 +899,16 @@ fn authenticate_params(
             return Err(bad("the artifact multiproof's leaves are not in ascending order"));
         }
         last = Some(*index);
-        let (param, layer, start, len) = inventory.piece_of(*index).ok_or(bad("the artifact multiproof names no leaf"))?;
+        if *index >= count {
+            return Err(bad("the artifact multiproof names no leaf"));
+        }
+        let (param, layer, start, len) = inventory.piece_of(base + *index).ok_or(bad("the artifact multiproof names no leaf"))?;
         let d = v.space.program.params.get(param as usize).ok_or(bad("the artifact multiproof names no leaf"))?;
         if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize {
             return Err(bad("an opened operand is not its leaf's canonical piece"));
         }
     }
-    verify_artifact_multiproof_v1(proof, binding.artifact_root)
-        .map_err(|_| bad("the artifact multiproof does not reach the class's root"))?;
-    for (index, operand) in &proof.opened {
-        out.insert(*index, (operand.row_start, operand.bytes.clone()));
-    }
-    Ok(out)
+    Ok(())
 }
 
 /// **How an IR close carries its parameter openings** — the parameter of
@@ -1053,7 +1158,7 @@ fn check_carriage<'r>(
     // 5.
     let operands = authenticate_operands(binding, &v, &refutation.operands, out_index, rules.max_step_leaf_count)?;
     let inventory = PalwTirInventoryIndexV1::new(&v.space.program).ok_or(PalwStepRefuteError::Unadjudicable)?;
-    let params = authenticate_params(binding, &v, &inventory, refutation.params.as_ref())?;
+    let params = authenticate_params(binding, &v, &inventory, &refutation.params)?;
     let (prompt, prompt_tiles) =
         authenticate_prompt(&binding.job_context, rules.prompt_form, &refutation.prompt_token_ids, &refutation.prompt_ids_openings)?;
     let generated = match &refutation.decode_tokens {
@@ -1120,7 +1225,7 @@ impl CheckedCarriage<'_> {
         if used.steps.len() != self.operands.len() || !self.operands.iter().all(|(i, _)| used.steps.contains(i)) {
             return Err(bad("the operand row is not the set the evaluation reads"));
         }
-        if used.params.len() != r.params.as_ref().map_or(0, |p| p.opened.len()) {
+        if used.params.len() != r.params.opened_count() {
             return Err(bad("the artifact multiproof is not the set the evaluation reads"));
         }
         match rules.prompt_form {
@@ -1168,7 +1273,7 @@ pub fn build_tir_cone_refutation_v1(
     let (v, leaf, inventory) = builder_prelude(binding, output_leaf)?;
     let mut source = store_source(&v, &binding.job_context, &inventory, store, output_leaf, rules);
     evaluate_leaf(&v.space, &leaf, &mut source, &rules.limits).map_err(|e| PalwTirEvidenceErrorV1::Evaluation(e.to_string()))?;
-    assemble_carriage(binding, output_leaf, &source.used, store, rules)
+    assemble_carriage(&v, binding, output_leaf, &source.used, store, rules)
 }
 
 /// A builder's verified binding, the leaf, and the class's inventory index.
@@ -1223,6 +1328,7 @@ fn store_source<'a, 's>(
 /// **The carriage of `used`**, in the canonical order: the step leaves as one range-proved row, the
 /// artifact openings, the prompt in the network's form, the decode pin.
 fn assemble_carriage(
+    v: &PalwTirVerifiedBindingV1,
     binding: &PalwTirStepBindingV1,
     output_leaf: u64,
     used: &Requests,
@@ -1252,20 +1358,20 @@ fn assemble_carriage(
         k += len;
     }
     let params = if used.params.is_empty() {
-        None
+        PalwTirParamOpeningV1::None
     } else {
         let leaves: Vec<u32> = used.params.iter().copied().collect();
-        let proof = store
-            .param_multiproof(&leaves)
+        let opening = store
+            .param_carriage(&leaves)
             .ok_or_else(|| missing(format!("the multiproof of inventory leaves {}..={}", leaves[0], leaves[leaves.len() - 1])))?;
         // A store whose paths disagree with the class's root would build a close the court refuses:
-        // say so here, where the store can be named.
-        if proof.opened.iter().map(|(i, _)| *i).ne(leaves.iter().copied())
-            || verify_artifact_multiproof_v1(&proof, binding.artifact_root).is_err()
-        {
-            return Err(missing("a multiproof of the read leaves that reaches the class's artifact root".into()));
+        // say so here, where the store can be named — by the court's own check.
+        let inventory = PalwTirInventoryIndexV1::new(&v.space.program)
+            .ok_or_else(|| PalwTirEvidenceErrorV1::Binding("the class has no inventory".into()))?;
+        match authenticate_params(binding, v, &inventory, &opening) {
+            Ok(opened) if opened.keys().copied().eq(leaves.iter().copied()) => opening,
+            _ => return Err(missing("a multiproof of the read leaves that reaches the class's artifact root".into())),
         }
-        Some(proof)
     };
     let (mut prompt_token_ids, mut prompt_ids_openings) = (Vec::new(), Vec::new());
     if !used.prompt.is_empty() {
@@ -1535,7 +1641,7 @@ pub fn build_tir_named_leaf_refutation_v1(
         output_opening: store.step_opening(leaf).ok_or_else(|| missing(format!("the opening of leaf {leaf}")))?,
         output_preimage: store.step_leaf(leaf).ok_or_else(|| missing(format!("step leaf {leaf}")))?,
         operands: PalwStepInputRowV1 { preimages: Vec::new(), run_siblings: Vec::new() },
-        params: None,
+        params: PalwTirParamOpeningV1::None,
         prompt_token_ids: Vec::new(),
         prompt_ids_openings: Vec::new(),
         decode_tokens: None,
@@ -1584,7 +1690,7 @@ pub fn build_tir_root_claim_v1(
         claim_elements[i].push(*e as u32);
         totals[i].push(source.supplied[&(*node, *e)]);
     }
-    let finalize = assemble_carriage(binding, narrowed, &source.used, store, rules)?;
+    let finalize = assemble_carriage(&v, binding, narrowed, &source.used, store, rules)?;
     Ok(PalwTirRootClaimV1 {
         version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
         elements: claim_elements,
@@ -1668,7 +1774,8 @@ pub fn build_tir_dissect_bottom_v1(
 ) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
     let range = phase.terminal_range().ok_or_else(|| PalwTirEvidenceErrorV1::Binding("the dissection has no bottom yet".into()))?;
     let (_, used) = builder_partials(binding, phase, range, store, rules)?;
-    assemble_carriage(binding, phase.leaf_index(), &used, store, rules)
+    let (v, _, _) = builder_prelude(binding, phase.leaf_index())?;
+    assemble_carriage(&v, binding, phase.leaf_index(), &used, store, rules)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2574,10 +2681,14 @@ pub(crate) mod test_support {
         for leaf in 0..x.preimages.len() as u64 {
             let r = build_tir_cone_refutation_v1(&x.binding, leaf, &x, &rules).expect("buildable");
             assert_eq!(check_tir_cone_refutation_v1(&r, &rules), Err(PalwStepRefuteError::NoFaultFound), "leaf {leaf}");
-            let leaves: Vec<u32> = r.params.iter().flat_map(|p| p.opened.iter().map(|(l, _)| *l)).collect();
+            let leaves: Vec<u32> = r.params.single().iter().flat_map(|p| p.opened.iter().map(|(l, _)| *l)).collect();
             if !leaves.is_empty() {
                 let opened: Vec<_> = leaves.iter().map(|l| (*l, x.ops[*l as usize].clone())).collect();
-                assert_eq!(r.params, crate::palw_artifact::palw_artifact_multiproof_v1(&hashes, &opened), "leaf {leaf}");
+                assert_eq!(
+                    r.params.single(),
+                    crate::palw_artifact::palw_artifact_multiproof_v1(&hashes, &opened).as_ref(),
+                    "leaf {leaf}"
+                );
             }
             let carried = borsh::to_vec(&r.params).unwrap().len() as u64;
             assert_eq!(palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::Multiproof, &leaves), Some(carried));

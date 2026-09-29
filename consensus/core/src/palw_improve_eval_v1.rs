@@ -30,11 +30,11 @@
 //! * **The job table** (`improvement_eval_jobs`, delta entries 100–103, [`PalwEvalJobStateV1`]): the
 //!   first valid claim per job in the accepting chain's order is the one ([`palw_improve_eval_take_v1`]);
 //!   none after `t_eval`; a job without a final claim is missing.
-//! * **Outcomes** ([`palw_improve_item_outcome_v1`], spec 17 §17.9): a missing evaluation always
+//! * **Outcomes** ([`palw_improve_item_outcome_v1`], the core's, spec 17 §17.9): a missing evaluation always
 //!   favours the incumbent — a missing candidate score is a loss, a missing parent score a parent win.
 //!   Missing data can block a promotion, never make one.
-//! * **Cost** ([`palw_improve_eval_reservation_v1`], [`palw_improve_eval_budget_positions_v1`],
-//!   [`palw_improve_candidate_eval_escrow_v1`]): a claim reserves capacity by ADR-0160's stage-1
+//! * **Cost** ([`palw_improve_eval_reservation_v1`]; the jobs and escrow per subject are the core's,
+//!   `palw_improvement_jobs_per_subject_v1`): a claim reserves capacity by ADR-0160's stage-1
 //!   rule; an epoch's positions are bounded; a candidate escrows its own jobs' fees.
 
 use crate::Hash64;
@@ -42,7 +42,7 @@ use crate::palw_decode_pipeline_v4::DecodeConfigV4;
 use crate::palw_decode_select_v2::PalwDecodeSamplingV2;
 use crate::palw_freeprompt_v3::{PalwFpCommitmentTxPayloadV3, PalwFpJobTailV1, PalwFreePromptCommitmentV3, PalwFreePromptJobV3};
 use crate::palw_gen_worker_v1::PalwGenDecodeV1;
-use crate::palw_improve_state_v1::{PalwEvalSpecV1, PalwEvalSubjectV1, PalwImprovementFeesV1, PalwItemOutcomeV1, PalwScoringKindV1};
+use crate::palw_improve_state_v1::{PalwEvalSpecV1, PalwEvalSubjectV1, PalwScoringKindV1};
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -628,6 +628,17 @@ pub fn palw_improve_eval_score_lanes_v1(kind: PalwScoringKindV1) -> usize {
     }
 }
 
+/// **Is a committed score in its kind's range?** (spec 17 §17.8.3, the record's own rule): Judge inside
+/// the stage's `[lo, hi]`, Pairwise −1, 0 or 1, RefLogLik any value; ExactMatch commits none.
+pub fn palw_improve_eval_score_in_range_v1(params: &PalwEvalStageParamsV1, value: i64) -> bool {
+    match params {
+        PalwEvalStageParamsV1::ExactMatch { .. } => false,
+        PalwEvalStageParamsV1::RefLogLik { .. } => true,
+        PalwEvalStageParamsV1::Judge { lo, hi } => (*lo as i64..=*hi as i64).contains(&value),
+        PalwEvalStageParamsV1::Pairwise { .. } => (-1..=1).contains(&value),
+    }
+}
+
 /// **A committed score as the fold records it**: RefLogLik's `(hi, lo)` joined, Judge's and
 /// Pairwise's one lane; refused for a lane count the kind does not commit, and for ExactMatch.
 pub fn palw_improve_eval_score_value_v1(kind: PalwScoringKindV1, score: &[i32]) -> Result<i64, PalwEvalErrorV1> {
@@ -965,29 +976,10 @@ pub fn palw_improve_exact_match_score_v1(row: &PalwEvalJobStateV1, key: &[u32]) 
 // Outcomes: a missing evaluation favours the incumbent
 // ---------------------------------------------------------------------------------------------
 
-/// **An item's outcome for a subject against the parent** (spec 17 §17.9; the coordinator's decision
-/// of 2026-09-29): a missing subject score is a loss, and so is a missing parent score (a parent
-/// win) — missing data blocks a promotion and never makes one. With both: ExactMatch pass against
-/// fail; RefLogLik and Judge the sign of the difference. Pairwise's score is already the subject's
-/// outcome (R's order and the margin applied in its stage), so its parent score is not read: +1 a
-/// win, −1 a loss, 0 a tie; a missing one a loss.
-pub fn palw_improve_item_outcome_v1(kind: PalwScoringKindV1, parent: Option<i64>, subject: Option<i64>) -> PalwItemOutcomeV1 {
-    use std::cmp::Ordering;
-    let Some(c) = subject else { return PalwItemOutcomeV1::Loss };
-    if kind == PalwScoringKindV1::Pairwise {
-        return match c.cmp(&0) {
-            Ordering::Greater => PalwItemOutcomeV1::Win,
-            Ordering::Less => PalwItemOutcomeV1::Loss,
-            Ordering::Equal => PalwItemOutcomeV1::Tie,
-        };
-    }
-    let Some(h) = parent else { return PalwItemOutcomeV1::Loss };
-    match c.cmp(&h) {
-        Ordering::Greater => PalwItemOutcomeV1::Win,
-        Ordering::Less => PalwItemOutcomeV1::Loss,
-        Ordering::Equal => PalwItemOutcomeV1::Tie,
-    }
-}
+/// **An item's outcome** is the core's one function (spec 17 §17.9.1: a missing evaluation counts for
+/// the incumbent; Pairwise's recorded value is already the outcome), re-exported here where the
+/// evaluation lane defined it first.
+pub use crate::palw_improve_promotion_v1::palw_improve_item_outcome_v1;
 
 // ---------------------------------------------------------------------------------------------
 // Cost: capacity, the epoch's budget, the fees a candidate escrows
@@ -1076,30 +1068,6 @@ pub fn palw_improve_eval_step_leaves_v1(
     .map_err(|e| PalwEvalErrorV1::Binding(e.to_string()))
 }
 
-/// **An epoch's evaluation positions** (RFC-0004 §13): `n` items for the parent and each of `k`
-/// candidates (and the head's predecessor when `previous`), at `positions_per_job`, plus the judged
-/// jobs at `judge_positions` — what the policy's cap and the network's ceiling bound.
-pub fn palw_improve_eval_budget_positions_v1(
-    n: u32,
-    k: u32,
-    previous: bool,
-    positions_per_job: u64,
-    judged_jobs: u64,
-    judge_positions: u64,
-) -> u128 {
-    let subjects = 1 + k as u128 + previous as u128;
-    (n as u128)
-        .saturating_mul(subjects)
-        .saturating_mul(positions_per_job as u128)
-        .saturating_add((judged_jobs as u128).saturating_mul(judge_positions as u128))
-}
-
-/// **The evaluation fees a candidate escrows at submission** (RFC-0004 §13): its own `n` subject
-/// jobs and its pairwise jobs, at the policy's fee per job. Unexecuted fees are refunded at `t_score`.
-pub fn palw_improve_candidate_eval_escrow_v1(spec: &PalwEvalSpecV1, fees: &PalwImprovementFeesV1, pairwise_jobs: u32) -> u128 {
-    (spec.n as u128 + pairwise_jobs as u128).saturating_mul(fees.eval_fee_per_job as u128)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1125,7 +1093,7 @@ mod tests {
 
     #[test]
     fn a_missing_evaluation_never_favours_the_challenger() {
-        use PalwItemOutcomeV1::*;
+        use crate::palw_improve_state_v1::PalwItemOutcomeV1::*;
         use PalwScoringKindV1::*;
         assert_eq!(palw_improve_item_outcome_v1(ExactMatch, Some(0), None), Loss, "a missing candidate");
         assert_eq!(palw_improve_item_outcome_v1(ExactMatch, None, Some(1)), Loss, "a missing parent: a parent win");
@@ -1176,9 +1144,6 @@ mod tests {
         assert_eq!(palw_improve_eval_reservation_v1(10, 1, 3), 4, "⌈10 / 3⌉");
         assert_eq!(palw_improve_eval_reservation_v1(10, 7, 3), 24, "⌈10 · 7 / 3⌉");
         assert_eq!(palw_improve_eval_reservation_v1(10, 1, 0), 10, "ρ = 0 reads as 1");
-        // RFC-0004 §13's worked size: n = 400, four candidates plus the parent, 512 positions.
-        assert_eq!(palw_improve_eval_budget_positions_v1(400, 4, false, 512, 0, 0), 1_024_000);
-        assert_eq!(palw_improve_eval_budget_positions_v1(400, 4, true, 512, 1_600, 100), 400 * 6 * 512 + 160_000);
     }
 
     #[test]

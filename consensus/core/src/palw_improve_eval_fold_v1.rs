@@ -41,27 +41,42 @@ fn refused(why: &'static str) -> PalwStateV2Error {
 
 // ---- the material lane's answers (A4) --------------------------------------------------------------
 
-/// **An item's disclosed prompt** — the material lane's (A4) to answer from its case rows (a hold-out
-/// case's prompt) and setter rows (`SetterSetRevealed`'s). Until it lands nothing is disclosed, so
-/// every evaluation claim is refused: fail-closed, and dormant anyway below `palw_improvement_v1`.
+/// **An item's disclosed prompt**, from the material lane's rows (A4): a hold-out case's prompt ids, or
+/// a setter item's once `SetterSetRevealed` opened them. A suite item's prompt is not on chain, so it
+/// is never disclosed here: its jobs take no claim, and the item counts for the incumbent.
 fn palw_improve_eval_item_prompt_hook_v1(state: &PalwChainStateV2, line_id: &Hash64, epoch: u64, item: u32) -> Option<Vec<u32>> {
-    let _ = (state, line_id, epoch, item);
     #[cfg(test)]
     if let Some((prompt, _)) = test_disclosure::get(line_id, epoch, item) {
         return Some(prompt);
     }
-    None
+    let row = state.improvement_item(line_id, epoch, item)?;
+    match row.source {
+        PalwItemSourceV1::HoldOut => state.improvement_case(line_id, &row.case_id).map(|case| case.case.prompt_ids.clone()),
+        PalwItemSourceV1::Setter { set_id, index } => state.improvement_setter_prompt(line_id, &set_id, index).map(<[u32]>::to_vec),
+        PalwItemSourceV1::Regression { .. } | PalwItemSourceV1::Safety { .. } => None,
+    }
 }
 
-/// **A teacher-forced item's disclosed reference** — the material lane's (A4) too: a hold-out case's
-/// `Continuation`, disclosed at the draw (RFC-0004 §7.1 as decided 2026-09-29). `None` until it lands.
+/// **A teacher-forced item's disclosed reference**, from the material lane's rows (A4): a hold-out
+/// case's `Continuation`, opened from the draw on (RFC-0004 §7.1 as decided 2026-09-29). A setter
+/// item's reference opens with its keys, in `Closing` — too late for a claim, so a setter set's
+/// likelihood items take none (the material lane's to move to the draw).
 fn palw_improve_eval_item_reference_hook_v1(state: &PalwChainStateV2, line_id: &Hash64, epoch: u64, item: u32) -> Option<Vec<u32>> {
-    let _ = (state, line_id, epoch, item);
     #[cfg(test)]
     if let Some((_, Some(reference))) = test_disclosure::get(line_id, epoch, item) {
         return Some(reference);
     }
-    None
+    let row = state.improvement_item(line_id, epoch, item)?;
+    match row.source {
+        PalwItemSourceV1::HoldOut => {
+            let case = state.improvement_case(line_id, &row.case_id)?;
+            match case.case.reference {
+                crate::palw_improve_material_v1::PalwCaseReferenceV1::Continuation { .. } => case.revealed.clone(),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -139,25 +154,19 @@ impl PalwChainStateV2 {
         })
     }
 
-    /// **May the keys of `items` be revealed?** (spec 17 §17.8.2's key disclosure) — while the epoch
-    /// evaluates, once every subject's generation (its ExactMatch job) on every one of them is final;
-    /// once it is closing, once none of them holds a live claim that is not yet final. `false` on an
-    /// epoch that is neither.
+    /// **Are the generations of `items` settled?** (spec 17 §17.8.2's key disclosure, E17: keys open
+    /// only in `Closing`, which the material lane's reveal arms check) — no subject's generation (its
+    /// ExactMatch job) on any of them holds a live claim that is not yet final.
     pub fn improvement_eval_generations_settled_v1(&self, line_id: &Hash64, epoch: u64, items: &[u32]) -> bool {
-        let Some(header) = self.improvement_epoch(line_id, epoch) else { return false };
-        let subjects = self.improvement_subjects(line_id, epoch);
-        let row = |item: u32, subject: &PalwEvalSubjectV1| {
-            self.improvement_eval_jobs.get(&(*line_id, epoch, item, *subject, PalwScoringKindV1::ExactMatch))
-        };
-        match header.state {
-            PalwEpochStateV1::Evaluating => items.iter().all(|item| {
-                subjects.iter().all(|subject| row(*item, subject).and_then(|r| r.claim).is_some_and(|c| c.final_daa.is_some()))
-            }),
-            PalwEpochStateV1::Closing => items.iter().all(|item| {
-                subjects.iter().all(|subject| row(*item, subject).is_none_or(|r| !self.improvement_eval_row_pending_v1(r)))
-            }),
-            _ => false,
-        }
+        items.iter().all(|item| {
+            let lo = (*line_id, epoch, *item, PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch);
+            let hi =
+                (*line_id, epoch, *item, PalwEvalSubjectV1::Previous(Hash64::from_bytes([0xFF; 64])), PalwScoringKindV1::Pairwise);
+            self.improvement_eval_jobs
+                .range(lo..=hi)
+                .filter(|((_, _, _, _, kind), _)| *kind == PalwScoringKindV1::ExactMatch)
+                .all(|(_, row)| !self.improvement_eval_row_pending_v1(row))
+        })
     }
 }
 
@@ -352,6 +361,9 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     })?;
     if kind != PalwScoringKindV1::ExactMatch {
         let value = palw_improve_eval_score_value_v1(kind, &tail.score).map_err(|_| refused("the committed score"))?;
+        if !palw_improve_eval_score_in_range_v1(&params, value) {
+            return Err(refused("a committed score outside its kind's range"));
+        }
         if let Some(claim) = row.claim.as_mut() {
             claim.score = Some(value);
         }
@@ -487,7 +499,6 @@ impl TransitionBuilder<'_> {
     /// ([`palw_improve_exact_match_score_v1`]) and recorded through `record_improvement_score_v1`; a
     /// subject without one records nothing, and is missing (it counts for the incumbent). Refused while
     /// the item's generations are not settled ([`PalwChainStateV2::improvement_eval_generations_settled_v1`]).
-    #[allow(dead_code)] // the material lane's reveal arms (A4) call it
     pub(crate) fn score_improvement_exact_match_v1(
         &mut self,
         line_id: &Hash64,
@@ -508,7 +519,7 @@ impl TransitionBuilder<'_> {
         for subject in self.state.improvement_subjects(line_id, epoch) {
             let kind = PalwScoringKindV1::ExactMatch;
             let Some(row) = self.state.improvement_eval_job(line_id, epoch, item, &subject, kind).cloned() else { continue };
-            let (Some(value), Some(claim)) = (palw_improve_exact_match_score_v1(&row, key), row.claim) else { continue };
+            let Some(value) = palw_improve_exact_match_score_v1(&row, key) else { continue };
             if !self.improvement_eval_takes_score_v1(line_id, epoch, item, &subject, kind) {
                 continue;
             }
@@ -998,8 +1009,8 @@ mod tests {
             1,
             "and records nothing twice"
         );
-        // Items no claim reached are not settled while the epoch evaluates.
-        assert!(!s.improvement_eval_generations_settled_v1(&h(LINE), 1, &[1]));
+        // An item no claim reached has nothing pending (E17: its key opens in Closing, the reveal arm's check).
+        assert!(s.improvement_eval_generations_settled_v1(&h(LINE), 1, &[1]));
         // At t_eval nothing is pending: the epoch closes and scores in the same block (spec 17
         // §17.5.3), the other seven items missing for every subject — so they count for the parent.
         let (done, _) = at(&s, &p, 1_800, |_| {});

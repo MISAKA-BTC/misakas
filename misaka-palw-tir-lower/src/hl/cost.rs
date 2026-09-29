@@ -50,12 +50,15 @@ pub fn estimate(p: &HlProgram) -> CostReport {
         for n in &b.nodes {
             let out: u64 = n.outs.first().map(|s| numel(s)).unwrap_or(0);
             match &n.op {
-                Op::Linear { .. } => {
+                Op::Linear { lora, .. } => {
                     let inp = match n.inputs[1] {
                         Ref::Param(pi) => p.params[pi as usize].shape.get(1).copied().unwrap_or(0) as u64,
                         _ => 0,
                     };
                     c.macs_fixed += out * inp;
+                    if let Some(l) = lora {
+                        c.macs_fixed += l.rank as u64 * (inp + out);
+                    }
                 }
                 Op::Attention { heads, head_dim, v_head_dim, window, .. } => {
                     let per = (*heads * (*head_dim + *v_head_dim)) as u64;

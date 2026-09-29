@@ -221,33 +221,26 @@ fn palw_improve_eval_pending_hook_v1(state: &PalwChainStateV2, line_id: &Hash64,
 }
 
 /// **The material lane's reveal hook** (spec 17 §17.5.3 step 7): does a drawn setter set or hold-out
-/// case still owe a reveal (prompts, a key or a reference)? The material lane (A4) replaces this body;
-/// until then nothing is owed.
-fn palw_improve_material_pending_hook_v1(_state: &PalwChainStateV2, _line_id: &Hash64, _epoch: u64) -> bool {
-    false
+/// case still owe a reveal (prompts, a key or a reference)? The material lane's (A4) answer.
+fn palw_improve_material_pending_hook_v1(state: &PalwChainStateV2, line_id: &Hash64, epoch: u64) -> bool {
+    super::palw_improve_material_fold_v1::palw_improve_material_pending_v1(state, line_id, epoch)
 }
 
 /// **The material lane's settlement before scoring** (spec 17 §17.9.1): drop every drawn item whose
 /// prompts, key or reference was never revealed (`drop_improvement_item_v1`) and forfeit the
-/// non-revealing setters' holds. The material lane (A4) replaces this body; until then nothing is
-/// dropped.
+/// non-revealing setters' holds — the material lane's (A4).
 fn palw_improve_material_before_scoring_hook_v1(
-    _builder: &mut TransitionBuilder<'_>,
-    _line_id: &Hash64,
-    _epoch: u64,
+    builder: &mut TransitionBuilder<'_>,
+    line_id: &Hash64,
+    epoch: u64,
 ) -> Result<(), PalwStateV2Error> {
-    Ok(())
+    super::palw_improve_material_fold_v1::palw_improve_material_before_scoring_v1(builder, line_id, epoch)
 }
 
-/// **The material lane's dataset reader** (spec 17 §17.11.3): a registered dataset's registrant. The
-/// material lane (A4) replaces this body with its dataset table's answer; until then S2's data share
-/// finds no contributor and returns to the balance.
-fn palw_improve_dataset_registrant_hook_v1(
-    _state: &PalwChainStateV2,
-    _line_id: &Hash64,
-    _dataset_id: &Hash64,
-) -> Option<PalwBondKeyV2> {
-    None
+/// **The material lane's dataset reader** (spec 17 §17.11.3): a registered dataset's registrant — the
+/// material lane's (A4) dataset table.
+fn palw_improve_dataset_registrant_hook_v1(state: &PalwChainStateV2, line_id: &Hash64, dataset_id: &Hash64) -> Option<PalwBondKeyV2> {
+    state.improvement_dataset(line_id, dataset_id).map(|record| record.registrant)
 }
 
 /// **The evaluation lane's claim predicate** (spec 17 §17.4.5): is the claim an evaluation claim (which
