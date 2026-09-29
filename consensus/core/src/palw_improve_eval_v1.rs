@@ -632,7 +632,7 @@ pub fn palw_fp_claim_is_evaluation_v1(job: &PalwFreePromptJobV3) -> bool {
 fn subject_class_v1(subject: &PalwEvalSubjectV1) -> Option<Hash64> {
     match subject {
         PalwEvalSubjectV1::Parent => None,
-        PalwEvalSubjectV1::Candidate(class) => Some(*class),
+        PalwEvalSubjectV1::Candidate(class) | PalwEvalSubjectV1::Previous(class) => Some(*class),
     }
 }
 
@@ -1068,7 +1068,7 @@ mod tests {
             _ => (3, DecodeConfigV4::NOOP),
         };
         let class = match eval.subject {
-            PalwEvalSubjectV1::Candidate(c) => c,
+            PalwEvalSubjectV1::Candidate(c) | PalwEvalSubjectV1::Previous(c) => c,
             PalwEvalSubjectV1::Parent => Hash64::from_bytes([0x44; 64]),
         };
         PalwFreePromptJobV3 {
