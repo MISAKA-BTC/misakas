@@ -141,7 +141,16 @@ fn top_k_breaks_ties_to_the_lowest_index_and_returns_index_order() {
 }
 
 fn router(scoring: Scoring, normalize: bool) -> RouterSpec {
-    RouterSpec { scoring, linear_bias: false, selection_bias: false, groups: None, normalize, norm_eps: 0.0, scale: 1.0 }
+    RouterSpec {
+        scoring,
+        linear_bias: false,
+        selection_bias: false,
+        groups: None,
+        normalize,
+        norm_eps: 0.0,
+        scale: 1.0,
+        jitter_eps: 0.0,
+    }
 }
 
 #[test]
@@ -176,6 +185,23 @@ fn deepseek_v3_group_limited_routing_masks_whole_groups() {
     let (idx, w) = route(&logits, Some(&[0.0, 0.0, 5.0, -5.0]), &r, 4, 2);
     assert_eq!(idx, vec![2, 3]);
     assert!(close(w[0] as f64, 2.5 * 0.5, 1e-6), "weights are the unbiased sigmoids, equal here");
+}
+
+#[test]
+fn sparsemixer_weights_each_pick_by_the_logits_within_its_threshold() {
+    // 2ε = 0.1. The max 2.0 keeps 1.9 ((2 − 1.9)/2 = 0.05) and masks 0.5 and −1: w1 = σ(0.1).
+    // With expert 0 out, the max 1.9 keeps only itself (0.5: 1.4/1.9 > 0.1): w2 = 1.
+    let mut r = router(Scoring::SparseMixer, false);
+    r.jitter_eps = 0.05;
+    let (idx, w) = route(&[2.0, 1.9, 0.5, -1.0], None, &r, 4, 2);
+    assert_eq!(idx, vec![0, 1]);
+    assert!(close(w[0] as f64, 1.0 / (1.0 + (-0.1f64).exp()), 1e-6), "{w:?}");
+    assert!(close(w[1] as f64, 1.0, 1e-6), "{w:?}");
+    // A wider threshold keeps 0.5 for the second pick too: its weight is a real softmax.
+    r.jitter_eps = 0.4;
+    let (_, w) = route(&[2.0, 1.9, 0.5, -1.0], None, &r, 4, 2);
+    let z = 1.0 + (0.5f64 - 1.9).exp();
+    assert!(close(w[1] as f64, 1.0 / z, 1e-6), "{w:?}");
 }
 
 #[test]

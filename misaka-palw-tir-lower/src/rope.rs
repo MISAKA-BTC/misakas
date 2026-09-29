@@ -227,6 +227,18 @@ fn take_f64_list(m: &mut Map<String, Value>, k: &str) -> Result<Option<Vec<f64>>
     }
 }
 
+/// LongRoPE's inverse frequencies for extension factors `ext` (`dim / 2` of them), in float32 as HF
+/// computes them: `1 / (ext_i · base^(2i/dim))`.
+pub fn longrope_inv_freq(base: f64, dim: usize, ext: &[f64]) -> Vec<f32> {
+    (0..dim / 2)
+        .map(|i| {
+            let e = (2 * i) as f32 / dim as f32;
+            let p = base.powf(e as f64) as f32;
+            1.0f32 / (ext[i] as f32 * p)
+        })
+        .collect()
+}
+
 fn get_mscale(scale: f64, mscale: f64) -> f64 {
     if scale <= 1.0 { 1.0 } else { 0.1 * mscale * scale.ln() + 1.0 }
 }
@@ -381,17 +393,8 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
                 None if factor <= 1.0 => 1.0,
                 None => (1.0 + factor.ln() / (original_max as f64).ln()).sqrt(),
             };
-            let with = |ext: &[f64]| -> Vec<f32> {
-                (0..dim / 2)
-                    .map(|i| {
-                        let e = (2 * i) as f32 / dim as f32;
-                        let p = base.powf(e as f64) as f32;
-                        1.0f32 / (ext[i] as f32 * p)
-                    })
-                    .collect()
-            };
-            out.inv_freq = with(&short);
-            out.longrope = Some(LongRopeSwitch { inv_freq_long: with(&long), original_max });
+            out.inv_freq = longrope_inv_freq(base, dim, &short);
+            out.longrope = Some(LongRopeSwitch { inv_freq_long: longrope_inv_freq(base, dim, &long), original_max });
         }
         other => return Err(LowerError::not_lowerable(format!("{arch}: rope type `{other}` is not modelled"))),
     }

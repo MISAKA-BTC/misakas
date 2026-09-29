@@ -2703,6 +2703,9 @@ fn lower_route(
         return Err(LowerError::not_lowerable(format!("router renormalisation epsilon {} is not in Gate 2a", r.norm_eps)));
     }
     let up = 24 - LOGIT_Q;
+    if r.scoring == Scoring::SparseMixer {
+        return Ok(lower_sparsemixer(b, l.r, experts, r.jitter_eps, up));
+    }
     // (scores the weights are read from, choice scores the selection ranks, the value a masked
     // expert takes)
     let (scores, choice, fill): (tir::Ref, tir::Ref, i64) = match r.scoring {
@@ -2710,7 +2713,7 @@ fn lower_route(
             let probs = b.softmax_shifted(l.r, up);
             (probs, probs, 0)
         }
-        Scoring::TopKThenSoftmax => (l.r, l.r, i32::MIN as i64),
+        Scoring::TopKThenSoftmax | Scoring::SparseMixer => (l.r, l.r, i32::MIN as i64),
         Scoring::Sigmoid => {
             let c = b.c(DType::I64, 1i128 << up);
             let y = b.mul(l.r, c, DType::I64);
@@ -2754,6 +2757,42 @@ fn lower_route(
     let kept = if r.scoring == Scoring::TopKThenSoftmax { b.softmax_shifted(kept, up) } else { kept };
     let w = if r.normalize { b.renormalize_recip(kept) } else { kept };
     Ok((idx, w))
+}
+
+/// **Phi-3.5-MoE's `sparsemixer`** (`Scoring::SparseMixer`, top-2) over the router logits `x:[E]`:
+/// the argmax `i1` (a committed `TopK`, lowest index on ties, as `torch.max`), weighted by the
+/// softmax at `i1` of the logits under the threshold, `(m − x_j)·2^24 ≤ ⌊2ε·2^24⌉·max(|x_j|, m)` —
+/// the rest set far below every kept logit, so the library's `softmax_shifted` gives them zero —
+/// then the argmax `i2` of the logits with `i1` masked, weighted the same way, its threshold still
+/// on the ORIGINAL logits. Returns `([i1, i2], [w1, w2])`, the weights Q24 like the other routers'.
+fn lower_sparsemixer(b: &mut BlockBuilder<'_>, x: tir::Ref, experts: usize, eps: f64, up: u32) -> (tir::Ref, tir::Ref) {
+    let t = (2.0 * eps * (1u64 << 24) as f64).round().clamp(0.0, (1u64 << 40) as f64) as i128;
+    let far = b.c(DType::I32, (i32::MIN / 2) as i128);
+    let zero = b.c(DType::I32, 0);
+    let neg = b.sub(zero, x, DType::I64);
+    let is_neg = b.compare(x, zero, tir::Cmp::Lt);
+    let absx = b.select(is_neg, neg, x, DType::I64);
+    let one24 = b.c(DType::I64, 1i128 << 24);
+    let tq = b.c(DType::I64, t);
+    let pick = |b: &mut BlockBuilder<'_>, row: tir::Ref| -> (tir::Ref, tir::Ref) {
+        let i = b.topk(row, 0, 1);
+        let m = b.reduce_max(row, 0);
+        let small = b.compare(absx, m, tir::Cmp::Lt);
+        let factor = b.select(small, m, absx, DType::I64);
+        let d = b.sub(m, x, DType::I64);
+        let lhs = b.mul(d, one24, DType::I64);
+        let rhs = b.mul(factor, tq, DType::I64);
+        let past = b.compare(lhs, rhs, tir::Cmp::Gt);
+        let gated = b.select(past, far, row, DType::I32);
+        let p = b.softmax_shifted(gated, up);
+        (i, b.gather(p, i, 0, 0))
+    };
+    let (i1, w1) = pick(b, x);
+    let iota = b.iota(DType::Idx, &[Dim::Fixed(experts as u32)], 0, 0, 1);
+    let first = b.compare(iota, i1, tir::Cmp::Eq);
+    let rest = b.select(first, far, x, DType::I32);
+    let (i2, w2) = pick(b, rest);
+    (b.concat(&[i1, i2], 0), b.concat(&[w1, w2], 0))
 }
 
 /// The routed experts, batched over the `k` selected: every expert tensor is a param `[E, …]`

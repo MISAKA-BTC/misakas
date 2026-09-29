@@ -325,6 +325,11 @@ pub enum Scoring {
     Sigmoid,
     /// top-k of the raw logits, then `softmax` over the k (gpt-oss, GraniteMoE).
     TopKThenSoftmax,
+    /// Phi-3.5-MoE's `sparsemixer` at inference (top-2 only): the argmax `i1`, weighted by the
+    /// softmax at `i1` of the logits within `jitter_eps` of the max — `(m − s_j) / max(|s_j|, m) ≤
+    /// 2·jitter_eps`, the rest masked — then the argmax `i2` of the others, weighted the same way
+    /// (the threshold on the original logits, `i1` masked).
+    SparseMixer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -355,6 +360,8 @@ pub struct RouterSpec {
     pub norm_eps: f64,
     /// Multiplier on the final weights (`routed_scaling_factor`).
     pub scale: f64,
+    /// `sparsemixer`'s `router_jitter_noise` (0 for every other scoring).
+    pub jitter_eps: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

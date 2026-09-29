@@ -158,6 +158,8 @@ fixtures!(
     qwen3_moe,
     olmoe,
     granitemoe,
+    glm4_moe,
+    phimoe,
     deepseek_v2,
     deepseek_v2_lite,
     deepseek_v3,

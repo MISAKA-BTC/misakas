@@ -166,6 +166,20 @@ CONFIGS = {
                       n_group=4, topk_group=2, routed_scaling_factor=2.5,
                       rope_scaling={"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 32,
                                     "mscale": 1.0, "mscale_all_dim": 1.0}, max_position_embeddings=128), {}),
+    # GLM-4.5 (Glm4Moe): DeepSeek-V3 routing over GQA with q/k/v biases, per-head QK norm, partial
+    # rotary on NeoX halves; one dense layer first.
+    "glm4_moe": (c("glm4_moe", "Glm4MoeForCausalLM", L, num_hidden_layers=2, head_dim=16, first_k_dense_replace=1,
+                   n_routed_experts=8, n_shared_experts=1, num_experts_per_tok=2, moe_intermediate_size=16,
+                   n_group=4, topk_group=2, routed_scaling_factor=2.5, attention_bias=True, use_qk_norm=True,
+                   partial_rotary_factor=0.5, pad_token_id=0), {}),
+    # Phi-3.5-MoE (Phimoe): sparsemixer top-2 (a jitter of 0.3 keeps several experts under each
+    # threshold, so the weights are real softmaxes), LayerNorms, biases everywhere incl. the head,
+    # LongRoPE with its short factors and an mscale (HF 5.17 never switches to the long factors).
+    "phimoe": (c("phimoe", "PhimoeForCausalLM", L, num_hidden_layers=2, num_local_experts=4, num_experts_per_tok=2,
+                 attention_bias=True, lm_head_bias=True, router_jitter_noise=0.3, max_position_embeddings=32,
+                 rope_parameters={"rope_type": "longrope", "rope_theta": 10000.0, "short_factor": [1.0, 1.25, 1.5, 2.0],
+                                  "long_factor": [2.0, 4.0, 6.0, 8.0], "short_mscale": 1.2, "long_mscale": 1.2,
+                                  "original_max_position_embeddings": 8}, sliding_window=None), {"decode": True}),
     "gpt_oss": (c("gpt_oss", "GptOssForCausalLM", L, num_hidden_layers=2, head_dim=8, num_local_experts=4,
                   num_experts_per_tok=2, intermediate_size=16, sliding_window=4,
                   rope_scaling={"rope_type": "yarn", "factor": 4.0, "beta_fast": 32.0, "beta_slow": 1.0,

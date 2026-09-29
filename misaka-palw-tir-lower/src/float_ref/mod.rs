@@ -14,9 +14,9 @@
 
 use crate::error::{LowerError, Result};
 use crate::hl::*;
+use crate::prequant::QWeight;
 use crate::rope::{RopeStyle, bf16_round};
 use crate::spec::{Act, Glu, GroupScore, HeadMap, NormKind, RouterSpec, Scoring};
-use crate::prequant::QWeight;
 use crate::weights::{Binding, Resolver, Src, Tensor, TensorSource, eval_qsrc, eval_src, layers_of_param};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -1234,6 +1234,9 @@ pub fn top_k_indices(v: &[f64], k: usize) -> Vec<usize> {
 /// bias-corrected choice scores and weight by the raw scores (DeepSeek-V3).
 pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize, k: usize) -> (Vec<usize>, Vec<f32>) {
     let l: Vec<f64> = logits.iter().map(|x| *x as f64).collect();
+    if r.scoring == Scoring::SparseMixer {
+        return sparsemixer(&l, r.jitter_eps, r.scale);
+    }
     let (scores, mut choice): (Vec<f64>, Vec<f64>) = match r.scoring {
         Scoring::Softmax => {
             let p = softmax_with_sink(&l, None);
@@ -1244,7 +1247,7 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
             let c = s.iter().enumerate().map(|(i, v)| v + sel_bias.map(|b| b[i] as f64).unwrap_or(0.0)).collect();
             (s, c)
         }
-        Scoring::TopKThenSoftmax => (l.clone(), l.clone()),
+        Scoring::TopKThenSoftmax | Scoring::SparseMixer => (l.clone(), l.clone()),
     };
     if let Some(g) = &r.groups {
         let per = e / g.n_group;
@@ -1270,7 +1273,7 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
     }
     let idx = top_k_indices(&choice, k);
     let mut w: Vec<f64> = match r.scoring {
-        Scoring::TopKThenSoftmax => softmax_with_sink(&idx.iter().map(|i| l[*i]).collect::<Vec<_>>(), None),
+        Scoring::TopKThenSoftmax | Scoring::SparseMixer => softmax_with_sink(&idx.iter().map(|i| l[*i]).collect::<Vec<_>>(), None),
         Scoring::Softmax => idx.iter().map(|i| choice[*i]).collect(),
         Scoring::Sigmoid => idx.iter().map(|i| scores[*i]).collect(),
     };
@@ -1280,6 +1283,25 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
     }
     w.iter_mut().for_each(|x| *x *= r.scale);
     (idx, w.into_iter().map(|x| x as f32).collect())
+}
+
+/// Phi-3.5-MoE's `sparsemixer` at inference, as transformers computes it: the argmax `i1` (the
+/// first on ties), weighted by the softmax at `i1` of the scores not past the threshold
+/// `(m − s_j) / max(|s_j|, m) > 2ε`; then the same over the scores with `i1` masked, the threshold
+/// still read from the ORIGINAL scores.
+fn sparsemixer(s: &[f64], eps: f64, scale: f64) -> (Vec<usize>, Vec<f32>) {
+    let pick = |row: &[f64]| -> (usize, f64) {
+        let i = row.iter().enumerate().fold(0, |b, (j, v)| if *v > row[b] { j } else { b });
+        let m = row[i];
+        let gated: Vec<f64> =
+            row.iter().zip(s).map(|(r, x)| if (m - x) / x.abs().max(m) > 2.0 * eps { f64::NEG_INFINITY } else { *r }).collect();
+        (i, softmax_with_sink(&gated, None)[i])
+    };
+    let (i1, w1) = pick(s);
+    let mut rest = s.to_vec();
+    rest[i1] = f64::NEG_INFINITY;
+    let (i2, w2) = pick(&rest);
+    (vec![i1, i2], vec![(w1 * scale) as f32, (w2 * scale) as f32])
 }
 
 #[cfg(test)]

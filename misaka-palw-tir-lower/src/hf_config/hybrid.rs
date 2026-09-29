@@ -149,6 +149,7 @@ pub(crate) fn qwen3_next(p: &mut P) -> Result<ArchSpec> {
             normalize: norm_topk,
             norm_eps: 0.0,
             scale: 1.0,
+            jitter_eps: 0.0,
         },
         shared: (shared > 0).then_some(SharedExpertSpec { intermediate: shared, sigmoid_gate: true }),
     };
@@ -225,6 +226,7 @@ pub(crate) fn qwen3_5_text(
                 normalize: true,
                 norm_eps: 0.0,
                 scale: 1.0,
+                jitter_eps: 0.0,
             },
             shared: (shared > 0).then_some(SharedExpertSpec { intermediate: shared, sigmoid_gate: true }),
         })
@@ -317,6 +319,7 @@ pub(crate) fn jamba(p: &mut P) -> Result<ArchSpec> {
             normalize: false,
             norm_eps: 0.0,
             scale: 1.0,
+            jitter_eps: 0.0,
         },
         shared: None,
     };

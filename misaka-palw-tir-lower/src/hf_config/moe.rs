@@ -2,10 +2,19 @@
 //! (with MLA), gpt-oss.
 
 use super::*;
-use crate::rope::RopeStyle;
+use crate::rope::{RopeSpec, RopeStyle};
 
 fn router(scoring: Scoring, normalize: bool) -> RouterSpec {
-    RouterSpec { scoring, linear_bias: false, selection_bias: false, groups: None, normalize, norm_eps: 0.0, scale: 1.0 }
+    RouterSpec {
+        scoring,
+        linear_bias: false,
+        selection_bias: false,
+        groups: None,
+        normalize,
+        norm_eps: 0.0,
+        scale: 1.0,
+        jitter_eps: 0.0,
+    }
 }
 
 fn moe(experts: usize, top_k: usize, inter: usize, act: Act, r: RouterSpec) -> MoeSpec {
@@ -410,6 +419,7 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
         normalize,
         norm_eps: if normalize { 1e-20 } else { 0.0 },
         scale: rsf,
+        jitter_eps: 0.0,
     };
     let mut m = moe(n_routed, k, moe_inter, act, r);
     m.shared = (n_shared > 0).then_some(SharedExpertSpec { intermediate: moe_inter * n_shared, sigmoid_gate: false });
@@ -463,6 +473,227 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
     }))
 }
 
+/// GLM-4.5 / 4.6 (`Glm4MoeForCausalLM`): GQA with q/k/v biases (`attention_bias`; `o_proj` has
+/// none), an optional per-head QK RMSNorm (`use_qk_norm`), rotary on the first
+/// `partial_rotary_factor` of each head in NeoX halves (the rest passes through), and DeepSeek-V3's
+/// routing — sigmoid scores, a selection-only bias, groups ranked by their top-2 sum, renormalised
+/// (`norm_topk_prob`), times `routed_scaling_factor` — with `n_shared_experts` fused into one shared
+/// MLP. The first `first_k_dense_replace` layers are dense; the multi-token-prediction layers after
+/// the last one are not read.
+pub(crate) fn glm4_moe(p: &mut P) -> Result<ArchSpec> {
+    let vocab = p.cfg.usize_or("vocab_size", 151552)?;
+    let hidden = p.cfg.usize_or("hidden_size", 4096)?;
+    let inter = p.cfg.usize_or("intermediate_size", 10944)?;
+    let n = p.cfg.usize_or("num_hidden_layers", 46)?;
+    let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 96, Some(8), None)?;
+    let act = p.act("hidden_act", "silu")?;
+    let max_pos = p.cfg.usize_or("max_position_embeddings", 131072)?;
+    let eps = p.cfg.f64_or("rms_norm_eps", 1e-5)?;
+    let tied = p.cfg.bool_or("tie_word_embeddings", false)?;
+    let bias = p.cfg.bool_or("attention_bias", false)?;
+    let qk_norm = p.cfg.bool_or("use_qk_norm", false)?;
+    let mtp = p.cfg.alias_usize(&["num_nextn_predict_layers", "num_mtp_layers"])?.unwrap_or(1);
+    for i in 0..mtp {
+        p.ignored_prefixes.push(format!("model.layers.{}.", n + i));
+    }
+    let n_shared = p.cfg.usize_or("n_shared_experts", 1)?;
+    let e = p.cfg.alias_usize(&["n_routed_experts", "num_local_experts"])?.unwrap_or(128);
+    let k = p.cfg.usize_or("num_experts_per_tok", 8)?;
+    check_topk(&p.arch(), e, k)?;
+    let moe_inter = p.cfg.usize_or("moe_intermediate_size", 1408)?;
+    let rsf = p.cfg.f64_or("routed_scaling_factor", 1.0)?;
+    let ng = p.cfg.usize_or("n_group", 1)?;
+    let tg = p.cfg.usize_or("topk_group", 1)?;
+    if ng == 0 || e % ng != 0 || tg == 0 || tg > ng {
+        return Err(LowerError::bad(format!("glm4_moe: {e} experts in {ng} groups, top {tg}")));
+    }
+    let normalize = p.cfg.bool_or("norm_topk_prob", true)?;
+    let first_dense = p.cfg.usize_or("first_k_dense_replace", 1)?;
+    let partial = super::legacy::partial_factor(p, &["partial_rotary_factor"], 0.5)?;
+    let rd = (hd as f64 * partial) as usize;
+    let rope = p.rope(rd, RopeStyle::Half, Some(10000.0), None, partial, Some(max_pos), None)?;
+    let norm = NormSpec::rms(eps);
+    let mut at = attn(h, kv, hd, Position::Rope(rope), (bias, false));
+    if qk_norm {
+        at.qk_norm = Some(QkNorm { norm, scope: QkNormScope::PerHeadShared });
+    }
+    let r = RouterSpec {
+        scoring: Scoring::Sigmoid,
+        linear_bias: false,
+        selection_bias: true,
+        groups: Some(GroupRouting { n_group: ng, topk_group: tg, score: GroupScore::Top2Sum }),
+        normalize,
+        norm_eps: if normalize { 1e-20 } else { 0.0 },
+        scale: rsf,
+        jitter_eps: 0.0,
+    };
+    let mut m = moe(e, k, moe_inter, act, r);
+    m.shared = (n_shared > 0).then_some(SharedExpertSpec { intermediate: moe_inter * n_shared, sigmoid_gate: false });
+    let layers = (0..n)
+        .map(|i| {
+            let ffn = if i >= first_dense { Ffn::Moe(m.clone()) } else { Ffn::Mlp(gated_mlp(inter, act, false)) };
+            LayerSpec { mixer: Mixer::Attention(at.clone()), ffn, residual: pre_norm(norm), post_scale: 1.0 }
+        })
+        .collect();
+    let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
+    let l = "model.layers.{L}.";
+    for (k2, v2) in [
+        ("moe.router", "mlp.gate"),
+        ("moe.sel_bias", "mlp.gate.e_score_correction_bias"),
+        ("moe.gate", "mlp.experts.{E}.gate_proj"),
+        ("moe.up", "mlp.experts.{E}.up_proj"),
+        ("moe.down", "mlp.experts.{E}.down_proj"),
+        ("moe.shared.gate", "mlp.shared_experts.gate_proj"),
+        ("moe.shared.up", "mlp.shared_experts.up_proj"),
+        ("moe.shared.down", "mlp.shared_experts.down_proj"),
+    ] {
+        nm.insert(k2.into(), format!("{l}{v2}"));
+    }
+    Ok(p.finish_spec(SpecParts {
+        model_type: "glm4_moe",
+        families: vec!["C3", "C8"],
+        vocab,
+        hidden,
+        max_pos: Some(max_pos),
+        embedding: plain_embedding(hidden),
+        layers,
+        final_norm: Some(norm),
+        head: plain_head(tied),
+        names: nm,
+        prefix_aliases: vec![],
+        conv1d: false,
+    }))
+}
+
+/// Phi-3.5-MoE (`PhimoeForCausalLM`): Mixtral's layout (`block_sparse_moe`, experts `w1`/`w3`/`w2`)
+/// with LayerNorms (weight and bias, eps = `rms_norm_eps`), biases on q/k/v/o (`attention_bias`) and
+/// on the head (`lm_head_bias`), `sparsemixer` top-2 routing (`Scoring::SparseMixer`, threshold
+/// `router_jitter_noise`), and LongRoPE as transformers 5.17 computes it: the SHORT factors at
+/// every length (its forward rebuilds the frequencies without the sequence length) and cos/sin
+/// times `short_mscale` up to `original_max_position_embeddings`, `long_mscale` past it — equal in
+/// the published checkpoint, and required equal here.
+pub(crate) fn phimoe(p: &mut P) -> Result<ArchSpec> {
+    let vocab = p.cfg.usize_or("vocab_size", 32064)?;
+    let hidden = p.cfg.usize_or("hidden_size", 4096)?;
+    let inter = p.cfg.usize_or("intermediate_size", 6400)?;
+    let n = p.cfg.usize_or("num_hidden_layers", 32)?;
+    let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 32, Some(8), None)?;
+    let act = p.act("hidden_act", "silu")?;
+    let max_pos = p.cfg.usize_or("max_position_embeddings", 4096 * 32)?;
+    let eps = p.cfg.f64_or("rms_norm_eps", 1e-5)?;
+    let tied = p.cfg.bool_or("tie_word_embeddings", false)?;
+    let bias = p.cfg.bool_or("attention_bias", false)?;
+    let head_bias = p.cfg.bool_or("lm_head_bias", false)?;
+    let e = p.cfg.alias_usize(&["num_local_experts", "num_experts"])?.unwrap_or(16);
+    let k = p.cfg.usize_or("num_experts_per_tok", 2)?;
+    check_topk(&p.arch(), e, k)?;
+    if k != 2 {
+        return Err(LowerError::not_lowerable(format!("phimoe: sparsemixer is top-2 only, not top-{k}")));
+    }
+    let jitter = p.cfg.f64_or("router_jitter_noise", 0.01)?;
+    if !(jitter.is_finite() && jitter >= 0.0) {
+        return Err(LowerError::bad(format!("phimoe: router_jitter_noise {jitter}")));
+    }
+    // Training-time input noise.
+    p.cfg.inert(&["input_jitter_noise", "original_max_position_embeddings"]);
+    let sw = p.cfg.opt_usize("sliding_window")?.filter(|w| *w < max_pos);
+    let rc = crate::rope::read_rope_config(&p.cfg, Some(10000.0), None)?;
+    let rope = match rc.rope_type.as_str() {
+        "default" => p.rope(hd, RopeStyle::Half, Some(10000.0), None, 1.0, Some(max_pos), None)?,
+        "longrope" | "su" => {
+            let list = |k: &str| -> Result<Vec<f64>> {
+                rc.params
+                    .get(k)
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<f64>>())
+                    .ok_or_else(|| LowerError::bad(format!("phimoe: longrope without `{k}`")))
+            };
+            let num = |k: &str| rc.params.get(k).and_then(Value::as_f64);
+            let short = list("short_factor")?;
+            list("long_factor")?;
+            if short.len() != hd / 2 {
+                return Err(LowerError::bad(format!("phimoe: short_factor has {} entries for head dim {hd}", short.len())));
+            }
+            let (sm, lm) = match (num("short_mscale"), num("long_mscale")) {
+                (Some(a), Some(b)) => (a, b),
+                _ => return Err(LowerError::not_lowerable("phimoe: longrope without short_mscale and long_mscale")),
+            };
+            if sm != lm {
+                return Err(LowerError::not_lowerable(format!(
+                    "phimoe: short_mscale {sm} ≠ long_mscale {lm} (a cos/sin factor that changes at the original length)"
+                )));
+            }
+            if let Some(k) = rc.params.keys().find(|k| {
+                ![
+                    "short_factor",
+                    "long_factor",
+                    "short_mscale",
+                    "long_mscale",
+                    "original_max_position_embeddings",
+                    "factor",
+                    "attention_factor",
+                ]
+                .contains(&k.as_str())
+            }) {
+                return Err(LowerError::not_lowerable(format!("phimoe: rope parameter `{k}` is not modelled")));
+            }
+            p.notes.push("LongRoPE as transformers 5.17 runs Phi-3.5-MoE: the short factors at every length, cos/sin × mscale".into());
+            RopeSpec {
+                rotary_dim: hd,
+                offset: 0,
+                style: RopeStyle::Half,
+                freqs: crate::rope::RopeFreqs {
+                    rope_type: rc.rope_type.clone(),
+                    theta: rc.theta,
+                    dim: hd,
+                    inv_freq: crate::rope::longrope_inv_freq(rc.theta, hd, &short),
+                    attention_factor: sm,
+                    dynamic: None,
+                    longrope: None,
+                    mrope: None,
+                },
+            }
+        }
+        other => return Err(LowerError::not_lowerable(format!("phimoe: rope type `{other}` is not modelled"))),
+    };
+    let norm = NormSpec::layer(eps);
+    let mut at = attn(h, kv, hd, Position::Rope(rope), (bias, bias));
+    at.window = sw;
+    let mut r = router(Scoring::SparseMixer, false);
+    r.jitter_eps = jitter;
+    let m = moe(e, k, inter, act, r);
+    let layers = (0..n)
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Moe(m.clone()),
+            residual: pre_norm(norm),
+            post_scale: 1.0,
+        })
+        .collect();
+    let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
+    let l = "model.layers.{L}.block_sparse_moe.";
+    nm.insert("moe.router".into(), format!("{l}gate"));
+    nm.insert("moe.gate".into(), format!("{l}experts.{{E}}.w1"));
+    nm.insert("moe.up".into(), format!("{l}experts.{{E}}.w3"));
+    nm.insert("moe.down".into(), format!("{l}experts.{{E}}.w2"));
+    let mut head = plain_head(tied);
+    head.bias = head_bias;
+    Ok(p.finish_spec(SpecParts {
+        model_type: "phimoe",
+        families: vec!["C3", "C8"],
+        vocab,
+        hidden,
+        max_pos: Some(max_pos),
+        embedding: plain_embedding(hidden),
+        layers,
+        final_norm: Some(norm),
+        head,
+        names: nm,
+        prefix_aliases: vec![],
+        conv1d: false,
+    }))
+}
+
 /// gpt-oss: attention sinks, alternating 128-token sliding / full attention, YaRN (truncate =
 /// false), biased router with softmax over the top-k logits, clamped SwiGLU experts with
 /// interleaved gate/up columns stored `[E, in, out]`.
@@ -500,6 +731,7 @@ pub(crate) fn gpt_oss(p: &mut P) -> Result<ArchSpec> {
         normalize: false,
         norm_eps: 0.0,
         scale: 1.0,
+        jitter_eps: 0.0,
     };
     let m = MoeSpec {
         experts: e,
