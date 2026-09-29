@@ -425,6 +425,12 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
         self.params.param_multiproof(leaves)
     }
 
+    /// The carriage the class's artifact makes: one multiproof, or — a composite candidate's — the
+    /// two sub-roots' (RFC-0004 §6.3).
+    fn param_carriage(&self, leaves: &[u32]) -> Option<kaspa_consensus_core::palw_tir_court_v1::PalwTirParamOpeningV1> {
+        self.params.param_carriage(leaves)
+    }
+
     fn prompt_token_ids(&self) -> Option<Vec<u32>> {
         Some(self.prompt.to_vec())
     }

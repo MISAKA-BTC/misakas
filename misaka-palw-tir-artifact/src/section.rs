@@ -127,6 +127,26 @@ pub struct PalwTirSectionV1 {
     index: BTreeMap<(u16, Option<u16>), (u64, u64)>,
 }
 
+/// **A section's header, unchecked beyond its framing** — the magic, the version and the header's
+/// bytes decoding — for a reader that learns `p` from it (the provenance's `composite.p`) before it
+/// opens the section at that `p` ([`PalwTirSectionV1::open`] checks the rest).
+pub fn peek_section_header_v1(path: &Path) -> Result<PalwTirContainerHeaderV1> {
+    let mut f = std::fs::File::open(path)?;
+    let file_len = f.metadata()?.len();
+    let mut prefix = [0u8; PREFIX as usize];
+    f.read_exact(&mut prefix).map_err(|_| PalwTirContainerError::Magic)?;
+    if &prefix[0..8] != PALW_TIR_SECTION_MAGIC_V1 || u16::from_le_bytes([prefix[8], prefix[9]]) != PALW_TIR_SECTION_VERSION_V1 {
+        return Err(PalwTirContainerError::Magic);
+    }
+    let hl = u32::from_le_bytes(prefix[10..14].try_into().expect("4 bytes"));
+    if hl > PALW_TIR_MAX_HEADER_BYTES_V1 || PREFIX + hl as u64 > file_len {
+        return Err(PalwTirContainerError::Header(format!("a header of {hl} bytes in a file of {file_len}")));
+    }
+    let mut hb = vec![0u8; hl as usize];
+    f.read_exact(&mut hb)?;
+    PalwTirContainerHeaderV1::try_from_slice(&hb).map_err(|e| PalwTirContainerError::Header(e.to_string()))
+}
+
 impl PalwTirSectionV1 {
     /// **Read and check the header** of a section of params `p..` (no tensor is read): the magic and
     /// version, the program decoding canonically and validating, `p` inside it, the table exactly

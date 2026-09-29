@@ -39,7 +39,7 @@ USAGE:
     palw-class check-architecture --network <id> --config <config.json> --lora-budget [--lora-rank R] [--max-context N]
                          [--logits-tile N] [--max-window N] [--checkpoint-interval N] [--held] [--tile-len N]
                          [--h-chunk N] [--json]
-    palw-class composite --parent <parent.palwtir> [--parent-class <hex>] [--out <path>] <candidate.palwtir>
+    palw-class composite --parent <parent.palwtir> [--parent-class <hex>] [--out <path>] [--section-out <path>] <candidate.palwtir>
     palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
     palw-class drill-leaves --network <id> [--model-id <model-id>] [--decode N] <artifact-path>
     palw-class close-sizes --network <id> [--anchor <hex>] [--json] <artifact-path>
@@ -130,8 +130,11 @@ to the parent's inventory root) and derives the adapter section's root. It print
 composite artifact root when --parent-class names the parent's class id. With --out it writes the
 candidate again with the record in its provenance:
 composite: {p, parent_root, adapter_root, parent_leaves, adapter_leaves[, parent_class]} (hex:
-lowercase, 128 characters). Every root comes from the consensus functions. Exits 1 on a
-refusal.
+lowercase, 128 characters). With --section-out (and --parent-class) it writes the adapter section
+(PALWTIRS, RFC-0004 §6.7): params P.. alone, with the program, layout, tokenizer and the record — what
+a seat holding the parent fetches; a node loads it after the parent (--palw-class-artifact, parent
+first) and serves the candidate from the two files. Every root comes from the consensus functions.
+Exits 1 on a refusal.
 
 NETWORKS: a network id with a PALW V2 bundle, e.g. testnet-11 or devnet.
 
@@ -289,8 +292,15 @@ fn run(args: &[String]) -> Result<(), String> {
                 None => None,
             };
             let out = take_flag(&mut args, "--out");
+            let section_out = take_flag(&mut args, "--section-out");
             let path = PathBuf::from(args.first().ok_or(USAGE)?);
-            composite(&PathBuf::from(parent), parent_class, &path, out.as_deref().map(std::path::Path::new))
+            composite(
+                &PathBuf::from(parent),
+                parent_class,
+                &path,
+                out.as_deref().map(std::path::Path::new),
+                section_out.as_deref().map(std::path::Path::new),
+            )
         }
         "close-sizes" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
@@ -475,8 +485,9 @@ fn composite(
     parent_class: Option<Hash64>,
     candidate: &std::path::Path,
     out: Option<&std::path::Path>,
+    section_out: Option<&std::path::Path>,
 ) -> Result<(), String> {
-    use misaka_palw_sdk::tir_composite::{tir_composite_derive_v1, tir_composite_write_v1};
+    use misaka_palw_sdk::tir_composite::{tir_composite_derive_v1, tir_composite_section_write_v1, tir_composite_write_v1};
     use misaka_palw_tir_artifact::PalwTirContainerV1;
     let pc = PalwTirContainerV1::open(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     let cc = PalwTirContainerV1::open(candidate).map_err(|e| format!("{}: {e}", candidate.display()))?;
@@ -495,6 +506,15 @@ fn composite(
     if let Some(out) = out {
         let digest = tir_composite_write_v1(&cc, &c, out)?;
         println!("wrote {} (file digest {})", out.display(), Hash64::from_bytes(digest));
+    }
+    if let Some(section) = section_out {
+        let digest = tir_composite_section_write_v1(&cc, &c, section)?;
+        println!(
+            "wrote {} (the adapter section: params {}.. alone, file digest {}) — a seat holding the parent loads it after the parent",
+            section.display(),
+            c.p,
+            Hash64::from_bytes(digest)
+        );
     }
     Ok(())
 }

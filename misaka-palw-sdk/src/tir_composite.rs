@@ -25,14 +25,15 @@
 use std::path::Path;
 
 use kaspa_consensus_core::palw_improve_composite_v1::{
-    palw_improve_composite_root_v1, palw_tir_composite_rule_v1, palw_tir_composite_section_roots_v1, palw_tir_family_rule_v1,
+    PalwTirCompositeRefV1, palw_improve_composite_root_v1, palw_tir_composite_rule_v1, palw_tir_composite_section_roots_v1,
+    palw_tir_family_rule_v1,
 };
 use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_root_v1;
 use kaspa_consensus_core::palw_tir_class_v1::{
     PALW_TIR_CLASS_VERSION_V1, PALW_TIR_LAYOUT_VERSION_V1, PalwTirClassV1, PalwTirLayoutV1,
 };
 use kaspa_hashes::Hash64;
-use misaka_palw_tir_artifact::{PalwTirContainerV1, write_container_v1};
+use misaka_palw_tir_artifact::{PalwTirContainerV1, write_container_v1, write_section_v1};
 
 use crate::tir_manifest::PalwTirContainerSourceV1;
 
@@ -190,4 +191,43 @@ pub fn tir_composite_write_v1(candidate: &PalwTirContainerV1, composite: &TirCom
         &mut |j, l| candidate.read_tensor_bytes(j, l).map_err(|e| e.to_string()),
     )
     .map_err(|e| format!("{}: {e}", output.display()))
+}
+
+/// **Write the candidate's adapter section** (`PALWTIRS`, RFC-0004 §6.7 — what a seat holding the
+/// parent fetches instead of the whole candidate): params `composite.p..` of `candidate`, with its
+/// program, layout and tokenizer, and the composite record in its provenance. The record must name
+/// the parent class: a node matches the section to the parent it holds by it
+/// ([`tir_composite_ref_of_meta_v1`]). Returns the file digest.
+pub fn tir_composite_section_write_v1(
+    candidate: &PalwTirContainerV1,
+    composite: &TirCompositeV1,
+    output: &Path,
+) -> Result<[u8; 64], String> {
+    if composite.parent_class.is_none() {
+        return Err("a section names its parent class, which a node matches it to (--parent-class <hex>)".into());
+    }
+    if output == candidate.path.as_path() {
+        return Err("write the section to another path than the candidate (the candidate is read while it is written)".into());
+    }
+    let mut meta = meta_of(candidate);
+    meta["composite"] = composite.meta();
+    write_section_v1(
+        output,
+        &candidate.program,
+        composite.p,
+        candidate.header.layout.clone(),
+        candidate.header.tokenizer_id,
+        meta.to_string(),
+        &mut |j, l| candidate.read_tensor_bytes(j, l).map_err(|e| e.to_string()),
+    )
+    .map_err(|e| format!("{}: {e}", output.display()))
+}
+
+/// **The chain's reference a section's provenance records** (`meta.composite`, parent class
+/// included) — what a node opens the section against and holds to the candidate's registration.
+pub fn tir_composite_ref_of_meta_v1(meta: &str) -> Result<PalwTirCompositeRefV1, String> {
+    let v: serde_json::Value = serde_json::from_str(meta).map_err(|e| format!("the provenance is not JSON: {e}"))?;
+    let c = TirCompositeV1::from_meta(v.get("composite").ok_or("the provenance records no composite")?)?;
+    let parent_class = c.parent_class.ok_or("the composite record names no parent class")?;
+    Ok(PalwTirCompositeRefV1 { parent_class, parent_root: c.parent_root, adapter_root: c.adapter_root, p: c.p })
 }

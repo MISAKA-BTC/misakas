@@ -44,7 +44,10 @@ pub use v2::{
 /// **`PALWTIRS`**: a composite candidate's adapter section (RFC-0004 §6.7) — the candidate's program
 /// and the tensors of its params `p..`; its params `0..p` are the parent container's.
 pub mod section;
-pub use section::{PALW_TIR_SECTION_MAGIC_V1, PALW_TIR_SECTION_VERSION_V1, PalwTirSectionV1, section_instances_v1, write_section_v1};
+pub use section::{
+    PALW_TIR_SECTION_MAGIC_V1, PALW_TIR_SECTION_VERSION_V1, PalwTirSectionV1, peek_section_header_v1, section_instances_v1,
+    write_section_v1,
+};
 
 pub const PALW_TIR_CONTAINER_MAGIC_V1: &[u8; 8] = b"PALWTIR1";
 pub const PALW_TIR_CONTAINER_VERSION_V1: u16 = 1;
