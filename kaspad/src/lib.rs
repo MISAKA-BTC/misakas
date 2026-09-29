@@ -24,6 +24,7 @@ pub mod palw_fp_seat;
 /// RFC-0003 §II.2.1: the seat's receipt and a party's court objects for a pipeline class's V5 claim (dormant).
 pub mod palw_gen_seat;
 pub mod palw_heartbeat_miner;
+pub mod palw_improve_watch;
 pub mod palw_lane_watch;
 /// V04 (the pre-t12 drill of 2026-09-25): the order a collector offers licences in (node policy).
 pub mod palw_licence_order;
