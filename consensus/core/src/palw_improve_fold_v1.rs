@@ -189,8 +189,8 @@ impl PalwImproveScoresV1 for EpochScores<'_> {
 /// **The evaluation lane's completion hook** (spec 17 §17.5.3 step 7): is any evaluation claim of the
 /// epoch not yet final? The evaluation lane (A6) replaces this body with its job table's answer; until
 /// then every epoch scores at `t_score`.
-fn palw_improve_eval_pending_hook_v1(_state: &PalwChainStateV2, _line_id: &Hash64, _epoch: u64) -> bool {
-    true
+fn palw_improve_eval_pending_hook_v1(state: &PalwChainStateV2, line_id: &Hash64, epoch: u64) -> bool {
+    state.improvement_eval_pending_v1(line_id, epoch)
 }
 
 /// **The material lane's dataset reader** (spec 17 §17.11.3): a registered dataset's registrant. The
@@ -207,8 +207,8 @@ fn palw_improve_dataset_registrant_hook_v1(
 /// **The evaluation lane's claim predicate** (spec 17 §17.4.5): is the claim an evaluation claim (which
 /// never counts toward usage)? The evaluation lane (A6) replaces this body with
 /// `palw_fp_claim_is_evaluation_v1`; until then no claim is one.
-fn palw_improve_claim_is_evaluation_hook_v1(_claim: &PalwClaimStateV2) -> bool {
-    false
+fn palw_improve_claim_is_evaluation_hook_v1(claim: &PalwClaimStateV2) -> bool {
+    super::palw_improve_eval_fold_v1::palw_improve_claim_is_evaluation_v1(claim)
 }
 
 // ---- the builder's helpers -----------------------------------------------------------------
@@ -965,10 +965,14 @@ fn retire_improvement_rows_v1(builder: &mut TransitionBuilder<'_>) {
         for key in results {
             builder.write_improvement_result(key, None);
         }
+        // The evaluation lane's job rows (A6), in the same budget.
+        let (jobs, jobs_left) = builder.retire_improvement_eval_jobs_v1(&line_id, epoch, budget);
+        budget -= jobs;
         let remaining =
             builder.state.improvement_pool_entries.range((line_id, epoch, 0)..=(line_id, epoch, u32::MAX)).next().is_some()
                 || builder.state.improvement_items.range((line_id, epoch, 0)..=(line_id, epoch, u32::MAX)).next().is_some()
-                || builder.state.improvement_results.range(lo..=hi).next().is_some();
+                || builder.state.improvement_results.range(lo..=hi).next().is_some()
+                || jobs_left;
         if remaining {
             break;
         }
@@ -1837,10 +1841,9 @@ mod tests {
             assert!(b.record_improvement_score_v1(&h(LINE), 1, 0, PalwEvalSubjectV1::Parent, dup).is_err(), "a score recorded twice");
         });
         conserved(&s, &h(LINE));
-        // t_eval → Closing; t_score → scored and decided.
+        // t_eval → Closing, and — nothing pending: every score is in, no evaluation claim is live
+        // (the evaluation lane's hook) — scored and decided in the same block, not at t_score.
         let s = at(&s, &p, 1_800, |_| {});
-        assert_eq!(s.improvement_epoch(&h(LINE), 1).unwrap().state, PalwEpochStateV1::Closing);
-        let s = at(&s, &p, 1_950, |_| {});
         let e = s.improvement_epoch(&h(LINE), 1).unwrap();
         assert_eq!(e.state, PalwEpochStateV1::Decided);
         assert_eq!(e.outcome, Some(PalwPromotionOutcomeV1::Promoted { class_id: h(CAND_A), wins: 8, losses: 0 }));

@@ -866,6 +866,7 @@ pub fn fp_commit_of(c: &Chain, n: u64, work_leaves: u64, i: u64) -> (PalwConsens
     (
         PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: Hash64::default(),
+            eval: None,
             claim,
             class_id: floor,
             bond: bond_key(n),

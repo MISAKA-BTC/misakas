@@ -103,6 +103,9 @@ use std::collections::{BTreeMap, BTreeSet};
 #[path = "palw_improve_fold_v1.rs"]
 mod palw_improve_fold_v1;
 pub use palw_improve_fold_v1::{PALW_STATE_V2_IMPROVE_PAYOUT_KEY_PREFIX, PalwMaterialPlacementV1};
+#[path = "palw_improve_eval_fold_v1.rs"]
+mod palw_improve_eval_fold_v1;
+pub use palw_improve_eval_fold_v1::PALW_IMPROVE_TABLE_EVAL_JOBS_V1;
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
@@ -6617,6 +6620,12 @@ pub enum PalwConsensusObjectV2 {
         /// extractor's, which recomputes it from the commitment.
         #[borsh(skip)]
         job_pin: Hash64,
+        /// **RFC-0004 A6: an evaluation claim's job and payload tail** (FP job version 9), built by the
+        /// extractor from the evaluation payload it decoded and checked; `None` for every other
+        /// commitment. **`#[borsh(skip)]`** as `job_pin` is: the object's Borsh encoding is exactly
+        /// the one before this field, and a decoded object reads `None` — never an evaluation claim.
+        #[borsh(skip)]
+        eval: Option<Box<crate::palw_improve_eval_v1::PalwFpEvalCarriageV1>>,
     },
     /// **ADR-0075 Decision 1: a drilled family enters the chain's certified set through its own
     /// evidence.** The transition grades `evidence` with the shipped court's grader
@@ -10257,6 +10266,10 @@ pub struct PalwChainStateV2 {
     improvement_grants: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwRewardGrantV1>,
     /// RFC-0004: what the pools owe each bond, not yet flushed into a payout (spec 17 §17.11.5).
     improvement_earnings: BTreeMap<PalwBondKeyV2, u64>,
+    /// **RFC-0004 A6: every evaluation job's row**, by `(line, epoch, item, subject, kind)` — written at
+    /// the job's first claim (`palw_improve_eval_fold_v1`). Its own Some-only root block
+    /// (`improvement-eval/v1`) and carriage tail (`0xCC`): empty below the fence.
+    improvement_eval_jobs: BTreeMap<crate::palw_improve_eval_v1::PalwEvalJobKeyV1, crate::palw_improve_eval_v1::PalwEvalJobStateV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
@@ -10269,6 +10282,8 @@ pub struct PalwChainStateV2 {
     improvement_retiring: BTreeSet<(u64, Hash64, u64)>,
     /// RFC-0004: the epochs not yet decided, network-wide (the `max_open_epochs` ceiling).
     improvement_open_epochs: u32,
+    /// RFC-0004 A6: the evaluation claims' jobs, by claim id — from `improvement_eval_jobs`' rows.
+    improvement_eval_claims: BTreeMap<Hash64, crate::palw_improve_eval_v1::PalwEvalJobKeyV1>,
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
     deadlines: BTreeSet<(u64, Hash64)>,
     /// `(accepted_blue_score, claim)` for every non-terminal claim — what the frontier reads.
@@ -10443,10 +10458,12 @@ impl PalwChainStateV2 {
             improvement_results: BTreeMap::new(),
             improvement_grants: BTreeMap::new(),
             improvement_earnings: BTreeMap::new(),
+            improvement_eval_jobs: BTreeMap::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
             improvement_open_epochs: 0,
+            improvement_eval_claims: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -12678,6 +12695,13 @@ impl PalwChainStateV2 {
             state.update(collection_root(b"improvement_grants", &self.improvement_grants).as_byte_slice());
             state.update(collection_root(b"improvement_earnings", &self.improvement_earnings).as_byte_slice());
         }
+        // **RFC-0004 A6: the evaluation jobs, ONE Some-only block** (after the material lane's
+        // `improvement-material/v1`) — empty until a job's first claim, which nothing below
+        // `palw_improvement_v1` can make.
+        if !self.improvement_eval_jobs.is_empty() {
+            state.update(b"improvement-eval/v1");
+            state.update(collection_root(b"improvement_eval_jobs", &self.improvement_eval_jobs).as_byte_slice());
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -12799,7 +12823,15 @@ impl PalwChainStateV2 {
             // ledger inside range, spends only on a certified (Final) claim, and zero immature
             // contribution (a commitment is not a block's work).
             if let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source {
-                if *quanta == 0 || claim.pwu % (*quanta as u64) != 0 || claim.pwu / (*quanta as u64) == 0 {
+                // RFC-0004 A6 (MIP-17): an evaluation claim is the one free-prompt claim with no quanta —
+                // and then it earns nothing at all: no pwu, no spend, no receipt rights, no escrow.
+                if *quanta == 0 {
+                    if claim.pwu != 0 || !spent.is_empty() || claim.rights_reserved != 0 || claim.escrowed_reward != 0 {
+                        return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                            "free-prompt claim {id} has no quanta and earns something"
+                        )));
+                    }
+                } else if claim.pwu % (*quanta as u64) != 0 || claim.pwu / (*quanta as u64) == 0 {
                     return Err(PalwStateV2Error::CarriageInconsistent(format!("free-prompt claim {id} has non-uniform quanta")));
                 }
                 if spent.iter().any(|q| *q >= *quanta) {
@@ -24932,6 +24964,8 @@ impl<'a> TransitionBuilder<'a> {
         self.note_final_work(&id, claim, final_daa);
         // RFC-0004 (spec 17 §17.4.5): a Final claim of a governed line's head counts toward its trigger.
         self.note_improvement_usage_at_final_v1(claim, final_daa);
+        // RFC-0004 A6 (MIP-17): an evaluation claim's Final records its score and pays its fee.
+        self.note_improvement_eval_final_v1(&id, claim, final_daa)?;
         self.release_for_claim(claim, final_daa)?;
         // The weight divergence between the lanes (ADR-0044): an attempt's Final IS its block's
         // certified work; a free-prompt Final only LICENSES — its weight arrives per spent
@@ -33661,6 +33695,7 @@ fn apply_object(
             trace_retention_daa,
             consumed_prefix_state,
             job_pin,
+            eval,
         } => {
             if builder.state.claims.contains_key(claim_id) {
                 return Err(PalwStateV2Error::DuplicateClaim(*claim_id));
@@ -33686,6 +33721,29 @@ fn apply_object(
             // ADR-0160 lane liab (AG-3): nor while its bond is frozen (empty map below the fence).
             if crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&builder.state, bond) {
                 return Err(PalwStateV2Error::ProducerFrozen { bond: *bond });
+            }
+            // **RFC-0004 A6 (MIP-17): an evaluation claim** — the arm's one guarded branch. It is off
+            // the reward path (no quanta, pwu, receipt rights or weight), priced by nothing, and its
+            // context is the chain's; its `Final` pays the subject's escrowed fee
+            // (`palw_improve_eval_fold_v1`). Every other commitment goes on below, as before.
+            if let Some(eval) = eval {
+                return palw_improve_eval_fold_v1::apply_improvement_eval_commitment_v1(
+                    builder,
+                    ctx,
+                    palw_improve_eval_fold_v1::PalwEvalCommitV1 {
+                        claim_id,
+                        class_id,
+                        bond,
+                        work_leaves: *work_leaves,
+                        prompt_token_ids,
+                        decode_tokens_executed: *decode_tokens_executed,
+                        trace_root,
+                        output_root,
+                        execution_root,
+                        job_pin,
+                        eval,
+                    },
+                );
             }
             let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
             if let PalwClassStatusV2::Frozen { .. } = class.status {
@@ -36339,6 +36397,7 @@ fn apply_improvement_row_v1(
         PALW_IMPROVE_TABLE_RESULTS_V1 => swap(&mut state.improvement_results, key, old, new, revert),
         PALW_IMPROVE_TABLE_GRANTS_V1 => swap(&mut state.improvement_grants, key, old, new, revert),
         PALW_IMPROVE_TABLE_EARNINGS_V1 => swap(&mut state.improvement_earnings, key, old, new, revert),
+        PALW_IMPROVE_TABLE_EVAL_JOBS_V1 => swap(&mut state.improvement_eval_jobs, key, old, new, revert),
         _ => Err(PalwStateV2Error::DeltaMismatch("an improvement row names no table")),
     }
 }
@@ -36666,6 +36725,7 @@ fn rebuild_improvement_indices_v1(state: &mut PalwChainStateV2) {
     state.improvement_heads_of = heads_of;
     state.improvement_retiring = state.improvement_epochs.values().filter_map(palw_improvement_retiring_entry_v1).collect();
     state.improvement_open_epochs = state.improvement_epochs.values().filter(|epoch| !epoch.is_decided()).count() as u32;
+    state.improvement_eval_claims = palw_improve_eval_fold_v1::palw_improve_eval_claims_index_v1(&state.improvement_eval_jobs);
 }
 
 fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
@@ -37000,6 +37060,8 @@ pub struct PalwStateCarriageV2 {
     pub improvement_results: BTreeMap<(Hash64, u64, u32, crate::palw_improve_state_v1::PalwEvalSubjectV1), crate::palw_improve_state_v1::PalwEvalResultV1>,
     pub improvement_grants: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwRewardGrantV1>,
     pub improvement_earnings: BTreeMap<PalwBondKeyV2, u64>,
+    /// **RFC-0004 A6: the evaluation jobs.** A tagged tail (`0xCC`), encoded only when non-empty; rooted.
+    pub improvement_eval_jobs: BTreeMap<crate::palw_improve_eval_v1::PalwEvalJobKeyV1, crate::palw_improve_eval_v1::PalwEvalJobStateV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -37140,6 +37202,8 @@ const PALW_CARRIAGE_IMPROVEMENT_ITEMS_TAIL_V1: u8 = 0xD7;
 const PALW_CARRIAGE_IMPROVEMENT_RESULTS_TAIL_V1: u8 = 0xD8;
 const PALW_CARRIAGE_IMPROVEMENT_GRANTS_TAIL_V1: u8 = 0xD9;
 const PALW_CARRIAGE_IMPROVEMENT_EARNINGS_TAIL_V1: u8 = 0xDA;
+/// RFC-0004 A6: the evaluation jobs' tail (the evaluation lane's `0xCC`–`0xCF`).
+const PALW_CARRIAGE_IMPROVEMENT_EVAL_JOBS_TAIL_V1: u8 = 0xCC;
 
 /// **RFC-0004: the improvement tables' consistency** (spec 17 §17.3): every row under its own key,
 /// every governed line with exactly its policy, usage and pool, every detail row under an existing
@@ -37457,6 +37521,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_IMPROVEMENT_EARNINGS_TAIL_V1.serialize(writer)?;
             self.improvement_earnings.serialize(writer)?;
         }
+        if !self.improvement_eval_jobs.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_EVAL_JOBS_TAIL_V1.serialize(writer)?;
+            self.improvement_eval_jobs.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -37612,6 +37680,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_improvement_grants = false;
         let mut improvement_earnings = BTreeMap::new();
         let mut seen_improvement_earnings = false;
+        let mut improvement_eval_jobs = BTreeMap::new();
+        let mut seen_improvement_eval_jobs = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -37814,6 +37884,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_improvement_earnings = true;
                     improvement_earnings = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_IMPROVEMENT_EVAL_JOBS_TAIL_V1 if !seen_improvement_eval_jobs => {
+                    seen_improvement_eval_jobs = true;
+                    improvement_eval_jobs = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -37935,6 +38009,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             improvement_results,
             improvement_grants,
             improvement_earnings,
+            improvement_eval_jobs,
         })
     }
 }
@@ -38034,6 +38109,7 @@ impl PalwStateCarriageV2 {
             improvement_results: state.improvement_results.clone(),
             improvement_grants: state.improvement_grants.clone(),
             improvement_earnings: state.improvement_earnings.clone(),
+            improvement_eval_jobs: state.improvement_eval_jobs.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -38127,6 +38203,8 @@ impl PalwStateCarriageV2 {
         // RFC-0004: every row sits under its own key, every line has its policy, usage and pool, and
         // every detail row sits under a line (and, past the material, an epoch) that exists.
         palw_improvement_carriage_consistent_v1(&self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        palw_improve_eval_fold_v1::palw_improve_eval_carriage_consistent_v1(&self.improvement_eval_jobs, &self.improvement_epochs)
+            .map_err(PalwStateV2Error::CarriageInconsistent)?;
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
             reserved_exposure: self.reserved_exposure,
@@ -38219,10 +38297,12 @@ impl PalwStateCarriageV2 {
             improvement_results: self.improvement_results,
             improvement_grants: self.improvement_grants,
             improvement_earnings: self.improvement_earnings,
+            improvement_eval_jobs: self.improvement_eval_jobs,
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
             improvement_open_epochs: 0,
+            improvement_eval_claims: BTreeMap::new(),
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -50448,6 +50528,7 @@ pub(crate) mod tests {
     fn fp_commit(claim_word: u64, pwu: u64, quanta: u32) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            eval: None,
             claim: h64(claim_word),
             class_id: h64(1),
             bond: bond_key(1),
@@ -51290,6 +51371,7 @@ pub(crate) mod tests {
     fn derived_commit_from(bond: u64, claim_word: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            eval: None,
             claim: h64(claim_word),
             class_id: derived_profile().shape_profile_id(),
             bond: bond_key(bond),
@@ -51700,6 +51782,7 @@ pub(crate) mod tests {
         fn commit(class: Hash64, claim_word: u64, bond: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::FreePromptCommitted {
                 job_pin: kaspa_hashes::Hash64::default(),
+                eval: None,
                 claim: h64(claim_word),
                 class_id: class,
                 bond: bond_key(bond),
@@ -52388,6 +52471,7 @@ pub(crate) mod tests {
                 ..
             } => PalwConsensusObjectV2::FreePromptCommitted {
                 job_pin: kaspa_hashes::Hash64::default(),
+                eval: None,
                 claim,
                 class_id,
                 bond,
@@ -55610,6 +55694,7 @@ pub(crate) mod tests {
             improvement_results: _,
             improvement_grants: _,
             improvement_earnings: _,
+            improvement_eval_jobs: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -55758,6 +55843,17 @@ pub(crate) mod tests {
             })),
             ("improvement_earnings", Box::new(|s| {
                 s.improvement_earnings.insert(bond_key(0xDA), 5);
+            })),
+            ("improvement_eval_jobs", Box::new(|s| {
+                let job = crate::palw_improve_eval_v1::PalwEvalJobV1 {
+                    line_id: Hash64::from_bytes([0xCC; 64]),
+                    epoch: 1,
+                    item: 0,
+                    subject: crate::palw_improve_state_v1::PalwEvalSubjectV1::Parent,
+                    kind: crate::palw_improve_state_v1::PalwScoringKindV1::ExactMatch,
+                    mode: crate::palw_improve_eval_v1::PalwEvalModeV1::Generate { seed: Hash64::default(), max_new: 4, stop_ids: vec![] },
+                };
+                s.improvement_eval_jobs.insert(job.key(), crate::palw_improve_eval_v1::PalwEvalJobStateV1 { job, claim: None });
             })),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),

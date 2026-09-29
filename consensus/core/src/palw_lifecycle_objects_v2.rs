@@ -1231,6 +1231,7 @@ pub(crate) mod tests {
         };
         let fp = PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            eval: None,
             claim: h64(0xF1),
             class_id: h64(1),
             bond: bond(1),

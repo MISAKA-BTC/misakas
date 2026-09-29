@@ -1934,6 +1934,7 @@ mod certification_object_tests {
         let run = a16.execute_free_prompt(&job, &prompt).expect("the A16 fixture runs a caller's prompt");
         let commit = Obj::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            eval: None,
             claim: h(0xFC),
             class_id: a16_class,
             bond: PalwBondKeyV2(bond_outpoint),

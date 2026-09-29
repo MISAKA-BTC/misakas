@@ -145,6 +145,7 @@ fn td2_the_2m_row_is_refused_at_launch_attempt_and_free_prompt() {
         let job = genesis_classes(&c.p).iter().find(|g| g.0 == id2m).expect("the 2M row").1;
         let commit = PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: Hash64::default(),
+            eval: None,
             claim: h(0xF6_2D01),
             class_id: id2m,
             bond: bond_key(2),

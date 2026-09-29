@@ -75,6 +75,10 @@ pub const PALW_IMPROVE_EVAL_GENERATED_DOMAIN_V1: &[u8] = b"misaka-palw/improve/e
 pub const PALW_IMPROVE_EVAL_FINALIZED_DOMAIN_V1: &[u8] = b"misaka-palw/improve/eval-finalized/v1";
 /// Key of [`palw_improve_answer_span_hash_v1`].
 pub const PALW_IMPROVE_ANSWER_SPAN_DOMAIN_V1: &[u8] = b"misaka-palw/improve/answer-span/v1";
+/// **The most ids an evaluation job's stream carries** — a generating job's budget, a teacher-forced
+/// job's reference: a format cap, so a binding with a pairwise job's two finalized reads fits one
+/// carrier (80 KiB) whatever the policy says.
+pub const PALW_IMPROVE_EVAL_MAX_STREAM_IDS_V1: u32 = 4096;
 
 fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(key).to_state();
@@ -661,6 +665,9 @@ pub fn palw_fp_eval_job_shape_v1(job: &PalwFreePromptJobV3) -> Result<&PalwEvalJ
         return Err(PalwEvalErrorV1::JobField("an evaluation job is named by its evaluation job: a zero nonce"));
     }
     decode.validate_canonical().map_err(|_| PalwEvalErrorV1::JobField("the decode rules are not canonical"))?;
+    if job.decode_token_limit > PALW_IMPROVE_EVAL_MAX_STREAM_IDS_V1 {
+        return Err(PalwEvalErrorV1::JobField("an evaluation job's stream is at most 4,096 ids"));
+    }
     match (eval.kind, &eval.mode) {
         (PalwScoringKindV1::ExactMatch, PalwEvalModeV1::Generate { max_new, stop_ids, .. }) => {
             if *max_new == 0 || job.decode_token_limit != *max_new {
@@ -692,10 +699,23 @@ pub fn palw_fp_eval_job_shape_v1(job: &PalwFreePromptJobV3) -> Result<&PalwEvalJ
 /// ids and the committed score — on chain, outside the signature, bound by the committed roots
 /// ([`palw_fp_eval_claim_check_v1`]). Public at acceptance, so nobody can withhold what a later
 /// job's `FinalizedOutput` or the ExactMatch fold reads.
-#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwEvalClaimTailV1 {
     pub generated: Vec<u32>,
     pub score: Vec<i32>,
+    /// The subject's layout — the class row keeps only its digest (`layout_digest`), which the fold
+    /// checks it against — so acceptance derives the claim's leaf count, and its reservation, from
+    /// the chain's context rather than the executor's word.
+    pub subject_layout: PalwTirLayoutV1,
+}
+
+/// **What an evaluation claim carries into the fold** (the `FreePromptCommitted` object's `eval`):
+/// its evaluation job and its payload's tail, built by the extractor from the payload it decoded and
+/// checked ([`palw_fp_eval_claim_check_v1`]) — never carried to a peer, never hashed into a root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFpEvalCarriageV1 {
+    pub job: PalwEvalJobV1,
+    pub tail: PalwEvalClaimTailV1,
 }
 
 /// **An evaluation claim's payload bytes**: the FP payload's borsh, then the tail's. An FP
@@ -758,6 +778,11 @@ pub fn palw_fp_eval_claim_check_v1<'a>(
     if commitment.schedule_root != Hash64::default() {
         return Err(PalwEvalErrorV1::Carriage("an evaluation claim has no schedule root"));
     }
+    // The DA trio (Phase F's pipeline-claim units): one chunk and no manifest — the units open step
+    // leaves and nodes under `trace_root`; retention is the chain's (`accepted_daa` + the minimum).
+    if commitment.trace_chunk_count != 1 || commitment.trace_manifest_root != Hash64::default() {
+        return Err(PalwEvalErrorV1::Carriage("an evaluation claim serves one chunk and names no manifest"));
+    }
     let root = palw_improve_eval_execution_root_v1(
         &eval.id(),
         &job.class_id,
@@ -792,13 +817,24 @@ pub struct PalwEvalClaimRefV1 {
     pub score: Option<i64>,
 }
 
-/// **A job's row** in `improvement_eval_jobs` (delta entries 100–103), keyed by the job id.
+/// **A job's row** in `improvement_eval_jobs`, keyed by [`PalwEvalJobKeyV1`] and written at its
+/// first claim (lazily: a draw writes none). Its fee is the subject's escrow's, paid at `Final`
+/// (spec 17 §17.11.2), so the row holds none.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwEvalJobStateV1 {
     pub job: PalwEvalJobV1,
-    /// The job's evaluation fee, escrowed: paid to the claim at `Final`, refunded at `t_score` if none.
-    pub fee: u64,
     pub claim: Option<PalwEvalClaimRefV1>,
+}
+
+/// **An evaluation job's key in `improvement_eval_jobs`**: `(line, epoch, item, subject, kind)` — the
+/// id's inputs, in an order whose ranges are an epoch's and an item's jobs.
+pub type PalwEvalJobKeyV1 = (Hash64, u64, u32, PalwEvalSubjectV1, PalwScoringKindV1);
+
+impl PalwEvalJobV1 {
+    /// The job's key in `improvement_eval_jobs`.
+    pub fn key(&self) -> PalwEvalJobKeyV1 {
+        (self.line_id, self.epoch, self.item, self.subject, self.kind)
+    }
 }
 
 /// **Open claiming** (RFC-0004 §7.2): the first valid claim per job in the accepting chain's order is
@@ -819,6 +855,18 @@ pub fn palw_improve_eval_take_v1(
     }
     row.claim = Some(PalwEvalClaimRefV1 { claim_id, executor, accepted_daa: daa, answer, final_daa: None, score: None });
     Ok(())
+}
+
+/// **A row whose claim is gone** (voided, or retired before `Final`) takes a new claim: the row's
+/// claim is cleared when the chain no longer holds it live or final, so a dead claim never holds a
+/// job past its own life. `live` answers for the claim id.
+pub fn palw_improve_eval_row_release_dead_v1(row: &mut PalwEvalJobStateV1, live: impl Fn(&Hash64) -> bool) {
+    if let Some(c) = &row.claim
+        && c.final_daa.is_none()
+        && !live(&c.claim_id)
+    {
+        row.claim = None;
+    }
 }
 
 /// The job's recorded score, when its claim is final.
@@ -897,11 +945,76 @@ pub fn palw_improve_item_outcome_v1(kind: PalwScoringKindV1, parent: Option<i64>
 // Cost: capacity, the epoch's budget, the fees a candidate escrows
 // ---------------------------------------------------------------------------------------------
 
-/// **An evaluation claim's reservation** (RFC-0004 §13, PALW-MIP-20): ADR-0160's stage-1 rule,
-/// `⌈w / ρ⌉`, over the job's step leaves — the work its seats replay (`ρ = 0` reads as 1). An
-/// evaluation claim earns no weight; it holds capacity as any claim does.
-pub fn palw_improve_eval_reservation_v1(step_leaves: u64, rho: u32) -> u128 {
-    (step_leaves as u128).div_ceil(rho.max(1) as u128)
+/// **An evaluation claim's reservation** (RFC-0004 §13, PALW-MIP-20): what a claim of the same work
+/// on the class reserves — its step leaves at the class's `slash_value_per_pwu`, the leaves era's
+/// `pwu × slash` — under ADR-0160's stage-1 rule, `⌈w / ρ⌉` (`ρ = 0` reads as 1). An evaluation claim
+/// earns no weight; it holds collateral as any claim does, so a false one is slashed like any other.
+pub fn palw_improve_eval_reservation_v1(step_leaves: u64, slash_value_per_pwu: u64, rho: u32) -> u128 {
+    (step_leaves as u128).saturating_mul(slash_value_per_pwu as u128).div_ceil(rho.max(1) as u128)
+}
+
+/// **A layout's digest**, as an IR class id binds it (`PalwTirClassV1::layout_digest`): what the fold
+/// holds a claim's carried layout to, against the class row's `layout_digest`.
+pub fn palw_improve_eval_layout_digest_v1(layout: &PalwTirLayoutV1) -> Hash64 {
+    keyed64(crate::palw_tir_class_v1::PALW_TIR_LAYOUT_DOMAIN_V1, &[&borsh::to_vec(layout).expect("a layout is borsh-serializable")])
+}
+
+/// **The job facts of an evaluation claim**: the item's prompt, the stream's ids, what the job read,
+/// and the context's scalars — the job a court, a seat and acceptance run the context over.
+pub fn palw_improve_eval_pipeline_job_v1(
+    ctx: &PalwEvalContextV1,
+    prompt: &[u32],
+    generated: &[u32],
+    finalized: &[Vec<u32>],
+) -> misaka_palw_tir::pipeline::PipelineJob {
+    misaka_palw_tir::pipeline::PipelineJob {
+        prompt: prompt.to_vec(),
+        generated: generated.to_vec(),
+        scalars: ctx.scalars.clone(),
+        finalized: finalized.iter().enumerate().map(|(c, ids)| ((c as u8, 0u8), ids.clone())).collect(),
+        ..Default::default()
+    }
+}
+
+/// **An evaluation claim's step space** (spec 04b §15; Phase F's pipeline-claim units descend it): the
+/// context's stages at the trips the job's facts give, the stream stage's logits consumed from
+/// `|prompt| − 1`.
+pub fn palw_improve_eval_step_space_v1(
+    ctx: &PalwEvalContextV1,
+    prompt: &[u32],
+    generated: &[u32],
+    finalized: &[Vec<u32>],
+) -> Result<crate::palw_gen_step_v1::PalwGenStepSpaceV1, PalwEvalErrorV1> {
+    let job = palw_improve_eval_pipeline_job_v1(ctx, prompt, generated, finalized);
+    let facts = misaka_palw_tir::pipeline::stage_job_facts(&ctx.pipeline, &ctx.programs, &job)
+        .map_err(|e| PalwEvalErrorV1::Binding(e.to_string()))?;
+    let trips: Vec<u32> = facts.iter().map(|f| f.trip).collect();
+    crate::palw_gen_step_v1::PalwGenStepSpaceV1::new(&ctx.pipeline, &ctx.programs, &ctx.layouts, &trips, prompt.len() as u32)
+        .map_err(|e| PalwEvalErrorV1::Binding(e.to_string()))
+}
+
+/// **An evaluation claim's leaf count, in closed form** — what [`palw_improve_eval_step_space_v1`]
+/// enumerates, without enumerating (`PalwGenStepSpaceV1::leaf_count_v1`): acceptance holds a claim's
+/// `work_leaves` to it, so its reservation is the chain's number.
+pub fn palw_improve_eval_step_leaves_v1(
+    ctx: &PalwEvalContextV1,
+    prompt: &[u32],
+    generated: &[u32],
+    finalized: &[Vec<u32>],
+) -> Result<u128, PalwEvalErrorV1> {
+    let job = palw_improve_eval_pipeline_job_v1(ctx, prompt, generated, finalized);
+    let facts = misaka_palw_tir::pipeline::stage_job_facts(&ctx.pipeline, &ctx.programs, &job)
+        .map_err(|e| PalwEvalErrorV1::Binding(e.to_string()))?;
+    let trips: Vec<u32> = facts.iter().map(|f| f.trip).collect();
+    crate::palw_gen_step_v1::PalwGenStepSpaceV1::leaf_count_v1(
+        &ctx.pipeline,
+        &ctx.programs,
+        &ctx.layouts,
+        &trips,
+        None,
+        prompt.len() as u32,
+    )
+    .map_err(|e| PalwEvalErrorV1::Binding(e.to_string()))
 }
 
 /// **An epoch's evaluation positions** (RFC-0004 §13): `n` items for the parent and each of `k`
@@ -980,7 +1093,7 @@ mod tests {
             kind: PalwScoringKindV1::ExactMatch,
             mode: PalwEvalModeV1::Generate { seed: Hash64::from_bytes([2; 64]), max_new: 8, stop_ids: vec![] },
         };
-        let mut row = PalwEvalJobStateV1 { job, fee: 10, claim: None };
+        let mut row = PalwEvalJobStateV1 { job, claim: None };
         let bond = |b: u32| PalwBondKeyV2(crate::config::premine::premine_outpoint(b));
         assert_eq!(palw_improve_eval_take_v1(&mut row, Hash64::from_bytes([3; 64]), bond(1), 100, 200, None), Ok(()));
         assert_eq!(
@@ -1001,8 +1114,9 @@ mod tests {
 
     #[test]
     fn cost_formulas() {
-        assert_eq!(palw_improve_eval_reservation_v1(10, 3), 4, "⌈10 / 3⌉");
-        assert_eq!(palw_improve_eval_reservation_v1(10, 0), 10, "ρ = 0 reads as 1");
+        assert_eq!(palw_improve_eval_reservation_v1(10, 1, 3), 4, "⌈10 / 3⌉");
+        assert_eq!(palw_improve_eval_reservation_v1(10, 7, 3), 24, "⌈10 · 7 / 3⌉");
+        assert_eq!(palw_improve_eval_reservation_v1(10, 1, 0), 10, "ρ = 0 reads as 1");
         // RFC-0004 §13's worked size: n = 400, four candidates plus the parent, 512 positions.
         assert_eq!(palw_improve_eval_budget_positions_v1(400, 4, false, 512, 0, 0), 1_024_000);
         assert_eq!(palw_improve_eval_budget_positions_v1(400, 4, true, 512, 1_600, 100), 400 * 6 * 512 + 160_000);
@@ -1045,7 +1159,7 @@ mod tests {
             kind: PalwScoringKindV1::ExactMatch,
             mode: PalwEvalModeV1::Generate { seed: Hash64::from_bytes([2; 64]), max_new: 8, stop_ids: vec![] },
         };
-        let mut row = PalwEvalJobStateV1 { job: job.clone(), fee: 1, claim: None };
+        let mut row = PalwEvalJobStateV1 { job: job.clone(), claim: None };
         assert_eq!(palw_improve_exact_match_score_v1(&row, &[5, 6]), None, "unclaimed: missing");
         let bond = PalwBondKeyV2(crate::config::premine::premine_outpoint(1));
         let answer = palw_improve_answer_of_v1(&[9, 5, 6, 8], 9, 8);
@@ -1199,6 +1313,15 @@ mod tests {
         let eval = palw_fp_eval_job_v1(&job).unwrap().clone();
         let generated = vec![5u32, 6, 7];
         let step_root = Hash64::from_bytes([0x31; 64]);
+        let layout = crate::palw_tir_class_v1::PalwTirLayoutV1 {
+            version: PALW_TIR_LAYOUT_VERSION_V1,
+            max_context: 8,
+            checkpoint_interval: 1,
+            h_tile: 16,
+            commit_tiles: vec![4],
+            state_tiles: vec![],
+        };
+        let tail_of = |generated: Vec<u32>, score: Vec<i32>| PalwEvalClaimTailV1 { generated, score, subject_layout: layout.clone() };
         let commitment = |generated: &[u32], score: &[i32]| PalwFreePromptCommitmentV3 {
             job: job.clone(),
             trace_root: step_root,
@@ -1216,12 +1339,12 @@ mod tests {
             decode_tokens_executed: generated.len() as u32,
             stop_reason: PalwFpStopReasonV3::EndOfGeneration,
             work_leaves: 40,
-            trace_manifest_root: Hash64::from_bytes([0x32; 64]),
+            trace_manifest_root: Hash64::default(),
             trace_chunk_count: 1,
             trace_retention_daa: 1000,
         };
         let c = commitment(&generated, &[]);
-        let tail = PalwEvalClaimTailV1 { generated: generated.clone(), score: vec![] };
+        let tail = tail_of(generated.clone(), vec![]);
         assert_eq!(palw_fp_eval_claim_check_v1(&c, &tail, &[]).map(|e| e.id()), Ok(eval.id()));
         // The payload: the FP payload's bytes, then the tail — which an FP decoder refuses outright.
         let payload =
@@ -1243,12 +1366,15 @@ mod tests {
         let refused = |c: &PalwFreePromptCommitmentV3, t: &PalwEvalClaimTailV1, f: &[Hash64]| {
             matches!(palw_fp_eval_claim_check_v1(c, t, f), Err(PalwEvalErrorV1::Carriage(_)))
         };
-        assert!(refused(&c, &PalwEvalClaimTailV1 { generated: vec![5, 6, 8], score: vec![] }, &[]), "ids not the output_root's");
-        assert!(refused(&c, &PalwEvalClaimTailV1 { generated: vec![5, 6], score: vec![] }, &[]), "ids not the executed count");
-        assert!(
-            refused(&c, &PalwEvalClaimTailV1 { generated: generated.clone(), score: vec![1] }, &[]),
-            "ExactMatch commits no score"
-        );
+        assert!(refused(&c, &tail_of(vec![5, 6, 8], vec![]), &[]), "ids not the output_root's");
+        assert!(refused(&c, &tail_of(vec![5, 6], vec![]), &[]), "ids not the executed count");
+        assert!(refused(&c, &tail_of(generated.clone(), vec![1]), &[]), "ExactMatch commits no score");
+        let mut chunks = c.clone();
+        chunks.trace_chunk_count = 2;
+        assert!(refused(&chunks, &tail, &[]), "one chunk");
+        let mut manifest = c.clone();
+        manifest.trace_manifest_root = Hash64::from_bytes([0x32; 64]);
+        assert!(refused(&manifest, &tail, &[]), "no manifest");
         assert!(refused(&c, &tail, &[Hash64::from_bytes([9; 64])]), "what it read is in the root");
         let mut other_leaves = c.clone();
         other_leaves.work_leaves = 41;
@@ -1267,14 +1393,6 @@ mod tests {
             step_root: Hash64::default(),
             stage_roots: vec![Hash64::from_bytes([0x41; 64])],
             generated: generated.clone(),
-        };
-        let layout = crate::palw_tir_class_v1::PalwTirLayoutV1 {
-            version: PALW_TIR_LAYOUT_VERSION_V1,
-            max_context: 8,
-            checkpoint_interval: 1,
-            h_tile: 16,
-            commit_tiles: vec![4],
-            state_tiles: vec![],
         };
         let binding = PalwEvalBindingV1::of(&eval, job.class_id, &layout, &roots, 40, vec![], vec![]);
         let r = binding.claim_roots();
