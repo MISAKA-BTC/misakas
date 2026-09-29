@@ -89,9 +89,7 @@ fn scale(alpha: f64, r: usize, rslora: bool) -> Result<(i64, i64)> {
     let div = if rslora {
         let s = (r as f64).sqrt().round() as i64;
         if (s * s) as usize != r {
-            return Err(LowerError::not_lowerable(format!(
-                "rsLoRA with rank {r}: alpha/√{r} is not a rational (a square rank is)"
-            )));
+            return Err(LowerError::not_lowerable(format!("rsLoRA with rank {r}: alpha/√{r} is not a rational (a square rank is)")));
         }
         s
     } else {
@@ -105,6 +103,85 @@ fn scale(alpha: f64, r: usize, rslora: bool) -> Result<(i64, i64)> {
 /// Modules the HL keeps as several matrices: a LoRA on them would need one `A` shared by slices of
 /// `B`, which is not modelled yet.
 const FUSED: &[&str] = &["qkv_proj", "gate_up_proj", "c_attn", "query_key_value", "W_pack", "Wqkv", "c_fc"];
+
+/// The HL per-layer projections the lowering adapts (each a single matrix), attention first.
+const ADAPTED_ROLES: &[&str] = &[
+    "attn.q",
+    "attn.k",
+    "attn.v",
+    "attn.o",
+    "attn.gate",
+    "mlp.gate",
+    "mlp.up",
+    "mlp.down",
+    "moe.shared.gate",
+    "moe.shared.up",
+    "moe.shared.down",
+];
+
+/// Whether the lowering adapts `role` (an HL per-layer projection with a single matrix).
+pub fn adapts_role(role: &str) -> bool {
+    ADAPTED_ROLES.contains(&role)
+}
+
+/// One module kind an adapter can target on `spec`: its HL role and its checkpoint leaf name (what
+/// `target_modules` lists), and whether the leaf is a fused projection (refused).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LoraTarget {
+    pub role: String,
+    pub leaf: String,
+    pub fused: bool,
+}
+
+/// **The module kinds an adapter can name on `spec`**: every per-layer projection the lowering
+/// adapts, attention's first, then the fused projections, which are marked because naming one is
+/// refused.
+pub fn targets(spec: &ArchSpec) -> Vec<LoraTarget> {
+    let mut out: Vec<LoraTarget> = Vec::new();
+    let mut push = |role: &str, path: &str| {
+        let leaf = path.rsplit('.').next().unwrap_or(path).to_string();
+        if !out.iter().any(|t| t.leaf == leaf) {
+            out.push(LoraTarget { role: role.to_string(), fused: FUSED.contains(&leaf.as_str()), leaf });
+        }
+    };
+    for role in ADAPTED_ROLES {
+        if let Some(path) = spec.hf.names.get(*role).filter(|p| p.contains("{L}")) {
+            push(role, path);
+        }
+    }
+    for (role, path) in &spec.hf.names {
+        if path.contains("{L}") && FUSED.contains(&path.rsplit('.').next().unwrap_or(path)) {
+            push(role, path);
+        }
+    }
+    out
+}
+
+/// **Every tensor of an adapter file is one the attached adapter reads**: a LoRA pair of a targeted
+/// projection, at some layer. PEFT's `all-linear` and its patterns also reach modules the lowering
+/// does not adapt, such as a router, an expert or a gated-delta projection. Their tensors would
+/// otherwise go unread, and the candidate would not be the trained model, so they are refused by
+/// name.
+pub fn check_adapter_tensors(spec: &ArchSpec, names: &[String]) -> Result<()> {
+    let ad = spec.adapter.as_ref().ok_or_else(|| LowerError::bad("no adapter is attached"))?;
+    let mut read = std::collections::BTreeSet::new();
+    for role in ad.roles.keys() {
+        for b in [false, true] {
+            if let Some(t) = ad.tensor(role, b) {
+                read.extend((0..spec.layers.len()).map(|l| t.replace("{L}", &l.to_string())));
+            }
+        }
+    }
+    let unread: Vec<&String> = names.iter().filter(|n| !read.contains(*n)).collect();
+    match unread.first() {
+        None => Ok(()),
+        Some(first) => Err(LowerError::not_lowerable(format!(
+            "LoRA adapter: {} tensor(s) of modules the lowering does not adapt, e.g. `{first}` (the targets it adapts: {})",
+            unread.len(),
+            ad.modules.values().map(|m| m.rsplit('.').next().unwrap_or(m)).collect::<Vec<_>>().join(", ")
+        ))),
+    }
+}
 
 /// Read `adapter_config.json` and attach the adapter to `spec`.
 pub fn attach(spec: &mut ArchSpec, adapter_config: &str) -> Result<()> {
@@ -134,7 +211,9 @@ pub fn attach(spec: &mut ArchSpec, adapter_config: &str) -> Result<()> {
         "none" => {}
         b => return refuse(format!("bias `{b}` (trained biases) is not modelled")),
     }
-    for k in ["modules_to_save", "layers_to_transform", "layers_pattern", "target_parameters", "trainable_token_indices", "exclude_modules"] {
+    for k in
+        ["modules_to_save", "layers_to_transform", "layers_pattern", "target_parameters", "trainable_token_indices", "exclude_modules"]
+    {
         if !absent(k) {
             return refuse(format!("`{k}` is not modelled"));
         }
@@ -148,7 +227,9 @@ pub fn attach(spec: &mut ArchSpec, adapter_config: &str) -> Result<()> {
         if let Some(o) = v.get(k).and_then(Value::as_object) {
             for (key, val) in o {
                 if key.contains('.') || key.contains('*') || key.contains('\\') {
-                    return Err(LowerError::not_lowerable(format!("LoRA adapter: `{k}` key `{key}` names part of the model, not a module kind")));
+                    return Err(LowerError::not_lowerable(format!(
+                        "LoRA adapter: `{k}` key `{key}` names part of the model, not a module kind"
+                    )));
                 }
                 out.insert(key.clone(), val.as_f64().ok_or_else(|| LowerError::bad(format!("`{k}.{key}` is not a number")))?);
             }
@@ -174,12 +255,7 @@ pub fn attach(spec: &mut ArchSpec, adapter_config: &str) -> Result<()> {
         return refuse(format!("a target on the fused projection `{f}` is not modelled yet"));
     }
     // The spec's per-layer projection roles and their module paths (`{L}` for the layer).
-    let layer_linear = |role: &str| -> bool {
-        matches!(
-            role,
-            "attn.q" | "attn.k" | "attn.v" | "attn.o" | "attn.gate" | "mlp.up" | "mlp.gate" | "mlp.down" | "moe.shared.up" | "moe.shared.gate" | "moe.shared.down"
-        )
-    };
+    let layer_linear = adapts_role;
     let regex_match = |pat: &str, path: &str| -> bool {
         // PEFT's string target is `re.fullmatch` over the module path. Only the forms adapters use
         // are modelled: `.*\.(a|b|c)` or `.*(a|b|c)`, and a plain leaf.
@@ -198,7 +274,8 @@ pub fn attach(spec: &mut ArchSpec, adapter_config: &str) -> Result<()> {
         let leaf = path.rsplit('.').next().unwrap_or(path);
         let hit = match &targets {
             Targets::Leaves(l) => l.iter().any(|t| t == leaf),
-            Targets::AllLinear => layer_linear(role),
+            // PEFT's all-linear takes every linear projection, a fused one included (refused below).
+            Targets::AllLinear => layer_linear(role) || FUSED.contains(&leaf),
             Targets::Regex(p) => regex_match(p, path),
         };
         if !hit {

@@ -16,8 +16,8 @@ use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session, SiteStat};
 use misaka_palw_tir_lower::lower::{self, LowerOpts, materialise};
 use misaka_palw_tir_lower::quant::QuantPolicy;
-use misaka_palw_tir_lower::weights::{Checkpoint, Overlay};
-use misaka_palw_tir_lower::{fidelity, hf_weights, hl, lora};
+use misaka_palw_tir_lower::weights::{Checkpoint, Overlay, TensorSource};
+use misaka_palw_tir_lower::{fidelity, lora};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,22 +62,23 @@ fn run(name: &str) -> Case {
     let (merged, parent_hf) = (rows("logits_merged"), rows("logits_base"));
     let cfg = std::fs::read_to_string(base_dir.join("config.json")).unwrap();
     let opts = LowerOpts { max_window: Some(64), ..LowerOpts::default() };
-    // The parent.
-    let spec_p = misaka_palw_tir_lower::parse_config_str(&cfg).expect("parent spec");
-    let hl_p = hl::build_program(&spec_p).expect("parent hl");
-    let bind_p = hf_weights::bind(&spec_p, &hl_p).expect("parent binding");
+    // The parent, as `palw-tir-fidelity` prepares it.
+    let parent = fidelity::prepare(&cfg, &opts).expect("parent");
+    let (hl_p, bind_p) = (&parent.hl, &parent.binding);
     let ck = Checkpoint::open(&base_dir).expect("checkpoint");
-    let (pf, _) = ParamStore::from_source(&hl_p, &bind_p, &ck).expect("parent params");
-    // The candidate: the parent's spec with the adapter attached, over the adapter's tensors too.
-    let mut spec_c = spec_p.clone();
-    lora::attach(&mut spec_c, &std::fs::read_to_string(ad_dir.join("adapter_config.json")).unwrap()).expect("attach");
-    let hl_c = hl::build_program(&spec_c).expect("candidate hl");
-    let bind_c = hf_weights::bind(&spec_c, &hl_c).expect("candidate binding");
+    let (pf, _) = ParamStore::from_source(hl_p, bind_p, &ck).expect("parent params");
+    // The candidate, as `palw-tir-fidelity --adapter` prepares it: the parent's spec with the
+    // adapter attached, its params last, over the adapter's tensors too.
+    let (cand, p) = fidelity::prepare_candidate(&parent, &std::fs::read_to_string(ad_dir.join("adapter_config.json")).unwrap(), &opts)
+        .expect("candidate");
+    let (hl_c, bind_c) = (&cand.hl, &cand.binding);
     let ad = Checkpoint::open(&ad_dir.join("adapter_model.safetensors")).expect("adapter");
-    let (cf, unused) = ParamStore::from_source(&hl_c, &bind_c, &Overlay { base: &ck, over: &ad }).expect("candidate params");
+    lora::check_adapter_tensors(&cand.spec, &ad.names()).expect("every adapter tensor is read");
+    let (cf, unused) = ParamStore::from_source(hl_c, bind_c, &Overlay { base: &ck, over: &ad }).expect("candidate params");
     assert!(unused.is_empty(), "{name}: tensors not read: {unused:?}");
     // 1. The unmerged float candidate is HF's merged model.
-    let fl: Vec<Vec<f64>> = Session::new(&hl_c, &cf).run(&tokens).unwrap().iter().map(|r| r.iter().map(|x| *x as f64).collect()).collect();
+    let fl: Vec<Vec<f64>> =
+        Session::new(hl_c, &cf).run(&tokens).unwrap().iter().map(|r| r.iter().map(|x| *x as f64).collect()).collect();
     let rel = (fl.concat().iter().zip(merged.concat()).map(|(a, b)| (a - b) * (a - b)).sum::<f64>()
         / merged.concat().iter().map(|b| b * b).sum::<f64>())
     .sqrt();
@@ -87,23 +88,20 @@ fn run(name: &str) -> Case {
     let calib = fidelity::random_sequences(hl_p.vocab, 6, 32, 7);
     let quiet = |_: usize, _: usize| {};
     let lp_loader = Resident(Arc::new(pf));
-    let stats_p = fidelity::calibrate(&hl_p, &lp_loader, &calib, &quiet).expect("parent calibration");
-    let lw_p = lower::lower(&hl_p, &opts).expect("parent lower");
+    let stats_p = fidelity::calibrate(hl_p, &lp_loader, &calib, &quiet).expect("parent calibration");
+    let lw_p = &parent.lowered;
     assert!(lw_p.program.params.iter().all(|p| !p.name.contains(lower::LORA_MARK)), "{name}: a parent param looks like an adapter's");
-    let mat_p = materialise(&lw_p, &hl_p, &lp_loader, &stats_p, &QuantPolicy::default(), &quiet).expect("parent artifact");
+    let mat_p = materialise(lw_p, hl_p, &lp_loader, &stats_p, &QuantPolicy::default(), &quiet).expect("parent artifact");
     // 3. The candidate: adapter params last; the parent's calibration plus the adapter's sites.
     let lc_loader = Resident(Arc::new(cf));
-    let stats_c = fidelity::calibrate(&hl_c, &lc_loader, &calib, &quiet).expect("candidate calibration");
-    let mut stats: BTreeMap<String, SiteStat> = stats_p.clone();
-    for (k, v) in stats_c {
-        if k.contains(lower::LORA_MARK) {
-            stats.insert(k, v);
-        }
-    }
-    let mut lw_c = lower::lower(&hl_c, &opts).expect("candidate lower");
-    let p = lower::adapter_params_last(&mut lw_c).expect("reorder");
+    let stats_c = fidelity::calibrate(hl_c, &lc_loader, &calib, &quiet).expect("candidate calibration");
+    let adapter_sites = stats_c.keys().filter(|k| k.contains(lower::LORA_MARK)).count();
+    let stats: BTreeMap<String, SiteStat> = fidelity::candidate_stats(&stats_p, stats_c);
+    assert!(adapter_sites > 0 && stats.len() == stats_p.len() + adapter_sites, "{name}: the parent's sites plus the adapter's");
+    let lw_c = &cand.lowered;
+    assert_eq!(p, lw_p.program.params.len(), "{name}: P is the parent's param count");
     assert_eq!(lw_c.program.params[..p], lw_p.program.params[..], "{name}: the candidate's first params are not the parent's");
-    let mat_c = materialise(&lw_c, &hl_c, &lc_loader, &stats, &QuantPolicy::default(), &quiet).expect("candidate artifact");
+    let mat_c = materialise(lw_c, hl_c, &lc_loader, &stats, &QuantPolicy::default(), &quiet).expect("candidate artifact");
     for (key, t) in &mat_p.params.tensors {
         assert_eq!(mat_c.params.tensors.get(key), Some(t), "{name}: parent tensor {key:?} changed");
     }
@@ -144,7 +142,12 @@ fn check(name: &str) {
     let c = run(name);
     assert!(c.top1 >= 0.9, "{name}: top-1 {}", c.top1);
     assert!(c.kl < 0.02, "{name}: KL {}", c.kl);
-    assert!(c.kl < c.kl_parent_vs_merged / 10.0, "{name}: the adapter's effect is not reproduced (KL {} vs parent {})", c.kl, c.kl_parent_vs_merged);
+    assert!(
+        c.kl < c.kl_parent_vs_merged / 10.0,
+        "{name}: the adapter's effect is not reproduced (KL {} vs parent {})",
+        c.kl,
+        c.kl_parent_vs_merged
+    );
     assert!(c.adapter_params > 0 && c.adapter_bytes > 0 && c.macs.1 > c.macs.0);
 }
 
@@ -168,10 +171,39 @@ fn mistral_q_v_rank_8_fractional_alpha() {
     check("mistral_qv_r8");
 }
 
+/// An adapter's tensors for a module the lowering does not adapt (a router here) are refused, never
+/// left unread; and PEFT's all-linear over a fused projection is refused like a named one.
+#[test]
+fn unread_adapter_tensors_and_fused_all_linear_are_refused() {
+    let spec =
+        misaka_palw_tir_lower::parse_config_str(&std::fs::read_to_string(root().join("hf/llama/config.json")).unwrap()).unwrap();
+    let mut s = spec.clone();
+    lora::attach(&mut s, r#"{"peft_type":"LORA","r":8,"lora_alpha":16,"target_modules":["q_proj"]}"#).unwrap();
+    let mut names: Vec<String> = (0..s.layers.len())
+        .flat_map(|l| ["A", "B"].map(|x| format!("base_model.model.model.layers.{l}.self_attn.q_proj.lora_{x}.weight")))
+        .collect();
+    lora::check_adapter_tensors(&s, &names).expect("q_proj's pairs are read");
+    names.push("base_model.model.model.layers.0.mlp.gate.lora_A.weight".into());
+    let e = lora::check_adapter_tensors(&s, &names).unwrap_err().to_string();
+    assert!(e.contains("does not adapt") && e.contains("mlp.gate.lora_A"), "{e}");
+    let phi3 = misaka_palw_tir_lower::parse_config_str(&std::fs::read_to_string(root().join("hf/phi3_longrope/config.json")).unwrap())
+        .unwrap();
+    let targets = lora::targets(&phi3);
+    assert!(
+        targets.iter().any(|t| t.leaf == "qkv_proj" && t.fused) && targets.iter().any(|t| t.leaf == "o_proj" && !t.fused),
+        "{targets:?}"
+    );
+    let e = lora::attach(&mut phi3.clone(), r#"{"peft_type":"LORA","r":8,"lora_alpha":16,"target_modules":"all-linear"}"#)
+        .expect_err("all-linear over qkv_proj")
+        .to_string();
+    assert!(e.contains("fused"), "{e}");
+}
+
 /// What is not modelled is refused by name, never ignored.
 #[test]
 fn unmodelled_adapters_are_refused() {
-    let spec = misaka_palw_tir_lower::parse_config_str(&std::fs::read_to_string(root().join("hf/llama/config.json")).unwrap()).unwrap();
+    let spec =
+        misaka_palw_tir_lower::parse_config_str(&std::fs::read_to_string(root().join("hf/llama/config.json")).unwrap()).unwrap();
     for (cfg, why) in [
         (r#"{"peft_type":"LORA","r":8,"lora_alpha":16,"target_modules":["q_proj"],"use_dora":true}"#, "DoRA"),
         (r#"{"peft_type":"LORA","r":8,"lora_alpha":16,"target_modules":["q_proj"],"bias":"all"}"#, "bias"),

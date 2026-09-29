@@ -40,9 +40,10 @@ pub trait TensorSource {
 }
 
 /// Two sources read as one: `over` (an adapter's tensors) before `base` (the parent checkpoint).
+/// Both are `Sync`, so an overlay streams to the float reference's parallel loader.
 pub struct Overlay<'a> {
-    pub base: &'a dyn TensorSource,
-    pub over: &'a dyn TensorSource,
+    pub base: &'a (dyn TensorSource + Sync),
+    pub over: &'a (dyn TensorSource + Sync),
 }
 
 impl TensorSource for Overlay<'_> {
