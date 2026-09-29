@@ -217,7 +217,11 @@ struct FinishArgs<'s> {
 
 fn finish_llama(p: &mut P, f: Flavor, a: FinishArgs) -> Result<ArchSpec> {
     let theta = llama_defaults(f).theta;
-    let rope = p.rope(a.hd, RopeStyle::Half, Some(theta), None, 1.0, Some(a.max_pos), None)?;
+    // Ministral-3: Mistral with Llama-4's query scaling (`llama_4_scaling_beta`), applied after the
+    // rotation on every layer.
+    let ministral3 =
+        f == Flavor::Mistral && (a.arch == "Ministral3ForCausalLM" || p.cfg.opt_str("model_type")?.as_deref() == Some("ministral3"));
+    let (rope, q_temp) = p.rope_q_scaled(a.hd, RopeStyle::Half, Some(theta), None, 1.0, Some(a.max_pos), None, ministral3)?;
     let norm = NormSpec::rms(a.eps);
 
     let (mut emb_scale, mut multiplier, mut logit_scale, mut pre_scale) = (1.0, 1.0, 1.0, 1.0);
@@ -261,6 +265,7 @@ fn finish_llama(p: &mut P, f: Flavor, a: FinishArgs) -> Result<ArchSpec> {
         let mut at = attn(a.h, a.kv, a.hd, position, (a.qkv_bias, a.o_bias));
         at.scale = attn_scale;
         at.window = window_for(&a.types[i], a.sw);
+        at.q_temperature = q_temp;
         if f == Flavor::Qwen3 {
             at.qk_norm = Some(QkNorm { norm, scope: QkNormScope::PerHeadShared });
         }
@@ -280,6 +285,7 @@ fn finish_llama(p: &mut P, f: Flavor, a: FinishArgs) -> Result<ArchSpec> {
     }
     let model_type = match f {
         Flavor::Llama => "llama",
+        Flavor::Mistral if ministral3 => "ministral3",
         Flavor::Mistral => "mistral",
         Flavor::Qwen2 => "qwen2",
         Flavor::Qwen3 => "qwen3",

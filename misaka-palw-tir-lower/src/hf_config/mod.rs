@@ -29,6 +29,7 @@ pub const SUPPORTED: &[(&str, &str)] = &[
     ("LlamaForCausalLM", "C1 C2"),
     ("MistralForCausalLM", "C1 C2"),
     ("MinistralForCausalLM", "C1 C2"),
+    ("Ministral3ForCausalLM", "C1 C2"),
     ("GlmForCausalLM", "C1"),
     ("Glm4ForCausalLM", "C1"),
     ("Olmo3ForCausalLM", "C1 C2"),
@@ -262,7 +263,7 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         "LlamaForCausalLM" => dense::llama(&mut p, Flavor::Llama)?,
         "MistralForCausalLM" => dense::llama(&mut p, Flavor::Mistral)?,
         // Ministral (8B-2410): Mistral math with `layer_types` (all sliding by default).
-        "MinistralForCausalLM" => dense::llama(&mut p, Flavor::Mistral)?,
+        "MinistralForCausalLM" | "Ministral3ForCausalLM" => dense::llama(&mut p, Flavor::Mistral)?,
         "GlmForCausalLM" => dense::glm(&mut p, false)?,
         "Glm4ForCausalLM" => dense::glm(&mut p, true)?,
         "Olmo3ForCausalLM" => dense::olmo3(&mut p)?,
@@ -467,10 +468,10 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
         }
         "qwen3_5_text" => hybrid::qwen3_5_text(&mut sub, false, prefix, lm_head, aliases)?,
         "qwen3_5_moe_text" => hybrid::qwen3_5_text(&mut sub, true, prefix, lm_head, aliases)?,
-        "llama" | "mistral" | "qwen2" | "qwen2_vl_text" | "qwen2_5_vl_text" => {
+        "llama" | "mistral" | "ministral3" | "qwen2" | "qwen2_vl_text" | "qwen2_5_vl_text" => {
             let flavor = match tmt {
                 "llama" => Flavor::Llama,
-                "mistral" => Flavor::Mistral,
+                "mistral" | "ministral3" => Flavor::Mistral,
                 _ => Flavor::Qwen2,
             };
             let mut s = dense::llama_with_prefix(&mut sub, flavor, prefix, lm_head)?;
@@ -584,7 +585,51 @@ impl P<'_> {
         max_pos: Option<usize>,
         top_orig: Option<usize>,
     ) -> Result<RopeSpec> {
-        let rc = read_rope_config(&self.cfg, theta_default, layer_type)?;
+        Ok(self.rope_q_scaled(rotary_dim, style, theta_default, layer_type, partial, max_pos, top_orig, false)?.0)
+    }
+
+    /// [`P::rope`], and the query temperature a `llama_4_scaling_beta` among the rope parameters
+    /// asks for (Ministral-3: `q ·= 1 + β·ln(1 + ⌊p / original_max_position_embeddings⌋)`), which
+    /// only an architecture that applies it may carry (`q_scaled`) — elsewhere it is refused, never
+    /// dropped.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rope_q_scaled(
+        &self,
+        rotary_dim: usize,
+        style: RopeStyle,
+        theta_default: Option<f64>,
+        layer_type: Option<&str>,
+        partial: f64,
+        max_pos: Option<usize>,
+        top_orig: Option<usize>,
+        q_scaled: bool,
+    ) -> Result<(RopeSpec, Option<QTemperature>)> {
+        let mut rc = read_rope_config(&self.cfg, theta_default, layer_type)?;
+        let beta = match rc.params.remove("llama_4_scaling_beta") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(v.as_f64().ok_or_else(|| LowerError::bad(format!("{}: llama_4_scaling_beta {v}", self.cfg.arch)))?),
+        };
+        if beta.is_some() && !q_scaled {
+            return Err(LowerError::not_lowerable(format!(
+                "{}: llama_4_scaling_beta (a query scaling) on an architecture that does not apply it",
+                self.cfg.arch
+            )));
+        }
+        // transformers 5 also keeps the model's own length among the rope parameters.
+        if let Some(v) = rc.params.remove("max_position_embeddings")
+            && v.as_u64().map(|m| m as usize) != max_pos
+        {
+            return Err(LowerError::bad(format!("{}: rope_parameters.max_position_embeddings {v} ≠ {max_pos:?}", self.cfg.arch)));
+        }
+        let temp = match beta {
+            Some(b) => {
+                let floor = rc.params.get("original_max_position_embeddings").and_then(Value::as_u64).ok_or_else(|| {
+                    LowerError::bad(format!("{}: llama_4_scaling_beta without original_max_position_embeddings", self.cfg.arch))
+                })?;
+                Some(QTemperature { floor: floor as usize, scale: b, offset: 0 })
+            }
+            None => None,
+        };
         let freqs = compute_freqs(
             &self.cfg.arch,
             &rc,
@@ -595,7 +640,7 @@ impl P<'_> {
                 partial_rotary_factor: partial,
             },
         )?;
-        Ok(RopeSpec { rotary_dim, offset: 0, style, freqs })
+        Ok((RopeSpec { rotary_dim, offset: 0, style, freqs }, temp))
     }
 
     pub fn finish_spec(&mut self, s: SpecParts) -> ArchSpec {

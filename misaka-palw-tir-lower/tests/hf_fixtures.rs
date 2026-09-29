@@ -163,6 +163,7 @@ fixtures!(
     llama4,
     llama4_vlm,
     gemma4,
+    ministral3,
     deepseek_v2,
     deepseek_v2_lite,
     deepseek_v3,

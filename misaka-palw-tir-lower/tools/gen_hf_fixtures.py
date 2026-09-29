@@ -123,6 +123,13 @@ CONFIGS = {
     # Ministral (8B-2410): Mistral with per-layer sliding windows.
     "ministral": (c("ministral", "MinistralForCausalLM", L, num_hidden_layers=3, sliding_window=4, head_dim=16,
                     layer_types=["sliding_attention", "full_attention", "sliding_attention"]), {}),
+    # Ministral-3: Mistral with yarn and Llama-4's query scaling over the original length (4 here,
+    # so it grows inside the 10 positions).
+    "ministral3": (c("ministral3", "Ministral3ForCausalLM", L, num_hidden_layers=2, head_dim=8, max_position_embeddings=64,
+                     rope_parameters={"rope_type": "yarn", "rope_theta": 1000000.0, "factor": 16.0,
+                                      "original_max_position_embeddings": 4, "max_position_embeddings": 64,
+                                      "beta_fast": 32.0, "beta_slow": 1.0, "mscale_all_dim": 1.0, "mscale": 1.0,
+                                      "llama_4_scaling_beta": 0.5}), {}),
     "cohere": (c("cohere", "CohereForCausalLM", L, num_hidden_layers=2, use_qk_norm=True, logit_scale=0.5), {}),
     "cohere2": (c("cohere2", "Cohere2ForCausalLM", L, num_hidden_layers=4, head_dim=8, sliding_window=4,
                   layer_types=["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"]), {}),

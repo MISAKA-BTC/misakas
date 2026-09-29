@@ -198,19 +198,23 @@ pub struct AttnSpec {
     pub param_prefix: Option<String>,
 }
 
-/// Llama-4's `attn_temperature_tuning` (`floor_scale`, `attn_scale`).
+/// A query temperature by position: Llama-4's `attn_temperature_tuning` (`floor_scale`,
+/// `attn_scale`, over `p + 1`) and Ministral-3's `llama_4_scaling_beta` (over the original context
+/// length, over `p`).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct QTemperature {
     pub floor: usize,
     pub scale: f64,
+    /// Added to the position before the division: 1 (Llama-4) or 0 (Ministral-3).
+    pub offset: usize,
 }
 
 impl QTemperature {
-    /// The factor at position `p`: `log1p(floor((p + 1) / floor)) · scale + 1` in float32 as
+    /// The factor at position `p`: `log1p(floor((p + offset) / floor)) · scale + 1` in float32 as
     /// transformers computes it. Its float32 quotient is exact below `2^23` positions, so the floor
     /// is the integer one.
     pub fn at(&self, p: usize) -> f32 {
-        self.of_quotient((p + 1) / self.floor.max(1))
+        self.of_quotient((p + self.offset) / self.floor.max(1))
     }
 
     /// The factor for `floor((p + 1) / floor) = q`.

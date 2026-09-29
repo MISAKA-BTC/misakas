@@ -2376,7 +2376,7 @@ fn lower_pos_scale(
     site: &str,
     want: &Want,
 ) -> Result<Val> {
-    let rows = cx.history_bound as usize / temp.floor.max(1) + 1;
+    let rows = (cx.history_bound as usize + temp.offset) / temp.floor.max(1) + 1;
     let tab = decl(
         b,
         cx,
@@ -2390,8 +2390,8 @@ fn lower_pos_scale(
             Ok(IntTensor::i32(vec![rows], v))
         }),
     )?;
-    let one = b.c(DType::I64, 1);
-    let p1 = b.add(tir::Ref::Input(INPUT_POS), one, DType::I64);
+    let off = b.c(DType::I64, temp.offset as i128);
+    let p1 = b.add(tir::Ref::Input(INPUT_POS), off, DType::I64);
     let fl = b.c(DType::I64, temp.floor.max(1) as i128);
     let q = b.div(p1, fl, Rounding::Floor, DType::I64);
     let q = b.clamp(q, 0, rows as i64 - 1, DType::Idx);

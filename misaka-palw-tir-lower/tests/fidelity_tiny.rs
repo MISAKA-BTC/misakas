@@ -112,6 +112,7 @@ dense!(
     glm,
     glm4,
     ministral,
+    ministral3,
     cohere,
     cohere2,
     stablelm,

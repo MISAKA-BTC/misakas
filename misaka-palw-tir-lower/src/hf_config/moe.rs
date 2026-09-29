@@ -794,7 +794,7 @@ pub(crate) fn llama4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchS
             } else {
                 let mut a = attn(h, kv, hd, Position::None, (bias, bias));
                 if tune {
-                    a.q_temperature = Some(QTemperature { floor, scale: attn_scale });
+                    a.q_temperature = Some(QTemperature { floor, scale: attn_scale, offset: 1 });
                 }
                 a
             };
