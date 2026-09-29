@@ -41,6 +41,11 @@ pub use v2::{
     PalwTirContainerV2, PalwTirTensorEntryV2, pipeline_instances_v2, write_container_v2,
 };
 
+/// **`PALWTIRS`**: a composite candidate's adapter section (RFC-0004 §6.7) — the candidate's program
+/// and the tensors of its params `p..`; its params `0..p` are the parent container's.
+pub mod section;
+pub use section::{PALW_TIR_SECTION_MAGIC_V1, PALW_TIR_SECTION_VERSION_V1, PalwTirSectionV1, section_instances_v1, write_section_v1};
+
 pub const PALW_TIR_CONTAINER_MAGIC_V1: &[u8; 8] = b"PALWTIR1";
 pub const PALW_TIR_CONTAINER_VERSION_V1: u16 = 1;
 /// Every tensor starts at a multiple of this.
@@ -127,12 +132,12 @@ pub fn tensor_bytes_v1(p: &TirProgramV1, j: u16) -> u64 {
     d.shape.iter().map(|x| *x as u64).product::<u64>() * d.dtype.width() as u64
 }
 
-fn align(x: u64) -> u64 {
+pub(crate) fn align(x: u64) -> u64 {
     x.div_ceil(PALW_TIR_TENSOR_ALIGN_V1) * PALW_TIR_TENSOR_ALIGN_V1
 }
 
 /// The fixed prefix: magic, version, header length.
-const PREFIX: u64 = 8 + 2 + 4;
+pub(crate) const PREFIX: u64 = 8 + 2 + 4;
 
 /// **Write a container**, one tensor at a time: `tensor(param, layer)` is asked for each instance
 /// in inventory order and must return exactly its declared bytes. Returns the file digest
@@ -204,7 +209,7 @@ pub fn write_container_v1(
 /// Every element of a param lies in its dtype by construction of the byte width, except nothing:
 /// `i8`/`i16`/`i32`/`i64` and `idx` (unsigned 32) cover every bit pattern of their width. `i128` is
 /// never a param (NF-7). Kept as a function so the rule has one place.
-fn check_values(dtype: DType, bytes: &[u8]) -> std::result::Result<(), String> {
+pub(crate) fn check_values(dtype: DType, bytes: &[u8]) -> std::result::Result<(), String> {
     if dtype == DType::I128 {
         return Err("an i128 param".into());
     }
@@ -214,10 +219,10 @@ fn check_values(dtype: DType, bytes: &[u8]) -> std::result::Result<(), String> {
     Ok(())
 }
 
-struct DigestWriter<W: Write> {
-    inner: W,
-    state: blake2b_simd::State,
-    written: u64,
+pub(crate) struct DigestWriter<W: Write> {
+    pub(crate) inner: W,
+    pub(crate) state: blake2b_simd::State,
+    pub(crate) written: u64,
 }
 
 impl<W: Write> Write for DigestWriter<W> {
@@ -235,7 +240,7 @@ impl<W: Write> Write for DigestWriter<W> {
 /// Key of [`file_digest_v1`].
 pub const PALW_TIR_FILE_DIGEST_DOMAIN_V1: &[u8] = b"misaka-palw/tir/container-file/v1";
 
-fn digest_state() -> blake2b_simd::State {
+pub(crate) fn digest_state() -> blake2b_simd::State {
     blake2b_simd::Params::new().hash_length(64).key(PALW_TIR_FILE_DIGEST_DOMAIN_V1).to_state()
 }
 
@@ -449,6 +454,48 @@ mod tests {
         std::fs::write(&path, &bytes).expect("write");
         assert!(matches!(PalwTirContainerV1::open(&path), Err(PalwTirContainerError::Magic)));
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A section holds params `p..` alone and serves them as the container does**: written from a
+    /// container's tensors, it opens only at its own `p` (another `p`, a PALWTIR1 reader, a flipped
+    /// byte or a truncation are refused), every held instance reads back the container's bytes at an
+    /// aligned offset, and the params below `p` are not in it; `p` must leave it at least one param.
+    #[test]
+    fn a_section_holds_the_params_from_p_on_and_opens_only_at_its_own_p() {
+        let p = program();
+        let mp = params(&p);
+        let tag = std::process::id();
+        let full = std::env::temp_dir().join(format!("palwtir1-full-{tag}.palwtir"));
+        write_container_v1(&full, &p, vec![1], [7u8; 64], "{}".into(), &mut |j, l| Ok(mp.tensors[&(j, l)].to_le_bytes())).expect("written");
+        let c = PalwTirContainerV1::open(&full).expect("opens");
+        let path = std::env::temp_dir().join(format!("palwtirs-{tag}.palwtirs"));
+        let split = 2u32;
+        let digest = write_section_v1(&path, &p, split, vec![1], [7u8; 64], "{\"composite\":{\"p\":2}}".into(), &mut |j, l| {
+            c.read_tensor_bytes(j, l).map_err(|e| e.to_string())
+        })
+        .expect("written");
+        assert_eq!(file_digest_v1(&path).expect("digest"), digest);
+        let s = PalwTirSectionV1::open(&path, split).expect("opens at its p");
+        assert_eq!(s.program, p);
+        assert_eq!(s.header.tensors.iter().map(|e| (e.param, e.layer)).collect::<Vec<_>>(), section_instances_v1(&p, split));
+        assert!(s.header.tensors.iter().all(|e| e.param as u32 >= split && e.offset % PALW_TIR_TENSOR_ALIGN_V1 == 0));
+        for e in &s.header.tensors {
+            assert_eq!(s.read_tensor_bytes(e.param, e.layer).expect("bytes"), c.read_tensor_bytes(e.param, e.layer).expect("bytes"));
+        }
+        assert!(s.locate(0, None).is_none() && s.locate(1, Some(0)).is_none(), "the parent's params are not in it");
+        assert!(PalwTirSectionV1::open(&path, 1).is_err(), "another p");
+        assert!(PalwTirSectionV1::open(&path, 3).is_err(), "another p");
+        assert!(matches!(PalwTirContainerV1::open(&path), Err(PalwTirContainerError::Magic)), "not a PALWTIR1 file");
+        assert!(matches!(PalwTirSectionV1::open(&full, split), Err(PalwTirContainerError::Magic)), "not a section");
+        let empty = std::env::temp_dir().join(format!("palwtirs-empty-{tag}.palwtirs"));
+        assert!(write_section_v1(&empty, &p, p.params.len() as u32, vec![], [0; 64], String::new(), &mut |_, _| Ok(vec![])).is_err());
+        let mut bytes = std::fs::read(&path).expect("read");
+        bytes.truncate(bytes.len() - 1);
+        std::fs::write(&path, &bytes).expect("write");
+        assert!(PalwTirSectionV1::open(&path, split).is_err(), "truncated");
+        for f in [&full, &path, &empty] {
+            let _ = std::fs::remove_file(f);
+        }
     }
 
     #[test]
