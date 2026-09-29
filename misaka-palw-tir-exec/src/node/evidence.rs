@@ -32,12 +32,13 @@ use kaspa_consensus_core::palw_prompt_ids_v1::{
 use kaspa_consensus_core::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1, step_tile_leaf_hash_v1};
 use kaspa_consensus_core::palw_step_refute::{
     PALW_LOGITS_TILE_LANES, PalwBase0DecodeTokensV1, PalwDecodeTokenPinV1, PalwTiledDecodePinV1, PalwTiledDecodeTokensV1,
-    flat_logits_scheme_id_v1, tiled_decode_pin_v1, tiled_logits_rows_root_v1, tiled_logits_scheme_id_v1,
+    flat_logits_scheme_id_v1, tiled_decode_pin_v1, tiled_logits_row_root_v1, tiled_logits_rows_root_v1, tiled_logits_scheme_id_v1,
+    tiled_logits_tile_leaf_v1,
 };
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirEvidenceErrorV1, PalwTirEvidenceStoreV1, PalwTirLogitsConsistencyV1,
-    PalwTirTraceLanesV1, build_tir_cone_refutation_v1,
+    PalwTirTraceLanesV1, build_tir_cone_refutation_v1, palw_tir_row_node_parts_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirLeafKindV1, PalwTirStepBindingV1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
@@ -524,4 +525,42 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
         self.tree.node_parts(level, index)
     }
+
+    /// **Rows-tree node `(level, index)` of the committed tiled trace** (the second IR fence's
+    /// `TirRowNode`): from the rows this store holds — a capture's, or this node's own run
+    /// (`palw_tir_row_node_parts_v1`). A store holding only a summary of the trace answers none.
+    fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        match self.trace {
+            TirTraceV1::Rows { rows, .. } => palw_tir_row_node_parts_v1(&self.binding.job_context, rows, level, index),
+            TirTraceV1::Summary { .. } | TirTraceV1::Absent => None,
+        }
+    }
+}
+
+/// **The rows tree of a tiled logits trace, held level by level** — the step tree's own shape over
+/// the row roots (`tiled_logits_row_root_v1`), which is what a claim's `TirRowNode` answers open: a
+/// seat whose own steps are the claim's descends the claim's rows tree against this one. `None` for
+/// no rows, or rows that build no root.
+pub fn tir_rows_tree_v1(ctx: &PalwJobContextV2, rows: &[Vec<i32>]) -> Option<TirStepTreeV1> {
+    let ctx_hash = ctx.context_hash();
+    let roots = rows
+        .iter()
+        .enumerate()
+        .map(|(r, row)| tiled_logits_row_root_v1(&ctx_hash, u32::try_from(r).ok()?, row))
+        .collect::<Option<Vec<Hash64>>>()?;
+    (!roots.is_empty()).then(|| TirStepTreeV1::full(&roots))
+}
+
+/// **Row `row`'s tile leaves** (`tiled_logits_tile_leaf_v1`, one per 4,096 lanes) — the frontier of
+/// a level-0 `TirRowNode` answer, set against a claim's to name the tile it disputes.
+pub fn tir_row_tile_leaves_v1(ctx: &PalwJobContextV2, rows: &[Vec<i32>], row: u32) -> Option<Vec<Hash64>> {
+    let ctx_hash = ctx.context_hash();
+    let lanes = rows.get(row as usize)?;
+    Some(
+        lanes
+            .chunks(PALW_LOGITS_TILE_LANES)
+            .enumerate()
+            .map(|(t, tile)| tiled_logits_tile_leaf_v1(&ctx_hash, row, t as u32, tile))
+            .collect(),
+    )
 }

@@ -2084,22 +2084,18 @@ pub(crate) fn palw_da_unit_answer_v1(
         }
         PalwDaUnitV1::Held(missing) => missing,
         // **RFC-0002 Phase F's second IR fence: an IR step unit** (evidence transport C) — a step leaf,
-        // or an interior step node a seat's descent reached — answered by the IR responder
-        // (`TirBackendV1::step_unit_answer`): consensus's builders over this capture's store (a dense
-        // capture's own leaves, or this node's re-derivation of its fold: the executor answering for
-        // its own run), a unit past the execution by the binding proving so — each self-checked by
-        // the fold's check, the program stripped.
-        PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } => {
+        // an interior step node a seat's descent reached, or a node of the tiled trace's rows tree —
+        // answered by the IR responder (`TirBackendV1::step_unit_answer`): consensus's builders over
+        // this capture's store (a dense capture's own leaves, or this node's re-derivation of its fold:
+        // the executor answering for its own run; the rows from the capture's committed trace), a unit
+        // past the execution by the binding proving so — each self-checked by the fold's check, the
+        // program stripped.
+        PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. } => {
             if !tir_capture {
                 return Err(format!("{unit:?} is an IR claim's unit, and this material is not an IR capture"));
             }
             let tir = tir.ok_or_else(|| format!("{unit:?}: the claim's IR class does not resolve on this node"))?;
             return tir.step_unit_answer(capture, unit);
-        }
-        PalwDaUnitV1::TirRowNode { level, index } => {
-            return Err(format!(
-                "IR rows-tree node ({level}, {index}): answered by the IR responder, not the capture path (RFC-0002 Phase F)"
-            ));
         }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
@@ -14452,7 +14448,7 @@ impl PalwPanelService {
         // The second IR fence's step leaves are answered by the claim's IR backend (RFC-0002 evidence
         // transport C): resolved here, once, when a unit asks for one — a class this node does not
         // hold as IR answers them with the unit's own error.
-        let tir = if units.iter().any(|unit| unit.is_tir_step_v1()) {
+        let tir = if units.iter().any(|unit| unit.is_tir_fence2_v1()) {
             match self.backends().resolve_tir_v1(class_id, artifact_root) {
                 Some(Ok(tir)) => Some(tir),
                 Some(Err(why)) => return Err(PalwDaClaimHoldV1::Material(format!("the claim's IR backend does not build: {why}"))),

@@ -28,7 +28,7 @@ pub use misaka_palw_tir_exec::node::{
     PALW_TIR_LEAF_ANNEX_MAGIC_V1, PalwTirAnnexTraceV1, PalwTirLeafAnnexV1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1,
     TirCloseSizeV1, TirDivergenceV1, TirRetainedJobV1, TirStepTreeV1, palw_tir_leaf_annex_verify_v1, set_tir_fused_kernels_default_v1,
     tir_dissect_choice_v1, tir_drill_covering_leaves_v1, tir_first_divergence_from_opening_v1, tir_fused_kernels_default_v1,
-    tir_terminal_close_sizes_v1, tir_trace_event_disclosure_of_capture_v1,
+    tir_row_tile_leaves_v1, tir_rows_tree_v1, tir_terminal_close_sizes_v1, tir_trace_event_disclosure_of_capture_v1,
 };
 
 /// The lineage's id.

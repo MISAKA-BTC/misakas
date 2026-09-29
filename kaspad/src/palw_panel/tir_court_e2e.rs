@@ -1140,11 +1140,13 @@ fn a_seat_pursues_a_large_claim_through_served_annexes() {
         "self.tir_annex_pursuit_tick_v1(session, bond_key, network_domain, current_daa, &target, due, tir, &mut books).await;"
     ));
     let tick = &court_src[court_src.find("    async fn tir_annex_pursuit_tick_v1(").expect("the tick")..];
-    assert!(
-        tick.contains(
-            "self.request_leaf_evidence_v1(network_domain, claim, palw_tir_annex_request_index_v1(0), 0, current_daa).await;"
-        )
-    );
+    // The first ask: leaf 0 — or, on a trace descent, decode row 0's door leaf (`with_trace`).
+    let first_ask = &tick[tick.find("let mut pursuit = PalwTirAnnexPursuitV1::new(own, current_daa);").expect("the pursuit")..];
+    let first_ask = &first_ask[..first_ask.find("            return;").expect("the first ask's end")];
+    assert!(first_ask.contains("pursuit = pursuit.with_trace(rows, row0);"));
+    assert!(first_ask.contains(
+        "self.request_leaf_evidence_v1(network_domain, claim, palw_tir_annex_request_index_v1(leaf), leaf, current_daa).await;"
+    ));
     assert!(tick.contains("palw_tir_leaf_annex_verify_v1("));
     assert!(tick.contains("palw_tir_annex_step_v1(&tir, &task, &annex, &binding, &rules)"));
     let panel = include_str!("../palw_panel.rs");
@@ -1475,16 +1477,20 @@ fn node_answers_c(
 /// read back as an annex it is the served annex of that leaf, byte for byte; interior nodes at every
 /// level (the root, the first two and the last of each level) by a frontier and opening the fold's
 /// check takes; a unit past the execution — a leaf at its leaf count, a node past its level or above
-/// the root — by the claim's binding proving so. The duty loop's door answers through the class's
-/// IR responder, and without one answers with an error, never a guess.
+/// the root — by the claim's binding proving so. The tiled trace's rows tree likewise (`TirRowNode`):
+/// every level's nodes and rows (a row by its tile leaves) with the claim's ids, exactly as a seat's
+/// own rows tree over the same rows holds them (`tir_rows_tree_v1`, `tir_row_tile_leaves_v1`); a row
+/// at the decode count, a node above the rows tree, and any rows node of a flat trace proven out of
+/// range. The duty loop's door answers through the class's IR responder, and without one answers
+/// with an error, never a guess.
 #[test]
 fn the_node_answers_every_ir_step_unit_from_its_capture_dense_or_fold() {
     use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
     use kaspa_consensus_core::palw_tir_court_v1::{
-        check_tir_step_leaf_disclosure_v1, check_tir_step_node_disclosure_v1, check_tir_step_out_of_range_v1,
-        palw_tir_step_tree_height_v1, palw_tir_step_tree_width_v1,
+        check_tir_row_node_disclosure_v1, check_tir_step_leaf_disclosure_v1, check_tir_step_node_disclosure_v1,
+        check_tir_step_out_of_range_v1, palw_tir_step_tree_height_v1, palw_tir_step_tree_width_v1,
     };
-    use misaka_palw_sdk::lineages::tir::{PalwTirLeafAnnexV1, TirCaptureV1};
+    use misaka_palw_sdk::lineages::tir::{PalwTirLeafAnnexV1, TirCaptureV1, tir_row_tile_leaves_v1, tir_rows_tree_v1};
     for tiled in [true, false] {
         let ir = ir_class(if tiled { "c-answer-tiled" } else { "c-answer-flat" }, tiled);
         let tir = ir.tir();
@@ -1539,11 +1545,49 @@ fn the_node_answers_every_ir_step_unit_from_its_capture_dense_or_fold() {
                 proof.class.program = program.clone();
                 check_tir_step_out_of_range_v1(trace_root, execution_root, &past, &proof, LADDER).expect("proven past the execution");
             }
+            // The rows tree of the committed trace, as the seat's own rows tree holds it.
+            let ctx = &capture.binding.job_context;
+            let rows = u64::from(ctx.exact_decode_tokens);
+            let rows_height = palw_tir_step_tree_height_v1(rows);
+            let rows_tree = tir_rows_tree_v1(ctx, &capture.logits_rows).expect("the rows build a tree");
+            let proven_out = |unit: PalwDaUnitV1| {
+                let PalwDaAnswerV1::TirStepOutOfRange(proof) = answer(unit) else { panic!("tiled {tiled}: {unit:?} is out of range") };
+                let mut proof = proof.as_ref().clone();
+                proof.class.program = program.clone();
+                check_tir_step_out_of_range_v1(trace_root, execution_root, &unit, &proof, LADDER)
+                    .unwrap_or_else(|e| panic!("tiled {tiled}: {unit:?} is proven out of range: {e}"));
+            };
+            for level in 0..=rows_height {
+                let width = palw_tir_step_tree_width_v1(rows, level).expect("a level of the rows tree");
+                for index in [0, 1, width - 1].into_iter().filter(|i| *i < width) {
+                    let unit = PalwDaUnitV1::TirRowNode { level, index };
+                    if !tiled {
+                        proven_out(unit);
+                        continue;
+                    }
+                    let PalwDaAnswerV1::TirRowNode(disclosure) = answer(unit) else { panic!("{unit:?}: a rows-tree disclosure") };
+                    assert!(disclosure.binding.class.program.is_empty(), "it rides without the program");
+                    let mut filled = disclosure.as_ref().clone();
+                    filled.binding.class.program = program.clone();
+                    check_tir_row_node_disclosure_v1(trace_root, execution_root, level, index, &filled, LADDER)
+                        .unwrap_or_else(|e| panic!("fold {fold}: {unit:?} answers: {e}"));
+                    assert_eq!(filled.generated_token_ids, capture.generated, "the ids that tie the rows root to the trace root");
+                    let own = if level == 0 {
+                        tir_row_tile_leaves_v1(ctx, &capture.logits_rows, index as u32).expect("a row")
+                    } else {
+                        rows_tree.node_parts(level, index).expect("a node of the rows tree").0
+                    };
+                    assert_eq!(filled.frontier, own, "{unit:?}: the answer's frontier is the seat's own rows tree's");
+                }
+            }
+            proven_out(PalwDaUnitV1::TirRowNode { level: 0, index: rows });
+            proven_out(PalwDaUnitV1::TirRowNode { level: rows_height + 1, index: 0 });
             // The duty loop's door: the class's IR responder answers; none, an error.
             let units = [
                 PalwDaUnitV1::TirStepNode { level: height, index: 0 },
                 PalwDaUnitV1::TirStepLeaf { index: n - 1 },
                 PalwDaUnitV1::TirStepLeaf { index: n },
+                PalwDaUnitV1::TirRowNode { level: 0, index: rows - 1 },
             ];
             let backend = ir.backend();
             let answers = |tir: Option<&TirBackendV1>| {
@@ -1564,6 +1608,14 @@ fn the_node_answers_every_ir_step_unit_from_its_capture_dense_or_fold() {
             assert!(matches!(&with[0], Some(Ok(PalwDaAnswerV1::TirStepNode(_)))), "{:?}", with[0]);
             assert!(matches!(&with[1], Some(Ok(PalwDaAnswerV1::TirStepLeaf(d))) if d.opening.leaf_index == n - 1));
             assert!(matches!(&with[2], Some(Ok(PalwDaAnswerV1::TirStepOutOfRange(_)))), "a leaf past the job, proven so");
+            assert!(
+                matches!(
+                    (&with[3], tiled),
+                    (Some(Ok(PalwDaAnswerV1::TirRowNode(_))), true) | (Some(Ok(PalwDaAnswerV1::TirStepOutOfRange(_))), false)
+                ),
+                "the last row, or a flat trace's out-of-range proof: {:?}",
+                with[3]
+            );
             assert!(answers(None).iter().all(|a| matches!(a, Some(Err(why)) if why.contains("does not resolve"))));
         }
     }
@@ -1886,7 +1938,7 @@ fn a_withheld_pursuit_demands_on_chain_only_past_the_fence_and_within_its_sessio
     let court_src = &court_src[..court_src.find("\n#[cfg(test)]").unwrap_or(court_src.len())];
     let tick = &court_src[court_src.find("    async fn tir_annex_pursuit_tick_v1(").expect("the tick")..];
     assert!(tick.contains(
-        "self.tir_demand_tick_v1(session, bond_key, network_domain, current_daa, target, due, &program, ladder, books).await;"
+        "self.tir_demand_tick_v1(session, bond_key, network_domain, current_daa, target, due, tir, &program, ladder, books).await;"
     ));
     let demand = &court_src[court_src.find("    async fn tir_demand_tick_v1(").expect("the demand tick")..];
     let demand = &demand[..demand.find("\n    }\n").expect("its end")];
@@ -1904,9 +1956,318 @@ fn a_withheld_pursuit_demands_on_chain_only_past_the_fence_and_within_its_sessio
     assert!(file.find("session.palw_object_rehearsal_v1(object)").unwrap() < file.find("books.court_pending.push(").unwrap());
     let panel = include_str!("../palw_panel.rs");
     let rcore = &panel[panel.find("    async fn rcore_da_answers_v1(").expect("the answers")..];
-    assert!(rcore.contains("units.iter().any(|unit| unit.is_tir_step_v1())") && rcore.contains("tir.as_ref(),"));
+    assert!(rcore.contains("units.iter().any(|unit| unit.is_tir_fence2_v1())") && rcore.contains("tir.as_ref(),"));
     let unit = &panel[panel.find("pub(crate) fn palw_da_unit_answer_v1(").expect("the unit answer")..];
     assert!(unit.contains("return tir.step_unit_answer(capture, unit);"));
+}
+
+// ---- the trace's descent: RowNode (the second IR fence), the seats' half --------------------------
+
+/// The claim as a seat's one-move pass reads a target (the disputable-claim view).
+fn target_c(ir: &Ir, claim: &Claim) -> kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2 {
+    kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2 {
+        accepted_block: Default::default(),
+        claim_id: claim.id,
+        class_id: ir.class_id,
+        artifact_root: ir.root,
+        executor_bond: bond_key(PRODUCER),
+        trace_root: claim.env.attempt.trace_root,
+        execution_root: claim.env.attempt.execution_root,
+        licensed_daa: 102,
+        free_prompt: false,
+    }
+}
+
+/// A close as it rides: its binding's program emptied.
+fn as_filed_c(built: Result<PalwCourtVerdictProofV2, String>) -> Result<PalwCourtVerdictProofV2, String> {
+    built.map(|mut proof| {
+        proof.tir_strip_program_v1();
+        proof
+    })
+}
+
+/// The seat's own run of `claim`'s job.
+fn own_run(tir: &TirBackendV1, claim: &Claim) -> std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1> {
+    let prompt: Vec<u32> = claim.prompt.iter().map(|t| *t as u32).collect();
+    tir.retain_memo(&claim.job, &prompt).expect("the seat's own run")
+}
+
+/// **A trace pursuit on the chain's path**, as the demand tick holds it: the trace's descent over the
+/// seat's own rows tree, the served annexes' door token cleared (on chain the rows root comes first).
+fn trace_pursuit_c(
+    tir: &TirBackendV1,
+    own: &std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1>,
+) -> super::tir_court::PalwTirAnnexPursuitV1 {
+    let ctx = &own.binding.job_context;
+    let rows = misaka_palw_sdk::lineages::tir::tir_rows_tree_v1(ctx, &own.logits_rows).expect("the seat's rows tree");
+    let row0 = tir.logits_leaf_holding(ctx, 0, u64::from(own.generated[0]));
+    let mut p = super::tir_court::PalwTirAnnexPursuitV1::new(own.clone(), C_FENCE2).with_trace(rows, row0);
+    (p.token, p.withheld) = (None, true);
+    p
+}
+
+/// **Option C's rounds, driven to an end**: the seat `me`'s pursuit reads the chain (every demand and
+/// answer folded so far, `palw_tir_pursuit_absorb_chain_v1`), walks what it knows (the step tree's
+/// nodes, the rows tree's), and — until `done` — demands the unit it stands at (an IR step or rows
+/// demand, or an event demand by the ONE event builder), which the liar's node answers, every unit
+/// of the session, from its capture. Returns the chain state and the DAA past the last answer.
+#[allow(clippy::too_many_arguments)]
+fn drive_c(
+    ir: &Ir,
+    tir: &TirBackendV1,
+    liar: &Claim,
+    p: &mut super::tir_court::PalwTirAnnexPursuitV1,
+    me: u64,
+    mut s: PalwChainStateV2,
+    chain: &mut Vec<PalwConsensusObjectV2>,
+    done: &dyn Fn(&super::tir_court::PalwTirAnnexPursuitV1) -> bool,
+) -> (PalwChainStateV2, u64) {
+    use super::tir_court::{
+        PalwTirWithheldStepV1, palw_tir_pursuit_absorb_chain_v1, palw_tir_pursuit_descend_known_nodes_v1,
+        palw_tir_pursuit_descend_known_rows_v1, palw_tir_withheld_step_v1,
+    };
+    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaUnitV1, palw_da_accusation_object_v1, palw_tir_step_accusation_object_v1};
+    let program = tir.class().program.clone();
+    let target = target_c(ir, liar);
+    let ctx = p.own.binding.job_context.clone();
+    let mut daa = C_FENCE2;
+    loop {
+        assert!(daa < C_FENCE2 + 200, "the descent ends");
+        palw_tir_pursuit_absorb_chain_v1(p, chain, &bond_key(me), &program, &target, LADDER, daa);
+        palw_tir_pursuit_descend_known_nodes_v1(p);
+        palw_tir_pursuit_descend_known_rows_v1(p, &|row, token| tir.logits_leaf_holding(&ctx, row, u64::from(token)));
+        if done(p) {
+            return (s, daa);
+        }
+        let unit = match palw_tir_withheld_step_v1(true, p, daa, 20, 4, 0) {
+            PalwTirWithheldStepV1::Demand { unit } => unit,
+            other => panic!("the descent stalls: {other:?}"),
+        };
+        p.demanded = Some((unit, daa));
+        p.sessions += 1;
+        let sign = |_: &[u8], _: &[u8]| Some(vec![3; 16]);
+        let object = match unit {
+            PalwDaUnitV1::Event { .. } => palw_da_accusation_object_v1(&h64(999), liar.id, unit, bond_key(me), sign),
+            _ => palw_tir_step_accusation_object_v1(&h64(999), liar.id, unit, bond_key(me), sign),
+        }
+        .unwrap_or_else(|e| panic!("{unit:?}: the demand builds: {e}"));
+        s = step_c(&s, daa, std::slice::from_ref(&object), None)
+            .unwrap_or_else(|e| panic!("DAA {daa}: {unit:?} opens a session: {e}"));
+        chain.push(object);
+        let (units, _) = session_c(&s, &liar.id, me).expect("a session");
+        assert!(units.contains(&unit), "{unit:?} is demanded: {units:?}");
+        let answers = node_answers_c(ir, liar, &units);
+        daa += 1;
+        s = step_c(&s, daa, &answers, None).unwrap_or_else(|e| panic!("DAA {daa}: the answers fold: {e}"));
+        assert!(session_c(&s, &liar.id, me).is_none(), "{unit:?}: answered, the session closes");
+        chain.extend(answers);
+        daa += 1;
+    }
+}
+
+/// **A liar whose lie is only in its trace rows is found down its rows tree and convicted by one
+/// seat** (the second IR fence's `TirRowNode`, the seats' half): the liar commits the honest steps and
+/// ids and a trace whose one row is moved at one lane under the row's maximum (the selection stands).
+/// The seat's replay does not reproduce the claim, but its own step root beside the claim's trace root
+/// gives the claim's execution root (`palw_tir_steps_agree_v1`): the lie is in the trace. On chain it
+/// demands the rows root, then the row its own rows tree disputes (its tile leaves), then that tile's
+/// lanes as an event unit — each answered by the liar's own node from its capture and read back off
+/// the chain — `⌈h/8⌉ + 2` sessions, inside its four; a second seat reading the same chain reaches the
+/// same tile without a session of its own. The seat's own step tile beside the disclosed one is the
+/// logits door (`TirBackendV1::trace_logits_close`), the gate reads it `ExecutorGuilty`, and the fold
+/// voids the claim for fraud. Against the honest trace the same close finds nothing.
+#[test]
+fn a_trace_only_liar_is_found_down_its_rows_tree_and_convicted_by_one_seat() {
+    use super::tir_court::{
+        palw_tir_one_move_accusation_to_file_v1, palw_tir_one_move_verdict_stateless_v1, palw_tir_pursuit_absorb_chain_v1,
+        palw_tir_pursuit_descend_known_rows_v1, palw_tir_steps_agree_v1, palw_tir_withheld_unit_v1,
+    };
+    use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+    use kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2;
+    use kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES;
+    use kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1;
+    use misaka_palw_sdk::lineages::tir::TirCaptureV1;
+    let ir = ir_class("c-rows", true);
+    let tir = ir.tir();
+    let program = tir.class().program.clone();
+    let honest = produce(&ir, 25, None);
+    let capture = TirCaptureV1::decode(&honest.material).expect("an IR capture");
+    let decode = capture.logits_rows.len();
+    let r = decode / 2;
+    let selected = capture.generated[r] as usize;
+    let top = *capture.logits_rows[r].iter().max().expect("a row");
+    let lane = (0..capture.logits_rows[r].len())
+        .find(|l| *l != selected && capture.logits_rows[r][*l] + 1 < top)
+        .expect("a lane under the row's maximum");
+    let liar = craft(&ir, &honest, |c| c.logits_rows[r][lane] += 1);
+    assert_eq!(TirCaptureV1::decode(&liar.material).unwrap().generated, capture.generated, "the ids stand");
+    let target = target_c(&ir, &liar);
+    let own = own_run(&tir, &honest);
+    assert!(palw_tir_steps_agree_v1(&own, &target.trace_root, &target.execution_root), "the steps are the seat's own");
+    assert!(!palw_tir_steps_agree_v1(&own, &target.trace_root, &honest.env.attempt.execution_root), "and nothing else is");
+    let height = palw_tir_step_tree_height_v1(decode as u64);
+    let mut first = trace_pursuit_c(&tir, &own);
+    assert_eq!(palw_tir_withheld_unit_v1(&first), PalwDaUnitV1::TirRowNode { level: height, index: 0 }, "the rows root first");
+    let mut chain = Vec::new();
+    let reached = |p: &super::tir_court::PalwTirAnnexPursuitV1| {
+        p.trace.as_ref().and_then(|t| t.event).is_some_and(|e| p.events.contains_key(&e))
+    };
+    let (s, daa) = drive_c(&ir, &tir, &liar, &mut first, SEAT, bound_c(&ir, &liar), &mut chain, &reached);
+    let (row, tile) = first.trace.as_ref().and_then(|t| t.event).expect("the event reached");
+    assert_eq!((row as usize, usize::from(tile)), (r, lane / PALW_LOGITS_TILE_LANES), "the forged row, and the tile of its lane");
+    let expected = u32::from(height).div_ceil(8) + 2;
+    assert_eq!(u32::from(first.sessions), expected, "{decode} rows ({height} levels): the rows root, the row, the tile");
+    assert!(first.sessions <= 4, "inside one seat's four sessions");
+    // A second seat reads the same chain and stands at the same tile, having spent nothing.
+    let mut second = trace_pursuit_c(&tir, &own);
+    palw_tir_pursuit_absorb_chain_v1(&mut second, &chain, &bond_key(COLLUDER), &program, &target, LADDER, daa);
+    palw_tir_pursuit_descend_known_rows_v1(&mut second, &|_, _| None);
+    assert_eq!(second.trace.as_ref().and_then(|t| t.event), Some((row, tile)), "the other seat reaches the same tile");
+    assert_eq!(second.sessions, 0);
+    // The close: the seat's own step tile beside the disclosed tile.
+    let event = first.events.get(&(row, tile)).expect("the tile is disclosed").clone();
+    let binding = first.binding.as_deref().expect("the claim's binding").clone();
+    let proof = tir.trace_logits_close(&own, &binding, row, tile, &event).expect("the logits door");
+    let (label, mut accusation) = palw_tir_one_move_accusation_to_file_v1(
+        vec![("logits", as_filed_c(Ok(proof)))],
+        &target,
+        &program,
+        bond_key(SEAT),
+        &court(),
+        LADDER,
+        FORM,
+    )
+    .expect("the close convicts");
+    assert_eq!(label, "logits");
+    assert_eq!(
+        palw_tir_one_move_verdict_stateless_v1(&accusation.proof, &target, &program, &court(), LADDER, FORM),
+        Some(PalwCourtVerdictV2::ExecutorGuilty)
+    );
+    accusation.signature = vec![9; 16];
+    let voided = step_c(&s, daa, &[PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(accusation) }], None)
+        .expect("the accusation folds");
+    assert!(
+        matches!(phase_of(&voided, &liar.id), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+        "the trace liar is voided for fraud: {:?}",
+        phase_of(&voided, &liar.id)
+    );
+    // The honest trace's own tile: nothing to accuse.
+    let honest_event = misaka_palw_sdk::lineages::tir::tir_trace_event_disclosure_of_capture_v1(&honest.material, row, tile)
+        .expect("an IR capture")
+        .expect("an event of the run");
+    assert!(tir.trace_logits_close(&own, &own.binding, row, tile, &honest_event).is_err(), "the honest tile is the seat's own");
+}
+
+/// **An ids-only liar is found at its rows root and convicted at the decode-token door**: the steps
+/// and every trace row honest, one generated id not the greedy selection of its (honest) row. The
+/// rows root's answer carries the claim's ids and a frontier that is the seat's own throughout — the
+/// rows agree — so the seat's next demand is the logits leaf of the first row whose id parts that
+/// holds its own token; that leaf's disclosed row pin is the door (stepped as a disclosed annex is),
+/// and it convicts. Two sessions.
+#[test]
+fn an_ids_only_liar_is_found_at_its_rows_root_and_convicted_at_the_door() {
+    use super::tir_court::{
+        PalwTirAnnexStepV1, palw_tir_annex_step_v1, palw_tir_one_move_accusation_to_file_v1, palw_tir_steps_agree_v1,
+    };
+    use kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2;
+    use misaka_palw_sdk::lineages::tir::TirCaptureV1;
+    let ir = ir_class("c-ids", true);
+    let tir = ir.tir();
+    let rules = tir.court_rules(&court());
+    let program = tir.class().program.clone();
+    let honest = produce(&ir, 26, None);
+    let capture = TirCaptureV1::decode(&honest.material).expect("an IR capture");
+    let k = capture.generated.len().min(2) - 1;
+    let vocab = capture.logits_rows[k].len() as u32;
+    let liar = craft(&ir, &honest, |c| c.generated[k] = (c.generated[k] + 1) % vocab);
+    let target = target_c(&ir, &liar);
+    let own = own_run(&tir, &honest);
+    assert!(palw_tir_steps_agree_v1(&own, &target.trace_root, &target.execution_root), "the steps are the seat's own");
+    let mut p = trace_pursuit_c(&tir, &own);
+    let mut chain = Vec::new();
+    let at_the_door = |p: &super::tir_court::PalwTirAnnexPursuitV1| p.token.is_some() && p.disclosed.contains_key(&p.leaf);
+    let (s, daa) = drive_c(&ir, &tir, &liar, &mut p, SEAT, bound_c(&ir, &liar), &mut chain, &at_the_door);
+    assert!(p.trace.as_ref().is_some_and(|t| t.rows_agree && t.event.is_none()), "the rows are the seat's own");
+    assert_eq!(p.token, Some((k as u32, own.generated[k])), "the door at the first id that parts, its lane the seat's own token");
+    assert_eq!(p.sessions, 2, "the rows root, then the door's leaf");
+    let annex = p.disclosed.get(&p.leaf).expect("the door's leaf is disclosed").clone();
+    let binding = p.binding.as_deref().expect("the claim's binding").clone();
+    let PalwTirAnnexStepV1::Accuse { row, candidates, .. } = palw_tir_annex_step_v1(&tir, &p, &annex, &binding, &rules) else {
+        panic!("the door's leaf is an accusation")
+    };
+    assert_eq!(row, Some(k as u32));
+    let (label, mut accusation) =
+        palw_tir_one_move_accusation_to_file_v1(candidates, &target, &program, bond_key(SEAT), &court(), LADDER, FORM)
+            .expect("the door convicts");
+    assert_eq!(label, "decode token");
+    accusation.signature = vec![9; 16];
+    let voided = step_c(&s, daa, &[PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(accusation) }], None)
+        .expect("the accusation folds");
+    assert!(
+        matches!(phase_of(&voided, &liar.id), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+        "{:?}",
+        phase_of(&voided, &liar.id)
+    );
+}
+
+/// **Served annexes on a trace descent ask decode row 0's door leaf first** (where an ask costs no
+/// session): the pursuit of a claim whose steps are the seat's own asks the logits leaf of decode row 0
+/// holding its own token there; that annex carries the claim's ids and row 0's pin — the door itself
+/// when row 0 holds the first id that parts, a re-aim at the first row that does otherwise — and ids
+/// that are the seat's own leave the rows to the chain (`Rows`), which no annex reaches.
+#[test]
+fn served_annexes_on_a_trace_descent_ask_decode_row_zeros_door_leaf_first() {
+    use super::tir_court::{
+        PalwTirAnnexPursuitV1, PalwTirAnnexStepV1, palw_tir_annex_step_v1, palw_tir_one_move_accusation_to_file_v1,
+    };
+    use misaka_palw_sdk::lineages::tir::{TirCaptureV1, palw_tir_leaf_annex_verify_v1, tir_rows_tree_v1};
+    let ir = ir_class("b-rows", true);
+    let tir = ir.tir();
+    let rules = tir.court_rules(&court());
+    let program = tir.class().program.clone();
+    let honest = produce(&ir, 27, None);
+    let capture = TirCaptureV1::decode(&honest.material).expect("an IR capture");
+    let (decode, vocab) = (capture.generated.len(), capture.logits_rows[0].len() as u32);
+    let own = own_run(&tir, &honest);
+    let ctx = &own.binding.job_context;
+    let row0 = tir.logits_leaf_holding(ctx, 0, u64::from(own.generated[0])).expect("decode row 0's door leaf");
+    let last = decode - 1;
+    let r = decode / 2;
+    let lane = (0..capture.logits_rows[r].len())
+        .find(|l| {
+            *l != capture.generated[r] as usize && capture.logits_rows[r][*l] + 1 < *capture.logits_rows[r].iter().max().unwrap()
+        })
+        .expect("a lane under the row's maximum");
+    let mut liars = vec![
+        ("row 0's id", craft(&ir, &honest, |c| c.generated[0] = (c.generated[0] + 1) % vocab)),
+        ("a row's lane", craft(&ir, &honest, |c| c.logits_rows[r][lane] += 1)),
+    ];
+    if last > 0 {
+        liars.push(("a later id", craft(&ir, &honest, |c| c.generated[last] = (c.generated[last] + 1) % vocab)));
+    }
+    for (what, liar) in liars {
+        let target = target_c(&ir, &liar);
+        let p = PalwTirAnnexPursuitV1::new(own.clone(), 100)
+            .with_trace(tir_rows_tree_v1(ctx, &own.logits_rows).expect("the seat's rows tree"), Some(row0));
+        assert_eq!((p.leaf, p.token), (row0, Some((0, own.generated[0]))), "{what}: decode row 0's door leaf is asked first");
+        let annex = tir.leaf_annex(&liar.material, p.leaf).expect("the served annex");
+        let binding = palw_tir_leaf_annex_verify_v1(&annex, &program, target.execution_root, target.trace_root, LADDER)
+            .expect("the annex verifies against the claim");
+        match (what, palw_tir_annex_step_v1(&tir, &p, &annex, &binding, &rules)) {
+            ("row 0's id", PalwTirAnnexStepV1::Accuse { row: Some(0), candidates, .. }) => {
+                let (label, _) =
+                    palw_tir_one_move_accusation_to_file_v1(candidates, &target, &program, bond_key(SEAT), &court(), LADDER, FORM)
+                        .expect("row 0's door convicts from the first annex");
+                assert_eq!(label, "decode token");
+            }
+            ("a later id", PalwTirAnnexStepV1::Ask { leaf, below: None, token: Some((row, token)) }) => {
+                assert_eq!((row as usize, token), (last, own.generated[last]), "re-aimed at the first id that parts");
+                assert_eq!(Some(leaf), tir.logits_leaf_holding(ctx, row, u64::from(token)));
+            }
+            ("a row's lane", PalwTirAnnexStepV1::Rows(_)) => {}
+            (what, _) => panic!("{what}: another step than the descent's"),
+        }
+    }
 }
 
 /// **The whole walk on testnet-12's own fold** (F6 C(1)–C(3) and the one-move court): the IR class

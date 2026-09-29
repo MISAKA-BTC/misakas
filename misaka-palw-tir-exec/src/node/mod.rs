@@ -26,7 +26,10 @@ pub use drill::{
     TirCloseSizeV1, TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_drill_covering_leaves_v1,
     tir_family_drill_v1, tir_family_evidence_v1, tir_family_id_v1, tir_prim_kernel_id_v1, tir_terminal_close_sizes_v1,
 };
-pub use evidence::{TirEvidenceV1, TirRetainedJobV1, TirTraceV1, tir_bisect_prefix_state_v1, tir_first_divergence_v1};
+pub use evidence::{
+    TirEvidenceV1, TirRetainedJobV1, TirTraceV1, tir_bisect_prefix_state_v1, tir_first_divergence_v1, tir_row_tile_leaves_v1,
+    tir_rows_tree_v1,
+};
 pub use inventory::{TirHeldInventoryV1, TirInventoryTreeV1, TirParamOpenerV1, TirParamsSourceV1};
 pub use run::{TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};
 pub use tree::TirStepTreeV1;

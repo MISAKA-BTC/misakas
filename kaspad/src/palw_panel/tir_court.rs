@@ -431,6 +431,18 @@ pub(crate) struct PalwTirAnnexPursuitV1 {
     /// The executor withheld an annex once: the chain drives the descent from then on (a served
     /// annex is still taken whenever one arrives).
     pub withheld: bool,
+    /// **The descent of the claim's trace** — `Some` when the claim's steps are this seat's own
+    /// ([`palw_tir_steps_agree_v1`]): the lie, if any, is in its trace.
+    pub trace: Option<PalwTirTraceDescentV1>,
+    /// Rows-tree nodes the chain disclosed (`TirRowNode` answers of anyone's session): each node's
+    /// frontier — a row's, its tile leaves — verified against the claim's trace root.
+    pub rows: std::collections::BTreeMap<(u8, u64), std::sync::Arc<Vec<Hash64>>>,
+    /// Trace events the chain disclosed (`TirEvent` answers of anyone's session), verified against
+    /// the claim, their binding's program filled.
+    pub events:
+        std::collections::BTreeMap<(u32, u8), std::sync::Arc<kaspa_consensus_core::palw_tir_court_v1::PalwTirTraceEventDisclosureV1>>,
+    /// The claim's generated ids, as the first verified disclosure that carries them shows them.
+    pub ids: Option<std::sync::Arc<Vec<u32>>>,
 }
 
 impl PalwTirAnnexPursuitV1 {
@@ -454,8 +466,68 @@ impl PalwTirAnnexPursuitV1 {
             pending: Default::default(),
             withheld_since: None,
             withheld: false,
+            trace: None,
+            rows: Default::default(),
+            events: Default::default(),
+            ids: None,
         }
     }
+
+    /// **The pursuit of a claim whose steps are this seat's own** (a tiled trace): the descent is the
+    /// trace's, over `own_rows` (this seat's rows tree, `tir_rows_tree_v1` of its own run), from the
+    /// rows root. Served annexes cost no session, so the first one asked is decode row 0's logits leaf
+    /// holding this seat's own token there (`row0_leaf`): its answer carries the claim's ids and row
+    /// 0's pin, the decode-token door itself when row 0 holds the first id they part at. On chain the
+    /// descent starts at the rows root instead ([`palw_tir_withheld_unit_v1`]).
+    pub fn with_trace(mut self, own_rows: misaka_palw_sdk::lineages::tir::TirStepTreeV1, row0_leaf: Option<u64>) -> Self {
+        let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(own_rows.leaf_count());
+        self.trace =
+            Some(PalwTirTraceDescentV1 { own_rows: std::sync::Arc::new(own_rows), at: (height, 0), event: None, rows_agree: false });
+        if let (Some(leaf), Some(&token)) = (row0_leaf, self.own.generated.first()) {
+            (self.leaf, self.below, self.token) = (leaf, None, Some((0, token)));
+        }
+        self
+    }
+}
+
+/// **A pursuit's descent of the claim's TRACE** (the second IR fence's `TirRowNode`, evidence
+/// transport C). A claim whose step tree is this seat's own lies, if at all, in its tiled trace: the
+/// rows, or the ids. The seat descends the claim's rows tree against its own eight levels a session
+/// to the first row it disputes, that row's tile leaves to the first tile, and demands the tile's
+/// lanes as an event unit; its own step tile beside the disclosed one convicts (`TirLogits`). A rows
+/// root that agrees throughout leaves the ids: the decode-token door at the first id they part at.
+/// For `h` rows-tree levels that is `⌈h/8⌉ + 2` sessions (3 to 256 rows, 4 to 65,536), the ids-only
+/// lie 2.
+#[derive(Clone)]
+pub(crate) struct PalwTirTraceDescentV1 {
+    /// This seat's own rows tree (its row roots as the leaves).
+    pub own_rows: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirStepTreeV1>,
+    /// The rows-tree node the descent stands at, `(level, index)`; level 0 is a row, whose frontier
+    /// is its tile leaves.
+    pub at: (u8, u64),
+    /// The event `(row, tile)` the descent reached.
+    pub event: Option<(u32, u8)>,
+    /// The claim's rows root is this seat's own: the lie is in the ids alone.
+    pub rows_agree: bool,
+}
+
+/// **Are the claim's steps this seat's own?** An IR claim's execution root is
+/// `palw_tir_execution_root_v1` over its trace root and its step tree (leaf count and root): this
+/// seat's own step tree beside the claim's trace root reproducing the claim's execution root says the
+/// two step trees are one — and a claim that is not the seat's own execution then lies in its trace.
+pub(crate) fn palw_tir_steps_agree_v1(
+    own: &misaka_palw_sdk::lineages::tir::TirRetainedJobV1,
+    trace_root: &Hash64,
+    execution_root: &Hash64,
+) -> bool {
+    let b = &own.binding;
+    kaspa_consensus_core::palw_tir_step_v1::palw_tir_execution_root_v1(
+        &b.job_context.context_hash(),
+        trace_root,
+        &b.job_context.shape_profile_id,
+        b.step_leaf_count,
+        &b.step_merkle_root,
+    ) == *execution_root
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -505,9 +577,17 @@ pub(crate) enum PalwTirWithheldStepV1 {
 /// **The unit a pursuit stands at, as a demand on chain names it** (the second IR fence's descent):
 /// the step node over the subtree the descent stands at (`below`, whose first leaf is `leaf`; the
 /// whole tree's root at the start), or the leaf itself — at level 0, and for the decode-token door's
-/// logits leaf.
+/// logits leaf; on the trace's descent, the rows-tree node it stands at (the rows root at the start),
+/// then the event `(row, tile)` it reached.
 pub(crate) fn palw_tir_withheld_unit_v1(pursuit: &PalwTirAnnexPursuitV1) -> kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1 {
     use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+    // The trace's descent: the rows-tree node it stands at, then the event it reached.
+    if let (Some(trace), None) = (&pursuit.trace, pursuit.token) {
+        return match trace.event {
+            Some((row, tile)) => PalwDaUnitV1::Event { row, tile },
+            None => PalwDaUnitV1::TirRowNode { level: trace.at.0, index: trace.at.1 },
+        };
+    }
     let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(pursuit.own_tree.leaf_count());
     let level = match (pursuit.token, pursuit.below) {
         (Some(_), _) => 0,
@@ -579,9 +659,11 @@ pub(crate) fn palw_tir_node_descent_v1(
 /// **What the chain says of the claim to a pursuit** — pure: every IR step answer of anyone's session
 /// verified against the claim and kept (a leaf's as the annex of its leaf,
 /// [`misaka_palw_sdk::lineages::tir::PalwTirLeafAnnexV1::from_step_leaf_disclosure_v1`]; a node's
-/// frontier by `check_tir_step_node_disclosure_v1`), the claim's binding from any of them, and every
-/// demand of the claim ANOTHER bond filed noted pending from `current_daa` (the first time it is
-/// seen). `program` is the class's; `ladder` the step ladder the claim's tree is capped at.
+/// frontier by `check_tir_step_node_disclosure_v1`; a rows-tree node's by
+/// `check_tir_row_node_disclosure_v1`; a trace event by `check_tir_trace_event_disclosure_v1`), the
+/// claim's binding and ids from any of them, and every demand of the claim ANOTHER bond filed (an IR
+/// step demand, or an event demand) noted pending from `current_daa` (the first time it is seen).
+/// `program` is the class's; `ladder` the step ladder the claim's tree is capped at.
 pub(crate) fn palw_tir_pursuit_absorb_chain_v1(
     pursuit: &mut PalwTirAnnexPursuitV1,
     objects: &[PalwConsensusObjectV2],
@@ -613,6 +695,9 @@ pub(crate) fn palw_tir_pursuit_absorb_chain_v1(
                             continue;
                         };
                         pursuit.binding.get_or_insert_with(|| std::sync::Arc::new(binding));
+                        if !annex.generated().is_empty() {
+                            pursuit.ids.get_or_insert_with(|| std::sync::Arc::new(annex.generated().to_vec()));
+                        }
                         if pursuit.disclosed.len() < PALW_TIR_DISCLOSED_KEPT_V1 || *index == pursuit.leaf {
                             pursuit.disclosed.insert(*index, std::sync::Arc::new(annex));
                         }
@@ -638,6 +723,57 @@ pub(crate) fn palw_tir_pursuit_absorb_chain_v1(
                         pursuit.nodes.insert((*level, *index), std::sync::Arc::new(checked.frontier));
                         pursuit.binding.get_or_insert_with(|| std::sync::Arc::new(checked.binding));
                     }
+                    (PalwDaUnitV1::TirRowNode { level, index }, PalwDaAnswerV1::TirRowNode(disclosure)) => {
+                        if pursuit.rows.contains_key(&(*level, *index)) || pursuit.rows.len() >= PALW_TIR_DISCLOSED_KEPT_V1 {
+                            continue;
+                        }
+                        let mut checked = disclosure.as_ref().clone();
+                        checked.binding = filled(&disclosure.binding);
+                        if kaspa_consensus_core::palw_tir_court_v1::check_tir_row_node_disclosure_v1(
+                            target.trace_root,
+                            target.execution_root,
+                            *level,
+                            *index,
+                            &checked,
+                            ladder,
+                        )
+                        .is_err()
+                        {
+                            continue;
+                        }
+                        pursuit.ids.get_or_insert_with(|| std::sync::Arc::new(checked.generated_token_ids.clone()));
+                        pursuit.rows.insert((*level, *index), std::sync::Arc::new(checked.frontier));
+                        pursuit.binding.get_or_insert_with(|| std::sync::Arc::new(checked.binding));
+                    }
+                    (PalwDaUnitV1::Event { row, tile }, PalwDaAnswerV1::TirEvent(disclosure)) => {
+                        use kaspa_consensus_core::palw_tir_court_v1::PalwTirTraceEventDisclosureV1 as E;
+                        if pursuit.events.contains_key(&(*row, *tile)) || pursuit.events.len() >= PALW_TIR_DISCLOSED_KEPT_V1 {
+                            continue;
+                        }
+                        let mut checked = disclosure.as_ref().clone();
+                        match &mut checked {
+                            E::Flat { binding, .. } | E::Tiled { binding, .. } | E::OutOfRange { binding } => {
+                                **binding = filled(binding);
+                            }
+                        }
+                        if kaspa_consensus_core::palw_tir_court_v1::check_tir_trace_event_disclosure_v1(
+                            target.trace_root,
+                            target.execution_root,
+                            *row,
+                            *tile,
+                            &checked,
+                            ladder,
+                        )
+                        .is_err()
+                        {
+                            continue;
+                        }
+                        if let E::Tiled { generated_token_ids, .. } = &checked {
+                            pursuit.ids.get_or_insert_with(|| std::sync::Arc::new(generated_token_ids.clone()));
+                        }
+                        pursuit.binding.get_or_insert_with(|| std::sync::Arc::new(checked.binding().clone()));
+                        pursuit.events.insert((*row, *tile), std::sync::Arc::new(checked));
+                    }
                     _ => {}
                 }
             }
@@ -646,9 +782,85 @@ pub(crate) fn palw_tir_pursuit_absorb_chain_v1(
             {
                 pursuit.pending.entry(accusation.unit).or_insert(current_daa);
             }
+            // Another bond's event demand of the claim: the trace descent's last unit, waited on as a
+            // step demand is.
+            PalwConsensusObjectV2::DefaultAccused { claim, missing_event_index, accuser, .. }
+                if *claim == target.claim_id && accuser != me =>
+            {
+                pursuit.pending.entry(PalwDaUnitV1::event_of_index(*missing_event_index)).or_insert(current_daa);
+            }
             _ => {}
         }
     }
+}
+
+/// **The trace's descent, walked over what the chain disclosed** — pure: while the descent stands at
+/// a rows-tree node whose frontier the chain showed ([`PalwTirAnnexPursuitV1::rows`]), it moves to the
+/// first frontier node that differs from this seat's own rows tree ([`palw_tir_node_descent_v1`] —
+/// every node before it agrees); at a row (level 0), to the first tile whose leaf differs from its own
+/// row's: the event it demands next. A rows root whose frontier agrees throughout says the rows are
+/// the seat's own and the ids decide: the pursuit is aimed at the decode-token door at the first id
+/// the claim's part from its own — the logits leaf of that row holding its own token (`token_leaf`,
+/// `TirBackendV1::logits_leaf_holding`). Returns how many rounds it moved.
+pub(crate) fn palw_tir_pursuit_descend_known_rows_v1(
+    pursuit: &mut PalwTirAnnexPursuitV1,
+    token_leaf: &dyn Fn(u32, u32) -> Option<u64>,
+) -> u32 {
+    let Some(mut trace) = pursuit.trace.clone() else { return 0 };
+    if pursuit.token.is_some() {
+        return 0;
+    }
+    let own = pursuit.own.clone();
+    let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(trace.own_rows.leaf_count());
+    let mut moved = 0;
+    while trace.event.is_none() && !trace.rows_agree {
+        let (level, index) = trace.at;
+        let Some(frontier) = pursuit.rows.get(&(level, index)).cloned() else { break };
+        let differs = if level == 0 {
+            let Ok(row) = u32::try_from(index) else { break };
+            let Some(own_tiles) =
+                misaka_palw_sdk::lineages::tir::tir_row_tile_leaves_v1(&own.binding.job_context, &own.logits_rows, row)
+            else {
+                break;
+            };
+            if own_tiles.len() != frontier.len() {
+                break;
+            }
+            match own_tiles.iter().zip(frontier.iter()).position(|(a, b)| a != b).and_then(|t| u8::try_from(t).ok()) {
+                Some(tile) => {
+                    trace.event = Some((row, tile));
+                    true
+                }
+                None => false,
+            }
+        } else {
+            match palw_tir_node_descent_v1(&trace.own_rows, level, index, &frontier) {
+                Some((row, below)) => {
+                    trace.at = (below as u8, row >> below);
+                    true
+                }
+                None => false,
+            }
+        };
+        if !differs {
+            // Only the root's agreement says anything: the rows are the seat's own.
+            if level != height {
+                break;
+            }
+            trace.rows_agree = true;
+            let first_id = pursuit.ids.as_ref().and_then(|ids| ids.iter().zip(&own.generated).position(|(a, b)| a != b));
+            if let Some(row) = first_id.and_then(|k| u32::try_from(k).ok()) {
+                let token = own.generated[row as usize];
+                if let Some(leaf) = token_leaf(row, token) {
+                    (pursuit.leaf, pursuit.below, pursuit.token) = (leaf, None, Some((row, token)));
+                }
+            }
+        }
+        pursuit.rounds += 1;
+        moved += 1;
+    }
+    pursuit.trace = Some(trace);
+    moved
 }
 
 /// **The descent, walked over what the chain disclosed** — pure: while the pursuit stands at a step
@@ -674,9 +886,10 @@ pub(crate) fn palw_tir_pursuit_descend_known_nodes_v1(pursuit: &mut PalwTirAnnex
 }
 
 /// **Option C's chain read**: every object accepted since `not_before_daa` that says something of
-/// `claim` to a pursuit — an IR data-availability answer (`MaterialDisclosedV2` carrying an IR step
-/// answer, anyone's session: the seats of one claim share what the chain made its executor disclose)
-/// and every IR step demand of it (`DefaultAccusedTirStep`) — oldest first. Nothing here is taken on
+/// `claim` to a pursuit — an IR data-availability answer (`MaterialDisclosedV2` carrying an IR step,
+/// rows-tree or trace-event answer, anyone's session: the seats of one claim share what the chain
+/// made its executor disclose) and every demand of it (`DefaultAccusedTirStep`, and the event
+/// demands `DefaultAccused` the trace's descent ends with) — oldest first. Nothing here is taken on
 /// its word ([`palw_tir_pursuit_absorb_chain_v1`]).
 pub(crate) fn tir_da_chain_objects_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
@@ -687,8 +900,9 @@ pub(crate) fn tir_da_chain_objects_v1(
     let mut found = Vec::new();
     super::walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
         let keep = match &object {
-            PalwConsensusObjectV2::MaterialDisclosedV2 { claim, answer, .. } => *claim == claim_id && answer.is_tir_fence2_v1(),
+            PalwConsensusObjectV2::MaterialDisclosedV2 { claim, answer, .. } => *claim == claim_id && answer.is_tir_v1(),
             PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } => accusation.claim == claim_id,
+            PalwConsensusObjectV2::DefaultAccused { claim, .. } => *claim == claim_id,
             _ => false,
         };
         if keep {
@@ -726,6 +940,10 @@ pub(crate) enum PalwTirAnnexStepV1 {
     /// Nothing the annexes can reach differs (a lie in the trace's lanes alone), or the annex is not
     /// of this job: the claim is left to the on-chain demand.
     Stop(&'static str),
+    /// **The lie is in the trace's rows** — the steps are the seat's own, and the ids are too (or the
+    /// door's row was forged to select its id): no annex reaches a row's lanes, so the chain's rows
+    /// tree is the path (`TirRowNode`, then the event).
+    Rows(&'static str),
 }
 
 /// **The pursuit's step on one annex** — pure, over the seat's own execution and one annex verified
@@ -742,10 +960,29 @@ pub(crate) fn palw_tir_annex_step_v1(
     if annex.leaf() != pursuit.leaf {
         return PalwTirAnnexStepV1::Stop("the annex opens another leaf than the one asked");
     }
-    // The decode-token door's round: the pin of the row, re-aimed at the seat's own token.
+    // The decode-token door's round: the pin of the row, re-aimed at the seat's own token — at the
+    // first id the annex's ids part from the seat's own. (On a trace descent the first annex asked is
+    // decode row 0's before any id is seen: another row re-aims it there, and ids that agree leave the
+    // rows.)
     if let Some((row, token)) = pursuit.token {
-        let door = as_filed(tir.annex_decode_token_close(binding, annex, row, token));
-        return PalwTirAnnexStepV1::Accuse { leaf: None, row: Some(row), candidates: vec![("decode token", door)] };
+        let parts = annex.generated().iter().zip(&own.generated).position(|(a, b)| a != b);
+        match parts.and_then(|k| u32::try_from(k).ok()) {
+            Some(k) if k == row => {
+                let door = as_filed(tir.annex_decode_token_close(binding, annex, row, token));
+                return PalwTirAnnexStepV1::Accuse { leaf: None, row: Some(row), candidates: vec![("decode token", door)] };
+            }
+            Some(k) => {
+                let token = own.generated[k as usize];
+                return match tir.logits_leaf_holding(&binding.job_context, k, u64::from(token)) {
+                    Some(leaf) => PalwTirAnnexStepV1::Ask { leaf, below: None, token: Some((k, token)) },
+                    None => PalwTirAnnexStepV1::Stop("no logits leaf of that row holds the seat's own token"),
+                };
+            }
+            None if pursuit.trace.is_some() => {
+                return PalwTirAnnexStepV1::Rows("the steps and every id are the seat's own: the lie is in the trace's rows");
+            }
+            None => return PalwTirAnnexStepV1::Stop("the door's annex carries the seat's own ids"),
+        }
     }
     match tir_first_divergence_from_opening_v1(&pursuit.own_tree, &annex.opening, pursuit.below) {
         None => PalwTirAnnexStepV1::Stop("the annex's opening is not of this job's step tree"),
@@ -768,23 +1005,17 @@ pub(crate) fn palw_tir_annex_step_v1(
             // row; the annex of the logits leaf whose tile holds the seat's own token there carries
             // the decode-token door's pin.
             let Some(row) = annex.generated().iter().zip(&own.generated).position(|(a, b)| a != b) else {
+                if pursuit.trace.is_some() {
+                    return PalwTirAnnexStepV1::Rows("every step leaf and every id agrees: the lie is in the trace's rows");
+                }
                 return PalwTirAnnexStepV1::Stop(
                     "every step leaf and every id agrees: a lie in the trace's lanes alone, which no annex round reaches",
                 );
             };
             let token = own.generated[row];
-            let ctx = &binding.job_context;
-            let Some(position) = (ctx.declared_prefill_tokens + row as u32).checked_sub(1) else {
-                return PalwTirAnnexStepV1::Stop("a decode row before the first selecting position");
-            };
-            let space = tir.space();
-            let leaf = space.leaves_of_position(ctx, position).into_iter().find(|l| {
-                is_logits_leaf(tir, &l.kind)
-                    && matches!(l.kind, PalwTirLeafKindV1::Commit { first_element, .. }
-                        if (first_element..first_element + u64::from(l.value_count)).contains(&u64::from(token)))
-            });
-            match leaf {
-                Some(l) => PalwTirAnnexStepV1::Ask { leaf: l.index, below: None, token: Some((row as u32, token)) },
+            let Ok(row) = u32::try_from(row) else { return PalwTirAnnexStepV1::Stop("a decode row past u32") };
+            match tir.logits_leaf_holding(&binding.job_context, row, u64::from(token)) {
+                Some(leaf) => PalwTirAnnexStepV1::Ask { leaf, below: None, token: Some((row, token)) },
                 None => PalwTirAnnexStepV1::Stop("no logits leaf of that row holds the seat's own token"),
             }
         }
@@ -1073,6 +1304,13 @@ impl super::PalwPanelService {
     /// carrier is paid for ([`Self::file_tir_demand_v1`]). The executor answers inside `W_disclose`
     /// or the fold voids its claim; a disclosed leaf is stepped like a served annex, to the
     /// accusation built from this seat's own execution below the leaf and the leaf's disclosure.
+    ///
+    /// **On the trace's descent** (the claim's steps are this seat's own) the units are the rows
+    /// tree's (`TirRowNode`: the rows root first, the first differing frontier node next, then the
+    /// row's tile leaves, [`palw_tir_pursuit_descend_known_rows_v1`]) and then the tile's lanes, an
+    /// event demand (`DefaultAccused`, the ONE event builder); the disclosed tile beside this seat's
+    /// own step tile is the logits door (`TirBackendV1::trace_logits_close`). A rows root that agrees
+    /// throughout aims the descent at the decode-token door's leaf instead.
     #[allow(clippy::too_many_arguments)]
     async fn tir_demand_tick_v1(
         &self,
@@ -1082,6 +1320,7 @@ impl super::PalwPanelService {
         current_daa: u64,
         target: &PalwDisputableClaimV2,
         due: u64,
+        tir: TirBackendV1,
         program: &[u8],
         ladder: u64,
         books: &mut PalwTirOneMoveBooksV1<'_>,
@@ -1113,6 +1352,12 @@ impl super::PalwPanelService {
             palw_tir_pursuit_absorb_chain_v1(p, &objects, &bond_key, program, target, ladder, current_daa);
         }
         let Some(p) = books.pursuits.get_mut(&claim) else { return };
+        // On the chain the trace's descent starts at the rows root: the door's leaf served annexes
+        // were asked first is left for the rows tree to say (its root's agreement), not demanded.
+        if p.trace.as_ref().is_some_and(|t| !t.rows_agree) {
+            p.token = None;
+        }
+        let ctx = p.own.binding.job_context.clone();
         let moved = palw_tir_pursuit_descend_known_nodes_v1(p);
         if moved > 0 {
             info!(
@@ -1121,8 +1366,51 @@ impl super::PalwPanelService {
                 palw_tir_withheld_unit_v1(p)
             );
         }
+        let moved = palw_tir_pursuit_descend_known_rows_v1(p, &|row, token| tir.logits_leaf_holding(&ctx, row, u64::from(token)));
+        if moved > 0 {
+            info!(
+                "[{PALW_PANEL}] IR claim {claim}: the chain's rows-tree answers move the trace's descent {moved} round(s), to {:?} \
+                 (RFC-0002 evidence transport C)",
+                palw_tir_withheld_unit_v1(p)
+            );
+        }
+        // The trace's descent reached a disclosed tile: the logits door, from this seat's own step tile.
+        let disclosed_event = match (&p.trace, p.token) {
+            (Some(PalwTirTraceDescentV1 { event: Some((row, tile)), .. }), None) => {
+                p.events.get(&(*row, *tile)).cloned().map(|event| (*row, *tile, event))
+            }
+            _ => None,
+        };
+        if let Some((row, tile, event)) = disclosed_event {
+            let Some(binding) = p.binding.clone() else { return };
+            let own = p.own.clone();
+            let rounds = p.rounds;
+            books.pursuits.remove(&claim);
+            books.accused.insert(claim);
+            let Ok(built) = tokio::task::spawn_blocking(move || tir.trace_logits_close(&own, &binding, row, tile, &event)).await
+            else {
+                return;
+            };
+            let court = self.config.court;
+            let form = self.config.prompt_ids_form;
+            let candidates = vec![("logits", as_filed(built))];
+            match palw_tir_one_move_accusation_to_file_v1(candidates, target, program, bond_key, &court, ladder, form) {
+                Some((label, accusation)) => {
+                    info!(
+                        "[{PALW_PANEL}] IR claim {claim}: the chain's rows tree names row {row} tile {tile} after {rounds} round(s) — \
+                         its disclosed lanes are not this seat's own step tile (RFC-0002 evidence transport C)"
+                    );
+                    self.file_tir_one_move_v1(target, due, label, None, Some(row), accusation, books);
+                }
+                None => warn!(
+                    "[{PALW_PANEL}] IR claim {claim}: the disclosed tile (row {row}, tile {tile}) builds no logits close that \
+                     convicts; recorded, not filed"
+                ),
+            }
+            return;
+        }
         // A disclosed leaf at the descent's position is stepped like a served annex (the tick's step 2).
-        if p.disclosed.contains_key(&p.leaf) {
+        if (p.trace.is_none() || p.token.is_some()) && p.disclosed.contains_key(&p.leaf) {
             info!(
                 "[{PALW_PANEL}] IR claim {claim}: leaf {} is disclosed on chain — the pursuit goes on from it (RFC-0002 evidence \
                  transport C)",
@@ -1151,15 +1439,37 @@ impl super::PalwPanelService {
             }
             PalwTirWithheldStepV1::Demand { unit } => unit,
         };
-        let message =
-            kaspa_consensus_core::palw_da_rcore_v1::palw_tir_step_accusation_message_v1(network_domain, &claim, &unit, &bond_key);
-        let object = match kaspa_consensus_core::palw_da_rcore_v1::palw_tir_step_accusation_object_v1(
-            &network_domain,
-            claim,
-            unit,
-            bond_key,
-            |message, context| self.sign(message, context),
-        ) {
+        // The trace's last unit is an event: the ONE event builder, under the event demand's own message.
+        let (message, built) = match unit {
+            kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row, tile } => (
+                kaspa_consensus_core::palw_state_v2::palw_da_accusation_message_v2(
+                    network_domain,
+                    &claim,
+                    kaspa_consensus_core::palw_state_v2::palw_da_event_index_v1(row, tile),
+                    &bond_key,
+                ),
+                kaspa_consensus_core::palw_da_rcore_v1::palw_da_accusation_object_v1(
+                    &network_domain,
+                    claim,
+                    unit,
+                    bond_key,
+                    |m, c| self.sign(m, c),
+                )
+                .map_err(|e| e.to_string()),
+            ),
+            _ => (
+                kaspa_consensus_core::palw_da_rcore_v1::palw_tir_step_accusation_message_v1(network_domain, &claim, &unit, &bond_key),
+                kaspa_consensus_core::palw_da_rcore_v1::palw_tir_step_accusation_object_v1(
+                    &network_domain,
+                    claim,
+                    unit,
+                    bond_key,
+                    |m, c| self.sign(m, c),
+                )
+                .map_err(|e| e.to_string()),
+            ),
+        };
+        let object = match built {
             Ok(object) => object,
             Err(why) => {
                 warn!("[{PALW_PANEL}] IR claim {claim}: cannot build the demand of {unit:?}: {why}");
@@ -1172,9 +1482,14 @@ impl super::PalwPanelService {
                     p.demanded = Some((unit, current_daa));
                     p.sessions = p.sessions.saturating_add(1);
                 }
+                let kind = if matches!(unit, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { .. }) {
+                    "DefaultAccused"
+                } else {
+                    "DefaultAccusedTirStep"
+                };
                 info!(
-                    "[{PALW_PANEL}] IR claim {claim}: its executor served no annex — demanding {unit:?} on chain (DefaultAccusedTirStep); \
-                     it answers inside {window} DAA or the claim is voided (RFC-0002 evidence transport C)"
+                    "[{PALW_PANEL}] IR claim {claim}: demanding {unit:?} on chain ({kind}); its executor answers inside {window} DAA or \
+                     the claim is voided (RFC-0002 evidence transport C)"
                 );
             }
             PalwTirDemandFiledV1::Wait(why) => {
@@ -1275,21 +1590,56 @@ impl super::PalwPanelService {
             };
             drop(backend);
             let Ok(prompt) = prompt.into_iter().map(u32::try_from).collect::<Result<Vec<u32>, _>>() else { return };
-            let Ok(Ok(own)) = tokio::task::spawn_blocking(move || tir.retain_memo(&job, &prompt)).await else { return };
+            let (trace_root, execution_root) = (target.trace_root, target.execution_root);
+            // The run, and — for a claim whose steps are this seat's own, under the tiled scheme — its
+            // rows tree and decode row 0's door leaf: the trace's descent.
+            let Ok(Ok((own, trace))) = tokio::task::spawn_blocking(move || {
+                let own = tir.retain_memo(&job, &prompt)?;
+                let tiled = Hash64::from_bytes(tir.space().program.logits_scheme_id)
+                    == kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1();
+                let reproduces =
+                    own.binding.committed_execution_root == execution_root && own.binding.full_logits_trace_root == trace_root;
+                let trace = (tiled && !reproduces && palw_tir_steps_agree_v1(&own, &trace_root, &execution_root))
+                    .then(|| {
+                        let rows = misaka_palw_sdk::lineages::tir::tir_rows_tree_v1(&own.binding.job_context, &own.logits_rows)?;
+                        let row0 = own
+                            .generated
+                            .first()
+                            .and_then(|token| tir.logits_leaf_holding(&own.binding.job_context, 0, u64::from(*token)));
+                        Some((rows, row0))
+                    })
+                    .flatten();
+                Ok::<_, String>((own, trace))
+            })
+            .await
+            else {
+                return;
+            };
             if own.binding.committed_execution_root == target.execution_root && own.binding.full_logits_trace_root == target.trace_root
             {
                 books.challenged.insert(claim);
                 return;
             }
+            let mut pursuit = PalwTirAnnexPursuitV1::new(own, current_daa);
+            if let Some((rows, row0)) = trace {
+                pursuit = pursuit.with_trace(rows, row0);
+            }
             warn!(
-                "[{PALW_PANEL}] IR claim {claim} committed an execution this node does not reproduce, and no capture of it reaches \
-                 this seat — asking its executor for served annexes (RFC-0002 evidence transport B)"
+                "[{PALW_PANEL}] IR claim {claim} committed an execution this node does not reproduce{}, and no capture of it reaches \
+                 this seat — asking its executor for served annexes (RFC-0002 evidence transport B)",
+                if pursuit.trace.is_some() { " (its steps are this node's own: the lie is in its trace)" } else { "" }
             );
-            books.pursuits.insert(claim, PalwTirAnnexPursuitV1::new(own, current_daa));
-            self.request_leaf_evidence_v1(network_domain, claim, palw_tir_annex_request_index_v1(0), 0, current_daa).await;
+            let leaf = pursuit.leaf;
+            books.pursuits.insert(claim, pursuit);
+            self.request_leaf_evidence_v1(network_domain, claim, palw_tir_annex_request_index_v1(leaf), leaf, current_daa).await;
             return;
         }
         let Some(pursuit) = books.pursuits.get(&claim).cloned() else { return };
+        // The trace's descent past what an annex reaches (a row's lanes): the chain's rows tree.
+        if pursuit.trace.is_some() && pursuit.token.is_none() && pursuit.withheld {
+            self.tir_demand_tick_v1(session, bond_key, network_domain, current_daa, target, due, tir, &program, ladder, books).await;
+            return;
+        }
         // 2. The annex of the leaf asked, verified against the claim: served by the executor (option
         //    B), or disclosed on chain (option C: a `TirStepLeaf` answer, read into the pursuit).
         let index = palw_tir_annex_request_index_v1(pursuit.leaf);
@@ -1317,7 +1667,8 @@ impl super::PalwPanelService {
             // Option C: once the executor withheld, the chain drives the descent (a served annex is
             // still taken whenever one arrives, above); before, it is asked and re-asked first.
             if pursuit.withheld {
-                self.tir_demand_tick_v1(session, bond_key, network_domain, current_daa, target, due, &program, ladder, books).await;
+                self.tir_demand_tick_v1(session, bond_key, network_domain, current_daa, target, due, tir, &program, ladder, books)
+                    .await;
                 return;
             }
             if current_daa < pursuit.asked_daa.saturating_add(PALW_TIR_ANNEX_REASK_DAA_V1) {
@@ -1325,7 +1676,8 @@ impl super::PalwPanelService {
             }
             if pursuit.asks >= PALW_TIR_ANNEX_ASKS_V1 {
                 // Option C: the executor serves nothing of this leaf — the chain makes it disclose.
-                self.tir_demand_tick_v1(session, bond_key, network_domain, current_daa, target, due, &program, ladder, books).await;
+                self.tir_demand_tick_v1(session, bond_key, network_domain, current_daa, target, due, tir, &program, ladder, books)
+                    .await;
                 return;
             }
             if let Some(p) = books.pursuits.get_mut(&claim) {
@@ -1367,22 +1719,44 @@ impl super::PalwPanelService {
                 books.pursuits.remove(&claim);
                 books.accused.insert(claim);
             }
+            // No annex reaches a row's lanes: the chain's rows tree is the path (option C's units).
+            PalwTirAnnexStepV1::Rows(why) => {
+                info!("[{PALW_PANEL}] IR claim {claim}: {why} — descending its rows tree on chain (RFC-0002 evidence transport C)");
+                if let Some(p) = books.pursuits.get_mut(&claim) {
+                    (p.token, p.withheld, p.rounds) = (None, true, p.rounds + 1);
+                }
+            }
             PalwTirAnnexStepV1::Accuse { leaf, row, candidates } => {
-                books.pursuits.remove(&claim);
-                books.accused.insert(claim);
                 let found = palw_tir_one_move_accusation_to_file_v1(candidates, target, &program, bond_key, &court, ladder, form);
                 match found {
                     Some((label, accusation)) => {
+                        books.pursuits.remove(&claim);
+                        books.accused.insert(claim);
                         info!(
                             "[{PALW_PANEL}] IR claim {claim}: the annexes name leaf {leaf:?} / token row {row:?} after {} round(s)",
                             pursuit.rounds + 1
                         );
                         self.file_tir_one_move_v1(target, due, label, leaf, row, accusation, books);
                     }
-                    None => warn!(
-                        "[{PALW_PANEL}] IR claim {claim}: no accusation built from the annexes convicts (leaf {leaf:?}, row {row:?}); \
-                         recorded, not filed"
-                    ),
+                    // On a trace descent a door that does not convict is a row forged to select its
+                    // id: the rows tree finds it.
+                    None if pursuit.trace.is_some() && row.is_some() => {
+                        info!(
+                            "[{PALW_PANEL}] IR claim {claim}: the decode-token door at row {row:?} does not convict (the row selects its \
+                             id) — descending its rows tree on chain (RFC-0002 evidence transport C)"
+                        );
+                        if let Some(p) = books.pursuits.get_mut(&claim) {
+                            (p.token, p.withheld, p.rounds) = (None, true, p.rounds + 1);
+                        }
+                    }
+                    None => {
+                        books.pursuits.remove(&claim);
+                        books.accused.insert(claim);
+                        warn!(
+                            "[{PALW_PANEL}] IR claim {claim}: no accusation built from the annexes convicts (leaf {leaf:?}, row {row:?}); \
+                             recorded, not filed"
+                        );
+                    }
                 }
             }
         }

@@ -44,6 +44,15 @@ condition, on a class that runs in minutes):
 - **C0**: C, and new4 stopped once a demand is on chain: its claim defaults (`ProducerWithholding`, counted by
   `dfwatch.py` as `withheld`).
 
+Not in the piece yet: **a lie in the trace alone** (the steps honest). A seat whose own step root, beside the
+claim's trace root, gives the claim's execution root descends the trace instead — served annexes first from decode
+row 0's logits leaf (ids, and the decode-token door at the first id that parts), and on chain the rows tree
+(`TirRowNode` under `DefaultAccusedTirStep`: the rows root, the first differing frontier node, the row's tile
+leaves), then the tile as an event demand (`DefaultAccused`), convicting with its own step tile beside the
+disclosed one (`TirLogits`). The log says `rows-tree answers move the trace's descent`. Drilling it needs a producer
+flag that commits a forged trace row, which the kit does not have; the node tests cover it
+(`tir_court_e2e::a_trace_only_liar_is_found_down_its_rows_tree_and_convicted_by_one_seat`).
+
 `DF1=0` loads no 1.5B class (the seven holders hold the small class alone, new0 is a plain seat, no old relay).
 `TIR2_AT` must be past `TIR_AT` and is fixed for the chain's life (the datadir marker's `tir2_at`). The verdict
 is `$WORK_DIR/bdc.verdict`; `BDC_LEAF` / `BDC_DISSECTED_LEAF` override the leaves read from the small class's

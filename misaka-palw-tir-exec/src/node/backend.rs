@@ -474,8 +474,11 @@ impl TirBackendV1 {
     /// **The answer to an IR step unit of this node's claim** (the second IR fence's DA units,
     /// evidence transport C): a step leaf by its disclosure ([`Self::step_leaf_disclosure`]'s
     /// builder), an interior step node by its frontier and opening
-    /// (`build_tir_step_node_disclosure_v1` over the store's tree), and a unit past this execution —
-    /// a leaf at or past its leaf count, a node past its tree — by the claim's binding proving so
+    /// (`build_tir_step_node_disclosure_v1` over the store's tree), a node of the tiled trace's rows
+    /// tree by its frontier (a row's: its tile leaves) and opening with the ids
+    /// (`build_tir_row_node_disclosure_v1` over the capture's rows), and a unit past this execution —
+    /// a leaf at or past its leaf count, a node past its tree, a row at or past the decode count, a
+    /// rows node past the rows tree or of a flat trace — by the claim's binding proving so
     /// (`TirStepOutOfRange`, the program stripped). Every answer is self-checked by the fold's own
     /// check before it is returned.
     pub fn step_unit_answer(
@@ -484,7 +487,10 @@ impl TirBackendV1 {
         unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
     ) -> Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String> {
         use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
-        use kaspa_consensus_core::palw_tir_court_v1::{build_tir_step_node_disclosure_v1, palw_tir_step_tree_width_v1};
+        use kaspa_consensus_core::palw_tir_court_v1::{
+            build_tir_row_node_disclosure_v1, build_tir_step_node_disclosure_v1, palw_tir_step_tree_width_v1,
+        };
+        let tiled = Hash64::from_bytes(self.space.program.logits_scheme_id) == tiled_logits_scheme_id_v1();
         self.with_capture_store(material, self.prompt_ids_form, |store, binding| {
             let count = binding.step_leaf_count;
             let out_of_range = || {
@@ -505,6 +511,21 @@ impl TirBackendV1 {
                     build_tir_step_node_disclosure_v1(binding, level, index, store, self.ladder)
                         .map(|d| PalwDaAnswerV1::TirStepNode(Box::new(d)))
                         .map_err(|e| format!("step node ({level}, {index}): {e}"))
+                }
+                // The rows tree is the tiled scheme's (a flat trace hashes every row at once): a row
+                // at or past the decode count, a node past the tree, or any node of a flat trace is
+                // proven out of range — the fold's own predicate (`check_tir_step_out_of_range_v1`).
+                PalwDaUnitV1::TirRowNode { level, index }
+                    if !tiled
+                        || palw_tir_step_tree_width_v1(u64::from(binding.job_context.exact_decode_tokens), level)
+                            .is_none_or(|w| index >= w) =>
+                {
+                    out_of_range()
+                }
+                PalwDaUnitV1::TirRowNode { level, index } => {
+                    build_tir_row_node_disclosure_v1(binding, level, index, store, self.ladder)
+                        .map(|d| PalwDaAnswerV1::TirRowNode(Box::new(d)))
+                        .map_err(|e| format!("rows-tree node ({level}, {index}): {e}"))
                 }
                 other => Err(format!("{other:?} is not an IR step unit")),
             }
@@ -818,6 +839,78 @@ impl TirBackendV1 {
             };
             Ok(PalwCourtVerdictProofV2::TirDecodeToken { binding, pin, position: row })
         }
+    }
+
+    /// **The step leaf of the logits node at decode row `row` whose tile holds lane `lane`** — the
+    /// leaf a decode-token door's pin rides with (`lane` the seat's own token), or the one a logits
+    /// door accuses (`lane` the first lane a disclosed trace tile parts at). `None` for a row before
+    /// the first selecting position, or a lane no logits tile of that row holds.
+    pub fn logits_leaf_holding(&self, ctx: &PalwJobContextV2, row: u32, lane: u64) -> Option<u64> {
+        let position = (ctx.declared_prefill_tokens + row).checked_sub(1)?;
+        let post = u32::try_from(self.space.occurrences().len().checked_sub(1)?).ok()?;
+        let logits = self.space.program.logits;
+        self.space
+            .leaves_of_position(ctx, position)
+            .into_iter()
+            .find(|l| {
+                matches!(l.kind, kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::Commit { occurrence, node, first_element, .. }
+                    if occurrence == post && node == logits && (first_element..first_element + u64::from(l.value_count)).contains(&lane))
+            })
+            .map(|l| l.index)
+    }
+
+    /// **The logits door over a trace the steps did not compute, from a disclosed trace event** (the
+    /// end of the second IR fence's rows-tree descent): a seat whose own steps are the claim's — its
+    /// step root, beside the claim's trace root, gives the claim's execution root — descends the
+    /// claim's rows tree (`TirRowNode`) to tile `tile` of row `row`, and the claim's executor discloses
+    /// that tile (`TirEvent`, tiled). The close is the seat's OWN step tile holding the first lane at
+    /// which the disclosed tile parts from the seat's own row — the claim's own leaf, since the step
+    /// trees are one — opened in its own tree, beside the disclosed tile: `TirLogits`, which the court
+    /// convicts on (`TirLogitsTraceMismatch`). `accused` is the claim's binding, its program filled.
+    pub fn trace_logits_close(
+        &self,
+        own: &TirRetainedJobV1,
+        accused: &PalwTirStepBindingV1,
+        row: u32,
+        tile: u8,
+        event: &kaspa_consensus_core::palw_tir_court_v1::PalwTirTraceEventDisclosureV1,
+    ) -> Result<PalwCourtVerdictProofV2, String> {
+        use kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES;
+        use kaspa_consensus_core::palw_tir_court_v1::{PalwTirEvidenceStoreV1, PalwTirTraceEventDisclosureV1, PalwTirTraceLanesV1};
+        let PalwTirTraceEventDisclosureV1::Tiled { generated_token_ids, row_root, row_opening, tile_lanes, tile_opening, .. } = event
+        else {
+            return Err("the rows tree ends at a tiled trace event".into());
+        };
+        let theirs = (&accused.job_context, accused.step_leaf_count, accused.step_merkle_root);
+        if (&own.binding.job_context, own.binding.step_leaf_count, own.binding.step_merkle_root) != theirs {
+            return Err("the seat's own steps are not the claim's: the step tree's descent is the path".into());
+        }
+        let first = usize::from(tile) * PALW_LOGITS_TILE_LANES;
+        let own_row = own.logits_rows.get(row as usize).ok_or("the row is past the seat's own run")?;
+        let own_lanes = own_row.get(first..(first + PALW_LOGITS_TILE_LANES).min(own_row.len())).ok_or("the tile is past the row")?;
+        if own_lanes.len() != tile_lanes.len() {
+            return Err("the disclosed tile is not the row's tile width".into());
+        }
+        let at = own_lanes.iter().zip(tile_lanes).position(|(a, b)| a != b).ok_or("the disclosed tile is the seat's own")?;
+        let lane = (first + at) as u64;
+        let leaf = self
+            .logits_leaf_holding(&accused.job_context, row, lane)
+            .ok_or_else(|| format!("no logits step tile of row {row} holds lane {lane}"))?;
+        let runner = self.runner();
+        let store = TirEvidenceV1::own(&runner, own, self.artifact.as_ref(), self.prompt_ids_form, self.ladder)?;
+        let accusation = PalwTirLogitsConsistencyV1 {
+            binding: accused.clone(),
+            step_opening: store.step_opening(leaf).ok_or_else(|| format!("step leaf {leaf} does not open"))?,
+            step_preimage: store.step_leaf(leaf).ok_or_else(|| format!("step leaf {leaf} is not re-derived"))?,
+            trace: PalwTirTraceLanesV1::Tiled {
+                generated_token_ids: generated_token_ids.clone(),
+                row_root: *row_root,
+                row_opening: row_opening.clone(),
+                tile_lanes: tile_lanes.clone(),
+                tile_opening: tile_opening.clone(),
+            },
+        };
+        Ok(PalwCourtVerdictProofV2::TirLogits { accusation: Box::new(accusation) })
     }
 
     /// The operands of the drawn inventory leaves, in the draw's order.
