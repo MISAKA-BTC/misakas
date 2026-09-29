@@ -729,11 +729,11 @@ pub(crate) fn pre_norm(n: NormSpec) -> Residual {
 }
 
 pub(crate) fn gated_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias }
+    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias, name: None }
 }
 
 pub(crate) fn plain_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias }
+    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias, name: None }
 }
 
 /// Heads / kv heads / head_dim with the usual defaults and divisibility checks.
@@ -788,6 +788,7 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         v_norm: None,
         v_from_k: false,
         param_prefix: None,
+        kv_share: None,
     }
 }
 

@@ -196,6 +196,21 @@ pub struct AttnSpec {
     /// The HL name of this attention's params and histories (`attn` unless given): layers whose
     /// projections differ in shape (Gemma-4's wider global heads) need names of their own.
     pub param_prefix: Option<String>,
+    /// Gemma-3n/4's KV sharing: this layer's keys and values ride to later layers, or are an
+    /// earlier layer's.
+    pub kv_share: Option<KvShare>,
+}
+
+/// Gemma-3n/4's KV sharing (`num_kv_shared_layers`), through the carries between layers: carry
+/// `1 + 2·slot` holds a key row and `2 + 2·slot` its value row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum KvShare {
+    /// The last layer of its kind before the sharing ones: its keys (normed and rotated) and values
+    /// (normed) go out on the slot's carries.
+    Source { slot: usize },
+    /// A layer that projects no keys or values: it appends the slot's rows to a history of its
+    /// own and attends over it — the source's history, row for row.
+    Consumer { slot: usize },
 }
 
 /// A query temperature by position: Llama-4's `attn_temperature_tuning` (`floor_scale`,
@@ -356,6 +371,9 @@ pub struct MlpSpec {
     pub glu: Glu,
     pub up_bias: bool,
     pub down_bias: bool,
+    /// The HL name of the MLP's params (`mlp` unless given): layers whose MLPs differ in width
+    /// (Gemma-4's double-wide KV-sharing layers, Gemma-3n's per-layer widths) need their own.
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

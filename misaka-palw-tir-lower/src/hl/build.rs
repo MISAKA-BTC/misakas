@@ -13,6 +13,7 @@ use crate::spec::*;
 use std::collections::BTreeMap;
 
 pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
+    let carries = carries_of(spec)?;
     let mut b = Builder {
         s: spec,
         params: vec![],
@@ -21,8 +22,9 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
         sidx: BTreeMap::new(),
         ropes: vec![],
         blocks: vec![],
+        carries: carries.clone(),
+        carry_out: BTreeMap::new(),
     };
-    let carries = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size] }];
     let pre = b.pre_block()?;
     let mut kinds: Vec<(LayerSpec, Vec<u16>)> = Vec::new();
     let mut schedule = Vec::with_capacity(spec.layers.len());
@@ -46,6 +48,7 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
         }
     }
     let post = b.post_block()?;
+    let carries = b.carries.clone();
     let p = HlProgram {
         architecture: spec.architecture.clone(),
         output: match spec.output {
@@ -76,6 +79,35 @@ struct Builder<'a> {
     sidx: BTreeMap<String, u32>,
     ropes: Vec<crate::rope::RopeFreqs>,
     blocks: Vec<Block>,
+    /// The carries (the residual first, then each KV-sharing slot's key and value rows).
+    carries: Vec<CarryDecl>,
+    /// What the block under construction writes to a carry past the residual.
+    carry_out: BTreeMap<usize, Ref>,
+}
+
+/// The carries a spec needs: the residual stream, then a key row and a value row for each KV
+/// slot a [`KvShare::Source`] layer fills.
+fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
+    let mut out = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size] }];
+    let mut slots: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+    for ls in &spec.layers {
+        if let Mixer::Attention(a) = &ls.mixer
+            && let Some(KvShare::Source { slot }) = a.kv_share
+        {
+            let dims = (a.kv_heads * a.head_dim, a.kv_heads * a.v_head_dim);
+            if slots.insert(slot, dims).is_some_and(|d| d != dims) {
+                return Err(LowerError::eval(format!("internal: KV slot {slot} filled at two widths")));
+            }
+        }
+    }
+    for (i, (slot, (k, v))) in slots.into_iter().enumerate() {
+        if slot != i {
+            return Err(LowerError::eval("internal: KV slots are not numbered from 0"));
+        }
+        out.push(CarryDecl { name: format!("kv{slot}.k"), shape: vec![k] });
+        out.push(CarryDecl { name: format!("kv{slot}.v"), shape: vec![v] });
+    }
+    Ok(out)
 }
 
 /// A block under construction.
@@ -249,8 +281,22 @@ impl Builder<'_> {
         if let Some(rb) = e.rel_bias {
             self.param("attn.rel_bias", vec![rb.buckets, rb.heads], false, Init::Normal(0.2))?;
         }
-        self.blocks.push(Block { name: "pre".into(), role: BlockRole::Pre, nodes: bk.nodes, outputs: vec![x] });
+        let mut outputs = vec![x];
+        for c in self.carries.clone().iter().skip(1) {
+            let n: usize = c.shape.iter().product();
+            outputs.push(bk.f(Op::Zeros, vec![], n, &format!("carry.{}", c.name)));
+        }
+        self.blocks.push(Block { name: "pre".into(), role: BlockRole::Pre, nodes: bk.nodes, outputs });
         Ok(self.blocks.len() - 1)
+    }
+
+    /// A layer block's outputs: the residual, then every other carry — what this block wrote to
+    /// it, else the carry passed through.
+    fn layer_outputs(&mut self, h: Ref) -> Vec<Ref> {
+        let written = std::mem::take(&mut self.carry_out);
+        let mut out = vec![h];
+        out.extend((1..self.carries.len()).map(|c| written.get(&c).copied().unwrap_or(Ref::Carry(c as u8))));
+        out
     }
 
     fn post_block(&mut self) -> Result<usize> {
@@ -323,7 +369,8 @@ impl Builder<'_> {
             let m = self.full_norm(&mut bk, m, *post_mixer, "norm.post_mix", d, true)?;
             let h = bk.f(Op::Add, vec![x, m], d, "resid.mix");
             let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
-            self.blocks.push(Block { name: format!("{name}.mix"), role: BlockRole::Layer, nodes: bk.nodes, outputs: vec![h] });
+            let outputs = self.layer_outputs(h);
+            self.blocks.push(Block { name: format!("{name}.mix"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
             let a = self.blocks.len() - 1;
             let f = self.layer_block(ls, kind_index)?;
             return Ok(vec![a, f]);
@@ -392,7 +439,7 @@ impl Builder<'_> {
                     // Gemma-4's MoE block beside the MLP: the router and the experts read the residual.
                     Ffn::MlpMoe(mm) => {
                         let n2 = self.full_norm(&mut bk, x1, *pre_ffn, "norm.ffn", d, true)?;
-                        let a = self.mlp(&mut bk, &mm.mlp, n2, "mlp")?;
+                        let a = self.mlp(&mut bk, &mm.mlp, n2, mm.mlp.name.as_deref().unwrap_or("mlp"))?;
                         let a = self.full_norm(&mut bk, a, mm.mlp_post, "norm.post_mlp", d, true)?;
                         let rn = self.full_norm(&mut bk, x1, mm.router_norm, "moe.router_norm", d, true)?;
                         let rn = bk.f(Op::Scale { c: mm.router_scale }, vec![rn], d, "moe.router_in");
@@ -431,7 +478,8 @@ impl Builder<'_> {
         if matches!(ls.residual, Residual::Sandwich { .. }) {
             name.push_str(".ffn");
         }
-        self.blocks.push(Block { name, role: BlockRole::Layer, nodes: bk.nodes, outputs: vec![h] });
+        let outputs = self.layer_outputs(h);
+        self.blocks.push(Block { name, role: BlockRole::Layer, nodes: bk.nodes, outputs });
         Ok(self.blocks.len() - 1)
     }
 
@@ -449,7 +497,7 @@ impl Builder<'_> {
     fn ffn(&mut self, bk: &mut Bk, f: &Ffn, x: Ref) -> Result<Ref> {
         match f {
             Ffn::None => Err(LowerError::eval("internal: ffn of a layer without one")),
-            Ffn::Mlp(m) => self.mlp(bk, m, x, "mlp"),
+            Ffn::Mlp(m) => self.mlp(bk, m, x, m.name.as_deref().unwrap_or("mlp")),
             Ffn::Moe(m) => self.moe(bk, m, x),
             Ffn::RwkvChannel(c) => self.rwkv_channel(bk, c, x),
             Ffn::MlpMoe(_) => Err(LowerError::eval("internal: an MLP+MoE block outside a sandwich layer")),
@@ -485,6 +533,48 @@ impl Builder<'_> {
         let pf = a.param_prefix.clone().unwrap_or_else(|| "attn".into());
         let n = |s: &str| format!("{pf}.{s}");
         let mut q = self.linear(bk, x, &n("q"), qn, d, a.q_bias, true, &n("q"))?;
+        // A KV-sharing layer: the query as ever, the keys and values an earlier layer's rows.
+        if let Some(KvShare::Consumer { slot }) = a.kv_share {
+            if a.output_gate || a.clip_qkv.is_some() || a.sinks || a.v_from_k {
+                return Err(LowerError::not_lowerable("a KV-sharing layer with a gated, clipped, sinked or K = V attention"));
+            }
+            if let Some(qk) = &a.qk_norm {
+                q = self.qk_norm(bk, q, qk, &n("q_norm"), h, hd)?;
+            }
+            match &a.position {
+                Position::Rope(r) => {
+                    let t = self.rope_table(&r.freqs);
+                    q = bk.f(
+                        Op::Rope { heads: h, head_dim: hd, rotary_dim: r.rotary_dim, offset: r.offset, style: r.style, table: t },
+                        vec![q, Ref::Pos],
+                        qn,
+                        &n("q_rope"),
+                    );
+                }
+                Position::None => {}
+                Position::Alibi(_) => return Err(LowerError::not_lowerable("a KV-sharing layer under ALiBi")),
+            }
+            let (kc, vc) = (Ref::Carry((1 + 2 * slot) as u8), Ref::Carry((2 + 2 * slot) as u8));
+            let suffix = a.window.map(|w| format!(".w{w}")).unwrap_or_default();
+            let ks = self.state(&format!("{pf}.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![kn], 0.0)?;
+            let vs = self.state(&format!("{pf}.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![vn], 0.0)?;
+            bk.append(kc, ks);
+            bk.append(vc, vs);
+            let op = Op::Attention {
+                heads: h,
+                kv_heads: kv,
+                head_dim: hd,
+                v_head_dim: vd,
+                scale: a.scale,
+                softcap: a.softcap,
+                window: a.window,
+                alibi: None,
+                sinks: false,
+                chunk: a.chunk,
+            };
+            let o = bk.f(op, vec![q, ks, vs], h * vd, &n("ctx"));
+            return self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"));
+        }
         let mut k = self.linear(bk, x, &n("k"), kn, d, a.k_bias, true, &n("k"))?;
         // Gemma-4's `attention_k_eq_v`: the values are the raw key projection.
         let mut v = if a.v_from_k {
@@ -536,6 +626,11 @@ impl Builder<'_> {
         let vs = self.state(&format!("{pf}.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![vn], 0.0)?;
         bk.append(k, ks);
         bk.append(v, vs);
+        // The source of a KV slot: its rows, as appended, go out to the sharing layers.
+        if let Some(KvShare::Source { slot }) = a.kv_share {
+            self.carry_out.insert(1 + 2 * slot, k);
+            self.carry_out.insert(2 + 2 * slot, v);
+        }
         let mut ins = vec![q, ks, vs];
         if a.sinks {
             ins.push(self.param(&n("sinks"), vec![h], true, Init::Normal(1.0))?);
@@ -852,6 +947,7 @@ impl Builder<'_> {
                 glu: Glu::Standard,
                 up_bias: false,
                 down_bias: false,
+                name: None,
             };
             let mut s = self.mlp(bk, &spec, x, "moe.shared")?;
             if sh.sigmoid_gate {

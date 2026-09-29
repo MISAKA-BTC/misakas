@@ -271,6 +271,20 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
     // The HL names (`AttnSpec::param_prefix`); the checkpoint roles stay `attn.*`.
     let pf = a.param_prefix.clone().unwrap_or_else(|| "attn".into());
     let n = |s: &str| format!("{pf}.{s}");
+    // A KV-sharing layer projects no keys or values of its own.
+    if let Some(crate::spec::KvShare::Consumer { .. }) = a.kv_share {
+        if m.st.qkv != QkvLayout::Separate || a.output_gate {
+            return Err(LowerError::eval("internal: a KV-sharing layer over a fused qkv or a gated query"));
+        }
+        m.lin(&n("q"), "attn.q", a.q_bias)?;
+        m.lin(&n("o"), "attn.o", a.o_bias)?;
+        if let Some(qk) = &a.qk_norm
+            && (qk.norm.gain != Gain::None || qk.norm.bias)
+        {
+            m.norm(&n("q_norm"), "attn.q_norm", &qk.norm)?;
+        }
+        return Ok(());
+    }
     match m.st.qkv {
         QkvLayout::Separate => {
             if a.output_gate {
@@ -512,30 +526,33 @@ fn rwkv_channel(m: &mut M, _c: &RwkvChannelSpec, rescale: Option<usize>, d: usiz
     m.put("rwkv.ffn.v.w", rescaled(v, rescale))
 }
 
+/// An MLP's params: HL names under the MLP's own name ([`MlpSpec::name`], else `pfx`), checkpoint
+/// roles under `pfx`.
 fn mlp(m: &mut M, s: &MlpSpec, pfx: &str, layout: MlpLayout) -> Result<()> {
     let i = s.intermediate;
+    let hn = s.name.clone().unwrap_or_else(|| pfx.to_string());
     match layout {
         MlpLayout::Separate => {
             if s.gated {
-                m.lin(&format!("{pfx}.gate"), &format!("{pfx}.gate"), s.up_bias)?;
+                m.lin(&format!("{hn}.gate"), &format!("{pfx}.gate"), s.up_bias)?;
             }
-            m.lin(&format!("{pfx}.up"), &format!("{pfx}.up"), s.up_bias)?;
+            m.lin(&format!("{hn}.up"), &format!("{pfx}.up"), s.up_bias)?;
         }
         MlpLayout::FusedGateFirst => {
             let w = m.w(&format!("{pfx}.gate_up"))?;
-            m.put(format!("{pfx}.gate.w"), w.clone().rows(Pick::Range { start: 0, len: i }))?;
-            m.put(format!("{pfx}.up.w"), w.rows(Pick::Range { start: i, len: i }))?;
+            m.put(format!("{hn}.gate.w"), w.clone().rows(Pick::Range { start: 0, len: i }))?;
+            m.put(format!("{hn}.up.w"), w.rows(Pick::Range { start: i, len: i }))?;
             if s.up_bias {
                 let b = m.b(&format!("{pfx}.gate_up"))?;
-                m.put(format!("{pfx}.gate.b"), b.clone().rows(Pick::Range { start: 0, len: i }))?;
-                m.put(format!("{pfx}.up.b"), b.rows(Pick::Range { start: i, len: i }))?;
+                m.put(format!("{hn}.gate.b"), b.clone().rows(Pick::Range { start: 0, len: i }))?;
+                m.put(format!("{hn}.up.b"), b.rows(Pick::Range { start: i, len: i }))?;
             }
         }
         MlpLayout::FusedInterleaved | MlpLayout::FusedGateFirstInOut => {
             return Err(LowerError::eval("internal: an expert-only layout on a dense MLP"));
         }
     }
-    m.lin(&format!("{pfx}.down"), &format!("{pfx}.down"), s.down_bias)
+    m.lin(&format!("{hn}.down"), &format!("{pfx}.down"), s.down_bias)
 }
 
 fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
@@ -591,7 +608,7 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
     }
     if let Some(sh) = &s.shared {
         let spec =
-            MlpSpec { intermediate: sh.intermediate, act: s.act, gated: true, glu: Glu::Standard, up_bias: false, down_bias: false };
+            MlpSpec { intermediate: sh.intermediate, act: s.act, gated: true, glu: Glu::Standard, up_bias: false, down_bias: false, name: None };
         mlp(m, &spec, "moe.shared", MlpLayout::Separate)?;
         if sh.sigmoid_gate {
             m.lin("moe.shared_gate", "moe.shared_gate", false)?;
