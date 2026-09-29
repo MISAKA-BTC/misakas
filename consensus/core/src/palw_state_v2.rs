@@ -98,6 +98,12 @@ use blake2b_simd::Params;
 use kaspa_hashes::{Hash64, ZERO_HASH64};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// **RFC-0004: the Model Improvement Protocol in the fold** — a child module, so it reads the builder
+/// and the tables and writes them only through their one writers (spec 17).
+#[path = "palw_improve_fold_v1.rs"]
+mod palw_improve_fold_v1;
+pub use palw_improve_fold_v1::{PALW_STATE_V2_IMPROVE_PAYOUT_KEY_PREFIX, PalwMaterialPlacementV1};
+
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
 /// declared field positions; ADR-0044 (FP-03) added the free-prompt claim source, the
@@ -1553,6 +1559,10 @@ pub struct PalwStateParamsV2 {
     /// reason, and `validate_palw_v2` refuses a copy that disagrees.
     #[borsh(skip)]
     improve_from_daa: Option<u64>,
+    /// RFC-0004: the fence's ceilings, mirrored with its height (the fold bounds every policy and the
+    /// network's open epochs by them). `None` exactly where `improve_from_daa` is.
+    #[borsh(skip)]
+    improve_ceilings: Option<crate::palw_improve_v1::PalwImprovementCeilingsV1>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1763,6 +1773,7 @@ impl PalwStateParamsV2 {
             gen_from_daa: None,
             tir_fence2_from_daa: None,
             improve_from_daa: None,
+            improve_ceilings: None,
         })
     }
 
@@ -1980,6 +1991,18 @@ impl PalwStateParamsV2 {
     pub fn with_improve_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.improve_from_daa = from_daa;
         self
+    }
+
+    /// RFC-0004: the fence's ceilings' mirror, written with its height by
+    /// `Params::sync_palw_improvement_v1`.
+    pub fn with_improve_ceilings(mut self, ceilings: Option<crate::palw_improve_v1::PalwImprovementCeilingsV1>) -> Self {
+        self.improve_ceilings = ceilings;
+        self
+    }
+
+    /// The fence's ceilings, if the network arms it (the mirror).
+    pub fn improve_ceilings(&self) -> Option<crate::palw_improve_v1::PalwImprovementCeilingsV1> {
+        self.improve_ceilings
     }
 
     /// `Params::palw_improvement_v1`'s height, if the network arms it (the mirror).
@@ -7523,6 +7546,15 @@ pub fn palw_object_is_improvement_v1(object: &PalwConsensusObjectV2) -> bool {
     palw_improvement_object_name_v1(object).is_some()
 }
 
+/// **Has the object's admission landed?** (spec 17 §17.0) An improvement object whose admission has
+/// landed is taken past `palw_improvement_v1` by its own arm; every other is dropped by the acceptance
+/// walk and refused by the fold and the object gate at every height. Each lane adds its objects here as
+/// their admission lands.
+pub fn palw_improvement_object_landed_v1(object: &PalwConsensusObjectV2) -> bool {
+    use PalwConsensusObjectV2 as O;
+    matches!(object, O::ModelLineImprovementPolicySet { .. } | O::LineageHeadRolledBack { .. })
+}
+
 /// **The name and tag of an RFC-0004 improvement object**, or `None` for every other object. One
 /// function for the predicate, the fold's refusal and the processor's drop, so the three cannot
 /// disagree about which objects are the protocol's.
@@ -9634,6 +9666,16 @@ pub enum PalwStateV2Error {
     /// above it. The acceptance walk drops it by name first; this is the second lock.
     #[error("an improvement object is refused: {object}: {why}")]
     ImprovementObjectRefused { object: &'static str, why: &'static str },
+    /// **An improvement move the protocol does not take** (spec 17): the reason, by name.
+    #[error("the improvement protocol refuses this: {0}")]
+    ImprovementRefused(&'static str),
+    /// **A policy object refused** (spec 17 §17.4.2–3): the rule it breaks, by name.
+    #[error("an improvement policy is refused: {0}")]
+    ImprovementPolicyRefused(&'static str),
+    /// **A developer's promotion on a governed line** (spec 17 §17.4.1): the head moves only by the
+    /// protocol's promotion or rollback.
+    #[error("line {0} is governed by the improvement protocol: its head moves only by promotion or rollback")]
+    ImprovementLineGoverned(Hash64),
     /// **An IR step-leaf demand past the claim's committed leaves.**
     #[error("claim {claim}: step leaf {index} is past the {count} its execution commits")]
     TirLeafOutOfRange { claim: Hash64, index: u64, count: u64 },
@@ -10183,18 +10225,50 @@ pub struct PalwChainStateV2 {
     /// carriage tail (`0xC2`): empty below `palw_gen_v1`, so every network roots and carries exactly
     /// as before.
     gen_classes: BTreeMap<Hash64, crate::palw_gen_class_v1::PalwGenClassRecordV1>,
-    /// **RFC-0004: every governed line's improvement row**, by line id — its policy, head history,
-    /// usage baseline, epoch counter and pool ([`crate::palw_improve_state_v1::PalwImprovementLineV1`]).
-    /// Written only past `palw_improvement_v1`, so every network roots and carries exactly as before:
-    /// the Some-only root block `improvement/v1` and carriage tail `0xC3`.
+    // ---- RFC-0004 (`Params::palw_improvement_v1`): the Model Improvement Protocol's tables ----
+    //
+    // Written only past the fence, through their one writers; ONE Some-only root block
+    // (`improvement/v1`, the collection roots in this order) and one carriage tail each, so every
+    // network below the fence roots and carries exactly as before. Headers are O(1); what grows
+    // lives in keyed tables (spec 17 §17.3).
+    /// RFC-0004: every governed line's header, by line id.
     improvement_lines: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementLineV1>,
-    /// **RFC-0004: every improvement epoch**, by `(line id, epoch)` — its state, times, material,
-    /// candidates, items, results, counts, outcome and grants
-    /// ([`crate::palw_improve_state_v1::PalwImprovementEpochV1`]). Written only past the fence: the
-    /// same root block and carriage tail `0xC4`.
+    /// RFC-0004: every epoch's header, by `(line, epoch)`.
     improvement_epochs: BTreeMap<(Hash64, u64), crate::palw_improve_state_v1::PalwImprovementEpochV1>,
+    /// RFC-0004: each governed line's policy and pending policy.
+    improvement_policies: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementPolicyRecordV1>,
+    /// RFC-0004: each governed line's usage counter.
+    improvement_usage: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementUsageV1>,
+    /// RFC-0004: the last 64 head changes of each line, by `(line, seq)`.
+    improvement_heads: BTreeMap<(Hash64, u32), crate::palw_improve_state_v1::PalwLineageHeadEntryV1>,
+    /// RFC-0004: each governed line's pool.
+    improvement_pools: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementPoolV1>,
+    /// RFC-0004: each epoch's material frontier, by `(line, epoch)` — the next epoch's before it opens.
+    improvement_material: BTreeMap<(Hash64, u64), crate::palw_improve_state_v1::PalwMaterialFrontierV1>,
+    /// RFC-0004: each epoch's candidates, by `(line, epoch, index)` in acceptance order.
+    improvement_candidates: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwEpochCandidateV1>,
+    /// RFC-0004: each epoch's hold-out cases and setter sets, by `(line, epoch, index)`.
+    improvement_pool_entries: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwPoolEntryV2>,
+    /// RFC-0004: each epoch's drawn items, by `(line, epoch, item)`.
+    improvement_items: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwEvalItemV1>,
+    /// RFC-0004: each recorded score set, by `(line, epoch, item, subject)`.
+    improvement_results: BTreeMap<(Hash64, u64, u32, crate::palw_improve_state_v1::PalwEvalSubjectV1), crate::palw_improve_state_v1::PalwEvalResultV1>,
+    /// RFC-0004: each epoch's grants, by `(line, epoch, index)`.
+    improvement_grants: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwRewardGrantV1>,
+    /// RFC-0004: what the pools owe each bond, not yet flushed into a payout (spec 17 §17.11.5).
+    improvement_earnings: BTreeMap<PalwBondKeyV2, u64>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
+    /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
+    /// in (spec 17 §17.5.2).
+    improvement_due: BTreeSet<(u64, Hash64)>,
+    /// RFC-0004: the lines each class heads (spec 17 §17.4.5).
+    improvement_heads_of: BTreeMap<Hash64, BTreeSet<Hash64>>,
+    /// RFC-0004: decided epochs whose detail rows are still to retire, by `(decided_daa, line,
+    /// epoch)` (spec 17 §17.5.4).
+    improvement_retiring: BTreeSet<(u64, Hash64, u64)>,
+    /// RFC-0004: the epochs not yet decided, network-wide (the `max_open_epochs` ceiling).
+    improvement_open_epochs: u32,
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
     deadlines: BTreeSet<(u64, Hash64)>,
     /// `(accepted_blue_score, claim)` for every non-terminal claim — what the frontier reads.
@@ -10358,6 +10432,21 @@ impl PalwChainStateV2 {
             gen_classes: BTreeMap::new(),
             improvement_lines: BTreeMap::new(),
             improvement_epochs: BTreeMap::new(),
+            improvement_policies: BTreeMap::new(),
+            improvement_usage: BTreeMap::new(),
+            improvement_heads: BTreeMap::new(),
+            improvement_pools: BTreeMap::new(),
+            improvement_material: BTreeMap::new(),
+            improvement_candidates: BTreeMap::new(),
+            improvement_pool_entries: BTreeMap::new(),
+            improvement_items: BTreeMap::new(),
+            improvement_results: BTreeMap::new(),
+            improvement_grants: BTreeMap::new(),
+            improvement_earnings: BTreeMap::new(),
+            improvement_due: BTreeSet::new(),
+            improvement_heads_of: BTreeMap::new(),
+            improvement_retiring: BTreeSet::new(),
+            improvement_open_epochs: 0,
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -10816,6 +10905,60 @@ impl PalwChainStateV2 {
     /// the class has no line rows; otherwise, over every Active line of the class, the versions
     /// in force (current, previews, superseded inside their grace), plus the founding root while
     /// the founding line has no row of its own.
+    /// **RFC-0004: does any improvement table hold a row?** The root block's (and the carriage's)
+    /// one guard: all empty on every network below the fence.
+    pub fn has_improvement_rows_v1(&self) -> bool {
+        !self.improvement_lines.is_empty()
+            || !self.improvement_epochs.is_empty()
+            || !self.improvement_policies.is_empty()
+            || !self.improvement_usage.is_empty()
+            || !self.improvement_heads.is_empty()
+            || !self.improvement_pools.is_empty()
+            || !self.improvement_material.is_empty()
+            || !self.improvement_candidates.is_empty()
+            || !self.improvement_pool_entries.is_empty()
+            || !self.improvement_items.is_empty()
+            || !self.improvement_results.is_empty()
+            || !self.improvement_grants.is_empty()
+            || !self.improvement_earnings.is_empty()
+    }
+
+    /// Test support: one governed line's rows and one epoch's detail rows, inserted directly (the
+    /// fold writes them only through its writers).
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_improvement_rows_for_test_v1(
+        &mut self,
+        line: crate::palw_improve_state_v1::PalwImprovementLineV1,
+        policy: crate::palw_improve_state_v1::PalwImprovementPolicyRecordV1,
+        usage: crate::palw_improve_state_v1::PalwImprovementUsageV1,
+        head: crate::palw_improve_state_v1::PalwLineageHeadEntryV1,
+        pool: crate::palw_improve_state_v1::PalwImprovementPoolV1,
+        material: crate::palw_improve_state_v1::PalwMaterialFrontierV1,
+        epoch: crate::palw_improve_state_v1::PalwImprovementEpochV1,
+        candidate: crate::palw_improve_state_v1::PalwEpochCandidateV1,
+        pool_entry: crate::palw_improve_state_v1::PalwPoolEntryV2,
+        item: crate::palw_improve_state_v1::PalwEvalItemV1,
+        result: crate::palw_improve_state_v1::PalwEvalResultV1,
+        grant: crate::palw_improve_state_v1::PalwRewardGrantV1,
+    ) {
+        let id = line.line_id;
+        let n = epoch.epoch;
+        self.improvement_lines.insert(id, line);
+        self.improvement_policies.insert(id, policy);
+        self.improvement_usage.insert(id, usage);
+        self.improvement_heads.insert((id, 0), head);
+        self.improvement_pools.insert(id, pool);
+        self.improvement_material.insert((id, n), material);
+        self.improvement_epochs.insert((id, n), epoch);
+        self.improvement_candidates.insert((id, n, 0), candidate);
+        self.improvement_pool_entries.insert((id, n, 0), pool_entry);
+        self.improvement_items.insert((id, n, item.item), item);
+        self.improvement_results.insert((id, n, result.item, result.subject), result);
+        self.improvement_grants.insert((id, n, 0), grant);
+        rebuild_improvement_indices_v1(self);
+    }
+
     pub fn class_roots_in_force(&self, class_id: &Hash64, daa: u64) -> Vec<Hash64> {
         let Some(class) = self.classes.get(class_id) else { return Vec::new() };
         let mut roots: Vec<Hash64> = Vec::new();
@@ -12519,10 +12662,21 @@ impl PalwChainStateV2 {
         }
         // **RFC-0004: the governed lines and their epochs, ONE Some-only block** — empty until a line
         // opts in, which nothing below `palw_improvement_v1` can do.
-        if !self.improvement_lines.is_empty() || !self.improvement_epochs.is_empty() {
+        if self.has_improvement_rows_v1() {
             state.update(b"improvement/v1");
             state.update(collection_root(b"improvement_lines", &self.improvement_lines).as_byte_slice());
             state.update(collection_root(b"improvement_epochs", &self.improvement_epochs).as_byte_slice());
+            state.update(collection_root(b"improvement_policies", &self.improvement_policies).as_byte_slice());
+            state.update(collection_root(b"improvement_usage", &self.improvement_usage).as_byte_slice());
+            state.update(collection_root(b"improvement_heads", &self.improvement_heads).as_byte_slice());
+            state.update(collection_root(b"improvement_pools", &self.improvement_pools).as_byte_slice());
+            state.update(collection_root(b"improvement_material", &self.improvement_material).as_byte_slice());
+            state.update(collection_root(b"improvement_candidates", &self.improvement_candidates).as_byte_slice());
+            state.update(collection_root(b"improvement_pool_entries", &self.improvement_pool_entries).as_byte_slice());
+            state.update(collection_root(b"improvement_items", &self.improvement_items).as_byte_slice());
+            state.update(collection_root(b"improvement_results", &self.improvement_results).as_byte_slice());
+            state.update(collection_root(b"improvement_grants", &self.improvement_grants).as_byte_slice());
+            state.update(collection_root(b"improvement_earnings", &self.improvement_earnings).as_byte_slice());
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -13668,6 +13822,20 @@ fn collection_root<K: borsh::BorshSerialize, V: borsh::BorshSerialize>(label: &[
 // Delta
 // ---------------------------------------------------------------------------------------------
 
+/// RFC-0004: the table ids of [`PalwDeltaEntryV2::ImprovementRow`] (spec 17 §17.0).
+pub const PALW_IMPROVE_TABLE_EPOCHS_V1: u8 = 1;
+pub const PALW_IMPROVE_TABLE_POLICIES_V1: u8 = 2;
+pub const PALW_IMPROVE_TABLE_USAGE_V1: u8 = 3;
+pub const PALW_IMPROVE_TABLE_HEADS_V1: u8 = 4;
+pub const PALW_IMPROVE_TABLE_POOLS_V1: u8 = 5;
+pub const PALW_IMPROVE_TABLE_MATERIAL_V1: u8 = 6;
+pub const PALW_IMPROVE_TABLE_CANDIDATES_V1: u8 = 7;
+pub const PALW_IMPROVE_TABLE_POOL_ENTRIES_V1: u8 = 8;
+pub const PALW_IMPROVE_TABLE_ITEMS_V1: u8 = 9;
+pub const PALW_IMPROVE_TABLE_RESULTS_V1: u8 = 10;
+pub const PALW_IMPROVE_TABLE_GRANTS_V1: u8 = 11;
+pub const PALW_IMPROVE_TABLE_EARNINGS_V1: u8 = 12;
+
 /// One entry of a block's state delta: which key changed, from what, to what. `old` is carried so
 /// application can verify it is being applied to the state it was computed from, and so a reorg
 /// can revert without recomputing the branch.
@@ -14214,13 +14382,11 @@ pub enum PalwDeltaEntryV2 {
         old: Option<Box<crate::palw_improve_state_v1::PalwImprovementLineV1>>,
         new: Option<Box<crate::palw_improve_state_v1::PalwImprovementLineV1>>,
     },
-    /// An improvement epoch's row was written or dropped (92; RFC-0004,
-    /// [`crate::palw_improve_state_v1::PalwImprovementEpochV1`]).
-    ImprovementEpoch {
-        key: (Hash64, u64),
-        old: Option<Box<crate::palw_improve_state_v1::PalwImprovementEpochV1>>,
-        new: Option<Box<crate::palw_improve_state_v1::PalwImprovementEpochV1>>,
-    },
+    /// A row of one of RFC-0004's keyed tables was written or dropped (92): `table` names it
+    /// ([`PALW_IMPROVE_TABLE_EPOCHS_V1`] …), and the key and rows ride as their borsh bytes. One
+    /// entry for every detail table, so a table added later takes a table id and not a delta
+    /// discriminant (the lanes' 93–103 stay theirs).
+    ImprovementRow { table: u8, key: Vec<u8>, old: Option<Vec<u8>>, new: Option<Vec<u8>> },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -18116,32 +18282,136 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
-    /// **RFC-0004: the one writer of `improvement_lines`**, journaled `ImprovementLine` (91).
-    #[allow(dead_code)] // the epoch machine's (A2/A3); the skeleton declares the one writer first
+    /// **RFC-0004: the one writer of `improvement_lines`**, journaled `ImprovementLine` (91). Keeps the
+    /// due index and the heads index in step with the row.
     pub(crate) fn write_improvement_line(&mut self, key: Hash64, new: Option<crate::palw_improve_state_v1::PalwImprovementLineV1>) {
         let old = match new.clone() {
             Some(row) => self.state.improvement_lines.insert(key, row),
             None => self.state.improvement_lines.remove(&key),
         };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::ImprovementLine { key, old: old.map(Box::new), new: new.map(Box::new) });
+        if old == new {
+            return;
         }
+        if let Some(old) = &old {
+            self.state.improvement_due.remove(&(old.next_due_daa, key));
+            if let Some(lines) = self.state.improvement_heads_of.get_mut(&old.head) {
+                lines.remove(&key);
+                if lines.is_empty() {
+                    self.state.improvement_heads_of.remove(&old.head);
+                }
+            }
+        }
+        if let Some(new) = &new {
+            self.state.improvement_due.insert((new.next_due_daa, key));
+            self.state.improvement_heads_of.entry(new.head).or_default().insert(key);
+        }
+        self.entries.push(PalwDeltaEntryV2::ImprovementLine { key, old: old.map(Box::new), new: new.map(Box::new) });
     }
 
-    /// **RFC-0004: the one writer of `improvement_epochs`**, journaled `ImprovementEpoch` (92).
-    #[allow(dead_code)] // the epoch machine's (A3); the skeleton declares the one writer first
+    /// **RFC-0004: the one journaled writer of every keyed improvement table** (`ImprovementRow`, 92).
+    fn write_improvement_row<K, V>(
+        &mut self,
+        table: u8,
+        key: K,
+        new: Option<V>,
+        map: fn(&mut PalwChainStateV2) -> &mut BTreeMap<K, V>,
+    ) -> Option<V>
+    where
+        K: Ord + Clone + borsh::BorshSerialize,
+        V: Clone + PartialEq + borsh::BorshSerialize,
+    {
+        let rows = map(&mut self.state);
+        let old = match new.clone() {
+            Some(row) => rows.insert(key.clone(), row),
+            None => rows.remove(&key),
+        };
+        if old != new {
+            let encode = |row: &V| borsh::to_vec(row).expect("an improvement row is borsh-serializable");
+            self.entries.push(PalwDeltaEntryV2::ImprovementRow {
+                table,
+                key: borsh::to_vec(&key).expect("an improvement key is borsh-serializable"),
+                old: old.as_ref().map(encode),
+                new: new.as_ref().map(encode),
+            });
+        }
+        old
+    }
+
+    /// **RFC-0004: the one writer of `improvement_epochs`**. Keeps the open-epoch count and the
+    /// retirement index in step with the header.
     pub(crate) fn write_improvement_epoch(
         &mut self,
         key: (Hash64, u64),
         new: Option<crate::palw_improve_state_v1::PalwImprovementEpochV1>,
     ) {
-        let old = match new.clone() {
-            Some(row) => self.state.improvement_epochs.insert(key, row),
-            None => self.state.improvement_epochs.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::ImprovementEpoch { key, old: old.map(Box::new), new: new.map(Box::new) });
+        let old = self.write_improvement_row(PALW_IMPROVE_TABLE_EPOCHS_V1, key, new.clone(), |s| &mut s.improvement_epochs);
+        let open = |e: &Option<crate::palw_improve_state_v1::PalwImprovementEpochV1>| e.as_ref().is_some_and(|e| !e.is_decided());
+        match (open(&old), open(&new)) {
+            (false, true) => self.state.improvement_open_epochs += 1,
+            (true, false) => self.state.improvement_open_epochs = self.state.improvement_open_epochs.saturating_sub(1),
+            _ => {}
         }
+        if let Some(entry) = old.as_ref().and_then(palw_improvement_retiring_entry_v1) {
+            self.state.improvement_retiring.remove(&entry);
+        }
+        if let Some(entry) = new.as_ref().and_then(palw_improvement_retiring_entry_v1) {
+            self.state.improvement_retiring.insert(entry);
+        }
+    }
+
+    /// **RFC-0004: the one writer of `improvement_policies`**, journaled `ImprovementRow` (2).
+    pub(crate) fn write_improvement_policy(&mut self, key: Hash64, new: Option<crate::palw_improve_state_v1::PalwImprovementPolicyRecordV1>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_POLICIES_V1, key, new, |s| &mut s.improvement_policies);
+    }
+
+    /// **RFC-0004: the one writer of `improvement_usage`**, journaled `ImprovementRow` (3).
+    pub(crate) fn write_improvement_usage(&mut self, key: Hash64, new: Option<crate::palw_improve_state_v1::PalwImprovementUsageV1>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_USAGE_V1, key, new, |s| &mut s.improvement_usage);
+    }
+
+    /// **RFC-0004: the one writer of `improvement_heads`**, journaled `ImprovementRow` (4).
+    pub(crate) fn write_improvement_head(&mut self, key: (Hash64, u32), new: Option<crate::palw_improve_state_v1::PalwLineageHeadEntryV1>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_HEADS_V1, key, new, |s| &mut s.improvement_heads);
+    }
+
+    /// **RFC-0004: the one writer of `improvement_pools`**, journaled `ImprovementRow` (5).
+    pub(crate) fn write_improvement_pool(&mut self, key: Hash64, new: Option<crate::palw_improve_state_v1::PalwImprovementPoolV1>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_POOLS_V1, key, new, |s| &mut s.improvement_pools);
+    }
+
+    /// **RFC-0004: the one writer of `improvement_material`**, journaled `ImprovementRow` (6).
+    pub(crate) fn write_improvement_material(&mut self, key: (Hash64, u64), new: Option<crate::palw_improve_state_v1::PalwMaterialFrontierV1>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_MATERIAL_V1, key, new, |s| &mut s.improvement_material);
+    }
+
+    /// **RFC-0004: the one writer of `improvement_candidates`**, journaled `ImprovementRow` (7).
+    pub(crate) fn write_improvement_candidate(&mut self, key: (Hash64, u64, u32), new: Option<crate::palw_improve_state_v1::PalwEpochCandidateV1>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_CANDIDATES_V1, key, new, |s| &mut s.improvement_candidates);
+    }
+
+    /// **RFC-0004: the one writer of `improvement_pool_entries`**, journaled `ImprovementRow` (8).
+    pub(crate) fn write_improvement_pool_entry(&mut self, key: (Hash64, u64, u32), new: Option<crate::palw_improve_state_v1::PalwPoolEntryV2>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_POOL_ENTRIES_V1, key, new, |s| &mut s.improvement_pool_entries);
+    }
+
+    /// **RFC-0004: the one writer of `improvement_items`**, journaled `ImprovementRow` (9).
+    pub(crate) fn write_improvement_item(&mut self, key: (Hash64, u64, u32), new: Option<crate::palw_improve_state_v1::PalwEvalItemV1>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_ITEMS_V1, key, new, |s| &mut s.improvement_items);
+    }
+
+    /// **RFC-0004: the one writer of `improvement_results`**, journaled `ImprovementRow` (10).
+    pub(crate) fn write_improvement_result(&mut self, key: (Hash64, u64, u32, crate::palw_improve_state_v1::PalwEvalSubjectV1), new: Option<crate::palw_improve_state_v1::PalwEvalResultV1>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_RESULTS_V1, key, new, |s| &mut s.improvement_results);
+    }
+
+    /// **RFC-0004: the one writer of `improvement_earnings`**, journaled `ImprovementRow` (12).
+    pub(crate) fn write_improvement_earning(&mut self, key: PalwBondKeyV2, new: Option<u64>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_EARNINGS_V1, key, new, |s| &mut s.improvement_earnings);
+    }
+
+    /// **RFC-0004: the one writer of `improvement_grants`**, journaled `ImprovementRow` (11).
+    pub(crate) fn write_improvement_grant(&mut self, key: (Hash64, u64, u32), new: Option<crate::palw_improve_state_v1::PalwRewardGrantV1>) {
+        self.write_improvement_row(PALW_IMPROVE_TABLE_GRANTS_V1, key, new, |s| &mut s.improvement_grants);
     }
 
     /// **RFC-0002 F7: the one writer of `tir_dissections`**, journaled `TirDissection` (89).
@@ -24660,6 +24930,8 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0152-adjacent (Activation Pool): (b)'s tracking — before the duty row leaves below.
         self.note_activation_probe_credits_v1(&id, claim);
         self.note_final_work(&id, claim, final_daa);
+        // RFC-0004 (spec 17 §17.4.5): a Final claim of a governed line's head counts toward its trigger.
+        self.note_improvement_usage_at_final_v1(claim, final_daa);
         self.release_for_claim(claim, final_daa)?;
         // The weight divergence between the lanes (ADR-0044): an attempt's Final IS its block's
         // certified work; a free-prompt Final only LICENSES — its weight arrives per spent
@@ -25841,6 +26113,8 @@ pub fn palw_v2_pre_object_base_v1(
     apply_work_target(&mut builder, parent, ctx);
     apply_class_share_growth(&mut builder, parent, ctx);
     apply_class_reclamation(&mut builder, parent, ctx)?;
+    // RFC-0004 (spec 17 §17.5.2): the improvement sweep, as the fold's step 2e does.
+    palw_improve_fold_v1::advance_improvement_v1(&mut builder, ctx)?;
     Ok(builder.checkpoint().0)
 }
 
@@ -26245,6 +26519,11 @@ pub fn apply_palw_transition_v7(
     //     class that has been silent for `reclaim_epochs` are different facts, and only the second
     //     one takes a class out of the table.
     apply_class_reclamation(&mut builder, parent, ctx)?;
+    // 2e. RFC-0004 (spec 17 §17.5.2): the improvement protocol's sweep — the bounded retirement, every
+    //     due line's transitions and vesting, the bounded earnings flush — before this block's objects,
+    //     so a candidate or a case here meets the epoch at this DAA. Mirrored in
+    //     `palw_v2_pre_object_base_v1`. A no-op below `palw_improvement_v1`.
+    palw_improve_fold_v1::advance_improvement_v1(&mut builder, ctx)?;
 
     // 3. The block's accepted objects, in consensus acceptance order.
     //
@@ -30855,18 +31134,23 @@ fn apply_object(
     // drops it first (an older build cannot decode it and skips it), so this is the second lock,
     // and every network folds exactly as before these variants existed.
     if let Some(name) = palw_improvement_object_name_v1(object) {
-        let why = if builder.params.improve_active_at(ctx.daa_score) {
-            "its admission has not landed (RFC-0004 step 0)"
-        } else {
-            "before palw_improvement_v1 is in force (RFC-0004)"
-        };
-        return Err(PalwStateV2Error::ImprovementObjectRefused { object: name, why });
+        let active = builder.params.improve_active_at(ctx.daa_score);
+        if !active || !palw_improvement_object_landed_v1(object) {
+            let why = if active { "its admission has not landed" } else { "before palw_improvement_v1 is in force (RFC-0004)" };
+            return Err(PalwStateV2Error::ImprovementObjectRefused { object: name, why });
+        }
     }
     match object {
-        // RFC-0004: refused by name above, before any arm reads it; the arms land with each object's
-        // admission (the candidates lane's A4/A5, this lane's A2/A9).
-        PalwConsensusObjectV2::ModelLineImprovementPolicySet { .. }
-        | PalwConsensusObjectV2::HardCaseSubmitted { .. }
+        // ---- RFC-0004: the core lane's objects (spec 17 §17.4.2, §17.10) ----
+        PalwConsensusObjectV2::ModelLineImprovementPolicySet { payload, signature: _ } => {
+            palw_improve_fold_v1::apply_improvement_policy_set_v1(builder, ctx, payload)?;
+        }
+        PalwConsensusObjectV2::LineageHeadRolledBack { payload, filer, signature: _ } => {
+            palw_improve_fold_v1::apply_lineage_rollback_v1(builder, ctx, payload, filer)?;
+        }
+        // RFC-0004: refused by name above, before any arm reads it, until each object's admission lands
+        // (the candidates lane's A4/A5, this lane's A9).
+        PalwConsensusObjectV2::HardCaseSubmitted { .. }
         | PalwConsensusObjectV2::DataUseOptIn { .. }
         | PalwConsensusObjectV2::SetterSetCommitted { .. }
         | PalwConsensusObjectV2::SetterSetRevealed { .. }
@@ -30876,7 +31160,6 @@ fn apply_object(
         | PalwConsensusObjectV2::TeachingArtifactRevealed { .. }
         | PalwConsensusObjectV2::TeacherLicenceRegistered { .. }
         | PalwConsensusObjectV2::CandidateSubmitted { .. }
-        | PalwConsensusObjectV2::LineageHeadRolledBack { .. }
         | PalwConsensusObjectV2::ImprovementPoolFunded { .. } => {
             return Err(PalwStateV2Error::ImprovementObjectRefused {
                 object: palw_improvement_object_name_v1(object).unwrap_or("an improvement object"),
@@ -34681,6 +34964,12 @@ impl<'a> TransitionBuilder<'a> {
             .map(|b| b.payout_payload);
         let (to_contributor, to_owner) =
             crate::palw_model_lines_v1::split_owner_leg_v1(leg, line.contributor_permille_of_leg, contributor.is_some());
+        // RFC-0004 (spec 17 §17.11.1): φ of a governed line's owner part feeds its improvement pool.
+        // The market counts the pool's part as the owner's leg paid (ADR-0087 M2 keeps closing): φ is
+        // the owner's money, routed.
+        let owner_part = to_owner;
+        let to_owner = self.take_improvement_phi_v1(line_id, to_owner, ctx.daa_score);
+        let to_pool = owner_part - to_owner;
         let mut owner_tag = tag.to_vec();
         owner_tag.extend_from_slice(b"-owner");
         let burned_owner = self.write_model_fee(ctx, line_id, holder, &owner_tag, owner, to_owner);
@@ -34688,7 +34977,7 @@ impl<'a> TransitionBuilder<'a> {
         contributor_tag.extend_from_slice(b"-contributor");
         let burned_contributor = self.write_model_fee(ctx, line_id, holder, &contributor_tag, contributor, to_contributor);
         after.burned_sompi = after.burned_sompi.saturating_add(burned_owner).saturating_add(burned_contributor);
-        after.registrant_paid_sompi = after.registrant_paid_sompi.saturating_add(to_owner - burned_owner);
+        after.registrant_paid_sompi = after.registrant_paid_sompi.saturating_add(to_owner - burned_owner).saturating_add(to_pool);
         after.contributor_paid_sompi = after.contributor_paid_sompi.saturating_add(to_contributor - burned_contributor);
     }
 
@@ -35285,6 +35574,10 @@ fn apply_model_version_published(
 ) -> Result<(), PalwStateV2Error> {
     use crate::palw_model_lines_v1::*;
     builder.require_model_lines()?;
+    // RFC-0004 (spec 17 §17.4.1): a version that makes itself current is a developer's promotion.
+    if !preview {
+        builder.refuse_developer_promotion_v1(line_id, ctx.daa_score)?;
+    }
     let mut line = builder.model_line_for_write(line_id)?;
     if !line.is_active() {
         return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
@@ -35364,6 +35657,8 @@ fn apply_model_version_promoted(
 ) -> Result<(), PalwStateV2Error> {
     use crate::palw_model_lines_v1::PalwVersionStatusV1;
     builder.require_model_lines()?;
+    // RFC-0004 (spec 17 §17.4.1): a governed line's head moves only by promotion or rollback.
+    builder.refuse_developer_promotion_v1(line_id, ctx.daa_score)?;
     let mut line = builder.model_line_for_write(line_id)?;
     if !line.is_active() {
         return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
@@ -36010,6 +36305,55 @@ pub fn revert_delta_v2(
     Ok(state)
 }
 
+/// RFC-0004: one [`PalwDeltaEntryV2::ImprovementRow`] applied or reverted — decode the key and the
+/// rows as the table's types, check the expected row, install the other.
+fn apply_improvement_row_v1(
+    state: &mut PalwChainStateV2,
+    table: u8,
+    key: &[u8],
+    old: &Option<Vec<u8>>,
+    new: &Option<Vec<u8>>,
+    revert: bool,
+) -> Result<(), PalwStateV2Error> {
+    fn swap<K, V>(map: &mut BTreeMap<K, V>, key: &[u8], old: &Option<Vec<u8>>, new: &Option<Vec<u8>>, revert: bool) -> Result<(), PalwStateV2Error>
+    where
+        K: Ord + borsh::BorshDeserialize,
+        V: PartialEq + borsh::BorshDeserialize,
+    {
+        let bad = |_| PalwStateV2Error::DeltaMismatch("an improvement row's bytes do not decode");
+        let key: K = borsh::from_slice(key).map_err(bad)?;
+        let (expected, install) = if revert { (new, old) } else { (old, new) };
+        let expected: Option<V> = expected.as_deref().map(borsh::from_slice).transpose().map_err(bad)?;
+        if map.get(&key) != expected.as_ref() {
+            return Err(PalwStateV2Error::DeltaMismatch("an improvement row does not match the delta's expectation"));
+        }
+        match install.as_deref() {
+            Some(bytes) => {
+                map.insert(key, borsh::from_slice(bytes).map_err(bad)?);
+            }
+            None => {
+                map.remove(&key);
+            }
+        }
+        Ok(())
+    }
+    match table {
+        PALW_IMPROVE_TABLE_EPOCHS_V1 => swap(&mut state.improvement_epochs, key, old, new, revert),
+        PALW_IMPROVE_TABLE_POLICIES_V1 => swap(&mut state.improvement_policies, key, old, new, revert),
+        PALW_IMPROVE_TABLE_USAGE_V1 => swap(&mut state.improvement_usage, key, old, new, revert),
+        PALW_IMPROVE_TABLE_HEADS_V1 => swap(&mut state.improvement_heads, key, old, new, revert),
+        PALW_IMPROVE_TABLE_POOLS_V1 => swap(&mut state.improvement_pools, key, old, new, revert),
+        PALW_IMPROVE_TABLE_MATERIAL_V1 => swap(&mut state.improvement_material, key, old, new, revert),
+        PALW_IMPROVE_TABLE_CANDIDATES_V1 => swap(&mut state.improvement_candidates, key, old, new, revert),
+        PALW_IMPROVE_TABLE_POOL_ENTRIES_V1 => swap(&mut state.improvement_pool_entries, key, old, new, revert),
+        PALW_IMPROVE_TABLE_ITEMS_V1 => swap(&mut state.improvement_items, key, old, new, revert),
+        PALW_IMPROVE_TABLE_RESULTS_V1 => swap(&mut state.improvement_results, key, old, new, revert),
+        PALW_IMPROVE_TABLE_GRANTS_V1 => swap(&mut state.improvement_grants, key, old, new, revert),
+        PALW_IMPROVE_TABLE_EARNINGS_V1 => swap(&mut state.improvement_earnings, key, old, new, revert),
+        _ => Err(PalwStateV2Error::DeltaMismatch("an improvement row names no table")),
+    }
+}
+
 fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, revert: bool) -> Result<(), PalwStateV2Error> {
     // In revert mode the roles swap: verify `new`, install `old`.
     macro_rules! swap_write {
@@ -36198,10 +36542,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             let (old, new) = (old.as_deref().cloned(), new.as_deref().cloned());
             swap_write!(state.improvement_lines, key, &old, &new)
         }
-        PalwDeltaEntryV2::ImprovementEpoch { key, old, new } => {
-            let (old, new) = (old.as_deref().cloned(), new.as_deref().cloned());
-            swap_write!(state.improvement_epochs, key, &old, &new)
-        }
+        PalwDeltaEntryV2::ImprovementRow { table, key, old, new } => apply_improvement_row_v1(state, *table, key, old, new, revert)?,
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -36320,6 +36661,24 @@ fn rebuild_capacity_weight_index_v1(state: &mut PalwChainStateV2, params: &PalwS
 /// Rebuild the indices that delta entries do not carry (they are derivable). The deadline index
 /// is rebuilt exactly only under params; delta application rebuilds the parameterless two and
 /// leaves deadlines to [`rebuild_indices_v2`], which every store-facing load path calls.
+/// RFC-0004: the retirement index's entry for an epoch header — decided, with detail rows left.
+fn palw_improvement_retiring_entry_v1(epoch: &crate::palw_improve_state_v1::PalwImprovementEpochV1) -> Option<(u64, Hash64, u64)> {
+    (epoch.is_decided() && epoch.retire != crate::palw_improve_state_v1::PalwEpochRetireV1::Done)
+        .then(|| (epoch.decided_daa.unwrap_or(0), epoch.line_id, epoch.epoch))
+}
+
+/// RFC-0004: the four improvement indices, from the rows (spec 17 §17.3).
+fn rebuild_improvement_indices_v1(state: &mut PalwChainStateV2) {
+    state.improvement_due = state.improvement_lines.iter().map(|(id, line)| (line.next_due_daa, *id)).collect();
+    let mut heads_of: BTreeMap<Hash64, BTreeSet<Hash64>> = BTreeMap::new();
+    for (id, line) in &state.improvement_lines {
+        heads_of.entry(line.head).or_default().insert(*id);
+    }
+    state.improvement_heads_of = heads_of;
+    state.improvement_retiring = state.improvement_epochs.values().filter_map(palw_improvement_retiring_entry_v1).collect();
+    state.improvement_open_epochs = state.improvement_epochs.values().filter(|epoch| !epoch.is_decided()).count() as u32;
+}
+
 fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
     state.unresolved = state
         .claims
@@ -36349,6 +36708,7 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
     let (da_deadlines, da_by_accuser) = palw_da_indexes_of_v1(&state.da_sessions, &state.da_claims);
     state.da_deadlines = da_deadlines;
     state.da_by_accuser = da_by_accuser;
+    rebuild_improvement_indices_v1(state);
 }
 
 /// **The two DA indexes (M3), from the rooted maps alone** — the one derivation the rebuild, the
@@ -36636,12 +36996,21 @@ pub struct PalwStateCarriageV2 {
     /// **RFC-0003: the generative classes.** A tagged tail (`0xC2`, after the IR dissections'),
     /// encoded only when non-empty; rooted (each row without its class, which its hashes commit to).
     pub gen_classes: BTreeMap<Hash64, crate::palw_gen_class_v1::PalwGenClassRecordV1>,
-    /// **RFC-0004: the governed lines.** A tagged tail (`0xC3`, after the generative classes'),
-    /// encoded only when non-empty; rooted.
+    // **RFC-0004: the Model Improvement Protocol's tables.** One tagged tail each (`0xC3`, `0xC4`,
+    // `0xD0`–`0xD9`), encoded only when non-empty; rooted.
     pub improvement_lines: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementLineV1>,
-    /// **RFC-0004: the improvement epochs.** A tagged tail (`0xC4`, after the lines'), encoded only
-    /// when non-empty; rooted.
     pub improvement_epochs: BTreeMap<(Hash64, u64), crate::palw_improve_state_v1::PalwImprovementEpochV1>,
+    pub improvement_policies: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementPolicyRecordV1>,
+    pub improvement_usage: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementUsageV1>,
+    pub improvement_heads: BTreeMap<(Hash64, u32), crate::palw_improve_state_v1::PalwLineageHeadEntryV1>,
+    pub improvement_pools: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementPoolV1>,
+    pub improvement_material: BTreeMap<(Hash64, u64), crate::palw_improve_state_v1::PalwMaterialFrontierV1>,
+    pub improvement_candidates: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwEpochCandidateV1>,
+    pub improvement_pool_entries: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwPoolEntryV2>,
+    pub improvement_items: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwEvalItemV1>,
+    pub improvement_results: BTreeMap<(Hash64, u64, u32, crate::palw_improve_state_v1::PalwEvalSubjectV1), crate::palw_improve_state_v1::PalwEvalResultV1>,
+    pub improvement_grants: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwRewardGrantV1>,
+    pub improvement_earnings: BTreeMap<PalwBondKeyV2, u64>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -36767,11 +37136,64 @@ const PALW_CARRIAGE_TIR_DISSECTIONS_TAIL_V1: u8 = 0xC1;
 /// RFC-0003: the generative classes' tail (Phase F's allocation), encoded only when one has
 /// registered — a carriage with none is byte-identical to one before this tail existed.
 const PALW_CARRIAGE_GEN_CLASSES_TAIL_V1: u8 = 0xC2;
-/// RFC-0004: the governed lines' tail, encoded only when a line is governed — a carriage with none
-/// is byte-identical to one before this tail existed.
+/// RFC-0004: the improvement tables' tails, each encoded only when its table holds a row — a carriage
+/// with none is byte-identical to one before these tails existed.
 const PALW_CARRIAGE_IMPROVEMENT_LINES_TAIL_V1: u8 = 0xC3;
-/// RFC-0004: the improvement epochs' tail, encoded only when an epoch exists.
 const PALW_CARRIAGE_IMPROVEMENT_EPOCHS_TAIL_V1: u8 = 0xC4;
+const PALW_CARRIAGE_IMPROVEMENT_POLICIES_TAIL_V1: u8 = 0xD0;
+const PALW_CARRIAGE_IMPROVEMENT_USAGE_TAIL_V1: u8 = 0xD1;
+const PALW_CARRIAGE_IMPROVEMENT_HEADS_TAIL_V1: u8 = 0xD2;
+const PALW_CARRIAGE_IMPROVEMENT_POOLS_TAIL_V1: u8 = 0xD3;
+const PALW_CARRIAGE_IMPROVEMENT_MATERIAL_TAIL_V1: u8 = 0xD4;
+const PALW_CARRIAGE_IMPROVEMENT_CANDIDATES_TAIL_V1: u8 = 0xD5;
+const PALW_CARRIAGE_IMPROVEMENT_POOL_ENTRIES_TAIL_V1: u8 = 0xD6;
+const PALW_CARRIAGE_IMPROVEMENT_ITEMS_TAIL_V1: u8 = 0xD7;
+const PALW_CARRIAGE_IMPROVEMENT_RESULTS_TAIL_V1: u8 = 0xD8;
+const PALW_CARRIAGE_IMPROVEMENT_GRANTS_TAIL_V1: u8 = 0xD9;
+const PALW_CARRIAGE_IMPROVEMENT_EARNINGS_TAIL_V1: u8 = 0xDA;
+
+/// **RFC-0004: the improvement tables' consistency** (spec 17 §17.3): every row under its own key,
+/// every governed line with exactly its policy, usage and pool, every detail row under an existing
+/// line — and, past the material (which may precede its epoch), under an existing epoch.
+fn palw_improvement_carriage_consistent_v1(c: &PalwStateCarriageV2) -> Result<(), String> {
+    for (line_id, row) in &c.improvement_lines {
+        if row.line_id != *line_id {
+            return Err(format!("improvement line {line_id}: a row under another id"));
+        }
+        if !c.improvement_policies.contains_key(line_id) || !c.improvement_usage.contains_key(line_id) || !c.improvement_pools.contains_key(line_id) {
+            return Err(format!("improvement line {line_id}: its policy, usage or pool is missing"));
+        }
+    }
+    let line = |id: &Hash64, what: &str| -> Result<(), String> {
+        if c.improvement_lines.contains_key(id) { Ok(()) } else { Err(format!("{what} of {id}: no governed line holds it")) }
+    };
+    let epoch = |id: &Hash64, n: u64, what: &str| -> Result<(), String> {
+        if c.improvement_epochs.contains_key(&(*id, n)) { Ok(()) } else { Err(format!("{what} of {id}/{n}: no such epoch")) }
+    };
+    for ((line_id, n), row) in &c.improvement_epochs {
+        if row.line_id != *line_id || row.epoch != *n {
+            return Err(format!("improvement epoch {line_id}/{n}: a row under another key"));
+        }
+        line(line_id, "an epoch")?;
+    }
+    for id in c.improvement_policies.keys().chain(c.improvement_usage.keys()).chain(c.improvement_pools.keys()) {
+        line(id, "a policy, usage or pool row")?;
+    }
+    for ((id, _), _) in &c.improvement_heads {
+        line(id, "a head entry")?;
+    }
+    for ((id, _), _) in &c.improvement_material {
+        line(id, "a material frontier")?;
+    }
+    let detail = c.improvement_candidates.keys().chain(c.improvement_pool_entries.keys()).chain(c.improvement_items.keys());
+    for (id, n, _) in detail.chain(c.improvement_grants.keys()) {
+        epoch(id, *n, "a candidate, pool entry, item or grant")?;
+    }
+    for (id, n, _, _) in c.improvement_results.keys() {
+        epoch(id, *n, "a result")?;
+    }
+    Ok(())
+}
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -37002,6 +37424,50 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_IMPROVEMENT_EPOCHS_TAIL_V1.serialize(writer)?;
             self.improvement_epochs.serialize(writer)?;
         }
+        if !self.improvement_policies.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_POLICIES_TAIL_V1.serialize(writer)?;
+            self.improvement_policies.serialize(writer)?;
+        }
+        if !self.improvement_usage.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_USAGE_TAIL_V1.serialize(writer)?;
+            self.improvement_usage.serialize(writer)?;
+        }
+        if !self.improvement_heads.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_HEADS_TAIL_V1.serialize(writer)?;
+            self.improvement_heads.serialize(writer)?;
+        }
+        if !self.improvement_pools.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_POOLS_TAIL_V1.serialize(writer)?;
+            self.improvement_pools.serialize(writer)?;
+        }
+        if !self.improvement_material.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_MATERIAL_TAIL_V1.serialize(writer)?;
+            self.improvement_material.serialize(writer)?;
+        }
+        if !self.improvement_candidates.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_CANDIDATES_TAIL_V1.serialize(writer)?;
+            self.improvement_candidates.serialize(writer)?;
+        }
+        if !self.improvement_pool_entries.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_POOL_ENTRIES_TAIL_V1.serialize(writer)?;
+            self.improvement_pool_entries.serialize(writer)?;
+        }
+        if !self.improvement_items.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_ITEMS_TAIL_V1.serialize(writer)?;
+            self.improvement_items.serialize(writer)?;
+        }
+        if !self.improvement_results.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_RESULTS_TAIL_V1.serialize(writer)?;
+            self.improvement_results.serialize(writer)?;
+        }
+        if !self.improvement_grants.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_GRANTS_TAIL_V1.serialize(writer)?;
+            self.improvement_grants.serialize(writer)?;
+        }
+        if !self.improvement_earnings.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_EARNINGS_TAIL_V1.serialize(writer)?;
+            self.improvement_earnings.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -37135,6 +37601,28 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_improvement_lines = false;
         let mut improvement_epochs = BTreeMap::new();
         let mut seen_improvement_epochs = false;
+        let mut improvement_policies = BTreeMap::new();
+        let mut seen_improvement_policies = false;
+        let mut improvement_usage = BTreeMap::new();
+        let mut seen_improvement_usage = false;
+        let mut improvement_heads = BTreeMap::new();
+        let mut seen_improvement_heads = false;
+        let mut improvement_pools = BTreeMap::new();
+        let mut seen_improvement_pools = false;
+        let mut improvement_material = BTreeMap::new();
+        let mut seen_improvement_material = false;
+        let mut improvement_candidates = BTreeMap::new();
+        let mut seen_improvement_candidates = false;
+        let mut improvement_pool_entries = BTreeMap::new();
+        let mut seen_improvement_pool_entries = false;
+        let mut improvement_items = BTreeMap::new();
+        let mut seen_improvement_items = false;
+        let mut improvement_results = BTreeMap::new();
+        let mut seen_improvement_results = false;
+        let mut improvement_grants = BTreeMap::new();
+        let mut seen_improvement_grants = false;
+        let mut improvement_earnings = BTreeMap::new();
+        let mut seen_improvement_earnings = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -37293,6 +37781,50 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_improvement_epochs = true;
                     improvement_epochs = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_IMPROVEMENT_POLICIES_TAIL_V1 if !seen_improvement_policies => {
+                    seen_improvement_policies = true;
+                    improvement_policies = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_USAGE_TAIL_V1 if !seen_improvement_usage => {
+                    seen_improvement_usage = true;
+                    improvement_usage = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_HEADS_TAIL_V1 if !seen_improvement_heads => {
+                    seen_improvement_heads = true;
+                    improvement_heads = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_POOLS_TAIL_V1 if !seen_improvement_pools => {
+                    seen_improvement_pools = true;
+                    improvement_pools = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_MATERIAL_TAIL_V1 if !seen_improvement_material => {
+                    seen_improvement_material = true;
+                    improvement_material = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_CANDIDATES_TAIL_V1 if !seen_improvement_candidates => {
+                    seen_improvement_candidates = true;
+                    improvement_candidates = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_POOL_ENTRIES_TAIL_V1 if !seen_improvement_pool_entries => {
+                    seen_improvement_pool_entries = true;
+                    improvement_pool_entries = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_ITEMS_TAIL_V1 if !seen_improvement_items => {
+                    seen_improvement_items = true;
+                    improvement_items = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_RESULTS_TAIL_V1 if !seen_improvement_results => {
+                    seen_improvement_results = true;
+                    improvement_results = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_GRANTS_TAIL_V1 if !seen_improvement_grants => {
+                    seen_improvement_grants = true;
+                    improvement_grants = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_EARNINGS_TAIL_V1 if !seen_improvement_earnings => {
+                    seen_improvement_earnings = true;
+                    improvement_earnings = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -37403,6 +37935,17 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             gen_classes,
             improvement_lines,
             improvement_epochs,
+            improvement_policies,
+            improvement_usage,
+            improvement_heads,
+            improvement_pools,
+            improvement_material,
+            improvement_candidates,
+            improvement_pool_entries,
+            improvement_items,
+            improvement_results,
+            improvement_grants,
+            improvement_earnings,
         })
     }
 }
@@ -37491,6 +38034,17 @@ impl PalwStateCarriageV2 {
             gen_classes: state.gen_classes.clone(),
             improvement_lines: state.improvement_lines.clone(),
             improvement_epochs: state.improvement_epochs.clone(),
+            improvement_policies: state.improvement_policies.clone(),
+            improvement_usage: state.improvement_usage.clone(),
+            improvement_heads: state.improvement_heads.clone(),
+            improvement_pools: state.improvement_pools.clone(),
+            improvement_material: state.improvement_material.clone(),
+            improvement_candidates: state.improvement_candidates.clone(),
+            improvement_pool_entries: state.improvement_pool_entries.clone(),
+            improvement_items: state.improvement_items.clone(),
+            improvement_results: state.improvement_results.clone(),
+            improvement_grants: state.improvement_grants.clone(),
+            improvement_earnings: state.improvement_earnings.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -37581,24 +38135,9 @@ impl PalwStateCarriageV2 {
                 return Err(PalwStateV2Error::CarriageInconsistent(format!("generative class {class_id}: a row under another id")));
             }
         }
-        // RFC-0004: every row sits under its own key, and every epoch under a governed line.
-        for (line_id, row) in &self.improvement_lines {
-            if row.line_id != *line_id {
-                return Err(PalwStateV2Error::CarriageInconsistent(format!("improvement line {line_id}: a row under another id")));
-            }
-        }
-        for ((line_id, epoch), row) in &self.improvement_epochs {
-            if row.line_id != *line_id || row.epoch != *epoch {
-                return Err(PalwStateV2Error::CarriageInconsistent(format!(
-                    "improvement epoch {line_id}/{epoch}: a row under another key"
-                )));
-            }
-            if !self.improvement_lines.contains_key(line_id) {
-                return Err(PalwStateV2Error::CarriageInconsistent(format!(
-                    "improvement epoch {line_id}/{epoch}: no governed line holds it"
-                )));
-            }
-        }
+        // RFC-0004: every row sits under its own key, every line has its policy, usage and pool, and
+        // every detail row sits under a line (and, past the material, an epoch) that exists.
+        palw_improvement_carriage_consistent_v1(&self).map_err(PalwStateV2Error::CarriageInconsistent)?;
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
             reserved_exposure: self.reserved_exposure,
@@ -37680,6 +38219,21 @@ impl PalwStateCarriageV2 {
             gen_classes: self.gen_classes,
             improvement_lines: self.improvement_lines,
             improvement_epochs: self.improvement_epochs,
+            improvement_policies: self.improvement_policies,
+            improvement_usage: self.improvement_usage,
+            improvement_heads: self.improvement_heads,
+            improvement_pools: self.improvement_pools,
+            improvement_material: self.improvement_material,
+            improvement_candidates: self.improvement_candidates,
+            improvement_pool_entries: self.improvement_pool_entries,
+            improvement_items: self.improvement_items,
+            improvement_results: self.improvement_results,
+            improvement_grants: self.improvement_grants,
+            improvement_earnings: self.improvement_earnings,
+            improvement_due: BTreeSet::new(),
+            improvement_heads_of: BTreeMap::new(),
+            improvement_retiring: BTreeSet::new(),
+            improvement_open_epochs: 0,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -54300,7 +54854,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::GenClass { .. } => "gen_class",
                     // RFC-0004: their round trips are the improvement suites' (A2, A3).
                     PalwDeltaEntryV2::ImprovementLine { .. } => "improvement_line",
-                    PalwDeltaEntryV2::ImprovementEpoch { .. } => "improvement_epoch",
+                    PalwDeltaEntryV2::ImprovementRow { .. } => "improvement_row",
                 });
             }
         }
@@ -54429,7 +54983,7 @@ pub(crate) mod tests {
             (90, PalwDeltaEntryV2::GenClass { key, old: None, new: None }),
             // RFC-0004, after RFC-0003's: a governed line and an epoch.
             (91, PalwDeltaEntryV2::ImprovementLine { key, old: None, new: None }),
-            (92, PalwDeltaEntryV2::ImprovementEpoch { key: (key, 1), old: None, new: None }),
+            (92, PalwDeltaEntryV2::ImprovementRow { table: PALW_IMPROVE_TABLE_EPOCHS_V1, key: Vec::new(), old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -55056,6 +55610,17 @@ pub(crate) mod tests {
             gen_classes: _,
             improvement_lines: _,
             improvement_epochs: _,
+            improvement_policies: _,
+            improvement_usage: _,
+            improvement_heads: _,
+            improvement_pools: _,
+            improvement_material: _,
+            improvement_candidates: _,
+            improvement_pool_entries: _,
+            improvement_items: _,
+            improvement_results: _,
+            improvement_grants: _,
+            improvement_earnings: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -55153,16 +55718,57 @@ pub(crate) mod tests {
                 let row = crate::palw_gen_class_v1::PalwGenClassRecordV1::test_row_v1(0xC2);
                 s.gen_classes.insert(row.class_id, row);
             })),
-            // RFC-0004: a governed line, and an epoch under it — each alone moves the root.
+            // RFC-0004: a row in any one improvement table moves the root and the carriage.
             ("improvement_lines", Box::new(|s| {
-                let row = crate::palw_improve_state_v1::test_rows::line_v1(0xC3);
-                s.improvement_lines.insert(row.line_id, row);
+                let r = crate::palw_improve_state_v1::test_rows::line_v1(0xC3);
+                s.improvement_lines.insert(r.line_id, r);
             })),
             ("improvement_epochs", Box::new(|s| {
-                let line = crate::palw_improve_state_v1::test_rows::line_v1(0xC4);
-                let epoch = crate::palw_improve_state_v1::test_rows::epoch_v1(0xC4);
-                s.improvement_lines.insert(line.line_id, line);
-                s.improvement_epochs.insert((epoch.line_id, epoch.epoch), epoch);
+                let r = crate::palw_improve_state_v1::test_rows::epoch_v1(0xC4);
+                s.improvement_epochs.insert((r.line_id, r.epoch), r);
+            })),
+            ("improvement_policies", Box::new(|s| {
+                let r = crate::palw_improve_state_v1::test_rows::policy_record_v1(0xD0);
+                s.improvement_policies.insert(Hash64::from_bytes([0xD0; 64]), r);
+            })),
+            ("improvement_usage", Box::new(|s| {
+                let r = crate::palw_improve_state_v1::test_rows::usage_v1(0xD1);
+                s.improvement_usage.insert(Hash64::from_bytes([0xD1; 64]), r);
+            })),
+            ("improvement_heads", Box::new(|s| {
+                let r = crate::palw_improve_state_v1::test_rows::head_v1(0xD2);
+                s.improvement_heads.insert((Hash64::from_bytes([0xD2; 64]), 0), r);
+            })),
+            ("improvement_pools", Box::new(|s| {
+                let r = crate::palw_improve_state_v1::test_rows::pool_v1(0xD3);
+                s.improvement_pools.insert(Hash64::from_bytes([0xD3; 64]), r);
+            })),
+            ("improvement_material", Box::new(|s| {
+                let r = crate::palw_improve_state_v1::test_rows::material_v1(0xD4);
+                s.improvement_material.insert((Hash64::from_bytes([0xD4; 64]), 1), r);
+            })),
+            ("improvement_candidates", Box::new(|s| {
+                let r = crate::palw_improve_state_v1::test_rows::candidate_v1(0xD5);
+                s.improvement_candidates.insert((Hash64::from_bytes([0xD5; 64]), 1, 0), r);
+            })),
+            ("improvement_pool_entries", Box::new(|s| {
+                let r = crate::palw_improve_state_v1::test_rows::pool_entry_v1(0xD6);
+                s.improvement_pool_entries.insert((Hash64::from_bytes([0xD6; 64]), 1, 0), r);
+            })),
+            ("improvement_items", Box::new(|s| {
+                let r = crate::palw_improve_state_v1::test_rows::item_v1(0xD7);
+                s.improvement_items.insert((Hash64::from_bytes([0xD7; 64]), 1, 0), r);
+            })),
+            ("improvement_results", Box::new(|s| {
+                let r = crate::palw_improve_state_v1::test_rows::result_v1(0xD8);
+                s.improvement_results.insert((Hash64::from_bytes([0xD8; 64]), 1, 0, r.subject), r);
+            })),
+            ("improvement_grants", Box::new(|s| {
+                let r = crate::palw_improve_state_v1::test_rows::grant_v1(0xD9);
+                s.improvement_grants.insert((Hash64::from_bytes([0xD9; 64]), 1, 0), r);
+            })),
+            ("improvement_earnings", Box::new(|s| {
+                s.improvement_earnings.insert(bond_key(0xDA), 5);
             })),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),
@@ -70051,11 +70657,10 @@ mod review_fix12_readiness_reads_net_collateral {
     }
 }
 
-/// **RFC-0004 step 0: the improvement tables' layout** — empty tables leave the root and the carriage
-/// exactly as they were, rows ride the tails `0xC3`/`0xC4` after everything an older build writes, the
-/// carriage refuses rows under the wrong key or an epoch no governed line holds, and the two delta
-/// entries replay and revert. The fold never writes a row before A2/A3 land; these tests write them
-/// directly.
+/// **RFC-0004: the improvement tables' layout** (spec 17 §17.3) — empty tables leave the root and the
+/// carriage exactly as they were, rows ride their own tails after everything an older build writes,
+/// the carriage refuses a misfiled or orphaned row, and both delta entries (the line header's and the
+/// keyed rows') replay and revert.
 #[cfg(test)]
 mod improvement_skeleton_tests {
     use super::*;
@@ -70069,43 +70674,57 @@ mod improvement_skeleton_tests {
 
     fn governed(seed: u8) -> PalwChainStateV2 {
         let mut s = PalwChainStateV2::genesis();
-        let line = test_rows::line_v1(seed);
-        let epoch = test_rows::epoch_v1(seed);
-        s.improvement_lines.insert(line.line_id, line);
-        s.improvement_epochs.insert((epoch.line_id, epoch.epoch), epoch);
+        test_rows::populate_v1(&mut s, seed);
         s
     }
 
     #[test]
     fn empty_tables_leave_the_root_and_the_carriage_and_rows_ride_their_own_tails() {
         let genesis = PalwChainStateV2::genesis();
+        assert!(!genesis.has_improvement_rows_v1());
         let empty_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&genesis)).unwrap();
         let s = governed(0x31);
+        assert!(s.has_improvement_rows_v1());
         assert_ne!(s.state_root(), genesis.state_root(), "a governed line is state");
         let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
         assert!(bytes.starts_with(&empty_bytes), "the rows ride after everything a build without them writes");
         assert_eq!(bytes[empty_bytes.len()], PALW_CARRIAGE_IMPROVEMENT_LINES_TAIL_V1);
         let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("this build decodes its own tails");
         let back = decoded.into_state(&params(), Some(s.state_root())).expect("an honest carriage loads");
-        assert_eq!(back, s, "the restored state is the state");
-        // A lines-only state writes the lines' tail alone; an emptied state is genesis, root and bytes.
-        let mut lines_only = s.clone();
-        lines_only.improvement_epochs.clear();
-        let lines_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&lines_only)).unwrap();
-        assert!(bytes.starts_with(&lines_bytes) && bytes[lines_bytes.len()] == PALW_CARRIAGE_IMPROVEMENT_EPOCHS_TAIL_V1);
-        let mut emptied = s.clone();
-        emptied.improvement_lines.clear();
-        emptied.improvement_epochs.clear();
+        assert_eq!(back, s, "the restored state is the state, indices included");
+        assert_eq!(back.improvement_due.len(), 1);
+        assert_eq!(back.improvement_open_epochs, 1, "the one epoch is open");
+        // Every table's tail appears once, in order.
+        let tails = [
+            PALW_CARRIAGE_IMPROVEMENT_LINES_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_EPOCHS_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_POLICIES_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_USAGE_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_HEADS_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_POOLS_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_MATERIAL_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_CANDIDATES_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_POOL_ENTRIES_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_ITEMS_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_RESULTS_TAIL_V1,
+            PALW_CARRIAGE_IMPROVEMENT_GRANTS_TAIL_V1,
+        ];
+        assert_eq!(tails.iter().collect::<BTreeSet<_>>().len(), 12, "twelve distinct tails");
+        // An emptied state is genesis, root and bytes.
+        let emptied = PalwChainStateV2::genesis();
         assert_eq!(emptied.state_root(), genesis.state_root(), "no row, no root block");
         assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&emptied)).unwrap(), empty_bytes, "no row, no tail");
         // A tail twice is refused, as every tail is.
         let mut doubled = bytes.clone();
-        doubled.extend_from_slice(&bytes[lines_bytes.len()..]);
-        assert!(borsh::from_slice::<PalwStateCarriageV2>(&doubled).is_err(), "the epochs' tail twice");
+        let last = PalwStateCarriageV2::from_state(&s);
+        let mut grants_tail = vec![PALW_CARRIAGE_IMPROVEMENT_GRANTS_TAIL_V1];
+        grants_tail.extend(borsh::to_vec(&last.improvement_grants).unwrap());
+        doubled.extend_from_slice(&grants_tail);
+        assert!(borsh::from_slice::<PalwStateCarriageV2>(&doubled).is_err(), "the grants' tail twice");
     }
 
     #[test]
-    fn the_carriage_refuses_a_misfiled_row_and_an_epoch_without_its_line() {
+    fn the_carriage_refuses_a_misfiled_row_and_an_orphan() {
         let s = governed(0x32);
         let p = params();
         let honest = PalwStateCarriageV2::from_state(&s);
@@ -70113,51 +70732,63 @@ mod improvement_skeleton_tests {
             |carriage: PalwStateCarriageV2| matches!(carriage.into_state(&p, None), Err(PalwStateV2Error::CarriageInconsistent(_)));
         let mut orphan = honest.clone();
         orphan.improvement_lines.clear();
-        assert!(refused(orphan), "an epoch no governed line holds");
+        assert!(refused(orphan), "rows no governed line holds");
+        let mut no_pool = honest.clone();
+        no_pool.improvement_pools.clear();
+        assert!(refused(no_pool), "a line without its pool");
         let mut moved = honest.clone();
         let ((line_id, epoch), row) = moved.improvement_epochs.pop_first().unwrap();
         moved.improvement_epochs.insert((line_id, epoch + 1), row);
         assert!(refused(moved), "an epoch row under another epoch number");
+        let mut stray = honest.clone();
+        let ((line_id, epoch, item, subject), row) = stray.improvement_results.pop_first().unwrap();
+        stray.improvement_results.insert((line_id, epoch + 5, item, subject), row);
+        assert!(refused(stray), "a result under an epoch that does not exist");
         let mut misfiled = honest.clone();
         let (_, row) = misfiled.improvement_lines.pop_first().unwrap();
         misfiled.improvement_lines.insert(Hash64::from_bytes([0xEE; 64]), row);
         assert!(refused(misfiled), "a line row under another line id");
+        // Material may precede its epoch (the next epoch's), and needs only the line.
+        let mut ahead = honest.clone();
+        let (line_id, _) = *ahead.improvement_material.keys().next().unwrap();
+        ahead.improvement_material.insert((line_id, 99), crate::palw_improve_state_v1::PalwMaterialFrontierV1::default());
+        assert!(ahead.into_state(&p, None).is_ok(), "the next epoch's material");
         assert!(honest.into_state(&p, Some(s.state_root())).is_ok());
     }
 
     #[test]
-    fn the_two_delta_entries_replay_and_revert() {
+    fn both_delta_entries_replay_and_revert() {
         let p = params();
         let genesis = PalwChainStateV2::genesis();
         let line = test_rows::line_v1(0x33);
         let epoch = test_rows::epoch_v1(0x33);
         let mut next = epoch.clone();
-        next.state = crate::palw_improve_state_v1::PalwEpochStateV1::Submission;
-        next.dataset_root = Some(Hash64::from_bytes([0x44; 64]));
+        next.state = crate::palw_improve_state_v1::PalwEpochStateV1::HoldOut;
         let point = PalwBlockContextV2 { block: Default::default(), daa_score: 1, blue_score: 1, subsidy: 0 };
+        let row = |table: u8, key: Vec<u8>, old: Option<Vec<u8>>, new: Option<Vec<u8>>| PalwDeltaEntryV2::ImprovementRow { table, key, old, new };
+        let key = borsh::to_vec(&(epoch.line_id, 1u64)).unwrap();
         let open = PalwStateDeltaV2 {
             point,
             entries: vec![
                 PalwDeltaEntryV2::ImprovementLine { key: line.line_id, old: None, new: Some(Box::new(line.clone())) },
-                PalwDeltaEntryV2::ImprovementEpoch { key: (epoch.line_id, 1), old: None, new: Some(Box::new(epoch.clone())) },
+                row(PALW_IMPROVE_TABLE_EPOCHS_V1, key.clone(), None, Some(borsh::to_vec(&epoch).unwrap())),
             ],
         };
         let child = apply_delta_v2(&genesis, &open, &p).expect("the rows install");
         assert_eq!(child.improvement_lines.get(&line.line_id), Some(&line));
         assert_eq!(child.improvement_epochs.get(&(epoch.line_id, 1)), Some(&epoch));
+        assert_eq!(child.improvement_open_epochs, 1, "the index follows the delta");
         assert!(apply_delta_v2(&child, &open, &p).is_err(), "a delta whose `old` the state does not hold is refused");
         let fix = PalwStateDeltaV2 {
             point,
-            entries: vec![PalwDeltaEntryV2::ImprovementEpoch {
-                key: (epoch.line_id, 1),
-                old: Some(Box::new(epoch.clone())),
-                new: Some(Box::new(next.clone())),
-            }],
+            entries: vec![row(PALW_IMPROVE_TABLE_EPOCHS_V1, key.clone(), Some(borsh::to_vec(&epoch).unwrap()), Some(borsh::to_vec(&next).unwrap()))],
         };
         let grandchild = apply_delta_v2(&child, &fix, &p).expect("the epoch moves");
         assert_eq!(grandchild.improvement_epochs.get(&(epoch.line_id, 1)), Some(&next));
         assert_eq!(revert_delta_v2(&grandchild, &fix, &p).unwrap(), child, "…and moves back");
         assert_eq!(revert_delta_v2(&child, &open, &p).unwrap(), genesis, "…and the rows leave");
+        let unknown = PalwStateDeltaV2 { point, entries: vec![row(200, key, None, Some(vec![1]))] };
+        assert!(apply_delta_v2(&genesis, &unknown, &p).is_err(), "a table id nobody has");
         for delta in [&open, &fix] {
             let bytes = borsh::to_vec(delta).unwrap();
             assert_eq!(&borsh::from_slice::<PalwStateDeltaV2>(&bytes).unwrap(), delta, "the journal round-trips");
