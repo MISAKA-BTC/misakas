@@ -183,6 +183,32 @@ pub struct AttnSpec {
     pub sinks: bool,
     /// `q_proj` also emits a per-head gate (`[q, gate]` per head); output `*= σ(gate)` (Qwen3-Next).
     pub output_gate: bool,
+    /// Chunked attention (Llama-4): a query at `p` sees only the keys of its own chunk,
+    /// `[p − p mod c, p]`. The history then keeps `c` rows (`window` is `Some(c)`).
+    pub chunk: Option<usize>,
+    /// Llama-4's attention temperature on its NoPE layers: `q ·= ln(1 + ⌊(p + 1) / floor⌋)·scale + 1`.
+    pub q_temperature: Option<QTemperature>,
+}
+
+/// Llama-4's `attn_temperature_tuning` (`floor_scale`, `attn_scale`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct QTemperature {
+    pub floor: usize,
+    pub scale: f64,
+}
+
+impl QTemperature {
+    /// The factor at position `p`: `log1p(floor((p + 1) / floor)) · scale + 1` in float32 as
+    /// transformers computes it. Its float32 quotient is exact below `2^23` positions, so the floor
+    /// is the integer one.
+    pub fn at(&self, p: usize) -> f32 {
+        self.of_quotient((p + 1) / self.floor.max(1))
+    }
+
+    /// The factor for `floor((p + 1) / floor) = q`.
+    pub fn of_quotient(&self, q: usize) -> f32 {
+        (q as f32).ln_1p() * self.scale as f32 + 1.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -297,6 +323,9 @@ pub enum MlpLayout {
     FusedGateFirst,
     /// One `gate_up` tensor, rows interleaved `g0,u0,g1,u1,…` (gpt-oss).
     FusedInterleaved,
+    /// Experts stored `[E, in, out]`: `gate_up_proj [E, D, 2I]` with the gate columns first,
+    /// `down_proj [E, I, D]` (Llama-4).
+    FusedGateFirstInOut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -325,6 +354,8 @@ pub enum Scoring {
     Sigmoid,
     /// top-k of the raw logits, then `softmax` over the k (gpt-oss, GraniteMoE).
     TopKThenSoftmax,
+    /// top-k of the raw logits, then `sigmoid` of each kept one (Llama-4).
+    TopKThenSigmoid,
     /// Phi-3.5-MoE's `sparsemixer` at inference (top-2 only): the argmax `i1`, weighted by the
     /// softmax at `i1` of the logits within `jitter_eps` of the max — `(m − s_j) / max(|s_j|, m) ≤
     /// 2·jitter_eps`, the rest masked — then the argmax `i2` of the others, weighted the same way
@@ -381,6 +412,9 @@ pub struct MoeSpec {
     pub expert_bias: bool,
     pub router: RouterSpec,
     pub shared: Option<SharedExpertSpec>,
+    /// Llama-4: each selected expert reads `w · x` (its routing weight scales the INPUT) and the
+    /// outputs are summed unweighted.
+    pub input_scaled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

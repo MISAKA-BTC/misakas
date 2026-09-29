@@ -145,7 +145,7 @@ macro_rules! moe {
     )*};
 }
 
-moe!(mixtral, qwen2_moe, qwen3_moe, olmoe, granitemoe, gpt_oss, deepseek_v2, deepseek_v2_lite, deepseek_v3, glm4_moe, phimoe);
+moe!(mixtral, qwen2_moe, qwen3_moe, olmoe, granitemoe, gpt_oss, deepseek_v2, deepseek_v2_lite, deepseek_v3, glm4_moe, phimoe, llama4, llama4_vlm);
 
 macro_rules! recurrent {
     ($($name:ident),* $(,)?) => {$(

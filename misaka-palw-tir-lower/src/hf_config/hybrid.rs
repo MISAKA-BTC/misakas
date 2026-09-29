@@ -152,6 +152,7 @@ pub(crate) fn qwen3_next(p: &mut P) -> Result<ArchSpec> {
             jitter_eps: 0.0,
         },
         shared: (shared > 0).then_some(SharedExpertSpec { intermediate: shared, sigmoid_gate: true }),
+        input_scaled: false,
     };
     let layers = (0..q.n)
         .map(|i| {
@@ -229,6 +230,7 @@ pub(crate) fn qwen3_5_text(
                 jitter_eps: 0.0,
             },
             shared: (shared > 0).then_some(SharedExpertSpec { intermediate: shared, sigmoid_gate: true }),
+            input_scaled: false,
         })
     } else {
         Ffn::Mlp(gated_mlp(p.cfg.usize_or("intermediate_size", 12288)?, q.act, false))
@@ -322,6 +324,7 @@ pub(crate) fn jamba(p: &mut P) -> Result<ArchSpec> {
             jitter_eps: 0.0,
         },
         shared: None,
+        input_scaled: false,
     };
     let layers = (0..n)
         .map(|i| {

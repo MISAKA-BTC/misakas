@@ -1235,13 +1235,13 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 Some(Val { r: w, dt: DType::I32, key: wkey, len: *top_k, site: format!("{site}.w") }),
             ])
         }
-        Op::MoeExperts { top_k, act, glu, bias } => {
+        Op::MoeExperts { top_k, act, glu, bias, input_scaled } => {
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             let idx = operand(lb, node.inputs[1])?;
             let w = operand(lb, node.inputs[2])?;
             let ps: Vec<u32> = (3..if *bias { 9 } else { 6 }).map(|k| pidx(node.inputs[k])).collect::<Result<_>>()?;
-            let v = lower_moe(b, cx, lb, &x, &idx, &w, &ps, *top_k, *act, *glu, &site, &want)?;
+            let v = lower_moe(b, cx, lb, &x, &idx, &w, &ps, *top_k, *act, *glu, *input_scaled, &site, &want)?;
             note_resid(cx, lb, &v);
             one(v)
         }
@@ -1249,6 +1249,11 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             one(lower_rope(b, cx, lb, &x, *heads, *head_dim, *rotary_dim, *offset, *style, *table)?)
+        }
+        Op::PosScale { temp } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            one(lower_pos_scale(b, cx, lb, &x, *temp, &site, &want)?)
         }
         Op::HistAppend => {
             let hl::Ref::State(s) = node.inputs[1] else { return Err(LowerError::eval("internal: HistAppend without a state")) };
@@ -1270,7 +1275,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             lb.windows.insert(s, (win, x.key.clone()));
             Ok(vec![None])
         }
-        Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window: _, alibi, sinks } => {
+        Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window: _, alibi, sinks, chunk } => {
             let sink_param = if *sinks { Some(pidx(node.inputs[3])?) } else { None };
             let q = operand(lb, node.inputs[0])?;
             let q = codes(b, cx, lb, &q)?;
@@ -1286,7 +1291,14 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 StateKind::Fixed => return Err(LowerError::eval("internal: attention over a Fixed state")),
             };
             let shape = AttnDims { heads: *heads, kv: *kv_heads, d: *head_dim, dv: *v_head_dim, window };
-            let extra = AttnExtras { scale: *scale, softcap: *softcap, alibi: alibi.clone(), sinks: sink_param, rel_bias: None };
+            let extra = AttnExtras {
+                scale: *scale,
+                softcap: *softcap,
+                alibi: alibi.clone(),
+                sinks: sink_param,
+                rel_bias: None,
+                chunk: *chunk,
+            };
             one(lower_attention(b, cx, lb, &q, (kw, kk), (vw, vk), shape, &extra, &site, &want)?)
         }
         Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale } => {
@@ -2292,6 +2304,46 @@ fn rope_angles(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32) -
     Ok(out)
 }
 
+/// **Llama-4's attention temperature** `x · t(pos)`: `t` from a table over `⌊(pos + 1) / floor⌋`
+/// (Q24; `2^18 / 8,192 + 1 = 33` rows for the published models), the product narrowed once to the
+/// output's scale.
+fn lower_pos_scale(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    temp: crate::spec::QTemperature,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let rows = cx.history_bound as usize / temp.floor.max(1) + 1;
+    let tab = decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.t"),
+        DType::I32,
+        &[rows],
+        false,
+        Arc::new(move |_c| {
+            let v = (0..rows).map(|q| (temp.of_quotient(q) as f64 * (1u64 << 24) as f64).round() as i32).collect();
+            Ok(IntTensor::i32(vec![rows], v))
+        }),
+    )?;
+    let one = b.c(DType::I64, 1);
+    let p1 = b.add(tir::Ref::Input(INPUT_POS), one, DType::I64);
+    let fl = b.c(DType::I64, temp.floor.max(1) as i128);
+    let q = b.div(p1, fl, Rounding::Floor, DType::I64);
+    let q = b.clamp(q, 0, rows as i64 - 1, DType::Idx);
+    let t = b.gather(tab, q, 0, 0);
+    let p = b.mul(x.r, t, DType::I64);
+    let (kx, ko) = (x.key.clone(), want.key.clone());
+    let (m, s) = decl_ms(b, cx, lb, site, 1, Arc::new(move |c| Ok(vec![c.scale(&kx)? / (1u64 << 24) as f64 / c.scale(&ko)?])))?;
+    let r = narrow(b, p, m, s, None, want.dt);
+    b.commit(r);
+    Ok(Val { r, dt: want.dt, key: want.key.clone(), len: x.len, site: site.to_string() })
+}
+
 fn q24(v: f64) -> i32 {
     (v * (1u64 << 24) as f64).round().clamp(-(1i64 << 24) as f64, (1i64 << 24) as f64) as i32
 }
@@ -2380,6 +2432,8 @@ struct AttnExtras {
     sinks: Option<u32>,
     /// T5's bias over bucketed relative positions ([`encdec`]'s decoder).
     rel_bias: Option<RelBias>,
+    /// Llama-4's chunked attention: only the keys of the query's own chunk.
+    chunk: Option<usize>,
 }
 
 /// T5's relative-position bias on the causal scores: `table[bucket(pos − j)]` per head, in
@@ -2410,7 +2464,7 @@ fn lower_attention(
     let AttnDims { heads, kv, d, dv, window } = dims;
     let g = heads / kv;
     let (kv32, g32, d32, dv32) = (kv as u32, g as u32, d as u32, dv as u32);
-    if ex.softcap.is_none() && ex.alibi.is_none() && ex.rel_bias.is_none() && dv == d {
+    if ex.softcap.is_none() && ex.alibi.is_none() && ex.rel_bias.is_none() && ex.chunk.is_none() && dv == d {
         return lower_attention_library(b, cx, lb, q, k, v, dims, ex, site, want);
     }
     let qg = b.reshape_fixed(q.r, &[kv32, g32, d32]);
@@ -2540,6 +2594,22 @@ fn lower_attention(
         let bias = b.reshape(bias, &[Dim::Fixed(kv32), Dim::Fixed(g32), Dim::H]);
         let sum = b.add(logits, bias, DType::I64);
         logits = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    }
+    if let Some(c) = ex.chunk {
+        // Chunked attention (Llama-4): the keys `j = pos − (H − 1) + t` of the query's own chunk,
+        // `j ≥ pos − pos mod c` ⟺ `t ≥ (H − 1) − pos mod c`; the others take the logits' floor,
+        // which the softmax's clamped difference sends to `exp = 0` (the query's own key is always kept).
+        let pos = tir::Ref::Input(INPUT_POS);
+        let hm1 = b.clamp(pos, 0, window as i64 - 1, DType::I64);
+        let t = b.iota(DType::I64, &[Dim::H], 0, 0, 1);
+        let cc = b.c(DType::I64, c as i128);
+        let quot = b.div(pos, cc, Rounding::Floor, DType::I64);
+        let start = b.mul(quot, cc, DType::I64);
+        let pm = b.sub(pos, start, DType::I64);
+        let thr = b.sub(hm1, pm, DType::I64);
+        let outside = b.compare(t, thr, tir::Cmp::Lt);
+        let floor = b.c(DType::I32, i32::MIN as i128);
+        logits = b.select(outside, floor, logits, DType::I32);
     }
     if let Some(rb) = ex.rel_bias {
         // Keys are `j = pos − (H − 1) + t`: the distance `pos − j = (H − 1) − t`.
@@ -2713,7 +2783,7 @@ fn lower_route(
             let probs = b.softmax_shifted(l.r, up);
             (probs, probs, 0)
         }
-        Scoring::TopKThenSoftmax | Scoring::SparseMixer => (l.r, l.r, i32::MIN as i64),
+        Scoring::TopKThenSoftmax | Scoring::TopKThenSigmoid | Scoring::SparseMixer => (l.r, l.r, i32::MIN as i64),
         Scoring::Sigmoid => {
             let c = b.c(DType::I64, 1i128 << up);
             let y = b.mul(l.r, c, DType::I64);
@@ -2754,7 +2824,17 @@ fn lower_route(
         }
     };
     let kept = b.gather(scores, idx, 0, 0);
-    let kept = if r.scoring == Scoring::TopKThenSoftmax { b.softmax_shifted(kept, up) } else { kept };
+    let kept = match r.scoring {
+        Scoring::TopKThenSoftmax => b.softmax_shifted(kept, up),
+        // Llama-4: σ of each kept logit, lifted to Q24.
+        Scoring::TopKThenSigmoid => {
+            let c = b.c(DType::I64, 1i128 << up);
+            let y = b.mul(kept, c, DType::I64);
+            let y = b.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32);
+            b.int_sigmoid(y)
+        }
+        _ => kept,
+    };
     let w = if r.normalize { b.renormalize_recip(kept) } else { kept };
     Ok((idx, w))
 }
@@ -2811,6 +2891,7 @@ fn lower_moe(
     k: usize,
     act: Act,
     glu: crate::spec::Glu,
+    input_scaled: bool,
     site: &str,
     want: &Want,
 ) -> Result<Val> {
@@ -2885,7 +2966,17 @@ fn lower_moe(
         Ok(narrow(b, acc, mk, sk, z, dt))
     };
     let (gb, ub, db) = if ps.len() > 3 { (Some(ps[3]), Some(ps[4]), Some(ps[5])) } else { (None, None, None) };
-    let xb = b.reshape_fixed(x.r, &[d as u32, 1]);
+    // Llama-4: every selected expert reads `w_j · x`, exact to 2^-16 of a code in `i32`
+    // (`(x · w_j) >> 8` of a Q24 weight), and the outputs are summed at unit weight.
+    let (xb, kx) = if input_scaled {
+        let wk = b.reshape_fixed(w.r, &[k as u32, 1, 1]);
+        let xk = b.reshape_fixed(x.r, &[1, d as u32, 1]);
+        let p = b.mul(xk, wk, DType::I64);
+        let xs = b.shr(p, 8, Rounding::Floor, DType::I64);
+        (b.clamp(xs, i32::MIN as i64, i32::MAX as i64, DType::I32), kx.times(1.0 / 65536.0))
+    } else {
+        (b.reshape_fixed(x.r, &[d as u32, 1]), kx)
+    };
     let (gk, uk) = (ScaleKey::site(vec![sub("gate")], false), ScaleKey::site(vec![sub("up")], false));
     let g16 = proj(b, cx, lb, gp, gb, xb, kx.clone(), &sub("gate"), gk.clone(), DType::I16)?;
     b.commit(g16);
@@ -2914,13 +3005,20 @@ fn lower_moe(
     let ok = ScaleKey::site(vec![sub("out")], true);
     let y = proj(b, cx, lb, dp, db, hb, hk, &sub("out"), ok.clone(), DType::I32)?;
     b.commit(y);
-    // Σ_j w_j · y_j in one accumulator, narrowed once to the wanted scale.
-    let (kw, ko2, kt) = (w.key.clone(), ok, want.key.clone());
+    // Σ_j w_j · y_j in one accumulator, narrowed once to the wanted scale (unit weights when the
+    // weights already scaled the inputs).
+    let (wr, kw) = if input_scaled {
+        let one = b.pb.konst(DType::I32, &[k as u32], &vec![1i128 << 24; k]);
+        (one, ScaleKey::q24())
+    } else {
+        (w.r, w.key.clone())
+    };
+    let (ko2, kt) = (ok, want.key.clone());
     let (m, s) = decl_ms(b, cx, lb, site, 1, Arc::new(move |c| Ok(vec![c.scale(&kw)? * c.scale(&ko2)? / c.scale(&kt)?])))?;
     let (lo, hi) = code_bounds(want.dt);
     let p2 = b.pow2_of(s);
     let z = b.c(DType::I64, 0);
-    let r = b.moe_combine_q36(y, w.r, m, p2, z, lo, hi, want.dt);
+    let r = b.moe_combine_q36(y, wr, m, p2, z, lo, hi, want.dt);
     if want.dt == DType::I16 {
         b.commit(r);
     }

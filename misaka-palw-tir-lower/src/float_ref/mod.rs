@@ -493,13 +493,17 @@ impl<'a> Session<'a> {
                 };
                 one(rope(x(0)?, *heads, *head_dim, *rotary_dim, *offset, *style, &c, &s))
             }
+            Op::PosScale { temp } => {
+                let t = temp.at(pos);
+                one(x(0)?.iter().map(|v| v * t).collect())
+            }
             Op::HistAppend => {
                 let Ref::State(s) = ins[1] else { return Err(LowerError::eval("HistAppend without a state")) };
                 let row = x(0)?.to_vec();
                 self.hist.entry((s, lyr)).or_default().push(row);
                 Ok(vec![vec![]])
             }
-            Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window, alibi, sinks } => {
+            Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window, alibi, sinks, chunk } => {
                 let (Ref::State(ks), Ref::State(vs)) = (ins[1], ins[2]) else {
                     return Err(LowerError::eval("attention without states"));
                 };
@@ -510,8 +514,16 @@ impl<'a> Session<'a> {
                 let values: &[Vec<f32>] = self.hist.get(&(vs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let shape = AttnShape { heads: *heads, kv_heads: *kv_heads, head_dim: *head_dim, v_head_dim: *v_head_dim };
                 let want = self.sites.is_some();
+                // A chunk keeps the last `p mod c + 1` keys: the query's own chunk.
+                let window = match chunk {
+                    Some(c) => {
+                        let own = keys.len().saturating_sub(1) % c + 1;
+                        Some(window.map_or(own, |w| w.min(own)))
+                    }
+                    None => *window,
+                };
                 let (out, scores, probs) =
-                    attention(&q, keys, values, shape, *scale, *softcap, *window, alibi.as_ref(), sinks_v.as_deref(), want);
+                    attention(&q, keys, values, shape, *scale, *softcap, window, alibi.as_ref(), sinks_v.as_deref(), want);
                 self.sub_site(prefix, &node.site, "scores", &scores);
                 self.sub_site(prefix, &node.site, "probs", &probs);
                 one(out)
@@ -619,7 +631,7 @@ impl<'a> Session<'a> {
                 self.sub_site(prefix, &node.site, "logits", &logits);
                 Ok(vec![idx.iter().map(|i| *i as f32).collect(), w])
             }
-            Op::MoeExperts { top_k, act: a, glu, bias } => {
+            Op::MoeExperts { top_k, act: a, glu, bias, input_scaled } => {
                 let xv = x(0)?.to_vec();
                 let idx: Vec<usize> = x(1)?.iter().map(|v| *v as usize).collect();
                 let w = x(2)?.to_vec();
@@ -645,8 +657,10 @@ impl<'a> Session<'a> {
                     let gb = biases.map(|(a, _, _)| slice(a, e));
                     let ub = biases.map(|(_, b, _)| slice(b, e));
                     let db = biases.map(|(_, _, c)| slice(c, e));
-                    let gv = linear_raw(&xv, &gw, e_i, gb.as_deref());
-                    let uv = linear_raw(&xv, &uw, e_i, ub.as_deref());
+                    // Llama-4: the expert reads `w · x` (in float32, as transformers scales it).
+                    let xs: Vec<f32> = if *input_scaled { xv.iter().map(|v| v * w[j]).collect() } else { xv.clone() };
+                    let gv = linear_raw(&xs, &gw, e_i, gb.as_deref());
+                    let uv = linear_raw(&xs, &uw, e_i, ub.as_deref());
                     let hv: Vec<f32> = match glu {
                         Glu::Standard => gv.iter().zip(&uv).map(|(g, u)| act(*a, *g) * *u).collect(),
                         Glu::ClampedSwiGlu { alpha, limit } => {
@@ -661,8 +675,9 @@ impl<'a> Session<'a> {
                         hidden_all.extend_from_slice(&hv);
                         out_all.extend_from_slice(&ov);
                     }
+                    let wj = if *input_scaled { 1.0 } else { w[j] as f64 };
                     for (yy, o) in y.iter_mut().zip(&ov) {
-                        *yy += w[j] as f64 * *o as f64;
+                        *yy += wj * *o as f64;
                     }
                 }
                 for (sub, v) in [("gate", &gate_all), ("up", &up_all), ("act", &act_all), ("hidden", &hidden_all), ("out", &out_all)] {
@@ -1247,7 +1262,7 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
             let c = s.iter().enumerate().map(|(i, v)| v + sel_bias.map(|b| b[i] as f64).unwrap_or(0.0)).collect();
             (s, c)
         }
-        Scoring::TopKThenSoftmax | Scoring::SparseMixer => (l.clone(), l.clone()),
+        Scoring::TopKThenSoftmax | Scoring::TopKThenSigmoid | Scoring::SparseMixer => (l.clone(), l.clone()),
     };
     if let Some(g) = &r.groups {
         let per = e / g.n_group;
@@ -1276,6 +1291,7 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
         Scoring::TopKThenSoftmax | Scoring::SparseMixer => softmax_with_sink(&idx.iter().map(|i| l[*i]).collect::<Vec<_>>(), None),
         Scoring::Softmax => idx.iter().map(|i| choice[*i]).collect(),
         Scoring::Sigmoid => idx.iter().map(|i| scores[*i]).collect(),
+        Scoring::TopKThenSigmoid => idx.iter().map(|i| 1.0 / (1.0 + (-(l[*i] as f32)).exp()) as f64).collect(),
     };
     if r.normalize {
         let s: f64 = w.iter().sum::<f64>() + r.norm_eps;

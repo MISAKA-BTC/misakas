@@ -1591,7 +1591,7 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
                 _ => None,
             };
             let dims = AttnDims { heads: h, kv: h, d: dh, dv: dh, window };
-            let ex = AttnExtras { scale: s.attn_scale, softcap: None, alibi: None, sinks: None, rel_bias };
+            let ex = AttnExtras { scale: s.attn_scale, softcap: None, alibi: None, sinks: None, rel_bias, chunk: None };
             let ctx = lower_attention(&mut b, cx, &mut lb, &qv, (kw, k.key.clone()), (vw, v.key.clone()), dims, &ex, "attn.ctx", &codes_want("attn.ctx"))?;
             let cr = b.reshape_fixed(ctx.r, &[1, inner]);
             let ctx = Val { r: cr, ..ctx };

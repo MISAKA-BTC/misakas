@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::rope::{RopeSpec, RopeStyle};
+use crate::spec::QTemperature;
 
 fn router(scoring: Scoring, normalize: bool) -> RouterSpec {
     RouterSpec {
@@ -18,7 +19,17 @@ fn router(scoring: Scoring, normalize: bool) -> RouterSpec {
 }
 
 fn moe(experts: usize, top_k: usize, inter: usize, act: Act, r: RouterSpec) -> MoeSpec {
-    MoeSpec { experts, top_k, intermediate: inter, act, glu: Glu::Standard, expert_bias: false, router: r, shared: None }
+    MoeSpec {
+        experts,
+        top_k,
+        intermediate: inter,
+        act,
+        glu: Glu::Standard,
+        expert_bias: false,
+        router: r,
+        shared: None,
+        input_scaled: false,
+    }
 }
 
 fn check_topk(arch: &str, e: usize, k: usize) -> Result<()> {
@@ -694,6 +705,142 @@ pub(crate) fn phimoe(p: &mut P) -> Result<ArchSpec> {
     }))
 }
 
+/// Llama-4's text decoder (`Llama4ForCausalLM`, or the text of `Llama4ForConditionalGeneration`):
+/// * rope layers (`no_rope_layers[i] = 1`) rotate interleaved pairs (llama3 scaling) and run
+///   chunked attention (`attention_chunk_size`), with a weightless L2 QK-norm (`use_qk_norm`),
+///   applied after the rotation in transformers and before it here — the rotation keeps the RMS,
+///   so the two orders are the same function when the rope carries no attention factor;
+/// * NoPE layers (`no_rope_layers[i] = 0`, every `no_rope_layer_interval`-th) attend to every
+///   key, with the query temperature `ln(1 + ⌊(p + 1)/floor_scale⌋)·attn_scale + 1`
+///   (`attn_temperature_tuning`);
+/// * MoE layers (`moe_layers`, else every `interleave_moe_layer_step`-th): top-k of the router
+///   logits, each selected expert reading `σ(logit)·x` (`MoeSpec::input_scaled`), its outputs
+///   summed with a shared expert's; experts stored `[E, in, out]` (`gate_up_proj`, gate first);
+/// * dense layers: a SwiGLU of `intermediate_size_mlp`.
+pub(crate) fn llama4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchSpec> {
+    let vocab = p.cfg.usize_or("vocab_size", 202048)?;
+    let hidden = p.cfg.usize_or("hidden_size", 5120)?;
+    let inter = p.cfg.usize_or("intermediate_size", 8192)?;
+    let inter_mlp = p.cfg.usize_or("intermediate_size_mlp", 16384)?;
+    let n = p.cfg.usize_or("num_hidden_layers", 48)?;
+    let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 40, Some(8), Some(128))?;
+    let act = p.act("hidden_act", "silu")?;
+    let max_pos = p.cfg.usize_or("max_position_embeddings", 4096 * 32)?;
+    let eps = p.cfg.f64_or("rms_norm_eps", 1e-5)?;
+    let tied = p.cfg.bool_or("tie_word_embeddings", false)?;
+    let bias = p.cfg.bool_or("attention_bias", false)?;
+    let e = p.cfg.usize_or("num_local_experts", 16)?;
+    let k = p.cfg.usize_or("num_experts_per_tok", 1)?;
+    check_topk(&p.arch(), e, k)?;
+    let qk_norm = p.cfg.bool_or("use_qk_norm", true)?;
+    let tune = p.cfg.bool_or("attn_temperature_tuning", true)?;
+    let floor = p.cfg.usize_or("floor_scale", 8192)?;
+    let attn_scale = p.cfg.f64_or("attn_scale", 0.1)?;
+    if floor == 0 {
+        return Err(LowerError::bad("llama4: floor_scale 0"));
+    }
+    let chunk = p.cfg.usize_or_null("attention_chunk_size", Some(8192))?;
+    // Training-only router settings.
+    p.cfg.inert(&["router_jitter_noise", "router_aux_loss_coef", "output_router_logits"]);
+    let interval = p.cfg.usize_or("no_rope_layer_interval", 4)?;
+    let use_rope: Vec<bool> = match p.cfg.opt_usize_list("no_rope_layers")? {
+        Some(l) if !l.is_empty() => {
+            if l.len() != n {
+                return Err(LowerError::bad(format!("llama4: no_rope_layers has {} entries for {n} layers", l.len())));
+            }
+            l.iter().map(|v| *v != 0).collect()
+        }
+        _ => (0..n).map(|i| interval == 0 || (i + 1) % interval != 0).collect(),
+    };
+    let types =
+        p.layer_types(
+            n,
+            &["chunked_attention", "full_attention"],
+            |i| {
+                if use_rope[i] { "chunked_attention" } else { "full_attention" }
+            },
+        )?;
+    let step = p.cfg.usize_or("interleave_moe_layer_step", 1)?;
+    let moe_layers: Vec<usize> = match p.cfg.opt_usize_list("moe_layers")? {
+        Some(l) => l,
+        None => (step.saturating_sub(1)..n).step_by(step.max(1)).collect(),
+    };
+    let rope = p.rope(hd, RopeStyle::Interleaved, Some(500000.0), None, 1.0, Some(max_pos), None)?;
+    if qk_norm && rope.freqs.attention_factor != 1.0 {
+        return Err(LowerError::not_lowerable(format!(
+            "llama4: a QK-norm after a rope scaled by {} (the order matters then)",
+            rope.freqs.attention_factor
+        )));
+    }
+    let norm = NormSpec::rms(eps);
+    let l2 = QkNorm { norm: NormSpec { kind: NormKind::Rms, eps, gain: Gain::None, bias: false }, scope: QkNormScope::PerHeadShared };
+    let mut r = router(Scoring::TopKThenSigmoid, false);
+    r.scale = 1.0;
+    let mut m = moe(e, k, inter, act, r);
+    m.shared = Some(SharedExpertSpec { intermediate: inter, sigmoid_gate: false });
+    m.input_scaled = true;
+    p.layouts.experts = MlpLayout::FusedGateFirstInOut;
+    let layers = (0..n)
+        .map(|i| {
+            let mut at = if use_rope[i] {
+                let mut a = attn(h, kv, hd, Position::Rope(rope.clone()), (bias, bias));
+                if qk_norm {
+                    a.qk_norm = Some(l2);
+                }
+                a
+            } else {
+                let mut a = attn(h, kv, hd, Position::None, (bias, bias));
+                if tune {
+                    a.q_temperature = Some(QTemperature { floor, scale: attn_scale });
+                }
+                a
+            };
+            if types[i] == "chunked_attention"
+                && let Some(c) = chunk
+            {
+                at.chunk = Some(c);
+                at.window = Some(c);
+            }
+            let ffn = if moe_layers.contains(&i) { Ffn::Moe(m.clone()) } else { Ffn::Mlp(gated_mlp(inter_mlp, act, false)) };
+            LayerSpec { mixer: Mixer::Attention(at), ffn, residual: pre_norm(norm), post_scale: 1.0 }
+        })
+        .collect();
+    let emb = format!("{model}embed_tokens");
+    let mut nm = llama_names(model, if tied { &emb } else { lm_head });
+    let l = format!("{model}layers.{{L}}.feed_forward.");
+    for (k2, v2) in [
+        ("mlp.gate", "gate_proj"),
+        ("mlp.up", "up_proj"),
+        ("mlp.down", "down_proj"),
+        ("moe.router", "router"),
+        ("moe.gate_up.stacked", "experts.gate_up_proj"),
+        ("moe.down.stacked", "experts.down_proj"),
+        ("moe.shared.gate", "shared_expert.gate_proj"),
+        ("moe.shared.up", "shared_expert.up_proj"),
+        ("moe.shared.down", "shared_expert.down_proj"),
+    ] {
+        nm.insert(k2.into(), format!("{l}{v2}"));
+    }
+    if chunk.is_some() {
+        p.notes
+            .push("chunked attention: each rope layer's history keeps one chunk, and keys before the query's chunk are masked".into());
+    }
+    Ok(p.finish_spec(SpecParts {
+        model_type: "llama4_text",
+        families: vec!["C1", "C3", "C8"],
+        vocab,
+        hidden,
+        max_pos: Some(max_pos),
+        embedding: plain_embedding(hidden),
+        layers,
+        final_norm: Some(norm),
+        head: plain_head(tied),
+        names: nm,
+        prefix_aliases: vec![],
+        conv1d: false,
+    }))
+}
+
 /// gpt-oss: attention sinks, alternating 128-token sliding / full attention, YaRN (truncate =
 /// false), biased router with softmax over the top-k logits, clamped SwiGLU experts with
 /// interleaved gate/up columns stored `[E, in, out]`.
@@ -742,6 +889,7 @@ pub(crate) fn gpt_oss(p: &mut P) -> Result<ArchSpec> {
         expert_bias: true,
         router: r,
         shared: None,
+        input_scaled: false,
     };
     p.layouts.experts = MlpLayout::FusedInterleaved;
     let layers = (0..n)

@@ -160,6 +160,8 @@ fixtures!(
     granitemoe,
     glm4_moe,
     phimoe,
+    llama4,
+    llama4_vlm,
     deepseek_v2,
     deepseek_v2_lite,
     deepseek_v3,

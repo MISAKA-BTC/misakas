@@ -487,7 +487,9 @@ fn mlp(m: &mut M, s: &MlpSpec, pfx: &str, layout: MlpLayout) -> Result<()> {
                 m.put(format!("{pfx}.up.b"), b.rows(Pick::Range { start: i, len: i }))?;
             }
         }
-        MlpLayout::FusedInterleaved => return Err(LowerError::eval("internal: interleaved dense MLP")),
+        MlpLayout::FusedInterleaved | MlpLayout::FusedGateFirstInOut => {
+            return Err(LowerError::eval("internal: an expert-only layout on a dense MLP"));
+        }
     }
     m.lin(&format!("{pfx}.down"), &format!("{pfx}.down"), s.down_bias)
 }
@@ -516,6 +518,13 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
             m.put("moe.experts.gate", gu.clone().take(1, Pick::Range { start: 0, len: i }))?;
             m.put("moe.experts.up", gu.take(1, Pick::Range { start: i, len: i }))?;
             m.put("moe.experts.down", Src::t(m.role("moe.down.stacked")?))?;
+        }
+        MlpLayout::FusedGateFirstInOut => {
+            // Llama-4: gate_up_proj [E, D, 2I] with the gate columns first, down_proj [E, I, D].
+            let gu = Src::t(m.role("moe.gate_up.stacked")?).transpose();
+            m.put("moe.experts.gate", gu.clone().take(1, Pick::Range { start: 0, len: i }))?;
+            m.put("moe.experts.up", gu.take(1, Pick::Range { start: i, len: i }))?;
+            m.put("moe.experts.down", Src::t(m.role("moe.down.stacked")?).transpose())?;
         }
         MlpLayout::FusedInterleaved => {
             // gpt-oss: gate_up_proj [E, D, 2I] with gate/up interleaved, down_proj [E, I, D].

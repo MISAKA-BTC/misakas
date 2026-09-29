@@ -422,6 +422,9 @@ impl Builder<'_> {
             Position::Alibi(al) => alibi = Some(al.clone()),
             Position::None => {}
         }
+        if let Some(t) = a.q_temperature {
+            q = bk.f(Op::PosScale { temp: t }, vec![q, Ref::Pos], qn, "attn.q_temp");
+        }
         let suffix = a.window.map(|w| format!(".w{w}")).unwrap_or_default();
         let ks = self.state(&format!("attn.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![kn], 0.0)?;
         let vs = self.state(&format!("attn.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![vn], 0.0)?;
@@ -441,6 +444,7 @@ impl Builder<'_> {
             window: a.window,
             alibi,
             sinks: a.sinks,
+            chunk: a.chunk,
         };
         let mut o = bk.f(op, ins, h * vd, "attn.ctx");
         if let Some(g) = gate {
@@ -720,7 +724,12 @@ impl Builder<'_> {
             ins.push(self.param("moe.experts.up_b", vec![e, i], true, Init::Uniform(-0.1, 0.1))?);
             ins.push(self.param("moe.experts.down_b", vec![e, d], true, Init::Uniform(-0.1, 0.1))?);
         }
-        let mut y = bk.f(Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias }, ins, d, "moe.routed");
+        let mut y = bk.f(
+            Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias, input_scaled: m.input_scaled },
+            ins,
+            d,
+            "moe.routed",
+        );
         if let Some(sh) = &m.shared {
             let spec = MlpSpec {
                 intermediate: sh.intermediate,

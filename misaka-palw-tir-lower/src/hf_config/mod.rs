@@ -75,6 +75,8 @@ pub const SUPPORTED: &[(&str, &str)] = &[
     ("DeepseekV3ForCausalLM", "C3 C8 (MLA)"),
     ("Glm4MoeForCausalLM", "C3 C8"),
     ("PhimoeForCausalLM", "C3 C8"),
+    ("Llama4ForCausalLM", "C1 C3 C8"),
+    ("Llama4ForConditionalGeneration", "C1 C3 C8 (text decoder only)"),
     ("GptOssForCausalLM", "C2 C3 C8"),
     ("Qwen3NextForCausalLM", "C3 C4 C7"),
     ("Qwen3_5ForCausalLM", "C4 C7"),
@@ -101,8 +103,6 @@ pub const SUPPORTED: &[(&str, &str)] = &[
 pub const REFUSED: &[(&str, &str)] = &[
     ("Gemma3nForConditionalGeneration", "AltUp/Laurel/per-layer embeddings and activation sparsity are not modelled yet"),
     ("Gemma3nForCausalLM", "AltUp/Laurel/per-layer embeddings and activation sparsity are not modelled yet"),
-    ("Llama4ForConditionalGeneration", "chunked attention, NoPE temperature tuning and the Llama-4 MoE are not modelled yet"),
-    ("Llama4ForCausalLM", "chunked attention, NoPE temperature tuning and the Llama-4 MoE are not modelled yet"),
     ("MllamaForConditionalGeneration", "the text decoder has cross-attention layers that read vision states"),
     ("PaliGemmaForConditionalGeneration", "prefix-LM (bidirectional) attention over the prompt"),
     ("Phi3SmallForCausalLM", "blocksparse attention and muP scalings (remote code) are not modelled"),
@@ -283,7 +283,7 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         "GemmaForCausalLM" => dense::gemma(&mut p)?,
         "Gemma2ForCausalLM" => dense::gemma2(&mut p)?,
         "Gemma3ForCausalLM" => dense::gemma3_text(&mut p, "model.", "lm_head", vec![])?,
-        "Gemma3ForConditionalGeneration" => vlm_text(&mut p, &arch)?,
+        "Gemma3ForConditionalGeneration" | "Llama4ForConditionalGeneration" => vlm_text(&mut p, &arch)?,
         "LlavaForConditionalGeneration" | "Mistral3ForConditionalGeneration" => vlm_text(&mut p, &arch)?,
         "Phi3ForCausalLM" => dense::phi3(&mut p)?,
         "PhiForCausalLM" => legacy::phi(&mut p)?,
@@ -305,6 +305,7 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         "DeepseekV3ForCausalLM" => moe::deepseek(&mut p, 3)?,
         "Glm4MoeForCausalLM" => moe::glm4_moe(&mut p)?,
         "PhimoeForCausalLM" => moe::phimoe(&mut p)?,
+        "Llama4ForCausalLM" => moe::llama4_text(&mut p, "model.", "lm_head")?,
         "GptOssForCausalLM" => moe::gpt_oss(&mut p)?,
         "Qwen3NextForCausalLM" => hybrid::qwen3_next(&mut p)?,
         "Qwen3_5ForCausalLM" => hybrid::qwen3_5_text(&mut p, false, "model.", "lm_head", vec![])?,
@@ -401,6 +402,7 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
         "Mistral3ForConditionalGeneration" => "mistral",
         "Qwen3_5ForConditionalGeneration" => "qwen3_5_text",
         "Qwen3_5MoeForConditionalGeneration" => "qwen3_5_moe_text",
+        "Llama4ForConditionalGeneration" => "llama4_text",
         _ => "llama",
     });
     // Both HF weight layouts exist on the hub: `language_model.model.*` (≤ 4.51) and
@@ -433,6 +435,8 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
     // A text-only lowering never reads the vision tower, the projector or the MTP heads.
     let vision: Vec<String> = [
         "vision_tower.",
+        "vision_model.",
+        "model.vision_model.",
         "multi_modal_projector.",
         "model.vision_tower.",
         "model.multi_modal_projector.",
@@ -454,6 +458,11 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
     sub.cfg.inert(&["model_type"]);
     let mut spec = match tmt {
         "gemma3_text" => dense::gemma3_text(&mut sub, prefix, lm_head, aliases)?,
+        "llama4_text" => {
+            let mut s = moe::llama4_text(&mut sub, prefix, lm_head)?;
+            s.hf.prefix_aliases = aliases;
+            s
+        }
         "qwen3_5_text" => hybrid::qwen3_5_text(&mut sub, false, prefix, lm_head, aliases)?,
         "qwen3_5_moe_text" => hybrid::qwen3_5_text(&mut sub, true, prefix, lm_head, aliases)?,
         "llama" | "mistral" | "qwen2" | "qwen2_vl_text" | "qwen2_5_vl_text" => {
@@ -727,6 +736,8 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         window: None,
         sinks: false,
         output_gate: false,
+        chunk: None,
+        q_temperature: None,
     }
 }
 
