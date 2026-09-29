@@ -944,27 +944,26 @@ fn palw_improve_exact_match_on_reveal_hook_v1(
 /// **Does a drawn item of the epoch still owe a reveal?** A setter set's prompts or keys, or a
 /// hold-out case's committed key or reference. The core scores early (before `t_score`) only when
 /// nothing is owed.
-#[allow(dead_code)] // the core's `palw_improve_material_pending_hook_v1` calls it (rfc4/core, next)
 pub(super) fn palw_improve_material_pending_v1(state: &PalwChainStateV2, line_id: &Hash64, epoch: u64) -> bool {
     state.improvement_items(line_id, epoch).into_iter().filter(|item| !item.dropped).any(|item| owes_reveal_v1(state, line_id, item))
 }
 
-#[allow(dead_code)]
 fn owes_reveal_v1(state: &PalwChainStateV2, line_id: &Hash64, item: &PalwEvalItemV1) -> bool {
+    // A drawn item is owed a reveal only by a row that exists: every hold-out entry and setter set this
+    // lane admits has one until its epoch retires (a set that forfeits leaves with its items dropped).
     match item.source {
         PalwItemSourceV1::Setter { set_id, .. } => {
-            state.improvement_setter_set(line_id, &set_id).is_none_or(|set| set.prompts.is_none() || set.keys.is_none())
+            state.improvement_setter_set(line_id, &set_id).is_some_and(|set| set.prompts.is_none() || set.keys.is_none())
         }
         PalwItemSourceV1::HoldOut => state
             .improvement_case(line_id, &item.case_id)
-            .is_none_or(|case| !matches!(case.case.reference, PalwCaseReferenceV1::None) && case.revealed.is_none()),
+            .is_some_and(|case| !matches!(case.case.reference, PalwCaseReferenceV1::None) && case.revealed.is_none()),
         PalwItemSourceV1::Regression { .. } | PalwItemSourceV1::Safety { .. } => false,
     }
 }
 
 /// **Right before scoring** (spec 17 §17.9.1): every drawn item that still owes a reveal is dropped for
 /// every subject, and every setter set that owed one forfeits its bond and leaves.
-#[allow(dead_code)] // the core's `palw_improve_material_before_scoring_hook_v1` calls it (rfc4/core, next)
 pub(super) fn palw_improve_material_before_scoring_v1(
     builder: &mut TransitionBuilder<'_>,
     line_id: &Hash64,

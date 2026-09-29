@@ -52,6 +52,7 @@ impl TransactionValidator {
         self.check_model_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_model_sink_binding_in_context(tx, ctx_daa_score)?;
         self.check_activation_sink_outputs_in_context(tx, ctx_daa_score)?;
+        self.check_improvement_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)
     }
@@ -173,6 +174,24 @@ impl TransactionValidator {
         for (i, output) in tx.outputs.iter().enumerate() {
             if kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_class_v1(&output.script_public_key).is_some() {
                 return Err(TxRuleError::ActivationSinkBeforePoolActivation(i, ctx_daa_score));
+            }
+        }
+        Ok(())
+    }
+
+    /// **RFC-0004 (spec 17 §17.11.1): the height-indexed half of the improvement sink** — refused below
+    /// `palw_improvement_v1`, so a build that schedules the fence and one that does not agree on every
+    /// transaction before it.
+    fn check_improvement_sink_outputs_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_improvement_fence else {
+            return Ok(());
+        };
+        if fence.is_active(ctx_daa_score) {
+            return Ok(());
+        }
+        for (i, output) in tx.outputs.iter().enumerate() {
+            if kaspa_consensus_core::palw_improve_pool_v1::palw_improvement_sink_line_v1(&output.script_public_key).is_some() {
+                return Err(TxRuleError::ImprovementSinkBeforeActivation(i, ctx_daa_score));
             }
         }
         Ok(())

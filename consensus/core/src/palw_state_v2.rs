@@ -7570,6 +7570,8 @@ pub fn palw_improvement_object_landed_v1(object: &PalwConsensusObjectV2) -> bool
             | O::TeachingArtifactRevealed { .. }
             | O::TeacherLicenceRegistered { .. }
             | O::CandidateSubmitted { .. }
+            // The core lane's A9.
+            | O::ImprovementPoolFunded { .. }
     )
 }
 
@@ -10301,6 +10303,9 @@ pub struct PalwChainStateV2 {
     improvement_retiring: BTreeSet<(u64, Hash64, u64)>,
     /// RFC-0004: the epochs not yet decided, network-wide (the `max_open_epochs` ceiling).
     improvement_open_epochs: u32,
+    /// RFC-0004: the result rows reserved by every epoch whose results may still exist (the
+    /// `max_live_results` ceiling, spec 17 §17.3).
+    improvement_live_results: u64,
     /// RFC-0004 A4: revealed artifacts by `(line, output_hash, committed_daa, commit)` — an output's
     /// original is its earliest commit.
     improvement_artifact_outputs: BTreeSet<(Hash64, Hash64, u64, Hash64)>,
@@ -10500,6 +10505,7 @@ impl PalwChainStateV2 {
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
             improvement_open_epochs: 0,
+            improvement_live_results: 0,
             improvement_artifact_outputs: BTreeSet::new(),
             improvement_artifact_answers: BTreeSet::new(),
             improvement_artifact_deadlines: BTreeSet::new(),
@@ -18466,6 +18472,8 @@ impl<'a> TransitionBuilder<'a> {
             (true, false) => self.state.improvement_open_epochs = self.state.improvement_open_epochs.saturating_sub(1),
             _ => {}
         }
+        let live = |e: &Option<crate::palw_improve_state_v1::PalwImprovementEpochV1>| e.as_ref().map_or(0, palw_improvement_live_results_of_v1);
+        self.state.improvement_live_results = self.state.improvement_live_results.saturating_sub(live(&old)).saturating_add(live(&new));
         if let Some(entry) = old.as_ref().and_then(palw_improvement_retiring_entry_v1) {
             self.state.improvement_retiring.remove(&entry);
         }
@@ -31303,12 +31311,8 @@ fn apply_object(
         PalwConsensusObjectV2::CandidateSubmitted { payload, submitter, signature: _ } => {
             palw_improve_material_fold_v1::apply_candidate_submitted_v1(builder, ctx, payload, submitter)?;
         }
-        // RFC-0004: refused by name above, before any arm reads it, until its admission lands (A9).
-        PalwConsensusObjectV2::ImprovementPoolFunded { .. } => {
-            return Err(PalwStateV2Error::ImprovementObjectRefused {
-                object: palw_improvement_object_name_v1(object).unwrap_or("an improvement object"),
-                why: "its admission has not landed (RFC-0004 step 0)",
-            });
+        PalwConsensusObjectV2::ImprovementPoolFunded { payload } => {
+            palw_improve_fold_v1::apply_improvement_pool_funded_v1(builder, ctx, payload)?;
         }
         PalwConsensusObjectV2::BondRegistered {
             bond,
@@ -36848,6 +36852,12 @@ fn rebuild_improvement_indices_v1(state: &mut PalwChainStateV2) {
     state.improvement_heads_of = heads_of;
     state.improvement_retiring = state.improvement_epochs.values().filter_map(palw_improvement_retiring_entry_v1).collect();
     state.improvement_open_epochs = state.improvement_epochs.values().filter(|epoch| !epoch.is_decided()).count() as u32;
+    state.improvement_live_results = state.improvement_epochs.values().map(palw_improvement_live_results_of_v1).sum();
+}
+
+/// RFC-0004: what an epoch header holds against `max_live_results` — its bound until its results retire.
+fn palw_improvement_live_results_of_v1(epoch: &crate::palw_improve_state_v1::PalwImprovementEpochV1) -> u64 {
+    if epoch.is_decided() && epoch.retire == crate::palw_improve_state_v1::PalwEpochRetireV1::Done { 0 } else { epoch.results_bound as u64 }
 }
 
 fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
@@ -38516,6 +38526,7 @@ impl PalwStateCarriageV2 {
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
             improvement_open_epochs: 0,
+            improvement_live_results: 0,
             improvement_artifact_outputs: BTreeSet::new(),
             improvement_artifact_answers: BTreeSet::new(),
             improvement_artifact_deadlines: BTreeSet::new(),

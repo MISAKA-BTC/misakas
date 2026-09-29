@@ -11707,6 +11707,14 @@ impl VirtualStateProcessor {
                         "a policy object",
                     )?;
                 }
+                // RFC-0004 (spec 17 §17.11.1): a sponsor's deposit is bound to its carrier's sink (the
+                // extraction walk and isolation); the fold credits a governed line's pool or refuses it,
+                // and P-B1 pays a refusal back.
+                Obj::ImprovementPoolFunded { .. } => {
+                    if !self.palw_improvement_at(point.daa_score) {
+                        return Err(format!("{} is refused: palw_improvement_v1 is not in force at this block (RFC-0004)", "a pool deposit"));
+                    }
+                }
                 // RFC-0004 (spec 17 §17.10.1): a rollback, signed by its filer bond's key.
                 Obj::LineageHeadRolledBack { payload, filer, signature } => {
                     if !self.palw_improvement_at(point.daa_score) {
@@ -11812,16 +11820,6 @@ impl VirtualStateProcessor {
                     state
                         .improvement_candidate_acceptance_v1(payload, rules)
                         .map_err(|why| format!("candidate {} is not admissible: {why} (RFC-0004 §6)", payload.class_id))?;
-                }
-                Obj::ImprovementPoolFunded { .. } => {
-                    let name = kaspa_consensus_core::palw_state_v2::palw_improvement_object_name_v1(object)
-                        .unwrap_or("an improvement object");
-                    let why = if self.palw_improvement_at(point.daa_score) {
-                        "its admission has not landed"
-                    } else {
-                        "palw_improvement_v1 is not in force at this block"
-                    };
-                    return Err(format!("{name} is refused: {why} (RFC-0004)"));
                 }
                 // **ADR-0078: a derivation is authorised by the key it declares, on this chain.**
                 // The ride list proved a signature is present and the shape is the object's; here
@@ -14931,6 +14929,9 @@ impl VirtualStateProcessor {
                 // ADR-0152-adjacent (Activation Pool): a top-up the fold refuses (a missing or Frozen
                 // class, under the least top-up) is paid back by the same route, against the same cap.
                 MObj::ActivationPoolFunded { amount, .. } => *amount,
+                // RFC-0004 (spec 17 §17.11.1): a deposit the fold refuses (a line not governed) is
+                // paid back by the same route — also when the walk drops it below the fence.
+                MObj::ImprovementPoolFunded { payload } => payload.amount,
                 _ => 0,
             };
             if !refunds_armed || paid == 0 {
