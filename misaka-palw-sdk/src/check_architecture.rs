@@ -138,16 +138,22 @@ pub fn check_ir_config_v1(params: &Params, config_text: &str, long_history: bool
     check_ir_config_at_v1(params, config_text, long_history, IR_DEFAULT_TILE_LEN_V1, IR_DEFAULT_H_CHUNK_V1)
 }
 
-/// **IR mode from a config** with `tile_len` and the history chunk given.
-pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: bool, tile_len: u32, h_chunk: u32) -> IrReportV1 {
-    let opts = misaka_palw_tir_lower::lower::LowerOpts {
+/// The lowering IR mode checks: the program's history bound (`--held` for the long one), nothing
+/// else set.
+fn ir_lower_opts(long_history: bool) -> misaka_palw_tir_lower::lower::LowerOpts {
+    misaka_palw_tir_lower::lower::LowerOpts {
         history_bound: if long_history {
             misaka_palw_tir::program::HISTORY_BOUND_V1_HELD
         } else {
             misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL
         },
         ..Default::default()
-    };
+    }
+}
+
+/// **IR mode from a config** with `tile_len` and the history chunk given.
+pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: bool, tile_len: u32, h_chunk: u32) -> IrReportV1 {
+    let opts = ir_lower_opts(long_history);
     let (ceilings, source, _) = tir_ceilings_v1(params);
     let empty = |architecture: String, verdict: ArchVerdictV1| IrReportV1 {
         architecture,
@@ -613,6 +619,496 @@ fn projected_row(
             class_id: Hash64::default(),
             verdict: ArchVerdictV1::Refused(why),
         },
+    }
+}
+
+// ───────────────────────────── LoRA budget (RFC-0004) ─────────────────────────────
+
+/// `--lora-budget`'s adapter rank unless given (`lora_alpha` is twice it).
+pub const LORA_BUDGET_DEFAULT_RANK_V1: usize = 16;
+/// The context a LoRA budget's admission work is sized at unless given.
+pub const LORA_BUDGET_DEFAULT_CONTEXT_V1: u32 = 2048;
+/// How far past admission's work cap a budget's sizing is followed before it says "past": 4×.
+pub const LORA_BUDGET_SIZING_REACH_V1: u64 = 4 * kaspa_consensus_core::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1;
+
+/// What a LoRA budget is measured at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoraBudgetChoiceV1 {
+    /// The adapter's rank `r` (`lora_alpha` is `2r`).
+    pub rank: usize,
+    /// The context the admission work is sized over (the layout's longest job); `None` for
+    /// [`LORA_BUDGET_DEFAULT_CONTEXT_V1`], or the widest the program admits when that is shorter.
+    pub context: Option<u32>,
+    /// The logits node's tile. With `None`, the widest divisor of 4,096 lanes is used whose
+    /// terminal closes the chain can carry, sized over the parent (declare-layout starts from an
+    /// estimate that can choose a narrower one: pass the tile the class is declared at).
+    pub logits_tile: Option<u32>,
+    pub tile_len: u32,
+    pub h_chunk: u32,
+    /// The held (long) history bound, as IR mode's `--held`.
+    pub long_history: bool,
+    /// The lowering's window (`palw-tir-fidelity --max-window`), for a model whose state at the
+    /// history bound is past the ceiling; `None` keeps the model's own windows.
+    pub max_window: Option<u32>,
+    /// The layout's checkpoint interval `C` (at most `min_j C_j`); `None` for `min_j C_j`, which a
+    /// declaration may narrow.
+    pub checkpoint_interval: Option<u32>,
+}
+
+impl Default for LoraBudgetChoiceV1 {
+    fn default() -> Self {
+        Self {
+            rank: LORA_BUDGET_DEFAULT_RANK_V1,
+            context: None,
+            logits_tile: None,
+            tile_len: IR_DEFAULT_TILE_LEN_V1,
+            h_chunk: IR_DEFAULT_H_CHUNK_V1,
+            long_history: false,
+            max_window: None,
+            checkpoint_interval: None,
+        }
+    }
+}
+
+/// What admission's close sizing measured: its work, the largest terminal close as carried, and
+/// PALW-TIR-38's verdict on the closes (`palw_tir_carried_close_bounds_admit_v1`: every close within
+/// what the chain carries, every dissected point's root claim within one carrier).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoraSizedV1 {
+    pub work: u64,
+    pub largest_close: u64,
+    pub carried: Result<(), String>,
+}
+
+/// One adapter target set, lowered as a LoRA candidate of the config's model.
+#[derive(Clone, Debug)]
+pub struct LoraBudgetRowV1 {
+    /// A module leaf (`q_proj`), a set (`attention`, `mlp`), `all-linear`, or `fallback`.
+    pub name: String,
+    /// The leaves the adapter targets (for `all-linear`, what it resolved to).
+    pub targets: Vec<String>,
+    /// Why the adapter was not attached or lowered (a fused projection, for one), when it was not.
+    pub refused: Option<String>,
+    /// The adapter section: its params (the candidate's params `P..`) and their bytes over every
+    /// instance.
+    pub adapter_params: usize,
+    pub adapter_bytes: u64,
+    /// The candidate's nodes, block by block.
+    pub block_nodes: Vec<usize>,
+    /// Every block within 512 nodes (NF-12). Admission refuses a block past it by name.
+    pub fits: bool,
+    /// Admission's close sizing of the composite (`PalwTirParamFormV1::Composite { p }`), or why it
+    /// was not measured (past [`LORA_BUDGET_SIZING_REACH_V1`] included).
+    pub sized: Result<LoraSizedV1, String>,
+}
+
+impl LoraBudgetRowV1 {
+    fn refused(name: &str, targets: Vec<String>, why: String) -> Self {
+        Self {
+            name: name.to_string(),
+            targets,
+            refused: Some(why),
+            adapter_params: 0,
+            adapter_bytes: 0,
+            block_nodes: Vec::new(),
+            fits: false,
+            sized: Err("not sized".into()),
+        }
+    }
+
+    /// Within every budget a composite's admission holds it to: the blocks' nodes, the sizing's
+    /// work cap, and the largest close the chain can carry.
+    pub fn admissible(&self, cap: u64) -> bool {
+        self.refused.is_none() && self.fits && matches!(&self.sized, Ok(s) if s.work <= cap && s.carried.is_ok())
+    }
+}
+
+/// **What a LoRA candidate of a config costs**, per adapter target set (RFC-0004 §6.3): which sets
+/// fit a block's 512 nodes, and what admission's close sizing of the composite takes against its
+/// cap, with the largest close against what the chain can carry.
+#[derive(Clone, Debug)]
+pub struct LoraBudgetReportV1 {
+    pub architecture: String,
+    pub rank: usize,
+    /// Every block's name, its occurrences in the schedule, and the parent's nodes in it.
+    pub blocks: Vec<(String, usize, usize)>,
+    /// The parent's own sizing (`Multiproof`), for scale.
+    pub parent: Result<LoraSizedV1, String>,
+    pub rows: Vec<LoraBudgetRowV1>,
+    /// The layout the work was sized at.
+    pub context: u32,
+    pub logits_tile: u32,
+    pub checkpoint_interval: u32,
+    pub tile_len: u32,
+    pub h_chunk: u32,
+    /// Admission's work cap (`PALW_TIR_CLOSE_SIZING_WORK_CAP_V1`) and the most one close may carry
+    /// (`palw_tir_carriable_close_bytes_v1`).
+    pub work_cap: u64,
+    pub carriable: u64,
+}
+
+/// The sizing admission runs, at `choice`'s layout, in `form`: what it measures (its work followed
+/// up to [`LORA_BUDGET_SIZING_REACH_V1`]), and the layout's checkpoint interval.
+fn close_sizing(
+    params: &Params,
+    program: &TirProgramV1,
+    choice: &crate::tir_layout::TirLayoutChoiceV1,
+    interval: Option<u32>,
+    form: kaspa_consensus_core::palw_tir_close_size_v1::PalwTirParamFormV1,
+    carriable: u64,
+) -> Result<(LoraSizedV1, u32), String> {
+    use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1};
+    use kaspa_consensus_core::palw_tir_close_size_v1::{
+        PALW_TIR_CLOSE_SIZING_OVER_CAP_V1, PalwTirCloseSizingV1, palw_tir_worst_closes_work_v1,
+    };
+    let mut layout = crate::tir_layout::tir_default_layout_v1(params, program, choice)?;
+    if let Some(c) = interval {
+        if c == 0 || c > layout.checkpoint_interval {
+            return Err(format!(
+                "a checkpoint interval of {c}: admission takes 1..={} (min C_j) for this program",
+                layout.checkpoint_interval
+            ));
+        }
+        layout.checkpoint_interval = c;
+    }
+    let c = layout.checkpoint_interval;
+    let class =
+        PalwTirClassV1 { version: PALW_TIR_CLASS_VERSION_V1, program: program.encode(), layout, tokenizer_id: Hash64::default() };
+    let id = class.class_id(&Hash64::default());
+    let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(&class).map_err(|e| e.to_string())?;
+    let longest = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, id, (1, class.layout.max_context))
+        .ok_or("the layout has no longest job")?;
+    let inventory = kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1::new(&space.program)
+        .ok_or("the program's inventory has no index")?;
+    let sizing = PalwTirCloseSizingV1 { form, court: true, cap: LORA_BUDGET_SIZING_REACH_V1, stop_above: None };
+    match palw_tir_worst_closes_work_v1(&space, &inventory, &longest, &sizing) {
+        Ok((bounds, work)) => {
+            let largest_close = bounds.iter().map(|b| b.close_bytes).max().unwrap_or(0);
+            let carried = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carried_close_bounds_admit_v1(&bounds, carriable)
+                .map_err(|e| e.to_string());
+            Ok((LoraSizedV1 { work, largest_close, carried }, c))
+        }
+        Err(e) if e == PALW_TIR_CLOSE_SIZING_OVER_CAP_V1 => {
+            Err(format!("past {LORA_BUDGET_SIZING_REACH_V1} steps (4× the cap) at checkpoint interval {c}"))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// **`check-architecture --lora-budget`**: which LoRA adapters of the config's model a composite
+/// candidate can carry (RFC-0004 §6.3). Rows, in order:
+/// * every module kind an adapter can target on the model, alone;
+/// * the attention set and the MLP set;
+/// * PEFT's `all-linear`.
+///
+/// Each is lowered at rank `choice.rank` with its params after the parent's
+/// (`lower::adapter_params_last`), as `palw-tir-fidelity --adapter` lowers a candidate. For each,
+/// the report gives the adapter section's size, every block's nodes against the 512 a block may
+/// hold (NF-12, the composite rule), and admission's close sizing of the composite. The sizing is
+/// run as `palw_tir_composite_admits_v1` runs it: every terminal close in the `Composite { p }`
+/// form, over the longest job of a layout at `choice`'s context and tiles, with its work against the
+/// cap and its largest close against what the chain can carry. When `all-linear` is past any of
+/// those budgets, a greedy fallback follows: the targets, in order, that keep all of them.
+pub fn check_lora_budget_v1(
+    params: &Params,
+    bundle: &PalwConsensusParamsV2,
+    config_text: &str,
+    choice: &LoraBudgetChoiceV1,
+) -> Result<LoraBudgetReportV1, String> {
+    use kaspa_consensus_core::palw_improve_composite_v1::{PalwTirCompositeErrorV1, palw_tir_composite_rule_v1};
+    use kaspa_consensus_core::palw_tir_close_size_v1::{PALW_TIR_CLOSE_SIZING_WORK_CAP_V1, PalwTirParamFormV1};
+    use misaka_palw_tir_lower::{hl, lora, lower};
+    let opts = misaka_palw_tir_lower::lower::LowerOpts { max_window: choice.max_window, ..ir_lower_opts(choice.long_history) };
+    let spec = misaka_palw_tir_lower::parse_config_str(config_text).map_err(|e| e.to_string())?;
+    // A program under the tiled logits scheme (the lowerer names none), with `P`.
+    // Also the roles given adapter params (`{role}.lora_a` in the HL program): the projections an
+    // adapter reaches in some layer.
+    let lowered = |spec: &ArchSpec| -> Result<(TirProgramV1, usize, std::collections::BTreeSet<String>), String> {
+        let hl = hl::build_program(spec).map_err(|e| e.to_string())?;
+        let adapted = hl.params.iter().filter_map(|d| d.name.strip_suffix(".lora_a").map(str::to_string)).collect();
+        let mut lw = lower::lower(&hl, &opts).map_err(|e| e.to_string())?;
+        let p = match spec.adapter {
+            Some(_) => lower::adapter_params_last(&mut lw).map_err(|e| e.to_string())?,
+            None => lw.program.params.len(),
+        };
+        Ok((crate::tir_layout::tir_program_with_scheme_v1(&lw.program, None)?, p, adapted))
+    };
+    let (parent, _, _) = lowered(&spec)?;
+    let (ceilings, _, _) = tir_ceilings_v1(params);
+    let widest = parent.history_bound.min(ceilings.max_context).min(choice.max_window.unwrap_or(u32::MAX));
+    let context = choice.context.unwrap_or(LORA_BUDGET_DEFAULT_CONTEXT_V1.min(widest));
+    let cap = PALW_TIR_CLOSE_SIZING_WORK_CAP_V1;
+    let carriable = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&bundle.court);
+    let layout_at = |logits_tile: u32| crate::tir_layout::TirLayoutChoiceV1 {
+        max_context: Some(context),
+        tile_len: choice.tile_len,
+        h_chunk: choice.h_chunk,
+        logits_scheme: None,
+        logits_tile: Some(logits_tile),
+    };
+    // The logits tile: the one given, else the widest whose closes the parent's sizing finds
+    // carriable (a candidate's head is its parent's). declare-layout's estimate is not used here: it
+    // can rule out a tile the sizing carries (SmolLM2-1.7B's 512).
+    let tiles: Vec<u32> = match choice.logits_tile {
+        Some(t) => vec![t],
+        None => (2..=12).rev().map(|k| 1u32 << k).collect(),
+    };
+    // A sizing that fails (past its reach, most often) ends the search: a narrower tile only adds
+    // closes. With none carriable, the widest tile's result is the one reported.
+    let mut widest_tried: Option<(u32, Result<(LoraSizedV1, u32), String>)> = None;
+    let mut carriable_at: Option<(u32, Result<(LoraSizedV1, u32), String>)> = None;
+    for t in tiles {
+        let sized =
+            close_sizing(params, &parent, &layout_at(t), choice.checkpoint_interval, PalwTirParamFormV1::Multiproof, carriable);
+        let (carried, failed) = (matches!(&sized, Ok((s, _)) if s.carried.is_ok()), sized.is_err());
+        if carried {
+            carriable_at = Some((t, sized));
+            break;
+        }
+        widest_tried.get_or_insert((t, sized));
+        if failed {
+            break;
+        }
+    }
+    let (logits_tile, parent_sized) = carriable_at.or(widest_tried).ok_or("no logits tile to size at")?;
+    let layout_choice = layout_at(logits_tile);
+    let checkpoint_interval = parent_sized.as_ref().map(|(_, c)| *c).unwrap_or(0);
+    // A composite's closes are its parent's and more: past the cap with the parent, past it with any
+    // adapter.
+    let parent_past = match &parent_sized {
+        Ok((s, _)) if s.work <= cap => None,
+        Ok(_) => Some("not sized: the parent alone is past the work cap".to_string()),
+        Err(e) => Some(format!("not sized: the parent's sizing fails ({e})")),
+    };
+    let mut occurrences = vec![0usize; parent.blocks.len()];
+    for b in
+        std::iter::once(parent.schedule.pre).chain(parent.schedule.layers.iter().copied()).chain(std::iter::once(parent.schedule.post))
+    {
+        if let Some(n) = occurrences.get_mut(b as usize) {
+            *n += 1;
+        }
+    }
+    let blocks = parent.blocks.iter().zip(&occurrences).map(|(b, n)| (b.name.clone(), *n, b.nodes.len())).collect();
+    let rank = choice.rank;
+    let listed = lora::targets(&spec);
+    // One row: the candidate with `targets` (a list of leaves, or PEFT's "all-linear").
+    let row = |name: &str, targets: &[String], all_linear: bool| -> LoraBudgetRowV1 {
+        let named = if all_linear { vec!["all-linear".to_string()] } else { targets.to_vec() };
+        let modules = if all_linear { serde_json::json!("all-linear") } else { serde_json::json!(targets) };
+        let config =
+            serde_json::json!({ "peft_type": "LORA", "r": rank, "lora_alpha": 2 * rank, "target_modules": modules }).to_string();
+        let mut s = spec.clone();
+        let (cand, p, adapted) = match lora::attach(&mut s, &config).map_err(|e| e.to_string()).and_then(|_| lowered(&s)) {
+            Ok(x) => x,
+            Err(e) => return LoraBudgetRowV1::refused(name, named, e),
+        };
+        let instances = kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_param_instances_v1(&cand);
+        let mut r = LoraBudgetRowV1 {
+            name: name.to_string(),
+            // What "all-linear" resolved to: the projections given adapter params, which are the ones
+            // the lowering adapts in some layer (never a router or an expert).
+            targets: match all_linear {
+                true => listed.iter().filter(|t| adapted.contains(&t.role)).map(|t| t.leaf.clone()).collect(),
+                false => named,
+            },
+            refused: None,
+            adapter_params: cand.params.len() - p,
+            adapter_bytes: (p..cand.params.len())
+                .map(|j| misaka_palw_tir_artifact::tensor_bytes_v1(&cand, j as u16) * instances[j].len() as u64)
+                .sum(),
+            block_nodes: cand.blocks.iter().map(|b| b.nodes.len()).collect(),
+            fits: false,
+            sized: Err("not sized".into()),
+        };
+        match palw_tir_composite_rule_v1(&parent, &cand, p as u32) {
+            Ok(()) => {
+                r.fits = true;
+                r.sized = match &parent_past {
+                    Some(why) => Err(why.clone()),
+                    None => close_sizing(
+                        params,
+                        &cand,
+                        &layout_choice,
+                        choice.checkpoint_interval,
+                        PalwTirParamFormV1::Composite { p: p as u32 },
+                        carriable,
+                    )
+                    .map(|(x, _)| x),
+                };
+            }
+            Err(PalwTirCompositeErrorV1::NodeBudget { block, nodes }) => {
+                r.sized = Err(format!("not sized: block {block} holds {nodes} nodes, past 512"));
+            }
+            Err(e) => r.refused = Some(e.to_string()),
+        }
+        r
+    };
+    let mut rows = Vec::new();
+    for t in &listed {
+        rows.push(match t.fused {
+            false => row(&t.leaf, std::slice::from_ref(&t.leaf), false),
+            true => LoraBudgetRowV1::refused(
+                &t.leaf,
+                vec![t.leaf.clone()],
+                format!("`{}` is a fused projection ({}), which the lowering does not adapt yet", t.leaf, t.role),
+            ),
+        });
+    }
+    let unfused: Vec<&lora::LoraTarget> = listed.iter().filter(|t| !t.fused).collect();
+    let set =
+        |pred: &dyn Fn(&str) -> bool| -> Vec<String> { unfused.iter().filter(|t| pred(&t.role)).map(|t| t.leaf.clone()).collect() };
+    for (name, leaves) in
+        [("attention", set(&|r| r.starts_with("attn."))), ("mlp", set(&|r| r.starts_with("mlp.") || r.starts_with("moe.shared.")))]
+    {
+        if leaves.len() > 1 {
+            rows.push(row(name, &leaves, false));
+        }
+    }
+    let all = row("all-linear", &[], true);
+    let widest_ok = all.admissible(cap);
+    rows.push(all);
+    if !widest_ok && !unfused.is_empty() && parent_past.is_none() {
+        let mut kept: Vec<String> = Vec::new();
+        let mut best: Option<LoraBudgetRowV1> = None;
+        for t in &unfused {
+            // A target past a budget on its own is past it with company.
+            if rows.iter().any(|r| r.targets == [t.leaf.clone()] && !r.admissible(cap)) {
+                continue;
+            }
+            let mut trial = kept.clone();
+            trial.push(t.leaf.clone());
+            let r = row("fallback", &trial, false);
+            if r.admissible(cap) {
+                kept = trial;
+                best = Some(r);
+            }
+        }
+        rows.push(best.unwrap_or_else(|| LoraBudgetRowV1::refused("fallback", Vec::new(), "no target keeps every budget".into())));
+    }
+    Ok(LoraBudgetReportV1 {
+        architecture: spec.architecture.clone(),
+        rank,
+        blocks,
+        parent: parent_sized.map(|(x, _)| x),
+        rows,
+        context,
+        logits_tile,
+        checkpoint_interval,
+        tile_len: choice.tile_len,
+        h_chunk: choice.h_chunk,
+        work_cap: cap,
+        carriable,
+    })
+}
+
+impl LoraBudgetReportV1 {
+    fn sized_text(&self, s: &Result<LoraSizedV1, String>) -> String {
+        match s {
+            Ok(s) => format!(
+                "{} ({:.1}%){}  {} B{}",
+                s.work,
+                100.0 * s.work as f64 / self.work_cap as f64,
+                if s.work > self.work_cap { " PAST THE CAP" } else { "" },
+                s.largest_close,
+                match &s.carried {
+                    Ok(()) => String::new(),
+                    Err(e) => format!(" NOT CARRIABLE: {e}"),
+                }
+            ),
+            Err(e) => e.clone(),
+        }
+    }
+
+    /// The report as text lines.
+    pub fn render(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        let _ = writeln!(out, "LoRA budget — {}, rank {} (lora_alpha {})", self.architecture, self.rank, 2 * self.rank);
+        let _ = writeln!(
+            out,
+            "  a block holds at most {} nodes (NF-12); admission sizes a composite's closes within {} steps, each carriable in {} B",
+            misaka_palw_tir::program::MAX_NODES_PER_BLOCK,
+            self.work_cap,
+            self.carriable
+        );
+        let _ = writeln!(
+            out,
+            "  sized at context {}, logits tile {}, checkpoint interval {}, tile {}, history chunk {}",
+            self.context, self.logits_tile, self.checkpoint_interval, self.tile_len, self.h_chunk
+        );
+        for (i, (name, n, nodes)) in self.blocks.iter().enumerate() {
+            let _ = writeln!(out, "  block b{i} `{name}` ×{n}: {nodes} nodes in the parent");
+        }
+        let cols: String = (0..self.blocks.len()).map(|i| format!("{:>6}", format!("b{i}"))).collect();
+        let _ = writeln!(
+            out,
+            "  {:<16} {:>7} {:>11} {cols}  fits  admission work (of the cap)  largest close",
+            "targets", "params", "bytes"
+        );
+        let parent_cols: String = self.blocks.iter().map(|(_, _, n)| format!("{n:>6}")).collect();
+        let _ = writeln!(
+            out,
+            "  {:<16} {:>7} {:>11} {parent_cols}  {:<4}  {}",
+            "(the parent)",
+            "-",
+            "-",
+            "",
+            self.sized_text(&self.parent)
+        );
+        for r in &self.rows {
+            if let Some(why) = &r.refused {
+                let _ = writeln!(out, "  {:<16} REFUSED: {why}", r.name);
+                continue;
+            }
+            let cols: String = r.block_nodes.iter().map(|n| format!("{n:>6}")).collect();
+            let _ = writeln!(
+                out,
+                "  {:<16} {:>7} {:>11} {cols}  {:<4}  {}",
+                r.name,
+                r.adapter_params,
+                r.adapter_bytes,
+                if r.fits { "yes" } else { "NO" },
+                self.sized_text(&r.sized)
+            );
+        }
+        for r in self.rows.iter().filter(|r| r.targets.len() > 1 || r.targets.first() != Some(&r.name)) {
+            let _ = writeln!(out, "  {} = {}", r.name, if r.targets.is_empty() { "(none)".to_string() } else { r.targets.join(", ") });
+        }
+        out
+    }
+
+    /// The report as JSON.
+    pub fn to_json(&self) -> serde_json::Value {
+        let sized = |s: &Result<LoraSizedV1, String>| match s {
+            Ok(s) => serde_json::json!({ "work": s.work, "of_cap": s.work as f64 / self.work_cap as f64,
+                                         "largest_close": s.largest_close, "carried": s.carried.as_ref().err() }),
+            Err(e) => serde_json::json!({ "not_sized": e }),
+        };
+        serde_json::json!({
+            "architecture": self.architecture,
+            "rank": self.rank,
+            "context": self.context,
+            "logits_tile": self.logits_tile,
+            "checkpoint_interval": self.checkpoint_interval,
+            "tile_len": self.tile_len,
+            "h_chunk": self.h_chunk,
+            "work_cap": self.work_cap,
+            "carriable": self.carriable,
+            "max_nodes_per_block": misaka_palw_tir::program::MAX_NODES_PER_BLOCK,
+            "blocks": self.blocks.iter().map(|(name, n, nodes)| serde_json::json!({ "name": name, "occurrences": n, "parent_nodes": nodes })).collect::<Vec<_>>(),
+            "parent": sized(&self.parent),
+            "rows": self.rows.iter().map(|r| serde_json::json!({
+                "name": r.name,
+                "targets": r.targets,
+                "refused": r.refused,
+                "adapter_params": r.adapter_params,
+                "adapter_bytes": r.adapter_bytes,
+                "block_nodes": r.block_nodes,
+                "fits": r.fits,
+                "sized": sized(&r.sized),
+                "admissible": r.admissible(self.work_cap),
+            })).collect::<Vec<_>>(),
+        })
     }
 }
 
