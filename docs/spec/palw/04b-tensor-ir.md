@@ -1538,17 +1538,51 @@ scheme the logits node's tile length MUST divide the scheme's 4,096 lanes (a ste
 inside one trace tile, at an offset, and the logits consistency check compares it with that part), so
 a large vocabulary's head can be tiled finer. At `d_model = 1,536` (Qwen2.5-1.5B A16 at 8,192
 positions, `h_tile` 64, a 20-level inventory) the D-F1 class declares 1,024 logits lanes and is
-admitted: its largest carried closes are the attention scores tile's at the first positions —
-2,519,468 bytes, where one 128-lane tile covers all twelve heads and reads all of `W_q` — the logits
-tile's (1,626,216: a run of 1,024 head rows shares its two boundary paths) and the layer output's
-(1,273,759); its dissected context's bottom is 441,871 bytes and its root claim 84,688. At 2,048 lanes
-the logits tile carries 3,233,896 bytes and the class is refused. Sizing D-F1 takes 53.2 M of the
-`2^26` steps; the Qwen2.5-3B A16 class at the same layout is refused inside the cap for its closes (its
-first positions' attention tile reads all 16 heads' `W_q`: 4,371,616 bytes). Every close the court's
-own builders make on the corpus (a whole tile's cone close, a dissected leaf's root claim and its
-bottom played to the first and to the last tile) is within its bound —
-`consensus/core/tests/palw_tir_close_size.rs`; D-F1 in
+admitted: its largest carried closes are the logits tile's (1,626,472 bytes: a run of 1,024 head rows
+shares its two boundary paths), the layer output's (1,259,741) and the attention scores tile's at the
+first positions (1,040,652); its dissected context's bottom is 450,447 bytes and its root claim 84,944
+(measured 2026-09-29 on the DAA-2,000 release). At 2,048 lanes the logits tile carries 3,234,152 bytes
+and the class is refused. Sizing D-F1 takes 53.8 M of the `2^26` steps; the Qwen2.5-3B A16 class at
+the same layout takes 72.0 M and is refused for its sizing, though every one of its closes fits (its
+largest, the logits tile's, 2,153,168 bytes). Every close the court's own builders make on the corpus
+(a whole tile's cone close, a dissected leaf's root claim and its bottom played to the first and to
+the last tile) is within its bound — `consensus/core/tests/palw_tir_close_size.rs`; D-F1 in
 `misaka-palw-base0/tests/tir_a16_admission_dissected.rs`.
+
+**Past `palw_tir_fence2`: the range twin** (`palw_tir_close_range_v1`). The element twin walks every
+demanded element of every node, one at a time — a tile whose cone replays a `Fixed` state over `C − 1`
+positions visits the whole state at each — and most real-size classes pass the cap before their
+closes are sized. Past the fence the twin runs over RANGES: a node's demand in a context is a set of
+sorted disjoint ranges of its row-major elements, and a range is mapped through its primitive at once
+— cut into at most `2·rank − 1` boxes of the node's shape, each box mapped to the box of the operand
+it reads, that box cut back into ranges of the operand's row-major order. Every index map above is a
+product of per-axis maps (identity, a shift, a permutation, a collapse to 0 on a broadcast axis, a
+whole axis or a span of it, a row split), so the image of a box is a box and the demand is exactly the
+element twin's; a run of consecutive tiles is a run of consecutive leaves (placed at one index
+lookup), a range of param elements a range of inventory leaves (pieces and rows are whole elements).
+So the units — step leaves with their lanes and history marks, hypothetical leaves, inventory leaves,
+location-free rows, the token, a dissection's supplied elements, the row pattern — are the element
+twin's, request by request, and every bound is the element twin's byte for byte; only the work
+differs. Its steps count what it does: a context made (one step; a block's node shapes resolved once
+per `H`, a step a node), a range demanded, visited or cut into boxes and each range a box is cut back
+into, a step leaf's index lookup (once per run of tiles) and each leaf placed, each inventory leaf and
+row piece recorded, each position a replay walks, a request seeded (a step a range), an entry united
+outside the twin. The cap is unchanged. D-F1 sizes in 7.4 M steps and the 3B in 10.1 M, both admitted
+past the fence. At 512 positions (64-lane commit tiles; measured 2026-09-29, element twin's steps in
+parentheses): Llama-3.2-1B 6.2 M (62.8 M), SmolLM2-1.7B 6.4 M (65.1 M), Qwen2.5-1.5B 7.7 M (59.1 M),
+Gemma-3-1B 10.2 M at `h_tile` 32 (past the cap), Qwen3-8B 11.9 M at `h_tile` 32 (195.2 M),
+Qwen3.5-0.8B 20.2 M (4,186 M) and Qwen3.5-2B 20.8 M (4,412 M) at `C` 256 and `h_tile` 32 — the same
+at 2,048 positions, where the replay is bounded by `C` and a history cone's analysis by `h_tile`.
+`consensus/core/tests/palw_tir_close_range.rs` holds the two twins equal request by request in every
+mode and bound by bound on the corpus; `misaka-palw-sdk/tests/tir_close_range_real.rs` does so on
+real-size classes (every one above, uncapped: equal bounds, commit point by commit point).
+
+*A root claim's history.* A dissected cone's root claim probes its reductions at the history's first
+row, and once that row's history tile is complete the court reads the row through it: `h_tile` rows
+of every sub-row the probe touches. At `h_tile` 64 that is most of a real class's root claim —
+Gemma-3-1B's 114,604 bytes, Qwen3-8B's 109,804, Qwen3.5's 105,797 against the 100,000-byte carrier —
+and at `h_tile` 32 they are 74,036, 85,228 and 64,837 (at 16: 53,556, 72,940, 44,357). The layout
+decides it; the carrier does not move.
 
 **Checkpoint intervals.** They are derived for every **written** `Fixed` state — one some block
 writes; a `Fixed` state no block writes needs no replay, has no `C_j` and does not enter `C`. The
