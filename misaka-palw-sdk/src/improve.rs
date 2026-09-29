@@ -1,26 +1,29 @@
 //! **RFC-0004's node side (work item A10): what a node does for a governed line's epochs.**
 //!
-//! The chain decides everything an epoch does (`docs/rfc/0004-palw-model-improvement.md` §4): its
-//! transitions happen at DAA boundaries, its items are drawn by R, its scores are the committed outputs
-//! of evaluation claims, and the fold promotes. A node's part is to *serve* that machine:
+//! The chain decides everything an epoch does (spec 17 §17.5): its transitions happen at DAA
+//! boundaries, its items are drawn by R, its scores are the committed outputs of evaluation claims, and
+//! the fold promotes. A node's part is to *serve* that machine:
 //!
-//! * **watch** every governed line's epoch — [`palw_improve_duties_v1`] reads the chain through
+//! * **watch** every governed line's open epoch — [`palw_improve_duties_v1`] reads the chain through
 //!   [`PalwImproveChainV1`] and says what this node should do now;
 //! * **prefetch** each candidate it can hold — a composite candidate over a parent it holds costs
 //!   only the adapter section (§6.7); full weights only where the policy admits them and the node
 //!   opted in ([`palw_improve_prefetch_plan_v1`]);
-//! * **evaluate** — every `(item, subject)` job of an `Evaluating` epoch whose subject class it
-//!   holds and that no claim has taken, derived exactly as the chain derives it
-//!   ([`palw_improve_eval_job_v1`]: the item's seed is the epoch's, the job id the chain's formula),
-//!   and run by the evaluation executor ([`crate::improve_eval`]).
+//! * **evaluate** — every `(item, subject)` task of an `Evaluating` epoch whose subject class it holds
+//!   and that no claim has taken ([`palw_improve_eval_task_v1`]: the item's seed is the epoch's, the
+//!   subjects the chain's — the parent, the candidates in acceptance order, the regression check's
+//!   predecessor), run by the evaluation executor ([`crate::improve_eval`]).
 //!
-//! **Against interfaces, not the row layout.** The core lane's rows may move (items and results into
-//! keyed tables); everything here reads the chain through [`PalwImproveChainV1`] and its view types,
-//! and [`PalwImproveRowsV1`] is the one place that reads step 0's rows.
+//! **Against interfaces, not the row layout.** Everything here reads the chain through
+//! [`PalwImproveChainV1`]; [`PalwImproveStateChainV1`] implements it over the chain state's readers
+//! (`improvement_line`, `improvement_policy`, `improvement_epoch`, `improvement_candidates`,
+//! `improvement_items`, `improvement_subjects`), and [`PalwImproveMemChainV1`] in memory for tools and
+//! tests.
 //!
-//! **Provisional until A6** (the evaluation job family): which scoring stage a case's pipeline ends
-//! in ([`palw_improve_scoring_kind_of_v1`]) and the pipeline root the job names. They are read off
-//! the policy's `eval.stages` here, and A6's pipeline registry replaces the lookup.
+//! **The job's type and id are the evaluation lane's (A6)**: a task carries what the job is derived
+//! from (line, epoch, item, subject and its class, the scoring kind, the mode) and the id the chain
+//! keys it by ([`palw_improve_task_job_id_v1`], the one place that computes it); the kind a case is
+//! scored by ([`palw_improve_scoring_kind_of_v1`]) and the mode are provisional until A6's derivation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,11 +31,10 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_improve_artifact_v1::PalwTirArtifactRefV1;
 use kaspa_consensus_core::palw_improve_material_v1::PalwCaseReferenceV1;
 use kaspa_consensus_core::palw_improve_state_v1::{
-    PalwEpochCandidateV1, PalwEpochStateV1, PalwEpochTimesV1, PalwEvalItemV1, PalwEvalJobV1, PalwEvalModeV1, PalwEvalSubjectV1,
-    PalwImprovementEpochV1, PalwImprovementLineV1, PalwImprovementPolicyV1, PalwScoringKindV1, palw_improve_eval_job_id_v1,
-    palw_improve_eval_seed_v1,
+    PalwEpochCandidateV1, PalwEpochStateV1, PalwEpochTimesV1, PalwEvalItemV1, PalwEvalModeV1, PalwEvalSubjectV1,
+    PalwImprovementPolicyV1, PalwScoringKindV1, palw_improve_eval_job_id_v1, palw_improve_eval_seed_v1,
 };
-use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+use kaspa_consensus_core::palw_state_v2::PalwChainStateV2;
 
 // ---------------------------------------------------------------------------------------------
 // The chain, as a node reads it
@@ -42,16 +44,17 @@ use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwImproveLineViewV1 {
     pub line_id: Hash64,
-    pub owner: PalwBondKeyV2,
-    /// The line's head: its current version's IR class id (every candidate's parent in an open epoch).
+    /// The line's head: an IR class id (spec 17 §17.4.1).
     pub head: Hash64,
+    /// The policy in force.
     pub policy: PalwImprovementPolicyV1,
     /// The epoch the line runs now, if any (one at a time, PALW-MIP-5).
     pub open_epoch: Option<u64>,
 }
 
-/// **An epoch, as the watcher reads it** — its state and clock, its parent and candidates, its seed.
-/// Its items are read by key ([`PalwImproveChainV1::items`]).
+/// **An epoch, as the watcher reads it** — its header (state, clock, parent, the regression check's
+/// predecessor, seed) and its candidates in acceptance order. Its items are read by key
+/// ([`PalwImproveChainV1::items`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwImproveEpochViewV1 {
     pub line_id: Hash64,
@@ -60,9 +63,11 @@ pub struct PalwImproveEpochViewV1 {
     pub times: PalwEpochTimesV1,
     /// The head when the epoch opened: every candidate's parent, and the `Parent` subject's class.
     pub parent: Hash64,
-    /// In acceptance order (the order ties go by, §7.5).
+    /// The head's predecessor when the epoch runs the regression check: the `Previous` subject.
+    pub previous: Option<Hash64>,
+    /// In acceptance order (the order ties go by, §17.9).
     pub candidates: Vec<PalwEpochCandidateV1>,
-    /// The epoch seed, from `Drawn` on.
+    /// The epoch seed, from `Drawing` on.
     pub seed: Option<Hash64>,
 }
 
@@ -77,69 +82,101 @@ pub struct PalwEvalCaseViewV1 {
 }
 
 /// **What the node reads of the chain** — the only door the watcher and the executor take into the
-/// improvement tables. A kaspad adapter implements it over the tip's state; tests over
-/// [`PalwImproveRowsV1`].
+/// improvement tables.
 pub trait PalwImproveChainV1 {
     /// Every governed line, by id.
     fn governed_lines(&self) -> Vec<Hash64>;
     fn line(&self, line_id: &Hash64) -> Option<PalwImproveLineViewV1>;
     fn epoch(&self, line_id: &Hash64, epoch: u64) -> Option<PalwImproveEpochViewV1>;
-    /// The epoch's drawn items, in item order (empty before `Drawn`).
+    /// The epoch's drawn items, in item order (empty before `Drawing` ends).
     fn items(&self, line_id: &Hash64, epoch: u64) -> Vec<PalwEvalItemV1>;
     /// The case item `item` of the epoch evaluates, when the chain holds it (a setter's prompt only
-    /// once revealed).
+    /// once revealed) — the candidates lane's reader.
     fn case(&self, line_id: &Hash64, epoch: u64, item: &PalwEvalItemV1) -> Option<PalwEvalCaseViewV1>;
-    /// Whether evaluation job `job_id` is taken: the first valid claim per job is the one (§7.2).
+    /// Whether evaluation job `job_id` is taken: the first valid claim per job is the one (§17.8) —
+    /// the evaluation lane's reader.
     fn job_claimed(&self, job_id: &Hash64) -> bool;
 }
 
-/// **Step 0's rows as a chain view** — the one place that reads the rows' layout
-/// (`palw_improve_state_v1`): the line and epoch rows, the cases by id, the claimed jobs.
-#[derive(Clone, Debug, Default)]
-pub struct PalwImproveRowsV1 {
-    pub lines: BTreeMap<Hash64, PalwImprovementLineV1>,
-    pub epochs: BTreeMap<(Hash64, u64), PalwImprovementEpochV1>,
-    pub cases: BTreeMap<Hash64, PalwEvalCaseViewV1>,
-    pub claimed: BTreeSet<Hash64>,
+/// **The chain state's readers as a chain view** (the core lane's keyed layout, spec 17 §17.3): the
+/// line header and its policy record, the epoch header, the candidates and items tables. The cases
+/// and the claimed jobs are the candidates' and the evaluation lanes' readers, supplied until they
+/// land beside these.
+pub struct PalwImproveStateChainV1<'a> {
+    pub state: &'a PalwChainStateV2,
+    /// The DAA the lines are asked at (governance ends at an opt-out's effective height).
+    pub daa: u64,
+    pub case: &'a dyn Fn(&Hash64, u64, &PalwEvalItemV1) -> Option<PalwEvalCaseViewV1>,
+    pub claimed: &'a dyn Fn(&Hash64) -> bool,
+    /// The lines to read (the state keeps no public index of them; the read door lists the open ones).
+    pub lines: Vec<Hash64>,
 }
 
-impl PalwImproveChainV1 for PalwImproveRowsV1 {
+impl PalwImproveChainV1 for PalwImproveStateChainV1<'_> {
     fn governed_lines(&self) -> Vec<Hash64> {
-        self.lines.keys().copied().collect()
+        self.lines.iter().filter(|line| self.state.improvement_governed_at(line, self.daa)).copied().collect()
     }
 
     fn line(&self, line_id: &Hash64) -> Option<PalwImproveLineViewV1> {
-        let row = self.lines.get(line_id)?;
-        Some(PalwImproveLineViewV1 {
-            line_id: row.line_id,
-            owner: row.owner,
-            head: row.head,
-            policy: row.policy.clone(),
-            open_epoch: row.open_epoch,
-        })
+        let row = self.state.improvement_line(line_id)?;
+        let policy = self.state.improvement_policy(line_id)?.clone();
+        Some(PalwImproveLineViewV1 { line_id: row.line_id, head: row.head, policy, open_epoch: row.open_epoch })
     }
 
     fn epoch(&self, line_id: &Hash64, epoch: u64) -> Option<PalwImproveEpochViewV1> {
-        let row = self.epochs.get(&(*line_id, epoch))?;
+        let header = self.state.improvement_epoch(line_id, epoch)?;
         Some(PalwImproveEpochViewV1 {
-            line_id: row.line_id,
-            epoch: row.epoch,
-            state: row.state,
-            times: row.times,
-            parent: row.parent,
-            candidates: row.candidates.clone(),
-            seed: row.seed,
+            line_id: header.line_id,
+            epoch: header.epoch,
+            state: header.state,
+            times: header.times,
+            parent: header.parent,
+            previous: header.previous,
+            candidates: self.state.improvement_candidates(line_id, epoch).into_iter().map(|(_, row)| row.clone()).collect(),
+            seed: header.seed,
         })
     }
 
     fn items(&self, line_id: &Hash64, epoch: u64) -> Vec<PalwEvalItemV1> {
-        self.epochs.get(&(*line_id, epoch)).map(|row| row.items.clone()).unwrap_or_default()
+        self.state.improvement_items(line_id, epoch).into_iter().copied().collect()
     }
 
+    fn case(&self, line_id: &Hash64, epoch: u64, item: &PalwEvalItemV1) -> Option<PalwEvalCaseViewV1> {
+        (self.case)(line_id, epoch, item)
+    }
+
+    fn job_claimed(&self, job_id: &Hash64) -> bool {
+        (self.claimed)(job_id)
+    }
+}
+
+/// **A chain view in memory** — for tools and tests: lines, epochs, items and cases by id, the
+/// claimed jobs.
+#[derive(Clone, Debug, Default)]
+pub struct PalwImproveMemChainV1 {
+    pub lines: BTreeMap<Hash64, PalwImproveLineViewV1>,
+    pub epochs: BTreeMap<(Hash64, u64), PalwImproveEpochViewV1>,
+    pub items: BTreeMap<(Hash64, u64), Vec<PalwEvalItemV1>>,
+    pub cases: BTreeMap<Hash64, PalwEvalCaseViewV1>,
+    pub claimed: BTreeSet<Hash64>,
+}
+
+impl PalwImproveChainV1 for PalwImproveMemChainV1 {
+    fn governed_lines(&self) -> Vec<Hash64> {
+        self.lines.keys().copied().collect()
+    }
+    fn line(&self, line_id: &Hash64) -> Option<PalwImproveLineViewV1> {
+        self.lines.get(line_id).cloned()
+    }
+    fn epoch(&self, line_id: &Hash64, epoch: u64) -> Option<PalwImproveEpochViewV1> {
+        self.epochs.get(&(*line_id, epoch)).cloned()
+    }
+    fn items(&self, line_id: &Hash64, epoch: u64) -> Vec<PalwEvalItemV1> {
+        self.items.get(&(*line_id, epoch)).cloned().unwrap_or_default()
+    }
     fn case(&self, _line_id: &Hash64, _epoch: u64, item: &PalwEvalItemV1) -> Option<PalwEvalCaseViewV1> {
         self.cases.get(&item.case_id).cloned()
     }
-
     fn job_claimed(&self, job_id: &Hash64) -> bool {
         self.claimed.contains(job_id)
     }
@@ -203,19 +240,20 @@ pub fn palw_improve_prefetch_plan_v1(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Evaluation jobs (RFC-0004 §7.2)
+// Evaluation tasks (spec 17 §17.8)
 // ---------------------------------------------------------------------------------------------
 
-/// **The subjects of an epoch's items**, in the chain's order: the parent, then each candidate in
-/// acceptance order — with the class each runs.
+/// **The subjects of an epoch**, in the chain's order (`improvement_subjects`): the parent, every
+/// candidate in acceptance order, then the regression check's predecessor — with the class each runs.
 pub fn palw_improve_subjects_v1(epoch: &PalwImproveEpochViewV1) -> Vec<(PalwEvalSubjectV1, Hash64)> {
     std::iter::once((PalwEvalSubjectV1::Parent, epoch.parent))
         .chain(epoch.candidates.iter().map(|c| (PalwEvalSubjectV1::Candidate(c.class_id), c.class_id)))
+        .chain(epoch.previous.map(|previous| (PalwEvalSubjectV1::Previous(previous), previous)))
         .collect()
 }
 
-/// **The scoring stage a case is scored by** (provisional until A6's pipeline registry): an exact key
-/// by `ExactMatch`, a continuation by `RefLogLik`, a case with no reference by a `Judge`.
+/// **The scoring stage a case is scored by** (provisional until A6's derivation): an exact key by
+/// `ExactMatch`, a continuation by `RefLogLik`, a case with no reference by a `Judge`.
 pub fn palw_improve_scoring_kind_of_v1(reference: &PalwCaseReferenceV1) -> PalwScoringKindV1 {
     match reference {
         PalwCaseReferenceV1::ExactKey { .. } => PalwScoringKindV1::ExactMatch,
@@ -224,39 +262,74 @@ pub fn palw_improve_scoring_kind_of_v1(reference: &PalwCaseReferenceV1) -> PalwS
     }
 }
 
-/// **The evaluation job of `item` for `subject`, derived as the chain derives it** — with its id
-/// (`H(line ‖ epoch ‖ item ‖ subject)`). The item's seed must be the epoch's
-/// (`H(epoch seed ‖ item)`, the same for every subject, so pairing is exact); the mode follows the
-/// case (a continuation is teacher-forced, anything else generated under the item's seed with the
-/// policy's budget and stop ids); the pipeline is the policy's stage of the case's scoring kind.
-pub fn palw_improve_eval_job_v1(
+/// **An evaluation task**: what the job is derived from, and the id the chain keys it by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwImproveEvalTaskV1 {
+    pub line_id: Hash64,
+    pub epoch: u64,
+    pub item: u32,
+    pub subject: PalwEvalSubjectV1,
+    /// The IR class the subject stage runs.
+    pub subject_class: Hash64,
+    pub kind: PalwScoringKindV1,
+    pub mode: PalwEvalModeV1,
+    pub job_id: Hash64,
+}
+
+/// **The job id a task is claimed under** — the one place the node computes it (the core lane's
+/// formula now; A6's, which binds the kind too, when it lands).
+pub fn palw_improve_task_job_id_v1(
+    line_id: &Hash64,
+    epoch: u64,
+    item: u32,
+    subject: &PalwEvalSubjectV1,
+    _kind: PalwScoringKindV1,
+) -> Hash64 {
+    palw_improve_eval_job_id_v1(line_id, epoch, item, subject)
+}
+
+/// **The task of `item` for `subject`, derived as the chain derives it**. The item's seed must be the
+/// epoch's (`H(epoch seed ‖ item)`, the same for every subject, so pairing is exact); a dropped item
+/// derives nothing; the kind follows the case, and the policy must score it; the mode is teacher-forced
+/// over a continuation and otherwise generated under the item's seed with the policy's budget and stop
+/// ids.
+pub fn palw_improve_eval_task_v1(
     line: &PalwImproveLineViewV1,
     epoch: &PalwImproveEpochViewV1,
     item: &PalwEvalItemV1,
     subject: PalwEvalSubjectV1,
+    subject_class: Hash64,
     case: &PalwEvalCaseViewV1,
-) -> Result<(PalwEvalJobV1, Hash64), &'static str> {
-    let epoch_seed = epoch.seed.ok_or("the epoch has no seed yet: its items are drawn at Drawn")?;
+) -> Result<PalwImproveEvalTaskV1, &'static str> {
+    let epoch_seed = epoch.seed.ok_or("the epoch has no seed yet: its items are drawn at Drawing")?;
+    if item.dropped {
+        return Err("the item is dropped for every subject");
+    }
     if item.seed != palw_improve_eval_seed_v1(&epoch_seed, item.item) {
         return Err("the item's seed is not the epoch's");
     }
     let eval = &line.policy.eval;
+    let kind = palw_improve_scoring_kind_of_v1(&case.reference);
+    if !eval.stages.iter().any(|stage| stage.kind == kind) {
+        return Err("the policy's eval spec has no stage of the case's scoring kind");
+    }
     let mode = match case.reference {
         PalwCaseReferenceV1::Continuation { commitment } => PalwEvalModeV1::TeacherForced { reference_commitment: commitment },
         PalwCaseReferenceV1::ExactKey { .. } | PalwCaseReferenceV1::None => {
             PalwEvalModeV1::Generate { seed: item.seed, max_new: eval.max_new_tokens, stop_ids: eval.stop_ids.clone() }
         }
     };
-    let kind = palw_improve_scoring_kind_of_v1(&case.reference);
-    let pipeline_root = eval
-        .stages
-        .iter()
-        .find(|stage| stage.kind == kind)
-        .map(|stage| stage.program_root)
-        .ok_or("the policy's eval spec has no stage of the case's scoring kind")?;
-    let job = PalwEvalJobV1 { line_id: line.line_id, epoch: epoch.epoch, item: item.item, subject, mode, pipeline_root };
-    let job_id = palw_improve_eval_job_id_v1(&line.line_id, epoch.epoch, item.item, &subject);
-    Ok((job, job_id))
+    let job_id = palw_improve_task_job_id_v1(&line.line_id, epoch.epoch, item.item, &subject, kind);
+    Ok(PalwImproveEvalTaskV1 {
+        line_id: line.line_id,
+        epoch: epoch.epoch,
+        item: item.item,
+        subject,
+        subject_class,
+        kind,
+        mode,
+        job_id,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -268,24 +341,28 @@ pub fn palw_improve_eval_job_v1(
 pub enum PalwImproveDutyV1 {
     /// Fetch a candidate's artifact (or its adapter section) before the epoch evaluates it.
     Prefetch { line_id: Hash64, epoch: u64, class_id: Hash64, plan: PalwImprovePrefetchV1 },
-    /// Run an evaluation job and claim it before `until_daa` (the epoch's `t_eval`).
-    Evaluate { job: PalwEvalJobV1, job_id: Hash64, until_daa: u64 },
+    /// Run an evaluation task and claim it before `until_daa` (the epoch's `t_eval`).
+    Evaluate { task: PalwImproveEvalTaskV1, until_daa: u64 },
 }
 
 /// Do an epoch's candidates want prefetching in `state`? From the moment they are known (they are
 /// submitted in `Submission`) until evaluation ends.
 fn prefetches_in(state: PalwEpochStateV1) -> bool {
-    matches!(state, PalwEpochStateV1::Submission | PalwEpochStateV1::HoldOut | PalwEpochStateV1::Drawn | PalwEpochStateV1::Evaluating)
+    matches!(
+        state,
+        PalwEpochStateV1::Submission | PalwEpochStateV1::HoldOut | PalwEpochStateV1::Drawing | PalwEpochStateV1::Evaluating
+    )
 }
 
 /// **What this node should do now for every governed line** — pure, over the chain view:
 ///
 /// * every candidate of an epoch between `Submission` and `Evaluating` that this node does not hold
 ///   and can fetch ([`palw_improve_prefetch_plan_v1`]);
-/// * for an evaluating node, every job of an `Evaluating` epoch before its `t_eval` — each item for
+/// * for an evaluating node, every task of an `Evaluating` epoch before its `t_eval` — each item for
 ///   each subject whose class this node holds — that no claim has taken, derived as the chain derives
 ///   it, in item order then subject order, at most `max_jobs`. An item whose case the chain does not
-///   hold yet (a setter's prompt before its reveal) or that derives no job is skipped.
+///   hold yet (a setter's prompt before its reveal), a dropped item, or one that derives no task is
+///   skipped.
 pub fn palw_improve_duties_v1(
     chain: &dyn PalwImproveChainV1,
     node: &PalwImproveNodeV1,
@@ -314,15 +391,15 @@ pub fn palw_improve_duties_v1(
             palw_improve_subjects_v1(&epoch).into_iter().filter(|(_, class)| node.holds.contains(class)).collect();
         for item in chain.items(&line_id, epoch.epoch) {
             let Some(case) = chain.case(&line_id, epoch.epoch, &item) else { continue };
-            for (subject, _) in &subjects {
+            for (subject, class) in &subjects {
                 if jobs >= max_jobs {
                     return duties;
                 }
-                let Ok((job, job_id)) = palw_improve_eval_job_v1(&line, &epoch, &item, *subject, &case) else { continue };
-                if chain.job_claimed(&job_id) {
+                let Ok(task) = palw_improve_eval_task_v1(&line, &epoch, &item, *subject, *class, &case) else { continue };
+                if chain.job_claimed(&task.job_id) {
                     continue;
                 }
-                duties.push(PalwImproveDutyV1::Evaluate { job, job_id, until_daa: epoch.times.t_eval });
+                duties.push(PalwImproveDutyV1::Evaluate { task, until_daa: epoch.times.t_eval });
                 jobs += 1;
             }
         }
@@ -343,14 +420,21 @@ pub fn palw_improve_epoch_moved_v1(
     }
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+/// **Fixtures for the watcher's tests** (here and in kaspad): a governed line's epoch in a given state,
+/// with a composite and a full-weight candidate, the regression check's predecessor and three items.
+#[doc(hidden)]
+pub mod testing {
+    pub use super::tests_fixtures::*;
+}
+
+#[doc(hidden)]
+mod tests_fixtures {
     use super::*;
     use kaspa_consensus_core::palw_improve_state_v1::{
-        PALW_IMPROVEMENT_POLICY_VERSION_V1, PalwEpochWindowsV1, PalwEvalSpecV1, PalwImprovementFeesV1, PalwImprovementPoolV1,
-        PalwItemSourceV1, PalwProvenancePolicyV1, PalwScoringStageV1, PalwUsageMeasureV1, PalwUsageThresholdV1,
-        palw_improvement_policy_digest_v1,
+        PALW_IMPROVEMENT_POLICY_VERSION_V1, PalwEpochWindowsV1, PalwEvalSpecV1, PalwImprovementFeesV1, PalwItemSourceV1,
+        PalwProvenancePolicyV1, PalwScoringParamsV1, PalwScoringStageV1, PalwUsageMeasureV1, PalwUsageThresholdV1,
     };
+    use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
     pub fn h(v: u64) -> Hash64 {
@@ -376,9 +460,15 @@ pub(crate) mod tests {
             },
             eval: PalwEvalSpecV1 {
                 stages: vec![
-                    PalwScoringStageV1 { kind: PalwScoringKindV1::ExactMatch, program_root: h(0xE1) },
-                    PalwScoringStageV1 { kind: PalwScoringKindV1::RefLogLik, program_root: h(0xE2) },
-                    PalwScoringStageV1 { kind: PalwScoringKindV1::Judge, program_root: h(0xE3) },
+                    PalwScoringStageV1 {
+                        kind: PalwScoringKindV1::ExactMatch,
+                        params: PalwScoringParamsV1::ExactMatch { open: -1, close: -1, key_cap: 8 },
+                    },
+                    PalwScoringStageV1 {
+                        kind: PalwScoringKindV1::RefLogLik,
+                        params: PalwScoringParamsV1::RefLogLik { logit_scale_q24: 1 << 20 },
+                    },
+                    PalwScoringStageV1 { kind: PalwScoringKindV1::Judge, params: PalwScoringParamsV1::Judge { lo: -100, hi: 100 } },
                 ],
                 regression_suite_root: h(0),
                 regression_items: 0,
@@ -395,6 +485,7 @@ pub(crate) mod tests {
                 max_new_tokens: 32,
                 stop_ids: vec![2],
                 setter_cap_permille: 300,
+                max_eval_positions: 1 << 20,
             },
             k_max: 4,
             fees: PalwImprovementFeesV1 {
@@ -405,9 +496,12 @@ pub(crate) mod tests {
                 artifact_bond: 1,
                 setter_bond: 1,
                 dataset_bond: 1,
+                s1_bounty: 1,
+                s1_setter_reward: 1,
             },
             phi_permille: 100,
             bounty_share_permille: 100,
+            promotion_share_permille: 100,
             s2_trainer_permille: 500,
             s2_dataset_cap_permille: 200,
             s2_contributor_cap_permille: 100,
@@ -424,69 +518,56 @@ pub(crate) mod tests {
     }
 
     pub const HEAD: u64 = 0x4EAD;
+    pub const PREVIOUS: u64 = 0x9E7;
     pub const LINE: u64 = 0x11E;
 
-    /// A governed line whose epoch 3 is in `state`, with a composite candidate over the head and a
-    /// full-weight one, and three drawn items: an exact key, a continuation, a judged case.
-    pub fn rows(state: PalwEpochStateV1, full_weights: bool) -> PalwImproveRowsV1 {
-        let policy = policy(full_weights);
-        let seed = h(0x5EED);
-        let composite = PalwTirArtifactRefV1::Composite { parent_class: h(HEAD), parent_root: h(0x400), adapter_root: h(0xAD), p: 40 };
-        let candidate = |class: u64, artifact: PalwTirArtifactRefV1, n: u64| PalwEpochCandidateV1 {
+    pub fn candidate(class: u64, artifact: PalwTirArtifactRefV1, n: u64) -> PalwEpochCandidateV1 {
+        PalwEpochCandidateV1 {
             class_id: h(class),
             submitter: bond(n),
             artifact,
             declarations_digest: h(0),
-            fees_paid: 1,
+            datasets: vec![],
+            fee_paid: 1,
             bond: 1,
+            escrow: 10,
+            escrow_spent: 0,
             submitted_daa: 160 + n,
-        };
+            counts: None,
+        }
+    }
+
+    /// A governed line whose epoch 3 is in `state`, with a composite candidate over the head and a
+    /// full-weight one, the regression check's predecessor, and three drawn items: an exact key, a
+    /// continuation, a judged case.
+    pub fn chain(state: PalwEpochStateV1, full_weights: bool) -> PalwImproveMemChainV1 {
+        let seed = h(0x5EED);
+        let composite = PalwTirArtifactRefV1::Composite { parent_class: h(HEAD), parent_root: h(0x400), adapter_root: h(0xAD), p: 40 };
         let item = |i: u32, case: u64| PalwEvalItemV1 {
             item: i,
             case_id: h(case),
             source: PalwItemSourceV1::HoldOut,
+            supplier: Some(bond(9)),
             seed: palw_improve_eval_seed_v1(&seed, i),
             judge: None,
+            dropped: false,
         };
-        let line = PalwImprovementLineV1 {
-            line_id: h(LINE),
-            owner: bond(1),
-            policy_digest: palw_improvement_policy_digest_v1(&policy),
-            policy,
-            governed_from_daa: 0,
-            pending_policy: None,
-            opt_out_after_epoch: None,
-            head: h(HEAD),
-            head_history: vec![],
-            usage_baseline: 0,
-            next_epoch: 4,
-            open_epoch: Some(3),
-            pool: PalwImprovementPoolV1 { balance: 0, deposited: 0, paid: 0, forfeited_in: 0, refunded: 0 },
-            barred_submitters: vec![],
-        };
-        let epoch = PalwImprovementEpochV1 {
+        let line = PalwImproveLineViewV1 { line_id: h(LINE), head: h(HEAD), policy: policy(full_weights), open_epoch: Some(3) };
+        let epoch = PalwImproveEpochViewV1 {
             line_id: h(LINE),
             epoch: 3,
             state,
-            times: PalwEpochTimesV1 { t_open: 100, t_fix: 150, t_close: 200, t_draw: 220, t_eval: 280 },
+            times: PalwEpochTimesV1 { t_open: 100, t_fix: 150, t_close: 200, t_draw: 220, t_eval: 280, t_score: 290 },
             parent: h(HEAD),
-            material_acc: h(0),
-            material_count: 0,
-            dataset_root: None,
-            holdout_cases: vec![],
-            setter_sets: vec![],
+            previous: Some(h(PREVIOUS)),
             candidates: vec![candidate(0xC1, composite, 2), candidate(0xC2, PalwTirArtifactRefV1::Single { root: h(0xF0) }, 3)],
             seed: Some(seed),
-            items: vec![item(0, 0xCA0), item(1, 0xCA1), item(2, 0xCA2)],
-            results: vec![],
-            counts: vec![],
-            outcome: None,
-            grants: vec![],
         };
         let case = |reference: PalwCaseReferenceV1| PalwEvalCaseViewV1 { prompt_ids: vec![1, 5, 9], reference, domain: 0 };
-        PalwImproveRowsV1 {
+        PalwImproveMemChainV1 {
             lines: [(h(LINE), line)].into(),
             epochs: [((h(LINE), 3), epoch)].into(),
+            items: [((h(LINE), 3), vec![item(0, 0xCA0), item(1, 0xCA1), item(2, 0xCA2)])].into(),
             cases: [
                 (h(0xCA0), case(PalwCaseReferenceV1::ExactKey { commitment: h(0xB0) })),
                 (h(0xCA1), case(PalwCaseReferenceV1::Continuation { commitment: h(0xB1) })),
@@ -496,6 +577,35 @@ pub(crate) mod tests {
             claimed: BTreeSet::new(),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_fixtures::*;
+    use super::*;
+
+    fn prefetches(chain: &PalwImproveMemChainV1, node: &PalwImproveNodeV1) -> Vec<(Hash64, PalwImprovePrefetchV1)> {
+        palw_improve_duties_v1(chain, node, 150, 64)
+            .into_iter()
+            .filter_map(|d| match d {
+                PalwImproveDutyV1::Prefetch { class_id, plan, .. } => Some((class_id, plan)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn tasks(chain: &PalwImproveMemChainV1, node: &PalwImproveNodeV1, daa: u64, max: usize) -> Vec<PalwImproveEvalTaskV1> {
+        palw_improve_duties_v1(chain, node, daa, max)
+            .into_iter()
+            .filter_map(|d| match d {
+                PalwImproveDutyV1::Evaluate { task, until_daa } => {
+                    assert_eq!(until_daa, 280);
+                    Some(task)
+                }
+                _ => None,
+            })
+            .collect()
+    }
 
     /// **Prefetch follows the artifact**: a composite candidate over a held parent is its adapter
     /// section; over a parent not held, nothing; full weights only where the policy admits them and the
@@ -503,139 +613,117 @@ pub(crate) mod tests {
     #[test]
     fn a_node_prefetches_the_adapter_over_its_parent_and_full_weights_only_where_admitted() {
         let node = PalwImproveNodeV1 { holds: [h(HEAD)].into(), evaluates: false, prefetch_full: false };
-        let prefetches = |rows: &PalwImproveRowsV1, node: &PalwImproveNodeV1| -> Vec<(Hash64, PalwImprovePrefetchV1)> {
-            palw_improve_duties_v1(rows, node, 150, 64)
-                .into_iter()
-                .filter_map(|d| match d {
-                    PalwImproveDutyV1::Prefetch { class_id, plan, .. } => Some((class_id, plan)),
-                    _ => None,
-                })
-                .collect()
-        };
-        let rows = rows(PalwEpochStateV1::Submission, false);
+        let submission = chain(PalwEpochStateV1::Submission, false);
         assert_eq!(
-            prefetches(&rows, &node),
+            prefetches(&submission, &node),
             vec![(
                 h(0xC1),
                 PalwImprovePrefetchV1::Adapter { parent_class: h(HEAD), parent_root: h(0x400), adapter_root: h(0xAD), p: 40 }
             )],
             "the adapter section only; the full-weight candidate is not admitted"
         );
-        let full = rows_full();
+        let full = chain(PalwEpochStateV1::Submission, true);
         let opted = PalwImproveNodeV1 { prefetch_full: true, ..node.clone() };
         assert_eq!(prefetches(&full, &node).len(), 1, "full weights only for a node that opted in");
         assert_eq!(prefetches(&full, &opted)[1], (h(0xC2), PalwImprovePrefetchV1::Full { root: h(0xF0) }));
         let stranger = PalwImproveNodeV1 { holds: BTreeSet::new(), ..opted.clone() };
         assert_eq!(prefetches(&full, &stranger), vec![(h(0xC2), PalwImprovePrefetchV1::Full { root: h(0xF0) })], "no parent held");
         let held = PalwImproveNodeV1 { holds: [h(HEAD), h(0xC1)].into(), ..node.clone() };
-        assert!(prefetches(&rows, &held).is_empty(), "a class already held is not fetched again");
+        assert!(prefetches(&submission, &held).is_empty(), "a class already held is not fetched again");
         for (state, wants) in [
             (PalwEpochStateV1::Open, false),
             (PalwEpochStateV1::Submission, true),
             (PalwEpochStateV1::HoldOut, true),
-            (PalwEpochStateV1::Drawn, true),
+            (PalwEpochStateV1::Drawing, true),
             (PalwEpochStateV1::Evaluating, true),
-            (PalwEpochStateV1::Scoring, false),
+            (PalwEpochStateV1::Closing, false),
             (PalwEpochStateV1::Decided, false),
         ] {
-            assert_eq!(!prefetches(&rows_in(state), &node).is_empty(), wants, "{state:?}");
+            assert_eq!(!prefetches(&chain(state, false), &node).is_empty(), wants, "{state:?}");
         }
     }
 
-    fn rows_full() -> PalwImproveRowsV1 {
-        rows(PalwEpochStateV1::Submission, true)
-    }
-
-    fn rows_in(state: PalwEpochStateV1) -> PalwImproveRowsV1 {
-        rows(state, false)
-    }
-
-    /// **An evaluating node runs every unclaimed job it can**: in an `Evaluating` epoch before
-    /// `t_eval`, each item for each subject whose class it holds (the parent, then candidates in
-    /// acceptance order), derived as the chain derives it — id, mode per case, the item's seed, the
-    /// policy's budget and stop ids, the pipeline of the case's scoring kind; a claimed job is skipped,
-    /// the budget bounds the list, and nothing is planned past `t_eval` or in any other state.
+    /// **An evaluating node runs every unclaimed task it can**: in an `Evaluating` epoch before
+    /// `t_eval`, each item for each subject whose class it holds — the parent, the candidates in
+    /// acceptance order, the regression check's predecessor — derived as the chain derives it (the
+    /// chain's id, the mode per case, the item's seed, the policy's budget and stop ids, the kind of the
+    /// case); a claimed task is skipped, the budget bounds the list, and nothing is planned past `t_eval`
+    /// or in any other state.
     #[test]
-    fn an_evaluating_node_plans_every_unclaimed_job_it_can_run_as_the_chain_derives_it() {
-        let mut rows = rows(PalwEpochStateV1::Evaluating, false);
-        let node = PalwImproveNodeV1 { holds: [h(HEAD), h(0xC1)].into(), evaluates: true, prefetch_full: false };
-        let evaluations = |rows: &PalwImproveRowsV1, daa: u64, max: usize| -> Vec<(PalwEvalJobV1, Hash64)> {
-            palw_improve_duties_v1(rows, &node, daa, max)
-                .into_iter()
-                .filter_map(|d| match d {
-                    PalwImproveDutyV1::Evaluate { job, job_id, until_daa } => {
-                        assert_eq!(until_daa, 280);
-                        Some((job, job_id))
-                    }
-                    _ => None,
-                })
-                .collect()
-        };
-        let jobs = evaluations(&rows, 250, 64);
-        assert_eq!(jobs.len(), 6, "three items × the parent and the held candidate");
-        let seed = rows.epochs[&(h(LINE), 3)].seed.unwrap();
-        for (job, id) in &jobs {
-            assert_eq!(*id, palw_improve_eval_job_id_v1(&h(LINE), 3, job.item, &job.subject), "the chain's id");
-            assert!(job.subject == PalwEvalSubjectV1::Parent || job.subject == PalwEvalSubjectV1::Candidate(h(0xC1)));
-            match (job.item, &job.mode) {
+    fn an_evaluating_node_plans_every_unclaimed_task_it_can_run_as_the_chain_derives_it() {
+        let mut chain = chain(PalwEpochStateV1::Evaluating, false);
+        let node = PalwImproveNodeV1 { holds: [h(HEAD), h(0xC1), h(PREVIOUS)].into(), evaluates: true, prefetch_full: false };
+        let planned = tasks(&chain, &node, 250, 64);
+        assert_eq!(planned.len(), 9, "three items × the parent, the held candidate and the predecessor");
+        let seed = chain.epochs[&(h(LINE), 3)].seed.unwrap();
+        for task in &planned {
+            assert_eq!(task.job_id, palw_improve_eval_job_id_v1(&h(LINE), 3, task.item, &task.subject), "the chain's id");
+            let expected_class = match task.subject {
+                PalwEvalSubjectV1::Parent => h(HEAD),
+                PalwEvalSubjectV1::Candidate(c) => c,
+                PalwEvalSubjectV1::Previous(p) => p,
+            };
+            assert_eq!(task.subject_class, expected_class);
+            match (task.item, &task.mode) {
                 (0, PalwEvalModeV1::Generate { seed: s, max_new: 32, stop_ids }) => {
                     assert_eq!(*s, palw_improve_eval_seed_v1(&seed, 0));
                     assert_eq!(stop_ids, &vec![2]);
-                    assert_eq!(job.pipeline_root, h(0xE1), "ExactMatch");
+                    assert_eq!(task.kind, PalwScoringKindV1::ExactMatch);
                 }
                 (1, PalwEvalModeV1::TeacherForced { reference_commitment }) => {
                     assert_eq!(*reference_commitment, h(0xB1));
-                    assert_eq!(job.pipeline_root, h(0xE2), "RefLogLik");
+                    assert_eq!(task.kind, PalwScoringKindV1::RefLogLik);
                 }
-                (2, PalwEvalModeV1::Generate { .. }) => assert_eq!(job.pipeline_root, h(0xE3), "Judge"),
-                other => panic!("unexpected job {other:?}"),
+                (2, PalwEvalModeV1::Generate { .. }) => assert_eq!(task.kind, PalwScoringKindV1::Judge),
+                other => panic!("unexpected task {other:?}"),
             }
         }
-        assert_eq!(jobs[0].0.subject, PalwEvalSubjectV1::Parent, "the parent first");
-        assert_eq!(evaluations(&rows, 250, 4).len(), 4, "the budget bounds the list");
-        rows.claimed.insert(jobs[0].1);
-        assert!(!evaluations(&rows, 250, 64).iter().any(|(_, id)| *id == jobs[0].1), "a claimed job is taken");
-        assert!(evaluations(&rows, 280, 64).is_empty(), "nothing past t_eval");
+        assert_eq!(
+            planned[..3].iter().map(|t| t.subject).collect::<Vec<_>>(),
+            vec![PalwEvalSubjectV1::Parent, PalwEvalSubjectV1::Candidate(h(0xC1)), PalwEvalSubjectV1::Previous(h(PREVIOUS))],
+            "the chain's subject order"
+        );
+        assert_eq!(tasks(&chain, &node, 250, 4).len(), 4, "the budget bounds the list");
+        chain.claimed.insert(planned[0].job_id);
+        assert!(!tasks(&chain, &node, 250, 64).iter().any(|t| t.job_id == planned[0].job_id), "a claimed task is taken");
+        assert!(tasks(&chain, &node, 280, 64).is_empty(), "nothing past t_eval");
         let idle = PalwImproveNodeV1 { evaluates: false, ..node.clone() };
-        assert!(palw_improve_duties_v1(&rows, &idle, 250, 64).iter().all(|d| !matches!(d, PalwImproveDutyV1::Evaluate { .. })));
-        for state in [PalwEpochStateV1::Drawn, PalwEpochStateV1::Scoring, PalwEpochStateV1::HoldOut] {
-            let r = rows_in(state);
-            assert!(palw_improve_duties_v1(&r, &node, 250, 64).iter().all(|d| !matches!(d, PalwImproveDutyV1::Evaluate { .. })));
+        assert!(tasks(&chain, &idle, 250, 64).is_empty());
+        for state in [PalwEpochStateV1::Drawing, PalwEpochStateV1::Closing, PalwEpochStateV1::HoldOut] {
+            assert!(tasks(&self::chain(state, false), &node, 250, 64).is_empty(), "{state:?}");
         }
     }
 
-    /// **A job is the chain's or none**: an item whose seed is not the epoch's, an epoch with no seed,
-    /// and a case whose scoring kind the policy has no stage of derive no job; an item whose case the
-    /// chain does not hold yet is skipped. The watcher's log notices each state change once.
+    /// **A task is the chain's or none**: an item whose seed is not the epoch's, a dropped item, an
+    /// epoch with no seed, and a case whose scoring kind the policy has no stage of derive nothing; an
+    /// item whose case the chain does not hold yet is skipped. The watcher's log notices each state
+    /// change once.
     #[test]
-    fn a_job_is_derived_only_from_the_epoch_s_own_seed_and_the_policy_s_stages() {
-        let rows = rows(PalwEpochStateV1::Evaluating, false);
-        let line = rows.line(&h(LINE)).unwrap();
-        let epoch = rows.epoch(&h(LINE), 3).unwrap();
-        let items = rows.items(&h(LINE), 3);
-        let case = rows.case(&h(LINE), 3, &items[0]).unwrap();
-        assert!(palw_improve_eval_job_v1(&line, &epoch, &items[0], PalwEvalSubjectV1::Parent, &case).is_ok());
-        let mut forged = items[0].clone();
+    fn a_task_is_derived_only_from_the_epoch_s_own_seed_and_the_policy_s_stages() {
+        let chain = chain(PalwEpochStateV1::Evaluating, false);
+        let line = chain.line(&h(LINE)).unwrap();
+        let epoch = chain.epoch(&h(LINE), 3).unwrap();
+        let items = chain.items(&h(LINE), 3);
+        let case = chain.case(&h(LINE), 3, &items[0]).unwrap();
+        let task = |item: &PalwEvalItemV1, epoch: &PalwImproveEpochViewV1, line: &PalwImproveLineViewV1| {
+            palw_improve_eval_task_v1(line, epoch, item, PalwEvalSubjectV1::Parent, h(HEAD), &case)
+        };
+        assert!(task(&items[0], &epoch, &line).is_ok());
+        let mut forged = items[0];
         forged.seed = h(0xF00);
-        assert_eq!(
-            palw_improve_eval_job_v1(&line, &epoch, &forged, PalwEvalSubjectV1::Parent, &case).unwrap_err(),
-            "the item's seed is not the epoch's"
-        );
+        assert_eq!(task(&forged, &epoch, &line).unwrap_err(), "the item's seed is not the epoch's");
+        let mut dropped = items[0];
+        dropped.dropped = true;
+        assert_eq!(task(&dropped, &epoch, &line).unwrap_err(), "the item is dropped for every subject");
         let unseeded = PalwImproveEpochViewV1 { seed: None, ..epoch.clone() };
-        assert!(palw_improve_eval_job_v1(&line, &unseeded, &items[0], PalwEvalSubjectV1::Parent, &case).is_err());
+        assert!(task(&items[0], &unseeded, &line).is_err());
         let mut narrow = line.clone();
         narrow.policy.eval.stages.retain(|s| s.kind != PalwScoringKindV1::ExactMatch);
-        assert!(palw_improve_eval_job_v1(&narrow, &epoch, &items[0], PalwEvalSubjectV1::Parent, &case).is_err());
-        let mut missing = rows.clone();
+        assert!(task(&items[0], &epoch, &narrow).is_err());
+        let mut missing = chain.clone();
         missing.cases.remove(&h(0xCA0));
         let node = PalwImproveNodeV1 { holds: [h(HEAD)].into(), evaluates: true, prefetch_full: false };
-        let planned: Vec<u32> = palw_improve_duties_v1(&missing, &node, 250, 64)
-            .into_iter()
-            .filter_map(|d| match d {
-                PalwImproveDutyV1::Evaluate { job, .. } => Some(job.item),
-                _ => None,
-            })
-            .collect();
+        let planned: Vec<u32> = tasks(&missing, &node, 250, 64).into_iter().map(|t| t.item).collect();
         assert_eq!(planned, vec![1, 2], "items 1 and 2 for the parent: item 0's case is not on chain yet");
         // The watcher's log: a change once, then nothing.
         let e = |s| Some((3, s));
@@ -645,6 +733,92 @@ pub(crate) mod tests {
             palw_improve_epoch_moved_v1(e(PalwEpochStateV1::Open), e(PalwEpochStateV1::Submission)),
             e(PalwEpochStateV1::Submission)
         );
-        assert_eq!(palw_improve_epoch_moved_v1(e(PalwEpochStateV1::Vesting), None), None);
+        assert_eq!(palw_improve_epoch_moved_v1(e(PalwEpochStateV1::Decided), None), None);
+    }
+
+    /// **The chain state's readers as the view** (the core lane's keyed layout): a state carrying one
+    /// governed line, its policy, its open epoch's header, candidates and items reads back through
+    /// [`PalwImproveStateChainV1`] exactly as the rows say — the subjects in the chain's own order
+    /// (`improvement_subjects`) — and plans the same tasks as the in-memory view.
+    #[test]
+    fn the_state_readers_are_the_same_view_as_the_rows() {
+        use kaspa_consensus_core::palw_improve_state_v1::{
+            PalwEpochEscrowV1, PalwEpochRetireV1, PalwImprovementEpochV1, PalwImprovementLineStatusV1, PalwImprovementLineV1,
+            PalwImprovementPolicyRecordV1, palw_improvement_policy_digest_v1,
+        };
+        use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+        let mem = chain(PalwEpochStateV1::Evaluating, false);
+        let line = &mem.lines[&h(LINE)];
+        let epoch = &mem.epochs[&(h(LINE), 3)];
+        let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+        carriage.improvement_lines.insert(
+            h(LINE),
+            PalwImprovementLineV1 {
+                line_id: h(LINE),
+                class_id: h(HEAD),
+                policy_digest: palw_improvement_policy_digest_v1(&line.policy),
+                policy_sequence: 1,
+                status: PalwImprovementLineStatusV1::Governed,
+                governed_from_daa: 0,
+                head: h(HEAD),
+                head_seq: 1,
+                next_epoch: 4,
+                open_epoch: Some(3),
+                next_due_daa: 280,
+                barred: vec![],
+                last_promotion: None,
+                regression_epoch: None,
+                regression_check: None,
+            },
+        );
+        carriage.improvement_policies.insert(h(LINE), PalwImprovementPolicyRecordV1 { policy: line.policy.clone(), pending: None });
+        carriage.improvement_usage.insert(h(LINE), Default::default());
+        carriage.improvement_pools.insert(h(LINE), Default::default());
+        carriage.improvement_epochs.insert(
+            (h(LINE), 3),
+            PalwImprovementEpochV1 {
+                line_id: h(LINE),
+                epoch: 3,
+                state: epoch.state,
+                times: epoch.times,
+                parent: epoch.parent,
+                previous: epoch.previous,
+                policy_digest: palw_improvement_policy_digest_v1(&line.policy),
+                dataset_root: None,
+                candidates: epoch.candidates.len() as u32,
+                pool_entries: 0,
+                holdout_cases: 0,
+                setter_sets: 0,
+                seed: epoch.seed,
+                items: 3,
+                previous_counts: None,
+                outcome: None,
+                escrow: PalwEpochEscrowV1::default(),
+                grants: 0,
+                decided_daa: None,
+                retire: PalwEpochRetireV1::Pending,
+            },
+        );
+        for (i, c) in epoch.candidates.iter().enumerate() {
+            carriage.improvement_candidates.insert((h(LINE), 3, i as u32), c.clone());
+        }
+        for item in &mem.items[&(h(LINE), 3)] {
+            carriage.improvement_items.insert((h(LINE), 3, item.item), *item);
+        }
+        let params =
+            kaspa_consensus_core::palw_state_v2::PalwStateParamsV2::new(100, 10, 10, 20, 600, 1000, h(1), 4, 1000, 10_000, 1000, 0)
+                .expect("params");
+        let state = carriage.into_state(&params, None).expect("a consistent carriage");
+        let case = |_: &Hash64, _: u64, item: &PalwEvalItemV1| mem.cases.get(&item.case_id).cloned();
+        let claimed = |_: &Hash64| false;
+        let view = PalwImproveStateChainV1 { state: &state, daa: 250, case: &case, claimed: &claimed, lines: vec![h(LINE)] };
+        assert_eq!(view.governed_lines(), vec![h(LINE)]);
+        assert_eq!(view.line(&h(LINE)).as_ref(), Some(line));
+        assert_eq!(view.epoch(&h(LINE), 3).as_ref(), Some(epoch));
+        assert_eq!(view.items(&h(LINE), 3), mem.items[&(h(LINE), 3)]);
+        let subjects: Vec<PalwEvalSubjectV1> = palw_improve_subjects_v1(epoch).into_iter().map(|(s, _)| s).collect();
+        assert_eq!(subjects, state.improvement_subjects(&h(LINE), 3), "the chain's own subject order");
+        let node = PalwImproveNodeV1 { holds: [h(HEAD), h(0xC1), h(PREVIOUS)].into(), evaluates: true, prefetch_full: false };
+        assert_eq!(palw_improve_duties_v1(&view, &node, 250, 64), palw_improve_duties_v1(&mem, &node, 250, 64));
     }
 }

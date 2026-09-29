@@ -44,9 +44,6 @@ pub const PALW_IMPROVE_SIGN_TABLE_DOMAIN_V1: &[u8] = b"misaka-palw/improve/sign-
 /// it by the library's program roots before the fence is armed on any network; until then the fence
 /// is dormant everywhere and nothing reads it.
 pub const PALW_IMPROVE_SCORING_SET_DESCRIPTOR_V1: &str = "palw-improve/v1/scoring=1:ExactMatch,2:RefLogLik,3:Judge,4:Pairwise";
-/// **The sign test's table descriptor** (RFC-0004 §7.5, spec 17 §17.8). The promotion item (A8)
-/// replaces it by the pinned table's digest.
-pub const PALW_IMPROVE_SIGN_TABLE_DESCRIPTOR_V1: &str = "palw-improve/v1/sign-table=binomial-one-sided";
 
 fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(key).to_state();
@@ -63,9 +60,14 @@ pub fn palw_improve_scoring_set_id_v1() -> Hash64 {
     keyed64(PALW_IMPROVE_SCORING_SET_DOMAIN_V1, &[PALW_IMPROVE_SCORING_SET_DESCRIPTOR_V1.as_bytes()])
 }
 
-/// **The network's `sign_table_id`** — the pinned binomial table this build's promotion reads.
+/// **The network's `sign_table_id`** — the pinned binomial table this build's promotion reads (spec
+/// 17 §17.9.2): the digest pinned in [`crate::palw_improve_promotion_v1::PALW_IMPROVE_SIGN_TABLE_ID_HEX_V1`],
+/// which `the_pinned_sign_table_is_the_definition` recomputes from the whole table.
 pub fn palw_improve_sign_table_id_v1() -> Hash64 {
-    keyed64(PALW_IMPROVE_SIGN_TABLE_DOMAIN_V1, &[PALW_IMPROVE_SIGN_TABLE_DESCRIPTOR_V1.as_bytes()])
+    let hex = crate::palw_improve_promotion_v1::PALW_IMPROVE_SIGN_TABLE_ID_HEX_V1;
+    let mut out = [0u8; 64];
+    faster_hex::hex_decode(hex.as_bytes(), &mut out).expect("the pinned sign table id is 128 hex digits");
+    Hash64::from_bytes(out)
 }
 
 /// **The network's bounds on every governed line's policy** (RFC-0004 §13). A line's policy may only
@@ -84,17 +86,21 @@ pub struct PalwImprovementCeilingsV1 {
     pub max_governed_lines: u32,
     /// The largest policy an owner may sign, in bytes.
     pub max_policy_bytes: u32,
+    /// The most epochs open at once across the network — with the two above, the bound on live
+    /// items and results every block's root rehashes (spec 17 §17.3).
+    pub max_open_epochs: u32,
 }
 
 impl PalwImprovementCeilingsV1 {
     /// The widest ceilings the format allows.
     pub const FORMAT_CAPS_V1: Self = Self {
-        max_candidates_per_epoch: 64,
-        max_items_per_epoch: 1 << 16,
+        max_candidates_per_epoch: 16,
+        max_items_per_epoch: 4_096,
         max_eval_positions_per_epoch: 1 << 40,
         max_eval_budget_permille: 1_000,
-        max_governed_lines: 1 << 16,
-        max_policy_bytes: 65_536,
+        max_governed_lines: 1_024,
+        max_policy_bytes: 16_384,
+        max_open_epochs: 64,
     };
 
     /// Is every ceiling inside the format's cap, and none zero?
@@ -107,15 +113,16 @@ impl PalwImprovementCeilingsV1 {
             self.max_eval_budget_permille as u64,
             self.max_governed_lines as u64,
             self.max_policy_bytes as u64,
+            self.max_open_epochs as u64,
         ];
         if nonzero.contains(&0) {
             return Err("an improvement ceiling of zero admits no epoch");
         }
         if self.max_candidates_per_epoch > caps.max_candidates_per_epoch {
-            return Err("max_candidates_per_epoch must be at most 64");
+            return Err("max_candidates_per_epoch must be at most 16");
         }
         if self.max_items_per_epoch > caps.max_items_per_epoch {
-            return Err("max_items_per_epoch must be at most 2^16");
+            return Err("max_items_per_epoch must be at most 4,096");
         }
         if self.max_eval_positions_per_epoch > caps.max_eval_positions_per_epoch {
             return Err("max_eval_positions_per_epoch must be at most 2^40");
@@ -124,10 +131,13 @@ impl PalwImprovementCeilingsV1 {
             return Err("max_eval_budget_permille must be at most 1,000");
         }
         if self.max_governed_lines > caps.max_governed_lines {
-            return Err("max_governed_lines must be at most 2^16");
+            return Err("max_governed_lines must be at most 1,024");
         }
         if self.max_policy_bytes > caps.max_policy_bytes {
-            return Err("max_policy_bytes must be at most 65,536");
+            return Err("max_policy_bytes must be at most 16,384");
+        }
+        if self.max_open_epochs > caps.max_open_epochs {
+            return Err("max_open_epochs must be at most 64");
         }
         Ok(())
     }
@@ -139,6 +149,7 @@ impl PalwImprovementCeilingsV1 {
         h.write(self.max_eval_budget_permille.to_le_bytes());
         h.write(self.max_governed_lines.to_le_bytes());
         h.write(self.max_policy_bytes.to_le_bytes());
+        h.write(self.max_open_epochs.to_le_bytes());
     }
 }
 
@@ -146,11 +157,12 @@ impl PalwImprovementCeilingsV1 {
 /// and the fork id's probe; no network's release carries them.
 pub const PALW_DRILL_IMPROVE_CEILINGS_V1: PalwImprovementCeilingsV1 = PalwImprovementCeilingsV1 {
     max_candidates_per_epoch: 8,
-    max_items_per_epoch: 4_096,
+    max_items_per_epoch: 1_024,
     max_eval_positions_per_epoch: 1 << 32,
     max_eval_budget_permille: 500,
-    max_governed_lines: 256,
-    max_policy_bytes: 65_536,
+    max_governed_lines: 64,
+    max_policy_bytes: 16_384,
+    max_open_epochs: 8,
 };
 
 /// **`Params::palw_improvement_v1`'s value**: the fence and what it carries.
@@ -223,20 +235,28 @@ impl Params {
     /// set on an assembled ruleset; [`Self::validate_palw_improvement_v1`] refuses a ruleset whose copy
     /// disagrees.
     pub fn sync_palw_improvement_v1(&mut self) {
-        let from_daa = self.palw_improvement_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+        let armed = self.palw_improvement_v1.filter(|f| f.activation != ForkActivation::never());
+        let from_daa = armed.map(|f| f.activation.daa_score());
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state = bundle.state.clone().with_improve_from_daa(from_daa);
+            bundle.state = bundle.state.clone().with_improve_from_daa(from_daa).with_improve_ceilings(armed.map(|f| f.ceilings));
         }
     }
 
     /// **The improvement fence's own refusals**, asked by [`Params::validate_palw_v2`]. A
     /// `Some(never())` value is dormant and passes (it collapses out of the identity).
     pub fn validate_palw_improvement_v1(&self) -> Result<(), PalwModeV2Error> {
+        let armed_at_all = self.palw_improvement_v1.is_some_and(|f| f.activation != ForkActivation::never());
+        if armed_at_all && !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
+            return Err(PalwModeV2Error::Invalid("palw_improvement_v1 is a ConsensusV2 rule: this ruleset has no V2 bundle"));
+        }
         let mirror = match &self.palw_consensus_mode {
-            PalwConsensusMode::ConsensusV2(bundle) => bundle.state.improve_from_daa(),
+            PalwConsensusMode::ConsensusV2(bundle) => bundle.state.improve_from_daa().map(|at| (at, bundle.state.improve_ceilings())),
             _ => None,
         };
-        let armed = self.palw_improvement_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+        let armed = self
+            .palw_improvement_v1
+            .filter(|f| f.activation != ForkActivation::never())
+            .map(|f| (f.activation.daa_score(), Some(f.ceilings)));
         if mirror != armed {
             return Err(PalwModeV2Error::Invalid(
                 "palw_improvement_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_improvement_v1 after \
@@ -261,9 +281,6 @@ impl Params {
             return Err(PalwModeV2Error::Invalid("palw_improvement_v1 names a protocol version this build does not implement"));
         }
         fence.ceilings.within_format_caps().map_err(PalwModeV2Error::Invalid)?;
-        if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
-            return Err(PalwModeV2Error::Invalid("palw_improvement_v1 is a ConsensusV2 rule: this ruleset has no V2 bundle"));
-        }
         if self.palw_audit_2026_09_11.is_none() {
             return Err(PalwModeV2Error::Invalid(
                 "palw_improvement_v1 needs palw_audit_2026_09_11 declared: only there does an older build skip the appended \
@@ -281,6 +298,13 @@ impl Params {
         if !gen_ok {
             return Err(PalwModeV2Error::Invalid(
                 "palw_improvement_v1 needs palw_gen_v1 in force at or below it: an evaluation job is an RFC-0003 pipeline",
+            ));
+        }
+        let fence2_ok = self.palw_tir_fence2.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at);
+        if !fence2_ok {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_improvement_v1 needs palw_tir_fence2 in force at or below it: every evaluation pipeline is sized under H7 \
+                 and no verdict may flip mid-epoch",
             ));
         }
         let kary_ok = self.palw_kary_court.is_some_and(|k| k != ForkActivation::never() && k.daa_score() <= at);

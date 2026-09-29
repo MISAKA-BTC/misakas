@@ -85,163 +85,41 @@ impl PalwImproveWatchV1 {
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw_improve_artifact_v1::PalwTirArtifactRefV1;
-    use kaspa_consensus_core::palw_improve_material_v1::PalwCaseReferenceV1;
-    use kaspa_consensus_core::palw_improve_state_v1::{
-        PalwEpochCandidateV1, PalwEpochTimesV1, PalwEvalItemV1, PalwItemSourceV1, palw_improve_eval_seed_v1,
-    };
-    use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
-    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
-    use misaka_palw_sdk::improve::{PalwEvalCaseViewV1, PalwImproveEpochViewV1, PalwImproveLineViewV1, PalwImprovePrefetchV1};
+    use misaka_palw_sdk::improve::{PalwImproveMemChainV1, PalwImprovePrefetchV1};
 
     fn h(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
     }
 
-    /// A chain the test moves by hand: one line, its epoch in `state`.
-    struct Chain {
-        line: PalwImproveLineViewV1,
-        epoch: Option<PalwImproveEpochViewV1>,
-    }
-
-    impl PalwImproveChainV1 for Chain {
-        fn governed_lines(&self) -> Vec<Hash64> {
-            vec![self.line.line_id]
-        }
-        fn line(&self, _: &Hash64) -> Option<PalwImproveLineViewV1> {
-            Some(PalwImproveLineViewV1 { open_epoch: self.epoch.as_ref().map(|e| e.epoch), ..self.line.clone() })
-        }
-        fn epoch(&self, _: &Hash64, epoch: u64) -> Option<PalwImproveEpochViewV1> {
-            self.epoch.clone().filter(|e| e.epoch == epoch)
-        }
-        fn items(&self, _: &Hash64, _: u64) -> Vec<PalwEvalItemV1> {
-            let seed = self.epoch.as_ref().and_then(|e| e.seed).unwrap_or_default();
-            (0..3)
-                .map(|i| PalwEvalItemV1 {
-                    item: i,
-                    case_id: h(0xCA0 + i as u64),
-                    source: PalwItemSourceV1::HoldOut,
-                    seed: palw_improve_eval_seed_v1(&seed, i),
-                    judge: None,
-                })
-                .collect()
-        }
-        fn case(&self, _: &Hash64, _: u64, _: &PalwEvalItemV1) -> Option<PalwEvalCaseViewV1> {
-            Some(PalwEvalCaseViewV1 {
-                prompt_ids: vec![1, 2],
-                reference: PalwCaseReferenceV1::ExactKey { commitment: h(9) },
-                domain: 0,
-            })
-        }
-        fn job_claimed(&self, _: &Hash64) -> bool {
-            false
-        }
-    }
-
-    fn policy() -> kaspa_consensus_core::palw_improve_state_v1::PalwImprovementPolicyV1 {
-        use kaspa_consensus_core::palw_improve_state_v1::*;
-        PalwImprovementPolicyV1 {
-            version: PALW_IMPROVEMENT_POLICY_VERSION_V1,
-            usage: PalwUsageThresholdV1 { measure: PalwUsageMeasureV1::Claims, value: 10 },
-            windows: PalwEpochWindowsV1 {
-                grid: 100,
-                w_collect: 50,
-                w_submit: 50,
-                w_holdout: 20,
-                w_eval: 60,
-                beacon_delay: 2,
-                court_margin: 10,
-            },
-            eval: PalwEvalSpecV1 {
-                stages: vec![PalwScoringStageV1 { kind: PalwScoringKindV1::ExactMatch, program_root: h(0xE1) }],
-                regression_suite_root: h(0),
-                regression_items: 0,
-                safety_suite_root: h(0),
-                safety_items: 0,
-                judge_set: vec![],
-                anchor_floor_permille: 800,
-                n: 3,
-                n_min: 3,
-                delta_permille: 50,
-                epsilon_permille: 20,
-                epsilon_safety_permille: 0,
-                alpha_permille: 50,
-                max_new_tokens: 16,
-                stop_ids: vec![2],
-                setter_cap_permille: 300,
-            },
-            k_max: 4,
-            fees: PalwImprovementFeesV1 {
-                registration_fee: 1,
-                candidate_bond: 1,
-                eval_fee_per_job: 1,
-                hard_case_fee: 1,
-                artifact_bond: 1,
-                setter_bond: 1,
-                dataset_bond: 1,
-            },
-            phi_permille: 100,
-            bounty_share_permille: 100,
-            s2_trainer_permille: 500,
-            s2_dataset_cap_permille: 200,
-            s2_contributor_cap_permille: 100,
-            provenance: PalwProvenancePolicyV1 {
-                teacher_classes: 0xFF,
-                licence_classes: vec![],
-                full_weight_candidates: false,
-                base_licence_class: h(0),
-            },
-            rollback_epochs: 2,
-            vest_epochs: 2,
-            ban_epochs: 2,
-        }
-    }
-
     /// **The watcher follows an epoch through its states and serves it**: each state change is logged
     /// once; in `Submission` it plans the composite candidate's adapter section; in `Evaluating` the
-    /// jobs of the classes it holds, at most the tick's budget; the epoch's close is noticed; and below
+    /// tasks of the classes it holds, at most the tick's budget; the epoch's close is noticed; and below
     /// the fence the watcher is not armed on any shipped preset.
     #[test]
     fn the_watcher_follows_an_epoch_and_plans_its_prefetch_and_evaluation() {
-        let bond = PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 });
-        let line = PalwImproveLineViewV1 { line_id: h(0x11E), owner: bond, head: h(0x4EAD), policy: policy(), open_epoch: None };
-        let candidate = PalwEpochCandidateV1 {
-            class_id: h(0xC1),
-            submitter: bond,
-            artifact: PalwTirArtifactRefV1::Composite { parent_class: h(0x4EAD), parent_root: h(0x400), adapter_root: h(0xAD), p: 7 },
-            declarations_digest: h(0),
-            fees_paid: 1,
-            bond: 1,
-            submitted_daa: 160,
-        };
-        let epoch = |state: PalwEpochStateV1| PalwImproveEpochViewV1 {
-            line_id: h(0x11E),
-            epoch: 3,
-            state,
-            times: PalwEpochTimesV1 { t_open: 100, t_fix: 150, t_close: 200, t_draw: 220, t_eval: 280 },
-            parent: h(0x4EAD),
-            candidates: vec![candidate.clone()],
-            seed: Some(h(0x5EED)),
-        };
-        let mut node = PalwImproveNodeV1 { holds: [h(0x4EAD)].into(), evaluates: true, prefetch_full: false };
+        let mut chain: PalwImproveMemChainV1 = misaka_palw_sdk::improve::testing::chain(PalwEpochStateV1::Submission, false);
+        let line = h(misaka_palw_sdk::improve::testing::LINE);
+        let head = h(misaka_palw_sdk::improve::testing::HEAD);
+        let mut node = PalwImproveNodeV1 { holds: [head].into(), evaluates: true, prefetch_full: false };
         let mut watch = PalwImproveWatchV1::default();
-        let mut chain = Chain { line, epoch: Some(epoch(PalwEpochStateV1::Submission)) };
         let tick = watch.tick(&chain, &node, 160);
-        assert_eq!(tick.moved, vec![(h(0x11E), 3, PalwEpochStateV1::Submission)]);
+        assert_eq!(tick.moved, vec![(line, 3, PalwEpochStateV1::Submission)]);
         assert!(matches!(
             tick.duties.as_slice(),
-            [PalwImproveDutyV1::Prefetch { plan: PalwImprovePrefetchV1::Adapter { p: 7, .. }, .. }]
+            [PalwImproveDutyV1::Prefetch { plan: PalwImprovePrefetchV1::Adapter { p: 40, .. }, .. }]
         ));
         assert!(watch.tick(&chain, &node, 161).moved.is_empty(), "logged once");
         node.holds.insert(h(0xC1));
-        chain.epoch = Some(epoch(PalwEpochStateV1::Evaluating));
+        chain.epochs.get_mut(&(line, 3)).unwrap().state = PalwEpochStateV1::Evaluating;
         let tick = watch.tick(&chain, &node, 250);
-        assert_eq!(tick.moved, vec![(h(0x11E), 3, PalwEpochStateV1::Evaluating)]);
+        assert_eq!(tick.moved, vec![(line, 3, PalwEpochStateV1::Evaluating)]);
         let evaluations = tick.duties.iter().filter(|d| matches!(d, PalwImproveDutyV1::Evaluate { .. })).count();
         assert_eq!(evaluations, PALW_IMPROVE_JOBS_PER_TICK_V1, "three items × two subjects, at most the tick's budget");
-        chain.epoch = None;
+        chain.lines.get_mut(&line).unwrap().open_epoch = None;
         let tick = watch.tick(&chain, &node, 400);
-        assert_eq!(tick.gone, vec![h(0x11E)], "the epoch closed");
+        assert_eq!(tick.gone, vec![line], "the epoch closed");
         assert!(tick.duties.is_empty());
+        let _ = PalwTirArtifactRefV1::Single { root: h(0) };
         assert!(palw_improve_held_classes_v1(&[]).is_empty(), "a node with no IR artifact holds no class");
         for net in [
             kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12),

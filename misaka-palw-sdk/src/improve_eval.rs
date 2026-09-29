@@ -23,7 +23,9 @@ use kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2;
 use kaspa_consensus_core::palw_gen_worker_v1::{
     PalwGenDecodeV1, PalwGenExecutionV1, palw_gen_execute_v1, palw_gen_replay_committed_v1,
 };
-use kaspa_consensus_core::palw_improve_state_v1::{PalwEvalJobV1, PalwEvalModeV1, PalwScoringKindV1};
+use kaspa_consensus_core::palw_improve_state_v1::{PalwEvalModeV1, PalwScoringKindV1};
+
+use crate::improve::PalwImproveEvalTaskV1;
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1;
 use misaka_palw_tir::pipeline::{PipelineJob, PipelineParams, TirPipelineV1};
 use misaka_palw_tir::program_v2::TirProgramV2;
@@ -95,8 +97,8 @@ pub fn palw_eval_decode_v1(max_new: u32, stop_ids: &[u32]) -> Option<PalwGenDeco
 /// **A job's pipeline facts** — the prompt, the key, the finalized generations and the scalars; a
 /// teacher-forced job's reference as the stream's given ids (its decode stage consumes the reference's
 /// logits rows, and its scoring stage reads the reference as `Generated`).
-pub fn palw_eval_pipeline_job_v1(job: &PalwEvalJobV1, inputs: &PalwEvalInputsV1) -> PipelineJob {
-    let generated = match job.mode {
+pub fn palw_eval_pipeline_job_v1(task: &PalwImproveEvalTaskV1, inputs: &PalwEvalInputsV1) -> PipelineJob {
+    let generated = match task.mode {
         PalwEvalModeV1::Generate { .. } => Vec::new(),
         PalwEvalModeV1::TeacherForced { .. } => inputs.reference.clone(),
     };
@@ -153,11 +155,14 @@ pub fn palw_eval_score_of_v1(kind: PalwScoringKindV1, output: &[i128]) -> Result
 /// the output stage.
 pub fn palw_eval_execute_v1(
     pipeline: &PalwEvalPipelineV1<'_>,
-    job: &PalwEvalJobV1,
+    task: &PalwImproveEvalTaskV1,
     inputs: &PalwEvalInputsV1,
 ) -> Result<PalwEvalRunV1, String> {
-    let pjob = palw_eval_pipeline_job_v1(job, inputs);
-    let execution = match &job.mode {
+    if task.kind != pipeline.kind {
+        return Err(format!("the task is scored by {:?} and the pipeline ends in {:?}", task.kind, pipeline.kind));
+    }
+    let pjob = palw_eval_pipeline_job_v1(task, inputs);
+    let execution = match &task.mode {
         PalwEvalModeV1::Generate { seed, max_new, stop_ids } => {
             let decode = palw_eval_decode_v1(*max_new, stop_ids).ok_or("the job's stop ids have no canonical V4 form")?;
             palw_gen_execute_v1(
@@ -285,14 +290,16 @@ mod tests {
         Vector { pipeline, programs, layouts, params, inputs, generated: ids(&j["generated"]), score }
     }
 
-    fn job(mode: PalwEvalModeV1) -> PalwEvalJobV1 {
-        PalwEvalJobV1 {
+    fn job(mode: PalwEvalModeV1, kind: PalwScoringKindV1) -> PalwImproveEvalTaskV1 {
+        PalwImproveEvalTaskV1 {
             line_id: Hash64::from_u64_word(1),
             epoch: 3,
             item: 0,
             subject: PalwEvalSubjectV1::Parent,
+            subject_class: Hash64::from_u64_word(0x4EAD),
+            kind,
             mode,
-            pipeline_root: Hash64::from_u64_word(0xE1),
+            job_id: Hash64::from_u64_word(0x10B),
         }
     }
 
@@ -307,7 +314,10 @@ mod tests {
     #[test]
     fn a_generated_job_runs_the_decode_stage_then_scores_it_and_commits_the_claim() {
         let v = vector("eval-exact-match.json");
-        let generating = job(PalwEvalModeV1::Generate { seed: Hash64::from_bytes([0; 64]), max_new: 4, stop_ids: vec![] });
+        let generating = job(
+            PalwEvalModeV1::Generate { seed: Hash64::from_bytes([0; 64]), max_new: 4, stop_ids: vec![] },
+            PalwScoringKindV1::ExactMatch,
+        );
         let run = palw_eval_execute_v1(&pipeline(&v, PalwScoringKindV1::ExactMatch), &generating, &v.inputs).expect("the run");
         assert_eq!(run.execution.claim.generated, v.generated, "the decode stage selects the vector's ids");
         assert_eq!(run.execution.run.output.data, v.score, "the vector's score");
@@ -315,7 +325,7 @@ mod tests {
         assert_eq!(run.score, PalwEvalScoreValueV1::ExactMatch(want));
         let replayed = palw_eval_execute_v1(
             &pipeline(&v, PalwScoringKindV1::ExactMatch),
-            &job(PalwEvalModeV1::TeacherForced { reference_commitment: Hash64::from_u64_word(0) }),
+            &job(PalwEvalModeV1::TeacherForced { reference_commitment: Hash64::from_u64_word(0) }, PalwScoringKindV1::ExactMatch),
             &PalwEvalInputsV1 { reference: v.generated.clone(), ..v.inputs.clone() },
         )
         .expect("the replay");
@@ -339,7 +349,8 @@ mod tests {
     #[test]
     fn teacher_forced_judge_and_pairwise_jobs_score_as_the_vectors_do() {
         let v = vector("eval-ref-loglik.json");
-        let forced = job(PalwEvalModeV1::TeacherForced { reference_commitment: Hash64::from_u64_word(0) });
+        let forced_as = |kind| job(PalwEvalModeV1::TeacherForced { reference_commitment: Hash64::from_u64_word(0) }, kind);
+        let forced = forced_as(PalwScoringKindV1::RefLogLik);
         let inputs = PalwEvalInputsV1 { reference: v.generated.clone(), ..v.inputs.clone() };
         let run = palw_eval_execute_v1(&pipeline(&v, PalwScoringKindV1::RefLogLik), &forced, &inputs).expect("the run");
         assert_eq!(run.execution.run.output.data, v.score);
@@ -353,11 +364,17 @@ mod tests {
             "teacher-forced without the reference"
         );
         let j = vector("eval-judge.json");
-        let run = palw_eval_execute_v1(&pipeline(&j, PalwScoringKindV1::Judge), &forced, &j.inputs).expect("the judge");
+        let run = palw_eval_execute_v1(&pipeline(&j, PalwScoringKindV1::Judge), &forced_as(PalwScoringKindV1::Judge), &j.inputs)
+            .expect("the judge");
         assert_eq!(run.execution.run.output.data, j.score);
         assert!(matches!(run.score, PalwEvalScoreValueV1::Judge(_)));
         let p = vector("eval-pairwise.json");
-        let run = palw_eval_execute_v1(&pipeline(&p, PalwScoringKindV1::Pairwise), &forced, &p.inputs).expect("the pairwise judge");
+        let run = palw_eval_execute_v1(&pipeline(&p, PalwScoringKindV1::Pairwise), &forced_as(PalwScoringKindV1::Pairwise), &p.inputs)
+            .expect("the pairwise judge");
+        assert!(
+            palw_eval_execute_v1(&pipeline(&p, PalwScoringKindV1::Pairwise), &forced, &p.inputs).is_err(),
+            "a task is run only by a pipeline of its own kind"
+        );
         assert_eq!(run.execution.run.output.data, p.score);
         let PalwEvalScoreValueV1::Pairwise(outcome) = run.score else { panic!("a Pairwise score") };
         assert!((-1..=1).contains(&outcome));
