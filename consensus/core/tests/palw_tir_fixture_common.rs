@@ -368,6 +368,9 @@ impl PalwTirEvidenceStoreV1 for Store<'_> {
     fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
         palw_tir_step_node_parts_v1(&self.x.hashes, level, index)
     }
+    fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        kaspa_consensus_core::palw_tir_court_v1::palw_tir_row_node_parts_v1(&self.f.ctx, &self.x.rows, level, index)
+    }
 }
 
 pub fn refute(f: &Fixture, x: &Execution, leaf: u64) -> PalwTirConeRefutationV1 {

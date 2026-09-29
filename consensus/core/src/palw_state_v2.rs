@@ -7251,8 +7251,9 @@ pub enum PalwConsensusObjectV2 {
     // ---- RFC-0002 Phase F, the second IR fence (`Params::palw_tir_fence2`) ----
     /// **A data-availability demand for one unit of an IR claim's step tree** (evidence transport C),
     /// keyed by the claim alone — no binding: opens an R-core+ DA session naming exactly that unit, a
-    /// step leaf `TirStepLeaf { index }` or an interior node `TirStepNode { level, index }` (no
-    /// draws), which the producer or any locked signer answers with `MaterialDisclosedV2` inside
+    /// step leaf `TirStepLeaf { index }`, an interior node `TirStepNode { level, index }` or a node of
+    /// the tiled trace's rows tree `TirRowNode { level, index }` (no draws), which the producer or any
+    /// locked signer answers with `MaterialDisclosedV2` inside
     /// `W_disclose` — the leaf ([`crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1`]), the node's
     /// frontier and opening ([`crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1`]), or the
     /// claim's binding proving the unit past its execution — or it defaults. Signed by the accuser's
@@ -7292,7 +7293,7 @@ pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
 pub fn palw_object_is_tir_fence2_v1(object: &PalwConsensusObjectV2) -> bool {
     match object {
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => true,
-        PalwConsensusObjectV2::MaterialDisclosedV2 { unit, answer, .. } => answer.is_tir_fence2_v1() || unit.is_tir_step_v1(),
+        PalwConsensusObjectV2::MaterialDisclosedV2 { unit, answer, .. } => answer.is_tir_fence2_v1() || unit.is_tir_fence2_v1(),
         _ => false,
     }
 }
@@ -26799,13 +26800,16 @@ fn open_da_session_rcore_v1(
                     PalwDaUnitV1::Held(drawn) => {
                         crate::palw_held_da_v1::palw_held_da_check_accusation_v1(&claim.execution_root, drawn, binding, form).is_ok()
                     }
-                    PalwDaUnitV1::Event { .. } | PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } => false,
+                    PalwDaUnitV1::Event { .. }
+                    | PalwDaUnitV1::TirStepLeaf { .. }
+                    | PalwDaUnitV1::TirStepNode { .. }
+                    | PalwDaUnitV1::TirRowNode { .. } => false,
                 })
                 .collect()
         }
         // The second IR fence: an IR step unit, named only — no draws (`open_da_session_tir_step_v1`
         // bounded it by the widest execution; the claim's own bound is the accused's to prove).
-        (PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. }, None) => Vec::new(),
+        (PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. }, None) => Vec::new(),
         _ => return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "an accusation's unit and binding disagree in kind" }),
     };
     let mut units = Vec::with_capacity(1 + drawn.len());
@@ -27038,7 +27042,37 @@ fn apply_da_answer_v1(
         // **The second IR fence: an IR step unit past the claim's execution**, proven by the claim's
         // own binding (`check_tir_step_out_of_range_v1`): the demand was keyed by the claim alone, so
         // its bound is the accused's to show. The session it ends is refuted like any other.
-        (PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. }, PalwDaAnswerV1::TirStepOutOfRange(carried)) => {
+        // **The second IR fence: a node of the claim's tiled trace's rows tree**, by hash arithmetic:
+        // it reaches a rows root that, with the carried ids, reproduces the claim's trace root
+        // (`check_tir_row_node_disclosure_v1`), then the identity rule over its binding.
+        (PalwDaUnitV1::TirRowNode { level, index }, PalwDaAnswerV1::TirRowNode(carried)) => {
+            if !builder.params.tir_fence2_active_at(ctx.daa_score) {
+                return Err(malformed("an IR rows-tree answer before palw_tir_fence2 is in force"));
+            }
+            let record = builder
+                .state
+                .tir_classes
+                .get(&claim.class_id)
+                .ok_or(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "the claim's class is not an IR program" })?;
+            let disclosure = carried.with_program_v1(record).map_err(malformed)?;
+            crate::palw_tir_court_v1::check_tir_row_node_disclosure_v1(
+                claim.trace_root,
+                claim.execution_root,
+                *level,
+                *index,
+                &disclosure,
+                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            )
+            .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
+            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding) {
+                return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
+            }
+            false
+        }
+        (
+            PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. },
+            PalwDaAnswerV1::TirStepOutOfRange(carried),
+        ) => {
             if !builder.params.tir_fence2_active_at(ctx.daa_score) {
                 return Err(malformed("an IR out-of-range answer before palw_tir_fence2 is in force"));
             }

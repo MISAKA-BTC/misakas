@@ -44,8 +44,8 @@ use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, PalwPromptId
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2, PalwCourtVerdictV2, PalwPanelSeatV2,
     PalwPwuRuleV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error, PalwTransitionExtrasV1,
-    PalwVoidReasonV2, apply_delta_v2, apply_palw_transition_v2_with_extras, palw_accuser_exposure_v1, palw_object_is_tir_fence2_v1,
-    palw_operator_id_v2, revert_delta_v2,
+    PalwVoidReasonV2, apply_delta_v2, apply_palw_transition_v2_with_extras, palw_accuser_exposure_v1, palw_da_event_index_v1,
+    palw_object_is_tir_fence2_v1, palw_operator_id_v2, revert_delta_v2,
 };
 use kaspa_consensus_core::palw_step_leg::{
     PalwStepFaultV1, PalwStepOpeningV1, PalwStepTileLeafV1, step_merkle_leaf_v1, step_merkle_node_v1, step_merkle_root_v1,
@@ -54,9 +54,11 @@ use kaspa_consensus_core::palw_step_leg::{
 use kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1;
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirAdmissionCarriageV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
-    PalwTirEvidenceStoreV1, PalwTirStepLeafDisclosureV1, PalwTirStepNodeDisclosureV1, build_tir_cone_refutation_v1,
+    PalwTirEvidenceStoreV1, PalwTirLogitsConsistencyV1, PalwTirStepLeafDisclosureV1, PalwTirStepNodeDisclosureV1,
+    PalwTirTraceEventDisclosureV1, PalwTirTraceLanesV1, build_tir_cone_refutation_v1, build_tir_row_node_disclosure_v1,
     build_tir_step_leaf_disclosure_v1, build_tir_step_node_disclosure_v1, check_tir_cone_refutation_v1,
-    palw_tir_step_node_frontier_v1, palw_tir_step_node_parts_v1, palw_tir_step_tree_height_v1, palw_tir_step_tree_width_v1,
+    check_tir_logits_consistency_v1, palw_tir_step_node_frontier_v1, palw_tir_step_node_parts_v1, palw_tir_step_tree_height_v1,
+    palw_tir_step_tree_width_v1, tir_logits_event_disclosure_v1,
 };
 use kaspa_consensus_core::palw_tir_one_move_v1::{
     palw_tir_one_move_accusation_v1, palw_tir_one_move_shape_v1, palw_tir_one_move_verdict_v1,
@@ -981,4 +983,229 @@ fn every_node_of_the_fixture_tree_is_answered_from_its_own_tree() {
     // The index-bound leaf node, as the tree hashes it.
     let leaf = &x.preimages[0];
     assert_eq!(tree.levels[0][0], step_merkle_leaf_v1(0, &step_tile_leaf_hash_v1(&f.ctx.context_hash(), &f.class_id, leaf)));
+}
+
+// =================================================================================================
+// The trace's rows tree: a lie only in the trace, reached by one seat
+// =================================================================================================
+
+fn row_answer(f: &Fixture, x: &Execution, claim: Hash64, level: u8, index: u64) -> PalwConsensusObjectV2 {
+    let d = build_tir_row_node_disclosure_v1(&x.binding, level, index, &Store { f, x }, MAX)
+        .unwrap_or_else(|e| panic!("rows node ({level}, {index}): {e}"));
+    disclosed(claim, PalwDaUnitV1::TirRowNode { level, index }, PalwDaAnswerV1::TirRowNode(Box::new(d)))
+}
+
+/// An event demand past R-core+ (`DefaultAccused`): row `row`, logits tile `tile` of the trace.
+fn event_demand(claim: Hash64, row: u32, tile: u8, accuser: u64) -> PalwConsensusObjectV2 {
+    PalwConsensusObjectV2::DefaultAccused {
+        claim,
+        missing_event_index: palw_da_event_index_v1(row, tile),
+        accuser: bond_key(accuser),
+        signature: vec![3; 8],
+    }
+}
+
+/// The accused's IR event disclosure of `(row, tile)`, program stripped.
+fn event_disclosure(x: &Execution, row: u32, tile: u8) -> PalwTirTraceEventDisclosureV1 {
+    let mut d = tir_logits_event_disclosure_v1(&x.binding, &x.rows, &x.generated, row, tile).expect("an event of the run");
+    d.strip_program_v1();
+    d
+}
+
+/// The honest run's row roots — the rows tree's leaves.
+fn row_roots(f: &Fixture, rows: &[Vec<i32>]) -> Vec<Hash64> {
+    let ctx_hash = f.ctx.context_hash();
+    rows.iter()
+        .enumerate()
+        .map(|(r, row)| kaspa_consensus_core::palw_step_refute::tiled_logits_row_root_v1(&ctx_hash, r as u32, row).expect("a row"))
+        .collect()
+}
+
+/// **A liar whose lie is only in its trace is convicted by one seat inside its four sessions.** The
+/// accused commits the honest step tree and a trace whose row `r` differs at one lane (not the
+/// selected one: the ids stand). The seat sees the claim's trace root is not its own while its own step
+/// root, put beside the claim's trace root, gives the claim's execution root — the steps agree, the
+/// trace does not — so it descends the trace's rows tree: the root (`TirRowNode`), then the row its own
+/// tree disagrees with, whose tile leaves name the tile; that tile's lanes it demands as an event unit.
+/// The liar answers every demand. The step tree's own logits leaf of row `r` beside the disclosed trace
+/// tile convicts (`TirLogits`, one move): the claim is voided for fraud and the seat's refuted exposure
+/// refunded.
+#[test]
+fn a_trace_only_liar_is_convicted_by_one_seat_down_the_rows_tree() {
+    let f = fixture();
+    let honest = f.honest();
+    let decode = f.rows.len();
+    let r = decode / 2;
+    let selected = f.generated[r] as usize;
+    let top = *f.rows[r].iter().max().expect("a row");
+    let lane = (0..f.rows[r].len()).find(|l| *l != selected && f.rows[r][*l] + 1 < top).expect("a lane under the row's maximum");
+    let mut rows = f.rows.clone();
+    rows[r][lane] += 1;
+    let accused = f.commit(&f.values, &rows, &f.generated);
+    assert_eq!(accused.binding.step_merkle_root, honest.binding.step_merkle_root, "the steps agree");
+    assert_ne!(accused.binding.full_logits_trace_root, honest.binding.full_logits_trace_root, "the trace does not");
+    let (mut run, claim_id) = claimed(&f, &accused);
+    run.at(FENCE2, &[], None);
+    let claim = run.s.claim(&claim_id).expect("live").clone();
+    // The seat's reading: its own steps with the claim's trace root give the claim's execution root.
+    assert_eq!(
+        kaspa_consensus_core::palw_tir_step_v1::palw_tir_execution_root_v1(
+            &f.ctx.context_hash(),
+            &claim.trace_root,
+            &f.class_id,
+            honest.binding.step_leaf_count,
+            &honest.binding.step_merkle_root,
+        ),
+        claim.execution_root,
+        "the lie is in the trace alone"
+    );
+    // Down the rows tree.
+    let own_roots = row_roots(&f, &f.rows);
+    let own = Tree::of(&own_roots);
+    let height = palw_tir_step_tree_height_v1(decode as u64);
+    let mut sessions = 0u32;
+    let mut unit = PalwDaUnitV1::TirRowNode { level: height, index: 0 };
+    let (row, tile) = loop {
+        run.step(&[demand(claim_id, unit, SEAT)]);
+        sessions += 1;
+        assert_eq!(run.session_units(&claim_id, SEAT), Some(vec![unit]), "named only");
+        let PalwDaUnitV1::TirRowNode { level, index } = unit else { unreachable!() };
+        let answer = row_answer(&f, &accused, claim_id, level, index);
+        run.step(std::slice::from_ref(&answer));
+        assert!(run.session_units(&claim_id, SEAT).is_none(), "rows node ({level}, {index}): refuted and closed");
+        let PalwConsensusObjectV2::MaterialDisclosedV2 { answer: PalwDaAnswerV1::TirRowNode(d), .. } = answer else { unreachable!() };
+        if level == 0 {
+            // The row's tile leaves: the first the seat's own row disagrees with.
+            let ctx_hash = f.ctx.context_hash();
+            let own_tiles: Vec<Hash64> = f.rows[index as usize]
+                .chunks(kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES)
+                .enumerate()
+                .map(|(t, lanes)| kaspa_consensus_core::palw_step_refute::tiled_logits_tile_leaf_v1(&ctx_hash, index as u32, t as u32, lanes))
+                .collect();
+            let t = d.frontier.iter().zip(&own_tiles).position(|(a, b)| a != b).expect("the row differs, so a tile does");
+            break (index as u32, t as u8);
+        }
+        let (below, first, end) = palw_tir_step_node_frontier_v1(decode as u64, level, index).expect("a node");
+        let k = (first..end).find(|p| own.levels[below as usize][*p as usize] != d.frontier[(*p - first) as usize]).expect("a node differs")
+            - first;
+        unit = PalwDaUnitV1::TirRowNode { level: below, index: first + k };
+    };
+    assert_eq!(row as usize, r, "the descent names the forged row");
+    // The tile's lanes, as an event unit: the liar answers the session's every unit.
+    run.step(&[event_demand(claim_id, row, tile, SEAT)]);
+    sessions += 1;
+    let units = run.session_units(&claim_id, SEAT).expect("an event session");
+    let answers: Vec<PalwConsensusObjectV2> = units
+        .iter()
+        .map(|u| {
+            let PalwDaUnitV1::Event { row, tile } = *u else { panic!("event units: {u:?}") };
+            disclosed(claim_id, *u, PalwDaAnswerV1::TirEvent(Box::new(event_disclosure(&accused, row, tile))))
+        })
+        .collect();
+    run.step(&answers);
+    assert!(run.session_units(&claim_id, SEAT).is_none(), "the event session is refuted and closed");
+    assert!(sessions <= 4, "inside one seat's four sessions: {sessions}");
+    assert_eq!(u32::from(run.sessions_opened_by(&claim_id, SEAT)), sessions);
+    eprintln!("{decode} rows: the seat reached row {row} tile {tile} in {sessions} sessions");
+    // The close: the step tree's logits leaf of that row (the seat's own, which is the accused's) beside
+    // the disclosed trace tile.
+    let PalwTirTraceEventDisclosureV1::Tiled { generated_token_ids, row_root, row_opening, tile_lanes, tile_opening, .. } =
+        event_disclosure(&accused, row, tile)
+    else {
+        unreachable!("the tiled scheme")
+    };
+    let post = (f.space.occurrences().len() - 1) as u32;
+    let position = f.ctx.declared_prefill_tokens - 1 + row;
+    let leaf = f
+        .leaves
+        .iter()
+        .position(|l| {
+            matches!(l.kind, kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::Commit { occurrence, node, first_element, .. }
+                if occurrence == post && node == f.space.program.logits && l.position == position
+                    && (first_element as usize) <= lane && lane < first_element as usize + l.value_count as usize)
+        })
+        .expect("the row's logits leaf") as u64;
+    let accusation = PalwTirLogitsConsistencyV1 {
+        binding: accused.binding.clone(),
+        step_opening: kaspa_consensus_core::palw_step_leg::step_opening_v1(&honest.hashes, leaf).expect("an opening"),
+        step_preimage: honest.preimages[leaf as usize].clone(),
+        trace: PalwTirTraceLanesV1::Tiled { generated_token_ids, row_root, row_opening, tile_lanes, tile_opening },
+    };
+    let verdict = check_tir_logits_consistency_v1(&accusation, &RULES).expect("the trace tile convicts");
+    assert_eq!(verdict.fault, PalwStepFaultV1::TirLogitsTraceMismatch { value_index: lane as u32 });
+    let mut one_move = palw_tir_one_move_accusation_v1(
+        claim_id,
+        &claim,
+        bond_key(SEAT),
+        PalwCourtVerdictV2::ExecutorGuilty,
+        PalwCourtVerdictProofV2::TirLogits { accusation: Box::new(accusation) },
+    );
+    one_move.signature = vec![9; 8];
+    palw_tir_one_move_shape_v1(&one_move).expect("the accusation's shape");
+    let court = PalwCourtParamsV2::new(LADDER, 20, 2).expect("a court");
+    assert_eq!(
+        palw_tir_one_move_verdict_v1(&run.s, &claim, &one_move, &court, LADDER, PalwPromptIdsFormV1::Flat),
+        Ok(PalwCourtVerdictV2::ExecutorGuilty),
+        "the acceptance layer re-derives the verdict"
+    );
+    assert!(palw_accuser_exposure_v1(&run.s, &bond_key(SEAT)) > 0);
+    run.step(&[PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(one_move) }]);
+    assert!(
+        matches!(run.s.claim(&claim_id).map(|c| &c.phase), Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. })),
+        "the trace liar is voided for fraud"
+    );
+    assert_eq!(palw_accuser_exposure_v1(&run.s, &bond_key(SEAT)), 0, "the seat's refuted exposure is refunded");
+}
+
+/// **A rows-tree answer that does not reach the claim's trace root is refused, and a unit past the
+/// trace is answered by the binding**: a tampered frontier, sibling or id, another row's answer, the
+/// honest trace's answer; a row at the decode count and a node above the rows tree proven out of range.
+#[test]
+fn an_inconsistent_rows_answer_is_refused_and_a_row_past_the_trace_is_proven_so() {
+    let f = fixture();
+    let honest = f.honest();
+    let decode = f.rows.len() as u64;
+    let r = f.rows.len() / 2;
+    let mut rows = f.rows.clone();
+    rows[r][0] += 1;
+    let accused = f.commit(&f.values, &rows, &f.generated);
+    let (mut run, claim_id) = claimed(&f, &accused);
+    run.at(FENCE2, &[], None);
+    let unit = PalwDaUnitV1::TirRowNode { level: 0, index: r as u64 };
+    run.step(&[demand(claim_id, unit, OTHER)]);
+    let refused = |object: PalwConsensusObjectV2, what: &str| {
+        let e = run.refused(&[object]);
+        assert!(matches!(e, PalwStateV2Error::DaOpeningRefused { .. } | PalwStateV2Error::DaAnswerMalformed { .. }), "{what}: {e}");
+    };
+    let tampered = |edit: &dyn Fn(&mut kaspa_consensus_core::palw_tir_court_v1::PalwTirRowNodeDisclosureV1)| {
+        let PalwConsensusObjectV2::MaterialDisclosedV2 { answer: PalwDaAnswerV1::TirRowNode(mut d), .. } =
+            row_answer(&f, &accused, claim_id, 0, r as u64)
+        else {
+            unreachable!()
+        };
+        edit(&mut d);
+        disclosed(claim_id, unit, PalwDaAnswerV1::TirRowNode(d))
+    };
+    refused(tampered(&|d| d.frontier[0] = h64(0xF00)), "a tile leaf flipped");
+    refused(tampered(&|d| d.frontier.push(h64(0xF01))), "a tile leaf added");
+    refused(tampered(&|d| d.siblings[0] = h64(0xF02)), "a sibling flipped");
+    refused(tampered(&|d| d.generated_token_ids[0] ^= 1), "an id changed");
+    let PalwConsensusObjectV2::MaterialDisclosedV2 { answer: neighbour, .. } = row_answer(&f, &accused, claim_id, 0, (r as u64 + 1) % decode) else {
+        unreachable!()
+    };
+    refused(disclosed(claim_id, unit, neighbour), "another row's answer");
+    refused(row_answer(&f, &honest, claim_id, 0, r as u64), "the honest trace's answer");
+    refused(out_of_range(&accused, claim_id, unit), "an out-of-range proof of a row inside the trace");
+    run.step(&[row_answer(&f, &accused, claim_id, 0, r as u64)]);
+    assert!(run.session_units(&claim_id, OTHER).is_none(), "the honest answer refutes the session");
+    // Past the trace: the binding proves it.
+    for unit in [
+        PalwDaUnitV1::TirRowNode { level: 0, index: decode },
+        PalwDaUnitV1::TirRowNode { level: palw_tir_step_tree_height_v1(decode) + 1, index: 0 },
+    ] {
+        run.step(&[demand(claim_id, unit, OTHER)]);
+        refused(row_answer(&f, &accused, claim_id, 0, 0), "a row's answer for a unit past the trace");
+        run.step(&[out_of_range(&accused, claim_id, unit)]);
+        assert!(run.session_units(&claim_id, OTHER).is_none(), "{unit:?}: proven past the trace");
+    }
 }
