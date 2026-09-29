@@ -5899,15 +5899,19 @@ dependencies = [
 name = "misaka-dnsseeder"
 version = "1.1.0"
 dependencies = [
+ "async-trait",
  "clap 4.5.51",
  "kaspa-consensus-core",
  "kaspa-core",
+ "kaspa-p2p-lib",
  "kaspa-rpc-core",
+ "kaspa-utils",
  "kaspa-wrpc-client",
  "log",
  "misaka-endpoints",
  "rand 0.8.6",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
