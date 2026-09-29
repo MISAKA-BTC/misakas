@@ -4,14 +4,17 @@
 //! subject:
 //!
 //! * the chain derives the evaluation pipeline from the job, the class and the policy's scoring
-//!   parameters — the subject's program lifted unchanged into a `Decode` stage over its own layout,
-//!   then the scoring library's stages — and it validates;
+//!   parameters — the subject's program lifted unchanged over its own layout: an ExactMatch job's
+//!   text stage alone (the key is hidden until every subject's outputs are final, so the fold scores
+//!   the generation at the key's reveal), a RefLogLik job's `Decode` stage then the scoring library's
+//!   stages — and it validates;
 //! * **the params are the class's own**: the evaluation pipeline's inventory root is the class's Phase
 //!   F `artifact_root`, so the court reads the subject's weights from openings under the root the
 //!   class registered;
 //! * an ExactMatch job (Generate) and a RefLogLik job (TeacherForced) run, bind their execution root
 //!   over the stage roots, the ids and the score, and every leaf of every stage is acquitted by the
-//!   generative court;
+//!   generative court; the ExactMatch job's answer, kept at acceptance, scores at the key's reveal as
+//!   the library's stage would;
 //! * judged kinds wait for the judge class kind; a job whose kind, mode and stage disagree is refused.
 
 use kaspa_consensus_core::Hash64;
@@ -25,6 +28,7 @@ use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTi
 use misaka_palw_tir::builder::ProgramBuilder;
 use misaka_palw_tir::demand::DemandLimits;
 use misaka_palw_tir::interp::{MapParams, ParamSource};
+use misaka_palw_tir::pipeline::TripRule;
 use misaka_palw_tir::pipeline::{PipelineJob, PipelineParams, stage_job_facts};
 use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
 use misaka_palw_tir::scoring::{exact_match_reference_v1, ref_loglik_join_v1, ref_loglik_reference_v1};
@@ -181,35 +185,92 @@ fn an_exact_match_job_derives_runs_binds_and_is_adjudicable() {
         PalwEvalSubjectClassV1 { class_id: Hash64::from_bytes([0x22; 64]), artifact_root, program: &program, layout: &layout };
     let seed = palw_improve_eval_seed_v1(&Hash64::from_bytes([0x33; 64]), 7);
     let j = job(PalwScoringKindV1::ExactMatch, PalwEvalModeV1::Generate { seed, max_new: 4, stop_ids: vec![] });
-    let ctx =
-        palw_improve_eval_context_v1(&j, &subject, PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1, key_cap: 4 }).unwrap();
+    let ctx = palw_improve_eval_context_v1(&j, &subject, PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 }).unwrap();
     assert_eq!(ctx.job_id, j.id());
-    assert_eq!(ctx.pipeline.stages.len(), 2);
+    assert_eq!(ctx.pipeline.stages.len(), 1, "the generation alone");
+    assert_eq!(ctx.pipeline.stages[0].trip, TripRule::TextStream, "as the pipeline's text stage");
+    assert!(ctx.scalars.is_empty());
     assert_eq!(ctx.layouts[0], layout, "the subject runs over its own layout");
-    let params = Params(vec![params_v1.clone(), MapParams::default()]);
-    // The executor generates (FP Job V4's greedy decode) and the exact match reads what it decoded.
+    let params = Params(vec![params_v1.clone()]);
+    // The executor generates (FP Job V4's greedy decode); the key is not in the job.
     let prompt = vec![3u32, 5, 1];
     let probe = PipelineJob { prompt: prompt.clone(), scalars: ctx.scalars.clone(), ..PipelineJob::default() };
     let decode = ctx.decode.clone().expect("a generating job decodes");
     let e = palw_gen_execute_v1(&ctx.pipeline, &ctx.programs, &ctx.layouts, &params, &probe, &decode, ctx.seed).unwrap();
     assert_eq!(e.claim.generated.len(), 4);
-    assert_eq!(e.run.output.data, vec![0], "no key: the empty key does not match four ids");
-    // The key is the whole output: a pass, the same generation (the decode does not read the key).
-    let keyed = PipelineJob { key: e.claim.generated.clone(), ..probe.clone() };
-    let e = palw_gen_execute_v1(&ctx.pipeline, &ctx.programs, &ctx.layouts, &params, &keyed, &decode, ctx.seed).unwrap();
-    assert_eq!(e.run.output.data, vec![exact_match_reference_v1(&e.claim.generated, &keyed.key, -1, -1) as i128]);
-    assert_eq!(e.run.output.data, vec![1]);
-    // The binding: the execution root over the stage roots, the ids and the score.
-    let score: Vec<i32> = e.run.output.data.iter().map(|v| *v as i32).collect();
-    let binding = PalwEvalBindingV1::of(&j, subject.class_id, &layout, &e.claim, e.space.leaf_count(), score);
+    // The binding: the execution root over the stage roots and the ids; no score is committed.
+    let binding = PalwEvalBindingV1::of(&j, subject.class_id, &layout, &e.claim, e.space.leaf_count(), vec![], vec![]);
     assert_eq!(binding.execution_root(), binding.committed_execution_root);
-    assert_eq!(binding.score_value(), Ok(1));
+    assert!(binding.score_value().is_err(), "an ExactMatch claim commits no score");
+    let roots = binding.claim_roots();
+    assert_eq!(roots.trace_root, e.claim.step_root, "the claim's trace root is the step root");
+    assert_eq!(roots.output_root, palw_improve_eval_generated_root_v1(&e.claim.generated));
     let mut other = binding.clone();
-    other.score = vec![0];
-    assert_ne!(other.execution_root(), binding.committed_execution_root, "the score is in the root");
+    other.generated[0] ^= 1;
+    assert_ne!(other.execution_root(), binding.committed_execution_root, "the ids are in the root");
+    // At acceptance the row keeps the answer; at the key's reveal it scores as the library's stage.
+    let answer = palw_improve_answer_of_v1(&e.claim.generated, -1, -1);
+    for key in [e.claim.generated.clone(), vec![e.claim.generated[0]], vec![]] {
+        let fold = answer == Some(palw_improve_answer_span_hash_v1(&key));
+        assert_eq!(fold, exact_match_reference_v1(&e.claim.generated, &key, -1, -1));
+        let stage = misaka_palw_tir::scoring::exact_match_v1(misaka_palw_tir::scoring::ExactMatchShapeV1 {
+            gen_len: 4,
+            key_len: 4,
+            token_bound: program.token_bound,
+        })
+        .unwrap();
+        assert_eq!(run_exact_match_stage(&stage, &e.claim.generated, &key, -1, -1), fold as i64, "the library's stage agrees");
+    }
     // Every leaf, the subject's included, is adjudicable from the class's own params.
-    let judged = every_leaf_acquitted(&ctx, &params, &e, &keyed);
+    let judged = every_leaf_acquitted(&ctx, &params, &e, &probe);
     assert!(judged > 20, "{judged}");
+}
+
+/// The library's ExactMatch stage run on its own, the key padded to its length.
+fn run_exact_match_stage(
+    stage: &misaka_palw_tir::program_v2::TirProgramV2,
+    generated: &[u32],
+    key: &[u32],
+    open: i32,
+    close: i32,
+) -> i64 {
+    use misaka_palw_tir::pipeline::{Binding, StageDecl, TIR_PIPELINE_VERSION_V1, TirPipelineV1, TokenPad, TokenRule, TokenSource};
+    let rule = |source, to_len| TokenRule { prefix: vec![], source, suffix: vec![], pad: Some(TokenPad { id: 0, to_len }) };
+    let pipeline = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![StageDecl {
+            name: "score".into(),
+            program: 0,
+            trip: TripRule::Fixed { n: 1 },
+            max_trip: 1,
+            tokens: None,
+            bind: vec![
+                Binding::JobTokens { rule: rule(TokenSource::Prompt, 4) },
+                Binding::JobTokenCount { rule: rule(TokenSource::Prompt, 4) },
+                Binding::JobTokens { rule: rule(TokenSource::Key, 4) },
+                Binding::JobTokenCount { rule: rule(TokenSource::Key, 4) },
+                Binding::JobScalar { index: 0 },
+                Binding::JobScalar { index: 1 },
+            ],
+        }],
+        output_stage: 0,
+    };
+    let job = PipelineJob {
+        prompt: generated.to_vec(),
+        key: key.to_vec(),
+        scalars: vec![open as i64, close as i64],
+        ..PipelineJob::default()
+    };
+    struct NoRandom;
+    impl misaka_palw_tir::pipeline::RandomSource for NoRandom {
+        fn random(&self, _: u16, _: misaka_palw_tir::program_v2::RandomDist, _: u32, _: &[u32]) -> Option<Tensor> {
+            None
+        }
+    }
+    let params = Params(vec![MapParams::default()]);
+    let run = misaka_palw_tir::pipeline::run_pipeline(&pipeline, std::slice::from_ref(stage), &params, &NoRandom, &job)
+        .expect("the stage runs");
+    run.output.data[0] as i64
 }
 
 #[test]
@@ -234,8 +295,9 @@ fn a_ref_loglik_job_is_teacher_forced_over_the_reference() {
     let want = ref_loglik_reference_v1(&rows, &reference, 1 << 12);
     let score: Vec<i32> = e.run.output.data.iter().map(|v| *v as i32).collect();
     assert_eq!(ref_loglik_join_v1(score[0], score[1]), want);
-    let binding = PalwEvalBindingV1::of(&j, subject.class_id, &layout, &e.claim, e.space.leaf_count(), score);
+    let binding = PalwEvalBindingV1::of(&j, subject.class_id, &layout, &e.claim, e.space.leaf_count(), vec![], score);
     assert_eq!(binding.score_value(), Ok(want));
+    assert_eq!(binding.generated, reference, "teacher-forced: the ids are the reference");
     let judged = every_leaf_acquitted(&ctx, &params, &e, &pj);
     assert!(judged > 20, "{judged}");
 }
@@ -270,7 +332,7 @@ fn judged_kinds_wait_and_disagreements_are_refused() {
         palw_improve_eval_context_v1(
             &job(PalwScoringKindV1::ExactMatch, judged),
             &subject,
-            PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1, key_cap: 4 }
+            PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 }
         )
         .err(),
         Some(PalwEvalErrorV1::KindMismatch),
@@ -336,10 +398,9 @@ fn the_subject_s_dissected_points_are_its_class_s() {
         PalwEvalSubjectClassV1 { class_id: Hash64::default(), artifact_root: Hash64::default(), program: &program, layout: &layout };
     let seed = Hash64::from_bytes([1; 64]);
     let j = job(PalwScoringKindV1::ExactMatch, PalwEvalModeV1::Generate { seed, max_new: 4, stop_ids: vec![] });
-    let ctx =
-        palw_improve_eval_context_v1(&j, &subject, PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1, key_cap: 4 }).unwrap();
+    let ctx = palw_improve_eval_context_v1(&j, &subject, PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 }).unwrap();
     let at_subject: Vec<(u8, u16)> = ctx.dissected.iter().filter(|(s, _, _)| *s == 0).map(|(_, b, n)| (*b, *n)).collect();
     assert_eq!(at_subject, class_points, "the class's own points, at the subject stage");
-    assert!(ctx.dissected.iter().all(|(s, _, _)| *s == 0), "the scoring stages read no history");
+    assert!(ctx.dissected.iter().all(|(s, _, _)| *s == 0), "only the subject stage reads history");
     assert_eq!(ctx.programs[0].v1_view().encode(), program.encode(), "the lifted program's view is the class's program");
 }
