@@ -2087,9 +2087,12 @@ is therefore always the executor's malformed commitment.
 ```
 TirPipelineV1 := version u16 (= 1) · stages [StageDecl] · output_stage u8
 StageDecl     := name String · program u16 · trip TripRule · max_trip u32 · tokens Option<TokenRule> · bind [Binding]
-TripRule      := tag 0: Fixed · n u32 | tag 1: JobSteps | tag 2: TokenCount | tag 3: TextStream
+TripRule      := tag 0: Fixed · n u32 | tag 1: JobSteps | tag 2: TokenCount | tag 3: TextStream | tag 4: Decode
 TokenRule     := prefix [u32] · source TokenSource · suffix [u32] · pad Option<TokenPad>
 TokenSource   := tag 0: Prompt | tag 1: Negative | tag 2: Source   -- Source: the job's source ids (RFC-0003 §II.2.2)
+               | tag 3: Generated                                  -- what the Decode stage produced (RFC-0004 §7.2)
+               | tag 4: Key                                        -- an evaluation item's key ids (RFC-0004 §7.3)
+               | tag 5: FinalizedOutput · claim u8 · stage u8      -- a final claim's generated ids (RFC-0004 §7.2)
 TokenPad      := id u32 · to_len u32
 Binding       := tag 0: JobScalar     · index u8
                | tag 1: JobTokens     · rule TokenRule
@@ -2120,7 +2123,11 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
     when there is a pad. A sequence longer than the pad is `Operand`;
   - `TextStream` (the text stage, RFC-0003 §II.2.1): the text job's stream, the prompt ids and then
     the generated ids. There is one position per id whose logits the decode consumed:
-    `T = |prompt| + max(|generated|, 1) − 1`, because the last generated id is never fed back.
+    `T = |prompt| + max(|generated|, 1) − 1`, because the last generated id is never fed back;
+  - `Decode` (RFC-0004 §7.2): the same stream and trip count, in a stage that is **not** the output.
+    It runs before the stages after it, which read what it decoded — or, teacher-forced, what the job
+    gave — through `TokenSource::Generated`, and its rows through `StageRows` / `StageRowCount`: its
+    **consumed** logits rows, position `|prompt| − 1` on, row `r` the one `generated[r]` came from.
 
   A trip count outside `[1, max_trip]` is `Position`.
 - **Tokens.** A `TokenCount` stage's `Input(0)` at position `p` is its sequence's `p`-th id. A
@@ -2135,9 +2142,11 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
   from its binding:
   - `JobScalar`: `job.scalars[index]` as a rank-0 tensor of the input's dtype;
   - `JobTokens`: the rule applied to the job's ids, padded to its length;
-  - `StageRows`: rows `drop … T − 1` of the earlier `Rows` stage, zero-padded to `pad_to`;
+  - `StageRows`: rows `drop … T − 1` of the earlier `Rows` stage, zero-padded to `pad_to` — of a
+    `Decode` stage, its consumed rows (from position `|prompt| − 1 + drop`);
   - `StageFinal`: the earlier `Final` stage's output;
-  - `StageRowCount`: `max(T − drop, 0)` of the earlier `Rows` stage;
+  - `StageRowCount`: `max(T − drop, 0)` of the earlier `Rows` stage (of a `Decode` stage, its consumed
+    rows less `drop`);
   - `JobTokenCount`: `|prefix ‖ ids ‖ suffix|` **before** padding, a rank-0 `idx`. It is the count a
     bidirectional encoder's mask admits (`Compare(Iota < count)`). The mask then never depends on
     the pad id, which a prompt may also contain;
@@ -2163,22 +2172,28 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
   - a `TokenCount` stage reads the token and has a token rule. Its template ids are below
     `token_bound`, its pad (if any) is no shorter than the template, and a padded run has
     `max_trip = pad.to_len`;
-  - a `TextStream` stage reads the token and has no token rule.
+  - a `TextStream` or `Decode` stage reads the token and has no token rule.
 - **NF-P4.** One random input per domain across the whole pipeline (PALW-RND-7).
 - **NF-P5.** One binding per external input. An edge reads only an earlier stage.
 - **NF-P6.** A `JobScalar` binds a rank-0 input, with `index < 16`. A `JobTokens` binds an
   `idx [pad.to_len]` input, and its template ids lie inside the input's interval. A
   `JobTokenCount`'s template is padded, and it binds a rank-0 `idx` whose interval contains
   `[0, pad.to_len]`.
-- **NF-P7.** A `StageRows` edge reads a `Rows` stage, and its shape is `[pad_to] ++ row shape` of the
+- **NF-P7.** A `StageRows` edge reads a `Rows` stage or a `Decode` stage's logits rows, and its shape is `[pad_to] ++ row shape` of the
   row dtype, with `pad_to ≥ max(max_trip − drop, 1)`. The rows' proven interval (§15.5), with 0 for
   the pad, lies inside the input's. A `StageFinal` edge reads a `Final` stage, with that output's
   type, and its proven interval lies inside the input's.
-- **NF-P8.** A `StageRowCount` edge reads a `Rows` stage, binds a rank-0 `idx`, and
+- **NF-P8.** A `StageRowCount` edge reads a `Rows` stage or a `Decode` stage, binds a rank-0 `idx`, and
   `[0, max_trip − drop]` lies inside the input's interval.
 - **NF-P9 (with NF-P9′).** The output stage is a `Rows` or `Final` program, or it is **the text
-  stage**: a `Logits` program whose trip is `TextStream`. No other stage is `TextStream` or a `Logits`
-  program. Every other stage feeds a later one (no dead stage).
+  stage**: a `Logits` program whose trip is `TextStream`. A `Logits` program elsewhere is the
+  **decode stage** (trip `Decode`), which is never the output. A pipeline has at most one stream
+  stage (`TextStream` or `Decode`), and no other stage is a `Logits` program. Every other stage feeds a
+  later one (no dead stage); reading `Generated` feeds the decode stage.
+- **NF-P11 (RFC-0004 §7.2).** A rule whose source is `Generated` is a stage's after the pipeline's
+  `Decode` stage, and only such a pipeline has one. A `FinalizedOutput` names a claim below 8. The
+  job carries the named lists (`generated`, `key`, `finalized[(claim, stage)]`); a finalized output the
+  job does not carry is `Missing`.
 - **NF-P10.** A `JobImage` binds an `i16 [h, w, 3]` input whose interval contains `[0, 255]`, with
   `index < 16`. One image is bound at one size wherever it is bound. The bound images are exactly
   `0 … n − 1`, so a job carries `n` images and no index goes unread. `validate_pipeline` reports
@@ -2348,8 +2363,15 @@ image is not among the job facts.
   A court MUST read its elements only from input tiles proven under the job's `input_root`. A tile
   not proven under the root MUST NOT convict anyone.
 - **PALW-TIR-49 (the text stage).** A pipeline's `Logits` program MUST be its output stage with the
-  trip `TextStream`, and its positions MUST be the text job's stream. The IR MUST NOT select a
-  generated id: selection is RFC-0001 §A's, outside the program.
+  trip `TextStream`, or its decode stage with the trip `Decode` (RFC-0004 §7.2), and its positions
+  MUST be the job's stream. The IR MUST NOT select a generated id: selection is RFC-0001 §A's,
+  outside the program. A court holds each id a decode stage selected to its committed logits row as
+  it holds the text stage's (the decode door).
+- **PALW-TIR-50 (scoring stages, RFC-0004 §7.3).** A scoring stage is an ordinary program of the
+  scoring library (`misaka_palw_tir::scoring`: ExactMatch, RefLogLik, Judge, Pairwise; vectors
+  `consensus-vectors/tir-v2/scoring/`). Its inputs are job facts (the generated ids, the key, a
+  finalized output, job scalars) or edges (a decode stage's consumed rows, a judge stage's output),
+  and its score is its committed `Final` output — adjudicated as any committed leaf.
 
 ### 15.11 Open items
 

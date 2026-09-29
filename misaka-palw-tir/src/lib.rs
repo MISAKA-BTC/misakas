@@ -53,6 +53,7 @@ pub mod pipeline;
 pub mod prim;
 pub mod program;
 pub mod program_v2;
+pub mod scoring;
 pub mod tensor;
 pub mod types;
 pub mod validate;

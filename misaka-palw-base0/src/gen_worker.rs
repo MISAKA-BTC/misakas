@@ -445,7 +445,7 @@ pub fn gen_court_candidates_v1<P: PipelineParams>(
             .cone_close(index, limits)
             .map(|close| GenCourtMoveV1::Close(PalwCourtVerdictProofV2::GenCone { close: Box::new(close) })),
     )];
-    if challenger && stage == held.pipeline.output_stage {
+    if challenger && misaka_palw_tir::pipeline::stream_stage(&held.pipeline) == Some(stage as usize) {
         let program = &held.programs[held.pipeline.stages[stage as usize].program as usize];
         let post = (program.occurrences().len() - 1) as u16;
         let row_kind = PalwGenLeafKindV1::Commit { occurrence: post, node: program.output.node() };

@@ -34,6 +34,10 @@
 
 /// RFC-0002 Phase F (F10): `palw-class check-architecture` — IR and legacy verdicts for a config.
 pub mod check_architecture;
+/// RFC-0004's node side (A10): the epoch watcher's plan, adapter prefetch, evaluation jobs.
+pub mod improve;
+/// RFC-0004's evaluation executor (A10): an evaluation job run as its RFC-0003 pipeline.
+pub mod improve_eval;
 pub mod class_manifest;
 pub mod conformance;
 pub mod lineage;
