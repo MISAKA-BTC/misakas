@@ -71,9 +71,11 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
     use PalwConsensusObjectV2 as O;
     match object {
         O::ObjectiveOffence { kind, .. } => match kind {
-            PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted => {
-                true
-            }
+            PalwOffenceKindV1::ExecutorEquivocation
+            | PalwOffenceKindV1::PanelFalseValidV2
+            | PalwOffenceKindV1::ExecutorRefuted
+            // RFC-0002 Phase F: the IR executor's identity conviction, kind 4's twin.
+            | PalwOffenceKindV1::TirIdentityMismatch => true,
             PalwOffenceKindV1::PanelFalseValid
             | PalwOffenceKindV1::CourtExecutorGuilty
             | PalwOffenceKindV1::DaDefault
@@ -94,12 +96,19 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::CourtAttnRootClaimedHeld { .. }
         | O::CourtAttnDissected { .. }
         | O::CourtAttnChildChosen { .. } => true,
+        // RFC-0002 Phase F (F7, tags 64–66): the IR history dissection's moves, court moves like
+        // the ADR-0082 ones above.
+        O::CourtTirRootClaimed { .. } | O::CourtTirDissected { .. } | O::CourtTirChildChosen { .. } => true,
         // ADR-0152 §4-ter: the held dissection's opening and step 6's checkpoint conviction.
         O::ShardCourtAccused { .. } | O::CheckpointAccused { .. } => true,
+        // RFC-0002 Phase F (tag 62): the IR one-move accusation, a court opening like the one above.
+        O::TirShardCourtAccused { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }
         | O::ClassRegistered { .. }
+        // RFC-0002 Phase F (tag 61): an IR registration is a registration, like the one above.
+        | O::ClassRegisteredTirV1 { .. }
         | O::ClassFrozen(..)
         | O::PanelBound { .. }
         | O::ReceiptLicensed { .. }
@@ -107,6 +116,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::FreePromptCommitted { .. }
         | O::FamilyCertified { .. }
         | O::ClassLaneCertified { .. }
+        | O::ClassLaneCertifiedTirV1 { .. }
         | O::ObjectChunk { .. }
         | O::DerivedArtifactV1 { .. }
         | O::MaterialDisclosed { .. }
@@ -132,6 +142,11 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::SeatReadinessProved { .. }
         | O::ClassManifestV2 { .. }
         | O::ReceiptLicensedV2 { .. }
+        // ADR-0160 F-B (tag 59): a batch licence is a licence, as the single one beside it.
+        | O::ReceiptLicensedBatchV1 { .. }
+        // ADR-0160 F-Q (tag 60): an audit receipt batch is the licence's second half for a credited
+        // claim — market traffic like the licence, not a conviction a halt must let through.
+        | O::AuditReceiptBatchV1 { .. }
         | O::SeatReadinessProvedV2 { .. }
         | O::OptimisticLicensed { .. }
         | O::PanelUnavailableQuorum { .. }
@@ -246,6 +261,7 @@ pub fn palw_h1_carrier_lane_key_v1(object: &PalwConsensusObjectV2) -> Option<Pal
         O::ReporterCommitted { reporter, .. } | O::ReporterRevealed { reporter, .. } => Some(PalwH1LaneKeyV1::Reporter(*reporter)),
         O::CourtOpened { claim, .. } => Some(PalwH1LaneKeyV1::CourtOpening(*claim)),
         O::ShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
+        O::TirShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
         O::CheckpointAccused { accusation } => Some(PalwH1LaneKeyV1::CheckpointConviction(accusation.claim)),
         _ => None,
     }

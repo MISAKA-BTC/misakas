@@ -1,0 +1,834 @@
+{
+  "format": "palw-tir-v1/program-vectors/3",
+  "spec": "docs/spec/palw/04b-tensor-ir.md",
+  "name": "fixed-state-saturation",
+  "description": "StateWrite saturating to [-100, 100], one state instance per layer",
+  "program_borsh_hex": "010061fa4aa57adfc79053c5e517515e50c7ae7c036abc43ff931053144691ba31c9212539a93514f831a8472ca75a39b094177736aa5818eeae547bb31fbf89f589040000000000040000000000020000000201000000020000000800000025000000e9ffffff020000000004000000ceffffff0100000003000000616363009cffffffffffffff640000000000000001010000000200000001030000000300000070726500000000020000000701000000050002000000000000010000000000000201000000000100000001010000000100030000006163630100000002010000000001000000050000000a020000000100030000020100000000020000000008020000000000000301000201000000000200000000080200000004000000010002010000000002000000001700000100000000020001010000000002000000000c0001000000000300020100000000010000000101000000040004000000706f7374010000000201000000000100000001000000000100000001000201000000000100000001000000000002000000010102000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "graph_ir_root_hex": "dcc4422a07d843bd575c689b18c8b2e41812d69589ca97749d722b2ba987ea80eb8ad3ffa4dcac6672befc8ecc0c909f6f0bc09711336095def307d6cfa89c88",
+  "params": [],
+  "steps": [
+    {
+      "pos": 0,
+      "token": 0,
+      "logits": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "0"
+        ]
+      },
+      "commits": [
+        {
+          "slot": 1,
+          "block": 0,
+          "layer": null,
+          "node": 1,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        },
+        {
+          "slot": 6,
+          "block": 1,
+          "layer": 0,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-100"
+            ]
+          }
+        },
+        {
+          "slot": 11,
+          "block": 1,
+          "layer": 1,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        },
+        {
+          "slot": 12,
+          "block": 2,
+          "layer": null,
+          "node": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "pos": 1,
+      "token": 3,
+      "logits": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "0"
+        ]
+      },
+      "commits": [
+        {
+          "slot": 1,
+          "block": 0,
+          "layer": null,
+          "node": 1,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "3"
+            ]
+          }
+        },
+        {
+          "slot": 6,
+          "block": 1,
+          "layer": 0,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-89"
+            ]
+          }
+        },
+        {
+          "slot": 11,
+          "block": 1,
+          "layer": 1,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        },
+        {
+          "slot": 12,
+          "block": 2,
+          "layer": null,
+          "node": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "pos": 2,
+      "token": 1,
+      "logits": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "0"
+        ]
+      },
+      "commits": [
+        {
+          "slot": 1,
+          "block": 0,
+          "layer": null,
+          "node": 1,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "1"
+            ]
+          }
+        },
+        {
+          "slot": 6,
+          "block": 1,
+          "layer": 0,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-102"
+            ]
+          }
+        },
+        {
+          "slot": 11,
+          "block": 1,
+          "layer": 1,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        },
+        {
+          "slot": 12,
+          "block": 2,
+          "layer": null,
+          "node": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "pos": 3,
+      "token": 2,
+      "logits": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "0"
+        ]
+      },
+      "commits": [
+        {
+          "slot": 1,
+          "block": 0,
+          "layer": null,
+          "node": 1,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "2"
+            ]
+          }
+        },
+        {
+          "slot": 6,
+          "block": 1,
+          "layer": 0,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-78"
+            ]
+          }
+        },
+        {
+          "slot": 11,
+          "block": 1,
+          "layer": 1,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        },
+        {
+          "slot": 12,
+          "block": 2,
+          "layer": null,
+          "node": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "pos": 4,
+      "token": 3,
+      "logits": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "0"
+        ]
+      },
+      "commits": [
+        {
+          "slot": 1,
+          "block": 0,
+          "layer": null,
+          "node": 1,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "3"
+            ]
+          }
+        },
+        {
+          "slot": 6,
+          "block": 1,
+          "layer": 0,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-17"
+            ]
+          }
+        },
+        {
+          "slot": 11,
+          "block": 1,
+          "layer": 1,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        },
+        {
+          "slot": 12,
+          "block": 2,
+          "layer": null,
+          "node": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "pos": 5,
+      "token": 3,
+      "logits": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "-50"
+        ]
+      },
+      "commits": [
+        {
+          "slot": 1,
+          "block": 0,
+          "layer": null,
+          "node": 1,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "3"
+            ]
+          }
+        },
+        {
+          "slot": 6,
+          "block": 1,
+          "layer": 0,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        },
+        {
+          "slot": 11,
+          "block": 1,
+          "layer": 1,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-50"
+            ]
+          }
+        },
+        {
+          "slot": 12,
+          "block": 2,
+          "layer": null,
+          "node": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-50"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "pos": 6,
+      "token": 0,
+      "logits": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "0"
+        ]
+      },
+      "commits": [
+        {
+          "slot": 1,
+          "block": 0,
+          "layer": null,
+          "node": 1,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        },
+        {
+          "slot": 6,
+          "block": 1,
+          "layer": 0,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-50"
+            ]
+          }
+        },
+        {
+          "slot": 11,
+          "block": 1,
+          "layer": 1,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        },
+        {
+          "slot": 12,
+          "block": 2,
+          "layer": null,
+          "node": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "pos": 7,
+      "token": 1,
+      "logits": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "0"
+        ]
+      },
+      "commits": [
+        {
+          "slot": 1,
+          "block": 0,
+          "layer": null,
+          "node": 1,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "1"
+            ]
+          }
+        },
+        {
+          "slot": 6,
+          "block": 1,
+          "layer": 0,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-63"
+            ]
+          }
+        },
+        {
+          "slot": 11,
+          "block": 1,
+          "layer": 1,
+          "node": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        },
+        {
+          "slot": 12,
+          "block": 2,
+          "layer": null,
+          "node": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "0"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "cones": [
+    {
+      "block": 1,
+      "layer": 0,
+      "target": 4,
+      "token": 1,
+      "pos": 7,
+      "carry_in": [
+        {
+          "index": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "1"
+            ]
+          }
+        }
+      ],
+      "fixed": [
+        {
+          "index": 0,
+          "value": {
+            "dtype": "i16",
+            "shape": [
+              2
+            ],
+            "data": [
+              "50",
+              "-100"
+            ]
+          }
+        }
+      ],
+      "hist_prior": [],
+      "supplied": [],
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "-63"
+        ]
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "what": "the target is supplied (F2)",
+      "block": 1,
+      "layer": 0,
+      "target": 4,
+      "token": 1,
+      "pos": 7,
+      "carry_in": [
+        {
+          "index": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "1"
+            ]
+          }
+        }
+      ],
+      "fixed": [
+        {
+          "index": 0,
+          "value": {
+            "dtype": "i16",
+            "shape": [
+              2
+            ],
+            "data": [
+              "50",
+              "-100"
+            ]
+          }
+        }
+      ],
+      "hist_prior": [],
+      "supplied": [
+        {
+          "index": 4,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-63"
+            ]
+          }
+        }
+      ],
+      "expect_error": "Malformed"
+    },
+    {
+      "what": "a supplied index that is no node (F4)",
+      "block": 1,
+      "layer": 0,
+      "target": 4,
+      "token": 1,
+      "pos": 7,
+      "carry_in": [
+        {
+          "index": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "1"
+            ]
+          }
+        }
+      ],
+      "fixed": [
+        {
+          "index": 0,
+          "value": {
+            "dtype": "i16",
+            "shape": [
+              2
+            ],
+            "data": [
+              "50",
+              "-100"
+            ]
+          }
+        }
+      ],
+      "hist_prior": [],
+      "supplied": [
+        {
+          "index": 5,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "-63"
+            ]
+          }
+        }
+      ],
+      "expect_error": "Malformed"
+    },
+    {
+      "what": "pos = history_bound (F7)",
+      "block": 1,
+      "layer": 0,
+      "target": 4,
+      "token": 1,
+      "pos": 262144,
+      "carry_in": [
+        {
+          "index": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "1"
+            ]
+          }
+        }
+      ],
+      "fixed": [
+        {
+          "index": 0,
+          "value": {
+            "dtype": "i16",
+            "shape": [
+              2
+            ],
+            "data": [
+              "50",
+              "-100"
+            ]
+          }
+        }
+      ],
+      "hist_prior": [],
+      "supplied": [],
+      "expect_error": "Position"
+    },
+    {
+      "what": "state 0's value is absent (F1)",
+      "block": 1,
+      "layer": 0,
+      "target": 4,
+      "token": 1,
+      "pos": 7,
+      "carry_in": [
+        {
+          "index": 0,
+          "value": {
+            "dtype": "i32",
+            "shape": [
+              1
+            ],
+            "data": [
+              "1"
+            ]
+          }
+        }
+      ],
+      "fixed": [],
+      "hist_prior": [],
+      "supplied": [],
+      "expect_error": "Missing"
+    }
+  ]
+}

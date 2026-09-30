@@ -2259,6 +2259,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_operator_da_standing_v1_impl(&bond)
     }
 
+    fn palw_capacity_audit_candidates_v1(
+        &self,
+        me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_audit_door_v1::PalwAuditCandidateV1> {
+        self.virtual_processor.palw_capacity_audit_candidates_v1_impl(&me)
+    }
+
     fn palw_reporter_filing_read_v1(
         &self,
         offence_key: kaspa_consensus_core::Hash64,
@@ -2380,6 +2387,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_vesting_v1_impl(query, limit, after)
     }
 
+    fn palw_capacity_shadow_v1(
+        &self,
+        options: kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1,
+    ) -> Option<kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowV1> {
+        self.virtual_processor.palw_capacity_shadow_v1_impl(options)
+    }
+
     fn palw_v2_class_table(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
         self.virtual_processor.palw_v2_class_table_impl()
     }
@@ -2430,6 +2444,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_registered_class_carriage_v1_impl(class_id)
     }
 
+    fn palw_tir_class_record_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1> {
+        self.palw_state_v2_tip()?.tir_class_v1(&class_id).cloned()
+    }
+
     fn palw_adopt_class_carriage_v1(&self, class_id: kaspa_hashes::Hash64, carriage: &[u8]) -> Result<(), String> {
         self.virtual_processor.palw_adopt_class_carriage_v1_impl(class_id, carriage)
     }
@@ -2467,6 +2488,15 @@ impl ConsensusApi for Consensus {
         candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3>,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         self.virtual_processor.palw_v2_receipt_coverage_assemble_impl(claim, &candidates)
+    }
+
+    fn palw_v2_batch_licence_assemble(
+        &self,
+        windows: Vec<kaspa_consensus_core::palw_batch_licence_v1::PalwSeatWindowV1>,
+        due: Vec<kaspa_hashes::Hash64>,
+        max_bytes: usize,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.virtual_processor.palw_v2_batch_licence_assemble_impl(&windows, &due, max_bytes)
     }
 
     fn palw_v2_optimistic_assemble(

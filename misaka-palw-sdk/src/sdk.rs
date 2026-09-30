@@ -70,7 +70,12 @@ impl std::error::Error for PalwCandidateError {}
 /// [`PalwClassSdk::with_lineage`] where a caller composes its own), and every consumer of the SDK
 /// serves it with no further wiring.
 pub fn builtin_lineages_v1() -> Vec<Arc<dyn PalwModelLineageV1>> {
-    vec![Arc::new(crate::lineages::dense::DenseLineageV1), Arc::new(crate::lineages::qwen36::Qwen36LineageV1)]
+    vec![
+        Arc::new(crate::lineages::dense::DenseLineageV1),
+        Arc::new(crate::lineages::qwen36::Qwen36LineageV1),
+        // RFC-0002 Phase F: IR classes, the classes of the PALWTIR1 artifacts this node loads.
+        Arc::new(crate::lineages::tir::TirLineageV1::new()),
+    ]
 }
 
 /// See the module doc. Construction asserts the lineage set is coherent (distinct ids, at most
@@ -235,6 +240,13 @@ impl PalwClassSdk {
     /// operators read.
     pub fn ledger(&self) -> Vec<PalwClassEntryV1> {
         self.lineages.iter().flat_map(|l| l.classes(&self.court)).collect()
+    }
+
+    /// **Every IR class this node holds** (RFC-0002 Phase F) — the classes of the PALWTIR1
+    /// artifacts its lineages loaded. Beside [`Self::ledger`], not inside it: see
+    /// [`crate::PalwTirClassEntryV1`].
+    pub fn tir_ledger(&self) -> Vec<crate::lineage::PalwTirClassEntryV1> {
+        self.lineages.iter().flat_map(|l| l.tir_classes()).collect()
     }
 
     /// **Load one `--palw-class-artifact` path, dispatched by the file's own magic.** The lineage

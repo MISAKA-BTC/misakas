@@ -70,6 +70,58 @@ impl PalwClassEntryV1 {
     }
 }
 
+/// **One IR class a node holds** (RFC-0002 Phase F, design §2.10) — the IR twin of
+/// [`PalwClassEntryV1`].
+///
+/// IR classes are DATA: the classes of the PALWTIR1 artifacts a node loaded, never a table of the
+/// build, so an entry carries its artifact (the class is declared inside it, and its root is inside
+/// the IR class id) and a model id read from the artifact at load. It is kept BESIDE the legacy
+/// entry, not inside it: every legacy consumer reads a legacy profile — a context bound, economic
+/// compute, a v9 admission shape — and an IR class has none, so a consumer that serves IR classes
+/// asks [`PalwModelLineageV1::tir_classes`] for them by name (the registration arm is F6's).
+#[derive(Clone)]
+pub struct PalwTirClassEntryV1 {
+    pub model_id: String,
+    /// The lineage that supplies this class (asserted by the conformance harness).
+    pub lineage_id: &'static str,
+    pub class: Arc<kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1>,
+    /// The class's TIR inventory root, derived from the artifact at load.
+    pub artifact_root: Hash64,
+    /// `(prefill, decode)` the class is paid per.
+    pub canonical_job: (u32, u32),
+    /// The mapped artifact the class is served from.
+    pub artifact: Arc<misaka_palw_tir_exec::node::TirArtifactV1>,
+    pub path: Option<PathBuf>,
+}
+
+impl PalwTirClassEntryV1 {
+    /// The IR class id: `tir_class_id_v1` over the class and its artifact root (design §2.3).
+    pub fn class_id(&self) -> Hash64 {
+        self.class.class_id(&self.artifact_root)
+    }
+
+    /// The canonical job's context — consensus's yardstick (`palw_tir_attempt_v1::palw_tir_job_context_v1`),
+    /// what a registration carries.
+    pub fn canonical_context(&self) -> PalwJobContextV2 {
+        use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_job_context_v1};
+        let facts = PalwTirJobFactsV1::of(&self.class, &self.artifact.plan().program, self.class_id());
+        palw_tir_job_context_v1(&facts, self.canonical_job)
+    }
+}
+
+impl std::fmt::Debug for PalwTirClassEntryV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PalwTirClassEntryV1")
+            .field("model_id", &self.model_id)
+            .field("lineage_id", &self.lineage_id)
+            .field("class_id", &self.class_id())
+            .field("artifact_root", &self.artifact_root)
+            .field("canonical_job", &self.canonical_job)
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
 /// One artifact file (or derived equivalent) as loaded by the lineage that owns its container.
 ///
 /// The payload is opaque on purpose: only the lineage that loaded an artifact ever looks inside
@@ -133,6 +185,12 @@ pub trait PalwModelLineageV1: Send + Sync {
     /// Every class of this lineage this build can supply, at FROZEN geometries — a geometry that
     /// moved would silently rename a class the chain already registered.
     fn classes(&self, court: &PalwCourtParamsV2) -> Vec<PalwClassEntryV1>;
+
+    /// **The IR classes of the artifacts this lineage has loaded** (RFC-0002 Phase F). Every
+    /// legacy lineage has none, which is the default.
+    fn tir_classes(&self) -> Vec<PalwTirClassEntryV1> {
+        Vec::new()
+    }
 
     /// Does the 8-byte file head name this lineage's container? Decided from the magic alone,
     /// without reading the body.

@@ -210,6 +210,21 @@ pub enum PalwVestingNoteV1 {
         claim_id: Hash64,
         sompi: u64,
     },
+    /// **ADR-0160 AG-2: a forfeited producer's own leg of a row burned** (appended by lane liab,
+    /// tag 7; emitted only past `Params::palw_capacity_aggregate_liability`). An intent-class
+    /// forfeiture takes the bond's unmatured REWARD — the producer leg of each row it produced —
+    /// and leaves the row standing with that leg at 0, so the credited seats' legs and the reserve
+    /// mature and move as they would have: the seats validated a claim no one proved false, and
+    /// they are other bonds. `producer` is the forfeited bond (the row's `producer_bond`), `sompi`
+    /// the leg's amount, which goes to `vesting_burned` and is never minted. A later conviction
+    /// that binds the claim itself still finds the row (S3's once-per-claim marker is untouched).
+    ProducerLegBurned {
+        claim_id: Hash64,
+        producer: PalwBondKeyV2,
+        offence_id: Hash64,
+        kind: PalwOffenceKindV1,
+        sompi: u64,
+    },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -803,10 +818,13 @@ pub fn palw_vesting_notes_of_delta_v1(delta: &PalwStateDeltaV2) -> impl Iterator
     })
 }
 
-/// Σ `Burned` + `ShareBurned` sompi one block's delta journaled (phase2-plan §2.5).
+/// Σ `Burned` + `ShareBurned` + `ProducerLegBurned` sompi one block's delta journaled (phase2-plan
+/// §2.5; the last is ADR-0160 AG-2's, past its fence only).
 pub fn palw_vesting_burned_by_delta_v1(delta: &PalwStateDeltaV2) -> u64 {
     palw_vesting_notes_of_delta_v1(delta).fold(0u64, |sum, note| match note {
-        PalwVestingNoteV1::Burned { sompi, .. } | PalwVestingNoteV1::ShareBurned { sompi, .. } => sum.saturating_add(*sompi),
+        PalwVestingNoteV1::Burned { sompi, .. }
+        | PalwVestingNoteV1::ShareBurned { sompi, .. }
+        | PalwVestingNoteV1::ProducerLegBurned { sompi, .. } => sum.saturating_add(*sompi),
         _ => sum,
     })
 }
@@ -932,6 +950,17 @@ mod tests {
             // Appended by the vesting work (V-3's identity notes).
             (5, PalwVestingNoteV1::BuybackAtFinal { claim_id: r.claim_id, sompi: 3 }),
             (6, PalwVestingNoteV1::ReserveCredited { claim_id: r.claim_id, sompi: 4 }),
+            // Appended by ADR-0160 lane liab (AG-2's producer leg).
+            (
+                7,
+                PalwVestingNoteV1::ProducerLegBurned {
+                    claim_id: r.claim_id,
+                    producer: r.producer_bond,
+                    offence_id: Hash64::from_bytes([4; 64]),
+                    kind: PalwOffenceKindV1::DaDefault,
+                    sompi: 5,
+                },
+            ),
         ];
         for (tag, note) in notes {
             let bytes = borsh::to_vec(&note).unwrap();

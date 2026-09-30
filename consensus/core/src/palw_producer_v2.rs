@@ -67,6 +67,18 @@ pub struct PalwProducerBondFactsV2 {
     /// **Lane V02 (review HIGH): the accuser reserve the relief never spends**
     /// (`palw_bond_accuser_reserve_v1` at the candidate DAA, `0` below the fence).
     pub accuser_reserve: u128,
+    /// **ADR-0160 lane liab (AG-3): the bond is frozen by a conviction**
+    /// (`palw_aggregate_liability_v1::palw_bond_is_frozen_v1` on the snapshot) — admission and the
+    /// fold refuse its attempts (`ProducerFrozen`) while it is. `false` on every chain below
+    /// `Params::palw_capacity_aggregate_liability`.
+    pub frozen: bool,
+    /// **ADR-0160 F-S (stage 2): the bond's issuance is capped at the candidate DAA** — `N_out` slots
+    /// held or no whole token in its bucket (`palw_issuance_slots_v1::palw_issuance_read_at_v1`, the one
+    /// reading the fold and admission ask). `false` below `Params::palw_capacity_issuance_slots`.
+    pub issuance_capped: bool,
+    /// **ADR-0160 F-Q (stage 2): a claim of this class would be credited and the audit backlog is full**
+    /// (`palw_audit_door_v1`, §5.9 (f)). `false` below `Params::palw_capacity_audit_door`.
+    pub audit_backlog_full: bool,
 }
 
 impl PalwProducerBondFactsV2 {
@@ -120,7 +132,12 @@ pub fn palw_producer_facts_apply_held_ledger_v1(
         return;
     };
     if let Some(bond_facts) = facts.bond.as_mut() {
-        bond_facts.accuser_exposure = crate::palw_state_v2::palw_accuser_ledger_v1(state, key, Some(floor));
+        bond_facts.accuser_exposure = crate::palw_state_v2::palw_accuser_ledger_v1(
+            state,
+            &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(state_params),
+            key,
+            Some(floor),
+        );
     }
 }
 
@@ -313,6 +330,10 @@ impl PalwProducerFactsV2 {
         if bond.producer_floor_shortfall.is_some() {
             return Err(PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2);
         }
+        // ADR-0160 lane liab (AG-3): admission refuses a frozen bond after the floor (`ProducerFrozen`).
+        if bond.frozen {
+            return Err(PALW_NOT_READY_BOND_FROZEN_V1);
+        }
         if self.class_admission_refusal.is_some() {
             return Err(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2);
         }
@@ -321,6 +342,14 @@ impl PalwProducerFactsV2 {
         }
         if !bond.has_committed_room() {
             return Err(PALW_NOT_READY_EXPOSURE_FULL_V2);
+        }
+        // ADR-0160 stage 2: lane S's slot and bucket, then lane Q's audit backlog — admission's 8b, after
+        // the ceiling.
+        if bond.issuance_capped {
+            return Err(PALW_NOT_READY_ISSUANCE_CAPPED_V1);
+        }
+        if bond.audit_backlog_full {
+            return Err(PALW_NOT_READY_AUDIT_BACKLOG_V1);
         }
         Ok(())
     }
@@ -346,6 +375,17 @@ pub const PALW_NOT_READY_CLASS_NOT_ADMITTING_V2: &str = "the model registry admi
 /// refuses as `ProducerBelowFloor` on both lanes. A registered bond's collateral cannot be raised:
 /// the way out is a new bond at the floor under a new key.
 pub const PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2: &str = "the bond's posted collateral is below the producer floor";
+/// `ready_to_produce_v3` past ADR-0160's `palw_capacity_aggregate_liability`: the bond is frozen by a
+/// conviction (`PalwProducerBondFactsV2::frozen`), which admission and the fold refuse as
+/// `ProducerFrozen` — for good once its bond was forfeited, until the freeze lifts
+/// (`since + window_court`) otherwise.
+pub const PALW_NOT_READY_BOND_FROZEN_V1: &str = "the bond is frozen by a conviction";
+/// `ready_to_produce_v3` (ADR-0160 F-S, stage 2): the bond holds `N_out` issuance slots, or its token
+/// bucket holds no whole token at the candidate DAA — admission and the fold refuse it (`IssuanceCapped`).
+pub const PALW_NOT_READY_ISSUANCE_CAPPED_V1: &str = "the bond's issuance is capped (outstanding slots or the token bucket)";
+/// `ready_to_produce_v3` (ADR-0160 F-Q, stage 2): this class's claim would be credited and the credited
+/// claims awaiting their audit are at `A_max` — admission and the fold refuse it (`AuditBacklogFull`).
+pub const PALW_NOT_READY_AUDIT_BACKLOG_V1: &str = "the audit backlog is full: a credited claim waits for audits";
 /// `ready_to_produce`: this class's blocks for the epoch are spent (the floor class is exempt).
 pub const PALW_NOT_READY_EPOCH_BUDGET_V2: &str = "this class's epoch budget is already spent";
 /// `ready_to_produce`: every sompi of the bond's exposure ceiling is reserved by live claims.
@@ -353,10 +393,11 @@ pub const PALW_NOT_READY_EXPOSURE_FULL_V2: &str = "the bond's exposure ceiling l
 
 /// Every sentence `ready_to_produce_v3` can return, in the order it checks them (the floor's only
 /// past `palw_rcore_plus`).
-pub const PALW_NOT_READY_REASONS_V2: [&str; 6] = [
+pub const PALW_NOT_READY_REASONS_V2: [&str; 7] = [
     PALW_NOT_READY_BOND_UNKNOWN_V2,
     PALW_NOT_READY_KEY_MISMATCH_V2,
     PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2,
+    PALW_NOT_READY_BOND_FROZEN_V1,
     PALW_NOT_READY_CLASS_NOT_ADMITTING_V2,
     PALW_NOT_READY_EPOCH_BUDGET_V2,
     PALW_NOT_READY_EXPOSURE_FULL_V2,
@@ -523,15 +564,25 @@ pub fn palw_producer_facts_v4(
             // disagrees with the rule that refuses it.
             // ADR-0149: the admission's own expression (`palw_exposure_pwu_v3`), which below the
             // fence is `palw_exposure_pwu_v1` of the claimed pwu byte for byte.
-            claim_exposure: (exposure_pwu as u128)
-                .saturating_mul(class.slash_value_per_pwu as u128)
-                .saturating_mul(if audit_2026_09_23_active {
-                    crate::palw_pwu::palw_claim_attempts_v1(pwu, derived_draw.map(|work| work.min(u64::MAX as u128) as u64)) as u128
-                } else {
-                    1
-                })
-                // Option A: the escrow term, outside the attempts factor, exactly as the ceiling adds it.
-                .saturating_add(state_params.claim_escrow_reservation_v1(daa_score, claim_escrow)),
+            // ADR-0160 F-W (SR-7): the weight term through the one capped reading the fold and the
+            // admission ceiling share — `min(w, R_budget − held)` past the fence, `w` below it.
+            claim_exposure: crate::palw_weight_cap_v1::palw_claim_weight_reservation_v1(
+                state,
+                state_params,
+                key,
+                (exposure_pwu as u128).saturating_mul(class.slash_value_per_pwu as u128).saturating_mul(
+                    if audit_2026_09_23_active {
+                        crate::palw_pwu::palw_claim_attempts_v1(pwu, derived_draw.map(|work| work.min(u64::MAX as u128) as u64))
+                            as u128
+                    } else {
+                        1
+                    },
+                ),
+                daa_score,
+            )
+            // Option A: the escrow term, outside the attempts factor, exactly as the ceiling adds it
+            // (ADR-0160: `m_c` past `palw_capacity_escrow_at_licence`).
+            .saturating_add(state_params.claim_escrow_term_v2(daa_score, claim_escrow, &class_id)),
             committed: if state_params.rcore_plus_active_at(daa_score) {
                 crate::palw_state_v2::palw_bond_committed_raw_v1(state, state_params, key, daa_score, raw_depth)
             } else {
@@ -547,6 +598,15 @@ pub fn palw_producer_facts_v4(
             committed_off_ceiling: crate::palw_state_v2::palw_bond_off_ceiling_raw_v1(state, state_params, key, daa_score, raw_depth),
             // Lane V02 (review HIGH): 0 below the fence.
             accuser_reserve: crate::palw_state_v2::palw_bond_accuser_reserve_v1(state_params, daa_score),
+            frozen: crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, key),
+            issuance_capped: crate::palw_issuance_slots_v1::palw_issuance_read_at_v1(state, state_params, key, bond_state.collateral, daa_score)
+                .is_some_and(|read| read.admits_v1().is_err()),
+            audit_backlog_full: state_params.capacity_audit_active_at(daa_score) && {
+                let template = crate::palw_state_v2::palw_claim_template_v1(class_id, *key, daa_score, 0, claim_escrow);
+                crate::palw_audit_door_v1::palw_capacity_claim_credited_v1(state_params, &template)
+                    && crate::palw_audit_door_v1::palw_capacity_audit_backlog_v1(state, state_params)
+                        >= crate::palw_audit_door_v1::palw_capacity_audit_backlog_max_v1(&class_id)
+            },
         })
     });
     Some(PalwProducerFactsV2 {
@@ -1349,6 +1409,7 @@ pub fn palw_held_pursuit_seeds_v1(state: &PalwChainStateV2, mine: &[PalwBondKeyV
                 free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
                 fused_class: true,
                 dissection: None,
+                tir_dissection: None,
                 panel_seat_count: state.panel(claim_id).map(|panel| panel.seats.len() as u16).unwrap_or(0),
             },
             record: record.clone(),
@@ -1425,6 +1486,11 @@ pub struct PalwCourtDutyV2 {
     /// dispute, the root's `(m*, S*)`, the children awaiting the challenger's index — everything a
     /// party's next move is computed against, read off the chain rather than remembered.
     pub dissection: Option<crate::palw_attn_court_v1::PalwAttnDissectPhaseV1>,
+    /// **An IR class's history dissection phase, once a root claim opened one** (RFC-0002 F7): the
+    /// row of `tir_dissections` beside the session (`PalwChainStateV2::tir_dissection_v1`) — the range
+    /// under dispute, the root's totals, the children awaiting the challenger's index — read off the
+    /// chain as `dissection` is, so a party's next IR move is computed against it. A view field only.
+    pub tir_dissection: Option<Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
     /// ADR-0133 S1: seats on this claim's bound panel, so a close resumes the accused V2 segment
     /// from its published checkpoint rather than from genesis. Zero when no panel is bound yet
     /// (the bisection still runs; segment resume is then unavailable).
@@ -1453,12 +1519,14 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
         // chain was already clocking as `AwaitDisclosure`. Every court arm in the panel switches on
         // `duty.turn`, so this is the second half of the missing responder: it would misroute even
         // a correct one.
-        let (turn, rung_deadline_daa) = crate::palw_state_v2::court_turn_and_rung_deadline_v2(
-            session,
-            crate::palw_state_v2::court_session_class_is_fused_v2(state, session),
-        );
+        // RFC-0002 F7: an IR class's phase is a row beside the session (`tir_dissection_v1`), read
+        // through the state-aware helper the fold's deadline index reads.
+        let (turn, rung_deadline_daa) = crate::palw_state_v2::court_session_turn_and_rung_deadline_v2(state, session);
         // The round is the PHASE's once one is open, for the same reason the turn is.
-        let round = session.dissection.as_ref().map_or_else(|| session.ladder.round(), |phase| phase.round());
+        let round = match state.tir_dissection_v1(session_id) {
+            Some(phase) => phase.round(),
+            None => session.dissection.as_ref().map_or_else(|| session.ladder.round(), |phase| phase.round()),
+        };
         out.push(PalwCourtDutyV2 {
             accepted_block: claim.accepted_block,
             session_id: *session_id,
@@ -1481,6 +1549,7 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
             free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
             fused_class: crate::palw_state_v2::court_session_class_is_fused_v2(state, session),
             dissection: session.dissection.clone(),
+            tir_dissection: state.tir_dissection_v1(session_id).map(|phase| Box::new(phase.clone())),
             panel_seat_count: state.panel(&session.claim).map(|panel| panel.seats.len() as u16).unwrap_or(0),
         });
     }

@@ -254,6 +254,11 @@ pub struct PalwClassLedgerContext {
     pub max_context_tokens: u32,
 }
 
+/// **Why an IR class takes no free prompt** (RFC-0002): its free-prompt lane stays closed until
+/// Phase H — the same words the node's IR backend and the CLI refuse with.
+const PALW_TIR_FREE_PROMPT_CLOSED_V1: &str =
+    "free-prompt claims of an IR class are closed until RFC-0002 Phase H — an IR class serves attempts only";
+
 /// The numbers a class declaration the chain registered fixes: its graph's `n_ctx` and its canonical
 /// job's token counts.
 struct PalwRegisteredClassContext {
@@ -261,6 +266,30 @@ struct PalwRegisteredClassContext {
     canonical_prefill_tokens: u32,
     canonical_decode_tokens: u32,
     max_context_tokens: u32,
+    /// An IR class (RFC-0002): read off its `tir_classes` record, not a legacy carriage.
+    ir: bool,
+}
+
+/// **An IR class's context, from the record the chain keeps** (RFC-0002 Phase F): its layout's
+/// `max_context` is its window, and the canonical job — its token counts and its context bound — is
+/// the one admission v10 required it to carry (`palw_tir_job_context_v1` at the attempt formula's
+/// `(f − 1, 2)`).
+fn palw_tir_registered_class_context(
+    record: &kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1,
+) -> PalwRegisteredClassContext {
+    let n_ctx = record.facts.max_context;
+    let Some(canonical) = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(n_ctx) else {
+        return PalwRegisteredClassContext { n_ctx, canonical_prefill_tokens: 0, canonical_decode_tokens: 0, max_context_tokens: 0, ir: true };
+    };
+    // The one constructor of an IR job context, so the bound is the one the chain's jobs carry.
+    let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_job_context_v1(&record.facts, canonical);
+    PalwRegisteredClassContext {
+        n_ctx,
+        canonical_prefill_tokens: job.declared_prefill_tokens,
+        canonical_decode_tokens: job.exact_decode_tokens,
+        max_context_tokens: job.max_context_tokens,
+        ir: true,
+    }
 }
 
 /// **One `getPalwClassContexts` row**: the registered declaration first — with the ledger's model id
@@ -287,7 +316,9 @@ fn palw_class_context_row(
             canonical_decode_tokens: declared.canonical_decode_tokens,
             canonical_footprint_positions: footprint(declared.canonical_prefill_tokens, declared.canonical_decode_tokens),
             max_context_tokens: declared.max_context_tokens,
-            source: "chain_registration".to_string(),
+            // An IR class's registration is its own source name, so a reader (`misaka model list`)
+            // can tell an HF-lowered class from a legacy one without a second call.
+            source: if declared.ir { "chain_ir_registration" } else { "chain_registration" }.to_string(),
         },
         (None, Some(ledger)) => RpcPalwClassContext {
             class_id: class_id.to_string(),
@@ -447,6 +478,8 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::CourtDefault => "court_default",
                 // ADR-0152 §4-ter (F3, decision (B)): a held dissection's verdict, past `palw_offence_attribution`.
                 R::CourtHeldVerdict => "court_held_verdict",
+                // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
+                R::AggregateForfeit => "aggregate_forfeit",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }
@@ -531,6 +564,7 @@ impl RpcCoreService {
     )> {
         let class_id = match object {
             kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, .. } => *class_id,
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, .. } => *class_id,
             _ => return Err(RpcError::General("the object is not a ClassRegistered".into())),
         };
         let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
@@ -543,6 +577,14 @@ impl RpcCoreService {
             .filter(|(lane, _, _)| *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt)
             .map(|(_, _, record)| record.family)
             .collect();
+        // RFC-0002 Phase F: an IR registration is judged by the gate its acceptance path runs —
+        // `palw_tir_v1` in force at the tip, then admission v10 with the chain's certified families.
+        if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }) {
+            return Ok((
+                palw_tir_preflight_report(&self.config.params, bundle, object, &chain_certified, tip_daa, already),
+                class_row,
+            ));
+        }
         let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
         let report = kaspa_consensus_core::palw_model_registration_v1::palw_model_preflight_v1(
             &self.config.params,
@@ -2022,13 +2064,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 c.palw_v2_class_table()
                     .into_iter()
                     .map(|row| {
-                        let declared =
-                            c.palw_registered_class_carriage_v1(row.class_id).map(|(profile, canonical)| PalwRegisteredClassContext {
+                        let declared = c
+                            .palw_registered_class_carriage_v1(row.class_id)
+                            .map(|(profile, canonical)| PalwRegisteredClassContext {
                                 n_ctx: profile.n_ctx,
                                 canonical_prefill_tokens: canonical.declared_prefill_tokens,
                                 canonical_decode_tokens: canonical.exact_decode_tokens,
                                 max_context_tokens: canonical.max_context_tokens,
-                            });
+                                ir: false,
+                            })
+                            .or_else(|| c.palw_tir_class_record_v1(row.class_id).map(|r| palw_tir_registered_class_context(&r)));
                         (row.class_id, declared)
                     })
                     .collect::<Vec<_>>()
@@ -2321,6 +2366,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let GetPalwFreePromptPriceRequest { prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, .. } = request;
         let session = self.consensus_manager.consensus().unguarded_session();
+        // RFC-0002: an IR class's free-prompt lane stays closed until Phase H — refused by name here,
+        // before a gateway prices a commitment the transition refuses (`FreePromptLaneUncertified`).
+        if session.clone().spawn_blocking(move |c| c.palw_tir_class_record_v1(class_id)).await.is_some() {
+            return Err(RpcError::General(format!("class {class_id}: {PALW_TIR_FREE_PROMPT_CLOSED_V1}")));
+        }
         let answer = session
             .spawn_blocking(move |c| {
                 c.palw_fp_commitment_price_v1(class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond)
@@ -2690,9 +2740,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) else {
             return Ok(GetPalwModelResponse { available: true, tip_daa, found: false, class_id: class_id.to_string(), ..Default::default() });
         };
+        // An IR class's window is its record's (RFC-0002 Phase F): it registered no legacy carriage.
         let n_ctx = session
             .clone()
-            .spawn_blocking(move |c| c.palw_registered_class_carriage_v1(class_id).map(|(profile, _)| profile.n_ctx))
+            .spawn_blocking(move |c| {
+                c.palw_registered_class_carriage_v1(class_id)
+                    .map(|(profile, _)| profile.n_ctx)
+                    .or_else(|| c.palw_tir_class_record_v1(class_id).map(|r| r.facts.max_context))
+            })
             .await
             .unwrap_or(0);
         let registry = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await;
@@ -2938,6 +2993,46 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 _ => 0,
             },
         })
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ADR-0160 §7.5 — the capacity shadow (op 201; node-only)
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_capacity_shadow_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwCapacityShadowRequest,
+    ) -> RpcResult<GetPalwCapacityShadowResponse> {
+        use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+        // Everything the caller sent is parsed before a byte of chain state is read (mainnet audit
+        // M-5): a malformed request is free, and an error.
+        let steps = palw_capacity_steps_of_request(&request.steps)?;
+        let bond = match request.bond.trim() {
+            "" => None,
+            b => Some(PalwBondKeyV2(parse_bond_outpoint(b)?)),
+        };
+        let adversaries = palw_capacity_adversaries_of_request(&request.adversary_bonds)?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwCapacityShadowResponse::default());
+        }
+        let options = kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1 {
+            steps,
+            raw_depth: None,
+            adversaries,
+            block_mass_limit: self.config.params.max_block_mass,
+            // The processor fills it from the fold's own carve at the next block's DAA.
+            reference_escrow_sompi: None,
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(shadow) = session.spawn_blocking(move |c| c.palw_capacity_shadow_v1(options)).await else {
+            return Ok(GetPalwCapacityShadowResponse::default());
+        };
+        let limit = match request.limit {
+            0 => PALW_CAPACITY_SHADOW_RPC_ROWS,
+            n => (n as usize).min(PALW_CAPACITY_SHADOW_RPC_ROWS_MAX),
+        };
+        Ok(palw_capacity_shadow_response_v1(&shadow, bond.as_ref(), request.include_claims, limit))
     }
 
     // ------------------------------------------------------------------------------------------
@@ -4638,6 +4733,229 @@ impl AsyncService for RpcCoreService {
     }
 }
 
+/// `getPalwCapacityShadow`'s default page of bond and claim rows, and the most a caller may ask.
+const PALW_CAPACITY_SHADOW_RPC_ROWS: usize = 500;
+const PALW_CAPACITY_SHADOW_RPC_ROWS_MAX: usize = 5_000;
+/// The most steps one request prices.
+const PALW_CAPACITY_SHADOW_RPC_STEPS_MAX: usize = 16;
+
+/// `getPalwCapacityShadow`'s steps, validated: `rho ≥ 1`, `q ≤ 1000‰`, at most 16; none is the
+/// reference ramp (the shadow's own default).
+fn palw_capacity_steps_of_request(
+    steps: &[RpcPalwCapacityStep],
+) -> RpcResult<Vec<kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityStepV1>> {
+    if steps.len() > PALW_CAPACITY_SHADOW_RPC_STEPS_MAX {
+        return Err(RpcError::General(format!("at most {PALW_CAPACITY_SHADOW_RPC_STEPS_MAX} steps per request")));
+    }
+    steps
+        .iter()
+        .map(|step| {
+            if step.rho == 0 {
+                return Err(RpcError::General("a step's rho must be at least 1".to_string()));
+            }
+            let q = u16::try_from(step.q_credit_permille)
+                .ok()
+                .filter(|q| *q <= 1_000)
+                .ok_or_else(|| RpcError::General(format!("q_credit_permille {} is above 1000", step.q_credit_permille)))?;
+            Ok(kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityStepV1 {
+                from_daa: step.from_daa,
+                rho: step.rho,
+                q_credit_permille: q,
+            })
+        })
+        .collect()
+}
+
+/// `getPalwCapacityShadow`'s O-3 bonds, `<txid>:<index>[:<strategy>]` — the shadow's own reading of the
+/// strategy suffix (`palw_capacity_split_adversary_v1`), and a bond named with two strategies refused.
+fn palw_capacity_adversaries_of_request(
+    named: &[String],
+) -> RpcResult<Vec<kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityAdversaryV1>> {
+    use kaspa_consensus_core::palw_capacity_shadow_v1::{
+        PalwCapacityAdversaryV1, palw_capacity_check_adversaries_v1, palw_capacity_split_adversary_v1,
+    };
+    let adversaries = named
+        .iter()
+        .map(|text| {
+            let (outpoint, strategy) = palw_capacity_split_adversary_v1(text).map_err(RpcError::General)?;
+            Ok(PalwCapacityAdversaryV1 {
+                bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(parse_bond_outpoint(outpoint)?),
+                strategy,
+            })
+        })
+        .collect::<RpcResult<Vec<_>>>()?;
+    palw_capacity_check_adversaries_v1(&adversaries).map_err(RpcError::General)?;
+    Ok(adversaries)
+}
+
+/// **The wire form of one shadow** — every total and step row, the bond rows (one bond's when
+/// `bond` names it), and the claim rows when asked, each list at most `limit` long.
+pub fn palw_capacity_shadow_response_v1(
+    shadow: &kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowV1,
+    bond: Option<&kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    include_claims: bool,
+    limit: usize,
+) -> GetPalwCapacityShadowResponse {
+    let outpoint = |b: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", b.0.transaction_id, b.0.index);
+    let text = |v: u128| v.to_string();
+    let texts = |v: &[u128]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let step = |s: &kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityStepV1| RpcPalwCapacityStep {
+        from_daa: s.from_daa,
+        rho: s.rho,
+        q_credit_permille: u32::from(s.q_credit_permille),
+    };
+    let bonds: Vec<&kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityBondShadowV1> =
+        shadow.bonds.iter().filter(|row| bond.is_none_or(|b| row.bond == *b)).collect();
+    let claims: Vec<&kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityClaimShadowV1> =
+        if include_claims { shadow.claims.iter().filter(|row| bond.is_none_or(|b| row.bond == *b)).collect() } else { Vec::new() };
+    GetPalwCapacityShadowResponse {
+        available: true,
+        now_daa: shadow.now_daa,
+        tip_daa: shadow.tip_daa,
+        summary: shadow.summary(),
+        bounded_immature_today: text(shadow.bounded_immature_today),
+        bounded_immature_new: text(shadow.bounded_immature_new),
+        safe_weight: text(shadow.safe_weight),
+        w_cap_total: text(shadow.w_cap_total),
+        reference_escrow_sompi: text(shadow.reference_escrow),
+        reference_w_floor_sompi: text(shadow.reference_w_floor),
+        reference_l_sompi: text(shadow.reference_l),
+        reference_conviction_tier_sompi: match shadow.reference_floor {
+            kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityConvictionFloorV1::Tier(tier) => text(tier),
+            kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityConvictionFloorV1::WholeBond => String::new(),
+        },
+        reference_seats: shadow.reference_seats,
+        reference_duty_sompi: text(shadow.reference_duty),
+        reference_lock_sompi: text(shadow.reference_lock),
+        claims_commitment_today_sompi: text(shadow.claims_commitment_today),
+        committed_today_sompi: text(shadow.committed_today_total),
+        seats: shadow.seats,
+        seat_usable_capital_sompi: text(shadow.seat_usable_capital),
+        seat_duty_today_sompi: text(shadow.seat_duty_total_today),
+        seat_lock_today_sompi: text(shadow.seat_lock_total_today),
+        seat_capacity_today_milli_per_daa: shadow.seat_capacity_today_milli_per_daa,
+        duty_rows: shadow.duty_rows,
+        duty_rows_capped: shadow.duty_rows_capped,
+        licence_queue: shadow.licence_queue,
+        licence_queue_oldest_bound_daa: shadow.licence_queue_oldest_bound_daa,
+        licensed_recent: shadow.licensed_recent,
+        carriers_per_block: shadow.carriers_per_block,
+        carriage_blocks_to_drain: shadow.carriage_blocks_to_drain,
+        convictions_total: shadow.convictions_total,
+        steps: shadow
+            .steps
+            .iter()
+            .map(|row| RpcPalwCapacityStepRow {
+                step: step(&row.step),
+                m_floor_sompi: text(row.m_floor),
+                q_needed_permille: u32::from(row.q_needed_permille),
+                ramp_binds: row.ramp_binds,
+                seat_credit: row.seat_credit,
+                claims_commitment_sompi: text(row.claims_commitment_total),
+                committed_sompi: text(row.committed_total),
+                seat_duty_sompi: text(row.seat_duty_total),
+                seat_lock_sompi: text(row.seat_lock_total),
+                seat_capacity_milli_per_daa: row.seat_capacity_milli_per_daa,
+                n_instant_13k: row.n_instant_13k,
+                q_alarm: row.q_alarm,
+                seat_credit_if_d5: row.seat_credit_if_d5,
+                seat_capacity_if_d5_milli_per_daa: row.seat_capacity_if_d5_milli_per_daa,
+                m_floor_v1_superseded_sompi: text(row.m_floor_v1_superseded),
+                n_instant_13k_v1_superseded: row.n_instant_13k_v1_superseded,
+                q_needed_route_permille: u32::from(row.q_needed_route_permille),
+                q_required_permille: u32::from(row.q_required_permille),
+                q_alarm_unmeasured: row.q_alarm_unmeasured,
+            })
+            .collect(),
+        bonds_total: bonds.len() as u64,
+        bonds: bonds
+            .iter()
+            .take(limit)
+            .map(|row| RpcPalwCapacityBondRow {
+                bond: outpoint(&row.bond),
+                collateral_sompi: row.collateral,
+                seat: row.seat,
+                live_claims: row.live_claims,
+                unlicensed_claims: row.unlicensed_claims,
+                raw_immature: text(row.raw_immature_today),
+                w_cap: text(row.w_cap),
+                x_b: text(row.x_b),
+                capped: text(row.capped),
+                r_budget_sompi: text(row.r_budget),
+                reserved_new_sompi: text(row.reserved_new_total),
+                committed_today_sompi: text(row.committed_today),
+                own_claims_today_sompi: text(row.own_claims_today),
+                committed_new_sompi: texts(&row.committed_new),
+                n_instant_today: row.n_instant_today,
+                n_instant_new: row.n_instant_new.clone(),
+                n_more_today: row.n_more_today,
+                n_more_new: row.n_more_new.clone(),
+                frozen_would_be: row.frozen_would_be,
+                freeze_final: row.freeze_final,
+                freeze_undetermined: row.freeze_undetermined,
+                convictions: row.convictions,
+            })
+            .collect(),
+        claims_total: claims.len() as u64,
+        claims: claims
+            .iter()
+            .take(limit)
+            .map(|row| RpcPalwCapacityClaimRow {
+                claim_id: row.claim_id.to_string(),
+                bond: outpoint(&row.bond),
+                class_id: row.class_id.to_string(),
+                phase: row.phase.to_string(),
+                stage: row.stage.name().to_string(),
+                accepted_daa: row.accepted_daa,
+                free_prompt: row.free_prompt,
+                c7: row.c7,
+                raw_weight: text(row.raw_w),
+                staged_weight: text(row.staged_w),
+                reserved_today_sompi: text(row.reserved_today),
+                reserved_new_sompi: text(row.reserved_new),
+                commitment_today_sompi: text(row.commitment_today),
+                commitment_new_sompi: texts(&row.commitment_new),
+            })
+            .collect(),
+        attribution: shadow
+            .attribution
+            .iter()
+            .map(|row| RpcPalwCapacityAttributionRow {
+                class_id: if row.class_id == kaspa_hashes::Hash64::default() { String::new() } else { row.class_id.to_string() },
+                claims_live: row.claims_live,
+                claims_final: row.claims_final,
+                claims_voided: row.claims_voided,
+                voids_attributed: row.voids_attributed,
+                voids_by_reason: row.voids_by_reason.iter().map(|(reason, n)| format!("{reason}={n}")).collect(),
+                convictions_by_kind: row.convictions_by_kind.iter().map(|(kind, n)| format!("{kind}={n}")).collect(),
+                da_open_non_seat: row.da_open_non_seat,
+                da_open_seat: row.da_open_seat,
+                da_opened_non_seat_total: row.da_opened_non_seat_total,
+                conviction_latency_histogram: row.conviction_latency_histogram.to_vec(),
+            })
+            .collect(),
+        adversary: shadow
+            .adversary
+            .iter()
+            .map(|row| RpcPalwCapacityAdversaryRow {
+                class_id: row.class_id.to_string(),
+                strategy: row.strategy.name().to_string(),
+                c7: row.c7,
+                claims: row.claims,
+                caught: row.caught,
+                caught_late: row.caught_late,
+                caught_unpriced: row.caught_unpriced,
+                unpriced_by_route: row.unpriced_by_route.iter().map(|(route, n)| format!("{route}={n}")).collect(),
+                undetected: row.undetected,
+                censored: row.censored,
+                in_flight: row.in_flight,
+                seat_only: row.seat_only,
+                q_measured_permille: row.q_measured_permille.map(u32::from),
+            })
+            .collect(),
+    }
+}
+
 fn palw_v2_bundle(params: &kaspa_consensus_core::config::params::Params) -> Option<&kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2> {
     match &params.palw_consensus_mode {
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle),
@@ -4657,10 +4975,62 @@ fn decode_class_registered_hex(hex: &str) -> RpcResult<kaspa_consensus_core::pal
     faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(format!("objectHex: {e}")))?;
     let object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 =
         borsh::from_slice(&bytes).map_err(|e| RpcError::General(format!("objectHex is not a ClassRegistered: {e}")))?;
-    if !matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { .. }) {
-        return Err(RpcError::General("objectHex is not a ClassRegistered".into()));
+    // RFC-0002 Phase F: an IR class registers through its own object (`ClassRegisteredTirV1`).
+    if !matches!(
+        object,
+        kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { .. }
+            | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }
+    ) {
+        return Err(RpcError::General("objectHex is not a ClassRegistered or a ClassRegisteredTirV1".into()));
     }
     Ok(object)
+}
+
+/// **The preflight report of an IR registration** (`ClassRegisteredTirV1`, RFC-0002 Phase F): the
+/// class's facts read off the object's carried class, and ONE check — the acceptance path's own gate,
+/// `palw_tir_registration_preflight_at_v1` at `tip_daa` (the IR fence, then admission v10) — named by
+/// its refusal code; a class already registered is refused as the legacy report refuses it.
+fn palw_tir_preflight_report(
+    params: &kaspa_consensus_core::config::params::Params,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    chain_certified: &[kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    tip_daa: u64,
+    already: bool,
+) -> kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightReportV1 {
+    use kaspa_consensus_core::palw_model_registration_v1::{PalwModelPreflightCheckV1, PalwModelPreflightReportV1};
+    let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 {
+        class_id, artifact_root, admission, ..
+    } = object
+    else {
+        return PalwModelPreflightReportV1::empty();
+    };
+    let mut report = PalwModelPreflightReportV1::empty();
+    report.class_id = *class_id;
+    report.artifact_root = *artifact_root;
+    report.n_ctx = admission.class.layout.max_context;
+    report.layer_count =
+        admission.class.decode_program().map(|p| u16::try_from(p.schedule.layers.len()).unwrap_or(u16::MAX)).unwrap_or(0);
+    report.graph_profile = format!("palw-tir/v1 graph {}", admission.class.graph_ir_root());
+    report.canonical_prefill = admission.canonical.declared_prefill_tokens;
+    report.canonical_decode = admission.canonical.exact_decode_tokens;
+    let gate = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_registration_preflight_at_v1(
+        params,
+        bundle,
+        object,
+        tip_daa,
+        chain_certified,
+    );
+    let (ok, code, message) = match (&gate, already) {
+        (_, true) => (false, "CLASS_ALREADY_REGISTERED".to_string(), "the chain already holds this class id".to_string()),
+        (Ok(_), false) => (true, "ADMISSION_OK".to_string(), "admission v10 admits the IR class at the tip".to_string()),
+        (Err(e), false) => (false, e.code().to_string(), e.to_string()),
+    };
+    report.checks.push(PalwModelPreflightCheckV1 { code: "TIR_ADMISSION_V10".to_string(), ok, message: message.clone() });
+    report.admissible = ok;
+    report.processor_verdict = if ok { "ADMISSION_OK".to_string() } else { format!("{code}: {message}") };
+    report.reject_code = if ok { String::new() } else { code };
+    report
 }
 
 fn rpc_preflight_check(check: &kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightCheckV1) -> RpcPalwModelPreflightCheck {
@@ -5091,7 +5461,7 @@ mod palw_class_context_tests {
 
     /// This build's Qwen3.6-35B-A3B row: a (7, 2) canonical job at `n_ctx` 8 — a footprint of 8, valid.
     fn declared() -> PalwRegisteredClassContext {
-        PalwRegisteredClassContext { n_ctx: 8, canonical_prefill_tokens: 7, canonical_decode_tokens: 2, max_context_tokens: 8 }
+        PalwRegisteredClassContext { n_ctx: 8, canonical_prefill_tokens: 7, canonical_decode_tokens: 2, max_context_tokens: 8, ir: false }
     }
 
     /// **The chain's declaration outranks the build's ledger, the ledger names the model, and a class
@@ -5139,8 +5509,13 @@ mod palw_class_context_tests {
             (unknown.n_ctx, unknown.canonical_footprint_positions, unknown.max_context_tokens, unknown.model_id.as_str()),
             (0, 0, 0, "")
         );
-        let decode_free =
-            PalwRegisteredClassContext { n_ctx: 8, canonical_prefill_tokens: 8, canonical_decode_tokens: 0, max_context_tokens: 8 };
+        let decode_free = PalwRegisteredClassContext {
+            n_ctx: 8,
+            canonical_prefill_tokens: 8,
+            canonical_decode_tokens: 0,
+            max_context_tokens: 8,
+            ir: false,
+        };
         assert_eq!(
             palw_class_context_row(one, Some(decode_free), None).canonical_footprint_positions,
             8,
@@ -5148,6 +5523,38 @@ mod palw_class_context_tests {
         );
         let no_ledger = palw_class_context_row(two, None, None);
         assert_eq!(no_ledger.source, "unknown", "a node built without a ledger answers from the chain alone");
+    }
+
+    /// **An IR class's context is its record's** (RFC-0002 Phase F): the layout's window is `n_ctx`
+    /// and the canonical job's bound, the canonical job is the attempt formula's `(f − 1, 2)` there —
+    /// the job admission v10 made the registration carry — and the row names its own source, so a
+    /// reader tells an HF-lowered class from a legacy one.
+    #[test]
+    fn an_ir_class_context_is_read_off_its_record() {
+        use kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1;
+        use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_of_v1};
+        let class_id = kaspa_hashes::Hash64::from_u64_word(9);
+        let record = PalwTirClassRecordV1 {
+            version: 1,
+            facts: PalwTirJobFactsV1 { class_id, max_context: 64, token_bound: 64, tiled: true, held: false },
+            graph_ir_root: class_id,
+            layout_digest: class_id,
+            tokenizer_id: class_id,
+            prim_set_id: kaspa_consensus_core::palw_tir_v1::palw_tir_prim_set_id_v1(),
+            logits_vocab: 64,
+            program_bytes: 14_637,
+            program: Default::default(),
+            dissected: Default::default(),
+        };
+        let row = palw_class_context_row(class_id, Some(palw_tir_registered_class_context(&record)), None);
+        let (prefill, decode) = palw_tir_attempt_canonical_of_v1(64).expect("a canonical job at 64");
+        assert_eq!(row.source, "chain_ir_registration");
+        let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_job_context_v1(&record.facts, (prefill, decode));
+        assert_eq!(
+            (row.n_ctx, row.canonical_prefill_tokens, row.canonical_decode_tokens, row.max_context_tokens),
+            (64, prefill, decode, job.max_context_tokens)
+        );
+        assert!(row.canonical_footprint_positions <= row.n_ctx, "the canonical job fits its window");
     }
 }
 

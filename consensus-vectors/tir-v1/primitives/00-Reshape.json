@@ -1,0 +1,247 @@
+{
+  "format": "palw-tir-v1/primitive-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md",
+  "primitive": "Reshape",
+  "tag": 0,
+  "cases": [
+    {
+      "name": "matrix_to_transpose_shape",
+      "prim": {
+        "name": "Reshape",
+        "attrs": [],
+        "borsh_hex": "00"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2,
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          3,
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          3,
+          2
+        ],
+        "data": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ]
+      }
+    },
+    {
+      "name": "scalar_to_one",
+      "prim": {
+        "name": "Reshape",
+        "attrs": [],
+        "borsh_hex": "00"
+      },
+      "inputs": [
+        {
+          "dtype": "i8",
+          "shape": [],
+          "data": [
+            "-128"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          1
+        ]
+      },
+      "expect": {
+        "dtype": "i8",
+        "shape": [
+          1
+        ],
+        "data": [
+          "-128"
+        ]
+      }
+    },
+    {
+      "name": "flat_to_rank3",
+      "prim": {
+        "name": "Reshape",
+        "attrs": [],
+        "borsh_hex": "00"
+      },
+      "inputs": [
+        {
+          "dtype": "i16",
+          "shape": [
+            6
+          ],
+          "data": [
+            "-32768",
+            "1",
+            "2",
+            "3",
+            "4",
+            "32767"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i16",
+        "shape": [
+          1,
+          2,
+          3
+        ]
+      },
+      "expect": {
+        "dtype": "i16",
+        "shape": [
+          1,
+          2,
+          3
+        ],
+        "data": [
+          "-32768",
+          "1",
+          "2",
+          "3",
+          "4",
+          "32767"
+        ]
+      }
+    },
+    {
+      "name": "rank4",
+      "prim": {
+        "name": "Reshape",
+        "attrs": [],
+        "borsh_hex": "00"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2,
+            2,
+            2,
+            1
+          ],
+          "data": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          4,
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          4,
+          2
+        ],
+        "data": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8"
+        ]
+      }
+    },
+    {
+      "name": "error_element_count",
+      "prim": {
+        "name": "Reshape",
+        "attrs": [],
+        "borsh_hex": "00"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2,
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          4
+        ]
+      },
+      "expect_error": "Shape"
+    },
+    {
+      "name": "error_dtype_change",
+      "prim": {
+        "name": "Reshape",
+        "attrs": [],
+        "borsh_hex": "00"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2
+          ],
+          "data": [
+            "1",
+            "2"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i64",
+        "shape": [
+          2
+        ]
+      },
+      "expect_error": "Shape"
+    }
+  ]
+}

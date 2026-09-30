@@ -187,11 +187,18 @@ struct Finalized {
 
 /// A junk floor attempt, bound to five genesis seats, licensed all-Valid and swept to `Final`.
 fn drive_to_final(audit: bool) -> Finalized {
-    let p = t12();
+    drive_to_final_on(t12(), audit, None, 0)
+}
+
+/// [`drive_to_final`] on `p`, with the attempt's pwu overridden by `pwu` (the floor's derived pwu where
+/// `None`) and, where `retired > 0`, an older history's retired weight written through the carriage
+/// first (`safe_weight = retired_safe_weight = retired`, which the loader's check accepts), so a
+/// saturating over-subtraction cannot hide at zero.
+fn drive_to_final_on(p: Params, audit: bool, pwu: Option<u64>, retired: u128) -> Finalized {
     let b = bundle(&p);
     let sp = b.state.clone();
     let (floor, leaves, target, _) = genesis_classes(&p)[0];
-    let pwu = palw_pwu_v1(target, leaves);
+    let pwu = pwu.unwrap_or_else(|| palw_pwu_v1(target, leaves));
     let bonds = genesis_bonds(&p);
     let (exec_bond, exec_pk, exec_op) = b
         .genesis_objects
@@ -206,6 +213,14 @@ fn drive_to_final(audit: bool) -> Finalized {
     let seats: Vec<(PalwBondKeyV2, Hash64)> = bonds[1..6].iter().map(|(k, o, _)| (*k, *o)).collect();
     let valid_seats: Vec<PalwBondKeyV2> = seats.iter().map(|s| s.0).collect();
     let s = with_floor_lifecycle(&p, &genesis_state(&p));
+    let s = if retired > 0 {
+        let mut c = PalwStateCarriageV2::from_state(&s);
+        c.safe_weight = retired;
+        c.retired_safe_weight = retired;
+        rebuild(&p, c)
+    } else {
+        s
+    };
     // The attempt names the floor's founding version root, so `note_claim_usage` counts it on the
     // version and the reversal has a usage row to take it back from. A founding line has no ROW
     // until something touches it (the fold synthesises it), and usage is counted only on a row, so
@@ -431,6 +446,65 @@ fn dos_g2_below_the_fence_a_conviction_after_final_leaves_the_final() {
     assert!(matches!(s.claim(&f.claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "dormant: the phase does not move");
     assert_eq!(s.safe_weight(), f.at_final.safe_weight(), "dormant: the weight stays");
     assert!(s.bond(&accused).unwrap().collateral < f.at_final.bond(&accused).unwrap().collateral, "the slash still lands");
+}
+
+/// **ADR-0160 F-W (lane cap-weight's verify finding 1): past the weight cap, a conviction after `Final`
+/// takes back exactly the C7-scaled weight the `Final` added — through the real fold, on testnet-12's own
+/// params with F-W's mirror armed from genesis.**
+///
+/// The attempt carries a 2M-scale pwu and the floor class is put on the C7 list's mirror (the fold's C7
+/// ceiling reads the list — rcore/cap-s1's stage-1 finding F2 — and the claim's raw weight, so a
+/// floor-class record at that pwu on the list is priced exactly as a 2M claim would be), so
+/// `finalize_claim` adds its contribution scaled by `ceiling / raw`. `reverse_convicted_final` used to
+/// subtract the UNSCALED amount and saturate `safe_weight` to zero, stripping every other `Final` — here the
+/// older history's retired weight, written first so the over-subtraction cannot hide at zero. testnet-12
+/// runs ADR-0069 Decision 7, so its reload is a BOUND and accepted that understatement silently: the
+/// equality `safe = retired + Σ Final` is asserted explicitly, then the reload and the revert.
+#[test]
+fn dos_g2_capacity_a_conviction_after_a_capped_final_takes_back_exactly_its_scaled_weight() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_weight_cap_v1::{PALW_CAPACITY_C7_WEIGHT_CEILING_V1, palw_weight_final_safe_v1};
+    const RETIRED: u128 = 1_000_000_000_000_000;
+    let mut p = t12();
+    p.palw_capacity_weight_cap = Some(ForkActivation::new(0));
+    p.sync_palw_capacity_weight_cap();
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut p.palw_consensus_mode {
+        let (from, delay) = (bundle.state.rcore_plus_from_daa(), bundle.state.withdrawal_delay_daa());
+        let mut c7 = bundle.state.rcore_conservative_classes().to_vec();
+        c7.push(bundle.state.base_class_id());
+        bundle.state = bundle.state.clone().with_rcore_plus_mirrors(from, delay, c7);
+    }
+    let f = drive_to_final_on(p, true, Some(3_357_310_000_000_000), RETIRED);
+    let (p, sp) = (&f.p, &f.sp);
+    assert_eq!(sp.capacity_weight_cap_from_daa(), Some(0), "the fold runs F-W");
+    let claim = f.at_final.claim(&f.claim_id).unwrap().clone();
+    assert!(claim.immature_contribution > PALW_CAPACITY_C7_WEIGHT_CEILING_V1, "the premise: a raw weight above the C7 ceiling");
+    assert_eq!(f.before_final.safe_weight(), RETIRED, "only the older history's retired weight before the Final");
+    let added = f.at_final.safe_weight() - f.before_final.safe_weight();
+    let unscaled = f.at_final.palw_claim_canonical_weight_v1(&claim, p.palw_canonical_work_daa()).unwrap_or(u128::from(claim.pwu));
+    assert!(added > 0 && added < unscaled, "the Final added its weight scaled under the ceiling ({added} of {unscaled})");
+    assert_eq!(added, palw_weight_final_safe_v1(sp, &claim, unscaled), "finalize_claim's scaling");
+    reloads(p, &f.at_final);
+    let accused = f.valid_seats[0];
+    let conviction_daa = f.daa + 5;
+    let (s, delta) =
+        step(p, sp, &f.at_final, conviction_daa, &[false_valid(&f, accused)], PalwBlockWorkV3::None, Hash64::default(), 0, true);
+    assert!(
+        matches!(s.claim(&f.claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+        "the conviction voids the capped Final"
+    );
+    println!(
+        "\n=== #8 past F-W: safe_weight before Final {} -> Final {} (+{added}, scaled under the C7 ceiling) -> convicted {} ===",
+        f.before_final.safe_weight(),
+        f.at_final.safe_weight(),
+        s.safe_weight()
+    );
+    assert_eq!(s.safe_weight(), f.before_final.safe_weight(), "the reversal takes back exactly the scaled weight the Final added");
+    assert_eq!(s.safe_weight(), s.retired_safe_weight(), "safe = retired + Σ Final (no Final left)");
+    reloads(p, &s);
+    let reverted = revert_delta_v2(&s, &delta, sp).expect("the conviction's delta reverts");
+    assert_eq!(reverted.state_root(), f.at_final.state_root(), "revert restores the Final state root");
+    assert_eq!(reverted.safe_weight(), f.at_final.safe_weight());
 }
 
 /// A schedule minted from `finals`, as the first block of its span writes it.

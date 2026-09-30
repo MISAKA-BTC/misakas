@@ -235,14 +235,25 @@ pub fn kimi_k3_mla_fused(
     if heads == 0 || d_qk == 0 || d_v == 0 || kv_len == 0 {
         return Err(PalwKimiK3OpError::Empty);
     }
-    if q.len() != heads * d_qk {
-        return Err(PalwKimiK3OpError::LengthMismatch { a: q.len(), b: heads * d_qk });
+    // The three widths are products of a registered geometry and the challenged position's
+    // history, and an unchecked `usize` product of them panics under `overflow-checks = true`
+    // before any length is compared. Checked, a product that does not fit is a row no opening can
+    // match, and is refused as one.
+    let (Some(q_len), Some(k_len), Some(v_len)) = (
+        heads.checked_mul(d_qk),
+        kv_len.checked_mul(heads).and_then(|n| n.checked_mul(d_qk)),
+        kv_len.checked_mul(heads).and_then(|n| n.checked_mul(d_v)),
+    ) else {
+        return Err(PalwKimiK3OpError::Overflow);
+    };
+    if q.len() != q_len {
+        return Err(PalwKimiK3OpError::LengthMismatch { a: q.len(), b: q_len });
     }
-    if k.len() != kv_len * heads * d_qk {
-        return Err(PalwKimiK3OpError::LengthMismatch { a: k.len(), b: kv_len * heads * d_qk });
+    if k.len() != k_len {
+        return Err(PalwKimiK3OpError::LengthMismatch { a: k.len(), b: k_len });
     }
-    if v.len() != kv_len * heads * d_v {
-        return Err(PalwKimiK3OpError::LengthMismatch { a: v.len(), b: kv_len * heads * d_v });
+    if v.len() != v_len {
+        return Err(PalwKimiK3OpError::LengthMismatch { a: v.len(), b: v_len });
     }
     check_a16(q)?;
     check_a16(k)?;

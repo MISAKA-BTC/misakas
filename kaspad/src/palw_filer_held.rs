@@ -839,6 +839,7 @@ mod tests {
             free_prompt: false,
             fused_class: true,
             dissection: None,
+            tir_dissection: None,
             panel_seat_count: 5,
         }
     }

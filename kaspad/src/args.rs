@@ -286,6 +286,13 @@ pub struct Args {
     pub palw_verify_class_manifest: bool,
     /// ADR-0067 Decision 6: `class-id:file` pairs whose declarations this node should adopt.
     pub palw_class_carriage: Vec<String>,
+    /// **ADR-0160 §9 Stage 0 / A8: the bonds of an O-3 run** (`<txid>:<index>[:<strategy>]`,
+    /// repeatable; `naive`, `garbage` or `borrowed`) — the adversarial bonds whose claims the capacity
+    /// shadow's every-10-DAA line measures the attribution rate `q` on, per (class, strategy), counting
+    /// only convictions the credit prices, and WARNs about (the A8 alarm) while it is below a step's
+    /// bar. Node-only; empty: no `q` is measured, and the node alarms only on a credited step. A
+    /// malformed outpoint or strategy, or a bond named with two strategies, refuses the start.
+    pub palw_capacity_shadow_adversary: Vec<String>,
     pub palw_bond_collateral: Option<u64>,
     /// **Produce for this class instead of the network's floor.**
     ///
@@ -324,6 +331,23 @@ pub struct Args {
     /// like the salt.
     #[serde(skip)]
     pub palw_drill_fence2_at: Option<u64>,
+    /// **DRILL ONLY: cross testnet-12's THIRD post-launch flag day at this DAA** (the capacity architecture
+    /// at ρ = 10) — with the salt, every fence of `PALW_T12_POST_LAUNCH_FENCES_V3` is moved to this height on
+    /// the drill chain, after the first two flag days' moves and at a height of its own
+    /// (`config::drill::palw_drill_post_launch_fences_v3_at_v1`). Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_fence3_at: Option<u64>,
+    /// **DRILL ONLY: arm testnet-12's IR fence (`palw_tir_v1`, RFC-0002 Phase F) at this DAA** — with
+    /// the salt, `PALW_T12_TIR_V1_ENTRY` is armed, or moved, to this height on the drill chain, after
+    /// the flag days' moves and at a height of its own (`config::drill::palw_drill_tir_fence_at_v1`,
+    /// which refuses a height below the fence's prerequisites). The D-F drills' flag. Command line
+    /// only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_tir_at: Option<u64>,
+    /// **Run the IR fused kernels** (RFC-0002 §7, Phase G): every IR backend this node builds runs
+    /// the regions its plan matched fused. Node software in no consensus object, byte-identical to the
+    /// generic kernels; OFF by default, and kept off until the D-F drills pass with it on.
+    pub palw_tir_fused_kernels: bool,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
@@ -534,6 +558,7 @@ impl Default for Args {
             palw_chain_classes: None,
             palw_verify_class_manifest: false,
             palw_class_carriage: Vec::new(),
+            palw_capacity_shadow_adversary: Vec::new(),
             palw_bond_collateral: None,
             palw_producer_class: None,
             palw_challenge: false,
@@ -541,6 +566,9 @@ impl Default for Args {
             palw_drill_write_keyring: None,
             palw_drill_fence_at: None,
             palw_drill_fence2_at: None,
+            palw_drill_fence3_at: None,
+            palw_drill_tir_at: None,
+            palw_tir_fused_kernels: false,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
@@ -692,6 +720,18 @@ impl Args {
         if let Some(at) = self.palw_drill_fence2_at {
             let moves = kaspa_consensus_core::config::drill::palw_drill_post_launch_fences_v2_at_v1(&mut config.params, at)
                 .unwrap_or_else(|e| panic!("--palw-drill-fence2-at: {e} (validate_args refuses this first)"));
+            config.palw_drill_fence_moves.extend(moves);
+        }
+        // **And the third flag day** (`--palw-drill-fence3-at`, the capacity package), after the second.
+        if let Some(at) = self.palw_drill_fence3_at {
+            let moves = kaspa_consensus_core::config::drill::palw_drill_post_launch_fences_v3_at_v1(&mut config.params, at)
+                .unwrap_or_else(|e| panic!("--palw-drill-fence3-at: {e} (validate_args refuses this first)"));
+            config.palw_drill_fence_moves.extend(moves);
+        }
+        // **And the IR fence** (`--palw-drill-tir-at`, RFC-0002 Phase F's D-F drills), after the flag days.
+        if let Some(at) = self.palw_drill_tir_at {
+            let moves = kaspa_consensus_core::config::drill::palw_drill_tir_fence_at_v1(&mut config.params, at)
+                .unwrap_or_else(|e| panic!("--palw-drill-tir-at: {e} (validate_args refuses this first)"));
             config.palw_drill_fence_moves.extend(moves);
         }
 
@@ -1496,6 +1536,38 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-fence3-at")
+                .long("palw-drill-fence3-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: move every fence of testnet-12's third post-launch flag day (the \
+                     capacity architecture at rho 10) to this DAA on the drill chain, after the first two flag days. Nothing \
+                     else moves. Refused without the salt, at 0, and at a height another fence uses.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-tir-at")
+                .long("palw-drill-tir-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm testnet-12's IR fence (palw_tir_v1, RFC-0002) at this DAA on the \
+                     drill chain, after the flag days, so a drill registers and serves an IR class with the shipping binary. \
+                     Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and below the fence's \
+                     prerequisites (palw_kary_court and palw_rcore_plus in force).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-fused-kernels")
+                .long("palw-tir-fused-kernels")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW (RFC-0002 Phase G): run the IR fused kernels in every IR backend this node builds — byte-identical to \
+                     the generic kernels, node software in no consensus object. Off by default until the D-F drills pass with it on.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-tamper-leaf")
                 .long("palw-drill-tamper-leaf")
                 .env("KASPAD_PALW_DRILL_TAMPER_LEAF")
@@ -1626,6 +1698,18 @@ pub fn cli() -> Command {
                      the borsh PalwClassAdmissionCarriageV2 the registration carried. It needs no trust in whoever \
                      supplied it: the node refuses unless the chain currently holds that class unfrozen, the profile \
                      hashes to the class id, and the canonical job names the same class. Repeatable.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-capacity-shadow-adversary")
+                .long("palw-capacity-shadow-adversary")
+                .action(ArgAction::Append)
+                .value_name("txid:index[:strategy]")
+                .help(
+                    "MISAKA PALW (ADR-0160 §9 Stage 0, A8): a bond of an O-3 adversarial run, with its strategy \
+                     (naive, garbage or borrowed). The capacity shadow's every-10-DAA line measures the attribution \
+                     rate q per (class, strategy) on the named bonds' resolved claims, counting only convictions the \
+                     credit prices, and WARNs while it is below a step's bar. Node-only; no verdict reads it. Repeatable.",
                 ),
         )
         .arg(
@@ -2393,6 +2477,10 @@ impl Args {
                 .get_many::<String>("palw-class-carriage")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_carriage.clone()),
+            palw_capacity_shadow_adversary: m
+                .get_many::<String>("palw-capacity-shadow-adversary")
+                .map(|v| v.cloned().collect())
+                .unwrap_or(defaults.palw_capacity_shadow_adversary.clone()),
             palw_bond_collateral: m.get_one::<u64>("palw-bond-collateral").copied(),
             palw_producer_class: m.get_one::<String>("palw-producer-class").cloned().or(defaults.palw_producer_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),
@@ -2400,6 +2488,9 @@ impl Args {
             palw_drill_write_keyring: m.get_one::<String>("palw-drill-write-keyring").cloned(),
             palw_drill_fence_at: m.get_one::<u64>("palw-drill-fence-at").copied(),
             palw_drill_fence2_at: m.get_one::<u64>("palw-drill-fence2-at").copied(),
+            palw_drill_fence3_at: m.get_one::<u64>("palw-drill-fence3-at").copied(),
+            palw_drill_tir_at: m.get_one::<u64>("palw-drill-tir-at").copied(),
+            palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m

@@ -687,4 +687,146 @@ pub(crate) mod tests {
             assert_eq!(refuse(&own), Err(PalwCheckpointCourtError::AccuserIsTheAccused));
         }
     }
+
+    impl HeldFixture {
+        /// **The same execution with checkpoint `c`'s leaf replaced by one the executor chose** —
+        /// the leg root and the execution root re-derived, so the anchor opening walks to the
+        /// claim's root and whatever the leaf declares is what the court reads.
+        fn with_committed_checkpoint(mut self, c: usize, leaf: PalwCheckpointLeafV2) -> Self {
+            let context_hash = self.binding.job_context.context_hash();
+            let profile_hash = self.binding.shape_profile.shape_profile_id();
+            let b = &mut self.binding;
+            let hash = checkpoint_leaf_hash_v2(&context_hash, &b.checkpoint_profile.profile_hash(), &b.state_chunk_map_id, &leaf);
+            self.checkpoint_leaves[c] = leaf;
+            self.checkpoint_hashes[c] = hash;
+            b.checkpoint_merkle_root = step_merkle_root_v1(&self.checkpoint_hashes).expect("a checkpoint root");
+            b.committed_execution_root = execution_commitment_root_v2(
+                &context_hash,
+                &b.full_logits_trace_root,
+                &b.activation_leg_root,
+                &checkpoint_leg_root_v2(
+                    &context_hash,
+                    &b.checkpoint_profile.profile_hash(),
+                    &b.state_chunk_map_id,
+                    b.job_context.exact_decode_tokens.saturating_sub(1),
+                    b.checkpoint_count,
+                    &b.checkpoint_merkle_root,
+                ),
+                &step_leg_root_v1(&context_hash, &profile_hash, b.step_leaf_count, &b.step_merkle_root),
+            );
+            verify_binding_v1(b).expect("the re-derived binding authenticates");
+            self
+        }
+    }
+
+    /// **Hostile evidence is answered — a verdict or a refusal, never a panic** (RFC-0002 Step 1).
+    ///
+    /// The verdict runs in block processing under `overflow-checks = true`. Every field the ACCUSER
+    /// names is taken to its rails; every value the EXECUTOR committed — the cache-write row's
+    /// lanes and value count, the checkpoint leaf's covered call, chunk count and index — is
+    /// committed at its rails and opened authentically, so the arithmetic behind the openings is
+    /// what gets exercised; and the ruleset's ladder is taken to its rails as well.
+    #[test]
+    fn a_hostile_accusation_is_answered_and_never_panics() {
+        use crate::palw_step_refute::hostile_totality_tests::guarded;
+        let mut panics: Vec<String> = Vec::new();
+        // Verdicts reached, so a sweep refused at the door every time cannot pass for one that
+        // exercised the comparison behind the openings.
+        let mut verdicts = 0u64;
+        let mut run = |what: String, a: &PalwCheckpointAccusationV1, class: Hash64, ladder: u64| match guarded(|| {
+            palw_checkpoint_court_verdict_v1(a, class, ladder)
+        }) {
+            Ok(Ok(_)) => verdicts += 1,
+            Ok(Err(_)) => {}
+            Err(p) => panics.push(format!("{what}: {p}")),
+        };
+        for held in [false, true] {
+            let fx = held_fixture(held, 20, None);
+            let class = fx.class_id();
+            let good = fx.accusation(9, 0, 1, 5);
+            let mut cases: Vec<(String, PalwCheckpointAccusationV1)> = Vec::new();
+            let mut case = |what: String, edit: &dyn Fn(&mut PalwCheckpointAccusationV1)| {
+                let mut a = good.clone();
+                edit(&mut a);
+                cases.push((what, a));
+            };
+            for position in [u32::MAX, u32::MAX - 1, 1 << 31, 10, 9, 0] {
+                case(format!("position {position}"), &|a| a.position = position);
+            }
+            for layer in [u16::MAX, 2, 1, 0] {
+                case(format!("layer {layer}"), &|a| a.attn_layer = layer);
+            }
+            for kind in [2u8, 255] {
+                case(format!("kind {kind}"), &|a| a.kind = kind);
+            }
+            for index in [u32::MAX, u32::MAX - 1, 1 << 31, 0] {
+                case(format!("chunk index {index}"), &|a| a.chunk.chunk_index = index);
+            }
+            case("empty chunk".into(), &|a| a.chunk.chunk_bytes.clear());
+            case("chunk one byte short".into(), &|a| {
+                a.chunk.chunk_bytes.pop();
+            });
+            case("chunk one word long".into(), &|a| a.chunk.chunk_bytes.extend([0xFF; 4]));
+            case("chunk past the cap".into(), &|a| a.chunk.chunk_bytes = vec![0x80; (1 << 20) + 1]);
+            case("no siblings".into(), &|a| a.chunk.siblings.clear());
+            case("64 siblings".into(), &|a| a.chunk.siblings = vec![h64(0xDEAD); 64]);
+            case("no rows".into(), &|a| a.rows.clear());
+            case("a row twice".into(), &|a| {
+                let r = a.rows[0].clone();
+                a.rows.push(r);
+            });
+            case("row value count at the rail".into(), &|a| a.rows[0].leaf.value_count = u32::MAX);
+            case("row leaf index at the rail".into(), &|a| a.rows[0].opening.leaf_index = u64::MAX);
+            case("anchor covering u32::MAX calls".into(), &|a| a.anchor.leaf.covered_decode_call = u32::MAX);
+            case("anchor declaring u32::MAX chunks".into(), &|a| a.anchor.leaf.state_chunk_count = u32::MAX);
+            case("anchor index at the rail".into(), &|a| {
+                a.anchor.leaf.checkpoint_index = u32::MAX;
+                a.anchor.opening.leaf_index = u64::from(u32::MAX);
+            });
+            case("binding checkpoint count at the rail".into(), &|a| a.binding.checkpoint_count = u32::MAX);
+            case("binding leaf count at the rail".into(), &|a| a.binding.step_leaf_count = u64::MAX);
+            case("binding prefill at the rail".into(), &|a| a.binding.job_context.declared_prefill_tokens = u32::MAX);
+            for (what, a) in &cases {
+                for ladder in [LADDER, 0, 1, u64::MAX] {
+                    run(format!("held={held} {what} ladder {ladder}"), a, class, ladder);
+                }
+            }
+
+            // The executor's own commitments at their rails, opened authentically.
+            let (slot, tile) = {
+                let profile = &fx.binding.shape_profile;
+                let writer = profile.attn_nodes.iter().position(|n| n.role == PalwStepNodeRoleV1::KCacheWrite).expect("a writer");
+                (
+                    profile.global_node_slot(PalwStepTableV1::Attn, 1, writer).expect("a slot"),
+                    profile.attn_nodes[writer].tile_len as usize,
+                )
+            };
+            let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 5, tile_index: 0 };
+            for (value_count, values_le) in [
+                (tile as u32, [0x00u8, 0x00, 0x00, 0x80].repeat(tile)),
+                (tile as u32, [0xFFu8, 0xFF, 0xFF, 0x7F].repeat(tile)),
+                (u32::MAX, vec![0x80; 4]),
+                (0, Vec::new()),
+                (tile as u32 + 1, vec![0x7F; 4 * (tile + 1)]),
+                (tile as u32, vec![0x80; 4 * tile + 3]),
+            ] {
+                let committed = held_fixture(held, 20, None).with_committed_tile(coord, value_count, values_le);
+                let a = committed.accusation(9, 0, 1, 5);
+                run(format!("held={held} committed row value_count {value_count}"), &a, committed.class_id(), LADDER);
+            }
+            for (covered, chunks, index) in
+                [(u32::MAX, u32::MAX, 9u32), (0, 0, 9), (u32::MAX, 0, 9), (10, u32::MAX, 9), (1 << 31, 1 << 31, 9)]
+            {
+                let mut leaf = fx.checkpoint_leaves[9].clone();
+                leaf.covered_decode_call = covered;
+                leaf.state_chunk_count = chunks;
+                leaf.checkpoint_index = index;
+                let committed = held_fixture(held, 20, None).with_committed_checkpoint(9, leaf);
+                let a = committed.accusation(9, 0, 1, 5);
+                run(format!("held={held} committed checkpoint covered {covered} chunks {chunks}"), &a, committed.class_id(), LADDER);
+            }
+        }
+        assert!(panics.is_empty(), "{} hostile accusations panicked:\n{}", panics.len(), panics.join("\n"));
+        assert!(verdicts > 0, "no hostile accusation reached a verdict");
+    }
 }

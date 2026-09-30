@@ -152,9 +152,8 @@ pub fn decide_deep_reorg_v2(incumbent: &PalwCandidateOrderV1, challenger: &PalwC
 /// claim) would not stop there. Neither number reaches the published merchant rule (finality, or a
 /// `Final` settlement anchor), which does not count ticks at all.
 ///
-/// The capacity lane carries the same value as `palw_weight_cap_v1::PALW_CAPACITY_SHALLOW_REORG_DAA_V1`
-/// (rcore/cap-weight 3aa4abec4, F-W's copy of this rule); rcore/cap-int makes that name an alias of
-/// this one (see [`palw_reorg_strict_economic_win_v1`]).
+/// The capacity lane's `palw_weight_cap_v1::PALW_CAPACITY_SHALLOW_REORG_DAA_V1` is an alias of this one
+/// (rcore/cap-s1; see [`palw_reorg_strict_economic_win_v1`]).
 pub const PALW_REORG_SHALLOW_TIE_DAA_V1: u64 = 2;
 
 /// The most selected-chain blocks the processor walks back from the incumbent looking for the common
@@ -164,6 +163,16 @@ pub const PALW_REORG_SHALLOW_TIE_DAA_V1: u64 = 2;
 /// bounded however many blocks a tick holds. (The capacity lane's
 /// `PALW_CAPACITY_SHALLOW_REORG_WALK_V1`, the same value.)
 pub const PALW_REORG_SHALLOW_TIE_WALK_V1: usize = 64;
+
+/// **A shallow all-economic tie never LOWERS the sink's DAA** — part of strict-win's rule since the
+/// DAA-750 release (rcore/f1-strictwin-tie's option 9fd73e2f2, merged at 19e732712): the processor's
+/// `palw_reorg_shallow_ghostdag_win_v1` answers `false` for a candidate whose DAA is below the
+/// incumbent's, so no chain of tie releases reaches deeper than [`PALW_REORG_SHALLOW_TIE_DAA_V1`] ticks
+/// under the highest sink a tie produced. Named so the rule that most needs it can hold to it: ADR-0160
+/// F-W (`Params::palw_capacity_weight_cap`) makes all-economic ties common, and
+/// `Params::validate_palw_capacity_weight_cap_v1` refuses F-W on a build where this is `false`
+/// (rcore/cap-s1's hard rule: F-W is never armable without the no-DAA-lowering check).
+pub const PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1: bool = true;
 
 /// **`Params::palw_reorg_strict_economic_win`'s rule: a strict economic win, and a SHALLOW
 /// all-economic tie decided by GHOSTDAG** (lane rcore/f1-strictwin-tie — the capacity lane's verify
@@ -197,12 +206,12 @@ pub const PALW_REORG_SHALLOW_TIE_WALK_V1: usize = 64;
 /// the constant). Pure: the depth, the DAA and the GHOSTDAG order are the caller's reads of its own
 /// stores (the processor's `palw_reorg_shallow_ghostdag_win_v1`).
 ///
-/// **One rule, two copies until rcore/cap-int.** The capacity lane measured the finding under its fence
-/// F-W and gave F-W this exact rule as `palw_deep_reorg_capacity_v1` (with
-/// `palw_capacity_shallow_ghostdag_win_v1` and `PALW_CAPACITY_SHALLOW_REORG_{DAA,WALK}_V1`). F-W
-/// requires this fence at or below it, so wherever F-W is active this function already answers, and
-/// identically: rcore/cap-int keeps this one, drops F-W's arm in `dns_reorg_outcome`, and makes the
-/// capacity names aliases of these (or deletes them).
+/// **One rule** (rcore/cap-s1). The capacity lane measured the finding under its fence F-W and gave F-W
+/// a copy of this rule (`palw_deep_reorg_capacity_v1`, without the no-DAA-lowering check); cap-s1 dropped
+/// the copy and F-W's arm in `dns_reorg_outcome`, and `PALW_CAPACITY_SHALLOW_REORG_{DAA,WALK}_V1` are now
+/// aliases of [`PALW_REORG_SHALLOW_TIE_DAA_V1`] / [`PALW_REORG_SHALLOW_TIE_WALK_V1`]. F-W requires this
+/// fence at or below it, so wherever F-W is active this function answers — with the check
+/// ([`PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1`]).
 pub fn palw_reorg_strict_economic_win_v1(
     incumbent: &PalwCandidateOrderV1,
     challenger: &PalwCandidateOrderV1,
