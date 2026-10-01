@@ -522,6 +522,13 @@ impl<'a> Session<'a> {
                 let g = a.len() / groups;
                 one((0..*groups).map(|k| (0..g).map(|j| a[k * g + j] as f64 * b[k * g + j] as f64).sum::<f64>() as f32).collect())
             }
+            Op::GroupRepeat { groups, size } => {
+                let a = x(0)?;
+                if a.len() != *groups {
+                    return Err(LowerError::eval(format!("GroupRepeat: {} values for {groups} groups", a.len())));
+                }
+                one(a.iter().flat_map(|v| std::iter::repeat_n(*v, *size)).collect())
+            }
             Op::GatherRows { heads, dim } => {
                 let ids = x(0)?.to_vec();
                 let t = self.param(ins[1], layer)?;

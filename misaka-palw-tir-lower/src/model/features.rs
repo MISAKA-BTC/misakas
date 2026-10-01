@@ -156,6 +156,8 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ATTN_SOFTCAP_V1", Attention, "tanh soft-capping of the scores", Implemented, ["Compare", "Select"], NoReq, ["fidelity_tiny::gemma2"], "cap·tanh(s/cap) through the integer sigmoid."),
     feature!("ATTN_SINKS_V1", Attention, "attention sinks", Implemented, [], NoReq, ["fidelity_tiny::gpt_oss"], "A learned logit per head that joins the softmax and is dropped."),
     feature!("ATTN_OUTPUT_GATE_V1", Attention, "sigmoid gate on the attention output", Implemented, [], NoReq, ["fidelity_tiny::qwen3_next", "fidelity_tiny::qwen3_5"], "q_proj also emits a per-head gate."),
+    feature!("ATTN_OUTPUT_GATE_SEPARATE_V1", Attention, "an attention output gate from a projection of its own, per element or per head", Implemented, [], NoReq, ["attn_gate_scale::a_separate_gate_and_a_value_scale_are_features_that_lower"], "AfMoE (sigmoid per element) and Laguna (softplus per head): o *= act(gate_proj(x)); a per-head gate is repeated over the head's width (HL GroupRepeat: a Broadcast). Exclusive with the fused q_proj gate."),
+    feature!("ATTN_VALUE_SCALE_V1", Attention, "a constant on the values after their projection", Implemented, [], NoReq, ["attn_gate_scale::a_separate_gate_and_a_value_scale_are_features_that_lower"], "MiMo-V2-Flash attention_value_scale: the constant joins the value narrowing's multiplier; no node of its own survives."),
     feature!("ATTN_QK_NORM_V1", Attention, "norm on the queries and keys", Implemented, [], NoReq, ["fidelity_tiny::qwen3_moe", "fidelity_tiny::olmoe", "fidelity_tiny::cohere"], "Per-head shared, per-head separate or whole-projection scope."),
     feature!("ATTN_QK_NORM_POST_ROPE_V1", Attention, "the q/k norms act after the rotation", Implemented, [], NoReq, ["qk_norm_post_rope::the_order_of_the_norm_and_the_rotation_is_part_of_the_function"], "Hunyuan: q = rope(q); q = RMSNorm_head(q). Qwen3's order is the reverse. A rotation preserves a head's L2 norm but a per-channel gain does not commute with it, so the orders are different functions (8.9e-2 and 4.6e-2 of the logit scale on the two Hunyuan fixtures). The history keeps the normed, rotated key; no node is new, only their order."),
     feature!("ATTN_V_NORM_V1", Attention, "norm on the values", Implemented, [], NoReq, ["fidelity_tiny::gemma4"], "Gemma-4."),
@@ -366,6 +368,12 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
                 }
                 if a.output_gate {
                     u.add("ATTN_OUTPUT_GATE_V1", lay, "");
+                }
+                if let Some(g) = &a.gate {
+                    u.add("ATTN_OUTPUT_GATE_SEPARATE_V1", lay, format!("{:?}{}", g.act, if g.per_head { " per head" } else { "" }));
+                }
+                if a.v_scale != 1.0 {
+                    u.add("ATTN_VALUE_SCALE_V1", lay, "");
                 }
                 if let Some(q) = &a.qk_norm {
                     u.add("ATTN_QK_NORM_V1", lay, format!("{:?}", q.scope));

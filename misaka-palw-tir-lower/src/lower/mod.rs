@@ -1904,6 +1904,17 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let c = codes(b, cx, lb, &c)?;
             one(generic::group_dot(b, cx, lb, &a, &c, *groups, &site, &want)?)
         }
+        Op::GroupRepeat { groups, size } => {
+            let x = operand(lb, node.inputs[0])?;
+            if x.key.split() > 0 {
+                return Err(LowerError::eval("internal: GroupRepeat reads a value with per-channel scales"));
+            }
+            let (g, sz) = (*groups as u32, *size as u32);
+            let col = b.reshape_fixed(x.r, &[g, 1]);
+            let bc = b.broadcast(col, &[Dim::Fixed(g), Dim::Fixed(sz)]);
+            let r = b.reshape_fixed(bc, &[g * sz]);
+            one(Val { r, len: groups * size, ..x })
+        }
         Op::NgramIds { ple, layers } => one(generic::ngram_ids(b, cx, lb, node, ple, layers, &site)?),
         Op::GatherRows { .. } => {
             let ids = operand(lb, node.inputs[0])?;

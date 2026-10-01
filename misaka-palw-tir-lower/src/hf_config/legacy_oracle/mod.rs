@@ -667,6 +667,8 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         param_prefix: None,
         kv_share: None,
         sparse: None,
+        gate: None,
+        v_scale: 1.0,
     }
 }
 

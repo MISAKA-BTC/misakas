@@ -247,6 +247,11 @@ pub enum Op {
     GroupDot {
         groups: usize,
     },
+    /// Each element repeated `size` times: `out[g·size + j] = a[g]` (a per-head gate over the head's width). In: `[a [groups]]`.
+    GroupRepeat {
+        groups: usize,
+        size: usize,
+    },
     // ── hashed n-gram per-layer embedding (EMBED_NGRAM_PLE_V1) ──
     /// The table row of every hash head for this position's token and the segment-masked tokens
     /// before it ([`crate::ngram`]): an `Idx` vector of `(ngram_size − 1)·heads_per_ngram` ids.
@@ -336,6 +341,7 @@ impl Op {
             Op::StreamMean { .. } => "StreamMean",
             Op::StreamOuter { .. } => "StreamOuter",
             Op::GroupDot { .. } => "GroupDot",
+            Op::GroupRepeat { .. } => "GroupRepeat",
             Op::NgramIds { .. } => "NgramIds",
             Op::GatherRows { .. } => "GatherRows",
             Op::BlockMean { .. } => "BlockMean",
