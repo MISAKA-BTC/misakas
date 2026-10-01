@@ -16,6 +16,9 @@ import json, os, re, struct, sys
 import numpy as np
 import torch
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bnb_ref
+
 LLAMA = os.environ.get("LLAMA_CPP", os.path.expanduser("~/Downloads/misaka-palw-runtime/llama.cpp"))
 sys.path.insert(0, os.path.join(LLAMA, "gguf-py"))
 import gguf
@@ -326,6 +329,104 @@ F["mxfp4_hf"] = {
                "value": "fp4x2[(blocks[e, o, i / 32, (i % 32) / 2] >> (4 * (i % 2))) & 15] * 0.5 * e8m0(scales[e, o, i / 32])"},
 }
 
+
+# ───────────────────────────── bitsandbytes ─────────────────────────────
+# What is stored and how it is dequantised is written out in tools/bnb_ref.py. In short: a 4-bit weight is a uint8 [ceil(N / 2), 1] of
+# the flattened row-major weight (the even element in the HIGH nibble), one absmax per `blocksize` flat elements, a 16-entry code table
+# stored in the checkpoint, and a JSON document (as a uint8 tensor) holding the logical shape, the block size and the module dtype; double
+# quantisation makes absmax uint8 and adds a nested absmax (float, per 256 of them) with its own 256-entry code and an offset.
+BNB_INERT_4 = ["bnb_4bit_compute_dtype", "bnb_4bit_use_double_quant", "llm_int8_enable_fp32_cpu_offload", "llm_int8_has_fp16_weight",
+               "llm_int8_threshold", "_load_in_4bit", "_load_in_8bit"]
+BNB_INERT_8 = ["bnb_4bit_compute_dtype", "bnb_4bit_quant_type", "bnb_4bit_quant_storage", "bnb_4bit_use_double_quant",
+               "llm_int8_enable_fp32_cpu_offload", "llm_int8_has_fp16_weight", "_load_in_4bit", "_load_in_8bit"]
+
+def bnb4(kind):
+    K = "(o * shape1 + i)"
+    CODE = "((weight[%s / 2, 0] >> (4 * (1 - %s %% 2))) & 15)" % (K, K)
+    B = "(%s / bs)" % K
+    ABSMAX = "(has_nabs ? rnd(rnd(nmap[absmax[%s]] * nabs[%s / nbs], 0) + rnd(noff, 0), 0) : absmax[%s])" % (B, B, B)
+    when = [{"path": "load_in_4bit", "one_of": [True]},
+            {"path": "bnb_4bit_quant_type", "one_of": ["nf4"] if kind == "nf4" else ["fp4", None]}]
+    def jp(path, kind="int", default=None):
+        d = {"from_role": {"role": "qstate", "path": path}}
+        if kind != "int":
+            d["from_role"]["kind"] = kind
+        if default is not None:
+            d["default"] = default
+        return d
+    return {
+        "schema": SCHEMA, "name": "BNB_" + kind.upper(),
+        "doc": ("bitsandbytes 4-bit " + ("NormalFloat (nf4)" if kind == "nf4" else "FP4") + ", as `Linear4bit` saves it to safetensors. The weight is a uint8 [ceil(N / 2), 1]: the flattened row-major [out, in] "
+                "weight, two 4-bit codes a byte, the first (even-index) element in the HIGH nibble; `.weight.absmax` has one float per `blocksize` flat elements "
+                "(under double quantisation, `bnb_4bit_use_double_quant`, it is uint8: a code of `.weight.nested_quant_map` scaled by `.weight.nested_absmax`, one per `nested_blocksize` of "
+                "them, plus the document's `nested_offset`); `.weight.quant_map` is the 16-entry code table, stored in the checkpoint, and `.weight.quant_state.bitsandbytes__" + kind + "` is a JSON document "
+                "(a uint8 tensor) holding the logical `shape`, `blocksize`, the module's `dtype` and the nested parameters. A weight element is the float32 product of its code and its (de-nested) absmax, rounded once to the module "
+                "dtype — bitsandbytes' CUDA kernel's arithmetic (its pure-PyTorch fallback rounds the code table to that dtype first and differs by up to one bfloat16 ulp). Double quantisation is exact here: "
+                "each of its float32 operations (the product by the nested absmax, the sum with the offset) is a `rnd(., 0)` of a float64 operation on float32 operands, which is the correctly rounded float32 result. "
+                "The code table is read from the checkpoint, so the format is table-agnostic; for FP4 the CUDA kernel's own literal for code 1 (0.00520833) differs from the stored table's (0.0625 / 12 in float32) in the seventh digit, "
+                "and this follows the stored table. Decodes to floats, so the weight takes the ordinary W8 path. "
+                "Refused by name: `bnb_4bit_quant_storage` other than uint8 (the packed bytes are stored in another dtype and shape)."),
+        "ids": [{"scheme": "config", "method": "bitsandbytes", "when": when}],
+        "config": {"inert": BNB_INERT_4, "skip": "llm_int8_skip_modules", "skip_match": "path", "lm_head": "unless_skipped",
+                   "checks": [
+                       {"path": "load_in_4bit", "one_of": [True], "message": "this is the 4-bit format"},
+                       {"path": "load_in_8bit", "one_of": [None, False], "message": "8-bit and 4-bit together"},
+                       {"path": "bnb_4bit_quant_type", "one_of": ["nf4"] if kind == "nf4" else ["fp4", None], "message": "the 4-bit type is " + kind},
+                       {"path": "bnb_4bit_quant_storage", "one_of": [None, "uint8"],
+                        "message": "4-bit weights packed into a storage dtype other than uint8 (FSDP-style) are stored with another dtype and shape than this format reads"}]},
+        "params": {
+            "shape0": jp("shape[0]"), "shape1": jp("shape[1]"),
+            "shape2": jp("shape[2]", default=0),
+            "bs": jp("blocksize"),
+            "dt": dict(jp("dtype", "string"), map={"float32": 0, "bfloat16": 1, "float16": 2}),
+            "nbs": jp("nested_blocksize", default=256),
+            "noff": jp("nested_offset", "float", default=0),
+        },
+        "layout": {"kind": "tensors",
+                   "roles": [role("weight", ".weight", ["U8"], 2), role("absmax", ".weight.absmax", ["F32", "U8"], 1),
+                             role("qmap", ".weight.quant_map", ["F32"], 1),
+                             role("qstate", ".weight.quant_state.bitsandbytes__" + kind, ["U8"], 1),
+                             role("nabs", ".weight.nested_absmax", ["F32"], 1, required=False),
+                             role("nmap", ".weight.nested_quant_map", ["F32"], 1, required=False)],
+                   "dims": {"out": "shape0", "inp": "shape1"},
+                   "checks": [
+                       {"expr": "shape2 == 0", "message": "the logical weight is not a matrix (its `shape` has more than two entries)"},
+                       {"expr": "dim_weight[1] == 1 && dim_weight[0] * 2 >= out * inp && dim_weight[0] * 2 <= out * inp + 1", "message": "the packed weight is not [ceil(out * in / 2), 1]"},
+                       {"expr": "bs > 0 && dim_absmax[0] == (out * inp + bs - 1) / bs", "message": "absmax is not one per block of the flat weight"},
+                       {"expr": "dim_qmap[0] == 16", "message": "the code table does not have 16 entries"},
+                       {"expr": "has_nabs == has_nmap", "message": "nested_absmax and nested_quant_map come together"},
+                       {"expr": "has_nabs + float_absmax == 1", "message": "absmax is 8-bit exactly when it is double-quantised (nested_absmax present) and float otherwise"},
+                       {"expr": "!has_nabs || (nbs > 0 && dim_nmap[0] == 256 && dim_nabs[0] == (dim_absmax[0] + nbs - 1) / nbs)",
+                        "message": "the nested statistics are not one float per `nested_blocksize` absmax values with a 256-entry code"}]},
+        "decode": {"target": "floats", "value": "rnd(rnd(qmap[%s] * %s, 0), dt)" % (CODE, ABSMAX)},
+    }
+
+F["bnb_nf4"] = bnb4("nf4")
+F["bnb_fp4"] = bnb4("fp4")
+F["bnb_int8"] = {
+    "schema": SCHEMA, "name": "BNB_INT8",
+    "doc": ("bitsandbytes LLM.int8, as `Linear8bitLt` saves it: `.weight` int8 [out, in] and `.SCB` float32 [out], the absolute maximum of each row of the original weight, so W[o, i] = weight[o, i] * SCB[o] / 127 "
+            "(row-wise absmax quantisation); `.weight_format` (uint8 scalar) must be 0, the row-major layout. The stored integers are lowered as they are (the per-row scale is SCB * float32(1 / 127), rounded to float32; "
+            "bitsandbytes' own `int8_vectorwise_dequant` rounds twice and agrees to one unit in the last place). "
+            "Refused by name: `llm_int8_threshold` above 0 — LLM.int8 then splits every matmul at run time (the activation columns whose magnitude passes the threshold are multiplied in float16 against the dequantised weight "
+            "columns, the rest in int8), which a fixed integer graph does not reproduce; and a hardware-reordered `weight_format` (col32 / col_turing / col_ampere)."),
+    "ids": [{"scheme": "config", "method": "bitsandbytes", "when": [{"path": "load_in_8bit", "one_of": [True]}]}],
+    "config": {"inert": BNB_INERT_8, "skip": "llm_int8_skip_modules", "skip_match": "path", "lm_head": "unless_skipped",
+               "checks": [
+                   {"path": "load_in_8bit", "one_of": [True], "message": "this is the 8-bit format"},
+                   {"path": "load_in_4bit", "one_of": [None, False], "message": "4-bit and 8-bit together"},
+                   {"path": "llm_int8_threshold", "one_of": [0, 0.0],
+                    "message": "llm_int8_threshold above 0 means outlier decomposition: LLM.int8 splits each matmul at run time (activation columns above the threshold go through float16 against the dequantised weight columns, the rest through int8), which a fixed integer graph does not reproduce — a checkpoint saved with llm_int8_threshold 0 is read"}]},
+    "params": {},
+    "layout": {"kind": "tensors",
+               "roles": [role("weight", ".weight", ["I8"], 2), role("scb", ".SCB", ["F32"], 1), role("wfmt", ".weight_format", ["U8"], 0, required=False)],
+               "dims": {"out": "dim_weight[0]", "inp": "dim_weight[1]"},
+               "checks": [{"expr": "dim_scb[0] == out", "message": "SCB is not one scale per output row"},
+                          {"expr": "!has_wfmt || wfmt == 0", "message": "the int8 weight is stored in a hardware-reordered layout (`weight_format` col32 / col_turing / col_ampere), not row-major"}]},
+    "decode": {"target": "integers", "group": {"size": "inp"}, "q": "weight[o, i]", "scale": "rnd(scb[o] * rnd(0.007874015718698502, 0), 0)",
+               "zero": "0", "code": {"min": -128, "max": 127}},
+}
+
 # ───────────────────────────── test vectors ─────────────────────────────
 rng = np.random.default_rng(0x4D495341)
 
@@ -555,6 +656,63 @@ def tensor_vectors(d):
             assert ref.shape == (E, G * 32, O)
             case({"quant_method": "mxfp4", "modules_to_not_convert": ["model.layers.*.self_attn", "lm_head"]},
                  {"blocks": role_json(blocks, "U8"), "scales": role_json(scales, "U8")}, ref)
+    elif name in ("BNB_NF4", "BNB_FP4"):
+        kind = "nf4" if name == "BNB_NF4" else "fp4"
+        def bcfg(dq, dtype, skip=None):
+            return {"_load_in_4bit": True, "_load_in_8bit": False, "bnb_4bit_compute_dtype": "bfloat16", "bnb_4bit_quant_storage": "uint8",
+                    "bnb_4bit_quant_type": kind, "bnb_4bit_use_double_quant": dq, "llm_int8_enable_fp32_cpu_offload": False,
+                    "llm_int8_has_fp16_weight": False, "llm_int8_skip_modules": skip, "llm_int8_threshold": 6.0, "load_in_4bit": True,
+                    "load_in_8bit": False, "quant_method": "bitsandbytes"}
+        # (out, in, blocksize, double quantisation, module dtype): a ragged last block, an odd element count, several nested blocks
+        for o, i, bs, dq, dt, nbs in [(8, 32, 64, False, "bfloat16", None), (6, 40, 64, False, "float16", None), (3, 5, 64, False, "float32", None),
+                                      (5, 24, 64, True, "float16", 256), (12, 48, 64, True, "bfloat16", 4), (7, 33, 128, True, "float32", 2),
+                                      (4, 16, 16, False, "bfloat16", None)]:
+            w = (trng.standard_normal((o, i)) * trng.uniform(0.02, 0.4)).astype(np.float32)
+            if (o, i) == (8, 32):
+                w[2, :] = 0.0               # a block of zeros: absmax 0
+            t = bnb_ref.quantize_4bit(w, kind, bs, dq, dt)
+            if nbs is not None and nbs != 256:
+                # a smaller nested block than bitsandbytes' 256, to have several nested blocks in a small tensor: requantise the absmax that way
+                state = json.loads(bytes(t[f".weight.quant_state.bitsandbytes__{kind}"]).decode())
+                nb = -(-(o * i) // bs)
+                x = np.concatenate([np.abs(w.reshape(-1)).reshape(-1), np.zeros(nb * bs - o * i, np.float32)]).reshape(nb, bs)
+                absmax = x.max(1).astype(np.float32)
+                offset = np.float32(absmax.mean())
+                a = (absmax - offset).astype(np.float32)
+                nb2 = -(-a.size // nbs)
+                a2 = np.concatenate([a, np.zeros(nb2 * nbs - a.size, np.float32)]).reshape(nb2, nbs)
+                nabs = np.abs(a2).max(1).astype(np.float32)
+                y2 = a2 / np.where(nabs > 0, nabs, np.float32(1))[:, None]
+                q = bnb_ref._nearest(y2, t[".weight.nested_quant_map"]).reshape(-1)[: a.size].astype(np.uint8)
+                t[".weight.absmax"], t[".weight.nested_absmax"] = q, nabs
+                state.update({"nested_blocksize": nbs, "nested_offset": float(offset)})
+                t[f".weight.quant_state.bitsandbytes__{kind}"] = np.frombuffer(json.dumps(state).encode(), dtype=np.uint8).copy()
+            ref = bnb_ref.dequantize_4bit(t)
+            assert ref.shape == (o, i)
+            roles = {"weight": role_json(t[".weight"], "U8"),
+                     "absmax": role_json(t[".weight.absmax"], "U8" if dq else "F32"),
+                     "qmap": role_json(t[".weight.quant_map"], "F32"),
+                     "qstate": role_json(t[f".weight.quant_state.bitsandbytes__{kind}"], "U8")}
+            if dq:
+                roles["nabs"] = role_json(t[".weight.nested_absmax"], "F32")
+                roles["nmap"] = role_json(t[".weight.nested_quant_map"], "F32")
+            case(bcfg(dq, dt), roles, ref)
+    elif name == "BNB_INT8":
+        for o, i in [(6, 16), (5, 9)]:
+            w = (trng.standard_normal((o, i)) * trng.uniform(0.02, 0.4)).astype(np.float32)
+            w[0, :] = 0.0                    # an all-zero row: SCB 0
+            t = bnb_ref.quantize_int8(w)
+            t[".weight"][1, 0] = -128        # the whole int8 range is read
+            ref = bnb_ref.dequantize_int8(t)
+            # the library's own expression agrees to one float32 unit in the last place
+            lib = bnb_ref.bnb_dequant_int8(t)
+            assert np.all(np.abs(ref - lib) <= np.abs(lib) * 2.4e-7), "the stored-integer scale and bitsandbytes' vectorwise dequantisation differ by more than an ulp"
+            cfg = {"_load_in_4bit": False, "_load_in_8bit": True, "bnb_4bit_compute_dtype": "float32", "bnb_4bit_quant_storage": "uint8",
+                   "bnb_4bit_quant_type": "fp4", "bnb_4bit_use_double_quant": False, "llm_int8_enable_fp32_cpu_offload": False,
+                   "llm_int8_has_fp16_weight": False, "llm_int8_skip_modules": None, "llm_int8_threshold": 0.0, "load_in_4bit": False,
+                   "load_in_8bit": True, "quant_method": "bitsandbytes"}
+            roles = {"weight": role_json(t[".weight"], "I8"), "scb": role_json(t[".SCB"], "F32"), "wfmt": role_json(t[".weight_format"], "U8")}
+            case(cfg, roles, ref)
     return out
 
 def vectors(d, kinds=("random", "random", "random", "random", "extreme", "extreme")):

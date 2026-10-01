@@ -1,0 +1,606 @@
+{
+ "config": {
+  "checks": [
+   {
+    "message": "this is the 4-bit format",
+    "one_of": [
+     true
+    ],
+    "path": "load_in_4bit"
+   },
+   {
+    "message": "8-bit and 4-bit together",
+    "one_of": [
+     null,
+     false
+    ],
+    "path": "load_in_8bit"
+   },
+   {
+    "message": "the 4-bit type is nf4",
+    "one_of": [
+     "nf4"
+    ],
+    "path": "bnb_4bit_quant_type"
+   },
+   {
+    "message": "4-bit weights packed into a storage dtype other than uint8 (FSDP-style) are stored with another dtype and shape than this format reads",
+    "one_of": [
+     null,
+     "uint8"
+    ],
+    "path": "bnb_4bit_quant_storage"
+   }
+  ],
+  "inert": [
+   "bnb_4bit_compute_dtype",
+   "bnb_4bit_use_double_quant",
+   "llm_int8_enable_fp32_cpu_offload",
+   "llm_int8_has_fp16_weight",
+   "llm_int8_threshold",
+   "_load_in_4bit",
+   "_load_in_8bit"
+  ],
+  "lm_head": "unless_skipped",
+  "skip": "llm_int8_skip_modules",
+  "skip_match": "path"
+ },
+ "decode": {
+  "target": "floats",
+  "value": "rnd(rnd(qmap[((weight[(o * shape1 + i) / 2, 0] >> (4 * (1 - (o * shape1 + i) % 2))) & 15)] * (has_nabs ? rnd(rnd(nmap[absmax[((o * shape1 + i) / bs)]] * nabs[((o * shape1 + i) / bs) / nbs], 0) + rnd(noff, 0), 0) : absmax[((o * shape1 + i) / bs)]), 0), dt)"
+ },
+ "doc": "bitsandbytes 4-bit NormalFloat (nf4), as `Linear4bit` saves it to safetensors. The weight is a uint8 [ceil(N / 2), 1]: the flattened row-major [out, in] weight, two 4-bit codes a byte, the first (even-index) element in the HIGH nibble; `.weight.absmax` has one float per `blocksize` flat elements (under double quantisation, `bnb_4bit_use_double_quant`, it is uint8: a code of `.weight.nested_quant_map` scaled by `.weight.nested_absmax`, one per `nested_blocksize` of them, plus the document's `nested_offset`); `.weight.quant_map` is the 16-entry code table, stored in the checkpoint, and `.weight.quant_state.bitsandbytes__nf4` is a JSON document (a uint8 tensor) holding the logical `shape`, `blocksize`, the module's `dtype` and the nested parameters. A weight element is the float32 product of its code and its (de-nested) absmax, rounded once to the module dtype — bitsandbytes' CUDA kernel's arithmetic (its pure-PyTorch fallback rounds the code table to that dtype first and differs by up to one bfloat16 ulp). Double quantisation is exact here: each of its float32 operations (the product by the nested absmax, the sum with the offset) is a `rnd(., 0)` of a float64 operation on float32 operands, which is the correctly rounded float32 result. The code table is read from the checkpoint, so the format is table-agnostic; for FP4 the CUDA kernel's own literal for code 1 (0.00520833) differs from the stored table's (0.0625 / 12 in float32) in the seventh digit, and this follows the stored table. Decodes to floats, so the weight takes the ordinary W8 path. Refused by name: `bnb_4bit_quant_storage` other than uint8 (the packed bytes are stored in another dtype and shape).",
+ "ids": [
+  {
+   "method": "bitsandbytes",
+   "scheme": "config",
+   "when": [
+    {
+     "one_of": [
+      true
+     ],
+     "path": "load_in_4bit"
+    },
+    {
+     "one_of": [
+      "nf4"
+     ],
+     "path": "bnb_4bit_quant_type"
+    }
+   ]
+  }
+ ],
+ "layout": {
+  "checks": [
+   {
+    "expr": "shape2 == 0",
+    "message": "the logical weight is not a matrix (its `shape` has more than two entries)"
+   },
+   {
+    "expr": "dim_weight[1] == 1 && dim_weight[0] * 2 >= out * inp && dim_weight[0] * 2 <= out * inp + 1",
+    "message": "the packed weight is not [ceil(out * in / 2), 1]"
+   },
+   {
+    "expr": "bs > 0 && dim_absmax[0] == (out * inp + bs - 1) / bs",
+    "message": "absmax is not one per block of the flat weight"
+   },
+   {
+    "expr": "dim_qmap[0] == 16",
+    "message": "the code table does not have 16 entries"
+   },
+   {
+    "expr": "has_nabs == has_nmap",
+    "message": "nested_absmax and nested_quant_map come together"
+   },
+   {
+    "expr": "has_nabs + float_absmax == 1",
+    "message": "absmax is 8-bit exactly when it is double-quantised (nested_absmax present) and float otherwise"
+   },
+   {
+    "expr": "!has_nabs || (nbs > 0 && dim_nmap[0] == 256 && dim_nabs[0] == (dim_absmax[0] + nbs - 1) / nbs)",
+    "message": "the nested statistics are not one float per `nested_blocksize` absmax values with a 256-entry code"
+   }
+  ],
+  "dims": {
+   "inp": "shape1",
+   "out": "shape0"
+  },
+  "kind": "tensors",
+  "roles": [
+   {
+    "dtypes": [
+     "U8"
+    ],
+    "name": "weight",
+    "rank": 2,
+    "suffix": ".weight"
+   },
+   {
+    "dtypes": [
+     "F32",
+     "U8"
+    ],
+    "name": "absmax",
+    "rank": 1,
+    "suffix": ".weight.absmax"
+   },
+   {
+    "dtypes": [
+     "F32"
+    ],
+    "name": "qmap",
+    "rank": 1,
+    "suffix": ".weight.quant_map"
+   },
+   {
+    "dtypes": [
+     "U8"
+    ],
+    "name": "qstate",
+    "rank": 1,
+    "suffix": ".weight.quant_state.bitsandbytes__nf4"
+   },
+   {
+    "dtypes": [
+     "F32"
+    ],
+    "name": "nabs",
+    "rank": 1,
+    "required": false,
+    "suffix": ".weight.nested_absmax"
+   },
+   {
+    "dtypes": [
+     "F32"
+    ],
+    "name": "nmap",
+    "rank": 1,
+    "required": false,
+    "suffix": ".weight.nested_quant_map"
+   }
+  ]
+ },
+ "name": "BNB_NF4",
+ "params": {
+  "bs": {
+   "from_role": {
+    "path": "blocksize",
+    "role": "qstate"
+   }
+  },
+  "dt": {
+   "from_role": {
+    "kind": "string",
+    "path": "dtype",
+    "role": "qstate"
+   },
+   "map": {
+    "bfloat16": 1,
+    "float16": 2,
+    "float32": 0
+   }
+  },
+  "nbs": {
+   "default": 256,
+   "from_role": {
+    "path": "nested_blocksize",
+    "role": "qstate"
+   }
+  },
+  "noff": {
+   "default": 0,
+   "from_role": {
+    "kind": "float",
+    "path": "nested_offset",
+    "role": "qstate"
+   }
+  },
+  "shape0": {
+   "from_role": {
+    "path": "shape[0]",
+    "role": "qstate"
+   }
+  },
+  "shape1": {
+   "from_role": {
+    "path": "shape[1]",
+    "role": "qstate"
+   }
+  },
+  "shape2": {
+   "default": 0,
+   "from_role": {
+    "path": "shape[2]",
+    "role": "qstate"
+   }
+  }
+ },
+ "schema": "misaka.palw.quant-format.v1",
+ "tests": [
+  {
+   "config": {
+    "_load_in_4bit": true,
+    "_load_in_8bit": false,
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_quant_storage": "uint8",
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_use_double_quant": false,
+    "llm_int8_enable_fp32_cpu_offload": false,
+    "llm_int8_has_fp16_weight": false,
+    "llm_int8_skip_modules": null,
+    "llm_int8_threshold": 6.0,
+    "load_in_4bit": true,
+    "load_in_8bit": false,
+    "quant_method": "bitsandbytes"
+   },
+   "roles": {
+    "absmax": {
+     "dtype": "F32",
+     "hex": "9fd5f03ee03c003f1901d63e246aee3e",
+     "shape": [
+      4
+     ]
+    },
+    "qmap": {
+     "dtype": "F32",
+     "hex": "000080bfb13932bf306b06bfa032cabe4da291be3f353dbe7178babd00000000fffaa23de3ca243edd047c3e3a03ad3eb8a4e13eab07103fb313393f0000803f",
+     "shape": [
+      16
+     ]
+    },
+    "qstate": {
+     "dtype": "U8",
+     "hex": "7b227175616e745f74797065223a20226e6634222c2022626c6f636b73697a65223a2036342c20226474797065223a202262666c6f61743136222c20227368617065223a205b382c2033325d7d",
+     "shape": [
+      77
+     ]
+    },
+    "weight": {
+     "dtype": "U8",
+     "hex": "45cb6cc47ded98a3476061320a4b9c39d79c57e37b7282ce465f43e6212e96b177777777777777777777777777777777a5537d4d648ea4c2715aef954a24c5a3d741c4148a45153b4d7bd7ab5137b7489264c01664196a3babf1a27e22e2ada675b51c59b615dbc2674421c3bc6c4c4f269b9b3a1a5d3706965a157471fa2c59",
+     "shape": [
+      128,
+      1
+     ]
+    }
+   },
+   "values_f32_hex": "000009be0000b2bd0000543e0000233e00002fbd0000543e0000543e000009be000000000000873e0000ae3e0000873e00009b3d0000193d0000ed3d00003ebe000009be0000000000002fbd0000f1be00002fbd0000a8be00003ebe00007dbe0000f1be0000ed3d000009be0000233e00009b3d0000543e00003ebe00009b3d0000873e0000000000009b3d0000543e0000b2bd000000000000ae3e00003ebe000000000000233e0000000000007dbe0000193d00007dbe0000543e0000ae3e000009be00002fbd0000b2bd0000f13e000009be00003ebe0000ae3e00002fbd00007dbe0000a8be00007dbe0000ae3e00009b3d00002fbd0000233e0000a8be00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fc3d0000bebd0000bebd00004bbe000000000000903e000012be0000903e00003bbd000012be0000233d0000b93e0000fc3d000012be0000623e000087be000000000000b3be0000bebd0000fc3d0000b93e0000003f0000a53d0000bebd000012be0000fc3d000087be000012be0000623e0000bebd0000fc3d00004bbe0000713e000000000000f3bd000095be00003d3e0000f3bd000095be0000f3bd0000083d0000d33d0000f3bd00009ebd000095be00009ebd000029be0000113e0000f3bd0000713e000000000000113e0000713e000000000000d33d0000113e00009ebd000095be000029be000000000000113e000000000000f3bd0000083d00008a3d000061be00001cbd0000f3bd00003d3e0000d6be000095be00001cbd00001cbd0000f3bd000095be00008a3d00001cbd0000d33d000029be0000113e0000d33d0000113e0000d63e000095be0000d33d000061be0000000000009b3e000061be000061be00009b3e000061be0000d33d0000713e0000d33d00001cbd000000000000b0bd0000213e0000b0bd0000a6be0000523e0000b0bd0000993d0000213e00002ebd0000a6be0000b0bd0000863e0000213e0000523e00007abe00002ebd00000000000008be000008be00007abe0000a6be0000523e00003cbe0000213e0000523e00002ebd0000523e000008be0000523e000008be0000ee3e00007abe00002ebd0000993d0000213e0000993d0000213e00003cbe0000eb3d0000a6be0000eb3d0000b0bd0000863e00003cbe000000000000eebe00002ebd0000993d00002ebd0000b0bd0000eb3d0000a6be0000b0bd00000000000008be000000000000a6be0000ee3e0000eb3d00007abe0000523e0000b0bd0000993d"
+  },
+  {
+   "config": {
+    "_load_in_4bit": true,
+    "_load_in_8bit": false,
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_quant_storage": "uint8",
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_use_double_quant": false,
+    "llm_int8_enable_fp32_cpu_offload": false,
+    "llm_int8_has_fp16_weight": false,
+    "llm_int8_skip_modules": null,
+    "llm_int8_threshold": 6.0,
+    "load_in_4bit": true,
+    "load_in_8bit": false,
+    "quant_method": "bitsandbytes"
+   },
+   "roles": {
+    "absmax": {
+     "dtype": "F32",
+     "hex": "5795e13d4a74143e08a9ce3dbb88023e",
+     "shape": [
+      4
+     ]
+    },
+    "qmap": {
+     "dtype": "F32",
+     "hex": "000080bfb13932bf306b06bfa032cabe4da291be3f353dbe7178babd00000000fffaa23de3ca243edd047c3e3a03ad3eb8a4e13eab07103fb313393f0000803f",
+     "shape": [
+      16
+     ]
+    },
+    "qstate": {
+     "dtype": "U8",
+     "hex": "7b227175616e745f74797065223a20226e6634222c2022626c6f636b73697a65223a2036342c20226474797065223a2022666c6f61743136222c20227368617065223a205b362c2034305d7d",
+     "shape": [
+      76
+     ]
+    },
+    "weight": {
+     "dtype": "U8",
+     "hex": "8a99797cb2648a71a43f54185095d951c45419b8882974d13e1551576d4c1c49bc178a8c544a3436ccd49969939632e64bd4a89453829716345a7555a7714098cb24d54f791c823578832033257e44c927d081c9b979b824923ba9392335479d8b797397636b87bf974be88377a2d3586ad492990b5b8656",
+     "shape": [
+      120,
+      1
+     ]
+    }
+   },
+   "values_f32_hex": "00a00f3c0020de3c0040913c0040913c000000000040913c0000000000e0463d0080183d00e06cbd006024bc006000bd00a00f3c0020de3c0000000000009dbd0020de3c006000bd002032bd00a0e13d00c0a6bc006000bd00009dbd00a00f3c00c0a6bc00a0e1bd0040913c00c0a6bc00e07d3d0040913c00c0a6bc00009dbd00e0463d006000bd00c0a6bc006000bd00009dbd0040913c0080183d00a00f3c00a00f3c00a00f3c00e06cbd0040913c00000000006000bd00e07d3d00009dbd002032bd0020a33d00009dbd00c0a6bc00c0a6bc00009dbd00c0a6bc00000000006024bc00e07d3d006000bd00e0463d00009dbd00e0463d006000bd0040913c00a0483d00e0823d00c0cebd0000000000003d3c0020123d00003d3c00e0823d0080dbbc00e028bd00e028bd0020123d00806abd00e028bd00806abd004058bc00e0823d00e0823d0000a73d00e028bd0020bf3c0020bf3c004058bc0020bf3c0020bf3c00806abd0020bf3c004058bc00806abd00e09bbd00a0d63d004058bc00e028bd00a0483d0000a73d00e028bd0020123d00003d3c0020bf3c00e028bd0080dbbc00806abd00003d3c00e09bbd0020bf3c0000000000c0cebd004058bc00806abd00e028bd0080dbbc0020123d000000000080dbbc0080dbbc0080dbbc0020123d000000000000000000c0cebd00e028bd008014be0020bf3c00003d3c0020363d00a00b3d000059bd0020ebbc0080683d00c098bc0020ebbc00a0ce3d000000000000853c00e08fbd0020363d00a0033c000059bd004023bd00c098bc0000000000a0033c00a0033c004023bd000059bd00a0cebd004023bd004023bd000059bd00c098bc000000000060953d0020ebbc0020ebbc0020363d0000853c000059bd000000000080683d00a0cebd00a0033c00e08fbd0020363d0000853c00a00b3d0000853c000000000000853c00a00b3d00a0033c000059bd0020ebbc0000853c000059bd004023bd00a00b3d0080cb3c0000853c004023bd0000853c000059bd004023bd004023bd00c098bc0020ebbc000000000000853c0080683d0040263c0080303d000000000000a83c0000000000404ebd0000a83c0000000000203ebc00404ebd00203ebc0080303d0040263c000000000080303d0080023e0000a83c00000000008014bd0080303d00c0bc3d0040263c0040263c00404ebd00000000000000000080003d002089bd00e0923d00404ebd0000c1bc0040263c00203ebc0080003d00e0923d008014bd0000a83c002089bd0000a83c0000a83c008002be0080303d0000c1bc0080303d0040263c00203ebc0000c1bc00203ebc"
+  },
+  {
+   "config": {
+    "_load_in_4bit": true,
+    "_load_in_8bit": false,
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_quant_storage": "uint8",
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_use_double_quant": false,
+    "llm_int8_enable_fp32_cpu_offload": false,
+    "llm_int8_has_fp16_weight": false,
+    "llm_int8_skip_modules": null,
+    "llm_int8_threshold": 6.0,
+    "load_in_4bit": true,
+    "load_in_8bit": false,
+    "quant_method": "bitsandbytes"
+   },
+   "roles": {
+    "absmax": {
+     "dtype": "F32",
+     "hex": "5de98f3e",
+     "shape": [
+      1
+     ]
+    },
+    "qmap": {
+     "dtype": "F32",
+     "hex": "000080bfb13932bf306b06bfa032cabe4da291be3f353dbe7178babd00000000fffaa23de3ca243edd047c3e3a03ad3eb8a4e13eab07103fb313393f0000803f",
+     "shape": [
+      16
+     ]
+    },
+    "qstate": {
+     "dtype": "U8",
+     "hex": "7b227175616e745f74797065223a20226e6634222c2022626c6f636b73697a65223a2036342c20226474797065223a2022666c6f61743332222c20227368617065223a205b332c20355d7d",
+     "shape": [
+      75
+     ]
+    },
+    "weight": {
+     "dtype": "U8",
+     "hex": "05c4a537924aa030",
+     "shape": [
+      8,
+      1
+     ]
+    }
+   },
+   "values_f32_hex": "5de98fbe71ba54bd67b1fd3dd5bca3bd73ac8d3d71ba54bd3255e3bd000000001b47393dd02017bed5bca3bd73ac8d3d73ac8d3d5de98fbe3255e3bd"
+  },
+  {
+   "config": {
+    "_load_in_4bit": true,
+    "_load_in_8bit": false,
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_quant_storage": "uint8",
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_use_double_quant": true,
+    "llm_int8_enable_fp32_cpu_offload": false,
+    "llm_int8_has_fp16_weight": false,
+    "llm_int8_skip_modules": null,
+    "llm_int8_threshold": 6.0,
+    "load_in_4bit": true,
+    "load_in_8bit": false,
+    "quant_method": "bitsandbytes"
+   },
+   "roles": {
+    "absmax": {
+     "dtype": "U8",
+     "hex": "ff00",
+     "shape": [
+      2
+     ]
+    },
+    "nabs": {
+     "dtype": "F32",
+     "hex": "e830f43d",
+     "shape": [
+      1
+     ]
+    },
+    "nmap": {
+     "dtype": "F32",
+     "hex": "33337ebf9a997abf000077bf666673bfcdcc6fbf33336cbf9a9968bf000065bf666661bfcdcc5dbf33335abf9a9956bf000053bf66664fbfcdcc4bbf333348bf9a9944bf000041bf66663dbfcdcc39bf343336bf9a9932bf00002fbf66662bbfcdcc27bf343324bf9a9920bf00001dbf666619bfcdcc15bf343312bf9a990ebf00000bbf666607bfcccc03bf333300bf3233f9be0000f2becccceabe9a99e3be6666dcbe3333d5be0000cebeccccc6be9a99bfbe6666b8be3333b1be0000aabecccca2be9a999bbe666694be34338dbe000086be99997dbe33336fbecdcc60be666652be000044be9a9935be333327becdcc18be66660abe0000f8bd3433dbbd85ebc9bdf728c4bd6766bebdd7a3b8bd48e1b2bdb81eadbd2a5ca7bd9a99a1bd0ad79bbd7b1496bdeb5190bd5d8f8abdcdcc84bd7b147ebd5d8f72bd3d0a67bd1f855bbd000050bde17a44bdc3f538bda3702dbd85eb21bd676616bd48e10abd52b8febc15aee7bcd7a3d0bc9a99b9bc5d8fa2bc1f858bbcc3f568bc48e13abc643b1fbc180416bccdcc0cbc819503bc6abcf4bbd34de2bb3bdfcfbba470bdbb0d02abbb749398bbdd2486bb8a6c67bb5c8f42bb2db21dbbfca9f1ba9defa7baff6577ba3ee859ba806a3cbac1ec1eba016f01ba83e2c7b905e78cb90bd723b94b1fbab8b3ef8ab8348037b80642b2b7ff0502b7941a5ab6b7a313b500000000b7a31335941a5a36ff0502370642b23734803738b3ef8a384b1fba380bd7233905e78c3983e2c739016f013ac1ec1e3a806a3c3a3ee8593aff65773a9defa73afca9f13a2db21d3b5c8f423b8a6c673bdd24863b7493983b0d02ab3ba470bd3b3bdfcf3bd34de23b6abcf43b8195033ccdcc0c3c1804163c643b1f3c48e13a3cc3f5683c1f858b3c5d8fa23c9a99b93cd7a3d03c15aee73c52b8fe3c48e10a3d6766163d85eb213da3702d3dc3f5383de17a443d0000503d1f855b3d3d0a673d5d8f723d7b147e3dcdcc843d5d8f8a3deb51903d7b14963d0ad79b3d9a99a13d2a5ca73db81ead3d48e1b23dd7a3b83d6766be3df728c43d85ebc93d3433db3d0000f83d66660a3ecdcc183e3333273e9a99353e0000443e6666523ecdcc603e33336f3e99997d3e0000863e34338d3e6666943e9a999b3ecccca23e0000aa3e3333b13e6666b83e9a99bf3eccccc63e0000ce3e3333d53e6666dc3e9a99e33eccccea3e0000f23e3233f93e3333003fcccc033f6666073f00000b3f9a990e3f3433123fcdcc153f6666193f00001d3f9a99203f3433243fcdcc273f66662b3f00002f3f9a99323f3433363fcdcc393f66663d3f0000413f9a99443f3333483fcdcc4b3f66664f3f0000533f9a99563f33335a3fcdcc5d3f6666613f0000653f9a99683f33336c3fcdcc6f3f6666733f0000773f9a997a3f33337e3f0000803f",
+     "shape": [
+      256
+     ]
+    },
+    "qmap": {
+     "dtype": "F32",
+     "hex": "000080bfb13932bf306b06bfa032cabe4da291be3f353dbe7178babd00000000fffaa23de3ca243edd047c3e3a03ad3eb8a4e13eab07103fb313393f0000803f",
+     "shape": [
+      16
+     ]
+    },
+    "qstate": {
+     "dtype": "U8",
+     "hex": "7b227175616e745f74797065223a20226e6634222c2022626c6f636b73697a65223a2036342c20226474797065223a2022666c6f61743136222c20227368617065223a205b352c2032345d2c20226e65737465645f626c6f636b73697a65223a203235362c20226e65737465645f6474797065223a2022666c6f61743332222c20226e65737465645f6f6666736574223a20302e363539333535343631353937343432367d",
+     "shape": [
+      165
+     ]
+    },
+    "weight": {
+     "dtype": "U8",
+     "hex": "952dbe6569d359eabad858a2c9244639784d755ac7a9a5ddb35876547f356c578aaad4a724ad6478321ea6828031b6c6a6158418743255a965696098",
+     "shape": [
+      60,
+      1
+     ]
+    }
+   },
+   "values_f32_hex": "0040003e006013be0060d1be0040e03e00c0863e0020103f002091bd006013be002091bd0040003e0040e03e00609dbe006013be0040003e0020103f0040443e00c0863e0040443e0040e03e00c07d3d006013be00c07d3d0040443e0060d1be00a0af3e0040003e0060d1be00c062be00c062be002091bd00609dbe0040003e0000000000c07d3d00c062be0040e03e00000000006013be006013be0040443e00a0af3e000000000040443e0040003e0040443e006013be0040e03e0040e03e00c0863e00609dbe006013be00c07d3d00000000002091bd006013be00c062be000000000060473f00609dbe006013be002091bd00a0af3e006013be000000000060303d0060083e0060083e0060083e00e09b3e00a01dbe0060083e00000000006091be00a01dbe0060083e00e09b3e00c049bd00a01dbe000000000060303d00c05abe006091be00e0c0be0040c83e0060083e00c049bd0060303d006091be0060303d00800abf00c05abe00e0c0be00203b3e00c049bd0020743e00c049bd0060083e00c049bd00e0c0be00c0ccbd0060303d00a01dbe00e0c0be0060303d0000000000a01dbe00c05abe006091be00c0ccbd00c0ccbd0060083e0040b23d00c049bd00c0ccbd00c049bd0040b23d00c049bd00800abf0040b23d0060303d"
+  },
+  {
+   "config": {
+    "_load_in_4bit": true,
+    "_load_in_8bit": false,
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_quant_storage": "uint8",
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_use_double_quant": true,
+    "llm_int8_enable_fp32_cpu_offload": false,
+    "llm_int8_has_fp16_weight": false,
+    "llm_int8_skip_modules": null,
+    "llm_int8_threshold": 6.0,
+    "load_in_4bit": true,
+    "load_in_8bit": false,
+    "quant_method": "bitsandbytes"
+   },
+   "roles": {
+    "absmax": {
+     "dtype": "U8",
+     "hex": "c1ff00269f00d1ccff",
+     "shape": [
+      9
+     ]
+    },
+    "nabs": {
+     "dtype": "F32",
+     "hex": "703ca83dc068c73db03b6f3d",
+     "shape": [
+      3
+     ]
+    },
+    "nmap": {
+     "dtype": "F32",
+     "hex": "33337ebf9a997abf000077bf666673bfcdcc6fbf33336cbf9a9968bf000065bf666661bfcdcc5dbf33335abf9a9956bf000053bf66664fbfcdcc4bbf333348bf9a9944bf000041bf66663dbfcdcc39bf343336bf9a9932bf00002fbf66662bbfcdcc27bf343324bf9a9920bf00001dbf666619bfcdcc15bf343312bf9a990ebf00000bbf666607bfcccc03bf333300bf3233f9be0000f2becccceabe9a99e3be6666dcbe3333d5be0000cebeccccc6be9a99bfbe6666b8be3333b1be0000aabecccca2be9a999bbe666694be34338dbe000086be99997dbe33336fbecdcc60be666652be000044be9a9935be333327becdcc18be66660abe0000f8bd3433dbbd85ebc9bdf728c4bd6766bebdd7a3b8bd48e1b2bdb81eadbd2a5ca7bd9a99a1bd0ad79bbd7b1496bdeb5190bd5d8f8abdcdcc84bd7b147ebd5d8f72bd3d0a67bd1f855bbd000050bde17a44bdc3f538bda3702dbd85eb21bd676616bd48e10abd52b8febc15aee7bcd7a3d0bc9a99b9bc5d8fa2bc1f858bbcc3f568bc48e13abc643b1fbc180416bccdcc0cbc819503bc6abcf4bbd34de2bb3bdfcfbba470bdbb0d02abbb749398bbdd2486bb8a6c67bb5c8f42bb2db21dbbfca9f1ba9defa7baff6577ba3ee859ba806a3cbac1ec1eba016f01ba83e2c7b905e78cb90bd723b94b1fbab8b3ef8ab8348037b80642b2b7ff0502b7941a5ab6b7a313b500000000b7a31335941a5a36ff0502370642b23734803738b3ef8a384b1fba380bd7233905e78c3983e2c739016f013ac1ec1e3a806a3c3a3ee8593aff65773a9defa73afca9f13a2db21d3b5c8f423b8a6c673bdd24863b7493983b0d02ab3ba470bd3b3bdfcf3bd34de23b6abcf43b8195033ccdcc0c3c1804163c643b1f3c48e13a3cc3f5683c1f858b3c5d8fa23c9a99b93cd7a3d03c15aee73c52b8fe3c48e10a3d6766163d85eb213da3702d3dc3f5383de17a443d0000503d1f855b3d3d0a673d5d8f723d7b147e3dcdcc843d5d8f8a3deb51903d7b14963d0ad79b3d9a99a13d2a5ca73db81ead3d48e1b23dd7a3b83d6766be3df728c43d85ebc93d3433db3d0000f83d66660a3ecdcc183e3333273e9a99353e0000443e6666523ecdcc603e33336f3e99997d3e0000863e34338d3e6666943e9a999b3ecccca23e0000aa3e3333b13e6666b83e9a99bf3eccccc63e0000ce3e3333d53e6666dc3e9a99e33eccccea3e0000f23e3233f93e3333003fcccc033f6666073f00000b3f9a990e3f3433123fcdcc153f6666193f00001d3f9a99203f3433243fcdcc273f66662b3f00002f3f9a99323f3433363fcdcc393f66663d3f0000413f9a99443f3333483fcdcc4b3f66664f3f0000533f9a99563f33335a3fcdcc5d3f6666613f0000653f9a99683f33336c3fcdcc6f3f6666733f0000773f9a997a3f33337e3f0000803f",
+     "shape": [
+      256
+     ]
+    },
+    "qmap": {
+     "dtype": "F32",
+     "hex": "000080bfb13932bf306b06bfa032cabe4da291be3f353dbe7178babd00000000fffaa23de3ca243edd047c3e3a03ad3eb8a4e13eab07103fb313393f0000803f",
+     "shape": [
+      16
+     ]
+    },
+    "qstate": {
+     "dtype": "U8",
+     "hex": "7b227175616e745f74797065223a20226e6634222c2022626c6f636b73697a65223a2036342c20226474797065223a202262666c6f61743136222c20227368617065223a205b31322c2034385d2c20226e65737465645f626c6f636b73697a65223a20342c20226e65737465645f6474797065223a2022666c6f61743332222c20226e65737465645f6f6666736574223a20302e353337313531363334363933313435387d",
+     "shape": [
+      165
+     ]
+    },
+    "weight": {
+     "dtype": "U8",
+     "hex": "357a5ba235a21d6562d66aedb42f7e769b53835569cd34685a87739634636d563851ab5f5daa635e6bc34d66678565c866863187b98784937457aa879e746361bb19f18c3a874cb852fb5c6dba27d35363639395e4e27db546878dec6277788973cd551a7b868d19c46396cbe2f2429b3370f184ce7e9a6379626395e4aa7c678988cd4168c7d8ae593548c829fcc44e825cfcd4ac7a3b4175488b7c856c77698b9c2076862263e61ab588a1dd23cd1572c9dee41c66d11d048a917374eb1abd6584a3a15eba6e4cb4ca5a68a3b722aa3741362879b53da4925bc95a9440918b636c7e73c3239f27bb980d5318264b1145564e4ccac7a6a5563fc665236a5957957828989a66e1abadf33689c8bc4caab2aa874b5a7eaa4395c598b6868b8b5b",
+     "shape": [
+      288,
+      1
+     ]
+    }
+   },
+   "values_f32_hex": "00005ebe0000cfbd0000000000000a3e0000cfbd00003e3e00000a3e000093be00005ebe0000cfbd00000a3e000093be0000c3be00009e3e00004cbd0000cfbd00004cbd000093be00009e3e00004cbd00004cbd00000a3e0000cb3e00009e3e00003e3e000020be000093be00000c3f000000000000cb3e0000000000004cbd0000b53d00003e3e0000cfbd00005ebe0000333d00005ebe0000cfbd0000cfbd00004cbd0000b53d0000773e00009e3e00005ebe000020be00004cbd0000333d0000cfbd00000a3e0000333d000000000000000000005ebe0000b53d00004cbd00005ebe000020be00004cbd00005ebe00004cbd00009e3e0000cfbd00004cbd00007abe00004a3d0000eabd0000ddbe00001c3e0000563e0000eabd00001f3f0000eabd0000b23e00001c3e00001c3e000067bd00007abe0000eabd0000e53e000067bd0000563e00008c3e00007abe000034be0000b23e000067bd000067bd000067bd0000000000004a3d0000eabd000067bd0000eabd00008c3e00004a3d000067bd000067bd00004a3d000067bd00007abe0000ddbe00004a3d000000000000563e0000cc3d00004a3d0000000000004a3d000034be0000cc3d00007abe00000000000034be0000eabd0000000000001c3e00001c3e00004a3d000000000000cc3d0000e53e00000000000034be000067bd00007abe000067bd0000ddbe00001e3e00001e3e0000a2be0000963d0000e93e0000a2be0000153d00004e3e000038be0000e63d0000153d00000000000005be00004e3e00001e3e0000153d0000acbd000075be0000e93e00001e3e0000acbd00004e3e00002abd0000833e00001e3e0000e63d000075be000000000000833e000038be0000acbd000038be00002abd000038be00002abd000038be0000963d000038be0000963d0000acbd0000a93e000005be0000a93e000075be000000000000833e00001e3e0000acbd000005be00002abd0000153d000000000000153d0000833e0000a93e00004e3e00002abd000075be0000000000000000000000000000153d0000153d0000963d0000000000004abe0000613e0000903e0000bdbd0000bdbd0000b2be0000fc3d0000000000002d3e0000233d00003abd0000233d0000903e0000b2be0000a53d0000613e000011be00003abd00004abe0000a53d00003abd0000613e00002d3e0000b93e000086be0000003f000086be000011be000086be0000a53d00002d3e00004abe00004abe00000000000000bf0000003f0000b2be0000233d000011be0000613e0000b93e000000000000b93e0000a53d0000fc3d00003abd00004abe000000000000a53d00003abd000086be00003abd00004abe0000a53d0000bdbd0000b93e000011be0000fc3d0000fc3d000000000000613e00003abd0000000000002f3d0000b13d00002f3d00002f3d0000733e00009b3e00001dbe0000c0be000049bd00002f3d0000733e0000000000009b3e00002f3d0000083e0000c73e0000ccbd0000b13d00005abe0000ccbd00001dbe00002f3d0000733e00002f3d000091be0000b13d00000a3f0000733e0000733e00001dbe00001dbe0000c73e00002f3d000091be0000ccbd0000733e00000a3f0000733e00009b3e00001dbe0000083e0000733e000000000000083e00005abe00003a3e00001dbe0000c0be000000000000ccbd00001dbe00002f3d00002f3d00003a3e000000000000733e00002f3d0000ccbd000049bd0000733e0000000000000000000049bd0000b13d0000103d0000183e0000913d0000473e00006dbe0000e2be00000000000024bd0000103d000024bd00006dbe00006dbe000024bd000032be0000a33e000024bd00009dbe0000de3d0000183e0000a7bd0000103d0000103d0000de3d00009dbe00007e3e00007e3e00006dbe000032be0000473e00007e3e00009dbe0000a7bd0000000000006dbe0000473e0000913d00007e3e0000a33e0000a33e000000be00009dbe0000473e000024bd000024bd00007e3e00009dbe00009dbe00007e3e0000e2be000000be0000103d0000de3d0000913d00009dbe00000000000032be00000000000000be0000a33e0000183e00009dbe0000de3d0000183e00007e3e000055bd0000d9bd00003b3d000027be0000103e000067be0000103e0000ccbe0000d9bd0000d43e0000463e0000103e000055bd0000d43e000027be0000813e0000463e000027be0000813e0000103e0000d9bd0000103e000055bd00003b3d0000103e000067be0000463e0000000000009abe00009abe0000103e0000103e000067be00000000000027be0000ccbe000067be000055bd00009abe00003b3d000000000000bd3d0000463e0000d9bd000067be0000a53e0000103e000027be0000bd3d00009abe0000d9bd0000463e0000813e0000bd3d0000d9bd0000103e0000bd3d000027be000027be000012bf0000bd3d0000ccbe00003b3d0000463e000053bd000065be000053bd00007f3e000000000000d13e00000000000065be00007f3e000065be000098be000065be0000ba3d0000113f000098be000000000000443e0000443e0000ba3d0000383d000011bf0000a33e0000d6bd000065be0000cabe0000383d000098be000053bd000025be0000443e0000cabe0000cabe000025be0000d6bd0000d6bd000053bd000025be0000d13e000025be00007f3e00007f3e00000e3e00007f3e0000000000000e3e000053bd00000e3e0000d6bd0000d6bd000053bd000065be0000113f00007f3e000053bd000053bd0000d6bd000098be000065be000053bd00000e3e0000d6bd0000ba3d0000d6bd000000000000c43d0000e1bd000000000000423d0000a0be0000423d0000c43d0000423d0000c43d0000163e00005ebd00005ebd0000dc3e0000d4be0000163e00004e3e0000163e0000ac3e0000183f000071be000071be00005ebd0000423d0000c43d0000863e0000423d00004e3e0000863e00002dbe0000863e0000163e0000163e00004e3e0000a0be0000163e0000163e0000423d0000000000002dbe00004e3e0000e1bd0000163e000000000000dc3e0000163e0000163e00002dbe000071be0000c43d0000e1bd0000863e0000e1bd0000c43d0000423d00004e3e00005ebd0000423d00005ebd0000423d00004e3e0000423d00004e3e0000e1bd00004e3e"
+  },
+  {
+   "config": {
+    "_load_in_4bit": true,
+    "_load_in_8bit": false,
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_quant_storage": "uint8",
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_use_double_quant": true,
+    "llm_int8_enable_fp32_cpu_offload": false,
+    "llm_int8_has_fp16_weight": false,
+    "llm_int8_skip_modules": null,
+    "llm_int8_threshold": 6.0,
+    "load_in_4bit": true,
+    "load_in_8bit": false,
+    "quant_method": "bitsandbytes"
+   },
+   "roles": {
+    "absmax": {
+     "dtype": "U8",
+     "hex": "ff00",
+     "shape": [
+      2
+     ]
+    },
+    "nabs": {
+     "dtype": "F32",
+     "hex": "200e5b3c",
+     "shape": [
+      1
+     ]
+    },
+    "nmap": {
+     "dtype": "F32",
+     "hex": "33337ebf9a997abf000077bf666673bfcdcc6fbf33336cbf9a9968bf000065bf666661bfcdcc5dbf33335abf9a9956bf000053bf66664fbfcdcc4bbf333348bf9a9944bf000041bf66663dbfcdcc39bf343336bf9a9932bf00002fbf66662bbfcdcc27bf343324bf9a9920bf00001dbf666619bfcdcc15bf343312bf9a990ebf00000bbf666607bfcccc03bf333300bf3233f9be0000f2becccceabe9a99e3be6666dcbe3333d5be0000cebeccccc6be9a99bfbe6666b8be3333b1be0000aabecccca2be9a999bbe666694be34338dbe000086be99997dbe33336fbecdcc60be666652be000044be9a9935be333327becdcc18be66660abe0000f8bd3433dbbd85ebc9bdf728c4bd6766bebdd7a3b8bd48e1b2bdb81eadbd2a5ca7bd9a99a1bd0ad79bbd7b1496bdeb5190bd5d8f8abdcdcc84bd7b147ebd5d8f72bd3d0a67bd1f855bbd000050bde17a44bdc3f538bda3702dbd85eb21bd676616bd48e10abd52b8febc15aee7bcd7a3d0bc9a99b9bc5d8fa2bc1f858bbcc3f568bc48e13abc643b1fbc180416bccdcc0cbc819503bc6abcf4bbd34de2bb3bdfcfbba470bdbb0d02abbb749398bbdd2486bb8a6c67bb5c8f42bb2db21dbbfca9f1ba9defa7baff6577ba3ee859ba806a3cbac1ec1eba016f01ba83e2c7b905e78cb90bd723b94b1fbab8b3ef8ab8348037b80642b2b7ff0502b7941a5ab6b7a313b500000000b7a31335941a5a36ff0502370642b23734803738b3ef8a384b1fba380bd7233905e78c3983e2c739016f013ac1ec1e3a806a3c3a3ee8593aff65773a9defa73afca9f13a2db21d3b5c8f423b8a6c673bdd24863b7493983b0d02ab3ba470bd3b3bdfcf3bd34de23b6abcf43b8195033ccdcc0c3c1804163c643b1f3c48e13a3cc3f5683c1f858b3c5d8fa23c9a99b93cd7a3d03c15aee73c52b8fe3c48e10a3d6766163d85eb213da3702d3dc3f5383de17a443d0000503d1f855b3d3d0a673d5d8f723d7b147e3dcdcc843d5d8f8a3deb51903d7b14963d0ad79b3d9a99a13d2a5ca73db81ead3d48e1b23dd7a3b83d6766be3df728c43d85ebc93d3433db3d0000f83d66660a3ecdcc183e3333273e9a99353e0000443e6666523ecdcc603e33336f3e99997d3e0000863e34338d3e6666943e9a999b3ecccca23e0000aa3e3333b13e6666b83e9a99bf3eccccc63e0000ce3e3333d53e6666dc3e9a99e33eccccea3e0000f23e3233f93e3333003fcccc033f6666073f00000b3f9a990e3f3433123fcdcc153f6666193f00001d3f9a99203f3433243fcdcc273f66662b3f00002f3f9a99323f3433363fcdcc393f66663d3f0000413f9a99443f3333483fcdcc4b3f66664f3f0000533f9a99563f33335a3fcdcc5d3f6666613f0000653f9a99683f33336c3fcdcc6f3f6666733f0000773f9a997a3f33337e3f0000803f",
+     "shape": [
+      256
+     ]
+    },
+    "qmap": {
+     "dtype": "F32",
+     "hex": "000080bfb13932bf306b06bfa032cabe4da291be3f353dbe7178babd00000000fffaa23de3ca243edd047c3e3a03ad3eb8a4e13eab07103fb313393f0000803f",
+     "shape": [
+      16
+     ]
+    },
+    "qstate": {
+     "dtype": "U8",
+     "hex": "7b227175616e745f74797065223a20226e6634222c2022626c6f636b73697a65223a203132382c20226474797065223a2022666c6f61743332222c20227368617065223a205b372c2033335d2c20226e65737465645f626c6f636b73697a65223a20322c20226e65737465645f6474797065223a2022666c6f61743332222c20226e65737465645f6f6666736574223a20302e30393335343738383036343935363636357d",
+     "shape": [
+      165
+     ]
+    },
+    "weight": {
+     "dtype": "U8",
+     "hex": "9548ad695bc5f8434b6dd5dc489455a9695a5913685939d467c32a47ab7c567bb9d65136863c4741c462ba81c4874cf766755788895667347877a6596ac980277723951b6576c7e23d62c73649d76ed6ea021354a3298a693a8dc3449925daf1657c7884f185aa44e156b297346547e57a2dc800",
+     "shape": [
+      116,
+      1
+     ]
+    }
+   },
+   "values_f32_hex": "48f48c3c7dd6a1bc5a22f9bc7f670b3c1690d73ce463763d0f7f1fbc48f48c3c7dd6a1bc37fc133dae00413d7dd6a1bcccf7da3d7f670b3c5a22f9bcd4f22cbd5a22f9bc37fc133d0f7f1fbce463763de463763d7dd6a1bce463763dae00413d5a22f9bc7f670b3c48f48c3c5a22f9bc7dd6a1bc7dd6a1bc1690d73c48f48c3c0f7f1fbc48f48c3c7dd6a1bc1690d73c7dd6a1bc48f48c3ca47198bdd4f22cbd0f7f1fbc7f670b3c7dd6a1bc48f48c3cd4f22cbd48f48c3ce463763d5a22f9bc0f7f1fbc00000000ae00413dd4f22cbdc7f265bd1690d73c5a22f9bc000000001690d73c37fc133d00000000ae00413d7dd6a1bc0f7f1fbc0000000037fc133d37fc133d48f48c3ce463763d0f7f1fbc7dd6a1bca47198bdd4f22cbd0f7f1fbc7f670b3c0f7f1fbcd4f22cbdae00413d5a22f9bc000000005a22f9bca47198bdae00413d5a22f9bc0f7f1fbcc7f265bd37fc133d1690d73c7f670b3ca47198bdae00413d5a22f9bc7f670b3c000000005a22f9bcae00413dccf7da3d000000000f7f1fbc0f7f1fbc000000007dd6a1bc7dd6a1bc000000007f670b3c7f670b3c7f670b3c48f48c3c7dd6a1bc0f7f1fbc0f7f1fbc00000000d4f22cbd5a22f9bc000000007f670b3c00000000000000001690d73c0f7f1fbc7dd6a1bc48f48c3c0f7f1fbc1690d73cae00413d48f48c3c7f670b3cccf7dabdc7f265bd000000000000000000000000fba32cbda5d801bdb2a6533c570273bc52e764bd6735de3c437eefbb570273bc00000000437eefbb09e7103d0000000014b46d3dfba32cbda5d801bd19fc383d437eefbbfba32cbd09e7103d00000000a5d801bd437eefbb7e0bbbbcb2a6533c19fc383d00000000437eefbb14b46d3d19fc383d437eefbb14b46d3d17d7a13c8e65a4bdfba32cbd52e764bda5d801bd570273bc7e0bbbbc17d7a13ca5d801bdfba32cbdb2a6533ce652d13b17d7a13c437eefbbb2a6533ca5d801bd17d7a13ce652d13b19fc383d09e7103da5d801bd7e0bbbbc7e0bbbbcb2a6533cb2a6533cfba32cbd570273bc19fc383d17d7a13c8e65a43d52e764bd437eefbb570273bc0000000009e7103d00000000e652d13be652d13b7e0bbbbc8e65a43d52e764bde652d13b570273bc17d7a13c17d7a13c7e0bbbbc7e0bbbbc14b46d3d52e764bd570273bc437eefbb6735de3cfba32cbdb2a6533c00000000a5d801bd7e0bbbbc437eefbb570273bc7e0bbbbc0000000014b46d3d570273bc0000000017d7a13cfba32cbd19fc383d09e7103de652d13b8e65a4bd"
+  },
+  {
+   "config": {
+    "_load_in_4bit": true,
+    "_load_in_8bit": false,
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_quant_storage": "uint8",
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_use_double_quant": false,
+    "llm_int8_enable_fp32_cpu_offload": false,
+    "llm_int8_has_fp16_weight": false,
+    "llm_int8_skip_modules": null,
+    "llm_int8_threshold": 6.0,
+    "load_in_4bit": true,
+    "load_in_8bit": false,
+    "quant_method": "bitsandbytes"
+   },
+   "roles": {
+    "absmax": {
+     "dtype": "F32",
+     "hex": "52dfbd3ecc50c13e1199af3e440f873e",
+     "shape": [
+      4
+     ]
+    },
+    "qmap": {
+     "dtype": "F32",
+     "hex": "000080bfb13932bf306b06bfa032cabe4da291be3f353dbe7178babd00000000fffaa23de3ca243edd047c3e3a03ad3eb8a4e13eab07103fb313393f0000803f",
+     "shape": [
+      16
+     ]
+    },
+    "qstate": {
+     "dtype": "U8",
+     "hex": "7b227175616e745f74797065223a20226e6634222c2022626c6f636b73697a65223a2031362c20226474797065223a202262666c6f61743136222c20227368617065223a205b342c2031365d7d",
+     "shape": [
+      77
+     ]
+    },
+    "weight": {
+     "dtype": "U8",
+     "hex": "4da829449a6088d57843e83ab78934f8a9d7bc0a55f7cf86d9607d0784db9e12",
+     "shape": [
+      32,
+      1
+     ]
+    }
+   },
+   "values_f32_hex": "0000d8bd0000563e0000bb3d0000f23c000047be0000743d0000d8bd0000d8bd0000743d0000bb3d00000abd0000bebe0000f23c0000f23c0000563e00008cbd000000000000f63c0000dcbd000019be00008c3e0000f63c000019be0000be3d0000033e000000000000f63c0000793d000019be0000dcbd0000c13e0000f63c0000ad3d0000623d0000463e000000000000ed3d00001b3e0000b0be0000ad3d000082bd000082bd0000b03e0000000000001b3e0000b03e0000e03c000000bd0000183e00002e3d0000c5bc000087be000000000000183e000087be000000000000ac3c00009abd0000183e0000b73d00002e3d0000433e00003cbe00000ebe"
+  }
+ ]
+}

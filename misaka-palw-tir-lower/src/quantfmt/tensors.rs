@@ -87,7 +87,7 @@ impl Rd {
             Rd::I64 | Rd::F64 => 8,
         }
     }
-    fn is_float(self) -> bool {
+    pub(super) fn is_float(self) -> bool {
         matches!(self, Rd::F16 | Rd::Bf16 | Rd::F32 | Rd::F64 | Rd::Fp8E4m3 | Rd::Fp8E5m2)
     }
 }
@@ -155,8 +155,9 @@ impl ConfigReader {
         let mode = match cfg.skip_match.as_deref() {
             None | Some("exact") => "exact",
             Some("contains") => "contains",
+            Some("path") => "path",
             Some("regex") => "regex",
-            Some(o) => return Err(DslError(format!("{}: config.skip_match `{o}` (exact, contains or regex)", self.name))),
+            Some(o) => return Err(DslError(format!("{}: config.skip_match `{o}` (exact, contains, path or regex)", self.name))),
         };
         let skip: Vec<String> = match &cfg.skip {
             None => Vec::new(),
@@ -192,6 +193,10 @@ impl ConfigReader {
         use serde_json::Value;
         let mut out = BTreeMap::new();
         for (name, p) in &self.params {
+            // Read from each module's own tensors, not from the configuration.
+            if p.from_role.is_some() {
+                continue;
+            }
             let raw = p.config.as_ref().map(|path| json_path(config, path));
             let from_cfg: Option<i64> = match &raw {
                 None | Some(Value::Null) => None,
@@ -334,6 +339,19 @@ impl TensorsFormat {
             return Err(DslError("not a tensors layout".into()));
         };
         let rs = compile_roles(roles, LANES)?;
+        for (n, p) in &d.params {
+            if let Some(rj) = &p.from_role {
+                if p.config.is_some() {
+                    return Err(DslError(format!("parameter `{n}` is read from a role: it has no `config`")));
+                }
+                if !rs.iter().any(|r| r.name == rj.role) {
+                    return Err(DslError(format!("parameter `{n}` is read from role `{}`, which the format does not declare", rj.role)));
+                }
+                if !matches!(rj.kind.as_str(), "int" | "float" | "string") {
+                    return Err(DslError(format!("parameter `{n}`: from_role.kind `{}` (int, float or string)", rj.kind)));
+                }
+            }
+        }
         let mut tables = Vec::new();
         for (name, t) in &d.tables {
             tables.push(table(name, t)?);
@@ -342,6 +360,7 @@ impl TensorsFormat {
         let mut consts: Vec<String> = d.params.keys().cloned().collect();
         consts.extend(["out", "inp", "gs", "ng"].map(String::from));
         consts.extend(rs.iter().map(|r| format!("has_{}", r.name)));
+        consts.extend(rs.iter().map(|r| format!("float_{}", r.name)));
         for c in &consts {
             if LANES.contains(&c.as_str()) || rs.iter().any(|r| r.name == *c) {
                 return Err(DslError(format!("the name `{c}` is taken")));
@@ -515,17 +534,24 @@ impl TensorsFormat {
         let mut vars = vec![Col::CI(0); LANES.len()];
         for c in &self.consts {
             let v = match c.as_str() {
-                "out" => out as i64,
-                "inp" => inp as i64,
-                "gs" => gs as i64,
-                "ng" => ng as i64,
+                "out" => Col::CI(out as i64),
+                "inp" => Col::CI(inp as i64),
+                "gs" => Col::CI(gs as i64),
+                "ng" => Col::CI(ng as i64),
                 n if n.starts_with("has_") => {
                     let r = self.roles.iter().position(|r| r.name == n[4..]).expect("a has_ constant names a role");
-                    roles[r].is_some() as i64
+                    Col::CI(roles[r].is_some() as i64)
                 }
-                n => *params.get(n).ok_or_else(|| DslError(format!("{}: parameter `{n}` is not bound", self.name)))?,
+                n if n.starts_with("float_") => {
+                    let r = self.roles.iter().position(|r| r.name == n[6..]).expect("a float_ constant names a role");
+                    Col::CI(is_float_role(roles[r].as_ref()))
+                }
+                n => match self.reader.params.get(n).filter(|p| p.from_role.is_some()) {
+                    Some(p) => role_param(&self.name, n, p, &self.roles, roles)?,
+                    None => Col::CI(*params.get(n).ok_or_else(|| DslError(format!("{}: parameter `{n}` is not bound", self.name)))?),
+                },
             };
-            vars.push(Col::CI(v));
+            vars.push(v);
         }
         Ok(TEnv { defs: Defs { roles: &self.roles, tables: &self.tables }, roles, vars, n: 1 })
     }
@@ -680,6 +706,242 @@ impl TensorsFormat {
     }
 }
 
+// ───────────────────────────── a JSON document in a tensor ─────────────────────────────
+
+/// A JSON value with its numbers kept as text: a decimal is parsed once, exactly, by whoever needs it
+/// (serde_json's default parser is off by an ulp on some floats).
+#[derive(Debug)]
+enum J {
+    Null,
+    Bool(bool),
+    Num(String),
+    Str(String),
+    Arr(Vec<J>),
+    Obj(Vec<(String, J)>),
+}
+
+struct JParser<'a> {
+    b: &'a [u8],
+    p: usize,
+}
+
+impl JParser<'_> {
+    fn ws(&mut self) {
+        while self.p < self.b.len() && self.b[self.p].is_ascii_whitespace() {
+            self.p += 1;
+        }
+    }
+    fn lit(&mut self, s: &str) -> bool {
+        if self.b[self.p..].starts_with(s.as_bytes()) {
+            self.p += s.len();
+            true
+        } else {
+            false
+        }
+    }
+    fn string(&mut self) -> Result<String, String> {
+        self.p += 1;
+        let mut out = String::new();
+        loop {
+            let c = *self.b.get(self.p).ok_or("an unterminated string")?;
+            self.p += 1;
+            match c {
+                b'"' => return Ok(out),
+                b'\\' => {
+                    let e = *self.b.get(self.p).ok_or("an unterminated escape")?;
+                    self.p += 1;
+                    out.push(match e {
+                        b'"' => '"',
+                        b'\\' => '\\',
+                        b'/' => '/',
+                        b'b' => '\u{8}',
+                        b'f' => '\u{c}',
+                        b'n' => '\n',
+                        b'r' => '\r',
+                        b't' => '\t',
+                        b'u' => {
+                            let h = self.b.get(self.p..self.p + 4).ok_or("a short \\u escape")?;
+                            self.p += 4;
+                            char::from_u32(u32::from_str_radix(std::str::from_utf8(h).map_err(|e| e.to_string())?, 16).map_err(|e| e.to_string())?).unwrap_or('\u{fffd}')
+                        }
+                        other => return Err(format!("the escape \\{}", other as char)),
+                    });
+                }
+                c if c < 0x80 => out.push(c as char),
+                _ => {
+                    // A multi-byte UTF-8 character: copy its bytes.
+                    let start = self.p - 1;
+                    let len = match c {
+                        0xC0..=0xDF => 2,
+                        0xE0..=0xEF => 3,
+                        _ => 4,
+                    };
+                    let chunk = self.b.get(start..start + len).ok_or("a truncated character")?;
+                    out.push_str(std::str::from_utf8(chunk).map_err(|e| e.to_string())?);
+                    self.p = start + len;
+                }
+            }
+        }
+    }
+    fn value(&mut self, depth: usize) -> Result<J, String> {
+        if depth > 32 {
+            return Err("nested too deeply".into());
+        }
+        self.ws();
+        match self.b.get(self.p).copied() {
+            None => Err("ends early".into()),
+            Some(b'{') => {
+                self.p += 1;
+                let mut v = Vec::new();
+                self.ws();
+                if self.b.get(self.p) == Some(&b'}') {
+                    self.p += 1;
+                    return Ok(J::Obj(v));
+                }
+                loop {
+                    self.ws();
+                    match self.b.get(self.p) {
+                        Some(b'"') => {}
+                        None => return Err("ends early".into()),
+                        Some(_) => return Err("an object key is not a string".into()),
+                    }
+                    let k = self.string()?;
+                    self.ws();
+                    match self.b.get(self.p) {
+                        Some(b':') => {}
+                        None => return Err("ends early".into()),
+                        Some(_) => return Err("a `:` is missing".into()),
+                    }
+                    self.p += 1;
+                    v.push((k, self.value(depth + 1)?));
+                    self.ws();
+                    match self.b.get(self.p) {
+                        Some(b',') => self.p += 1,
+                        Some(b'}') => {
+                            self.p += 1;
+                            return Ok(J::Obj(v));
+                        }
+                        _ => return Err("an object is not closed".into()),
+                    }
+                }
+            }
+            Some(b'[') => {
+                self.p += 1;
+                let mut v = Vec::new();
+                self.ws();
+                if self.b.get(self.p) == Some(&b']') {
+                    self.p += 1;
+                    return Ok(J::Arr(v));
+                }
+                loop {
+                    v.push(self.value(depth + 1)?);
+                    self.ws();
+                    match self.b.get(self.p) {
+                        Some(b',') => self.p += 1,
+                        Some(b']') => {
+                            self.p += 1;
+                            return Ok(J::Arr(v));
+                        }
+                        _ => return Err("an array is not closed".into()),
+                    }
+                }
+            }
+            Some(b'"') => Ok(J::Str(self.string()?)),
+            Some(_) if self.lit("true") => Ok(J::Bool(true)),
+            Some(_) if self.lit("false") => Ok(J::Bool(false)),
+            Some(_) if self.lit("null") => Ok(J::Null),
+            Some(c) if c == b'-' || c.is_ascii_digit() => {
+                let start = self.p;
+                while self.p < self.b.len() && matches!(self.b[self.p], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9') {
+                    self.p += 1;
+                }
+                Ok(J::Num(String::from_utf8_lossy(&self.b[start..self.p]).into_owned()))
+            }
+            Some(c) => Err(format!("unexpected `{}`", c as char)),
+        }
+    }
+}
+
+fn parse_json(bytes: &[u8]) -> Result<J, String> {
+    let mut p = JParser { b: bytes, p: 0 };
+    let v = p.value(0)?;
+    p.ws();
+    if p.p != bytes.len() {
+        return Err("text after the document".into());
+    }
+    Ok(v)
+}
+
+/// A dotted path (`shape[1]`, `nested_offset`) into a document.
+fn j_path<'a>(j: &'a J, path: &str) -> Option<&'a J> {
+    let mut v = j;
+    for seg in path.split('.') {
+        let (key, idx) = match seg.split_once('[') {
+            Some((k, rest)) => (k, Some(rest.trim_end_matches(']').parse::<usize>().ok()?)),
+            None => (seg, None),
+        };
+        if !key.is_empty() {
+            v = match v {
+                J::Obj(o) => &o.iter().find(|(k, _)| k == key)?.1,
+                _ => return None,
+            };
+        }
+        if let Some(i) = idx {
+            v = match v {
+                J::Arr(a) => a.get(i)?,
+                _ => return None,
+            };
+        }
+    }
+    Some(v)
+}
+
+/// 1 when a role's tensor is stored in a floating-point dtype, else 0 (also when it is absent): a role that
+/// accepts both (bitsandbytes' `absmax` is float, or u8 under double quantisation) can be told apart.
+pub(super) fn is_float_role(t: Option<&RoleTensor>) -> i64 {
+    t.and_then(|t| Rd::parse(&t.dtype)).is_some_and(|d| d.is_float()) as i64
+}
+
+/// A parameter a module carries in a tensor of its own (a JSON document): the constant its expressions read.
+fn role_param(fmt: &str, name: &str, p: &ParamDesc, defs: &[Role], roles: &[Option<RoleTensor>]) -> R<Col> {
+    let rj = p.from_role.as_ref().expect("checked by the caller");
+    let ri = defs.iter().position(|r| r.name == rj.role).expect("checked at compile time");
+    let Some(t) = roles[ri].as_ref() else {
+        // No module's tensors at all (a layout asked for from the parameters alone): a placeholder.
+        return if roles.iter().all(Option::is_none) { Ok(Col::CI(0)) } else { Err(DslError(format!("{fmt}: parameter `{name}` is read from role `{}`, which this module lacks", rj.role))) };
+    };
+    if t.data.is_empty() {
+        return Err(DslError(format!("{fmt}: parameter `{name}`: the document of role `{}` is not loaded", rj.role)));
+    }
+    let doc = parse_json(&t.data).map_err(|e| DslError(format!("{fmt}: role `{}` is not a JSON document: {e}", rj.role)))?;
+    let Some(v) = j_path(&doc, &rj.path) else {
+        // An absent key takes the parameter's default (bitsandbytes writes the nested-quantisation keys only when it nests).
+        return match p.default {
+            Some(d) => Ok(if rj.kind == "float" { Col::CF(d as f64) } else { Col::CI(d) }),
+            None => Err(DslError(format!("{fmt}: the document of role `{}` has no `{}`", rj.role, rj.path))),
+        };
+    };
+    let col = match (rj.kind.as_str(), v) {
+        ("int", J::Num(s)) => Col::CI(s.parse::<i64>().map_err(|_| DslError(format!("{fmt}: `{}` is {s}, not an integer", rj.path)))?),
+        ("int", J::Bool(b)) => Col::CI(*b as i64),
+        ("float", J::Num(s)) => {
+            let f = s.parse::<f64>().map_err(|_| DslError(format!("{fmt}: `{}` is {s}, not a number", rj.path)))?;
+            if !f.is_finite() {
+                return Err(DslError(format!("{fmt}: `{}` is not finite", rj.path)));
+            }
+            Col::CF(f)
+        }
+        ("string", J::Str(s)) => Col::CI(*p.map.get(&s.to_ascii_lowercase()).ok_or_else(|| DslError(format!("{fmt}: {name} = `{s}` (defined for {:?})", p.map.keys().collect::<Vec<_>>())))?),
+        (k, other) => return Err(DslError(format!("{fmt}: `{}` is {other:?}, not a {k}", rj.path))),
+    };
+    if let (Col::CI(v), false) = (&col, p.allowed.is_empty())
+        && !p.allowed.contains(v)
+    {
+        return Err(DslError(format!("{fmt}: {name} = {v} (defined for {:?})", p.allowed)));
+    }
+    Ok(col)
+}
+
 /// The value at a dotted path of the configuration — keys, each optionally indexed
 /// (`config_groups.group_0.weights.num_bits`, `weight_block_size[1]`); an absent key is `null`.
 pub fn json_path(config: &serde_json::Value, path: &str) -> serde_json::Value {
@@ -793,5 +1055,120 @@ impl Env for TEnv<'_> {
             }
         }
         Ok(if rd.is_float() { Col::F(floats) } else { Col::I(ints) })
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::quantfmt::desc::RoleJsonDesc;
+
+    #[test]
+    fn the_json_reader_keeps_numbers_as_text_and_reads_what_bitsandbytes_writes() {
+        // `json.dumps` of a quant state, with a float that serde_json's default parser is off by an ulp on, and escapes.
+        let doc = br#"{"quant_type": "nf4", "blocksize": 64, "dtype": "bfloat16", "shape": [4096, 11008], "nested_offset": 0.30000000000000004, "note": "a\"b\\c\n", "x": null, "y": true}"#;
+        let j = parse_json(doc).expect("parses");
+        let num = |p: &str| match j_path(&j, p) {
+            Some(J::Num(s)) => s.clone(),
+            other => panic!("{p}: {other:?}"),
+        };
+        assert_eq!(num("blocksize"), "64");
+        assert_eq!(num("shape[1]"), "11008");
+        assert_eq!(num("nested_offset").parse::<f64>().unwrap(), 0.1 + 0.2, "parsed once, exactly");
+        assert!(matches!(j_path(&j, "dtype"), Some(J::Str(s)) if s == "bfloat16"));
+        assert!(matches!(j_path(&j, "note"), Some(J::Str(s)) if s == "a\"b\\c\n"));
+        assert!(matches!(j_path(&j, "x"), Some(J::Null)) && matches!(j_path(&j, "y"), Some(J::Bool(true))));
+        assert!(j_path(&j, "shape[2]").is_none() && j_path(&j, "nope").is_none() && j_path(&j, "blocksize.x").is_none());
+        // A \u escape: the backslash-u-0-0-e-9 of `json.dumps(ensure_ascii=True)` is the character e-acute.
+        let esc: Vec<u8> = [b'"', b'\\', b'u', b'0', b'0', b'e', b'9', b'"'].to_vec();
+        assert!(matches!(parse_json(&esc), Ok(J::Str(s)) if s == "\u{e9}"));
+        // Multi-byte characters straight in a string, whitespace everywhere, nesting.
+        let j = parse_json("  { \"k\" : [ 1 , { \"é\" : \"ü→\" } ] }  ".as_bytes()).expect("parses");
+        assert!(matches!(j_path(&j, "k[1].é"), Some(J::Str(s)) if s == "ü→"));
+    }
+
+    #[test]
+    fn a_document_that_is_not_json_is_an_error_with_a_reason() {
+        for (bad, why) in [
+            ("", "ends early"),
+            ("{", "ends early"),
+            (r#"{"a": 1"#, "not closed"),
+            (r#"{"a" 1}"#, "`:`"),
+            (r#"{1: 2}"#, "not a string"),
+            (r#"[1, 2"#, "not closed"),
+            (r#""abc"#, "unterminated"),
+            (r#"{"a": 1} x"#, "after the document"),
+            ("nope", "unexpected"),
+            (r#"{"a": "\q"}"#, "escape"),
+        ] {
+            let e = parse_json(bad.as_bytes()).err().unwrap_or_else(|| panic!("`{bad}` parsed"));
+            assert!(e.contains(why), "`{bad}`: {e}");
+        }
+        let deep = "[".repeat(40) + &"]".repeat(40);
+        assert!(parse_json(deep.as_bytes()).err().is_some_and(|e| e.contains("deeply")), "nesting is bounded");
+        assert!(parse_json(&[0xff, 0xfe]).is_err());
+    }
+
+    fn pdesc(path: &str, kind: &str, default: Option<i64>) -> ParamDesc {
+        ParamDesc {
+            config: None,
+            default,
+            allowed: Vec::new(),
+            map: [("float32".to_string(), 0), ("bfloat16".to_string(), 1)].into_iter().collect(),
+            from_role: Some(RoleJsonDesc { role: "doc".into(), path: path.into(), kind: kind.into() }),
+        }
+    }
+
+    fn doc_role(text: &str) -> Role {
+        let _ = text;
+        Role { name: "doc".into(), suffix: ".doc".into(), dtypes: vec![Rd::U8], required: true, rank: 1 }
+    }
+
+    fn doc_tensor(text: &str) -> Option<RoleTensor> {
+        Some(RoleTensor { shape: vec![text.len()], dtype: "U8".into(), data: text.as_bytes().to_vec() })
+    }
+
+    #[test]
+    fn a_parameter_read_from_a_tensor_has_a_type_a_default_and_a_range() {
+        let defs = [doc_role("")];
+        let t = doc_tensor(r#"{"n": 64, "dtype": "bfloat16", "off": 0.30000000000000004, "b": true, "neg": -3, "frac": 1.5, "inf": 1e999}"#);
+        let get = |name: &str, p: ParamDesc| role_param("T", name, &p, &defs, std::slice::from_ref(&t));
+        assert!(matches!(get("n", pdesc("n", "int", None)), Ok(Col::CI(64))));
+        assert!(matches!(get("d", pdesc("dtype", "string", None)), Ok(Col::CI(1))), "a string read through the parameter's map");
+        assert!(matches!(get("o", pdesc("off", "float", None)), Ok(Col::CF(v)) if v == 0.1 + 0.2));
+        assert!(matches!(get("b", pdesc("b", "int", None)), Ok(Col::CI(1))), "a JSON bool is 0 or 1");
+        assert!(matches!(get("neg", pdesc("neg", "int", None)), Ok(Col::CI(-3))));
+        // An absent key takes the default, or is an error without one.
+        assert!(matches!(get("m", pdesc("missing", "int", Some(256))), Ok(Col::CI(256))));
+        assert!(matches!(get("m", pdesc("missing", "float", Some(0))), Ok(Col::CF(v)) if v == 0.0));
+        assert!(get("m", pdesc("missing", "int", None)).unwrap_err().0.contains("has no `missing`"));
+        // A value of the wrong type, a string the map does not know, a number that is not finite, a range the format does not allow.
+        assert!(get("f", pdesc("frac", "int", None)).unwrap_err().0.contains("not an integer"));
+        assert!(get("n", pdesc("dtype", "int", None)).unwrap_err().0.contains("not a int"));
+        assert!(get("s", pdesc("n", "string", None)).unwrap_err().0.contains("not a string"));
+        let mut p = pdesc("dtype", "string", None);
+        p.map.remove("bfloat16");
+        assert!(get("d", p).unwrap_err().0.contains("defined for"));
+        assert!(get("i", pdesc("inf", "float", None)).unwrap_err().0.contains("not"));
+        let mut p = pdesc("n", "int", None);
+        p.allowed = vec![32, 128];
+        assert!(get("n", p).unwrap_err().0.contains("defined for"));
+        // The tensor's data is not loaded (a header-only role): an error, not a guess; no tensors at all: a placeholder for a layout-only evaluation.
+        let header = Some(RoleTensor::header_only(vec![12], "U8"));
+        assert!(role_param("T", "n", &pdesc("n", "int", None), &defs, std::slice::from_ref(&header)).unwrap_err().0.contains("not loaded"));
+        assert!(matches!(role_param("T", "n", &pdesc("n", "int", None), &defs, &[None]), Ok(Col::CI(0))));
+    }
+
+    #[test]
+    fn a_role_that_accepts_float_or_bytes_can_be_told_apart() {
+        let f32s = RoleTensor { shape: vec![2], dtype: "F32".into(), data: vec![0; 8] };
+        let u8s = RoleTensor { shape: vec![2], dtype: "U8".into(), data: vec![0; 2] };
+        assert_eq!(is_float_role(Some(&f32s)), 1);
+        assert_eq!(is_float_role(Some(&u8s)), 0);
+        assert_eq!(is_float_role(None), 0);
+        assert_eq!(is_float_role(Some(&RoleTensor::header_only(vec![1], "BF16"))), 1);
+        assert_eq!(is_float_role(Some(&RoleTensor::header_only(vec![1], "F8_E4M3"))), 1);
+        assert_eq!(is_float_role(Some(&RoleTensor::header_only(vec![1], "I8"))), 0);
     }
 }

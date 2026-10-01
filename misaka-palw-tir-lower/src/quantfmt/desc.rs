@@ -76,6 +76,19 @@ pub struct FormatId {
     pub id: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
+    /// `config` ids: conditions on the `quantization_config` that must all hold for this descriptor to be
+    /// the one the configuration announces (bitsandbytes: `load_in_4bit` and `bnb_4bit_quant_type` choose
+    /// between nf4, fp4 and int8 under one `quant_method`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when: Vec<WhenDesc>,
+}
+
+/// The value at a dotted path of the configuration (an absent key is `null`) is one of `one_of`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WhenDesc {
+    pub path: String,
+    pub one_of: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -175,8 +188,10 @@ pub struct ConfigDesc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip: Option<String>,
     /// How a `skip` entry names a module: `exact` (the full module name; an entry `re:<pattern>` is a
-    /// regular expression of the subset `^ $ . .* \x` and literals), `contains` (a substring of it) or
-    /// `regex` (every entry is such a pattern, as Hugging Face's `re.match` reads them).
+    /// regular expression of the subset `^ $ . .* \x` and literals), `contains` (a substring of it),
+    /// `path` (its last component, its whole name, or a path prefix: `<entry>.` occurs in it — how
+    /// bitsandbytes reads `llm_int8_skip_modules`) or `regex` (every entry is such a pattern, as
+    /// Hugging Face's `re.match` reads them).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip_match: Option<String>,
     /// `never`: the language-model head is not stored in this format; `unless_skipped`: it is, unless
@@ -212,6 +227,28 @@ pub struct ParamDesc {
     /// A string-valued configuration key read through this table (`"gptq_v2": 1`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub map: BTreeMap<String, i64>,
+    /// A parameter read from the module's own tensors instead of the configuration: a role that holds a
+    /// UTF-8 JSON document (bitsandbytes' `quant_state`) and a dotted path into it. Such a parameter is
+    /// not resolved from the configuration; every module of the model has its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_role: Option<RoleJsonDesc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleJsonDesc {
+    /// The role whose bytes are the JSON document.
+    pub role: String,
+    /// A dotted path into it (`shape[1]`, `nested_offset`).
+    pub path: String,
+    /// `int` (default), `float` (the number's text parsed exactly), or `string` (read through the
+    /// parameter's `map`).
+    #[serde(default = "int_kind")]
+    pub kind: String,
+}
+
+fn int_kind() -> String {
+    "int".into()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

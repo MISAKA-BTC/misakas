@@ -3,12 +3,6 @@
  "doc": "Quantisation methods a Hugging Face checkpoint can announce (`quantization_config.quant_method`) that no built-in descriptor reads yet. A model that uses one is refused by name — and, so that nobody mistakes the refusal for a verdict on the model, preflight lists the method here as known and not yet described, with what writing its descriptor takes. Writing one is a file (misaka.palw.quant-format.v1), not a release; the ones marked `queued` are next.",
  "methods": [
   {
-   "method": "bitsandbytes",
-   "status": "queued",
-   "title": "bitsandbytes",
-   "note": "nf4 and fp4 (16-entry codebooks, one absmax per block, the absmax itself 8-bit quantised under a second level when `bnb_4bit_use_double_quant`), and LLM.int8 (row-wise int8 with per-row scales; the outlier-threshold variant decomposes the matmul at run time and is refused by name)"
-  },
-  {
    "method": "hqq",
    "status": "known",
    "title": "Half-Quadratic Quantization",

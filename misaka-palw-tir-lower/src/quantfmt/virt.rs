@@ -71,6 +71,7 @@ impl VirtualFormat {
         }
         let mut consts: Vec<String> = d.params.keys().cloned().collect();
         consts.extend(rs.iter().map(|r| format!("has_{}", r.name)));
+        consts.extend(rs.iter().map(|r| format!("float_{}", r.name)));
         for c in &consts {
             if lane_names.contains(&c.as_str()) || rs.iter().any(|r| r.name == *c) {
                 return Err(DslError(format!("the name `{c}` is taken")));
@@ -141,6 +142,10 @@ impl VirtualFormat {
                 n if n.starts_with("has_") => {
                     let r = self.roles.iter().position(|r| r.name == n[4..]).expect("a has_ constant names a role");
                     roles[r].is_some() as i64
+                }
+                n if n.starts_with("float_") => {
+                    let r = self.roles.iter().position(|r| r.name == n[6..]).expect("a float_ constant names a role");
+                    super::tensors::is_float_role(roles[r].as_ref())
                 }
                 n => *params.get(n).ok_or_else(|| DslError(format!("{}: parameter `{n}` is not bound", self.name)))?,
             };

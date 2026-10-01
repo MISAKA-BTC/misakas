@@ -299,6 +299,9 @@ pub struct QuantRegistry {
     by_name: BTreeMap<String, usize>,
     /// A `quantization_config`'s `quant_method` (`gptq`, `compressed-tensors/pack-quantized`).
     by_config: BTreeMap<String, usize>,
+    /// `quant_method`s one of several descriptors announce depending on other keys of the configuration
+    /// (`bitsandbytes`: `load_in_4bit`, `bnb_4bit_quant_type`, `load_in_8bit`): the first whose conditions hold.
+    by_when: BTreeMap<String, Vec<(Vec<desc::WhenDesc>, usize)>>,
 }
 
 macro_rules! builtin {
@@ -311,7 +314,7 @@ macro_rules! builtin {
 const BUILTIN: &[&str] = builtin!(
     "f32", "f16", "bf16", "f64", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "q2_k", "q3_k", "q4_k", "q5_k", "q6_k", "iq4_nl", "iq4_xs",
     "tq1_0", "tq2_0", "mxfp4", "nvfp4", "q1_0", "q2_0", "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m", "gptq", "awq",
-    "fp8_block", "ct_pack", "ct_fp8", "ct_int8", "mxfp4_hf",
+    "fp8_block", "ct_pack", "ct_fp8", "ct_int8", "mxfp4_hf", "bnb_nf4", "bnb_fp4", "bnb_int8",
 );
 
 impl QuantRegistry {
@@ -343,15 +346,25 @@ impl QuantRegistry {
         {
             return Err(LowerError::bad(format!("ggml type {id} is already `{}`; `{}` cannot redefine it", self.formats[i].name(), f.name())));
         }
-        let methods: Vec<String> = f.ids().iter().filter(|i| i.scheme == "config").filter_map(|i| i.method.clone()).collect();
-        for m in &methods {
-            if let Some(&i) = self.by_config.get(m) {
-                return Err(LowerError::bad(format!("quant_method `{m}` is already read by `{}`; `{}` cannot redefine it", self.formats[i].name(), f.name())));
+        let config_ids: Vec<&FormatId> = f.ids().iter().filter(|i| i.scheme == "config" && i.method.is_some()).collect();
+        for id in &config_ids {
+            let m = id.method.as_deref().unwrap_or_default();
+            if id.when.is_empty() {
+                if let Some(&i) = self.by_config.get(m) {
+                    return Err(LowerError::bad(format!("quant_method `{m}` is already read by `{}`; `{}` cannot redefine it", self.formats[i].name(), f.name())));
+                }
+            } else if let Some((_, i)) = self.by_when.get(m).and_then(|v| v.iter().find(|(w, _)| *w == id.when)) {
+                return Err(LowerError::bad(format!("quant_method `{m}` under the same conditions is already read by `{}`; `{}` cannot redefine it", self.formats[*i].name(), f.name())));
             }
         }
         let i = self.formats.len();
-        for m in methods {
-            self.by_config.insert(m, i);
+        for id in config_ids {
+            let m = id.method.clone().unwrap_or_default();
+            if id.when.is_empty() {
+                self.by_config.insert(m, i);
+            } else {
+                self.by_when.entry(m).or_default().push((id.when.clone(), i));
+            }
         }
         if let Some(id) = f.ggml_id() {
             self.by_ggml.insert(id, i);
@@ -397,9 +410,27 @@ impl QuantRegistry {
             .or_else(|| self.by_config.get(&method))
             .map(|i| &self.formats[*i])
     }
+    /// The format a `quantization_config` announces, conditions included: the first descriptor of its
+    /// `quant_method` whose `when` holds, else `quant_method/format`, else the method alone.
+    pub fn config_for(&self, method: &str, q: &serde_json::Value) -> Option<&Arc<QuantFormat>> {
+        let m = method.to_ascii_lowercase();
+        if let Some(list) = self.by_when.get(&m)
+            && let Some((_, i)) = list.iter().find(|(when, _)| when.iter().all(|w| w.one_of.contains(&tensors::json_path(q, &w.path))))
+        {
+            return Some(&self.formats[*i]);
+        }
+        self.config(&m, q.get("format").and_then(serde_json::Value::as_str))
+    }
     /// The `quant_method` ids this registry reads, for a refusal that lists them.
     pub fn config_methods(&self) -> Vec<String> {
-        self.by_config.keys().cloned().collect()
+        let mut v: Vec<String> = self.by_config.keys().cloned().collect();
+        for (m, list) in &self.by_when {
+            for (when, _) in list {
+                v.push(format!("{m} [{}]", when.iter().map(|w| format!("{} = {}", w.path, w.one_of.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("|"))).collect::<Vec<_>>().join(", ")));
+            }
+        }
+        v.sort();
+        v
     }
     pub fn all(&self) -> &[Arc<QuantFormat>] {
         &self.formats
@@ -468,6 +499,39 @@ pub(crate) mod tests {
         let ext = reg.with(vec![QuantFormat::from_json(CUSTOM).unwrap()]).unwrap();
         assert_eq!(ext.ggml(200).map(|f| f.name()), Some("PQ2_TEST"));
         assert!(ext.named("PQ2_TEST").is_some() && reg.named("PQ2_TEST").is_none());
+    }
+
+    /// One `quant_method` can announce several descriptors, told apart by other keys of the configuration (bitsandbytes):
+    /// the first whose conditions hold is the one; nobody can claim conditions another descriptor holds.
+    #[test]
+    fn a_config_id_can_carry_conditions_and_the_same_conditions_cannot_be_claimed_twice() {
+        let reg = QuantRegistry::builtin();
+        let cfg = |load4: bool, qt: &str| serde_json::json!({"quant_method": "bitsandbytes", "load_in_4bit": load4, "load_in_8bit": !load4, "bnb_4bit_quant_type": qt});
+        let name = |f: Option<&Arc<QuantFormat>>| f.map(|f| f.name().to_string());
+        assert_eq!(name(reg.config_for("bitsandbytes", &cfg(true, "nf4"))).as_deref(), Some("BNB_NF4"));
+        assert_eq!(name(reg.config_for("BitsAndBytes", &cfg(true, "fp4"))).as_deref(), Some("BNB_FP4"));
+        assert_eq!(name(reg.config_for("bitsandbytes", &cfg(false, "fp4"))).as_deref(), Some("BNB_INT8"));
+        assert!(reg.config_for("bitsandbytes", &cfg(true, "af4")).is_none());
+        // A method with no conditions is found as before.
+        assert_eq!(name(reg.config_for("gptq", &serde_json::json!({"quant_method": "gptq"}))).as_deref(), Some("GPTQ"));
+        // The listing of what is read says the conditions.
+        let m = reg.config_methods();
+        assert!(m.iter().any(|x| x == "bitsandbytes [load_in_4bit = true, bnb_4bit_quant_type = \"nf4\"]"), "{m:?}");
+        assert!(m.iter().any(|x| x == "gptq"));
+        // Another descriptor under the same conditions is refused; under others, added.
+        let nf4 = include_str!("../../quant-formats/bnb_nf4.json");
+        let mut v: serde_json::Value = serde_json::from_str(nf4).unwrap();
+        v["name"] = "BNB_NF4_COPY".into();
+        v.as_object_mut().unwrap().remove("tests");
+        let e = reg.with(vec![QuantFormat::from_json(&v.to_string()).unwrap()]).expect_err("same conditions");
+        assert!(e.to_string().contains("under the same conditions") && e.to_string().contains("BNB_NF4"), "{e}");
+        v["ids"][0]["when"][1]["one_of"] = serde_json::json!(["int4"]);
+        v["name"] = "BNB_INT4_TEST".into();
+        let ext = reg.with(vec![QuantFormat::from_json(&v.to_string()).unwrap()]).expect("another condition is a new descriptor");
+        assert_eq!(name(ext.config_for("bitsandbytes", &cfg(true, "int4"))).as_deref(), Some("BNB_INT4_TEST"));
+        assert!(reg.config_for("bitsandbytes", &cfg(true, "int4")).is_none());
+        // The extended registry still answers the built-in conditions with the built-in descriptors.
+        assert_eq!(name(ext.config_for("bitsandbytes", &cfg(true, "nf4"))).as_deref(), Some("BNB_NF4"));
     }
 
     #[test]

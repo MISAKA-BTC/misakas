@@ -215,6 +215,13 @@ pub enum Func {
     F16,
     Bf16,
     F32,
+    /// Round a value to the nearest binary32, bfloat16, binary16 (ties to even): the dtype a library
+    /// computes a dequantised weight in. A value outside the format is an error.
+    Rnd32,
+    RndBf16,
+    RndF16,
+    /// `rnd(x, kind)`: round to binary32 (kind 0), bfloat16 (1) or binary16 (2).
+    Rnd,
     E8m0,
     Fp8E4m3,
     Fp8E5m2,
@@ -234,6 +241,10 @@ fn func_of(name: &str) -> Option<(Func, usize)> {
         "f16" => (Func::F16, 1),
         "bf16" => (Func::Bf16, 1),
         "f32" => (Func::F32, 1),
+        "rnd32" => (Func::Rnd32, 1),
+        "rndbf16" => (Func::RndBf16, 1),
+        "rndf16" => (Func::RndF16, 1),
+        "rnd" => (Func::Rnd, 2),
         "e8m0" => (Func::E8m0, 1),
         "fp8e4m3" => (Func::Fp8E4m3, 1),
         "fp8e5m2" => (Func::Fp8E5m2, 1),
@@ -735,6 +746,69 @@ pub fn fp8_e5m2_bits_to_f64(b: u8) -> R<f64> {
     Ok(if sign == 1 { -m } else { m })
 }
 
+/// The nearest binary32 (ties to even), as `f64`.
+pub fn round_to_f32(x: f64) -> R<f64> {
+    let r = x as f32;
+    if r.is_finite() { Ok(r as f64) } else { err(format!("{x:e} is outside binary32")) }
+}
+
+/// The nearest bfloat16 (ties to even) of the nearest binary32, as `f64` — what `tensor.to(torch.bfloat16)`
+/// of a float32 tensor gives.
+pub fn round_to_bf16(x: f64) -> R<f64> {
+    let f = round_to_f32(x)? as f32;
+    let b = f.to_bits();
+    let r = f32::from_bits(b.wrapping_add(0x7FFF + ((b >> 16) & 1)) & 0xFFFF_0000);
+    if r.is_finite() { Ok(r as f64) } else { err(format!("{x:e} is outside bfloat16")) }
+}
+
+/// The binary16 bits of a binary32, nearest, ties to even; `None` outside binary16's range.
+pub fn f32_to_f16_bits(f: f32) -> Option<u16> {
+    let b = f.to_bits();
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let exp = ((b >> 23) & 0xFF) as i32;
+    let man = b & 0x7F_FFFF;
+    if exp == 0xFF {
+        return None;
+    }
+    let e = exp - 127 + 15;
+    if e >= 31 {
+        return None;
+    }
+    if e <= 0 {
+        // Subnormal in binary16 (or zero).
+        if e < -10 {
+            return Some(sign);
+        }
+        let m = man | 0x80_0000;
+        let shift = (14 - e) as u32;
+        let half = 1u32 << (shift - 1);
+        let mut r = m >> shift;
+        let rem = m & ((1u32 << shift) - 1);
+        if rem > half || (rem == half && r & 1 == 1) {
+            r += 1;
+        }
+        return Some(sign | r as u16);
+    }
+    let mut r = ((e as u32) << 10) | (man >> 13);
+    let rem = man & 0x1FFF;
+    if rem > 0x1000 || (rem == 0x1000 && r & 1 == 1) {
+        r += 1;
+    }
+    if (r >> 10) >= 31 {
+        return None;
+    }
+    Some(sign | r as u16)
+}
+
+/// The nearest binary16 (ties to even) of the nearest binary32, as `f64`.
+pub fn round_to_f16(x: f64) -> R<f64> {
+    let f = round_to_f32(x)? as f32;
+    match f32_to_f16_bits(f) {
+        Some(h) => f16_bits_to_f64(h),
+        None => err(format!("{x:e} is outside binary16")),
+    }
+}
+
 fn e8m0_to_f64(b: u8) -> R<f64> {
     if b == 255 {
         return err("an E8M0 NaN");
@@ -778,6 +852,62 @@ fn call(f: Func, args: &[Col], n: usize, mask: Mask<'_>) -> R<Col> {
             if v.is_finite() { Ok(v as f64) } else { err("a binary32 NaN or infinity") }
         }),
         Func::E8m0 => unary_int(&|x| e8m0_to_f64(bits_of(x, 8)? as u8)),
+        Func::Rnd => {
+            let kind = match &args[1] {
+                Col::CI(k) => *k,
+                _ => return err("rnd(x, kind): the kind is a constant"),
+            };
+            let round: fn(f64) -> R<f64> = match kind {
+                0 => round_to_f32,
+                1 => round_to_bf16,
+                2 => round_to_f16,
+                other => return err(format!("rnd kind {other} (0: binary32, 1: bfloat16, 2: binary16)")),
+            };
+            let one = |x: f64| round(x);
+            match &args[0] {
+                Col::CI(x) => Ok(Col::CF(one(*x as f64)?)),
+                Col::CF(x) => Ok(Col::CF(one(*x)?)),
+                Col::I(v) => {
+                    let mut out = Vec::with_capacity(n);
+                    for (k, x) in v.iter().enumerate() {
+                        out.push(if mask.on(k) { one(*x as f64)? } else { 0.0 });
+                    }
+                    Ok(Col::F(out))
+                }
+                Col::F(v) => {
+                    let mut out = Vec::with_capacity(n);
+                    for (k, x) in v.iter().enumerate() {
+                        out.push(if mask.on(k) { one(*x)? } else { 0.0 });
+                    }
+                    Ok(Col::F(out))
+                }
+            }
+        }
+        Func::Rnd32 | Func::RndBf16 | Func::RndF16 => {
+            let round: fn(f64) -> R<f64> = match f {
+                Func::Rnd32 => round_to_f32,
+                Func::RndBf16 => round_to_bf16,
+                _ => round_to_f16,
+            };
+            match &args[0] {
+                Col::CI(x) => Ok(Col::CF(round(*x as f64)?)),
+                Col::CF(x) => Ok(Col::CF(round(*x)?)),
+                Col::I(v) => {
+                    let mut out = Vec::with_capacity(n);
+                    for (k, x) in v.iter().enumerate() {
+                        out.push(if mask.on(k) { round(*x as f64)? } else { 0.0 });
+                    }
+                    Ok(Col::F(out))
+                }
+                Col::F(v) => {
+                    let mut out = Vec::with_capacity(n);
+                    for (k, x) in v.iter().enumerate() {
+                        out.push(if mask.on(k) { round(*x)? } else { 0.0 });
+                    }
+                    Ok(Col::F(out))
+                }
+            }
+        }
         Func::Fp8E4m3 => unary_int(&|x| fp8_e4m3_bits_to_f64(bits_of(x, 8)? as u8)),
         Func::Fp8E5m2 => unary_int(&|x| fp8_e5m2_bits_to_f64(bits_of(x, 8)? as u8)),
         Func::Pow2 => unary_int(&pow2),
@@ -988,6 +1118,25 @@ mod tests {
         assert_eq!(f("f16(1)"), 2f64.powi(-24));
         assert_eq!(f("bf16(0x3fc0)"), 1.5);
         assert_eq!(f("e8m0(127)"), 1.0);
+        // Rounding to the dtype a library computes in: ties to even, subnormals, overflow is an error.
+        assert_eq!(f("rnd32(0.1)"), 0.1f32 as f64);
+        assert_eq!(f("rndbf16(1.00390625)"), 1.0, "1 + 2^-8 is the tie between 1 and 1 + 2^-7: to even");
+        assert_eq!(f("rndbf16(1.01171875)"), 1.015625, "1 + 3 * 2^-8 ties up to the even 1 + 2^-6");
+        assert_eq!(f("rndf16(1.00048828125)"), 1.0, "1 + 2^-11 ties to even");
+        assert_eq!(f("rndf16(1.00146484375)"), 1.001953125, "1 + 3 * 2^-11 ties up to the even 1 + 2^-9");
+        assert_eq!(f("rndf16(0.000000059604644775390625)"), 2f64.powi(-24), "the smallest binary16 subnormal");
+        assert_eq!(f("rndf16(0.00000002980232238769531)"), 0.0, "half of it ties to the even zero");
+        assert_eq!(f("rndf16(65504)"), 65504.0);
+        assert!(run("rndf16(65520)", 1).is_err() && run("rnd32(1e300)", 1).is_err() && run("rndbf16(1e39)", 1).is_err());
+        // `rnd(x, kind)` is the same three roundings with the dtype a constant a descriptor can take from the checkpoint (0: f32, 1: bf16, 2: f16).
+        assert_eq!(f("rnd(0.1, 0)"), 0.1f32 as f64);
+        assert_eq!(f("rnd(1.00390625, 1)"), 1.0);
+        assert_eq!(f("rnd(1.01171875, 1)"), 1.015625);
+        assert_eq!(f("rnd(1.00048828125, 2)"), 1.0);
+        assert_eq!(f("rnd(-0.0, 1)").to_bits(), (-0.0f64).to_bits(), "a negative zero stays one");
+        assert!(run("rnd(1.0, 3)", 1).is_err(), "no such kind");
+        assert!(run("rnd(1.0, e)", 1).is_err(), "the kind is a constant, not a lane");
+        assert!(run("rnd(65520, 2)", 1).is_err());
         assert_eq!(f("e8m0(0)"), 2f64.powi(-127));
         assert_eq!(f("fp8e4m3(0x38)"), 1.0);
         assert_eq!(f("fp8e4m3(0x7e)"), 448.0);

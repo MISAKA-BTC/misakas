@@ -223,7 +223,7 @@ impl QuantConfig {
 }
 
 /// Whether a module name is among the modules a configuration keeps in float. An entry is
-/// `exact:<name>`, `contains:<text>` or `re:<pattern>` (a descriptor's `skip`, see
+/// `exact:<name>`, `contains:<text>`, `path:<entry>` or `re:<pattern>` (a descriptor's `skip`, see
 /// `quantfmt::desc::ConfigDesc`), or — AWQ's own — a bare prefix or suffix of the name.
 pub fn skip_matches(skip: &[String], name: &str) -> bool {
     skip.iter().any(|k| {
@@ -233,6 +233,10 @@ pub fn skip_matches(skip: &[String], name: &str) -> bool {
             name == n
         } else if let Some(n) = k.strip_prefix("contains:") {
             name.contains(n)
+        } else if let Some(n) = k.strip_prefix("path:") {
+            // As transformers' bitsandbytes integration reads `llm_int8_skip_modules`: the entry is the module's
+            // last component, or its whole name, or a path prefix (`<entry>.` occurs in the name).
+            name == n || name.rsplit('.').next() == Some(n) || name.contains(&format!("{n}."))
         } else {
             name.starts_with(k.as_str()) || name.ends_with(k.as_str())
         }
@@ -430,7 +434,7 @@ pub fn parse_quant_config(q: &Value, arch: &str, model_type: &str) -> Result<Qua
 /// descriptor reads is a refusal that says what to supply ([`NeedsDescriptor`]).
 fn described_config(q: &Value, method: &str, arch: &str, reg: &QuantRegistry) -> Result<QuantConfig> {
     let format = q.get("format").and_then(Value::as_str);
-    let Some(f) = reg.config(method, format) else {
+    let Some(f) = reg.config_for(method, q) else {
         let name = match format {
             Some(fm) => format!("{method}/{fm}"),
             None => method.to_string(),
