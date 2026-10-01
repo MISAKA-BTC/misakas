@@ -5878,6 +5878,55 @@ impl Deserializer for RpcPalwSeatReadiness {
     }
 }
 
+/// **What blocks a class, and at which stage** (RFC-0002 Part II §II.7.4): the registry's own reading of a class's row as a
+/// structured fact instead of a sentence. `stage` is `convert` (the artifact's graph is the problem), `register` (the network has
+/// not admitted the class) or `mine` (the class is registered but not yet admitted to claims, or not at full rate); `code` is a
+/// stable token; `what` says what is missing, with the numbers; `have` / `need` are present (`has_count`) where the condition is a
+/// count; `next` says the act that lifts it. A class with nothing blocking has no entry.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwClassBlocking {
+    pub class_id: String,
+    pub stage: String,
+    pub code: String,
+    pub what: String,
+    pub has_count: bool,
+    pub have: u64,
+    pub need: u64,
+    pub next: String,
+}
+
+impl Serializer for RpcPalwClassBlocking {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.stage, writer)?;
+        store!(String, &self.code, writer)?;
+        store!(String, &self.what, writer)?;
+        store!(bool, &self.has_count, writer)?;
+        store!(u64, &self.have, writer)?;
+        store!(u64, &self.need, writer)?;
+        store!(String, &self.next, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwClassBlocking {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            stage: load!(String, reader)?,
+            code: load!(String, reader)?,
+            what: load!(String, reader)?,
+            has_count: load!(bool, reader)?,
+            have: load!(u64, reader)?,
+            need: load!(u64, reader)?,
+            next: load!(String, reader)?,
+        })
+    }
+}
+
 /// `fence_daa` is 0 where no registry is scheduled (`scheduled` false); `active` is whether the
 /// fence is in force at the tip; the reference constants are the globals every class is derived
 /// against.
@@ -5933,11 +5982,17 @@ pub struct GetPalwModelRegistryResponse {
     pub panel_inflight_replay: String,
     pub panel_horizon_spans: u64,
     pub final_work_epochs: u64,
+    /// **Version 2** (RFC-0002 Part II §II.7.4): what blocks each class and at which stage, for every class that has something
+    /// blocking it. Appended last: a reader of version 1 stops before it. A node of version 1 serves none; derive the same
+    /// reading from `classes` with [`crate::model::palw_registry_blockings`].
+    #[serde(default)]
+    pub blocking: Vec<RpcPalwClassBlocking>,
 }
 
 impl Serializer for GetPalwModelRegistryResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        // Version 2 appends `blocking` (the class's stage and what is missing).
+        store!(u16, &2, writer)?;
         store!(bool, &self.available, writer)?;
         store!(u64, &self.tip_daa, writer)?;
         store!(bool, &self.scheduled, writer)?;
@@ -5976,13 +6031,14 @@ impl Serializer for GetPalwModelRegistryResponse {
         store!(String, &self.panel_inflight_replay, writer)?;
         store!(u64, &self.panel_horizon_spans, writer)?;
         store!(u64, &self.final_work_epochs, writer)?;
+        serialize!(Vec<RpcPalwClassBlocking>, &self.blocking, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwModelRegistryResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         Ok(Self {
             available: load!(bool, reader)?,
             tip_daa: load!(u64, reader)?,
@@ -6022,6 +6078,8 @@ impl Deserializer for GetPalwModelRegistryResponse {
             panel_inflight_replay: load!(String, reader)?,
             panel_horizon_spans: load!(u64, reader)?,
             final_work_epochs: load!(u64, reader)?,
+            // Version 1 (a node before RFC-0002 Part II §II.7.4) serves no blocking readings.
+            blocking: if version >= 2 { deserialize!(Vec<RpcPalwClassBlocking>, reader)? } else { Vec::new() },
         })
     }
 }

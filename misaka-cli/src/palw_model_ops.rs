@@ -533,6 +533,30 @@ pub(crate) async fn status(ctx: &Ctx, profile: Profile, class_id: String) -> Cli
     if !resp.reason.is_empty() {
         println!("reason                {}", resp.reason);
     }
+    // RFC-0002 Part II §II.7.4: which stage lacks what, as the registry itself reads the class (best effort: the status above stands
+    // without it). A node that serves no such reading is read by the same function.
+    if let Ok(registry) = nv.client.get_palw_model_registry().await {
+        let served;
+        let blocking = if registry.blocking.is_empty() {
+            served = kaspa_rpc_core::palw_registry_blockings(&registry);
+            &served
+        } else {
+            &registry.blocking
+        };
+        match blocking.iter().find(|b| b.class_id.eq_ignore_ascii_case(&resp.class_id)) {
+            Some(b) => {
+                println!("stage                 {}", b.stage);
+                println!(
+                    "blocked by            {}{}",
+                    b.code,
+                    if b.has_count { format!(" ({} of {})", b.have, b.need) } else { String::new() }
+                );
+                println!("                      {}", b.what);
+                println!("next                  {}", b.next);
+            }
+            None => println!("stage                 nothing blocks this class (the registry reads it as admitted, or has no row for it)"),
+        }
+    }
     Ok(())
 }
 
