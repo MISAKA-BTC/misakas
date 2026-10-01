@@ -610,6 +610,11 @@ pub fn palw_bond_may_judge_class_v4(
         // (`palw_readiness_row_is_fresh_v1`), so the draw seats exactly the rows the registry counts.
         Some(policy) if *class_id != policy.base_class_id => {
             state.seat_readiness(bond_key, class_id).is_some_and(|row| policy.admits(row))
+                // RFC-0004 §6.7 (spec 17 §17.7.1): a seat is drawn onto a composite's panel only if its row for
+                // every ancestor of the composite is fresh too — it must hold the parent to replay the adapter.
+                && crate::palw_model_registry_v1::palw_composite_ancestry_v1(state, class_id).is_some_and(|ancestry| {
+                    ancestry.iter().all(|parent| state.seat_readiness(bond_key, parent).is_some_and(|row| policy.admits(row)))
+                })
         }
         _ => palw_bond_may_judge_class_v3(state, bond_key, bond, class_id, require_production),
     }
@@ -15713,10 +15718,13 @@ impl PalwFoldReadV1<'_> {
         #[cfg(test)]
         tests::PALW_READY_PREDICATE_EVALS_FOR_TESTS.with(|count| count.set(count.get() + 1));
         let Some(row) = self.state.seat_readiness.get(&(*bond_key, *class_id)) else { return false };
-        crate::palw_model_registry_v1::palw_seat_not_ready_reason_net_v1(
+        // **RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): a composite class adds the parent clause** — the seat must be
+        // ready for the composite's parent too. The class-blind predicate for every class without a record.
+        crate::palw_model_registry_v1::palw_seat_class_not_ready_reason_net_v1(
             self.state,
             self.params,
             bond_key,
+            class_id,
             row,
             now_daa,
             fold,
@@ -22201,7 +22209,23 @@ impl<'a> TransitionBuilder<'a> {
                 registry::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1
             )));
         }
-        crate::palw_artifact::verify_artifact_multiproof_v1(proof, class.artifact_root)
+        // **RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): a composite class is possessed over its ADAPTER section.** A
+        // composite's registered root is `H(parent_class ‖ parent_root ‖ adapter_root ‖ P)`, which is no
+        // inventory root and which no multiproof opens; the proof reconstructs the adapter section's own
+        // inventory root instead, the record the candidate's acceptance wrote. The record must root to the
+        // class's registered artifact root, so a stale or foreign record opens nothing.
+        let possession_root = match self.state.improvement_composite_class(class_id) {
+            Some(record) if self.params.improve_active_at(ctx.daa_score) => {
+                if record.artifact_root() != class.artifact_root {
+                    return Err(PalwStateV2Error::ReadinessProofRefused(
+                        "the composite record does not root to the class's registered artifact root".to_string(),
+                    ));
+                }
+                record.adapter_root
+            }
+            _ => class.artifact_root,
+        };
+        crate::palw_artifact::verify_artifact_multiproof_v1(proof, possession_root)
             .map_err(|e| PalwStateV2Error::ReadinessProofRefused(format!("{e}")))?;
         let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
         let landing = registry::palw_readiness_landing_spans_v1(span_daa);
@@ -40014,6 +40038,8 @@ pub(crate) mod tests {
         // ADR-0152-adjacent (Activation Pool, user decision 2026-09-25): R2 through this fixture's
         // registry step.
         mod activation_pool_r2_v1;
+        // RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): a composite class proves readiness over its adapter section.
+        mod composite_readiness_v1;
 
         /// The registry's fixture params: the shared `params()` with a receipt window of four spans
         /// (40 DAA) instead of ten DAA — the derived verification window of any class is at least

@@ -595,6 +595,39 @@ it paid.
 - registration fees are the pool's balance from admission (an abort refunds each less its share of
   the spend it funded, §17.10.3).
 
+### 17.7.1 A composite class proves readiness over its adapter section
+
+> Normative past `palw_improvement_v1`. The coordinator's addition of 2026-10-01 (lane C's drill preparation
+> found the gap): RFC-0004 §6.3's composite is the main candidate shape (A5), and it could not become ready.
+
+**Why.** A composite candidate's class carries `artifact_root = H(parent_class ‖ parent_root ‖ adapter_root ‖
+le32(P))` (§17.7; RFC-0004 §6.3). That is no inventory root: no multiproof opens it. The model registry's
+possession proof (`SeatReadinessProvedV2`, tag 50, ADR-0133 §11.2) reconstructs the class's registered root, so
+no seat could ever prove a composite, no composite ever left `Candidate`/`Prefetching` (`ready_seats` stayed
+0), and none of its evaluation claims (§17.8.4) was admitted.
+
+**The rule.** It binds exactly the classes with a **composite record** (`improvement_composite_classes`,
+written when the candidate carrying the reference is accepted, §17.7). That table is empty on every chain that
+accepted no composite candidate and is written only past `palw_improvement_v1`, so the rule is **dormant
+below the fence and for every other class — byte for byte, at every height**.
+
+| Item | Rule |
+| --- | --- |
+| The proof | The existing V2 object for `class_id = C`, whose multiproof reconstructs **`adapter_root`** — the root of the adapter section's own inventory (params `P..`) — in place of the class's registered artifact root. Every other V2 rule is unchanged: at most 16 leaves, the operand byte cap, the span window, the leaves opened are exactly the challenge's draw over the section's leaf count, the seat's ML-DSA-87 signature over the leaves it opened |
+| Consistency | The record's reference must root to the class's registered `artifact_root` (`palw_improve_composite_artifact_root_v1`); a record that does not opens nothing (`ReadinessProofRefused`, "does not root to the class's registered artifact root") |
+| Binding to the composite | Three places: the challenge seed names `C` (`palw_readiness_v2_challenge_seed_v1(C, bond, span)`), so another composite over the same adapter draws other leaves of it and a proof written for `C` is no proof of `C'`; the seat's signature covers `C` and the leaves; and the row it writes is keyed `(bond, C)`, so it counts for no other class. |
+| The parent | A seat counts as ready for `C` only if it is **also ready for every ancestor of `C`** — a fresh row of its own on `parent_class` passing the same five registry clauses (active, above the floor, a fresh row, free collateral for the readiness multiple, and lane maturity) — recursively when the parent is itself a composite, to depth 8 (`PALW_COMPOSITE_READINESS_MAX_DEPTH_V1`); a chain of composites longer than that is one no seat is ready for **[decision R1]**. The clause is per seat, not per class: RFC-0004 §6.7 has a seat that holds the parent fetch only the adapter, so the seats that can replay a composite are the seats that hold both, and a class-level "the parent has its seats" would count adapter holders that cannot replay. The parent's row is judged at the DAA of the question: when it lapses, the composite's count falls with it |
+| Where it applies | The one readiness predicate (`palw_seat_class_not_ready_reason_net_v1`): the fold's ready-seat count and the `Candidate` jury (`model_registry_seat_is_ready`), the registry read (`readySeatsNow`, and each row's `not_ready_reason`, `parent not ready`; the panel view's hold reason `PARENT_NOT_READY`), and the panel room's ready count; the panel draw (`palw_bond_may_judge_class_v4`) asks the parent row's freshness likewise, so a seat without the parent is never seated on a composite's panel |
+| Lifecycle | Unchanged: `Candidate → Prefetching → Probation` read the count above; a composite is admitted exactly when `required_ready_seats` seats prove the adapter and are ready for the parent |
+
+**What the node does** (lane C, on top of this rule): a seat that holds the parent and the adapter section
+files the adapter proof for `C` from the section's own inventory and keeps its parent row fresh; the parent's
+renewal is the parent class's own (`SeatReadinessProvedV2` for `parent_class`). **Tests** (core,
+`palw_state_v2::tests::adr0135::composite_readiness_v1`; the processor's gate): a composite reaches
+`Probation` once seven seats prove the adapter and hold the parent and stays in `Prefetching` otherwise; the
+parent clause is per seat and follows the parent's row; the proof opens the adapter root only, under a record
+that roots to the class; the proof is bound to its class; the fence-off twin reads the class-blind rule.
+
 ## 17.8 Evaluation
 
 ### 17.8.1 The draw [E7], [E10]

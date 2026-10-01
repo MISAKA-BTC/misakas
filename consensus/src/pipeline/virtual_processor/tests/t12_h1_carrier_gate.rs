@@ -540,3 +540,111 @@ async fn t12_the_fold_the_registry_read_and_the_escalation_take_the_configured_h
         assert_eq!(at(last + 1), Some(PalwReadinessUrgencyV1::Lapsed), "{max_age}: past the horizon");
     }
 }
+
+/// **RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): a composite's possession proof through the processor's gate and the
+/// fold's arm.** A composite candidate's registered root is `H(parent_class ‖ parent_root ‖ adapter_root ‖ P)`,
+/// which no multiproof opens; past `palw_improvement_v1` the proof of a class with a composite record opens the
+/// ADAPTER section's inventory root, signed by the seat's own key over the class and the leaves. Two of
+/// testnet-12's genesis classes stand in (re-rooted in a copy of the genesis state, as the honest-proof test
+/// does): the parent on one synthetic inventory, the composite on the composite root over that parent and a
+/// second inventory — the adapter's. The gate takes the adapter proof under the improvement fence, refuses the
+/// parent's leaves as the composite's possession, refuses another card's key, and — with the fence off — asks
+/// the class-blind rule, under which the composite's root is no inventory root.
+#[tokio::test]
+async fn m1_a_composite_possession_proof_opens_the_adapter_section_through_the_gate_and_the_fold() {
+    use kaspa_consensus_core::palw_artifact::{
+        PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, palw_artifact_multiproof_v1,
+    };
+    use kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1;
+    use kaspa_consensus_core::palw_model_registry_v1::{
+        PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT, palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1,
+        palw_seat_readiness_message_v2,
+    };
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    let g = gate(true);
+    let ids: Vec<Hash64> = g.state.classes_iter().map(|(id, _)| *id).collect();
+    let (parent, composite) = (ids[ids.len() - 2], ids[ids.len() - 1]);
+    const LEAVES: u32 = 4_096;
+    let (card, daa) = (1usize, g.point.daa_score);
+    let bond = g.cards[card];
+    let bond_bytes = borsh::to_vec(&bond).unwrap();
+    let inventory = |tensor: &str| -> Vec<PalwArtifactOperandV1> {
+        (0..LEAVES)
+            .map(|index| PalwArtifactOperandV1 {
+                tensor_name: tensor.to_string(),
+                layer: Some(0),
+                row_start: index,
+                bytes: vec![index as u8; 64],
+            })
+            .collect()
+    };
+    let (parent_ops, adapter_ops) = (inventory("blk.0.ffn_up"), inventory("lora_A.blk.0.ffn_up"));
+    let leaves_of = |ops: &[PalwArtifactOperandV1]| -> Vec<Hash64> { ops.iter().map(artifact_leaf_v1).collect() };
+    let (parent_root, adapter_root) =
+        (artifact_root_v1(&leaves_of(&parent_ops)).unwrap(), artifact_root_v1(&leaves_of(&adapter_ops)).unwrap());
+    let record = PalwTirCompositeRefV1 { parent_class: parent, parent_root, adapter_root, p: 290 };
+    let mut carriage = PalwStateCarriageV2::from_state(&g.state);
+    carriage.classes.get_mut(&parent).unwrap().artifact_root = parent_root;
+    carriage.classes.get_mut(&composite).unwrap().artifact_root = record.artifact_root();
+    carriage.improvement_composite_classes.insert(composite, record);
+    let state = carriage.into_state(&g.params, None).expect("the re-rooted genesis state is consistent");
+    // testnet-12's one-DAA spans: the span IS the DAA.
+    let proof_of = |class: Hash64, ops: &[PalwArtifactOperandV1], signer: u64, span: u64| {
+        let leaves = leaves_of(ops);
+        let draw = palw_readiness_v2_draw_v1(&palw_readiness_v2_challenge_seed_v1(&class, &bond_bytes, span), LEAVES);
+        let mut opened: Vec<_> = draw.iter().map(|index| (*index, ops[*index as usize].clone())).collect();
+        opened.sort_by_key(|(index, _)| *index);
+        let proof = palw_artifact_multiproof_v1(&leaves, &opened).expect("the leaves are the inventory's");
+        let message = palw_seat_readiness_message_v2(g.network_domain, &bond_bytes, &class, span, &proof);
+        let key = TestConsensus::palw_v2_registry_keypair(signer);
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &key.signing_key,
+            message.as_byte_slice(),
+            PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT,
+            [0u8; 32],
+        )
+        .expect("sign")
+        .as_ref()
+        .to_vec();
+        Obj::SeatReadinessProvedV2 { bond, class_id: class, span, proof: Box::new(proof), signature }
+    };
+    let armed = g
+        .params
+        .clone()
+        .with_improve_from_daa(Some(0))
+        .with_improve_ceilings(Some(kaspa_consensus_core::palw_improve_v1::PALW_DRILL_IMPROVE_CEILINGS_V1));
+    let gate_under = |params: &PalwStateParamsV2, object: &Obj| {
+        g.ctx.consensus.virtual_processor().palw_h1_carrier_refusal_on(&state, params, &g.point, object)
+    };
+    // Past the improvement fence: the adapter section is the composite's possession; the parent's leaves are not.
+    let honest = proof_of(composite, &adapter_ops, card as u64, daa);
+    assert_eq!(gate_under(&armed, &honest), None, "the seat's own proof of the adapter section, signed over the composite");
+    assert!(
+        gate_under(&armed, &proof_of(composite, &adapter_ops, 2, daa)).is_some_and(|why| why.contains("not signed by")),
+        "another card's key does not sign for card 1"
+    );
+    assert!(
+        gate_under(&armed, &proof_of(composite, &parent_ops, card as u64, daa)).is_some(),
+        "the parent's leaves do not reconstruct the adapter root: refused by the fold's arm"
+    );
+    // The parent is possessed as ever: its own inventory, its own class.
+    assert_eq!(
+        gate_under(&armed, &proof_of(parent, &parent_ops, card as u64, daa)),
+        None,
+        "the parent's proof is the class-blind rule's"
+    );
+    assert!(
+        gate_under(&armed, &proof_of(parent, &adapter_ops, card as u64, daa)).is_some(),
+        "and the adapter's leaves are not the parent's possession"
+    );
+    // Fence off: the class-blind rule — the composite's root is no inventory root, so the adapter's proof opens nothing.
+    assert!(
+        gate_under(&g.params, &honest).is_some(),
+        "below palw_improvement_v1 a composite's adapter proof is refused: the rule is dormant"
+    );
+    assert_eq!(
+        gate_under(&g.params, &proof_of(parent, &parent_ops, card as u64, daa)),
+        None,
+        "and the parent's proof is unchanged"
+    );
+}

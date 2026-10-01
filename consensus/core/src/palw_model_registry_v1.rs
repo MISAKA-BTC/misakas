@@ -1712,6 +1712,97 @@ pub fn palw_seat_not_ready_reason_net_v1(
     None
 }
 
+// ---------------------------------------------------------------------------------------------
+// RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): the readiness of a composite class
+// ---------------------------------------------------------------------------------------------
+
+/// **Why a seat that holds a composite's adapter is not ready for the composite**: it is not ready for the
+/// parent the composite rests on, or for one of that parent's own ancestors (spec 17 §17.7.1). A seat that
+/// executes a composite holds the parent's artifact AND the adapter section (RFC-0004 §6.7: it fetches only
+/// the adapter), so a readiness row for the adapter alone is no evidence it can replay.
+pub const PALW_SEAT_NOT_READY_PARENT_V1: &str = "parent not ready";
+
+/// The longest chain of composite classes a seat's readiness follows (a composite over a composite over …).
+/// A class whose ancestry is longer is one no seat is ready for: the walk is bounded, so the predicate is.
+pub const PALW_COMPOSITE_READINESS_MAX_DEPTH_V1: usize = 8;
+
+/// **The classes a seat must also be ready for before it is ready for `class_id`**, nearest first: the
+/// parent of a composite class, and — when that parent is itself a composite — its parent, and so on.
+/// Empty for every class without a composite record, which is every class on a chain that accepted no
+/// composite candidate (the record is written only past `palw_improvement_v1`). `None` when the chain of
+/// composites is deeper than [`PALW_COMPOSITE_READINESS_MAX_DEPTH_V1`].
+pub fn palw_composite_ancestry_v1(state: &crate::palw_state_v2::PalwChainStateV2, class_id: &Hash64) -> Option<Vec<Hash64>> {
+    let mut chain = Vec::new();
+    let mut class = *class_id;
+    while let Some(record) = state.improvement_composite_class(&class) {
+        if chain.len() >= PALW_COMPOSITE_READINESS_MAX_DEPTH_V1 {
+            return None;
+        }
+        chain.push(record.parent_class);
+        class = record.parent_class;
+    }
+    Some(chain)
+}
+
+/// **[`palw_seat_not_ready_reason_net_v1`] for one class**: the five clauses over the seat's row for the class,
+/// and — for a composite class (past `palw_improvement_v1`) — the parent clause: the seat's own row for every
+/// ancestor of the class must pass the same five clauses ([`PALW_SEAT_NOT_READY_PARENT_V1`] otherwise). The
+/// ONE readiness predicate: the fold's ready-seat count and the Candidate jury, the registry read, and the
+/// ready count of the panel room ask it. Identical to the class-blind predicate for every class without a
+/// composite record.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_seat_class_not_ready_reason_net_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    bond_key: &crate::palw_state_v2::PalwBondKeyV2,
+    class_id: &Hash64,
+    row: &PalwSeatReadinessRowV1,
+    now_daa: u64,
+    fold: &PalwModelRegistryFoldV1,
+    readiness_v2: bool,
+    collateral_is_net: bool,
+) -> Option<&'static str> {
+    let own = palw_seat_not_ready_reason_net_v1(state, params, bond_key, row, now_daa, fold, readiness_v2, collateral_is_net);
+    if own.is_some() || !params.improve_active_at(now_daa) {
+        return own;
+    }
+    let Some(ancestry) = palw_composite_ancestry_v1(state, class_id) else { return Some(PALW_SEAT_NOT_READY_PARENT_V1) };
+    for ancestor in ancestry {
+        let ready = state.seat_readiness(bond_key, &ancestor).is_some_and(|parent_row| {
+            palw_seat_not_ready_reason_net_v1(state, params, bond_key, parent_row, now_daa, fold, readiness_v2, collateral_is_net)
+                .is_none()
+        });
+        if !ready {
+            return Some(PALW_SEAT_NOT_READY_PARENT_V1);
+        }
+    }
+    None
+}
+
+/// [`palw_seat_class_not_ready_reason_net_v1`] under the fold's own freshness rule and the ruleset's
+/// collateral arithmetic — [`palw_seat_not_ready_reason_v1`] for one class.
+pub fn palw_seat_class_not_ready_reason_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    bond_key: &crate::palw_state_v2::PalwBondKeyV2,
+    class_id: &Hash64,
+    row: &PalwSeatReadinessRowV1,
+    now_daa: u64,
+    fold: &PalwModelRegistryFoldV1,
+) -> Option<&'static str> {
+    palw_seat_class_not_ready_reason_net_v1(
+        state,
+        params,
+        bond_key,
+        class_id,
+        row,
+        now_daa,
+        fold,
+        fold.readiness_v2_active,
+        params.bond_collateral_is_net_v1(),
+    )
+}
+
 /// The seats ready for a class now (ADR-0135 Decision 4), as the fold counts them — through the
 /// one predicate ([`palw_seat_not_ready_reason_under_v1`]) under the fold's freshness rule. It
 /// used the thirty-span V1 age and took V1 rows past readiness V2, so on testnet-12 the RPC's
@@ -1726,7 +1817,7 @@ pub fn palw_model_registry_ready_seats_v1(
     let mut ready = 0u32;
     for (bond_key, _) in state.bonds_iter() {
         let Some(row) = state.seat_readiness(bond_key, class_id) else { continue };
-        if palw_seat_not_ready_reason_v1(state, params, bond_key, row, now_daa, fold).is_none() {
+        if palw_seat_class_not_ready_reason_v1(state, params, bond_key, class_id, row, now_daa, fold).is_none() {
             ready = ready.saturating_add(1);
         }
     }
@@ -1749,9 +1840,9 @@ pub fn palw_model_registry_room_ready_v1(
     let ready = state
         .bonds_iter()
         .filter(|(bond_key, _)| {
-            state
-                .seat_readiness(bond_key, class_id)
-                .is_some_and(|row| palw_seat_not_ready_reason_v1(state, params, bond_key, row, now_daa, fold).is_none())
+            state.seat_readiness(bond_key, class_id).is_some_and(|row| {
+                palw_seat_class_not_ready_reason_v1(state, params, bond_key, class_id, row, now_daa, fold).is_none()
+            })
         })
         .map(|(_, bond)| bond);
     match state.model_lifecycle(class_id) {
@@ -2001,7 +2092,7 @@ pub fn palw_model_registry_read_v2(
             row: *row,
             fresh: fold.is_some_and(|f| f.readiness_row_is_fresh(row, tip_daa)),
             not_ready_reason: fold
-                .and_then(|f| palw_seat_not_ready_reason_v1(state, params, bond, row, tip_daa, f))
+                .and_then(|f| palw_seat_class_not_ready_reason_v1(state, params, bond, class_id, row, tip_daa, f))
                 .unwrap_or("")
                 .to_string(),
         })

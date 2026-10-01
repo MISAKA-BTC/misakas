@@ -43,6 +43,9 @@ pub enum PalwPanelHoldReasonV1 {
     /// Lane maturity-ext (post-launch, 2026-09-26): the bond registered less than ADR-0065 D1's window
     /// ago, so past `palw_bond_maturity_early` the registry does not count it ready yet.
     BondImmature,
+    /// RFC-0004 §6.7 (spec 17 §17.7.1): the seat proved the composite's adapter section but is not ready for
+    /// the parent class the composite rests on. Appended last.
+    ParentNotReady,
 }
 
 impl PalwPanelHoldReasonV1 {
@@ -59,6 +62,7 @@ impl PalwPanelHoldReasonV1 {
             Self::NotSelected => "NOT_SELECTED",
             Self::SegmentCheckpointMissing => "SEGMENT_CHECKPOINT_MISSING",
             Self::BondImmature => "BOND_IMMATURE",
+            Self::ParentNotReady => "PARENT_NOT_READY",
         }
     }
 
@@ -75,6 +79,7 @@ impl PalwPanelHoldReasonV1 {
             Self::NotSelected => "this seat is ready but the claim's panel did not draw it",
             Self::SegmentCheckpointMissing => "the assigned segment's SC01 checkpoint is not open, so a partial seat cannot resume",
             Self::BondImmature => "the bond registered less than the seat-maturity window ago (ADR-0065 D1); it counts from its registration DAA plus the window",
+            Self::ParentNotReady => "the seat proved the composite's adapter section but holds no standing possession proof for the parent class it rests on",
         }
     }
 
@@ -87,6 +92,7 @@ impl PalwPanelHoldReasonV1 {
             "below floor" | "collateral short" => Some(Self::CollateralInsufficient),
             "stale" => Some(Self::ReadinessProofExpired),
             crate::palw_model_registry_v1::PALW_SEAT_NOT_READY_IMMATURE_V1 => Some(Self::BondImmature),
+            crate::palw_model_registry_v1::PALW_SEAT_NOT_READY_PARENT_V1 => Some(Self::ParentNotReady),
             _ => None,
         }
     }
