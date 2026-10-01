@@ -29,7 +29,7 @@ use super::conv::{ConvSpec, QConv, QConvRefs, lower_conv};
 use super::linear::{QLinear, QLinearRefs, lower_linear_codes};
 use super::norm::{GroupNormSpec, QGroupNorm, QGroupNormRefs, lower_group_norm};
 use super::sink::ParamSink;
-use super::stream::{lower_requant, lower_to_codes};
+use super::stream::lower_requant;
 use super::vae_float::{VAE_EPS, Vae};
 use crate::quant::mul_shift;
 
@@ -148,6 +148,7 @@ struct QResnetRefs {
     sc: Option<QConvRefs>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resnet_stage(
     vae: &Vae,
     cal: &Calib,
@@ -294,6 +295,7 @@ fn attention_stage(
 }
 
 /// Nearest ×2 then the upsampler's 3×3 convolution.
+#[allow(clippy::too_many_arguments)]
 fn upsample_stage(vae: &Vae, cal: &Calib, prefix: &str, s: &str, c: usize, h: usize, w: usize, s_in: f64) -> Result<VaeStage, String> {
     let s_uc = cal.scale16(&format!("{s}.uc"));
     let q = qconv(vae, &format!("{prefix}.conv"), 2 * h, 2 * w, 1, s_in, s_uc);
@@ -391,7 +393,6 @@ fn last_stage(vae: &Vae, cal: &Calib, c: usize, h: usize, w: usize, s_in: f64) -
     let spec = co.spec;
     // `pixel = Clamp(HAFZ((y + 1) · 255 / 2), 0, 255)` on `y` in Q24 (the RFC's `Div_HAFZ((y + ONE)·255, 2·ONE)`).
     let to_q24 = mul_shift(s_img * (1u64 << 24) as f64);
-    let out_c = cfg.out_channels as u32;
     let (c32, h32, w32) = (c as u32, h as u32, w as u32);
     let (program, sink) = make_stage(
         DType::I16,
@@ -419,7 +420,6 @@ fn last_stage(vae: &Vae, cal: &Calib, c: usize, h: usize, w: usize, s_in: f64) -
             b.transpose(px, &[1, 2, 0]) // [H, W, 3]
         },
     )?;
-    let _ = out_c;
     Ok(VaeStage {
         name: "vae.out".to_string(),
         program,
@@ -439,10 +439,10 @@ pub fn lower_vae(vae: &Vae, cal: &Calib, side: usize, s_x: f64) -> Result<VaeCha
     let mut stages = vec![first_stage(vae, cal, cfg.latent_channels, side, side, s_x)?];
     let (mut c, mut h, mut w) = (top, side, side);
     let mut s_cur = stages[0].out_scale;
-    let mut push = |st: VaeStage, stages: &mut Vec<VaeStage>, cur: &mut f64| {
+    fn push(st: VaeStage, stages: &mut Vec<VaeStage>, cur: &mut f64) {
         *cur = st.out_scale;
         stages.push(st);
-    };
+    }
     let st = resnet_stage(vae, cal, "decoder.mid_block.resnets.0", "vae.mid.r0", c, h, w, s_cur)?;
     push(st, &mut stages, &mut s_cur);
     if cfg.mid_attention {
