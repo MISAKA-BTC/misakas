@@ -47,6 +47,7 @@ pub mod hl;
 pub mod lora;
 pub mod lower;
 pub mod prequant;
+pub mod quantfmt;
 pub mod quant;
 pub mod report;
 pub mod rope;

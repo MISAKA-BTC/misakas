@@ -1,0 +1,58 @@
+{
+ "decode": {
+  "target": "floats",
+  "value": "weight[o, i] * scale_inv[o / bo, i / bi]"
+ },
+ "doc": "float8_e4m3fn weights with a float scale per (bo × bi) block (DeepSeek-V3, Qwen3-FP8: `weight` + `weight_scale_inv`): W = fp8(w) · scale_inv. The elements are floats, not integer codes under a group scale, so it decodes to floats and the weight takes the ordinary W8 path.",
+ "ids": [
+  {
+   "method": "fp8",
+   "scheme": "config"
+  }
+ ],
+ "layout": {
+  "checks": [
+   {
+    "expr": "dim_scale_inv[0] == (out + bo - 1) / bo && dim_scale_inv[1] == (inp + bi - 1) / bi",
+    "message": "the block scales are not [ceil(out / bo), ceil(in / bi)]"
+   }
+  ],
+  "dims": {
+   "inp": "dim_weight[1]",
+   "out": "dim_weight[0]"
+  },
+  "kind": "tensors",
+  "roles": [
+   {
+    "dtypes": [
+     "F8_E4M3"
+    ],
+    "name": "weight",
+    "rank": 2,
+    "suffix": ".weight"
+   },
+   {
+    "dtypes": [
+     "F16",
+     "BF16",
+     "F32"
+    ],
+    "name": "scale_inv",
+    "rank": 2,
+    "suffix": ".weight_scale_inv"
+   }
+  ]
+ },
+ "name": "FP8_BLOCK",
+ "params": {
+  "bi": {
+   "config": "weight_block_size[1]",
+   "default": 128
+  },
+  "bo": {
+   "config": "weight_block_size[0]",
+   "default": 128
+  }
+ },
+ "schema": "misaka.palw.quant-format.v1"
+}
