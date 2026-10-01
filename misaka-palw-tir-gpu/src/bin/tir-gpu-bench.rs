@@ -172,12 +172,80 @@ fn elementwise_case(dev: &GpuDevice, name: &str, node: &NodePlan, ins: &[(Buf, F
     println!("  {name:<34} n {n:>7}: device {gpu:6.3} ns/element | CPU {cpu:6.3} ns/element | ×{:.1}  equal", cpu / gpu);
 }
 
+/// **One 1.5B layer's seven projections over a batch of positions** — the shape a layer shard's
+/// verification has (RFC-0006 §1.4) — against the same projections one position at a time, both on
+/// the device; each batched result byte-checked against the CPU executor's kernel first.
+fn layer_batch(dev: &GpuDevice, positions: usize, iters: usize) {
+    let shapes: [(&str, usize, usize); 7] = [
+        ("q", 1536, 1536),
+        ("k", 256, 1536),
+        ("v", 256, 1536),
+        ("o", 1536, 1536),
+        ("gate", 8960, 1536),
+        ("up", 8960, 1536),
+        ("down", 1536, 8960),
+    ];
+    let node = mm_plan();
+    let (mut batched, mut single) = (0.0f64, 0.0f64);
+    for (name, rows, k) in shapes {
+        let mut rng = Rng(0xba7c ^ (rows * 31 + k) as u64);
+        let w = rng.w8(rows * k);
+        let x = rng.codes(k * positions);
+        let wd = dev.upload(Slice::I8(&w), Form::P8, &[rows, k]);
+        let xd = dev.upload(Slice::I16(&x), Form::S32, &[k, positions]);
+        // The batched product, checked against the CPU kernel.
+        let a = Opd { data: Slice::I8(&w), layout: Layout::contiguous(&[rows, k]) };
+        let b = Opd { data: Slice::I16(&x), layout: Layout::contiguous(&[k, positions]) };
+        let mut out = Buf::default();
+        matmul::matmul(&node, &a, &b, &[rows, positions], &mut out, &mut Scratch::default()).expect("the CPU kernel");
+        let mut rec = Recorder::new(dev, 1);
+        let o = rec.node(&node, &[&wd, &xd], &[rows, positions], 0).expect("on the device");
+        let kernel = rec.log.last().cloned().unwrap_or_default();
+        assert_eq!(rec.finish()[0], 0);
+        assert_eq!(dev.download(&o), out, "{name}: device ≠ CPU executor");
+        let mut rec = Recorder::new(dev, 1);
+        for _ in 0..iters {
+            rec.node(&node, &[&wd, &xd], &[rows, positions], 0).unwrap();
+        }
+        let t = Instant::now();
+        rec.finish();
+        let tb = t.elapsed().as_secs_f64() * 1e3 / iters as f64;
+        // One position: the same weights against one column.
+        let x1 = dev.upload(Slice::I16(&x[..k]), Form::S32, &[k, 1]);
+        let mut rec = Recorder::new(dev, 1);
+        for _ in 0..iters {
+            rec.node(&node, &[&wd, &x1], &[rows, 1], 0).unwrap();
+        }
+        let t = Instant::now();
+        rec.finish();
+        let ts = t.elapsed().as_secs_f64() * 1e3 / iters as f64;
+        println!(
+            "  {name:>4} [{rows:>5}, {k:>5}]: {positions} positions batched ({kernel}) {tb:7.3} ms = {:6.4} ms a position | one position {ts:6.3} ms",
+            tb / positions as f64
+        );
+        batched += tb;
+        single += ts;
+    }
+    println!(
+        "  → one layer, {positions} positions: batched {:.2} ms ({:.4} ms a position) vs {:.3} ms a position one at a time: ×{:.1}",
+        batched,
+        batched / positions as f64,
+        single,
+        single * positions as f64 / batched
+    );
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let quick = args.iter().any(|a| a == "--quick");
     let it = |n: usize| if quick { n.div_ceil(5).max(3) } else { n };
     let dev = GpuDevice::new().expect("a TIR device");
     println!("device: {}; CPU pool: {} threads", dev.describe(), rayon::current_num_threads());
+    if let Some(p) = args.iter().position(|a| a == "--layer-batch").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()) {
+        println!("\nOne Qwen2.5-1.5B layer's projections over a batch of positions (RFC-0006 §8)");
+        layer_batch(&dev, p, it(20));
+        return;
+    }
 
     println!("\nDecode projections, Qwen2.5-1.5B (d 1536, kv 256, ff 8960, vocab 151,936): W·x, one position");
     let mut layer = (0.0, 0.0);
