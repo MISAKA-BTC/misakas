@@ -171,6 +171,13 @@ pub(crate) struct GenClaimArgs<'a> {
     pub out_dir: &'a Path,
     /// The node's retention directory: where `<claim>.material` is written (omit to write it beside the tx).
     pub retention_dir: Option<&'a Path>,
+    /// **Drill and court-battery tooling**: commit a LYING run — `step:<global leaf>:<lane>:<delta>` or
+    /// `output:<lane>:<delta>` (`GenPlantV1`). The claim is consistent (its roots are the lying run's), so only
+    /// the court can tell. Never for a real chain.
+    pub plant: Option<&'a str>,
+    /// Write the run's step leaves (global index, stage, position, kind, tile, lanes, dtype) to this JSON file
+    /// and stop: the list a fault site is chosen from. Nothing is signed or written otherwise.
+    pub list_leaves: Option<&'a Path>,
 }
 
 /// **`misaka palw gen-claim`** (see the module doc).
@@ -297,6 +304,36 @@ pub(crate) async fn gen_claim_files(ctx: &Ctx, key: &crate::keys::KeySource, a: 
             return Err(CliError::new(exit::MODEL, format!("the worker refuses the job: {why}")));
         }
         (PalwGenTensorAnswerV1::Result { .. }, None) => return Err(CliError::new(exit::GENERIC, "the worker answered with no run")),
+    };
+    // The leaf listing a drill picks a fault site from, then stop: nothing is signed or filed.
+    if let Some(path) = a.list_leaves {
+        let listing: Vec<serde_json::Value> = work
+            .leaf_listing()
+            .into_iter()
+            .map(|l| {
+                serde_json::json!({"global": l.global, "stage": l.stage, "pos": l.pos, "kind": l.kind, "tile": l.tile, "lanes": l.lanes, "dtype": l.dtype})
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&serde_json::json!({
+            "class_id": row.class_id.to_string(),
+            "leaf_count": work.execution.space.leaf_count(),
+            "output_lanes": work.output().values.len(),
+            "leaves": listing,
+        }))
+        .map_err(|e| CliError::new(exit::GENERIC, e.to_string()))?;
+        std::fs::write(path, text).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", path.display())))?;
+        println!("wrote {} ({} step leaves)", path.display(), work.execution.space.leaf_count());
+        return Ok(());
+    }
+    // A planted fault (the drill's liar): the claim commits the lying run.
+    let work = match a.plant {
+        Some(spec) => {
+            let plant = misaka_palw_base0::gen_tensor_worker::GenPlantV1::parse(spec).map_err(|e| CliError::new(exit::CONFIG, e))?;
+            let lying = work.planted(&plant).map_err(|e| CliError::new(exit::CONFIG, format!("--plant {spec}: {e}")))?;
+            println!("PLANTED FAULT {plant:?}: this claim commits a lying run (drill tooling)");
+            lying
+        }
+        None => work,
     };
     let binding = &work.binding;
 

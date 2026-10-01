@@ -1195,6 +1195,13 @@ enum PalwCmd {
         /// the executor's node serves the panel. Without it the material is written beside the transaction.
         #[arg(long)]
         retention_dir: Option<std::path::PathBuf>,
+        /// DRILL ONLY: commit a LYING run — `step:<global leaf>:<lane>:<delta>` or `output:<lane>:<delta>`. The claim
+        /// is consistent (its roots are the lying run's); the court convicts it. Choose a leaf with `--list-leaves`.
+        #[arg(long)]
+        plant: Option<String>,
+        /// Write the run's step leaves to this JSON file and stop (the list `--plant` is chosen from).
+        #[arg(long)]
+        list_leaves: Option<std::path::PathBuf>,
     },
     /// Submit a PALW lifecycle object written by `palw-certify` — the ADR-0075 certification
     /// objects `FamilyCertified` (a family's drill evidence, graded on chain) and
@@ -2762,7 +2769,7 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::GenRegistration { key, artifact, bond, out, model_id }) => {
             palw_gen::gen_registration_object(&ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await
         }
-        Command::Palw(PalwCmd::GenClaim { key, artifact, request, bond, operator_id, out_dir, retention_dir }) => {
+        Command::Palw(PalwCmd::GenClaim { key, artifact, request, bond, operator_id, out_dir, retention_dir, plant, list_leaves }) => {
             palw_gen::gen_claim_files(
                 &ctx,
                 &key.source(),
@@ -2773,6 +2780,8 @@ async fn main() -> std::process::ExitCode {
                     operator_id: &operator_id,
                     out_dir: &out_dir,
                     retention_dir: retention_dir.as_deref(),
+                    plant: plant.as_deref(),
+                    list_leaves: list_leaves.as_deref(),
                 },
             )
             .await
