@@ -375,8 +375,17 @@ pub fn palw_fp_v5_accept_payload_v1<'a>(
 /// **The entry a drill arms FP Job V5 with** (`--palw-drill-fp-v5-at`,
 /// [`crate::config::drill::palw_drill_fp_v5_at_v1`]). In NO testnet-12 flag-day list: dormant on
 /// every network.
-pub const PALW_DRILL_FP_V5_ENTRY: PalwPostLaunchFenceV1 =
-    PalwPostLaunchFenceV1 { name: "palw_fp_job_v5", set: |params, at| params.palw_fp_job_v5 = at };
+///
+/// Its `set` also writes the bundle's mirror of the height (`Params::sync_palw_gen_v1` mirrors `palw_fp_job_v5` beside the
+/// generative fence's in-flight caps, because the fold's tensor branch holds only the bundle) — a setter that left it unwritten
+/// would arm a ruleset `validate_palw_v2` refuses ("disagrees with the V2 bundle's mirror").
+pub const PALW_DRILL_FP_V5_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_fp_job_v5",
+    set: |params, at| {
+        params.palw_fp_job_v5 = at;
+        params.sync_palw_gen_v1();
+    },
+};
 
 /// The drill's one-entry list.
 pub const PALW_DRILL_FP_V5_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_DRILL_FP_V5_ENTRY];
