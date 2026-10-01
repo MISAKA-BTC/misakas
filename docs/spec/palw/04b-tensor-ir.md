@@ -2508,6 +2508,18 @@ refusal has a name (`PalwGenJobErrorV1`). Where the RFC is silent, the conservat
 >    an Image class's sampler id, guidance interval and the scalars its job maps to; an Embedding
 >    class's pooling and widths (`dims == [output.shape[1]]`); a registration whose profile offers do
 >    not match its profile or its bindings is refused at admission.
+> 8. **An embedding embeds at least one id** (finding G19): a text of 0 ids is `InputNotOffered` ("an empty
+>    text embeds nothing"), which decision 1's zero-length encoding does not cover; an image job's empty
+>    prompt (the unconditional prompt) is accepted.
+> 9. **The ids' bound is two rules** (finding G20, decision 6 completed): the least `token_bound` of the
+>    stages whose token run reads the list, and the least `hi + 1` of the external inputs a `JobTokens`
+>    binding of that list feeds (an id the run would refuse — §15.6: every value is held to its input's
+>    declaration — is refused at acceptance). A class that reads its prompt only through a `JobTokens`
+>    binding (an embedding) is bounded by the second rule alone; 0 when no stage reads the list.
+> 10. **The embedding job's refusal names** (finding G22) are `PoolingNotOffered`, `DimsNotOffered`,
+>     `InputNotOffered`, `OutputSpecNotOffered` and `Image(ImageCount | ImageSizeNotOffered)`; the image
+>     job's are §II.1.1's table's. `steps` is an element of the class's offered set, and with an empty set no
+>     step count is accepted.
 
 **The claim.** A tensor claim's execution root commits the job, the class, the step tree and the output:
 
@@ -2542,6 +2554,18 @@ stage's root (`PalwGenOutputCloseV1`). The court checks, in this order, and the 
    `TirValueOutsideProvenInterval { value_index }` (PALW-TIR-33), a lane whose canonical bytes are not
    the committed value's is `TirOutputDigestMismatch { value_index }` (discriminant 21, the lane within the
    tile), both hashed into the evidence id.
+
+**What each check names** (finding G22). Check 1's inside: the close's version or the binding's is
+`Version`; a `committed_execution_root` that is not the claim's, or parts that do not produce it, is
+`NotTheClaims`; a job that does not resolve against the class, or a count of stage roots that is not the
+pipeline's, is `Binding`; and a leaf count that is not the job's canonical one is a **conviction**
+(`StepLeafCountNotCanonical`), decided after those refusals. The narrowed leaf's index space (check 2) is the
+claim's one step tree, stage-major (`NotTheNarrowedLeaf`). In check 4 the lanes are taken in order and for each
+the interval is judged before the bytes; the first failing lane decides; a lane count that is not the tile's is
+a refusal (`LaneCount`) after both proofs, and a step tile whose lane count is not the leaf's is
+`LeafNotProven`. **Check 3 hashes the disclosed lanes as committed** (finding G21, §15.14): a step tile whose
+lane lies outside the node's dtype — an `i16` node's 32,768 — proves under its stage's root like any other and
+check 4 convicts it (`TirValueOutsideProvenInterval`); it is never `LeafNotProven`, which convicts nobody.
 
 An output close needs no recomputation, and no weight: it is a statement about two things the executor
 committed. A claim whose step tree is honest and whose canonical output is not has no divergent leaf for a
@@ -2614,6 +2638,20 @@ A leaf binds neither its dtype nor its `first_element` (both follow from the coo
 layout), and a stage root binds the stage index and the leaf count, so a stage's tree can be neither
 relabelled nor cut. A leaf's authentication path is its siblings bottom-up, one for every level at which
 its node has a sibling.
+
+**The hash is total over the lanes** (finding G21, decided 2026-10-01). A lane is the value's low 32 bits
+whether or not the node's dtype contains it, and a leaf's hash is over the lanes as they were committed and
+are disclosed: a leaf with a lane outside its node's dtype (an `i16` node's 32,768 or −32,769, an `i8`'s 128,
+an `idx`'s −1) opens, proves under its stage's root and is convicted by PALW-TIR-33's interval check, like any
+lane outside the proven interval. This is not optional. The executor hashes its own tree with its own code, so
+a hash that refused such a lane would make the leaf **unprovable** and let the executor commit one and escape
+(`LeafNotProven` convicts nobody). Every court path therefore reads the disclosed lanes without judging them
+(`palw_tir_lane_values_v1`) and hashes them as committed (`palw_tir_lanes_wire_v1`); only the IR builder's
+strict encoding (`palw_tir_lanes_le_v1`: an honest producer's fail-closed construction) refuses a lane outside
+its dtype. The hash of every in-dtype lane is what it always was, so no root and no golden moves. A challenger
+whose accused leaf holds such a lane files the leaf alone: the cone close of a leaf with a lane outside its
+interval carries no operand, param or image, because the court convicts on PALW-TIR-33 before it reads one
+(`palw_gen_interval_conviction_close_v1`).
 
 **The tree's enumeration**, per stage, per position `a` in `0 … trip − 1`:
 
