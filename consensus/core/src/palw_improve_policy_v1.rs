@@ -80,9 +80,10 @@ pub fn palw_improvement_jobs_per_subject_v1(eval: &PalwEvalSpecV1, pairwise: boo
     jobs
 }
 
-/// **The policy check** (spec 17 §17.4.3): `Err` names the first rule a policy breaks. `lifecycle` is the
-/// ruleset's unchallenged claim lifecycle bound (`palw_improvement_claim_lifecycle_v1`, mirrored in the state params): `Some`
-/// asks rows 19 and 20, which hold the epoch's windows to it; `None` — a fixture that does not set it — does not.
+/// **The policy check** (spec 17 §17.4.3): `Err` names the first rule a policy breaks. `lifecycle` is `Λ`, the ruleset's fast
+/// honest claim path at the DAA the policy is applied (`PalwStateParamsV2::improve_lifecycle_at`: the anchor slot, the licence
+/// allowance and the challenge window in force): `Some` asks rows 19 and 20, which hold the epoch's windows to it; `None` — a
+/// fixture that does not set it — does not.
 pub fn palw_improvement_policy_check_v1(
     policy: &PalwImprovementPolicyV1,
     ceilings: &PalwImprovementCeilingsV1,
@@ -290,12 +291,13 @@ pub fn palw_improvement_policy_check_v1(
     if e.seat_pool_permille > ceilings.max_eval_seat_permille {
         return Err("seat_pool_permille is at most the network's max_eval_seat_permille");
     }
-    // 19, 20: the epoch's windows against the ruleset's unchallenged claim lifecycle (RFC-0004 §13 as decided 2026-09-30,
-    // refined the same day: the court window is not in it — a claim not Final at the decision is a missing evaluation).
+    // 19, 20: the epoch's windows against the ruleset's fast honest claim path Λ (RFC-0004 §13 as decided 2026-09-30 and
+    // corrected 2026-10-01: neither the receipt deadline nor the court window is in it — a claim not Final at the decision is a
+    // missing evaluation).
     if let Some(lifecycle) = lifecycle {
         if w.court_margin < lifecycle {
             return Err(
-                "court_margin is shorter than the ruleset's unchallenged claim lifecycle (anchor, licence and finalization): a claim accepted late could never reach Final in time",
+                "court_margin is shorter than the ruleset's fast honest claim path (anchor, licence allowance and challenge window): a claim accepted late could never reach Final in time",
             );
         }
         if judged && w.w_eval <= w.beacon_delay.saturating_add(lifecycle).saturating_add(PALW_IMPROVE_MIN_CLAIM_WINDOW_DAA_V1) {

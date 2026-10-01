@@ -176,14 +176,17 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 
 | Space | Reserved | Last used before |
 | --- | --- | --- |
-| `PalwCourtVerdictProofV2` tags | 13 `EvalCone`, 14 `EvalDecodeToken`, 15 `EvalDissection` (the evaluation lane's: an evaluation claim's court moves carry its `PalwEvalBindingV1` and composite parameter openings); **16 `GenOutputTile`** (RFC-0003's tensor claim's output close — it first took 13, the next positional number, and moved here on the coordinator's decision of 2026-10-01; the enum carries its discriminants explicitly, `#[borsh(use_discriminant = true)]`, so a variant declared before it never renumbers it); 17 and up free | 12 (`GenDissection`, RFC-0003); 16 is RFC-0003's, after the reserved range |
+| `PalwCourtVerdictProofV2` tags | 13 `EvalCone`, 14 `EvalDecodeToken`, 15 `EvalDissection` (the evaluation lane's, defined in §17.8.6: an evaluation claim's court moves carry its `PalwEvalBindingV1` and composite parameter openings); **16 `GenOutputTile`** (RFC-0003's tensor claim's output close — it first took 13, the next positional number, and moved here on the coordinator's decision of 2026-10-01; the enum carries its discriminants explicitly, `#[borsh(use_discriminant = true)]`, so a variant declared before it never renumbers it); 17 and up free | 12 (`GenDissection`, RFC-0003); 16 is RFC-0003's, after the reserved range |
 | `PalwStepFaultV1` discriminants | 22 and up | 21 (`TirOutputDigestMismatch`, RFC-0003) |
 | `PalwDaUnitV1` tags | 5–6 for Phase F's pipeline-claim units (step leaf, step node; an evaluation claim has no rows unit), 7 spare | 4 (`TirRowNode { level, index }`, the second IR fence's) |
 | `PalwDaAnswerV1` tags | 7 and up for the pipeline-claim answers (the out-of-range proof is an answer of tag 5's shape, generic over the claim kind) | 6 (the row node's answer, after `TirStepOutOfRange` 5) |
 
 Evaluation jobs are RFC-0003 pipeline jobs, adjudicated by the courts that already exist. A new proof
-or fault is added only if A6/A7 show one is needed, and takes the next number here. Object tag 91 and
-up, court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
+or fault is added only if A6/A7 show one is needed, and takes the next number here. A6 needed three proofs
+(13–15, §17.8.6) and one object for the history dissection of a claim (`CourtEvalRootClaimed`, the evaluation
+analogue of `CourtGenRootClaimed`, §17.8.6.3), assigned tag 89 at the integration. The one-move accusation of an
+evaluation claim is **not** a new object: it is `TirShardCourtAccused` (62) carrying proof 13 or 14. Object tag 91
+and up, court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
 object tags 83–90 are allocated above): a lane asks the core lane before taking one.
 
 ### The fence
@@ -197,7 +200,7 @@ object tags 83–90 are allocated above): a lane asks the core lane before takin
 | Value bytes | `scoring_set_id` (64) ‖ `sign_table_id` (64) ‖ LE u16 `court_version` ‖ u8 `max_candidates_per_epoch` ‖ LE u32 `max_items_per_epoch` ‖ LE u64 `max_eval_positions_per_epoch` ‖ LE u16 `max_eval_budget_permille` ‖ LE u32 `max_governed_lines` ‖ LE u32 `max_policy_bytes` ‖ LE u32 `max_open_epochs` ‖ LE u32 `max_live_results` ‖ LE u16 `max_eval_seat_permille` (appended last, 2026-09-30) |
 | Normaliser | `Some(never())` collapses to `None`; `for_each_fence` visits the activation only |
 | Fork id | listed in `palw_fences_v1` as `("palw_improvement_v1", activation)` |
-| Mirror | `PalwStateParamsV2::improve_from_daa`, `improve_ceilings` and `improve_lifecycle_daa` (borsh-skipped; the last is the ruleset's claim lifecycle bound, §17.4.3 rows 19–20), written by `Params::sync_palw_improvement_v1` only |
+| Mirror | `PalwStateParamsV2::improve_from_daa`, `improve_ceilings` and `improve_lifecycle_base_daa` (borsh-skipped; the last is the DAA-independent part of the ruleset's claim path `Λ`, §17.4.3 rows 19–20), written by `Params::sync_palw_improvement_v1` only |
 | Drill | `--palw-drill-improve-at` (`palw_drill_improve_fence_at_v1`, list `PALW_DRILL_IMPROVE_FENCES_V1`, ceilings `PALW_DRILL_IMPROVE_CEILINGS_V1`); armed after `--palw-drill-tir-at`, `--palw-drill-tir2-at`, `--palw-drill-gen-at`, `--palw-drill-fence-at` and `--palw-drill-decode-rules-at`, its prerequisites |
 | Format caps | candidates ≤ 16, items ≤ 4,096 per epoch, positions ≤ 2^40 per epoch, budget ≤ 1,000 ‰, lines ≤ 1,024, policy ≤ 16,384 bytes, open epochs ≤ 64, **live results ≤ 2^17**, **seat share ≤ 1,000 ‰** (zero allowed: no seat share); the others none zero. `max_live_results` is the product bound every block's root rehash pays: an epoch reserves `(n + regression_items + safety_items) × (k_max + 2)` result rows when it opens (the policy check refuses a policy whose epoch could never fit), and frees them when its results retire; an epoch opens only if the reservation fits. The drill's ceilings are (8, 1,024, 2^32, 500, 64, 16,384, 8, 2^14, 500) |
 | Prerequisites | a `ConsensusV2` ruleset (checked first); `palw_audit_2026_09_11` declared; `palw_tir_v1`, **`palw_tir_fence2`**, `palw_gen_v1` and `palw_kary_court` in force at or below the activation (the second IR fence since 2026-09-29: every evaluation pipeline sized under H7, and no verdict may flip mid-epoch); and **`palw_fp_decode_rules`** in force at or below it too — the integration's decision of 2026-10-01, resolving **[decision A6-1]** (required, as `palw_fp_job_v5` requires it): an evaluation's generated text is a decode under the network's sampler rules (ADR-0082 D10/D11, §17.8.4), the header-context door refuses an evaluation claim below them, and an epoch must not open on rules that arm mid-epoch (without the requirement every such epoch would end `NoChange`). The decode rules carry their own dormant testnet-12 flag-day list (`PALW_T12_DECODE_RULES_FENCES_V1`, height `PALW_T12_DECODE_RULES_DAA`, `None` until the user sets it) and drill flag (`--palw-drill-decode-rules-at`, `palw_drill_decode_rules_at_v1`). |
@@ -448,23 +451,44 @@ A policy is refused by name unless every check below holds. `C` is the fence's `
 | 16 | `teacher_classes ≠ 0` and within the six defined bits; `\|licence_classes\| ≤ 32`, without duplicates; `base_licence_class ≠ 0` |
 | 17 | `1 ≤ vest_epochs ≤ 64`; `rollback_epochs ≤ 16`; `ban_epochs ≤ 256` |
 | 18 | `seat_pool_permille ≤ C.max_eval_seat_permille` (§17.11.2) |
-| 19 | **`court_margin ≥ Λ`**, where `Λ` is the ruleset's unchallenged claim lifecycle (below) [decision, 2026-09-30, refined the same day]: a claim accepted in the epoch's last DAA before `t_eval` and left unchallenged could not otherwise reach `Final` before `t_score` |
-| 20 | **a judged policy** (a Judge or Pairwise stage): `w_eval > beacon_delay + Λ + 32` — a judge reads FINAL generations, so the epoch evaluates in two rounds (generations, then judged parts), each needing the unchallenged lifecycle |
+| 19 | **`court_margin ≥ Λ`**, where `Λ` is the ruleset's fast honest claim path (below) [decision, 2026-09-30, corrected 2026-10-01]: a claim accepted in the epoch's last DAA before `t_eval` and left unchallenged could not otherwise reach `Final` before `t_score` |
+| 20 | **a judged policy** (a Judge or Pairwise stage): `w_eval > beacon_delay + Λ + 32` — a judge reads FINAL generations, so the epoch evaluates in two rounds (generations, then judged parts), each needing the fast honest path |
 
-`Λ = anchor_delay + window_receipt + max(window_challenge, the short challenge window where scheduled)` — the
-**unchallenged finalization path** under the ruleset's own windows: the anchor slot that binds the claim's panel,
-the receipt window in which the panel licenses it, and the challenge window it finalizes after. **The court
-window is not in it** [coordinator's refinement, 2026-09-30]: bounding the epoch by a dispute's whole course (≈ 4.8k
-DAA with the 3,000-DAA court window) would make epochs days long and refuse every practical policy, and a
-claim that is not `Final` at the decision point is simply *missing* — the missing-evaluation rule (§17.9.1)
-gives its item to the incumbent. A court that convicts such a claim later still slashes it (the claim rules,
-independently of the epoch's decision); a conviction before the decision also voids the claim, which frees its
-job and keeps its score out of the sign test (§17.8.6). `Λ` is computed from the ruleset
-(`palw_improvement_claim_lifecycle_v1`) and mirrored in the state parameters (`improve_lifecycle_daa`). Rows 19
-and 20 are asked at policy registration where the mirror is set (every ruleset that arms the fence); a policy
-they refuse is unworkable on this ruleset and is refused by name. *The "submission" window the coordinator's
-decision lists is read as the window evaluation claims are submitted in, `w_eval − beacon_delay` — the one
-window of the epoch in which a claim is submitted; `w_submit` holds no claim and is not held to `Λ`.*
+```
+Λ = anchor_delay + A + max(C, 120)         A = min(window_receipt, 30)          C = the challenge window in force
+```
+
+`Λ` is the **fast honest path** of an evaluation claim from its acceptance to `Final` [the coordinator's correction,
+2026-10-01]: the anchor slot that binds the claim's panel (`anchor_delay`), a **licence allowance** `A`, and the challenge
+window it finalizes after (`window_challenge_at(licence DAA)`: the 120-DAA short window where it is in force, the long window
+before it; never less than 120). **Neither deadline is in it**: `window_receipt` is the time a panel has before an unlicensed
+claim is voided, not the time an honest claim needs, and the court window belongs to a dispute (≈ 4.8k DAA with the 3,000-DAA
+court window would make epochs days long and refuse every practical policy). On testnet-12 and its drills (anchor 20,
+receipt 600, challenge 1,200 with the short window in force from genesis) `Λ = 20 + 30 + 120 = 170` DAA, not the 1,820 the
+deadlines made it; with the long window in force `Λ = 1,250`; on the devnet windows (anchor 4, receipt 40, challenge 100)
+`Λ = 4 + 30 + 120 = 154`.
+
+*The licence allowance* is one fixed ruleset constant, `PALW_IMPROVE_LICENCE_ALLOWANCE_DAA_V1 = 30` DAA, not a policy field.
+It is the time the drawn seats need to replay a job of at most 4,096 positions and for the quorum's receipts to ride a
+block — an hour at the 120-second cadence: minutes of replay and a few blocks of assembly, above the derived verification
+floor of the registry's smallest classes (10 DAA) and a twentieth of the receipt window; a ruleset whose receipt window is
+shorter gives the window (nothing is licensed later). A constant keeps the policy format unchanged and the check a pure
+function of the ruleset; a field would let an owner shorten `Λ` below any honest claim's reach, and nothing in a policy can
+make a seat faster. A class whose registry deadline `D(c)` (ADR-0152 §4-quater) is longer than the allowance finalizes later
+than `Λ`: its late claims are missing evaluations and its line's owner sets a longer `court_margin` — **the check holds only
+the minimum**.
+
+**A short `Λ` costs only late claims, never safety.** A claim that is not `Final` at the decision point is a *missing*
+evaluation — the missing-evaluation rule (§17.9.1) gives its item to the incumbent — and a court that convicts such a claim later
+still slashes it (the claim rules, independently of the epoch's decision); a conviction before the decision also voids the
+claim, which frees its job and keeps its score out of the sign test (§17.8.6). `Λ` is asked **at the DAA the policy is
+applied** (`PalwStateParamsV2::improve_lifecycle_at`: the mirror `improve_lifecycle_base_daa` = `anchor_delay + A`, written by
+`Params::sync_palw_improvement_v1`, plus the challenge window in force): a fence that only shortens the window can only shorten
+`Λ`, so a policy that held it when applied holds it ever after. Rows 19 and 20 are asked at policy registration where the
+mirror is set (every ruleset that arms the fence); a policy they refuse is unworkable on this ruleset and is refused by name.
+*The "submission" window the coordinator's decision lists is read as the window evaluation claims are submitted in,
+`w_eval − beacon_delay` — the one window of the epoch in which a claim is submitted; `w_submit` holds no claim and is not held
+to `Λ`.*
 
 ### 17.4.4 Opting out [E6]
 
@@ -820,7 +844,8 @@ subject, kind)`, and the claim is the evaluation lane's job row's.
 | Judge | the judge's margin `LL(verdict_a) − LL(verdict_b)` on the subject's output, in Q24 nats, clamped to the stage's `[lo, hi]` (§17.8.5) |
 | Pairwise | the outcome from the candidate's side: **+1** when the sum of the judge's two margins (both orders shown, §17.8.5) exceeds the stage's `margin`, **−1** otherwise — a tie goes to the incumbent, so it is never 0 |
 
-A second score for the same `(item, subject, kind)` is refused. A score is taken only while the epoch
+A second score for the same `(item, subject, kind)` is refused (a score that stands: a convicted claim's
+score is taken back out, §17.8.6, and the job's next claim records its own). A score is taken only while the epoch
 is `Evaluating` or `Closing`, for an item it drew and a subject it evaluates, and only inside its
 kind's range [D6]: ExactMatch 0 or 1; Pairwise −1, 0 or 1; Judge inside a Judge stage's `[lo, hi]`;
 RefLogLik any `i64`. A score outside it is refused by name, so the one outcome function (§17.9.1)
@@ -1010,8 +1035,10 @@ evaluate and can never make a promotion. The pieces of the lane are consistent w
 - *courts*: a court that convicts a claim slashes it by the claim rules (`claim.reserved`, §17.8.4 above, the
   swing lock) independently of the epoch's decision, whenever it rules; before the decision it also voids the claim,
   which frees the job while the epoch still takes claims and keeps the score out of the sign test (§17.8.6).
-The policy's windows hold the *unchallenged* path (§17.4.3 rows 19–20): an honest claim accepted before `t_eval`
-finalizes by `t_score`; a challenged one may not, and is then a missing evaluation by the rule above.
+The policy's windows hold the *fast honest* path `Λ` (§17.4.3 rows 19–20: the anchor slot, a 30-DAA licence allowance and the
+challenge window in force — 170 DAA on testnet-12): an honest claim that is licensed within the allowance and unchallenged,
+accepted before `t_eval`, finalizes by `t_score`; a slower or challenged one may not, and is then a missing evaluation by
+the rule above. A short `Λ` costs only late claims, never safety.
 
 ### 17.8.5 Judged scores (A6) [decision, 2026-09-30]
 
@@ -1047,10 +1074,179 @@ response is better / the second-shown is) and the judge's logit scale.
 - **Missing parts.** A judged score with a part unclaimed or not final is missing: it counts for the incumbent
   (§17.9.1). A claim's reading needs final generations, so an item with no final generation of the subject
   (or, for Pairwise, the parent) has no judged score.
+- **A reversed generation** [decision, 2026-10-01, E-C6]. The parts read FINAL generations, and the score is combined
+  only while those generations still are what the parts read: each is a held `Final` claim and every part was accepted
+  at or after the newest of them was final. A generation convicted after `Final` (§17.8.6) takes the judged scores
+  recorded over it out of the epoch, and the parts that had read it and finalize later record nothing — whether the
+  generation is claimed anew or not. Their executors were honest and are paid their fee; the item is missing for the
+  incumbent (a part, once final, is not claimed again).
 
-### 17.8.6 The evaluation court
+### 17.8.6 The evaluation court (A6) [coordinator's priority addition, 2026-09-30]
 
-*Reserved for the evaluation court (proofs 13–15, §17.0): added with its implementation.*
+An evaluation claim is an RFC-0003 *pipeline claim* whose pipeline the chain derives (the subject's program as
+stage 0, the scoring library's stages after it; §17.8.4), so the court that judges it is the generative court's —
+its leaf adjudication, decode door and F7 dissection — over the evaluation's own context
+(`palw_improve_eval_context_v1`) instead of a registered pipeline class's row. Without it a lying evaluation claim
+would only block its job until the epoch's decision; with it a lie is convicted, slashed and voided like any other
+claim's. Everything here is dormant below `palw_improvement_v1`. The proofs and their checks are
+`palw_improve_eval_court_v1`; their adjudication is `palw_court_v2`'s; the accusation is `palw_tir_one_move_v1`'s;
+the effects are the fold's (`palw_improve_eval_fold_v1`, and the claim rules it calls).
+
+**What an executor can lie about.** The fold verified at acceptance everything it can see (§17.8.4): the job
+against the item, the subject and the policy, the prompt, a teacher-forced job's ids, a judged part's reading, the
+roots against the tail, the leaf count against the closed form, the layout against the class's id. What it cannot
+see is the *execution* — the step tree's leaves, the decode's selections and the score — and those are the court's,
+through three proofs. The three faults the coordinator named map onto them:
+
+| Fault | Proof | How it is convicted |
+| --- | --- | --- |
+| a wrong **score at an item** | `EvalDecodeToken { Score }` when the tree is honest and the committed score is not its output; `EvalCone` when the lie is in the tree (the likelihood's sum, the logits it reads, the subject's weights) | `TirOutputDigestMismatch` at the first wrong lane; `ComputationMismatch` at the lie's leaf |
+| a wrong **decode** (a generated id, or a judged part's output) | `EvalDecodeToken { Token }`: the id against the committed logits row it was selected from; `EvalCone` on a leaf of the stream | `DecodeTokenMismatch` at the position |
+| a wrong **binding to the item or the candidate** | the fold, at acceptance, for the job, the prompt, the reference, the subject's class and the reading of a judged part (§17.8.4); the cone, for the *weights* — a tree run over other weights than the class's artifact has a leaf its cone cannot reproduce from the class's proven parameters, and the prompt's content — a leaf that read other ids than the binding's prompt | `ComputationMismatch` at the first such leaf |
+
+| Tag | `PalwCourtVerdictProofV2` | Payload | What it proves |
+| --- | --- | --- | --- |
+| 13 | `EvalCone { close }` | `PalwEvalConeCloseV1 { version, binding, prompt_ids, disputed, operands, params }` | one step leaf of the claim's tree — the one the accusation names — is not what its cone computes from the leaves before it, the subject's proven parameters, the job's facts and `R`; or a value of the cone lies outside its node's proven interval (PALW-TIR-33) |
+| 14 | `EvalDecodeToken { close }` | `PalwEvalDecodeCloseV1 { version, binding, output }`, `output = Token { t, row } \| Score { tiles }` | the claim's COMMITTED OUTPUTS against what they were read from: a generated id `t` is not what FP Job V4's rules select from the committed logits row it was read from (a generating job), or the committed score lanes are not the score stage's committed output tile (a scoring job or a judged part) |
+| 15 | `EvalDissection { bottom }` | `PalwEvalConeCloseV1` | the bottom of an F7 history dissection at a leaf whose cone reduces over the history (§17.8.6.3), graded against its session's phase |
+
+Tags 13–15 are appended after `GenDissection` (12), so no earlier discriminant moves; an older build cannot decode
+them and skips them (A-2). `PalwEvalParamsV1` carries the subject's parameters: `Single(openings)` — whole
+inventory leaves, ascending, each with its path to the class's `artifact_root` — or, for a composite candidate
+(RFC-0004 §6.3), `Composite { artifact, parent, adapter }`: the reference (it must hash to the class's artifact root,
+so the court believes nothing it was not given), the parent section's leaves under `parent_root` at their own indices
+and the adapter section's under `adapter_root`, rebased by the split. A close carries the prompt exactly when the
+disputed stage reads it (and then it is the binding's, by its root and length); a dispute elsewhere reveals none.
+
+**The binding is the chain's** (`verify_eval_binding_v1`). A close carries a `PalwEvalBindingV1` (§17.8.4) and the
+court holds it to the claim and the chain before reading anything else: its job is the job table's row for the claim
+(`improvement_eval_jobs`: the row's claim is *this* claim, by execution root, bond and accepting DAA, so a close of
+one claim never convicts another), its class the claim's, its parts hash to the claim's `execution_root`, its stage
+roots to the claim's `trace_root`, its ids to the claim's `output_root`, its leaf count is the claim's
+`work_leaves`, its layout is the one the class id binds (`layout_digest`); the context is then derived from the job,
+the class row's canonical program and the binding's own stage parameters (committed in the root, §17.8.4: a court
+derives the context from what the claim bound, whatever the policy says later), the stage roots are the pipeline's
+count, and the job's facts and step space — with the prompt carried exactly where read, and zeros of its length
+elsewhere — must have the claim's leaf count. The class's program is the chain's (`tir_classes`), never the close's.
+
+**Adjudication.** `adjudicate_close_proof_v2` dispatches the three proofs (`adjudicate_eval_close_v1`): the verdict is
+`ExecutorGuilty` for a conviction and `ChallengerDefeated` for an acquittal; a close that is not the claim's, or that
+the court cannot evaluate, adjudicates *nothing* (`DoesNotAdjudicate`: refused, nobody convicted). A decode close under
+the court door convicts or is refused, never acquits (`palw_decode_close_verdict_v1`); a close in a session must open
+the leaf the ladder narrowed to (a cone close) or one of the tiles it concerns (a decode close). A close is priced by
+its own encoding against the court's `max_close_bytes` (`CloseTooLarge`), like every pipeline close. A conviction's
+evidence id is `H(execution_root, 0x49, leaf, fault)` (kind `0x49`; the generative court's is `0x47`).
+
+**The accusation.** On a ruleset whose court plays no bisection (the held regime; testnet-12) an evaluation claim is
+accused **in one move**, by the object the IR claims use — `TirShardCourtAccused` (tag 62, `PalwTirOneMoveAccusationV1`,
+unchanged: no new object and no new tag) — carrying an evaluation close proof (`EvalCone` or `EvalDecodeToken`) in place
+of an IR one. The object is
+`{ version = 1, claim, execution_root, trace_root, executor_bond, accuser_bond, verdict, proof, signature }`, built
+with `palw_tir_one_move_accusation_v1` and signed by the accuser's ML-DSA-87 over `palw_tir_one_move_session_id_v1` (the
+network domain, every field and the proof's digest: an accusation cannot be re-attributed, re-targeted or re-filled).
+The checks, in the order the acceptance layer runs them:
+1. `palw_tir_v1` and `palw_improvement_v1` are in force at the block (an evaluation proof below the second is dropped
+   by the acceptance walk by name, first and charged nothing, and refused at the gate);
+2. the object's shape: version 1; a signature; the proof's binding speaks about the roots the accusation names (the
+   binding's `committed_execution_root` is `execution_root` and its step root is `trace_root`); the executor is not the
+   accuser;
+3. the accuser's bond exists and signed the session id;
+4. the claim is the chain's own claim of an IR class, its executor and roots the accusation's;
+5. the verdict the proof produces under this block's court (`palw_tir_one_move_outcome_v1`) is the verdict the
+   accusation *declares* — refused in either direction, so a challenger cannot claim a conviction its proof does not
+   support, and cannot be charged for one it could have had. Under the held regime a cone accusation at a leaf whose
+   cone reduces over the history opens a dissection instead (§17.8.6.3) and declares `ExecutorGuilty`.
+
+The fold repeats what it can see (it is the second lock): the fence; a live claim (a claim already `Final` or voided is
+`WrongPhase`: the court's window is the claim's path to `Final`); an *evaluation proof accuses an evaluation claim of
+the job table* (`ImprovementObjectRefused`, by name, on any other claim); the executor and the roots the claim's; an
+accuser that is not the producer, an Active bond at or above the floor; then the effects below. The challenger replays
+the claim's job — the chain derived its context, so executors choose nothing — and files the first close the court
+convicts on (§17.8.6.1).
+
+**Effects.** *`ExecutorGuilty`* convicts the claim by the claim rules (`convict_by_court_verdict_v1`): the claim is
+voided `CourtFraud` and `claim.reserved` is slashed — for an evaluation claim that is the swing lock (§17.8.4), so a
+forged score costs at least what it could pay — with the accuser its challenger (the conviction record and the
+reporter's reward are the claim rules'). *`ChallengerDefeated`* charges the accuser what a false accusation costs
+(`min(claim.reserved, floor)`, as an IR one is charged) and leaves the claim standing: an honest claim is untouched, and
+an acquittal changes nothing about it.
+
+**The sign test.** A convicted claim leaves the epoch by construction, never by a special case:
+- *before `Final`* (the usual case: the court rules inside the claim's path to `Final`, which an open dissection also
+  freezes) the claim is voided, so it records no score (a score is recorded only at `Final`, §17.8.3) and holds no job:
+  open claiming frees the job (§17.8.4), a live claim of it by another executor is accepted while the epoch still takes
+  claims, and `improvement_eval_pending_v1` counts live claims only — so a convicted score is *excluded from the sign
+  test* and the item counts for the incumbent if no honest claim takes the job before `t_eval` (§17.9.1);
+- *after the epoch's decision* the conviction still slashes and voids the claim by the claim rules, independently of
+  the epoch, which no later event reopens: the claim was not `Final` at the decision, so it was a missing evaluation
+  (§17.8.4, late claims) and the decision stands;
+- *a convicted `Final` claim* (a conviction that reaches a claim past `Final` by another path than this court's
+  one-move) takes its score back out while the epoch still takes scores (`Evaluating`, `Closing`) and frees its job
+  (`note_improvement_eval_reversed_v1`, from `reverse_convicted_final`): the item is then missing for that subject. A
+  convicted *generation* also takes out the judged scores that read it — a Judge score of the subject, and for the
+  parent's generation every Pairwise score of the item (§17.8.5) — because a judge's honest pass over a dishonest
+  output is no evidence of anything; a missing score favours the incumbent, so this is the conservative direction.
+  An epoch already decided is not reopened.
+
+**Gating.** Below `palw_improvement_v1` every evaluation proof is dropped by the acceptance walk by name, first and
+charged nothing (an older build cannot decode it and skips it), the processor's gates refuse it, and the fold refuses it
+as the second lock; above it, the claim must be an evaluation claim of the job table. A close whose
+job-table row holds another claim adjudicates nothing (`DoesNotAdjudicate`).
+
+#### 17.8.6.1 First divergent leaf
+
+A challenger holding the accused execution's trace (the claim's data-availability units, §17.0 tags 83–85) replays the
+claim's job and compares leaf by leaf, in the claim's one order (stage-major): the first leaf that differs is the
+*first divergent leaf* — every leaf before it matches the accused tree, so its cone is provable from authenticated
+operands — and the close at it is the proof the one-move accusation files
+(`palw_eval_first_divergent_leaf_v1` finds it; a leaf the accused cannot open counts as a divergence there: the accused
+withholds it, a data-availability matter). A divergence only at the *last* output (the
+score, or an id) with an honest tree under it shows as no divergent leaf: the claim's tail `score` differs from the
+score stage's output tile, or a committed id from the row it was selected from, and the close is the decode close.
+
+#### 17.8.6.2 Builders
+
+`PalwEvalEvidenceV1` builds every close from an executor's run — `cone_close(index)`, `named_leaf_close(index)`,
+`decode_close(t)`, `score_close()`, `root_claim(index)`, `round(phase)`, `bottom(phase)` — each carrying exactly the
+units the court's evaluation reads (the builders record them), the subject's parameters per leaf with their paths and,
+for a composite candidate, per section. Executors, accusers and the tests build their moves through it. The accused
+execution's leaves are read through `PalwEvalLeafStoreV1` (a whole run, or whatever a challenger holds of one from the
+claim's data-availability units).
+
+#### 17.8.6.3 Dissection
+
+A leaf whose cone reduces over the history (a subject's attention) is never tried whole under the held regime (it
+costs `O(H)`): it is argued by F7's dissection, as a generative claim's is. The accusation there is a cone
+accusation that *names* the leaf and carries nothing else (`PalwEvalEvidenceV1::named_leaf_close`: the binding and the
+disputed leaf with its path under its stage's root, `palw_eval_named_dissected_leaf_v1`); it opens a session at
+`Terminal` on that leaf (`NeedsDissection`) and declares `ExecutorGuilty`. The session then plays F7:
+- `CourtEvalRootClaimed` — the responder's root claim (`PalwEvalRootClaimV1`: the elements the finalize demands, their
+  totals over the history, and the finalize carried as an evaluation cone close), signed by the claim's bond under the
+  ADR-0082 responder context over `palw_eval_root_claim_message_v1`. The acceptance layer admits it only if the finalize
+  reads the committed leaf exactly as claimed (`check_eval_root_claim_v1`, at the court's limits) and the declared arity
+  is the ruleset's; the fold derives the site from the class's program and the job's trips
+  (`palw_eval_root_claim_site_v1`, never the mover's word) and opens F7's phase;
+- the rounds and the choices are F7's own objects (`CourtTirDissected`, `CourtTirChildChosen`), verbatim;
+- `CourtClosed { EvalDissection }` — the bottom, graded against the session's phase
+  (`palw_gen_check_dissect_bottom_with_v1` over the evaluation's context), convicting where the responder's totals lie
+  and acquitting where they hold.
+
+`CourtEvalRootClaimed` is **object tag 89** (§17.0's allocation of 2026-10-01, declared with an explicit
+discriminant). It is a dissection move (the k-ary court's fence), carries no heartbeat, and is
+dropped by name below `palw_improvement_v1`.
+
+**Records** [decision, 2026-09-30/10-01]. *E-C1*: no new accusation object; the evaluation accusation is
+`TirShardCourtAccused` carrying proof tags 13/14. *E-C2*: an evaluation proof accuses an evaluation claim of the job
+table and no other (refused by name). *E-C3*: the binding is the chain's (job table row, class row, layout digest);
+no close carries a program or a policy. *E-C4*: a close is priced by its own encoding. *E-C5*: a conviction slashes the
+swing lock; a false accusation is charged `min(reserved, floor)`. *E-C6*: a convicted `Final` claim retracts its
+score — and the judged scores that read a convicted generation — while the epoch takes scores (conservative: missing
+scores favour the incumbent). *E-C7*: a claim is beyond the one-move court once `Final`; a later conviction by another
+path is E-C6's. *E-C8*: an evaluation dissection's verdict is recorded as an IR dissection's — `CourtHeldVerdict` past
+`palw_offence_attribution` (the bottom proves the responder's filings false, not necessarily the committed execution;
+charged the same). The rule is one predicate, `PalwCourtVerdictProofV2::is_dissection_bottom_v1` (attention, IR,
+generative and evaluation dissections), which the fold's close arm asks and no list of its own. *Open*: calibrating the false-accusation charge for evaluation claims, whose reservations are larger
+than an ordinary claim's, is D-M1's.
 
 ## 17.9 Promotion
 
@@ -1393,7 +1589,7 @@ acceptance order, and its items in item order (dropped ones included).
 
 ## 17.12 Rules
 
-These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 21–24 are new.
+These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 21–25 are new.
 
 - **PALW-MIP-1 (the method is free).** A candidate MUST NOT be required to have been produced by the
   VM, or by any particular method, tool or party.
@@ -1460,9 +1656,15 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
   bond and unspent escrow in full, and its fee less its share of the evaluation spend the fees funded
   (§17.10.3) [E21]; the balance MUST NOT go below zero.
 - **PALW-MIP-23 (the policy check).** A policy MUST satisfy every check of §17.4.3. `w_eval` MUST exceed
-  `beacon_delay` by more than 32 DAA, and the windows MUST hold the ruleset's claim lifecycle `Λ` (rows 19–20).
+  `beacon_delay` by more than 32 DAA, and the windows MUST hold the ruleset's fast honest claim path `Λ` (rows 19–20).
 - **PALW-MIP-24 (order).** Transitions due in one block MUST be applied before that block's objects,
   lines in `(next_due_daa, line_id)` order, and each line's transitions in §17.5.3's order.
+- **PALW-MIP-25 (the evaluation court).** An evaluation claim MUST be convictable by the court the claim rules
+  already use (§17.8.6). A close MUST be held to the claim and the chain — the job table's row, the class's program
+  and layout, the claim's roots — before anything else is read; an evaluation proof MUST accuse an evaluation claim
+  of the job table and no other; a convicted claim MUST be voided and slashed by the claim rules and MUST leave the
+  sign test (a score of it is never recorded, or is taken back while the epoch takes scores); an acquitted claim
+  MUST be untouched and its accuser charged.
 
 ## 17.13 Vectors (the plan)
 

@@ -864,7 +864,8 @@ pub(super) fn apply_improvement_policy_set_v1(
         return Err(policy_refused("the policy object's sequence is not the line's next"));
     }
     if let Some(policy) = &payload.policy {
-        palw_improvement_policy_check_v1(policy, &ceilings, builder.params.improve_lifecycle_daa()).map_err(policy_refused)?;
+        palw_improvement_policy_check_v1(policy, &ceilings, builder.params.improve_lifecycle_at(ctx.daa_score))
+            .map_err(policy_refused)?;
         if policy.eval.judge_set.iter().any(|judge| !builder.state.tir_classes.contains_key(judge)) {
             return Err(policy_refused("a judge is not an admitted IR class"));
         }
@@ -2740,6 +2741,64 @@ mod tests {
             Err(PalwStateV2Error::ImprovementPolicyRefused(why)) => Some(why),
             Err(other) => panic!("a policy refusal by name, got {other:?}"),
         }
+    }
+
+    /// **Rows 19-20 are asked against `Λ`, the fast honest claim path, at the DAA the policy is applied** (spec 17 §17.4.3,
+    /// corrected 2026-10-01): the anchor slot, the licence allowance and the challenge window in force — 170 DAA on
+    /// testnet-12 (the 120-DAA short window from genesis), 1,250 where the long window is still in force at that DAA — and a
+    /// judged policy's `w_eval` must exceed `beacon_delay + Λ + 32`. A window that arms between two applications shortens `Λ`
+    /// for the later one only.
+    #[test]
+    fn a_policys_windows_are_held_to_the_fast_honest_claim_path_at_the_daa_it_is_applied() {
+        let g = genesis();
+        let refusal = |p: &PalwStateParamsV2, daa: u64, edit: &dyn Fn(&mut PalwImprovementPolicyV1)| {
+            let mut pol = policy();
+            pol.windows.grid = 6_000;
+            edit(&mut pol);
+            let extras = PalwTransitionExtrasV1::default();
+            let mut b = TransitionBuilder::new(&g, p, false, false, false, false, &extras);
+            match apply_improvement_policy_set_v1(&mut b, &ctx(daa), &set(LINE, 1, Some(pol))) {
+                Ok(()) => None,
+                Err(PalwStateV2Error::ImprovementPolicyRefused(why)) => Some(why),
+                Err(other) => panic!("a policy refusal by name, got {other:?}"),
+            }
+        };
+        let margin = |court_margin: u64| move |pol: &mut PalwImprovementPolicyV1| pol.windows.court_margin = court_margin;
+        // Testnet-12: anchor 20 + allowance 30 + the short window 120.
+        let t12 = params().with_improve_lifecycle_base(Some(50));
+        assert_eq!(t12.improve_lifecycle_at(600), Some(170));
+        assert!(refusal(&t12, 600, &margin(169)).is_some_and(|why| why.contains("court_margin")), "one DAA short of Λ");
+        assert_eq!(refusal(&t12, 600, &margin(170)), None, "Λ is enough");
+        assert_eq!(
+            refusal(&t12, 600, &|_| {}),
+            Some(
+                "court_margin is shorter than the ruleset's fast honest claim path (anchor, licence allowance and challenge window): a claim accepted late could never reach Final in time"
+            ),
+            "the example's 150 is under it"
+        );
+        // Where the long window is still in force at the application's DAA: 20 + 30 + 1,200.
+        let long = t12.clone().with_short_challenge_window_from_daa(Some(10_000));
+        assert!(refusal(&long, 600, &margin(1_249)).is_some_and(|why| why.contains("court_margin")));
+        assert_eq!(refusal(&long, 600, &margin(1_250)), None);
+        // The short window arms at 500: applied at 600 the policy holds Λ = 170, applied at 499 it would have held 1,250.
+        let later = t12.clone().with_short_challenge_window_from_daa(Some(500));
+        assert_eq!(refusal(&later, 600, &margin(170)), None);
+        assert!(refusal(&later, 499, &margin(170)).is_some());
+        // A judged policy reads two rounds: w_eval must exceed beacon_delay + Λ + 32 (10 + 170 + 32 = 212).
+        let judged = |w_eval: u64| {
+            move |pol: &mut PalwImprovementPolicyV1| {
+                pol.eval
+                    .stages
+                    .push(PalwScoringStageV1 { kind: PalwScoringKindV1::Judge, params: PalwScoringParamsV1::Judge { lo: -9, hi: 9 } });
+                pol.eval.judge_set = vec![h(JUDGE)];
+                pol.eval.judge =
+                    Some(PalwJudgeSpecV1 { template_dataset: h(0x71), verdict_a: vec![7], verdict_b: vec![8], logit_scale_q24: 4096 });
+                pol.windows.court_margin = 170;
+                pol.windows.w_eval = w_eval;
+            }
+        };
+        let rejected = refusal(&t12, 600, &judged(212));
+        assert!(rejected.is_some_and(|why| why.contains("w_eval")), "{rejected:?}: w_eval = beacon_delay + Λ + 32 is not enough");
     }
 
     /// **A suite names a registered public dataset, and a judge is a class that was never the head** (spec 17 §17.6.3,

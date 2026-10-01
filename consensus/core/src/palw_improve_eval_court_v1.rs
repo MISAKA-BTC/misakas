@@ -607,6 +607,45 @@ pub fn check_eval_dissect_bottom_v1(
 // An executor's evidence: every court move built from its own run
 // ---------------------------------------------------------------------------------------------
 
+/// **Where an evidence builder reads the accused execution's leaves**: a whole run ([`crate::palw_gen_worker_v1::PalwGenExecutionV1`],
+/// an executor's own), or whatever a challenger holds of one — leaf values and their paths under the stage roots the claim
+/// committed, from the claim's data-availability units (spec 17 §17.0, tags 83–85).
+pub trait PalwEvalLeafStoreV1 {
+    /// Leaf `index` of stage `stage`, opened with its path under its stage's root.
+    fn open_leaf(&self, stage: u8, index: u64) -> Option<crate::palw_gen_step_v1::PalwGenOpenedLeafV1>;
+}
+
+impl PalwEvalLeafStoreV1 for crate::palw_gen_worker_v1::PalwGenExecutionV1 {
+    fn open_leaf(&self, stage: u8, index: u64) -> Option<crate::palw_gen_step_v1::PalwGenOpenedLeafV1> {
+        self.open(stage, index)
+    }
+}
+
+/// **The first divergent leaf** (spec 17 §17.8.6.1): the first leaf, in the claim's one order (stage-major), at which the
+/// accused execution's committed values are not the honest replay's — `Some(global index)`, or `None` when every leaf
+/// matches (a lie that lives only in the committed score or the generated ids, over an honest tree, is the decode close's
+/// to convict, not a leaf's). A leaf the accused store cannot open counts as a divergence too: the accused withholds it,
+/// which is a data-availability matter. Every leaf before the first matches the accused tree, so the cone of the first is
+/// provable from authenticated operands: the close at it ([`PalwEvalEvidenceV1::cone_close`]) convicts.
+pub fn palw_eval_first_divergent_leaf_v1(
+    space: &PalwGenStepSpaceV1,
+    accused: &dyn PalwEvalLeafStoreV1,
+    honest: &crate::palw_gen_worker_v1::PalwGenExecutionV1,
+) -> Option<u64> {
+    let mut global = 0u64;
+    for (stage, sp) in space.stages.iter().enumerate() {
+        for index in 0..sp.leaves().len() {
+            let same =
+                accused.open_leaf(stage as u8, index as u64).is_some_and(|leaf| leaf.values == honest.leaf_values[stage][index]);
+            if !same {
+                return Some(global);
+            }
+            global += 1;
+        }
+    }
+    None
+}
+
 /// **An executor's evidence** — the claim's facts, its weights, its run, its binding and the item's prompt — from
 /// which it (or a challenger holding the same inputs) builds every court move, each carrying exactly the units the
 /// court's evaluation reads (the builders record them).
@@ -614,7 +653,8 @@ pub struct PalwEvalEvidenceV1<'a> {
     pub facts: PalwEvalClaimFactsV1<'a>,
     /// The subject's weights, as the evaluation pipeline reads them (program 0's; the scoring programs have none).
     pub params: &'a dyn misaka_palw_tir::pipeline::PipelineParams,
-    pub execution: &'a crate::palw_gen_worker_v1::PalwGenExecutionV1,
+    /// The accused execution's leaves: a whole run, or whatever a challenger holds of one ([`PalwEvalLeafStoreV1`]).
+    pub execution: &'a dyn PalwEvalLeafStoreV1,
     pub binding: &'a PalwEvalBindingV1,
     pub prompt: &'a [u32],
     /// The composite reference, where the subject is a composite candidate (RFC-0004 §6.3).
@@ -656,8 +696,9 @@ impl PalwEvalEvidenceV1<'_> {
     /// The close of leaf `index` (the claim's one order) holding EVERY unit: every leaf before it, every param leaf.
     fn full_close(&self, v: &PalwEvalVerifiedBindingV1, index: u64) -> Result<PalwGenCloseV1, String> {
         let (s, i) = v.space.locate(index).ok_or_else(|| format!("{index} is no leaf of this execution"))?;
-        let open =
-            |s: usize, i: usize| self.execution.open(s as u8, i as u64).ok_or_else(|| format!("stage {s} leaf {i} does not open"));
+        let open = |s: usize, i: usize| {
+            self.execution.open_leaf(s as u8, i as u64).ok_or_else(|| format!("stage {s} leaf {i} does not open"))
+        };
         let mut operands = Vec::new();
         for st in 0..=s as usize {
             let n = if st == s as usize { i as usize } else { v.space.stages[st].leaves().len() };
@@ -721,6 +762,24 @@ impl PalwEvalEvidenceV1<'_> {
         self.wire(&v, &restricted, self.restrict_params(&v, &all, &used))
     }
 
+    /// **The accusation of a dissected leaf**: the binding and the disputed leaf with its path under its stage's root,
+    /// nothing else (spec 17 §17.8.6.3). Under the held regime a leaf whose cone reduces over the history is never tried
+    /// whole; this names it ([`palw_eval_named_dissected_leaf_v1`]), and the session it opens plays F7's dissection.
+    pub fn named_leaf_close(&self, index: u64) -> Result<PalwEvalConeCloseV1, String> {
+        let v = self.verified()?;
+        let (s, i) = v.space.locate(index).ok_or_else(|| format!("{index} is no leaf of this execution"))?;
+        let opened = self.execution.open_leaf(s as u8, i as u64).ok_or_else(|| format!("stage {s} leaf {i} does not open"))?;
+        let disputed = PalwGenLeafOpeningV1::of(&v.space, &opened).ok_or("the named leaf does not ride")?;
+        Ok(PalwEvalConeCloseV1 {
+            version: PALW_IMPROVE_EVAL_COURT_VERSION_V1,
+            binding: self.binding.clone(),
+            prompt_ids: Vec::new(),
+            disputed,
+            operands: Vec::new(),
+            params: PalwEvalParamsV1::Single(Vec::new()),
+        })
+    }
+
     /// **A decode close of generated id `t`**: every tile of its logits row.
     pub fn decode_close(&self, t: u32) -> Result<PalwEvalDecodeCloseV1, String> {
         let v = self.verified()?;
@@ -732,7 +791,7 @@ impl PalwEvalEvidenceV1<'_> {
         let mut row = Vec::new();
         for (i, leaf) in v.space.stages[out].leaves().iter().enumerate() {
             if leaf.coord.pos == pos && leaf.coord.kind == kind {
-                let opened = self.execution.open(out as u8, i as u64).ok_or("a row tile does not open")?;
+                let opened = self.execution.open_leaf(out as u8, i as u64).ok_or("a row tile does not open")?;
                 row.push(PalwGenLeafOpeningV1::of(&v.space, &opened).ok_or("a row tile does not ride")?);
             }
         }
@@ -751,7 +810,7 @@ impl PalwEvalEvidenceV1<'_> {
         let mut tiles = Vec::new();
         for coord in coords {
             let i = sp.leaf_index(&coord).ok_or("an output tile is no leaf of the stage")?;
-            let opened = self.execution.open(stage, i).ok_or("an output tile does not open")?;
+            let opened = self.execution.open_leaf(stage, i).ok_or("an output tile does not open")?;
             tiles.push(PalwGenLeafOpeningV1::of(&v.space, &opened).ok_or("an output tile does not ride")?);
         }
         Ok(PalwEvalDecodeCloseV1 {

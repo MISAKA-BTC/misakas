@@ -219,6 +219,12 @@ fn base() -> (TirProgramV1, MapParams, PalwTirLayoutV1, Hash64) {
 
 /// An ExactMatch generation of four ids over a three-id prompt.
 fn generation() -> Claim {
+    generation_over(0)
+}
+
+/// [`generation`], the executor's run over the weights of `run_salt` — the class's own are salt 0, and `params` (what a
+/// challenger holds, the class's registered artifact) are always the class's.
+fn generation_over(run_salt: usize) -> Claim {
     let (program, params_v1, layout, artifact_root) = base();
     let class_id = Hash64::from_bytes([0x33; 64]);
     let seed = palw_improve_eval_seed_v1(&Hash64::from_bytes([0x44; 64]), 7);
@@ -227,10 +233,11 @@ fn generation() -> Claim {
     let subject = PalwEvalSubjectClassV1 { class_id, artifact_root, program: &program, layout: &layout };
     let ctx = palw_improve_eval_context_v1(&j, &subject, stage).unwrap();
     let params = Params(vec![params_v1]);
+    let ran = Params(vec![subject_params(&program, run_salt)]);
     let prompt = vec![3u32, 5, 1];
     let probe = PipelineJob { prompt: prompt.clone(), scalars: ctx.scalars.clone(), ..PipelineJob::default() };
     let decode = ctx.decode.clone().unwrap();
-    let execution = palw_gen_execute_v1(&ctx.pipeline, &ctx.programs, &ctx.layouts, &params, &probe, &decode, ctx.seed).unwrap();
+    let execution = palw_gen_execute_v1(&ctx.pipeline, &ctx.programs, &ctx.layouts, &ran, &probe, &decode, ctx.seed).unwrap();
     let binding =
         PalwEvalBindingV1::of(&j, class_id, &layout, &execution.claim, execution.space.leaf_count(), &prompt, stage, vec![], vec![]);
     Claim {
@@ -500,6 +507,81 @@ fn a_close_is_the_claims_or_it_is_refused_by_name_and_convicts_nobody() {
     assert!(matches!(refused(&bad, &facts, None), Err(PalwEvalCourtErrorV1::NoSuchLeaf(_))));
 }
 
+/// **A wrong binding to the candidate is the cone's** (spec 17 §17.8.6): an executor that ran the job over OTHER weights
+/// than its class's registered artifact commits a consistent tree — every leaf its own — whose leaves its cone cannot
+/// reproduce from the class's proven parameters. The first leaf that reads a weight is convicted; the leaves before it
+/// (none read a weight) acquit; and the claim is the chain's all the way: the fold could not see this, the court does.
+#[test]
+fn an_executor_that_ran_other_weights_is_convicted_at_its_first_divergent_leaf() {
+    let honest = generation();
+    let other = generation_over(1);
+    assert_ne!(other.binding.step_root(), honest.binding.step_root(), "other weights, another tree");
+    // The honest tree is acquitted everywhere; the other weights' tree is convicted from its first leaf that reads one.
+    let leaves: usize = other.execution.space.stages.iter().map(|st| st.leaves().len()).sum();
+    let mut first = None;
+    for g in 0..leaves as u64 {
+        let outcome = check(&other, &cone(&other, g), Some(g));
+        match (first, outcome) {
+            (None, Ok(None)) => {}
+            (None, Ok(Some(PalwStepFaultV1::ComputationMismatch { .. }))) => first = Some(g),
+            (None, unexpected) => panic!("leaf {g}: {unexpected:?}"),
+            (Some(_), outcome) => assert!(matches!(outcome, Ok(Some(_)) | Ok(None)), "leaf {g}: {outcome:?}"),
+        }
+    }
+    let first = first.expect("a run over other weights is convicted somewhere");
+    eprintln!("other weights: convicted from leaf {first} of {leaves}");
+    // The convicting leaf is the first the weights touch; everything the honest claim reads is acquitted.
+    for g in 0..first {
+        assert_eq!(check(&other, &cone(&other, g), Some(g)), Ok(None), "leaf {g} reads no weight that differs");
+    }
+    assert_eq!(
+        check(&other, &cone(&other, first), Some(first)),
+        Ok(Some(PalwStepFaultV1::ComputationMismatch { value_index: 0 })),
+        "convicted at the first divergent leaf"
+    );
+}
+
+/// **The first divergent leaf is where the accused tree parts from the honest replay** (spec 17 §17.8.6.1), and the close
+/// at it convicts: a planted lie's leaf, and, for a run over other weights, the first leaf the weights touch; an honest
+/// tree has none; a lie only in the committed score or ids over an honest tree shows none either (the decode close's).
+#[test]
+fn the_first_divergent_leaf_is_where_the_accused_tree_parts_from_the_honest_replay() {
+    let honest = generation();
+    let space = &honest.execution.space;
+    assert_eq!(palw_eval_first_divergent_leaf_v1(space, &honest.execution, &honest.execution), None, "an honest tree has none");
+    // A planted lie: its leaf, and the close at it convicts.
+    let (stage, index) = (0, honest.execution.space.stages[0].leaves().len() / 2);
+    let lied = honest.rebound(lie(&honest.execution, stage, index, 1), vec![]);
+    let g = global(&lied, stage, index);
+    assert_eq!(palw_eval_first_divergent_leaf_v1(&lied.execution.space, &lied.execution, &honest.execution), Some(g));
+    assert_eq!(check(&lied, &cone(&lied, g), Some(g)), Ok(Some(PalwStepFaultV1::ComputationMismatch { value_index: 0 })));
+    // A run over other weights: every leaf before the first divergent one acquits, and that one convicts.
+    let other = generation_over(1);
+    let first = palw_eval_first_divergent_leaf_v1(&other.execution.space, &other.execution, &honest.execution)
+        .expect("other weights part from the class's replay somewhere");
+    for g in 0..first {
+        assert_eq!(check(&other, &cone(&other, g), Some(g)), Ok(None), "leaf {g} matches the honest replay");
+    }
+    assert_eq!(check(&other, &cone(&other, first), Some(first)), Ok(Some(PalwStepFaultV1::ComputationMismatch { value_index: 0 })));
+    // A wrong generated id over an honest tree shows no divergent leaf: the decode close's.
+    let mut ids = honest.execution.clone();
+    ids.claim.generated[1] ^= 1;
+    let wrong_id = honest.rebound(ids, vec![]);
+    assert_eq!(palw_eval_first_divergent_leaf_v1(&wrong_id.execution.space, &wrong_id.execution, &honest.execution), None);
+    // A store that cannot open a leaf is a divergence at it (the accused withholds it).
+    struct Withholding<'a>(&'a PalwGenExecutionV1, u8, u64);
+    impl PalwEvalLeafStoreV1 for Withholding<'_> {
+        fn open_leaf(&self, stage: u8, index: u64) -> Option<kaspa_consensus_core::palw_gen_step_v1::PalwGenOpenedLeafV1> {
+            (stage != self.1 || index != self.2).then(|| self.0.open(stage, index)).flatten()
+        }
+    }
+    assert_eq!(
+        palw_eval_first_divergent_leaf_v1(&honest.execution.space, &Withholding(&honest.execution, 0, 3), &honest.execution),
+        Some(3),
+        "a withheld leaf"
+    );
+}
+
 #[test]
 fn the_evidence_id_binds_the_claim_the_leaf_and_the_fault() {
     let claim = generation();
@@ -531,6 +613,7 @@ fn the_proofs_take_the_reserved_tags_and_a_close_is_priced_by_its_own_bytes() {
         assert_eq!(bytes[0], *tag, "spec 17 §17.0: the evaluation court's proofs are 13, 14 and 15");
         assert_eq!(&borsh::from_slice::<PalwCourtVerdictProofV2>(&bytes).unwrap(), proof, "the object round-trips");
         assert!(proof.is_eval_v1() && !proof.is_gen_v1() && !proof.is_tir_v1(), "an evaluation proof is none of the others");
+        assert_eq!(proof.is_dissection_bottom_v1(), *tag == 15, "only the evaluation dissection's bottom is a dissection's bottom");
         assert_eq!(proof.eval_binding_v1(), Some(&claim.binding), "it carries the claim's binding");
         assert_eq!(check_close_cost_v2(proof, &court), Ok(()), "a close of a small program is within the ceiling");
     }

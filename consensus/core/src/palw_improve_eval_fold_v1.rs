@@ -754,7 +754,10 @@ impl TransitionBuilder<'_> {
 
     /// **A judged score, once all its parts are final** (spec 17 §17.8.5): the policy's stage parameters and the
     /// parts' committed log-likelihoods combined ([`palw_improve_judged_score_v1`]). `None` while a part is missing
-    /// or not yet final.
+    /// or not yet final — and when a generation the parts read is no longer what they read (spec 17 §17.8.6: a
+    /// generation convicted after `Final` and perhaps claimed anew): each generation must still be a held FINAL claim,
+    /// and every part must have been accepted at or after the newest of them was final, so a part that read a
+    /// reversed generation records nothing and the item is missing for the incumbent.
     fn improvement_eval_judged_score_v1(
         &self,
         line_id: &Hash64,
@@ -765,6 +768,20 @@ impl TransitionBuilder<'_> {
     ) -> Option<i64> {
         let policy = self.state.improvement_policy(line_id)?;
         let params = palw_improve_eval_stage_params_of_v1(policy, kind)?;
+        let generation_final_daa = |of: &PalwEvalSubjectV1| -> Option<u64> {
+            let claim = self.state.improvement_eval_job(line_id, epoch, item, of, PalwScoringKindV1::ExactMatch, 0)?.claim?;
+            self.state.improvement_eval_claim_held_v1(&claim.claim_id).then_some(claim.final_daa).flatten()
+        };
+        let mut newest = generation_final_daa(subject)?;
+        if kind == PalwScoringKindV1::Pairwise {
+            newest = newest.max(generation_final_daa(&PalwEvalSubjectV1::Parent)?);
+        }
+        for part in 0..palw_improve_scoring_parts_v1(kind) {
+            let accepted = self.state.improvement_eval_job(line_id, epoch, item, subject, kind, part)?.claim?.accepted_daa;
+            if accepted < newest {
+                return None;
+            }
+        }
         let parts: Option<Vec<i64>> = (0..palw_improve_scoring_parts_v1(kind))
             .map(|part| {
                 self.state.improvement_eval_job(line_id, epoch, item, subject, kind, part).and_then(palw_improve_eval_score_v1)
@@ -837,6 +854,26 @@ impl TransitionBuilder<'_> {
         row.claim = None;
         self.write_improvement_eval_job(key, Some(row));
         self.retract_improvement_score_v1(&line_id, epoch, item, subject, kind)?;
+        // A judge reads FINAL generations (spec 17 §17.8.5): a convicted generation takes the judged scores that read it
+        // out too — the subject's Judge and Pairwise, and for the parent's generation every Pairwise score of the item.
+        // A judge's honest pass over a dishonest output is no evidence, and a missing score favours the incumbent.
+        if kind == PalwScoringKindV1::ExactMatch {
+            let dependents: Vec<(PalwEvalSubjectV1, PalwScoringKindV1)> = match subject {
+                PalwEvalSubjectV1::Parent => {
+                    let lo = (line_id, epoch, item, PalwEvalSubjectV1::Parent);
+                    let hi = (line_id, epoch, item, PalwEvalSubjectV1::Previous(Hash64::from_bytes([0xFF; 64])));
+                    let mut keys = vec![(PalwEvalSubjectV1::Parent, PalwScoringKindV1::Judge)];
+                    keys.extend(
+                        self.state.improvement_results.range(lo..=hi).map(|((_, _, _, s), _)| (*s, PalwScoringKindV1::Pairwise)),
+                    );
+                    keys
+                }
+                other => vec![(other, PalwScoringKindV1::Judge), (other, PalwScoringKindV1::Pairwise)],
+            };
+            for (dependent, dependent_kind) in dependents {
+                self.retract_improvement_score_v1(&line_id, epoch, item, dependent, dependent_kind)?;
+            }
+        }
         Ok(())
     }
 
@@ -951,9 +988,96 @@ mod tests {
         p
     }
 
+    /// A test's subject class in place of the toy — a real decoder with attention, whose leaves are dissected
+    /// ([`use_golden_subject`]). One per test thread; the guard clears it.
+    #[derive(Clone)]
+    struct Subject {
+        program: TirProgramV1,
+        weights: MapParams,
+        layout: PalwTirLayoutV1,
+    }
+
+    thread_local! {
+        static SUBJECT: std::cell::RefCell<Option<Subject>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn subject() -> Option<Subject> {
+        SUBJECT.with(|s| s.borrow().clone())
+    }
+
+    struct SubjectGuard;
+    impl Drop for SubjectGuard {
+        fn drop(&mut self) {
+            SUBJECT.with(|s| *s.borrow_mut() = None);
+        }
+    }
+
+    /// The subject of every class the test registers: the golden decoder's program, weights and layout, or the toy's.
+    fn program() -> TirProgramV1 {
+        subject().map_or_else(toy_program, |s| s.program)
+    }
+
+    fn weights(p: &TirProgramV1, salt: usize) -> MapParams {
+        subject().map_or_else(|| toy_weights(p, salt), |s| s.weights)
+    }
+
+    fn layout(p: &TirProgramV1) -> PalwTirLayoutV1 {
+        subject().map_or_else(|| toy_layout(p), |s| s.layout)
+    }
+
+    /// The layout the IR fixtures use for the golden programs: ragged multi-tile commit points and two-row history tiles.
+    fn golden_layout(p: &TirProgramV1, positions: u32) -> PalwTirLayoutV1 {
+        let mut tiles = Vec::new();
+        let mut k = 0u32;
+        for (bi, b) in p.blocks.iter().enumerate() {
+            for (ni, n) in b.nodes.iter().enumerate() {
+                if !n.commit {
+                    continue;
+                }
+                let is_logits = bi == p.schedule.post as usize && ni == p.logits as usize;
+                tiles.push(if is_logits { 4096 } else { 4 + (k * 7) % 6 });
+                k += 1;
+            }
+        }
+        PalwTirLayoutV1 {
+            version: PALW_TIR_LAYOUT_VERSION_V1,
+            max_context: positions,
+            checkpoint_interval: 2,
+            h_tile: 2,
+            commit_tiles: tiles,
+            state_tiles: (0..p.states.len() as u32).map(|j| 4 + j % 3).collect(),
+        }
+    }
+
+    /// **The golden dense decoder with grouped-query attention as the subject** (`consensus-vectors/tir-v1/programs/
+    /// dense-gqa-2layer.json`, RFC-0002 F7): its attention leaves are dissected. Returns the guard that restores the
+    /// toy and the golden job's tokens.
+    fn use_golden_subject() -> (SubjectGuard, Vec<u32>) {
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v1/programs/dense-gqa-2layer.json");
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("the vector")).expect("json");
+        let unhex =
+            |s: &str| -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect() };
+        let mut program = TirProgramV1::decode_canonical(&unhex(v["program_borsh_hex"].as_str().unwrap())).expect("canonical");
+        let mut w = MapParams::default();
+        for e in v["params"].as_array().unwrap() {
+            let j = e["param"].as_u64().unwrap() as u16;
+            let layer = e["layer"].as_u64().map(|l| l as u16);
+            let d = &program.params[j as usize];
+            let shape: Vec<usize> = d.shape.iter().map(|x| *x as usize).collect();
+            w.tensors.insert((j, layer), Tensor::from_le_bytes(d.dtype, &shape, &unhex(e["le_hex"].as_str().unwrap())).unwrap());
+        }
+        let tokens: Vec<u32> = v["steps"].as_array().unwrap().iter().map(|s| s["token"].as_u64().unwrap() as u32).collect();
+        program.logits_scheme_id.copy_from_slice(crate::palw_step_refute::tiled_logits_scheme_id_v1().as_byte_slice());
+        let program = TirProgramV1::decode_canonical(&program.encode()).expect("still canonical under the tiled scheme");
+        let layout = golden_layout(&program, 12);
+        SUBJECT.with(|s| *s.borrow_mut() = Some(Subject { program, weights: w, layout }));
+        (SubjectGuard, tokens)
+    }
+
     /// A toy IR class: an `i8` embedding, one layer of an `i8 [4, 4]` matrix and `i64` multiplier, an
     /// `i16` head over 16 ids (tiled logits).
-    fn program() -> TirProgramV1 {
+    fn toy_program() -> TirProgramV1 {
         let mut pb = ProgramBuilder::new(16, misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL);
         let table = pb.param("embed.table", DType::I8, &[16, 4], false);
         let w = pb.param("blk.w", DType::I8, &[4, 4], true);
@@ -991,7 +1115,7 @@ mod tests {
         p
     }
 
-    fn weights(p: &TirProgramV1, salt: usize) -> MapParams {
+    fn toy_weights(p: &TirProgramV1, salt: usize) -> MapParams {
         let mut out = MapParams::default();
         for (j, inst) in crate::palw_tir_artifact_v1::palw_tir_param_instances_v1(p).into_iter().enumerate() {
             let d = &p.params[j];
@@ -1009,7 +1133,7 @@ mod tests {
         out
     }
 
-    fn layout(p: &TirProgramV1) -> PalwTirLayoutV1 {
+    fn toy_layout(p: &TirProgramV1) -> PalwTirLayoutV1 {
         let commits = p.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum::<usize>();
         PalwTirLayoutV1 {
             version: PALW_TIR_LAYOUT_VERSION_V1,
@@ -1075,8 +1199,18 @@ mod tests {
         daa: u64,
         f: impl FnOnce(&mut TransitionBuilder<'_>),
     ) -> (PalwChainStateV2, PalwStateDeltaV2) {
-        let extras = PalwTransitionExtrasV1::default();
-        let mut builder = TransitionBuilder::new(state, p, false, false, false, false, &extras);
+        at_with(state, p, daa, &PalwTransitionExtrasV1::default(), f)
+    }
+
+    /// [`at`] under the block's `extras` (the held regime's ladder, say).
+    fn at_with(
+        state: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        daa: u64,
+        extras: &PalwTransitionExtrasV1,
+        f: impl FnOnce(&mut TransitionBuilder<'_>),
+    ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+        let mut builder = TransitionBuilder::new(state, p, false, false, false, false, extras);
         crate::palw_state_v2::palw_improve_fold_v1::advance_improvement_v1(&mut builder, &ctx(daa)).expect("the sweep");
         f(&mut builder);
         let delta = PalwStateDeltaV2 { point: ctx(daa), entries: builder.entries.clone() };
@@ -1153,6 +1287,59 @@ mod tests {
         prompt: Vec<u32>,
         opening: Option<PalwSuiteOpeningV1>,
     ) -> PalwConsensusObjectV2 {
+        claim_run(s, item, subject, executor, claim_word, prompt, opening, Lie::None).object
+    }
+
+    /// An executor's whole run of an evaluation claim: the object it files, and what it holds to defend it in court.
+    struct EvalRun {
+        object: PalwConsensusObjectV2,
+        execution: crate::palw_gen_worker_v1::PalwGenExecutionV1,
+        binding: PalwEvalBindingV1,
+        prompt: Vec<u32>,
+        weights: Weights,
+    }
+
+    /// What a lying executor does to its own run before it commits it (spec 17 §17.8.6).
+    #[derive(Clone, Copy, Debug)]
+    enum Lie {
+        /// Nothing: an honest claim.
+        None,
+        /// A wrong value at one step leaf of the tree, committed consistently into its stage's root.
+        Leaf { stage: usize, index: usize, delta: i128 },
+        /// A wrong committed score (the lane off by `delta`) over an honest tree.
+        Score { lane: usize, delta: i32 },
+        /// A wrong generated id (position `t`) over an honest tree.
+        Id { t: usize },
+    }
+
+    /// The tree's lie, committed: the leaf's hash, its stage's root and the step root recomputed over it.
+    fn plant(e: &mut crate::palw_gen_worker_v1::PalwGenExecutionV1, lie: Lie) {
+        match lie {
+            Lie::Leaf { stage, index, delta } => {
+                e.leaf_values[stage][index][0] += delta;
+                let leaf = e.space.stages[stage].leaves()[index];
+                e.leaf_hashes[stage][index] =
+                    crate::palw_gen_step_v1::palw_gen_step_leaf_hash_v1(&leaf, &e.leaf_values[stage][index]).unwrap();
+                e.claim.stage_roots[stage] = crate::palw_gen_step_v1::palw_gen_stage_root_v1(stage as u8, &e.leaf_hashes[stage]);
+                e.claim.step_root = crate::palw_gen_step_v1::palw_gen_step_root_v1(&e.claim.stage_roots);
+            }
+            Lie::Id { t } => e.claim.generated[t] ^= 1,
+            Lie::None | Lie::Score { .. } => {}
+        }
+    }
+
+    /// [`claim_with`], its run kept, and a `lie` planted in it before the commit.
+    #[allow(clippy::too_many_arguments)]
+    fn claim_run(
+        s: &PalwChainStateV2,
+        item: u32,
+        subject: PalwEvalSubjectV1,
+        executor: u8,
+        claim_word: u8,
+        prompt: Vec<u32>,
+        opening: Option<PalwSuiteOpeningV1>,
+        lie: Lie,
+    ) -> EvalRun {
         let class = match subject {
             PalwEvalSubjectV1::Parent => h(LINE),
             PalwEvalSubjectV1::Candidate(c) | PalwEvalSubjectV1::Previous(c) => c,
@@ -1174,21 +1361,23 @@ mod tests {
             palw_improve_eval_context_v1(&job, &subject_row, PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 }).unwrap();
         let probe = misaka_palw_tir::pipeline::PipelineJob { prompt: prompt.clone(), ..Default::default() };
         let salt = if class == h(LINE) { 0 } else { 1 };
-        let e = crate::palw_gen_worker_v1::palw_gen_execute_v1(
+        let weights = Weights(vec![weights(&p, salt)]);
+        let mut e = crate::palw_gen_worker_v1::palw_gen_execute_v1(
             &context.pipeline,
             &context.programs,
             &context.layouts,
-            &Weights(vec![weights(&p, salt)]),
+            &weights,
             &probe,
             context.decode.as_ref().unwrap(),
             context.seed,
         )
         .unwrap();
+        plant(&mut e, lie);
         let params = PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 };
         let binding =
             PalwEvalBindingV1::of(&job, class, &layout, &e.claim, e.space.leaf_count(), &probe.prompt, params, vec![], vec![]);
         let roots = binding.claim_roots();
-        PalwConsensusObjectV2::FreePromptCommitted {
+        let object = PalwConsensusObjectV2::FreePromptCommitted {
             claim: h(claim_word),
             class_id: class,
             bond: bond(executor),
@@ -1216,7 +1405,8 @@ mod tests {
                     opening,
                 },
             })),
-        }
+        };
+        EvalRun { object, execution: e, binding, prompt: probe.prompt, weights }
     }
 
     /// The ids `class`'s model decodes for `prompt` under the test policy's budget: what an honest executor claims.
@@ -1265,6 +1455,24 @@ mod tests {
         read: Option<PalwEvalReadV1>,
         opening: Option<PalwSuiteOpeningV1>,
     ) -> PalwConsensusObjectV2 {
+        forced_run(job, class, executor, claim_word, prompt, reference, params, finalized, read, opening, Lie::None).object
+    }
+
+    /// [`forced_object`], its run kept, and a `lie` planted in it before the commit.
+    #[allow(clippy::too_many_arguments)]
+    fn forced_run(
+        job: PalwEvalJobV1,
+        class: u8,
+        executor: u8,
+        claim_word: u8,
+        prompt: Vec<u32>,
+        reference: Vec<u32>,
+        params: PalwEvalStageParamsV1,
+        finalized: Vec<Vec<u32>>,
+        read: Option<PalwEvalReadV1>,
+        opening: Option<PalwSuiteOpeningV1>,
+        lie: Lie,
+    ) -> EvalRun {
         let p = program();
         let layout = layout(&p);
         let row = PalwEvalSubjectClassV1 { class_id: h(class), artifact_root: h(class), program: &p, layout: &layout };
@@ -1280,20 +1488,26 @@ mod tests {
             JUDGE => 2,
             _ => 1,
         };
-        let e = crate::palw_gen_worker_v1::palw_gen_replay_committed_v1(
+        let weights = Weights(vec![weights(&p, salt), MapParams::default(), MapParams::default()]);
+        let mut e = crate::palw_gen_worker_v1::palw_gen_replay_committed_v1(
             &context.pipeline,
             &context.programs,
             &context.layouts,
-            &Weights(vec![weights(&p, salt), MapParams::default(), MapParams::default()]),
+            &weights,
             &pj,
             context.seed,
         )
         .unwrap();
-        let score: Vec<i32> = e.run.output.data.iter().map(|v| *v as i32).collect();
+        plant(&mut e, lie);
+        let mut score: Vec<i32> = e.run.output.data.iter().map(|v| *v as i32).collect();
+        if let Lie::Score { lane, delta } = lie {
+            score[lane] += delta;
+        }
         let binding =
             PalwEvalBindingV1::of(&job, h(class), &layout, &e.claim, e.space.leaf_count(), &prompt, params, finalized, score.clone());
         let roots = binding.claim_roots();
-        PalwConsensusObjectV2::FreePromptCommitted {
+        let run_prompt = prompt.clone();
+        let object = PalwConsensusObjectV2::FreePromptCommitted {
             claim: h(claim_word),
             class_id: h(class),
             bond: bond(executor),
@@ -1314,7 +1528,8 @@ mod tests {
                 job,
                 tail: PalwEvalClaimTailV1 { generated: reference, score, subject_layout: layout, params, read, opening },
             })),
-        }
+        };
+        EvalRun { object, execution: e, binding, prompt: run_prompt, weights }
     }
 
     fn generated_of(object: &PalwConsensusObjectV2) -> Vec<u32> {
@@ -2371,6 +2586,56 @@ mod tests {
         assert_ne!(pairwise_of(&s8), Some(0), "a pairwise outcome is +1 or −1: there is no tie");
     }
 
+    /// **A judged part that read a generation later reversed records no score** (spec 17 §17.8.6, E-C6): a judge reads
+    /// FINAL generations, and a generation convicted after `Final` is no longer what its parts read — whether it is
+    /// claimed anew or not, the judged score is missing and the item counts for the incumbent.
+    #[test]
+    fn a_judged_part_that_read_a_generation_later_reversed_records_no_score() {
+        let p = params();
+        let s = evaluating_judged();
+        let parent_claim = claim(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xA0);
+        let parent_gen = generated_of(&parent_claim);
+        let jt = judge_template();
+        let (s1, _) = at(&s, &p, 1_600, |b| apply_object(b, &ctx(1_600), &parent_claim).unwrap());
+        // The generation is licensed and finalized by the lane's own funnel, so it is a real `Final` claim.
+        let finalize = |s: &PalwChainStateV2, id: Hash64, daa: u64| {
+            let licensed =
+                PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: daa - 1 }, ..s.claims[&id].clone() };
+            at(s, &p, daa, |b| {
+                b.write_claim(id, Some(licensed.clone()));
+                b.finalize_claim(id, &licensed, daa).expect("the claim finalizes");
+            })
+            .0
+        };
+        let s2 = finalize(&s1, h(0xA0), 1_650);
+        let a = judged_part(0, PalwEvalSubjectV1::Parent, PalwScoringKindV1::Judge, 0, &jt, &[&parent_gen], ALICE, 0xB1);
+        let b = judged_part(0, PalwEvalSubjectV1::Parent, PalwScoringKindV1::Judge, 1, &jt, &[&parent_gen], ALICE, 0xB2);
+        let (s3, _) = at(&s2, &p, 1_660, |bld| {
+            apply_object(bld, &ctx(1_660), &a).expect("part 0");
+            apply_object(bld, &ctx(1_660), &b).expect("part 1");
+        });
+        let judged = |s: &PalwChainStateV2| {
+            s.improvement_result(&h(LINE), 1, 0, &PalwEvalSubjectV1::Parent)
+                .is_some_and(|r| r.scores.iter().any(|score| score.kind == PalwScoringKindV1::Judge))
+        };
+        // Control: parts that read a generation that stands record their score.
+        assert!(judged(&finalize_all(&finalize_all(&s3, &p, 1_700, &[h(0xB1)]), &p, 1_701, &[h(0xB2)])), "the generation stands");
+
+        // The generation is convicted after Final: the parts are accepted, and finalize, but record nothing.
+        let (s4, _) = at(&s3, &p, 1_670, |bld| {
+            bld.reverse_convicted_final(&ctx(1_670), h(0xA0), PalwVoidReasonV2::CourtFraud).expect("reversed")
+        });
+        assert!(matches!(s4.claims[&h(0xA0)].phase, PalwClaimPhaseV2::Voided { .. }));
+        let s5 = finalize_all(&finalize_all(&s4, &p, 1_700, &[h(0xB1)]), &p, 1_701, &[h(0xB2)]);
+        assert!(!judged(&s5), "a part that read a reversed generation records no judged score");
+        // …and when the generation is claimed anew and finalized, the old parts are still stale: they read the old one.
+        let retake = claim(&s4, 0, PalwEvalSubjectV1::Parent, BOB, 0xA9);
+        let (s6, _) = at(&s4, &p, 1_680, |bld| apply_object(bld, &ctx(1_680), &retake).expect("the freed job is re-taken"));
+        let s7 = finalize(&s6, h(0xA9), 1_690);
+        let s8 = finalize_all(&finalize_all(&s7, &p, 1_700, &[h(0xB1)]), &p, 1_701, &[h(0xB2)]);
+        assert!(!judged(&s8), "the parts were accepted before the new generation was final: stale");
+    }
+
     // ---- panels: seat pay, the class's replay room, and the swing lock ------------------------------------------
 
     /// **The seats are paid from the escrow, at the ordinary per-claim rule** (spec 17 §17.11.2, decided
@@ -2509,5 +2774,670 @@ mod tests {
         assert_eq!(palw_improve_eval_swing_lock_v1(0), 0);
         assert_eq!(palw_improve_max_promotion_payout_v1(u64::MAX, 1_000), u64::MAX);
         assert_eq!(palw_improve_max_promotion_payout_v1(1_000, 1), 1, "the promotion share is in permille");
+    }
+
+    // ---- the evaluation court (spec 17 §17.8.6): planted lies convicted, honest claims untouched ----------------
+
+    const LIMITS: misaka_palw_tir::demand::DemandLimits =
+        misaka_palw_tir::demand::DemandLimits { max_elements: 1 << 20, max_terms: 1 << 24 };
+
+    /// The ruleset's court the acceptance layer judges at (its default ceilings).
+    fn court() -> crate::palw_mode_v2::PalwCourtParamsV2 {
+        crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 26, 20, 2).expect("a court")
+    }
+
+    /// A class's weights as the court proves them: the inventory root over [`weights`] of its `salt`.
+    fn real_artifact_root(salt: usize) -> Hash64 {
+        struct Src<'a>(&'a MapParams);
+        impl crate::palw_tir_artifact_v1::PalwTirTensorSourceV1 for Src<'_> {
+            fn tensor_bytes(&self, param: u16, layer: Option<u16>) -> Option<std::borrow::Cow<'_, [u8]>> {
+                self.0.tensors.get(&(param, layer)).map(|t| std::borrow::Cow::Owned(t.to_le_bytes()))
+            }
+        }
+        let p = program();
+        let w = weights(&p, salt);
+        crate::palw_tir_artifact_v1::palw_tir_inventory_root_v1(&p, &Src(&w)).expect("an inventory root").0
+    }
+
+    /// The state with every class registered under its weights' real artifact root, which a court proves openings to.
+    fn with_real_roots(mut s: PalwChainStateV2) -> PalwChainStateV2 {
+        for (class, salt) in [(LINE, 0), (CAND_A, 1), (JUDGE, 2)] {
+            s.classes.get_mut(&h(class)).expect("a class").artifact_root = real_artifact_root(salt);
+        }
+        s
+    }
+
+    /// The executor's evidence for `run`, as the state holds its claim.
+    fn evidence_of<'a>(
+        s: &'a PalwChainStateV2,
+        run: &'a EvalRun,
+        claim: &'a PalwClaimStateV2,
+    ) -> crate::palw_improve_eval_court_v1::PalwEvalEvidenceV1<'a> {
+        crate::palw_improve_eval_court_v1::PalwEvalEvidenceV1 {
+            facts: s.improvement_eval_claim_facts_v1(claim, &run.binding).expect("the claim the job table holds"),
+            params: &run.weights,
+            execution: &run.execution,
+            binding: &run.binding,
+            prompt: &run.prompt,
+            composite: None,
+        }
+    }
+
+    /// The accusation the node files for `proof`: the verdict as the acceptance layer re-derives it
+    /// (`palw_tir_one_move_outcome_v1`), signed by position, its own shape checked.
+    fn accusation_of(
+        s: &PalwChainStateV2,
+        claim_id: Hash64,
+        accuser: u8,
+        proof: crate::palw_court_v2::PalwCourtVerdictProofV2,
+    ) -> (PalwConsensusObjectV2, PalwCourtVerdictV2) {
+        use crate::palw_tir_one_move_v1::*;
+        let claim = s.claims.get(&claim_id).expect("the accused claim").clone();
+        let mut a = palw_tir_one_move_accusation_v1(claim_id, &claim, bond(accuser), PalwCourtVerdictV2::ExecutorGuilty, proof);
+        a.signature = vec![9; 8];
+        palw_tir_one_move_shape_v1(&a).expect("the accusation's own shape");
+        let outcome = palw_tir_one_move_outcome_v1(
+            s,
+            &claim,
+            &a,
+            &court(),
+            1 << 26,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            false,
+        )
+        .expect("the close adjudicates");
+        let PalwTirOneMoveOutcomeV1::Verdict(verdict) = outcome else { panic!("the toy program has no dissected leaf") };
+        a.verdict = verdict;
+        (PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(a) }, verdict)
+    }
+
+    fn cone_proof(
+        evidence: &crate::palw_improve_eval_court_v1::PalwEvalEvidenceV1<'_>,
+        leaf: u64,
+    ) -> crate::palw_court_v2::PalwCourtVerdictProofV2 {
+        crate::palw_court_v2::PalwCourtVerdictProofV2::EvalCone {
+            close: Box::new(evidence.cone_close(leaf, &LIMITS).expect("a cone close")),
+        }
+    }
+
+    /// The claim's phase, as a test reads it.
+    fn voided_by_the_court(s: &PalwChainStateV2, id: &Hash64) -> bool {
+        matches!(s.claims.get(id).map(|c| &c.phase), Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }))
+    }
+
+    /// **A wrong value in the tree is convicted at its leaf, and the claim is voided and slashed** (spec 17 §17.8.6):
+    /// the fold cannot see inside an execution, so it accepts a claim whose tree holds a lie; one accusation —
+    /// carrying the evaluation cone close of the lie's leaf — convicts it by the claim rules (`CourtFraud`, the
+    /// swing lock slashed, the accuser the challenger), its job is free again and no score of it was recorded; an
+    /// honest claim of another job is untouched, and a false accusation of an honest claim is charged to its accuser.
+    #[test]
+    fn a_planted_lie_in_the_tree_is_convicted_voided_and_slashed_and_an_honest_claim_survives() {
+        let p = params();
+        let s = with_real_roots(evaluating());
+        let honest_probe = claim_run(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xB0, vec![3, 5, 0], None, Lie::None);
+        let last = honest_probe.execution.space.stages[0].leaves().len() - 1;
+        let lying = claim_run(
+            &s,
+            0,
+            PalwEvalSubjectV1::Parent,
+            CAROL,
+            0xB0,
+            vec![3, 5, 0],
+            None,
+            Lie::Leaf { stage: 0, index: last, delta: 1 },
+        );
+        assert_ne!(lying.binding.committed_execution_root, honest_probe.binding.committed_execution_root, "the lie is committed");
+        let bystander = claim_run(&s, 1, PalwEvalSubjectV1::Parent, ALICE, 0xB2, vec![3, 5, 1], None, Lie::None);
+        let (s1, _) = at(&s, &p, 1_600, |b| {
+            apply_object(b, &ctx(1_600), &lying.object).expect("a lie the fold cannot see is accepted");
+            apply_object(b, &ctx(1_600), &bystander.object).expect("an honest claim");
+        });
+        let (id, other) = (h(0xB0), h(0xB2));
+        let before = s1.claims[&id].clone();
+        assert!(before.reserved > 0 && matches!(before.phase, PalwClaimPhaseV2::Provisional));
+
+        // The close of the lie's leaf convicts; the close of an earlier leaf of the same claim acquits.
+        let claim = s1.claims[&id].clone();
+        let evidence = evidence_of(&s1, &lying, &claim);
+        let (guilty, verdict) = accusation_of(&s1, id, BOB, cone_proof(&evidence, last as u64));
+        assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "the lie's own leaf");
+        let (defeated, verdict) = accusation_of(&s1, id, BOB, cone_proof(&evidence, 0));
+        assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest leaf of a lying claim acquits: the lie is the leaf's");
+
+        // The honest claim: a false accusation is charged to its accuser and leaves the claim standing.
+        let honest_evidence = evidence_of(&s1, &bystander, &s1.claims[&other]);
+        let (false_accusation, verdict) = accusation_of(&s1, other, BOB, cone_proof(&honest_evidence, last as u64));
+        assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest claim's leaf acquits");
+        let bob_before = s1.bond(&bond(BOB)).unwrap().collateral;
+        let (s2, _) = at(&s1, &p, 1_650, |b| apply_object(b, &ctx(1_650), &false_accusation).expect("a false accusation folds"));
+        assert!(s2.bond(&bond(BOB)).unwrap().collateral < bob_before, "and is charged");
+        assert_eq!(s2.claims[&other], s1.claims[&other], "the honest claim is untouched");
+        assert!(!s2.claims[&other].phase.is_terminal());
+        let (s2b, _) = at(&s1, &p, 1_650, |b| apply_object(b, &ctx(1_650), &defeated).expect("a false accusation folds"));
+        assert!(!s2b.claims[&id].phase.is_terminal(), "a defeated accusation convicts nothing");
+
+        // The conviction.
+        let carol_before = s1.bond(&bond(CAROL)).unwrap().collateral;
+        let (s3, _) = at(&s1, &p, 1_650, |b| apply_object(b, &ctx(1_650), &guilty).expect("the accusation folds"));
+        assert!(voided_by_the_court(&s3, &id), "{:?}", s3.claims[&id].phase);
+        let slashed = u128::from(carol_before - s3.bond(&bond(CAROL)).unwrap().collateral);
+        assert!(slashed >= before.reserved, "the lock is slashed: {slashed} of {}", before.reserved);
+        assert_eq!(s3.claims[&other], s1.claims[&other], "an honest claim of another job is untouched");
+        let job = s3.improvement_eval_job(&h(LINE), 1, 0, &PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch, 0).unwrap();
+        assert!(!s3.improvement_eval_claim_held_v1(&job.claim.unwrap().claim_id), "the job's holder is dead");
+        assert!(!s3.improvement_eval_row_pending_v1(job), "a voided claim is no live claim: it keeps nothing pending");
+        let bystander_job =
+            s3.improvement_eval_job(&h(LINE), 1, 1, &PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch, 0).unwrap();
+        assert!(s3.improvement_eval_row_pending_v1(bystander_job), "an honest claim of another job is live");
+        assert!(s3.improvement_result(&h(LINE), 1, 0, &PalwEvalSubjectV1::Parent).is_none(), "no score was recorded");
+        // The job is free: another executor takes it.
+        let retake = claim(&s3, 0, PalwEvalSubjectV1::Parent, BOB, 0xB3);
+        assert_eq!(fold_one(&s3, &p, 1_700, &retake), Ok(()), "the convicted claim's job is re-taken");
+        // A second conviction of the same claim is no second charge.
+        assert!(matches!(fold_one(&s3, &p, 1_700, &guilty), Err(PalwStateV2Error::WrongPhase { .. })), "a claim already voided");
+    }
+
+    /// **A wrong generated id over an honest tree is a wrong decode** (`EvalDecodeToken`, `Token`): the committed id is
+    /// not the lane FP Job V4's rules select from the committed logits row it was read from.
+    #[test]
+    fn a_wrong_generated_id_is_a_wrong_decode_and_is_convicted() {
+        let p = params();
+        let s = with_real_roots(evaluating());
+        let honest = claim_run(&s, 2, PalwEvalSubjectV1::Parent, CAROL, 0xB4, vec![3, 5, 2], None, Lie::None);
+        let lying = claim_run(&s, 2, PalwEvalSubjectV1::Parent, CAROL, 0xB5, vec![3, 5, 2], None, Lie::Id { t: 1 });
+        let (s1, _) = at(&s, &p, 1_600, |b| {
+            apply_object(b, &ctx(1_600), &lying.object).expect("a wrong id the fold cannot see is accepted");
+        });
+        let claim = s1.claims[&h(0xB5)].clone();
+        let evidence = evidence_of(&s1, &lying, &claim);
+        let decode = |t: u32| crate::palw_court_v2::PalwCourtVerdictProofV2::EvalDecodeToken {
+            close: Box::new(evidence.decode_close(t).unwrap()),
+        };
+        let (guilty, verdict) = accusation_of(&s1, h(0xB5), BOB, decode(1));
+        assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "the id at position 1 is not the selection from its row");
+        let (_, verdict) = accusation_of(&s1, h(0xB5), BOB, decode(0));
+        assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest id acquits");
+        let (s2, _) = at(&s1, &p, 1_650, |b| apply_object(b, &ctx(1_650), &guilty).expect("the accusation folds"));
+        assert!(voided_by_the_court(&s2, &h(0xB5)));
+        // The honest twin, were it filed, would have been acquitted at every id.
+        assert_eq!(honest.binding.generated.len(), lying.binding.generated.len());
+        let (s3, _) = at(&s, &p, 1_600, |b| apply_object(b, &ctx(1_600), &honest.object).unwrap());
+        let honest_claim = s3.claims[&h(0xB4)].clone();
+        let honest_evidence = evidence_of(&s3, &honest, &honest_claim);
+        for t in 0..honest.binding.generated.len() as u32 {
+            let proof = crate::palw_court_v2::PalwCourtVerdictProofV2::EvalDecodeToken {
+                close: Box::new(honest_evidence.decode_close(t).unwrap()),
+            };
+            assert_eq!(accusation_of(&s3, h(0xB4), BOB, proof).1, PalwCourtVerdictV2::ChallengerDefeated, "id {t}");
+        }
+    }
+
+    /// **A wrong score at an item is convicted, and never reaches the sign test** (`EvalDecodeToken`, `Score`): a
+    /// likelihood claim commits a score its own tree does not produce; its leaves are all honest, so the cone close
+    /// acquits every one of them and only the score close convicts. The claim is voided before `Final`, so no score of
+    /// it is recorded, and the honest re-claim records the right one.
+    #[test]
+    fn a_wrong_score_at_an_item_is_convicted_and_its_score_never_reaches_the_sign_test() {
+        let p = params();
+        let (s, entries, leaves) = evaluating_with_suite();
+        let s = with_real_roots(s);
+        let drawn: Vec<(u32, u32)> = (8..12u32)
+            .map(|item| match s.improvement_item(&h(LINE), 1, item).unwrap().source {
+                PalwItemSourceV1::Regression { index } => (item, index),
+                other => panic!("a regression item, got {other:?}"),
+            })
+            .collect();
+        let (likely_item, likely_index) =
+            *drawn.iter().find(|(_, index)| index % 2 == 1).expect("a likelihood entry among four of six");
+        let likely = &entries[likely_index as usize];
+        let PalwSuiteReferenceV1::Continuation(continuation) = &likely.reference else { panic!("a likelihood entry") };
+        let run_of = |executor: u8, word: u8, lie: Lie| {
+            forced_run(
+                PalwEvalJobV1 {
+                    line_id: h(LINE),
+                    epoch: 1,
+                    item: likely_item,
+                    subject: PalwEvalSubjectV1::Parent,
+                    kind: PalwScoringKindV1::RefLogLik,
+                    part: 0,
+                    mode: PalwEvalModeV1::TeacherForced { reference_commitment: Hash64::default() },
+                },
+                LINE,
+                executor,
+                word,
+                likely.prompt.clone(),
+                continuation.clone(),
+                PalwEvalStageParamsV1::RefLogLik { logit_scale_q24: 1 << 12 },
+                vec![],
+                None,
+                Some(opening_of(&entries, &leaves, likely_index)),
+                lie,
+            )
+        };
+        let honest = run_of(CAROL, 0xB6, Lie::None);
+        let lying = run_of(CAROL, 0xB7, Lie::Score { lane: 1, delta: 1 });
+        assert_ne!(honest.binding.score, lying.binding.score);
+        let (s1, _) = at(&s, &p, 1_600, |b| apply_object(b, &ctx(1_600), &lying.object).expect("a wrong score the fold cannot see"));
+        let id = h(0xB7);
+        let claim = s1.claims[&id].clone();
+        let evidence = evidence_of(&s1, &lying, &claim);
+        // The tree is honest: every leaf acquits.
+        let n: usize = lying.execution.space.stages.iter().map(|st| st.leaves().len()).sum();
+        for leaf in 0..n as u64 {
+            assert_eq!(
+                accusation_of(&s1, id, BOB, cone_proof(&evidence, leaf)).1,
+                PalwCourtVerdictV2::ChallengerDefeated,
+                "leaf {leaf}"
+            );
+        }
+        // The committed score is not the score stage's output: convicted at the lane.
+        let proof =
+            crate::palw_court_v2::PalwCourtVerdictProofV2::EvalDecodeToken { close: Box::new(evidence.score_close().unwrap()) };
+        let (guilty, verdict) = accusation_of(&s1, id, BOB, proof);
+        assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty);
+        let (s2, _) = at(&s1, &p, 1_650, |b| apply_object(b, &ctx(1_650), &guilty).expect("the accusation folds"));
+        assert!(voided_by_the_court(&s2, &id));
+        assert!(
+            s2.improvement_result(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent).is_none_or(|r| r.scores.is_empty()),
+            "a convicted claim records no score"
+        );
+        // The honest re-claim takes the freed job and records the right score at Final.
+        let retake = run_of(BOB, 0xB8, Lie::None);
+        let (s3, _) = at(&s2, &p, 1_700, |b| apply_object(b, &ctx(1_700), &retake.object).expect("the freed job is re-taken"));
+        let retaken = s3.claims[&h(0xB8)].clone();
+        let licensed = PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1_710 }, ..retaken };
+        let (s4, _) = at(&s3, &p, 1_720, |b| {
+            b.write_claim(h(0xB8), Some(licensed.clone()));
+            b.finalize_claim(h(0xB8), &licensed, 1_720).expect("the honest claim finalizes");
+        });
+        let recorded = s4
+            .improvement_result(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent)
+            .and_then(|r| r.scores.iter().find(|score| score.kind == PalwScoringKindV1::RefLogLik).copied())
+            .expect("the honest score");
+        assert_eq!(
+            palw_improve_eval_score_value_v1(PalwScoringKindV1::RefLogLik, &honest.binding.score).unwrap(),
+            recorded.value,
+            "the recorded score is the honest claim's, never the convicted one's"
+        );
+    }
+
+    /// **Gating** (spec 17 §17.8.6): below `palw_improvement_v1` an evaluation proof is refused by name; an
+    /// evaluation proof accuses an evaluation claim of the job table and no other; a close of another claim is not
+    /// this claim's; a claim already `Final` is beyond the court.
+    #[test]
+    fn an_evaluation_accusation_is_refused_below_the_fence_on_another_kind_of_claim_and_on_another_claim() {
+        let p = params();
+        let s = with_real_roots(evaluating());
+        let a =
+            claim_run(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xC0, vec![3, 5, 0], None, Lie::Leaf { stage: 0, index: 3, delta: 1 });
+        let b = claim_run(&s, 1, PalwEvalSubjectV1::Parent, ALICE, 0xC1, vec![3, 5, 1], None, Lie::None);
+        let (s1, _) = at(&s, &p, 1_600, |bld| {
+            apply_object(bld, &ctx(1_600), &a.object).unwrap();
+            apply_object(bld, &ctx(1_600), &b.object).unwrap();
+        });
+        let (id_a, id_b) = (h(0xC0), h(0xC1));
+        let claim_a = s1.claims[&id_a].clone();
+        let (guilty, verdict) = accusation_of(&s1, id_a, BOB, cone_proof(&evidence_of(&s1, &a, &claim_a), 3));
+        assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty);
+
+        // Below the fence: refused by name, whatever it proves.
+        let below = params().with_improve_from_daa(None);
+        assert!(matches!(
+            fold_one(&s1, &below, 1_650, &guilty),
+            Err(PalwStateV2Error::ImprovementObjectRefused { object: "an evaluation court move", .. })
+        ));
+        assert!(palw_object_is_eval_v1(&guilty), "the walk drops it by name");
+
+        // Another claim's close (the acceptance layer's checks): an accusation that names claim B with its roots and
+        // carries A's close is refused by the proof's own roots; and A's close against B, the roots left as A's, is
+        // not the claim the job table holds for its binding's job.
+        let PalwConsensusObjectV2::TirShardCourtAccused { accusation } = &guilty else { unreachable!() };
+        let mut on_b = accusation.as_ref().clone();
+        on_b.claim = id_b;
+        on_b.executor_bond = s1.claims[&id_b].bond;
+        assert!(
+            matches!(
+                crate::palw_tir_one_move_v1::palw_tir_one_move_outcome_v1(
+                    &s1,
+                    &s1.claims[&id_b],
+                    &on_b,
+                    &court(),
+                    1 << 26,
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    false
+                ),
+                Err(crate::palw_court_v2::PalwCourtV2Error::DoesNotAdjudicate(_))
+            ),
+            "A's close is not claim B's"
+        );
+        on_b.execution_root = s1.claims[&id_b].execution_root;
+        on_b.trace_root = s1.claims[&id_b].trace_root;
+        assert!(
+            crate::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(&on_b).is_err(),
+            "a close's binding speaks about its own claim's roots, never the accusation's other ones"
+        );
+
+        // A claim that is not an evaluation claim (an attempt claim of the same class): refused by name.
+        let mut plain = s1.clone();
+        plain.claims.get_mut(&id_a).unwrap().source = PalwClaimSourceV2::Attempt;
+        assert_eq!(
+            fold_one(&plain, &p, 1_650, &guilty),
+            Err(PalwStateV2Error::ImprovementObjectRefused {
+                object: "an evaluation court move",
+                why: "it accuses a claim that is not an evaluation claim"
+            })
+        );
+        assert!(matches!(
+            crate::palw_tir_one_move_v1::palw_tir_one_move_outcome_v1(
+                &plain,
+                &plain.claims[&id_a],
+                accusation,
+                &court(),
+                1 << 26,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                false
+            ),
+            Err(crate::palw_court_v2::PalwCourtV2Error::DoesNotAdjudicate(_))
+        ));
+
+        // A claim already Final is beyond the court.
+        let mut done = s1.clone();
+        done.claims.get_mut(&id_a).unwrap().phase = PalwClaimPhaseV2::Final { final_daa: 1_640 };
+        assert!(matches!(fold_one(&done, &p, 1_650, &guilty), Err(PalwStateV2Error::WrongPhase { .. })));
+    }
+
+    /// **A convicted `Final` evaluation claim leaves the epoch** (spec 17 §17.8.6): the claim's score is taken back out
+    /// while the epoch still takes scores, the job is free again, and an epoch already decided is not reopened.
+    #[test]
+    fn a_convicted_final_claim_takes_its_score_back_while_the_epoch_still_takes_scores() {
+        let p = params();
+        let (s, entries, leaves) = evaluating_with_suite();
+        let likely_item = (8..12u32)
+            .find(|item| match s.improvement_item(&h(LINE), 1, *item).unwrap().source {
+                PalwItemSourceV1::Regression { index } => index % 2 == 1,
+                _ => false,
+            })
+            .expect("a likelihood suite item");
+        let PalwItemSourceV1::Regression { index } = s.improvement_item(&h(LINE), 1, likely_item).unwrap().source else {
+            unreachable!()
+        };
+        let likely = &entries[index as usize];
+        let PalwSuiteReferenceV1::Continuation(continuation) = &likely.reference else { panic!("a likelihood entry") };
+        let run = forced_run(
+            PalwEvalJobV1 {
+                line_id: h(LINE),
+                epoch: 1,
+                item: likely_item,
+                subject: PalwEvalSubjectV1::Parent,
+                kind: PalwScoringKindV1::RefLogLik,
+                part: 0,
+                mode: PalwEvalModeV1::TeacherForced { reference_commitment: Hash64::default() },
+            },
+            LINE,
+            CAROL,
+            0xD1,
+            likely.prompt.clone(),
+            continuation.clone(),
+            PalwEvalStageParamsV1::RefLogLik { logit_scale_q24: 1 << 12 },
+            vec![],
+            None,
+            Some(opening_of(&entries, &leaves, index)),
+            Lie::None,
+        );
+        let id = h(0xD1);
+        let (s1, _) = at(&s, &p, 1_600, |b| apply_object(b, &ctx(1_600), &run.object).expect("an honest claim"));
+        let licensed = PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1_620 }, ..s1.claims[&id].clone() };
+        let (s2, _) = at(&s1, &p, 1_700, |b| {
+            b.write_claim(id, Some(licensed.clone()));
+            b.finalize_claim(id, &licensed, 1_700).expect("the claim finalizes");
+        });
+        let scored = |s: &PalwChainStateV2| {
+            s.improvement_result(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent).is_some_and(|r| !r.scores.is_empty())
+        };
+        assert!(scored(&s2), "recorded at Final");
+        // Convicted after Final, in the epoch still taking scores: the score and the holder go.
+        let (s3, _) =
+            at(&s2, &p, 1_750, |b| b.reverse_convicted_final(&ctx(1_750), id, PalwVoidReasonV2::CourtFraud).expect("reversed"));
+        assert!(matches!(s3.claims[&id].phase, PalwClaimPhaseV2::Voided { .. }));
+        assert!(!scored(&s3), "the convicted claim's score is taken back out of the epoch");
+        let row =
+            s3.improvement_eval_job(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent, PalwScoringKindV1::RefLogLik, 0).unwrap();
+        assert!(row.claim.is_none(), "the job is free again");
+        // An epoch already decided is not reopened: the reversal leaves the results alone.
+        let (decided, _) = at(&s2, &p, 1_800, |_| {});
+        assert_eq!(decided.improvement_epoch(&h(LINE), 1).unwrap().state, PalwEpochStateV1::Decided);
+        // (The decided epoch's rows retire by a bounded sweep, so the baseline is the same block without the reversal.)
+        let (baseline, _) = at(&decided, &p, 1_900, |_| {});
+        let (after, _) = at(&decided, &p, 1_900, |b| {
+            let _ = b.reverse_convicted_final(&ctx(1_900), id, PalwVoidReasonV2::CourtFraud);
+        });
+        assert_eq!(
+            after.improvement_result(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent),
+            baseline.improvement_result(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent),
+            "a decided epoch's results stand"
+        );
+    }
+
+    /// [`fold_one`] under the block's `extras`.
+    fn fold_with(
+        s: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        daa: u64,
+        extras: &PalwTransitionExtrasV1,
+        object: &PalwConsensusObjectV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let mut b = TransitionBuilder::new(s, p, false, false, false, false, extras);
+        apply_object(&mut b, &ctx(daa), object)
+    }
+
+    /// A signature the test's verifier accepts: the key, the message and the context, concatenated.
+    fn fake_sign(key: &[u8], message: &[u8], context: &[u8]) -> Vec<u8> {
+        let mut out = key.to_vec();
+        out.extend_from_slice(message);
+        out.extend_from_slice(context);
+        out
+    }
+
+    fn fake_verify(key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+        signature == fake_sign(key, message, context).as_slice()
+    }
+
+    /// **A dissected leaf of an evaluation claim is argued by F7 through the fold** (spec 17 §17.8.6.3): the subject is
+    /// a real decoder with attention, its claim honest; a cone accusation that NAMES the attention leaf opens a session
+    /// at `Terminal` on it under the held regime (the leaf is never tried whole there), the responder's root claim
+    /// (`CourtEvalRootClaimed`) opens F7's phase over the claim's own evaluation context, the rounds and the choices are
+    /// F7's own objects, and the bottom (`EvalDissection`) is graded against the phase: an honest responder is acquitted
+    /// and the challenger pays; a responder whose totals lie — hidden in the last tile so every fold checks — is
+    /// convicted where the dissection narrows it, its claim voided and slashed.
+    #[test]
+    fn a_dissected_leaf_of_an_evaluation_claim_is_argued_by_f7_and_the_fold_convicts_where_the_totals_lie() {
+        use crate::palw_court_v2::{PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT, PalwCourtVerdictProofV2 as Proof};
+        use crate::palw_improve_eval_court_v1 as court_v1;
+        use crate::palw_tir_dissect_v1::{PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirDissectChoiceV1, PalwTirFoldV1};
+        use crate::palw_tir_one_move_v1::{PalwTirOneMoveOutcomeV1, palw_tir_one_move_accusation_v1, palw_tir_one_move_outcome_v1};
+        const FORM: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let (_subject, tokens) = use_golden_subject();
+        let prompt: Vec<u32> = tokens.iter().take(3).copied().collect();
+        let p = params();
+        let base = with_real_roots(evaluating());
+        test_disclosure::set(h(LINE), 1, 0, prompt.clone(), None);
+        let run = claim_run(&base, 0, PalwEvalSubjectV1::Parent, CAROL, 0xE0, prompt.clone(), None, Lie::None);
+        let id = h(0xE0);
+        let (s1, _) = at(&base, &p, 1_600, |b| apply_object(b, &ctx(1_600), &run.object).expect("an honest claim"));
+        let claim = s1.claims[&id].clone();
+        let ev = evidence_of(&s1, &run, &claim);
+
+        // The attention's commit point at the stream's last position: a leaf whose cone reduces over the history.
+        let sp = &run.execution.space.stages[0];
+        let dissected = sp
+            .leaves()
+            .iter()
+            .rfind(|l| crate::palw_gen_court_v1::palw_gen_dissect_site_v1(sp, &l.coord).is_some())
+            .expect("the attention's commit points are dissected");
+        let index = run.execution.space.global_index(&dissected.coord).expect("a leaf of the space");
+
+        // The accusation names the leaf and carries nothing else: under the held regime it opens a dissection;
+        // outside it a leaf is argued whole, and this carries none of its cone.
+        let named = Proof::EvalCone { close: Box::new(ev.named_leaf_close(index).expect("a named leaf")) };
+        let mut accusation = palw_tir_one_move_accusation_v1(id, &claim, bond(BOB), PalwCourtVerdictV2::ExecutorGuilty, named);
+        accusation.signature = vec![9; 8];
+        crate::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(&accusation).expect("the accusation's own shape");
+        let outcome = |held: bool| palw_tir_one_move_outcome_v1(&s1, &claim, &accusation, &court(), 1 << 26, FORM, held);
+        assert_eq!(outcome(true), Ok(PalwTirOneMoveOutcomeV1::NeedsDissection { leaf: index }), "the held regime dissects it");
+        assert!(outcome(false).is_err(), "outside the held regime a leaf is argued whole, and this carries none of its cone");
+
+        // The fold, under the held regime: a session at Terminal on the leaf; the claim's path to Final is frozen.
+        let extras = PalwTransitionExtrasV1 { held_context_ladder: Some(1 << 26), ..PalwTransitionExtrasV1::default() };
+        let object = PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(accusation.clone()) };
+        let (s2, _) =
+            at_with(&s1, &p, 1_650, &extras, |b| apply_object(b, &ctx(1_650), &object).expect("the accusation opens a dissection"));
+        let sid = *s2.court_sessions.iter().find(|(_, session)| session.claim == id).map(|(sid, _)| sid).expect("a session opened");
+        assert_eq!(s2.court_session(&sid).unwrap().ladder.terminal_index(), Some(index), "at the named leaf");
+        assert!(!s2.claims[&id].phase.is_terminal(), "the claim stands while it is argued");
+        // An accusation that opens a dissection prosecutes: one declaring its own defeat is refused (the IR court's rule).
+        let mut defeat = accusation.clone();
+        defeat.verdict = PalwCourtVerdictV2::ChallengerDefeated;
+        let defeat_object = PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(defeat) };
+        assert!(
+            matches!(fold_with(&s1, &p, 1_650, &extras, &defeat_object), Err(PalwStateV2Error::ShardCourt(_))),
+            "an accusation that opens a dissection declares ExecutorGuilty"
+        );
+
+        // The responder's root claim: admitted by the acceptance layer's checks, then folded.
+        let root = ev.root_claim(index, &LIMITS).expect("a root claim");
+        let signature =
+            fake_sign(&[CAROL], &court_v1::palw_eval_root_claim_message_v1(&sid, &root), PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT);
+        crate::palw_court_v2::check_court_eval_root_claim_acceptance_v1(&s2, &sid, &root, &signature, fake_verify)
+            .expect("signed by the claim's bond");
+        let by_the_challenger =
+            fake_sign(&[BOB], &court_v1::palw_eval_root_claim_message_v1(&sid, &root), PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT);
+        assert_eq!(
+            crate::palw_court_v2::check_court_eval_root_claim_acceptance_v1(&s2, &sid, &root, &by_the_challenger, fake_verify),
+            Err(crate::palw_court_v2::PalwCourtV2Error::RungSignatureInvalid),
+            "the responder's key only"
+        );
+        let site = crate::palw_court_v2::check_court_eval_root_claim_admits_v1(&s2, &sid, &root, 2, 2, &court())
+            .expect("the root claim finalizes to the committed leaf");
+        assert!(
+            matches!(
+                crate::palw_court_v2::check_court_eval_root_claim_admits_v1(&s2, &sid, &root, 4, 2, &court()),
+                Err(crate::palw_court_v2::PalwCourtV2Error::ArityIsNotTheDerivedOne { declared: 4, derived: 2 })
+            ),
+            "the ruleset's arity only"
+        );
+
+        // The session's close door: a cone close must open the leaf the ladder narrowed to, a decode close one of the tiles it
+        // concerns, and an honest close of the narrowed leaf is an acquittal (a leaf is judged in the claim's one stage-major order).
+        let close_verdict = |proof: &Proof| {
+            crate::palw_court_v2::adjudicate_court_close_v3(&s2, &sid, proof, &court(), 1 << 26, FORM, true, false, None)
+        };
+        let elsewhere = Proof::EvalCone { close: Box::new(ev.cone_close(0, &LIMITS).expect("a cone close of the first leaf")) };
+        assert!(
+            matches!(close_verdict(&elsewhere), Err(crate::palw_court_v2::PalwCourtV2Error::CloseIsNotTheNarrowedStep { .. })),
+            "a cone close of another leaf is not the ladder's"
+        );
+        let token = Proof::EvalDecodeToken { close: Box::new(ev.decode_close(0).expect("a decode close")) };
+        assert!(
+            matches!(close_verdict(&token), Err(crate::palw_court_v2::PalwCourtV2Error::CloseIsNotTheNarrowedStep { .. })),
+            "a decode close whose tiles do not include the narrowed leaf is not the ladder's"
+        );
+        let whole =
+            Proof::EvalCone { close: Box::new(ev.cone_close(index, &LIMITS).expect("a whole cone close of the narrowed leaf")) };
+        assert_eq!(
+            close_verdict(&whole),
+            Ok(PalwCourtVerdictV2::ChallengerDefeated),
+            "an honest cone close of the narrowed leaf acquits"
+        );
+
+        // Play the phase to its bottom, honest or with a lie in reduction `lying`'s first element, hidden in the last tile.
+        let tiles = (site.history_positions as u64).div_ceil(2);
+        let open_phase = |lying: Option<usize>| -> PalwChainStateV2 {
+            let mut claimed = root.clone();
+            if let Some(r) = lying {
+                claimed.totals.partials[r][0] += 1;
+            }
+            let signature = fake_sign(
+                &[CAROL],
+                &court_v1::palw_eval_root_claim_message_v1(&sid, &claimed),
+                PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+            );
+            let object = PalwConsensusObjectV2::CourtEvalRootClaimed { session_id: sid, root: Box::new(claimed), arity: 2, signature };
+            let (mut state, _) =
+                at_with(&s2, &p, 1_651, &extras, |b| apply_object(b, &ctx(1_651), &object).expect("the root claim opens F7's phase"));
+            let mut daa = 1_652;
+            while state.tir_dissection_v1(&sid).expect("an open phase").turn() == crate::palw_bisect::PalwBisectTurnV1::AwaitDisclosure
+            {
+                let phase = state.tir_dissection_v1(&sid).unwrap().clone();
+                let mut round = ev.round(&phase, &LIMITS).expect("honest children");
+                if let Some(r) = lying {
+                    let ranges = phase.child_ranges();
+                    let at = ranges.iter().position(|(first, count)| (*first..first + count).contains(&(tiles - 1))).unwrap_or(0);
+                    round.children[at].partials[r][0] += 1;
+                }
+                let claimed_children = round.children.clone();
+                let round_object = PalwConsensusObjectV2::CourtTirDissected { session_id: sid, round, signature: vec![1; 8] };
+                (state, _) = at_with(&state, &p, daa, &extras, |b| apply_object(b, &ctx(daa), &round_object).expect("a round"));
+                daa += 1;
+                // The challenger names the child its own partials disagree with.
+                let phase = state.tir_dissection_v1(&sid).unwrap().clone();
+                let honest = ev.round(&phase, &LIMITS).expect("honest children").children;
+                let child = claimed_children.iter().zip(&honest).position(|(c, h)| c != h).unwrap_or(0) as u8;
+                let choice = PalwTirDissectChoiceV1 {
+                    version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+                    session_id: sid,
+                    round: phase.round(),
+                    child,
+                };
+                let choice_object = PalwConsensusObjectV2::CourtTirChildChosen { session_id: sid, choice, signature: vec![1; 8] };
+                (state, _) = at_with(&state, &p, daa, &extras, |b| apply_object(b, &ctx(daa), &choice_object).expect("a choice"));
+                daa += 1;
+            }
+            state
+        };
+        // The bottom close and the verdict the acceptance layer derives from it.
+        let close_of = |state: &PalwChainStateV2| -> (PalwConsensusObjectV2, PalwCourtVerdictV2) {
+            let phase = state.tir_dissection_v1(&sid).expect("an open phase").clone();
+            let bottom = ev.bottom(&phase, &LIMITS).expect("the bottom close");
+            let proof = Proof::EvalDissection { bottom: Box::new(bottom) };
+            let verdict =
+                crate::palw_court_v2::adjudicate_court_close_v3(state, &sid, &proof, &court(), 1 << 26, FORM, true, false, None)
+                    .expect("the bottom adjudicates");
+            (PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict, proof }, verdict)
+        };
+
+        // An honest responder is acquitted at the bottom, and the challenger pays.
+        let honest = open_phase(None);
+        let (close, verdict) = close_of(&honest);
+        assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest responder is acquitted");
+        let bob_before = honest.bond(&bond(BOB)).unwrap().collateral;
+        let (done, _) = at_with(&honest, &p, 1_700, &extras, |b| apply_object(b, &ctx(1_700), &close).expect("the close folds"));
+        assert!(
+            done.court_session(&sid).is_none() && done.tir_dissection_v1(&sid).is_none(),
+            "the session and its phase end together"
+        );
+        assert!(!done.claims[&id].phase.is_terminal(), "the honest claim stands");
+        assert!(done.bond(&bond(BOB)).unwrap().collateral < bob_before, "the challenger pays");
+
+        // A responder whose totals lie is convicted where the dissection narrows it.
+        let r = (0..site.folds.len())
+            .rev()
+            .find(|i| site.folds[*i] == PalwTirFoldV1::Sum && !root.elements[*i].is_empty())
+            .expect("a sum reduction");
+        let lying = open_phase(Some(r));
+        let (close, verdict) = close_of(&lying);
+        assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "the lie is convicted at its tile");
+        let carol_before = lying.bond(&bond(CAROL)).unwrap().collateral;
+        let (done, _) = at_with(&lying, &p, 1_700, &extras, |b| apply_object(b, &ctx(1_700), &close).expect("the close folds"));
+        assert!(
+            matches!(done.claims[&id].phase, PalwClaimPhaseV2::Voided { .. }),
+            "the claim is voided: {:?}",
+            done.claims[&id].phase
+        );
+        assert!(done.bond(&bond(CAROL)).unwrap().collateral < carol_before, "and its executor slashed");
+        assert!(done.court_session(&sid).is_none() && done.tir_dissection_v1(&sid).is_none());
+        assert!(
+            done.improvement_result(&h(LINE), 1, 0, &PalwEvalSubjectV1::Parent).is_none_or(|r| r.scores.is_empty()),
+            "a convicted claim records no score"
+        );
     }
 }
