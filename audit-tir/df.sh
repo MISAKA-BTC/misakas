@@ -27,7 +27,7 @@
 #   bash audit-tir/df.sh <command> --bin-dir <release dir>      (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
 #     OLD_KASPAD_BIN=<the fleet's release kaspad>  A16_ARTIFACT=<qwen2.5-1.5B A16 .palwart>
 #     [WORK_DIR=~/.misaka-palw-tir-drill] [TIR_AT=20] [IR_CONTEXT=512] [IR_LOGITS_TILE=1024]
-#   commands: dry | class | small | up | register-past | flagday [old|below|cross|classes] | stage1 | stage2 | df1 | df2 | df3 | df4 | bdc | status | down
+#   commands: dry | class | small | up | restart-old | register-past | flagday [old|below|cross|classes] | stage1 | stage2 | df1 | df2 | df3 | df4 | bdc | status | down
 #   [WORK_DIR=~/.misaka-palw-int10-drill] [TIR2_AT=50]  (the DAA-3,600 flag day's drill height; fixed for the chain's life)
 #
 #   THE B/D/C PIECE (RFC-0002's evidence transport, docs/design/palw/tir/evidence-transport-scope.md), on its
@@ -201,6 +201,8 @@ plan() {
                      at ${TIR2_AT:-?} and no court window
      flagday below   new0 DAA < $((${TIR2_AT:-$TIR_AT} - 2)): new0 and the old relay report one sink at one DAA (the old release
                      validated every block the new binary built below the fence: the rules below it are unchanged)
+     restart-old     the tip past ${TIR_AT} and before ${TIR2_AT:-?}: the old relay is restarted once, so its handshake stores the refusal height the new
+                     nodes rejudge it at (without it, it follows the chain past the fence until a fresh handshake)
   3. register-past   the tip past ${TIR2_AT:-?}: the $PAST_CLASS class's registrant restarted with --palw-register-class — it registers PAST the flag day
      flagday cross   new0 past ${TIR2_AT:-?} + 5: 'Fork-id mismatch … crossed fence ${TIR2_AT:-?}'; the old relay stops (DAA <= ${TIR2_AT:-?} + 3)
      flagday classes the $PAST_CLASS class (registered past the fence) is listed by every running new node (getPalwClasses): one registeredDaa
@@ -370,6 +372,30 @@ flagday_script() {
     bash "$s" "${1:-run}"
 }
 
+# restart-old: the old relay connected at DAA 1, when its next fence and the new nodes' were the same one (the drill's own flag
+# day), so the new nodes stored NO refusal height for it and never rejudge that connection at TIR2_AT: on 2026-10-01 it followed the
+# chain from DAA 50 to 52 and was refused only by a hand-restarted, fresh handshake (README "Known drill behaviours"; the 09-29
+# D-F4 lesson, now for fence2). Restarted once the chain is past TIR_AT and before TIR2_AT, its handshake announces the next fence the
+# old release expects (1,000) against the 50 the new nodes expect, they store the refusal height, and disconnect it AT the fence —
+# the case of a production int-8 node that is already connected when the new release's flag day is scheduled. Does nothing, and says
+# so, when the tip is already within two DAA of the flag day or past it (UNTESTED here: the 10-01 run restarted it at tip 52).
+restart_old() {
+    [ -n "$TIR2_AT" ] || die "no TIR2_AT: nothing to restart the old relay for"
+    local now="" i
+    for i in $(seq 1 "${RESTART_OLD_WAIT_SAMPLES:-720}"); do
+        now=$(tip new3)
+        [[ "$now" =~ ^[0-9]+$ ]] && [ "$now" -gt $((TIR_AT + 1)) ] && break
+        sleep 10
+    done
+    [[ "$now" =~ ^[0-9]+$ ]] && [ "$now" -gt $((TIR_AT + 1)) ] || die "the chain is still at DAA ${now:-?}, not past the IR fence $TIR_AT"
+    if [ "$now" -ge $((TIR2_AT - 2)) ]; then
+        say "restart-old: tip $now is within two DAA of the flag day $TIR2_AT (or past it) — the old relay is NOT restarted; it is refused only at a fresh handshake"
+        return 0
+    fi
+    say "restart-old: tip $now is between the IR fence $TIR_AT and the flag day $TIR2_AT — restarting the old relay (a fresh handshake, so the refusal height is stored)"
+    bash "$A/nodes.sh" stop old; bash "$A/nodes.sh" start old
+}
+
 # register-past: the PAST_CLASS (small by default, or ir) registers PAST the flag day. Waits for the tip to pass TIR2_AT + 1,
 # creates the marker lib-df.sh reads, and restarts that class's registrant (new4 for small, new0 for ir) with --palw-register-class.
 register_past() {
@@ -397,6 +423,7 @@ stage1() {
     local rco=0 rcb=0 rcr=0 rcx=0 rcc=0 rc3=0
     flagday_script old || rco=$?
     flagday_script below || rcb=$?
+    restart_old || say "restart-old failed (not a verdict item): the old relay may follow the chain past the flag day"
     register_past || rcr=$?
     flagday_script cross || rcx=$?
     flagday_script classes || rcc=$?
@@ -540,6 +567,7 @@ case $cmd in
     stage2) stage2 ;;
     flagday) flagday_script "${STEP:-run}" ;;
     register-past|register-small) register_past ;;
+    restart-old) restart_old ;;
     df1) df1 ;;
     df2) df2 ;;
     df3) phase_f df3 ;;
