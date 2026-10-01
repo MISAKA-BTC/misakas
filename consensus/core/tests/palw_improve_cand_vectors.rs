@@ -18,7 +18,7 @@ use kaspa_consensus_core::palw_improve_candidate_v1::{
 use kaspa_consensus_core::palw_improve_composite_v1::palw_improve_composite_root_v1;
 use kaspa_consensus_core::palw_improve_material_v1::*;
 use kaspa_consensus_core::palw_improve_state_v1::{PalwTeacherClassV1, PalwTeachingArtifactKindV1, PalwVerificationTypeV1};
-use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use kaspa_consensus_core::palw_tir_class_v1::{
     PALW_TIR_CLASS_VERSION_V1, PALW_TIR_LAYOUT_VERSION_V1, PalwTirClassV1, PalwTirLayoutV1,
 };
@@ -173,6 +173,14 @@ fn material_ids() -> Value {
         "artifact_commit": hex(&palw_teaching_artifact_commit_v1(&artifact)),
         "licence_id": hex(&licence.licence_id),
         "opt_in_pin": hex(&job.pin()),
+        // Tag 86: the key reveal as a consensus object, its borsh bytes (the discriminant first).
+        "key_reveal_object_tag86": borsh::to_vec(&PalwConsensusObjectV2::HardCaseKeyRevealed {
+            payload: Box::new(PalwCaseKeyRevealV1 { line_id: line, case_id, key: key.clone(), salt: h(0x51) }),
+        })
+        .unwrap()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>(),
         "messages": {
             "hard_case_tag71": hex(&palw_improve_material_message_v1(71, &network, &case, Some(&bond(2)))),
             "licence_tag79": hex(&palw_improve_material_message_v1(79, &network, &licence, None)),

@@ -6370,7 +6370,14 @@ impl PalwClassFrozenV2 {
 /// The consensus objects a block can carry into the state, in the block's deterministic
 /// acceptance order. ACCEPTANCE (who may say this, with what proof) belongs to later PRs; the
 /// transition enforces referential integrity and the lattice.
+///
+/// **A variant's discriminant is its tag, and from 83 on it is declared** (`= 83` …; spec 17 §17.0): the
+/// first 83 are their positions, and the later ones are allocations two lanes may append in either order
+/// without moving each other's number (`use_discriminant`, and the `repr` Rust asks of a data-carrying
+/// variant with one — the proof enum's own convention, `PalwCourtVerdictProofV2`).
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum PalwConsensusObjectV2 {
     /// Carries the operator's KEY, not an operator id: the id is derived
     /// ([`palw_operator_id_v2`]) so it names something someone must hold rather than a label
@@ -7546,13 +7553,22 @@ pub enum PalwConsensusObjectV2 {
     /// Signed by the accuser's bond. Appended; dropped by name below `palw_improvement_v1`.
     DefaultAccusedPipelineStep {
         accusation: Box<crate::palw_pipeline_da_v1::PalwPipelineStepAccusationV1>,
-    },
+    } = 83,
     /// **Tag 84: reserved** (spec 17 §17.0). The variant exists so that every later tag keeps its number;
     /// its payload is uninhabited, so a block that carries one is undecodable, exactly as an unknown tag
     /// is.
-    ReservedPipelineDa84(crate::palw_pipeline_da_v1::PalwReservedObjectV1),
+    ReservedPipelineDa84(crate::palw_pipeline_da_v1::PalwReservedObjectV1) = 84,
     /// **Tag 85: reserved** (spec 17 §17.0), as tag 84 is.
-    ReservedPipelineDa85(crate::palw_pipeline_da_v1::PalwReservedObjectV1),
+    ReservedPipelineDa85(crate::palw_pipeline_da_v1::PalwReservedObjectV1) = 85,
+    /// **Tag 86: a hard case's committed key or reference, opened** (RFC-0004 §7.1, spec 17 §17.8.2): the
+    /// key (an `ExactKey`) or the reference continuation (a `Continuation`) the case's commitment commits,
+    /// with its salt. Unsigned, as a setter set's keys are (tag 75): only the maker's salt opens the
+    /// commitment. A hold-out case's reference is disclosed from the draw (`Evaluating`), its key once the
+    /// generations are final (`Closing`); a training case's at any time. Appended; dropped by name below
+    /// `palw_improvement_v1`.
+    HardCaseKeyRevealed {
+        payload: Box<crate::palw_improve_material_v1::PalwCaseKeyRevealV1>,
+    } = 86,
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7638,6 +7654,7 @@ pub fn palw_improvement_object_landed_v1(object: &PalwConsensusObjectV2) -> bool
             | O::SetterSetCommitted { .. }
             | O::SetterSetRevealed { .. }
             | O::SetterKeysRevealed { .. }
+            | O::HardCaseKeyRevealed { .. }
             | O::DatasetRegistered { .. }
             | O::TeachingArtifactCommitted { .. }
             | O::TeachingArtifactRevealed { .. }
@@ -7660,6 +7677,7 @@ pub fn palw_improvement_object_name_v1(object: &PalwConsensusObjectV2) -> Option
         O::SetterSetCommitted { .. } => Some("SetterSetCommitted (tag 73)"),
         O::SetterSetRevealed { .. } => Some("SetterSetRevealed (tag 74)"),
         O::SetterKeysRevealed { .. } => Some("SetterKeysRevealed (tag 75)"),
+        O::HardCaseKeyRevealed { .. } => Some("HardCaseKeyRevealed (tag 86)"),
         O::DatasetRegistered { .. } => Some("DatasetRegistered (tag 76)"),
         O::TeachingArtifactCommitted { .. } => Some("TeachingArtifactCommitted (tag 77)"),
         O::TeachingArtifactRevealed { .. } => Some("TeachingArtifactRevealed (tag 78)"),
@@ -31702,6 +31720,9 @@ fn apply_object(
         }
         PalwConsensusObjectV2::SetterKeysRevealed { payload } => {
             palw_improve_material_fold_v1::apply_setter_keys_revealed_v1(builder, ctx, payload)?;
+        }
+        PalwConsensusObjectV2::HardCaseKeyRevealed { payload } => {
+            palw_improve_material_fold_v1::apply_case_key_revealed_v1(builder, ctx, payload)?;
         }
         PalwConsensusObjectV2::DatasetRegistered { payload, registrant, signature: _ } => {
             palw_improve_material_fold_v1::apply_dataset_registered_v1(builder, ctx, payload, registrant)?;

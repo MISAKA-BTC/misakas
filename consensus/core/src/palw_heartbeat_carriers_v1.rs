@@ -171,6 +171,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::SetterSetCommitted { .. }
         | O::SetterSetRevealed { .. }
         | O::SetterKeysRevealed { .. }
+        | O::HardCaseKeyRevealed { .. }
         | O::DatasetRegistered { .. }
         | O::TeachingArtifactCommitted { .. }
         | O::TeachingArtifactRevealed { .. }

@@ -11883,7 +11883,10 @@ impl VirtualStateProcessor {
                     )?;
                 }
                 // Reveals are unsigned: each opens a commitment only its maker's salt opens (the fold's).
-                Obj::SetterSetRevealed { .. } | Obj::SetterKeysRevealed { .. } | Obj::TeachingArtifactRevealed { .. } => {
+                Obj::SetterSetRevealed { .. }
+                | Obj::SetterKeysRevealed { .. }
+                | Obj::HardCaseKeyRevealed { .. }
+                | Obj::TeachingArtifactRevealed { .. } => {
                     if !self.palw_improvement_at(point.daa_score) {
                         return Err("a reveal is refused: palw_improvement_v1 is not in force at this block (RFC-0004)".to_string());
                     }
@@ -19467,6 +19470,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::SetterSetCommitted { .. } => "SetterSetCommitted",
         O::SetterSetRevealed { .. } => "SetterSetRevealed",
         O::SetterKeysRevealed { .. } => "SetterKeysRevealed",
+        O::HardCaseKeyRevealed { .. } => "HardCaseKeyRevealed",
         O::DatasetRegistered { .. } => "DatasetRegistered",
         O::TeachingArtifactCommitted { .. } => "TeachingArtifactCommitted",
         O::TeachingArtifactRevealed { .. } => "TeachingArtifactRevealed",

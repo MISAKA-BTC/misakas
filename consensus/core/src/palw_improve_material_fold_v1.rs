@@ -784,7 +784,6 @@ pub(super) fn apply_candidate_submitted_v1(
 /// may be disclosed at any time. A drawn case's key is then scored for every subject, pays the S1
 /// bounty of the first matching `Answer`, and — for a problem an artifact set — the setter's reward
 /// when the parent fails it.
-#[allow(dead_code)] // its variant (tag 86) lands after Phase F's 83–85
 pub(super) fn apply_case_key_revealed_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -1688,7 +1687,9 @@ mod tests {
         let reveal = PalwCaseKeyRevealV1 { line_id: h(LINE), case_id: c.case_id, key: key.clone(), salt: h(0x51) };
         let bad = PalwCaseKeyRevealV1 { salt: h(0x52), ..reveal.clone() };
         assert!(try_at(&s, 1_030, |b, x| apply_case_key_revealed_v1(b, x, &bad)).is_err(), "another salt");
-        let s = try_at(&s, 1_030, |b, x| apply_case_key_revealed_v1(b, x, &reveal)).unwrap();
+        // …taken through the object's own arm (tag 86: past the fence, its admission landed).
+        let object = PalwConsensusObjectV2::HardCaseKeyRevealed { payload: Box::new(reveal.clone()) };
+        let s = try_at(&s, 1_030, |b, x| apply_object(b, x, &object)).unwrap();
         assert_eq!(s.improvement_case(&h(LINE), &c.case_id).unwrap().revealed, Some(key));
         assert_eq!(s.improvement_earnings(&bond(ALICE)), policy().fees.s1_bounty, "the matching Answer's teacher");
         assert_eq!(s.improvement_earnings(&bond(BOB)), 0, "a wrong answer earns nothing");

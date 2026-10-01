@@ -12698,6 +12698,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::SetterSetCommitted { .. } => "SetterSetCommitted",
         PalwConsensusObjectV2::SetterSetRevealed { .. } => "SetterSetRevealed",
         PalwConsensusObjectV2::SetterKeysRevealed { .. } => "SetterKeysRevealed",
+        PalwConsensusObjectV2::HardCaseKeyRevealed { .. } => "HardCaseKeyRevealed",
         PalwConsensusObjectV2::DatasetRegistered { .. } => "DatasetRegistered",
         PalwConsensusObjectV2::TeachingArtifactCommitted { .. } => "TeachingArtifactCommitted",
         PalwConsensusObjectV2::TeachingArtifactRevealed { .. } => "TeachingArtifactRevealed",

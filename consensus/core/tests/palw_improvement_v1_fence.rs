@@ -34,7 +34,7 @@ use kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1;
 use kaspa_consensus_core::palw_improve_artifact_v1::PalwTirArtifactRefV1;
 use kaspa_consensus_core::palw_improve_candidate_v1::{PalwCandidateDeclarationsV1, PalwCandidateSubmissionV1};
 use kaspa_consensus_core::palw_improve_material_v1::{
-    PalwCaseReferenceV1, PalwCaseSourceV1, PalwDataUseOptInV1, PalwDatasetV1, PalwFpJobFactsV1, PalwHardCaseV1,
+    PalwCaseKeyRevealV1, PalwCaseReferenceV1, PalwCaseSourceV1, PalwDataUseOptInV1, PalwDatasetV1, PalwFpJobFactsV1, PalwHardCaseV1,
     PalwSetterKeysRevealV1, PalwSetterSetCommitmentV1, PalwSetterSetRevealV1, PalwTeacherLicenceV1, PalwTeachingArtifactCommitV1,
     PalwTeachingArtifactV1,
 };
@@ -657,8 +657,33 @@ fn the_improvement_objects_are_tags_70_to_82_and_one_predicate_names_them() {
     assert_eq!(names.len(), 13, "thirteen distinct names");
     let other = PalwConsensusObjectV2::ModelLineRetired { line_id: h(10), signature: vec![1] };
     assert!(!palw_object_is_improvement_v1(&other) && palw_improvement_object_name_v1(&other).is_none());
-    // Tag 83 is free: nothing decodes it.
+    // Tags 83-86 are Phase F's and the key reveal's (spec 17 §17.0): 83 is the pipeline step demand, 84 and 85 are
+    // reserved and decode to nothing, 86 is `HardCaseKeyRevealed`; tag 87 is the next free tag.
     let mut bytes = borsh::to_vec(objects.last().unwrap()).unwrap();
-    bytes[0] = 83;
-    assert!(borsh::from_slice::<PalwConsensusObjectV2>(&bytes).is_err(), "tag 83 is unassigned");
+    for undecodable in [84u8, 85, 87] {
+        bytes[0] = undecodable;
+        assert!(borsh::from_slice::<PalwConsensusObjectV2>(&bytes).is_err(), "tag {undecodable} decodes to nothing");
+    }
+}
+
+/// **Tag 86, appended after Phase F's 83-85**: a hard case's committed key or reference, opened — unsigned (only the
+/// maker's salt opens the commitment), named by the one predicate, riding at every height, and no H-1 carrier.
+#[test]
+fn the_case_key_reveal_is_tag_86_and_one_predicate_names_it() {
+    let object = PalwConsensusObjectV2::HardCaseKeyRevealed {
+        payload: Box::new(PalwCaseKeyRevealV1 { line_id: h(10), case_id: h(11), key: vec![5, 6], salt: h(12) }),
+    };
+    let bytes = borsh::to_vec(&object).expect("an object serializes");
+    assert_eq!(bytes[0], 86, "the discriminant is the reserved tag");
+    let name = palw_improvement_object_name_v1(&object).expect("named");
+    assert!(name.ends_with("(tag 86)"), "{name}");
+    assert!(palw_object_is_improvement_v1(&object));
+    assert!(
+        !palw_object_is_tir_v1(&object) && !palw_object_is_tir_fence2_v1(&object) && !palw_object_is_gen_v1(&object),
+        "it belongs to no other fence"
+    );
+    assert!(kaspa_consensus_core::palw_state_v2::palw_improvement_object_landed_v1(&object), "its admission has landed");
+    assert_eq!(borsh::from_slice::<PalwConsensusObjectV2>(&bytes).expect("an object decodes"), object, "it round-trips");
+    assert!(kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).is_ok(), "it rides");
+    assert!(!kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_v1(&object), "and is no H-1 carrier");
 }

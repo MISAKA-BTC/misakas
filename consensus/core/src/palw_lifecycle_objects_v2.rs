@@ -309,6 +309,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::SetterSetCommitted { .. }
         | PalwConsensusObjectV2::SetterSetRevealed { .. }
         | PalwConsensusObjectV2::SetterKeysRevealed { .. }
+        | PalwConsensusObjectV2::HardCaseKeyRevealed { .. }
         | PalwConsensusObjectV2::DatasetRegistered { .. }
         | PalwConsensusObjectV2::TeachingArtifactCommitted { .. }
         | PalwConsensusObjectV2::TeachingArtifactRevealed { .. }
