@@ -111,11 +111,25 @@ requirement (none, or a named capability with the general primitive that would c
 `adapters/*.json`: `decoder-core` (the strict Llama-lineage decoder every family adapter extends: it reads
 only the keys a Llama reads, so an adapter is exactly as permissive as its class), `standard-decoder` (the
 Level A template: core + sliding window, partial rotary, tensor-driven biases and q/k norm, multipliers,
-soft-caps), the family adapters, mixins (`mixin-*`), and `refusals` (architectures refused on purpose, by
-the features they lack). Every family adapter is held, by `tests/adapters.rs`, to the `ModelSpec` the Rust
-parser it replaced produced on every fixture and real config; `tests/golden_lowering.rs` holds the lowered
-programs and artifacts (92 fixtures, 63 real configs) byte-identical to the baseline recorded before the
-refactor.
+soft-caps), `spec-frame` (the shape of every decoder-shaped spec), the mixins (`mixin-*`), the family
+adapters — **every architecture this crate lowers is one**: the Llama lineage and its relatives, the
+MoEs (Mixtral, Qwen-MoE, OLMoE, Granite-MoE, DeepSeek-V2/V3 with MLA, GLM-4.5, Phi-3.5-MoE, Llama-4,
+gpt-oss, Gemma-4 with per-layer inputs and KV sharing), the hybrids (Qwen3-Next/3.5, Jamba), the SSMs
+(Mamba, Mamba-2, Falcon-Mamba, RWKV-4), the encoders (BERT, RoBERTa/XLM-R, MPNet, DistilBERT, CLIP's
+text tower) and the vision-language wrappers — and `refusals` (architectures refused on purpose, by the
+features they lack, RWKV-5/6/7 among them).
+
+Every family adapter is held to the `ModelSpec` the per-architecture Rust parser it replaced produced,
+by the differential oracle `tests/adapters.rs` (cargo feature `legacy-oracle`): on 224 fixtures and
+published configs and on ~15 000 single-key *mutants* of them (every key deleted, nulled, flipped,
+nudged, rewritten or truncated, at the top level and one object down — plus an unknown key), the adapter
+and the Rust parser either read the same spec or both refuse. Where an adapter refuses a mutant the
+parser read, the refusal comes from the generic checks of the evaluator (a head count that does not
+divide the width, an odd rotary dimension, a division by zero, a non-finite number, a decoder with no
+layer): stricter, never looser. `tests/golden_lowering.rs` holds the lowered programs and artifacts
+(92 fixtures, 63 real configs) byte-identical to the baseline recorded before the refactor; it is the
+permanent gate, and the Rust parsers (`src/hf_config/legacy_oracle`, compiled only with the feature) can
+be deleted once the corpus lane has validated the pack.
 
 ## 7. Writing an adapter
 

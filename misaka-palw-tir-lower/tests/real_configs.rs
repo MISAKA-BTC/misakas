@@ -318,7 +318,7 @@ fn refusals_name_their_reason() {
     refused("rwkv-6-finch-1b6", "remote code");
     refused("rwkv7-fla-1.5b", "flash-linear-attention");
     refused("t5-small", "encoder–decoder");
-    refused("bert-base-uncased", "no lowerer template");
+    refused("bert-base-uncased", "no adapter");
     refused("gemma-3n-e4b", "AltUp");
     // Pre-quantised: GPTQ and AWQ are read from their integers; every other method is refused.
     let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/llama-3.1-8b-gptq.json")).unwrap();
