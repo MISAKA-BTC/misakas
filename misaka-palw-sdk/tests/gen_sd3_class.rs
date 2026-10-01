@@ -113,8 +113,16 @@ fn sd3_class() -> Option<Sd3Class> {
     )
     .unwrap_or_else(|e| panic!("declare: {e}"));
     let row = declared.row.clone().expect("the class derives a registry row");
-    let ids = vec![5, 9, 13];
-    let steps = COUNTS[COUNTS.len() - 1] as u16;
+    // `SD3_PROMPT=<ids, comma separated>` asks for another prompt (at most `L − 2` ids).
+    let ids: Vec<u32> = std::env::var("SD3_PROMPT")
+        .ok()
+        .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+        .filter(|v: &Vec<u32>| !v.is_empty() && v.len() <= L - 2)
+        .unwrap_or_else(|| vec![5, 9, 13]);
+    // The widest job's step count unless `SD3_STEPS=<an offered count>` asks for another job of the class (the price is the class's, and
+    // bounds every job: the sweep may be run on a shorter one).
+    let steps = std::env::var("SD3_STEPS").ok().and_then(|v| v.parse::<u16>().ok()).unwrap_or(COUNTS[COUNTS.len() - 1] as u16);
+    assert!(COUNTS.contains(&(steps as u32)), "SD3_STEPS is one of {COUNTS:?}");
     let job = PalwGenJobV1 {
         version: PALW_GEN_JOB_VERSION_V1,
         envelope: PalwJobEnvelopeV1 {
@@ -471,17 +479,20 @@ fn the_gate_prices_every_close_at_least_what_it_measures() {
             sample.insert(l.global);
         }
     }
-    for leaves in by_point.values() {
-        sample.extend([leaves[0], leaves[leaves.len() / 2], leaves[leaves.len() - 1]]);
-    }
-    // The first leaf of every position of every commit point: the structure of a cone moves with the position (a state's replay, a
-    // history's length, the first position's missing reads).
-    let positions: BTreeMap<u64, u32> = listing.iter().map(|l| (l.global, l.pos)).collect();
-    for leaves in by_point.values() {
-        let mut seen = std::collections::BTreeSet::new();
-        for leaf in leaves {
-            if seen.insert(positions[leaf]) {
-                sample.insert(*leaf);
+    // `SD3_SWEEP_STRIDE_ONLY=1`: the strided sample alone (the first sweep's 519 leaves at stride 40), for a run on another job.
+    if std::env::var("SD3_SWEEP_STRIDE_ONLY").is_err() {
+        for leaves in by_point.values() {
+            sample.extend([leaves[0], leaves[leaves.len() / 2], leaves[leaves.len() - 1]]);
+        }
+        // The first leaf of every position of every commit point: the structure of a cone moves with the position (a state's replay, a
+        // history's length, the first position's missing reads).
+        let positions: BTreeMap<u64, u32> = listing.iter().map(|l| (l.global, l.pos)).collect();
+        for leaves in by_point.values() {
+            let mut seen = std::collections::BTreeSet::new();
+            for leaf in leaves {
+                if seen.insert(positions[leaf]) {
+                    sample.insert(*leaf);
+                }
             }
         }
     }
@@ -749,6 +760,118 @@ fn every_leaf_of_the_widest_job_has_a_cone_close_that_fits_one_carrier() {
         worst.0, worst.1
     );
     assert!(worst.0 <= one_move_max, "a cone close of {} B at leaf {} exceeds one carrier", worst.0, worst.1);
+}
+
+/// **The price counts the committed write of the previous position, for every element of the latent a cone reads** (lane A's
+/// requirement on PALW-GEN-20). The latent is a state `post` writes (NF-29): the court reads its value at the start of `p` as the
+/// committed write of `p − 1` (the `StateWrite`'s commit leaf at the stage's `post` occurrence), so a cone at a position ≥ 1 that reads
+/// the latent carries that leaf. For every denoiser leaf at positions 1.. whose MEASURED close carries such a leaf (`SD3_WRITE_STRIDE=<n>`
+/// takes every `n`-th, default 4, and always the first and last tile of each commit point at each position): (1) every committed-write
+/// leaf of the measured close is in the twin's read set of the same cone — the leaf, by its coordinate, not by a count; (2) the price of
+/// the commit point is at least the measured close. A cone that reads the latent is among the sampled leaves of the sweep too; this one
+/// is held to the leaf.
+#[test]
+#[ignore = "slow: a cone close per sampled denoiser leaf at positions >= 1: cargo test --config profile.dev.opt-level=2 -p misaka-palw-sdk --test gen_sd3_class -- --ignored --nocapture committed_write"]
+fn the_price_counts_the_committed_write_of_the_previous_position_for_every_element_a_cone_reads() {
+    use kaspa_consensus_core::palw_gen_close_price_v1::PalwGenClassSizingV1;
+    use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
+    use kaspa_consensus_core::palw_tir_close_size_v1::{PalwTirClosePriceV1, PalwTirCloseRequestV1, palw_gen_close_reads_v1};
+    use misaka_palw_tir::demand::DemandContext;
+    let Some(c) = sd3_class() else { return };
+    let (held, _file) = held(&c);
+    let honest = held.run_tensor(&c.job, &c.ids, &[], &[], FORM).expect("the job runs");
+    let ev = honest.evidence(&held);
+    let denoise = c.spec.pipeline.stages.iter().position(|st| st.name == "denoise").expect("a denoise stage");
+    let space = &honest.execution.space;
+    let sp = &space.stages[denoise];
+    let post_occ = (sp.program.occurrences().len() - 1) as u16;
+    let (write_node, _state) = *sp.info.post_writes.first().expect("the latent is written in post");
+    let class = &c.declared.class;
+    let tables = PalwGenClassSizingV1::new(class, &c.spec.pipeline, &c.spec.programs).expect("tables");
+    let z = tables.stage(class, &c.spec.pipeline, &c.spec.programs, denoise).expect("the denoiser's sizing");
+    let leaves = kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&c.spec.programs).unwrap().leaf_count();
+    let price = PalwTirClosePriceV1::generative(&z.space, &z.inventory, denoise, leaves, z.pricing.clone()).expect("a price");
+    let (prices, _) = gate_prices(&c);
+    let shape = z.space.job_shape(&z.job).expect("the job shape");
+    let stride: usize = std::env::var("SD3_WRITE_STRIDE").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    // The leaves at positions >= 1, by (position, occurrence, node): their tiles in order.
+    let mut by_site: BTreeMap<(u32, u16, u16), Vec<usize>> = BTreeMap::new();
+    for (local, leaf) in sp.leaves().iter().enumerate() {
+        if leaf.coord.pos == 0 {
+            continue;
+        }
+        if let PalwGenLeafKindV1::Commit { occurrence, node } = leaf.coord.kind {
+            by_site.entry((leaf.coord.pos, occurrence, node)).or_default().push(local);
+        }
+    }
+    let (mut measured, mut with_write, mut leaves_checked, mut worst_margin) = (0usize, 0usize, 0usize, i64::MAX);
+    let mut positions = std::collections::BTreeSet::new();
+    for ((pos, occurrence, node), locals) in &by_site {
+        let block = sp.occurrence_block(*occurrence).expect("an occurrence");
+        let point = (denoise as u8, block, *node);
+        let Some(bound) = prices.get(&point) else { continue };
+        for (n, local) in locals.iter().enumerate() {
+            if n % stride != 0 && n != 0 && n + 1 != locals.len() {
+                continue;
+            }
+            let leaf = sp.leaves()[*local];
+            let global = space.global_index(&leaf.coord).expect("a leaf");
+            if is_dissected(&held, &honest, global) {
+                continue;
+            }
+            let close = ev.cone_close(global, &LIMITS).unwrap_or_else(|e| panic!("denoise pos {pos} node {node} tile {n}: {e}"));
+            let bytes = borsh::to_vec(&PalwCourtVerdictProofV2::GenCone { close: Box::new(close.clone()) }).unwrap().len() as u64;
+            measured += 1;
+            assert!(bound.close_bytes >= bytes, "denoise pos {pos} block {block} node {node}: priced {} B, measured {bytes} B", bound.close_bytes);
+            worst_margin = worst_margin.min(bound.close_bytes as i64 - bytes as i64);
+            // The committed writes of the previous position the close carries.
+            let writes: Vec<_> = close
+                .operands
+                .iter()
+                .filter(|o| {
+                    o.coord.stage as usize == denoise
+                        && o.coord.pos + 1 == *pos
+                        && o.coord.kind == (PalwGenLeafKindV1::Commit { occurrence: post_occ, node: write_node })
+                })
+                .collect();
+            if writes.is_empty() {
+                continue;
+            }
+            with_write += 1;
+            positions.insert(*pos);
+            let elements: Vec<usize> = (leaf.first_element..leaf.first_element + leaf.value_count as u64).map(|e| e as usize).collect();
+            let request = PalwTirCloseRequestV1 {
+                ctx: DemandContext { pos: *pos, occurrence: *occurrence },
+                target: *node,
+                elements: &elements,
+                supplied: &[],
+                range: None,
+                both: false,
+            };
+            let (reads, _) = palw_gen_close_reads_v1(&z.space, &z.job, &z.inventory, &request, 1 << 40, &z.model).expect("the reads");
+            for w in &writes {
+                let (call_index, position) = shape.call_position(w.coord.pos);
+                let slot = z.space.node_slot(post_occ as usize, write_node).expect("the write's slot");
+                let coord = PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: w.coord.tile };
+                let index = z.space.leaf_index(&z.job, &coord).expect("the committed write is a leaf of the job");
+                assert!(
+                    reads.steps.contains_key(&index),
+                    "denoise pos {pos} block {block} node {node} tile {n}: the close carries the committed write of position {} (tile {}), the twin's read set does not hold it",
+                    w.coord.pos,
+                    w.coord.tile
+                );
+                leaves_checked += 1;
+            }
+            // And the price of its leaf is in the point's price: the cone's units cost at least that leaf's opening.
+            assert!(price.close(&reads, elements.len() as u32) <= bound.close_bytes, "the point's price is the worst of its tiles'");
+        }
+    }
+    eprintln!(
+        "{measured} cone closes measured at positions >= 1 ({} positions carry the latent): {with_write} carry the committed write of the previous position, {leaves_checked} such leaves each held to the twin's read set; priced >= measured everywhere (smallest margin {worst_margin} B)",
+        positions.len()
+    );
+    assert!(with_write > 0, "no sampled cone read the latent");
+    assert!(positions.len() >= 2, "the latent is read at more than one later position");
 }
 
 /// **The latent is a `post`-written state, and a cone that reads it at a later position must still close and convict** (NF-29: the

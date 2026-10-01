@@ -60,10 +60,11 @@ use misaka_palw_tir::validate_v2::validate_v2;
 
 /// **The most work one generative class's close sizing may do**, in the twin's steps
 /// ([`crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1`] counts them): the whole class, every stage — twice an IR
-/// class's (`2^26`), which the reduced SD3 pipeline (13 stages, 168 commit points) sizes in 66.9 M steps, nine tenths of it the
-/// VAE's convolutions (a tile of a convolution's output reads `3 · Cin` input leaves, and the sizing walks every tile of a node at its
-/// widest position). A registration's CPU is bounded before it is spent; a class whose sizing would do more is refused by name — a
-/// real-size convolution stack is past any cap until the sizing walks a tile class, not every tile.
+/// class's (`2^26`), which the reduced SD3 pipeline (13 stages, 168 commit points) sizes in 66.9 M steps — three quarters of it the ten
+/// VAE stages, a fifth the denoiser, the text stages almost nothing (the sizing walks every tile of a node at its widest position, and
+/// a tile of a convolution's output reads `3 · Cin` input leaves). A registration's CPU is bounded before it is spent; a class whose
+/// sizing would do more is refused by name — a real-size image stack is past any cap until the sizing walks a tile CLASS, not every
+/// tile (recorded as the follow-up).
 pub const PALW_GEN_CLOSE_SIZING_WORK_CAP_V1: u64 = 1 << 27;
 
 /// The most elements of a decode rule's logit bias, and the stop sequences and their ids (`DecodeConfigV4`'s own bounds): the

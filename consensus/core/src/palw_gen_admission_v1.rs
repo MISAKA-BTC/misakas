@@ -23,8 +23,7 @@
 //!    court: the tile's multiply-accumulates within the terminal ceiling; the tile's evaluation plus
 //!    the worst `Fixed`-state replay the stage's checkpoint interval admits within the IR court's
 //!    work limits (`palw_court_v2::palw_tir_court_limits_v1`, which the generative court adjudicates
-//!    under); the opened bytes and the close frame within the ruleset's close ceiling and the chunks
-//!    the fold assembles (the class referenced by id, never carried). **A cone that reduces over the
+//!    under) (the bytes a close carries are item 6's). **A cone that reduces over the
 //!    history is dissected** under the k-ary court — RFC-0002 F7 composed into the generative court:
 //!    F7's obligations (O-1…O-5), its value bound, its round and root-claim sizing and its window
 //!    asked of the stage's view verbatim, the terminal one `h_tile` chunk — and must fit the court
@@ -37,10 +36,9 @@
 //! 5. **weight: none.** No attempt lane exists for pipelines (Phase F decision 12's reading for
 //!    generative classes: `palw_gen_v1` opens registration, panels and the court), so a generative
 //!    class registers at 0‰ — permissionless (ADR-0069 D5) — and anything else is refused by name
-//!    (`GenEarnsNoWeight`).
-//!
+//!    (`GenEarnsNoWeight`);
 //! 6. **every close the court can be asked for is carriable, priced as carried (PALW-GEN-20)**: the
-//!    worst terminal close of every commit point of every stage, over every job of the class —
+//!    worst terminal close of every commit point and every checkpoint leaf of every stage, over every job of the class —
 //!    [`crate::palw_gen_close_price_v1`], an upper bound of what the builder carries (every leaf with its
 //!    own path at its own stage's depth, every param row a whole opening at the class inventory's depth,
 //!    the frame at its widest binding) — within the bytes the chain can carry, and every dissected
@@ -292,6 +290,8 @@ pub fn verify_gen_class_admission_v1(
         carried
     };
     let (mut worst_macs, mut worst_operands) = (0u64, 0u64);
+    // The commit points this loop treats as dissected: the close sizing below must agree (it asks the same question of the same cone).
+    let mut dissected_points: BTreeSet<(u8, u8, u16)> = BTreeSet::new();
     for (s, st) in pipeline.stages.iter().enumerate() {
         let program = &programs[st.program as usize];
         let layout = &class.layouts[s];
@@ -315,6 +315,9 @@ pub fn verify_gen_class_admission_v1(
                 // stage's view verbatim ([`palw_tir_dissected_cone_admits_parts_v1`]), the terminal one
                 // `h_tile` chunk. Without the court such a cone must fit whole.
                 let dissected = !cone.h_reductions.is_empty() && rules.court.is_some();
+                if dissected {
+                    dissected_points.insert((s as u8, bi as u8, ni as u16));
+                }
                 if !cone.h_reductions.is_empty() {
                     match rules.court {
                         None => {
@@ -421,6 +424,12 @@ pub fn verify_gen_class_admission_v1(
     let mut worst_close = 0u64;
     for (s, stage) in bounds.iter().enumerate() {
         for b in stage {
+            if b.checkpoint.is_none() && b.dissected != dissected_points.contains(&(s as u8, b.block, b.node)) {
+                return Err(PalwClassAdmissionError::GenClass(format!(
+                    "the close sizing and the cone admission disagree about whether stage {s} block {} node {} is dissected",
+                    b.block, b.node
+                )));
+            }
             exceeds("generative close bytes as carried", b.close_bytes, carriable)?;
             if b.dissected && b.root_claim_bytes > crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1 {
                 return Err(PalwClassAdmissionError::TirExceeds {
