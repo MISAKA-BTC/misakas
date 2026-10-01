@@ -15,8 +15,12 @@ Prefetching, Probation, ActiveLimited, Active, the first Final after Active; the
 "small-" prefix, and its first conviction) to $WORK_DIR/df-milestones.tsv.
 
   dfwatch.py [--once] [--until prefetching|active|final|small-active|small-convicted]
-Exit (with --until): 0 when reached, 3 INCOMPLETE when --deadline-daa passes first."""
-import argparse, json, os, sys, time
+Exit (with --until): 0 when reached, 3 INCOMPLETE when --deadline-daa passes first, 4 when the memory tripwire stopped the drill.
+
+Every sample also appends the drill nodes' resident memory and the machine's free memory to $WORK_DIR/mem.tsv (time, DAA,
+summed RSS in GiB, free %, each node's MiB) — the measurement the quiet window for the drill is sized from — and trips a wire
+(DF_MEM_FLOOR_PCT, default 10; 0 = off) that stops the drill's nodes when the machine runs out of memory."""
+import argparse, json, os, re, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rpc import call, pick
 
@@ -28,6 +32,64 @@ CONVICTED = ("CourtFraud", "CourtDefault", "CourtHeldVerdict")
 # A claim voided because its executor did not answer a data-availability demand in time (R-core+'s DA default,
 # evidence transport C's silent executor): a slash, counted apart from the court's convictions.
 WITHHELD = ("ProducerWithholding",)
+
+
+def node_rss_kib():
+    """The resident set of every running drill node (its kaspad.pid), in KiB, by node name."""
+    out = {}
+    try:
+        names = sorted(os.listdir(WORK))
+    except OSError:
+        return out
+    for name in names:
+        try:
+            pid = int(open(f"{WORK}/{name}/kaspad.pid").read().strip())
+            rss = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+            if rss.isdigit():
+                out[name] = int(rss)
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def free_memory_pct():
+    """macOS `memory_pressure`'s system-wide free percentage (reclaimable memory included), None when unreadable."""
+    try:
+        text = subprocess.run(["memory_pressure"], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"System-wide memory free percentage: (\d+)%", text)
+    return int(m.group(1)) if m else None
+
+
+# The drill's memory tripwire (the 2026-10-01 incident: a lane's process took the machine to swap and the swap filled the disk):
+# when the machine's free memory stays below DF_MEM_FLOOR_PCT for two samples in a row, the drill's nodes are stopped
+# (SIGINT, never SIGKILL: `nodes.sh stop`) and MEM-TRIPWIRE is written beside the logs. 0 switches it off.
+MEM_FLOOR_PCT = int(os.environ.get("DF_MEM_FLOOR_PCT", "10"))
+
+
+def memory_sample(daa, state):
+    """Append one line to $WORK/mem.tsv (time, DAA, the nodes' summed RSS in GiB, the machine's free %, each node's RSS in MiB)
+    and trip the wire when the machine is out of memory twice running. Returns True when the drill was stopped."""
+    rss = node_rss_kib()
+    free = free_memory_pct()
+    total = sum(rss.values()) / (1 << 20)
+    with open(f"{WORK}/mem.tsv", "a") as f:
+        f.write(f"{time.strftime('%F %T')}\t{daa}\t{total:.2f}\t{free if free is not None else '-'}\t"
+                f"{json.dumps({n: round(k / 1024) for n, k in rss.items()})}\n")
+    if MEM_FLOOR_PCT and free is not None and free < MEM_FLOOR_PCT:
+        state["low"] = state.get("low", 0) + 1
+        if state["low"] >= 2:
+            msg = (f"{time.strftime('%F %T')} the machine's free memory is {free}% (< {MEM_FLOOR_PCT}%) twice running; the drill's nodes "
+                   f"hold {total:.1f} GiB — stopping them (SIGINT) so the machine does not swap its disk full")
+            print("MEM TRIPWIRE:", msg, flush=True)
+            with open(f"{WORK}/MEM-TRIPWIRE", "a") as f:
+                f.write(msg + "\n")
+            subprocess.run(["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "nodes.sh"), "stop"], timeout=900)
+            return True
+    else:
+        state["low"] = 0
+    return False
 
 
 def read_id(name):
@@ -109,8 +171,11 @@ def main():
     seen = set()
     if os.path.exists(f"{WORK}/df-milestones.tsv"):
         seen = {l.split("\t")[0] for l in open(f"{WORK}/df-milestones.tsv")}
+    mem_state = {}
     while True:
         s = sample()
+        if not a.once and memory_sample(s["daa"], mem_state):
+            return 4
         with open(f"{WORK}/df.tsv", "a") as f:
             small = s["small"] or {}
             f.write(
