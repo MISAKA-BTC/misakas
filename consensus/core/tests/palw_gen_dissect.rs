@@ -129,6 +129,7 @@ fn fixture() -> Fixture {
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
         },
         tokenizer_id: Hash64::from_bytes([0x74; 64]),
     };
@@ -206,8 +207,9 @@ fn cone(f: &Fixture, e: &PalwGenExecutionV1, binding: &PalwGenStepBindingV1, ind
     let reads = palw_gen_stage_reads_prompt_v1(&f.pipeline, s as usize);
     PalwGenConeCloseV1 {
         version: PALW_GEN_CLOSE_VERSION_V1,
-        binding: binding.clone(),
+        binding: binding.clone().into(),
         prompt_ids: if reads { f.prompt.clone() } else { vec![] },
+        negative_ids: vec![],
         disputed: wire(s as usize, i as usize),
         operands,
         image_tiles,
@@ -218,12 +220,12 @@ fn cone(f: &Fixture, e: &PalwGenExecutionV1, binding: &PalwGenStepBindingV1, ind
 
 /// The court's case and the in-memory close of a wire close.
 fn with_case<T>(f: &Fixture, close: &PalwGenConeCloseV1, run: impl FnOnce(&PalwGenCourtCaseV1<'_>, &PalwGenCloseV1) -> T) -> T {
-    let v = match verify_gen_binding_v1(
+    let v = match verify_gen_binding_any_v1(
         &close.binding,
         &f.row,
         &f.row.class_id,
-        &close.binding.committed_execution_root,
-        PalwGenJobIdsV1 { prompt: Some(&f.prompt), source: None },
+        &close.binding.committed_execution_root(),
+        PalwGenJobIdsV1 { prompt: Some(&f.prompt), source: None, negative: None },
     )
     .unwrap()
     {

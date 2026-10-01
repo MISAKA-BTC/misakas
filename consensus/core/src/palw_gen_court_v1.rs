@@ -55,6 +55,14 @@ pub struct PalwGenDrawV1 {
 
 /// **Lane `lane` of a random input at stage position `pos`**, recomputed from the job: the domain's
 /// word at `(seed, step, item, lane)`, then `Uniform`'s word or `Normal`'s table entry (PALW-RND-4).
+///
+/// This function is more lenient than the input declaration it serves, by design: it accepts domain 0
+/// (not an input domain), a `Uniform` whose `bits` are not its domain's word width, and a lane past `2^28`
+/// (past any tensor), each of which the program's normal form (NF-26) or the demand machinery's bound on
+/// the tensor's shape already refuses. It is safe only as long as those run first — a class whose programs
+/// were decoded and validated (`PalwGenClassV1::decode`) — and the evaluator now also holds every element
+/// it is answered to the input's declared interval (PALW-TIR-42), so a mis-derived draw fails `Operand`
+/// by name (the independent second implementation's observation on this function).
 pub fn palw_gen_random_element_v1(
     domain: u16,
     dist: RandomDist,

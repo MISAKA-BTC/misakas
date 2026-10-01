@@ -154,6 +154,58 @@ pub struct PalwGenScalarOfferV1 {
     pub hi: i64,
 }
 
+/// **An image class's guidance offer** (RFC-0003 §II.1.1): the job scalar that carries the guidance
+/// value and the grid range a job's `guidance_q` may take (one grid index `round(16 · g)`; a class with a
+/// fixed or distilled guidance declares one value, `lo == hi`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenGuidanceOfferV1 {
+    /// The index into the class's job scalars that carries `guidance_q`.
+    pub scalar: u8,
+    pub lo: u16,
+    pub hi: u16,
+}
+
+/// **What an image class offers beyond the generic offers** (RFC-0003 §II.1.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenImageOffersV1 {
+    /// The class's sampler descriptor id (`H64(key "misaka-palw/image/sampler/v1", descriptor text)`):
+    /// a job's `sampler_id` must equal it. The math is in the program; the descriptor is the
+    /// registrant's label.
+    pub sampler_id: Hash64,
+    /// The guidance offer: `None` for a class whose programs read no guidance (a job's `guidance_q` is
+    /// then 0).
+    pub guidance: Option<PalwGenGuidanceOfferV1>,
+    /// The index into the class's job scalars that carries the step count's POSITION in
+    /// [`PalwGenOffersV1::steps`] (a program indexes its pinned schedule tables by it); `None` when no
+    /// program reads it.
+    pub steps_scalar: Option<u8>,
+}
+
+/// **What an embedding class offers beyond the generic offers** (RFC-0003 §II.3).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenEmbeddingOffersV1 {
+    /// The pooling the class's program applies (`PALW_GEN_POOLING_*`): a job's `pooling` must equal it.
+    pub pooling: u8,
+    /// The output widths a job may ask. A v1 class offers exactly its output's own width: a
+    /// truncatable class is one class per width.
+    pub dims: Vec<u32>,
+}
+
+/// Pooling modes of an embedding class (the job's `pooling` field; the program is what computes it).
+pub const PALW_GEN_POOLING_CLS_V1: u8 = 1;
+pub const PALW_GEN_POOLING_MEAN_V1: u8 = 2;
+pub const PALW_GEN_POOLING_LAST_V1: u8 = 3;
+
+/// **A profile's own offers** (RFC-0003 Part II): the job-parameter domains the generic offers cannot
+/// say. Appended to [`PalwGenOffersV1`]: `None` for a text class (RFC-0001's lane) and for a profile
+/// that is not built.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwGenProfileOffersV1 {
+    None,
+    Image(PalwGenImageOffersV1),
+    Embedding(PalwGenEmbeddingOffersV1),
+}
+
 /// **What a job of the class may ask** (RFC-0003 §I.2.3 `offers`): the job-parameter domains, each a
 /// bounded set or interval (§Security, *ceilings*). Generic across profiles in v1; a profile's own
 /// offers (an image class's sampler descriptor, guidance grid and resolution) arrive with it.
@@ -187,6 +239,10 @@ pub struct PalwGenOffersV1 {
     /// with (`decoder_start_token_id`, a forced target language) — declared by the class, carried at
     /// the prompt's head. Empty for a class that forces none; only a text class may declare one.
     pub forced_prompt_prefix: Vec<u32>,
+    /// **The profile's own offers** (RFC-0003 Part II): an image class's sampler, guidance and steps
+    /// scalar, an embedding class's pooling and widths. [`PalwGenProfileOffersV1::None`] for a text
+    /// class.
+    pub profile: PalwGenProfileOffersV1,
 }
 
 /// **A generative class**: a pipeline of version-2 programs, its layouts, its output, its offers and
@@ -588,6 +644,79 @@ fn check_offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2], offers: &Pa
     Ok(())
 }
 
+/// **A profile's own offers against the class** (RFC-0003 Part II): an image class's guidance and steps
+/// scalars are exactly the job scalars it offers (every scalar the body has a field for, none unmapped:
+/// an unmapped scalar is two job ids for one computation), an embedding class offers its pooling and its
+/// output's own width, and every other profile offers nothing of its own.
+fn check_profile_offers(class: &PalwGenClassV1, profile: PalwGenProfileV1) -> Result<(), PalwGenClassErrorV1> {
+    let bad = |m: String| Err(PalwGenClassErrorV1::Offers(m));
+    let offers = &class.offers;
+    match (profile, &offers.profile) {
+        (PalwGenProfileV1::Image, PalwGenProfileOffersV1::Image(img)) => {
+            if offers.steps.is_empty() {
+                return bad("an image class runs its denoiser over the job's steps: it offers at least one step count".into());
+            }
+            let mut mapped = vec![false; offers.scalars.len()];
+            if let Some(g) = &img.guidance {
+                let Some(offer) = offers.scalars.get(g.scalar as usize) else {
+                    return bad(format!("the guidance scalar {} is not among the {} job scalars offered", g.scalar, offers.scalars.len()));
+                };
+                if g.lo > g.hi || offer.lo != g.lo as i64 || offer.hi != g.hi as i64 {
+                    return bad(format!(
+                        "guidance [{}, {}] is not job scalar {}'s offered interval [{}, {}]",
+                        g.lo, g.hi, g.scalar, offer.lo, offer.hi
+                    ));
+                }
+                mapped[g.scalar as usize] = true;
+            }
+            if let Some(index) = img.steps_scalar {
+                let Some(offer) = offers.scalars.get(index as usize) else {
+                    return bad(format!("the steps scalar {index} is not among the {} job scalars offered", offers.scalars.len()));
+                };
+                if mapped[index as usize] {
+                    return bad(format!("job scalar {index} is both the guidance and the steps index"));
+                }
+                if offer.lo != 0 || offer.hi != offers.steps.len() as i64 - 1 {
+                    return bad(format!(
+                        "the steps scalar {index} offers [{}, {}]; the position of one of {} step counts is [0, {}]",
+                        offer.lo,
+                        offer.hi,
+                        offers.steps.len(),
+                        offers.steps.len() - 1
+                    ));
+                }
+                mapped[index as usize] = true;
+            }
+            if let Some(i) = mapped.iter().position(|m| !m) {
+                return bad(format!("job scalar {i} is neither the guidance nor the steps position: the image body has no field for it"));
+            }
+            Ok(())
+        }
+        (PalwGenProfileV1::Embedding, PalwGenProfileOffersV1::Embedding(e)) => {
+            if !matches!(e.pooling, PALW_GEN_POOLING_CLS_V1 | PALW_GEN_POOLING_MEAN_V1 | PALW_GEN_POOLING_LAST_V1) {
+                return bad(format!("pooling {} is not cls (1), mean (2) or last (3)", e.pooling));
+            }
+            let width = class.output.shape.get(1).copied();
+            if Some(&e.dims[..]) != width.as_ref().map(std::slice::from_ref) {
+                return bad(format!("an embedding class offers its output's own width {width:?}; it offers {:?}", e.dims));
+            }
+            if !offers.scalars.is_empty() || !offers.steps.is_empty() || offers.max_negative_tokens != 0 {
+                return bad("an embedding class offers no steps, no job scalar and no negative prompt".into());
+            }
+            Ok(())
+        }
+        (PalwGenProfileV1::Image | PalwGenProfileV1::Embedding, other) => {
+            bad(format!("a {profile:?} class carries {} profile offers", match other {
+                PalwGenProfileOffersV1::None => "no",
+                PalwGenProfileOffersV1::Image(_) => "image",
+                PalwGenProfileOffersV1::Embedding(_) => "embedding",
+            }))
+        }
+        (_, PalwGenProfileOffersV1::None) => Ok(()),
+        (_, _) => bad(format!("a {profile:?} class offers nothing of its own")),
+    }
+}
+
 /// **The preflight of a generative class** under an armed fence's ceilings for its profile: the
 /// structure, the offers, the output header, and the IR's admission of the pipeline (see the module
 /// doc for what is exact and what is a necessary condition).
@@ -670,6 +799,7 @@ pub fn palw_gen_class_preflight_v1(
             return out(format!("a text class's output is Tokens [{}], its stream's most ids", out_stage.max_trip));
         }
         check_offers(&pipeline, &programs, &class.offers)?;
+        check_profile_offers(class, profile)?;
         let admission = admit_class(class, ceilings)?;
         let floors = palw_gen_input_token_floors_v1(&pipeline, &admission, class.offers.images.len())?;
         let image_token_floor = floors.images;
@@ -741,8 +871,9 @@ pub fn palw_gen_class_preflight_v1(
         return out(format!("a row of {row} elements is not whole tiles of {output_tile_len} (PALW-OUT-3's alignment)"));
     }
 
-    // 5. The offers against the bindings.
+    // 5. The offers against the bindings, and the profile's own.
     check_offers(&pipeline, &programs, &class.offers)?;
+    check_profile_offers(class, profile)?;
 
     // 6. The IR's admission under the profile's ceilings, each stage at its widest commit tile.
     let admission = admit_class(class, ceilings)?;
@@ -754,6 +885,22 @@ pub fn palw_gen_class_preflight_v1(
         image_token_floor: Vec::new(),
         source_token_floor: 0,
     })
+}
+
+/// **The output node's commit tile** (PALW-OUT-3's alignment): the tile length, in the output stage's
+/// layout, of the commit point the class's output is — the lanes an output tile and a step tile share.
+/// `None` when the layout has no tile for it (the preflight refuses such a class).
+pub fn palw_gen_output_tile_len_v1(pipeline: &TirPipelineV1, programs: &[TirProgramV2], layouts: &[PalwTirLayoutV1]) -> Option<u32> {
+    let out_stage = pipeline.stages.get(pipeline.output_stage as usize)?;
+    let out_prog = programs.get(out_stage.program as usize)?;
+    let node = out_prog.output.node();
+    let index = out_prog
+        .blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, b)| b.nodes.iter().enumerate().filter(|(_, n)| n.commit).map(move |(ni, _)| (bi, ni)))
+        .position(|(bi, ni)| bi == out_prog.schedule.post as usize && ni == node as usize)?;
+    layouts.get(pipeline.output_stage as usize)?.commit_tiles.get(index).copied()
 }
 
 fn draws_randomness(programs: &[TirProgramV2]) -> bool {
@@ -859,6 +1006,7 @@ impl PalwGenClassRecordV1 {
                 max_source_tokens: 0,
                 source_token_floor: 0,
                 forced_prompt_prefix: Vec::new(),
+                profile: PalwGenProfileOffersV1::None,
             },
             tokenizer_id: Hash64::from_bytes([seed; 64]),
         };

@@ -96,7 +96,13 @@ fn offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2]) -> PalwGenOffersV
     let encoder = pipeline.stages.iter().find(|st| st.tokens.is_some()).unwrap();
     let max_prompt = encoder.max_trip - (rule.prefix.len() + rule.suffix.len()) as u32;
     PalwGenOffersV1 {
-        steps: (1..=steps_max).collect(),
+        // Two offered step counts: the toy denoiser's scalar 1 is the step count's position in them.
+        steps: vec![steps_max - 1, steps_max],
+        profile: PalwGenProfileOffersV1::Image(PalwGenImageOffersV1 {
+            sampler_id: Hash64::from_bytes([0x5A; 64]),
+            guidance: Some(PalwGenGuidanceOfferV1 { scalar: 0, lo: scalars[0].lo as u16, hi: scalars[0].hi as u16 }),
+            steps_scalar: Some(1),
+        }),
         scalars,
         max_prompt_tokens: max_prompt,
         max_negative_tokens: 0,
@@ -402,6 +408,7 @@ fn vision_class() -> PalwGenClassV1 {
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::Embedding(PalwGenEmbeddingOffersV1 { pooling: PALW_GEN_POOLING_CLS_V1, dims: vec![4] }),
         },
         output: OutputSpecV1::embedding_i32(1, 4, 0, false),
         pipeline,
@@ -491,6 +498,7 @@ fn text_class(vector: &str, images: Vec<PalwGenImageOfferV1>) -> PalwGenClassV1 
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
         },
         output: OutputSpecV1::tokens(max_trip),
         pipeline,
@@ -568,6 +576,7 @@ fn a_text_only_pipeline_is_a_text_class() {
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
         },
         output: OutputSpecV1::tokens(12),
         pipeline: p,

@@ -78,6 +78,7 @@ fn offers() -> PalwGenOffersV1 {
         max_source_tokens: 4,
         forced_prompt_prefix: vec![START],
         source_token_floor: SOURCE_FLOOR,
+        profile: PalwGenProfileOffersV1::None,
     }
 }
 
@@ -181,7 +182,16 @@ fn execute(f: &Fixture, job: &PalwFreePromptJobV5) -> (PalwGenExecutionV1, PalwG
 }
 
 fn evidence<'a>(f: &'a Fixture, e: &'a PalwGenExecutionV1, binding: &'a PalwGenStepBindingV1) -> PalwGenEvidenceV1<'a> {
-    PalwGenEvidenceV1 { row: &f.row, params: &f.params, execution: e, binding, prompt: &f.prompt, images: &[], source: &f.source }
+    PalwGenEvidenceV1 {
+        row: &f.row,
+        params: &f.params,
+        execution: e,
+        binding: binding.clone().into(),
+        prompt: &f.prompt,
+        negative: &[],
+        images: &[],
+        source: &f.source,
+    }
 }
 
 /// An execution whose one leaf is changed, its roots recomputed over it: the executor's lie,
@@ -249,7 +259,7 @@ fn the_binding_recomputes_the_jobs_facts_from_its_source() {
     assert_eq!(binding.execution_root(), binding.committed_execution_root);
     let root = binding.committed_execution_root;
     let verify = |ids: PalwGenJobIdsV1<'_>| verify_gen_binding_v1(&binding, &f.row, &f.row.class_id, &root, ids);
-    let carried = PalwGenJobIdsV1 { prompt: Some(&f.prompt), source: Some(&f.source) };
+    let carried = PalwGenJobIdsV1 { prompt: Some(&f.prompt), source: Some(&f.source), negative: None };
     let Ok(PalwGenBindingOutcomeV1::Verified(v)) = verify(carried) else { panic!("the honest binding verifies") };
     assert_eq!(v.facts[0].inputs[&0].data, vec![1, 7, 9, 11, 2, 0], "the encoder's ids: the template over the source");
     assert_eq!(v.facts[0].inputs[&1].data, vec![5], "and their count");
@@ -260,7 +270,7 @@ fn the_binding_recomputes_the_jobs_facts_from_its_source() {
     assert_eq!(z.facts[0].inputs[&1].data, vec![5], "the count is the job's");
     assert_eq!(z.space.leaf_count(), v.space.leaf_count());
     // A carried source that is not the job's length is refused.
-    let short = PalwGenJobIdsV1 { prompt: None, source: Some(&f.source[..2]) };
+    let short = PalwGenJobIdsV1 { prompt: None, source: Some(&f.source[..2]), negative: None };
     assert!(matches!(verify(short), Err(PalwGenCloseErrorV1::SourceNotTheJobs)));
     // A job of this class without a source is not the class's job.
     let mut no_source = job.clone();
