@@ -216,12 +216,6 @@ fn a_user_adapter_may_override_a_built_in_refusal_and_the_report_says_so() {
     let out = r.render();
     assert!(out.contains("user adapter overrides built-in refusal: MiniCPM3ForCausalLM"), "{out}");
     assert!(serde_json::to_value(&r).unwrap()["overrides_refusal"].is_string());
-    // The override cannot launder a feature the vocabulary lacks: Gemma-3n's AltUp has no field to say it in.
-    let g = json(&root().join("tests/configs/real/gemma-3n-e4b.json"));
-    let std_like = serde_json::json!({
-        "format": "misaka.palw.model-adapter.v1", "id": "gemma3n-wishful", "extends": ["standard-decoder"],
-    })
-    .to_string();
-    let refused = analyze(&g, None, &ReadOptions { adapter: AdapterChoice::Text(std_like) });
-    assert!(matches!(refused.result, ReportResult::NotLowerable { .. }), "{}", refused.render());
+    // The override is not a proof of correctness: it is unconfirmed until a reference check says otherwise.
+    assert!(out.contains("confirm with palw-tir-fidelity"), "{out}");
 }

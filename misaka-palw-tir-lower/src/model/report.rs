@@ -406,6 +406,12 @@ impl ArchitectureReport {
         let _ = writeln!(o, "adapter         {}", self.adapter.describe());
         if let Some(r) = &self.overrides_refusal {
             let _ = writeln!(o, "user adapter overrides built-in refusal: {r}");
+            if !self.reference_confirmed {
+                let _ = writeln!(
+                    o,
+                    "                the override passed the same validation as any adapter; whether the reading is RIGHT is not checked here — confirm with palw-tir-fidelity against the transformers class"
+                );
+            }
         }
         let _ = writeln!(o, "level           {}", self.level_label);
         if self.level == Level::A && !self.reference_confirmed {

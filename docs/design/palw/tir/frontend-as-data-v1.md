@@ -302,9 +302,10 @@ overridden even by an adapter that proves the architecture expressible. **Decisi
 adapter (`AdapterChoice::Text`) may override a built-in refusal provided it passes the same validation as any adapter, and the
 report says so. Implemented as: the refusal applies to `Auto`, `BuiltIn` and `None`; a user adapter proceeds, and the read carries
 `overrides_refusal: Some("<architecture>: <the refusal's why>")`; `check-architecture` prints
-`user adapter overrides built-in refusal: <the refusal>` and the JSON field. The override cannot launder a missing feature: the
-adapter can only emit a `ModelSpec` from the existing vocabulary, so a refusal naming a feature the vocabulary lacks
-(`RESIDUAL_ALTUP_V1`) still ends in Level C when the adapter cannot express it. A refusal that has become stale — a built-in
+`user adapter overrides built-in refusal: <the refusal>` and the JSON field. The override is **not a proof of correctness**: the adapter can only emit a `ModelSpec` from the existing vocabulary, so it cannot
+name a feature the vocabulary lacks, but it can still read a class wrongly (a sloppy adapter reads defaults). The report therefore
+says so (*"the override passed the same validation as any adapter; whether the reading is right is not checked here — confirm with
+palw-tir-fidelity"*), exactly as it labels a Level A reading unconfirmed. A refusal that has become stale — a built-in
 adapter now exists for the architecture — is **deleted from `refusals.json`** in the commit that adds the adapter, so the data
 never contradicts itself: Granite-hybrid's went with the built-in `granitemoehybrid` adapter (together with `dbrx` and `ernie4-5-moe`,
 the three corpus entries FR-01 unlocked; coordinator, 2026-10-01); MiniCPM3's stays, as the worked example of an override

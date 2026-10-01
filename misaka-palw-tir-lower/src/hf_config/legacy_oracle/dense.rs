@@ -1108,6 +1108,7 @@ pub(crate) fn gemma4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchS
                         dynamic: None,
                         longrope: None,
                         mrope: None,
+                        reversed: false,
                     },
                 })
             }

@@ -144,6 +144,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ROPE_PROPORTIONAL_V1", Position, "proportional rope", Implemented, [], NoReq, ["fidelity_tiny::gemma4", "fidelity_tiny::gemma4_kvshare"], "Gemma-4's full-attention rope: frequencies on the first `partial_rotary_factor` of the head width, zeros after (those pairs are not rotated), divided by `factor`."),
     feature!("ROPE_PARTIAL_V1", Position, "rotation of a prefix of each head", Implemented, [], NoReq, ["fidelity_tiny::phi", "fidelity_tiny::stablelm_parallel"], "`partial_rotary_factor` < 1: the rest of the head passes through."),
     feature!("ROPE_INTERLEAVED_V1", Position, "interleaved rotary pairs", Implemented, [], NoReq, ["fidelity_tiny::gptj", "fidelity_tiny::glm"], "(2i, 2i+1) pairs instead of (i, i + d/2)."),
+    feature!("ROPE_REVERSED_V1", Position, "rotation by −θ (the inverse rotate_half)", Implemented, [], NoReq, ["rope_reversed::a_reversed_rope_is_the_inverse_rotation_and_lowers"], "nanochat: [x1·cos + x2·sin, −x1·sin + x2·cos]. Stored as negated inverse frequencies, so every cos/sin table follows; refused over position-dependent or multimodal frequencies."),
     feature!("ROPE_MROPE_V1", Position, "multimodal rope sections", Implemented, [], NoReq, ["fidelity_tiny::qwen3_5"], "Sections of the frequencies take the t/h/w position components; text-only they are all the position."),
     feature!("POS_ALIBI_V1", Position, "ALiBi distance bias", Implemented, ["Iota"], NoReq, ["fidelity_tiny::bloom", "fidelity_tiny::falcon_alibi", "fidelity_tiny::mpt"], "A per-head slope times the key distance, added to the scores."),
     feature!("POS_NOPE_V1", Position, "attention layers without a positional term", Implemented, [], NoReq, ["fidelity_tiny::smollm3"], "SmolLM3, Cohere-2 and Llama-4 global layers."),
@@ -301,6 +302,9 @@ fn rope_features(u: &mut Uses, r: &crate::rope::RopeSpec, head_dim: usize, layer
     }
     if f.mrope.is_some() {
         u.add("ROPE_MROPE_V1", Some(layer), "");
+    }
+    if f.reversed {
+        u.add("ROPE_REVERSED_V1", Some(layer), "");
     }
 }
 

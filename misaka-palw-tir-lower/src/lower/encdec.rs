@@ -348,7 +348,7 @@ fn parse_encdec_raw(config: &str) -> Result<EncDecSpec> {
             let act_name = root.get("activation_function").and_then(Value::as_str).unwrap_or("gelu");
             let act = Act::from_hf(act_name).ok_or_else(|| LowerError::not_lowerable(format!("{arch}: activation `{act_name}`")))?;
             let (enc_heads, dec_heads) = (need("encoder_attention_heads")?, need("decoder_attention_heads")?);
-            if d % enc_heads != 0 || d % dec_heads != 0 {
+            if enc_heads == 0 || dec_heads == 0 || d % enc_heads != 0 || d % dec_heads != 0 {
                 return Err(LowerError::bad(format!("{arch}: d_model {d} does not split into the heads")));
             }
             let max_pos = need("max_position_embeddings")?;

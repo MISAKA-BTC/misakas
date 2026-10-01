@@ -665,6 +665,7 @@ pub(crate) fn phimoe(p: &mut P) -> Result<ArchSpec> {
                     dynamic: None,
                     longrope: None,
                     mrope: None,
+                    reversed: false,
                 },
             }
         }

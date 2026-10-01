@@ -908,7 +908,8 @@ pub(crate) fn check_logits_range(hl: &HlProgram, ctx: &FillCtx<'_>) -> Result<()
     let amax = ctx.absmax(&site)?;
     if amax >= LOGITS_Q24_REFUSE_AT {
         return Err(LowerError::not_lowerable(format!(
-            "LOGITS_Q24_V1: the calibrated logits reach {amax:.1} natural-log units; the Q24 logits of a text program hold |logit| < 128"
+            "LOGITS_Q24_V1: the calibrated logits reach {amax:.1} natural-log units (limit {LOGITS_Q24_REFUSE_AT}); the Q24 logits of a text program hold |logit| < 128. \
+             A randomly initialised model can have logits this large; a trained model's are far below — a property of the checkpoint, not of the lowering"
         )));
     }
     Ok(())
