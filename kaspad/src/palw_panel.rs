@@ -20225,12 +20225,18 @@ mod seat_s_tests {
         let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
         let block = &block[..block.find("let Some(verdict) = verdict else { continue };").unwrap()];
         let waits: Vec<usize> = block.match_indices("palw_seat_material_wait_ends_v1(").map(|(i, _)| i).collect();
-        assert_eq!(waits.len(), 4, "the FP resume, the FP replaying partial seat, the attempt resume, and the tail");
+        assert_eq!(
+            waits.len(),
+            5,
+            "the tensor claim's pass (RFC-0003), the FP resume, the FP replaying partial seat, the attempt resume, and the tail"
+        );
         for (n, at) in waits.iter().enumerate() {
             let before = &block[..*at];
             let resume_wait = before.rfind("PalwSeatResumeStepV1::Waiting => break 'verdict None,");
             let replay_wait = before.rfind("(PalwSeatReplayStepV1::Waiting, _) => break 'verdict None,");
-            assert!(resume_wait.or(replay_wait).is_some(), "wait {n}: a Waiting arm precedes it");
+            // The tensor claim's pass (RFC-0003) matches on its one step alone, not on a `(step, bytes)` pair.
+            let tensor_wait = before.rfind("                                PalwSeatReplayStepV1::Waiting => break 'verdict None,");
+            assert!(resume_wait.or(replay_wait).or(tensor_wait).is_some(), "wait {n}: a Waiting arm precedes it");
         }
         assert_eq!(block.matches("PalwSeatResumeStepV1::Waiting => break 'verdict None,").count(), 2);
         // A resuming seat that was served — an opening authenticated as the claim's, or on the FP lane
@@ -21265,7 +21271,11 @@ mod p2_6_da_accusation_policy {
             block.find("if seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {\n                                //").expect("C7");
         let route = attempt + block[attempt..].find(".seat_s4_resume_v1(").unwrap();
         assert!(block[attempt..route].contains("service.note_served(duty.claim_id);"), "the attempt lane's job is the anchor's");
-        assert_eq!(block.matches("service.note_unserved(duty.claim_id, current_daa)").count(), 2, "the FP replay, the tail");
+        assert_eq!(
+            block.matches("service.note_unserved(duty.claim_id, current_daa)").count(),
+            3,
+            "the tensor claim's pass (RFC-0003), the FP replay, the tail"
+        );
         let valid = source.find("if valid {\n                    service.note_served(duty.claim_id);").expect("a Valid");
         let hook = source.find("if matches!(verdict, PalwReceiptVerdictV2::Unavailable { .. })\n                    && service.is_unserved(&duty.claim_id)");
         assert!(hook.is_some_and(|hook| valid < hook), "an Unavailable accuses only an unserved claim");
