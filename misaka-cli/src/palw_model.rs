@@ -172,6 +172,11 @@ pub(crate) fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketRespons
 }
 
 fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Value {
+    // The 2026-09-25 Position review's #6: a line that is not a market has no opening height and no
+    // curve, whichever node answered — a node served the tip's DAA and the whole supply there.
+    let market = market_from_response(r);
+    let open = market.is_open();
+    let (opened_daa, position_units) = if open { (Some(r.opened_daa), r.position_units) } else { (None, 0) };
     serde_json::json!({
         "schema": "misaka.palw.model-market.v1",
         "found": r.found,
@@ -180,11 +185,11 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         // same fact from a node with the 2026-09-23 Position route matrix's P10 repair, and "a
         // market row exists" (a pledge makes one) from a node without it.
         "opened": r.opened,
-        "open": market_from_response(r).is_open(),
-        "opened_daa": r.opened_daa,
+        "open": open,
+        "opened_daa": opened_daa,
         "msk_reserve_sompi": r.msk_reserve,
-        "position_units": r.position_units,
-        "positions_in_curve": r.position_units / PALW_MODEL_POSITION_UNITS_V1,
+        "position_units": position_units,
+        "positions_in_curve": position_units / PALW_MODEL_POSITION_UNITS_V1,
         "sold_units": r.sold_units,
         "burned_sompi": r.burned_sompi,
         "registrant_paid_sompi": r.registrant_paid_sompi,
@@ -197,7 +202,7 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "retired_units": r.retired_units,
         "retired_positions": r.retired_units / PALW_MODEL_POSITION_UNITS_V1,
         "closed_to_buys": r.closed_to_buys,
-        "price_sompi_per_position": r.price_sompi_per_position,
+        "price_sompi_per_position": if open { r.price_sompi_per_position } else { 0 },
         "supply_units": r.supply_units,
         "virtual_sompi": r.virtual_sompi,
         "class_status": r.class_status,
@@ -275,8 +280,15 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
         } else {
             println!("  seed           none yet — the market opens with `model-seed` (at least {})", msk(r.seed_min_sompi));
         }
-        println!("  in the curve   {} positions ({} units)", r.position_units / PALW_MODEL_POSITION_UNITS_V1, r.position_units);
-        println!("  price          {} per position", msk(r.price_sompi_per_position));
+        // The 2026-09-25 Position review's #6: an unopened line has no curve — no positions in it and
+        // no price — so nothing is printed for one (a node served the supply as "in the curve" and the
+        // tip's DAA as the opening height).
+        if market_from_response(&r).is_open() {
+            println!("  in the curve   {} positions ({} units)", r.position_units / PALW_MODEL_POSITION_UNITS_V1, r.position_units);
+            println!("  price          {} per position", msk(r.price_sompi_per_position));
+        } else {
+            println!("  curve          none yet — {} positions open in it at the seed", r.supply_units / PALW_MODEL_POSITION_UNITS_V1);
+        }
         println!("  sold (gross)   {} positions", r.sold_units / PALW_MODEL_POSITION_UNITS_V1);
         println!("  burned         {}", msk(r.burned_sompi));
         println!(
@@ -926,6 +938,25 @@ mod tests {
         }
         let m = seed_shortfall_message(15, FEE + 7 * MSK + 5, 1_000_000 * MSK, FEE, &"addr", &"line", MILLION_MSK);
         assert!(m.contains("--msk 7`") && m.contains("15 mature utxo(s)") && m.contains("crosses the floor"), "{m}");
+    }
+
+    /// **The 2026-09-25 Position review's #6: an unopened line has no opening height and no curve in
+    /// `model-show --json`** — a node served the tip's DAA as its opening and the whole supply as "in
+    /// the curve".
+    #[test]
+    fn an_unopened_line_has_no_opening_height_and_no_curve_in_the_json() {
+        use kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1;
+        let unopened = kaspa_rpc_core::GetPalwModelMarketResponse {
+            opened_daa: 66,
+            position_units: 500_000,
+            ..answer(MILLION_MSK, PalwModelMarketV1::pledge_v1(0, 0, Default::default()))
+        };
+        let v = super::market_json(&unopened);
+        assert!(v["opened_daa"].is_null(), "{v}");
+        assert_eq!(
+            (v["open"].as_bool(), v["position_units"].as_u64(), v["price_sompi_per_position"].as_u64()),
+            (Some(false), Some(0), Some(0))
+        );
     }
 
     #[test]
