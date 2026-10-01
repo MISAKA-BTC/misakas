@@ -22,6 +22,7 @@
 //! * [`conv`] — `CONV_DENSE_V1`, a dense 2-D convolution as im2col by a pinned index table and that linear map;
 //! * [`sampler`] — the Euler schedule as pinned tables, the initial latent, `GEN_SAMPLER_AFFINE_V1`, unpatchify;
 //! * [`stream`] — the one narrowing between code scales (the stream to codes and back);
+//! * [`pipeline`] — the text stages, the denoise scan and the VAE chain as one `TirPipelineV1`;
 //! * [`norm`] — `NORM_GROUP_SPATIAL_V1`, GroupNorm with committed row partials (no cone reads a whole tensor);
 //!
 //! **Conventions** (the library's, spec 04b §11): activations are `i16` codes at a calibrated per-site scale
@@ -40,6 +41,7 @@ pub mod embed;
 pub mod float;
 pub mod linear;
 pub mod norm;
+pub mod pipeline;
 pub mod sampler;
 pub mod sink;
 pub mod stream;
