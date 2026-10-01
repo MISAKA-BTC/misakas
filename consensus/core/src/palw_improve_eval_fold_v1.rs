@@ -3325,6 +3325,29 @@ mod tests {
             "the ruleset's arity only"
         );
 
+        // The session's close door: a cone close must open the leaf the ladder narrowed to, a decode close one of the tiles it
+        // concerns, and an honest close of the narrowed leaf is an acquittal (a leaf is judged in the claim's one stage-major order).
+        let close_verdict = |proof: &Proof| {
+            crate::palw_court_v2::adjudicate_court_close_v3(&s2, &sid, proof, &court(), 1 << 26, FORM, true, false, None)
+        };
+        let elsewhere = Proof::EvalCone { close: Box::new(ev.cone_close(0, &LIMITS).expect("a cone close of the first leaf")) };
+        assert!(
+            matches!(close_verdict(&elsewhere), Err(crate::palw_court_v2::PalwCourtV2Error::CloseIsNotTheNarrowedStep { .. })),
+            "a cone close of another leaf is not the ladder's"
+        );
+        let token = Proof::EvalDecodeToken { close: Box::new(ev.decode_close(0).expect("a decode close")) };
+        assert!(
+            matches!(close_verdict(&token), Err(crate::palw_court_v2::PalwCourtV2Error::CloseIsNotTheNarrowedStep { .. })),
+            "a decode close whose tiles do not include the narrowed leaf is not the ladder's"
+        );
+        let whole =
+            Proof::EvalCone { close: Box::new(ev.cone_close(index, &LIMITS).expect("a whole cone close of the narrowed leaf")) };
+        assert_eq!(
+            close_verdict(&whole),
+            Ok(PalwCourtVerdictV2::ChallengerDefeated),
+            "an honest cone close of the narrowed leaf acquits"
+        );
+
         // Play the phase to its bottom, honest or with a lie in reduction `lying`'s first element, hidden in the last tile.
         let tiles = (site.history_positions as u64).div_ceil(2);
         let open_phase = |lying: Option<usize>| -> PalwChainStateV2 {
