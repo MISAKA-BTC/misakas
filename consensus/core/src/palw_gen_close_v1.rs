@@ -1,7 +1,7 @@
 //! **RFC-0003: the generative court's consensus objects** — what pins a pipeline claim's execution
 //! (its binding), and the closes a `CourtClosed` carries for one
 //! (`PalwCourtVerdictProofV2::GenCone`, tag 10; `PalwCourtVerdictProofV2::GenDecodeToken`, tag 11;
-//! Phase F's allocation; and a tensor claim's `GenOutputTile`, tag 13).
+//! Phase F's allocation; and a tensor claim's `GenOutputTile`, tag 16).
 //!
 //! **The binding.** A V5 claim (RFC-0003 §II.2.1) commits one step tree (`palw_gen_step_v1`: every
 //! stage's leaves, a root per stage, the step root over them) and its generated ids; its commitment's
@@ -406,7 +406,7 @@ pub struct PalwGenDecodeCloseV1 {
     pub row: Vec<PalwGenLeafOpeningV1>,
 }
 
-/// **A generative output close** (`GenOutputTile`, tag 13; RFC-0003 §I.3.2, PALW-OUT-4): the claim's
+/// **A generative output close** (`GenOutputTile`, tag 16; RFC-0003 §I.3.2, PALW-OUT-4): the claim's
 /// output digest against its own step tree — output tile `tile`, proven under the claim's `output_root`,
 /// against the output node's committed step tile of the same lanes, opened under its stage's root. The
 /// executor's two statements disagree (`TirOutputDigestMismatch`) or a lane is outside the output node's
