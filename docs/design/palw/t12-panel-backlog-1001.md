@@ -126,7 +126,7 @@ to drain at ~6 blocks/DAA).
 **F1 — the ledger counts what the kernel can give back as free** (`palw_backends`):
 the cgroup term is `max − (current − credit)` at every level, `credit = min(LazyFree, current, 60 % of the
 limit)`. `LazyFree` is sampled from `smaps_rollup` on its own thread every 15 s (0.63 s of system time a read on
-b6: never on a caller). b6's reading becomes 8.7 GiB. The cap (60 %) and the 15 s sample age are what a
+b6: never on a caller). b6's reading becomes 9.09 GiB (8.09 past the ledger's 1 GiB reserve). The cap (60 %) and the 15 s sample age are what a
 stale figure is spent against; the share, every reservation and the 1 GiB reserve still bind.
 *Allocator*: kept as is — `MADV_FREE` is the cheaper mode for a node that reuses its memory (no fault + zero page
 per reuse), and on a CPU-saturated host switching it would add system time; the ledger must be right either

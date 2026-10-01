@@ -2535,7 +2535,7 @@ mod tests {
     /// `smaps_rollup`) are `MADV_FREE`d pages the kernel drops on demand. The old reading was
     /// `max − current` = 0.26 GiB, which with the ledger's 1 GiB reserve is the "host headroom
     /// 0.00 GiB … 0.00 GiB already reserved" that held every duty for three hours; crediting the lazy
-    /// pages reads 8.7 GiB, and the credit is capped (a stale sample is never trusted past 60 % of
+    /// pages reads 9.09 GiB (8.09 past the ledger's 1 GiB reserve), and the credit is capped (a stale sample is never trusted past 60 % of
     /// the limit) and never past what the cgroup holds.
     #[test]
     fn a_cgroup_full_of_lazily_freed_pages_is_not_out_of_headroom() {
@@ -2552,7 +2552,7 @@ mod tests {
         assert_eq!(cgroup_headroom_from_v1(cg, 0, &read), Some(max - current), "no credit: the old reading, 0.26 GiB");
         let credited = cgroup_headroom_from_v1(cg, lazy, &read).expect("a limit");
         assert_eq!(credited, max - (current - lazy), "the pages the kernel hands back are headroom");
-        assert!(credited > 8 << 30, "8.7 GiB: a 3.37 GiB full seat, a 0.5 GiB floor replay and the 1 GiB reserve all fit");
+        assert!(credited > 8 << 30, "9.09 GiB: a 3.37 GiB full seat, a 0.5 GiB floor replay and the 1 GiB reserve all fit");
         // A sample larger than the cgroup holds, or than the cap allows, is clamped.
         let capped = cgroup_headroom_from_v1(cg, u64::MAX, &read).expect("a limit");
         assert_eq!(capped, max - (current - max / 1_000 * PALW_LAZYFREE_CREDIT_PERMILLE_V1), "never more than the cap");

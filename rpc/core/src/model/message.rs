@@ -8094,7 +8094,7 @@ mod palw_node_status_wire_tests {
             consensus_params_id: "ab".repeat(32),
             genesis_hash: "cd".repeat(64),
             drill_salt_id: "0123456789abcdef".to_string(),
-            verification: "seat_receipts_1h=61 slots=2 cgroup_naive_mib=268 cgroup_credited_mib=8700".to_string(),
+            verification: "seat_receipts_1h=61 slots=2 cgroup_naive_mib=268 cgroup_credited_mib=9306".to_string(),
             ..Default::default()
         };
         let mut v5 = Vec::new();
