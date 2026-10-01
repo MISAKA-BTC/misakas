@@ -80,11 +80,11 @@ pub const PALW_TIR_CLOSE_SIZING_WORK_CAP_V1: u64 = 1 << 26;
 pub const PALW_TIR_CLOSE_SIZING_OVER_CAP_V1: &str = "the close sizing exceeds its work cap";
 
 /// The mover's ML-DSA-87 signature a dissection move carries.
-const MOVE_SIGNATURE_BYTES: usize = 4_627;
+pub(crate) const MOVE_SIGNATURE_BYTES: usize = 4_627;
 
 /// What a carrier holds beside the move object it carries (the signer's key reference), as
 /// [`crate::palw_tir_admission_v1::PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1`] allows it.
-const MOVE_CARRIER_EXTRA_BYTES: u64 = 64;
+pub(crate) const MOVE_CARRIER_EXTRA_BYTES: u64 = 64;
 
 /// How a close carries its parameter openings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +115,11 @@ pub struct PalwTirCloseReadsV1 {
     pub token: bool,
     /// Elements of supplied nodes read, `(node, element)` — a dissection claim's values.
     pub supplied: BTreeSet<(u16, usize)>,
+    /// **A pipeline stage's edge reads** (RFC-0003 PALW-GEN-20): the leaves of EARLIER stages an input reads, `(stage, row, tile)` and
+    /// the lanes of each — a leaf opened under its own stage's root, never an artifact leaf.
+    pub edges: BTreeMap<(u8, u32, u32), u32>,
+    /// **A pipeline stage's job-image reads**: the input tiles, `(image, tile)`.
+    pub images: BTreeSet<(u8, u64)>,
 }
 
 impl PalwTirCloseReadsV1 {
@@ -128,7 +133,43 @@ impl PalwTirCloseReadsV1 {
         }
         self.token |= other.token;
         self.supplied.extend(other.supplied.iter().copied());
+        self.edges.extend(other.edges.iter().map(|(k, v)| (*k, *v)));
+        self.images.extend(other.images.iter().copied());
     }
+}
+
+/// **How the generative court answers one input of a pipeline stage** (RFC-0003 PALW-GEN-20) — what a read of it costs a close. A
+/// version-2 stage's view reads input `k` as the view's param `first_input + k`; the generative court reads it elsewhere than the
+/// artifact (`palw_gen_court_v1::palw_gen_stage_answers_v1`), so the sizing must price it there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwGenTwinInputV1 {
+    /// A random input (recomputed from the job's draw) or a job-bound one (the accepted job's value): nothing is opened.
+    Free,
+    /// An earlier stage's committed output: an element is read through the commit leaf of the upstream output node that holds it.
+    Edge {
+        /// The upstream stage.
+        stage: u8,
+        /// `StageRows { drop, .. }`: `Some((drop, elements per row))` — element `e` is element `e % per_row` of row `e / per_row + drop`;
+        /// `StageFinal`: `None` — the upstream's last position.
+        rows: Option<(u32, u64)>,
+        /// The upstream output node's commit tile (the lanes of a leaf) and its elements at one position.
+        tile: u32,
+        elements: u64,
+    },
+    /// Job image `image`: an element is a byte of one input tile of `tile_len` bytes, opened under the job's `input_root`.
+    Image { image: u8, tile_len: u32 },
+}
+
+/// **What the twin needs to read a pipeline stage as the generative court does** (RFC-0003 PALW-GEN-20): where each input is read,
+/// and the `post` writers of the states `post` writes (NF-29: such a state's value at `p` is that commit leaf at `p − 1`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwGenTwinStageV1 {
+    /// The view's first input param (`ProgramInfoV2::first_input_param`).
+    pub first_input: u16,
+    /// One entry per input of the program, in declaration order.
+    pub inputs: Vec<PalwGenTwinInputV1>,
+    /// `(state, (occurrence, node))` of every state `post` writes (`demand_v2::post_writers_v2`).
+    pub post_writers: Vec<(u16, (u16, u16))>,
 }
 
 /// One read request: the target, its elements, and the dissection's supplied nodes and range.
@@ -154,6 +195,8 @@ struct CtxState {
 }
 
 struct Twin<'a> {
+    /// A pipeline stage's reading of its inputs and its `post`-written states; `None` for an IR class.
+    gen_stage: Option<&'a PalwGenTwinStageV1>,
     space: &'a PalwTirStepSpaceV1,
     job_ctx: &'a PalwJobContextV2,
     job: PalwTirJobShapeV1,
@@ -326,6 +369,41 @@ impl Twin<'_> {
         self.step_leaf(coord, values, out.has_h())
     }
 
+    /// The input a view param is, for a pipeline stage (`None` for a declared param, and for every param of an IR class).
+    fn input_of(&self, param: u16) -> Option<u16> {
+        self.gen_stage.and_then(|g| param.checked_sub(g.first_input))
+    }
+
+    /// **Element `index` of input `input`, read as the generative court reads it** (RFC-0003 PALW-GEN-20): a random or job-bound input
+    /// opens nothing; an edge is the commit leaf of the upstream stage's output node that holds the element (a position past the
+    /// upstream's kept rows is the zero pad, never a leaf — priced anyway: a superset); an image byte is one input tile.
+    fn input_read(&mut self, input: u16, index: usize) -> Result<(), String> {
+        self.tick(1)?;
+        let g = self.gen_stage.ok_or("an input read outside a pipeline stage")?;
+        let model = g.inputs.get(input as usize).ok_or_else(|| format!("no input {input}"))?;
+        match *model {
+            PalwGenTwinInputV1::Free => Ok(()),
+            PalwGenTwinInputV1::Edge { stage, rows, tile, elements } => {
+                let (row, within) = match rows {
+                    Some((drop, per_row)) => {
+                        let per_row = per_row.max(1);
+                        (((index as u64 / per_row) as u32).saturating_add(drop), index as u64 % per_row)
+                    }
+                    None => (u32::MAX, index as u64),
+                };
+                let tile = tile.max(1) as u64;
+                let t = within / tile;
+                let lanes = tile.min(elements.saturating_sub(t * tile)).max(1) as u32;
+                self.sink().edges.insert((stage, row, t as u32), lanes);
+                Ok(())
+            }
+            PalwGenTwinInputV1::Image { image, tile_len } => {
+                self.sink().images.insert((image, index as u64 / tile_len.max(1) as u64));
+                Ok(())
+            }
+        }
+    }
+
     fn param_read(&mut self, param: u16, layer: Option<u16>, index: usize) -> Result<(), String> {
         let d = self.space.program.params.get(param as usize).ok_or("no such param")?;
         let byte = (index as u64).saturating_mul(d.dtype.width() as u64);
@@ -346,6 +424,15 @@ impl Twin<'_> {
     /// A `Fixed` state's element at the start of `pos` (the court's `state_at_start`, its source's
     /// checkpoint schedule).
     fn state_at_start(&mut self, pos: u32, state: u16, layer: Option<u16>, index: usize) -> Result<(), String> {
+        // **A state `post` writes** (a pipeline stage's, NF-29): its value at the start of `pos` is the committed write of `pos − 1`,
+        // never a replay and never a checkpoint leaf (the stage's step space makes none for it).
+        if let Some(g) = self.gen_stage
+            && let Some((_, (occurrence, node))) = g.post_writers.iter().find(|(s, _)| *s == state)
+        {
+            self.tick(1)?;
+            let Some(prev) = pos.checked_sub(1) else { return Ok(()) };
+            return self.leaf_read(DemandContext { pos: prev, occurrence: *occurrence }, *node, index);
+        }
         let c = self.space.layout.checkpoint_interval.max(1);
         let mut at = pos;
         loop {
@@ -461,6 +548,9 @@ impl Twin<'_> {
                 self.leaf_read(prev, node, index)
             }
             Ref::Param(j) => {
+                if let Some(input) = self.input_of(j) {
+                    return self.input_read(input, index);
+                }
                 let d = program.params.get(j as usize).ok_or("no such param")?;
                 let layer = if d.per_layer { self.ctxs[&(key.pos, key.occurrence)].layer } else { None };
                 self.param_read(j, layer, index)
@@ -494,6 +584,13 @@ impl Twin<'_> {
                 let demand = &mut self.ctxs.get_mut(&(key.pos, key.occurrence)).expect("live").demand[j as usize];
                 for k in 0..count {
                     demand.insert(start + k * stride);
+                }
+                Ok(())
+            }
+            Ref::Param(j) if self.input_of(j).is_some() => {
+                let input = self.input_of(j).expect("checked");
+                for k in 0..count {
+                    self.input_read(input, start + k * stride)?;
                 }
                 Ok(())
             }
@@ -611,7 +708,7 @@ impl Twin<'_> {
                 let dst = strides(&dsh);
                 match inputs[0] {
                     Ref::Const(_) => Ok(()),
-                    Ref::Param(pj) if a == 0 && dsh.len() >= 2 => {
+                    Ref::Param(pj) if a == 0 && dsh.len() >= 2 && self.input_of(pj).is_none() => {
                         let d = &space.program.params[pj as usize];
                         let layer = if d.per_layer { self.ctxs[&(key.pos, key.occurrence)].layer } else { None };
                         let within = ravel(&di, &dst) as u64 * d.dtype.width() as u64;
@@ -748,10 +845,12 @@ fn close_reads_split(
     hist_only: bool,
     pattern: bool,
     leaf_cost: u64,
+    gen_stage: Option<&PalwGenTwinStageV1>,
 ) -> Result<Split, String> {
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let (block, _) = space.occurrences().get(request.ctx.occurrence as usize).copied().ok_or("no such occurrence")?;
     let mut twin = Twin {
+        gen_stage,
         space,
         job_ctx,
         job,
@@ -806,7 +905,23 @@ pub fn palw_tir_close_reads_v1(
     cap: u64,
 ) -> Result<(PalwTirCloseReadsV1, u64), String> {
     let Split { mut reads, hist, work, .. } =
-        close_reads_split(space, job_ctx, inventory, request, cap, false, false, leaf_cost_of(space))?;
+        close_reads_split(space, job_ctx, inventory, request, cap, false, false, leaf_cost_of(space), None)?;
+    reads.merge(&hist);
+    Ok((reads, work))
+}
+
+/// [`palw_tir_close_reads_v1`] over a pipeline stage's view (RFC-0003 PALW-GEN-20): its inputs read where the generative court reads
+/// them and its `post`-written states as the committed write of the position before (`stage`).
+pub fn palw_gen_close_reads_v1(
+    space: &PalwTirStepSpaceV1,
+    job_ctx: &PalwJobContextV2,
+    inventory: &PalwTirInventoryIndexV1,
+    request: &PalwTirCloseRequestV1<'_>,
+    cap: u64,
+    stage: &PalwGenTwinStageV1,
+) -> Result<(PalwTirCloseReadsV1, u64), String> {
+    let Split { mut reads, hist, work, .. } =
+        close_reads_split(space, job_ctx, inventory, request, cap, false, false, leaf_cost_of(space), Some(stage))?;
     reads.merge(&hist);
     Ok((reads, work))
 }
@@ -825,6 +940,29 @@ fn step_preimage_bytes(values: u32) -> u64 {
     2 + 16 + 4 + 4 + 4 * values as u64
 }
 
+/// **How a pipeline stage's closes are priced** (RFC-0003 PALW-GEN-20) — what differs from an IR class's: a generative close opens
+/// every leaf with its OWN path (a leaf of stage `s` under stage `s`'s root: no sibling set is shared by a run), a param as a whole
+/// `PalwArtifactOpeningV1` under the CLASS's one artifact root (named `p<k>/…`), and an edge leaf or an image tile under their own roots.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwGenClosePricingV1 {
+    /// Each stage's step tree depth over the widest job: a leaf of stage `s` opens with at most `stage_depths[s]` siblings.
+    pub stage_depths: Vec<u64>,
+    /// Each image slot's `(input tile tree depth, input tile bytes)`.
+    pub image_tiles: Vec<(u64, u64)>,
+    /// What an operand's name carries beyond the stage's own param name: the program prefix `p<k>/`.
+    pub name_extra: u64,
+    /// The close object (`CourtClosed` over a `GenCone`) with nothing opened, its disputed leaf of no lane — at the widest binding.
+    pub frame: u64,
+    /// The dissected cone's root claim (`CourtGenRootClaimed`) likewise, signed, with its carrier's extra.
+    pub root_frame: u64,
+}
+
+/// A generative step leaf's carried bytes: its coordinate (at most 15), its lanes (a length and four bytes each) and its path (a length
+/// and 64 bytes a sibling).
+fn gen_leaf_bytes(values: u32, depth: u64) -> u64 {
+    15 + 4 + 4 * values as u64 + 4 + 64 * depth
+}
+
 /// **How one class's closes are priced**: the frames, serialized, and the opening forms.
 #[derive(Clone, Debug)]
 pub struct PalwTirClosePriceV1<'a> {
@@ -840,6 +978,8 @@ pub struct PalwTirClosePriceV1<'a> {
     frame: u64,
     /// `CourtTirRootClaimed` likewise, its claim of no reduction, signed, with its carrier's extra.
     root_frame: u64,
+    /// A pipeline stage's pricing; `None` for an IR class.
+    pipe: Option<PalwGenClosePricingV1>,
 }
 
 impl<'a> PalwTirClosePriceV1<'a> {
@@ -913,6 +1053,31 @@ impl<'a> PalwTirClosePriceV1<'a> {
             token_bytes: 64 + 16 + 4 * (space.layout.max_context as u64 + 1) + 64 * 64,
             frame,
             root_frame,
+            pipe: None,
+        })
+    }
+
+    /// **The price of the closes of pipeline stage `stage`** (RFC-0003 PALW-GEN-20), over a class whose one artifact tree holds
+    /// `class_inventory_leaves` leaves: [`PalwGenClosePricingV1`] says what a generative close carries.
+    pub fn generative(
+        space: &'a PalwTirStepSpaceV1,
+        inventory: &'a PalwTirInventoryIndexV1,
+        stage: usize,
+        class_inventory_leaves: u32,
+        pricing: PalwGenClosePricingV1,
+    ) -> Result<Self, String> {
+        let depth = *pricing.stage_depths.get(stage).ok_or("a stage with no step tree depth")?;
+        Ok(Self {
+            space,
+            inventory,
+            depth,
+            inv_depth: ceil_log2(class_inventory_leaves.max(1) as u64),
+            form: PalwTirParamFormV1::PerLeaf,
+            // A prompt's or a generated id rides the close's frame (the ids vectors and the binding), never a read of its own.
+            token_bytes: 0,
+            frame: pricing.frame,
+            root_frame: pricing.root_frame,
+            pipe: Some(pricing),
         })
     }
 
@@ -920,6 +1085,10 @@ impl<'a> PalwTirClosePriceV1<'a> {
     /// sibling a level for a single leaf and two for a longer run, at ANY alignment; with
     /// `every_leaf_a_run`, as if no two were adjacent (a bound no alignment or job exceeds).
     pub fn steps(&self, reads: &PalwTirCloseReadsV1, every_leaf_a_run: bool) -> u64 {
+        // A generative close opens every leaf with its own whole path: a run shares nothing.
+        if self.pipe.is_some() {
+            return reads.steps.values().chain(reads.loose_steps.iter()).map(|v| gen_leaf_bytes(*v, self.depth)).sum();
+        }
         let mut bytes = 0u64;
         let mut runs: Vec<u64> = Vec::new();
         let mut last: Option<u64> = None;
@@ -953,7 +1122,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
         let mut last: Option<u32> = None;
         for leaf in &reads.params {
             let (p, layer, _, len) = self.inventory.piece_of(*leaf).unwrap_or((0, Some(0), 0, PALW_TIR_ROW_PIECE_BYTES_V1 as u32));
-            let name = program.params.get(p as usize).map_or(256, |d| d.name.len());
+            let name = program.params.get(p as usize).map_or(256, |d| d.name.len()) + self.name_extra() as usize;
             lens.push(palw_artifact_operand_borsh_len_v1(name, layer.is_some(), len as usize));
             if last.is_some_and(|l| l.wrapping_add(1) == *leaf) {
                 run += 1;
@@ -977,7 +1146,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
             };
             for k in pieces {
                 let len = row_bytes.saturating_sub(k * PALW_TIR_ROW_PIECE_BYTES_V1).min(PALW_TIR_ROW_PIECE_BYTES_V1);
-                lens.push(palw_artifact_operand_borsh_len_v1(d.name.len(), layer.is_some(), len as usize));
+                lens.push(palw_artifact_operand_borsh_len_v1(d.name.len() + self.name_extra() as usize, layer.is_some(), len as usize));
             }
             siblings += run_siblings(pieces.len() as u64);
         }
@@ -994,7 +1163,32 @@ impl<'a> PalwTirClosePriceV1<'a> {
 
     /// Every unit of `reads` beyond the frame.
     pub fn units(&self, reads: &PalwTirCloseReadsV1, every_leaf_a_run: bool) -> u64 {
-        self.steps(reads, every_leaf_a_run) + self.params(reads) + if reads.token { self.token_bytes } else { 0 }
+        self.steps(reads, every_leaf_a_run) + self.params(reads) + self.edges(reads) + if reads.token { self.token_bytes } else { 0 }
+    }
+
+    /// What an operand's name carries beyond the program's own param name (a pipeline's `p<k>/`).
+    fn name_extra(&self) -> u64 {
+        self.pipe.as_ref().map_or(0, |g| g.name_extra)
+    }
+
+    /// **A pipeline stage's edge leaves and image tiles** (none for an IR class): each edge leaf opened under its own stage's root, each
+    /// input tile with its path under the job's image root.
+    pub fn edges(&self, reads: &PalwTirCloseReadsV1) -> u64 {
+        let Some(g) = &self.pipe else { return 0 };
+        let leaves: u64 = reads
+            .edges
+            .iter()
+            .map(|((stage, _, _), lanes)| gen_leaf_bytes(*lanes, g.stage_depths.get(*stage as usize).copied().unwrap_or(self.depth)))
+            .sum();
+        let tiles: u64 = reads
+            .images
+            .iter()
+            .map(|(image, _)| {
+                let (depth, bytes) = g.image_tiles.get(*image as usize).copied().unwrap_or((0, 0));
+                1 + 8 + 4 + bytes + 4 + 64 * depth
+            })
+            .sum();
+        leaves + tiles
     }
 
     /// The alignment allowance of `reads`' `H`-carrying commit tiles: one more leaf, and a run of its
@@ -1102,26 +1296,41 @@ pub fn palw_tir_worst_closes_work_v1(
     job_ctx: &PalwJobContextV2,
     sizing: &PalwTirCloseSizingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
-    palw_tir_worst_closes_work_at_depth_v1(space, inventory, job_ctx, sizing, None)
+    let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
+    worst_closes_priced(space, inventory, job_ctx, sizing, price, None)
 }
 
-/// [`palw_tir_worst_closes_work_v1`] with the inventory's size the paths are priced at taken from `inventory_leaves` when given: a
-/// PIPELINE class's stage is sized over its own stage inventory, but its params are opened from the CLASS's one artifact tree, whose
-/// paths are deeper (RFC-0003 PALW-GEN-20).
-pub fn palw_tir_worst_closes_work_at_depth_v1(
+/// **The worst terminal close of every commit point of pipeline stage `stage`** (RFC-0003 PALW-GEN-20): the stage's version-1 view
+/// sized as [`palw_tir_worst_closes_work_v1`] sizes an IR class, with the stage's inputs read where the generative court
+/// reads them (`model`), its `post`-written states as the committed write of the position before, and every unit priced as a
+/// generative close carries it (`pricing`, over a class whose artifact tree holds `class_inventory_leaves` leaves). `job_ctx` is the
+/// stage's widest job (`palw_gen_close_price_v1::palw_gen_stage_job_context_v1`).
+#[allow(clippy::too_many_arguments)]
+pub fn palw_gen_worst_closes_v1(
     space: &PalwTirStepSpaceV1,
     inventory: &PalwTirInventoryIndexV1,
     job_ctx: &PalwJobContextV2,
     sizing: &PalwTirCloseSizingV1,
-    inventory_leaves: Option<u32>,
+    stage: usize,
+    class_inventory_leaves: u32,
+    model: &PalwGenTwinStageV1,
+    pricing: PalwGenClosePricingV1,
+) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
+    let price = PalwTirClosePriceV1::generative(space, inventory, stage, class_inventory_leaves, pricing)?;
+    worst_closes_priced(space, inventory, job_ctx, sizing, price, Some(model))
+}
+
+fn worst_closes_priced(
+    space: &PalwTirStepSpaceV1,
+    inventory: &PalwTirInventoryIndexV1,
+    job_ctx: &PalwJobContextV2,
+    sizing: &PalwTirCloseSizingV1,
+    price: PalwTirClosePriceV1<'_>,
+    gen_stage: Option<&PalwGenTwinStageV1>,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let program = &space.program;
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let p_max = job.positions.checked_sub(1).ok_or("a job with no position")?;
-    let mut price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
-    if let Some(leaves) = inventory_leaves {
-        price.inv_depth = price.inv_depth.max(ceil_log2(leaves.max(1) as u64));
-    }
     let c = space.layout.checkpoint_interval.max(1);
     let has_fixed = !space.fixed_instances().is_empty();
     // The position of `[lo, p_max]` whose replay is the longest: the largest `≡ C − 1 (mod C)`, or
@@ -1212,7 +1421,8 @@ pub fn palw_tir_worst_closes_work_at_depth_v1(
                             pattern: bool| {
                     let request =
                         PalwTirCloseRequestV1 { ctx: DemandContext { pos, occurrence: occ }, target, elements, supplied, range, both };
-                    let split = close_reads_split(space, job_ctx, inventory, &request, budget.get(), hist_only, pattern, leaf_cost)?;
+                    let split =
+                        close_reads_split(space, job_ctx, inventory, &request, budget.get(), hist_only, pattern, leaf_cost, gen_stage)?;
                     budget.set(budget.get().saturating_sub(split.work));
                     Ok::<_, String>(split)
                 };

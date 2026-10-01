@@ -39,9 +39,14 @@
 //!    class registers at 0‰ — permissionless (ADR-0069 D5) — and anything else is refused by name
 //!    (`GenEarnsNoWeight`).
 //!
-//! The close-bytes check of item 3 is a NECESSARY condition, as v10's is: the IR's admission reports
-//! the operand bytes a worst tile demands at element granularity, and a close carries whole leaves
-//! with their paths (the close proof's wire type, item 3 of the wiring, sets the sufficient bound).
+//! 6. **every close the court can be asked for is carriable, priced as carried (PALW-GEN-20)**: the
+//!    worst terminal close of every commit point of every stage, over every job of the class —
+//!    [`crate::palw_gen_close_price_v1`], an upper bound of what the builder carries (every leaf with its
+//!    own path at its own stage's depth, every param row a whole opening at the class inventory's depth,
+//!    the frame at its widest binding) — within the bytes the chain can carry, and every dissected
+//!    point's root claim within one carrier. The IR admission's operand bytes at element granularity,
+//!    which this check used to be (a necessary condition: it priced no path and no frame), sat as low as a
+//!    fifth of what a close measures. Last, as the costliest check, and bounded work.
 
 use std::collections::BTreeSet;
 
@@ -55,7 +60,7 @@ use crate::palw_gen_step_v1::PalwGenStepSpaceV1;
 use crate::palw_gen_v1::PalwGenFenceV1;
 use crate::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwPwuRuleV2};
-use crate::palw_tir_admission_v1::{PALW_TIR_CLOSE_FRAME_BYTES_V1, palw_tir_carriable_close_bytes_v1, palw_tir_prim_kernel_id_v1};
+use crate::palw_tir_admission_v1::{palw_tir_carriable_close_bytes_v1, palw_tir_prim_kernel_id_v1};
 use misaka_palw_tir::admit::{LeafV1, TirAdmitError, TirAdmitInputsV1, TirCeilingsV1};
 use misaka_palw_tir::admit_v2::{TirJobCeilingsV1, TirPipelineAdmissionV1, tir_admit_pipeline_staged_with_rules_v1};
 use misaka_palw_tir::pipeline::{PipelineJob, TirPipelineV1, TripRule, stage_job_facts};
@@ -218,7 +223,7 @@ pub fn verify_gen_class_admission_v1(
     let (programs, pipeline) = (&report.admission.programs, &report.admission.pipeline);
     // The weights have an inventory (a closed form of the declarations): every param byte a court
     // reads has a leaf of the class's `artifact_root` to be proven under.
-    crate::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(programs).ok_or_else(|| {
+    let inventory = crate::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(programs).ok_or_else(|| {
         PalwClassAdmissionError::GenClass(
             "the class's params have no pipeline inventory (no param, a tensor past 4 GiB, or past a u32 of leaves)".into(),
         )
@@ -286,7 +291,7 @@ pub fn verify_gen_class_admission_v1(
     } else {
         carried
     };
-    let (mut worst_close, mut worst_macs, mut worst_operands) = (0u64, 0u64, 0u64);
+    let (mut worst_macs, mut worst_operands) = (0u64, 0u64);
     for (s, st) in pipeline.stages.iter().enumerate() {
         let program = &programs[st.program as usize];
         let layout = &class.layouts[s];
@@ -364,33 +369,12 @@ pub fn verify_gen_class_admission_v1(
                                 PalwClassAdmissionError::TirDissection { why, .. } => gen_refused(why),
                                 other => other,
                             })?;
-                            // The root claim rides one carrier: the close frame, the chunk's opened
-                            // evidence, the claimed values and the move's frame (a NECESSARY
-                            // condition; the finalize's carriage is recorded exactly when built).
-                            let values = crate::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v2(
-                                &view.program,
-                                vblock,
-                                ni as u16,
-                                tile_len,
-                                rules.demand,
-                            );
-                            let root = PALW_TIR_CLOSE_FRAME_BYTES_V1
-                                .saturating_add(cone.terminal_opened_bytes())
-                                .saturating_add(values.saturating_mul(20))
-                                .saturating_add(crate::palw_tir_admission_v1::PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1);
-                            if root > crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1 {
-                                return Err(PalwClassAdmissionError::TirExceeds {
-                                    limit: "generative dissection root claim bytes",
-                                    at: format!("stage {s} block {bi} node {ni}"),
-                                    value: root,
-                                    cap: crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1,
-                                });
-                            }
+                            // The root claim rides one carrier: asked of the close sizing below (PALW-GEN-20), which
+                            // prices it as carried.
                         }
                     }
                 }
-                let (tile, opened) =
-                    if dissected { (cone.terminal(), cone.terminal_opened_bytes()) } else { (&cone.tile, cone.tile_opened_bytes) };
+                let tile = if dissected { cone.terminal() } else { &cone.tile };
                 exceeds("generative tile multiply-accumulates", tile.macs, bundle.court.max_terminal_macs())?;
                 let mut work = tile.macs.saturating_add(tile.elementwise).saturating_add(tile.transcendentals);
                 for leaf in &cone.leaves {
@@ -403,9 +387,6 @@ pub fn verify_gen_class_admission_v1(
                     }
                 }
                 exceeds("generative cone evaluation work (tile and state replay)", work, work_limit)?;
-                let close = PALW_TIR_CLOSE_FRAME_BYTES_V1.saturating_add(opened);
-                exceeds("generative close bytes as carried", close, carriable)?;
-                worst_close = worst_close.max(close);
                 worst_macs = worst_macs.max(tile.macs);
                 worst_operands = worst_operands.max(cone.operands);
             }
@@ -421,6 +402,36 @@ pub fn verify_gen_class_admission_v1(
     // 5. Weight: none (see the module doc).
     if *share_permille != 0 {
         return Err(PalwClassAdmissionError::GenEarnsNoWeight { share: *share_permille });
+    }
+
+    // 6. **PALW-GEN-20: every close the court can be asked for is CARRIABLE, priced as carried** — the worst terminal close of
+    // every commit point of every stage, over every job of the class, an upper bound of what its builder carries
+    // ([`crate::palw_gen_close_price_v1`]); every dissected point's worst root claim within one carrier. Last, as the costliest
+    // check (at most the sizing's work cap). The catalog records the worst of them: what the class's closes can weigh.
+    let (bounds, _work) = crate::palw_gen_close_price_v1::palw_gen_worst_closes_of_class_v1(
+        class,
+        pipeline,
+        programs,
+        inventory.leaf_count(),
+        rules.court.is_some(),
+        carriable,
+        crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1,
+        crate::palw_gen_close_price_v1::PALW_GEN_CLOSE_SIZING_WORK_CAP_V1,
+    )?;
+    let mut worst_close = 0u64;
+    for (s, stage) in bounds.iter().enumerate() {
+        for b in stage {
+            exceeds("generative close bytes as carried", b.close_bytes, carriable)?;
+            if b.dissected && b.root_claim_bytes > crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1 {
+                return Err(PalwClassAdmissionError::TirExceeds {
+                    limit: "generative dissection root claim bytes",
+                    at: format!("stage {s} block {} node {}", b.block, b.node),
+                    value: b.root_claim_bytes,
+                    cap: crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1,
+                });
+            }
+            worst_close = worst_close.max(b.close_bytes);
+        }
     }
 
     let record = palw_gen_class_record_v1(class, artifact_root).map_err(preflight_error)?;

@@ -121,7 +121,8 @@ fn sd3_class() -> Option<Sd3Class> {
             network_domain: Hash64::from_bytes([0xD0; 64]),
             class_id: row.class_id,
             executor_bond: TransactionOutpoint::new(TransactionId::from_bytes([7; 64]), 0),
-            executor_pubkey: vec![1; 8],
+            // The bond's key, as long as it is on chain: a close carries the whole job, the key in it.
+            executor_pubkey: vec![1; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN],
             operator_id: Hash64::from_bytes([2; 64]),
             anchor_block: Hash64::from_bytes([3; 64]),
             anchor_daa: 100,
@@ -300,93 +301,301 @@ fn breakdown_of_the_close_at_a_kind() {
     }
 }
 
-/// **PALW-GEN-20**: the PALW-TIR-38 twin over every stage's version-1 view with the param openings priced as the generative close
-/// carries them (`PerLeaf`: one opening, one full path per axis-0 row) at the CLASS's inventory depth, beside the worker's MEASURED
-/// close — the largest of the first, middle and last leaf of every commit POINT (stage, block, node). The twin is a sound bound only
-/// where it is at least the measurement: this prints both per point, the ratio, and the points where it is not.
+/// **PALW-GEN-20: what the gate prices a close at**, per commit point `(stage, block, node)`, and the work the sizing did.
+fn gate_prices(
+    c: &Sd3Class,
+) -> (BTreeMap<(u8, u8, u16), kaspa_consensus_core::palw_tir_close_size_v1::PalwTirCloseBoundV1>, u64) {
+    use kaspa_consensus_core::palw_gen_close_price_v1::{PALW_GEN_CLOSE_SIZING_WORK_CAP_V1, palw_gen_worst_closes_of_class_v1};
+    let leaves = kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&c.spec.programs)
+        .expect("the class's inventory")
+        .leaf_count();
+    let (bounds, work) = palw_gen_worst_closes_of_class_v1(
+        &c.declared.class,
+        &c.spec.pipeline,
+        &c.spec.programs,
+        leaves,
+        true,
+        u64::MAX,
+        u64::MAX,
+        PALW_GEN_CLOSE_SIZING_WORK_CAP_V1,
+    )
+    .unwrap_or_else(|e| panic!("the close sizing refuses the class: {e}"));
+    let mut by_point = BTreeMap::new();
+    for (s, stage) in bounds.into_iter().enumerate() {
+        for b in stage {
+            by_point.insert((s as u8, b.block, b.node), b);
+        }
+    }
+    (by_point, work)
+}
+
+/// The commit point `(stage, block, node)` a listed leaf is a leaf of, and its kind's name — `None` for a checkpoint leaf.
+fn point_of(c: &Sd3Class, l: &misaka_palw_base0::gen_tensor_worker::GenLeafListingV1) -> Option<(u8, u8, u16)> {
+    let ("commit", rest) = l.kind.split_once(' ')? else { return None };
+    let (occ, node) = rest.split_once('.')?;
+    let st = &c.spec.pipeline.stages[l.stage as usize];
+    let (block, _layer) = c.spec.programs[st.program as usize].occurrences()[occ.parse::<usize>().ok()?];
+    Some((l.stage, block, node.parse().ok()?))
+}
+
+/// **PALW-GEN-20, what the gate prices**: the sizing of every close of this class, per commit point, and the work it does. Cheap (no
+/// close is built): the table is the gate's, printed beside the measured one by the sweep below.
 #[test]
-#[ignore = "slow: three worker cone closes per commit point; prints the twin beside the measurement"]
-fn the_close_twin_bounds_the_measured_closes_per_commit_point() {
-    use kaspa_consensus_core::palw_tir_close_size_v1::{
-        PalwTirCloseSizingV1, PalwTirParamFormV1, palw_tir_worst_closes_work_at_depth_v1,
-    };
-    use kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1;
-    use kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1;
+fn the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap() {
+    use kaspa_consensus_core::palw_gen_close_price_v1::PALW_GEN_CLOSE_SIZING_WORK_CAP_V1;
     let Some(c) = sd3_class() else { return };
+    let started = std::time::Instant::now();
+    let (prices, work) = gate_prices(&c);
+    eprintln!(
+        "the gate sizes {} commit points in {work} steps of work (cap {PALW_GEN_CLOSE_SIZING_WORK_CAP_V1}), {:.1}s",
+        prices.len(),
+        started.elapsed().as_secs_f64()
+    );
+    let one_move_max = palw_gen_one_move_max_proof_bytes_v1();
+    let mut worst = (0u64, (0u8, 0u8, 0u16));
+    for (k, b) in &prices {
+        if b.close_bytes > worst.0 {
+            worst = (b.close_bytes, *k);
+        }
+        eprintln!("  stage {} block {} node {:>3}: close {:>7} B{}", k.0, k.1, k.2, b.close_bytes, if b.dissected { format!(", root claim {} B (dissected)", b.root_claim_bytes) } else { String::new() });
+    }
+    eprintln!("the largest priced close: {} B at {:?} (one-move carrier {one_move_max} B)", worst.0, worst.1);
+    assert!(work <= PALW_GEN_CLOSE_SIZING_WORK_CAP_V1);
+}
+
+/// **PALW-GEN-20: the gate's price is an upper bound of the measured close — at every commit point, at every sampled leaf** (a
+/// strided sweep of the widest job's leaves, `SD3_SWEEP_STRIDE=<n>`, default 40, and the first, middle and last leaf of every
+/// commit point), measured as the one-move accusation carries it (the proof's bytes). Prints the table (priced, measured, margin,
+/// ratio, per commit point) and asserts priced ≥ measured everywhere. A dissected point is held to its root claim and its bottoms.
+#[test]
+#[ignore = "slow: a cone close per sampled leaf: PALW_SWEEP=1 cargo test --config profile.dev.opt-level=2 -p misaka-palw-sdk --test gen_sd3_class -- --ignored --nocapture the_gate_prices"]
+fn the_gate_prices_every_close_at_least_what_it_measures() {
+    let Some(c) = sd3_class() else { return };
+    let (prices, work) = gate_prices(&c);
     let (held, _file) = held(&c);
     let honest = held.run_tensor(&c.job, &c.ids, &[], &[], FORM).expect("the job runs");
     let ev = honest.evidence(&held);
-    let class_leaves = kaspa_consensus_core::palw_gen_artifact_v1::palw_gen_inventory_operands_v1(&c.spec.programs, &c.weights)
-        .expect("the class's inventory")
-        .len() as u32;
-    // The leaves of every (stage, block, node), in order.
-    let mut by_node: BTreeMap<(u8, u8, u16), Vec<u64>> = BTreeMap::new();
-    for l in honest.leaf_listing() {
+    let stride: usize = std::env::var("SD3_SWEEP_STRIDE").ok().and_then(|v| v.parse().ok()).unwrap_or(40);
+    let listing = honest.leaf_listing();
+    // The leaves of every commit point, in order.
+    let mut by_point: BTreeMap<(u8, u8, u16), Vec<u64>> = BTreeMap::new();
+    for l in &listing {
         if l.lanes == 0 {
             continue;
         }
-        if let Some(("commit", rest)) = l.kind.split_once(' ') {
-            let (occ, node) = rest.split_once('.').expect("occurrence.node");
-            let (occ, node): (usize, u16) = (occ.parse().unwrap(), node.parse().unwrap());
-            let st = &c.spec.pipeline.stages[l.stage as usize];
-            let (block, _layer) = c.spec.programs[st.program as usize].occurrences()[occ];
-            by_node.entry((l.stage, block, node)).or_default().push(l.global);
+        if let Some(k) = point_of(&c, l) {
+            by_point.entry(k).or_default().push(l.global);
         }
     }
-    let (mut unsound, mut points, mut worst_twin, mut worst_measured) = (Vec::new(), 0usize, 0u64, 0u64);
+    let mut sample: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    for (n, l) in listing.iter().enumerate() {
+        if l.lanes > 0 && n % stride == 0 && point_of(&c, l).is_some() {
+            sample.insert(l.global);
+        }
+    }
+    for leaves in by_point.values() {
+        sample.extend([leaves[0], leaves[leaves.len() / 2], leaves[leaves.len() - 1]]);
+    }
+    let by_leaf: BTreeMap<u64, (u8, u8, u16)> = by_point.iter().flat_map(|(k, v)| v.iter().map(move |l| (*l, *k))).collect();
+    eprintln!("the gate sizes {} commit points in {work} steps; measuring {} leaves (stride {stride})", prices.len(), sample.len());
+    // Measured, per commit point: the largest, its leaf and the samples taken.
+    let mut measured: BTreeMap<(u8, u8, u16), (u64, u64, usize)> = BTreeMap::new();
+    let mut done = 0usize;
+    for leaf in &sample {
+        let point = by_leaf[leaf];
+        if is_dissected(&held, &honest, *leaf) {
+            continue;
+        }
+        let close = ev.cone_close(*leaf, &LIMITS).unwrap_or_else(|e| panic!("leaf {leaf} at {point:?}: {e}"));
+        let bytes = borsh::to_vec(&PalwCourtVerdictProofV2::GenCone { close: Box::new(close) }).unwrap().len() as u64;
+        let e = measured.entry(point).or_insert((0, *leaf, 0));
+        e.2 += 1;
+        if bytes > e.0 {
+            e.0 = bytes;
+            e.1 = *leaf;
+        }
+        done += 1;
+        if done % 100 == 0 {
+            eprintln!("  {done} closes measured");
+        }
+    }
+    let name = |k: &(u8, u8, u16)| {
+        let st = &c.spec.pipeline.stages[k.0 as usize];
+        let b = &c.spec.programs[st.program as usize].blocks[k.1 as usize];
+        format!("{} / {} / {}", st.name, b.name, b.nodes[k.2 as usize].prim.name())
+    };
+    eprintln!("  {:<58} {:>5} {:>9} {:>9} {:>8} {:>6}", "commit point (stage / block / primitive)", "n", "measured", "priced", "margin", "ratio");
+    let (mut under, mut min_ratio, mut max_ratio, mut min_margin) = (Vec::new(), f64::MAX, 0f64, i64::MAX);
+    for (k, (bytes, leaf, n)) in &measured {
+        let price = prices[k].close_bytes;
+        let (margin, ratio) = (price as i64 - *bytes as i64, price as f64 / *bytes as f64);
+        eprintln!(
+            "  {:<58} {n:>5} {bytes:>9} {price:>9} {margin:>8} {ratio:>6.2}{}",
+            format!("{} [{},{}]", name(k), k.1, k.2),
+            if margin < 0 { "  <-- UNDER" } else { "" }
+        );
+        min_ratio = min_ratio.min(ratio);
+        max_ratio = max_ratio.max(ratio);
+        min_margin = min_margin.min(margin);
+        if margin < 0 {
+            under.push((name(k), *k, *leaf, *bytes, price));
+        }
+    }
     eprintln!(
-        "class inventory: {class_leaves} leaves; {:<14} {:>5} {:>5} {:>10} {:>10} {:>7}",
-        "stage", "block", "node", "measured B", "twin B", "ratio"
+        "{} commit points, {done} closes measured: priced/measured in [{min_ratio:.3}, {max_ratio:.3}], the smallest margin {min_margin} B; priced below measured at {}: {under:?}",
+        measured.len(),
+        under.len()
     );
-    for (s, st) in c.spec.pipeline.stages.iter().enumerate() {
-        let view = c.spec.programs[st.program as usize].v1_view();
-        let info = misaka_palw_tir::validate::validate(&view).expect("the view validates");
-        let space = PalwTirStepSpaceV1::from_program(view.clone(), info, c.declared.class.layouts[s].clone()).expect("the step space");
-        let inventory = PalwTirInventoryIndexV1::new(&view).expect("an inventory");
-        let ctx = twin_ctx(st.max_trip);
-        let sizing = PalwTirCloseSizingV1 { form: PalwTirParamFormV1::PerLeaf, court: true, cap: 1 << 40, stop_above: None };
-        let (bounds, _) = palw_tir_worst_closes_work_at_depth_v1(&space, &inventory, &ctx, &sizing, Some(class_leaves))
-            .unwrap_or_else(|e| panic!("stage {s}: the twin refuses: {e}"));
-        for b in &bounds {
-            worst_twin = worst_twin.max(b.close_bytes);
-            let Some(leaves) = by_node.get(&(s as u8, b.block, b.node)) else { continue };
-            if is_dissected(&held, &honest, leaves[0]) {
-                eprintln!("  {:<14} {:>5} {:>5} {:>10} {:>10} {:>7}", st.name, b.block, b.node, "dissected", b.close_bytes, "-");
+    // The dissected points: the root claim and the bottoms, as their moves carry them.
+    for (k, b) in prices.iter().filter(|(_, b)| b.dissected) {
+        let leaves = &by_point[k];
+        let picks = [leaves[0], leaves[leaves.len() / 2], leaves[leaves.len() - 1]];
+        let (mut root_worst, mut bottom_worst) = (0u64, 0u64);
+        for leaf in picks {
+            let (root, bottoms) = dissected_moves(&c, &held, &honest, &ev, leaf);
+            root_worst = root_worst.max(root);
+            bottom_worst = bottom_worst.max(bottoms);
+        }
+        eprintln!(
+            "  dissected {}: root claim measured {root_worst} B priced {} B; bottom measured {bottom_worst} B priced {} B",
+            name(k),
+            b.root_claim_bytes,
+            b.close_bytes
+        );
+        assert!(b.root_claim_bytes >= root_worst, "{}: the root claim is priced below what it measures", name(k));
+        assert!(b.close_bytes >= bottom_worst, "{}: the bottom is priced below what it measures", name(k));
+    }
+    assert!(under.is_empty(), "the gate prices a close below its measurement at {} commit points: {under:?}", under.len());
+}
+
+/// **Diagnostic: what the gate's price of one commit point is made of** — the read set of its worst tile at the stage's last position
+/// (`SD3_POINT=<stage>,<block>,<node>`): the step leaves, the param leaves (by param), the wild rows, the edges, each priced.
+#[test]
+#[ignore = "diagnostic: SD3_POINT=<stage>,<block>,<node> cargo test --config profile.dev.opt-level=2 -p misaka-palw-sdk --test gen_sd3_class -- --ignored --nocapture breakdown_of_a_priced"]
+fn breakdown_of_a_priced_close() {
+    use kaspa_consensus_core::palw_gen_close_price_v1::PalwGenClassSizingV1;
+    use kaspa_consensus_core::palw_tir_close_size_v1::{PalwTirCloseRequestV1, PalwTirClosePriceV1, palw_gen_close_reads_v1};
+    use misaka_palw_tir::demand::{DemandContext, history_length_v1};
+    let Some(c) = sd3_class() else { return };
+    let want = std::env::var("SD3_POINT").expect("SD3_POINT=<stage>,<block>,<node>");
+    let [s, bi, ni]: [usize; 3] = want.split(',').map(|v| v.trim().parse().unwrap()).collect::<Vec<_>>().try_into().expect("three numbers");
+    let class = &c.declared.class;
+    let tables = PalwGenClassSizingV1::new(class, &c.spec.pipeline, &c.spec.programs).expect("tables");
+    let z = tables.stage(class, &c.spec.pipeline, &c.spec.programs, s).expect("the stage's sizing");
+    let leaves = kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&c.spec.programs).unwrap().leaf_count();
+    let price = PalwTirClosePriceV1::generative(&z.space, &z.inventory, s, leaves, z.pricing.clone()).expect("a price");
+    let occ = z.space.occurrences().iter().position(|(b, _)| *b as usize == bi).expect("an occurrence of the block");
+    let p_max = z.space.job_shape(&z.job).unwrap().positions - 1;
+    let tile_len = z.space.commit_tile_len(bi as u8, ni as u16).expect("a commit point") as usize;
+    let h = history_length_v1(&z.space.info, bi as u8, p_max).unwrap_or(1);
+    let count: usize = z.space.program.blocks[bi].nodes[ni].out.resolve(h).iter().product();
+    eprintln!("stage {s} block {bi} node {ni}: {count} elements at position {p_max} in tiles of {tile_len}; frame {} B", price.frame(tile_len as u32));
+    let mut worst: Option<(u64, usize, kaspa_consensus_core::palw_tir_close_size_v1::PalwTirCloseReadsV1)> = None;
+    for first in (0..count).step_by(tile_len) {
+        let elements: Vec<usize> = (first..(first + tile_len).min(count)).collect();
+        let request = PalwTirCloseRequestV1 {
+            ctx: DemandContext { pos: p_max, occurrence: occ as u16 },
+            target: ni as u16,
+            elements: &elements,
+            supplied: &[],
+            range: None,
+            both: false,
+        };
+        let (reads, _) = palw_gen_close_reads_v1(&z.space, &z.job, &z.inventory, &request, 1 << 40, &z.model).expect("the reads");
+        let bytes = price.close(&reads, elements.len() as u32);
+        if worst.as_ref().is_none_or(|w| bytes > w.0) {
+            worst = Some((bytes, first, reads));
+        }
+    }
+    let (bytes, first, reads) = worst.expect("a tile");
+    eprintln!("worst tile starts at element {first}: priced {bytes} B");
+    eprintln!("  step leaves {} ({} B), loose {}", reads.steps.len(), price.steps(&reads, false), reads.loose_steps.len());
+    eprintln!("  param leaves {} + wild rows {} ({} B)", reads.params.len(), reads.wild_rows.values().map(|p| p.len()).sum::<usize>(), price.params(&reads));
+    let mut by_param: BTreeMap<String, usize> = BTreeMap::new();
+    for leaf in &reads.params {
+        let (p, _, _, _) = z.inventory.piece_of(*leaf).unwrap();
+        *by_param.entry(z.space.program.params[p as usize].name.clone()).or_default() += 1;
+    }
+    eprintln!("    by param: {by_param:?}");
+    eprintln!("  edges {} ({} B), image tiles {}", reads.edges.len(), price.edges(&reads), reads.images.len());
+    let mut by_edge: BTreeMap<u8, usize> = BTreeMap::new();
+    for ((st, _, _), _) in &reads.edges {
+        *by_edge.entry(*st).or_default() += 1;
+    }
+    eprintln!("    by upstream stage: {by_edge:?}; token read: {}", reads.token);
+    // The measured close at the same node's leaves (the first leaf of the stage's last position).
+    let honest = {
+        let (held, _file) = held(&c);
+        let honest = held.run_tensor(&c.job, &c.ids, &[], &[], FORM).expect("the job runs");
+        let ev = honest.evidence(&held);
+        let mut best: Option<(usize, u64, usize, usize, usize)> = None;
+        for l in honest.leaf_listing() {
+            if l.lanes == 0 {
                 continue;
             }
-            let sample = [leaves[0], leaves[leaves.len() / 2], leaves[leaves.len() - 1]];
-            let measured = sample
-                .iter()
-                .map(|leaf| {
-                    let close = ev
-                        .cone_close(*leaf, &LIMITS)
-                        .unwrap_or_else(|e| panic!("stage {s} block {} node {} leaf {leaf}: {e}", b.block, b.node));
-                    borsh::to_vec(&PalwCourtVerdictProofV2::GenCone { close: Box::new(close) }).unwrap().len() as u64
-                })
-                .max()
-                .unwrap();
-            worst_measured = worst_measured.max(measured);
-            points += 1;
-            let ratio = b.close_bytes as f64 / measured as f64;
-            eprintln!(
-                "  {:<14} {:>5} {:>5} {:>10} {:>10} {:>7.2}{}",
-                st.name,
-                b.block,
-                b.node,
-                measured,
-                b.close_bytes,
-                ratio,
-                if ratio < 1.0 { "  <-- UNDER" } else { "" }
-            );
-            if b.close_bytes < measured {
-                unsound.push((st.name.clone(), b.block, b.node, measured, b.close_bytes));
+            if point_of(&c, &l) == Some((s as u8, bi as u8, ni as u16)) {
+                let close = ev.cone_close(l.global, &LIMITS).expect("a close");
+                let bytes = borsh::to_vec(&PalwCourtVerdictProofV2::GenCone { close: Box::new(close.clone()) }).unwrap().len();
+                if best.as_ref().is_none_or(|b| bytes > b.0) {
+                    best = Some((bytes, l.global, close.operands.len(), close.params.len(), close.operands.iter().filter(|o| o.coord.stage as usize != s).count()));
+                }
             }
         }
+        best
+    };
+    if let Some((bytes, leaf, operands, params, edges)) = honest {
+        eprintln!("measured at its worst leaf {leaf}: {bytes} B with {operands} operand leaves ({edges} of other stages), {params} param leaves");
     }
-    eprintln!(
-        "{points} commit points measured; largest measured {worst_measured} B, twin's largest bound {worst_twin} B; the twin is below the measurement at {}: {unsound:?}",
-        unsound.len()
-    );
+}
+
+/// **A dissected leaf's moves, measured**: the responder's root claim (`CourtGenRootClaimed`, signed, as its carrier holds it) and
+/// the bottom (`CourtClosed` over a `GenDissection`) of the dissection played to the end — to the first and to the last child at
+/// every round — the largest of them.
+fn dissected_moves(
+    c: &Sd3Class,
+    held: &GenHeldClassV1<misaka_palw_tir_artifact::PalwTirContainerV2>,
+    honest: &GenTensorWorkV1,
+    ev: &kaspa_consensus_core::palw_gen_close_v1::PalwGenEvidenceV1<'_>,
+    leaf: u64,
+) -> (u64, u64) {
+    use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
+    use kaspa_consensus_core::palw_gen_close_v1::check_gen_root_claim_v1;
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+    use kaspa_consensus_core::palw_tir_dissect_v1::{PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirDissectChoiceV1, PalwTirDissectPhaseV1};
+    let zero = Hash64::from_bytes([0; 64]);
+    let len = |o: &PalwConsensusObjectV2| borsh::to_vec(o).unwrap().len() as u64;
+    let root = ev.root_claim(leaf, &LIMITS).unwrap_or_else(|e| panic!("the root claim at leaf {leaf}: {e}"));
+    let root_bytes = len(&PalwConsensusObjectV2::CourtGenRootClaimed {
+        session_id: zero,
+        root: Box::new(root.clone()),
+        arity: 2,
+        signature: vec![0; 4_627],
+    }) + 64;
+    let site = check_gen_root_claim_v1(&root, &held.row, &c.row.class_id, &honest.execution_root(), leaf, FORM, &LIMITS)
+        .unwrap_or_else(|e| panic!("the root claim at leaf {leaf} is not admitted: {e}"));
+    let mut bottom_worst = 0u64;
+    for child_last in [false, true] {
+        let mut phase =
+            PalwTirDissectPhaseV1::open_parts(Hash64::from_bytes([7; 64]), leaf, &site, root.version, &root.elements, &root.totals, 2, 1, 100)
+                .expect("the phase opens");
+        let mut daa = 2;
+        while phase.turn() == PalwBisectTurnV1::AwaitDisclosure {
+            let round = ev.round(&phase, &LIMITS).expect("a round");
+            phase.apply_round(&round, daa, 100).expect("the honest children fold");
+            let child = if child_last { (round.children.len() - 1) as u8 } else { 0 };
+            let choice = PalwTirDissectChoiceV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, session_id: phase.session_id(), round: phase.round(), child };
+            phase.apply_choice(&choice, daa + 1, 100).expect("a legal choice");
+            daa += 2;
+        }
+        let bottom = ev.bottom(&phase, &LIMITS).expect("the bottom");
+        let bytes = len(&PalwConsensusObjectV2::CourtClosed {
+            session_id: zero,
+            verdict: PalwCourtVerdictV2::ChallengerDefeated,
+            proof: PalwCourtVerdictProofV2::GenDissection { bottom: Box::new(bottom) },
+        });
+        bottom_worst = bottom_worst.max(bytes);
+    }
+    (root_bytes, bottom_worst)
 }
 
 /// **PALW-GEN-20 by exhaustion — the exact worst close of this class's widest job**: the cone close at EVERY non-dissected step leaf of
@@ -448,28 +657,6 @@ fn every_leaf_of_the_widest_job_has_a_cone_close_that_fits_one_carrier() {
         worst.0, worst.1
     );
     assert!(worst.0 <= one_move_max, "a cone close of {} B at leaf {} exceeds one carrier", worst.0, worst.1);
-}
-
-fn twin_ctx(positions: u32) -> kaspa_consensus_core::palw_v2::PalwJobContextV2 {
-    kaspa_consensus_core::palw_v2::PalwJobContextV2 {
-        version: 2,
-        network_id: vec![0; 8],
-        job_id: Hash64::default(),
-        job_nullifier: Hash64::default(),
-        assignment_id: Hash64::default(),
-        execution_seed: [0; 32],
-        model_profile_id: Hash64::default(),
-        runtime_manifest_hash: Hash64::default(),
-        runtime_class_id: Hash64::default(),
-        shape_profile_id: Hash64::default(),
-        trace_scheme_id: Hash64::default(),
-        cu_ruleset_id: Hash64::default(),
-        tokenizer_id: Hash64::default(),
-        prompt_token_ids_hash: Hash64::default(),
-        declared_prefill_tokens: positions,
-        exact_decode_tokens: 1,
-        max_context_tokens: positions,
-    }
 }
 
 /// **The latent is a `post`-written state, and a cone that reads it at a later position must still close and convict** (NF-29: the
