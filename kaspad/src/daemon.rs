@@ -1861,6 +1861,8 @@ Do you confirm? (y/n)";
                         canonical_claims: args.palw_canonical_claims,
                         canonical_class: args.palw_canonical_class.clone(),
                         canonical_interval_daa: args.palw_canonical_interval_daa,
+                        improve_evaluate: args.palw_improve_evaluate,
+                        improve_artifact_dir: args.palw_improve_artifact_dir.as_ref().map(std::path::PathBuf::from),
                         drill_tamper_fp_leaf: match args.palw_drill_tamper_fp_leaf {
                             // Devnet, simnet, or a salted testnet-12 drill (ADR-0152 §8.2) — a
                             // private chain by construction; never public testnet-12.

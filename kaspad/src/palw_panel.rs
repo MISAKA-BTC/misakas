@@ -111,6 +111,9 @@ const PALW_PANEL: &str = "palw-panel";
 
 /// ADR-0152 §4-ter N3: a held dissection's moves, answered off the tick by the windowed builders.
 mod held_court;
+/// RFC-0004 (A10, node half): the improvement loop — the epoch watch, adapter prefetch, the evaluation
+/// executor's carrier, and a seat's replay of an evaluation claim (dormant below `palw_improvement_v1`).
+mod improve;
 /// RFC-0002 Phase F (F6, node half): an IR class's court close.
 mod tir_court;
 /// RFC-0002 F7's node side: an IR class's history dissection, played.
@@ -3298,6 +3301,11 @@ pub struct PalwPanelConfig {
     pub drill_answer_only: bool,
     /// DRILL ONLY (devnet/simnet): refuse every leaf-evidence request, so the slow path runs.
     pub drill_refuse_leaf_evidence: bool,
+    /// **RFC-0004 (A10): evaluate** (`--palw-improve-evaluate`): run the evaluation jobs of every governed
+    /// line's open epoch whose subject class this node holds, and carry their claims.
+    pub improve_evaluate: bool,
+    /// **RFC-0004 (A10): where this node finds a candidate's artifact** (`--palw-improve-artifact-dir`).
+    pub improve_artifact_dir: Option<PathBuf>,
     /// Where THIS node's producer persists the material behind its own attempts, when it produces.
     ///
     /// A court can open long after a claim licensed, and the in-memory pool does not live that
@@ -3402,6 +3410,12 @@ pub struct PalwPanelService {
     /// Loaded once, through the SDK — whichever lineage's container each file is. Same contract
     /// as the producer's: container-checked at load, matched against the CHAIN per duty.
     class_holdings: Vec<misaka_palw_sdk::PalwLoadedArtifactV1>,
+    /// **RFC-0004 (A10): the SDK the holdings were loaded through, kept** — a composite candidate's
+    /// adapter section opens over the parent this SDK's IR lineage already holds — and the classes
+    /// prefetched since the node started (`improve`), which [`Self::backends`] serves beside
+    /// `class_holdings`.
+    improve_sdk: misaka_palw_sdk::PalwClassSdk,
+    improve_holdings: std::sync::Mutex<Vec<misaka_palw_sdk::PalwLoadedArtifactV1>>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
@@ -3503,7 +3517,12 @@ impl PalwPanelService {
             &self.consensus_config.params,
             self.config.court,
             self.config.prompt_ids_form,
-            self.class_holdings.clone(),
+            {
+                // RFC-0004 (A10): the classes prefetched at run time are held beside the ones loaded at start.
+                let mut holdings = self.class_holdings.clone();
+                holdings.extend(self.improve_holdings.lock().expect("the prefetched holdings are never poisoned").iter().cloned());
+                holdings
+            },
             net,
             self.config.chain_classes,
         )
@@ -3787,6 +3806,8 @@ impl PalwPanelService {
             keypair,
             bond,
             class_holdings,
+            improve_sdk: sdk,
+            improve_holdings: std::sync::Mutex::new(Vec::new()),
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             foreign_pinned: std::sync::Mutex::new(HashSet::new()),
             served_openings: std::sync::Mutex::new(Vec::new()),
@@ -7143,9 +7164,9 @@ impl PalwPanelService {
         // move in hundreds of DAA).
         let mut own_phases: std::collections::HashMap<kaspa_hashes::Hash64, String> = std::collections::HashMap::new();
         let mut own_phases_read: Option<std::time::Instant> = None;
-        // RFC-0004 (A10): the improvement epochs this node follows, read through the core's door.
-        let mut improve_watch = crate::palw_improve_watch::PalwImproveWatchV1::default();
-        let mut improve_read: Option<std::time::Instant> = None;
+        // RFC-0004 (A10): the improvement loop's state — the epochs this node follows (read through the
+        // core's doors), its evaluation runs, and its seat's replays of evaluation claims.
+        let mut improve = improve::PalwImproveLoopV1::default();
 
         loop {
             if !self.tick(std::time::Duration::from_secs(2)).await {
@@ -7221,26 +7242,10 @@ impl PalwPanelService {
                 continue;
             }
             let current_daa = session.get_virtual_daa_score();
-            // **RFC-0004 (A10): the improvement epochs** — past `palw_improvement_v1` only (dormant on
-            // every shipped preset): the open epochs read through the core's door, the watcher's plan
-            // logged. Prefetch only: the evaluation claims wait for the evaluation lane's job type.
-            if crate::palw_improve_watch::palw_improve_watch_armed_v1(&self.consensus_config.params, current_daa)
-                && improve_read.is_none_or(|at| at.elapsed() >= crate::palw_improve_watch::PALW_IMPROVE_READ_EVERY_V1)
-            {
-                improve_read = Some(std::time::Instant::now());
-                let views = self
-                    .consensus_manager
-                    .consensus()
-                    .unguarded_session()
-                    .spawn_blocking(|c| c.palw_improvement_open_epochs_v1())
-                    .await;
-                let node = misaka_palw_sdk::improve::PalwImproveNodeV1 {
-                    holds: crate::palw_improve_watch::palw_improve_held_classes_v1(self.backends().holdings()),
-                    evaluates: false,
-                    prefetch_full: false,
-                };
-                crate::palw_improve_watch::palw_improve_log_tick_v1(&improve_watch.tick_views(&views, &node, current_daa));
-            }
+            // **RFC-0004 (A10): the improvement loop** — past `palw_improvement_v1` only (dormant on every
+            // shipped preset): the open epochs read through the core's doors, the plan logged, adapter
+            // prefetch, and the evaluation runs started and reaped.
+            self.improve_tick_v1(&mut improve, current_daa).await;
             if own_phases_read.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(30)) {
                 own_phases_read = Some(std::time::Instant::now());
                 // Its own session: `spawn_blocking` takes the handle, and this tick still needs one.
@@ -9357,6 +9362,21 @@ impl PalwPanelService {
                     if self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err() {
                         break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                     }
+                    // **RFC-0004 (A10): an evaluation claim** — a free-prompt claim with no quanta — is replayed
+                    // through the pipeline executor from the chain's own state (its job, the item's prompt
+                    // and reference, the policy's parameters), never from material an executor serves: it has
+                    // none to withhold, so no arm below may file `Unavailable` against it. A matching replay
+                    // licenses `Valid`; a difference is the court's question and files nothing.
+                    match self.improve_seat_step_v1(&mut improve, duty).await {
+                        improve::PalwImproveSeatStepV1::NotEvaluation => {}
+                        improve::PalwImproveSeatStepV1::Valid => {
+                            licensed_by_replay = true;
+                            break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                        }
+                        improve::PalwImproveSeatStepV1::Waiting
+                        | improve::PalwImproveSeatStepV1::Differs
+                        | improve::PalwImproveSeatStepV1::Unjudgeable => break 'verdict None,
+                    }
                     // **ADR-0098 Decision 2: a seat that found a fault in this claim files NOTHING
                     // about it** — in this round or any later one. Not a `Valid` from an arm whose
                     // samples missed the lie, and not the half-window `Unavailable`, which accuses a
@@ -11425,6 +11445,17 @@ impl PalwPanelService {
                         }
                         Err(e) => warn!("[{PALW_PANEL}] cannot build a canonical claim: {e}"),
                     }
+                }
+                // **RFC-0004 (A10): an evaluation claim the executor finished**, carried beside the
+                // canonical claim at the same site and funded the same way. Nothing here runs below the
+                // fence: no run is ever ready.
+                if slots.offers(PalwCarrierSiteV1::Own, inflight)
+                    && !stuck_opened
+                    && funding.is_some()
+                {
+                    let _ = self
+                        .improve_carry_v1(&mut improve, &session, network_domain, bond, current_daa, &mut funding, &mut inflight)
+                        .await;
                 }
                 // **ADR-0135 / audit C-1: a class registered before the registry fence never gets a
                 // row.** On a chain whose fence is scheduled but not yet in force, hold the
@@ -20108,7 +20139,11 @@ mod p2_6_da_accusation_policy {
         let gate = |site: &str| sites.matches(&format!("slots.offers(PalwCarrierSiteV1::{site}, inflight)")).count();
         assert_eq!(gate("ReadinessEscalated"), 1, "M1: the one escalated possession proof, ahead of the court queue");
         assert_eq!(gate("PriorityFirst"), 1);
-        assert_eq!(gate("Own"), 3, "the canonical claim, the class registration, the possession proofs");
+        assert_eq!(
+            gate("Own"),
+            4,
+            "the canonical claim, an evaluation claim (RFC-0004 A10), the class registration, the possession proofs"
+        );
         assert_eq!(gate("Licences"), 3, "the collector's licences; the supplementary collector's entry and each offer (F4 part 2)");
         let supplementary = sites.find("session.palw_v2_supplementary_assemble(claim, v3, v2)").expect("the supplementary collector");
         let licences_at = sites.find("slots.at(PalwCarrierSiteV1::Licences, inflight);").expect("the Licences site");
