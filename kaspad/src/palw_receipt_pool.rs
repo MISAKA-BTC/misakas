@@ -2228,6 +2228,7 @@ pub(crate) mod tests {
         assert!((11..=15).all(|b| held.contains(&bond(b))), "the sibling's seats, heard last, are kept");
         assert!((1..=5).all(|b| !held.contains(&bond(b))), "the oldest heard went");
     }
+
     /// **The seat scheduler reads only VERIFIED receipts** (F2): two seats' genuine receipts are
     /// checked at the door and count; a full-length junk receipt naming a third seat takes a free slot
     /// unchecked and does not, nor does a genuine receipt pooled after the tick's budget was spent; this

@@ -114,7 +114,7 @@ pub enum PalwSeatTierV1 {
 }
 
 /// The ranking every seat computes alike: FNV-1a over the claim's bytes, the seat bond's transaction
-/// id and its index. Deterministic across nodes and processes (the pool's own hasher is process-keyed
+/// id and its index, finished with murmur3's fmix64. Deterministic across nodes and processes (the pool's own hasher is process-keyed
 /// and would give each seat a different order).
 pub fn palw_seat_rank_key_v1(claim: &Hash64, seat: &PalwBondKeyV2) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -127,7 +127,12 @@ pub fn palw_seat_rank_key_v1(claim: &Hash64, seat: &PalwBondKeyV2) -> u64 {
     eat(&claim.as_bytes());
     eat(&seat.0.transaction_id.as_bytes());
     eat(&seat.0.index.to_le_bytes());
-    hash
+    // murmur3's fmix64: FNV alone mixes the last bytes poorly, and two seats' keys differ only in theirs.
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    hash ^ (hash >> 33)
 }
 
 /// **The tier of `item` at `now_daa` under a quorum of `quorum` seats**, and how many receipts it is
@@ -203,8 +208,18 @@ mod tests {
         PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_bytes([n; 64]), 0))
     }
 
+    /// A claim id as the chain makes them: 64 bytes that look random (a splitmix stream seeded by `n`).
     fn claim(n: u8) -> Hash64 {
-        Hash64::from_bytes([n; 64])
+        let mut state = u64::from(n).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xA5A5_A5A5;
+        let mut bytes = [0u8; 64];
+        for chunk in bytes.chunks_exact_mut(8) {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            chunk.copy_from_slice(&(z ^ (z >> 31)).to_le_bytes());
+        }
+        Hash64::from_bytes(bytes)
     }
 
     fn panel() -> Vec<PalwBondKeyV2> {
@@ -352,7 +367,7 @@ mod tests {
             assert_eq!(backups, 1, "claim {n}: 3 needed + 1 spare = 4 primaries of 5");
         }
         for (seat, count) in backups_per_seat.iter().enumerate() {
-            assert!((25..=75).contains(count), "seat {seat} defers {count} of 250: the load is shared, not piled on one seat");
+            assert!((30..=70).contains(count), "seat {seat} defers {count} of 250: the load is shared, not piled on one seat");
         }
         let a = palw_seat_rank_key_v1(&claim(7), &bond(2));
         assert_eq!(a, palw_seat_rank_key_v1(&claim(7), &bond(2)));

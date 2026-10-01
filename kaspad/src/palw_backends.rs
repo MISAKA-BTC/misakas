@@ -2571,7 +2571,7 @@ mod tests {
         let read = move |path: &Path| nested.iter().find(|(p, _)| Path::new(p) == path).map(|(_, v)| v.clone());
         assert_eq!(cgroup_headroom_from_v1("0::/a/b", 0, &read), Some(100));
         assert_eq!(cgroup_headroom_from_v1("0::/a/b", 400, &read), Some(500), "400 of the 900 held are reclaimable: 1000 − 500");
-        assert_eq!(cgroup_headroom_from_v1("0::/a/b", 800, &read), Some(400), "the credit is capped at 60 % of the limit: 1000 − 600");
+        assert_eq!(cgroup_headroom_from_v1("0::/a/b", 800, &read), Some(700), "the credit is capped at 60 % of the limit (600): 1000 − (900 − 600)");
     }
 
     /// **The growth, simulated: the ledger's headroom does not fall as the allocator hoards freed
