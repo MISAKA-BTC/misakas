@@ -11,6 +11,7 @@
 //! handful of fields that differ. Every default below is the config class's own.
 
 mod dense;
+mod encoder;
 mod hybrid;
 mod legacy;
 mod moe;
@@ -27,6 +28,11 @@ use std::collections::BTreeMap;
 pub const SUPPORTED: &[(&str, &str)] = &[
     ("LlamaForCausalLM", "C1 C2"),
     ("MistralForCausalLM", "C1 C2"),
+    ("MinistralForCausalLM", "C1 C2"),
+    ("Ministral3ForCausalLM", "C1 C2"),
+    ("GlmForCausalLM", "C1"),
+    ("Glm4ForCausalLM", "C1"),
+    ("Olmo3ForCausalLM", "C1 C2"),
     ("Qwen2ForCausalLM", "C1 C2"),
     ("Qwen3ForCausalLM", "C1 C2"),
     ("GemmaForCausalLM", "C1"),
@@ -68,6 +74,11 @@ pub const SUPPORTED: &[(&str, &str)] = &[
     ("GraniteMoeForCausalLM", "C3 C8"),
     ("DeepseekV2ForCausalLM", "C3 C8 (MLA)"),
     ("DeepseekV3ForCausalLM", "C3 C8 (MLA)"),
+    ("Glm4MoeForCausalLM", "C3 C8"),
+    ("PhimoeForCausalLM", "C3 C8"),
+    ("Llama4ForCausalLM", "C1 C3 C8"),
+    ("Gemma4ForCausalLM", "C1 C2 (C3 C8 with its MoE block)"),
+    ("Llama4ForConditionalGeneration", "C1 C3 C8 (text decoder only)"),
     ("GptOssForCausalLM", "C2 C3 C8"),
     ("Qwen3NextForCausalLM", "C3 C4 C7"),
     ("Qwen3_5ForCausalLM", "C4 C7"),
@@ -79,17 +90,23 @@ pub const SUPPORTED: &[(&str, &str)] = &[
     ("FalconMambaForCausalLM", "C5"),
     ("Mamba2ForCausalLM", "C5"),
     ("RwkvForCausalLM", "C6"),
+    ("CLIPTextModel", "E1 (encoder: RFC-0003 Embedding profile)"),
+    ("CLIPTextModelWithProjection", "E1 (encoder: RFC-0003 Embedding profile)"),
+    ("BertModel", "E2 (bidirectional encoder: RFC-0003 Embedding profile)"),
+    ("RobertaModel", "E2 (bidirectional encoder: RFC-0003 Embedding profile)"),
+    ("MPNetModel", "E2 (bidirectional encoder: RFC-0003 Embedding profile)"),
+    ("MPNetForMaskedLM", "E2 (bidirectional encoder, the MLM head ignored)"),
+    ("DistilBertModel", "E2 (bidirectional encoder: RFC-0003 Embedding profile)"),
+    ("DistilBertForMaskedLM", "E2 (bidirectional encoder, the MLM head ignored)"),
+    ("XLMRobertaModel", "E2 (bidirectional encoder: RFC-0003 Embedding profile)"),
 ];
 
 /// Architectures refused on purpose, with the reason (printed instead of "unknown").
 pub const REFUSED: &[(&str, &str)] = &[
     ("Gemma3nForConditionalGeneration", "AltUp/Laurel/per-layer embeddings and activation sparsity are not modelled yet"),
     ("Gemma3nForCausalLM", "AltUp/Laurel/per-layer embeddings and activation sparsity are not modelled yet"),
-    ("Llama4ForConditionalGeneration", "chunked attention, NoPE temperature tuning and the Llama-4 MoE are not modelled yet"),
-    ("Llama4ForCausalLM", "chunked attention, NoPE temperature tuning and the Llama-4 MoE are not modelled yet"),
     ("MllamaForConditionalGeneration", "the text decoder has cross-attention layers that read vision states"),
     ("PaliGemmaForConditionalGeneration", "prefix-LM (bidirectional) attention over the prompt"),
-    ("PhimoeForCausalLM", "sparsemixer routing is not modelled"),
     ("Phi3SmallForCausalLM", "blocksparse attention and muP scalings (remote code) are not modelled"),
     ("ChatGLMModel", "ChatGLM remote code is not modelled"),
     ("ChatGLMForConditionalGeneration", "ChatGLM remote code is not modelled"),
@@ -99,7 +116,6 @@ pub const REFUSED: &[(&str, &str)] = &[
     ("NemotronHForCausalLM", "Nemotron-H hybrid is not modelled yet"),
     ("FalconH1ForCausalLM", "Falcon-H1 hybrid with muP multipliers is not modelled yet"),
     ("Zamba2ForCausalLM", "Zamba2 shared-attention hybrid is not modelled yet"),
-    ("Olmo3ForCausalLM", "OLMo-3 per-layer-type rope parameters are not modelled yet"),
 ];
 
 /// Replace non-standard JSON number tokens Python writes (`Infinity`, `-Infinity`, `NaN`) outside
@@ -203,12 +219,15 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
     if root.get("add_cross_attention").and_then(Value::as_bool) == Some(true) {
         return Err(LowerError::not_lowerable(format!("{arch}: cross-attention is out of scope for v1")));
     }
-    if let Some(q) = root.get("quantization_config").filter(|q| !q.is_null()) {
-        let method = q.get("quant_method").and_then(Value::as_str).unwrap_or("unknown");
-        return Err(LowerError::not_lowerable(format!(
-            "{arch}: pre-quantized checkpoint (quant_method={method}); lower from a BF16/F16/F32 export — the integer program is quantized by the lowerer, not inherited"
-        )));
-    }
+    // A pre-quantised checkpoint (GPTQ, AWQ): its integers are lowered as stored
+    // (`crate::prequant`); every other method is refused there.
+    let quant = match root.get("quantization_config").filter(|q| !q.is_null()) {
+        Some(q) => {
+            let mt = root.get("model_type").and_then(Value::as_str).unwrap_or("");
+            Some(crate::prequant::parse_quant_config(q, &arch, mt)?)
+        }
+        None => None,
+    };
     let reference = match root.get("auto_map").and_then(Value::as_object) {
         Some(m) => {
             let module = remote_module(m).unwrap_or_default();
@@ -243,6 +262,11 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
     let spec = match arch.as_str() {
         "LlamaForCausalLM" => dense::llama(&mut p, Flavor::Llama)?,
         "MistralForCausalLM" => dense::llama(&mut p, Flavor::Mistral)?,
+        // Ministral (8B-2410): Mistral math with `layer_types` (all sliding by default).
+        "MinistralForCausalLM" | "Ministral3ForCausalLM" => dense::llama(&mut p, Flavor::Mistral)?,
+        "GlmForCausalLM" => dense::glm(&mut p, false)?,
+        "Glm4ForCausalLM" => dense::glm(&mut p, true)?,
+        "Olmo3ForCausalLM" => dense::olmo3(&mut p)?,
         "Qwen2ForCausalLM" => dense::llama(&mut p, Flavor::Qwen2)?,
         "Qwen3ForCausalLM" => dense::llama(&mut p, Flavor::Qwen3)?,
         "GraniteForCausalLM" => dense::llama(&mut p, Flavor::Granite)?,
@@ -261,7 +285,7 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         "GemmaForCausalLM" => dense::gemma(&mut p)?,
         "Gemma2ForCausalLM" => dense::gemma2(&mut p)?,
         "Gemma3ForCausalLM" => dense::gemma3_text(&mut p, "model.", "lm_head", vec![])?,
-        "Gemma3ForConditionalGeneration" => vlm_text(&mut p, &arch)?,
+        "Gemma3ForConditionalGeneration" | "Llama4ForConditionalGeneration" => vlm_text(&mut p, &arch)?,
         "LlavaForConditionalGeneration" | "Mistral3ForConditionalGeneration" => vlm_text(&mut p, &arch)?,
         "Phi3ForCausalLM" => dense::phi3(&mut p)?,
         "PhiForCausalLM" => legacy::phi(&mut p)?,
@@ -281,11 +305,16 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         "GraniteMoeForCausalLM" => moe::granite_moe(&mut p)?,
         "DeepseekV2ForCausalLM" => moe::deepseek(&mut p, 2)?,
         "DeepseekV3ForCausalLM" => moe::deepseek(&mut p, 3)?,
+        "Glm4MoeForCausalLM" => moe::glm4_moe(&mut p)?,
+        "PhimoeForCausalLM" => moe::phimoe(&mut p)?,
+        "Llama4ForCausalLM" => moe::llama4_text(&mut p, "model.", "lm_head")?,
+        "Gemma4ForCausalLM" => dense::gemma4_text(&mut p, "model.", "lm_head")?,
         "GptOssForCausalLM" => moe::gpt_oss(&mut p)?,
         "Qwen3NextForCausalLM" => hybrid::qwen3_next(&mut p)?,
         "Qwen3_5ForCausalLM" => hybrid::qwen3_5_text(&mut p, false, "model.", "lm_head", vec![])?,
         "Qwen3_5MoeForCausalLM" => hybrid::qwen3_5_text(&mut p, true, "model.", "lm_head", vec![])?,
         "Qwen3_5ForConditionalGeneration" | "Qwen3_5MoeForConditionalGeneration" => vlm_text(&mut p, &arch)?,
+        "Qwen2VLForConditionalGeneration" | "Qwen2_5_VLForConditionalGeneration" => vlm_text(&mut p, &arch)?,
         "JambaForCausalLM" => hybrid::jamba(&mut p)?,
         "MambaForCausalLM" => hybrid::mamba(&mut p, false)?,
         "FalconMambaForCausalLM" => hybrid::mamba(&mut p, true)?,
@@ -294,6 +323,14 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         "Rwkv5ForCausalLM" => hybrid::rwkv56(&mut p, 5)?,
         "Rwkv6ForCausalLM" => hybrid::rwkv56(&mut p, 6)?,
         "RWKV7ForCausalLM" => hybrid::rwkv7(&mut p)?,
+        "CLIPTextModel" => encoder::clip_text(&mut p, false)?,
+        "CLIPTextModelWithProjection" => encoder::clip_text(&mut p, true)?,
+        "BertModel" => encoder::bert_like(&mut p, encoder::BertFlavor::Bert)?,
+        "RobertaModel" | "XLMRobertaModel" => encoder::bert_like(&mut p, encoder::BertFlavor::Roberta)?,
+        // sentence-transformers repositories keep the base checkpoint's `…ForMaskedLM` name
+        // (all-mpnet-base-v2, distilbert-base): the encoder is read, the MLM head ignored.
+        "MPNetModel" | "MPNetForMaskedLM" => encoder::bert_like(&mut p, encoder::BertFlavor::MPNet)?,
+        "DistilBertModel" | "DistilBertForMaskedLM" => encoder::bert_like(&mut p, encoder::BertFlavor::DistilBert)?,
         other => {
             return Err(LowerError::not_lowerable(format!(
                 "`{other}` has no lowerer template (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet)"
@@ -301,7 +338,42 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         }
     };
     p.cfg.finish()?;
+    let mut spec = spec;
+    if let Some(q) = quant {
+        attach_quant(&mut spec, q)?;
+    }
     Ok(spec)
+}
+
+/// Attach a pre-quantised checkpoint's config to a parsed spec: dense attention + MLP decoders,
+/// the checkpoint's projections read as stored integers (`crate::prequant`).
+pub(crate) fn attach_quant(spec: &mut ArchSpec, q: crate::prequant::QuantConfig) -> Result<()> {
+    let arch = spec.architecture.clone();
+    if !matches!(spec.output, OutputSpec::Logits) || spec.hf.conv1d_weights || spec.adapter.is_some() {
+        return Err(LowerError::not_lowerable(format!(
+            "{arch}: a pre-quantised checkpoint of this kind (only decoders with nn.Linear projections)"
+        )));
+    }
+    let visual = |k: &str| k.contains("vision") || k.contains("visual") || k.contains("projector");
+    if spec.hf.names.keys().any(|k| visual(k)) || spec.hf.ignored_prefixes.iter().any(|k| visual(k)) {
+        return Err(LowerError::not_lowerable(format!("{arch}: a pre-quantised multimodal checkpoint")));
+    }
+    for (l, ls) in spec.layers.iter().enumerate() {
+        if !matches!(ls.mixer, Mixer::Attention(_) | Mixer::GatedDeltaNet(_)) || !matches!(ls.ffn, Ffn::Mlp(_) | Ffn::Moe(_)) {
+            return Err(LowerError::not_lowerable(format!(
+                "{arch}: layer {l} of a pre-quantised checkpoint is not attention or gated delta + MLP or experts (latent attention and the other recurrent mixers are not lowered from their integers yet)"
+            )));
+        }
+        if let Ffn::Moe(m) = &ls.ffn
+            && spec.hf.experts != crate::spec::MlpLayout::Separate
+        {
+            let _ = m;
+            return Err(LowerError::not_lowerable(format!("{arch}: pre-quantised experts in a fused layout")));
+        }
+    }
+    spec.notes.push(format!("pre-quantised checkpoint ({}): projections lowered from the stored integers", q.fmt.label()));
+    spec.hf.quant = Some(q);
+    Ok(())
 }
 
 /// The text decoder of a VLM, lowered alone (text-only prompts). The vision tower, projector and
@@ -333,14 +405,25 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
         "Mistral3ForConditionalGeneration" => "mistral",
         "Qwen3_5ForConditionalGeneration" => "qwen3_5_text",
         "Qwen3_5MoeForConditionalGeneration" => "qwen3_5_moe_text",
+        "Llama4ForConditionalGeneration" => "llama4_text",
         _ => "llama",
     });
     // Both HF weight layouts exist on the hub: `language_model.model.*` (≤ 4.51) and
     // `model.language_model.*` (≥ 4.52, and every checkpoint of a newer family).
     let qwen35 = tmt.starts_with("qwen3_5");
-    let (prefix, lm_head) =
-        if qwen35 { ("model.language_model.", "lm_head") } else { ("language_model.model.", "language_model.lm_head") };
-    let aliases = if qwen35 {
+    // Qwen2-VL and Qwen2.5-VL: `model.language_model.*` (≥ 4.52) or the plain Qwen2 names `model.*`
+    // their original checkpoints (and transformers 5's save) use.
+    let qwen2vl = matches!(tmt, "qwen2_vl_text" | "qwen2_5_vl_text");
+    let (prefix, lm_head) = if qwen35 {
+        ("model.language_model.", "lm_head")
+    } else if qwen2vl {
+        ("model.", "lm_head")
+    } else {
+        ("language_model.model.", "language_model.lm_head")
+    };
+    let aliases = if qwen2vl {
+        vec![("model.".to_string(), "model.language_model.".to_string())]
+    } else if qwen35 {
         vec![
             ("model.language_model.".to_string(), "language_model.model.".to_string()),
             ("lm_head".to_string(), "language_model.lm_head".to_string()),
@@ -355,6 +438,8 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
     // A text-only lowering never reads the vision tower, the projector or the MTP heads.
     let vision: Vec<String> = [
         "vision_tower.",
+        "vision_model.",
+        "model.vision_model.",
         "multi_modal_projector.",
         "model.vision_tower.",
         "model.multi_modal_projector.",
@@ -376,12 +461,17 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
     sub.cfg.inert(&["model_type"]);
     let mut spec = match tmt {
         "gemma3_text" => dense::gemma3_text(&mut sub, prefix, lm_head, aliases)?,
+        "llama4_text" => {
+            let mut s = moe::llama4_text(&mut sub, prefix, lm_head)?;
+            s.hf.prefix_aliases = aliases;
+            s
+        }
         "qwen3_5_text" => hybrid::qwen3_5_text(&mut sub, false, prefix, lm_head, aliases)?,
         "qwen3_5_moe_text" => hybrid::qwen3_5_text(&mut sub, true, prefix, lm_head, aliases)?,
-        "llama" | "mistral" | "qwen2" => {
+        "llama" | "mistral" | "ministral3" | "qwen2" | "qwen2_vl_text" | "qwen2_5_vl_text" => {
             let flavor = match tmt {
                 "llama" => Flavor::Llama,
-                "mistral" => Flavor::Mistral,
+                "mistral" | "ministral3" => Flavor::Mistral,
                 _ => Flavor::Qwen2,
             };
             let mut s = dense::llama_with_prefix(&mut sub, flavor, prefix, lm_head)?;
@@ -495,7 +585,51 @@ impl P<'_> {
         max_pos: Option<usize>,
         top_orig: Option<usize>,
     ) -> Result<RopeSpec> {
-        let rc = read_rope_config(&self.cfg, theta_default, layer_type)?;
+        Ok(self.rope_q_scaled(rotary_dim, style, theta_default, layer_type, partial, max_pos, top_orig, false)?.0)
+    }
+
+    /// [`P::rope`], and the query temperature a `llama_4_scaling_beta` among the rope parameters
+    /// asks for (Ministral-3: `q ·= 1 + β·ln(1 + ⌊p / original_max_position_embeddings⌋)`), which
+    /// only an architecture that applies it may carry (`q_scaled`) — elsewhere it is refused, never
+    /// dropped.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rope_q_scaled(
+        &self,
+        rotary_dim: usize,
+        style: RopeStyle,
+        theta_default: Option<f64>,
+        layer_type: Option<&str>,
+        partial: f64,
+        max_pos: Option<usize>,
+        top_orig: Option<usize>,
+        q_scaled: bool,
+    ) -> Result<(RopeSpec, Option<QTemperature>)> {
+        let mut rc = read_rope_config(&self.cfg, theta_default, layer_type)?;
+        let beta = match rc.params.remove("llama_4_scaling_beta") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(v.as_f64().ok_or_else(|| LowerError::bad(format!("{}: llama_4_scaling_beta {v}", self.cfg.arch)))?),
+        };
+        if beta.is_some() && !q_scaled {
+            return Err(LowerError::not_lowerable(format!(
+                "{}: llama_4_scaling_beta (a query scaling) on an architecture that does not apply it",
+                self.cfg.arch
+            )));
+        }
+        // transformers 5 also keeps the model's own length among the rope parameters.
+        if let Some(v) = rc.params.remove("max_position_embeddings")
+            && v.as_u64().map(|m| m as usize) != max_pos
+        {
+            return Err(LowerError::bad(format!("{}: rope_parameters.max_position_embeddings {v} ≠ {max_pos:?}", self.cfg.arch)));
+        }
+        let temp = match beta {
+            Some(b) => {
+                let floor = rc.params.get("original_max_position_embeddings").and_then(Value::as_u64).ok_or_else(|| {
+                    LowerError::bad(format!("{}: llama_4_scaling_beta without original_max_position_embeddings", self.cfg.arch))
+                })?;
+                Some(QTemperature { floor: floor as usize, scale: b, offset: 0 })
+            }
+            None => None,
+        };
         let freqs = compute_freqs(
             &self.cfg.arch,
             &rc,
@@ -506,7 +640,7 @@ impl P<'_> {
                 partial_rotary_factor: partial,
             },
         )?;
-        Ok(RopeSpec { rotary_dim, offset: 0, style, freqs })
+        Ok((RopeSpec { rotary_dim, offset: 0, style, freqs }, temp))
     }
 
     pub fn finish_spec(&mut self, s: SpecParts) -> ArchSpec {
@@ -524,6 +658,8 @@ impl P<'_> {
             layers: s.layers,
             final_norm: s.final_norm,
             head: s.head,
+            output: OutputSpec::Logits,
+            adapter: None,
             hf: HfStorage {
                 names: s.names,
                 prefix_aliases: s.prefix_aliases,
@@ -533,6 +669,7 @@ impl P<'_> {
                 experts: self.layouts.experts,
                 gdn: self.layouts.gdn,
                 ignored_prefixes: std::mem::take(&mut self.ignored_prefixes),
+                quant: None,
             },
             notes: std::mem::take(&mut self.notes),
         }
@@ -580,7 +717,7 @@ pub(crate) fn llama_names(model: &str, lm_head: &str) -> BTreeMap<String, String
 }
 
 pub(crate) fn plain_embedding(dim: usize) -> EmbeddingSpec {
-    EmbeddingSpec { dim, scale: 1.0, positions: None, norm: None, proj_in: false }
+    EmbeddingSpec { dim, scale: 1.0, positions: None, norm: None, proj_in: false, type_rows: None, rel_bias: None }
 }
 
 pub(crate) fn plain_head(tied: bool) -> HeadSpec {
@@ -592,11 +729,11 @@ pub(crate) fn pre_norm(n: NormSpec) -> Residual {
 }
 
 pub(crate) fn gated_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias }
+    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias, name: None }
 }
 
 pub(crate) fn plain_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias }
+    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias, name: None }
 }
 
 /// Heads / kv heads / head_dim with the usual defaults and divisibility checks.
@@ -646,6 +783,12 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         window: None,
         sinks: false,
         output_gate: false,
+        chunk: None,
+        q_temperature: None,
+        v_norm: None,
+        v_from_k: false,
+        param_prefix: None,
+        kv_share: None,
     }
 }
 
@@ -674,10 +817,17 @@ mod tests {
         assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("encoder–decoder")), "{e}");
         let e = parse_config(&serde_json::json!({"hidden_size": 8})).unwrap_err();
         assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("architectures")), "{e}");
-        let e =
-            parse_config(&serde_json::json!({"architectures": ["LlamaForCausalLM"], "quantization_config": {"quant_method": "gptq"}}))
-                .unwrap_err();
-        assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("gptq")), "{e}");
+        // GPTQ and AWQ are read (crate::prequant); every other method is refused up front.
+        let e = parse_config(
+            &serde_json::json!({"architectures": ["LlamaForCausalLM"], "quantization_config": {"quant_method": "bitsandbytes"}}),
+        )
+        .unwrap_err();
+        assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("bitsandbytes")), "{e}");
+        let e = parse_config(
+            &serde_json::json!({"architectures": ["LlamaForCausalLM"], "quantization_config": {"quant_method": "gptq", "bits": 3}}),
+        )
+        .unwrap_err();
+        assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("GPTQ 3-bit")), "{e}");
         let e = parse_config(&serde_json::json!({
             "architectures": ["LlamaForCausalLM"],
             "auto_map": {"AutoModelForCausalLM": "modeling_custom.CustomLlama"}

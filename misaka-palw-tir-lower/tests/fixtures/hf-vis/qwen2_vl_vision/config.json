@@ -1,0 +1,23 @@
+{
+  "architectures": [
+    "Qwen2VisionTransformerPretrainedModel"
+  ],
+  "depth": 2,
+  "dtype": "bfloat16",
+  "embed_dim": 32,
+  "hidden_act": "quick_gelu",
+  "hidden_size": 48,
+  "in_channels": 3,
+  "initializer_range": 0.02,
+  "mlp_ratio": 2,
+  "model_type": "qwen2_vl_vision",
+  "num_heads": 4,
+  "patch_size": 7,
+  "rope_parameters": {
+    "rope_theta": 10000.0,
+    "rope_type": "axial"
+  },
+  "spatial_merge_size": 2,
+  "temporal_patch_size": 2,
+  "transformers_version": "5.17.0"
+}

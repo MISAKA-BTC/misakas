@@ -10,10 +10,10 @@
 //! exactly what a step-by-step run would hold for that layer — so the result is the step-by-step
 //! result, value for value.
 
-use super::{ParamStore, Session, SiteStat, check_shape};
+use super::{ParamStore, Session, SiteStat, bind_one, check_shape};
 use crate::error::{LowerError, Result};
 use crate::hl::HlProgram;
-use crate::weights::{Binding, Resolver, TensorSource, eval_src};
+use crate::weights::{Binding, Resolver, TensorSource};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -42,21 +42,22 @@ pub struct Streamed<'a> {
 impl OccParams for Streamed<'_> {
     fn load(&self, bi: usize, layer: Option<usize>) -> Result<Arc<ParamStore>> {
         let r = Resolver::new(self.source, &self.binding.aliases).with_ignored(&self.binding.ignored_prefixes);
-        let none = BTreeMap::new();
         let mut st = ParamStore::default();
         for pi in self.prog.block_params(bi) {
             let d = &self.prog.params[pi as usize];
             if d.per_layer {
                 let l = layer.ok_or_else(|| LowerError::eval(format!("per-layer param `{}` outside a layer", d.name)))?;
-                let t = eval_src(&self.binding.srcs[pi as usize], &r, Some(l), &none)
-                    .map_err(|e| LowerError::weights(format!("param `{}` layer {l}: {e}", d.name)))?;
+                // Keyed by the occurrence, read at the model layer it belongs to.
+                let ml = self.prog.model_layer(l);
+                let (t, q) = bind_one(&self.binding.srcs[pi as usize], &r, Some(ml))
+                    .map_err(|e| LowerError::weights(format!("param `{}` layer {ml}: {e}", d.name)))?;
                 check_shape(&d.name, &t, &d.shape)?;
-                st.layered.insert((pi, l), t);
+                st.insert(pi, Some(l), t, q);
             } else {
-                let t = eval_src(&self.binding.srcs[pi as usize], &r, None, &none)
+                let (t, q) = bind_one(&self.binding.srcs[pi as usize], &r, None)
                     .map_err(|e| LowerError::weights(format!("param `{}`: {e}", d.name)))?;
                 check_shape(&d.name, &t, &d.shape)?;
-                st.global.insert(pi, t);
+                st.insert(pi, None, t, q);
             }
         }
         Ok(Arc::new(st))

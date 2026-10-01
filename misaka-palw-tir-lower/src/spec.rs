@@ -183,6 +183,59 @@ pub struct AttnSpec {
     pub sinks: bool,
     /// `q_proj` also emits a per-head gate (`[q, gate]` per head); output `*= σ(gate)` (Qwen3-Next).
     pub output_gate: bool,
+    /// Chunked attention (Llama-4): a query at `p` sees only the keys of its own chunk,
+    /// `[p − p mod c, p]`. The history then keeps `c` rows (`window` is `Some(c)`).
+    pub chunk: Option<usize>,
+    /// Llama-4's attention temperature on its NoPE layers: `q ·= ln(1 + ⌊(p + 1) / floor⌋)·scale + 1`.
+    pub q_temperature: Option<QTemperature>,
+    /// A norm on each value head (Gemma-4: RMS without a gain).
+    pub v_norm: Option<QkNorm>,
+    /// The values are the key projection's output, before its norm and rotation (Gemma-4's
+    /// `attention_k_eq_v`): no `v_proj`.
+    pub v_from_k: bool,
+    /// The HL name of this attention's params and histories (`attn` unless given): layers whose
+    /// projections differ in shape (Gemma-4's wider global heads) need names of their own.
+    pub param_prefix: Option<String>,
+    /// Gemma-3n/4's KV sharing: this layer's keys and values ride to later layers, or are an
+    /// earlier layer's.
+    pub kv_share: Option<KvShare>,
+}
+
+/// Gemma-3n/4's KV sharing (`num_kv_shared_layers`), through the carries between layers: carry
+/// `1 + 2·slot` holds a key row and `2 + 2·slot` its value row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum KvShare {
+    /// The last layer of its kind before the sharing ones: its keys (normed and rotated) and values
+    /// (normed) go out on the slot's carries.
+    Source { slot: usize },
+    /// A layer that projects no keys or values: it appends the slot's rows to a history of its
+    /// own and attends over it — the source's history, row for row.
+    Consumer { slot: usize },
+}
+
+/// A query temperature by position: Llama-4's `attn_temperature_tuning` (`floor_scale`,
+/// `attn_scale`, over `p + 1`) and Ministral-3's `llama_4_scaling_beta` (over the original context
+/// length, over `p`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct QTemperature {
+    pub floor: usize,
+    pub scale: f64,
+    /// Added to the position before the division: 1 (Llama-4) or 0 (Ministral-3).
+    pub offset: usize,
+}
+
+impl QTemperature {
+    /// The factor at position `p`: `log1p(floor((p + offset) / floor)) · scale + 1` in float32 as
+    /// transformers computes it. Its float32 quotient is exact below `2^23` positions, so the floor
+    /// is the integer one.
+    pub fn at(&self, p: usize) -> f32 {
+        self.of_quotient((p + self.offset) / self.floor.max(1))
+    }
+
+    /// The factor for `floor((p + 1) / floor) = q`.
+    pub fn of_quotient(&self, q: usize) -> f32 {
+        (q as f32).ln_1p() * self.scale as f32 + 1.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -297,6 +350,9 @@ pub enum MlpLayout {
     FusedGateFirst,
     /// One `gate_up` tensor, rows interleaved `g0,u0,g1,u1,…` (gpt-oss).
     FusedInterleaved,
+    /// Experts stored `[E, in, out]`: `gate_up_proj [E, D, 2I]` with the gate columns first,
+    /// `down_proj [E, I, D]` (Llama-4).
+    FusedGateFirstInOut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -315,6 +371,9 @@ pub struct MlpSpec {
     pub glu: Glu,
     pub up_bias: bool,
     pub down_bias: bool,
+    /// The HL name of the MLP's params (`mlp` unless given): layers whose MLPs differ in width
+    /// (Gemma-4's double-wide KV-sharing layers, Gemma-3n's per-layer widths) need their own.
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -325,6 +384,13 @@ pub enum Scoring {
     Sigmoid,
     /// top-k of the raw logits, then `softmax` over the k (gpt-oss, GraniteMoE).
     TopKThenSoftmax,
+    /// top-k of the raw logits, then `sigmoid` of each kept one (Llama-4).
+    TopKThenSigmoid,
+    /// Phi-3.5-MoE's `sparsemixer` at inference (top-2 only): the argmax `i1`, weighted by the
+    /// softmax at `i1` of the logits within `jitter_eps` of the max — `(m − s_j) / max(|s_j|, m) ≤
+    /// 2·jitter_eps`, the rest masked — then the argmax `i2` of the others, weighted the same way
+    /// (the threshold on the original logits, `i1` masked).
+    SparseMixer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -355,6 +421,11 @@ pub struct RouterSpec {
     pub norm_eps: f64,
     /// Multiplier on the final weights (`routed_scaling_factor`).
     pub scale: f64,
+    /// `sparsemixer`'s `router_jitter_noise` (0 for every other scoring).
+    pub jitter_eps: f64,
+    /// Gemma-4: each selected weight times a learned per-expert scale (`per_expert_scale[e]`), after
+    /// the renormalisation.
+    pub per_expert_scale: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -374,6 +445,23 @@ pub struct MoeSpec {
     pub expert_bias: bool,
     pub router: RouterSpec,
     pub shared: Option<SharedExpertSpec>,
+    /// Llama-4: each selected expert reads `w · x` (its routing weight scales the INPUT) and the
+    /// outputs are summed unweighted.
+    pub input_scaled: bool,
+}
+
+/// Gemma-4's MoE block beside its MLP: `f = mlp_post(mlp(pre_ffn(x))) + moe_post(moe(moe_pre(x)))`,
+/// the router reading `router_norm(x)·router_scale` — every branch from the layer's residual `x`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct MlpMoeSpec {
+    pub mlp: MlpSpec,
+    pub moe: MoeSpec,
+    pub mlp_post: NormSpec,
+    pub moe_pre: NormSpec,
+    pub moe_post: NormSpec,
+    /// A weightless RMSNorm times a learned vector: a `Gain::W` norm whose gain is that vector.
+    pub router_norm: NormSpec,
+    pub router_scale: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -382,6 +470,24 @@ pub enum Ffn {
     Mlp(MlpSpec),
     Moe(MoeSpec),
     RwkvChannel(RwkvChannelSpec),
+    /// Gemma-4 (only under [`Residual::Sandwich`]).
+    MlpMoe(Box<MlpMoeSpec>),
+}
+
+/// Gemma-3n/4's per-layer input (PLE), for layer `l` from the token and its scaled embedding `e`:
+/// `ple = (norm(P_l·e·proj_scale) + T_l[token]·table_scale)·combine_scale`, then
+/// `x += post_norm(W_out·(act(W_gate·x) ⊙ ple))`. `P_l` and `T_l` are the layer's slices of two
+/// tensors packed over the layers.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PleSpec {
+    pub dim: usize,
+    pub vocab: usize,
+    pub table_scale: f64,
+    pub proj_scale: f64,
+    pub norm: NormSpec,
+    pub combine_scale: f64,
+    pub act: Act,
+    pub post_norm: NormSpec,
 }
 
 /// The residual wiring of one layer.
@@ -399,6 +505,17 @@ pub enum Residual {
     Parallel { norm: NormSpec, ffn_norm: Option<NormSpec> },
     /// Post-LN: `x = n1(x + mixer(x))`, `x = n2(x + ffn(x))` (OPT-350m).
     PostNorm { mixer_norm: NormSpec, ffn_norm: NormSpec },
+    /// Gemma-4: Gemma's four norms around the mixer and the FFN (an [`Ffn::MlpMoe`] reads the
+    /// residual itself), then the per-layer input as a branch of its own, then the layer's output
+    /// times a learned per-layer scalar (`layer_scalar`).
+    Sandwich {
+        pre_mixer: NormSpec,
+        post_mixer: NormSpec,
+        pre_ffn: NormSpec,
+        post_ffn: NormSpec,
+        ple: Option<PleSpec>,
+        layer_scalar: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -428,6 +545,20 @@ pub struct EmbeddingSpec {
     pub norm: Option<NormSpec>,
     /// `project_in` (OPT-350m).
     pub proj_in: bool,
+    /// A token-type table of this many rows (BERT's `token_type_embeddings`); a single-segment
+    /// encoder adds row 0 to every position.
+    pub type_rows: Option<usize>,
+    /// A bidirectional encoder's bias over bucketed relative positions, one table shared by every
+    /// layer (MPNet: T5's bidirectional buckets). Read by `lower::bidir` only.
+    pub rel_bias: Option<RelBiasSpec>,
+}
+
+/// `table[bucket(j − i), head]` added to the scaled scores of query `i` and key `j`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct RelBiasSpec {
+    pub buckets: usize,
+    pub max_distance: usize,
+    pub heads: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -442,6 +573,16 @@ pub struct HeadSpec {
     pub logit_scale: f64,
     /// `tanh(z / c) · c` on the logits (Gemma-2).
     pub softcap: Option<f64>,
+}
+
+/// What a program's `post` produces (RFC-0003 §I.2.3's output kinds are chosen per class, from it).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum OutputSpec {
+    /// A language model's logits, through the head.
+    Logits,
+    /// An encoder's embedding: the hidden row after `final_norm`, then an optional projection
+    /// (`width`, `bias`: CLIP's `text_projection`), then an optional L2 normalisation.
+    Embedding { proj: Option<(usize, bool)>, normalize: bool },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -460,6 +601,10 @@ pub struct ArchSpec {
     pub layers: Vec<LayerSpec>,
     pub final_norm: Option<NormSpec>,
     pub head: HeadSpec,
+    /// Logits, or an encoder's embedding.
+    pub output: OutputSpec,
+    /// A LoRA adapter over this model (`crate::lora`): the candidate = parent + adapter.
+    pub adapter: Option<crate::lora::LoraAdapter>,
     /// How the checkpoint stores the weights. Read only by `crate::hf_weights`; the HL builder
     /// never looks at it, so the HL graph is the same whichever frontend produced the spec.
     pub hf: HfStorage,
@@ -491,6 +636,8 @@ pub struct HfStorage {
     /// Checkpoint tensors a text-only lowering does not read by design (a VLM's vision tower
     /// and projector, multi-token-prediction heads). Every OTHER unread tensor is reported.
     pub ignored_prefixes: Vec<String>,
+    /// A pre-quantised checkpoint (GPTQ, AWQ): which linears are stored as integers, and how.
+    pub quant: Option<crate::prequant::QuantConfig>,
 }
 
 impl HfStorage {

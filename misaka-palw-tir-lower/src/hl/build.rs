@@ -13,6 +13,7 @@ use crate::spec::*;
 use std::collections::BTreeMap;
 
 pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
+    let carries = carries_of(spec)?;
     let mut b = Builder {
         s: spec,
         params: vec![],
@@ -21,25 +22,39 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
         sidx: BTreeMap::new(),
         ropes: vec![],
         blocks: vec![],
+        carries: carries.clone(),
+        carry_out: BTreeMap::new(),
     };
-    let carries = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size] }];
     let pre = b.pre_block()?;
-    let mut kinds: Vec<(LayerSpec, u16)> = Vec::new();
+    let mut kinds: Vec<(LayerSpec, Vec<u16>)> = Vec::new();
     let mut schedule = Vec::with_capacity(spec.layers.len());
-    for ls in &spec.layers {
-        match kinds.iter().find(|(s, _)| s == ls) {
-            Some((_, bi)) => schedule.push(*bi),
+    let mut layer_of = Vec::with_capacity(spec.layers.len());
+    for (li, ls) in spec.layers.iter().enumerate() {
+        let bis = match kinds.iter().find(|(s, _)| s == ls) {
+            Some((_, bis)) => bis.clone(),
             None => {
-                let bi = b.layer_block(ls, kinds.len())?;
-                let bi = u16::try_from(bi).map_err(|_| LowerError::not_lowerable("more than 65535 blocks"))?;
-                kinds.push((ls.clone(), bi));
-                schedule.push(bi);
+                let bis = b
+                    .layer_blocks(ls, kinds.len())?
+                    .into_iter()
+                    .map(|bi| u16::try_from(bi).map_err(|_| LowerError::not_lowerable("more than 65535 blocks")))
+                    .collect::<Result<Vec<u16>>>()?;
+                kinds.push((ls.clone(), bis.clone()));
+                bis
             }
+        };
+        for bi in bis {
+            schedule.push(bi);
+            layer_of.push(li);
         }
     }
     let post = b.post_block()?;
+    let carries = b.carries.clone();
     let p = HlProgram {
         architecture: spec.architecture.clone(),
+        output: match spec.output {
+            OutputSpec::Logits => HlOutput::Logits,
+            OutputSpec::Embedding { normalize, .. } => HlOutput::Embedding { normalized: normalize },
+        },
         vocab: spec.vocab_size,
         hidden: spec.hidden_size,
         carries,
@@ -50,6 +65,7 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
         pre,
         post,
         schedule,
+        layer_of,
     };
     p.validate().map_err(|e| LowerError::eval(format!("internal: built program is malformed: {e}")))?;
     Ok(p)
@@ -63,6 +79,46 @@ struct Builder<'a> {
     sidx: BTreeMap<String, u32>,
     ropes: Vec<crate::rope::RopeFreqs>,
     blocks: Vec<Block>,
+    /// The carries (the residual first, then each KV-sharing slot's key and value rows).
+    carries: Vec<CarryDecl>,
+    /// What the block under construction writes to a carry past the residual.
+    carry_out: BTreeMap<usize, Ref>,
+}
+
+/// The carries a spec needs: the residual stream, then a key row and a value row for each KV
+/// slot a [`KvShare::Source`] layer fills.
+fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
+    let mut out = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size] }];
+    // slot → the (kv heads, head width, value width) of the one layer that fills it.
+    let mut slots: BTreeMap<usize, (usize, usize, usize)> = BTreeMap::new();
+    for (li, ls) in spec.layers.iter().enumerate() {
+        let Mixer::Attention(a) = &ls.mixer else { continue };
+        let dims = (a.kv_heads, a.head_dim, a.v_head_dim);
+        match a.kv_share {
+            Some(KvShare::Source { slot }) => {
+                if slots.insert(slot, dims).is_some() {
+                    return Err(LowerError::eval(format!("internal: KV slot {slot} is filled by two layers")));
+                }
+            }
+            Some(KvShare::Consumer { slot }) => match slots.get(&slot) {
+                None => return Err(LowerError::eval(format!("internal: layer {li} reads KV slot {slot} before any layer fills it"))),
+                Some(d) if *d != dims => {
+                    return Err(LowerError::eval(format!("internal: layer {li} reads KV slot {slot} at other head shapes")));
+                }
+                Some(_) => {}
+            },
+            None => {}
+        }
+    }
+    let slots: BTreeMap<usize, (usize, usize)> = slots.into_iter().map(|(s, (kv, hd, vd))| (s, (kv * hd, kv * vd))).collect();
+    for (i, (slot, (k, v))) in slots.into_iter().enumerate() {
+        if slot != i {
+            return Err(LowerError::eval("internal: KV slots are not numbered from 0"));
+        }
+        out.push(CarryDecl { name: format!("kv{slot}.k"), shape: vec![k] });
+        out.push(CarryDecl { name: format!("kv{slot}.v"), shape: vec![v] });
+    }
+    Ok(out)
 }
 
 /// A block under construction.
@@ -162,7 +218,16 @@ impl Builder<'_> {
         if bias {
             ins.push(self.param(&format!("{name}.b"), vec![out], per_layer, Init::Uniform(-0.1, 0.1))?);
         }
-        Ok(bk.f(Op::Linear { bias }, ins, out, site))
+        // A LoRA adapter on this role (a layer's projection): `A [r, in]`, `B [out, r]`.
+        let lora = match self.s.adapter.as_ref().and_then(|a| a.role(name)) {
+            Some(l) if per_layer => {
+                ins.push(self.param(&format!("{name}.lora_a"), vec![l.rank, inp], true, Init::Normal(W_STD))?);
+                ins.push(self.param(&format!("{name}.lora_b"), vec![out, l.rank], true, Init::Normal(W_STD))?);
+                Some(LoraOp { rank: l.rank, num: l.num, den: l.den })
+            }
+            _ => None,
+        };
+        Ok(bk.f(Op::Linear { bias, lora }, ins, out, site))
     }
 
     /// A norm under role `name` over `n` values in `groups` groups, gain shaped `gain_shape`
@@ -218,8 +283,31 @@ impl Builder<'_> {
         if let Some(n) = e.norm {
             x = self.full_norm(&mut bk, x, n, "embed.norm", d, false)?;
         }
-        self.blocks.push(Block { name: "pre".into(), role: BlockRole::Pre, nodes: bk.nodes, outputs: vec![x] });
+        // Declared for the binding only: a bidirectional encoder's lowering (`lower::bidir`) folds
+        // row 0 into its position rows; a per-position program never reads it.
+        if let Some(rows) = e.type_rows {
+            self.param("embed.type_table", vec![rows, d], false, Init::Normal(0.2))?;
+        }
+        // Declared for the binding only, like the token types: `lower::bidir` adds it to the scores.
+        if let Some(rb) = e.rel_bias {
+            self.param("attn.rel_bias", vec![rb.buckets, rb.heads], false, Init::Normal(0.2))?;
+        }
+        let mut outputs = vec![x];
+        for c in self.carries.clone().iter().skip(1) {
+            let n: usize = c.shape.iter().product();
+            outputs.push(bk.f(Op::Zeros, vec![], n, &format!("carry.{}", c.name)));
+        }
+        self.blocks.push(Block { name: "pre".into(), role: BlockRole::Pre, nodes: bk.nodes, outputs });
         Ok(self.blocks.len() - 1)
+    }
+
+    /// A layer block's outputs: the residual, then every other carry — what this block wrote to
+    /// it, else the carry passed through.
+    fn layer_outputs(&mut self, h: Ref) -> Vec<Ref> {
+        let written = std::mem::take(&mut self.carry_out);
+        let mut out = vec![h];
+        out.extend((1..self.carries.len()).map(|c| written.get(&c).copied().unwrap_or(Ref::Carry(c as u8))));
+        out
     }
 
     fn post_block(&mut self) -> Result<usize> {
@@ -230,6 +318,23 @@ impl Builder<'_> {
         let mut x = Ref::Carry(0);
         if let Some(n) = s.final_norm {
             x = self.full_norm(&mut bk, x, n, "final_norm", d, false)?;
+        }
+        // An encoder: the final row, projected and normalised as the class says; no head.
+        if let OutputSpec::Embedding { proj, normalize } = &s.output {
+            let mut width = d;
+            if let Some((w, bias)) = *proj {
+                x = self.linear(&mut bk, x, "embed.proj", w, d, bias, false, "embed.proj")?;
+                width = w;
+            }
+            if *normalize {
+                x = bk.f(Op::L2Norm { groups: 1, eps: 1e-24 }, vec![x], width, "embed.normed");
+            }
+            if !matches!(x, Ref::Node(..)) {
+                // The output is the carry itself (a bidirectional encoder pools in its own `post`).
+                x = bk.f(Op::Scale { c: 1.0 }, vec![x], width, "embed.out");
+            }
+            self.blocks.push(Block { name: "post".into(), role: BlockRole::Post, nodes: bk.nodes, outputs: vec![x] });
+            return Ok(self.blocks.len() - 1);
         }
         if h.pre_scale != 1.0 {
             x = bk.f(Op::Scale { c: h.pre_scale }, vec![x], d, "head.pre_scaled");
@@ -249,7 +354,7 @@ impl Builder<'_> {
         if h.bias {
             ins.push(self.param("head.b", vec![s.vocab_size], false, Init::Uniform(-0.1, 0.1))?);
         }
-        let mut logits = bk.f(Op::Linear { bias: h.bias }, ins, s.vocab_size, "logits");
+        let mut logits = bk.f(Op::Linear { bias: h.bias, lora: None }, ins, s.vocab_size, "logits");
         if h.logit_scale != 1.0 {
             logits = bk.f(Op::Scale { c: h.logit_scale }, vec![logits], s.vocab_size, "logits.scaled");
         }
@@ -261,6 +366,28 @@ impl Builder<'_> {
     }
 
     // ───────────────────────────── layers ─────────────────────────────
+
+    /// The blocks one layer runs as, in order: one, or — a [`Residual::Sandwich`] layer — its
+    /// mixer half and its FFN half (with the per-layer input and the layer scalar), the residual
+    /// carried between them.
+    fn layer_blocks(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<Vec<usize>> {
+        if let Residual::Sandwich { pre_mixer, post_mixer, .. } = &ls.residual {
+            let d = self.s.hidden_size;
+            let mut bk = Bk { nodes: vec![] };
+            let x = Ref::Carry(0);
+            let n1 = self.full_norm(&mut bk, x, *pre_mixer, "norm.mix", d, true)?;
+            let m = self.mixer(&mut bk, &ls.mixer, n1)?;
+            let m = self.full_norm(&mut bk, m, *post_mixer, "norm.post_mix", d, true)?;
+            let h = bk.f(Op::Add, vec![x, m], d, "resid.mix");
+            let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
+            let outputs = self.layer_outputs(h);
+            self.blocks.push(Block { name: format!("{name}.mix"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+            let a = self.blocks.len() - 1;
+            let f = self.layer_block(ls, kind_index)?;
+            return Ok(vec![a, f]);
+        }
+        Ok(vec![self.layer_block(ls, kind_index)?])
+    }
 
     fn layer_block(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<usize> {
         let d = self.s.hidden_size;
@@ -315,12 +442,55 @@ impl Builder<'_> {
                 let h = bk.f(Op::Add, vec![h, f], d, "resid.ffn");
                 self.full_norm(&mut bk, h, *ffn_norm, "norm.ffn", d, true)?
             }
+            // The FFN half: the mixer half ([`Builder::layer_blocks`]) carries in `x + mix`.
+            Residual::Sandwich { pre_ffn, post_ffn, ple, layer_scalar, .. } => {
+                let x1 = x;
+                let f = match &ls.ffn {
+                    Ffn::None => return Err(LowerError::eval("internal: a sandwich layer without an FFN")),
+                    // Gemma-4's MoE block beside the MLP: the router and the experts read the residual.
+                    Ffn::MlpMoe(mm) => {
+                        let n2 = self.full_norm(&mut bk, x1, *pre_ffn, "norm.ffn", d, true)?;
+                        let a = self.mlp(&mut bk, &mm.mlp, n2, mm.mlp.name.as_deref().unwrap_or("mlp"))?;
+                        let a = self.full_norm(&mut bk, a, mm.mlp_post, "norm.post_mlp", d, true)?;
+                        let rn = self.full_norm(&mut bk, x1, mm.router_norm, "moe.router_norm", d, true)?;
+                        let rn = bk.f(Op::Scale { c: mm.router_scale }, vec![rn], d, "moe.router_in");
+                        let en = self.full_norm(&mut bk, x1, mm.moe_pre, "norm.moe", d, true)?;
+                        let e = self.moe_split(&mut bk, &mm.moe, rn, en)?;
+                        let e = self.full_norm(&mut bk, e, mm.moe_post, "norm.post_moe", d, true)?;
+                        bk.f(Op::Add, vec![a, e], d, "ffn.sum")
+                    }
+                    other => {
+                        let n2 = self.full_norm(&mut bk, x1, *pre_ffn, "norm.ffn", d, true)?;
+                        self.ffn(&mut bk, other, n2)?
+                    }
+                };
+                let f = self.full_norm(&mut bk, f, *post_ffn, "norm.post_ffn", d, true)?;
+                let mut h = bk.f(Op::Add, vec![x1, f], d, "resid.ffn");
+                if let Some(p) = ple {
+                    let pv = self.ple(&mut bk, p)?;
+                    let g = self.linear(&mut bk, h, "ple.gate", p.dim, d, false, true, "ple.gate")?;
+                    let g = bk.f(Op::Act(p.act), vec![g], p.dim, "ple.act");
+                    let gm = bk.f(Op::Mul, vec![g, pv], p.dim, "ple.gated");
+                    let o = self.linear(&mut bk, gm, "ple.out", d, p.dim, false, true, "ple.out")?;
+                    let o = self.full_norm(&mut bk, o, p.post_norm, "ple.post_norm", d, true)?;
+                    h = bk.f(Op::Add, vec![h, o], d, "resid.ple");
+                }
+                if *layer_scalar {
+                    let sp = self.param("layer.scalar", vec![1], true, Init::Uniform(0.8, 1.2))?;
+                    h = bk.f(Op::ScaleParam, vec![h, sp], d, "resid.scaled");
+                }
+                h
+            }
         };
         if ls.post_scale != 1.0 {
             h = bk.f(Op::Scale { c: ls.post_scale }, vec![h], d, "resid.rescaled");
         }
-        let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
-        self.blocks.push(Block { name, role: BlockRole::Layer, nodes: bk.nodes, outputs: vec![h] });
+        let mut name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
+        if matches!(ls.residual, Residual::Sandwich { .. }) {
+            name.push_str(".ffn");
+        }
+        let outputs = self.layer_outputs(h);
+        self.blocks.push(Block { name, role: BlockRole::Layer, nodes: bk.nodes, outputs });
         Ok(self.blocks.len() - 1)
     }
 
@@ -338,10 +508,31 @@ impl Builder<'_> {
     fn ffn(&mut self, bk: &mut Bk, f: &Ffn, x: Ref) -> Result<Ref> {
         match f {
             Ffn::None => Err(LowerError::eval("internal: ffn of a layer without one")),
-            Ffn::Mlp(m) => self.mlp(bk, m, x, "mlp"),
+            Ffn::Mlp(m) => self.mlp(bk, m, x, m.name.as_deref().unwrap_or("mlp")),
             Ffn::Moe(m) => self.moe(bk, m, x),
             Ffn::RwkvChannel(c) => self.rwkv_channel(bk, c, x),
+            Ffn::MlpMoe(_) => Err(LowerError::eval("internal: an MLP+MoE block outside a sandwich layer")),
         }
+    }
+
+    /// Gemma-3n/4's per-layer input of this layer ([`PleSpec`]), from the token: the token's
+    /// scaled embedding projected by the layer's slice and normed, plus the layer's own table row.
+    fn ple(&mut self, bk: &mut Bk, p: &PleSpec) -> Result<Ref> {
+        let s = self.s;
+        let d = s.hidden_size;
+        let table = self.param("embed.table", vec![s.vocab_size, s.embedding.dim], false, Init::Normal(0.5))?;
+        let mut e = bk.f(Op::Embedding, vec![Ref::Token, table], s.embedding.dim, "ple.embed");
+        if s.embedding.scale != 1.0 {
+            e = bk.f(Op::Scale { c: s.embedding.scale }, vec![e], d, "ple.embed_scaled");
+        }
+        let pr = self.linear(bk, e, "ple.proj", p.dim, d, false, true, "ple.proj")?;
+        let pr = bk.f(Op::Scale { c: p.proj_scale }, vec![pr], p.dim, "ple.proj_scaled");
+        let pr = self.full_norm(bk, pr, p.norm, "ple.norm", p.dim, false)?;
+        let tt = self.param("ple.table", vec![p.vocab, p.dim], true, Init::Normal(0.5))?;
+        let te = bk.f(Op::Embedding, vec![Ref::Token, tt], p.dim, "ple.token");
+        let te = bk.f(Op::Scale { c: p.table_scale }, vec![te], p.dim, "ple.token_scaled");
+        let sum = bk.f(Op::Add, vec![pr, te], p.dim, "ple.sum");
+        Ok(bk.f(Op::Scale { c: p.combine_scale }, vec![sum], p.dim, "ple"))
     }
 
     // ───────────────────────────── attention ─────────────────────────────
@@ -350,18 +541,73 @@ impl Builder<'_> {
         let d = self.s.hidden_size;
         let (h, kv, hd, vd) = (a.heads, a.kv_heads, a.head_dim, a.v_head_dim);
         let (qn, kn, vn) = (h * hd, kv * hd, kv * vd);
-        let mut q = self.linear(bk, x, "attn.q", qn, d, a.q_bias, true, "attn.q")?;
-        let mut k = self.linear(bk, x, "attn.k", kn, d, a.k_bias, true, "attn.k")?;
-        let mut v = self.linear(bk, x, "attn.v", vn, d, a.v_bias, true, "attn.v")?;
-        let gate = if a.output_gate { Some(self.linear(bk, x, "attn.gate", qn, d, false, true, "attn.gate")?) } else { None };
+        let pf = a.param_prefix.clone().unwrap_or_else(|| "attn".into());
+        let n = |s: &str| format!("{pf}.{s}");
+        let mut q = self.linear(bk, x, &n("q"), qn, d, a.q_bias, true, &n("q"))?;
+        // A KV-sharing layer: the query as ever, the keys and values an earlier layer's rows.
+        if let Some(KvShare::Consumer { slot }) = a.kv_share {
+            if a.output_gate || a.clip_qkv.is_some() || a.sinks || a.v_from_k {
+                return Err(LowerError::not_lowerable("a KV-sharing layer with a gated, clipped, sinked or K = V attention"));
+            }
+            if let Some(qk) = &a.qk_norm {
+                q = self.qk_norm(bk, q, qk, &n("q_norm"), h, hd)?;
+            }
+            match &a.position {
+                Position::Rope(r) => {
+                    let t = self.rope_table(&r.freqs);
+                    q = bk.f(
+                        Op::Rope { heads: h, head_dim: hd, rotary_dim: r.rotary_dim, offset: r.offset, style: r.style, table: t },
+                        vec![q, Ref::Pos],
+                        qn,
+                        &n("q_rope"),
+                    );
+                }
+                Position::None => {}
+                Position::Alibi(_) => return Err(LowerError::not_lowerable("a KV-sharing layer under ALiBi")),
+            }
+            let (kc, vc) = (Ref::Carry((1 + 2 * slot) as u8), Ref::Carry((2 + 2 * slot) as u8));
+            let suffix = a.window.map(|w| format!(".w{w}")).unwrap_or_default();
+            let ks = self.state(&format!("{pf}.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![kn], 0.0)?;
+            let vs = self.state(&format!("{pf}.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![vn], 0.0)?;
+            bk.append(kc, ks);
+            bk.append(vc, vs);
+            let op = Op::Attention {
+                heads: h,
+                kv_heads: kv,
+                head_dim: hd,
+                v_head_dim: vd,
+                scale: a.scale,
+                softcap: a.softcap,
+                window: a.window,
+                alibi: None,
+                sinks: false,
+                chunk: a.chunk,
+            };
+            let o = bk.f(op, vec![q, ks, vs], h * vd, &n("ctx"));
+            return self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"));
+        }
+        let mut k = self.linear(bk, x, &n("k"), kn, d, a.k_bias, true, &n("k"))?;
+        // Gemma-4's `attention_k_eq_v`: the values are the raw key projection.
+        let mut v = if a.v_from_k {
+            if vd != hd {
+                return Err(LowerError::eval("internal: values from keys of another width"));
+            }
+            k
+        } else {
+            self.linear(bk, x, &n("v"), vn, d, a.v_bias, true, &n("v"))?
+        };
+        let gate = if a.output_gate { Some(self.linear(bk, x, &n("gate"), qn, d, false, true, &n("gate"))?) } else { None };
         if let Some(c) = a.clip_qkv {
-            q = bk.f(Op::Clamp { lo: -c, hi: c }, vec![q], qn, "attn.q_clip");
-            k = bk.f(Op::Clamp { lo: -c, hi: c }, vec![k], kn, "attn.k_clip");
-            v = bk.f(Op::Clamp { lo: -c, hi: c }, vec![v], vn, "attn.v_clip");
+            q = bk.f(Op::Clamp { lo: -c, hi: c }, vec![q], qn, &n("q_clip"));
+            k = bk.f(Op::Clamp { lo: -c, hi: c }, vec![k], kn, &n("k_clip"));
+            v = bk.f(Op::Clamp { lo: -c, hi: c }, vec![v], vn, &n("v_clip"));
         }
         if let Some(qk) = &a.qk_norm {
-            q = self.qk_norm(bk, q, qk, "attn.q_norm", h, hd)?;
-            k = self.qk_norm(bk, k, qk, "attn.k_norm", kv, hd)?;
+            q = self.qk_norm(bk, q, qk, &n("q_norm"), h, hd)?;
+            k = self.qk_norm(bk, k, qk, &n("k_norm"), kv, hd)?;
+        }
+        if let Some(vn_) = &a.v_norm {
+            v = self.qk_norm(bk, v, vn_, &n("v_norm"), kv, vd)?;
         }
         let mut alibi = None;
         match &a.position {
@@ -371,26 +617,34 @@ impl Builder<'_> {
                     Op::Rope { heads: h, head_dim: hd, rotary_dim: r.rotary_dim, offset: r.offset, style: r.style, table: t },
                     vec![q, Ref::Pos],
                     qn,
-                    "attn.q_rope",
+                    &n("q_rope"),
                 );
                 k = bk.f(
                     Op::Rope { heads: kv, head_dim: hd, rotary_dim: r.rotary_dim, offset: r.offset, style: r.style, table: t },
                     vec![k, Ref::Pos],
                     kn,
-                    "attn.k_rope",
+                    &n("k_rope"),
                 );
             }
             Position::Alibi(al) => alibi = Some(al.clone()),
             Position::None => {}
         }
+        if let Some(t) = a.q_temperature {
+            q = bk.f(Op::PosScale { temp: t }, vec![q, Ref::Pos], qn, &n("q_temp"));
+        }
         let suffix = a.window.map(|w| format!(".w{w}")).unwrap_or_default();
-        let ks = self.state(&format!("attn.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![kn], 0.0)?;
-        let vs = self.state(&format!("attn.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![vn], 0.0)?;
+        let ks = self.state(&format!("{pf}.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![kn], 0.0)?;
+        let vs = self.state(&format!("{pf}.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![vn], 0.0)?;
         bk.append(k, ks);
         bk.append(v, vs);
+        // The source of a KV slot: its rows, as appended, go out to the sharing layers.
+        if let Some(KvShare::Source { slot }) = a.kv_share {
+            self.carry_out.insert(1 + 2 * slot, k);
+            self.carry_out.insert(2 + 2 * slot, v);
+        }
         let mut ins = vec![q, ks, vs];
         if a.sinks {
-            ins.push(self.param("attn.sinks", vec![h], true, Init::Normal(1.0))?);
+            ins.push(self.param(&n("sinks"), vec![h], true, Init::Normal(1.0))?);
         }
         let op = Op::Attention {
             heads: h,
@@ -402,13 +656,14 @@ impl Builder<'_> {
             window: a.window,
             alibi,
             sinks: a.sinks,
+            chunk: a.chunk,
         };
-        let mut o = bk.f(op, ins, h * vd, "attn.ctx");
+        let mut o = bk.f(op, ins, h * vd, &n("ctx"));
         if let Some(g) = gate {
-            let s = bk.f(Op::Act(Act::Sigmoid), vec![g], qn, "attn.gate_act");
-            o = bk.f(Op::Mul, vec![o, s], qn, "attn.gated");
+            let s = bk.f(Op::Act(Act::Sigmoid), vec![g], qn, &n("gate_act"));
+            o = bk.f(Op::Mul, vec![o, s], qn, &n("gated"));
         }
-        self.linear(bk, o, "attn.o", d, h * vd, a.o_bias, true, "attn.out")
+        self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"))
     }
 
     fn qk_norm(&mut self, bk: &mut Bk, x: Ref, qk: &QkNorm, name: &str, heads: usize, hd: usize) -> Result<Ref> {
@@ -657,12 +912,20 @@ impl Builder<'_> {
     }
 
     fn moe(&mut self, bk: &mut Bk, m: &MoeSpec, x: Ref) -> Result<Ref> {
+        self.moe_split(bk, m, x, x)
+    }
+
+    /// The MoE block with its router reading `rx` and its experts `x` (Gemma-4 feeds them apart).
+    fn moe_split(&mut self, bk: &mut Bk, m: &MoeSpec, rx: Ref, x: Ref) -> Result<Ref> {
         let d = self.s.hidden_size;
         let (e, i) = (m.experts, m.intermediate);
-        let logits = self.linear(bk, x, "moe.router", e, d, m.router.linear_bias, true, "moe.router")?;
+        let logits = self.linear(bk, rx, "moe.router", e, d, m.router.linear_bias, true, "moe.router")?;
         let mut rins = vec![logits];
         if m.router.selection_bias {
             rins.push(self.param("moe.sel_bias", vec![e], true, Init::Uniform(-0.05, 0.05))?);
+        }
+        if m.router.per_expert_scale {
+            rins.push(self.param("moe.expert_scale", vec![e], true, Init::Uniform(0.5, 1.5))?);
         }
         let route = bk.push(
             Op::Route { router: m.router.clone(), experts: e, top_k: m.top_k },
@@ -681,7 +944,12 @@ impl Builder<'_> {
             ins.push(self.param("moe.experts.up_b", vec![e, i], true, Init::Uniform(-0.1, 0.1))?);
             ins.push(self.param("moe.experts.down_b", vec![e, d], true, Init::Uniform(-0.1, 0.1))?);
         }
-        let mut y = bk.f(Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias }, ins, d, "moe.routed");
+        let mut y = bk.f(
+            Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias, input_scaled: m.input_scaled },
+            ins,
+            d,
+            "moe.routed",
+        );
         if let Some(sh) = &m.shared {
             let spec = MlpSpec {
                 intermediate: sh.intermediate,
@@ -690,6 +958,7 @@ impl Builder<'_> {
                 glu: Glu::Standard,
                 up_bias: false,
                 down_bias: false,
+                name: None,
             };
             let mut s = self.mlp(bk, &spec, x, "moe.shared")?;
             if sh.sigmoid_gate {
@@ -728,6 +997,7 @@ fn block_name(ls: &LayerSpec) -> String {
         Ffn::Mlp(_) => "+mlp".into(),
         Ffn::Moe(_) => "+moe".into(),
         Ffn::RwkvChannel(_) => "+cmix".into(),
+        Ffn::MlpMoe(_) => "+mlp|moe".into(),
     };
     format!("{mix}{ffn}")
 }

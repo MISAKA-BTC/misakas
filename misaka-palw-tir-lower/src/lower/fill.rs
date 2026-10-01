@@ -8,7 +8,9 @@
 //! code range; the residual scale is one number for the program, sized on every value carried
 //! at it (`Lowered::resid_sites`).
 
+use super::qlinear::QInts;
 use super::{Base, Lowered, ScaleKey, occurrences};
+use crate::prequant::QLayout;
 use crate::error::{LowerError, Result};
 use crate::float_ref::stream::OccParams;
 use crate::float_ref::{ParamStore, SiteStat};
@@ -147,6 +149,8 @@ pub struct FillCtx<'a> {
     memo: Mutex<BTreeMap<u32, Arc<RowCodes>>>,
     memo16: Mutex<BTreeMap<u32, Arc<RowCodes16>>>,
     split_memo: Mutex<BTreeMap<String, Arc<SplitCodes>>>,
+    qmemo: Mutex<BTreeMap<String, Arc<QInts>>>,
+    qstack_memo: Mutex<BTreeMap<u32, Arc<Vec<QInts>>>>,
 }
 
 impl<'a> FillCtx<'a> {
@@ -172,7 +176,58 @@ impl<'a> FillCtx<'a> {
             memo: Mutex::new(BTreeMap::new()),
             memo16: Mutex::new(BTreeMap::new()),
             split_memo: Mutex::new(BTreeMap::new()),
+            qmemo: Mutex::new(BTreeMap::new()),
+            qstack_memo: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// A pre-quantised projection's integers in `layout`, for the input key `kx` (its outlier
+    /// columns route around the codes), computed once per occurrence.
+    pub fn qints(&self, p: u32, layout: QLayout, kx: &ScaleKey) -> Result<Arc<QInts>> {
+        let outl = self.outliers(kx)?;
+        let mk = format!("{p}:{outl:?}");
+        if let Some(r) = self.qmemo.lock().expect("memo").get(&mk) {
+            return Ok(r.clone());
+        }
+        let qs = self
+            .params
+            .get_q(p, self.layer)
+            .ok_or_else(|| LowerError::eval(format!("param {p} is lowered as pre-quantised, but the checkpoint gave no integers")))?;
+        if qs.len() != 1 {
+            return Err(LowerError::eval(format!("internal: param {p} is a stack of {} quantised experts", qs.len())));
+        }
+        let q = &qs[0];
+        let ratio: Vec<f64> = if outl.is_empty() {
+            Vec::new()
+        } else {
+            let (tv, tn) = (self.scale_vec(kx, q.inp)?, self.scale(kx)?);
+            outl.iter().map(|c| tv[*c] / tn).collect()
+        };
+        let qi = Arc::new(super::qlinear::build(q, layout, &outl, &ratio)?);
+        self.qmemo.lock().expect("memo").insert(mk, qi.clone());
+        Ok(qi)
+    }
+
+    /// A stack of quantised experts' integers in `layout` (no outlier split: an expert's input is
+    /// never split), one [`QInts`] per expert, computed once per occurrence.
+    pub fn qints_stack(&self, p: u32, layout: QLayout) -> Result<Arc<Vec<QInts>>> {
+        if let Some(r) = self.qstack_memo.lock().expect("memo").get(&p) {
+            return Ok(r.clone());
+        }
+        let qs = self
+            .params
+            .get_q(p, self.layer)
+            .ok_or_else(|| LowerError::eval(format!("param {p} is lowered as pre-quantised experts, but the checkpoint gave no integers")))?;
+        let v: Vec<QInts> = qs.iter().map(|q| super::qlinear::build(q, layout, &[], &[])).collect::<Result<_>>()?;
+        let v = Arc::new(v);
+        self.qstack_memo.lock().expect("memo").insert(p, v.clone());
+        Ok(v)
+    }
+
+    /// Scales of this occurrence's quantised projections that are not exact at their row's unit.
+    pub fn quant_inexact(&self) -> usize {
+        self.qmemo.lock().expect("memo").values().map(|q| q.inexact).sum::<usize>()
+            + self.qstack_memo.lock().expect("memo").values().flat_map(|v| v.iter()).map(|q| q.inexact).sum::<usize>()
     }
 
     /// A float param of this occurrence.
@@ -193,6 +248,17 @@ impl<'a> FillCtx<'a> {
             Base::Resid => self.resid,
             Base::Q24 => 1.0 / (1u64 << 24) as f64,
             Base::Fixed(v) => *v,
+            Base::At { prefix, base } => {
+                let at = FillCtx::for_scales(self.hl, self.params, None, prefix, self.stats, self.resid, self.policy);
+                at.scale(&ScaleKey { base: (**base).clone(), factor: 1.0 })?
+            }
+            Base::Pow2Site { names } => {
+                let mut a = 0f64;
+                for n in names {
+                    a = a.max(self.absmax(n)?);
+                }
+                pow2_unit(code_scale(a, CODE32_MAX, self.policy.headroom32))
+            }
             Base::Site { names, wide, split } => {
                 let a = if *split == 0 {
                     let mut a = 0f64;
@@ -353,6 +419,9 @@ pub struct Materialised {
     pub resid_scale: f64,
     /// Float value of one unit of the logits.
     pub logits_scale: f64,
+    /// Pre-quantised projections' per-group scales that are not exact at their row's unit (0 when
+    /// every stored scale is represented exactly, `lower::qlinear`).
+    pub quant_inexact: usize,
 }
 
 /// Params each TIR block references.
@@ -393,6 +462,7 @@ pub fn materialise(
     let used = params_of_blocks(&lw.program);
     let mut out = IntParams::default();
     let mut logits_scale = None;
+    let mut quant_inexact = 0usize;
     let occs = occurrences(hl);
     let total = occs.len();
     for (oi, (hbk, layer, prefix)) in occs.into_iter().enumerate() {
@@ -409,6 +479,8 @@ pub fn materialise(
             memo: Mutex::new(BTreeMap::new()),
             memo16: Mutex::new(BTreeMap::new()),
             split_memo: Mutex::new(BTreeMap::new()),
+            qmemo: Mutex::new(BTreeMap::new()),
+            qstack_memo: Mutex::new(BTreeMap::new()),
         };
         for &pi in &used[tb] {
             let d = &lw.program.params[pi as usize];
@@ -432,7 +504,22 @@ pub fn materialise(
         if hbk == hl.post {
             logits_scale = Some(ctx.scale(&lw.logits_key)?);
         }
+        quant_inexact += ctx.quant_inexact();
         progress(oi + 1, total);
     }
-    Ok(Materialised { params: out, resid_scale: resid, logits_scale: logits_scale.expect("post runs") })
+    Ok(Materialised { params: out, resid_scale: resid, logits_scale: logits_scale.expect("post runs"), quant_inexact })
+}
+
+/// The smallest power of two `≥ s`, as `2^−q` with `q` in `[0, 31]` (an `EmbeddingI32` output's
+/// fixed point, RFC-0003 §I.3.3).
+pub fn pow2_unit(s: f64) -> f64 {
+    2f64.powi(output_q(s).map_or(0, |q| -(q as i32)))
+}
+
+/// The fractional bits `q` of [`pow2_unit`]`(s)`.
+pub fn output_q(s: f64) -> Option<u8> {
+    if s.is_nan() || s <= 0.0 || !s.is_finite() {
+        return None;
+    }
+    Some((-s.log2().ceil()).clamp(0.0, 31.0) as u8)
 }
