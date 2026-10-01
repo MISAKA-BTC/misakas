@@ -19,9 +19,9 @@ use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
 use misaka_palw_tir::program_v2::{InputSource, OutputDecl, RandomDist, TirProgramV2};
 use misaka_palw_tir::{DType, Ref};
 
-use super::act::QAct;
+use super::act::{Act, lower_act_codes};
 use super::ada::{AdaNormConsts, lower_ada_layer_norm};
-use super::block::{NORM_EPS, QBlock, lower_block, lower_to_stream_linear, qlin};
+use super::block::{NORM_EPS, QBlock, lower_attn_half, lower_mlp_half, lower_to_stream_linear, qlin};
 use super::calib::Calib;
 use super::conv::ConvSpec;
 use super::embed::{
@@ -127,7 +127,6 @@ pub fn lower_dit_stage(dit: &Dit, cal: &Calib, spec: &DitStageSpec) -> Result<Di
     let te = embedder("time_text_embed.timestep_embedder", 256, TIMESTEP_CODE_SCALE, "te_h", "te_a");
     let pe = embedder("time_text_embed.text_embedder", cfg.pooled_dim, s_pool, "pe_h", "pe_a");
     let ctx_embed = qlin(dit, "context_embedder", s_txt, s_st);
-    let cond_silu = QAct::silu(s_cond, s_ca);
     let blocks: Vec<QBlock> = (0..cfg.num_layers).map(|i| QBlock::new(i, dit, cal, l)).collect();
     let no_mod = qlin(dit, "norm_out.linear", s_ca, 1.0 / (1u64 << e_no) as f64);
     let proj_out = qlin(dit, "proj_out", s_no_x, s_vel);
@@ -146,7 +145,6 @@ pub fn lower_dit_stage(dit: &Dit, cal: &Calib, spec: &DitStageSpec) -> Result<Di
     let te_r = te.declare(&mut pb, &mut sink, "time_text_embed.timestep_embedder");
     let pe_r = pe.declare(&mut pb, &mut sink, "time_text_embed.text_embedder");
     let ctx_r = ctx_embed.declare(&mut pb, &mut sink, "context_embedder");
-    let silu_r = cond_silu.declare(&mut pb, &mut sink, "time_text_embed.cond_silu");
     let block_r: Vec<_> = blocks.iter().map(|b| b.declare(&mut pb, &mut sink)).collect();
     let no_r = no_mod.declare(&mut pb, &mut sink, "norm_out.linear");
     let proj_r = proj_out.declare(&mut pb, &mut sink, "proj_out");
@@ -165,11 +163,15 @@ pub fn lower_dit_stage(dit: &Dit, cal: &Calib, spec: &DitStageSpec) -> Result<Di
         let xc = lower_to_codes(&mut b, x, mul_shift(s_x / s_lat));
         let h_img = lower_patch_embed(&mut b, xc, &patch_r, &conv);
         let row = lower_timestep_row(&mut b, steps_in, &ts_r, &timesteps);
-        let t = lower_embedder(&mut b, row, &te_r);
+        // The embedders' outputs are commit points: the conditioning's cone then reads two leaves, not two embedders'
+        // weights.
+        let t = lower_embedder(&mut b, row, &te_r, &te);
+        b.commit(t);
         let pooled16 = lower_to_codes(&mut b, pooled_in, mul_shift(spec.pooled_unit / s_pool));
-        let q = lower_embedder(&mut b, pooled16, &pe_r);
+        let q = lower_embedder(&mut b, pooled16, &pe_r, &pe);
+        b.commit(q);
         let cond = lower_cond_sum(&mut b, t, q);
-        let cond_a = b.act_table(cond, silu_r);
+        let cond_a = lower_act_codes(&mut b, cond, Act::Silu, s_cond, s_ca);
         let text16 = lower_to_codes(&mut b, text_in, mul_shift(spec.text_unit / s_txt));
         let h_txt = lower_to_stream_linear(&mut b, text16, &ctx_r);
         b.finish(&[h_img, h_txt, cond_a])
@@ -177,22 +179,30 @@ pub fn lower_dit_stage(dit: &Dit, cal: &Calib, spec: &DitStageSpec) -> Result<Di
 
     // ---- the transformer blocks ----
     let mut layers = Vec::new();
+    // Each transformer block is two layer blocks (its attention half, its MLP half): see `super::block`.
     for (blk, r) in blocks.iter().zip(&block_r) {
-        let mut b = pb.block(&format!("transformer_blocks.{}", blk.index), carry.clone());
-        let outs = lower_block(&mut b, blk, r);
+        let mut b = pb.block(&format!("transformer_blocks.{}.attn", blk.index), carry.clone());
+        let outs = lower_attn_half(&mut b, blk, r);
+        layers.push(b.finish(&outs));
+        let mut b = pb.block(&format!("transformer_blocks.{}.mlp", blk.index), carry.clone());
+        let outs = lower_mlp_half(&mut b, blk, r);
         layers.push(b.finish(&outs));
     }
 
     // ---- post ----
     let (post, out_node) = {
         let mut b = pb.block("post", carry);
+        // Commit points between the carry and the latent write (a cone then reads leaves, not the whole chain).
         let m = lower_linear_codes(&mut b, Ref::CarryIn(2), &no_r); // [1, 2d]: scale, then shift
+        b.commit(m);
         let scale = b.slice(m, 1, 0, d as u32);
         let shift = b.slice(m, 1, d as u32, d as u32);
         let xin = lower_to_codes(&mut b, Ref::CarryIn(0), mul_shift(s_si / s_no_in));
         let k = AdaNormConsts::new(d, s_no_in, NORM_EPS, e_no, s_no_x);
         let x = lower_ada_layer_norm(&mut b, xin, scale, shift, &k);
+        b.commit(x);
         let rows = lower_linear_codes(&mut b, x, &proj_r); // [N, p·p·C]
+        b.commit(rows);
         let v = lower_unpatchify(&mut b, rows, unpatch_r, n * p * p * c);
         let at = lower_step_row_index(&mut b, steps_in, ts_r.base, spec.counts.len() as u32 - 1, timesteps.total_rows() as u32);
         let dsig = b.gather(dsigma_r, at, 0, 0);

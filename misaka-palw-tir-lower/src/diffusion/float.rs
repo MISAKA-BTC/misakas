@@ -228,6 +228,15 @@ impl Dit {
         cal.note(&format!("{b}.mod_img"), &m_img);
         let m_txt = self.lin(cond_a, 1, &format!("{pf}.norm1_context.linear"));
         cal.note(&format!("{b}.mod_txt"), &m_txt);
+        // The lowering splits each stream's modulation into the attention half's chunks and the MLP half's.
+        cal.note(&format!("{b}.mod_img.a"), &m_img[..3 * d]);
+        cal.note(&format!("{b}.mod_img.m"), &m_img[3 * d..]);
+        if pre_only {
+            cal.note(&format!("{b}.mod_txt.a"), &m_txt);
+        } else {
+            cal.note(&format!("{b}.mod_txt.a"), &m_txt[..3 * d]);
+            cal.note(&format!("{b}.mod_txt.m"), &m_txt[3 * d..]);
+        }
         let ch = |m: &[f64], k: usize| m[k * d..(k + 1) * d].to_vec();
 
         cal.note(&format!("{b}.ln1_in_img"), h_img);
@@ -282,6 +291,7 @@ impl Dit {
             }
         }
         cal.note("stream_img", h_img);
+        cal.note(&format!("{b}.h_mid_img"), h_img);
         cal.note(&format!("{b}.ln2_in_img"), h_img);
         let x2 = modulate(h_img, n, d, &ch(&m_img, 3), &ch(&m_img, 4));
         cal.note(&format!("{b}.x2_img"), &x2);
@@ -304,6 +314,7 @@ impl Dit {
                 }
             }
             cal.note("stream_txt", h_txt);
+            cal.note(&format!("{b}.h_mid_txt"), h_txt);
             cal.note(&format!("{b}.ln2_in_txt"), h_txt);
             let x2 = modulate(h_txt, l, d, &ch(&m_txt, 3), &ch(&m_txt, 4));
             cal.note(&format!("{b}.x2_txt"), &x2);
