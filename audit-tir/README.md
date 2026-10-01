@@ -16,6 +16,11 @@ crosses at `TIR2_AT` (default 50; the model court window stays dormant on testne
   forged outputs refused).
 - **Stage 2, after the rollout and before Phase H's phaseh2** (`df.sh stage2`): `bdc`, D-F1, D-F2.
 
+`df.sh restart-old` (wired into `stage1` after `below`): restart the old relay once the chain is between `TIR_AT` and `TIR2_AT`.
+On 2026-10-01 it was missing and the old relay, connected at DAA 1 when both sides' next fence was the same, followed the chain
+from DAA 50 to 52 (no refusal height stored, no rejudge); a hand restart at tip 52 gave the handshake refusal. The step
+reproduces the production case (an int-8 node already connected when the flag day is scheduled) and is untested live.
+
 `df.sh dry` prints the plan and every node's argv without starting anything.
 
 **Before `up`, once per class file:** `palw-class declare-layout` judges at the IR fence's height (the release's rules), not
