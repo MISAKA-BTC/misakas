@@ -1635,6 +1635,7 @@ mod pq_output_class_enforcement_tests {
                     tv.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
                 ),
                 tv.palw_improvement_fence.is_some(),
+                tv.palw_fp_job_v5_fence.is_some(),
             )
         };
         let header =
