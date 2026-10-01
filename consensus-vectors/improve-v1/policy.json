@@ -108,33 +108,33 @@
     },
     {
       "accepted": false,
-      "case": "court_margin 150 under a 4,820-DAA claim lifecycle",
-      "lifecycle": 4820
+      "case": "court_margin 150 under a 170-DAA claim path",
+      "lifecycle": 170
     },
     {
       "accepted": true,
-      "case": "court_margin 4,820 under a 4,820-DAA claim lifecycle",
-      "lifecycle": 4820
+      "case": "court_margin 170 under a 170-DAA claim path",
+      "lifecycle": 170
     },
     {
       "accepted": false,
-      "case": "court_margin 4,819 under a 4,820-DAA claim lifecycle",
-      "lifecycle": 4820
+      "case": "court_margin 169 under a 170-DAA claim path",
+      "lifecycle": 170
     },
     {
       "accepted": false,
-      "case": "a judged policy with w_eval 300 under a 4,820-DAA claim lifecycle",
-      "lifecycle": 4820
+      "case": "a judged policy with w_eval 200 under a 170-DAA claim path",
+      "lifecycle": 170
     },
     {
       "accepted": false,
-      "case": "a judged policy with w_eval = beacon_delay + 4,820 + 32",
-      "lifecycle": 4820
+      "case": "a judged policy with w_eval = beacon_delay + 170 + 32",
+      "lifecycle": 170
     },
     {
       "accepted": true,
-      "case": "a judged policy with w_eval = beacon_delay + 4,820 + 33",
-      "lifecycle": 4820
+      "case": "a judged policy with w_eval = beacon_delay + 170 + 33",
+      "lifecycle": 170
     }
   ],
   "example_borsh_len": 514,
