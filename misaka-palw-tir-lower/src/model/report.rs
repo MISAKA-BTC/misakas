@@ -139,7 +139,12 @@ fn weights_check(spec: &crate::spec::ModelSpec, t: &TensorIndex) -> (Vec<String>
     } else {
         crate::weights::check_names(&prog, &binding, &t.names().map(str::to_string).collect())
     };
-    (rep.unused, rep.errors)
+    // A tied head reads the embedding table; some checkpoints save the same matrix a second time as `lm_head.weight`
+    // (HF loads both into the one tied parameter): that copy is not a feature the reading is missing.
+    let tied_copy = |n: &String| {
+        matches!(spec.output, crate::spec::OutputSpec::Logits) && spec.head.tied && (n == "lm_head.weight" || n.ends_with(".lm_head.weight"))
+    };
+    (rep.unused.into_iter().filter(|n| !tied_copy(n)).collect(), rep.errors)
 }
 
 fn short_list(v: &[String], n: usize) -> String {
