@@ -342,6 +342,16 @@ PalwImprovementPolicyV1 {
   rollback_epochs, vest_epochs, ban_epochs: u32,
 }
 policy_digest = H("misaka-palw/improve/policy/v1", borsh(policy))
+```
+
+The eval block's types, in borsh and in the order listed [lane E's P11]: `stages` a `Vec` of `{ kind u8, params }`;
+`regression_dataset [64]`; `regression_items u32`; `safety_dataset [64]`; `safety_items u32`; `judge_set` a `Vec<[64]>`;
+`judge` and `pairwise` each an `Option<JudgeSpec>` with `JudgeSpec = { template_dataset [64], verdict_a Vec<u32>, verdict_b
+Vec<u32>, logit_scale_q24 i32 }`; `seat_pool_permille u16`; `anchor_floor_permille u16`; `n u32`; `n_min u32`;
+`delta_permille u16`; `epsilon_permille u16`; `epsilon_safety_permille u16`; `alpha_permille u16`; `max_new_tokens u32`;
+`stop_ids Vec<u32>`; `setter_cap_permille u16`; `max_eval_positions u64`.
+
+```
 L_e = w_collect + w_submit + w_holdout + w_eval + court_margin        // the nominal epoch length
 ```
 
@@ -658,7 +668,7 @@ the draw is fixed only after every candidate and every hold-out case is.
   numbered `0..` in draw order.
 - **Suites** [decision, 2026-09-30]. Then, for each suite with items, `min(items, entries)` distinct entries of
   its registered dataset (§17.6.3) are drawn by a sparse Fisher–Yates shuffle driven by the epoch seed — for
-  `j = 0, 1, …`: `r_j = LE u64(H("…/suite-draw/v1", seed ‖ dataset_id ‖ role ‖ LE u32 j)[0..8]) mod (n − j)`
+  `j = 0, 1, …`: `r_j = LE u64(H("…/suite-draw/v1", seed ‖ dataset_id ‖ role ‖ LE u32 j)[0..8]) mod (n − j)` (`role` ONE byte, `j` four)
   over the `n` entries, the entry at virtual position `j + r_j` is drawn and the entry at `j` takes its place
   (`role` 1 for the regression suite, 2 for the safety suite, so two suites over one dataset draw different
   entries) — at a cost of `O(items · log items)`, whatever `n` is. Each drawn entry `e` is appended as an item
@@ -954,7 +964,9 @@ evaluate and can never make a promotion. The pieces of the lane are consistent w
   ExactMatch generation scored at a key's reveal needs a `Final` claim, and a missing one scores nothing;
 - *fees and refunds*: such a claim is paid nothing — the subject's escrow is the epoch's, and what it did not
   spend returns at the epoch's end (§17.11.2) — and its executor bears the work; its reservation is released as
-  any claim's is. Its job row retires with the epoch (§17.5.4), so a late `Final` finds no row and does nothing;
+  any claim's is. Its job row retires with the epoch (§17.5.4), so a late `Final` finds no row and does nothing. A fee
+  is paid once, at `Final`, and stays paid (§17.8.6, E-C9): a claim convicted before `Final` was never paid, and a
+  freed job's next claim is paid from what the escrow has left;
 - *the sign test*: counts are over recorded scores only (§17.9.3), so a late or voided claim is the same as an
   unclaimed job: nothing recorded, the item for the incumbent;
 - *courts*: a court that convicts a claim slashes it by the claim rules (`claim.reserved`, §17.8.4 above, the
@@ -1167,7 +1179,11 @@ no close carries a program or a policy. *E-C4*: a close is priced by its own enc
 swing lock; a false accusation is charged `min(reserved, floor)`. *E-C6*: a convicted `Final` claim retracts its
 score — and the judged scores that read a convicted generation — while the epoch takes scores (conservative: missing
 scores favour the incumbent). *E-C7*: a claim is beyond the one-move court once `Final`; a later conviction by another
-path is E-C6's. *E-C8*: an evaluation dissection's verdict is recorded as an IR dissection's — `CourtHeldVerdict` past
+path is E-C6's. *E-C9* [lane E's E30]: a fee already paid at `Final` stays paid — nothing is clawed back and the
+escrow does not refill — so a convicted `Final` claim's executor keeps the fee while the claim rules slash its swing lock
+(which dwarfs a fee), and the freed job's next claim is paid from what the escrow has left (§17.11.2); a claim convicted
+before `Final` was never paid; the judged parts that read a reversed generation are paid their fee at their own `Final`
+(§17.8.5). *E-C8*: an evaluation dissection's verdict is recorded as an IR dissection's — `CourtHeldVerdict` past
 `palw_offence_attribution` (the bottom proves the responder's filings false, not necessarily the committed execution;
 charged the same). The rule is one predicate, `PalwCourtVerdictProofV2::is_dissection_bottom_v1` (attention, IR,
 generative and evaluation dissections), which the fold's close arm asks and no list of its own. *Open*: calibrating the false-accusation charge for evaluation claims, whose reservations are larger
@@ -1381,7 +1397,10 @@ is **not spent**: it stays in the escrow and returns with it at the epoch's end,
 it. *(The ordinary rule sends that remainder to the panel reserve; this escrow's accounting has no place for it,
 and returning it is the conservative choice — an executor can never profit from a seat's silence.)* A claim with
 no duty row (bound below the panel economy) pays its executor the whole fee. The escrow's `spent` grows by what
-was paid, so a job whose escrow is exhausted pays only what is left.
+was paid, so a job whose escrow is exhausted pays only what is left [E31, decision 2026-10-01]: the reward is
+`min(fee, escrow left)` and it divides by the rule above — `P = ⌊reward · seat_pool_permille / 1000⌋`, each credited seat
+`⌊P / d⌋`, the executor `reward − P` — so a short escrow scales the seats' pool and the executor's share together (the
+executor is not paid first and the seats are not paid last); with nothing left the claim is paid nothing.
 
 At the epoch's end, whatever is left of an escrow goes back to where it came from:
 - a candidate's, to its submitter;
