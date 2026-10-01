@@ -851,12 +851,13 @@ reason: it describes the remote-code model, not the class transformers 5.17 ship
    Arcee and BitNet), and (b) print "Level A: UNCONFIRMED — rope pairing, norm placement and MLP gating are class code, not
    configuration" unless a fixture check passed.
 
-### FR-29 `HEAD_TRANSFORM_V1` — a prediction head before the vocabulary projection (S, found by the census: `modernbert_decoder`; also the MLM head of every BERT-lineage model)
+### FR-29 `HEAD_TRANSFORM_V1` — a prediction head before the vocabulary projection (S, found by the census: `modernbert_decoder` and the `ForCausalLM` mode of the whole BERT lineage)
 
 `modeling_modernbert_decoder.py:ModernBertDecoderPredictionHead`: `h → LayerNorm(act(dense(h)))`, then the tied vocabulary projection plus a `decoder.bias [V]` — the same shape as BERT's `cls.predictions.transform` (`dense → gelu → LayerNorm`) and `decoder.bias`. In the fixture the head owns
 `lm_head.dense.weight`, `lm_head.norm.weight`, `decoder.bias` and the tied embedding. **Spec**: `HeadSpec.transform: Option<HeadTransformSpec{bias, act, norm}>` and `HeadSpec.bias`; **decomposition**: `Lin` → the activation table → the norm template (`layer_norm_exact`), then the existing tied head with an `Add` of the bias; no primitive, no new commit-point kind. The rest of
 `modernbert_decoder` is readable by data once the per-layer-type rope convention of FR-27's neighbours exists in the template (measured: `standard-v3` fixes the rope refusal and the family then stops at its own keys `norm_eps`, `hidden_activation`, `local_attention`, `classifier_*`, which an adapter maps) — layer 0 has no `attn_norm` (`Identity`), the Q/K/V are separate (not ModernBERT's fused `Wqkv`), the GeGLU `Wi` rows are `[input|gate]` (`FusedGateFirst`).
-**Acceptance**: `modernbert_decoder` (census). *Evidence: read from the transformers code; the fixture exists in `tools/corpus/census-specs/modernbert_decoder`.*
+The same head is what blocks **eleven more census families** read as decoders — `camembert`, `data2vec_text`, `electra` (`generator_predictions`), `ernie`, `megatron_bert`, `rembert`, `roberta_prelayernorm`, `roc_bert`, `roformer`, `xlm_roberta_xl`, `big_bird` — whose fixtures all carry `lm_head.dense` + `lm_head.layer_norm` + a bias (RoBERTa spelling) or `cls.predictions.transform.{dense,LayerNorm}` + `cls.predictions.bias` (BERT spelling), and which are otherwise BERT blocks run with a causal mask: it is the lever for the lineage's decoder mode and, for encoders, for MLM logits. They are hardly served as decoders on the hub, so it is a small lever by usage and a large one by family count.
+**Acceptance**: `modernbert_decoder` (census), then one of the BERT-lineage rows. *Evidence: read from the transformers code and the census fixtures' tensor names (`tools/corpus/census-specs/*/tensors.json`); no adapter run.*
 
 ### FR-30 `ATTN_OUTPUT_GATE_SEPARATE_V1` — an attention output gate from its own tensor, with a choice of activation and granularity (S–M, census: `afmoe`, `laguna`)
 

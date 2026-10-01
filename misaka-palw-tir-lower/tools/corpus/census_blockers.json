@@ -163,5 +163,93 @@
   "frs": [],
   "short": "expected Level B: the built-in gemma4-text without PLE and without the MoE block; written, not yet run",
   "evidence": "adapter written, pending validation"
+ },
+ "camembert": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "data2vec_text": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "electra": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "ernie": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "megatron_bert": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "rembert": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "roberta_prelayernorm": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "roc_bert": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "roformer": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "xlm_roberta_xl": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "big_bird": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
  }
 }
