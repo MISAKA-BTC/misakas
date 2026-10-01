@@ -287,13 +287,13 @@ Court coverage: 53687 commit points over 56 lowered models reproduced by the con
 | `nemotron_h` | text/hybrid | **C** | - |  | LAYER_FFN_ONLY → FR-14 | read |
 | `lfm2` | text/hybrid | **C** | - |  | gated short convolution mixer → FR-15 | read |
 | `kimi_linear` | text/hybrid | **C** | - |  | Kimi delta attention (channel-wise gated delta rule) → FR-16, FR-27 | read |
-| `bert` | encoder | **B** | built-in adapter `bert` | 12 |  |  |
-| `roberta` | encoder | **B** | built-in adapter `roberta` | 12 |  |  |
-| `xlm_roberta` | encoder | **B** | built-in adapter `roberta` | 12 |  |  |
-| `distilbert` | encoder | **B** | built-in adapter `distilbert` | 11 |  |  |
-| `mpnet` | encoder | **B** | built-in adapter `mpnet` | 12 |  |  |
+| `bert` | encoder | **B** | built-in adapter `bert` | 13 |  |  |
+| `roberta` | encoder | **B** | built-in adapter `roberta` | 13 |  |  |
+| `xlm_roberta` | encoder | **B** | built-in adapter `roberta` | 13 |  |  |
+| `distilbert` | encoder | **B** | built-in adapter `distilbert` | 12 |  |  |
+| `mpnet` | encoder | **B** | built-in adapter `mpnet` | 13 |  |  |
 | `deberta_v2` | encoder | **C** | - |  | an adapter for `DebertaV2Model` → FR-17 | read |
-| `albert` | encoder | **C** | third-party adapter `albert` (tools/corpus/adapters) (refuted: lower) | 13 | checkpoint tensors the reading never uses, the checkpoint does not fit the reading → FR-17, FR-26 | lower |
+| `albert` | encoder | **C** | third-party adapter `albert` (tools/corpus/adapters) (refuted: lower) | 14 | checkpoint tensors the reading never uses, the checkpoint does not fit the reading → FR-17, FR-26 | lower |
 | `modernbert` | encoder | **C** | - |  | an adapter for `ModernBertModel` → FR-17 | read |
 | `nomic_bert` | encoder | **C** | - |  | an adapter for `NomicBertModel` → FR-17 | read |
 | `clip_text` | encoder | **B** | built-in adapter `clip-text` | 10 |  |  |
@@ -339,10 +339,10 @@ Court coverage: 53687 commit points over 56 lowered models reproduced by the con
 | --- | ---: | ---: |
 | Level A (the standard template alone) | 1 | 1 % |
 | Level B through the built-in adapter pack (nobody wrote anything for this run) | 24 | 22 % |
-| Level B through a third-party adapter (written by this lane for this table, data only: `tools/corpus/census-adapters/`) | 19 | 17 % |
+| Level B through a third-party adapter (written by this lane for this table, data only: `tools/corpus/census-adapters/`) | 24 | 22 % |
 | Level B through a synthesised adapter (convention search) | 0 | 0 % |
-| **A + B** | **44** | **40 %** (of the 85 buildable: 52 %) |
-| Level C (read refused or a later stage failed) | 41 | 37 % |
+| **A + B** | **49** | **44 %** (of the 85 buildable: 58 %) |
+| Level C (read refused or a later stage failed) | 36 | 32 % |
 | no automatic tiny config (listed below) | 8 | 7 % |
 | excluded: not a standalone text decoder (listed below, with the reason) | 18 | 16 % |
 
@@ -350,35 +350,35 @@ Why the Level C families are Level C (read-stage evidence, `census_report.json`)
 
 | reason | families | which |
 | --- | ---: | --- |
-| config keys the template does not model | 26 | `afmoe`, `big_bird`, `bigbird_pegasus`, `blenderbot_small`, `camembert`, `cpmant`, `data2vec_text`, `doge`, `electra`, `ernie`, `fuyu`, `gpt_neox_japanese`, `hrm_text`, `megatron_bert`, `minimax_m3_vl_text`, `moshi`, `mvp`, `pegasus`, `recurrent_gemma`, `rembert`, `roberta_prelayernorm`, `roc_bert`, `roformer`, `trocr`, `xglm`, `xlm_roberta_xl` |
-| rope parameters keyed by layer type, layer has none | 4 | `laguna`, `mimo_v2_flash`, `modernbert_decoder`, `zaya` |
+| config keys the template does not model | 25 | `big_bird`, `bigbird_pegasus`, `blenderbot_small`, `camembert`, `cpmant`, `data2vec_text`, `doge`, `electra`, `ernie`, `fuyu`, `gpt_neox_japanese`, `hrm_text`, `megatron_bert`, `minimax_m3_vl_text`, `moshi`, `mvp`, `pegasus`, `recurrent_gemma`, `rembert`, `roberta_prelayernorm`, `roc_bert`, `roformer`, `trocr`, `xglm`, `xlm_roberta_xl` |
 | layer type `deepseek_sparse_attention` (FR-09) | 3 | `axk2`, `glm_moe_dsa`, `hy_v4` |
 | not a causal language model class (no adapter) | 3 | `ctrl`, `xlm`, `xlnet` |
-| later stage: float_vs_hf | 2 | `biogpt`, `nanochat` |
 | layer type `linear_attention` not modelled | 2 | `minimax`, `olmo_hybrid` |
+| later stage: float_vs_hf | 1 | `biogpt` |
 | cross-attention (decoder half of an encoder-decoder) | 1 | `prophetnet` |
+| rope parameters keyed by layer type, layer has none | 1 | `zaya` |
 
 | convention the template lacks | families it blocks | the keys |
 | --- | ---: | --- |
-| MoE hyper-parameters and layer pattern | 3 | `moe_intermediate_size`, `norm_topk_prob`, `num_experts`, `num_experts_per_tok`, `num_local_experts`, `routed_scaling_factor`, `router_jitter_noise` |
+| MoE hyper-parameters and layer pattern | 2 | `norm_topk_prob`, `num_experts`, `num_experts_per_tok`, `num_local_experts`, `routed_scaling_factor`, `router_jitter_noise` |
 | nested VLM wrapper (text_config, vision_config, token ids) | 1 | `image_token_id`, `text_config` |
 | bias switches | 2 | `use_bias` |
 | norm epsilon / norm kind aliases | 13 | `layer_norm_eps` |
 | activation aliases | 7 | `activation_function`, `hidden_activation` |
 | dimension aliases (n_embd, n_head, n_layer, ...) | 7 | `d_model`, `ffn_dim` |
-| everything else (family-specific keys) | 26 | 84 distinct keys |
+| everything else (family-specific keys) | 25 | 79 distinct keys |
 
-Variants (a second tiny config where the first cannot exercise a feature real checkpoints use; not counted as families): `granitemoeshared_shared` is Level B; `mimo_v2_flash_unscaled` is Level B; `biogpt_unscaled` is Level B; `cohere2_moe_shared_sum` is Level B; `cohere2_moe_shared_avg` is Level C (NOT_LOWERABLE(Cohere2MoeForCausalLM: a shared expert combined by `average` needs a scale on the shared expert (not a spec field yet) [in variable `com); `nanochat_std_rope` is Level B.
+Variants (a second tiny config where the first cannot exercise a feature real checkpoints use; not counted as families): `granitemoeshared_shared` is Level B; `mimo_v2_flash_unscaled` is Level B; `biogpt_unscaled` is Level B; `nanochat_std_rope` is Level B; `cohere2_moe_shared_sum` is Level B; `cohere2_moe_shared_avg` is Level C (NOT_LOWERABLE(Cohere2MoeForCausalLM: a shared expert combined by `average` needs a scale on the shared expert (not a spec field yet) [in variable `com).
 
 What this lane has read of the Level C families (`tools/corpus/census_blockers.json`; the rest are listed by the reader's refusal above and are NOT classified):
 
 | class | families | which |
 | --- | ---: | --- |
-| feature | 29 | `afmoe`, `axk2`, `big_bird`, `biogpt`, `camembert`, `data2vec_text`, `doge`, `electra`, `ernie`, `glm_moe_dsa`, `gpt_neox_japanese`, `hrm_text`, `hy_v4`, `laguna`, `megatron_bert`, `mimo_v2_flash`, `minimax`, `minimax_m3_vl_text`, `modernbert_decoder`, `nanochat`, `olmo_hybrid`, `recurrent_gemma`, `rembert`, `roberta_prelayernorm`, `roc_bert`, `roformer`, `xglm`, `xlm_roberta_xl`, `zaya` |
+| feature | 24 | `axk2`, `big_bird`, `biogpt`, `camembert`, `data2vec_text`, `doge`, `electra`, `ernie`, `glm_moe_dsa`, `gpt_neox_japanese`, `hrm_text`, `hy_v4`, `megatron_bert`, `minimax`, `minimax_m3_vl_text`, `olmo_hybrid`, `recurrent_gemma`, `rembert`, `roberta_prelayernorm`, `roc_bert`, `roformer`, `xglm`, `xlm_roberta_xl`, `zaya` |
 | route | 8 | `bigbird_pegasus`, `blenderbot_small`, `fuyu`, `moshi`, `mvp`, `pegasus`, `prophetnet`, `trocr` |
 | legacy | 4 | `cpmant`, `ctrl`, `xlm`, `xlnet` |
 
-Feature requests the census names (a family may name two): FR-29: 12; FR-18: 7; FR-09: 4; FR-30: 3; FR-34: 2; FR-01: 1; FR-10: 1; FR-16: 1; FR-19: 1; FR-23: 1; FR-31: 1; FR-32: 1; FR-35: 1.
+Feature requests the census names (a family may name two): FR-29: 11; FR-18: 7; FR-09: 4; FR-34: 2; FR-01: 1; FR-10: 1; FR-16: 1; FR-19: 1; FR-23: 1; FR-30: 1; FR-32: 1.
 
 No automatic tiny config (the family's defaults are over the size guard or its tiny build fails; recorded, not dropped): `bamba`, `cohere_compass_text`, `dots1`, `inkling_text`, `lfm2_moe`, `qwen4_exp`, `xlstm`, `zamba`.
 
@@ -487,22 +487,22 @@ named lever (per-commit tile lengths, a stat-only softmax commit, per-level stag
 The census (§3.2) asks the question again on every causal-LM family of transformers 5.17 that is not one of the 100 curated
 entries. Four results.
 
-1. **52 % of the buildable families are expressible by data today** (44 of 85): one at Level A (`ministral`), 24 through the built-in pack and
-   19 through this lane's adapters; **40 % of all 111** once the families with no automatic tiny config (8) and the excluded ones
+1. **58 % of the buildable families are expressible by data today** (49 of 85): one at Level A (`ministral`), 24 through the built-in pack and
+   24 through this lane's adapters; **44 % of all 111** once the families with no automatic tiny config (8) and the excluded ones
    (18: composites, drafters, encoder-decoder halves) are counted (the standard-template families are in the
    curated corpus), and the convention search synthesised none: the refusals are on keys that *can* change the math (experts, MLA
    ranks, norm kinds, layer patterns) or on whole layer types, which the search by design does not guess.
-2. **The 41 Level C families, by what this lane has read** (`tools/corpus/census_blockers.json`; 40 of the 41 are classified): 29 need a feature,
+2. **The 36 Level C families, by what this lane has read** (`tools/corpus/census_blockers.json`): 25 need a feature,
    8 are a route (decoder halves of encoder–decoders, a VLM, a speech model), 4 are historical LMs. The named features: **FR-29** the BERT lineage's
    prediction head (12 families, `ForCausalLM` modes hardly anyone serves, plus `modernbert_decoder`); **FR-09** DeepSeek sparse attention
-   (`axk2`, `glm_moe_dsa`, `hy_v4`, plus the corpus's `deepseek_v32`); **FR-30** a separate attention output gate (`afmoe`, `laguna`, `minimax`);
-   **FR-34** the embedding scale on tokens only (`biogpt`, `xglm`); **FR-31** a value scale (`mimo_v2_flash`); **FR-35** the sign of NanoChat's rotation;
+   (`axk2`, `glm_moe_dsa`, `hy_v4`, plus the corpus's `deepseek_v32`); **FR-30** a separate attention output gate (`minimax`; `afmoe` and `laguna` became Level B when FR-30 landed);
+   **FR-34** the embedding scale on tokens only (`biogpt`, `xglm`); (**FR-31** `mimo_v2_flash`, **FR-35** `nanochat` and the **FR-29** `modernbert_decoder` head also landed on tir/generic c3f1c27ca: all Level B, every stage);
    and one-offs read but not built (`minimax` lightning attention FR-32, `olmo_hybrid`, `recurrent_gemma`, `zaya`, `doge`, `hrm_text`).
    **The prediction test.** Before running, this lane expected an adapter to hold for ten decoder families. Six did (`cohere2_moe`, `granite_swa`,
    `granitemoe_swa`, `granitemoeshared`, `mellum`, and `aria_text` once FR-01 landed); `biogpt` and `mimo_v2_flash` did not and the cause was
    the one found by reading (FR-34; FR-31), proved by variants that remove only that gap (`biogpt_unscaled`, `mimo_v2_flash_unscaled`: Level B, every stage);
    `afmoe` and `laguna` were read to need FR-30 and not run. The same method rescued five more (`gemma4_unified_text`, `openai_gpt`,
-   `bert_generation`, `minicpm3`, `codegen`). The 44 are therefore a **floor** for what data can do and the 41 an **upper bound** for what needs a feature.
+   `bert_generation`, `minicpm3`, `codegen`). The 49 are therefore a **floor** for what data can do and the 36 an **upper bound** for what needs a feature.
 3. **The per-layer-type rope convention is necessary but not sufficient.** Six census families are refused because
    `rope_parameters` is keyed by layer type; `a-candidates/standard-v3.json` (a 30-line data file: the rope of layer *i* is the one of
    its type, with that type's partial-rotary factor) removes the refusal for five and moves **none** to Level B — each then stops at

@@ -22,17 +22,21 @@ code, not yet run. Semantics are cited as `models/<arch>/modeling_<arch>.py:<Cla
 | FR-26 accepted | a Level A without a reference check is labelled "A (unconfirmed)" until a transformers/diffusers class confirms it (the harness does, `level_label`; confirmation is `float_vs_hf` on the same weights) |
 | Not adopted | per-layer-type rope in the standard template: the candidate (`tools/corpus/a-candidates/standard-v3.json`) moved none of the six families it targets, so there is no evidence. The convention search stays a development tool in `tools/corpus`, documented in `corpus-v2.md` §6, and is not a product feature |
 
-## Status on `tir/generic` (measured by the corpus lane after the merge of `239179132`)
+## Status on `tir/generic` (measured by the corpus lane after the merge of `c3f1c27ca`)
 
 | request | status | evidence |
 | --- | --- | --- |
 | FR-01 weights as data | **landed** (`spec.hf.weights`) | `dbrx`, `ernie4_5_moe`, `granitemoehybrid` Level B (built-in); this lane's `aria_text`, `codegen`, `granitemoeshared` (real shared expert) Level B by weight expressions |
 | FR-02 post-rotation q/k norm | **landed** (`AttnSpec.qk_norm_after_rope`) | `hunyuan_v1_dense`, `hunyuan_v1_moe` Level B by this lane's adapters with the flag |
 | FR-07 softmax selection bias + dropped-flag guards | **landed** | `ernie4_5_moe` Level B |
-| FR-18 phase 1 encoder–decoders as data | **landed** (adapters of kind `encdec`) | `t5`, `t5_gated`, `bart`, `mbart`, `marian` Level B, lower + admit only; spec equals the Rust parser's up to one ulp of `1/sqrt(d)` (worth a look: a program digest may depend on it) |
+| FR-18 phase 1 encoder–decoders as data | **landed** (adapters of kind `encdec`) | `t5`, `t5_gated`, `bart`, `mbart`, `marian` Level B, lower + admit only; spec equals the Rust parser's up to one ulp of `1/sqrt(d)` (fixed on c3f1c27ca via detmath: the harness compares at 1e-12 and no longer sees a difference) |
 | FR-25 refusal override | **landed** | `minicpm3`, `codegen`, `granitemoehybrid` carry "user adapter overrides built-in refusal" |
 | FR-26 Level A honesty, panics | **landed** (the `albert` panic is a refusal now: stops at `lower`) | harness `level_label`; `albert` |
-| FR-03, 04, 05, 06, 08..17, 19..24, 27..35 | open | see each |
+| FR-29 head transform | **landed** (`HEAD_TRANSFORM_V1`) | `modernbert_decoder` Level B, every stage incl. court (third-party adapter) |
+| FR-30 separate output gate | **landed** (`ATTN_OUTPUT_GATE_SEPARATE_V1`) | `afmoe`, `laguna` Level B |
+| FR-31 attention value scale | **landed** (`ATTN_VALUE_SCALE_V1`) | `mimo_v2_flash` Level B (and the `_unscaled` variant) |
+| FR-35 rotation by -theta | **landed** (`ROPE_REVERSED_V1`) | `nanochat` Level B |
+| FR-03, 04, 05, 06, 08..17, 19..24, 27, 28, 32..34 | open | see each |
 
 ## Findings for lane G (from the re-measure on `239179132`)
 

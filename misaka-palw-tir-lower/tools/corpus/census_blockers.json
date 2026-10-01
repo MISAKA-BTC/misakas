@@ -1,20 +1,16 @@
 {
  "_doc": "Census families whose gap this lane has read in the transformers code (not all 51 Level C: the others are listed by the refusal the reader gave, in the generated census table, and are NOT classified). class: feature | route | refusal | data (an adapter is expected to hold, not yet written) ; frs: the feature requests (docs/design/palw/tir/feature-requests.md) that name it.",
  "nanochat": {
-  "class": "feature",
-  "frs": [
-   "FR-35"
-  ],
-  "short": "NanoChat's `rotate_half` has flipped signs (a rotation by -theta, which no weight can absorb); the post-rotation q/k norm (FR-02) is in on tir/generic and the adapter uses it; with the standard rotation in the REFERENCE (variant nanochat_std_rope) the adapter is Level B with every stage, so the sign is the only gap",
-  "evidence": "adapter run + a patched-reference variant"
+  "class": "data",
+  "frs": [],
+  "short": "LANDED on tir/generic c3f1c27ca (FR-35); now Level B by a third-party data adapter, every stage incl. court",
+  "evidence": "adapter run on the merge of c3f1c27ca"
  },
  "modernbert_decoder": {
-  "class": "feature",
-  "frs": [
-   "FR-29"
-  ],
-  "short": "a prediction head (dense + activation + norm) before the tied vocabulary projection (FR-29); layer 0 has no attn_norm; the per-layer-type rope convention alone does not make it readable",
-  "evidence": "read from modeling_modernbert_decoder.py; the per-layer-type rope convention alone does not make it readable"
+  "class": "data",
+  "frs": [],
+  "short": "LANDED on tir/generic c3f1c27ca (FR-29); now Level B by a third-party data adapter, every stage incl. court",
+  "evidence": "adapter run on the merge of c3f1c27ca"
  },
  "axk2": {
   "class": "feature",
@@ -65,28 +61,22 @@
   "evidence": "config keys (lru_width, conv1d_width, block_types)"
  },
  "afmoe": {
-  "class": "feature",
-  "frs": [
-   "FR-30"
-  ],
-  "short": "a SEPARATE output-gate tensor (self_attn.gate_proj [H*hd, D], sigmoid, per element): the binder reads an output gate only from the fused q_proj rows (Qwen3-Next layout); also rotary on the sliding layers only and pre/post norms around both sub-layers",
-  "evidence": "read from modeling_afmoe.py and hf_weights.rs:316"
+  "class": "data",
+  "frs": [],
+  "short": "LANDED on tir/generic c3f1c27ca (FR-30); now Level B by a third-party data adapter, every stage incl. court",
+  "evidence": "adapter run on the merge of c3f1c27ca"
  },
  "laguna": {
-  "class": "feature",
-  "frs": [
-   "FR-30"
-  ],
-  "short": "a separate output-gate tensor with a SOFTPLUS activation, per head (self_attn.g_proj [H, D]; per element when gating is false), per-layer head counts, per-layer-type partial rotary, a router with logit soft-capping, a shared expert",
-  "evidence": "read from modeling_laguna.py"
+  "class": "data",
+  "frs": [],
+  "short": "LANDED on tir/generic c3f1c27ca (FR-30); now Level B by a third-party data adapter, every stage incl. court",
+  "evidence": "adapter run on the merge of c3f1c27ca"
  },
  "mimo_v2_flash": {
-  "class": "feature",
-  "frs": [
-   "FR-31"
-  ],
-  "short": "attention_value_scale (values times 0.707) has no spec field; the rest (per-layer-type kv heads, sinks on the sliding layers only under the hub name attention_sink_bias, per-layer-type partial rotary, a sigmoid router with a correction bias) is data",
-  "evidence": "adapter run: refuses the config by its own check naming FR-31; the variant mimo_v2_flash_unscaled is Level B with every stage including the court"
+  "class": "data",
+  "frs": [],
+  "short": "LANDED on tir/generic c3f1c27ca (FR-31); now Level B by a third-party data adapter, every stage incl. court",
+  "evidence": "adapter run on the merge of c3f1c27ca"
  },
  "zaya": {
   "class": "feature",
