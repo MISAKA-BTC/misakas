@@ -22,6 +22,7 @@
 //! * [`conv`] — `CONV_DENSE_V1`, a dense 2-D convolution as im2col by a pinned index table and that linear map;
 //! * [`sampler`] — the Euler schedule as pinned tables, the initial latent, `GEN_SAMPLER_AFFINE_V1`, unpatchify;
 //! * [`stream`] — the one narrowing between code scales (the stream to codes and back);
+//! * [`text`] — CLIP's text tower as the pipeline's two text stages (rows and pooled), through the HF frontend;
 //! * [`pipeline`] — the text stages, the denoise scan and the VAE chain as one `TirPipelineV1`;
 //! * [`norm`] — `NORM_GROUP_SPATIAL_V1`, GroupNorm with committed row partials (no cone reads a whole tensor);
 //!
@@ -46,6 +47,7 @@ pub mod sampler;
 pub mod sink;
 pub mod stream;
 pub mod tables;
+pub mod text;
 pub mod vae;
 pub mod vae_float;
 
