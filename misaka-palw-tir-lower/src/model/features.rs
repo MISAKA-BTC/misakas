@@ -44,6 +44,8 @@ pub enum Area {
     Residual,
     Head,
     Storage,
+    /// What kind of model the whole is (an encoder–decoder, …), not one layer's part.
+    Model,
 }
 
 /// Does the generic lowerer turn this feature into a TIR program?
@@ -154,6 +156,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ATTN_SINKS_V1", Attention, "attention sinks", Implemented, [], NoReq, ["fidelity_tiny::gpt_oss"], "A learned logit per head that joins the softmax and is dropped."),
     feature!("ATTN_OUTPUT_GATE_V1", Attention, "sigmoid gate on the attention output", Implemented, [], NoReq, ["fidelity_tiny::qwen3_next", "fidelity_tiny::qwen3_5"], "q_proj also emits a per-head gate."),
     feature!("ATTN_QK_NORM_V1", Attention, "norm on the queries and keys", Implemented, [], NoReq, ["fidelity_tiny::qwen3_moe", "fidelity_tiny::olmoe", "fidelity_tiny::cohere"], "Per-head shared, per-head separate or whole-projection scope."),
+    feature!("ATTN_QK_NORM_POST_ROPE_V1", Attention, "the q/k norms act after the rotation", Implemented, [], NoReq, ["qk_norm_post_rope::the_order_of_the_norm_and_the_rotation_is_part_of_the_function"], "Hunyuan: q = rope(q); q = RMSNorm_head(q). Qwen3's order is the reverse. A rotation preserves a head's L2 norm but a per-channel gain does not commute with it, so the orders are different functions (8.9e-2 and 4.6e-2 of the logit scale on the two Hunyuan fixtures). The history keeps the normed, rotated key; no node is new, only their order."),
     feature!("ATTN_V_NORM_V1", Attention, "norm on the values", Implemented, [], NoReq, ["fidelity_tiny::gemma4"], "Gemma-4."),
     feature!("ATTN_CLIP_QKV_V1", Attention, "clamp of q, k and v after projection", Implemented, [], NoReq, ["fidelity_tiny::olmo"], "OLMo `clip_qkv`."),
     feature!("ATTN_QUERY_TEMPERATURE_V1", Attention, "position-dependent query scaling", Implemented, [], NoReq, ["fidelity_tiny::llama4", "fidelity_tiny::ministral3"], "Llama-4 / Ministral-3."),
@@ -218,7 +221,6 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("SCALE_MUP_V1", Residual, "muP multipliers on the embedding, branches and logits", Missing, [], NoReq, [], "Per-model constants over existing multiplier features; an adapter once a rule names them."),
     feature!("REFERENCE_REMOTE_CODE_V1", Storage, "a reference implementation that is remote Python code outside transformers", Missing, [], NoReq, [], "The semantics cannot be pinned to a library version; confirm against the module before an adapter may claim it."),
     feature!("WEIGHTS_QKV_MP_PARTITIONED_V1", Storage, "mp_num-partitioned fused qkv weight layout", Missing, [], NoReq, [], "CodeGen."),
-    feature!("MIXER_LAYER_PATTERN_HYBRID_V1", Mixer, "per-layer mixer pattern with Mamba-2 and attention sharing an MoE feed-forward", Missing, [], NoReq, [], "Granite-4 hybrid: all parts exist; the layer pattern keys are not mapped yet."),
     feature!("LAYER_FFN_ONLY_V1", Mixer, "layers that are a single block (a mixer or an FFN, not both)", Missing, [], NoReq, [], "Nemotron-H."),
     feature!("MIXER_PARALLEL_BRANCH_V1", Mixer, "two mixers in parallel in one layer, summed", Missing, [], NoReq, [], "Falcon-H1."),
     feature!("ATTN_SHARED_BLOCK_V1", Attention, "one attention block's weights reused at several depths", Missing, [], NoReq, [], "Zamba2."),
@@ -227,6 +229,10 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("QUANT_AWQ_V1", Storage, "AWQ-quantised projections", Implemented, [], NoReq, ["quantized::awq_g128"], "Same, activation-aware scales."),
     feature!("QUANT_GGUF_V1", Storage, "GGUF block-quantised tensors", Implemented, [], NoReq, ["gguf::gguf_llama_q4_k_m"], "Q4_0 … Q8_0, K-quants."),
     feature!("ADAPTER_LORA_V1", Storage, "LoRA adapter over the parent (candidate = parent + adapter)", Implemented, [], NoReq, ["lora::llama_r16"], "Unmerged low-rank path."),
+    feature!("ENCDEC_FROM_SPEC_V1", Model, "an encoder-decoder as data: two stages (the encoder over the padded source, the decoder with cross-attention) described by an adapter of kind `encdec`", Implemented, [], NoReq, ["encdec_adapters::the_t5_adapter_reads_what_the_rust_reader_read", "encdec_adapters::every_family_adapter_reads_what_the_rust_reader_read"], "Stage 0, the encoder, is ONE position over the padded source axis; its Final output is every decoder layer's cross-attention keys and values (one MatMul against the stacked weights). Stage 1 is the decoder's text stage. What the Rust route hard-wired per family (the five parsers and their tensor-name tables) is the adapter's data; the lowering is unchanged (Phase 1 of docs/design/palw/tir/frontend-as-data-v1.md section 3)."),
+    feature!("ATTN_CROSS_ENCDEC_V1", Attention, "cross-attention of a decoder to its encoder's output (the stage-0 Final)", Implemented, [], NoReq, ["encdec_adapters::every_family_adapter_reads_what_the_rust_reader_read"], "Keys and values come from the encoder through StageFinal, per decoder layer; attention runs over the source axis (a Fixed axis, not H) with the keys at or past the source length masked. Distinct from ATTN_CROSS_V1, a decoder-only model reading another sequence's states, which is not modelled."),
+    feature!("POS_SINUSOID_V1", Position, "sinusoidal absolute positions (computed, or the checkpoint's table)", Implemented, [], NoReq, ["encdec_adapters::every_family_adapter_reads_what_the_rust_reader_read"], "Marian computes the table, Pegasus stores it: sin in the first half of the width and cos in the second."),
+    feature!("WEIGHTS_EXPR_V1", Storage, "weights as data: a tensor expression (reshape, rows, take, stack, transpose, pad, three maps) per HL param, written in the adapter", Implemented, [], NoReq, ["weights_expr::dbrx_flat_experts_bind_by_expression", "weights_expr::the_enumerated_layouts_are_expressions"], "Replaces the default binding of the params it names: a checkpoint layout the enumerated ones (fused qkv, fused gate/up, stacked experts, conv1d) do not describe needs no Rust. Every step is an exact copy or re-indexing (no arithmetic on weights beyond neg_exp, scale and rescale_by_layer), so conversion stays a pure re-indexing; no primitive and no protocol change (the artifact is what the checkpoint holds). The grammar is closed: an unknown step key is an error. docs/design/palw/tir/frontend-as-data-v1.md section 2."),
 ];
 
 /// Look a feature up by id.
@@ -355,6 +361,9 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
                     u.add("ATTN_QK_NORM_V1", lay, format!("{:?}", q.scope));
                     norm_features(&mut u, &q.norm, lay);
                     u.add("NORM_GROUPED_V1", lay, "");
+                    if a.qk_norm_after_rope {
+                        u.add("ATTN_QK_NORM_POST_ROPE_V1", lay, "");
+                    }
                 }
                 if let Some(v) = &a.v_norm {
                     u.add("ATTN_V_NORM_V1", lay, "");
@@ -559,6 +568,46 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     if s.adapter.is_some() {
         u.add("ADAPTER_LORA_V1", None, "");
     }
+    if !s.hf.weights.is_empty() {
+        let names: Vec<&str> = s.hf.weights.keys().map(String::as_str).collect();
+        let shown = names.iter().take(4).copied().collect::<Vec<_>>().join(", ");
+        u.add("WEIGHTS_EXPR_V1", None, format!("{} param(s) bound by expression: {shown}{}", names.len(), if names.len() > 4 { ", …" } else { "" }));
+    }
+    u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
+}
+
+/// The features an encoder-decoder spec uses (`ENCDEC_FROM_SPEC_V1`).
+pub fn encdec_features(s: &crate::lower::encdec::EncDecSpec) -> Vec<FeatureUse> {
+    use crate::lower::encdec::Positions;
+    let mut u = Uses::default();
+    u.add("ENCDEC_FROM_SPEC_V1", None, format!("{} + {} layers of {}", s.enc_layers, s.dec_layers, s.d));
+    u.add("ATTN_CROSS_ENCDEC_V1", None, "");
+    u.add("EMBED_TOKEN_V1", None, format!("{} × {}", s.vocab, s.d));
+    match &s.positions {
+        Positions::Relative { buckets, .. } => u.add("POS_RELATIVE_BIAS_V1", None, format!("{buckets} buckets")),
+        Positions::Learned { .. } => u.add("EMBED_POSITION_LEARNED_V1", None, ""),
+        Positions::Sinusoidal { .. } => u.add("POS_SINUSOID_V1", None, ""),
+    }
+    u.add(if s.rms { "NORM_RMS_V1" } else { "NORM_LAYER_V1" }, None, "");
+    u.add(if s.pre_norm { "RESIDUAL_PRE_NORM_V1" } else { "RESIDUAL_POST_NORM_V1" }, None, "");
+    u.add(if s.gated { "MLP_DENSE_GATED_V1" } else { "MLP_DENSE_PLAIN_V1" }, None, "");
+    if s.bias {
+        u.add("ATTN_BIAS_V1", None, "");
+        u.add("MLP_BIAS_V1", None, "");
+    }
+    if s.embed_scale != 1.0 {
+        u.add("EMBED_SCALE_V1", None, "");
+    }
+    if s.embed_norm {
+        u.add("EMBED_NORM_V1", None, "");
+    }
+    if s.head_scale != 1.0 {
+        u.add("HEAD_PRE_SCALE_V1", None, "");
+    }
+    if s.logits_bias {
+        u.add("HEAD_BIAS_V1", None, "");
+    }
+    u.add("OUTPUT_LOGITS_V1", None, "");
     u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
 }
 

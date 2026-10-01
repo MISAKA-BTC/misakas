@@ -11,22 +11,57 @@ use crate::error::{LowerError, Result};
 use crate::hl::HlProgram;
 use crate::spec::*;
 use crate::weights::{Binding, MapFn, Pick, Src};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Stands for a role the adapter does not name while the defaults of the overridden params are derived
+/// (see [`M::role`]); `\u{2}` ends the role.
+const MISSING: &str = "\u{1}missing-role:";
 
 struct M<'a> {
     st: &'a HfStorage,
     out: BTreeMap<String, Src>,
+    /// The HL params an adapter binds by an expression (`spec.hf.weights`, `WEIGHTS_EXPR_V1`): their default
+    /// binding is not derived, so the roles it would read need not be named.
+    overrides: BTreeSet<String>,
+}
+
+/// The role a marker in `s` stands for, if any.
+fn missing_role(s: &Src) -> Option<String> {
+    let mark = |t: &str| -> Option<String> {
+        let rest = t.split_once(MISSING)?.1;
+        Some(rest.split('\u{2}').next().unwrap_or(rest).to_string())
+    };
+    match s {
+        Src::Tensor(t) => mark(t),
+        Src::Quant { module, .. } => mark(module),
+        Src::Take { src, .. }
+        | Src::Transpose(src)
+        | Src::Stack { src, .. }
+        | Src::Map { src, .. }
+        | Src::Reshape { src, .. }
+        | Src::PadRows { src, .. } => missing_role(src),
+    }
 }
 
 impl M<'_> {
     fn role(&self, role: &str) -> Result<String> {
-        self.st
-            .name(role)
-            .map(str::to_string)
-            .ok_or_else(|| LowerError::eval(format!("internal: no HF tensor name for role `{role}`")))
+        match self.st.name(role) {
+            Some(n) => Ok(n.to_string()),
+            // With expressions in play a role may be absent on purpose: every param that would read it is
+            // overridden. `put` turns the marker back into the error for any other.
+            None if !self.overrides.is_empty() => Ok(format!("{MISSING}{role}\u{2}")),
+            None => Err(LowerError::eval(format!("internal: no HF tensor name for role `{role}`"))),
+        }
     }
     fn put(&mut self, name: impl Into<String>, src: Src) -> Result<()> {
         let name = name.into();
+        // An expression of the adapter replaces the default binding.
+        if self.overrides.contains(&name) {
+            return Ok(());
+        }
+        if let Some(role) = missing_role(&src) {
+            return Err(LowerError::eval(format!("internal: no HF tensor name for role `{role}`")));
+        }
         if let Some(old) = self.out.get(&name)
             && *old != src
         {
@@ -121,7 +156,9 @@ impl M<'_> {
 
 /// Map every param of `prog` (built from `spec`) onto HF tensors.
 pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
-    let mut m = M { st: &spec.hf, out: BTreeMap::new() };
+    // The adapter's expressions (`WEIGHTS_EXPR_V1`) replace the default binding of the params they name.
+    let overrides = crate::weights::expr::parse_all(&spec.hf.weights, &prog.params)?;
+    let mut m = M { st: &spec.hf, out: BTreeMap::new(), overrides: overrides.keys().cloned().collect() };
     // Embedding, positions, head.
     m.put("embed.table", Src::t(format!("{}.weight", m.role("embed")?)))?;
     if spec.embedding.proj_in {
@@ -199,12 +236,14 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     }
     let mut srcs = Vec::with_capacity(prog.params.len());
     for d in &prog.params {
-        srcs.push(
-            m.out
+        srcs.push(match overrides.get(&d.name) {
+            Some(expr) => expr.clone(),
+            None => m
+                .out
                 .get(&d.name)
                 .cloned()
                 .ok_or_else(|| LowerError::eval(format!("internal: HL param `{}` has no HF source", d.name)))?,
-        );
+        });
     }
     Ok(Binding { srcs, aliases: spec.hf.prefix_aliases.clone(), ignored_prefixes: spec.hf.ignored_prefixes.clone() })
 }

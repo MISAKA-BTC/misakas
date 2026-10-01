@@ -545,6 +545,7 @@ impl P<'_> {
                 ignored_prefixes: std::mem::take(&mut self.ignored_prefixes),
                 quant: None,
                 table_shards: 1,
+                weights: Default::default(),
             },
             notes: std::mem::take(&mut self.notes),
         }
@@ -651,6 +652,7 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         v_bias: bias.0,
         o_bias: bias.1,
         qk_norm: None,
+        qk_norm_after_rope: false,
         clip_qkv: None,
         position,
         scale: 1.0 / (hd as f64).sqrt(),

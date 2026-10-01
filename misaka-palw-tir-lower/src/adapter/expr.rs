@@ -951,6 +951,9 @@ impl<'a> Env<'a> {
                 if dim == 0 || dim % 2 != 0 {
                     return Err(bad(format!("{}: rotary dim {dim} must be even and positive", self.arch)));
                 }
+                if dim > crate::rope::MAX_ROTARY_DIM {
+                    return Err(bad(format!("{}: rotary dim {dim} is past the {} a program rotates", self.arch, crate::rope::MAX_ROTARY_DIM)));
+                }
                 let spec = crate::rope::RopeSpec { rotary_dim: dim, offset: 0, style, freqs: crate::rope::RopeFreqs::plain(theta, dim) };
                 serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
             }

@@ -14,6 +14,13 @@ macro_rules! pack {
 pack!(
     "refusals",
     "spec-frame",
+    "encdec-frame",
+    "mixin-bart-lineage",
+    "t5",
+    "bart",
+    "mbart",
+    "marian",
+    "pegasus",
     "decoder-core",
     "standard-decoder",
     "mixin-gdn-hybrid",
@@ -28,7 +35,9 @@ pack!(
     "cohere",
     "cohere2",
     "deepseek-v2",
+    "dbrx",
     "deepseek-v3",
+    "ernie4-5-moe",
     "exaone",
     "exaone4",
     "falcon",
@@ -48,6 +57,7 @@ pack!(
     "gptj",
     "granite",
     "granitemoe",
+    "granitemoehybrid",
     "distilbert",
     "internlm2",
     "jamba",
@@ -109,9 +119,17 @@ pub fn by_id(id: &str) -> Option<&'static Adapter> {
     all().iter().find(|a| a.id == id)
 }
 
-/// The built-in adapter claiming a configuration: by `architectures[0]`, else by `model_type`.
+/// The built-in DECODER adapter claiming a configuration: by `architectures[0]`, else by `model_type`.
+/// (An adapter of kind `encdec` is found by [`find_encdec_for`]; the decoder reader never sees one.)
 pub fn find_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
-    let real = || all().iter().filter(|a| a.value.get("spec").is_some() || a.value.get("dispatch").is_some());
+    let real = || all().iter().filter(|a| a.kind() == "decoder" && (a.value.get("spec").is_some() || a.value.get("dispatch").is_some()));
+    real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+}
+
+/// The built-in ENCODER-DECODER adapter (kind `encdec`) claiming a configuration, by `architectures[0]`, else by
+/// `model_type`.
+pub fn find_encdec_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
+    let real = || all().iter().filter(|a| a.kind() == "encdec" && a.value.get("match").is_some());
     real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
 }
 

@@ -101,8 +101,72 @@ pub fn build_spec(adapter: &Adapter, config: &Value, tensors: Option<&TensorInde
     Ok(Built { spec, assumed_defaults })
 }
 
+/// An encoder-decoder spec built from an adapter of kind `encdec`.
+#[derive(Clone, Debug)]
+pub struct EncDecBuilt {
+    pub spec: crate::lower::encdec::EncDecSpec,
+    /// Config keys whose value is the class default, not the checkpoint's.
+    pub assumed_defaults: Vec<String>,
+}
+
+/// Instantiate an adapter of kind `encdec` for `config`: the same evaluator as [`build_spec`] (variables, class
+/// defaults, inert keys — and, as everywhere, a key nobody accounts for is refused), but the `spec` template
+/// instantiates a [`crate::lower::encdec::EncDecSpec`] (`misaka.palw.encdec-spec.v1`), validated before anything is
+/// sized on it. An encoder-decoder config is flat: there is no nested decoder section.
+pub fn build_encdec_spec(adapter: &Adapter, config: &Value) -> Result<EncDecBuilt> {
+    if adapter.kind() != "encdec" {
+        return Err(bad(format!("adapter `{}` is of kind `{}`, not `encdec`", adapter.id, adapter.kind())));
+    }
+    let root = config.as_object().ok_or_else(|| bad("config.json is not an object"))?;
+    let arch = root.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("").to_string();
+    let acfg = adapter.value.get("config").and_then(Value::as_object).cloned().unwrap_or_default();
+    let cfg = Cfg::new(arch.clone(), root, "");
+    let strs = |k: &str| -> Vec<String> {
+        acfg.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+    };
+    cfg.inert(crate::hf_schema::READER_KEYS);
+    cfg.inert(&strs("inert").iter().map(String::as_str).collect::<Vec<_>>());
+    let empty = Map::new();
+    let defaults = acfg.get("defaults").and_then(Value::as_object).unwrap_or(&empty);
+    let env = Env::new(&cfg, None, defaults, None, &arch);
+    env.set_var("arch", Value::String(arch.clone()));
+    if let Some(vars) = adapter.value.get("vars").and_then(Value::as_array) {
+        let mut order = Vec::new();
+        for v in vars {
+            let name = v.get("name").and_then(Value::as_str).ok_or_else(|| bad("a variable has no `name`"))?;
+            let expr = v.get("value").ok_or_else(|| bad(format!("variable `{name}` has no `value`")))?;
+            let force = v.get("lazy").and_then(Value::as_bool) != Some(true);
+            env.define_global(name, expr.clone());
+            if force {
+                order.push(name.to_string());
+            }
+        }
+        env.force_globals(&order)?;
+    }
+    let template = adapter.value.get("spec").ok_or_else(|| bad(format!("adapter `{}` has no `spec`", adapter.id)))?;
+    let out = normalize(env.eval(template)?);
+    let spec = crate::lower::encdec::encdec_spec_from_value(out)
+        .map_err(|e| bad(format!("adapter `{}` produced an invalid {}: {e}", adapter.id, crate::lower::encdec::ENCDEC_SPEC_SCHEMA_V1)))?;
+    cfg.finish()?;
+    let assumed_defaults = env.assumed.borrow().iter().cloned().collect();
+    Ok(EncDecBuilt { spec, assumed_defaults })
+}
+
+/// `{p}` in every string of a weight expression (`hf.weights`: the tensor names inside nested steps).
+fn subst_all(v: &mut Value, p: &str) {
+    match v {
+        Value::String(s) => *s = s.replace("{p}", p),
+        Value::Array(a) => a.iter_mut().for_each(|e| subst_all(e, p)),
+        Value::Object(o) => o.values_mut().for_each(|e| subst_all(e, p)),
+        _ => {}
+    }
+}
+
 fn subst_prefix(v: &mut Value, p: &str) {
     if let Some(hf) = v.get_mut("hf") {
+        if let Some(w) = hf.get_mut("weights") {
+            subst_all(w, p);
+        }
         if let Some(names) = hf.get_mut("names").and_then(Value::as_object_mut) {
             for n in names.values_mut() {
                 if let Value::String(s) = n {

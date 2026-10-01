@@ -834,7 +834,9 @@ impl Builder<'_> {
             if a.output_gate || a.clip_qkv.is_some() || a.sinks || a.v_from_k {
                 return Err(LowerError::not_lowerable("a KV-sharing layer with a gated, clipped, sinked or K = V attention"));
             }
-            if let Some(qk) = &a.qk_norm {
+            if let Some(qk) = &a.qk_norm
+                && !a.qk_norm_after_rope
+            {
                 q = self.qk_norm(bk, q, qk, &n("q_norm"), h, hd)?;
             }
             match &a.position {
@@ -849,6 +851,11 @@ impl Builder<'_> {
                 }
                 Position::None => {}
                 Position::Alibi(_) => return Err(LowerError::not_lowerable("a KV-sharing layer under ALiBi")),
+            }
+            if let Some(qk) = &a.qk_norm
+                && a.qk_norm_after_rope
+            {
+                q = self.qk_norm(bk, q, qk, &n("q_norm"), h, hd)?;
             }
             let (kc, vc) = (Ref::Carry((1 + 2 * slot) as u8), Ref::Carry((2 + 2 * slot) as u8));
             let suffix = a.window.map(|w| format!(".w{w}")).unwrap_or_default();
@@ -888,7 +895,9 @@ impl Builder<'_> {
             k = bk.f(Op::Clamp { lo: -c, hi: c }, vec![k], kn, &n("k_clip"));
             v = bk.f(Op::Clamp { lo: -c, hi: c }, vec![v], vn, &n("v_clip"));
         }
-        if let Some(qk) = &a.qk_norm {
+        if let Some(qk) = &a.qk_norm
+            && !a.qk_norm_after_rope
+        {
             q = self.qk_norm(bk, q, qk, &n("q_norm"), h, hd)?;
             k = self.qk_norm(bk, k, qk, &n("k_norm"), kv, hd)?;
         }
@@ -914,6 +923,13 @@ impl Builder<'_> {
             }
             Position::Alibi(al) => alibi = Some(al.clone()),
             Position::None => {}
+        }
+        // Hunyuan: the per-head norms act on the rotated q and k (`ATTN_QK_NORM_POST_ROPE_V1`).
+        if let Some(qk) = &a.qk_norm
+            && a.qk_norm_after_rope
+        {
+            q = self.qk_norm(bk, q, qk, &n("q_norm"), h, hd)?;
+            k = self.qk_norm(bk, k, qk, &n("k_norm"), kv, hd)?;
         }
         if let Some(t) = a.q_temperature {
             q = bk.f(Op::PosScale { temp: t }, vec![q, Ref::Pos], qn, &n("q_temp"));
@@ -1220,6 +1236,21 @@ impl Builder<'_> {
     fn moe_split(&mut self, bk: &mut Bk, m: &MoeSpec, rx: Ref, x: Ref) -> Result<Ref> {
         let d = self.s.hidden_size;
         let (e, i) = (m.experts, m.intermediate);
+        // A spec flag the lowering would not apply is a refusal, never a silent no-op (FR-26): a model whose router
+        // carries one of these would otherwise compute a different function with no error anywhere.
+        let r = &m.router;
+        if r.selection_bias && !matches!(r.scoring, Scoring::Sigmoid | Scoring::Softmax) {
+            return Err(LowerError::not_lowerable(format!(
+                "router selection bias with {:?} scoring: the bias joins the selection scores of the sigmoid and softmax routers only, so this lowering would drop it",
+                r.scoring
+            )));
+        }
+        if r.jitter_eps != 0.0 && r.scoring != Scoring::SparseMixer {
+            return Err(LowerError::not_lowerable(format!(
+                "router jitter noise {} with {:?} scoring: only sparsemixer reads it, so this lowering would drop it",
+                r.jitter_eps, r.scoring
+            )));
+        }
         let logits = self.linear(bk, rx, "moe.router", e, d, m.router.linear_bias, true, "moe.router")?;
         let mut rins = vec![logits];
         if m.router.selection_bias {

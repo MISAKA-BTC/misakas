@@ -37,6 +37,7 @@ use super::bidir::{add_rows, codes_rows, hl_param, input_fill, linear_rows, norm
 use super::*;
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::weights::{Binding, Src};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// The encoder's input params (lifted into inputs in this order).
@@ -56,7 +57,7 @@ pub enum Family {
 }
 
 /// How a stack knows positions.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Positions {
     /// T5: a learned bias per head over bucketed relative positions.
     Relative { buckets: usize, max_distance: usize },
@@ -77,11 +78,12 @@ impl Positions {
     }
 }
 
-/// One normalised encoder-decoder.
-#[derive(Clone, Debug, PartialEq)]
+/// One normalised encoder-decoder: the model's math ([`Positions`], norms, activation, scales) and where its
+/// tensors live ([`EncDecNames`]). A data adapter of kind `encdec` builds one (`ENCDEC_FROM_SPEC_V1`); so does
+/// [`parse_encdec`], the Rust reader of five families that remains as the oracle of those adapters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EncDecSpec {
     pub architecture: String,
-    pub family: Family,
     pub vocab: usize,
     pub d: usize,
     pub enc_layers: usize,
@@ -116,24 +118,156 @@ pub struct EncDecSpec {
     /// `final_logits_bias` (the BART family).
     pub logits_bias: bool,
     pub decoder_start: u32,
+    /// The checkpoint's tensor names.
+    pub names: EncDecNames,
 }
+
+/// The schema id of a serialised [`EncDecSpec`]: what a data adapter of kind `encdec` instantiates.
+pub const ENCDEC_SPEC_SCHEMA_V1: &str = "misaka.palw.encdec-spec.v1";
 
 impl EncDecSpec {
     pub fn enc_inner(&self) -> usize {
-        self.enc_heads * self.enc_head_dim
+        self.enc_heads.saturating_mul(self.enc_head_dim)
     }
     /// The cross-attention's width: `q`, and each decoder layer's keys and values.
     pub fn dec_inner(&self) -> usize {
-        self.dec_heads * self.dec_head_dim
+        self.dec_heads.saturating_mul(self.dec_head_dim)
     }
+
+    /// A spec an adapter built (or a config produced) is untrusted: every size is bounded and the names must
+    /// agree with the flags BEFORE anything is sized or bound on them. A refusal names the field.
+    pub fn validate(&self) -> Result<()> {
+        let bad = |m: String| LowerError::bad(format!("{}: {m}", self.architecture));
+        const MAX_DIM: usize = 1 << 24;
+        for (what, v) in [
+            ("vocab_size", self.vocab),
+            ("d_model", self.d),
+            ("encoder layers", self.enc_layers),
+            ("decoder layers", self.dec_layers),
+            ("encoder heads", self.enc_heads),
+            ("decoder heads", self.dec_heads),
+            ("encoder head width", self.enc_head_dim),
+            ("decoder head width", self.dec_head_dim),
+            ("encoder ffn width", self.enc_ffn),
+            ("decoder ffn width", self.dec_ffn),
+        ] {
+            if v == 0 || v > MAX_DIM {
+                return Err(bad(format!("{what} {v} is outside 1..=2^24")));
+            }
+        }
+        if self.enc_layers > 4096 || self.dec_layers > 4096 {
+            return Err(bad("more than 4096 layers".into()));
+        }
+        if self.enc_inner() > MAX_DIM || self.dec_inner() > MAX_DIM {
+            return Err(bad("heads × head width is past 2^24".into()));
+        }
+        if self.dec_layers.saturating_mul(self.dec_inner()) > MAX_DIM {
+            return Err(bad("decoder layers × cross-attention width is past 2^24 (the stacked cross keys/values)".into()));
+        }
+        if self.decoder_start as usize >= self.vocab {
+            return Err(bad(format!("decoder_start {} is not a token of a vocabulary of {}", self.decoder_start, self.vocab)));
+        }
+        let pos = |name: &str, v: f64| if v.is_finite() && v > 0.0 { Ok(()) } else { Err(bad(format!("{name} must be a positive number, got {v}"))) };
+        pos("eps", self.eps)?;
+        pos("attn_scale", self.attn_scale)?;
+        pos("embed_scale", self.embed_scale)?;
+        pos("head_scale", self.head_scale)?;
+        match &self.positions {
+            Positions::Relative { buckets, max_distance } => {
+                if !(2..=1 << 16).contains(buckets) || *max_distance == 0 || *max_distance > 1 << 24 {
+                    return Err(bad(format!("relative positions: {buckets} buckets up to distance {max_distance}")));
+                }
+            }
+            Positions::Learned { rows, offset } => {
+                if *rows == 0 || *rows > MAX_DIM || *offset >= *rows {
+                    return Err(bad(format!("learned positions: {rows} rows at offset {offset}")));
+                }
+            }
+            Positions::Sinusoidal { rows } => {
+                if *rows == 0 || *rows > MAX_DIM {
+                    return Err(bad(format!("sinusoidal positions: {rows} rows")));
+                }
+            }
+        }
+        // The names agree with the flags.
+        let n = &self.names;
+        let name = |what: &str, v: &str| -> Result<()> {
+            if v.is_empty() || v.len() > 512 || v.contains('\0') || v.contains(['{', '}']) {
+                return Err(bad(format!("names.{what} `{v}` is empty, too long or malformed")));
+            }
+            Ok(())
+        };
+        name("shared", &n.shared)?;
+        for (i, q) in n.qkvo.iter().enumerate() {
+            name(&format!("qkvo[{i}]"), q)?;
+        }
+        for (which, st, decoder) in [("enc", &n.enc, false), ("dec", &n.dec, true)] {
+            name(&format!("{which}.prefix"), &st.prefix)?;
+            if !st.layer.contains("{L}") || st.layer.matches('{').count() != 1 || st.layer.matches('}').count() != 1 {
+                return Err(bad(format!("names.{which}.layer `{}` must contain `{{L}}` once and no other braces", st.layer)));
+            }
+            for (what, v) in [("self_attn", &st.self_attn), ("self_norm", &st.self_norm), ("ffn_norm", &st.ffn_norm), ("ffn_up", &st.ffn_up), ("ffn_down", &st.ffn_down)] {
+                name(&format!("{which}.{what}"), v)?;
+            }
+            if decoder {
+                name("dec.cross_attn", &st.cross_attn)?;
+                name("dec.cross_norm", &st.cross_norm)?;
+            }
+            if st.ffn_gate.is_some() != self.gated {
+                return Err(bad(format!("names.{which}.ffn_gate is {} but gated is {}", st.ffn_gate.is_some(), self.gated)));
+            }
+            if let Some(g) = &st.ffn_gate {
+                name(&format!("{which}.ffn_gate"), g)?;
+            }
+            for (what, flag, v) in [("embed_norm", self.embed_norm, &st.embed_norm), ("final_norm", self.final_norm, &st.final_norm)] {
+                match (flag, v) {
+                    (true, Some(v)) => name(&format!("{which}.{what}"), v)?,
+                    (true, None) => return Err(bad(format!("{what} is set but names.{which}.{what} is not given"))),
+                    _ => {}
+                }
+            }
+            match (&self.positions, &st.positions, &st.rel_bias) {
+                (Positions::Learned { .. }, Some(p), _) => name(&format!("{which}.positions"), p)?,
+                (Positions::Learned { .. }, None, _) => return Err(bad(format!("learned positions need names.{which}.positions"))),
+                (Positions::Sinusoidal { .. }, Some(p), _) => name(&format!("{which}.positions"), p)?,
+                (Positions::Sinusoidal { .. }, None, _) => {}
+                (Positions::Relative { .. }, _, Some(r)) => name(&format!("{which}.rel_bias"), r)?,
+                (Positions::Relative { .. }, _, None) => return Err(bad(format!("relative positions need names.{which}.rel_bias"))),
+            }
+        }
+        if self.logits_bias {
+            name("logits_bias", n.logits_bias.as_deref().unwrap_or(""))?;
+        }
+        if !n.lm_head.is_empty() {
+            name("lm_head", &n.lm_head)?;
+        }
+        if n.ignored.len() > 64 || n.ignored.iter().any(|p| p.len() > 512) {
+            return Err(bad("names.ignored: at most 64 prefixes of at most 512 bytes".into()));
+        }
+        Ok(())
+    }
+}
+
+/// An [`EncDecSpec`] from JSON (an adapter's instantiated `spec`), validated.
+pub fn encdec_spec_from_value(v: Value) -> Result<EncDecSpec> {
+    let s: EncDecSpec = serde_json::from_value(v).map_err(|e| LowerError::bad(format!("an invalid {ENCDEC_SPEC_SCHEMA_V1}: {e}")))?;
+    s.validate()?;
+    Ok(s)
 }
 
 fn get_usize(v: &Value, k: &str) -> Option<usize> {
     v.get(k).and_then(Value::as_u64).map(|x| x as usize)
 }
 
-/// Parse a Hugging Face `config.json` of a sequence-to-sequence model.
+/// Parse a Hugging Face `config.json` of a sequence-to-sequence model: the Rust reader of five families
+/// (T5/mT5, BART, mBART, Marian, Pegasus), kept as the oracle of the data adapters of kind `encdec`.
 pub fn parse_encdec(config: &str) -> Result<EncDecSpec> {
+    let s = parse_encdec_raw(config)?;
+    s.validate()?;
+    Ok(s)
+}
+
+fn parse_encdec_raw(config: &str) -> Result<EncDecSpec> {
     let root: Value = serde_json::from_str(config).map_err(|e| LowerError::bad(format!("config.json: {e}")))?;
     let arch = root
         .get("architectures")
@@ -166,7 +300,6 @@ pub fn parse_encdec(config: &str) -> Result<EncDecSpec> {
             let dkv = need("d_kv")?;
             Ok(EncDecSpec {
                 architecture: arch.clone(),
-                family: Family::T5,
                 vocab,
                 d,
                 enc_layers: layers,
@@ -194,6 +327,7 @@ pub fn parse_encdec(config: &str) -> Result<EncDecSpec> {
                 head_scale: if scale_out { crate::detmath::powf(d as f64, -0.5) } else { 1.0 },
                 logits_bias: false,
                 decoder_start: start,
+                names: family_names(Family::T5, gated),
             })
         }
         "BartForConditionalGeneration" | "MBartForConditionalGeneration" | "MarianMTModel" | "PegasusForConditionalGeneration" => {
@@ -224,7 +358,6 @@ pub fn parse_encdec(config: &str) -> Result<EncDecSpec> {
             let (enc_head_dim, dec_head_dim) = (d / enc_heads, d / dec_heads);
             Ok(EncDecSpec {
                 architecture: arch.clone(),
-                family,
                 vocab,
                 d,
                 enc_layers: need("encoder_layers")?,
@@ -249,6 +382,7 @@ pub fn parse_encdec(config: &str) -> Result<EncDecSpec> {
                 head_scale: 1.0,
                 logits_bias: true,
                 decoder_start: start,
+                names: family_names(family, false),
             })
         }
         other => Err(LowerError::not_lowerable(format!("`{other}` is not an encoder-decoder this lowerer models"))),
@@ -290,27 +424,145 @@ pub fn sinusoid(rows: usize, d: usize) -> Vec<f32> {
     v
 }
 
+// ───────────────────────────── the checkpoint's names (data) ─────────────────────────────
+
+/// Where one stack's tensors live in a checkpoint, as the adapter states it — everything the per-family Rust
+/// tables used to hold (`ENCDEC_FROM_SPEC_V1`, `docs/design/palw/tir/frontend-as-data-v1.md` §3). Module names
+/// are appended to `layer` (inside a layer) or to `prefix` (outside the layers).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StackNames {
+    /// The prefix of the stack's tensors outside the layers (`encoder.`, `model.decoder.`).
+    pub prefix: String,
+    /// A layer's prefix, with `{L}` (`encoder.block.{L}.`, `model.encoder.layers.{L}.`).
+    pub layer: String,
+    /// The self-attention module and its norm, under the layer prefix.
+    pub self_attn: String,
+    pub self_norm: String,
+    /// The decoder's cross-attention module and its norm (empty in an encoder).
+    #[serde(default)]
+    pub cross_attn: String,
+    #[serde(default)]
+    pub cross_norm: String,
+    /// The FFN's norm and projections: full paths under the layer prefix (`layer.1.DenseReluDense.wi_1`, `fc1`).
+    pub ffn_norm: String,
+    pub ffn_up: String,
+    pub ffn_down: String,
+    /// The gate projection of a gated FFN (`act(gate·x) ⊙ (up·x)`).
+    #[serde(default)]
+    pub ffn_gate: Option<String>,
+    /// `layernorm_embedding`, the final norm and the absolute-position table: modules under `prefix`.
+    #[serde(default)]
+    pub embed_norm: Option<String>,
+    #[serde(default)]
+    pub final_norm: Option<String>,
+    #[serde(default)]
+    pub positions: Option<String>,
+    /// T5's relative-position bias table: the tensor's name under layer 0's prefix.
+    #[serde(default)]
+    pub rel_bias: Option<String>,
+}
+
+/// The checkpoint's tensor names for both stacks: the data the five hard-wired families carried as Rust.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EncDecNames {
+    /// The shared token-embedding table.
+    pub shared: String,
+    /// `[q, k, v, o]` projection modules inside an attention module (both stacks, self- and cross-attention).
+    pub qkvo: [String; 4],
+    pub enc: StackNames,
+    pub dec: StackNames,
+    /// The decoder's output head when the checkpoint has one of its own (else the shared table is the head).
+    #[serde(default)]
+    pub lm_head: String,
+    /// `final_logits_bias` (the BART family): its tensor.
+    #[serde(default)]
+    pub logits_bias: Option<String>,
+    /// Tensor-name prefixes neither stage reads by design: the per-stack copies of the shared table (older
+    /// checkpoints save them), T5's unused cross-attention bias, a sinusoid table the lowering computes.
+    #[serde(default)]
+    pub ignored: Vec<String>,
+}
+
+/// The names of a family the Rust reader ([`parse_encdec`]) knows — the oracle of the adapters that say the
+/// same in data (`tests/encdec_adapters.rs`).
+pub fn family_names(family: Family, gated: bool) -> EncDecNames {
+    let strs = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    match family {
+        Family::T5 => {
+            let stack = |decoder: bool| {
+                let (prefix, layer) = if decoder { ("decoder.", "decoder.block.{L}.") } else { ("encoder.", "encoder.block.{L}.") };
+                let ffn = if decoder { "layer.2.DenseReluDense" } else { "layer.1.DenseReluDense" };
+                StackNames {
+                    prefix: prefix.into(),
+                    layer: layer.into(),
+                    self_attn: "layer.0.SelfAttention".into(),
+                    self_norm: "layer.0.layer_norm".into(),
+                    cross_attn: if decoder { "layer.1.EncDecAttention".into() } else { String::new() },
+                    cross_norm: if decoder { "layer.1.layer_norm".into() } else { String::new() },
+                    ffn_norm: if decoder { "layer.2.layer_norm".into() } else { "layer.1.layer_norm".into() },
+                    ffn_up: if gated { format!("{ffn}.wi_1") } else { format!("{ffn}.wi") },
+                    ffn_down: format!("{ffn}.wo"),
+                    ffn_gate: gated.then(|| format!("{ffn}.wi_0")),
+                    embed_norm: None,
+                    final_norm: Some("final_layer_norm".into()),
+                    positions: None,
+                    rel_bias: Some("layer.0.SelfAttention.relative_attention_bias.weight".into()),
+                }
+            };
+            EncDecNames {
+                shared: "shared.weight".into(),
+                qkvo: ["q", "k", "v", "o"].map(String::from),
+                enc: stack(false),
+                dec: stack(true),
+                lm_head: "lm_head.weight".into(),
+                logits_bias: None,
+                ignored: strs(&["encoder.embed_tokens.", "decoder.embed_tokens.", "decoder.block.0.layer.1.EncDecAttention.relative_attention_bias."]),
+            }
+        }
+        Family::Bart | Family::MBart | Family::Marian | Family::Pegasus => {
+            let stack = |decoder: bool| {
+                let (prefix, layer) = if decoder { ("model.decoder.", "model.decoder.layers.{L}.") } else { ("model.encoder.", "model.encoder.layers.{L}.") };
+                StackNames {
+                    prefix: prefix.into(),
+                    layer: layer.into(),
+                    self_attn: "self_attn".into(),
+                    self_norm: "self_attn_layer_norm".into(),
+                    cross_attn: if decoder { "encoder_attn".into() } else { String::new() },
+                    cross_norm: if decoder { "encoder_attn_layer_norm".into() } else { String::new() },
+                    ffn_norm: "final_layer_norm".into(),
+                    ffn_up: "fc1".into(),
+                    ffn_down: "fc2".into(),
+                    ffn_gate: None,
+                    embed_norm: Some("layernorm_embedding".into()),
+                    final_norm: Some("layer_norm".into()),
+                    positions: Some("embed_positions".into()),
+                    rel_bias: None,
+                }
+            };
+            let ignored: &[&str] = if family == Family::Marian {
+                &["model.encoder.embed_tokens.", "model.decoder.embed_tokens.", "model.encoder.embed_positions.", "model.decoder.embed_positions."]
+            } else {
+                &["model.encoder.embed_tokens.", "model.decoder.embed_tokens."]
+            };
+            EncDecNames {
+                shared: "model.shared.weight".into(),
+                qkvo: ["q_proj", "k_proj", "v_proj", "out_proj"].map(String::from),
+                enc: stack(false),
+                dec: stack(true),
+                lm_head: "lm_head.weight".into(),
+                logits_bias: Some("final_logits_bias".into()),
+                ignored: strs(ignored),
+            }
+        }
+    }
+}
+
 // ───────────────────────────── params ─────────────────────────────
 
 type Table = Vec<(String, Vec<usize>, bool, Src)>;
 
-/// Checkpoint names by role.
-struct Names {
-    shared: String,
-    /// Per stack (`"encoder"` / `"decoder"`): the layer prefix with `{L}`.
-    enc_layer: String,
-    dec_layer: String,
-}
-
-fn names(s: &EncDecSpec) -> Names {
-    match s.family {
-        Family::T5 => Names { shared: "shared.weight".into(), enc_layer: "encoder.block.{L}.".into(), dec_layer: "decoder.block.{L}.".into() },
-        _ => Names {
-            shared: "model.shared.weight".into(),
-            enc_layer: "model.encoder.layers.{L}.".into(),
-            dec_layer: "model.decoder.layers.{L}.".into(),
-        },
-    }
+fn stack_names(s: &EncDecSpec, decoder: bool) -> &StackNames {
+    if decoder { &s.names.dec } else { &s.names.enc }
 }
 
 fn push_lin(v: &mut Table, name: &str, ck: &str, out: usize, inp: usize, bias: bool, pl: bool) {
@@ -327,85 +579,40 @@ fn push_norm(v: &mut Table, name: &str, ck: &str, d: usize, bias: bool, pl: bool
     }
 }
 
-/// Roles of a layer's sublayers in the checkpoint: `(self-attention, its norm, cross-attention, its
-/// norm, FFN, its norm)` under the layer prefix.
-fn sublayers(s: &EncDecSpec, decoder: bool) -> [&'static str; 6] {
-    match (s.family, decoder) {
-        (Family::T5, false) => ["layer.0.SelfAttention", "layer.0.layer_norm", "", "", "layer.1.DenseReluDense", "layer.1.layer_norm"],
-        (Family::T5, true) => [
-            "layer.0.SelfAttention",
-            "layer.0.layer_norm",
-            "layer.1.EncDecAttention",
-            "layer.1.layer_norm",
-            "layer.2.DenseReluDense",
-            "layer.2.layer_norm",
-        ],
-        (_, _) => ["self_attn", "self_attn_layer_norm", "encoder_attn", "encoder_attn_layer_norm", "", "final_layer_norm"],
-    }
-}
-
-/// `(q, k, v, o)` projection names of an attention module.
-fn qkvo(s: &EncDecSpec) -> [&'static str; 4] {
-    match s.family {
-        Family::T5 => ["q", "k", "v", "o"],
-        _ => ["q_proj", "k_proj", "v_proj", "out_proj"],
-    }
-}
-
-fn push_ffn(v: &mut Table, s: &EncDecSpec, lp: &str, ffn_role: &str, inter: usize) {
+/// An FFN's params: the gate (when gated), the up and the down projection, in that order.
+fn push_ffn(v: &mut Table, s: &EncDecSpec, lp: &str, st: &StackNames, inter: usize) {
     let d = s.d;
-    match s.family {
-        Family::T5 => {
-            if s.gated {
-                push_lin(v, "mlp.gate", &format!("{lp}{ffn_role}.wi_0"), inter, d, false, true);
-                push_lin(v, "mlp.up", &format!("{lp}{ffn_role}.wi_1"), inter, d, false, true);
-            } else {
-                push_lin(v, "mlp.up", &format!("{lp}{ffn_role}.wi"), inter, d, false, true);
-            }
-            push_lin(v, "mlp.down", &format!("{lp}{ffn_role}.wo"), d, inter, false, true);
-        }
-        _ => {
-            push_lin(v, "mlp.up", &format!("{lp}fc1"), inter, d, true, true);
-            push_lin(v, "mlp.down", &format!("{lp}fc2"), d, inter, true, true);
-        }
+    if let Some(g) = &st.ffn_gate {
+        push_lin(v, "mlp.gate", &format!("{lp}{g}"), inter, d, s.bias, true);
     }
-}
-
-/// The stack's global prefix for embedding-side tensors (`model.encoder.`).
-fn stack_prefix(s: &EncDecSpec, decoder: bool) -> String {
-    match (s.family, decoder) {
-        (Family::T5, false) => "encoder.".into(),
-        (Family::T5, true) => "decoder.".into(),
-        (_, false) => "model.encoder.".into(),
-        (_, true) => "model.decoder.".into(),
-    }
+    push_lin(v, "mlp.up", &format!("{lp}{}", st.ffn_up), inter, d, s.bias, true);
+    push_lin(v, "mlp.down", &format!("{lp}{}", st.ffn_down), d, inter, s.bias, true);
 }
 
 /// The embedding-side params of a stack: table, positions (when read from the checkpoint), T5's
 /// relative bias, `layernorm_embedding`.
 fn push_embedding(v: &mut Table, s: &EncDecSpec, decoder: bool, has: &dyn Fn(&str) -> bool) {
-    let n = names(s);
-    let sp = stack_prefix(s, decoder);
-    v.push(("embed.table".into(), vec![s.vocab, s.d], false, Src::t(n.shared.clone())));
+    let st = stack_names(s, decoder);
+    v.push(("embed.table".into(), vec![s.vocab, s.d], false, Src::t(s.names.shared.clone())));
+    let positions = || format!("{}{}.weight", st.prefix, st.positions.as_deref().unwrap_or_default());
     match &s.positions {
         Positions::Learned { rows, .. } => {
-            v.push(("embed.pos_table".into(), vec![*rows, s.d], false, Src::t(format!("{sp}embed_positions.weight"))));
+            v.push(("embed.pos_table".into(), vec![*rows, s.d], false, Src::t(positions())));
         }
         Positions::Sinusoidal { rows } => {
-            let t = format!("{sp}embed_positions.weight");
+            let t = positions();
             if has(&t) {
                 v.push(("embed.pos_table".into(), vec![*rows, s.d], false, Src::t(t)));
             }
         }
         Positions::Relative { buckets, .. } => {
             let heads = if decoder { s.dec_heads } else { s.enc_heads };
-            let lp = if decoder { &n.dec_layer } else { &n.enc_layer };
-            let t = format!("{}layer.0.SelfAttention.relative_attention_bias.weight", lp.replace("{L}", "0"));
+            let t = format!("{}{}", st.layer.replace("{L}", "0"), st.rel_bias.as_deref().unwrap_or_default());
             v.push(("attn.rel_bias".into(), vec![*buckets, heads], false, Src::t(t)));
         }
     }
     if s.embed_norm {
-        push_norm(v, "embed.norm", &format!("{sp}layernorm_embedding"), s.d, true, false);
+        push_norm(v, "embed.norm", &format!("{}{}", st.prefix, st.embed_norm.as_deref().unwrap_or_default()), s.d, true, false);
     }
 }
 
@@ -413,64 +620,66 @@ fn push_final(v: &mut Table, s: &EncDecSpec, decoder: bool) {
     if !s.final_norm {
         return;
     }
-    let sp = stack_prefix(s, decoder);
-    let ck = if s.family == Family::T5 { format!("{sp}final_layer_norm") } else { format!("{sp}layer_norm") };
+    let st = stack_names(s, decoder);
+    let ck = format!("{}{}", st.prefix, st.final_norm.as_deref().unwrap_or_default());
     push_norm(v, "final", &ck, s.d, s.bias, false);
 }
 
 /// The encoder program's params: its own, and the decoder layers' cross-attention `k`/`v`
 /// projections stacked `[D·inner, d]`.
 fn encoder_table(s: &EncDecSpec, has: &dyn Fn(&str) -> bool) -> Table {
-    let n = names(s);
     let mut v = Table::new();
     push_embedding(&mut v, s, false, has);
-    let [sa, sn, _, _, ffn, fnorm] = sublayers(s, false);
-    let [q, k, vv, o] = qkvo(s);
-    let lp = &n.enc_layer;
+    let st = &s.names.enc;
+    let [q, k, vv, o] = &s.names.qkvo;
+    let lp = &st.layer;
     let (d, inner) = (s.d, s.enc_inner());
-    push_norm(&mut v, "norm.self", &format!("{lp}{sn}"), d, s.bias, true);
-    push_lin(&mut v, "attn.q", &format!("{lp}{sa}.{q}"), inner, d, s.bias, true);
-    push_lin(&mut v, "attn.k", &format!("{lp}{sa}.{k}"), inner, d, s.bias, true);
-    push_lin(&mut v, "attn.v", &format!("{lp}{sa}.{vv}"), inner, d, s.bias, true);
-    push_lin(&mut v, "attn.o", &format!("{lp}{sa}.{o}"), d, inner, s.bias, true);
-    push_norm(&mut v, "norm.ffn", &format!("{lp}{fnorm}"), d, s.bias, true);
-    push_ffn(&mut v, s, lp, ffn, s.enc_ffn);
+    push_norm(&mut v, "norm.self", &format!("{lp}{}", st.self_norm), d, s.bias, true);
+    push_lin(&mut v, "attn.q", &format!("{lp}{}.{q}", st.self_attn), inner, d, s.bias, true);
+    push_lin(&mut v, "attn.k", &format!("{lp}{}.{k}", st.self_attn), inner, d, s.bias, true);
+    push_lin(&mut v, "attn.v", &format!("{lp}{}.{vv}", st.self_attn), inner, d, s.bias, true);
+    push_lin(&mut v, "attn.o", &format!("{lp}{}.{o}", st.self_attn), d, inner, s.bias, true);
+    push_norm(&mut v, "norm.ffn", &format!("{lp}{}", st.ffn_norm), d, s.bias, true);
+    push_ffn(&mut v, s, lp, st, s.enc_ffn);
     push_final(&mut v, s, false);
-    let [_, _, ca, _, _, _] = sublayers(s, true);
-    let dl = n.dec_layer.replace("{L}", "{E}");
+    let dst = &s.names.dec;
+    let dl = dst.layer.replace("{L}", "{E}");
     let (dn, di) = (s.dec_layers, s.dec_inner());
     for (role, proj) in [("xkv.k", k), ("xkv.v", vv)] {
-        v.push((format!("{role}.w"), vec![dn * di, d], false, Src::t(format!("{dl}{ca}.{proj}.weight")).stack('E', dn).reshape(vec![dn * di, d])));
+        let w = Src::t(format!("{dl}{}.{proj}.weight", dst.cross_attn)).stack('E', dn).reshape(vec![dn * di, d]);
+        v.push((format!("{role}.w"), vec![dn * di, d], false, w));
         if s.bias {
-            v.push((format!("{role}.b"), vec![dn * di], false, Src::t(format!("{dl}{ca}.{proj}.bias")).stack('E', dn).reshape(vec![dn * di])));
+            let b = Src::t(format!("{dl}{}.{proj}.bias", dst.cross_attn)).stack('E', dn).reshape(vec![dn * di]);
+            v.push((format!("{role}.b"), vec![dn * di], false, b));
         }
     }
     v
 }
 
 fn decoder_table(s: &EncDecSpec, has: &dyn Fn(&str) -> bool) -> Table {
-    let n = names(s);
     let mut v = Table::new();
     push_embedding(&mut v, s, true, has);
-    let [sa, sn, ca, cn, ffn, fnorm] = sublayers(s, true);
-    let [q, k, vv, o] = qkvo(s);
-    let lp = &n.dec_layer;
+    let st = &s.names.dec;
+    let [q, k, vv, o] = &s.names.qkvo;
+    let lp = &st.layer;
     let (d, inner) = (s.d, s.dec_inner());
-    push_norm(&mut v, "norm.self", &format!("{lp}{sn}"), d, s.bias, true);
-    push_lin(&mut v, "attn.q", &format!("{lp}{sa}.{q}"), inner, d, s.bias, true);
-    push_lin(&mut v, "attn.k", &format!("{lp}{sa}.{k}"), inner, d, s.bias, true);
-    push_lin(&mut v, "attn.v", &format!("{lp}{sa}.{vv}"), inner, d, s.bias, true);
-    push_lin(&mut v, "attn.o", &format!("{lp}{sa}.{o}"), d, inner, s.bias, true);
-    push_norm(&mut v, "norm.cross", &format!("{lp}{cn}"), d, s.bias, true);
-    push_lin(&mut v, "xattn.q", &format!("{lp}{ca}.{q}"), inner, d, s.bias, true);
-    push_lin(&mut v, "xattn.o", &format!("{lp}{ca}.{o}"), d, inner, s.bias, true);
-    push_norm(&mut v, "norm.ffn", &format!("{lp}{fnorm}"), d, s.bias, true);
-    push_ffn(&mut v, s, lp, ffn, s.dec_ffn);
+    push_norm(&mut v, "norm.self", &format!("{lp}{}", st.self_norm), d, s.bias, true);
+    push_lin(&mut v, "attn.q", &format!("{lp}{}.{q}", st.self_attn), inner, d, s.bias, true);
+    push_lin(&mut v, "attn.k", &format!("{lp}{}.{k}", st.self_attn), inner, d, s.bias, true);
+    push_lin(&mut v, "attn.v", &format!("{lp}{}.{vv}", st.self_attn), inner, d, s.bias, true);
+    push_lin(&mut v, "attn.o", &format!("{lp}{}.{o}", st.self_attn), d, inner, s.bias, true);
+    push_norm(&mut v, "norm.cross", &format!("{lp}{}", st.cross_norm), d, s.bias, true);
+    push_lin(&mut v, "xattn.q", &format!("{lp}{}.{q}", st.cross_attn), inner, d, s.bias, true);
+    push_lin(&mut v, "xattn.o", &format!("{lp}{}.{o}", st.cross_attn), d, inner, s.bias, true);
+    push_norm(&mut v, "norm.ffn", &format!("{lp}{}", st.ffn_norm), d, s.bias, true);
+    push_ffn(&mut v, s, lp, st, s.dec_ffn);
     push_final(&mut v, s, true);
-    let head = if has("lm_head.weight") { "lm_head.weight".to_string() } else { n.shared.clone() };
+    let own_head = !s.names.lm_head.is_empty() && has(&s.names.lm_head);
+    let head = if own_head { s.names.lm_head.clone() } else { s.names.shared.clone() };
     v.push(("head.w".into(), vec![s.vocab, d], false, Src::t(head)));
     if s.logits_bias {
-        v.push(("head.b".into(), vec![s.vocab], false, Src::t("final_logits_bias").reshape(vec![s.vocab])));
+        let b = Src::t(s.names.logits_bias.clone().unwrap_or_default()).reshape(vec![s.vocab]);
+        v.push(("head.b".into(), vec![s.vocab], false, b));
     }
     v
 }
@@ -521,20 +730,8 @@ fn synth(s: &EncDecSpec, name: &str, table: Table, layers: usize, rows: usize, p
         layer_of: (0..layers).collect(),
     };
     hl.validate().map_err(|e| LowerError::eval(format!("internal: the {name}'s HL program: {e}")))?;
-    let binding = Binding { srcs: table.into_iter().map(|(_, _, _, src)| src).collect(), aliases: vec![], ignored_prefixes: ignored(s) };
+    let binding = Binding { srcs: table.into_iter().map(|(_, _, _, src)| src).collect(), aliases: vec![], ignored_prefixes: s.names.ignored.clone() };
     Ok((hl, binding))
-}
-
-/// Checkpoint tensors neither stage reads by design: the per-stack copies of the shared table
-/// (older checkpoints save them), T5's unused cross-attention bias, and a sinusoid table the
-/// lowering computes.
-fn ignored(s: &EncDecSpec) -> Vec<String> {
-    let v: &[&str] = match s.family {
-        Family::T5 => &["encoder.embed_tokens.", "decoder.embed_tokens.", "decoder.block.0.layer.1.EncDecAttention.relative_attention_bias."],
-        Family::Marian => &["model.encoder.embed_tokens.", "model.decoder.embed_tokens.", "model.encoder.embed_positions.", "model.decoder.embed_positions."],
-        _ => &["model.encoder.embed_tokens.", "model.decoder.embed_tokens."],
-    };
-    v.iter().map(|x| x.to_string()).collect()
 }
 
 /// The two stages' HL programs and bindings: `(encoder, decoder)`. `has` answers whether the

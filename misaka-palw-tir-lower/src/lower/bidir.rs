@@ -19,7 +19,7 @@
 
 use super::*;
 use crate::float_ref::{ParamStore, SiteStat};
-use crate::spec::{ArchSpec, Ffn, Mixer, NormSpec, Residual};
+use crate::spec::{ArchSpec, Ffn, Mixer, NormSpec, Position, Residual};
 
 /// How the class pools the token rows into one vector (sentence-transformers' pooling modes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +70,33 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
     }
     if !(at.q_bias && at.k_bias && at.v_bias && at.o_bias) {
         return bad("attention without biases");
+    }
+    // FR-26: a field this lowering never reads must be at the value it assumes — otherwise an adapter that sets it
+    // (a RoPE encoder: ModernBERT, nomic-BERT, jina-v3, EuroBERT) lowers to a WRONG program with no error.
+    if !matches!(at.position, Position::None) {
+        return bad("attention with a positional term of its own (RoPE, ALiBi): this lowering reads learned positions only");
+    }
+    if at.softcap.is_some()
+        || at.clip_qkv.is_some()
+        || at.chunk.is_some()
+        || at.q_temperature.is_some()
+        || at.v_norm.is_some()
+        || at.v_from_k
+        || at.output_gate
+        || at.kv_share.is_some()
+        || at.sparse.is_some()
+        || at.param_prefix.is_some()
+    {
+        return bad("an attention feature (soft-cap, q/k/v clipping, chunks, temperature, v-norm, gate, KV sharing, sparse blocks) this lowering does not read");
+    }
+    if spec.final_norm.is_some() {
+        return bad("a final norm: this lowering ends at the last layer's post-LN");
+    }
+    if spec.hyper.is_some() {
+        return bad("hyper-connection residual streams");
+    }
+    if spec.embedding.proj_in || spec.embedding.dim != spec.hidden_size || spec.embedding.scale != 1.0 {
+        return bad("an embedding of another width than the hidden size (a factorised embedding with its projection) or an embedding scale: this lowering reads the plain BERT embedding");
     }
     let Ffn::Mlp(mlp) = &first.ffn else { return bad("an FFN other than a plain MLP") };
     if mlp.gated || !(mlp.up_bias && mlp.down_bias) {

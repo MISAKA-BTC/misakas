@@ -241,7 +241,7 @@ a new adapter (a data file) over existing HL ops unless stated):
 | `Llama4ForCausalLM`/`…ConditionalGeneration` | chunked attention (a new window shape), NoPE layers with attention temperature tuning, Llama-4 MoE — needs a `chunked` Hist read |
 | `Gemma3nForConditionalGeneration` | AltUp, Laurel, per-layer embeddings, activation sparsity (a top-k-by-value gate) |
 | `Glm4ForCausalLM`, `GlmForCausalLM`, `Glm4MoeForCausalLM`, ChatGLM (remote) | not modelled yet; GLM-4.5 is DeepSeek-V3-style routing with partial rope — mostly existing ops |
-| `Olmo3ForCausalLM`, `GraniteMoeHybridForCausalLM`, `NemotronHForCausalLM`, `FalconH1ForCausalLM`, `Zamba2ForCausalLM`, `BambaForCausalLM` | hybrids of existing ops (Mamba2 + attention); config parsers not written; Falcon-H1 adds µP multipliers |
+| `Olmo3ForCausalLM`, `NemotronHForCausalLM`, `FalconH1ForCausalLM`, `Zamba2ForCausalLM`, `BambaForCausalLM` | hybrids of existing ops (Mamba2 + attention); config parsers not written; Falcon-H1 adds µP multipliers |
 | `PhimoeForCausalLM` | sparsemixer routing (a second top-1 over a masked, jittered distribution) |
 | `DbrxForCausalLM`, `JetMoeForCausalLM`, `Ernie4_5*`, `HunYuan*`, `MiniMax*`, `Lfm2*`, `RecurrentGemma`, `xLSTM`, `DiffLlama`, `BitNet`, … | long tail; each needs its parser, some a new op (xLSTM's exponential gating, BitNet's ternary weights) |
 | `Rwkv5ForCausalLM`, `Rwkv6ForCausalLM` (remote), `RWKV7ForCausalLM` (flash-linear-attention) | not in transformers 5.17: the group-norm eps, rescale and LoRA widths cannot be checked offline. The **recurrences are HL ops** (`Wkv6` covers RWKV-5/6 with a per-channel decay, `Wkv7` the RWKV-7 generalised delta rule), tested against their closed forms |
@@ -1338,6 +1338,16 @@ lowering's and the three implementations agree.
 | reference ↔ ref2 ↔ exec | logits and every commit point equal, all fixtures |
 | court | the demand evaluator reproduces every node of every occurrence from the committed leaves alone, with `Fixed` state replayed between checkpoints, and the dissection arithmetic of every reduction over `H`; all **25** primitives are evaluated |
 | admission (`tir_admit_v1`) | admitted: largest block 450 nodes (NF-12: 512), 6–9 blocks, worst court terminal 4,096 MACs (16,384 at 512 experts) |
+| the published shape (2048 wide, 40 layers, 512 experts of top 10, 4 streams, 16 hash heads of 20 M rows; declared, never instantiated: peak 23 MB) | lowers to 9 blocks, largest 450 nodes, the PLE block 196; every head's table takes two chunks (`[16, 2^24, 128]` and `[16, 3,225,183, 128]`); admitted at the legacy court ceilings (187 cones, cone work 6,120, 131,318 step leaves, 2.5e10 MACs a position) |
+| the in-program hash at that scale | equal to the reference function on random tokens at a vocabulary of 248,320 and head tables of 20 M rows, through the range analysis (`lower::generic::tests`) — the function alone, never the table |
+| robustness | 1,378 single-key mutations of two configs (a key deleted, or set to a null, 0, 1, 2, 3, 7, 65, −1, a float, a boolean, a string, a list): no panic, 710 lowered, the rest refused by name; 45 hostile huge numbers in the keys that size a feature: 40 refused before anything is sized on them, none allocates |
+
+**Hardening this found.** A mutated config reached an 85 GB allocation through `head_dim = 10^12` (the rope's
+frequency vector) and `hc_count = 10^12` (the stream repeat): rotary dimensions past 4,096 are refused, as are
+more than 64 streams, more than 1,024 hash heads, a convolution past 64 taps or 4,096 rows and a block-key matrix
+past 2^27 elements; a zero-tap convolution and a hash base of 0 were panics and are refusals now. The test binary
+runs under an allocator that aborts on one allocation over 512 MiB, its mutants are small numbers, and each is sized
+by arithmetic over what it declares.
 
 **Limits found.**
 - The PLE table of a real checkpoint (hundreds of millions of rows × `dim` × the PLE layers) is

@@ -10,7 +10,6 @@
     {"architectures": ["ChatGLMModel", "ChatGLMForConditionalGeneration"], "missing": ["REFERENCE_REMOTE_CODE_V1"], "why": "ChatGLM remote code is not modelled"},
     {"architectures": ["CodeGenForCausalLM"], "missing": ["WEIGHTS_QKV_MP_PARTITIONED_V1"], "why": "CodeGen's mp_num-partitioned qkv layout is not modelled"},
     {"architectures": ["MiniCPM3ForCausalLM"], "missing": ["REFERENCE_REMOTE_CODE_V1", "SCALE_MUP_V1"], "why": "MiniCPM3 (MLA + muP remote code) is not modelled yet"},
-    {"architectures": ["GraniteMoeHybridForCausalLM"], "missing": ["MIXER_LAYER_PATTERN_HYBRID_V1"], "why": "Granite-4 hybrid (Mamba2 + attention + MoE per layer) is not modelled yet"},
     {"architectures": ["NemotronHForCausalLM"], "missing": ["LAYER_FFN_ONLY_V1"], "why": "Nemotron-H hybrid (single-block layers: Mamba2, attention, MLP or MoE) is not modelled yet"},
     {"architectures": ["FalconH1ForCausalLM"], "missing": ["MIXER_PARALLEL_BRANCH_V1", "SCALE_MUP_V1"], "why": "Falcon-H1 hybrid (attention and Mamba2 in parallel, muP multipliers) is not modelled yet"},
     {"architectures": ["Zamba2ForCausalLM"], "missing": ["ATTN_SHARED_BLOCK_V1"], "why": "Zamba2 shared-attention hybrid is not modelled yet"},

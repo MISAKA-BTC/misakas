@@ -3229,12 +3229,36 @@ fn lower_route(
     if r.scoring == Scoring::SparseMixer {
         return Ok(lower_sparsemixer(b, l.r, experts, r.jitter_eps, up));
     }
+    // The per-expert selection bias (DeepSeek-V3's and ERNIE-4.5's `e_score_correction_bias`) as a Q24 param, added
+    // to the scores the selection RANKS (never to the weights).
+    let biased = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, scores: tir::Ref| -> Result<tir::Ref> {
+        match sel_bias {
+            Some(bp) => {
+                let bias = decl(
+                    b,
+                    cx,
+                    lb,
+                    &format!("{site}.sel_bias"),
+                    DType::I32,
+                    &[experts],
+                    per_layer(lb),
+                    Arc::new(move |c| {
+                        Ok(IntTensor::i32(vec![experts], c.f(bp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))
+                    }),
+                )?;
+                Ok(b.selection_bias(scores, bias))
+            }
+            None => Ok(scores),
+        }
+    };
     // (scores the weights are read from, choice scores the selection ranks, the value a masked
     // expert takes)
     let (scores, choice, fill): (tir::Ref, tir::Ref, i64) = match r.scoring {
         Scoring::Softmax => {
             let probs = b.softmax_shifted(l.r, up);
-            (probs, probs, 0)
+            let choice = biased(b, cx, lb, probs)?;
+            // A masked expert scores 0 under plain softmax; a bias can push a kept expert below 0.
+            (probs, choice, if sel_bias.is_some() { i32::MIN as i64 } else { 0 })
         }
         Scoring::TopKThenSoftmax | Scoring::TopKThenSigmoid | Scoring::SparseMixer => (l.r, l.r, i32::MIN as i64),
         Scoring::Sigmoid => {
@@ -3242,24 +3266,7 @@ fn lower_route(
             let y = b.mul(l.r, c, DType::I64);
             let y = b.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32);
             let sig = b.int_sigmoid(y);
-            let choice = match sel_bias {
-                Some(bp) => {
-                    let bias = decl(
-                        b,
-                        cx,
-                        lb,
-                        &format!("{site}.sel_bias"),
-                        DType::I32,
-                        &[experts],
-                        per_layer(lb),
-                        Arc::new(move |c| {
-                            Ok(IntTensor::i32(vec![experts], c.f(bp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))
-                        }),
-                    )?;
-                    b.selection_bias(sig, bias)
-                }
-                None => sig,
-            };
+            let choice = biased(b, cx, lb, sig)?;
             (sig, choice, i32::MIN as i64)
         }
     };
@@ -3574,6 +3581,11 @@ fn lower_conv(
     act: Option<Act>,
     site: &str,
 ) -> Result<Val> {
+    // A convolution has at least one tap, spaced at least one position apart (a config with none is a
+    // mistaken one, refused here rather than underflowing the window's length).
+    if kernel == 0 || dilation == 0 {
+        return Err(LowerError::bad(format!("a causal convolution of {kernel} taps dilated {dilation}")));
+    }
     let hl = cx.hl;
     let sd = &hl.states[st as usize];
     let ts = match cx.tstate.get(&st) {

@@ -19,6 +19,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub mod expr;
 mod remote;
 pub use remote::{MemoryFetcher, RangeFetcher, RemoteCheckpoint};
 #[cfg(feature = "remote")]
@@ -701,15 +702,26 @@ impl<'a> Resolver<'a> {
         self
     }
 
-    /// Tensors of the checkpoint the program never read (excluding the ignored prefixes).
+    /// Tensors of the checkpoint the program never read (excluding the ignored prefixes and the module
+    /// buffers older checkpoints save, [`is_module_buffer`]).
     pub fn untouched(&self) -> Vec<String> {
         let t = self.touched.borrow();
         self.names
             .iter()
-            .filter(|n| !t.contains(*n) && !self.ignored_prefixes.iter().any(|p| n.starts_with(p.as_str())))
+            .filter(|n| !t.contains(*n) && !is_module_buffer(n) && !self.ignored_prefixes.iter().any(|p| n.starts_with(p.as_str())))
             .cloned()
             .collect()
     }
+}
+
+/// A **buffer** of a module, not a parameter: rotary frequency tables and position-id ranges that older
+/// checkpoints saved (newer ones do not) and no forward pass reads as a weight. A tensor the reading does not use
+/// is a feature it may be missing (FR-26) — these are not. Any other buffer (a causal-mask table) is listed by
+/// the adapter that knows its family, in `ignored_prefixes`.
+pub fn is_module_buffer(name: &str) -> bool {
+    ["inv_freq", "cos_cached", "sin_cached", "position_ids"]
+        .iter()
+        .any(|b| name == *b || name.ends_with(&format!(".{b}")))
 }
 
 fn expand(template: &str, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<String> {
@@ -1066,6 +1078,21 @@ pub struct Binding {
     pub ignored_prefixes: Vec<String>,
 }
 
+/// The tail of a shape-mismatch message when `got` and `want` differ only by size-1 axes (a bias stored
+/// `[1, E]` where the graph wants `[E]`): the fix an adapter author can apply. Shapes are never coerced
+/// silently — an implicit squeeze would be the same class of defect as a dropped flag — so the message
+/// names the step instead (`WEIGHTS_EXPR_V1`).
+pub fn size_one_hint(param: &str, got: &[usize], want: &[usize]) -> String {
+    let core = |s: &[usize]| s.iter().copied().filter(|d| *d != 1).collect::<Vec<usize>>();
+    if got != want && core(got) == core(want) {
+        format!(
+            ": the shapes differ only by size-1 axes — add the step {{\"reshape\": \"param\"}} to the expression of `{param}` in the adapter's `spec.hf.weights`"
+        )
+    } else {
+        String::new()
+    }
+}
+
 /// A shape-only check of a checkpoint against a program.
 #[derive(Debug, Default)]
 pub struct WeightReport {
@@ -1085,10 +1112,11 @@ pub fn check_weights(prog: &HlProgram, binding: &Binding, source: &dyn TensorSou
             match src_shape(&binding.srcs[pi], &r, l, &none) {
                 Ok(s) if s == d.shape => rep.bound += 1,
                 Ok(s) => rep.errors.push(format!(
-                    "param `{}`{}: checkpoint gives {s:?}, graph needs {:?}",
+                    "param `{}`{}: checkpoint gives {s:?}, graph needs {:?}{}",
                     d.name,
                     l.map(|x| format!(" (layer {x})")).unwrap_or_default(),
-                    d.shape
+                    d.shape,
+                    size_one_hint(&d.name, &s, &d.shape)
                 )),
                 Err(e) => {
                     rep.errors.push(format!("param `{}`{}: {e}", d.name, l.map(|x| format!(" (layer {x})")).unwrap_or_default()))
