@@ -117,6 +117,8 @@ mod tir_court;
 mod tir_dissect;
 /// RFC-0003 (carriage node half): a tensor claim's seat replay and its one-move court.
 mod gen_court;
+/// RFC-0003 decision 22: the held leaf challenge filed from a node — a close past one carrier, declared and delivered in chunks.
+mod held_chunks;
 #[cfg(test)]
 mod tir_court_e2e;
 /// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
@@ -7179,6 +7181,9 @@ impl PalwPanelService {
         // carried after every dated item, by age. The reporter filer's items are dated by the filer
         // (`queued_dues_v1`, read after each of its passes).
         let mut court_due: HashMap<(Hash64, u32, bool), u64> = HashMap::new();
+        // RFC-0003 decision 22: the held leaf challenges this node is carrying — each a close past one carrier,
+        // declared (queued above) and delivered in chunks once its group stands (`held_chunks`).
+        let mut held_chunks: Vec<held_chunks::PalwHeldChunksV1> = Vec::new();
         // ADR-0152 R-3 (P2-8): every conviction this node files on its own evidence — commit, then the
         // evidence, then the reveal, through `court_pending` — persisted so a restart still reveals.
         let mut reporter_filer = reporter_filer::PalwReporterFilerV1::load(&self.config.state_dir);
@@ -7698,9 +7703,16 @@ impl PalwPanelService {
                         accused: &mut accused,
                         court_pending: &mut court_pending,
                         court_due: &mut court_due,
+                        held_chunks: &mut held_chunks,
                     },
                 )
                 .await;
+            }
+            // **RFC-0003 decision 22: the chunks of every held leaf challenge this node carries**, once a tick, beside
+            // the passes that file their declarations (the generative pass above; an IR pass hands its close to the
+            // same module).
+            if !held_chunks.is_empty() {
+                self.held_chunks_tick_v1(&session, bond_key, current_daa, &mut held_chunks, &mut court_pending, &mut court_due, &court_moved);
             }
 
             // --- the court's half: answer the disputes this bond is a party to ---

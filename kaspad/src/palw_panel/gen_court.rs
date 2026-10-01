@@ -18,8 +18,9 @@
 //!   accused capture rebuilt, this node's own run of the same inputs, the first leaf where their commitments
 //!   part (or, where the steps agree, the first output tile that is not its own step tile's), the close the court
 //!   convicts on there — checked as the chain derives it, from the class's row — signed over its session id and
-//!   queued as a `GenShardCourtAccused`. A close that does not fit one carrier is recorded and not filed (the
-//!   held leaf challenge, decision 22, files it once its fence is armed).
+//!   queued as a `GenShardCourtAccused`. A close that does not fit one carrier is filed as a held leaf challenge
+//!   (decision 22, [`super::held_chunks`]: a declaration, then the chunks) where `palw_held_close_chunks_v1` is
+//!   armed, and recorded, not filed, below it.
 //!
 //! **Logging (ADR-0079 SA-7):** nothing here logs prompt ids or image bytes; a refusal names the rule.
 
@@ -439,14 +440,33 @@ impl super::PalwPanelService {
             let Some(signature) = self.sign(session_id.as_byte_slice(), PALW_GEN_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1) else { continue };
             accusation.signature = signature;
             let object = PalwConsensusObjectV2::GenShardCourtAccused { accusation: Box::new(accusation) };
-            // One carrier: a close past it is the held leaf challenge's (decision 22), filed once its fence is armed.
+            // One carrier: a close past it is the held leaf challenge's (decision 22) — declared, then delivered in
+            // chunks (`held_chunks`) — where `palw_held_close_chunks_v1` is armed; below it the close is recorded, not
+            // filed (G24: the lie is licence-refused and not slashed, a recorded limitation).
             let bytes = borsh::to_vec(&object).map(|b| b.len()).unwrap_or(usize::MAX);
             if bytes > PALW_OBJECT_CHUNK_MAX_BYTES {
-                warn!(
-                    "[{PALW_PANEL}] tensor claim {}: its {label} close is {bytes} bytes, past one carrier ({PALW_OBJECT_CHUNK_MAX_BYTES}); \
-                     recorded, not filed — the held leaf challenge (palw_held_close_chunks_v1, decision 22) carries it",
-                    target.claim_id
-                );
+                let PalwConsensusObjectV2::GenShardCourtAccused { accusation } = object else { continue };
+                if self.consensus_config.params.palw_held_close_chunks_active_at(current_daa) {
+                    self.file_held_leaf_challenge_v1(
+                        session,
+                        &target,
+                        bond_key,
+                        leaf,
+                        accusation.proof,
+                        label,
+                        due,
+                        current_daa,
+                        &mut *books.held_chunks,
+                        &mut *books.court_pending,
+                        &mut *books.court_due,
+                    );
+                } else {
+                    warn!(
+                        "[{PALW_PANEL}] tensor claim {}: its {label} close is {bytes} bytes, past one carrier ({PALW_OBJECT_CHUNK_MAX_BYTES}); \
+                         recorded, not filed — the held leaf challenge (palw_held_close_chunks_v1, decision 22) carries it once armed",
+                        target.claim_id
+                    );
+                }
                 continue;
             }
             if let Err(why) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object) {
@@ -477,6 +497,9 @@ pub(super) struct PalwGenOneMoveBooksV1<'a> {
     pub accused: &'a mut HashSet<Hash64>,
     pub court_pending: &'a mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
     pub court_due: &'a mut HashMap<(Hash64, u32, bool), u64>,
+    /// The held leaf challenges this node carries (decision 22): a close past one carrier is declared and
+    /// delivered in chunks by [`super::held_chunks`].
+    pub held_chunks: &'a mut Vec<super::held_chunks::PalwHeldChunksV1>,
 }
 
 #[allow(dead_code)]

@@ -2981,8 +2981,18 @@ tile's, `gen_tensor_output_audit_v1`), the moves a challenger may file there (`g
 cone close, and at the output node's step tile the output close), the first of which the court convicts on **as the
 chain derives it** (`palw_gen_close_verdict_for_row_v1`: the court close's own grading from the class's row, the
 claim's class and its execution root), signed over its session id and queued as `GenShardCourtAccused`. Once per
-claim. A close past one carrier is recorded and not filed until the held leaf challenge (§15.15.6) is armed, and the
-node's filing of it follows its fence. Where bisection is played the ladder's prefix state is a node-side convention
+claim. **A close past one carrier** is filed, where `palw_held_close_chunks_v1` is armed, as the held leaf challenge of
+§15.15.6, and recorded, not filed, below it. The node cuts the court's close (`CourtClosed` over the session the
+challenge opens, verdict `ExecutorGuilty`) by the court's own cut (`PALW_COURT_CLOSE_CHUNK_MAX_BYTES`), refuses before a
+fee is spent a close the ruleset's court cannot carry (more chunks than `max_close_chunks`, or an assembly clock
+`4 · count` that does not end inside the court window), signs the challenge digest, and asks the fold what it makes of
+the declaration at the tip (`palw_object_rehearsal_v1`) before paying a carrier for it. The declaration rides the court
+queue at round 0 and chunk `i` at round `1 + i` (a session's items sort by round, so the carriers chain
+declaration-first), each chunk queued only once the chain's group names it missing and due by the group's assembly
+deadline; a node that restarts mid-assembly finds its group on the chain (same declarer, same close digest) and delivers
+what is missing. An entry leaves the node's books when its group is gone (the completing chunk applied the close, or the
+sweep convicted the declarer) or its declaration never landed. The same module serves an IR class's pass (a close it
+builds past one carrier is the same object). Where bisection is played the ladder's prefix state is a node-side convention
 both parties compute alike: `H64(key "misaka-palw/gen/bisect-prefix-state/v1", execution_root ‖ le64(index) ‖
 le64(take) ‖ the first take leaf hashes, stage-major)` with `take = min(index, leaf count)` (the IR's convention,
 `tir_bisect_prefix_state_v1`, under its own key).
