@@ -357,8 +357,11 @@ For a claim whose class has an IR shard plan, read at the claim's anchor:
 
 `s_shard = 3` is proposed (§5): one full-shard seat and two partial seats. The S1 assignment is
 PALW-VF-33's run inside each shard: `K = s_shard − 1 = 2` segments, one drawn full-shard seat attesting
-both, each partial seat attesting one by the drawn rotation. So `S_P = s_shard − 1` by default, and
+both, each partial seat attesting one by the drawn rotation. So `S_P = s_shard − 1` is the target, and
 every cell is attested by two seats: the full-shard seat and its partial seat.
+
+The recommended first step (open question 5) is `S_P = 1`. Each seat then attests its whole shard, and
+a shard's two attesters are its first two seats. Segments switch on per class later.
 
 ### 4.2 An outsider per shard (ADR-0147, generalised)
 
@@ -760,26 +763,48 @@ with a declared plan:
 
 ## Open questions
 
+Each question carries the **recommended default** (marked so) that this text assumes until the user
+decides.
+
 1. **One fence or two?** A plan-and-draw fence and a licensing fence would let a network draw stratified
-   panels and attest cells before licensing by parts (shadow mode). Proposed: one, after a shadow period
-   with the node's cell verifier on whole-licence claims.
+   panels and attest cells before licensing by parts (shadow mode).
+   *Recommended default:* **one fence**, `palw_tir_shard_v1`, armed only after a shadow period in which
+   the node's cell verifier runs beside the whole-licence replay on IR claims and their verdicts are
+   compared (node-only, no fence).
 2. **The attesters per cell and the detection point (§5).** Two (`s_shard = 3`, Verification V2's own
    rule, plus the outsider: 2.9 % per-lie miss at `h = 2/3`, `f = 0.26`) or four (`S_P = 1`,
-   `s_shard = 4`: 0.32 %, testnet-12's de-facto five replays' detection at its work). This trades
+   `s_shard = 4`: 0.32 %, testnet-12's de-facto five replays' detection at its work). The choice trades
    supply against detection per lie; the court window stays the backstop.
-3. **The outsider's span.** The whole shard (proposed: it fetched the weights anyway) or one cell (cheaper,
-   `1/S_P` of the compute, weaker independence).
-4. **`TirStepRun`.** A new DA unit (proposed), or peer serving plus `TirStepNode` only.
-5. **2-D at first, or layers only?** `S_P = s_shard − 1` reuses S1. A network could start with `S_P = 1`
-   (each seat attests its whole shard) and add position segments when batch verification is common.
-6. **Locks and pay by `w_cell / w` (§6).** Or per-seat as today, with the floor doing the work.
+   *Recommended default:* **two attesters a cell (`s_shard = 3`) plus the shard's outsider** on
+   testnet-12, where supply binds. Mainnet's point is set by its own measured `h`.
+3. **The outsider's span.** The whole shard, or one cell (cheaper: `1/S_P` of the compute, weaker
+   independence).
+   *Recommended default:* **the whole shard**. The outsider fetches the shard's weights anyway, and a
+   batched pass over all positions costs little more than one segment.
+4. **`TirStepRun`.** A new DA unit, or peer serving plus `TirStepNode` only.
+   *Recommended default:* **the new unit**. A segment's carry-ins are runs, and one `TirStepLeaf` per
+   position cannot be demanded within the session limits.
+5. **2-D at first, or layers only?**
+   *Recommended default:* **layers only at first (`S_P = 1`; each seat attests its whole shard)**,
+   with position segments switched on per class once batch verification is the node's common path.
+   `S_P = s_shard − 1` (S1 inside the shard) is the target.
+6. **Locks and pay by `w_cell / w` (§6)**, or per seat as today with the floor doing the work.
+   *Recommended default:* **by `w_cell / w`, with the floor**. It is what lets a bond seat more shard
+   duties; the slash term keeps the deterrent whole.
 7. **The class room (§6.2)** as the binding shard's `ready_eff`, and the readiness proof over a shard's
    rows. Both change ADR-0160's lane-verify arithmetic.
+   *Recommended default:* **adopt both**, together with the licensing fence; until then the class room
+   stays ADR-0160's.
 8. **Who declares `S_L`?** The registrant, once (ADR-0100), or derived from a network-wide seat budget
-   (ADR-0099 Decision 2's `palw_shard_plan_for_seat_v1`), so that a class cannot be over-sharded to
-   thin its panels.
-9. **The measured-speed constant (§6.2).** Batch verification is faster than the replay it was measured
-   on. Raise it under its own fence, after a drill measures the cell verifier on the network's hosts.
+   (ADR-0099 Decision 2's `palw_shard_plan_for_seat_v1`), so that a class cannot be over-sharded to thin
+   its panels.
+   *Recommended default:* **derived from the network's seat budget** (the fewest shards whose widest
+   shard fits it). The registrant may declare MORE shards only up to twice that number, so that a class
+   cannot thin its own panels.
+9. **The measured-speed constant (§6.2).** Batch verification is faster than the replay the constant was
+   measured on.
+   *Recommended default:* **leave it**. Raise it under its own fence, after a drill measures the cell
+   verifier on the network's hosts.
 
 ## Decision
 
