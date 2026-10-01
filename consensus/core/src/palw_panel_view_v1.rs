@@ -578,18 +578,18 @@ pub fn palw_panel_notify_diff_v1(
         if !prev.assignment_ids.contains(&assignment.claim_id) {
             diff.assignments.push(assignment.clone());
         }
-        if let Some(&(class_id, coverage, valid, selected)) = prev.receipts.get(&assignment.claim_id) {
-            if coverage != assignment.coverage_mask || valid != assignment.valid_receipt_seats {
-                diff.receipts.push(PalwPanelReceiptNotifyV1 {
-                    claim_id: assignment.claim_id,
-                    class_id,
-                    coverage_mask: assignment.coverage_mask,
-                    previous_coverage_mask: coverage,
-                    valid_receipt_seats: assignment.valid_receipt_seats,
-                    previous_valid_receipt_seats: valid,
-                    selected_panel_seats: assignment.selected_panel_seats.max(selected),
-                });
-            }
+        if let Some(&(class_id, coverage, valid, selected)) = prev.receipts.get(&assignment.claim_id)
+            && (coverage != assignment.coverage_mask || valid != assignment.valid_receipt_seats)
+        {
+            diff.receipts.push(PalwPanelReceiptNotifyV1 {
+                claim_id: assignment.claim_id,
+                class_id,
+                coverage_mask: assignment.coverage_mask,
+                previous_coverage_mask: coverage,
+                valid_receipt_seats: assignment.valid_receipt_seats,
+                previous_valid_receipt_seats: valid,
+                selected_panel_seats: assignment.selected_panel_seats.max(selected),
+            });
         }
     }
     for seat in &view.seats {
