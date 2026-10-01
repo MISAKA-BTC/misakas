@@ -32423,14 +32423,14 @@ fn apply_object(
                         // whatever the class — recorded `CourtHeldVerdict`, charged the same, no
                         // kind-3 basis.
                         // RFC-0002 F7: an IR dissection's bottom proves the same thing — the responder's
-                        // own claim of partials false — so it is recorded the same way.
+                        // own claim of partials false — so it is recorded the same way. RFC-0003: and a
+                        // pipeline's (`GenDissection`, F7 composed into the generative court) — the arm
+                        // listed the first two and left the third a `CourtFraud`, which kind 3 reads as
+                        // the replayed execution proven false against every full-mask `Valid` signer
+                        // (lane B's finding, 2026-10-01).
                         let reason = palw_court_verdict_void_reason_v1(
                             builder.extras.offence_attribution_active,
-                            matches!(
-                                proof,
-                                crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { .. }
-                                    | crate::palw_court_v2::PalwCourtVerdictProofV2::TirDissection { .. }
-                            ),
+                            proof.is_dissection_bottom_v1(),
                         );
                         builder.convict_by_court_verdict_as_v1(
                             ctx,
