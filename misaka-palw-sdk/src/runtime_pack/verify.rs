@@ -395,7 +395,22 @@ fn artifact_check(acc: &mut Acc, pack: &RuntimePackV1, art: &Path) {
     };
     let r = &pack.result;
     let mut ok = true;
-    ok &= cmp(acc, "artifact", "file digest", &hex(&m.artifact_digest), &r.artifact_digest);
+    // The file may be the pack's artifact, or that artifact with a layout declared (the class a registration carries: its
+    // container differs by the layout and the logits scheme, so its file digest and graph root are the declared class's, which the
+    // pack pins in `declared`). The inventory root and the tokenizer are the same in both.
+    let digest = hex(&m.artifact_digest);
+    if let Some(d) = pack.declared.iter().find(|d| d.file_digest == digest && digest != r.artifact_digest) {
+        ok &= cmp(acc, "artifact", "inventory root", &m.inventory_root.to_string(), &r.inventory_root);
+        ok &= cmp(acc, "artifact", "tokenizer id", &hex(&m.tokenizer_id), &r.tokenizer_id);
+        if ok {
+            acc.pass(
+                "artifact",
+                format!("the artifact declared for {} (class {}): file {} · inventory root {}", d.network, &d.class_id[..16], &digest[..16], &r.inventory_root[..16]),
+            );
+        }
+        return;
+    }
+    ok &= cmp(acc, "artifact", "file digest", &digest, &r.artifact_digest);
     ok &= cmp(acc, "artifact", "inventory root", &m.inventory_root.to_string(), &r.inventory_root);
     ok &= cmp(acc, "artifact", "graph root", &m.graph_ir_root.to_string(), &r.graph_ir_root);
     ok &= cmp(acc, "artifact", "tokenizer id", &hex(&m.tokenizer_id), &r.tokenizer_id);

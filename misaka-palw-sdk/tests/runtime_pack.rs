@@ -269,6 +269,14 @@ fn a_declared_class_is_reproduced_from_the_pack_and_its_class_id_cannot_be_chang
     assert!(r.ok(), "{}", r.render());
     let d = r.checks.iter().find(|c| c.name == "declared").expect("a declared check");
     assert_eq!(d.status, Status::Pass, "{}", d.detail);
+    // The class a registration carries is the artifact with its layout declared: a pack verifies against that file too (its file digest
+    // and graph root are the declared class's, which the pack pins), so `tir-registration --pack` can be given the class file.
+    let mut vd = VerifyOpts::new(&pack_dir);
+    vd.artifact = Some(work.join("artifact.palwtir.testnet-12.palwtir"));
+    let r = verify_pack(&vd, &|_| {}).expect("verifies the declared form");
+    let a = r.checks.iter().find(|c| c.name == "artifact").expect("an artifact check");
+    assert_eq!(a.status, Status::Pass, "{}", r.render());
+    assert!(a.detail.contains("declared for testnet-12"), "{}", a.detail);
     // Another class id is not this artifact's class.
     let mut m: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(pack_dir.join(PACK_FILE)).expect("manifest")).expect("json");
     m["declared"][0]["class_id"] = "0".repeat(128).into();
