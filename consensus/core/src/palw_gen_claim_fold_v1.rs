@@ -102,22 +102,23 @@ pub(super) fn apply_gen_tensor_commitment_v1(
     // collateral for the readiness multiple). Without it a claim is accepted that no panel can be drawn for:
     // it holds its executor's reservation and one of the class's slots for the whole bind window and voids.
     // Where there is no registry there are no possession proofs to count, and the lane refuses.
+    //
+    // **The one function every class kind asks** (lane F's Proposal A, approved 2026-10-01): the possession
+    // floor is `class_seating_v1`'s, shared with the IR and composite lanes (`palw_class_seating_v1`); the
+    // independence floor is added there under the later fence `palw_class_seating`, not here.
     let Some(fold) = builder.model_registry_fold().cloned() else {
         return Err(refused("no model registry is in force: a class's seats prove possession through it"));
     };
-    let executor_operator = bond_record.operator_id;
-    let mut operators = BTreeSet::new();
-    for (key, bond) in builder.state.bonds.iter() {
-        if key == c.bond || bond.operator_id == executor_operator {
-            continue;
-        }
-        if builder.read().model_registry_seat_is_ready(key, bond, c.class_id, daa, &fold) {
-            operators.insert(bond.operator_id);
-        }
-    }
-    let needed = fold.globals.seat_count as u32;
-    if (operators.len() as u32) < needed {
-        return Err(PalwStateV2Error::GenClassNotReady { class: *c.class_id, ready: operators.len() as u32, needed });
+    let seating = builder
+        .read()
+        .class_seating_v1(c.class_id, c.bond, daa, &fold)
+        .ok_or(PalwStateV2Error::MissingBond(*c.bond))?;
+    if !seating.possession_floor_met() {
+        return Err(PalwStateV2Error::GenClassNotReady {
+            class: *c.class_id,
+            ready: seating.ready_operators(),
+            needed: seating.seat_count,
+        });
     }
     builder.check_class_verify_admits_v1(
         c.class_id,

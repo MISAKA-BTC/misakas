@@ -102,6 +102,10 @@ use std::collections::{BTreeMap, BTreeSet};
 // builder and the state's tables directly.
 #[path = "palw_gen_claim_fold_v1.rs"]
 mod palw_gen_claim_fold_v1;
+// One reading of "this class has seats" for every class kind (RFC-0002 Part II §II.7.5 Proposal A's possession
+// floor, extracted from the tensor claim's readiness gate): a child module for the same reason.
+#[path = "palw_class_seating_v1.rs"]
+mod palw_class_seating_v1;
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
