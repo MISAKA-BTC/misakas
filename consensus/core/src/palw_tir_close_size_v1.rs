@@ -929,7 +929,7 @@ pub fn palw_tir_close_reads_split_v1(
     pattern: bool,
 ) -> Result<(PalwTirCloseReadsV1, PalwTirCloseReadsV1, HistPattern, u64), String> {
     let Split { reads, hist, pattern, work } =
-        close_reads_split(space, job_ctx, inventory, request, cap, hist_only, pattern, leaf_cost_of(space))?;
+        close_reads_split(space, job_ctx, inventory, request, cap, hist_only, pattern, leaf_cost_of(space), None)?;
     Ok((reads, hist, pattern, work))
 }
 
@@ -1129,6 +1129,8 @@ impl<'a> PalwTirClosePriceV1<'a> {
             depth,
             inv_depth: ceil_log2(class_inventory_leaves.max(1) as u64),
             form: PalwTirParamFormV1::PerLeaf,
+            // A pipeline stage's artifact is one flat tree, never a composite parent-plus-adapter.
+            composite: None,
             // A prompt's or a generated id rides the close's frame (the ids vectors and the binding), never a read of its own.
             token_bytes: 0,
             frame: pricing.frame,
