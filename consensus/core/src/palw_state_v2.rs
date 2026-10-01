@@ -7569,6 +7569,18 @@ pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
     }
 }
 
+/// **Is this object an RFC-0004 evaluation court move** (spec 17 §17.8.6) — a close or an accusation carrying one of
+/// the evaluation proofs (tags 13–15 of `PalwCourtVerdictProofV2`) that an older build cannot decode and skips (A-2)?
+/// Below `palw_improvement_v1` the acceptance walk drops every such object by name before any slot, rent or budget is
+/// charged for it, and the fold refuses it as the second lock.
+pub fn palw_object_is_eval_v1(object: &PalwConsensusObjectV2) -> bool {
+    match object {
+        PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_eval_v1(),
+        PalwConsensusObjectV2::TirShardCourtAccused { accusation } => accusation.proof.is_eval_v1(),
+        _ => false,
+    }
+}
+
 /// **Is this object an RFC-0004 improvement move** (tags 70–82) — an appended variant an older build
 /// cannot decode and skips (A-2)? Below `palw_improvement_v1` the acceptance walk drops every such
 /// object by name before any slot, rent or budget is charged for it, and the fold refuses it as the
@@ -21690,6 +21702,9 @@ impl<'a> TransitionBuilder<'a> {
         if let PalwClaimSourceV2::FreePrompt { spent, .. } = &mut voided.source {
             spent.clear();
         }
+        // RFC-0004 A6: an evaluation claim convicted after `Final` takes its score back out of the epoch while the
+        // epoch still takes scores, and frees its job (spec 17 §17.8.6).
+        self.note_improvement_eval_reversed_v1(&id, &claim)?;
         self.write_claim(id, Some(voided.clone()));
         self.disarm_deadline(id);
         self.arm_retirement(id, &voided)?;
@@ -31353,6 +31368,14 @@ fn apply_object(
     if palw_object_is_gen_v1(object) && !builder.params.gen_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::GenObjectRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
     }
+    // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is refused by name** — the acceptance walk
+    // drops it first (an older build cannot decode it and skips it); this is the second lock.
+    if palw_object_is_eval_v1(object) && !builder.params.improve_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::ImprovementObjectRefused {
+            object: "an evaluation court move",
+            why: "before palw_improvement_v1 is in force (RFC-0004)",
+        });
+    }
     // **The second IR fence, likewise**: below `palw_tir_fence2` its moves are payloads an older build
     // cannot decode; the acceptance walk drops them by name, and this is the second lock.
     if palw_object_is_tir_fence2_v1(object) && !builder.params.tir_fence2_active_at(ctx.daa_score) {
@@ -31556,6 +31579,13 @@ fn apply_object(
                 return Err(PalwStateV2Error::TirRegistrationRefused(
                     "an IR one-move accusation names a claim of a class that is not an IR program",
                 ));
+            }
+            // RFC-0004 A6: an evaluation proof accuses an evaluation claim of the job table, and no other.
+            if accusation.proof.is_eval_v1() && !palw_improve_eval_fold_v1::palw_improve_claim_is_evaluation_v1(&claim) {
+                return Err(PalwStateV2Error::ImprovementObjectRefused {
+                    object: "an evaluation court move",
+                    why: "it accuses a claim that is not an evaluation claim",
+                });
             }
             if accusation.executor_bond != claim.bond {
                 return Err(PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(claim_id));
@@ -33377,6 +33407,11 @@ fn apply_object(
                 .filter(|object| {
                     !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
                         if proof.is_gen_v1() && !builder.params.gen_active_at(ctx.daa_score))
+                })
+                // RFC-0004 A6: likewise an evaluation proof below `palw_improvement_v1`.
+                .filter(|object| {
+                    !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
+                        if proof.is_eval_v1() && !builder.params.improve_active_at(ctx.daa_score))
                 });
             let Some(close) = decoded else {
                 return convict_close_declarer_v1(builder, ctx, *session_id, *side);

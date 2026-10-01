@@ -309,8 +309,7 @@ pub fn verify_eval_binding_v1(
         None => vec![0; binding.prompt_tokens as usize],
     };
     let job = palw_improve_eval_pipeline_job_v1(&ctx, &prompt_ids, &binding.generated, &binding.finalized);
-    let job_facts =
-        stage_job_facts(&ctx.pipeline, &ctx.programs, &job).map_err(|e| PalwEvalCourtErrorV1::Binding(e.to_string()))?;
+    let job_facts = stage_job_facts(&ctx.pipeline, &ctx.programs, &job).map_err(|e| PalwEvalCourtErrorV1::Binding(e.to_string()))?;
     let trips: Vec<u32> = job_facts.iter().map(|f| f.trip).collect();
     let space = PalwGenStepSpaceV1::new(&ctx.pipeline, &ctx.programs, &ctx.layouts, &trips, binding.prompt_tokens)
         .map_err(|e| PalwEvalCourtErrorV1::Binding(e.to_string()))?;
@@ -348,7 +347,8 @@ pub fn authenticate_eval_params_v1(
             if artifact.artifact_root() != v.artifact_root {
                 return Err(PalwEvalCourtErrorV1::Params("the composite reference is not of the class's artifact".into()));
             }
-            let p = u16::try_from(artifact.p).map_err(|_| PalwEvalCourtErrorV1::Params("a composite split past every param".into()))?;
+            let p =
+                u16::try_from(artifact.p).map_err(|_| PalwEvalCourtErrorV1::Params("a composite split past every param".into()))?;
             let total = v.inventory.leaf_count();
             let split = v
                 .inventory
@@ -357,7 +357,10 @@ pub fn authenticate_eval_params_v1(
                 .ok_or_else(|| PalwEvalCourtErrorV1::Params("a composite split past every param".into()))?;
             PalwGenOpenedParamsV1::authenticate_sections(
                 &v.inventory,
-                &[(0, split, artifact.parent_root, parent.as_slice()), (split, total - split, artifact.adapter_root, adapter.as_slice())],
+                &[
+                    (0, split, artifact.parent_root, parent.as_slice()),
+                    (split, total - split, artifact.adapter_root, adapter.as_slice()),
+                ],
             )
             .map_err(refused)
         }
@@ -373,12 +376,13 @@ pub fn authenticate_eval_params_v1(
 pub type PalwEvalCloseOutcomeV1 = Result<Option<crate::palw_step_leg::PalwStepFaultV1>, PalwEvalCourtErrorV1>;
 
 /// The evidence id of an evaluation conviction (the §24.1 dedup key).
-pub fn palw_eval_evidence_id_v1(
-    binding: &PalwEvalBindingV1,
-    leaf_index: u64,
-    fault: crate::palw_step_leg::PalwStepFaultV1,
-) -> Hash64 {
-    crate::palw_step_leg::step_refutation_evidence_id(&binding.committed_execution_root, PALW_IMPROVE_EVAL_EVIDENCE_KIND_V1, leaf_index, fault)
+pub fn palw_eval_evidence_id_v1(binding: &PalwEvalBindingV1, leaf_index: u64, fault: crate::palw_step_leg::PalwStepFaultV1) -> Hash64 {
+    crate::palw_step_leg::step_refutation_evidence_id(
+        &binding.committed_execution_root,
+        PALW_IMPROVE_EVAL_EVIDENCE_KIND_V1,
+        leaf_index,
+        fault,
+    )
 }
 
 /// **A cone close opened**: the binding verified against the claim and the chain, the prompt carried exactly when
@@ -447,7 +451,8 @@ fn output_tiles_v1(v: &PalwEvalVerifiedBindingV1) -> Option<(u8, Vec<PalwGenLeaf
     let post = (program.occurrences().len() - 1) as u16;
     let kind = PalwGenLeafKindV1::Commit { occurrence: post, node: program.output.node() };
     let pos = sp.trip.checked_sub(1)?;
-    let coords: Vec<PalwGenLeafCoordV1> = sp.leaves().iter().filter(|l| l.coord.pos == pos && l.coord.kind == kind).map(|l| l.coord).collect();
+    let coords: Vec<PalwGenLeafCoordV1> =
+        sp.leaves().iter().filter(|l| l.coord.pos == pos && l.coord.kind == kind).map(|l| l.coord).collect();
     (!coords.is_empty()).then_some((stage, coords))
 }
 
@@ -492,7 +497,9 @@ pub fn check_eval_decode_close_v1(
             };
             let leaves = row.iter().map(opened).collect::<Result<Vec<_>, _>>()?;
             in_session(&leaves.iter().map(|l| l.coord).collect::<Vec<_>>())?;
-            match palw_gen_decode_door_v1(&v.case(), decode, close.binding.prompt_tokens, *t, &leaves).map_err(PalwEvalCourtErrorV1::Refused)? {
+            match palw_gen_decode_door_v1(&v.case(), decode, close.binding.prompt_tokens, *t, &leaves)
+                .map_err(PalwEvalCourtErrorV1::Refused)?
+            {
                 PalwGenVerdictV1::Acquitted => Ok(None),
                 PalwGenVerdictV1::Convicted { fault, .. } => Ok(Some(fault)),
             }
@@ -501,10 +508,13 @@ pub fn check_eval_decode_close_v1(
             if close.binding.score.is_empty() {
                 return Err(PalwEvalCourtErrorV1::NotThisJobsClose("a job that commits no score has no score to close"));
             }
-            let (stage, expected) = output_tiles_v1(&v).ok_or(PalwEvalCourtErrorV1::Binding("the pipeline has no output tile".into()))?;
+            let (stage, expected) =
+                output_tiles_v1(&v).ok_or(PalwEvalCourtErrorV1::Binding("the pipeline has no output tile".into()))?;
             let leaves = tiles.iter().map(opened).collect::<Result<Vec<_>, _>>()?;
             if leaves.iter().map(|l| l.coord).collect::<Vec<_>>() != expected {
-                return Err(PalwEvalCourtErrorV1::NotThisJobsClose("the close does not open every tile of the output node at the output stage's last position"));
+                return Err(PalwEvalCourtErrorV1::NotThisJobsClose(
+                    "the close does not open every tile of the output node at the output stage's last position",
+                ));
             }
             in_session(&expected)?;
             let sp = &v.space.stages[stage as usize];
@@ -657,7 +667,12 @@ impl PalwEvalEvidenceV1<'_> {
     }
 
     /// The params a close needs: `all` cut to the leaves `used` read.
-    fn restrict_params(&self, v: &PalwEvalVerifiedBindingV1, all: &PalwEvalParamsV1, used: &crate::palw_gen_court_v1::PalwGenUsedUnitsV1) -> PalwEvalParamsV1 {
+    fn restrict_params(
+        &self,
+        v: &PalwEvalVerifiedBindingV1,
+        all: &PalwEvalParamsV1,
+        used: &crate::palw_gen_court_v1::PalwGenUsedUnitsV1,
+    ) -> PalwEvalParamsV1 {
         let keep = |base: u32, openings: &[PalwArtifactOpeningV1]| -> Vec<PalwArtifactOpeningV1> {
             openings.iter().filter(|o| used.params.contains(&(base + o.leaf_index))).cloned().collect()
         };
@@ -698,7 +713,8 @@ impl PalwEvalEvidenceV1<'_> {
         let full = self.full_close(&v, index)?;
         let all = self.all_params(&v)?;
         let authed = authenticate_eval_params_v1(&all, &v).map_err(|e| e.to_string())?;
-        let used = palw_gen_cone_units_with_v1(&v.case(), &full, PalwGenParamsV1::Authenticated(&authed), limits).map_err(|e| e.to_string())?;
+        let used = palw_gen_cone_units_with_v1(&v.case(), &full, PalwGenParamsV1::Authenticated(&authed), limits)
+            .map_err(|e| e.to_string())?;
         let restricted = palw_gen_restrict_close_v1(&v.case(), &full, &used);
         self.wire(&v, &restricted, self.restrict_params(&v, &all, &used))
     }
@@ -752,7 +768,8 @@ impl PalwEvalEvidenceV1<'_> {
         let all = self.all_params(&v)?;
         let authed = authenticate_eval_params_v1(&all, &v).map_err(|e| e.to_string())?;
         let (elements, totals, used) =
-            palw_gen_build_root_claim_recorded_with_v1(&v.case(), &full, PalwGenParamsV1::Authenticated(&authed), limits).map_err(|e| e.to_string())?;
+            palw_gen_build_root_claim_recorded_with_v1(&v.case(), &full, PalwGenParamsV1::Authenticated(&authed), limits)
+                .map_err(|e| e.to_string())?;
         let restricted = palw_gen_restrict_close_v1(&v.case(), &full, &used);
         let finalize = self.wire(&v, &restricted, self.restrict_params(&v, &all, &used))?;
         Ok(PalwEvalRootClaimV1 {
@@ -792,9 +809,10 @@ impl PalwEvalEvidenceV1<'_> {
         let authed = authenticate_eval_params_v1(&all, &v).map_err(|e| e.to_string())?;
         let mut children = Vec::new();
         for range in self.child_positions(&v, phase)? {
-            let claim = palw_gen_dissect_partials_with_v1(&v.case(), &full, phase, range, PalwGenParamsV1::Authenticated(&authed), limits)
-                .map_err(|e| e.to_string())?
-                .map_err(|v| format!("the carriage convicts its own executor: {v:?}"))?;
+            let claim =
+                palw_gen_dissect_partials_with_v1(&v.case(), &full, phase, range, PalwGenParamsV1::Authenticated(&authed), limits)
+                    .map_err(|e| e.to_string())?
+                    .map_err(|v| format!("the carriage convicts its own executor: {v:?}"))?;
             children.push(claim);
         }
         Ok(crate::palw_tir_dissect_v1::PalwTirDissectRoundV1 {
@@ -815,10 +833,36 @@ impl PalwEvalEvidenceV1<'_> {
         let all = self.all_params(&v)?;
         let authed = authenticate_eval_params_v1(&all, &v).map_err(|e| e.to_string())?;
         let range = phase.terminal_range().ok_or("the dissection has no bottom yet")?;
-        let (out, used) = palw_gen_dissect_partials_recorded_with_v1(&v.case(), &full, phase, range, PalwGenParamsV1::Authenticated(&authed), limits)
-            .map_err(|e| e.to_string())?;
+        let (out, used) = palw_gen_dissect_partials_recorded_with_v1(
+            &v.case(),
+            &full,
+            phase,
+            range,
+            PalwGenParamsV1::Authenticated(&authed),
+            limits,
+        )
+        .map_err(|e| e.to_string())?;
         out.map_err(|v| format!("the carriage convicts its own executor: {v:?}"))?;
         let restricted = palw_gen_restrict_close_v1(&v.case(), &full, &used);
         self.wire(&v, &restricted, self.restrict_params(&v, &all, &used))
     }
+}
+
+/// **The dissected leaf an evaluation cone accusation names, if it names one**: the binding the claim's, the leaf a leaf
+/// of this execution proven under its stage's root, and its site — `Some(global index)` when the leaf's cone reduces
+/// over the history (it is dissected, never closed whole under the held regime); `None` for any other leaf. No
+/// evaluation: the fold asks it too.
+pub fn palw_eval_named_dissected_leaf_v1(
+    close: &PalwEvalConeCloseV1,
+    facts: &PalwEvalClaimFactsV1<'_>,
+) -> Result<Option<u64>, String> {
+    let v = verify_eval_binding_v1(&close.binding, facts, None).map_err(|e| e.to_string())?;
+    let coord = close.disputed.coord;
+    let index = v.space.global_index(&coord).ok_or_else(|| format!("{coord:?} is not a leaf of this execution"))?;
+    let opened = close.disputed.opened(&v.space).ok_or_else(|| format!("{coord:?} does not open under the space"))?;
+    let sp = &v.space.stages[coord.stage as usize];
+    if !crate::palw_gen_step_v1::palw_gen_verify_leaf_v1(sp, &v.roots.stage_roots[coord.stage as usize], &opened) {
+        return Err(format!("{coord:?} is not under its stage's root"));
+    }
+    Ok(crate::palw_gen_court_v1::palw_gen_dissect_site_v1(sp, &coord).map(|_| index))
 }

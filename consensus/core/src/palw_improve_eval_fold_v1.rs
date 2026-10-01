@@ -195,6 +195,44 @@ impl PalwChainStateV2 {
     }
 }
 
+impl PalwChainStateV2 {
+    /// **What the court holds of an evaluation claim** (spec 17 §17.8.6): the claim must be the evaluation claim the
+    /// job table holds for the binding's job — the row's claim, by id and by the roots and the bond it committed —
+    /// and its class an IR class the registry still holds (the program, the layout digest it was registered with and
+    /// its artifact root). `Err` names what is missing; nothing is evaluated.
+    pub fn improvement_eval_claim_facts_v1<'a>(
+        &'a self,
+        claim: &'a PalwClaimStateV2,
+        binding: &PalwEvalBindingV1,
+    ) -> Result<crate::palw_improve_eval_court_v1::PalwEvalClaimFactsV1<'a>, &'static str> {
+        if !palw_improve_claim_is_evaluation_v1(claim) {
+            return Err("the claim is not an evaluation claim");
+        }
+        let row = self.improvement_eval_jobs.get(&binding.job.key()).ok_or("the binding's job is not in the job table")?;
+        let held = row.claim.as_ref().ok_or("the job holds no claim")?;
+        let held_claim = self.claims.get(&held.claim_id).ok_or("the job's claim is gone")?;
+        if held_claim.execution_root != claim.execution_root
+            || held_claim.bond != claim.bond
+            || held_claim.accepted_daa != claim.accepted_daa
+        {
+            return Err("the claim is not the one the job table holds for the binding's job");
+        }
+        let record = self.tir_classes.get(&claim.class_id).ok_or("the claim's class is not an IR class")?;
+        let class = self.classes.get(&claim.class_id).ok_or("the claim's class is not registered")?;
+        Ok(crate::palw_improve_eval_court_v1::PalwEvalClaimFactsV1 {
+            class_id: &claim.class_id,
+            execution_root: &claim.execution_root,
+            trace_root: &claim.trace_root,
+            output_root: &claim.output_root,
+            work_leaves: claim.work_leaves,
+            job: &row.job,
+            program: record.program.as_slice(),
+            layout_digest: record.layout_digest,
+            artifact_root: class.artifact_root,
+        })
+    }
+}
+
 /// The key range of one epoch's jobs.
 fn palw_improve_eval_epoch_range_v1(line_id: &Hash64, epoch: u64) -> std::ops::RangeInclusive<PalwEvalJobKeyV1> {
     let lo = (*line_id, epoch, 0, PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch, 0);
@@ -776,6 +814,29 @@ impl TransitionBuilder<'_> {
             (row.seats.len(), credited)
         });
         self.pay_improvement_eval_fee_v1(&line_id, epoch, &subject, &claim.bond, panel.as_ref().map(|(n, c)| (*n, c.as_slice())))?;
+        Ok(())
+    }
+
+    /// **A convicted `Final` evaluation claim leaves the epoch** (spec 17 §17.8.6): the court reversed it, so its job is
+    /// free again (open claiming: another executor may take it while the epoch still takes claims) and the score it
+    /// gave — a hold-out generation's at the key's reveal, a suite entry's, a likelihood's, a judged score a part of
+    /// which it was — is taken back out of the epoch's results while the epoch still takes scores, the item then
+    /// missing for that subject and counting for the incumbent (§17.9.1). A claim voided before `Final` records no
+    /// score and its row is cleared by open claiming already; an epoch already decided is not reopened.
+    pub(super) fn note_improvement_eval_reversed_v1(
+        &mut self,
+        claim_id: &Hash64,
+        claim: &PalwClaimStateV2,
+    ) -> Result<(), PalwStateV2Error> {
+        if !palw_improve_claim_is_evaluation_v1(claim) {
+            return Ok(());
+        }
+        let Some((key, row)) = self.state.improvement_eval_job_of_claim(claim_id) else { return Ok(()) };
+        let mut row = row.clone();
+        let (line_id, epoch, item, subject, kind, _part) = key;
+        row.claim = None;
+        self.write_improvement_eval_job(key, Some(row));
+        self.retract_improvement_score_v1(&line_id, epoch, item, subject, kind)?;
         Ok(())
     }
 

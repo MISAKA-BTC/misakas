@@ -20,6 +20,7 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_gen_artifact_v1::*;
 use kaspa_consensus_core::palw_gen_step_v1::{palw_gen_stage_root_v1, palw_gen_step_leaf_hash_v1};
 use kaspa_consensus_core::palw_gen_worker_v1::*;
+use kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1;
 use kaspa_consensus_core::palw_improve_eval_court_v1::*;
 use kaspa_consensus_core::palw_improve_eval_v1::*;
 use kaspa_consensus_core::palw_improve_state_v1::{PalwEvalSubjectV1, PalwScoringKindV1};
@@ -261,17 +262,8 @@ fn likelihood() -> Claim {
     let pj = PipelineJob { prompt: prompt.clone(), generated: reference, scalars: ctx.scalars.clone(), ..PipelineJob::default() };
     let execution = palw_gen_replay_committed_v1(&ctx.pipeline, &ctx.programs, &ctx.layouts, &params, &pj, ctx.seed).unwrap();
     let score: Vec<i32> = execution.run.output.data.iter().map(|v| *v as i32).collect();
-    let binding = PalwEvalBindingV1::of(
-        &j,
-        class_id,
-        &layout,
-        &execution.claim,
-        execution.space.leaf_count(),
-        &prompt,
-        stage,
-        vec![],
-        score,
-    );
+    let binding =
+        PalwEvalBindingV1::of(&j, class_id, &layout, &execution.claim, execution.space.leaf_count(), &prompt, stage, vec![], score);
     Claim {
         class_id,
         artifact_root,
@@ -425,7 +417,9 @@ fn a_close_is_the_claims_or_it_is_refused_by_name_and_convicts_nobody() {
     let g = global(&honest, 0, 2);
     let close = cone(&honest, g);
     assert_eq!(check(&honest, &close, Some(g)), Ok(None));
-    let refused = |c: &PalwEvalConeCloseV1, facts: &PalwEvalClaimFactsV1<'_>, narrowed: Option<u64>| check_eval_cone_close_v1(c, facts, narrowed, &LIMITS);
+    let refused = |c: &PalwEvalConeCloseV1, facts: &PalwEvalClaimFactsV1<'_>, narrowed: Option<u64>| {
+        check_eval_cone_close_v1(c, facts, narrowed, &LIMITS)
+    };
     let facts = honest.facts();
 
     // The ladder narrowed elsewhere.
@@ -441,17 +435,23 @@ fn a_close_is_the_claims_or_it_is_refused_by_name_and_convicts_nobody() {
     let other_class = Hash64::from_bytes([0x34; 64]);
     let mut other_facts = honest.facts();
     other_facts.class_id = &other_class;
-    assert!(matches!(refused(&close, &other_facts, None), Err(PalwEvalCourtErrorV1::NotTheClaims(why)) if why.contains("another class")));
+    assert!(
+        matches!(refused(&close, &other_facts, None), Err(PalwEvalCourtErrorV1::NotTheClaims(why)) if why.contains("another class"))
+    );
     let other_root = Hash64::from_bytes([0x66; 64]);
     let mut other_facts = honest.facts();
     other_facts.execution_root = &other_root;
-    assert!(matches!(refused(&close, &other_facts, None), Err(PalwEvalCourtErrorV1::NotTheClaims(why)) if why.contains("execution root")));
+    assert!(
+        matches!(refused(&close, &other_facts, None), Err(PalwEvalCourtErrorV1::NotTheClaims(why)) if why.contains("execution root"))
+    );
     let mut other_facts = honest.facts();
     other_facts.trace_root = &other_root;
     assert!(matches!(refused(&close, &other_facts, None), Err(PalwEvalCourtErrorV1::NotTheClaims(why)) if why.contains("step root")));
     let mut other_facts = honest.facts();
     other_facts.output_root = &other_root;
-    assert!(matches!(refused(&close, &other_facts, None), Err(PalwEvalCourtErrorV1::NotTheClaims(why)) if why.contains("output root")));
+    assert!(
+        matches!(refused(&close, &other_facts, None), Err(PalwEvalCourtErrorV1::NotTheClaims(why)) if why.contains("output root"))
+    );
     let mut other_facts = honest.facts();
     other_facts.layout_digest = Hash64::from_bytes([0x67; 64]);
     assert!(matches!(refused(&close, &other_facts, None), Err(PalwEvalCourtErrorV1::NotTheClaims(why)) if why.contains("layout")));
@@ -512,6 +512,36 @@ fn the_evidence_id_binds_the_claim_the_leaf_and_the_fault() {
     assert_eq!(PALW_IMPROVE_EVAL_EVIDENCE_KIND_V1, 0x49);
 }
 
+// ---- the proofs: tags, round trips, price ---------------------------------------------------------------------
+
+#[test]
+fn the_proofs_take_the_reserved_tags_and_a_close_is_priced_by_its_own_bytes() {
+    use kaspa_consensus_core::palw_court_v2::{PalwCourtV2Error, PalwCourtVerdictProofV2, check_close_cost_v2};
+    use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+    let claim = likelihood();
+    let at_zero = cone(&claim, 0);
+    let proofs = [
+        (PalwCourtVerdictProofV2::EvalCone { close: Box::new(at_zero.clone()) }, 13u8),
+        (PalwCourtVerdictProofV2::EvalDecodeToken { close: Box::new(claim.evidence().score_close().unwrap()) }, 14),
+        (PalwCourtVerdictProofV2::EvalDissection { bottom: Box::new(at_zero.clone()) }, 15),
+    ];
+    let court = PalwCourtParamsV2::new(1 << 26, 20, 2).expect("a court");
+    for (proof, tag) in &proofs {
+        let bytes = borsh::to_vec(proof).unwrap();
+        assert_eq!(bytes[0], *tag, "spec 17 §17.0: the evaluation court's proofs are 13, 14 and 15");
+        assert_eq!(&borsh::from_slice::<PalwCourtVerdictProofV2>(&bytes).unwrap(), proof, "the object round-trips");
+        assert!(proof.is_eval_v1() && !proof.is_gen_v1() && !proof.is_tir_v1(), "an evaluation proof is none of the others");
+        assert_eq!(proof.eval_binding_v1(), Some(&claim.binding), "it carries the claim's binding");
+        assert_eq!(check_close_cost_v2(proof, &court), Ok(()), "a close of a small program is within the ceiling");
+    }
+    // A close is priced by its own encoding, whatever it carries: pad one past the court's ceiling.
+    let mut padded = at_zero.clone();
+    let ceiling = court.max_close_bytes();
+    padded.prompt_ids = vec![0; (ceiling / 4 + 8) as usize];
+    let proof = PalwCourtVerdictProofV2::EvalCone { close: Box::new(padded) };
+    assert!(matches!(check_close_cost_v2(&proof, &court), Err(PalwCourtV2Error::CloseTooLarge { .. })), "over the ceiling");
+}
+
 // ---- a composite candidate ------------------------------------------------------------------------------
 
 /// The generation claim re-registered as a composite of itself, split at param 2: the claim, its reference and the
@@ -520,11 +550,14 @@ fn composite_generation() -> (Claim, PalwTirCompositeRefV1, u32) {
     use kaspa_consensus_core::palw_artifact::{artifact_leaf_v1, artifact_root_v1};
     let mut claim = generation();
     let program = subject_program();
-    let split = kaspa_consensus_core::palw_improve_composite_v1::palw_tir_composite_split_v1(&program, 2).expect("a split").parent_leaves;
+    let split =
+        kaspa_consensus_core::palw_improve_composite_v1::palw_tir_composite_split_v1(&program, 2).expect("a split").parent_leaves;
     let (_, params_v1, layout, _) = base();
-    let subject = PalwEvalSubjectClassV1 { class_id: claim.class_id, artifact_root: claim.artifact_root, program: &program, layout: &layout };
+    let subject =
+        PalwEvalSubjectClassV1 { class_id: claim.class_id, artifact_root: claim.artifact_root, program: &program, layout: &layout };
     let ctx = palw_improve_eval_context_v1(&claim.job, &subject, claim.binding.params).unwrap();
-    let operands = palw_gen_inventory_operands_named_v1(&ctx.programs, &Params(vec![params_v1]), PalwGenInventoryNamingV1::Evaluation).unwrap();
+    let operands =
+        palw_gen_inventory_operands_named_v1(&ctx.programs, &Params(vec![params_v1]), PalwGenInventoryNamingV1::Evaluation).unwrap();
     let hashes: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
     let r = PalwTirCompositeRefV1 {
         parent_class: Hash64::from_bytes([0x9C; 64]),
@@ -588,7 +621,10 @@ fn a_composite_candidate_is_adjudicated_from_its_sections_openings() {
     assert!(matches!(check(&claim, &single, None), Err(PalwEvalCourtErrorV1::Params(_))), "a one-root carriage of a composite class");
     let plain = generation();
     let on_plain = PalwEvalConeCloseV1 { params: close.params.clone(), ..cone(&plain, g) };
-    assert!(matches!(check(&plain, &on_plain, None), Err(PalwEvalCourtErrorV1::Params(_))), "a composite carriage of a one-root class");
+    assert!(
+        matches!(check(&plain, &on_plain, None), Err(PalwEvalCourtErrorV1::Params(_))),
+        "a composite carriage of a one-root class"
+    );
 
     // Every malformed composite opening is refused: the reference is the class's, the sections are not swapped, no
     // opening is another's.

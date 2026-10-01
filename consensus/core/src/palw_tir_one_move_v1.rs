@@ -103,14 +103,22 @@ pub fn palw_tir_one_move_shape_v1(a: &PalwTirOneMoveAccusationV1) -> Result<(), 
     if a.signature.is_empty() {
         return Err("an IR one-move accusation must carry the accuser's signature");
     }
-    let Some(binding) = a.proof.tir_binding_v1() else {
-        return Err("an IR one-move accusation carries an IR close proof");
-    };
-    if binding.committed_execution_root != a.execution_root || binding.full_logits_trace_root != a.trace_root {
-        return Err("the proof's binding speaks about other roots than the accusation names");
-    }
-    if !binding.class.program.is_empty() {
-        return Err("the proof's binding carries no program: the chain holds the registered class's");
+    // An evaluation close (RFC-0004 A6) rides the same accusation: its binding is the evaluation's, whose step root is
+    // the claim's `trace_root`, and which carries no program (the chain derives the context from the class's row).
+    if let Some(binding) = a.proof.eval_binding_v1() {
+        if binding.committed_execution_root != a.execution_root || binding.step_root() != a.trace_root {
+            return Err("the proof's binding speaks about other roots than the accusation names");
+        }
+    } else {
+        let Some(binding) = a.proof.tir_binding_v1() else {
+            return Err("an IR one-move accusation carries an IR or an evaluation close proof");
+        };
+        if binding.committed_execution_root != a.execution_root || binding.full_logits_trace_root != a.trace_root {
+            return Err("the proof's binding speaks about other roots than the accusation names");
+        }
+        if !binding.class.program.is_empty() {
+            return Err("the proof's binding carries no program: the chain holds the registered class's");
+        }
     }
     if a.executor_bond == a.accuser_bond {
         return Err("an executor does not accuse its own claim");
@@ -130,8 +138,8 @@ pub fn palw_tir_one_move_verdict_v1(
     step_ladder: u64,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
-    if !a.proof.is_tir_v1() {
-        return Err(PalwCourtV2Error::DoesNotAdjudicate("not an IR close".into()));
+    if !a.proof.is_tir_v1() && !a.proof.is_eval_v1() {
+        return Err(PalwCourtV2Error::DoesNotAdjudicate("not an IR or an evaluation close".into()));
     }
     crate::palw_court_v2::adjudicate_close_proof_v2(state, claim, &a.proof, court, step_ladder, prompt_ids_form)
 }
@@ -155,14 +163,24 @@ pub fn palw_tir_one_move_dissected_leaf_v1(
     claim: &PalwClaimStateV2,
     a: &PalwTirOneMoveAccusationV1,
 ) -> Result<Option<u64>, PalwCourtV2Error> {
-    let PalwCourtVerdictProofV2::TirCone { refutation } = &a.proof else {
-        return Ok(None);
-    };
-    let mut filled = refutation.as_ref().clone();
-    filled.binding = crate::palw_court_v2::tir_binding_filled_v1(state, claim, &refutation.binding)?;
-    crate::palw_court_v2::check_tir_binding_is_the_claims_v1(state, claim, &filled.binding)?;
-    crate::palw_tir_court_v1::palw_tir_named_dissected_leaf_v1(&filled)
-        .map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(format!("the named leaf is not this claim's: {e}")))
+    match &a.proof {
+        PalwCourtVerdictProofV2::TirCone { refutation } => {
+            let mut filled = refutation.as_ref().clone();
+            filled.binding = crate::palw_court_v2::tir_binding_filled_v1(state, claim, &refutation.binding)?;
+            crate::palw_court_v2::check_tir_binding_is_the_claims_v1(state, claim, &filled.binding)?;
+            crate::palw_tir_court_v1::palw_tir_named_dissected_leaf_v1(&filled)
+                .map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(format!("the named leaf is not this claim's: {e}")))
+        }
+        // RFC-0004 A6: an evaluation cone accusation at a dissected leaf of the claim's own pipeline likewise.
+        PalwCourtVerdictProofV2::EvalCone { close } => {
+            let facts = state
+                .improvement_eval_claim_facts_v1(claim, &close.binding)
+                .map_err(|why| PalwCourtV2Error::DoesNotAdjudicate(why.into()))?;
+            crate::palw_improve_eval_court_v1::palw_eval_named_dissected_leaf_v1(close, &facts)
+                .map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(format!("the named leaf is not this claim's: {e}")))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// **What the accusation decides against `claim`** — under the held regime (`held_regime`, the
@@ -178,8 +196,8 @@ pub fn palw_tir_one_move_outcome_v1(
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     held_regime: bool,
 ) -> Result<PalwTirOneMoveOutcomeV1, PalwCourtV2Error> {
-    if !a.proof.is_tir_v1() {
-        return Err(PalwCourtV2Error::DoesNotAdjudicate("not an IR close".into()));
+    if !a.proof.is_tir_v1() && !a.proof.is_eval_v1() {
+        return Err(PalwCourtV2Error::DoesNotAdjudicate("not an IR or an evaluation close".into()));
     }
     if held_regime {
         crate::palw_court_v2::check_close_cost_v2(&a.proof, court)?;

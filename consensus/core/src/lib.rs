@@ -481,6 +481,8 @@ pub mod palw_improve_v1;
 pub mod palw_improve_state_v1;
 /// RFC-0004 §7.2 (A6): the evaluation job family — the job, its derived context, its binding, its table and the outcomes a missing evaluation takes.
 pub mod palw_improve_eval_v1;
+/// RFC-0004 §7.2 (A6): the evaluation court — the binding the chain holds to the claim, and the closes proofs 13–15 carry (spec 17 §17.8.6).
+pub mod palw_improve_eval_court_v1;
 /// RFC-0004 §6.3: a candidate's artifact reference and the composite artifact root (the candidates lane's).
 pub mod palw_improve_artifact_v1;
 /// RFC-0004 §6: the candidate's wire payload (the candidates lane's).

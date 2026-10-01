@@ -124,6 +124,13 @@ impl PalwGenInventoryIndexV1 {
         u32::try_from(base + index.leaf_of(param, layer, byte)? as u64).ok()
     }
 
+    /// **Where a composite candidate's inventory splits at param `p`** of program `program` (RFC-0004 §6.3): the
+    /// leaves before it — the parent section's — counted over the whole pipeline inventory.
+    pub fn leaves_before_param_v1(&self, program: u16, p: u16) -> Option<u32> {
+        let (base, index) = self.programs.get(program as usize)?;
+        u32::try_from(base + index.leaves_before(p)? as u64).ok()
+    }
+
     /// The coordinates of leaf `leaf`.
     pub fn piece_of(&self, leaf: u32) -> Option<PalwGenInventoryPieceV1> {
         let k = self.programs.partition_point(|(base, _)| *base <= leaf as u64).checked_sub(1)?;
@@ -339,6 +346,44 @@ impl PalwGenOpenedParamsV1 {
             }
             verify_artifact_opening_v1(o, *artifact_root).map_err(|_| PalwGenParamRefusalV1::NotUnderTheRoot(o.leaf_index))?;
             leaves.insert(o.leaf_index, (o.operand.row_start, o.operand.bytes.clone()));
+        }
+        Ok(Self { leaves })
+    }
+
+    /// **Authenticate openings carried in sections** (RFC-0004 §6.3's composite artifact): each section is
+    /// `(base, count, root, openings)` — `count` leaves of the inventory from leaf `base` on, as a tree of its own under
+    /// `root`, its openings' indices relative to the section, ascending, each its leaf's canonical piece and reaching
+    /// the section's root. The authenticated leaves are keyed by their inventory leaf (`base + index`).
+    pub fn authenticate_sections(
+        inventory: &PalwGenInventoryIndexV1,
+        sections: &[(u32, u32, Hash64, &[PalwArtifactOpeningV1])],
+    ) -> Result<Self, PalwGenParamRefusalV1> {
+        let mut leaves = BTreeMap::new();
+        for (base, count, root, openings) in sections {
+            let mut last: Option<u32> = None;
+            for o in *openings {
+                if last.is_some_and(|l| l >= o.leaf_index) {
+                    return Err(PalwGenParamRefusalV1::NotAscending);
+                }
+                last = Some(o.leaf_index);
+                if o.leaf_count != *count {
+                    return Err(PalwGenParamRefusalV1::AnotherInventory { got: o.leaf_count, want: *count });
+                }
+                let global = base.checked_add(o.leaf_index).ok_or(PalwGenParamRefusalV1::NotCanonical(o.leaf_index))?;
+                let (k, j, layer, start, len) = inventory.piece_of(global).ok_or(PalwGenParamRefusalV1::NotCanonical(global))?;
+                let name = &inventory.view(k).expect("a piece names a program").params[j as usize].name;
+                if o.operand.tensor_name != *name
+                    || o.operand.layer != layer
+                    || o.operand.row_start != start
+                    || o.operand.bytes.len() != len as usize
+                {
+                    return Err(PalwGenParamRefusalV1::NotCanonical(global));
+                }
+                verify_artifact_opening_v1(o, *root).map_err(|_| PalwGenParamRefusalV1::NotUnderTheRoot(global))?;
+                if leaves.insert(global, (o.operand.row_start, o.operand.bytes.clone())).is_some() {
+                    return Err(PalwGenParamRefusalV1::NotAscending);
+                }
+            }
         }
         Ok(Self { leaves })
     }

@@ -612,6 +612,32 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
+    /// **Take a recorded score back out** (spec 17 §17.8.6): a convicted evaluation claim's, while the epoch still takes
+    /// scores. The item is then missing for that subject — it counts for the incumbent — until another claim records
+    /// it. `Ok(false)` when there is nothing to take: no such epoch, an epoch that no longer takes scores, no score.
+    pub(crate) fn retract_improvement_score_v1(
+        &mut self,
+        line_id: &Hash64,
+        epoch: u64,
+        item: u32,
+        subject: PalwEvalSubjectV1,
+        kind: PalwScoringKindV1,
+    ) -> Result<bool, PalwStateV2Error> {
+        let Some(header) = self.state.improvement_epochs.get(&(*line_id, epoch)) else { return Ok(false) };
+        if !matches!(header.state, PalwEpochStateV1::Evaluating | PalwEpochStateV1::Closing) {
+            return Ok(false);
+        }
+        let key = (*line_id, epoch, item, subject);
+        let Some(mut row) = self.state.improvement_results.get(&key).cloned() else { return Ok(false) };
+        let before = row.scores.len();
+        row.scores.retain(|score| score.kind != kind);
+        if row.scores.len() == before {
+            return Ok(false);
+        }
+        self.write_improvement_result(key, if row.scores.is_empty() { None } else { Some(row) });
+        Ok(true)
+    }
+
     /// **Pay an evaluation job's fee** (spec 17 §17.11.2) from the subject's escrow: the executor's, and — where
     /// the claim's panel is known (`panel` = the seats drawn and the ones credited, those that answered) — the
     /// credited seats' share of it, `seat_pool_permille` of the fee divided over the seats DRAWN, exactly as an

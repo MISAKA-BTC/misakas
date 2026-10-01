@@ -510,6 +510,20 @@ pub enum PalwCourtVerdictProofV2 {
     /// `TirDissection` with the generative close as its carriage, graded against its session's phase
     /// ([`crate::palw_gen_close_v1::check_gen_dissect_bottom_v1`]), never against the claim alone.
     GenDissection { bottom: Box<crate::palw_gen_close_v1::PalwGenConeCloseV1> },
+    /// **RFC-0004 A6 (tag 13, spec 17 §17.0): an evaluation claim's cone close** — one leaf of the claim's step
+    /// tree, the one the accusation narrowed to, adjudicated by demand evaluation of its cone over the evaluation's
+    /// own pipeline ([`crate::palw_improve_eval_court_v1::check_eval_cone_close_v1`]). Appended, so no earlier
+    /// discriminant moves; below `palw_improvement_v1` the acceptance layer drops a close that carries one by name
+    /// and the fold reads an assembled one as bytes that do not decode — an older build's reading of both.
+    EvalCone { close: Box<crate::palw_improve_eval_court_v1::PalwEvalConeCloseV1> },
+    /// **RFC-0004 A6 (tag 14): an evaluation decode close** — the claim's committed outputs against what they were
+    /// read from: a generated id against the logits row it was selected from, or the committed score against the
+    /// score stage's output tile ([`crate::palw_improve_eval_court_v1::check_eval_decode_close_v1`]).
+    EvalDecodeToken { close: Box<crate::palw_improve_eval_court_v1::PalwEvalDecodeCloseV1> },
+    /// **RFC-0004 A6 (tag 15): the bottom of an evaluation claim's history dissection** — F7's `GenDissection` over
+    /// the evaluation's context, graded against its session's phase
+    /// ([`crate::palw_improve_eval_court_v1::check_eval_dissect_bottom_v1`]), never against the claim alone.
+    EvalDissection { bottom: Box<crate::palw_improve_eval_court_v1::PalwEvalConeCloseV1> },
 }
 
 impl PalwCourtVerdictProofV2 {
@@ -517,6 +531,22 @@ impl PalwCourtVerdictProofV2 {
     /// acceptance layer drops it by name and the fold reads an assembled one as undecodable bytes.
     pub fn is_gen_v1(&self) -> bool {
         matches!(self, Self::GenCone { .. } | Self::GenDecodeToken { .. } | Self::GenDissection { .. })
+    }
+
+    /// **Is this an evaluation close** (RFC-0004 A6)? A move only past `palw_improvement_v1`; below it the acceptance
+    /// layer drops it by name and the fold reads an assembled one as undecodable bytes.
+    pub fn is_eval_v1(&self) -> bool {
+        matches!(self, Self::EvalCone { .. } | Self::EvalDecodeToken { .. } | Self::EvalDissection { .. })
+    }
+
+    /// The evaluation binding an evaluation close carries.
+    pub fn eval_binding_v1(&self) -> Option<&crate::palw_improve_eval_v1::PalwEvalBindingV1> {
+        match self {
+            Self::EvalCone { close } => Some(&close.binding),
+            Self::EvalDecodeToken { close } => Some(&close.binding),
+            Self::EvalDissection { bottom } => Some(&bottom.binding),
+            _ => None,
+        }
     }
 
     /// **Is this an IR class's close** (RFC-0002 Phase F)? Such a close is a move only past
@@ -889,6 +919,55 @@ pub fn check_court_gen_root_claim_admits_v1(
     .map_err(PalwCourtV2Error::TirDissectionRefused)
 }
 
+/// **RFC-0004 A6: the evaluation root claim, under the responder's key** — the claim's bond, the ADR-0082 responder
+/// context, over [`crate::palw_improve_eval_court_v1::palw_eval_root_claim_message_v1`].
+pub fn check_court_eval_root_claim_acceptance_v1<V>(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    root: &crate::palw_improve_eval_court_v1::PalwEvalRootClaimV1,
+    signature: &[u8],
+    verify_mldsa87: V,
+) -> Result<(), PalwCourtV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    let (_session, claim) = resolve_court_session_v2(state, session_id)?;
+    let bond = state.bond(&claim.bond).ok_or(PalwCourtV2Error::ChallengerMissing(claim.bond))?;
+    let message = crate::palw_improve_eval_court_v1::palw_eval_root_claim_message_v1(session_id, root);
+    if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT) {
+        return Err(PalwCourtV2Error::RungSignatureInvalid);
+    }
+    Ok(())
+}
+
+/// **RFC-0004 A6: the evaluation root claim, admitted** — the generative root claim's rules over the claim's own
+/// evaluation pipeline: the session's ladder terminal and no phase open on it, the claim an evaluation claim of the
+/// job table, the declared arity the ruleset's derived one, and the finalize
+/// ([`crate::palw_improve_eval_court_v1::check_eval_root_claim_v1`]) at the court's limits. Returns the site the
+/// phase will open on (the fold derives the same one).
+pub fn check_court_eval_root_claim_admits_v1(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    root: &crate::palw_improve_eval_court_v1::PalwEvalRootClaimV1,
+    arity: u8,
+    derived_arity: u8,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+) -> Result<crate::palw_tir_dissect_v1::PalwTirDissectSiteV1, PalwCourtV2Error> {
+    let (session, claim) = resolve_court_session_v2(state, session_id)?;
+    if session.dissection.is_some() || state.tir_dissection_v1(session_id).is_some() {
+        return Err(PalwCourtV2Error::DissectionAlreadyOpen(*session_id));
+    }
+    let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
+    let facts = state
+        .improvement_eval_claim_facts_v1(claim, &root.finalize.binding)
+        .map_err(|why| PalwCourtV2Error::TirDissectionRefused(why.into()))?;
+    if arity != derived_arity {
+        return Err(PalwCourtV2Error::ArityIsNotTheDerivedOne { declared: arity, derived: derived_arity });
+    }
+    crate::palw_improve_eval_court_v1::check_eval_root_claim_v1(root, &facts, narrowed, &palw_tir_court_limits_v1(court))
+        .map_err(PalwCourtV2Error::TirDissectionRefused)
+}
+
 /// **What a `CourtCloseDeclared` binds** (ADR-0080 design A, W6).
 ///
 /// Every field of the object except the signature itself, in the object's own order, borsh-encoded
@@ -1070,7 +1149,10 @@ fn binding_of(proof: &PalwCourtVerdictProofV2) -> Option<&crate::palw_step_leg::
         | PalwCourtVerdictProofV2::TirDissection { .. }
         | PalwCourtVerdictProofV2::GenCone { .. }
         | PalwCourtVerdictProofV2::GenDecodeToken { .. }
-        | PalwCourtVerdictProofV2::GenDissection { .. } => None,
+        | PalwCourtVerdictProofV2::GenDissection { .. }
+        | PalwCourtVerdictProofV2::EvalCone { .. }
+        | PalwCourtVerdictProofV2::EvalDecodeToken { .. }
+        | PalwCourtVerdictProofV2::EvalDissection { .. } => None,
     }
 }
 
@@ -1355,6 +1437,34 @@ pub fn adjudicate_court_close_v3(
         PalwCourtVerdictProofV2::GenCone { .. } | PalwCourtVerdictProofV2::GenDecodeToken { .. } => {
             return adjudicate_gen_close_v1(state, claim, proof, Some(narrowed), court, prompt_ids_form, decode_close_convicts_only);
         }
+        // **RFC-0004 A6: an evaluation close, through the same door** — a cone close must open the leaf the ladder
+        // narrowed to, a decode close one of the tiles it concerns; both are checked with the binding, which the
+        // door needs to place the leaf.
+        PalwCourtVerdictProofV2::EvalCone { .. } | PalwCourtVerdictProofV2::EvalDecodeToken { .. } => {
+            return adjudicate_eval_close_v1(state, claim, proof, Some(narrowed), court, decode_close_convicts_only);
+        }
+        // **RFC-0004 A6: the evaluation dissection's bottom, graded against F7's phase**, as the generative one is.
+        PalwCourtVerdictProofV2::EvalDissection { bottom } => {
+            let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
+            let facts = state
+                .improvement_eval_claim_facts_v1(claim, &bottom.binding)
+                .map_err(|why| PalwCourtV2Error::DoesNotAdjudicate(why.into()))?;
+            let outcome = crate::palw_improve_eval_court_v1::check_eval_dissect_bottom_v1(
+                phase,
+                bottom,
+                &facts,
+                narrowed,
+                &palw_tir_court_limits_v1(court),
+            );
+            return match outcome {
+                Ok(Some(_)) => Ok(PalwCourtVerdictV2::ExecutorGuilty),
+                Ok(None) => Ok(PalwCourtVerdictV2::ChallengerDefeated),
+                Err(crate::palw_improve_eval_court_v1::PalwEvalCourtErrorV1::NotTheNarrowedLeaf { opened, narrowed }) => {
+                    Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened, narrowed })
+                }
+                Err(e) => Err(PalwCourtV2Error::DoesNotAdjudicate(e.to_string())),
+            };
+        }
         // **RFC-0003: the generative dissection's bottom, graded against F7's phase** — the tile it
         // may open, the claim it is compared with and the totals the other reductions are supplied
         // from are the phase's facts.
@@ -1584,6 +1694,10 @@ pub fn adjudicate_close_proof_v2(
     if proof.is_gen_v1() {
         return adjudicate_gen_close_v1(state, claim, proof, None, court, prompt_ids_form, false);
     }
+    // RFC-0004 A6: an evaluation close, adjudicated over the claim's own evaluation pipeline.
+    if proof.is_eval_v1() {
+        return adjudicate_eval_close_v1(state, claim, proof, None, court, false);
+    }
     // Before ANY arm reads geometry out of the binding. See the function's own docs: this is the
     // bound that does not have to be repeated at each consumer.
     let Some(legacy) = binding_of(proof) else {
@@ -1652,6 +1766,51 @@ pub fn adjudicate_close_proof_v2(
             Err(PalwCourtV2Error::DoesNotAdjudicate("a generative close".into()))
         }
         PalwCourtVerdictProofV2::GenDissection { .. } => Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
+        // Adjudicated above, by `adjudicate_eval_close_v1`; the bottom only in its session.
+        PalwCourtVerdictProofV2::EvalCone { .. } | PalwCourtVerdictProofV2::EvalDecodeToken { .. } => {
+            Err(PalwCourtV2Error::DoesNotAdjudicate("an evaluation close".into()))
+        }
+        PalwCourtVerdictProofV2::EvalDissection { .. } => Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
+    }
+}
+
+/// **The evidence half of an evaluation close** (RFC-0004 A6): the claim must be the evaluation claim the job table
+/// holds for the binding's job, the binding must be the execution the claim committed (its job, class, roots, layout
+/// and leaf count — [`crate::palw_improve_eval_court_v1::verify_eval_binding_v1`]), and — in a session — the close
+/// must answer the leaf the ladder narrowed to. Then the evaluation court decides; a decode close under the court
+/// door convicts or is refused, never acquits (`palw_decode_close_verdict_v1`).
+fn adjudicate_eval_close_v1(
+    state: &PalwChainStateV2,
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    proof: &PalwCourtVerdictProofV2,
+    narrowed: Option<u64>,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    decode_close_convicts_only: bool,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    use crate::palw_improve_eval_court_v1 as e;
+    let binding = proof.eval_binding_v1().ok_or_else(|| PalwCourtV2Error::DoesNotAdjudicate("not an evaluation close".into()))?;
+    let facts =
+        state.improvement_eval_claim_facts_v1(claim, binding).map_err(|why| PalwCourtV2Error::DoesNotAdjudicate(why.into()))?;
+    let limits = palw_tir_court_limits_v1(court);
+    let outcome = match proof {
+        PalwCourtVerdictProofV2::EvalCone { close } => e::check_eval_cone_close_v1(close, &facts, narrowed, &limits),
+        PalwCourtVerdictProofV2::EvalDecodeToken { close } => e::check_eval_decode_close_v1(close, &facts, narrowed),
+        // Graded against its phase, in `adjudicate_court_close_v3` — refused here, never read as "no fault found"
+        // (which would acquit).
+        PalwCourtVerdictProofV2::EvalDissection { .. } => return Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
+        _ => return Err(PalwCourtV2Error::DoesNotAdjudicate("not an evaluation close".into())),
+    };
+    let verdict = match outcome {
+        Ok(Some(_fault)) => PalwCourtVerdictV2::ExecutorGuilty,
+        Ok(None) => PalwCourtVerdictV2::ChallengerDefeated,
+        Err(e::PalwEvalCourtErrorV1::NotTheNarrowedLeaf { opened, narrowed }) => {
+            return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened, narrowed });
+        }
+        Err(e) => return Err(PalwCourtV2Error::DoesNotAdjudicate(e.to_string())),
+    };
+    match proof {
+        PalwCourtVerdictProofV2::EvalDecodeToken { .. } => palw_decode_close_verdict_v1(verdict, decode_close_convicts_only),
+        _ => Ok(verdict),
     }
 }
 
@@ -2334,7 +2493,11 @@ pub fn check_close_cost_v2(
         // RFC-0003: a generative close likewise, measured as it rides (the class referenced by id).
         | PalwCourtVerdictProofV2::GenCone { .. }
         | PalwCourtVerdictProofV2::GenDecodeToken { .. }
-        | PalwCourtVerdictProofV2::GenDissection { .. } => {
+        | PalwCourtVerdictProofV2::GenDissection { .. }
+        // RFC-0004 A6: an evaluation close likewise (the class, the job and the context referenced by the claim).
+        | PalwCourtVerdictProofV2::EvalCone { .. }
+        | PalwCourtVerdictProofV2::EvalDecodeToken { .. }
+        | PalwCourtVerdictProofV2::EvalDissection { .. } => {
             let bytes = borsh::to_vec(proof).map(|b| b.len() as u64).unwrap_or(u64::MAX);
             if bytes > court.max_close_bytes() {
                 return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });
