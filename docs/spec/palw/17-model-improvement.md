@@ -17,10 +17,14 @@
 > Status: **Draft for review (A1)**.
 > - §17.0 (the tags and ids every lane builds against) is final for v1.
 > - The findings of the independent second implementation (`rfc4/ref2`,
->   `docs/design/palw/improve/ref2-findings.md`) are resolved here, each where its id is cited
->   ([S1]…[S5], [P1]…[P9], [E1]…[E15]).
-> - The coordinator's decisions are applied: E11, E12, P1, the head's place (RFC §3 amended), and the
->   missing-evaluation rule.
+>   `docs/design/palw/improve/ref2-findings.md`) are resolved here, each where its id is cited:
+>   the RFC-era ones ([S1]…[S5], [P1]…[P9], [E1]…[E15]) and spec 17's own ([S6]…[S9], [P10],
+>   [E16]…[E28]) and the differential's ([D1]…[D15]).
+> - The coordinator's decisions are applied: E11, E12, P1, the head's place (RFC §3 amended), the
+>   missing-evaluation rule, and — from the differential — E21/D2 (fees fund the draw; an abort refunds
+>   each fee less its share of the spend), D15 (a setter missing any key loses its whole set and its
+>   bond), D12 (vesting is final, on its own steps) and D5 (a missing guard score counts for the
+>   incumbent, with its liveness cost).
 
 Contents:
 - §17.0 tags and ids;
@@ -35,8 +39,9 @@ Contents:
 - §17.9 promotion;
 - §17.10 rollback;
 - §17.11 the pool and rewards;
-- §17.12 rules PALW-MIP-1…25;
-- §17.13 vectors.
+- §17.12 rules PALW-MIP-1…25 (and PALW-MIP-26…28, §17.14.5);
+- §17.13 vectors;
+- §17.14 pipeline-claim data availability (Phase F's half).
 
 ---
 
@@ -44,8 +49,14 @@ Contents:
 
 Every number below was chosen free on every branch that touches the same space:
 - `tir/fence-2`: object tag 67, delta 88–89, tails `0xC0`–`0xC1`;
-- `rfc3/fp-v5`: object tags 68–69, delta 90, tail `0xC2`, court proofs 10–12, step fault 21;
-- the capacity line: tails `0xB*`.
+- `rfc3/fp-v5`: object tags 68–69, delta 90, tail `0xC2`, court proofs 10–12 and 16, step fault 21;
+- Phase F's pipeline-claim data availability (`rfc4/int`, §17.14): object tags 83–85 (83 assigned, 84 and 85
+  reserved), DA units 5–6, DA answers 7–9; and `HardCaseKeyRevealed`, object tag 86;
+- the capacity line: tails `0xB*`;
+- `rcore/int-10` (the release line): the model court window's delta entry `ClassCourtWindow`, which that line
+  declared at 90 and which sits at the **end** of the delta enum here (100; `GenClass` keeps 90 — the
+  integration's decision of 2026-10-01: `palw_model_court_window` is armed on no network, so no serialised
+  delta of it exists and moving it moves no stored byte), and its carriage tail `0xE0`.
 
 ### Consensus objects (`PalwConsensusObjectV2`, appended)
 
@@ -68,12 +79,44 @@ Each variant's borsh discriminant is its tag. Tags 70–82 are appended after `C
 | 80 | `CandidateSubmitted` | `PalwCandidateSubmissionV1` | `submitter` (a bond) | `palw_improve_candidate_v1` | cand (A5) |
 | 81 | `LineageHeadRolledBack` | `PalwLineageRollbackV1` | `filer`: the owner, or any bond with a proof | `palw_improve_state_v1` | core (A2) |
 | 82 | `ImprovementPoolFunded` | `PalwImprovementPoolFundingV1` | unsigned (its carrier's sink output pays it, as `ModelBuy`) | `palw_improve_state_v1` | core (A9) |
+| 83 | `DefaultAccusedPipelineStep` | `PalwPipelineStepAccusationV1` | the `accuser` (a bond) | `palw_pipeline_da_v1` | Phase F (§17.14) |
+| 84, 85 | reserved (uninhabited payload) | — | — | `palw_pipeline_da_v1` | — |
+| 86 | `HardCaseKeyRevealed` | `PalwCaseKeyRevealV1` | unsigned (opens the commitment) | `palw_improve_material_v1` | cand (A4) |
 
-Tags 83–85 are reserved for Phase F's pipeline-claim data-availability objects (the coordinator's
-decision of 2026-09-29): evaluation claims otherwise have no on-chain DA transport, so a withholding
-evaluator could not be convicted. Those objects are dropped by name below `palw_improvement_v1`. Tag 86
-is `HardCaseKeyRevealed` (the material lane's: a hold-out case's committed key or reference, opened in
-`Closing`, unsigned, as `SetterKeysRevealed` opens a set's). Tag 87 is the next free tag.
+Tags 83–85 are Phase F's pipeline-claim data-availability tags (the coordinator's decision of
+2026-09-29; §17.14): evaluation claims otherwise have no on-chain DA transport, so a withholding evaluator
+could not be convicted. **Tag 83 is `DefaultAccusedPipelineStep`**, the demand; **tags 84 and 85 stay
+reserved**, their variants' payload uninhabited, so a block that carries one is undecodable, as an unknown
+tag is, while every later tag keeps its number. Phase F's objects are dropped by name below
+`palw_improvement_v1`. **Tag 86 is `HardCaseKeyRevealed`** (the material lane's: a hold-out case's
+committed key or reference, opened in `Closing`, unsigned, as `SetterKeysRevealed` opens a set's; §17.8.2).
+
+The integration's allocations beyond them (2026-10-01; each lane asked the core lane, §17.0's rule):
+
+| Tag | Variant | What it is | On the wire |
+| --- | --- | --- | --- |
+| 87 | `GenTensorCommitted` | RFC-0003 §I.4: a tensor claim's commitment, the object the acceptance walk builds from an FP job version 10 payload (`palw_fp_gen_objects_from_accepted_txs_v1`), past `palw_fp_job_v5` over `palw_gen_v1` (approved for `rfc3/gen-claim`) | **never**: the transaction is the carrier and `palw_lifecycle_object_may_ride_v2` refuses it a carriage by name, as `FreePromptCommitted`. The number is a name, held so that no other object is ever declared at 87 |
+| 88 | `GenShardCourtAccused` | RFC-0003 §I.4.7: a pipeline claim accused in one move — the generative twin of tag 62 for a chain that plays no bisection (the held regime); the accusation carries a generative close and is adjudicated whole at acceptance (requested by `rfc3/gen-claim`, granted in its order) | yes |
+| 89 | `CourtEvalRootClaimed` | RFC-0004 §7.2 (A6): the evaluation court's history-dissection root claim (`PalwEvalRootClaimV1`'s carrier); the evaluation lane's | yes |
+| 90 | `HeldLeafChallengeDeclared` | `PalwHeldLeafChallengeV1` (spec 04b §15.15.6, lane D): a challenge generic over IR and generative leaves, under the dormant fence `palw_held_close_chunks_v1`. **It carries the close declaration**: one step opens a `Terminal` session on the named leaf (ADR-0103 Decision 5) and writes the challenger-side close group the court already has, and the chunks ride as `CourtCloseChunk`, so a leaf whose close does not fit one carrier (~100 KB) is convictable on a held chain. Opening without declaring would put the executor on the clock at a fused terminal and refuse the accuser's own declaration there (`CourtCloseNotTerminal`), which is why the two are one object; while the declared close stands the session waits at `Terminal` (§17.0 review note below). It replaces a chunk-group table design; tag 62 is untouched (lane D's decision 22, 2026-10-01) | yes |
+| 91 and up | free | the next tag is 91 | |
+
+**Tag 90's executor clock** (the integration's review of 2026-10-01; spec 04b §15.15.6 is the authority). The session
+a held leaf challenge opens is at a fused IR or pipeline terminal with no phase open, where the court clocks the
+executor for its opening move (`court_turn_and_rung_deadline_v2`) and refuses a challenger's own declaration
+(`court_session_turn_and_rung_deadline_v2`, the declaration arm: a close is legal only at `Terminal`). The object
+therefore writes the declaration with the opening, and the clock gains the mirror of the executor-declared clause:
+a challenger-side group at the IR or pipeline terminal with no phase open waits at `Terminal`, the group's own
+assembly deadline clocking the declarer. The clause reads rooted state only — the group row, the phase table, the
+class's fused flag and its IR or generative row — and no fence, so the deadline index, its rebuild and checker, the
+sweep, the declaration arm and the producer's duty view, which all ask the one helper, agree by construction. It
+changes no state a ruleset can reach below the fence: a challenger's declaration at that terminal is refused until
+the executor's own declared close makes the session wait at `Terminal`, where the existing clause already gives
+the same answer, and a group dies only with its session.
+
+Tags 83–90 are declared with **explicit discriminants** (`#[borsh(use_discriminant = true)]`), as
+`PalwCourtVerdictProofV2` already carries them: a tag is an allocation, not a position, and two lanes that
+append at the same place cannot move each other's number by the order they merge in.
 
 **Every layer asks the same three predicates:**
 - the stateless gate (`palw_lifecycle_object_may_ride_v2`) lets each of the thirteen ride at every
@@ -107,7 +150,7 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 | 6 | `improvement_pools` | line → `PalwImprovementPoolV1` | 5 | `0xD3` |
 | 7 | `improvement_material` | (line, epoch) → `PalwMaterialFrontierV1` | 6 | `0xD4` |
 | 8 | `improvement_candidates` | (line, epoch, index) → `PalwEpochCandidateV1` | 7 | `0xD5` |
-| 9 | `improvement_pool_entries` | (line, epoch, index) → `PalwPoolEntryV2` | 8 | `0xD6` |
+| 9 | `improvement_pool_entries` | (line, epoch, u8 kind, id) → `PalwPoolEntryV2` — kind 1 a hold-out case, 2 a setter set (§17.6.2) [D13] | 8 | `0xD6` |
 | 10 | `improvement_items` | (line, epoch, item) → `PalwEvalItemV1` | 9 | `0xD7` |
 | 11 | `improvement_results` | (line, epoch, item, subject) → `PalwEvalResultV1` | 10 | `0xD8` |
 | 12 | `improvement_grants` | (line, epoch, index) → `PalwRewardGrantV1` | 11 | `0xD9` |
@@ -127,25 +170,24 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 | Lane | Delta entries | Carriage tails | `state_root` block (after `improvement/v1`) |
 | --- | --- | --- | --- |
 | cand (A4: cases, setter sets, datasets, artifacts, licences, opt-ins) | 93–99 | `0xC5`–`0xCB` | `improvement-material/v1` |
-| eval (A6: per-job state) | none: the job table is `ImprovementRow` table 13 (`improvement_eval_jobs`); 100–103 stay free | `0xCC` (`0xCD`–`0xCF` free) | `improvement-eval/v1` |
+| eval (A6: per-job state) | none: the job table is `ImprovementRow` table 13 (`improvement_eval_jobs`); 101–103 stay free (100 is `ClassCourtWindow`, the release line's) | `0xCC` (`0xCD`–`0xCF` free) | `improvement-eval/v1` |
 
 ### Court and step ids (reserved, not used by step 0)
 
 | Space | Reserved | Last used before |
 | --- | --- | --- |
-| `PalwCourtVerdictProofV2` tags | 13 `EvalCone`, 14 `EvalDecodeToken`, 15 `EvalDissection` (the evaluation lane's, defined in §17.8.6: an evaluation claim's court moves carry its `PalwEvalBindingV1` and composite parameter openings); 16 and up free | 12 (`GenDissection`, RFC-0003) |
+| `PalwCourtVerdictProofV2` tags | 13 `EvalCone`, 14 `EvalDecodeToken`, 15 `EvalDissection` (the evaluation lane's, defined in §17.8.6: an evaluation claim's court moves carry its `PalwEvalBindingV1` and composite parameter openings); **16 `GenOutputTile`** (RFC-0003's tensor claim's output close — it first took 13, the next positional number, and moved here on the coordinator's decision of 2026-10-01; the enum carries its discriminants explicitly, `#[borsh(use_discriminant = true)]`, so a variant declared before it never renumbers it); 17 and up free | 12 (`GenDissection`, RFC-0003); 16 is RFC-0003's, after the reserved range |
 | `PalwStepFaultV1` discriminants | 22 and up | 21 (`TirOutputDigestMismatch`, RFC-0003) |
 | `PalwDaUnitV1` tags | 5–6 for Phase F's pipeline-claim units (step leaf, step node; an evaluation claim has no rows unit), 7 spare | 4 (`TirRowNode { level, index }`, the second IR fence's) |
 | `PalwDaAnswerV1` tags | 7 and up for the pipeline-claim answers (the out-of-range proof is an answer of tag 5's shape, generic over the claim kind) | 6 (the row node's answer, after `TirStepOutOfRange` 5) |
 
 Evaluation jobs are RFC-0003 pipeline jobs, adjudicated by the courts that already exist. A new proof
 or fault is added only if A6/A7 show one is needed, and takes the next number here. A6 needed three proofs
-(13–15, §17.8.6) and one object for the history dissection of a claim (`CourtEvalRootClaimed`, the
-evaluation analogue of `CourtGenRootClaimed`, §17.8.6.3), appended on the evaluation branch after the last tag
-and assigned at the integration (87 on this plan). The one-move accusation of an evaluation claim is **not** a
-new object: it is `TirShardCourtAccused` (62) carrying proof 13 or 14. Object tag 83 and
-up, court proof 13 and up and step fault 22 and up are shared: a lane asks the core lane before taking
-one.
+(13–15, §17.8.6) and one object for the history dissection of a claim (`CourtEvalRootClaimed`, the evaluation
+analogue of `CourtGenRootClaimed`, §17.8.6.3), assigned tag 89 at the integration. The one-move accusation of an
+evaluation claim is **not** a new object: it is `TirShardCourtAccused` (62) carrying proof 13 or 14. Object tag 91
+and up, court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
+object tags 83–90 are allocated above): a lane asks the core lane before taking one.
 
 ### The fence
 
@@ -159,9 +201,9 @@ one.
 | Normaliser | `Some(never())` collapses to `None`; `for_each_fence` visits the activation only |
 | Fork id | listed in `palw_fences_v1` as `("palw_improvement_v1", activation)` |
 | Mirror | `PalwStateParamsV2::improve_from_daa`, `improve_ceilings` and `improve_lifecycle_base_daa` (borsh-skipped; the last is the DAA-independent part of the ruleset's claim path `Λ`, §17.4.3 rows 19–20), written by `Params::sync_palw_improvement_v1` only |
-| Drill | `--palw-drill-improve-at` (`palw_drill_improve_fence_at_v1`, list `PALW_DRILL_IMPROVE_FENCES_V1`, ceilings `PALW_DRILL_IMPROVE_CEILINGS_V1`) |
+| Drill | `--palw-drill-improve-at` (`palw_drill_improve_fence_at_v1`, list `PALW_DRILL_IMPROVE_FENCES_V1`, ceilings `PALW_DRILL_IMPROVE_CEILINGS_V1`); armed after `--palw-drill-tir-at`, `--palw-drill-tir2-at`, `--palw-drill-gen-at`, `--palw-drill-fence-at` and `--palw-drill-decode-rules-at`, its prerequisites |
 | Format caps | candidates ≤ 16, items ≤ 4,096 per epoch, positions ≤ 2^40 per epoch, budget ≤ 1,000 ‰, lines ≤ 1,024, policy ≤ 16,384 bytes, open epochs ≤ 64, **live results ≤ 2^17**, **seat share ≤ 1,000 ‰** (zero allowed: no seat share); the others none zero. `max_live_results` is the product bound every block's root rehash pays: an epoch reserves `(n + regression_items + safety_items) × (k_max + 2)` result rows when it opens (the policy check refuses a policy whose epoch could never fit), and frees them when its results retire; an epoch opens only if the reservation fits. The drill's ceilings are (8, 1,024, 2^32, 500, 64, 16,384, 8, 2^14, 500) |
-| Prerequisites | a `ConsensusV2` ruleset (checked first); `palw_audit_2026_09_11` declared; `palw_tir_v1`, **`palw_tir_fence2`**, `palw_gen_v1` and `palw_kary_court` in force at or below the activation (the second IR fence since 2026-09-29: every evaluation pipeline sized under H7, and no verdict may flip mid-epoch); **and `palw_fp_decode_rules` in force at or below the activation** **[decision A6-1, the coordinator's, 2026-09-30]** — an evaluation claim is an FP Job V4's bytes under the decode rules (§17.8.4), so a ruleset that armed improvement without them would open epochs whose claims the header-context door refuses, and every such epoch would end `NoChange`. `validate_palw_v2` refuses such a ruleset, as it refuses `palw_fp_job_v5` without them; the integration adds the check and a decode-rules entry (`--palw-drill-decode-rules-at`) to the flag-day and drill lists. |
+| Prerequisites | a `ConsensusV2` ruleset (checked first); `palw_audit_2026_09_11` declared; `palw_tir_v1`, **`palw_tir_fence2`**, `palw_gen_v1` and `palw_kary_court` in force at or below the activation (the second IR fence since 2026-09-29: every evaluation pipeline sized under H7, and no verdict may flip mid-epoch); and **`palw_fp_decode_rules`** in force at or below it too — the integration's decision of 2026-10-01, resolving **[decision A6-1]** (required, as `palw_fp_job_v5` requires it): an evaluation's generated text is a decode under the network's sampler rules (ADR-0082 D10/D11, §17.8.4), the header-context door refuses an evaluation claim below them, and an epoch must not open on rules that arm mid-epoch (without the requirement every such epoch would end `NoChange`). The decode rules carry their own dormant testnet-12 flag-day list (`PALW_T12_DECODE_RULES_FENCES_V1`, height `PALW_T12_DECODE_RULES_DAA`, `None` until the user sets it) and drill flag (`--palw-drill-decode-rules-at`, `palw_drill_decode_rules_at_v1`). |
 | Shipped | `None` on every preset and in no testnet-12 flag-day list |
 
 ### Domain keys (keyed BLAKE2b-512, 64-byte output)
@@ -242,8 +284,10 @@ The integration (lane A) adds it with `palw_fp_decode_rules`'s own flag-day and 
 | `head`, `head_seq` | the head class, and how many head entries were ever appended |
 | `next_epoch`, `open_epoch` | the next epoch number (from 1), and the epoch in progress, if any |
 | `next_due_daa` | when the fold next advances the line (§17.5.2) |
-| `barred` | at most 16 submitters barred after a rollback, each with the DAA its bar ends |
-| `last_promotion`, `regression_epoch`, `regression_check` | the epoch of the latest promotion and of its regression check (kept while a rollback can name them), and the predecessor the next epoch checks (§17.10.2) |
+| `next_check_daa` | the next grid boundary at which an idle line's trigger is examined: the first multiple of `grid` strictly after the line's last check (its creation, the decision that made it idle, a policy coming into force on an idle line, or the last examination) [D16] |
+| `barred` | at most 16 submitters barred after a rollback, each with the DAA its bar ends. An expired bar is pruned when the line is advanced. A new bar for a submitter already barred replaces it (removed, then appended). A 17th bar sorts the list by end, latest first (a stable sort), and keeps the first 16: the bar that ends soonest is dropped [D8/E19] |
+| `last_promotion` | `PalwLastPromotionV1 { epoch: u64, owner_until_daa: u64, ban_daa: u64 }`: the latest promotion's epoch and its rollback terms, pinned at the promotion (§17.10.1) [E22]; kept while a rollback can name it |
+| `regression_epoch`, `regression_check` | the epoch that ran the latest promotion's regression check (kept for its proof), and the predecessor still owed a check (§17.10.2) [E20] |
 
 The line's other rows: `improvement_policies[line]` (the policy in force and a pending one),
 `improvement_usage[line]` (`usage`, `since_daa`, §17.4.5), `improvement_heads[(line, seq)]` (the last 64
@@ -262,6 +306,7 @@ material frontier — the next epoch's before it opens).
 | `seed` | the epoch seed (§17.8.1) |
 | `previous_counts`, `outcome` | the regression check's counts, and the decision (§17.9) |
 | `escrow` | the parent's and the regression check's evaluation escrow, and what they spent (§17.11.2) |
+| `results_bound` | `u32`: the result rows the epoch reserved against `C.max_live_results` when it opened, `(n + regression_items + safety_items) × (k_max + 2)`; freed when its results retire (§17.2). A header field, not a table: the state's live-result count (`improvement_live_results`, re-derived on every load) is the sum of `results_bound` over the epochs not yet retired, and a block's epoch opens only if that sum plus the new bound fits [P12] |
 | `decided_daa`, `retire` | when the epoch ended, and the retirement sweep's progress (§17.5.4) |
 
 Its rows, keyed under `(line, epoch, …)`: `improvement_candidates` (in acceptance order, each with what
@@ -311,34 +356,43 @@ and refuses by name (`ImprovementPolicyRefused`):
   - fewer than `ceilings.max_governed_lines` lines are governed;
   - the policy passes §17.4.3.
   The row is created: `head = class_id`, a history entry `OptIn`, `usage = 0`,
-  `usage_since_daa = governed_from_daa =` this DAA, `next_epoch = 1`, and `next_due_daa` = the first
-  grid boundary strictly after this DAA [E1].
+  `usage_since_daa = governed_from_daa =` this DAA, `next_epoch = 1`, and `next_check_daa = next_due_daa` = the
+  first grid boundary strictly after this DAA [E1].
 - **Change** (row, `policy = Some`):
-  - with no epoch open, the policy is in force at once;
+  - the line MUST still be governed at this DAA: past an opt-out's `effective_daa` a policy is
+    refused until the line has dissolved, when it opts in afresh [D14];
+  - with no epoch open, the policy is in force at once, and `next_due_daa` is recomputed on its grid
+    (§17.5.2) [E28];
   - otherwise it becomes `pending_policy`, replacing any earlier pending one, and is in force from
     the epoch's end [E6];
-  - a pending opt-out is cancelled.
-- **Opt out** (row, `policy = None`): §17.4.4.
+  - an opt-out not yet in effect is cancelled: the line is `Governed` again.
+- **Opt out** (row, `policy = None`): §17.4.4. An opt-out of a line already opting out is refused
+  [D14].
 
 ### 17.4.3 The policy and its check
 
 ```
-PalwImprovementPolicyV1 {
+PalwImprovementPolicyV1 {                        // borsh, fields in this order [P10]
   version: u16 = 1,
-  usage: { measure: Claims | WorkLeaves, value: u128 },
-  windows: { grid, w_collect, w_submit, w_holdout, w_eval, beacon_delay, court_margin },
-  eval: { stages: [ { kind, params } ], regression_dataset, regression_items, safety_dataset,
-          safety_items, judge_set: [class], judge: Option<JudgeSpec>, pairwise: Option<JudgeSpec>,
-          seat_pool_permille, anchor_floor_permille, n, n_min, delta_permille,
-          epsilon_permille, epsilon_safety_permille, alpha_permille, max_new_tokens, stop_ids,
-          setter_cap_permille, max_eval_positions },
+  usage: { measure: u8 (Claims 1 | WorkLeaves 2), value: u128 },
+  windows: { grid, w_collect, w_submit, w_holdout, w_eval, beacon_delay, court_margin: u64 },
+  eval: {
+    stages: Vec<{ kind: u8 (ExactMatch 1 | RefLogLik 2 | Judge 3 | Pairwise 4), params }>,
+    regression_dataset: [u8; 64], regression_items: u32,
+    safety_dataset: [u8; 64], safety_items: u32,
+    judge_set: Vec<[u8; 64]>, judge: Option<JudgeSpec>, pairwise: Option<JudgeSpec>,
+    seat_pool_permille: u16, anchor_floor_permille: u16,
+    n: u32, n_min: u32,
+    delta_permille, epsilon_permille, epsilon_safety_permille, alpha_permille: u16,
+    max_new_tokens: u32, stop_ids: Vec<u32>, setter_cap_permille: u16, max_eval_positions: u64,
+  },
   k_max: u8,
-  fees: { registration_fee, candidate_bond, eval_fee_per_job, hard_case_fee, artifact_bond, setter_bond,
-          dataset_bond, s1_bounty, s1_setter_reward },
+  fees: { registration_fee, candidate_bond, eval_fee_per_job, hard_case_fee, artifact_bond,
+          setter_bond, dataset_bond, s1_bounty, s1_setter_reward: u64 },
   phi_permille, bounty_share_permille, promotion_share_permille,
-  s2_trainer_permille, s2_dataset_cap_permille, s2_contributor_cap_permille,
-  provenance: { teacher_classes: u8 mask, licence_classes: [id], full_weight_candidates: bool,
-                base_licence_class },
+  s2_trainer_permille, s2_dataset_cap_permille, s2_contributor_cap_permille: u16,
+  provenance: { teacher_classes: u8, licence_classes: Vec<[u8; 64]>, full_weight_candidates: bool,
+                base_licence_class: [u8; 64] },
   rollback_epochs, vest_epochs, ban_epochs: u32,
 }
 policy_digest = H("misaka-palw/improve/policy/v1", borsh(policy))
@@ -355,6 +409,17 @@ Vec<u32>, logit_scale_q24 i32 }`; `seat_pool_permille u16`; `anchor_floor_permil
 L_e = w_collect + w_submit + w_holdout + w_eval + court_margin        // the nominal epoch length
 ```
 
+The encoding is borsh's [P10]:
+- integers are little-endian at their width; a `bool` is one byte, 0 or 1;
+- a `Vec` is `LE u32` length, then its elements; a 64-byte id is its bytes;
+- `usage.measure` and a stage's `kind` are one byte holding the value shown;
+- `params` is one byte of variant index — ExactMatch 0, RefLogLik 1, Judge 2, Pairwise 3 — then its
+  fields;
+- `teacher_classes` is a mask, class `c` (OpenDistill 1, LicensedDistill 2, SelfPlay 3, Human 4,
+  ToolVerified 5, PublicData 6) at bit `c − 1`.
+
+`policy.json` (§17.13) holds byte vectors of this form.
+
 `PalwScoringParamsV1` is one of:
 - `ExactMatch { open: i32, close: i32, key_cap: u32 }` (−1: no delimiter);
 - `RefLogLik { logit_scale_q24: i32 }`;
@@ -362,7 +427,16 @@ L_e = w_collect + w_submit + w_holdout + w_eval + court_margin        // the nom
 - `Pairwise { margin: i32 }`.
 
 The chain derives each stage's program from its kind, these parameters and the subject's shape, with
-the builders `scoring_set_id` pins (A7).
+the builders `scoring_set_id` pins (A7). Two of the programs saturate, and the saturated value is the
+score [D10, D11]:
+- **RefLogLik** (`misaka_palw_tir::scoring::ref_loglik_v1`; `ref_loglik_reference_v1` is the same
+  arithmetic in plain Rust): per logits row `r`, with `m = max_j x_j`, each scaled gap is
+  `z_j = clamp((x_j − m)·logit_scale_q24, i32::MIN, 0)` — about −128 nats at the floor — and
+  `log p(ref_r) = z_{ref_r} − IntLn(Σ_j IntExp(z_j))`. The value is the exact `i64` sum over the rows
+  before `min(ref_count, rows_count)`, committed as `(hi, lo)`. A token the row puts more than
+  128 nats below its best thus scores as if it were 128 nats below.
+- **Judge** (`misaka_palw_tir::scoring::judge_v1`): the value is the judge's scalar clamped to
+  `[lo, hi]`, so two outputs both past `hi` (or both below `lo`) tie.
 
 `JudgeSpec { template_dataset: id, verdict_a: [u32], verdict_b: [u32], logit_scale_q24: i32 }` is what a judged
 stage needs (§17.8.5): `Some` exactly when the stages hold the matching kind (`judge` for Judge, `pairwise` for
@@ -378,13 +452,13 @@ A policy is refused by name unless every check below holds. `C` is the fence's `
 | --- | --- |
 | 1 | `version = 1`; `borsh(policy)` is at most `C.max_policy_bytes` |
 | 2 | `usage.value ≥ 1` |
-| 3 | every window `≥ 1` and `≤ 2^32`; `grid ≥ L_e` (so at most one epoch runs per grid period and every epoch ends before the next boundary it could open at) |
+| 3 | every window `≥ 1` and `≤ 2^32`; **`grid > L_e`** [E18]: an epoch opened at `g` ends by `t_score = g + L_e < g + grid`, strictly before the next boundary, which it would otherwise skip |
 | 4 | **`w_eval > beacon_delay + PALW_IMPROVE_MIN_CLAIM_WINDOW_DAA_V1`**, where the constant is 32 DAA [E12]: the draw leaves at least 32 DAA of claiming |
 | 5 | `1 ≤ \|stages\| ≤ 8`; each stage's params match its kind; at least one stage is primary (ExactMatch or RefLogLik); no kind appears twice |
 | 6 | ExactMatch: `1 ≤ key_cap ≤ max_new_tokens`, `open ≥ −1`, `close ≥ −1`. RefLogLik: `logit_scale_q24 > 0`. Judge: `lo < hi`. Pairwise: `0 ≤ margin ≤ i32::MAX` (the stage's input interval) |
 | 7 | a Judge or Pairwise stage requires `1 ≤ \|judge_set\| ≤ 16`, the set without duplicates, each an admitted IR class; without one, `judge_set` is empty; `anchor_floor_permille ≤ 1000` |
 | 7b | **each judged stage carries its specification** [decision, 2026-09-30]: `judge` is `Some` exactly when there is a Judge stage and `pairwise` exactly when there is a Pairwise stage; each names a template dataset (non-zero id), two different verdict sequences of 1 to 8 ids each, and `logit_scale_q24 > 0` |
-| 8 | `1 ≤ n_min ≤ n ≤ min(C.max_items_per_epoch, PALW_IMPROVE_SIGN_N_MAX_V1 = 2048)` |
+| 8 | `1 ≤ n_min ≤ n ≤ min(C.max_items_per_epoch, PALW_IMPROVE_SIGN_N_MAX_V1 = 2048)`, and `n + regression_items + safety_items ≤ C.max_items_per_epoch` (the ceiling bounds every item an epoch evaluates) [D9] |
 | 9 | `regression_items, safety_items ≤ 1024`; **a suite with items names its dataset (a non-zero id), and a suite with none names none** — a policy whose suite names no dataset is refused [decision, 2026-09-30] |
 | 10 | `delta_permille, epsilon_permille, epsilon_safety_permille ≤ 1000` |
 | 11 | `alpha_permille` is one of the sign table's levels, `{10, 50}` [P1] |
@@ -397,6 +471,8 @@ A policy is refused by name unless every check below holds. `C` is the fence's `
 | 18 | `seat_pool_permille ≤ C.max_eval_seat_permille` (§17.11.2) |
 | 19 | **`court_margin ≥ Λ`**, where `Λ` is the ruleset's fast honest claim path (below) [decision, 2026-09-30, corrected 2026-10-01]: a claim accepted in the epoch's last DAA before `t_eval` and left unchallenged could not otherwise reach `Final` before `t_score` |
 | 20 | **a judged policy** (a Judge or Pairwise stage): `w_eval > beacon_delay + Λ + 32` — a judge reads FINAL generations, so the epoch evaluates in two rounds (generations, then judged parts), each needing the fast honest path |
+
+The rows are checked **in ascending order and the first one a policy breaks names the refusal** [E36]: a policy that breaks rows 8 and 9 together (D9's item total and a suite's own cap) is refused by row 8. A refusal's name is not state, so this order is not consensus; it is stated so that two implementations give the same name.
 
 ```
 Λ = anchor_delay + A + max(C, 120)         A = min(window_receipt, 30)          C = the challenge window in force
@@ -447,7 +523,11 @@ While opting out, no epoch opens. From `effective_daa`:
 - then every row of the line is deleted but its header, which stays as `Dissolved` so the next opt-in
   continues its policy sequence (§17.11.5).
 
-A policy object with `policy = Some` before `effective_daa` cancels the opt-out.
+A policy object with `policy = Some` before `effective_daa` (or while the epoch that set it off is still
+open) cancels the opt-out. Past `effective_daa` a policy is refused until the line has dissolved; a
+second opt-out is refused at any time [D14]. A rollback stays valid until the line dissolves, governed
+or not: its window and bar were pinned at the promotion, and its forfeits fund the pool whose balance
+the owner receives at dissolution [E25].
 
 ### 17.4.5 Usage (the trigger's counter) [E1], open question 3
 
@@ -490,11 +570,26 @@ unnamed.
 ### 17.5.2 Advancing a line
 
 In step 2 of every block, the fold takes every line with `next_due_daa ≤ DAA`, in `(next_due_daa,
-line_id)` order. It advances each one by applying every transition due at this DAA, in the order of
-§17.5.3, until none is due [E15]. It then vests the line's grants (§17.11.4) and sets `next_due_daa` to
-the smallest DAA at which a transition, a vesting step or the opt-out becomes due:
+line_id)` order. It advances each one: it first vests the line's grants to this DAA (§17.11.4) [D12],
+then applies every transition due at this DAA, in the order of §17.5.3, until none is due [E15], then
+vests again. It sets `next_due_daa` to the smallest DAA, strictly after this one, at which any of these
+becomes due:
 - for an idle line: the next grid boundary strictly after this DAA;
-- for an open epoch: its next time.
+- for an open epoch: its next time (every block while `Closing`, for an early Scoring);
+- an opt-out's `effective_daa`;
+- **the next vesting step** of any of the line's grants still vesting, `vest_from_daa + k·vest_unit_daa`
+  for the smallest `k` that lands after this DAA [D12] — so a grant vests on its step even on a line
+  with nothing else to do, and a rollback can never reach an amount that should already have vested.
+
+**A wake-up is not a check** [D16]. An idle line also carries `next_check_daa`, the next grid boundary at which its
+trigger is examined, and `next_due_daa` is the smaller of that and its other due times. Only a block with
+`DAA ≥ next_check_daa` examines the trigger (§17.5.3 step 1), after which `next_check_daa` is the next boundary strictly
+after this DAA; a block that wakes the line for a vesting step, or an opt-out, examines nothing and leaves it. So a
+vesting step falling between two boundaries never opens an epoch (with the usage restarted and an epoch number spent)
+nor skips the boundary after it, and a jump past several boundaries still examines the trigger once, at the first block
+past them.
+
+The same computation runs after a rollback and after a policy that is in force at once [E28].
 
 A block whose DAA jumps past several times therefore applies all of them, in order, in that block.
 
@@ -507,34 +602,43 @@ Let `W` be the policy's windows. All times are fixed when the epoch opens.
    opens epoch `e = next_epoch`:
    - `t_open = g`, `t_fix = g + w_collect`, `t_close = t_fix + w_submit`, `t_draw = t_close + w_holdout`,
      `t_eval = t_draw + w_eval`, `t_score = t_eval + court_margin`;
-   - `parent = head`, and `previous` as §17.10.2 says;
+   - `parent = head`, `previous = None` (the regression check joins at the draw, §17.10.2 [E20]);
    - `material` = the line's `pending_material`, which is reset;
    - `usage = 0`, `usage_since_daa = DAA`, `open_epoch = e`, `next_epoch = e + 1`.
-   The S1 budget for the period is set (§17.11.3). A line opting out does not open. Otherwise the
-   line's next check is the next boundary.
+   The S1 budget for the period is set (§17.11.3). A line opting out does not open. Whether or not it opens, the
+   line's next check is the next boundary strictly after this DAA [D16]; only a block at or past `next_check_daa`
+   makes the check.
 2. **`Open → Submission` at `t_fix`.** `dataset_root` is fixed over `material` (§17.6.1) and never
    changes [PALW-MIP-7].
 3. **`Submission → HoldOut` at `t_close`.** The candidate set freezes; `K = |candidates|` from here on
    [P6]. With no candidate the epoch is **decided at once**: `NoChange(NoCandidate)` [E9].
 4. **`HoldOut → Drawing` at `t_draw`.**
 5. **`Drawing → Evaluating` at `t_draw + beacon_delay`.** The draw (§17.8.1): the epoch seed, the items
-   and the judges. Then the parent's evaluation escrow is reserved from the pool (§17.11.2).
-   - With fewer than `n_min` drawn items: **decided at once** `NoChange(TooFewItems)` [E9]. (Which
+   and the judges. Then, in this order [E24]:
+   - with fewer than `n_min` drawn items: **decided at once** `NoChange(TooFewItems)` [E9] (which
      items are primary is known only from their scores; scoring applies the same test to the primary
-     count, §17.9.5.)
-   - With a pool too small for the parent's escrow: `NoChange(PoolInsufficient)`.
+     count, §17.9.5);
+   - the regression check joins if one is owed: `previous = regression_check`, if that class is still
+     admitted (§17.10.2) [E20];
+   - the parent's escrow and, with a check, `Previous`'s are reserved from the balance (§17.11.2); a
+     balance too small for both: `NoChange(PoolInsufficient)`, the check still owed;
+   - with the check reserved, `regression_check = None` and `regression_epoch = e`.
 6. **`Evaluating → Closing` at `t_eval`.** No evaluation claim is accepted from here on.
 7. **Scoring**, at the first DAA ≥ `t_eval` at which the evaluation lane reports every evaluation claim
    of the epoch final and the material lane reports no drawn set or case owing a reveal, and at the
-   latest at `t_score` [E4]. Just before it, the material lane drops every drawn item still owing a
-   reveal (§17.9.1). The
+   latest at `t_score` [E4]. `t_score` is the reveal deadline [E16]: a silent steward holds Scoring
+   until then, never past it. Just before Scoring, the material lane (the core's before-scoring hook)
+   settles every drawn set or case still owing a reveal: a setter that has not revealed **every** key
+   of its set loses its **whole** set — every item of the set is dropped for every subject — and its
+   setter bond is forfeited to the balance [D15]; a hold-out case owing its key or reference is
+   dropped (§17.9.1). The
    fold computes the counts and the decision (§17.9), and applies it (§17.9.5, §17.11). The epoch is
    `Decided`.
 8. **The epoch's end** (whenever an epoch becomes `Decided`, whatever the path):
    - `open_epoch = None`, `decided_daa = DAA`;
    - a pending policy comes into force;
    - a pending opt-out starts its delay;
-   - unused escrows are returned (§17.11.2);
+   - unused escrows are returned (§17.11.2), the parent's and `Previous`'s first [D3];
    - the row is compacted: `items` and `results` are dropped, keeping `counts`, `outcome`, the
      candidates and the grants;
    - the line's next boundary check is the next grid boundary strictly after this DAA [E15].
@@ -589,7 +693,10 @@ refusal.
   submitter bond. At most `4·n` entries (`PALW_IMPROVE_HOLDOUT_FACTOR_V1 = 4`); a further case in
   `HoldOut` is refused by name.
 - **Setter sets.** A `SetterSetCommitted` before `t_close` enters the pool as `{ set_id, setter,
-  items }`, at most 16 sets. Its items are `(set_id, i)` for `i < items`. In v1 setter items are
+  items }`, `1 ≤ items ≤ n`, at most 16 sets. Its items are `(set_id, i)` for `i < items`.
+- **Keys** [D13/E27]. The pool is keyed `(line, epoch, kind, id)` — kind 1 a hold-out case (`case_id`),
+  kind 2 a setter set (`set_id`) — so an id enters an epoch's pool once: a repeated case id or set id is
+  refused by name. The draw's order keys are then distinct (its "ties are impossible"). In v1 setter items are
   generated only: an ExactMatch key, or an empty key for a judged item. Likelihood items come from
   hold-out cases with a continuation reference, disclosed from the draw by `HardCaseKeyRevealed` —
   one hash commits a set's keys, so a set cannot disclose a reference at the draw apart from its keys
@@ -640,7 +747,43 @@ it paid.
 "nothing is withdrawn after `t_close`" holds trivially. At the epoch's end:
 - losing candidates' bonds are refunded;
 - the winner's bond vests with its grant;
-- registration fees stay in the pool (except on abort, §17.10.3).
+- registration fees are the pool's balance from admission (an abort refunds each less its share of
+  the spend it funded, §17.10.3).
+
+### 17.7.1 A composite class proves readiness over its adapter section
+
+> Normative past `palw_improvement_v1`. The coordinator's addition of 2026-10-01 (lane C's drill preparation
+> found the gap): RFC-0004 §6.3's composite is the main candidate shape (A5), and it could not become ready.
+
+**Why.** A composite candidate's class carries `artifact_root = H(parent_class ‖ parent_root ‖ adapter_root ‖
+le32(P))` (§17.7; RFC-0004 §6.3). That is no inventory root: no multiproof opens it. The model registry's
+possession proof (`SeatReadinessProvedV2`, tag 50, ADR-0133 §11.2) reconstructs the class's registered root, so
+no seat could ever prove a composite, no composite ever left `Candidate`/`Prefetching` (`ready_seats` stayed
+0), and none of its evaluation claims (§17.8.4) was admitted.
+
+**The rule.** It binds exactly the classes with a **composite record** (`improvement_composite_classes`,
+written when the candidate carrying the reference is accepted, §17.7). That table is empty on every chain that
+accepted no composite candidate and is written only past `palw_improvement_v1`, so the rule is **dormant
+below the fence and for every other class — byte for byte, at every height**.
+
+| Item | Rule |
+| --- | --- |
+| The proof | The existing V2 object for `class_id = C`, whose multiproof reconstructs **`adapter_root`** — the root of the adapter section's own inventory (params `P..`) — in place of the class's registered artifact root. Every other V2 rule is unchanged: at most 16 leaves, the operand byte cap, the span window, the leaves opened are exactly the challenge's draw over the section's leaf count, the seat's ML-DSA-87 signature over the leaves it opened |
+| Consistency | The record's reference must root to the class's registered `artifact_root` (`palw_improve_composite_artifact_root_v1`); a record that does not opens nothing (`ReadinessProofRefused`, "does not root to the class's registered artifact root") |
+| Binding to the composite | Three places: the challenge seed names `C` (`palw_readiness_v2_challenge_seed_v1(C, bond, span)`), so another composite over the same adapter draws other leaves of it and a proof written for `C` is no proof of `C'`; the seat's signature covers `C` and the leaves; and the row it writes is keyed `(bond, C)`, so it counts for no other class. |
+| The parent | A seat counts as ready for `C` only if it is **also ready for every ancestor of `C`** — a fresh row of its own on `parent_class` passing the same five registry clauses (active, above the floor, a fresh row, free collateral for the readiness multiple, and lane maturity) — recursively when the parent is itself a composite, to depth 8 (`PALW_COMPOSITE_READINESS_MAX_DEPTH_V1`); a chain of composites longer than that is one no seat is ready for **[decision R1]**. The clause is per seat, not per class: RFC-0004 §6.7 has a seat that holds the parent fetch only the adapter, so the seats that can replay a composite are the seats that hold both, and a class-level "the parent has its seats" would count adapter holders that cannot replay. The parent's row is judged at the DAA of the question: when it lapses, the composite's count falls with it |
+| Where it applies | The one readiness predicate (`palw_seat_class_not_ready_reason_net_v1`): the fold's ready-seat count and the `Candidate` jury (`model_registry_seat_is_ready`), the registry read (`readySeatsNow`, and each row's `not_ready_reason`, `parent not ready`; the panel view's hold reason `PARENT_NOT_READY`), and the panel room's ready count; the panel draw (`palw_bond_may_judge_class_v4`) asks the parent row's freshness likewise, so a seat without the parent is never seated on a composite's panel |
+| Lifecycle | Unchanged: `Candidate → Prefetching → Probation` read the count above; a composite is admitted exactly when `required_ready_seats` seats prove the adapter and are ready for the parent |
+
+**An empty adapter section is refused** [C4, decision 2026-10-01]. A composite whose adapter section holds no params (`p = 0`), or whose `p` is not the parent's own param count, is not a composite: the candidate's `PalwTirCompositeRefV1` check refuses it at the door (`palw_improve_composite_v1`: both sections are non-empty, and a parent of no params has no inventory to reuse), so no composite record is written and nothing here applies to it. The chain's check is the rule; an implementation that admits an empty section (the reference interpreter `ref2` did) is wrong and MUST refuse, since an adapter proof over an empty inventory opens no leaf and would make every seat "ready" for a class that adds nothing.
+
+**What the node does** (lane C, on top of this rule): a seat that holds the parent and the adapter section
+files the adapter proof for `C` from the section's own inventory and keeps its parent row fresh; the parent's
+renewal is the parent class's own (`SeatReadinessProvedV2` for `parent_class`). **Tests** (core,
+`palw_state_v2::tests::adr0135::composite_readiness_v1`; the processor's gate): a composite reaches
+`Probation` once seven seats prove the adapter and hold the parent and stays in `Prefetching` otherwise; the
+parent clause is per seat and follows the parent's row; the proof opens the adapter root only, under a record
+that roots to the class; the proof is bound to its class; the fence-off twin reads the class-blind rule.
 
 ## 17.8 Evaluation
 
@@ -655,8 +798,9 @@ entry ids   : a hold-out case         → case_id
 order key   = H("misaka-palw/improve/draw/v1", seed ‖ entry id)
 ```
 
-`block_hash` is the hash of the chain block whose fold performs the draw. It postdates the hold-out, so
-the draw is fixed only after every candidate and every hold-out case is.
+`block_hash` is the hash of the chain block whose fold performs the draw — the chain's 64-byte block
+hash (`Hash64`), as it is — and `line_id` is the line's 64-byte id [E26]. The block postdates the
+hold-out, so the draw is fixed only after every candidate and every hold-out case is.
 
 - **Draw.** The pool is sorted by `order key` (as bytes, ascending; ties are impossible). The items are
   the first entries of that order, with two exclusions:
@@ -698,8 +842,9 @@ Every subject gets the same jobs on every item: one job per stage that applies t
 Pairwise job exists only for candidates and `Previous`: it compares the subject with the parent. The
 job family is the evaluation lane's (A6):
 - contexts derived by the chain;
-- job ids `H("…/eval-job/v1", line ‖ LE u64 epoch ‖ LE u32 item ‖ borsh(subject) ‖ kind ‖ part)` (§17.0: `part` one byte, 0 for
-  every kind but a judged one);
+- job ids `H("…/eval-job/v1", line ‖ LE u64 epoch ‖ LE u32 item ‖ borsh(subject) ‖ kind ‖ part)`, `kind` one
+  byte holding the kind's value (ExactMatch 1, RefLogLik 2, Judge 3, Pairwise 4 — the policy's
+  encoding, not the scoring library's tags 0–3) [S9], and `part` one byte (§17.0): 0 for every kind but a judged one;
 - open claiming in `[draw, t_eval)`;
 - the fee per job, paid from the subject's escrow;
 - capacity reservation (§17.8.4).
@@ -722,9 +867,13 @@ lane's `palw_improve_eval_epoch_jobs_v1` are the two spellings of it, and the se
 
 **Key disclosure** (RFC §7.1, amended):
 - setter prompts, and the references of teacher-forced items, are disclosed at the draw;
-- keys of generated items are disclosed only after every subject's generation claims on the set's
-  items are final;
-- a steward that misses its reveal forfeits its bond, and its items drop out for every subject.
+- keys of generated items are disclosed only in `Closing` (`t_eval ≤ DAA < t_score`), and only when
+  no evaluation claim on the set's (or case's) items is pending — every generation claim on them
+  final or voided [E17]. Before `t_eval` a job not yet claimed has no claim, so "every claim final"
+  would hold vacuously while the job is still claimable; `Closing` accepts no new claim (step 6);
+- `t_score` is the deadline [E16]. A setter that has not revealed every key of its set by Scoring
+  forfeits its setter bond and loses its whole set; a case owing its key drops (§17.5.3 step 7)
+  [D15].
 
 ### 17.8.3 Results
 
@@ -744,7 +893,15 @@ subject, kind)`, and the claim is the evaluation lane's job row's.
 
 A second score for the same `(item, subject, kind)` is refused (a score that stands: a convicted claim's
 score is taken back out, §17.8.6, and the job's next claim records its own). A score is taken only while the epoch
-is `Evaluating` or `Closing`, for an item it drew and a subject it evaluates.
+is `Evaluating` or `Closing`, for an item it drew and a subject it evaluates, and only inside its
+kind's range [D6]: ExactMatch 0 or 1; Pairwise −1, 0 or 1; Judge inside a Judge stage's `[lo, hi]`;
+RefLogLik any `i64`. A score outside it is refused by name, so the one outcome function (§17.9.1)
+reads only legal values.
+
+**A claim final after the epoch's end** [E23] is neither scored nor paid: the core's recorder refuses a
+score, and its payer pays nothing, once the epoch is `Decided` (its unspent escrow has gone back,
+§17.11.2). The evaluation lane skips both without failing the block. `court_margin` is the time a
+court has to finish; an executor whose claim is still contested at `t_score` is not paid for it.
 
 **ExactMatch is scored by the fold at the key's reveal**, not by a claim: keys stay hidden until every
 subject's outputs are final, so no single claim may read one. An ExactMatch job is generation only; its
@@ -934,6 +1091,19 @@ its own life.
   **`max_eval_budget_permille` bounds them**: the class's evaluation claims whose replay is still owed, with
   the one asked about, may not exceed that share of the class's capacity in claims (at least one is always
   admitted) — evaluation cannot crowd out the class's attempts. A claim past either is refused by name.
+- *The network room's verification term `L_ver`* **[capacity line, int-11; dormant]**. The network room's level
+  `L_net = min(L_seat, L_carry, L_anchor)` bounds the unlicensed claims the network holds by capital and
+  carriage, not by what the seats can verify, and an evaluation claim that sits in that queue waits for its licence
+  like any claim. `palw_network_verify_level_v1` adds a fourth term, a constant sized from the measured supply:
+  `L_ver = ⌊μ_floor × W_safe⌋`, `μ_floor` = 1.5 licences a DAA (`PALW_NETWORK_VERIFY_FLOOR_MILLI_V1` = 1,500) and
+  `W_safe = (window_receipt − anchor_delay) / 2` DAA, half the receipt window. At the shipped 600 / 20 windows
+  `L_ver = 435`; it is 0 when the window does not exceed the anchor delay. The level used is
+  `palw_network_level_with_verify_v1`: `L_net` capped by `L_ver` once the fence that arms it is in force, `L_net` as
+  today below it, so the term only ever lowers the level. A refused attempt is skipped, never charged
+  (`NetworkRoomExhausted` is non-fatal for the block). The term is a function of the ruleset's windows alone and
+  reads no state; the feedback form (`μ` observed from a ring of licences) is the capacity line's stage 6 and is
+  not here. Nothing in this chapter reads `L_ver`: the evaluation claim's capacity rules above are unchanged by it,
+  and the integration (lane A) wires it behind its own dormant fence.
 
 **Panels** (who seats an evaluation claim, and who is paid). An evaluation claim is an FP claim of the class it
 runs, so the chain derives its panel as it derives any claim's (the same seed, the same draw over the seats ready
@@ -1168,8 +1338,8 @@ disputed leaf with its path under its stage's root, `palw_eval_named_dissected_l
   (`palw_gen_check_dissect_bottom_with_v1` over the evaluation's context), convicting where the responder's totals lie
   and acquitting where they hold.
 
-`CourtEvalRootClaimed` is appended after the last tag of §17.0 on this branch; its tag is assigned at the
-integration (87 on §17.0's plan). It is a dissection move (the k-ary court's fence), carries no heartbeat, and is
+`CourtEvalRootClaimed` is **object tag 89** (§17.0's allocation of 2026-10-01, declared with an explicit
+discriminant). It is a dissection move (the k-ary court's fence), carries no heartbeat, and is
 dropped by name below `palw_improvement_v1`.
 
 **Records** [decision, 2026-09-30/10-01]. *E-C1*: no new accusation object; the evaluation accusation is
@@ -1208,13 +1378,17 @@ Read the item's score of the kind in question for both subjects (`s_C`, `s_H`).
   supplier that never reveals cannot veto a promotion by making every candidate lose its item. The
   material lane drops them just before scoring (`drop_improvement_item_v1`) and forfeits a
   non-revealing setter's hold.
-- The **primary** kind of an item is read from the recorded scores: ExactMatch if any subject has an
-  ExactMatch score on it, else RefLogLik if any has a RefLogLik score; an item with neither but with a
-  guard score is judged-only; an item with no score at all is a primary item every subject misses, so it
-  counts, and counts for the parent (a Loss for every candidate). Regression and safety items without a
-  score count the same way.
+- The **primary** kind of a drawn item is read from the recorded scores: ExactMatch if any subject has
+  an ExactMatch score on it, else RefLogLik if any has a RefLogLik score; a drawn item with neither but
+  with a guard score is judged-only; a drawn item with no score at all is a primary item every subject
+  misses, so it counts, and counts for the parent (a Loss for every candidate).
+- **Regression and safety items are never judged-only** [S6]: each always counts in its suite (`N_r`,
+  `N_s`), by its primary kind if any subject has one, else as ExactMatch — so a suite item without a
+  primary score, whatever guard scores it has, is a Loss for every candidate.
 
-The evaluation lane's `palw_improve_item_outcome_v1` implements exactly this.
+There is **one** outcome function, the core's `palw_improve_item_outcome_v1` (in
+`palw_improve_promotion_v1`), and every lane calls it [D6]. With the ranges §17.8.3 enforces, a
+Pairwise value is exactly −1, 0 or 1.
 
 ### 17.9.2 The pinned sign table [P1], [P2]
 
@@ -1254,17 +1428,33 @@ For each candidate `C` in the frozen set, over non-dropped items:
 | `primary` | primary drawn items, by the item's primary kind | `n = b + c + t` |
 | `regression` | regression items, primary kind | `N_r` = their number |
 | `safety` | safety items, primary kind | `N_s` = their number |
-| `judge` | drawn items with a Judge score, their judge not excluded | |
-| `pairwise` | drawn items with a Pairwise score, their judge not excluded | |
+| `judge` | every drawn item whose judge is not excluded, when the policy has a Judge stage — whether or not a Judge score was recorded [D5, S8] | |
+| `pairwise` | every drawn item whose judge is not excluded, when the policy has a Pairwise stage — whether or not a Pairwise score was recorded [D5, S8] | |
+
+**The guards count missing evaluations for the incumbent** [D5, S8]. A guard's count runs over every
+non-dropped drawn item with a kept judge, and §17.9.1's rule decides each: a Judge item with either
+side's score missing is a Loss; a Pairwise item without the candidate's recorded outcome is a Loss.
+This is the conservative choice, and it has a liveness cost: a guard job nobody claims (a Judge or
+Pairwise job, paid from the subject's escrow like any other) counts against the candidate, and enough
+unclaimed guard jobs make the guard's sign test fire and block a promotion that the primary items
+support. The other reading — counting only items that carry the guard's score — would let a candidate
+escape a guard by leaving its guard jobs unclaimed. v1 takes safety over liveness: the escrow pays
+for every guard job, so an honest executor is paid to claim it.
 
 **Judge anchors [S4].** A judge is *excluded* for the epoch (its Judge and Pairwise scores void) when it
-fails its anchors. The anchor pairs are, over the drawn exact-match items it judged, every ordered pair
-of subjects `(p, f)` where `p` passed and `f` failed. A pair is *correct* when the judge's Judge score
-of `p` exceeds its score of `f`. The judge is excluded if:
+fails its anchors. The anchor pairs are, over the non-dropped drawn items it judged whose primary kind
+is ExactMatch, every ordered pair of subjects `(p, f)` where `p` passed and `f` failed **and the judge
+scored both** — a subject without both an ExactMatch and a Judge score on the item forms no pair [D4].
+A pair is *correct* when the judge's Judge score of `p` exceeds its score of `f`. The judge is excluded
+if:
 - it has fewer than `PALW_IMPROVE_MIN_ANCHOR_PAIRS_V1 = 8` pairs; or
 - `1000·correct < anchor_floor_permille · pairs`.
 
-A policy without a Judge stage has no anchors, and its Pairwise judges are never excluded.
+An unscored side is left out of the anchors rather than counted incorrect [D4]: counted incorrect, a
+missing Judge score would let whoever withholds judge jobs push a judge under its floor and void its
+guard, which is the incumbent's protection. A judge left under 8 pairs is still excluded, so a guard
+rests on its anchor jobs being claimed: they are open to every executor and paid from the escrow. A
+policy without a Judge stage has no anchors, and its Pairwise judges are never excluded.
 
 ### 17.9.4 Eligibility and the winner
 
@@ -1310,27 +1500,47 @@ On `NoChange`, every candidate's bond is refunded.
 ```
 PalwLineageRollbackV1 { line_id, epoch, to_class, cause }
 cause = Owner | CanaryFailed { claim, item } | LaterRegression { epoch } | LicenceViolation { challenge }
+```
+
+`cause` is a Borsh enum, its variant index one byte in this order, with these field types: `Owner` 0 (no field); `CanaryFailed` 1 `{ claim: Hash64, item: Hash64 }` (`item` is an item id, §17.8.1); `LaterRegression` 2 `{ epoch: u64 }`; `LicenceViolation` 3 `{ challenge: Hash64 }`. The payload is `line_id: Hash64 ‖ epoch: u64 ‖ to_class: Hash64 ‖ cause` [P14].
+
+```
 message = H("misaka-palw/improve/rollback/v1", network_domain ‖ borsh(payload))
 ```
 
 It is signed with ML-DSA-87 under `misaka-palw-improve-rollback-v1` by the `filer` bond's key. Only
 the **latest promotion** can be rolled back [E8]: the head's last history entry MUST be `Promoted` for
-`epoch`, with `previous = to_class`. A rollback of an older promotion is refused: forfeiting its unvested
-rewards needs no rollback, and its class is no longer the head.
+`epoch`, with `previous = to_class`, and the line's `last_promotion` MUST name `epoch`. A rollback of an
+older promotion is refused: forfeiting its unvested rewards needs no rollback, and its class is no
+longer the head.
+
+**The terms are pinned at the promotion** [E22]. When an epoch promotes, the line records
+`last_promotion = { epoch, owner_until_daa = DAA + rollback_epochs·L_e, ban_daa = ban_epochs·L_e }`
+from that epoch's policy. The owner's window and the bar read these, never the policy in force at the
+rollback: a submitter's exposure is fixed when its promotion is, and a later policy (which the owner
+writes) can neither lengthen the window nor the bar.
+
+A rollback is valid until the line dissolves, whether or not it is still governed [E25].
 
 | Cause | Valid when | Head entry cause |
 | --- | --- | --- |
-| `Owner` | the filer is the spec 15 owner, and `DAA ≤ promotion.daa + rollback_epochs·L_e` [E8] | `RolledBackByOwner` |
+| `Owner` | the filer is the spec 15 owner, and `DAA ≤ last_promotion.owner_until_daa` [E8, E22] | `RolledBackByOwner` |
 | `LaterRegression { epoch: e2 }` | `e2 > epoch`, `e2` is decided, and its regression check shows `Previous` eligible against the parent with `K = 1` (§17.10.2) | `RolledBackByProof` |
 | `CanaryFailed { claim, item }` | the evaluation lane records a canary job over `claim`'s final output that fails safety item `item`. **Not in v1 until A6 provides canary jobs**: refused by name | `RolledBackByProof` |
 | `LicenceViolation { challenge }` | an upheld licence challenge. **Not in v1** (RFC open questions 10–11 give no challenge procedure): refused by name | `RolledBackByProof` |
 
 ### 17.10.2 The regression check
 
-The first epoch that opens after a promotion evaluates the head's predecessor as the subject
-`Previous(previous class)`. That requires:
-- the head's last entry is `Promoted`;
-- the predecessor is still an admitted class.
+A promotion leaves a **regression check owed**: `regression_check = parent` (the head's
+predecessor). The first epoch after it that reaches its draw evaluates the predecessor as the subject
+`Previous(previous class)` [E20]:
+- the check joins at the draw (§17.5.3 step 5), not at the opening, so an epoch that ends before its
+  draw (`NoCandidate`) or at it (`TooFewItems`, `PoolInsufficient`) leaves it owed to the next — a
+  quiet line does not lose the proof path of `LaterRegression`;
+- it requires the predecessor to be still an admitted class at the draw (otherwise it is skipped and
+  stays owed);
+- once reserved, `regression_check = None` and `regression_epoch` names the epoch;
+- a rollback or a new promotion replaces what is owed.
 
 `Previous` runs the same jobs as a candidate, paid from the pool like the parent. Its counts
 (`previous_counts`) are computed as a candidate's with `K = 1`. It is never a candidate: it cannot
@@ -1338,15 +1548,28 @@ win, and it does not count in `K`.
 
 ### 17.10.3 The effect
 
-A valid rollback:
-- sets `head = to_class`, with a history entry, and restarts `usage`;
-- forfeits the rolled-back winner's unvested grants and its unvested candidate bond to the pool
-  [PALW-MIP-16];
-- bars its submitter until `DAA + ban_epochs·L_e`;
-- **aborts an open epoch** [E11]: the epoch is `NoChange(Aborted)`, every candidate's submission fee,
-  bond and unused escrow is refunded in full, and the evaluation spend already paid from the pool
-  stays spent. No re-basing and no waiting: the next epoch opens from the restored head under the
-  usual trigger.
+A valid rollback, in this order:
+1. **vests** every grant of the line to this DAA (§17.11.4): vesting is final, and a vested amount is
+   never taken back [D12];
+2. **aborts an open epoch** [E11]: the epoch is `NoChange(Aborted)`. The parent's and `Previous`'s
+   unspent escrow return to the balance; the evaluation spend already paid stays spent. Every
+   candidate gets back its bond and its unspent escrow in full, and its registration fee **less its
+   share of that spend** [D2/E21]: with `F` the sum of the epoch's fees and `S` the parent's and
+   `Previous`'s spend, candidate `i` is refunded `fee_i − ⌈fee_i · min(F, S) / F⌉`, the rounding
+   staying in the balance. (The fees were in the balance when the draw reserved those escrows, so they
+   may have paid for them; refunding them whole could take the balance below zero, which MIP-21
+   forbids.) A refund is never more than the balance holds — an S1 payout (§17.11.3) may have spent
+   part of what the fees funded — taken candidate by candidate in acceptance order, so that a rollback
+   is never refused for want of balance: it is the owner's safety valve [E21]. No re-basing and no
+   waiting: the next epoch opens from the restored head under the usual trigger;
+3. **forfeits** the unvested remainder, `amount − vested`, of **every** grant of the promoted epoch —
+   the trainer's and every dataset's S2 grant and the winner's candidate bond — to the balance
+   [PALW-MIP-16, D7];
+4. **bars** the winner's submitter until `DAA + last_promotion.ban_daa` (`barred`, §17.3.1) [E22,
+   D8/E19];
+5. sets `head = to_class`, with a history entry, and restarts `usage`; the promotion can no longer be
+   named (`last_promotion`, `regression_check` and `regression_epoch` are cleared); `next_due_daa` is
+   recomputed (§17.5.2).
 
 ## 17.11 The pool and rewards
 
@@ -1360,7 +1583,7 @@ Three paths bring money into the pool.
    escrow as held for the jobs it pays. The debit is refused by name unless the bond is `Active` and
    its free collateral covers it. Free collateral is its collateral less slashed, less what the
    R-core+ ledger holds committed, less its accuser ledger.
-   - `CandidateSubmitted`: `registration_fee` (balance), `candidate_bond` (held), and
+   - `CandidateSubmitted`: `registration_fee` (balance, at once — the draw's escrow may use it [D2]), `candidate_bond` (held), and
      `eval_fee_per_job × J_s` (the candidate's escrow). `J_s` is the most jobs a non-parent subject can be given, as §17.8.2
      defines it once: `(n + m) + 2n·[Judge] + 4n·[Pairwise]` with `m = regression_items + safety_items`.
    - `HardCaseSubmitted`: `hard_case_fee` (balance).
@@ -1387,7 +1610,8 @@ per drawn item and suite entry, **two judged parts per drawn item for a Judge st
 non-parent subject** (§17.8.5: a judged score is that many claims): a subject's escrow is `J_s × eval_fee_per_job`, the
 parent's with no Pairwise term.
 
-The evaluation lane pays, when a job's claim is final, `eval_fee_per_job` from the subject's escrow, as earnings
+The evaluation lane pays, when a job's claim is final and the epoch is still `Evaluating` or `Closing` (a claim
+final after the epoch's end is not paid [E23]), `eval_fee_per_job` from the subject's escrow, as earnings
 credits (§17.11.5): **the executor's, and the credited seats' share of it** [decision A6-4, 2026-09-30]. With
 `P = ⌊fee · seat_pool_permille / 1000⌋` (the policy's `seat_pool_permille`, at most the fence's
 `max_eval_seat_permille`, §17.4.3 row 18), the seats' pool, and `d` the seats DRAWN for the claim's panel (its
@@ -1402,9 +1626,9 @@ was paid, so a job whose escrow is exhausted pays only what is left [E31, decisi
 `⌊P / d⌋`, the executor `reward − P` — so a short escrow scales the seats' pool and the executor's share together (the
 executor is not paid first and the seats are not paid last); with nothing left the claim is paid nothing.
 
-At the epoch's end, whatever is left of an escrow goes back to where it came from:
-- a candidate's, to its submitter;
-- the parent's and `Previous`'s, to the balance.
+At the epoch's end, whatever is left of an escrow goes back to where it came from, **first** the
+parent's and `Previous`'s to the balance — so S2's `R` (§17.11.3) is taken from a balance that
+includes them [D3] — then each candidate's to its submitter.
 
 ### 17.11.3 Grants
 
@@ -1436,11 +1660,14 @@ What the caps withhold returns to the balance. Every S2 grant, and the winner's 
 ### 17.11.4 Vesting and forfeit
 
 A vesting grant is `{ recipient, stage, amount, label, vest_from_daa, vest_unit_daa = L_e,
-vest_epochs, vested, forfeited }`. Whenever the line is advanced, each grant's vested target is
-`⌊amount · min(vest_epochs, ⌊(DAA − vest_from_daa) / vest_unit_daa⌋) / vest_epochs⌋`, and the
-difference from `vested` is paid. The last unit pays the remainder.
+vest_epochs, vested, forfeited }`, made at the epoch's decision with `vest_from_daa` = that DAA. Whenever
+the line is advanced — and the line is due at every grant's next step (§17.5.2) — each grant's vested
+target is `⌊amount · min(vest_epochs, ⌊(DAA − vest_from_daa) / vest_unit_daa⌋) / vest_epochs⌋`, and
+the difference from `vested` is paid. The last unit pays the remainder.
 
-A forfeit (§17.10.3) moves `amount − vested` to the balance, as forfeited, and marks the grant.
+**Vesting is final** [D12]: a vested amount is never confiscated. A forfeit (§17.10.3) first vests the
+grant to the forfeit's DAA, then moves `amount − vested` to the balance, as forfeited, and marks the
+grant.
 Vesting counts DAA in units of the policy's `L_e`, not epochs that open, so a line that stops opening
 epochs still vests [E8].
 
@@ -1503,8 +1730,9 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
   admitted IR class of the parent's family, with its payment (§17.7, §17.11.1).
 - **PALW-MIP-9 (the hold-out).** Items MUST be drawn as §17.8.1 says, from hold-out cases and committed
   setter sets. Prompts and teacher-forced references MUST be disclosed only after `t_close`, keys of
-  generated items only after every subject's outputs are final. An item missing a subject's evaluation
-  MUST count for the parent.
+  generated items only in `Closing` with no claim on their items pending [E17]. An item missing a
+  subject's evaluation MUST count for the parent. A setter that misses any key's reveal MUST lose its
+  whole set and its bond [D15].
 - **PALW-MIP-10 (evaluation jobs).** Every item MUST be evaluated for every subject by jobs whose
   contexts the chain derives, with one seed per item shared by every subject.
 - **PALW-MIP-11 (scores).** A score MUST be the committed output of the policy's scoring stage, recorded
@@ -1525,7 +1753,8 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
   - every block MUST stay within 512 nodes.
 - **PALW-MIP-16 (rewards).** Payouts MUST come only from the pool. S1 MUST pay only EXACT-verified
   events. S2 MUST pay only registered datasets the winner declared, within their caps. S2 grants and
-  the winner's bond MUST vest, and MUST be forfeited on a valid rollback.
+  the winner's bond MUST vest, on their own steps, and their unvested remainder MUST be forfeited on a
+  valid rollback; a vested amount MUST NOT be forfeited [D7, D12].
 - **PALW-MIP-17 (not a reward path).** Nothing in this chapter MAY create a quantum, a ticket or
   eligibility, or draw on PALW worker rewards.
 - **PALW-MIP-18 (licences).** A declaration of `LICENSED_DISTILL` MUST cite a registered, unexpired
@@ -1539,8 +1768,9 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
   than `max_eval_budget_permille` of it.
 - **PALW-MIP-21 (conservation).** The pool MUST satisfy §17.11.5 after every block. Every sompi it pays
   MUST have been taken in by §17.11.1.
-- **PALW-MIP-22 (abort).** A rollback while an epoch is open MUST abort it and refund every candidate in
-  full (§17.10.3).
+- **PALW-MIP-22 (abort).** A rollback while an epoch is open MUST abort it and refund every candidate its
+  bond and unspent escrow in full, and its fee less its share of the evaluation spend the fees funded
+  (§17.10.3) [E21]; the balance MUST NOT go below zero.
 - **PALW-MIP-23 (the policy check).** A policy MUST satisfy every check of §17.4.3. `w_eval` MUST exceed
   `beacon_delay` by more than 32 DAA, and the windows MUST hold the ruleset's fast honest claim path `Λ` (rows 19–20).
 - **PALW-MIP-24 (order).** Transitions due in one block MUST be applied before that block's objects,
@@ -1569,3 +1799,121 @@ the fold, and `misaka-palw-improve-ref2` — MUST agree on every one.
 | `scoring/*.json`, `pipelines/eval-*.json` | the scoring library (`consensus-vectors/tir-v2/`) | eval (A7, landed) |
 | `composite.json` | composite roots and class ids | cand (A5) |
 | `suite.json`, `judge.json` | a suite dataset's RFC 6962 roots and inclusion proofs (§17.6.3); a template's root, its fills and the judged score of parts (§17.8.5) | eval (A6, 2026-09-30) |
+
+## 17.14 Pipeline-claim data availability
+
+> Normative past `palw_improvement_v1`. Phase F's half of RFC-0004: spec 17 §17.0 reserved object tags
+> 83–85 and the DA units 5–6 for it (the coordinator's decision of 2026-09-29), and this section
+> assigns them. It is the second IR fence's mechanism (`palw_tir_fence2`: `TirStepLeaf`,
+> `TirStepNode`, `DefaultAccusedTirStep`; `docs/design/palw/tir/evidence-transport-scope.md`) for the
+> other claims whose execution is a step tree: pipeline claims.
+
+### 17.14.1 Why
+
+A **pipeline claim** is a free-prompt claim whose execution is a pipeline of programs (spec 04b §15.6):
+RFC-0003's generative claims (a V5 job on a `gen_classes` class) and RFC-0004's evaluation claims (a
+version-9 job, §17.8.2). Its executor commits one step tree — a keyed Merkle tree per stage over that
+stage's leaves, and a step root over the stage roots (`palw_gen_step_v1`) — and the execution root binds
+the step root, the job and the answer. The executor's capture (40–625 MB for a real-size class) is
+never on chain and no seat can pull it, so a lie is never convicted: no seat holds the leaf the court
+needs, and the court's moves (`GenCone`, `GenDecodeToken`, the dissection) all open a leaf of that tree.
+An evaluation claim in particular would let a withholding evaluator decide a promotion's counts for
+free. The remedy is the IR claim's: a DA demand that names one unit of the tree and a producer that
+must disclose it inside `W_disclose` or be defaulted (a DA court conviction, DA-7).
+
+### 17.14.2 Units, answers, demand
+
+| Item | Value |
+| --- | --- |
+| Units (`PalwDaUnitV1`, appended after tag 4) | **5 `PipelineStepLeaf { stage: u8, index: u64 }`** — leaf `index` of stage `stage`'s tree; **6 `PipelineStepNode { stage: u8, level: u8, index: u64 }`** — interior node `index` of the stage's tree at `level ≥ 1` above the leaf hashes (level 0 is a leaf). Tag 7 stays spare. A pipeline has no rows unit: a stream stage's logits are leaves of its tree |
+| Answers (`PalwDaAnswerV1`, appended after tag 6) | **7 `PipelineStepLeaf`** (the leaf's preimage and its opening to the stage root), **8 `PipelineStepNode`** (the node's frontier ten levels down and its opening), **9 `PipelineStepOutOfRange`** (the claim's binding, proving the unit is not in the execution). Each rides `MaterialDisclosedV2` (tag 55), signed by the discloser as every DA answer is |
+| Demand (object tag **83**, `DefaultAccusedPipelineStep`) | `PalwPipelineStepAccusationV1 { claim, unit, accuser, signature }`: keyed by the claim alone (no binding, no draws), signed by the accuser's bond under the ML-DSA-87 context `misaka-palw/pipeline/da-step-accusation/mldsa87/v1` over `H("misaka-palw/pipeline/da-step-accusation/message/v1", network ‖ claim ‖ borsh(unit) ‖ accuser)`. It opens an R-core+ session naming exactly that unit |
+| Tags 84, 85 | reserved. Their variants exist so that every later tag keeps its number, with a payload that is never constructible (a block that carries one is undecodable, exactly as an unknown tag is) |
+| Fence | `palw_improvement_v1` and nothing else: below it the acceptance walk drops every such object by name, first and charged nothing (an older build cannot decode them, A-2), the gate refuses them, and the fold refuses them as the second lock. Its prerequisites already include `palw_tir_fence2`, `palw_gen_v1` and `palw_kary_court` (§17.0) |
+
+**The binding.** An answer carries a *compact* binding — the parts of the claim's execution root and
+nothing else, so a node answer stays near the frontier's 64 KiB:
+- `Gen { job_id, class_id, step_leaf_count, stage_roots, generated }`: the inputs of
+  `palw_gen_execution_root_v1`;
+- `Eval { job_id, subject_class, step_leaf_count, stage_roots, prompt_root, prompt_tokens, params,
+  generated_root, finalized_root, score }`: the inputs of `palw_improve_eval_execution_root_v1`.
+- `Tensor { job_id, class_id, step_leaf_count, stage_roots, output_root }`: the inputs of
+  `palw_gen_tensor_execution_root_v1` (RFC-0003 §I.3: an image or an embedding, a generative class's claim
+  whose output is a digest) — in its own domain, so no text binding of the same trees is a tensor claim's.
+
+The fold takes the kind from its own state — an evaluation claim is one in `improvement_eval_claims`; a
+generative claim (text or tensor: the binding's variant is whichever recomputes the claim's execution root) is a free-prompt claim whose class is in `gen_classes` — and accepts only the binding
+of that kind whose recomputed execution root is the claim's `execution_root` and whose class is the
+claim's. (`step_root` is `palw_gen_step_root_v1` over `stage_roots`; the job and every other input are
+inside the root, so the root's equality pins them.)
+
+### 17.14.3 What an answer proves (hash arithmetic only)
+
+A stage's root is `H(stage-root key, [stage] ‖ LE u64 count ‖ M)`, `M` the Merkle root of its leaf
+hashes (`palw_gen_stage_root_v1`): **the stage's leaf count is committed inside the stage root**. An
+answer therefore carries `stage_leaf_count` (and, for an out-of-range proof, `M`), and the fold checks
+it by recomputing the stage root. The fold derives no class, no program and no step space; it does not
+judge that a count is the job's canonical one — that is the court's (`StepLeafCountNotCanonical`), and a
+non-canonical claim is convicted there.
+
+For stage tree `T` of `count` leaves (leaf hashes at level 0, each level above `⌈w / 2⌉` nodes by
+`palw_gen_step_node` over pairs, an odd last node promoted — the same arithmetic as the IR step tree, with
+the pipeline's own node rule):
+- **`PipelineStepLeaf { stage, index }`** is answered by `{ binding, stage_leaf_count, coord, lanes_le,
+  siblings }`: `index < count`; `coord.stage = stage`; the leaf hash
+  `H(leaf key, borsh(coord) ‖ LE u32 n ‖ lanes_le)`, `n = |lanes_le| / 4`, walked up by `siblings`
+  from position `index` reaches `M`, and `H(stage-root key, [stage] ‖ LE u64 count ‖ M)` is
+  `binding.stage_roots[stage]`. The leaf's *structure* is not judged (a leaf whose coordinate is not
+  its index's is what was committed; the court convicts it from the answer, as for an IR leaf);
+- **`PipelineStepNode { stage, level, index }`** is answered by `{ binding, stage_leaf_count, frontier,
+  siblings }`: `(level, index)` is an interior node of `T`; `frontier` is exactly the nodes it covers
+  `min(level, 10)` levels down (the leaf hashes when nearer) — at most 1,024 hashes — folding to it by
+  the tree's rule; `siblings` walk it to `M`; the stage root is `binding.stage_roots[stage]` as above;
+- **`PipelineStepOutOfRange`** is answered by `{ binding, stage_tree }`: for a `stage` at or past
+  `|stage_roots|` the binding alone (`stage_tree` empty); otherwise `stage_tree = { leaf_count, M }` with
+  the stage root recomputed, and the unit past the tree — a leaf at or past `leaf_count`, a node whose
+  level is above the root or whose index is at or past its level's width.
+
+An answer of a unit inside the tree by out-of-range, or of a unit past it by a disclosure, is refused.
+
+### 17.14.4 Demands and the descent
+
+- **At the door** (the gate, then the fold): `stage < 16` (NF-P1's most stages), a leaf `index <
+  PALW_HELD_STEP_LADDER_V1` (2^40, the widest ladder any network runs), a node `1 ≤ level ≤ 40` with
+  `index` below the width of the widest tree at that level. A unit past the claim's own stage is the
+  accused's to prove by `PipelineStepOutOfRange`. The claim MUST be a pipeline claim of the kinds above;
+  every other gate, budget, clock and record of the R-core+ session is `DA-1…DA-9`'s unchanged.
+- **A seat's descent.** The seat compares its own replay with the claim: it demands the root of a stage
+  (`level = ⌈log₂ count⌉`, `index = 0`); the answer's binding names every stage root, so it learns the
+  first stage whose root differs from its own and descends that stage — each node answer is ten levels —
+  and ends at the leaf. A stage of up to 2^20 leaves is reached inside one seat's four sessions (the
+  discovery, two node sessions, the leaf); one of up to 2^30 when the stage roots are already known
+  (any earlier answer's binding is on chain), and any seat, or any bond with a session budget, continues
+  from what the chain already holds.
+- **The close from the disclosure alone.** The descent takes the first differing node at every level, so
+  everything wholly before the disputed leaf is the seat's own; the disclosed leaf and its opening give
+  the nodes on its path, and the cone close (`GenCone`) is built from the seat's own leaves and that
+  one.
+
+### 17.14.5 Rules
+
+- **PALW-MIP-26 (pipeline DA objects).** Below `palw_improvement_v1` the objects and answers of this
+  section MUST be dropped by name in the acceptance walk and refused by the gate and the fold. Past it,
+  a demand MUST be signed by its accuser's registered key over the network, the claim, the unit and the
+  accuser, and name a unit within §17.14.4's door bounds.
+- **PALW-MIP-27 (answers).** An answer MUST verify by hash arithmetic against the claim's committed roots
+  alone (§17.14.3). The fold MUST NOT accept an answer for a claim that is not a pipeline claim of the
+  binding's kind, and MUST NOT judge a leaf's structure or a count's canonicality.
+- **PALW-MIP-28 (default).** A demanded unit unanswered by the producer or a bond with a live lock on
+  the claim inside `W_disclose` MUST default the claim as a DA court default does (DA-7); an answer
+  answers every session that demands the unit (DA-4).
+
+### 17.14.6 Vectors and tests
+
+`consensus-vectors/pipeline-da-v1/` pins the stage tree's arithmetic (leaf hash, Merkle root, stage root, the
+frontier and the openings, over stages of 0, 1, 2, 3, 4, 5, 7, 8, 9, 17 and 33 leaves), the answers a prover
+builds and the checks that accept or refuse them, the out-of-range proofs, the compact bindings' execution
+roots, the tags of the units and answers, and the demand's message; `PIPELINE_DA_BLESS=1` rewrites them. The
+fold's own tests (`palw_pipeline_da_fold_v1`) run a claim through demand, answer and default; the processor's
+gate test (`t12_pipeline_da_gate`) holds the demand's signature, its fence and its unit bounds; the evidence
+transport doc (`docs/design/palw/tir/evidence-transport-scope.md`) carries the design note.
