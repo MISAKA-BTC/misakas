@@ -44,6 +44,61 @@ pub(crate) fn market_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> 
     })
 }
 
+/// **Why a seed this carrier cannot fund is refused, and what to pay instead** (the 2026-09-25
+/// Position review's #5). One carrier spends at most [`PALW_CARRIER_MAX_INPUTS`] utxos, so the advice
+/// is an instalment of what those utxos hold less the fee — in whole MSK, and only when that is at
+/// least one MSK. It used to advise `--msk 0` when the utxos held less than the fee, an amount this
+/// command and the chain both refuse; there the only advice is to fund the address.
+pub(crate) fn seed_shortfall_message(
+    utxos: usize,
+    reach: u64,
+    msk_seed: u64,
+    fee: u64,
+    addr: &impl std::fmt::Display,
+    line: &impl std::fmt::Display,
+    seed_min_sompi: u64,
+) -> String {
+    let instalment_msk = reach.saturating_sub(fee) / SOMPI_PER_MSK;
+    if instalment_msk == 0 {
+        return format!(
+            "the {utxos} mature utxo(s) this carrier can spend at {addr} hold {}, which does not cover {} plus a fee — nor \
+             even a one-MSK payment and the fee ({}). Fund {addr} first.",
+            msk(reach),
+            msk(msk_seed),
+            msk(fee)
+        );
+    }
+    let tail = format!(
+        "again until the line has {} in all.\nEvery instalment is locked in the line's sink the moment it lands (ADR-0094); the \
+         market opens on the one that crosses the floor.",
+        msk(seed_min_sompi)
+    );
+    format!(
+        "the {utxos} mature utxo(s) this carrier can spend at {addr} hold {}, which does not cover {} plus a fee.\nOne \
+         transaction fits at most {PALW_CARRIER_MAX_INPUTS} post-quantum inputs, so pay in parts: `misaka palw model-seed \
+         --line {line} --msk {instalment_msk}` now, and {tail}",
+        msk(reach),
+        msk(msk_seed)
+    )
+}
+
+/// **An unseeded line, named as one** (the 2026-09-25 Position review's #5): `Some(why)` when the
+/// line has no market yet — what has been pledged toward the floor and what the floor is — so a buy
+/// is refused for the reason it is, before any quote.
+pub(crate) fn unseeded_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> Option<String> {
+    if market_from_response(r).is_open() {
+        return None;
+    }
+    Some(format!(
+        "line {} is not seeded (pledged {} / needs {}): it has no market to buy from until a seed reaches the floor — \
+         `misaka palw model-seed --line {} --msk <amount>` pays toward it (ADR-0094)",
+        r.line_id,
+        msk(r.seed_pledged_sompi),
+        msk(r.seed_min_sompi),
+        r.line_id
+    ))
+}
+
 /// "5 %", "1 %": a permille as the percentage the CLI prints.
 pub(crate) fn pct(permille: u64) -> String {
     if permille.is_multiple_of(10) { format!("{} %", permille / 10) } else { format!("{}.{} %", permille / 10, permille % 10) }
@@ -450,16 +505,16 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
         }
     }
     if funding.is_empty() || have <= want {
-        let reach = have;
         return Err(CliError::new(
             exit::GENERIC,
-            format!(
-                "the {} mature utxo(s) this carrier can spend at {addr} hold {}, which does not cover {} plus a fee.\n                   One transaction fits at most {PALW_CARRIER_MAX_INPUTS} post-quantum inputs, so pay the seed in instalments: \n                   `misaka palw model-seed --line {line} --msk {}` now, and again until the line has {} in all.\n                   Every instalment is locked in the line's sink the moment it lands (ADR-0094); the market opens on the one that crosses the floor.",
+            seed_shortfall_message(
                 funding.len(),
-                msk(reach),
-                msk(msk_seed),
-                (reach.saturating_sub(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI)) / 100_000_000,
-                msk(r.seed_min_sompi)
+                have,
+                msk_seed,
+                kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI,
+                &addr,
+                &line,
+                r.seed_min_sompi,
             ),
         ));
     }
@@ -587,9 +642,15 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
     if let Some(why) = market_refusal(&r) {
         return Err(CliError::new(exit::GENERIC, why));
     }
+    // The 2026-09-25 Position review's #5: an unseeded line is named as one, with what it has and
+    // what it needs — not "closed to buys, or too small", which describes neither.
+    if let Some(why) = unseeded_refusal(&r) {
+        return Err(CliError::new(exit::GENERIC, why));
+    }
     let market = market_from_response(&r);
     let Some(quote) = palw_model_buy_quote_with(&market, msk_in, served_schedule(&r)) else {
-        return Err(CliError::new(exit::GENERIC, format!("a buy of {} releases nothing (closed to buys, or too small)", msk(msk_in))));
+        let why = if r.closed_to_buys { "the line is closed to buys" } else { "the payment is too small to release a whole position" };
+        return Err(CliError::new(exit::GENERIC, format!("a buy of {} releases nothing: {why}", msk(msk_in))));
     };
     let min_positions = floor.min_positions(quote.units_out, refused_is_refunded(&nv))?;
     let min_units_out = min_positions.saturating_mul(PALW_MODEL_POSITION_UNITS_V1);
@@ -804,6 +865,67 @@ mod tests {
         assert_eq!(sell_payee_refusal(false, true), None, "the override signs, and burns");
         assert_eq!(sell_payee_refusal(true, false), None, "testnet-12 shape: the fence pays the seller's address");
         assert_eq!(sell_payee_refusal(true, true), None);
+    }
+
+    /// A node's answer for a line, serving `seed_min_sompi` as the least seed in force: ADR-0120's
+    /// million below ADR-0162's fence ([`MILLION_MSK`]), zero past it.
+    fn answer(
+        seed_min_sompi: u64,
+        market: kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1,
+    ) -> kaspa_rpc_core::GetPalwModelMarketResponse {
+        use kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SUPPLY_UNITS_V1;
+        kaspa_rpc_core::GetPalwModelMarketResponse {
+            found: true,
+            line_id: "ab".repeat(64),
+            opened: market.is_open(),
+            opened_daa: market.opened_daa,
+            msk_reserve: market.msk_reserve,
+            position_units: market.position_units,
+            sold_units: market.sold_units,
+            price_sompi_per_position: market.price_sompi_per_position_v1(),
+            supply_units: PALW_MODEL_SUPPLY_UNITS_V1,
+            virtual_sompi: market.virtual_sompi,
+            class_status: "Active".into(),
+            seed_sompi: market.seed_sompi,
+            seed_pledged_sompi: market.seed_pledged_sompi,
+            seed_min_sompi,
+            burn_permille: 50,
+            leg_permille: 50,
+            ..Default::default()
+        }
+    }
+
+    /// ADR-0120's least seed, served by every answer below ADR-0162's fence here.
+    const MILLION_MSK: u64 = 1_000_000 * 100_000_000;
+
+    /// **The 2026-09-25 Position review's #5: an unseeded line is refused a buy as one** — with what it
+    /// has collected and what it needs, not "closed to buys, or too small", which describes neither.
+    #[test]
+    fn an_unseeded_line_is_refused_a_buy_as_one_with_what_it_holds_and_needs() {
+        use super::unseeded_refusal;
+        use kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1;
+        const MSK: u64 = 100_000_000;
+        let pledge = PalwModelMarketV1::pledge_v1(5, 400_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
+        let why = unseeded_refusal(&answer(MILLION_MSK, pledge)).expect("unseeded");
+        assert!(why.contains("not seeded (pledged 400000.00000000 MSK / needs 1000000.00000000 MSK)"), "{why}");
+        let open = PalwModelMarketV1::seed_v1(5, 1_000_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
+        assert_eq!(unseeded_refusal(&answer(MILLION_MSK, open)), None, "an open market is not");
+    }
+
+    /// **#5: a short seed never advises `--msk 0`.** Under the fee (or under one MSK after it) the
+    /// advice is to fund the address; above it, a whole-MSK payment of what the utxos hold less the
+    /// fee.
+    #[test]
+    fn a_short_seed_never_advises_zero() {
+        use super::seed_shortfall_message;
+        const MSK: u64 = 100_000_000;
+        const FEE: u64 = 2_000_000;
+        for reach in [0, FEE - 1, FEE, FEE + MSK - 1] {
+            let m = seed_shortfall_message(1, reach, 1_000_000 * MSK, FEE, &"addr", &"line", MILLION_MSK);
+            assert!(!m.contains("--msk 0") && m.contains("Fund addr first"), "reach {reach}: {m}");
+        }
+        let m = seed_shortfall_message(15, FEE + 7 * MSK + 5, 1_000_000 * MSK, FEE, &"addr", &"line", MILLION_MSK);
+        assert!(m.contains("--msk 7`") && m.contains("15 mature utxo(s)") && m.contains("crosses the floor"), "{m}");
     }
 
     #[test]
