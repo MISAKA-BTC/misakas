@@ -347,6 +347,13 @@ pub struct Args {
     /// `config::drill::palw_drill_capacity_step2_at_v1`). Command line only.
     #[serde(skip)]
     pub palw_drill_capacity_step2_at: Option<u64>,
+    /// **DRILL ONLY: move F-N — the network level and the work-conserving fair share (ADR-0160 stage 4,
+    /// `palw_capacity_network_room`) — to this DAA** (`config::drill::palw_drill_capacity_network_room_at_v1`): the
+    /// gate that must be in force before ρ = 25 / ρ = 100. The ρ = 10 flag day (`--palw-drill-fence3-at`) arms it with
+    /// the rest of the capacity package; this times it apart, at or above the verify room and the issuance slots.
+    /// Command line only.
+    #[serde(skip)]
+    pub palw_drill_capacity_network_room_at: Option<u64>,
     /// **DRILL ONLY: append the capacity ramp's ρ = 100 step after ρ = 25 at this DAA** — F-L's third step
     /// (`config::drill::palw_drill_capacity_step3_at_v1`); needs `--palw-drill-capacity-step2-at` below it.
     /// Command line only.
@@ -626,6 +633,7 @@ impl Default for Args {
             palw_drill_fence2_at: None,
             palw_drill_fence3_at: None,
             palw_drill_model_court_at: None,
+            palw_drill_capacity_network_room_at: None,
             palw_drill_capacity_step2_at: None,
             palw_drill_capacity_step3_at: None,
             palw_drill_capacity_rho100_at: None,
@@ -1654,6 +1662,18 @@ pub fn cli() -> Command {
                      half of the fixes after the DAA-2,000 release, the whole list) at this DAA on the drill chain, after \
                      --palw-drill-tir-at. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and \
                      below palw_tir_v1.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-capacity-network-room-at")
+                .long("palw-drill-capacity-network-room-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: move F-N, the network level and the work-conserving fair share \
+                     (palw_capacity_network_room), to this DAA on the drill chain — the stage-4 gate in force before rho = 25 / 100. \
+                     Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and below the verify room and \
+                     the issuance slots it needs (the rho = 10 flag day, --palw-drill-fence3-at, arms them).",
                 ),
         )
         .arg(
@@ -2688,6 +2708,7 @@ impl Args {
             palw_drill_fence2_at: m.get_one::<u64>("palw-drill-fence2-at").copied(),
             palw_drill_fence3_at: m.get_one::<u64>("palw-drill-fence3-at").copied(),
             palw_drill_model_court_at: m.get_one::<u64>("palw-drill-model-court-at").copied(),
+            palw_drill_capacity_network_room_at: m.get_one::<u64>("palw-drill-capacity-network-room-at").copied(),
             palw_drill_capacity_step2_at: m.get_one::<u64>("palw-drill-capacity-step2-at").copied(),
             palw_drill_capacity_step3_at: m.get_one::<u64>("palw-drill-capacity-step3-at").copied(),
             palw_drill_capacity_rho100_at: m.get_one::<u64>("palw-drill-capacity-rho100-at").copied(),

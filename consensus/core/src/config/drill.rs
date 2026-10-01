@@ -744,6 +744,11 @@ const PALW_DRILL_CAPACITY_STEP3_FENCES_V1: &[crate::config::params::PalwPostLaun
     &[crate::config::params::PALW_T12_CAPACITY_RHO100_STEP_3_V1];
 const PALW_DRILL_CAPACITY_RHO100_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
     &[crate::config::params::PALW_T12_CAPACITY_RHO100_STEP_2_V1];
+/// F-N alone (`--palw-drill-capacity-network-room-at`): the network level and the work-conserving fair share.
+const PALW_DRILL_CAPACITY_NETWORK_ROOM_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
+    &[crate::config::params::PALW_T12_CAPACITY_NETWORK_ROOM_V1];
+const PALW_DRILL_FLAG_DAY_CAPACITY_NETWORK_ROOM_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_NETWORK_ROOM_FENCES_V1, flag: "--palw-drill-capacity-network-room-at" };
 /// ρ = 25 as F-L's second step (`--palw-drill-capacity-step2-at`).
 const PALW_DRILL_FLAG_DAY_CAPACITY_STEP2_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_STEP2_FENCES_V1, flag: "--palw-drill-capacity-step2-at" };
@@ -788,6 +793,20 @@ fn palw_drill_capacity_step_prerequisite_v1(
         ));
     }
     Ok(())
+}
+
+/// **A drill moves F-N — the network level and the work-conserving fair share (ADR-0160 stage 4,
+/// `palw_capacity_network_room`) — to its own height** (`--palw-drill-capacity-network-room-at`): the stage-4 gate that
+/// must be in force before ρ = 25 / ρ = 100. The ρ = 10 flag day's list arms it with the other seven
+/// (`--palw-drill-fence3-at`, which still takes the whole list: they arm together); this flag moves F-N alone, so a drill
+/// can time it apart from them — never below F-R (the verify room) and F-S (the issuance slots), which
+/// `validate_palw_v2` refuses (it needs both at or below it). Every refusal of the post-launch moves applies, named for
+/// this flag.
+pub fn palw_drill_capacity_network_room_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_NETWORK_ROOM_V1)
 }
 
 /// **A drill appends the ρ = 25 step** (ADR-0160 stage 3, `--palw-drill-capacity-step2-at`) — F-L's second step at
@@ -1463,6 +1482,24 @@ mod tests {
         assert_eq!(moves[0].name, "palw_capacity_aggregate_liability_step_2");
         assert_eq!(ramp(&straight), vec![(80, 10), (560, 100)]);
         assert_ne!(straight.consensus_params_id(), ramped.consensus_params_id());
+        // F-N moves alone, never below the verify room and the issuance slots it needs (armed at 80 with the list).
+        let mut room = base.clone();
+        let mut public = palw_t12_shipped_params();
+        assert!(palw_drill_capacity_network_room_at_v1(&mut public, 120).unwrap_err().contains("PUBLIC testnet-12"));
+        let moves = palw_drill_capacity_network_room_at_v1(&mut room, 120).expect("F-N later than the rest of the list");
+        assert_eq!((moves[0].name, moves[0].was, moves[0].at), ("palw_capacity_network_room", Some(80), 120));
+        assert_eq!(moves.len(), 1);
+        assert_ne!(room.consensus_params_id(), base.consensus_params_id());
+        for ((name, before), (_, after)) in base.palw_fences_v1().iter().zip(room.palw_fences_v1().iter()) {
+            if *name != "palw_capacity_network_room" {
+                assert_eq!(before, after, "{name} did not move");
+            }
+        }
+        let mut early = base.clone();
+        assert!(
+            palw_drill_capacity_network_room_at_v1(&mut early, 70).unwrap_err().contains("does not validate"),
+            "below the verify room and the issuance slots"
+        );
     }
 
     /// **A drill crosses the DAA-3,600 flag day and nothing else moves** ([`palw_drill_tir_fence2_at_v1`],

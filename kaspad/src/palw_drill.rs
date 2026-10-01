@@ -77,6 +77,7 @@ pub struct PalwDrillExtraFencesV1 {
     pub model_court_at: Option<u64>,
     /// The capacity ramp's ready steps (ADR-0160 stage 3): ρ = 25 as F-L's second step, ρ = 100 as its third, and
     /// ρ = 100 straight after ρ = 10 (the second step again — never with the other two).
+    pub capacity_network_room_at: Option<u64>,
     pub capacity_step2_at: Option<u64>,
     pub capacity_step3_at: Option<u64>,
     pub capacity_rho100_at: Option<u64>,
@@ -92,6 +93,7 @@ impl PalwDrillExtraFencesV1 {
         Self {
             tir2_at: args.palw_drill_tir2_at,
             model_court_at: args.palw_drill_model_court_at,
+            capacity_network_room_at: args.palw_drill_capacity_network_room_at,
             capacity_step2_at: args.palw_drill_capacity_step2_at,
             capacity_step3_at: args.palw_drill_capacity_step3_at,
             capacity_rho100_at: args.palw_drill_capacity_rho100_at,
@@ -115,7 +117,10 @@ impl PalwDrillExtraFencesV1 {
 
     /// Does any capacity step flag stand?
     fn capacity_any(&self) -> bool {
-        self.capacity_step2_at.is_some() || self.capacity_step3_at.is_some() || self.capacity_rho100_at.is_some()
+        self.capacity_network_room_at.is_some()
+            || self.capacity_step2_at.is_some()
+            || self.capacity_step3_at.is_some()
+            || self.capacity_rho100_at.is_some()
     }
 
     /// The first flag that stands, named (for the unsalted refusal).
@@ -123,6 +128,11 @@ impl PalwDrillExtraFencesV1 {
         [
             ("--palw-drill-tir2-at", self.tir2_at, "testnet-12's DAA-3,600 flag day (palw_tir_fence2)"),
             ("--palw-drill-model-court-at", self.model_court_at, "the per-model court-window fence (palw_model_court_window)"),
+            (
+                "--palw-drill-capacity-network-room-at",
+                self.capacity_network_room_at,
+                "the capacity network room and fair share (palw_capacity_network_room, F-N)",
+            ),
             ("--palw-drill-capacity-step2-at", self.capacity_step2_at, "the capacity ramp's rho = 25 step (F-L's second step)"),
             (
                 "--palw-drill-capacity-step3-at",
@@ -156,6 +166,12 @@ impl PalwDrillExtraFencesV1 {
         }
         if let Some(at) = self.model_court_at {
             moves.extend(d::palw_drill_model_court_window_at_v1(params, at).map_err(|e| format!("--palw-drill-model-court-at: {e}"))?);
+        }
+        if let Some(at) = self.capacity_network_room_at {
+            moves.extend(
+                d::palw_drill_capacity_network_room_at_v1(params, at)
+                    .map_err(|e| format!("--palw-drill-capacity-network-room-at: {e}"))?,
+            );
         }
         if let Some(at) = self.capacity_step2_at {
             moves.extend(d::palw_drill_capacity_step2_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-step2-at: {e}"))?);
@@ -194,13 +210,19 @@ impl PalwDrillExtraFencesV1 {
     }
 
     /// The marker's `capacity_at=` line — the ramp's steps (`none` when none stands, else
-    /// `step2:… step3:… rho100:…`), its own line so the lines of the flags before it keep their text.
+    /// `room:… step2:… step3:… rho100:…`), its own line so the lines of the flags before it keep their text.
     fn capacity_marker_text(&self) -> String {
         if !self.capacity_any() {
             return palw_drill_marker_fence_text_v1(None);
         }
         let at = |v: Option<u64>| palw_drill_marker_fence_text_v1(v);
-        format!("step2:{},step3:{},rho100:{}", at(self.capacity_step2_at), at(self.capacity_step3_at), at(self.capacity_rho100_at))
+        format!(
+            "room:{},step2:{},step3:{},rho100:{}",
+            at(self.capacity_network_room_at),
+            at(self.capacity_step2_at),
+            at(self.capacity_step3_at),
+            at(self.capacity_rho100_at)
+        )
     }
 
     /// The marker's `extra_at=` line — RFC-0003 / RFC-0004's four flags only (`none` when none stands, else
@@ -623,7 +645,7 @@ pub fn palw_drill_datadir_guard_v4(
                 }
                 if recorded_capacity != capacity_text {
                     named = format!(
-                        "{named} and different --palw-drill-capacity-step2-at/-step3-at/-rho100-at (recorded {recorded_capacity}, now {capacity_text})"
+                        "{named} and different --palw-drill-capacity-network-room-at/-step2-at/-step3-at/-rho100-at (recorded {recorded_capacity}, now {capacity_text})"
                     );
                 }
                 if recorded_extra != extra_text {
@@ -801,6 +823,7 @@ pub fn palw_drill_write_keyring_v4(
         "tir_at": tir_at,
         "tir2_at": extra.tir2_at,
         "model_court_at": extra.model_court_at,
+        "capacity_network_room_at": extra.capacity_network_room_at,
         "capacity_step2_at": extra.capacity_step2_at,
         "capacity_step3_at": extra.capacity_step3_at,
         "capacity_rho100_at": extra.capacity_rho100_at,
@@ -1393,7 +1416,12 @@ mod tests {
                 .unwrap_or_default()
         };
         // Refused without the salt, by name.
-        for flag in ["--palw-drill-capacity-step2-at=30", "--palw-drill-capacity-step3-at=40", "--palw-drill-capacity-rho100-at=30"] {
+        for flag in [
+            "--palw-drill-capacity-network-room-at=30",
+            "--palw-drill-capacity-step2-at=30",
+            "--palw-drill-capacity-step3-at=40",
+            "--palw-drill-capacity-rho100-at=30",
+        ] {
             let unsalted = parse(&["--testnet", "--netsuffix=12", flag]);
             let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
             assert!(refused.contains(flag) && refused.contains("--palw-drill-genesis-salt"), "{flag}: {refused}");
@@ -1407,6 +1435,12 @@ mod tests {
         let step2 = config_of(&parsed(&["--palw-drill-capacity-step2-at=30"]));
         assert_eq!(ramp(&step2), vec![(14, 10), (30, 25)]);
         assert_eq!(step2.palw_drill_fence_moves.len() + 1, both.palw_drill_fence_moves.len(), "each flag moves its one step");
+        // F-N moves alone, later than the list's 14 (the stage-4 gate timed apart); never below the rooms it needs.
+        let room = config_of(&parsed(&["--palw-drill-capacity-network-room-at=50"]));
+        assert_eq!(room.params.palw_capacity_network_room, Some(kaspa_consensus_core::config::params::ForkActivation::new(50)));
+        assert_eq!(room.palw_drill_fence_moves.len(), step2.palw_drill_fence_moves.len(), "one fence moved");
+        let why = palw_drill_validate_args_v1(&parsed(&["--palw-drill-capacity-network-room-at=12"])).unwrap_err().to_string();
+        assert!(why.contains("--palw-drill-capacity-network-room-at") && why.contains("does not validate"), "{why}");
         let straight = config_of(&parsed(&["--palw-drill-capacity-rho100-at=30"]));
         assert_eq!(ramp(&straight), vec![(14, 10), (30, 100)]);
         // Refused by name, never by a panic: step 3 without step 2, a height not above the step before, both ramps.
@@ -1426,21 +1460,22 @@ mod tests {
         let dir = root.path().join("capacity/misaka-testnet-12");
         let set = PalwDrillExtraFencesV1 { capacity_step2_at: Some(30), capacity_step3_at: Some(40), ..Default::default() };
         palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), None, set).expect("a fresh app dir");
-        assert!(marker_of(&dir).contains("capacity_at=step2:30,step3:40,rho100:none\n"), "{}", marker_of(&dir));
+        assert!(marker_of(&dir).contains("capacity_at=room:none,step2:30,step3:40,rho100:none\n"), "{}", marker_of(&dir));
         std::fs::create_dir_all(dir.join("datadir")).unwrap();
         palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), None, set).expect("the same start");
         let moved = PalwDrillExtraFencesV1 { capacity_step3_at: Some(45), ..set };
         let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), None, moved).unwrap_err();
         assert!(
-            why.contains("--palw-drill-capacity-step2-at/-step3-at/-rho100-at (recorded step2:30,step3:40,rho100:none, now"),
+            why.contains("--palw-drill-capacity-network-room-at/-step2-at/-step3-at/-rho100-at (recorded room:none,step2:30,step3:40,rho100:none, now"),
             "{why}"
         );
         let none = palw_drill_datadir_guard_v3(&dir, Some(&a), "g", Some(6), Some(10), Some(14), None).unwrap_err();
-        assert!(none.contains("recorded step2:30,step3:40,rho100:none, now none"), "dropped over a stored chain: {none}");
+        assert!(none.contains("recorded room:none,step2:30,step3:40,rho100:none, now none"), "dropped over a stored chain: {none}");
         // The keyring names them and the fingerprint the node on the same command line announces.
         let keys = tempfile::tempdir().unwrap();
         let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), None, set).expect("written");
         let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["capacity_network_room_at"], serde_json::Value::Null);
         assert_eq!(manifest["capacity_step2_at"], serde_json::json!(30));
         assert_eq!(manifest["capacity_step3_at"], serde_json::json!(40));
         assert_eq!(manifest["capacity_rho100_at"], serde_json::Value::Null);
