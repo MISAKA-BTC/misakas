@@ -38,7 +38,6 @@ use kaspa_consensus_core::palw_gen_claim_v1::*;
 use kaspa_consensus_core::palw_gen_class_v1::*;
 use kaspa_consensus_core::palw_gen_close_v1::*;
 use kaspa_consensus_core::palw_gen_job_v1::*;
-use kaspa_consensus_core::palw_gen_one_move_v1::*;
 use kaspa_consensus_core::palw_gen_step_v1::{
     PalwGenLeafCoordV1, palw_gen_stage_root_v1, palw_gen_step_leaf_hash_v1, palw_gen_step_root_v1,
 };
@@ -55,7 +54,6 @@ use kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1;
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
 use kaspa_consensus_core::tx::Transaction;
 use misaka_palw_gen::OutputSpecV1;
-use misaka_palw_tir::demand::DemandLimits;
 use misaka_palw_tir::interp::{MapParams, ParamSource};
 use misaka_palw_tir::pipeline::{Binding, JobImageV1, PipelineParams, TirPipelineV1, TokenSource, TripRule};
 use misaka_palw_tir::program_v2::TirProgramV2;
@@ -63,7 +61,6 @@ use misaka_palw_tir::tensor::Tensor;
 
 const AT: u64 = 1_100;
 const FORM: PalwPromptIdsFormV1 = PalwPromptIdsFormV1::Flat;
-const LIMITS: DemandLimits = DemandLimits { max_elements: 1 << 20, max_terms: 1 << 24 };
 const EXECUTOR: u64 = 21;
 const ACCUSER: u64 = 22;
 const OTHER: u64 = 23;
@@ -287,19 +284,6 @@ fn lie_about_the_output(e: &PalwGenExecutionV1, lane: usize) -> PalwGenExecution
     out.values[lane] ^= 1;
     out.root = Hash64::from_bytes(misaka_palw_gen::output_root_v1(&out.spec, &out.values, out.tile_len).unwrap());
     l.claim.output_root = Some(out.root);
-    l
-}
-
-/// An execution with `value` at `lane` of the step tile at `coord`, every root recomputed over it.
-fn lie_in_the_step_tile(e: &PalwGenExecutionV1, coord: &PalwGenLeafCoordV1, lane: usize, value: i128) -> PalwGenExecutionV1 {
-    let mut l = e.clone();
-    let stage = coord.stage as usize;
-    let index = l.space.stages[stage].leaf_index(coord).unwrap() as usize;
-    l.leaf_values[stage][index][lane] = value;
-    let leaf = l.space.stages[stage].leaves()[index];
-    l.leaf_hashes[stage][index] = palw_gen_step_leaf_hash_v1(&leaf, &l.leaf_values[stage][index]).unwrap();
-    l.claim.stage_roots[stage] = palw_gen_stage_root_v1(stage as u8, &l.leaf_hashes[stage]);
-    l.claim.step_root = palw_gen_step_root_v1(&l.claim.stage_roots);
     l
 }
 
@@ -559,7 +543,12 @@ fn a_challenge_opens_the_session_at_the_leaf_and_writes_the_challengers_group() 
     assert!(s.court_close_group(&ch.session, PalwCourtSideV1::Executor).is_none(), "the executor declared nothing");
     assert!(!env.chain.claim(&claim.id).phase.is_terminal(), "a challenge does not touch the claim");
     assert_eq!(collateral(&env, ACCUSER), accuser_before, "the deposit is a charge, collected only if the group ends undelivered");
-    assert!(env.chain.reserved(&bond_key(ACCUSER)) > 0, "the accuser reserved what a losing challenger pays");
+    // Past `palw_rcore_plus` the stake is the session itself (nothing is written to `reserved_exposure`): the
+    // accuser ledger the gate reads counts the claim's `reserved` through the challenger index.
+    assert!(
+        kaspa_consensus_core::palw_state_v2::palw_accuser_exposure_v1(&env.chain.s, &bond_key(ACCUSER)) > 0,
+        "the accuser stakes what a losing challenger pays, through the session"
+    );
 }
 
 #[test]
