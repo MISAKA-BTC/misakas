@@ -272,7 +272,7 @@ ModernBERT, nomic-BERT, jina-v3, EuroBERT, ALBERT and ELECTRA are adapters, then
 `Disentangled`/`Bucketed`. The leaf-cap verdicts of the corpus note (ModernBERT-large over 2^22 at 512 tokens, fitting at 320)
 are admission facts, reported by name.
 
-## 5. FR-19 — vision towers and convolutions (`VISION_FROM_SPEC_V1`, `CONV_2D_V1`, `POOL_2D_V1`)
+## 5. FR-19 — vision towers and convolutions (`VISION_FROM_SPEC_V1`, `CNN_FROM_SPEC_V1`, `CONV_DENSE_V1`, `POOL_MAX_2D_V1`)
 
 A ViT-style tower is the rows-mode stack of §4 plus a patch embedding (`EmbeddingSpec.patches`: a non-overlapping `Conv2d`, which is
 `Reshape`/`Transpose` and one `MatMul`, as `vision.rs:1085-1095` does), learned or `Rope2d` positions, and an output kind (rows, CLS,
@@ -292,6 +292,11 @@ stage needs a fixed worst-case flat carry), tensor rank ≤ 4, ≤ 16 blocks. FR
 a worst-case padded carry is the interim. The minimal general primitive, if one were ever wanted, is a strided window view
 `Unfold { axis, size, stride, dilation }` (kind S) that removes the index params and makes demand exact — recorded as evidence in the
 registry, **not needed now**. ResNet as data is a `ConvNetSpec` whose stages an adapter generates with `$map`/`$range`.
+
+**Built 2026-10-02** (`lower/cnn.rs`, `adapters/resnet.json`; `generic-frontend-v1.md` §9.7): the worst-case padded flat carry is what
+the interim became (`[E]` `i32`, a `Slice`/`Reshape` in and a `Reshape`/`Broadcast`/`Concat` out of each block), and ResNet-18, -50 and
+-152 at 224 px are admitted. The three-way agreement and the real-size admission hold; a program with FR-22's per-occurrence carries
+would only drop the zero padding.
 
 ## 6. The reader's honesty items (FR-25, FR-26, FR-07)
 
@@ -395,6 +400,7 @@ being compiled or run**; the first action after the window lifts is a build, the
 | built (2026-10-01) | FR-02, FR-07, FR-25/26, FR-29 (`HEAD_TRANSFORM_V1`), FR-35 (`ROPE_REVERSED_V1`), FR-17 step 1, FR-18 Phase 1, lane D's lowerers as features | `tests/{weights_expr,qk_norm_post_rope,architecture_report,head_transform,rope_reversed,encdec_adapters,encoders,encdec}.rs`; the full release suite and the golden gates |
 | FR-09 (built 2026-10-02) | `ATTN_TOKEN_INDEXER_V1`: `MlaSpec.indexer`, the `deepseek-v32` adapter, the indexer's HL nodes and float reference, the selection as an exact mask by counting (`lower/dsa.rs`: a 16-ary radix search for the k-th largest composite key, `B/4 <= 10` reductions over `H` in one cone, a committed lane pair, ties to the lowest index of the window), a DSA layer as a mixer half and an FFN half | `tests/dsa.rs` (float = transformers to 1e-6 with the IR's tie rule; integer KL 3e-5 against transformers; the selection applied at k = 1..10; reference = ref2 = exec; streamed = whole; the real V3.2 shape admitted at windows 2^13 and 2^16), `lower::dsa::tests` (the radix search = a sort), `generic-frontend-v1.md` §9.6 |
 | the residency contract (built 2026-10-02) | the n-gram table is one axis-0 `[rows, dim]` param per hash head and chunk, each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself (it was one batched gather over `[heads, rows, dim]`, a dense use to lane M2's residency); the writer API (`RowKind::Mapped`, `RowMap`, `FillCtx` hooks, `materialise_stream`, `TensorSink`) documented as final in `generic-frontend-v1.md` §9.4 | `tests/row_addressing.rs` (M2's own classifier, vendored: at Qwen4-Exp's published shape 750 GiB of weights, 2.55 GiB pinned, floor 3.77 GiB), `tests/golden_lowering.rs` (`INTENDED`: the seven PLE rows), `tests/streaming_ple.rs`, `tests/qwen4_exp.rs` |
-| not started | FR-18 Phase 2, FR-19 convolutional towers (ResNet) and the Qwen2-VL / Qwen2.5-VL / LLaVA towers as adapters | — |
+| FR-19, convolutions (built 2026-10-02) | `CnnSpec` as serde data (convolutions with stride, padding, dilation, depthwise; batch norm folded exactly; max pool; residual units; feature-map or pooled output); adapter kind `cnn` (`resnet`, data only); `hf_schema::read_cnn`, the report and `palw-tir-check`; the flat zero-padded carry; features `CNN_FROM_SPEC_V1`, `CONV_DENSE_V1` (shared with lane D's), `CONV_DEPTHWISE_2D_V1`, `BN_FOLD_V1`, `POOL_MAX_2D_V1`, `RESIDUAL_ADD_ACT_V1`, `POOL_AVG_GLOBAL_V1` | `tests/cnn.rs` (three HF ResNets, float 1e-6 / integer cosine 0.9997+; a depthwise-separable dilated network against a naive convolution; the real ResNet-18/50/152 admitted at 224 px; the adapter equals the Rust structure) |
+| not started | FR-18 Phase 2 and the Qwen2-VL / Qwen2.5-VL / LLaVA towers as adapters | — |
 
 Until the build, the commit is a design with a reviewed draft, nothing more.

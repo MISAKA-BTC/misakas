@@ -152,20 +152,12 @@ pub fn build_encdec_spec(adapter: &Adapter, config: &Value) -> Result<EncDecBuil
     Ok(EncDecBuilt { spec, assumed_defaults })
 }
 
-/// A vision-tower spec built from an adapter of kind `vision`.
-#[derive(Clone, Debug)]
-pub struct VisionBuilt {
-    /// The instantiated `misaka.palw.vision-spec.v1` (not yet validated: the caller adds the class's input size and
-    /// the processor's normalisation).
-    pub spec: Value,
-    pub assumed_defaults: Vec<String>,
-}
-
-/// Instantiate an adapter of kind `vision` for `config` (`VISION_FROM_SPEC_V1`): the same evaluator, a `spec` template
-/// that is a [`crate::lower::vision::VisionSpec`]. A wrapping model's tower config is reached with `$scope`.
-pub fn build_vision_spec(adapter: &Adapter, config: &Value) -> Result<VisionBuilt> {
-    if adapter.kind() != "vision" {
-        return Err(bad(format!("adapter `{}` is of kind `{}`, not `vision`", adapter.id, adapter.kind())));
+/// A spec value built from an adapter of a data kind (`vision`, `cnn`): the same evaluator as [`build_spec`] (variables, class
+/// defaults, inert keys — and, as everywhere, a key nobody accounts for is refused) over a flat configuration, whose `spec`
+/// template is the typed spec (not yet validated: the caller adds the class's input size and the processor's normalisation).
+fn build_data_spec(adapter: &Adapter, config: &Value, kind: &str) -> Result<(Value, Vec<String>)> {
+    if adapter.kind() != kind {
+        return Err(bad(format!("adapter `{}` is of kind `{}`, not `{kind}`", adapter.id, adapter.kind())));
     }
     let root = config.as_object().ok_or_else(|| bad("config.json is not an object"))?;
     let arch = root.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("").to_string();
@@ -197,7 +189,39 @@ pub fn build_vision_spec(adapter: &Adapter, config: &Value) -> Result<VisionBuil
     let out = normalize(env.eval(template)?);
     cfg.finish()?;
     let assumed_defaults = env.assumed.borrow().iter().cloned().collect();
-    Ok(VisionBuilt { spec: out, assumed_defaults })
+    Ok((out, assumed_defaults))
+}
+
+/// A vision-tower spec built from an adapter of kind `vision`.
+#[derive(Clone, Debug)]
+pub struct VisionBuilt {
+    /// The instantiated `misaka.palw.vision-spec.v1` (not yet validated: the caller adds the class's input size and
+    /// the processor's normalisation).
+    pub spec: Value,
+    pub assumed_defaults: Vec<String>,
+}
+
+/// Instantiate an adapter of kind `vision` for `config` (`VISION_FROM_SPEC_V1`): a `spec` template that is a
+/// [`crate::lower::vision::VisionSpec`]. A wrapping model's tower config is reached with `$scope`.
+pub fn build_vision_spec(adapter: &Adapter, config: &Value) -> Result<VisionBuilt> {
+    let (spec, assumed_defaults) = build_data_spec(adapter, config, "vision")?;
+    Ok(VisionBuilt { spec, assumed_defaults })
+}
+
+/// A convolutional-network spec built from an adapter of kind `cnn`.
+#[derive(Clone, Debug)]
+pub struct CnnBuilt {
+    /// The instantiated `misaka.palw.cnn-spec.v1` (not yet validated: the caller adds the class's input size and the
+    /// processor's normalisation).
+    pub spec: Value,
+    pub assumed_defaults: Vec<String>,
+}
+
+/// Instantiate an adapter of kind `cnn` for `config` (`CNN_FROM_SPEC_V1`): a `spec` template that is a
+/// [`crate::lower::cnn::CnnSpec`].
+pub fn build_cnn_spec(adapter: &Adapter, config: &Value) -> Result<CnnBuilt> {
+    let (spec, assumed_defaults) = build_data_spec(adapter, config, "cnn")?;
+    Ok(CnnBuilt { spec, assumed_defaults })
 }
 
 /// `{p}` in every string of a weight expression (`hf.weights`: the tensor names inside nested steps).

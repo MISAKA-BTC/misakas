@@ -386,6 +386,56 @@ worst terminal tile 5.25 M MACs (of 16 Mi), at most 9–10 reductions over `H` i
 (data: extends `deepseek-v3`, `layer_types`/`mlp_layer_types` read, the indexer's tensors `self_attn.indexer.{wq_b, wk, k_norm,
 weights_proj}` named). `glm_moe_dsa` differs only in `rope.style` (interleaved): an adapter, no code.
 
+### 9.7 Convolutional networks (`CNN_FROM_SPEC_V1`, `CONV_DENSE_V1`, `BN_FOLD_V1`, `POOL_MAX_2D_V1`, `RESIDUAL_ADD_ACT_V1`, FR-19)
+
+A convolutional network is a `CnnSpec` (`lower/cnn.rs`): a tree of `Conv` (kernel, stride, zero padding, dilation, groups, its batch
+norm and activation), `MaxPool`, `Act` and `Residual { main, shortcut, act }` ops, a normalisation, and an output (`Map`: the last
+feature map as rows, `GlobalAvg`: its mean). An adapter of kind `cnn` instantiates it from `config.json` with `$map`/`$range`
+(`adapters/resnet.json`: ResNet-18 to -152, basic and bottleneck, `downsample_in_bottleneck`, the 1x1 projection shortcut where the
+width or the stride changes — equal, op for op, to the ResNet that `tests/cnn.rs` writes out in Rust, on the fixtures and on the real
+configurations of ResNet-18, -50 and -152). No network's name is in the lowering; a MobileNet is an adapter and the depthwise path
+below, a ConvNeXt an adapter plus the activations the table already covers.
+
+**Layout.** An activation is `[P, C]` — a row per spatial position, a column per channel — of `i16` codes at a calibrated scale per
+site, as a vision tower's rows are. The input is the class's canonical image (`u8` HWC, `input.image`); its HWC order *is* the rows
+`[H·W, 3]`, and `(x/255 − mean)/std` per channel is one per-channel narrowing (not folded into the first convolution: a zero-padded
+stem sees the padding in the *normalised* space).
+
+**A convolution is one linear map.** The rows get one zero row appended (the padding's value); a pinned `Idx` table `[P_out, k·k]`
+names, for every output position and tap, the row it reads (the zero row where the tap falls in the padding); one `Gather` makes
+`[P_out, k·k, C_in]`, one `MatMul` against the `i8` weight `[k·k·C_in, C_out]` gives the exact `i64` accumulators, narrowed per
+output channel. **Stride, padding and dilation are the table's content**; the table is clamped into range before the gather (a
+`Clamp` that never fires, so the range analysis is total for any registered table). A depthwise convolution (`groups = C_in = C_out`)
+is a `Mul` against `[k·k, C]` and a `ReduceSum` over the taps; any other grouping is refused by name. No primitive is added; a strided
+window view `Unfold` (kind S) would only replace the table and is not needed.
+
+**Batch norm costs no node** (`BN_FOLD_V1`). At inference `y = γ(x − μ)/√(σ² + ε) + β` is `W' = W·γ/√(σ² + ε)`,
+`b' = β − γμ/√(σ² + ε) + (γ/√(σ² + ε))·b`; the weight codes are those of the folded rows (the per-row scale absorbs the positive
+factor) and the bias joins the narrowing's offset. **A residual unit** narrows both branches to `i32` at one calibrated scale, adds
+them exactly, applies the activation and narrows to `i16` codes (ReLU is the narrowing's clamp at 0; any other activation is the
+table after it). **Max pooling** gathers the windows with a padding row of the code floor and takes a `ReduceMax` over the taps —
+exact on the codes. **Global average pooling** is an exact sum and one rounded division.
+
+**Blocks, and the one carry.** A program has at most 16 blocks of 512 nodes, so the top-level units (a residual unit is never split)
+are packed into blocks by an estimate of their node count (22 per convolution, 12 per pool or activation, 10 per residual sum;
+`BLOCK_BUDGET` 400, a unit over 440 is refused by name). But a program has **one carry signature** — every layer block reads and
+writes the same type — and a feature map changes shape from stage to stage (`[3136, 64]`, `[784, 128]`, `[196, 256]`, `[49, 512]`
+at 224 px). The carry is therefore the activation **flattened and zero-padded** to `E` elements, `E` the largest boundary's: a block
+`Slice`s its first `rows·C` elements and `Reshape`s them (two nodes), and writes `Reshape`, `Broadcast` of a zero, `Concat` (three).
+No arithmetic, and the padding is committed zeros (7/8 of the last block's carry at 224 px). FR-22's per-occurrence carry signatures
+would make the padding unnecessary; this needs neither a primitive nor a format change.
+
+**Evidence** (`tests/cnn.rs`). Three tiny HF ResNets with random weights and batch-norm statistics (basic, bottleneck, and a deep one
+that needs a layer block, so its carry changes shape between blocks): the float reference equals `transformers` to `10⁻⁶`, the
+integer program's cosine to it is 0.9997 – 0.99999 (relative error 0.4 % – 2.6 %) for the feature map and for the pooled vector, the
+class's one-stage pipeline binds the image through `JobImage` and gives the program's bytes, and every program is admitted. A network
+transformers has no tiny fixture for — a depthwise-separable one with a dilated depthwise convolution, a depthwise convolution with a
+bias and no batch norm, an identity residual, and SiLU both fused and standalone — is held against a **naive direct convolution** the
+lowering shares nothing with: float `10⁻⁷`, integer cosine 0.9999. **Admission at the real shapes at 224 × 224** (no weights read,
+`tir_admit_pipeline_v1` at the open job ceilings): ResNet-18 3 blocks, 364 nodes, 1.81·10⁹ MACs, cone work 935; ResNet-50 5 blocks,
+886 nodes, 4.09·10⁹ MACs, cone work 2,284; ResNet-152 12 blocks, 2,620 nodes, 1.15·10¹⁰ MACs, cone work 6,752 (of 65,536) — the
+class's own job ceiling decides which of them it takes.
+
 ## 10. The gates that keep it honest
 
 | gate | what it holds |
@@ -393,6 +443,7 @@ weights_proj}` named). `glm_moe_dsa` differs only in `rope.style` (interleaved):
 | `tests/golden_lowering.rs` | every lowering is byte-identical to a recorded baseline under both math modes (`std`, `libm-v1`): version-1 *programs* (92 fixtures + 63 real configs, recorded before the generic frontend) and version-2 artifacts (119 fixtures + 63 configs) — a refactor that moves a byte fails; a family that changes on purpose is listed with the commit that explains it |
 | `tests/adapters.rs` (`legacy-oracle`) | every family adapter reads the `ModelSpec` the Rust parser it replaced produced, on 224 configs and ~15,000 single-key mutants |
 | `tests/feature_registry.rs` | the vocabulary is honest (§3) |
+| `tests/cnn.rs` | a convolutional network is a data spec: the HF ResNet fixtures (basic, bottleneck, one that crosses a block boundary), a depthwise / dilated network against a naive direct convolution, the real ResNet-18/50/152 admitted at 224 px, the adapter equal to the Rust structure |
 | `tests/qwen4_exp.rs`, `tests/common` | the acceptance matrix for a model that is a combination: float reference ↔ transformers, integer ↔ transformers, the in-program ids ↔ transformers' ids, the program's selected blocks ↔ the indexer's, reference ↔ ref2 ↔ exec on every commit point, the court's demand evaluator reproducing every node of every occurrence (all 25 primitives, state replay, the dissection arithmetic) |
 | admission | every fixture admitted; the largest block ≤ 512 nodes, ≤ 16 blocks |
 | hardening | the mutated-config sweep and the hostile-number test (§11) |

@@ -60,6 +60,7 @@
 //! commit point is added for cone size.
 
 pub mod bidir;
+pub mod cnn;
 pub mod encdec;
 pub mod qlinear;
 pub mod vision;

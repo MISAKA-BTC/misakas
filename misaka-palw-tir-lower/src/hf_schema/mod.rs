@@ -442,6 +442,61 @@ pub fn read_vision(config: &Value, opts: &ReadOptions) -> Result<VisionRead, Rea
     Ok(VisionRead { spec, adapter: src, assumed_defaults: built.assumed_defaults })
 }
 
+/// A successful read of a **convolutional network** (`CNN_FROM_SPEC_V1`).
+#[derive(Clone, Debug)]
+pub struct CnnRead {
+    pub spec: crate::lower::cnn::CnnSpec,
+    pub adapter: AdapterSource,
+    pub assumed_defaults: Vec<String>,
+}
+
+/// The image classes' canonical input size: a convolutional network's `config.json` declares none (the class does), so a read
+/// without a class assumes the ImageNet convention and says so.
+pub const CNN_DEFAULT_INPUT: (u32, u32) = (224, 224);
+
+/// Whether an adapter of kind `cnn` claims this configuration.
+pub fn is_cnn(config: &Value) -> bool {
+    let arch = config.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("");
+    builtin::find_cnn_for(arch, config.get("model_type").and_then(Value::as_str)).is_some()
+}
+
+/// Read a convolutional network's configuration through an adapter of kind `cnn` (the built-in one that claims it, one by id,
+/// or the caller's). The class's input size and the processor's normalisation are not in `config.json`: the size is
+/// [`CNN_DEFAULT_INPUT`] (an assumed default) and the normalisation the adapter's.
+pub fn read_cnn(config: &Value, opts: &ReadOptions) -> Result<CnnRead, ReadFailure> {
+    let root = config.as_object().ok_or_else(|| fail(LowerError::bad("config.json is not an object"), AdapterSource::None))?;
+    let arch = root.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("").to_string();
+    let model_type = root.get("model_type").and_then(Value::as_str);
+    let adapter: Adapter = match &opts.adapter {
+        AdapterChoice::BuiltIn(id) => builtin::by_id(id).cloned().ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?,
+        AdapterChoice::Text(t) => adapter::parse(t, Origin::User).map_err(|e| fail(e, AdapterSource::None))?,
+        AdapterChoice::None => {
+            return Err(fail(LowerError::not_lowerable(format!("{arch}: a convolutional network has no standard template; it needs an adapter (kind `cnn`)")), AdapterSource::None));
+        }
+        AdapterChoice::Auto => match builtin::find_cnn_for(&arch, model_type) {
+            Some(a) => a.clone(),
+            None => {
+                return Err(fail(LowerError::not_lowerable(format!("`{arch}` is a convolutional network no adapter of kind `cnn` claims")), AdapterSource::None));
+            }
+        },
+    };
+    let src = source_of(&adapter);
+    if adapter.kind() != "cnn" {
+        return Err(fail(LowerError::not_lowerable(format!("{arch}: adapter `{}` is of kind `{}`, not `cnn`", adapter.id, adapter.kind())), src));
+    }
+    let built = eval::build_cnn_spec(&adapter, config).map_err(|e| fail(e, src.clone()))?;
+    let mut assumed_defaults = built.assumed_defaults;
+    let given = built.spec.get("h").is_some_and(|v| !v.is_null()) && built.spec.get("w").is_some_and(|v| !v.is_null());
+    let size = if given {
+        None
+    } else {
+        assumed_defaults.push(format!("input size {}x{} (the class declares it; a convolutional network's config.json has none)", CNN_DEFAULT_INPUT.0, CNN_DEFAULT_INPUT.1));
+        Some(CNN_DEFAULT_INPUT)
+    };
+    let spec = crate::lower::cnn::cnn_spec_from_value(built.spec, size, None).map_err(|e| fail(e, src.clone()))?;
+    Ok(CnnRead { spec, adapter: src, assumed_defaults })
+}
+
 /// The reader's own checks (before any adapter runs), the adapter's evaluation, and the
 /// pre-quantised-checkpoint attachment.
 fn read_with(

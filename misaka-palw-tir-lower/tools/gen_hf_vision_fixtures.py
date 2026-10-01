@@ -52,6 +52,16 @@ CONFIGS = {
                                        image_size=28, patch_size=7, hidden_act="gelu", layer_norm_eps=1e-12,
                                        qkv_bias=True)),
                 model="ViTModel", size=(28, 28), mean=HALF, std=HALF, layout="nchw"),
+    "resnet": dict(cfg=("ResNetConfig", dict(num_channels=3, embedding_size=8, hidden_sizes=[8, 16], depths=[1, 1], layer_type="basic",
+                                             hidden_act="relu", downsample_in_first_stage=False)),
+                   model="ResNetModel", size=(32, 32), mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], layout="nchw"),
+    "resnet_bottleneck": dict(cfg=("ResNetConfig", dict(num_channels=3, embedding_size=8, hidden_sizes=[16, 32], depths=[2, 1],
+                                                        layer_type="bottleneck", hidden_act="relu", downsample_in_first_stage=False)),
+                              model="ResNetModel", size=(32, 32), mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], layout="nchw"),
+    # Deep enough that the program needs layer blocks: the carry between them changes shape (the feature map halves each stage).
+    "resnet_deep": dict(cfg=("ResNetConfig", dict(num_channels=3, embedding_size=8, hidden_sizes=[8, 8, 16, 16], depths=[2, 2, 2, 2],
+                                                  layer_type="basic", hidden_act="relu", downsample_in_first_stage=False)),
+                        model="ResNetModel", size=(64, 64), mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], layout="nchw"),
     "qwen2_vl_vision": dict(cfg=("Qwen2VLVisionConfig", dict(depth=2, embed_dim=32, hidden_size=48, hidden_act="quick_gelu",
                                                              mlp_ratio=2, num_heads=4, in_channels=3, patch_size=7,
                                                              spatial_merge_size=2, temporal_patch_size=2)),
@@ -129,6 +139,8 @@ def make(name):
     hidden = getattr(cfg, "hidden_size", None) if name != "llava" else cfg.text_config.hidden_size
     if name.startswith("qwen2_vl") and name.endswith("_vision"):
         hidden = cfg.embed_dim
+    if name.startswith("resnet"):
+        hidden = 72  # about a 3x3 convolution's fan-in over 8 channels: the weights' scale keeps activations O(1)
     if name in ("qwen2_vl", "qwen2_5_vl"):
         hidden = cfg.text_config.hidden_size
     randomise(model, hidden, seed)
@@ -153,6 +165,10 @@ def make(name):
             elif name == "siglip_vision":
                 o = fresh(pixel_values=pv)
                 out = {"pooler_output": o.pooler_output[0].tolist(), "last_hidden_state": o.last_hidden_state[0].tolist()}
+            elif name.startswith("resnet"):
+                o = fresh(pixel_values=pv)
+                fm = o.last_hidden_state[0]  # [C, H, W] -> rows [H*W, C]
+                out = {"last_hidden_state": fm.permute(1, 2, 0).reshape(-1, fm.shape[0]).tolist(), "pooler_output": o.pooler_output[0].flatten().tolist()}
             elif name == "vit":
                 o = fresh(pixel_values=pv)
                 out = {"last_hidden_state": o.last_hidden_state[0].tolist(), "cls": o.last_hidden_state[0, 0].tolist(),

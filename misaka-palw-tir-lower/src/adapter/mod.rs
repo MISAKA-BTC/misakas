@@ -218,7 +218,8 @@ fn resolve(v: Value, depth: usize) -> Result<Value> {
 impl Adapter {
     /// What the adapter's `spec` instantiates: `"decoder"` (a [`crate::spec::ModelSpec`], the default) or
     /// `"encdec"` (a [`crate::lower::encdec::EncDecSpec`], `ENCDEC_FROM_SPEC_V1`) or `"vision"` (a
-    /// [`crate::lower::vision::VisionSpec`], `VISION_FROM_SPEC_V1`).
+    /// [`crate::lower::vision::VisionSpec`], `VISION_FROM_SPEC_V1`) or `"cnn"` (a [`crate::lower::cnn::CnnSpec`],
+    /// `CNN_FROM_SPEC_V1`).
     pub fn kind(&self) -> &str {
         self.value.get("kind").and_then(Value::as_str).unwrap_or("decoder")
     }

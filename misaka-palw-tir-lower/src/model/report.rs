@@ -6,8 +6,8 @@
 //! same data serialises as JSON (`--json`) for the tools that wrap it (header-only preflight, the t12
 //! admission conditions).
 
-use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, encdec_features, feature_info, vision_features};
-use crate::hf_schema::{AdapterSource, Level, MissingItem, ReadOptions, TensorIndex, is_encoder_decoder, is_vision_tower, read_encdec, read_model, read_vision};
+use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, cnn_features, encdec_features, feature_info, vision_features};
+use crate::hf_schema::{AdapterSource, Level, MissingItem, ReadOptions, TensorIndex, is_cnn, is_encoder_decoder, is_vision_tower, read_cnn, read_encdec, read_model, read_vision};
 use serde::Serialize;
 use serde_json::Value;
 use std::fmt::Write;
@@ -267,22 +267,32 @@ pub fn analyze_encdec(config: &Value, tensors: Option<&TensorIndex>, opts: &Read
     }
 }
 
-/// [`analyze`] for a vision tower (`VISION_FROM_SPEC_V1`): the adapter of kind `vision` builds the spec, the features
-/// are listed, and the tensor index is run through the tower's binding.
-pub fn analyze_vision(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
+/// What [`analyze_data`] needs of a model of a data kind (a vision tower, a convolutional network): the features it uses, the
+/// adapter that read it, the assumptions made, its HL program and weight binding (to run the tensor index through), and a note.
+struct DataRead {
+    features: Vec<FeatureUse>,
+    adapter: AdapterSource,
+    assumed_defaults: Vec<String>,
+    hl: crate::Result<(crate::hl::HlProgram, crate::weights::Binding)>,
+    note: &'static str,
+}
+
+/// [`analyze`] for a model an adapter of a DATA kind reads (`vision`, `cnn`): the adapter builds the spec, the features are
+/// listed, and the tensor index is run through the spec's binding.
+fn analyze_data(config: &Value, tensors: Option<&TensorIndex>, read: Result<DataRead, crate::hf_schema::ReadFailure>) -> ArchitectureReport {
     let model_type = model_type_of(config);
     let architectures = architectures_of(config);
-    match read_vision(config, opts) {
+    match read {
         Ok(read) => {
-            let features: Vec<FeatureReport> = vision_features(&read.spec).iter().map(feature_report).collect();
+            let features: Vec<FeatureReport> = read.features.iter().map(feature_report).collect();
             let mut missing = Vec::new();
             let (unread_tensors, weight_errors) = match tensors {
-                Some(t) => match crate::lower::vision::hl_program(&read.spec) {
+                Some(t) => match &read.hl {
                     Ok((hl, b)) => {
                         let r = if t.has_all_shapes() {
-                            crate::weights::check_weights(&hl, &b, &crate::hf_schema::HeaderSource(t))
+                            crate::weights::check_weights(hl, b, &crate::hf_schema::HeaderSource(t))
                         } else {
-                            crate::weights::check_names(&hl, &b, &t.names().map(str::to_string).collect())
+                            crate::weights::check_names(hl, b, &t.names().map(str::to_string).collect())
                         };
                         (r.unused, r.errors)
                     }
@@ -328,7 +338,7 @@ pub fn analyze_vision(config: &Value, tensors: Option<&TensorIndex>, opts: &Read
                 new_consensus_primitive_required: false,
                 new_court_kernel_required: false,
                 result,
-                notes: vec!["a vision tower takes a canonical u8 image at the class's declared size; the processor's normalisation is the adapter's default unless the class gives its own".to_string()],
+                notes: vec![read.note.to_string()],
             }
         }
         Err(f) => ArchitectureReport {
@@ -354,6 +364,30 @@ pub fn analyze_vision(config: &Value, tensors: Option<&TensorIndex>, opts: &Read
     }
 }
 
+/// [`analyze`] for a vision tower (`VISION_FROM_SPEC_V1`).
+pub fn analyze_vision(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
+    let read = read_vision(config, opts).map(|r| DataRead {
+        features: vision_features(&r.spec),
+        hl: crate::lower::vision::hl_program(&r.spec),
+        adapter: r.adapter,
+        assumed_defaults: r.assumed_defaults,
+        note: "a vision tower takes a canonical u8 image at the class's declared size; the processor's normalisation is the adapter's default unless the class gives its own",
+    });
+    analyze_data(config, tensors, read)
+}
+
+/// [`analyze`] for a convolutional network (`CNN_FROM_SPEC_V1`).
+pub fn analyze_cnn(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
+    let read = read_cnn(config, opts).map(|r| DataRead {
+        features: cnn_features(&r.spec),
+        hl: crate::lower::cnn::hl_program(&r.spec),
+        adapter: r.adapter,
+        assumed_defaults: r.assumed_defaults,
+        note: "a convolutional network takes a canonical u8 image at the class's declared size (224x224 unless the class says otherwise); the processor's normalisation is the adapter's default unless the class gives its own",
+    });
+    analyze_data(config, tensors, read)
+}
+
 /// Read a configuration (and, if given, its tensor names) and report what it needs.
 pub fn analyze(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
     if is_encoder_decoder(config) {
@@ -361,6 +395,9 @@ pub fn analyze(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions
     }
     if is_vision_tower(config) {
         return analyze_vision(config, tensors, opts);
+    }
+    if is_cnn(config) {
+        return analyze_cnn(config, tensors, opts);
     }
     let model_type = model_type_of(config);
     let architectures = architectures_of(config);

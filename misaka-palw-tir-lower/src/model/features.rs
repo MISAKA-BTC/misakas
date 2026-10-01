@@ -234,7 +234,13 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("MOD_ADALN_V1", Norm, "adaLN: a LayerNorm modulated by a conditioning-derived shift and scale, and the gated residual", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "SD3/DiT conditioning. Existing norm and mul/add primitives; the modulation vectors come from a linear map of the conditioning."),
     feature!("ACT_TABLE_V1", Ffn, "SiLU and GELU-tanh as i16 tables on the code grid", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "The diffusion stack's activations as pinned tables (same lookup primitive as the decoder's activation tables)."),
     feature!("ATTN_JOINT_STREAMS_V1", Attention, "joint attention over two token streams (MMDiT): separate projections, one softmax over both", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "Committed row statistics keep every cone bounded."),
-    feature!("CONV_DENSE_V1", Model, "a dense 2-D convolution as im2col by a pinned index table and one linear map", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "conv2d as matmul: no convolution primitive; the gather table is the only addition."),
+    feature!("CONV_DENSE_V1", Model, "a dense 2-D convolution as im2col by a pinned index table and one linear map", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline", "cnn::resnet_basic_feature_map_matches_its_hf_fixture", "cnn::resnet_bottleneck_feature_map_matches_its_hf_fixture"], "conv2d as matmul: no convolution primitive; the gather table is the only addition. Two lowerers write it: diffusion/conv.rs (a latent as [C, H, W], square kernel) and lower/cnn.rs (an activation as rows [H*W, C]; stride, zero padding and dilation are the table's, a batch norm is folded into the weight)."),
+    feature!("CNN_FROM_SPEC_V1", Model, "a convolutional network lowered from a spec: an integer image preprocessing, convolutions with their batch norms, pools, residual units, a feature-map or pooled output", Implemented, [], NoReq, ["cnn::resnet_basic_feature_map_matches_its_hf_fixture", "cnn::resnet_bottleneck_feature_map_matches_its_hf_fixture", "cnn::resnet_pooled_vector_matches_its_hf_fixture", "cnn::a_deep_resnet_crosses_a_block_boundary_with_a_padded_carry", "cnn::real_resnets_lower_and_are_admitted_at_224"], "lower/cnn.rs: the network is a CnnSpec (a tree of convolutions, pools, activations and residual units) that an adapter of kind cnn (resnet) instantiates as data; no network's name is in the lowering. One position over the image; an activation is rows [H*W, C] of i16 codes at a calibrated scale per site, crossing a block boundary as i32 at the residual scale in a flat zero-padded carry (a program has one carry signature and a feature map changes shape from stage to stage). The canonical image is u8 HWC at the class's size (224x224 unless the class says otherwise); the per-channel (x/255 - mean)/std is one narrowing. ResNet-18, -50 and -152 at 224x224 are admitted (3, 5 and 12 blocks; 1.8, 4.1 and 11.5 GMACs per image; cone work 935, 2,284 and 6,752 of 65,536)."),
+    feature!("BN_FOLD_V1", Norm, "a batch norm folded exactly into the convolution before it", Implemented, [], NoReq, ["cnn::resnet_basic_feature_map_matches_its_hf_fixture", "cnn::a_depthwise_separable_network_with_dilation_follows_a_naive_reference"], "At inference y = gamma (x - mu)/sqrt(var + eps) + beta is W' = W gamma/sqrt(var + eps) and b' = beta - gamma mu/sqrt(var + eps) + (gamma/sqrt(var + eps)) b: the weight codes are those of the folded rows (the per-row scale absorbs the positive factor) and the bias joins the narrowing's offset, so no batch-norm node exists in a program. Exact up to the weight quantisation; training-mode statistics are not modelled."),
+    feature!("CONV_DEPTHWISE_2D_V1", Mixer, "a depthwise 2-D convolution (groups = channels, any stride, padding and dilation) as a gather, a Mul against [k*k, C] and a ReduceSum over the taps", Implemented, [], NoReq, ["cnn::a_depthwise_separable_network_with_dilation_follows_a_naive_reference"], "MobileNet and ConvNeXt's spatial mixers (the causal 1-D one is CONV_DEPTHWISE_CAUSAL_V1). A grouping other than 1 and depthwise is refused by name (cnn::a_grouped_convolution_that_is_not_depthwise_is_refused_by_name)."),
+    feature!("POOL_MAX_2D_V1", Mixer, "max pooling over k x k windows: the windows gathered from the rows and a padding row of the code floor, a ReduceMax over the taps", Implemented, ["ReduceMax"], NoReq, ["cnn::resnet_basic_feature_map_matches_its_hf_fixture"], "ResNet's stem pool. Exact on the codes (a max commutes with the monotone code map); the padding is minus infinity."),
+    feature!("RESIDUAL_ADD_ACT_V1", Residual, "a residual unit: both branches narrowed to i32 at one calibrated scale, added exactly, the activation applied and the sum narrowed to i16 codes", Implemented, [], NoReq, ["cnn::resnet_basic_feature_map_matches_its_hf_fixture", "cnn::resnet_bottleneck_feature_map_matches_its_hf_fixture", "cnn::a_depthwise_separable_network_with_dilation_follows_a_naive_reference"], "ReLU is a clamp at 0 inside the final narrowing; any other activation is the table lookup after it. An empty shortcut is the identity, a non-empty one is any branch (ResNet's 1x1 projection)."),
+    feature!("POOL_AVG_GLOBAL_V1", Head, "global average pooling: the mean over every position, exact sum and one rounded division", Implemented, [], NoReq, ["cnn::resnet_pooled_vector_matches_its_hf_fixture"], "ResNet's pooler_output; the output is [1, C] at the class's fixed point."),
     feature!("NORM_GROUP_SPATIAL_V1", Norm, "GroupNorm over spatial positions with committed row partials", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "No cone reads a whole tensor."),
     feature!("GEN_STAGE_VAE_V1", Model, "a VAE decoder as a chain of single-position stages (resnet, mid attention, nearest x2 upsample, RGB head)", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "Image output ImageRgb8 HWC; each stage's float reference is checked."),
     feature!("GEN_SAMPLER_AFFINE_V1", Model, "an Euler sampler step as an integer affine update over pinned sigma tables", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "The schedule is data; the latent update is one affine map."),
@@ -690,6 +696,70 @@ pub fn vision_features(s: &crate::lower::vision::VisionSpec) -> Vec<FeatureUse> 
         VisionOut::ClipPooled { .. } => u.add("OUTPUT_EMBEDDING_V1", None, "the class row"),
         VisionOut::SiglipHead => u.add("HEAD_POOL_ATTENTION_V1", None, ""),
         VisionOut::Merger { .. } | VisionOut::Projector { .. } => u.add("OUTPUT_EMBEDDING_V1", None, "rows"),
+    }
+    u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
+}
+
+/// The features a convolutional network uses, by id (`CNN_FROM_SPEC_V1`).
+pub fn cnn_features(s: &crate::lower::cnn::CnnSpec) -> Vec<FeatureUse> {
+    use crate::lower::cnn::{CnnOp, CnnOut};
+    use std::collections::BTreeSet;
+    fn walk<'a>(ops: &'a [CnnOp], f: &mut impl FnMut(&'a CnnOp)) {
+        for op in ops {
+            f(op);
+            if let CnnOp::Residual { main, shortcut, .. } = op {
+                walk(main, f);
+                walk(shortcut, f);
+            }
+        }
+    }
+    let mut u = Uses::default();
+    let (mut n, mut kernels, mut dilated, mut strided) = (0usize, BTreeSet::new(), false, false);
+    let mut acts = BTreeSet::new();
+    walk(&s.ops, &mut |op| match op {
+        CnnOp::Conv(c) => {
+            n += 1;
+            kernels.insert(c.k);
+            dilated |= c.dilation > 1;
+            strided |= c.stride > 1;
+            if let Some(a) = c.act {
+                acts.insert(format!("{a:?}"));
+            }
+            if c.groups > 1 {
+                u.add("CONV_DEPTHWISE_2D_V1", None, format!("{}x{} on {} channels", c.k, c.k, c.cin));
+            } else {
+                u.add("CONV_DENSE_V1", None, format!("{}x{}", c.k, c.k));
+            }
+            if c.bn.is_some() {
+                u.add("BN_FOLD_V1", None, "");
+            }
+        }
+        CnnOp::MaxPool { k, stride, .. } => u.add("POOL_MAX_2D_V1", None, format!("{k}x{k} stride {stride}")),
+        CnnOp::Act(a) => {
+            acts.insert(format!("{a:?}"));
+        }
+        CnnOp::Residual { act, .. } => {
+            u.add("RESIDUAL_ADD_ACT_V1", None, "");
+            if let Some(a) = act {
+                acts.insert(format!("{a:?}"));
+            }
+        }
+    });
+    let mut detail = format!("{}x{} px, {n} convolutions (kernels {kernels:?})", s.h, s.w);
+    if strided {
+        detail.push_str(", strided");
+    }
+    if dilated {
+        detail.push_str(", dilated");
+    }
+    u.add("CNN_FROM_SPEC_V1", None, detail);
+    // ReLU (and no activation) is a clamp inside a narrowing; every other activation is a table.
+    if acts.iter().any(|a| !matches!(a.as_str(), "Relu" | "Identity")) {
+        u.add("ACT_TABLE_V1", None, acts.iter().filter(|a| !matches!(a.as_str(), "Relu" | "Identity")).cloned().collect::<Vec<_>>().join(", "));
+    }
+    match s.out {
+        CnnOut::Map => u.add("OUTPUT_EMBEDDING_V1", None, "the last feature map as rows"),
+        CnnOut::GlobalAvg => u.add("POOL_AVG_GLOBAL_V1", None, ""),
     }
     u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
 }

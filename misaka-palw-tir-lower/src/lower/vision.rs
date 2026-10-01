@@ -1077,7 +1077,7 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
     Ok(Lowered { program, fills: cx.fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
 }
 
-fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
+pub(super) fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
     let blk = &hl.blocks[hbk];
     let n = blk.nodes.len();
     let prefixes: Vec<String> = match blk.role {
