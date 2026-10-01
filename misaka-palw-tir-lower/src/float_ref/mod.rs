@@ -933,6 +933,10 @@ pub fn act(a: Act, v: f32) -> f32 {
         Act::GeluTanh => 0.5 * x * (1.0 + crate::detmath::tanh((2.0 / std::f64::consts::PI).sqrt() * (x + 0.044715 * x * x * x))),
         Act::QuickGelu => x * sig(1.702 * x),
         Act::Relu => x.max(0.0),
+        Act::Relu6 => x.clamp(0.0, 6.0),
+        // torch: `x * relu6(x + 3) / 6` and `relu6(x + 3) / 6`
+        Act::HardSwish => x * (x + 3.0).clamp(0.0, 6.0) / 6.0,
+        Act::HardSigmoid => (x + 3.0).clamp(0.0, 6.0) / 6.0,
         Act::Relu2 => {
             let r = x.max(0.0);
             r * r

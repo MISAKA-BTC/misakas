@@ -241,6 +241,9 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("POOL_MAX_2D_V1", Mixer, "max pooling over k x k windows: the windows gathered from the rows and a padding row of the code floor, a ReduceMax over the taps", Implemented, ["ReduceMax"], NoReq, ["cnn::resnet_basic_feature_map_matches_its_hf_fixture"], "ResNet's stem pool. Exact on the codes (a max commutes with the monotone code map); the padding is minus infinity."),
     feature!("RESIDUAL_ADD_ACT_V1", Residual, "a residual unit: both branches narrowed to i32 at one calibrated scale, added exactly, the activation applied and the sum narrowed to i16 codes", Implemented, [], NoReq, ["cnn::resnet_basic_feature_map_matches_its_hf_fixture", "cnn::resnet_bottleneck_feature_map_matches_its_hf_fixture", "cnn::a_depthwise_separable_network_with_dilation_follows_a_naive_reference"], "ReLU is a clamp at 0 inside the final narrowing; any other activation is the table lookup after it. An empty shortcut is the identity, a non-empty one is any branch (ResNet's 1x1 projection)."),
     feature!("POOL_AVG_GLOBAL_V1", Head, "global average pooling: the mean over every position, exact sum and one rounded division", Implemented, [], NoReq, ["cnn::resnet_pooled_vector_matches_its_hf_fixture"], "ResNet's pooler_output; the output is [1, C] at the class's fixed point."),
+    feature!("CONV_PAD_TF_SAME_V1", Mixer, "TensorFlow SAME padding: asymmetric zero padding computed from the input's extent, stride and kernel (the extra row after, not before)", Implemented, [], NoReq, ["cnn::a_mobilenet_v2_matches_its_hf_fixture"], "MobileNet v1/v2 (`tf_padding`): the window table's padding row is where a tap falls outside, with before = pad/2 and after = pad - pad/2 per axis; no node of its own."),
+    feature!("LAYER_SCALE_FOLD_V1", Norm, "a learned per-channel scale after a convolution folded exactly into its weights and bias", Implemented, [], NoReq, ["cnn::a_convnext_matches_its_hf_fixture"], "ConvNeXt's layer scale (gamma per channel multiplying a pointwise convolution's output): W' = gamma W and b' = gamma b, so no multiply exists in a program."),
+    feature!("ACT_CLAMP_FIXED_UNIT_V1", Ffn, "ReLU6 as a narrowing into the fixed unit 6/32767 whose clamp at 0 and at 32767 is min(max(x, 0), 6)", Implemented, [], NoReq, ["cnn::a_mobilenet_v2_matches_its_hf_fixture"], "MobileNet v1/v2: the output scale is not calibrated but fixed (the range is exactly [0, 6]); the narrowing's clamp is the activation."),
     feature!("NORM_GROUP_SPATIAL_V1", Norm, "GroupNorm over spatial positions with committed row partials", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "No cone reads a whole tensor."),
     feature!("GEN_STAGE_VAE_V1", Model, "a VAE decoder as a chain of single-position stages (resnet, mid attention, nearest x2 upsample, RGB head)", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "Image output ImageRgb8 HWC; each stage's float reference is checked."),
     feature!("GEN_SAMPLER_AFFINE_V1", Model, "an Euler sampler step as an integer affine update over pinned sigma tables", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "The schedule is data; the latent update is one affine map."),
@@ -738,15 +741,23 @@ pub fn cnn_features(s: &crate::lower::cnn::CnnSpec) -> Vec<FeatureUse> {
             if let Some(a) = c.act {
                 acts.insert(format!("{a:?}"));
             }
+            let kw = c.kw.unwrap_or(c.k);
             if c.groups > 1 {
-                u.add("CONV_DEPTHWISE_2D_V1", None, format!("{}x{} on {} channels", c.k, c.k, c.cin));
+                u.add("CONV_DEPTHWISE_2D_V1", None, format!("{}x{} on {} channels", c.k, kw, c.cin));
             } else {
-                u.add("CONV_DENSE_V1", None, format!("{}x{}", c.k, c.k));
+                u.add("CONV_DENSE_V1", None, format!("{}x{}", c.k, kw));
             }
             if c.bn.is_some() {
                 u.add("BN_FOLD_V1", None, "");
             }
+            if c.tf_same {
+                u.add("CONV_PAD_TF_SAME_V1", None, format!("{}x{} stride {}", c.k, kw, c.stride));
+            }
+            if c.layer_scale.is_some() {
+                u.add("LAYER_SCALE_FOLD_V1", None, "");
+            }
         }
+        CnnOp::ChannelNorm { .. } => u.add("NORM_LAYER_V1", None, "over the channels of the feature map"),
         CnnOp::MaxPool { k, stride, .. } => u.add("POOL_MAX_2D_V1", None, format!("{k}x{k} stride {stride}")),
         CnnOp::Act(a) => {
             acts.insert(format!("{a:?}"));
@@ -766,13 +777,21 @@ pub fn cnn_features(s: &crate::lower::cnn::CnnSpec) -> Vec<FeatureUse> {
         detail.push_str(", dilated");
     }
     u.add("CNN_FROM_SPEC_V1", None, detail);
-    // ReLU (and no activation) is a clamp inside a narrowing; every other activation is a table.
-    if acts.iter().any(|a| !matches!(a.as_str(), "Relu" | "Identity")) {
-        u.add("ACT_TABLE_V1", None, acts.iter().filter(|a| !matches!(a.as_str(), "Relu" | "Identity")).cloned().collect::<Vec<_>>().join(", "));
+    // ReLU, ReLU6 (a clamp in its fixed unit) and no activation are clamps inside a narrowing; every other activation is a table.
+    let is_clamp = |a: &str| matches!(a, "Relu" | "Relu6" | "Identity");
+    if acts.iter().any(|a| !is_clamp(a)) {
+        u.add("ACT_TABLE_V1", None, acts.iter().filter(|a| !is_clamp(a)).cloned().collect::<Vec<_>>().join(", "));
     }
-    match s.out {
+    if acts.contains("Relu6") {
+        u.add("ACT_CLAMP_FIXED_UNIT_V1", None, "ReLU6");
+    }
+    match &s.out {
         CnnOut::Map => u.add("OUTPUT_EMBEDDING_V1", None, "the last feature map as rows"),
         CnnOut::GlobalAvg => u.add("POOL_AVG_GLOBAL_V1", None, ""),
+        CnnOut::GlobalAvgNorm { .. } => {
+            u.add("POOL_AVG_GLOBAL_V1", None, "");
+            u.add("NORM_LAYER_V1", None, "over the pooled row");
+        }
     }
     u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
 }

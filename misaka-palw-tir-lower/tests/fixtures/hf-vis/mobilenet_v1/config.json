@@ -1,0 +1,17 @@
+{
+  "architectures": [
+    "MobileNetV1Model"
+  ],
+  "classifier_dropout_prob": 0.999,
+  "depth_multiplier": 0.25,
+  "dtype": "bfloat16",
+  "hidden_act": "relu6",
+  "image_size": 60,
+  "initializer_range": 0.02,
+  "layer_norm_eps": 0.001,
+  "min_depth": 8,
+  "model_type": "mobilenet_v1",
+  "num_channels": 3,
+  "tf_padding": true,
+  "transformers_version": "5.17.0"
+}

@@ -30,7 +30,7 @@
 use super::bidir::{input_fill, note_site, rows_val, site_key};
 use super::*;
 use crate::float_ref::{ParamStore, SiteStat};
-use crate::spec::Act;
+use crate::spec::{Act, NormKind};
 use crate::weights::{Binding, Src};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -42,6 +42,10 @@ pub const IMAGE_PARAM: &str = super::vision::IMAGE_PARAM;
 
 fn one() -> usize {
     1
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A batch norm folded into the convolution before it: the checkpoint's tensors `{name}.{weight, bias, running_mean,
@@ -76,6 +80,15 @@ pub struct ConvOp {
     pub pad_w: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dilation_w: Option<usize>,
+    /// TensorFlow's "SAME" padding (MobileNet's `tf_padding`): computed from the input's size — along an axis of extent `n`,
+    /// kernel `k` and stride `s`, `max(k − s, 0)` when `n` is a multiple of `s`, else `max(k − n mod s, 0)`, the smaller half
+    /// before — and `pad` is ignored. Not combined with a dilation other than 1.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tf_same: bool,
+    /// LayerScale: the checkpoint's `[cout]` tensor that multiplies the output channels (ConvNeXt's `layer_scale_parameter`),
+    /// folded exactly into the weight rows and the bias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_scale: Option<String>,
     #[serde(default = "one")]
     pub groups: usize,
     #[serde(default)]
@@ -94,6 +107,8 @@ pub enum CnnOp {
     MaxPool { k: usize, stride: usize, pad: usize },
     /// An activation on its own (not fused into a convolution).
     Act(Act),
+    /// A LayerNorm over the channels of every position (ConvNeXt's): the checkpoint's `{name}.weight` and `{name}.bias`.
+    ChannelNorm { name: String, eps: f64 },
     /// `act(main(x) + shortcut(x))`; an empty shortcut is the identity.
     Residual {
         main: Vec<CnnOp>,
@@ -105,12 +120,15 @@ pub enum CnnOp {
 }
 
 /// What the network outputs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CnnOut {
     /// The last feature map as rows `[P, C]`.
     Map,
     /// The mean over positions `[1, C]` (global average pooling).
     GlobalAvg,
+    /// The mean over positions through a LayerNorm over the channels (ConvNeXt's `pooler_output`): the checkpoint's
+    /// `{name}.weight` and `{name}.bias`.
+    GlobalAvgNorm { name: String, eps: f64 },
 }
 
 /// A convolutional network as the lowering reads it.
@@ -149,10 +167,16 @@ impl Geo {
 }
 
 /// The output extent of a window of `k` (dilation `d`) at stride `s` and padding `p` over `n`.
-fn window_out(n: usize, k: usize, s: usize, p: usize, d: usize) -> Option<usize> {
+fn window_out(n: usize, k: usize, s: usize, p_total: usize, d: usize) -> Option<usize> {
     let span = d.checked_mul(k.checked_sub(1)?)?.checked_add(1)?;
-    let padded = n.checked_add(p.checked_mul(2)?)?;
+    let padded = n.checked_add(p_total)?;
     (padded >= span && s >= 1).then(|| (padded - span) / s + 1)
+}
+
+/// TensorFlow's "SAME" padding along one axis: `(before, after)`.
+fn tf_pad(n: usize, k: usize, s: usize) -> (usize, usize) {
+    let along = if s != 0 && n % s == 0 { k.saturating_sub(s) } else if s != 0 { k.saturating_sub(n % s) } else { 0 };
+    (along / 2, along - along / 2)
 }
 
 /// A window's geometry on each axis: kernel, stride, zero padding and dilation (height, then width).
@@ -162,44 +186,51 @@ struct Win {
     kw: usize,
     sh: usize,
     sw: usize,
-    ph: usize,
-    pw: usize,
+    /// Zero padding before and after, per axis.
+    ph0: usize,
+    ph1: usize,
+    pw0: usize,
+    pw1: usize,
     dh: usize,
     dw: usize,
 }
 
 impl Win {
     fn square(k: usize, stride: usize, pad: usize, dil: usize) -> Self {
-        Win { kh: k, kw: k, sh: stride, sw: stride, ph: pad, pw: pad, dh: dil, dw: dil }
+        Win { kh: k, kw: k, sh: stride, sw: stride, ph0: pad, ph1: pad, pw0: pad, pw1: pad, dh: dil, dw: dil }
     }
     fn taps(&self) -> usize {
         self.kh * self.kw
     }
     /// The output extent over `inp`, `None` when the window does not fit.
     fn out(&self, inp: Geo, c: usize) -> Option<Geo> {
-        Some(Geo { h: window_out(inp.h, self.kh, self.sh, self.ph, self.dh)?, w: window_out(inp.w, self.kw, self.sw, self.pw, self.dw)?, c })
+        Some(Geo { h: window_out(inp.h, self.kh, self.sh, self.ph0 + self.ph1, self.dh)?, w: window_out(inp.w, self.kw, self.sw, self.pw0 + self.pw1, self.dw)?, c })
     }
     /// The table's name: the geometry in and out and the window.
     fn table_name(&self, inp: Geo, out: Geo) -> String {
         format!(
-            "cnn.idx.{}x{}.{}x{}k{}x{}s{}x{}p{}x{}d{}x{}",
-            inp.h, inp.w, out.h, out.w, self.kh, self.kw, self.sh, self.sw, self.ph, self.pw, self.dh, self.dw
+            "cnn.idx.{}x{}.{}x{}k{}x{}s{}x{}p{}.{}x{}.{}d{}x{}",
+            inp.h, inp.w, out.h, out.w, self.kh, self.kw, self.sh, self.sw, self.ph0, self.ph1, self.pw0, self.pw1, self.dh, self.dw
         )
     }
 }
 
 impl ConvOp {
-    fn win(&self) -> Win {
-        Win {
-            kh: self.k,
-            kw: self.kw.unwrap_or(self.k),
-            sh: self.stride,
-            sw: self.stride_w.unwrap_or(self.stride),
-            ph: self.pad,
-            pw: self.pad_w.unwrap_or(self.pad),
-            dh: self.dilation,
-            dw: self.dilation_w.unwrap_or(self.dilation),
-        }
+    /// The window over an input of geometry `inp` (the padding of a `tf_same` convolution depends on it).
+    fn win_at(&self, inp: Geo) -> Win {
+        let (kw, sw) = (self.kw.unwrap_or(self.k), self.stride_w.unwrap_or(self.stride));
+        let ((ph0, ph1), (pw0, pw1)) = if self.tf_same {
+            (tf_pad(inp.h, self.k, self.stride), tf_pad(inp.w, kw, sw))
+        } else {
+            let pw = self.pad_w.unwrap_or(self.pad);
+            ((self.pad, self.pad), (pw, pw))
+        };
+        Win { kh: self.k, kw, sh: self.stride, sw, ph0, ph1, pw0, pw1, dh: self.dilation, dw: self.dilation_w.unwrap_or(self.dilation) }
+    }
+
+    /// Taps per output channel and input channel (`kh · kw`).
+    fn taps(&self) -> usize {
+        self.k * self.kw.unwrap_or(self.k)
     }
 }
 
@@ -218,6 +249,7 @@ enum PKind {
     Conv(ConvOp),
     MaxPool { k: usize, stride: usize, pad: usize },
     Act(Act),
+    ChannelNorm { eps: f64, name: String },
     Residual { main: Vec<PNode>, shortcut: Vec<PNode>, act: Option<Act> },
 }
 
@@ -257,14 +289,17 @@ fn plan_ops(ops: &[CnnOp], mut geo: Geo, counter: &mut usize) -> Result<(Vec<PNo
         }
         let (id, kind, g_out) = match op {
             CnnOp::Conv(c) => {
-                let w = c.win();
+                let w = c.win_at(geo);
+                if c.tf_same && (w.dh != 1 || w.dw != 1) {
+                    return Err(LowerError::bad(format!("convolution `{}`: TensorFlow SAME padding with a dilation other than 1", c.name)));
+                }
                 if [w.kh, w.kw, w.sh, w.sw, w.dh, w.dw, c.groups, c.cout, c.cin].contains(&0) || c.cin % c.groups != 0 || c.cout % c.groups != 0 {
                     return Err(LowerError::bad(format!("convolution `{}`: kernel, stride, dilation, groups and channels must be positive and divisible", c.name)));
                 }
                 if w.kh.max(w.kw) > MAX_KERNEL
                     || w.sh.max(w.sw) > MAX_STRIDE
                     || w.dh.max(w.dw) > MAX_DILATION
-                    || w.ph.max(w.pw) > MAX_PAD
+                    || w.ph0.max(w.ph1).max(w.pw0).max(w.pw1) > MAX_PAD
                     || c.cin > MAX_CHANNELS
                     || c.cout > MAX_CHANNELS
                 {
@@ -306,6 +341,12 @@ fn plan_ops(ops: &[CnnOp], mut geo: Geo, counter: &mut usize) -> Result<(Vec<PNo
                 (format!("p{n}"), PKind::MaxPool { k: *k, stride: *stride, pad: *pad }, g)
             }
             CnnOp::Act(a) => (format!("a{n}"), PKind::Act(*a), geo),
+            CnnOp::ChannelNorm { name, eps } => {
+                if !eps.is_finite() || *eps <= 0.0 {
+                    return Err(LowerError::bad(format!("channel norm `{name}`: eps {eps} is not a positive number")));
+                }
+                (format!("n{n}"), PKind::ChannelNorm { eps: *eps, name: name.clone() }, geo)
+            }
             CnnOp::Residual { main, shortcut, act } => {
                 let (m, gm) = plan_ops(main, geo, counter)?;
                 let (s, gs) = plan_ops(shortcut, geo, counter)?;
@@ -327,6 +368,7 @@ fn estimate(n: &PNode) -> usize {
     match &n.op {
         PKind::Conv(_) => 22,
         PKind::MaxPool { .. } | PKind::Act(_) => 12,
+        PKind::ChannelNorm { .. } => 32,
         PKind::Residual { main, shortcut, .. } => 10 + main.iter().chain(shortcut).map(estimate).sum::<usize>(),
     }
 }
@@ -395,6 +437,17 @@ fn convs<'a>(nodes: &'a [PNode], f: &mut impl FnMut(&'a PNode, &'a ConvOp)) {
     }
 }
 
+/// Visit every node of a plan (depth first, branches included).
+fn walk_nodes<'a>(nodes: &'a [PNode], f: &mut impl FnMut(&'a PNode)) {
+    for n in nodes {
+        f(n);
+        if let PKind::Residual { main, shortcut, .. } = &n.op {
+            walk_nodes(main, f);
+            walk_nodes(shortcut, f);
+        }
+    }
+}
+
 // ───────────────────────────── params ─────────────────────────────
 
 /// A convolution's HL param names.
@@ -407,7 +460,7 @@ fn pn(id: &str, what: &str) -> String {
 fn param_table(spec: &CnnSpec, p: &Plan) -> Vec<(String, Vec<usize>, Src)> {
     let mut v = Vec::new();
     convs(&p.nodes, &mut |n, c| {
-        let taps = c.cin / c.groups * c.win().taps();
+        let taps = c.cin / c.groups * c.taps();
         v.push((pn(&n.id, "w"), vec![c.cout, taps], Src::t(format!("{}.weight", c.name)).reshape(vec![c.cout, taps])));
         if c.bias {
             v.push((pn(&n.id, "b"), vec![c.cout], Src::t(format!("{}.bias", c.name))));
@@ -418,8 +471,21 @@ fn param_table(spec: &CnnSpec, p: &Plan) -> Vec<(String, Vec<usize>, Src)> {
             v.push((pn(&n.id, "bn.mean"), vec![c.cout], Src::t(format!("{}.running_mean", bn.name))));
             v.push((pn(&n.id, "bn.var"), vec![c.cout], Src::t(format!("{}.running_var", bn.name))));
         }
+        if let Some(ls) = &c.layer_scale {
+            v.push((pn(&n.id, "ls"), vec![c.cout], Src::t(ls.clone())));
+        }
     });
-    let _ = spec;
+    // A channel norm's gain and bias, and the pooled output's.
+    walk_nodes(&p.nodes, &mut |n| {
+        if let PKind::ChannelNorm { name, .. } = &n.op {
+            v.push((pn(&n.id, "gain"), vec![n.out.c], Src::t(format!("{name}.weight"))));
+            v.push((pn(&n.id, "bias"), vec![n.out.c], Src::t(format!("{name}.bias"))));
+        }
+    });
+    if let CnnOut::GlobalAvgNorm { name, .. } = &spec.out {
+        v.push(("pnorm.gain".into(), vec![p.last.c], Src::t(format!("{name}.weight"))));
+        v.push(("pnorm.bias".into(), vec![p.last.c], Src::t(format!("{name}.bias"))));
+    }
     v
 }
 
@@ -430,19 +496,15 @@ pub fn hl_program(spec: &CnnSpec) -> Result<(HlProgram, Binding)> {
     let p = plan(spec)?;
     let table = param_table(spec, &p);
     let params: Vec<ParamDecl> = table.iter().map(|(n, sh, _)| ParamDecl { name: n.clone(), shape: sh.clone(), per_layer: false, init: Init::Normal(0.1) }).collect();
-    let index = |name: &str| table.iter().position(|(n, _, _)| n == name).map(|i| Ref::Param(i as u32));
+    // The params a block's nodes read: those named after the ids of its nodes (`c3.w`, `n5.gain`, `c3.ls`).
     let group_params = |range: std::ops::Range<usize>| -> Vec<Ref> {
-        let mut refs = Vec::new();
-        convs(&p.nodes[range], &mut |n, c| {
-            for w in ["w", "b", "bn.gain", "bn.bias", "bn.mean", "bn.var"] {
-                if (w == "b" && !c.bias) || (w.starts_with("bn.") && c.bn.is_none()) {
-                    continue;
-                }
-                refs.extend(index(&pn(&n.id, w)));
-            }
+        let mut ids = std::collections::BTreeSet::new();
+        walk_nodes(&p.nodes[range], &mut |n| {
+            ids.insert(n.id.clone());
         });
-        refs
+        table.iter().enumerate().filter(|(_, (name, _, _))| name.split('.').next().is_some_and(|id| ids.contains(id))).map(|(i, _)| Ref::Param(i as u32)).collect()
     };
+    let post_params: Vec<Ref> = table.iter().enumerate().filter(|(_, (name, _, _))| name.starts_with("pnorm.")).map(|(i, _)| Ref::Param(i as u32)).collect();
     let anchor = |inputs: Vec<Ref>| Node {
         op: crate::hl::Op::Scale { c: 1.0 },
         inputs,
@@ -457,7 +519,7 @@ pub fn hl_program(spec: &CnnSpec) -> Result<(HlProgram, Binding)> {
         blocks.push(Block { name: format!("g{g}"), role: BlockRole::Layer, nodes: vec![anchor(group_params(range.clone()))], outputs: vec![Ref::Node(0, 0)] });
         schedule.push((blocks.len() - 1) as u16);
     }
-    blocks.push(Block { name: "post".into(), role: BlockRole::Post, nodes: vec![anchor(vec![])], outputs: vec![Ref::Node(0, 0)] });
+    blocks.push(Block { name: "post".into(), role: BlockRole::Post, nodes: vec![anchor(post_params)], outputs: vec![Ref::Node(0, 0)] });
     let post = blocks.len() - 1;
     let hl = HlProgram {
         architecture: spec.architecture.clone(),
@@ -478,7 +540,15 @@ pub fn hl_program(spec: &CnnSpec) -> Result<(HlProgram, Binding)> {
     let mut ignored: Vec<String> = spec.ignored.clone();
     convs(&p.nodes, &mut |_, c| {
         if let Some(bn) = &c.bn {
-            ignored.push(format!("{}.num_batches_tracked", bn.name));
+            // A batch norm's step counter is training state: unread by design, under the name a wrapped checkpoint gives it too
+            // (`mobilenet_v2.conv_1x1.normalization.num_batches_tracked` of an image classifier).
+            let t = format!("{}.num_batches_tracked", bn.name);
+            for [from, to] in &spec.aliases {
+                if let Some(rest) = t.strip_prefix(from.as_str()) {
+                    ignored.push(format!("{to}{rest}"));
+                }
+            }
+            ignored.push(t);
         }
     });
     let aliases = spec.aliases.iter().map(|[a, b]| (a.clone(), b.clone())).collect();
@@ -497,7 +567,7 @@ fn window_index(inp: Geo, out: Geo, w: &Win) -> Vec<u32> {
         for ow in 0..out.w {
             for kh in 0..w.kh {
                 for kw in 0..w.kw {
-                    let (ih, iw) = ((oh * w.sh + kh * w.dh) as isize - w.ph as isize, (ow * w.sw + kw * w.dw) as isize - w.pw as isize);
+                    let (ih, iw) = ((oh * w.sh + kh * w.dh) as isize - w.ph0 as isize, (ow * w.sw + kw * w.dw) as isize - w.pw0 as isize);
                     v.push(if ih < 0 || iw < 0 || ih >= inp.h as isize || iw >= inp.w as isize { pad_row } else { (ih as usize * inp.w + iw as usize) as u32 });
                 }
             }
@@ -510,8 +580,8 @@ fn window_index(inp: Geo, out: Geo, w: &Win) -> Vec<u32> {
 
 /// A convolution's folded float weights `[cout][taps]` (`(cin/groups, kh, kw)` order) and bias `[cout]`: the batch norm folded
 /// exactly (`BN_FOLD_V1`).
-fn folded(c: &ConvOp, w: &[f32], bias: Option<&[f32]>, bn: Option<(&[f32], &[f32], &[f32], &[f32])>) -> (Vec<f32>, Vec<f64>) {
-    let taps = c.cin / c.groups * c.win().taps();
+fn folded(c: &ConvOp, w: &[f32], bias: Option<&[f32]>, bn: Option<(&[f32], &[f32], &[f32], &[f32])>, layer_scale: Option<&[f32]>) -> (Vec<f32>, Vec<f64>) {
+    let taps = c.cin / c.groups * c.taps();
     let mut out = w.to_vec();
     let mut b = vec![0f64; c.cout];
     for o in 0..c.cout {
@@ -524,6 +594,14 @@ fn folded(c: &ConvOp, w: &[f32], bias: Option<&[f32]>, bn: Option<(&[f32], &[f32
             out[o * taps + t] = (w[o * taps + t] as f64 * s) as f32;
         }
         b[o] = shift + s * bias.map_or(0.0, |b| b[o] as f64);
+        // LayerScale multiplies the whole output channel, bias included: exact.
+        if let Some(ls) = layer_scale {
+            let g = ls[o] as f64;
+            for t in 0..taps {
+                out[o * taps + t] = (out[o * taps + t] as f64 * g) as f32;
+            }
+            b[o] *= g;
+        }
     }
     (out, b)
 }
@@ -532,10 +610,19 @@ fn apply_act(a: Act, x: f64) -> f64 {
     crate::float_ref::act(a, x as f32) as f64
 }
 
+/// LayerNorm of one row over its channels: `(x − μ)/√(σ² + ε)·γ + β`.
+fn layer_norm_row(x: &[f64], g: &[f32], b: &[f32], eps: f64) -> Vec<f64> {
+    let n = x.len() as f64;
+    let mu = x.iter().sum::<f64>() / n;
+    let var = x.iter().map(|v| (v - mu) * (v - mu)).sum::<f64>() / n;
+    let inv = 1.0 / (var + eps).sqrt();
+    x.iter().enumerate().map(|(i, v)| (v - mu) * inv * g[i] as f64 + b[i] as f64).collect()
+}
+
 /// A convolution over rows in `f64`: `x` is `[P_in][C_in]`, the weight `fw` `[C_out][C_in/groups · kh · kw]` (batch norm already
 /// folded) and the offsets `fb`, the result `[P_out][C_out]` before the activation.
 fn conv_float(x: &[Vec<f64>], inp: Geo, out: Geo, c: &ConvOp, fw: &[f32], fb: &[f64]) -> Vec<Vec<f64>> {
-    let win = c.win();
+    let win = c.win_at(inp);
     let kk = win.taps();
     let taps = c.cin / c.groups * kk;
     let idx = window_index(inp, out, &win);
@@ -576,6 +663,8 @@ impl Default for ConvOp {
             stride_w: None,
             pad_w: None,
             dilation_w: None,
+            tf_same: false,
+            layer_scale: None,
             groups: 1,
             bias: false,
             bn: None,
@@ -600,6 +689,8 @@ impl ConvOp {
             stride_w: Some(stride),
             pad_w: Some(pad),
             dilation_w: None,
+            tf_same: false,
+            layer_scale: None,
             groups: 1,
             bias,
             bn: None,
@@ -610,14 +701,15 @@ impl ConvOp {
 
 /// The length of a 1-D convolution's output over `t` rows (`None` when the window does not fit).
 pub(super) fn conv1d_out_len(t: usize, c: &ConvOp) -> Option<usize> {
-    c.win().out(Geo { h: 1, w: t, c: c.cin }, c.cout).map(|g| g.w)
+    let inp = Geo { h: 1, w: t, c: c.cin };
+    c.win_at(inp).out(inp, c.cout).map(|g| g.w)
 }
 
 /// A 1-D convolution of `x` (`[T][C_in]` rows) in `f64`: the checkpoint's `weight` (`[C_out, C_in, k]`, flat) and `bias`.
 pub(super) fn conv1d_float(x: &[Vec<f64>], c: &ConvOp, w: &[f32], bias: Option<&[f32]>) -> Result<Vec<Vec<f64>>> {
     let inp = Geo { h: 1, w: x.len(), c: c.cin };
-    let out = c.win().out(inp, c.cout).ok_or_else(|| LowerError::bad(format!("convolution `{}`: {} frames are shorter than its window", c.name, x.len())))?;
-    let (fw, fb) = folded(c, w, bias, None);
+    let out = c.win_at(inp).out(inp, c.cout).ok_or_else(|| LowerError::bad(format!("convolution `{}`: {} frames are shorter than its window", c.name, x.len())))?;
+    let (fw, fb) = folded(c, w, bias, None, None);
     Ok(conv_float(x, inp, out, c, &fw, &fb))
 }
 
@@ -626,7 +718,7 @@ pub(super) fn conv1d_float(x: &[Vec<f64>], c: &ConvOp, w: &[f32], bias: Option<&
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lower_conv1d(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, id: &str, c: &ConvOp, t: usize, want: &Want, relu: bool) -> Result<Val> {
     let inp = Geo { h: 1, w: t, c: c.cin };
-    let out = c.win().out(inp, c.cout).ok_or_else(|| LowerError::bad(format!("convolution `{}`: {t} frames are shorter than its window", c.name)))?;
+    let out = c.win_at(inp).out(inp, c.cout).ok_or_else(|| LowerError::bad(format!("convolution `{}`: {t} frames are shorter than its window", c.name)))?;
     let n = PNode { id: id.to_string(), op: PKind::Conv(c.clone()), inp, out };
     lower_conv(b, cx, lb, x, &n, c, want, relu)
 }
@@ -695,7 +787,8 @@ pub fn float_forward(hl: &HlProgram, spec: &CnnSpec, params: &ParamStore, image:
                         Some(_) => Some((get(&pn(&n.id, "bn.gain"))?, get(&pn(&n.id, "bn.bias"))?, get(&pn(&n.id, "bn.mean"))?, get(&pn(&n.id, "bn.var"))?)),
                         None => None,
                     };
-                    let (fw, fb) = folded(c, &w, bias.as_deref(), bn.as_ref().map(|(a, b, m, v)| (&a[..], &b[..], &m[..], &v[..])));
+                    let ls = if c.layer_scale.is_some() { Some(get(&pn(&n.id, "ls"))?) } else { None };
+                    let (fw, fb) = folded(c, &w, bias.as_deref(), bn.as_ref().map(|(a, b, m, v)| (&a[..], &b[..], &m[..], &v[..])), ls.as_deref());
                     let pre = conv_float(&x, n.inp, n.out, c, &fw, &fb);
                     activated(&pre, c.act, &n.id, prefix, observe)
                 }
@@ -710,6 +803,12 @@ pub fn float_forward(hl: &HlProgram, spec: &CnnSpec, params: &ParamStore, image:
                 }
                 PKind::Act(a) => {
                     let rows: Vec<Vec<f64>> = x.iter().map(|r| r.iter().map(|v| apply_act(*a, *v)).collect()).collect();
+                    observe(format!("{prefix}{}", n.id), &rows);
+                    rows
+                }
+                PKind::ChannelNorm { eps, .. } => {
+                    let (g, b) = (get(&pn(&n.id, "gain"))?, get(&pn(&n.id, "bias"))?);
+                    let rows: Vec<Vec<f64>> = x.iter().map(|r| layer_norm_row(r, &g, &b, *eps)).collect();
                     observe(format!("{prefix}{}", n.id), &rows);
                     rows
                 }
@@ -734,11 +833,17 @@ pub fn float_forward(hl: &HlProgram, spec: &CnnSpec, params: &ParamStore, image:
         observe(format!("{prefix}out{g}"), &x);
     }
     observe("post.carry0".into(), &x);
-    let out: Vec<Vec<f64>> = match spec.out {
+    let out: Vec<Vec<f64>> = match &spec.out {
         CnnOut::Map => x,
         CnnOut::GlobalAvg => {
             let n = x.len() as f64;
             vec![(0..p.last.c).map(|c| x.iter().map(|r| r[c]).sum::<f64>() / n).collect()]
+        }
+        CnnOut::GlobalAvgNorm { eps, .. } => {
+            let n = x.len() as f64;
+            let mean: Vec<f64> = (0..p.last.c).map(|c| x.iter().map(|r| r[c]).sum::<f64>() / n).collect();
+            observe("post.mean".into(), std::slice::from_ref(&mean));
+            vec![layer_norm_row(&mean, &get("pnorm.gain")?, &get("pnorm.bias")?, *eps)]
         }
     };
     observe("post.out".into(), &out);
@@ -761,7 +866,7 @@ fn narrow_into(b: &mut BlockBuilder<'_>, x: tir::Ref, m: tir::Ref, s: tir::Ref, 
 }
 
 /// A convolution: rows `x` (`i16` codes, `[P_in, C_in]`) to rows `[P_out, C_out]` narrowed as `want` says (`lo` 0 under a ReLU).
-pub(super) fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n: &PNode, c: &ConvOp, want: &Want, relu: bool) -> Result<Val> {
+fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n: &PNode, c: &ConvOp, want: &Want, relu: bool) -> Result<Val> {
     let hl = cx.hl;
     let (inp, out) = (n.inp, n.out);
     let id = n.id.clone();
@@ -769,7 +874,7 @@ pub(super) fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb,
     if xc.len != c.cin {
         return Err(LowerError::eval(format!("internal: `{id}` reads {} columns, its weight has {}", xc.len, c.cin)));
     }
-    let win = c.win();
+    let win = c.win_at(inp);
     let kk = win.taps();
     let pad_row = b.pb.konst(DType::I16, &[1, c.cin as u32], &vec![0i128; c.cin]);
     let padded = b.concat(&[xc.r, pad_row], 0);
@@ -788,9 +893,14 @@ pub(super) fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb,
     };
     // The folded, quantised weight in the matmul's layout, and the per-row scales: made from the float params by every fill
     // that needs them (the same function, so the same bytes).
+    let lsp = if c.layer_scale.is_some() { Some(super::bidir::hl_param(hl, &pn(&id, "ls"))?) } else { None };
     let (cc, cin, cout) = (c.clone(), c.cin, c.cout);
     let fold = Arc::new(move |fc: &FillCtx<'_>| -> Result<(crate::quant::RowCodes, Vec<f64>)> {
         let w = fc.f(wp)?.data.clone();
+        let ls = match lsp {
+            Some(p) => Some(fc.f(p)?.data.clone()),
+            None => None,
+        };
         let bias = match bp {
             Some(p) => Some(fc.f(p)?.data.clone()),
             None => None,
@@ -799,7 +909,7 @@ pub(super) fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb,
             Some(ids) => Some([fc.f(ids[0])?.data.clone(), fc.f(ids[1])?.data.clone(), fc.f(ids[2])?.data.clone(), fc.f(ids[3])?.data.clone()]),
             None => None,
         };
-        let (fw, fb) = folded(&cc, &w, bias.as_deref(), bn.as_ref().map(|v| (&v[0][..], &v[1][..], &v[2][..], &v[3][..])));
+        let (fw, fb) = folded(&cc, &w, bias.as_deref(), bn.as_ref().map(|v| (&v[0][..], &v[1][..], &v[2][..], &v[3][..])), ls.as_deref());
         Ok((crate::quant::quantize_rows(&fw, cout, taps, None), fb))
     });
     let f1 = fold.clone();
@@ -916,7 +1026,19 @@ fn lower_maxpool(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val
     Ok(rows_val(r, DType::I16, xc.key.clone(), c, &n.id))
 }
 
-/// The activation `a` over rows (`ReLU` is exact on codes: a clamp; every other is a table).
+/// ReLU6's output unit: its range is exactly `[0, 6]`, so the `i16` codes are `6/32767` apiece and the narrowing's own clamp at
+/// 0 and at 32767 IS `min(max(x, 0), 6)` — no node of its own, and no new primitive.
+fn relu6_key() -> ScaleKey {
+    ScaleKey { base: Base::Fixed(6.0 / 32767.0), factor: 1.0 }
+}
+
+/// An activation a narrowing's clamp performs (ReLU: at 0; ReLU6: at 0 and 6, in its fixed unit) — every other is a table.
+fn is_clamp_act(a: Act) -> bool {
+    matches!(a, Act::Relu | Act::Relu6)
+}
+
+/// The activation `a` over rows (`ReLU` is exact on codes: a clamp; `ReLU6` is a requantisation into its fixed unit; every other
+/// is a table).
 pub(super) fn lower_act(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, a: Act, site: &str) -> Result<Val> {
     let xc = super::bidir::codes_rows(b, cx, lb, x)?;
     match a {
@@ -926,8 +1048,21 @@ pub(super) fn lower_act(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, 
             b.commit(r);
             Ok(rows_val(r, DType::I16, xc.key.clone(), xc.len, site))
         }
+        Act::Relu6 => {
+            let (kx, ky) = (xc.key.clone(), relu6_key());
+            let (m, s) = decl_ms(b, cx, lb, site, 1, Arc::new(move |fc| Ok(vec![fc.scale(&kx)? / fc.scale(&ky)?])))?;
+            let r = narrow_into(b, xc.r, m, s, None, 0, 32767, DType::I16);
+            b.commit(r);
+            Ok(rows_val(r, DType::I16, relu6_key(), xc.len, site))
+        }
         other => lower_table_named(b, cx, lb, &xc, TableFn::Act(other), site),
     }
+}
+
+/// A channel LayerNorm over rows: the input's codes (or `i32` rows), the unit row and one per-channel narrowing with the gain.
+fn lower_channel_norm(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n: &PNode, eps: f64) -> Result<Val> {
+    let xc = super::bidir::codes_rows(b, cx, lb, x)?;
+    super::bidir::norm_rows_kind(b, cx, lb, &xc, NormKind::Layer, eps, &n.id, true, &codes_want(&n.id))
 }
 
 /// One node of a branch, from `x`; `last_want` is where the branch's final value should land when it is a convolution's.
@@ -936,12 +1071,15 @@ fn lower_nodes(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, nodes: &[
         let last = i + 1 == nodes.len();
         x = match &n.op {
             PKind::Conv(c) => {
-                let relu = c.act == Some(Act::Relu);
-                let table_act = c.act.filter(|a| !matches!(a, Act::Relu | Act::Identity));
+                let clamp = c.act.is_some_and(is_clamp_act);
+                let relu6 = c.act == Some(Act::Relu6);
+                let table_act = c.act.filter(|a| !is_clamp_act(*a) && *a != Act::Identity);
                 match (last, last_want) {
-                    (true, Some(w)) if table_act.is_none() => lower_conv(b, cx, lb, &x, n, c, w, relu)?,
+                    // The branch's last convolution lands on the unit's sum scale (ReLU6's fixed unit cannot).
+                    (true, Some(w)) if table_act.is_none() && !relu6 => lower_conv(b, cx, lb, &x, n, c, w, clamp)?,
                     _ => {
-                        let v = lower_conv(b, cx, lb, &x, n, c, &codes_want(&n.id), relu)?;
+                        let want = if relu6 { Want { dt: DType::I16, key: relu6_key() } } else { codes_want(&n.id) };
+                        let v = lower_conv(b, cx, lb, &x, n, c, &want, clamp)?;
                         match table_act {
                             Some(a) => lower_act(b, cx, lb, &v, a, &format!("{}.act", n.id))?,
                             None => v,
@@ -949,6 +1087,7 @@ fn lower_nodes(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, nodes: &[
                     }
                 }
             }
+            PKind::ChannelNorm { eps, .. } => lower_channel_norm(b, cx, lb, &x, n, *eps)?,
             PKind::MaxPool { k, stride, pad } => lower_maxpool(b, cx, lb, &x, n, *k, *stride, *pad)?,
             PKind::Act(a) => lower_act(b, cx, lb, &x, *a, &n.id)?,
             PKind::Residual { main, shortcut, act } => {
@@ -966,9 +1105,9 @@ fn lower_nodes(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, nodes: &[
                 let t = b.add(m.r, s.r, DType::I64);
                 let t = b.clamp(t, i32::MIN as i64, i32::MAX as i64, DType::I32);
                 let sum = rows_val(t, DType::I32, sum_key.clone(), m.len, &format!("{}.sum", n.id));
-                let relu = *act == Some(Act::Relu);
-                let table_act = act.filter(|a| !matches!(a, Act::Relu | Act::Identity));
-                let out_key = site_key(&n.id);
+                let relu = act.is_some_and(is_clamp_act);
+                let table_act = act.filter(|a| !is_clamp_act(*a) && *a != Act::Identity);
+                let out_key = if *act == Some(Act::Relu6) { relu6_key() } else { site_key(&n.id) };
                 let (kk, ko) = (sum_key.clone(), out_key.clone());
                 let (mm, ss) = decl_ms(b, cx, lb, &format!("{}.out", n.id), 1, Arc::new(move |fc| Ok(vec![fc.scale(&kk)? / fc.scale(&ko)?])))?;
                 let (lo, hi) = super::code_bounds(DType::I16);
@@ -1044,8 +1183,19 @@ fn cnn_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, spec: &CnnSpe
             let g = p.last;
             let x = unpack(&mut b, g, e, "carry0");
             let ok = out_key();
-            let out = match spec.out {
+            let out = match &spec.out {
                 CnnOut::Map => coerce(&mut b, cx, &mut lb, &Val { site: "out".into(), ..x }, DType::I32, &ok)?,
+                CnnOut::GlobalAvgNorm { eps, .. } => {
+                    // The mean over positions at the residual unit (the sum is exact, one rounding), then the pooled row's
+                    // LayerNorm into the output's unit.
+                    let sum = b.reduce_sum(x.r, 0, DType::I64);
+                    let n = b.c(DType::I64, g.rows() as i128);
+                    let mean = b.div(sum, n, Rounding::HalfAwayFromZero, DType::I64);
+                    let mean = b.clamp(mean, i32::MIN as i64, i32::MAX as i64, DType::I32);
+                    let mean = rows_val(mean, DType::I32, x.key.clone(), g.c, "pool");
+                    let v = super::bidir::norm_rows_kind(&mut b, cx, &mut lb, &mean, NormKind::Layer, *eps, "pnorm", true, &Want { dt: DType::I32, key: ok.clone() })?;
+                    Val { site: "out".into(), ..v }
+                }
                 CnnOut::GlobalAvg => {
                     // The mean over positions, at the output's unit: the rows narrowed to it, summed exactly and divided.
                     let rows = coerce(&mut b, cx, &mut lb, &Val { site: "out".into(), ..x }, DType::I32, &ok)?;
@@ -1158,7 +1308,7 @@ impl CnnSpec {
     pub fn validate(&self) -> Result<()> {
         let p = plan(self)?;
         let mut total_w = 0usize;
-        convs(&p.nodes, &mut |_, c| total_w = total_w.saturating_add(c.cout.saturating_mul(c.cin / c.groups).saturating_mul(c.win().taps())));
+        convs(&p.nodes, &mut |_, c| total_w = total_w.saturating_add(c.cout.saturating_mul(c.cin / c.groups).saturating_mul(c.taps())));
         if total_w > 1 << 36 {
             return Err(LowerError::bad(format!("{}: {total_w} convolution weights", self.architecture)));
         }

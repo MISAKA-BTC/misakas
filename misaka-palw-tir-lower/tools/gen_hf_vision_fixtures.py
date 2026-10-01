@@ -19,6 +19,7 @@ Usage:
 """
 
 import json
+import math
 import os
 import sys
 
@@ -67,6 +68,36 @@ CONFIGS = {
     "resnet_deeper": dict(cfg=("ResNetConfig", dict(num_channels=3, embedding_size=8, hidden_sizes=[8, 8, 8, 8], depths=[4, 4, 4, 4],
                                                     layer_type="basic", hidden_act="relu", downsample_in_first_stage=False)),
                           model="ResNetModel", size=(64, 64), mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], layout="nchw"),
+    # ConvNeXt: a patch convolution and channel LayerNorm, stages of depthwise/pointwise blocks with a layer scale, a 2x2 stride-2
+    # downsampling between stages, the pooled vector through the final LayerNorm. The layer scale is set live (see `make`).
+    "convnext": dict(cfg=("ConvNextConfig", dict(num_channels=3, patch_size=4, num_stages=4, hidden_sizes=[8, 8, 16, 16], depths=[1, 2, 2, 1],
+                                                 hidden_act="gelu", layer_norm_eps=1e-12, layer_scale_init_value=1e-6, image_size=64)),
+                     model="ConvNextModel", size=(64, 64), mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], layout="nchw"),
+    # Deep enough that the program needs layer blocks (the carry between them is a padded flat activation).
+    "convnext_deep": dict(cfg=("ConvNextConfig", dict(num_channels=3, patch_size=4, num_stages=3, hidden_sizes=[8, 8, 16], depths=[4, 6, 4],
+                                                      hidden_act="gelu", layer_norm_eps=1e-12, layer_scale_init_value=1e-6, image_size=64)),
+                          model="ConvNextModel", size=(64, 64), mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], layout="nchw"),
+    # MobileNetV2 at depth multiplier 1/4 on a 60x60 image: the maps are 30, 15, 8, 4 and 2 wide, so TensorFlow "SAME" padding
+    # is asymmetric at some strides and symmetric at others (an odd extent at a stride of 2).
+    "mobilenet_v2": dict(cfg=("MobileNetV2Config", dict(num_channels=3, image_size=60, depth_multiplier=0.25, finegrained_output=False,
+                                                        tf_padding=True, hidden_act="relu6", layer_norm_eps=1e-3)),
+                         model="MobileNetV2Model", size=(60, 60), mean=HALF, std=HALF, layout="nchw"),
+    # The same network with every weight row on the lowering's int8 grid (see `snap_rows_to_int8_grid`): no weight-quantisation
+    # error, so the integer program's distance from transformers is the lowering's own — the exactness check of a deep network.
+    "mobilenet_v2_grid": dict(cfg=("MobileNetV2Config", dict(num_channels=3, image_size=60, depth_multiplier=0.25, finegrained_output=False,
+                                                             tf_padding=True, hidden_act="relu6", layer_norm_eps=1e-3)),
+                              model="MobileNetV2Model", size=(60, 60), mean=HALF, std=HALF, layout="nchw"),
+    "convnext_grid": dict(cfg=("ConvNextConfig", dict(num_channels=3, patch_size=4, num_stages=4, hidden_sizes=[8, 8, 16, 16], depths=[1, 2, 2, 1],
+                                                      hidden_act="gelu", layer_norm_eps=1e-12, layer_scale_init_value=1e-6, image_size=64)),
+                          model="ConvNextModel", size=(64, 64), mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], layout="nchw"),
+    # The symmetric-padding variant (tf_padding = false) with an expansion-free first layer (first_layer_is_expansion = false).
+    "mobilenet_v2_sym": dict(cfg=("MobileNetV2Config", dict(num_channels=3, image_size=64, depth_multiplier=0.25, finegrained_output=False,
+                                                            tf_padding=False, first_layer_is_expansion=False, hidden_act="relu6",
+                                                            layer_norm_eps=1e-3)),
+                             model="MobileNetV2Model", size=(64, 64), mean=HALF, std=HALF, layout="nchw"),
+    "mobilenet_v1": dict(cfg=("MobileNetV1Config", dict(num_channels=3, image_size=60, depth_multiplier=0.25, tf_padding=True,
+                                                        hidden_act="relu6", layer_norm_eps=1e-3)),
+                         model="MobileNetV1Model", size=(60, 60), mean=HALF, std=HALF, layout="nchw"),
     "qwen2_vl_vision": dict(cfg=("Qwen2VLVisionConfig", dict(depth=2, embed_dim=32, hidden_size=48, hidden_act="quick_gelu",
                                                              mlp_ratio=2, num_heads=4, in_channels=3, patch_size=7,
                                                              spatial_merge_size=2, temporal_patch_size=2)),
@@ -133,6 +164,50 @@ def pixel_values(img, spec, cfg):
     return flat, torch.tensor([[1, gh, gw]])
 
 
+def snap_rows_to_int8_grid(w):
+    """Every output row of `w` onto the per-row int8 grid the lowering's weight quantiser uses: a power-of-two step, integer
+    codes in [-127, 127] with one at exactly +-127 (so the quantiser recovers the same step and the same codes), bf16-exact.
+    A network on this grid has no weight-quantisation error: what the integer program differs by is the lowering's own."""
+    rows = w.reshape(w.shape[0], -1).clone()
+    for i in range(rows.shape[0]):
+        r = rows[i]
+        amax = float(r.abs().max())
+        if amax == 0.0:
+            continue
+        step = 2.0 ** math.ceil(math.log2(amax / 127.0))
+        codes = torch.clamp(torch.round(r / step), -127, 127)
+        j = int(torch.argmax(r.abs()))
+        codes[j] = 127.0 if r[j] > 0 else -127.0
+        rows[i] = codes * step
+    return rows.reshape(w.shape)
+
+
+def randomise_cnn(model, seed, grid=False):
+    """He-scaled weights (std sqrt(2/fan_in): the signal survives fifty layers of a MobileNet), norm gains 1 +- 0.1, biases and
+    batch-norm statistics +- 0.1, ConvNeXt's layer scales ~ 0.5 (their initial 1e-6 would make every block a no-op); then
+    everything rounded to bfloat16."""
+    g = torch.Generator().manual_seed(seed + 1)
+    sd_names = set(model.state_dict().keys())
+    with torch.no_grad():
+        for name, p in model.named_parameters():
+            if not p.is_floating_point():
+                continue
+            if "layer_scale" in name:
+                p.copy_(0.5 + 0.1 * torch.randn(p.shape, generator=g))
+            elif p.ndim >= 2:
+                fan_in = p[0].numel()
+                p.copy_(torch.randn(p.shape, generator=g) * math.sqrt(2.0 / fan_in))
+                if grid:
+                    p.copy_(snap_rows_to_int8_grid(p))
+            else:
+                p.add_(torch.randn(p.shape, generator=g) * 0.1)
+            p.copy_(p.to(torch.bfloat16).to(torch.float32))
+        for name, b in model.named_buffers():
+            if name in sd_names and b.is_floating_point():
+                b.add_(torch.randn(b.shape, generator=g) * 0.1)
+                b.copy_(b.to(torch.bfloat16).to(torch.float32))
+
+
 def make(name):
     spec = CONFIGS[name]
     seed = sum(ord(ch) for ch in name)
@@ -148,7 +223,10 @@ def make(name):
         hidden = 72  # about a 3x3 convolution's fan-in over 8 channels: the weights' scale keeps activations O(1)
     if name in ("qwen2_vl", "qwen2_5_vl"):
         hidden = cfg.text_config.hidden_size
-    randomise(model, hidden, seed)
+    if name.startswith(("convnext", "mobilenet")):
+        randomise_cnn(model, seed, grid=name.endswith("_grid"))
+    else:
+        randomise(model, hidden, seed)
     d = os.path.join(FIX, name)
     os.makedirs(d, exist_ok=True)
     model.to(torch.bfloat16)
@@ -170,7 +248,7 @@ def make(name):
             elif name == "siglip_vision":
                 o = fresh(pixel_values=pv)
                 out = {"pooler_output": o.pooler_output[0].tolist(), "last_hidden_state": o.last_hidden_state[0].tolist()}
-            elif name.startswith("resnet"):
+            elif name.startswith(("resnet", "convnext", "mobilenet")):
                 o = fresh(pixel_values=pv)
                 fm = o.last_hidden_state[0]  # [C, H, W] -> rows [H*W, C]
                 out = {"last_hidden_state": fm.permute(1, 2, 0).reshape(-1, fm.shape[0]).tolist(), "pooler_output": o.pooler_output[0].flatten().tolist()}

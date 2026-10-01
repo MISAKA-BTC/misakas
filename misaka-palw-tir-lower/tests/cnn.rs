@@ -125,10 +125,39 @@ fn assert_blocks_share_no_params(name: &str, p: &tir::TirProgramV1) {
     assert!(shared.is_empty(), "{name}: params read by several blocks: {shared:?}");
 }
 
-/// The five steps on one fixture; the output rows are compared to `key` of the fixture.
+/// The five steps on one ResNet fixture (the spec written out in Rust); the output rows are compared to `key` of the fixture.
 fn check(name: &str, out: CnnOut, key: &str) -> usize {
     let fx = load(name);
     let spec = resnet_spec(&fx.cfg, fx.size, fx.ms, out);
+    check_spec(name, &fx, spec, key, 0.995)
+}
+
+/// The same steps on a network a data adapter builds — there is no Rust oracle for it: transformers is the oracle, and the
+/// float reference's agreement with it (step 1) is what says the adapter's structure and names are right. `map` asks for the
+/// last feature map (the adapter's own output is the pooled vector).
+fn check_adapter(name: &str, map: bool, key: &str) -> usize {
+    check_adapter_min(name, map, key, 0.995)
+}
+
+/// [`check_adapter`] with the integer program's cosine floor stated: a network of many layers carries the weight codes' (int8,
+/// per output row) rounding through every one of them — about 1% in cosine over MobileNetV2's fifty convolutions — so its floor is
+/// lower than a ResNet's; the SAME network with its weights on the int8 grid (`*_grid` fixtures) has none of that noise and its
+/// floor is 0.9995: what is left is the activations' 16-bit codes and the requantisations, the lowering's own error.
+fn check_adapter_min(name: &str, map: bool, key: &str, min_cos: f64) -> usize {
+    let fx = load(name);
+    let text = std::fs::read_to_string(fixture_dir(name).join("config.json")).expect("config");
+    let mut spec = cnn::parse_cnn(&text, Some(fx.size), None).unwrap_or_else(|e| panic!("{name}: the adapter: {e}"));
+    assert_eq!((spec.mean, spec.std), fx.ms, "{name}: the adapter's normalisation is the one the fixture was made with");
+    if map {
+        if let CnnOut::GlobalAvgNorm { name: n, .. } = &spec.out {
+            spec.ignored.push(format!("{n}."));
+        }
+        spec.out = CnnOut::Map;
+    }
+    check_spec(name, &fx, spec, key, min_cos)
+}
+
+fn check_spec(name: &str, fx: &Fixture, spec: CnnSpec, key: &str, min_cos: f64) -> usize {
     let dir = fixture_dir(name);
     let (hl, binding) = cnn::hl_program(&spec).expect("hl");
     let ck = Checkpoint::open(&dir).expect("checkpoint");
@@ -170,7 +199,7 @@ fn check(name: &str, out: CnnOut, key: &str) -> usize {
         let cos: Vec<f64> = got.iter().zip(&want).map(|(a, b)| cosine(a, b)).collect();
         let (mean, min) = (cos.iter().sum::<f64>() / cos.len() as f64, cos.iter().cloned().fold(1.0, f64::min));
         eprintln!("{name} integer vs HF `{key}`: cosine mean {mean:.6} min {min:.6}, rel {:.2e} ({} rows × {width})", rel(&got.concat(), &want.concat()), got.len());
-        assert!(min > 0.995, "{name}: cosine min {min}");
+        assert!(min > min_cos, "{name}: cosine min {min} (floor {min_cos})");
     }
     // 5. The class's one-stage pipeline: the image bound by JobImage must give the standalone program's bytes.
     let pipe = encoder::vision_pipeline();
@@ -303,6 +332,234 @@ fn a_deep_resnet_crosses_a_block_boundary_with_a_padded_carry() {
     check("resnet_deep", CnnOut::GlobalAvg, "pooler_output");
 }
 
+// ───────────────────────────── ConvNeXt and MobileNet: data adapters, no Rust structure ─────────────────────────────
+
+/// **ConvNeXt as data** (`adapters/convnext.json`): a channel LayerNorm (the encoder's LayerNorm over rows), a 7x7 depthwise
+/// convolution, pointwise convolutions as 1x1 ones with GELU as a table, the learned layer scale folded into the projection,
+/// a 2x2 stride-2 downsampling between stages and the pooled vector through the final LayerNorm. transformers is the oracle for
+/// both the last feature map and the pooled output; no primitive, no new lowering code path but the channel norm's wiring.
+#[test]
+fn a_convnext_matches_its_hf_fixture() {
+    check_adapter("convnext", true, "last_hidden_state");
+    check_adapter("convnext", false, "pooler_output");
+}
+
+/// A ConvNeXt deep enough for layer blocks: the carry crosses block boundaries between stages as a padded flat activation, and
+/// every block has its own norm and layer-scale params (none shared).
+#[test]
+fn a_deep_convnext_crosses_block_boundaries_with_a_padded_carry() {
+    let blocks = check_adapter("convnext_deep", false, "pooler_output");
+    assert!(blocks >= 3, "the deep ConvNeXt fits pre and post only ({blocks} blocks) — the carry is not exercised");
+}
+
+/// **MobileNetV2 as data** (`adapters/mobilenet-v2.json`): inverted residuals with linear bottlenecks, ReLU6 (a narrowing into
+/// its fixed unit), BN folded, TensorFlow "SAME" padding — asymmetric at the stride-2 layers over an even extent and symmetric
+/// over an odd one (the 60x60 image's maps are 30, 15, 8, 4, 2 wide) — and the symmetric-padding variant without the expansion
+/// layer in the stem.
+#[test]
+fn a_mobilenet_v2_matches_its_hf_fixture() {
+    check_adapter_min("mobilenet_v2", true, "last_hidden_state", 0.98);
+    check_adapter_min("mobilenet_v2", false, "pooler_output", 0.98);
+    check_adapter_min("mobilenet_v2_sym", false, "pooler_output", 0.98);
+}
+
+/// **A deep network on the int8 grid is exact up to the activations' rounding**: MobileNetV2 (fifty convolutions, ReLU6, TF
+/// padding, residual adds) and ConvNeXt with every weight row on the lowering's per-row int8 grid have no weight-quantisation
+/// error, and the integer program is then within 0.9995 in cosine of transformers' float outputs — the distance in the plain
+/// fixtures is the weight codes' rounding, not the lowering's.
+#[test]
+fn a_deep_network_with_weights_on_the_int8_grid_follows_transformers_to_activation_rounding() {
+    check_adapter_min("mobilenet_v2_grid", true, "last_hidden_state", 0.9995);
+    check_adapter_min("mobilenet_v2_grid", false, "pooler_output", 0.9995);
+    check_adapter_min("convnext_grid", true, "last_hidden_state", 0.9995);
+    check_adapter_min("convnext_grid", false, "pooler_output", 0.9995);
+}
+
+/// **MobileNetV1 as data** (`adapters/mobilenet-v1.json`): thirteen depthwise-separable pairs, no residuals, ReLU6 everywhere.
+#[test]
+fn a_mobilenet_v1_matches_its_hf_fixture() {
+    check_adapter("mobilenet_v1", true, "last_hidden_state");
+    check_adapter("mobilenet_v1", false, "pooler_output");
+}
+
+/// **The adapters read the REAL architectures**: for each real config (the hub's `config.json` of ConvNeXt tiny, base and large at
+/// 384, MobileNetV2 at depth multipliers 1.0, 0.75 and 1.4, MobileNetV1 at 1.0 and 0.75) and the tensor names and shapes of the
+/// model transformers' own code builds from it (`tools/gen_cnn_shapes.py`, the meta device: no weights), the architecture
+/// report finds Level B, every tensor accounted for and every parameter at the shape the lowering needs. A channel count the
+/// adapter computes differently from HF's `make_divisible` would be a shape error here.
+#[test]
+fn real_convnext_and_mobilenet_configs_account_for_every_tensor_at_its_real_shape() {
+    use misaka_palw_tir_lower::hf_schema::{Level, ReadOptions, TensorIndex};
+    use misaka_palw_tir_lower::model::{ReportResult, analyze};
+    for name in REAL_CNN_FAMILIES {
+        let cfg: Value = serde_json::from_str(&real(name)).unwrap();
+        let shapes: std::collections::BTreeMap<String, Vec<usize>> = serde_json::from_str(&real(&format!("{name}.shapes"))).unwrap();
+        let n = shapes.len();
+        let r = analyze(&cfg, Some(&TensorIndex::from_shapes(shapes)), &ReadOptions::default());
+        assert_eq!((r.level, &r.result), (Level::B, &ReportResult::Lowerable), "{name}: {}", r.render());
+        assert!(r.unread_tensors.is_empty() && r.weight_errors.is_empty(), "{name}: {:?} {:?}", r.unread_tensors, r.weight_errors);
+        assert!(!r.new_consensus_primitive_required && !r.new_court_kernel_required, "{name}");
+        eprintln!("{name}: Level B, {n} tensors accounted for; features {}", r.features.iter().map(|f| f.id.as_str()).collect::<Vec<_>>().join(" "));
+    }
+}
+
+const REAL_CNN_FAMILIES: [&str; 8] =
+    ["convnext-tiny-224", "convnext-base-224", "convnext-large-384", "mobilenet_v2_1.0_224", "mobilenet_v2_0.75_160", "mobilenet_v2_1.4_224", "mobilenet_v1_1.0_224", "mobilenet_v1_0.75_192"];
+
+/// **Admission at the real shapes** (no weights read): each real ConvNeXt and MobileNet lowers to a handful of blocks inside the
+/// normal form's caps; its one-stage pipeline is admitted at the legacy court's ceilings, or refused by NAME of the ceiling it
+/// exceeds (the verdicts are printed; a refusal is a finding about the class's ceilings, not a missing feature).
+#[test]
+fn real_convnexts_and_mobilenets_lower_and_are_admitted_or_refused_by_name() {
+    let mut verdicts = Vec::new();
+    for name in REAL_CNN_FAMILIES {
+        let spec = cnn::parse_cnn(&real(name), None, None).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let (hl, _) = cnn::hl_program(&spec).expect("hl");
+        let lw = cnn::lower_cnn(&hl, &spec).unwrap_or_else(|e| panic!("{name}: lower: {e}"));
+        let p2 = encoder::vision_v2(&lw).expect("v2");
+        let nodes: usize = p2.blocks.iter().map(|b| b.nodes.len()).sum();
+        let most = p2.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
+        assert!(most <= 512 && p2.blocks.len() <= 16, "{name}: {} blocks, largest {most}", p2.blocks.len());
+        let pipe = encoder::vision_pipeline();
+        let v = match tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &misaka_palw_tir_lower::admission::default_inputs(), &tir::admit_v2::TirJobCeilingsV1::open_v1()) {
+            Ok(pa) => format!(
+                "ADMITTED — {}x{} px, {} blocks, {nodes} nodes (largest {most}), job {:.3e} MACs, {} step leaves, cone work {}",
+                spec.h,
+                spec.w,
+                p2.blocks.len(),
+                pa.job_cost.macs as f64,
+                pa.job_step_leaves,
+                pa.cone_work
+            ),
+            Err(e) => format!("REFUSED — {}x{} px, {} blocks, {nodes} nodes: {e}", spec.h, spec.w, p2.blocks.len()),
+        };
+        eprintln!("{name}: {v}");
+        verdicts.push((name, v));
+    }
+    for (name, v) in &verdicts {
+        // Every refusal names a ceiling; none is "internal".
+        assert!(v.starts_with("ADMITTED") || v.contains("ceiling") || v.contains("exceed") || v.contains("cap") || v.contains("budget") || v.contains("too"), "{name}: {v}");
+    }
+}
+
+/// **The features a MobileNet-shaped network composes that transformers has no fixture for** — TensorFlow "SAME" padding at a
+/// stride of 3 over odd extents, HardSwish and HardSigmoid as tables, ReLU6 fused, standalone and as a residual's activation, a
+/// channel LayerNorm, a layer-scaled convolution and the pooled output through a LayerNorm — against the naive reference: the float
+/// reference to 1e-5, the integer program by cosine, and the three implementations plus the court agree on the version-1 view.
+#[test]
+fn a_network_with_tf_padding_hard_activations_channel_norm_and_layer_scale_follows_a_naive_reference() {
+    use rand::{Rng, SeedableRng};
+    let bn = |n: &str| Some(BnOp { name: format!("{n}.bn"), eps: 1e-3 });
+    let conv = |name: &str, cin, cout, k, stride, groups, bias, act: Option<Act>| ConvOp {
+        name: name.into(),
+        cin,
+        cout,
+        k,
+        stride,
+        groups,
+        bias,
+        bn: if bias { None } else { bn(name) },
+        act,
+        tf_same: true,
+        ..ConvOp::default()
+    };
+    let mut scaled = conv("b4.scaled", 16, 16, 5, 3, 1, true, Some(Act::Relu6));
+    scaled.layer_scale = Some("b4.ls".into());
+    let ops = vec![
+        CnnOp::Conv(conv("stem", 3, 8, 3, 2, 1, false, Some(Act::Relu6))), // 17 -> 9: odd extent, pad (1, 1)
+        CnnOp::Conv(conv("b1.dw", 8, 8, 3, 1, 8, false, Some(Act::Relu6))),
+        CnnOp::Conv(ConvOp { k: 1, tf_same: false, ..conv("b1.pw", 8, 16, 1, 1, 1, false, Some(Act::HardSwish)) }),
+        CnnOp::Residual {
+            main: vec![CnnOp::Conv(conv("b2.dw", 16, 16, 3, 1, 16, false, Some(Act::Relu6))), CnnOp::Conv(ConvOp { k: 1, tf_same: false, ..conv("b2.pw", 16, 16, 1, 1, 1, false, None) })],
+            shortcut: vec![],
+            act: Some(Act::Relu6),
+        },
+        CnnOp::Act(Act::HardSwish),
+        CnnOp::Act(Act::Relu6),
+        CnnOp::ChannelNorm { name: "b3.norm".into(), eps: 1e-6 },
+        CnnOp::Conv(scaled), // 9 -> 3 at stride 3: pad (1, 1)
+        CnnOp::Conv(conv("b5.dw", 16, 16, 3, 2, 16, false, Some(Act::HardSigmoid))), // 3 -> 2: odd extent at stride 2
+    ];
+    let spec = CnnSpec {
+        architecture: "SyntheticMobileNetShaped".into(),
+        h: 17,
+        w: 17,
+        mean: [0.5; 3],
+        std: [0.5; 3],
+        ops,
+        out: CnnOut::GlobalAvgNorm { name: "head.norm".into(), eps: 1e-5 },
+        ignored: vec![],
+        aliases: vec![],
+    };
+    spec.validate().expect("valid");
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(23);
+    let mut tensors = Vec::new();
+    walk_convs(&spec.ops, &mut |c| tensors.extend(random_conv_tensors(&mut rng, c)));
+    let vec_of = |rng: &mut rand_chacha::ChaCha8Rng, lo: f32, hi: f32| -> Vec<f32> { (0..16).map(|_| rng.gen_range(lo..hi)).collect() };
+    tensors.push(("b3.norm.weight".into(), vec![16], vec_of(&mut rng, 0.6, 1.4)));
+    tensors.push(("b3.norm.bias".into(), vec![16], vec_of(&mut rng, -0.3, 0.3)));
+    tensors.push(("b4.ls".into(), vec![16], vec_of(&mut rng, 0.3, 1.2)));
+    tensors.push(("head.norm.weight".into(), vec![16], vec_of(&mut rng, 0.6, 1.4)));
+    tensors.push(("head.norm.bias".into(), vec![16], vec_of(&mut rng, -0.3, 0.3)));
+    let dir = std::env::temp_dir().join(format!("cnn-mobile-shaped-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    write_safetensors(&dir.join("model.safetensors"), &tensors);
+    let by_name: std::collections::BTreeMap<String, Vec<f32>> = tensors.iter().map(|(n, _, d)| (n.clone(), d.clone())).collect();
+    let naive = Naive { t: &by_name };
+    let (hl, binding) = cnn::hl_program(&spec).expect("hl");
+    let ck = Checkpoint::open(&dir).expect("checkpoint");
+    let (params_f, unused) = ParamStore::from_source(&hl, &binding, &ck).expect("params");
+    assert!(unused.is_empty(), "{unused:?}");
+    let images = calib_images(&spec, 3);
+    let reference = |img: &[u8]| -> Vec<Vec<f64>> {
+        let x: Vec<Vec<f64>> = (0..(spec.h * spec.w) as usize).map(|p| (0..3).map(|ch| (img[p * 3 + ch] as f64 / 255.0 - spec.mean[ch]) / spec.std[ch]).collect()).collect();
+        let (m, hw) = naive.ops(&spec.ops, x, (spec.h as usize, spec.w as usize));
+        assert_eq!(hw, (2, 2), "the maps shrink 17, 9, 9, 3, 2 under TensorFlow padding");
+        let n = m.len() as f64;
+        let mean: Vec<f64> = (0..16).map(|c| m.iter().map(|r| r[c]).sum::<f64>() / n).collect();
+        vec![naive.layer_norm(&mean, "head.norm", 1e-5)]
+    };
+    for img in &images {
+        let got = cnn::float_forward(&hl, &spec, &params_f, img, None).expect("float");
+        let want = reference(img);
+        assert_eq!((got.len(), got[0].len()), (1, 16), "shape");
+        let r = rel(&got.concat(), &want.concat());
+        eprintln!("mobile-shaped net: float reference vs the naive reference: rel {r:.2e}");
+        assert!(r < 1e-5, "float vs naive rel {r}");
+    }
+    let mut stats = std::collections::BTreeMap::new();
+    for img in calib_images(&spec, 6).iter().rev() {
+        cnn::float_forward(&hl, &spec, &params_f, img, Some(&mut stats)).expect("calibration");
+    }
+    let lw = cnn::lower_cnn(&hl, &spec).expect("lower");
+    let quiet = |_: usize, _: usize| {};
+    let mat = materialise(&lw, &hl, &Resident(Arc::new(params_f)), &stats, &QuantPolicy::default(), &quiet).expect("materialise");
+    let p2 = encoder::vision_v2(&lw).expect("v2");
+    let params2 = encoder::lifted_params(&lw.program, &[cnn::IMAGE_PARAM], &mat.params);
+    let interp = tir::interp_v2::InterpreterV2::new(&p2).expect("interpreter v2");
+    for img in &images {
+        let mut inputs = tir::interp_v2::MapInputs::default();
+        let t = tir::Tensor::new(tir::DType::I16, vec![17, 17, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+        inputs.constant.insert(0, t);
+        let run = interp.run_positions(&params2, &inputs, 1).expect("v2 run");
+        let want = reference(img);
+        let got: Vec<Vec<f64>> = run[0].output.data.chunks(16).map(|r| r.iter().map(|c| *c as f64 * mat.logits_scale).collect()).collect();
+        let c = cosine(&got[0], &want[0]);
+        eprintln!("mobile-shaped net: integer vs the naive reference: cosine {c:.6}, rel {:.2e}", rel(&got.concat(), &want.concat()));
+        assert!(c > 0.99, "cosine {c}");
+    }
+    // The three implementations and the court on the version-1 view.
+    let img = &images[0];
+    let t = misaka_palw_tir_lower::lower::IntTensor::i16(vec![17, 17, 3], img.iter().map(|v| *v as i16).collect());
+    let p6 = common::with_inputs(&lw.program, &mat.params, &[(cnn::IMAGE_PARAM, t)]);
+    common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("three implementations: {e}"));
+    let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("court: {e}"));
+    eprintln!("mobile-shaped net COURT: {} commit points over {} primitives", c.commits, c.primitives.len());
+    assert!(c.commits > 0);
+    tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs()).expect("admitted");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 // ───────────────────────────── networks transformers has no fixture for ─────────────────────────────
 
 /// A minimal safetensors file of f32 tensors, in the order given.
@@ -371,6 +628,9 @@ impl Naive<'_> {
             Some(Act::Relu) => x.max(0.0),
             None | Some(Act::Identity) => x,
             Some(Act::Silu) => x / (1.0 + (-x).exp()),
+            Some(Act::Relu6) => x.clamp(0.0, 6.0),
+            Some(Act::HardSwish) => x * (x + 3.0).clamp(0.0, 6.0) / 6.0,
+            Some(Act::HardSigmoid) => (x + 3.0).clamp(0.0, 6.0) / 6.0,
             other => panic!("the naive reference has no {other:?}"),
         }
     }
@@ -381,7 +641,14 @@ impl Naive<'_> {
         let (sh, sw) = (c.stride, c.stride_w.unwrap_or(c.stride));
         let (ph, pw) = (c.pad, c.pad_w.unwrap_or(c.pad));
         let (dh, dw) = (c.dilation, c.dilation_w.unwrap_or(c.dilation));
-        let (ho, wo) = ((h + 2 * ph - ((kh - 1) * dh + 1)) / sh + 1, (w + 2 * pw - ((kw - 1) * dw + 1)) / sw + 1);
+        // TensorFlow "SAME": along an axis of extent n, kernel k, stride s the padding is max(k - s, 0) when n is a multiple of
+        // s and max(k - n mod s, 0) otherwise, the smaller half before (written from the HF function, not from the lowering's).
+        let tf = |n: usize, k: usize, s: usize| {
+            let along = if n % s == 0 { k.saturating_sub(s) } else { k.saturating_sub(n % s) };
+            (along / 2, along - along / 2)
+        };
+        let ((ph0, ph1), (pw0, pw1)) = if c.tf_same { (tf(h, kh, sh), tf(w, kw, sw)) } else { ((ph, ph), (pw, pw)) };
+        let (ho, wo) = ((h + ph0 + ph1 - ((kh - 1) * dh + 1)) / sh + 1, (w + pw0 + pw1 - ((kw - 1) * dw + 1)) / sw + 1);
         let wt = &self.t[&format!("{}.weight", c.name)];
         let cin_g = c.cin / c.groups;
         let per = c.cout / c.groups;
@@ -394,7 +661,7 @@ impl Naive<'_> {
                     for ci in 0..cin_g {
                         for ky in 0..kh {
                             for kx in 0..kw {
-                                let (iy, ix) = ((oy * sh + ky * dh) as isize - ph as isize, (ox * sw + kx * dw) as isize - pw as isize);
+                                let (iy, ix) = ((oy * sh + ky * dh) as isize - ph0 as isize, (ox * sw + kx * dw) as isize - pw0 as isize);
                                 if iy < 0 || ix < 0 || iy >= h as isize || ix >= w as isize {
                                     continue;
                                 }
@@ -411,6 +678,9 @@ impl Naive<'_> {
                         );
                         acc = gm * (acc - mu) / (var + bn.eps).sqrt() + bt;
                     }
+                    if let Some(ls) = &c.layer_scale {
+                        acc *= self.t[ls][co] as f64;
+                    }
                     out[oy * wo + ox][co] = Self::act(c.act, acc);
                 }
             }
@@ -418,11 +688,21 @@ impl Naive<'_> {
         (out, (ho, wo))
     }
 
+    /// `(x − μ)/√(σ² + ε)·γ + β` over one row, γ and β the checkpoint's `{name}.weight` and `{name}.bias`.
+    fn layer_norm(&self, r: &[f64], name: &str, eps: f64) -> Vec<f64> {
+        let n = r.len() as f64;
+        let mu = r.iter().sum::<f64>() / n;
+        let var = r.iter().map(|v| (v - mu) * (v - mu)).sum::<f64>() / n;
+        let (g, b) = (&self.t[&format!("{name}.weight")], &self.t[&format!("{name}.bias")]);
+        r.iter().enumerate().map(|(i, v)| (v - mu) / (var + eps).sqrt() * g[i] as f64 + b[i] as f64).collect()
+    }
+
     fn ops(&self, ops: &[CnnOp], mut x: Vec<Vec<f64>>, mut hw: (usize, usize)) -> (Vec<Vec<f64>>, (usize, usize)) {
         for op in ops {
             match op {
                 CnnOp::Conv(c) => (x, hw) = self.conv(&x, hw, c),
                 CnnOp::Act(a) => x = x.iter().map(|r| r.iter().map(|v| Self::act(Some(*a), *v)).collect()).collect(),
+                CnnOp::ChannelNorm { name, eps } => x = x.iter().map(|r| self.layer_norm(r, name, *eps)).collect(),
                 CnnOp::Residual { main, shortcut, act } => {
                     let (m, mhw) = self.ops(main, x.clone(), hw);
                     let (s, _) = if shortcut.is_empty() { (x.clone(), hw) } else { self.ops(shortcut, x.clone(), hw) };

@@ -393,8 +393,8 @@ norm and activation), `MaxPool`, `Act` and `Residual { main, shortcut, act }` op
 feature map as rows, `GlobalAvg`: its mean). An adapter of kind `cnn` instantiates it from `config.json` with `$map`/`$range`
 (`adapters/resnet.json`: ResNet-18 to -152, basic and bottleneck, `downsample_in_bottleneck`, the 1x1 projection shortcut where the
 width or the stride changes — equal, op for op, to the ResNet that `tests/cnn.rs` writes out in Rust, on the fixtures and on the real
-configurations of ResNet-18, -50 and -152). No network's name is in the lowering; a MobileNet is an adapter and the depthwise path
-below, a ConvNeXt an adapter plus the activations the table already covers.
+configurations of ResNet-18, -50 and -152). No network's name is in the lowering; ConvNeXt and MobileNet v1/v2 are adapters
+that use the depthwise path below and four more features of the spec (§9.9).
 
 **Layout.** An activation is `[P, C]` — a row per spatial position, a column per channel — of `i16` codes at a calibrated scale per
 site, as a vision tower's rows are. The input is the class's canonical image (`u8` HWC, `input.image`); its HWC order *is* the rows
@@ -482,6 +482,68 @@ them), with the inputs as leaves — the evaluator `eval_demanded_v2` is `eval_d
 every route this branch added: the ResNets, the six vision towers, the nine encoder families and the DSA program
 (`tests/{cnn,vision,encoders,dsa}.rs`).
 
+### 9.9 ConvNeXt and MobileNet as data (`NORM_LAYER_V1` over channels, `LAYER_SCALE_FOLD_V1`, `CONV_PAD_TF_SAME_V1`, `ACT_CLAMP_FIXED_UNIT_V1`)
+
+The coordinator's condition was that channel-norm, ReLU6 and HardSwish compose from primitives the lowering already has, as
+features, or the family is a prim-set question. They do, and no primitive, runtime or court kernel is added: the family is three
+adapters (`adapters/{convnext,mobilenet-v2,mobilenet-v1}.json`, data only) and these features of the `CnnSpec` (all serde
+defaults: every earlier spec, adapter and golden byte is unchanged).
+
+* **A LayerNorm over channels** (`CnnOp::ChannelNorm`, ConvNeXt's `LayerNorm` in `channels_first` or `channels_last` form) is the
+  encoder's LayerNorm over the rows `[P, C]` the activation already is (`norm_rows_kind`: the exact centring, the Q24 unit row, one
+  per-channel narrowing with the gain as its multiplier). The registry feature is the existing `NORM_LAYER_V1`. The pooled output
+  through a LayerNorm (`CnnOut::GlobalAvgNorm`, ConvNeXt's `pooler_output`) is the exact mean at the residual unit and the same norm.
+* **A layer scale** (`ConvOp.layer_scale`, ConvNeXt's `layer_scale_parameter`) multiplies the output channels of the projection
+  that precedes it: `W' = γ·W`, `b' = γ·b`, folded into the weight rows before they are quantised, like a batch norm
+  (`LAYER_SCALE_FOLD_V1`: no node).
+* **ReLU6** (`Act::Relu6`) is `min(max(x, 0), 6)`. Its range is exact, so its output unit is a FIXED `6/32767` instead of a
+  calibrated one and the narrowing's own clamp at 0 and at 32767 *is* the activation (`ACT_CLAMP_FIXED_UNIT_V1`): ReLU6 fused into
+  a convolution, standalone, or after a residual sum is a requantisation, not a node. **HardSwish** and **HardSigmoid** are tables
+  like every other activation that is not a clamp (`ACT_TABLE_V1`).
+* **TensorFlow "SAME" padding** (`ConvOp.tf_same`, MobileNet's `tf_padding`) is asymmetric and depends on the input's extent
+  (`max(k − s, 0)` when the extent is a multiple of the stride, else `max(k − extent mod s, 0)`, the smaller half before): the
+  window table's content, computed per convolution from the geometry it reads (`CONV_PAD_TF_SAME_V1`). The windows are now
+  rectangular with a before and an after per axis (`Win`), which also made the 1-D stem of §9.8 a special case of one code path.
+
+**Structure as data.** `adapters/convnext.json`: the patch convolution and its norm, the stages (a channel norm and a 2x2
+stride-2 convolution between them), blocks of a 7x7 depthwise convolution, a channel norm, the pointwise expansion with the
+activation, the pointwise projection with the layer scale; `num_stages`, `patch_size` (an int or a pair) and the layer scale's absence
+(`layer_scale_init_value <= 0`) are read from the config. `adapters/mobilenet-v2.json`: the stem, sixteen inverted residuals (the
+residual only where `stride = 1` and the width is unchanged), the head; HF's `make_divisible(round(c·depth_multiplier))` is written in the
+adapter's arithmetic and refuses the one input where its `round` (half away from zero) and Python's (half to even) differ, an exact
+half; a dilated backbone (`output_stride` 8 or 16) is refused by name. `adapters/mobilenet-v1.json`: the stem and thirteen
+depthwise-separable pairs.
+
+**Evidence** (`tests/cnn.rs`, with `tools/gen_hf_vision_fixtures.py` and `tools/gen_cnn_shapes.py`). Against `transformers` on tiny
+models with random weights, bf16-exact: the float reference equals HF to `3·10⁻⁷` (ConvNeXt, MobileNetV1) and `2–9·10⁻⁶` (MobileNetV2);
+the integer program's cosine is 0.9997 – 0.9999 for ConvNeXt (one and six layer blocks) and MobileNetV1 and 0.987 – 0.997 for
+MobileNetV2; each program is admitted, bound through `JobImage`, and its three implementations are bit-identical with the court
+replaying every commit point (45 – 87 for ConvNeXt, 61 – 62 for MobileNetV2, 32 for MobileNetV1). The 0.99 of MobileNetV2 is the **weight
+codes**, not the lowering: the weights are `i8` per output row, each convolution adds that rounding, and fifty of them in a row cost
+about 1 % in cosine. The same networks with every weight row ON the int8 grid (`*_grid` fixtures, `snap_rows_to_int8_grid`) have none
+of it, and their integer programs are within 0.99987 (MobileNetV2) and 1.0000 (ConvNeXt) of HF — what remains is the activations' 16-bit
+codes. (A class that wants fifty-layer networks closer than 1 % would take wider weight codes for convolutions: a policy, not a
+primitive.) Features HF has no fixture for — TF padding at a stride of 3 over odd extents, HardSwish and HardSigmoid, ReLU6 fused,
+standalone and after a residual sum, a channel norm, a layer-scaled convolution, the pooled output through a norm — are held against a
+naive direct reference: float `10⁻⁷`, integer cosine 0.99999.
+
+**The real architectures** (no weights): the architecture report reads the real configs of ConvNeXt tiny, base and large-384,
+MobileNetV2 at depth multipliers 1.0, 0.75 and 1.4 and MobileNetV1 at 1.0 and 0.75 against the tensor names and SHAPES of the model
+transformers' own code builds from each (the meta device: `tests/configs/cnn/*.shapes.json`) — Level B, every tensor accounted for, every
+parameter at the shape the lowering needs; this found that a wrapped checkpoint's `num_batches_tracked` carried the alias prefix the
+ignore list did not (the real `ResNetForImageClassification` and every MobileNet classifier would have been Level C), fixed in
+`hl_program`. **Admission at the real shapes** (`tir_admit_pipeline_v1` at the open job ceilings): ConvNeXt-T at 224 is 7 blocks, 1,796
+nodes, 4.35·10⁹ MACs, 431 k step leaves, cone work 4,618; ConvNeXt-B at 224 is 13 blocks, 3,380 nodes, 1.51·10¹⁰ MACs, 931 k leaves;
+ConvNeXt-L at 384 is 1.00·10¹¹ MACs and 4.10 M step leaves (**98 % of the 2^22 cap**: the next size up does not fit); MobileNetV2 at 224 is 5
+blocks, 829 nodes, 2.8·10⁸ MACs (1.4 depth: 5.5·10⁸), 113 k – 161 k leaves; MobileNetV1 at 224 is 3 blocks, 375 nodes, 5.5·10⁸ MACs, 86 k
+leaves — cone work 957 – 8,692 of 65,536.
+
+**What this leaves in the family.** MobileNetV3 (squeeze-and-excite: a pooled gate multiplied back over the map), EfficientNet (the same
+gate, SiLU, dynamic padding), RegNet (grouped, non-depthwise convolutions) and ConvNeXt V2 (a global response normalisation) each add an
+op to the CNN spec composed of the same primitives (a `ReduceSum` over positions, a table, a broadcast `Mul`; block-diagonal `MatMul`s per
+group), none a primitive; grouped convolutions are refused by name today. Weight-standardised convolutions and GroupNorm (BiT) are
+the same kind of composition.
+
 ## 10. The gates that keep it honest
 
 | gate | what it holds |
@@ -490,7 +552,7 @@ every route this branch added: the ResNets, the six vision towers, the nine enco
 | `tests/adapters.rs` (`legacy-oracle`) | every family adapter reads the `ModelSpec` the Rust parser it replaced produced, on 224 configs and ~15,000 single-key mutants |
 | `tests/feature_registry.rs` | the vocabulary is honest (§3) |
 | `tests/{encdec,whisper,cnn,vision,encoders,dsa}.rs` (court) | the weights stage on every route: the three implementations are bit-identical and the court's demand evaluator reproduces every commit point of every position from committed leaves — encoder-decoder stages, Whisper, the CNNs, the vision towers, the encoders, DSA (536 commit points, 144 reductions over `H` dissected) |
-| `tests/cnn.rs` | a convolutional network is a data spec: the HF ResNet fixtures (basic, bottleneck, one that crosses a block boundary), a depthwise / dilated network against a naive direct convolution, the real ResNet-18/50/152 admitted at 224 px, the adapter equal to the Rust structure |
+| `tests/cnn.rs` | a convolutional network is a data spec: the HF ResNet fixtures (basic, bottleneck, one that crosses a block boundary), ConvNeXt (one and six layer blocks), MobileNetV1/V2 and the same deep networks with weights on the int8 grid (0.9995 floor), a depthwise / dilated / TF-padded / hard-activation network against a naive direct convolution, the real ResNet-18/50/152, ConvNeXt-T/B/L and MobileNetV1/V2 admitted at their sizes, every real tensor accounted for at its real shape (meta-device shapes), the ResNet adapter equal to the Rust structure |
 | `tests/qwen4_exp.rs`, `tests/common` | the acceptance matrix for a model that is a combination: float reference ↔ transformers, integer ↔ transformers, the in-program ids ↔ transformers' ids, the program's selected blocks ↔ the indexer's, reference ↔ ref2 ↔ exec on every commit point, the court's demand evaluator reproducing every node of every occurrence (all 25 primitives, state replay, the dissection arithmetic) |
 | admission | every fixture admitted; the largest block ≤ 512 nodes, ≤ 16 blocks |
 | hardening | the mutated-config sweep and the hostile-number test (§11) |
@@ -514,3 +576,32 @@ convolution, a hash base of 0) and an 85 GB allocation reachable through `head_d
 The corpus lane's ranked requests (FR-01 … FR-29) are generic additions to this vocabulary; the order is FR-01 weights as data →
 FR-18 encoder–decoders as data → FR-17 rows-mode encoders → FR-19 vision towers and convolutions → FR-02 post-rotation q/k norm →
 FR-09 DeepSeek sparse attention. The first two are designed in [`frontend-as-data-v1.md`](frontend-as-data-v1.md).
+
+## 13. Merging tir/generic with tir/onboard (notes for the integration lane)
+
+Merge base `1a4964205`. Lane F's `tests/golden/adapter_pins_v1.json` (on tir/onboard) pins 79 built-in adapters by the hash of the
+effective adapter; this branch's pack has **108**. Compared with those pins (computed from the manifest at the branch tip, the
+adapters' text unchanged by anything but the commits named):
+
+* **77 unchanged** — the data pack's earlier adapters are byte-stable under this branch.
+* **2 changed on purpose**, to be listed in `INTENDED` of `tests/adapter_pins.rs` with the commit that explains them: `qwen4-exp`
+  (`fbbef69c6`, the generic feature lowerers: the model now declares the features it uses) and `refusals` (`239179132`, the
+  coordinator's decision after CP2: `dbrx`, `granitemoehybrid` and `ernie4-5-moe` are built-in adapters, so the stale Granite-hybrid
+  refusal is deleted).
+* **29 new**, to be recorded with `PALW_PINS_UPDATE=1` (it refuses to touch a changed row that is not in `INTENDED`): `albert`, `bart`,
+  `clip-vision`, `convnext`, `dbrx`, `deberta-v2`, `deepseek-v32`, `encdec-frame`, `ernie4-5-moe`, `granitemoehybrid`, `llava-vision`,
+  `marian`, `mbart`, `mixin-bart-lineage`, `mobilenet-v1`, `mobilenet-v2`, `modernbert`, `nomic-bert`, `pegasus`, `qwen2-5-vl-vision`,
+  `qwen2-5-vl-vision-in-vlm`, `qwen2-vl-vision`, `qwen2-vl-vision-in-vlm`, `resnet`, `siglip-vision`, `t5`, `t5-encoder`, `vit`, `whisper`.
+
+**The pack hash therefore changed**, and it changes with any adapter edit (it is the hash of the sorted `(id, hash)` pairs): at the tip of
+this branch it is `2bfb01c611fecd14fdd4e128672007747190cfc803996234e1e3efd7a1ffd641f80335885e33a87792d48d662776984a305b8dcd74cecc1c84eae5b8fe79ddd0`
+(`cargo test --release --test adapters -- --nocapture the_pack_parses` prints the current one). A runtime pack that pinned the pack hash
+of an earlier line names an older pack; one that pinned only its own adapter's `{id, hash}` (the 77 and the changed two aside) is
+unaffected. The merge needs `tests/adapter_pins.rs` re-run and `adapter_pins_v1.json` updated for the 29, nothing else of lane F's.
+
+What else the merge touches in this crate: `src/adapter/builtin.rs` (the pack list: both sides append ids — keep every id, one line each;
+`the_pack_parses_and_every_file_is_listed` fails if a file and the list disagree), `src/model/features.rs` (the registry: ids are unique
+and the `an_implemented_features_tests_exist` test names a test that exists), `tests/golden/*` (this branch added the libm and version-2
+baselines and moved the seven PLE rows on purpose, listed in `INTENDED`; the golden corpus is `hf`, `hf-quant` and `gguf`, so the
+encoder-decoder, CNN, vision and encoder fixtures are not in it, and FR-18 phase 2 and §9.9 moved no golden row), and
+`tests/real_configs.rs`. tir/onboard was not edited from this branch.

@@ -114,6 +114,12 @@ pub enum Act {
     /// `x·σ(1.702x)`.
     QuickGelu,
     Relu,
+    /// `min(max(x, 0), 6)` (MobileNet v1/v2) — a clamp, so exact on codes: the narrowing's own clamp in a fixed `6/32767` unit.
+    Relu6,
+    /// `x·relu6(x+3)/6` (MobileNet v3, LeViT) — a table.
+    HardSwish,
+    /// `relu6(x+3)/6` (squeeze-excite gates of MobileNet v3) — a table.
+    HardSigmoid,
     /// `relu(x)²` (Nemotron, RWKV channel mix).
     Relu2,
     Sigmoid,
@@ -133,6 +139,9 @@ impl Act {
             "gelu_new" | "gelu_pytorch_tanh" | "gelu_fast" | "gelu_accurate" => Act::GeluTanh,
             "quick_gelu" => Act::QuickGelu,
             "relu" => Act::Relu,
+            "relu6" => Act::Relu6,
+            "hardswish" | "hard_swish" => Act::HardSwish,
+            "hardsigmoid" | "hard_sigmoid" => Act::HardSigmoid,
             "relu2" => Act::Relu2,
             "sigmoid" => Act::Sigmoid,
             "tanh" => Act::Tanh,
