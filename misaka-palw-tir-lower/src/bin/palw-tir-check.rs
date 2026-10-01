@@ -166,11 +166,12 @@ fn main() {
         }
     };
     // The feature report (model_type is informational; the features, the level, the adapter used).
-    let (arch, encdec) = {
+    let (arch, (encdec, vision)) = {
         let cfg: Result<serde_json::Value, _> = serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&text));
         let tensors = a.weights.as_ref().and_then(|p| TensorIndex::from_checkpoint_path(p).ok());
         let encdec = cfg.as_ref().ok().is_some_and(misaka_palw_tir_lower::hf_schema::is_encoder_decoder);
-        (cfg.ok().map(|c| model::analyze(&c, tensors.as_ref(), &read)), encdec)
+        let vision = cfg.as_ref().ok().is_some_and(misaka_palw_tir_lower::hf_schema::is_vision_tower);
+        (cfg.ok().map(|c| model::analyze(&c, tensors.as_ref(), &read)), (encdec, vision))
     };
     // An encoder-decoder lowers to TWO programs (the encoder over the padded source, the decoder's text stage): this
     // tool's per-position cost report is for one decoder-shaped program, so the feature report is the whole answer here
@@ -181,6 +182,16 @@ fn main() {
         } else {
             print!("{}", r.render());
             println!("an encoder–decoder lowers to two programs; `palw-class check-architecture` admits both stages");
+        }
+        std::process::exit(if matches!(r.result, model::ReportResult::Lowerable) { 0 } else { 2 });
+    }
+    // A vision tower is one position over a fixed patch axis, not a decoder: the feature report is the answer here too
+    // (the tower's program is lowered and admitted by `lower::vision`, which `palw-class check-architecture` runs).
+    if vision && let Some(r) = &arch {
+        if a.json {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"architecture_report": r})).unwrap_or_default());
+        } else {
+            print!("{}", r.render());
         }
         std::process::exit(if matches!(r.result, model::ReportResult::Lowerable) { 0 } else { 2 });
     }

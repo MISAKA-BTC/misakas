@@ -33,6 +33,9 @@ pack!(
     "modernbert",
     "albert",
     "deberta-v2",
+    "clip-vision",
+    "siglip-vision",
+    "vit",
     "bert",
     "bloom",
     "clip-text",
@@ -134,6 +137,12 @@ pub fn find_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter
 /// `model_type`.
 pub fn find_encdec_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
     let real = || all().iter().filter(|a| a.kind() == "encdec" && a.value.get("match").is_some());
+    real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+}
+
+/// The built-in VISION-TOWER adapter (kind `vision`) claiming a configuration, by `architectures[0]`, else by `model_type`.
+pub fn find_vision_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
+    let real = || all().iter().filter(|a| a.kind() == "vision" && a.value.get("match").is_some());
     real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
 }
 

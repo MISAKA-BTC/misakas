@@ -81,7 +81,15 @@ pub struct Built {
 }
 
 pub fn check_tower(name: &str, key: &str) -> Built {
-    let fx = load(name);
+    check_tower_with(name, key, None)
+}
+
+/// [`check_tower`] with the class's output choice overridden (a ViT's rows instead of its class embedding).
+pub fn check_tower_with(name: &str, key: &str, out: Option<vision::VisionOut>) -> Built {
+    let mut fx = load(name);
+    if let Some(o) = out {
+        fx.spec.out = o;
+    }
     let s = &fx.spec;
     let dir = fixture_dir(name);
     let (hl, binding) = vision::hl_program(s).expect("hl");
@@ -183,6 +191,14 @@ fn clip_vision_with_projection_matches_its_hf_fixture() {
 #[test]
 fn siglip_vision_with_its_pooling_head_matches_its_hf_fixture() {
     check_tower("siglip_vision", "pooler_output");
+}
+
+/// FR-19: a ViT from data only (no Rust reader of this family): the class embedding, and, as the class's other output
+/// choice, every row through the final norm.
+#[test]
+fn vit_class_embedding_and_rows_match_their_hf_fixture() {
+    check_tower("vit", "cls");
+    check_tower_with("vit", "last_hidden_state", Some(vision::VisionOut::Rows));
 }
 
 #[test]
@@ -591,5 +607,26 @@ fn real_size_towers_are_admitted() {
             a.view.position.cost.macs as f64,
             a.view.position.step_leaves
         );
+    }
+}
+
+/// **The adapters of kind `vision` are the Rust reader's data form**: CLIP's and SigLIP's adapters instantiate the same
+/// `VisionSpec` (every field, every name) as `parse_vision_rust` on the fixtures' configurations.
+#[test]
+fn the_vision_adapters_agree_with_the_rust_reader() {
+    for name in ["clip_vision", "siglip_vision"] {
+        let dir = fixture_dir(name);
+        let cfg = std::fs::read_to_string(dir.join("config.json")).expect("config");
+        let o: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("outputs.json")).expect("outputs")).expect("json");
+        let arr = |v: &serde_json::Value| -> [f64; 3] { [v[0].as_f64().unwrap(), v[1].as_f64().unwrap(), v[2].as_f64().unwrap()] };
+        let size = (o["size"][0].as_u64().unwrap() as u32, o["size"][1].as_u64().unwrap() as u32);
+        let ms = Some((arr(&o["mean"]), arr(&o["std"])));
+        let a = vision::parse_vision(&cfg, Some(size), ms).expect("adapter");
+        let r = vision::parse_vision_rust(&cfg, Some(size), ms).expect("rust");
+        assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::to_value(&r).unwrap(), "{name}");
+        // And without the processor's numbers: each family's default normalisation.
+        let a = vision::parse_vision(&cfg, None, None).expect("adapter");
+        let r = vision::parse_vision_rust(&cfg, None, None).expect("rust");
+        assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::to_value(&r).unwrap(), "{name} defaults");
     }
 }

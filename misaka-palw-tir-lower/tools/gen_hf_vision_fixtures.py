@@ -48,6 +48,10 @@ CONFIGS = {
                                                           hidden_act="gelu_pytorch_tanh", layer_norm_eps=1e-6,
                                                           vision_use_head=True)),
                           model="SiglipVisionModel", size=(28, 28), mean=HALF, std=HALF, layout="nchw"),
+    "vit": dict(cfg=("ViTConfig", dict(hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4,
+                                       image_size=28, patch_size=7, hidden_act="gelu", layer_norm_eps=1e-12,
+                                       qkv_bias=True)),
+                model="ViTModel", size=(28, 28), mean=HALF, std=HALF, layout="nchw"),
     "qwen2_vl_vision": dict(cfg=("Qwen2VLVisionConfig", dict(depth=2, embed_dim=32, hidden_size=48, hidden_act="quick_gelu",
                                                              mlp_ratio=2, num_heads=4, in_channels=3, patch_size=7,
                                                              spatial_merge_size=2, temporal_patch_size=2)),
@@ -149,6 +153,10 @@ def make(name):
             elif name == "siglip_vision":
                 o = fresh(pixel_values=pv)
                 out = {"pooler_output": o.pooler_output[0].tolist(), "last_hidden_state": o.last_hidden_state[0].tolist()}
+            elif name == "vit":
+                o = fresh(pixel_values=pv)
+                out = {"last_hidden_state": o.last_hidden_state[0].tolist(), "cls": o.last_hidden_state[0, 0].tolist(),
+                       "pooler_output": o.pooler_output[0].tolist()}
             elif name in ("qwen2_vl_vision", "qwen2_5_vl_vision"):
                 o = fresh(pv, grid_thw=grid)
                 out = {"merged": o.pooler_output.tolist(), "last_hidden_state": o.last_hidden_state.tolist()}

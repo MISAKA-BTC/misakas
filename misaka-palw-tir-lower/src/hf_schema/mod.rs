@@ -399,6 +399,49 @@ pub fn read_encdec(config: &Value, opts: &ReadOptions) -> Result<EncDecRead, Rea
     }
 }
 
+/// A successful read of a **vision tower** (`VISION_FROM_SPEC_V1`).
+#[derive(Clone, Debug)]
+pub struct VisionRead {
+    pub spec: crate::lower::vision::VisionSpec,
+    pub adapter: AdapterSource,
+    pub assumed_defaults: Vec<String>,
+}
+
+/// Whether an adapter of kind `vision` claims this configuration.
+pub fn is_vision_tower(config: &Value) -> bool {
+    let arch = config.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("");
+    builtin::find_vision_for(arch, config.get("model_type").and_then(Value::as_str)).is_some()
+}
+
+/// Read a vision tower's configuration through an adapter of kind `vision` (the built-in one that claims it, one by id,
+/// or the caller's). The class's input size and the processor's normalisation are not in `config.json`: the size is the
+/// config's own `image_size` (via the adapter) and the normalisation the adapter's default.
+pub fn read_vision(config: &Value, opts: &ReadOptions) -> Result<VisionRead, ReadFailure> {
+    let root = config.as_object().ok_or_else(|| fail(LowerError::bad("config.json is not an object"), AdapterSource::None))?;
+    let arch = root.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("").to_string();
+    let model_type = root.get("model_type").and_then(Value::as_str);
+    let adapter: Adapter = match &opts.adapter {
+        AdapterChoice::BuiltIn(id) => builtin::by_id(id).cloned().ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?,
+        AdapterChoice::Text(t) => adapter::parse(t, Origin::User).map_err(|e| fail(e, AdapterSource::None))?,
+        AdapterChoice::None => {
+            return Err(fail(LowerError::not_lowerable(format!("{arch}: a vision tower has no standard template; it needs an adapter (kind `vision`)")), AdapterSource::None));
+        }
+        AdapterChoice::Auto => match builtin::find_vision_for(&arch, model_type) {
+            Some(a) => a.clone(),
+            None => {
+                return Err(fail(LowerError::not_lowerable(format!("`{arch}` is a vision tower no adapter of kind `vision` claims")), AdapterSource::None));
+            }
+        },
+    };
+    let src = source_of(&adapter);
+    if adapter.kind() != "vision" {
+        return Err(fail(LowerError::not_lowerable(format!("{arch}: adapter `{}` is of kind `{}`, not `vision`", adapter.id, adapter.kind())), src));
+    }
+    let built = eval::build_vision_spec(&adapter, config).map_err(|e| fail(e, src.clone()))?;
+    let spec = crate::lower::vision::vision_spec_from_value(built.spec, None, None).map_err(|e| fail(e, src.clone()))?;
+    Ok(VisionRead { spec, adapter: src, assumed_defaults: built.assumed_defaults })
+}
+
 /// The reader's own checks (before any adapter runs), the adapter's evaluation, and the
 /// pre-quantised-checkpoint attachment.
 fn read_with(

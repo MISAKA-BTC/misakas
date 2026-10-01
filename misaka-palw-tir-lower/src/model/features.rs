@@ -127,6 +127,11 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("EMBED_PROJ_IN_V1", Embedding, "projection from the embedding width to the hidden width", Implemented, [], NoReq, ["fidelity_tiny::opt_postln_proj"], "OPT-350m's `project_in`."),
     feature!("EMBED_PROJ_IN_AFTER_NORM_V1", Embedding, "a factorised embedding: positions, token types and the norm at the table's width, then a projection (with bias) to the hidden width", Implemented, [], NoReq, ["encoders::albert_matches_its_hf_fixture"], "ALBERT's embedding_size and embedding_hidden_mapping_in; OPT's project_in (EMBED_PROJ_IN_V1) comes first and has no bias."),
     feature!("ATTN_DISENTANGLED_V1", Attention, "DeBERTa's disentangled attention: content-to-position and position-to-content terms from log-bucketed relative-position embeddings projected by the layer's own key and query weights", Implemented, [], NoReq, ["encoders::deberta_v2_matches_its_hf_fixture"], "One [2*span, d] table (after an optional norm) shared by every layer; per layer pos_key = K(table) and pos_query = Q(table) (share_att_key); two [h, L, 2*span] products, gathered by a pinned [L, L] bucket table, added to the content scores under the common 1/sqrt(dh * (1 + terms)) scale. share_att_key = false and the convolution layer are not lowered."),
+    feature!("VISION_FROM_SPEC_V1", Model, "a vision tower lowered from a spec: integer preprocessing, a patch projection, a rows-mode transformer, a pooled or row output", Implemented, [], NoReq, ["vision::vit_class_embedding_and_rows_match_their_hf_fixture", "vision::clip_vision_with_projection_matches_its_hf_fixture", "vision::siglip_vision_with_its_pooling_head_matches_its_hf_fixture"], "One position over a fixed patch axis (lower/vision.rs). The canonical image is u8 HWC at the class's size; per-channel (x/255 - mean)/std is folded into the patch matmul, so the projection reads the pixels exactly. Adapters of kind vision (clip-vision, siglip-vision, vit) instantiate the VisionSpec as data; the Qwen2-VL, Qwen2.5-VL and LLaVA towers are still read by Rust (parse_vision_rust)."),
+    feature!("EMBED_PATCH_CONV_V1", Embedding, "a non-overlapping patch convolution as a matmul over patchified pixels", Implemented, [], NoReq, ["vision::vit_class_embedding_and_rows_match_their_hf_fixture"], "Reshape/Transpose to patches (row-major or merge-block order) and one MatMul; the bias and the pixel normalisation are folded into the weight and bias."),
+    feature!("EMBED_CLS_TOKEN_V1", Embedding, "a learned class row prepended to the patch rows", Implemented, [], NoReq, ["vision::vit_class_embedding_and_rows_match_their_hf_fixture"], "CLIP's class_embedding, ViT's cls_token (any shape holding one row)."),
+    feature!("HEAD_POOL_ATTENTION_V1", Head, "SigLIP's attention-pooling head: a learned probe queries every row", Implemented, [], NoReq, ["vision::siglip_vision_with_its_pooling_head_matches_its_hf_fixture"], "The probe through W_q is data (one param), then a multihead attention, a residual MLP with its norm."),
+    feature!("OUTPUT_ROWS_NORMED_V1", Head, "every row of the tower through its final LayerNorm is the output", Implemented, [], NoReq, ["vision::vit_class_embedding_and_rows_match_their_hf_fixture"], "ViT's last_hidden_state; the class row alone (CLIP's pooled output without a projection, ViT's class embedding) is the other choice."),
     feature!("EMBED_TOKEN_TYPE_V1", Embedding, "token-type embedding", Implemented, [], NoReq, ["encoders::bert_mean_pooled_and_normalised_matches_its_hf_fixture"], "BERT-style segment table (encoders)."),
     feature!("EMBED_PER_LAYER_INPUT_V1", Embedding, "per-layer input from the token", Implemented, [], NoReq, ["fidelity_tiny::gemma4"], "Gemma-4's second, per-layer embedding gating a branch of each layer."),
     feature!("EMBED_NGRAM_PLE_V1", Embedding, "hashed n-gram per-layer embedding", Implemented, ["Concat", "Compare", "Select", "Slice", "StateWrite"], NoReq, ["qwen4_exp::PLE_01_bigram", "qwen4_exp::PLE_02_trigram", "qwen4_exp::PLE_03_hash_boundary", "qwen4_exp::PLE_04_streaming_cache", "qwen4_exp::PLE_05_dilated_conv_boundary", "qwen4_exp::PLE_06_a_table_taller_than_a_chunk_is_read_by_chunks"], "Hashed bigram/trigram rows per layer (XOR of token·multiplier, prime-modulus buckets), a key per stream and a value from the rows, the streams' normed query gating the value through σ(signed √(k·q/√D)), then a dilated depthwise causal convolution (CONV_DEPTHWISE_CAUSAL_V1), added to every stream. The hash is computed IN the program, with no consensus change: bit decomposition of the n products by floor-divisions by 2^k, an XOR as the parity of a bit sum (one 0/1 triangular MatMul for every order), the recomposition as a weighted MatMul into i128, `mixed mod size` as a floor-division and a Mul in i128. MEASURED on the lowered program: 26 nodes for the ids of a trigram layer and 14 for the table read, a 187-node block with the three norms. The segment window (the last n−1 tokens, an eos ending a segment) is a Fixed state of `token − eos`, so zero is a fresh sequence. A table taller than NF-8's 2^24 rows is a LOWERING matter, not a capability: it is split per hash head (each head owns a contiguous range of prime size) into `[heads, rows, dim]` i16 codes at one scale per layer and cut into chunks of at most 2^24 rows, one batched Gather (batch_dims 1) per chunk and a Select by the chunk index, so no dimension passes the cap. ADVISORY, evidence for a possible one-time primitive-set extension (decided later, not required): general integer bit primitives — XOR, shifts, a wrapping multiply, a remainder — would cut the ids from ~26 nodes to ~6 (Mul, two XORs, Rem, Add, Gather)."),
@@ -658,6 +663,30 @@ pub fn encdec_features(s: &crate::lower::encdec::EncDecSpec) -> Vec<FeatureUse> 
         u.add("HEAD_BIAS_V1", None, "");
     }
     u.add("OUTPUT_LOGITS_V1", None, "");
+    u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
+}
+
+/// The features a vision tower uses, by id (`VISION_FROM_SPEC_V1`).
+pub fn vision_features(s: &crate::lower::vision::VisionSpec) -> Vec<FeatureUse> {
+    use crate::lower::vision::VisionOut;
+    let mut u = Uses::default();
+    u.add("VISION_FROM_SPEC_V1", None, format!("{}x{} px, patch {}, {} layers of {}", s.h, s.w, s.patch, s.layers, s.d));
+    u.add("EMBED_PATCH_CONV_V1", None, format!("{} patches", s.patches()));
+    if s.cls {
+        u.add("EMBED_CLS_TOKEN_V1", None, "");
+    }
+    if s.learned_pos {
+        u.add("EMBED_POSITION_LEARNED_V1", None, "");
+    }
+    u.add(if s.rms { "NORM_RMS_V1" } else { "NORM_LAYER_V1" }, None, "");
+    u.add("RESIDUAL_PRE_NORM_V1", None, "");
+    u.add(if s.swiglu { "MLP_DENSE_GATED_V1" } else { "MLP_DENSE_PLAIN_V1" }, None, "");
+    match &s.out {
+        VisionOut::Rows => u.add("OUTPUT_ROWS_NORMED_V1", None, ""),
+        VisionOut::ClipPooled { .. } => u.add("OUTPUT_EMBEDDING_V1", None, "the class row"),
+        VisionOut::SiglipHead => u.add("HEAD_POOL_ATTENTION_V1", None, ""),
+        VisionOut::Merger { .. } | VisionOut::Projector { .. } => u.add("OUTPUT_EMBEDDING_V1", None, "rows"),
+    }
     u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
 }
 
