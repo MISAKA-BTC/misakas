@@ -5,6 +5,8 @@
 //! give the version-1 program's bytes, and all three are held against the HF output, which is
 //! fidelity, not validity. Admission (`tir_admit_v2`, `tir_admit_pipeline_v1`) must accept both.
 
+mod common;
+
 use misaka_palw_tir as tir;
 use misaka_palw_tir_lower::encoder::{self, EncoderOutput};
 use misaka_palw_tir_lower::float_ref::stream::Resident;
@@ -212,7 +214,19 @@ fn bidir_case(name: &str, pad: u32, pooling: misaka_palw_tir_lower::lower::bidir
         eprintln!("{name} integer vs HF `{key}` ({} real of {lmax}): cosine {c:.6}, rel {r:.2e}", p.count);
         assert!(c > 0.999, "{name}: cosine {c}, rel {r}");
     }
-    // 4. Admission of the program and the pipeline.
+    // 4. The three implementations and the court on the encoder's version-1 view (ids and count are input params).
+    {
+        use misaka_palw_tir_lower::lower::IntTensor;
+        let (p, _) = &seqs[0];
+        let ids = IntTensor::idx(vec![lmax as usize], p.ids.iter().map(|t| *t as u32).collect());
+        let count = IntTensor::idx(vec![], vec![p.count as u32]);
+        let p6 = common::with_inputs(&lw.program, &mat.params, &[(bidir::IDS_PARAM, ids), (bidir::COUNT_PARAM, count)]);
+        let n3 = common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("{name}: three implementations: {e}"));
+        let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name}: court: {e}"));
+        eprintln!("{name} COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes, {} elements) over {} primitives", c.commits, c.nodes, c.elements, c.primitives.len());
+        assert!(c.commits > 0);
+    }
+    // 5. Admission of the program and the pipeline.
     let inputs = misaka_palw_tir_lower::admission::default_inputs();
     tir::admit_v2::tir_admit_program_v2(&p2, &inputs).expect("tir_admit_v2");
     let pa = tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())

@@ -15,12 +15,15 @@
 //! The job's source ids ride in `PipelineJob::negative` (`TokenSource::Negative`): the IR has no
 //! second token list of its own (see hf-coverage §17).
 
+mod common;
+
+use common::{court_coverage, int_tensor, three_ways, with_inputs};
 use misaka_palw_tir as tir;
 use misaka_palw_tir_lower::encoder;
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::lower::encdec::{self, Stats};
-use misaka_palw_tir_lower::lower::materialise;
+use misaka_palw_tir_lower::lower::{IntTensor, materialise};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::weights::{Checkpoint, TensorSource};
 use std::path::{Path, PathBuf};
@@ -237,6 +240,44 @@ fn check(name: &str) {
         pa.job_cost, pa.job_step_leaves
     );
     assert!(agree as f64 / t_all as f64 >= 0.85 && kl_mean < 0.05, "{name}: top-1 {agree}/{t_all}, KL {kl_mean}");
+    // 6. The three implementations and the court, on both stage programs of the first record. The lowering declares a
+    //    stage's inputs as params (the version-2 stage lifts them); the second implementation, the typed backend and the
+    //    court's demand evaluator see that version-1 view with the inputs as leaves — the decoder's `xkv` is the INTEGER
+    //    encoder's own output.
+    {
+        let rec = &recs[0];
+        let src: Vec<u32> = ids_of(&rec["input_ids"]).iter().map(|t| *t as u32).collect();
+        let mut padded = src.clone();
+        padded.resize(LMAX as usize, 0);
+        let ids_t = IntTensor::idx(vec![LMAX as usize], padded);
+        let count_t = IntTensor::idx(vec![], vec![src.len() as u32]);
+        let einterp = tir::interp_v2::InterpreterV2::new(&e2).expect("encoder interpreter");
+        let mut inputs = tir::interp_v2::MapInputs::default();
+        inputs.constant.insert(0, ids_t.to_tir());
+        inputs.constant.insert(1, count_t.to_tir());
+        let xkv = einterp.run_positions(&e_params, &inputs, 1).expect("the integer encoder").remove(0).output;
+        let ep6 = with_inputs(&elw.program, &emat.params, &[(encdec::IDS_PARAM, ids_t), (encdec::COUNT_PARAM, count_t.clone())]);
+        let dp6 = with_inputs(&dlw.program, &dmat.params, &[(encdec::XKV_PARAM, int_tensor(&xkv)), (encdec::ENC_COUNT_PARAM, count_t)]);
+        let stream: Vec<u32> = ids_of(&rec["decoder_input_ids"]).iter().map(|t| *t as u32).collect();
+        let last = stream.len() as u32 - 1;
+        let n3 = three_ways(&elw.program, &ep6, &[vec![0]]).unwrap_or_else(|e| panic!("{name}: encoder, three implementations: {e}"));
+        let n3d = three_ways(&dlw.program, &dp6, &[stream.iter().map(|t| *t as usize).collect()]).unwrap_or_else(|e| panic!("{name}: decoder, three implementations: {e}"));
+        let ce = court_coverage(&elw.program, &ep6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name}: encoder, court: {e}"));
+        let cd = court_coverage(&dlw.program, &dp6, &stream, &[0, 1, last], &[1, 3]).unwrap_or_else(|e| panic!("{name}: decoder, court: {e}"));
+        let mut prims: std::collections::BTreeSet<&str> = ce.primitives.keys().copied().collect();
+        prims.extend(cd.primitives.keys().copied());
+        eprintln!(
+            "{name} COURT: three implementations equal at {n3} + {n3d} positions; the court replays {} + {} commit points ({} + {} nodes, {} + {} elements) over {} primitives",
+            ce.commits,
+            cd.commits,
+            ce.nodes,
+            cd.nodes,
+            ce.elements,
+            cd.elements,
+            prims.len()
+        );
+        assert!(ce.commits > 0 && cd.commits > 0);
+    }
     assert!(worst < 2.0, "{name}: the integer stage differs from HF where HF's top-2 margin is {worst}× its logit error, not a tie within its noise");
 }
 

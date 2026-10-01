@@ -205,6 +205,30 @@ fn the_dsa_program_is_the_same_on_all_three_implementations() {
     }
 }
 
+/// **The court on the DSA program**: every node of every occurrence, at positions before, at and after the selection
+/// starts selecting, is reproduced by the court's demand evaluator from the committed leaves alone — the threshold's
+/// two committed lanes, the radix search's `Compare`/`ReduceSum` over `H` (and its dissection into two halves of the
+/// history, which must combine to the whole), the masked softmax — from a checkpoint every position and every third.
+#[test]
+fn the_court_replays_every_node_of_the_dsa_program() {
+    let prep = fidelity::prepare(&config_with_topk(3), &LowerOpts::default()).expect("prepare");
+    let ck = Checkpoint::open(&dir()).expect("checkpoint");
+    let (params, _) = ParamStore::from_source(&prep.hl, &prep.binding, &ck).expect("params");
+    let loader = Resident(Arc::new(params));
+    let calib = fidelity::random_sequences(prep.hl.vocab, 4, 24, 11);
+    let quiet = |_: usize, _: usize| {};
+    let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).expect("calibrate");
+    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialise");
+    let tokens: Vec<u32> = fidelity::random_sequences(prep.hl.vocab, 1, 10, 5).remove(0).into_iter().map(|t| t as u32).collect();
+    let last = tokens.len() as u32 - 1;
+    let r = common::court_coverage(&prep.lowered.program, &mat.params, &tokens, &[0, 2, 3, last], &[1, 3]).unwrap_or_else(|e| panic!("the court: {e}"));
+    eprintln!("DSA court: {} commit points, {} nodes, {} elements, {} dissected reductions over H, primitives {:?}", r.commits, r.nodes, r.elements, r.dissected, r.primitives.keys().collect::<Vec<_>>());
+    assert!(r.commits > 0 && r.dissected > 0, "no reduction over H was dissected: the selection's radix search is not exercised");
+    for p in ["Compare", "ReduceSum", "Select", "ReduceMax"] {
+        assert!(r.primitives.contains_key(p), "the court never evaluated a `{p}` of the DSA program");
+    }
+}
+
 /// **The streaming conversion of the DSA model is the whole conversion, byte for byte** (RFC-0002 Part II): the
 /// indexer's projections are row-wise params like any other, and its narrowings (score, query, key) are small fills.
 #[test]

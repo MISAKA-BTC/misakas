@@ -5,6 +5,8 @@
 //! lowering to an integer program (a convolution is an im2col gather and one matmul; the batch norm is folded), the version-2
 //! program on `InterpreterV2` (the image a `u8` HWC input), and admission. The integer output is held against HF's by cosine.
 
+mod common;
+
 use misaka_palw_tir as tir;
 use misaka_palw_tir_lower::encoder;
 use misaka_palw_tir_lower::float_ref::ParamStore;
@@ -179,7 +181,18 @@ fn check(name: &str, out: CnnOut, key: &str) -> usize {
     let pa = tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &misaka_palw_tir_lower::admission::default_inputs(), &tir::admit_v2::TirJobCeilingsV1::open_v1())
         .expect("tir_admit_pipeline_v1");
     eprintln!("{name} pipeline (JobImage) admitted: job {:?}, {} step leaves", pa.job_cost, pa.job_step_leaves);
-    // 6. Admission of the program alone.
+    // 6. The three implementations and the court on the network's version-1 view (the image an input param): every layer
+    //    block's carry is a committed leaf the next block's cones start from.
+    {
+        let img = &fx.images[0].0;
+        let t = misaka_palw_tir_lower::lower::IntTensor::i16(vec![spec.h as usize, spec.w as usize, 3], img.iter().map(|v| *v as i16).collect());
+        let p6 = common::with_inputs(&lw.program, &mat.params, &[(cnn::IMAGE_PARAM, t)]);
+        let n3 = common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("{name}: three implementations: {e}"));
+        let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name}: court: {e}"));
+        eprintln!("{name} COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes, {} elements) over {} primitives", c.commits, c.nodes, c.elements, c.primitives.len());
+        assert!(c.commits > 0);
+    }
+    // 7. Admission of the program alone.
     let a = tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs()).expect("tir_admit_v2");
     eprintln!("{name} admitted: {} nodes in {} blocks, {} cones, {} params", p2.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(), p2.blocks.len(), a.view.cones.len(), p2.params.len());
     p2.blocks.len()

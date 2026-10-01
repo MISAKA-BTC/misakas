@@ -12,8 +12,34 @@ use misaka_palw_tir::Prim;
 use misaka_palw_tir::program::StateKind;
 use misaka_palw_tir::{ConeEnv, Interpreter, MapParams, RunState, Tensor, TirProgramV1};
 use misaka_palw_tir_exec::{NodeValue, ParamData, StepSink, TirExecutor, TirParams, TirPlan};
-use misaka_palw_tir_lower::lower::IntParams;
+use misaka_palw_tir_lower::lower::{IntParams, IntTensor};
 use std::collections::BTreeMap;
+
+/// The lowering's integer tensor of an evaluator tensor (a stage's output becoming the next stage's input).
+pub fn int_tensor(t: &Tensor) -> IntTensor {
+    use misaka_palw_tir::DType as D;
+    let shape = t.shape.clone();
+    match t.dtype {
+        D::I8 => IntTensor::i8(shape, t.data.iter().map(|v| *v as i8).collect()),
+        D::I16 => IntTensor::i16(shape, t.data.iter().map(|v| *v as i16).collect()),
+        D::I32 => IntTensor::i32(shape, t.data.iter().map(|v| *v as i32).collect()),
+        D::I64 => IntTensor::i64(shape, t.data.iter().map(|v| *v as i64).collect()),
+        D::Idx => IntTensor::idx(shape, t.data.iter().map(|v| *v as u32).collect()),
+        D::I128 => panic!("an i128 tensor is not a param"),
+    }
+}
+
+/// A lowered stage's params with REAL values for its input params. The lowering declares a stage's inputs as params
+/// (`encoder::lifted_params` drops them for the version-2 program); the second implementation, the typed backend and
+/// the court's demand evaluator all see that version-1 view, with the inputs as leaves.
+pub fn with_inputs(program: &TirProgramV1, params: &IntParams, inputs: &[(&str, IntTensor)]) -> IntParams {
+    let mut p = params.clone();
+    for (name, t) in inputs {
+        let j = program.params.iter().position(|d| d.name == *name).unwrap_or_else(|| panic!("the program has no param `{name}`"));
+        p.tensors.insert((j as u16, None), t.clone());
+    }
+    p
+}
 
 /// One commit: `(slot, block, layer, node, values)`.
 type Commit = (u64, u8, Option<u32>, u16, Vec<i128>);

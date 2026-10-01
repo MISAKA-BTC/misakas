@@ -13,6 +13,8 @@
 //! tower over the job image, the LM as the text stage — against HF's greedy `generate`
 //! ([`text_stage`]).
 
+mod common;
+
 use misaka_palw_tir as tir;
 use misaka_palw_tir_lower::encoder;
 use misaka_palw_tir_lower::float_ref::ParamStore;
@@ -171,7 +173,17 @@ pub fn check_tower_with(name: &str, key: &str, out: Option<vision::VisionOut>) -
     )
     .expect("tir_admit_pipeline_v1");
     eprintln!("{name} pipeline (JobImage) admitted: job {:?}, {} step leaves", pa.job_cost, pa.job_step_leaves);
-    // 6. Admission of the program alone.
+    // 6. The three implementations and the court, on the tower's version-1 view (the image an input param).
+    {
+        let img = &fx.images[0].0;
+        let t = misaka_palw_tir_lower::lower::IntTensor::i16(vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i16).collect());
+        let p6 = common::with_inputs(&lw.program, &mat.params, &[(vision::IMAGE_PARAM, t)]);
+        let n3 = common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("{name}: three implementations: {e}"));
+        let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name}: court: {e}"));
+        eprintln!("{name} COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes, {} elements) over {} primitives", c.commits, c.nodes, c.elements, c.primitives.len());
+        assert!(c.commits > 0);
+    }
+    // 7. Admission of the program alone.
     let a = tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs()).expect("tir_admit_v2");
     eprintln!(
         "{name} admitted: {} nodes, {} cones, {} params, position {:?}",
