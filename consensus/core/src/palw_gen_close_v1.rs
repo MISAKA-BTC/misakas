@@ -149,7 +149,12 @@ impl PalwGenStepBindingV1 {
 
     /// The claim's roots as the court reads them.
     pub fn claim_roots(&self) -> PalwGenClaimRootsV1 {
-        PalwGenClaimRootsV1 { step_root: self.step_root(), stage_roots: self.stage_roots.clone(), generated: self.generated.clone(), output_root: None }
+        PalwGenClaimRootsV1 {
+            step_root: self.step_root(),
+            stage_roots: self.stage_roots.clone(),
+            generated: self.generated.clone(),
+            output_root: None,
+        }
     }
 }
 
@@ -168,7 +173,13 @@ pub fn palw_gen_tensor_execution_root_v1(
 ) -> Hash64 {
     keyed64(
         PALW_GEN_TENSOR_EXECUTION_ROOT_DOMAIN_V1,
-        &[job_id.as_byte_slice(), class_id.as_byte_slice(), &step_leaf_count.to_le_bytes(), step_root.as_byte_slice(), output_root.as_byte_slice()],
+        &[
+            job_id.as_byte_slice(),
+            class_id.as_byte_slice(),
+            &step_leaf_count.to_le_bytes(),
+            step_root.as_byte_slice(),
+            output_root.as_byte_slice(),
+        ],
     )
 }
 
@@ -191,7 +202,12 @@ pub struct PalwGenTensorBindingV1 {
 
 impl PalwGenTensorBindingV1 {
     /// The binding of what a worker committed.
-    pub fn of(job: &crate::palw_gen_job_v1::PalwGenJobV1, roots: &PalwGenClaimRootsV1, step_leaf_count: u64, output_root: Hash64) -> Self {
+    pub fn of(
+        job: &crate::palw_gen_job_v1::PalwGenJobV1,
+        roots: &PalwGenClaimRootsV1,
+        step_leaf_count: u64,
+        output_root: Hash64,
+    ) -> Self {
         let mut binding = Self {
             version: PALW_GEN_CLOSE_VERSION_V1,
             job: job.clone(),
@@ -211,7 +227,13 @@ impl PalwGenTensorBindingV1 {
 
     /// The execution root its parts produce.
     pub fn execution_root(&self) -> Hash64 {
-        palw_gen_tensor_execution_root_v1(&self.job.id(), &self.job.envelope.class_id, self.step_leaf_count, &self.step_root(), &self.output_root)
+        palw_gen_tensor_execution_root_v1(
+            &self.job.id(),
+            &self.job.envelope.class_id,
+            self.step_leaf_count,
+            &self.step_root(),
+            &self.output_root,
+        )
     }
 
     /// The claim's roots as the court reads them (a tensor claim generates no ids).
@@ -559,8 +581,8 @@ pub fn verify_gen_binding_any_v1(
             let job = PipelineJob { prompt: prompt_ids, generated: b.generated.clone(), source: source_ids, ..PipelineJob::default() };
             let images: Vec<PalwGenImageRefV1> =
                 b.job.images.iter().zip(&row.class.offers.images).map(|(image, slot)| PalwGenImageRefV1::of(image, slot)).collect();
-            let decode = PalwGenDecodeV1::of(&b.job)
-                .ok_or_else(|| PalwGenCloseErrorV1::Binding("a V5 job decodes under V4's rules".into()))?;
+            let decode =
+                PalwGenDecodeV1::of(&b.job).ok_or_else(|| PalwGenCloseErrorV1::Binding("a V5 job decodes under V4's rules".into()))?;
             (job, images, PalwGenDrawV1 { seed: b.job.v4.sampling_seed, item_index: 0 }, Some(decode), prompt_len as u32)
         }
         (PalwGenBindingV1::Tensor(b), Some(accepted)) => {
@@ -605,7 +627,12 @@ pub type PalwGenCloseOutcomeV1 = Result<Option<PalwStepFaultV1>, PalwGenCloseErr
 
 /// The evidence id of a generative conviction (the §24.1 dedup key).
 pub fn palw_gen_evidence_id_v1(binding: &PalwGenBindingV1, leaf_index: u64, fault: PalwStepFaultV1) -> Hash64 {
-    crate::palw_step_leg::step_refutation_evidence_id(&binding.committed_execution_root(), PALW_GEN_EVIDENCE_KIND_V1, leaf_index, fault)
+    crate::palw_step_leg::step_refutation_evidence_id(
+        &binding.committed_execution_root(),
+        PALW_GEN_EVIDENCE_KIND_V1,
+        leaf_index,
+        fault,
+    )
 }
 
 /// **Check a generative cone close** against the claim (its class's row, its class id and execution
@@ -997,7 +1024,8 @@ pub fn check_gen_output_close_v1(
     let stage = &v.space.stages[out];
     let tile_len = crate::palw_gen_class_v1::palw_gen_output_tile_len_v1(&v.pipeline, &v.programs, &row.class.layouts)
         .ok_or(PalwGenCloseErrorV1::NotTheOutputStepTile { tile: close.tile })?;
-    let want = palw_gen_output_step_coord_v1(stage, close.tile, tile_len).ok_or(PalwGenCloseErrorV1::NotTheOutputStepTile { tile: close.tile })?;
+    let want = palw_gen_output_step_coord_v1(stage, close.tile, tile_len)
+        .ok_or(PalwGenCloseErrorV1::NotTheOutputStepTile { tile: close.tile })?;
     if close.step_tile.coord != want {
         return Err(PalwGenCloseErrorV1::NotTheOutputStepTile { tile: close.tile });
     }
@@ -1011,8 +1039,8 @@ pub fn check_gen_output_close_v1(
     if !palw_gen_verify_leaf_v1(stage, &close.binding.stage_roots[out], &opened) {
         return Err(PalwGenCloseErrorV1::Refused(PalwGenCloseRefusalV1::LeafNotProven(want)));
     }
-    let interval = misaka_palw_tir::interval_v2::output_interval_v2(&stage.program)
-        .map_err(|e| PalwGenCloseErrorV1::Binding(e.to_string()))?;
+    let interval =
+        misaka_palw_tir::interval_v2::output_interval_v2(&stage.program).map_err(|e| PalwGenCloseErrorV1::Binding(e.to_string()))?;
     let mut root = [0u8; 64];
     root.copy_from_slice(close.binding.output_root.as_byte_slice());
     match crate::palw_gen_court_v1::palw_gen_output_tile_check_v1(

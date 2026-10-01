@@ -245,8 +245,8 @@ pub fn palw_gen_replay_committed_v1(
     job: &PipelineJob,
     seed: [u8; 32],
 ) -> Result<PalwGenExecutionV1, PalwGenRunErrorV1> {
-    let run =
-        run_pipeline(pipeline, programs, params, &PalwGenRandomV1 { seed, item: 0 }, job).map_err(|e| PalwGenRunErrorV1::Run(e.to_string()))?;
+    let run = run_pipeline(pipeline, programs, params, &PalwGenRandomV1 { seed, item: 0 }, job)
+        .map_err(|e| PalwGenRunErrorV1::Run(e.to_string()))?;
     commit_run(pipeline, programs, layouts, run, job.generated.clone(), None, job.prompt.len() as u32)
 }
 

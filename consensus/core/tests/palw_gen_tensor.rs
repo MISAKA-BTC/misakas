@@ -314,7 +314,12 @@ fn lie_about_the_output(e: &PalwGenExecutionV1, lane: usize) -> PalwGenExecution
 /// An execution whose output node's committed step tile holds `value` at `lane` of the step tile at
 /// `coord`, every root recomputed over it — the executor's lie about the computation, committed
 /// consistently (its canonical output left as it was).
-fn lie_in_the_step_tile(e: &PalwGenExecutionV1, coord: &kaspa_consensus_core::palw_gen_step_v1::PalwGenLeafCoordV1, lane: usize, value: i128) -> PalwGenExecutionV1 {
+fn lie_in_the_step_tile(
+    e: &PalwGenExecutionV1,
+    coord: &kaspa_consensus_core::palw_gen_step_v1::PalwGenLeafCoordV1,
+    lane: usize,
+    value: i128,
+) -> PalwGenExecutionV1 {
     use kaspa_consensus_core::palw_gen_step_v1::{palw_gen_stage_root_v1, palw_gen_step_leaf_hash_v1, palw_gen_step_root_v1};
     let mut l = e.clone();
     let stage = coord.stage as usize;
@@ -343,7 +348,10 @@ fn a_job_is_one_canonical_encoding_with_one_id() {
     assert_eq!(PalwGenJobV1::decode_canonical(&bytes), Ok(job.clone()));
     let mut trailing = bytes.clone();
     trailing.push(0);
-    assert!(matches!(PalwGenJobV1::decode_canonical(&trailing), Err(PalwGenJobErrorV1::NotCanonical(_))), "a trailing byte is refused");
+    assert!(
+        matches!(PalwGenJobV1::decode_canonical(&trailing), Err(PalwGenJobErrorV1::NotCanonical(_))),
+        "a trailing byte is refused"
+    );
     assert!(matches!(PalwGenJobV1::decode_canonical(&bytes[..bytes.len() - 1]), Err(PalwGenJobErrorV1::NotCanonical(_))));
     // The id covers every field: the envelope, the seed, the body.
     let id = job.id();
@@ -408,11 +416,7 @@ fn every_way_a_job_is_not_the_classes_is_refused_by_name() {
     assert_eq!(resolve(&with(&|j| j.envelope.privacy_mode = 3)), Err(E::PrivacyModeNotOffered(3)));
     assert_eq!(resolve(&with(&|j| j.envelope.prompt_mode = 1)), Err(E::PromptModeNotOffered(1)));
     assert_eq!(resolve(&with(&|j| j.seed = [0; 32])), Err(E::SeedRequired), "a class that draws randomness needs a seed");
-    assert_eq!(
-        resolve(&vision_job(&vision())),
-        Err(E::ClassMismatch),
-        "another class's job"
-    );
+    assert_eq!(resolve(&vision_job(&vision())), Err(E::ClassMismatch), "another class's job");
     assert!(matches!(resolve(&image_edit(|b| b.steps += 1000)), Err(E::StepsNotOffered { .. })));
     assert_eq!(resolve(&image_edit(|b| b.sampler_id = Hash64::from_bytes([9; 64]))), Err(E::SamplerNotOffered));
     assert!(matches!(resolve(&image_edit(|b| b.guidance_q = u16::MAX)), Err(E::GuidanceOutOfRange { .. })));
@@ -566,7 +570,11 @@ fn output_tiles(e: &PalwGenExecutionV1) -> u64 {
 fn an_honest_claim_is_acquitted_at_every_output_tile() {
     for f in [vision(), image()] {
         let p = prompt();
-        let (job, ids) = if f.image.is_some() { (vision_job(&f), no_ids()) } else { (image_job(&f, 0, 0, [0x33; 32]), PalwGenIdsV1 { prompt: &p, negative: &[] }) };
+        let (job, ids) = if f.image.is_some() {
+            (vision_job(&f), no_ids())
+        } else {
+            (image_job(&f, 0, 0, [0x33; 32]), PalwGenIdsV1 { prompt: &p, negative: &[] })
+        };
         let (e, binding) = run(&f, &job, ids);
         let ev = evidence(&f, &e, &binding, ids);
         let tiles = output_tiles(&e);
@@ -605,7 +613,11 @@ fn an_honest_claim_is_acquitted_at_every_output_tile() {
 fn a_planted_digest_fault_is_convicted_at_its_lane_and_only_there() {
     for f in [vision(), image()] {
         let p = prompt();
-        let (job, ids) = if f.image.is_some() { (vision_job(&f), no_ids()) } else { (image_job(&f, 0, 0, [0x33; 32]), PalwGenIdsV1 { prompt: &p, negative: &[] }) };
+        let (job, ids) = if f.image.is_some() {
+            (vision_job(&f), no_ids())
+        } else {
+            (image_job(&f, 0, 0, [0x33; 32]), PalwGenIdsV1 { prompt: &p, negative: &[] })
+        };
         let (honest, _) = run(&f, &job, ids);
         let tile_len = honest.output.as_ref().unwrap().tile_len as usize;
         let lanes = honest.output.as_ref().unwrap().values.len();

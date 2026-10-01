@@ -2057,6 +2057,22 @@ additions:
 
   A refused answer fails the evaluation with `Missing`, like every other refusal. An input the
   closure never reads (the operand a `Select` did not choose) is never asked.
+
+  **The evaluator holds every answer to the input's declaration (PALW-TIR-42), whatever the source
+  is.** An element is held to the input's dtype and to its declared interval (§15.5) at the point a
+  param's element is held to its dtype: an element outside the interval fails the evaluation
+  `Operand` (`input NAME: V is outside its interval [LO, HI]`), as a step's input fetch does (step 2).
+  A source answers inputs inside their intervals by construction (the court derives random ones, an
+  upstream committed value was checked against its proven interval, PALW-TIR-33, which lies inside the
+  input's by NF-P7, and a job value was checked at acceptance), and the evaluator does not rely on it:
+  the bounds admission proved over a cone (that no value overflows its dtype, the work of a
+  reduction) are bounds over the *declared* intervals, so a value outside one is a value the proof does
+  not cover.
+  > **[decision, 2026-10-01, on finding G15 of the independent second implementation.]** The first
+  > evaluator held an input to its dtype only (a value of the dtype outside the interval was
+  > evaluated); PALW-TIR-42 says dtype, shape and interval, and the second implementation held all
+  > three. The evaluator now holds the interval too, in `eval_demanded_v2` and `eval_demanded_range_v2`
+  > alike (`DemandInputsV1`); the version-1 API is unchanged (no inputs, nothing to hold).
 - **The writer of a global `Fixed` state.** It is occurrence 0's `StateWrite`, or the committed
   `post` write of occurrence `L + 1` (unique by NF-19 and NF-29). The value of a `post`-written
   state at the start of `p` is therefore the leaf `node(p − 1, L + 1, write)`, and it costs no work.
@@ -2102,6 +2118,12 @@ Binding       := tag 0: JobScalar     · index u8
 
 `Option<T>` is Borsh's: `0x00`, or `0x01` followed by `T`. `program` indexes the pipeline's program
 list.
+
+**Reserved tags** (RFC-0003 §II.2.3, finding G12; built dormant on RFC-0004's branch `rfc4/eval`, not in
+this base's decoder, where each is an `Encoding` refusal): `TripRule` tag 4 `Decode`; `TokenSource` tag 3
+`Generated`, tag 4 `Key` and tag 5 `FinalizedOutput { claim: u8, stage: u8 }` (`claim < 8`). Their
+rules — edges from a `Decode` stage read its consumed rows, `|prompt| − 1` on; at most one text-kind
+stage in all — are §II.2.3's.
 
 `TirPipelineV1::decode_canonical(bytes, programs)` decodes strictly, like §4.4:
 - at most 65,536 bytes;
@@ -2151,7 +2173,9 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
   `per_step`.
 - **The pipeline's output.** A `Final` output stage gives its last position's value. A `Rows` output
   stage gives its rows stacked `[T] ++ row shape`. A text stage gives its logits rows stacked the same
-  way. The class's output is the generated ids (RFC-0003 §I.3.3 `Tokens`), and it has no output root.
+  way. A text class's output is the generated ids (RFC-0003 §I.3.3 `Tokens`); a text claim commits no
+  `output_root` (its answer is bound in its execution root). `Tokens` has an `output_root` like every other
+  kind, for a claim whose output is an id list that a portable digest names (§I.3.3).
 
 **Normal form** (`validate_pipeline`, class `NormalForm`):
 
@@ -2160,19 +2184,22 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
 - **NF-P3.** `1 ≤ max_trip ≤ history_bound`, with one shape per kind of stage:
   - a `Fixed { n }` stage has `max_trip = n` and reads no token;
   - a `JobSteps` stage reads no token;
-  - a `TokenCount` stage reads the token and has a token rule. Its template ids are below
-    `token_bound`, its pad (if any) is no shorter than the template, and a padded run has
-    `max_trip = pad.to_len`;
+  - a `TokenCount` stage reads the token and has a token rule. Its template ids (prefix and suffix)
+    **and its pad id** are below `token_bound` (a padded run fills every lane past the sequence with
+    the pad id, and the program reads each lane as a token), its pad (if any) is no shorter than the
+    template, and a padded run has `max_trip = pad.to_len`;
   - a `TextStream` stage reads the token and has no token rule.
 - **NF-P4.** One random input per domain across the whole pipeline (PALW-RND-7).
 - **NF-P5.** One binding per external input. An edge reads only an earlier stage.
 - **NF-P6.** A `JobScalar` binds a rank-0 input, with `index < 16`. A `JobTokens` binds an
-  `idx [pad.to_len]` input, and its template ids lie inside the input's interval. A
+  `idx [pad.to_len]` input, and its template ids **and its pad id** lie inside the input's interval (a
+  padded run fills the input's lanes with the pad id, and every lane is held to the interval, PALW-TIR-42). A
   `JobTokenCount`'s template is padded, and it binds a rank-0 `idx` whose interval contains
   `[0, pad.to_len]`.
 - **NF-P7.** A `StageRows` edge reads a `Rows` stage, and its shape is `[pad_to] ++ row shape` of the
-  row dtype, with `pad_to ≥ max(max_trip − drop, 1)`. The rows' proven interval (§15.5), with 0 for
-  the pad, lies inside the input's. A `StageFinal` edge reads a `Final` stage, with that output's
+  row dtype, with `pad_to ≥ max(max_trip − drop, 1)`. The rows' proven interval (§15.5) **together with
+  0, always** (any `StageRows` edge can pad a run shorter than `max_trip`, since
+  `pad_to ≥ max(max_trip − drop, 1)`), lies inside the input's. A `StageFinal` edge reads a `Final` stage, with that output's
   type, and its proven interval lies inside the input's.
 - **NF-P8.** A `StageRowCount` edge reads a `Rows` stage, binds a rank-0 `idx`, and
   `[0, max_trip − drop]` lies inside the input's interval.
@@ -2368,12 +2395,16 @@ dormant behind `palw_fp_job_v5`, with the generative closes (`GenCone` 10, `GenD
 (`TokenSource::Source`, tag 2, RFC-0003 §II.2.2). A dissected cone with a `TopK` is sized under the
 block's box-demand rules: refused below `palw_tir_fence2`, H7's row past it.
 
+The one step tree of a pipeline (stage-major leaf numbering: `palw_gen_step_v1.rs`) and the admission
+that counts its leaves exactly are built, and so is the generative job for the tensor profiles
+(`PalwGenJobV1`, `palw_gen_job_v1.rs`), its acceptance against a class by name, the tensor claim's
+binding and execution root, the output close (`GenOutputTile`, tag 13) and the worker, seat and court
+halves of a node (§15.13). The claim lane's carriage of a tensor job (the commitment, its fee, its
+signature, the bond and anchor checks of the envelope) is **not built**: it is the free-prompt lane's,
+opened for pipeline classes by its own later fence (RFC-0003 §Activation).
+
 The following are not yet built:
 
-- the one step tree of a pipeline (stage-major leaf numbering) and the admission that counts its
-  leaves exactly; the preflight's leaf check is a necessary condition only;
-- the generative job (`PalwGenJobV1`), its acceptance, and the close that carries the court's
-  answers (with `PalwCourtVerdictProofV2` 10/11 from Phase F's allocation);
 - generalised dissection over a declared reduction axis (RFC-0003 §II.1.5.6, decided to come with
   video).
 
@@ -2419,3 +2450,97 @@ and logit bias are mis-scaled.
   IR and generative `false` until the later fence), and `palw_fp_v5_accept_payload_v1`.
 - **Checked off chain.** A runtime pack's verification compares the class's logit scale with the float
   reference; the chain does not.
+
+### 15.13 The tensor job and the tensor claim (RFC-0003 §I.0, §I.3, activation step 7)
+
+Built dormant behind `palw_gen_v1` (`palw_gen_job_v1.rs`, `palw_gen_close_v1.rs`,
+`palw_gen_worker_v1.rs`); nothing in it is reachable from a block.
+
+**The job.** `PalwGenJobV1 { version: u16 = 1, envelope, seed: [u8; 32], body }` — one shape for every
+non-text profile; the body is an enum (`0` Image, `1` Embedding; audio and video are not built and their
+tags are not bytes the enum decodes) and an embedding's input an enum (`0` Text, `1` Image). Its Borsh
+encoding is the only encoding of the job: acceptance verifies the canonical form
+(`PalwGenJobV1::decode_canonical`: strict Borsh, no trailing byte, re-encoding byte-identical) and
+never rewrites; canonicalisation (text to ids, a guidance value to its grid, an integer seed to 32
+bytes) is the gateway's. `gen_job_id_v1 = H64(key "misaka-palw/gen-v1/job-id/v1", borsh(job))`, so
+no field can change after the fact. The golden vectors are `consensus-vectors/gen-v1/job_v1.json`
+(`scripts/palw-gen-job-vectors.py`, an implementation that shares no code with the Rust one).
+
+**Accepted against its class by name** (`palw_gen_job_resolve_class_v1`, the court's own re-read of a
+claim's job; the network's domain and the privacy mode's arming are `palw_gen_job_admitted_v1`'s; the
+ids are `palw_gen_job_ids_admitted_v1`'s). Every body field is held to the class's offers and every
+refusal has a name (`PalwGenJobErrorV1`). Where the RFC is silent, the conservative reading is taken:
+
+> **[decision, 2026-10-01, step 7.]**
+> 1. **One encoding per behaviour.** An empty id list is the zero hash and a count of 0, and nothing else
+>    (`EmptyIdsEncoding`): a second encoding of one job would be a second job id.
+> 2. **The seed is all zeros exactly when the class draws no randomness** (`SeedNotUsed` /
+>    `SeedRequired`): a deterministic class never has two job ids for one computation, and a class that
+>    draws randomness never runs under the deterministic classes' encoding of "no seed". `R`'s key is the
+>    seed and its `position` is the job's `image_index` (0 for an embedding), so the same (class, prompt,
+>    parameters, seed, index) is the same image in any job.
+> 3. **`prompt_mode` is the user's (0) only.** A generative class has no canonical prompt in v1; the
+>    canonical seed (`gen_canonical_seed_v1(anchor) = H64(key
+>    "misaka-palw/gen-v1/canonical-seed/v1", anchor)[..32]`, ADR-0074 D1 carried over) is fixed now so a
+>    later canonical job cannot differ.
+> 4. **The job's scalars are the class's, in its declared order.** An image class's `guidance_q` is the
+>    scalar its guidance offer names, and the step count's POSITION among the class's offered counts is
+>    the scalar its steps offer names (`offers.scalars` holds the intervals both lie in).
+> 5. **An embedding embeds text or one image, never both**: a class takes text when it offers a prompt
+>    (`max_prompt_tokens > 0`, no image slot) and one image when it offers one slot and no prompt
+>    (`InputNotOffered` otherwise).
+> 6. **A negative prompt only where the class offers it** (`NegativePromptNotOffered`); ids are held to
+>    the least token bound of the stages that read them (`palw_gen_token_bound_v1`).
+> 7. **The profile offers are part of the class** (`PalwGenProfileOffersV1`, hashed into the class id):
+>    an Image class's sampler id, guidance interval and the scalars its job maps to; an Embedding
+>    class's pooling and widths (`dims == [output.shape[1]]`); a registration whose profile offers do
+>    not match its profile or its bindings is refused at admission.
+
+**The claim.** A tensor claim's execution root commits the job, the class, the step tree and the output:
+
+```text
+tensor_execution_root = H64(key "misaka-palw/gen/tensor-execution-root/v1",
+                            job_id | class_id | le64(step_leaf_count) | step_root | output_root)
+```
+
+its own key, so it never verifies as a text claim's, an FP, a legacy or an IR one. The binding a court
+move carries is `PalwGenTensorBindingV1 { version, job, stage_roots, step_leaf_count, output_root,
+committed_execution_root }` (`PalwGenBindingV1::{Text, Tensor}` is the one type a generative close
+carries; the cone close, the root claim and the dissection's bottom are shared by both). `output_root`
+is `misaka_palw_gen::output_root_v1` over the output node's elements as the kind's canonical bytes,
+cut at the output node's step tiles (PALW-OUT-3). The worker (`palw_gen_execute_tensor_v1`) runs the
+pipeline with `R` keyed by the job's seed at the job's item index, commits the one step tree and then
+the output.
+
+**The output close** (`GenOutputTile`, `PalwCourtVerdictProofV2` tag 13, appended last) holds one output
+tile to the claim's own step tree. It carries the binding, the output tile's index, bytes and path under
+`output_root`, and the output node's committed step tile of the same lanes with its path under its
+stage's root (`PalwGenOutputCloseV1`). The court checks, in this order, and the first failure decides:
+
+1. the version; the binding against the claim (its class, its parts producing the claim's execution
+   root) and the registry, and the leaf count the job's trips make canonical (`StepLeafCountNotCanonical`
+   convicts from the binding alone, as for every generative close);
+2. the opened step tile is the output node's step tile for this output tile (`NotTheOutputStepTile`:
+   the inverse of PALW-OUT-3's alignment, `palw_gen_output_step_coord_v1`), and — in a session — the leaf
+   the ladder narrowed to (`NotTheNarrowedLeaf`);
+3. the step tile is under its stage's root (`LeafNotProven`) and the output tile under `output_root`
+   (`TileNotProven`) — evidence that does not hold **convicts nobody**;
+4. lane by lane, `palw_gen_output_tile_check_v1`: a lane outside the output node's proven interval is
+   `TirValueOutsideProvenInterval { value_index }` (PALW-TIR-33), a lane whose canonical bytes are not
+   the committed value's is `TirOutputDigestMismatch { value_index }` (discriminant 21, the lane within the
+   tile), both hashed into the evidence id.
+
+An output close needs no recomputation, and no weight: it is a statement about two things the executor
+committed. A claim whose step tree is honest and whose canonical output is not has no divergent leaf for a
+ladder to reach; the challenger narrows to the output node's step tile it names (a challenger chooses the
+leaf it argues at, and the close decides who is right there).
+
+**A node's halves** (`misaka-palw-base0`, `gen_tensor_worker.rs`): `GenHeldClassV1::run_tensor` (the job
+held to the class and its inputs to the job, then the run), `gen_tensor_answer_v1` (one request frame in,
+one answer out), `gen_tensor_seat_judge_v1` (the replay's execution root held to the claim's — a
+difference is the court's question, never a sampled conviction), `GenTensorCaptureV1` (the inputs, every
+committed leaf and the claim's canonical output, lies included, from which the accused's execution is
+rebuilt), `gen_tensor_court_candidates_v1` (the moves a party files at a leaf) and
+`gen_tensor_output_audit_v1` (the first output tile that is not the accused's own step tile's). The
+operator's path (`misaka-palw-sdk`, `gen_class.rs`) is `lower (tir-lower: embedding) → declare layout →
+registration gate offline → PALWTIR2 container`.

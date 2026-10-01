@@ -240,7 +240,9 @@ pub enum PalwGenJobErrorV1 {
     PromptModeNotOffered(u8),
     #[error("a seed on a class that draws no randomness: its seed is 32 zero bytes (two job ids for one computation)")]
     SeedNotUsed,
-    #[error("a zero seed on a class that draws randomness: R's key is the job's seed, and an all-zero one is the deterministic classes' encoding")]
+    #[error(
+        "a zero seed on a class that draws randomness: R's key is the job's seed, and an all-zero one is the deterministic classes' encoding"
+    )]
     SeedRequired,
     #[error("the class cannot be decoded: {0}")]
     ClassUndecodable(String),
@@ -308,7 +310,10 @@ pub fn palw_gen_class_draws_randomness_v1(programs: &[misaka_palw_tir::program_v
 /// court re-asks of a claim's job: the version, the class, the profile, the seed rule, the modes and
 /// every body field against the class's offers. (The network's domain and arming are
 /// [`palw_gen_job_admitted_v1`]'s; the ids are [`palw_gen_job_ids_admitted_v1`]'s.)
-pub fn palw_gen_job_resolve_class_v1(job: &PalwGenJobV1, row: &PalwGenClassRecordV1) -> Result<PalwGenAcceptedJobV1, PalwGenJobErrorV1> {
+pub fn palw_gen_job_resolve_class_v1(
+    job: &PalwGenJobV1,
+    row: &PalwGenClassRecordV1,
+) -> Result<PalwGenAcceptedJobV1, PalwGenJobErrorV1> {
     use PalwGenJobErrorV1 as E;
     if job.version != PALW_GEN_JOB_VERSION_V1 {
         return Err(E::Version(job.version));

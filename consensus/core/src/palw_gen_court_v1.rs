@@ -150,7 +150,11 @@ pub fn palw_gen_stage_answers_v1(
                 Binding::StageFinal { stage: up } => {
                     let up_prog = &programs[pipeline.stages[*up as usize].program as usize];
                     let iv = misaka_palw_tir::interval_v2::output_interval_v2(up_prog)?;
-                    PalwGenInputAnswerV1::Edge { lo: iv.lo, hi: iv.hi, kept: d.shape.iter().fold(1u64, |acc, x| acc.saturating_mul(*x as u64)) }
+                    PalwGenInputAnswerV1::Edge {
+                        lo: iv.lo,
+                        hi: iv.hi,
+                        kept: d.shape.iter().fold(1u64, |acc, x| acc.saturating_mul(*x as u64)),
+                    }
                 }
                 Binding::JobImage { index } => {
                     let image = images.get(*index as usize).ok_or_else(|| missing(format!("the job has no image {index}")))?;

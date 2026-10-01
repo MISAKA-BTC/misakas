@@ -659,7 +659,11 @@ fn check_profile_offers(class: &PalwGenClassV1, profile: PalwGenProfileV1) -> Re
             let mut mapped = vec![false; offers.scalars.len()];
             if let Some(g) = &img.guidance {
                 let Some(offer) = offers.scalars.get(g.scalar as usize) else {
-                    return bad(format!("the guidance scalar {} is not among the {} job scalars offered", g.scalar, offers.scalars.len()));
+                    return bad(format!(
+                        "the guidance scalar {} is not among the {} job scalars offered",
+                        g.scalar,
+                        offers.scalars.len()
+                    ));
                 };
                 if g.lo > g.hi || offer.lo != g.lo as i64 || offer.hi != g.hi as i64 {
                     return bad(format!(
@@ -688,7 +692,9 @@ fn check_profile_offers(class: &PalwGenClassV1, profile: PalwGenProfileV1) -> Re
                 mapped[index as usize] = true;
             }
             if let Some(i) = mapped.iter().position(|m| !m) {
-                return bad(format!("job scalar {i} is neither the guidance nor the steps position: the image body has no field for it"));
+                return bad(format!(
+                    "job scalar {i} is neither the guidance nor the steps position: the image body has no field for it"
+                ));
             }
             Ok(())
         }
@@ -705,13 +711,14 @@ fn check_profile_offers(class: &PalwGenClassV1, profile: PalwGenProfileV1) -> Re
             }
             Ok(())
         }
-        (PalwGenProfileV1::Image | PalwGenProfileV1::Embedding, other) => {
-            bad(format!("a {profile:?} class carries {} profile offers", match other {
+        (PalwGenProfileV1::Image | PalwGenProfileV1::Embedding, other) => bad(format!(
+            "a {profile:?} class carries {} profile offers",
+            match other {
                 PalwGenProfileOffersV1::None => "no",
                 PalwGenProfileOffersV1::Image(_) => "image",
                 PalwGenProfileOffersV1::Embedding(_) => "embedding",
-            }))
-        }
+            }
+        )),
         (_, PalwGenProfileOffersV1::None) => Ok(()),
         (_, _) => bad(format!("a {profile:?} class offers nothing of its own")),
     }

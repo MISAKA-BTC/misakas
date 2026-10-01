@@ -243,10 +243,15 @@ fn an_input_outside_its_declared_interval_is_refused_by_name_and_the_ends_are_ac
                             &LIMITS,
                         );
                         if in_interval {
-                            assert!(out.is_ok(), "input {k} element {idx} at {p}: the interval's own end {value} is accepted: {out:?}");
+                            assert!(
+                                out.is_ok(),
+                                "input {k} element {idx} at {p}: the interval's own end {value} is accepted: {out:?}"
+                            );
                             accepted_ends += 1;
                         } else {
-                            let Err(DemandError::Tir(t)) = out else { panic!("input {k} element {idx} at {p}: {value} outside [{lo}, {hi}] must be refused") };
+                            let Err(DemandError::Tir(t)) = out else {
+                                panic!("input {k} element {idx} at {p}: {value} outside [{lo}, {hi}] must be refused")
+                            };
                             assert_eq!(t.kind, TirErrorKind::Operand, "{t}");
                             if dtype.contains(value) {
                                 assert!(t.msg.contains("outside its interval"), "refused by name: {}", t.msg);
@@ -373,7 +378,8 @@ fn the_range_evaluator_holds_an_input_to_its_interval() {
     for end in [0i128, 8] {
         let mut src = source(&r);
         src.inputs.get_mut(&(0, Some(3))).unwrap()[0] = end;
-        eval_demanded_range_v2(&r.p, &info, &request, &mut src, &LIMITS).unwrap_or_else(|e| panic!("{end} is the interval's end: {e:?}"));
+        eval_demanded_range_v2(&r.p, &info, &request, &mut src, &LIMITS)
+            .unwrap_or_else(|e| panic!("{end} is the interval's end: {e:?}"));
     }
     let _ = honest;
 }
