@@ -2027,8 +2027,14 @@ mod tests {
         };
         palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("created");
         let marker = std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
-        // The release line's two flags keep the marker lines that line writes; RFC-0003 / RFC-0004's four share one.
-        assert!(marker.contains("tir2_at=24\nmodel_court_at=26\nextra_at=gen:28,decode_rules:32,fp_v5:none,improve:36\n"), "{marker}");
+        // The release line's two flags keep the marker lines that line writes; the capacity ramp's steps share `capacity_at=` (none
+        // here); RFC-0003 / RFC-0004's four share `extra_at=`; and the flags after it have a line each (`held_chunks_at=`).
+        assert!(
+            marker.contains(
+                "tir2_at=24\nmodel_court_at=26\ncapacity_at=none\nextra_at=gen:28,decode_rules:32,fp_v5:none,improve:36\nheld_chunks_at=none\n"
+            ),
+            "{marker}"
+        );
         std::fs::create_dir_all(dir.join("datadir")).unwrap();
         palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("kept");
         let moved = PalwDrillExtraFencesV1 { improve_at: Some(40), ..set };
