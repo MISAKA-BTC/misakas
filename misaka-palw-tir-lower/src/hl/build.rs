@@ -466,6 +466,53 @@ impl Builder<'_> {
             let f = self.layer_block(ls, kind_index)?;
             return Ok(vec![a, f]);
         }
+        // DeepSeek sparse attention (`ATTN_TOKEN_INDEXER_V1`): the indexer's selection (about a hundred nodes) joins an MLA
+        // mixer that is already a large block, and the layer's block would pass the normal form's 512 nodes. The layer
+        // runs as its mixer half and its FFN half, the residual carried between them (as a sandwich layer does).
+        if let Residual::Sequential { pre_mixer, post_mixer, pre_ffn, post_ffn, multiplier } = &ls.residual
+            && matches!(&ls.mixer, Mixer::Mla(m) if m.indexer.is_some())
+            && ls.ffn != Ffn::None
+        {
+            let d = self.s.hidden_size;
+            let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
+            let mut bk = Bk { nodes: vec![] };
+            let x = Ref::Carry(0);
+            let n1 = match pre_mixer {
+                Some(n) => self.full_norm(&mut bk, x, *n, "norm.mix", d, true)?,
+                None => x,
+            };
+            let mut m = self.mixer(&mut bk, &ls.mixer, n1)?;
+            if let Some(n) = post_mixer {
+                m = self.full_norm(&mut bk, m, *n, "norm.post_mix", d, true)?;
+            }
+            if *multiplier != 1.0 {
+                m = bk.f(Op::Scale { c: *multiplier }, vec![m], d, "mix.scaled");
+            }
+            let h = bk.f(Op::Add, vec![x, m], d, "resid.mix");
+            let outputs = self.layer_outputs(h);
+            self.blocks.push(Block { name: format!("{name}.mix"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+            let a = self.blocks.len() - 1;
+            let mut bk = Bk { nodes: vec![] };
+            let h = Ref::Carry(0);
+            let n2 = match pre_ffn {
+                Some(n) => self.full_norm(&mut bk, h, *n, "norm.ffn", d, true)?,
+                None => h,
+            };
+            let mut f = self.ffn(&mut bk, &ls.ffn, n2)?;
+            if let Some(n) = post_ffn {
+                f = self.full_norm(&mut bk, f, *n, "norm.post_ffn", d, true)?;
+            }
+            if *multiplier != 1.0 {
+                f = bk.f(Op::Scale { c: *multiplier }, vec![f], d, "ffn.scaled");
+            }
+            let mut out = bk.f(Op::Add, vec![h, f], d, "resid.ffn");
+            if ls.post_scale != 1.0 {
+                out = bk.f(Op::Scale { c: ls.post_scale }, vec![out], d, "resid.rescaled");
+            }
+            let outputs = self.layer_outputs(out);
+            self.blocks.push(Block { name: format!("{name}.ffn"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+            return Ok(vec![a, self.blocks.len() - 1]);
+        }
         // A hyper-connection layer: the per-layer n-gram embedding (its own block when the layer has
         // one — it is as large as a mixer), the mixer half (the gated mix of the streams, the mixer,
         // the injection back) and the FFN half the same way.
@@ -1043,10 +1090,12 @@ impl Builder<'_> {
         let d = self.s.hidden_size;
         let (h, nope, rope, vd, r) = (a.heads, a.qk_nope_head_dim, a.qk_rope_head_dim, a.v_head_dim, a.kv_lora_rank);
         let qd = nope + rope;
+        let mut qlatent = None;
         let q = match a.q_lora_rank {
             Some(qr) => {
                 let qa = self.linear(bk, x, "mla.q_a", qr, d, a.a_bias, true, "mla.q_a")?;
                 let qa = self.full_norm(bk, qa, a.q_a_norm, "mla.q_a_norm", qr, true)?;
+                qlatent = Some((qa, qr));
                 self.linear(bk, qa, "mla.q_b", h * qd, qr, false, true, "mla.q")?
             }
             None => self.linear(bk, x, "mla.q", h * qd, d, false, true, "mla.q")?,
@@ -1072,9 +1121,45 @@ impl Builder<'_> {
         bk.append(c, ls);
         bk.append(kr, rs);
         let kvb = self.param("mla.kv_b.w", vec![h * (nope + vd), r], true, Init::Normal(W_STD))?;
+        // DeepSeek sparse attention (`ATTN_TOKEN_INDEXER_V1`): the indexer's query from the MLA's q-latent, its key from
+        // the layer input, its head weights, and the history of its keys.
+        let mut indexer = None;
+        let mut extra: Vec<Ref> = Vec::new();
+        if let Some(ix) = &a.indexer {
+            let Some((qa, qr)) = qlatent else {
+                return Err(LowerError::not_lowerable("a token indexer needs the MLA's q-latent (q_lora_rank): its query is read from it"));
+            };
+            let (hi, di) = (ix.heads, ix.head_dim);
+            if ix.rope.offset != 0 || ix.rope.rotary_dim > di || ix.rope.rotary_dim == 0 {
+                return Err(LowerError::not_lowerable("a token indexer's rotation must cover the first lanes of its head (offset 0, 0 < rotary_dim <= head_dim)"));
+            }
+            let it = self.rope_table(&ix.rope.freqs);
+            let iq = self.linear(bk, qa, "mla.idx.q", hi * di, qr, false, true, "mla.idx.q")?;
+            let iq = bk.f(
+                Op::Rope { heads: hi, head_dim: di, rotary_dim: ix.rope.rotary_dim, offset: 0, style: ix.rope.style, table: it },
+                vec![iq, Ref::Pos],
+                hi * di,
+                "mla.idx.q_rope",
+            );
+            let ik = self.linear(bk, x, "mla.idx.k", di, d, false, true, "mla.idx.k")?;
+            let ik = self.norm(bk, ik, ix.k_norm, "mla.idx.k_norm", di, 1, vec![di], true, "mla.idx.k_normed")?;
+            let ik = bk.f(
+                Op::Rope { heads: 1, head_dim: di, rotary_dim: ix.rope.rotary_dim, offset: 0, style: ix.rope.style, table: it },
+                vec![ik, Ref::Pos],
+                di,
+                "mla.idx.k_rope",
+            );
+            let iw = self.linear(bk, x, "mla.idx.wp", hi, d, false, true, "mla.idx.wp")?;
+            let ih = self.state("mla.idx.k_hist", StateKind::Hist { window: None }, vec![di], 0.0)?;
+            bk.append(ik, ih);
+            indexer = Some(TokenIndexDims { heads: hi, dim: di, topk: ix.topk });
+            extra = vec![iq, iw, ih];
+        }
+        let mut ins = vec![q, ls, rs, kvb];
+        ins.extend(extra);
         let o = bk.f(
-            Op::MlaAttention { heads: h, nope, rope, v_dim: vd, kv_lora: r, scale: a.scale },
-            vec![q, ls, rs, kvb],
+            Op::MlaAttention { heads: h, nope, rope, v_dim: vd, kv_lora: r, scale: a.scale, indexer },
+            ins,
             h * vd,
             "mla.ctx",
         );

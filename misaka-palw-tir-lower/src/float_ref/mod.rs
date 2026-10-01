@@ -670,14 +670,27 @@ impl<'a> Session<'a> {
                 self.sub_site(prefix, &node.site, "probs", &probs);
                 one(out)
             }
-            Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale } => {
+            Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale, indexer } => {
                 let (Ref::State(ls), Ref::State(rs)) = (ins[1], ins[2]) else { return Err(LowerError::eval("MLA without states")) };
                 let q = x(0)?.to_vec();
                 let kvb = self.param(ins[3], layer)?;
+                // DeepSeek sparse attention: the indexer's scores over the window and the tokens it keeps.
+                let keep: Option<Vec<bool>> = match indexer {
+                    Some(ix) => {
+                        let (iq, iw) = (x(4)?.to_vec(), x(5)?.to_vec());
+                        let Ref::State(ihs) = ins[6] else { return Err(LowerError::eval("a token indexer without its key history")) };
+                        let keys: &[Vec<f32>] = self.hist.get(&(ihs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
+                        let scores = token_index_scores(&iq, &iw, keys, ix.heads, ix.dim);
+                        let sv: Vec<f32> = scores.iter().map(|v| *v as f32).collect();
+                        self.sub_site(prefix, &node.site, "idx_score", &sv);
+                        Some(token_index_keep(&scores, ix.topk))
+                    }
+                    None => None,
+                };
                 let lat: &[Vec<f32>] = self.hist.get(&(ls, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let kr: &[Vec<f32>] = self.hist.get(&(rs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let (mut qt, mut ctx) = (Vec::new(), Vec::new());
-                let out = mla_traced(&q, &kvb.data, lat, kr, *heads, *nope, *rope, *v_dim, *kv_lora, *scale, &mut qt, &mut ctx);
+                let out = mla_traced_keep(&q, &kvb.data, lat, kr, *heads, *nope, *rope, *v_dim, *kv_lora, *scale, keep.as_deref(), &mut qt, &mut ctx);
                 // The absorbed query and the latent context: where an integer MLA narrows.
                 self.sub_site(prefix, &node.site, "qt", &qt);
                 self.sub_site(prefix, &node.site, "latent_ctx", &ctx);
@@ -1156,23 +1169,71 @@ pub fn mla_traced(
     qt_out: &mut Vec<f32>,
     ctx_out: &mut Vec<f32>,
 ) -> Vec<f32> {
+    mla_traced_keep(q, kvb, lat, kr, heads, nope, rope, vd, r, scale, None, qt_out, ctx_out)
+}
+
+/// The indexer's scores of DeepSeek sparse attention over its key history (`ATTN_TOKEN_INDEXER_V1`):
+/// `s_t = Σ_h w_h · ReLU(q_h · k_t)`. The positive factors `head_dim^-½` and `heads^-½` of the model's formula
+/// move no rank and are left out, so a score is in the units the integer lowering calibrates.
+pub fn token_index_scores(iq: &[f32], iw: &[f32], keys: &[Vec<f32>], heads: usize, dim: usize) -> Vec<f64> {
+    keys.iter()
+        .map(|k| {
+            (0..heads)
+                .map(|h| {
+                    let dot: f64 = (0..dim).map(|j| iq[h * dim + j] as f64 * k[j] as f64).sum();
+                    iw[h] as f64 * dot.max(0.0)
+                })
+                .sum()
+        })
+        .collect()
+}
+
+/// The tokens a top-`topk` selection keeps: the `min(topk, n)` best scores, **ties to the lowest index** (the IR's
+/// `TopK` rule).
+pub fn token_index_keep(scores: &[f64], topk: usize) -> Vec<bool> {
+    let mut keep = vec![false; scores.len()];
+    for i in top_k_indices(scores, topk.min(scores.len())) {
+        keep[i] = true;
+    }
+    keep
+}
+
+/// [`mla_traced`] over the history rows `keep` marks (all of them when `None`): DeepSeek sparse attention's softmax.
+#[allow(clippy::too_many_arguments)]
+pub fn mla_traced_keep(
+    q: &[f32],
+    kvb: &[f32],
+    lat: &[Vec<f32>],
+    kr: &[Vec<f32>],
+    heads: usize,
+    nope: usize,
+    rope: usize,
+    vd: usize,
+    r: usize,
+    scale: f64,
+    keep: Option<&[bool]>,
+    qt_out: &mut Vec<f32>,
+    ctx_out: &mut Vec<f32>,
+) -> Vec<f32> {
     let qd = nope + rope;
     let mut out = vec![0f32; heads * vd];
+    let rows: Vec<usize> = (0..lat.len()).filter(|j| keep.is_none_or(|k| k[*j])).collect();
     for h in 0..heads {
-        let rows = &kvb[h * (nope + vd) * r..(h + 1) * (nope + vd) * r];
-        let (wk, wv) = rows.split_at(nope * r);
+        let kv_rows = &kvb[h * (nope + vd) * r..(h + 1) * (nope + vd) * r];
+        let (wk, wv) = kv_rows.split_at(nope * r);
         let qn = &q[h * qd..h * qd + nope];
         let qr = &q[h * qd + nope..(h + 1) * qd];
         let qt: Vec<f64> = (0..r).map(|c| (0..nope).map(|i| wk[i * r + c] as f64 * qn[i] as f64).sum()).collect();
-        let sc: Vec<f64> = (0..lat.len())
-            .map(|j| {
+        let sc: Vec<f64> = rows
+            .iter()
+            .map(|&j| {
                 let a: f64 = qt.iter().zip(&lat[j]).map(|(x, y)| x * *y as f64).sum();
                 let b: f64 = qr.iter().zip(&kr[j]).map(|(x, y)| *x as f64 * *y as f64).sum();
                 (a + b) * scale
             })
             .collect();
         let p = softmax_with_sink(&sc, None);
-        let ctx: Vec<f64> = (0..r).map(|c| (0..lat.len()).map(|j| p[j] * lat[j][c] as f64).sum()).collect();
+        let ctx: Vec<f64> = (0..r).map(|c| rows.iter().enumerate().map(|(n, &j)| p[n] * lat[j][c] as f64).sum()).collect();
         qt_out.extend(qt.iter().map(|v| *v as f32));
         ctx_out.extend(ctx.iter().map(|v| *v as f32));
         for i in 0..vd {

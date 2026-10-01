@@ -63,6 +63,7 @@ pub mod bidir;
 pub mod encdec;
 pub mod qlinear;
 pub mod vision;
+mod dsa;
 pub mod fill;
 mod generic;
 pub mod stream;
@@ -1684,7 +1685,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             };
             one(lower_attention(b, cx, lb, &q, (kw, kk), (vw, vk), shape, &extra, &site, &want)?)
         }
-        Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale } => {
+        Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale, indexer } => {
             let q = operand(lb, node.inputs[0])?;
             let q = codes(b, cx, lb, &q)?;
             let (hl::Ref::State(ls), hl::Ref::State(rs)) = (node.inputs[1], node.inputs[2]) else {
@@ -1696,7 +1697,24 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let dims = MlaDims { heads: *heads, nope: *nope, rope: *rope, vd: *v_dim, r: *kv_lora };
             let want =
                 if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
-            one(lower_mla(b, cx, lb, &q, lat, kr, kvb, dims, *scale, &site, &want)?)
+            // DeepSeek sparse attention: the indexer's query, head weights and key window.
+            let idx = match indexer {
+                Some(ix) => {
+                    let iq = operand(lb, node.inputs[4])?;
+                    let iq = codes(b, cx, lb, &iq)?;
+                    let iw = operand(lb, node.inputs[5])?;
+                    let iw = codes(b, cx, lb, &iw)?;
+                    let hl::Ref::State(ih) = node.inputs[6] else { return Err(LowerError::eval("internal: a token indexer without its key history")) };
+                    let keys = lb.windows.get(&ih).cloned().ok_or_else(|| LowerError::eval("internal: indexer keys read before their append"))?;
+                    let window = match hl.states[ih as usize].kind {
+                        StateKind::Hist { window } => hist_window(cx, lb.hb, window),
+                        StateKind::Fixed => return Err(LowerError::eval("internal: the indexer's keys are a Fixed state")),
+                    };
+                    Some(dsa::IndexInputs { q: iq, w: iw, keys, heads: ix.heads, dim: ix.dim, topk: ix.topk, window })
+                }
+                None => None,
+            };
+            one(lower_mla(b, cx, lb, &q, lat, kr, kvb, dims, *scale, &site, &want, idx.as_ref())?)
         }
         Op::TokenShift => {
             // The previous position's row (zeros at position 0, as the state starts), and this
@@ -4272,6 +4290,7 @@ fn lower_mla(
     scale: f64,
     site: &str,
     want: &Want,
+    idx: Option<&dsa::IndexInputs>,
 ) -> Result<Val> {
     let MlaDims { heads, nope, rope, vd, r } = dims;
     let (h32, n32, ro32, v32, r32) = (heads as u32, nope as u32, rope as u32, vd as u32, r as u32);
@@ -4387,6 +4406,15 @@ fn lower_mla(
     let l2 = narrow(b, s2, m2, sh2, None, DType::I32);
     let ls = b.add(l1, l2, DType::I64);
     let logits = b.clamp(ls, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    // DeepSeek sparse attention: the softmax runs over the indexer's top-k tokens only.
+    let logits = match idx {
+        Some(ix) => {
+            let vis = dsa::token_index_mask(b, cx, lb, ix, site)?;
+            let floor = b.c(DType::I32, i32::MIN as i128);
+            b.select(vis, logits, floor, DType::I32)
+        }
+        None => logits,
+    };
     let probs = b.softmax_shifted(logits, 24 - LOGIT_Q);
     // Latent context, then the value half.
     let ctx = b.matmul(probs, lw, DType::I64);

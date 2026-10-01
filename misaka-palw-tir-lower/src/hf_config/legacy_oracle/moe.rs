@@ -422,6 +422,7 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
         a_bias,
         rope,
         scale,
+        indexer: None,
     };
     let r = RouterSpec {
         scoring,

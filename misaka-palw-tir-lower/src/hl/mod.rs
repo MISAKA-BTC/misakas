@@ -177,6 +177,11 @@ pub enum Op {
     },
     /// Multi-head latent attention over a compressed history (DeepSeek). Keys/values are
     /// `kv_b · latent` per head plus the shared rotary key. In: `[q, State(latent), State(k_rope), kv_b]`.
+    ///
+    /// With an `indexer` (`ATTN_TOKEN_INDEXER_V1`, DeepSeek sparse attention) the softmax runs over the `topk` best
+    /// tokens of the indexer's score only (ties to the lowest index of the history window). In: `[q, State(latent),
+    /// State(k_rope), kv_b, iq [heads·dim], iw [heads], State(idx_keys)]`: the indexer's rotated query, its head
+    /// weights and the history of its rotated keys (this position's row already appended).
     MlaAttention {
         heads: usize,
         nope: usize,
@@ -184,6 +189,7 @@ pub enum Op {
         v_dim: usize,
         kv_lora: usize,
         scale: f64,
+        indexer: Option<TokenIndexDims>,
     },
     // ── recurrences (Fixed states) ──
     /// Depthwise causal convolution over the last `kernel` inputs; the state keeps `kernel−1`
@@ -312,6 +318,14 @@ pub enum Op {
         bias: bool,
         input_scaled: bool,
     },
+}
+
+/// The shape of a token indexer ([`crate::spec::TokenIndexerSpec`]) as the HL op carries it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct TokenIndexDims {
+    pub heads: usize,
+    pub dim: usize,
+    pub topk: usize,
 }
 
 impl Op {

@@ -68,10 +68,16 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     }
                     c.transcendental += *heads as u64; // per row, approximated below by softmax exps
                 }
-                Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, .. } => {
+                Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, indexer, .. } => {
                     let (h, r_) = (*heads as u64, *kv_lora as u64);
                     c.macs_fixed += h * (*nope as u64 * r_ + *v_dim as u64 * r_);
                     c.macs_per_hist_row += h * (2 * r_ + *rope as u64);
+                    if let Some(ix) = indexer {
+                        // The scorer: one dot per (index head, history row), then the head-weighted sum; the top-k
+                        // threshold's radix passes are elementwise over the row (about 16 compares and adds a pass).
+                        c.macs_per_hist_row += (ix.heads * ix.dim + ix.heads) as u64;
+                        c.elementwise += 0;
+                    }
                 }
                 Op::GatedDelta { v_heads, dk, dv, .. } => c.macs_fixed += 4 * (*v_heads * *dk * *dv) as u64,
                 Op::SelectiveScan { inner, state } => c.macs_fixed += 3 * (*inner * *state) as u64,

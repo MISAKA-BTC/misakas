@@ -280,6 +280,20 @@ fn deepseek_mla_and_routing() {
     assert_eq!((r.scoring, r.selection_bias, r.scale), (Scoring::Sigmoid, true, 2.5));
     assert_eq!(r.groups.map(|g| (g.n_group, g.topk_group, g.score)), Some((8, 4, GroupScore::Top2Sum)));
     assert!(matches!(&s.layers[2].ffn, Ffn::Mlp(_)));
+    // DeepSeek-V3.2-Exp: V3's MLA and routing plus DeepSeek sparse attention in every layer (`ATTN_TOKEN_INDEXER_V1`): an
+    // indexer of 64 heads × 128 over the top 2,048 tokens, rotated half-split over the first 64 lanes of its head with the
+    // same yarn frequencies as the MLA; each layer runs as its mixer half and its FFN half (the indexer's selection
+    // does not fit one block's 512 nodes with an MLA mixer and a MoE).
+    let (s, p) = ok("deepseek-v3.2-exp");
+    let Mixer::Mla(m) = &s.layers[0].mixer else { panic!() };
+    let ix = m.indexer.as_ref().expect("the indexer");
+    assert_eq!((ix.heads, ix.head_dim, ix.topk, ix.rope.rotary_dim, ix.rope.offset), (64, 128, 2048, 64, 0));
+    assert_eq!(ix.rope.style, crate_rope::RopeStyle::Half);
+    assert_eq!(m.rope.style, crate_rope::RopeStyle::Interleaved);
+    assert_eq!(ix.rope.freqs, m.rope.freqs);
+    assert!(s.layers.iter().all(|l| matches!(&l.mixer, Mixer::Mla(m) if m.indexer.is_some())));
+    assert!(matches!(&s.layers[2].ffn, Ffn::Mlp(_)) && matches!(&s.layers[3].ffn, Ffn::Moe(_)));
+    assert_eq!(p.schedule.len(), 2 * 61, "a mixer half and an FFN half a layer");
 }
 
 #[test]

@@ -77,7 +77,9 @@ fn every_lowerable_real_configuration_is_admitted() {
     // name and number, as it should be; every other lowerable configuration is admitted. The FP8
     // export is the same model (its block-scale quantisation is a descriptor now, so it lowers and
     // meets the same ceiling instead of stopping at "no descriptor").
-    assert_eq!(refused, vec!["deepseek-v3-bf16.json".to_string(), "deepseek-v3-fp8.json".to_string()]);
+    // DeepSeek-V3.2-Exp (DSA) is the same model plus the indexer (+5.7 % of the position's MACs): past the ceiling at 2^18 too,
+    // admitted at a window of 2^16 (`tests/dsa.rs::deepseek_v32_is_admitted`).
+    assert_eq!(refused, vec!["deepseek-v3-bf16.json".to_string(), "deepseek-v3-fp8.json".to_string(), "deepseek-v3.2-exp.json".to_string()]);
 }
 
 /// DeepSeek-V3's attention scales with its window: at `2^17` it still passes `2^40` MACs a

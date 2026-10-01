@@ -505,6 +505,13 @@ fn mla(m: &mut M, a: &MlaSpec) -> Result<()> {
     }
     m.norm("mla.kv_a_norm", "mla.kv_a_norm", &a.kv_a_norm)?;
     m.lin("mla.kv_b", "mla.kv_b", false)?;
+    // The token indexer's own projections (`ATTN_TOKEN_INDEXER_V1`): wq_b, wk, the key's LayerNorm, weights_proj.
+    if let Some(ix) = &a.indexer {
+        m.lin("mla.idx.q", "mla.idx.q", false)?;
+        m.lin("mla.idx.k", "mla.idx.k", false)?;
+        m.norm("mla.idx.k_norm", "mla.idx.k_norm", &ix.k_norm)?;
+        m.lin("mla.idx.wp", "mla.idx.wp", false)?;
+    }
     m.lin("mla.o", "mla.o", false)
 }
 

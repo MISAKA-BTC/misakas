@@ -332,6 +332,38 @@ impl QTemperature {
     }
 }
 
+/// **`ATTN_TOKEN_INDEXER_V1`** — DeepSeek sparse attention (DSA): a learned scorer chooses which `topk` of the visible
+/// tokens an MLA layer attends over (`DeepseekV32Indexer`, `GlmMoeDsaIndexer`).
+///
+/// For a query at position `p` the indexer reads the MLA's **q-latent** `qr = q_a_norm(q_a x)` (so the layer must have
+/// `q_lora_rank`), projects it to `heads` query heads of `head_dim` (`wq_b`), rotates the first `rope.rotary_dim` lanes of
+/// each (the rotated lanes come FIRST, the opposite of MLA's nope-first layout; `rope.style` is rotate-half for
+/// DeepSeek-V3.2 and interleaved for GLM-MoE-DSA), and scores every visible token `t` by
+///
+/// ```text
+/// s_t = Σ_h w_h · ReLU( head_dim^-½ · q_h · k_t ),   w = weights_proj(x) · heads^-½
+/// k_t = rotate( LayerNorm(wk x_t) )                     one head, cached per position
+/// ```
+///
+/// The attention is the layer's ordinary MLA softmax restricted to the `min(topk, p + 1)` best tokens — **ties to the
+/// lowest index** (the IR's `TopK` rule; `torch.topk` leaves its tie order unspecified, and ReLU makes exact-zero scores
+/// common). When the window holds at most `topk` tokens every token is selected and the layer is dense MLA.
+///
+/// Not [`SparseBlockSpec`]: that scores block means of raw keys with the layer input as the query.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TokenIndexerSpec {
+    /// `index_n_heads`.
+    pub heads: usize,
+    /// `index_head_dim`.
+    pub head_dim: usize,
+    /// `index_topk`.
+    pub topk: usize,
+    /// The rotation of the first `rotary_dim` lanes of the indexer's query and key (`offset` 0).
+    pub rope: RopeSpec,
+    /// The key's LayerNorm (gain, bias; eps 1e-6 in both implementations).
+    pub k_norm: NormSpec,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MlaSpec {
     pub heads: usize,
@@ -347,6 +379,9 @@ pub struct MlaSpec {
     pub a_bias: bool,
     pub rope: RopeSpec,
     pub scale: f64,
+    /// **`ATTN_TOKEN_INDEXER_V1`**: DeepSeek sparse attention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexer: Option<TokenIndexerSpec>,
 }
 
 /// Which key head a value head reads when `v_heads > k_heads`.
