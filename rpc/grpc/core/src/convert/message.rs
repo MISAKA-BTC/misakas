@@ -870,6 +870,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwNodeStatusResponse>, protowire::Ge
         lane_alarm: item.lane_alarm.clone(),
         genesis_hash: item.genesis_hash.clone(),
         drill_salt_id: item.drill_salt_id.clone(),
+        verification: item.verification.clone(),
         error: None,
     }
 });
@@ -3018,6 +3019,7 @@ try_from!(item: &protowire::GetPalwNodeStatusResponseMessage, RpcResult<kaspa_rp
         lane_alarm: item.lane_alarm.clone(),
         genesis_hash: item.genesis_hash.clone(),
         drill_salt_id: item.drill_salt_id.clone(),
+        verification: item.verification.clone(),
     }
 });
 try_from!(&protowire::GetPalwRoundLaneRequestMessage, kaspa_rpc_core::GetPalwRoundLaneRequest);

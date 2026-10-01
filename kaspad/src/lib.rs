@@ -31,6 +31,9 @@ pub mod palw_licence_order;
 pub mod palw_memory_ledger;
 pub mod palw_panel;
 pub mod palw_producer;
+/// 2026-10-01 (F3): the producer holds its attempt lane while its own claims are not getting licensed
+/// (node policy).
+pub mod palw_producer_backpressure;
 /// The 2026-09-25 model-registry review, M1: the seat's escalated possession proof (node policy).
 pub mod palw_readiness_escalation;
 #[cfg(test)]
@@ -38,6 +41,9 @@ mod palw_producer_t12_tests;
 pub mod palw_receipt_pool;
 pub mod palw_retention;
 pub mod palw_round_producer;
+/// 2026-10-01 (F2): which claim a seat replays next — closest to quorum first, claims already at quorum
+/// last (node policy).
+pub mod palw_seat_schedule;
 pub mod validator_service;
 
 #[cfg(test)]

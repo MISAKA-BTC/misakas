@@ -575,6 +575,11 @@ pub struct Args {
     /// the producer's attempt is ~11.6 GiB and a panel seat idles at ~1.75. Overrides the division
     /// when set; the floor check and the reservation ledger read the result the same way.
     pub palw_host_memory_share: Option<u64>,
+    /// How many seat replays this node may run at once (default 2, range 1..=4; `None` = the
+    /// default). Node policy — a seat on a host with idle cores and memory raises it, a seat sharing
+    /// an over-committed host lowers it — and the memory ledger still gates every start. A host
+    /// whose load average per CPU is over 3 runs one regardless (the 2026-10-01 backlog).
+    pub palw_seat_replay_slots: Option<u32>,
     pub retention_period_days: Option<f64>,
 
     pub override_params_file: Option<String>,
@@ -749,6 +754,7 @@ impl Default for Args {
             palw_host_memory_budget: None,
             palw_host_node_count: 1,
             palw_host_memory_share: None,
+            palw_seat_replay_slots: None,
             retention_period_days: None,
             override_params_file: None,
             rocksdb_preset: None,
@@ -2534,6 +2540,19 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 ),
         )
         .arg(
+            Arg::new("palw-seat-replay-slots")
+                .long("palw-seat-replay-slots")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u32).range(1..=4))
+                .help(
+                    "MISAKA PALW: how many seat replays this node runs at once (default 2, 1 to 4). A seat on a host with \
+                     idle cores and memory raises it to put more receipts in the pool; a seat sharing an over-committed \
+                     host (several nodes on few cores) lowers it. The memory ledger still gates every start, a C7 class's \
+                     replay still holds one heavy slot at a time, and a host whose load average per CPU is over 3 runs \
+                     one replay at a time whatever is set here.",
+                ),
+        )
+        .arg(
             Arg::new("palw-host-node-count")
                 .long("palw-host-node-count")
                 .env("KASPAD_PALW_HOST_NODE_COUNT")
@@ -2912,6 +2931,7 @@ impl Args {
             palw_host_memory_budget: m.get_one::<u64>("palw-host-memory-budget").copied().or(defaults.palw_host_memory_budget),
             palw_host_node_count: arg_match_unwrap_or::<u32>(&m, "palw-host-node-count", defaults.palw_host_node_count),
             palw_host_memory_share: m.get_one::<u64>("palw-host-memory-share").copied().or(defaults.palw_host_memory_share),
+            palw_seat_replay_slots: m.get_one::<u32>("palw-seat-replay-slots").copied().or(defaults.palw_seat_replay_slots),
             retention_period_days: m.get_one::<f64>("retention-period-days").cloned().or(defaults.retention_period_days),
 
             #[cfg(feature = "devnet-prealloc")]

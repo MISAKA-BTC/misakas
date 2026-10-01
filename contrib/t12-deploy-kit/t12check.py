@@ -254,6 +254,31 @@ def main():
         holders = pick(st, "memoryHolders", default="")
         if holders:
             print(f"  memory holders: {str(holders)[:200]}")
+        # 10-01 (panel backlog, F4): the verification debt — key=value pairs from the ledger, the seat and the producer.
+        ver = str(pick(st, "verification", default="") or "")
+        if ver:
+            print(f"  verification: {ver[:400]}")
+            kv = dict(p.split("=", 1) for p in ver.split() if "=" in p)
+            def num(key):
+                try:
+                    return int(kv[key])
+                except (KeyError, ValueError):
+                    return None
+            naive, credited = num("cgroup_naive_mib"), num("cgroup_credited_mib")
+            if naive is not None and credited is not None and share and naive - 1024 < share // (1 << 20) <= credited - 1024:
+                print(f"  NOTE: the kernel's max−current is {naive} MiB but {credited - naive} MiB of the cgroup is freed memory it will "
+                      f"take back; the ledger counts it as headroom (the 10-01 b6 reading)")
+            if kv.get("debt_hold") == "true":
+                print("  WARNING: producer backpressure is HOLDING — this bond's claims are waiting for their panel's quorum")
+            if kv.get("load_limited") == "true":
+                print("  WARNING: the seat runs one replay at a time — the host's load per CPU is over 3.0 (an over-committed host)")
+            if (num("overdue") or 0) > 0:
+                print(f"  WARNING: {num('overdue')} seat replay(s) are past 4x their class's timing and no longer hold a slot")
+            wait = num("seat_oldest_wait_daa")
+            if wait is not None and wait > 30:
+                print(f"  WARNING: this seat's oldest duty has waited {wait} DAA for its panel's quorum (healthy: 2-6)")
+            if num("seat_receipts_1h") is not None and (num("seat_duties") or 0) > 20 and num("seat_receipts_1h") < 20:
+                print(f"  WARNING: this seat filed only {num('seat_receipts_1h')} receipts in the last hour with {num('seat_duties')} duties on the chain")
         # 09-25: the seat duties are always on for a bonded node — the startup 'PALW duties' line is the
         # PLAN; this is whether the panel worker actually started (its key and bond loaded, the gossip
         # inbox was free).

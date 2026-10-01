@@ -7947,11 +7947,16 @@ pub struct GetPalwNodeStatusResponse {
     /// network; it is the salt's short id, never the salt. Both empty from a version-3 sender.
     pub genesis_hash: String,
     pub drill_salt_id: String,
+    /// **Version 5: the verification debt** (the 2026-10-01 panel backlog) — `key=value` pairs, the
+    /// memory ledger's readings with and without the reclaimable pages, this seat's slots, schedule
+    /// and receipts filed in the last hour, and the producer's backpressure gate. Empty from a
+    /// version-4 sender.
+    pub verification: String,
 }
 
 impl Serializer for GetPalwNodeStatusResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &4, writer)?;
+        store!(u16, &5, writer)?;
         store!(String, &self.consensus_params_id, writer)?;
         store!(Vec<u64>, &self.fence_schedule, writer)?;
         store!(String, &self.consensus_schedule_id, writer)?;
@@ -7987,6 +7992,8 @@ impl Serializer for GetPalwNodeStatusResponse {
         // Version 4: the genesis and the drill salt's id.
         store!(String, &self.genesis_hash, writer)?;
         store!(String, &self.drill_salt_id, writer)?;
+        // Version 5: the verification debt.
+        store!(String, &self.verification, writer)?;
         Ok(())
     }
 }
@@ -8038,6 +8045,10 @@ impl Deserializer for GetPalwNodeStatusResponse {
             out.genesis_hash = load!(String, reader)?;
             out.drill_salt_id = load!(String, reader)?;
         }
+        // A version-4 sender stops here: no verification debt to report.
+        if version >= 5 {
+            out.verification = load!(String, reader)?;
+        }
         Ok(out)
     }
 }
@@ -8063,16 +8074,43 @@ mod palw_node_status_wire_tests {
         assert_eq!((back.genesis_hash.as_str(), back.drill_salt_id.as_str()), (response.genesis_hash.as_str(), "0123456789abcdef"));
         assert_eq!(back.lane_alarm, "quiet", "the version-3 fields before them are where they were");
 
-        // A version-3 sender: the same bytes without the two version-4 strings, version 3.
+        // A version-3 sender: the same bytes without the two version-4 strings and the version-5 one, version 3.
         let public = GetPalwNodeStatusResponse { genesis_hash: String::new(), drill_salt_id: String::new(), ..response };
-        let mut v4 = Vec::new();
-        Serializer::serialize(&public, &mut v4).unwrap();
+        let mut v5 = Vec::new();
+        Serializer::serialize(&public, &mut v5).unwrap();
         let mut empty = Vec::new();
         store!(String, &String::new(), &mut empty).unwrap();
-        let mut v3 = v4[..v4.len() - 2 * empty.len()].to_vec();
+        let mut v3 = v5[..v5.len() - 3 * empty.len()].to_vec();
         v3[..2].copy_from_slice(&3u16.to_le_bytes());
         let old = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut v3.as_slice()).unwrap();
         assert_eq!((old.genesis_hash.as_str(), old.drill_salt_id.as_str(), old.lane_alarm.as_str()), ("", "", "quiet"));
+    }
+
+    /// **Version 5 carries the verification debt; a version-4 sender decodes with it empty** — and the
+    /// version-4 fields before it are where they were.
+    #[test]
+    fn the_node_status_carries_its_verification_debt_and_a_v4_sender_carries_none() {
+        let response = GetPalwNodeStatusResponse {
+            consensus_params_id: "ab".repeat(32),
+            genesis_hash: "cd".repeat(64),
+            drill_salt_id: "0123456789abcdef".to_string(),
+            verification: "seat_receipts_1h=61 slots=2 cgroup_naive_mib=268 cgroup_credited_mib=9306".to_string(),
+            ..Default::default()
+        };
+        let mut v5 = Vec::new();
+        Serializer::serialize(&response, &mut v5).unwrap();
+        let back = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut v5.as_slice()).unwrap();
+        assert_eq!(back.verification, response.verification);
+        assert_eq!(back.drill_salt_id, "0123456789abcdef");
+        let mut empty = Vec::new();
+        store!(String, &String::new(), &mut empty).unwrap();
+        let without = GetPalwNodeStatusResponse { verification: String::new(), ..response };
+        let mut v4 = Vec::new();
+        Serializer::serialize(&without, &mut v4).unwrap();
+        let mut v4 = v4[..v4.len() - empty.len()].to_vec();
+        v4[..2].copy_from_slice(&4u16.to_le_bytes());
+        let old = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut v4.as_slice()).unwrap();
+        assert_eq!((old.verification.as_str(), old.drill_salt_id.as_str()), ("", "0123456789abcdef"));
     }
 }
 

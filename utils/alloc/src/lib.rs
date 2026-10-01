@@ -52,6 +52,17 @@ pub fn init_allocator_with_default_settings() {
     #[cfg(not(feature = "heap"))]
     unsafe {
         // Empirical tests show that this option results in the smallest RSS.
-        mi_option_set_enabled(mi_option_e::mi_option_purge_decommits, false)
+        //
+        // **`MIMALLOC_PURGE_DECOMMITS` wins when the operator sets it** (2026-10-01): with `false`
+        // freed memory is handed back with `MADV_FREE` — still mapped and still charged to the
+        // process's cgroup until the kernel needs the room — which is what made a PALW node's
+        // `memory.current` read 98 % of `memory.max` while 9 GiB of it was reclaimable. The memory
+        // ledger now credits those pages (`kaspad::palw_backends::host_available_bytes_v1`), so the
+        // default stays; an operator who wants the memory returned at once sets `MIMALLOC_PURGE_DECOMMITS=1`
+        // in the unit's environment (`MADV_DONTNEED`: the RSS tracks the live set, at the price of a page
+        // fault and a zeroed page per reuse). Explicitly setting an option would otherwise override it.
+        if std::env::var_os("MIMALLOC_PURGE_DECOMMITS").is_none() {
+            mi_option_set_enabled(mi_option_e::mi_option_purge_decommits, false)
+        }
     };
 }

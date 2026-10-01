@@ -878,6 +878,11 @@ impl PalwProducerService {
         // This producer's attempts whose blocks the tip has not merged yet, and the DAA each was
         // produced at (`palw_producer_share_hold_v1`, F2 of the pre-t12 drill of 2026-09-25).
         let mut own_unmerged: std::collections::BTreeMap<Hash64, u64> = std::collections::BTreeMap::new();
+        // **F3: this bond's claims that wait for their panel's quorum** (`palw_producer_backpressure`) — the
+        // gate, the last reading and when it was taken.
+        let mut debt_gate = crate::palw_producer_backpressure::PalwProducerDebtGateV1::default();
+        let mut debt = crate::palw_producer_backpressure::PalwProducerDebtV1::default();
+        let mut debt_read_at: Option<std::time::Instant> = None;
         loop {
             if !self.tick(std::time::Duration::from_millis(200)).await {
                 break;
@@ -1080,6 +1085,44 @@ impl PalwProducerService {
                     break;
                 }
                 continue;
+            }
+            // **F3: verification backpressure.** While this bond's own claims are not getting licensed
+            // the seats are behind, and another claim only deepens the queue. Anchor duty is never held
+            // (`binder_due`: an operator's attempt binds other bonds' claims). Read once per
+            // `PALW_PRODUCER_DEBT_READ_SECS_V1`, off the loop.
+            if !facts.binder_due {
+                if debt_read_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(crate::palw_producer_backpressure::PALW_PRODUCER_DEBT_READ_SECS_V1)) {
+                    debt_read_at = Some(std::time::Instant::now());
+                    let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond);
+                    let now_daa = facts.daa_score;
+                    if let Some(read) = self
+                        .consensus_manager
+                        .consensus()
+                        .unguarded_session()
+                        .spawn_blocking(move |c| {
+                            c.palw_claim_rows_v1(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor, false, 500)
+                        })
+                        .await
+                    {
+                        debt = crate::palw_producer_backpressure::palw_producer_debt_v1(&read.rows, now_daa);
+                    }
+                }
+                let held = debt_gate.judge(&debt);
+                let status = debt_gate.status(&debt);
+                self.flow_context.update_palw_runtime(|r| r.verification_producer = status);
+                if let Some(detail) = held {
+                    self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
+                    let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                    if last_hold.as_deref() != Some(detail.as_str()) || stale {
+                        log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
+                        last_hold = Some(detail);
+                        last_hold_at = Some(std::time::Instant::now());
+                    }
+                    if !self.tick(std::time::Duration::from_secs(5)).await {
+                        break;
+                    }
+                    continue;
+                }
             }
             // Cleared so the next hold, whatever it is, prints immediately rather than being
             // suppressed as a repeat of one the node has since recovered from.

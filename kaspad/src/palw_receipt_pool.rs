@@ -126,6 +126,8 @@ pub const OWN_RECEIPT_REBROADCASTS_PER_TICK: usize = 8;
 pub trait PoolReceiptV1: Clone + PartialEq + borsh::BorshSerialize {
     fn claim(&self) -> Hash64;
     fn seat_bond(&self) -> PalwBondKeyV2;
+    /// Whether the receipt's verdict is `Valid` (the seat's replay reproduced the claim).
+    fn is_valid_verdict(&self) -> bool;
     fn signed_daa(&self) -> u64;
     fn signature(&self) -> &[u8];
     /// The message the seat signed and the context it signed it under — the pair the acceptance
@@ -139,6 +141,9 @@ impl PoolReceiptV1 for PalwSeatReceiptV2 {
     }
     fn seat_bond(&self) -> PalwBondKeyV2 {
         self.seat_bond
+    }
+    fn is_valid_verdict(&self) -> bool {
+        self.verdict == PalwReceiptVerdictV2::Valid
     }
     fn signed_daa(&self) -> u64 {
         self.signed_daa
@@ -157,6 +162,9 @@ impl PoolReceiptV1 for PalwSeatReceiptV3 {
     }
     fn seat_bond(&self) -> PalwBondKeyV2 {
         self.receipt.seat_bond
+    }
+    fn is_valid_verdict(&self) -> bool {
+        self.receipt.verdict == PalwReceiptVerdictV2::Valid
     }
     fn signed_daa(&self) -> u64 {
         self.receipt.signed_daa
@@ -523,6 +531,33 @@ impl<R: PoolReceiptV1> PalwReceiptPoolV1<R> {
         let mut entries: Vec<&PooledReceiptV1<R>> = slice.bonds.values().flatten().collect();
         entries.sort_by_key(|e| e.seq);
         entries.into_iter().map(|e| (e.receipt.clone(), e.checked)).collect()
+    }
+
+    /// **The seats of `claim` whose `Valid` receipt this node holds and has VERIFIED** — its own
+    /// (signed by this node's key) and every pooled one whose signature this node checked. An unchecked
+    /// receipt is nothing known, so it is not counted: the seat scheduler
+    /// ([`crate::palw_seat_schedule`]) reads this to decide whether a replay is still needed, and a
+    /// receipt anyone could have forged must not be able to talk a seat out of its work. Restricted to
+    /// the tip's panel when `facts` places one.
+    pub fn checked_valid_seats(&self, claim: &Hash64, facts: &ReceiptChainFactsV1) -> HashSet<PalwBondKeyV2> {
+        let seated = |bond: &PalwBondKeyV2| facts.panel(claim).is_none_or(|panel| panel.seats.contains(bond));
+        let mut seats: HashSet<PalwBondKeyV2> = self
+            .own
+            .get(claim)
+            .into_iter()
+            .flatten()
+            .filter(|own| own.receipt.is_valid_verdict())
+            .map(|own| own.receipt.seat_bond())
+            .filter(|bond| seated(bond))
+            .collect();
+        if let Some(slice) = self.claims.get(claim) {
+            for (bond, entries) in &slice.bonds {
+                if seated(bond) && entries.iter().any(|entry| entry.checked && entry.receipt.is_valid_verdict()) {
+                    seats.insert(*bond);
+                }
+            }
+        }
+        seats
     }
 
     /// **What the collector offers the assembler for `claim`**: this node's own receipts first, then
@@ -2192,5 +2227,50 @@ pub(crate) mod tests {
         assert_eq!(held.len(), OFF_PANEL_BONDS_PER_CLAIM);
         assert!((11..=15).all(|b| held.contains(&bond(b))), "the sibling's seats, heard last, are kept");
         assert!((1..=5).all(|b| !held.contains(&bond(b))), "the oldest heard went");
+    }
+
+    /// **The seat scheduler reads only VERIFIED receipts** (F2): two seats' genuine receipts are
+    /// checked at the door and count; a full-length junk receipt naming a third seat takes a free slot
+    /// unchecked and does not, nor does a genuine receipt pooled after the tick's budget was spent; this
+    /// node's own receipts count; a bond off the panel never does.
+    #[test]
+    fn only_checked_valid_receipts_count_toward_a_seats_quorum() {
+        let chain = Chain::new();
+        let facts = chain.facts();
+        let (mut v2, mut v3) = pools(&chain);
+        let (a, b, c, d) = (chain.seats[0], chain.seats[1], chain.seats[2], chain.seats[3]);
+        let arrivals = vec![
+            ArrivedReceiptV1::V2(chain.v2(&a, 0)),
+            ArrivedReceiptV1::V3(chain.v3(&b, 0)),
+            ArrivedReceiptV1::V2(junk_v2(&chain, c, 1)),
+        ];
+        // A budget that checks the first two and is spent before the third (and before `d`'s genuine one).
+        let mut budget = VerifyBudgetV1::new(2, 10);
+        let kept: HashSet<Hash64> = [chain.claim].into();
+        let outcomes = admit_receipt_arrivals_v1(arrivals, &mut v2, &mut v3, &facts, &verify, &mut budget, 110, &kept);
+        assert_eq!(outcomes.len(), 3);
+        let late = admit_receipt_arrivals_v1(
+            vec![ArrivedReceiptV1::V2(chain.v2(&d, 0))],
+            &mut v2,
+            &mut v3,
+            &facts,
+            &verify,
+            &mut budget,
+            110,
+            &kept,
+        );
+        assert!(late[0].kept(), "pooled unchecked once the budget is gone: {late:?}");
+        let seats = |v2: &PalwReceiptPoolV1<PalwSeatReceiptV2>, v3: &PalwReceiptPoolV1<PalwSeatReceiptV3>| -> HashSet<PalwBondKeyV2> {
+            let mut s = v2.checked_valid_seats(&chain.claim, &facts);
+            s.extend(v3.checked_valid_seats(&chain.claim, &facts));
+            s
+        };
+        assert_eq!(seats(&v2, &v3), [a, b].into(), "only the two receipts this node verified count");
+        // This node's own receipt counts as soon as it is filed.
+        v2.insert_own(chain.v2(&d, 3), 110);
+        assert_eq!(seats(&v2, &v3), [a, b, d].into());
+        // A bond the tip's panel does not seat never counts, whatever the pool holds.
+        let stranger = chain.stranger();
+        assert!(!seats(&v2, &v3).contains(&stranger));
     }
 }

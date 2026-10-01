@@ -644,6 +644,13 @@ pub struct PalwNodeRuntimeV1 {
     pub lane_last_work_daa: u64,
     pub lane_mix: String,
     pub lane_alarm: String,
+    /// **The verification debt, as last published** (the 2026-10-01 panel backlog; `getPalwNodeStatus`
+    /// `verification`): `key=value` pairs from the three places that know it — the memory ledger's
+    /// readings with and without the reclaimable pages, the seat's slots, schedule and receipts filed
+    /// in the last hour, and the producer's backpressure gate. Empty until the owner first publishes.
+    pub verification_memory: String,
+    pub verification_seat: String,
+    pub verification_producer: String,
 }
 
 /// One class this node's panel is (or is not) serving.

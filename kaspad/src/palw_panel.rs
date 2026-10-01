@@ -988,6 +988,10 @@ struct PalwSeatReplayRunV1 {
     class: Hash64,
     started_daa: u64,
     heavy: bool,
+    /// Running far past what this host's last replay of the class took ([`PalwSeatReplaysV1::mark_overdue`]):
+    /// it keeps its thread and its reservation until it returns, and stops holding a LIGHT slot, so one
+    /// replay stuck behind a thrashing host cannot hold every slot of the seat.
+    overdue: bool,
 }
 
 struct PalwSeatReplayDoneV1 {
@@ -1002,6 +1006,16 @@ pub(crate) enum PalwSeatSegmentPollV1 {
     Absent,
     Running,
     Done { result: PalwSeatSegmentResultV1, fresh: bool },
+}
+
+/// A seat's replay slots as a status line reads them ([`PalwSeatReplaysV1::occupancy`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PalwSeatSlotsV1 {
+    pub slots: usize,
+    pub running: usize,
+    pub overdue: usize,
+    pub detached: usize,
+    pub load_limited: bool,
 }
 
 /// **SEAT-R's replays, off the panel's loop.**
@@ -1049,11 +1063,34 @@ pub(crate) struct PalwSeatReplaysV1 {
     timed: HashMap<Hash64, u64>,
     /// Whether a served job is the claim's own, and over how many of its payloads that was asked.
     own_jobs: HashMap<PalwSeatReplayKeyV1, (bool, usize)>,
+    /// `--palw-seat-replay-slots` (0 = [`Self::IN_FLIGHT`]).
+    configured_slots: usize,
+    /// The host's load per CPU is over [`Self::LOAD_LIMIT_MILLI`]: one replay at a time until it falls
+    /// under [`Self::LOAD_RELEASE_MILLI`].
+    load_limited: bool,
+    /// Lighter replays are waiting: a big replay of a class this seat runs slowly is not STARTED
+    /// ([`Self::big_replay_deferred`]). Set once a tick by the duty loop.
+    big_gate_closed: bool,
 }
 
 impl PalwSeatReplaysV1 {
-    /// Replays holding a slot at once.
+    /// Replays holding a slot at once (the default of `--palw-seat-replay-slots`).
     pub(crate) const IN_FLIGHT: usize = 2;
+    /// The most `--palw-seat-replay-slots` allows.
+    pub(crate) const MAX_IN_FLIGHT: usize = 4;
+    /// **Host load per CPU, in thousandths, over which this seat runs one replay at a time** — and the
+    /// level it must fall under before it runs its configured number again. The 5.104 host of
+    /// testnet-12 ran five seats on eight cores at a load average of 35-40 (4.4-5 per CPU) and its
+    /// replays took 7-50 minutes against ~5 s on an idle host: ten replays on eight cores finish no
+    /// more of them than five, and thrash the memory the artifact's pages need.
+    pub(crate) const LOAD_LIMIT_MILLI: u64 = 3_000;
+    pub(crate) const LOAD_RELEASE_MILLI: u64 = 2_000;
+    /// A replay is overdue once it has run this many times what this host's last replay of its class
+    /// took, and never before [`Self::OVERDUE_MIN_DAA`]; a class not yet timed here has
+    /// [`Self::OVERDUE_UNTIMED_DAA`].
+    pub(crate) const OVERDUE_FACTOR: u64 = 4;
+    pub(crate) const OVERDUE_MIN_DAA: u64 = 8;
+    pub(crate) const OVERDUE_UNTIMED_DAA: u64 = 24;
     /// Replays of C7 classes held at once, running or detached.
     pub(crate) const HEAVY_IN_FLIGHT: usize = 1;
 
@@ -1126,13 +1163,98 @@ impl PalwSeatReplaysV1 {
         }
     }
 
+    /// The replays holding a slot at once on this seat: `--palw-seat-replay-slots` (default
+    /// [`Self::IN_FLIGHT`]), and one while the host is over-loaded.
+    pub(crate) fn in_flight(&self) -> usize {
+        if self.load_limited {
+            return 1;
+        }
+        if self.configured_slots == 0 { Self::IN_FLIGHT } else { self.configured_slots.clamp(1, Self::MAX_IN_FLIGHT) }
+    }
+
+    /// Set `--palw-seat-replay-slots` (`None`: the default).
+    pub(crate) fn configure_slots(&mut self, slots: Option<usize>) {
+        self.configured_slots = slots.map_or(0, |n| n.clamp(1, Self::MAX_IN_FLIGHT));
+    }
+
+    /// **Read the host's load once a tick**: `load1 / CPUs` in thousandths ([`crate::palw_backends::host_load_per_cpu_milli_v1`]),
+    /// `None` where the platform cannot say. Over [`Self::LOAD_LIMIT_MILLI`] the seat runs one replay at
+    /// a time; it runs its configured number again under [`Self::LOAD_RELEASE_MILLI`] (the gap keeps it
+    /// from flapping on a load that hovers).
+    pub(crate) fn note_host_load(&mut self, load_per_cpu_milli: Option<u64>) {
+        match load_per_cpu_milli {
+            Some(load) if load >= Self::LOAD_LIMIT_MILLI => self.load_limited = true,
+            Some(load) if load < Self::LOAD_RELEASE_MILLI => self.load_limited = false,
+            Some(_) => {}
+            None => self.load_limited = false,
+        }
+    }
+
+    /// **A light replay that has run past what this host's last replay of its class took, times
+    /// [`Self::OVERDUE_FACTOR`], stops holding a slot** — it keeps its thread and its ledger
+    /// reservation until it returns (a backend has no cancel) and is polled like any other, but the
+    /// queue behind it moves. Called once a tick. A heavy (C7) replay is never relaxed: its own slot
+    /// is the whole of its class's, and the held total stays under twice the slots whatever is overdue.
+    pub(crate) fn mark_overdue(&mut self, now_daa: u64) {
+        for run in self.running.values_mut() {
+            if run.heavy {
+                continue;
+            }
+            let limit = self
+                .timed
+                .get(&run.class)
+                .map_or(Self::OVERDUE_UNTIMED_DAA, |took| took.saturating_mul(Self::OVERDUE_FACTOR).max(Self::OVERDUE_MIN_DAA));
+            run.overdue = now_daa.saturating_sub(run.started_daa) >= limit;
+        }
+    }
+
+    /// Close or open the gate for big replays this tick (`palw_seat_schedule::palw_seat_light_pending_v1`).
+    pub(crate) fn set_big_gate(&mut self, closed: bool) {
+        self.big_gate_closed = closed;
+    }
+
+    /// Whether `class` is one this seat has found slow: its last replay here took
+    /// [`crate::palw_seat_schedule::PALW_SEAT_BIG_SLOW_DAA_V1`] DAA or more.
+    pub(crate) fn is_slow_class(&self, class: &Hash64) -> bool {
+        self.timed.get(class).is_some_and(|took| *took >= crate::palw_seat_schedule::PALW_SEAT_BIG_SLOW_DAA_V1)
+    }
+
+    /// **Whether a replay of `need_bytes` of `class`, due by `deadline`, is held back this tick so the
+    /// lighter replays waiting can run** (F2): it is big (at least
+    /// [`crate::palw_seat_schedule::PALW_SEAT_BIG_REPLAY_BYTES_V1`], which on a 3.5 GiB share is all of it),
+    /// this seat runs the class slowly, lighter work waits (the gate), and the claim is not yet urgent. A
+    /// running replay is never touched; a class this seat has not timed is started (its first run is the
+    /// measurement); an idle seat, an urgent claim and a fast seat start it.
+    pub(crate) fn big_replay_deferred(&self, class: &Hash64, need_bytes: u64, deadline: u64, now_daa: u64) -> bool {
+        need_bytes >= crate::palw_seat_schedule::PALW_SEAT_BIG_REPLAY_BYTES_V1
+            && self.big_gate_closed
+            && self.is_slow_class(class)
+            && deadline.saturating_sub(now_daa) > crate::palw_seat_schedule::PALW_SEAT_BIG_URGENT_DAA_V1
+    }
+
+    /// How many replays run and how many of those are overdue, and how many are held detached — what a
+    /// status line reads.
+    pub(crate) fn occupancy(&self) -> PalwSeatSlotsV1 {
+        PalwSeatSlotsV1 {
+            slots: self.in_flight(),
+            running: self.running.len(),
+            overdue: self.running.values().filter(|run| run.overdue).count(),
+            detached: self.detached.len(),
+            load_limited: self.load_limited,
+        }
+    }
+
     /// Whether a replay (`heavy`: of a C7 class) may start now. A heavy one: while no other C7 replay
     /// is held, running or detached, and a slot is free. A light one: while no light replay runs, or
-    /// a slot is free — the running and the detached together under twice the slots.
+    /// a slot is free — the running and the detached together under twice the slots. A running replay
+    /// that is overdue ([`Self::mark_overdue`]) holds no slot, but it still counts toward the total
+    /// held, so a thrashing host cannot pile up more than twice the slots.
     pub(crate) fn has_room(&self, heavy: bool) -> bool {
-        let light_running = self.running.values().filter(|run| !run.heavy).count();
+        let slots = self.in_flight();
+        let light_running = self.running.values().filter(|run| !run.heavy && !run.overdue).count();
+        let slot_holders = self.running.values().filter(|run| !run.overdue).count();
         let heavy_held = self.running.values().chain(self.detached.values()).filter(|run| run.heavy).count();
-        let open = self.running.len() < Self::IN_FLIGHT && self.running.len() + self.detached.len() < 2 * Self::IN_FLIGHT;
+        let open = slot_holders < slots && self.running.len() + self.detached.len() < 2 * slots;
         if heavy { heavy_held < Self::HEAVY_IN_FLIGHT && open } else { light_running == 0 || open }
     }
 
@@ -1161,7 +1283,7 @@ impl PalwSeatReplaysV1 {
             let _held_for_the_replay = reservation;
             PalwSeatTaskOutV1::Replay(work(backend.as_ref()))
         });
-        self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy });
+        self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy, overdue: false });
     }
 
     /// **Start a whole-job replay that carries its own class** (RFC-0003: a pipeline class's replay) — the
@@ -1210,7 +1332,7 @@ impl PalwSeatReplaysV1 {
             let _held_for_the_segment = reservation;
             PalwSeatTaskOutV1::Segment(work(backend.as_ref()))
         });
-        self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy });
+        self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy, overdue: false });
     }
 
     /// **Start a refused replay once more, if the time it took fits again before `deadline`.** `true`
@@ -3401,6 +3523,8 @@ pub struct PalwPanelConfig {
     pub class_artifacts: Vec<PathBuf>,
     /// ADR-0067 tier ④: the byte bound on resident artifacts (0 = unbounded).
     pub class_cache_bytes: u64,
+    /// `--palw-seat-replay-slots`: seat replays at once (`None` = [`PalwSeatReplaysV1::IN_FLIGHT`]).
+    pub seat_replay_slots: Option<usize>,
     /// ADR-0112: how much of a mapped class's weights this node keeps in memory.
     pub class_residency: misaka_palw_sdk::PalwWeightResidencyV1,
     /// ADR-0132: the node's per-class counters this seat reports its replays and receipts into.
@@ -7276,6 +7400,9 @@ impl PalwPanelService {
         // a fault finder past SEAT-R, never a licence — does not re-run on every tick of a long
         // replay. Swept with `replayed`.
         let mut seat_replays = PalwSeatReplaysV1::default();
+        seat_replays.configure_slots(self.config.seat_replay_slots);
+        // When this seat filed each receipt in the last hour — the `verification` status's receipts/h.
+        let mut receipts_filed_at: std::collections::VecDeque<std::time::Instant> = std::collections::VecDeque::new();
         // SEAT-S4's resume of a C7 partial seat's mask (`PalwSeatResumesV1`), in the same slots.
         let mut seat_resumes = PalwSeatResumesV1::default();
         // N-5: the duties this seat reached the material wait on holding nothing, with the DAA it
@@ -7422,6 +7549,7 @@ impl PalwPanelService {
             palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_registrations_v1(&self.consensus_config.params));
         // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
         let mut audit_duty = palw_audit_duty::PalwAuditDutyV1::new();
+        audit_duty.replays.configure_slots(self.config.seat_replay_slots);
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -9656,10 +9784,88 @@ impl PalwPanelService {
                     }
                 })
                 .collect();
-            let order = palw_seat_duty_order_v1(
-                &duties.iter().zip(&seat_r_duties).map(|(duty, view)| (view.deadline, duty.claim_id)).collect::<Vec<_>>(),
-                seat_r,
-            );
+            // **F2 (the 2026-10-01 backlog): past SEAT-R the seat answers the duties its panel still needs
+            // from it first** — closest to quorum, then by deadline — and the claims whose quorum is already
+            // pooled last (`palw_seat_schedule`). Every seat of a panel used to walk the same list oldest-first,
+            // so the slow seats replayed claims the fast ones had already licensed.
+            // The host's load and the replays that have outlived their class's timing, read once a tick
+            // before any slot is handed out (F2: a thrashing host must not hold every slot).
+            let host_load = crate::palw_backends::host_load_per_cpu_milli_v1();
+            seat_replays.note_host_load(host_load);
+            seat_replays.mark_overdue(current_daa);
+            audit_duty.replays.note_host_load(host_load);
+            audit_duty.replays.mark_overdue(current_daa);
+            let mut seat_schedule_tiers = [0usize; 3];
+            let order = if seat_r {
+                let items: Vec<crate::palw_seat_schedule::PalwSeatScheduleInV1> = duties
+                    .iter()
+                    .zip(&seat_r_duties)
+                    .map(|(duty, view)| {
+                        let mut valid = receipt_pool_v2.checked_valid_seats(&duty.claim_id, &receipt_facts);
+                        valid.extend(receipt_pool_v3.checked_valid_seats(&duty.claim_id, &receipt_facts));
+                        crate::palw_seat_schedule::PalwSeatScheduleInV1 {
+                            claim_id: duty.claim_id,
+                            deadline: view.deadline,
+                            bound_daa: duty.bound_daa,
+                            me: duty.seat_bond,
+                            panel: receipt_facts.panel(&duty.claim_id).map(|panel| panel.seats.clone()),
+                            valid,
+                            due: seat_duty_is_due_until_v1(duty, &answered, current_daa, view.deadline),
+                            big: seat_replays.is_slow_class(&duty.class_id)
+                                && view.deadline.saturating_sub(current_daa) > crate::palw_seat_schedule::PALW_SEAT_BIG_URGENT_DAA_V1,
+                        }
+                    })
+                    .collect();
+                let quorum = usize::from(kaspa_consensus_core::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM);
+                let mut tiers = [0usize; 3];
+                for item in &items {
+                    tiers[crate::palw_seat_schedule::palw_seat_tier_v1(item, quorum, current_daa).0 as usize] += 1;
+                }
+                seat_schedule_tiers = tiers;
+                seat_replays.set_big_gate(crate::palw_seat_schedule::palw_seat_light_pending_v1(&items, quorum, current_daa));
+                crate::palw_seat_schedule::palw_seat_schedule_order_v1(&items, quorum, current_daa)
+            } else {
+                palw_seat_duty_order_v1(
+                    &duties.iter().zip(&seat_r_duties).map(|(duty, view)| (view.deadline, duty.claim_id)).collect::<Vec<_>>(),
+                    false,
+                )
+            };
+            // The verification debt this seat reports (`getPalwNodeStatus.verification`): what it owes, how long
+            // the oldest has waited, how many receipts it filed in the last hour, and its slots.
+            while receipts_filed_at.front().is_some_and(|at| at.elapsed() > std::time::Duration::from_secs(3600)) {
+                receipts_filed_at.pop_front();
+            }
+            {
+                let slots = seat_replays.occupancy();
+                let status = format!(
+                    "seat_duties={} seat_oldest_wait_daa={} seat_receipts_1h={} sched_needed={} sched_backup={} sched_satisfied={} \
+                     slots={} running={} overdue={} detached={} load_limited={}",
+                    duties.len(),
+                    duties.iter().map(|duty| current_daa.saturating_sub(duty.bound_daa)).max().unwrap_or(0),
+                    receipts_filed_at.len(),
+                    seat_schedule_tiers[0],
+                    seat_schedule_tiers[1],
+                    seat_schedule_tiers[2],
+                    slots.slots,
+                    slots.running,
+                    slots.overdue,
+                    slots.detached,
+                    slots.load_limited
+                );
+                self.flow_context.update_palw_runtime(|r| r.verification_seat = status);
+            }
+            if seat_r && !duties.is_empty() {
+                crate::palw_backends::note_throttled_v1("seat-schedule", || {
+                    format!(
+                        "[{PALW_PANEL}] seat schedule: {} duties due — {} this panel still needs from this seat, {} where this seat is the \
+                         backup, {} whose quorum is already pooled (replayed last; promoted by age) (F2)",
+                        duties.len(),
+                        seat_schedule_tiers[0],
+                        seat_schedule_tiers[1],
+                        seat_schedule_tiers[2]
+                    )
+                });
+            }
             // R2: a duty's retention horizon, read from the claim's own record once per claim and
             // class read (`palw_seat_note_duty_liability_v1`).
             if seat_r {
@@ -11283,6 +11489,7 @@ impl PalwPanelService {
                     None
                 };
                 self.config.telemetry.panel_receipt(duty.class_id, verdict_name(&verdict));
+                receipts_filed_at.push_back(std::time::Instant::now());
                 let key = seat_duty_panel_key_v1(duty);
                 let now = std::time::Instant::now();
                 let filed = |segments| crate::palw_receipt_pool::OwnFiledV1 {
@@ -15232,6 +15439,26 @@ impl PalwPanelService {
                     kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
                     |id| self.chain_carriage_v1(session, id),
                 );
+                // **F2: a big replay on a slow seat waits for the lighter work** — a 3.37 GiB replay holds the
+                // share's whole budget for its life (37-55 minutes on the 5.104 seats, 5 on an idle host),
+                // and every floor replay and audit behind it waits on the ledger. Held back only while lighter
+                // work is waiting, only on a seat that has found the class slow, and never within
+                // `PALW_SEAT_BIG_URGENT_DAA_V1` of the claim's deadline.
+                if replays.big_replay_deferred(&duty.class_id, need.total_bytes(), seat_r_duty.deadline, current_daa) {
+                    crate::palw_backends::note_throttled_v1("panel-replay-big", || {
+                        format!(
+                            "[{PALW_PANEL}] replay of claim {} held back: it needs {} and this seat's last replay of the class took \
+                             {} DAA, while lighter replays are waiting for the same memory — it starts when they are done or {} DAA \
+                             before its deadline (DAA {}) (F2)",
+                            duty.claim_id,
+                            need.describe(),
+                            replays.timed.get(&duty.class_id).copied().unwrap_or(0),
+                            crate::palw_seat_schedule::PALW_SEAT_BIG_URGENT_DAA_V1,
+                            seat_r_duty.deadline
+                        )
+                    });
+                    return (PalwSeatReplayStepV1::Waiting, None);
+                }
                 let reserved = match self.reserve_replay_v1("full-seat", &need, duty.class_id, duty.claim_id) {
                     Ok(reserved) => reserved,
                     Err(why) => {
@@ -18486,6 +18713,104 @@ mod seat_r_tests {
         }
         assert!(!(1..=4).any(|n| replays.holds_claim(&h(n))), "returned while detached: dropped");
         assert!(replays.has_room(true) && replays.has_room(false));
+    }
+
+    /// **F2 (the 2026-10-01 backlog): a thrashing host cannot hold every slot.** A light replay that has
+    /// run past its class's timing (an untimed class: [`PalwSeatReplaysV1::OVERDUE_UNTIMED_DAA`]; a timed
+    /// one: four times what the last took, never under [`PalwSeatReplaysV1::OVERDUE_MIN_DAA`]) keeps its
+    /// thread and reservation but stops holding a slot, the held total stays under twice the slots, and
+    /// the slots are `--palw-seat-replay-slots` — one on a host over [`PalwSeatReplaysV1::LOAD_LIMIT_MILLI`]
+    /// load per CPU until it falls under the release level.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+    async fn a_replay_past_its_timing_yields_its_slot_and_a_loaded_host_runs_one() {
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let gate = Arc::new(std::sync::Mutex::new(gate));
+        let mut replays = PalwSeatReplaysV1::default();
+        assert_eq!(replays.in_flight(), 2, "the default");
+        let (a, b) = ((h(1), h(0xA)), (h(2), h(0xB)));
+        replays.start(a, floor_class(), false, 100, None, Box::new(floor_backend()), gated(&gate));
+        replays.start(b, floor_class(), false, 100, None, Box::new(floor_backend()), gated(&gate));
+        assert!(!replays.has_room(false), "both slots held");
+        replays.mark_overdue(100 + PalwSeatReplaysV1::OVERDUE_UNTIMED_DAA - 1);
+        assert!(!replays.has_room(false), "not overdue yet");
+        replays.mark_overdue(100 + PalwSeatReplaysV1::OVERDUE_UNTIMED_DAA);
+        assert!(replays.has_room(false), "overdue: the queue moves");
+        assert_eq!(replays.occupancy().overdue, 2);
+        // The held total is still bounded by twice the slots: two overdue + two fresh, then nothing more.
+        let (c, d) = ((h(3), h(0xC)), (h(4), h(0xD)));
+        replays.start(c, floor_class(), false, 130, None, Box::new(floor_backend()), gated(&gate));
+        replays.start(d, floor_class(), false, 130, None, Box::new(floor_backend()), gated(&gate));
+        assert!(!replays.has_room(false), "four held: a thrashing host cannot pile up more");
+        // A heavy replay is never relaxed.
+        let mut replays_h = PalwSeatReplaysV1::default();
+        replays_h.start((h(9), h(1)), floor_class(), true, 100, None, Box::new(floor_backend()), gated(&gate));
+        replays_h.mark_overdue(10_000);
+        assert_eq!(replays_h.occupancy().overdue, 0, "a C7 replay holds its slot for as long as it runs");
+        assert!(!replays_h.has_room(true));
+        for _ in 0..5 {
+            release.send(()).unwrap();
+        }
+        for _ in 0..200 {
+            replays.retain_live(|_| false);
+            replays_h.retain_live(|_| false);
+            if !(1..=4).any(|n| replays.holds_claim(&h(n))) && !replays_h.holds_claim(&h(9)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        // `--palw-seat-replay-slots`.
+        let mut one = PalwSeatReplaysV1::default();
+        one.configure_slots(Some(1));
+        assert_eq!(one.in_flight(), 1);
+        one.start((h(30), h(1)), floor_class(), false, 100, None, Box::new(floor_backend()), gated(&gate));
+        assert!(!one.has_room(false), "one slot, held");
+        let mut four = PalwSeatReplaysV1::default();
+        four.configure_slots(Some(99));
+        assert_eq!(four.in_flight(), PalwSeatReplaysV1::MAX_IN_FLIGHT, "clamped");
+        four.configure_slots(None);
+        assert_eq!(four.in_flight(), PalwSeatReplaysV1::IN_FLIGHT);
+
+        // The host's load: one replay at a time over the limit, the configured number again under the
+        // release level, and no flapping between them.
+        let mut loaded = PalwSeatReplaysV1::default();
+        loaded.configure_slots(Some(3));
+        assert_eq!(loaded.in_flight(), 3);
+        loaded.note_host_load(Some(PalwSeatReplaysV1::LOAD_LIMIT_MILLI));
+        assert_eq!(loaded.in_flight(), 1, "over the limit");
+        loaded.note_host_load(Some((PalwSeatReplaysV1::LOAD_LIMIT_MILLI + PalwSeatReplaysV1::LOAD_RELEASE_MILLI) / 2));
+        assert_eq!(loaded.in_flight(), 1, "between the two: stays limited");
+        loaded.note_host_load(Some(PalwSeatReplaysV1::LOAD_RELEASE_MILLI - 1));
+        assert_eq!(loaded.in_flight(), 3, "released");
+        loaded.note_host_load(Some(PalwSeatReplaysV1::LOAD_LIMIT_MILLI + 1));
+        loaded.note_host_load(None);
+        assert_eq!(loaded.in_flight(), 3, "no reading: no limit");
+        release.send(()).unwrap();
+    }
+
+    /// **F2: a big replay on a slow seat waits for the lighter work** (the 2026-10-01 collapse at 05:00: an
+    /// 8k replay of 37-55 minutes held 3.37 of the share's 3.5 GiB and every floor replay and audit behind it
+    /// waited on the ledger). Held back only when it is big, the seat has found the class slow, lighter
+    /// work waits and the claim is not yet urgent — an unknown class, a fast seat, an idle seat, an urgent
+    /// claim and a small replay all start.
+    #[test]
+    fn a_big_replay_of_a_slow_class_is_held_back_only_while_lighter_work_waits() {
+        const GIB: u64 = 1 << 30;
+        let mut replays = PalwSeatReplaysV1::default();
+        let class = floor_class();
+        let (now, far, near) = (1_000u64, 1_000 + 500, 1_000 + 100);
+        replays.set_big_gate(true);
+        assert!(!replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, far, now), "a class this seat has not timed is started: its first run is the measurement");
+        replays.timed.insert(class, 5);
+        assert!(!replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, far, now), "5 DAA (13 minutes) is not slow");
+        replays.timed.insert(class, 14); // the 05:00 replay: 37 minutes
+        assert!(replays.is_slow_class(&class));
+        assert!(replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, far, now), "slow, big, lighter work waits, far from the deadline: held");
+        assert!(!replays.big_replay_deferred(&class, GIB / 2, far, now), "a small replay is never held");
+        assert!(!replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, near, now), "within 120 DAA of the deadline it is urgent");
+        assert!(replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, now + 121, now), "121 DAA out: still held");
+        replays.set_big_gate(false);
+        assert!(!replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, far, now), "nothing lighter waits: an idle seat starts it");
     }
 
     /// **(g) C7 replays, running or detached, never keep a floor replay waiting** (the review,
