@@ -353,5 +353,11 @@
   ],
   "short": "a BLOCK-sparse attention indexer with local blocks (index_block_size, index_local_blocks, index_topk_blocks) plus MoE; `ATTN_SPARSE_BLOCK_V1` exists for Qwen4's variant and was not tried",
   "evidence": "config keys; not run"
+ },
+ "bert_generation": {
+  "class": "data",
+  "frs": [],
+  "short": "expected Level B: BERT blocks under a causal mask with a tied head and a logits bias (the fixture needs is_decoder = true); written, not yet run",
+  "evidence": "adapter written, pending validation"
  }
 }
