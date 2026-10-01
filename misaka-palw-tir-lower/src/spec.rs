@@ -197,6 +197,12 @@ pub struct AttnSpec {
     pub o_bias: bool,
     #[serde(default)]
     pub qk_norm: Option<QkNorm>,
+    /// **`ATTN_QK_NORM_POST_ROPE_V1`**: the q/k norms act AFTER the rotation (Hunyuan:
+    /// `q = rope(q); q = RMSNorm_head(q)`); Qwen3's order, the default, is the reverse. Rotation preserves a head's
+    /// L2 norm but a per-channel gain does not commute with it, so the two orders are different functions. The
+    /// history keeps the normed, rotated key either way.
+    #[serde(default)]
+    pub qk_norm_after_rope: bool,
     /// `clamp(q|k|v, −c, c)` after projection (OLMo `clip_qkv`, MPT).
     #[serde(default)]
     pub clip_qkv: Option<f64>,
@@ -849,6 +855,13 @@ pub struct HfStorage {
     /// tensor-name template, concatenated in order): Qwen4-Exp's n-gram tables (`split_ngram_parts`).
     #[serde(default = "one_shard")]
     pub table_shards: usize,
+    /// **`WEIGHTS_EXPR_V1` — weights as data.** HL parameter name → weight expression (a JSON array: the
+    /// checkpoint tensor's complete name, then steps; [`crate::weights::expr`]). An entry replaces the
+    /// parameter's default binding, so a checkpoint layout the enumerated ones above do not describe is
+    /// written in the adapter, not in Rust. Evaluated and validated by [`crate::hf_weights::bind`]; absent from
+    /// the serialised spec when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub weights: BTreeMap<String, serde_json::Value>,
 }
 
 fn one_shard() -> usize {

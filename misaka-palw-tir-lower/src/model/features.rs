@@ -154,6 +154,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ATTN_SINKS_V1", Attention, "attention sinks", Implemented, [], NoReq, ["fidelity_tiny::gpt_oss"], "A learned logit per head that joins the softmax and is dropped."),
     feature!("ATTN_OUTPUT_GATE_V1", Attention, "sigmoid gate on the attention output", Implemented, [], NoReq, ["fidelity_tiny::qwen3_next", "fidelity_tiny::qwen3_5"], "q_proj also emits a per-head gate."),
     feature!("ATTN_QK_NORM_V1", Attention, "norm on the queries and keys", Implemented, [], NoReq, ["fidelity_tiny::qwen3_moe", "fidelity_tiny::olmoe", "fidelity_tiny::cohere"], "Per-head shared, per-head separate or whole-projection scope."),
+    feature!("ATTN_QK_NORM_POST_ROPE_V1", Attention, "the q/k norms act after the rotation", Implemented, [], NoReq, ["qk_norm_post_rope::the_order_of_the_norm_and_the_rotation_is_part_of_the_function"], "Hunyuan: q = rope(q); q = RMSNorm_head(q). Qwen3's order is the reverse. A rotation preserves a head's L2 norm but a per-channel gain does not commute with it, so the orders are different functions (8.9e-2 and 4.6e-2 of the logit scale on the two Hunyuan fixtures). The history keeps the normed, rotated key; no node is new, only their order."),
     feature!("ATTN_V_NORM_V1", Attention, "norm on the values", Implemented, [], NoReq, ["fidelity_tiny::gemma4"], "Gemma-4."),
     feature!("ATTN_CLIP_QKV_V1", Attention, "clamp of q, k and v after projection", Implemented, [], NoReq, ["fidelity_tiny::olmo"], "OLMo `clip_qkv`."),
     feature!("ATTN_QUERY_TEMPERATURE_V1", Attention, "position-dependent query scaling", Implemented, [], NoReq, ["fidelity_tiny::llama4", "fidelity_tiny::ministral3"], "Llama-4 / Ministral-3."),
@@ -227,6 +228,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("QUANT_AWQ_V1", Storage, "AWQ-quantised projections", Implemented, [], NoReq, ["quantized::awq_g128"], "Same, activation-aware scales."),
     feature!("QUANT_GGUF_V1", Storage, "GGUF block-quantised tensors", Implemented, [], NoReq, ["gguf::gguf_llama_q4_k_m"], "Q4_0 … Q8_0, K-quants."),
     feature!("ADAPTER_LORA_V1", Storage, "LoRA adapter over the parent (candidate = parent + adapter)", Implemented, [], NoReq, ["lora::llama_r16"], "Unmerged low-rank path."),
+    feature!("WEIGHTS_EXPR_V1", Storage, "weights as data: a tensor expression (reshape, rows, take, stack, transpose, pad, three maps) per HL param, written in the adapter", Implemented, [], NoReq, ["weights_expr::dbrx_flat_experts_bind_by_expression", "weights_expr::the_enumerated_layouts_are_expressions"], "Replaces the default binding of the params it names: a checkpoint layout the enumerated ones (fused qkv, fused gate/up, stacked experts, conv1d) do not describe needs no Rust. Every step is an exact copy or re-indexing (no arithmetic on weights beyond neg_exp, scale and rescale_by_layer), so conversion stays a pure re-indexing; no primitive and no protocol change (the artifact is what the checkpoint holds). The grammar is closed: an unknown step key is an error. docs/design/palw/tir/frontend-as-data-v1.md section 2."),
 ];
 
 /// Look a feature up by id.
@@ -355,6 +357,9 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
                     u.add("ATTN_QK_NORM_V1", lay, format!("{:?}", q.scope));
                     norm_features(&mut u, &q.norm, lay);
                     u.add("NORM_GROUPED_V1", lay, "");
+                    if a.qk_norm_after_rope {
+                        u.add("ATTN_QK_NORM_POST_ROPE_V1", lay, "");
+                    }
                 }
                 if let Some(v) = &a.v_norm {
                     u.add("ATTN_V_NORM_V1", lay, "");
@@ -558,6 +563,11 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     }
     if s.adapter.is_some() {
         u.add("ADAPTER_LORA_V1", None, "");
+    }
+    if !s.hf.weights.is_empty() {
+        let names: Vec<&str> = s.hf.weights.keys().map(String::as_str).collect();
+        let shown = names.iter().take(4).copied().collect::<Vec<_>>().join(", ");
+        u.add("WEIGHTS_EXPR_V1", None, format!("{} param(s) bound by expression: {shown}{}", names.len(), if names.len() > 4 { ", …" } else { "" }));
     }
     u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
 }

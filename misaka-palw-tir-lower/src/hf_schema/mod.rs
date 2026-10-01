@@ -20,7 +20,7 @@
 
 pub mod tensors;
 
-pub use tensors::{TensorEntry, TensorIndex};
+pub use tensors::{HeaderSource, TensorEntry, TensorIndex};
 
 use crate::adapter::{self, Adapter, Origin, builtin, eval};
 use crate::error::LowerError;
@@ -126,6 +126,10 @@ pub struct ModelRead {
     pub adapter: AdapterSource,
     /// Config keys the class defaults supplied (the reader assumed them: confirm against the class).
     pub assumed_defaults: Vec<String>,
+    /// The built-in refusal (`adapters/refusals.json`) a user-supplied adapter overrode, as
+    /// `<architecture>: <why>` (FR-25): the architecture is refused by default, and this adapter passed the same
+    /// validation as any other and reads it anyway. The report says so.
+    pub overrides_refusal: Option<String>,
 }
 
 /// A refused read: what was missing or unmapped.
@@ -208,7 +212,16 @@ pub fn read_model_with(
         }
     };
     // An architecture refused on purpose, by the features it would need (data: `adapters/refusals.json`).
-    if let Some((missing, why)) = builtin::refusal_for(&arch) {
+    // A refusal is the build's default word, not a proof of impossibility: an adapter the CALLER supplies may
+    // override it (FR-25), provided it passes the same validation as every adapter — it can only emit a
+    // `ModelSpec` from the existing vocabulary, so a feature the vocabulary lacks still ends in Level C — and the
+    // report says so. An adapter chosen from the built-in pack never overrides one: a stale refusal is deleted
+    // from the data in the commit that adds the adapter.
+    let refusal = builtin::refusal_for(&arch);
+    let user_adapter = matches!(opts.adapter, AdapterChoice::Text(_));
+    if let Some((missing, why)) = &refusal
+        && !user_adapter
+    {
         let items = missing
             .iter()
             .map(|id| MissingItem {
@@ -224,6 +237,10 @@ pub fn read_model_with(
             missing: items,
         });
     }
+    let overridden = match (&refusal, user_adapter) {
+        (Some((_, why)), true) => Some(format!("{arch}: {why}")),
+        _ => None,
+    };
     let model_type = root.get("model_type").and_then(Value::as_str);
     // Choose the route.
     enum Route {
@@ -275,8 +292,8 @@ pub fn read_model_with(
         }
         other => other,
     };
-    match route {
-        Route::Adapter(a) => read_with(&a, &arch, config, tensors, reg),
+    let mut read = match route {
+        Route::Adapter(a) => read_with(&a, &arch, config, tensors, reg)?,
         Route::Generic => {
             // The standard decoder template is the reading of a causal language model whose class
             // follows the Hugging Face convention (`…ForCausalLM`): a configuration of another kind
@@ -300,9 +317,11 @@ pub fn read_model_with(
             let std = builtin::by_id("standard-decoder").ok_or_else(|| fail(LowerError::eval("internal: no standard-decoder adapter"), AdapterSource::None))?;
             let mut r = read_with(std, &arch, config, tensors, reg)?;
             r.adapter = AdapterSource::None;
-            Ok(r)
+            r
         }
-    }
+    };
+    read.overrides_refusal = overridden;
+    Ok(read)
 }
 
 /// The reader's own checks (before any adapter runs), the adapter's evaluation, and the
@@ -361,5 +380,5 @@ fn read_with(
     if let Some(q) = quant {
         crate::hf_config::attach_quant(&mut spec, q).map_err(|e| fail(e, src.clone()))?;
     }
-    Ok(ModelRead { spec, adapter: src, assumed_defaults: built.assumed_defaults })
+    Ok(ModelRead { spec, adapter: src, assumed_defaults: built.assumed_defaults, overrides_refusal: None })
 }

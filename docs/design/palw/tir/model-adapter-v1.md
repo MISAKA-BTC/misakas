@@ -106,6 +106,28 @@ block kinds. `ModelSpec::features()` lists the features it uses; each [`FeatureI
 states its lowering status, the primitives it emits (checked against every lowered fixture), its protocol
 requirement (none, or a named capability with the general primitive that would close it) and its tests.
 
+### 5.1 Weights as data (`WEIGHTS_EXPR_V1`)
+
+`spec.hf.names` maps a *role* to a tensor-name template and the enumerated layouts (`qkv`, `mlp`, `experts`, `gdn`,
+`conv1d_weights`, `table_shards`) name the common ways a checkpoint packs several matrices into one. A layout those
+do not describe is written in the adapter, not in Rust: `spec.hf.weights` maps an **HL parameter name** to a *weight
+expression* — a JSON array, the checkpoint tensor's complete name followed by steps (`"transpose"`, `{"reshape": […]}`
+or `{"reshape": "param"}`, `{"rows": [start, len]}`, `{"take": {…}}`, `{"stack": "E", "count": n}`, `{"pad_rows": n}`,
+`{"map": …}`) applied in order. An entry replaces the parameter's default binding, so the roles it would have read need
+not be named; a key that names no parameter of the graph is an error that lists the parameters under its prefix; an
+unknown step key is an error. Every step is an exact copy or re-indexing, so the artifact is what the checkpoint holds.
+
+```jsonc
+"spec": {"hf": {"weights": {
+  "moe.experts.down": ["transformer.blocks.{L}.ffn.experts.mlp.w2", {"reshape": [8, 16, 32]}, "transpose"],
+  "moe.shared.up.w":  ["{p}layers.{L}.shared_mlp.input_linear.weight", {"rows": [32, 32]}],
+  "moe.sel_bias":     ["{p}layers.{L}.mlp.moe_statics.e_score_correction_bias", {"reshape": "param"}]
+}}}
+```
+
+The grammar, its bounds and the design are in [`frontend-as-data-v1.md`](frontend-as-data-v1.md) §2; every layout the
+built-in binder enumerates is an instance of it (`tests/weights_expr.rs` round-trips every binding of every fixture).
+
 ## 6. The built-in pack
 
 `adapters/*.json`: `decoder-core` (the strict Llama-lineage decoder every family adapter extends: it reads
@@ -138,6 +160,8 @@ be deleted once the corpus lane has validated the pack.
    and override the variables your class departs in (`norm`, `residual`, `names`, `l_mixer`, `l_ffn`, …).
 3. If a key changes the math and no variable can express it, the gap is a **feature**: name it, add it
    generically (a `FeatureId`, a spec field with a default, a lowerer) — never family code.
+   A checkpoint layout none of the enumerated ones describes (flat experts, a fused shared expert, a bias stored
+   `[1, E]`) is a `spec.hf.weights` expression (§5.1), not a feature request.
 4. Run it with your file, no rebuild: `palw-class check-architecture <hf dir> --adapter my.json` (the
    feature report names the adapter used: a built-in, `user file <id> <hash>`, or none),
    `palw-tir-check --config <hf dir>/config.json --adapter my.json`, and the same `--adapter` on

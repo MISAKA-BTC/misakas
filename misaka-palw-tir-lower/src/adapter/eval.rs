@@ -101,8 +101,21 @@ pub fn build_spec(adapter: &Adapter, config: &Value, tensors: Option<&TensorInde
     Ok(Built { spec, assumed_defaults })
 }
 
+/// `{p}` in every string of a weight expression (`hf.weights`: the tensor names inside nested steps).
+fn subst_all(v: &mut Value, p: &str) {
+    match v {
+        Value::String(s) => *s = s.replace("{p}", p),
+        Value::Array(a) => a.iter_mut().for_each(|e| subst_all(e, p)),
+        Value::Object(o) => o.values_mut().for_each(|e| subst_all(e, p)),
+        _ => {}
+    }
+}
+
 fn subst_prefix(v: &mut Value, p: &str) {
     if let Some(hf) = v.get_mut("hf") {
+        if let Some(w) = hf.get_mut("weights") {
+            subst_all(w, p);
+        }
         if let Some(names) = hf.get_mut("names").and_then(Value::as_object_mut) {
             for n in names.values_mut() {
                 if let Value::String(s) = n {

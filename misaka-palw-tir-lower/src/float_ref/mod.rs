@@ -141,7 +141,11 @@ impl ParamStore {
 
 fn check_shape(name: &str, t: &Tensor, want: &[usize]) -> Result<()> {
     if t.shape != want {
-        return Err(LowerError::weights(format!("param `{name}`: checkpoint gives {:?}, graph needs {want:?}", t.shape)));
+        return Err(LowerError::weights(format!(
+            "param `{name}`: checkpoint gives {:?}, graph needs {want:?}{}",
+            t.shape,
+            crate::weights::size_one_hint(name, &t.shape, want)
+        )));
     }
     Ok(())
 }
@@ -1413,9 +1417,12 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
         return sparsemixer(&l, r.jitter_eps, r.scale);
     }
     let (scores, mut choice): (Vec<f64>, Vec<f64>) = match r.scoring {
+        // The selection bias (ERNIE-4.5's `e_score_correction_bias`, DeepSeek-V3's) joins the CHOICE scores only; the
+        // weights stay the unbiased probabilities (`scores`).
         Scoring::Softmax => {
             let p = softmax_with_sink(&l, None);
-            (p.clone(), p)
+            let c = p.iter().enumerate().map(|(i, v)| v + sel_bias.map(|b| b[i] as f64).unwrap_or(0.0)).collect();
+            (p, c)
         }
         Scoring::Sigmoid => {
             let s: Vec<f64> = l.iter().map(|x| 1.0 / (1.0 + (-x).exp())).collect();
@@ -1439,7 +1446,9 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
             })
             .collect();
         let keep = top_k_indices(&gs, g.topk_group);
-        let fill = if r.scoring == Scoring::Softmax { 0.0 } else { f64::NEG_INFINITY };
+        // A masked expert scores 0 under plain softmax (every probability is ≥ 0); with a bias a kept expert can score
+        // below 0, so the mask must be below every biased score.
+        let fill = if r.scoring == Scoring::Softmax && sel_bias.is_none() { 0.0 } else { f64::NEG_INFINITY };
         for (i, c) in choice.iter_mut().enumerate() {
             if !keep.contains(&(i / per)) {
                 *c = fill;
@@ -1449,8 +1458,7 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
     let idx = top_k_indices(&choice, k);
     let mut w: Vec<f64> = match r.scoring {
         Scoring::TopKThenSoftmax | Scoring::SparseMixer => softmax_with_sink(&idx.iter().map(|i| l[*i]).collect::<Vec<_>>(), None),
-        Scoring::Softmax => idx.iter().map(|i| choice[*i]).collect(),
-        Scoring::Sigmoid => idx.iter().map(|i| scores[*i]).collect(),
+        Scoring::Softmax | Scoring::Sigmoid => idx.iter().map(|i| scores[*i]).collect(),
         Scoring::TopKThenSigmoid => idx.iter().map(|i| 1.0 / (1.0 + (-(l[*i] as f32)).exp()) as f64).collect(),
     };
     if r.normalize {
