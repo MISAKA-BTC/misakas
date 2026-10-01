@@ -52,7 +52,8 @@
 #   PEERS (space-separated ip:port of the OTHER drill nodes), P2P_BASE (26711), RPC_BASE (27711; wRPC borsh,
 #   loopback), EVM_RPC_BASE (18711; EVM HTTP, loopback), PUBLIC_PEER (a public testnet-12 node's ip:port —
 #   D-1's refusal target; the drill only handshakes with it), PRODUCER_CLASS (the class a seat mines; default
-#   the floor), STALL_WAIT (s, 3600: the chain's DAA did not move), STEP_WAIT (s, 172800), PROBE_WAIT (s, 300:
+#   the floor), MODEL_COURT_AT (optional low DAA crossing for the model-specific finite court-window fence),
+#   STALL_WAIT (s, 3600: the chain's DAA did not move), STEP_WAIT (s, 172800), PROBE_WAIT (s, 300:
 #   a D-1 probe's wall-clock limit — a probe is not on the drill's chain, so its wait is not on its clock).
 #
 # DUTIES HAVE NO OFF SWITCH (2026-09-25, kaspad/src/palw_duties.rs). A seat started with its bond key and bond
@@ -82,6 +83,7 @@ RPC_BASE="${RPC_BASE:-27711}"
 EVM_RPC_BASE="${EVM_RPC_BASE:-18711}"
 PUBLIC_PEER="${PUBLIC_PEER:-}"
 PRODUCER_CLASS="${PRODUCER_CLASS:-}"
+MODEL_COURT_AT="${MODEL_COURT_AT:-}"
 STALL_WAIT="${STALL_WAIT:-3600}"
 STEP_WAIT="${STEP_WAIT:-172800}"
 PROBE_WAIT="${PROBE_WAIT:-300}"
@@ -283,7 +285,9 @@ cmd_new_salt() {
 cmd_keyring() {
   need_salt; need_bins
   mkdir -p "$WORK_DIR"
-  "$KASPAD_BIN" --testnet --netsuffix=12 --palw-drill-genesis-salt="$SALT" --palw-drill-write-keyring="$KEYRING"
+  local args=(--testnet --netsuffix=12 --palw-drill-genesis-salt="$SALT" --palw-drill-write-keyring="$KEYRING")
+  [ -n "$MODEL_COURT_AT" ] && args+=(--palw-drill-model-court-at="$MODEL_COURT_AT")
+  "$KASPAD_BIN" "${args[@]}"
   [ "$(manifest "m['format']")" = "misaka-palw-drill-keyring/v1" ] || die "unexpected keyring format in $MANIFEST"
   [ "$(manifest "len(m.get('evm') or [])")" -gt 0 ] || die "the keyring has no EVM accounts — this kaspad was built without the EVM lane"
   log "drill $(manifest "m['salt_id']"): genesis $(manifest "m['genesis_hash'][:16]")… (public testnet-12: $(manifest "m['public_genesis_hash'][:16]")…)"
@@ -327,6 +331,7 @@ cmd_node() {
               --palw-fee-outpoint="$(manifest "m['seats'][$seat]['fee_float_outpoint']")"
               --palw-heartbeat-miner-address="$(manifest "m['heartbeat'][$seat]['address']")"
               --evm-fee-recipient="$(manifest "m['evm'][$seat]['address']")")
+  [ -n "$MODEL_COURT_AT" ] && args+=(--palw-drill-model-court-at="$MODEL_COURT_AT")
   [ -n "$PRODUCER_CLASS" ] && args+=(--palw-producer-class="$PRODUCER_CLASS")
   local peer
   for peer in $PEERS; do args+=(--addpeer="$peer"); done

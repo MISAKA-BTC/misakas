@@ -9514,6 +9514,8 @@ pub enum PalwStateV2Error {
     /// [`PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`].
     #[error("class {class} is one bought registration more than a block may carry ({max})")]
     ClassRegistrationsPerBlockExceeded { class: Hash64, max: usize },
+    #[error("class {0} has no consensus-derived model court window in the active registration transition")]
+    ClassCourtWindowMissing(Hash64),
     /// **2026-09-24 DoS audit #12 (b): the registrant bond cannot pay the registration burn** on top
     /// of what it already stands behind ([`PALW_CLASS_REGISTRATION_BURN_SOMPI_V1`]).
     #[error(
@@ -9944,6 +9946,13 @@ pub struct PalwChainStateV2 {
     /// a row is a function of the id and is never rewritten. Enters the root and the carriage only
     /// once written, which nothing below `Params::palw_held_context` can do.
     class_step_ladders: BTreeMap<Hash64, u64>,
+    /// **Model-specific finite court windows** (`palw_model_court_window`): one row for every class registered past
+    /// that fence whose court has a history to dissect — a fused-attention graph class, an IR class with a dissected
+    /// cone — holding `max(network window, the minimum complete dispute duration of its own shape)`. A class
+    /// registered below the fence, or one the rule does not reach, has no row and keeps the network window and the
+    /// release's retention bound; a class is never removed, so a row never outlives its class. Enters the root
+    /// and the carriage (tail `0xE0`) only once written, which nothing below the fence can do.
+    class_court_windows: BTreeMap<Hash64, u64>,
     /// **ADR-0124 Decisions 2 and 3: the seats on duty for each live claim, and when each
     /// discharged it.** A row is written when a panel is bound past `Params::palw_panel_economy`,
     /// one entry per drawn seat at `0`; an entry becomes the DAA at which the chain credited that
@@ -10440,6 +10449,7 @@ impl PalwChainStateV2 {
             held_da_missing: BTreeMap::new(),
             held_leaf_demands: BTreeMap::new(),
             class_step_ladders: BTreeMap::new(),
+            class_court_windows: BTreeMap::new(),
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
             round_span: 0,
@@ -11597,6 +11607,20 @@ impl PalwChainStateV2 {
         self.class_step_ladders.contains_key(class_id)
     }
 
+    /// **The finite court window a class committed when it registered past `palw_model_court_window`**,
+    /// `None` for every other class — every class registered below the fence, and every class past it that
+    /// the rule does not reach (a graph class with no fused attention site, an IR class with no dissected
+    /// cone). The table is empty on every chain below the fence, so a court opened for a class with no row
+    /// takes the rule exactly as the release before this one folded it.
+    pub fn class_model_court_window_v1(&self, class_id: &Hash64) -> Option<u64> {
+        self.class_court_windows.get(class_id).copied()
+    }
+
+    /// The registered class's finite dispute backstop, or the network default.
+    pub fn class_court_window_v1(&self, class_id: &Hash64, network_window: u64) -> u64 {
+        self.class_model_court_window_v1(class_id).unwrap_or(network_window)
+    }
+
     /// **ADR-0089 Decision 2: the window** — every row a read precompile may serve, flattened,
     /// at this state's own point (the EVM block's selected parent). Bond keys are resolved to
     /// their payout payloads, statuses to codes, and every line of every class is present
@@ -12585,6 +12609,9 @@ impl PalwChainStateV2 {
         if !self.class_step_ladders.is_empty() {
             state.update(collection_root(b"class_step_ladders", &self.class_step_ladders).as_byte_slice());
         }
+        if !self.class_court_windows.is_empty() {
+            state.update(collection_root(b"class_court_windows", &self.class_court_windows).as_byte_slice());
+        }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a
         // share unpaid, which only such a panel can do. Below the fence the root is the one a
@@ -12855,6 +12882,13 @@ impl PalwChainStateV2 {
         uncertified_weightless: bool,
         canonical_work_daa: Option<u64>,
     ) -> Result<(), PalwStateV2Error> {
+        for (class_id, window) in &self.class_court_windows {
+            if !self.classes.contains_key(class_id) || *window < params.window_court() {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "class court window for {class_id} is unregistered or below the network minimum"
+                )));
+            }
+        }
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
         // The same sum with Decision 7 switched OFF: the most `safe_weight` this claim set could
@@ -14558,6 +14592,14 @@ pub enum PalwDeltaEntryV2 {
         key: Hash64,
         old: Option<crate::palw_improve_composite_v1::PalwTirCompositeRefV1>,
         new: Option<crate::palw_improve_composite_v1::PalwTirCompositeRefV1>,
+    },
+    /// A model's finite court backstop was registered or removed (**100**: the end of the delta enum — the
+    /// release line declared it at 90 and the integration moved it so `GenClass` keeps 90; spec 17 §17.0).
+    /// `palw_model_court_window` is armed on no network, so no stored delta carries this variant.
+    ClassCourtWindow {
+        key: Hash64,
+        old: Option<u64>,
+        new: Option<u64>,
     },
 }
 
@@ -18030,6 +18072,16 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::ClassStepLadder { key, old, new });
+        }
+    }
+
+    fn write_class_court_window(&mut self, key: Hash64, new: Option<u64>) {
+        let old = match new {
+            Some(window) => self.state.class_court_windows.insert(key, window),
+            None => self.state.class_court_windows.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ClassCourtWindow { key, old, new });
         }
     }
 
@@ -28182,7 +28234,30 @@ fn open_dissection_at_named_leaf_v1(
     }
     let challenger_collateral =
         builder.state.bonds.get(&challenger_bond).ok_or(PalwStateV2Error::MissingBond(challenger_bond))?.collateral;
-    let deadline_daa = ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
+    // **The class's own window, if it committed one** (`palw_model_court_window`): only a class registered past
+    // that fence has a row, so every other session — all of them below the fence — takes the window and the
+    // retention rule (none, at this opening) exactly as the release before this one did.
+    let model_window = builder.state.class_model_court_window_v1(&claim.class_id);
+    let session_window = model_window.unwrap_or_else(|| builder.params.window_court());
+    let deadline_daa = ctx.daa_score.checked_add(session_window).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
+    if model_window.is_some() {
+        // A model window may outrun the retention obligation the claim was accepted with (the obligation is
+        // sized by the network window): the opening must lie inside retention, and the claim's retention is
+        // extended to the session's deadline, so the producer owes the trace for as long as the court runs.
+        if ctx.daa_score > claim.trace_retention_daa {
+            return Err(PalwStateV2Error::CourtOutsideRetention {
+                claim: claim_id,
+                at: ctx.daa_score,
+                window: session_window,
+                retention_daa: claim.trace_retention_daa,
+            });
+        }
+        if deadline_daa > claim.trace_retention_daa {
+            let mut extended_claim = claim.clone();
+            extended_claim.trace_retention_daa = deadline_daa;
+            builder.write_claim(claim_id, Some(extended_claim));
+        }
+    }
     let first_deadline_daa =
         ctx.daa_score.checked_add(opening_turn).ok_or(PalwStateV2Error::Overflow("court opening rung deadline"))?.min(deadline_daa);
     // The space a bisection would have declared: the ruleset's own leaf cap — the ladder the
@@ -28345,7 +28420,8 @@ fn cap_session_rung_deadline_v2(session: &mut PalwCourtSessionStateV2, params: &
     // a network that configured a real rung window gets the reserve honoured, and one that did
     // not keeps exactly the behaviour it had. `palw_v2_without_a_rung_window_the_backstop_still_decides`
     // is what says so, and it went red the first time this was written as a test of the rung.
-    if params.turn_deadline_daa() >= params.window_court() {
+    let session_window = session.deadline_daa.saturating_sub(session.opened_daa);
+    if params.turn_deadline_daa() >= session_window {
         return;
     }
     let reserve = palw_close_assembly_daa_v1(PALW_COURT_CLOSE_MAX_CHUNKS);
@@ -28465,7 +28541,8 @@ fn cap_tir_phase_deadline_v1(
     session: &PalwCourtSessionStateV2,
     params: &PalwStateParamsV2,
 ) {
-    if params.turn_deadline_daa() >= params.window_court() {
+    let session_window = session.deadline_daa.saturating_sub(session.opened_daa);
+    if params.turn_deadline_daa() >= session_window {
         return;
     }
     phase.cap_deadline_to_session_v1(session.deadline_daa, palw_close_assembly_daa_v1(PALW_COURT_CLOSE_MAX_CHUNKS));
@@ -32388,6 +32465,16 @@ fn apply_object(
                     work: Some(&work),
                 },
             )?;
+            if builder.extras.model_court_window_active && !record.dissected.is_empty() {
+                let window = builder
+                    .extras
+                    .class_court_windows
+                    .get(class_id)
+                    .copied()
+                    .filter(|window| *window >= builder.params.window_court())
+                    .ok_or(PalwStateV2Error::ClassCourtWindowMissing(*class_id))?;
+                builder.write_class_court_window(*class_id, Some(window));
+            }
             builder.write_tir_class(*class_id, Some(record));
         }
         PalwConsensusObjectV2::ClassRegistered {
@@ -32436,6 +32523,20 @@ fn apply_object(
                     work: work.as_ref().map(|f| f as &dyn Fn() -> Option<crate::palw_model_registry_v1::PalwModelWorkV1>),
                 },
             )?;
+            if builder.extras.model_court_window_active
+                && admission
+                    .as_ref()
+                    .is_some_and(|carriage| crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&carriage.profile))
+            {
+                let window = builder
+                    .extras
+                    .class_court_windows
+                    .get(class_id)
+                    .copied()
+                    .filter(|window| *window >= builder.params.window_court())
+                    .ok_or(PalwStateV2Error::ClassCourtWindowMissing(*class_id))?;
+                builder.write_class_court_window(*class_id, Some(window));
+            }
         }
         // **ADR-0078 Decision 4: a derivation is committed beside its claim; the thing never
         // rides.** The chain checks what it can check — the claim exists on this chain (any phase
@@ -32867,7 +32968,8 @@ fn apply_object(
             // against collateral that may already be leaving. The attempt path demands Active and
             // the registry floor before it will let a bond risk anything; the court is the same
             // question and now asks it the same way.
-            let challenger = builder.state.bonds.get(challenger_bond).ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
+            let challenger =
+                builder.state.bonds.get(challenger_bond).cloned().ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
             if !matches!(challenger.status, PalwBondStatusV2::Active) {
                 return Err(PalwStateV2Error::BondNotActive(*challenger_bond));
             }
@@ -32878,8 +32980,12 @@ fn apply_object(
                     floor: builder.params.min_collateral_sompi(),
                 });
             }
-            let deadline_daa =
-                ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
+            // The class's own window, if it committed one (`palw_model_court_window`); every other class —
+            // all of them below that fence — takes `window_court` and the retention bound below exactly as
+            // the release before this one did.
+            let model_window = builder.state.class_model_court_window_v1(&claim.class_id);
+            let session_window = model_window.unwrap_or_else(|| builder.params.window_court());
+            let deadline_daa = ctx.daa_score.checked_add(session_window).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
             // **Court-window bound (mainnet audit 2026-09-11 deep fence): a court's whole window must
             // fit inside the producer's retention obligation** — the rule the DA-accusation path
             // already enforces (`DaOutsideRetention`, SA-1/SA-6), mirrored onto the interactive court.
@@ -32892,13 +32998,27 @@ fn apply_object(
             // `validate_palw_v2` requires `min_trace_retention_daa >= window_court` whenever this
             // fence is armed, so a court can still open on every fresh claim (the obligation always
             // covers at least one full window from acceptance).
-            if builder.extras.audit_2026_09_11_deep_active && deadline_daa > claim.trace_retention_daa {
+            //
+            // **A class that committed its own window (`palw_model_court_window`) may outrun that obligation**
+            // — the obligation was sized by the network window — so for it the opening alone must lie inside
+            // retention, and the claim's retention is extended to the session's deadline (the producer owes
+            // the trace for as long as the court runs). Every other class keeps the bound above, byte for byte.
+            let outside_retention = match model_window {
+                Some(_) => ctx.daa_score > claim.trace_retention_daa,
+                None => deadline_daa > claim.trace_retention_daa,
+            };
+            if builder.extras.audit_2026_09_11_deep_active && outside_retention {
                 return Err(PalwStateV2Error::CourtOutsideRetention {
                     claim: *claim_id,
                     at: ctx.daa_score,
-                    window: builder.params.window_court,
+                    window: session_window,
                     retention_daa: claim.trace_retention_daa,
                 });
+            }
+            if model_window.is_some() && deadline_daa > claim.trace_retention_daa {
+                let mut extended_claim = claim.clone();
+                extended_claim.trace_retention_daa = deadline_daa;
+                builder.write_claim(*claim_id, Some(extended_claim));
             }
             // **The opening rung is clocked like every other rung — because a responder now ships.**
             //
@@ -35195,6 +35315,10 @@ pub struct PalwTransitionExtrasV1 {
     /// ([`palw_sw8_thin_draws_v1`]); step 4c re-anchors those instead of voiding them. `None` — by
     /// `Default`, below the fence and on every other network — leaves step 4c the void it always was.
     pub sw8_draw: Option<crate::palw_panel_v2::PalwSw8DrawInputsV1>,
+    /// Model-specific court horizons derived by the acceptance layer from the exact carried
+    /// admission profile. The fold commits these in rooted chain state at registration.
+    pub model_court_window_active: bool,
+    pub class_court_windows: std::collections::BTreeMap<Hash64, u64>,
 }
 
 /// What each `Valid` signer of one set locks: `every` seat's price, except the one seat a door
@@ -36907,6 +37031,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ImprovementCompositeClass { key, old, new } => {
             swap_write!(state.improvement_composite_classes, key, old, new)
         }
+        PalwDeltaEntryV2::ClassCourtWindow { key, old, new } => swap_write!(state.class_court_windows, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -37280,6 +37405,8 @@ pub struct PalwStateCarriageV2 {
     pub held_leaf_demands: BTreeMap<Hash64, BTreeMap<PalwBondKeyV2, u64>>,
     /// ADR-0119 Decision 2. An eighth tagged tail (`0xA5`), encoded only when non-empty.
     pub class_step_ladders: BTreeMap<Hash64, u64>,
+    /// Model-specific court backstops in appended tail `0xC2`, present only when non-empty.
+    pub class_court_windows: BTreeMap<Hash64, u64>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
     /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
     /// reserved (ADR-0130, [`PalwPanelDutyRowV1`]); the tail gained it before any chain wrote one.
@@ -37597,6 +37724,14 @@ fn palw_improvement_carriage_consistent_v1(c: &PalwStateCarriageV2) -> Result<()
     Ok(())
 }
 
+/// Per-class finite court windows (`palw_model_court_window`), after RFC-0002's class/dissection tails.
+///
+/// **`0xE0`, not `0xC2`** (the release owner's renumbering of 2026-10-01): `0xC2` is RFC-0003's generated
+/// classes tail and spec 17 §17.0 reserves `0xC3`–`0xCF` and `0xD0`–`0xDA` for RFC-0004, so a court-window
+/// carriage written here would decode as another lane's table the day those merge. Nothing is allocated at
+/// `0xE0` or above in any branch; `model_court_window_tail_is_pinned_at_0xe0` pins the value.
+const PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1: u8 = 0xE0;
+
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
 /// snapshot written by another `PALW_STATE_V2_VERSION` has other record layouts, so decoding it fails
@@ -37902,6 +38037,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_IMPROVEMENT_EVAL_JOBS_TAIL_V1.serialize(writer)?;
             self.improvement_eval_jobs.serialize(writer)?;
         }
+        if !self.class_court_windows.is_empty() {
+            PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1.serialize(writer)?;
+            self.class_court_windows.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -38073,6 +38212,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_improvement_composite_classes = false;
         let mut improvement_eval_jobs = BTreeMap::new();
         let mut seen_improvement_eval_jobs = false;
+        let mut class_court_windows = BTreeMap::new();
+        let mut seen_class_court_windows = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -38307,6 +38448,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_improvement_eval_jobs = true;
                     improvement_eval_jobs = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1 if !seen_class_court_windows => {
+                    seen_class_court_windows = true;
+                    class_court_windows = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -38436,6 +38581,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             improvement_licences,
             improvement_composite_classes,
             improvement_eval_jobs,
+            class_court_windows,
         })
     }
 }
@@ -38543,6 +38689,7 @@ impl PalwStateCarriageV2 {
             improvement_licences: state.improvement_licences.clone(),
             improvement_composite_classes: state.improvement_composite_classes.clone(),
             improvement_eval_jobs: state.improvement_eval_jobs.clone(),
+            class_court_windows: state.class_court_windows.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -38753,6 +38900,7 @@ impl PalwStateCarriageV2 {
             improvement_opt_in_expiries: BTreeSet::new(),
             improvement_licence_expiries: BTreeSet::new(),
             improvement_eval_claims: BTreeMap::new(),
+            class_court_windows: self.class_court_windows,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -45980,6 +46128,72 @@ pub(crate) mod tests {
             other => panic!("expected CourtOutsideRetention past the deep fence, got {other:?}"),
         }
         assert!(open(false).is_ok(), "below the deep fence a court opens regardless of the obligation (unchanged)");
+    }
+
+    /// **The retention bound is the release's for every class without a window of its own, and a model
+    /// window's own for a class with one** (`palw_model_court_window`, the review of 2026-10-01). The same
+    /// object on the same claim, retention ending at DAA 200 under a 500-DAA network window: a class with no
+    /// row is refused as before (and its claim is never rewritten); a class that committed a 900-DAA window
+    /// opens its court — the opening lies inside retention — and the claim's retention is extended to the
+    /// session's deadline; and one whose retention has already ended is refused. Without the gate the first
+    /// half is a consensus change below the fence (a court the previous release refuses would open here).
+    #[test]
+    fn a_class_without_a_window_keeps_the_retention_bound_and_a_model_window_extends_it() {
+        let p = params(); // window_court = 500
+        let genesis = PalwChainStateV2::genesis();
+        let mut env = attempt(40, 1);
+        env.attempt.trace_retention_daa = 200;
+        let claim_id = attempt_id_v2(&env.attempt);
+        let extras = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: true, ..Default::default() };
+        let step = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objs: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>| {
+            apply_palw_transition_v7(parent, &p, None, c, objs, work, &[], Hash64::default(), false, false, false, false, &extras)
+                .map(|(s, _, _)| s)
+        };
+        let s1 = step(&genesis, &ctx(1, 100, 1), &register_class_and_bond(), PalwBlockWorkV3::None).expect("register");
+        let s2 = step(&s1, &ctx(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&env)).expect("attempt");
+        let class_id = *s2.classes.keys().next().expect("the fixture registers a class");
+        let court = court_open(claim_id, env.attempt.trace_root, bond_key(1), bond_key(1));
+        // No row: refused (deadline 102 + 500 past retention 200), exactly as `court_outside_retention_is_refused_past_the_deep_fence`.
+        match step(&s2, &ctx(3, 102, 3), std::slice::from_ref(&court), PalwBlockWorkV3::None) {
+            Err(PalwStateV2Error::CourtOutsideRetention { retention_daa: 200, window: 500, .. }) => {}
+            other => panic!("a class with no window row keeps the retention bound, got {other:?}"),
+        }
+        // A row of 900: the same court opens, its session runs the class's window, and retention follows it.
+        let with_window = apply_delta_v2(
+            &s2,
+            &PalwStateDeltaV2 {
+                point: ctx(2, 101, 2),
+                entries: vec![PalwDeltaEntryV2::ClassCourtWindow { key: class_id, old: None, new: Some(900) }],
+            },
+            &p,
+        )
+        .expect("the window row applies");
+        let opened = step(&with_window, &ctx(3, 102, 3), std::slice::from_ref(&court), PalwBlockWorkV3::None)
+            .expect("a model-window class opens a court its retention did not cover");
+        let session = opened.court_sessions_iter().next().map(|(_, session)| session.clone()).expect("the court session");
+        assert_eq!((session.opened_daa, session.deadline_daa), (102, 102 + 900), "the class's window governs the session");
+        assert_eq!(opened.claim(&claim_id).expect("claim").trace_retention_daa, 102 + 900, "retention follows the session's deadline");
+        // Retention already over at the opening (101, a court at 102): refused even for a model window — the
+        // producer may have pruned.
+        let mut late_env = attempt(40, 1);
+        late_env.attempt.trace_retention_daa = 101;
+        let late_claim = attempt_id_v2(&late_env.attempt);
+        let l1 = step(&genesis, &ctx(1, 100, 1), &register_class_and_bond(), PalwBlockWorkV3::None).expect("register");
+        let l2 = step(&l1, &ctx(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&late_env)).expect("attempt");
+        let l2 = apply_delta_v2(
+            &l2,
+            &PalwStateDeltaV2 {
+                point: ctx(2, 101, 2),
+                entries: vec![PalwDeltaEntryV2::ClassCourtWindow { key: class_id, old: None, new: Some(900) }],
+            },
+            &p,
+        )
+        .expect("the window row applies");
+        let late_court = court_open(late_claim, late_env.attempt.trace_root, bond_key(1), bond_key(1));
+        match step(&l2, &ctx(3, 102, 3), &[late_court], PalwBlockWorkV3::None) {
+            Err(PalwStateV2Error::CourtOutsideRetention { retention_daa: 101, window: 900, .. }) => {}
+            other => panic!("a court opened after retention ended is refused whatever the window, got {other:?}"),
+        }
     }
 
     #[test]
@@ -55280,6 +55494,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::RegistrationExposure { .. } => "registration_exposure",
                     PalwDeltaEntryV2::ClassWalk { .. } => "class_walk",
                     PalwDeltaEntryV2::Class { .. } => "class",
+                    PalwDeltaEntryV2::ClassCourtWindow { .. } => "class_court_window",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
                     PalwDeltaEntryV2::EpochBudgets { .. } => "epoch_budgets",
@@ -55393,6 +55608,149 @@ pub(crate) mod tests {
         }
         // The walk above is only worth trusting if it actually exercised the variety it claims.
         assert!(kinds.len() >= 10, "the fixture walk covered {} entry kinds, expected at least 10", kinds.len());
+    }
+
+    #[test]
+    fn model_court_window_is_rooted_carried_and_delta_reversible() {
+        let p = params();
+        let (parent, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let class_id = *parent.classes.keys().next().expect("the fixture registers a class");
+        let delta = PalwStateDeltaV2 {
+            point: ctx(2, 101, 2),
+            entries: vec![PalwDeltaEntryV2::ClassCourtWindow { key: class_id, old: None, new: Some(9_000) }],
+        };
+        let after = apply_delta_v2(&parent, &delta, &p).expect("the window delta applies");
+        assert_eq!(after.class_court_window_v1(&class_id, p.window_court()), 9_000);
+        assert_ne!(after.state_root(), parent.state_root(), "the custom window is consensus-rooted");
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&after)).expect("carriage serializes");
+        let carriage: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("carriage decodes");
+        let loaded = carriage.into_state(&p, Some(after.state_root())).expect("the custom window survives restart");
+        assert_eq!(loaded.class_court_window_v1(&class_id, p.window_court()), 9_000);
+        assert_eq!(revert_delta_v2(&after, &delta, &p).expect("the delta reverts").state_root(), parent.state_root());
+        let encoded_delta = borsh::to_vec(&delta).expect("delta serializes");
+        assert_eq!(borsh::from_slice::<PalwStateDeltaV2>(&encoded_delta).unwrap(), delta);
+    }
+
+    /// **The court-window carriage tail is `0xE0`** and nothing else: pinned by value, written last, decoded
+    /// only under it, and disjoint from every tail another lane has taken or reserved — RFC-0003's gen classes
+    /// (`0xC2`) and spec 17 §17.0's RFC-0004 tables (`0xC3`–`0xCF`, `0xD0`–`0xDA`) — so the two
+    /// unshipped lanes can merge this release without a carriage collision.
+    #[test]
+    fn model_court_window_tail_is_pinned_at_0xe0() {
+        assert_eq!(PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1, 0xE0);
+        let others = [
+            PALW_CARRIAGE_MODEL_TAIL_V1,
+            PALW_CARRIAGE_LINES_TAIL_V1,
+            PALW_CARRIAGE_SETTLEMENTS_TAIL_V1,
+            PALW_CARRIAGE_BENEFITS_TAIL_V1,
+            PALW_CARRIAGE_SHARDS_TAIL_V1,
+            PALW_CARRIAGE_HELD_TAIL_V1,
+            PALW_CARRIAGE_HELD_DEMANDS_TAIL_V1,
+            PALW_CARRIAGE_CLASS_LADDERS_TAIL_V1,
+            PALW_CARRIAGE_PANEL_ECONOMY_TAIL_V1,
+            PALW_CARRIAGE_ROUND_LANE_TAIL_V1,
+            PALW_CARRIAGE_ROUND_EQUIVOCATIONS_TAIL_V1,
+            PALW_CARRIAGE_ROUND_SCHEDULER_TAIL_V1,
+            PALW_CARRIAGE_MODEL_REGISTRY_TAIL_V1,
+            PALW_CARRIAGE_CLAIM_ECONOMICS_TAIL_V1,
+            PALW_CARRIAGE_WORK_TARGET_SHADOW_TAIL_V1,
+            PALW_CARRIAGE_WORK_TARGET_TAIL_V1,
+            PALW_CARRIAGE_ARTIFACT_OWNERS_TAIL_V1,
+            PALW_CARRIAGE_FP_DERIVED_WORK_TAIL_V1,
+            PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1,
+            PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1,
+            PALW_CARRIAGE_RCORE_PLUS_TAIL_V1,
+            PALW_CARRIAGE_ACTIVATION_POOL_TAIL_V1,
+            PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1,
+            PALW_CARRIAGE_PROBATION_MEMORY_TAIL_V1,
+            PALW_CARRIAGE_BOND_FREEZES_TAIL_V1,
+            PALW_CARRIAGE_CAPACITY_QS_TAIL_V1,
+            PALW_CARRIAGE_CAPACITY_N_TAIL_V1,
+            PALW_CARRIAGE_TIR_CLASSES_TAIL_V1,
+            PALW_CARRIAGE_TIR_DISSECTIONS_TAIL_V1,
+        ];
+        assert!(!others.contains(&PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1), "a tail another table of this build already uses");
+        // RFC-0003 (`0xC2`) and spec 17 §17.0's RFC-0004 ranges, none of which this build carries yet.
+        let reserved_by_unshipped_lanes = (0xC2u8..=0xCF).chain(0xD0..=0xDA);
+        assert!(
+            reserved_by_unshipped_lanes.clone().all(|tail| tail != PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1)
+                && reserved_by_unshipped_lanes.clone().all(|tail| !others.contains(&tail)),
+            "the court-window tail sits outside RFC-0003's and RFC-0004's reserved tails"
+        );
+        let p = params();
+        let (parent, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let class_id = *parent.classes.keys().next().expect("the fixture registers a class");
+        let delta = PalwStateDeltaV2 {
+            point: ctx(2, 101, 2),
+            entries: vec![PalwDeltaEntryV2::ClassCourtWindow { key: class_id, old: None, new: Some(9_000) }],
+        };
+        let after = apply_delta_v2(&parent, &delta, &p).expect("the window delta applies");
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&after)).expect("carriage serializes");
+        // One row at the end of the carriage: the tail byte, the map's LE u32 length, a 64-byte key, an LE u64 window.
+        let at = bytes.len() - (1 + 4 + 64 + 8);
+        assert_eq!(bytes[at], 0xE0, "the tail byte");
+        assert_eq!(bytes[at + 1..at + 5], 1u32.to_le_bytes(), "one row");
+        assert_eq!(bytes[at + 5..at + 69], class_id.as_bytes()[..], "keyed by the class");
+        assert_eq!(bytes[at + 69..], 9_000u64.to_le_bytes(), "the window");
+        borsh::from_slice::<PalwStateCarriageV2>(&bytes).expect("decodes under 0xE0");
+        // The value it had when it was written as RFC-0003's tail is not this table: it does not decode as one.
+        let mut as_gen_classes = bytes.clone();
+        as_gen_classes[at] = 0xC2;
+        assert!(
+            borsh::from_slice::<PalwStateCarriageV2>(&as_gen_classes)
+                .map(|carriage| carriage.class_court_windows.is_empty())
+                .unwrap_or(true),
+            "0xC2 is not the court-window tail"
+        );
+    }
+
+    #[test]
+    fn model_court_window_controls_the_live_session_and_trace_retention() {
+        let p = params();
+        let (registered, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let class_id = *registered.classes.keys().next().expect("the fixture registers a class");
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (attempted, _) = apply(&registered, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let (panelled, _) = apply(
+            &attempted,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound {
+                claim: claim_id,
+                anchor: h64(77),
+                seats: vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }],
+            }],
+            None,
+        );
+        let (licensed, _) = apply(
+            &panelled,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        let window = 9_000;
+        let window_delta = PalwStateDeltaV2 {
+            point: ctx(5, 104, 5),
+            entries: vec![PalwDeltaEntryV2::ClassCourtWindow { key: class_id, old: None, new: Some(window) }],
+        };
+        let licensed = apply_delta_v2(&licensed, &window_delta, &p).expect("the registered class window is rooted");
+        let opened_daa = 105;
+        let (opened, _) = apply(
+            &licensed,
+            &p,
+            &ctx(6, opened_daa, 6),
+            &[court_open(claim_id, env.attempt.trace_root, bond_key(1), bond_key(1))],
+            None,
+        );
+        let session_id = court_session_of(claim_id, env.attempt.trace_root, bond_key(1), bond_key(1));
+        let session = opened.court_session(&session_id).expect("the court session opens");
+        assert_eq!(session.deadline_daa, opened_daa + window, "the registered model window governs the live clock");
+        assert!(
+            opened.claim(&claim_id).expect("the claim remains available").trace_retention_daa >= opened_daa + window,
+            "retained trace evidence covers the entire extended court window"
+        );
     }
 
     /// **…and a row written by an OLDER build still reads as the row it was.** The round trip
@@ -55525,6 +55883,9 @@ pub(crate) mod tests {
             (97, PalwDeltaEntryV2::ImprovementArtifact { key: (key, key), old: None, new: None }),
             (98, PalwDeltaEntryV2::ImprovementLicence { key, old: None, new: None }),
             (99, PalwDeltaEntryV2::ImprovementCompositeClass { key, old: None, new: None }),
+            // The release line's model-specific finite court horizon, at the END of the delta enum (spec 17 §17.0:
+            // `GenClass` keeps 90; the window is dormant on every network, so no stored delta moved).
+            (100, PalwDeltaEntryV2::ClassCourtWindow { key, old: None, new: Some(9_000) }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -56170,6 +56531,7 @@ pub(crate) mod tests {
             improvement_licences: _,
             improvement_composite_classes: _,
             improvement_eval_jobs: _,
+            class_court_windows: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -65375,6 +65737,8 @@ pub(crate) mod tests {
                 sw8_anchor_delay: None,
                 sw8_anchor_reach: None,
                 sw8_draw: None,
+                model_court_window_active: false,
+                class_court_windows: BTreeMap::new(),
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -65627,6 +65991,8 @@ pub(crate) mod tests {
                 sw8_anchor_delay: None,
                 sw8_anchor_reach: None,
                 sw8_draw: None,
+                model_court_window_active: false,
+                class_court_windows: BTreeMap::new(),
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,

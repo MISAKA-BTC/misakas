@@ -2058,12 +2058,15 @@ fn palw_fp_held_disclosure_v1(
 /// capture with the canonical prompt its block's anchor implies — the fold draws held units on
 /// attempt claims too (a `DefaultAccusedHeld` on any class draws width-1 step ranges beside a named
 /// leaf) — and the capture's own binding, read off an out-of-range event disclosure (every family's DA
-/// responder carries it there, and the fold's checkers read that binding).
+/// responder carries it there, and the fold's checkers read that binding). An IR claim's step leaf
+/// (the second IR fence's `TirStepLeaf`) by the IR responder `tir`, the claim's class's IR backend
+/// ([`misaka_palw_sdk::lineages::tir::TirBackendV1::step_leaf_disclosure`]).
 pub(crate) fn palw_da_unit_answer_v1(
     backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
     facts: &PalwDaClaimFactsV1,
     material: &PalwDaCaptureV1,
     unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
+    tir: Option<&misaka_palw_sdk::lineages::tir::TirBackendV1>,
 ) -> Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String> {
     use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_held_answer_v1};
     let capture: &[u8] = match material {
@@ -2089,21 +2092,19 @@ pub(crate) fn palw_da_unit_answer_v1(
             return Err("an IR claim answers no held unit: the held regime's units are the legacy families' (RFC-0002 Phase F)".into());
         }
         PalwDaUnitV1::Held(missing) => missing,
-        // RFC-0002 Phase F's second IR fence (dormant): an IR step leaf is answered by the IR
-        // responder (`kaspa_consensus_core::palw_tir_court_v1::build_tir_step_leaf_disclosure_v1` over
-        // the claim's IR evidence store), which the node lane lands before the fence is armed.
-        PalwDaUnitV1::TirStepLeaf { index } => {
-            return Err(format!("IR step leaf {index}: answered by the IR responder, not the capture path (RFC-0002 Phase F)"));
-        }
-        PalwDaUnitV1::TirStepNode { level, index } => {
-            return Err(format!(
-                "IR step node ({level}, {index}): answered by the IR responder, not the capture path (RFC-0002 Phase F)"
-            ));
-        }
-        PalwDaUnitV1::TirRowNode { level, index } => {
-            return Err(format!(
-                "IR rows-tree node ({level}, {index}): answered by the IR responder, not the capture path (RFC-0002 Phase F)"
-            ));
+        // **RFC-0002 Phase F's second IR fence: an IR step unit** (evidence transport C) — a step leaf,
+        // an interior step node a seat's descent reached, or a node of the tiled trace's rows tree —
+        // answered by the IR responder (`TirBackendV1::step_unit_answer`): consensus's builders over
+        // this capture's store (a dense capture's own leaves, or this node's re-derivation of its fold:
+        // the executor answering for its own run; the rows from the capture's committed trace), a unit
+        // past the execution by the binding proving so — each self-checked by the fold's check, the
+        // program stripped.
+        PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. } => {
+            if !tir_capture {
+                return Err(format!("{unit:?} is an IR claim's unit, and this material is not an IR capture"));
+            }
+            let tir = tir.ok_or_else(|| format!("{unit:?}: the claim's IR class does not resolve on this node"))?;
+            return tir.step_unit_answer(capture, unit);
         }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
@@ -2155,6 +2156,7 @@ pub(crate) struct PalwDaClaimAnswersV1 {
 /// dropped when this returns: the panel's tick never holds a claim's capture past its own answers, nor
 /// one beside the next claim's (the P2-7 review's MEDIUM: a per-tick cache of every claim's whole
 /// capture, cloned once a unit). `flat` says a `Flat` of this claim is already queued or sent.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn palw_da_claim_answers_v1(
     backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
     facts: &PalwDaClaimFactsV1,
@@ -2163,6 +2165,7 @@ pub(crate) fn palw_da_claim_answers_v1(
     units: &[kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1],
     in_run_rows: u32,
     mut flat: bool,
+    tir: Option<&misaka_palw_sdk::lineages::tir::TirBackendV1>,
 ) -> Result<PalwDaClaimAnswersV1, String> {
     use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, palw_da_flat_answers_unit_v1};
     use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
@@ -2173,7 +2176,7 @@ pub(crate) fn palw_da_claim_answers_v1(
             answers.push(None);
             continue;
         }
-        let answer = palw_da_unit_answer_v1(backend, facts, &material, *unit);
+        let answer = palw_da_unit_answer_v1(backend, facts, &material, *unit, tir);
         flat |= matches!(answer, Ok(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })))
             || matches!(&answer, Ok(PalwDaAnswerV1::TirEvent(disclosure)) if disclosure.is_flat());
         answers.push(Some(answer));
@@ -2282,6 +2285,79 @@ fn fp_capture_view(
 /// chain's cadence varies, so a short horizon would rebuild a registration that was merely slow —
 /// and each rebuild spends a fee. Long enough that a retry means the object really was dropped.
 const CLASS_REGISTRATION_RETRY_DAA: u64 = 200;
+
+/// **How long a class-registration carrier that has LEFT this node's mempool gets before the panel
+/// concludes its object did not stand** (the D-F drill of 2026-09-29: two IR registrations rode one
+/// block, the second was dropped with the block standing, and its node waited out
+/// [`CLASS_REGISTRATION_RETRY_DAA`] — hours — before trying again). A carrier leaves the mempool when a
+/// block takes it (or when it is evicted), and the fold registers the class in that same block, so a
+/// few DAA past it with no class means the object was dropped inside its block or the carrier is gone.
+/// Doubled per consecutive such drop, up to [`CLASS_REGISTRATION_RETRY_DAA`]: a registration the chain
+/// keeps refusing costs one fee per growing interval, never one per block.
+const CLASS_REGISTRATION_LEFT_POOL_GRACE_DAA: u64 = 3;
+
+/// **What the panel does with its in-flight class registration this tick.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwClassRegistrationStepV1 {
+    /// The class is on the chain: done.
+    Landed,
+    /// Keep waiting — the carrier is queued, or it only just left the mempool.
+    Wait,
+    /// Rebuild the object (a fresh sample of the live terms) and submit a new carrier.
+    Retry(PalwClassRegistrationRetryV1),
+}
+
+/// Why an in-flight class registration is retried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwClassRegistrationRetryV1 {
+    /// The carrier left the mempool — taken by a block, or evicted — and the class did not appear.
+    LeftThePoolWithoutTheClass,
+    /// The carrier is still queued [`CLASS_REGISTRATION_RETRY_DAA`] after it was sent.
+    StillQueuedPastTheHorizon,
+}
+
+/// **The in-flight class registration's next step**, from what the tick reads: whether the class is
+/// on the chain, whether the carrier is still in this node's mempool, when it was sent, when this node
+/// first saw it gone from the mempool (`left_pool_daa`, kept by the caller) and how many carriers in a
+/// row left the mempool without the class (`drops`).
+pub(crate) fn palw_class_registration_step_v1(
+    landed: bool,
+    in_mempool: bool,
+    sent_daa: u64,
+    left_pool_daa: Option<u64>,
+    drops: u32,
+    current_daa: u64,
+) -> PalwClassRegistrationStepV1 {
+    use PalwClassRegistrationStepV1::{Landed, Retry, Wait};
+    if landed {
+        return Landed;
+    }
+    if !in_mempool {
+        let since = left_pool_daa.unwrap_or(current_daa);
+        let grace = CLASS_REGISTRATION_LEFT_POOL_GRACE_DAA.saturating_mul(1u64 << drops.min(16)).min(CLASS_REGISTRATION_RETRY_DAA);
+        return if current_daa.saturating_sub(since) >= grace {
+            Retry(PalwClassRegistrationRetryV1::LeftThePoolWithoutTheClass)
+        } else {
+            Wait
+        };
+    }
+    if current_daa.saturating_sub(sent_daa) > CLASS_REGISTRATION_RETRY_DAA {
+        Retry(PalwClassRegistrationRetryV1::StillQueuedPastTheHorizon)
+    } else {
+        Wait
+    }
+}
+
+/// **Does the panel skip the rest of its tick for the class registration?** Only while a built
+/// registration waits for its funding: that is the stall the skip exists for (a duty sweep that ran
+/// for minutes before the object was ever submitted, and on a 2M registrant never ended). Not while
+/// the chain's gate refuses to build it (an IR class below `palw_tir_v1`: nothing to submit), not while
+/// its carrier waits for a block, and not once the class is on the chain — a registrant is a seat, and
+/// skipping its duties there silenced it for as long as the registration took, and after a restart of a
+/// node whose class had landed, for good.
+pub(crate) fn palw_class_registration_holds_the_tick_v1(registering: bool, done: bool, built: bool, in_flight: bool) -> bool {
+    registering && !done && built && !in_flight
+}
 
 /// submitted 791 carriers with zero mempool refusals, the producer received 492 and mined 302, and
 /// of 300 `CourtOpened` exactly ONE ever reached a block — while `ReceiptLicensed` kept landing,
@@ -6980,6 +7056,13 @@ impl PalwPanelService {
             Hash64,
             (u64, Option<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1>),
         > = HashMap::new();
+        // RFC-0002's evidence transport, option B: the IR claims this seat pursues through served
+        // annexes (their capture never reaches it) — `tir_court::PalwTirAnnexPursuitV1`.
+        let mut tir_annex_pursuits: HashMap<Hash64, tir_court::PalwTirAnnexPursuitV1> = HashMap::new();
+        // RFC-0002 F7, option D: the accused's IR root claim per session, read off the chain on the same
+        // throttle — a challenger's bottom when it holds no accused capture.
+        let mut tir_root_filings: HashMap<Hash64, (u64, Option<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirRootClaimV1>)> =
+            HashMap::new();
         // ADR-0152 §4-ter N3: the held route's evidence per (session, role), its builds off the tick,
         // and the accused's held filings read off the chain.
         let mut held_court = held_court::PalwHeldCourtV1::default();
@@ -7143,6 +7226,14 @@ impl PalwPanelService {
         // from the mempool without one (try again).
         let mut class_registration_inflight: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = None;
         let mut class_registration_done = false;
+        // When this node first saw the in-flight carrier gone from its mempool, and how many carriers
+        // in a row left it without the class (`palw_class_registration_step_v1`).
+        let mut class_registration_left_pool: Option<u64> = None;
+        let mut class_registration_drops: u32 = 0;
+        // The class id this node registers, derived once (`class_registration_id` re-pairs the
+        // holdings, which a 2M legacy class pays in minutes) — what tells a restarted registrant its
+        // class already stands on the chain.
+        let mut class_registration_known_id: Option<Option<Hash64>> = None;
         // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
         // appears in the virtual UTXO set, which is the only honest signal that it was mined.
         let mut inflight: usize = 0;
@@ -7345,7 +7436,8 @@ impl PalwPanelService {
                 // learn a Hash64 we signed. A court-capable A16 registration that paid that walk
                 // to submit would then pay it every tick until the carrier landed.
                 let landed = match (session.palw_v2_registration_terms(), &class_registration) {
-                    (Some(terms), Some(PalwConsensusObjectV2::ClassRegistered { class_id, .. })) => {
+                    (Some(terms), Some(PalwConsensusObjectV2::ClassRegistered { class_id, .. }))
+                    | (Some(terms), Some(PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, .. })) => {
                         terms.registered_class_ids.contains(class_id)
                     }
                     (Some(terms), _) => self.class_registration_id().is_some_and(|id| terms.registered_class_ids.contains(&id)),
@@ -7353,22 +7445,65 @@ impl PalwPanelService {
                     // "cannot tell", and the retry horizon below is what keeps that from latching.
                     _ => false,
                 };
-                if landed {
-                    info!("[{PALW_PANEL}] the class registration in tx {txid} is on the chain");
-                    class_registration_inflight = None;
-                    class_registration_done = true;
-                } else if current_daa.saturating_sub(sent_daa) > CLASS_REGISTRATION_RETRY_DAA {
-                    // The carrier had a generous window to be mined and the class still is not
-                    // there, so the object was dropped inside a block that stood (the acceptance
-                    // gate refuses a target the epoch retarget has since moved) — or the carrier
-                    // never made it. Both are "the registration did not happen", and believing a
-                    // MEMPOOL receipt forever is what made that loss permanent and silent.
-                    warn!(
-                        "[{PALW_PANEL}] the class registration carrier {txid} was sent at daa {sent_daa} and the class is still \
-                         not registered at {current_daa} — rebuilding and retrying"
-                    );
-                    class_registration_inflight = None;
-                    class_registration = None;
+                // **Is the carrier still queued here?** A carrier leaves the mempool when a block
+                // takes it (or when it is evicted); the fold registers the class in that same block,
+                // so a carrier gone from the pool with no class a few DAA later was dropped inside
+                // its block (the D-F drill of 2026-09-29: a second IR registration in one block) or
+                // is gone — and waiting out the whole horizon for it is what left that node silent.
+                let in_mempool = landed
+                    || self
+                        .flow_context
+                        .mining_manager()
+                        .clone()
+                        .has_transaction(txid, kaspa_mining::model::tx_query::TransactionQuery::All)
+                        .await;
+                if in_mempool {
+                    class_registration_left_pool = None;
+                } else if class_registration_left_pool.is_none() {
+                    class_registration_left_pool = Some(current_daa);
+                }
+                match palw_class_registration_step_v1(
+                    landed,
+                    in_mempool,
+                    sent_daa,
+                    class_registration_left_pool,
+                    class_registration_drops,
+                    current_daa,
+                ) {
+                    PalwClassRegistrationStepV1::Landed => {
+                        info!("[{PALW_PANEL}] the class registration in tx {txid} is on the chain");
+                        class_registration_inflight = None;
+                        class_registration_done = true;
+                        class_registration_drops = 0;
+                    }
+                    PalwClassRegistrationStepV1::Wait => {}
+                    PalwClassRegistrationStepV1::Retry(why) => {
+                        match why {
+                            // The object did not stand in the block that took its carrier (or the
+                            // carrier was evicted): rebuilt from the live terms and sent again now.
+                            PalwClassRegistrationRetryV1::LeftThePoolWithoutTheClass => {
+                                class_registration_drops = class_registration_drops.saturating_add(1);
+                                warn!(
+                                    "[{PALW_PANEL}] the class registration carrier {txid} (sent at daa {sent_daa}) left the \
+                                     mempool at daa {} and the class is not registered at {current_daa}: its object was \
+                                     dropped inside the block that took it (that block's \"a class registration was \
+                                     dropped\" line says why) or the carrier was evicted — rebuilding and resubmitting \
+                                     (drop {class_registration_drops} in a row)",
+                                    class_registration_left_pool.unwrap_or(current_daa)
+                                );
+                            }
+                            // The carrier had a generous window to be mined and the class still is
+                            // not there. Believing a MEMPOOL receipt forever is what made that loss
+                            // permanent and silent.
+                            PalwClassRegistrationRetryV1::StillQueuedPastTheHorizon => warn!(
+                                "[{PALW_PANEL}] the class registration carrier {txid} was sent at daa {sent_daa} and the class is \
+                                 still not registered at {current_daa} — rebuilding and retrying"
+                            ),
+                        }
+                        class_registration_inflight = None;
+                        class_registration_left_pool = None;
+                        class_registration = None;
+                    }
                 }
             }
             if self.config.register_class.is_some()
@@ -7381,11 +7516,30 @@ impl PalwPanelService {
                         info!("[{PALW_PANEL}] built a class registration for this node's worker");
                         class_registration = Some(object);
                     }
-                    // Once a minute: a gate that refuses (an IR class below `palw_tir_v1`, say) refuses
-                    // every tick until the chain moves, and the retry each tick is what registers it then.
-                    Err(e) => crate::palw_backends::note_throttled_v1("class-registration-build", || {
-                        format!("[{PALW_PANEL}] cannot register this node's class: {e}")
-                    }),
+                    Err(e) => {
+                        // **A class already on the chain is done.** The builder refuses a class the
+                        // chain holds, and nothing else ever set `done` — so a registrant restarted
+                        // after its class landed (or one whose carrier stood while it was down)
+                        // refused every tick, for good, and skipped its duties behind it.
+                        let id = *class_registration_known_id.get_or_insert_with(|| self.class_registration_id());
+                        let on_chain = id
+                            .zip(session.palw_v2_registration_terms())
+                            .is_some_and(|(id, terms)| terms.registered_class_ids.contains(&id));
+                        if on_chain {
+                            info!(
+                                "[{PALW_PANEL}] this node's class {} is already registered on the chain — nothing to register",
+                                id.unwrap_or_default()
+                            );
+                            class_registration_done = true;
+                        } else {
+                            // Once a minute: a gate that refuses (an IR class below `palw_tir_v1`, say)
+                            // refuses every tick until the chain moves, and the retry each tick is what
+                            // registers it then.
+                            crate::palw_backends::note_throttled_v1("class-registration-build", || {
+                                format!("[{PALW_PANEL}] cannot register this node's class: {e}")
+                            })
+                        }
+                    }
                 }
             }
             // **Submit HERE, before the duty sweep.** The funded carrier used to be built at the
@@ -7421,6 +7575,7 @@ impl PalwPanelService {
                                     Ok(()) => {
                                         info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
                                         class_registration_inflight = Some((txid, current_daa));
+                                        class_registration_left_pool = None;
                                         let next = TransactionOutpoint::new(txid, 0);
                                         self.persist_fee_outpoint(next);
                                         chained_funding = Some((
@@ -7450,9 +7605,17 @@ impl PalwPanelService {
                     });
                 }
             }
-            // Do not spend the rest of the tick on a foreign duty backlog while this node's class
-            // is still unregistered — that is the stall that left the 2M object unsent.
-            if self.config.register_class.is_some() && !class_registration_done {
+            // Do not spend the rest of the tick on a foreign duty backlog while this node's built
+            // registration waits for its funding — that is the stall that left the 2M object unsent.
+            // Only then (`palw_class_registration_holds_the_tick_v1`): a registrant is a seat, and
+            // while its gate refuses, its carrier waits for a block, or its class already stands, it
+            // does its duties.
+            if palw_class_registration_holds_the_tick_v1(
+                self.config.register_class.is_some(),
+                class_registration_done,
+                class_registration.is_some(),
+                class_registration_inflight.is_some(),
+            ) {
                 continue;
             }
 
@@ -7607,7 +7770,7 @@ impl PalwPanelService {
             // move by an IR close instead (`TirShardCourtAccused`, `tir_court`).
             if !bisection_is_played
                 && self.consensus_config.params.palw_tir_v1_active_at(current_daa)
-                && (self.config.challenge || !seat_faulted.is_empty() || !replay_refuted.is_empty())
+                && (self.config.challenge || !seat_faulted.is_empty() || !replay_refuted.is_empty() || !tir_annex_pursuits.is_empty())
             {
                 self.tir_one_move_pass_v1(
                     &session,
@@ -7622,6 +7785,8 @@ impl PalwPanelService {
                         accused: &mut accused,
                         court_pending: &mut court_pending,
                         court_due: &mut court_due,
+                        pursuits: &mut tir_annex_pursuits,
+                        openings: &interval_openings,
                     },
                 )
                 .await;
@@ -7654,6 +7819,7 @@ impl PalwPanelService {
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             attn_evidence.retain(|(session_id, _), _| court_duties.iter().any(|d| d.session_id == *session_id));
             attn_root_filings.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
+            tir_root_filings.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
             held_court.begin_tick_v1(&court_duties, current_daa).await;
             let mut held_duties: Vec<kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2> = Vec::new();
             for duty in &court_duties {
@@ -7989,9 +8155,59 @@ impl PalwPanelService {
                         continue;
                     };
                     let name = tir_dissect::palw_tir_dissect_move_name_v1(mv);
+                    // **Option D: a challenger's bottom without the accused capture** — the leaf the
+                    // accused's root claim carries, read off the chain (a large class's capture never
+                    // reaches a seat). Looked up once, re-looked on the attention route's throttle.
+                    let accused_root = if mv == tir_dissect::PalwTirDissectMoveV1::Close && accused_capture.is_none() {
+                        match tir_root_filings.get(&duty.session_id) {
+                            Some((_, Some(root))) => Some(root.clone()),
+                            Some((looked, None)) if current_daa < looked.saturating_add(25) => None,
+                            _ => {
+                                let window = match &self.consensus_config.params.palw_consensus_mode {
+                                    kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                                        bundle.state.window_court()
+                                    }
+                                    _ => 0,
+                                };
+                                let not_before = duty.session_deadline_daa.saturating_sub(window);
+                                let span = current_daa.saturating_sub(not_before).saturating_add(64).min(1 << 16) as usize;
+                                let sid = duty.session_id;
+                                let filed = session
+                                    .clone()
+                                    .spawn_blocking(move |c| tir_root_claims_from_chain_v1(c, sid, not_before, span))
+                                    .await;
+                                let root = filed.into_iter().find(|root| {
+                                    root.finalize.binding.committed_execution_root == duty.execution_root
+                                        && duty
+                                            .tir_dissection
+                                            .as_ref()
+                                            .is_some_and(|p| p.leaf_index() == root.finalize.output_opening.leaf_index)
+                                });
+                                tir_root_filings.insert(duty.session_id, (current_daa, root.clone()));
+                                if root.is_some() {
+                                    info!(
+                                        "[{PALW_PANEL}] session {}: no accused capture here — the dissection's bottom is built from the \
+                                         accused's root claim on chain (RFC-0002 evidence transport D)",
+                                        duty.session_id
+                                    );
+                                }
+                                root
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     let (own, accused, task_duty) = (capture.to_vec(), accused_capture.as_deref().map(|c| c.to_vec()), duty.clone());
                     let built = tokio::task::spawn_blocking(move || {
-                        tir_dissect::palw_tir_dissect_build_v1(&tir, &task_duty, mv, &own, accused.as_deref(), &rules)
+                        tir_dissect::palw_tir_dissect_build_v1(
+                            &tir,
+                            &task_duty,
+                            mv,
+                            &own,
+                            accused.as_deref(),
+                            accused_root.as_ref(),
+                            &rules,
+                        )
                     })
                     .await;
                     let built = match built {
@@ -11550,6 +11766,7 @@ impl PalwPanelService {
                                     Ok(()) => {
                                         info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
                                         class_registration_inflight = Some((txid, current_daa));
+                                        class_registration_left_pool = None;
                                         let next = TransactionOutpoint::new(txid, 0);
                                         self.persist_fee_outpoint(next);
                                         funding = Some((
@@ -12631,6 +12848,28 @@ fn attn_root_filings_from_chain_v1(
     found
 }
 
+/// **RFC-0002 F7, option D: the accused's IR root claims for `session_id`, off the chain** — every
+/// `CourtTirRootClaimed` accepted since `not_before_daa`, OLDEST first, as they rode (program empty).
+/// Read, never believed: the walk returns objects the fold refused too, and the challenger's bottom
+/// builder re-checks the one it uses against the claim and the phase.
+fn tir_root_claims_from_chain_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    session_id: Hash64,
+    not_before_daa: u64,
+    max_chain_blocks: usize,
+) -> Vec<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirRootClaimV1> {
+    let mut found = Vec::new();
+    walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
+        if let PalwConsensusObjectV2::CourtTirRootClaimed { session_id: filed, root, .. } = object
+            && filed == session_id
+        {
+            found.push(*root);
+        }
+    });
+    found.reverse();
+    found
+}
+
 /// **The held route's chain reads, beside [`attn_root_filings_from_chain_v1`]** (ADR-0152 §4-ter
 /// N3, C2; 4-ter.3 step 6): through the same walk, every lifecycle object accepted since the
 /// session's opening that is a held root claim for `session_id` (`CourtAttnRootClaimedHeld`, tag 57:
@@ -12955,6 +13194,46 @@ impl PalwPanelService {
     ///
     /// Runs on a blocking thread (the transport arranges that): it reads a file and runs the
     /// family's opening arithmetic.
+    /// **Option B's serving half: the annex of leaf `leaf` of this node's own IR claim** — the class
+    /// resolved from the capture's binding, the annex built by the IR backend (a fold re-derived once,
+    /// through its memo), encoded under its magic. `None` (silence) where any step fails or the annex
+    /// would not fit the lane; the asking seat re-asks, then leaves the claim to the chain's demand.
+    fn serve_tir_leaf_annex_v1(&self, claim: Hash64, capture: &[u8], leaf: u64) -> Option<Vec<u8>> {
+        let started = std::time::Instant::now();
+        let decoded = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(capture).ok()?;
+        let binding = &decoded.binding;
+        let class_id = binding.class.class_id(&binding.artifact_root);
+        let tir = match self.backends().resolve_tir_v1(class_id, binding.artifact_root)? {
+            Ok(tir) => tir,
+            Err(why) => {
+                info!("[{PALW_PANEL}] claim {claim}: the annex of leaf {leaf} does not open here — the IR backend: {why}");
+                return None;
+            }
+        };
+        match tir.leaf_annex(capture, leaf) {
+            Ok(annex) => {
+                let bytes = annex.encode();
+                if bytes.len() > kaspa_p2p_flows::palw_gossip::PALW_INTERVAL_OPENING_MAX_BYTES {
+                    warn!(
+                        "[{PALW_PANEL}] claim {claim}: the annex of leaf {leaf} is {} bytes, past the lane's cap — not served",
+                        bytes.len()
+                    );
+                    return None;
+                }
+                info!(
+                    "[{PALW_PANEL}] claim {claim}: served the IR annex of leaf {leaf} ({} bytes, {:.0?}) — RFC-0002 evidence transport B",
+                    bytes.len(),
+                    started.elapsed()
+                );
+                Some(bytes)
+            }
+            Err(e) => {
+                info!("[{PALW_PANEL}] claim {claim}: the annex of leaf {leaf} does not open here: {e}");
+                None
+            }
+        }
+    }
+
     fn open_retained_interval(&self, claim: Hash64, interval_index: u32, leaf_index: Option<u64>) -> Option<Vec<u8>> {
         use misaka_palw_base0::fp_interval::{base0_fp_block_leaves_request_decode_v1, base0_fp_resume_request_decode_v1};
         // **ADR-0111 Decision 2: a leaf's evidence, on the lane's own authentication.** The seat
@@ -12968,6 +13247,14 @@ impl PalwPanelService {
                     "[{PALW_PANEL}] PALW DRILL: refusing the evidence of leaf {leaf} of claim {claim} — the seat must demand it on chain"
                 );
                 return None;
+            }
+            // **RFC-0002's evidence transport, option B: an IR claim's leaf is served as its annex**
+            // (`misaka_palw_sdk::lineages::tir::PalwTirLeafAnnexV1`) — the binding, the leaf's preimage and
+            // opening, the trace summary — built from this node's own retained capture, the executor's.
+            if let Some(capture) =
+                self.retained_capture(&claim).filter(|bytes| bytes.starts_with(&misaka_palw_sdk::lineages::tir::TirCaptureV1::MAGIC))
+            {
+                return self.serve_tir_leaf_annex_v1(claim, &capture, leaf);
             }
             let session = self.consensus_manager.consensus().unguarded_session();
             let started = std::time::Instant::now();
@@ -14312,6 +14599,18 @@ impl PalwPanelService {
         let foreign = dir.join("foreign");
         let units: Vec<kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1> = duties.iter().map(|duty| duty.unit).collect();
         let in_run_rows = first.in_run_rows;
+        // The second IR fence's step leaves are answered by the claim's IR backend (RFC-0002 evidence
+        // transport C): resolved here, once, when a unit asks for one — a class this node does not
+        // hold as IR answers them with the unit's own error.
+        let tir = if units.iter().any(|unit| unit.is_tir_fence2_v1()) {
+            match self.backends().resolve_tir_v1(class_id, artifact_root) {
+                Some(Ok(tir)) => Some(tir),
+                Some(Err(why)) => return Err(PalwDaClaimHoldV1::Material(format!("the claim's IR backend does not build: {why}"))),
+                None => None,
+            }
+        } else {
+            None
+        };
         let built = offload_shared(backend, move |b| {
             let _held_for_the_answers = reserved;
             palw_da_claim_answers_v1(
@@ -14322,6 +14621,7 @@ impl PalwPanelService {
                 &units,
                 in_run_rows,
                 flat_queued,
+                tir.as_ref(),
             )
         })
         .await
@@ -15411,6 +15711,65 @@ const MARKER_SEAT_S: &str = "mod tests {\n    use super::*;";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A class registration whose object did not stand is sent again — promptly** (the D-F drill of
+    /// 2026-09-29: two IR registrations rode one block, the second was dropped with the block standing,
+    /// and its node waited out the 200-DAA horizon). The carrier leaving the mempool without the class
+    /// is the signal: a few DAA of grace (the fold registers the class in the block that takes the
+    /// carrier), doubled per consecutive drop up to the horizon; a carrier still queued keeps the
+    /// horizon. A registrant whose class already stands is done, and a registrant is a seat: only a
+    /// built registration waiting for its funding holds the rest of the tick.
+    #[test]
+    fn a_dropped_class_registration_is_resubmitted_and_a_registrant_keeps_its_duties() {
+        use PalwClassRegistrationRetryV1::{LeftThePoolWithoutTheClass, StillQueuedPastTheHorizon};
+        use PalwClassRegistrationStepV1::{Landed, Retry, Wait};
+        let step = palw_class_registration_step_v1;
+        let grace = CLASS_REGISTRATION_LEFT_POOL_GRACE_DAA;
+        // The class appeared: done, whatever else is true.
+        assert_eq!(step(true, false, 100, Some(101), 3, 500), Landed);
+        assert_eq!(step(true, true, 100, None, 0, 101), Landed);
+        // Queued: wait, up to the horizon, then rebuild.
+        assert_eq!(step(false, true, 100, None, 0, 100 + CLASS_REGISTRATION_RETRY_DAA), Wait);
+        assert_eq!(step(false, true, 100, None, 0, 101 + CLASS_REGISTRATION_RETRY_DAA), Retry(StillQueuedPastTheHorizon));
+        // Gone from the pool with no class (the drill's case): the grace, then at once.
+        assert_eq!(step(false, false, 100, Some(104), 0, 104), Wait, "the block that took it may still be folding");
+        assert_eq!(step(false, false, 100, Some(104), 0, 104 + grace - 1), Wait);
+        assert_eq!(step(false, false, 100, Some(104), 0, 104 + grace), Retry(LeftThePoolWithoutTheClass));
+        assert!(104 + grace < 100 + CLASS_REGISTRATION_RETRY_DAA, "long before the horizon");
+        // A registration the chain keeps dropping: the grace doubles per drop, capped at the horizon.
+        assert_eq!(step(false, false, 100, Some(104), 1, 104 + grace), Wait);
+        assert_eq!(step(false, false, 100, Some(104), 1, 104 + 2 * grace), Retry(LeftThePoolWithoutTheClass));
+        assert_eq!(step(false, false, 100, Some(104), 3, 104 + 8 * grace), Retry(LeftThePoolWithoutTheClass));
+        assert_eq!(step(false, false, 100, Some(104), 30, 103 + CLASS_REGISTRATION_RETRY_DAA), Wait);
+        assert_eq!(step(false, false, 100, Some(104), 30, 104 + CLASS_REGISTRATION_RETRY_DAA), Retry(LeftThePoolWithoutTheClass));
+        // Unrecorded departure (the first tick that sees it): counted from now.
+        assert_eq!(step(false, false, 100, None, 0, 150), Wait);
+
+        // The tick is held only for a built registration waiting for funding.
+        let holds = palw_class_registration_holds_the_tick_v1;
+        assert!(holds(true, false, true, false), "built, not yet sent: the stall the hold exists for");
+        assert!(!holds(true, false, false, false), "the gate refuses (below palw_tir_v1): the seat does its duties");
+        assert!(!holds(true, false, true, true), "its carrier waits for a block: the seat does its duties");
+        assert!(!holds(true, true, false, false), "the class stands");
+        assert!(!holds(false, false, true, false), "not a registrant");
+
+        // The loop asks the mempool, applies the step, treats a class already on the chain as done,
+        // matches the IR object's own class id, and holds the tick by the rule.
+        let whole = include_str!("palw_panel.rs");
+        let production = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the tests")];
+        let worker = &production[production.find("    pub async fn worker(").expect("the worker")..];
+        let flight =
+            &worker[worker.find("if let Some((txid, sent_daa)) = class_registration_inflight {").expect("the in-flight read")..];
+        let flight = &flight[..flight.find("\n            }\n").expect("its end")];
+        assert!(flight.contains(".has_transaction(txid, kaspa_mining::model::tx_query::TransactionQuery::All)"));
+        assert!(flight.contains("palw_class_registration_step_v1("));
+        assert!(flight.contains("Some(PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, .. })"));
+        assert!(worker.contains("class_registration_known_id.get_or_insert_with(|| self.class_registration_id())"));
+        assert!(!worker.contains("if self.config.register_class.is_some() && !class_registration_done {\n                continue;"));
+        assert!(worker.contains("if palw_class_registration_holds_the_tick_v1("));
+        assert_eq!(worker.matches("class_registration_inflight = Some((txid, current_daa));").count(), 2, "both submit sites");
+        assert_eq!(worker.matches("class_registration_left_pool = None;").count(), 4, "reset on submit (x2), in pool, retry");
+    }
 
     /// The two-output bond carrier this node builds: one collateral output to the payee, one
     /// change output back to the funding script, one input.
@@ -19528,7 +19887,7 @@ mod p2_7_disclosure_policy {
         flat: bool,
     ) -> (Result<PalwDaClaimAnswersV1, String>, Option<Vec<u8>>) {
         let mut kept_back = None;
-        let built = palw_da_claim_answers_v1(backend, facts, kept, |bytes| kept_back = Some(bytes.to_vec()), units, 2, flat);
+        let built = palw_da_claim_answers_v1(backend, facts, kept, |bytes| kept_back = Some(bytes.to_vec()), units, 2, flat, None);
         (built, kept_back)
     }
 

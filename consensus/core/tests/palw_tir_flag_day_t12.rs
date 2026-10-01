@@ -4,9 +4,11 @@
 //!   fence of testnet-12 uses (750, 1,000, 1,300 and 1,700 are the earlier flag days'); its name is apart
 //!   from the P0a line's `PALW_T12_POST_LAUNCH_FENCES_V4`, which stays dormant and off this flag day
 //!   (the user's direction: hybrids go the IR way);
-//! * **the release** — testnet-12 as shipped IS the DAA-1,700 release (`palw_t12_release_v3_params`,
-//!   int-7's three ids exactly, pinned in `palw_tir_fences_are_dormant.rs`) with that list armed at
-//!   2,000: the params and schedule ids move, the identity does not, and no other fence moves;
+//! * **the release** — testnet-12 as the DAA-2,000 release ships it (`palw_t12_release_v4_params`: the
+//!   shipped ruleset before the DAA-3,600 flag day, int-8's ids) IS the DAA-1,700 release
+//!   (`palw_t12_release_v3_params`, int-7's three ids exactly, pinned in `palw_tir_fences_are_dormant.rs`)
+//!   with that list armed at 2,000: the params and schedule ids move, the identity does not, and no other
+//!   fence moves;
 //! * **the value** — `PalwTirFenceV1::testnet12_v1`: this build's primitive set and court version at
 //!   testnet-12's IR ceilings (`max_cone_work` 2^16), mirrored on the V2 bundle;
 //! * **the fork id** — an int-7 node is kept below 2,000 in both directions and refused from 2,000;
@@ -19,8 +21,9 @@
 
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_tir_fence_at_v1};
 use kaspa_consensus_core::config::params::{
-    PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FLAG_DAY_DAA,
-    PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, palw_t12_drill_params_v1, palw_t12_release_v3_params, palw_t12_shipped_params,
+    PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA,
+    PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, palw_t12_drill_params_v1, palw_t12_release_v3_params,
+    palw_t12_release_v4_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
@@ -70,7 +73,9 @@ fn the_ir_flag_day_is_palw_tir_v1_alone_at_2000_a_height_no_other_fence_uses() {
     for earlier in [750, 1_000, 1_300, 1_700] {
         assert!(schedule.contains(&earlier), "{earlier}: an earlier flag day, still scheduled ({schedule:?})");
     }
-    assert_eq!(schedule.last(), Some(&FLAG_DAY), "the IR flag day is the schedule's last height ({schedule:?})");
+    let day_3600 = PALW_T12_TIR_FENCE2_DAA.expect("the DAA-3,600 flag day");
+    assert_eq!(schedule.last(), Some(&day_3600), "the DAA-3,600 flag day is the schedule's last height ({schedule:?})");
+    assert_eq!(schedule[schedule.len() - 2], FLAG_DAY, "and the IR flag day the one before it ({schedule:?})");
 }
 
 #[test]
@@ -82,12 +87,17 @@ fn testnet12_ships_the_ir_flag_day_armed_at_2000_over_the_daa1700_release() {
     assert_eq!(fence_at(&release, "palw_tir_v1"), None, "dormant on the release");
     release.validate_palw_v2().expect("the release validates");
 
-    let shipped = palw_t12_shipped_params();
+    // testnet-12 as the DAA-2,000 release ships it: the shipped ruleset before the DAA-3,600 flag day.
+    let shipped = palw_t12_release_v4_params();
     let armed = with_list(release.clone(), Some(FLAG_DAY));
     armed.validate_palw_v2().expect("the list at 2,000 validates over the release");
-    assert_eq!(ids(&shipped), ids(&armed), "testnet-12 as shipped arms the list at 2,000 over the release");
-    assert_eq!(ids(&Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))), ids(&shipped), "the node's door");
-    shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
+    assert_eq!(ids(&shipped), ids(&armed), "the DAA-2,000 release arms the list at 2,000 over the DAA-1,700 release");
+    shipped.validate_palw_v2().expect("testnet-12 as the DAA-2,000 release validates");
+    // …and what a node runs today is that release with the DAA-3,600 flag day's list on top (its own tests).
+    let node = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+    assert_eq!(ids(&node), ids(&palw_t12_shipped_params()), "the node's door");
+    assert_ne!(ids(&node).0, ids(&shipped).0, "which the DAA-3,600 flag day moves");
+    assert_eq!(ids(&node).1, ids(&shipped).1, "and not the identity");
 
     let (sp, si, ss) = ids(&shipped);
     assert_ne!(sp, rp, "the ruleset names the IR");
@@ -130,7 +140,7 @@ fn testnet12_ships_the_ir_flag_day_armed_at_2000_over_the_daa1700_release() {
 #[test]
 fn the_fork_id_keeps_an_int7_node_below_2000_and_refuses_it_from_2000() {
     let old = palw_t12_release_v3_params();
-    let new = palw_t12_shipped_params();
+    let new = palw_t12_release_v4_params();
     for daa in [1_700, 1_900, FLAG_DAY - 1] {
         let o = fork_id_v1(&old, daa);
         let n = fork_id_v1(&new, daa);

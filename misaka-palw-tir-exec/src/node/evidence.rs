@@ -32,12 +32,13 @@ use kaspa_consensus_core::palw_prompt_ids_v1::{
 use kaspa_consensus_core::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1, step_tile_leaf_hash_v1};
 use kaspa_consensus_core::palw_step_refute::{
     PALW_LOGITS_TILE_LANES, PalwBase0DecodeTokensV1, PalwDecodeTokenPinV1, PalwTiledDecodePinV1, PalwTiledDecodeTokensV1,
-    flat_logits_scheme_id_v1, tiled_decode_pin_v1, tiled_logits_rows_root_v1, tiled_logits_scheme_id_v1,
+    flat_logits_scheme_id_v1, tiled_decode_pin_v1, tiled_logits_row_root_v1, tiled_logits_rows_root_v1, tiled_logits_scheme_id_v1,
+    tiled_logits_tile_leaf_v1,
 };
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirEvidenceErrorV1, PalwTirEvidenceStoreV1, PalwTirLogitsConsistencyV1,
-    PalwTirTraceLanesV1, build_tir_cone_refutation_v1,
+    PalwTirTraceLanesV1, build_tir_cone_refutation_v1, palw_tir_row_node_parts_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirLeafKindV1, PalwTirStepBindingV1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
@@ -144,9 +145,44 @@ enum Leaves<'a> {
 }
 
 /// The committed trace a decode pin authenticates against.
-struct Trace<'a> {
-    rows: &'a [Vec<i32>],
-    generated: &'a [u32],
+/// **The committed trace, as far as a store holds it.**
+#[derive(Clone, Copy)]
+pub enum TirTraceV1<'a> {
+    /// Every committed row and id — a capture's, or a run's own.
+    Rows { rows: &'a [Vec<i32>], generated: &'a [u32] },
+    /// **What a served annex or an on-chain root claim carries of it** (the tiled scheme): the rows
+    /// root and the ids (the trace root's preimage beside the row count), and the pins it holds —
+    /// each one row's committed-token tile and the tile holding some lane, opened under the row, the
+    /// row under the rows root. A pin answers every lane of its beat tile (the lane is an index into
+    /// lanes the pin carries whole), so the logits door and the decode-token door are built from it
+    /// without the rows.
+    Summary { rows_root: Hash64, generated: &'a [u32], pins: &'a [PalwTiledDecodePinV1] },
+    /// None of it: a store whose evaluations read no trace (a dissection's bottom whose root claim
+    /// carried no decode pin). An evaluation that asks for it is refused, never guessed.
+    Absent,
+}
+
+impl TirTraceV1<'_> {
+    /// The pin of row `row` whose beat tile holds `lane`, re-aimed at `lane` — from the rows, or from
+    /// a held pin of that row and tile.
+    pub fn pin_v1(&self, ctx: &PalwJobContextV2, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
+        self.pin(ctx, row, lane)
+    }
+
+    fn pin(&self, ctx: &PalwJobContextV2, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
+        match self {
+            Self::Rows { rows, generated } => tiled_decode_pin_v1(ctx, rows, generated, row, lane),
+            Self::Absent => None,
+            Self::Summary { pins, .. } => pins
+                .iter()
+                .find(|p| {
+                    p.position == row
+                        && p.beat_lane as usize / PALW_LOGITS_TILE_LANES == lane as usize / PALW_LOGITS_TILE_LANES
+                        && (lane as usize % PALW_LOGITS_TILE_LANES) < p.beat_tile_lanes.len()
+                })
+                .map(|p| PalwTiledDecodePinV1 { beat_lane: lane, ..p.clone() }),
+        }
+    }
 }
 
 /// **The node's evidence store for one execution** — see the module doc.
@@ -154,7 +190,7 @@ pub struct TirEvidenceV1<'a> {
     runner: &'a TirClassRunnerV1<'a>,
     binding: &'a PalwTirStepBindingV1,
     prompt: &'a [u32],
-    trace: Trace<'a>,
+    trace: TirTraceV1<'a>,
     tree: TirStepTreeV1,
     leaves: Leaves<'a>,
     params: &'a dyn TirParamOpenerV1,
@@ -180,7 +216,7 @@ impl<'a> TirEvidenceV1<'a> {
             runner,
             binding: &job.binding,
             prompt: &job.prompt,
-            trace: Trace { rows: &job.logits_rows, generated: &job.generated },
+            trace: TirTraceV1::Rows { rows: &job.logits_rows, generated: &job.generated },
             tree,
             leaves: Leaves::Replay { points: &job.points, disputed: None },
             params,
@@ -212,7 +248,7 @@ impl<'a> TirEvidenceV1<'a> {
             runner,
             binding,
             prompt,
-            trace: Trace { rows: logits_rows, generated },
+            trace: TirTraceV1::Rows { rows: logits_rows, generated },
             tree,
             leaves: Leaves::Dense(preimages),
             params,
@@ -241,6 +277,25 @@ impl<'a> TirEvidenceV1<'a> {
         prompt_form: PalwPromptIdsFormV1,
         cap: u64,
     ) -> Result<Self, String> {
+        let trace = TirTraceV1::Rows { rows: accused_rows, generated: accused_generated };
+        Self::challenger_with_trace(runner, accused, own, disputed_opening, disputed_preimage, trace, params, prompt_form, cap)
+    }
+
+    /// [`Self::challenger`] over the accused's committed trace as a SERVED ANNEX or an on-chain root
+    /// claim carries it ([`TirTraceV1::Summary`]) — what a challenger holds of a claim whose capture no
+    /// transport carries (RFC-0002's evidence transport, options B and D).
+    #[allow(clippy::too_many_arguments)]
+    pub fn challenger_with_trace(
+        runner: &'a TirClassRunnerV1<'a>,
+        accused: &'a PalwTirStepBindingV1,
+        own: &'a TirRetainedJobV1,
+        disputed_opening: &PalwStepOpeningV1,
+        disputed_preimage: PalwStepTileLeafV1,
+        trace: TirTraceV1<'a>,
+        params: &'a dyn TirParamOpenerV1,
+        prompt_form: PalwPromptIdsFormV1,
+        cap: u64,
+    ) -> Result<Self, String> {
         if own.binding.job_context != accused.job_context || own.binding.class != accused.class {
             return Err("the challenger's execution is not of the accused's job and class".into());
         }
@@ -257,7 +312,7 @@ impl<'a> TirEvidenceV1<'a> {
             runner,
             binding: accused,
             prompt: &own.prompt,
-            trace: Trace { rows: accused_rows, generated: accused_generated },
+            trace,
             tree,
             leaves: Leaves::Replay { points: &own.points, disputed: Some((disputed_opening.leaf_index, disputed_preimage)) },
             params,
@@ -311,14 +366,13 @@ impl<'a> TirEvidenceV1<'a> {
         let row = (l.position + 1).checked_sub(prefill).ok_or("a leaf before the first selecting position")?;
         let scheme = Hash64::from_bytes(space.program.logits_scheme_id);
         let trace = if scheme == flat_logits_scheme_id_v1() {
-            PalwTirTraceLanesV1::Flat(PalwBase0DecodeTokensV1 {
-                logits_rows: self.trace.rows.to_vec(),
-                generated_token_ids: self.trace.generated.to_vec(),
-            })
+            let TirTraceV1::Rows { rows, generated } = self.trace else {
+                return Err("the flat scheme's door carries every row, and this store holds a summary".into());
+            };
+            PalwTirTraceLanesV1::Flat(PalwBase0DecodeTokensV1 { logits_rows: rows.to_vec(), generated_token_ids: generated.to_vec() })
         } else if scheme == tiled_logits_scheme_id_v1() {
             let beat = u32::try_from(first_element).map_err(|_| "a logits lane past u32")?;
-            let pin = tiled_decode_pin_v1(ctx, self.trace.rows, self.trace.generated, row, beat)
-                .ok_or("the trace has no such row or lane")?;
+            let pin = self.trace.pin(ctx, row, beat).ok_or("the trace this store holds has no such row or lane")?;
             debug_assert_eq!(beat as usize / PALW_LOGITS_TILE_LANES, pin.beat_lane as usize / PALW_LOGITS_TILE_LANES);
             PalwTirTraceLanesV1::Tiled {
                 generated_token_ids: pin.generated_token_ids,
@@ -341,7 +395,7 @@ impl<'a> TirEvidenceV1<'a> {
     /// **The tiled decode-token pin** for decode row `row`, the lane `beat_lane` said to beat the
     /// committed token (the tiled scheme's door).
     pub fn decode_token_pin(&self, row: u32, beat_lane: u32) -> Option<PalwTiledDecodePinV1> {
-        tiled_decode_pin_v1(&self.binding.job_context, self.trace.rows, self.trace.generated, row, beat_lane)
+        self.trace.pin(&self.binding.job_context, row, beat_lane)
     }
 
     /// Replay the positions from the latest point before `a` through `a`, caching their leaves.
@@ -444,18 +498,75 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
 
     fn decode_pin(&self) -> Option<PalwDecodeTokenPinV1> {
         let scheme = Hash64::from_bytes(self.runner.space.program.logits_scheme_id);
-        if scheme == tiled_logits_scheme_id_v1() {
-            Some(PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 {
-                rows_root: tiled_logits_rows_root_v1(&self.binding.job_context, self.trace.rows)?,
-                generated_token_ids: self.trace.generated.to_vec(),
-            }))
-        } else if scheme == flat_logits_scheme_id_v1() {
-            Some(PalwDecodeTokenPinV1::Base0V1(PalwBase0DecodeTokensV1 {
-                logits_rows: self.trace.rows.to_vec(),
-                generated_token_ids: self.trace.generated.to_vec(),
-            }))
-        } else {
-            None
+        match (self.trace, scheme) {
+            (TirTraceV1::Rows { rows, generated }, s) if s == tiled_logits_scheme_id_v1() => {
+                Some(PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 {
+                    rows_root: tiled_logits_rows_root_v1(&self.binding.job_context, rows)?,
+                    generated_token_ids: generated.to_vec(),
+                }))
+            }
+            (TirTraceV1::Summary { rows_root, generated, .. }, s) if s == tiled_logits_scheme_id_v1() => {
+                Some(PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated.to_vec() }))
+            }
+            (TirTraceV1::Rows { rows, generated }, s) if s == flat_logits_scheme_id_v1() => {
+                Some(PalwDecodeTokenPinV1::Base0V1(PalwBase0DecodeTokensV1 {
+                    logits_rows: rows.to_vec(),
+                    generated_token_ids: generated.to_vec(),
+                }))
+            }
+            _ => None,
         }
     }
+
+    /// **The tiled row pin of decode row `row`, aimed at lane `lane`** (the second IR fence's
+    /// `TirStepLeaf` answer): from the rows (a capture's, or this node's own run), or from a held pin
+    /// of that row whose beat tile holds the lane (a served annex's, an on-chain disclosure's).
+    fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
+        self.trace.pin(&self.binding.job_context, row, lane)
+    }
+
+    /// **Step-tree node `(level, index)`'s frontier and opening** (the second IR fence's descent
+    /// unit), off this store's tree — whole for the executor's own capture or run; a challenger's
+    /// partial tree answers only the nodes it holds.
+    fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        self.tree.node_parts(level, index)
+    }
+
+    /// **Rows-tree node `(level, index)` of the committed tiled trace** (the second IR fence's
+    /// `TirRowNode`): from the rows this store holds — a capture's, or this node's own run
+    /// (`palw_tir_row_node_parts_v1`). A store holding only a summary of the trace answers none.
+    fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        match self.trace {
+            TirTraceV1::Rows { rows, .. } => palw_tir_row_node_parts_v1(&self.binding.job_context, rows, level, index),
+            TirTraceV1::Summary { .. } | TirTraceV1::Absent => None,
+        }
+    }
+}
+
+/// **The rows tree of a tiled logits trace, held level by level** — the step tree's own shape over
+/// the row roots (`tiled_logits_row_root_v1`), which is what a claim's `TirRowNode` answers open: a
+/// seat whose own steps are the claim's descends the claim's rows tree against this one. `None` for
+/// no rows, or rows that build no root.
+pub fn tir_rows_tree_v1(ctx: &PalwJobContextV2, rows: &[Vec<i32>]) -> Option<TirStepTreeV1> {
+    let ctx_hash = ctx.context_hash();
+    let roots = rows
+        .iter()
+        .enumerate()
+        .map(|(r, row)| tiled_logits_row_root_v1(&ctx_hash, u32::try_from(r).ok()?, row))
+        .collect::<Option<Vec<Hash64>>>()?;
+    (!roots.is_empty()).then(|| TirStepTreeV1::full(&roots))
+}
+
+/// **Row `row`'s tile leaves** (`tiled_logits_tile_leaf_v1`, one per 4,096 lanes) — the frontier of
+/// a level-0 `TirRowNode` answer, set against a claim's to name the tile it disputes.
+pub fn tir_row_tile_leaves_v1(ctx: &PalwJobContextV2, rows: &[Vec<i32>], row: u32) -> Option<Vec<Hash64>> {
+    let ctx_hash = ctx.context_hash();
+    let lanes = rows.get(row as usize)?;
+    Some(
+        lanes
+            .chunks(PALW_LOGITS_TILE_LANES)
+            .enumerate()
+            .map(|(t, tile)| tiled_logits_tile_leaf_v1(&ctx_hash, row, t as u32, tile))
+            .collect(),
+    )
 }

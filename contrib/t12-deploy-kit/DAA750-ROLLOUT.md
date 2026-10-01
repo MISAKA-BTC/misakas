@@ -1,6 +1,10 @@
 # testnet-12 DAA 750 post-launch release — rollout checklist
 
-2026-09-26 作成（`rcore/int-4`）。**この文書のどの手順もまだ実行していない。** 読み取りで確かめたのは次の 3 つだけ:
+> **実施済み（2026-09-27）**: 01:50〜02:15 JST に公開 fleet の 8 ノードを `c3dbaee3c` に 1 台ずつ入れ替えた（DAA 623 まで、check-fleet 8/8 OK、
+> 起動ログ `Consensus fence schedule: 750, 1000`）。DAA 750 には 07:29 JST に達し、その前後で 8 ノードは同じ chain にとどまった（分岐なし）。
+> 旧スケジュールのノードは handshake で拒否されている。以下は実施前に書いたチェックリスト。
+
+2026-09-26 作成（`rcore/int-4`）。**作成時点では、この文書のどの手順もまだ実行していなかった。** 読み取りで確かめたのは次の 3 つだけ:
 .113 の `/etc/misaka-mtp/chain.pin`（`cat` のみ）、IBD checkpoint の候補（explorer の node と ibm の node への `getBlock`）、
 公開 node の DAA。
 
@@ -53,7 +57,7 @@
 
 | 対象 | 何を pin / 表示しているか | 切替時にすること |
 |---|---|---|
-| **DNS seeder**（4 台、`misaka-dnsseeder-t12` `1174b965…`、`SEEDER_SHA256=KEEP`） | **何も pin しない。** `--anchors-only` で、operator が指定した anchor（169.58.232.113、169.58.39.220）へ `:26311` の TCP 接続ができるかだけを見る。genesis・params id・fork id・version を読まず、P2P handshake もしない（`misaka-dnsseeder/src/main.rs` `refresh_verified`）。address manager の peer は anchors-only では配らない | **何もしない。** KEEP の seeder は upgrade 後も同じ IP・port の anchor を配り続ける。旧 version の node は anchor でない限りもともと配られない（fleet 外の node は新旧どちらも配られない）。切替後に `seeders/40-verify.sh` と `CONFIRM=yes seeders/60-join-check.sh <新 release の kaspad>`（`EXPECT_FP` は fleet.env の新しい値を読む） |
+| **DNS seeder**（4 台、`misaka-dnsseeder-t12`） | `--anchors-only` でも operator anchor（169.58.232.113、169.58.39.220）へ P2P handshake を行い、`--network-id testnet-12` から導いた genesis・params id・identity id・fence schedule id が完全一致したものだけ配る。TCP 接続だけの旧実装では、T11／旧T12の同一ポート node を誤配布できた | seeder をこの変更で再ビルド・段階配備し、`seeders/40-verify.sh` と `CONFIRM=yes seeders/60-join-check.sh <新 release の kaspad>` を実行する。検証できない anchor は空応答にするため、joiner が別 ruleset へ誘導されることはない |
 | **explorer**（misakascan、.113） | `deploy.sh verify` が `/kaspa`・`/kaspa-seed`・`/kaspa-hub` の `getPalwNodeStatus.consensusParamsId` を `EXPECT_FP`（fleet.env）と比べる。`index.html` の告知 banner が fp・fence schedule・schedule id を表示（この commit で新しい値に更新済み — **再 pin 後にもう一度**。registry に登録したので `t12-repin.sh` が書き換える） | .113 の node がこのリリースになった後で `./deploy.sh files`（banner）→ `./deploy.sh verify`。それまでは旧 banner のまま（node が出さない fp を表示しない）。`app.js` に fp は無い |
 | **MTP collector**（.113 `/etc/misaka-mtp/chain.pin`） | `NETWORK=testnet-12`・`DB=kaspa_t12`・`RPC=127.0.0.1:26313`・`GENESIS=a27f8f44…`・`DB_ANCHOR_DAA=0`／`DB_ANCHOR_HASH=a27f8f44…`。`mtp-chain-fence.sh` は node の pruning point を `GENESIS` と比べるだけで、**fingerprint は見ない**（2026-09-26 20:00 JST 読み取りで確認） | **何もしない**（genesis 不変）。pruning point が genesis を離れる DAA ~75k までは今の pin のままでよい |
 | **deploy kit**（`fleet.env`） | `EXPECT_FP`（stage の IDENTITY 照合、`upgrade` の再起動後 gate、`check`、`t12check.py --expect-fp`）。`t12check.py` 自体は値を持たない | `REV`・`KASPAD_SHA256`・`MISAKA_SHA256`・`PALW_CLASS_SHA256` を新しい build の値に、`EXPECT_FP` を**再 pin 後の**新しい fp に、**`UPGRADE_FROM_FP=b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f`**（今 fleet が出している fp）。`EXPECT_GENESIS`・`PREMINE_TXID`・`SEEDER_SHA256=KEEP` はそのまま |
@@ -126,9 +130,10 @@ PLAN.md §15 の表は ibm → .113 → 5.104 の順だが、今回は .113 → 
 - 同時に、750 以降の block は新規則（panel seed・operator anchor・lock・sink 等）で fold される。どの block で最初に分かれるかは
   どの規則が最初に効くか次第だが、PALW の state commitment が旧規則の計算と合わなくなった時点で、旧 node はその block を受け入れ
   られない。旧 node は止まる（自分で掘らない限り）か、旧 node 同士で別の枝を伸ばす。
-- **戻り方**: 新しい release に更新すれば、同じ genesis・同じ identity なので datadir をそのまま使える（`upgrade` と同じ）。
-  750 以降に旧 node が自分で block を掘って別の枝に乗っていた場合は、更新後も自分の枝を持ち続けることがあるので、datadir を
-  消して再同期する（その場合は IBD 修正入りの build が必須）。
+- **戻り方**: DAA 750 より前に更新すれば、同じ genesis・同じ identity なので datadir をそのまま使える（`upgrade` と同じ）。
+  旧 build のまま DAA 750 を越えた node は、750 以降の block を旧規則で無効・失格として DB に記録しうるので、更新後も datadir を
+  そのままでは使えないことがある: `<appdir>/misaka-testnet-12/datadir` を退避して再同期する（IBD 修正入りの build が必須）。
+  round の署名記録は `<appdir>/misaka-testnet-12/palw-panel/` にあり、datadir の退避では失われない。
 - DNS seeder は anchor（更新済みの fleet）だけを配るので、旧 node が DNS で新たにつながる先も更新済みの fleet で、750 以降は拒否される。
 
 ## 9. 入金確定の公開文言（main の launch note §3）— strict-win は浅い同点規則つきで 750 に武装する

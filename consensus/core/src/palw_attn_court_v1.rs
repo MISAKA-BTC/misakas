@@ -1244,15 +1244,49 @@ pub fn palw_attn_court_admits_row_v1(
     tile: u32,
     window_court: u64,
 ) -> Result<u64, PalwAttnCourtError> {
-    let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(court.max_close_chunks());
-    let worst = court
-        .worst_case_duration_with_history_daa(history_positions, tile)
+    let (worst, reserve, required) = attn_court_window_parts_v1(court, history_positions, tile, false)
         .ok_or(PalwAttnCourtError::NoAdmissibleArity { window_court })?;
-    let moves = worst / court.turn_deadline_daa().max(1);
-    match worst.checked_add(reserve) {
-        Some(total) if total < window_court => Ok(worst),
-        _ => Err(PalwAttnCourtError::OverrunsWindow { moves, deadline: court.turn_deadline_daa(), reserve, window_court }),
+    if required <= window_court {
+        Ok(worst)
+    } else {
+        let moves = worst / court.turn_deadline_daa().max(1);
+        Err(PalwAttnCourtError::OverrunsWindow { moves, deadline: court.turn_deadline_daa(), reserve, window_court })
     }
+}
+
+/// **The smallest finite DAA window that admits this court shape.** The inequality is strict:
+/// the court must finish its worst-case exchange *and* leave the full assembly reserve before
+/// the backstop, so the minimum admissible integer window is `worst + reserve + 1`.
+///
+/// This is deliberately independent of the configured network window. Registration stores this
+/// value per class; admission and live sessions must then use that same stored value. Arithmetic
+/// overflow is a refusal, not a reason to fall back to a common or unlimited window.
+pub fn palw_attn_court_required_window_daa_v1(
+    court: &PalwCourtParamsV2,
+    history_positions: u64,
+    tile: u32,
+    held: bool,
+) -> Option<u64> {
+    attn_court_window_parts_v1(court, history_positions, tile, held).map(|(_, _, required)| required)
+}
+
+/// **The finite per-model window**: the minimum valid duration for this model's court shape.
+/// There is no arbitrary network-wide DAA ceiling; `None` means the derivation overflowed `u64`
+/// or the court shape has no finite bound, in which case registration must refuse it. Every
+/// successful result is a deterministic finite deadline committed to the registered class.
+pub fn palw_model_court_window_daa_v1(court: &PalwCourtParamsV2, history_positions: u64, tile: u32, held: bool) -> Option<u64> {
+    palw_attn_court_required_window_daa_v1(court, history_positions, tile, held)
+}
+
+fn attn_court_window_parts_v1(court: &PalwCourtParamsV2, history_positions: u64, tile: u32, held: bool) -> Option<(u64, u64, u64)> {
+    let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(court.max_close_chunks());
+    let worst = if held {
+        court.worst_case_duration_held_daa(history_positions, tile)
+    } else {
+        court.worst_case_duration_with_history_daa(history_positions, tile)
+    }?;
+    let required = worst.checked_add(reserve)?.checked_add(1)?;
+    Some((worst, reserve, required))
 }
 
 /// **ADR-0103 Decision 5: the window admission with no leaf ladder** —
@@ -1265,13 +1299,13 @@ pub fn palw_attn_court_admits_row_held_v1(
     tile: u32,
     window_court: u64,
 ) -> Result<u64, PalwAttnCourtError> {
-    let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(court.max_close_chunks());
-    let worst =
-        court.worst_case_duration_held_daa(history_positions, tile).ok_or(PalwAttnCourtError::NoAdmissibleArity { window_court })?;
-    let moves = worst / court.turn_deadline_daa().max(1);
-    match worst.checked_add(reserve) {
-        Some(total) if total < window_court => Ok(worst),
-        _ => Err(PalwAttnCourtError::OverrunsWindow { moves, deadline: court.turn_deadline_daa(), reserve, window_court }),
+    let (worst, reserve, required) = attn_court_window_parts_v1(court, history_positions, tile, true)
+        .ok_or(PalwAttnCourtError::NoAdmissibleArity { window_court })?;
+    if required <= window_court {
+        Ok(worst)
+    } else {
+        let moves = worst / court.turn_deadline_daa().max(1);
+        Err(PalwAttnCourtError::OverrunsWindow { moves, deadline: court.turn_deadline_daa(), reserve, window_court })
     }
 }
 
@@ -2756,6 +2790,27 @@ mod tests {
         // not, with the arithmetic in the refusal.
         let wide = palw_attn_court_admits_row_v1(&court, 131_072, TILE, 3_000).expect("73 moves at 20 DAA is 1,460");
         assert_eq!(wide, (2 * (22 + 13) + 2 + 1) * 20);
+        let required = palw_attn_court_required_window_daa_v1(&court, 131_072, TILE, false).expect("finite bound");
+        assert_eq!(required, wide + 216 + 1, "strict admission includes the complete close reserve and one DAA of slack");
+        assert_eq!(palw_model_court_window_daa_v1(&court, 131_072, TILE, false), Some(required));
+        assert_eq!(palw_attn_court_admits_row_v1(&court, 131_072, TILE, required), Ok(wide), "the derived minimum is admissible");
+        assert!(
+            matches!(
+                palw_attn_court_admits_row_v1(&court, 131_072, TILE, required - 1),
+                Err(PalwAttnCourtError::OverrunsWindow { .. })
+            ),
+            "one DAA below the derived minimum is refused"
+        );
+        // A larger court clock raises this same profile's finite requirement above the old
+        // 6,000-DAA proposal. There is no arbitrary ceiling: a 9,000-DAA window still admits it.
+        let long_court = PalwCourtParamsV2::new(1 << 22, 120, 2)
+            .expect("a longer but finite rung clock")
+            .with_dissection_arity(2)
+            .expect("binary court");
+        let long_required = palw_model_court_window_daa_v1(&long_court, 131_072, TILE, false).expect("finite model window");
+        assert!(long_required > 6_000 && long_required <= 9_000, "derived requirement is {long_required}");
+        assert!(palw_attn_court_admits_row_v1(&long_court, 131_072, TILE, 9_000).is_ok());
+        assert!(palw_attn_court_admits_row_v1(&long_court, 131_072, TILE, long_required - 1).is_err());
         assert_eq!(
             palw_attn_court_admits_row_v1(&court, 131_072, TILE, 1_500),
             Err(PalwAttnCourtError::OverrunsWindow { moves: 73, deadline: 20, reserve: 216, window_court: 1_500 }),

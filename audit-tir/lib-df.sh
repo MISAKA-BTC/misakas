@@ -1,6 +1,14 @@
 # audit-tir/lib-df.sh — sourced by the D-F drill runner (RFC-0002 Phase F: D-F1 the Qwen2.5-A16 IR class
 # end to end, D-F2 its court battery; D-F3/D-F4 are Phase F's step scripts, run on the same chain).
 #
+# **THE int-10 KIT (df-kit-int10, 2026-10-01): the DAA-3,600 flag day's drill** — `palw_tir_fence2` ALONE (the
+# coordinator's decision of 2026-10-01: the model court window stays dormant on testnet-12), crossed on the SHIPPING
+# binary at TIR2_AT (`--palw-drill-tir2-at`), with the fleet's int-8 release (OLD_KASPAD_BIN,
+# lifecycle-run/bin/4ca695b98) as the old relay: it knows the IR fence (`--palw-drill-tir-at`), so it agrees with the
+# new nodes through TIR_AT and up to TIR2_AT − 1, and the fork id refuses it at TIR2_AT. The A16 class (new0) registers
+# BELOW TIR2_AT (the release's element-twin sizing); the small class (new4) registers PAST it (`df.sh register-past`),
+# admitted under fence2's sizing (the range twin) and its DA ladder (PAST_CLASS=ir: the other way round).
+#
 # ONE salted testnet-12 drill chain on this Mac, loopback only: its own salt ($WORK_DIR/SALT, 0600, never
 # printed — or SALT from the environment), its own keyring (written by the shipping kaspad itself), its own
 # ports, its own app dirs under $WORK_DIR. Never a fleet host, never a public node's app dir or port.
@@ -12,14 +20,14 @@
 set -euo pipefail
 A=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)          # audit-tir/
 WT=$(cd "$A/.." && pwd)
-WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-tir-drill}
+WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-int10-drill}
 # BIN_DIR: the release under test (kaspad, misaka, palw-class, palw-a16-to-tir, palw-tir-equiv, redteam) —
 # the one parameter a run points at a build; each binary can still be named on its own.
 BIN_DIR=${BIN_DIR:-}
 KASPAD_BIN=${KASPAD_BIN:-${BIN_DIR:+$BIN_DIR/kaspad}}
 CLI_BIN=${CLI_BIN:-$(dirname "${KASPAD_BIN:-/nonexistent/kaspad}")/misaka}
-# The fleet's release (the arm64 int-7 build, the exact commit the fleet runs), per the coordinator 2026-09-28.
-OLD_KASPAD_BIN=${OLD_KASPAD_BIN:-/Users/wata/Downloads/MISAKA-wt-b/lifecycle-run/bin/7aba8dd57/kaspad}
+# The fleet's release (the arm64 int-8 build, the exact commit the fleet runs: 4ca695b98, params 3db42ea6…).
+OLD_KASPAD_BIN=${OLD_KASPAD_BIN:-/Users/wata/Downloads/MISAKA-wt-b/lifecycle-run/bin/4ca695b98/kaspad}
 # The offline tools (palw-class, palw-a16-to-tir, palw-tir-equiv): beside kaspad unless named.
 TOOLS_BIN=${TOOLS_BIN:-$(dirname "${KASPAD_BIN:-/nonexistent/kaspad}")}
 KR=$WORK_DIR/keyring
@@ -29,6 +37,22 @@ IR_DIR=$WORK_DIR/ir
 # The flag days, moved below the IR fence so the drill runs the rules the live chain has when the fence arms
 # (validate_palw_v2: all four heights distinct, fence1 <= fence3).
 FENCE_AT=${FENCE_AT:-6}; FENCE2_AT=${FENCE2_AT:-10}; FENCE3_AT=${FENCE3_AT:-14}; TIR_AT=${TIR_AT:-20}
+# **The DAA-3,600 flag day's drill height** (`--palw-drill-tir2-at`: palw_tir_fence2 — the whole of the flag day's list,
+# the court window rides none): above TIR_AT, a height no other fence uses; fixed for the chain's life (the datadir
+# marker's tir2_at). Empty: the chain does not cross it (the B/D/C piece's own chains set it at `up`: DF1=0 TIR2_AT=30).
+TIR2_AT=${TIR2_AT:-50}
+# One class registers only once the chain is past the flag day — PAST_CLASS=small (default: the small class, new4) or
+# PAST_CLASS=ir (the A16 class, new0): `df.sh register-past` creates this marker and restarts that registrant with
+# --palw-register-class. That is the registration Stage 1 judges under fence2's sizing (the range twin); the OTHER class
+# registers at `up`, below the flag day, under the release's. (PAST_CLASS=ir lets the small class run its whole lifecycle
+# before the flag day, so the B/D/C piece is ready the moment the chain crosses it.) Without the marker the delayed
+# registrant only produces.
+PAST_CLASS=${PAST_CLASS:-small}
+case $PAST_CLASS in small|ir) ;; *) echo "PAST_CLASS must be small or ir" >&2; exit 2 ;; esac
+PAST_REGISTER_MARKER=$WORK_DIR/past-register.ok
+# DF1=0: the B/D/C piece's lighter chain — no node loads or produces D-F1 (the 1.5B class); the seven holders
+# load the small class alone and new0 is a plain seat.
+DF1=${DF1:-1}
 
 # The IR class: the Qwen2.5-1.5B A16 artifact converted to PALW-TIR (its mirror program, unwindowed: F7
 # dissects its history cones), declared at IR_CONTEXT positions with its logits tiled at IR_LOGITS_TILE
@@ -105,10 +129,20 @@ salt() {
 manifest() { python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print($1)" "$KR/manifest.json"; }
 ir_class_id() { tr -d ' \n' < "$WORK_DIR/ir-class.id"; }
 small_class_id() { tr -d ' \n' < "$WORK_DIR/small-class.id"; }
+# Is the class already on the drill chain (getPalwModelRegistry through new3)? Then its registrant is restarted
+# WITHOUT --palw-register-class: the int-8 release (tir/node up to 7a9ab18da) builds nothing for a class the
+# chain holds, never marks its registration done, and skips every duty after it in the panel's tick — readiness
+# proofs included — for as long as the process lives (fixed on tir/node after 7a9ab18da). Not reachable (the
+# chain is not up yet): the flag stays, as the first registration needs it.
+class_on_chain() {
+    local cid=$1
+    [ -n "$cid" ] || return 1
+    python3 "$A/rpc.py" call --port "$(jport new3)" getPalwModelRegistry '{}' 2>/dev/null | grep -q "$cid"
+}
 
 # The shared ports and logs, exported for Phase F's step scripts.
 export_layout() {
-    export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TIR_AT FENCE_AT FENCE2_AT FENCE3_AT
+    export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TIR_AT TIR2_AT PAST_CLASS FENCE_AT FENCE2_AT FENCE3_AT
     NEW0_P2P=$(p2p new0); NEW0_RPC=$(borsh new0); NEW0_GRPC=$(gport new0); NEW0_LOG=$WORK_DIR/new0/kaspad.out
     OLD_P2P=$(p2p old); OLD_RPC=$(borsh old); OLD_LOG=$WORK_DIR/old/kaspad.out
     export NEW0_P2P NEW0_RPC NEW0_GRPC NEW0_LOG OLD_P2P OLD_RPC OLD_LOG
@@ -129,26 +163,39 @@ node_args() {
     # The flag days every node runs, the old release included: below the IR fence the two binaries agree.
     a+=("--palw-drill-fence-at=$FENCE_AT" "--palw-drill-fence2-at=$FENCE2_AT" "--palw-drill-fence3-at=$FENCE3_AT")
     if [ "$role" = old ]; then
-        # The fleet's release: keyless, peered to new0 only, the same salt and flag days, and no IR fence
-        # (it has no --palw-drill-tir-at): past TIR_AT its fork id is not the new nodes' (D-F4).
-        a+=("--addpeer=127.0.0.1:$(p2p new0)")
+        # The fleet's int-8 release: keyless, peered to new0 only, the same salt, flag days and IR fence
+        # (--palw-drill-tir-at: int-8 has it), and NOT the DAA-3,600 flag day (it has no --palw-drill-tir2-at):
+        # it agrees with the new nodes below TIR2_AT, and past it its fork id is not theirs.
+        a+=("--palw-drill-tir-at=$TIR_AT" "--addpeer=127.0.0.1:$(p2p new0)")
         printf '%s\n' "${a[@]}" "$@"
         return
     fi
     a+=("--ram-scale=$RAM_SCALE" "--palw-host-memory-share=$(( $(cat "$d/share-mib" 2>/dev/null || echo "$SHARE_MIB") * 1048576))"
         "--palw-drill-tir-at=$TIR_AT")
+    [ -n "$TIR2_AT" ] && a+=("--palw-drill-tir2-at=$TIR2_AT")
     if [ "$seat" != - ]; then
         a+=("--palw-producer-key=$KR/bond-$seat.seed"
             "--palw-producer-bond=$(manifest "m['seats'][$seat]['bond_outpoint']")"
             "--palw-fee-outpoint=$(manifest "m['seats'][$seat]['fee_float_outpoint']")")
     fi
-    [ "$ir" = 1 ] && a+=("--palw-class-artifact=$IR_ARTIFACT")
+    [ "$ir" = 1 ] && [ "$DF1" = 1 ] && a+=("--palw-class-artifact=$IR_ARTIFACT")
     [ "$ir" = 1 ] && [ -s "$SMALL_ARTIFACT" ] && a+=("--palw-class-artifact=$SMALL_ARTIFACT")
     case $role in
         floor) a+=(--palw-produce) ;;
-        ir) a+=(--palw-produce "--palw-register-class=$IR_MODEL_ID" "--palw-producer-class=$(ir_class_id)") ;;
-        ir2) [ -s "$WORK_DIR/small-class.id" ] &&
-            a+=(--palw-produce "--palw-register-class=$SMALL_MODEL_ID" "--palw-producer-class=$(small_class_id)") ;;
+        ir) if [ "$DF1" = 1 ]; then
+                a+=(--palw-produce "--palw-producer-class=$(ir_class_id)")
+                # PAST_CLASS=ir: registered past the flag day only (see PAST_REGISTER_MARKER).
+                if [ "$PAST_CLASS" != ir ] || [ -z "$TIR2_AT" ] || [ -e "$PAST_REGISTER_MARKER" ]; then
+                    class_on_chain "$(ir_class_id)" || a+=("--palw-register-class=$IR_MODEL_ID")
+                fi
+            fi ;;
+        ir2) if [ -s "$WORK_DIR/small-class.id" ]; then
+                a+=(--palw-produce "--palw-producer-class=$(small_class_id)")
+                # PAST_CLASS=small (default): registered past the flag day only (see PAST_REGISTER_MARKER).
+                if [ "$PAST_CLASS" != small ] || [ -z "$TIR2_AT" ] || [ -e "$PAST_REGISTER_MARKER" ]; then
+                    class_on_chain "$(small_class_id)" || a+=("--palw-register-class=$SMALL_MODEL_ID")
+                fi
+            fi ;;
     esac
     [ "$hb" = 1 ] && a+=("--palw-heartbeat-miner-address=$(manifest "m['heartbeat'][$k]['address']")" --enable-unsynced-mining)
     local m; for m in $(new_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done

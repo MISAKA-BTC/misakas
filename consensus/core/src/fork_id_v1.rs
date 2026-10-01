@@ -772,6 +772,9 @@ mod tests {
             "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
             "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
             "palw_kary_court" => params.palw_kary_court = Some(at),
+            // The model-specific finite court window (DAA-3,600 flag day): a bare height; `validate_palw_v2`
+            // (not run by the probe) refuses it without the k-ary court at or below it.
+            "palw_model_court_window" => params.palw_model_court_window = Some(at),
             "palw_court_responder_coverage" => params.palw_court_responder_coverage = Some(at),
             "palw_fp_decode_rules" => params.palw_fp_decode_rules = Some(at),
             "palw_fp_derived_work" => params.palw_fp_derived_work = Some(at),

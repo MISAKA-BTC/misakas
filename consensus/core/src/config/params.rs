@@ -2631,6 +2631,11 @@ pub struct Params {
     /// ruleset whose genesis set registers a graph-v5 class while this fence is dormant.
     pub palw_kary_court: Option<ForkActivation>,
 
+    /// Activate model-specific finite court windows. After this fence registration derives the
+    /// minimum complete dispute duration from each model's court shape; there is no shared DAA
+    /// ceiling such as 6,000. Overflow or a non-finite court shape is refused.
+    pub palw_model_court_window: Option<ForkActivation>,
+
     /// **ADR-0082 Decision 2's clock does not convict for a move no party in the field can make**
     /// (mainnet audit 2026-09-06, C-2/H-5). `None` on every shipped preset, so the fold is
     /// byte-identical to not having the field at all.
@@ -3777,6 +3782,21 @@ impl Params {
         self
     }
 
+    /// **The model-specific court window's prerequisite** (`palw_model_court_window`, the DAA-3,600 flag day): the
+    /// k-ary court in force at or below it — a model-specific window has no executable court until the court
+    /// that dissects is active. `Ok` while the fence is dormant (`None` or `never()`). Public so the rule is
+    /// tested on its own: on a ruleset whose genesis registers a fused row, the k-ary court's own refusals answer first.
+    pub fn validate_palw_model_court_window(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        if let Some(model_window_at) = self.palw_model_court_window.filter(|f| *f != ForkActivation::never())
+            && !self.palw_kary_court.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= model_window_at.daa_score())
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "palw_model_court_window is armed before palw_kary_court: a model-specific window has no executable court until the k-ary court is active",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         // The overlay's bond collateral has one gate left: the acceptance-time skip, in force from
         // `bond_spend_gate_mergeset_activation_daa_score`. The own-body gate that covered the blocks
@@ -4830,6 +4850,7 @@ impl Params {
                  end unprosecuted at the price it was admitted for (ADR-0082 Decision 1, ADR-0049 Decision C)",
             ));
         }
+        self.validate_palw_model_court_window()?;
         // **ADR-0082 Decisions 10 and 11 — the audit D M-1 / audit C M-5 refusal is LIFTED** (RFC-0001
         // §A, lane fp-sampler, 2026-09-27). It stood because the transition answered
         // `FreePromptDecodeLeavesUnavailable` past the fence and no engine implemented
@@ -6019,6 +6040,9 @@ impl Params {
         // ADR-0082 Decision 3, a bare fence: the same collapse for the same reason.
         if self.palw_kary_court == Some(ForkActivation::never()) {
             self.palw_kary_court = None;
+        }
+        if self.palw_model_court_window == Some(ForkActivation::never()) {
+            self.palw_model_court_window = None;
         }
         // The fused-terminal responder-coverage rule, a bare fence: the same collapse for the same
         // reason — `never()` is absence, and absence must not write a name into the schedule id.
@@ -8360,6 +8384,11 @@ impl Params {
         self.palw_kary_court_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// Is per-model finite court-window admission in force at `daa_score`?
+    pub fn palw_model_court_window_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_court_window.is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// Is the fused terminal's responder-coverage rule in force at `daa_score`? `false` on every
     /// shipped preset. The ONE place it is decided; the fold and the sync walk both switch on this
     /// and never on the raw field.
@@ -9228,6 +9257,7 @@ impl Params {
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
+            palw_model_court_window,
             palw_court_responder_coverage,
             palw_fp_decode_rules,
             palw_fp_derived_work,
@@ -9463,6 +9493,7 @@ impl Params {
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
             ("palw_kary_court", *palw_kary_court),
+            ("palw_model_court_window", *palw_model_court_window),
             ("palw_court_responder_coverage", *palw_court_responder_coverage),
             ("palw_fp_decode_rules", *palw_fp_decode_rules),
             ("palw_fp_derived_work", *palw_fp_derived_work),
@@ -10220,6 +10251,7 @@ impl Params {
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
+            palw_model_court_window,
             palw_court_responder_coverage,
             palw_fp_decode_rules,
             palw_fp_derived_work,
@@ -10873,6 +10905,9 @@ impl Params {
         if let Some(activation) = palw_kary_court.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_model_court_window.as_mut() {
+            fork(activation, visit);
+        }
         // The fused-terminal responder-coverage rule. Visited SOME-ONLY, for the reason above it.
         if let Some(activation) = palw_court_responder_coverage.as_mut() {
             fork(activation, visit);
@@ -11341,6 +11376,7 @@ impl Params {
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
+            palw_model_court_window,
             palw_court_responder_coverage,
             palw_fp_decode_rules,
             palw_fp_derived_work,
@@ -12002,6 +12038,10 @@ impl Params {
         // preset leaves it `None` and fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_kary_court {
             h.write(b"palw_kary_court");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_model_court_window {
+            h.write(b"palw_model_court_window");
             h.write(activation.daa_score().to_le_bytes());
         }
         // The fused-terminal responder-coverage rule, Some-only like every fence above it: arming
@@ -12729,6 +12769,7 @@ impl Params {
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
+            palw_model_court_window: self.palw_model_court_window,
             palw_court_responder_coverage: self.palw_court_responder_coverage,
             palw_fp_decode_rules: self.palw_fp_decode_rules,
             palw_fp_derived_work: self.palw_fp_derived_work,
@@ -13787,6 +13828,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
+    palw_model_court_window: None,
     palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_fp_derived_work: None,
@@ -14041,6 +14083,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
+    palw_model_court_window: None,
     palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_fp_derived_work: None,
@@ -14277,6 +14320,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
+    palw_model_court_window: None,
     palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_fp_derived_work: None,
@@ -19220,6 +19264,7 @@ pub fn palw_t12_launch_params_v1() -> Params {
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
         .iter()
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
+        .chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1)
         .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V3)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V2)
@@ -19790,21 +19835,23 @@ fn palw_t12_arm_tir_flag_day_v1(params: &mut Params) {
     }
 }
 
-/// **testnet-12's second IR flag day: the fixes after DAA 2,000** — `palw_tir_fence2` alone
-/// ([`crate::palw_tir_fence2_v1`]: ref2's H7 `TopK` row, the `Select`-arm work credit, the IR DA units
-/// `TirStepLeaf` and `TirStepNode`). Its prerequisite is the IR flag day's `palw_tir_v1` at or below it
-/// (`validate_palw_tir_fence2`).
+/// **testnet-12's DAA-3,600 flag day** (the user's decision of 2026-10-01: one release, one drill, one
+/// rollout — `rcore/int-10`; the court window stays dormant on testnet-12, the coordinator's decision of the
+/// same day, so the list is `palw_tir_fence2` ALONE) — `palw_tir_fence2` ([`crate::palw_tir_fence2_v1`]: ref2's
+/// H7 `TopK` row, the `Select`-arm work credit, the IR DA units `TirStepLeaf`, `TirStepNode` and
+/// `TirRowNode`, the per-class DA ladder past the fence, the seat-reach (2^30) admission cap). Its
+/// prerequisite is the IR flag day's `palw_tir_v1` at or below it (`validate_palw_tir_fence2`).
+/// `--palw-drill-tir2-at` moves this list alone.
 pub const PALW_T12_TIR_FENCE2_FENCES_V1: &[PalwPostLaunchFenceV1] = &[crate::palw_tir_fence2_v1::PALW_T12_TIR_FENCE2_ENTRY];
 
-/// **The second IR flag day's height — `None` until the user sets it.** While `None` the list is
-/// dormant on every ruleset, the shipped one included, and a drill crosses it with
-/// `--palw-drill-tir2-at`. It must be a height no other fence uses (not 750, 1,000, 1,300, 1,700 or
-/// 2,000): the fork id names heights, not fences.
-pub const PALW_T12_TIR_FENCE2_DAA: Option<u64> = None;
+/// **The DAA-3,600 flag day's height** (~17:00 JST 2026-10-02 at 2.9 min/DAA; the user's decision of
+/// 2026-10-01). A height no other fence uses — not 750, 1,000, 1,300, 1,700 or 2,000: the fork id names
+/// heights, not fences. An activation height, not a maximum model window.
+pub const PALW_T12_TIR_FENCE2_DAA: Option<u64> = Some(3_600);
 
-/// **The second IR flag day, armed** — every entry of [`PALW_T12_TIR_FENCE2_FENCES_V1`] at
-/// [`PALW_T12_TIR_FENCE2_DAA`], on the ASSEMBLED ruleset, after the IR flag day; a no-op while the
-/// height is `None`.
+/// **The DAA-3,600 flag day, armed** — every entry of [`PALW_T12_TIR_FENCE2_FENCES_V1`] at
+/// [`PALW_T12_TIR_FENCE2_DAA`] through its own `set` (which writes the bundle's mirror), on the ASSEMBLED
+/// ruleset, after the IR flag day; a no-op while the height is `None`.
 fn palw_t12_arm_tir_fence2_v1(params: &mut Params) {
     let Some(at) = PALW_T12_TIR_FENCE2_DAA else { return };
     for fence in PALW_T12_TIR_FENCE2_FENCES_V1 {
@@ -19835,12 +19882,65 @@ fn palw_t12_arm_decode_rules_v1(params: &mut Params) {
     }
 }
 
+/// **The model-specific finite court-window fence's entry** (`palw_model_court_window`, Codex's
+/// `codex/t12-court-window`). After it, registration derives each fused-attention or IR class's court
+/// window from its own court shape — the minimum complete dispute duration, with no shared DAA ceiling —
+/// and stores it in `class_court_windows`; every class registered below it keeps the network window.
+pub const PALW_T12_MODEL_COURT_WINDOW_ENTRY: PalwPostLaunchFenceV1 =
+    PalwPostLaunchFenceV1 { name: "palw_model_court_window", set: |params, at| params.palw_model_court_window = at };
+
+/// The per-model court window alone — what `--palw-drill-model-court-at` moves. **Armed nowhere on
+/// testnet-12** ([`PALW_T12_MODEL_COURT_WINDOW_DAA`] is `None`): testnet-12 charges every class the held clock
+/// (`palw_attn_court_admits_row_held_v1` — `held.armed` is the network's regime, from genesis), under which the
+/// window the fence derives is the network window for every admissible class and no admission verdict moves
+/// (`consensus/core/tests/palw_t12_court_window_changes_no_admission.rs`). The code, this list and the drill
+/// flag stay for a ruleset that charges the ladder clock, and the baselines below clear it so arming it later
+/// is a one-line edit.
+pub const PALW_T12_MODEL_COURT_WINDOW_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_T12_MODEL_COURT_WINDOW_ENTRY];
+
+/// **The model court window's height — `None`: dormant on every testnet-12 ruleset** (the coordinator's
+/// decision of 2026-10-01). See [`PALW_T12_MODEL_COURT_WINDOW_FENCES_V1`]. It must be a height no other
+/// fence uses if it is ever set.
+pub const PALW_T12_MODEL_COURT_WINDOW_DAA: Option<u64> = None;
+
+/// **The model court window, armed** — every entry of [`PALW_T12_MODEL_COURT_WINDOW_FENCES_V1`] at
+/// [`PALW_T12_MODEL_COURT_WINDOW_DAA`]; a no-op while the height is `None`, which it is.
+fn palw_t12_arm_model_court_window_v1(params: &mut Params) {
+    let Some(at) = PALW_T12_MODEL_COURT_WINDOW_DAA else { return };
+    for fence in PALW_T12_MODEL_COURT_WINDOW_FENCES_V1 {
+        (fence.set)(params, Some(ForkActivation::new(at)));
+    }
+}
+
+/// **testnet-12 as its DAA-2,000 release (int-8, `4ca695b98`) ships it** — [`palw_t12_shipped_params`] with
+/// the DAA-3,600 flag day's list (and the dormant model court window's and decode rules') set back to dormant: the ruleset a
+/// node that has not taken the DAA-3,600 release runs (the fleet's int-8 ids, params `3db42ea6…`), and the
+/// baseline the DAA-3,600 flag day is judged against (the fork-id comparison, the "only this fence moved it"
+/// twin).
+pub fn palw_t12_release_v4_params() -> Params {
+    let mut params = palw_t12_shipped_params();
+    for fence in PALW_T12_DECODE_RULES_FENCES_V1
+        .iter()
+        .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
+        .chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1)
+    {
+        (fence.set)(&mut params, None);
+    }
+    params
+}
+
 /// **testnet-12 as its DAA-1,700 release (int-7, `7aba8dd57`) ships it** — [`palw_t12_shipped_params`] with
-/// the IR flag day's list set back to dormant: the ruleset a node that has not taken the IR release runs
-/// (the fleet's, params `770fb822…`, schedule `9410712f…`), and the baseline the IR flag day is judged against.
+/// the IR flag day's list (and the DAA-3,600 flag day's, which builds on it) set back to dormant: the ruleset a
+/// node that has not taken the IR release runs (int-7's, params `770fb822…`, schedule `9410712f…`), and the
+/// baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_DECODE_RULES_FENCES_V1.iter().chain(PALW_T12_TIR_FENCE2_FENCES_V1).chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1) {
+    for fence in PALW_T12_DECODE_RULES_FENCES_V1
+        .iter()
+        .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
+        .chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1)
+        .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
+    {
         (fence.set)(&mut params, None);
     }
     params
@@ -19855,6 +19955,7 @@ pub fn palw_t12_release_v2_params() -> Params {
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
         .iter()
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
+        .chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1)
         .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V3)
     {
@@ -19872,6 +19973,7 @@ pub fn palw_t12_release_v1_params() -> Params {
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
         .iter()
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
+        .chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1)
         .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V3)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V2)
@@ -19922,10 +20024,14 @@ fn palw_t12_params_with_registry_v1(
     // **The IR flag day** (RFC-0002 PALW-TIR v1, 2026-09-28): `palw_tir_v1` at `PALW_T12_TIR_FLAG_DAY_DAA`,
     // after the third list, on the same assembled ruleset (its prerequisites are genesis rules here).
     palw_t12_arm_tir_flag_day_v1(&mut params);
-    // RFC-0002 Phase F's second IR flag day (dormant while its height is `None`).
+    // **The DAA-3,600 flag day** (`rcore/int-10`, 2026-10-01): `palw_tir_fence2` (RFC-0002 Phase F's second IR
+    // fence) ALONE at `PALW_T12_TIR_FENCE2_DAA`, after the IR flag day whose `palw_tir_v1` it needs below it.
     palw_t12_arm_tir_fence2_v1(&mut params);
     // The decode-rules flag day (ADR-0082 D10/D11; RFC-0003/0004's prerequisite): dormant while its height is `None`.
     palw_t12_arm_decode_rules_v1(&mut params);
+    // **The model court window is armed nowhere** (`PALW_T12_MODEL_COURT_WINDOW_DAA` is `None`; the coordinator's
+    // decision of 2026-10-01): testnet-12 charges the held clock, under which the fence moves no verdict.
+    palw_t12_arm_model_court_window_v1(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or
@@ -21374,6 +21480,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // dormant fence by name (`FusedAttentionNeedsTheKaryCourt`), which is the guard; the property
     // is that a dispute reaches a verdict, and only the court drill asserts that.
     palw_kary_court: Some(ForkActivation::always()),
+    palw_model_court_window: None,
     // **NOT armed on devnet, deliberately** (mainnet audit 2026-09-06, C-2/H-5): devnet is the
     // drill network for the dissection court over a fused row, and the exemption would change what
     // its fold does at a terminal. It is the network the responder will be built against.
@@ -30006,14 +30113,32 @@ mod post_launch_fence_arming_tests {
         assert!(gate.contains(&AT), "the fork id gates on 750 ({gate:?})");
         assert!(!crate::fork_id_v1::fork_id_gate_fences_v1(&launch).contains(&AT));
         // The schedule: 750, D1's 1,000, and — on this build — the second and third flag days' own
-        // heights (`PALW_T12_POST_LAUNCH_FENCES_V2`/`_V3`) and the IR flag day's
-        // (`PALW_T12_TIR_FLAG_DAY_FENCES_V1`); the DAA-750 release as the fleet ran it is 750 and 1,000 alone.
+        // heights (`PALW_T12_POST_LAUNCH_FENCES_V2`/`_V3`), the IR flag day's
+        // (`PALW_T12_TIR_FLAG_DAY_FENCES_V1`) and the DAA-3,600 flag day's
+        // (`PALW_T12_TIR_FENCE2_FENCES_V1`); the DAA-750 release as the fleet ran it is 750 and 1,000 alone.
         let mut expected_schedule = vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA];
         expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V2_DAA);
         expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V3_DAA);
         expected_schedule.extend(PALW_T12_TIR_FLAG_DAY_DAA);
+        expected_schedule.extend(PALW_T12_TIR_FENCE2_DAA);
         expected_schedule.sort_unstable();
-        assert_eq!(release.fence_schedule_v1(), expected_schedule, "750, D1's 1,000, then the second, third and IR flag days");
+        expected_schedule.dedup();
+        assert_eq!(release.fence_schedule_v1(), expected_schedule, "750, D1's 1,000, then the second, third, IR and DAA-3,600 flag days");
+        // The DAA-3,600 flag day's one fence: dormant below it, in force from it, on the shipped ruleset only; the
+        // model court window rides no flag day (the coordinator's decision of 2026-10-01).
+        let flag_day = PALW_T12_TIR_FENCE2_DAA.expect("the DAA-3,600 flag day");
+        assert_eq!(flag_day, 3_600, "the user's decision of 2026-10-01");
+        assert!(!release.palw_tir_fence2_active_at(flag_day - 1) && release.palw_tir_fence2_active_at(flag_day), "fence2 from 3,600");
+        assert_eq!(PALW_T12_MODEL_COURT_WINDOW_DAA, None, "the model court window is armed nowhere");
+        assert!(
+            !release.palw_model_court_window_active_at(0) && !release.palw_model_court_window_active_at(u64::MAX / 2),
+            "the model-window rule is dormant on the release at every height"
+        );
+        let pre_flag_day = palw_t12_release_v4_params();
+        assert!(!pre_flag_day.palw_tir_fence2_active_at(flag_day), "the pre-flag release keeps the release's IR rules");
+        let mut pre_flag_schedule = expected_schedule.clone();
+        pre_flag_schedule.retain(|height| *height != flag_day);
+        assert_eq!(pre_flag_day.fence_schedule_v1(), pre_flag_schedule, "the pre-flag release omits only the flag day's height");
         assert_eq!(
             palw_t12_release_v1_params().fence_schedule_v1(),
             vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA],

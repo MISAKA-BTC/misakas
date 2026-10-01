@@ -337,6 +337,11 @@ pub struct Args {
     /// (`config::drill::palw_drill_post_launch_fences_v3_at_v1`). Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_fence3_at: Option<u64>,
+    /// **DRILL ONLY: cross the model-specific finite court-window fence at this DAA** — with the salt,
+    /// `palw_model_court_window` alone is moved to this height on the drill chain
+    /// (`config::drill::palw_drill_model_court_window_at_v1`). Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_model_court_at: Option<u64>,
     /// **DRILL ONLY: arm testnet-12's IR fence (`palw_tir_v1`, RFC-0002 Phase F) at this DAA** — with
     /// the salt, `PALW_T12_TIR_V1_ENTRY` is armed, or moved, to this height on the drill chain, after
     /// the flag days' moves and at a height of its own (`config::drill::palw_drill_tir_fence_at_v1`,
@@ -344,9 +349,11 @@ pub struct Args {
     /// only, like the salt.
     #[serde(skip)]
     pub palw_drill_tir_at: Option<u64>,
-    /// **DRILL ONLY: arm testnet-12's SECOND IR fence (`palw_tir_fence2`) at this DAA** (RFC-0002's second
-    /// IR flag day, which RFC-0004's fence requires in force at or below its own) — the same machinery
-    /// as `--palw-drill-tir-at` (`config::drill::palw_drill_tir_fence2_at_v1`). Command line only.
+    /// **DRILL ONLY: cross testnet-12's DAA-3,600 flag day at this DAA** — with the salt, `palw_tir_fence2`
+    /// (the whole DAA-3,600 list: ref2's H7 TopK row, the IR DA units `TirStepLeaf`/`TirStepNode`/`TirRowNode`,
+    /// the per-class DA ladder, the seat-reach admission cap) is moved to this height on the drill chain, after
+    /// the first IR fence (`config::drill::palw_drill_tir_fence2_at_v1`; the ruleset refuses it below
+    /// `palw_tir_v1`, so combine it with `--palw-drill-tir-at`). Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_tir2_at: Option<u64>,
     /// **DRILL ONLY: arm RFC-0003's generative fence (`palw_gen_v1`) at this DAA**
@@ -603,6 +610,7 @@ impl Default for Args {
             palw_drill_fence_at: None,
             palw_drill_fence2_at: None,
             palw_drill_fence3_at: None,
+            palw_drill_model_court_at: None,
             palw_drill_tir_at: None,
             palw_drill_tir2_at: None,
             palw_drill_gen_at: None,
@@ -777,9 +785,11 @@ impl Args {
                 .unwrap_or_else(|e| panic!("--palw-drill-tir-at: {e} (validate_args refuses this first)"));
             config.palw_drill_fence_moves.extend(moves);
         }
-        // **And the RFC-0003 / RFC-0004 fences** (`--palw-drill-tir2-at`, `--palw-drill-gen-at`,
+        // **And the later fences** (`--palw-drill-tir2-at` — testnet-12's DAA-3,600 flag day —,
+        // `--palw-drill-model-court-at`, then RFC-0003 / RFC-0004's `--palw-drill-gen-at`,
         // `--palw-drill-decode-rules-at`, `--palw-drill-fp-v5-at`, `--palw-drill-improve-at`), in that order,
-        // after the IR fence: the improvement fence's prerequisites are armed before it.
+        // after the IR fence: the improvement fence's prerequisites are armed before it. One list
+        // (`PalwDrillExtraFencesV1`) for the config, the start-up validation, the keyring and the marker.
         let moves = crate::palw_drill::PalwDrillExtraFencesV1::of(self)
             .apply(&mut config.params)
             .unwrap_or_else(|e| panic!("{e} (validate_args refuses this first)"));
@@ -1505,9 +1515,10 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_DRILL_ANSWER_ONLY")
                 .action(clap::ArgAction::SetTrue)
                 .help(
-                    "PALW DRILL ONLY: this node's canonical free-prompt claims are broadcast and served as their answer \
-                     envelope, never the capture, so every seat judges them by intervals alone and must obtain a named \
-                     leaf's evidence from the executor (ADR-0111). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                    "PALW DRILL ONLY: this node's canonical free-prompt claims and attempts are broadcast and served as their \
+                     answer envelope, never the capture, so every seat judges them by replay or intervals alone and must \
+                     obtain a named leaf's evidence from the executor (ADR-0111) — or, for an IR class, its served annexes or \
+                     the chain's demand (RFC-0002's evidence transport). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
                 ),
         )
         .arg(
@@ -1597,6 +1608,13 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-model-court-at")
+                .long("palw-drill-model-court-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help("With a drill salt only: move testnet-12's per-model finite court-window fence to this DAA."),
+        )
+        .arg(
             Arg::new("palw-drill-tir-at")
                 .long("palw-drill-tir-at")
                 .require_equals(true)
@@ -1614,9 +1632,10 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(u64))
                 .help(
-                    "With --palw-drill-genesis-salt only: arm testnet-12's SECOND IR fence (palw_tir_fence2) at this DAA on the \
-                     drill chain, after --palw-drill-tir-at. Nothing else moves. Refused without the salt, at 0, at a height \
-                     another fence uses, and unless palw_tir_v1 is in force at or below it.",
+                    "With --palw-drill-genesis-salt only: cross testnet-12's DAA-3,600 flag day (palw_tir_fence2 — the consensus \
+                     half of the fixes after the DAA-2,000 release, the whole list) at this DAA on the drill chain, after \
+                     --palw-drill-tir-at. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and \
+                     below palw_tir_v1.",
                 ),
         )
         .arg(
@@ -2616,6 +2635,7 @@ impl Args {
             palw_drill_fence_at: m.get_one::<u64>("palw-drill-fence-at").copied(),
             palw_drill_fence2_at: m.get_one::<u64>("palw-drill-fence2-at").copied(),
             palw_drill_fence3_at: m.get_one::<u64>("palw-drill-fence3-at").copied(),
+            palw_drill_model_court_at: m.get_one::<u64>("palw-drill-model-court-at").copied(),
             palw_drill_tir_at: m.get_one::<u64>("palw-drill-tir-at").copied(),
             palw_drill_tir2_at: m.get_one::<u64>("palw-drill-tir2-at").copied(),
             palw_drill_gen_at: m.get_one::<u64>("palw-drill-gen-at").copied(),

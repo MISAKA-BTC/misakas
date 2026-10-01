@@ -85,7 +85,10 @@ pub(crate) enum PalwTirDissectBuiltV1 {
 
 /// **Build the move `mv` of `duty`'s dissection** — the heavy half, off the tick. `own` is the
 /// party's own capture: the responder's is the claim's; a challenger's its own execution of the same
-/// job. `accused` is the claim's capture (the bottom's source; the responder's own serves as it).
+/// job. `accused` is the claim's capture (the bottom's source; the responder's own serves as it) and
+/// `accused_root` the accused's root claim as it rode on chain — the bottom's source for a challenger
+/// that holds no accused capture (RFC-0002's evidence transport, option D: the disputed leaf is the one
+/// the root claim carries, every other leaf the challenger's own).
 /// `Err` names what could not be built — the move is then not filed, and the clock decides.
 pub(crate) fn palw_tir_dissect_build_v1(
     tir: &TirBackendV1,
@@ -93,6 +96,7 @@ pub(crate) fn palw_tir_dissect_build_v1(
     mv: PalwTirDissectMoveV1,
     own: &[u8],
     accused: Option<&[u8]>,
+    accused_root: Option<&PalwTirRootClaimV1>,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwTirDissectBuiltV1, String> {
     let phase = || duty.tir_dissection.as_deref().ok_or_else(|| "no IR dissection phase is open on the session".to_string());
@@ -129,8 +133,29 @@ pub(crate) fn palw_tir_dissect_build_v1(
             }))
         }
         PalwTirDissectMoveV1::Close => {
-            let accused = accused.ok_or("the bottom is built from the ACCUSED capture and this node holds none")?;
-            let bottom = tir.dissect_bottom(accused, phase()?, rules)?;
+            let phase = phase()?;
+            let bottom = match (accused, accused_root) {
+                (Some(accused), _) => tir.dissect_bottom(accused, phase, rules)?,
+                (None, Some(root)) => {
+                    // The root claim rode with its program empty and the chain's walk hands back what
+                    // the fold refused too: it is read only as the claim's, at the phase's leaf.
+                    let finalize = &root.finalize;
+                    if finalize.binding.committed_execution_root != duty.execution_root
+                        || finalize.binding.full_logits_trace_root != duty.trace_root
+                        || finalize.output_opening.leaf_index != phase.leaf_index()
+                    {
+                        return Err("the root claim on chain is not this claim's at the phase's leaf".into());
+                    }
+                    let mut binding = finalize.binding.clone();
+                    binding.class.program = tir.class().program.clone();
+                    tir.dissect_bottom_from_root_claim(own, root, &binding, phase, rules)?
+                }
+                (None, None) => {
+                    return Err(
+                        "the bottom is built from the ACCUSED capture or its root claim on chain, and this node holds neither".into(),
+                    );
+                }
+            };
             let mut proof = PalwCourtVerdictProofV2::TirDissection { bottom: Box::new(bottom) };
             proof.tir_strip_program_v1();
             Ok(PalwTirDissectBuiltV1::Close(proof))

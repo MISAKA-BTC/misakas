@@ -995,6 +995,25 @@ pub fn verify_class_manifests_v1(sdk: &PalwClassSdk, holdings: &[PalwLoadedArtif
     let mut without: Vec<String> = Vec::new();
     for holding in holdings {
         let name = holding.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| holding.lineage_id.to_string());
+        // **RFC-0002 Phase F: an IR artifact's sidecar is the IR manifest** (`palw-class manifest`
+        // writes `misaka_palw_sdk::tir_manifest::PalwTirManifestV1` beside a `PALWTIR1` file) — checked
+        // as what it is: the inventory root re-derived from the file, streamed, and compared. Read as the
+        // legacy manifest it failed either way (no sidecar, or another schema), and every node that
+        // runs this flag for its 8k artifact refused to start once it also held an IR class.
+        if holding.lineage_id == misaka_palw_sdk::lineages::tir::TIR_LINEAGE_ID_V1 {
+            let text = holding
+                .path
+                .as_ref()
+                .and_then(|path| std::fs::read_to_string(misaka_palw_sdk::PalwClassManifestFileV1::path_beside(path)).ok());
+            let (Some(path), Some(text)) = (holding.path.as_ref(), text) else {
+                without.push(name);
+                continue;
+            };
+            let manifest = misaka_palw_sdk::tir_manifest::PalwTirManifestV1::from_json(&text).map_err(|e| format!("{name}: {e}"))?;
+            manifest.check(path).map_err(|e| format!("{name}: {e}"))?;
+            checked += 1;
+            continue;
+        }
         match misaka_palw_sdk::class_manifest::manifest_beside(holding) {
             misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Absent => without.push(name.clone()),
             misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Disagrees(why) => {

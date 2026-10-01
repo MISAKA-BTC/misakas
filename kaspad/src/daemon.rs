@@ -1551,6 +1551,9 @@ Do you confirm? (y/n)";
                         // court can be shown convicting on a live testnet; a mainnet producer
                         // committing a deliberate fraud is not a drill, it is the thing the drill
                         // is about.
+                        // The panel's config refuses the flag off a private drill; the producer
+                        // takes it only there too.
+                        drill_answer_only: args.palw_drill_answer_only && palw_private_drill,
                         drill_tamper_leaf: match args.palw_drill_tamper_leaf {
                             Some(leaf) if network.is_mainnet() => {
                                 panic!("--palw-drill-tamper-leaf={leaf} is a drill fault injector and is refused on mainnet")

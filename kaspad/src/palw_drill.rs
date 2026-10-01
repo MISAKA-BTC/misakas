@@ -63,15 +63,18 @@ fn refused(why: impl Into<String>) -> ConfigError {
     ConfigError::PalwDrillRefused(why.into())
 }
 
-/// **The five fences beyond the IR fence a drill may arm** (RFC-0003 and RFC-0004's drills): the second IR
-/// fence, the generative fence, the decode rules, FP Job V5 and the improvement fence — each its own flag
-/// (`--palw-drill-tir2-at`, `--palw-drill-gen-at`, `--palw-drill-decode-rules-at`, `--palw-drill-fp-v5-at`,
-/// `--palw-drill-improve-at`), armed in that order after the IR fence so the prerequisites of FP Job V5 and of
-/// the improvement fence (the generative fence, the decode rules) stand before them. The one list
-/// the node's config, the start-up validation, the keyring export and the datadir marker all read.
+/// **The six fences beyond the IR fence a drill may arm**: testnet-12's second IR fence (the DAA-3,600 flag
+/// day), the per-model court window (`palw_model_court_window`, dormant on the release) and RFC-0003 /
+/// RFC-0004's four — the generative fence, the decode rules, FP Job V5 and the improvement fence — each its own
+/// flag (`--palw-drill-tir2-at`, `--palw-drill-model-court-at`, `--palw-drill-gen-at`,
+/// `--palw-drill-decode-rules-at`, `--palw-drill-fp-v5-at`, `--palw-drill-improve-at`), armed in that order after
+/// the IR fence so the prerequisites of FP Job V5 and of the improvement fence (the generative fence, the
+/// decode rules) stand before them. The one list the node's config, the start-up validation, the keyring export
+/// and the datadir marker all read.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PalwDrillExtraFencesV1 {
     pub tir2_at: Option<u64>,
+    pub model_court_at: Option<u64>,
     pub gen_at: Option<u64>,
     pub decode_rules_at: Option<u64>,
     pub fp_v5_at: Option<u64>,
@@ -83,6 +86,7 @@ impl PalwDrillExtraFencesV1 {
     pub fn of(args: &Args) -> Self {
         Self {
             tir2_at: args.palw_drill_tir2_at,
+            model_court_at: args.palw_drill_model_court_at,
             gen_at: args.palw_drill_gen_at,
             decode_rules_at: args.palw_drill_decode_rules_at,
             fp_v5_at: args.palw_drill_fp_v5_at,
@@ -93,6 +97,7 @@ impl PalwDrillExtraFencesV1 {
     /// Does any of them stand?
     pub fn any(&self) -> bool {
         self.tir2_at.is_some()
+            || self.model_court_at.is_some()
             || self.gen_at.is_some()
             || self.decode_rules_at.is_some()
             || self.fp_v5_at.is_some()
@@ -102,7 +107,8 @@ impl PalwDrillExtraFencesV1 {
     /// The first flag that stands, named (for the unsalted refusal).
     fn first_named(&self) -> Option<(&'static str, u64, &'static str)> {
         [
-            ("--palw-drill-tir2-at", self.tir2_at, "testnet-12's second IR fence (palw_tir_fence2)"),
+            ("--palw-drill-tir2-at", self.tir2_at, "testnet-12's DAA-3,600 flag day (palw_tir_fence2)"),
+            ("--palw-drill-model-court-at", self.model_court_at, "the per-model court-window fence (palw_model_court_window)"),
             ("--palw-drill-gen-at", self.gen_at, "RFC-0003's generative fence (palw_gen_v1)"),
             ("--palw-drill-decode-rules-at", self.decode_rules_at, "the decode rules (palw_fp_decode_rules)"),
             ("--palw-drill-fp-v5-at", self.fp_v5_at, "FP Job V5 (palw_fp_job_v5)"),
@@ -119,6 +125,9 @@ impl PalwDrillExtraFencesV1 {
         if let Some(at) = self.tir2_at {
             moves.extend(d::palw_drill_tir_fence2_at_v1(params, at).map_err(|e| format!("--palw-drill-tir2-at: {e}"))?);
         }
+        if let Some(at) = self.model_court_at {
+            moves.extend(d::palw_drill_model_court_window_at_v1(params, at).map_err(|e| format!("--palw-drill-model-court-at: {e}"))?);
+        }
         if let Some(at) = self.gen_at {
             moves.extend(d::palw_drill_gen_fence_at_v1(params, at).map_err(|e| format!("--palw-drill-gen-at: {e}"))?);
         }
@@ -134,15 +143,26 @@ impl PalwDrillExtraFencesV1 {
         Ok(moves)
     }
 
-    /// The marker's one line (`none` for no flag, else `tir2:… gen:… decode_rules:… fp_v5:… improve:…`).
+    /// The marker's `tir2_at=` line — the release line's own (`none` without the flag, also what a marker
+    /// written before it counts as): a chain that line's binary started reopens under this build.
+    fn tir2_marker_text(&self) -> String {
+        palw_drill_marker_fence_text_v1(self.tir2_at)
+    }
+
+    /// The marker's `model_court_at=` line — the release line's own, as above.
+    fn model_court_marker_text(&self) -> String {
+        palw_drill_marker_fence_text_v1(self.model_court_at)
+    }
+
+    /// The marker's `extra_at=` line — RFC-0003 / RFC-0004's four flags only (`none` when none stands, else
+    /// `gen:… decode_rules:… fp_v5:… improve:…`).
     fn marker_text(&self) -> String {
-        if !self.any() {
+        if self.gen_at.is_none() && self.decode_rules_at.is_none() && self.fp_v5_at.is_none() && self.improve_at.is_none() {
             return palw_drill_marker_fence_text_v1(None);
         }
         let at = |v: Option<u64>| palw_drill_marker_fence_text_v1(v);
         format!(
-            "tir2:{},gen:{},decode_rules:{},fp_v5:{},improve:{}",
-            at(self.tir2_at),
+            "gen:{},decode_rules:{},fp_v5:{},improve:{}",
             at(self.gen_at),
             at(self.decode_rules_at),
             at(self.fp_v5_at),
@@ -355,7 +375,7 @@ pub fn palw_drill_fence_lines_v1(config: &Config) -> Vec<String> {
         return Vec::new();
     }
     let mut lines = vec![format!(
-        "PALW DRILL FLAG DAY (--palw-drill-fence-at / --palw-drill-fence2-at / --palw-drill-fence3-at): {} post-launch fence(s) of testnet-12's release set \
+        "PALW DRILL FLAG DAY (--palw-drill-fence-at / --palw-drill-fence2-at / --palw-drill-fence3-at / --palw-drill-model-court-at / --palw-drill-tir-at / --palw-drill-tir2-at): {} post-launch fence(s) of testnet-12's release set \
          on this drill chain, nothing else moved — params fingerprint {}, schedule id {}",
         moves.len(),
         config.params.consensus_params_id(),
@@ -436,10 +456,12 @@ pub fn palw_drill_datadir_guard_v3(
     )
 }
 
-/// [`palw_drill_datadir_guard_v3`] with the four later fences ([`PalwDrillExtraFencesV1`]: the second IR
-/// fence, the generative fence, FP Job V5, the improvement fence): the marker also names them
-/// (`extra_at=`, `none` when absent — also what a marker written before them counts as), and a stored
-/// chain is reopened only under the same set.
+/// [`palw_drill_datadir_guard_v3`] with the later fences ([`PalwDrillExtraFencesV1`]: the second IR fence —
+/// testnet-12's DAA-3,600 flag day —, the per-model court window, and RFC-0003 / RFC-0004's generative fence,
+/// decode rules, FP Job V5 and improvement fence). The marker names the release line's two as its own lines
+/// (`tir2_at=`, `model_court_at=`, as the release writes them: a chain started by that binary reopens under
+/// this one) and the other four as one (`extra_at=`); each reads `none` when absent — also what a marker
+/// written before it counts as — and a stored chain is reopened only under the same set.
 #[allow(clippy::too_many_arguments)]
 pub fn palw_drill_datadir_guard_v4(
     prefixed_dir: &Path,
@@ -463,13 +485,15 @@ pub fn palw_drill_datadir_guard_v4(
     // also what a marker written before the flag existed counts as.
     let fence3_text = palw_drill_marker_fence_text_v1(fence3_at);
     let tir_text = palw_drill_marker_fence_text_v1(tir_at);
+    let tir2_text = extra.tir2_marker_text();
+    let model_court_text = extra.model_court_marker_text();
     let extra_text = extra.marker_text();
     let write_marker = |salt: &PalwDrillSaltV1| {
         std::fs::create_dir_all(prefixed_dir).map_err(|e| format!("cannot create {}: {e}", prefixed_dir.display()))?;
         std::fs::write(
             &marker_path,
             format!(
-                "salt_id={}\ngenesis={genesis_hash}\nfence_at={fence_text}\nfence2_at={fence2_text}\nfence3_at={fence3_text}\ntir_at={tir_text}\nextra_at={extra_text}\n",
+                "salt_id={}\ngenesis={genesis_hash}\nfence_at={fence_text}\nfence2_at={fence2_text}\nfence3_at={fence3_text}\ntir_at={tir_text}\ntir2_at={tir2_text}\nmodel_court_at={model_court_text}\nextra_at={extra_text}\n",
                 salt.id()
             ),
         )
@@ -493,11 +517,15 @@ pub fn palw_drill_datadir_guard_v4(
             let recorded2 = marker_line("fence2_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
             let recorded3 = marker_line("fence3_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
             let recorded_tir = marker_line("tir_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
+            let recorded_tir2 = marker_line("tir2_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
+            let recorded_model_court = marker_line("model_court_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
             let recorded_extra = marker_line("extra_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
             if recorded == fence_text
                 && recorded2 == fence2_text
                 && recorded3 == fence3_text
                 && recorded_tir == tir_text
+                && recorded_tir2 == tir2_text
+                && recorded_model_court == model_court_text
                 && recorded_extra == extra_text
             {
                 return Ok(());
@@ -533,9 +561,17 @@ pub fn palw_drill_datadir_guard_v4(
                 if recorded_tir != tir_text {
                     named = format!("{named} and a different --palw-drill-tir-at (recorded {recorded_tir}, now {tir_text})");
                 }
+                if recorded_tir2 != tir2_text {
+                    named = format!("{named} and a different --palw-drill-tir2-at (recorded {recorded_tir2}, now {tir2_text})");
+                }
+                if recorded_model_court != model_court_text {
+                    named = format!(
+                        "{named} and a different --palw-drill-model-court-at (recorded {recorded_model_court}, now {model_court_text})"
+                    );
+                }
                 if recorded_extra != extra_text {
                     named = format!(
-                        "{named} and different --palw-drill-tir2-at/-gen-at/-fp-v5-at/-improve-at (recorded {recorded_extra}, now {extra_text})"
+                        "{named} and different --palw-drill-gen-at/-decode-rules-at/-fp-v5-at/-improve-at (recorded {recorded_extra}, now {extra_text})"
                     );
                 }
                 named
@@ -622,9 +658,10 @@ pub fn palw_drill_write_keyring_v3(
     palw_drill_write_keyring_v4(salt, dir, fence_at, fence2_at, fence3_at, tir_at, PalwDrillExtraFencesV1::default())
 }
 
-/// [`palw_drill_write_keyring_v3`] with the four later fences ([`PalwDrillExtraFencesV1`]), armed after the
-/// IR fence as `apply_to_config` arms them, so the manifest's `consensus_params_id` is the one such a node
-/// announces; the manifest names each (`tir2_at`, `gen_at`, `decode_rules_at`, `fp_v5_at`, `improve_at`, `null` without it).
+/// [`palw_drill_write_keyring_v3`] with the later fences ([`PalwDrillExtraFencesV1`]: the second IR fence, the
+/// per-model court window, and RFC-0003 / RFC-0004's four), armed after the IR fence as `apply_to_config` arms
+/// them, so the manifest's `consensus_params_id` is the one such a node announces; the manifest names each
+/// (`tir2_at`, `model_court_at`, `gen_at`, `decode_rules_at`, `fp_v5_at`, `improve_at`, `null` without it).
 pub fn palw_drill_write_keyring_v4(
     salt: &PalwDrillSaltV1,
     dir: &Path,
@@ -706,6 +743,7 @@ pub fn palw_drill_write_keyring_v4(
         "fence3_at": fence3_at,
         "tir_at": tir_at,
         "tir2_at": extra.tir2_at,
+        "model_court_at": extra.model_court_at,
         "gen_at": extra.gen_at,
         "decode_rules_at": extra.decode_rules_at,
         "fp_v5_at": extra.fp_v5_at,
@@ -858,6 +896,11 @@ mod tests {
 
     fn salt() -> PalwDrillSaltV1 {
         PalwDrillSaltV1::from_hex(SALT).unwrap()
+    }
+
+    /// The release line's DAA-3,600 drill flag alone (`--palw-drill-tir2-at`).
+    fn tir2_only(at: u64) -> PalwDrillExtraFencesV1 {
+        PalwDrillExtraFencesV1 { tir2_at: Some(at), ..Default::default() }
     }
 
     fn refusal(args: &Args) -> String {
@@ -1188,6 +1231,150 @@ mod tests {
         let unsalted = parse(&["--testnet", "--netsuffix=12", "--palw-drill-tir-at=100"]);
         let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
         assert!(refused.contains("--palw-drill-tir-at=100") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
+    }
+
+    /// **The second IR fence is a drill flag day of its own too** (`--palw-drill-tir2-at`,
+    /// `palw_tir_fence2`): the marker names it (`tir2_at=`), a stored chain is never reopened under
+    /// another one, the keyring's manifest names it and announces the fingerprint it moves, and the flag
+    /// is refused without the salt and — by the ruleset's own check — without the first IR fence below it.
+    #[test]
+    fn the_second_ir_fence_is_a_drill_flag_day_of_its_own() {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        let a = salt();
+        let root = tempfile::tempdir().unwrap();
+        let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
+        let dir = root.path().join("tir2/misaka-testnet-12");
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), tir2_only(130)).expect("a fresh app dir");
+        assert!(marker_of(&dir).contains("tir2_at=130\n"), "{}", marker_of(&dir));
+        std::fs::create_dir_all(dir.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), tir2_only(130)).expect("the same start");
+        let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), tir2_only(140)).unwrap_err();
+        assert!(why.contains("--palw-drill-tir2-at (recorded 130, now 140)"), "{why}");
+        let why = palw_drill_datadir_guard_v3(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100)).unwrap_err();
+        assert!(why.contains("recorded 130, now none"), "dropped over a stored chain: {why}");
+        // `apply_to_config` arms it after the first IR fence — the drill's own heights (audit-tir's
+        // lib-df.sh: flag days 6/10/14, IR fence 20) — with the mirror the fold reads, and the keyring
+        // names the fingerprint the node on the same command line announces.
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let salted = format!("--palw-drill-genesis-salt={SALT}");
+        let days = ["--palw-drill-fence-at=6", "--palw-drill-fence2-at=10", "--palw-drill-fence3-at=14", "--palw-drill-tir-at=20"];
+        let argv = |extra: &[&str]| -> Vec<String> {
+            base.iter().copied().chain([salted.as_str()]).chain(days).chain(extra.iter().copied()).map(str::to_owned).collect()
+        };
+        let parsed = |extra: &[&str]| {
+            let v = argv(extra);
+            parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        let with = config_of(&parsed(&["--palw-drill-tir2-at=30"]));
+        let without = config_of(&parsed(&[]));
+        assert_eq!(with.params.palw_tir_fence2, Some(ForkActivation::new(30)));
+        assert_eq!(
+            without.params.palw_tir_fence2,
+            Some(ForkActivation::new(3_600)),
+            "the release arms it at DAA 3,600 with the court window; the flag moves it alone"
+        );
+        assert!(with.params.palw_tir_fence2_active_at(30) && !with.params.palw_tir_fence2_active_at(29));
+        assert_eq!(with.palw_drill_fence_moves.len(), without.palw_drill_fence_moves.len() + 1, "the fence alone moves");
+        with.params.validate_palw_v2().expect("the drill crossing both IR fences validates");
+        assert_ne!(with.params.consensus_params_id(), without.params.consensus_params_id(), "the fence moves the fingerprint");
+        palw_drill_validate_args_v1(&parsed(&["--palw-drill-tir2-at=30"])).expect("with the first IR fence below it");
+        let keys = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), tir2_only(30)).expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["tir2_at"], serde_json::json!(30));
+        assert_eq!(manifest["consensus_params_id"], with.params.consensus_params_id().to_string().as_str());
+        let keys_without = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v3(&a, keys_without.path(), Some(6), Some(10), Some(14), Some(20)).expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["tir2_at"], serde_json::Value::Null);
+        assert_eq!(manifest["consensus_params_id"], without.params.consensus_params_id().to_string().as_str());
+        // Refused without the salt, and — by the ruleset's own check, at start-up and in the keyring
+        // export — below `palw_tir_v1` (the release arms it at DAA 2,000; here without --palw-drill-tir-at).
+        let unsalted = parse(&["--testnet", "--netsuffix=12", "--palw-drill-tir2-at=130"]);
+        let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
+        assert!(refused.contains("--palw-drill-tir2-at=130") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
+        let alone: Vec<&str> = base.iter().copied().chain([salted.as_str(), "--palw-drill-tir2-at=130"]).collect();
+        let refused = palw_drill_validate_args_v1(&parse(&alone)).unwrap_err().to_string();
+        assert!(refused.contains("palw_tir_fence2 needs palw_tir_v1"), "{refused}");
+        let why = palw_drill_write_keyring_v4(&a, tempfile::tempdir().unwrap().path(), None, None, None, None, tir2_only(130)).unwrap_err();
+        assert!(why.contains("--palw-drill-tir2-at") || why.contains("palw_tir_fence2 needs palw_tir_v1"), "{why}");
+    }
+
+    /// **The per-model court window is a dormant drill flag of its own** (`--palw-drill-model-court-at`; the release
+    /// arms it nowhere, and the DAA-3,600 flag day — `--palw-drill-tir2-at`, `palw_tir_fence2` alone — leaves it so):
+    /// the marker is named (`model_court_at=`), a stored chain is never reopened under another one, the keyring's
+    /// manifest names it and announces the fingerprint the node on the same command line announces, and the flag is
+    /// refused without the salt.
+    #[test]
+    fn the_model_court_window_is_a_dormant_drill_flag_of_its_own() {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        let a = salt();
+        let root = tempfile::tempdir().unwrap();
+        let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
+        let dir = root.path().join("window/misaka-testnet-12");
+        let start = |dir: &Path, model: Option<u64>| {
+            palw_drill_datadir_guard_v4(dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), PalwDrillExtraFencesV1 { model_court_at: model, ..Default::default() })
+        };
+        start(&dir, Some(130)).expect("a fresh app dir");
+        assert!(marker_of(&dir).contains("model_court_at=130\n"), "{}", marker_of(&dir));
+        std::fs::create_dir_all(dir.join("datadir")).unwrap();
+        start(&dir, Some(130)).expect("the same start");
+        let why = start(&dir, Some(140)).unwrap_err();
+        assert!(why.contains("--palw-drill-model-court-at (recorded 130, now 140)"), "{why}");
+        let why = start(&dir, None).unwrap_err();
+        assert!(why.contains("--palw-drill-model-court-at (recorded 130, now none)"), "dropped over a stored chain: {why}");
+        // A marker written by an older start (`guard_v3`) counts as started without the flag.
+        let old = root.path().join("older/misaka-testnet-12");
+        palw_drill_datadir_guard_v3(&old, Some(&a), "g", Some(40), Some(60), Some(80), Some(100)).expect("an older start");
+        assert!(marker_of(&old).contains("model_court_at=none\n"), "{}", marker_of(&old));
+        std::fs::create_dir_all(old.join("datadir")).unwrap();
+        let why = start(&old, Some(130)).unwrap_err();
+        assert!(why.contains("--palw-drill-model-court-at (recorded none, now 130)"), "added over a stored chain: {why}");
+
+        // `apply_to_config` moves it after the IR fences — the drill's own heights (flag days 6/10/14, IR fence 20).
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let salted = format!("--palw-drill-genesis-salt={SALT}");
+        let days = ["--palw-drill-fence-at=6", "--palw-drill-fence2-at=10", "--palw-drill-fence3-at=14", "--palw-drill-tir-at=20"];
+        let argv = |extra: &[&str]| -> Vec<String> {
+            base.iter().copied().chain([salted.as_str()]).chain(days).chain(extra.iter().copied()).map(str::to_owned).collect()
+        };
+        let parsed = |extra: &[&str]| {
+            let v = argv(extra);
+            parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        let release = config_of(&parsed(&[]));
+        assert_eq!(release.params.palw_model_court_window, None, "dormant on the release drill");
+        assert_eq!(release.params.palw_tir_fence2, Some(ForkActivation::new(3_600)), "and fence2 alone is the DAA-3,600 flag day");
+        // The DAA-3,600 flag day's drill flag moves fence2 alone and leaves the window dormant.
+        let crossing = config_of(&parsed(&["--palw-drill-tir2-at=30"]));
+        assert_eq!(crossing.params.palw_tir_fence2, Some(ForkActivation::new(30)));
+        assert_eq!(crossing.params.palw_model_court_window, None, "the DAA-3,600 flag day arms no court window");
+        assert_eq!(crossing.palw_drill_fence_moves.len(), release.palw_drill_fence_moves.len() + 1, "fence2, and nothing else");
+        palw_drill_validate_args_v1(&parsed(&["--palw-drill-tir2-at=30"])).expect("with the IR fence below it");
+        // The window flag arms it alone.
+        let model_only = config_of(&parsed(&["--palw-drill-model-court-at=30"]));
+        assert_eq!(model_only.params.palw_model_court_window, Some(ForkActivation::new(30)));
+        assert!(model_only.params.palw_model_court_window_active_at(30) && !model_only.params.palw_model_court_window_active_at(29));
+        assert_eq!(model_only.params.palw_tir_fence2, Some(ForkActivation::new(3_600)), "the window flag moves its own fence alone");
+        assert_eq!(model_only.palw_drill_fence_moves.len(), release.palw_drill_fence_moves.len() + 1);
+        model_only.params.validate_palw_v2().expect("the dormant window armed in a drill validates");
+        palw_drill_validate_args_v1(&parsed(&["--palw-drill-model-court-at=30"])).expect("the model window alone");
+        // The keyring names it and the fingerprint the node on the same command line announces.
+        let keys = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), PalwDrillExtraFencesV1 { model_court_at: Some(30), ..Default::default() })
+            .expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["model_court_at"], serde_json::json!(30));
+        assert_eq!(manifest["consensus_params_id"], model_only.params.consensus_params_id().to_string().as_str());
+        let keys_without = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v3(&a, keys_without.path(), Some(6), Some(10), Some(14), Some(20)).expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["model_court_at"], serde_json::Value::Null);
+        assert_eq!(manifest["consensus_params_id"], release.params.consensus_params_id().to_string().as_str());
+        // Refused without the salt.
+        let unsalted = parse(&["--testnet", "--netsuffix=12", "--palw-drill-model-court-at=130"]);
+        let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
+        assert!(refused.contains("--palw-drill-model-court-at=130") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
     }
 
     /// **The keyring export is the binary's own answer**: seeds kaspad accepts (0600, the seat's
@@ -1580,15 +1767,26 @@ mod tests {
         // The marker names the set and refuses another over a stored chain.
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("x/misaka-testnet-12");
-        let set = PalwDrillExtraFencesV1 { tir2_at: Some(24), gen_at: Some(28), decode_rules_at: Some(32), fp_v5_at: None, improve_at: Some(36) };
+        let set = PalwDrillExtraFencesV1 {
+            tir2_at: Some(24),
+            model_court_at: Some(26),
+            gen_at: Some(28),
+            decode_rules_at: Some(32),
+            fp_v5_at: None,
+            improve_at: Some(36),
+        };
         palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("created");
         let marker = std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
-        assert!(marker.contains("extra_at=tir2:24,gen:28,decode_rules:32,fp_v5:none,improve:36\n"), "{marker}");
+        // The release line's two flags keep the marker lines that line writes; RFC-0003 / RFC-0004's four share one.
+        assert!(marker.contains("tir2_at=24\nmodel_court_at=26\nextra_at=gen:28,decode_rules:32,fp_v5:none,improve:36\n"), "{marker}");
         std::fs::create_dir_all(dir.join("datadir")).unwrap();
         palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("kept");
         let moved = PalwDrillExtraFencesV1 { improve_at: Some(40), ..set };
         let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), moved).unwrap_err();
-        assert!(why.contains("recorded tir2:24,gen:28,decode_rules:32,fp_v5:none,improve:36"), "{why}");
+        assert!(why.contains("recorded gen:28,decode_rules:32,fp_v5:none,improve:36"), "{why}");
+        let moved_tir2 = PalwDrillExtraFencesV1 { tir2_at: Some(25), ..set };
+        let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), moved_tir2).unwrap_err();
+        assert!(why.contains("--palw-drill-tir2-at (recorded 24, now 25)"), "{why}");
         // v3's callers (no extras) keep what they had.
         let v3 = root.path().join("y/misaka-testnet-12");
         palw_drill_datadir_guard_v3(&v3, Some(&a), "g", None, None, None, None).expect("created");
