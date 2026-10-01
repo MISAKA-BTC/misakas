@@ -2757,7 +2757,11 @@ in the block's object list.
    DISTINCT operators — never the executor's bond or operator — hold the class with a fresh readiness V2
    possession proof (`model_registry_seat_is_ready`: active, above the floor, a fresh row, free collateral for the
    readiness multiple), else `GenClassNotReady { ready, needed }`; with no registry in force the lane refuses
-   (`GenClaimRefused`);
+   (`GenClaimRefused`). **The possession floor is one shared function** (`class_seating_v1` in
+   `palw_class_seating_v1`, extracted 2026-10-01): for a class and an executor bond it returns each ready
+   operator once with its ready bonds, the executor's bond and operator excluded, and the panel's size;
+   RFC-0002 Part II §II.7.5 Proposal A (the fence `palw_class_seating`, approved) makes it the one door every
+   class kind asks and adds the independence floor over the same map (`ready_operators_in`);
 4. the job against the class: `palw_gen_job_resolve_class_v1` (§15.13's refusals, as `GenClaimRefused`), the
    profile an Image or an Embedding, and under `PublicDa` the carried ids within the class's counts and token
    bounds;
@@ -2784,7 +2788,7 @@ From here the claim is the lane's: panel at the bind (a bought class takes an ou
 licence, `Final`, retirement, the lane's slash on a conviction. Weight for a tensor claim is a later fence.
 
 **15.15.5 The court under the held regime: the generative one-move accusation (G23).** Object
-`GenShardCourtAccused { accusation: PalwGenOneMoveAccusationV1 }`, tag 88 (requested):
+`GenShardCourtAccused { accusation: PalwGenOneMoveAccusationV1 }`, tag 88 (approved):
 
 ```
 PalwGenOneMoveAccusationV1 { version: u16 = 1, claim: Hash64, execution_root: Hash64, trace_root: Hash64,
@@ -2813,21 +2817,124 @@ dissected leaf** (`palw_gen_dissect_site_v1` finds a site, the binding verified 
 responder's `CourtGenRootClaimed` is its first move). The object spends the block's adjudication slot, is a
 court opening for the H-1 heartbeat lane (`CourtOpening(claim)`), and is dropped by name below `palw_gen_v1`.
 
-**15.15.6 One carrier (G24, open).** The accusation is one lifecycle object in one carrier (about 100,000 bytes,
-`PALW_OBJECT_CHUNK_MAX_BYTES`); the chunk path for larger objects is `palw_chunked_object_kind_admitted_v1`
-(`FamilyCertified` only), and a close's own chunks (`CourtCloseDeclared`/`CourtCloseChunk`, PALW-TIR-38's
-3.2 MB) are keyed to a session's bonds. On a held-regime chain a pipeline class is therefore convictable in
-one move only at leaves whose close fits one carrier. **PALW-GEN-21** (to be built with the gate's twin,
-PALW-GEN-20): registration of a pipeline class on a network that carries `palw_held_context` MUST be refused
-when any terminal close exceeds one carrier, until a chunked one-move accusation exists (recommended: the
-close's group rule keyed to (claim id, accuser bond)).
+**15.15.6 One carrier, and the chunked close that lifts it (G24; decision 22, approved 2026-10-01).** *Status:
+specified here, dormant behind `palw_held_close_chunks_v1`, built after the node's halves (§15.15.8).*
 
-**15.15.7 Allocations.** FP job version 10; object tags 87 `GenTensorCommitted` (approved) and 88
-`GenShardCourtAccused` (requested); court proof tag 16 `GenOutputTile` (§15.13; the enum's discriminants are
-explicit); the fence `palw_fp_job_v5` over `palw_gen_v1` (the per-profile `max_inflight_claims` is in the
-latter's value; the V2 bundle mirrors both, borsh-skipped, written only by `sync_palw_gen_v1`); keys
+*The limit.* A one-move accusation (tag 62 for an IR class, tag 88 above) is one lifecycle object in one
+carrier (about 100,000 bytes, `PALW_OBJECT_CHUNK_MAX_BYTES`). The chunk path for larger objects is
+`palw_chunked_object_kind_admitted_v1` (`FamilyCertified` only), and a close's own chunks
+(`CourtCloseDeclared`/`CourtCloseChunk`, PALW-TIR-38's 32 × 100,000 B) are keyed to a **session**, which a chain
+that plays no bisection (the held regime) opens only by naming a dissected leaf (ADR-0103 Decision 5). So on a
+held-regime chain a lie is convictable **only at a leaf whose close fits one carrier**. **Known limitation,
+recorded (it holds for the live IR classes of testnet-12 as for a pipeline class):** a lie at a leaf whose
+close exceeds one carrier is **refused its licence but not slashed** — the panel's seats replay the claim, find
+the difference and file no receipt (a difference files nothing, ADR-0077 W10), so the claim never licenses and
+never reaches `Final`, its reservation is released when its receipt window lapses, and the liar loses fees and
+time and no collateral. Tag 62's semantics below the fence are not changed to close it.
+
+*The mechanism.* One generic object, for IR and pipeline classes alike, under one dormant fence
+**`palw_held_close_chunks_v1`** (a bare height; `None` on every preset and in no testnet-12 list; Some-only in
+both fingerprints, collapsed from `never()`; requires `palw_tir_v1` and `palw_held_context` at or below it; the
+V2 bundle mirrors it, borsh-skipped, written by `sync_palw_gen_v1`; armed by the drill's gen list). It carries no
+new table: it opens a session at the named leaf as ADR-0103 Decision 5 does and writes **the challenger-side
+close group the existing `CourtCloseDeclared` would have written**, so the group rule, the chunks, the assembly
+and the verdict are the court's own. Object `HeldLeafChallengeDeclared { challenge: PalwHeldLeafChallengeV1 }`,
+tag 90 (approved):
+
+```
+PalwHeldLeafChallengeV1 { version: u16 = 1, claim: Hash64, execution_root: Hash64, trace_root: Hash64,
+  executor_bond, accuser_bond, leaf_index: u64, count: u8, chunk_digests: Vec<Hash64>, close_digest: Hash64,
+  signature: Vec<u8> }
+challenge_digest = H64(key "misaka-palw/held-close/challenge/v1",
+                       le32(|domain|) ‖ domain ‖ le16(version) ‖ claim ‖ execution_root ‖ trace_root ‖
+                       borsh(executor_bond) ‖ borsh(accuser_bond) ‖ le64(leaf_index) ‖ count ‖
+                       chunk_digests ‖ close_digest)
+signature       = ML-DSA-87(accuser's registered key, challenge_digest,
+                            context "misaka-palw/held-close/challenge/mldsa87/v1")
+session_id      = bisect_session_id_v1(claim, trace_root, party(accuser_bond), party(executor_bond),
+                                       StepLeaves, the claim's class ladder)      -- unchanged: it names no leaf
+```
+
+`chunk_digests[i]` and `close_digest` are the court's own `palw_court_close_chunk_digest_v1` over chunk `i` and
+over the assembled bytes, which are `borsh(CourtClosed { session_id, verdict: ExecutorGuilty, proof })` for the
+session id above (the accuser computes it before it files: it names the claim, the roots, the two bonds and the
+class's ladder, never the leaf). The session is therefore keyed to **(claim, accuser bond)** by construction,
+exactly the group rule's key, and the leaf is bound by the signature and, at assembly, by the court's own rule
+that a close is judged at the leaf the session narrowed to.
+
+*Acceptance* (`palw_v2_validate_objects`): the fence (dropped by name below it, as every gated object is); the
+shape — version 1, a non-empty signature, `1 ≤ count ≤ min(max_close_chunks, 32)`, `|chunk_digests| = count`,
+`accuser_bond ≠ executor_bond`; the accuser's registered key over `challenge_digest`. The object pays the grading
+rent of a declaration of `count` chunks (`palw_court_close_min_fee_v1(count)`), spends no adjudication slot (it
+adjudicates nothing) and is a court opening for the H-1 heartbeat lane (`CourtOpening(claim)`).
+
+*Fold*: the fence (the second lock); a live non-terminal claim of a class with a `tir_classes` or a `gen_classes`
+row; the executor and the roots the claim's; an accuser that is not the producer; **the held regime in force**
+(the object is refused by name where bisection is played: the ladder reaches the leaf there); an Active accuser at
+or above the floor; **a session already open on the claim admits another challenge only from a seat of the
+claim's panel, one per seat, at most `1 + seat_count` on the claim** (`check_further_held_dissection_v1`: a decoy
+the producer's Sybil opened holds off no seat); then the session opens at `Terminal` on the named leaf
+(`open_dissection_at_named_leaf_v1`: the network's session capacity, the accuser's reservation through the
+accuser gate at `held_dissection_charge_v1`, the claim's path to `Final` frozen) and the group
+`(session_id, Challenger)` is written with `declarer = accuser_bond`, `declared_daa`, `assembly_deadline_daa =
+daa + 4 · count` (refused, `CourtCloseCannotAssemble`, if it does not fit inside the session's backstop), the
+pinned digests and the deposit `palw_close_assembly_deposit_v1(count)` backed by the accuser's own bond.
+
+*Delivery and verdict.* The close rides as the court's `CourtCloseChunk { session_id, side: Challenger, index,
+bytes }` objects — each at most 100,000 B, digest-checked at arrival, in any order — and the chunk that completes
+the group assembles it: bytes that do not hash to `close_digest`, or do not decode to this session's
+`CourtClosed { ExecutorGuilty }`, convict the declarer in that block; otherwise the acceptance layer adjudicates
+the assembled proof at the session's named leaf (`adjudicate_court_close_v3`, the same function a one-carrier
+close meets) and **refuses the completing chunk unless it adjudicates to `ExecutorGuilty`** (the object is
+dropped, the block stands, the group runs on to its deadline); an adjudicated conviction is applied **through
+the `CourtClosed` arm**, so a challenged conviction and a one-move one are the same state machine: the claim
+voids as `CourtFraud` and the executor is charged. A `GenCone` or `TirCone` at a **dissected** leaf is not a
+whole close and never adjudicates to a conviction there: such a leaf is the cone accusation's
+(`NeedsDissection`, §15.15.5), and a challenge at it fails as below.
+
+*The executor's clock.* At a fused class's terminal the court clocks the executor for its opening move (its root
+claim, or at an undissected leaf an acquitting close). A challenge must not put an honest executor on a clock for
+a close the accuser has pinned and may never deliver, so **while the challenger's declared close stands at the IR
+or pipeline terminal the session waits at `Terminal`** (the mirror of the clause that makes the executor's own
+declared close its terminal move, `court_session_executor_declared_at_the_ir_terminal_v1`): its clock is the
+group's assembly deadline, which convicts a declarer that does not deliver. The executor has **no move owed**; it
+may file an acquitting close of its own (one carrier, or declared in its own group) to end the freeze early, and
+whichever side's close completes first ends the session. The clause reads rooted state only (a challenger-side
+group at a fused terminal with no phase open) and cannot be true of any state below the fence.
+
+*Griefing, and what bounds it.* (1) **The accuser alone bears the clock and the deposit.** The window is
+`4 · count` DAA (at most 128) from the block that carries the object, inside the session's backstop; the deposit
+`count × palw_close_chunk_carriage_v1()` is a charge against the accuser's own bond, collected when the session
+ends without the close it pinned; the object pays the declaration's grading rent and the chunks pay their own
+carriage. The executor pays nothing. (2) **If the accuser never completes the close** — no chunk, a missing
+chunk, a close that does not decode, a close that adjudicates to anything but `ExecutorGuilty`, a challenge at a
+dissected leaf — the sweep at `assembly_deadline_daa` (or the completing chunk) convicts the *declarer*
+(`convict_close_declarer_v1`, side `Challenger`): the session ends, **the claim is not convicted, voided or
+slashed**, the accuser's deposit is forfeited and it is charged what a lost held dissection costs (`max(reserved,
+G)` capped at the floor where the class is held, `reserved` otherwise, plus the court-time charge), and the
+claim's licence anchor moves to the close so the seats keep a whole challenge window — a decoy cannot carry a lie
+to `Final` (`rearm_after_challenger_side_close`, ADR-0152 §4-ter C3). (3) **Concurrency is capped three ways:**
+the claim admits one challenge, then one per panel seat (`1 + seat_count`); the network admits
+`palw_max_concurrent_court_sessions_v1(turn_deadline_daa)` sessions, each holding the accuser's reservation (a
+bond opens about one such session at a time); and the block grades at most one close completion
+(`PALW_COURT_CLOSE_MAX_PER_BLOCK`). (4) A claim under a challenge cannot reach `Final` for at most the assembly
+window; a challenge that does not convict leaves it a whole further challenge window.
+
+*PALW-GEN-21.* Registration of a pipeline class on a network that carries `palw_held_context` MUST be refused when
+any terminal close's exact bytes exceed the carried limit **in force at the registration block**: one carrier
+less the accusation's own framing (`palw_gen_one_move_max_proof_bytes_v1`) while `palw_held_close_chunks_v1` is not
+in force, and `min(max_close_chunks, 32) × 100,000` bytes (PALW-TIR-38) once it is. A class registered before the
+fence keeps the stricter bound it was admitted under; one registered after it may use the carried limit. The
+live IR classes of testnet-12 are unchanged (their admission already stands).
+
+**15.15.7 Allocations.** FP job version 10; object tags 87 `GenTensorCommitted`, 88 `GenShardCourtAccused` and
+90 `HeldLeafChallengeDeclared` (all approved 2026-10-01; 89 is RFC-0004's `CourtEvalRootClaimed`); court proof
+tag 16 `GenOutputTile` (§15.13; the enum's discriminants are explicit); the fences `palw_fp_job_v5` over
+`palw_gen_v1` (the per-profile `max_inflight_claims` is in the latter's value) and `palw_held_close_chunks_v1`
+(§15.15.6) — the V2 bundle mirrors them, borsh-skipped, written only by `sync_palw_gen_v1`; keys
 `"misaka-palw/gen/work-id/v1"`, `"misaka-palw/gen/fp-job-id/malformed/v1"`,
-`"misaka-palw/gen/one-move/session/v1"` and the context `"misaka-palw/gen/one-move/accuse/mldsa87/v1"`.
+`"misaka-palw/gen/one-move/session/v1"`, `"misaka-palw/held-close/challenge/v1"` and the contexts
+`"misaka-palw/gen/one-move/accuse/mldsa87/v1"` and `"misaka-palw/held-close/challenge/mldsa87/v1"`.
 
 **15.15.8 The node's halves (not built).** The worker serves `PalwGenTensorRequestV1` (the job, its prompt and
 negative ids, its images) and answers with the claim's binding; the claim is submitted as the lane's
