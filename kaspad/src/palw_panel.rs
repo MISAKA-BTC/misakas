@@ -1341,7 +1341,7 @@ impl PalwSeatReplaysV1 {
             let _held_for_the_replay = reservation;
             PalwSeatTaskOutV1::Replay(work())
         });
-        self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy });
+        self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy, overdue: false });
     }
 
     /// **Start one SEAT-S4 segment task in the same slots** (the audit's SEAT-S review, H2): a held
