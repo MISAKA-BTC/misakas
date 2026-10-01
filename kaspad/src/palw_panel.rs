@@ -111,6 +111,9 @@ const PALW_PANEL: &str = "palw-panel";
 
 /// ADR-0152 §4-ter N3: a held dissection's moves, answered off the tick by the windowed builders.
 mod held_court;
+/// RFC-0004 (A10, node half): the improvement loop — the epoch watch, adapter prefetch, the evaluation
+/// executor's carrier, and a seat's replay of an evaluation claim (dormant below `palw_improvement_v1`).
+mod improve;
 /// RFC-0002 Phase F (F6, node half): an IR class's court close.
 mod tir_court;
 /// RFC-0002 F7's node side: an IR class's history dissection, played.
@@ -282,13 +285,19 @@ pub(crate) enum PalwSeatArmV1 {
     FreePromptCapture,
     /// The attempt lane's interval arm (ADR-0084 Decision 4).
     AttemptInterval,
+    /// **RFC-0004 (A10): a seat's replay of an evaluation claim** — the job the chain's state derives
+    /// (its item's prompt and reference, the policy's parameters), run through the pipeline executor on the
+    /// seat's own weights, its four roots held to the claim row's. A replay of the claim's whole job, so
+    /// it licenses past SEAT-R as the other replays do.
+    EvaluationReplay,
 }
 
 impl PalwSeatArmV1 {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::AttemptReplay,
         Self::FreePromptReplay,
+        Self::EvaluationReplay,
         Self::SegmentResume,
         Self::VerifiedSegmentResume,
         Self::AttemptMaterial,
@@ -304,7 +313,7 @@ impl PalwSeatArmV1 {
 /// that mask's V3 alone, `palw_seat_receipt_forms_v1`).
 pub(crate) fn palw_seat_arm_licenses_v1(seat_r: bool, arm: PalwSeatArmV1) -> bool {
     use PalwSeatArmV1::*;
-    !seat_r || matches!(arm, AttemptReplay | FreePromptReplay | VerifiedSegmentResume)
+    !seat_r || matches!(arm, AttemptReplay | FreePromptReplay | EvaluationReplay | VerifiedSegmentResume)
 }
 
 /// What one whole material of an attempt claim makes of the seat's verdict.
@@ -3308,6 +3317,11 @@ pub struct PalwPanelConfig {
     pub drill_answer_only: bool,
     /// DRILL ONLY (devnet/simnet): refuse every leaf-evidence request, so the slow path runs.
     pub drill_refuse_leaf_evidence: bool,
+    /// **RFC-0004 (A10): evaluate** (`--palw-improve-evaluate`): run the evaluation jobs of every governed
+    /// line's open epoch whose subject class this node holds, and carry their claims.
+    pub improve_evaluate: bool,
+    /// **RFC-0004 (A10): where this node finds a candidate's artifact** (`--palw-improve-artifact-dir`).
+    pub improve_artifact_dir: Option<PathBuf>,
     /// Where THIS node's producer persists the material behind its own attempts, when it produces.
     ///
     /// A court can open long after a claim licensed, and the in-memory pool does not live that
@@ -3412,6 +3426,9 @@ pub struct PalwPanelService {
     /// Loaded once, through the SDK — whichever lineage's container each file is. Same contract
     /// as the producer's: container-checked at load, matched against the CHAIN per duty.
     class_holdings: Vec<misaka_palw_sdk::PalwLoadedArtifactV1>,
+    /// **RFC-0004 (A10): the classes prefetched since the node started** (`improve`), which
+    /// [`Self::backends`] serves beside `class_holdings`.
+    improve_holdings: std::sync::Mutex<Vec<misaka_palw_sdk::PalwLoadedArtifactV1>>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
@@ -3513,7 +3530,12 @@ impl PalwPanelService {
             &self.consensus_config.params,
             self.config.court,
             self.config.prompt_ids_form,
-            self.class_holdings.clone(),
+            {
+                // RFC-0004 (A10): the classes prefetched at run time are held beside the ones loaded at start.
+                let mut holdings = self.class_holdings.clone();
+                holdings.extend(self.improve_holdings.lock().expect("the prefetched holdings are never poisoned").iter().cloned());
+                holdings
+            },
             net,
             self.config.chain_classes,
         )
@@ -3797,6 +3819,7 @@ impl PalwPanelService {
             keypair,
             bond,
             class_holdings,
+            improve_holdings: std::sync::Mutex::new(Vec::new()),
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             foreign_pinned: std::sync::Mutex::new(HashSet::new()),
             served_openings: std::sync::Mutex::new(Vec::new()),
@@ -6418,7 +6441,7 @@ impl PalwPanelService {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            v5: None,
+            tail: None,
         };
         // **RFC-0001 §A.4: past `Params::palw_fp_decode_rules` every new free-prompt job is FP Job
         // V4** — the network's own canonical job too, as the no-op V4 (it decodes exactly what the
@@ -7153,6 +7176,9 @@ impl PalwPanelService {
         // move in hundreds of DAA).
         let mut own_phases: std::collections::HashMap<kaspa_hashes::Hash64, String> = std::collections::HashMap::new();
         let mut own_phases_read: Option<std::time::Instant> = None;
+        // RFC-0004 (A10): the improvement loop's state — the epochs this node follows (read through the
+        // core's doors), its evaluation runs, and its seat's replays of evaluation claims.
+        let mut improve = improve::PalwImproveLoopV1::default();
 
         loop {
             if !self.tick(std::time::Duration::from_secs(2)).await {
@@ -7228,6 +7254,10 @@ impl PalwPanelService {
                 continue;
             }
             let current_daa = session.get_virtual_daa_score();
+            // **RFC-0004 (A10): the improvement loop** — past `palw_improvement_v1` only (dormant on every
+            // shipped preset): the open epochs read through the core's doors, the plan logged, adapter
+            // prefetch, and the evaluation runs started and reaped.
+            self.improve_tick_v1(&mut improve, current_daa).await;
             if own_phases_read.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(30)) {
                 own_phases_read = Some(std::time::Instant::now());
                 // Its own session: `spawn_blocking` takes the handle, and this tick still needs one.
@@ -9344,6 +9374,22 @@ impl PalwPanelService {
                     if self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err() {
                         break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                     }
+                    // **RFC-0004 (A10): an evaluation claim** — a free-prompt claim with no quanta — is replayed
+                    // through the pipeline executor from the chain's own state (its job, the item's prompt
+                    // and reference, the policy's parameters), never from material an executor serves: it has
+                    // none to withhold, so no arm below may file `Unavailable` against it. A matching replay
+                    // licenses `Valid`; a difference is the court's question and files nothing.
+                    match self.improve_seat_step_v1(&mut improve, duty).await {
+                        improve::PalwImproveSeatStepV1::NotEvaluation => {}
+                        improve::PalwImproveSeatStepV1::Valid => {
+                            debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::EvaluationReplay));
+                            licensed_by_replay = true;
+                            break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                        }
+                        improve::PalwImproveSeatStepV1::Waiting
+                        | improve::PalwImproveSeatStepV1::Differs
+                        | improve::PalwImproveSeatStepV1::Unjudgeable => break 'verdict None,
+                    }
                     // **ADR-0098 Decision 2: a seat that found a fault in this claim files NOTHING
                     // about it** — in this round or any later one. Not a `Valid` from an arm whose
                     // samples missed the lie, and not the half-window `Unavailable`, which accuses a
@@ -11412,6 +11458,17 @@ impl PalwPanelService {
                         }
                         Err(e) => warn!("[{PALW_PANEL}] cannot build a canonical claim: {e}"),
                     }
+                }
+                // **RFC-0004 (A10): an evaluation claim the executor finished**, carried beside the
+                // canonical claim at the same site and funded the same way. Nothing here runs below the
+                // fence: no run is ever ready.
+                if slots.offers(PalwCarrierSiteV1::Own, inflight)
+                    && !stuck_opened
+                    && funding.is_some()
+                {
+                    let _ = self
+                        .improve_carry_v1(&mut improve, &session, network_domain, bond, current_daa, &mut funding, &mut inflight)
+                        .await;
                 }
                 // **ADR-0135 / audit C-1: a class registered before the registry fence never gets a
                 // row.** On a chain whose fence is scheduled but not yet in force, hold the
@@ -17056,8 +17113,8 @@ mod seat_r_tests {
         assert!(!palw_seat_r_in_force_v1(&never, u64::MAX), "a fence scheduled never is no fence");
     }
 
-    /// **The one rule, as a table.** Below SEAT-R every arm licenses; past it the two replays of the
-    /// claim's whole job, and SEAT-S4's verified resume of a seat's own mask — not the legacy segment
+    /// **The one rule, as a table.** Below SEAT-R every arm licenses; past it the replays of the
+    /// claim's whole job (an attempt's, a free-prompt claim's, RFC-0004's evaluation claim's), and SEAT-S4's verified resume of a seat's own mask — not the legacy segment
     /// resume, not S3 inside it, not the material, the capture, or either interval arm.
     #[test]
     fn past_seat_r_only_the_replays_license() {
@@ -17065,7 +17122,13 @@ mod seat_r_tests {
             assert!(palw_seat_arm_licenses_v1(false, arm), "{arm:?} below the fences, as today");
             assert_eq!(
                 palw_seat_arm_licenses_v1(true, arm),
-                matches!(arm, PalwSeatArmV1::AttemptReplay | PalwSeatArmV1::FreePromptReplay | PalwSeatArmV1::VerifiedSegmentResume),
+                matches!(
+                    arm,
+                    PalwSeatArmV1::AttemptReplay
+                        | PalwSeatArmV1::FreePromptReplay
+                        | PalwSeatArmV1::EvaluationReplay
+                        | PalwSeatArmV1::VerifiedSegmentResume
+                ),
                 "{arm:?} past the fences"
             );
         }
@@ -17900,7 +17963,7 @@ mod seat_r_tests {
     /// Every `break 'verdict` of the verdict block is one of six spellings, and every mention of
     /// `PalwReceiptVerdictV2::Valid` in it is a `Valid` exit or one of the two interval gates — so a
     /// `Valid` cannot leave the block by a spelling this pin does not see (the review, LOW). Every
-    /// `Valid` exit is attributed to the nearest arm named before it, thirteen in all, in order. The two
+    /// `Valid` exit is attributed to the nearest arm named before it, fourteen in all, in order. The two
     /// replay exits past the fence are the `Licensed` arms of the two off-loop replays
     /// (`fp_seat_replay_pass_v1`, `attempt_seat_replay_v1`), the only lines that set
     /// `licensed_by_replay`; the two SEAT-S4 exits are the `Licensed` arms of the verified resume, one
@@ -17966,6 +18029,9 @@ mod seat_r_tests {
         assert_eq!(
             exits.iter().map(|at| arm_before(*at).0).collect::<Vec<_>>(),
             vec![
+                // RFC-0004 (A10): the evaluation claim's replay, at the head of the block (after the
+                // capability check): a claim with no quanta is never judged by the free-prompt arms below.
+                EvaluationReplay,
                 VerifiedSegmentResume,
                 FreePromptReplay,
                 SegmentResume,
@@ -18005,9 +18071,17 @@ mod seat_r_tests {
         // before its `Valid`.
         const LICENSED: &str = "licensed_by_replay = true;";
         let writers: Vec<usize> = block.match_indices(LICENSED).map(|(i, _)| i).collect();
-        assert_eq!(writers.len(), 2, "two writers, and no other");
+        assert_eq!(
+            writers.len(),
+            3,
+            "three writers, and no other: the two off-loop replays' `Licensed` arms, and RFC-0004's evaluation replay"
+        );
         for at in &writers {
             assert!(block[at + LICENSED.len()..].trim_start().starts_with(VALID), "a writer is its exit's last line");
+            // RFC-0004 (A10): the evaluation replay's writer is the `Valid` arm of its own step.
+            if block[..*at].rfind("improve::PalwImproveSeatStepV1::Valid => {").is_some_and(|v| *at - v < 300) {
+                continue;
+            }
             let licensed = block[..*at].rfind("(PalwSeatReplayStepV1::Licensed, ").expect("a Licensed arm");
             assert!(*at - licensed < 600, "inside the Licensed arm");
             assert!((fp_pass < licensed && licensed - fp_pass < 400) || (attempt_pass < licensed && licensed - attempt_pass < 900));
@@ -18378,7 +18452,7 @@ mod seat_s_tests {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            v5: None,
+            tail: None,
         };
         (job, ids)
     }
@@ -20095,7 +20169,11 @@ mod p2_6_da_accusation_policy {
         let gate = |site: &str| sites.matches(&format!("slots.offers(PalwCarrierSiteV1::{site}, inflight)")).count();
         assert_eq!(gate("ReadinessEscalated"), 1, "M1: the one escalated possession proof, ahead of the court queue");
         assert_eq!(gate("PriorityFirst"), 1);
-        assert_eq!(gate("Own"), 3, "the canonical claim, the class registration, the possession proofs");
+        assert_eq!(
+            gate("Own"),
+            4,
+            "the canonical claim, an evaluation claim (RFC-0004 A10), the class registration, the possession proofs"
+        );
         assert_eq!(gate("Licences"), 3, "the collector's licences; the supplementary collector's entry and each offer (F4 part 2)");
         let supplementary = sites.find("session.palw_v2_supplementary_assemble(claim, v3, v2)").expect("the supplementary collector");
         let licences_at = sites.find("slots.at(PalwCarrierSiteV1::Licences, inflight);").expect("the Licences site");
@@ -21376,7 +21454,7 @@ mod fp_job_v4_material_tests {
             sampling_seed: [0; 32],
             temperature_q: 0,
             decode: None,
-            v5: None,
+            tail: None,
         };
         let greedy = backend.execute_free_prompt(&v3, &usize_prompt).unwrap();
         let v4 = v3.clone().into_v4(DecodeConfigV4 {

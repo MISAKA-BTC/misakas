@@ -113,6 +113,7 @@ fn the_c7_own_attempt_reservation_counts_against_a_same_class_commitment() {
     assert_eq!(op186(&p, &sp, &s, id2m, next).panel_room, 1);
     let commit = PalwConsensusObjectV2::FreePromptCommitted {
         job_pin: kaspa_hashes::Hash64::default(),
+        eval: None,
         claim: h(0xF6_0001),
         class_id: id2m,
         bond: bond_key(42),

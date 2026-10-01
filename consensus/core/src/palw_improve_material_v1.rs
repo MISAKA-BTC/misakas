@@ -879,7 +879,7 @@ mod tests {
                 sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
                 temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
                 decode: None,
-                v5: None,
+                tail: None,
             },
             trace_root: h(0x7A),
             output_root: h(0),

@@ -9,7 +9,8 @@
 //!   read across an edge whose rows start at `|prompt| − 1` (RefLogLik), the finalized outputs (Judge,
 //!   Pairwise);
 //! * **a lie** at a score leaf is convicted there, and a lie in a consumed logits row convicts at the
-//!   RefLogLik leaf that reads it across the edge;
+//!   RefLogLik leaf that reads it across the edge (RefLogLik's first stage, whose leaf at position
+//!   `p` reads row `p` alone);
 //! * **the decode door** holds every id a decode stage that is NOT the output stage selected, and
 //!   convicts an id the decode would not select.
 
@@ -274,9 +275,13 @@ fn a_lie_in_a_score_or_in_a_row_it_reads_is_convicted() {
         "no logits leaf before |prompt| − 1: only consumed rows are committed"
     );
     let lied = lie(&e, 0, row, 1 << 20);
-    let out = c.pipeline.output_stage as usize;
-    let reader = e.space.stages[out].leaves().iter().position(|l| matches!(l.coord.kind, PalwGenLeafKindV1::Commit { .. })).unwrap();
-    assert!(matches!(judge(&c, &lied, out, reader), Ok(PalwGenVerdictV1::Convicted { .. })), "the row's lie reaches the score");
+    // RefLogLik's first stage reads row p at position p: its leaf at position 0 reads the lied row.
+    let reader = e.space.stages[1]
+        .leaves()
+        .iter()
+        .position(|l| l.coord.pos == 0 && matches!(l.coord.kind, PalwGenLeafKindV1::Commit { .. }))
+        .unwrap();
+    assert!(matches!(judge(&c, &lied, 1, reader), Ok(PalwGenVerdictV1::Convicted { .. })), "the row's lie reaches the score");
 }
 
 #[test]
@@ -311,4 +316,33 @@ fn the_decode_door_holds_a_decode_stage_that_is_not_the_output() {
         door(&lied, 1),
         Ok(PalwGenVerdictV1::Convicted { fault: PalwStepFaultV1::DecodeTokenMismatch { position: 1 }, .. })
     ));
+}
+
+/// **RefLogLik's first stage reads one logits row per leaf** — the decode door's own bound, so a
+/// RefLogLik leaf's close carries at most one row whatever the reference's length: the units the
+/// court's evaluation of stage 1's leaves at position `p` read are row `p`'s tiles of the decode stage
+/// and stage 1's own leaves, and nothing else of the decode stage.
+#[test]
+fn a_ref_loglik_leaf_reads_one_logits_row() {
+    let c = eval("eval-ref-loglik.json");
+    let e = claim(&c);
+    let job = PipelineJob { generated: e.claim.generated.clone(), ..c.job.clone() };
+    let facts = stage_job_facts(&c.pipeline, &c.programs, &job).unwrap();
+    let from = c.job.prompt.len() as u32 - 1;
+    let post = (c.programs[0].occurrences().len() - 1) as u16;
+    for (i, leaf) in e.space.stages[1].leaves().iter().enumerate() {
+        let used = palw_gen_cone_units_v1(&case(&c, &e, &facts), &close(&c, &e, 1, i), &LIMITS).unwrap();
+        for (s, index) in &used.leaves {
+            if *s != 0 {
+                continue;
+            }
+            let read = e.space.stages[0].leaves()[*index as usize].coord;
+            assert!(
+                read.pos == from + leaf.coord.pos
+                    && matches!(read.kind, PalwGenLeafKindV1::Commit { occurrence, .. } if occurrence == post),
+                "stage 1 leaf {:?} read {read:?}: only the consumed row of its position",
+                leaf.coord
+            );
+        }
+    }
 }

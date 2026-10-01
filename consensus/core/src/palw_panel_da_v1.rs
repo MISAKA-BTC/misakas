@@ -144,7 +144,7 @@ mod tests {
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            v5: None,
+            tail: None,
         }
     }
 
@@ -517,6 +517,7 @@ mod tests {
         let (s1, _) = apply(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &registrations());
         let commit = PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            eval: None,
             claim: h64(CLAIM),
             class_id: h64(1),
             bond: PalwBondKeyV2(bond_op(1)),

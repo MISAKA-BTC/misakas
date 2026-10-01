@@ -2459,6 +2459,14 @@ impl ConsensusApi for Consensus {
         self.palw_state_v2_tip().map(|state| state.improvement_open_epoch_views_v1()).unwrap_or_default()
     }
 
+    fn palw_improvement_eval_views_v1(&self) -> Vec<kaspa_consensus_core::palw_improve_node_v1::PalwImprovementEvalViewV1> {
+        self.palw_state_v2_tip().map(|state| state.improvement_eval_views_v1()).unwrap_or_default()
+    }
+
+    fn palw_improvement_status_v1(&self) -> kaspa_consensus_core::palw_improve_node_v1::PalwImprovementStatusV1 {
+        self.palw_state_v2_tip().map(|state| state.improvement_status_v1()).unwrap_or_default()
+    }
+
     fn palw_class_carriages_for_sync_v1(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
         self.virtual_processor.palw_class_carriages_for_sync_v1_impl()
     }

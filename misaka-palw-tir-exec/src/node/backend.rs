@@ -584,6 +584,15 @@ impl TirBackendV1 {
         }
     }
 
+    /// Readiness proves possession of ONE tree's leaves against the class's root; a composite
+    /// candidate's root is no tree's, so it proves nothing that way (its parent's class does).
+    fn not_composite(&self) -> Result<(), String> {
+        match self.artifact.composite_ref() {
+            Some(_) => Err("a composite candidate's root commits two trees: readiness is its parent class's".into()),
+            None => Ok(()),
+        }
+    }
+
     /// The operands of the drawn inventory leaves, in the draw's order.
     fn drawn_operands(&self, draw: &[u32]) -> Result<Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>, String> {
         use super::inventory::TirParamOpenerV1;
@@ -739,6 +748,10 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
     }
 
     fn artifact_root_and_leaf_count(&self) -> Result<(Hash64, u32), String> {
+        if self.artifact.composite_ref().is_some() {
+            // A composite candidate's root is the composite root over its two sections, not its tree's.
+            return self.artifact.inventory_root();
+        }
         let tree = self.artifact.inventory_tree()?;
         Ok((tree.root(), tree.leaf_count()))
     }
@@ -750,6 +763,7 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         &self,
         draw: &[u32],
     ) -> Result<(Hash64, Vec<Hash64>, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>), String> {
+        self.not_composite()?;
         let tree = self.artifact.inventory_tree()?;
         Ok((tree.root(), tree.leaves().to_vec(), self.drawn_operands(draw)?))
     }
@@ -760,6 +774,7 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         on_leaf: &mut dyn FnMut(Hash64),
     ) -> Option<Result<(Hash64, u32, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>), String>> {
         Some((|| {
+            self.not_composite()?;
             let tree = self.artifact.inventory_tree()?;
             for leaf in tree.leaves() {
                 on_leaf(*leaf);

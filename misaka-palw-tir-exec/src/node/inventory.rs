@@ -110,13 +110,15 @@ impl TirInventoryTreeV1 {
         Some(PalwArtifactOpeningV1 { operand, leaf_index: leaf, leaf_count: self.leaf_count(), path })
     }
 
-    /// **One multiproof over `leaves`** (RFC-0002 Phase F §2.12.1: an IR close carries its parameter
-    /// openings as one `PalwArtifactMultiproofV1`): the operands read from `src` in ascending leaf
-    /// order, and exactly the siblings `palw_artifact_multiproof_v1` supplies — read off this tree's
-    /// levels instead of folding the inventory again, so a run of leaves costs its two boundary paths.
-    /// `None` for an empty set, a repeated leaf, a leaf outside the inventory, or a source that does not
-    /// hold a piece.
-    pub fn multiproof(&self, program: &TirProgramV1, src: &dyn PalwTirTensorSourceV1, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+    /// **The operands of `leaves`** — each leaf's piece read from `src`, in ascending leaf order (what
+    /// a multiproof or a composite carriage opens). `None` for an empty set, a repeated leaf, a leaf
+    /// outside the inventory, or a source that does not hold a piece.
+    pub fn operands(
+        &self,
+        program: &TirProgramV1,
+        src: &dyn PalwTirTensorSourceV1,
+        leaves: &[u32],
+    ) -> Option<Vec<(u32, PalwArtifactOperandV1)>> {
         let mut sorted = leaves.to_vec();
         sorted.sort_unstable();
         if sorted.is_empty() || sorted.windows(2).any(|w| w[0] == w[1]) || *sorted.last()? >= self.leaf_count() {
@@ -135,6 +137,18 @@ impl TirInventoryTreeV1 {
                 PalwArtifactOperandV1 { tensor_name: program.params[j as usize].name.clone(), layer, row_start: start, bytes: piece };
             opened.push((leaf, operand));
         }
+        Some(opened)
+    }
+
+    /// **One multiproof over `leaves`** (RFC-0002 Phase F §2.12.1: an IR close carries its parameter
+    /// openings as one `PalwArtifactMultiproofV1`): the operands read from `src` in ascending leaf
+    /// order, and exactly the siblings `palw_artifact_multiproof_v1` supplies — read off this tree's
+    /// levels instead of folding the inventory again, so a run of leaves costs its two boundary paths.
+    /// `None` for an empty set, a repeated leaf, a leaf outside the inventory, or a source that does not
+    /// hold a piece.
+    pub fn multiproof(&self, program: &TirProgramV1, src: &dyn PalwTirTensorSourceV1, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        let opened = self.operands(program, src, leaves)?;
+        let sorted: Vec<u32> = opened.iter().map(|(leaf, _)| *leaf).collect();
         // The builder's walk: level by level, a known node whose partner is not known supplies it.
         let mut known: Vec<u64> = sorted.iter().map(|&i| i as u64).collect();
         let mut siblings = Vec::new();
@@ -182,6 +196,12 @@ pub trait TirParamOpenerV1 {
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1>;
     /// One multiproof over `leaves` ([`TirInventoryTreeV1::multiproof`]).
     fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1>;
+    /// **The carriage of `leaves` as a close carries it** (the court store's `param_carriage`): one
+    /// multiproof against the class's root, unless the class is a composite candidate (RFC-0004 §6.3),
+    /// which opens under its two sub-roots.
+    fn param_carriage(&self, leaves: &[u32]) -> Option<kaspa_consensus_core::palw_tir_court_v1::PalwTirParamOpeningV1> {
+        self.param_multiproof(leaves).map(kaspa_consensus_core::palw_tir_court_v1::PalwTirParamOpeningV1::Single)
+    }
 }
 
 /// A tree and the source it was built from.

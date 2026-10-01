@@ -19,8 +19,9 @@
 //!   pipelines: a decode stage and an exact-match stage over what it decoded; a teacher-forced decode
 //!   stage and RefLogLik over its consumed rows; a judge over a finalized claim's generation; a
 //!   pairwise judge over two — each with its score digest (`TensorLe i32`);
-//! * `scoring/{exact-match,ref-loglik,judge,pairwise}.json` — the scoring library (RFC-0004 §7.3):
-//!   each program's canonical bytes and identity, its inputs, and cases (inputs → score);
+//! * `scoring/{exact-match,ref-logprob,ref-loglik-sum,judge,pairwise}.json` — the scoring library
+//!   (RFC-0004 §7.3): each program's canonical bytes and identity, its inputs, and cases (inputs →
+//!   score; RefLogLik's first stage position by position);
 //! * `encoding.json` — byte strings `TirProgramV2::decode_canonical` / `TirProgram::decode_canonical`
 //!   must accept or refuse, with the class.
 //!
@@ -1639,45 +1640,92 @@ fn scoring_vectors() {
     let file = scoring_file("exact-match", "G = 8, K = 4, token_bound = 16".into(), &em, em_cases);
     check_or_bless("scoring/exact-match.json", serde_json::to_string_pretty(&file).unwrap());
 
-    // RefLogLik at R = 4 rows of [1, 8].
-    let rl = ref_loglik_v1(&RefLogLikShapeV1 { rows: 4, row: vec![1, 8] }).unwrap();
+    // RefLogLik at R = 4 rows of [1, 8]: stage 1 position by position, stage 2 the sum.
+    let shape = RefLogLikShapeV1 { rows: 4, row: vec![1, 8] };
+    let lp = ref_logprob_v1(&shape).unwrap();
     let rows_t = |rows: &[[i32; 8]]| {
         let mut data: Vec<i128> = rows.iter().flatten().map(|x| *x as i128).collect();
         data.resize(4 * 8, 0);
         Tensor::new(DType::I32, vec![4, 1, 8], data).unwrap()
     };
-    let rl_case = |rows: &[[i32; 8]], refs: &[u32], scale: i64| {
-        let want = ref_loglik_reference_v1(&rows.iter().map(|r| r.to_vec()).collect::<Vec<_>>(), refs, scale);
-        let inputs = vec![
-            rows_t(rows),
-            sc(DType::Idx, rows.len() as i128),
-            idx_t(refs, 4),
-            sc(DType::Idx, refs.len() as i128),
-            sc(DType::I32, scale as i128),
-        ];
-        let interp = InterpreterV2::new(&rl).unwrap();
-        let mut m = MapInputs::default();
-        for (k, t) in inputs.iter().enumerate() {
-            m.constant.insert(k as u16, t.clone());
-        }
-        let out = interp.step(&MapParams::default(), &m, &mut RunState::default(), 0).unwrap().output;
-        assert_eq!(ref_loglik_join_v1(out.data[0] as i32, out.data[1] as i32), want);
-        inputs
-    };
-    let uniform = [[0i32; 8]; 3];
-    let steep = [[0, 0, 0, 5000, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 5000]];
+    let uniform = [[0i32; 8]; 4];
+    let steep = [[0, 0, 0, 5000, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 5000], [0; 8], [0; 8]];
     let mixed = [[-3, 12, 7, 0, 1, -40, 22, 5], [100_000, -100_000, 0, 1, 2, 3, 4, 5], [i32::MAX, i32::MIN, 0, 0, 0, 0, 0, 0], [7; 8]];
-    let rl_cases = vec![
-        ("uniform rows: 3 · −ln 8", rl_case(&uniform, &[0, 5, 7], 1 << 24)),
-        ("scale 0: every row uniform", rl_case(&mixed, &[1, 2, 3, 4], 0)),
-        ("the reference each row's maximum: near 0", rl_case(&steep, &[3, 7], 1 << 20)),
-        ("the reference below each row's maximum", rl_case(&steep, &[0, 0], 1 << 20)),
-        ("mixed rows at 2^16", rl_case(&mixed, &[6, 0, 1, 2], 1 << 16)),
-        ("mixed rows at the largest scale", rl_case(&mixed, &[0, 1, 0, 7], i32::MAX as i64)),
-        ("no reference: 0", rl_case(&mixed[..0], &[], 1 << 24)),
+    // One file of position cases: (rows, the position's cursor, its token, the scale).
+    #[derive(Serialize)]
+    struct PositionCaseJson {
+        name: String,
+        rows: TensorJson,
+        scale: String,
+        tokens: Vec<u32>,
+        outputs: Vec<TensorJson>,
+    }
+    let interp = InterpreterV2::new(&lp).unwrap();
+    let run_positions = |name: &str, rows: &[[i32; 8]; 4], tokens: &[u32], scale: i64| {
+        let mut m = MapInputs::default();
+        m.constant.insert(0, rows_t(rows));
+        m.constant.insert(1, sc(DType::I32, scale as i128));
+        let mut state = RunState::default();
+        let outputs: Vec<Tensor> =
+            tokens.iter().map(|t| interp.step(&MapParams::default(), &m, &mut state, *t).unwrap().output).collect();
+        for (p, (t, out)) in tokens.iter().zip(&outputs).enumerate() {
+            assert_eq!(out.data, vec![ref_logprob_reference_v1(&rows[p], *t, scale) as i128], "{name} position {p}");
+        }
+        PositionCaseJson {
+            name: name.into(),
+            rows: tj(&rows_t(rows)),
+            scale: scale.to_string(),
+            tokens: tokens.to_vec(),
+            outputs: outputs.iter().map(tj).collect(),
+        }
+    };
+    #[derive(Serialize)]
+    struct RefLogProbFileJson {
+        format: String,
+        spec: String,
+        name: String,
+        library_version: u16,
+        shape: String,
+        program_borsh_hex: String,
+        graph_ir_root_hex: String,
+        inputs: Vec<ScoringInputJson>,
+        cases: Vec<PositionCaseJson>,
+    }
+    let cases = vec![
+        run_positions("uniform rows: −ln 8 each", &uniform, &[0, 5, 7], 1 << 24),
+        run_positions("scale 0: every row uniform", &mixed, &[1, 2, 3, 4], 0),
+        run_positions("the reference each row's maximum: near 0", &steep, &[3, 7], 1 << 20),
+        run_positions("the reference below each row's maximum", &steep, &[0, 0], 1 << 20),
+        run_positions("mixed rows at 2^16", &mixed, &[6, 0, 1, 2], 1 << 16),
+        run_positions("mixed rows at the largest scale: clamped at −128 nats", &mixed, &[0, 1, 0, 7], i32::MAX as i64),
     ];
-    let file = scoring_file("ref-loglik", "R = 4, row = [1, 8]".into(), &rl, rl_cases);
-    check_or_bless("scoring/ref-loglik.json", serde_json::to_string_pretty(&file).unwrap());
+    let head = scoring_file("ref-logprob", "R = 4, row = [1, 8]".into(), &lp, vec![]);
+    let file = RefLogProbFileJson {
+        format: "palw-tir-v2/scoring-vectors/1".into(),
+        spec: SCORING_SPEC.into(),
+        name: "ref-logprob".into(),
+        library_version: head.library_version,
+        shape: head.shape,
+        program_borsh_hex: head.program_borsh_hex,
+        graph_ir_root_hex: head.graph_ir_root_hex,
+        inputs: head.inputs,
+        cases,
+    };
+    check_or_bless("scoring/ref-logprob.json", serde_json::to_string_pretty(&file).unwrap());
+    let sum = ref_loglik_sum_v1(4).unwrap();
+    let lp_t = |v: &[i128]| {
+        let mut d = v.to_vec();
+        d.resize(4, 0);
+        Tensor::new(DType::I32, vec![4, 1], d).unwrap()
+    };
+    let sum_cases = vec![
+        ("three values", vec![lp_t(&[-34_888_133, -1, -2_000_000_000]), sc(DType::Idx, 3)]),
+        ("the count masks the rest", vec![lp_t(&[-5, -7, -9, -11]), sc(DType::Idx, 2)]),
+        ("every value at the floor", vec![lp_t(&[i32::MIN as i128; 4]), sc(DType::Idx, 4)]),
+        ("none", vec![lp_t(&[-5, -7]), sc(DType::Idx, 0)]),
+    ];
+    let file = scoring_file("ref-loglik-sum", "R = 4".into(), &sum, sum_cases);
+    check_or_bless("scoring/ref-loglik-sum.json", serde_json::to_string_pretty(&file).unwrap());
 
     // Judge, clamped to [−1000, 1000].
     let jd = judge_v1(-1000, 1000).unwrap();
@@ -1710,6 +1758,38 @@ fn scoring_vectors() {
         ],
     );
     check_or_bless("scoring/pairwise.json", serde_json::to_string_pretty(&file).unwrap());
+
+    // The set's identity: the reference programs' roots and the id the fence carries.
+    #[derive(Serialize)]
+    struct SetProgramJson {
+        name: String,
+        graph_ir_root_hex: String,
+    }
+    #[derive(Serialize)]
+    struct SetFileJson {
+        format: String,
+        spec: String,
+        key: String,
+        library_version: u16,
+        programs: Vec<SetProgramJson>,
+        scoring_set_id_hex: String,
+    }
+    let file = SetFileJson {
+        format: "palw-tir-v2/scoring-set/1".into(),
+        spec: SCORING_SPEC.into(),
+        key: String::from_utf8(PALW_IMPROVE_SCORING_SET_DOMAIN_V1.to_vec()).unwrap(),
+        library_version: SCORING_LIBRARY_VERSION_V1,
+        programs: scoring_reference_programs_v1()
+            .into_iter()
+            .map(|(name, p)| SetProgramJson { name: name.into(), graph_ir_root_hex: root(&p.encode()) })
+            .collect(),
+        scoring_set_id_hex: hex(blake2b_simd::Params::new()
+            .hash_length(64)
+            .key(PALW_IMPROVE_SCORING_SET_DOMAIN_V1)
+            .hash(&scoring_set_descriptor_v1())
+            .as_bytes()),
+    };
+    check_or_bless("scoring/set.json", serde_json::to_string_pretty(&file).unwrap());
 }
 
 /// One evaluation pipeline's vector: its run under `job` (generated by `select` when given), every

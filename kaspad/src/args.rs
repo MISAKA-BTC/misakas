@@ -344,6 +344,37 @@ pub struct Args {
     /// only, like the salt.
     #[serde(skip)]
     pub palw_drill_tir_at: Option<u64>,
+    /// **DRILL ONLY: arm testnet-12's SECOND IR fence (`palw_tir_fence2`) at this DAA** (RFC-0002's second
+    /// IR flag day, which RFC-0004's fence requires in force at or below its own) — the same machinery
+    /// as `--palw-drill-tir-at` (`config::drill::palw_drill_tir_fence2_at_v1`). Command line only.
+    #[serde(skip)]
+    pub palw_drill_tir2_at: Option<u64>,
+    /// **DRILL ONLY: arm RFC-0003's generative fence (`palw_gen_v1`) at this DAA**
+    /// (`config::drill::palw_drill_gen_fence_at_v1`), which RFC-0004's fence requires in force at or below
+    /// its own. Command line only.
+    #[serde(skip)]
+    pub palw_drill_gen_at: Option<u64>,
+    /// **DRILL ONLY: arm FP Job V5 (`palw_fp_job_v5`) at this DAA** (`config::drill::palw_drill_fp_v5_at_v1`).
+    /// Command line only.
+    #[serde(skip)]
+    pub palw_drill_fp_v5_at: Option<u64>,
+    /// **DRILL ONLY: arm RFC-0004's improvement fence (`palw_improvement_v1`) at this DAA**
+    /// (`config::drill::palw_drill_improve_fence_at_v1`), with the drill's ceilings. It needs
+    /// `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1` and `palw_kary_court` in force at or below it:
+    /// arm them first (`--palw-drill-tir-at`, `--palw-drill-tir2-at`, `--palw-drill-gen-at`,
+    /// `--palw-drill-fence-at`). Command line only.
+    #[serde(skip)]
+    pub palw_drill_improve_at: Option<u64>,
+    /// **RFC-0004 (A10): evaluate** — run the evaluation jobs of every governed line's open epoch whose
+    /// subject class this node holds, and carry their claims under the producer bond (an open market: the
+    /// first valid claim per job takes its fee at `Final`). Off by default; the seat's replay of an
+    /// evaluation claim it is drawn onto is a duty and is never optional. Needs `--palw-producer-key`,
+    /// `--palw-producer-bond` and a fee float.
+    pub palw_improve_evaluate: bool,
+    /// **RFC-0004 (A10): where this node finds a candidate's artifact.** A seat holding a line's parent
+    /// prefetches a composite candidate's adapter section (`PALWTIRS`, written by
+    /// `palw-class composite --section-out`) from this directory when an epoch's candidate names it.
+    pub palw_improve_artifact_dir: Option<String>,
     /// **Run the IR fused kernels** (RFC-0002 §7, Phase G): every IR backend this node builds runs
     /// the regions its plan matched fused. Node software in no consensus object, byte-identical to the
     /// generic kernels; OFF by default, and kept off until the D-F drills pass with it on.
@@ -568,6 +599,12 @@ impl Default for Args {
             palw_drill_fence2_at: None,
             palw_drill_fence3_at: None,
             palw_drill_tir_at: None,
+            palw_drill_tir2_at: None,
+            palw_drill_gen_at: None,
+            palw_drill_fp_v5_at: None,
+            palw_drill_improve_at: None,
+            palw_improve_evaluate: false,
+            palw_improve_artifact_dir: None,
             palw_tir_fused_kernels: false,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
@@ -734,6 +771,13 @@ impl Args {
                 .unwrap_or_else(|e| panic!("--palw-drill-tir-at: {e} (validate_args refuses this first)"));
             config.palw_drill_fence_moves.extend(moves);
         }
+        // **And the RFC-0003 / RFC-0004 fences** (`--palw-drill-tir2-at`, `--palw-drill-gen-at`,
+        // `--palw-drill-fp-v5-at`, `--palw-drill-improve-at`), in that order, after the IR fence: the
+        // improvement fence's prerequisites are armed before it.
+        let moves = crate::palw_drill::PalwDrillExtraFencesV1::of(self)
+            .apply(&mut config.params)
+            .unwrap_or_else(|e| panic!("{e} (validate_args refuses this first)"));
+        config.palw_drill_fence_moves.extend(moves);
 
         // The floor-only devnet ruleset: the shipped devnet carries testnet-11's class set, so its
         // floor holds a sliver of the share and ADR-0076 seeds it at ~MAX/12,663 — a fixture
@@ -1556,6 +1600,70 @@ pub fn cli() -> Command {
                      drill chain, after the flag days, so a drill registers and serves an IR class with the shipping binary. \
                      Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and below the fence's \
                      prerequisites (palw_kary_court and palw_rcore_plus in force).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-tir2-at")
+                .long("palw-drill-tir2-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm testnet-12's SECOND IR fence (palw_tir_fence2) at this DAA on the \
+                     drill chain, after --palw-drill-tir-at. Nothing else moves. Refused without the salt, at 0, at a height \
+                     another fence uses, and unless palw_tir_v1 is in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-gen-at")
+                .long("palw-drill-gen-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0003's generative fence (palw_gen_v1) at this DAA on the drill \
+                     chain. Nothing else moves. Refused without the salt, at 0, and at a height another fence uses.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-fp-v5-at")
+                .long("palw-drill-fp-v5-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm FP Job V5 (palw_fp_job_v5) at this DAA on the drill chain. Nothing else \
+                     moves. Refused without the salt, at 0, and at a height another fence uses.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-improve-at")
+                .long("palw-drill-improve-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0004's improvement fence (palw_improvement_v1) at this DAA on the \
+                     drill chain, with the drill's ceilings. Nothing else moves. Refused without the salt, at 0, at a height another \
+                     fence uses, and unless palw_tir_v1, palw_tir_fence2, palw_gen_v1 and palw_kary_court are in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-improve-evaluate")
+                .long("palw-improve-evaluate")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW (RFC-0004, A10): run the evaluation jobs of every governed line's open epoch whose subject class this node \
+                     holds, and carry their claims under the producer bond (the first valid claim per job takes its evaluation fee at \
+                     Final). Needs --palw-producer-key, --palw-producer-bond and a fee float. The seat's replay of an evaluation claim \
+                     it is drawn onto is a duty and is never optional.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-improve-artifact-dir")
+                .long("palw-improve-artifact-dir")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW (RFC-0004, A10): the directory this node finds a candidate's artifact in. A seat holding a line's parent \
+                     prefetches a composite candidate's adapter section (PALWTIRS, `palw-class composite --section-out`) from it when \
+                     an epoch's candidate names it, and then holds the candidate's class.",
                 ),
         )
         .arg(
@@ -2490,6 +2598,12 @@ impl Args {
             palw_drill_fence2_at: m.get_one::<u64>("palw-drill-fence2-at").copied(),
             palw_drill_fence3_at: m.get_one::<u64>("palw-drill-fence3-at").copied(),
             palw_drill_tir_at: m.get_one::<u64>("palw-drill-tir-at").copied(),
+            palw_drill_tir2_at: m.get_one::<u64>("palw-drill-tir2-at").copied(),
+            palw_drill_gen_at: m.get_one::<u64>("palw-drill-gen-at").copied(),
+            palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
+            palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
+            palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
+            palw_improve_artifact_dir: m.get_one::<String>("palw-improve-artifact-dir").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
