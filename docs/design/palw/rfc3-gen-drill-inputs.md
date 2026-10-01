@@ -17,10 +17,10 @@ Written by `cargo test -p misaka-palw-sdk --test gen_drill_classes -- --ignored 
 | `toy-image` (Plan B) | image claim, one-move court (DG-3/4/5) | 6,112 B | 120 | 2,628 B | 1,657 B |
 | `toy-embed` | embedding claim, readiness (DG-2/3) | 326,785 B | 750 | 51,784 B | 8,213 B |
 | `wide-embed` | held leaf challenge (DG-6/7a/7b) | 329,600 B | 4 | 8,736 B | 605,362 B (over one carrier: tag 90 only) |
-| `sd3-tiny` (Plan A) | the reduced SD3 pipeline replaces `toy-image` | 2,301,184 B | 15,738 | 1,065,616 B | 73,676 B (every cone-closable kind under one carrier) |
+| `sd3-tiny` (Plan A) | the reduced SD3 pipeline replaces `toy-image` | 2,301,248 B | 20,922 | 1,418,128 B | 73,676 B (every cone-closable commit point under one carrier) |
 
 Plan A is selected with `IMAGE_CLASS=sd3-tiny DENOISE_STAGE=2` (audit-gen/dg.sh). Plan B stays the default; Plan A replaces it
-only on the coordinator's word. A `sd3-tiny` claim is ~1 MB of material and 13 stages (text rows, text pooled, denoise,
+only on the coordinator's word. A `sd3-tiny` claim is ~1.4 MB of material and 13 stages (text rows, text pooled, denoise,
 ten VAE): a seat's replay and the capture fetch are the first things the drill exercises beyond the toy classes.
 
 ## 2. Fences and flags the generative drill needs
@@ -65,7 +65,14 @@ Liar bonds 10..13 and their keyring are lane C's (`$WORK_DIR/liars/`).
   `palw_gen_claim_fold` 8/8, `palw_gen_dissect` 3/3, in-crate `held_close_chunks_clock` 6/6, goldens pin tests 6/6.
 * kaspad: `palw_panel::held_chunks` 5/5 and the verdict-block pin; processor gate test for tag 90 1/1.
 * SDK: `gen_drill_classes` 2/2 (each Plan B class passes the gate; a planted lie is convicted with the close the lane expects);
-  `gen_sd3_class`: the class passes the gate, 61 of 63 commit-point kinds are cone-closable and every one fits one carrier;
-  the 2 others are the CLIP stages' fused-attention outputs (dissected: ADR-0103's held dissection, like every LLM class).
+  `gen_sd3_class`: the class passes the gate; 166 commit points measured at three leaves each, the largest cone close 73,676 B (one-move
+  carrier 95,037 B); a 519-leaf strided sweep of the widest job (all positions) found none above that; a lie at the first leaf of
+  every cone-closable kind (61) convicted in one lying run and 32 independent single lies convicted at their own leaves, honest claims
+  acquitted, every close admissible in the one-move accusation; lies at denoise positions 1–3 through the post-written latent
+  convicted. 2 kinds are dissected (the CLIP stages' fused-attention outputs: ADR-0103's held dissection, as every LLM class).
+* Consensus-core changes this layer carries (dormant behind `palw_gen_v1`, tests pass): the generative court source reads a
+  post-written `Fixed` state as the committed write of the previous position; a worker's openings share one build of the artifact
+  tree and of each stage's step tree; the close twin has a depth-parameterised entry. `palw_gen_one_move` 6/6, `palw_gen_dissect` 3/3,
+  `palw_gen_tensor` 14/14, `palw_gen_vectors_v1` 6/6, `palw_held_close_chunks` 7/7 re-run on this tip.
 * NOT exercised: `gen-claim --plant`/`--list-leaves` against a node, the filer's chunk delivery against a live chain, the
   capture fetch of a 1 MB sd3 claim. Those are what the drill is for.
