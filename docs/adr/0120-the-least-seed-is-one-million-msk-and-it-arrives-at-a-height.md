@@ -13,6 +13,8 @@
 * Builds on: [0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) (a market rule
   that changes what the fold writes arrives by activation, read through one resolved fence).
 
+> **Amended (2026-10-01, implemented the same day behind the dormant fence `palw_model_virtual_v1`).** [0162](0162-the-pair-opens-on-a-virtual-reserve.md): past `palw_model_virtual_v1` the least seed is zero — no seed opens anything, every line's market opens at its creation on a virtual reserve — and `Params::palw_model_seed_min_sompi_at` answers 0 there whatever `palw_model_seed_v2` says.
+
 ## 1. What is asked, and why it is a consensus rule
 
 A line's market opens only once MSK is paid into the line's sink and locked there for good — the seed

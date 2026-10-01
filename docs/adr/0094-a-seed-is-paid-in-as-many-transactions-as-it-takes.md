@@ -7,6 +7,8 @@
   buys the pair).
 * Supersedes nothing.
 
+> **Amended (2026-10-01, implemented the same day behind the dormant fence `palw_model_virtual_v1`).** [0162](0162-the-pair-opens-on-a-virtual-reserve.md): past the fence a pledge waits for no floor — a line whose pledges were short when the fence crossed opens at the fence on the virtual reserve with its pledges as its seed, and every later seed is any amount, added before the market's first trade and refused after it.
+
 ## 0. The sentence this ADR is
 
 A hundred thousand MSK does not fit in one post-quantum transaction, so the seed is allowed to
