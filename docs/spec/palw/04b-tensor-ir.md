@@ -2376,3 +2376,46 @@ The following are not yet built:
   answers (with `PalwCourtVerdictProofV2` 10/11 from Phase F's allocation);
 - generalised dissection over a declared reduction axis (RFC-0003 §II.1.5.6, decided to come with
   video).
+
+### 15.12 The logits unit of a text program (RFC-0001 §A.3, RFC-0003 §I.3)
+
+> **[decision, 2026-10-01, on finding G1 of the independent second implementation.]** The unit of a
+> text program's committed logits is a convention of the lowering. It is not a field of the class,
+> and a class-declared unit was considered and not taken.
+
+A program whose output is `Logits { node, scheme_id }` — a version-1 text program, or the text stage
+of a version-2 pipeline (§15.6) — commits the model's logits in **natural-log units × 2^24 (Q24)**:
+the committed `i32` `v` stands for the real logit `v / 2^24`, and the model's own softmax is
+`p_j = exp(v_j / 2^24) / Σ_k exp(v_k / 2^24)`. **The lowerer guarantees it**: the program's `post`
+ends in the rescale from the calibrated site scale to Q24 (a versioned lowering change, tir-lower's
+lane), and a lowerer that does not has a class whose temperature, frequency and presence penalties
+and logit bias are mis-scaled.
+
+- **Why a convention.** RFC-0001 §A.3 measures the decode controls that depend on the logits' unit
+  (`temperature_q`, `frequency_penalty_q`, `presence_penalty_q`, `logit_bias`) in Q24, the legacy
+  classes' own fixed point (`K = 24`). A program carries no unit: `logits` and `logits_scheme_id` (the
+  commitment form, flat or tiled) are all it says, and tir-lower's calibrated logit scale is a real
+  number of the lowerer's choosing (5.3·10^-9 … 7.2·10^-8 on nine tiny fixtures: not a power of two,
+  so a power-of-two declaration would not even fit). The chain cannot check a unit. It can fix what
+  the lowerer must guarantee, and a class whose lowerer does not guarantee it mis-scales only its own
+  sampling. The key of RFC-0001 §A.3 (`value · 2^24 + T_q · G`) reads the committed integer as Q24.
+- **Which controls read the unit.** `temperature_q`, `frequency_penalty_q`, `presence_penalty_q` and
+  `logit_bias`. The repeat penalty (a Q16 ratio), greedy selection, stop sequences and constraints do
+  not. (A bias entry that bans a lane would not either; the rule refuses every entry, the
+  conservative reading, and a ban-only list can be offered later by changing one predicate.)
+- **What is offered to whom.**
+  - Every legacy class commits Q24, so every control is offered to it.
+  - An IR or generative text class registered **before** the fence that opens the free-prompt lane
+    to IR and pipeline classes is offered the unit-free controls only. A V4 job (the lane's walk) or a
+    V5 job (acceptance) that asks it for a unit-dependent control is refused by name,
+    `PalwFpV3Error::DecodeControlNeedsQ24Logits { control }` — dormant with `palw_fp_decode_rules`,
+    which no preset carries. Such a class stays refused for good, the live SmolLM2 class among them,
+    because nothing on chain says what its unit is.
+  - That later fence offers the unit-dependent controls to a class **registered past it**, which is
+    Q24 by construction of the lowering the fence names.
+- **Where it is built** (dormant): `palw_fp_unit_dependent_control_v1` and
+  `palw_fp_decode_controls_offered_v1` (the predicate and the refusal), `PalwFpClassCapsV1::logits_q24`
+  (what the walk reads off the class), `PalwChainStateV2::class_commits_q24_logits_v1` (legacy `true`,
+  IR and generative `false` until the later fence), and `palw_fp_v5_accept_payload_v1`.
+- **Checked off chain.** A runtime pack's verification compares the class's logit scale with the float
+  reference; the chain does not.
