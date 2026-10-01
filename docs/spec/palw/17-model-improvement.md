@@ -17,10 +17,14 @@
 > Status: **Draft for review (A1)**.
 > - §17.0 (the tags and ids every lane builds against) is final for v1.
 > - The findings of the independent second implementation (`rfc4/ref2`,
->   `docs/design/palw/improve/ref2-findings.md`) are resolved here, each where its id is cited
->   ([S1]…[S5], [P1]…[P9], [E1]…[E15]).
-> - The coordinator's decisions are applied: E11, E12, P1, the head's place (RFC §3 amended), and the
->   missing-evaluation rule.
+>   `docs/design/palw/improve/ref2-findings.md`) are resolved here, each where its id is cited:
+>   the RFC-era ones ([S1]…[S5], [P1]…[P9], [E1]…[E15]) and spec 17's own ([S6]…[S9], [P10],
+>   [E16]…[E28]) and the differential's ([D1]…[D15]).
+> - The coordinator's decisions are applied: E11, E12, P1, the head's place (RFC §3 amended), the
+>   missing-evaluation rule, and — from the differential — E21/D2 (fees fund the draw; an abort refunds
+>   each fee less its share of the spend), D15 (a setter missing any key loses its whole set and its
+>   bond), D12 (vesting is final, on its own steps) and D5 (a missing guard score counts for the
+>   incumbent, with its liveness cost).
 
 Contents:
 - §17.0 tags and ids;
@@ -107,7 +111,7 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 | 6 | `improvement_pools` | line → `PalwImprovementPoolV1` | 5 | `0xD3` |
 | 7 | `improvement_material` | (line, epoch) → `PalwMaterialFrontierV1` | 6 | `0xD4` |
 | 8 | `improvement_candidates` | (line, epoch, index) → `PalwEpochCandidateV1` | 7 | `0xD5` |
-| 9 | `improvement_pool_entries` | (line, epoch, index) → `PalwPoolEntryV2` | 8 | `0xD6` |
+| 9 | `improvement_pool_entries` | (line, epoch, u8 kind, id) → `PalwPoolEntryV2` — kind 1 a hold-out case, 2 a setter set (§17.6.2) [D13] | 8 | `0xD6` |
 | 10 | `improvement_items` | (line, epoch, item) → `PalwEvalItemV1` | 9 | `0xD7` |
 | 11 | `improvement_results` | (line, epoch, item, subject) → `PalwEvalResultV1` | 10 | `0xD8` |
 | 12 | `improvement_grants` | (line, epoch, index) → `PalwRewardGrantV1` | 11 | `0xD9` |
@@ -220,8 +224,9 @@ activation, and only there, the fold reads this chapter. The fence's `ceilings` 
 | `head`, `head_seq` | the head class, and how many head entries were ever appended |
 | `next_epoch`, `open_epoch` | the next epoch number (from 1), and the epoch in progress, if any |
 | `next_due_daa` | when the fold next advances the line (§17.5.2) |
-| `barred` | at most 16 submitters barred after a rollback, each with the DAA its bar ends |
-| `last_promotion`, `regression_epoch`, `regression_check` | the epoch of the latest promotion and of its regression check (kept while a rollback can name them), and the predecessor the next epoch checks (§17.10.2) |
+| `barred` | at most 16 submitters barred after a rollback, each with the DAA its bar ends. An expired bar is pruned when the line is advanced. A new bar for a submitter already barred replaces it (removed, then appended). A 17th bar sorts the list by end, latest first (a stable sort), and keeps the first 16: the bar that ends soonest is dropped [D8/E19] |
+| `last_promotion` | `PalwLastPromotionV1 { epoch: u64, owner_until_daa: u64, ban_daa: u64 }`: the latest promotion's epoch and its rollback terms, pinned at the promotion (§17.10.1) [E22]; kept while a rollback can name it |
+| `regression_epoch`, `regression_check` | the epoch that ran the latest promotion's regression check (kept for its proof), and the predecessor still owed a check (§17.10.2) [E20] |
 
 The line's other rows: `improvement_policies[line]` (the policy in force and a pending one),
 `improvement_usage[line]` (`usage`, `since_daa`, §17.4.5), `improvement_heads[(line, seq)]` (the last 64
@@ -292,35 +297,55 @@ and refuses by name (`ImprovementPolicyRefused`):
   `usage_since_daa = governed_from_daa =` this DAA, `next_epoch = 1`, and `next_due_daa` = the first
   grid boundary strictly after this DAA [E1].
 - **Change** (row, `policy = Some`):
-  - with no epoch open, the policy is in force at once;
+  - the line MUST still be governed at this DAA: past an opt-out's `effective_daa` a policy is
+    refused until the line has dissolved, when it opts in afresh [D14];
+  - with no epoch open, the policy is in force at once, and `next_due_daa` is recomputed on its grid
+    (§17.5.2) [E28];
   - otherwise it becomes `pending_policy`, replacing any earlier pending one, and is in force from
     the epoch's end [E6];
-  - a pending opt-out is cancelled.
-- **Opt out** (row, `policy = None`): §17.4.4.
+  - an opt-out not yet in effect is cancelled: the line is `Governed` again.
+- **Opt out** (row, `policy = None`): §17.4.4. An opt-out of a line already opting out is refused
+  [D14].
 
 ### 17.4.3 The policy and its check
 
 ```
-PalwImprovementPolicyV1 {
+PalwImprovementPolicyV1 {                        // borsh, fields in this order [P10]
   version: u16 = 1,
-  usage: { measure: Claims | WorkLeaves, value: u128 },
-  windows: { grid, w_collect, w_submit, w_holdout, w_eval, beacon_delay, court_margin },
-  eval: { stages: [ { kind, params } ], regression_suite_root, regression_items, safety_suite_root,
-          safety_items, judge_set: [class], anchor_floor_permille, n, n_min, delta_permille,
-          epsilon_permille, epsilon_safety_permille, alpha_permille, max_new_tokens, stop_ids,
-          setter_cap_permille, max_eval_positions },
+  usage: { measure: u8 (Claims 1 | WorkLeaves 2), value: u128 },
+  windows: { grid, w_collect, w_submit, w_holdout, w_eval, beacon_delay, court_margin: u64 },
+  eval: {
+    stages: Vec<{ kind: u8 (ExactMatch 1 | RefLogLik 2 | Judge 3 | Pairwise 4), params }>,
+    regression_suite_root: [u8; 64], regression_items: u32,
+    safety_suite_root: [u8; 64], safety_items: u32,
+    judge_set: Vec<[u8; 64]>, anchor_floor_permille: u16,
+    n: u32, n_min: u32,
+    delta_permille, epsilon_permille, epsilon_safety_permille, alpha_permille: u16,
+    max_new_tokens: u32, stop_ids: Vec<u32>, setter_cap_permille: u16, max_eval_positions: u64,
+  },
   k_max: u8,
-  fees: { registration_fee, candidate_bond, eval_fee_per_job, hard_case_fee, artifact_bond, setter_bond,
-          dataset_bond, s1_bounty, s1_setter_reward },
+  fees: { registration_fee, candidate_bond, eval_fee_per_job, hard_case_fee, artifact_bond,
+          setter_bond, dataset_bond, s1_bounty, s1_setter_reward: u64 },
   phi_permille, bounty_share_permille, promotion_share_permille,
-  s2_trainer_permille, s2_dataset_cap_permille, s2_contributor_cap_permille,
-  provenance: { teacher_classes: u8 mask, licence_classes: [id], full_weight_candidates: bool,
-                base_licence_class },
+  s2_trainer_permille, s2_dataset_cap_permille, s2_contributor_cap_permille: u16,
+  provenance: { teacher_classes: u8, licence_classes: Vec<[u8; 64]>, full_weight_candidates: bool,
+                base_licence_class: [u8; 64] },
   rollback_epochs, vest_epochs, ban_epochs: u32,
 }
 policy_digest = H("misaka-palw/improve/policy/v1", borsh(policy))
 L_e = w_collect + w_submit + w_holdout + w_eval + court_margin        // the nominal epoch length
 ```
+
+The encoding is borsh's [P10]:
+- integers are little-endian at their width; a `bool` is one byte, 0 or 1;
+- a `Vec` is `LE u32` length, then its elements; a 64-byte id is its bytes;
+- `usage.measure` and a stage's `kind` are one byte holding the value shown;
+- `params` is one byte of variant index — ExactMatch 0, RefLogLik 1, Judge 2, Pairwise 3 — then its
+  fields;
+- `teacher_classes` is a mask, class `c` (OpenDistill 1, LicensedDistill 2, SelfPlay 3, Human 4,
+  ToolVerified 5, PublicData 6) at bit `c − 1`.
+
+`policy.json` (§17.13) holds byte vectors of this form.
 
 `PalwScoringParamsV1` is one of:
 - `ExactMatch { open: i32, close: i32, key_cap: u32 }` (−1: no delimiter);
@@ -329,7 +354,16 @@ L_e = w_collect + w_submit + w_holdout + w_eval + court_margin        // the nom
 - `Pairwise { margin: i32 }`.
 
 The chain derives each stage's program from its kind, these parameters and the subject's shape, with
-the builders `scoring_set_id` pins (A7).
+the builders `scoring_set_id` pins (A7). Two of the programs saturate, and the saturated value is the
+score [D10, D11]:
+- **RefLogLik** (`misaka_palw_tir::scoring::ref_loglik_v1`; `ref_loglik_reference_v1` is the same
+  arithmetic in plain Rust): per logits row `r`, with `m = max_j x_j`, each scaled gap is
+  `z_j = clamp((x_j − m)·logit_scale_q24, i32::MIN, 0)` — about −128 nats at the floor — and
+  `log p(ref_r) = z_{ref_r} − IntLn(Σ_j IntExp(z_j))`. The value is the exact `i64` sum over the rows
+  before `min(ref_count, rows_count)`, committed as `(hi, lo)`. A token the row puts more than
+  128 nats below its best thus scores as if it were 128 nats below.
+- **Judge** (`misaka_palw_tir::scoring::judge_v1`): the value is the judge's scalar clamped to
+  `[lo, hi]`, so two outputs both past `hi` (or both below `lo`) tie.
 
 A policy is refused by name unless every check below holds. `C` is the fence's `ceilings`.
 
@@ -337,12 +371,12 @@ A policy is refused by name unless every check below holds. `C` is the fence's `
 | --- | --- |
 | 1 | `version = 1`; `borsh(policy)` is at most `C.max_policy_bytes` |
 | 2 | `usage.value ≥ 1` |
-| 3 | every window `≥ 1` and `≤ 2^32`; `grid ≥ L_e` (so at most one epoch runs per grid period and every epoch ends before the next boundary it could open at) |
+| 3 | every window `≥ 1` and `≤ 2^32`; **`grid > L_e`** [E18]: an epoch opened at `g` ends by `t_score = g + L_e < g + grid`, strictly before the next boundary, which it would otherwise skip |
 | 4 | **`w_eval > beacon_delay + PALW_IMPROVE_MIN_CLAIM_WINDOW_DAA_V1`**, where the constant is 32 DAA [E12]: the draw leaves at least 32 DAA of claiming |
 | 5 | `1 ≤ \|stages\| ≤ 8`; each stage's params match its kind; at least one stage is primary (ExactMatch or RefLogLik); no kind appears twice |
 | 6 | ExactMatch: `1 ≤ key_cap ≤ max_new_tokens`, `open ≥ −1`, `close ≥ −1`. RefLogLik: `logit_scale_q24 > 0`. Judge: `lo < hi`. Pairwise: `0 ≤ margin ≤ i32::MAX` (the stage's input interval) |
 | 7 | a Judge or Pairwise stage requires `1 ≤ \|judge_set\| ≤ 16`, the set without duplicates, each an admitted IR class; without one, `judge_set` is empty; `anchor_floor_permille ≤ 1000` |
-| 8 | `1 ≤ n_min ≤ n ≤ min(C.max_items_per_epoch, PALW_IMPROVE_SIGN_N_MAX_V1 = 2048)` |
+| 8 | `1 ≤ n_min ≤ n ≤ min(C.max_items_per_epoch, PALW_IMPROVE_SIGN_N_MAX_V1 = 2048)`, and `n + regression_items + safety_items ≤ C.max_items_per_epoch` (the ceiling bounds every item an epoch evaluates) [D9] |
 | 9 | `regression_items, safety_items ≤ 1024`; a suite with items has a non-zero root, and a suite with none has a zero root |
 | 10 | `delta_permille, epsilon_permille, epsilon_safety_permille ≤ 1000` |
 | 11 | `alpha_permille` is one of the sign table's levels, `{10, 50}` [P1] |
@@ -366,7 +400,11 @@ While opting out, no epoch opens. From `effective_daa`:
 - then every row of the line is deleted but its header, which stays as `Dissolved` so the next opt-in
   continues its policy sequence (§17.11.5).
 
-A policy object with `policy = Some` before `effective_daa` cancels the opt-out.
+A policy object with `policy = Some` before `effective_daa` (or while the epoch that set it off is still
+open) cancels the opt-out. Past `effective_daa` a policy is refused until the line has dissolved; a
+second opt-out is refused at any time [D14]. A rollback stays valid until the line dissolves, governed
+or not: its window and bar were pinned at the promotion, and its forfeits fund the pool whose balance
+the owner receives at dissolution [E25].
 
 ### 17.4.5 Usage (the trigger's counter) [E1], open question 3
 
@@ -409,11 +447,18 @@ unnamed.
 ### 17.5.2 Advancing a line
 
 In step 2 of every block, the fold takes every line with `next_due_daa ≤ DAA`, in `(next_due_daa,
-line_id)` order. It advances each one by applying every transition due at this DAA, in the order of
-§17.5.3, until none is due [E15]. It then vests the line's grants (§17.11.4) and sets `next_due_daa` to
-the smallest DAA at which a transition, a vesting step or the opt-out becomes due:
+line_id)` order. It advances each one: it first vests the line's grants to this DAA (§17.11.4) [D12],
+then applies every transition due at this DAA, in the order of §17.5.3, until none is due [E15], then
+vests again. It sets `next_due_daa` to the smallest DAA, strictly after this one, at which any of these
+becomes due:
 - for an idle line: the next grid boundary strictly after this DAA;
-- for an open epoch: its next time.
+- for an open epoch: its next time (every block while `Closing`, for an early Scoring);
+- an opt-out's `effective_daa`;
+- **the next vesting step** of any of the line's grants still vesting, `vest_from_daa + k·vest_unit_daa`
+  for the smallest `k` that lands after this DAA [D12] — so a grant vests on its step even on a line
+  with nothing else to do, and a rollback can never reach an amount that should already have vested.
+
+The same computation runs after a rollback and after a policy that is in force at once [E28].
 
 A block whose DAA jumps past several times therefore applies all of them, in order, in that block.
 
@@ -426,7 +471,7 @@ Let `W` be the policy's windows. All times are fixed when the epoch opens.
    opens epoch `e = next_epoch`:
    - `t_open = g`, `t_fix = g + w_collect`, `t_close = t_fix + w_submit`, `t_draw = t_close + w_holdout`,
      `t_eval = t_draw + w_eval`, `t_score = t_eval + court_margin`;
-   - `parent = head`, and `previous` as §17.10.2 says;
+   - `parent = head`, `previous = None` (the regression check joins at the draw, §17.10.2 [E20]);
    - `material` = the line's `pending_material`, which is reset;
    - `usage = 0`, `usage_since_daa = DAA`, `open_epoch = e`, `next_epoch = e + 1`.
    The S1 budget for the period is set (§17.11.3). A line opting out does not open. Otherwise the
@@ -437,23 +482,31 @@ Let `W` be the policy's windows. All times are fixed when the epoch opens.
    [P6]. With no candidate the epoch is **decided at once**: `NoChange(NoCandidate)` [E9].
 4. **`HoldOut → Drawing` at `t_draw`.**
 5. **`Drawing → Evaluating` at `t_draw + beacon_delay`.** The draw (§17.8.1): the epoch seed, the items
-   and the judges. Then the parent's evaluation escrow is reserved from the pool (§17.11.2).
-   - With fewer than `n_min` drawn items: **decided at once** `NoChange(TooFewItems)` [E9]. (Which
+   and the judges. Then, in this order [E24]:
+   - with fewer than `n_min` drawn items: **decided at once** `NoChange(TooFewItems)` [E9] (which
      items are primary is known only from their scores; scoring applies the same test to the primary
-     count, §17.9.5.)
-   - With a pool too small for the parent's escrow: `NoChange(PoolInsufficient)`.
+     count, §17.9.5);
+   - the regression check joins if one is owed: `previous = regression_check`, if that class is still
+     admitted (§17.10.2) [E20];
+   - the parent's escrow and, with a check, `Previous`'s are reserved from the balance (§17.11.2); a
+     balance too small for both: `NoChange(PoolInsufficient)`, the check still owed;
+   - with the check reserved, `regression_check = None` and `regression_epoch = e`.
 6. **`Evaluating → Closing` at `t_eval`.** No evaluation claim is accepted from here on.
 7. **Scoring**, at the first DAA ≥ `t_eval` at which the evaluation lane reports every evaluation claim
    of the epoch final and the material lane reports no drawn set or case owing a reveal, and at the
-   latest at `t_score` [E4]. Just before it, the material lane drops every drawn item still owing a
-   reveal (§17.9.1). The
+   latest at `t_score` [E4]. `t_score` is the reveal deadline [E16]: a silent steward holds Scoring
+   until then, never past it. Just before Scoring, the material lane (the core's before-scoring hook)
+   settles every drawn set or case still owing a reveal: a setter that has not revealed **every** key
+   of its set loses its **whole** set — every item of the set is dropped for every subject — and its
+   setter bond is forfeited to the balance [D15]; a hold-out case owing its key or reference is
+   dropped (§17.9.1). The
    fold computes the counts and the decision (§17.9), and applies it (§17.9.5, §17.11). The epoch is
    `Decided`.
 8. **The epoch's end** (whenever an epoch becomes `Decided`, whatever the path):
    - `open_epoch = None`, `decided_daa = DAA`;
    - a pending policy comes into force;
    - a pending opt-out starts its delay;
-   - unused escrows are returned (§17.11.2);
+   - unused escrows are returned (§17.11.2), the parent's and `Previous`'s first [D3];
    - the row is compacted: `items` and `results` are dropped, keeping `counts`, `outcome`, the
      candidates and the grants;
    - the line's next boundary check is the next grid boundary strictly after this DAA [E15].
@@ -508,7 +561,10 @@ refusal.
   submitter bond. At most `4·n` entries (`PALW_IMPROVE_HOLDOUT_FACTOR_V1 = 4`); a further case in
   `HoldOut` is refused by name.
 - **Setter sets.** A `SetterSetCommitted` before `t_close` enters the pool as `{ set_id, setter,
-  items }`, at most 16 sets. Its items are `(set_id, i)` for `i < items`. In v1 setter items are
+  items }`, `1 ≤ items ≤ n`, at most 16 sets. Its items are `(set_id, i)` for `i < items`.
+- **Keys** [D13/E27]. The pool is keyed `(line, epoch, kind, id)` — kind 1 a hold-out case (`case_id`),
+  kind 2 a setter set (`set_id`) — so an id enters an epoch's pool once: a repeated case id or set id is
+  refused by name. The draw's order keys are then distinct (its "ties are impossible"). In v1 setter items are
   generated only: an ExactMatch key, or an empty key for a judged item. Likelihood items come from
   hold-out cases with a continuation reference, disclosed from the draw by `HardCaseKeyRevealed` —
   one hash commits a set's keys, so a set cannot disclose a reference at the draw apart from its keys
@@ -536,7 +592,8 @@ it paid.
 "nothing is withdrawn after `t_close`" holds trivially. At the epoch's end:
 - losing candidates' bonds are refunded;
 - the winner's bond vests with its grant;
-- registration fees stay in the pool (except on abort, §17.10.3).
+- registration fees are the pool's balance from admission (an abort refunds each less its share of
+  the spend it funded, §17.10.3).
 
 ## 17.8 Evaluation
 
@@ -551,8 +608,9 @@ entry ids   : a hold-out case         → case_id
 order key   = H("misaka-palw/improve/draw/v1", seed ‖ entry id)
 ```
 
-`block_hash` is the hash of the chain block whose fold performs the draw. It postdates the hold-out, so
-the draw is fixed only after every candidate and every hold-out case is.
+`block_hash` is the hash of the chain block whose fold performs the draw — the chain's 64-byte block
+hash (`Hash64`), as it is — and `line_id` is the line's 64-byte id [E26]. The block postdates the
+hold-out, so the draw is fixed only after every candidate and every hold-out case is.
 
 - **Draw.** The pool is sorted by `order key` (as bytes, ascending; ties are impossible). The items are
   the first entries of that order, with two exclusions:
@@ -570,7 +628,8 @@ the draw is fixed only after every candidate and every hold-out case is.
 - **Judges.** When the policy has a Judge or Pairwise stage, a judge is drawn for each drawn (non-suite)
   item: `judge_set[LE u64(H("…/judge/v1", seed ‖ LE u32 i)[0..8]) mod |judge_set|]`.
 - **Pairwise order.** The order of a pairwise comparison of item `i` and candidate `C` is bit 0 of
-  `H("…/pair-order/v1", seed ‖ LE u32 i ‖ C)[0]`. It is the stage's `order` scalar: 0 shows the
+  `H("…/pair-order/v1", seed ‖ LE u32 i ‖ C)[0]`, where `C` is the candidate's 64-byte class id (for
+  `Previous`, the predecessor's class id) [S7]. It is the stage's `order` scalar: 0 shows the
   candidate first (as A), 1 shows the parent first. The Pairwise stage applies the order and the margin
   inside the circuit (`misaka_palw_tir::scoring::pairwise_v1`, A7).
 - **Items' kinds.** An item is **primary** when its case's reference is an exact-match key or a
@@ -589,16 +648,22 @@ Every subject gets the same jobs on every item: one job per stage that applies t
 Pairwise job exists only for candidates and `Previous`: it compares the subject with the parent. The
 job family is the evaluation lane's (A6):
 - contexts derived by the chain;
-- job ids `H("…/eval-job/v1", line ‖ LE u64 epoch ‖ LE u32 item ‖ borsh(subject) ‖ kind)`;
+- job ids `H("…/eval-job/v1", line ‖ LE u64 epoch ‖ LE u32 item ‖ borsh(subject) ‖ kind)`, `kind` one
+  byte holding the kind's value (ExactMatch 1, RefLogLik 2, Judge 3, Pairwise 4 — the policy's
+  encoding, not the scoring library's tags 0–3) [S9];
 - open claiming in `[draw, t_eval)`;
 - the fee per job, paid from the subject's escrow;
 - capacity reservation.
 
 **Key disclosure** (RFC §7.1, amended):
 - setter prompts, and the references of teacher-forced items, are disclosed at the draw;
-- keys of generated items are disclosed only after every subject's generation claims on the set's
-  items are final;
-- a steward that misses its reveal forfeits its bond, and its items drop out for every subject.
+- keys of generated items are disclosed only in `Closing` (`t_eval ≤ DAA < t_score`), and only when
+  no evaluation claim on the set's (or case's) items is pending — every generation claim on them
+  final or voided [E17]. Before `t_eval` a job not yet claimed has no claim, so "every claim final"
+  would hold vacuously while the job is still claimable; `Closing` accepts no new claim (step 6);
+- `t_score` is the deadline [E16]. A setter that has not revealed every key of its set by Scoring
+  forfeits its setter bond and loses its whole set; a case owing its key drops (§17.5.3 step 7)
+  [D15].
 
 ### 17.8.3 Results
 
@@ -617,7 +682,15 @@ subject, kind)`, and the claim is the evaluation lane's job row's.
 | Pairwise | the stage's committed outcome from the candidate's side: +1 preferred beyond the margin, −1 the parent preferred beyond it, 0 otherwise |
 
 A second score for the same `(item, subject, kind)` is refused. A score is taken only while the epoch
-is `Evaluating` or `Closing`, for an item it drew and a subject it evaluates.
+is `Evaluating` or `Closing`, for an item it drew and a subject it evaluates, and only inside its
+kind's range [D6]: ExactMatch 0 or 1; Pairwise −1, 0 or 1; Judge inside a Judge stage's `[lo, hi]`;
+RefLogLik any `i64`. A score outside it is refused by name, so the one outcome function (§17.9.1)
+reads only legal values.
+
+**A claim final after the epoch's end** [E23] is neither scored nor paid: the core's recorder refuses a
+score, and its payer pays nothing, once the epoch is `Decided` (its unspent escrow has gone back,
+§17.11.2). The evaluation lane skips both without failing the block. `court_margin` is the time a
+court has to finish; an executor whose claim is still contested at `t_score` is not paid for it.
 
 **ExactMatch is scored by the fold at the key's reveal**, not by a claim: keys stay hidden until every
 subject's outputs are final, so no single claim may read one. An ExactMatch job is generation only; its
@@ -646,13 +719,17 @@ Read the item's score of the kind in question for both subjects (`s_C`, `s_H`).
   supplier that never reveals cannot veto a promotion by making every candidate lose its item. The
   material lane drops them just before scoring (`drop_improvement_item_v1`) and forfeits a
   non-revealing setter's hold.
-- The **primary** kind of an item is read from the recorded scores: ExactMatch if any subject has an
-  ExactMatch score on it, else RefLogLik if any has a RefLogLik score; an item with neither but with a
-  guard score is judged-only; an item with no score at all is a primary item every subject misses, so it
-  counts, and counts for the parent (a Loss for every candidate). Regression and safety items without a
-  score count the same way.
+- The **primary** kind of a drawn item is read from the recorded scores: ExactMatch if any subject has
+  an ExactMatch score on it, else RefLogLik if any has a RefLogLik score; a drawn item with neither but
+  with a guard score is judged-only; a drawn item with no score at all is a primary item every subject
+  misses, so it counts, and counts for the parent (a Loss for every candidate).
+- **Regression and safety items are never judged-only** [S6]: each always counts in its suite (`N_r`,
+  `N_s`), by its primary kind if any subject has one, else as ExactMatch — so a suite item without a
+  primary score, whatever guard scores it has, is a Loss for every candidate.
 
-The evaluation lane's `palw_improve_item_outcome_v1` implements exactly this.
+There is **one** outcome function, the core's `palw_improve_item_outcome_v1` (in
+`palw_improve_promotion_v1`), and every lane calls it [D6]. With the ranges §17.8.3 enforces, a
+Pairwise value is exactly −1, 0 or 1.
 
 ### 17.9.2 The pinned sign table [P1], [P2]
 
@@ -692,17 +769,33 @@ For each candidate `C` in the frozen set, over non-dropped items:
 | `primary` | primary drawn items, by the item's primary kind | `n = b + c + t` |
 | `regression` | regression items, primary kind | `N_r` = their number |
 | `safety` | safety items, primary kind | `N_s` = their number |
-| `judge` | drawn items with a Judge score, their judge not excluded | |
-| `pairwise` | drawn items with a Pairwise score, their judge not excluded | |
+| `judge` | every drawn item whose judge is not excluded, when the policy has a Judge stage — whether or not a Judge score was recorded [D5, S8] | |
+| `pairwise` | every drawn item whose judge is not excluded, when the policy has a Pairwise stage — whether or not a Pairwise score was recorded [D5, S8] | |
+
+**The guards count missing evaluations for the incumbent** [D5, S8]. A guard's count runs over every
+non-dropped drawn item with a kept judge, and §17.9.1's rule decides each: a Judge item with either
+side's score missing is a Loss; a Pairwise item without the candidate's recorded outcome is a Loss.
+This is the conservative choice, and it has a liveness cost: a guard job nobody claims (a Judge or
+Pairwise job, paid from the subject's escrow like any other) counts against the candidate, and enough
+unclaimed guard jobs make the guard's sign test fire and block a promotion that the primary items
+support. The other reading — counting only items that carry the guard's score — would let a candidate
+escape a guard by leaving its guard jobs unclaimed. v1 takes safety over liveness: the escrow pays
+for every guard job, so an honest executor is paid to claim it.
 
 **Judge anchors [S4].** A judge is *excluded* for the epoch (its Judge and Pairwise scores void) when it
-fails its anchors. The anchor pairs are, over the drawn exact-match items it judged, every ordered pair
-of subjects `(p, f)` where `p` passed and `f` failed. A pair is *correct* when the judge's Judge score
-of `p` exceeds its score of `f`. The judge is excluded if:
+fails its anchors. The anchor pairs are, over the non-dropped drawn items it judged whose primary kind
+is ExactMatch, every ordered pair of subjects `(p, f)` where `p` passed and `f` failed **and the judge
+scored both** — a subject without both an ExactMatch and a Judge score on the item forms no pair [D4].
+A pair is *correct* when the judge's Judge score of `p` exceeds its score of `f`. The judge is excluded
+if:
 - it has fewer than `PALW_IMPROVE_MIN_ANCHOR_PAIRS_V1 = 8` pairs; or
 - `1000·correct < anchor_floor_permille · pairs`.
 
-A policy without a Judge stage has no anchors, and its Pairwise judges are never excluded.
+An unscored side is left out of the anchors rather than counted incorrect [D4]: counted incorrect, a
+missing Judge score would let whoever withholds judge jobs push a judge under its floor and void its
+guard, which is the incumbent's protection. A judge left under 8 pairs is still excluded, so a guard
+rests on its anchor jobs being claimed: they are open to every executor and paid from the escrow. A
+policy without a Judge stage has no anchors, and its Pairwise judges are never excluded.
 
 ### 17.9.4 Eligibility and the winner
 
@@ -753,22 +846,37 @@ message = H("misaka-palw/improve/rollback/v1", network_domain ‖ borsh(payload)
 
 It is signed with ML-DSA-87 under `misaka-palw-improve-rollback-v1` by the `filer` bond's key. Only
 the **latest promotion** can be rolled back [E8]: the head's last history entry MUST be `Promoted` for
-`epoch`, with `previous = to_class`. A rollback of an older promotion is refused: forfeiting its unvested
-rewards needs no rollback, and its class is no longer the head.
+`epoch`, with `previous = to_class`, and the line's `last_promotion` MUST name `epoch`. A rollback of an
+older promotion is refused: forfeiting its unvested rewards needs no rollback, and its class is no
+longer the head.
+
+**The terms are pinned at the promotion** [E22]. When an epoch promotes, the line records
+`last_promotion = { epoch, owner_until_daa = DAA + rollback_epochs·L_e, ban_daa = ban_epochs·L_e }`
+from that epoch's policy. The owner's window and the bar read these, never the policy in force at the
+rollback: a submitter's exposure is fixed when its promotion is, and a later policy (which the owner
+writes) can neither lengthen the window nor the bar.
+
+A rollback is valid until the line dissolves, whether or not it is still governed [E25].
 
 | Cause | Valid when | Head entry cause |
 | --- | --- | --- |
-| `Owner` | the filer is the spec 15 owner, and `DAA ≤ promotion.daa + rollback_epochs·L_e` [E8] | `RolledBackByOwner` |
+| `Owner` | the filer is the spec 15 owner, and `DAA ≤ last_promotion.owner_until_daa` [E8, E22] | `RolledBackByOwner` |
 | `LaterRegression { epoch: e2 }` | `e2 > epoch`, `e2` is decided, and its regression check shows `Previous` eligible against the parent with `K = 1` (§17.10.2) | `RolledBackByProof` |
 | `CanaryFailed { claim, item }` | the evaluation lane records a canary job over `claim`'s final output that fails safety item `item`. **Not in v1 until A6 provides canary jobs**: refused by name | `RolledBackByProof` |
 | `LicenceViolation { challenge }` | an upheld licence challenge. **Not in v1** (RFC open questions 10–11 give no challenge procedure): refused by name | `RolledBackByProof` |
 
 ### 17.10.2 The regression check
 
-The first epoch that opens after a promotion evaluates the head's predecessor as the subject
-`Previous(previous class)`. That requires:
-- the head's last entry is `Promoted`;
-- the predecessor is still an admitted class.
+A promotion leaves a **regression check owed**: `regression_check = parent` (the head's
+predecessor). The first epoch after it that reaches its draw evaluates the predecessor as the subject
+`Previous(previous class)` [E20]:
+- the check joins at the draw (§17.5.3 step 5), not at the opening, so an epoch that ends before its
+  draw (`NoCandidate`) or at it (`TooFewItems`, `PoolInsufficient`) leaves it owed to the next — a
+  quiet line does not lose the proof path of `LaterRegression`;
+- it requires the predecessor to be still an admitted class at the draw (otherwise it is skipped and
+  stays owed);
+- once reserved, `regression_check = None` and `regression_epoch` names the epoch;
+- a rollback or a new promotion replaces what is owed.
 
 `Previous` runs the same jobs as a candidate, paid from the pool like the parent. Its counts
 (`previous_counts`) are computed as a candidate's with `K = 1`. It is never a candidate: it cannot
@@ -776,15 +884,28 @@ win, and it does not count in `K`.
 
 ### 17.10.3 The effect
 
-A valid rollback:
-- sets `head = to_class`, with a history entry, and restarts `usage`;
-- forfeits the rolled-back winner's unvested grants and its unvested candidate bond to the pool
-  [PALW-MIP-16];
-- bars its submitter until `DAA + ban_epochs·L_e`;
-- **aborts an open epoch** [E11]: the epoch is `NoChange(Aborted)`, every candidate's submission fee,
-  bond and unused escrow is refunded in full, and the evaluation spend already paid from the pool
-  stays spent. No re-basing and no waiting: the next epoch opens from the restored head under the
-  usual trigger.
+A valid rollback, in this order:
+1. **vests** every grant of the line to this DAA (§17.11.4): vesting is final, and a vested amount is
+   never taken back [D12];
+2. **aborts an open epoch** [E11]: the epoch is `NoChange(Aborted)`. The parent's and `Previous`'s
+   unspent escrow return to the balance; the evaluation spend already paid stays spent. Every
+   candidate gets back its bond and its unspent escrow in full, and its registration fee **less its
+   share of that spend** [D2/E21]: with `F` the sum of the epoch's fees and `S` the parent's and
+   `Previous`'s spend, candidate `i` is refunded `fee_i − ⌈fee_i · min(F, S) / F⌉`, the rounding
+   staying in the balance. (The fees were in the balance when the draw reserved those escrows, so they
+   may have paid for them; refunding them whole could take the balance below zero, which MIP-21
+   forbids.) A refund is never more than the balance holds — an S1 payout (§17.11.3) may have spent
+   part of what the fees funded — taken candidate by candidate in acceptance order, so that a rollback
+   is never refused for want of balance: it is the owner's safety valve [E21]. No re-basing and no
+   waiting: the next epoch opens from the restored head under the usual trigger;
+3. **forfeits** the unvested remainder, `amount − vested`, of **every** grant of the promoted epoch —
+   the trainer's and every dataset's S2 grant and the winner's candidate bond — to the balance
+   [PALW-MIP-16, D7];
+4. **bars** the winner's submitter until `DAA + last_promotion.ban_daa` (`barred`, §17.3.1) [E22,
+   D8/E19];
+5. sets `head = to_class`, with a history entry, and restarts `usage`; the promotion can no longer be
+   named (`last_promotion`, `regression_check` and `regression_epoch` are cleared); `next_due_daa` is
+   recomputed (§17.5.2).
 
 ## 17.11 The pool and rewards
 
@@ -798,10 +919,13 @@ Three paths bring money into the pool.
    escrow as held for the jobs it pays. The debit is refused by name unless the bond is `Active` and
    its free collateral covers it. Free collateral is its collateral less slashed, less what the
    R-core+ ledger holds committed, less its accuser ledger.
-   - `CandidateSubmitted`: `registration_fee` (balance), `candidate_bond` (held), and
-     `eval_fee_per_job × J` (the candidate's escrow). `J` is the most jobs the candidate can be given:
-     `(n + regression_items + safety_items) × |primary and judge stages|`, plus `n` if there is a
-     Pairwise stage.
+   - `CandidateSubmitted`: `registration_fee` (balance, at once — the draw's escrow may use it
+     [D2]), `candidate_bond` (held), and `eval_fee_per_job × J` (the candidate's escrow, held). `J`
+     is the most jobs a subject can be given [D1]: one per item for its primary kind —
+     `n + regression_items + safety_items`, since an ExactMatch job generates and the fold scores it
+     at the key's reveal, and a likelihood job is one teacher-forced pipeline — plus `n` with a Judge
+     stage (drawn items only), plus `n` with a Pairwise stage for a candidate or `Previous` (the parent
+     has no Pairwise job). `palw_improvement_jobs_per_subject_v1` computes it.
    - `HardCaseSubmitted`: `hard_case_fee` (balance).
    - `TeachingArtifactCommitted`: `artifact_bond` (held).
    - `SetterSetCommitted`: `setter_bond` (held).
@@ -824,11 +948,12 @@ epoch's escrow, and so is the `Previous` subject's. If the balance cannot cover 
 `NoChange(PoolInsufficient)`.
 
 The evaluation lane pays each executor `eval_fee_per_job` from the subject's escrow, as a payout, when
-the job's claim is final.
+the job's claim is final — while the epoch is `Evaluating` or `Closing`; a claim final after the
+epoch's end is not paid [E23].
 
-At the epoch's end, whatever is left of an escrow goes back to where it came from:
-- a candidate's, to its submitter;
-- the parent's and `Previous`'s, to the balance.
+At the epoch's end, whatever is left of an escrow goes back to where it came from, **first** the
+parent's and `Previous`'s to the balance — so S2's `R` (§17.11.3) is taken from a balance that
+includes them [D3] — then each candidate's to its submitter.
 
 ### 17.11.3 Grants
 
@@ -860,11 +985,14 @@ What the caps withhold returns to the balance. Every S2 grant, and the winner's 
 ### 17.11.4 Vesting and forfeit
 
 A vesting grant is `{ recipient, stage, amount, label, vest_from_daa, vest_unit_daa = L_e,
-vest_epochs, vested, forfeited }`. Whenever the line is advanced, each grant's vested target is
-`⌊amount · min(vest_epochs, ⌊(DAA − vest_from_daa) / vest_unit_daa⌋) / vest_epochs⌋`, and the
-difference from `vested` is paid. The last unit pays the remainder.
+vest_epochs, vested, forfeited }`, made at the epoch's decision with `vest_from_daa` = that DAA. Whenever
+the line is advanced — and the line is due at every grant's next step (§17.5.2) — each grant's vested
+target is `⌊amount · min(vest_epochs, ⌊(DAA − vest_from_daa) / vest_unit_daa⌋) / vest_epochs⌋`, and
+the difference from `vested` is paid. The last unit pays the remainder.
 
-A forfeit (§17.10.3) moves `amount − vested` to the balance, as forfeited, and marks the grant.
+**Vesting is final** [D12]: a vested amount is never confiscated. A forfeit (§17.10.3) first vests the
+grant to the forfeit's DAA, then moves `amount − vested` to the balance, as forfeited, and marks the
+grant.
 Vesting counts DAA in units of the policy's `L_e`, not epochs that open, so a line that stops opening
 epochs still vests [E8].
 
@@ -927,8 +1055,9 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
   admitted IR class of the parent's family, with its payment (§17.7, §17.11.1).
 - **PALW-MIP-9 (the hold-out).** Items MUST be drawn as §17.8.1 says, from hold-out cases and committed
   setter sets. Prompts and teacher-forced references MUST be disclosed only after `t_close`, keys of
-  generated items only after every subject's outputs are final. An item missing a subject's evaluation
-  MUST count for the parent.
+  generated items only in `Closing` with no claim on their items pending [E17]. An item missing a
+  subject's evaluation MUST count for the parent. A setter that misses any key's reveal MUST lose its
+  whole set and its bond [D15].
 - **PALW-MIP-10 (evaluation jobs).** Every item MUST be evaluated for every subject by jobs whose
   contexts the chain derives, with one seed per item shared by every subject.
 - **PALW-MIP-11 (scores).** A score MUST be the committed output of the policy's scoring stage, recorded
@@ -947,7 +1076,8 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
   - every block MUST stay within 512 nodes.
 - **PALW-MIP-16 (rewards).** Payouts MUST come only from the pool. S1 MUST pay only EXACT-verified
   events. S2 MUST pay only registered datasets the winner declared, within their caps. S2 grants and
-  the winner's bond MUST vest, and MUST be forfeited on a valid rollback.
+  the winner's bond MUST vest, on their own steps, and their unvested remainder MUST be forfeited on a
+  valid rollback; a vested amount MUST NOT be forfeited [D7, D12].
 - **PALW-MIP-17 (not a reward path).** Nothing in this chapter MAY create a quantum, a ticket or
   eligibility, or draw on PALW worker rewards.
 - **PALW-MIP-18 (licences).** A declaration of `LICENSED_DISTILL` MUST cite a registered, unexpired
@@ -959,8 +1089,9 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
   ceiling as a share of claim capacity.
 - **PALW-MIP-21 (conservation).** The pool MUST satisfy §17.11.5 after every block. Every sompi it pays
   MUST have been taken in by §17.11.1.
-- **PALW-MIP-22 (abort).** A rollback while an epoch is open MUST abort it and refund every candidate in
-  full (§17.10.3).
+- **PALW-MIP-22 (abort).** A rollback while an epoch is open MUST abort it and refund every candidate its
+  bond and unspent escrow in full, and its fee less its share of the evaluation spend the fees funded
+  (§17.10.3) [E21]; the balance MUST NOT go below zero.
 - **PALW-MIP-23 (the policy check).** A policy MUST satisfy every check of §17.4.3. `w_eval` MUST exceed
   `beacon_delay` by more than 32 DAA.
 - **PALW-MIP-24 (order).** Transitions due in one block MUST be applied before that block's objects,
