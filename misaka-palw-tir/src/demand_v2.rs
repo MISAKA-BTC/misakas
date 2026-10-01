@@ -13,13 +13,18 @@
 //!   (NF-29): its value at the start of `p` is that leaf at `p − 1`, never a replay of `post`.
 //!
 //! Everything else — the leaves, the index maps, the work and its limits, the refusals — is §9.4's.
-//! The source answers inputs within their declared intervals by construction: the court derives
-//! random ones, an upstream committed value was checked against its proven interval (PALW-TIR-33)
-//! and that interval lies inside the input's (NF-P7), and a job value was checked at acceptance.
+//!
+//! **An input's answer is held to its declared dtype AND interval** (PALW-TIR-42), by the evaluator,
+//! at the point a param's is held to its dtype: a value outside the interval fails the evaluation
+//! `Operand`, by name. A source answers inputs within their declared intervals by construction (the
+//! court derives random ones, an upstream committed value was checked against its proven interval —
+//! PALW-TIR-33 — and that interval lies inside the input's, NF-P7, and a job value was checked at
+//! acceptance); the evaluator does not rely on it, because the bounds admission proved over the
+//! cones — a value that overflows, a work estimate — are bounds over the declared intervals.
 
 use crate::demand::{
-    DemandContext, DemandLimits, DemandRangeRequest, DemandRequest, DemandResult, DemandSource, DemandWork, StateSupply,
-    eval_demanded_ext, eval_demanded_range_ext,
+    DemandContext, DemandInputsV1, DemandLimits, DemandRangeRequest, DemandRequest, DemandResult, DemandSource, DemandWork,
+    StateSupply, eval_demanded_ext, eval_demanded_range_ext,
 };
 use crate::error::{TirError, TirErrorKind, TirResult};
 use crate::program_v2::TirProgramV2;
@@ -75,6 +80,11 @@ impl DemandSource for ViewSource<'_> {
     }
 }
 
+/// The declared interval of every input of `p`, in declaration order (`InputDecl::interval`).
+pub fn input_intervals_v2(p: &TirProgramV2) -> Vec<(i128, i128)> {
+    p.inputs.iter().map(|d| d.interval()).collect()
+}
+
 /// The `post` writers of a validated version-2 program: `(state, (occurrence L + 1, node))`.
 pub fn post_writers_v2(p: &TirProgramV2, info: &ProgramInfoV2) -> Vec<(u16, (u16, u16))> {
     let post_occurrence = (p.schedule.layers.len() + 1) as u16;
@@ -91,8 +101,10 @@ pub fn eval_demanded_v2(
     limits: &DemandLimits,
 ) -> DemandResult<(Vec<i128>, DemandWork)> {
     let writers = post_writers_v2(program, info);
+    let intervals = input_intervals_v2(program);
+    let inputs = DemandInputsV1 { first_input: info.first_input_param, intervals: &intervals };
     let mut view_source = ViewSource { inner: source, first_input: info.first_input_param };
-    eval_demanded_ext(&info.view, &info.v1, request, &mut view_source, limits, &writers)
+    eval_demanded_ext(&info.view, &info.v1, request, &mut view_source, limits, &writers, inputs)
 }
 
 /// **A range evaluation of a version-2 program** (spec 04b §9.5 over the view): the history
@@ -105,8 +117,10 @@ pub fn eval_demanded_range_v2(
     limits: &DemandLimits,
 ) -> DemandResult<(Vec<i128>, DemandWork)> {
     let writers = post_writers_v2(program, info);
+    let intervals = input_intervals_v2(program);
+    let inputs = DemandInputsV1 { first_input: info.first_input_param, intervals: &intervals };
     let mut view_source = ViewSource { inner: source, first_input: info.first_input_param };
-    eval_demanded_range_ext(&info.view, &info.v1, request, &mut view_source, limits, &writers)
+    eval_demanded_range_ext(&info.view, &info.v1, request, &mut view_source, limits, &writers, inputs)
 }
 
 /// A [`DemandSourceV2`] over in-memory values — for tools and the differential tests: version 1's
