@@ -22,6 +22,10 @@ use kaspa_consensus_core::palw_gen_artifact_v1::palw_gen_inventory_root_v1;
 use kaspa_consensus_core::palw_gen_class_v1::*;
 use kaspa_consensus_core::palw_gen_close_v1::*;
 use kaspa_consensus_core::palw_gen_job_v1::*;
+use kaspa_consensus_core::palw_gen_step_v1::{PalwGenLeafCoordV1, PalwGenLeafKindV1, PalwGenLeafV1, palw_gen_step_leaf_hash_v1};
+use kaspa_consensus_core::palw_tir_step_v1::{palw_tir_lane_values_v1, palw_tir_lanes_le_v1, palw_tir_lanes_wire_v1};
+use misaka_palw_tir::demand::DemandLimits;
+use misaka_palw_tir::types::DType;
 use kaspa_consensus_core::palw_gen_v1::PalwGenProfileV1;
 use kaspa_consensus_core::palw_gen_worker_v1::{PalwGenExecutionV1, palw_gen_execute_tensor_v1};
 use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
@@ -35,6 +39,7 @@ use misaka_palw_tir::program_v2::TirProgramV2;
 use misaka_palw_tir::tensor::Tensor;
 
 const FORM: PalwPromptIdsFormV1 = PalwPromptIdsFormV1::Flat;
+const LIMITS: DemandLimits = DemandLimits { max_elements: 1 << 20, max_terms: 1 << 24 };
 
 fn unhex(s: &str) -> Vec<u8> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect()
@@ -730,4 +735,164 @@ fn evidence_that_does_not_hold_convicts_nobody() {
     let mut old = close.clone();
     old.version = 9;
     assert_eq!(check(&f, &old, &binding, None), Err(PalwGenCloseErrorV1::Version(9)));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Finding G21: a lane outside its dtype is hashed as committed, so it opens, proves and is convicted
+// ---------------------------------------------------------------------------------------------
+
+fn coord_of(dtype: DType) -> PalwGenLeafV1 {
+    PalwGenLeafV1 {
+        coord: PalwGenLeafCoordV1 { stage: 0, pos: 3, kind: PalwGenLeafKindV1::Commit { occurrence: 1, node: 2 }, tile: 0 },
+        dtype,
+        first_element: 0,
+        value_count: 3,
+    }
+}
+
+#[test]
+fn the_leaf_hash_is_total_over_four_byte_lanes_and_unchanged_inside_the_dtype() {
+    // Inside the dtype the wire encoding is the strict one, byte for byte: honest leaves, every root and
+    // every golden are what they were.
+    let inside: [(DType, [i128; 3]); 4] = [
+        (DType::I8, [-128, 0, 127]),
+        (DType::I16, [-32_768, 1, 32_767]),
+        (DType::I32, [i32::MIN as i128, -1, i32::MAX as i128]),
+        (DType::Idx, [0, 1, u32::MAX as i128]),
+    ];
+    for (dtype, values) in inside {
+        assert_eq!(palw_tir_lanes_wire_v1(dtype, &values).unwrap(), palw_tir_lanes_le_v1(dtype, &values).unwrap(), "{dtype:?}");
+    }
+    // Outside it the strict encoding refuses and the wire encoding is the lane as committed: the low 32 bits.
+    let outside: [(DType, [i128; 3]); 4] = [
+        (DType::I8, [128, -129, 100_000]),
+        (DType::I16, [32_768, -32_769, 100_000]),
+        (DType::I32, [1 << 31, -(1 << 31) - 1, 1 << 40]),
+        (DType::Idx, [-1, 1 << 32, 1 << 40]),
+    ];
+    for (dtype, values) in outside {
+        assert!(palw_tir_lanes_le_v1(dtype, &values).is_err(), "{dtype:?}: the strict builder refuses");
+        let lanes = palw_tir_lanes_wire_v1(dtype, &values).unwrap_or_else(|e| panic!("{dtype:?}: {e}"));
+        let want: Vec<u8> = values
+            .iter()
+            .flat_map(|v| if dtype == DType::Idx { (*v as u32).to_le_bytes() } else { (*v as i32).to_le_bytes() })
+            .collect();
+        assert_eq!(lanes, want, "{dtype:?}: four little-endian bytes, the value's low 32 bits");
+        // The leaf's hash is over exactly those lanes (no error, no dtype judgement) ...
+        let leaf = coord_of(dtype);
+        let hash = palw_gen_step_leaf_hash_v1(&leaf, &values).unwrap_or_else(|e| panic!("{dtype:?}: {e}"));
+        // ... and equals the hash of the values a court reads back from those lanes (the wire round trip).
+        let read = palw_tir_lane_values_v1(dtype, &lanes).unwrap();
+        assert_eq!(palw_gen_step_leaf_hash_v1(&leaf, &read).unwrap(), hash, "{dtype:?}: the opened leaf hashes as committed");
+    }
+    // Never a dtype that is not committed.
+    assert!(palw_tir_lanes_wire_v1(DType::I64, &[0]).is_err());
+}
+
+/// Values a forger plants in the output node's step tile: each past its dtype's range, in the range of
+/// a lane's four bytes or beyond it.
+fn forged_lanes(dtype: DType) -> Vec<i128> {
+    let (lo, hi) = match dtype {
+        DType::I8 => (-128i128, 127i128),
+        DType::I16 => (-32_768, 32_767),
+        DType::I32 => (i32::MIN as i128, i32::MAX as i128),
+        DType::Idx => (0, u32::MAX as i128),
+        other => panic!("{other:?} is never committed"),
+    };
+    vec![hi + 1, lo - 1, 100_000, -100_000]
+}
+
+#[test]
+fn an_executor_that_commits_a_lane_outside_its_dtype_is_convicted_at_the_output_close() {
+    // E's 311 forged closes: a lane outside the output node's dtype, committed into a tree the executor
+    // hashed itself. It opens, proves under its stage's root and is convicted by PALW-TIR-33.
+    let mut convicted = 0;
+    for f in [vision(), image()] {
+        let p = prompt();
+        let (job, ids) = if f.image.is_some() {
+            (vision_job(&f), no_ids())
+        } else {
+            (image_job(&f, 0, 0, [0x33; 32]), PalwGenIdsV1 { prompt: &p, negative: &[] })
+        };
+        let (honest, honest_binding) = run(&f, &job, ids);
+        let out_stage = f.pipeline.output_stage as usize;
+        let program = &f.programs[f.pipeline.stages[out_stage].program as usize];
+        let interval = misaka_palw_tir::interval_v2::output_interval_v2(program).expect("the output node's proven interval");
+        let tile_len = honest.output.as_ref().unwrap().tile_len;
+        let coord = palw_gen_output_step_coord_v1(&honest.space.stages[out_stage], 0, tile_len).expect("tile 0 has a step tile");
+        let leaf_index = honest.space.stages[out_stage].leaf_index(&coord).unwrap() as usize;
+        let dtype = honest.space.stages[out_stage].leaves()[leaf_index].dtype;
+        for value in forged_lanes(dtype) {
+            // What a court reads back from the lane: the value's low 32 bits.
+            let read = if dtype == DType::Idx { value as u32 as i128 } else { value as i32 as i128 };
+            if read >= interval.lo && read <= interval.hi {
+                continue; // the wrapped lane is a value the node may hold: not a G21 case
+            }
+            let lied = lie_in_the_step_tile(&honest, &coord, 1, value);
+            assert_ne!(lied.claim.step_root, honest.claim.step_root, "the forged tree has its own root");
+            let accused = PalwGenTensorBindingV1::of(&job, &lied.claim, lied.space.leaf_count(), lied.claim.output_root.unwrap());
+            let ev = evidence(&f, &lied, &accused, ids);
+            let close = ev.output_close(0).unwrap_or_else(|e| panic!("{dtype:?} {value}: the forged tile does not ride: {e}"));
+            assert_eq!(
+                check(&f, &close, &accused, None),
+                Ok(Some(PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: 1 })),
+                "{dtype:?}: a lane of {value} (read as {read}) is outside [{}, {}] and convicts",
+                interval.lo,
+                interval.hi
+            );
+            // In a session the same close is the narrowed leaf's.
+            let global = lied.space.global_index(&close.step_tile.coord).unwrap();
+            assert_eq!(check(&f, &close, &accused, Some(global)), Ok(Some(PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: 1 })));
+            convicted += 1;
+        }
+        // The honest claim is what it was: the same root, acquitted at every tile.
+        let ev = evidence(&f, &honest, &honest_binding, ids);
+        for tile in 0..output_tiles(&honest) {
+            assert_eq!(check(&f, &ev.output_close(tile).unwrap(), &honest_binding, None), Ok(None));
+        }
+    }
+    assert!(convicted >= 4, "at least one toy node's dtype is narrower than a four-byte lane: {convicted} forged closes convicted");
+}
+
+#[test]
+fn a_cone_close_at_a_leaf_holding_a_lane_outside_its_dtype_convicts_on_the_lane_alone() {
+    // The challenger's other move: dispute the leaf itself. Its cone is never read — PALW-TIR-33 convicts
+    // before any operand, param or image is — so the close is the leaf and nothing else.
+    let f = image();
+    let p = prompt();
+    let ids = PalwGenIdsV1 { prompt: &p, negative: &[] };
+    let job = image_job(&f, 0, 0, [0x33; 32]);
+    let (honest, _) = run(&f, &job, ids);
+    let out_stage = f.pipeline.output_stage as usize;
+    let tile_len = honest.output.as_ref().unwrap().tile_len;
+    let coord = palw_gen_output_step_coord_v1(&honest.space.stages[out_stage], 0, tile_len).unwrap();
+    let lied = lie_in_the_step_tile(&honest, &coord, 0, 100_000);
+    let accused = PalwGenTensorBindingV1::of(&job, &lied.claim, lied.space.leaf_count(), lied.claim.output_root.unwrap());
+    let ev = evidence(&f, &lied, &accused, ids);
+    let global = lied.space.global_index(&coord).unwrap();
+    let close = ev.cone_close(global, &LIMITS).expect("a lane outside the interval is a close, not a refusal to build one");
+    assert!(close.operands.is_empty() && close.params.is_empty() && close.image_tiles.is_empty(), "the leaf alone");
+    let verdict = check_gen_cone_close_v1(&close, &f.row, &f.row.class_id, &accused.committed_execution_root, Some(global), FORM, &LIMITS);
+    assert_eq!(verdict, Ok(Some(PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: 0 })));
+
+    // An honest leaf still gets the full cone close and is acquitted (unchanged).
+    let (_, honest_binding) = run(&f, &job, ids);
+    let honest_ev = evidence(&f, &honest, &honest_binding, ids);
+    let full = honest_ev.cone_close(global, &LIMITS).expect("the honest cone close builds");
+    assert!(!full.operands.is_empty() || !full.params.is_empty(), "an honest leaf's close carries what its cone reads");
+    assert_eq!(
+        check_gen_cone_close_v1(&full, &f.row, &f.row.class_id, &honest_binding.committed_execution_root, Some(global), FORM, &LIMITS),
+        Ok(None)
+    );
+
+    // A leaf that does not prove under its stage's root convicts nobody, whatever its lanes.
+    let mut forged = close.clone();
+    forged.disputed.lanes_le[0] ^= 1;
+    assert!(
+        matches!(
+            check_gen_cone_close_v1(&forged, &f.row, &f.row.class_id, &accused.committed_execution_root, Some(global), FORM, &LIMITS),
+            Err(_)
+        ),
+        "an unproven leaf is a refusal, not a conviction"
+    );
 }
