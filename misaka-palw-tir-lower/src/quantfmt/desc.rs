@@ -50,6 +50,11 @@ pub struct QuantFormatDesc {
     #[serde(default)]
     pub ids: Vec<FormatId>,
     pub layout: LayoutDesc,
+    /// How a `quantization_config` that announces this format is read (`ids` of scheme `config`): the
+    /// keys it may carry, the modules it leaves in float, and the conditions under which the stored
+    /// tensors mean what this descriptor says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<ConfigDesc>,
     /// Parameters of the format (`bits`, `group_size`), read from the model's configuration.
     #[serde(default)]
     pub params: BTreeMap<String, ParamDesc>,
@@ -141,6 +146,43 @@ pub struct DimsDesc {
     pub inp: String,
 }
 
+/// How a model's `quantization_config` is read for a format.
+///
+/// Every top-level key of the configuration is either read (a parameter's `config` path starts with
+/// it), declared `inert`, named by `skip`, named by a check, or refused by name — a key the descriptor
+/// does not know may change what the stored tensors mean.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigDesc {
+    /// Keys that never change what the stored tensors mean (tooling, calibration, kernel choices).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inert: Vec<String>,
+    /// The key that lists the modules kept in float (`ignore`, `modules_to_not_convert`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip: Option<String>,
+    /// How a `skip` entry names a module: `exact` (the full module name; an entry `re:<pattern>` is a
+    /// regular expression of the subset `^ $ . .* \x` and literals) or `contains` (a substring of it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_match: Option<String>,
+    /// `never`: the language-model head is not stored in this format; `unless_skipped`: it is, unless
+    /// `skip` names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lm_head: Option<String>,
+    /// Conditions on the configuration; all must hold.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<ConfigCheck>,
+}
+
+/// The value at a dotted `path` of the configuration (an absent key is `null`) must be one of
+/// `one_of`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigCheck {
+    pub path: String,
+    pub one_of: Vec<serde_json::Value>,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParamDesc {
@@ -190,6 +232,15 @@ pub struct DecodeDesc {
     /// code width from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<CodeDesc>,
+    /// `tensors` layouts: whether the lowering must carry a per-group offset term (codes minus the zero
+    /// point do not fit `i8`), as an expression over the parameters. Absent: the conservative rule (a
+    /// float offset, or a data-dependent zero over a code range that does not fit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_term: Option<String>,
+    /// `tensors` layouts: whether the lowering gathers the input through the group index first, as an
+    /// expression over the parameters. Absent: whether `group.index` is declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<String>,
 }
 
 /// A number a descriptor gives literally, or as an expression over the format's parameters
@@ -258,11 +309,28 @@ impl CodeRange {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TestVector {
-    /// One block (or, for `tensors` formats, a case name with `tensors_json`): its bytes.
+    /// `blocks` formats: one or more blocks' bytes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub block_hex: String,
+    /// `tensors` formats: the role tensors of one weight, by role name (an optional role may be absent).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub roles: BTreeMap<String, TestRole>,
+    /// `tensors` formats: the `quantization_config` the parameters are read from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
     /// The `f32` values the dequantised weight must be, little-endian, hex — from an independent
     /// implementation.
     pub values_f32_hex: String,
+}
+
+/// One role tensor of a `tensors` test vector.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestRole {
+    pub dtype: String,
+    pub shape: Vec<usize>,
+    /// Little-endian, row-major, hex.
+    pub hex: String,
 }
 
 impl QuantFormatDesc {

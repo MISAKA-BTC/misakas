@@ -64,6 +64,13 @@ impl M<'_> {
             "moe.shared.up",
             "moe.shared.down",
         ];
+        // A format that decodes to floats (FP8) reads whatever the quantiser converted — a projection of
+        // any mixer — as the float weight it is; one that yields integers is lowered from them, and only
+        // the plain attention and MLP projections are (`crate::lower::qlinear`).
+        const ALSO_FLOAT: &[&str] = &[
+            "mla.q_a", "mla.q_b", "mla.q", "mla.kv_a", "mla.kv_b", "mla.o", "gdn.qkvz", "gdn.ba", "gdn.qkv", "gdn.z", "gdn.b", "gdn.a", "gdn.out",
+            "mamba.in", "mamba.x", "mamba.dt", "mamba.out", "mamba2.in", "mamba2.out",
+        ];
         let Some(q) = &self.st.quant else { return Ok(None) };
         // GGUF: every tensor has its own type; the modules stored block-quantised are listed.
         if let crate::prequant::QFormat::Gguf { .. } = q.fmt {
@@ -75,7 +82,7 @@ impl M<'_> {
         if role == "lm_head" {
             return Ok(q.lm_head.then(|| q.fmt.clone()));
         }
-        if !PROJECTIONS.contains(&role) {
+        if !(PROJECTIONS.contains(&role) || (!q.fmt.is_integers() && ALSO_FLOAT.contains(&role))) {
             return Ok(None);
         }
         let t = self.role(role)?;

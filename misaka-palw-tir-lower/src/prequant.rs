@@ -30,11 +30,19 @@
 //! carries into the neighbouring zero. Symmetric checkpoints (`z = 2^(b−1)`) never hit it.
 
 use crate::error::{LowerError, Result};
+use crate::quantfmt::{NeedsDescriptor, QuantFormat, QuantRegistry};
 use crate::weights::Tensor;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// A group-quantised linear format, as `config.json`'s `quantization_config` names it.
+///
+/// Every variant but [`QFormat::Gguf`] is read from the checkpoint's tensors by a descriptor
+/// (`crate::quantfmt`, `misaka.palw.quant-format.v1`): `Gptq` and `Awq` are the two built-ins whose
+/// configuration this module checks by hand (they carry model-family gates a descriptor cannot say),
+/// `Described` is any other format a descriptor defines.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum QFormat {
     /// GPTQ (AutoGPTQ / GPTQModel). `group = 0`: one group per row (`group_size = −1`).
@@ -44,15 +52,82 @@ pub enum QFormat {
     /// GGUF (llama.cpp) block formats: the program layout of one module over every layer's tensor
     /// type (`crate::gguf`).
     Gguf { layout: QLayout },
+    /// A format a descriptor defines (FP8 with block scales, compressed-tensors, or one a caller
+    /// supplied), with the parameters its configuration gave.
+    Described(Described),
+}
+
+/// A `tensors` descriptor with its parameters bound: what a module of this checkpoint is stored as.
+#[derive(Clone, Debug)]
+pub struct Described {
+    pub format: Arc<QuantFormat>,
+    pub params: BTreeMap<String, i64>,
+}
+
+impl PartialEq for Described {
+    fn eq(&self, o: &Self) -> bool {
+        self.format.digest() == o.format.digest() && self.params == o.params
+    }
+}
+impl Eq for Described {}
+
+impl Serialize for Described {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("Described", 3)?;
+        st.serialize_field("format", self.format.name())?;
+        st.serialize_field("digest", &self.format.digest_hex())?;
+        st.serialize_field("params", &self.params)?;
+        st.end()
+    }
+}
+
+impl Described {
+    /// Bind `params` to a `tensors` descriptor (the descriptor's layout must evaluate under them).
+    pub fn new(format: Arc<QuantFormat>, params: BTreeMap<String, i64>) -> Result<Described> {
+        let t = format.as_tensors().ok_or_else(|| LowerError::bad(format!("quant format `{}` is not a tensors format", format.name())))?;
+        t.layout(&params).map_err(|e| LowerError::bad(format!("quant format `{}`: {e}", format.name())))?;
+        Ok(Described { format, params })
+    }
+}
+
+/// The built-in descriptor a [`QFormat::Gptq`] or [`QFormat::Awq`] decodes through, with its
+/// parameters.
+fn builtin_binding(fmt: &QFormat) -> Option<(Arc<QuantFormat>, BTreeMap<String, i64>)> {
+    let reg = QuantRegistry::builtin();
+    let gs = |g: usize| if g == 0 { -1 } else { g as i64 };
+    match fmt {
+        QFormat::Gptq { bits, group, sym, v2, .. } => Some((
+            reg.named("GPTQ").expect("the built-in GPTQ descriptor").clone(),
+            BTreeMap::from([("bits".into(), *bits as i64), ("group_size".into(), gs(*group)), ("v2".into(), *v2 as i64), ("sym".into(), *sym as i64)]),
+        )),
+        QFormat::Awq { bits, group } => {
+            Some((reg.named("AWQ").expect("the built-in AWQ descriptor").clone(), BTreeMap::from([("bits".into(), *bits as i64), ("group_size".into(), gs(*group))])))
+        }
+        QFormat::Described(d) => Some((d.format.clone(), d.params.clone())),
+        QFormat::Gguf { .. } => None,
+    }
 }
 
 impl QFormat {
+    /// The descriptor and parameters this format's tensors are decoded with (`None`: GGUF, whose
+    /// descriptors are per tensor type).
+    pub fn binding(&self) -> Option<(Arc<QuantFormat>, BTreeMap<String, i64>)> {
+        builtin_binding(self)
+    }
+
+    /// Whether the decode yields stored integers (the exact lowering reads them) rather than floats
+    /// (an FP8 weight: the ordinary W8 path).
+    pub fn is_integers(&self) -> bool {
+        match self {
+            QFormat::Described(d) => d.format.as_tensors().is_some_and(|t| t.is_integers()),
+            _ => true,
+        }
+    }
+
     /// Columns per group, `0` for one group per row.
     pub fn group(&self) -> usize {
-        match self {
-            QFormat::Gptq { group, .. } | QFormat::Awq { group, .. } => *group,
-            QFormat::Gguf { layout } => layout.group,
-        }
+        self.layout().group
     }
     pub fn label(&self) -> String {
         let g = |g: usize| if g == 0 { "per-row".to_string() } else { format!("g{g}") };
@@ -66,18 +141,28 @@ impl QFormat {
             ),
             QFormat::Awq { bits, group } => format!("awq b{bits} {}", g(*group)),
             QFormat::Gguf { layout } => format!("gguf {}{}", g(layout.group), if layout.offset_term { " +min" } else { "" }),
+            QFormat::Described(d) => {
+                let p: Vec<String> = d.params.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                format!("{} {}", d.format.name(), p.join(" "))
+            }
         }
     }
-    /// The program structure this format lowers to ([`QLayout`]).
+    /// The program structure this format lowers to ([`QLayout`]): GPTQ's column order is data
+    /// (`g_idx`) and GPTQModel's group-aware reordering permutes it without `desc_act`, so every
+    /// GPTQ projection gathers its input through it; 8-bit asymmetric codes need the offset term.
+    /// Those rules are the descriptors' (`decode.order`, `decode.offset_term`).
     pub fn layout(&self) -> QLayout {
         match self {
-            // The column order is data (`g_idx`), and GPTQModel's group-aware reordering permutes
-            // it without `desc_act`: every GPTQ projection gathers its input through it.
-            QFormat::Gptq { bits, group, sym, .. } => {
-                QLayout { group: *group, order: true, offset_term: *bits == 8 && !*sym }
-            }
-            QFormat::Awq { group, .. } => QLayout { group: *group, order: false, offset_term: false },
             QFormat::Gguf { layout } => *layout,
+            other => {
+                let (f, params) = builtin_binding(other).expect("a tensors format");
+                let l = f
+                    .as_tensors()
+                    .expect("a tensors descriptor")
+                    .layout(&params)
+                    .unwrap_or_else(|e| panic!("`{}` was bound to parameters its layout does not evaluate under: {e}", f.name()));
+                QLayout { group: l.group, order: l.order, offset_term: l.offset_term }
+            }
         }
     }
 }
@@ -113,7 +198,7 @@ pub struct QuantConfig {
 impl QuantConfig {
     /// Whether the linear module `name` (a full module name) is stored quantised.
     pub fn converts(&self, name: &str) -> bool {
-        if self.skip.iter().any(|k| name.starts_with(k.as_str()) || name.ends_with(k.as_str())) {
+        if skip_matches(&self.skip, name) {
             return false;
         }
         match &self.only {
@@ -121,6 +206,95 @@ impl QuantConfig {
             Some(list) => list.iter().any(|m| name.ends_with(m.as_str())),
         }
     }
+}
+
+/// Whether a module name is among the modules a configuration keeps in float. An entry is
+/// `exact:<name>`, `contains:<text>` or `re:<pattern>` (a descriptor's `skip`, see
+/// `quantfmt::desc::ConfigDesc`), or — AWQ's own — a bare prefix or suffix of the name.
+pub fn skip_matches(skip: &[String], name: &str) -> bool {
+    skip.iter().any(|k| {
+        if let Some(p) = k.strip_prefix("re:") {
+            regex_prefix_match(p, name)
+        } else if let Some(n) = k.strip_prefix("exact:") {
+            name == n
+        } else if let Some(n) = k.strip_prefix("contains:") {
+            name.contains(n)
+        } else {
+            name.starts_with(k.as_str()) || name.ends_with(k.as_str())
+        }
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Re {
+    Any,
+    Lit(char),
+}
+
+/// The regular-expression subset a configuration's `ignore` list is written in: literals, `.`,
+/// `.*`, escapes of a punctuation character, `^` at the start and `$` at the end. Anything else is
+/// refused by name rather than guessed at.
+fn regex_parse(p: &str) -> Result<(Vec<(Re, bool)>, bool)> {
+    let p = p.strip_prefix('^').unwrap_or(p);
+    let (p, end) = match p.strip_suffix('$') {
+        Some(q) if !q.ends_with('\\') => (q, true),
+        _ => (p, false),
+    };
+    let mut out: Vec<(Re, bool)> = Vec::new();
+    let mut it = p.chars().peekable();
+    while let Some(c) = it.next() {
+        let tok = match c {
+            '\\' => match it.next() {
+                Some(e) if e.is_ascii_punctuation() => Re::Lit(e),
+                other => return Err(nl(format!("`ignore` pattern `{p}`: the escape \\{} is outside the subset read (literals, `.`, `.*`, `^`, `$`)", other.map(String::from).unwrap_or_default()))),
+            },
+            '.' => Re::Any,
+            '*' | '+' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^' | '$' => {
+                return Err(nl(format!("`ignore` pattern `{p}`: `{c}` is outside the subset read (literals, `.`, `.*`, `^`, `$`)")));
+            }
+            c => Re::Lit(c),
+        };
+        let star = it.peek() == Some(&'*');
+        if star {
+            if tok != Re::Any {
+                return Err(nl(format!("`ignore` pattern `{p}`: `*` after a literal is outside the subset read (only `.*`)")));
+            }
+            it.next();
+        }
+        out.push((tok, star));
+    }
+    Ok((out, end))
+}
+
+/// Check that a `re:` entry is in the subset (the refusal is raised when the configuration is read).
+pub fn check_skip_pattern(entry: &str) -> Result<()> {
+    match entry.strip_prefix("re:") {
+        Some(p) => regex_parse(p).map(|_| ()),
+        None => Ok(()),
+    }
+}
+
+/// `re.match(pattern, name)` (anchored at the start; at the end only with `$`) over the subset.
+fn regex_prefix_match(p: &str, name: &str) -> bool {
+    let Ok((toks, end)) = regex_parse(p) else { return false };
+    let s: Vec<char> = name.chars().collect();
+    fn go(t: &[(Re, bool)], s: &[char], end: bool) -> bool {
+        match t.split_first() {
+            None => !end || s.is_empty(),
+            Some(((tok, star), rest)) => {
+                let one = |c: char| match tok {
+                    Re::Any => true,
+                    Re::Lit(l) => *l == c,
+                };
+                if *star {
+                    (0..=s.len()).take_while(|k| s[..*k].iter().all(|c| one(*c))).any(|k| go(rest, &s[k..], end))
+                } else {
+                    s.first().is_some_and(|c| one(*c)) && go(rest, &s[1..], end)
+                }
+            }
+        }
+    }
+    go(&toks, &s, end)
 }
 
 /// `quantization_config` keys that never change the stored weights' meaning: tooling, calibration
@@ -232,9 +406,36 @@ fn group_of(g: Option<i64>) -> Result<usize> {
     }
 }
 
-/// Parse `quantization_config` (GPTQ and AWQ; every other method is refused). Every key is either
-/// read, known inert, or a refusal.
+/// Parse `quantization_config` against the built-in descriptors.
 pub fn parse_quant_config(q: &Value, arch: &str, model_type: &str) -> Result<QuantConfig> {
+    parse_quant_config_with(q, arch, model_type, QuantRegistry::builtin())
+}
+
+/// A `quantization_config` whose `quant_method` a descriptor in `reg` reads: the descriptor says
+/// which keys it knows, which conditions must hold and how its parameters are found. A method no
+/// descriptor reads is a refusal that says what to supply ([`NeedsDescriptor`]).
+fn described_config(q: &Value, method: &str, arch: &str, reg: &QuantRegistry) -> Result<QuantConfig> {
+    let format = q.get("format").and_then(Value::as_str);
+    let Some(f) = reg.config(method, format) else {
+        let name = match format {
+            Some(fm) => format!("{method}/{fm}"),
+            None => method.to_string(),
+        };
+        let n = NeedsDescriptor { scheme: "config".into(), id: None, name: Some(name), tensors: Vec::new() };
+        return Err(nl(format!("{arch}: pre-quantized checkpoint: {}", n.message(&reg.config_methods()))));
+    };
+    let t = f.as_tensors().ok_or_else(|| LowerError::bad(format!("quant format `{}` is a blocks format: a quant_method names a tensors format", f.name())))?;
+    let r = t.read_config(q).map_err(|e| nl(format!("{arch}: {e}")))?;
+    for e in &r.skip {
+        check_skip_pattern(e)?;
+    }
+    Ok(QuantConfig { fmt: QFormat::Described(Described::new(f.clone(), r.params)?), lm_head: r.lm_head, skip: r.skip, only: None, per_module: Default::default() })
+}
+
+/// Parse `quantization_config` (GPTQ and AWQ by hand; any other method through the descriptor in
+/// `reg` that reads it, else refused by name). Every key is either read, known inert, or a refusal.
+pub fn parse_quant_config_with(q: &Value, arch: &str, model_type: &str, reg: &QuantRegistry) -> Result<QuantConfig> {
+    let qv = q;
     let q = q.as_object().ok_or_else(|| LowerError::bad("quantization_config is not an object"))?;
     let method = q.get("quant_method").and_then(Value::as_str).unwrap_or("unknown").to_ascii_lowercase();
     let known: &[&str] = match method.as_str() {
@@ -252,11 +453,7 @@ pub fn parse_quant_config(q: &Value, arch: &str, model_type: &str) -> Result<Qua
             "is_marlin_format",
         ],
         "awq" => &["bits", "group_size", "zero_point", "version", "format", "modules_to_not_convert", "desc_act"],
-        other => {
-            return Err(nl(format!(
-                "{arch}: pre-quantized checkpoint (quant_method={other}) — only GPTQ and AWQ checkpoints are lowered from their stored integers; lower this one from a BF16/F16/F32 export"
-            )));
-        }
+        other => return described_config(qv, other, arch, reg),
     };
     let inert = if method == "gptq" { GPTQ_INERT } else { AWQ_INERT };
     let unknown: Vec<&String> = q.keys().filter(|k| !known.contains(&k.as_str()) && !inert.contains(&k.as_str())).collect();

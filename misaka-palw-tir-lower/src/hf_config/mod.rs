@@ -165,8 +165,13 @@ pub fn sanitize_json(text: &str) -> String {
 }
 
 pub fn parse_config_str(text: &str) -> Result<ArchSpec> {
+    parse_config_str_with(text, crate::quantfmt::QuantRegistry::builtin())
+}
+
+/// [`parse_config_str`] with the quant formats of `reg` (built-ins plus the descriptors a model needs).
+pub fn parse_config_str_with(text: &str, reg: &crate::quantfmt::QuantRegistry) -> Result<ArchSpec> {
     let v: Value = serde_json::from_str(&sanitize_json(text)).map_err(|e| LowerError::bad(format!("config.json is not JSON: {e}")))?;
-    parse_config(&v)
+    parse_config_with(&v, reg)
 }
 
 fn remote_module(auto_map: &Map<String, Value>) -> Option<String> {
@@ -199,6 +204,10 @@ const REMOTE_ONLY: &[&str] =
     &["InternLM2ForCausalLM", "MiniCPMForCausalLM", "ExaoneForCausalLM", "RWForCausalLM", "Rwkv5ForCausalLM", "Rwkv6ForCausalLM"];
 
 pub fn parse_config(v: &Value) -> Result<ArchSpec> {
+    parse_config_with(v, crate::quantfmt::QuantRegistry::builtin())
+}
+
+pub fn parse_config_with(v: &Value, reg: &crate::quantfmt::QuantRegistry) -> Result<ArchSpec> {
     let root = v.as_object().ok_or_else(|| LowerError::bad("config.json is not an object"))?;
     let arch = match root.get("architectures") {
         Some(Value::Array(a)) if !a.is_empty() => {
@@ -224,7 +233,7 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
     let quant = match root.get("quantization_config").filter(|q| !q.is_null()) {
         Some(q) => {
             let mt = root.get("model_type").and_then(Value::as_str).unwrap_or("");
-            Some(crate::prequant::parse_quant_config(q, &arch, mt)?)
+            Some(crate::prequant::parse_quant_config_with(q, &arch, mt, reg)?)
         }
         None => None,
     };
@@ -358,8 +367,11 @@ pub(crate) fn attach_quant(spec: &mut ArchSpec, q: crate::prequant::QuantConfig)
     if spec.hf.names.keys().any(|k| visual(k)) || spec.hf.ignored_prefixes.iter().any(|k| visual(k)) {
         return Err(LowerError::not_lowerable(format!("{arch}: a pre-quantised multimodal checkpoint")));
     }
+    // A format that decodes to floats (FP8) hands the lowerer an ordinary float weight, whatever the
+    // layer is; the integers-lowering below is for the layers `crate::lower::qlinear` knows.
+    let integers = q.fmt.is_integers();
     for (l, ls) in spec.layers.iter().enumerate() {
-        if !matches!(ls.mixer, Mixer::Attention(_) | Mixer::GatedDeltaNet(_)) || !matches!(ls.ffn, Ffn::Mlp(_) | Ffn::Moe(_)) {
+        if integers && (!matches!(ls.mixer, Mixer::Attention(_) | Mixer::GatedDeltaNet(_)) || !matches!(ls.ffn, Ffn::Mlp(_) | Ffn::Moe(_))) {
             return Err(LowerError::not_lowerable(format!(
                 "{arch}: layer {l} of a pre-quantised checkpoint is not attention or gated delta + MLP or experts (latent attention and the other recurrent mixers are not lowered from their integers yet)"
             )));
@@ -371,7 +383,11 @@ pub(crate) fn attach_quant(spec: &mut ArchSpec, q: crate::prequant::QuantConfig)
             return Err(LowerError::not_lowerable(format!("{arch}: pre-quantised experts in a fused layout")));
         }
     }
-    spec.notes.push(format!("pre-quantised checkpoint ({}): projections lowered from the stored integers", q.fmt.label()));
+    spec.notes.push(if integers {
+        format!("pre-quantised checkpoint ({}): projections lowered from the stored integers", q.fmt.label())
+    } else {
+        format!("pre-quantised checkpoint ({}): projections decoded to float32 and lowered on the ordinary W8 path", q.fmt.label())
+    });
     spec.hf.quant = Some(q);
     Ok(())
 }

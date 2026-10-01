@@ -1,0 +1,235 @@
+{
+ "config": {
+  "checks": [
+   {
+    "message": "more than one config group: modules of one checkpoint use different formats",
+    "one_of": [
+     null
+    ],
+    "path": "config_groups.group_1"
+   },
+   {
+    "message": "targets other than all Linear modules",
+    "one_of": [
+     [
+      "Linear"
+     ]
+    ],
+    "path": "config_groups.group_0.targets"
+   },
+   {
+    "message": "a quantised KV cache changes what the model computes",
+    "one_of": [
+     null
+    ],
+    "path": "kv_cache_scheme"
+   },
+   {
+    "message": "a sparse checkpoint stores its tensors differently",
+    "one_of": [
+     null,
+     {}
+    ],
+    "path": "sparsity_config"
+   },
+   {
+    "message": "transforms (rotations) are applied to the weights at run time",
+    "one_of": [
+     null,
+     {}
+    ],
+    "path": "transform_config"
+   },
+   {
+    "message": "dynamic weight quantisation",
+    "one_of": [
+     null,
+     false
+    ],
+    "path": "config_groups.group_0.weights.dynamic"
+   },
+   {
+    "message": "integer weights are another format",
+    "one_of": [
+     "float"
+    ],
+    "path": "config_groups.group_0.weights.type"
+   },
+   {
+    "message": "FP8 is 8 bits",
+    "one_of": [
+     8
+    ],
+    "path": "config_groups.group_0.weights.num_bits"
+   },
+   {
+    "message": "a weight strategy other than per-channel",
+    "one_of": [
+     "channel"
+    ],
+    "path": "config_groups.group_0.weights.strategy"
+   }
+  ],
+  "inert": [
+   "format",
+   "global_compression_ratio",
+   "compression_ratio",
+   "quantization_status",
+   "version"
+  ],
+  "lm_head": "unless_skipped",
+  "skip": "ignore",
+  "skip_match": "exact"
+ },
+ "decode": {
+  "target": "floats",
+  "value": "weight[o, i] * scale[o, 0]"
+ },
+ "doc": "compressed-tensors, format float-quantized, FP8 weights with one scale per output channel (RedHatAI *-FP8-dynamic): `weight` float8_e4m3fn [out, in], `weight_scale` [out, 1]. W = fp8(w) * scale; the elements are floats, so it decodes to floats and takes the ordinary W8 path.",
+ "ids": [
+  {
+   "method": "compressed-tensors/float-quantized",
+   "scheme": "config"
+  }
+ ],
+ "layout": {
+  "checks": [
+   {
+    "expr": "dim_scale[0] == out && dim_scale[1] == 1",
+    "message": "weight_scale is not [out, 1]"
+   }
+  ],
+  "dims": {
+   "inp": "dim_weight[1]",
+   "out": "dim_weight[0]"
+  },
+  "kind": "tensors",
+  "roles": [
+   {
+    "dtypes": [
+     "F8_E4M3"
+    ],
+    "name": "weight",
+    "rank": 2,
+    "suffix": ".weight"
+   },
+   {
+    "dtypes": [
+     "F16",
+     "BF16",
+     "F32"
+    ],
+    "name": "scale",
+    "rank": 2,
+    "suffix": ".weight_scale"
+   }
+  ]
+ },
+ "name": "CT_FP8_CHANNEL",
+ "params": {},
+ "schema": "misaka.palw.quant-format.v1",
+ "tests": [
+  {
+   "config": {
+    "config_groups": {
+     "group_0": {
+      "input_activations": null,
+      "output_activations": null,
+      "targets": [
+       "Linear"
+      ],
+      "weights": {
+       "actorder": null,
+       "dynamic": false,
+       "group_size": null,
+       "num_bits": 8,
+       "observer": "minmax",
+       "strategy": "channel",
+       "symmetric": true,
+       "type": "float"
+      }
+     }
+    },
+    "format": "float-quantized",
+    "ignore": [
+     "lm_head"
+    ],
+    "kv_cache_scheme": null,
+    "quant_method": "compressed-tensors",
+    "quantization_status": "compressed",
+    "sparsity_config": {},
+    "transform_config": {}
+   },
+   "roles": {
+    "scale": {
+     "dtype": "F32",
+     "hex": "d850883eb3a89a3ef006b63d63fded3d5ed0453ead320b3eeebbc33ed3fec23e",
+     "shape": [
+      8,
+      1
+     ]
+    },
+    "weight": {
+     "dtype": "F8_E4M3",
+     "hex": "9f2ae601038e4d4fe1a7470976a029860bd1a6913dd18ff2233361f8c4c0eedbf0e2e01c8d521d55234be7f44af8bb50d72a10c62a79471ce0102a3bae8dc4247571130f38c8fcb6558e838a599d4847fe6df238397b5d85a02bc83dc7467d574d30489750c5da0fa505c4b1db3f0ced6f2755307da1313ccfaf7e4614678242",
+     "shape": [
+      8,
+      16
+     ]
+    }
+   },
+   "values_f32_hex": "9597ffbc0e65aa3d7a8d6ec1d850083a4479cc3a7a8deebb5f83dd3f9597ff3ff35a19c195977fbd95977f3ff35a993b7a8d6e42d85008bdf35a993d44794cbbf6a7d43bc9fd2dc09d5387bdc9fd2dbc2352fb3ec9fd2dc028fe10bce05241c2f6a7543df6a7543ec9fd2d41b3a89ac20cfd67bfb3a81abf9d5307c2f6a7d4c0f00636c1ac8863c0f00636c03485083ca3e513bbac88633fa3e5133ca3e5933f8a497a3c8a49fa3e81a6aac0348588c1ac88e33ef006b6c18a49fabdf006363f8d1ddfbf5ebe143d63fd6d3bb73dd0be5ebe143d88de05428d1ddf3e0a7e323c63fd6dc063fd6d3b5ebe143d349e233eb73d50bde05d41bb0a7eb2be0a7eb23c4cb920426a8ade4141ff073c5873b93b5ed0453e5ed045bf465c94c252162dbe4cb920405216adbb465c94ba764477bb6a8a5e404cb9a0bc5ed0453f5873393faf9873c25932624158ffadc1ad320b3e03991c3eae653f425932624058ffadbaad328bbcae653f3dad320bbf5932623e827f02bfaf98f33e59326242827f0240b1081f40eebb433eeebbc33f2f80b7bceebb4340b1089fbfeaaaf4c02f80373cb1089fbdeaaa743bf2cc92bf6c335cbe349106c12f80373ff2cc123cb1081fc2e6ce3642e6ceb63d0b6f9e40d3fe423e0b6f1e43ad5e5bbdad5e5b3e1e3f123fe6ce36c0e6ce36bef99e2a43f99eaa3f1e3f923ce6ceb641d3fec2ba88be733f"
+  },
+  {
+   "config": {
+    "config_groups": {
+     "group_0": {
+      "input_activations": null,
+      "output_activations": null,
+      "targets": [
+       "Linear"
+      ],
+      "weights": {
+       "actorder": null,
+       "dynamic": false,
+       "group_size": null,
+       "num_bits": 8,
+       "observer": "minmax",
+       "strategy": "channel",
+       "symmetric": true,
+       "type": "float"
+      }
+     }
+    },
+    "format": "float-quantized",
+    "ignore": [
+     "lm_head"
+    ],
+    "kv_cache_scheme": null,
+    "quant_method": "compressed-tensors",
+    "quantization_status": "compressed",
+    "sparsity_config": {},
+    "transform_config": {}
+   },
+   "roles": {
+    "scale": {
+     "dtype": "F32",
+     "hex": "ab6be33eed6bec3edbc45c3e54dc073ecdaec73e",
+     "shape": [
+      5,
+      1
+     ]
+    },
+    "weight": {
+     "dtype": "F8_E4M3",
+     "hex": "0dd131d07244f7db4373c3a086f5a472f671aecebcbfdd28c9b6c1dd57575ecc54e35c",
+     "shape": [
+      5,
+      7
+     ]
+    }
+   },
+   "values_f32_hex": "7bc7383c20d97fc020d97f3eab6b63c04b238e42c090aa3ff034d5c2338a22c1338aa23f338aa242338aa2bfed6b6cbdf250b1bbb117c0c2a49325bd09fb0942402c41c2765df841402cc1bd402cc1bfa493a5be1ebd7ebe08c65cc054dc073dded718bf93c1edbdded798be08c65cc0e033bb40e033bb40f3b82e411ac315c01ac395402d4889c11ac31541"
+  }
+ ]
+}
