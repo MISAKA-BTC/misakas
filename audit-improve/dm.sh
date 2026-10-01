@@ -174,6 +174,11 @@ preflight() {
         else ok "the old release lacks: $lacks— D-M5's crossing is the first of them"; fi
         grep -q -- "--palw-drill-improve-at" <<<"$O" && bad "the old release lists --palw-drill-improve-at (D-M5 needs a release without the improvement fence)" \
             || ok "the old release has no improvement fence (D-M5's other side)"
+        # The old release is the release the fleet runs; the build under test must CONTAIN it (every fence the old release knows, the new one knows),
+        # or the crossing D-M5 shows is not "the next release after it".
+        local only_old; only_old=$(comm -13 <({ grep -oE -- '--palw-drill-[a-z0-9-]*-at' <<<"$H" || true; } | sort -u) <({ grep -oE -- '--palw-drill-[a-z0-9-]*-at' <<<"$O" || true; } | sort -u) | tr '\n' ' ')
+        if [ -z "$only_old" ]; then ok "the build under test lists every drill fence flag the old release lists (it contains the old release's fences)"
+        else bad "the old release lists drill fence flags the build under test lacks: ${only_old}— the build under test must contain the old release (merge it; D-M5's new side is the release AFTER the old one)"; fi
         if [ "$real" = 1 ] || [ -n "${WRITE_LACKS:-}" ]; then echo "$lacks" > "$WORK_DIR/old-lacks.txt" 2>/dev/null || true; fi
     fi
     if [ -x "${CLI_BIN:-/nonexistent}" ]; then

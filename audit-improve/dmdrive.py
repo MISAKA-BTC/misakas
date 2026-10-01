@@ -1141,7 +1141,8 @@ def verdict_dm5(sd):
     if cross.get("result") != "PASS":
         return "FAIL", cross.get("why", "no refusal")
     lack = cross["lack"]
-    note = "" if lack[0] == "improve" else f" (the first fence the old build lacks is {lack[0]}@{lack[1]}, not the improvement fence: name an older release closer to this one)"
+    note = "" if lack[0] == "improve" else (f" (the old release is int-10: the first fence it lacks is {lack[0]}@{lack[1]}, the flag day that follows it on testnet-12; the improvement fence "
+                                             f"comes after it, so the crossing shown is that flag day's, refused by the fork id as every later one would be)")
     return "PASS", f"below: dropped by name / skipped / one tip at DAA {ver['tips'][0]}; crossed fence {lack[1]}: {cross['refusal']}{note}"
 
 
