@@ -278,3 +278,19 @@ fn a_declared_class_is_reproduced_from_the_pack_and_its_class_id_cannot_be_chang
     assert_eq!(d.status, Status::Fail, "{}", r.render());
     let _ = std::fs::remove_dir_all(work);
 }
+
+#[test]
+fn an_mxfp4_pack_serves_the_packed_experts_as_the_float_export_and_rebuilds() {
+    let work = scratch("mxfp4");
+    let src = fixture("hf-quant/mxfp4_gptoss");
+    let (pack, _, pack_dir) = build(&src, &work, 128, true);
+    assert!(pack.quant.descriptors.iter().any(|d| d.name == "MXFP4_HF" && d.source == "built-in"), "{:?}", pack.quant.descriptors);
+    assert!(pack.features.used.iter().any(|u| u["id"] == "QUANT_DESCRIBED_FLOATS_V1"), "{:?}", pack.features.used);
+    assert_eq!(pack.model.architectures, vec!["GptOssForCausalLM".to_string()]);
+    let mut o = VerifyOpts::new(&pack_dir);
+    o.model = Some(src);
+    o.rebuild = true;
+    let r = verify_pack(&o, &|_| {}).expect("verifies");
+    assert!(r.verified(), "{}", r.render());
+    let _ = std::fs::remove_dir_all(work);
+}

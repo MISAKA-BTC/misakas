@@ -22,6 +22,10 @@ Every fixture is a tiny random decoder (transformers' own config classes) whose 
 
   FP8 with block scales (`quant_method: fp8`, DeepSeek-V3 / Qwen3-FP8): `weight` float8_e4m3fn + `weight_scale_inv`
     float32 [ceil(out/bo), ceil(in/bi)], scale = block amax / 448, w8 = fp8(w / scale).
+  MXFP4 as Hugging Face stores it (gpt-oss, `quant_method: mxfp4`): the expert tensors `gate_up_proj` [E, in, out]
+    and `down_proj` are kept as `<name>_blocks` uint8 [E, out, in/32, 16] and `<name>_scales` uint8 [E, out, in/32]
+    (E8M0 exponent, bias 127), one shared exponent per 32 inputs, codes the nearest FP4 (E2M1) value; the reference's
+    expert weights are transformers' own `convert_moe_packed_tensors` of the stored tensors.
   compressed-tensors (llm-compressor):
     pack-quantized (W4A16 / W8A16): `weight_packed` int32 [out, in/pack] (codes along the INPUT, offset by
     2^(b-1)), `weight_scale` fp16 [out, G], asymmetric `weight_zero_point` int32 [out/pack, G] (packed along the
@@ -72,6 +76,12 @@ AWQ_ORDER = [0, 2, 4, 6, 1, 3, 5, 7]
 BASE = dict(hidden_size=128, intermediate_size=256, num_attention_heads=4, num_key_value_heads=2, vocab_size=V,
             num_hidden_layers=2, max_position_embeddings=1024)
 MODELS = {
+    # gpt-oss: experts [E, in, out] fused; the in-width of each expert tensor is a multiple of 32 (MXFP4's block).
+    "gptoss": ("gpt_oss", "GptOssForCausalLM", dict(hidden_size=64, intermediate_size=32, num_attention_heads=4, num_key_value_heads=2,
+                                                    vocab_size=V, head_dim=16, num_hidden_layers=2, num_local_experts=4, num_experts_per_tok=2,
+                                                    sliding_window=4, max_position_embeddings=128,
+                                                    rope_scaling={"rope_type": "yarn", "factor": 4.0, "beta_fast": 32.0, "beta_slow": 1.0,
+                                                                  "truncate": False, "original_max_position_embeddings": 32})),
     "qwen3moe": ("qwen3_moe", "Qwen3MoeForCausalLM", dict(BASE, moe_intermediate_size=128, num_experts=4, num_experts_per_tok=2,
                                                         norm_topk_prob=True, head_dim=32)),
     "mixtral": ("mixtral", "MixtralForCausalLM", dict(BASE, intermediate_size=128, num_local_experts=4, num_experts_per_tok=2)),
@@ -111,6 +121,7 @@ def ct_config(bits, group_size, sym, strategy, actorder=None, fmt="pack-quantize
 
 
 CONFIGS.update({
+    "mxfp4_gptoss": ("gptoss", {"quant_method": "mxfp4", "modules_to_not_convert": ["model.layers.*.self_attn", "model.layers.*.mlp.router", "model.embed_tokens", "lm_head"]}),
     "fp8_block_32": ("llama", {"quant_method": "fp8", "activation_scheme": "dynamic", "fmt": "e4m3", "weight_block_size": [32, 32]}),
     # Blocks that do not divide the weight (128 / 48, 256 / 96): ragged edges.
     "fp8_block_ragged": ("qwen2", {"quant_method": "fp8", "activation_scheme": "dynamic", "fmt": "e4m3", "weight_block_size": [48, 96]}),
@@ -289,6 +300,27 @@ def ct_dequant(t, bits, gs):
     return sc[:, gi] * (q - z[:, gi])
 
 
+FP4_MAG = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0])
+
+
+def mxfp4_quantize(w):
+    """OCP MX with FP4 (E2M1) elements, 32 per block along the last axis: shared exponent floor(log2(amax)) - 2, each element the nearest
+    FP4 value of x / 2^e (clamped to +-6). w: [..., n] float64 with n % 32 == 0. Returns blocks uint8 [..., n/32, 16], scales uint8 [..., n/32]."""
+    *lead, n = w.shape
+    assert n % 32 == 0
+    x = w.reshape(*lead, n // 32, 32)
+    amax = np.abs(x).max(-1)
+    e = np.where(amax > 0, np.floor(np.log2(np.where(amax > 0, amax, 1.0))) - 2, 0).astype(np.int64)
+    e = np.clip(e, -127, 127)
+    y = x / np.exp2(e)[..., None].astype(np.float64)
+    mag = np.abs(y)
+    idx = np.abs(mag[..., None] - FP4_MAG).argmin(-1)           # nearest magnitude code 0..7 (ties: the lower)
+    code = idx + 8 * (np.signbit(y) & (idx > 0))                 # sign bit for nonzero magnitudes (zero stays +0)
+    code = code.astype(np.uint8)
+    blocks = (code[..., 0::2] | (code[..., 1::2] << 4)).astype(np.uint8)
+    return np.ascontiguousarray(blocks), np.ascontiguousarray((e + 127).astype(np.uint8))
+
+
 def fp8_quantize(w, bo, bi):
     """Block-scaled float8_e4m3fn: scale = block amax / 448. Returns the fp8 bytes [out, in] and the float32 scales."""
     out, inp = w.shape
@@ -356,6 +388,18 @@ def build(name):
         bits, group = cw["num_bits"], cw["group_size"] if cw["group_size"] else -1
     for k in sorted(ck):
         v = ck[k]
+        if method == "mxfp4":
+            if k.endswith(("mlp.experts.gate_up_proj", "mlp.experts.down_proj")):
+                from transformers.integrations.mxfp4 import convert_moe_packed_tensors
+                blocks, scales = mxfp4_quantize(np.ascontiguousarray(v.astype(np.float64).transpose(0, 2, 1)))   # [E, out, in] -> blocks over in
+                tensors[f"{k}_blocks"], tensors[f"{k}_scales"] = blocks, scales
+                ref = convert_moe_packed_tensors(torch.from_numpy(blocks), torch.from_numpy(scales), dtype=torch.bfloat16).to(torch.float32).numpy()
+                assert ref.shape == v.shape, (k, ref.shape, v.shape)
+                deq[k] = np.ascontiguousarray(ref, dtype=np.float32)
+            else:
+                tensors[k] = v.astype(np.float16)
+                deq[k] = v.astype(np.float16).astype(np.float32)
+            continue
         if k.endswith(".weight") and k.split(".")[-2] in PROJ and ".layers." in k:
             mod = k[: -len(".weight")]
             w = v.astype(np.float64)

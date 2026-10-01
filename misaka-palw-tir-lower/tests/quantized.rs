@@ -16,7 +16,6 @@ use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};
 use misaka_palw_tir_lower::lower::{self, LowerOpts, materialise};
 use misaka_palw_tir_lower::quant::QuantPolicy;
-use misaka_palw_tir_lower::weights::Checkpoint;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -37,13 +36,13 @@ struct Outcome {
 
 /// Formats whose elements are floats: no projection is lowered from integers.
 fn decodes_to_floats(name: &str) -> bool {
-    name.starts_with("fp8_") || name == "ct_fp8_channel"
+    name.starts_with("fp8_") || name.starts_with("mxfp4_") || name == "ct_fp8_channel"
 }
 
 fn run(name: &str) -> Result<Outcome, String> {
     let dir = fixture_dir(name);
-    let cfg = std::fs::read_to_string(dir.join("config.json")).map_err(|e| e.to_string())?;
-    let prep = fidelity::prepare(&cfg, &LowerOpts::default()).map_err(|e| format!("prepare: {e}"))?;
+    // `open_model`: a format that serves packed tensors as float ones (MXFP4 experts) wraps the checkpoint.
+    let (prep, ck) = fidelity::open_model(&dir, &LowerOpts::default()).map_err(|e| format!("prepare: {e}"))?;
     let quantised = prep.lowered.program.params.iter().filter(|p| p.name.ends_with(".qa")).count();
     if decodes_to_floats(name) {
         if quantised != 0 {
@@ -53,8 +52,7 @@ fn run(name: &str) -> Result<Outcome, String> {
         return Err("no projection lowered from its integers".into());
     }
     analyze_ranges(&prep.lowered.program).map_err(|e| format!("range analysis refuses the program: {e}"))?;
-    let ck = Checkpoint::open(&dir).map_err(|e| e.to_string())?;
-    let (params, unused) = ParamStore::from_source(&prep.hl, &prep.binding, &ck).map_err(|e| e.to_string())?;
+    let (params, unused) = ParamStore::from_source(&prep.hl, &prep.binding, ck.as_ref()).map_err(|e| e.to_string())?;
     if !unused.is_empty() {
         return Err(format!("checkpoint tensors the program never reads: {unused:?}"));
     }
@@ -160,6 +158,8 @@ quantised!(
     ct_pack_qwen3moe_b4_g32,
     // INT8 per channel (compressed-tensors int-quantized): integers, one group per row.
     ct_int8_channel,
+    // MXFP4 as Hugging Face stores it (gpt-oss): experts fused on a leading axis, per-block E8M0 scales — served as the float export's tensors.
+    mxfp4_gptoss,
     // FP8 (block scales; compressed-tensors per channel): floats, the ordinary W8 path.
     fp8_block_32,
     fp8_block_ragged,
