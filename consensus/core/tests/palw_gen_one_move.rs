@@ -341,7 +341,10 @@ fn accuse(env: &Env, claim_id: Hash64, proof: PalwCourtVerdictProofV2) -> (PalwG
 }
 
 fn object_of(a: &PalwGenOneMoveAccusationV1) -> PalwConsensusObjectV2 {
-    PalwConsensusObjectV2::GenShardCourtAccused { accusation: Box::new(a.clone()) }
+    let object = PalwConsensusObjectV2::GenShardCourtAccused { accusation: Box::new(a.clone()) };
+    // Spec 17 section 17.0: tag 88, declared explicitly — no declaration order moves it.
+    assert_eq!(borsh::to_vec(&object).expect("serializes")[0], 88, "GenShardCourtAccused rides under tag 88");
+    object
 }
 
 #[test]

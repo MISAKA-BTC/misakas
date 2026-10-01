@@ -54,11 +54,9 @@ impl PalwClassSeatingV1 {
     /// independence floor (Proposal A condition 2) takes over `Base`: `in_population` answers "is this bond
     /// in the base population" and `except` names the operators to leave out (the class's registrant's; the
     /// executor's is already absent from [`Self::ready`]). An operator counts once.
+    #[allow(dead_code)] // lane F's independence floor (`palw_class_seating`) is its first caller
     pub(super) fn ready_operators_in(&self, in_population: impl Fn(&PalwBondKeyV2) -> bool, except: &[Hash64]) -> u32 {
-        self.ready
-            .iter()
-            .filter(|(operator, bonds)| !except.contains(operator) && bonds.iter().any(&in_population))
-            .count() as u32
+        self.ready.iter().filter(|(operator, bonds)| !except.contains(operator) && bonds.iter().any(&in_population)).count() as u32
     }
 }
 

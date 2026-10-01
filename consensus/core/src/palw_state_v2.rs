@@ -38936,6 +38936,225 @@ pub(crate) mod tests {
         (state, delta)
     }
 
+    // ---- RFC-0003 decision 22: the challenger's declared close in the court's clock ----------------
+
+    /// **The clock clause the held leaf challenge adds** (`court_session_challenger_declared_at_the_ir_terminal_v1`,
+    /// spec 04b §15.15.6), pinned on the court of `fused_terminal_court` with its class recorded as each kind.
+    ///
+    /// The fixture's court has converged to a FUSED terminal, so before the clause a session of an IR or a
+    /// pipeline class there reads `AwaitDisclosure` (the executor owes a root claim) at the ladder's last rung —
+    /// unless its own declared close stands, which makes the turn `Terminal` (RFC-0002 F7). The clause adds the
+    /// same wait for the CHALLENGER's group, and only that state moves.
+    mod held_close_chunks_clock {
+        use super::*;
+        use crate::palw_bisect::PalwBisectTurnV1;
+
+        #[derive(Clone, Copy, Debug)]
+        enum Kind {
+            /// A class that is neither an IR program nor a pipeline: what a chain below the fences holds.
+            Legacy,
+            Ir,
+            Pipeline,
+        }
+
+        /// The fused terminal court, its class recorded as `kind`.
+        fn court_of(kind: Kind) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Hash64) {
+            let p = params_with_ladder();
+            let (mut s, claim_id, sid) = fused_terminal_court(&p, false);
+            let class = s.claim(&claim_id).expect("the claim").class_id;
+            match kind {
+                Kind::Legacy => {}
+                Kind::Ir => {
+                    s.tir_classes.insert(class, crate::palw_tir_admission_v1::PalwTirClassRecordV1::test_row_v1(class));
+                }
+                Kind::Pipeline => {
+                    s.gen_classes.insert(class, crate::palw_gen_class_v1::PalwGenClassRecordV1::test_row_v1(0xC2));
+                }
+            }
+            (p, s, claim_id, sid)
+        }
+
+        /// A group of `declarer` declared at `declared`, assembling by `deadline` (nothing delivered).
+        fn group_of(declarer: PalwBondKeyV2, declared: u64, deadline: u64) -> PalwCourtCloseGroupV2 {
+            PalwCourtCloseGroupV2 {
+                declarer,
+                count: 2,
+                chunk_digests: vec![palw_court_close_chunk_digest_v1(&[7u8; 16]), palw_court_close_chunk_digest_v1(&[8u8; 16])],
+                close_digest: h64(0xDC),
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                declared_daa: declared,
+                assembly_deadline_daa: deadline,
+                present: 0,
+                deposit_outpoint: TransactionOutpoint::default(),
+                deposit: 0,
+                chunks: BTreeMap::new(),
+            }
+        }
+
+        /// Stand `group` on the session as `write_court_close_group` would: the row, the assembly-window queue
+        /// and the session's own key in the deadline index.
+        fn stand(state: &mut PalwChainStateV2, sid: Hash64, side: PalwCourtSideV1, group: PalwCourtCloseGroupV2) {
+            state.court_close_deadlines.insert((group.assembly_deadline_daa, (sid, side)));
+            state.court_close_groups.insert((sid, side), group);
+            let next = court_next_deadline_v2(state, state.court_sessions.get(&sid).expect("the session"));
+            state.court_deadlines.retain(|(_, id)| *id != sid);
+            state.court_deadlines.insert((next, sid));
+        }
+
+        /// The clock as it stood before the clause: the IR phase's, the executor's declared close, the record's.
+        fn clock_before_the_clause(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> (PalwBisectTurnV1, u64) {
+            match state.tir_dissections.get(&session.ladder.session_id()) {
+                Some(phase) => (phase.turn(), phase.last_deadline_daa()),
+                None if court_session_executor_declared_at_the_ir_terminal_v1(state, session) => {
+                    (PalwBisectTurnV1::Terminal, session.ladder.last_deadline_daa())
+                }
+                None => court_turn_and_rung_deadline_v2(session, court_session_class_is_fused_v2(state, session)),
+            }
+        }
+
+        /// The four group combinations a session can stand in.
+        const COMBINATIONS: [(&str, bool, bool); 4] =
+            [("no group", false, false), ("the executor's group", true, false), ("both groups", true, true), ("the challenger's group alone", false, true)];
+
+        fn with_groups(base: &PalwChainStateV2, sid: Hash64, executor: bool, challenger: bool) -> PalwChainStateV2 {
+            let mut s = base.clone();
+            let rung = s.court_session(&sid).expect("the session").ladder.last_deadline_daa();
+            if executor {
+                stand(&mut s, sid, PalwCourtSideV1::Executor, group_of(bond_key(1), 112, rung + 8));
+            }
+            if challenger {
+                stand(&mut s, sid, PalwCourtSideV1::Challenger, group_of(bond_key(2), 112, rung + 8));
+            }
+            s
+        }
+
+        /// **Every state but the challenger-only one at an IR or pipeline terminal reads the clock it read before** —
+        /// the one equivalence the clause owes the chains below its fence (a state with only a challenger's group
+        /// at such a terminal exists where a held leaf challenge wrote it: the declaration arm refuses the
+        /// challenger there, the turn being the executor's).
+        #[test]
+        fn the_clause_moves_no_clock_but_the_challenger_only_one_at_an_ir_or_pipeline_terminal() {
+            for kind in [Kind::Legacy, Kind::Ir, Kind::Pipeline] {
+                let (_p, base, _claim, sid) = court_of(kind);
+                let rung = base.court_session(&sid).unwrap().ladder.last_deadline_daa();
+                for (name, executor, challenger) in COMBINATIONS {
+                    let s = with_groups(&base, sid, executor, challenger);
+                    let session = s.court_session(&sid).unwrap();
+                    let (before, after) = (clock_before_the_clause(&s, session), court_session_turn_and_rung_deadline_v2(&s, session));
+                    let the_new_state = matches!(kind, Kind::Ir | Kind::Pipeline) && challenger && !executor;
+                    if the_new_state {
+                        assert_eq!(before, (PalwBisectTurnV1::AwaitDisclosure, rung), "{kind:?}, {name}: the premise — the old clock owed a root claim");
+                        assert_eq!(after, (PalwBisectTurnV1::Terminal, rung), "{kind:?}, {name}: the session now waits at the terminal");
+                    } else {
+                        assert_eq!(before, after, "{kind:?}, {name}: the clause moves nothing here");
+                    }
+                }
+            }
+        }
+
+        /// **The challenger-only state's deadline key is the backstop**, and the index, its rebuild and its checker
+        /// agree on it (they all ask `court_next_deadline_v2`): `Terminal` has no rung to fire.
+        #[test]
+        fn a_challenger_only_group_keys_the_session_at_its_backstop() {
+            for kind in [Kind::Ir, Kind::Pipeline] {
+                let (p, base, _claim, sid) = court_of(kind);
+                let backstop = base.court_session(&sid).unwrap().deadline_daa;
+                let rung = base.court_session(&sid).unwrap().ladder.last_deadline_daa();
+                assert!(rung < backstop, "the premise: the rung fires before the backstop");
+                assert_eq!(court_next_deadline_v2(&base, base.court_session(&sid).unwrap()), rung, "{kind:?}: before the group, the rung");
+                let s = with_groups(&base, sid, false, true);
+                assert_eq!(court_next_deadline_v2(&s, s.court_session(&sid).unwrap()), backstop, "{kind:?}: with the group, the backstop");
+                assert!(s.court_deadlines.contains(&(backstop, sid)), "{kind:?}: the index holds the backstop key");
+                assert!(!s.court_deadlines.contains(&(rung, sid)), "{kind:?}: and not the rung's");
+                s.assert_internal_consistency(&p).expect("the index is what the sessions say");
+                s.assert_deadline_consistency(&p).expect("the deadline queues agree");
+            }
+        }
+
+        /// **The duty view reads the same clock** (`palw_court_duties_v2` asks the helper the fold asks): both
+        /// parties are told `Terminal` once the challenger's group stands, and the executor — which was told to
+        /// owe a root claim before it — is told nothing it cannot do.
+        #[test]
+        fn the_executors_duty_turn_is_terminal_where_the_challengers_group_stands() {
+            let (_p, base, _claim, sid) = court_of(Kind::Pipeline);
+            let rung = base.court_session(&sid).unwrap().ladder.last_deadline_daa();
+            let before = crate::palw_producer_v2::palw_court_duties_v2(&base, &[bond_key(1)]);
+            assert_eq!(before.len(), 1);
+            assert_eq!((before[0].turn, before[0].rung_deadline_daa), (PalwBisectTurnV1::AwaitDisclosure, rung), "the premise");
+            let s = with_groups(&base, sid, false, true);
+            let executor = crate::palw_producer_v2::palw_court_duties_v2(&s, &[bond_key(1)]);
+            let challenger = crate::palw_producer_v2::palw_court_duties_v2(&s, &[bond_key(2)]);
+            assert_eq!((executor.len(), challenger.len()), (1, 1));
+            assert!(executor[0].i_am_responder && !challenger[0].i_am_responder);
+            assert_eq!(executor[0].turn, PalwBisectTurnV1::Terminal, "the executor's view");
+            assert_eq!(challenger[0].turn, PalwBisectTurnV1::Terminal, "the challenger's view");
+            assert_eq!(executor[0].rung_deadline_daa, rung, "the ladder's last deadline, as for the executor's own declared close");
+            assert_eq!(executor[0].session_deadline_daa, s.court_session(&sid).unwrap().deadline_daa);
+        }
+
+        /// **A silent executor is not convicted** while the challenger's close is being assembled: the rung that
+        /// would have charged it at the fused terminal (`rung + 1`, below) does not fire, the session stands, and
+        /// the executor is untouched — the control is the same block with no group, which convicts it.
+        #[test]
+        fn a_silent_executor_is_not_convicted_past_the_old_rung_while_the_challengers_close_assembles() {
+            let (p, base, claim_id, sid) = court_of(Kind::Pipeline);
+            let rung = base.court_session(&sid).unwrap().ladder.last_deadline_daa();
+            let executor_before = base.bond(&bond_key(1)).unwrap().clone();
+            // The control: with no group the fused terminal's silence convicts at the rung, below the coverage fence.
+            let (control, _) = apply_with_coverage(&base, &p, &ctx(14, rung + 1, 14), &[], false);
+            assert!(matches!(control.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "the premise: silence convicted before the group");
+            // With the challenger's group standing the same block convicts nobody.
+            let s = with_groups(&base, sid, false, true);
+            let (after, _) = apply_with_coverage(&s, &p, &ctx(14, rung + 1, 14), &[], false);
+            assert!(after.court_session(&sid).is_some(), "the session stands past the old rung");
+            assert!(!after.claim(&claim_id).unwrap().phase.is_terminal(), "the claim is not voided");
+            let executor_after = after.bond(&bond_key(1)).unwrap();
+            assert_eq!((executor_after.collateral, executor_after.slashed), (executor_before.collateral, executor_before.slashed));
+        }
+
+        /// **A lapsed group convicts its declarer**, the claim untouched and the executor uncharged — the
+        /// delta re-applies and reverts, and the state stays internally consistent after it.
+        #[test]
+        fn a_lapsed_challenger_group_convicts_the_challenger_and_nobody_else() {
+            let (p, base, claim_id, sid) = court_of(Kind::Pipeline);
+            let s = with_groups(&base, sid, false, true);
+            let group_deadline = s.court_close_group(&sid, PalwCourtSideV1::Challenger).expect("the group").assembly_deadline_daa;
+            let backstop = s.court_session(&sid).unwrap().deadline_daa;
+            assert!(group_deadline < backstop, "the premise: the group's window ends inside the session's");
+            let (executor_before, challenger_before) = (s.bond(&bond_key(1)).unwrap().clone(), s.bond(&bond_key(2)).unwrap().clone());
+            // Inside the window nothing happens.
+            let (inside, _) = apply_with_coverage(&s, &p, &ctx(14, group_deadline, 14), &[], false);
+            assert!(inside.court_session(&sid).is_some(), "the window is open at its deadline");
+            // Past it the sweep convicts the declarer.
+            let (after, delta) = apply_with_coverage(&s, &p, &ctx(15, group_deadline + 1, 15), &[], false);
+            assert!(after.court_session(&sid).is_none(), "the session ended");
+            assert!(after.court_close_group(&sid, PalwCourtSideV1::Challenger).is_none(), "and its group");
+            assert!(!after.claim(&claim_id).unwrap().phase.is_terminal(), "the claim is untouched");
+            let (executor_after, challenger_after) = (after.bond(&bond_key(1)).unwrap(), after.bond(&bond_key(2)).unwrap());
+            assert_eq!((executor_after.collateral, executor_after.slashed), (executor_before.collateral, executor_before.slashed), "the executor pays nothing");
+            assert!(
+                challenger_after.slashed > challenger_before.slashed || challenger_after.collateral < challenger_before.collateral,
+                "the declarer is charged"
+            );
+            assert_eq!(apply_delta_v2(&s, &delta, &p).expect("re-applies"), after, "the delta is the transition");
+            assert_eq!(revert_delta_v2(&after, &delta, &p).expect("reverts"), s, "the delta reverts");
+            after.assert_internal_consistency(&p).expect("consistent after the sweep");
+        }
+
+        /// **Both groups standing**: the executor's group is the one a delivered acquittal would complete, and the
+        /// clock is the same with or without the challenger's — the executor's clause answers first.
+        #[test]
+        fn with_both_groups_standing_the_session_waits_at_the_terminal_on_the_executors_clause_first() {
+            let (p, base, _claim, sid) = court_of(Kind::Pipeline);
+            let only_executor = with_groups(&base, sid, true, false);
+            let both = with_groups(&base, sid, true, true);
+            let clock = |s: &PalwChainStateV2| court_session_turn_and_rung_deadline_v2(s, s.court_session(&sid).unwrap());
+            assert_eq!(clock(&only_executor), clock(&both));
+            assert_eq!(clock(&both).0, PalwBisectTurnV1::Terminal);
+            both.assert_internal_consistency(&p).expect("consistent with both groups standing");
+        }
+    }
+
     // ---- ADR-0135: the model registry in the fold --------------------------------------------
 
     mod adr0132_short_challenge_window {

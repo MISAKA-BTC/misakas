@@ -93,8 +93,10 @@ pub(crate) async fn gen_registration_object(
     let message = misaka_palw_sdk::gen_class::gen_registration_message_v1(domain, &unsigned)
         .ok_or_else(|| CliError::new(exit::GENERIC, "the builder returned another object than a generative registration"))?;
     let key = key.load_key()?;
-    let signature =
-        key.sign_with_context(message.as_byte_slice(), kaspa_consensus_core::palw_gen_class_v1::PALW_GEN_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1);
+    let signature = key.sign_with_context(
+        message.as_byte_slice(),
+        kaspa_consensus_core::palw_gen_class_v1::PALW_GEN_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1,
+    );
     let object = build(signature.to_vec())?;
     let bytes = borsh::to_vec(&object).map_err(|e| CliError::new(exit::GENERIC, e.to_string()))?;
     std::fs::write(out, &bytes).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", out.display())))?;
@@ -174,8 +176,12 @@ pub(crate) struct GenClaimArgs<'a> {
 /// **`misaka palw gen-claim`** (see the module doc).
 pub(crate) async fn gen_claim_files(ctx: &Ctx, key: &crate::keys::KeySource, a: GenClaimArgs<'_>) -> CliResult {
     use kaspa_consensus_core::mass::MassCalculator;
-    use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, fp_claim_id_v3};
-    use misaka_palw_base0::gen_tensor_worker::{GenTensorCaptureV1, PalwGenTensorAnswerV1, PalwGenTensorRequestV1, gen_tensor_material_encode_v1};
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, fp_claim_id_v3,
+    };
+    use misaka_palw_base0::gen_tensor_worker::{
+        GenTensorCaptureV1, PalwGenTensorAnswerV1, PalwGenTensorRequestV1, gen_tensor_material_encode_v1,
+    };
 
     let nv = connect(ctx).await?;
     let params = nv.params.clone();
@@ -249,7 +255,10 @@ pub(crate) async fn gen_claim_files(ctx: &Ctx, key: &crate::keys::KeySource, a: 
         (profile, _) => {
             return Err(CliError::new(
                 exit::CONFIG,
-                format!("the request's profile {profile:?} is not this class's (profile {}); \"image\" and \"embedding\" are built", class.profile),
+                format!(
+                    "the request's profile {profile:?} is not this class's (profile {}); \"image\" and \"embedding\" are built",
+                    class.profile
+                ),
             ));
         }
     };
@@ -261,7 +270,10 @@ pub(crate) async fn gen_claim_files(ctx: &Ctx, key: &crate::keys::KeySource, a: 
             executor_bond: bond.0,
             executor_pubkey: key.public_key().to_vec(),
             operator_id,
-            anchor_block: request.anchor_block.parse().map_err(|_| CliError::new(exit::CONFIG, "anchor_block: not a 128-hex Hash64"))?,
+            anchor_block: request
+                .anchor_block
+                .parse()
+                .map_err(|_| CliError::new(exit::CONFIG, "anchor_block: not a 128-hex Hash64"))?,
             anchor_daa: request.anchor_daa,
             job_nonce: hex_array::<32>("job_nonce", &request.job_nonce)?,
             privacy_mode,
@@ -281,7 +293,9 @@ pub(crate) async fn gen_claim_files(ctx: &Ctx, key: &crate::keys::KeySource, a: 
     let (answer, work) = backend.answer(&borsh::to_vec(&frame).map_err(|e| CliError::new(exit::GENERIC, e.to_string()))?);
     let work = match (answer, work) {
         (PalwGenTensorAnswerV1::Result { .. }, Some(work)) => work,
-        (PalwGenTensorAnswerV1::Refused { why }, _) => return Err(CliError::new(exit::MODEL, format!("the worker refuses the job: {why}"))),
+        (PalwGenTensorAnswerV1::Refused { why }, _) => {
+            return Err(CliError::new(exit::MODEL, format!("the worker refuses the job: {why}")));
+        }
         (PalwGenTensorAnswerV1::Result { .. }, None) => return Err(CliError::new(exit::GENERIC, "the worker answered with no run")),
     };
     let binding = &work.binding;

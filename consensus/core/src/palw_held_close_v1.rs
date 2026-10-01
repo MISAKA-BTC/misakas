@@ -31,7 +31,7 @@
 //! are untouched.
 
 use crate::Hash64;
-use crate::config::params::{ForkActivation, Params, PalwPostLaunchFenceV1};
+use crate::config::params::{ForkActivation, PalwPostLaunchFenceV1, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwCourtParamsV2, PalwModeV2Error};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2};
 
@@ -258,9 +258,8 @@ mod tests {
     use super::*;
 
     fn challenge() -> PalwHeldLeafChallengeV1 {
-        let bond = |i: u8| {
-            PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_bytes([i; 64]), u32::from(i)))
-        };
+        let bond =
+            |i: u8| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_bytes([i; 64]), u32::from(i)));
         PalwHeldLeafChallengeV1 {
             version: PALW_HELD_LEAF_CHALLENGE_VERSION_V1,
             claim: Hash64::from_bytes([1; 64]),
@@ -336,10 +335,8 @@ mod tests {
         assert_eq!(id, palw_held_leaf_challenge_session_id_v1(&other_leaf, 1_000), "no leaf in the id");
         assert_ne!(id, palw_held_leaf_challenge_session_id_v1(&base, 2_000), "the ladder");
         let mut other_accuser = base.clone();
-        other_accuser.accuser_bond = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
-            crate::tx::TransactionId::from_bytes([6; 64]),
-            6,
-        ));
+        other_accuser.accuser_bond =
+            PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_bytes([6; 64]), 6));
         assert_ne!(id, palw_held_leaf_challenge_session_id_v1(&other_accuser, 1_000), "the accuser");
         let mut other_claim = base.clone();
         other_claim.claim = Hash64::from_bytes([12; 64]);

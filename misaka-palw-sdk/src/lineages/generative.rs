@@ -19,7 +19,9 @@
 use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use kaspa_consensus_core::palw_artifact::{PalwArtifactMerkleFrontierV1, PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_parts_v1};
+use kaspa_consensus_core::palw_artifact::{
+    PalwArtifactMerkleFrontierV1, PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_parts_v1,
+};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_gen_artifact_v1::{palw_gen_inventory_root_v1, palw_gen_open_leaves_v1, palw_gen_visit_inventory_v1};
 use kaspa_consensus_core::palw_gen_class_v1::{PalwGenClassV1, palw_gen_class_record_v1};
@@ -209,11 +211,8 @@ impl GenBackendV1 {
         &self,
         capture: &misaka_palw_base0::gen_tensor_worker::GenTensorCaptureV1,
     ) -> Result<misaka_palw_base0::gen_tensor_worker::GenTensorWorkV1, String> {
-        let images: Vec<misaka_palw_tir::pipeline::JobImageV1> = capture
-            .images
-            .iter()
-            .map(|i| misaka_palw_tir::pipeline::JobImageV1 { h: i.h, w: i.w, rgb: i.rgb.clone() })
-            .collect();
+        let images: Vec<misaka_palw_tir::pipeline::JobImageV1> =
+            capture.images.iter().map(|i| misaka_palw_tir::pipeline::JobImageV1 { h: i.h, w: i.w, rgb: i.rgb.clone() }).collect();
         self.held().run_tensor(&capture.job, &capture.prompt, &capture.negative, &images, self.prompt_ids_form)
     }
 
@@ -277,10 +276,8 @@ impl GenBackendV1 {
     pub fn answer(
         &self,
         request: &[u8],
-    ) -> (
-        misaka_palw_base0::gen_tensor_worker::PalwGenTensorAnswerV1,
-        Option<misaka_palw_base0::gen_tensor_worker::GenTensorWorkV1>,
-    ) {
+    ) -> (misaka_palw_base0::gen_tensor_worker::PalwGenTensorAnswerV1, Option<misaka_palw_base0::gen_tensor_worker::GenTensorWorkV1>)
+    {
         misaka_palw_base0::gen_tensor_worker::gen_tensor_answer_v1(self.held(), request, self.prompt_ids_form)
     }
 
@@ -303,7 +300,10 @@ impl GenBackendV1 {
             frontier.push(leaf);
             on_leaf(leaf);
             if wanted.contains(&index) {
-                kept.insert(index, PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start: start, bytes: piece.to_vec() });
+                kept.insert(
+                    index,
+                    PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start: start, bytes: piece.to_vec() },
+                );
             }
             index += 1;
         })
@@ -311,7 +311,9 @@ impl GenBackendV1 {
         let root = frontier.root().ok_or("the class's inventory is empty")?;
         let drawn = draw
             .iter()
-            .map(|i| kept.get(i).cloned().map(|operand| (*i, operand)).ok_or_else(|| format!("leaf {i} is outside an inventory of {count}")))
+            .map(|i| {
+                kept.get(i).cloned().map(|operand| (*i, operand)).ok_or_else(|| format!("leaf {i} is outside an inventory of {count}"))
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok((root, count, drawn))
     }
@@ -346,10 +348,7 @@ impl PalwExecutionBackendV1 for GenBackendV1 {
 
     /// The readiness material from the held inventory: its root, every leaf hash, and the drawn leaves'
     /// operands in the draw's order.
-    fn artifact_readiness_material(
-        &self,
-        draw: &[u32],
-    ) -> Result<(Hash64, Vec<Hash64>, Vec<(u32, PalwArtifactOperandV1)>), String> {
+    fn artifact_readiness_material(&self, draw: &[u32]) -> Result<(Hash64, Vec<Hash64>, Vec<(u32, PalwArtifactOperandV1)>), String> {
         let mut leaves = Vec::new();
         let (root, _, drawn) = self.walk_readiness(draw, &mut |leaf| leaves.push(leaf))?;
         Ok((root, leaves, drawn))

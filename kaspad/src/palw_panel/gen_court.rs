@@ -29,7 +29,8 @@ use std::sync::Arc;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_court_v2::{PalwCourtVerdictProofV2, palw_gen_close_verdict_for_row_v1, palw_tir_court_limits_v1};
 use kaspa_consensus_core::palw_gen_one_move_v1::{
-    PALW_GEN_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1, PALW_GEN_ONE_MOVE_VERSION_V1, PalwGenOneMoveAccusationV1, palw_gen_one_move_session_id_v1,
+    PALW_GEN_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1, PALW_GEN_ONE_MOVE_VERSION_V1, PalwGenOneMoveAccusationV1,
+    palw_gen_one_move_session_id_v1,
 };
 use kaspa_consensus_core::palw_gen_v1::PalwGenProfileV1;
 use kaspa_consensus_core::palw_producer_v2::{PalwDisputableClaimV2, PalwSeatDutyV2};
@@ -40,9 +41,7 @@ use misaka_palw_base0::gen_tensor_worker::{GenTensorCaptureV1, GenTensorWorkV1, 
 use misaka_palw_base0::gen_worker::GenCourtMoveV1;
 use misaka_palw_sdk::lineages::generative::GenBackendV1;
 
-use super::{
-    PALW_PANEL, PalwSeatRDutyV1, PalwSeatReplayPollV1, PalwSeatReplayStepV1, PalwSeatReplaysV1, palw_seat_replay_step_v1,
-};
+use super::{PALW_PANEL, PalwSeatRDutyV1, PalwSeatReplayPollV1, PalwSeatReplayStepV1, PalwSeatReplaysV1, palw_seat_replay_step_v1};
 
 /// **Is this a TENSOR class** — an image or an embedding: its claims are `PalwGenJobV1`s on the free-prompt lane
 /// (job version 10) and its material is `FPG1`. A text pipeline class's claims are FP Job V4/V5's, which this
@@ -86,7 +85,14 @@ fn captures_of_v1(
 /// **Does this capture rebuild to the claim's own roots?** — the rebuilt execution's tensor execution root, step
 /// root, leaf count and output root are the claim's. Cheap (it hashes the captured leaves and runs nothing), and
 /// the test a payload is the claim's capture and not a stranger's.
-fn capture_answers_for_v1(tensor: &GenBackendV1, capture: &GenTensorCaptureV1, execution_root: Hash64, trace_root: Hash64, output_root: Hash64, work_leaves: u64) -> Option<GenTensorWorkV1> {
+fn capture_answers_for_v1(
+    tensor: &GenBackendV1,
+    capture: &GenTensorCaptureV1,
+    execution_root: Hash64,
+    trace_root: Hash64,
+    output_root: Hash64,
+    work_leaves: u64,
+) -> Option<GenTensorWorkV1> {
     let work = tensor.rebuild(capture).ok()?;
     (work.execution_root() == execution_root
         && work.binding.step_root() == trace_root
@@ -129,8 +135,15 @@ impl super::PalwPanelService {
             let own = match replays.own_job(&key, 1) {
                 Some(answer) => answer,
                 None => {
-                    let own = capture_answers_for_v1(&tensor, &capture, duty.execution_root, duty.trace_root, duty.output_root, duty.work_leaves)
-                        .is_some();
+                    let own = capture_answers_for_v1(
+                        &tensor,
+                        &capture,
+                        duty.execution_root,
+                        duty.trace_root,
+                        duty.output_root,
+                        duty.work_leaves,
+                    )
+                    .is_some();
                     replays.note_own_job(key, own, 1);
                     own
                 }
@@ -143,17 +156,20 @@ impl super::PalwPanelService {
                 && replays.retry_refused(&key, current_daa, seat_r_duty.deadline)
             {
                 if *fresh {
-                    warn!(
-                        "[{PALW_PANEL}] tensor replay for claim {} refused: {e} — starting it once more (SEAT-R)",
-                        duty.claim_id
-                    );
+                    warn!("[{PALW_PANEL}] tensor replay for claim {} refused: {e} — starting it once more (SEAT-R)", duty.claim_id);
                 }
                 poll = PalwSeatReplayPollV1::Absent;
             }
             match poll {
                 PalwSeatReplayPollV1::Running => waiting = true,
                 PalwSeatReplayPollV1::Done { result: Ok(replayed), fresh } => {
-                    let step = palw_seat_replay_step_v1(&Ok(replayed.clone()), duty.execution_root, duty.trace_root, duty.work_leaves, duty.output_root);
+                    let step = palw_seat_replay_step_v1(
+                        &Ok(replayed.clone()),
+                        duty.execution_root,
+                        duty.trace_root,
+                        duty.work_leaves,
+                        duty.output_root,
+                    );
                     match step {
                         PalwSeatReplayStepV1::Licensed => {
                             if fresh {
@@ -238,7 +254,11 @@ impl super::PalwPanelService {
                 }
             }
         }
-        PalwGenSeatPassV1 { step: if waiting { PalwSeatReplayStepV1::Waiting } else { PalwSeatReplayStepV1::NoVerdict }, kept: None, served }
+        PalwGenSeatPassV1 {
+            step: if waiting { PalwSeatReplayStepV1::Waiting } else { PalwSeatReplayStepV1::NoVerdict },
+            kept: None,
+            served,
+        }
     }
 
     /// **The tensor one-move pass — a pipeline claim's court where the held regime plays no bisection** (see the
@@ -289,7 +309,10 @@ impl super::PalwPanelService {
                 Some(Ok(_)) => continue,
                 Some(Err(why)) => {
                     crate::palw_backends::note_throttled_v1("tensor-one-move-backend", || {
-                        format!("[{PALW_PANEL}] claim {}: the generative backend does not build for its class ({why})", target.claim_id)
+                        format!(
+                            "[{PALW_PANEL}] claim {}: the generative backend does not build for its class ({why})",
+                            target.claim_id
+                        )
                     });
                     continue;
                 }
@@ -301,7 +324,8 @@ impl super::PalwPanelService {
             let accused_capture = captures_of_v1(target.class_id, &target.executor_bond, pool.into_iter().chain(disk))
                 .into_iter()
                 .find(|(_, capture, _)| {
-                    tensor.rebuild(capture)
+                    tensor
+                        .rebuild(capture)
                         .is_ok_and(|w| w.execution_root() == target.execution_root && w.binding.step_root() == target.trace_root)
                 })
                 .map(|(_, capture, _)| capture);
@@ -376,7 +400,10 @@ impl super::PalwPanelService {
             let (found_at, filed) = match found {
                 Ok(pair) => pair,
                 Err(why) => {
-                    warn!("[{PALW_PANEL}] tensor claim {}: its court case does not build ({why}); recorded, not filed", target.claim_id);
+                    warn!(
+                        "[{PALW_PANEL}] tensor claim {}: its court case does not build ({why}); recorded, not filed",
+                        target.claim_id
+                    );
                     continue;
                 }
             };
@@ -423,7 +450,10 @@ impl super::PalwPanelService {
                 continue;
             }
             if let Err(why) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object) {
-                warn!("[{PALW_PANEL}] tensor claim {}: the accusation cannot ride a carrier ({why}); recorded, not filed", target.claim_id);
+                warn!(
+                    "[{PALW_PANEL}] tensor claim {}: the accusation cannot ride a carrier ({why}); recorded, not filed",
+                    target.claim_id
+                );
                 continue;
             }
             if books.court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {

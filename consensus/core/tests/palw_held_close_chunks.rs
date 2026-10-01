@@ -26,8 +26,12 @@ use rcore::*;
 
 use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_shipped_params};
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
+use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
-use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP};
+use kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3;
+use kaspa_consensus_core::palw_freeprompt_v3::{
+    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+};
 use kaspa_consensus_core::palw_gen_admission_v1::*;
 use kaspa_consensus_core::palw_gen_artifact_v1::palw_gen_inventory_root_v1;
 use kaspa_consensus_core::palw_gen_claim_v1::*;
@@ -35,15 +39,15 @@ use kaspa_consensus_core::palw_gen_class_v1::*;
 use kaspa_consensus_core::palw_gen_close_v1::*;
 use kaspa_consensus_core::palw_gen_job_v1::*;
 use kaspa_consensus_core::palw_gen_one_move_v1::*;
-use kaspa_consensus_core::palw_gen_step_v1::{PalwGenLeafCoordV1, palw_gen_stage_root_v1, palw_gen_step_leaf_hash_v1, palw_gen_step_root_v1};
+use kaspa_consensus_core::palw_gen_step_v1::{
+    PalwGenLeafCoordV1, palw_gen_stage_root_v1, palw_gen_step_leaf_hash_v1, palw_gen_step_root_v1,
+};
 use kaspa_consensus_core::palw_gen_v1::{PalwGenFenceV1, PalwGenProfileV1};
 use kaspa_consensus_core::palw_gen_worker_v1::{PalwGenExecutionV1, palw_gen_execute_tensor_v1};
-use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
-use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
-use kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3;
 use kaspa_consensus_core::palw_held_close_v1::*;
+use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
 use kaspa_consensus_core::palw_state_v2::{
-    PalwCourtSideV1, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwCourtVerdictV2, PalwStateV2Error, PalwVoidReasonV2,
+    PalwCourtSideV1, PalwCourtVerdictV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error, PalwVoidReasonV2,
     apply_delta_v2, palw_close_assembly_daa_v1, palw_close_assembly_deposit_v1, palw_court_close_chunk_digest_v1, revert_delta_v2,
 };
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
@@ -316,8 +320,9 @@ fn env_with(p: Params) -> Env {
     let (registrant, _, _) = floor_producer(&chain.p);
     let (floor, _, target, slash) = genesis_classes(&chain.p)[0];
     let target = chain.s.class_target(&floor).map(|t| t.target).unwrap_or(target);
-    let object = palw_gen_post_genesis_registration_v1(f.class.clone(), f.row.artifact_root, 0, target, slash, AT, registrant, vec![9; 16])
-        .expect("the builder counts the yardstick job");
+    let object =
+        palw_gen_post_genesis_registration_v1(f.class.clone(), f.row.artifact_root, 0, target, slash, AT, registrant, vec![9; 16])
+            .expect("the builder counts the yardstick job");
     let bond = |n: u64| PalwConsensusObjectV2::BondRegistered {
         bond: bond_key(n),
         pubkey: fp_pubkey_of(n),
@@ -336,7 +341,11 @@ fn env_with(p: Params) -> Env {
 }
 
 /// The object the acceptance walk makes of an execution's commitment, and the payload it came from.
-fn commit(job: &PalwGenJobV1, e: &PalwGenExecutionV1, binding: &PalwGenTensorBindingV1) -> (PalwConsensusObjectV2, kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3) {
+fn commit(
+    job: &PalwGenJobV1,
+    e: &PalwGenExecutionV1,
+    binding: &PalwGenTensorBindingV1,
+) -> (PalwConsensusObjectV2, kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3) {
     let payload = palw_gen_payload_v1(
         job,
         e.space.leaf_count(),
@@ -345,10 +354,22 @@ fn commit(job: &PalwGenJobV1, e: &PalwGenExecutionV1, binding: &PalwGenTensorBin
         prompt(),
         vec![7u8; MLDSA87_SIGNATURE_LEN],
     );
-    assert_eq!(payload.commitment.execution_root, binding.committed_execution_root, "the worker's binding is the commitment's execution root");
+    assert_eq!(
+        payload.commitment.execution_root, binding.committed_execution_root,
+        "the worker's binding is the commitment's execution root"
+    );
     let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, borsh::to_vec(&payload).unwrap());
-    let out = palw_fp_gen_objects_from_accepted_txs_v1(&[tx], net_domain(), true, |_| PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, FORM, |_, _, _, _| true);
+    let out = palw_fp_gen_objects_from_accepted_txs_v1(
+        &[tx],
+        net_domain(),
+        true,
+        |_| PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+        FORM,
+        |_, _, _, _| true,
+    );
     let [one] = &out.objects[..] else { panic!("the walk makes one object: {:?}", out.skipped) };
+    // Spec 17 section 17.0: tag 87, declared explicitly — no declaration order moves it.
+    assert_eq!(borsh::to_vec(&one.object).expect("serializes")[0], 87, "GenTensorCommitted rides under tag 87");
     (one.object.clone(), payload)
 }
 
@@ -356,7 +377,6 @@ fn claim_id_of(object: &PalwConsensusObjectV2) -> Hash64 {
     let PalwConsensusObjectV2::GenTensorCommitted { claim, .. } = object else { panic!("a tensor claim's object") };
     *claim
 }
-
 
 // ---------------------------------------------------------------------------------------------
 // The held regime's steps: the harness's, with `held_context_ladder` set
@@ -375,7 +395,8 @@ fn fold_held(env: &Env, parent: &PalwChainStateV2, at: u64, objects: &[PalwConse
 fn step_held(env: &mut Env, daa: u64, objects: &[PalwConsensusObjectV2]) {
     assert!(daa > env.chain.daa, "DAA moves forward");
     let parent = env.chain.s.clone();
-    let (child, delta, skips) = fold_held(env, &parent, daa, objects, Some(HELD)).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
+    let (child, delta, skips) =
+        fold_held(env, &parent, daa, objects, Some(HELD)).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
     assert!(skips.is_empty(), "nothing skipped at {daa}: {skips:?}");
     let sp: &PalwStateParamsV2 = &env.chain.sp;
     assert_eq!(apply_delta_v2(&parent, &delta, sp).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
@@ -414,7 +435,8 @@ fn put_claim(env: &mut Env, nonce: u8, lie: Option<usize>) -> Claim {
         Some(lane) => lie_about_the_output(&honest, lane),
         None => honest,
     };
-    let binding = PalwGenTensorBindingV1::of(&job, &execution.claim, execution.space.leaf_count(), execution.claim.output_root.unwrap());
+    let binding =
+        PalwGenTensorBindingV1::of(&job, &execution.claim, execution.space.leaf_count(), execution.claim.output_root.unwrap());
     let (object, _) = commit(&job, &execution, &binding);
     let id = claim_id_of(&object);
     let at = next(env);
@@ -472,12 +494,18 @@ fn challenge(env: &Env, claim_id: Hash64, accuser: u64, leaf: u64, proof: PalwCo
         signature: vec![1; 8],
     };
     let session = palw_held_leaf_challenge_session_id_v1(&c, ladder);
-    let close = PalwConsensusObjectV2::CourtClosed { session_id: session, verdict: PalwCourtVerdictV2::ExecutorGuilty, proof: proof.clone() };
+    let close =
+        PalwConsensusObjectV2::CourtClosed { session_id: session, verdict: PalwCourtVerdictV2::ExecutorGuilty, proof: proof.clone() };
     let bytes = borsh::to_vec(&close).expect("a close serializes");
     let chunks = split(&bytes, count);
     c.chunk_digests = chunks.iter().map(|b| palw_court_close_chunk_digest_v1(b)).collect();
     c.close_digest = palw_court_close_chunk_digest_v1(&bytes);
-    Challenge { object: PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge: Box::new(c.clone()) }, challenge: c, session, proof, chunks }
+    let object = PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge: Box::new(c.clone()) };
+    // Spec 17 section 17.0: tag 90, declared explicitly (89 is RFC-0004's `CourtEvalRootClaimed`); and it reads back.
+    let wire = borsh::to_vec(&object).expect("serializes");
+    assert_eq!(wire[0], 90, "HeldLeafChallengeDeclared rides under tag 90");
+    assert_eq!(borsh::from_slice::<PalwConsensusObjectV2>(&wire).expect("reads back"), object, "the challenge round-trips");
+    Challenge { object, challenge: c, session, proof, chunks }
 }
 
 fn with(c: &Challenge, change: impl FnOnce(&mut PalwHeldLeafChallengeV1)) -> PalwConsensusObjectV2 {
@@ -519,7 +547,10 @@ fn a_challenge_opens_the_session_at_the_leaf_and_writes_the_challengers_group() 
     assert_eq!(session.ladder.terminal_index(), Some(leaf), "the ladder is narrowed to the named leaf");
     assert_eq!(session.ladder.turn(), PalwBisectTurnV1::Terminal);
     let group = s.court_close_group(&ch.session, PalwCourtSideV1::Challenger).expect("the challenger-side group");
-    assert_eq!((group.declarer, group.count, group.verdict, group.declared_daa), (bond_key(ACCUSER), 3, PalwCourtVerdictV2::ExecutorGuilty, at));
+    assert_eq!(
+        (group.declarer, group.count, group.verdict, group.declared_daa),
+        (bond_key(ACCUSER), 3, PalwCourtVerdictV2::ExecutorGuilty, at)
+    );
     assert_eq!(group.assembly_deadline_daa, at + palw_close_assembly_daa_v1(3), "4 DAA a chunk from the block that carried it");
     assert_eq!(group.deposit, palw_close_assembly_deposit_v1(3), "the deposit is the declaration's");
     assert_eq!(group.chunk_digests, ch.challenge.chunk_digests);
@@ -555,7 +586,11 @@ fn the_chunks_deliver_the_close_in_any_order_and_the_lying_claim_is_convicted() 
     let claim = env.chain.claim(&claim.id);
     assert!(matches!(claim.phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{:?}", claim.phase);
     assert!(collateral(&env, EXECUTOR) < executor_before, "the executor is charged");
-    assert_eq!(collateral(&env, ACCUSER), accuser_before, "the accuser's deposit is refunded by never being taken: the group delivered");
+    assert_eq!(
+        collateral(&env, ACCUSER),
+        accuser_before,
+        "the accuser's deposit is refunded by never being taken: the group delivered"
+    );
 }
 
 #[test]
@@ -597,7 +632,10 @@ fn a_close_that_never_comes_convicts_its_declarer_and_leaves_the_claim_alone() {
     assert!(!env.chain.claim(&claim.id).phase.is_terminal(), "the claim is not convicted, voided or slashed");
     assert_eq!(collateral(&env, EXECUTOR), executor_before, "the executor pays nothing");
     let charged = accuser_before - collateral(&env, ACCUSER);
-    assert!(charged >= palw_close_assembly_deposit_v1(2) as u64, "the accuser forfeits its deposit ({charged}) and what a lost held dissection costs");
+    assert!(
+        charged >= palw_close_assembly_deposit_v1(2) as u64,
+        "the accuser forfeits its deposit ({charged}) and what a lost held dissection costs"
+    );
 }
 
 #[test]
@@ -633,16 +671,27 @@ fn an_executors_own_acquitting_close_may_stand_beside_the_challengers_group_and_
         step_held(
             &mut env,
             at,
-            &[PalwConsensusObjectV2::CourtCloseChunk { session_id: ch.session, side: PalwCourtSideV1::Executor, index: index as u8, bytes: bytes.clone() }],
+            &[PalwConsensusObjectV2::CourtCloseChunk {
+                session_id: ch.session,
+                side: PalwCourtSideV1::Executor,
+                index: index as u8,
+                bytes: bytes.clone(),
+            }],
         );
     }
     let s = &env.chain.s;
     assert!(s.court_session(&ch.session).is_none(), "the executor's close completed first and ended the session");
-    assert!(s.court_close_group(&ch.session, PalwCourtSideV1::Challenger).is_none(), "the challenger's undelivered group went with it");
+    assert!(
+        s.court_close_group(&ch.session, PalwCourtSideV1::Challenger).is_none(),
+        "the challenger's undelivered group went with it"
+    );
     assert!(!env.chain.claim(&claim.id).phase.is_terminal(), "an acquittal leaves the claim standing");
     assert_eq!(collateral(&env, EXECUTOR), executor_before, "the executor's delivered group costs it nothing");
     let charged = accuser_before - collateral(&env, ACCUSER);
-    assert!(charged >= palw_close_assembly_deposit_v1(2) as u64, "the losing challenger forfeits its undelivered group's deposit and is charged ({charged})");
+    assert!(
+        charged >= palw_close_assembly_deposit_v1(2) as u64,
+        "the losing challenger forfeits its undelivered group's deposit and is charged ({charged})"
+    );
 }
 
 #[test]
@@ -656,7 +705,10 @@ fn the_challenge_is_refused_by_name_where_it_is_not_this_courts() {
     let fold = |objects: &[PalwConsensusObjectV2], held: Option<u64>, at: u64| fold_held(&env, &parent, at, objects, held).map(|_| ());
     assert!(fold(&[ch.object.clone()], Some(HELD), at).is_ok(), "the control folds");
     // Off the held regime the ladder reaches the leaf; below the fence (a ruleset that arms it later) the lock refuses.
-    assert!(matches!(fold(&[ch.object.clone()], None, at), Err(PalwStateV2Error::HeldLeafChallengeRefused(_))), "a chain that plays bisection");
+    assert!(
+        matches!(fold(&[ch.object.clone()], None, at), Err(PalwStateV2Error::HeldLeafChallengeRefused(_))),
+        "a chain that plays bisection"
+    );
     let mut early = env_with(armed_with_chunks_at(AT + 1_000));
     let early_claim = put_claim(&mut early, 1, Some(0));
     let (early_proof, early_leaf) = output_close(&early, &early_claim, 0);
@@ -665,27 +717,57 @@ fn the_challenge_is_refused_by_name_where_it_is_not_this_courts() {
     let below = fold_held(&early, &early_parent, next(&early), &[early_ch.object.clone()], Some(HELD)).map(|_| ());
     assert!(matches!(below, Err(PalwStateV2Error::HeldLeafChallengeRefused(_))), "below palw_held_close_chunks_v1: {below:?}");
     // Another claim; the roots and the executor are the claim's; a producer does not challenge its own claim.
-    assert!(matches!(fold(&[with(&ch, |c| c.claim = h(0xDEAD))], Some(HELD), at), Err(PalwStateV2Error::MissingClaim(c)) if c == h(0xDEAD)));
-    assert!(matches!(fold(&[with(&ch, |c| c.execution_root = h(1))], Some(HELD), at), Err(PalwStateV2Error::ShardCourtRootsDiffer(_))));
+    assert!(
+        matches!(fold(&[with(&ch, |c| c.claim = h(0xDEAD))], Some(HELD), at), Err(PalwStateV2Error::MissingClaim(c)) if c == h(0xDEAD))
+    );
+    assert!(matches!(
+        fold(&[with(&ch, |c| c.execution_root = h(1))], Some(HELD), at),
+        Err(PalwStateV2Error::ShardCourtRootsDiffer(_))
+    ));
     assert!(matches!(fold(&[with(&ch, |c| c.trace_root = h(1))], Some(HELD), at), Err(PalwStateV2Error::ShardCourtRootsDiffer(_))));
-    assert!(matches!(fold(&[with(&ch, |c| c.executor_bond = bond_key(ACCUSER))], Some(HELD), at), Err(PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(_))));
-    assert!(matches!(fold(&[with(&ch, |c| c.accuser_bond = bond_key(EXECUTOR))], Some(HELD), at), Err(PalwStateV2Error::ShardCourtAccuserIsTheProducer(_))));
+    assert!(matches!(
+        fold(&[with(&ch, |c| c.executor_bond = bond_key(ACCUSER))], Some(HELD), at),
+        Err(PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(_))
+    ));
+    assert!(matches!(
+        fold(&[with(&ch, |c| c.accuser_bond = bond_key(EXECUTOR))], Some(HELD), at),
+        Err(PalwStateV2Error::ShardCourtAccuserIsTheProducer(_))
+    ));
     assert!(matches!(fold(&[with(&ch, |c| c.accuser_bond = bond_key(77))], Some(HELD), at), Err(PalwStateV2Error::MissingBond(_))));
     // The leaf is inside the claim's step space: its priced leaf count.
     let work = claim.execution.space.leaf_count();
     assert!(fold(&[with(&ch, |c| c.leaf_index = work - 1)], Some(HELD), at).is_ok(), "the last leaf is a leaf");
-    assert!(matches!(fold(&[with(&ch, |c| c.leaf_index = work)], Some(HELD), at), Err(PalwStateV2Error::HeldLeafChallengeRefused(_))), "one past the last");
+    assert!(
+        matches!(fold(&[with(&ch, |c| c.leaf_index = work)], Some(HELD), at), Err(PalwStateV2Error::HeldLeafChallengeRefused(_))),
+        "one past the last"
+    );
     // The declaration: between one chunk and the structural bound, one digest per chunk.
     assert!(matches!(fold(&[with(&ch, |c| c.count = 0)], Some(HELD), at), Err(PalwStateV2Error::CourtCloseCountOutOfRange { .. })));
     assert!(matches!(fold(&[with(&ch, |c| c.count = 33)], Some(HELD), at), Err(PalwStateV2Error::CourtCloseCountOutOfRange { .. })));
-    assert!(matches!(fold(&[with(&ch, |c| { c.chunk_digests.pop(); })], Some(HELD), at), Err(PalwStateV2Error::CourtCloseDigestsIncoherent { .. })));
+    assert!(matches!(
+        fold(
+            &[with(&ch, |c| {
+                c.chunk_digests.pop();
+            })],
+            Some(HELD),
+            at
+        ),
+        Err(PalwStateV2Error::CourtCloseDigestsIncoherent { .. })
+    ));
     // A close that cannot assemble inside the session's backstop is refused where the accuser can still make a smaller one.
     let window = env.chain.sp.window_court();
     let too_many = (window / 4 + 1).min(32) as u8;
     if u64::from(too_many) * 4 > window {
         let digests = vec![h(9); too_many as usize];
         assert!(matches!(
-            fold(&[with(&ch, |c| { c.count = too_many; c.chunk_digests = digests.clone(); })], Some(HELD), at),
+            fold(
+                &[with(&ch, |c| {
+                    c.count = too_many;
+                    c.chunk_digests = digests.clone();
+                })],
+                Some(HELD),
+                at
+            ),
             Err(PalwStateV2Error::CourtCloseCannotAssemble { .. })
         ));
     }
@@ -694,10 +776,22 @@ fn the_challenge_is_refused_by_name_where_it_is_not_this_courts() {
     let parent = env.chain.s.clone();
     let at = next(&env);
     let again = fold_held(&env, &parent, at, &[ch.object.clone()], Some(HELD)).map(|_| ());
-    assert!(matches!(again, Err(PalwStateV2Error::HeldDissectionFurtherSessionRefused { .. }) | Err(PalwStateV2Error::DuplicateSession(_))), "{again:?}");
+    assert!(
+        matches!(
+            again,
+            Err(PalwStateV2Error::HeldDissectionFurtherSessionRefused { .. }) | Err(PalwStateV2Error::DuplicateSession(_))
+        ),
+        "{again:?}"
+    );
     let other = challenge(&env, claim.id, OTHER, leaf, proof, 2);
     let from_a_non_seat = fold_held(&env, &parent, at, &[other.object.clone()], Some(HELD)).map(|_| ());
-    assert!(matches!(from_a_non_seat, Err(PalwStateV2Error::HeldDissectionFurtherSessionRefused { .. }) | Err(PalwStateV2Error::MissingBond(_))), "{from_a_non_seat:?}");
+    assert!(
+        matches!(
+            from_a_non_seat,
+            Err(PalwStateV2Error::HeldDissectionFurtherSessionRefused { .. }) | Err(PalwStateV2Error::MissingBond(_))
+        ),
+        "{from_a_non_seat:?}"
+    );
     // A terminal claim takes no challenge: convict it (the one-move way would too), then challenge again.
     let mut done = env;
     let (p2, l2) = output_close(&done, &claim, 0);

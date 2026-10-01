@@ -351,11 +351,14 @@ pub fn gen_registration_candidate_v1(
     wanted: Option<&str>,
 ) -> Result<PalwGenClassEntryV1, String> {
     let wanted = wanted.filter(|s| !s.is_empty());
-    let named: Vec<PalwGenClassEntryV1> = gen_entries_of_v1(holdings).into_iter().filter(|e| wanted.is_none_or(|w| names(e, w))).collect();
+    let named: Vec<PalwGenClassEntryV1> =
+        gen_entries_of_v1(holdings).into_iter().filter(|e| wanted.is_none_or(|w| names(e, w))).collect();
     if named.is_empty() {
         return Err(match wanted {
             Some(w) => format!("--palw-register-class {w} names no generative class this node's artifacts declare"),
-            None => "no --palw-class-artifact is a generative (PALWTIR2) artifact, so there is no generative class to register".to_string(),
+            None => {
+                "no --palw-class-artifact is a generative (PALWTIR2) artifact, so there is no generative class to register".to_string()
+            }
         });
     }
     let fresh: Vec<PalwGenClassEntryV1> = named
@@ -363,7 +366,8 @@ pub fn gen_registration_candidate_v1(
         .filter(|e| !terms.registered_class_ids.contains(&e.class_id()) && !terms.registered_artifact_roots.contains(&e.artifact_root))
         .collect();
     match fresh.len() {
-        0 => Err("every generative class this node's artifacts declare is already registered on this chain (or its weights are)".to_string()),
+        0 => Err("every generative class this node's artifacts declare is already registered on this chain (or its weights are)"
+            .to_string()),
         1 => Ok(fresh.into_iter().next().expect("one")),
         n => Err(format!(
             "this node's artifacts declare {n} unregistered generative classes ({}) — name one with --palw-register-class <model-id>",

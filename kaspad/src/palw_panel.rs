@@ -9534,7 +9534,8 @@ impl PalwPanelService {
                         // class (no partial seat, no interval seat, no capture sampler — a tensor claim has none) and
                         // files `Valid` when the replay reproduces the claim's roots and canonical output. A class this
                         // node does not hold answered `Incapable` above.
-                        if let Some(Ok(tensor)) = self.backends().resolve_gen_v1(duty.class_id, duty.artifact_root)
+                        let tensor_class = self.backends().resolve_gen_v1(duty.class_id, duty.artifact_root);
+                        if let Some(Ok(tensor)) = tensor_class
                             && gen_court::gen_class_is_tensor_v1(&tensor)
                         {
                             if !(seat_r && seat_r_duty.role == PalwSeatRRoleV1::FullSeat) || refuted {
@@ -18061,9 +18062,10 @@ mod seat_r_tests {
     /// Every `break 'verdict` of the verdict block is one of six spellings, and every mention of
     /// `PalwReceiptVerdictV2::Valid` in it is a `Valid` exit or one of the two interval gates — so a
     /// `Valid` cannot leave the block by a spelling this pin does not see (the review, LOW). Every
-    /// `Valid` exit is attributed to the nearest arm named before it, thirteen in all, in order. The two
-    /// replay exits past the fence are the `Licensed` arms of the two off-loop replays
-    /// (`fp_seat_replay_pass_v1`, `attempt_seat_replay_v1`), the only lines that set
+    /// `Valid` exit is attributed to the nearest arm named before it, fourteen in all, in order. The three
+    /// replay exits past the fence are the `Licensed` arms of the three off-loop replays
+    /// (`gen_tensor_seat_pass_v1` — RFC-0003's tensor claim, first in the block — `fp_seat_replay_pass_v1`,
+    /// `attempt_seat_replay_v1`), the only lines that set
     /// `licensed_by_replay`; the two SEAT-S4 exits are the `Licensed` arms of the verified resume, one
     /// a lane, the only lines that set `licensed_by_verified_resume` (for a `PartialResumes` seat's
     /// own-mask V3 alone); those four are the only exits whose arm the rule admits. The two other
@@ -18127,6 +18129,8 @@ mod seat_r_tests {
         assert_eq!(
             exits.iter().map(|at| arm_before(*at).0).collect::<Vec<_>>(),
             vec![
+                // RFC-0003: a tensor claim's own seat pass, first in the free-prompt lane.
+                FreePromptReplay,
                 VerifiedSegmentResume,
                 FreePromptReplay,
                 SegmentResume,
@@ -18166,12 +18170,23 @@ mod seat_r_tests {
         // before its `Valid`.
         const LICENSED: &str = "licensed_by_replay = true;";
         let writers: Vec<usize> = block.match_indices(LICENSED).map(|(i, _)| i).collect();
-        assert_eq!(writers.len(), 2, "two writers, and no other");
+        assert_eq!(writers.len(), 3, "three writers (the tensor pass, the FP pass, the attempt pass), and no other");
+        let tensor_pass = block.find(".gen_tensor_seat_pass_v1(").expect("the tensor pass (RFC-0003)");
+        assert!(tensor_pass < fp_pass, "a tensor claim's pass runs before the FP replay arm: it never reaches the FPM1 arms");
         for at in &writers {
             assert!(block[at + LICENSED.len()..].trim_start().starts_with(VALID), "a writer is its exit's last line");
-            let licensed = block[..*at].rfind("(PalwSeatReplayStepV1::Licensed, ").expect("a Licensed arm");
+            let licensed = block[..*at]
+                .rfind("(PalwSeatReplayStepV1::Licensed, ")
+                .into_iter()
+                .chain(block[..*at].rfind("PalwSeatReplayStepV1::Licensed => {"))
+                .max()
+                .expect("a Licensed arm");
             assert!(*at - licensed < 600, "inside the Licensed arm");
-            assert!((fp_pass < licensed && licensed - fp_pass < 400) || (attempt_pass < licensed && licensed - attempt_pass < 900));
+            assert!(
+                (tensor_pass < licensed && licensed - tensor_pass < 900)
+                    || (fp_pass < licensed && licensed - fp_pass < 400)
+                    || (attempt_pass < licensed && licensed - attempt_pass < 900)
+            );
         }
         // SEAT-S4's two writers: the verified resume's `Licensed` arms, one a lane, each just before
         // its `Valid` and inside the arm of a `seat_s4_resume_v1` step.
@@ -18282,7 +18297,11 @@ mod seat_r_tests {
             "if refuted && seat_r_duty.role != PalwSeatRRoleV1::FullSeat {\n                        break 'verdict None;"
         ));
         assert!(!block.contains("if seat_r && replay_refuted.contains(&duty.claim_id) {"), "no gate stops the full seat");
-        assert_eq!(block.matches("replay_refuted.insert(duty.claim_id);\n").count(), 2, "both lanes' refutations are recorded");
+        assert_eq!(
+            block.matches("replay_refuted.insert(duty.claim_id);\n").count(),
+            3,
+            "the tensor lane's, the free-prompt lane's and the attempt lane's refutations are recorded"
+        );
         let fp_refuted = block.find("(PalwSeatReplayStepV1::Refuted, _) => {\n").expect("the FP refutation");
         assert!(
             block[fp_refuted..]
