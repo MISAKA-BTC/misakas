@@ -285,13 +285,19 @@ pub(crate) enum PalwSeatArmV1 {
     FreePromptCapture,
     /// The attempt lane's interval arm (ADR-0084 Decision 4).
     AttemptInterval,
+    /// **RFC-0004 (A10): a seat's replay of an evaluation claim** — the job the chain's state derives
+    /// (its item's prompt and reference, the policy's parameters), run through the pipeline executor on the
+    /// seat's own weights, its four roots held to the claim row's. A replay of the claim's whole job, so
+    /// it licenses past SEAT-R as the other replays do.
+    EvaluationReplay,
 }
 
 impl PalwSeatArmV1 {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::AttemptReplay,
         Self::FreePromptReplay,
+        Self::EvaluationReplay,
         Self::SegmentResume,
         Self::VerifiedSegmentResume,
         Self::AttemptMaterial,
@@ -307,7 +313,7 @@ impl PalwSeatArmV1 {
 /// that mask's V3 alone, `palw_seat_receipt_forms_v1`).
 pub(crate) fn palw_seat_arm_licenses_v1(seat_r: bool, arm: PalwSeatArmV1) -> bool {
     use PalwSeatArmV1::*;
-    !seat_r || matches!(arm, AttemptReplay | FreePromptReplay | VerifiedSegmentResume)
+    !seat_r || matches!(arm, AttemptReplay | FreePromptReplay | EvaluationReplay | VerifiedSegmentResume)
 }
 
 /// What one whole material of an attempt claim makes of the seat's verdict.
@@ -9366,6 +9372,7 @@ impl PalwPanelService {
                     match self.improve_seat_step_v1(&mut improve, duty).await {
                         improve::PalwImproveSeatStepV1::NotEvaluation => {}
                         improve::PalwImproveSeatStepV1::Valid => {
+                            debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::EvaluationReplay));
                             licensed_by_replay = true;
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
                         }
@@ -17096,8 +17103,8 @@ mod seat_r_tests {
         assert!(!palw_seat_r_in_force_v1(&never, u64::MAX), "a fence scheduled never is no fence");
     }
 
-    /// **The one rule, as a table.** Below SEAT-R every arm licenses; past it the two replays of the
-    /// claim's whole job, and SEAT-S4's verified resume of a seat's own mask — not the legacy segment
+    /// **The one rule, as a table.** Below SEAT-R every arm licenses; past it the replays of the
+    /// claim's whole job (an attempt's, a free-prompt claim's, RFC-0004's evaluation claim's), and SEAT-S4's verified resume of a seat's own mask — not the legacy segment
     /// resume, not S3 inside it, not the material, the capture, or either interval arm.
     #[test]
     fn past_seat_r_only_the_replays_license() {
@@ -17105,7 +17112,13 @@ mod seat_r_tests {
             assert!(palw_seat_arm_licenses_v1(false, arm), "{arm:?} below the fences, as today");
             assert_eq!(
                 palw_seat_arm_licenses_v1(true, arm),
-                matches!(arm, PalwSeatArmV1::AttemptReplay | PalwSeatArmV1::FreePromptReplay | PalwSeatArmV1::VerifiedSegmentResume),
+                matches!(
+                    arm,
+                    PalwSeatArmV1::AttemptReplay
+                        | PalwSeatArmV1::FreePromptReplay
+                        | PalwSeatArmV1::EvaluationReplay
+                        | PalwSeatArmV1::VerifiedSegmentResume
+                ),
                 "{arm:?} past the fences"
             );
         }
@@ -17940,7 +17953,7 @@ mod seat_r_tests {
     /// Every `break 'verdict` of the verdict block is one of six spellings, and every mention of
     /// `PalwReceiptVerdictV2::Valid` in it is a `Valid` exit or one of the two interval gates — so a
     /// `Valid` cannot leave the block by a spelling this pin does not see (the review, LOW). Every
-    /// `Valid` exit is attributed to the nearest arm named before it, thirteen in all, in order. The two
+    /// `Valid` exit is attributed to the nearest arm named before it, fourteen in all, in order. The two
     /// replay exits past the fence are the `Licensed` arms of the two off-loop replays
     /// (`fp_seat_replay_pass_v1`, `attempt_seat_replay_v1`), the only lines that set
     /// `licensed_by_replay`; the two SEAT-S4 exits are the `Licensed` arms of the verified resume, one
@@ -18006,6 +18019,9 @@ mod seat_r_tests {
         assert_eq!(
             exits.iter().map(|at| arm_before(*at).0).collect::<Vec<_>>(),
             vec![
+                // RFC-0004 (A10): the evaluation claim's replay, at the head of the block (after the
+                // capability check): a claim with no quanta is never judged by the free-prompt arms below.
+                EvaluationReplay,
                 VerifiedSegmentResume,
                 FreePromptReplay,
                 SegmentResume,
@@ -18045,9 +18061,17 @@ mod seat_r_tests {
         // before its `Valid`.
         const LICENSED: &str = "licensed_by_replay = true;";
         let writers: Vec<usize> = block.match_indices(LICENSED).map(|(i, _)| i).collect();
-        assert_eq!(writers.len(), 2, "two writers, and no other");
+        assert_eq!(
+            writers.len(),
+            3,
+            "three writers, and no other: the two off-loop replays' `Licensed` arms, and RFC-0004's evaluation replay"
+        );
         for at in &writers {
             assert!(block[at + LICENSED.len()..].trim_start().starts_with(VALID), "a writer is its exit's last line");
+            // RFC-0004 (A10): the evaluation replay's writer is the `Valid` arm of its own step.
+            if block[..*at].rfind("improve::PalwImproveSeatStepV1::Valid => {").is_some_and(|v| *at - v < 300) {
+                continue;
+            }
             let licensed = block[..*at].rfind("(PalwSeatReplayStepV1::Licensed, ").expect("a Licensed arm");
             assert!(*at - licensed < 600, "inside the Licensed arm");
             assert!((fp_pass < licensed && licensed - fp_pass < 400) || (attempt_pass < licensed && licensed - attempt_pass < 900));
