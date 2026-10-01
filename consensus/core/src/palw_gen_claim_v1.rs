@@ -35,13 +35,19 @@ use crate::palw_freeprompt_v3::{
     PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PalwFpCommitmentTxPayloadV3, PalwFpJobTailV1,
     PalwFpStopReasonV3, PalwFpV3Error, PalwFreePromptCommitmentV3, PalwFreePromptJobV3,
 };
-use crate::palw_fp_objects_v3::{PalwConsensusObjectV3Carrier, PalwFpClassCapsV1, PalwFpExtractionV3};
+use crate::palw_fp_objects_v3::{PalwConsensusObjectV3Carrier, PalwFpExtractionV3};
+use crate::palw_gen_class_v1::PalwGenClassRecordV1;
 use crate::palw_gen_close_v1::palw_gen_tensor_execution_root_v1;
-use crate::palw_gen_job_v1::{PALW_GEN_JOB_VERSION_V1, PalwGenBodyV1, PalwGenJobV1, PalwJobEnvelopeV1, palw_gen_job_id_v1};
+use crate::palw_gen_job_v1::{
+    PALW_GEN_JOB_VERSION_V1, PalwGenAcceptedJobV1, PalwGenBodyV1, PalwGenIdsV1, PalwGenJobErrorV1, PalwGenJobV1, PalwJobEnvelopeV1,
+    palw_gen_job_id_v1, palw_gen_pipeline_job_v1, palw_gen_token_bound_v1,
+};
+use crate::palw_gen_step_v1::PalwGenStepSpaceV1;
 use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
 use crate::tx::{Transaction, TransactionOutpoint};
+use misaka_palw_tir::pipeline::{TokenSource, stage_job_facts};
 
 /// **FP job version 10** (RFC-0003 §I.4): a tensor job. 5 is V3, 6 ADR-0096 D8's constraint job (named,
 /// unbuilt), 7 is V4, 8 is V5, 9 is RFC-0004's evaluation job. Provisional as 8 is: RFC-0001 may renumber
@@ -112,6 +118,10 @@ pub enum PalwGenClaimErrorV1 {
     IdsNotTheJobs { what: &'static str },
     #[error("the payload does not decode as a free-prompt commitment")]
     PayloadUndecodable,
+    #[error("the class cannot count this job: {0}")]
+    Class(String),
+    #[error("the job is not the class's: {0}")]
+    Job(PalwGenJobErrorV1),
 }
 
 impl From<PalwGenClaimErrorV1> for PalwFpV3Error {
@@ -425,22 +435,22 @@ pub fn palw_fp_gen_refusal_at_v1(payload: &[u8], fp_job_v5_active: bool) -> Opti
 /// version-10 payloads, which the lane's walk skips as not stateless-admissible
 /// (`palw_fp_objects_from_accepted_txs_by_class_v1`). Its arguments and the order of its checks are the FP
 /// walk's: the payload decodes as a version-10 payload; its claim's stateless rules hold at the claim's
-/// CLASS's ladder under the network's domain and arming ([`palw_fp_gen_claim_check_v1`]); its signature
+/// CLASS's ladder (`class_ladder`) under the network's domain and arming ([`palw_fp_gen_claim_check_v1`]); its signature
 /// verifies under the key it carries. Total over whatever was accepted: a payload that fails any of them
 /// is skipped with its reason, never rejected, so a peer's payload cannot invalidate the block that
 /// carried it. The class, the work and the capacity are the fold's. The caller runs it only past
 /// `palw_fp_job_v5` over `palw_gen_v1` and appends its objects after the free-prompt walk's.
-pub fn palw_fp_gen_objects_from_accepted_txs_v1<'a, V, C>(
+pub fn palw_fp_gen_objects_from_accepted_txs_v1<V, L>(
     txs: &[Transaction],
     network_domain: Hash64,
     panel_da_armed: bool,
-    class_caps: C,
+    class_ladder: L,
     prompt_ids_form: PalwPromptIdsFormV1,
     verify_mldsa87: V,
 ) -> PalwFpExtractionV3
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
-    C: Fn(&Hash64) -> PalwFpClassCapsV1<'a>,
+    L: Fn(&Hash64) -> u64,
 {
     let mut out = PalwFpExtractionV3::default();
     for tx in txs {
@@ -455,9 +465,8 @@ where
                 continue;
             }
         };
-        let caps = class_caps(&payload.commitment.job.class_id);
-        let Ok(job) = palw_fp_gen_claim_check_v1(&payload, Some(network_domain), panel_da_armed, caps.step_ladder, prompt_ids_form)
-        else {
+        let ladder = class_ladder(&payload.commitment.job.class_id);
+        let Ok(job) = palw_fp_gen_claim_check_v1(&payload, Some(network_domain), panel_da_armed, ladder, prompt_ids_form) else {
             out.skipped.push((id, "tensor payload is not stateless-admissible"));
             continue;
         };
@@ -517,4 +526,54 @@ pub fn palw_gen_payload_v1(
         prompt_token_ids,
         signature,
     }
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// What the chain derives from the class (the fold's)
+// ---------------------------------------------------------------------------------------------
+
+/// **A job's step leaves, as the chain counts them** (§I.4.5, step 4): the class's pipeline, programs and
+/// layouts and the job's facts — the court's own count (`StepLeafCountNotCanonical`) in closed form, so
+/// its cost is the programs' size, never the job's. Zeros of the job's id lengths stand in for the ids
+/// (the trips and positions depend on the lengths alone, as the court's binding check reads them).
+pub fn palw_gen_job_step_leaves_v1(row: &PalwGenClassRecordV1, accepted: &PalwGenAcceptedJobV1) -> Result<u64, PalwGenClaimErrorV1> {
+    use PalwGenClaimErrorV1 as E;
+    let (programs, pipeline) = row.class.decode().map_err(|e| E::Class(e.to_string()))?;
+    let prompt = vec![0u32; accepted.prompt_tokens as usize];
+    let negative = vec![0u32; accepted.negative_tokens as usize];
+    let job = palw_gen_pipeline_job_v1(accepted, PalwGenIdsV1 { prompt: &prompt, negative: &negative }, Vec::new());
+    let facts = stage_job_facts(&pipeline, &programs, &job).map_err(|e| E::Class(e.to_string()))?;
+    let trips: Vec<u32> = facts.iter().map(|f| f.trip).collect();
+    let leaves = PalwGenStepSpaceV1::leaf_count_v1(&pipeline, &programs, &row.class.layouts, &trips, None, 0)
+        .map_err(|e| E::Class(e.to_string()))?;
+    u64::try_from(leaves).map_err(|_| E::Class("the job's step tree has more leaves than a u64 counts".into()))
+}
+
+/// **A job's carried ids against the class** — the part of [`crate::palw_gen_job_v1::palw_gen_job_ids_admitted_v1`]
+/// the fold can ask (the acceptance walk held the hashes, in the network's form): each list as long as the
+/// job says and every id below the bound the class's stages read it under.
+pub fn palw_gen_ids_within_bounds_v1(
+    row: &PalwGenClassRecordV1,
+    accepted: &PalwGenAcceptedJobV1,
+    prompt: &[u32],
+    negative: &[u32],
+) -> Result<(), PalwGenClaimErrorV1> {
+    use PalwGenClaimErrorV1 as E;
+    for (what, source, held, declared) in [
+        ("prompt", TokenSource::Prompt, prompt, accepted.prompt_tokens),
+        ("negative prompt", TokenSource::Negative, negative, accepted.negative_tokens),
+    ] {
+        if held.len() != declared as usize {
+            return Err(E::IdsCount { got: held.len(), declared: declared as u64 });
+        }
+        if declared == 0 {
+            continue;
+        }
+        let bound = palw_gen_token_bound_v1(row, source).map_err(E::Job)?;
+        if let Some((index, id)) = held.iter().enumerate().find(|(_, id)| **id >= bound) {
+            return Err(E::Job(PalwGenJobErrorV1::PromptTokenOutOfRange { what, index, id: *id, bound }));
+        }
+    }
+    Ok(())
 }

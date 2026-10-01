@@ -46,6 +46,9 @@ impl TransactionValidator {
             kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::door(
                 self.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
             ),
+            // RFC-0003 §I.4.4: the tensor claim's height-free door — `true` only where the ruleset carries
+            // `palw_fp_job_v5`; the header-context door decides the height.
+            self.palw_fp_job_v5_fence.is_some(),
         )?;
         check_transaction_version(tx)
     }
@@ -333,6 +336,8 @@ fn check_transaction_subnetwork(
     palw_fp_work_leaves_cap: u64,
     // RFC-0001 §A.4: `PalwFpDecodeRulesV1::door` — height-free, as isolation is.
     palw_fp_decode_rules_door: kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1,
+    // RFC-0003 §I.4.4: the ruleset carries `palw_fp_job_v5` (a tensor claim's door) — height-free too.
+    palw_gen_door: bool,
 ) -> TxResult<()> {
     if tx.is_coinbase() || tx.subnetwork_id.is_native() {
         Ok(())
@@ -431,7 +436,11 @@ fn check_transaction_subnetwork(
         // carried prompt ids must hash to the job under the network's form — flat everywhere the
         // fence is dormant, the tiled Merkle root on a genesis that armed it. A door that spelled
         // `false, Flat` here would refuse every honest commitment on such a network.
-        kaspa_consensus_core::palw_fp_objects_v3::validate_palw_fp_commitment_tx_under_v5(
+        // **RFC-0003 §I.4.4: a tensor claim (FP job version 10) is judged by its own door where the
+        // ruleset carries the fence, and refused by the lane's own door everywhere else** — which says
+        // `UnsupportedVersion`, as a build without the fence says it. Every other payload meets the lane's
+        // door exactly as it did.
+        kaspa_consensus_core::palw_gen_claim_v1::validate_palw_fp_commitment_tx_gen_door_v1(
             &tx.payload,
             palw_panel_da_admissible,
             palw_prompt_ids_form,
@@ -439,6 +448,7 @@ fn check_transaction_subnetwork(
             // RFC-0001 §A.4, height-free: a V4 job's shape passes only where the ruleset carries
             // the decode-rules fence; the header-context door decides the height.
             palw_fp_decode_rules_door,
+            palw_gen_door,
         )
         .map_err(TxRuleError::InvalidPalwFpPayload)?;
         Ok(())
@@ -1430,6 +1440,7 @@ mod pq_output_class_enforcement_tests {
                 kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::door(
                     tv.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
                 ),
+                tv.palw_fp_job_v5_fence.is_some(),
             )
         };
         // Isolation: no fence, the V4 shape is refused (as a pre-V4 build refuses its bytes); a

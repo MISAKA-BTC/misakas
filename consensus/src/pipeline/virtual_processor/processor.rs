@@ -573,6 +573,10 @@ pub struct VirtualStateProcessor {
     /// from which a new free-prompt job is V4 only (and below which it is V3 only), read by the
     /// extraction walk at the accepting block's DAA. `None` on every shipped preset.
     pub(super) palw_fp_decode_rules: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0003 §I.4: `Params::palw_fp_job_v5_fence()`** — the height from which a tensor claim (FP job
+    /// version 10) may be accepted, over `palw_gen_v1` ([`Self::palw_gen_lane_open_at`]); read by the
+    /// extraction walk at the accepting block's DAA. `None` on every shipped preset.
+    pub(super) palw_fp_job_v5: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
     /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
     pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1134,6 +1138,7 @@ impl VirtualStateProcessor {
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_held_context: params.palw_held_context_fence(),
             palw_fp_decode_rules: params.palw_fp_decode_rules_fence(),
+            palw_fp_job_v5: params.palw_fp_job_v5_fence(),
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
@@ -13015,6 +13020,18 @@ impl VirtualStateProcessor {
         self.palw_gen_v1.is_some_and(|fence| fence.activation.is_active(daa_score))
     }
 
+    /// **RFC-0003 §I.4: is the free-prompt lane open for tensor claims at `daa_score`?** Both fences in
+    /// force — `palw_gen_v1` (the registry, the court) and `palw_fp_job_v5` (the lane's job versions
+    /// past V4): `palw_gen_lane_open_v1`, resolved here in exactly one place. The extraction walk reads
+    /// it at the accepting block; below it no tensor claim becomes an object.
+    pub(super) fn palw_gen_lane_open_at(&self, daa_score: u64) -> bool {
+        self.palw_gen_at(daa_score)
+            && self
+                .palw_fp_job_v5
+                .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
+                .is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// **RFC-0002 Phase F's second IR fence, read off the bundle's mirror** (`tir_fence2_from_daa`,
     /// which `validate_palw_v2` holds equal to `Params::palw_tir_fence2`).
     fn palw_tir_fence2_at(&self, daa_score: u64) -> bool {
@@ -14522,6 +14539,41 @@ impl VirtualStateProcessor {
         Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound { claim: *claim_id, anchor: seed, seats })
     }
 
+    /// **RFC-0003 §I.4.4: the tensor claims of an accepted set** — the free-prompt walk's twin for
+    /// version-10 payloads ([`kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_objects_from_accepted_txs_v1`]),
+    /// at `block_daa` against the parent `state`: this network's domain and `PanelDa` arming, each
+    /// commitment bounded by its CLASS's ladder (the bundle's, or the one the class recorded under the held
+    /// regime), the network's form and this processor's verifier. Empty below `palw_gen_v1` or
+    /// `palw_fp_job_v5` ([`Self::palw_gen_lane_open_at`]): no tensor claim becomes an object. The one place
+    /// the walk's arguments are written — the extraction and the tests' helper both read it.
+    pub(super) fn palw_v2_gen_objects_of_txs(
+        &self,
+        txs: &[Transaction],
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        block_daa: u64,
+    ) -> kaspa_consensus_core::palw_fp_objects_v3::PalwFpExtractionV3 {
+        if !self.palw_gen_lane_open_at(block_daa) {
+            return Default::default();
+        }
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        let ladder = self
+            .palw_v2_bundle
+            .as_ref()
+            .map(|bundle| bundle.court.max_step_leaf_count())
+            .unwrap_or(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
+        kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_objects_from_accepted_txs_v1(
+            txs,
+            network_domain,
+            self.palw_panel_da_at(block_daa),
+            |class_id| state.class_step_ladder_v1(class_id, ladder),
+            self.palw_prompt_ids_form_at(block_daa),
+            Self::verify_mldsa87_with_context_bool,
+        )
+    }
+
     fn palw_v2_objects_of_block(
         &self,
         acceptance: &AcceptanceData,
@@ -14603,9 +14655,20 @@ impl VirtualStateProcessor {
             // a claim bound to any bond outpoint it named — the genesis premine bond among them.
             Self::verify_mldsa87_with_context_bool,
         );
+        let mut extraction = extraction;
         for (carrier, reason) in &extraction.skipped {
             info!("[palw-fp] carrier {carrier} produced no object: {reason}");
         }
+        // **RFC-0003 §I.4.4: the tensor claims (FP job version 10), past both fences.** The lane's walk
+        // above skipped every version-10 payload as not stateless-admissible; this is its twin for them,
+        // at each commitment's CLASS's ladder, under the network's domain and arming, and its objects are
+        // appended after the lane's own — a fixed concatenation, as the lifecycle walk's below. Below
+        // either fence it does not run: no tensor claim becomes an object.
+        let gen = self.palw_v2_gen_objects_of_txs(&txs, state, block_daa);
+        for (carrier, reason) in &gen.skipped {
+            info!("[palw-fp] carrier {carrier} produced no tensor object: {reason}");
+        }
+        extraction.objects.extend(gen.objects);
         // P0-11: the claim-lifecycle objects. Without this walk no block could carry a
         // `PanelBound`, so every claim on a V2 network voided at `BindTimeout` and PALW weight —
         // the network's whole fork choice — was permanently zero.

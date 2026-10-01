@@ -120,6 +120,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::ReceiptLicensed { .. }
         | O::ProducerDefaulted { .. }
         | O::FreePromptCommitted { .. }
+        // RFC-0003 §I.4: a tensor claim's commitment, a free-prompt commitment of job version 10.
+        | O::GenTensorCommitted { .. }
         | O::FamilyCertified { .. }
         | O::ClassLaneCertified { .. }
         | O::ClassLaneCertifiedTirV1 { .. }

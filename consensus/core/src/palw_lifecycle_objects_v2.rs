@@ -319,6 +319,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::FreePromptCommitted { .. } => {
             Err("a free-prompt commitment rides its own subnetwork, where its price is checked")
         }
+        // RFC-0003 §I.4: a tensor claim's commitment is a free-prompt commitment of job version 10.
+        PalwConsensusObjectV2::GenTensorCommitted { .. } => {
+            Err("a tensor claim's commitment rides the free-prompt subnetwork, where its price is checked")
+        }
         // **ADR-0078: a derivation rides, and carries the executor's authorisation.** Same split
         // as a bond's declarations: this layer is stateless, so it checks SHAPE — the object's
         // version, a non-zero kind, an ML-DSA-87-sized executor key, a non-empty artifact — and

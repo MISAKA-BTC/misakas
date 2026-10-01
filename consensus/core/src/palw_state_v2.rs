@@ -98,6 +98,11 @@ use blake2b_simd::Params;
 use kaspa_hashes::{Hash64, ZERO_HASH64};
 use std::collections::{BTreeMap, BTreeSet};
 
+// RFC-0003 §I.4: the tensor claim's fold branch — a child module, as the evaluation lane's is, so it reads the
+// builder and the state's tables directly.
+#[path = "palw_gen_claim_fold_v1.rs"]
+mod palw_gen_claim_fold_v1;
+
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
 /// declared field positions; ADR-0044 (FP-03) added the free-prompt claim source, the
@@ -7400,6 +7405,33 @@ pub enum PalwConsensusObjectV2 {
         arity: u8,
         signature: Vec<u8>,
     },
+    // ---- RFC-0003 §I.4: the tensor claim's commitment (a lane object, like `FreePromptCommitted`). ----
+    /// **A tensor claim's commitment** (FP job version 10, RFC-0003 §I.4): the object the acceptance walk
+    /// (`palw_fp_gen_objects_from_accepted_txs_v1`) builds from a version-10 payload on the free-prompt
+    /// subnetwork, past `palw_fp_job_v5` over `palw_gen_v1`. Like `FreePromptCommitted` it is **never
+    /// serialized to a peer** (`palw_lifecycle_object_may_ride_v2` refuses it a carriage by name): the
+    /// transaction is the carrier, and this is what its payload means to the fold. Appended (tag 70 on this
+    /// branch; the integration with RFC-0004's objects, which also append past 69, renumbers it — its number
+    /// is not a wire fact). The fold's tensor branch derives the class, the work and the capacity and
+    /// writes a weightless claim (`palw_gen_claim_fold_v1`); below the fences it refuses it by name.
+    GenTensorCommitted {
+        claim: Hash64,
+        class_id: Hash64,
+        bond: PalwBondKeyV2,
+        executor_pubkey: Vec<u8>,
+        /// The step tree's leaf count, as committed (the fold holds it to the chain's own count).
+        work_leaves: u64,
+        /// The payload's ids: the job's prompt ids then its negative ids under `PublicDa`, none under `PanelDa`.
+        prompt_token_ids: Vec<u32>,
+        trace_root: Hash64,
+        output_root: Hash64,
+        execution_root: Hash64,
+        /// The commitment's job pin (`palw_fp_job_pin_v1`), recorded as the claim's identity past
+        /// `palw_offence_attribution`.
+        job_pin: Hash64,
+        /// The tensor job, reconstructed from the version-10 job the commitment carries.
+        job: Box<crate::palw_gen_job_v1::PalwGenJobV1>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7445,7 +7477,10 @@ pub fn palw_object_is_tir_fence2_v1(object: &PalwConsensusObjectV2) -> bool {
 /// is charged for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
     match object {
-        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } | PalwConsensusObjectV2::CourtGenRootClaimed { .. } => true,
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. }
+        | PalwConsensusObjectV2::CourtGenRootClaimed { .. }
+        // RFC-0003 §I.4: a tensor claim's commitment is a generative move too.
+        | PalwConsensusObjectV2::GenTensorCommitted { .. } => true,
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_gen_v1(),
         _ => false,
     }
@@ -9524,6 +9559,13 @@ pub enum PalwStateV2Error {
     /// walk drops it first; this is the second lock.
     #[error("a generative object is refused: {0}")]
     GenObjectRefused(&'static str),
+    /// **RFC-0003 §I.4: a tensor claim the fold refuses**, by the rule's own reason.
+    #[error("a tensor claim is refused: {0}")]
+    GenClaimRefused(String),
+    /// **RFC-0003 §I.4.8: a generative class's claims in flight are at the fence's cap** — it takes no
+    /// new claim until one leaves the live set.
+    #[error("generative class {class} holds {inflight} claims in flight, at the fence's cap of {cap}")]
+    GenClassInflightCapped { class: Hash64, inflight: u64, cap: u32 },
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -12535,7 +12577,16 @@ impl PalwChainStateV2 {
             // ledger inside range, spends only on a certified (Final) claim, and zero immature
             // contribution (a commitment is not a block's work).
             if let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source {
-                if *quanta == 0 || claim.pwu % (*quanta as u64) != 0 || claim.pwu / (*quanta as u64) == 0 {
+                // RFC-0004 A6 (MIP-17), RFC-0003 §I.4: a weightless claim — an evaluation claim, a tensor claim —
+                // is the one free-prompt claim with no quanta, and then it earns nothing at all: no pwu, no spend,
+                // no receipt rights, no escrow.
+                if *quanta == 0 {
+                    if claim.pwu != 0 || !spent.is_empty() || claim.rights_reserved != 0 || claim.escrowed_reward != 0 {
+                        return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                            "free-prompt claim {id} has no quanta and earns something"
+                        )));
+                    }
+                } else if claim.pwu % (*quanta as u64) != 0 || claim.pwu / (*quanta as u64) == 0 {
                     return Err(PalwStateV2Error::CarriageInconsistent(format!("free-prompt claim {id} has non-uniform quanta")));
                 }
                 if spent.iter().any(|q| *q >= *quanta) {
@@ -31508,6 +31559,40 @@ fn apply_object(
         // reduces over the history, F7 composed) owes its court's terminal move, as an IR class does
         // (`fused_attention`); nothing is held; and a pipeline opens no registry lifecycle row in v1
         // (the registry's work model is a text model's).
+        // **RFC-0003 §I.4: a tensor claim's commitment** — the fences, the bond, the class, the job against the
+        // class, the work (the chain's own count), the class's capacity, the work identity, the reservation; then
+        // a weightless claim that is any claim of its class (`palw_gen_claim_fold_v1`).
+        PalwConsensusObjectV2::GenTensorCommitted {
+            claim,
+            class_id,
+            bond,
+            executor_pubkey,
+            work_leaves,
+            prompt_token_ids,
+            trace_root,
+            output_root,
+            execution_root,
+            job_pin,
+            job,
+        } => {
+            palw_gen_claim_fold_v1::apply_gen_tensor_commitment_v1(
+                builder,
+                ctx,
+                palw_gen_claim_fold_v1::PalwGenCommitV1 {
+                    claim_id: claim,
+                    class_id,
+                    bond,
+                    executor_pubkey,
+                    work_leaves: *work_leaves,
+                    prompt_token_ids,
+                    trace_root,
+                    output_root,
+                    execution_root,
+                    job_pin,
+                    job,
+                },
+            )?;
+        }
         PalwConsensusObjectV2::ClassRegisteredGenV1 {
             class_id,
             artifact_root,
