@@ -1244,11 +1244,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
         let dir = root.path().join("tir2/misaka-testnet-12");
-        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), tir2_only(130)).expect("a fresh app dir");
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), tir2_only(130))
+            .expect("a fresh app dir");
         assert!(marker_of(&dir).contains("tir2_at=130\n"), "{}", marker_of(&dir));
         std::fs::create_dir_all(dir.join("datadir")).unwrap();
-        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), tir2_only(130)).expect("the same start");
-        let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), tir2_only(140)).unwrap_err();
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), tir2_only(130))
+            .expect("the same start");
+        let why =
+            palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), tir2_only(140)).unwrap_err();
         assert!(why.contains("--palw-drill-tir2-at (recorded 130, now 140)"), "{why}");
         let why = palw_drill_datadir_guard_v3(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100)).unwrap_err();
         assert!(why.contains("recorded 130, now none"), "dropped over a stored chain: {why}");
@@ -1279,7 +1282,8 @@ mod tests {
         assert_ne!(with.params.consensus_params_id(), without.params.consensus_params_id(), "the fence moves the fingerprint");
         palw_drill_validate_args_v1(&parsed(&["--palw-drill-tir2-at=30"])).expect("with the first IR fence below it");
         let keys = tempfile::tempdir().unwrap();
-        let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), tir2_only(30)).expect("written");
+        let path =
+            palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), tir2_only(30)).expect("written");
         let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(manifest["tir2_at"], serde_json::json!(30));
         assert_eq!(manifest["consensus_params_id"], with.params.consensus_params_id().to_string().as_str());
@@ -1296,7 +1300,8 @@ mod tests {
         let alone: Vec<&str> = base.iter().copied().chain([salted.as_str(), "--palw-drill-tir2-at=130"]).collect();
         let refused = palw_drill_validate_args_v1(&parse(&alone)).unwrap_err().to_string();
         assert!(refused.contains("palw_tir_fence2 needs palw_tir_v1"), "{refused}");
-        let why = palw_drill_write_keyring_v4(&a, tempfile::tempdir().unwrap().path(), None, None, None, None, tir2_only(130)).unwrap_err();
+        let why =
+            palw_drill_write_keyring_v4(&a, tempfile::tempdir().unwrap().path(), None, None, None, None, tir2_only(130)).unwrap_err();
         assert!(why.contains("--palw-drill-tir2-at") || why.contains("palw_tir_fence2 needs palw_tir_v1"), "{why}");
     }
 
@@ -1313,7 +1318,16 @@ mod tests {
         let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
         let dir = root.path().join("window/misaka-testnet-12");
         let start = |dir: &Path, model: Option<u64>| {
-            palw_drill_datadir_guard_v4(dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100), PalwDrillExtraFencesV1 { model_court_at: model, ..Default::default() })
+            palw_drill_datadir_guard_v4(
+                dir,
+                Some(&a),
+                "g",
+                Some(40),
+                Some(60),
+                Some(80),
+                Some(100),
+                PalwDrillExtraFencesV1 { model_court_at: model, ..Default::default() },
+            )
         };
         start(&dir, Some(130)).expect("a fresh app dir");
         assert!(marker_of(&dir).contains("model_court_at=130\n"), "{}", marker_of(&dir));
@@ -1361,8 +1375,16 @@ mod tests {
         palw_drill_validate_args_v1(&parsed(&["--palw-drill-model-court-at=30"])).expect("the model window alone");
         // The keyring names it and the fingerprint the node on the same command line announces.
         let keys = tempfile::tempdir().unwrap();
-        let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), PalwDrillExtraFencesV1 { model_court_at: Some(30), ..Default::default() })
-            .expect("written");
+        let path = palw_drill_write_keyring_v4(
+            &a,
+            keys.path(),
+            Some(6),
+            Some(10),
+            Some(14),
+            Some(20),
+            PalwDrillExtraFencesV1 { model_court_at: Some(30), ..Default::default() },
+        )
+        .expect("written");
         let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(manifest["model_court_at"], serde_json::json!(30));
         assert_eq!(manifest["consensus_params_id"], model_only.params.consensus_params_id().to_string().as_str());
