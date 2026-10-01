@@ -192,6 +192,25 @@ fn olmo_cohere_granite_nemotron() {
     assert_eq!(s.final_norm.map(|n| n.gain), Some(Gain::OnePlusW));
 }
 
+/// **BitNet b1.58 and Apertus** (data adapters, no Rust reader): BitNet's two sub-layer norms (`SUBLAYER_NORMS_V1`) over the attention
+/// output and the MLP's hidden activation, and Apertus' ungated MLP with xIELU (`ACT_LEARNED_POINTWISE_V1`), q/k norm and llama3 rope.
+#[test]
+fn bitnet_and_apertus() {
+    let (s, p) = ok("bitnet-b1.58-2b-4t");
+    assert!(attn(&s, 0).o_norm.is_some(), "attn_sub_norm");
+    assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if m.gated && m.act == Act::Relu2 && m.inner_norm.is_some()), "ReLU2 gated with ffn_sub_norm");
+    assert!(s.head.tied);
+    assert!(p.params.iter().any(|d| d.name == "attn.sub_norm.gain") && p.params.iter().any(|d| d.name == "mlp.sub_norm.gain"));
+    let (s, p) = ok("apertus-8b-2509");
+    assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if !m.gated && m.act == Act::Xielu && m.inner_norm.is_none()), "an ungated xIELU MLP");
+    assert_eq!(attn(&s, 0).qk_norm.map(|q| q.scope), Some(QkNormScope::PerHeadShared));
+    assert_eq!(rope(attn(&s, 0)).freqs.rope_type, "llama3");
+    for k in ["alpha_p", "alpha_n", "beta", "eps"] {
+        assert!(p.params.iter().any(|d| d.name == format!("mlp.act.{k}") && d.per_layer), "xIELU's {k} is a per-layer param");
+    }
+    assert!(p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::Xielu)));
+}
+
 #[test]
 fn remote_code_llama_likes_are_lowered_but_marked_unsure() {
     for n in ["internlm2.5-7b-chat", "minicpm-2b-sft-bf16", "exaone-3.5-2.4b-instruct"] {

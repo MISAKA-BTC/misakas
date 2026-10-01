@@ -95,7 +95,7 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                         c.routed_expert_macs += m;
                     }
                 }
-                Op::Act(_) | Op::Softcap { .. } | Op::DecayExpNegExp | Op::ClampedSwiGlu { .. } => {
+                Op::Act(_) | Op::Xielu | Op::Softcap { .. } | Op::DecayExpNegExp | Op::ClampedSwiGlu { .. } => {
                     c.elementwise += out;
                     c.transcendental += out;
                 }

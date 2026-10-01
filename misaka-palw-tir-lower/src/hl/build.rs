@@ -413,7 +413,7 @@ impl Builder<'_> {
         // `HEAD_TRANSFORM_V1`: dense, activation, norm — then the vocabulary projection.
         if let Some(t) = &h.transform {
             x = self.linear(&mut bk, x, "head.transform.dense", d, d, t.bias, false, "head.transform.dense")?;
-            x = bk.f(Op::Act(t.act), vec![x], d, "head.transform.act");
+            x = bk.f(Op::Act(plain_act(t.act, "a head transform")?), vec![x], d, "head.transform.act");
             x = self.full_norm(&mut bk, x, t.norm, "head.transform.norm", d, false)?;
         }
         if h.pre_scale != 1.0 {
@@ -620,7 +620,7 @@ impl Builder<'_> {
                 if let Some(p) = ple {
                     let pv = self.ple(&mut bk, p)?;
                     let g = self.linear(&mut bk, h, "ple.gate", p.dim, d, false, true, "ple.gate")?;
-                    let g = bk.f(Op::Act(p.act), vec![g], p.dim, "ple.act");
+                    let g = bk.f(Op::Act(plain_act(p.act, "a per-layer embedding gate")?), vec![g], p.dim, "ple.act");
                     let gm = bk.f(Op::Mul, vec![g, pv], p.dim, "ple.gated");
                     let o = self.linear(&mut bk, gm, "ple.out", d, p.dim, false, true, "ple.out")?;
                     let o = self.full_norm(&mut bk, o, p.post_norm, "ple.post_norm", d, true)?;
@@ -948,7 +948,10 @@ impl Builder<'_> {
                 chunk: a.chunk,
                 blocks: None,
             };
-            let o = bk.f(op, vec![q, ks, vs], h * vd, &n("ctx"));
+            let mut o = bk.f(op, vec![q, ks, vs], h * vd, &n("ctx"));
+            if let Some(on) = a.o_norm {
+                o = self.full_norm(bk, o, on, &n("sub_norm"), h * vd, true)?;
+            }
             return self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"));
         }
         let mut k = self.linear(bk, x, &n("k"), kn, d, a.k_bias, true, &n("k"))?;
@@ -974,7 +977,7 @@ impl Builder<'_> {
             Some(g) => {
                 let width = if g.per_head { h } else { h * vd };
                 let gl = self.linear(bk, x, &n("gate"), width, d, false, true, &n("gate"))?;
-                let ga = bk.f(Op::Act(g.act), vec![gl], width, &n("gate_act"));
+                let ga = bk.f(Op::Act(plain_act(g.act, "an attention output gate")?), vec![gl], width, &n("gate_act"));
                 Some(if g.per_head { bk.f(Op::GroupRepeat { groups: h, size: vd }, vec![ga], h * vd, &n("gate_rep")) } else { ga })
             }
             None => None,
@@ -1071,6 +1074,10 @@ impl Builder<'_> {
         if let Some(g) = gate {
             let s = bk.f(Op::Act(Act::Sigmoid), vec![g], qn, &n("gate_act"));
             o = bk.f(Op::Mul, vec![o, s], qn, &n("gated"));
+        }
+        // `SUBLAYER_NORMS_V1`: BitNet's `attn_sub_norm` over the heads' concatenated output, before `o_proj`.
+        if let Some(on) = a.o_norm {
+            o = self.full_norm(bk, o, on, &n("sub_norm"), h * vd, true)?;
         }
         self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"))
     }
@@ -1337,24 +1344,44 @@ impl Builder<'_> {
     // ───────────────────────────── FFN ─────────────────────────────
 
     /// Dense MLP under a role prefix (`mlp` or `moe.shared`).
+    /// The activation node over `x` (`n` wide). xIELU reads four scalars of the layer (`{name}.alpha_p`, `.alpha_n`, `.beta`, `.eps`):
+    /// the only activation with parameters, so the only one that is not `Op::Act`.
+    fn activation(&mut self, bk: &mut Bk, act: Act, x: Ref, n: usize, name: &str) -> Result<Ref> {
+        if act != Act::Xielu {
+            return Ok(bk.f(Op::Act(act), vec![x], n, name));
+        }
+        let p = self.param(&format!("{name}.alpha_p"), vec![1], true, Init::Uniform(0.0, 0.5))?;
+        let q = self.param(&format!("{name}.alpha_n"), vec![1], true, Init::Uniform(0.0, 0.5))?;
+        let beta = self.param(&format!("{name}.beta"), vec![1], true, Init::Uniform(0.3, 0.7))?;
+        let eps = self.param(&format!("{name}.eps"), vec![1], true, Init::Uniform(-1e-3, -1e-6))?;
+        Ok(bk.f(Op::Xielu, vec![x, p, q, beta, eps], n, name))
+    }
+
     fn mlp(&mut self, bk: &mut Bk, m: &MlpSpec, x: Ref, pfx: &str) -> Result<Ref> {
         let d = self.s.hidden_size;
         let i = m.intermediate;
         let u = self.linear(bk, x, &format!("{pfx}.up"), i, d, m.up_bias, true, &format!("{pfx}.up"))?;
-        let hdn = if m.gated {
+        let mut hdn = if m.gated {
             let g = self.linear(bk, x, &format!("{pfx}.gate"), i, d, m.up_bias, true, &format!("{pfx}.gate"))?;
             match m.glu {
                 Glu::Standard => {
-                    let a = bk.f(Op::Act(m.act), vec![g], i, &format!("{pfx}.act"));
+                    let a = self.activation(bk, m.act, g, i, &format!("{pfx}.act"))?;
                     bk.f(Op::Mul, vec![a, u], i, &format!("{pfx}.hidden"))
                 }
                 Glu::ClampedSwiGlu { alpha, limit } => {
+                    if m.act == Act::Xielu {
+                        return Err(LowerError::not_lowerable("xIELU in a clamped SwiGLU"));
+                    }
                     bk.f(Op::ClampedSwiGlu { alpha, limit }, vec![g, u], i, &format!("{pfx}.hidden"))
                 }
             }
         } else {
-            bk.f(Op::Act(m.act), vec![u], i, &format!("{pfx}.act"))
+            self.activation(bk, m.act, u, i, &format!("{pfx}.act"))?
         };
+        // `SUBLAYER_NORMS_V1`: BitNet's `ffn_sub_norm` over the hidden activation, before the down projection.
+        if let Some(n) = m.inner_norm {
+            hdn = self.full_norm(bk, hdn, n, &format!("{pfx}.sub_norm"), i, true)?;
+        }
         self.linear(bk, hdn, &format!("{pfx}.down"), d, i, m.down_bias, true, &format!("{pfx}.out"))
     }
 
@@ -1366,6 +1393,7 @@ impl Builder<'_> {
     fn moe_split(&mut self, bk: &mut Bk, m: &MoeSpec, rx: Ref, x: Ref) -> Result<Ref> {
         let d = self.s.hidden_size;
         let (e, i) = (m.experts, m.intermediate);
+        plain_act(m.act, "an expert MLP")?;
         // A spec flag the lowering would not apply is a refusal, never a silent no-op (FR-26): a model whose router
         // carries one of these would otherwise compute a different function with no error anywhere.
         let r = &m.router;
@@ -1420,6 +1448,7 @@ impl Builder<'_> {
                 glu: Glu::Standard,
                 up_bias: false,
                 down_bias: false,
+                inner_norm: None,
                 name: None,
             };
             let mut s = self.mlp(bk, &spec, x, "moe.shared")?;
@@ -1462,4 +1491,13 @@ fn block_name(ls: &LayerSpec) -> String {
         Ffn::MlpMoe(_) => "+mlp|moe".into(),
     };
     format!("{mix}{ffn}")
+}
+
+/// An activation a node applies to its input alone. xIELU reads parameters of the layer (`Op::Xielu`, built only by a dense MLP's
+/// activation): anywhere else it would be silently another function, so it is refused by name.
+fn plain_act(a: Act, what: &str) -> Result<Act> {
+    if a == Act::Xielu {
+        return Err(LowerError::not_lowerable(format!("xIELU in {what}: it is a learned activation, lowered in a dense MLP only")));
+    }
+    Ok(a)
 }

@@ -352,6 +352,9 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
         }
         m.lin(&n("q"), "attn.q", a.q_bias)?;
         m.lin(&n("o"), "attn.o", a.o_bias)?;
+        if let Some(on) = &a.o_norm {
+            m.norm(&n("sub_norm"), "attn.sub_norm", on)?;
+        }
         if let Some(qk) = &a.qk_norm
             && (qk.norm.gain != Gain::None || qk.norm.bias)
         {
@@ -421,6 +424,10 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
         }
     }
     m.lin(&n("o"), "attn.o", a.o_bias)?;
+    // `SUBLAYER_NORMS_V1`: BitNet's `attn_sub_norm`.
+    if let Some(on) = &a.o_norm {
+        m.norm(&n("sub_norm"), "attn.sub_norm", on)?;
+    }
     if a.gate.is_some() {
         m.lin(&n("gate"), "attn.gate", false)?;
     }
@@ -668,6 +675,16 @@ fn mlp(m: &mut M, s: &MlpSpec, pfx: &str, layout: MlpLayout) -> Result<()> {
             return Err(LowerError::eval("internal: an expert-only layout on a dense MLP"));
         }
     }
+    // `SUBLAYER_NORMS_V1`: BitNet's `ffn_sub_norm`.
+    if let Some(n) = &s.inner_norm {
+        m.norm(&format!("{hn}.sub_norm"), &format!("{pfx}.sub_norm"), n)?;
+    }
+    // xIELU's four scalars of the layer (`ACT_LEARNED_POINTWISE_V1`): `[1]` tensors and 0-dimensional buffers, read as `[1]`.
+    if s.act == Act::Xielu {
+        for k in ["alpha_p", "alpha_n", "beta", "eps"] {
+            m.put(format!("{hn}.act.{k}"), Src::t(m.role(&format!("{pfx}.act_{k}"))?).reshape(vec![1]))?;
+        }
+    }
     m.lin(&format!("{hn}.down"), &format!("{pfx}.down"), s.down_bias)
 }
 
@@ -730,6 +747,7 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
             glu: Glu::Standard,
             up_bias: false,
             down_bias: false,
+            inner_norm: None,
             name: None,
         };
         mlp(m, &spec, "moe.shared", MlpLayout::Separate)?;

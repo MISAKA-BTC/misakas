@@ -47,6 +47,8 @@ pack!(
     "convnext",
     "mobilenet-v2",
     "mobilenet-v1",
+    "bitnet",
+    "apertus",
     "bert",
     "bloom",
     "clip-text",

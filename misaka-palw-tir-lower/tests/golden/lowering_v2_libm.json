@@ -209,6 +209,18 @@
     "params": 84,
     "program": "1bb71fb95e292ca92a3f234d0e1cd6f464af48576a80ee9cfb7b53472dd31c2f8bc136e7c6dd9ad658a8c138f78cb92a8b24177005c9e706ea2ead427a3508b5"
   },
+  "hf/apertus": {
+    "artifact": "60b9d8fe6ba92b08c754291792ec9a54ce23a056aa86bdc8d8212b97c93c3cb0b8f3984ba7e545a59fb04589d8df7beb51286a9d5ec15c4fa1a4bffb3b50c656",
+    "nodes": 341,
+    "params": 66,
+    "program": "39cbeb6e76930962f11947024f62bbe7a80182ba6271b5c790630ea64abdbaf9673993b87941cb17d60ae03f309f5e8064ab60f479f6cf63d7be0f6415c7bf5c"
+  },
+  "hf/bitnet": {
+    "artifact": "7ad129bd30d1789bc3a596e69d7e5e2d50a70e5dd8fcca85f3eed4c8654595dec7aa3781104a37286390690949e8adc0e1a6c723b0569f677bed8c42d589f775",
+    "nodes": 367,
+    "params": 77,
+    "program": "052b61ea685a0cde385dc020f4141f4fdb3dbe2af125771a046362bfabf1718a6862d718b7625bb4f301271936a33cebbaed09cd7cab6029a990d3e6456d71cb"
+  },
   "hf/bloom": {
     "artifact": "94d96b569ce396b08ecc88078f94ee4e167a4be77b7d4b6c3e09d557e001dfbb97db27441397d57e899285b3602d28b5d4ca54e7789f6972efbf1aec0fd59054",
     "nodes": 299,
@@ -713,8 +725,18 @@
     "params": 65,
     "program": "bdb0b1d1dfe4e0187908e4f67b3b0c916b071668fce95fdd8e5157f023d11480c6b1e3e0c03ddbfe2810352ca0e8936a3eb9e55d94eb4603662848e6d063b8e7"
   },
+  "real/apertus-8b-2509.json": {
+    "nodes": 341,
+    "params": 66,
+    "program": "8cfe07135953cf285abd1dd98c0cdf3ffb5dbc5df3d38072154c041898f96175563f4d3d13b0a4fb416102cd2e07766cb27bb8119be5f96b4c5850a87c7cc723"
+  },
   "real/bert-base-uncased.json": {
     "refused": true
+  },
+  "real/bitnet-b1.58-2b-4t.json": {
+    "nodes": 358,
+    "params": 73,
+    "program": "625f98445bcb41d1ad93bc8876baf8a206f1c14762be49897f5e5de4fd5265260ad9c051520e5bf27fd73dad4823979a9fe5a3468e0de0e386e14cd25aa49450"
   },
   "real/bloom-560m.json": {
     "nodes": 299,

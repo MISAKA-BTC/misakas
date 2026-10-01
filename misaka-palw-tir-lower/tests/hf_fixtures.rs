@@ -146,6 +146,8 @@ fixtures!(
     cohere,
     cohere2,
     granite,
+    bitnet,
+    apertus,
     nemotron,
     exaone4,
     smollm3,

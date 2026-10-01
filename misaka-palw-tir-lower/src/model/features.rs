@@ -140,6 +140,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("NORM_LAYER_V1", Norm, "layer normalisation", Implemented, [], NoReq, ["fidelity_tiny::gpt2"], "Centres exactly (n·x − Σx), then the RMS template."),
     feature!("NORM_GAIN_ONE_PLUS_V1", Norm, "gain stored as w, applied as 1 + w", Implemented, [], NoReq, ["fidelity_tiny::gemma"], "Gemma, Qwen3-Next, Nemotron."),
     feature!("NORM_UNWEIGHTED_V1", Norm, "norm without a gain", Implemented, [], NoReq, ["fidelity_tiny::olmo"], "OLMo-1's non-parametric LayerNorm, Gemma-4's V-norm."),
+    feature!("SUBLAYER_NORMS_V1", Norm, "a norm over the attention output before o_proj and/or over the MLP's hidden activation before down_proj", Implemented, [], NoReq, ["fidelity_tiny::bitnet", "hf_fixtures::bitnet"], "BitNet b1.58's attn_sub_norm (RMSNorm over the heads' concatenated output, hidden wide) and ffn_sub_norm (RMSNorm over the gated product, intermediate wide); the sub-LN of MAGNETO/RetNet-style models. The ordinary RMS/LayerNorm lowering over rows: no node of its own kind, no primitive. BitNet's packed ternary storage with per-token int8 activation quantisation is a quant-format question; the bf16-master checkpoint lowers with the sub-norms."),
     feature!("NORM_GROUPED_V1", Norm, "norm over equal groups of a vector", Implemented, [], NoReq, ["fidelity_tiny::qwen3_moe"], "Per-head QK-norm; the streams of a hyper-connection."),
     // ───────────────────────────── positions ─────────────────────────────
     feature!("ROPE_DEFAULT_V1", Position, "rotary position embedding", Implemented, ["Concat", "Slice"], NoReq, ["fidelity_tiny::llama"], "Angles from two pinned tables by angle addition (04b §11.3); half-split pairs rotate by slices."),
@@ -186,6 +187,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("CONV_DEPTHWISE_CAUSAL_V1", Mixer, "depthwise causal convolution (any dilation)", Implemented, ["StateWrite", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::qwen3_5", "fidelity_tiny::mamba", "qwen4_exp::PLE_05_dilated_conv_boundary"], "A window state of (kernel − 1)·dilation rows (zero before the sequence: the left pad); the window is state ++ row and the taps read its rows `dilation` apart through one Gather by a constant index vector (dilation 1 is the library's contiguous template)."),
     // ───────────────────────────── feed-forward ─────────────────────────────
     feature!("MLP_DENSE_GATED_V1", Ffn, "gated MLP", Implemented, [], NoReq, ["fidelity_tiny::llama"], "act(gate)·up, then down."),
+    feature!("ACT_LEARNED_POINTWISE_V1", Ffn, "xIELU: a pointwise activation whose four scalars are the layer's own tensors, lowered as one 65,536-entry table per layer", Implemented, [], NoReq, ["fidelity_tiny::apertus", "hf_fixtures::apertus"], "Apertus' xIELU: y = x > 0 ? softplus(p)*x^2 + beta*x : (expm1(min(x, eps)) - x)*(beta + softplus(n)) + beta*x with p, n, beta, eps the layer's act_fn tensors. Pointwise on the activation's code, so the same Gather of a pinned i16 table as every other activation, the table made at conversion from the layer's scalars (one per layer in the stacked param). Only a dense MLP reads it; anywhere else it is refused by name."),
     feature!("MLP_DENSE_PLAIN_V1", Ffn, "ungated MLP", Implemented, [], NoReq, ["fidelity_tiny::gpt2"], "act(fc1), then fc2."),
     feature!("MLP_GLU_CLAMPED_V1", Ffn, "clamped SwiGLU", Implemented, ["Compare", "Select"], NoReq, ["fidelity_tiny::gpt_oss"], "gpt-oss: (clamp(up) + 1)·g·σ(αg)."),
     feature!("MLP_BIAS_V1", Ffn, "biases on the MLP projections", Implemented, [], NoReq, ["fidelity_tiny::starcoder2"], "up and/or down."),
@@ -408,6 +410,10 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
                 if a.v_scale != 1.0 {
                     u.add("ATTN_VALUE_SCALE_V1", lay, "");
                 }
+                if let Some(n) = &a.o_norm {
+                    u.add("SUBLAYER_NORMS_V1", lay, "the attention output");
+                    norm_features(&mut u, n, lay);
+                }
                 if let Some(q) = &a.qk_norm {
                     u.add("ATTN_QK_NORM_V1", lay, format!("{:?}", q.scope));
                     norm_features(&mut u, &q.norm, lay);
@@ -477,6 +483,13 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
             }
             if m.up_bias || m.down_bias {
                 u.add("MLP_BIAS_V1", lay, "");
+            }
+            if let Some(n) = &m.inner_norm {
+                u.add("SUBLAYER_NORMS_V1", lay, "the MLP's hidden activation");
+                norm_features(u, n, lay);
+            }
+            if m.act == Act::Xielu {
+                u.add("ACT_LEARNED_POINTWISE_V1", lay, "xIELU");
             }
         };
         let moe = |u: &mut Uses, m: &MoeSpec| {

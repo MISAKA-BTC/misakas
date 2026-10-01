@@ -1485,6 +1485,12 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let x = codes(b, cx, lb, &x)?;
             one(lower_table(b, cx, lb, i, &x, TableFn::Act(*a), &site)?)
         }
+        Op::Xielu => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let ps = [pidx(node.inputs[1])?, pidx(node.inputs[2])?, pidx(node.inputs[3])?, pidx(node.inputs[4])?];
+            one(lower_xielu(b, cx, lb, i, &x, ps, &site)?)
+        }
         Op::Softcap { cap } => {
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
@@ -2634,36 +2640,48 @@ impl TableFn {
     }
 }
 
+/// xIELU reads parameters of its layer (`Op::Xielu`): a table of the activation alone would be another function.
+fn refuse_learned_act(f: TableFn) -> Result<()> {
+    if matches!(f, TableFn::Act(Act::Xielu)) {
+        return Err(LowerError::not_lowerable("xIELU is a learned activation: only a dense MLP's reads its parameters"));
+    }
+    Ok(())
+}
+
+/// A table's function, made at fill time (it may read the layer's own float parameters, as xIELU's does).
+type TableMaker = Arc<dyn Fn(&FillCtx<'_>) -> Result<Box<dyn Fn(f64) -> f64 + Send + Sync>> + Send + Sync>;
+
 /// `Table(x; T)`: `Gather(T, Cast_idx(x + 32768))`, `T` the float function on the code grid,
 /// rounded to the output site's codes.
 fn lower_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, x: &Val, f: TableFn, site: &str) -> Result<Val> {
+    refuse_learned_act(f)?;
     // A table has one output scale (its own site's, and any RoPE's that rotates it).
     let mut names = vec![site.to_string()];
     names.extend(lb.rope_sites[i].iter().cloned());
     let out_key = ScaleKey::site(names, false);
-    let (kx, ko) = (x.key.clone(), out_key.clone());
-    let t = decl(
+    table_with(b, cx, lb, x, site, out_key, Arc::new(move |_| Ok(Box::new(move |v| f.eval(v)))))
+}
+
+/// **xIELU** (`ACT_LEARNED_POINTWISE_V1`): the table of `αp·x² + β·x` / `(expm1(min(x, ε)) − x)·αn + β·x` over the code grid, made
+/// from the layer's four scalars `ps` (`p`, `n`, `β`, `ε`: float params read at fill time, so one table per layer in the layer
+/// block's stacked param). A lookup like every other activation: one `Gather` of a 65,536-entry `i16` table.
+fn lower_xielu(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, x: &Val, ps: [u32; 4], site: &str) -> Result<Val> {
+    let mut names = vec![site.to_string()];
+    names.extend(lb.rope_sites[i].iter().cloned());
+    let out_key = ScaleKey::site(names, false);
+    table_with(
         b,
         cx,
         lb,
-        &format!("{site}.table"),
-        DType::I16,
-        &[65536],
-        per_layer(lb),
+        x,
+        site,
+        out_key,
         Arc::new(move |c| {
-            let (sx, so) = (c.scale(&kx)?, c.scale(&ko)?);
-            Ok(IntTensor::i16(
-                vec![65536],
-                (0..65536i64).map(|i| (f.eval((i - 32768) as f64 * sx) / so).round().clamp(-32767.0, 32767.0) as i16).collect(),
-            ))
+            let sc = |p: u32| -> Result<f64> { Ok(c.f(p)?.data[0] as f64) };
+            let (p, n, beta, eps) = (sc(ps[0])?, sc(ps[1])?, sc(ps[2])?, sc(ps[3])?);
+            Ok(Box::new(move |v| crate::float_ref::xielu(v, p, n, beta, eps)))
         }),
-    )?;
-    // `code + 32768` straight into `idx` (every i16 code lands in [0, 65535]).
-    let off = b.c(DType::I32, 32768);
-    let at = b.add(x.r, off, DType::Idx);
-    let r = b.gather(t, at, 0, 0);
-    b.commit(r);
-    Ok(Val { r, dt: DType::I16, key: out_key, len: x.len, site: site.to_string() })
+    )
 }
 
 /// [`lower_table`] for a value that is not an HL node's output (a sub-site of a composite).
@@ -2681,6 +2699,12 @@ fn lower_table_keyed(
     site: &str,
     out_key: ScaleKey,
 ) -> Result<Val> {
+    refuse_learned_act(f)?;
+    table_with(b, cx, lb, x, site, out_key, Arc::new(move |_| Ok(Box::new(move |v| f.eval(v)))))
+}
+
+/// The table param `{site}.table` (the function over the input's code grid, rounded to the output's codes) and its lookup.
+fn table_with(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, site: &str, out_key: ScaleKey, make: TableMaker) -> Result<Val> {
     let (kx, ko) = (x.key.clone(), out_key.clone());
     let t = decl(
         b,
@@ -2692,10 +2716,8 @@ fn lower_table_keyed(
         per_layer(lb),
         Arc::new(move |c| {
             let (sx, so) = (c.scale(&kx)?, c.scale(&ko)?);
-            Ok(IntTensor::i16(
-                vec![65536],
-                (0..65536i64).map(|i| (f.eval((i - 32768) as f64 * sx) / so).round().clamp(-32767.0, 32767.0) as i16).collect(),
-            ))
+            let f = make(c)?;
+            Ok(IntTensor::i16(vec![65536], (0..65536i64).map(|i| (f((i - 32768) as f64 * sx) / so).round().clamp(-32767.0, 32767.0) as i16).collect()))
         }),
     )?;
     // `code + 32768` straight into `idx` (every i16 code lands in [0, 65535]).

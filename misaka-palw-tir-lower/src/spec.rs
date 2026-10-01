@@ -128,6 +128,11 @@ pub enum Act {
     Identity,
     /// `sign(x)·√max(|x|, 10⁻⁶)` — the gate of Qwen4-Exp's n-gram embedding.
     SignedSqrt,
+    /// **xIELU** (Apertus, `ACT_LEARNED_POINTWISE_V1`; NOT in [`Act::from_hf`]: an adapter that knows its four tensors names it
+    /// by this variant, every other reader still refuses `hidden_act = "xielu"` by name): `x > 0 ? αp·x² + β·x : (expm1(min(x, ε)) − x)·αn + β·x` with
+    /// `αp = softplus(p)`, `αn = β + softplus(n)` and `p`, `n`, `β`, `ε` the layer's own tensors. It reads parameters, so only a
+    /// dense MLP lowers it (`Op::Xielu`); anywhere else it is refused by name — `float_ref::act` of it is NaN, never a number.
+    Xielu,
 }
 
 impl Act {
@@ -212,6 +217,10 @@ pub struct AttnSpec {
     /// history keeps the normed, rotated key either way.
     #[serde(default, skip_serializing_if = "is_false")]
     pub qk_norm_after_rope: bool,
+    /// **`SUBLAYER_NORMS_V1`**: a norm over the attention output (all heads concatenated) before `o_proj` — BitNet's
+    /// `attn_sub_norm` (`RMSNorm(hidden)`), the sub-LN of MAGNETO/RetNet-style models. Tensors `attn.sub_norm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub o_norm: Option<NormSpec>,
     /// `clamp(q|k|v, −c, c)` after projection (OLMo `clip_qkv`, MPT).
     #[serde(default)]
     pub clip_qkv: Option<f64>,
@@ -527,6 +536,10 @@ pub struct MlpSpec {
     pub up_bias: bool,
     #[serde(default)]
     pub down_bias: bool,
+    /// **`SUBLAYER_NORMS_V1`**: a norm over the hidden activation (the gated product, or the activation of a plain MLP) before
+    /// `down_proj` — BitNet's `ffn_sub_norm` (`RMSNorm(intermediate)`). Tensors `mlp.sub_norm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inner_norm: Option<NormSpec>,
     /// The HL name of the MLP's params (`mlp` unless given): layers whose MLPs differ in width
     /// (Gemma-4's double-wide KV-sharing layers, Gemma-3n's per-layer widths) need their own.
     #[serde(default)]

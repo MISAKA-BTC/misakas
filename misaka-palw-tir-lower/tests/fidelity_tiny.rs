@@ -116,6 +116,8 @@ dense!(
     gemma4_kvshare,
     cohere,
     cohere2,
+    bitnet,
+    apertus,
     stablelm,
     stablelm_parallel,
     starcoder2,

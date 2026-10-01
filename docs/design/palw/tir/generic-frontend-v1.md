@@ -579,6 +579,34 @@ op to the CNN spec composed of the same primitives (a `ReduceSum` over positions
 group), none a primitive; grouped convolutions are refused by name today. Weight-standardised convolutions and GroupNorm (BiT) are
 the same kind of composition.
 
+### 9.10 A learned pointwise activation and the sub-layer norms (`ACT_LEARNED_POINTWISE_V1`, `SUBLAYER_NORMS_V1`; FR-05, FR-03)
+
+Two corpus families, `apertus` and `bitnet`, lower as data with no primitive and no court kernel.
+
+**xIELU** (`Act::Xielu`, `Op::Xielu`; Apertus). `y = x > 0 ? αp·x² + β·x : (expm1(min(x, ε)) − x)·αn + β·x` with `αp = softplus(p)`,
+`αn = β + softplus(n)` and `p`, `n`, `β`, `ε` the layer's own tensors (`mlp.act_fn.{alpha_p, alpha_n, beta, eps}`: two `[1]` parameters and
+two 0-dimensional buffers, bound as `[1]`). It is pointwise on the activation's code, so it is the table every other activation is — one
+`Gather` of a pinned 65,536-entry `i16` table — except that the table is made at conversion from the layer's four scalars: a table PER
+LAYER in the layer block's stacked param (`tests/learned_act_and_sublayer_norms.rs` holds that two layers' tables differ). It is the only
+activation with parameters, so it is its own HL op (`Op::Xielu`, five inputs) and only a dense MLP builds it; in a clamped SwiGLU, a head
+transform, a per-layer embedding gate, an attention output gate or an expert MLP it would be another function, so each is refused by
+name, and it is NOT in `Act::from_hf`: only an adapter that knows its four tensors (`apertus.json`, which names it by variant) can use it,
+and the Level A template and every other reader still refuse `hidden_act = "xielu"`.
+
+**Sub-layer norms** (`AttnSpec.o_norm`, `MlpSpec.inner_norm`; BitNet b1.58). An RMSNorm over the attention output (the heads'
+concatenation, hidden wide) before `o_proj` and one over the gated product (intermediate wide) before `down_proj`
+(`self_attn.attn_sub_norm`, `mlp.ffn_sub_norm`): the ordinary norm lowering over rows at two more sites; the sub-LN of MAGNETO/RetNet
+style models is the same feature. The released 1.58-bit checkpoint's packed ternary storage (uint8 weights, `weight_scale`, per-token int8
+activations) is a quantised-storage question and is not read here: the bf16-master checkpoint lowers, the packed one fails to bind by name.
+
+**Evidence.** Tiny HF models (`tests/fixtures/hf/{bitnet,apertus}`, bf16-exact random weights): the float reference matches transformers to
+`1.3·10⁻⁶` (BitNet) and `1.5·10⁻⁶` (Apertus) on logits of scale 2.9; the integer program agrees on the top-1 id at 0.93 (BitNet) and 0.99
+(Apertus) of positions with a mean KL of `1.0·10⁻⁴` and `6·10⁻⁵` (perplexity +0.01 % and +0.03 %); the three implementations are
+bit-identical; the court reproduces every node of every occurrence from the committed leaves (BitNet 2,049 nodes and 105 committed
+values, Apertus 1,893 and 93, 17 primitives each, all evaluated). The real configurations (BitNet b1.58-2B-4T, Apertus-8B-2509) are Level
+B and ADMITTED at a 4,096-position window: BitNet 358 nodes, 3.05·10⁹ MACs, 28,784 step leaves, cone work 970; Apertus 341 nodes,
+8.6·10⁹ MACs (24.7·10⁹ at its 65,536 window), 42,112 step leaves, cone work 923.
+
 ## 10. The gates that keep it honest
 
 | gate | what it holds |

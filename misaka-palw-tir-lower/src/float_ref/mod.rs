@@ -454,6 +454,11 @@ impl<'a> Session<'a> {
             }
             Op::Scale { c } => one(x(0)?.iter().map(|v| (*v as f64 * c) as f32).collect()),
             Op::Act(a) => one(x(0)?.iter().map(|v| act(*a, *v)).collect()),
+            Op::Xielu => {
+                let sc = |i: usize| -> Result<f64> { Ok(self.param(ins[i], layer)?.data[0] as f64) };
+                let (p, n, beta, eps) = (sc(1)?, sc(2)?, sc(3)?, sc(4)?);
+                one(x(0)?.iter().map(|v| xielu(*v as f64, p, n, beta, eps) as f32).collect())
+            }
             Op::Clamp { lo, hi } => one(x(0)?.iter().map(|v| (*v as f64).clamp(*lo, *hi) as f32).collect()),
             Op::Softcap { cap } => one(x(0)?.iter().map(|v| ((*v as f64 / cap).tanh() * cap) as f32).collect()),
             Op::Lerp => {
@@ -924,6 +929,24 @@ pub fn erf(x: f64) -> f64 {
     if x < 0.0 { -r } else { r }
 }
 
+/// **xIELU** with the layer's scalars: `αp = softplus(p)`, `αn = β + softplus(n)`, `y = x > 0 ? αp·x² + β·x :
+/// (expm1(min(x, ε)) − x)·αn + β·x` (`activations.py:XIELUActivation._xielu_python`; softplus at torch's threshold of 20).
+pub fn xielu(x: f64, p: f64, n: f64, beta: f64, eps: f64) -> f64 {
+    let softplus = |v: f64| if v > 20.0 { v } else { crate::detmath::ln_1p(crate::detmath::exp(v)) };
+    let (alpha_p, alpha_n) = (softplus(p), beta + softplus(n));
+    if x > 0.0 {
+        alpha_p * x * x + beta * x
+    } else {
+        let z = x.min(eps);
+        (expm1(z) - x) * alpha_n + beta * x
+    }
+}
+
+/// `exp(z) − 1`, accurate near 0 (a series below 1e-5, where the difference of two nearly equal numbers loses digits).
+fn expm1(z: f64) -> f64 {
+    if z.abs() < 1e-5 { z * (1.0 + z * (0.5 + z / 6.0)) } else { crate::detmath::exp(z) - 1.0 }
+}
+
 pub fn act(a: Act, v: f32) -> f32 {
     let x = v as f64;
     let sig = |z: f64| 1.0 / (1.0 + crate::detmath::exp(-z));
@@ -952,6 +975,8 @@ pub fn act(a: Act, v: f32) -> f32 {
             }
         }
         Act::Identity => x,
+        // xIELU reads the layer's parameters (`Op::Xielu`); an activation of the input alone is none (the lowering refuses it).
+        Act::Xielu => f64::NAN,
         // torch: `x.abs().clamp_min(1e-6).sqrt() * x.sign()`
         Act::SignedSqrt => {
             let sign = if x > 0.0 {

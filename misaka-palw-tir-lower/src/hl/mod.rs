@@ -154,6 +154,9 @@ pub enum Op {
     },
     /// `x · p[0]` for a learned per-layer scalar `p` (Gemma-4's `layer_scalar`). In: `[x, p [1]]`.
     ScaleParam,
+    /// **xIELU** (`ACT_LEARNED_POINTWISE_V1`, Apertus): `x > 0 ? αp·x² + β·x : (expm1(min(x, ε)) − x)·αn + β·x` with
+    /// `αp = softplus(p)` and `αn = β + softplus(n)`, the layer's own scalars. In: `[x, p [1], n [1], β [1], ε [1]]`.
+    Xielu,
     // ── history (Hist states) ──
     /// Append a row to a `Hist` state. In: `[x, State]`.
     HistAppend,
@@ -363,6 +366,7 @@ impl Op {
             Op::BlockSelect { .. } => "BlockSelect",
             Op::PosScale { .. } => "PosScale",
             Op::ScaleParam => "ScaleParam",
+            Op::Xielu => "Xielu",
             Op::HistAppend => "HistAppend",
             Op::Attention { .. } => "Attention",
             Op::MlaAttention { .. } => "MlaAttention",

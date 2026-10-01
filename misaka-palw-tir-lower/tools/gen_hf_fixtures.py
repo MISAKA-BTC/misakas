@@ -130,6 +130,14 @@ CONFIGS = {
                                       "original_max_position_embeddings": 4, "max_position_embeddings": 64,
                                       "beta_fast": 32.0, "beta_slow": 1.0, "mscale_all_dim": 1.0, "mscale": 1.0,
                                       "llama_4_scaling_beta": 0.5}), {}),
+    # BitNet b1.58 (bf16 master): ReLU^2 gated MLP and the two sub-layer norms (SUBLAYER_NORMS_V1).
+    "bitnet": (c("bitnet", "BitNetForCausalLM", L, num_hidden_layers=2, hidden_act="relu2", head_dim=8,
+                 rope_parameters={"rope_type": "default", "rope_theta": 500000.0}, max_position_embeddings=128), {}),
+    # Apertus: xIELU (the layer's own alpha_p, alpha_n, beta, eps), q/k norm, llama3 rope (ACT_LEARNED_POINTWISE_V1).
+    "apertus": (c("apertus", "ApertusForCausalLM", L, num_hidden_layers=2, hidden_act="xielu", head_dim=8,
+                  rope_parameters={"rope_type": "llama3", "rope_theta": 12000000.0, "factor": 8.0, "low_freq_factor": 1.0,
+                                   "high_freq_factor": 4.0, "original_max_position_embeddings": 16},
+                  max_position_embeddings=128), {}),
     "cohere": (c("cohere", "CohereForCausalLM", L, num_hidden_layers=2, use_qk_norm=True, logit_scale=0.5), {}),
     "cohere2": (c("cohere2", "Cohere2ForCausalLM", L, num_hidden_layers=4, head_dim=8, sliding_window=4,
                   layer_types=["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"]), {}),
