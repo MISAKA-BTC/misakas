@@ -1,0 +1,21 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "olmoe",
+  "doc": "OLMoE: OLMo-2-style whole-projection QK RMS norm, pre-norm residual, softmax top-8 of 64, optional clip_qkv.",
+  "extends": ["standard-decoder"],
+  "match": {"architectures": ["OlmoeForCausalLM"], "model_types": ["olmoe"]},
+  "config": {"defaults": {"vocab_size": 50304, "hidden_size": 2048, "intermediate_size": 2048, "num_hidden_layers": 16, "num_attention_heads": 16, "max_position_embeddings": 4096, "rms_norm_eps": 1e-05, "norm_topk_prob": false, "num_experts_per_tok": 8}},
+  "vars": [
+    {"name": "e", "value": {"$alias": [["num_experts", "num_local_experts"], 64]}},
+    {"name": "k", "value": {"$cfg": "num_experts_per_tok"}},
+    {"name": "topk_ok", "value": {"$bad": [{"$and": [{"$gt": [{"$var": "k"}, 0]}, {"$le": [{"$var": "k"}, {"$var": "e"}]}]}, {"$cat": ["top-k ", {"$var": "k"}, " of ", {"$var": "e"}, " experts"]}]}},
+    {"name": "norm_topk", "value": {"$cfg": "norm_topk_prob"}},
+    {"name": "clip", "value": {"$cfg?": "clip_qkv"}},
+    {"name": "qk_norm", "value": {"norm": {"kind": "Rms", "eps": {"$var": "eps"}, "gain": "W", "bias": false}, "scope": "Whole"}},
+    {"name": "attn_extra", "value": {"clip_qkv": {"$var": "clip"}}},
+    {"name": "l_ffn", "value": {"Moe": {"experts": {"$var": "e"}, "top_k": {"$var": "k"}, "intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "router": {"scoring": "Softmax", "normalize": {"$var": "norm_topk"}}}}, "layer": true},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"moe.router": "{p}layers.{L}.mlp.gate", "moe.gate": "{p}layers.{L}.mlp.experts.{E}.gate_proj", "moe.up": "{p}layers.{L}.mlp.experts.{E}.up_proj", "moe.down": "{p}layers.{L}.mlp.experts.{E}.down_proj"}]}},
+    {"name": "families", "value": ["C3", "C8"]},
+    {"name": "model_type", "value": "olmoe"}
+  ]
+}

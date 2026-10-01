@@ -1,0 +1,24 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "phi3",
+  "doc": "Phi-3 / 3.5 / 4 / 4-mini: fused qkv_proj and gate_up_proj, partial rotary, LongRoPE with the top-level original_max_position_embeddings, optional sliding window on every layer.",
+  "extends": ["standard-decoder"],
+  "match": {"architectures": ["Phi3ForCausalLM"], "model_types": ["phi3"]},
+  "remote_code": ["modeling_phi3.Phi3ForCausalLM"],
+  "config": {"defaults": {"vocab_size": 32064, "hidden_size": 3072, "intermediate_size": 8192, "max_position_embeddings": 4096, "original_max_position_embeddings": 4096, "rms_norm_eps": 1e-05, "partial_rotary_factor": 1.0}},
+  "vars": [
+    {"name": "orig", "value": {"$cfg": "original_max_position_embeddings"}},
+    {"name": "partial", "value": {"$cfg": "partial_rotary_factor"}},
+    {"name": "sw", "value": {"$cfg?": "sliding_window"}},
+    {"name": "types", "value": {"$repeat": ["sliding_attention", {"$var": "n"}]}},
+    {"name": "rope_dim", "value": {"$floor": {"$mul": [{"$var": "hd"}, {"$var": "partial"}]}}},
+    {"name": "rope_partial", "value": {"$var": "partial"}},
+    {"name": "rope", "value": {"$rope": {"dim": {"$var": "rope_dim"}, "style": "Half", "theta": {"$var": "rope_theta"}, "partial": {"$var": "rope_partial"}, "max_pos": {"$var": "max_pos"}, "top_orig": {"$var": "orig"}}}},
+    {"name": "abias", "value": false},
+    {"name": "mbias", "value": false},
+    {"name": "qkv_layout", "value": "FusedConcat"},
+    {"name": "mlp_layout", "value": "FusedGateFirst"},
+    {"name": "names", "value": {"embed": "{p}embed_tokens", "final_norm": "{p}norm", "lm_head": {"$if": [{"$var": "tied"}, "{p}embed_tokens", "lm_head"]}, "norm.mix": "{p}layers.{L}.input_layernorm", "norm.ffn": "{p}layers.{L}.post_attention_layernorm", "attn.qkv": "{p}layers.{L}.self_attn.qkv_proj", "attn.o": "{p}layers.{L}.self_attn.o_proj", "mlp.gate_up": "{p}layers.{L}.mlp.gate_up_proj", "mlp.down": "{p}layers.{L}.mlp.down_proj"}},
+    {"name": "model_type", "value": "phi3"}
+  ]
+}

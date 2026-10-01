@@ -1,0 +1,25 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "stablelm",
+  "doc": "StableLM (2 and 3B-4E1T): LayerNorm, partial rotary (default 0.25), optional per-head QK LayerNorm, optional parallel residual, bias on q/k/v only when use_qkv_bias.",
+  "extends": ["standard-decoder"],
+  "match": {"architectures": ["StableLmForCausalLM"], "model_types": ["stablelm"]},
+  "config": {"defaults": {"vocab_size": 50304, "hidden_size": 2560, "intermediate_size": 6912, "num_key_value_heads": 32, "max_position_embeddings": 4096, "layer_norm_eps": 1e-05, "partial_rotary_factor": 0.25, "use_qkv_bias": false, "qk_layernorm": false, "use_parallel_residual": false}},
+  "vars": [
+    {"name": "eps", "value": {"$cfg": "layer_norm_eps"}},
+    {"name": "qkv_bias", "value": {"$cfg": "use_qkv_bias"}},
+    {"name": "o_bias", "value": false},
+    {"name": "abias", "value": false},
+    {"name": "qk_ln", "value": {"$cfg": "qk_layernorm"}},
+    {"name": "parallel", "value": {"$cfg": "use_parallel_residual"}},
+    {"name": "partial", "value": {"$cfg": "partial_rotary_factor"}},
+    {"name": "rope_dim", "value": {"$floor": {"$mul": [{"$var": "hd"}, {"$var": "partial"}]}}},
+    {"name": "rope_partial", "value": {"$var": "partial"}},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}},
+    {"name": "qk_norm", "value": {"$if": [{"$var": "qk_ln"}, {"norm": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": false}, "scope": "PerHeadSeparate"}, null]}},
+    {"name": "residual", "value": {"$if": [{"$var": "parallel"}, {"Parallel": {"norm": {"$var": "norm"}, "ffn_norm": null}}, {"Sequential": {"pre_mixer": {"$var": "norm"}, "post_mixer": null, "pre_ffn": {"$var": "norm"}, "post_ffn": null, "multiplier": 1.0}}]}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"attn.q_norm": "{p}layers.{L}.self_attn.q_layernorm.norms.{H}", "attn.k_norm": "{p}layers.{L}.self_attn.k_layernorm.norms.{H}"}]}},
+    {"name": "families", "value": ["C1"]},
+    {"name": "model_type", "value": "stablelm"}
+  ]
+}

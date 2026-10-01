@@ -1,0 +1,25 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "gpt-neox",
+  "doc": "GPT-NeoX / Pythia: per-head interleaved query_key_value, partial rotary (rotary_pct), parallel residual with TWO LayerNorms (or sequential), biased MLP.",
+  "extends": ["standard-decoder"],
+  "match": {"architectures": ["GPTNeoXForCausalLM"], "model_types": ["gpt_neox"]},
+  "config": {"defaults": {"vocab_size": 50432, "hidden_size": 6144, "intermediate_size": 24576, "num_hidden_layers": 44, "num_attention_heads": 64, "hidden_act": "gelu", "max_position_embeddings": 2048, "layer_norm_eps": 1e-05, "use_parallel_residual": true, "attention_bias": true}},
+  "vars": [
+    {"name": "kv_ok", "value": {"$check": [{"$eq": [{"$var": "kv"}, {"$var": "heads"}]}, "num_key_value_heads ≠ heads"]}},
+    {"name": "eps", "value": {"$cfg": "layer_norm_eps"}},
+    {"name": "parallel", "value": {"$cfg": "use_parallel_residual"}},
+    {"name": "partial", "value": {"$partial_rotary": {"legacy": ["rotary_pct", "partial_rotary_factor"], "default": 0.25}}},
+    {"name": "rope_theta", "value": {"$let": ["t", {"$cfg?": "rotary_emb_base"}, {"$if": [{"$ne": [{"$var": "t"}, null]}, {"$var": "t"}, 10000.0]}]}},
+    {"name": "rope_dim", "value": {"$floor": {"$mul": [{"$var": "hd"}, {"$var": "partial"}]}}},
+    {"name": "rope_partial", "value": {"$var": "partial"}},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}},
+    {"name": "mbias", "value": true},
+    {"name": "mlp_gated", "value": false},
+    {"name": "qkv_layout", "value": "FusedPerHead"},
+    {"name": "residual", "value": {"$if": [{"$var": "parallel"}, {"Parallel": {"norm": {"$var": "norm"}, "ffn_norm": {"$var": "norm"}}}, {"Sequential": {"pre_mixer": {"$var": "norm"}, "post_mixer": null, "pre_ffn": {"$var": "norm"}, "post_ffn": null, "multiplier": 1.0}}]}},
+    {"name": "names", "value": {"embed": "gpt_neox.embed_in", "final_norm": "gpt_neox.final_layer_norm", "lm_head": {"$if": [{"$var": "tied"}, "gpt_neox.embed_in", "embed_out"]}, "norm.mix": "gpt_neox.layers.{L}.input_layernorm", "norm.ffn": "gpt_neox.layers.{L}.post_attention_layernorm", "attn.qkv": "gpt_neox.layers.{L}.attention.query_key_value", "attn.o": "gpt_neox.layers.{L}.attention.dense", "mlp.up": "gpt_neox.layers.{L}.mlp.dense_h_to_4h", "mlp.down": "gpt_neox.layers.{L}.mlp.dense_4h_to_h"}},
+    {"name": "families", "value": ["C1"]},
+    {"name": "model_type", "value": "gpt_neox"}
+  ]
+}

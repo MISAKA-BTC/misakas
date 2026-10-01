@@ -18,7 +18,7 @@ mod moe;
 
 use crate::cfg::Cfg;
 use crate::error::{LowerError, Result};
-use crate::rope::{RopeContext, RopeSpec, RopeStyle, compute_freqs, read_rope_config};
+use crate::rope::{RopeSpec, RopeStyle};
 use crate::spec::*;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -169,7 +169,7 @@ pub fn parse_config_str(text: &str) -> Result<ArchSpec> {
     parse_config(&v)
 }
 
-fn remote_module(auto_map: &Map<String, Value>) -> Option<String> {
+pub(crate) fn remote_module(auto_map: &Map<String, Value>) -> Option<String> {
     let v = auto_map.get("AutoModelForCausalLM").or_else(|| auto_map.get("AutoModel"))?;
     let s = match v {
         Value::String(s) => s.clone(),
@@ -198,7 +198,22 @@ const MODELLED_REMOTE: &[(&str, &[&str])] = &[
 const REMOTE_ONLY: &[&str] =
     &["InternLM2ForCausalLM", "MiniCPMForCausalLM", "ExaoneForCausalLM", "RWForCausalLM", "Rwkv5ForCausalLM", "Rwkv6ForCausalLM"];
 
+/// Does a Rust parser still serve this architecture (it is being converted to adapter data files)?
+pub(crate) fn knows(arch: &str) -> bool {
+    SUPPORTED.iter().any(|(a, _)| *a == arch)
+        || matches!(arch, "Rwkv5ForCausalLM" | "Rwkv6ForCausalLM" | "RWKV7ForCausalLM" | "Qwen2VLForConditionalGeneration" | "Qwen2_5_VLForConditionalGeneration")
+}
+
+/// A configuration through the schema reader ([`crate::hf_schema::read_model`]) with no tensor index
+/// and the default adapter choice.
 pub fn parse_config(v: &Value) -> Result<ArchSpec> {
+    crate::hf_schema::read_model(v, None, &crate::hf_schema::ReadOptions::default()).map(|r| r.spec).map_err(|f| f.error)
+}
+
+/// The per-architecture Rust parsers: the Level B path while its families are being converted into
+/// adapter data files ([`crate::hf_schema`]).
+#[doc(hidden)]
+pub fn parse_legacy(v: &Value) -> Result<ArchSpec> {
     let root = v.as_object().ok_or_else(|| LowerError::bad("config.json is not an object"))?;
     let arch = match root.get("architectures") {
         Some(Value::Array(a)) if !a.is_empty() => {
@@ -604,43 +619,7 @@ impl P<'_> {
         top_orig: Option<usize>,
         q_scaled: bool,
     ) -> Result<(RopeSpec, Option<QTemperature>)> {
-        let mut rc = read_rope_config(&self.cfg, theta_default, layer_type)?;
-        let beta = match rc.params.remove("llama_4_scaling_beta") {
-            None | Some(Value::Null) => None,
-            Some(v) => Some(v.as_f64().ok_or_else(|| LowerError::bad(format!("{}: llama_4_scaling_beta {v}", self.cfg.arch)))?),
-        };
-        if beta.is_some() && !q_scaled {
-            return Err(LowerError::not_lowerable(format!(
-                "{}: llama_4_scaling_beta (a query scaling) on an architecture that does not apply it",
-                self.cfg.arch
-            )));
-        }
-        // transformers 5 also keeps the model's own length among the rope parameters.
-        if let Some(v) = rc.params.remove("max_position_embeddings")
-            && v.as_u64().map(|m| m as usize) != max_pos
-        {
-            return Err(LowerError::bad(format!("{}: rope_parameters.max_position_embeddings {v} ≠ {max_pos:?}", self.cfg.arch)));
-        }
-        let temp = match beta {
-            Some(b) => {
-                let floor = rc.params.get("original_max_position_embeddings").and_then(Value::as_u64).ok_or_else(|| {
-                    LowerError::bad(format!("{}: llama_4_scaling_beta without original_max_position_embeddings", self.cfg.arch))
-                })?;
-                Some(QTemperature { floor: floor as usize, scale: b, offset: 0 })
-            }
-            None => None,
-        };
-        let freqs = compute_freqs(
-            &self.cfg.arch,
-            &rc,
-            RopeContext {
-                dim: rotary_dim,
-                max_position_embeddings: max_pos,
-                top_level_original_max: top_orig,
-                partial_rotary_factor: partial,
-            },
-        )?;
-        Ok((RopeSpec { rotary_dim, offset: 0, style, freqs }, temp))
+        crate::rope::rope_spec_from_config(&self.cfg, rotary_dim, style, theta_default, layer_type, partial, max_pos, top_orig, q_scaled)
     }
 
     pub fn finish_spec(&mut self, s: SpecParts) -> ArchSpec {
@@ -648,7 +627,7 @@ impl P<'_> {
         ArchSpec {
             architecture: self.cfg.arch.clone(),
             model_type: s.model_type.to_string(),
-            families: s.families,
+            families: s.families.into_iter().map(String::from).collect(),
             reference: self.reference.clone(),
             confidence,
             vocab_size: s.vocab,
@@ -658,6 +637,7 @@ impl P<'_> {
             layers: s.layers,
             final_norm: s.final_norm,
             head: s.head,
+            hyper: None,
             output: OutputSpec::Logits,
             adapter: None,
             hf: HfStorage {
@@ -789,6 +769,7 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         v_from_k: false,
         param_prefix: None,
         kv_share: None,
+        sparse: None,
     }
 }
 

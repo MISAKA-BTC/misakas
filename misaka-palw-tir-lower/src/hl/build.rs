@@ -481,6 +481,9 @@ impl Builder<'_> {
                 }
                 h
             }
+            Residual::HyperConnection { .. } => {
+                return Err(LowerError::not_lowerable("RESIDUAL_GATED_HC_V1: the generic lowerer of hyper-connections is not in this build"));
+            }
         };
         if ls.post_scale != 1.0 {
             h = bk.f(Op::Scale { c: ls.post_scale }, vec![h], d, "resid.rescaled");

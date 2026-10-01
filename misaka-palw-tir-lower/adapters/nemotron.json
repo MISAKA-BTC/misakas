@@ -1,0 +1,19 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "nemotron",
+  "doc": "Nemotron (Minitron): LayerNorm1P `(1+w)·x̂ + b`, squared-ReLU ungated MLP, partial rotary (default 0.5).",
+  "extends": ["standard-decoder"],
+  "match": {"architectures": ["NemotronForCausalLM"], "model_types": ["nemotron"]},
+  "config": {"defaults": {"vocab_size": 256000, "hidden_size": 6144, "intermediate_size": 24576, "num_attention_heads": 48, "hidden_act": "relu2", "max_position_embeddings": 4096, "norm_eps": 1e-05, "partial_rotary_factor": 0.5}},
+  "vars": [
+    {"name": "eps", "value": {"$cfg": "norm_eps"}},
+    {"name": "partial", "value": {"$cfg": "partial_rotary_factor"}},
+    {"name": "rope_dim", "value": {"$floor": {"$mul": [{"$var": "hd"}, {"$var": "partial"}]}}},
+    {"name": "rope_partial", "value": {"$var": "partial"}},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "OnePlusW", "bias": true}},
+    {"name": "mlp_gated", "value": false},
+    {"name": "names", "value": {"$omit": [{"$var": "names_base"}, ["mlp.gate"]]}},
+    {"name": "families", "value": ["C1"]},
+    {"name": "model_type", "value": "nemotron"}
+  ]
+}

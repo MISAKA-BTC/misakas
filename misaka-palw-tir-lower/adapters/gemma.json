@@ -1,0 +1,17 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "gemma",
+  "doc": "Gemma-1: (1+w) RMSNorm, sqrt(d) embedding scale, GeGLU, tied head. transformers 5 reads hidden_act for Gemma-1 (4.40-4.4x read hidden_activation); a disagreement is flagged.",
+  "extends": ["standard-decoder", "mixin-gemma"],
+  "match": {"architectures": ["GemmaForCausalLM"], "model_types": ["gemma"]},
+  "config": {"defaults": {"vocab_size": 256000, "hidden_size": 3072, "intermediate_size": 24576, "num_hidden_layers": 28, "num_attention_heads": 16, "num_key_value_heads": 16, "max_position_embeddings": 8192, "hidden_act": "gelu_pytorch_tanh"}},
+  "vars": [
+    {"name": "act_name", "value": {"$cfg": "hidden_act"}},
+    {"name": "act_other", "value": {"$cfg?": "hidden_activation"}},
+    {"name": "act", "value": {"$act": {"$var": "act_name"}}},
+    {"name": "act_note", "value": {"$if": [{"$and": [{"$ne": [{"$var": "act_other"}, null]}, {"$ne": [{"$var": "act_other"}, {"$var": "act_name"}]}]}, {"Unsure": [{"$cat": ["Gemma: `", "hidden_act", "`=", {"$var": "act_name"}, " is used (transformers 5); `", "hidden_activation", "`=", {"$var": "act_other"}, " disagrees and older transformers may have used it"]}]}, "Known"]}},
+    {"name": "families", "value": ["C1"]},
+    {"name": "model_type", "value": "gemma"}
+  ],
+  "spec": {"confidence": {"$var": "act_note"}}
+}

@@ -1,0 +1,18 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "exaone4",
+  "doc": "EXAONE 4.0: post-norms (OLMo-2 style), per-head QK-norm, 3:1 sliding/global with NoPE globals when sliding_window is set.",
+  "extends": ["standard-decoder", "mixin-post-norm"],
+  "match": {"architectures": ["Exaone4ForCausalLM"], "model_types": ["exaone4"]},
+  "config": {"defaults": {"vocab_size": 102400, "intermediate_size": 16384, "num_key_value_heads": 32, "rms_norm_eps": 1e-05}},
+  "vars": [
+    {"name": "sw", "value": {"$cfgn": ["sliding_window", 4096]}},
+    {"name": "pattern", "value": {"$cfg": ["sliding_window_pattern", 4]}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "sliding_attention"], "each": {"$if": [{"$and": [{"$ne": [{"$var": "sw"}, null]}, {"$ne": [{"$mod": [{"$add": [{"$var": "i"}, 1]}, {"$var": "pattern"}]}, 0]}]}, "sliding_attention", "full_attention"]}}}},
+    {"name": "qk_norm", "value": {"norm": {"kind": "Rms", "eps": {"$var": "eps"}, "gain": "W", "bias": false}, "scope": "PerHeadShared"}},
+    {"name": "l_position", "value": {"$if": [{"$or": [{"$eq": [{"$var": "sw"}, null]}, {"$eq": [{"$index": [{"$var": "types"}, {"$var": "i"}]}, "sliding_attention"]}]}, {"Rope": {"$var": "rope"}}, "None"]}, "layer": true},
+    {"name": "families", "value": ["C1", "C2"]},
+    {"name": "model_type", "value": "exaone4"}
+  ],
+  "spec": {"confidence": {"Unsure": ["EXAONE-4 wiring (post-norm only, NoPE on global layers when sliding_window is set) as recalled from modeling_exaone4.py"]}}
+}

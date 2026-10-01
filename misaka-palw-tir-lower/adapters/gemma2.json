@@ -1,0 +1,28 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "gemma2",
+  "doc": "Gemma-2: Gemma-1 plus sandwich norms, alternating sliding/global layers, score and logit soft-caps and query_pre_attn_scalar.",
+  "extends": ["standard-decoder", "mixin-gemma"],
+  "match": {"architectures": ["Gemma2ForCausalLM"], "model_types": ["gemma2"]},
+  "config": {"defaults": {"vocab_size": 256000, "hidden_size": 2304, "intermediate_size": 9216, "num_hidden_layers": 26, "num_attention_heads": 8, "num_key_value_heads": 4, "max_position_embeddings": 8192, "hidden_activation": "gelu_pytorch_tanh", "query_pre_attn_scalar": 256.0, "sliding_window": 4096, "final_logit_softcapping": 30.0, "attn_logit_softcapping": 50.0}, "inert": ["cache_implementation"]},
+  "vars": [
+    {"name": "act_name", "value": {"$cfg": "hidden_activation"}},
+    {"name": "act_other", "value": {"$cfg?": "hidden_act"}},
+    {"name": "act", "value": {"$act": {"$var": "act_name"}}},
+    {"name": "act_note", "value": {"$if": [{"$and": [{"$ne": [{"$var": "act_other"}, null]}, {"$ne": [{"$var": "act_other"}, {"$var": "act_name"}]}]}, {"Unsure": [{"$cat": ["Gemma: `", "hidden_activation", "`=", {"$var": "act_name"}, " is used (transformers 5); `", "hidden_act", "`=", {"$var": "act_other"}, " disagrees and older transformers may have used it"]}]}, "Known"]}},
+    {"name": "qpas", "value": {"$cfg": "query_pre_attn_scalar"}},
+    {"name": "attn_scale", "value": {"$div": [1.0, {"$sqrt": {"$var": "qpas"}}]}},
+    {"name": "sw", "value": {"$cfgn": "sliding_window"}},
+    {"name": "sw_legacy", "value": {"$let": ["a", {"$cfg?": "sliding_window_size"}, {"$check": [{"$or": [{"$eq": [{"$var": "a"}, null]}, {"$eq": [{"$var": "a"}, {"$var": "sw"}]}]}, {"$cat": ["legacy sliding_window_size ", {"$var": "a"}, " disagrees with sliding_window ", {"$var": "sw"}]}]}]}},
+    {"name": "final_cap", "value": {"$cfgn": "final_logit_softcapping"}},
+    {"name": "attn_cap", "value": {"$cfgn": "attn_logit_softcapping"}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "sliding_attention"], "each": {"$if": [{"$ne": [{"$mod": [{"$add": [{"$var": "i"}, 1]}, 2]}, 0]}, "sliding_attention", "full_attention"]}}}},
+    {"name": "attn_extra", "value": {"softcap": {"$var": "attn_cap"}}},
+    {"name": "residual", "value": {"Sequential": {"pre_mixer": {"$var": "norm"}, "post_mixer": {"$var": "norm"}, "pre_ffn": {"$var": "norm"}, "post_ffn": {"$var": "norm"}, "multiplier": 1.0}}},
+    {"name": "head", "value": {"tied": {"$var": "tied"}, "softcap": {"$var": "final_cap"}}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"norm.post_mix": "{p}layers.{L}.post_attention_layernorm", "norm.ffn": "{p}layers.{L}.pre_feedforward_layernorm", "norm.post_ffn": "{p}layers.{L}.post_feedforward_layernorm"}]}},
+    {"name": "families", "value": ["C1", "C2"]},
+    {"name": "model_type", "value": "gemma2"}
+  ],
+  "spec": {"confidence": {"$var": "act_note"}}
+}

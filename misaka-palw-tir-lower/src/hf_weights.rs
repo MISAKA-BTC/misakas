@@ -236,6 +236,9 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
                 m.put("layer.scalar", Src::t(m.role("layer.scalar")?))?;
             }
         }
+        Residual::HyperConnection { .. } => {
+            return Err(LowerError::not_lowerable("RESIDUAL_GATED_HC_V1: no weight binding yet (the generic lowerer of hyper-connections is not in this build)"));
+        }
     }
     match &ls.mixer {
         Mixer::Attention(a) => attention(m, a)?,

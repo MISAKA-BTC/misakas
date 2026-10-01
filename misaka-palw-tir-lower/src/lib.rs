@@ -31,6 +31,7 @@
 //!
 //! Nothing here depends on consensus crates; nothing here is on a validation path.
 
+pub mod adapter;
 pub mod admission;
 pub mod artifact;
 pub mod cfg;
@@ -40,10 +41,12 @@ pub mod fidelity;
 pub mod float_ref;
 pub mod gguf;
 pub mod hf_config;
+pub mod hf_schema;
 pub mod hf_weights;
 pub mod hl;
 pub mod lora;
 pub mod lower;
+pub mod model;
 pub mod prequant;
 pub mod quant;
 pub mod report;

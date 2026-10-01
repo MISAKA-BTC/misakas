@@ -1,0 +1,22 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "starcoder2",
+  "doc": "StarCoder2: LayerNorm with bias, biased projections, GeLU-tanh ungated MLP, optional sliding window (every layer), tied.",
+  "extends": ["standard-decoder"],
+  "match": {"architectures": ["Starcoder2ForCausalLM"], "model_types": ["starcoder2"]},
+  "config": {"defaults": {"vocab_size": 49152, "hidden_size": 3072, "intermediate_size": 12288, "num_hidden_layers": 30, "num_attention_heads": 24, "num_key_value_heads": 2, "hidden_act": "gelu_pytorch_tanh", "max_position_embeddings": 4096, "norm_epsilon": 1e-05, "tie_word_embeddings": true, "use_bias": true}},
+  "vars": [
+    {"name": "eps", "value": {"$cfg": "norm_epsilon"}},
+    {"name": "bias", "value": {"$cfg": "use_bias"}},
+    {"name": "abias", "value": {"$var": "bias"}},
+    {"name": "mbias", "value": {"$var": "bias"}},
+    {"name": "sw", "value": {"$cfg?": "sliding_window"}},
+    {"name": "types", "value": {"$repeat": ["sliding_attention", {"$var": "n"}]}},
+    {"name": "mlp_type_ok", "value": {"$require_eq": ["mlp_type", "default", "Starcoder2MLP is the plain c_fc/c_proj MLP"]}},
+    {"name": "norm_type_ok", "value": {"$require_eq": ["norm_type", "layer_norm", "Starcoder2 uses LayerNorm"]}},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}},
+    {"name": "mlp_gated", "value": false},
+    {"name": "names", "value": {"$merge": [{"$omit": [{"$var": "names_base"}, ["mlp.gate"]]}, {"mlp.up": "{p}layers.{L}.mlp.c_fc", "mlp.down": "{p}layers.{L}.mlp.c_proj"}]}},
+    {"name": "model_type", "value": "starcoder2"}
+  ]
+}

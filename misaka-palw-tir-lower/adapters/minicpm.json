@@ -1,0 +1,21 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "minicpm",
+  "doc": "MiniCPM (remote code modeling_minicpm): muP scalings — embedding scale_emb, branch scale_depth/sqrt(layers), head input scaled by dim_model_base/hidden — tied by default.",
+  "extends": ["standard-decoder"],
+  "match": {"architectures": ["MiniCPMForCausalLM"], "model_types": ["minicpm"]},
+  "remote_code": ["modeling_minicpm.MiniCPMForCausalLM"],
+  "remote_code_required": true,
+  "config": {
+    "defaults": {"tie_word_embeddings": true}
+  },
+  "vars": [
+    {"name": "emb_scale", "value": {"$cfg": ["scale_emb", 1.0]}},
+    {"name": "res_mult", "value": {"$div": [{"$cfg": ["scale_depth", 1.0]}, {"$sqrt": {"$var": "n"}}]}},
+    {"name": "pre_scale", "value": {"$div": [{"$cfg": ["dim_model_base", 1.0]}, {"$var": "hidden"}]}},
+    {"name": "model_type", "value": "minicpm"}
+  ],
+  "spec": {
+    "confidence": {"Unsure": ["MiniCPM remote-code defaults (tie_word_embeddings=true) taken from configuration_minicpm.py as recalled"]}
+  }
+}

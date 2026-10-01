@@ -14,10 +14,10 @@
 
 use crate::cfg::Cfg;
 use crate::error::{LowerError, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RopeStyle {
     /// `rotate_half`: pairs `(i, i + d/2)` (Llama, NeoX, …).
     Half,
@@ -25,20 +25,20 @@ pub enum RopeStyle {
     Interleaved,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DynamicNtk {
     pub factor: f64,
     pub max_pos: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LongRopeSwitch {
     /// Used once `pos + 1 > original_max`.
     pub inv_freq_long: Vec<f32>,
     pub original_max: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RopeFreqs {
     pub rope_type: String,
     pub theta: f64,
@@ -57,7 +57,7 @@ pub struct RopeFreqs {
 }
 
 /// `mrope_section` and its layout over the `dim / 2` frequencies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MRope {
     pub section: [usize; 3],
     /// Qwen3-VL's and Qwen3.5's layout (`mrope_interleaved`): `h` and `w` take every third
@@ -86,7 +86,7 @@ impl MRope {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RopeSpec {
     /// Dimensions rotated in each head.
     pub rotary_dim: usize,
@@ -459,7 +459,7 @@ pub fn llama3_inv_freq(inv: &[f32], factor: f64, low: f64, high: f64, old_ctx: f
 
 /// ALiBi as a per-head slope on the key distance: `score += −slope_h · (i − j)` (BLOOM, Falcon,
 /// MPT). HF adds `slope · j` (or `slope · (j − i)`); a per-row constant does not change a softmax.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AlibiSpec {
     pub slopes: Vec<f64>,
     /// Falcon adds the bias BEFORE multiplying by the softmax scale, so the bias is scaled too.
@@ -680,4 +680,57 @@ mod tests {
         assert_eq!(bf16_round(1.0 + 3.0 / 256.0), 1.0 + 4.0 / 256.0);
         assert_eq!(bf16_round(0.70710677), 0.70703125);
     }
+}
+
+/// A rope spec from a config's rope fields (`rope_theta` + `rope_scaling`, or `rope_parameters`, flat or
+/// keyed by layer type), and the query temperature a `llama_4_scaling_beta` among them asks for
+/// (Ministral-3: `q ·= 1 + β·ln(1 + ⌊p / original_max_position_embeddings⌋)`). The temperature may
+/// only be carried by an architecture that applies it (`q_scaled`): elsewhere the key is refused,
+/// never dropped. Shared by the Rust parsers and the adapter evaluator (`rope` is a generic feature;
+/// which config keys feed it is the adapter's business).
+#[allow(clippy::too_many_arguments)]
+pub fn rope_spec_from_config(
+    cfg: &Cfg,
+    rotary_dim: usize,
+    style: RopeStyle,
+    theta_default: Option<f64>,
+    layer_type: Option<&str>,
+    partial: f64,
+    max_pos: Option<usize>,
+    top_orig: Option<usize>,
+    q_scaled: bool,
+) -> Result<(RopeSpec, Option<crate::spec::QTemperature>)> {
+    use crate::spec::QTemperature;
+    let mut rc = read_rope_config(cfg, theta_default, layer_type)?;
+    let beta = match rc.params.remove("llama_4_scaling_beta") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_f64().ok_or_else(|| LowerError::bad(format!("{}: llama_4_scaling_beta {v}", cfg.arch)))?),
+    };
+    if beta.is_some() && !q_scaled {
+        return Err(LowerError::not_lowerable(format!(
+            "{}: llama_4_scaling_beta (a query scaling) on an architecture that does not apply it",
+            cfg.arch
+        )));
+    }
+    // transformers 5 also keeps the model's own length among the rope parameters.
+    if let Some(v) = rc.params.remove("max_position_embeddings")
+        && v.as_u64().map(|m| m as usize) != max_pos
+    {
+        return Err(LowerError::bad(format!("{}: rope_parameters.max_position_embeddings {v} ≠ {max_pos:?}", cfg.arch)));
+    }
+    let temp = match beta {
+        Some(b) => {
+            let floor = rc.params.get("original_max_position_embeddings").and_then(Value::as_u64).ok_or_else(|| {
+                LowerError::bad(format!("{}: llama_4_scaling_beta without original_max_position_embeddings", cfg.arch))
+            })?;
+            Some(QTemperature { floor: floor as usize, scale: b, offset: 0 })
+        }
+        None => None,
+    };
+    let freqs = compute_freqs(
+        &cfg.arch,
+        &rc,
+        RopeContext { dim: rotary_dim, max_position_embeddings: max_pos, top_level_original_max: top_orig, partial_rotary_factor: partial },
+    )?;
+    Ok((RopeSpec { rotary_dim, offset: 0, style, freqs }, temp))
 }

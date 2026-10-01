@@ -1,0 +1,19 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mistral",
+  "doc": "Mistral, Ministral and Ministral-3: the standard decoder with no biases and a sliding window on every layer unless layer_types says otherwise; Ministral-3 adds Llama-4's query scaling over the original context length (llama_4_scaling_beta among the rope parameters).",
+  "extends": ["standard-decoder"],
+  "match": {"architectures": ["MistralForCausalLM", "MinistralForCausalLM", "Ministral3ForCausalLM"], "model_types": ["mistral", "ministral", "ministral3"]},
+  "config": {
+    "defaults": {"intermediate_size": 14336, "num_key_value_heads": 8, "max_position_embeddings": 131072}
+  },
+  "vars": [
+    {"name": "abias", "value": {"$let": ["_", {"$forbid": ["attention_bias", "MistralAttention has no biases"]}, false]}},
+    {"name": "mbias", "value": {"$let": ["_", {"$forbid": ["mlp_bias", "MistralMLP has no biases"]}, false]}},
+    {"name": "q_scaled", "value": {"$or": [{"$eq": [{"$var": "arch"}, "Ministral3ForCausalLM"]}, {"$eq": [{"$cfg?": "model_type"}, "ministral3"]}]}},
+    {"name": "q_temperature", "value": {"$if": [{"$var": "q_scaled"}, {"$rope_temp": {"dim": {"$var": "hd"}, "style": "Half", "theta": {"$var": "rope_theta"}, "partial": 1.0, "max_pos": {"$var": "max_pos"}, "q_scaled": true}}, null]}},
+    {"name": "sw", "value": {"$cfgn": ["sliding_window", 4096]}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "sliding_attention"], "each": "sliding_attention"}}},
+    {"name": "model_type", "value": {"$if": [{"$var": "q_scaled"}, "ministral3", "mistral"]}}
+  ]
+}

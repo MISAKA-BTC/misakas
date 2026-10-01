@@ -1,0 +1,21 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "cohere",
+  "doc": "Cohere (Command-R): bias-free LayerNorm, ONE norm feeding a parallel attention+MLP, GPT-J-interleaved rotary (theta 500,000), logit_scale, optional per-head QK LayerNorm.",
+  "extends": ["standard-decoder"],
+  "match": {"architectures": ["CohereForCausalLM"], "model_types": ["cohere"]},
+  "config": {"defaults": {"vocab_size": 256000, "hidden_size": 8192, "intermediate_size": 22528, "num_hidden_layers": 40, "num_attention_heads": 64, "max_position_embeddings": 8192, "layer_norm_eps": 1e-05, "tie_word_embeddings": true, "logit_scale": 0.0625}, "inert": ["model_max_length", "cache_implementation"]},
+  "vars": [
+    {"name": "eps", "value": {"$cfg": "layer_norm_eps"}},
+    {"name": "rope_style", "value": "Interleaved"},
+    {"name": "rope_theta", "value": 500000.0},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": false}},
+    {"name": "logit_scale", "value": {"$cfg": "logit_scale"}},
+    {"name": "use_qk_norm", "value": {"$cfg": ["use_qk_norm", false]}},
+    {"name": "qk_norm", "value": {"$if": [{"$var": "use_qk_norm"}, {"norm": {"$var": "norm"}, "scope": "PerHeadSeparate"}, null]}},
+    {"name": "residual", "value": {"Parallel": {"norm": {"$var": "norm"}, "ffn_norm": null}}},
+    {"name": "names", "value": {"$omit": [{"$var": "names_base"}, ["norm.ffn"]]}},
+    {"name": "families", "value": ["C1"]},
+    {"name": "model_type", "value": "cohere"}
+  ]
+}

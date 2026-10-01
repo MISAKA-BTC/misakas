@@ -1,0 +1,18 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "refusals",
+  "doc": "Architectures this build refuses on purpose, each by the FEATURES it would need and does not have (Level C). A refusal is data like everything else: when the feature exists, delete its entry and write the adapter.",
+  "refuse": [
+    {"architectures": ["Gemma3nForConditionalGeneration", "Gemma3nForCausalLM"], "missing": ["RESIDUAL_ALTUP_V1", "RESIDUAL_LAUREL_V1", "FFN_ACTIVATION_SPARSITY_V1"], "why": "AltUp/Laurel residual wiring and activation sparsity are not modelled yet"},
+    {"architectures": ["MllamaForConditionalGeneration"], "missing": ["ATTN_CROSS_V1"], "why": "the text decoder has cross-attention layers that read vision states"},
+    {"architectures": ["PaliGemmaForConditionalGeneration"], "missing": ["ATTN_PREFIX_LM_V1"], "why": "prefix-LM (bidirectional) attention over the prompt"},
+    {"architectures": ["Phi3SmallForCausalLM"], "missing": ["ATTN_BLOCKSPARSE_PATTERN_V1", "SCALE_MUP_V1"], "why": "blocksparse attention and muP scalings (remote code) are not modelled"},
+    {"architectures": ["ChatGLMModel", "ChatGLMForConditionalGeneration"], "missing": ["REFERENCE_REMOTE_CODE_V1"], "why": "ChatGLM remote code is not modelled"},
+    {"architectures": ["CodeGenForCausalLM"], "missing": ["WEIGHTS_QKV_MP_PARTITIONED_V1"], "why": "CodeGen's mp_num-partitioned qkv layout is not modelled"},
+    {"architectures": ["MiniCPM3ForCausalLM"], "missing": ["REFERENCE_REMOTE_CODE_V1", "SCALE_MUP_V1"], "why": "MiniCPM3 (MLA + muP remote code) is not modelled yet"},
+    {"architectures": ["GraniteMoeHybridForCausalLM"], "missing": ["MIXER_LAYER_PATTERN_HYBRID_V1"], "why": "Granite-4 hybrid (Mamba2 + attention + MoE per layer) is not modelled yet"},
+    {"architectures": ["NemotronHForCausalLM"], "missing": ["LAYER_FFN_ONLY_V1"], "why": "Nemotron-H hybrid (single-block layers: Mamba2, attention, MLP or MoE) is not modelled yet"},
+    {"architectures": ["FalconH1ForCausalLM"], "missing": ["MIXER_PARALLEL_BRANCH_V1", "SCALE_MUP_V1"], "why": "Falcon-H1 hybrid (attention and Mamba2 in parallel, muP multipliers) is not modelled yet"},
+    {"architectures": ["Zamba2ForCausalLM"], "missing": ["ATTN_SHARED_BLOCK_V1"], "why": "Zamba2 shared-attention hybrid is not modelled yet"}
+  ]
+}
