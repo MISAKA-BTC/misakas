@@ -1212,7 +1212,50 @@ fn probe_core_route(e: &Entry, cfg_text: &str, tensors: Option<&TensorIndex>) ->
                 let enc = encdec::lower_encoder(&ehl, &s, 16).map_err(|e| format!("lower encoder: {e}"))?;
                 let dec = encdec::lower_decoder(&dhl, &s, 16, 64).map_err(|e| format!("lower decoder: {e}"))?;
                 let (a, b) = (admit(&enc.program)?, admit(&dec.program)?);
-                Ok(json!({"parser": "lower::encdec::parse_encdec (Rust, per family)", "encoder": program_facts(&enc.program), "decoder": program_facts(&dec.program), "admit_encoder": a["admitted"], "admit_decoder": b["admitted"]}))
+                // The data route (FR-18 phase 1): an adapter of kind `encdec` builds the same spec. Its spec must EQUAL the Rust
+                // parser's (the oracle), and the same lowering must then lower and admit it.
+                let adapter_route = (|| -> Value {
+                    let cfgv: Value = match serde_json::from_str(cfg_text) {
+                        Ok(v) => v,
+                        Err(e) => return json!({"ok": false, "error": e.to_string()}),
+                    };
+                    match misaka_palw_tir_lower::hf_schema::read_encdec(&cfgv, &ReadOptions { adapter: AdapterChoice::Auto }) {
+                        Err(f) => json!({"ok": false, "error": short(&f.error.to_string(), 300)}),
+                        Ok(r) => {
+                            let id = match &r.adapter {
+                                misaka_palw_tir_lower::hf_schema::AdapterSource::BuiltIn { id, .. } => id.clone(),
+                                other => format!("{other:?}"),
+                            };
+                            // Equal up to the last bits of a float: `1/sqrt(d)` built by the adapter's arithmetic and by `powf(-0.5)` differ by an ulp
+                            // (reported in `ulp_only`); anything else is a real difference.
+                            let (va, vb) = (serde_json::to_value(&s).unwrap_or(Value::Null), serde_json::to_value(&r.spec).unwrap_or(Value::Null));
+                            fn near(a: &Value, b: &Value) -> bool {
+                                match (a, b) {
+                                    (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+                                        (Some(x), Some(y)) => x == y || (x - y).abs() <= 1e-12 * x.abs().max(y.abs()),
+                                        _ => x == y,
+                                    },
+                                    (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| near(p, q)),
+                                    (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, p)| y.get(k).is_some_and(|q| near(p, q))),
+                                    _ => a == b,
+                                }
+                            }
+                            let exact = r.spec == s;
+                            let equal = exact || near(&va, &vb);
+                            let low = (|| -> Result<(Value, Value), String> {
+                                let ((ehl, _), (dhl, _)) = encdec::hl_programs(&r.spec, 16, &has).map_err(|e| format!("hl: {e}"))?;
+                                let enc = encdec::lower_encoder(&ehl, &r.spec, 16).map_err(|e| format!("lower encoder: {e}"))?;
+                                let dec = encdec::lower_decoder(&dhl, &r.spec, 16, 64).map_err(|e| format!("lower decoder: {e}"))?;
+                                Ok((admit(&enc.program)?, admit(&dec.program)?))
+                            })();
+                            match low {
+                                Ok((a, b)) => json!({"ok": equal && a["admitted"] == json!(true) && b["admitted"] == json!(true), "adapter": id, "spec_equals_rust_parser": equal, "ulp_only": equal && !exact, "spec_diff": if exact { Value::Null } else { json!(first_diff(&serde_json::to_value(&s).unwrap_or(Value::Null), &serde_json::to_value(&r.spec).unwrap_or(Value::Null), "")) }, "admit_encoder": a["admitted"], "admit_decoder": b["admitted"], "assumed_defaults": r.assumed_defaults}),
+                                Err(m) => json!({"ok": false, "adapter": id, "spec_equals_rust_parser": equal, "error": short(&m, 300)}),
+                            }
+                        }
+                    }
+                })();
+                Ok(json!({"parser": "lower::encdec::parse_encdec (Rust, per family)", "adapter_route": adapter_route, "encoder": program_facts(&enc.program), "decoder": program_facts(&dec.program), "admit_encoder": a["admitted"], "admit_decoder": b["admitted"]}))
             }
             "vision" => {
                 let size = e.options.get("size").and_then(Value::as_u64).unwrap_or(28) as u32;
@@ -1270,6 +1313,7 @@ fn run_entry(e: &Entry, full: bool) -> Value {
         out.insert("core".into(), probe_core_route(e, &misaka_palw_tir_lower::hf_config::sanitize_json(&cfg_text), tensors.as_ref()));
     }
     let dir = heavy.as_deref().unwrap_or(Path::new("/nonexistent"));
+    let encdec_adapter_ok = out.get("core").and_then(|c| c["detail"]["adapter_route"]["ok"].as_bool()).unwrap_or(false);
     let pipeline = matches!(e.route.as_str(), "decoder" | "vlm" | "encoder-bidir" | "encoder-causal");
     let mut refuted: Vec<Value> = Vec::new();
     if reads.candidates.is_empty() {
@@ -1278,6 +1322,15 @@ fn run_entry(e: &Entry, full: bool) -> Value {
         stages.insert("route".into(), json!({"ok": true, "note": format!("route `{}` has no pipeline stage in this harness yet (read stage only)", e.route)}));
         level = reads.candidates[0].level.to_string();
         via = reads.candidates[0].via.clone();
+    }
+    if reads.candidates.is_empty() && e.route == "encdec" && encdec_adapter_ok {
+        // An adapter of kind `encdec` reads it, builds the Rust parser's spec, and the spec lowers and is admitted: Level B by data,
+        // proven to LOWER AND ADMIT only (this harness has no weights stage for an encoder-decoder yet).
+        let id = out["core"]["detail"]["adapter_route"]["adapter"].as_str().unwrap_or("?").to_string();
+        stages.insert("route".into(), json!({"ok": true, "note": "encoder-decoder adapter route: spec equals the Rust parser's, lowered and admitted (no weights stage)"}));
+        level = "B".to_string();
+        via = format!("built-in encdec adapter `{id}` (lower + admit only)");
+        failed = None;
     }
     if pipeline {
         for (ci, c) in reads.candidates.iter().enumerate() {

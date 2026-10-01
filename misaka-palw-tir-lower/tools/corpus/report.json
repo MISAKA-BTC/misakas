@@ -15481,6 +15481,16 @@
    "core": {
     "core_route": true,
     "detail": {
+     "adapter_route": {
+      "adapter": "t5",
+      "admit_decoder": true,
+      "admit_encoder": true,
+      "assumed_defaults": [],
+      "ok": true,
+      "spec_diff": ".head_scale: 0.17677669529663687 \u2260 0.1767766952966369",
+      "spec_equals_rust_parser": true,
+      "ulp_only": true
+     },
      "admit_decoder": true,
      "admit_encoder": true,
      "decoder": {
@@ -15555,14 +15565,14 @@
      "parser": "lower::encdec::parse_encdec (Rust, per family)"
     }
    },
-   "failed_stage": "read",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "T5ForConditionalGeneration",
    "id": "t5",
-   "level": "C",
-   "level_label": "C",
+   "level": "B",
+   "level_label": "B",
    "model_type": "t5",
-   "ms": 8,
+   "ms": 253,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -15674,11 +15684,16 @@
    "refuted_routes": [],
    "route": "encdec",
    "share": null,
-   "stages": {},
+   "stages": {
+    "route": {
+     "note": "encoder-decoder adapter route: spec equals the Rust parser's, lowered and admitted (no weights stage)",
+     "ok": true
+    }
+   },
    "synthesized": null,
    "tensors": 47,
    "usage": "vh",
-   "via": "-"
+   "via": "built-in encdec adapter `t5` (lower + admit only)"
   },
   {
    "category": "encdec",
@@ -15686,6 +15701,16 @@
    "core": {
     "core_route": true,
     "detail": {
+     "adapter_route": {
+      "adapter": "t5",
+      "admit_decoder": true,
+      "admit_encoder": true,
+      "assumed_defaults": [],
+      "ok": true,
+      "spec_diff": null,
+      "spec_equals_rust_parser": true,
+      "ulp_only": false
+     },
      "admit_decoder": true,
      "admit_encoder": true,
      "decoder": {
@@ -15760,14 +15785,14 @@
      "parser": "lower::encdec::parse_encdec (Rust, per family)"
     }
    },
-   "failed_stage": "read",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "T5ForConditionalGeneration",
    "id": "t5_gated",
-   "level": "C",
-   "level_label": "C",
+   "level": "B",
+   "level_label": "B",
    "model_type": "t5",
-   "ms": 8,
+   "ms": 15,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -15872,11 +15897,16 @@
    "refuted_routes": [],
    "route": "encdec",
    "share": null,
-   "stages": {},
+   "stages": {
+    "route": {
+     "note": "encoder-decoder adapter route: spec equals the Rust parser's, lowered and admitted (no weights stage)",
+     "ok": true
+    }
+   },
    "synthesized": null,
    "tensors": 51,
    "usage": "vh",
-   "via": "-"
+   "via": "built-in encdec adapter `t5` (lower + admit only)"
   },
   {
    "category": "encdec",
@@ -15884,6 +15914,16 @@
    "core": {
     "core_route": true,
     "detail": {
+     "adapter_route": {
+      "adapter": "bart",
+      "admit_decoder": true,
+      "admit_encoder": true,
+      "assumed_defaults": [],
+      "ok": true,
+      "spec_diff": ".attn_scale: 0.35355339059327373 \u2260 0.3535533905932738",
+      "spec_equals_rust_parser": true,
+      "ulp_only": true
+     },
      "admit_decoder": true,
      "admit_encoder": true,
      "decoder": {
@@ -15959,14 +15999,14 @@
      "parser": "lower::encdec::parse_encdec (Rust, per family)"
     }
    },
-   "failed_stage": "read",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "BartForConditionalGeneration",
    "id": "bart",
-   "level": "C",
-   "level_label": "C",
+   "level": "B",
+   "level_label": "B",
    "model_type": "bart",
-   "ms": 10,
+   "ms": 24,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -16099,11 +16139,16 @@
    "refuted_routes": [],
    "route": "encdec",
    "share": null,
-   "stages": {},
+   "stages": {
+    "route": {
+     "note": "encoder-decoder adapter route: spec equals the Rust parser's, lowered and admitted (no weights stage)",
+     "ok": true
+    }
+   },
    "synthesized": null,
    "tensors": 92,
    "usage": "h",
-   "via": "-"
+   "via": "built-in encdec adapter `bart` (lower + admit only)"
   },
   {
    "category": "encdec",
@@ -16111,6 +16156,16 @@
    "core": {
     "core_route": true,
     "detail": {
+     "adapter_route": {
+      "adapter": "mbart",
+      "admit_decoder": true,
+      "admit_encoder": true,
+      "assumed_defaults": [],
+      "ok": true,
+      "spec_diff": ".attn_scale: 0.35355339059327373 \u2260 0.3535533905932738",
+      "spec_equals_rust_parser": true,
+      "ulp_only": true
+     },
      "admit_decoder": true,
      "admit_encoder": true,
      "decoder": {
@@ -16186,14 +16241,14 @@
      "parser": "lower::encdec::parse_encdec (Rust, per family)"
     }
    },
-   "failed_stage": "read",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "MBartForConditionalGeneration",
    "id": "mbart",
-   "level": "C",
-   "level_label": "C",
+   "level": "B",
+   "level_label": "B",
    "model_type": "mbart",
-   "ms": 10,
+   "ms": 20,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -16333,11 +16388,16 @@
    "refuted_routes": [],
    "route": "encdec",
    "share": null,
-   "stages": {},
+   "stages": {
+    "route": {
+     "note": "encoder-decoder adapter route: spec equals the Rust parser's, lowered and admitted (no weights stage)",
+     "ok": true
+    }
+   },
    "synthesized": null,
    "tensors": 96,
    "usage": "m",
-   "via": "-"
+   "via": "built-in encdec adapter `mbart` (lower + admit only)"
   },
   {
    "category": "encdec",
@@ -16345,6 +16405,16 @@
    "core": {
     "core_route": true,
     "detail": {
+     "adapter_route": {
+      "adapter": "marian",
+      "admit_decoder": true,
+      "admit_encoder": true,
+      "assumed_defaults": [],
+      "ok": true,
+      "spec_diff": ".attn_scale: 0.35355339059327373 \u2260 0.3535533905932738",
+      "spec_equals_rust_parser": true,
+      "ulp_only": true
+     },
      "admit_decoder": true,
      "admit_encoder": true,
      "decoder": {
@@ -16420,14 +16490,14 @@
      "parser": "lower::encdec::parse_encdec (Rust, per family)"
     }
    },
-   "failed_stage": "read",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "MarianMTModel",
    "id": "marian",
-   "level": "C",
-   "level_label": "C",
+   "level": "B",
+   "level_label": "B",
    "model_type": "marian",
-   "ms": 9,
+   "ms": 18,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -16560,11 +16630,16 @@
    "refuted_routes": [],
    "route": "encdec",
    "share": null,
-   "stages": {},
+   "stages": {
+    "route": {
+     "note": "encoder-decoder adapter route: spec equals the Rust parser's, lowered and admitted (no weights stage)",
+     "ok": true
+    }
+   },
    "synthesized": null,
    "tensors": 86,
    "usage": "h",
-   "via": "-"
+   "via": "built-in encdec adapter `marian` (lower + admit only)"
   },
   {
    "category": "encdec",
@@ -18539,7 +18614,7 @@
    "level": "C",
    "level_label": "C",
    "model_type": "clip_vision_model",
-   "ms": 10,
+   "ms": 6,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -18650,7 +18725,7 @@
    "level": "C",
    "level_label": "C",
    "model_type": "siglip_vision_model",
-   "ms": 7,
+   "ms": 9,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,

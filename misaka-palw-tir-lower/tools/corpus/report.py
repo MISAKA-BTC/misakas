@@ -71,7 +71,8 @@ def summarise(rep, man, blk):
     refuted = [e for e in ents if e["level"] in ("A", "B") and e.get("failed_stage") is not None]
     unconfirmed_a = [e["id"] for e in ents if e["level"] == "A" and (e.get("level_label") or "A") != "A"]
     # an A/B entry whose reference is remote code has no weights to run: it is Level B at the READ stage only
-    read_only = [e["id"] for e in proven if "lower" not in e.get("stages", {})]
+    lower_admit_only = [e["id"] for e in proven if "(lower + admit only)" in (e.get("via") or "")]
+    read_only = [e["id"] for e in proven if "lower" not in e.get("stages", {}) and e["id"] not in lower_admit_only]
     cls = Counter()
     core_routes = []
     for e in ents:
@@ -102,7 +103,7 @@ def summarise(rep, man, blk):
         "level_pct": {k: 100.0 * v / n for k, v in lv.items()},
         "usage_weighted_pct": {k: 100.0 * v / tot for k, v in wt.items()},
         "data_expressible_proven": len(proven), "data_expressible_refuted": [e["id"] for e in refuted],
-        "read_only": read_only, "unconfirmed_a": unconfirmed_a,
+        "read_only": read_only, "lower_admit_only": lower_admit_only, "unconfirmed_a": unconfirmed_a,
         "level_c_by_class": dict(cls),
         "core_rust_routes": core_routes,
         "by_category": {k: dict(v) for k, v in by_cat.items()},
@@ -159,10 +160,14 @@ def summary_md(s):
     if s.get("unconfirmed_a"):
         k = len(s["unconfirmed_a"])
         lines.append(f"| *of the Level A, **unconfirmed** (no reference check ran): {', '.join('`'+i+'`' for i in s['unconfirmed_a'])}* | {k} | {pct(k, n)} | |")
+    if s.get("lower_admit_only"):
+        k = len(s["lower_admit_only"])
+        lines.append(f"| *of the A + B, encoder-decoders read by a data adapter and proven to lower and be admitted only (no weights stage in this harness): {', '.join('`'+i+'`' for i in s['lower_admit_only'])}* | {k} | {pct(k, n)} | |")
     if s.get("read_only"):
         k = len(s["read_only"])
         lines.append(f"| *of the A + B, read-level only (the reference is remote code, no weights to run): {', '.join('`'+i+'`' for i in s['read_only'])}* | {k} | {pct(k, n)} | |")
-        lines.append(f"| *A + B with every stage proven on weights* | {ab - k} | {pct(ab - k, n)} | |")
+        k2 = len(s.get("lower_admit_only") or [])
+        lines.append(f"| *A + B with every stage proven on weights* | {ab - k - k2} | {pct(ab - k - k2, n)} | |")
     if s.get("core_rust_routes"):
         k = len(s["core_rust_routes"])
         lines.append(f"| *Level C, but lowered today by a per-family Rust route (not data): {', '.join('`'+i+'`' for i in s['core_rust_routes'])}* | {k} | {pct(k, n)} | |")
@@ -191,12 +196,13 @@ def by_category_md(s):
 
 
 
-def fr_table(blk):
-    """FR -> entries it names, ranked by how many entries it names."""
+def fr_table(blk, rep=None):
+    """FR -> entries it names, ranked by how many entries it names (only the entries that are still Level C in `rep`)."""
+    still_c = {e["id"] for e in rep["entries"] if e["level"] == "C"} if rep else None
     titles = blk.get("_frs", {})
     by = defaultdict(list)
     for k, v in blk.items():
-        if k.startswith("_"):
+        if k.startswith("_") or (still_c is not None and k not in still_c):
             continue
         for fr in v.get("frs", []):
             by[fr].append(k)
@@ -409,7 +415,7 @@ def main():
         splice(a.md, "corpus", table_corpus(man))
         splice(a.md, "summary", summary_md(s) + "\n\n" + by_category_md(s))
         splice(a.md, "results", table_results(rep, man, blk))
-        splice(a.md, "frs", fr_table(blk))
+        splice(a.md, "frs", fr_table(blk, rep))
         splice(a.md, "uplift", uplift_md(rep))
         if a.census:
             splice(a.md, "census", census_md(load(a.census), load(os.path.join(HERE, "census_v2.json"))))
@@ -420,7 +426,7 @@ def main():
         print()
         print(table_results(rep, man, blk))
         print()
-        print(fr_table(blk))
+        print(fr_table(blk, rep))
         print()
         print(uplift_md(rep))
 
