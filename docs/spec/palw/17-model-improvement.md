@@ -48,7 +48,7 @@ Contents:
 
 Every number below was chosen free on every branch that touches the same space:
 - `tir/fence-2`: object tag 67, delta 88–89, tails `0xC0`–`0xC1`;
-- `rfc3/fp-v5`: object tags 68–69, delta 90, tail `0xC2`, court proofs 10–12, step fault 21;
+- `rfc3/fp-v5`: object tags 68–69, delta 90, tail `0xC2`, court proofs 10–12 and 16, step fault 21;
 - the capacity line: tails `0xB*`.
 
 ### Consensus objects (`PalwConsensusObjectV2`, appended)
@@ -137,14 +137,14 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 
 | Space | Reserved | Last used before |
 | --- | --- | --- |
-| `PalwCourtVerdictProofV2` tags | 13 `EvalCone`, 14 `EvalDecodeToken`, 15 `EvalDissection` (the evaluation lane's: an evaluation claim's court moves carry its `PalwEvalBindingV1` and composite parameter openings); 16 and up free | 12 (`GenDissection`, RFC-0003) |
+| `PalwCourtVerdictProofV2` tags | 13 `EvalCone`, 14 `EvalDecodeToken`, 15 `EvalDissection` (the evaluation lane's: an evaluation claim's court moves carry its `PalwEvalBindingV1` and composite parameter openings); **16 `GenOutputTile`** (RFC-0003's tensor claim's output close — it first took 13, the next positional number, and moved here on the coordinator's decision of 2026-10-01; the enum carries its discriminants explicitly, `#[borsh(use_discriminant = true)]`, so a variant declared before it never renumbers it); 17 and up free | 12 (`GenDissection`, RFC-0003); 16 is RFC-0003's, after the reserved range |
 | `PalwStepFaultV1` discriminants | 22 and up | 21 (`TirOutputDigestMismatch`, RFC-0003) |
 | `PalwDaUnitV1` tags | 5–6 for Phase F's pipeline-claim units (step leaf, step node; an evaluation claim has no rows unit), 7 spare | 4 (`TirRowNode { level, index }`, the second IR fence's) |
 | `PalwDaAnswerV1` tags | 7 and up for the pipeline-claim answers (the out-of-range proof is an answer of tag 5's shape, generic over the claim kind) | 6 (the row node's answer, after `TirStepOutOfRange` 5) |
 
 Evaluation jobs are RFC-0003 pipeline jobs, adjudicated by the courts that already exist. A new proof
 or fault is added only if A6/A7 show one is needed, and takes the next number here. Object tag 83 and
-up, court proof 13 and up and step fault 22 and up are shared: a lane asks the core lane before taking
+up, court proof 17 and up and step fault 22 and up are shared (13–15 are the evaluation lane's): a lane asks the core lane before taking
 one.
 
 ### The fence
