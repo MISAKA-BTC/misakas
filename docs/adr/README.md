@@ -1,5 +1,11 @@
 # ADR index — what governs, and what was reversed
 
+> **Looking for how MISAKA works today?** Start with the
+> [architecture overview](../architecture/overview.md): it maps each part of the protocol to the
+> ADRs that govern it now. This index is the decision history, and its tables below stop at
+> ADR-0149. ADR-0152 (R-core+, what testnet-12 runs) is cited throughout the code but is not yet
+> committed here.
+
 One list, maintained. Every ADR that has been superseded, amended or withdrawn — in whole or in
 part — is named here together with the ADR (or the measurement) that moved it and the clause that
 actually moved. If a decision you are about to rely on is not in the "still governing" section,

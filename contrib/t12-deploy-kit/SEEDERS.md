@@ -2,16 +2,14 @@
 
 2026-09-23 に作成。調べた tree は `wt-t12` @ `5a559459`（feat/testnet-12-regenesis）。ホストは 4 台とも**読み取りのみ**で調べた（15:28〜15:38 CEST）。この手順書と scripts はどれもまだ実行していない。例外は読み取り専用の `00-preflight.sh` と `40-verify.sh` で、スクリプトが動くか確かめるために一度ずつ走らせた。
 
-## 1. 結論: seeder は新 genesis に合わせて作り直す必要がない
+## 1. 結論: seeder は T12 ruleset 検証を含む版へ更新する
 
-- **再ビルドは不要、フラグの変更も不要。** 4 台とも今の `misaka-dnsseeder-t12`（sha `1174b965…`）のままにする。`fleet.env` の `SEEDER_SHA256=KEEP` と同じ判断。
-- 切替のときに seeder 側でやる作業は次の 2 つだけ。
-  (a) node を切り替えた**後で**検証する: `40-verify.sh` と、DNS だけで参加できるかを見る `60-join-check.sh`。
-  (b) anchor の構成を変えると決めた場合に限り、`30-swap.sh --anchors`（§6 Q1）。
+- **再ビルドと段階配備が必要。** 旧 `misaka-dnsseeder-t12`（sha `1174b965…`）は TCP liveness しか見ず、同じ `:26311` を使う別 ruleset を広告できる。新しい `SEEDER_SHA256` を `fleet.env` に記録する。
+- 配備後は `40-verify.sh` と、DNS だけで参加できるかを見る `60-join-check.sh` を実行する。anchor の構成を変える場合は従来どおり `30-swap.sh --anchors` を使う。
 
-### 1.1 コードから見た根拠（`misaka-dnsseeder/src/main.rs`、479 行）
-- genesis・`Params`・`consensus_params_id` をまったく読まない。依存しているのは `kaspa-consensus-core` の `NetworkId` だけ（P2P port と wRPC port の既定値を出すため）と、`misaka-endpoints`、wRPC Borsh クライアント。
-- P2P の handshake をしない。anchor に対しては `TcpStream::connect((ip, 26311))` で 3 秒以内に繋がるかを見るだけで、繋がったらすぐ閉じる。**genesis が違っても判定は変わらない。**
+### 1.1 コードから見た根拠（`misaka-dnsseeder/src/main.rs`）
+- `--network-id` から `Params` を作り、genesis hash、`consensus_params_id`、`consensus_identity_id`、`consensus_schedule_id` を anchor 検証の期待値として固定する。
+- P2P handshake を行い、peer の version message が上記 identity と fence schedule に完全一致した場合だけ広告する。TCP ポートが開いているだけの旧／別 ruleset は広告しない。**T12 と同じポートを共有する T11 もここで除外される。**
 - 4 台とも `--anchors-only` で動いている。このモードで co-located node に wRPC で投げるのは `get_server_info` だけで、しかも best-effort（失敗しても anchor は配る）。`get_connected_peer_info` と `get_peer_addresses` は呼ばない。
 - `--network-id testnet-12` から決まる P2P port は **26311**（`network.rs:286` の `Some(11) | Some(12) => 26311`）。port の設定は `5a559459` でも同じ。
 - 初回配備のビルド `de857a71` から `5a559459` までの間に、`misaka-dnsseeder/`・`misaka-endpoints/`・`consensus/core/src/network.rs`・`rpc/core/src/api/ops.rs` の差分はない。`rpc/core/src/model/message.rs` の差分は `RpcPalwClaimRow`・`RpcPalwLocalPanelClass`・`GetPalwNodeStatusResponse` だけで、seeder が使う 3 つの型には触れていない。
@@ -31,7 +29,7 @@
 | `ibm` | 169.58.39.220 | 169.58.39.220:53 | EnvironmentFile（c5104 と同じ形） | `/usr/local/bin/misaka-dnsseeder-t12` | **なし** | **あり**（`misaka-t12-node1`、**:26321**） | 169.58.232.113 |
 | `seeder1` | 169.58.232.113 | 169.58.232.113:53 | ExecStart に直書き（`After=misaka-t11-node.service` が残っている。害はない） | `/usr/local/bin/misaka-dnsseeder-t12` | `seeder1.misakascan.com` | **あり**（`misaka-t12-node`、**0.0.0.0:26311**） | 169.58.232.113 |
 
-4 台に共通のフラグ: `--network-id testnet-12 --anchors 169.58.232.113,169.58.39.220 --anchors-only --node-wrpc-borsh 127.0.0.1:26313`。26313 で待ち受けているのは .113 の t12 kaspad だけ。他の 3 台のログでは `Connection refused` になるが、anchors-only なので実害はない。
+4 台に共通のフラグ: `--network-id testnet-12 --anchors 169.58.232.113,169.58.39.220 --anchors-only --node-wrpc-borsh 127.0.0.1:26313`。`anchors-only` でも co-located node の検証は省略できるが、anchor 自体の T12 P2P identity 検証は必須。
 どのホストにも、以前のバイナリ `misaka-dnsseeder`（`b773b81a…`）と古い `.bak*` がそのまま残っている。t11 用の unit（`misaka-dnsseeder-t11`、`misaka-dnsseeder`）は disabled になっている。
 
 ### DNS の委任（親ゾーン `ns1.xdomain.ne.jp` に直接聞いた結果）
@@ -46,7 +44,7 @@ NS と glue の TTL は 3600 秒、seeder が返す A の TTL は 30 秒。kaspa
 
 ## 3. 今の構成の弱点（切替の前後で同じ。直すかどうかはユーザーが決める）
 1. **既定 port で入れる入口が .113:26311 の 1 か所しかない。** ibm の node は :26321 で待ち受けているので、A レコードで配っても 26311 では繋がらない。
-2. **seeder3 は、死んでいる 169.58.39.220:26311 を毎回配っている。** seeder3 は anchor のどれにも接続できない（egress が絞られている）。どれにも繋がらないときは「全部配る」側に倒れる作りなので、このホストでは port の判定がまったく効いていない。新しく参加するノードは ibm への接続に失敗し、.113 だけに繋がる（遅くなるが、別のチェーンに繋がることはない）。
+2. **旧実装の seeder3 は、TCP probe だけで 169.58.39.220:26311 を毎回配っていた。** 新実装では、anchor の ruleset 検証に失敗したものは広告せず、全 anchor が検証不能なら空応答に倒す。
 3. 4 つの DNS 名のうち 2 つ（seeder2 と seeder4）は、管理外の IP に委任されていて応答しない。
 4. .113 が止まると、既定 port で入れる入口がなくなる。
 5. ibm はディスクが 95% 使用（残り 16 GB）。seeder とは関係ないが、node 切替で新しい appdir を作るときに問題になる。

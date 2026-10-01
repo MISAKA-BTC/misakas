@@ -3,10 +3,10 @@
 //! A Kaspa-style DNS seeder: it serves the IPs of live kaspa-pq peers over DNS so a fresh node
 //! bootstraps by resolving `seeder{1,2}.misakascan.com` (its `dns_seeders` list) and randomly
 //! dialing the returned peers. The live peer set is taken from a co-located node's address
-//! manager over wRPC (`getPeerAddresses`), always augmented with the configured `--anchors` (the
-//! seed nodes) so the seeder is useful from genesis, before the network has grown. The operator
-//! delegates the subdomain to this host with an NS record; this process is authoritative for it
-//! and answers A queries with a random subset of the live set.
+//! manager over wRPC (`getPeerAddresses`). Configured `--anchors` are advertised only after a P2P
+//! handshake confirms the network, genesis, consensus fingerprints, and fence schedule expected by
+//! `--network-id`. The operator delegates the subdomain to this host with an NS record; this process
+//! is authoritative for it and answers A queries with a random subset of the verified live set.
 //!
 //! Run (port 53 needs root or `setcap cap_net_bind_service=+ep`):
 //!   misaka-dnsseeder --network-id testnet-10 --anchors 160.16.131.119,95.111.236.186
@@ -14,9 +14,17 @@
 //! to override.)
 
 use clap::Parser;
-use kaspa_consensus_core::network::{EndpointKind, NetworkId};
+use kaspa_consensus_core::{
+    config::params::Params,
+    fork_id_v1::fork_id_v1,
+    network::{EndpointKind, NetworkId, NetworkType},
+};
 use kaspa_core::{info, warn};
+use kaspa_p2p_lib::{
+    Adaptor, ConnectionInitializer, Hub, KaspadHandshake, Router, common::ProtocolError, convert::model::version::Version,
+};
 use kaspa_rpc_core::api::rpc::RpcApi;
+use kaspa_utils::networking::PeerId;
 use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
@@ -29,6 +37,88 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
+use tokio::sync::Mutex;
+use uuid::Uuid;
+
+const ANCHOR_PROBE_PROTOCOL_VERSION: u32 = 105;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AnchorIdentity {
+    network: String,
+    genesis_hash: Vec<u8>,
+    consensus_params_id: Vec<u8>,
+    consensus_identity_id: Vec<u8>,
+    consensus_schedule_id: Vec<u8>,
+}
+
+impl AnchorIdentity {
+    fn from_params(params: &Params) -> Self {
+        Self {
+            network: params.network_name(),
+            genesis_hash: params.genesis.hash.as_bytes().to_vec(),
+            consensus_params_id: params.consensus_params_id().as_bytes().to_vec(),
+            consensus_identity_id: params.consensus_identity_id().as_bytes().to_vec(),
+            consensus_schedule_id: params.consensus_schedule_id().as_bytes().to_vec(),
+        }
+    }
+}
+
+struct AnchorProbeInitializer {
+    network: String,
+    genesis_hash: Vec<u8>,
+    consensus_params_id: Vec<u8>,
+    consensus_identity_id: Vec<u8>,
+    consensus_schedule_id: Vec<u8>,
+    fork_id_fired: Vec<u8>,
+    fork_id_next: u64,
+    peer_version: Arc<Mutex<Option<Version>>>,
+}
+
+impl AnchorProbeInitializer {
+    fn new(params: &Params, peer_version: Arc<Mutex<Option<Version>>>) -> Self {
+        let fork_id = fork_id_v1(params, 0);
+        Self {
+            network: params.network_name(),
+            genesis_hash: params.genesis.hash.as_bytes().to_vec(),
+            consensus_params_id: params.consensus_params_id().as_bytes().to_vec(),
+            consensus_identity_id: params.consensus_identity_id().as_bytes().to_vec(),
+            consensus_schedule_id: params.consensus_schedule_id().as_bytes().to_vec(),
+            fork_id_fired: fork_id.fired.as_bytes().to_vec(),
+            fork_id_next: fork_id.next,
+            peer_version,
+        }
+    }
+
+    fn local_version(&self) -> Version {
+        Version::new(
+            None,
+            PeerId::new(Uuid::new_v4()),
+            self.network.clone(),
+            None,
+            ANCHOR_PROBE_PROTOCOL_VERSION,
+            self.genesis_hash.clone(),
+            self.consensus_params_id.clone(),
+            self.consensus_identity_id.clone(),
+            self.consensus_schedule_id.clone(),
+            self.fork_id_fired.clone(),
+            self.fork_id_next,
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl ConnectionInitializer for AnchorProbeInitializer {
+    async fn initialize_connection(&self, router: Arc<Router>) -> Result<(), ProtocolError> {
+        let mut handshake = KaspadHandshake::new(&router);
+        router.start();
+        let peer_message = handshake.handshake(self.local_version().into()).await?;
+        let peer_version = Version::try_from(peer_message).map_err(|error| ProtocolError::OtherOwned(error.to_string()))?;
+        router.set_identity(peer_version.id);
+        handshake.exchange_ready_messages().await?;
+        *self.peer_version.lock().await = Some(peer_version);
+        Ok(())
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "misaka-dnsseeder", version, about = "MISAKA (kaspa-pq) DNS seeder — serves live peer IPs over DNS")]
@@ -60,21 +150,53 @@ struct Args {
     /// Seconds between refreshing the peer set from the node.
     #[arg(long, default_value_t = 30)]
     poll_secs: u64,
-    /// Serve ONLY the `--anchors` (skip the co-located node's address-manager peers). The anchors
-    /// are health-gated on TCP liveness at the network's P2P port — the operator names them, and
-    /// this checks they are accepting connections.
+    /// Serve ONLY the `--anchors` (skip the co-located node's address-manager peers). Each anchor is
+    /// health-gated on a P2P handshake and must match the network, genesis, consensus fingerprints,
+    /// and fence schedule derived from `--network-id`.
     ///
     /// In this mode the backing node is BEST-EFFORT and cannot veto them: it is evidence about the
     /// address-manager peer list, which is not served here, and about nothing else. A host that
     /// serves a delegated nameserver but cannot reach the network it points at — filtered egress,
-    /// no node of its own — is a legitimate anchor SERVER, and under the old rule it could never
-    /// answer anything.
+    /// no node of its own — cannot answer until it can reach an anchor for this verification.
     #[arg(long, default_value_t = false)]
     anchors_only: bool,
 }
 
 fn parse_anchors(s: &str) -> Vec<Ipv4Addr> {
     s.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).filter_map(|x| x.parse().ok()).collect()
+}
+
+fn bytes_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn validate_anchor_peer(peer: &Version, expected: &AnchorIdentity) -> Result<(), String> {
+    if peer.network != expected.network {
+        return Err(format!("network mismatch: expected {}, got {}", expected.network, peer.network));
+    }
+    for (label, actual, wanted) in [
+        ("genesis", &peer.genesis_hash, &expected.genesis_hash),
+        ("consensus params id", &peer.consensus_params_id, &expected.consensus_params_id),
+        ("consensus identity id", &peer.consensus_identity_id, &expected.consensus_identity_id),
+        ("fence schedule id", &peer.consensus_schedule_id, &expected.consensus_schedule_id),
+    ] {
+        if actual != wanted {
+            return Err(format!("{label} mismatch: expected {}, got {}", bytes_hex(wanted), bytes_hex(actual)));
+        }
+    }
+    Ok(())
+}
+
+async fn probe_anchor(anchor: Ipv4Addr, p2p_port: u16, params: &Params, expected: &AnchorIdentity) -> Result<(), String> {
+    let peer_version = Arc::new(Mutex::new(None));
+    let initializer = Arc::new(AnchorProbeInitializer::new(params, peer_version.clone()));
+    let adaptor = Adaptor::client_only(Hub::new(), initializer, Default::default());
+    let address = format!("{anchor}:{p2p_port}");
+    let connect_result = adaptor.connect_peer_with_retries(address, 1, Duration::ZERO).await.map_err(|error| error.to_string());
+    adaptor.close().await;
+    connect_result?;
+    let peer = peer_version.lock().await.take().ok_or_else(|| "handshake completed without a peer version".to_string())?;
+    validate_anchor_peer(&peer, expected)
 }
 
 /// Resolve the co-located node's wRPC Borsh endpoint: explicit `--node-wrpc-borsh` wins; else
@@ -133,8 +255,9 @@ fn is_routable_v4(ip: &Ipv4Addr) -> bool {
 /// 2. Address-manager peers are advertised only if the backing node is CURRENTLY CONNECTED to them
 ///    — a live protocol-102 handshake on the right network is the strongest per-peer evidence this
 ///    process can obtain without a P2P probe stack.
-/// 3. Anchors are operator-trusted for identity but still must be TCP-alive on the network's P2P
-///    port.
+/// 3. Anchors must complete a P2P handshake and match the configured network's genesis,
+///    consensus fingerprints, and fence schedule. A TCP-open port is not sufficient: it can be a
+///    node from a different testnet generation.
 ///
 /// What this deliberately does NOT verify (needs a P2P probe or ADR-0025's registry, recorded here
 /// so nobody mistakes the gate for more than it is): the peer's own sync state, its chain identity
@@ -142,22 +265,16 @@ fn is_routable_v4(ip: &Ipv4Addr) -> bool {
 /// snapshots.
 /// **In `--anchors-only`, the backing node cannot veto the anchors.**
 ///
-/// An anchor is an IP the OPERATOR named, and the seeder verifies it by opening a TCP connection
-/// to the network's own P2P port. A co-located node's sync state is evidence about neither: not
-/// about who the operator trusts, and not about whether that host is accepting connections. It is
-/// essential for the address-manager peers below — that list comes FROM the node, so a node that
-/// cannot vouch for its own chain cannot vouch for them — and it is irrelevant to the anchors.
-///
-/// Making it block the anchors too costs a real deployment. An anchor SERVER — a host that runs
-/// the delegated nameserver and hands out entry points without being one — often cannot run a node
-/// of the network it serves at all: `seeder3.misakascan.com` sits behind filtered egress and
-/// cannot reach 26311 on any fleet host. Under the old rule it could never answer anything, and
-/// the failure printed as `refresh failed`, which reads like a seeder problem rather than a rule.
-///
-/// Two ways the veto also misfires on a host that HAS a node: a node on the wrong network reports
-/// `is_synced=false` forever (measured: this seeder was pointed at a leftover testnet-12 node and
-/// went silent), and a node in candidate review reports the same while being perfectly at the tip.
-async fn refresh_verified(node_rpc: &str, anchors: &[Ipv4Addr], anchors_only: bool, p2p_port: u16) -> Result<Vec<Ipv4Addr>, String> {
+/// The backing node remains best-effort in `--anchors-only`, but every advertised anchor is
+/// independently checked against the ruleset that the seeder is configured to serve.
+async fn refresh_verified(
+    node_rpc: &str,
+    anchors: &[Ipv4Addr],
+    anchors_only: bool,
+    p2p_port: u16,
+    params: &Params,
+    expected_identity: &AnchorIdentity,
+) -> Result<Vec<Ipv4Addr>, String> {
     let url = format!("ws://{node_rpc}");
     let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None).map_err(|e| e.to_string())?;
     let backing = async {
@@ -185,7 +302,7 @@ async fn refresh_verified(node_rpc: &str, anchors: &[Ipv4Addr], anchors_only: bo
             let _ = client.disconnect().await;
             return Err(format!("{why} — refusing to advertise ANY peers"));
         }
-        warn!("[dnsseeder] {why}; serving the operator's anchors on TCP liveness alone (anchors-only)");
+        warn!("[dnsseeder] {why}; backing node is bypassed in anchors-only mode, but anchors still require a T12 P2P identity check");
     }
 
     // Gate 2 input: the peers the backing node is actually connected to right now.
@@ -214,42 +331,23 @@ async fn refresh_verified(node_rpc: &str, anchors: &[Ipv4Addr], anchors_only: bo
 
     let mut set: BTreeSet<Ipv4Addr> = BTreeSet::new();
 
-    // Gate 3: anchors — operator-trusted identity, but must be alive on the P2P port.
-    //
-    // **A dial failure is evidence about TWO things, and the gate can only tell them apart in
-    // aggregate.** "I cannot reach this anchor" says either that the anchor is down or that THIS
-    // host cannot get out — and the second is common for exactly the machines that make good
-    // nameservers: a delegated NS with filtered egress and no node of its own. Measured on
-    // testnet-11: seeder3 ran the right binary with the right anchors and answered NOERROR/0 for
-    // hours, because its host cannot open 26311 to anywhere, while seeder1 served the same two
-    // anchors happily. The seeder had gone silent about a network that was perfectly healthy.
-    //
-    // So the gate stays where it can discriminate and yields where it cannot: if SOME anchors dial,
-    // the failures are about those anchors and are dropped. If NONE do, the evidence is about this
-    // host, and the operator's list is the better authority — serve it, and say so loudly, because
-    // an operator who really did list only dead anchors must still be able to find that out.
-    let mut unreachable: Vec<Ipv4Addr> = Vec::new();
+    // Gate 3: anchors — TCP liveness alone is unsafe because testnet-11 and testnet-12 share the
+    // P2P port. Require the full handshake and exact identity/schedule match before advertising.
+    let mut rejected: Vec<(Ipv4Addr, String)> = Vec::new();
     for anchor in anchors {
-        match tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect((*anchor, p2p_port))).await {
+        match tokio::time::timeout(Duration::from_secs(8), probe_anchor(*anchor, p2p_port, params, expected_identity)).await {
             Ok(Ok(_)) => {
                 set.insert(*anchor);
             }
-            _ => unreachable.push(*anchor),
+            Ok(Err(error)) => rejected.push((*anchor, error)),
+            Err(_) => rejected.push((*anchor, "P2P ruleset probe timed out".to_string())),
         }
     }
-    if set.is_empty() && !unreachable.is_empty() {
-        warn!(
-            "[dnsseeder] NONE of the {} anchors dial on :{p2p_port} from this host — that is evidence about this \
-             host's egress, not about every anchor at once, so they are served anyway. If they really are down, \
-             this seeder is now advertising dead peers: check {:?}",
-            unreachable.len(),
-            unreachable
-        );
-        set.extend(unreachable.iter().copied());
-    } else {
-        for anchor in &unreachable {
-            warn!("[dnsseeder] anchor {anchor}:{p2p_port} is not reachable — NOT advertising it this cycle");
-        }
+    for (anchor, reason) in &rejected {
+        warn!("[dnsseeder] anchor {anchor}:{p2p_port} failed T12 P2P identity/ruleset verification: {reason}");
+    }
+    if set.is_empty() && !anchors.is_empty() {
+        warn!("[dnsseeder] no configured anchors passed P2P identity/ruleset verification — serving EMPTY answers");
     }
 
     if !anchors_only {
@@ -343,10 +441,23 @@ async fn main() {
     let args = Args::parse();
     let anchors = parse_anchors(&args.anchors);
     let node_rpc = resolve_node_rpc(&args.network_id, &args.node_rpc);
-    // The network's P2P port, for the anchor liveness probe.
-    let p2p_port =
-        args.network_id.as_deref().and_then(|n| NetworkId::from_str(n).ok()).map(|nid| nid.default_p2p_port()).unwrap_or(26611); // the historical devnet fallback, matching resolve_node_rpc
+    let network = match args.network_id.as_deref() {
+        Some(value) => NetworkId::from_str(value).unwrap_or_else(|error| {
+            warn!("[dnsseeder] invalid --network-id {value}: {error}; falling back to devnet identity checks");
+            NetworkId::new(NetworkType::Devnet)
+        }),
+        None => NetworkId::new(NetworkType::Devnet),
+    };
+    let params = Params::from(network);
+    let expected_identity = AnchorIdentity::from_params(&params);
+    let p2p_port = network.default_p2p_port();
     info!("[dnsseeder] co-located node wRPC Borsh: {node_rpc}");
+    info!(
+        "[dnsseeder] anchor verification identity: network={}, p2p_port={}, schedule={:?}",
+        network,
+        p2p_port,
+        params.fence_schedule_v1()
+    );
     if args.anchors_only {
         info!("[dnsseeder] anchors-only mode: node address-manager discovery disabled");
     }
@@ -362,10 +473,12 @@ async fn main() {
         let node_rpc = node_rpc.clone();
         let anchors = anchors.clone();
         let anchors_only = args.anchors_only;
+        let params = params.clone();
+        let expected_identity = expected_identity.clone();
         let poll = Duration::from_secs(args.poll_secs.max(5));
         tokio::spawn(async move {
             loop {
-                match refresh_verified(&node_rpc, &anchors, anchors_only, p2p_port).await {
+                match refresh_verified(&node_rpc, &anchors, anchors_only, p2p_port, &params, &expected_identity).await {
                     Ok(ips) => {
                         let n = ips.len();
                         *peers.write().unwrap() = ips;
@@ -475,5 +588,29 @@ mod tests {
             vec![Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8), Ipv4Addr::new(9, 9, 9, 9),]
         );
         assert!(parse_anchors("").is_empty());
+    }
+
+    #[test]
+    fn anchor_identity_rejects_a_different_fence_schedule() {
+        let network = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        let params = Params::from(network);
+        assert_eq!(params.fence_schedule_v1(), vec![750, 1000, 1300]);
+        let expected = AnchorIdentity::from_params(&params);
+        let mut peer = Version::new(
+            None,
+            PeerId::new(Uuid::new_v4()),
+            expected.network.clone(),
+            None,
+            ANCHOR_PROBE_PROTOCOL_VERSION,
+            expected.genesis_hash.clone(),
+            expected.consensus_params_id.clone(),
+            expected.consensus_identity_id.clone(),
+            expected.consensus_schedule_id.clone(),
+            Vec::new(),
+            u64::MAX,
+        );
+        peer.consensus_schedule_id[0] ^= 1;
+        let error = validate_anchor_peer(&peer, &expected).unwrap_err();
+        assert!(error.contains("fence schedule id"));
     }
 }

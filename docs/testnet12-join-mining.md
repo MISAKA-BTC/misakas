@@ -90,7 +90,7 @@ Check the startup log for these lines:
 
 ```text
 Consensus params fingerprint: 3db42ea638f3c4274f326b4049aa1ef82408cb044c03f4ccf52848446a77702a (network testnet-12)
-Consensus fence schedule: 750, 1000 (schedule id 9d6b83fe744b6374daf0fabeed391b612e9ac5c1faa2f1bd17712657d1478b67)
+Consensus fence schedule: 750, 1000, 1300, 1700, 2000 (schedule id 9d6b83fe744b6374daf0fabeed391b612e9ac5c1faa2f1bd17712657d1478b67)
 ```
 
 A datadir from the first testnet-12 deployment (genesis `a8cabac4…`) is refused at startup with a

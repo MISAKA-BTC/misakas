@@ -6,10 +6,11 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 
 > [!IMPORTANT]
 > **Current status (2026-09-25).** The public network is **`testnet-12`** (R-core+, ADR-0152 v3.1),
-> launched on 2026-09-25/26 JST from release commit **`0e8ec984e`** (current `main`). Run it with
+> launched on 2026-09-25/26 JST from release commit **`0e8ec984e`**; the current fleet lineage is
+> **`4ca695b98`**. Run it with
 > `kaspad --testnet --netsuffix=12` or `misaka --network testnet-12` (the CLI's default) and verify:
 > * consensus params fingerprint **`3db42ea638f3c4274f326b4049aa1ef82408cb044c03f4ccf52848446a77702a`** — the
->   post-launch release, which arms every post-launch fence **from DAA 750** (fence schedule `750, 1000`); a node
+>   post-launch release, which arms every post-launch fence **from DAA 750** (fence schedule `750, 1000, 1300, 1700, 2000`); a node
 >   still on the launch release (`b8564b88…`) is refused by upgraded peers from DAA 750
 > * genesis `a27f8f44fe4d91a5…` and schedule id `9d6b83fe744b6374…`
 >

@@ -352,6 +352,8 @@ jobs:
       - name: Run cargo test regular features
         run: cargo nextest run
         env:
+          # The `ci` profile (.config/nextest.toml) adds a JUnit report for the summary below.
+          NEXTEST_PROFILE: ci
           MISAKA_PALW_POW_FIXTURE: "1"
           # This step runs the WHOLE workspace, `misaka-palw-derive` included, so it needs the
           # same declaration the dedicated step below makes: CI holds no Qwen checkpoint, and
@@ -360,6 +362,15 @@ jobs:
           # failure ahead of it was fixed, because nextest stops at the first failure and this one
           # had never been reached.
           MISAKA_PALW_WIDTH_NO_TOKENIZER: "1"
+
+      # **The numbers come from the run, never from a README.** Tests and failures by area from the
+      # JUnit report, the declared network and fingerprint from release.json, and the
+      # readiness tally from docs/mainnet-readiness.md. It runs when the tests fail too.
+      - name: Write the CI summary
+        if: always()
+        run: |
+          python3 scripts/misaka-ci-summary.py --junit target/nextest/ci/junit.xml \
+            --rust "$(rustc -V)" >> "$GITHUB_STEP_SUMMARY"
 
       # **`--lib` is absent on purpose. Do not add it.**
       #

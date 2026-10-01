@@ -565,7 +565,7 @@ colima.yaml の `rosetta` が true になる = 設定の変更。Rosetta はこ�
 ## 15. 稼働中の chain の binary 更新（`upgrade` / `upgrade-rollback`、2026-09-26、n5 緊急 hotfix）
 
 **何のためか**: 公開 t12（genesis `a27f8f44…`・fp `b8564b88…`、09-25 23:15 JST から release `0e8ec984efc9`）に、**同じ fingerprint・同じ
-genesis の node-only release**（`rcore/n5-emergency` @ `a4b76f8e4`）を **chain data を失わずに** 入れる。`switch` は再 genesis（appdir を
+genesis の node-only release**（`rcore/n5-emergency` @ `8a0810992` — hf 4 本は `a4b76f8e4` まで、その上に kit の `upgrade`(`437872e7a`)と DAA 198 分岐の修正。2026-09-26 15:45 JST に配備）を **chain data を失わずに** 入れる。`switch` は再 genesis（appdir を
 退避して genesis から起動）なので使えない — 既存の appdir があると `switch` は `CONFIRM_REGENESIS=yes` 無しでは止まる。appdir を移すと
 bond の round 署名記録（`palw-panel/state/palw-round-last-signed`）も一緒に移り、同じ round に 2 度署名し得る（§14）。
 
