@@ -192,7 +192,7 @@ keeps issuing. The network-wide answer is consensus's (§5).
 `seat_duties seat_oldest_wait_daa seat_receipts_1h sched_needed sched_backup sched_satisfied slots running overdue
 detached load_limited`, `own_provisional own_panel_bound own_panel_bound_aged own_oldest_wait_daa debt_hold`;
 the periodic `[palw-host] memory at periodic` line now splits anon into live and reclaimable;
-`t12check.py` prints and flags it and `lib.sh cgroup_memory` reports the credited headroom.
+`t12check.py` prints and flags it and `lib.sh cgroup_memory` reports the credited headroom. The live kit (`deploy-int10`, with Phase H) is not the tree's `contrib/t12-deploy-kit`: `contrib/t12-deploy-kit/patches/p1-f4-live-kit.patch` applies to it cleanly (`cd deploy-int10 && patch -p3 < …`, dry-run checked against a copy).
 
 Tests: b6's reading replayed (`a_cgroup_full_of_lazily_freed_pages_is_not_out_of_headroom`), the accumulation
 simulated (`the_headroom_does_not_fall_as_freed_memory_accumulates`: the kernel's figure falls to nothing, the
