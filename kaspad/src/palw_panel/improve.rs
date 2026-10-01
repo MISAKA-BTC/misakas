@@ -42,6 +42,8 @@ use misaka_palw_sdk::improve_eval::{
     palw_eval_claim_v1, palw_eval_run_v1, palw_eval_seat_judge_roots_v1,
 };
 
+use misaka_palw_sdk::improve_eval::{PalwEvalBatchV1, palw_eval_lockstep_width_v1, palw_eval_run_batch_v1};
+
 use crate::palw_improve_watch::{
     PALW_IMPROVE_READ_EVERY_V1, PalwImproveWatchV1, palw_improve_admitting_classes_v1, palw_improve_held_classes_v1,
     palw_improve_log_tick_v1, palw_improve_status_json_v1, palw_improve_watch_armed_v1,
@@ -54,6 +56,17 @@ const PALW_IMPROVE_RETRY_AFTER_DAA_V1: u64 = 48;
 const PALW_IMPROVE_MAX_RUNNING_V1: usize = 1;
 /// A finished claim not carried within this many DAA is stale (its anchor ages, its epoch moves on).
 const PALW_IMPROVE_READY_TTL_DAA_V1: u64 = 24;
+
+/// The most tasks one lockstep batch runs together (`palw_eval_run_batch_v1`): the residency's capacity
+/// and the host's memory usually bound it first (`palw_eval_lockstep_width_v1`).
+const PALW_IMPROVE_LOCKSTEP_MAX_V1: usize = 8;
+
+/// **One item's tasks over one parent's weights, in flight as one run** (RFC-0004 §7.2): the subject
+/// stages stepped together by one hub, each member's run its run alone.
+struct PalwImproveBatchRunV1 {
+    tasks: Vec<PalwImproveEvalTaskV1>,
+    handle: tokio::task::JoinHandle<PalwEvalBatchV1>,
+}
 
 /// One evaluation run in flight.
 struct PalwImproveRunV1 {
@@ -73,6 +86,8 @@ pub(super) struct PalwImproveLoopV1 {
     held: HashMap<Hash64, Arc<PalwEvalHeldV1>>,
     held_ids: std::collections::BTreeSet<Hash64>,
     running: Vec<PalwImproveRunV1>,
+    /// A lockstep batch in flight: one run of the loop's [`PALW_IMPROVE_MAX_RUNNING_V1`].
+    batches: Vec<PalwImproveBatchRunV1>,
     /// Finished runs waiting for a carrier slot, with the DAA they finished at.
     ready: VecDeque<(PalwEvalWorkV1, u64)>,
     /// The job ids this node ran, and when.
@@ -137,6 +152,11 @@ impl PalwPanelService {
         for entry in misaka_palw_sdk::tir_registration::tir_entries_of_v1(backends.holdings()) {
             match PalwEvalHeldV1::from_entry(&entry) {
                 Ok(h) => {
+                    info!(
+                        "[{PALW_PANEL}] [palw-improve] class {} serves evaluations: its subject stage on {}",
+                        h.class_id,
+                        if h.evaluates_on_executor_v1() { "this node's executor" } else { "the reference interpreter" }
+                    );
                     held.insert(h.class_id, Arc::new(h));
                 }
                 Err(why) => warn!("[{PALW_PANEL}] [palw-improve] class {} cannot serve evaluations: {why}", entry.class_id()),
@@ -189,13 +209,14 @@ impl PalwPanelService {
         // The retry rule: a job this node ran stays its own until the chain takes it or the retry age.
         st.attempted.retain(|_, at| current_daa < at.saturating_add(PALW_IMPROVE_RETRY_AFTER_DAA_V1));
         st.ready.retain(|(_, at)| current_daa < at.saturating_add(PALW_IMPROVE_READY_TTL_DAA_V1));
+        self.improve_batch_v1(st, &tick.duties, current_daa);
         for duty in tick.duties {
             match duty {
                 PalwImproveDutyV1::Prefetch { line_id, epoch, class_id, plan } => {
                     self.improve_prefetch_v1(st, line_id, epoch, class_id, plan);
                 }
                 PalwImproveDutyV1::Evaluate { task, until_daa } => {
-                    if st.running.len() + st.ready.len() >= PALW_IMPROVE_MAX_RUNNING_V1
+                    if st.running.len() + st.batches.len() + st.ready.len() >= PALW_IMPROVE_MAX_RUNNING_V1
                         || st.attempted.contains_key(&task.job_id)
                         || st.over_budget.contains(&task.job_id)
                     {
@@ -235,6 +256,89 @@ impl PalwPanelService {
                 Err(e) => warn!("[{PALW_PANEL}] [palw-improve] an evaluation run did not finish: {e}"),
             }
         }
+        let mut i = 0;
+        while i < st.batches.len() {
+            if !st.batches[i].handle.is_finished() {
+                i += 1;
+                continue;
+            }
+            let batch = st.batches.remove(i);
+            match batch.handle.await {
+                Ok(done) => {
+                    info!(
+                        "[{PALW_PANEL}] [palw-improve] a lockstep batch of {} evaluations finished: {} stepped together over {} positions \
+                         ({} member positions)",
+                        batch.tasks.len(),
+                        done.stepped_together,
+                        done.served.rounds,
+                        done.served.member_steps
+                    );
+                    for (task, run) in batch.tasks.iter().zip(done.runs) {
+                        match run {
+                            Ok(work) => st.ready.push_back((work, current_daa)),
+                            Err(why) => warn!(
+                                "[{PALW_PANEL}] [palw-improve] the evaluation of item {} of epoch {} for {:?} failed: {why}",
+                                task.item, task.epoch, task.subject
+                            ),
+                        }
+                    }
+                }
+                Err(e) => warn!("[{PALW_PANEL}] [palw-improve] a lockstep batch of evaluations did not finish: {e}"),
+            }
+        }
+    }
+
+    /// **The next lockstep batch** (RFC-0004 §7.2; `docs/design/palw/tir/runtime-residency.md` §8): the plan
+    /// is item-major, so one item's tasks for a parent and its candidates are adjacent; those whose held
+    /// subjects read one store — the first runnable task's weights root — go together as ONE run of the
+    /// loop's [`PALW_IMPROVE_MAX_RUNNING_V1`], as wide as the store's routed capacity and the host's memory
+    /// allow ([`palw_eval_lockstep_width_v1`]). Each member's run is its run alone, byte for byte. Fewer
+    /// than two members: nothing here, and the duty loop runs the task alone as before.
+    fn improve_batch_v1(&self, st: &mut PalwImproveLoopV1, duties: &[PalwImproveDutyV1], current_daa: u64) {
+        if st.running.len() + st.batches.len() + st.ready.len() >= PALW_IMPROVE_MAX_RUNNING_V1 {
+            return;
+        }
+        let spare = crate::palw_backends::host_available_bytes_v1().map_or(u64::MAX, |available| available / 10 * 7);
+        let members = palw_improve_batch_members_v1(
+            duties,
+            |task| {
+                if st.attempted.contains_key(&task.job_id) || st.over_budget.contains(&task.job_id) {
+                    return None;
+                }
+                st.held.get(&task.subject_class).map(|held| held.weights_root_v1())
+            },
+            |lead| {
+                st.held.get(&lead.subject_class).map_or(1, |held| {
+                    palw_eval_lockstep_width_v1(held, palw_improve_task_positions_v1(lead), spare, PALW_IMPROVE_LOCKSTEP_MAX_V1)
+                })
+            },
+        );
+        if members.len() < 2 {
+            return;
+        }
+        let runs: Vec<(Arc<PalwEvalHeldV1>, PalwImproveEvalTaskV1)> =
+            members.iter().filter_map(|t| st.held.get(&t.subject_class).map(|h| (h.clone(), (*t).clone()))).collect();
+        let lead = &runs[0].1;
+        info!(
+            "[{PALW_PANEL}] [palw-improve] evaluating item {} of epoch {} for {} subjects over one parent's weights in one lockstep batch: \
+             {:?} ({:?})",
+            lead.item,
+            lead.epoch,
+            runs.len(),
+            runs.iter().map(|(_, t)| t.subject).collect::<Vec<_>>(),
+            lead.kind
+        );
+        for (_, task) in &runs {
+            st.attempted.insert(task.job_id, current_daa);
+        }
+        let tasks = runs.iter().map(|(_, t)| t.clone()).collect();
+        st.batches.push(PalwImproveBatchRunV1 {
+            tasks,
+            handle: tokio::task::spawn_blocking(move || {
+                let members: Vec<(&PalwEvalHeldV1, &PalwImproveEvalTaskV1)> = runs.iter().map(|(h, t)| (h.as_ref(), t)).collect();
+                palw_eval_run_batch_v1(&members)
+            }),
+        });
     }
 
     /// **The status file**: the chain's improvement status at the tip, as JSON, beside the panel's other
@@ -607,12 +711,119 @@ impl PalwPanelService {
     }
 }
 
+/// **The positions a task runs at the most**: its prompt and a teacher-forced job's reference, and a
+/// generating job's whole budget.
+fn palw_improve_task_positions_v1(task: &PalwImproveEvalTaskV1) -> u64 {
+    let budget = match &task.mode {
+        kaspa_consensus_core::palw_improve_eval_v1::PalwEvalModeV1::Generate { max_new, .. } => *max_new as u64,
+        _ => 0,
+    };
+    task.positions_floor().saturating_add(budget)
+}
+
+/// **The members of the next lockstep batch**: the first runnable evaluation task of the plan, then every
+/// runnable task of the same item (line, epoch, item) whose subject reads the same weights root, in the
+/// plan's order, at most `width_of(first)` of them. `root_of` is a task's held subject's weights root, or
+/// `None` when the task is not runnable here (not held, attempted, past its budget).
+fn palw_improve_batch_members_v1(
+    duties: &[PalwImproveDutyV1],
+    root_of: impl Fn(&PalwImproveEvalTaskV1) -> Option<Hash64>,
+    width_of: impl FnOnce(&PalwImproveEvalTaskV1) -> usize,
+) -> Vec<&PalwImproveEvalTaskV1> {
+    let mut tasks = duties.iter().filter_map(|d| match d {
+        PalwImproveDutyV1::Evaluate { task, .. } => Some(task),
+        PalwImproveDutyV1::Prefetch { .. } => None,
+    });
+    let Some((lead, root)) = tasks.by_ref().find_map(|t| root_of(t).map(|r| (t, r))) else { return Vec::new() };
+    let width = width_of(lead).max(1);
+    let item = (lead.line_id, lead.epoch, lead.item);
+    std::iter::once(lead)
+        .chain(tasks.filter(|t| (t.line_id, t.epoch, t.item) == item && root_of(t) == Some(root)))
+        .take(width)
+        .collect()
+}
+
 /// The most step leaves a node retains a capture for (a capture is every leaf's lanes; a larger claim's
 /// evidence is served from a re-run).
 const PALW_IMPROVE_CAPTURE_MAX_LEAVES_V1: u64 = 1 << 20;
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use kaspa_consensus_core::palw_improve_eval_v1::{PalwEvalModeV1, PalwEvalStageParamsV1};
+    use kaspa_consensus_core::palw_improve_state_v1::{PalwEvalSubjectV1, PalwScoringKindV1};
+
+    fn eval(item: u32, class: u8) -> PalwImproveDutyV1 {
+        let class_id = Hash64::from_bytes([class; 64]);
+        let mut task = PalwImproveEvalTaskV1 {
+            line_id: Hash64::from_bytes([1; 64]),
+            epoch: 4,
+            item,
+            subject: PalwEvalSubjectV1::Candidate(class_id),
+            subject_class: class_id,
+            kind: PalwScoringKindV1::ExactMatch,
+            mode: PalwEvalModeV1::Generate {
+                seed: kaspa_consensus_core::palw_improve_state_v1::palw_improve_eval_seed_v1(&Hash64::from_bytes([3; 64]), item),
+                max_new: 5,
+                stop_ids: vec![],
+            },
+            job_id: Hash64::default(),
+            prompt_ids: vec![1, 2, 3],
+            reference_ids: vec![],
+            params: PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 },
+        };
+        task.job_id = task.job().id();
+        PalwImproveDutyV1::Evaluate { task, until_daa: 100 }
+    }
+
+    /// **The next lockstep batch is the first runnable task and its item's tasks over the same weights**: in
+    /// the plan's item-major order, skipping what is not runnable here (not held, attempted) and what
+    /// reads other weights (a full-weight candidate, another parent), never past the item or the width.
+    #[test]
+    fn a_batch_is_one_items_runnable_tasks_over_one_weights_root() {
+        let (parent, stranger) = (Hash64::from_bytes([0xA0; 64]), Hash64::from_bytes([0xB0; 64]));
+        // Classes 1..=4 are a parent and its composites (one root); 5 a full-weight candidate; 6 not held.
+        let root = |class: u8| match class {
+            1..=4 => Some(parent),
+            5 => Some(stranger),
+            _ => None,
+        };
+        let duties = vec![
+            eval(7, 6),
+            eval(7, 1),
+            eval(7, 5),
+            eval(7, 2),
+            PalwImproveDutyV1::Prefetch {
+                line_id: Hash64::from_bytes([1; 64]),
+                epoch: 4,
+                class_id: Hash64::from_bytes([9; 64]),
+                plan: misaka_palw_sdk::improve::PalwImprovePrefetchV1::Full { root: Hash64::default() },
+            },
+            eval(7, 3),
+            eval(8, 4),
+            eval(7, 4),
+        ];
+        let class_of = |t: &PalwImproveEvalTaskV1| t.subject_class.as_byte_slice()[0];
+        let picked = |width: usize, attempted: &[u8]| -> Vec<(u32, u8)> {
+            palw_improve_batch_members_v1(
+                &duties,
+                |t| if attempted.contains(&class_of(t)) { None } else { root(class_of(t)) },
+                |_| width,
+            )
+            .into_iter()
+            .map(|t| (t.item, class_of(t)))
+            .collect()
+        };
+        assert_eq!(picked(8, &[]), vec![(7, 1), (7, 2), (7, 3), (7, 4)], "item 7's tasks over the parent's weights, in order");
+        assert_eq!(picked(2, &[]), vec![(7, 1), (7, 2)], "no wider than the width");
+        assert_eq!(picked(8, &[1]), vec![(7, 5)], "the first runnable task leads: a full-weight candidate batches alone");
+        assert_eq!(picked(0, &[]), vec![(7, 1)], "a width of nothing is a run alone");
+        assert!(palw_improve_batch_members_v1(&duties, |_| None, |_| 8).is_empty(), "nothing runnable");
+        // A batch is sized for a generating task's whole budget beside its prompt.
+        let PalwImproveDutyV1::Evaluate { task, .. } = &duties[1] else { unreachable!() };
+        assert_eq!(palw_improve_task_positions_v1(task), task.positions_floor() + 5);
+    }
+
     /// **The panel hooks the improvement loop in three places and nowhere else**: the tick after the
     /// chain reads, the carrier at the `Own` site beside the canonical claim, and the seat's step at the
     /// head of the verdict block — each behind the fence (the tick) or the claim's own predicate (the
