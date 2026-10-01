@@ -15,7 +15,7 @@ two independent readings of the frozen text have to agree before a single one pa
     3. bias       d = b + bias_j            (bias_j = 0 without an entry; a ban is not a bias)
     4. saturate   v'' = min(max(d, -2**31 + 1), 2**31 - 1)
     5. mask       A = {j admitted by the constraint} minus {j banned}; empty => stop
-    6. select     argmax over A of  v'' * 2**24 + ((T * G_j) >> 24)   (T = 0: no noise term)
+    6. select     argmax over A of  v'' * 2**24 + T * G_j              (T = 0: no noise term)
                   G_j = GUMBEL[top 13 bits of BLAKE2b-512_key=domain(seed || t_le32 || j_le64)]
                   ties to the lowest index
     7. stop       the committed answer's tail equals a stop sequence => stop here
@@ -98,8 +98,12 @@ def gumbel(seed, t, lane):
 
 
 def key(v2, seed, t, lane, temp):
+    # RFC-0001 §A.3 step 6 / ADR-0082 D11, as written: v'' is a Q24 logit, so v'' * 2**24 is Q48; T (Q24) times
+    # the Gumbel variate (Q24) is Q48 too, and the two are added WHOLE. (An earlier revision of this file, and
+    # of the Rust key it mirrored, shifted the noise right by 24 — Q24 beside Q48 — which made the temperature
+    # inert: finding G1 of the independent second implementation. At T = 1.0 the key now samples softmax(v'').)
     base = v2 * Q24
-    return base if temp == 0 else base + ((temp * gumbel(seed, t, lane)) >> 24)
+    return base if temp == 0 else base + temp * gumbel(seed, t, lane)
 
 
 def select_v4(cfg, seed, temp, generated, row, admitted=None):
@@ -384,6 +388,31 @@ def render(obj):
     return json.dumps(obj, separators=(",", ":"), sort_keys=True) + "\n"
 
 
+def greedy_lane(values, admitted=None):
+    """The argmax of the values (None = a banned lane), ties to the lowest index, over the admitted lanes."""
+    best = None
+    for lane, v in enumerate(values):
+        if v is None or (admitted is not None and lane not in admitted):
+            continue
+        if best is None or v > best[1]:
+            best = (lane, v)
+    return None if best is None else best[0]
+
+
+def sampling_stats(obj):
+    """(sampled cases, sampled cases whose expected lane is NOT the greedy lane). Finding G2: a vector set in
+    which every expected lane is the greedy one passes any key, including an inert temperature."""
+    sampled = non_greedy = 0
+    for c in obj.get("cases", []):
+        if c.get("temperature_q", 0) == 0 or c.get("expected_lane") is None:
+            continue
+        values = c["processed"] if "processed" in c else c["row"]
+        admitted = None if c.get("admitted") is None else set(c["admitted"])
+        sampled += 1
+        non_greedy += c["expected_lane"] != greedy_lane(values, admitted)
+    return sampled, non_greedy
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
@@ -391,7 +420,14 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     bad = 0
     for name, make in FILES.items():
-        body = render(make())
+        obj = make()
+        if name in ("processor_order.json", "v4_noop_equals_v3.json"):
+            sampled, non_greedy = sampling_stats(obj)
+            print(f"  {name}: {sampled} sampled selections, {non_greedy} of them not the greedy lane")
+            # G1/G2: the temperature must decide something, or these vectors cannot tell a working sampler
+            # from an inert one. At T = 0.5, 1.0 and 3.0 on rows a few units wide a good share must differ.
+            assert non_greedy * 5 >= sampled, f"{name}: the temperature is inert in the vectors ({non_greedy}/{sampled})"
+        body = render(obj)
         path = os.path.join(OUT, name)
         if args.check:
             if not os.path.exists(path) or open(path).read() != body:

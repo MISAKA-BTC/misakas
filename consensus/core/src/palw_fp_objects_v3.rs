@@ -31,7 +31,7 @@
 //! a peer thought was valid is exactly the "reads as nothing" failure ADR-0042 Decision 5 warns
 //! about, and the count is how an operator sees it happening.
 
-use crate::palw_freeprompt_v3::{PalwFpCommitmentTxPayloadV3, PalwFreePromptParamsV3};
+use crate::palw_freeprompt_v3::{PalwFpCommitmentTxPayloadV3, PalwFreePromptParamsV3, palw_fp_decode_controls_offered_v1};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
 use crate::tx::Transaction;
@@ -202,7 +202,12 @@ where
         freeprompt,
         accepted_block,
         panel_da_armed,
-        |_| PalwFpClassCapsV1 { step_ladder: max_step_leaf_count, held: false, derived_work: PalwFpDerivedWorkCapV1::Declared },
+        |_| PalwFpClassCapsV1 {
+            step_ladder: max_step_leaf_count,
+            held: false,
+            derived_work: PalwFpDerivedWorkCapV1::Declared,
+            logits_q24: true,
+        },
         ruleset_caps_armed,
         held_armed,
         prompt_ids_form,
@@ -223,6 +228,14 @@ pub struct PalwFpClassCapsV1<'a> {
     pub held: bool,
     /// **ADR-0145 §5: whether this walk prices the class's work or believes it.**
     pub derived_work: PalwFpDerivedWorkCapV1<'a>,
+    /// **Does the class commit its logits in Q24** (RFC-0001 §A.3's unit)? `true` for every legacy
+    /// class (K = 24 integer kernels) and for any class registered past the fence that guarantees Q24
+    /// by construction (RFC-0003 §I.3); `false` for an IR or generative class registered before it,
+    /// whose logit unit is its lowerer's and declared nowhere. A V4 job asking such a class for the
+    /// temperature, a frequency or presence penalty, or a logit bias is skipped by name
+    /// ([`crate::palw_freeprompt_v3::palw_fp_decode_controls_offered_v1`]); greedy selection, the
+    /// repeat penalty, stop sequences and constraints are offered to every class.
+    pub logits_q24: bool,
 }
 
 /// **ADR-0145 §5, as the walk sees it** — three states, not two, because "the fence is dormant"
@@ -312,6 +325,19 @@ where
             .is_err()
         {
             out.skipped.push((id, "payload is not stateless-admissible"));
+            continue;
+        }
+        // **RFC-0001 §A.3's unit, RFC-0003 §I.3's convention**: the temperature, the frequency and
+        // presence penalties and the logit bias are measured in the class's logit units (Q24). A class
+        // that does not commit its logits in a declared Q24 unit (an IR or generative class registered
+        // before the fence that guarantees it) is offered the unit-free controls only; a job asking it
+        // for one is skipped, by name — and skipped, not rejected, like every refusal in this walk. A
+        // job with no V4 tail asks for nothing here, so below `palw_fp_decode_rules` nothing moves.
+        if palw_fp_decode_controls_offered_v1(&payload.commitment.job, caps.logits_q24).is_err() {
+            out.skipped.push((
+                id,
+                "a decode control in the class's logit unit (temperature, frequency/presence penalty, logit bias) on a class that does not commit Q24 logits",
+            ));
             continue;
         }
         // **ADR-0103 Decision 4: the ids never ride above one standard transaction.**
@@ -617,7 +643,12 @@ mod tests {
                 &freeprompt(),
                 crate::BlockHash::default(),
                 false,
-                |_| PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: PalwFpDerivedWorkCapV1::Declared },
+                |_| PalwFpClassCapsV1 {
+                    step_ladder: 1 << 26,
+                    held: false,
+                    derived_work: PalwFpDerivedWorkCapV1::Declared,
+                    logits_q24: true,
+                },
                 false,
                 false,
                 crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
@@ -648,6 +679,83 @@ mod tests {
         assert!(palw_fp_job_version_refusal_v1(&b4, PalwFpDecodeRulesV1::Active).is_none());
         assert!(palw_fp_job_version_refusal_v1(&b3, PalwFpDecodeRulesV1::Dormant).is_none());
         assert!(palw_fp_job_version_refusal_v1(&[0xFF; 4], PalwFpDecodeRulesV1::Active).is_none(), "isolation's to refuse");
+    }
+
+    /// **RFC-0001 §A.3's unit, RFC-0003 §I.3's convention, at the walk.** The temperature, the
+    /// frequency and presence penalties and the logit bias are measured in the class's logit units
+    /// (Q24). A class that does not commit its logits in Q24 — an IR or generative class registered
+    /// before the fence that guarantees it — is offered greedy selection, the repeat penalty, stop
+    /// sequences and constraints; a job asking it for a unit-dependent control is skipped by name, and
+    /// the same job is extracted for a class that does. Below the decode-rules fence there is no V4 job
+    /// and nothing here fires.
+    #[test]
+    fn a_class_that_does_not_commit_q24_logits_is_offered_only_the_unit_free_controls() {
+        use crate::palw_decode_pipeline_v4::DecodeConfigV4;
+        use crate::palw_freeprompt_v3::PalwFpDecodeRulesV1;
+        let with = |temperature_q: u32, decode: DecodeConfigV4| {
+            let mut p = payload(8, 4);
+            p.commitment.job = p.commitment.job.clone().into_v4(decode);
+            p.commitment.job.temperature_q = temperature_q;
+            if temperature_q != 0 {
+                p.commitment.job.sampling_seed = [0x33; 32];
+            }
+            p
+        };
+        let walk = |p: &PalwFpCommitmentTxPayloadV3, logits_q24: bool| {
+            let out = palw_fp_objects_from_accepted_txs_by_class_v1(
+                &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(p).unwrap())],
+                net(),
+                &freeprompt(),
+                crate::BlockHash::default(),
+                false,
+                |_| PalwFpClassCapsV1 {
+                    step_ladder: 1 << 26,
+                    held: false,
+                    derived_work: PalwFpDerivedWorkCapV1::Declared,
+                    logits_q24,
+                },
+                false,
+                false,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                PalwFpDecodeRulesV1::Active,
+                |_, _, _, _| true,
+            );
+            (out.objects.len(), out.skipped)
+        };
+        let unit_free = [
+            ("greedy, no controls", with(0, DecodeConfigV4::NOOP)),
+            ("the repeat penalty", with(0, DecodeConfigV4 { repeat_penalty_q: 98_304, penalty_window: 6, ..DecodeConfigV4::NOOP })),
+            ("a stop sequence", with(0, DecodeConfigV4 { stop_sequences: vec![vec![3]], ..DecodeConfigV4::NOOP })),
+        ];
+        let unit_dependent = [
+            ("the temperature", with(1 << 24, DecodeConfigV4::NOOP)),
+            ("the frequency penalty", with(0, DecodeConfigV4 { frequency_penalty_q: 1 << 23, penalty_window: 4, ..DecodeConfigV4::NOOP })),
+            ("the presence penalty", with(0, DecodeConfigV4 { presence_penalty_q: -(1 << 22), penalty_window: 4, ..DecodeConfigV4::NOOP })),
+            ("a logit bias", with(0, DecodeConfigV4 { logit_bias: vec![(3, 1 << 24)], ..DecodeConfigV4::NOOP })),
+        ];
+        for (what, p) in &unit_free {
+            assert_eq!(walk(p, false).0, 1, "{what} is offered to a class with no declared unit");
+            assert_eq!(walk(p, true).0, 1, "{what} is offered to every class");
+        }
+        for (what, p) in &unit_dependent {
+            let (n, skipped) = walk(p, false);
+            assert_eq!(n, 0, "{what} is not offered to a class with no declared unit");
+            assert_eq!(skipped.len(), 1, "{what}: skipped with a reason, never silently dropped");
+            assert!(skipped[0].1.contains("logit unit"), "{what}: {}", skipped[0].1);
+            assert_eq!(walk(p, true).0, 1, "{what} is offered to a class that commits Q24 logits");
+        }
+        // The named predicate says which control, first by the order the RFC lists them.
+        use crate::palw_freeprompt_v3::{PalwFpV3Error, palw_fp_decode_controls_offered_v1, palw_fp_unit_dependent_control_v1};
+        let names: Vec<_> = unit_dependent.iter().map(|(_, p)| palw_fp_unit_dependent_control_v1(&p.commitment.job)).collect();
+        assert_eq!(names, [Some("temperature_q"), Some("frequency_penalty_q"), Some("presence_penalty_q"), Some("logit_bias")]);
+        assert!(unit_free.iter().all(|(_, p)| palw_fp_unit_dependent_control_v1(&p.commitment.job).is_none()));
+        assert_eq!(
+            palw_fp_decode_controls_offered_v1(&unit_dependent[0].1.commitment.job, false),
+            Err(PalwFpV3Error::DecodeControlNeedsQ24Logits { control: "temperature_q" })
+        );
+        assert_eq!(palw_fp_decode_controls_offered_v1(&unit_dependent[0].1.commitment.job, true), Ok(()));
+        // A V3 job asks for nothing here: below the fence the lane is exactly as it was.
+        assert_eq!(palw_fp_unit_dependent_control_v1(&payload(8, 4).commitment.job), None);
     }
 
     /// **A commitment nobody signed for creates no claim** (launch blockers §4).
@@ -722,6 +830,7 @@ mod tests {
                         // its fixture's `work_leaves` is a bare power of two chosen to sit either
                         // side of a ladder, which no graph would ever count.
                         derived_work: PalwFpDerivedWorkCapV1::Declared,
+                        logits_q24: true,
                     }
                 },
                 false,
@@ -1221,7 +1330,7 @@ mod tests {
                 false,
                 |class_id| {
                     assert_eq!(*class_id, class, "the class is the commitment's own");
-                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived }
+                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived, logits_q24: true }
                 },
                 false,
                 true,

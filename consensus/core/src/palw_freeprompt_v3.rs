@@ -1494,6 +1494,18 @@ pub enum PalwFpV3Error {
     /// **RFC-0001 §A.2: the V4 job's `DecodeConfigV4` is not in canonical form**, by name.
     #[error("the V4 job's decode config is not canonical: {0}")]
     DecodeConfigNotCanonical(crate::palw_decode_pipeline_v4::PalwDecodeConfigV4Error),
+    /// **A decode control in the unit of the class's logits, asked of a class that does not commit
+    /// them in Q24** (RFC-0001 §A.3's unit; RFC-0003 §I.3's convention). The temperature, the
+    /// frequency and presence penalties and the logit bias are all measured in the class's logit
+    /// units, which §A.3 fixes at Q24 — true of every legacy class (K = 24 integer kernels) and not
+    /// declared anywhere for an IR or a generative class, whose logits are in whatever unit its
+    /// lowerer calibrated. Such a class registered before the fence that guarantees Q24 by
+    /// construction is offered greedy selection, the repeat penalty (multiplicative: unit-free), stop
+    /// sequences and constraints only.
+    #[error(
+        "the decode control `{control}` is in the unit of the class's logits (Q24, RFC-0001 §A.3), and this class does not commit its logits in a declared Q24 unit — temperature, frequency and presence penalties and logit bias are offered to legacy classes, and to IR and generative classes registered past the fence that guarantees Q24 (RFC-0003 §I.3); greedy selection, the repeat penalty, stop sequences and constraints are offered to every class"
+    )]
+    DecodeControlNeedsQ24Logits { control: &'static str },
     /// A mode-2 payload that carries the prompt anyway. Refused rather than trimmed: an executor
     /// that published a prompt the user asked to keep off chain has already done the harm, and a
     /// claim built on that payload would be one the chain quietly blessed.
@@ -1647,6 +1659,45 @@ impl PalwFpDecodeRulesV1 {
             }
             other => Err(PalwFpV3Error::UnsupportedVersion { got: other, expected: PALW_FP_V3_VERSION }),
         }
+    }
+}
+
+/// **The first decode control of a job whose meaning depends on the unit of the class's logits**, by
+/// name — `None` when the job asks only for what is unit-free. RFC-0001 §A.3 measures the temperature
+/// (`temperature_q`), the frequency and presence penalties and the logit bias in the class's logit
+/// units (Q24); greedy selection, the repeat penalty (a Q16 ratio), stop sequences and constraints do
+/// not read the unit. (A bias entry that bans a lane would not either; the rule refuses every entry,
+/// the conservative reading, and a ban-only list can be offered later without a fork of anything but
+/// this predicate.)
+pub fn palw_fp_unit_dependent_control_v1(job: &PalwFreePromptJobV3) -> Option<&'static str> {
+    if job.temperature_q != crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY {
+        return Some("temperature_q");
+    }
+    let decode = job.decode.as_ref()?;
+    if decode.frequency_penalty_q != 0 {
+        return Some("frequency_penalty_q");
+    }
+    if decode.presence_penalty_q != 0 {
+        return Some("presence_penalty_q");
+    }
+    if !decode.logit_bias.is_empty() {
+        return Some("logit_bias");
+    }
+    None
+}
+
+/// **May this job's decode controls be offered to a class?** (RFC-0001 §A.3, RFC-0003 §I.3.) A class
+/// whose logits are committed in Q24 (`logits_q24`: every legacy class; an IR or generative class
+/// registered past the fence that guarantees it) is offered every control. Any other class — an IR or
+/// generative class registered before it, whose logit unit is its lowerer's and nowhere declared — is
+/// offered the unit-free ones only; a unit-dependent control is refused BY NAME
+/// ([`PalwFpV3Error::DecodeControlNeedsQ24Logits`]), the way a V4 job's other out-of-form fields are.
+/// Dormant with the decode rules: a job that carries no V4 tail asks for nothing here, and a V4 job
+/// exists only past `Params::palw_fp_decode_rules`.
+pub fn palw_fp_decode_controls_offered_v1(job: &PalwFreePromptJobV3, logits_q24: bool) -> Result<(), PalwFpV3Error> {
+    match palw_fp_unit_dependent_control_v1(job) {
+        Some(control) if !logits_q24 => Err(PalwFpV3Error::DecodeControlNeedsQ24Logits { control }),
+        _ => Ok(()),
     }
 }
 

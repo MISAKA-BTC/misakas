@@ -167,7 +167,7 @@ impl PalwGenStageSpaceV1 {
                     if tile == 0 {
                         return Err(bad("a zero state tile".into()));
                     }
-                    let n: u64 = st.shape.iter().map(|d| *d as u64).product();
+                    let n: u64 = st.shape.iter().fold(1u64, |acc, d| acc.saturating_mul(*d as u64));
                     let layers: Vec<Option<u16>> =
                         if st.per_layer { (0..program.schedule.layers.len() as u16).map(Some).collect() } else { vec![None] };
                     for layer in layers {
@@ -438,7 +438,7 @@ fn stage_leaf_count(
         if tile == 0 {
             return Err(bad("a zero state tile".into()));
         }
-        let n: u64 = st.shape.iter().map(|d| *d as u64).product();
+        let n: u64 = st.shape.iter().fold(1u64, |acc, d| acc.saturating_mul(*d as u64));
         let layers = if st.per_layer { program.schedule.layers.len() as u128 } else { 1 };
         per_checkpoint = per_checkpoint.saturating_add(layers.saturating_mul(n.div_ceil(tile) as u128));
     }
@@ -447,12 +447,18 @@ fn stage_leaf_count(
 }
 
 /// **A leaf's hash**: its coordinate, its count and its lanes (four little-endian bytes each).
+///
+/// **Total over the lanes** (finding G21, spec 04b §15.14): a lane is its value's low 32 bits
+/// (`palw_tir_lanes_wire_v1`), whether or not the leaf's dtype contains it, so a leaf an executor
+/// committed with a lane outside its dtype opens and proves under its stage's root like any other, and
+/// the court convicts it by PALW-TIR-33's interval check. The hash of every value the dtype contains is
+/// what it always was.
 pub fn palw_gen_step_leaf_hash_v1(leaf: &PalwGenLeafV1, values: &[i128]) -> Result<Hash64, PalwGenStepErrorV1> {
     if values.len() != leaf.value_count as usize {
         return Err(PalwGenStepErrorV1::Leaf(format!("{} values for a leaf of {}", values.len(), leaf.value_count)));
     }
     let lanes =
-        crate::palw_tir_step_v1::palw_tir_lanes_le_v1(leaf.dtype, values).map_err(|e| PalwGenStepErrorV1::Leaf(e.to_string()))?;
+        crate::palw_tir_step_v1::palw_tir_lanes_wire_v1(leaf.dtype, values).map_err(|e| PalwGenStepErrorV1::Leaf(e.to_string()))?;
     let coord = borsh::to_vec(&leaf.coord).expect("a coordinate is borsh-serializable");
     Ok(keyed64(PALW_GEN_STEP_LEAF_DOMAIN_V1, &[&coord, &leaf.value_count.to_le_bytes(), &lanes]))
 }

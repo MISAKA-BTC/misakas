@@ -85,6 +85,7 @@ fn vlm_class(vector: &str, tile: u32, h_tile: u32, checkpoint: u32) -> PalwGenCl
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
         },
         tokenizer_id: Hash64::from_bytes([0x74; 64]),
     }
@@ -245,6 +246,7 @@ fn topk_class() -> PalwGenClassV1 {
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
         },
         tokenizer_id: Hash64::from_bytes([0x74; 64]),
     }
