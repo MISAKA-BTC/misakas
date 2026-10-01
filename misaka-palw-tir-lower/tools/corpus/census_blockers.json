@@ -6,14 +6,14 @@
    "FR-02"
   ],
   "short": "q/k RMS norm AFTER the rotation, weightless norms everywhere, an extra norm on the embeddings, ReLU\u00b2 ungated MLP; the standard template reads it and bind refutes it",
-  "evidence": "read from modeling_nanochat.py; the standard template reads it (Level A refuted at bind)"
+  "evidence": "read from modeling_nanochat.py; adapter written (census-adapters-pending), expected to stop at float_vs_hf because the spec has only the pre-rotation q/k norm"
  },
  "modernbert_decoder": {
   "class": "feature",
   "frs": [
    "FR-29"
   ],
-  "short": "a prediction head (dense + activation + norm) before the tied vocabulary projection, plus layer 0 without attn_norm and its own key names",
+  "short": "a prediction head (dense + activation + norm) before the tied vocabulary projection (FR-29); layer 0 has no attn_norm; the per-layer-type rope convention alone does not make it readable",
   "evidence": "read from modeling_modernbert_decoder.py; the per-layer-type rope convention alone does not make it readable"
  },
  "axk2": {
@@ -98,5 +98,65 @@
   ],
   "short": "attention_value_scale (values times 0.707) has no spec field; the rest (per-layer-type kv heads, sinks on the sliding layers only under the hub name attention_sink_bias, per-layer-type partial rotary, a sigmoid router with a correction bias) is data",
   "evidence": "read from modeling_mimo_v2_flash.py; an adapter that treats the scale as inert is expected to stop at float_vs_hf (not yet run: quiet window)"
+ },
+ "zaya": {
+  "class": "feature",
+  "frs": [],
+  "short": "Zyphra's CCA attention (a convolution over q/k, a delayed value projection, a q/k norm with a learned temperature), per-layer residual scale/bias vectors, an MLP router with balancing biases, layer types `hybrid`/`hybrid_sliding`: several features at once",
+  "evidence": "config and tensor names (the layer shows qkv_proj.conv_qk_depthwise, v_proj_delayed, router_mlp, *_residual_scale)"
+ },
+ "xglm": {
+  "class": "feature",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "sinusoidal positions in a DECODER (the spec has learned positions only; the sinusoid exists in the Rust encoder-decoder path), embedding scale; otherwise OPT-like",
+  "evidence": "tensor names and spec.rs / lower/encdec.rs"
+ },
+ "doge": {
+  "class": "feature",
+  "frs": [],
+  "short": "dynamic-mask attention (a learned `A` and `dt_proj` mask the keys) and residual vectors (input_residual, post_attention_residual): a new mixer",
+  "evidence": "tensor names"
+ },
+ "gpt_neox_japanese": {
+  "class": "feature",
+  "frs": [
+   "FR-01"
+  ],
+  "short": "an output-projection bias stored as a separate tensor (attention.dense_bias) added outside the projection on some layers",
+  "evidence": "tensor names"
+ },
+ "cohere2_moe": {
+  "class": "data",
+  "frs": [],
+  "short": "expected Level B: Cohere2's parallel block with a top-k MoE; written (census-adapters-pending), not yet run; a shared expert combined by `average` needs a scale on the shared expert",
+  "evidence": "adapter written, pending validation"
+ },
+ "aria_text": {
+  "class": "feature",
+  "frs": [
+   "FR-01"
+  ],
+  "short": "experts stacked and TRANSPOSED (experts.fc1.weight [E, in, 2I], fc2 [E, I, out]): a layout the binder has no name for",
+  "evidence": "adapter written, expected to stop at bind (pending validation)"
+ },
+ "biogpt": {
+  "class": "data",
+  "frs": [],
+  "short": "expected Level B: OPT's block under another prefix, gelu, a scaled embedding; written, not yet run",
+  "evidence": "adapter written, pending validation"
+ },
+ "openai_gpt": {
+  "class": "data",
+  "frs": [],
+  "short": "expected Level B: GPT-2's tensors in a post-norm block without a final norm; written, not yet run",
+  "evidence": "adapter written, pending validation"
+ },
+ "gemma4_unified_text": {
+  "class": "data",
+  "frs": [],
+  "short": "expected Level B: the built-in gemma4-text without PLE and without the MoE block; written, not yet run",
+  "evidence": "adapter written, pending validation"
  }
 }

@@ -1,0 +1,19 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "openai_gpt",
+  "doc": "GPT-1 (OpenAI): GPT-2's tensors (Conv1D weights [in, out], fused c_attn, learned positions from 0, ungated MLP, scaled attention) under the names tokens_embed / positions_embed, in a POST-norm block - h = ln_2(n + mlp(n)) with n = ln_1(x + attn(x)) - with no final norm, the activation read from afn, a tied head. The class is OpenAIGPTLMHeadModel (not ...ForCausalLM), so the template alone refuses it. PENDING VALIDATION (written during the quiet window). Third-party adapter (lane H): data only, extends the built-in gpt2.",
+  "extends": ["gpt2"],
+  "match": {"architectures": ["OpenAIGPTLMHeadModel"], "model_types": ["openai-gpt"]},
+  "config": {
+    "defaults": {"afn": "gelu", "n_positions": 512, "tie_word_embeddings": true},
+    "inert": ["attn_pdrop", "embd_pdrop", "resid_pdrop", "summary_activation", "summary_first_dropout", "summary_proj_to_labels", "summary_type", "summary_use_proj", "predict_special_tokens"]
+  },
+  "vars": [
+    {"name": "act", "value": {"$act": {"$cfg": "afn"}}},
+    {"name": "inter", "value": {"$mul": [4, {"$var": "hidden"}]}},
+    {"name": "residual", "value": {"PostNorm": {"mixer_norm": {"$var": "norm"}, "ffn_norm": {"$var": "norm"}}}},
+    {"name": "final_norm", "value": null},
+    {"name": "names", "value": {"embed": "{p}tokens_embed", "pos_embed": "{p}positions_embed", "lm_head": {"$if": [{"$var": "tied"}, "{p}tokens_embed", "lm_head"]}, "norm.mix": "{p}h.{L}.ln_1", "norm.ffn": "{p}h.{L}.ln_2", "attn.qkv": "{p}h.{L}.attn.c_attn", "attn.o": "{p}h.{L}.attn.c_proj", "mlp.up": "{p}h.{L}.mlp.c_fc", "mlp.down": "{p}h.{L}.mlp.c_proj"}},
+    {"name": "model_type", "value": "openai-gpt"}
+  ]
+}
