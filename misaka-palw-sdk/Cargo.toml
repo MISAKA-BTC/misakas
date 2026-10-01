@@ -35,6 +35,11 @@ rand_chacha.workspace = true
 kaspa-pq-validator-core.workspace = true
 kaspa-txscript.workspace = true
 serde_json.workspace = true
+# Runtime packs (`runtime_pack`): the source files' SHA-256 (the hub's git-lfs object ids) and the
+# independent second implementation of the IR, one of the executors a pack's conformance runs.
+sha2.workspace = true
+misaka-palw-tir-ref2 = { path = "../misaka-palw-tir-ref2" }
+serde = { workspace = true }
 
 [[bin]]
 name = "palw-class"

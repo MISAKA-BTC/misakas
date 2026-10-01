@@ -163,6 +163,9 @@ fn inspect_tir(
             (entry, verdict)
         })
         .collect();
+    // What the artifact says of itself: its feature scope (what the class does not compute), the adapter and
+    // quant descriptors it was read with, the math and calibration it was built under.
+    let provenance_of = |entry: &misaka_palw_sdk::PalwTirClassEntryV1| misaka_palw_sdk::runtime_pack::provenance::provenance_of(&entry.artifact.container().header.meta);
     if ctx.output == OutputFormat::Json {
         let classes: Vec<_> = rows
             .iter()
@@ -170,6 +173,7 @@ fn inspect_tir(
                 let l = &entry.class.layout;
                 let canonical = entry.canonical_context();
                 serde_json::json!({
+                    "provenance": provenance_of(entry).json,
                     "model_id": entry.model_id,
                     "class_id": entry.class_id().to_string(),
                     "artifact_root": entry.artifact_root.to_string(),
@@ -215,6 +219,9 @@ fn inspect_tir(
             "CanonicalWork    prefill {} / decode {} / max_context {}",
             canonical.declared_prefill_tokens, canonical.exact_decode_tokens, canonical.max_context_tokens
         );
+        for line in provenance_of(entry).lines {
+            println!("{line}");
+        }
         match verdict {
             Ok(()) => println!("admission result ADMISSION_OK  (admission v10 {})", gate.note()),
             Err(why) => println!("admission result REFUSED — {why}  (admission v10 {})", gate.note()),

@@ -26,6 +26,7 @@ use misaka_palw_sdk::PalwClassSdk;
 const USAGE: &str = "palw-class — inspect and preflight PALW model classes through the SDK
 
 USAGE:
+    palw-class pack build|verify|show ...   runtime packs: build one from a model, verify one, show one (palw-class pack for its usage)
     palw-class ledger    --network <id>
     palw-class inspect   --network <id> <artifact-path>
     palw-class preflight --network <id> <artifact-path> [--model-id <model-id>]
@@ -167,6 +168,10 @@ fn run(args: &[String]) -> Result<(), String> {
     let command = if args.is_empty() { String::new() } else { args.remove(0) };
     let network = take_flag(&mut args, "--network");
     match command.as_str() {
+        "pack" => match misaka_palw_sdk::runtime_pack::cli::run(&args)? {
+            0 => Ok(()),
+            code => std::process::exit(code),
+        },
         "ledger" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
             ledger(&view);
