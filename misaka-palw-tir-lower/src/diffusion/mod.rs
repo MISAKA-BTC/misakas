@@ -13,6 +13,7 @@
 //! * [`ada`] — `MOD_ADALN_V1`, the modulated LayerNorm and the gated residual;
 //! * [`calib`] / [`float`] — the per-site calibration and the float reference of the denoiser it is taken from;
 //! * [`dit`] — the denoiser stage: patch embed, timestep, blocks, output, Euler update, one program;
+//! * [`vae`] — the VAE decoder as a chain of single-position stages (resnet, attention, upsample, head);
 //! * [`vae_float`] — the float reference of the VAE decoder, noting the sites the VAE lowering reads;
 //! * [`block`] — one joint transformer block assembled from the lowerers;
 //! * [`attn`] — `ATTN_JOINT_STREAMS_V1`, MMDiT's joint attention over both streams with committed row statistics;
@@ -22,7 +23,6 @@
 //! * [`sampler`] — the Euler schedule as pinned tables, the initial latent, `GEN_SAMPLER_AFFINE_V1`, unpatchify;
 //! * [`stream`] — the one narrowing between code scales (the stream to codes and back);
 //! * [`norm`] — `NORM_GROUP_SPATIAL_V1`, GroupNorm with committed row partials (no cone reads a whole tensor);
-//! * the rest of the vocabulary (`GEN_STAGE_VAE_V1`, the joint block's assembly) follows, one file each.
 //!
 //! **Conventions** (the library's, spec 04b §11): activations are `i16` codes at a calibrated per-site scale
 //! (`±32767`) where a MAC reads them, `i32` where they are carried (the residual stream, Q24 unit rows); an
@@ -44,6 +44,7 @@ pub mod sampler;
 pub mod sink;
 pub mod stream;
 pub mod tables;
+pub mod vae;
 pub mod vae_float;
 
 #[cfg(test)]

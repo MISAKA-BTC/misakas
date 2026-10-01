@@ -196,6 +196,8 @@ pub fn lower_dit_stage(dit: &Dit, cal: &Calib, spec: &DitStageSpec) -> Result<Di
         let dsig = b.gather(dsigma_r, at, 0, 0);
         let cur = lower_initial_latent(&mut b, noise_in, Ref::State(latent), spec.q_lat);
         let new = lower_euler_step(&mut b, cur, v, dsig, mul_shift(s_vel / (1u64 << 24) as f64 / s_x), latent);
+        // NF-28/29: the output node, and a post StateWrite, are commit points — the latent's next value is a leaf.
+        b.commit(new);
         let Ref::Node(out) = new else { unreachable!("a StateWrite is a node") };
         (b.finish(&[]), out)
     };
