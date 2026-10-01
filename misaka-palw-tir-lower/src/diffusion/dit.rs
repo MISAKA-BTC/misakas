@@ -2,7 +2,7 @@
 //! as ONE `TirProgramV2` run by the pipeline's `JobSteps` stage — one step = one position.
 //!
 //! * **`pre`** — the latent at this position (the stage's `Random { IMAGE_INIT_NOISE_V1, Normal }` input at position 0,
-//!   else the latent `Fixed` state), the patch embedding, the timestep sinusoid row by `base[steps] + pos`, the two
+//!   else the latent `Fixed` state), the patch embedding, the timestep sinusoid row by `base[steps_index] + pos`, the two
 //!   conditioning embedders and their sum, `SiLU` of the conditioning, the text rows through the context embedder.
 //!   Its carry is `(h_img, h_txt, cond_a)`.
 //! * **layers** — one program block per transformer block ([`super::block`]); the last is `context_pre_only`.
@@ -91,7 +91,9 @@ pub fn lower_dit_stage(dit: &Dit, cal: &Calib, spec: &DitStageSpec) -> Result<Di
     if cfg.out_channels != c {
         return Err("a denoiser whose output channels differ from its input's is a later profile (learned sigma)".to_string());
     }
-    let max_steps = *spec.counts.last().ok_or("no step counts offered")?;
+    if spec.counts.is_empty() {
+        return Err("no step counts offered".to_string());
+    }
     let tables = SamplerTables::new(&spec.counts, spec.shift, spec.n_train);
     let timesteps = TimestepTable::new(&spec.counts, &tables.timesteps, 256, true, 0.0, 10_000.0);
 
@@ -192,7 +194,7 @@ pub fn lower_dit_stage(dit: &Dit, cal: &Calib, spec: &DitStageSpec) -> Result<Di
         let x = lower_ada_layer_norm(&mut b, xin, scale, shift, &k);
         let rows = lower_linear_codes(&mut b, x, &proj_r); // [N, p·p·C]
         let v = lower_unpatchify(&mut b, rows, unpatch_r, n * p * p * c);
-        let at = lower_step_row_index(&mut b, steps_in, ts_r.base, max_steps, timesteps.total_rows() as u32);
+        let at = lower_step_row_index(&mut b, steps_in, ts_r.base, spec.counts.len() as u32 - 1, timesteps.total_rows() as u32);
         let dsig = b.gather(dsigma_r, at, 0, 0);
         let cur = lower_initial_latent(&mut b, noise_in, Ref::State(latent), spec.q_lat);
         let new = lower_euler_step(&mut b, cur, v, dsig, mul_shift(s_vel / (1u64 << 24) as f64 / s_x), latent);
@@ -210,7 +212,7 @@ pub fn lower_dit_stage(dit: &Dit, cal: &Calib, spec: &DitStageSpec) -> Result<Di
     let inputs = [
         (param_of(text_in), InputSource::External { lo: i32::MIN as i64, hi: i32::MAX as i64 }),
         (param_of(pooled_in), InputSource::External { lo: i32::MIN as i64, hi: i32::MAX as i64 }),
-        (param_of(steps_in), InputSource::External { lo: spec.counts[0] as i64, hi: max_steps as i64 }),
+        (param_of(steps_in), InputSource::External { lo: 0, hi: spec.counts.len() as i64 - 1 }),
         (param_of(noise_in), InputSource::Random { domain: IMAGE_INIT_NOISE_DOMAIN, dist: RandomDist::Normal, per_step: false }),
     ];
     let program = TirProgramV2::from_v1_lifting_params(&v1, &inputs, OutputDecl::Final { node: out_node })
@@ -285,7 +287,7 @@ mod tests {
         let mut inp = MapInputs::default();
         inp.constant.insert(INPUT_TEXT, Tensor::new(DType::I32, vec![n_txt, cfg.joint_dim], q32(&text, spec.text_unit)).unwrap());
         inp.constant.insert(INPUT_POOLED, Tensor::new(DType::I32, vec![1, cfg.pooled_dim], q32(&pooled, spec.pooled_unit)).unwrap());
-        inp.constant.insert(INPUT_STEPS, Tensor::new(DType::Idx, vec![], vec![steps as i128]).unwrap());
+        inp.constant.insert(INPUT_STEPS, Tensor::new(DType::Idx, vec![], vec![si as i128]).unwrap());
         inp.constant.insert(
             INPUT_NOISE,
             Tensor::new(DType::I32, vec![cfg.in_channels, cfg.sample_size, cfg.sample_size], noise.clone()).unwrap(),
