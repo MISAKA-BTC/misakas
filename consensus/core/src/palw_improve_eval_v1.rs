@@ -1230,6 +1230,51 @@ pub fn palw_improve_eval_reservation_v1(step_leaves: u64, slash_value_per_pwu: u
     (step_leaves as u128).saturating_mul(slash_value_per_pwu as u128).div_ceil(rho.max(1) as u128)
 }
 
+/// **An epoch's evaluation budget, in positions** (spec 17 §17.8.2, PALW-MIP-20; RFC-0004 §13 and open
+/// question 7): the smaller of the policy's `max_eval_positions` and the network's ceiling
+/// `max_eval_positions_per_epoch` taken at its `max_eval_budget_permille` — the one reading of "a share
+/// of the span's claim capacity" the chain can compute, because no chapter defines a capacity in positions:
+/// v1 takes the ceiling itself as the span's capacity. A network that wants the evaluation budget tighter
+/// lowers either ceiling.
+pub fn palw_improve_eval_budget_positions_v1(
+    policy_max_eval_positions: u64,
+    ceilings: &crate::palw_improve_v1::PalwImprovementCeilingsV1,
+) -> u64 {
+    let share = (ceilings.max_eval_positions_per_epoch as u128 * ceilings.max_eval_budget_permille as u128 / 1_000) as u64;
+    policy_max_eval_positions.min(ceilings.max_eval_positions_per_epoch).min(share)
+}
+
+/// **The most evaluation jobs an epoch can hold**: the claimable ones — one per drawn item for each
+/// subject's primary kind (an item is exact-key or likelihood, never both), one more per item for a Judge
+/// stage, and one per item and non-parent subject for a Pairwise stage — over `subjects` subjects (the
+/// parent counts). An ExactMatch key's scoring is the fold's, not a claim, and a suite's items have no
+/// disclosed prompt (§17.8.4), so neither adds a job; `n` bounds the drawn items.
+pub fn palw_improve_eval_epoch_jobs_v1(eval: &PalwEvalSpecV1, subjects: usize) -> u64 {
+    use crate::palw_improve_policy_v1::palw_improvement_has_stage_v1 as has;
+    let n = eval.n as u64;
+    let judge = has(eval, PalwScoringKindV1::Judge) as u64;
+    let pairwise = has(eval, PalwScoringKindV1::Pairwise) as u64;
+    let subjects = subjects as u64;
+    n.saturating_mul(1 + judge)
+        .saturating_mul(subjects)
+        .saturating_add(n.saturating_mul(pairwise).saturating_mul(subjects.saturating_sub(1)))
+}
+
+/// **The positions one evaluation job may take**: the epoch's budget shared equally among the epoch's
+/// jobs (rounded down; a job of at least one position always fits a budget of at least one job's worth).
+/// Each job's cap is independent of every other claim — no order of claims can spend another job's share,
+/// and a voided claim returns nothing to anyone — so the epoch's total never exceeds its budget:
+/// `jobs × (budget / jobs) ≤ budget`.
+pub fn palw_improve_eval_job_position_cap_v1(budget_positions: u64, epoch_jobs: u64) -> u64 {
+    budget_positions / epoch_jobs.max(1)
+}
+
+/// **An evaluation claim's positions** (RFC-0004 §13's worked size): the prompt's, then the stream stage's
+/// — the ids it generated, or the reference it was given.
+pub fn palw_improve_eval_positions_v1(prompt_len: usize, stream_len: usize) -> u64 {
+    (prompt_len as u64).saturating_add(stream_len as u64)
+}
+
 /// **A layout's digest**, as an IR class id binds it (`PalwTirClassV1::layout_digest`): what the fold
 /// holds a claim's carried layout to, against the class row's `layout_digest`.
 pub fn palw_improve_eval_layout_digest_v1(layout: &PalwTirLayoutV1) -> Hash64 {
