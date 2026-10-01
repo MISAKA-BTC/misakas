@@ -109,6 +109,10 @@ pub use palw_improve_material_fold_v1::PALW_IMPROVE_MATERIAL_SWEEP_ROWS_PER_BLOC
 #[path = "palw_improve_eval_fold_v1.rs"]
 mod palw_improve_eval_fold_v1;
 pub use palw_improve_eval_fold_v1::PALW_IMPROVE_TABLE_EVAL_JOBS_V1;
+// One reading of "this class has seats" for every class kind (RFC-0002 Part II §II.7.5 Proposal A's possession floor; lane D's
+// class_seating_v1, 735bd69af + 5a9630c76 without the generative fold, which this line does not carry): a child module.
+#[path = "palw_class_seating_v1.rs"]
+mod palw_class_seating_v1;
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
