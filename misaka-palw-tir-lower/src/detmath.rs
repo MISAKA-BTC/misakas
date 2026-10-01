@@ -251,7 +251,7 @@ mod tests {
     fn libm_v1_is_pinned_bit_for_bit() {
         let _g = MODE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_mode(MathMode::LibmV1);
-        let xs = [0.1f64, 0.5, 1.0, 1.7320508075688772, 2.5, 3.141592653589793, 7.25, 40.0, 1e-5, 123.456];
+        let xs = [0.1f64, 0.5, 1.0, 1.7320508075688772, 2.5, std::f64::consts::PI, 7.25, 40.0, 1e-5, 123.456];
         let mut h = blake2b_simd::Params::new().hash_length(32).to_state();
         for &x in &xs {
             for v in [exp(-x), ln(x), ln_1p(x), tanh(x), sin(x * 3.0), cos(x * 3.0), powf(x, 0.37), powf(10000.0, -x / 64.0)] {
