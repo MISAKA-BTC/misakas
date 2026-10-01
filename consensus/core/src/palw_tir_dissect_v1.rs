@@ -339,7 +339,7 @@ pub fn palw_tir_dissect_value_bound_v2(
             continue;
         }
         let nd = &block.nodes[i];
-        let first = nd.inputs.first().and_then(|r| operand_shape(r));
+        let first = nd.inputs.first().and_then(&operand_shape);
         let per_operand = match nd.prim {
             Prim::MatMul => d.saturating_mul(first.as_ref().and_then(|s| s.last()).copied().unwrap_or(1) as u64),
             Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => {
