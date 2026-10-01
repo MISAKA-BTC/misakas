@@ -25,6 +25,8 @@ pub mod palw_filer_false_valid;
 /// and Decision 16's `PanelDa` gate. See the module's own header.
 pub mod palw_fp_seat;
 pub mod palw_heartbeat_miner;
+/// int-10.2 D1: the ledger every kaspad on one host reserves against together (node policy).
+pub mod palw_host_ledger;
 pub mod palw_lane_watch;
 /// V04 (the pre-t12 drill of 2026-09-25): the order a collector offers licences in (node policy).
 pub mod palw_licence_order;

@@ -31,6 +31,9 @@ KIT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [ -f "$KIT_DIR/fleet.env" ] || { echo "ABORT: $KIT_DIR/fleet.env missing — cp fleet.env.example fleet.env and fill it (PLAN.md §4)" >&2; exit 1; }
 # shellcheck source=fleet.env.example
 . "$KIT_DIR/fleet.env"
+# int-10.2 D1: the host pinner unit on a multi-seat host (HOST_PINNER=1 in its install-<host>.sh) — pinner-lib.sh.
+# shellcheck source=pinner-lib.sh
+. "$KIT_DIR/pinner-lib.sh"
 
 TS=$(date +%Y%m%dT%H%M%S)
 say()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
@@ -130,6 +133,14 @@ build_args() { # fills ARGS from the parsed node
            "--palw-producer-bond=$PREMINE_TXID:$N_ID"
            "--palw-fee-outpoint=$PREMINE_TXID:$((FEE_FLOAT_BASE + N_ID))"
            "--palw-host-memory-share=$((N_SHARE * 1048576))")
+    # int-10.2 D1: the host ledger every node on this host shares, where this host names one (HOST_LEDGER_DIR —
+    # fleet.env, or the install-<host>.sh; empty = off, the release's default): each grant of the node's memory
+    # ledger then also needs the host's free memory less EVERY node's reservations (t12-replay-memory-1001.md §5).
+    if [ -n "${HOST_LEDGER_DIR:-}" ]; then ARGS+=("--palw-host-ledger-dir=$HOST_LEDGER_DIR"); fi
+    # int-10.2 A2: the widest prefill run a replay starts at, where a host caps it (PREFILL_RUN_MAX in its install-<host>.sh;
+    # empty = the binary's 64). 32 costs 4-11 % of an 8k replay's time (measured) and halves its trace scratch: on a
+    # host whose ledger is the limit, more replays at once (t12-replay-memory-1001.md §4-§5).
+    if [ -n "${PREFILL_RUN_MAX:-}" ]; then ARGS+=("--palw-prefill-run-max=$PREFILL_RUN_MAX"); fi
     if [ "$N_SEAT8K" = 1 ]; then ARGS+=("--palw-class-artifact=$ART_8K" --palw-verify-class-manifest); fi
     case "$N_PRODUCE" in
         none) ;;
@@ -253,7 +264,7 @@ write_unit() { # into $REL/units — nothing under /etc yet
 # deploy-t12 drop-in, release $REV, bond $N_ID. Roll back = delete this file + daemon-reload.
 [Unit]
 StartLimitIntervalSec=900
-StartLimitBurst=4
+StartLimitBurst=4$(pinner_unit_deps)
 [Service]
 $(unit_body_service)
 EOF
@@ -265,7 +276,7 @@ Description=MISAKA testnet-12 bond $N_ID (regenesis, release $REV)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=900
-StartLimitBurst=4
+StartLimitBurst=4$(pinner_unit_deps)
 [Service]
 Type=simple
 $(unit_body_service)
@@ -390,6 +401,7 @@ stage_nodes() {
         "$N_LAUNCH" --check || die "b$N_ID launch check failed — nothing was switched"
     done
     say "  launch scripts: $REL/launch/  units: $REL/units/  (nothing under /etc changed)"
+    stage_pinner
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -578,6 +590,7 @@ cgroup_memory() {
 check_nodes() {
     local spec rc=0
     t12check_expect
+    check_pinner
     for spec in "${NODES[@]}"; do
         parse_node "$spec"
         say "== b$N_ID $N_UNIT: $(systemctl show -p ActiveState,SubState,NRestarts --value "$N_UNIT" | tr '\n' ' ')"
@@ -635,6 +648,7 @@ rollback_host() {
     grep '^PRIOR ' "$log" | awk '!seen[$2]++' | while read -r kind a b _; do
         if [ "$b" = "active=active" ]; then say "  starting $a (was active before switch)"; systemctl start "$a" || warn "$a did not start"; fi
     done
+    rollback_pinner
     say "rollback done — old units run their untouched old scripts/binaries"
 }
 
@@ -678,6 +692,7 @@ switch_host() { # $1 = seconds between node starts
     systemctl daemon-reload
     say "2/3 move the old chain data aside (never deleted here; keys never touched)"
     for d in "${OLD_APPDIRS[@]}"; do aside_dir "$d"; done
+    switch_pinner
     say "3/3 start the new nodes, ${gap}s apart, each gated on its fingerprint"
     for spec in "${NODES[@]}"; do
         parse_node "$spec"
@@ -723,6 +738,8 @@ usage: $0 <command>
   upgrade-rollback put back the unit each node had before 'upgrade' with this REV (appdirs never moved; DRY_RUN=1)
   purge-old        delete the old chain data switch moved aside (CONFIRM_PURGE=yes; rollback impossible after)
   seeder-status    read-only (swap/rollback of a seeder: seeders/30-swap.sh, 50-rollback.sh from the Mac)
+  (int-10.2 D1) a host with HOST_PINNER=1 also gets misaka-palw-pinner.service from stage / upgrade / switch, and
+                   check prints it with the host ledger (HOST_LEDGER_DIR) — pinner-lib.sh
 EOF2
 }
 
@@ -1035,10 +1052,12 @@ upgrade_host() { # $1 = seconds between nodes
     if [ "$DRY_RUN" = 1 ]; then say "DRY_RUN=1: every read-only check runs for real; nothing is stopped, installed, started or written"; fi
     say "upgrade $(hostname) to $REV — pre-flight of every node (nothing stops until all pass)"
     for spec in "${NODES[@]}"; do parse_node "$spec"; upgrade_preflight_node; done
+    upgrade_pinner_preflight
     drills=$(drill_processes_here)
     [ -z "$drills" ] || { echo "$drills" >&2; die "a testnet-12 DRILL runs on this host — stop it first"; }
     require_other_hosts_up "pre-flight"
     run mkdir -p "$STATE_DIR/upgrade-$REV"
+    upgrade_pinner
     for spec in "${NODES[@]}"; do parse_node "$spec"; upgrade_node "$gap"; done
     if [ "$DRY_RUN" = 1 ]; then say "DRY-RUN done — nothing on $(hostname) was changed"; return 0; fi
     say "upgrade done on $(hostname); running checks"
@@ -1094,6 +1113,7 @@ upgrade_rollback_host() { # $1 = seconds between nodes — puts back the unit/dr
         fi
         sleep "$gap"
     done
+    upgrade_rollback_pinner
     if [ "$DRY_RUN" = 1 ]; then say "DRY-RUN done — nothing on $(hostname) was changed"; return 0; fi
     say "upgrade-rollback done ($restored node(s) put back); chain data was never moved"
     check_nodes || warn "a check failed — read the lines above"

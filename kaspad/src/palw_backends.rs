@@ -1867,7 +1867,12 @@ fn host_headroom_of_v1(available: u64) -> u64 {
 pub fn host_memory_status_v1() -> String {
     // The pin half (int-10.2 A1) on every platform that pins: what this process locked, which a host's
     // arithmetic counts once per distinct file however many seats report it.
-    let pinned = format!("{} {}", crate::palw_artifact_pin::pinned_status_v1(), crate::palw_prefill_run::prefill_run_status_v1());
+    let pinned = format!(
+        "{} {} {}",
+        crate::palw_artifact_pin::pinned_status_v1(),
+        crate::palw_prefill_run::prefill_run_status_v1(),
+        crate::palw_host_ledger::host_ledger_status_v1()
+    );
     #[cfg(target_os = "linux")]
     {
         let mib = |bytes: u64| bytes >> 20;
@@ -1928,6 +1933,17 @@ fn load_per_cpu_milli_from_v1(loadavg: &str, cpus: u64) -> Option<u64> {
         return None;
     }
     Some(((load1 * 1000.0) / cpus.max(1) as f64) as u64)
+}
+
+/// **The HOST's headroom now** (int-10.2 D1), in both readings: `MemAvailable` alone, without this
+/// process's cgroup term — what the host ledger's aggregate is measured against. The cgroup is this
+/// node's limit; the host is every node's. `None` where the platform cannot say.
+pub fn host_wide_headroom_v1() -> Option<crate::palw_memory_ledger::PalwHostHeadroomV1> {
+    let available = mem_available_bytes_v1()?;
+    Some(crate::palw_memory_ledger::PalwHostHeadroomV1 {
+        past_reserve: available.saturating_sub(PALW_REPLAY_HOST_RESERVE_BYTES_V1),
+        haircut: host_headroom_of_v1(available),
+    })
 }
 
 /// The host's headroom now, in both readings the ledger chooses between (`palw_memory_ledger`'s

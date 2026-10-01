@@ -506,6 +506,15 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // The reservation ledger's declared bound (ADR-0151 follow-up, item 3): the per-node share, so
     // three duties in this process cannot each take the whole host because each fitted alone.
     crate::palw_memory_ledger::arm_host_share_v1(crate::args::palw_host_share_bytes_v1(args));
+    // int-10.2 D1: and, where the operator named one, the host ledger every node on this host shares —
+    // the host pool is rebuilt over it (same share, same carve) before any service can reserve.
+    if crate::palw_memory_ledger::arm_host_ledger_v1(args.palw_host_ledger_dir.as_deref().map(std::path::Path::new)) {
+        kaspa_core::info!(
+            "[palw-host] host ledger armed in {}: every grant of this node's memory ledger also needs the host's free memory less \
+             every node's reservations (int-10.2 D1)",
+            args.palw_host_ledger_dir.as_deref().unwrap_or_default()
+        );
+    }
     // The same share bounds how many leaves this process lays out WHOLE (DoS audit 2026-09-24, #4):
     // every family's `materialize_cap()` is `min(network ladder, 2^26, share / dense bytes a leaf)`,
     // so a declared budget is also the ceiling on a sampled capture, not only on the ledger's sum.

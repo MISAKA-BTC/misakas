@@ -155,6 +155,13 @@ add_checks() { # <id> <hard: 1 = die on what add needs, 0 = warn (the key is cop
     local spec; spec=$(move_target_spec "$id" "$HOST_KEY") || die "b$id does not move to this host ($HOST_KEY) (move-nodes.sh)"
     parse_node "$spec"; require_release
     [ "$N_MODE" = new ] || die "b$id: a moved seat arrives as a NEW unit (mode new), not a drop-in"
+    # int-10.2 D1: this host's pinner / host ledger configuration for the moved seat's launch script and unit — only
+    # under a staged kaspad that knows the flags (an int-10.1 kaspad would refuse --palw-host-ledger-dir at its launch
+    # check) and a kit whose lib.sh carries pinner-lib.sh (patch p4)
+    if "$REL/bin/kaspad" --help 2>/dev/null | grep -q -- '--palw-host-pinner' && declare -F pinner_unit_deps >/dev/null; then
+        move_host_memory_env "$HOST_KEY"
+        say "  host memory configuration here: HOST_PINNER=${HOST_PINNER:-0} HOST_LEDGER_DIR=${HOST_LEDGER_DIR:-<off>}$(pinner_on && echo "; pinner unit $(systemctl is-active "$PINNER_UNIT" 2>/dev/null || true)")"
+    fi
     flag() { if [ "$hard" = 1 ]; then die "$*"; else warn "$*"; ok=0; fi; }
     [ -x "$REL/bin/kaspad" ] && [ "$(sha_of "$REL/bin/kaspad")" = "$KASPAD_SHA256" ] || die "$REL/bin/kaspad is not the release's (sha $KASPAD_SHA256) — this host's release is not staged: \`./install-<host>.sh stage\` first (a moved seat runs the release the fleet runs)"
     if [ -f "$ART_8K" ] && [ "$(stat -c %s "$ART_8K")" = "$ART_8K_BYTES" ]; then say "  8k artifact present"; else flag "8k artifact $ART_8K missing or the wrong size (distribute-from-mac.sh artifact)"; fi

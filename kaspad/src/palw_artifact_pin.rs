@@ -209,7 +209,14 @@ pub fn unpin_paths_v1(paths: &[PathBuf]) -> usize {
     let canonical: Vec<PathBuf> = paths.iter().map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone())).collect();
     let mut pins = lock_pins();
     let before = pins.len();
-    pins.retain(|pin| !canonical.contains(&pin.path));
+    let host = crate::palw_host_ledger::shared_host_ledger_v1();
+    pins.retain(|pin| {
+        let keep = !canonical.contains(&pin.path);
+        if !keep && let Some(host) = &host {
+            host.unregister_pin(pin.identity);
+        }
+        keep
+    });
     before - pins.len()
 }
 
@@ -217,6 +224,11 @@ pub fn unpin_paths_v1(paths: &[PathBuf]) -> usize {
 pub fn unpin_all_v1() -> usize {
     let mut pins = lock_pins();
     let released = pins.len();
+    if let Some(host) = crate::palw_host_ledger::shared_host_ledger_v1() {
+        for pin in pins.iter() {
+            host.unregister_pin(pin.identity);
+        }
+    }
     pins.clear();
     released
 }
@@ -362,6 +374,10 @@ fn settle_v1(
             }
             let (bytes, resident, read_millis) = (identity.len, prepin.resident, prepin.read_millis);
             lock_pins().push(PinEntryV1 { path: prepin.canonical, identity, holdings: vec![payload], map: prepin.map });
+            // The host counts each distinct pinned file once, whoever locks it (int-10.2 D1).
+            if let Some(host) = crate::palw_host_ledger::shared_host_ledger_v1() {
+                host.register_pin(identity);
+            }
             PalwPinOutcomeV1::Pinned { bytes, resident, read_millis }
         }
         Err(PalwPinOutcomeV1::AlreadyPinned { bytes }) => {
@@ -444,6 +460,132 @@ fn log_outcome_v1(role: &str, path: &Path, outcome: &PalwPinOutcomeV1, cap: u64)
             )),
             gib(*locked)
         ),
+    }
+}
+
+/// The IR container's magic (`PALWTIR1`).
+const PALW_PIN_TIR_MAGIC_V1: &[u8; 8] = b"PALWTIR1";
+
+/// **The lineage a file's magic names, without loading it** — for the host pinner, which holds no SDK:
+/// the IR container's and the Qwen3.6 container's own magic, and the dense container as everyone's
+/// fallback (its decoder authenticates the format when a seat loads it).
+pub fn palw_pin_lineage_of_file_v1(path: &Path) -> Result<&'static str, String> {
+    let mut head = [0u8; 8];
+    std::fs::File::open(path)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    // `misaka_palw_tir_artifact::PALW_TIR_CONTAINER_MAGIC_V1`, spelled here because the node does not link
+    // the container crate; `the_pinners_magic_is_the_containers` holds the two together.
+    Ok(if head == *PALW_PIN_TIR_MAGIC_V1 {
+        misaka_palw_sdk::lineages::tir::TIR_LINEAGE_ID_V1
+    } else if head == *misaka_palw_base0::qwen36::QWEN36_FILE_MAGIC {
+        misaka_palw_sdk::lineages::qwen36::QWEN36_LINEAGE_ID
+    } else {
+        misaka_palw_sdk::lineages::dense::DENSE_LINEAGE_ID
+    })
+}
+
+/// **The host pinner** (int-10.2 D1; `kaspad --palw-host-pinner`): a process that holds nothing but the
+/// pins — every `--palw-class-artifact` a replay reads in place, locked by the same rules a node applies
+/// (`prepin_file_with_policy_v1`: never a residency's container, under the cap, within the host's spare
+/// memory) and registered in the host ledger when one is named — and then waits to be stopped.
+///
+/// **Why a process of its own** (the coordinator's condition 5): a page-cache page is charged to the
+/// memory cgroup that FIRST faulted it in. Started before the seats (the kit's `misaka-palw-pinner`
+/// unit, `Type=notify`, which the seats' units are ordered `After=`), the pinner is that cgroup: the
+/// artifacts' pages sit in its `memory.current`, and no seat's ledger carries 1.7–3.4 GiB of a file in
+/// its cgroup term because it happened to load first. Each seat still pins the same file for itself (its
+/// own lock on the same pages — free: `mincore` reads them resident), so a seat outlives a stopped pinner
+/// unchanged. On a host already running, the pages stay charged where they first were until that seat
+/// restarts: its old cgroup's charge then passes to the parent slice, and the pinner's lock keeps the
+/// pages resident, so the restarted seat faults none of them and is charged nothing.
+///
+/// **Readiness.** Once every file is locked, `READY=1` goes to systemd (`NOTIFY_SOCKET`; nothing without
+/// one), so a seat ordered after the pinner starts only when the pages are the pinner's. A pinner that
+/// locked nothing exits 1 — the unit's restart policy retries a host that had no room — rather than
+/// report a readiness it does not have.
+pub fn run_host_pinner_v1(paths: &[PathBuf], policy: PalwArtifactPinPolicyV1) -> ! {
+    let host = crate::palw_host_ledger::shared_host_ledger_v1();
+    if paths.is_empty() {
+        warn!("[palw-pinner] no --palw-class-artifact to pin: nothing to hold (int-10.2 D1)");
+        std::process::exit(1);
+    }
+    for path in paths {
+        let spare = crate::palw_backends::host_available_bytes_v1();
+        match prepin_file_with_policy_v1(path, palw_pin_lineage_of_file_v1(path), spare, policy) {
+            Ok(prepin) => {
+                let identity = prepin.map.identity();
+                if let Some(host) = &host {
+                    host.register_pin(identity);
+                }
+                info!(
+                    "[palw-pinner] pinned {}: {:.2} GiB locked ({:.2} GiB were resident, the rest read in {} ms){}",
+                    path.display(),
+                    gib(identity.len),
+                    gib(prepin.resident),
+                    prepin.read_millis,
+                    if host.is_some() { ", registered in the host ledger" } else { "" }
+                );
+                // Held by the registry, like a node's pins, for the life of the process; no holding names it.
+                lock_pins().push(PinEntryV1 { path: prepin.canonical, identity, holdings: Vec::new(), map: prepin.map });
+            }
+            Err(outcome) => warn!("[palw-pinner] {} is not pinned: {outcome:?}", path.display()),
+        }
+    }
+    let summary = pinned_summary_v1();
+    if summary.files == 0 {
+        warn!("[palw-pinner] none of the {} file(s) could be pinned (above): exiting so the unit retries (int-10.2 D1)", paths.len());
+        std::process::exit(1);
+    }
+    let status = format!(
+        "holding {} of {} file(s), {:.2} GiB, locked for this host's seats until stopped",
+        summary.files,
+        paths.len(),
+        gib(summary.bytes)
+    );
+    match sd_notify_v1(&format!("READY=1\nSTATUS={status}")) {
+        Ok(true) => info!("[palw-pinner] {status} (int-10.2 D1); systemd told READY"),
+        Ok(false) => info!("[palw-pinner] {status} (int-10.2 D1)"),
+        Err(e) => warn!("[palw-pinner] {status} (int-10.2 D1); systemd's NOTIFY_SOCKET refused READY ({e})"),
+    }
+    loop {
+        std::thread::park();
+    }
+}
+
+/// **`sd_notify(3)` without libsystemd**: one datagram to the socket systemd names in `NOTIFY_SOCKET`
+/// (a path, or `@` + an abstract name on Linux). `Ok(false)`: no socket named — not under a
+/// `Type=notify` unit, nothing to tell.
+pub fn sd_notify_v1(state: &str) -> std::io::Result<bool> {
+    match std::env::var_os("NOTIFY_SOCKET") {
+        Some(socket) => sd_notify_to_v1(&socket, state).map(|()| true),
+        None => Ok(false),
+    }
+}
+
+/// [`sd_notify_v1`] to a named socket (what a test calls: it cannot set the process's environment
+/// without racing its neighbours).
+pub fn sd_notify_to_v1(socket: &std::ffi::OsStr, state: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::net::{SocketAddr, UnixDatagram};
+        let bytes = socket.as_bytes();
+        let addr = match bytes.first() {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            Some(b'@') => {
+                use std::os::linux::net::SocketAddrExt;
+                SocketAddr::from_abstract_name(&bytes[1..])?
+            }
+            _ => SocketAddr::from_pathname(Path::new(socket))?,
+        };
+        UnixDatagram::unbound()?.send_to_addr(state.as_bytes(), &addr)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (socket, state);
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "no unix datagram sockets on this platform"))
     }
 }
 
@@ -539,6 +681,45 @@ mod tests {
         assert!(holding_is_pinned_v1(&stranger));
         assert_eq!(unpin_paths_v1(std::slice::from_ref(&path)), 1, "one file, one lock, released");
         assert!(!holding_is_pinned_v1(&holding) && !holding_is_pinned_v1(&stranger));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// **The host pinner reads a file's lineage from its magic exactly as the SDK dispatches it** — the
+    /// IR container's `PALWTIR1` (spelled in this module, held to the container crate's constant here),
+    /// the Qwen3.6 container's own magic (never pinned), and the dense container as everyone's fallback.
+    #[test]
+    fn the_pinners_magic_is_the_containers() {
+        assert_eq!(PALW_PIN_TIR_MAGIC_V1, misaka_palw_tir_artifact::PALW_TIR_CONTAINER_MAGIC_V1);
+        let dir = std::env::temp_dir().join(format!("misaka-pin-magic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (head, want) in [
+            (*PALW_PIN_TIR_MAGIC_V1, misaka_palw_sdk::lineages::tir::TIR_LINEAGE_ID_V1),
+            (*misaka_palw_base0::qwen36::QWEN36_FILE_MAGIC, misaka_palw_sdk::lineages::qwen36::QWEN36_LINEAGE_ID),
+            (*b"PALWB0A2", misaka_palw_sdk::lineages::dense::DENSE_LINEAGE_ID),
+        ] {
+            let path = dir.join(want);
+            std::fs::write(&path, [head.as_slice(), &[0u8; 8]].concat()).unwrap();
+            assert_eq!(palw_pin_lineage_of_file_v1(&path), Ok(want));
+            assert_eq!(palw_pin_lineage_v1(want).is_ok(), want != misaka_palw_sdk::lineages::qwen36::QWEN36_LINEAGE_ID);
+        }
+        assert!(palw_pin_lineage_of_file_v1(&dir.join("absent")).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The pinner's readiness reaches the socket systemd names**: one datagram, `READY=1` and the
+    /// status, read back from a socket bound where `NOTIFY_SOCKET` would point (the abstract form is
+    /// Linux's and is spelled the same way).
+    #[cfg(unix)]
+    #[test]
+    fn the_pinners_readiness_reaches_the_notify_socket() {
+        let path = std::env::temp_dir().join(format!("misaka-notify-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixDatagram::bind(&path).expect("a socket where systemd's would be");
+        sd_notify_to_v1(path.as_os_str(), "READY=1\nSTATUS=holding 2 of 2 file(s)").expect("sent");
+        let mut buf = [0u8; 128];
+        let n = listener.recv(&mut buf).expect("received");
+        assert_eq!(&buf[..n], b"READY=1\nSTATUS=holding 2 of 2 file(s)");
+        assert!(sd_notify_to_v1(std::ffi::OsStr::new("/nonexistent/notify.sock"), "READY=1").is_err(), "no socket there");
         std::fs::remove_file(&path).ok();
     }
 

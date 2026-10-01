@@ -329,7 +329,8 @@ ONE process …`). It prints it as a warning on a `--palw-register-class` run.
      Nothing else tells you, and a class that cannot reach 7 ready seats never leaves `Prefetching`.
      *From int-10.2* the artifact is pinned (below) and the replay's prefill run narrows to what the
      share can grant (`--palw-prefill-run-max`, default 64): the same replay needs 1.70 GiB at 64,
-     0.87 at 32 and 0.45 at 16, slower as it narrows (at one position a time ~2.5× the 64's time).
+     0.87 at 32 and 0.45 at 16, a little slower as it narrows (32 costs 4–11 % of the replay's time,
+     8 about a quarter; one position at a time ~2.5×).
      A seat that can meet a class only below 16 still proves it and says so in its log.
    * An 8k producer peaked at 3.67 GiB RSS in the drill, which ran it with a 5 GiB share
      (`5368709120`).
@@ -340,6 +341,12 @@ ONE process …`). It prints it as a warning on a `--palw-register-class` run.
      `RLIMIT_MEMLOCK` at least the file's size: `LimitMEMLOCK=infinity` in a systemd unit, `ulimit -l unlimited`
      in a shell (root already has it). If the kernel refuses, the log says `is not pinned: … RLIMIT_MEMLOCK …`
      and the node reserves the file per replay as before; `--palw-no-artifact-pin` turns pinning off.
+   * **Several nodes on one host (int-10.2).** Give each the same `--palw-host-ledger-dir=/run/misaka-palw`: a
+     node's grant then also needs the host's free memory less EVERY node's reservations, so the nodes cannot each
+     promise the same free memory (`… the host ledger cannot cover …` in a log is that bound holding a duty). To
+     keep the artifacts' page cache out of the nodes' memory cgroups, run `kaspad --palw-host-pinner
+     --palw-class-artifact=<file> --palw-host-ledger-dir=<dir>` as a unit of its own (systemd `Type=notify`,
+     `LimitMEMLOCK=infinity`) that the nodes' units are `After=` and `Wants=`. One node on a host needs neither.
 3. **Start.** Use `misaka mining setup --model <class-id> --artifact <path>`, then `mining start`, or
    add `--palw-producer-class=<class-id> --palw-class-artifact=/path/qwen25-1.5b-a16-8k.palwart` to the
    manual shape. Add `--palw-verify-class-manifest` to re-derive every sidecar at startup and refuse

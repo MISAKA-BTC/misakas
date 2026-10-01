@@ -96,8 +96,9 @@ way. A derived class (no file). A dense artifact a platform decoded into owned m
 the first seat to load the artifact. Pinned, it stays there: in that seat's `memory.current` for good and so in its ledger's cgroup
 term (`cgroup_headroom_from_v1`), lowered by the file (1.68 GiB, + 1.74 with the IR container); the other seats are charged nothing.
 The periodic `[palw-host] memory` line says it beside `pinned_mib`; the kit's `check_memmax` floor already budgets every artifact
-against every seat's `MemoryMax`. A host pinner of its own (a unit that pins before the seats start, so the charge leaves the seats'
-cgroups) is weighed in §5.
+against every seat's `MemoryMax`. On a multi-seat host the charge goes to a unit of its own instead — the host pinner, which faults
+the files in before any seat starts (§5): that is the configuration for 5.104 and ibm; a single-seat host (b6) and a Mac pin in
+process as above.
 
 **Reported.** The load line (`pinned class artifact …: 1.68 GiB locked in RAM …`), the periodic `[palw-host] memory` line (`class
 artifacts pinned by this process: … (pinned_mib=…)`), and `getPalwNodeStatus.verification` (`pinned_mib=<MiB> pinned_files=<n>` —
@@ -139,7 +140,8 @@ So the reservation and the run can never disagree.
 **Where the width is chosen.** SEAT-R full seat (attempt, free prompt, the legacy path), SEAT-S4 partial seat, the court's close, the
 interval seat, the S3 sampler, the whole-capture sampler, the ADR-0160 audit and operator DA, the J1 probe, and the producer. **The
 producer** takes the same rule: 64 whenever its need fits (the attempt is a race and the widest width is the fastest), narrower only
-where the attempt would otherwise HOLD — an attempt that holds produces nothing, one at 16 positions takes ~1.2× the time.
+where the attempt would otherwise HOLD — an attempt that holds produces nothing, one at 16 positions takes a few percent longer
+(timed below).
 
 **The pre-check and the readiness proof.** The per-duty pre-check (`replay_memory_budget_v1`) asks the NARROWEST width's need (one
 position at a time): the replay's own reservation takes the widest the ledger grants when it starts, so a duty is deferred only when
@@ -159,6 +161,25 @@ are the class's slow tail. The status's `full_capable` reads the narrowest width
 | 2 | 1.760 GiB | 0.084 GiB |
 | 1 | 1.734 GiB | 0.058 GiB |
 
+**The real 8k seat replay, timed** (CP2's request; `a_real_8k_replay_at_every_width_commits_one_set_of_roots`, env-gated): the
+converted `qwen25-1.5b-a16-8k.palwart` mapped as the dense lineage maps it, testnet-12's `graph-v7@8192` row at its canonical (1023, 2),
+the anchor's verdict replay (`execute_for_verdict`, SEAT-R's call) at each width in turn in one process, `RAYON_NUM_THREADS=4`, on this
+Mac (10 cores) while other lanes built — load average 30 at the start, 75 at the end:
+
+| width (order run) | time | a prefill position | working set (trace scratch) |
+| --- | --- | --- | --- |
+| 64 (1st) | 214.7 s | 209.9 ms | 1.698 GiB (1.667) |
+| 32 (2nd) | 222.8 s | 217.8 ms | 0.865 GiB (0.833) |
+| 16 (3rd) | 227.1 s | 222.0 ms | 0.448 GiB (0.417) |
+| 8 (4th) | 271.5 s | 265.4 ms | 0.240 GiB (0.208) |
+| 64 (5th) | 345.2 s | 337.5 ms | 1.698 GiB (1.667) |
+
+Every width committed the same execution root, trace root, work leaves and output root (asserted); peak RSS 2.6 GiB. The host's
+load is the largest term here — the same width took 61 % longer at the end than at the start — so the table bounds the width's own
+cost rather than measuring it: 32 and 16 cost a few percent against the first 64 and 8 a quarter, never the 2.45× of stepping one
+position at a time. ADR-0117's idle measurement of the prefill alone (graph-v5, 508 positions, 12 cores) is the other bound: 64 →
+32 +11 %. So **narrowing an 8k replay from 64 to 32 costs 4–11 % of its time and halves its trace scratch**; 16 a little more.
+
 **Reported.** A reservation the ledger narrowed is logged (once a minute per role: the need at the width taken and what the cap's
 would have needed); SEAT-R's start lines print the need reserved (`… trace scratch 0.42 GiB at a prefill run of 16 …`);
 `getPalwNodeStatus.verification` carries `run_cap`, `run_last`, `run_narrowed`, `capacity_run_min`, `capacity_narrow_classes`.
@@ -174,13 +195,154 @@ reservation through the ledger and runs the instance it left.
 2. Only an owned instance (`&mut`) is narrowed; a shared one runs and is priced at the cap.
 3. No consensus figure reads the width (`the_economic_derivations_do_not_read_the_resource_profile`); every width commits the same rows and roots.
 
-## 6. Kit, and the host's arithmetic
+## 5. D1 — host-level coordination
+
+**The failure.** Each node's ledger grants when its need fits its own share and `MemAvailable − 1 GiB` less ITS OWN reservations.
+Five seats on 5.104 each read the same `MemAvailable` and each subtracted only their own grants: together they promised it five
+times. Lane P: per-seat cgroups cannot fix that — five caps that each fit the host sum past it.
+
+**The configuration for a multi-seat host** (the coordinator's decision on CP2). Two parts, both node policy, both set per host by
+the kit: the **host pinner** — a unit and memory cgroup of its own, started before the seats, so the class artifacts' page cache
+(3.41 GiB with Phase H: the 8k `.palwart` 1.68 + the IR container 1.74) is charged there and to no seat — and the **host ledger**,
+so every seat's grant also needs the host's free memory less EVERY seat's reservations. The seats keep `MemoryMax=9G` and their 3.5
+GiB share: F1's live axis (each seat's cgroup term, LazyFree credited) bounds each seat, the host ledger bounds their sum.
+`install-5104.sh` and `install-ibm.sh` set `HOST_PINNER=1` and `HOST_LEDGER_DIR=/run/misaka-palw`. A single-seat host (b6 on .113)
+and a Mac pin in process (§3) with no host ledger; `install-113.sh` says to add both lines when b7 arrives (two seats).
+
+**The host ledger.** `--palw-host-ledger-dir=<dir>` names a ledger every kaspad on the host shares (`kaspad/src/palw_host_ledger.rs`):
+a text file `host-ledger-v1` on a tmpfs, rewritten whole by rename under an exclusive `flock(2)` on `host-ledger-v1.lock` (released
+by the kernel with the descriptor, so a node killed mid-write leaves no lock), never fsynced (it describes live processes only; a
+writer waiting on a swapping disk would hold its node's ledger).
+Its lines: `n <pid> <start> <instance> node|pinner` (who takes part), `r <pid> <start> <instance> <id> <bytes> <since> <role>` (a
+grant), `p <pid> <start> <instance> <dev> <ino> <size> <mtime>` (a pinned file). The host pool's ledger
+(`palw_memory_ledger::arm_host_ledger_v1`) registers every grant there under its own lock — so the two ledgers cannot disagree about
+which grants exist — and a grant needs BOTH the node's own bounds (share, its live headroom, the proof carve: unchanged) AND
+
+    need ≤ host_bound − Σ reservations of every live node on the host
+    host_bound = MemAvailable − 1 GiB (declared share) | 70 % × (MemAvailable − 1 GiB) (no share) — the node ledger's own policy
+
+`MemAvailable` alone (`palw_backends::host_wide_headroom_v1`): the cgroup term is the node's, the host is everyone's. It keeps the
+node ledger's deliberate double count host-wide (a grant's touched pages have left `MemAvailable` and are subtracted again): the
+error holds a duty that would have fitted, never starts one that would not. A host refusal names the host's bound, what is reserved
+on it and by how many nodes (`… this node's own bounds admit it, and the host ledger cannot cover 2.50 GiB: the host's bound is
+6.00 GiB and 5.00 GiB of it is reserved by 2 node(s) on this host`); the per-duty pre-check sees it as a dry run, and A2's widest-width
+search narrows a replay to what the HOST can grant as well as the seat. **Readiness never reads it**: a seat's capacity
+(`capacity_admits`) stays its own — a seat is a seat for the class while its host is busy — and the readiness proof's 32 MiB is
+registered on the host but never refused there (it is the node's standing carve; a refused proof lapses the seat's readiness row,
+and on 2026-09-25 that HELD a class and voided its claims). Pinned pages are already outside `MemAvailable` (unevictable), so the
+aggregate needs no term for them; the `p` lines are the host's report, each distinct identity counted once.
+
+**The host pinner** (the coordinator's condition 5). `kaspad --palw-host-pinner --palw-class-artifact=<8k> --palw-class-artifact=<IR>
+--palw-host-ledger-dir=<dir>` holds the pins and nothing else (no chain, no appdir, no bond: `palw_artifact_pin::run_host_pinner_v1`),
+by a node's own rules (never a residency's container, the cap, the spare memory), registered in the host ledger as `pinner`. Once every
+file is locked it sends systemd `READY=1` (`sd_notify` over `NOTIFY_SOCKET`, `palw_artifact_pin::sd_notify_v1`); one that locked
+nothing exits 1 and the unit retries. The kit's `misaka-palw-pinner.service` (`contrib/t12-deploy-kit/pinner-lib.sh`): `Type=notify`,
+`LimitMEMLOCK=infinity`, no `MemoryMax`, `Restart=on-failure`; every seat's unit on the host `Wants=` it and is `After=` it, so at boot
+and at every seat start the pages are the pinner's before a seat can fault one. A page is charged to the cgroup that FIRST faults it in:
+with the pinner first, no seat's ledger carries 1.7–3.4 GiB of artifact in its cgroup term. Each seat still pins the same files itself
+(its own lock on resident pages — free: `mincore` reads them resident, so the seat's pin reads nothing and always fits), so the pinner is
+never a dependency (`Wants=`, not `Requires=`): a seat starts without one, and stopping it changes nothing for a running seat. On a host
+already running, the pages stay charged to the seat that faulted them until that seat restarts: its old cgroup's charge then passes to
+the parent slice, and the pinner's lock keeps the pages resident, so the restarted seat faults none of them — the kit's `upgrade`
+starts the pinner BEFORE the first seat restarts for exactly this.
+
+**The host's arithmetic: 5.104** (24 GiB; the coordinator's question on CP2). RAM 24,033 MiB (`install-5104.sh`), the reserve for
+everything that is not a t12 kaspad 4,096 MiB (`RESERVE_MIB`, the t11 fixture node included), the pinned artifacts once 3,497 MiB
+(1,716 + 1,781), and each seat's live set 3.2 GiB = 3,277 MiB (lane P, `t12-panel-backlog-1001.md` §7: 2.7–3.2 GiB `Private_Dirty`;
+the high end). What is left is what replays can use; the host ledger keeps its 1 GiB below `MemAvailable` on top. An 8k full seat
+reserves 1,740 MiB at W = 64, 886 at 32, 460 at 16 (§4, pinned). The host ledger keeps the node ledger's deliberate double count: a
+running replay's touched pages leave `MemAvailable` AND stay reserved, so replays that start together get `⌊bound / need⌋`, while
+one that starts beside running replays whose pages are touched needs `bound − 2 × their reservations ≥ need` — the sustained count:
+
+| 5.104 | Σ live | RAM − reserve − pinned once − Σ live | the host ledger's bound (− 1 GiB) | concurrent 8k replays at W = 64 / 32 / 16: started together · sustained |
+| --- | --- | --- | --- | --- |
+| five seats (now) | 16,385 MiB | **55 MiB** | 0 | **0 / 0 / 0 · 0 / 0 / 0** |
+| three seats (b7 → .113, b3 → ibm) | 9,831 MiB | **6,609 MiB** (6.45 GiB) | 5,585 MiB (5.45 GiB) | **3 / 6 / 12 · 2 / 3 / 6** |
+
+*Five seats.* There is no room: the five live sets, the pins and the reserve fill the host before a replay starts, which is the
+10-01 night measured from the other side. The host ledger cannot make room; it turns the swap storm into a queue — a seat's duty
+waits (`… the host ledger cannot cover …`) until `MemAvailable` has the room, which on this host is the page cache and LazyFree the
+kernel can still drop: replays run one or two at a time, host-wide, at whatever width fits. The 5.104 seats stay slow, and so do the
+claims they gate, until two of them move. The figure moves with the live set (each 0.5 GiB less per seat is 2.5 GiB more at five
+seats: one replay at W = 64 and one at W = 32); lane P's 3.2 is the planning figure, and an idle seat's `Private_Dirty − LazyFree`
+from the host would firm the row up.
+
+*Three seats.* 5.45 GiB on the host ledger admits every seat's one 8k replay at full width when they start together (3 × 1,740 =
+5,220 MiB), but sustains two at W = 64: with two running and touched, `5,585 − 2 × 3,480 < 0` holds the third whatever its width
+until one returns. At W = 32 it sustains three — one per seat (each seat's own share would admit four: 4 × 886 ≤ 3,584 − 32) — and
+at 16 six. 32 costs 4–11 % of a replay's time against 64 (§4, timed): on a host whose ledger is the limit,
+**`--palw-prefill-run-max=32` buys a third concurrent replay for 4–11 % of each one's time**. The kit carries the knob (`PREFILL_RUN_MAX` in
+an `install-<host>.sh`) and sets it nowhere: the coordinator's call, after the move. Beyond the host, a seat's own limits: its
+replay slots, and its cgroup — with the pinner, 9,216 − 3,277 live − 1,024 − its page cache ≈ 2.9–4.9 GiB of working sets, two W =
+64 replays when its page cache is under ~1.4 GiB. The rule in `t12-panel-backlog-1001.md` §7 (`seats ≤ ⌊(RAM − 4 GiB − P) / (3.2 +
+R_W)⌋`: 3 at W = 64, 4 at W ≤ 32) is the same arithmetic without the double count.
+
+**What the worksheet then says** (`kaspad/tests/t12_role_memory_figures.rs`, W = 64, pinned; on a host whose `install-<host>.sh`
+sets `HOST_PINNER=1` the artifact leaves the `MemoryMax` term, the pinner's cgroup holding it). With its own estimate of a seat's base
+(437 MiB: the caches it declares at ram-scale 0.131, + 256), every 5.104 seat is **OK** at 9 GiB: it needs ≥ 8,877 MiB = share 3,584
++ base 437 + artifact 0 + ΣW 1,784 (one seat duty running — the worst partial segment — while a second asks) + reserve 1,024 + cache
+2,048. In-process, the artifact in the term, the same seat needed 10,594 (TOO LOW, CP2). With lane P's measured live set in place
+of the estimate (`T12_BASE_MIB=3277`) it says **TOO LOW: 11,717 MiB**. That is the cgroup term binding before the share, not a crash
+guard crossed: at 3.2 GiB live a seat's cgroup admits 9,216 − 3,277 − 2,048 − 1,024 = 2,867 MiB of working sets — one 8k replay at
+W = 64 and a floor, or two at 32 — A2 narrows to it, and on this host the host ledger binds first anyway (at three seats it sustains
+two W = 64 replays or three W = 32 across the host; at five, none). ibm's rows are TOO LOW even on the estimate (b0 21,400 against 20,480; b1 16,524 against 16,384):
+with the artifact out of every need, a share holds more duties at once (b0: two seat duties, an attempt and a DA answer, ΣW 7,048),
+and the term counts their working sets; .113's b6, pinning in process, 18,753 against 17,408. MemoryMax and the shares stay as they
+are (the coordinator's call on CP2): on those rows the cgroup term, LazyFree credited (F1), is the bound when the worst mix runs, and
+A2 narrows within it.
+
+**Default: OFF in the binary; ON per host in the kit.** The release's kaspad runs neither unless told: a node-only release should not
+let a host's shared file decide what a node starts by default — a bug in that path (a lock never released, a corrupt file, a
+permission change on `/run`) would hold every seat on the host at once, where the per-node ledger's failures stay per node — and a
+host mid-way through a rolling upgrade runs int-10.1 seats that register nothing, so its aggregate is partial until the whole host
+runs int-10.2 (`host_nodes` says how many take part). The kit turns both on where the coordinator decided they belong: the
+multi-seat hosts. Watch on each after the rollout: `host_nodes` = the host's seats and `host_pinner=1` (`t12check.py` prints the
+host ledger's line and a NOTE without a pinner); `host_reserved_mib` back to 0 when the seats are idle; no `host ledger cannot
+cover` lines on a host that has room (three seats); on five seats, those lines instead of swap-in (`vmstat 1` si = 0).
+
+**Staleness and failure.** A line whose process is gone (`kill(pid, 0)` = ESRCH) or whose pid was reused (Linux: `/proc/<pid>/stat`
+start time ≠ recorded) is pruned by the next writer. A directory that cannot be created or written leaves the host ledger off with
+one warning; an I/O failure at a grant is logged once and the node's own bounds decide (fail OPEN to int-10.1 — failing closed would
+hold every duty on the host). F4: `host_ledger=on host_nodes host_pinner host_reserved_mib host_reserving host_pinned_mib
+host_pinned_files` (or `host_ledger=off`).
+
+**Invariants.**
+1. A grant registered on the host is a grant held by a live node; a node that is gone counts nothing from the next write.
+2. The host aggregate only ever refuses; it never admits what a node's own bounds refuse — and it never refuses a readiness proof.
+3. Off, or broken, the node is exactly int-10.1's; a seat never needs the pinner to start or to run.
+4. The pinner holds nothing a seat does not also hold: stopping it releases no page a running seat reads.
+
+**Tests** (several ledgers in one test process over a temp directory): `three_seats_on_one_host_cannot_promise_its_memory_three_times`
+(the third seat refused by the host while its share admits it, its readiness proof and capacity untouched; admitted when the first
+releases; the share still binds),
+`a_dead_process_stops_counting_a_shared_pin_counts_once_and_a_bad_directory_holds_nothing` (a reaped child's 5 GiB line pruned;
+the 8k file pinned by two seats and the IR container by one count two files, each once; an unwritable directory refuses at open;
+a directory that vanishes fails open), `the_host_ledger_file_round_trips_and_counts_a_shared_pin_once` (members by kind, the
+reserving ledgers, a pin counted once), `the_pinners_magic_is_the_containers` (the pinner reads a file's lineage from its magic as
+the SDK dispatches it; a Qwen3.6 container is never pinned), `the_pinners_readiness_reaches_the_notify_socket`.
+
+## 6. Kit
 
 * Units: `LimitMEMLOCK=infinity` (`lib.sh unit_body_service`). The kit's units run as root (`CAP_IPC_LOCK`), so the pin works on the
   live units unchanged; the line is for units without it, and documents what the node needs.
-* `move-host.sh preflight add`: Σ shares + the moved seat's share + **each distinct pinned artifact once for the host** (the 8k
-  `.palwart`; with Phase H the IR container) + reserve ≤ MemTotal — counted only when the staged kaspad pins (its `--help` knows
-  `--palw-no-artifact-pin`).
-* `t12check.py`: prints `pinned_mib`/`pinned_files`, and a NOTE when a node pins nothing.
-* Live kit (`deploy-int10`): `contrib/t12-deploy-kit/patches/p2-pin-live-kit.patch` (after `p1-f4-live-kit.patch`).
-* Join guide (`docs/testnet12-join-mining.md` §6): the pin and `RLIMIT_MEMLOCK`.
+* The host pinner (`pinner-lib.sh`, sourced by `lib.sh`): on a host with `HOST_PINNER=1`, `stage` writes `$REL/launch/pinner.sh` (the
+  binary's sha256, every flag known to its `--help` — an int-10.1 kaspad is refused with exit 78 —, every artifact present, no
+  `KASPAD_*` environment) and `$REL/units/misaka-palw-pinner.service`; `upgrade` installs and (re)starts it BEFORE the first seat and
+  saves what was there (`upgrade-<rid>/misaka-palw-pinner.unit.before`, or `.absent`), which `upgrade-rollback` puts back after the
+  seats (or stops, disables and removes); `switch` / `rollback` install / remove it; `check` prints its state, what is charged to its
+  cgroup, its `holding … GiB` line, and the host ledger as its file says it. A pinner that does not come up is a warning everywhere —
+  never a stop: the seats pin the files themselves. Every seat unit on such a host carries `Wants=` / `After=misaka-palw-pinner.service`;
+  a plain host's units are byte for byte what they were.
+* `--palw-host-ledger-dir=$HOST_LEDGER_DIR` on every node of a host that names one (`build_args`). Turning it on is an ARGS change for
+  `upgrade` (`UPGRADE_ARGS_CHANGE_OK=1` on 5.104 and ibm). `--palw-prefill-run-max=$PREFILL_RUN_MAX` where a host caps the prefill
+  run — set nowhere; §5's three-seat arithmetic is the case for 32.
+* `move-host.sh` / `move-nodes.sh`: a moved seat takes its target host's configuration (`move_host_memory_env`: 5.104 and ibm on, .113
+  off until b7's spec moves there), and only under a staged kaspad that knows the flags. `preflight add` counts each distinct pinned
+  artifact once for the host (the 8k `.palwart`; with Phase H the IR container) — when the staged kaspad pins.
+* `t12check.py`: `pinned_mib`/`pinned_files` (A1), the prefill run (A2), the host ledger's line and a NOTE without a pinner (D1).
+* Live kit (`deploy-int10`): `contrib/t12-deploy-kit/patches/` — `p1-f4`, `p2-pin`, `p3-run-width`, `p4-host-ledger-pinner`, in that
+  order (`patch -p3`); p4 reproduces, byte for byte, the copy the kit's functions were exercised on (the pinner's launch script and
+  unit, the seats' units on a pinner host and a plain one, `upgrade` → re-run → `check` → `upgrade` over an older pinner →
+  `upgrade-rollback` twice → `DRY_RUN`, against stub `systemctl`/`journalctl`).
+* Join guide (`docs/testnet12-join-mining.md` §6): the pin and `RLIMIT_MEMLOCK`; several nodes on one host (the host ledger, the
+  pinner as a unit of its own); what narrowing the prefill run costs.

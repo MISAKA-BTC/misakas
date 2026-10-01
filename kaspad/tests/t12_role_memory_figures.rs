@@ -5,12 +5,14 @@
 //! ```text
 //! cargo test --locked -p kaspad --test t12_role_memory_figures -- --ignored --nocapture
 //! T12_PREFILL_RUN=16 T12_PINNED=0 cargo test …   # a narrower prefill run; the artifact reserved per duty (pre-int-10.2)
+//! T12_BASE_MIB=3277 cargo test …                  # a measured live set per node in place of the estimate below
 //! ```
 //!
 //! int-10.2: the artifact is pinned (A1) — counted once for the host, never in a duty's need — and a replay's
 //! prefill run follows what the ledger can grant (A2); `T12_PINNED` (default 1) and `T12_PREFILL_RUN` (default 64)
-//! say which node the figures are for. The node rows still budget the artifact's page cache against `MemoryMax`:
-//! it is charged to whichever seat faults it in first.
+//! say which node the figures are for. A node row budgets the artifact's page cache against `MemoryMax` where a
+//! seat can be charged for it — the first seat to fault it in — and not on a host whose `install-<host>.sh` sets
+//! `HOST_PINNER=1` (D1): there the kit's pinner unit faults it in first, in its own cgroup.
 //!
 //! It prints, for testnet-12's genesis held rows at the fleet's runtime (A16-KV-i16, the shipped K/V
 //! representation; 8 threads, the fleet hosts' core count; the A16 prefill run), what the node's
@@ -204,12 +206,16 @@ fn t12_role_memory_figures() {
 
     // ---- the kit's node rows ----
     // `a` is what a duty's need carries of the artifact (0 when pinned); `art` the file, which the MemoryMax term
-    // still budgets (the page cache is charged to the seat that faults it in first).
+    // budgets where a seat can be charged for its page cache (the first to fault it in) — `art_cg` below, 0 on a
+    // host whose pinner unit faults it in first (D1).
     let (a, art) = (mib(charged(art_8k)), mib(art_8k));
     println!("\nnode rows of install-*.sh (share and MemoryMax as staged; PLAN.md §2):");
     for host in ["ibm", "113", "5104"] {
         let file = format!("contrib/t12-deploy-kit/install-{host}.sh");
         let text = repo_file(&file);
+        // int-10.2 D1: a pinner host charges the artifacts' page cache to the pinner's cgroup, never to a seat's.
+        let host_pinner = pinned && text.lines().any(|l| l.trim() == "HOST_PINNER=1");
+        let art_cg = if host_pinner { 0 } else { art };
         for row in text.lines().map(str::trim).filter(|l| l.starts_with('"') && l.matches('|').count() >= 13) {
             let f: Vec<&str> = row.trim_matches('"').split('|').collect();
             let (id, grpc, share, memmax, produce) = (f[0], f[6], f[8].parse::<u64>().unwrap(), f[9], f[10]);
@@ -235,9 +241,10 @@ fn t12_role_memory_figures() {
             let (w_all, what_all) = worst_running_w(&duties, share, false);
             let ram_scale = kaspad_lib::args::palw_ram_scale_for_share_v1(share * MIB);
             let caches = mib(kaspa_consensus::consensus::storage::declared_cache_budget_bytes_v1(ram_scale));
-            let base = caches + PROCESS_BASE_MIB + if grpc != "-" { EXPLORER_BACKEND_EXTRA_MIB } else { 0 };
+            let estimate = caches + PROCESS_BASE_MIB + if grpc != "-" { EXPLORER_BACKEND_EXTRA_MIB } else { 0 };
+            let base = std::env::var("T12_BASE_MIB").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(estimate);
             let reserve = mib(PALW_REPLAY_HOST_RESERVE_BYTES_V1);
-            let need_max = share + base + art + w_running + reserve + CACHE_ALLOWANCE_MIB;
+            let need_max = share + base + art_cg + w_running + reserve + CACHE_ALLOWANCE_MIB;
             let staged = match memmax {
                 "-" => "infinity".to_string(),
                 g => format!("{} MiB", g.parse::<u64>().expect("memmax is GiB or -") * 1024),
@@ -245,8 +252,10 @@ fn t12_role_memory_figures() {
             let ok = memmax == "-" || memmax.parse::<u64>().unwrap() * 1024 >= need_max;
             println!(
                 "  b{id} ({host}, produce={produce}): share {share} MiB (the duties it is sized for: {intended}) · MemoryMax staged {staged}, \
-                 needs ≥ {need_max} = share {share} + base≈{base} (caches {caches} at ram-scale {ram_scale:.3}) + artifact {art} + \
+                 needs ≥ {need_max} = share {share} + base≈{base} (caches {caches} at ram-scale {ram_scale:.3}{}) + artifact {art_cg}{} + \
                  ΣW {w_running} ({what}) + reserve {reserve} + cache {CACHE_ALLOWANCE_MIB} → {} · worst anon ≈ base {base} + {w_all} ({what_all}) = {}",
+                if base == estimate { String::new() } else { format!("; T12_BASE_MIB in place of the estimate {estimate}") },
+                if host_pinner { " (the host pinner's cgroup)" } else { "" },
                 if ok { "OK" } else { "TOO LOW" },
                 base + w_all
             );

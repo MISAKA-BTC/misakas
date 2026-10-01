@@ -516,6 +516,11 @@ pub struct Args {
     /// (`None` = 64, the engine's). Each reservation takes the widest width up to this whose need the
     /// memory ledger can grant, and runs at it; a narrower width trades speed for trace scratch.
     pub palw_prefill_run_max: Option<u32>,
+    /// int-10.2 D1: the directory of the host ledger every kaspad on this host shares (`None` = off).
+    /// Set, every grant of this node's memory ledger also needs the host's aggregate bound.
+    pub palw_host_ledger_dir: Option<String>,
+    /// int-10.2 D1: run as the host pinner — pin every `--palw-class-artifact` and hold them, nothing else.
+    pub palw_host_pinner: bool,
     pub retention_period_days: Option<f64>,
 
     pub override_params_file: Option<String>,
@@ -680,6 +685,8 @@ impl Default for Args {
             palw_no_artifact_pin: false,
             palw_artifact_pin_max_bytes: None,
             palw_prefill_run_max: None,
+            palw_host_ledger_dir: None,
+            palw_host_pinner: false,
             retention_period_days: None,
             override_params_file: None,
             rocksdb_preset: None,
@@ -2360,6 +2367,35 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 ),
         )
         .arg(
+            Arg::new("palw-host-ledger-dir")
+                .long("palw-host-ledger-dir")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "MISAKA PALW: the directory of the host ledger every node on this host shares (e.g. /run/misaka-palw; \
+                     off when unset). Each node's memory ledger bounds its own duties by its share and the host's free \
+                     memory less ITS OWN reservations, so several nodes on one host each promise the same free memory \
+                     (five seats on a 24 GiB host swapped all night on testnet-12); with this set, every grant is also \
+                     registered here and needs the host's free memory less EVERY node's reservations. Give every node on \
+                     the host the same directory. A directory that cannot be created or written turns it off with a \
+                     warning; a node whose process is gone stops counting at the next grant.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-host-pinner")
+                .long("palw-host-pinner")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW: run as this host's pinner and nothing else — no chain, no appdir, no bond: lock every \
+                     --palw-class-artifact a replay reads in place (a dense .palwart, an IR container; never a Qwen3.6 \
+                     container) in RAM, register them in --palw-host-ledger-dir when given, and wait to be stopped. Started \
+                     before the host's seats, it is the memory cgroup their page cache is charged to, so no seat carries \
+                     an artifact in its own cgroup because it loaded first. Under a systemd Type=notify unit it reports \
+                     READY once every file is locked; it exits 1 if it could lock none. The seats still pin the same files \
+                     themselves (free: the pages are resident), so stopping it changes nothing for a running seat.",
+                ),
+        )
+        .arg(
             Arg::new("palw-host-node-count")
                 .long("palw-host-node-count")
                 .env("KASPAD_PALW_HOST_NODE_COUNT")
@@ -2731,6 +2767,8 @@ impl Args {
                 .copied()
                 .or(defaults.palw_artifact_pin_max_bytes),
             palw_prefill_run_max: m.get_one::<u32>("palw-prefill-run-max").copied().or(defaults.palw_prefill_run_max),
+            palw_host_ledger_dir: m.get_one::<String>("palw-host-ledger-dir").cloned().or(defaults.palw_host_ledger_dir.clone()),
+            palw_host_pinner: arg_match_unwrap_or::<bool>(&m, "palw-host-pinner", defaults.palw_host_pinner),
             retention_period_days: m.get_one::<f64>("retention-period-days").cloned().or(defaults.retention_period_days),
 
             #[cfg(feature = "devnet-prealloc")]

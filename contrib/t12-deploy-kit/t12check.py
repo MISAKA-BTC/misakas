@@ -257,7 +257,7 @@ def main():
         # 10-01 (panel backlog, F4): the verification debt — key=value pairs from the ledger, the seat and the producer.
         ver = str(pick(st, "verification", default="") or "")
         if ver:
-            print(f"  verification: {ver[:400]}")
+            print(f"  verification: {ver[:700]}")
             kv = dict(p.split("=", 1) for p in ver.split() if "=" in p)
             def num(key):
                 try:
@@ -294,6 +294,14 @@ def main():
                 if (num("capacity_narrow_classes") or 0) > 0:
                     print(f"  WARNING: this host can replay {num('capacity_narrow_classes')} class(es) only below a prefill run of 16 "
                           f"(narrowest {num('capacity_run_min')}): its replays of them run slowly -- the journal names the class")
+            # 10-01 int-10.2 D1: the host ledger every node on a multi-seat host shares, as its file says it now -- who takes part
+            # (the seats as nodes, the pinner), what is reserved on the host and by how many, and its distinct pinned files.
+            if kv.get("host_ledger") == "on":
+                print(f"  host ledger: {num('host_nodes')} node(s) and {num('host_pinner')} pinner, {num('host_reserved_mib')} MiB reserved by "
+                      f"{num('host_reserving')}, {num('host_pinned_mib')} MiB pinned in {num('host_pinned_files')} distinct file(s)")
+                if (num("host_pinner") or 0) == 0:
+                    print("  NOTE: no host pinner is registered on this host -- the artifacts' page cache is charged to the seat that "
+                          "faulted it first (a multi-seat host runs misaka-palw-pinner: pinner-lib.sh)")
         # 09-25: the seat duties are always on for a bonded node — the startup 'PALW duties' line is the
         # PLAN; this is whether the panel worker actually started (its key and bond loaded, the gossip
         # inbox was free).
