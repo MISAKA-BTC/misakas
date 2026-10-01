@@ -2063,10 +2063,10 @@ mod tests {
         );
         let line = s.improvement_line(&h(LINE)).unwrap();
         assert_eq!((line.regression_check, line.regression_epoch), (Some(h(LINE)), None));
-        // [D12] Idle, the line is next due at its grants' first vesting step (1,950 + 950), which comes
-        // before the next boundary (3,000); the step vests a quarter of every grant.
-        assert_eq!(line.next_due_daa, 2_900);
-        let s = at(&s, &p, 2_900, |_| {});
+        // [D12] Idle, the line is next due at its grants' first vesting step (the promotion's 1,800 + 950),
+        // which comes before the next boundary (3,000); the step vests a quarter of every grant.
+        assert_eq!(line.next_due_daa, 2_750);
+        let s = at(&s, &p, 2_750, |_| {});
         assert!(s.improvement_grants(&h(LINE), 1).iter().all(|(_, g)| g.vested == g.amount / 4));
         assert_eq!(s.improvement_line(&h(LINE)).unwrap().next_due_daa, 3_000);
         conserved(&s, &h(LINE));

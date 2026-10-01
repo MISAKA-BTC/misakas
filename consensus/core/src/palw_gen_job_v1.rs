@@ -543,5 +543,8 @@ pub fn palw_gen_pipeline_job_v1(accepted: &PalwGenAcceptedJobV1, ids: PalwGenIds
         images,
         generated: Vec::new(),
         source: Vec::new(),
+        // RFC-0004 §7.3: a generative job reads no item key and no finalized claim's output.
+        key: Vec::new(),
+        finalized: Default::default(),
     }
 }

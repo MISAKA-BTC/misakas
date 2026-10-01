@@ -344,6 +344,8 @@ fn job_of(j: &Value) -> PipelineJob {
             })
             .unwrap_or_default(),
         generated: ids(&j["generated"]),
+        // The vectors state no item key and no finalized claim's output (RFC-0004 §7.3 fields).
+        ..PipelineJob::default()
     }
 }
 

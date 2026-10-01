@@ -566,7 +566,13 @@ impl PalwEvalCaptureV1 {
             leaf_hashes.push(hashes);
         }
         let stage_roots: Vec<Hash64> = leaf_hashes.iter().enumerate().map(|(s, h)| palw_gen_stage_root_v1(s as u8, h)).collect();
-        let claim = PalwGenClaimRootsV1 { step_root: palw_gen_step_root_v1(&stage_roots), stage_roots, generated: self.generated.clone() };
+        // An evaluation claim is a text claim: its output is its generated ids, so no tensor output digest.
+        let claim = PalwGenClaimRootsV1 {
+            step_root: palw_gen_step_root_v1(&stage_roots),
+            stage_roots,
+            generated: self.generated.clone(),
+            output_root: None,
+        };
         let binding = PalwEvalBindingV1::of(
             &self.job,
             self.subject_class,

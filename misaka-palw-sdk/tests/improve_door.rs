@@ -210,6 +210,7 @@ fn a_claim_the_node_builds_passes_the_chains_door_the_walk_and_a_seats_replay() 
             step_ladder: cap,
             held: false,
             derived_work: kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared,
+            logits_q24: true,
         },
         false,
         false,

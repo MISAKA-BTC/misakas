@@ -1713,6 +1713,8 @@ mod tests {
             step_root: Hash64::default(),
             stage_roots: vec![Hash64::from_bytes([0x41; 64])],
             generated: generated.clone(),
+            // An evaluation claim is a text claim: its output is its generated ids (RFC-0003 §I.3.2).
+            output_root: None,
         };
         let binding = PalwEvalBindingV1::of(&eval, job.class_id, &layout, &roots, 40, &prompt, params, vec![], vec![]);
         let r = binding.claim_roots();
