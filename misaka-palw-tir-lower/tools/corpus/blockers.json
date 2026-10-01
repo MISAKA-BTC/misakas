@@ -510,6 +510,10 @@
   "FR-32": {
    "title": "lightning attention: linear attention with a constant per-head decay",
    "size": "M"
+  },
+  "FR-33": {
+   "title": "quant-format registry: announcement by roles or a config sub-key; the weight shape from the model",
+   "size": "S-M"
   }
  }
 }
