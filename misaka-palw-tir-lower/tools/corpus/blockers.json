@@ -518,6 +518,10 @@
   "FR-34": {
    "title": "embedding scale on the token embedding only (fairseq lineage)",
    "size": "S"
+  },
+  "FR-35": {
+   "title": "rotary rotation by -theta (NanoChat flips the sign of rotate_half)",
+   "size": "S"
   }
  }
 }

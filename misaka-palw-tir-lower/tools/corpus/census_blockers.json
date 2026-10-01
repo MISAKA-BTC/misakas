@@ -3,10 +3,10 @@
  "nanochat": {
   "class": "feature",
   "frs": [
-   "FR-02"
+   "FR-35"
   ],
-  "short": "q/k RMS norm AFTER the rotation, weightless norms everywhere, an extra norm on the embeddings, ReLU\u00b2 ungated MLP; the standard template reads it and bind refutes it",
-  "evidence": "adapter run: reads, lowers, binds, stops at float_vs_hf (0.48 of the logit scale, 3 argmax differences): the spec has only the pre-rotation q/k norm (FR-02)"
+  "short": "NanoChat's `rotate_half` has flipped signs (a rotation by -theta, which no weight can absorb); the post-rotation q/k norm (FR-02) is in on tir/generic and the adapter uses it; with the standard rotation in the REFERENCE (variant nanochat_std_rope) the adapter is Level B with every stage, so the sign is the only gap",
+  "evidence": "adapter run + a patched-reference variant"
  },
  "modernbert_decoder": {
   "class": "feature",
@@ -41,14 +41,6 @@
   "short": "DSA indexer plus hyper-connections without a mixing matrix and swiglu_limit",
   "evidence": "the reader's own refusal"
  },
- "codegen": {
-  "class": "feature",
-  "frs": [
-   "FR-01"
-  ],
-  "short": "qkv stored in an mp_num-partitioned layout the binder cannot express",
-  "evidence": "the reader's own refusal"
- },
  "olmo_hybrid": {
   "class": "feature",
   "frs": [
@@ -71,14 +63,6 @@
   "frs": [],
   "short": "RG-LRU recurrent blocks (a gated linear recurrence with a learned decay and a convolution) beside local attention: a new mixer, not yet read in detail",
   "evidence": "config keys (lru_width, conv1d_width, block_types)"
- },
- "granitemoeshared_shared": {
-  "class": "feature",
-  "frs": [
-   "FR-01"
-  ],
-  "short": "the shared expert's gate and up are one fused tensor (shared_mlp.input_linear); the default tiny config has no shared expert, so `granitemoeshared` itself is Level B while every real checkpoint is blocked",
-  "evidence": "adapter: its own check refuses and names FR-01"
  },
  "afmoe": {
   "class": "feature",
@@ -134,12 +118,10 @@
   "evidence": "tensor names"
  },
  "aria_text": {
-  "class": "feature",
-  "frs": [
-   "FR-01"
-  ],
-  "short": "experts stacked and TRANSPOSED (experts.fc1.weight [E, in, 2I], fc2 [E, I, out]): a layout the binder has no name for",
-  "evidence": "adapter run: reads, lowers, stops at bind: `take index 32 >= axis length 32 (shape [8, 32, 128])` (the stacked, transposed fc1/fc2 layout, FR-01)"
+  "class": "data",
+  "frs": [],
+  "short": "Level B on tir/generic: the stacked, transposed experts are `spec.hf.weights` expressions (FR-01 landed)",
+  "evidence": "adapter run, every stage"
  },
  "biogpt": {
   "class": "feature",

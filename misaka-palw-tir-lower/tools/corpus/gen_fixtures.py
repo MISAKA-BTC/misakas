@@ -236,7 +236,18 @@ def save_and_reload(e, model, cfg, outdir, cls=None):
 
 # ───────────────────────────────────────── builders ─────────────────────────────────────────
 
+PATCHES = {
+    # NanoChat's `rotate_half` has FLIPPED signs (rotation by -theta). The variant patches it to the standard one in the REFERENCE, to
+    # show that the rotation sign is the only gap left once FR-02 (the post-rotation q/k norm) is in (FR-35).
+    "nanochat_rotate_half": lambda: setattr(
+        __import__("transformers.models.nanochat.modeling_nanochat", fromlist=["x"]), "rotate_half",
+        lambda x: torch.cat((-x[..., x.shape[-1] // 2:], x[..., : x.shape[-1] // 2]), dim=-1)),
+}
+
+
 def build_causal(e, outdir, probe):
+    if e["options"].get("patch"):
+        PATCHES[e["options"]["patch"]]()
     seed = seed_of(e)
     cfg = entry_config(e)
     torch.manual_seed(seed)

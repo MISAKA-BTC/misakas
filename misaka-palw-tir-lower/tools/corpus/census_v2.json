@@ -1749,6 +1749,25 @@
    "note": ""
   },
   {
+   "id": "nanochat_std_rope",
+   "category": "census/text",
+   "route": "decoder",
+   "hf_arch": "NanoChatForCausalLM",
+   "model_type": "nanochat",
+   "builder": "causal",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "NanoChat with the standard rotation in the REFERENCE (a patched `rotate_half`): its own rotates by -theta (FR-35)",
+   "examples": [],
+   "options": {
+    "patch": "nanochat_rotate_half"
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
    "id": "cohere2_moe_shared_sum",
    "category": "census/text",
    "route": "decoder",
@@ -1791,7 +1810,7 @@
  ],
  "census": {
   "families": 91,
-  "built": 90,
+  "built": 91,
   "not_derivable": [
    {
     "model_type": "bamba",
@@ -1941,6 +1960,11 @@
     "id": "mimo_v2_flash_unscaled",
     "model_type": "mimo_v2_flash",
     "why": "the same family with the value scale removed: everything else of MiMo-V2-Flash is data, the scale (0.707 in the release) is FR-31"
+   },
+   {
+    "id": "nanochat_std_rope",
+    "model_type": "nanochat",
+    "why": "NanoChat with the standard rotation in the REFERENCE (a patched `rotate_half`): its own rotates by -theta (FR-35)"
    }
   ]
  }

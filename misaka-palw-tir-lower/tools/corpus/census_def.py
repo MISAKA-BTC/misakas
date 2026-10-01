@@ -93,11 +93,14 @@ VARIANTS = {
                                "the same family with the value scale removed: everything else of MiMo-V2-Flash is data, the scale (0.707 in the release) is FR-31"),
     "biogpt_unscaled": ("biogpt", dict(scale_embedding=False),
                         "BioGPT with the embedding scale removed: the builder scales token + position, the model scales the token only (FR-34)"),
+    "nanochat_std_rope": ("nanochat", {}, "NanoChat with the standard rotation in the REFERENCE (a patched `rotate_half`): its own rotates by -theta (FR-35)"),
     "cohere2_moe_shared_sum": ("cohere2_moe", dict(num_shared_experts=1, shared_expert_combination_strategy="sum"),
                                "a Cohere2-MoE with a shared expert added to the routed output (the default tiny config has none)"),
     "cohere2_moe_shared_avg": ("cohere2_moe", dict(num_shared_experts=1, shared_expert_combination_strategy="average"),
                                "a Cohere2-MoE whose shared and routed outputs are averaged: needs a scale on the shared expert, not a spec field"),
 }
+
+VARIANT_OPTIONS = {"nanochat_std_rope": {"patch": "nanochat_rotate_half"}}
 
 # Families the census does not build, with the reason. Never dropped silently.
 EXCLUDED = {
@@ -222,7 +225,7 @@ def manifest():
         if base is None:
             continue
         cfg = dict(OVERRIDES.get(mt, {}), **ov)
-        entries.append(C.entry(vid, "census/text", "decoder", base["class"], mt, "causal", cfg, usage="l", why=why, options={}))
+        entries.append(C.entry(vid, "census/text", "decoder", base["class"], mt, "causal", cfg, usage="l", why=why, options=VARIANT_OPTIONS.get(vid, {})))
     failed = [r for r in recs if not r["ok"]]
     doc = {"schema": "misaka.palw.corpus-v2", "positions": 10, "vocab": C.V, "usage_weight": C.USAGE_WEIGHT, "entries": entries,
            "census": {"families": len(recs), "built": len(entries), "not_derivable": failed,
