@@ -84,6 +84,10 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::DefaultAccused { .. } | O::DefaultAccusedHeld { .. } | O::MaterialDisclosedV2 { .. } => true,
         // The second IR fence: the IR step demand is a DA accusation like the two above.
         O::DefaultAccusedTirStep { .. } => true,
+        // Phase F (tag 83): the pipeline step demand is a DA accusation as well. Tags 84 and 85 are reserved
+        // and uninhabited.
+        O::DefaultAccusedPipelineStep { .. } => true,
+        O::ReservedPipelineDa84(never) | O::ReservedPipelineDa85(never) => match *never {},
         O::ReporterCommitted { .. } | O::ReporterRevealed { .. } => true,
         O::CourtOpened { .. }
         | O::CourtClosed { .. }

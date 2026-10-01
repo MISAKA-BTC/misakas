@@ -7357,6 +7357,14 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a second-IR-fence object was dropped by name below palw_tir_fence2, and the block stands (RFC-0002 Phase F)");
                 continue;
             }
+            // **Pipeline-claim data availability, likewise** (spec 17 §17.14): below `palw_improvement_v1` its
+            // moves (a pipeline step demand, an answer or unit of that kind) are payloads an older build cannot
+            // decode and skips (A-2), so they are dropped here, first, and charged nothing; the fold refuses
+            // them too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_pipeline_da_v1(&object) && !self.palw_pipeline_da_at(point.daa_score) {
+                info!("Block {block}: a pipeline-claim DA object was dropped by name below palw_improvement_v1, and the block stands (RFC-0004 Phase F)");
+                continue;
+            }
             // **RFC-0004 §6.3: an IR close carrying a composite artifact's sub-root openings** (the
             // parameter carriage's appended tag 2) is dropped by name below `palw_improvement_v1` —
             // an older build cannot decode the carriage and skips the object (A-2) — first, and
@@ -9178,6 +9186,11 @@ impl VirtualStateProcessor {
                     if answer.is_tir_v1() && !self.palw_tir_at(point.daa_score) {
                         return Err(format!(
                             "claim {claim}: an IR answer is refused: palw_tir_v1 is not in force at this block (RFC-0002 Phase F)"
+                        ));
+                    }
+                    if (answer.is_pipeline_da_v1() || unit.is_pipeline_step_v1()) && !self.palw_pipeline_da_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim}: a pipeline answer is refused: palw_improvement_v1 is not in force at this block (RFC-0004 Phase F)"
                         ));
                     }
                     if !self.palw_da_court_at(point.daa_score) {
@@ -11288,6 +11301,56 @@ impl VirtualStateProcessor {
                         kaspa_consensus_core::palw_da_rcore_v1::PALW_TIR_STEP_ACCUSATION_MLDSA87_CONTEXT_V1,
                     ) {
                         return Err(format!("claim {claim}'s IR step demand is not signed by the bond it names"));
+                    }
+                }
+                // **Pipeline-claim data availability: a pipeline step demand** (spec 17 §17.14, object tag 83),
+                // keyed by the claim alone. The fence (`palw_improvement_v1`), the DA court, a unit inside the
+                // widest execution, the ruleset's close ceiling and the accuser's registered key over the
+                // demand; the claim and its kind are the fold's (`open_da_session_pipeline_step_v1`), and a unit
+                // past the claim's own stage is the accused's to prove (`PipelineStepOutOfRange`).
+                Obj::DefaultAccusedPipelineStep { accusation } => {
+                    let claim = accusation.claim;
+                    if !self.palw_pipeline_da_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim}: a pipeline step demand is refused: palw_improvement_v1 is not in force (RFC-0004 Phase F)"
+                        ));
+                    }
+                    if !self.palw_da_court_at(point.daa_score) {
+                        return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
+                    }
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a pipeline step demand on a network with no V2 court parameters".to_string())?;
+                    kaspa_consensus_core::palw_pipeline_da_v1::palw_pipeline_step_unit_is_admissible_v1(&accusation.unit).map_err(
+                        |why| format!("claim {claim}: a pipeline step demand for {:?} is refused: {why}", accusation.unit),
+                    )?;
+                    let bytes = borsh::to_vec(accusation.as_ref()).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+                    if bytes > court.max_close_bytes() {
+                        return Err(format!(
+                            "claim {claim}'s pipeline step demand is {bytes} bytes, above this ruleset's {}-byte close ceiling",
+                            court.max_close_bytes()
+                        ));
+                    }
+                    let record = state
+                        .bond(&accusation.accuser)
+                        .ok_or_else(|| format!("a pipeline step demand names bond {:?} this chain does not have", accusation.accuser))?;
+                    let message = kaspa_consensus_core::palw_pipeline_da_v1::palw_pipeline_step_accusation_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        &claim,
+                        &accusation.unit,
+                        &accusation.accuser,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_pipeline_da_v1::PALW_PIPELINE_ACCUSATION_MLDSA87_CONTEXT_V1,
+                    ) {
+                        return Err(format!("claim {claim}'s pipeline step demand is not signed by the bond it names"));
                     }
                 }
                 Obj::DefaultAccusedHeld { accusation } => {
@@ -13408,6 +13471,12 @@ impl VirtualStateProcessor {
     /// `validate_palw_v2` holds equal to `Params::palw_improvement_v1`).
     fn palw_improvement_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.improve_active_at(daa_score))
+    }
+
+    /// **Pipeline-claim data availability** (spec 17 §17.14), resolved in exactly one place
+    /// (`PalwStateParamsV2::pipeline_da_active_at`): the acceptance walk, the gate and the fold must agree.
+    fn palw_pipeline_da_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.pipeline_da_active_at(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
@@ -19388,6 +19457,9 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtTirDissected { .. } => "CourtTirDissected",
         O::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         O::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",
+        // Phase F (tags 83–85): pipeline-claim data availability; 84 and 85 are reserved and uninhabited.
+        O::DefaultAccusedPipelineStep { .. } => "DefaultAccusedPipelineStep",
+        O::ReservedPipelineDa84(never) | O::ReservedPipelineDa85(never) => match *never {},
         // RFC-0004 (tags 70–82): dropped at acceptance until each admission lands.
         O::ModelLineImprovementPolicySet { .. } => "ModelLineImprovementPolicySet",
         O::HardCaseSubmitted { .. } => "HardCaseSubmitted",

@@ -16399,6 +16399,9 @@ mod t12_tir_da_step_gate;
 // RFC-0004 A4/A5: the material objects' and the candidate's signatures at the gate, and a licence
 // through the walk and the fold, with real card and rights-holder signatures.
 mod t12_improve_material_gate;
+// RFC-0004 Phase F: pipeline-claim data availability (tag 83) at the gate — refused below palw_improvement_v1,
+// signed by its accuser, a unit inside some pipeline execution.
+mod t12_pipeline_da_gate;
 // ADR-0152 v3.1 S-7: the reporter's commitment (tag 53) and reveal (tag 54) at the gate, the walk
 // and the fold past `palw_rcore_plus`, with real card signatures.
 mod t12_rcore_s7_reporter_gate;

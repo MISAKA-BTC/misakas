@@ -522,6 +522,9 @@ pub mod palw_tir_close_size_v1;
 pub mod palw_tir_close_range_v1;
 /// RFC-0004 §6.3 (PALW-MIP-15): composite artifacts — a candidate as its parent plus an adapter section, the parent never re-committed; sub-root openings, the composite and family rules, admission.
 pub mod palw_improve_composite_v1;
+/// RFC-0003 / RFC-0004 (Phase F, spec 17 §17.14): pipeline-claim data availability — the DA units, answers and demand for a
+/// pipeline claim's stage trees, by hash arithmetic over the claim's committed roots; dormant behind `palw_improvement_v1`.
+pub mod palw_pipeline_da_v1;
 /// RFC-0002 Phase F step F4: the step space of an IR class — commit-point tiles, Fixed-state checkpoints and history tiles as step leaves, in closed form.
 pub mod palw_tir_step_v1;
 /// RFC-0002 Phase F step F8: an IR class's canonical work vector, classified and priced by structure alone.

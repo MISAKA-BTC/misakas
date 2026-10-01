@@ -104,6 +104,8 @@ use std::collections::{BTreeMap, BTreeSet};
 mod palw_improve_fold_v1;
 #[path = "palw_improve_material_fold_v1.rs"]
 mod palw_improve_material_fold_v1;
+#[path = "palw_pipeline_da_fold_v1.rs"]
+mod palw_pipeline_da_fold_v1;
 pub use palw_improve_fold_v1::{PALW_STATE_V2_IMPROVE_PAYOUT_KEY_PREFIX, PalwMaterialPlacementV1};
 pub use palw_improve_material_fold_v1::PALW_IMPROVE_MATERIAL_SWEEP_ROWS_PER_BLOCK_V1;
 #[path = "palw_improve_eval_fold_v1.rs"]
@@ -2043,6 +2045,13 @@ impl PalwStateParamsV2 {
     /// **Is `palw_improvement_v1` in force at `daa_score`?** `false` on every shipped preset.
     pub fn improve_active_at(&self, daa_score: u64) -> bool {
         self.improve_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **Is pipeline-claim data availability in force at `daa_score`?** (spec 17 §17.14) `palw_improvement_v1`'s
+    /// height — the one place the choice of fence is made, so the fold, the acceptance walk and the gate
+    /// cannot disagree. `false` on every shipped preset.
+    pub fn pipeline_da_active_at(&self, daa_score: u64) -> bool {
+        self.improve_active_at(daa_score)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -7527,6 +7536,23 @@ pub enum PalwConsensusObjectV2 {
     ImprovementPoolFunded {
         payload: Box<crate::palw_improve_state_v1::PalwImprovementPoolFundingV1>,
     },
+    // ---- Phase F's pipeline-claim data availability (spec 17 §17.14; `Params::palw_improvement_v1`): tags 83–85 ----
+    /// **Tag 83: a data-availability demand for one unit of a pipeline claim's step tree** (RFC-0003's
+    /// generative claims, RFC-0004's evaluation claims), keyed by the claim alone — no binding: opens an
+    /// R-core+ DA session naming exactly that unit, a step leaf `PipelineStepLeaf { stage, index }` or an
+    /// interior node `PipelineStepNode { stage, level, index }` (no draws), which the producer or any
+    /// locked signer answers with `MaterialDisclosedV2` inside `W_disclose` — the leaf, the node's
+    /// frontier and opening, or the claim's binding proving the unit past its stage — or it defaults.
+    /// Signed by the accuser's bond. Appended; dropped by name below `palw_improvement_v1`.
+    DefaultAccusedPipelineStep {
+        accusation: Box<crate::palw_pipeline_da_v1::PalwPipelineStepAccusationV1>,
+    },
+    /// **Tag 84: reserved** (spec 17 §17.0). The variant exists so that every later tag keeps its number;
+    /// its payload is uninhabited, so a block that carries one is undecodable, exactly as an unknown tag
+    /// is.
+    ReservedPipelineDa84(crate::palw_pipeline_da_v1::PalwReservedObjectV1),
+    /// **Tag 85: reserved** (spec 17 §17.0), as tag 84 is.
+    ReservedPipelineDa85(crate::palw_pipeline_da_v1::PalwReservedObjectV1),
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7642,6 +7668,18 @@ pub fn palw_improvement_object_name_v1(object: &PalwConsensusObjectV2) -> Option
         O::LineageHeadRolledBack { .. } => Some("LineageHeadRolledBack (tag 81)"),
         O::ImprovementPoolFunded { .. } => Some("ImprovementPoolFunded (tag 82)"),
         _ => None,
+    }
+}
+
+/// **Is this object a move of pipeline-claim data availability** (spec 17 §17.14): a pipeline step
+/// demand (object tag 83), or an answer or unit of the pipeline kind — payloads an older build cannot
+/// decode (A-2). Below `palw_improvement_v1` the acceptance walk drops every such object by name before
+/// any slot, rent or budget is charged, and the fold refuses it as the second lock.
+pub fn palw_object_is_pipeline_da_v1(object: &PalwConsensusObjectV2) -> bool {
+    match object {
+        PalwConsensusObjectV2::DefaultAccusedPipelineStep { .. } => true,
+        PalwConsensusObjectV2::MaterialDisclosedV2 { unit, answer, .. } => answer.is_pipeline_da_v1() || unit.is_pipeline_step_v1(),
+        _ => false,
     }
 }
 
@@ -9729,6 +9767,11 @@ pub enum PalwStateV2Error {
     /// step demand the fold does not open.
     #[error("the second IR fence refuses this move: {0}")]
     TirFence2Refused(&'static str),
+    /// **A move of pipeline-claim data availability the fold refuses** (spec 17 §17.14): below
+    /// `palw_improvement_v1` (the acceptance walk drops it by name first; this is the second lock), or a
+    /// demand the fold does not open.
+    #[error("the pipeline-claim data-availability rules refuse this move: {0}")]
+    PipelineDaRefused(&'static str),
     // ---- RFC-0004 ----
     /// **An improvement object the fold does not take** (tags 70–82): any below
     /// `Params::palw_improvement_v1` (the bundle's mirror), and — until its admission lands — any
@@ -27861,13 +27904,17 @@ fn open_da_session_rcore_v1(
                     PalwDaUnitV1::Event { .. }
                     | PalwDaUnitV1::TirStepLeaf { .. }
                     | PalwDaUnitV1::TirStepNode { .. }
-                    | PalwDaUnitV1::TirRowNode { .. } => false,
+                    | PalwDaUnitV1::TirRowNode { .. }
+                    | PalwDaUnitV1::PipelineStepLeaf { .. }
+                    | PalwDaUnitV1::PipelineStepNode { .. } => false,
                 })
                 .collect()
         }
         // The second IR fence: an IR step unit, named only — no draws (`open_da_session_tir_step_v1`
         // bounded it by the widest execution; the claim's own bound is the accused's to prove).
         (PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. }, None) => Vec::new(),
+        // Pipeline-claim data availability: a pipeline step unit, named only — no draws.
+        (PalwDaUnitV1::PipelineStepLeaf { .. } | PalwDaUnitV1::PipelineStepNode { .. }, None) => Vec::new(),
         _ => return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "an accusation's unit and binding disagree in kind" }),
     };
     let mut units = Vec::with_capacity(1 + drawn.len());
@@ -28210,6 +28257,15 @@ fn apply_da_answer_v1(
                     }
                 }
             }
+            false
+        }
+        // **Pipeline-claim data availability** (spec 17 §17.14): a pipeline step unit is answered by its
+        // disclosure or an out-of-range proof, by hash arithmetic over the claim's committed roots.
+        (
+            PalwDaUnitV1::PipelineStepLeaf { .. } | PalwDaUnitV1::PipelineStepNode { .. },
+            PalwDaAnswerV1::PipelineStepLeaf(_) | PalwDaAnswerV1::PipelineStepNode(_) | PalwDaAnswerV1::PipelineStepOutOfRange(_),
+        ) => {
+            palw_pipeline_da_fold_v1::check_pipeline_answer_v1(builder, ctx, claim_id, &claim, &unit, answer)?;
             false
         }
         // Refused by the form check above; spelled again so the match stands on its own.
@@ -31590,6 +31646,12 @@ fn apply_object(
     if palw_object_is_tir_fence2_v1(object) && !builder.params.tir_fence2_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
     }
+    // **Pipeline-claim data availability, likewise** (spec 17 §17.14): below `palw_improvement_v1` its
+    // moves are payloads an older build cannot decode; the acceptance walk drops them by name, and this is
+    // the second lock.
+    if palw_object_is_pipeline_da_v1(object) && !builder.params.pipeline_da_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::PipelineDaRefused("a move before palw_improvement_v1 is in force"));
+    }
     // **RFC-0004 §6.3: a composite artifact's sub-root openings** (the IR parameter carriage's
     // appended tag 2) only past `palw_improvement_v1`: the acceptance walk drops a close carrying one
     // first; this is the second lock.
@@ -34104,6 +34166,13 @@ fn apply_object(
         PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } => {
             return open_da_session_tir_step_v1(builder, ctx, accusation);
         }
+        // **Pipeline-claim data availability: a pipeline step demand** (spec 17 §17.14) opens an
+        // R-core+ DA session over the one step leaf or step node it names.
+        PalwConsensusObjectV2::DefaultAccusedPipelineStep { accusation } => {
+            return palw_pipeline_da_fold_v1::open_da_session_pipeline_step_v1(builder, ctx, accusation);
+        }
+        // Tags 84 and 85 are reserved and uninhabited: no object of either exists.
+        PalwConsensusObjectV2::ReservedPipelineDa84(never) | PalwConsensusObjectV2::ReservedPipelineDa85(never) => match *never {},
         // **ADR-0062 SA-1: the accusation that CAN take a bond, because somebody has to prove it.**
         PalwConsensusObjectV2::DefaultAccused { claim: claim_id, missing_event_index, accuser, signature: _ } => {
             // ADR-0152 DA-1 (M3): past `palw_rcore_plus` the event accusation opens a session in the

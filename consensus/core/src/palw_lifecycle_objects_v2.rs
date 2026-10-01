@@ -185,6 +185,16 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => {
             Err("an IR step demand must carry its accuser's signature — unsigned, anyone could spend a bond's DA budget")
         }
+        // Pipeline-claim data availability (tag 83): a pipeline step demand names a pipeline step unit and
+        // carries its accuser's signature. Tags 84 and 85 are reserved and uninhabited.
+        PalwConsensusObjectV2::DefaultAccusedPipelineStep { accusation } if !accusation.unit.is_pipeline_step_v1() => {
+            Err("a pipeline step demand names a step leaf or a step node of a stage")
+        }
+        PalwConsensusObjectV2::DefaultAccusedPipelineStep { accusation } if !accusation.signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::DefaultAccusedPipelineStep { .. } => {
+            Err("a pipeline step demand must carry its accuser's signature — unsigned, anyone could spend a bond's DA budget")
+        }
+        PalwConsensusObjectV2::ReservedPipelineDa84(never) | PalwConsensusObjectV2::ReservedPipelineDa85(never) => match *never {},
         PalwConsensusObjectV2::CourtCloseDeclared { signature, .. } if !signature.is_empty() => Ok(()),
         // ADR-0087 Decision 3: a buy is bound to its carrier's sink output below; a sell must carry
         // the holder's signature, checked at acceptance against the payload it names.

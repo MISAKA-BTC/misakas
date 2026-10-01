@@ -118,6 +118,19 @@ pub enum PalwDaUnitV1 {
     /// not its steps descends to the first row and tile it disputes, and demands that tile's lanes as
     /// an event unit.
     TirRowNode { level: u8, index: u64 },
+    /// **One committed step leaf of a pipeline claim** (past `Params::palw_improvement_v1`; appended,
+    /// tag 5): leaf `index` of stage `stage`'s tree — RFC-0003's generative claims and RFC-0004's
+    /// evaluation claims (spec 17 §17.14). Answered by the leaf's preimage and its opening to the stage
+    /// root ([`crate::palw_pipeline_da_v1::PalwPipelineStepLeafDisclosureV1`]), or, past the stage's
+    /// tree, by the claim's binding proving so.
+    PipelineStepLeaf { stage: u8, index: u64 },
+    /// **One interior node of a pipeline claim's stage tree** (past `Params::palw_improvement_v1`;
+    /// appended, tag 6): level `level ≥ 1` above the leaf hashes of stage `stage`'s tree, `index` from the
+    /// left. Answered by its frontier — the nodes
+    /// [`crate::palw_pipeline_da_v1::PALW_PIPELINE_STEP_NODE_DEPTH_V1`] levels below it — and its opening
+    /// ([`crate::palw_pipeline_da_v1::PalwPipelineStepNodeDisclosureV1`]), or, past the tree, by the
+    /// binding proving so.
+    PipelineStepNode { stage: u8, level: u8, index: u64 },
 }
 
 impl PalwDaUnitV1 {
@@ -135,6 +148,12 @@ impl PalwDaUnitV1 {
     /// Is this a unit only the second IR fence names — the step tree's, or the trace's rows tree's?
     pub fn is_tir_fence2_v1(&self) -> bool {
         matches!(self, Self::TirStepLeaf { .. } | Self::TirStepNode { .. } | Self::TirRowNode { .. })
+    }
+
+    /// Is this a unit of a pipeline claim's stage trees (spec 17 §17.14)? A unit only
+    /// `palw_improvement_v1` makes legal.
+    pub fn is_pipeline_step_v1(&self) -> bool {
+        matches!(self, Self::PipelineStepLeaf { .. } | Self::PipelineStepNode { .. })
     }
 }
 
@@ -223,6 +242,17 @@ pub enum PalwDaAnswerV1 {
     /// **The second IR fence: one node of an IR claim's tiled trace's rows tree** (appended), answering
     /// a `TirRowNode { level, index }` unit.
     TirRowNode(Box<crate::palw_tir_court_v1::PalwTirRowNodeDisclosureV1>),
+    /// **Pipeline-claim data availability: one step leaf of a pipeline claim** (appended, tag 7),
+    /// answering a `PipelineStepLeaf { stage, index }` unit. Dropped by name below `palw_improvement_v1`.
+    PipelineStepLeaf(Box<crate::palw_pipeline_da_v1::PalwPipelineStepLeafDisclosureV1>),
+    /// **Pipeline-claim data availability: one interior node of a stage tree** (appended, tag 8),
+    /// answering a `PipelineStepNode { stage, level, index }` unit: its frontier ten levels down and its
+    /// opening.
+    PipelineStepNode(Box<crate::palw_pipeline_da_v1::PalwPipelineStepNodeDisclosureV1>),
+    /// **Pipeline-claim data availability: the claim's binding, proving a pipeline step unit is not in its
+    /// execution** (appended, tag 9) — a leaf at or past its stage's leaf count, a node past its tree, a
+    /// stage past its stages.
+    PipelineStepOutOfRange(Box<crate::palw_pipeline_da_v1::PalwPipelineOutOfRangeV1>),
 }
 
 impl PalwDaAnswerV1 {
@@ -232,7 +262,14 @@ impl PalwDaAnswerV1 {
         match self {
             Self::Event(disclosure) => Some(disclosure.binding()),
             Self::Held(carriage) => Some(&carriage.binding),
-            Self::TirEvent(_) | Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirRowNode(_) | Self::TirStepOutOfRange(_) => None,
+            Self::TirEvent(_)
+            | Self::TirStepLeaf(_)
+            | Self::TirStepNode(_)
+            | Self::TirRowNode(_)
+            | Self::TirStepOutOfRange(_)
+            | Self::PipelineStepLeaf(_)
+            | Self::PipelineStepNode(_)
+            | Self::PipelineStepOutOfRange(_) => None,
         }
     }
 
@@ -259,6 +296,11 @@ impl PalwDaAnswerV1 {
     /// Is this the second IR fence's answer? A move only past `palw_tir_fence2`.
     pub fn is_tir_fence2_v1(&self) -> bool {
         matches!(self, Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirRowNode(_) | Self::TirStepOutOfRange(_))
+    }
+
+    /// Is this a pipeline claim's answer (spec 17 §17.14)? A move only past `palw_improvement_v1`.
+    pub fn is_pipeline_da_v1(&self) -> bool {
+        matches!(self, Self::PipelineStepLeaf(_) | Self::PipelineStepNode(_) | Self::PipelineStepOutOfRange(_))
     }
 }
 
@@ -624,6 +666,14 @@ pub fn palw_da_answer_form_v1(claim: &Hash64, unit: &PalwDaUnitV1, answer: &Palw
                 Err("an IR answer's binding carries no program: the chain holds the registered class's")
             }
         }
+        // Pipeline-claim data availability: a pipeline step unit is answered by its own disclosure or by
+        // an out-of-range proof (the compact binding carries no program: there is none to strip).
+        (PalwDaUnitV1::PipelineStepLeaf { .. }, PalwDaAnswerV1::PipelineStepLeaf(_))
+        | (PalwDaUnitV1::PipelineStepNode { .. }, PalwDaAnswerV1::PipelineStepNode(_))
+        | (
+            PalwDaUnitV1::PipelineStepLeaf { .. } | PalwDaUnitV1::PipelineStepNode { .. },
+            PalwDaAnswerV1::PipelineStepOutOfRange(_),
+        ) => Ok(()),
         (PalwDaUnitV1::Held(missing), PalwDaAnswerV1::Held(carriage)) => {
             if carriage.version != crate::palw_held_da_v1::PALW_HELD_DA_VERSION_V1 {
                 Err("the carriage is not version 1")
@@ -826,6 +876,9 @@ pub enum PalwDaAccusationBuildErrorV1 {
     /// An IR step demand names a step leaf or an interior step node inside the widest execution.
     #[error("an IR step demand cannot name {0:?}: {1}")]
     NotATirStepUnit(PalwDaUnitV1, &'static str),
+    /// A pipeline step demand names a step leaf or an interior step node inside the widest execution.
+    #[error("a pipeline step demand cannot name {0:?}: {1}")]
+    NotAPipelineStepUnit(PalwDaUnitV1, &'static str),
 }
 
 /// **DA-1 / DA-3 (P2-6): the ONE builder of an event `DefaultAccused`** — what kaspad's seat files

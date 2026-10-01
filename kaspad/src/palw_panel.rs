@@ -2106,7 +2106,18 @@ pub(crate) fn palw_da_unit_answer_v1(
             let tir = tir.ok_or_else(|| format!("{unit:?}: the claim's IR class does not resolve on this node"))?;
             return tir.step_unit_answer(capture, unit);
         }
-    };
+        // Phase F's pipeline-claim data availability (dormant, spec 17 §17.14): a pipeline step unit is
+        // answered by the pipeline responder, which the node lane lands before `palw_improvement_v1` is armed.
+        PalwDaUnitV1::PipelineStepLeaf { stage, index } => {
+            return Err(format!(
+                "pipeline step leaf ({stage}, {index}): answered by the pipeline responder, not the capture path (RFC-0004 Phase F)"
+            ));
+        }
+        PalwDaUnitV1::PipelineStepNode { stage, level, index } => {
+            return Err(format!(
+                "pipeline step node ({stage}, {level}, {index}): answered by the pipeline responder, not the capture path (RFC-0004 Phase F)"
+            ));
+        }
     let (binding, disclosure) = match (material, &facts.lane) {
         (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(
             backend,
@@ -12676,6 +12687,9 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",
+        // Phase F (tags 83–85): pipeline-claim data availability; 84 and 85 are reserved and uninhabited.
+        PalwConsensusObjectV2::DefaultAccusedPipelineStep { .. } => "DefaultAccusedPipelineStep",
+        PalwConsensusObjectV2::ReservedPipelineDa84(never) | PalwConsensusObjectV2::ReservedPipelineDa85(never) => match *never {},
         // RFC-0004 (tags 70–82): the chain drops each until its admission lands, and no path in this
         // node builds one yet.
         PalwConsensusObjectV2::ModelLineImprovementPolicySet { .. } => "ModelLineImprovementPolicySet",
