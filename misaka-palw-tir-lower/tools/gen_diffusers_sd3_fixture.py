@@ -29,12 +29,12 @@ Usage (every command with `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`, from the cr
 
 `reference`'s request (the integer run's inputs, written by the Rust harness):
 
-    {"ids": [..prompt ids, ending in the EOS id..], "steps": 4,
+    {"ids": [..the padded template: bos, prompt ids, eos, pad.. (the class's length)..], "steps": 4,
      "noise": [... 4*8*8 floats, C-major (c, h, w): the Q24 Gaussian words / 2^24 ...],
      "sigmas": [... steps+1 floats ... the integer run's table, to check against the scheduler's ...]}
 
 and its output carries, per step, the latent after the step and the model's velocity, the text
-encoder's `prompt_embeds` (penultimate hidden states) and pooled vector, and the final image as
+encoder's `prompt_embeds` (final-norm rows) and pooled vector, and the final image as
 u8 HWC after the pipeline's own post-processing.
 """
 
@@ -243,13 +243,19 @@ def load(name, dtype=torch.float32):
 
 
 def encode_prompt(ids):
-    """The text component's contribution: `prompt_embeds` (the penultimate hidden states, SD3's choice for
-    the CLIP encoders) and the pooled `text_embeds`, from the harness's ids."""
+    """The text component's contribution: `prompt_embeds` and the pooled `text_embeds`, from the harness's ids.
+
+    `ids` is the class's padded template (`bos ‖ prompt ‖ eos ‖ pad…`, to the class's length). `prompt_embeds` is
+    the encoder's `last_hidden_state` (final-norm rows) — NOT the penultimate hidden states SD3's own pipeline takes
+    from its CLIPs: the first fixture's integer text stage is the HF frontend's `Rows` program, whose output is the
+    final-norm row (a truncated-depth `Rows` program is a later refinement; the denoiser reads whatever tensor the
+    pipeline hands it, and both runs hand it the same). The pooled vector is `text_embeds`, read at the FIRST `eos`
+    (transformers' pooling), which is the last position of the integer pooled stage's unpadded template."""
     model = load("text")
     x = torch.tensor([ids], dtype=torch.long)
     with torch.no_grad():
-        out = model(input_ids=x, output_hidden_states=True)
-    prompt_embeds = out.hidden_states[-2]  # [1, L, hidden]
+        out = model(input_ids=x)
+    prompt_embeds = out.last_hidden_state  # [1, L, hidden]
     pooled = out.text_embeds  # [1, projection]
     del model
     return prompt_embeds, pooled
