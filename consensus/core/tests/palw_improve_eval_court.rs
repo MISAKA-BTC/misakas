@@ -219,6 +219,12 @@ fn base() -> (TirProgramV1, MapParams, PalwTirLayoutV1, Hash64) {
 
 /// An ExactMatch generation of four ids over a three-id prompt.
 fn generation() -> Claim {
+    generation_over(0)
+}
+
+/// [`generation`], the executor's run over the weights of `run_salt` — the class's own are salt 0, and `params` (what a
+/// challenger holds, the class's registered artifact) are always the class's.
+fn generation_over(run_salt: usize) -> Claim {
     let (program, params_v1, layout, artifact_root) = base();
     let class_id = Hash64::from_bytes([0x33; 64]);
     let seed = palw_improve_eval_seed_v1(&Hash64::from_bytes([0x44; 64]), 7);
@@ -227,10 +233,11 @@ fn generation() -> Claim {
     let subject = PalwEvalSubjectClassV1 { class_id, artifact_root, program: &program, layout: &layout };
     let ctx = palw_improve_eval_context_v1(&j, &subject, stage).unwrap();
     let params = Params(vec![params_v1]);
+    let ran = Params(vec![subject_params(&program, run_salt)]);
     let prompt = vec![3u32, 5, 1];
     let probe = PipelineJob { prompt: prompt.clone(), scalars: ctx.scalars.clone(), ..PipelineJob::default() };
     let decode = ctx.decode.clone().unwrap();
-    let execution = palw_gen_execute_v1(&ctx.pipeline, &ctx.programs, &ctx.layouts, &params, &probe, &decode, ctx.seed).unwrap();
+    let execution = palw_gen_execute_v1(&ctx.pipeline, &ctx.programs, &ctx.layouts, &ran, &probe, &decode, ctx.seed).unwrap();
     let binding =
         PalwEvalBindingV1::of(&j, class_id, &layout, &execution.claim, execution.space.leaf_count(), &prompt, stage, vec![], vec![]);
     Claim {
@@ -498,6 +505,40 @@ fn a_close_is_the_claims_or_it_is_refused_by_name_and_convicts_nobody() {
     let mut bad = close.clone();
     bad.disputed.coord.pos += 1000;
     assert!(matches!(refused(&bad, &facts, None), Err(PalwEvalCourtErrorV1::NoSuchLeaf(_))));
+}
+
+/// **A wrong binding to the candidate is the cone's** (spec 17 §17.8.6): an executor that ran the job over OTHER weights
+/// than its class's registered artifact commits a consistent tree — every leaf its own — whose leaves its cone cannot
+/// reproduce from the class's proven parameters. The first leaf that reads a weight is convicted; the leaves before it
+/// (none read a weight) acquit; and the claim is the chain's all the way: the fold could not see this, the court does.
+#[test]
+fn an_executor_that_ran_other_weights_is_convicted_at_its_first_divergent_leaf() {
+    let honest = generation();
+    let other = generation_over(1);
+    assert_ne!(other.binding.step_root(), honest.binding.step_root(), "other weights, another tree");
+    // The honest tree is acquitted everywhere; the other weights' tree is convicted from its first leaf that reads one.
+    let leaves: usize = other.execution.space.stages.iter().map(|st| st.leaves().len()).sum();
+    let mut first = None;
+    for g in 0..leaves as u64 {
+        let outcome = check(&other, &cone(&other, g), Some(g));
+        match (first, outcome) {
+            (None, Ok(None)) => {}
+            (None, Ok(Some(PalwStepFaultV1::ComputationMismatch { .. }))) => first = Some(g),
+            (None, unexpected) => panic!("leaf {g}: {unexpected:?}"),
+            (Some(_), outcome) => assert!(matches!(outcome, Ok(Some(_)) | Ok(None)), "leaf {g}: {outcome:?}"),
+        }
+    }
+    let first = first.expect("a run over other weights is convicted somewhere");
+    eprintln!("other weights: convicted from leaf {first} of {leaves}");
+    // The convicting leaf is the first the weights touch; everything the honest claim reads is acquitted.
+    for g in 0..first {
+        assert_eq!(check(&other, &cone(&other, g), Some(g)), Ok(None), "leaf {g} reads no weight that differs");
+    }
+    assert_eq!(
+        check(&other, &cone(&other, first), Some(first)),
+        Ok(Some(PalwStepFaultV1::ComputationMismatch { value_index: 0 })),
+        "convicted at the first divergent leaf"
+    );
 }
 
 #[test]
