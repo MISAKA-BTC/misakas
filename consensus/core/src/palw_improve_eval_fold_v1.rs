@@ -1025,4 +1025,140 @@ mod tests {
         let (late, _) = at(&unrevealed, &p, 1_950, |_| {});
         assert_eq!(late.improvement_epoch(&h(LINE), 1).unwrap().state, PalwEpochStateV1::Decided, "at t_score at the latest");
     }
+
+    /// An evaluation claim's carrier as its executor would build it: the FP payload's bytes at job
+    /// version 9, then the claim's tail — the transaction the extraction walk reads.
+    fn carrier_of(object: &PalwConsensusObjectV2) -> crate::tx::Transaction {
+        let PalwConsensusObjectV2::FreePromptCommitted {
+            class_id,
+            bond,
+            executor_pubkey,
+            work_leaves,
+            prompt_token_ids,
+            decode_tokens_executed,
+            trace_root,
+            output_root,
+            execution_root,
+            eval: Some(eval),
+            ..
+        } = object
+        else {
+            panic!("an evaluation claim")
+        };
+        let PalwEvalModeV1::Generate { max_new, stop_ids, .. } = &eval.job.mode else { panic!("a generating job") };
+        let job = crate::palw_freeprompt_v3::PalwFreePromptJobV3 {
+            version: PALW_FP_EVAL_VERSION,
+            network_domain: h(0x10),
+            class_id: *class_id,
+            executor_bond: bond.0,
+            executor_pubkey: executor_pubkey.clone(),
+            operator_id: h(0x12),
+            anchor_block: h(0x13),
+            anchor_daa: 99,
+            job_nonce: [0; 32],
+            tokenizer_id: h(0x14),
+            prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids),
+            prompt_tokens: prompt_token_ids.len() as u32,
+            decode_token_limit: *max_new,
+            max_context_tokens: 64,
+            privacy_mode: crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: Some(palw_improve_eval_decode_config_v1(stop_ids)),
+            tail: Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::Eval(Box::new(eval.job.clone()))),
+        };
+        let commitment = crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
+            trace_root: *trace_root,
+            output_root: *output_root,
+            schedule_root: Hash64::default(),
+            execution_root: *execution_root,
+            decode_tokens_executed: *decode_tokens_executed,
+            stop_reason: if decode_tokens_executed == max_new {
+                crate::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached
+            } else {
+                crate::palw_freeprompt_v3::PalwFpStopReasonV3::EndOfGeneration
+            },
+            work_leaves: *work_leaves,
+            trace_manifest_root: Hash64::default(),
+            trace_chunk_count: 1,
+            trace_retention_daa: 0,
+            job,
+        };
+        let payload = crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 {
+            version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            commitment,
+            prompt_token_ids: prompt_token_ids.clone(),
+            signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        crate::tx::Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![],
+            vec![],
+            0,
+            crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+            0,
+            palw_fp_eval_payload_encode_v1(&payload, &eval.tail),
+        )
+    }
+
+    /// **The walk and the fold are one path**: the object the extraction builds from a carrier is the
+    /// object the fold's evaluation branch accepts, a transaction the walk skips never reaches it, and a
+    /// carrier the door refuses (below its heights, or not signed) takes no job.
+    #[test]
+    fn a_carried_evaluation_claim_is_extracted_and_folded_into_its_job() {
+        let p = params();
+        let s = evaluating();
+        let honest = claim(&s, 3, PalwEvalSubjectV1::Candidate(h(CAND_A)), BOB, 0xD0);
+        let tx = carrier_of(&honest);
+        let freeprompt = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_for_tests(
+            Hash64::from_u64_word(1),
+            Hash64::from_u64_word(0xCA7),
+            Hash64::from_u64_word(0xC0757),
+        )
+        .unwrap()
+        .freeprompt;
+        let extract = |tx: &crate::tx::Transaction, rules: crate::palw_freeprompt_v3::PalwFpDecodeRulesV1, signed: bool| {
+            palw_fp_eval_objects_from_accepted_txs_v1(
+                std::slice::from_ref(tx),
+                h(0x10),
+                &freeprompt,
+                false,
+                |_| crate::palw_fp_objects_v3::PalwFpClassCapsV1 {
+                    step_ladder: 1 << 26,
+                    held: false,
+                    derived_work: crate::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared,
+                },
+                false,
+                false,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                rules,
+                move |_, _, _, _| signed,
+            )
+        };
+        let active = crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active;
+        let extraction = extract(&tx, active, true);
+        assert!(extraction.skipped.is_empty(), "{:?}", extraction.skipped);
+        let [carried] = &extraction.objects[..] else { panic!("one object") };
+        assert_eq!(carried.carrier, tx.id());
+        // The extracted object differs from the hand-built one only in the fields the carrier derives
+        // (the id, the DA retention, the job pin): the evaluation carriage — the job and its tail — is
+        // the same, field for field.
+        let (PalwConsensusObjectV2::FreePromptCommitted { eval: built, .. }, PalwConsensusObjectV2::FreePromptCommitted { eval: extracted, .. }) =
+            (&honest, &carried.object)
+        else {
+            panic!("free-prompt commitments")
+        };
+        assert_eq!(built, extracted);
+        // …and the fold takes it: the job's row is written and the claim is the chain's.
+        let (s1, _) = at(&s, &p, 1_600, |b| apply_object(b, &ctx(1_600), &carried.object).expect("the extracted claim folds"));
+        let row = s1.improvement_eval_job(&h(LINE), 1, 3, &PalwEvalSubjectV1::Candidate(h(CAND_A)), PalwScoringKindV1::ExactMatch).unwrap();
+        let taken = row.claim.unwrap();
+        let PalwConsensusObjectV2::FreePromptCommitted { claim: id, .. } = &carried.object else { unreachable!() };
+        assert_eq!((taken.claim_id, taken.executor, taken.accepted_daa), (*id, bond(BOB), 1_600));
+        assert!(palw_improve_claim_is_evaluation_v1(s1.claims.get(id).unwrap()), "an evaluation claim: no quanta");
+        // The walk skips what its door refuses: below the decode rules, or unsigned — and nothing reaches the fold.
+        assert!(extract(&tx, crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::Dormant, true).objects.is_empty());
+        assert!(extract(&tx, active, false).objects.is_empty());
+    }
 }

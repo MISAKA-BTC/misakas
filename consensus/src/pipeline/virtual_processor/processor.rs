@@ -14886,6 +14886,37 @@ impl VirtualStateProcessor {
         for (carrier, reason) in &extraction.skipped {
             info!("[palw-fp] carrier {carrier} produced no object: {reason}");
         }
+        // **RFC-0004 A6: the evaluation claims — the free-prompt walk's twin for version-9 payloads**,
+        // which that walk skipped above as undecodable (their bytes follow the FP payload's with the
+        // claim's tail). Past `palw_improvement_v1` at the ACCEPTING block only; below it the walk does
+        // not run, so a build that carries the fence and one that does not fold the same objects from
+        // every block below it. The arguments are the free-prompt walk's, at the same bounds: each claim
+        // meets its class's ladder and the held regime's rules, the ruleset's caps, the network's form
+        // and this processor's verifier. `Declared`: an evaluation claim's leaves are the chain's count
+        // of its derived context, which the fold holds, not the FP lane's shape profile.
+        let evaluation = if self.palw_improvement_at(block_daa) {
+            kaspa_consensus_core::palw_improve_eval_v1::palw_fp_eval_objects_from_accepted_txs_v1(
+                &txs,
+                network_domain,
+                freeprompt,
+                self.palw_panel_da_at(block_daa),
+                |class_id| kaspa_consensus_core::palw_fp_objects_v3::PalwFpClassCapsV1 {
+                    step_ladder: state.class_step_ladder_v1(class_id, ladder),
+                    held: state.class_is_held_v1(class_id),
+                    derived_work: kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared,
+                },
+                self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
+                self.palw_held_context_at(block_daa),
+                self.palw_prompt_ids_form_at(block_daa),
+                self.palw_fp_decode_rules_at(block_daa),
+                Self::verify_mldsa87_with_context_bool,
+            )
+        } else {
+            Default::default()
+        };
+        for (carrier, reason) in &evaluation.skipped {
+            info!("[palw-eval] carrier {carrier} produced no object: {reason}");
+        }
         // P0-11: the claim-lifecycle objects. Without this walk no block could carry a
         // `PanelBound`, so every claim on a V2 network voided at `BindTimeout` and PALW weight —
         // the network's whole fork choice — was permanently zero.
@@ -14950,7 +14981,7 @@ impl VirtualStateProcessor {
             .into_iter()
             // Nothing carried a derived binding, so nothing owes rent for it.
             .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, refund: None, unrefundable: None })
-            .chain(extraction.objects.into_iter().map(|carried| PalwCarriedObjectV1 {
+            .chain(extraction.objects.into_iter().chain(evaluation.objects).map(|carried| PalwCarriedObjectV1 {
                 carrier_fee: fee_of(carried.carrier),
                 object: carried.object,
                 refund: None,
