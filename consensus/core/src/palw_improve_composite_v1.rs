@@ -331,6 +331,9 @@ pub fn palw_tir_composite_admits_v1(
         rules.court,
         rules.carriable,
         rules.work_cap,
+        // The element twin: the range twin's composite sizing is the candidates lane's to land
+        // (the same bounds; until then the release's twin, as before the merge).
+        crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element,
     )
     .map_err(|e| E::Admission(e.to_string()))
 }

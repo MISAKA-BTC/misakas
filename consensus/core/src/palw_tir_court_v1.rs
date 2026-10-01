@@ -219,6 +219,23 @@ pub trait PalwTirEvidenceStoreV1 {
         let _ = (row, lane);
         None
     }
+    /// **Step-tree node `(level, index)`'s frontier and opening** (the second IR fence's descent
+    /// unit): the nodes [`PALW_TIR_STEP_NODE_DEPTH_V1`] levels below it (the leaf nodes, when nearer)
+    /// and its siblings up to the root — [`palw_tir_step_node_parts_v1`] over the store's leaf
+    /// hashes. `None` by default.
+    fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        let _ = (level, index);
+        None
+    }
+    /// **The tiled logits trace's rows-tree node `(level, index)`'s frontier and opening** (the
+    /// second IR fence's `TirRowNode`): at `level ≥ 1` the rows-tree nodes eight levels below it (the
+    /// row leaves when nearer) and its siblings to the rows root; at level 0 row `index`'s tile
+    /// leaves and the row's opening — [`palw_tir_row_node_parts_v1`] over the store's rows. `None`
+    /// by default.
+    fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        let _ = (level, index);
+        None
+    }
 }
 
 /// Why a builder could not build a refutation.
@@ -2259,6 +2276,473 @@ impl PalwTirStepLeafDisclosureV1 {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The step tree's nodes: the second IR fence's descent unit `TirStepNode { level, index }`
+// ---------------------------------------------------------------------------------------------
+
+/// **Levels a `TirStepNode` answer covers**: its frontier is the nodes this many levels below the
+/// demanded node (the leaf nodes, when nearer) — at most 2^8 hashes — so one session descends eight
+/// levels and a 2^22-leaf execution's first divergent leaf is three node sessions and one leaf session
+/// away.
+pub const PALW_TIR_STEP_NODE_DEPTH_V1: u8 = 8;
+
+/// **The step tree's width at `level`** (0 = the leaf nodes; each level `⌈w / 2⌉`, an odd last node
+/// promoted), or `None` past the root or for an empty tree.
+pub fn palw_tir_step_tree_width_v1(leaf_count: u64, level: u8) -> Option<u64> {
+    if leaf_count == 0 {
+        return None;
+    }
+    let mut width = leaf_count;
+    for _ in 0..level {
+        if width == 1 {
+            return None;
+        }
+        width = width.div_ceil(2);
+    }
+    Some(width)
+}
+
+/// **The root's level**: how many times the leaf nodes fold to one.
+pub fn palw_tir_step_tree_height_v1(leaf_count: u64) -> u8 {
+    let mut level = 0u8;
+    let mut width = leaf_count.max(1);
+    while width > 1 {
+        width = width.div_ceil(2);
+        level += 1;
+    }
+    level
+}
+
+/// The frontier level of node `(level, ·)`'s answer.
+fn frontier_level(level: u8) -> u8 {
+    level.saturating_sub(PALW_TIR_STEP_NODE_DEPTH_V1)
+}
+
+/// The positions node `(level, index)` covers at `below ≤ level`: `[lo, hi)`, or `None` when the node
+/// is past the tree.
+fn covered(leaf_count: u64, level: u8, index: u64, below: u8) -> Option<(u64, u64)> {
+    if index >= palw_tir_step_tree_width_v1(leaf_count, level)? {
+        return None;
+    }
+    let shift = u32::from(level - below);
+    let lo = index.checked_shl(shift)?;
+    let hi = index.checked_add(1)?.checked_shl(shift)?.min(palw_tir_step_tree_width_v1(leaf_count, below)?);
+    (lo < hi).then_some((lo, hi))
+}
+
+/// **Node `(level, index)`'s hash from its frontier at `below`** — the tree's own fold (pairs, an odd
+/// last node promoted at the level's global width) over exactly the positions it covers; `None` when
+/// the frontier is not that many nodes.
+fn fold_frontier(leaf_count: u64, level: u8, index: u64, below: u8, frontier: &[Hash64]) -> Option<Hash64> {
+    let (lo, hi) = covered(leaf_count, level, index, below)?;
+    if frontier.len() as u64 != hi - lo {
+        return None;
+    }
+    let mut nodes = frontier.to_vec();
+    let mut start = lo;
+    for l in below..level {
+        let width = palw_tir_step_tree_width_v1(leaf_count, l)?;
+        let mut next = Vec::with_capacity(nodes.len().div_ceil(2));
+        let mut k = 0usize;
+        while k < nodes.len() {
+            let position = start + k as u64;
+            if position % 2 != 0 {
+                return None;
+            }
+            if position + 1 < width {
+                let right = nodes.get(k + 1)?;
+                next.push(crate::palw_step_leg::step_merkle_node_v1(&nodes[k], right));
+                k += 2;
+            } else {
+                next.push(nodes[k]);
+                k += 1;
+            }
+        }
+        nodes = next;
+        start /= 2;
+    }
+    (nodes.len() == 1).then(|| nodes[0])
+}
+
+/// **The root node `(level, index)` with hash `node` reaches through `siblings`** — the opening's
+/// walk from an interior node, promotion as the tree folds; `None` when the siblings are short or long.
+fn walk_to_root(leaf_count: u64, level: u8, index: u64, node: Hash64, siblings: &[Hash64]) -> Option<Hash64> {
+    let (mut current, mut position, mut l) = (node, index, level);
+    let mut supplied = siblings.iter();
+    loop {
+        let width = palw_tir_step_tree_width_v1(leaf_count, l)?;
+        if width == 1 {
+            break;
+        }
+        let promoted = width % 2 == 1 && position == width - 1;
+        if !promoted {
+            let sibling = supplied.next()?;
+            current = if position % 2 == 0 {
+                crate::palw_step_leg::step_merkle_node_v1(&current, sibling)
+            } else {
+                crate::palw_step_leg::step_merkle_node_v1(sibling, &current)
+            };
+        }
+        position /= 2;
+        l += 1;
+    }
+    supplied.next().is_none().then_some(current)
+}
+
+/// **The prover's half: node `(level, index)`'s frontier and opening** from the execution's ordered
+/// step-leaf hashes (the leaf hashes, not the tree's index-bound leaf nodes). `None` when the node is
+/// not in the tree or `level` is 0 (a leaf is a `TirStepLeaf`).
+pub fn palw_tir_step_node_parts_v1(ordered_leaf_hashes: &[Hash64], level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+    let leaf_count = ordered_leaf_hashes.len() as u64;
+    if level == 0 {
+        return None;
+    }
+    let below = frontier_level(level);
+    let (lo, hi) = covered(leaf_count, level, index, below)?;
+    let mut levels: Vec<Vec<Hash64>> = vec![
+        ordered_leaf_hashes.iter().enumerate().map(|(i, leaf)| crate::palw_step_leg::step_merkle_leaf_v1(i as u64, leaf)).collect(),
+    ];
+    while levels.last()?.len() > 1 {
+        let last = levels.last()?;
+        let mut next = Vec::with_capacity(last.len().div_ceil(2));
+        let mut pairs = last.chunks_exact(2);
+        for pair in &mut pairs {
+            next.push(crate::palw_step_leg::step_merkle_node_v1(&pair[0], &pair[1]));
+        }
+        if let [odd] = pairs.remainder() {
+            next.push(*odd);
+        }
+        levels.push(next);
+    }
+    let frontier = levels.get(below as usize)?.get(lo as usize..hi as usize)?.to_vec();
+    let mut siblings = Vec::new();
+    let mut position = index;
+    for row in levels.iter().skip(level as usize) {
+        let width = row.len() as u64;
+        if width == 1 {
+            break;
+        }
+        let promoted = width % 2 == 1 && position == width - 1;
+        if !promoted {
+            siblings.push(row[(position ^ 1) as usize]);
+        }
+        position /= 2;
+    }
+    Some((frontier, siblings))
+}
+
+/// **What a `TirStepNode { level, index }` answer opens** (past `Params::palw_tir_fence2`): the node's
+/// frontier — the nodes [`PALW_TIR_STEP_NODE_DEPTH_V1`] levels below it, or the leaf nodes when nearer
+/// — and its siblings up to the step root, with the claim's binding (program EMPTY). A challenger
+/// compares the frontier with its own execution's tree and names the first node that differs next:
+/// eight levels a session, then the leaf.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTirStepNodeDisclosureV1 {
+    pub binding: PalwTirStepBindingV1,
+    pub frontier: Vec<Hash64>,
+    pub siblings: Vec<Hash64>,
+}
+
+impl PalwTirStepNodeDisclosureV1 {
+    /// **Empties the carried program** — what a discloser does before the answer rides.
+    pub fn strip_program_v1(&mut self) {
+        crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut self.binding);
+    }
+
+    #[cfg(test)]
+    fn with_program_v1_for_tests(&self, program: &[u8]) -> Self {
+        let mut filled = self.clone();
+        filled.binding.class.program = program.to_vec();
+        filled
+    }
+
+    /// The disclosure with the registered class's program put back; refused when it carried one.
+    pub fn with_program_v1(&self, record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1) -> Result<Self, &'static str> {
+        let mut filled = self.clone();
+        filled.binding = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(&self.binding, record)?;
+        Ok(filled)
+    }
+}
+
+/// The binding verified and naming the claim's two roots — the first step of every step answer.
+fn claims_binding(
+    binding: &PalwTirStepBindingV1,
+    claim_trace_root: Hash64,
+    claim_execution_root: Hash64,
+    max_step_leaf_count: u64,
+) -> Result<PalwTirVerifiedBindingV1, PalwStepRefuteError> {
+    let v = crate::palw_tir_step_v1::verify_tir_binding_v1(binding, max_step_leaf_count)
+        .map_err(|_| bad("the IR binding does not verify"))?;
+    if binding.full_logits_trace_root != claim_trace_root {
+        return Err(bad("the disclosure binds to another trace root than the claim committed"));
+    }
+    if binding.committed_execution_root != claim_execution_root {
+        return Err(bad("the disclosure binds to another execution root than the claim committed"));
+    }
+    Ok(v)
+}
+
+/// **Verify a `TirStepNode` answer against the claim — by hash arithmetic.** The binding verifies and
+/// names the claim's roots; `(level, index)` is an interior node of its tree (`level ≥ 1`); the
+/// frontier is exactly the nodes it covers `min(level, 8)` levels down and folds to the node, and the
+/// siblings walk the node to the claim's step root.
+pub fn check_tir_step_node_disclosure_v1(
+    claim_trace_root: Hash64,
+    claim_execution_root: Hash64,
+    level: u8,
+    index: u64,
+    disclosure: &PalwTirStepNodeDisclosureV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepRefuteError> {
+    let binding = &disclosure.binding;
+    claims_binding(binding, claim_trace_root, claim_execution_root, max_step_leaf_count)?;
+    palw_tir_step_node_reaches_v1(
+        binding.step_leaf_count,
+        &binding.step_merkle_root,
+        level,
+        index,
+        &disclosure.frontier,
+        &disclosure.siblings,
+    )
+    .map_err(bad)
+}
+
+/// **The hash arithmetic of a `TirStepNode` answer, its binding aside**: in the step tree over
+/// `leaf_count` leaves, `(level, index)` is an interior node (`level ≥ 1`); `frontier` is exactly the
+/// nodes it covers `min(level, 8)` levels down, and folds to it by the tree's own rule; `siblings` walk
+/// it to `step_root`. What [`check_tir_step_node_disclosure_v1`] asks once the binding names the
+/// claim, and what a seat asks of each answer as it descends.
+pub fn palw_tir_step_node_reaches_v1(
+    leaf_count: u64,
+    step_root: &Hash64,
+    level: u8,
+    index: u64,
+    frontier: &[Hash64],
+    siblings: &[Hash64],
+) -> Result<(), &'static str> {
+    if level == 0 {
+        return Err("a step node is an interior node: a leaf is demanded as a TirStepLeaf");
+    }
+    let node = fold_frontier(leaf_count, level, index, frontier_level(level), frontier)
+        .ok_or("the frontier is not the node's, or the node is not in the tree")?;
+    let root = walk_to_root(leaf_count, level, index, node, siblings).ok_or("the node's siblings do not walk to a root")?;
+    if root != *step_root {
+        return Err("the node does not reach the claim's step root");
+    }
+    Ok(())
+}
+
+/// **Where node `(level, index)`'s frontier sits**: `(frontier level, first, end)` — the level
+/// `level − 8` (or 0, the leaf nodes, when nearer) and the positions `[first, end)` it covers there;
+/// `None` for a leaf or a node past the tree. A seat descending names next the first frontier node its
+/// own tree disagrees with: `TirStepNode { level: frontier level, index: first + k }`, or, at level 0,
+/// `TirStepLeaf { index: first + k }`.
+pub fn palw_tir_step_node_frontier_v1(leaf_count: u64, level: u8, index: u64) -> Option<(u8, u64, u64)> {
+    if level == 0 {
+        return None;
+    }
+    let below = frontier_level(level);
+    let (lo, hi) = covered(leaf_count, level, index, below)?;
+    Some((below, lo, hi))
+}
+
+/// **Verify a `TirStepOutOfRange` answer**: the claim's binding (roots, program empty on the wire)
+/// proves the demanded unit is not in its execution — a leaf at or past its leaf count, a node past
+/// the root or the level's width.
+pub fn check_tir_step_out_of_range_v1(
+    claim_trace_root: Hash64,
+    claim_execution_root: Hash64,
+    unit: &crate::palw_da_rcore_v1::PalwDaUnitV1,
+    binding: &PalwTirStepBindingV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepRefuteError> {
+    use crate::palw_da_rcore_v1::PalwDaUnitV1;
+    let v = claims_binding(binding, claim_trace_root, claim_execution_root, max_step_leaf_count)?;
+    let count = binding.step_leaf_count;
+    let past = match unit {
+        PalwDaUnitV1::TirStepLeaf { index } => *index >= count,
+        PalwDaUnitV1::TirStepNode { level, index } => palw_tir_step_tree_width_v1(count, *level).is_none_or(|width| *index >= width),
+        // A rows-tree unit is past a trace that has no rows tree (the flat scheme hashes every row at
+        // once), and past a tiled trace's rows (a row at or past the decode count, a node past the
+        // tree).
+        PalwDaUnitV1::TirRowNode { level, index } => {
+            let rows = u64::from(binding.job_context.exact_decode_tokens);
+            logits_shape(&v.space).1 != tiled_logits_scheme_id_v1()
+                || palw_tir_step_tree_width_v1(rows, *level).is_none_or(|width| *index >= width)
+        }
+        _ => return Err(bad("an out-of-range answer answers an IR step unit")),
+    };
+    if !past {
+        return Err(bad("the unit is in the execution: it is answered by its disclosure"));
+    }
+    Ok(())
+}
+
+/// **A `TirStepNode` answer, built from what the answering node holds**, checked before it is
+/// returned; the program stripped.
+pub fn build_tir_step_node_disclosure_v1(
+    binding: &PalwTirStepBindingV1,
+    level: u8,
+    index: u64,
+    store: &dyn PalwTirEvidenceStoreV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwTirStepNodeDisclosureV1, PalwTirEvidenceErrorV1> {
+    let (frontier, siblings) =
+        store.step_node(level, index).ok_or_else(|| PalwTirEvidenceErrorV1::Store(format!("step node ({level}, {index})")))?;
+    let mut disclosure = PalwTirStepNodeDisclosureV1 { binding: binding.clone(), frontier, siblings };
+    check_tir_step_node_disclosure_v1(
+        binding.full_logits_trace_root,
+        binding.committed_execution_root,
+        level,
+        index,
+        &disclosure,
+        max_step_leaf_count,
+    )
+    .map_err(|e| PalwTirEvidenceErrorV1::Store(format!("the store's node ({level}, {index}) does not answer: {e}")))?;
+    disclosure.strip_program_v1();
+    Ok(disclosure)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The tiled logits trace's rows tree: the second IR fence's descent unit `TirRowNode { level, index }`
+// ---------------------------------------------------------------------------------------------
+
+/// **The prover's half of a `TirRowNode`** from the run's logits rows (the tiled scheme): at
+/// `level ≥ 1` the rows tree's node — the step tree's own shape over the row roots — with its
+/// frontier and opening ([`palw_tir_step_node_parts_v1`]); at level 0 row `index`'s tile leaves
+/// (`tiled_logits_tile_leaf_v1`, one per 4,096 lanes) and the row's opening in the rows tree. `None`
+/// for a row or node past the trace, or rows that build no tree.
+pub fn palw_tir_row_node_parts_v1(
+    ctx: &PalwJobContextV2,
+    rows: &[Vec<i32>],
+    level: u8,
+    index: u64,
+) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+    let ctx_hash = ctx.context_hash();
+    let row_roots: Vec<Hash64> = rows
+        .iter()
+        .enumerate()
+        .map(|(r, row)| crate::palw_step_refute::tiled_logits_row_root_v1(&ctx_hash, r as u32, row))
+        .collect::<Option<_>>()?;
+    if level >= 1 {
+        return palw_tir_step_node_parts_v1(&row_roots, level, index);
+    }
+    let row = rows.get(usize::try_from(index).ok()?)?;
+    let tiles: Vec<Hash64> = row
+        .chunks(PALW_LOGITS_TILE_LANES)
+        .enumerate()
+        .map(|(t, lanes)| crate::palw_step_refute::tiled_logits_tile_leaf_v1(&ctx_hash, index as u32, t as u32, lanes))
+        .collect();
+    let opening = crate::palw_step_leg::step_opening_v1(&row_roots, index).ok()?;
+    Some((tiles, opening.siblings))
+}
+
+/// **What a `TirRowNode { level, index }` answer opens** (past `Params::palw_tir_fence2`): a node of
+/// the claim's tiled logits trace's rows tree — at `level ≥ 1` its frontier eight levels down (the row
+/// leaves when nearer) and its siblings to the rows root; at level 0, row `index`'s tile leaves and
+/// the row's siblings — with the generated ids that, with the rows root, reproduce the claim's trace
+/// root, and the claim's binding (program EMPTY). A seat whose replay disagrees with the claim's trace
+/// but not its steps descends here to the first row, then the first tile, it disputes; the tile's lanes
+/// are the event unit's, and the step tree's logits leaf beside them convicts (`TirLogits`).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTirRowNodeDisclosureV1 {
+    pub binding: PalwTirStepBindingV1,
+    pub generated_token_ids: Vec<u32>,
+    pub frontier: Vec<Hash64>,
+    pub siblings: Vec<Hash64>,
+}
+
+impl PalwTirRowNodeDisclosureV1 {
+    /// **Empties the carried program** — what a discloser does before the answer rides.
+    pub fn strip_program_v1(&mut self) {
+        crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut self.binding);
+    }
+
+    /// The disclosure with the registered class's program put back; refused when it carried one.
+    pub fn with_program_v1(&self, record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1) -> Result<Self, &'static str> {
+        let mut filled = self.clone();
+        filled.binding = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(&self.binding, record)?;
+        Ok(filled)
+    }
+}
+
+/// **Verify a `TirRowNode` answer against the claim — by hash arithmetic.** The binding verifies and
+/// names the claim's roots, and its class commits its logits under the tiled scheme; the ids are the
+/// decode count; the answer reaches a rows root — at `level ≥ 1` its frontier folds to the node and its
+/// siblings walk it up; at level 0 the tile leaves (the row's tile count of them) build the row root,
+/// and its opening walks the row up — and that rows root, with the ids, reproduces the claim's trace
+/// root.
+pub fn check_tir_row_node_disclosure_v1(
+    claim_trace_root: Hash64,
+    claim_execution_root: Hash64,
+    level: u8,
+    index: u64,
+    disclosure: &PalwTirRowNodeDisclosureV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepRefuteError> {
+    let binding = &disclosure.binding;
+    let v = claims_binding(binding, claim_trace_root, claim_execution_root, max_step_leaf_count)?;
+    let (vocab, scheme) = logits_shape(&v.space);
+    if scheme != tiled_logits_scheme_id_v1() {
+        return Err(bad("a rows tree is the tiled scheme's: a flat trace answers a row demand by its out-of-range proof"));
+    }
+    let ctx = &binding.job_context;
+    let rows = u64::from(ctx.exact_decode_tokens);
+    if disclosure.generated_token_ids.len() as u64 != rows {
+        return Err(bad("the id count is not the context's decode count"));
+    }
+    let rows_root = if level >= 1 {
+        let node = fold_frontier(rows, level, index, frontier_level(level), &disclosure.frontier)
+            .ok_or(bad("the frontier is not the node's, or the node is not in the rows tree"))?;
+        walk_to_root(rows, level, index, node, &disclosure.siblings).ok_or(bad("the node's siblings do not walk to a rows root"))?
+    } else {
+        if index >= rows {
+            return Err(bad("the row is past the decode count"));
+        }
+        if disclosure.frontier.len() != vocab.div_ceil(PALW_LOGITS_TILE_LANES) {
+            return Err(bad("a row's frontier is its tile leaves, one per 4,096 lanes of the vocabulary"));
+        }
+        let row_root = crate::palw_step_leg::step_merkle_root_capped_v1(&disclosure.frontier, max_step_leaf_count)
+            .map_err(|_| bad("the row's tiles build no tree"))?;
+        let opening = PalwStepOpeningV1 { leaf_index: index, leaf_hash: row_root, siblings: disclosure.siblings.clone() };
+        step_opening_root_capped_v1(rows, &opening, max_step_leaf_count).map_err(|_| bad("the row's opening does not walk"))?
+    };
+    if tiled_logits_outer_root_v1(ctx, rows, &rows_root, &disclosure.generated_token_ids) != binding.full_logits_trace_root {
+        return Err(bad("the rows root and the ids do not reproduce the claim's trace root"));
+    }
+    Ok(())
+}
+
+/// **A `TirRowNode` answer, built from what the answering node holds**: the ids from its decode pin
+/// (the tiled scheme's), the frontier and opening from its rows; checked before it is returned, the
+/// program stripped.
+pub fn build_tir_row_node_disclosure_v1(
+    binding: &PalwTirStepBindingV1,
+    level: u8,
+    index: u64,
+    store: &dyn PalwTirEvidenceStoreV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwTirRowNodeDisclosureV1, PalwTirEvidenceErrorV1> {
+    let missing = |what: String| PalwTirEvidenceErrorV1::Store(what);
+    let Some(PalwDecodeTokenPinV1::TiledV1(pin)) = store.decode_pin() else {
+        return Err(missing("the tiled scheme's decode pin".into()));
+    };
+    let (frontier, siblings) = store.row_node(level, index).ok_or_else(|| missing(format!("rows-tree node ({level}, {index})")))?;
+    let mut disclosure =
+        PalwTirRowNodeDisclosureV1 { binding: binding.clone(), generated_token_ids: pin.generated_token_ids, frontier, siblings };
+    check_tir_row_node_disclosure_v1(
+        binding.full_logits_trace_root,
+        binding.committed_execution_root,
+        level,
+        index,
+        &disclosure,
+        max_step_leaf_count,
+    )
+    .map_err(|e| missing(format!("the store's rows-tree node ({level}, {index}) does not answer: {e}")))?;
+    disclosure.strip_program_v1();
+    Ok(disclosure)
+}
+
 /// The decode row of a leaf of the post block's logits node — `a − (P − 1)` for a position with a row
 /// — and the leaf's first lane; `None` for any other leaf.
 fn logits_leaf_row(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, leaf: &PalwTirLeafV1) -> Option<(u32, u32)> {
@@ -2290,13 +2774,7 @@ pub fn check_tir_step_leaf_disclosure_v1(
     max_step_leaf_count: u64,
 ) -> Result<(), PalwStepRefuteError> {
     let binding = &disclosure.binding;
-    let v = crate::palw_tir_step_v1::verify_tir_binding_v1(binding, max_step_leaf_count).map_err(|_| bad("the IR binding does not verify"))?;
-    if binding.full_logits_trace_root != claim_trace_root {
-        return Err(bad("the disclosure binds to another trace root than the claim committed"));
-    }
-    if binding.committed_execution_root != claim_execution_root {
-        return Err(bad("the disclosure binds to another execution root than the claim committed"));
-    }
+    let v = claims_binding(binding, claim_trace_root, claim_execution_root, max_step_leaf_count)?;
     if index >= binding.step_leaf_count || disclosure.opening.leaf_index != index {
         return Err(bad("the opening does not open the demanded leaf of this execution"));
     }
@@ -2374,13 +2852,20 @@ pub fn build_tir_step_leaf_disclosure_v1(
     let decode = store.decode_pin().ok_or_else(|| missing("the decode pin".into()))?;
     let leaf = v.space.leaf_at(&binding.job_context, index).ok_or_else(|| missing(format!("leaf {index} in the step space")))?;
     let (_, scheme) = logits_shape(&v.space);
-    let row_pin = match (scheme == tiled_logits_scheme_id_v1()).then(|| logits_leaf_row(&v.space, &binding.job_context, &leaf)).flatten() {
-        Some((row, lane)) => Some(store.row_pin(row, lane).ok_or_else(|| missing(format!("row {row}'s pin at lane {lane}")))?),
-        None => None,
-    };
+    let row_pin =
+        match (scheme == tiled_logits_scheme_id_v1()).then(|| logits_leaf_row(&v.space, &binding.job_context, &leaf)).flatten() {
+            Some((row, lane)) => Some(store.row_pin(row, lane).ok_or_else(|| missing(format!("row {row}'s pin at lane {lane}")))?),
+            None => None,
+        };
     let mut disclosure = PalwTirStepLeafDisclosureV1 { binding: binding.clone(), preimage, opening, decode, row_pin };
-    check_tir_step_leaf_disclosure_v1(binding.full_logits_trace_root, binding.committed_execution_root, index, &disclosure, max_step_leaf_count)
-        .map_err(|e| PalwTirEvidenceErrorV1::Store(format!("the store's leaf {index} does not answer: {e}")))?;
+    check_tir_step_leaf_disclosure_v1(
+        binding.full_logits_trace_root,
+        binding.committed_execution_root,
+        index,
+        &disclosure,
+        max_step_leaf_count,
+    )
+    .map_err(|e| PalwTirEvidenceErrorV1::Store(format!("the store's leaf {index} does not answer: {e}")))?;
     disclosure.strip_program_v1();
     Ok(disclosure)
 }
@@ -2440,6 +2925,12 @@ pub(crate) mod test_support {
         }
         fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
             crate::palw_step_refute::tiled_decode_pin_v1(&self.binding.job_context, &self.rows, &self.generated, row, lane)
+        }
+        fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+            palw_tir_step_node_parts_v1(&self.hashes, level, index)
+        }
+        fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+            palw_tir_row_node_parts_v1(&self.binding.job_context, &self.rows, level, index)
         }
     }
 
@@ -2857,15 +3348,121 @@ mod step_leaf_da_tests {
         assert!(check(&x, past, &honest).is_err());
     }
 
+    /// **Every interior node of the tiny execution's step tree is disclosed** (its frontier and its
+    /// opening, the program stripped) and checks against the claim's roots; no node's answer answers
+    /// its neighbour or a leaf; a unit past the execution is proven so by the binding, and one inside
+    /// it is not.
     #[test]
-    fn the_draw_space_of_a_leaf_demand_is_the_execution_s_leaves() {
-        use crate::palw_da_rcore_v1::{PalwDaDrawSpaceV1, PalwDaUnitV1, palw_da_draw_units_v1};
-        let named = PalwDaUnitV1::TirStepLeaf { index: 3 };
-        let small = palw_da_draw_units_v1(&Hash64::from_bytes([1; 64]), &named, &PalwDaDrawSpaceV1::TirStepLeaves { leaves: 4 });
-        assert_eq!(small, vec![0, 1, 2].into_iter().map(|index| PalwDaUnitV1::TirStepLeaf { index }).collect::<Vec<_>>());
-        let wide = palw_da_draw_units_v1(&Hash64::from_bytes([2; 64]), &named, &PalwDaDrawSpaceV1::TirStepLeaves { leaves: 1 << 20 });
-        assert_eq!(wide.len(), 3);
-        assert!(wide.iter().all(|u| matches!(u, PalwDaUnitV1::TirStepLeaf { index } if *index < 1 << 20 && *index != 3)));
+    fn every_node_is_disclosed_and_a_unit_past_the_execution_is_proven_so() {
+        use crate::palw_da_rcore_v1::PalwDaUnitV1;
+        let x = tiny_execution(None);
+        let count = x.binding.step_leaf_count;
+        let height = palw_tir_step_tree_height_v1(count);
+        assert!(height >= 2, "{count} leaves");
+        let (trace, execution) = (x.binding.full_logits_trace_root, x.binding.committed_execution_root);
+        let filled_node = |d: &PalwTirStepNodeDisclosureV1| d.with_program_v1_for_tests(&x.binding.class.program);
+        let past = |unit: PalwDaUnitV1| check_tir_step_out_of_range_v1(trace, execution, &unit, &x.binding, MAX).is_ok();
+        for level in 1..=height {
+            let width = palw_tir_step_tree_width_v1(count, level).unwrap();
+            for index in 0..width {
+                let d = build_tir_step_node_disclosure_v1(&x.binding, level, index, &x, MAX)
+                    .unwrap_or_else(|e| panic!("({level}, {index}): {e}"));
+                assert!(d.binding.class.program.is_empty(), "it rides without the program");
+                let f = filled_node(&d);
+                check_tir_step_node_disclosure_v1(trace, execution, level, index, &f, MAX)
+                    .unwrap_or_else(|e| panic!("({level}, {index}): {e}"));
+                if index + 1 < width {
+                    assert!(
+                        check_tir_step_node_disclosure_v1(trace, execution, level, index + 1, &f, MAX).is_err(),
+                        "a neighbour's answer"
+                    );
+                }
+                assert!(check_tir_step_node_disclosure_v1(trace, execution, 0, index, &f, MAX).is_err(), "a leaf is not a node");
+                assert!(!past(PalwDaUnitV1::TirStepNode { level, index }), "({level}, {index}) is in the execution");
+            }
+            assert!(build_tir_step_node_disclosure_v1(&x.binding, level, width, &x, MAX).is_err(), "past level {level}");
+            assert!(past(PalwDaUnitV1::TirStepNode { level, index: width }), "past level {level}'s width");
+        }
+        assert!(past(PalwDaUnitV1::TirStepNode { level: height + 1, index: 0 }), "above the root");
+        assert!(past(PalwDaUnitV1::TirStepLeaf { index: count }), "past the leaves");
+        assert!(!past(PalwDaUnitV1::TirStepLeaf { index: count - 1 }), "the last leaf is in the execution");
+        assert!(!past(PalwDaUnitV1::Event { row: 0, tile: 0 }), "an out-of-range proof answers an IR step unit only");
+        let other_roots = check_tir_step_out_of_range_v1(
+            Hash64::from_bytes([9; 64]),
+            execution,
+            &PalwDaUnitV1::TirStepLeaf { index: count },
+            &x.binding,
+            MAX,
+        );
+        assert!(other_roots.is_err(), "the binding must be the claim's");
+    }
+
+    /// **Every node of the tiny execution's rows tree is disclosed** — rows-tree nodes with their
+    /// frontiers, rows with their tile leaves, each with the ids — and checks against the claim's trace
+    /// root; tampered answers, a neighbour's, and a unit past the trace are refused, which its
+    /// out-of-range proof answers.
+    #[test]
+    fn every_rows_tree_node_is_disclosed_and_a_row_past_the_trace_is_proven_so() {
+        use crate::palw_da_rcore_v1::PalwDaUnitV1;
+        let x = tiny_execution(None);
+        let rows = x.rows.len() as u64;
+        assert!(rows >= 2, "{rows} rows");
+        let (trace, execution) = (x.binding.full_logits_trace_root, x.binding.committed_execution_root);
+        let filled = |d: &PalwTirRowNodeDisclosureV1| {
+            let mut f = d.clone();
+            f.binding.class.program = x.binding.class.program.clone();
+            f
+        };
+        let check = |level: u8, index: u64, d: &PalwTirRowNodeDisclosureV1| {
+            check_tir_row_node_disclosure_v1(trace, execution, level, index, d, MAX)
+        };
+        let height = palw_tir_step_tree_height_v1(rows);
+        for level in 0..=height {
+            let width = palw_tir_step_tree_width_v1(rows, level).unwrap();
+            for index in 0..width {
+                let d = build_tir_row_node_disclosure_v1(&x.binding, level, index, &x, MAX)
+                    .unwrap_or_else(|e| panic!("rows node ({level}, {index}): {e}"));
+                assert!(d.binding.class.program.is_empty(), "it rides without the program");
+                let f = filled(&d);
+                check(level, index, &f).unwrap_or_else(|e| panic!("rows node ({level}, {index}): {e}"));
+                if index + 1 < width {
+                    assert!(check(level, index + 1, &f).is_err(), "({level}, {index}) does not answer its neighbour");
+                }
+                let mut ids = f.clone();
+                ids.generated_token_ids[0] ^= 1;
+                assert!(check(level, index, &ids).is_err(), "another id breaks the trace root");
+                let mut frontier = f.clone();
+                frontier.frontier[0] = Hash64::from_bytes([0xF0; 64]);
+                assert!(check(level, index, &frontier).is_err(), "a tampered frontier");
+                if !f.siblings.is_empty() {
+                    let mut siblings = f.clone();
+                    siblings.siblings[0] = Hash64::from_bytes([0xF1; 64]);
+                    assert!(check(level, index, &siblings).is_err(), "a tampered sibling");
+                }
+                let past =
+                    check_tir_step_out_of_range_v1(trace, execution, &PalwDaUnitV1::TirRowNode { level, index }, &x.binding, MAX);
+                assert!(past.is_err(), "({level}, {index}) is in the trace");
+            }
+            let past =
+                check_tir_step_out_of_range_v1(trace, execution, &PalwDaUnitV1::TirRowNode { level, index: width }, &x.binding, MAX);
+            assert!(past.is_ok(), "past level {level}'s width");
+            assert!(build_tir_row_node_disclosure_v1(&x.binding, level, width, &x, MAX).is_err());
+        }
+        assert!(
+            check_tir_step_out_of_range_v1(
+                trace,
+                execution,
+                &PalwDaUnitV1::TirRowNode { level: height + 1, index: 0 },
+                &x.binding,
+                MAX
+            )
+            .is_ok()
+        );
+        // A row's frontier is exactly its tiles: one short is refused.
+        let row = build_tir_row_node_disclosure_v1(&x.binding, 0, 0, &x, MAX).unwrap();
+        let mut short = filled(&row);
+        short.frontier.push(Hash64::from_bytes([0xF2; 64]));
+        assert!(check(0, 0, &short).is_err(), "a row carries exactly its tile leaves");
     }
 }
 

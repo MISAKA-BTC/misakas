@@ -2857,8 +2857,8 @@ pub struct Params {
 
     /// **RFC-0002 Phase F, the second IR fence** (`crate::palw_tir_fence2_v1`): the consensus half of
     /// the fixes after the DAA-2,000 release — ref2's H7 (the `TopK` row of the box demand and the
-    /// value bound `V`), the `Select`-arm work credit, and the IR data-availability unit
-    /// `TirStepLeaf { index }`. A bare height; `None` on every preset (testnet-12 included) until a
+    /// value bound `V`), the `Select`-arm work credit, and the IR data-availability units
+    /// `TirStepLeaf { index }` and `TirStepNode { level, index }`. A bare height; `None` on every preset (testnet-12 included) until a
     /// later flag day arms it. Hashed Some-only in every writer with the `never()` collapse, so a build
     /// that carries the field fingerprints and peers exactly as one that does not. Refused by
     /// [`Self::validate_palw_tir_fence2`] off ConsensusV2, without `palw_tir_v1` in force at or below
@@ -19792,8 +19792,8 @@ fn palw_t12_arm_tir_flag_day_v1(params: &mut Params) {
 }
 
 /// **testnet-12's second IR flag day: the fixes after DAA 2,000** — `palw_tir_fence2` alone
-/// ([`crate::palw_tir_fence2_v1`]: ref2's H7 `TopK` row, the `Select`-arm work credit, the IR DA unit
-/// `TirStepLeaf`). Its prerequisite is the IR flag day's `palw_tir_v1` at or below it
+/// ([`crate::palw_tir_fence2_v1`]: ref2's H7 `TopK` row, the `Select`-arm work credit, the IR DA units
+/// `TirStepLeaf` and `TirStepNode`). Its prerequisite is the IR flag day's `palw_tir_v1` at or below it
 /// (`validate_palw_tir_fence2`).
 pub const PALW_T12_TIR_FENCE2_FENCES_V1: &[PalwPostLaunchFenceV1] = &[crate::palw_tir_fence2_v1::PALW_T12_TIR_FENCE2_ENTRY];
 
