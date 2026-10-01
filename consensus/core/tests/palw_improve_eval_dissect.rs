@@ -126,8 +126,7 @@ fn claim() -> Claim {
     let dissected = sp
         .leaves()
         .iter()
-        .filter(|l| palw_gen_dissect_site_v1(sp, &l.coord).is_some())
-        .next_back()
+        .rfind(|l| palw_gen_dissect_site_v1(sp, &l.coord).is_some())
         .expect("the attention's commit points are dissected");
     let leaf = execution.space.global_index(&dissected.coord).expect("a leaf of the space");
     Claim {

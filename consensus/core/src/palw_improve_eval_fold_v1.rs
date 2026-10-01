@@ -3271,8 +3271,7 @@ mod tests {
         let dissected = sp
             .leaves()
             .iter()
-            .filter(|l| crate::palw_gen_court_v1::palw_gen_dissect_site_v1(sp, &l.coord).is_some())
-            .next_back()
+            .rfind(|l| crate::palw_gen_court_v1::palw_gen_dissect_site_v1(sp, &l.coord).is_some())
             .expect("the attention's commit points are dissected");
         let index = run.execution.space.global_index(&dissected.coord).expect("a leaf of the space");
 
@@ -3287,8 +3286,7 @@ mod tests {
         assert!(outcome(false).is_err(), "outside the held regime a leaf is argued whole, and this carries none of its cone");
 
         // The fold, under the held regime: a session at Terminal on the leaf; the claim's path to Final is frozen.
-        let mut extras = PalwTransitionExtrasV1::default();
-        extras.held_context_ladder = Some(1 << 26);
+        let extras = PalwTransitionExtrasV1 { held_context_ladder: Some(1 << 26), ..PalwTransitionExtrasV1::default() };
         let object = PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(accusation.clone()) };
         let (s2, _) =
             at_with(&s1, &p, 1_650, &extras, |b| apply_object(b, &ctx(1_650), &object).expect("the accusation opens a dissection"));
