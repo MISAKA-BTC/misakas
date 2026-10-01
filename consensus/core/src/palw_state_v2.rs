@@ -9585,6 +9585,10 @@ pub enum PalwStateV2Error {
     /// new claim until one leaves the live set.
     #[error("generative class {class} holds {inflight} claims in flight, at the fence's cap of {cap}")]
     GenClassInflightCapped { class: Hash64, inflight: u64, cap: u32 },
+    /// **RFC-0003 §I.4.5 step 3: no panel can be drawn for the class yet** — fewer distinct operators (the
+    /// executor's excluded) hold it with a fresh readiness V2 possession proof than a panel seats.
+    #[error("generative class {class} has {ready} operators ready to replay it, and a panel seats {needed}")]
+    GenClassNotReady { class: Hash64, ready: u32, needed: u32 },
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]

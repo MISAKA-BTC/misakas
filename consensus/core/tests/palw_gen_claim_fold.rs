@@ -239,7 +239,17 @@ fn net() -> Net {
     // The bonds first, below the fences (a bond registers on any ruleset), then the classes at the fence.
     chain.step_at(AT - 1, &[executor_bond(EXECUTOR), executor_bond(OTHER_EXECUTOR)], PalwBlockWorkV3::None, Hash64::default(), 0);
     chain.step_at(AT, &[image_object, vision_object, text_object], PalwBlockWorkV3::None, Hash64::default(), 0);
+    ready(&mut chain, &[image, vision, text]);
     Net { chain, registrant, image, vision, text }
+}
+
+/// **The genesis bonds proved ready for `classes` at the chain's DAA** (readiness V2 possession rows, as the
+/// harness writes them): a claim is taken only once a panel's worth of distinct operators can replay it. The
+/// rows stand for the registry's readiness horizon (24 spans on testnet-12, a span a DAA).
+fn ready(chain: &mut Chain, classes: &[Hash64]) {
+    for class in classes {
+        chain.s = readied(&chain.sp, &chain.s, &honest(&chain.p), *class, chain.daa);
+    }
 }
 
 fn envelope(n: u64, class_id: Hash64, privacy: u8, nonce: u8) -> PalwJobEnvelopeV1 {
@@ -533,4 +543,24 @@ fn a_class_takes_no_more_claims_in_flight_than_the_fences_cap() {
     let vision = vision_job(&vision_class(), net.vision, EXECUTOR, 1);
     let leaves = leaves_of(&net, &vision);
     assert!(fold_one(&net, claim_object(&vision, vec![], leaves)).is_ok());
+}
+
+#[test]
+fn a_claim_flows_only_once_a_panels_worth_of_operators_can_replay_the_class() {
+    let mut net = net();
+    let (object, _) = image_claim(&net, EXECUTOR, 1, 0x33, 0);
+    // Readiness lapses past the registry's horizon: stepping the chain 30 DAAs on leaves no fresh row.
+    net.chain.step_at(net.chain.daa + 30, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(
+        matches!(fold_one(&net, object.clone()), Err(PalwStateV2Error::GenClassNotReady { class, ready: 0, needed }) if class == net.image && needed > 0),
+        "no operator holds the class any more: {:?}",
+        fold_one(&net, object.clone())
+    );
+    // Fewer than a panel's worth is not enough either: re-ready two operators only.
+    let two: Vec<PalwBondKeyV2> = honest(&net.chain.p).into_iter().take(2).collect();
+    net.chain.s = readied(&net.chain.sp, &net.chain.s, &two, net.image, net.chain.daa);
+    assert!(matches!(fold_one(&net, object.clone()), Err(PalwStateV2Error::GenClassNotReady { ready: 2, .. })));
+    // The executor's own operator is never one of them: ready every genesis bond again and the claim flows.
+    ready(&mut net.chain, &[net.image]);
+    assert!(fold_one(&net, object).is_ok());
 }

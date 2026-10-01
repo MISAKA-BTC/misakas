@@ -2753,7 +2753,11 @@ in the block's object list.
 3. the class: it exists (`MissingClass`), its status is `Active` (`FrozenClass`; any other status is
    `GenClaimRefused`), it has a `gen_classes` row, and passes the verification-deadline admission
    (ADR-0152 §4-quater V2). **The registry lifecycle is not asked** (its row for a pipeline is `Registered` and
-   never admits);
+   never admits); **readiness is** (decision of 2026-10-01): at least `seat_count` (the registry fold's globals)
+   DISTINCT operators — never the executor's bond or operator — hold the class with a fresh readiness V2
+   possession proof (`model_registry_seat_is_ready`: active, above the floor, a fresh row, free collateral for the
+   readiness multiple), else `GenClassNotReady { ready, needed }`; with no registry in force the lane refuses
+   (`GenClaimRefused`);
 4. the job against the class: `palw_gen_job_resolve_class_v1` (§15.13's refusals, as `GenClaimRefused`), the
    profile an Image or an Embedding, and under `PublicDa` the carried ids within the class's counts and token
    bounds;

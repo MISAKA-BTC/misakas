@@ -94,6 +94,31 @@ pub(super) fn apply_gen_tensor_commitment_v1(
     }
     let slash_value_per_pwu = class.slash_value_per_pwu;
     let row = builder.state.gen_classes.get(c.class_id).cloned().ok_or_else(|| refused("the claim's class is no generative class"))?;
+    // **Readiness: a claim flows only once seats can replay it** (the coordinator's decision of 2026-10-01).
+    // The registry's lifecycle would have asked this (a class leaves `Prefetching` only on ready seats) and
+    // is not asked for a pipeline, so the lane asks it itself: at least a panel's worth of DISTINCT operators —
+    // never the executor's — hold the class with a fresh possession proof (the registry's own five-clause
+    // predicate, `model_registry_seat_is_ready`: active, above the floor, a fresh readiness V2 row, free
+    // collateral for the readiness multiple). Without it a claim is accepted that no panel can be drawn for:
+    // it holds its executor's reservation and one of the class's slots for the whole bind window and voids.
+    // Where there is no registry there are no possession proofs to count, and the lane refuses.
+    let Some(fold) = builder.model_registry_fold().cloned() else {
+        return Err(refused("no model registry is in force: a class's seats prove possession through it"));
+    };
+    let executor_operator = bond_record.operator_id;
+    let mut operators = BTreeSet::new();
+    for (key, bond) in builder.state.bonds.iter() {
+        if key == c.bond || bond.operator_id == executor_operator {
+            continue;
+        }
+        if builder.read().model_registry_seat_is_ready(key, bond, c.class_id, daa, &fold) {
+            operators.insert(bond.operator_id);
+        }
+    }
+    let needed = fold.globals.seat_count as u32;
+    if (operators.len() as u32) < needed {
+        return Err(PalwStateV2Error::GenClassNotReady { class: *c.class_id, ready: operators.len() as u32, needed });
+    }
     builder.check_class_verify_admits_v1(
         c.class_id,
         daa,

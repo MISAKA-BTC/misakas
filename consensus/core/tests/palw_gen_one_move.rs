@@ -300,6 +300,8 @@ fn env() -> Env {
     chain.step_at(AT - 1, &[bond(EXECUTOR), bond(ACCUSER)], PalwBlockWorkV3::None, Hash64::default(), 0);
     chain.step_at(AT, &[object], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert_eq!(chain.s.gen_class_v1(&f.row.class_id), Some(&f.row), "the chain's row is the fixture's");
+    // The genesis bonds hold the class (readiness V2 rows): a claim flows only once a panel's worth can replay it.
+    chain.s = readied(&chain.sp, &chain.s, &honest(&chain.p), f.row.class_id, chain.daa);
     Env { chain, f }
 }
 
