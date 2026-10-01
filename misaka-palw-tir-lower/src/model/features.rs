@@ -210,6 +210,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("HEAD_LOGIT_SCALE_V1", Head, "constant multiplier on the logits", Implemented, [], NoReq, ["fidelity_tiny::cohere", "fidelity_tiny::granite"], "Cohere, Granite."),
     feature!("HEAD_PRE_SCALE_V1", Head, "constant multiplier before the head", Implemented, [], NoReq, ["real_configs::minicpm"], "MiniCPM."),
     feature!("HEAD_PROJ_OUT_V1", Head, "projection to the embedding width before the head", Implemented, [], NoReq, ["fidelity_tiny::opt_postln_proj"], "OPT-350m."),
+    feature!("HEAD_TRANSFORM_V1", Head, "a prediction head before the vocabulary projection: dense, activation, norm", Implemented, [], NoReq, ["head_transform::a_head_transform_is_dense_act_norm_before_the_head"], "BERT's cls.predictions.transform, ModernBERT-decoder's and RoBERTa's lm_head: h -> norm(act(dense(h))), then the (tied) vocabulary projection and its bias. Roles head.transform.dense and head.transform.norm; no new node kinds."),
     feature!("OUTPUT_LOGITS_V1", Head, "logits output", Implemented, [], NoReq, ["fidelity_tiny::llama"], "Next-token logits."),
     feature!("OUTPUT_EMBEDDING_V1", Head, "embedding output (pooled hidden row)", Implemented, [], NoReq, ["encoders::clip_text_encoder_matches_its_hf_fixture"], "RFC-0003 Embedding profile."),
     feature!("ENC_BIDIR_V1", Model, "a bidirectional encoder over a padded token axis (BERT, RoBERTa, XLM-R, DistilBERT, MPNet)", Implemented, [], NoReq, ["encoders::bert_cls_pooled_unnormalised_matches_its_hf_fixture", "encoders::mpnet_with_its_relative_bias_matches_its_hf_fixture"], "ONE position over the padded token axis L: every value is a [L, ...] tensor, attention is full over a Fixed axis with the keys at or past the count masked, pad rows never reach a real row or the pooling. Learned positions, post-LN, plain multi-head attention with biases, a plain MLP; anything else is refused by name (the lowering reads a strict allow-list of the spec)."),
@@ -568,6 +569,10 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     }
     if h.proj_out {
         u.add("HEAD_PROJ_OUT_V1", None, "");
+    }
+    if let Some(t) = &h.transform {
+        u.add("HEAD_TRANSFORM_V1", None, format!("{:?}", t.act));
+        norm_features(&mut u, &t.norm, None);
     }
     // storage
     if let Some(q) = &s.hf.quant {

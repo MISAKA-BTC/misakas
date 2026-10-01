@@ -597,7 +597,7 @@ pub(crate) fn plain_embedding(dim: usize) -> EmbeddingSpec {
 }
 
 pub(crate) fn plain_head(tied: bool) -> HeadSpec {
-    HeadSpec { tied, bias: false, pre_scale: 1.0, proj_out: false, logit_scale: 1.0, softcap: None }
+    HeadSpec { tied, bias: false, pre_scale: 1.0, proj_out: false, logit_scale: 1.0, softcap: None, transform: None }
 }
 
 pub(crate) fn pre_norm(n: NormSpec) -> Residual {

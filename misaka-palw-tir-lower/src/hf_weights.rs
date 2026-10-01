@@ -194,6 +194,10 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
             m.put("embed.proj.b", Src::t(format!("{}.bias", m.role("embed_proj")?)))?;
         }
     }
+    if logits && let Some(t) = &spec.head.transform {
+        m.lin("head.transform.dense", "head.transform.dense", t.bias)?;
+        m.norm("head.transform.norm", "head.transform.norm", &t.norm)?;
+    }
     if logits && spec.head.proj_out {
         let w = m.w("proj_out")?;
         m.put("head.proj_out.w", w)?;

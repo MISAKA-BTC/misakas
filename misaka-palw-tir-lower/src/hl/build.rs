@@ -376,6 +376,9 @@ impl Builder<'_> {
         }
         // An encoder: the final row, projected and normalised as the class says; no head.
         if let OutputSpec::Embedding { proj, normalize } = &s.output {
+            if h.transform.is_some() {
+                return Err(LowerError::not_lowerable("HEAD_TRANSFORM_V1 under an embedding output: the transform belongs to a language-model head"));
+            }
             let mut width = d;
             if let Some((w, bias)) = *proj {
                 x = self.linear(&mut bk, x, "embed.proj", w, d, bias, false, "embed.proj")?;
@@ -390,6 +393,12 @@ impl Builder<'_> {
             }
             self.blocks.push(Block { name: "post".into(), role: BlockRole::Post, nodes: bk.nodes, outputs: vec![x] });
             return Ok(self.blocks.len() - 1);
+        }
+        // `HEAD_TRANSFORM_V1`: dense, activation, norm — then the vocabulary projection.
+        if let Some(t) = &h.transform {
+            x = self.linear(&mut bk, x, "head.transform.dense", d, d, t.bias, false, "head.transform.dense")?;
+            x = bk.f(Op::Act(t.act), vec![x], d, "head.transform.act");
+            x = self.full_norm(&mut bk, x, t.norm, "head.transform.norm", d, false)?;
         }
         if h.pre_scale != 1.0 {
             x = bk.f(Op::Scale { c: h.pre_scale }, vec![x], d, "head.pre_scaled");

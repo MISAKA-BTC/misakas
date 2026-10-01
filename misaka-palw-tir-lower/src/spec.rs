@@ -763,6 +763,20 @@ pub struct HeadSpec {
     /// `tanh(z / c) · c` on the logits (Gemma-2).
     #[serde(default)]
     pub softcap: Option<f64>,
+    /// **`HEAD_TRANSFORM_V1`**: a prediction head before the vocabulary projection — `dense → act → norm` (BERT's
+    /// `cls.predictions.transform`, ModernBERT-decoder's `lm_head`, RoBERTa's `lm_head.dense`/`layer_norm`).
+    #[serde(default)]
+    pub transform: Option<HeadTransformSpec>,
+}
+
+/// `h → norm(act(dense(h)))`, the head's own transform; then the (tied) vocabulary projection and its bias.
+/// Tensors: roles `head.transform.dense` (`.weight`, `.bias` when `bias`) and `head.transform.norm`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HeadTransformSpec {
+    #[serde(default)]
+    pub bias: bool,
+    pub act: Act,
+    pub norm: NormSpec,
 }
 
 /// What a program's `post` produces (RFC-0003 §I.2.3's output kinds are chosen per class, from it).
