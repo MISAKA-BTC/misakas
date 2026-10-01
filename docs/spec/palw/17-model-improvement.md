@@ -738,7 +738,7 @@ subject, kind)`, and the claim is the evaluation lane's job row's.
 | Kind | `value` |
 | --- | --- |
 | ExactMatch | 1 pass, 0 fail |
-| RefLogLik | the Q24 log-likelihood, `hi·2^31 + lo` of the stage's output |
+| RefLogLik | the Q24 log-likelihood, `hi·2^31 + lo` of the stage's output: the exact `i64` sum over the reference's tokens of `v_t = clamp(z_t − IntLn(Σ_j IntExp(z_j)), i32::MIN, 0)`, with `z_j = clamp((x_j − max x)·scale, i32::MIN, 0)` — **the per-token value is clamped at `i32::MIN` (−128 nats)** [D10b, lane E; the library `ref_logprob_v1` is canonical]: a token whose gap saturates while the row has other mass is worth `i32::MIN`, not the unclamped difference |
 | Judge | the judge's margin `LL(verdict_a) − LL(verdict_b)` on the subject's output, in Q24 nats, clamped to the stage's `[lo, hi]` (§17.8.5) |
 | Pairwise | the outcome from the candidate's side: **+1** when the sum of the judge's two margins (both orders shown, §17.8.5) exceeds the stage's `margin`, **−1** otherwise — a tie goes to the incumbent, so it is never 0 |
 
