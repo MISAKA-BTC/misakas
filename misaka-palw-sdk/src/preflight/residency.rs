@@ -75,6 +75,9 @@ pub struct ResidencyInfo {
     pub default_budget_bytes: u64,
     /// The default holds the floor (else a node holds the class through the page cache unless a budget is stated).
     pub default_holds_floor: bool,
+    /// When the default does not hold the floor, the budget to state to hold the class (its floor, in bytes) and the
+    /// flag that states it.
+    pub state_to_hold: Option<String>,
     pub replay: ReplayReadInfo,
     /// The routed and gathered params (every other param is pinned).
     pub rows: Vec<ResidencyParamInfo>,
@@ -119,6 +122,7 @@ pub fn residency_of(program: &TirProgramV1, rules: TirTierRulesV1, canonical: Op
         floor_bytes: a.floor_bytes,
         default_budget_bytes: a.fifth_bytes,
         default_holds_floor: a.fifth_bytes >= a.floor_bytes,
+        state_to_hold: (a.fifth_bytes < a.floor_bytes).then(|| format!("--palw-class-resident-bytes {}", a.floor_bytes)),
         replay: ReplayReadInfo {
             job: canonical,
             forwards,

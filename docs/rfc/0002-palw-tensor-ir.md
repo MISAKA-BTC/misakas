@@ -896,7 +896,9 @@ Each item names the function that answers it, so the preflight is a composition 
     uses (`misaka_palw_tir_exec::tiers`): the weights on disk split into **pinned** (read whole every forward), **routed** (rows a
     route selects: a mixture's experts) and **gathered** (rows an input selects: embeddings, per-layer and n-gram tables); the
     **RAM floor** (the pinned set, one token's routed rows, one admission in flight) and the **default budget** (a fifth of the
-    weights, and whether it holds the floor); and **what one replay reads** at the canonical job — the expected union of its
+    weights, and whether it holds the floor — when it is SHORT, the exact budget to state, `--palw-class-resident-bytes
+    <floor>`, since a short default holds the class through the page cache); and **what one replay reads** at the canonical
+    job — the expected union of its
     routed rows and its gathered rows — with the read time at 500 and 845 MB/s, labelled as estimates. Reported, never judged:
     a seat's resources gate its readiness, not a class's admission.
 

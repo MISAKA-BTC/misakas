@@ -242,12 +242,19 @@ impl Report {
                 size(r.routed_token_bytes),
                 size(r.in_flight_bytes),
                 size(r.default_budget_bytes),
-                if r.default_holds_floor {
-                    " and holds it"
-                } else {
-                    ": under the floor, so a node holds the class through the page cache unless a budget is stated"
-                }
+                if r.default_holds_floor { " and holds it" } else { ": SHORT of the floor" }
             );
+            if !r.default_holds_floor {
+                // The exact number to state, and the flag that states it: a short default is the page cache, and
+                // the operator's way out is one number, not a guess.
+                let _ = writeln!(
+                    o,
+                    "  to hold it    state --palw-class-resident-bytes {} (its floor, {}) or more; by default a node \
+                     holds it through the page cache",
+                    r.floor_bytes,
+                    size(r.floor_bytes)
+                );
+            }
             let _ = writeln!(
                 o,
                 "  weights       {} on disk: {} pinned, {} routed ({} a token), {} gathered ({} a token, read a row at a time)",

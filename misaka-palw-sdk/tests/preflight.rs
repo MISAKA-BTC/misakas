@@ -420,7 +420,14 @@ fn the_residency_is_read_off_the_program_and_reported_without_judging() {
     assert!(dres.rows.iter().filter(|x| x.tier == "routed").all(|x| x.row_bytes <= 2 && x.rows == 65_536), "{}", d.render());
     assert!(dres.rows.iter().any(|x| x.tier == "gathered"));
     let node_dense = run(&dense, &opts(Depth::Shape)).expect("preflight");
-    assert_eq!(node_dense.residency.as_ref().map(|r| r.routed_bytes), Some(0), "the node's rule pins the code tables");
+    let nres = node_dense.residency.as_ref().expect("a residency");
+    assert_eq!(nres.routed_bytes, 0, "the node's rule pins the code tables");
+    // A dense decoder's floor is its size: a fifth is SHORT, and the report names the exact budget to state.
+    assert!(!nres.default_holds_floor, "{}", node_dense.render());
+    let state = format!("--palw-class-resident-bytes {}", nres.floor_bytes);
+    assert_eq!(nres.state_to_hold.as_deref(), Some(state.as_str()));
+    assert!(node_dense.render().contains(&state), "{}", node_dense.render());
+    assert!(held.state_to_hold.is_some() == !held.default_holds_floor);
     let _ = std::fs::remove_dir_all(dir);
     let _ = std::fs::remove_dir_all(dense);
 }
