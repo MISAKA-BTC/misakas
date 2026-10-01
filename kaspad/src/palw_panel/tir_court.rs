@@ -1464,6 +1464,10 @@ impl super::PalwPanelService {
                     claim,
                     unit,
                     bond_key,
+                    // The step ladder the acceptance gate holds the unit to at this DAA (RFC-0002 Phase F's DA ladder: the
+                    // network's held ladder, 2^40 on testnet-12, from `palw_tir_fence2`; a demand is built only where
+                    // `armed` says the fence is in force): the one reading the producer's guard takes too.
+                    crate::palw_producer::palw_tir_da_answerable_leaves_v1(params, current_daa),
                     |m, c| self.sign(m, c),
                 )
                 .map_err(|e| e.to_string()),

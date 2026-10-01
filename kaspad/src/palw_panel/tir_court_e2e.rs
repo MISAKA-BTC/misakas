@@ -63,6 +63,9 @@ const COLLUDER: u64 = 4;
 /// The court's ladder: the step-leaf space every session is opened over (the node opens at the
 /// ruleset's `max_step_leaf_count`).
 const LADDER: u64 = 1 << 26;
+/// The step ladder this harness's fold holds a step demand's unit to (`step_c` folds under default extras: no held ladder, so
+/// the release's `PALW_STEP_LEG_MAX_LEAVES`, 2^22) — what the builder is given, as a node on a network with no held regime gives it.
+const DEMAND_LADDER: u64 = kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
 const TURN: u64 = 20;
 const FORM: PalwPromptIdsFormV1 = PalwPromptIdsFormV1::Flat;
 
@@ -1637,7 +1640,7 @@ fn a_demanded_ir_step_unit_is_answered_by_the_node_and_a_silent_executor_is_void
     let n = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).unwrap().binding.step_leaf_count;
     let root = PalwDaUnitV1::TirStepNode { level: palw_tir_step_tree_height_v1(n), index: 0 };
     let demand = |unit: PalwDaUnitV1| {
-        palw_tir_step_accusation_object_v1(&h64(999), honest.id, unit, bond_key(SEAT), |_, _| Some(vec![3; 16]))
+        palw_tir_step_accusation_object_v1(&h64(999), honest.id, unit, bond_key(SEAT), DEMAND_LADDER, |_, _| Some(vec![3; 16]))
             .expect("the demand builds")
     };
     let PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } = demand(root) else { panic!("a step demand") };
@@ -1782,8 +1785,9 @@ fn a_withholding_liar_is_demanded_on_chain_and_convicted_from_its_disclosure() {
         };
         first.demanded = Some((unit, daa));
         first.sessions += 1;
-        let object = palw_tir_step_accusation_object_v1(&h64(999), liar.id, unit, bond_key(SEAT), |_, _| Some(vec![3; 16]))
-            .expect("the demand");
+        let object =
+            palw_tir_step_accusation_object_v1(&h64(999), liar.id, unit, bond_key(SEAT), DEMAND_LADDER, |_, _| Some(vec![3; 16]))
+                .expect("the demand");
         s = step_c(&s, daa, std::slice::from_ref(&object), None)
             .unwrap_or_else(|e| panic!("DAA {daa}: {unit:?} opens a session: {e}"));
         chain.push(object);
@@ -2048,7 +2052,7 @@ fn drive_c(
         let sign = |_: &[u8], _: &[u8]| Some(vec![3; 16]);
         let object = match unit {
             PalwDaUnitV1::Event { .. } => palw_da_accusation_object_v1(&h64(999), liar.id, unit, bond_key(me), sign),
-            _ => palw_tir_step_accusation_object_v1(&h64(999), liar.id, unit, bond_key(me), sign),
+            _ => palw_tir_step_accusation_object_v1(&h64(999), liar.id, unit, bond_key(me), DEMAND_LADDER, sign),
         }
         .unwrap_or_else(|e| panic!("{unit:?}: the demand builds: {e}"));
         s = step_c(&s, daa, std::slice::from_ref(&object), None)

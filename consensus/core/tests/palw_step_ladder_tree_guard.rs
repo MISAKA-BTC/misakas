@@ -118,6 +118,14 @@ const ALLOWED: &[(&str, &str, &str)] = &[
          over a class wider than 2^22 can ever certify, and it fails as HonestRunConvicted. Making the two agree is a \
          VALIDITY change (a refused drill would newly certify) and needs the U-08 fence. Tracked, not fixed.",
     ),
+    // ---- test-only modules the file-level boundary cannot see ----
+    (
+        "kaspad/src/palw_panel/tir_court_e2e.rs",
+        "step_merkle_root_v1",
+        "a TEST-ONLY module (`#[cfg(test)] mod tir_court_e2e;` in palw_panel.rs, so the whole file is test code and the \
+         module-head boundary finds no cut): it garbles a test capture's leaves and re-roots THAT capture's own step tree, \
+         bounded by the capture's own leaf count",
+    ),
     // ---- no production caller today ----
     (
         "misaka-palw-base0/src/produce.rs",

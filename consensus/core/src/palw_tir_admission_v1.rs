@@ -444,7 +444,10 @@ pub fn verify_class_admission_v10(
 
     let mut model_rules = *rules;
     if let Some(k) = rules.court {
-        let network_window = bundle.state.window_court();
+        // The window the rules hand in IS the network window here (`PalwTirAdmissionRulesV1::at` writes the bundle's):
+        // with the model window inactive the derivation returns it untouched, so a rule set that carries another window
+        // (the dissection tests' bisection of it) is judged at that one, as it was before the fence existed.
+        let network_window = k.window_court_daa;
         let derived = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, rules.held.armed)
             .map_err(|e| PalwClassAdmissionError::Profile(format!("the IR model court has no shape: {e}")))?;
         let window = crate::palw_class_admission_v2::palw_court_window_for_history_v1(
