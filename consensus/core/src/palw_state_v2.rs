@@ -106,6 +106,9 @@ mod palw_gen_claim_fold_v1;
 // floor, extracted from the tensor claim's readiness gate): a child module for the same reason.
 #[path = "palw_class_seating_v1.rs"]
 mod palw_class_seating_v1;
+// RFC-0003 decision 22: the held leaf challenge's fold arm — a child module for the same reason.
+#[path = "palw_held_close_fold_v1.rs"]
+mod palw_held_close_fold_v1;
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
@@ -1567,6 +1570,11 @@ pub struct PalwStateParamsV2 {
     /// the admission rules and the DA court's IR unit from it). `None` on every shipped preset.
     #[borsh(skip)]
     tir_fence2_from_daa: Option<u64>,
+    /// **RFC-0003 decision 22: `Params::palw_held_close_chunks_v1`'s height**, mirrored by
+    /// `Params::sync_palw_held_close_chunks_v1` for `tir_fence2_from_daa`'s reason (the fold's held leaf
+    /// challenge arm reads it). `None` on every shipped preset.
+    #[borsh(skip)]
+    held_close_chunks_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1778,6 +1786,7 @@ impl PalwStateParamsV2 {
             fp_job_v5_from_daa: None,
             gen_max_inflight_claims: [0; 4],
             tir_fence2_from_daa: None,
+            held_close_chunks_from_daa: None,
         })
     }
 
@@ -2023,6 +2032,24 @@ impl PalwStateParamsV2 {
     /// **Is the second IR fence in force at `daa_score`?** `false` on every shipped preset.
     pub fn tir_fence2_active_at(&self, daa_score: u64) -> bool {
         self.tir_fence2_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0003 decision 22: the held leaf challenge's mirror** — written by
+    /// `Params::sync_palw_held_close_chunks_v1` and by nothing else (and by fixtures); `None` where the
+    /// fence is not armed.
+    pub fn with_held_close_chunks_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.held_close_chunks_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_held_close_chunks_v1`'s height, if the network arms it (the mirror).
+    pub fn held_close_chunks_from_daa(&self) -> Option<u64> {
+        self.held_close_chunks_from_daa
+    }
+
+    /// **Is the held leaf challenge in force at `daa_score`?** `false` on every shipped preset.
+    pub fn held_close_chunks_active_at(&self, daa_score: u64) -> bool {
+        self.held_close_chunks_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -7457,6 +7484,18 @@ pub enum PalwConsensusObjectV2 {
     GenShardCourtAccused {
         accusation: Box<crate::palw_gen_one_move_v1::PalwGenOneMoveAccusationV1>,
     } = 88,
+    // Tag 89 is RFC-0004's `CourtEvalRootClaimed` (spec 17 section 17.0): declared on its own branch, integrated here.
+    /// **RFC-0003 §I.4.7, decision 22: a held leaf challenge** — a named-leaf challenge that carries the
+    /// declaration of its close ([`crate::palw_held_close_v1`], spec 04b §15.15.6): the fold opens a session
+    /// at `Terminal` on the leaf as ADR-0103 Decision 5 does and writes the challenger-side close group the
+    /// existing `CourtCloseDeclared` would have written, so a lie at a leaf whose close exceeds one carrier
+    /// (up to the carried cap) is convictable under the held regime, for IR and pipeline classes alike. Signed
+    /// by the accuser's bond. **Its tag is 90, declared explicitly** (spec 17 section 17.0, approved
+    /// 2026-10-01). Below `palw_held_close_chunks_v1` the acceptance walk drops it by name and the fold
+    /// refuses it as the second lock.
+    HeldLeafChallengeDeclared {
+        challenge: Box<crate::palw_held_close_v1::PalwHeldLeafChallengeV1>,
+    } = 90,
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7494,6 +7533,13 @@ pub fn palw_object_is_tir_fence2_v1(object: &PalwConsensusObjectV2) -> bool {
         }
         _ => false,
     }
+}
+
+/// **Is this object the held leaf challenge** (RFC-0003 decision 22) — a variant an older build cannot decode
+/// and skips (A-2)? Below `Params::palw_held_close_chunks_v1` the acceptance walk drops it by name before any
+/// slot, rent or budget is charged for it, and the fold refuses it as the second lock.
+pub fn palw_object_is_held_close_chunks_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::HeldLeafChallengeDeclared { .. })
 }
 
 /// **Is this object an RFC-0003 generative move** — an appended generative variant (today the
@@ -8023,6 +8069,9 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
         // chunk that pays (a chunk carries no `count`, chunks arrive in any order, and this ceiling
         // is read where the folded state is not in hand).
         PalwConsensusObjectV2::CourtCloseDeclared { count, .. } => palw_court_close_min_fee_v1(*count as u64),
+        // RFC-0003 decision 22: a held leaf challenge IS a declaration (it writes the group `CourtCloseDeclared`
+        // writes), so it buys the same one grading, priced on the same field.
+        PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge } => palw_court_close_min_fee_v1(u64::from(challenge.count)),
         // A chunk of a declared close pays its carriage and no rent: the grading was bought by the
         // declaration, the row was reserved by the deposit, and charging the chunks again would tax
         // only the honest carrier that completes — the sentence the `ObjectChunk` arm's own doc
@@ -9601,6 +9650,10 @@ pub enum PalwStateV2Error {
     /// executor's excluded) hold it with a fresh readiness V2 possession proof than a panel seats.
     #[error("generative class {class} has {ready} operators ready to replay it, and a panel seats {needed}")]
     GenClassNotReady { class: Hash64, ready: u32, needed: u32 },
+    /// **RFC-0003 decision 22: a held leaf challenge the fold refuses**, by the rule's own reason (below the
+    /// fence, off the held regime, a leaf outside the claim's step space, a claim of no IR or pipeline class).
+    #[error("a held leaf challenge is refused: {0}")]
+    HeldLeafChallengeRefused(String),
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -27513,6 +27566,7 @@ fn open_held_dissection_v1(
         ladder,
         opening_turn,
     )
+    .map(|_| ())
 }
 
 /// **A session opened at `Terminal` on a named leaf** — the body [`open_held_dissection_v1`] and
@@ -27530,7 +27584,7 @@ fn open_dissection_at_named_leaf_v1(
     leaf_index: u64,
     ladder: u64,
     opening_turn: u64,
-) -> Result<(), PalwStateV2Error> {
+) -> Result<Hash64, PalwStateV2Error> {
     let refused = |why: String| PalwStateV2Error::HeldDissectionRefused { claim: claim_id, leaf: leaf_index, why };
     let open_sessions = builder.state.court_sessions.len() as u64;
     let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
@@ -27603,7 +27657,8 @@ fn open_dissection_at_named_leaf_v1(
     if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
         builder.disarm_deadline(claim_id);
     }
-    Ok(())
+    // The session's id, for a caller that keys something to it (the held leaf challenge's close group).
+    Ok(session_id)
 }
 
 fn rearm_claim_after_da_session(
@@ -27795,6 +27850,16 @@ pub(crate) fn court_session_turn_and_rung_deadline_v2(
         None if court_session_executor_declared_at_the_ir_terminal_v1(state, session) => {
             (crate::palw_bisect::PalwBisectTurnV1::Terminal, session.ladder.last_deadline_daa())
         }
+        // **RFC-0003 decision 22: so does the CHALLENGER's declared close** (a held leaf challenge's group).
+        // The executor is not put on a clock for a close the accuser has pinned and may never deliver: while
+        // it stands at an IR or pipeline terminal the session waits at `Terminal`, and the group's own
+        // assembly deadline convicts a declarer that does not deliver. The mirror of the clause above, and it
+        // adds no state that clause does not already wait on: a challenger-side group at such a terminal
+        // exists only where a held leaf challenge wrote it (the declaration arm refuses it there — the turn
+        // reads `AwaitDisclosure`), which no state below `palw_held_close_chunks_v1` can hold.
+        None if court_session_challenger_declared_at_the_ir_terminal_v1(state, session) => {
+            (crate::palw_bisect::PalwBisectTurnV1::Terminal, session.ladder.last_deadline_daa())
+        }
         None => court_turn_and_rung_deadline_v2(session, court_session_class_is_fused_v2(state, session)),
     }
 }
@@ -27817,6 +27882,16 @@ pub(crate) fn court_session_at_the_ir_terminal_v1(state: &PalwChainStateV2, sess
 /// [`court_session_at_the_ir_terminal_v1`], and the executor's declared close stands.
 fn court_session_executor_declared_at_the_ir_terminal_v1(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> bool {
     state.court_close_groups.contains_key(&(session.ladder.session_id(), PalwCourtSideV1::Executor))
+        && court_session_at_the_ir_terminal_v1(state, session)
+}
+
+/// [`court_session_at_the_ir_terminal_v1`], and the CHALLENGER's declared close stands (RFC-0003 decision 22: the
+/// group a held leaf challenge wrote).
+pub(crate) fn court_session_challenger_declared_at_the_ir_terminal_v1(
+    state: &PalwChainStateV2,
+    session: &PalwCourtSessionStateV2,
+) -> bool {
+    state.court_close_groups.contains_key(&(session.ladder.session_id(), PalwCourtSideV1::Challenger))
         && court_session_at_the_ir_terminal_v1(state, session)
 }
 
@@ -30773,6 +30848,11 @@ fn apply_object(
     if palw_object_is_tir_fence2_v1(object) && !builder.params.tir_fence2_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
     }
+    // **RFC-0003 decision 22, likewise**: below `palw_held_close_chunks_v1` the held leaf challenge is a payload an
+    // older build cannot decode; the acceptance walk drops it by name, and this is the second lock.
+    if palw_object_is_held_close_chunks_v1(object) && !builder.params.held_close_chunks_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::HeldLeafChallengeRefused("a held leaf challenge before palw_held_close_chunks_v1 is in force".into()));
+    }
     match object {
         PalwConsensusObjectV2::BondRegistered {
             bond,
@@ -31032,6 +31112,11 @@ fn apply_object(
                     }
                 }
             }
+        }
+        // **RFC-0003 decision 22: a named-leaf challenge with the declaration of its close** — the session at
+        // `Terminal` on the leaf and the challenger-side group, in one step (`palw_held_close_fold_v1`).
+        PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge } => {
+            palw_held_close_fold_v1::apply_held_leaf_challenge_v1(builder, ctx, challenge)?;
         }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {

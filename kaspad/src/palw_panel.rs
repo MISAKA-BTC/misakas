@@ -12383,6 +12383,12 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         PalwConsensusObjectV2::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
+        // RFC-0003 §I.4 (tag 87): the walk's product, never serialized — named for the logs only.
+        PalwConsensusObjectV2::GenTensorCommitted { .. } => "GenTensorCommitted",
+        // RFC-0003 §I.4.7 (tag 88): a pipeline claim accused in one move.
+        PalwConsensusObjectV2::GenShardCourtAccused { .. } => "GenShardCourtAccused",
+        // RFC-0003 decision 22 (tag 90): a named-leaf challenge with the declaration of its close.
+        PalwConsensusObjectV2::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",

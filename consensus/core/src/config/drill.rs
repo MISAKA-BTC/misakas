@@ -642,6 +642,18 @@ pub fn palw_drill_fp_v5_at_v1(params: &mut crate::config::params::Params, at: u6
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_V5_V1)
 }
 
+/// **A drill arms the held leaf challenge at a low height** (RFC-0003 decision 22;
+/// `--palw-drill-held-chunks-at`) — the same machinery for the one-entry drill list
+/// [`crate::palw_held_close_v1::PALW_DRILL_HELD_CLOSE_CHUNKS_FENCES_V1`]: ARMS `palw_held_close_chunks_v1` at
+/// `at` and moves nothing else. `validate_palw_v2` refuses the result unless `palw_tir_v1` and
+/// `palw_held_context` are in force at or below `at` (combine with `--palw-drill-tir-at`).
+pub fn palw_drill_held_close_chunks_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_HELD_CLOSE_CHUNKS_V1)
+}
+
 /// **A drill crosses the second IR flag day at a low height** (`--palw-drill-tir2-at`) —
 /// [`palw_drill_post_launch_fences_at_v1`] for
 /// [`crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1`]: ARMS `palw_tir_fence2` at `at` (its
@@ -681,6 +693,12 @@ const PALW_DRILL_FLAG_DAY_GEN_V1: PalwDrillFlagDayV1 =
 /// FP Job V5 alone (`--palw-drill-fp-v5-at`): a drill-only list.
 const PALW_DRILL_FLAG_DAY_FP_V5_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_fp_job_v5::PALW_DRILL_FP_V5_FENCES_V1, flag: "--palw-drill-fp-v5-at" };
+
+/// The held leaf challenge alone (`--palw-drill-held-chunks-at`): a drill-only list.
+const PALW_DRILL_FLAG_DAY_HELD_CLOSE_CHUNKS_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
+    list: crate::palw_held_close_v1::PALW_DRILL_HELD_CLOSE_CHUNKS_FENCES_V1,
+    flag: "--palw-drill-held-chunks-at",
+};
 
 /// The second IR fence alone (`--palw-drill-tir2-at`).
 const PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1: PalwDrillFlagDayV1 =

@@ -7342,6 +7342,15 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a second-IR-fence object was dropped by name below palw_tir_fence2, and the block stands (RFC-0002 Phase F)");
                 continue;
             }
+            // **RFC-0003 decision 22, likewise**: below `palw_held_close_chunks_v1` a held leaf challenge is a payload
+            // an older build cannot decode and skips (A-2), so it is dropped here, first, and charged nothing; the
+            // fold refuses it too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_held_close_chunks_v1(&object)
+                && !self.palw_held_close_chunks_at(point.daa_score)
+            {
+                info!("Block {block}: a held leaf challenge was dropped by name below palw_held_close_chunks_v1, and the block stands (RFC-0003)");
+                continue;
+            }
             if tir_registration_gated
                 && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
             {
@@ -11081,6 +11090,37 @@ impl VirtualStateProcessor {
                         }
                     }
                 }
+                // **RFC-0003 decision 22 (the held leaf challenge): a named-leaf challenge with the declaration of its
+                // close.** Signed over its digest by the accuser's registered key, within the ruleset's own carriage
+                // count; everything about the claim (live, its class, its roots, the leaf, the open sessions, the
+                // accuser's standing) is the fold's, where the state is in hand, and the rehearsal drops what the fold
+                // refuses. It adjudicates nothing — the close it pins is graded, once, by the completing chunk.
+                Obj::HeldLeafChallengeDeclared { challenge } => {
+                    let claim_id = challenge.claim;
+                    if !self.palw_held_close_chunks_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim_id}: a held leaf challenge is refused: palw_held_close_chunks_v1 is not in force (RFC-0003)"
+                        ));
+                    }
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a held leaf challenge on a network with no V2 court parameters".to_string())?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    kaspa_consensus_core::palw_held_close_v1::check_held_leaf_challenge_acceptance_v1(
+                        state,
+                        domain.as_byte_slice(),
+                        challenge,
+                        court,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| format!("claim {claim_id}: {e}"))?;
+                }
                 Obj::ShardCourtAccused { accusation } => {
                     let claim_id = accusation.claim;
                     if !self.palw_shard_court_at(point.daa_score) {
@@ -11618,6 +11658,9 @@ impl VirtualStateProcessor {
                         fence: self.palw_gen_v1.expect("palw_gen_at said the fence is in force"),
                         court,
                         held_armed: self.palw_held_context_at(point.daa_score),
+                        // RFC-0003 decision 22, read off the bundle's mirror: with the held leaf challenge a close up to
+                        // the carried cap is convictable under the held regime (PALW-GEN-21's bound lifts).
+                        held_close_chunks: self.palw_held_close_chunks_at(point.daa_score),
                         // The block's box-demand rules, as the IR arm reads them (the fold's mirror).
                         demand: kaspa_consensus_core::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(&bundle.state, point.daa_score),
                     };
@@ -13121,6 +13164,12 @@ impl VirtualStateProcessor {
     /// which `validate_palw_v2` holds equal to `Params::palw_tir_fence2`).
     fn palw_tir_fence2_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.tir_fence2_active_at(daa_score))
+    }
+
+    /// **RFC-0003 decision 22's held leaf challenge, read off the bundle's mirror**
+    /// (`held_close_chunks_from_daa`, which `validate_palw_v2` holds equal to `Params::palw_held_close_chunks_v1`).
+    fn palw_held_close_chunks_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.held_close_chunks_active_at(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
@@ -19100,6 +19149,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",
         O::TirShardCourtAccused { .. } => "TirShardCourtAccused",
         O::GenShardCourtAccused { .. } => "GenShardCourtAccused",
+        O::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

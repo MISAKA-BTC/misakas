@@ -76,6 +76,10 @@ pub struct PalwGenAdmissionRulesV1 {
     pub court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
     /// `Params::palw_held_context` at the block: which clock the dissection's window is read on.
     pub held_armed: bool,
+    /// **`Params::palw_held_close_chunks_v1` at the block** (decision 22): with it a close up to the carried cap
+    /// (PALW-TIR-38) is convictable under the held regime; without it a held-regime chain convicts in one move
+    /// only, and PALW-GEN-21 bounds a class's closes by one carrier (less the accusation's framing).
+    pub held_close_chunks: bool,
     /// **The box-demand rules at the block** (spec 04b §10.3): the release's, or ref2's H7 `TopK` row
     /// past `Params::palw_tir_fence2` — read by the stages' admission and the value bound `V`.
     pub demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
@@ -91,6 +95,7 @@ impl PalwGenAdmissionRulesV1 {
             fence,
             court: tir.and_then(|r| r.court),
             held_armed: tir.is_some_and(|r| r.held.armed),
+            held_close_chunks: params.palw_held_close_chunks_active_at(daa_score),
             demand: params.palw_tir_demand_rules_at(daa_score),
         })
     }
@@ -271,7 +276,16 @@ pub fn verify_gen_class_admission_v1(
     }
     let limits = crate::palw_court_v2::palw_tir_court_limits_v1(&bundle.court);
     let work_limit = limits.max_elements.min(limits.max_terms);
-    let carriable = palw_tir_carriable_close_bytes_v1(&bundle.court).min(bundle.court.max_close_bytes());
+    let carried = palw_tir_carriable_close_bytes_v1(&bundle.court).min(bundle.court.max_close_bytes());
+    // **PALW-GEN-21** (RFC-0003 §I.4.7, decision 22): on a chain that plays no bisection a lie is convicted in one
+    // move unless the held leaf challenge is in force, and a one-move accusation rides ONE carrier — so a close past
+    // one carrier less the accusation's framing could never convict and the class is refused. With the fence the
+    // carried cap is the bound (PALW-TIR-38), as it is where bisection is played.
+    let carriable = if rules.held_armed && !rules.held_close_chunks {
+        carried.min(crate::palw_gen_one_move_v1::palw_gen_one_move_max_proof_bytes_v1())
+    } else {
+        carried
+    };
     let (mut worst_close, mut worst_macs, mut worst_operands) = (0u64, 0u64, 0u64);
     for (s, st) in pipeline.stages.iter().enumerate() {
         let program = &programs[st.program as usize];

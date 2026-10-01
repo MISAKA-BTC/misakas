@@ -297,6 +297,12 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // generative close about the execution it names) at every height, as the IR one's does; the court's
         // ceiling and the verdict are the acceptance layer's, and below `palw_gen_v1` the walk drops it by name.
         PalwConsensusObjectV2::GenShardCourtAccused { accusation } => crate::palw_gen_one_move_v1::palw_gen_one_move_shape_v1(accusation),
+        // RFC-0003 decision 22: a held leaf challenge rides signed and shaped (one digest per declared chunk, the
+        // court's structural bound) at every height, as the one-move accusations do; the ruleset's carriage count
+        // and the signature are the acceptance layer's, and below `palw_held_close_chunks_v1` the walk drops it by name.
+        PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge } => {
+            crate::palw_held_close_v1::palw_held_leaf_challenge_shape_v1(challenge)
+        }
         PalwConsensusObjectV2::ClassRegistered { admission: None, .. } => Err(
             "a class registered on a running chain must carry its shape profile and canonical job —              without them nothing can check its coverage, its ladder depth or its declared pwu",
         ),

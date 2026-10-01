@@ -481,6 +481,8 @@ pub mod palw_gen_claim_v1;
 pub mod palw_gen_one_move_v1;
 /// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA unit `TirStepLeaf`.
 pub mod palw_tir_fence2_v1;
+/// RFC-0003 §I.4.7, decision 22: the held leaf challenge — a named-leaf challenge with the declaration of its close, so a lie at a leaf whose close exceeds one carrier is convictable under the held regime; dormant behind `palw_held_close_chunks_v1`.
+pub mod palw_held_close_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.

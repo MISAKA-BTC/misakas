@@ -89,6 +89,20 @@ pub fn palw_gen_one_move_session_id_v1(network_domain: &[u8], a: &PalwGenOneMove
     Hash64::from_bytes(s.finalize().as_bytes().try_into().expect("64 bytes"))
 }
 
+/// **The bytes of a one-move accusation that are not its proof**, on the wire: the object's tag (1), the
+/// accusation's version (2), the claim and the two roots (3 × 64), the two bond keys (2 × 68: a 64-byte txid and
+/// an index), the verdict (1) and the signature (a 4-byte length and an ML-DSA-87 signature). What is left of
+/// one carrier ([`crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES`]) is the proof's.
+pub const PALW_GEN_ONE_MOVE_FRAMING_BYTES_V1: u64 = 1 + 2 + 3 * 64 + 2 * 68 + 1 + 4 + crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
+
+/// **PALW-GEN-21's bound: the most bytes of a proof a one-move accusation can carry** — one carrier less the
+/// accusation's framing. A pipeline class on a held-regime chain whose terminal close exceeds it cannot be
+/// convicted in one move there (RFC-0003 §I.4.7, spec 04b §15.15.6): its registration is refused until
+/// `palw_held_close_chunks_v1` is in force, when the carried cap (PALW-TIR-38) is the bound.
+pub fn palw_gen_one_move_max_proof_bytes_v1() -> u64 {
+    (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64).saturating_sub(PALW_GEN_ONE_MOVE_FRAMING_BYTES_V1)
+}
+
 /// The bytes a ceiling prices: the proof, on the wire.
 pub fn palw_gen_one_move_bytes_v1(a: &PalwGenOneMoveAccusationV1) -> u64 {
     borsh::to_vec(&a.proof).map(|b| b.len() as u64).unwrap_or(u64::MAX)
