@@ -659,7 +659,10 @@ pub fn palw_drill_tir_fence2_at_v1(params: &mut crate::config::params::Params, a
 /// dormant, so there is no release height to move from. Every refusal of the post-launch moves applies,
 /// named for this flag. It is the prerequisite RFC-0003's FP Job V5 and RFC-0004's improvement fence name:
 /// arm it at or below `--palw-drill-fp-v5-at` and `--palw-drill-improve-at`.
-pub fn palw_drill_decode_rules_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+pub fn palw_drill_decode_rules_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_DECODE_RULES_V1)
 }
 
@@ -714,10 +717,8 @@ const PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1, flag: "--palw-drill-tir2-at" };
 
 /// The decode rules alone (`--palw-drill-decode-rules-at`, ADR-0082 D10/D11): the dormant testnet-12 list.
-const PALW_DRILL_FLAG_DAY_DECODE_RULES_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
-    list: crate::config::params::PALW_T12_DECODE_RULES_FENCES_V1,
-    flag: "--palw-drill-decode-rules-at",
-};
+const PALW_DRILL_FLAG_DAY_DECODE_RULES_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_DECODE_RULES_FENCES_V1, flag: "--palw-drill-decode-rules-at" };
 
 /// The improvement fence alone (`--palw-drill-improve-at`, RFC-0004): a drill-only list.
 const PALW_DRILL_FLAG_DAY_IMPROVE_V1: PalwDrillFlagDayV1 =

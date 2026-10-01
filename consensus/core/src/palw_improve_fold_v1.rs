@@ -2034,7 +2034,9 @@ mod tests {
         assert_eq!((line.head, line.open_epoch, line.regression_check), (h(CAND_A), None, Some(h(LINE))));
         assert_eq!(
             line.last_promotion,
-            Some(PalwLastPromotionV1 { epoch: 1, owner_until_daa: 1_950 + 2 * 950, ban_daa: 8 * 950 }),
+            // The decision's DAA: with every score in and no evaluation claim live the epoch is scored and
+            // decided in the block at t_eval (1,800), not at t_score — the evaluation lane's hook.
+            Some(PalwLastPromotionV1 { epoch: 1, owner_until_daa: 1_800 + 2 * 950, ban_daa: 8 * 950 }),
             "[E22] the rollback terms are pinned at the promotion"
         );
         assert_eq!(s.improvement_last_head(&h(LINE)).unwrap().cause, PalwHeadCauseV1::Promoted);

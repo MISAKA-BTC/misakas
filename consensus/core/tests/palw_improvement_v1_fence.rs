@@ -23,10 +23,10 @@ use kaspa_consensus_core::config::drill::{
 };
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
-    PALW_T12_DECODE_RULES_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1,
-    PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params,
-    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
-    palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_shipped_params,
+    PALW_T12_DECODE_RULES_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
+    PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
+    palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::fork_id_gate_fences_v1;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
@@ -108,7 +108,8 @@ fn t12_with_gen() -> Params {
     p.sync_palw_gen_v1();
     p.palw_fp_decode_rules = Some(ForkActivation::new(DECODE_AT));
     p.sync_palw_fp_decode_rules();
-    p.validate_palw_v2().unwrap_or_else(|e| panic!("testnet-12 past its IR flag day can arm the generative fence and the decode rules: {e}"));
+    p.validate_palw_v2()
+        .unwrap_or_else(|e| panic!("testnet-12 past its IR flag day can arm the generative fence and the decode rules: {e}"));
     p
 }
 
@@ -283,6 +284,9 @@ fn validate_refuses_every_value_this_build_cannot_run() {
     let mut same_height = ok.clone();
     same_height.palw_improvement_v1 = Some(PalwImprovementFenceV1::drill_v1(ForkActivation::new(GEN_AT)));
     same_height.sync_palw_improvement_v1();
+    // …with the decode rules in force at or below that height too: they are a prerequisite as well.
+    same_height.palw_fp_decode_rules = Some(ForkActivation::new(GEN_AT));
+    same_height.sync_palw_fp_decode_rules();
     assert!(same_height.validate_palw_improvement_v1().is_ok(), "at the generative fence's own height");
     // The second IR fence (every evaluation pipeline sized under H7; no verdict flips mid-epoch).
     let mut no_fence2 = ok.clone();
