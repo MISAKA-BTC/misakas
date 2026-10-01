@@ -1089,7 +1089,7 @@ pub(crate) fn gemma4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchS
                     .map(|i| {
                         if i < angles {
                             let e = (2 * i) as f32 / width as f32;
-                            (1.0f32 / rc.theta.powf(e as f64) as f32) / factor as f32
+                            (1.0f32 / crate::detmath::powf(rc.theta, e as f64) as f32) / factor as f32
                         } else {
                             0.0
                         }

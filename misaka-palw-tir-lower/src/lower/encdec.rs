@@ -191,7 +191,7 @@ pub fn parse_encdec(config: &str) -> Result<EncDecSpec> {
                 embed_norm: false,
                 final_norm: true,
                 attn_scale: 1.0,
-                head_scale: if scale_out { (d as f64).powf(-0.5) } else { 1.0 },
+                head_scale: if scale_out { crate::detmath::powf(d as f64, -0.5) } else { 1.0 },
                 logits_bias: false,
                 decoder_start: start,
             })
@@ -245,7 +245,7 @@ pub fn parse_encdec(config: &str) -> Result<EncDecSpec> {
                 embed_scale: if scale { (d as f64).sqrt() } else { 1.0 },
                 embed_norm: learned,
                 final_norm: pre,
-                attn_scale: (dec_head_dim as f64).powf(-0.5),
+                attn_scale: crate::detmath::powf(dec_head_dim as f64, -0.5),
                 head_scale: 1.0,
                 logits_bias: true,
                 decoder_start: start,
@@ -272,7 +272,7 @@ pub fn t5_bucket(rel: i64, bidirectional: bool, num_buckets: usize, max_distance
     if n < max_exact {
         return (ret + n) as usize;
     }
-    let lg = ((n as f32) / (max_exact as f32)).ln() / ((max_distance as f64 / max_exact as f64).ln() as f32) * ((nb - max_exact) as f32);
+    let lg = crate::detmath::ln_f32((n as f32) / (max_exact as f32)) / (crate::detmath::ln(max_distance as f64 / max_exact as f64) as f32) * ((nb - max_exact) as f32);
     (ret + (max_exact + lg as i64).min(nb - 1)) as usize
 }
 
@@ -283,7 +283,7 @@ pub fn sinusoid(rows: usize, d: usize) -> Vec<f32> {
     for p in 0..rows {
         for j in 0..d {
             let (k, f): (usize, fn(f64) -> f64) = if j < half { (2 * j, f64::sin) } else { (2 * (j - half) + 1, f64::cos) };
-            let ang = p as f64 / 10000f64.powf((2 * (k / 2)) as f64 / d as f64);
+            let ang = p as f64 / crate::detmath::powf(10000.0, (2 * (k / 2)) as f64 / d as f64);
             v[p * d + j] = f(ang) as f32;
         }
     }

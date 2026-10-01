@@ -20,7 +20,7 @@ pub fn mul_shift(r: f64) -> (i64, i8) {
         return (0, 0);
     }
     let a = r.abs();
-    let e = a.log2().floor() as i32;
+    let e = crate::detmath::floor_log2(a) as i32;
     let s = (30 - e).clamp(0, 62);
     let m = (a * 2f64.powi(s)).round().min((1u64 << 62) as f64) as i64;
     (if r < 0.0 { -m } else { m }, s as i8)

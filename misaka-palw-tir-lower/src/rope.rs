@@ -101,7 +101,7 @@ pub fn default_inv_freq(base: f64, dim: usize) -> Vec<f32> {
     (0..dim / 2)
         .map(|i| {
             let e = (2 * i) as f32 / dim as f32;
-            let p = base.powf(e as f64) as f32;
+            let p = crate::detmath::powf(base, e as f64) as f32;
             1.0f32 / p
         })
         .collect()
@@ -127,7 +127,7 @@ impl RopeFreqs {
             let seq_len = pos + 1;
             if seq_len > d.max_pos {
                 let dim = self.dim as f64;
-                let base = self.theta * ((d.factor * seq_len as f64 / d.max_pos as f64) - (d.factor - 1.0)).powf(dim / (dim - 2.0));
+                let base = self.theta * crate::detmath::powf((d.factor * seq_len as f64 / d.max_pos as f64) - (d.factor - 1.0), dim / (dim - 2.0));
                 return default_inv_freq(base, self.dim);
             }
         }
@@ -148,8 +148,8 @@ impl RopeFreqs {
         let mut s = Vec::with_capacity(inv.len());
         for f in inv {
             let ang = (pos as f32) * f;
-            c.push((ang as f64).cos() as f32 * af);
-            s.push((ang as f64).sin() as f32 * af);
+            c.push(crate::detmath::cos(ang as f64) as f32 * af);
+            s.push(crate::detmath::sin(ang as f64) as f32 * af);
         }
         (c, s)
     }
@@ -233,14 +233,14 @@ pub fn longrope_inv_freq(base: f64, dim: usize, ext: &[f64]) -> Vec<f32> {
     (0..dim / 2)
         .map(|i| {
             let e = (2 * i) as f32 / dim as f32;
-            let p = base.powf(e as f64) as f32;
+            let p = crate::detmath::powf(base, e as f64) as f32;
             1.0f32 / (ext[i] as f32 * p)
         })
         .collect()
 }
 
 fn get_mscale(scale: f64, mscale: f64) -> f64 {
-    if scale <= 1.0 { 1.0 } else { 0.1 * mscale * scale.ln() + 1.0 }
+    if scale <= 1.0 { 1.0 } else { 0.1 * mscale * crate::detmath::ln(scale) + 1.0 }
 }
 
 /// Everything the frequency computation needs besides the rope dict.
@@ -391,7 +391,7 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
             out.attention_factor = match attention_factor {
                 Some(a) => a,
                 None if factor <= 1.0 => 1.0,
-                None => (1.0 + factor.ln() / (original_max as f64).ln()).sqrt(),
+                None => (1.0 + crate::detmath::ln(factor) / crate::detmath::ln(original_max as f64)).sqrt(),
             };
             out.inv_freq = longrope_inv_freq(base, dim, &short);
             out.longrope = Some(LongRopeSwitch { inv_freq_long: longrope_inv_freq(base, dim, &long), original_max });
@@ -412,7 +412,7 @@ pub fn yarn_inv_freq(
     truncate: bool,
 ) -> Vec<f32> {
     let two_pi = 2.0 * std::f64::consts::PI;
-    let find_dim = |rot: f64| (dim as f64 * (original_max as f64 / (rot * two_pi)).ln()) / (2.0 * base.ln());
+    let find_dim = |rot: f64| (dim as f64 * crate::detmath::ln(original_max as f64 / (rot * two_pi))) / (2.0 * crate::detmath::ln(base));
     let (mut low, mut high) = (find_dim(beta_fast), find_dim(beta_slow));
     if truncate {
         low = low.floor();
@@ -427,7 +427,7 @@ pub fn yarn_inv_freq(
     (0..dim / 2)
         .map(|i| {
             let e = (2 * i) as f32 / dim as f32;
-            let pos_freq = base.powf(e as f64) as f32;
+            let pos_freq = crate::detmath::powf(base, e as f64) as f32;
             let extra = 1.0f32 / pos_freq;
             let inter = 1.0f32 / (factor as f32 * pos_freq);
             let ramp = (((i as f32) - lo as f32) / (hi as f32 - lo as f32)).clamp(0.0, 1.0);
@@ -471,10 +471,10 @@ pub struct AlibiSpec {
 /// BLOOM / Falcon slopes (`build_alibi_tensor`).
 pub fn alibi_slopes_bloom(n: usize) -> Vec<f64> {
     let closest = 1usize << (usize::BITS - 1 - n.leading_zeros());
-    let base = 2f64.powf(-(2f64.powf(-((closest as f64).log2() - 3.0))));
+    let base = crate::detmath::powf(2.0, -crate::detmath::powf(2.0, -((closest as f64).log2() - 3.0)));
     let mut s: Vec<f64> = (1..=closest).map(|p| (base as f32).powi(p as i32) as f64).collect();
     if closest != n {
-        let extra_base = 2f64.powf(-(2f64.powf(-((2.0 * closest as f64).log2() - 3.0))));
+        let extra_base = crate::detmath::powf(2.0, -crate::detmath::powf(2.0, -((2.0 * closest as f64).log2() - 3.0)));
         let remaining = closest.min(n - closest);
         s.extend((0..remaining).map(|i| (extra_base as f32).powi((1 + 2 * i) as i32) as f64));
     }
@@ -484,7 +484,7 @@ pub fn alibi_slopes_bloom(n: usize) -> Vec<f64> {
 /// MPT slopes (`build_mpt_alibi_tensor`).
 pub fn alibi_slopes_mpt(n: usize, alibi_bias_max: f64) -> Vec<f64> {
     let p2 = n.next_power_of_two();
-    let slopes: Vec<f64> = (1..=p2).map(|i| 1.0 / 2f64.powf(i as f64 * (alibi_bias_max / p2 as f64))).collect();
+    let slopes: Vec<f64> = (1..=p2).map(|i| 1.0 / crate::detmath::powf(2.0, i as f64 * (alibi_bias_max / p2 as f64))).collect();
     if p2 == n {
         return slopes;
     }

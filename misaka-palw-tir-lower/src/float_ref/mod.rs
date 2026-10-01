@@ -761,14 +761,13 @@ pub fn erf(x: f64) -> f64 {
     } else {
         let t = 1.0 / (1.0 + 0.5 * a);
         let e = t
-            * (-a * a - 1.265_512_23
+            * crate::detmath::exp(-a * a - 1.265_512_23
                 + t * (1.000_023_68
                     + t * (0.374_091_96
                         + t * (0.096_784_18
                             + t * (-0.186_288_06
                                 + t * (0.278_868_07
-                                    + t * (-1.135_203_98 + t * (1.488_515_87 + t * (-0.822_152_23 + t * 0.170_872_77)))))))))
-                .exp();
+                                    + t * (-1.135_203_98 + t * (1.488_515_87 + t * (-0.822_152_23 + t * 0.170_872_77)))))))));
         1.0 - e
     };
     if x < 0.0 { -r } else { r }
@@ -776,11 +775,11 @@ pub fn erf(x: f64) -> f64 {
 
 pub fn act(a: Act, v: f32) -> f32 {
     let x = v as f64;
-    let sig = |z: f64| 1.0 / (1.0 + (-z).exp());
+    let sig = |z: f64| 1.0 / (1.0 + crate::detmath::exp(-z));
     (match a {
         Act::Silu => x * sig(x),
         Act::Gelu => 0.5 * x * (1.0 + erf(x / std::f64::consts::SQRT_2)),
-        Act::GeluTanh => 0.5 * x * (1.0 + ((2.0 / std::f64::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh()),
+        Act::GeluTanh => 0.5 * x * (1.0 + crate::detmath::tanh((2.0 / std::f64::consts::PI).sqrt() * (x + 0.044715 * x * x * x))),
         Act::QuickGelu => x * sig(1.702 * x),
         Act::Relu => x.max(0.0),
         Act::Relu2 => {
@@ -788,13 +787,13 @@ pub fn act(a: Act, v: f32) -> f32 {
             r * r
         }
         Act::Sigmoid => sig(x),
-        Act::Tanh => x.tanh(),
+        Act::Tanh => crate::detmath::tanh(x),
         // torch.nn.functional.softplus(beta=1, threshold=20)
         Act::Softplus => {
             if x > 20.0 {
                 x
             } else {
-                x.exp().ln_1p()
+                crate::detmath::ln_1p(crate::detmath::exp(x))
             }
         }
         Act::Identity => x,
@@ -804,7 +803,7 @@ pub fn act(a: Act, v: f32) -> f32 {
 fn clamped_swiglu(g: f32, u: f32, alpha: f64, limit: f64) -> f32 {
     let g = (g as f64).min(limit);
     let u = (u as f64).clamp(-limit, limit);
-    let glu = g * (1.0 / (1.0 + (-(g * alpha)).exp()));
+    let glu = g * (1.0 / (1.0 + crate::detmath::exp(-(g * alpha))));
     ((u + 1.0) * glu) as f32
 }
 

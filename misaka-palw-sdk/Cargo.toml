@@ -47,3 +47,5 @@ path = "src/bin/palw-tir-equiv.rs"
 [dev-dependencies]
 # The IR registration test signs and verifies under a bond's ML-DSA-87 key, as the node does.
 libcrux-ml-dsa.workspace = true
+# The streamed-root test converts on pools of one and of seven threads.
+rayon.workspace = true

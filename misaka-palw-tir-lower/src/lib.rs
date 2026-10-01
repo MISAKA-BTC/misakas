@@ -36,6 +36,7 @@ pub mod artifact;
 pub mod calib;
 pub mod cfg;
 pub mod convert;
+pub mod detmath;
 pub mod encoder;
 pub mod error;
 pub mod fidelity;
