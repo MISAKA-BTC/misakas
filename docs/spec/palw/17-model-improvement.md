@@ -98,8 +98,21 @@ The integration's allocations beyond them (2026-10-01; each lane asked the core 
 | 87 | `GenTensorCommitted` | RFC-0003 §I.4: a tensor claim's commitment, the object the acceptance walk builds from an FP job version 10 payload (`palw_fp_gen_objects_from_accepted_txs_v1`), past `palw_fp_job_v5` over `palw_gen_v1` (approved for `rfc3/gen-claim`) | **never**: the transaction is the carrier and `palw_lifecycle_object_may_ride_v2` refuses it a carriage by name, as `FreePromptCommitted`. The number is a name, held so that no other object is ever declared at 87 |
 | 88 | `GenShardCourtAccused` | RFC-0003 §I.4.7: a pipeline claim accused in one move — the generative twin of tag 62 for a chain that plays no bisection (the held regime); the accusation carries a generative close and is adjudicated whole at acceptance (requested by `rfc3/gen-claim`, granted in its order) | yes |
 | 89 | `CourtEvalRootClaimed` | RFC-0004 §7.2 (A6): the evaluation court's history-dissection root claim (`PalwEvalRootClaimV1`'s carrier); the evaluation lane's | yes |
-| 90 | the held regime's named-leaf challenge (lane D names the variant) | a challenge generic over IR and generative leaves, under the dormant fence `palw_held_close_chunks_v1`: it opens a Terminal session on the named leaf, and its close rides the existing `CourtCloseDeclared` / `CourtCloseChunk` group, so a leaf whose close does not fit one carrier (~100 KB) is convictable on a held chain. It replaces a chunk-group table design; tag 62 is untouched (lane D's decision 22, 2026-10-01) | yes |
+| 90 | `HeldLeafChallengeDeclared` | `PalwHeldLeafChallengeV1` (spec 04b §15.15.6, lane D): a challenge generic over IR and generative leaves, under the dormant fence `palw_held_close_chunks_v1`. **It carries the close declaration**: one step opens a `Terminal` session on the named leaf (ADR-0103 Decision 5) and writes the challenger-side close group the court already has, and the chunks ride as `CourtCloseChunk`, so a leaf whose close does not fit one carrier (~100 KB) is convictable on a held chain. Opening without declaring would put the executor on the clock at a fused terminal and refuse the accuser's own declaration there (`CourtCloseNotTerminal`), which is why the two are one object; while the declared close stands the session waits at `Terminal` (§17.0 review note below). It replaces a chunk-group table design; tag 62 is untouched (lane D's decision 22, 2026-10-01) | yes |
 | 91 and up | free | the next tag is 91 | |
+
+**Tag 90's executor clock** (the integration's review of 2026-10-01; spec 04b §15.15.6 is the authority). The session
+a held leaf challenge opens is at a fused IR or pipeline terminal with no phase open, where the court clocks the
+executor for its opening move (`court_turn_and_rung_deadline_v2`) and refuses a challenger's own declaration
+(`court_session_turn_and_rung_deadline_v2`, the declaration arm: a close is legal only at `Terminal`). The object
+therefore writes the declaration with the opening, and the clock gains the mirror of the executor-declared clause:
+a challenger-side group at the IR or pipeline terminal with no phase open waits at `Terminal`, the group's own
+assembly deadline clocking the declarer. The clause reads rooted state only — the group row, the phase table, the
+class's fused flag and its IR or generative row — and no fence, so the deadline index, its rebuild and checker, the
+sweep, the declaration arm and the producer's duty view, which all ask the one helper, agree by construction. It
+changes no state a ruleset can reach below the fence: a challenger's declaration at that terminal is refused until
+the executor's own declared close makes the session wait at `Terminal`, where the existing clause already gives
+the same answer, and a group dies only with its session.
 
 Tags 83–90 are declared with **explicit discriminants** (`#[borsh(use_discriminant = true)]`), as
 `PalwCourtVerdictProofV2` already carries them: a tag is an allocation, not a position, and two lanes that
