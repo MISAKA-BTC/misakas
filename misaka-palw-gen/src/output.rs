@@ -164,9 +164,19 @@ impl OutputSpecV1 {
         if self.shape.iter().any(|d| *d == 0 || *d > OUTPUT_MAX_DIM_V1) {
             return shape_err("every dimension is in [1, 2^24]");
         }
-        let elements = self.shape.iter().map(|d| *d as u64).product::<u64>();
-        if elements > OUTPUT_MAX_ELEMENTS_V1 {
-            return shape_err("more than 2^28 elements");
+        // The element count is checked as it grows (finding G9 of the independent second
+        // implementation): each dimension is at most 2^24, so a count that has not passed 2^28 times
+        // the next dimension is at most 2^52 and cannot wrap, and the shape is refused by name the
+        // moment the count passes the cap. A rank-4 `[2^24; 4]` is 2^96 elements, which an unchecked
+        // `product::<u64>()` panicked on (the workspace's release profile keeps overflow checks)
+        // before this bound ran — a remote panic wherever a registrant's `OutputSpecV1` reaches this
+        // function, as the class preflight's does.
+        let mut elements = 1u64;
+        for d in &self.shape {
+            elements = elements.saturating_mul(*d as u64);
+            if elements > OUTPUT_MAX_ELEMENTS_V1 {
+                return shape_err("more than 2^28 elements");
+            }
         }
         let (rank, last_is_3) = (self.shape.len(), self.shape.last() == Some(&3));
         let (element_bytes, lo, hi, unsigned) = match kind {
@@ -517,6 +527,40 @@ mod tests {
         assert!(matches!(OutputSpecV1::embedding_i32(1, 4, 32, true).layout(), Err(OutputErrorV1::Meta(_))));
         assert!(matches!(OutputSpecV1::tensor_le(3, vec![4], 0).layout(), Err(OutputErrorV1::Meta(_))));
         assert!(matches!(output_root_v1(&OutputSpecV1::image_rgb8(1, 1), &[0, 0, 0], 3), Err(OutputErrorV1::TileLen(3))));
+    }
+
+    /// **G9 (the independent second implementation's finding): every dimension legal, the element
+    /// count past `u64`.** Each of these specs has dimensions in `[1, 2^24]` and rank ≤ 4, and made
+    /// `layout()` — and so `output_root_v1` and `output_tile_count_v1` — panic with a multiply
+    /// overflow before the `2^28` bound ran. Each is now a `Shape` refusal, by name, from every
+    /// function that reads the header, and no tile of one verifies.
+    #[test]
+    fn an_element_count_past_u64_is_refused_by_name_and_never_panics() {
+        let big = 1u32 << 24;
+        let specs = [
+            OutputSpecV1::tensor_le(2, vec![big; 4], 0),
+            OutputSpecV1::tensor_le(1, vec![big, big, big], 0),
+            OutputSpecV1::tensor_le(0, vec![big, big, 3, 3], 0),
+            OutputSpecV1::video_rgb8(big, big, big, 30, 1),
+            OutputSpecV1::video_rgb8(1 << 20, 1 << 20, 1 << 20, 30, 1),
+            OutputSpecV1::image_rgb8(big, big),
+            OutputSpecV1::embedding_i32(big, big, 0, false),
+            OutputSpecV1::pcm_i16(big, big, 48_000),
+        ];
+        for spec in &specs {
+            assert!(matches!(spec.layout(), Err(OutputErrorV1::Shape(_))), "{spec:?}");
+            assert!(matches!(output_tile_count_v1(spec, 4), Err(OutputErrorV1::Shape(_))), "{spec:?}");
+            assert!(matches!(output_root_v1(spec, &[], 4), Err(OutputErrorV1::Shape(_))), "{spec:?}");
+            assert!(matches!(spec.canonical_bytes(&[]), Err(OutputErrorV1::Shape(_))), "{spec:?}");
+            assert!(!verify_output_tile_v1(&[0; 64], spec, 4, 0, &[0; 4], &[]), "{spec:?}");
+        }
+        // The bound itself: exactly 2^28 elements is a header, one element more is not.
+        let at = OutputSpecV1::tensor_le(2, vec![1 << 14, 1 << 14], 0);
+        assert_eq!(at.layout().map(|l| l.elements), Ok(1 << 28));
+        assert!(matches!(OutputSpecV1::tensor_le(2, vec![1 << 14, (1 << 14) + 1], 0).layout(), Err(OutputErrorV1::Shape(_))));
+        assert_eq!(OutputSpecV1::tensor_le(1, vec![big, 16], 0).layout().map(|l| l.elements), Ok(1 << 28));
+        assert!(matches!(OutputSpecV1::tensor_le(1, vec![big, 17], 0).layout(), Err(OutputErrorV1::Shape(_))));
+        assert_eq!(output_tile_count_v1(&at, 4), Ok(1 << 26));
     }
 
     #[test]

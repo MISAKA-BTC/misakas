@@ -359,6 +359,12 @@ pub fn palw_fp_v5_accept_payload_v1<'a>(
         armed,
     )?;
     let row = palw_fp_v5_resolve_class_v1(&job, row, armed)?;
+    // **RFC-0001 §A.3's unit, RFC-0003 §I.3's convention.** The temperature, the frequency and
+    // presence penalties and the logit bias are measured in the class's logit units (Q24), and a
+    // generative text class's logits are in whatever unit its lowerer calibrated until the fence that
+    // guarantees Q24 by construction opens the lane to classes registered past it: until then a V5 job
+    // is offered the unit-free controls only (greedy, the repeat penalty, stop sequences, constraints).
+    crate::palw_freeprompt_v3::palw_fp_decode_controls_offered_v1(&job.v4, false).map_err(PalwFpV5Error::V4)?;
     let carried = crate::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&job.v4, &payload.prompt_token_ids);
     if !carried.is_empty() {
         palw_fp_v5_prompt_head_admitted_v1(&row.class.offers, &carried)?;

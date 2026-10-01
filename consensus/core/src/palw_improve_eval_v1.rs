@@ -1969,7 +1969,7 @@ mod tests {
             Hash64::from_bytes([0x10; 64]),
             &freeprompt(),
             false,
-            |_| PalwFpClassCapsV1 { step_ladder: class_ladder, held, derived_work: PalwFpDerivedWorkCapV1::Declared },
+            |_| PalwFpClassCapsV1 { step_ladder: class_ladder, held, derived_work: PalwFpDerivedWorkCapV1::Declared, logits_q24: true },
             ruleset_caps_armed,
             held_armed,
             FORM,

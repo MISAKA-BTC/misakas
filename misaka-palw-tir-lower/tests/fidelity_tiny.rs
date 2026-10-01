@@ -108,6 +108,12 @@ dense!(
     phi3_longrope,
     olmo,
     olmo2,
+    olmo3,
+    glm,
+    glm4,
+    ministral,
+    ministral3,
+    gemma4_kvshare,
     cohere,
     cohere2,
     stablelm,
@@ -141,7 +147,7 @@ macro_rules! moe {
     )*};
 }
 
-moe!(mixtral, qwen2_moe, qwen3_moe, olmoe, granitemoe, gpt_oss, deepseek_v2, deepseek_v2_lite, deepseek_v3);
+moe!(mixtral, qwen2_moe, qwen3_moe, olmoe, granitemoe, gpt_oss, deepseek_v2, deepseek_v2_lite, deepseek_v3, glm4_moe, phimoe, llama4, llama4_vlm, gemma4);
 
 macro_rules! recurrent {
     ($($name:ident),* $(,)?) => {$(

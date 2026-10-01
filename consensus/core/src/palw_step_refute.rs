@@ -3410,7 +3410,7 @@ pub fn check_tiled_decode_token_refutation_capped_v1(
 /// Identical to [`check_tiled_decode_token_refutation_v1`] in everything the court carries — the
 /// authentication order, the two openings, the row root, the tile widths, the ragged last tile —
 /// and different in exactly one line: the two opened lanes are turned into keys
-/// (`value · 2^24 + ((T_q · G) >> 24)`) before they are compared. At
+/// (`value · 2^24 + T_q · G`, both terms Q48) before they are compared. At
 /// [`crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY`] the key is a strictly increasing
 /// function of the value, so this IS the v1 arm; `the_seeded_arm_is_the_shipped_arm_when_greedy`
 /// sweeps that.

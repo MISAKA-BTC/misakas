@@ -35,10 +35,55 @@ impl M<'_> {
         self.out.insert(name, src);
         Ok(())
     }
-    /// The `[out, in]` weight of a linear role (GPT-2's `Conv1D` stores `[in, out]`).
+    /// The `[out, in]` weight of a linear role (GPT-2's `Conv1D` stores `[in, out]`); a
+    /// pre-quantised checkpoint's projection reads its stored integers ([`Src::Quant`]).
     fn w(&self, role: &str) -> Result<Src> {
+        if let Some(fmt) = self.quantised(role)? {
+            return Ok(Src::Quant { module: self.role(role)?, fmt });
+        }
         let t = Src::t(format!("{}.weight", self.role(role)?));
         Ok(if self.st.conv1d_weights { t.transpose() } else { t })
+    }
+    /// The format a linear role is stored in, when the checkpoint is pre-quantised and the role is
+    /// one of a block's projections the config converts (`crate::prequant::QuantConfig`).
+    fn quantised(&self, role: &str) -> Result<Option<crate::prequant::QFormat>> {
+        const PROJECTIONS: &[&str] = &[
+            "attn.q",
+            "attn.k",
+            "attn.v",
+            "attn.qkv",
+            "attn.o",
+            "mlp.gate",
+            "mlp.up",
+            "mlp.gate_up",
+            "mlp.down",
+            "moe.gate",
+            "moe.up",
+            "moe.down",
+            "moe.shared.gate",
+            "moe.shared.up",
+            "moe.shared.down",
+        ];
+        let Some(q) = &self.st.quant else { return Ok(None) };
+        // GGUF: every tensor has its own type; the modules stored block-quantised are listed.
+        if let crate::prequant::QFormat::Gguf { .. } = q.fmt {
+            return Ok(match self.st.name(role) {
+                Some(t) => q.per_module.get(t).map(|layout| crate::prequant::QFormat::Gguf { layout: *layout }),
+                None => None,
+            });
+        }
+        if role == "lm_head" {
+            return Ok(q.lm_head.then(|| q.fmt.clone()));
+        }
+        if !PROJECTIONS.contains(&role) {
+            return Ok(None);
+        }
+        let t = self.role(role)?;
+        let (a, b) = (q.converts(&t.replace("{L}", "0")), q.converts(&t.replace("{L}", "1")));
+        if a != b {
+            return Err(LowerError::not_lowerable(format!("`{t}`: quantised in some layers and not in others")));
+        }
+        Ok(a.then(|| q.fmt.clone()))
     }
     fn b(&self, role: &str) -> Result<Src> {
         Ok(Src::t(format!("{}.bias", self.role(role)?)))
@@ -82,17 +127,35 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     if let Some(n) = &spec.embedding.norm {
         m.norm("embed.norm", "embed_norm", n)?;
     }
+    if spec.embedding.type_rows.is_some() {
+        m.put("embed.type_table", Src::t(format!("{}.weight", m.role("type_embed")?)))?;
+    }
+    if spec.embedding.rel_bias.is_some() {
+        m.put("attn.rel_bias", Src::t(format!("{}.weight", m.role("rel_bias")?)))?;
+    }
     if let Some(n) = &spec.final_norm {
         m.norm("final_norm", "final_norm", n)?;
     }
-    if spec.head.proj_out {
+    let logits = matches!(spec.output, OutputSpec::Logits);
+    if let OutputSpec::Embedding { proj: Some((_, bias)), .. } = spec.output {
+        let w = m.w("embed_proj")?;
+        m.put("embed.proj.w", w)?;
+        if bias {
+            m.put("embed.proj.b", Src::t(format!("{}.bias", m.role("embed_proj")?)))?;
+        }
+    }
+    if logits && spec.head.proj_out {
         let w = m.w("proj_out")?;
         m.put("head.proj_out.w", w)?;
     }
-    if !spec.head.tied {
-        m.put("head.w", Src::t(format!("{}.weight", m.role("lm_head")?)))?;
+    if logits && !spec.head.tied {
+        let w = match m.quantised("lm_head")? {
+            Some(fmt) => Src::Quant { module: m.role("lm_head")?, fmt },
+            None => Src::t(format!("{}.weight", m.role("lm_head")?)),
+        };
+        m.put("head.w", w)?;
     }
-    if spec.head.bias {
+    if logits && spec.head.bias {
         let b = match spec.hf.name("lm_head_bias") {
             Some(n) => Src::t(n),
             None => Src::t(format!("{}.bias", m.role("lm_head")?)),
@@ -113,7 +176,9 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
         for d in &prog.params {
             for (suffix, b) in [(".lora_a", false), (".lora_b", true)] {
                 if let Some(role) = d.name.strip_suffix(suffix) {
-                    let t = ad.tensor(role, b).ok_or_else(|| LowerError::eval(format!("internal: adapter role `{role}` has no module")))?;
+                    let t = ad
+                        .tensor(role, b)
+                        .ok_or_else(|| LowerError::eval(format!("internal: adapter role `{role}` has no module")))?;
                     m.put(d.name.clone(), Src::t(t))?;
                 }
             }
@@ -152,6 +217,25 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
             m.norm("norm.mix", "norm.mix", mixer_norm)?;
             m.norm("norm.ffn", "norm.ffn", ffn_norm)?;
         }
+        Residual::Sandwich { pre_mixer, post_mixer, pre_ffn, post_ffn, ple, layer_scalar } => {
+            for (n, name) in
+                [(pre_mixer, "norm.mix"), (post_mixer, "norm.post_mix"), (pre_ffn, "norm.ffn"), (post_ffn, "norm.post_ffn")]
+            {
+                m.norm(name, name, n)?;
+            }
+            if let Some(p) = ple {
+                // The layer's slices of the two tensors packed over the layers.
+                m.put("ple.proj.w", Src::t(format!("{}.weight", m.role("ple.proj")?)).take(0, Pick::PerLayer { len: p.dim }))?;
+                m.put("ple.table", Src::t(format!("{}.weight", m.role("ple.table")?)).take(1, Pick::PerLayer { len: p.dim }))?;
+                m.norm("ple.norm", "ple.norm", &p.norm)?;
+                m.lin("ple.gate", "ple.gate", false)?;
+                m.lin("ple.out", "ple.out", false)?;
+                m.norm("ple.post_norm", "ple.post_norm", &p.post_norm)?;
+            }
+            if *layer_scalar {
+                m.put("layer.scalar", Src::t(m.role("layer.scalar")?))?;
+            }
+        }
     }
     match &ls.mixer {
         Mixer::Attention(a) => attention(m, a)?,
@@ -166,6 +250,17 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
         Ffn::Mlp(mm) => mlp(m, mm, "mlp", m.st.mlp)?,
         Ffn::Moe(mm) => moe(m, mm)?,
         Ffn::RwkvChannel(c) => rwkv_channel(m, c, rescale, spec.hidden_size)?,
+        Ffn::MlpMoe(mm) => {
+            mlp(m, &mm.mlp, "mlp", m.st.mlp)?;
+            moe(m, &mm.moe)?;
+            for (n, name) in [(&mm.mlp_post, "norm.post_mlp"), (&mm.moe_pre, "norm.moe"), (&mm.moe_post, "norm.post_moe")] {
+                m.norm(name, name, n)?;
+            }
+            // Gemma-4 stores the router's gain as a bare vector (`router.scale`).
+            if mm.router_norm.gain != Gain::None {
+                m.put("moe.router_norm.gain", Src::t(m.role("moe.router_norm")?))?;
+            }
+        }
     }
     Ok(())
 }
@@ -173,6 +268,23 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
 fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
     let (h, kv, hd, vd) = (a.heads, a.kv_heads, a.head_dim, a.v_head_dim);
     let (qn, kn, vn) = (h * hd, kv * hd, kv * vd);
+    // The HL names (`AttnSpec::param_prefix`); the checkpoint roles stay `attn.*`.
+    let pf = a.param_prefix.clone().unwrap_or_else(|| "attn".into());
+    let n = |s: &str| format!("{pf}.{s}");
+    // A KV-sharing layer projects no keys or values of its own.
+    if let Some(crate::spec::KvShare::Consumer { .. }) = a.kv_share {
+        if m.st.qkv != QkvLayout::Separate || a.output_gate || a.qk_norm.is_some_and(|q| q.scope == QkNormScope::PerHeadSeparate) {
+            return Err(LowerError::eval("internal: a KV-sharing layer over a fused qkv, a gated query or per-head norm modules"));
+        }
+        m.lin(&n("q"), "attn.q", a.q_bias)?;
+        m.lin(&n("o"), "attn.o", a.o_bias)?;
+        if let Some(qk) = &a.qk_norm
+            && (qk.norm.gain != Gain::None || qk.norm.bias)
+        {
+            m.norm(&n("q_norm"), "attn.q_norm", &qk.norm)?;
+        }
+        return Ok(());
+    }
     match m.st.qkv {
         QkvLayout::Separate => {
             if a.output_gate {
@@ -187,10 +299,16 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
                     m.put("attn.q.b", b.rows(qp))?;
                 }
             } else {
-                m.lin("attn.q", "attn.q", a.q_bias)?;
+                m.lin(&n("q"), "attn.q", a.q_bias)?;
             }
-            m.lin("attn.k", "attn.k", a.k_bias)?;
-            m.lin("attn.v", "attn.v", a.v_bias)?;
+            m.lin(&n("k"), "attn.k", a.k_bias)?;
+            // Gemma-4's `attention_k_eq_v`: no v_proj; the values are the key projection.
+            if !a.v_from_k {
+                m.lin(&n("v"), "attn.v", a.v_bias)?;
+            }
+        }
+        _ if a.param_prefix.is_some() || a.v_from_k => {
+            return Err(LowerError::eval("internal: named or key-valued attention over a fused qkv"));
         }
         layout => {
             let (pq, pk, pv) = match layout {
@@ -228,10 +346,13 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
             }
         }
     }
-    m.lin("attn.o", "attn.o", a.o_bias)?;
-    if let Some(qk) = &a.qk_norm {
-        for (name, heads) in [("attn.q_norm", h), ("attn.k_norm", kv)] {
-            let role = m.role(name)?;
+    m.lin(&n("o"), "attn.o", a.o_bias)?;
+    let norms = [(a.qk_norm, "q_norm", h), (a.qk_norm, "k_norm", kv), (a.v_norm, "v_norm", kv)];
+    for (qk, which, heads) in norms {
+        let Some(qk) = qk else { continue };
+        if qk.norm.gain != Gain::None || qk.norm.bias {
+            let (name, role) = (n(which), m.role(&format!("attn.{which}"))?);
+            let name = name.as_str();
             if qk.norm.gain != Gain::None {
                 let src = match qk.scope {
                     // StableLM keeps one LayerNorm module per head.
@@ -250,7 +371,7 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
         }
     }
     if a.sinks {
-        m.put("attn.sinks", Src::t(m.role("attn.sinks")?))?;
+        m.put(n("sinks"), Src::t(m.role("attn.sinks")?))?;
     }
     Ok(())
 }
@@ -405,28 +526,33 @@ fn rwkv_channel(m: &mut M, _c: &RwkvChannelSpec, rescale: Option<usize>, d: usiz
     m.put("rwkv.ffn.v.w", rescaled(v, rescale))
 }
 
+/// An MLP's params: HL names under the MLP's own name ([`MlpSpec::name`], else `pfx`), checkpoint
+/// roles under `pfx`.
 fn mlp(m: &mut M, s: &MlpSpec, pfx: &str, layout: MlpLayout) -> Result<()> {
     let i = s.intermediate;
+    let hn = s.name.clone().unwrap_or_else(|| pfx.to_string());
     match layout {
         MlpLayout::Separate => {
             if s.gated {
-                m.lin(&format!("{pfx}.gate"), &format!("{pfx}.gate"), s.up_bias)?;
+                m.lin(&format!("{hn}.gate"), &format!("{pfx}.gate"), s.up_bias)?;
             }
-            m.lin(&format!("{pfx}.up"), &format!("{pfx}.up"), s.up_bias)?;
+            m.lin(&format!("{hn}.up"), &format!("{pfx}.up"), s.up_bias)?;
         }
         MlpLayout::FusedGateFirst => {
             let w = m.w(&format!("{pfx}.gate_up"))?;
-            m.put(format!("{pfx}.gate.w"), w.clone().rows(Pick::Range { start: 0, len: i }))?;
-            m.put(format!("{pfx}.up.w"), w.rows(Pick::Range { start: i, len: i }))?;
+            m.put(format!("{hn}.gate.w"), w.clone().rows(Pick::Range { start: 0, len: i }))?;
+            m.put(format!("{hn}.up.w"), w.rows(Pick::Range { start: i, len: i }))?;
             if s.up_bias {
                 let b = m.b(&format!("{pfx}.gate_up"))?;
-                m.put(format!("{pfx}.gate.b"), b.clone().rows(Pick::Range { start: 0, len: i }))?;
-                m.put(format!("{pfx}.up.b"), b.rows(Pick::Range { start: i, len: i }))?;
+                m.put(format!("{hn}.gate.b"), b.clone().rows(Pick::Range { start: 0, len: i }))?;
+                m.put(format!("{hn}.up.b"), b.rows(Pick::Range { start: i, len: i }))?;
             }
         }
-        MlpLayout::FusedInterleaved => return Err(LowerError::eval("internal: interleaved dense MLP")),
+        MlpLayout::FusedInterleaved | MlpLayout::FusedGateFirstInOut => {
+            return Err(LowerError::eval("internal: an expert-only layout on a dense MLP"));
+        }
     }
-    m.lin(&format!("{pfx}.down"), &format!("{pfx}.down"), s.down_bias)
+    m.lin(&format!("{hn}.down"), &format!("{pfx}.down"), s.down_bias)
 }
 
 fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
@@ -435,11 +561,19 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
     if s.router.selection_bias {
         m.put("moe.sel_bias", Src::t(m.role("moe.sel_bias")?))?;
     }
+    if s.router.per_expert_scale {
+        m.put("moe.expert_scale", Src::t(m.role("moe.expert_scale")?))?;
+    }
     match m.st.experts {
         MlpLayout::Separate => {
             for (name, role) in [("moe.experts.gate", "moe.gate"), ("moe.experts.up", "moe.up"), ("moe.experts.down", "moe.down")] {
                 let r = m.role(role)?;
-                m.put(name, Src::t(format!("{r}.weight")).stack('E', e))?;
+                // Pre-quantised experts keep their integers, one stored module per expert.
+                let src = match m.quantised(role)? {
+                    Some(fmt) => Src::Quant { module: r, fmt }.stack('E', e),
+                    None => Src::t(format!("{r}.weight")).stack('E', e),
+                };
+                m.put(name, src)?;
             }
         }
         MlpLayout::FusedGateFirst => {
@@ -448,6 +582,13 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
             m.put("moe.experts.gate", gu.clone().take(1, Pick::Range { start: 0, len: i }))?;
             m.put("moe.experts.up", gu.take(1, Pick::Range { start: i, len: i }))?;
             m.put("moe.experts.down", Src::t(m.role("moe.down.stacked")?))?;
+        }
+        MlpLayout::FusedGateFirstInOut => {
+            // Llama-4: gate_up_proj [E, D, 2I] with the gate columns first, down_proj [E, I, D].
+            let gu = Src::t(m.role("moe.gate_up.stacked")?).transpose();
+            m.put("moe.experts.gate", gu.clone().take(1, Pick::Range { start: 0, len: i }))?;
+            m.put("moe.experts.up", gu.take(1, Pick::Range { start: i, len: i }))?;
+            m.put("moe.experts.down", Src::t(m.role("moe.down.stacked")?).transpose())?;
         }
         MlpLayout::FusedInterleaved => {
             // gpt-oss: gate_up_proj [E, D, 2I] with gate/up interleaved, down_proj [E, I, D].
@@ -466,8 +607,15 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
         }
     }
     if let Some(sh) = &s.shared {
-        let spec =
-            MlpSpec { intermediate: sh.intermediate, act: s.act, gated: true, glu: Glu::Standard, up_bias: false, down_bias: false };
+        let spec = MlpSpec {
+            intermediate: sh.intermediate,
+            act: s.act,
+            gated: true,
+            glu: Glu::Standard,
+            up_bias: false,
+            down_bias: false,
+            name: None,
+        };
         mlp(m, &spec, "moe.shared", MlpLayout::Separate)?;
         if sh.sigmoid_gate {
             m.lin("moe.shared_gate", "moe.shared_gate", false)?;

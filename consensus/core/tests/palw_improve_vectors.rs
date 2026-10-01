@@ -72,6 +72,7 @@ fn policy() -> Value {
         ("w_eval = beacon_delay + 32 (E12)", Box::new(|p| p.windows.w_eval = p.windows.beacon_delay + 32)),
         ("w_eval = beacon_delay + 33", Box::new(|p| p.windows.w_eval = p.windows.beacon_delay + 33)),
         ("grid below L_e", Box::new(|p| p.windows.grid = 900)),
+        ("grid = L_e (E18)", Box::new(|p| p.windows.grid = 950)),
         ("α = 25 (untabled)", Box::new(|p| p.eval.alpha_permille = 25)),
         ("α = 10", Box::new(|p| p.eval.alpha_permille = 10)),
         ("k_max = 9 (past the drill's 8)", Box::new(|p| p.k_max = 9)),

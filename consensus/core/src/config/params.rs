@@ -2857,8 +2857,8 @@ pub struct Params {
 
     /// **RFC-0002 Phase F, the second IR fence** (`crate::palw_tir_fence2_v1`): the consensus half of
     /// the fixes after the DAA-2,000 release — ref2's H7 (the `TopK` row of the box demand and the
-    /// value bound `V`), the `Select`-arm work credit, and the IR data-availability unit
-    /// `TirStepLeaf { index }`. A bare height; `None` on every preset (testnet-12 included) until a
+    /// value bound `V`), the `Select`-arm work credit, and the IR data-availability units
+    /// `TirStepLeaf { index }` and `TirStepNode { level, index }`. A bare height; `None` on every preset (testnet-12 included) until a
     /// later flag day arms it. Hashed Some-only in every writer with the `never()` collapse, so a build
     /// that carries the field fingerprints and peers exactly as one that does not. Refused by
     /// [`Self::validate_palw_tir_fence2`] off ConsensusV2, without `palw_tir_v1` in force at or below
@@ -19217,8 +19217,9 @@ pub fn palw_t12_launch_params_v1() -> Params {
     let mut params = palw_t12_shipped_params();
     // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
     // DAA-750 list: testnet-12 as it launched carries neither.
-    for fence in PALW_T12_TIR_FENCE2_FENCES_V1
+    for fence in PALW_T12_DECODE_RULES_FENCES_V1
         .iter()
+        .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
         .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V3)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V2)
@@ -19709,14 +19710,12 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V2: &[PalwPostLaunchFenceV1] = &[
 
 /// **FP Job V4's flag-day entry** (RFC-0001 §A.4, lane fp-sampler, 2026-09-27): ADR-0082 D10 + D11
 /// + "only V4 FP jobs from here", one fence (`palw_fp_decode_rules`) and its bundle mirror, set
-/// through its own `set` like every entry of the post-launch lists. **Dormant on this branch** — no
-/// list carries it, so every shipped id is unchanged — and arming it at the integration is a
-/// one-entry addition to the flag day's list.
-///
-/// TODO(int-6, flag day DAA 1,500): add `PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1` to the third
-/// post-launch list (`PALW_T12_POST_LAUNCH_FENCES_V3`, the DAA-1,500 flag day armed with the capacity
-/// work) — one line — and re-pin testnet-12 (`scripts/t12-repin.sh --shipping`). Its prerequisite
-/// `palw_fp_derived_work` is armed at testnet-12's genesis, so `validate_palw_v2` holds at any height.
+/// through its own `set` like every entry of the post-launch lists. **Dormant** — it rides its own
+/// flag-day list, [`PALW_T12_DECODE_RULES_FENCES_V1`], whose height is `None` (RFC-0003's FP Job V5
+/// and RFC-0004's improvement fence both require it in force at or below them), so every shipped id is
+/// unchanged. Arming it is the one line [`PALW_T12_DECODE_RULES_DAA`] and a re-pin of testnet-12
+/// (`scripts/t12-repin.sh --shipping`). Its own prerequisite `palw_fp_derived_work` is armed at
+/// testnet-12's genesis, so `validate_palw_v2` holds at any height.
 pub const PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
     name: "palw_fp_decode_rules",
     set: |params, at| {
@@ -19792,8 +19791,8 @@ fn palw_t12_arm_tir_flag_day_v1(params: &mut Params) {
 }
 
 /// **testnet-12's second IR flag day: the fixes after DAA 2,000** — `palw_tir_fence2` alone
-/// ([`crate::palw_tir_fence2_v1`]: ref2's H7 `TopK` row, the `Select`-arm work credit, the IR DA unit
-/// `TirStepLeaf`). Its prerequisite is the IR flag day's `palw_tir_v1` at or below it
+/// ([`crate::palw_tir_fence2_v1`]: ref2's H7 `TopK` row, the `Select`-arm work credit, the IR DA units
+/// `TirStepLeaf` and `TirStepNode`). Its prerequisite is the IR flag day's `palw_tir_v1` at or below it
 /// (`validate_palw_tir_fence2`).
 pub const PALW_T12_TIR_FENCE2_FENCES_V1: &[PalwPostLaunchFenceV1] = &[crate::palw_tir_fence2_v1::PALW_T12_TIR_FENCE2_ENTRY];
 
@@ -19813,12 +19812,35 @@ fn palw_t12_arm_tir_fence2_v1(params: &mut Params) {
     }
 }
 
+/// **testnet-12's decode-rules flag day — `palw_fp_decode_rules` alone** (ADR-0082 D10 seed/temperature
+/// and D11 repeat penalty, FP Job V4 only from there; [`PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1`]). It
+/// is the prerequisite RFC-0003's FP Job V5 and RFC-0004's improvement fence name — an evaluation's
+/// generated text is a decode under these rules — so it arms at or below either. Its own list so the
+/// release that arms it names one height for it; a drill crosses it with `--palw-drill-decode-rules-at`.
+pub const PALW_T12_DECODE_RULES_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1];
+
+/// **The decode-rules flag day's height — `None` until the user sets it.** While `None` the list is
+/// dormant on every ruleset, the shipped one included, and every shipped id is unchanged. It must be a
+/// height no other fence uses (not 750, 1,000, 1,300, 1,700, 2,000 or the second IR flag day's): the fork
+/// id names heights, not fences.
+pub const PALW_T12_DECODE_RULES_DAA: Option<u64> = None;
+
+/// **The decode-rules flag day, armed** — every entry of [`PALW_T12_DECODE_RULES_FENCES_V1`] at
+/// [`PALW_T12_DECODE_RULES_DAA`] through its own `set` (which writes the bundle's mirror), on the
+/// ASSEMBLED ruleset, after the IR flag days; a no-op while the height is `None`.
+fn palw_t12_arm_decode_rules_v1(params: &mut Params) {
+    let Some(at) = PALW_T12_DECODE_RULES_DAA else { return };
+    for fence in PALW_T12_DECODE_RULES_FENCES_V1 {
+        (fence.set)(params, Some(ForkActivation::new(at)));
+    }
+}
+
 /// **testnet-12 as its DAA-1,700 release (int-7, `7aba8dd57`) ships it** — [`palw_t12_shipped_params`] with
 /// the IR flag day's list set back to dormant: the ruleset a node that has not taken the IR release runs
 /// (the fleet's, params `770fb822…`, schedule `9410712f…`), and the baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_TIR_FENCE2_FENCES_V1.iter().chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1) {
+    for fence in PALW_T12_DECODE_RULES_FENCES_V1.iter().chain(PALW_T12_TIR_FENCE2_FENCES_V1).chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1) {
         (fence.set)(&mut params, None);
     }
     params
@@ -19830,7 +19852,12 @@ pub fn palw_t12_release_v3_params() -> Params {
 /// against.
 pub fn palw_t12_release_v2_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_TIR_FENCE2_FENCES_V1.iter().chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1).chain(PALW_T12_POST_LAUNCH_FENCES_V3) {
+    for fence in PALW_T12_DECODE_RULES_FENCES_V1
+        .iter()
+        .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
+        .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
+        .chain(PALW_T12_POST_LAUNCH_FENCES_V3)
+    {
         (fence.set)(&mut params, None);
     }
     params
@@ -19842,8 +19869,9 @@ pub fn palw_t12_release_v2_params() -> Params {
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_TIR_FENCE2_FENCES_V1
+    for fence in PALW_T12_DECODE_RULES_FENCES_V1
         .iter()
+        .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
         .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V3)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V2)
@@ -19896,6 +19924,8 @@ fn palw_t12_params_with_registry_v1(
     palw_t12_arm_tir_flag_day_v1(&mut params);
     // RFC-0002 Phase F's second IR flag day (dormant while its height is `None`).
     palw_t12_arm_tir_fence2_v1(&mut params);
+    // The decode-rules flag day (ADR-0082 D10/D11; RFC-0003/0004's prerequisite): dormant while its height is `None`.
+    palw_t12_arm_decode_rules_v1(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or

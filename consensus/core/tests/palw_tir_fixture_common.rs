@@ -29,7 +29,7 @@ use kaspa_consensus_core::palw_tir_class_v1::{
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirEvidenceStoreV1, PalwTirInventoryIndexV1, PalwTirLogitsConsistencyV1,
     PalwTirTraceLanesV1, build_tir_cone_refutation_v1, check_tir_cone_refutation_v1, check_tir_decode_token_tiled_v1,
-    check_tir_logits_consistency_v1, palw_tir_leaf_interval_v1,
+    check_tir_logits_consistency_v1, palw_tir_leaf_interval_v1, palw_tir_step_node_parts_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::{
     PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirLeafKindV1, PalwTirLeafV1, PalwTirStepBindingV1, PalwTirStepSpaceV1,
@@ -364,6 +364,12 @@ impl PalwTirEvidenceStoreV1 for Store<'_> {
             rows_root: tiled_logits_rows_root_v1(&self.f.ctx, &self.x.rows)?,
             generated_token_ids: self.x.generated.clone(),
         }))
+    }
+    fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        palw_tir_step_node_parts_v1(&self.x.hashes, level, index)
+    }
+    fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        kaspa_consensus_core::palw_tir_court_v1::palw_tir_row_node_parts_v1(&self.f.ctx, &self.x.rows, level, index)
     }
 }
 

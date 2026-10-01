@@ -426,7 +426,7 @@ class Drive:
         self.status, self.status_path = got if got else (None, None)
         self.ids = {n: model_id(n) for n in ("head", "win", "lose", "winc")}
         self.milestones()
-        for step in (self.step_m5_below, self.step_m5_cross, self.step_register_classes, self.step_lines, self.step_policies,
+        for step in (self.step_m5_below, self.step_m5_below_verify, self.step_m5_cross, self.step_register_classes, self.step_lines, self.step_policies,
                      self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks):
             key = step.__name__
             if self.s.d["failed"].get(key):
@@ -454,6 +454,12 @@ class Drive:
                 e = row.get("open_epoch")
                 er = epoch_row(row, e) if e else None
                 out[f"line:{line}"] = f"e{e}:{er['state']}" if er else f"idle head={row['head'][:8]} next_due={row['next_due_daa']}"
+                view = eval_view(self.status, lid, e) if e else None
+                if view:
+                    jobs = [j for j in view["jobs"] if j.get("claim")]
+                    final = sum(1 for j in jobs if j["claim"].get("final_daa") is not None)
+                    voided = sum(1 for j in jobs if j["claim"].get("voided"))
+                    out[f"eval:{line}"] = f"items={len(view['items'])} claimed={len(jobs)} final={final} void={voided}"
         return out
 
     # ----- milestones -------------------------------------------------------------------------------------------
@@ -544,6 +550,38 @@ class Drive:
         m = re.search(pattern, data)
         return m.group(0) if m else None
 
+    def step_m5_below_verify(self):
+        """What the object did on both sides: dropped by name on the new nodes, skipped by the old, one tip."""
+        if self.s.done("m5-below-verified") or not self.s.done("m5-below") or self.s.d["done"]["m5-below"].get("result") == "INCOMPLETE":
+            return
+        cur = self.s.get("m5_below") or {}
+        if self.daa < cur.get("daa", 0) + 3:
+            return
+        lack = first_lacking_fence()
+        pat_new = r"Block \S+: \S+ was dropped by name below palw_improvement_v1, and the block stands \(RFC-0004\)"
+        pat_old = r"\[palw-lifecycle\] carrier .* produced no object"
+        got_new = self.log_after("new0", cur.get("cur_new", 0), pat_new)
+        got_old = self.log_after("old", cur.get("cur_old", 0), pat_old)
+        agree = None
+        for _ in range(12):
+            a, b = daa_of("new0"), daa_of("old")
+            ra, rb = call(jport("new0"), "getBlockDagInfo", {}), call(jport("old"), "getBlockDagInfo", {})
+            sa, sb = str(pick(ra, "sink", default="")), str(pick(rb, "sink", default=""))
+            if a is not None and a == b and sa and sa == sb:
+                agree = (a, sa[:16])
+                break
+            time.sleep(5)
+        os.makedirs(f"{EVID}/dm5", exist_ok=True)
+        with open(f"{EVID}/dm5/below.txt", "w") as f:
+            f.write(f"new0: {got_new}\nold: {got_old}\ntips: {agree}\n")
+        deadline = (lack[1] if lack else IMPROVE_AT) - 1
+        n = self.s.tried("m5-below-verify")
+        if got_new and got_old and agree and agree[0] < deadline:
+            self.s.mark("m5-below-verified", result="PASS", new=got_new, old=got_old, tips=agree)
+        elif n >= 6 or self.daa >= deadline:
+            self.s.mark("m5-below-verified", result="FAIL" if (got_new is None or got_old is None) else "INCOMPLETE",
+                        why=f"new0 {'dropped it' if got_new else 'did NOT log the drop'}; old {'skipped it' if got_old else 'did NOT log the skip'}; tips {agree}")
+
     def step_m5_cross(self):
         if self.s.done("m5-cross") or not self.s.done("m5-below"):
             return
@@ -609,6 +647,9 @@ class Drive:
                                         "--bond", bond_of(7), "--key-file", seed_of(7), "--yes"]
             rc, text = run(cmd, home=UHOME)
             lid = parse_after(text, "line id")
+            if rc != 0 and any(w in text for w in ("already spent", "no mature", "mempool", "orphan")):
+                log(f"line-found {name}: the funding output is not free yet; waiting for the previous carrier to be mined")
+                return
             if rc != 0 or not lid:
                 raise RuntimeError(f"line-found {name}: {text.strip()[-300:]}")
             lines[name] = lid
@@ -725,6 +766,9 @@ class Drive:
             if rc != 0:
                 raise RuntimeError(f"setter set {s['name']}: {text.strip()[-300:]}")
             objs.append(out)
+            if s.get("withhold"):
+                self.s.put(f"{key}:withheld", [*(self.s.get(f"{key}:withheld") or []), s["name"]])
+                continue  # committed, never revealed: D-M6's withholding setter
             prompt_files.append(out + ".prompts")
             key_files.append(out + ".keys")
         ok, text = submit(objs)
@@ -799,12 +843,16 @@ class Drive:
             if e1:
                 self.attack_copy(lines["W1"], e1)
                 self.attack_late(lines["W1"], e1)
-                self.attack_early_keys(lines["W1"], e1)
+        # The attacks that could cost a line its epoch run on L, whose expected outcome (NoChange) they cannot spoil: the early
+        # keys in its first epoch, the hold-out flood in its second (the flood costs the epoch its items, so it never runs on a
+        # line whose promotion another drill needs).
         if "L" in lines:
             row = line_status(self.status, lines["L"])
-            e1 = epoch_row(row, 1)
+            e1, e2 = epoch_row(row, 1), epoch_row(row, 2)
             if e1:
-                self.attack_holdout_spam(lines["L"], e1)
+                self.attack_early_keys(lines["L"], e1)
+            if e2:
+                self.attack_holdout_spam(lines["L"], e2)
 
     def attack_copy(self, lid, e1):
         """A copy of the entered candidate by another bond, in the same window: refused (the class is entered)."""
@@ -837,9 +885,9 @@ class Drive:
     def attack_early_keys(self, lid, e1):
         """The keys of a set revealed while the outputs are not final: they must stay hidden (spec 17 §17.8.2)."""
         k = "attack:early-keys"
-        if self.s.done(k) or e1["state"] != "Evaluating" or not self.s.done("W1:e1:prompts"):
+        if self.s.done(k) or e1["state"] != "Evaluating" or not self.s.done("L:e1:prompts"):
             return
-        files = [p for p in (self.s.get("W1:e1:key-files") or []) if os.path.exists(p)]
+        files = [p for p in (self.s.get("L:e1:key-files") or []) if os.path.exists(p)]
         if not files:
             return
         cursor = {n: (os.path.getsize(f"{WORK}/{n}/kaspad.out") if os.path.exists(f"{WORK}/{n}/kaspad.out") else 0) for n in ("new0", "new3")}
@@ -852,7 +900,7 @@ class Drive:
         hard_case_fee, and a case whose key is never revealed is dropped from the draw — the cost of killing an epoch."""
         k = "attack:holdout-spam"
         if self.s.done(k) or e1["state"] != "HoldOut":
-            return
+            return  # (e1 is the epoch the flood runs in: L's second)
         n_cases = 40
         objs = []
         for i in range(n_cases):
@@ -922,16 +970,22 @@ def v_all(checks):
 
 
 def verdict_dm5(sd):
-    below, cross = sd["done"].get("m5-below"), sd["done"].get("m5-cross")
+    below, ver, cross = sd["done"].get("m5-below"), sd["done"].get("m5-below-verified"), sd["done"].get("m5-cross")
     if below is None:
         return "INCOMPLETE", "the below-the-fence half has not run yet"
     if below.get("result") == "INCOMPLETE":
         return "INCOMPLETE", below.get("why", "")
+    if ver is None:
+        return "INCOMPLETE", f"below: the object went in at DAA {below.get('submitted_daa')}; what the nodes did with it is not read yet"
+    if ver.get("result") != "PASS":
+        return ("FAIL" if ver.get("result") == "FAIL" else "INCOMPLETE"), "below: " + ver.get("why", "")
     if cross is None:
-        return "INCOMPLETE", f"below: the object went in at DAA {below.get('submitted_daa')}; the crossing is not reached"
+        return "INCOMPLETE", f"below: PASS (dropped by name, skipped by the old build, one tip); the crossing is not reached"
     if cross.get("result") != "PASS":
         return "FAIL", cross.get("why", "no refusal")
-    return "PASS", f"below: submitted at DAA {below.get('submitted_daa')}; crossed fence {cross['lack']}: {cross['refusal']}"
+    lack = cross["lack"]
+    note = "" if lack[0] == "improve" else f" (the first fence the old build lacks is {lack[0]}@{lack[1]}, not the improvement fence: name an older release closer to this one)"
+    return "PASS", f"below: dropped by name / skipped / one tip at DAA {ver['tips'][0]}; crossed fence {lack[1]}: {cross['refusal']}{note}"
 
 
 def _outcome_class(outcome):
@@ -1056,10 +1110,23 @@ def verdict_dm6(sd, st, lines):
         res.append((None, sp.get("why", "")))
     else:
         row = line_status(st, lines.get("L", "")) if st else None
-        e1 = epoch_row(row, 1) if row else None
-        n = e1["counts"]["holdout_cases"] if e1 else None
+        e2 = epoch_row(row, 2) if row else None
+        n = e2["counts"]["holdout_cases"] if e2 else None
         ceiling = 4 * POLICY["eval"]["n"]
         res.append((None if n is None else n <= ceiling, f"hold-out pool bounded: {n} entries (ceiling 4n = {ceiling}) of {sp.get('built')} submitted"))
+        if e2 is not None and e2["state"] == "Decided":
+            res.append((str(e2.get("outcome", "")).startswith("NoChange"),
+                        f"the flood costs the epoch its items: {e2.get('outcome')} (32 hold-out cases at hard_case_fee {POLICY['fees']['hard_case_fee']} each)"))
+    wh = (sd.get("data") or {}).get("W2:e1:withheld")
+    if wh:
+        row = line_status(st, lines.get("W2", "")) if st else None
+        e1 = epoch_row(row, 1) if row else None
+        if e1 is None or e1["state"] != "Decided":
+            res.append((None, "the withholding setter's forfeit is read when W2's epoch is decided"))
+        else:
+            forfeited = int(((row or {}).get("pool") or {}).get("forfeited_in", 0))
+            bond = POLICY["fees"]["setter_bond"]
+            res.append((forfeited >= bond, f"withholding setter {wh}: its bond forfeited to the pool ({forfeited} sompi, bond {bond})"))
     ek = sd["done"].get("attack:early-keys")
     res.append((None if ek is None else True, "early keys: submitted while Evaluating; the epoch still scored only after the outputs were final" if ek else "early keys not run"))
     return v_all(res)
@@ -1071,6 +1138,8 @@ def selftest():
     sd = {"done": {}, "milestones": {}}
     assert verdict_dm5(sd)[0] == "INCOMPLETE"
     sd["done"]["m5-below"] = {"submitted_daa": 30}
+    assert verdict_dm5(sd)[0] == "INCOMPLETE"
+    sd["done"]["m5-below-verified"] = {"result": "PASS", "tips": (31, "ab")}
     assert verdict_dm5(sd)[0] == "INCOMPLETE"
     sd["done"]["m5-cross"] = {"result": "PASS", "lack": ("gen", 28), "refusal": "Fork-id mismatch on network testnet-12 at DAA 30 - this node has crossed fence 28"}
     assert verdict_dm5(sd)[0] == "PASS"

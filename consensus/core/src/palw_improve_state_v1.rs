@@ -385,17 +385,30 @@ pub struct PalwImprovementLineV1 {
     /// Submitters barred after a rollback, each with the DAA its bar ends (§17.10.3), at most
     /// [`PALW_IMPROVE_BARRED_MAX_V1`]; an expired bar is pruned when the line is advanced.
     pub barred: Vec<(PalwBondKeyV2, u64)>,
-    /// The epoch of the head's latest promotion — kept (with its winner's row) while a rollback can
-    /// name it (§17.10).
-    pub last_promotion: Option<u64>,
+    /// The head's latest promotion — its epoch, kept (with its winner's row) while a rollback can name
+    /// it, and its rollback terms pinned at the promotion (§17.10.1) [E22].
+    pub last_promotion: Option<PalwLastPromotionV1>,
     /// The epoch that ran the regression check of the latest promotion, kept for its proof.
     pub regression_epoch: Option<u64>,
     /// The predecessor the next epoch evaluates as `Previous` (§17.10.2), set at a promotion.
     pub regression_check: Option<Hash64>,
 }
 
-/// The most bars a line keeps (the oldest-ending is dropped past it).
+/// The most bars a line keeps: a 17th re-sorts the list by end, latest first (stable), and drops the
+/// one that ends soonest (spec 17 §17.3.1) [D8/E19].
 pub const PALW_IMPROVE_BARRED_MAX_V1: usize = 16;
+
+/// **The latest promotion and its rollback terms** (spec 17 §17.10.1) [E22]: pinned at the promotion
+/// from the promoted epoch's policy — a later policy moves neither the owner's window nor the bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwLastPromotionV1 {
+    pub epoch: u64,
+    /// The last DAA at which the owner may roll the promotion back: the promotion's DAA plus
+    /// `rollback_epochs · L_e`.
+    pub owner_until_daa: u64,
+    /// How long a rollback bars the winner's submitter: `ban_epochs · L_e`.
+    pub ban_daa: u64,
+}
 
 /// **A line's policy record** in `improvement_policies` (spec 17 §17.3.1): the policy in force and a
 /// pending one.

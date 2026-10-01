@@ -1173,6 +1173,7 @@ mod tests {
                     step_ladder: 1 << 26,
                     held: false,
                     derived_work: crate::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared,
+                    logits_q24: true,
                 },
                 false,
                 false,

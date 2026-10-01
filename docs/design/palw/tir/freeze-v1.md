@@ -453,6 +453,22 @@ provisional `palw_tir_v1` ceilings (`max_macs_per_position` 2^37, `max_cone_work
 4. **The evaluation sample** is smaller than corpus-v1 §9's proposal (§5.2): one drift sequence per
    family, which is why the content control of §5.2 was needed.
 
+**Candidates for v2** (each changes the dtype table or a primitive, so it needs a new `prim_set_id`;
+v1 is not changed, and none of these blocks a v1 class):
+
+1. **A packed 4-bit dtype** (`i4`, two codes a byte, readable by `MatMul` and `Gather`). v1's
+   narrowest type is `i8`, so a pre-quantised checkpoint's 4-bit code costs a whole byte in the
+   artifact (hf-coverage §19, recorded 2026-09-29):
+   * GPTQ and AWQ at 4 bits: ≈ 1.03 bytes a weight at group 128, against ≈ 0.52 in the packed file
+     — about 2× the file. It is still ≈ 0.5× the fp16 weights, and the codes stay exact.
+   * GGUF: `Q4_0` ≈ 2.0× its file, `Q4_K` ≈ 2.2×, `Q5_K` ≈ 1.8×, `Q6_K` ≈ 1.5×, `Q8_0` ≈ 1.06×. The
+     K-quants also carry their per-sub-block scale and minimum as `i32` (0.25 bytes a weight at 32;
+     0.5 at 16). That part is a v1 lowering choice: a two-level scale (the fp16 `d` per 256, the
+     6-bit `sc` as `i8`) needs no new dtype.
+   * A packed `i4` would bring 4-bit artifacts down to about the file's size. It changes spec 04b's
+     dtype table and the descriptor, and every implementation's `MatMul`/`Gather` operand path
+     (reference, ref2, exec).
+
 Closed since the previous version of this document:
 
 * Mamba's fidelity row: the tied head (§5.2).

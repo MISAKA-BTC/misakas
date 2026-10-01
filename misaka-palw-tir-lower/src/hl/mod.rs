@@ -20,7 +20,7 @@ pub mod build;
 pub mod cost;
 
 use crate::rope::{AlibiSpec, RopeFreqs, RopeStyle};
-use crate::spec::{Act, Glu, HeadMap, NormSpec, RouterSpec};
+use crate::spec::{Act, Glu, HeadMap, NormSpec, QTemperature, RouterSpec};
 use serde::Serialize;
 
 pub use build::build_program;
@@ -135,6 +135,12 @@ pub enum Op {
         style: RopeStyle,
         table: u32,
     },
+    /// Llama-4's attention temperature: `x · t(pos)`, `t` the spec's [`QTemperature`]. In: `[x, Pos]`.
+    PosScale {
+        temp: QTemperature,
+    },
+    /// `x · p[0]` for a learned per-layer scalar `p` (Gemma-4's `layer_scalar`). In: `[x, p [1]]`.
+    ScaleParam,
     // ── history (Hist states) ──
     /// Append a row to a `Hist` state. In: `[x, State]`.
     HistAppend,
@@ -150,6 +156,8 @@ pub enum Op {
         window: Option<usize>,
         alibi: Option<AlibiSpec>,
         sinks: bool,
+        /// Chunked attention: only the keys of the query's own `chunk`-position chunk.
+        chunk: Option<usize>,
     },
     /// Multi-head latent attention over a compressed history (DeepSeek). Keys/values are
     /// `kv_b · latent` per head plus the shared rotary key. In: `[q, State(latent), State(k_rope), kv_b]`.
@@ -216,13 +224,15 @@ pub enum Op {
         experts: usize,
         top_k: usize,
     },
-    /// `Σ_j w_j · down_e(glu(gate_e x, up_e x))` over the selected experts.
+    /// `Σ_j w_j · down_e(glu(gate_e x, up_e x))` over the selected experts — or, `input_scaled`
+    /// (Llama-4), `Σ_j down_e(glu(gate_e x_j, up_e x_j))` with `x_j = w_j · x`.
     /// In: `[x, ids, weights, gate [E,I,D], up [E,I,D], down [E,D,I], (gate_b, up_b, down_b)]`.
     MoeExperts {
         top_k: usize,
         act: Act,
         glu: Glu,
         bias: bool,
+        input_scaled: bool,
     },
 }
 
@@ -249,6 +259,8 @@ impl Op {
             Op::GatedRmsNorm { .. } => "GatedRmsNorm",
             Op::L2Norm { .. } => "L2Norm",
             Op::Rope { .. } => "Rope",
+            Op::PosScale { .. } => "PosScale",
+            Op::ScaleParam => "ScaleParam",
             Op::HistAppend => "HistAppend",
             Op::Attention { .. } => "Attention",
             Op::MlaAttention { .. } => "MlaAttention",
@@ -342,6 +354,8 @@ pub struct CarryDecl {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HlProgram {
     pub architecture: String,
+    /// What `post` produces: logits, or an encoder's embedding.
+    pub output: HlOutput,
     pub vocab: usize,
     pub hidden: usize,
     pub carries: Vec<CarryDecl>,
@@ -353,11 +367,29 @@ pub struct HlProgram {
     pub post: usize,
     /// Block index per layer.
     pub schedule: Vec<u16>,
+    /// The model layer each occurrence of `schedule` belongs to, for reading its weights (`{L}`):
+    /// the identity unless a layer runs as more than one block (a Gemma-4 layer is its mixer half
+    /// and its FFN half, NF-12's 512 nodes being too few for one).
+    pub layer_of: Vec<usize>,
+}
+
+/// What a program's `post` produces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum HlOutput {
+    /// Logits, through the head.
+    Logits,
+    /// An encoder's embedding row, L2-normalised or not.
+    Embedding { normalized: bool },
 }
 
 impl HlProgram {
+    /// Block occurrences between `pre` and `post` (a layer split in two counts twice).
     pub fn num_layers(&self) -> usize {
         self.schedule.len()
+    }
+    /// The model layer of occurrence `l` (see [`HlProgram::layer_of`]).
+    pub fn model_layer(&self, l: usize) -> usize {
+        self.layer_of.get(l).copied().unwrap_or(l)
     }
     /// Params referenced by a block.
     pub fn block_params(&self, b: usize) -> Vec<u32> {

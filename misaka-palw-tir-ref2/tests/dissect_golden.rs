@@ -53,7 +53,11 @@ fn dissect_vectors() {
     for f in &files {
         let d = read_json(f);
         assert_eq!(d["format"], "palw-tir-v1/dissect-vectors/1");
-        let pv = read_json(&vectors_dir().join(d["program"].as_str().unwrap()));
+        // A vector names its program's file, or carries the program inline (the H-series' own: H1, H2).
+        let pv = match d["program"].as_str() {
+            Some(path) => read_json(&vectors_dir().join(path)),
+            None => d["inline"].clone(),
+        };
         let prog = decode_canonical(&hex_decode(pv["program_borsh_hex"].as_str().unwrap())).unwrap();
         let params = params_of(&prog, &pv["params"]);
         let job = &d["job"];

@@ -50,6 +50,40 @@ pub struct RopeFreqs {
     pub attention_factor: f64,
     pub dynamic: Option<DynamicNtk>,
     pub longrope: Option<LongRopeSwitch>,
+    /// The multimodal rope (Qwen2-VL, Qwen2.5-VL, Qwen3-VL, Qwen3.5): which position component
+    /// `(t, h, w)` rotates each frequency. With the components equal (text only) it is the plain
+    /// rope.
+    pub mrope: Option<MRope>,
+}
+
+/// `mrope_section` and its layout over the `dim / 2` frequencies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct MRope {
+    pub section: [usize; 3],
+    /// Qwen3-VL's and Qwen3.5's layout (`mrope_interleaved`): `h` and `w` take every third
+    /// frequency from 1 and 2, `3 · section[k]` long, and `t` the rest. Otherwise (Qwen2-VL)
+    /// contiguous sections `t`, `h`, `w`.
+    pub interleaved: bool,
+}
+
+impl MRope {
+    /// The position component (`0` t, `1` h, `2` w) that rotates frequency `j`.
+    pub fn component(&self, j: usize) -> usize {
+        let [t, h, w] = self.section;
+        if self.interleaved {
+            match j % 3 {
+                1 if j < 3 * h => 1,
+                2 if j < 3 * w => 2,
+                _ => 0,
+            }
+        } else if j < t {
+            0
+        } else if j < t + h {
+            1
+        } else {
+            2
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -83,6 +117,7 @@ impl RopeFreqs {
             attention_factor: 1.0,
             dynamic: None,
             longrope: None,
+            mrope: None,
         }
     }
 
@@ -192,6 +227,18 @@ fn take_f64_list(m: &mut Map<String, Value>, k: &str) -> Result<Option<Vec<f64>>
     }
 }
 
+/// LongRoPE's inverse frequencies for extension factors `ext` (`dim / 2` of them), in float32 as HF
+/// computes them: `1 / (ext_i · base^(2i/dim))`.
+pub fn longrope_inv_freq(base: f64, dim: usize, ext: &[f64]) -> Vec<f32> {
+    (0..dim / 2)
+        .map(|i| {
+            let e = (2 * i) as f32 / dim as f32;
+            let p = base.powf(e as f64) as f32;
+            1.0f32 / (ext[i] as f32 * p)
+        })
+        .collect()
+}
+
 fn get_mscale(scale: f64, mscale: f64) -> f64 {
     if scale <= 1.0 { 1.0 } else { 0.1 * mscale * scale.ln() + 1.0 }
 }
@@ -239,10 +286,18 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
     };
     match rc.rope_type.as_str() {
         "default" | "mrope" => {
-            // Qwen2-VL's multimodal rope: with the three position components equal (text only)
-            // every section reads the same position, which is the plain rope.
-            m.remove("mrope_section");
-            m.remove("mrope_interleaved");
+            // The multimodal rope: with the three position components equal (text only) every
+            // frequency reads the same position, which is the plain rope. The layout is kept: with
+            // an image the components differ (`crate::lower::ImageRows::mrope`).
+            let interleaved = m.remove("mrope_interleaved").and_then(|v| v.as_bool()) == Some(true);
+            if let Some(v) = m.remove("mrope_section") {
+                let s: Vec<usize> = v.as_array().map(|a| a.iter().filter_map(Value::as_u64).map(|x| x as usize).collect()).unwrap_or_default();
+                // HF splits the contiguous layout by the sections, which must cover the frequencies.
+                if s.len() != 3 || (!interleaved && s.iter().sum::<usize>() != dim / 2) {
+                    return Err(LowerError::bad(format!("{arch}: mrope_section {s:?} does not split {} frequencies in three", dim / 2)));
+                }
+                out.mrope = Some(MRope { section: [s[0], s[1], s[2]], interleaved });
+            }
             refuse_leftover(&m)?;
         }
         "linear" => {
@@ -338,17 +393,8 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
                 None if factor <= 1.0 => 1.0,
                 None => (1.0 + factor.ln() / (original_max as f64).ln()).sqrt(),
             };
-            let with = |ext: &[f64]| -> Vec<f32> {
-                (0..dim / 2)
-                    .map(|i| {
-                        let e = (2 * i) as f32 / dim as f32;
-                        let p = base.powf(e as f64) as f32;
-                        1.0f32 / (ext[i] as f32 * p)
-                    })
-                    .collect()
-            };
-            out.inv_freq = with(&short);
-            out.longrope = Some(LongRopeSwitch { inv_freq_long: with(&long), original_max });
+            out.inv_freq = longrope_inv_freq(base, dim, &short);
+            out.longrope = Some(LongRopeSwitch { inv_freq_long: longrope_inv_freq(base, dim, &long), original_max });
         }
         other => return Err(LowerError::not_lowerable(format!("{arch}: rope type `{other}` is not modelled"))),
     }
@@ -481,6 +527,25 @@ mod tests {
         let (c, s) = f.cos_sin(3);
         assert!((c[0] - 3f32.cos()).abs() < 1e-6 && (s[0] - 3f32.sin()).abs() < 1e-6);
         assert!((c[1] - 0.3f32.cos()).abs() < 1e-6);
+    }
+
+    /// The two M-RoPE layouts, against HF: Qwen2-VL's `cos.split(mrope_section · 2)` (contiguous
+    /// `t`, `h`, `w`) and Qwen3.5's `recomposition_frequencies` (`h` at `1, 4, …` below `3 · 11`,
+    /// `w` at `2, 5, …` below `3 · 10`, `t` elsewhere).
+    #[test]
+    fn m_rope_layouts_assign_each_frequency_as_hf_does() {
+        let f = compute_freqs("t", &rc("default", 1e4, json!({"mrope_section": [2, 1, 1]})), ctx(8, 128)).unwrap();
+        let mr = f.mrope.unwrap();
+        assert!(!mr.interleaved);
+        assert_eq!((0..4).map(|j| mr.component(j)).collect::<Vec<_>>(), [0, 0, 1, 2]);
+        let f = compute_freqs("t", &rc("default", 1e7, json!({"mrope_section": [11, 11, 10], "mrope_interleaved": true})), ctx(64, 128)).unwrap();
+        let mr = f.mrope.unwrap();
+        let hf: Vec<usize> = (0..32).map(|j| if j % 3 == 1 && j < 33 { 1 } else if j % 3 == 2 && j < 30 { 2 } else { 0 }).collect();
+        assert_eq!((0..32).map(|j| mr.component(j)).collect::<Vec<_>>(), hf);
+        assert_eq!(hf.iter().filter(|k| **k == 1).count(), 11);
+        assert_eq!(hf.iter().filter(|k| **k == 2).count(), 10);
+        // A contiguous layout that does not cover the frequencies is HF's error too.
+        assert!(compute_freqs("t", &rc("default", 1e4, json!({"mrope_section": [2, 1, 2]})), ctx(8, 128)).is_err());
     }
 
     #[test]

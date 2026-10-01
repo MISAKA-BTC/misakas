@@ -74,6 +74,9 @@ new5 5 5 eval 0 1
 new6 6 6 evalw 0 1
 old 7 - old 0 0"
 
+# NO_OLD=1: no old relay (D-M5 is then not run) — eight nodes become seven.
+[ "${NO_OLD:-0}" = 1 ] && NODES=$(echo "$NODES" | grep -v '^old ')
+
 say() { printf '[improve-dm %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 die() { say "REFUSED: $*"; exit 1; }
 row() { echo "$NODES" | awk -v n="$1" '$1==n'; }
@@ -112,7 +115,7 @@ improve|--palw-drill-improve-at|$IMPROVE_AT
 EOF
 }
 # A decode-rules flag, if the build has one: --palw-drill-<…decode…>-at.
-detect_decode_flag() { grep -oE -- '--palw-drill-[a-z0-9-]*decode[a-z0-9-]*-at' <<<"$1" | head -1; }
+detect_decode_flag() { { grep -oE -- '--palw-drill-[a-z0-9-]*decode[a-z0-9-]*-at' <<<"$1" || true; } | head -1; }
 # The `flag=height` list of the fences a binary (its --help text in $1) lists; the rest are the ones it lacks. Argument 2 = lacks.
 fence_args() {
     local help=$1 want=${2:-has} name flag at dflag

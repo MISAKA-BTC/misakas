@@ -77,6 +77,7 @@ print(f"          {t_ev:>5}  Closing: no more claims; every claim Final by ~{t_e
 print(f"          ~{t_ev + 170:>4}  epoch 1 decided (latest {t_score}) {H(t_ev + 170)}: W1 and W2 promote `win`, L is NoChange; W2's owner rolls back")
 print(f"          ~{t_ev + 170 + le:>4}  the grants' first vesting unit (vest_epochs 1, unit L_e)   {H(t_ev + 170 + le)}")
 nb = ((t_ev + 170) // g + 1) * g
+print(f"          {nb:>5}  L's epoch 2 (H's own claims keep its usage up): D-M6's hold-out flood in its HoldOut (~{nb + w['w_collect'] + w['w_submit'] + 1}), {H(nb + w['w_collect'] + w['w_submit'])}")
 print(f"          ~{nb + g:>4}  W1's epoch 2 (the regression check; `Previous` = H vs the promoted `win` on items W regresses) opens at the first boundary after W's")
 print(f"                 own claims are Final: ~{nb + g + le - 40}  it is decided  {H(nb + g + le - 40)}: the rollback by proof")
 print("  claims  3 lines x 8 items x (parent + candidates): ~56 evaluation claims in the 70-DAA window, one carrier per node per block")
@@ -103,7 +104,8 @@ preflight() {
     for b in "$KASPAD_BIN" "$CLI_BIN"; do
         [ -n "$b" ] && [ -x "$b" ] && ok "$b ($(shasum -a 256 "$b" | cut -c1-16))" || bad "binary missing: '${b}' (KASPAD_BIN, CLI_BIN)"
     done
-    if [ -n "$OLD_KASPAD_BIN" ] && [ -x "$OLD_KASPAD_BIN" ]; then ok "old release $OLD_KASPAD_BIN ($(shasum -a 256 "$OLD_KASPAD_BIN" | cut -c1-16))"
+    if [ "${NO_OLD:-0}" = 1 ]; then note "NO_OLD=1: no old relay, D-M5 will not run"
+    elif [ -n "$OLD_KASPAD_BIN" ] && [ -x "$OLD_KASPAD_BIN" ]; then ok "old release $OLD_KASPAD_BIN ($(shasum -a 256 "$OLD_KASPAD_BIN" | cut -c1-16))"
     else bad "OLD_KASPAD_BIN is unset or missing: D-M5 needs the release before the improvement fence (the fleet's), per the coordinator"; fi
     local H=""
     if [ -x "${KASPAD_BIN:-/nonexistent}" ]; then
@@ -123,7 +125,7 @@ preflight() {
         if grep -aqF "palw-improve-status" "$KASPAD_BIN"; then ok "kaspad writes the improvement status file (the drill's watcher reads it)"
         else bad "kaspad carries no improvement status file (no A10 node loop): not the build under test"; fi
     fi
-    if [ -n "$OLD_KASPAD_BIN" ] && [ -x "$OLD_KASPAD_BIN" ]; then
+    if [ "${NO_OLD:-0}" != 1 ] && [ -n "$OLD_KASPAD_BIN" ] && [ -x "$OLD_KASPAD_BIN" ]; then
         local O lacks; O=$(bin_help "$OLD_KASPAD_BIN")
         lacks=$(fence_args "$O" lacks | tr '\n' ' ')
         if [ -z "$(fence_args "$O" lacks)" ]; then bad "the old release lists every fence flag: it is not older than the release under test"
@@ -140,7 +142,11 @@ preflight() {
         HOME=${TMPDIR:-/tmp} "$CLI_BIN" palw tir-registration --help 2>&1 | grep -q -- "--parent" && ok "misaka palw tir-registration --parent" || bad "tir-registration has no --parent"
     fi
     local t
-    for t in palw-class palw-tir-fidelity; do [ -x "$TOOLS_BIN/$t" ] && ok "$TOOLS_BIN/$t" || bad "tool missing: $TOOLS_BIN/$t (TOOLS_BIN)"; done
+    [ -x "$TOOLS_BIN/palw-class" ] && ok "$TOOLS_BIN/palw-class" || bad "tool missing: $TOOLS_BIN/palw-class (TOOLS_BIN)"
+    # palw-tir-fidelity is the model step's (offline, before the chain): a release without it is fine once the model is built.
+    if [ -x "$TOOLS_BIN/palw-tir-fidelity" ]; then ok "$TOOLS_BIN/palw-tir-fidelity"
+    elif [ -s "$MODEL_DIR/ids/win.class" ]; then note "no palw-tir-fidelity in $TOOLS_BIN (the model is built already; only \`dm.sh model\` needs it)"
+    else bad "tool missing: $TOOLS_BIN/palw-tir-fidelity (TOOLS_BIN) — \`dm.sh model\` needs it"; fi
     if [ -x "$TOOLS_BIN/palw-class" ]; then
         local U; U=$("$TOOLS_BIN/palw-class" 2>&1 || true)
         local s
@@ -397,7 +403,7 @@ up() {
     keys
     touch "$WORK_DIR/.up"; mkdir -p "$VERDICT_DIR"
     local n
-    for n in new1 new2 new3 new0 new4 new5 new6 old; do bash "$A/nodes.sh" start "$n"; sleep 3; done
+    for n in new1 new2 new3 new0 new4 new5 new6 old; do [ -n "$(row "$n")" ] && { bash "$A/nodes.sh" start "$n"; sleep 3; }; done
     export_env; export SALT; SALT=$(salt)
     ( cd "$A"; nohup python3 dmdrive.py run >> "$WORK_DIR/drive.out" 2>&1 & echo $! > "$WORK_DIR/drive.pid" )
     say "up: tip $(tip new3); driver pid $(cat "$WORK_DIR/drive.pid"); next: dm.sh status / verdicts"

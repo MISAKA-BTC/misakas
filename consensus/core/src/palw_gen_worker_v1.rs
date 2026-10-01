@@ -36,7 +36,7 @@ pub struct PalwGenRandomV1 {
 
 impl RandomSource for PalwGenRandomV1 {
     fn random(&self, domain: u16, dist: RandomDist, step: u32, shape: &[u32]) -> Option<Tensor> {
-        let n: u64 = shape.iter().map(|d| *d as u64).product();
+        let n: u64 = shape.iter().fold(1u64, |acc, d| acc.saturating_mul(*d as u64));
         let (d, dtype) = match dist {
             RandomDist::Uniform { .. } => (misaka_palw_gen::RandDistV1::Uniform, DType::Idx),
             RandomDist::Normal => (misaka_palw_gen::RandDistV1::Normal, DType::I32),

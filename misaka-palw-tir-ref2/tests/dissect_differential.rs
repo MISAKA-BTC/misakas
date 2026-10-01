@@ -414,7 +414,7 @@ fn dummy_carriage(pp: &Prepared) -> cc::palw_tir_court_v1::PalwTirConeRefutation
         output_opening: cc::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: h, siblings: vec![] },
         output_preimage: cc::palw_step_leg::PalwStepTileLeafV1 { version: 1, coord, value_count: 0, values_le: vec![] },
         operands: cc::palw_step_refute::PalwStepInputRowV1 { preimages: vec![], run_siblings: vec![] },
-        params: vec![],
+        params: cc::palw_tir_court_v1::PalwTirParamOpeningV1::None,
         prompt_token_ids: vec![],
         prompt_ids_openings: vec![],
         decode_tokens: None,
@@ -1000,7 +1000,7 @@ fn cone_functions() {
                 if !mine_r.is_empty() {
                     for tile_len in [1u32, 3, 64] {
                         let mv = value_bound(&prog, b, n16, tile_len as u64);
-                        let fv = catch_any(|| cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(fb, n16, tile_len));
+                        let fv = catch_any(|| cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, fb, n16, tile_len));
                         if Ok(mv) != fv {
                             // Finding H2: the first implementation's V falls below the text's formula
                             // (and below the real closure: `value_bound_against_closures`).
@@ -1168,7 +1168,7 @@ fn investigate_value_bound() {
         println!(
             "tile_len {tl}: ref2 V {} first V {:?}; reductions {:?}",
             value_bound(&p, blk, node, tl),
-            cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp.blocks[blk], node, tl as u32),
+            cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, &fp.blocks[blk], node, tl as u32),
             ref2::dissect::cone_reductions(&p, blk, node)
         );
     }
@@ -1194,7 +1194,7 @@ fn value_bound_against_closures() {
                 }
                 for tl in [1u64, 3, 64] {
                     let mv = value_bound(p, b, n as u16, tl);
-                    let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp.blocks[b], n as u16, tl as u32);
+                    let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, &fp.blocks[b], n as u16, tl as u32);
                     if mv == fv {
                         continue;
                     }
@@ -1253,7 +1253,7 @@ fn value_bound_on_the_corpus() {
                 }
                 for tl in [64u64, 256] {
                     let mv = value_bound(p, b, n as u16, tl);
-                    let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp.blocks[b], n as u16, tl as u32);
+                    let fv = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, &fp.blocks[b], n as u16, tl as u32);
                     let obl = obligations(p, b, n as u16);
                     let fo = cc::palw_tir_dissect_v1::palw_tir_dissect_obligations_v1(&fp.blocks[b], n as u16);
                     rows.push(format!("b{b} n{n} tile_len {tl}: V ref2 {mv} first {fv}; obligations ref2 {obl:?} first {fo:?}"));

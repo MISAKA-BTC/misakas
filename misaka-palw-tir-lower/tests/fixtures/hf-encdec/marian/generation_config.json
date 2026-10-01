@@ -1,0 +1,10 @@
+{
+  "_from_model_config": true,
+  "decoder_start_token_id": 63,
+  "eos_token_id": 0,
+  "output_attentions": false,
+  "output_hidden_states": false,
+  "pad_token_id": 63,
+  "transformers_version": "5.17.0",
+  "use_cache": true
+}

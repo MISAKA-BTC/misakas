@@ -473,7 +473,7 @@ pub mod palw_gen_admission_v1;
 pub mod palw_gen_worker_v1;
 /// RFC-0003 §II.2.1 (RFC-0001's lane): FP Job V5 — a V4 job with image inputs, for a vision-language class; dormant behind `palw_fp_job_v5`.
 pub mod palw_fp_job_v5;
-/// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA unit `TirStepLeaf`.
+/// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA units `TirStepLeaf` and `TirStepNode`.
 pub mod palw_tir_fence2_v1;
 /// RFC-0004: the Model Improvement Protocol — the dormant `palw_improvement_v1` fence and its constants.
 pub mod palw_improve_v1;
@@ -514,6 +514,8 @@ pub mod palw_tir_one_move_v1;
 pub mod palw_tir_dissect_v1;
 /// RFC-0002 Phase F step F7 (PALW-TIR-38): the carried size of every terminal close of an IR class — the court's own read set, priced as carried.
 pub mod palw_tir_close_size_v1;
+/// RFC-0002 Phase F (PALW-TIR-38, `palw_tir_fence2`): the range twin of the close sizing — the element twin's read sets over ranges.
+pub mod palw_tir_close_range_v1;
 /// RFC-0004 §6.3 (PALW-MIP-15): composite artifacts — a candidate as its parent plus an adapter section, the parent never re-committed; sub-root openings, the composite and family rules, admission.
 pub mod palw_improve_composite_v1;
 /// RFC-0002 Phase F step F4: the step space of an IR class — commit-point tiles, Fixed-state checkpoints and history tiles as step leaves, in closed form.

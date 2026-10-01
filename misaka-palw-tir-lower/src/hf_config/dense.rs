@@ -217,7 +217,11 @@ struct FinishArgs<'s> {
 
 fn finish_llama(p: &mut P, f: Flavor, a: FinishArgs) -> Result<ArchSpec> {
     let theta = llama_defaults(f).theta;
-    let rope = p.rope(a.hd, RopeStyle::Half, Some(theta), None, 1.0, Some(a.max_pos), None)?;
+    // Ministral-3: Mistral with Llama-4's query scaling (`llama_4_scaling_beta`), applied after the
+    // rotation on every layer.
+    let ministral3 =
+        f == Flavor::Mistral && (a.arch == "Ministral3ForCausalLM" || p.cfg.opt_str("model_type")?.as_deref() == Some("ministral3"));
+    let (rope, q_temp) = p.rope_q_scaled(a.hd, RopeStyle::Half, Some(theta), None, 1.0, Some(a.max_pos), None, ministral3)?;
     let norm = NormSpec::rms(a.eps);
 
     let (mut emb_scale, mut multiplier, mut logit_scale, mut pre_scale) = (1.0, 1.0, 1.0, 1.0);
@@ -261,6 +265,7 @@ fn finish_llama(p: &mut P, f: Flavor, a: FinishArgs) -> Result<ArchSpec> {
         let mut at = attn(a.h, a.kv, a.hd, position, (a.qkv_bias, a.o_bias));
         at.scale = attn_scale;
         at.window = window_for(&a.types[i], a.sw);
+        at.q_temperature = q_temp;
         if f == Flavor::Qwen3 {
             at.qk_norm = Some(QkNorm { norm, scope: QkNormScope::PerHeadShared });
         }
@@ -280,6 +285,7 @@ fn finish_llama(p: &mut P, f: Flavor, a: FinishArgs) -> Result<ArchSpec> {
     }
     let model_type = match f {
         Flavor::Llama => "llama",
+        Flavor::Mistral if ministral3 => "ministral3",
         Flavor::Mistral => "mistral",
         Flavor::Qwen2 => "qwen2",
         Flavor::Qwen3 => "qwen3",
@@ -972,6 +978,293 @@ fn gemma_sandwich_names(model: &str, lm_head: &str) -> BTreeMap<String, String> 
     nm
 }
 
+/// **Gemma-4's text decoder** (`Gemma4ForCausalLM`):
+/// * Gemma's four RMSNorms around the mixer and the FFN. The gains are plain `w` here, not
+///   Gemma-3's `1 + w`. After them come the per-layer input (PLE, [`PleSpec`], when
+///   `hidden_size_per_layer_input` is set) and the learned `layer_scalar` on the layer's output
+///   ([`Residual::Sandwich`]).
+/// * Attention:
+///   - a per-head QK-norm with gains and a weightless V-norm, at scale 1;
+///   - sliding layers (`sliding_window`) with the default rope;
+///   - full layers with their own head width and KV heads (`per_layer_config`, or
+///     `global_head_dim`/`num_global_key_value_heads`) and the proportional rope: frequencies on the
+///     first `partial_rotary_factor` of each head, the rest unrotated. With `attention_k_eq_v`
+///     their values are the raw key projection.
+/// * FFN: a gated GeLU-tanh MLP. With `enable_moe_block`, a softmax top-k MoE runs beside it
+///   ([`Ffn::MlpMoe`]); its router reads the residual RMS-normed times a learned vector and
+///   `hidden^-½`, renormalises, and scales each weight by its expert's learned scale.
+/// * Head: the tied table under the final soft-cap.
+///
+/// Layers that reuse an earlier layer's keys and values (`num_kv_shared_layers`) are refused by
+/// name: the lowering carries only the residual between layers.
+pub(crate) fn gemma4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchSpec> {
+    let vocab = p.cfg.usize_or("vocab_size", 262_144)?;
+    let hidden = p.cfg.usize_or("hidden_size", 2304)?;
+    let inter = p.cfg.usize_or("intermediate_size", 9216)?;
+    let n = p.cfg.usize_or("num_hidden_layers", 30)?;
+    let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 8, Some(4), Some(256))?;
+    let act = p.act("hidden_activation", "gelu_pytorch_tanh")?;
+    let max_pos = p.cfg.usize_or("max_position_embeddings", 131_072)?;
+    let eps = p.cfg.f64_or("rms_norm_eps", 1e-6)?;
+    let tied = p.cfg.bool_or("tie_word_embeddings", true)?;
+    let bias = p.cfg.bool_or("attention_bias", false)?;
+    let sw = p.cfg.usize_or("sliding_window", 512)?;
+    match p.cfg.opt_str("use_bidirectional_attention")?.as_deref() {
+        None | Some("vision") => {}
+        Some(o) => return Err(LowerError::not_lowerable(format!("gemma4: use_bidirectional_attention `{o}` is not a causal LM"))),
+    }
+    // The last `num_kv_shared_layers` layers project no keys or values: each attends over those of
+    // the last earlier layer of its own type (transformers' `store_full_length_kv`), and with
+    // `use_double_wide_mlp` its MLP is twice as wide.
+    let kv_shared = p.cfg.usize_or("num_kv_shared_layers", 0)?;
+    let double_wide = p.cfg.bool_or("use_double_wide_mlp", false)?;
+    let first_shared =
+        n.checked_sub(kv_shared).ok_or_else(|| LowerError::bad(format!("gemma4: {kv_shared} KV-sharing layers of {n}")))?;
+    if kv_shared > 0 && first_shared == 0 {
+        return Err(LowerError::not_lowerable("gemma4: every layer shares keys and values, and no layer computes them"));
+    }
+    let k_eq_v = p.cfg.bool_or("attention_k_eq_v", false)?;
+    let types = p.layer_types(n, &["sliding_attention", "full_attention"], |i| {
+        if (i + 1) % 6 == 0 || i + 1 == n { "full_attention" } else { "sliding_attention" }
+    })?;
+    // One KV slot per layer type that has sharing layers, numbered by where its source is.
+    let mut kv_source: BTreeMap<&str, usize> = BTreeMap::new();
+    for t in &types[first_shared..] {
+        let src = types[..first_shared].iter().rposition(|u| u == t).ok_or_else(|| {
+            LowerError::not_lowerable(format!("gemma4: a KV-sharing `{t}` layer, and no earlier `{t}` layer computes keys and values"))
+        })?;
+        kv_source.insert(t.as_str(), src);
+    }
+    let mut sources: Vec<usize> = kv_source.values().copied().collect();
+    sources.sort_unstable();
+    let slot_of_source = |i: usize| sources.iter().position(|s| *s == i);
+    // The full layers' head width and KV heads: `per_layer_config` as transformers saves it, else
+    // the keys its constructor reads.
+    let mut per_layer: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+    match p.cfg.opt_obj("per_layer_config")? {
+        Some(o) => {
+            for (k, v) in o {
+                let i: usize = k.parse().map_err(|_| LowerError::bad(format!("gemma4: per_layer_config key `{k}`")))?;
+                let hd_i = v.get("head_dim").and_then(Value::as_u64).map_or(hd, |x| x as usize);
+                let kv_i = v.get("num_key_value_heads").and_then(Value::as_u64).map_or(kv, |x| x as usize);
+                if let Some(bad) =
+                    v.as_object().and_then(|m| m.keys().find(|k| !["head_dim", "num_key_value_heads"].contains(&k.as_str())))
+                {
+                    return Err(LowerError::not_lowerable(format!("gemma4: per_layer_config `{bad}` is not modelled")));
+                }
+                per_layer.insert(i, (hd_i, kv_i));
+            }
+        }
+        None => {
+            let ghd = p.cfg.usize_or("global_head_dim", 512)?;
+            let gkv = p.cfg.opt_usize("num_global_key_value_heads")?.filter(|_| k_eq_v).unwrap_or(kv);
+            for (i, t) in types.iter().enumerate() {
+                if t == "full_attention" {
+                    per_layer.insert(i, (ghd, gkv));
+                }
+            }
+        }
+    }
+    let d_pl = p.cfg.usize_or("hidden_size_per_layer_input", 256)?;
+    let vocab_pl = p.cfg.usize_or("vocab_size_per_layer_input", 262_144)?;
+    let moe_on = p.cfg.bool_or("enable_moe_block", false)?;
+    let softcap = p.cfg.opt_f64("final_logit_softcapping")?;
+    let norm = NormSpec::rms(eps);
+    let weightless = NormSpec { kind: NormKind::Rms, eps, gain: Gain::None, bias: false };
+    // Rotary tables per layer type, each at that type's head width.
+    let rope_for = |p: &P, full: bool, width: usize| -> Result<RopeSpec> {
+        let lt = if full { "full_attention" } else { "sliding_attention" };
+        let rc = crate::rope::read_rope_config(&p.cfg, Some(if full { 1_000_000.0 } else { 10_000.0 }), Some(lt))?;
+        match rc.rope_type.as_str() {
+            "proportional" => {
+                let prop = rc.params.get("partial_rotary_factor").and_then(Value::as_f64).unwrap_or(1.0);
+                let factor = rc.params.get("factor").and_then(Value::as_f64).unwrap_or(1.0);
+                if let Some(k) = rc.params.keys().find(|k| !["partial_rotary_factor", "factor"].contains(&k.as_str())) {
+                    return Err(LowerError::not_lowerable(format!("gemma4: proportional rope parameter `{k}`")));
+                }
+                // transformers: `rope_angles = int(prop · head_dim // 2)` frequencies over the head
+                // width, then zeros (those pairs are not rotated), all divided by `factor`.
+                let angles = (prop * width as f64 / 2.0).floor() as usize;
+                let inv: Vec<f32> = (0..width / 2)
+                    .map(|i| {
+                        if i < angles {
+                            let e = (2 * i) as f32 / width as f32;
+                            (1.0f32 / rc.theta.powf(e as f64) as f32) / factor as f32
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect();
+                Ok(RopeSpec {
+                    rotary_dim: width,
+                    offset: 0,
+                    style: RopeStyle::Half,
+                    freqs: crate::rope::RopeFreqs {
+                        rope_type: rc.rope_type.clone(),
+                        theta: rc.theta,
+                        dim: width,
+                        inv_freq: inv,
+                        attention_factor: 1.0,
+                        dynamic: None,
+                        longrope: None,
+                        mrope: None,
+                    },
+                })
+            }
+            _ => p.rope(width, RopeStyle::Half, Some(rc.theta), Some(lt), 1.0, Some(max_pos), None),
+        }
+    };
+    let ple = (d_pl > 0).then(|| PleSpec {
+        dim: d_pl,
+        vocab: vocab_pl,
+        table_scale: (d_pl as f64).sqrt(),
+        proj_scale: 1.0 / (hidden as f64).sqrt(),
+        norm,
+        combine_scale: std::f64::consts::FRAC_1_SQRT_2,
+        act,
+        post_norm: norm,
+    });
+    let moe_spec = if moe_on {
+        let e = p.cfg.opt_usize("num_experts")?.ok_or_else(|| LowerError::bad("gemma4: enable_moe_block without num_experts"))?;
+        let k = p.cfg.opt_usize("top_k_experts")?.ok_or_else(|| LowerError::bad("gemma4: enable_moe_block without top_k_experts"))?;
+        if k == 0 || k > e {
+            return Err(LowerError::bad(format!("gemma4: top-{k} of {e} experts")));
+        }
+        let mi = p.cfg.opt_usize("moe_intermediate_size")?.ok_or_else(|| LowerError::bad("gemma4: no moe_intermediate_size"))?;
+        let router = RouterSpec {
+            scoring: Scoring::Softmax,
+            linear_bias: false,
+            selection_bias: false,
+            groups: None,
+            normalize: true,
+            norm_eps: 0.0,
+            scale: 1.0,
+            jitter_eps: 0.0,
+            per_expert_scale: true,
+        };
+        p.layouts.experts = MlpLayout::FusedGateFirst;
+        Some(MoeSpec {
+            experts: e,
+            top_k: k,
+            intermediate: mi,
+            act,
+            glu: Glu::Standard,
+            expert_bias: false,
+            router,
+            shared: None,
+            input_scaled: false,
+        })
+    } else {
+        p.cfg.inert(&["num_experts", "top_k_experts", "moe_intermediate_size"]);
+        None
+    };
+    let mut ropes: BTreeMap<(bool, usize), RopeSpec> = BTreeMap::new();
+    let mut layers = Vec::with_capacity(n);
+    for (i, t) in types.iter().enumerate() {
+        let full = t == "full_attention";
+        let (hd_i, kv_i) = per_layer.get(&i).copied().unwrap_or((hd, kv));
+        if kv_i == 0 || h % kv_i != 0 {
+            return Err(LowerError::bad(format!("gemma4: layer {i}: {h} heads over {kv_i} kv heads")));
+        }
+        let rope = match ropes.get(&(full, hd_i)) {
+            Some(r) => r.clone(),
+            None => {
+                let r = rope_for(p, full, hd_i)?;
+                ropes.insert((full, hd_i), r.clone());
+                r
+            }
+        };
+        let mut at = attn(h, kv_i, hd_i, Position::Rope(rope), (bias, bias));
+        at.scale = 1.0;
+        at.qk_norm = Some(QkNorm { norm, scope: QkNormScope::PerHeadShared });
+        at.v_norm = Some(QkNorm { norm: weightless, scope: QkNormScope::PerHeadShared });
+        at.window = (!full).then_some(sw);
+        at.v_from_k = k_eq_v && full;
+        if (hd_i, kv_i) != (hd, kv) {
+            at.param_prefix = Some(format!("attn{hd_i}x{kv_i}"));
+        }
+        let shares = i >= first_shared;
+        if shares {
+            let src = kv_source[t.as_str()];
+            let slot = slot_of_source(src).expect("a source has a slot");
+            if per_layer.get(&src).copied().unwrap_or((hd, kv)) != (hd_i, kv_i) {
+                return Err(LowerError::bad(format!("gemma4: layer {i} shares the keys of layer {src}, whose heads differ")));
+            }
+            // It projects queries only: the K = V and V-norm facts are its source's.
+            at.kv_share = Some(KvShare::Consumer { slot });
+            at.v_from_k = false;
+            at.v_norm = None;
+        } else if let Some(slot) = slot_of_source(i) {
+            at.kv_share = Some(KvShare::Source { slot });
+        }
+        let mut mlp = gated_mlp(if shares && double_wide { 2 * inter } else { inter }, act, false);
+        if shares && double_wide {
+            mlp.name = Some("mlp2x".into());
+        }
+        let ffn = match &moe_spec {
+            Some(m) => Ffn::MlpMoe(Box::new(MlpMoeSpec {
+                mlp,
+                moe: m.clone(),
+                mlp_post: norm,
+                moe_pre: norm,
+                moe_post: norm,
+                router_norm: norm,
+                router_scale: 1.0 / (hidden as f64).sqrt(),
+            })),
+            None => Ffn::Mlp(mlp),
+        };
+        let residual = Residual::Sandwich {
+            pre_mixer: norm,
+            post_mixer: norm,
+            pre_ffn: norm,
+            post_ffn: norm,
+            ple: ple.clone(),
+            layer_scalar: true,
+        };
+        layers.push(LayerSpec { mixer: Mixer::Attention(at), ffn, residual, post_scale: 1.0 });
+    }
+    let emb = format!("{model}embed_tokens");
+    let mut nm = gemma_sandwich_names(model, if tied { &emb } else { lm_head });
+    let l = format!("{model}layers.{{L}}.");
+    for (k2, v2) in [
+        ("norm.post_mlp", format!("{l}post_feedforward_layernorm_1")),
+        ("norm.moe", format!("{l}pre_feedforward_layernorm_2")),
+        ("norm.post_moe", format!("{l}post_feedforward_layernorm_2")),
+        ("moe.router_norm", format!("{l}router.scale")),
+        ("moe.router", format!("{l}router.proj")),
+        ("moe.expert_scale", format!("{l}router.per_expert_scale")),
+        ("moe.gate_up.stacked", format!("{l}experts.gate_up_proj")),
+        ("moe.down.stacked", format!("{l}experts.down_proj")),
+        ("ple.proj", format!("{model}per_layer_model_projection")),
+        ("ple.table", format!("{model}embed_tokens_per_layer")),
+        ("ple.norm", format!("{model}per_layer_projection_norm")),
+        ("ple.gate", format!("{l}per_layer_input_gate")),
+        ("ple.out", format!("{l}per_layer_projection")),
+        ("ple.post_norm", format!("{l}post_per_layer_input_norm")),
+        ("layer.scalar", format!("{l}layer_scalar")),
+    ] {
+        nm.insert(k2.into(), v2);
+    }
+    let mut emb_spec = plain_embedding(hidden);
+    emb_spec.scale = (hidden as f64).sqrt();
+    let mut head = plain_head(tied);
+    head.softcap = softcap;
+    Ok(p.finish_spec(SpecParts {
+        model_type: "gemma4_text",
+        families: vec!["C1", "C2"],
+        vocab,
+        hidden,
+        max_pos: Some(max_pos),
+        embedding: emb_spec,
+        layers,
+        final_norm: Some(norm),
+        head,
+        names: nm,
+        prefix_aliases: vec![],
+        conv1d: false,
+    }))
+}
+
 /// Gemma-3 text decoder (also the decoder of `Gemma3ForConditionalGeneration`): Gemma-2 wiring,
 /// per-head `(1+w)` QK-norm instead of score soft-capping, 5:1 sliding/global, and two rotary
 /// tables — `rope_local_base_freq` (no scaling) on sliding layers, `rope_theta`+`rope_scaling` on
@@ -1107,6 +1400,139 @@ pub(crate) fn phi3(p: &mut P) -> Result<ArchSpec> {
     Ok(p.finish_spec(SpecParts {
         model_type: "phi3",
         families: if sw.is_some() { vec!["C1", "C2"] } else { vec!["C1"] },
+        vocab,
+        hidden,
+        max_pos: Some(max_pos),
+        embedding: plain_embedding(hidden),
+        layers,
+        final_norm: Some(norm),
+        head: plain_head(tied),
+        names: nm,
+        prefix_aliases: vec![],
+        conv1d: false,
+    }))
+}
+
+/// GLM (`GlmForCausalLM`: glm-4-9b(-chat)-hf, GLM-Edge) and GLM-4 (`Glm4ForCausalLM`: GLM-4-0414,
+/// GLM-Z1): Llama math with a fused `gate_up_proj` (`[gate | up]`), q/k/v biases (`attention_bias`,
+/// default true; `o_proj` never has one) and a partial rotary (`partial_rotary_factor`, default 0.5)
+/// on interleaved pairs (`rotate_half` over `x[0::2]`, `x[1::2]`, the angles repeated pairwise).
+/// GLM-4 wraps each sublayer in a post-norm as well: `post_self_attn_layernorm` after attention,
+/// `post_mlp_layernorm` after the MLP (its `post_attention_layernorm` is the pre-MLP norm).
+pub(crate) fn glm(p: &mut P, v4: bool) -> Result<ArchSpec> {
+    let vocab = p.cfg.usize_or("vocab_size", 151552)?;
+    let hidden = p.cfg.usize_or("hidden_size", 4096)?;
+    let inter = p.cfg.usize_or("intermediate_size", 13696)?;
+    let n = p.cfg.usize_or("num_hidden_layers", 40)?;
+    let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 32, Some(2), Some(128))?;
+    let act = p.act("hidden_act", "silu")?;
+    let max_pos = p.cfg.usize_or("max_position_embeddings", 131072)?;
+    let eps = p.cfg.f64_or("rms_norm_eps", 1.5625e-7)?;
+    let tied = p.cfg.bool_or("tie_word_embeddings", false)?;
+    let bias = p.cfg.bool_or("attention_bias", true)?;
+    let partial = super::legacy::partial_factor(p, &["partial_rotary_factor"], 0.5)?;
+    let rd = (hd as f64 * partial) as usize;
+    let rope = p.rope(rd, RopeStyle::Interleaved, Some(10000.0), None, partial, Some(max_pos), None)?;
+    let norm = NormSpec::rms(eps);
+    let at = attn(h, kv, hd, Position::Rope(rope), (bias, false));
+    p.layouts.mlp = MlpLayout::FusedGateFirst;
+    let residual = if v4 {
+        Residual::Sequential { pre_mixer: Some(norm), post_mixer: Some(norm), pre_ffn: Some(norm), post_ffn: Some(norm), multiplier: 1.0 }
+    } else {
+        pre_norm(norm)
+    };
+    let layers = (0..n)
+        .map(|_| LayerSpec {
+            mixer: Mixer::Attention(at.clone()),
+            ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
+            residual: residual.clone(),
+            post_scale: 1.0,
+        })
+        .collect();
+    let l = "model.layers.{L}.";
+    let mut nm = llama_names("model.", "lm_head");
+    nm.remove("mlp.gate");
+    nm.remove("mlp.up");
+    nm.insert("mlp.gate_up".into(), format!("{l}mlp.gate_up_proj"));
+    if v4 {
+        nm.insert("norm.post_mix".into(), format!("{l}post_self_attn_layernorm"));
+        nm.insert("norm.post_ffn".into(), format!("{l}post_mlp_layernorm"));
+    }
+    if tied {
+        nm.insert("lm_head".into(), "model.embed_tokens".into());
+    }
+    Ok(p.finish_spec(SpecParts {
+        model_type: if v4 { "glm4" } else { "glm" },
+        families: vec!["C1"],
+        vocab,
+        hidden,
+        max_pos: Some(max_pos),
+        embedding: plain_embedding(hidden),
+        layers,
+        final_norm: Some(norm),
+        head: plain_head(tied),
+        names: nm,
+        prefix_aliases: vec![],
+        conv1d: false,
+    }))
+}
+
+/// OLMo-3 (`Olmo3ForCausalLM`): OLMo-2 (post-norms only, RMS QK-norm over the whole projection)
+/// with `layer_types` (default: every fourth layer full, the rest sliding) over `sliding_window`
+/// (default 4096) and rope parameters per layer type (both default θ 500,000; a legacy
+/// `rope_scaling` applies to the full-attention layers).
+pub(crate) fn olmo3(p: &mut P) -> Result<ArchSpec> {
+    let vocab = p.cfg.usize_or("vocab_size", 50304)?;
+    let hidden = p.cfg.usize_or("hidden_size", 4096)?;
+    let inter = p.cfg.usize_or("intermediate_size", 11008)?;
+    let n = p.cfg.usize_or("num_hidden_layers", 32)?;
+    let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 32, None, None)?;
+    let act = p.act("hidden_act", "silu")?;
+    let max_pos = p.cfg.usize_or("max_position_embeddings", 2048)?;
+    let eps = p.cfg.f64_or("rms_norm_eps", 1e-5)?;
+    let tied = p.cfg.bool_or("tie_word_embeddings", false)?;
+    let bias = p.cfg.bool_or("attention_bias", false)?;
+    let sw = p.cfg.usize_or_null("sliding_window", Some(4096))?;
+    p.cfg.forbid("clip_qkv", "Olmo3Config has no clip_qkv")?;
+    let types = p.layer_types(n, &["full_attention", "sliding_attention"], |i| {
+        if (i + 1) % 4 != 0 { "sliding_attention" } else { "full_attention" }
+    })?;
+    let keyed = p.cfg.opt_obj("rope_parameters")?.is_some_and(|r| r.contains_key("full_attention") || r.contains_key("sliding_attention"));
+    let (full, local) = if keyed {
+        (
+            p.rope(hd, RopeStyle::Half, Some(500_000.0), Some("full_attention"), 1.0, Some(max_pos), None)?,
+            p.rope(hd, RopeStyle::Half, Some(500_000.0), Some("sliding_attention"), 1.0, Some(max_pos), None)?,
+        )
+    } else {
+        let r = p.rope(hd, RopeStyle::Half, Some(500_000.0), None, 1.0, Some(max_pos), None)?;
+        (r.clone(), r)
+    };
+    let norm = NormSpec::rms(eps);
+    let layers = (0..n)
+        .map(|i| {
+            let sliding = types[i] == "sliding_attention";
+            let mut at = attn(h, kv, hd, Position::Rope(if sliding { local.clone() } else { full.clone() }), (bias, bias));
+            at.qk_norm = Some(QkNorm { norm, scope: QkNormScope::Whole });
+            at.window = if sliding { sw } else { None };
+            LayerSpec {
+                mixer: Mixer::Attention(at),
+                ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
+                residual: Residual::Sequential { pre_mixer: None, post_mixer: Some(norm), pre_ffn: None, post_ffn: Some(norm), multiplier: 1.0 },
+                post_scale: 1.0,
+            }
+        })
+        .collect();
+    let mut nm = llama_names("model.", "lm_head");
+    nm.remove("norm.mix");
+    nm.remove("norm.ffn");
+    nm.insert("norm.post_mix".into(), "model.layers.{L}.post_attention_layernorm".into());
+    nm.insert("norm.post_ffn".into(), "model.layers.{L}.post_feedforward_layernorm".into());
+    if tied {
+        nm.insert("lm_head".into(), "model.embed_tokens".into());
+    }
+    Ok(p.finish_spec(SpecParts {
+        model_type: "olmo3",
+        families: vec!["C1", "C2"],
         vocab,
         hidden,
         max_pos: Some(max_pos),

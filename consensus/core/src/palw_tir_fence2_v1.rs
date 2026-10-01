@@ -9,9 +9,28 @@
 //! * **the `Select`-arm work credit**: the structural work vector credits each `Select`'s arm-only,
 //!   uncommitted work at the smaller arm's, the least any execution must do, where it credited both
 //!   (`crate::palw_tir_work_v1`);
-//! * **the IR data-availability unit `TirStepLeaf { index }`**: a session may demand one committed
-//!   step leaf of an IR claim — its preimage and its opening under the step root — and the accused
-//!   defaults if it does not disclose it inside `W_disclose` (`crate::palw_da_rcore_v1`).
+//! * **the close sizing's range twin** (`crate::palw_tir_close_range_v1`): admission v10 sizes a class's
+//!   terminal closes (PALW-TIR-38) over ranges of elements instead of one element at a time — the
+//!   same units, so the same bounds byte for byte, in far fewer steps of the same 2^26 cap
+//!   ([`palw_tir_close_twin_v1`]); the release's element twin walks a replayed `Fixed` state element by
+//!   element at every position and passes the cap on most real-size classes;
+//! * **the IR data-availability units `TirStepLeaf { index }` and `TirStepNode { level, index }`**
+//!   (`crate::palw_da_rcore_v1`): a demand keyed by the claim alone (`DefaultAccusedTirStep`, no
+//!   binding, no draws) names one committed step leaf — answered by its preimage and its opening under
+//!   the step root — or one interior node of the step tree — answered by its frontier ten levels
+//!   down and its opening (`crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1`) — or, past the
+//!   claim's execution, by the claim's binding proving so (`TirStepOutOfRange`); the accused defaults
+//!   if it answers none inside `W_disclose`. A seat descends ten levels a session, so a 2^30-leaf
+//!   execution's first disputed leaf is three node sessions and one leaf session away: inside one
+//!   seat's four;
+//! * **an IR claim's data availability at its class's ladder**: every IR answer's binding (the
+//!   release's `TirEvent` among them) and every step demand's unit is checked at the claim's class's
+//!   ladder — the court's step ladder admission held the class's jobs to — where the release checked
+//!   them at 2^22 leaves: an execution past 2^22 (every real-size class's) could answer no demand and
+//!   defaulted (`TransitionBuilder::tir_da_ladder_v1`);
+//! * **admission's DA seat reach**: a class whose canonical job commits more step leaves than one
+//!   seat's four sessions descend (2^30, `crate::palw_tir_court_v1::PALW_TIR_DA_SEAT_REACH_LEAVES_V1`)
+//!   is refused;
 //!
 //! Below the height every rule is the DAA-2,000 release's, byte for byte, and an object only this
 //! fence makes legal is one an older build cannot decode (A-2): the acceptance layer drops it by name,
@@ -36,6 +55,23 @@ pub const PALW_T12_TIR_FENCE2_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFence
 /// H7 `TopK` row). Defined beside the rule it selects (`misaka_palw_tir::admit`); admission v10 and the
 /// value bound `V` are asked under the registering block's rules ([`palw_tir_demand_rules_at_v1`]).
 pub use misaka_palw_tir::admit::TirDemandRulesV1 as PalwTirDemandRulesV1;
+
+/// **Which twin sizes a class's terminal closes under `demand`'s rules** (admission v10's step 9,
+/// PALW-TIR-38): the release's element twin, or — past the fence, whose rules `demand` names — the
+/// range twin (`crate::palw_tir_close_range_v1`), the same bounds in far fewer steps of the same cap.
+pub fn palw_tir_close_twin_v1(demand: PalwTirDemandRulesV1) -> crate::palw_tir_close_range_v1::PalwTirCloseTwinV1 {
+    match demand {
+        PalwTirDemandRulesV1::Release2000 => crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element,
+        PalwTirDemandRulesV1::H7 => crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Range,
+    }
+}
+
+/// **Is the second IR fence in force under `demand`'s rules?** Admission v10 reads the fence through
+/// the box-demand rules it is handed (the processor's and the preflight's `PalwTirAdmissionRulesV1`),
+/// which are this fence's exactly when it is in force.
+pub fn palw_tir_fence2_in_force_v1(demand: PalwTirDemandRulesV1) -> bool {
+    demand == PalwTirDemandRulesV1::H7
+}
 
 /// The box-demand rules in force at `daa_score` on the fold's copy of the fence.
 pub fn palw_tir_demand_rules_at_v1(params: &crate::palw_state_v2::PalwStateParamsV2, daa_score: u64) -> PalwTirDemandRulesV1 {

@@ -2095,6 +2095,16 @@ pub(crate) fn palw_da_unit_answer_v1(
         PalwDaUnitV1::TirStepLeaf { index } => {
             return Err(format!("IR step leaf {index}: answered by the IR responder, not the capture path (RFC-0002 Phase F)"));
         }
+        PalwDaUnitV1::TirStepNode { level, index } => {
+            return Err(format!(
+                "IR step node ({level}, {index}): answered by the IR responder, not the capture path (RFC-0002 Phase F)"
+            ));
+        }
+        PalwDaUnitV1::TirRowNode { level, index } => {
+            return Err(format!(
+                "IR rows-tree node ({level}, {index}): answered by the IR responder, not the capture path (RFC-0002 Phase F)"
+            ));
+        }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
         (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(
@@ -12448,7 +12458,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
-        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
+        PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",
         // RFC-0004 (tags 70–82): the chain drops each until its admission lands, and no path in this
         // node builds one yet.
         PalwConsensusObjectV2::ModelLineImprovementPolicySet { .. } => "ModelLineImprovementPolicySet",

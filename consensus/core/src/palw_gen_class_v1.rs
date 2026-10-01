@@ -732,7 +732,11 @@ pub fn palw_gen_class_preflight_v1(
         return out(format!("the output node's tile {output_tile_len} is outside the digest's [4, 2^16]"));
     }
     // A `Rows` output's tiles are its rows' step tiles end to end: a row must be whole tiles.
-    let row: u64 = post.nodes[node as usize].out.shape.iter().map(|d| if let Dim::Fixed(n) = d { *n as u64 } else { 0 }).product();
+    let row: u64 = post.nodes[node as usize]
+        .out
+        .shape
+        .iter()
+        .fold(1u64, |acc, d| acc.saturating_mul(if let Dim::Fixed(n) = d { *n as u64 } else { 0 }));
     if matches!(out_prog.output, OutputDecl::Rows { .. }) && row % output_tile_len as u64 != 0 {
         return out(format!("a row of {row} elements is not whole tiles of {output_tile_len} (PALW-OUT-3's alignment)"));
     }

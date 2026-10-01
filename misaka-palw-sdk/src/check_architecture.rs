@@ -1153,7 +1153,7 @@ mod tests {
             .filter(|p| p.join("config.json").exists())
             .collect();
         dirs.sort();
-        assert_eq!(dirs.len(), 57, "tir-lower's HF tiny fixtures");
+        assert_eq!(dirs.len(), 68, "tir-lower's HF tiny fixtures");
         for d in dirs {
             let text = std::fs::read_to_string(d.join("config.json")).expect("config");
             let r = check_ir_config_v1(&params, &text, false);

@@ -225,7 +225,7 @@ pub(crate) fn palw_improve_status_json_v1(
                 "next_due_daa": l.line.next_due_daa,
                 "policy_sequence": l.line.policy_sequence,
                 "governed_from_daa": l.line.governed_from_daa,
-                "last_promotion": l.line.last_promotion,
+                "last_promotion": l.line.last_promotion.map(|p| json!({"epoch": p.epoch, "owner_until_daa": p.owner_until_daa, "ban_daa": p.ban_daa})),
                 "regression_epoch": l.line.regression_epoch,
                 "regression_check": l.line.regression_check.map(|c| c.to_string()),
                 "barred": l.line.barred.iter().map(|(b, until)| json!({"bond": bond_text(b), "until": until})).collect::<Vec<_>>(),

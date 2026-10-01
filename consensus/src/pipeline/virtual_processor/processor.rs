@@ -6922,6 +6922,8 @@ impl VirtualStateProcessor {
                 } else {
                     kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared
                 },
+                // RFC-0001 §A.3 / RFC-0003 §I.3: whether the class commits its logits in Q24.
+                logits_q24: state.class_commits_q24_logits_v1(class_id),
             },
             self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
             self.palw_held_context_at(block_daa),
@@ -7328,8 +7330,8 @@ impl VirtualStateProcessor {
             // stands. The place is taken by the one handed to the gate (see there), whatever the gate
             // then decides; one dropped before the gate (unsigned, at a stale target, refused by the
             // rehearsal, over the slot cap) never took it. The fold refuses a second as its second lock.
-            // **The second IR fence, likewise**: below `palw_tir_fence2` its moves (an IR step-leaf demand,
-            // an answer of that kind) are payloads an older build cannot decode and skips (A-2), so
+            // **The second IR fence, likewise**: below `palw_tir_fence2` its moves (an IR step demand, an
+            // answer or unit of that kind) are payloads an older build cannot decode and skips (A-2), so
             // they are dropped here, first, and charged nothing; the fold refuses them too.
             if kaspa_consensus_core::palw_state_v2::palw_object_is_tir_fence2_v1(&object) && !self.palw_tir_fence2_at(point.daa_score) {
                 info!("Block {block}: a second-IR-fence object was dropped by name below palw_tir_fence2, and the block stands (RFC-0002 Phase F)");
@@ -11207,51 +11209,58 @@ impl VirtualStateProcessor {
                 // **ADR-0103 Decision 4: the held DA court's two moves.** The fence, the DA court's
                 // own fence, the signer (the accuser's key; the claim's producer for an answer), the
                 // ceiling, and the unit bounded — or answered — against the claim's own roots.
-                // **The second IR fence: an IR step-leaf demand** (evidence transport C). The fence, the
-                // DA court, the accuser's registered key over the demand, a binding that rides empty,
-                // and the ruleset's close ceiling; the claim, its class and the leaf's bound are the
-                // fold's (`open_da_session_tir_leaf_v1`).
-                Obj::DefaultAccusedTirLeaf { accusation } => {
+                // **The second IR fence: an IR step demand** (evidence transport C), keyed by the claim
+                // alone. The fence, the DA court, a step unit inside the widest execution, the ruleset's
+                // close ceiling and the accuser's registered key over the demand; the claim and its
+                // class are the fold's (`open_da_session_tir_step_v1`), and a unit past the claim's own
+                // execution is the accused's to prove (`TirStepOutOfRange`).
+                Obj::DefaultAccusedTirStep { accusation } => {
                     let claim = accusation.claim;
                     if !self.palw_tir_fence2_at(point.daa_score) {
-                        return Err(format!("claim {claim}: an IR leaf demand is refused: palw_tir_fence2 is not in force (RFC-0002)"));
+                        return Err(format!("claim {claim}: an IR step demand is refused: palw_tir_fence2 is not in force (RFC-0002)"));
                     }
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
                     }
-                    if !accusation.binding.class.program.is_empty() {
-                        return Err(format!("claim {claim}: an IR leaf demand's binding carries no program: the chain holds the class's"));
-                    }
                     let court = self
                         .palw_court_params_v2
                         .as_ref()
-                        .ok_or_else(|| "an IR leaf demand on a network with no V2 court parameters".to_string())?;
+                        .ok_or_else(|| "an IR step demand on a network with no V2 court parameters".to_string())?;
+                    // The widest execution at the court's step ladder where the held regime rides it,
+                    // the release's 2^22 otherwise; the fold holds the unit to the claim's class's.
+                    let ladder = if self.palw_held_context_at(point.daa_score) {
+                        self.palw_court_step_ladder_at(point.daa_score, court).max(kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+                    } else {
+                        kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES
+                    };
+                    kaspa_consensus_core::palw_da_rcore_v1::palw_tir_step_unit_is_admissible_v1(&accusation.unit, ladder)
+                        .map_err(|why| format!("claim {claim}: an IR step demand for {:?} is refused: {why}", accusation.unit))?;
                     let bytes = borsh::to_vec(accusation.as_ref()).map(|b| b.len() as u64).unwrap_or(u64::MAX);
                     if bytes > court.max_close_bytes() {
                         return Err(format!(
-                            "claim {claim}'s IR leaf demand is {bytes} bytes, above this ruleset's {}-byte close ceiling",
+                            "claim {claim}'s IR step demand is {bytes} bytes, above this ruleset's {}-byte close ceiling",
                             court.max_close_bytes()
                         ));
                     }
                     let record = state
                         .bond(&accusation.accuser)
-                        .ok_or_else(|| format!("an IR leaf demand names bond {:?} this chain does not have", accusation.accuser))?;
-                    let message = kaspa_consensus_core::palw_da_rcore_v1::palw_tir_leaf_accusation_message_v1(
+                        .ok_or_else(|| format!("an IR step demand names bond {:?} this chain does not have", accusation.accuser))?;
+                    let message = kaspa_consensus_core::palw_da_rcore_v1::palw_tir_step_accusation_message_v1(
                         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
                             self.network_id_bytes.as_slice(),
                             Some(self.genesis.hash),
                         ),
                         &claim,
-                        accusation.index,
+                        &accusation.unit,
                         &accusation.accuser,
                     );
                     if !Self::verify_mldsa87_with_context_bool(
                         &record.pubkey,
                         message.as_byte_slice(),
                         &accusation.signature,
-                        kaspa_consensus_core::palw_da_rcore_v1::PALW_TIR_LEAF_ACCUSATION_MLDSA87_CONTEXT_V1,
+                        kaspa_consensus_core::palw_da_rcore_v1::PALW_TIR_STEP_ACCUSATION_MLDSA87_CONTEXT_V1,
                     ) {
-                        return Err(format!("claim {claim}'s IR leaf demand is not signed by the bond it names"));
+                        return Err(format!("claim {claim}'s IR step demand is not signed by the bond it names"));
                     }
                 }
                 Obj::DefaultAccusedHeld { accusation } => {
@@ -14864,6 +14873,8 @@ impl VirtualStateProcessor {
                 } else {
                     kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared
                 },
+                // RFC-0001 §A.3 / RFC-0003 §I.3: whether the class commits its logits in Q24.
+                logits_q24: state.class_commits_q24_logits_v1(class_id),
             },
             // **ADR-0044 Decision 9's two advertised caps, at the same block's DAA** (mainnet audit
             // 2026-09-06, L-2). The bundle's `max_prompt_tokens` and `max_decode_tokens` are inside
@@ -14904,6 +14915,9 @@ impl VirtualStateProcessor {
                     step_ladder: state.class_step_ladder_v1(class_id, ladder),
                     held: state.class_is_held_v1(class_id),
                     derived_work: kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared,
+                    // The class's logit unit, as the FP walk asks it (RFC-0001 §A.3): an evaluation claim's
+                    // stand-in job meets the same decode-control offer as any V4 job on its class.
+                    logits_q24: state.class_commits_q24_logits_v1(class_id),
                 },
                 self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
                 self.palw_held_context_at(block_daa),
@@ -14961,7 +14975,8 @@ impl VirtualStateProcessor {
                 // class, under the least top-up) is paid back by the same route, against the same cap.
                 MObj::ActivationPoolFunded { amount, .. } => *amount,
                 // RFC-0004 (spec 17 §17.11.1): a deposit the fold refuses (a line not governed) is
-                // paid back by the same route — also when the walk drops it below the fence.
+                // paid back by the same route. (Only a bound carrier the walk extracted reaches here; below
+                // the fence no carrier can bind an improvement sink, so none is ever refunded there.)
                 MObj::ImprovementPoolFunded { payload } => payload.amount,
                 _ => 0,
             };
@@ -19270,7 +19285,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
         O::CourtTirDissected { .. } => "CourtTirDissected",
         O::CourtTirChildChosen { .. } => "CourtTirChildChosen",
-        O::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
+        O::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",
         // RFC-0004 (tags 70–82): dropped at acceptance until each admission lands.
         O::ModelLineImprovementPolicySet { .. } => "ModelLineImprovementPolicySet",
         O::HardCaseSubmitted { .. } => "HardCaseSubmitted",

@@ -320,7 +320,23 @@ fn refusals_name_their_reason() {
     refused("t5-small", "encoder–decoder");
     refused("bert-base-uncased", "no lowerer template");
     refused("gemma-3n-e4b", "AltUp");
-    refused("llama-3.1-8b-gptq", "quant_method=gptq");
+    // Pre-quantised: GPTQ and AWQ are read from their integers; every other method is refused.
+    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/llama-3.1-8b-gptq.json")).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&base).unwrap();
+    v["quantization_config"]["quant_method"] = serde_json::json!("bitsandbytes");
+    assert!(matches!(misaka_palw_tir_lower::parse_config(&v), Err(LowerError::NotLowerable(s)) if s.contains("quant_method=bitsandbytes")));
+}
+
+#[test]
+fn a_gptq_checkpoint_lowers_from_its_integers() {
+    use misaka_palw_tir_lower::prequant::QFormat;
+    let (s, p) = ok("llama-3.1-8b-gptq");
+    let q = s.hf.quant.as_ref().expect("quantization_config read");
+    assert_eq!(q.fmt, QFormat::Gptq { bits: 4, group: 128, desc_act: false, sym: true, v2: false });
+    let b = hf_weights::bind(&s, &p).unwrap();
+    let layouts = misaka_palw_tir_lower::weights::quant_layouts(&p, &b).unwrap();
+    // q, k, v, o, gate, up, down — the head and the embedding stay float.
+    assert_eq!(layouts.len(), 7);
 }
 
 #[test]

@@ -322,6 +322,16 @@ impl Params {
                 "palw_improvement_v1 needs palw_kary_court in force at or below it: evaluation disputes include history dissections",
             ));
         }
+        // **The decode rules** (ADR-0082 D10/D11; the user's decision of 2026-09-30): an evaluation job's
+        // generated text is a decode under the network's sampler rules, and an epoch's counts must not
+        // change under it when the rules arm — so the rules are in force before the protocol is.
+        let decode_ok = self.palw_fp_decode_rules.is_some_and(|d| d != ForkActivation::never() && d.daa_score() <= at);
+        if !decode_ok {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_improvement_v1 needs palw_fp_decode_rules in force at or below it: an evaluation's generated text is a \
+                 decode under the network's sampler rules (ADR-0082 D10/D11), and no verdict may flip when they arm mid-epoch",
+            ));
+        }
         Ok(())
     }
 }

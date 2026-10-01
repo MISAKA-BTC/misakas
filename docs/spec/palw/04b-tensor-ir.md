@@ -1539,17 +1539,51 @@ scheme the logits node's tile length MUST divide the scheme's 4,096 lanes (a ste
 inside one trace tile, at an offset, and the logits consistency check compares it with that part), so
 a large vocabulary's head can be tiled finer. At `d_model = 1,536` (Qwen2.5-1.5B A16 at 8,192
 positions, `h_tile` 64, a 20-level inventory) the D-F1 class declares 1,024 logits lanes and is
-admitted: its largest carried closes are the attention scores tile's at the first positions —
-2,519,468 bytes, where one 128-lane tile covers all twelve heads and reads all of `W_q` — the logits
-tile's (1,626,216: a run of 1,024 head rows shares its two boundary paths) and the layer output's
-(1,273,759); its dissected context's bottom is 441,871 bytes and its root claim 84,688. At 2,048 lanes
-the logits tile carries 3,233,896 bytes and the class is refused. Sizing D-F1 takes 53.2 M of the
-`2^26` steps; the Qwen2.5-3B A16 class at the same layout is refused inside the cap for its closes (its
-first positions' attention tile reads all 16 heads' `W_q`: 4,371,616 bytes). Every close the court's
-own builders make on the corpus (a whole tile's cone close, a dissected leaf's root claim and its
-bottom played to the first and to the last tile) is within its bound —
-`consensus/core/tests/palw_tir_close_size.rs`; D-F1 in
+admitted: its largest carried closes are the logits tile's (1,626,472 bytes: a run of 1,024 head rows
+shares its two boundary paths), the layer output's (1,259,741) and the attention scores tile's at the
+first positions (1,040,652); its dissected context's bottom is 450,447 bytes and its root claim 84,944
+(measured 2026-09-29 on the DAA-2,000 release). At 2,048 lanes the logits tile carries 3,234,152 bytes
+and the class is refused. Sizing D-F1 takes 53.8 M of the `2^26` steps; the Qwen2.5-3B A16 class at
+the same layout takes 72.0 M and is refused for its sizing, though every one of its closes fits (its
+largest, the logits tile's, 2,153,168 bytes). Every close the court's own builders make on the corpus
+(a whole tile's cone close, a dissected leaf's root claim and its bottom played to the first and to
+the last tile) is within its bound — `consensus/core/tests/palw_tir_close_size.rs`; D-F1 in
 `misaka-palw-base0/tests/tir_a16_admission_dissected.rs`.
+
+**Past `palw_tir_fence2`: the range twin** (`palw_tir_close_range_v1`). The element twin walks every
+demanded element of every node, one at a time — a tile whose cone replays a `Fixed` state over `C − 1`
+positions visits the whole state at each — and most real-size classes pass the cap before their
+closes are sized. Past the fence the twin runs over RANGES: a node's demand in a context is a set of
+sorted disjoint ranges of its row-major elements, and a range is mapped through its primitive at once
+— cut into at most `2·rank − 1` boxes of the node's shape, each box mapped to the box of the operand
+it reads, that box cut back into ranges of the operand's row-major order. Every index map above is a
+product of per-axis maps (identity, a shift, a permutation, a collapse to 0 on a broadcast axis, a
+whole axis or a span of it, a row split), so the image of a box is a box and the demand is exactly the
+element twin's; a run of consecutive tiles is a run of consecutive leaves (placed at one index
+lookup), a range of param elements a range of inventory leaves (pieces and rows are whole elements).
+So the units — step leaves with their lanes and history marks, hypothetical leaves, inventory leaves,
+location-free rows, the token, a dissection's supplied elements, the row pattern — are the element
+twin's, request by request, and every bound is the element twin's byte for byte; only the work
+differs. Its steps count what it does: a context made (one step; a block's node shapes resolved once
+per `H`, a step a node), a range demanded, visited or cut into boxes and each range a box is cut back
+into, a step leaf's index lookup (once per run of tiles) and each leaf placed, each inventory leaf and
+row piece recorded, each position a replay walks, a request seeded (a step a range), an entry united
+outside the twin. The cap is unchanged. D-F1 sizes in 7.4 M steps and the 3B in 10.1 M, both admitted
+past the fence. At 512 positions (64-lane commit tiles; measured 2026-09-29, element twin's steps in
+parentheses): Llama-3.2-1B 6.2 M (62.8 M), SmolLM2-1.7B 6.4 M (65.1 M), Qwen2.5-1.5B 7.7 M (59.1 M),
+Gemma-3-1B 10.2 M at `h_tile` 32 (past the cap), Qwen3-8B 11.9 M at `h_tile` 32 (195.2 M),
+Qwen3.5-0.8B 20.2 M (4,186 M) and Qwen3.5-2B 20.8 M (4,412 M) at `C` 256 and `h_tile` 32 — the same
+at 2,048 positions, where the replay is bounded by `C` and a history cone's analysis by `h_tile`.
+`consensus/core/tests/palw_tir_close_range.rs` holds the two twins equal request by request in every
+mode and bound by bound on the corpus; `misaka-palw-sdk/tests/tir_close_range_real.rs` does so on
+real-size classes (every one above, uncapped: equal bounds, commit point by commit point).
+
+*A root claim's history.* A dissected cone's root claim probes its reductions at the history's first
+row, and once that row's history tile is complete the court reads the row through it: `h_tile` rows
+of every sub-row the probe touches. At `h_tile` 64 that is most of a real class's root claim —
+Gemma-3-1B's 114,604 bytes, Qwen3-8B's 109,804, Qwen3.5's 105,797 against the 100,000-byte carrier —
+and at `h_tile` 32 they are 74,036, 85,228 and 64,837 (at 16: 53,556, 72,940, 44,357). The layout
+decides it; the carrier does not move.
 
 **Checkpoint intervals.** They are derived for every **written** `Fixed` state — one some block
 writes; a `Fixed` state no block writes needs no replay, has no `C_j` and does not enter `C`. The
@@ -2401,3 +2435,46 @@ The following are not yet built:
   answers (with `PalwCourtVerdictProofV2` 10/11 from Phase F's allocation);
 - generalised dissection over a declared reduction axis (RFC-0003 §II.1.5.6, decided to come with
   video).
+
+### 15.12 The logits unit of a text program (RFC-0001 §A.3, RFC-0003 §I.3)
+
+> **[decision, 2026-10-01, on finding G1 of the independent second implementation.]** The unit of a
+> text program's committed logits is a convention of the lowering. It is not a field of the class,
+> and a class-declared unit was considered and not taken.
+
+A program whose output is `Logits { node, scheme_id }` — a version-1 text program, or the text stage
+of a version-2 pipeline (§15.6) — commits the model's logits in **natural-log units × 2^24 (Q24)**:
+the committed `i32` `v` stands for the real logit `v / 2^24`, and the model's own softmax is
+`p_j = exp(v_j / 2^24) / Σ_k exp(v_k / 2^24)`. **The lowerer guarantees it**: the program's `post`
+ends in the rescale from the calibrated site scale to Q24 (a versioned lowering change, tir-lower's
+lane), and a lowerer that does not has a class whose temperature, frequency and presence penalties
+and logit bias are mis-scaled.
+
+- **Why a convention.** RFC-0001 §A.3 measures the decode controls that depend on the logits' unit
+  (`temperature_q`, `frequency_penalty_q`, `presence_penalty_q`, `logit_bias`) in Q24, the legacy
+  classes' own fixed point (`K = 24`). A program carries no unit: `logits` and `logits_scheme_id` (the
+  commitment form, flat or tiled) are all it says, and tir-lower's calibrated logit scale is a real
+  number of the lowerer's choosing (5.3·10^-9 … 7.2·10^-8 on nine tiny fixtures: not a power of two,
+  so a power-of-two declaration would not even fit). The chain cannot check a unit. It can fix what
+  the lowerer must guarantee, and a class whose lowerer does not guarantee it mis-scales only its own
+  sampling. The key of RFC-0001 §A.3 (`value · 2^24 + T_q · G`) reads the committed integer as Q24.
+- **Which controls read the unit.** `temperature_q`, `frequency_penalty_q`, `presence_penalty_q` and
+  `logit_bias`. The repeat penalty (a Q16 ratio), greedy selection, stop sequences and constraints do
+  not. (A bias entry that bans a lane would not either; the rule refuses every entry, the
+  conservative reading, and a ban-only list can be offered later by changing one predicate.)
+- **What is offered to whom.**
+  - Every legacy class commits Q24, so every control is offered to it.
+  - An IR or generative text class registered **before** the fence that opens the free-prompt lane
+    to IR and pipeline classes is offered the unit-free controls only. A V4 job (the lane's walk) or a
+    V5 job (acceptance) that asks it for a unit-dependent control is refused by name,
+    `PalwFpV3Error::DecodeControlNeedsQ24Logits { control }` — dormant with `palw_fp_decode_rules`,
+    which no preset carries. Such a class stays refused for good, the live SmolLM2 class among them,
+    because nothing on chain says what its unit is.
+  - That later fence offers the unit-dependent controls to a class **registered past it**, which is
+    Q24 by construction of the lowering the fence names.
+- **Where it is built** (dormant): `palw_fp_unit_dependent_control_v1` and
+  `palw_fp_decode_controls_offered_v1` (the predicate and the refusal), `PalwFpClassCapsV1::logits_q24`
+  (what the walk reads off the class), `PalwChainStateV2::class_commits_q24_logits_v1` (legacy `true`,
+  IR and generative `false` until the later fence), and `palw_fp_v5_accept_payload_v1`.
+- **Checked off chain.** A runtime pack's verification compares the class's logit scale with the float
+  reference; the chain does not.

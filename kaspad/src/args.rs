@@ -354,15 +354,20 @@ pub struct Args {
     /// its own. Command line only.
     #[serde(skip)]
     pub palw_drill_gen_at: Option<u64>,
+    /// **DRILL ONLY: arm the decode rules (`palw_fp_decode_rules`, ADR-0082 D10/D11) at this DAA**
+    /// (`config::drill::palw_drill_decode_rules_at_v1`) — the prerequisite FP Job V5 and RFC-0004's
+    /// improvement fence name: each needs it in force at or below its own height. Command line only.
+    #[serde(skip)]
+    pub palw_drill_decode_rules_at: Option<u64>,
     /// **DRILL ONLY: arm FP Job V5 (`palw_fp_job_v5`) at this DAA** (`config::drill::palw_drill_fp_v5_at_v1`).
     /// Command line only.
     #[serde(skip)]
     pub palw_drill_fp_v5_at: Option<u64>,
     /// **DRILL ONLY: arm RFC-0004's improvement fence (`palw_improvement_v1`) at this DAA**
     /// (`config::drill::palw_drill_improve_fence_at_v1`), with the drill's ceilings. It needs
-    /// `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1` and `palw_kary_court` in force at or below it:
-    /// arm them first (`--palw-drill-tir-at`, `--palw-drill-tir2-at`, `--palw-drill-gen-at`,
-    /// `--palw-drill-fence-at`). Command line only.
+    /// `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1`, `palw_kary_court` and `palw_fp_decode_rules` in
+    /// force at or below it: arm them first (`--palw-drill-tir-at`, `--palw-drill-tir2-at`,
+    /// `--palw-drill-gen-at`, `--palw-drill-fence-at`, `--palw-drill-decode-rules-at`). Command line only.
     #[serde(skip)]
     pub palw_drill_improve_at: Option<u64>,
     /// **RFC-0004 (A10): evaluate** — run the evaluation jobs of every governed line's open epoch whose
@@ -601,6 +606,7 @@ impl Default for Args {
             palw_drill_tir_at: None,
             palw_drill_tir2_at: None,
             palw_drill_gen_at: None,
+            palw_drill_decode_rules_at: None,
             palw_drill_fp_v5_at: None,
             palw_drill_improve_at: None,
             palw_improve_evaluate: false,
@@ -772,8 +778,8 @@ impl Args {
             config.palw_drill_fence_moves.extend(moves);
         }
         // **And the RFC-0003 / RFC-0004 fences** (`--palw-drill-tir2-at`, `--palw-drill-gen-at`,
-        // `--palw-drill-fp-v5-at`, `--palw-drill-improve-at`), in that order, after the IR fence: the
-        // improvement fence's prerequisites are armed before it.
+        // `--palw-drill-decode-rules-at`, `--palw-drill-fp-v5-at`, `--palw-drill-improve-at`), in that order,
+        // after the IR fence: the improvement fence's prerequisites are armed before it.
         let moves = crate::palw_drill::PalwDrillExtraFencesV1::of(self)
             .apply(&mut config.params)
             .unwrap_or_else(|e| panic!("{e} (validate_args refuses this first)"));
@@ -1624,13 +1630,25 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-decode-rules-at")
+                .long("palw-drill-decode-rules-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm the decode rules (palw_fp_decode_rules, ADR-0082 D10/D11) at this DAA \
+                     on the drill chain — the prerequisite of FP Job V5 and of RFC-0004's improvement fence. Nothing else moves. \
+                     Refused without the salt, at 0, and at a height another fence uses.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-fp-v5-at")
                 .long("palw-drill-fp-v5-at")
                 .require_equals(true)
                 .value_parser(clap::value_parser!(u64))
                 .help(
                     "With --palw-drill-genesis-salt only: arm FP Job V5 (palw_fp_job_v5) at this DAA on the drill chain. Nothing else \
-                     moves. Refused without the salt, at 0, and at a height another fence uses.",
+                     moves. Refused without the salt, at 0, at a height another fence uses, and unless palw_gen_v1 and \
+                     palw_fp_decode_rules are in force at or below it.",
                 ),
         )
         .arg(
@@ -1641,7 +1659,8 @@ pub fn cli() -> Command {
                 .help(
                     "With --palw-drill-genesis-salt only: arm RFC-0004's improvement fence (palw_improvement_v1) at this DAA on the \
                      drill chain, with the drill's ceilings. Nothing else moves. Refused without the salt, at 0, at a height another \
-                     fence uses, and unless palw_tir_v1, palw_tir_fence2, palw_gen_v1 and palw_kary_court are in force at or below it.",
+                     fence uses, and unless palw_tir_v1, palw_tir_fence2, palw_gen_v1, palw_kary_court and palw_fp_decode_rules are in \
+                     force at or below it.",
                 ),
         )
         .arg(
@@ -2600,6 +2619,7 @@ impl Args {
             palw_drill_tir_at: m.get_one::<u64>("palw-drill-tir-at").copied(),
             palw_drill_tir2_at: m.get_one::<u64>("palw-drill-tir2-at").copied(),
             palw_drill_gen_at: m.get_one::<u64>("palw-drill-gen-at").copied(),
+            palw_drill_decode_rules_at: m.get_one::<u64>("palw-drill-decode-rules-at").copied(),
             palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),

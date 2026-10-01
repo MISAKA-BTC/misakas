@@ -136,7 +136,8 @@ pub struct PalwTirCloseReadsV1 {
 }
 
 impl PalwTirCloseReadsV1 {
-    fn merge(&mut self, other: &Self) {
+    /// `self ∪ other`, unit by unit.
+    pub fn merge(&mut self, other: &Self) {
         self.steps.extend(other.steps.iter().map(|(k, v)| (*k, *v)));
         self.h_steps.extend(other.h_steps.iter().copied());
         self.loose_steps.extend_from_slice(&other.loose_steps);
@@ -211,15 +212,17 @@ struct Twin<'a> {
 
 /// What one history row is read through, whatever its position: its history tiles (one per
 /// `h_tile` rows) and its row's commit tiles.
-#[derive(Clone, Debug, Default)]
-struct HistPattern {
-    tiles: BTreeMap<(usize, u64), u32>,
-    commits: BTreeMap<(u16, u16, u32), u32>,
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HistPattern {
+    /// `(history instance, lane tile) → lanes`.
+    pub tiles: BTreeMap<(usize, u64), u32>,
+    /// `(occurrence, node, tile) → lanes`.
+    pub commits: BTreeMap<(u16, u16, u32), u32>,
 }
 
 /// The nodes of `block` whose cone within the block (through computed nodes; a commit point other
 /// than `target` is a leaf) holds a `HistAppend`.
-fn reaches_hist(block: &misaka_palw_tir::program::Block, target: u16) -> Vec<bool> {
+pub(crate) fn reaches_hist(block: &misaka_palw_tir::program::Block, target: u16) -> Vec<bool> {
     let mut r = vec![false; block.nodes.len()];
     for (j, n) in block.nodes.iter().enumerate() {
         r[j] = matches!(n.prim, Prim::HistAppend { .. })
@@ -230,7 +233,7 @@ fn reaches_hist(block: &misaka_palw_tir::program::Block, target: u16) -> Vec<boo
     r
 }
 
-fn strides(shape: &[usize]) -> Vec<usize> {
+pub(crate) fn strides(shape: &[usize]) -> Vec<usize> {
     let mut s = vec![1usize; shape.len()];
     for i in (0..shape.len().saturating_sub(1)).rev() {
         s[i] = s[i + 1].saturating_mul(shape[i + 1]);
@@ -260,7 +263,7 @@ fn broadcast_index(o: &[usize], shape: &[usize]) -> usize {
     shape.iter().enumerate().map(|(k, d)| if *d == 1 { 0 } else { o[off + k] * st[k] }).sum()
 }
 
-fn element_count(shape: &[usize]) -> usize {
+pub(crate) fn element_count(shape: &[usize]) -> usize {
     shape.iter().product()
 }
 
@@ -749,7 +752,7 @@ struct Split {
 
 /// The work of placing one step leaf of `space`: its index walks the program's commit points and
 /// occurrences.
-fn leaf_cost_of(space: &PalwTirStepSpaceV1) -> u64 {
+pub(crate) fn leaf_cost_of(space: &PalwTirStepSpaceV1) -> u64 {
     let commits: u64 = space.program.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count() as u64).sum();
     16 + commits + space.occurrences().len() as u64
 }
@@ -814,6 +817,23 @@ fn close_reads_split(
     Ok(Split { reads: twin.reads, hist: twin.hist, pattern: twin.pattern.unwrap_or_default(), work: twin.work })
 }
 
+/// **One element-twin read, as the sizing asks it** — everything but the history rows, the history
+/// rows, the row pattern (when `pattern`), and the work — history-only when `hist_only`. What the
+/// range twin (`crate::palw_tir_close_range_v1`) is held equal to, request by request.
+pub fn palw_tir_close_reads_split_v1(
+    space: &PalwTirStepSpaceV1,
+    job_ctx: &PalwJobContextV2,
+    inventory: &PalwTirInventoryIndexV1,
+    request: &PalwTirCloseRequestV1<'_>,
+    cap: u64,
+    hist_only: bool,
+    pattern: bool,
+) -> Result<(PalwTirCloseReadsV1, PalwTirCloseReadsV1, HistPattern, u64), String> {
+    let Split { reads, hist, pattern, work } =
+        close_reads_split(space, job_ctx, inventory, request, cap, hist_only, pattern, leaf_cost_of(space))?;
+    Ok((reads, hist, pattern, work))
+}
+
 /// **The units the court's evaluation of `request` reads** (a superset where the court reads by a
 /// value), over the job `job_ctx` of `space`, within `cap` steps of work; with the work done.
 pub fn palw_tir_close_reads_v1(
@@ -839,7 +859,7 @@ fn ceil_log2(n: u64) -> u64 {
 
 /// A step leaf's carried preimage: version, coordinate, value count, the lanes (a length and four
 /// bytes each).
-fn step_preimage_bytes(values: u32) -> u64 {
+pub(crate) fn step_preimage_bytes(values: u32) -> u64 {
     2 + 16 + 4 + 4 + 4 * values as u64
 }
 
@@ -950,6 +970,11 @@ impl<'a> PalwTirClosePriceV1<'a> {
             frame,
             root_frame,
         })
+    }
+
+    /// The step tree's depth over the longest job: the most siblings one path carries.
+    pub(crate) fn depth(&self) -> u64 {
+        self.depth
     }
 
     /// The step leaves of `reads`: preimages, and a sibling set per contiguous run — at most one
@@ -1118,13 +1143,13 @@ fn tile_elements(first: usize, len: usize) -> Vec<usize> {
 }
 
 /// The entries of a read set (what merging or pricing it walks).
-fn size_of_reads(reads: &PalwTirCloseReadsV1) -> u64 {
+pub(crate) fn size_of_reads(reads: &PalwTirCloseReadsV1) -> u64 {
     (reads.steps.len() + reads.loose_steps.len() + reads.params.len() + reads.wild_rows.len() + reads.supplied.len()) as u64
 }
 
 /// The contiguous runs of step leaves a read set holds (a unit moved by an alignment adds at most one
 /// leaf to each).
-fn step_runs(reads: &PalwTirCloseReadsV1) -> u64 {
+pub(crate) fn step_runs(reads: &PalwTirCloseReadsV1) -> u64 {
     let mut runs = reads.loose_steps.len() as u64;
     let mut last: Option<u64> = None;
     for i in reads.steps.keys() {

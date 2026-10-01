@@ -14,16 +14,16 @@
 //! adds no pin; it checks the field and the objects.
 //!
 //! The armed cases run over testnet-12 as shipped (`palw_t12_shipped_params`: `palw_tir_v1` at DAA
-//! 2,000 and `palw_kary_court` below it) with the generative fence armed at a height no fence uses —
-//! the improvement fence's three prerequisites.
+//! 2,000 and `palw_kary_court` below it) with the second IR fence, the generative fence and the decode
+//! rules armed at heights no fence uses — the improvement fence's prerequisites.
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::drill::{
-    PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_gen_fence_at_v1, palw_drill_improve_fence_at_v1,
+    PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_decode_rules_at_v1, palw_drill_gen_fence_at_v1, palw_drill_improve_fence_at_v1,
 };
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
-    PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1,
+    PALW_T12_DECODE_RULES_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1,
     PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params,
     mainnet_shipped_params, palw_rc_shipped_params, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
     palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_shipped_params,
@@ -58,6 +58,9 @@ use kaspa_consensus_core::tx::TransactionOutpoint;
 const FENCE2_AT: u64 = 9_999_985;
 /// The generative fence's height in these cases: above testnet-12's IR flag day, used by no fence.
 const GEN_AT: u64 = 9_999_990;
+/// The decode rules' height in these cases (a prerequisite since the integration's decision of 2026-10-01):
+/// above the generative fence's, below the improvement fence's, used by no fence.
+const DECODE_AT: u64 = 9_999_992;
 /// The improvement fence's: above the generative fence's, used by no fence.
 const AT: u64 = 9_999_995;
 
@@ -95,15 +98,17 @@ fn rulesets() -> Vec<(&'static str, Params)> {
     ]
 }
 
-/// Testnet-12 as shipped with the second IR fence at [`FENCE2_AT`] and the generative fence at
-/// [`GEN_AT`]: every prerequisite in force.
+/// Testnet-12 as shipped with the second IR fence at [`FENCE2_AT`], the generative fence at
+/// [`GEN_AT`] and the decode rules at [`DECODE_AT`]: every prerequisite in force.
 fn t12_with_gen() -> Params {
     let mut p = palw_t12_shipped_params();
     p.palw_tir_fence2 = Some(ForkActivation::new(FENCE2_AT));
     p.sync_palw_tir_fence2();
     p.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(ForkActivation::new(GEN_AT)));
     p.sync_palw_gen_v1();
-    p.validate_palw_v2().unwrap_or_else(|e| panic!("testnet-12 past its IR flag day can arm the generative fence: {e}"));
+    p.palw_fp_decode_rules = Some(ForkActivation::new(DECODE_AT));
+    p.sync_palw_fp_decode_rules();
+    p.validate_palw_v2().unwrap_or_else(|e| panic!("testnet-12 past its IR flag day can arm the generative fence and the decode rules: {e}"));
     p
 }
 
@@ -135,9 +140,14 @@ fn every_shipped_ruleset_leaves_it_dormant_and_no_release_lists_it() {
         PALW_T12_CAPACITY_RHO10_FENCES_V1,
         PALW_T12_TIR_FLAG_DAY_FENCES_V1,
         PALW_T12_TIR_FENCE2_FENCES_V1,
+        PALW_T12_DECODE_RULES_FENCES_V1,
     ] {
         assert!(list.iter().all(|f| f.name != "palw_improvement_v1"), "no testnet-12 release arms the improvement fence");
     }
+    // The decode rules have a flag-day list of their own, dormant: testnet-12 as shipped does not arm them.
+    let decode_names: Vec<&str> = PALW_T12_DECODE_RULES_FENCES_V1.iter().map(|f| f.name).collect();
+    assert_eq!(decode_names, ["palw_fp_decode_rules"]);
+    assert!(palw_t12_shipped_params().palw_fp_decode_rules.is_none(), "dormant while PALW_T12_DECODE_RULES_DAA is None");
     let names: Vec<&str> = PALW_DRILL_IMPROVE_FENCES_V1.iter().map(|f| f.name).collect();
     assert_eq!(names, ["palw_improvement_v1"]);
 }
@@ -290,6 +300,26 @@ fn validate_refuses_every_value_this_build_cannot_run() {
     let mut late_kary = ok.clone();
     late_kary.palw_kary_court = Some(ForkActivation::new(AT + 1));
     assert!(late_kary.validate_palw_improvement_v1().is_err(), "the k-ary court must be in force at or below it");
+    // The decode rules (ADR-0082 D10/D11): an evaluation's text is a decode under the sampler's rules, and a
+    // verdict must not flip when they arm mid-epoch.
+    let mut no_decode = ok.clone();
+    no_decode.palw_fp_decode_rules = None;
+    no_decode.sync_palw_fp_decode_rules();
+    let why = no_decode.validate_palw_improvement_v1().unwrap_err().to_string();
+    assert!(why.contains("palw_fp_decode_rules"), "an evaluation's text is a decode under the sampler's rules: {why}");
+    assert!(no_decode.validate_palw_v2().is_err(), "and validate_palw_v2 asks it");
+    let mut late_decode = ok.clone();
+    late_decode.palw_fp_decode_rules = Some(ForkActivation::new(AT + 1));
+    late_decode.sync_palw_fp_decode_rules();
+    assert!(late_decode.validate_palw_improvement_v1().is_err(), "the decode rules must be in force at or below it");
+    let mut never_decode = ok.clone();
+    never_decode.palw_fp_decode_rules = Some(ForkActivation::never());
+    never_decode.sync_palw_fp_decode_rules();
+    assert!(never_decode.validate_palw_improvement_v1().is_err(), "a dormant decode-rules fence is no decode rules");
+    let mut same_decode = ok.clone();
+    same_decode.palw_fp_decode_rules = Some(ForkActivation::new(AT));
+    same_decode.sync_palw_fp_decode_rules();
+    assert!(same_decode.validate_palw_improvement_v1().is_ok(), "at the improvement fence's own height");
     // The fold reads the fence through the bundle's mirror: a ruleset whose copy disagrees is refused.
     let mut stale = ok.clone();
     stale.palw_improvement_v1 = Some(PalwImprovementFenceV1::drill_v1(ForkActivation::new(AT + 5)));
@@ -349,6 +379,16 @@ fn the_drill_mover_arms_it_on_a_salted_drill_and_nowhere_else() {
     let mut drill = palw_t12_drill_params_v1(&salt());
     kaspa_consensus_core::config::drill::palw_drill_tir_fence2_at_v1(&mut drill, 2_300).expect("the second IR fence first");
     palw_drill_gen_fence_at_v1(&mut drill, 2_345).expect("the generative fence, above the drill's IR flag day");
+    // Without the decode rules the improvement fence is refused, naming them; the rules arm below it.
+    let mut without_decode = drill.clone();
+    let why = palw_drill_improve_fence_at_v1(&mut without_decode, 2_400).unwrap_err();
+    assert!(why.contains("does not validate") && why.contains("palw_fp_decode_rules"), "{why}");
+    assert_eq!(ids(&without_decode), ids(&drill), "a refusal leaves the ruleset as it came");
+    let decode_moves = palw_drill_decode_rules_at_v1(&mut drill, 2_360).expect("the decode rules, above the generative fence");
+    assert_eq!(decode_moves.len(), 1);
+    assert_eq!((decode_moves[0].name, decode_moves[0].was, decode_moves[0].at), ("palw_fp_decode_rules", None, 2_360));
+    assert!(decode_moves[0].to_string().contains("ARMED"), "{}", decode_moves[0]);
+    assert!(drill.palw_fp_decode_rules_active_at(2_360) && !drill.palw_fp_decode_rules_active_at(2_359));
     // Above the generative fence: armed, the one fence, and the result validates.
     let mut moved = drill.clone();
     let moves = palw_drill_improve_fence_at_v1(&mut moved, 2_400).expect("a salted drill arms it above palw_gen_v1");
@@ -368,8 +408,10 @@ fn the_drill_mover_arms_it_on_a_salted_drill_and_nowhere_else() {
     // Refusals leave the ruleset as it came.
     for (at, why) in [
         (2_330, "below the generative fence"),
+        (2_355, "below the decode rules"),
         (2_300, "palw_tir_fence2's own height"),
         (2_345, "palw_gen_v1's own height"),
+        (2_360, "palw_fp_decode_rules's own height"),
         (2_000, "palw_tir_v1's own height"),
         (0, "genesis"),
         (u64::MAX, "never"),
@@ -387,6 +429,46 @@ fn the_drill_mover_arms_it_on_a_salted_drill_and_nowhere_else() {
     assert!(palw_drill_improve_fence_at_v1(&mut public, 2_400).is_err(), "public testnet-12's genesis: never");
     let mut mainnet = mainnet_shipped_params();
     assert!(palw_drill_improve_fence_at_v1(&mut mainnet, 2_400).is_err(), "another network: never");
+}
+
+/// **The decode rules' own flag-day entry and drill mover**: dormant on every network, armed alone on a salted
+/// drill chain (the prerequisite RFC-0003's FP Job V5 and this fence name), refused where the other movers are.
+#[test]
+fn the_decode_rules_have_their_own_dormant_list_and_drill_mover() {
+    use kaspa_consensus_core::config::params::{PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1, PALW_T12_DECODE_RULES_DAA};
+    assert_eq!(PALW_T12_DECODE_RULES_DAA, None, "dormant until the user sets a height");
+    assert_eq!(PALW_T12_DECODE_RULES_FENCES_V1.len(), 1);
+    assert_eq!(PALW_T12_DECODE_RULES_FENCES_V1[0].name, PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1.name);
+    // Every shipped ruleset leaves the decode rules where it had them: dormant (the list's height is `None`).
+    for (name, p) in rulesets() {
+        assert!(p.palw_fp_decode_rules.is_none(), "{name}: dormant");
+    }
+    // A salted drill arms them alone.
+    let drill = palw_t12_drill_params_v1(&salt());
+    let mut moved = drill.clone();
+    let moves = palw_drill_decode_rules_at_v1(&mut moved, 2_360).expect("a salted drill arms the decode rules");
+    assert_eq!(moves.len(), 1);
+    assert_eq!((moves[0].name, moves[0].was, moves[0].at), ("palw_fp_decode_rules", None, 2_360));
+    assert!(moved.palw_fp_decode_rules_active_at(2_360) && !moved.palw_fp_decode_rules_active_at(2_359));
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &moved.palw_consensus_mode else { panic!("V2") };
+    assert_eq!(bundle.state.fp_decode_rules_from_daa(), Some(2_360), "the bundle's mirror follows");
+    for ((name, was), (_, now)) in drill.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
+        if *name != "palw_fp_decode_rules" {
+            assert_eq!(was, now, "{name} did not move");
+        }
+    }
+    assert_ne!(ids(&moved).0, ids(&drill).0, "the drill chain's params id moves");
+    assert_eq!(ids(&moved).1, ids(&drill).1, "a future height: the identity is the drill's");
+    // Refusals leave the ruleset as it came.
+    for (at, why) in [(2_000, "palw_tir_v1's own height"), (0, "genesis"), (u64::MAX, "never")] {
+        let mut p = drill.clone();
+        assert!(palw_drill_decode_rules_at_v1(&mut p, at).is_err(), "{why}");
+        assert_eq!(ids(&p), ids(&drill), "{why}: untouched");
+    }
+    let mut public = palw_t12_shipped_params();
+    assert!(palw_drill_decode_rules_at_v1(&mut public, 2_360).is_err(), "public testnet-12's genesis: never");
+    let mut mainnet = mainnet_shipped_params();
+    assert!(palw_drill_decode_rules_at_v1(&mut mainnet, 2_360).is_err(), "another network: never");
 }
 
 fn h(byte: u8) -> Hash64 {

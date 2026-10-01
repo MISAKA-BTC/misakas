@@ -11,11 +11,12 @@
 //!    `rand_word_v1(TEXT_GUMBEL_V1, …)` — the generic R, through the domain table and the
 //!    big-endian word reader — over a sweep of seeds, positions and lanes, edges included.
 //! 3. **RFC-0001's own golden vectors.** `consensus-vectors/fp-v4/processor_order.json` and
-//!    `v4_noop_equals_v3.json` of `rcore/fp-sampler` at 6cccbab3e, copied verbatim into
-//!    `tests/data/rfc0001-fp-v4/` (delete the copies and point here at `consensus-vectors/fp-v4/`
-//!    once that train lands). Every selection in them — sampled and greedy, masked and not — is
-//!    recomputed with D11's lane key over R's domain 0 and the parsed table, and must pick the lane
-//!    the vector says.
+//!    `v4_noop_equals_v3.json` (the train has landed: they are read in place, no longer copied).
+//!    Every selection in them — sampled and greedy, masked and not — is recomputed with D11's lane
+//!    key over R's domain 0 and the parsed table, and must pick the lane the vector says. The
+//!    vectors are regenerated for finding G1/G2 (the lane key's noise is no longer shifted out of
+//!    the logit's unit, and many sampled rows now select a lane the greedy rule would not), and this
+//!    test requires that they still do.
 
 use misaka_palw_gen::rand::{GUMBEL_Q24_V1_DIGEST_HEX, RAND_DOMAINS_V1, RandLayoutV1, RandStepRuleV1, TEXT_GUMBEL_V1, rand_word_v1};
 use serde::Deserialize;
@@ -45,7 +46,7 @@ const D11_DECODE_LANE_KEY_V2: &str =
     if temperature_q == PALW_DECODE_TEMPERATURE_GREEDY {
         return base;
     }
-    base + (((temperature_q as i64) * (gumbel_q24_v1(seed, position, lane) as i64)) >> K)
+    base + (temperature_q as i64) * (gumbel_q24_v1(seed, position, lane) as i64)
 }
 ";
 
@@ -201,7 +202,8 @@ fn lane_key(table: &[i32], value: i32, seed: &[u8; 32], position: u32, lane: usi
         return base;
     }
     let word = rand_word_v1(TEXT_GUMBEL_V1, seed, 0, position, lane as u64).expect("domain 0 draws");
-    base + (((temperature_q as i64) * (table[word as usize] as i64)) >> K)
+    // Both terms are Q48 (finding G1): the noise is added whole.
+    base + (temperature_q as i64) * (table[word as usize] as i64)
 }
 
 /// The argmax over the lanes that carry a value and are admitted, ties to the LOWEST index
@@ -232,7 +234,7 @@ fn select(
 fn check_3_rfc0001_golden_selections_replay_through_domain_0() {
     let d11 = parse_d11();
     let file: ProcessorFile =
-        serde_json::from_str(include_str!("data/rfc0001-fp-v4/processor_order.json")).expect("processor_order.json");
+        serde_json::from_str(include_str!("../../consensus-vectors/fp-v4/processor_order.json")).expect("processor_order.json");
     let mut sampled = 0;
     for c in &file.cases {
         let seed = seed_from_hex(&c.seed);
@@ -242,7 +244,7 @@ fn check_3_rfc0001_golden_selections_replay_through_domain_0() {
         sampled += (c.temperature_q != 0) as usize;
     }
     let noop: NoopFile =
-        serde_json::from_str(include_str!("data/rfc0001-fp-v4/v4_noop_equals_v3.json")).expect("v4_noop_equals_v3.json");
+        serde_json::from_str(include_str!("../../consensus-vectors/fp-v4/v4_noop_equals_v3.json")).expect("v4_noop_equals_v3.json");
     for (i, c) in noop.cases.iter().enumerate() {
         let seed = seed_from_hex(&c.seed);
         let values: Vec<Option<i32>> = c.row.iter().map(|v| Some(*v)).collect();
@@ -251,4 +253,28 @@ fn check_3_rfc0001_golden_selections_replay_through_domain_0() {
         sampled += (c.temperature_q != 0) as usize;
     }
     assert!(file.cases.len() + noop.cases.len() >= 400 && sampled >= 100, "the vectors still exercise sampling");
+    // G2: a vector that every rule passes tests nothing. At `T > 0` a good share of the expected lanes
+    // must be a lane the greedy rule (the argmax, ties to the lowest index) would NOT select.
+    let argmax = |values: &[Option<i32>], admitted: &dyn Fn(usize) -> bool| -> Option<usize> {
+        let mut best: Option<(usize, i32)> = None;
+        for (lane, v) in values.iter().enumerate() {
+            if let Some(v) = v
+                && admitted(lane)
+                && best.is_none_or(|(_, b)| *v > b)
+            {
+                best = Some((lane, *v));
+            }
+        }
+        best.map(|(l, _)| l)
+    };
+    let mut non_greedy = 0;
+    for c in &file.cases {
+        let admitted = |lane: usize| c.admitted.as_ref().is_none_or(|set| set.contains(&lane));
+        non_greedy += (c.temperature_q != 0 && c.expected_lane != argmax(&c.processed, &admitted)) as usize;
+    }
+    for c in &noop.cases {
+        let values: Vec<Option<i32>> = c.row.iter().map(|v| Some(*v)).collect();
+        non_greedy += (c.temperature_q != 0 && Some(c.expected_lane) != argmax(&values, &|_| true)) as usize;
+    }
+    assert!(non_greedy >= 40, "only {non_greedy} sampled selections differ from the greedy lane: the temperature is inert again");
 }

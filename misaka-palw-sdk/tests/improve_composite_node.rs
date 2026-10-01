@@ -197,6 +197,26 @@ fn serve(adapter: &str) {
     assert_eq!(entry.artifact.inventory_root(), Ok((r.artifact_root(), ft.leaf_count())));
     assert_eq!(composite.parent_leaves + composite.adapter_leaves, ft.leaf_count());
 
+    // **The readiness gap (found preparing drill D-M1; open for the core lane).** A seat proves it holds a class by a
+    // multiproof of leaves of the class's inventory against the class's REGISTERED artifact root
+    // (`apply_seat_readiness_v2`: `verify_artifact_multiproof_v1(proof, class.artifact_root)`; the node checks the same
+    // before filing). A composite's registered root is the composite root, which is no inventory root: a proof over the
+    // composite's own leaves roots to the full candidate's inventory root and never to the composite's — so a composite
+    // class cannot leave Candidate/Prefetching, and no evaluation claim of it is admitted (ClassNotAdmitting). When the core
+    // lane gives composites a possession proof (under `adapter_root`), THIS assertion is the one to change.
+    {
+        use kaspa_consensus_core::palw_artifact::{palw_artifact_multiproof_v1, verify_artifact_multiproof_v1};
+        let leaves: Vec<Hash64> = ct.leaves().to_vec();
+        let picks = [0u32, composite.parent_leaves as u32, (leaves.len() - 1) as u32];
+        let opened: Vec<_> = picks.iter().map(|i| (*i, entry.artifact.param_opening(*i).unwrap().operand)).collect();
+        let proof = palw_artifact_multiproof_v1(&leaves, &opened).expect("a multiproof of the composite's own leaves");
+        assert_eq!(verify_artifact_multiproof_v1(&proof, full.artifact_root), Ok(()), "{adapter}: it opens the full candidate's inventory root");
+        assert!(
+            verify_artifact_multiproof_v1(&proof, entry.artifact_root).is_err(),
+            "{adapter}: it does NOT open the composite class's registered root: a composite cannot prove readiness yet"
+        );
+    }
+
     // The carriage: under the sub-roots only.
     let split = composite.parent_leaves;
     let sides = |leaves: &[u32]| match entry.artifact.param_carriage(leaves) {
