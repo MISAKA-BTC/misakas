@@ -126,12 +126,15 @@ way. `utils/alloc` now honours `MIMALLOC_PURGE_DECOMMITS` when the operator sets
 memory at once (RSS = live set) if an operator wants it; the soak should compare the two.
 
 **F2 — seats do the work their panel still needs from them** (`palw_seat_schedule`, `PalwSeatReplaysV1`):
-* order: tier 0 = quorum short and this seat is one of the first `short + 1` unanswered seats in a hash ranking
-  every seat computes alike, closest to quorum first; tier 1 = backup; tier 2 = quorum already pooled
-  (checked receipts only — nothing a peer can forge moves the order). Nothing is skipped: lower tiers run when
-  a slot is free, and promote by age (backup 24 DAA, satisfied 72 DAA after the bind; stale claims, 48 DAA, go
-  back to oldest-deadline-first ahead of closer younger ones), so a dead primary or quorum receipts that never
-  land cost at most that long. Exactly one seat in five defers a fresh claim.
+* order: **the two oldest due claims short of their quorum first** (by rank, not by age — under a standing
+  backlog every claim is old and an age threshold would promote them all and switch the scheduler off; this
+  is the starvation guard: FIFO at the head, and a claim whose primaries are dead reaches the head when the
+  claims before it are done); then tier 0 = quorum short and this seat is one of the first `short + 1`
+  unanswered seats in a hash ranking every seat computes alike, closest to quorum first, then oldest
+  deadline; tier 1 = backup; tier 2 = quorum already pooled (checked receipts only — nothing a peer can
+  forge moves the order); duties not due last. Nothing is skipped: lower tiers run when a slot is free, and
+  a very old claim promotes itself as a backstop (backup 120 DAA, satisfied 72 DAA after the bind). Exactly
+  one seat in five defers a fresh claim.
 * slots: `--palw-seat-replay-slots` (1–4, default 2); one replay at a time while the host's load per CPU is over
   3.0 (released under 2.0); a light replay past 4× its class's timing on this host (min 8 DAA, untimed 24 DAA)
   stops holding a slot (it keeps its thread and reservation; the held total stays ≤ 2× slots; C7 replays are

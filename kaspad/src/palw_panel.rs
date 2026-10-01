@@ -9509,6 +9509,7 @@ impl PalwPanelService {
                             me: duty.seat_bond,
                             panel: receipt_facts.panel(&duty.claim_id).map(|panel| panel.seats.clone()),
                             valid,
+                            due: seat_duty_is_due_until_v1(duty, &answered, current_daa, view.deadline),
                         }
                     })
                     .collect();

@@ -29,11 +29,19 @@
 //!
 //! **Nothing is skipped, and nothing waits forever.** A lower tier is *later*, not *never*: when the
 //! seat has a free slot and nothing in a higher tier, it works the lower tier (a seat that is idle
-//! loses nothing by duplicating), and a claim promotes itself by age — a backup after
-//! [`PALW_SEAT_BACKUP_AFTER_DAA_V1`] DAA since the bind, a satisfied claim after
-//! [`PALW_SEAT_SATISFIED_AFTER_DAA_V1`] — so a dead primary, or quorum receipts that never land, delay
-//! a claim by at most that long. Pool contents are a hint a peer can only make worse by withholding
-//! (nobody can forge a checked receipt), and the worst a bad hint does is the old behaviour, later.
+//! loses nothing by duplicating). Two guards keep the order from starving a claim:
+//!
+//! * **the oldest [`PALW_SEAT_OLDEST_GUARD_V1`] due claims that are not already at quorum go first**,
+//!   whatever their tier — by rank, not by age, so it holds under a standing backlog (where every claim is
+//!   old and an age threshold would promote them all and switch the scheduler off): the queue is FIFO at
+//!   the head and closest-to-quorum behind it, and a claim whose primaries are dead reaches the head when
+//!   the claims before it are done;
+//! * **a very old claim promotes itself** — a backup after [`PALW_SEAT_BACKUP_AFTER_DAA_V1`] DAA since the
+//!   bind, a satisfied claim after [`PALW_SEAT_SATISFIED_AFTER_DAA_V1`] — against a pathology the rank
+//!   guard does not see (pooled receipts that never become a licence).
+//!
+//! Pool contents are a hint a peer can only make worse by withholding (nobody can forge a checked
+//! receipt), and the worst a bad hint does is the old behaviour, later.
 //!
 //! A duty with no panel read yet (the tip has not seen the bind) keeps tier 0 and the old order.
 
@@ -46,19 +54,17 @@ use kaspa_hashes::Hash64;
 /// slow primary does not hold a claim until it ages.
 pub const PALW_SEAT_PRIMARY_SPARE_V1: usize = 1;
 
-/// DAA after the bind at which a claim a seat is only a backup for becomes its primary work. 24 DAA
-/// is about an hour on testnet-12 (a DAA every ~2.6 minutes): longer than a healthy seat's replay,
-/// short against the 600-DAA receipt window.
-pub const PALW_SEAT_BACKUP_AFTER_DAA_V1: u64 = 24;
+/// DAA after the bind at which a claim a seat is only a backup for becomes its primary work. 120 DAA
+/// is about five hours on testnet-12 (a DAA every ~2.6 minutes): 20× the longest healthy wait, a fifth
+/// of the 600-DAA receipt window — a backstop, not the mechanism (the oldest-first guard is).
+pub const PALW_SEAT_BACKUP_AFTER_DAA_V1: u64 = 120;
 
 /// DAA after the bind at which a claim whose quorum is already pooled is replayed anyway — the pooled
 /// receipts have not become a licence in this long, so more receipts cost nothing.
 pub const PALW_SEAT_SATISFIED_AFTER_DAA_V1: u64 = 72;
 
-/// DAA after the bind at which a claim stops being ranked by how close it is to its quorum and goes
-/// back to plain oldest-deadline-first ahead of every younger claim: under a standing backlog the
-/// closest-first rule alone could starve a claim whose panel has answered nothing.
-pub const PALW_SEAT_STALE_AFTER_DAA_V1: u64 = 48;
+/// How many of the oldest due, not-yet-satisfied claims are answered first whatever their tier.
+pub const PALW_SEAT_OLDEST_GUARD_V1: usize = 2;
 
 /// What the scheduler reads of one due duty.
 #[derive(Clone, Debug)]
@@ -75,6 +81,9 @@ pub struct PalwSeatScheduleInV1 {
     /// Seats of the panel with a checked `Valid` receipt pooled (this seat's own are not in a due
     /// duty's pool: a duty it has answered is not due).
     pub valid: HashSet<PalwBondKeyV2>,
+    /// Whether the duty is due now (this seat has not answered it and its deadline has not passed): a
+    /// duty that is not due is listed last and never counts toward the oldest-first guard.
+    pub due: bool,
 }
 
 /// The tier of one duty (lower is sooner), with the sort key inside it.
@@ -124,20 +133,32 @@ pub fn palw_seat_tier_v1(item: &PalwSeatScheduleInV1, quorum: usize, now_daa: u6
     if primary || waited >= PALW_SEAT_BACKUP_AFTER_DAA_V1 { (PalwSeatTierV1::Needed, short) } else { (PalwSeatTierV1::Backup, short) }
 }
 
-/// **The order a seat answers its duties in**: indices into `items`, soonest first — tier, then (in
-/// the needed tier) the claims closest to quorum, then the receipt deadline, then the claim id.
+/// **The order a seat answers its duties in**: indices into `items`, soonest first — the oldest
+/// [`PALW_SEAT_OLDEST_GUARD_V1`] due claims short of their quorum, then by tier, then (in the needed
+/// tier) the claims closest to quorum, then the receipt deadline, then the claim id; duties that are
+/// not due last.
 pub fn palw_seat_schedule_order_v1(items: &[PalwSeatScheduleInV1], quorum: usize, now_daa: u64) -> Vec<usize> {
-    let mut keyed: Vec<(PalwSeatTierV1, usize, u64, Hash64, usize)> = items
+    let tiers: Vec<(PalwSeatTierV1, usize)> = items.iter().map(|item| palw_seat_tier_v1(item, quorum, now_daa)).collect();
+    // The guard: the oldest due claims that are not already at quorum.
+    let mut candidates: Vec<usize> =
+        (0..items.len()).filter(|i| items[*i].due && tiers[*i].0 != PalwSeatTierV1::Satisfied).collect();
+    candidates.sort_by_key(|i| (items[*i].deadline, items[*i].claim_id));
+    let guarded: HashSet<usize> = candidates.into_iter().take(PALW_SEAT_OLDEST_GUARD_V1).collect();
+    let mut keyed: Vec<(u8, PalwSeatTierV1, usize, u64, Hash64, usize)> = items
         .iter()
         .enumerate()
         .map(|(index, item)| {
-            let (tier, short) = palw_seat_tier_v1(item, quorum, now_daa);
-            // Closest to quorum first inside the needed tier only — and not for a claim that has waited
-            // past the stale bound, which goes ahead of them by deadline; the other tiers keep the
-            // deadline order.
-            let stale = now_daa.saturating_sub(item.bound_daa) >= PALW_SEAT_STALE_AFTER_DAA_V1;
-            let closeness = if tier == PalwSeatTierV1::Needed && !stale { short } else { 0 };
-            (tier, closeness, item.deadline, item.claim_id, index)
+            let (tier, short) = tiers[index];
+            // Closest to quorum first inside the needed tier only; the other tiers keep the deadline order.
+            let closeness = if tier == PalwSeatTierV1::Needed { short } else { 0 };
+            let band = if !item.due {
+                2
+            } else if guarded.contains(&index) {
+                0
+            } else {
+                1
+            };
+            (band, tier, closeness, item.deadline, item.claim_id, index)
         })
         .collect();
     keyed.sort();
@@ -169,56 +190,76 @@ mod tests {
             me: bond(me),
             panel: Some(panel()),
             valid: valid.iter().map(|b| bond(*b)).collect(),
+            due: true,
         }
     }
 
-    /// **The b6/5.104 case**: the two fast seats have answered; a slow seat is one receipt short of a
-    /// licence and does that claim before a fresh one, and a claim whose quorum is already pooled
-    /// goes last.
+    /// **The b6/5.104 case**: the fast seats have answered; a slow seat is one receipt short of a
+    /// licence and does that claim before a fresh one, and a claim whose quorum is already pooled goes
+    /// last. Run at a quorum of 4 over the five seats so that every unsatisfied claim has this seat among
+    /// its primaries whatever the hash ranking says (the ranking is tested apart), and past the
+    /// oldest-first guard: the two oldest claims lead, then closeness.
     #[test]
-    fn a_claim_one_receipt_short_is_replayed_first_and_a_satisfied_one_last() {
+    fn a_claim_one_receipt_short_is_replayed_before_a_fresh_one_and_a_satisfied_one_last() {
         let me = 5;
-        let items = [
-            item(1, me, &[], 100),           // fresh: 3 short
-            item(2, me, &[1, 2, 3], 100),    // quorum pooled: satisfied
-            item(3, me, &[1, 2], 100),       // one short
-            item(4, me, &[1], 100),          // two short
-        ];
-        let order = palw_seat_schedule_order_v1(&items, 3, 110);
-        let read: Vec<_> = order.iter().map(|i| palw_seat_tier_v1(&items[*i], 3, 110)).collect();
-        assert_eq!(order.last(), Some(&1), "the satisfied claim is last");
-        // Whatever the primaries' ranking turns out to be: tiers ascend, and inside the needed tier the
-        // claim closest to its quorum comes first.
-        for pair in read.windows(2) {
-            assert!(pair[0].0 <= pair[1].0, "tiers ascend: {read:?}");
-            if pair[0].0 == PalwSeatTierV1::Needed && pair[1].0 == PalwSeatTierV1::Needed {
-                assert!(pair[0].1 <= pair[1].1, "closest to quorum first: {read:?}");
-            }
+        let mut items = vec![item(10, me, &[], 100), item(11, me, &[], 100)];
+        items[0].deadline = 500;
+        items[1].deadline = 500; // the two oldest take the guard
+        items.push(item(3, me, &[1, 2, 3], 100)); // 2: one short
+        items.push(item(1, me, &[], 100)); //        3: fresh, four short
+        items.push(item(4, me, &[1, 2], 100)); //    4: two short
+        items.push(item(2, me, &[1, 2, 3, 4], 100)); // 5: quorum pooled
+        for (index, short) in [(2, 1), (3, 4), (4, 2)] {
+            assert_eq!(palw_seat_tier_v1(&items[index], 4, 110), (PalwSeatTierV1::Needed, short), "claim {index} is primary work");
         }
-        // The one-short claim is needed work for a seat that is among the first two of the three
-        // seats that have not answered, which is true of a fast seat that ranks first: construct it.
-        let first_ranked = (1..=5u8)
-            .find(|seat| {
-                let it = item(3, *seat, &[1, 2], 100);
-                palw_seat_tier_v1(&it, 3, 110) == (PalwSeatTierV1::Needed, 1) && *seat > 2
-            })
-            .expect("one of the three unanswered seats is a primary for the claim one receipt short");
-        let one_short = item(3, first_ranked, &[1, 2], 100);
-        let fresh = item(1, first_ranked, &[], 100);
-        let pair = [fresh, one_short];
-        let order = palw_seat_schedule_order_v1(&pair, 3, 110);
-        let fresh_tier = palw_seat_tier_v1(&pair[0], 3, 110).0;
-        if fresh_tier == PalwSeatTierV1::Needed {
-            assert_eq!(order, vec![1, 0], "a licence one receipt away before a claim nobody has answered");
+        assert_eq!(palw_seat_tier_v1(&items[5], 4, 110).0, PalwSeatTierV1::Satisfied);
+        assert_eq!(palw_seat_schedule_order_v1(&items, 4, 110), vec![0, 1, 2, 4, 3, 5], "guard, then closest to quorum, satisfied last");
+    }
+
+    /// **The oldest-first guard holds under a standing backlog**: with every claim old (an age
+    /// threshold would have promoted them all and switched the scheduler off), the two oldest due claims
+    /// short of their quorum go first, then the rest by closeness; a claim whose duty is not due, or
+    /// whose quorum is already pooled, does not take a guard place.
+    #[test]
+    fn the_two_oldest_due_claims_go_first_under_a_backlog_and_the_rest_by_closeness() {
+        let me = 5;
+        let now = 10_000; // every claim below has waited far past every age bound
+        let mut items = Vec::new();
+        for n in 1..=8u8 {
+            let valid: &[u8] = match n % 3 {
+                0 => &[1, 2],
+                1 => &[1],
+                _ => &[],
+            };
+            let mut it = item(n, me, valid, 100);
+            it.deadline = 2_000 - 10 * u64::from(n); // claim 8 is the oldest, claim 1 the youngest
+            items.push(it);
         }
+        items[7].due = false; // the very oldest is not due (answered)
+        items[5].valid = [1, 2, 3].map(bond).into_iter().collect(); // claim 6: quorum pooled
+        let order = palw_seat_schedule_order_v1(&items, 3, now);
+        let due_unsatisfied_oldest: Vec<usize> = {
+            let mut c: Vec<usize> = (0..items.len())
+                .filter(|i| items[*i].due && palw_seat_tier_v1(&items[*i], 3, now).0 != PalwSeatTierV1::Satisfied)
+                .collect();
+            c.sort_by_key(|i| items[*i].deadline);
+            c.into_iter().take(PALW_SEAT_OLDEST_GUARD_V1).collect()
+        };
+        let mut led: Vec<usize> = order[..PALW_SEAT_OLDEST_GUARD_V1].to_vec();
+        led.sort_unstable();
+        let mut want = due_unsatisfied_oldest.clone();
+        want.sort_unstable();
+        assert_eq!(led, want, "the guard's places lead");
+        assert_eq!(order.last(), Some(&7), "a duty that is not due is last");
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..items.len()).collect::<Vec<_>>(), "a permutation");
     }
 
     /// **Nobody is skipped for ever**: a backup becomes primary work after the aging bound, and a
-    /// satisfied claim after its own — a dead primary, or quorum receipts that never land, delay a
-    /// claim by at most that long.
+    /// satisfied claim after its own — a backstop for what the rank guard does not see.
     #[test]
     fn a_lower_tier_ages_into_the_needed_one() {
-        // Find a (claim, seat) pair where this seat is a backup: the five seats rank differently per claim.
         let mut backup = None;
         for n in 1..=64u8 {
             for me in 1..=5u8 {
@@ -236,32 +277,10 @@ mod tests {
         assert_eq!(palw_seat_tier_v1(&satisfied, 3, 100 + PALW_SEAT_SATISFIED_AFTER_DAA_V1).0, PalwSeatTierV1::Needed, "aged: replayed anyway");
     }
 
-    /// **Closest-to-quorum-first cannot starve an old claim**: past the stale bound a claim is ranked by
-    /// its deadline ahead of the younger claims that are closer to their quorum.
-    #[test]
-    fn an_old_claim_is_not_starved_by_closer_younger_ones() {
-        let me = 5;
-        let mut old = item(1, me, &[], 100); // 3 short, bound at 100
-        old.deadline = 700;
-        let mut young = item(2, me, &[1, 2], 400); // 1 short, bound at 400
-        young.deadline = 1_000;
-        // Both must be needed work for this seat for the comparison to mean anything.
-        let now = 100 + PALW_SEAT_STALE_AFTER_DAA_V1;
-        let tiers = [palw_seat_tier_v1(&old, 3, now).0, palw_seat_tier_v1(&young, 3, now).0];
-        if tiers == [PalwSeatTierV1::Needed, PalwSeatTierV1::Needed] {
-            assert_eq!(palw_seat_schedule_order_v1(&[old.clone(), young.clone()], 3, now), vec![0, 1], "stale first");
-        }
-        // Before the bound the closer one wins.
-        let now = 100 + PALW_SEAT_STALE_AFTER_DAA_V1 - 1;
-        if [palw_seat_tier_v1(&old, 3, now).0, palw_seat_tier_v1(&young, 3, now).0] == [PalwSeatTierV1::Needed, PalwSeatTierV1::Needed] {
-            assert_eq!(palw_seat_schedule_order_v1(&[old, young], 3, now), vec![1, 0], "closest to quorum first");
-        }
-    }
-
-    /// **Seats do not all pick the same claims**: over many claims with nothing pooled, every seat of
-    /// the panel is a primary for four in five and a backup for one in five, and exactly one seat of
-    /// each claim is the backup — the de-synchronisation that stops five seats doing one claim at
-    /// once. The ranking is the same function on every seat.
+    /// **Seats do not all pick the same claims**: over many claims with nothing pooled, exactly one seat
+    /// of each claim is the backup (3 needed + 1 spare = 4 primaries of 5) — the de-synchronisation that
+    /// stops five seats doing one claim at once — and the load is shared, not piled on one seat. The
+    /// ranking is the same function on every seat.
     #[test]
     fn exactly_one_seat_in_five_defers_a_fresh_claim() {
         let mut backups_per_seat = [0usize; 5];
@@ -278,22 +297,19 @@ mod tests {
         for (seat, count) in backups_per_seat.iter().enumerate() {
             assert!((25..=75).contains(count), "seat {seat} defers {count} of 250: the load is shared, not piled on one seat");
         }
-        // The same inputs rank the same way on every call (a process-keyed hasher would not).
         let a = palw_seat_rank_key_v1(&claim(7), &bond(2));
         assert_eq!(a, palw_seat_rank_key_v1(&claim(7), &bond(2)));
         assert_ne!(a, palw_seat_rank_key_v1(&claim(7), &bond(3)));
     }
 
-    /// **A receipt that has not been checked, from a seat off the panel, or this seat's own, moves
-    /// nothing**, and a duty with no panel read keeps the old order.
+    /// **A receipt from a seat off the panel, or this seat's own, moves nothing**, and a duty with no
+    /// panel read keeps the old order.
     #[test]
     fn only_the_panels_other_seats_count_and_no_panel_means_the_old_order() {
-        // Seat 5's own entry and an off-panel bond do not shorten the quorum.
-        let mut it = item(1, 5, &[5, 9], 100);
-        it.valid.insert(bond(9));
+        let it = item(1, 5, &[5, 9], 100);
         let (_, short) = palw_seat_tier_v1(&it, 3, 100);
         assert_eq!(short, 3, "own and off-panel receipts are not other panel seats'");
-        // No panel: needed, 3 short — the order is the deadline's.
+        // No panel: needed, 3 short — the order is the deadline's (the guard takes the two oldest).
         let mut no_panel = [item(1, 5, &[], 100), item(2, 5, &[], 100), item(3, 5, &[], 100)];
         for it in &mut no_panel {
             it.panel = None;
@@ -308,7 +324,9 @@ mod tests {
     /// pool holds.
     #[test]
     fn the_order_is_a_permutation_of_the_duties() {
-        let items: Vec<_> = (1..=40u8).map(|n| item(n, 1 + n % 5, &[(n % 5) + 1, ((n + 1) % 5) + 1][..usize::from(n % 3).min(2)], u64::from(n))).collect();
+        let items: Vec<_> = (1..=40u8)
+            .map(|n| item(n, 1 + n % 5, &[(n % 5) + 1, ((n + 1) % 5) + 1][..usize::from(n % 3).min(2)], u64::from(n)))
+            .collect();
         let order = palw_seat_schedule_order_v1(&items, 3, 500);
         let mut sorted = order.clone();
         sorted.sort_unstable();
