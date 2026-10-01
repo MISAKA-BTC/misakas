@@ -243,6 +243,48 @@ pub fn open_artifact_leaf_v1(operands: &[PalwArtifactOperandV1], index: u32) -> 
     Some(PalwArtifactOpeningV1 { operand: operands[index as usize].clone(), leaf_index: index, leaf_count, path })
 }
 
+/// **[`open_artifact_leaf_v1`] for many leaves over ONE build of the tree**: the leaves are hashed once and the levels kept,
+/// so a worker that opens the tens of leaves of a cone no longer rehashes the whole inventory per leaf (an opening was
+/// `O(n)` hashing: 60 s a cone close on a 1.5 MB class). The openings are byte for byte the single openings' — the same
+/// promotion rule, the same path. `None` when the inventory is empty or an index is outside it.
+pub fn open_artifact_leaves_v1(operands: &[PalwArtifactOperandV1], indices: &[u32]) -> Option<Vec<PalwArtifactOpeningV1>> {
+    if operands.is_empty() || indices.iter().any(|i| *i as usize >= operands.len()) {
+        return None;
+    }
+    let mut levels: Vec<Vec<Hash64>> = vec![operands.iter().map(artifact_leaf_v1).collect()];
+    while levels.last().is_some_and(|l| l.len() > 1) {
+        let level = levels.last().expect("a level");
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < level.len() {
+            next.push(node(&level[i], &level[i + 1]));
+            i += 2;
+        }
+        if i < level.len() {
+            next.push(level[i]);
+        }
+        levels.push(next);
+    }
+    let leaf_count = operands.len() as u32;
+    Some(
+        indices
+            .iter()
+            .map(|&index| {
+                let mut at = index as usize;
+                let mut path = Vec::new();
+                for level in &levels[..levels.len() - 1] {
+                    let promoted = at == level.len() - 1 && level.len() % 2 == 1;
+                    if !promoted {
+                        path.push(if at.is_multiple_of(2) { level[at + 1] } else { level[at - 1] });
+                    }
+                    at /= 2;
+                }
+                PalwArtifactOpeningV1 { operand: operands[index as usize].clone(), leaf_index: index, leaf_count, path }
+            })
+            .collect(),
+    )
+}
+
 /// An opening: the operand, its index, the inventory size, and the sibling path.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwArtifactOpeningV1 {
@@ -1844,5 +1886,31 @@ mod multiproof_size_tests {
         assert_eq!(palw_artifact_multiproof_sibling_count_v1(8, &[4, 3]), None);
         assert_eq!(palw_artifact_multiproof_sibling_count_v1(8, &[8]), None);
         assert_eq!(palw_artifact_multiproof_sibling_count_v1(1, &[0]), Some(0), "a one-leaf tree is its root");
+    }
+}
+
+#[cfg(test)]
+mod batch_opening_tests {
+    use super::*;
+
+    fn operand(i: u32) -> PalwArtifactOperandV1 {
+        PalwArtifactOperandV1 { tensor_name: format!("t{}", i % 3), layer: Some((i % 4) as u16), row_start: i * 7, bytes: vec![i as u8; (i % 5 + 1) as usize] }
+    }
+
+    #[test]
+    fn the_batch_openings_are_the_single_openings_for_every_inventory_size_and_verify() {
+        for n in [1u32, 2, 3, 4, 5, 7, 8, 9, 16, 17, 33] {
+            let operands: Vec<_> = (0..n).map(operand).collect();
+            let root = artifact_root_v1(&operands.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).expect("a root");
+            let all: Vec<u32> = (0..n).collect();
+            let batch = open_artifact_leaves_v1(&operands, &all).expect("every leaf opens");
+            for i in 0..n {
+                let single = open_artifact_leaf_v1(&operands, i).expect("a single opening");
+                assert_eq!(batch[i as usize], single, "n = {n}, leaf {i}");
+                assert_eq!(verify_artifact_opening_v1(&batch[i as usize], root), Ok(()), "n = {n}, leaf {i} reaches the root");
+            }
+            assert_eq!(open_artifact_leaves_v1(&operands, &[n]), None, "a leaf past the inventory has no opening");
+        }
+        assert_eq!(open_artifact_leaves_v1(&[], &[0]), None);
     }
 }

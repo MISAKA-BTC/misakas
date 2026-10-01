@@ -1181,10 +1181,26 @@ pub fn palw_tir_worst_closes_work_v1(
     job_ctx: &PalwJobContextV2,
     sizing: &PalwTirCloseSizingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
+    palw_tir_worst_closes_work_at_depth_v1(space, inventory, job_ctx, sizing, None)
+}
+
+/// [`palw_tir_worst_closes_work_v1`] with the inventory's size the paths are priced at taken from `inventory_leaves` when given: a
+/// PIPELINE class's stage is sized over its own stage inventory, but its params are opened from the CLASS's one artifact tree, whose
+/// paths are deeper (RFC-0003 PALW-GEN-20).
+pub fn palw_tir_worst_closes_work_at_depth_v1(
+    space: &PalwTirStepSpaceV1,
+    inventory: &PalwTirInventoryIndexV1,
+    job_ctx: &PalwJobContextV2,
+    sizing: &PalwTirCloseSizingV1,
+    inventory_leaves: Option<u32>,
+) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let program = &space.program;
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let p_max = job.positions.checked_sub(1).ok_or("a job with no position")?;
-    let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
+    let mut price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
+    if let Some(leaves) = inventory_leaves {
+        price.inv_depth = price.inv_depth.max(ceil_log2(leaves.max(1) as u64));
+    }
     let c = space.layout.checkpoint_interval.max(1);
     let has_fixed = !space.fixed_instances().is_empty();
     // The position of `[lo, p_max]` whose replay is the longest: the largest `≡ C − 1 (mod C)`, or
