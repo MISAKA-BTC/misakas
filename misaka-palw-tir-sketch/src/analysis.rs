@@ -96,12 +96,34 @@ pub enum TirActActPolicyV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TirCheckPolicyV1 {
     pub act_act: TirActActPolicyV1,
+    /// A weight product is served only when its contraction is at least this long. A shorter one —
+    /// a lowering's outlier columns (`K = 16` beside every A16 projection), a gate's scalar — is
+    /// recomputed from its weight, which the seat then holds: its output costs more bytes to serve
+    /// (8 per element) than its `K` multiply-adds cost to compute, and its weight is small.
+    pub weight_min_k: u32,
 }
 
+/// The measurement's choice: every weight product of contraction ≥ 64 served, `P·V` served from a
+/// history of 1,024, `Q·Kᵀ` recomputed (RFC-0007 §II.9).
 impl Default for TirCheckPolicyV1 {
     fn default() -> Self {
-        Self { act_act: TirActActPolicyV1::Served }
+        Self { act_act: TirActActPolicyV1::ServedFrom { k: 1024 }, weight_min_k: 64 }
     }
+}
+
+/// The contraction length of `MatMul` node `node` at history length `h`.
+fn contraction(program: &TirProgramV1, block: u8, node: u16, h: usize) -> Option<usize> {
+    let b = &program.blocks[block as usize];
+    let n = &b.nodes[node as usize];
+    let last = match n.inputs[0] {
+        Ref::Node(j) => b.nodes[j as usize].out.shape.last().copied(),
+        Ref::CarryIn(c) => b.carry_in[c as usize].shape.last().copied(),
+        Ref::Param(j) => program.params[j as usize].shape.last().map(|d| Dim::Fixed(*d)),
+        Ref::Const(j) => program.consts[j as usize].shape.last().map(|d| Dim::Fixed(*d)),
+        Ref::State(j) => program.states[j as usize].shape.last().map(|d| Dim::Fixed(*d)),
+        Ref::Input(_) => None,
+    }?;
+    Some(last.at(h))
 }
 
 #[derive(Clone, Debug)]
@@ -205,22 +227,14 @@ impl TirSketchAnalysisV1 {
     /// Weight `MatMul`s always are; activation × activation ones as the policy says; nothing else.
     pub fn witnessed(&self, program: &TirProgramV1, block: u8, node: u16, h: usize, policy: &TirCheckPolicyV1) -> bool {
         let Some(site) = self.site(block, node) else { return false };
+        let k_at_least = |k: u32| contraction(program, block, node, h).is_some_and(|c| c as u64 >= k as u64);
         match site.kind {
-            TirMatMulKindV1::Weight { .. } => true,
+            TirMatMulKindV1::Weight { .. } => k_at_least(policy.weight_min_k),
             TirMatMulKindV1::Exact => false,
             TirMatMulKindV1::ActAct => match policy.act_act {
                 TirActActPolicyV1::Recompute => false,
                 TirActActPolicyV1::Served => true,
-                TirActActPolicyV1::ServedFrom { k } => {
-                    let n = &program.blocks[block as usize].nodes[node as usize];
-                    let a = &program.blocks[block as usize];
-                    let kdim = match n.inputs[0] {
-                        Ref::Node(j) => a.nodes[j as usize].out.shape.last().copied(),
-                        Ref::CarryIn(c) => a.carry_in[c as usize].shape.last().copied(),
-                        _ => None,
-                    };
-                    kdim.map(|d| d.at(h) as u64 >= k as u64).unwrap_or(false)
-                }
+                TirActActPolicyV1::ServedFrom { k } => k_at_least(k),
             },
         }
     }

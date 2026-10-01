@@ -122,23 +122,22 @@ impl TirSketchModulusV1 {
 
     /// `Σ x[i]·s[i] mod p` with `x` raw signed integers of at most 64 bits (activations, served
     /// accumulators) and `s` reduced — the check's inner loop, without reducing `x` first.
-    ///
-    /// Over `P61`, `|x|·s < 2^63 · 2^61 = 2^124`, so sixteen products of each sign sum in a `u128`.
     pub fn dot_i64(self, x: &[i64], s: &[u64]) -> u64 {
+        self.dot_i64_bounded(x, s, 64)
+    }
+
+    /// [`Self::dot_i64`] for `x` whose every element satisfies `|x| < 2^x_bits` — what a node's
+    /// proven interval says. Over `P61` each product is a signed `i128` below `2^(x_bits + 61)`, so
+    /// `2^(126 − x_bits − 61)` of them sum without a reduction and without a branch: an `i16`
+    /// activation sums 2^49 terms, a 36-bit accumulator 2^29, a full `i64` four.
+    pub fn dot_i64_bounded(self, x: &[i64], s: &[u64], x_bits: u32) -> u64 {
         debug_assert_eq!(x.len(), s.len());
         if self.0 == M61 {
+            let chunk = 1usize << (126 - x_bits.clamp(1, 64) - 61).min(30);
             let mut acc = 0u64;
-            for (cx, cs) in x.chunks(16).zip(s.chunks(16)) {
-                let (mut pos, mut neg) = (0u128, 0u128);
-                for (v, w) in cx.iter().zip(cs) {
-                    let p = v.unsigned_abs() as u128 * *w as u128;
-                    if *v >= 0 {
-                        pos += p;
-                    } else {
-                        neg += p;
-                    }
-                }
-                acc = self.add(acc, self.sub(self.reduce_u128(pos), self.reduce_u128(neg)));
+            for (cx, cs) in x.chunks(chunk).zip(s.chunks(chunk)) {
+                let sum: i128 = cx.iter().zip(cs).map(|(v, w)| *v as i128 * *w as i128).sum();
+                acc = self.add(acc, self.reduce_i128(sum));
             }
             acc
         } else {
@@ -253,6 +252,13 @@ mod tests {
             assert_eq!(m.dot_i64(&x, &s) as u128, exact);
             let xr: Vec<u64> = x.iter().map(|v| m.reduce_i128(*v as i128)).collect();
             assert_eq!(m.dot(&xr, &s) as u128, exact);
+            // The bounded form over narrow values: one long chunk, the same sum.
+            let narrow: Vec<i64> = (0..200).map(|i| ((i * 2_654_435_761u64 as i64) % 65_535) - 32_767).collect();
+            let exact_narrow = narrow.iter().zip(&s).fold(0u128, |acc, (a, b)| {
+                let a = (*a as i128).rem_euclid(p as i128) as u128;
+                (acc + a * *b as u128 % p) % p
+            });
+            assert_eq!(m.dot_i64_bounded(&narrow, &s, 16) as u128, exact_narrow);
         }
     }
 

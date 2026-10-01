@@ -33,11 +33,11 @@ fn job() -> TirSketchJobV1 {
 }
 
 fn served() -> TirCheckPolicyV1 {
-    TirCheckPolicyV1 { act_act: TirActActPolicyV1::Served }
+    TirCheckPolicyV1 { act_act: TirActActPolicyV1::Served, weight_min_k: 0 }
 }
 
 fn recompute() -> TirCheckPolicyV1 {
-    TirCheckPolicyV1 { act_act: TirActActPolicyV1::Recompute }
+    TirCheckPolicyV1 { act_act: TirActActPolicyV1::Recompute, weight_min_k: 0 }
 }
 
 struct Class {
@@ -499,4 +499,26 @@ fn the_seat_reads_fewer_field_terms_than_a_recompute_reads_multiply_adds() {
     assert!(r.check_terms < r.avoided_macs * 2, "{r:?}");
     let (elements, bytes) = w.served();
     assert_eq!((elements, bytes), (r.served_elements, r.served_bytes));
+}
+
+/// A seat that recomputes the short weight products (`K < 17`: the o projection, the expert down
+/// projections, the shared expert's) holds exactly those weights, is served only the long ones,
+/// and still accepts the honest claim and refuses a lie in any product it was served.
+#[test]
+fn a_seat_that_recomputes_short_products_holds_only_their_weights() {
+    let c = class(dense_moe_v1(14));
+    let pol = TirCheckPolicyV1 { act_act: TirActActPolicyV1::ServedFrom { k: 4 }, weight_min_k: 17 };
+    let held = c.param_names(&c.analysis.held_params(&c.fx.program, 64, &pol));
+    for w in ["blk.attn_o.w", "blk.gate_exps.w", "blk.down_exps.w", "output.w"] {
+        assert!(held.contains(w), "{w}: K ≤ 16, recomputed from a held weight");
+    }
+    assert!(!held.contains("blk.ffn_down.w"), "K = 24: served and sketched");
+    let w = c.honest(&pol);
+    let r = c.check(&pol, &w).expect("the honest claim");
+    assert!(r.exact_macs > 0 && r.weight_checks > 0);
+    let dense = c.block_named("dense");
+    let down = *c.matmuls(dense, is_weight).last().expect("the down projection");
+    let w = c.produce(&pol, &mut add_at(2, c.occurrence_of(dense), down, 3, 1));
+    let f = fault(c.check(&pol, &w));
+    assert_eq!((f.pos, f.node), (2, Some(down)));
 }

@@ -36,6 +36,8 @@ pub struct TirPositionCostV1 {
     pub check_fresh_terms: u64,
     /// Multiply-adds of the activation × activation products the policy recomputes.
     pub exact_act_macs: u64,
+    /// Multiply-adds of the weight products too short to serve (`weight_min_k`), recomputed.
+    pub exact_weight_macs: u64,
     /// Elements every other needed node recomputes (norms, narrowings, softmax …).
     pub exact_elements: u64,
     /// Served elements: weight products, activation × activation products.
@@ -56,6 +58,7 @@ impl TirPositionCostV1 {
         self.check_weight_terms += o.check_weight_terms;
         self.check_fresh_terms += o.check_fresh_terms;
         self.exact_act_macs += o.exact_act_macs;
+        self.exact_weight_macs += o.exact_weight_macs;
         self.exact_elements += o.exact_elements;
         self.served_weight_elements += o.served_weight_elements;
         self.served_act_elements += o.served_act_elements;
@@ -80,6 +83,9 @@ pub struct TirClassCostV1 {
     pub param_bytes: u64,
     pub held_param_bytes: u64,
     pub sketched_param_bytes: u64,
+    /// The most weight bytes one served `MatMul` reads in a position (a routed one: its gathered
+    /// experts) — what a seat without the weights fetches to recompute a node whose check failed.
+    pub max_site_weight_bytes: u64,
 }
 
 fn bits_of(span: u128) -> u64 {
@@ -99,14 +105,43 @@ fn elements_of(plan: &TirPlan, block: u8, r: Ref, h: usize) -> u64 {
     }
 }
 
+/// A node the typed backend never materialises: a strided view of its input (`Reshape`,
+/// `Transpose`, `Slice`, `Broadcast`) or of a history (`HistAppend`'s window). It costs no work.
+fn is_view(p: &Prim) -> bool {
+    matches!(p, Prim::Reshape | Prim::Transpose { .. } | Prim::Slice { .. } | Prim::Broadcast | Prim::HistAppend { .. })
+}
+
+/// Is `r` a view (reshape, transpose, slice, broadcast) of a history window?
+fn history_view(plan: &TirPlan, block: u8, r: Ref) -> bool {
+    let b = &plan.program.blocks[block as usize];
+    match r {
+        Ref::Node(j) => match &b.nodes[j as usize].prim {
+            Prim::HistAppend { .. } => true,
+            Prim::Reshape | Prim::Transpose { .. } | Prim::Slice { .. } | Prim::Broadcast => {
+                history_view(plan, block, b.nodes[j as usize].inputs[0])
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// **One position's costs** at history length `h` (`H = min(h, W)` per block), with `post` run
 /// or not.
+///
+/// `incremental`: a served activation × activation product whose sketched operand is a view of a
+/// history window (`P·V`'s values, `Q·Kᵀ`'s keys) keeps its sketch per history row, computed once
+/// when the row is appended — `S_V[h] = Σ_d σ[d]·V_h[d]`, or the running `Σ_h ρ[h]·K_h` with `ρ`
+/// indexed by absolute position — so a position pays one row's sketch instead of the window's.
+/// Sound for the same reason as a weight's sketch: the vector is fixed per job and layer, secret,
+/// and every row is a verified value before it is sketched (RFC-0007 §II.3).
 pub fn tir_position_cost_v1(
     plan: &TirPlan,
     analysis: &TirSketchAnalysisV1,
     policy: &TirCheckPolicyV1,
     h: usize,
     run_post: bool,
+    incremental: bool,
 ) -> TirPositionCostV1 {
     let p = &plan.program;
     let mut c = TirPositionCostV1::default();
@@ -149,16 +184,26 @@ pub fn tir_position_cost_v1(
                             TirWeightSourceV1::Static(r) => elements_of(plan, block, r, hb),
                         };
                         c.weight_bytes_read += w_elems * w_width;
-                        c.check_weight_terms += g.check_terms() * mods;
-                        c.served_weight_elements += out_elems;
-                        c.served_bytes += out_elems * node.out.dtype.width() as u64;
-                        c.served_packed_bits += out_elems * bits_of(span);
+                        if served {
+                            c.check_weight_terms += g.check_terms() * mods;
+                            c.served_weight_elements += out_elems;
+                            c.served_bytes += out_elems * node.out.dtype.width() as u64;
+                            c.served_packed_bits += out_elems * bits_of(span);
+                        } else {
+                            // A short product: recomputed from its weight, which the seat holds.
+                            c.exact_weight_macs += macs;
+                        }
                     }
                     TirMatMulKindV1::ActAct | TirMatMulKindV1::Exact => {
                         c.recompute_act_macs += macs;
                         if served {
                             let g = TirCheckGeomV1::new(crate::analysis::TirSideV1::Right, &np.in_types[0], &np.in_types[1], hb, 0);
-                            c.check_fresh_terms += (g.check_terms() + g.body_len() as u64) * mods;
+                            let sketch = if incremental && history_view(plan, block, node.inputs[1]) {
+                                (g.body_len() / hb.max(1)) as u64
+                            } else {
+                                g.body_len() as u64
+                            };
+                            c.check_fresh_terms += (g.check_terms() + sketch) * mods;
                             c.served_act_elements += out_elems;
                             c.served_bytes += out_elems * node.out.dtype.width() as u64;
                             c.served_packed_bits += out_elems * bits_of(span);
@@ -167,7 +212,7 @@ pub fn tir_position_cost_v1(
                         }
                     }
                 }
-            } else if needed[ni] {
+            } else if needed[ni] && !is_view(&node.prim) {
                 c.exact_elements += out_elems;
             }
         }
@@ -184,6 +229,9 @@ pub fn tir_class_cost_v1(plan: &TirPlan, analysis: &TirSketchAnalysisV1, policy:
         let bp = &plan.blocks[block as usize];
         for site in &analysis.blocks[block as usize].matmuls {
             let TirMatMulKindV1::Weight { side, source } = site.kind else { continue };
+            if !analysis.witnessed(p, block, site.node, 1, policy) {
+                continue;
+            }
             let np = &bp.nodes[site.node as usize];
             let span = np.facts.out.hi.abs_diff(np.facts.out.lo);
             let mods = tir_sketch_moduli_for_span_v1(span).len() as u64;
@@ -206,6 +254,11 @@ pub fn tir_class_cost_v1(plan: &TirPlan, analysis: &TirSketchAnalysisV1, policy:
             c.sketch_entries += mods * (g.v_len() as u64 + experts * g.s_len() as u64);
             c.sketched_weight_elements += w_elems;
             c.sketched_weight_bytes += w_elems * w_width;
+            let read = match source {
+                TirWeightSourceV1::Routed { idx, .. } => elements_of(plan, block, idx, 1) * g.body_len() as u64,
+                TirWeightSourceV1::Static(_) => w_elems,
+            };
+            c.max_site_weight_bytes = c.max_site_weight_bytes.max(read * w_width);
         }
     }
     let bytes_of = |j: u16| -> u64 {

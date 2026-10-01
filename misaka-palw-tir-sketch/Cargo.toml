@@ -29,9 +29,11 @@ rand_chacha.workspace = true
 # `tir-sketch-measure` only: real Hugging Face configurations lowered WITHOUT weights, so the cost
 # tables count the nodes and shapes of the programs a class would really register.
 misaka-palw-tir-lower = { path = "../misaka-palw-tir-lower", optional = true }
+# `tir-sketch-measure` only: the kernel rates on one thread and on every thread.
+rayon = { workspace = true, optional = true }
 
 [features]
-measure = ["dep:misaka-palw-tir-lower"]
+measure = ["dep:misaka-palw-tir-lower", "dep:rayon"]
 
 [lints]
 workspace = true
