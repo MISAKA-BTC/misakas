@@ -76,7 +76,7 @@ pub fn builtin_lineages_v1() -> Vec<Arc<dyn PalwModelLineageV1>> {
         // RFC-0002 Phase F: IR classes, the classes of the PALWTIR1 artifacts this node loads.
         Arc::new(crate::lineages::tir::TirLineageV1::new()),
         // RFC-0003: generative (pipeline) classes, the classes of the PALWTIR2 artifacts this node loads.
-        Arc::new(crate::lineages::gen::GenLineageV1::new()),
+        Arc::new(crate::lineages::generative::GenLineageV1::new()),
     ]
 }
 

@@ -134,6 +134,22 @@ impl PalwBackendRegistry {
         Some(misaka_palw_sdk::lineages::tir::TirLineageV1::backend(&entry, self.sdk.court(), self.sdk.prompt_ids_form()))
     }
 
+    /// **The generative backend for a chain-named pipeline class, concretely** (RFC-0003 §II.2.1) — for the
+    /// verbs only a pipeline class has (the tensor worker, a seat's replay, a court's output close). `None`
+    /// when no holding is a generative artifact of exactly this `(class_id, artifact_root)`: the class is not
+    /// a pipeline class this node serves, and the trait's door answers for it (its readiness material, its
+    /// `Incapable`).
+    pub fn resolve_gen_v1(
+        &self,
+        class_id: Hash64,
+        artifact_root: Hash64,
+    ) -> Option<Result<misaka_palw_sdk::lineages::generative::GenBackendV1, String>> {
+        let entry = misaka_palw_sdk::gen_class::gen_entries_of_v1(&self.holdings)
+            .into_iter()
+            .find(|e| e.class_id() == class_id && e.artifact_root == artifact_root)?;
+        Some(Ok(misaka_palw_sdk::lineages::generative::GenLineageV1::backend(&entry, self.sdk.court(), self.sdk.prompt_ids_form())))
+    }
+
     /// **The bytes a replay of THIS class will actually hold** (H-4 of the 2026-09-18 audit,
     /// ADR-0112 for the mmap tier).
     ///

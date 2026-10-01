@@ -201,6 +201,89 @@ impl GenBackendV1 {
         self.prompt_ids_form
     }
 
+    // ---- The generative verbs (the node's passes call these; they are `gen_tensor_worker`'s) ----
+
+    /// **A capture's inputs as the worker takes them** — the job, the ids and the images — replayed over the
+    /// held class: the run, whatever the capture says it computed.
+    pub fn replay(
+        &self,
+        capture: &misaka_palw_base0::gen_tensor_worker::GenTensorCaptureV1,
+    ) -> Result<misaka_palw_base0::gen_tensor_worker::GenTensorWorkV1, String> {
+        let images: Vec<misaka_palw_tir::pipeline::JobImageV1> = capture
+            .images
+            .iter()
+            .map(|i| misaka_palw_tir::pipeline::JobImageV1 { h: i.h, w: i.w, rgb: i.rgb.clone() })
+            .collect();
+        self.held().run_tensor(&capture.job, &capture.prompt, &capture.negative, &images, self.prompt_ids_form)
+    }
+
+    /// **A replay's roots, as a seat compares them to its claim's**: the tensor execution root, the step root,
+    /// the step leaf count and the canonical output's root.
+    pub fn replay_roots(
+        &self,
+        capture: &misaka_palw_base0::gen_tensor_worker::GenTensorCaptureV1,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwReplayRootsV1, String> {
+        let work = self.replay(capture)?;
+        Ok(kaspa_consensus_core::palw_backend::PalwReplayRootsV1 {
+            execution_root: work.execution_root(),
+            trace_root: work.binding.step_root(),
+            work_leaves: Some(work.binding.step_leaf_count),
+            output_root: Some(work.binding.output_root),
+        })
+    }
+
+    /// **The accused's execution, rebuilt from its capture** (lies included): the roots the capture's leaves
+    /// and output commit to, whatever computed them.
+    pub fn rebuild(
+        &self,
+        capture: &misaka_palw_base0::gen_tensor_worker::GenTensorCaptureV1,
+    ) -> Result<misaka_palw_base0::gen_tensor_worker::GenTensorWorkV1, String> {
+        capture.rebuild(self.held())
+    }
+
+    /// **The moves a party may file at leaf `index` of the accused's execution** (see
+    /// `gen_tensor_court_candidates_v1`).
+    pub fn court_candidates(
+        &self,
+        accused: &misaka_palw_base0::gen_tensor_worker::GenTensorWorkV1,
+        index: u64,
+        challenger: bool,
+        limits: &misaka_palw_tir::demand::DemandLimits,
+    ) -> Vec<(&'static str, Result<misaka_palw_base0::gen_worker::GenCourtMoveV1, String>)> {
+        misaka_palw_base0::gen_tensor_worker::gen_tensor_court_candidates_v1(self.held(), accused, index, challenger, limits)
+    }
+
+    /// **The first leaf, in the claim's one order, where the accused's commitments part from an honest run
+    /// of the same job** (the leaf a challenger disputes).
+    pub fn first_divergence(
+        &self,
+        accused: &misaka_palw_base0::gen_tensor_worker::GenTensorWorkV1,
+        own: &misaka_palw_base0::gen_tensor_worker::GenTensorWorkV1,
+    ) -> Option<u64> {
+        misaka_palw_base0::gen_worker::gen_execution_first_divergence_v1(&accused.execution, &own.execution)
+    }
+
+    /// **The first output tile whose canonical bytes are not the accused's own committed step tile's** (see
+    /// `gen_tensor_output_audit_v1`): `(tile, the step tile's global leaf, the fault)`.
+    pub fn output_audit(
+        &self,
+        accused: &misaka_palw_base0::gen_tensor_worker::GenTensorWorkV1,
+    ) -> Option<(u64, u64, kaspa_consensus_core::palw_step_leg::PalwStepFaultV1)> {
+        misaka_palw_base0::gen_tensor_worker::gen_tensor_output_audit_v1(self.held(), accused)
+    }
+
+    /// **Run a request frame** (the worker's one step: a request in, the binding or a refusal out) over the held
+    /// class under the network's prompt-commitment form.
+    pub fn answer(
+        &self,
+        request: &[u8],
+    ) -> (
+        misaka_palw_base0::gen_tensor_worker::PalwGenTensorAnswerV1,
+        Option<misaka_palw_base0::gen_tensor_worker::GenTensorWorkV1>,
+    ) {
+        misaka_palw_base0::gen_tensor_worker::gen_tensor_answer_v1(self.held(), request, self.prompt_ids_form)
+    }
+
     /// The readiness walk: the one pass over the inventory the root, every leaf hash and the drawn leaves'
     /// operands are read from. `on_leaf` takes each leaf's hash in inventory order; the drawn operands come
     /// back in the draw's order. `(root, leaf_count, drawn)`.

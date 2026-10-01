@@ -869,6 +869,32 @@ impl ValidatorKey {
         self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
     }
 
+    /// **Sign and build a tensor claim's commitment transaction** (RFC-0003 §I.4, FP job version 10).
+    ///
+    /// `payload` is the commitment the executor's worker assembled (`palw_gen_payload_v1`: the job over the roots a
+    /// run committed, the ids where the privacy mode puts them on the chain) with any signature; this signs the
+    /// CLAIM ID — total over the commitment, so signing the identity signs every field — under the lane's
+    /// commitment context, and funds the overlay transaction on the free-prompt subnetwork. What it refuses is the
+    /// size cap, before it is built rather than after a peer drops it; the stateless rules of the tensor door
+    /// (`validate_palw_fp_gen_commitment_tx_v1`) are the caller's to ask of the built transaction, and the chain's
+    /// price for the claim is the fold's (a tensor claim is weightless: no quanta, no price derivation here).
+    pub fn build_gen_commitment_tx(
+        &self,
+        payload: PalwFpCommitmentTxPayloadV3,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let signature =
+            self.sign_with_context(fp_claim_id_v3(&payload.commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT).to_vec();
+        let payload = PalwFpCommitmentTxPayloadV3 { signature, ..payload };
+        let bytes = borsh::to_vec(&payload).map_err(|e| format!("cannot serialize the tensor commitment: {e}"))?;
+        if bytes.len() > PALW_FP_COMMITMENT_TX_MAX_BYTES {
+            return Err(format!("tensor commitment payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap", bytes.len()));
+        }
+        self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
+    }
+
     /// **The receipt lane's carriage: a signed spend of one certified quantum (FP-R5).**
     ///
     /// The mirror of [`Self::build_fp_commitment_tx`], for the other end of the claim's life: that

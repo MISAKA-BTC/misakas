@@ -35,7 +35,7 @@ use misaka_palw_tir::program_v2::TirProgramV2;
 
 use crate::check_architecture::{IR_DEFAULT_H_CHUNK_V1, IR_DEFAULT_TILE_LEN_V1};
 use crate::lineage::{PalwGenClassEntryV1, PalwLoadedArtifactV1};
-use crate::lineages::gen::GEN_LINEAGE_ID_V1;
+use crate::lineages::generative::GEN_LINEAGE_ID_V1;
 
 /// What an operator chooses; everything else is derived.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -41,7 +41,7 @@ pub mod conformance;
 pub mod lineage;
 pub mod lineages {
     pub mod dense;
-    pub mod gen;
+    pub mod generative;
     pub mod qwen36;
     pub mod tir;
 }

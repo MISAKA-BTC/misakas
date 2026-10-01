@@ -382,3 +382,29 @@ pub fn gen_tensor_output_audit_v1<P: PipelineParams>(
     }
     None
 }
+
+// ---------------------------------------------------------------------------------------------
+// The material a producer serves for a tensor claim
+// ---------------------------------------------------------------------------------------------
+
+/// **The magic a tensor claim's material starts with**: `FPG1` then the Borsh of its capture
+/// ([`GenTensorCaptureV1`]: the inputs, every committed leaf and the claimed canonical output, lies included).
+/// The material of a free-prompt text claim is `FPM1`/`FPC1` (the job and, with the capture, the executor's
+/// whole run); a tensor claim's job is the user's, so its material is its capture — which carries the inputs a
+/// seat replays from and the leaves a challenger builds a close from.
+pub const GEN_TENSOR_MATERIAL_MAGIC_V1: [u8; 4] = *b"FPG1";
+
+/// A tensor claim's material: the magic and the capture's Borsh.
+pub fn gen_tensor_material_encode_v1(capture: &GenTensorCaptureV1) -> Vec<u8> {
+    let mut out = GEN_TENSOR_MATERIAL_MAGIC_V1.to_vec();
+    out.extend_from_slice(&borsh::to_vec(capture).expect("a capture serializes"));
+    out
+}
+
+/// The capture a tensor claim's material carries, or `None` for bytes that are not one (another family's
+/// material, junk). Nothing is checked here beyond the encoding: whether it answers for a claim is the reader's
+/// ([`GenTensorCaptureV1::rebuild`] and the claim's roots).
+pub fn gen_tensor_material_decode_v1(bytes: &[u8]) -> Option<GenTensorCaptureV1> {
+    let body = bytes.strip_prefix(&GEN_TENSOR_MATERIAL_MAGIC_V1)?;
+    borsh::from_slice(body).ok()
+}

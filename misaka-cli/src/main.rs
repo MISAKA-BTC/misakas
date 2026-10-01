@@ -44,6 +44,7 @@ mod palw_economics;
 /// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
 mod palw_extension;
 mod palw_fp;
+mod palw_gen;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
 mod palw_model;
@@ -1145,6 +1146,55 @@ enum PalwCmd {
         /// The class's model id, when the artifact declares more than one class.
         #[arg(long)]
         model_id: Option<String>,
+    },
+    /// **Write a signed generative class registration** (RFC-0003: `ClassRegisteredGenV1`) for a PALWTIR2
+    /// artifact (`palw-class declare-layout`'s container for a pipeline class), at the connected chain's live
+    /// pricing (`getPalwRegistrationTerms`), weightless, the registrant bond named by `--bond` and signed with this
+    /// key under the chain's own domain. Nothing is submitted: file it with `misaka palw submit-object --object
+    /// <out> --yes`.
+    GenRegistration {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The pipeline class artifact (a PALWTIR2 container with a declared class).
+        #[arg(long)]
+        artifact: std::path::PathBuf,
+        /// The registrant bond, `<txid>:<index>` (its key is the one --key-file names).
+        #[arg(long)]
+        bond: String,
+        /// Where to write the borsh `PalwConsensusObjectV2`.
+        #[arg(long)]
+        out: std::path::PathBuf,
+        /// The class's model id, when the artifact declares one to check against.
+        #[arg(long)]
+        model_id: Option<String>,
+    },
+    /// **Run a tensor job and write its claim** (RFC-0003): the job in `--request` (JSON: profile, anchor, nonce,
+    /// seed, ids, steps…) is run on this machine over the PALWTIR2 class in `--artifact` — the worker a seat
+    /// replays with — and the signed commitment transaction (`<claim>.commitment-tx.borsh`, funded from this key)
+    /// and the claim's material (`<claim>.material`, the capture served as `FPG1`, into `--retention-dir`) are
+    /// written. Nothing is submitted: file the claim with `misaka palw fp-submit --tx <it> --yes`.
+    GenClaim {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The pipeline class artifact (a PALWTIR2 container with a declared class).
+        #[arg(long)]
+        artifact: std::path::PathBuf,
+        /// The job, as JSON.
+        #[arg(long)]
+        request: std::path::PathBuf,
+        /// The executor bond, `<txid>:<index>` (its key is the one --key-file names).
+        #[arg(long)]
+        bond: String,
+        /// The executor bond's operator id (128 hex digits).
+        #[arg(long)]
+        operator_id: String,
+        /// Where to write `<claim>.commitment-tx.borsh`.
+        #[arg(long)]
+        out_dir: std::path::PathBuf,
+        /// The node's retention directory (`--palw-retention-dir`): where `<claim>.material` is written, from which
+        /// the executor's node serves the panel. Without it the material is written beside the transaction.
+        #[arg(long)]
+        retention_dir: Option<std::path::PathBuf>,
     },
     /// Submit a PALW lifecycle object written by `palw-certify` — the ADR-0075 certification
     /// objects `FamilyCertified` (a family's drill evidence, graded on chain) and
@@ -2708,6 +2758,24 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await.map(|_| ()),
         Command::Palw(PalwCmd::TirRegistration { key, artifact, bond, out, model_id }) => {
             palw_model_ops::tir_registration_object(&ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await
+        }
+        Command::Palw(PalwCmd::GenRegistration { key, artifact, bond, out, model_id }) => {
+            palw_gen::gen_registration_object(&ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await
+        }
+        Command::Palw(PalwCmd::GenClaim { key, artifact, request, bond, operator_id, out_dir, retention_dir }) => {
+            palw_gen::gen_claim_files(
+                &ctx,
+                &key.source(),
+                palw_gen::GenClaimArgs {
+                    artifact: &artifact,
+                    request: &request,
+                    bond: &bond,
+                    operator_id: &operator_id,
+                    out_dir: &out_dir,
+                    retention_dir: retention_dir.as_deref(),
+                },
+            )
+            .await
         }
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Inspect { manifest, json })) => palw_extension::inspect(&ctx, &manifest, json),
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Verify { manifest, depth, receipt_out, key, json })) => {
