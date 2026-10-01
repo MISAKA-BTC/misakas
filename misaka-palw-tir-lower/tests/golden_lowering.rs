@@ -9,11 +9,19 @@
 //! a refactor that changes a byte of either moves a digest here.
 //!
 //! The expected values live in `tests/golden/lowering_v1.json`. They were recorded on `f125bf142`
-//! (`tir/lower`'s last commit before the generic frontend) and must never be re-recorded to make a
-//! refactor pass: a family whose bytes change on purpose is listed in `INTENDED` below with the
-//! commit that explains it. `PALW_GOLDEN_UPDATE=1` rewrites the file (for adding a NEW fixture; the
-//! rewrite refuses to change an existing row that is not in `INTENDED`).
+//! (`tir/lower`'s last commit before the generic frontend), when every table came from the platform's
+//! libm, and must never be re-recorded to make a refactor pass: a family whose bytes change on purpose
+//! is listed in `INTENDED` below with the commit that explains it. `PALW_GOLDEN_UPDATE=1` rewrites the
+//! file (for adding a NEW fixture; the rewrite refuses to change an existing row that is not in
+//! `INTENDED`).
+//!
+//! **Two math modes** (lane F's `detmath`): the baseline above is `math: "std"` (the legacy mode, held
+//! byte-identical here); `tests/golden/lowering_v1_libm.json` is the same table under `math: "libm-v1"`,
+//! the mode every new conversion runs in, recorded when it was introduced (`d2aecfe77`). The two differ
+//! only where a table entry is a transcendental on which Apple's libm and the pure-Rust port disagree
+//! by an ulp (the position temperature of Llama-4 and Ministral-3).
 
+use misaka_palw_tir_lower::detmath::{MathMode, set_mode};
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::lower::{LowerOpts, materialise};
@@ -24,15 +32,21 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Rows whose bytes changed on purpose: `name → why`. Empty at the baseline.
-const INTENDED: &[(&str, &str)] = &[];
+/// Rows whose bytes changed on purpose: `name → why`.
+const INTENDED: &[(&str, &str)] = &[(
+    "real/deepseek-v3-fp8.json",
+    "1db3c430f (lane F): FP8 checkpoints with block scales are quant-format descriptors now, so the config lowers (it was refused)",
+)];
 
-fn golden_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/lowering_v1.json")
+/// The two modes of `detmath` and the baseline file of each.
+const MODES: &[(MathMode, &str)] = &[(MathMode::Std, "lowering_v1.json"), (MathMode::LibmV1, "lowering_v1_libm.json")];
+
+fn golden_path(file: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(file)
 }
 
-fn load_golden() -> BTreeMap<String, Value> {
-    match std::fs::read(golden_path()) {
+fn load_golden(file: &str) -> BTreeMap<String, Value> {
+    match std::fs::read(golden_path(file)) {
         Ok(b) => serde_json::from_slice(&b).expect("golden json"),
         Err(_) => BTreeMap::new(),
     }
@@ -98,8 +112,17 @@ fn real_configs() -> Vec<(String, String)> {
 
 #[test]
 fn every_lowering_is_byte_identical_to_the_recorded_baseline() {
+    // The math mode is process-wide: both modes run in this one test, one after the other.
+    for (mode, file) in MODES {
+        set_mode(*mode);
+        check_baseline(mode.name(), file);
+    }
+    set_mode(MathMode::LibmV1);
+}
+
+fn check_baseline(mode: &str, file: &str) {
     let update = std::env::var_os("PALW_GOLDEN_UPDATE").is_some();
-    let mut golden = load_golden();
+    let mut golden = load_golden(file);
     let mut got: BTreeMap<String, Value> = BTreeMap::new();
     let mut failed = Vec::new();
     for root in ["tests/fixtures/hf", "tests/fixtures/hf-quant", "tests/fixtures/gguf"] {
@@ -110,11 +133,11 @@ fn every_lowering_is_byte_identical_to_the_recorded_baseline() {
             }
             match digests(&dir) {
                 Ok(v) => {
-                    eprintln!("{name:>34}: {}", v["program"].as_str().unwrap_or("").chars().take(16).collect::<String>());
+                    eprintln!("[{mode}] {name:>34}: {}", v["program"].as_str().unwrap_or("").chars().take(16).collect::<String>());
                     got.insert(name, v);
                 }
                 Err(e) => {
-                    eprintln!("{name:>34}: {e}");
+                    eprintln!("[{mode}] {name:>34}: {e}");
                     failed.push(format!("{name}: {e}"));
                 }
             }
@@ -128,18 +151,18 @@ fn every_lowering_is_byte_identical_to_the_recorded_baseline() {
         for (k, v) in &got {
             match golden.get(k) {
                 Some(old) if old != v && !INTENDED.iter().any(|(n, _)| n == k) => {
-                    panic!("{k}: the baseline row would change ({old} → {v}); list it in INTENDED with the commit that explains it")
+                    panic!("[{mode}] {k}: the baseline row would change ({old} → {v}); list it in INTENDED with the commit that explains it")
                 }
                 _ => {}
             }
             golden.insert(k.clone(), v.clone());
         }
-        std::fs::create_dir_all(golden_path().parent().expect("dir")).expect("mkdir");
-        std::fs::write(golden_path(), serde_json::to_string_pretty(&golden).expect("json") + "\n").expect("write golden");
-        eprintln!("wrote {} rows to {}", golden.len(), golden_path().display());
+        std::fs::create_dir_all(golden_path(file).parent().expect("dir")).expect("mkdir");
+        std::fs::write(golden_path(file), serde_json::to_string_pretty(&golden).expect("json") + "\n").expect("write golden");
+        eprintln!("[{mode}] wrote {} rows to {}", golden.len(), golden_path(file).display());
         return;
     }
-    assert!(!golden.is_empty(), "no recorded baseline at {}", golden_path().display());
+    assert!(!golden.is_empty(), "[{mode}] no recorded baseline at {}", golden_path(file).display());
     let mut moved = Vec::new();
     let mut missing = Vec::new();
     for (k, want) in &golden {
@@ -147,7 +170,7 @@ fn every_lowering_is_byte_identical_to_the_recorded_baseline() {
             Some(have) if have == want => {}
             Some(have) => {
                 if INTENDED.iter().any(|(n, _)| n == k) {
-                    eprintln!("{k}: changed on purpose");
+                    eprintln!("[{mode}] {k}: changed on purpose");
                 } else {
                     moved.push(format!("{k}: {want} → {have}"));
                 }
@@ -155,9 +178,9 @@ fn every_lowering_is_byte_identical_to_the_recorded_baseline() {
             None => missing.push(k.clone()),
         }
     }
-    eprintln!("{} rows compared, {} on purpose", golden.len(), INTENDED.len());
-    assert!(moved.is_empty(), "lowered bytes changed:\n{}", moved.join("\n"));
-    assert!(missing.is_empty(), "baseline rows no longer produced: {missing:?}");
+    eprintln!("[{mode}] {} rows compared, {} on purpose", golden.len(), INTENDED.len());
+    assert!(moved.is_empty(), "[{mode}] lowered bytes changed:\n{}", moved.join("\n"));
+    assert!(missing.is_empty(), "[{mode}] baseline rows no longer produced: {missing:?}");
 }
 
 /// The audit directories of the 09-29 sweep (`~/Downloads/MISAKA-wt-b/tir-audit/<family>/`, or
