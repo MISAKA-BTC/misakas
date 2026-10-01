@@ -25,7 +25,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Rows whose bytes changed on purpose: `name → why`. Empty at the baseline.
-const INTENDED: &[(&str, &str)] = &[];
+const INTENDED: &[(&str, &str)] = &[
+    // 537ca553f, math "libm-v1": the conversion's transcendentals come from a pinned pure-Rust libm, not the platform's. The one table
+    // they move on these fixtures is the Q24 query-temperature table `attn.q_temp.t` (a binary32 `ln_1p` ulp, 775 entries by up to 8
+    // codes); every program digest is unchanged, and so is every other row.
+    ("hf/llama4", "libm-v1: the query-temperature table's binary32 ln_1p (537ca553f)"),
+    ("hf/llama4_vlm", "libm-v1: the query-temperature table's binary32 ln_1p (537ca553f)"),
+    ("hf/ministral3", "libm-v1: the query-temperature table's binary32 ln_1p (537ca553f)"),
+    // 1db3c430f: FP8 with block scales is a built-in quant-format descriptor, so a config that was refused for being quantised lowers.
+    ("real/deepseek-v3-fp8.json", "FP8_BLOCK descriptor: refused before, lowers now (1db3c430f)"),
+];
 
 fn golden_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/lowering_v1.json")
