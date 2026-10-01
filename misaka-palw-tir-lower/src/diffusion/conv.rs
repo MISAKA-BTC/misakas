@@ -1,19 +1,26 @@
-//! **`CONV_DENSE_V1`** — a dense 2-D convolution as the one linear map it is (spec RFC-0003 §6, the lowerer
-//! table): im2col by a pinned index table, one `MatMul`, one narrowing.
+//! **`CONV_DENSE_V2`** — a dense 2-D convolution as the one linear map it is (spec RFC-0003 §6, the lowerer
+//! table): im2col by STATIC index maps, one `MatMul`, one narrowing.
 //!
-//! The input `x:[Cin, H, W]` `i16` codes is flattened and a zero element appended (the padding's value); a pinned
-//! `Idx` table `[Ho·Wo, Cin·k·k]` names, for every output position and every tap `(c, kh, kw)`, the flat index it
-//! reads — `Cin·H·W` (the zero) where the tap falls in the padding. One `Gather` makes the columns
-//! `[Ho·Wo, K]`, and [`super::linear`]'s projection (`MatMul` into exact `i64`, one narrowing per output channel)
-//! gives `[Ho·Wo, Cout]`, transposed back to `[Cout, Ho, Wo]`.
+//! The columns `[Ho·Wo, Cin·k·k]` (taps in `(c, kh, kw)` order, a row per output position) are made from the input
+//! `x:[Cin, H, W]` `i16` codes by `Reshape`, `Slice`, `Concat`, `Broadcast` and `Transpose` alone — every element of
+//! a column is a fixed element of `x` or the padding's zero, named by the PROGRAM. [`super::linear`]'s projection
+//! (`MatMul` into exact `i64`, one narrowing per output channel) gives `[Ho·Wo, Cout]`, transposed back to
+//! `[Cout, Ho, Wo]`.
 //!
-//! The table is a param, so a class can carry any geometry; it is clamped into the data's range before the gather,
-//! a `Clamp` that never fires and makes the range analysis total for any registered table (the library's
-//! convention). Stride and padding are the table's; the kernel is square; groups are 1 (depthwise is a later
-//! lowerer).
+//! **Why no index table** (`CONV_DENSE_V1` gathered through a pinned `Idx` param): a gather's data element sits at a VALUE's
+//! index, so what a court must open for a column is a function of the registered table, which the chain cannot read when it
+//! prices a close. Priced soundly (PALW-GEN-20) a tile of `K` columns that gather is `K` leaves of the input whatever the
+//! table says — an adversarial table makes it so — and a close that carries `K` leaves is past a carrier for any real `K`.
+//! A static map is read by the gate exactly (the twin sizes `Slice`/`Concat`/`Reshape` as the court evaluates them), carries no
+//! table in the artifact, and cannot be made worse by a registrant. The integers are the same: the columns are the table's
+//! gather, element for element ([`ConvSpec::im2col_index`] is the reference the tests hold them to).
+//!
+//! Three geometries are static maps: a pointwise convolution (`k = 1`), a patchify (`stride = k`, no padding, whole
+//! patches — one `Reshape` and `Transpose`s), and any other (`Slice` of the padded input, one per tap, strided taps through a
+//! `Reshape` to `[.., Ho, s, ..]`); groups are 1 (depthwise is a later lowerer).
 
 use misaka_palw_tir::builder::{BlockBuilder, ProgramBuilder};
-use misaka_palw_tir::{DType, Ref};
+use misaka_palw_tir::{DType, Dim, Ref};
 
 use super::linear::{QLinear, QLinearRefs, lower_linear};
 use super::sink::ParamSink;
@@ -75,28 +82,18 @@ impl ConvSpec {
 pub struct QConv {
     pub spec: ConvSpec,
     pub lin: QLinear,
-    pub idx: Vec<u32>,
 }
 
 impl QConv {
     /// Quantise `w:[Cout, Cin, k, k]` (row-major `f32`) and `bias:[Cout]` for inputs at `x_scale` and an output at `y_scale`.
     pub fn new(spec: ConvSpec, w: &[f32], bias: Option<&[f32]>, x_scale: f64, y_scale: f64) -> Self {
         assert_eq!(w.len(), spec.cout * spec.taps(), "a convolution weight is [Cout, Cin, k, k]");
-        Self { spec, lin: QLinear::new(w, spec.cout, spec.taps(), bias, x_scale, y_scale), idx: spec.im2col_index() }
+        Self { spec, lin: QLinear::new(w, spec.cout, spec.taps(), bias, x_scale, y_scale) }
     }
 
-    /// Declare the params (`<name>.w/.m/.s/.z` as a linear's and `<name>.idx`) on `pb`.
+    /// Declare the params (`<name>.w/.m/.s/.z` as a linear's) on `pb`.
     pub fn declare(&self, pb: &mut ProgramBuilder, sink: &mut ParamSink, name: &str) -> QConvRefs {
-        let lin = self.lin.declare(pb, sink, name);
-        let (ho, wo) = self.spec.out_hw();
-        let idx = sink.put(
-            pb,
-            &format!("{name}.idx"),
-            DType::Idx,
-            &[(ho * wo) as u32, self.spec.taps() as u32],
-            self.idx.iter().map(|v| *v as i128).collect(),
-        );
-        QConvRefs { lin, idx }
+        QConvRefs { lin: self.lin.declare(pb, sink, name) }
     }
 }
 
@@ -104,7 +101,6 @@ impl QConv {
 #[derive(Clone, Copy, Debug)]
 pub struct QConvRefs {
     pub lin: QLinearRefs,
-    pub idx: Ref,
 }
 
 /// **The convolution**: `x:[Cin, H, W]` `i16` codes to `[Cout, Ho, Wo]` `i16` codes.
@@ -123,13 +119,99 @@ pub fn lower_conv_as(b: &mut BlockBuilder<'_>, x: Ref, c: &QConvRefs, spec: &Con
 /// The convolution as ROWS, `[Ho·Wo, Cout]` (one row per output position — the token layout of a patch embedding),
 /// narrowed into `[lo, hi]` of `dtype`.
 pub fn lower_conv_rows(b: &mut BlockBuilder<'_>, x: Ref, c: &QConvRefs, spec: &ConvSpec, lo: i64, hi: i64, dtype: DType) -> Ref {
-    let n = (spec.cin * spec.h * spec.w) as u32;
-    let flat = b.reshape_fixed(x, &[n]);
-    let zero = b.pb.konst(DType::I16, &[1], &[0]);
-    let padded = b.concat(&[flat, zero], 0);
-    let idx = b.clamp(c.idx, 0, n as i64, DType::Idx);
-    let cols = b.gather(padded, idx, 0, 0); // [Ho·Wo, K]
+    let cols = lower_conv_cols(b, x, spec); // [Ho·Wo, K]
     lower_linear(b, cols, &c.lin, lo, hi, dtype)
+}
+
+/// `Concat` of any number of parts (a node takes at most 8, NF-14): groups of eight, then the groups.
+fn concat_wide(b: &mut BlockBuilder<'_>, parts: &[Ref], axis: usize) -> Ref {
+    match parts.len() {
+        0 => unreachable!("a concatenation of nothing"),
+        1 => parts[0],
+        2..=8 => b.concat(parts, axis),
+        _ => {
+            let groups: Vec<Ref> = parts.chunks(8).map(|g| concat_wide(b, g, axis)).collect();
+            concat_wide(b, &groups, axis)
+        }
+    }
+}
+
+/// A block of zeros of `shape` (a `Broadcast` of one zero: no constant of the block's size is stored).
+fn zeros(b: &mut BlockBuilder<'_>, shape: &[u32]) -> Ref {
+    let zero = b.pb.konst(DType::I16, &[1], &[0]);
+    b.broadcast(zero, &shape.iter().map(|d| Dim::Fixed(*d)).collect::<Vec<_>>())
+}
+
+/// **The columns**: `x:[Cin, H, W]` to `[Ho·Wo, Cin·k·k]` (a row per output position, taps in `(c, kh, kw)` order) by
+/// static maps alone — see the module doc.
+pub fn lower_conv_cols(b: &mut BlockBuilder<'_>, x: Ref, spec: &ConvSpec) -> Ref {
+    let (cin, h, w, k, s, p) = (spec.cin as u32, spec.h as u32, spec.w as u32, spec.k as u32, spec.stride as u32, spec.pad as u32);
+    let (ho, wo) = spec.out_hw();
+    let (ho, wo) = (ho as u32, wo as u32);
+    // A pointwise convolution: the columns are the input's channels at every position.
+    if k == 1 && s == 1 && p == 0 {
+        let flat = b.reshape_fixed(x, &[cin, h * w]);
+        return b.transpose(flat, &[1, 0]);
+    }
+    // A patchify: non-overlapping patches of the whole input. `[Cin·Ho, k, Wo, k]` → `[Cin·Ho, Wo, k, k]` → `[Cin, Ho, Wo, k·k]`
+    // → `[Ho, Wo, Cin, k·k]` → `[Ho·Wo, Cin·k·k]`.
+    if s == k && p == 0 && h == ho * k && w == wo * k {
+        let r = b.reshape_fixed(x, &[cin * ho, k, wo, k]);
+        let r = b.transpose(r, &[0, 2, 1, 3]);
+        let r = b.reshape_fixed(r, &[cin, ho, wo, k * k]);
+        let r = b.transpose(r, &[1, 2, 0, 3]);
+        return b.reshape_fixed(r, &[ho * wo, cin * k * k]);
+    }
+    // Any other geometry: pad the input (zero blocks around it, and past the end enough that every tap's strided window is a
+    // whole number of strides), slice one window per tap, and stack the taps behind the channel.
+    let hp = (h + 2 * p).max(k - 1 + s * ho);
+    let wp = (w + 2 * p).max(k - 1 + s * wo);
+    let (bottom, right) = (hp - h - p, wp - w - p);
+    let mut xp = x;
+    if p > 0 || bottom > 0 {
+        let mut parts = Vec::with_capacity(3);
+        if p > 0 {
+            parts.push(zeros(b, &[cin, p, w]));
+        }
+        parts.push(xp);
+        if bottom > 0 {
+            parts.push(zeros(b, &[cin, bottom, w]));
+        }
+        xp = b.concat(&parts, 1);
+    }
+    if p > 0 || right > 0 {
+        let mut parts = Vec::with_capacity(3);
+        if p > 0 {
+            parts.push(zeros(b, &[cin, hp, p]));
+        }
+        parts.push(xp);
+        if right > 0 {
+            parts.push(zeros(b, &[cin, hp, right]));
+        }
+        xp = b.concat(&parts, 2);
+    }
+    let mut taps = Vec::with_capacity((k * k) as usize);
+    for kh in 0..k {
+        for kw in 0..k {
+            // Rows `kh + s·oh`: a window of `s·Ho` rows, then every s-th.
+            let mut t = b.slice(xp, 1, kh, s * ho);
+            if s > 1 {
+                t = b.reshape_fixed(t, &[cin, ho, s, wp]);
+                t = b.slice(t, 2, 0, 1);
+                t = b.reshape_fixed(t, &[cin, ho, wp]);
+            }
+            // Columns `kw + s·ow`, likewise.
+            t = b.slice(t, 2, kw, s * wo);
+            if s > 1 {
+                t = b.reshape_fixed(t, &[cin * ho, wo, s]);
+                t = b.slice(t, 2, 0, 1);
+            }
+            taps.push(b.reshape_fixed(t, &[cin, 1, ho * wo]));
+        }
+    }
+    let stacked = concat_wide(b, &taps, 1); // [Cin, k·k, Ho·Wo]
+    let t = b.transpose(stacked, &[2, 0, 1]); // [Ho·Wo, Cin, k·k]
+    b.reshape_fixed(t, &[ho * wo, cin * k * k])
 }
 
 #[cfg(test)]
@@ -188,6 +270,38 @@ mod tests {
         check(ConvSpec { cin: 2, cout: 3, k: 3, stride: 1, pad: 1, h: 5, w: 4 }, true, 1);
         check(ConvSpec { cin: 3, cout: 2, k: 3, stride: 2, pad: 1, h: 6, w: 6 }, false, 2);
         check(ConvSpec { cin: 4, cout: 5, k: 1, stride: 1, pad: 0, h: 3, w: 3 }, true, 3);
+    }
+
+    /// **The static columns are the table's gather, element for element** — for every geometry a static map covers.
+    #[test]
+    fn the_static_columns_are_the_im2col_tables_gather() {
+        for (n, spec) in [
+            ConvSpec { cin: 2, cout: 1, k: 3, stride: 1, pad: 1, h: 5, w: 4 },
+            ConvSpec { cin: 3, cout: 1, k: 3, stride: 2, pad: 1, h: 6, w: 6 },
+            ConvSpec { cin: 3, cout: 1, k: 3, stride: 2, pad: 1, h: 7, w: 5 },
+            ConvSpec { cin: 2, cout: 1, k: 3, stride: 1, pad: 0, h: 4, w: 5 },
+            ConvSpec { cin: 2, cout: 1, k: 5, stride: 2, pad: 2, h: 8, w: 9 },
+            ConvSpec { cin: 4, cout: 1, k: 1, stride: 1, pad: 0, h: 3, w: 2 },
+            ConvSpec { cin: 3, cout: 1, k: 2, stride: 2, pad: 0, h: 4, w: 6 },
+            ConvSpec { cin: 1, cout: 1, k: 4, stride: 4, pad: 0, h: 8, w: 4 },
+            ConvSpec { cin: 2, cout: 1, k: 3, stride: 3, pad: 0, h: 6, w: 6 },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut rng = Lcg(7 + n as u64);
+            let x: Vec<i128> = (0..spec.cin * spec.h * spec.w).map(|_| rng.range(-15_000, 15_000)).collect();
+            let x2 = x.clone();
+            let cols = run_one_block(
+                |pb, sink| sink.put(pb, "x", DType::I16, &[spec.cin as u32, spec.h as u32, spec.w as u32], x2),
+                |b, xs| lower_conv_cols(b, xs, &spec),
+            );
+            let (ho, wo) = spec.out_hw();
+            assert_eq!(cols.shape, vec![ho * wo, spec.taps()], "{spec:?}");
+            let n_in = (spec.cin * spec.h * spec.w) as u32;
+            let want: Vec<i128> = spec.im2col_index().iter().map(|i| if *i == n_in { 0 } else { x[*i as usize] }).collect();
+            assert_eq!(cols.data, want, "geometry {n}: {spec:?}");
+        }
     }
 
     #[test]

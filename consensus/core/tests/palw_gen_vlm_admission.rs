@@ -102,10 +102,23 @@ const TARGETS: [&str; 3] = ["vlm-llava-tiny.json", "vlm-qwen2-vl-tiny.json", "vl
 fn the_lowered_vlm_stages_are_admitted_with_their_attention_dissected() {
     let p = armed();
     let bundle = bundle(&p);
-    let rules = PalwGenAdmissionRulesV1::at(&p, AT).expect("the fence is in force");
-    assert!(rules.court.is_some(), "the k-ary court is armed wherever palw_tir_v1 is");
+    let one_move = PalwGenAdmissionRulesV1::at(&p, AT).expect("the fence is in force");
+    assert!(one_move.court.is_some(), "the k-ary court is armed wherever palw_tir_v1 is");
+    // PALW-GEN-20: a close is priced as the builder carries it. The lowered stages' activation tables are four 32 KiB artifact pieces
+    // a tile's lookups can ALL land in, so a close at the activation is past one carrier (~147 KB): such a class is convictable only
+    // where closes may ride chunks (`palw_held_close_chunks_v1`, PALW-TIR-38's carried bound) and is refused by name where they may
+    // not (PALW-GEN-21) — the HF frontend's `LowerOpts::table_shift` makes the table two pieces.
+    let rules = PalwGenAdmissionRulesV1 { held_close_chunks: true, ..one_move };
     for vector in TARGETS {
         let object = register(vlm_class(vector, 16, 16, 8));
+        match verify_gen_class_admission_v1(&bundle, &one_move, &object) {
+            Ok(_) => {}
+            Err(PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling }) => {
+                assert_eq!(what, "generative close bytes as carried", "{vector}");
+                assert!(got > ceiling, "{vector}: {got} B against {ceiling} B");
+            }
+            Err(e) => panic!("{vector}: {e}"),
+        }
         let admitted = verify_gen_class_admission_v1(&bundle, &rules, &object).unwrap_or_else(|e| panic!("{vector}: {e}"));
         let dissected = &admitted.record.dissected;
         eprintln!(
@@ -126,7 +139,8 @@ fn without_the_court_a_history_cone_must_fit_whole() {
     let p = armed();
     let bundle = bundle(&p);
     let armed_rules = PalwGenAdmissionRulesV1::at(&p, AT).unwrap();
-    let rules = PalwGenAdmissionRulesV1 { court: None, ..armed_rules };
+    // Closes may ride chunks here: the question is the court's, not the carrier's (see the test above).
+    let rules = PalwGenAdmissionRulesV1 { court: None, held_close_chunks: true, ..armed_rules };
     for vector in TARGETS {
         let object = register(vlm_class(vector, 16, 16, 8));
         match verify_gen_class_admission_v1(&bundle, &rules, &object) {
