@@ -1856,6 +1856,7 @@ Do you confirm? (y/n)";
                         prompt_ids_form: config_for_palw_panel.params.palw_prompt_ids_form_v1(),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         class_cache_bytes: args.palw_class_cache_bytes,
+                        seat_replay_slots: args.palw_seat_replay_slots.map(|slots| slots as usize),
                         class_residency: crate::palw_backends::palw_class_residency_within_share_v1(
                             args.palw_class_resident_bytes,
                             crate::args::palw_host_share_bytes_v1(args),

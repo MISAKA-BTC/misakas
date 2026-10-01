@@ -1756,6 +1756,44 @@ fn host_headroom_of_v1(available: u64) -> u64 {
     available.saturating_sub(PALW_REPLAY_HOST_RESERVE_BYTES_V1).saturating_mul(PALW_REPLAY_BUDGET_PERMILLE_V1) / 1_000
 }
 
+/// **The host's one-minute load average per CPU, in thousandths** (`/proc/loadavg`'s first field over
+/// the CPUs this process may run on), `None` off Linux. What the seat's replay slots read to stop
+/// piling replays onto an over-committed host ([`crate::palw_panel::PalwSeatReplaysV1::note_host_load`]).
+/// Cached for a few seconds: the duty loop asks once a tick.
+pub fn host_load_per_cpu_milli_v1() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        static LAST: OnceLock<Mutex<Option<(std::time::Instant, Option<u64>)>>> = OnceLock::new();
+        let cell = LAST.get_or_init(|| Mutex::new(None));
+        let mut last = cell.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((at, value)) = *last
+            && at.elapsed() < std::time::Duration::from_secs(5)
+        {
+            return value;
+        }
+        let value = std::fs::read_to_string("/proc/loadavg").ok().and_then(|text| {
+            let cpus = std::thread::available_parallelism().map(|n| n.get() as u64).unwrap_or(1).max(1);
+            load_per_cpu_milli_from_v1(&text, cpus)
+        });
+        *last = Some((std::time::Instant::now(), value));
+        value
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// `load1 / cpus` in thousandths from `/proc/loadavg`'s text.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn load_per_cpu_milli_from_v1(loadavg: &str, cpus: u64) -> Option<u64> {
+    let load1: f64 = loadavg.split_whitespace().next()?.parse().ok()?;
+    if !load1.is_finite() || load1 < 0.0 {
+        return None;
+    }
+    Some(((load1 * 1000.0) / cpus.max(1) as f64) as u64)
+}
+
 /// The host's headroom now, in both readings the ledger chooses between (`palw_memory_ledger`'s
 /// doc), or `None` where the platform cannot say.
 pub fn host_headroom_v1() -> Option<crate::palw_memory_ledger::PalwHostHeadroomV1> {
@@ -2503,6 +2541,17 @@ mod tests {
         assert_eq!(cgroup_headroom_from_v1("0::/a/b", 0, &read), Some(100));
         assert_eq!(cgroup_headroom_from_v1("0::/a/b", 400, &read), Some(500), "400 of the 900 held are reclaimable: 1000 − 500");
         assert_eq!(cgroup_headroom_from_v1("0::/a/b", 800, &read), Some(400), "the credit is capped at 60 % of the limit: 1000 − 600");
+    }
+
+    /// `/proc/loadavg` over the CPUs, in thousandths: the 5.104 host's 35.5 on eight cores is 4,437.
+    #[test]
+    fn the_load_per_cpu_reads_the_first_loadavg_field() {
+        assert_eq!(load_per_cpu_milli_from_v1("35.50 38.64 40.77 33/919 1272365\n", 8), Some(4_437));
+        assert_eq!(load_per_cpu_milli_from_v1("0.35 0.40 0.41 1/200 42\n", 8), Some(43));
+        assert_eq!(load_per_cpu_milli_from_v1("2.00 0 0 0/0 0", 0), Some(2_000), "no CPU count reads as one");
+        assert_eq!(load_per_cpu_milli_from_v1("", 8), None);
+        assert_eq!(load_per_cpu_milli_from_v1("garbage", 8), None);
+        assert_eq!(load_per_cpu_milli_from_v1("-1.0 0 0", 8), None);
     }
 
     /// **Two duties naming one file hold one mapping.** The producer's and the panel's
