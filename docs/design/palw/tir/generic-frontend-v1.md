@@ -453,7 +453,10 @@ class's own job ceiling decides which of them it takes.
 A config is untrusted input. Every size a feature reads from it is bounded **before** anything is sized on it, and a refusal names
 the bound: rotary dimension ≤ 4,096; hyper-connection streams ≤ 64 with `S·D ≤ 2^24` and rank ≤ 65,536; n-gram order ≤ 8, ≤ 1,024
 hash heads, ≤ 65,536 primes to search, tables under 2^32 rows; a convolution ≤ 64 taps over ≤ 4,096 rows; a sparse-attention
-block-key matrix and scores ≤ 2^27 elements; every TIR dimension ≤ 2^24 and every param ≤ 2^40 elements (NF-8). The tests that
+block-key matrix and scores ≤ 2^27 elements; a convolutional network ≤ 4,096 ops, kernels ≤ 63, strides ≤ 64, dilations ≤ 32,
+paddings ≤ 2,016, ≤ 2^20 channels, feature maps and carried activations ≤ 2^24 positions and elements, window tables ≤ 2^26
+entries (`tests/cnn.rs::hostile_numbers_in_a_spec_are_refused_by_arithmetic_not_allocated`); every TIR dimension ≤ 2^24 and every
+param ≤ 2^40 elements (NF-8). The tests that
 exercise them run under an allocator that aborts on one allocation over 512 MiB, their mutants are small numbers, and each lowered
 mutant is sized by arithmetic over what it declares (a deleted key falls back to the class default, which can be the published
 size: such a program is lowered, never materialised). The sweep found two panics in code that existed before it (a zero-tap

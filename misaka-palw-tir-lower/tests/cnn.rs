@@ -537,3 +537,36 @@ fn the_architecture_report_names_a_resnets_features_and_checks_its_checkpoint() 
         assert_eq!((r.level, &r.result), (Level::B, &ReportResult::Lowerable), "{name}: {}", r.render());
     }
 }
+
+/// **Hostile numbers.** A spec is untrusted input (an adapter built it from a config): every size it declares is bounded by
+/// arithmetic BEFORE anything is sized on it, the refusal says which bound, and nothing is allocated for what a number says.
+#[test]
+fn hostile_numbers_in_a_spec_are_refused_by_arithmetic_not_allocated() {
+    let conv = |k: usize, stride: usize, pad: usize, dilation: usize, cin: usize, cout: usize| {
+        CnnOp::Conv(ConvOp { name: "c".into(), cin, cout, k, stride, pad, dilation, groups: 1, bias: false, bn: None, act: None })
+    };
+    let net = |h: u32, w: u32, ops: Vec<CnnOp>| CnnSpec { architecture: "Hostile".into(), h, w, mean: [0.0; 3], std: [1.0; 3], ops, out: CnnOut::Map, ignored: vec![], aliases: vec![] };
+    let e12 = 1_000_000_000_000usize;
+    let cases: Vec<(&str, CnnSpec)> = vec![
+        ("a kernel of 10^9", net(32, 32, vec![conv(1_000_000_000, 1, 0, 1, 3, 4)])),
+        ("a stride of 10^9", net(32, 32, vec![conv(3, 1_000_000_000, 1, 1, 3, 4)])),
+        ("a padding of 10^12", net(32, 32, vec![conv(3, 1, e12, 1, 3, 4)])),
+        ("a dilation of 10^9", net(32, 32, vec![conv(3, 1, 1, 1_000_000_000, 3, 4)])),
+        ("10^12 output channels", net(32, 32, vec![conv(3, 1, 1, 1, 3, e12)])),
+        ("a 16384 x 16384 input", net(16384, 16384, vec![conv(1, 1, 0, 1, 3, 3)])),
+        ("a 4096 x 4096 map of 64 channels", net(4096, 4096, vec![conv(1, 1, 0, 1, 3, 64)])),
+        ("a window table of 2^24 positions and 3,969 taps", net(4096, 4096, vec![conv(63, 1, 31, 1, 3, 1)])),
+        ("5,000 activations", net(8, 8, (0..5000).map(|_| CnnOp::Act(Act::Relu)).collect())),
+        ("a max pool of 10^9", net(32, 32, vec![CnnOp::MaxPool { k: 1_000_000_000, stride: 1, pad: 0 }])),
+        ("a max pool of stride 0", net(32, 32, vec![CnnOp::MaxPool { k: 3, stride: 0, pad: 0 }])),
+        ("a convolution of channels that overflow the taps", net(8, 8, vec![conv(3, 1, 1, 1, 3, 1 << 20), conv(63, 1, 31, 1, 1 << 20, 1)])),
+    ];
+    for (what, spec) in cases {
+        let t0 = std::time::Instant::now();
+        let v = std::panic::catch_unwind(|| (spec.validate(), cnn::hl_program(&spec).map(|_| ())));
+        let (v, h) = v.unwrap_or_else(|_| panic!("{what}: PANICS"));
+        assert!(v.is_err() && h.is_err(), "{what}: not refused (validate {v:?}, hl {h:?})");
+        assert!(t0.elapsed().as_secs() < 2, "{what}: took {:?} to refuse", t0.elapsed());
+        eprintln!("{what}: {}", v.unwrap_err());
+    }
+}

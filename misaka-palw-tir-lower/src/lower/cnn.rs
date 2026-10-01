@@ -163,19 +163,53 @@ enum PKind {
     Residual { main: Vec<PNode>, shortcut: Vec<PNode>, act: Option<Act> },
 }
 
+/// What an untrusted spec may declare, bounded BEFORE anything is sized on it (every TIR dimension is at most 2^24; a refusal
+/// names the bound).
+const MAX_OPS: usize = 4096;
+const MAX_KERNEL: usize = 63;
+const MAX_STRIDE: usize = 64;
+const MAX_DILATION: usize = 32;
+const MAX_PAD: usize = MAX_KERNEL * MAX_DILATION;
+const MAX_CHANNELS: usize = 1 << 20;
+/// A feature map's positions, and a carried activation's elements (the flat carry), are one TIR dimension each.
+const MAX_ELEMS: usize = 1 << 24;
+/// Entries of one window table (an `Idx` param): positions × taps.
+const MAX_TABLE: usize = 1 << 26;
+
+/// An op's output extent against the bounds: positions, carried elements and window-table entries.
+fn check_extent(what: &str, g: Geo, taps: usize) -> Result<()> {
+    let rows = g.rows();
+    if rows > MAX_ELEMS || rows.saturating_mul(g.c) > MAX_ELEMS || rows.saturating_mul(taps) > MAX_TABLE {
+        return Err(LowerError::not_lowerable(format!(
+            "{what}: a {}×{} map of {} channels with {taps} taps is past the bounds (2^24 positions and carried elements, 2^26 window-table entries)",
+            g.h, g.w, g.c
+        )));
+    }
+    Ok(())
+}
+
 /// The ids and geometry of every op, depth first.
 fn plan_ops(ops: &[CnnOp], mut geo: Geo, counter: &mut usize) -> Result<(Vec<PNode>, Geo)> {
     let mut out = Vec::with_capacity(ops.len());
     for op in ops {
         let n = *counter;
         *counter += 1;
+        if *counter > MAX_OPS {
+            return Err(LowerError::not_lowerable(format!("a network of more than {MAX_OPS} ops")));
+        }
         let (id, kind, g_out) = match op {
             CnnOp::Conv(c) => {
+                if c.k == 0 || c.stride == 0 || c.dilation == 0 || c.groups == 0 || c.cout == 0 || c.cin == 0 || c.cin % c.groups != 0 || c.cout % c.groups != 0 {
+                    return Err(LowerError::bad(format!("convolution `{}`: kernel, stride, dilation, groups and channels must be positive and divisible", c.name)));
+                }
+                if c.k > MAX_KERNEL || c.stride > MAX_STRIDE || c.dilation > MAX_DILATION || c.pad > MAX_PAD || c.cin > MAX_CHANNELS || c.cout > MAX_CHANNELS {
+                    return Err(LowerError::not_lowerable(format!(
+                        "convolution `{}`: past the bounds (kernel {MAX_KERNEL}, stride {MAX_STRIDE}, dilation {MAX_DILATION}, padding {MAX_PAD}, {MAX_CHANNELS} channels)",
+                        c.name
+                    )));
+                }
                 if c.cin != geo.c {
                     return Err(LowerError::bad(format!("convolution `{}` reads {} channels, its input has {}", c.name, c.cin, geo.c)));
-                }
-                if c.k == 0 || c.stride == 0 || c.dilation == 0 || c.groups == 0 || c.cout == 0 || c.cin % c.groups != 0 || c.cout % c.groups != 0 {
-                    return Err(LowerError::bad(format!("convolution `{}`: kernel, stride, dilation, groups and channels must be positive and divisible", c.name)));
                 }
                 if c.groups != 1 && !(c.groups == c.cin && c.cin == c.cout) {
                     return Err(LowerError::not_lowerable(format!("convolution `{}`: groups = {} (only 1 and depthwise are lowered)", c.name, c.groups)));
@@ -184,15 +218,29 @@ fn plan_ops(ops: &[CnnOp], mut geo: Geo, counter: &mut usize) -> Result<(Vec<PNo
                 let (Some(h), Some(w)) = (h, w) else {
                     return Err(LowerError::not_lowerable(format!("convolution `{}`: a {}×{} input is smaller than its window", c.name, geo.h, geo.w)));
                 };
-                (format!("c{n}"), PKind::Conv(c.clone()), Geo { h, w, c: c.cout })
+                let g = Geo { h, w, c: c.cout };
+                check_extent(&format!("convolution `{}`", c.name), g, c.k * c.k)?;
+                // The weight matrix `[k·k·C_in, C_out]` and the gathered columns' taps are TIR dimensions too.
+                if (c.k * c.k).saturating_mul(c.cin) > MAX_ELEMS {
+                    return Err(LowerError::not_lowerable(format!("convolution `{}`: {} taps over {} channels is past 2^24", c.name, c.k * c.k, c.cin)));
+                }
+                (format!("c{n}"), PKind::Conv(c.clone()), g)
             }
             CnnOp::MaxPool { k, stride, pad } => {
-                let (h, w) = (window_out(geo.h, *k, *stride, *pad, 1), window_out(geo.w, *k, *stride, *pad, 1));
-                let (Some(h), Some(w)) = (h, w) else { return Err(LowerError::not_lowerable("a max pool window larger than its input")) };
+                if *k == 0 || *stride == 0 {
+                    return Err(LowerError::bad("a max pool's window and stride must be positive"));
+                }
+                if *k > MAX_KERNEL || *stride > MAX_STRIDE {
+                    return Err(LowerError::not_lowerable(format!("a max pool past the bounds (window {MAX_KERNEL}, stride {MAX_STRIDE})")));
+                }
                 if *pad * 2 > *k {
                     return Err(LowerError::bad("a max pool's padding must be at most half its window"));
                 }
-                (format!("p{n}"), PKind::MaxPool { k: *k, stride: *stride, pad: *pad }, Geo { h, w, c: geo.c })
+                let (h, w) = (window_out(geo.h, *k, *stride, *pad, 1), window_out(geo.w, *k, *stride, *pad, 1));
+                let (Some(h), Some(w)) = (h, w) else { return Err(LowerError::not_lowerable("a max pool window larger than its input")) };
+                let g = Geo { h, w, c: geo.c };
+                check_extent("a max pool", g, k * k)?;
+                (format!("p{n}"), PKind::MaxPool { k: *k, stride: *stride, pad: *pad }, g)
             }
             CnnOp::Act(a) => (format!("a{n}"), PKind::Act(*a), geo),
             CnnOp::Residual { main, shortcut, act } => {
@@ -239,6 +287,9 @@ struct Plan {
 fn plan(spec: &CnnSpec) -> Result<Plan> {
     if spec.h == 0 || spec.w == 0 || spec.h > 1 << 14 || spec.w > 1 << 14 || spec.ops.is_empty() {
         return Err(LowerError::bad(format!("{}: an input of {}×{} and {} ops", spec.architecture, spec.h, spec.w, spec.ops.len())));
+    }
+    if spec.h as usize * spec.w as usize > MAX_ELEMS {
+        return Err(LowerError::not_lowerable(format!("{}: an input of {}×{} pixels (more than 2^24 positions)", spec.architecture, spec.h, spec.w)));
     }
     if spec.std.iter().any(|s| *s <= 0.0 || !s.is_finite()) || spec.mean.iter().any(|m| !m.is_finite()) {
         return Err(LowerError::bad("a normalisation mean or std that is not finite and positive"));
