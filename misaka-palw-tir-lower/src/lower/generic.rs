@@ -453,12 +453,32 @@ pub(super) fn ngram_ids(
     Ok(Val { r: ids, dt: DType::Idx, key: ScaleKey::q24(), len: heads, site: site.to_string() })
 }
 
-/// **A table row per hash head** (`GatherRows` over the ids of [`ngram_ids`]): each head owns a
-/// contiguous range of the layer's table, so the table is split per head — `i16` codes at ONE
-/// scale per layer, `[heads, rows, dim]` — and ONE batched `Gather` reads every head's row. A
-/// head's table taller than NF-8's `2^24` rows is cut into chunks of `2^24` rows (`⌈size / 2^24⌉`
-/// params, a `Select` by the chunk index): no table is ever one dimension past the cap, so a table
-/// of hundreds of millions of rows needs no new primitive.
+/// The rows head `h` can ever read over the block's layers (the tallest of its tables: the params' common shape).
+fn head_rows_max(ple: &NgramPleSpec, layers: &[(usize, usize)], h: usize) -> i64 {
+    layers
+        .iter()
+        .map(|(_, i)| {
+            let mut s = ple.clone();
+            s.layer_index = *i;
+            NgramTables::cached(&s).head_sizes.get(h).copied().unwrap_or(1)
+        })
+        .max()
+        .unwrap_or(1)
+        .max(1)
+}
+
+/// **A table row per hash head** (`GatherRows` over the ids of [`ngram_ids`]): each head owns a contiguous range of
+/// the layer's table, and the table is cut **per head** — `i16` codes at ONE scale per layer, one param
+/// `[rows, dim]` for each head (a head's table taller than NF-8's `2^24` rows is cut into chunks of `2^24` rows, a
+/// `Select` by the chunk index) — and every param is read by `Gather { axis: 0, batch_dims: 0 }` of the param itself.
+///
+/// **Why no batched gather over `[heads, rows, dim]`.** A table of hundreds of GB is never resident: a runtime reads
+/// the rows a forward gathers (lane M2's residency, `docs/design/palw/tir/runtime-residency.md` §2, tiers read off the
+/// program's dataflow), and it can address a row only when the gather is on axis 0 of the param (or of an uncommitted
+/// reshape chain of it): `unit` elements at `row × unit`. A batched gather (`batch_dims = 1`) reads a row of every
+/// head's slab; the runtime would see a dense use of the whole table. Each head's table is its own axis-0 row-major
+/// tensor, one row (`dim` codes, 256 B at 128) one gather unit, and the container's bytes for it are exactly the rows in order.
+/// Nor does the court read more: a head's gather reads one row of one param whatever the chunking.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn gather_rows(
     b: &mut BlockBuilder<'_>,
@@ -482,59 +502,66 @@ pub(super) fn gather_rows(
     if ids.dt != DType::Idx || ids.len != heads {
         return Err(LowerError::eval("internal: GatherRows ids of the wrong shape"));
     }
-    let max_size = max_head_size(ple, layers);
     // NF-8: no dimension past 2^24 rows (`LowerOpts::table_chunk_rows` lowers it for tests).
     let chunk_rows = cx.table_chunk;
-    let nch = ((max_size + chunk_rows - 1) / chunk_rows) as usize;
-    let rows_of = |k: usize| -> i64 { chunk_rows.min(max_size - k as i64 * chunk_rows) };
     let pl = per_layer(lb);
     let pd = &hl.params[table as usize];
-    let mut chunk_params = Vec::with_capacity(nch);
-    for k in 0..nch {
-        let rows = rows_of(k) as usize;
-        // The chunk's codes at the layer's one scale, by a row map (so a streaming conversion reads only the rows of a
-        // block of the chunk): the SAME closure fills the whole tensor and a block of it.
-        let map = Arc::new(NgramRows { ple: ple.clone(), layers: layers.clone(), k, chunk_rows, heads, rows });
-        let m2 = map.clone();
-        let fill: FillFn = Arc::new(move |c| {
-            let used = m2.used_rows(c.hl, c.layer)?;
-            let scale = scale_of(c.table_amax(table, used)?);
-            let src = c.f(table)?;
-            let x: std::borrow::Cow<[f32]> = match c.block_range() {
-                // A block of the chunk's rows: already in artifact order.
-                Some(_) => std::borrow::Cow::Borrowed(&src.data[..]),
-                None => std::borrow::Cow::Owned(gather_runs(&m2.runs(c.hl, c.layer)?, &src.data, dim, heads * rows)),
-            };
-            let v: Vec<i16> = x.iter().map(|f| (*f as f64 / scale).round().clamp(-32767.0, 32767.0) as i16).collect();
-            let n = v.len() / dim.max(1);
-            Ok(IntTensor::i16(if c.block_range().is_some() { vec![n, dim] } else { vec![heads, rows, dim] }, v))
-        });
-        let p = decl_rows_with(b, cx, lb, &format!("{}.c{k}", pd.name), DType::I16, &[heads, rows, dim], pl, RowKind::Mapped(MapRef(map)), table, fill)?;
-        chunk_params.push(p);
-    }
-    // The rows of every head, from the chunk each id lies in.
-    let picked = if nch == 1 {
-        b.gather(chunk_params[0], ids.r, 1, 1)
-    } else {
-        let ck = b.c(DType::I64, chunk_rows as i128);
-        let chunk = b.div(ids.r, ck, Rounding::Floor, DType::I64);
-        let base = b.mul(chunk, ck, DType::I64);
-        let local = b.sub(ids.r, base, DType::I64);
-        let chunk2 = b.reshape_fixed(chunk, &[heads as u32, 1]);
+    let ck = b.c(DType::I64, chunk_rows as i128);
+    let mut picked: Vec<tir::Ref> = Vec::with_capacity(heads);
+    for h in 0..heads {
+        let size = head_rows_max(ple, layers, h);
+        let nch = ((size + chunk_rows - 1) / chunk_rows) as usize;
+        let rows_of = |k: usize| -> i64 { chunk_rows.min(size - k as i64 * chunk_rows) };
+        let idh = b.slice(ids.r, 0, h as u32, 1);
+        // The head's chunks: the codes at the layer's one scale, by a row map (so a streaming conversion reads only the
+        // rows of a block of the chunk): the SAME closure fills the whole tensor and a block of it.
         let mut rows_k = Vec::with_capacity(nch);
+        let (chunk, local) = if nch == 1 {
+            (None, idh)
+        } else {
+            let chunk = b.div(idh, ck, Rounding::Floor, DType::I64);
+            let base = b.mul(chunk, ck, DType::I64);
+            (Some(chunk), b.sub(idh, base, DType::I64))
+        };
         for k in 0..nch {
-            let li = b.clamp(local, 0, rows_of(k) - 1, DType::Idx);
-            rows_k.push(b.gather(chunk_params[k], li, 1, 1));
+            let rows = rows_of(k) as usize;
+            let map = Arc::new(NgramRows { ple: ple.clone(), layers: layers.clone(), h, k, chunk_rows, rows });
+            let m2 = map.clone();
+            let fill: FillFn = Arc::new(move |c| {
+                let used = m2.used_rows(c.hl, c.layer)?;
+                let scale = scale_of(c.table_amax(table, used)?);
+                let src = c.f(table)?;
+                let x: std::borrow::Cow<[f32]> = match c.block_range() {
+                    // A block of the chunk's rows: already in artifact order.
+                    Some(_) => std::borrow::Cow::Borrowed(&src.data[..]),
+                    None => std::borrow::Cow::Owned(gather_runs(&m2.runs(c.hl, c.layer)?, &src.data, dim, rows)),
+                };
+                let v: Vec<i16> = x.iter().map(|f| (*f as f64 / scale).round().clamp(-32767.0, 32767.0) as i16).collect();
+                let n = v.len() / dim.max(1);
+                Ok(IntTensor::i16(if c.block_range().is_some() { vec![n, dim] } else { vec![rows, dim] }, v))
+            });
+            let p = decl_rows_with(b, cx, lb, &format!("{}.h{h}.c{k}", pd.name), DType::I16, &[rows, dim], pl, RowKind::Mapped(MapRef(map)), table, fill)?;
+            let li = b.clamp(local, 0, rows as i64 - 1, DType::Idx);
+            rows_k.push(b.gather(p, li, 0, 0)); // [1, dim]
         }
+        // The row from the chunk the id lies in.
         let mut out = rows_k[nch - 1];
-        for k in (0..nch - 1).rev() {
-            let kc = b.c(DType::I64, k as i128);
-            let hit = b.compare(chunk2, kc, Cmp::Eq);
-            out = b.select(hit, rows_k[k], out, DType::I16);
+        if let Some(chunk) = chunk {
+            for k in (0..nch - 1).rev() {
+                let kc = b.c(DType::I64, k as i128);
+                let hit = b.compare(chunk, kc, Cmp::Eq);
+                out = b.select(hit, rows_k[k], out, DType::I16);
+            }
         }
-        out
-    };
-    let flat = b.reshape_fixed(picked, &[(heads * dim) as u32]);
+        picked.push(out);
+    }
+    // `Concat` joins two to eight inputs: the heads' rows by groups of eight, then the groups.
+    let mut level = picked;
+    while level.len() > 1 {
+        level = level.chunks(8).map(|c| if c.len() == 1 { c[0] } else { b.concat(c, 0) }).collect();
+    }
+    let all = level[0];
+    let flat = b.reshape_fixed(all, &[(heads * dim) as u32]);
     let (sp, lay) = (ple.clone(), layers.clone());
     let ko = want.key.clone();
     let rv = narrow_to(
@@ -571,35 +598,33 @@ fn tables_at(hl: &hl::HlProgram, ple: &NgramPleSpec, layers: &[(usize, usize)], 
     Ok(NgramTables::cached(&s))
 }
 
-/// **The row map of one chunk of a layer's n-gram table** (`RowKind::Mapped`): the chunk is `[heads, rows, dim]`, its
-/// row `(h, r)` is the checkpoint row `head_offset[h] + k·chunk_rows + r` — one run per hash head — and the rows past a head's
-/// size are zero. This is what lets a streaming conversion read exactly the rows of a block of the chunk, never the table.
+/// **The row map of one chunk of one head's n-gram table** (`RowKind::Mapped`): the chunk is `[rows, dim]`, its row `r` is
+/// the checkpoint row `head_offset[h] + k·chunk_rows + r` — ONE run — and the rows past the head's size (the head's table
+/// of this layer is shorter than the tallest over the block's layers) are zero. This is what lets a streaming conversion read
+/// exactly the rows of a block of the chunk, never the table; and the chunk is axis-0 row-major in the container, a row (`dim`
+/// codes) one gather unit.
 struct NgramRows {
     ple: NgramPleSpec,
     layers: Vec<(usize, usize)>,
+    h: usize,
     k: usize,
     chunk_rows: i64,
-    heads: usize,
     rows: usize,
 }
 
 impl RowMap for NgramRows {
     fn key(&self) -> String {
-        format!("ngram-table[k={},chunk={},heads={},rows={}]{:?}", self.k, self.chunk_rows, self.heads, self.rows, self.ple)
+        format!("ngram-table[head={},k={},chunk={},rows={}]{:?}", self.h, self.k, self.chunk_rows, self.rows, self.ple)
     }
     fn runs(&self, hl: &hl::HlProgram, layer: Option<usize>) -> Result<Vec<RowRun>> {
         let t = tables_at(hl, &self.ple, &self.layers, layer)?;
         let from = self.k as i64 * self.chunk_rows;
-        let mut runs = Vec::with_capacity(self.heads);
-        for h in 0..self.heads {
-            let (off, size) = (t.head_offsets[h], t.head_sizes[h]);
-            if from >= size {
-                continue;
-            }
-            let len = (self.rows as i64).min(size - from);
-            runs.push(RowRun { dest: h * self.rows, src: (off + from) as usize, len: len as usize });
+        let (off, size) = (t.head_offsets[self.h], t.head_sizes[self.h]);
+        if from >= size {
+            return Ok(Vec::new());
         }
-        Ok(runs)
+        let len = (self.rows as i64).min(size - from);
+        Ok(vec![RowRun { dest: 0, src: (off + from) as usize, len: len as usize }])
     }
     fn used_rows(&self, hl: &hl::HlProgram, layer: Option<usize>) -> Result<usize> {
         Ok(tables_at(hl, &self.ple, &self.layers, layer)?.total_vocab as usize)

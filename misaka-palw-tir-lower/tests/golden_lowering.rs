@@ -40,10 +40,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Rows whose bytes changed on purpose: `name → why`.
-const INTENDED: &[(&str, &str)] = &[(
-    "real/deepseek-v3-fp8.json",
-    "1db3c430f (lane F): FP8 checkpoints with block scales are quant-format descriptors now, so the config lowers (it was refused)",
-)];
+const INTENDED: &[(&str, &str)] = &[
+    (
+        "real/deepseek-v3-fp8.json",
+        "1db3c430f (lane F): FP8 checkpoints with block scales are quant-format descriptors now, so the config lowers (it was refused)",
+    ),
+    ("hf/qwen4_exp", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
+    ("hf/qwen4_hc1", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
+    ("hf/qwen4_hc2", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
+    ("hf/qwen4_hc_edge", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
+    ("hf/qwen4_ple_bigram", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
+    ("hf/qwen4_ple_boundary", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
+    ("hf/qwen4_ple_trigram", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
+];
 
 /// The two modes of `detmath`; per mode the version-1 baseline (programs only) and the version-2 one.
 const MODES: &[(MathMode, &str, &str)] =

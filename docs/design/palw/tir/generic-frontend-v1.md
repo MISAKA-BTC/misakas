@@ -134,8 +134,11 @@ data would make both unbounded. The consequences, as the features obey them:
   are in the always-visible tail anyway, so the visible set equals the float reference's. Nothing is gathered along `H`: the
   per-block mask is a `[blocks]` vector looked up by each key's block (`Gather(sel, ⌊j / ratio⌋)`).
 - **Routing is `TopK` plus `Gather` of weights.** `K` experts always; the expert axis is a `Fixed` axis.
-- **A table above 2^24 rows is chunked, not dynamic.** The row lookup of a hashed embedding is `⌈size / 2^24⌉` batched `Gather`s
-  and a `Select` by the chunk index (§9.4).
+- **A table above 2^24 rows is chunked, not dynamic.** The row lookup of a hashed embedding is, per hash head, `⌈size / 2^24⌉`
+  axis-0 `Gather`s of that head's chunk params and a `Select` by the chunk index (§9.4) — a layout a runtime can address by row.
+- **A token indexer selects by counting, not by `TopK` over `H`.** `ATTN_TOKEN_INDEXER_V1` (§9.6): the window is `H` long and
+  `TopK` needs a `Fixed` axis, so the `k` best tokens are the mask `κ_t ≥ τ'` of a threshold found by a radix search of
+  reductions over `H`.
 - **A window is a state, not a slice.** A dilated convolution keeps `(k − 1)·dilation` rows and reads fixed rows of
   `state ++ row`.
 
@@ -268,41 +271,120 @@ recorded in the registry as evidence for a possible one-time primitive-set exten
 arithmetic is unit-tested against the reference function at the published scale (a vocabulary of 248,320, head tables of 20 M
 rows, 16 heads, layers 0 and 37) *through the range analysis*, with the function alone — never a table.
 
-**Tables above 2^24 rows (NF-8) are a lowering matter, not a capability.** Each hash head owns a contiguous range of the layer's
-table, so the table becomes `[heads, rows, dim]` `i16` codes at ONE scale per layer (one `narrow` to the consumer's scale
-afterwards), cut into chunks of at most `2^24` rows (`LowerOpts::table_chunk_rows`), **one batched `Gather` (`batch_dims = 1`)
-per chunk** and a `Select` by the chunk index. Published sizes (20 M rows a head) take two chunks (`[16, 2^24, 128]` and
-`[16, 3,225,183, 128]`; a 196-node PLE block, admitted). Cutting at 16 rows (`PLE-06`, 7 chunks) gives logits bit-identical to the
-unchunked lowering's, equal on the three implementations. What *is* large at published size is the artifact (hundreds of GB of
-`i16` codes for the PLE layers), a matter of the conversion's streamed fill and of what a registration may carry, not of the IR.
+**Tables above 2^24 rows (NF-8) are a lowering matter, not a capability — and the table is what a runtime can address by row.**
+Each hash head owns a contiguous range of the layer's table, and the lowering cuts the table **per head**: one param
+`[rows, dim]` of `i16` codes (at ONE scale per layer; one `narrow` to the consumer's scale afterwards) for each head, a head's
+table taller than `2^24` rows cut into chunks of `2^24` rows (`LowerOpts::table_chunk_rows`) with a `Select` by the chunk index,
+and **every param read by `Gather { axis: 0, batch_dims: 0 }` of the param itself** (the head's id, a `Clamp` stating its range
+for the range analysis). Published sizes (20 M rows a head) take two chunks a head — 32 params of `[16,777,216, 128]` and
+`[3.22 M, 128]` — and the PLE block is 349 nodes (the real-shape program: 9 blocks, the largest 450 nodes, 187 cones, cone work
+6,561, admitted). Cutting at 16 rows (`PLE-06`, 24 chunks) gives logits bit-identical to the unchunked lowering's, equal on the
+three implementations, with the court reproducing every node. What *is* large at published size is the artifact (hundreds of GB
+of `i16` codes for the PLE layers), a matter of the conversion's streamed fill and of what a registration may carry, not of the IR.
 
-**The streamed fill of a table that large (the hooks lane F's writer calls).** A registration may carry any artifact size:
-seat resources gate readiness (staged enablement), never admission, and the preflight reports the seat need
-(`palw-class check-architecture` prints `seat need: … GiB`; `artifact_bytes` in its JSON). What stands between the IR and a
-published-size `Qwen4-Exp` artifact is therefore the CONVERSION, and it is built from the loader lane F owns (a `TensorSource`
-that serves row ranges and a chunked writer), which already generalises to any huge `Gather` table. The hooks this feature
-provides, **implemented** (`RowKind::Mapped`, `RowMap`/`RowRun`, `FillCtx::table_amax`, the mapped branch of `lower/stream.rs::fill_by_blocks`;
-`tests/streaming_convert.rs` holds the byte equality with the whole-tensor path over every fixture, `tests/streaming_ple.rs` that the PLE chunks
-really go by blocks, with a first pass that keeps only the maximum):
+*An earlier lowering read a layer's table as ONE batched gather (`batch_dims = 1`) over `[heads, rows, dim]`. It was changed on
+purpose (`tests/golden/lowering_v2*.json`, `INTENDED`): see below.*
 
-1. **A row map.** `RowParam` says which HL rows feed which artifact rows. Today it is the identity (`row r ← row r`); the PLE
-   chunks need *runs*: chunk `k` of the layer's table is `[heads, rows_k, dim]` and its row `(h, r)` comes from HL row
-   `head_offset[h] + k·chunk_rows + r` — one run per hash head (`dest = h·rows_k`, `src = head_offset[h] + k·chunk_rows`,
-   `len = min(rows_k, size_h − k·chunk_rows)`); rows no run covers (past a head's size) are zero.
-2. **A table-wide scale as a first pass.** The table's `i16` codes share ONE scale per layer (a per-row scale would need a gather of
-   `[heads, rows]` more parameters at every position). `RowKind::TableShared` makes the scale a reduction (`max|x|/32767` over the rows
-   the heads use) computed in a first pass over the blocks that keeps nothing but the maximum — the shape of `SplitMain`'s meta pass —
-   and handed to the block fills ready-made; the whole-tensor path computes the same number, so the two agree to the byte. The narrowing
-   `(m, s, z)` that reads the table's scale takes it from the same pass.
-3. **Streaming-friendly by construction.** The lowering never asks for the whole table: the chunk fills read only through the row
-   map, the hash's tables (`NgramTables`) are tiny (primes and offsets), and the ids and the table read are already chunked by NF-8 at
-   `2^24` rows. The cost at published size is two reads of the rows used (`16 × 20 M × 128` values per layer: ≈ 82 GB of codes written,
-   about twice that read per pass from bf16), which is a property of the model, not of the IR.
+**The layout contract with the runtime residency (lane M2, `runtime-residency.md`).** A residency never holds a table of hundreds
+of GB; it reads the rows a forward gathers. It tells a table from a dense weight by the PROGRAM's dataflow alone: a param is
+**row-addressed** when every use is a `Gather { axis: 0, batch_dims: 0 }` of the param itself or of an uncommitted, uncarried
+`Reshape` chain of it (a row of a row-major view of a contiguous tensor is `unit` elements at `row × unit`), and is then served by
+rows — *gathered* when every index is a function of the inputs, *routed* when an index is computed from params (a param taints it:
+the n-gram hash's per-layer multipliers and head sizes are params, because the PLE block is shared by the PLE layers, so M2's rule
+calls an n-gram table routed; either tier reads a row at its offset) — and *pinned* otherwise. So the rule on what this lowerer
+writes, for every table and every stack a program gathers (embedding, per-layer, n-gram and position tables, a mixture's expert
+stacks and their per-row scales):
+
+* **one tensor, axis 0 = the gather unit.** One row — `dim` codes, 256 B at 128; an expert's matrix — is one gather unit and the
+  container holds the rows in order, so row `r` is at `r × row bytes` of the instance. Never a batched gather over a stack of
+  tables, a transposed copy, a blocked or interleaved layout, a layout whose row is not contiguous: a layout a runtime cannot
+  address by row offset reads the table densely — a pinned 51 GB table;
+* **a table over `2^24` rows is cut along axis 0** (chunks, a `Select` by the chunk index) and never along another axis;
+* **the container's bytes of a table are its artifact rows**, so the streaming writer below and a residency agree on what row `r`
+  of a param is without either knowing a model.
+
+`tests/row_addressing.rs` holds it with M2's own classifier (`tests/common/m2_tiers.rs`, vendored verbatim from `tir/residency`; the
+real module replaces it when that branch merges): at Qwen4-Exp's published shape the 32 n-gram head tables of every PLE layer are
+served by rows (none pinned) with the 512-expert stacks routed and the token embedding gathered — 750 GiB of weights, **2.55 GiB
+pinned, a floor of 3.77 GiB** — at any chunking of the fixtures; the mixtures' expert stacks are routed and every embedding
+gathered at the real shapes of Qwen3-30B-A3B, DeepSeek-V2-Lite and gpt-oss-20b.
+
+**The streamed fill — the writer API (final).** A registration may carry any artifact size: seat resources gate readiness (staged
+enablement), never admission, and the preflight reports the seat need (`palw-class check-architecture` prints `seat need: … GiB`;
+`artifact_bytes` in its JSON). What stands between the IR and a published-size artifact is the CONVERSION, and it is bounded by one
+block of rows and one chunk, whatever the model (`palw-tir-convert`, `tests/streaming_budget.rs`). The surface a writer is built on:
+
+| piece | what it is | contract |
+| --- | --- | --- |
+| `Lowered::row_params` | the params that are row-wise codes of ONE HL param (`RowParam { hl, kind }`), by TIR param name | a conversion produces these by blocks of rows; every other param comes with its occurrence |
+| `RowKind::{W8, T16, SplitMain, Mapped}` | per-row `i8` codes (a projection, an expert stack), per-row `i16` codes (an embedding), a split-outlier main matrix, and the **mapped** table | codes are per row, so a block of rows is the whole tensor's rows byte for byte |
+| `RowKind::Mapped(MapRef)` / `trait RowMap { key, runs, used_rows }` | the artifact rows are NOT the checkpoint's rows in order: `runs(hl, layer)` lists `RowRun { dest, src, len }` (artifact rows `dest..dest + len` are HL rows `src..src + len`; rows no run covers are zero), `used_rows` the HL rows `0..used` that carry the table | **row-major, ascending, one run's rows contiguous**; the n-gram chunk of head `h`, chunk `k` is ONE run (`src = head_offset[h] + k·chunk_rows`); a map never reorders within a block, so a writer reads exactly the checkpoint rows a block needs and nothing else |
+| `FillCtx::{table_amax, inject_amax, with_block, block_range}` | the table-wide scale as a first pass: `max|x| / 32767` over the used rows keeps nothing but the maximum, handed to the block fills ready-made | the whole-tensor path computes the same number, so the two agree to the byte; every chunk param of a layer reads the ONE scale |
+| `materialise_stream(lowered, hl, loader, stats, policy, &StreamOpts, &mut dyn TensorSink, progress)` | produces every param of every occurrence, handing each tensor to the sink | the result does not depend on `StreamOpts { defer_min_elems, block_elems }`, the block size, the chunk size or the thread count |
+| `trait TensorSink { begin(param, layer, bytes), push(bytes), end() }` and `ChunkSink` | where the tensors go, one instance at a time, in pieces; `ChunkSink` cuts what arrives into canonical chunks of a content-addressed store and is the recipe `write_container_v1_chunked` assembles a `PALWTIR1` container from | an instance's bytes are its row-major elements: a runtime addresses row `r` at `r × unit × width`; a sink may be a file, a chunk store or a multipart upload |
+| `Streamed::new(hl, binding, checkpoint)` (an `OccParams`) and `weights::stream::{src_row_space, eval_src_rows, row_blocks}` | the source: only the occurrence being filled has its float params loaded; a deferred param's rows are read through the binding's `Src` by ranges (`weights::remote` serves them over HTTP ranges) | nothing here knows a tensor name beyond the binding's |
+
+Invariants (held by `tests/streaming_convert.rs`, over every fixture and every block size from one row up; `tests/streaming_ple.rs`
+for the mapped tables; `tests/dsa.rs` for a layer split in two blocks): **W-1** the streamed container is the whole conversion's file,
+byte for byte (so the same inventory root and class id); **W-2** a table-wide scale is a first pass that keeps only the maximum;
+**W-3** what is resident is a block and a chunk; **W-4** a mapped table's bytes in the container are its artifact rows in order
+(the residency contract above); **W-5** nothing in the writer depends on a model's name. The lowering never asks for a whole table:
+the chunk fills read only through the row map, the hash's tables (`NgramTables`) are tiny (primes and offsets), and the cost at
+published size is two reads of the rows used (`16 × 20 M × 128` values per layer: ≈ 82 GB of codes written, about twice that read
+per pass from bf16), a property of the model, not of the IR.
 
 ### 9.5 The gate activations
 
 A gated norm's gate is data (`Op::GatedRmsNorm.act`: SiLU or sigmoid), a table over the `i16` grid like any activation;
 `Act::SignedSqrt` (`sign(x)·√max(|x|, 10⁻⁶)`) is one more table. Nothing here needs a primitive.
+
+### 9.6 DeepSeek sparse attention (`ATTN_TOKEN_INDEXER_V1`, FR-09)
+
+**Semantics** (`DeepseekV32Indexer`, `GlmMoeDsaIndexer` of transformers 5.17): a learned scorer chooses which of the visible tokens
+an MLA layer attends over. The indexer reads the MLA's own **q-latent** `qr = q_a_norm(q_a x)`, projects it to `index_n_heads`
+query heads of `index_head_dim` (`wq_b`), rotates the FIRST `qk_rope_head_dim` lanes of each head (the opposite of MLA's nope-first
+layout; rotate-half for DeepSeek-V3.2, interleaved for GLM-MoE-DSA), and scores every token by
+`s_t = Σ_h w_h · ReLU(dim^-½ q_h · k_t)` with `w = weights_proj(x)·heads^-½` and `k_t = rotate(LayerNorm(wk x_t))` (one head, cached
+per position). The MLA softmax then runs over the `min(index_topk, H)` best tokens. HF pins nothing about **ties**: `torch.topk`
+returns, for a vector whose seven best scores are all 0.0, the indices `[5, 1, 8, 3]` — and ReLU makes exact zeros common. The IR's
+`TopK` rule (04b §6.6, lowest index first) is the pinned choice, over the history window.
+
+**Why not `TopK` and not a gather.** `TopK` needs a `Fixed` axis and the window is `H` long; a `TopK`/`Gather` along `H` would
+break "dissectability is structural". The selection is the exact mask of a threshold found **by counting** (`lower/dsa.rs`):
+
+```
+  s_t   the head-weighted score, narrowed to SB bits at a calibrated scale (ReLU zeros stay exact zeros)
+  κ_t = (s_t + 2^SB) · 2^b + (2^b − 1 − t)         distinct: the low b bits break ties toward the lowest t
+  τ'  = the k-th largest κ  (0 when the window holds fewer than k tokens)
+  vis_t = [κ_t ≥ τ']                                exactly min(k, H) tokens, then Select(vis, logits, MIN) before the softmax
+```
+
+`τ'` is a 16-ary radix search of `B/4` passes (`B = SB + 1 + b`): pass `j` counts `κ ≥ prefix + (i+1)·step_j` for 15 candidates
+(`Compare` + `ReduceSum` over `H`), and the next prefix is the largest candidate with at least `k` tokens at or above it (`Select` +
+`ReduceMax` over the 15). **`B/4 ≤ 10` reductions over `H` in one cone** (04b §9.5.1 allows 16); `τ'` is a **commit point** of two
+`i32` lanes (a commit point is at most 32 bits wide: `hi · 2^28 + lo`), so every masked row compares against one value. The
+selection is masked-dense: no arithmetic is saved, the function is exact. With `SCORE_BITS = 16` (resolution one part in 65,000 of
+the largest score — as fine as the 15-bit codes it comes from) a window of `2^18` takes 9 passes, `2^13` takes 8.
+
+**Block size.** The selection is about a hundred nodes beside an MLA mixer that is already a large block, so a DSA layer runs as its
+**mixer half and its FFN half** (the residual carried between them, as a sandwich layer does): 479–497 nodes in the mixer half, under
+512. Layers without an indexer are unchanged (`tests/golden_lowering.rs`).
+
+**Evidence** (`tests/dsa.rs`; the tiny DeepSeek-V3.2 fixture, `index_topk` 4 over sequences of 10 to 24 tokens, so the selection
+selects from the fifth position on): the float reference equals `transformers` to `1e-6` at all ten positions **with the IR's tie rule**
+(`tools/gen_dsa_ties_fixture.py` replaces the one line `index_scores.topk(...)` of transformers' own model by a stable descending sort;
+`torch.topk`'s own order differs from it at the last position, where seven tokens tie at zero for four places, and at no other); the
+integer program against transformers' logits: top-1 1.000, KL `3·10⁻⁵`; against its own float reference at `index_topk` 1, 2, 3, 4, 6, 10:
+top-1 ≥ 0.97, KL ≤ 0.008 — and against the *dense* float model KL 0.03–0.19, so the selection is applied; the radix search equals a sort
+(ties to the lowest index) on windows of 1 to 300, `k` from 1 to past the window, over vectors of ties, extremes and negatives, through
+the range analysis; the same bytes at every commit point on the reference evaluator, `ref2` and the typed backend; streamed = whole.
+**Admission at the real V3.2 shape** (61 layers, 128 heads, indexer 64 × 128, top 2,048) at windows `2^13` and `2^16`: ADMITTED, the
+worst terminal tile 5.25 M MACs (of 16 Mi), at most 9–10 reductions over `H` in a cone, cone work 4.3 K, 6.27·10¹¹ MACs a position at
+`2^16` (the indexer adds 5.7 %); at the default `2^18` window it is refused by the position's MACs exactly as DeepSeek-V3 is.
+
+**Spec and adapter.** `MlaSpec.indexer: Option<TokenIndexerSpec { heads, head_dim, topk, rope, k_norm }>`; adapter `deepseek-v32`
+(data: extends `deepseek-v3`, `layer_types`/`mlp_layer_types` read, the indexer's tensors `self_attn.indexer.{wq_b, wk, k_norm,
+weights_proj}` named). `glm_moe_dsa` differs only in `rope.style` (interleaved): an adapter, no code.
 
 ## 10. The gates that keep it honest
 

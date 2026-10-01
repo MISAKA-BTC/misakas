@@ -556,16 +556,20 @@ fn PLE_05_dilated_conv_boundary() {
 #[test]
 fn PLE_06_a_table_taller_than_a_chunk_is_read_by_chunks() {
     // NF-8 caps a dimension at 2^24 rows and a published n-gram table has hundreds of millions: each head's table is
-    // cut into chunks (`LowerOpts::table_chunk_rows`, 2^24 by default) and ONE batched Gather per chunk reads every head.
-    // Cut at 16 rows the fixture's 61..97-row head tables take several chunks each; the program is another one,
-    // the function is the same: the logits are bit-identical to the unchunked lowering's.
+    // its own param `[rows, dim]`, cut into chunks (`LowerOpts::table_chunk_rows`, 2^24 by default) with a `Select` by
+    // the chunk index, every one read by `Gather { axis: 0, batch_dims: 0 }` of the param itself (the shape lane M2's
+    // residency can address by row). Cut at 16 rows the fixture's 61..97-row head tables take several chunks each; the
+    // program is another one, the function is the same: the logits are bit-identical to the unchunked lowering's.
     let whole = case("qwen4_ple_trigram");
     let cut = case_with("qwen4_ple_trigram", "chunk16", LowerOpts { table_chunk_rows: Some(16), ..LowerOpts::default() });
-    let chunks = cut.prep.lowered.program.params.iter().filter(|p| p.name.starts_with("ple.ngram.table.c")).count();
-    let one = whole.prep.lowered.program.params.iter().filter(|p| p.name.starts_with("ple.ngram.table.c")).count();
-    assert_eq!(one, 1, "within 2^24 rows the table is one param");
-    assert!(chunks >= 4, "{chunks} chunk params");
-    assert!(cut.prep.lowered.program.params.iter().filter(|p| p.name.starts_with("ple.ngram.table.c")).all(|p| p.shape[1] <= 16));
+    let tables = |c: &Case| -> Vec<misaka_palw_tir::program::ParamDecl> {
+        c.prep.lowered.program.params.iter().filter(|p| p.name.starts_with("ple.ngram.table.h")).cloned().collect()
+    };
+    let heads = 4; // (ngram_size - 1) * heads_per_ngram
+    let (chunks, one) = (tables(&cut).len(), tables(&whole).len());
+    assert_eq!(one, heads, "within 2^24 rows a head's table is one param");
+    assert!(chunks >= 4 * heads, "{chunks} chunk params");
+    assert!(tables(&cut).iter().all(|p| p.shape.len() == 2 && p.shape[0] <= 16), "a chunk is [rows <= 16, dim]");
     assert_eq!(cut.int, whole.int, "the chunked lookup reads the same rows");
     assert_chain(&cut);
     assert_ngram_ids_in_program(&cut);
@@ -801,11 +805,11 @@ fn a_config_at_the_real_shape_lowers_with_chunked_tables_inside_the_caps() {
     });
     let prep = fidelity::prepare(&cfg.to_string(), &LowerOpts::default()).unwrap_or_else(|e| panic!("the real-shape config does not lower: {e}"));
     let p = &prep.lowered.program;
-    let tables: Vec<_> = p.params.iter().filter(|q| q.name.starts_with("ple.ngram.table.c")).collect();
-    assert!(tables.len() >= 2, "two chunks a head at 20 M rows");
+    let tables: Vec<_> = p.params.iter().filter(|q| q.name.starts_with("ple.ngram.table.h")).collect();
+    assert_eq!(tables.len(), 16 * 2, "two chunks a head at 20 M rows, sixteen heads");
     for t in &tables {
         assert!(t.shape.iter().all(|d| *d <= 1 << 24), "{}: {:?}", t.name, t.shape);
-        assert_eq!(t.shape[0], 16, "one table per hash head");
+        assert_eq!(t.shape.len(), 2, "{}: a head's chunk is [rows, dim], axis-0 row-major", t.name);
     }
     let (largest, bytes, total) = declared(p);
     eprintln!("real shape DECLARES (never allocates) a param of {largest} elements ({bytes} bytes) and {total} elements in all");
