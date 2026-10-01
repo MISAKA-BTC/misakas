@@ -72,6 +72,7 @@ pub fn model_preflight(ctx: &Ctx, input: &Path, a: &ModelPreflightArgs) -> CliRe
             .map(|s| misaka_palw_sdk::preflight::chain::parse_seat_share(s))
             .collect::<Result<_, _>>()
             .map_err(|e| CliError::new(exit::CONFIG, e))?,
+        residency_pin_below_bytes: defaults.residency_pin_below_bytes,
     };
     let report = run(input, &opts).map_err(|e| CliError::new(exit::MODEL, e))?;
     if ctx.output == OutputFormat::Json {

@@ -370,6 +370,7 @@ fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool
         h_chunk: h_chunk.unwrap_or(defaults.h_chunk),
         held,
         seat_shares,
+        residency_pin_below_bytes: defaults.residency_pin_below_bytes,
     };
     let report = misaka_palw_sdk::preflight::run(&path, &opts)?;
     if json {

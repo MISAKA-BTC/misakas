@@ -231,6 +231,71 @@ impl Report {
             }
         }
 
+        if let Some(r) = &self.residency {
+            let _ = writeln!(o);
+            let _ = writeln!(
+                o,
+                "residency       floor {} (pinned {} + one token's routed rows {} + one admission in flight {}); the default \
+                 budget, a fifth of the weights, is {}{}",
+                size(r.floor_bytes),
+                size(r.pinned_bytes),
+                size(r.routed_token_bytes),
+                size(r.in_flight_bytes),
+                size(r.default_budget_bytes),
+                if r.default_holds_floor {
+                    " and holds it"
+                } else {
+                    ": under the floor, so a node holds the class through the page cache unless a budget is stated"
+                }
+            );
+            let _ = writeln!(
+                o,
+                "  weights       {} on disk: {} pinned, {} routed ({} a token), {} gathered ({} a token, read a row at a time)",
+                size(r.weight_bytes),
+                size(r.pinned_bytes),
+                size(r.routed_bytes),
+                size(r.routed_token_bytes),
+                size(r.gathered_bytes),
+                size(r.gathered_token_bytes)
+            );
+            let job = match r.replay.job {
+                Some((p, d)) => format!("the canonical job ({p} prefill, {d} decode: {} forward passes)", n(r.replay.forwards)),
+                None => "one forward pass (no context was chosen)".to_string(),
+            };
+            let secs = |s: f64| {
+                if s >= 10.0 {
+                    format!("{s:.0} s")
+                } else if s >= 1.0 {
+                    format!("{s:.1} s")
+                } else {
+                    format!("{s:.3} s")
+                }
+            };
+            let times: Vec<String> = r.replay.seconds_at.iter().map(|(mb, s)| format!("{} at {mb} MB/s", secs(*s))).collect();
+            let _ = writeln!(
+                o,
+                "  one replay    {job} reads about {}: {} of routed rows (their expected union) and {} of gathered rows — \
+                 about {} (estimates)",
+                size(r.replay.bytes),
+                size(r.replay.routed_union_bytes),
+                size(r.replay.gathered_bytes),
+                times.join(", ")
+            );
+            for x in &r.rows {
+                let _ = writeln!(
+                    o,
+                    "  {:<13} {} × {}: {} rows of {}, {} a forward",
+                    x.tier,
+                    x.name,
+                    x.instances,
+                    n(u64::from(x.rows)),
+                    size(x.row_bytes),
+                    n(x.rows_per_forward)
+                );
+            }
+            let _ = writeln!(o, "  {}", r.note);
+        }
+
         if let Some(ad) = &self.admission {
             let _ = writeln!(o);
             let _ = writeln!(o, "admission       {}", ad.verdict);

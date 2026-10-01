@@ -380,3 +380,47 @@ fn the_full_depth_says_what_it_needs() {
     assert!(r.depth.stopped_at.as_deref().is_some_and(|s| s.contains("pack verify")), "{:?}", r.depth.stopped_at);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// **The residency, read off the program, from headers alone** (ADR-0112 for IR classes,
+/// `docs/design/palw/tir/runtime-residency.md`): a mixture's expert stacks are routed and its embedding gathered;
+/// the floor is the pinned set, one token's routed rows and one admission in flight; one replay at the canonical job
+/// reads the expected union of the routed rows and every gathered row, with read times at the reference rates; a
+/// dense decoder routes nothing. Reported, never judged: the verdicts are the same whatever the tier rule.
+#[test]
+fn the_residency_is_read_off_the_program_and_reported_without_judging() {
+    let dir = copy_fixture(&fixture("hf/qwen3_moe"), "moe-residency", true);
+    // Every row-addressed param served by rows (a node's rule pins a fixture this small whole).
+    let rows = Options { residency_pin_below_bytes: 0, ..opts(Depth::Shape) };
+    let r = run(&dir, &rows).expect("preflight");
+    let res = r.residency.as_ref().expect("a residency");
+    assert!(res.rows.iter().filter(|x| x.tier == "routed").count() >= 3, "the expert stacks: {}", r.render());
+    assert!(res.rows.iter().any(|x| x.tier == "gathered"), "the embedding: {}", r.render());
+    assert_eq!(res.floor_bytes, res.pinned_bytes + res.routed_token_bytes + res.in_flight_bytes);
+    assert_eq!(res.weight_bytes, res.pinned_bytes + res.routed_bytes + res.gathered_bytes);
+    let (prefill, decode) = res.replay.job.expect("the shape depth chose a context and its canonical job");
+    assert_eq!(res.replay.forwards, u64::from(prefill + decode - 1));
+    assert!(res.replay.routed_union_bytes + 1 >= res.routed_token_bytes && res.replay.routed_union_bytes <= res.routed_bytes);
+    assert_eq!(res.replay.bytes, res.replay.routed_union_bytes + res.replay.gathered_bytes);
+    let at = |mb: u64| res.replay.seconds_at.iter().find(|(m, _)| *m == mb).map(|(_, s)| *s).expect("a reference rate");
+    assert!((at(500) - res.replay.bytes as f64 / 5e8).abs() < 1e-9 && at(845) < at(500));
+    let text = r.render();
+    assert!(text.contains("residency") && text.contains("one replay") && text.contains("estimates"), "{text}");
+    let json: serde_json::Value = serde_json::from_str(&r.to_json()).unwrap();
+    assert!(json["residency"]["floor_bytes"].as_u64().is_some());
+    // The node's own rule: the same verdicts; a fixture this small is pinned whole.
+    let node = run(&dir, &opts(Depth::Shape)).expect("preflight");
+    assert_eq!(node.verdict, r.verdict, "the residency judges nothing");
+    let held = node.residency.as_ref().expect("a residency");
+    assert!(held.rows.is_empty() && held.floor_bytes == held.weight_bytes, "{}", node.render());
+    // A dense decoder routes no stack — what an activation selects rows of is a table of single codes
+    // (65,536 of them), which the node's rule pins — and its embedding is gathered.
+    let dense = copy_fixture(&fixture("hf/llama"), "llama-residency", true);
+    let d = run(&dense, &Options { residency_pin_below_bytes: 0, ..opts(Depth::Shape) }).expect("preflight");
+    let dres = d.residency.as_ref().expect("a residency");
+    assert!(dres.rows.iter().filter(|x| x.tier == "routed").all(|x| x.row_bytes <= 2 && x.rows == 65_536), "{}", d.render());
+    assert!(dres.rows.iter().any(|x| x.tier == "gathered"));
+    let node_dense = run(&dense, &opts(Depth::Shape)).expect("preflight");
+    assert_eq!(node_dense.residency.as_ref().map(|r| r.routed_bytes), Some(0), "the node's rule pins the code tables");
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(dense);
+}

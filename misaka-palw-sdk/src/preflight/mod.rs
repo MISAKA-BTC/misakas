@@ -9,7 +9,10 @@
 //!   check against the program's parameters, the artifact estimate — and judges the **convert** stage;
 //! * [`chain`] asks the chain's own functions at a height — `tir_admit_v1`, admission v10 (typed), the court
 //!   window, the canonical job, the fences, the registry's derived profile — and judges the **register** and
-//!   **mine** stages.
+//!   **mine** stages;
+//! * [`residency`] reads the program's tiers as a node holds the class (ADR-0112 for IR classes): the pinned, routed
+//!   and gathered bytes, the RAM floor, the default budget, and what one replay reads from storage — reported, never
+//!   judged (a seat's resources gate its readiness, not a class's admission).
 //!
 //! Every verdict is `ok`, `blocked` or `unknown` (a depth too shallow to say), and a blocker is
 //! `{ stage, code, what, evidence, have, need, safe_paths }` with a code that is stable once published. The
@@ -18,6 +21,7 @@
 pub mod chain;
 pub mod model;
 pub mod render;
+pub mod residency;
 pub mod source;
 
 use serde::Serialize;
@@ -200,6 +204,9 @@ pub struct Options {
     pub held: bool,
     /// The memory a seat has, in GiB; `None` is the reference seat.
     pub seat_shares: Vec<chain::SeatShare>,
+    /// The tier rule the residency is read under: a row-addressed param under this many bytes is pinned (the node's
+    /// default, `TIR_PIN_BELOW_BYTES_V1`).
+    pub residency_pin_below_bytes: u64,
 }
 
 impl Default for Options {
@@ -216,6 +223,7 @@ impl Default for Options {
             h_chunk: crate::check_architecture::IR_DEFAULT_H_CHUNK_V1,
             held: false,
             seat_shares: Vec::new(),
+            residency_pin_below_bytes: misaka_palw_tir_exec::tiers::TIR_PIN_BELOW_BYTES_V1,
         }
     }
 }
@@ -300,6 +308,8 @@ pub struct Report {
     pub storage: model::StorageInfo,
     pub tensors: model::TensorsInfo,
     pub artifact: Option<model::ArtifactInfo>,
+    /// The class's residency as a node holds it, read off the program (reported, not judged).
+    pub residency: Option<residency::ResidencyInfo>,
     pub admission: Option<chain::AdmissionInfo>,
     pub chain: Vec<Condition>,
     pub seat: Option<chain::SeatInfo>,
@@ -395,6 +405,14 @@ pub fn run(path: &Path, opts: &Options) -> Result<Report, String> {
     };
     let mut notes = analysis.notes.clone();
     notes.extend(chain_out.notes.iter().cloned());
+    // The residency at the canonical job of the context the shape depth chose (one forward pass without one).
+    let canonical = chain_out
+        .admission
+        .as_ref()
+        .and_then(|a| a.layout.as_ref())
+        .and_then(|l| kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(l.max_context));
+    let rules = misaka_palw_tir_exec::tiers::TirTierRulesV1 { pin_below_bytes: opts.residency_pin_below_bytes };
+    let residency = analysis.program.as_ref().map(|p| residency::residency_of(p, rules, canonical));
     Ok(Report {
         schema: PREFLIGHT_SCHEMA_V1,
         mode: "model",
@@ -407,6 +425,7 @@ pub fn run(path: &Path, opts: &Options) -> Result<Report, String> {
         storage: analysis.storage.clone(),
         tensors: analysis.tensors.clone(),
         artifact: analysis.artifact.clone(),
+        residency,
         admission: chain_out.admission.clone(),
         chain: chain_out.conditions.clone(),
         seat: chain_out.seat.clone(),

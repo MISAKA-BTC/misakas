@@ -891,6 +891,14 @@ Each item names the function that answers it, so the preflight is a composition 
    (`palw_admission_audit_period_daa`), `required_ready_seats` ready seats, `probation_claims` probe claims, `stable_epochs`
    stable spans, how many independent operators the network has against the seating floor (§II.7.5), and the earliest time to the
    first paid claim. It is informational: the chain decides.
+10. **The residency.** How a node holds the class within a memory budget (ADR-0112 for IR classes; lane M2's runtime residency,
+    `docs/design/palw/tir/runtime-residency.md` on `tir/residency`), read off the program by the same tier function the node
+    uses (`misaka_palw_tir_exec::tiers`): the weights on disk split into **pinned** (read whole every forward), **routed** (rows a
+    route selects: a mixture's experts) and **gathered** (rows an input selects: embeddings, per-layer and n-gram tables); the
+    **RAM floor** (the pinned set, one token's routed rows, one admission in flight) and the **default budget** (a fifth of the
+    weights, and whether it holds the floor); and **what one replay reads** at the canonical job — the expected union of its
+    routed rows and its gathered rows — with the read time at 500 and 845 MB/s, labelled as estimates. Reported, never judged:
+    a seat's resources gate its readiness, not a class's admission.
 
 ### II.2.4 Verdicts, stages and codes
 
@@ -939,7 +947,8 @@ where the build has it, and the numbers each would give; for `SEAT_MEMORY_SHORT`
 
 `--json` prints `misaka.palw.preflight.v1`: the mode, depths, the network and height; `source` (files, sizes, SHA-256 of the
 config and each header); `model` (architectures, Level, adapter id and hash, features); `scope`; `storage` (histogram, descriptors
-by name and digest); `artifact` (estimates); `chain` (each condition with `needed`, `limit`, `source`); `seat`; `forecast`;
+by name and digest); `artifact` (estimates); `residency` (the tiers' bytes, the floor, the default budget, one replay's reads and
+their estimated time); `chain` (each condition with `needed`, `limit`, `source`); `seat`; `forecast`;
 `verdict` (the stage table); and `registries` (the adapter-pack hash, the feature-registry digest, the quant-registry digest and
 the tool's version), so a verdict is attributable to the build that gave it. It contains no timestamp and no path: the same
 inputs give the same bytes.
@@ -986,6 +995,10 @@ of it (the same report, `--json` the same bytes). Where the build differs from, 
   prefetch, ready seats, in-flight claims and registration bond. It does not know how many independent operators the network has.
 - **Tokenizer.** `TOKENIZER_MISSING` is raised for a directory (no `tokenizer.json`, `tokenizer.model` or `vocab.json`) and for a
   GGUF without `tokenizer.ggml.tokens`; a lone `config.json` says nothing about it.
+- **The residency** (item 10; branch `tir/residency-preflight`) is `preflight::residency::residency_of(program, rules,
+  canonical)`: `TirTiersV1::of` and its arithmetic at the node's rule (a row-addressed param under 1 MiB is pinned;
+  `Options::residency_pin_below_bytes` changes it for a study), the replay at the canonical job of the context the shape depth
+  chose (one forward pass at the headers depth). It enters no verdict: the stage table is the same whatever the rule.
 
 **Not in this slice**, each with where it plugs in: `--node` (the live chain's registration terms and tip, and with them
 `READY_SEATS_INSUFFICIENT` for a class already on the chain); a repository id by HTTP ranges (the `remote` feature of the
