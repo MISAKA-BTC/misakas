@@ -212,6 +212,11 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("HEAD_PROJ_OUT_V1", Head, "projection to the embedding width before the head", Implemented, [], NoReq, ["fidelity_tiny::opt_postln_proj"], "OPT-350m."),
     feature!("OUTPUT_LOGITS_V1", Head, "logits output", Implemented, [], NoReq, ["fidelity_tiny::llama"], "Next-token logits."),
     feature!("OUTPUT_EMBEDDING_V1", Head, "embedding output (pooled hidden row)", Implemented, [], NoReq, ["encoders::clip_text_encoder_matches_its_hf_fixture"], "RFC-0003 Embedding profile."),
+    feature!("ENC_BIDIR_V1", Model, "a bidirectional encoder over a padded token axis (BERT, RoBERTa, XLM-R, DistilBERT, MPNet)", Implemented, [], NoReq, ["encoders::bert_cls_pooled_unnormalised_matches_its_hf_fixture", "encoders::mpnet_with_its_relative_bias_matches_its_hf_fixture"], "ONE position over the padded token axis L: every value is a [L, ...] tensor, attention is full over a Fixed axis with the keys at or past the count masked, pad rows never reach a real row or the pooling. Learned positions, post-LN, plain multi-head attention with biases, a plain MLP; anything else is refused by name (the lowering reads a strict allow-list of the spec)."),
+    feature!("HEAD_POOL_CLS_V1", Head, "pooling: row 0 of the encoder (the class-start token)", Implemented, [], NoReq, ["encoders::bert_cls_pooled_unnormalised_matches_its_hf_fixture"], "An option of the Embedding class (RFC-0003 section II.3), chosen by the operator or the sentence-transformers stack, not read from the model's config."),
+    feature!("HEAD_POOL_MEAN_V1", Head, "pooling: the mean over the count real rows", Implemented, [], NoReq, ["encoders::bert_mean_pooled_and_normalised_matches_its_hf_fixture"], "As HEAD_POOL_CLS_V1; the mean is over the unpadded rows only."),
+    feature!("HEAD_NORMALIZE_L2_V1", Head, "L2-normalised embedding row (Q30)", Implemented, [], NoReq, ["encoders::bert_mean_pooled_and_normalised_matches_its_hf_fixture"], "sentence-transformers' Normalize: the pooled row divided by its norm, the output unit exactly 2^-30."),
+    feature!("OUTPUT_EMBEDDING_CLASS_V1", Model, "an encoder as the pieces of a registered Embedding class (program v2, one-stage pipeline, EmbeddingI32 row)", Implemented, [], NoReq, ["encoders::bert_mean_pooled_and_normalised_matches_its_hf_fixture"], "Lane D's `embedding::lower_bidir_embedding_v1` (RFC-0003 step 7): the pooled vector as the `Final` output of shape [1, d], the pipeline `JobTokens` over prefix, prompt, suffix padded to L, the integer parameters in the v2 program's order. End to end in misaka-palw-sdk/tests/gen_embedding_e2e.rs (registration gate, job, seat replay, court conviction)."),
     // ───────────────────────────── known gaps (Level C): named, not implemented ─────────────────────────────
     feature!("RESIDUAL_ALTUP_V1", Residual, "AltUp: a predicted/corrected multi-stream residual", Missing, [], NoReq, [], "Gemma-3n. Expressible with the existing primitives once described; not in the vocabulary yet."),
     feature!("RESIDUAL_LAUREL_V1", Residual, "LAuReL: a learned low-rank residual branch", Missing, [], NoReq, [], "Gemma-3n."),
@@ -536,7 +541,14 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     // head and output
     match &s.output {
         OutputSpec::Logits => u.add("OUTPUT_LOGITS_V1", None, ""),
-        OutputSpec::Embedding { .. } => u.add("OUTPUT_EMBEDDING_V1", None, ""),
+        OutputSpec::Embedding { .. } => {
+            u.add("OUTPUT_EMBEDDING_V1", None, "");
+            // The BERT lineage: post-LN layers under an embedding output (a causal embedder — CLIP's text tower,
+            // Qwen3-Embedding — is pre-norm and takes the decoder's route).
+            if !s.layers.is_empty() && s.layers.iter().all(|l| matches!(l.residual, Residual::PostNorm { .. })) {
+                u.add("ENC_BIDIR_V1", None, "");
+            }
+        }
     }
     let h = &s.head;
     if matches!(s.output, OutputSpec::Logits) && h.tied {
