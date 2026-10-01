@@ -172,7 +172,12 @@ pub fn model_evm_position(ctx: &Ctx, line: &str, address: &str) -> CliResult {
     let units: Option<u128> = if hex.len() >= 64 { u128::from_str_radix(&hex[hex.len() - 32..], 16).ok() } else { None };
     match ctx.output {
         OutputFormat::Human => match units {
-            Some(u) => println!("{u} units  ({} positions)", u / 1_000_000),
+            // ADR-0090: a position is one unit (it was 10^6 before); the 2026-09-25 Position review's N2
+            // (live: "2132 units (0 positions)").
+            Some(u) => println!(
+                "{u} units  ({} positions)",
+                u / kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_POSITION_UNITS_V1 as u128
+            ),
             None => println!("(the window is closed here: empty return data)"),
         },
         OutputFormat::Json => println!(
