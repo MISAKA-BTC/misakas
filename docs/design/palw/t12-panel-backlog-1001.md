@@ -80,8 +80,15 @@ share is 8 GiB, and the *live* axis is zero.
 * Each seat has `IN_FLIGHT = 2` replay slots (hard-coded); both are held by slow replays (`replay of claim …
   waits: every replay slot is taken`, ~30 a hour = every minute), so a seat files 1–15 receipts an hour
   against the ~60–95 it files when it is not thrashing.
-* An 8k (C7) replay reserves 3.37 GiB of the 3.5 GiB share: while it runs (5 minutes on a quiet host, 10–80 on
-  5.104) every other duty on that seat waits on the ledger (`ledger_deferred` ≈ 25–35 an hour, continuous).
+* **The 05:00 collapse, seat5, by class** (replay start → `licensed by replay`, claims matched to their class
+  from the chain table): 04:00 hour — 93 floor replays, mean 48–59 s; **05:00 — two 8k (`ebf44d0a`) replays of
+  2,197 s and 3,149 s and nothing else finished** (receipts 94 → 2); 06:00–07:41 — floor replays at 480–960 s
+  (a thrash episode); 08:26 — another 8k replay, 3,313 s. Every deferral line in the 05:00 window reads `…
+  less 3.37 GiB already reserved by full-seat of class … (3.37 GiB)` with `0.00–0.09 GiB available`: **an 8k
+  replay reserves 3.37 of the 3.5 GiB share, so while it runs (5 minutes on a quiet host, 37–55 on 5.104) every
+  floor replay (0.5 GiB) and audit (0.5 GiB) on that seat waits on the ledger** (`slot_waits` 0 in that hour:
+  the slots were free, the ledger was not). 8k claims arrive at ~2 an hour and every one engages five seats:
+  at 45 minutes each the slow seats are in an 8k replay for more than the whole hour.
 
 ### 2.3 Zero margin and no backpressure
 
@@ -135,6 +142,14 @@ memory at once (RSS = live set) if an operator wants it; the soak should compare
   forge moves the order); duties not due last. Nothing is skipped: lower tiers run when a slot is free, and
   a very old claim promotes itself as a backstop (backup 120 DAA, satisfied 72 DAA after the bind). Exactly
   one seat in five defers a fresh claim.
+* **big replays wait for lighter work**: a replay needing ≥ 2 GiB (the 8k's 3.37) is not STARTED while a due,
+  not-yet-satisfied lighter claim waits, on a seat whose last replay of that class took ≥ 8 DAA (~21 min), and
+  until the claim is within 120 DAA of its deadline (a fifth of the 600-DAA window, five times the longest
+  measured replay); a class this seat has not timed, a fast seat (5 min), an idle seat and an urgent claim start
+  it as before; a running replay is never touched. Such claims also take no oldest-first guard place until
+  urgent. The cost is stated: on a slow seat an 8k claim's receipt arrives late (at most 480 DAA after its
+  bind) — the fast seats license it meanwhile — in exchange for ~95 % of the demand (the floor) not waiting an
+  hour behind each one.
 * slots: `--palw-seat-replay-slots` (1–4, default 2); one replay at a time while the host's load per CPU is over
   3.0 (released under 2.0); a light replay past 4× its class's timing on this host (min 8 DAA, untimed 24 DAA)
   stops holding a slot (it keeps its thread and reservation; the held total stays ≤ 2× slots; C7 replays are

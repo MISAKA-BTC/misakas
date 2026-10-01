@@ -66,6 +66,19 @@ pub const PALW_SEAT_SATISFIED_AFTER_DAA_V1: u64 = 72;
 /// How many of the oldest due, not-yet-satisfied claims are answered first whatever their tier.
 pub const PALW_SEAT_OLDEST_GUARD_V1: usize = 2;
 
+/// A class is slow on this seat when its last replay here took this many DAA (~21 minutes at a DAA
+/// every ~2.6 minutes). The 5.104 seats' 8k replays took 14-55 minutes (5 on an idle host) and held
+/// the share's 3.37 of 3.5 GiB the whole time, which is what collapsed their floor receipts at 05:00.
+pub const PALW_SEAT_BIG_SLOW_DAA_V1: u64 = 8;
+
+/// A slow class's claim is urgent — no longer deferred behind lighter work — within this many DAA of its
+/// receipt deadline (a fifth of the 600-DAA window, ~5 hours: five times the longest measured replay).
+pub const PALW_SEAT_BIG_URGENT_DAA_V1: u64 = 120;
+
+/// A replay needing at least this many bytes is "big": [`crate::palw_panel`] gates its START (never a
+/// running one) while lighter work waits.
+pub const PALW_SEAT_BIG_REPLAY_BYTES_V1: u64 = 2 << 30;
+
 /// What the scheduler reads of one due duty.
 #[derive(Clone, Debug)]
 pub struct PalwSeatScheduleInV1 {
@@ -84,6 +97,12 @@ pub struct PalwSeatScheduleInV1 {
     /// Whether the duty is due now (this seat has not answered it and its deadline has not passed): a
     /// duty that is not due is listed last and never counts toward the oldest-first guard.
     pub due: bool,
+    /// A claim of a class this seat replays slowly (a replay of the class has taken it
+    /// [`PALW_SEAT_BIG_SLOW_DAA_V1`] DAA or more) and far from its deadline ([`PALW_SEAT_BIG_URGENT_DAA_V1`]):
+    /// its replay would hold the seat's whole memory share for most of an hour, and every lighter duty
+    /// behind it waits on the ledger. Such a claim goes after the lighter ones, and takes no place in the
+    /// oldest-first guard, until it is urgent.
+    pub big: bool,
 }
 
 /// The tier of one duty (lower is sooner), with the sort key inside it.
@@ -133,6 +152,12 @@ pub fn palw_seat_tier_v1(item: &PalwSeatScheduleInV1, quorum: usize, now_daa: u6
     if primary || waited >= PALW_SEAT_BACKUP_AFTER_DAA_V1 { (PalwSeatTierV1::Needed, short) } else { (PalwSeatTierV1::Backup, short) }
 }
 
+/// **Is there lighter work waiting?** A due duty, short of its quorum, that is not big: while there is,
+/// the seat does not START a big replay ([`crate::palw_panel::PalwSeatReplaysV1::set_big_gate`]).
+pub fn palw_seat_light_pending_v1(items: &[PalwSeatScheduleInV1], quorum: usize, now_daa: u64) -> bool {
+    items.iter().any(|item| item.due && !item.big && palw_seat_tier_v1(item, quorum, now_daa).0 != PalwSeatTierV1::Satisfied)
+}
+
 /// **The order a seat answers its duties in**: indices into `items`, soonest first — the oldest
 /// [`PALW_SEAT_OLDEST_GUARD_V1`] due claims short of their quorum, then by tier, then (in the needed
 /// tier) the claims closest to quorum, then the receipt deadline, then the claim id; duties that are
@@ -143,6 +168,8 @@ pub fn palw_seat_schedule_order_v1(items: &[PalwSeatScheduleInV1], quorum: usize
     let mut candidates: Vec<usize> =
         (0..items.len()).filter(|i| items[*i].due && tiers[*i].0 != PalwSeatTierV1::Satisfied).collect();
     candidates.sort_by_key(|i| (items[*i].deadline, items[*i].claim_id));
+    // A big (slow-class, not yet urgent) claim waits behind the lighter ones and takes no guard place.
+    candidates.retain(|i| !items[*i].big);
     let guarded: HashSet<usize> = candidates.into_iter().take(PALW_SEAT_OLDEST_GUARD_V1).collect();
     let mut keyed: Vec<(u8, PalwSeatTierV1, usize, u64, Hash64, usize)> = items
         .iter()
@@ -152,9 +179,11 @@ pub fn palw_seat_schedule_order_v1(items: &[PalwSeatScheduleInV1], quorum: usize
             // Closest to quorum first inside the needed tier only; the other tiers keep the deadline order.
             let closeness = if tier == PalwSeatTierV1::Needed { short } else { 0 };
             let band = if !item.due {
-                2
+                3
             } else if guarded.contains(&index) {
                 0
+            } else if item.big && tier != PalwSeatTierV1::Satisfied {
+                2
             } else {
                 1
             };
@@ -191,6 +220,7 @@ mod tests {
             panel: Some(panel()),
             valid: valid.iter().map(|b| bond(*b)).collect(),
             due: true,
+            big: false,
         }
     }
 
@@ -254,6 +284,33 @@ mod tests {
         let mut sorted = order.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, (0..items.len()).collect::<Vec<_>>(), "a permutation");
+    }
+
+    /// **A big claim — a slow class far from its deadline — waits behind the lighter ones**, takes no
+    /// guard place, and is not lighter work for the gate; urgent, it is an ordinary claim again.
+    #[test]
+    fn a_big_claim_waits_behind_lighter_work_until_it_is_urgent() {
+        let me = 5;
+        let mut big = item(1, me, &[], 100);
+        big.deadline = 100; // the oldest by far
+        big.big = true;
+        let light_a = item(2, me, &[], 100);
+        let light_b = item(3, me, &[], 100);
+        let items = [big.clone(), light_a.clone(), light_b.clone()];
+        let order = palw_seat_schedule_order_v1(&items, 4, 110);
+        assert_eq!(order.last(), Some(&0), "the big claim is last although it is the oldest");
+        assert!(palw_seat_light_pending_v1(&items, 4, 110), "lighter work waits: the gate closes");
+        // Only big claims: nothing lighter waits, the gate opens, and the big claim is guarded.
+        assert!(!palw_seat_light_pending_v1(&[big.clone()], 4, 110));
+        assert_eq!(palw_seat_schedule_order_v1(&[big.clone()], 4, 110), vec![0]);
+        // A lighter duty that is not due, or whose quorum is pooled, is not lighter work.
+        let mut answered = light_a.clone();
+        answered.due = false;
+        let pooled = item(4, me, &[1, 2, 3, 4], 100);
+        assert!(!palw_seat_light_pending_v1(&[big.clone(), answered, pooled], 4, 110));
+        // Urgent: the panel clears `big`, and the claim is an ordinary (here the oldest, guarded) one.
+        big.big = false;
+        assert_eq!(palw_seat_schedule_order_v1(&[big, light_a, light_b], 4, 110)[0], 0, "urgent: first again");
     }
 
     /// **Nobody is skipped for ever**: a backup becomes primary work after the aging bound, and a
