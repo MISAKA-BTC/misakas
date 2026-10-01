@@ -306,8 +306,10 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                 );
             }
         }
-        if let Some(sc) = &scope {
-            if sc.text_only {
+        if let Some(sc) = &scope
+            && sc.text_only
+        {
+            {
                 notes.push(format!(
                     "text stage only on testnet-12: {} — a vision-language or audio model registers as its text decoder; the other parts need RFC-0003's generative class",
                     sc.modalities_left_out().join(", ")
@@ -700,7 +702,7 @@ fn tensor_check(
 fn last_name(e: &str) -> String {
     let parts: Vec<&str> = e.split('`').collect();
     // `a `x` b `y` c` splits into [a, x, b, y, c]: the names are the odd positions.
-    parts.iter().enumerate().filter(|(i, _)| i % 2 == 1).map(|(_, p)| *p).last().unwrap_or(e).to_string()
+    parts.iter().enumerate().filter(|(i, _)| i % 2 == 1).map(|(_, p)| *p).next_back().unwrap_or(e).to_string()
 }
 
 /// The first backquoted name of a message (`param `X` ...` is `X`).

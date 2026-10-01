@@ -54,7 +54,7 @@ pub fn parse_seat_share(s: &str) -> Result<SeatShare, String> {
         None => (format!("{s} GiB"), s),
     };
     let g: f64 = gib.parse().map_err(|e| format!("--seat-share {s}: {e}"))?;
-    if !(g >= 0.0) || !g.is_finite() {
+    if g.is_nan() || g < 0.0 || !g.is_finite() {
         return Err(format!("--seat-share {s}: a share in GiB"));
     }
     Ok(SeatShare { name, bytes: (g * (1u64 << 30) as f64) as u64 })
@@ -90,7 +90,7 @@ pub struct FenceRow {
     pub needed: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct NetworkInfo {
     pub id: String,
     /// The height the conditions were judged at.
@@ -197,12 +197,6 @@ pub struct ChainOutput {
     pub seat: Option<SeatInfo>,
     pub forecast: Option<Forecast>,
     pub notes: Vec<String>,
-}
-
-impl Default for NetworkInfo {
-    fn default() -> Self {
-        NetworkInfo { id: String::new(), daa: 0, daa_choice: String::new(), tir_armed: false, what_if: None, fences: Vec::new() }
-    }
 }
 
 impl ChainOutput {
@@ -717,10 +711,7 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
                 if searched && max_context < widest {
                     let top = widest.min(32_783);
                     let why = match choose(top.max(16)) {
-                        Ok(c) => match c.admission {
-                            Ok(()) => None,
-                            Err(w) => Some(w),
-                        },
+                        Ok(c) => c.admission.err(),
                         Err(e) => Some(e),
                     };
                     notes.push(format!(
