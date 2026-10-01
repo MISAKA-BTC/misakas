@@ -301,10 +301,11 @@ impl<'d> Recorder<'d> {
         Ok(())
     }
 
-    /// A fresh contiguous output of `shape` for a node stored as `store`.
-    pub fn output(&self, store: DType, out_dtype: DType, shape: &[usize]) -> Result<DevTensor, Unsupported> {
+    /// A fresh contiguous output of `shape` for a node stored as `store` (the CPU executor's storage
+    /// type: an `i128` node whose values provably fit `i64` is stored, and here held, as `i64`).
+    pub fn output(&self, store: DType, _out_dtype: DType, shape: &[usize]) -> Result<DevTensor, Unsupported> {
         let form = Form::computed(store).ok_or(Unsupported::I128Store)?;
-        Ok(DevTensor { buf: self.dev.alloc(form, numel(shape)), form, dtype: out_dtype, layout: Layout::contiguous(shape) })
+        Ok(DevTensor { buf: self.dev.alloc(form, numel(shape)), form, dtype: store, layout: Layout::contiguous(shape) })
     }
 
     /// Materialise any layout of `x` as a contiguous tensor of `form` (a view the executor must
