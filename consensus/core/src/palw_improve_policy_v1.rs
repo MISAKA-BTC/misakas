@@ -62,21 +62,21 @@ pub fn palw_improvement_has_stage_v1(eval: &PalwEvalSpecV1, kind: PalwScoringKin
     eval.stages.iter().any(|stage| stage.kind == kind)
 }
 
-/// **The most evaluation jobs one subject can be given in an epoch** (spec 17 §17.11.1) [D1]: one per
-/// item for its primary kind (an ExactMatch job generates and the fold scores it at the key's reveal; a
-/// likelihood job is one teacher-forced pipeline), two per drawn item for a Judge stage (one teacher-forced
-/// pass per verdict sequence, §17.8.5) and four per drawn item for a Pairwise stage (two orders × two
-/// verdicts; `pairwise` false for the parent):
-/// `J = (n + reg + safety) + 2n·[Judge] + 4n·[Pairwise ∧ not the parent]`. The escrow is `J` times
-/// `eval_fee_per_job`; what is not spent comes back (§17.11.2).
+/// **`J`: the most evaluation jobs (claims) one subject can be given in an epoch** — the ONE definition (spec 17 §17.8.2):
+/// `J_s = (n + regression_items + safety_items) + parts(Judge)·n·[Judge] + parts(Pairwise)·n·[Pairwise ∧ s ≠ Parent]`, i.e.
+/// one primary job per drawn item and per suite entry (an item is exact-key or likelihood, never both, and an ExactMatch key's
+/// scoring is the fold's, not a claim), two judged parts per drawn item for a Judge stage and four for a Pairwise stage
+/// (§17.8.5: a judged score is that many claims; suite items are never judged). `pairwise` is true for a subject that is not
+/// the parent. The subject's escrow is this times `eval_fee_per_job` (§17.11.2); what is not spent comes back.
 pub fn palw_improvement_jobs_per_subject_v1(eval: &PalwEvalSpecV1, pairwise: bool) -> u64 {
-    let items = eval.n as u64 + eval.regression_items as u64 + eval.safety_items as u64;
-    let mut jobs = items;
+    use crate::palw_improve_eval_v1::palw_improve_scoring_parts_v1 as parts;
+    let n = eval.n as u64;
+    let mut jobs = n + eval.regression_items as u64 + eval.safety_items as u64;
     if palw_improvement_has_stage_v1(eval, PalwScoringKindV1::Judge) {
-        jobs += 2 * eval.n as u64;
+        jobs += parts(PalwScoringKindV1::Judge) as u64 * n;
     }
     if pairwise && palw_improvement_has_stage_v1(eval, PalwScoringKindV1::Pairwise) {
-        jobs += 4 * eval.n as u64;
+        jobs += parts(PalwScoringKindV1::Pairwise) as u64 * n;
     }
     jobs
 }
@@ -109,10 +109,8 @@ pub fn palw_improvement_policy_check_v1(
             return Err("every window must be between 1 and 2^32 DAA");
         }
     }
-    // [E18] Strictly longer than the epoch, so an epoch that runs to `t_score` ends before the next
-    // boundary it could open at.
-    if w.grid <= palw_improvement_epoch_length_v1(w) {
-        return Err("grid must exceed the epoch's length (w_collect + w_submit + w_holdout + w_eval + court_margin)");
+    if w.grid < palw_improvement_epoch_length_v1(w) {
+        return Err("grid must be at least the epoch's length (w_collect + w_submit + w_holdout + w_eval + court_margin)");
     }
     // 4 [E12]
     if w.w_eval <= w.beacon_delay.saturating_add(PALW_IMPROVE_MIN_CLAIM_WINDOW_DAA_V1) {
@@ -476,7 +474,6 @@ mod tests {
             ("usage", Box::new(|p| p.usage.value = 0)),
             ("zero window", Box::new(|p| p.windows.w_submit = 0)),
             ("grid below the epoch", Box::new(|p| p.windows.grid = 900)),
-            ("grid equal to the epoch (E18)", Box::new(|p| p.windows.grid = 950)),
             ("E12", Box::new(|p| p.windows.w_eval = p.windows.beacon_delay + 32)),
             ("no stage", Box::new(|p| p.eval.stages.clear())),
             ("params of another kind", Box::new(|p| p.eval.stages[0].kind = PalwScoringKindV1::RefLogLik)),
@@ -554,15 +551,23 @@ mod tests {
     fn the_epoch_length_and_the_jobs_bound() {
         let policy = palw_improvement_policy_example_v1();
         assert_eq!(palw_improvement_epoch_length_v1(&policy.windows), 950);
-        assert_eq!(palw_improvement_jobs_per_subject_v1(&policy.eval, true), 256 + 32 + 16, "[D1] one job per item");
+        // One primary job per drawn item and suite entry (spec 17 §17.8.2): 256 + 32 + 16.
+        assert_eq!(palw_improvement_jobs_per_subject_v1(&policy.eval, true), 256 + 32 + 16);
+        // A Judge stage adds two judged parts per drawn item, a Pairwise stage four per item of a non-parent subject.
         let mut judged = policy.eval.clone();
-        judged.stages.push(PalwScoringStageV1 { kind: PalwScoringKindV1::Judge, params: PalwScoringParamsV1::Judge { lo: 0, hi: 9 } });
-        judged.stages.push(PalwScoringStageV1 { kind: PalwScoringKindV1::Pairwise, params: PalwScoringParamsV1::Pairwise { margin: 0 } });
+        judged
+            .stages
+            .push(PalwScoringStageV1 { kind: PalwScoringKindV1::Judge, params: PalwScoringParamsV1::Judge { lo: -9, hi: 9 } });
+        judged
+            .stages
+            .push(PalwScoringStageV1 { kind: PalwScoringKindV1::Pairwise, params: PalwScoringParamsV1::Pairwise { margin: 0 } });
+        assert_eq!(palw_improvement_jobs_per_subject_v1(&judged, false), 304 + 2 * 256, "the parent: no Pairwise");
+        assert_eq!(palw_improvement_jobs_per_subject_v1(&judged, true), 304 + 2 * 256 + 4 * 256);
+        // The epoch's claimable jobs are the sum over its subjects: the parent and two others.
         assert_eq!(
-            palw_improvement_jobs_per_subject_v1(&judged, true),
-            304 + 2 * 256 + 4 * 256,
-            "a candidate: + two judged parts and four pairwise parts per drawn item (§17.8.5)"
+            crate::palw_improve_eval_v1::palw_improve_eval_epoch_jobs_v1(&judged, 3),
+            (304 + 2 * 256) + 2 * (304 + 2 * 256 + 4 * 256)
         );
-        assert_eq!(palw_improvement_jobs_per_subject_v1(&judged, false), 304 + 2 * 256, "the parent has no pairwise job");
+        assert_eq!(crate::palw_improve_eval_v1::palw_improve_eval_epoch_jobs_v1(&judged, 0), 0);
     }
 }

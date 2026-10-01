@@ -187,6 +187,12 @@ one.
 | `misaka-palw/improve/judge/v1` | the judge draw (§17.8.1). *`…/pair-order/v1` is retired by the 2026-09-30 decision: a Pairwise score shows both orders (§17.8.5)* |
 | `misaka-palw/improve/eval-seed/v1` | an item's generation seed, `H(epoch seed ‖ LE u32 item)` |
 | `misaka-palw/improve/eval-job/v1` | an evaluation job's id (A6: `H(line ‖ LE u64 epoch ‖ LE u32 item ‖ borsh(subject) ‖ kind ‖ part)`, with `borsh(subject)` = `0x00` (Parent), `0x01 ‖ class` (Candidate) or `0x02 ‖ class` (Previous), `kind` one byte (ExactMatch 1, RefLogLik 2, Judge 3, Pairwise 4 [S9]) and `part` one byte, 0 for every kind but a judged one, whose score is several claims, §17.8.5) |
+| `misaka-palw/improve/eval-generated/v1`, `…/eval-prompt/v1` | the ids' roots of an evaluation claim: `output_root` (the generated ids) and the binding's `prompt_root` (§17.8.4, byte-exact) |
+| `misaka-palw/improve/eval-finalized/v1` | the root over the outputs a judged part read (§17.8.4) |
+| `misaka-palw/improve/eval-execution-root/v1` | an evaluation claim's `execution_root` (§17.8.4); its own key, so it never verifies as an FP, IR or pipeline claim's |
+| `misaka-palw/improve/answer-span/v1` | the hash of an ExactMatch answer span or of a revealed key (§17.8.3): `H(LE u32 n ‖ LE u32 ids)` |
+| `misaka-palw/improve/fp-eval/job-id/v1` | an evaluation job's FP id as the lane carries it (§17.8.4): `H(LE u64 len ‖ bytes)` over the whole borsh of the version-9 job |
+| `misaka-palw/gen/step-root/v1`, `…/gen/stage-root/v1`, `misaka-palw/tir/layout/v1` | RFC-0003's step and stage roots (an evaluation claim's `trace_root` is its step root) and Phase F's layout digest (a class id binds it); not this chapter's, cited by §17.8.4 |
 | `misaka-palw/improve/payout/v1` | an earnings payout's key, `H(borsh(bond) ‖ LE u64 DAA ‖ block)`, first byte forced to `0xFD` (§17.11.5) |
 | `misaka-palw/improve/composite-artifact/v1` | a composite candidate's artifact root, `H(parent_class ‖ parent_root ‖ adapter_root ‖ LE u32 P)` |
 | `misaka-palw/improve/candidate-declarations/v1` | a candidate's declarations digest |
@@ -345,6 +351,16 @@ PalwImprovementPolicyV1 {                        // borsh, fields in this order 
   rollback_epochs, vest_epochs, ban_epochs: u32,
 }
 policy_digest = H("misaka-palw/improve/policy/v1", borsh(policy))
+```
+
+The eval block's types, in borsh and in the order listed [lane E's P11]: `stages` a `Vec` of `{ kind u8, params }`;
+`regression_dataset [64]`; `regression_items u32`; `safety_dataset [64]`; `safety_items u32`; `judge_set` a `Vec<[64]>`;
+`judge` and `pairwise` each an `Option<JudgeSpec>` with `JudgeSpec = { template_dataset [64], verdict_a Vec<u32>, verdict_b
+Vec<u32>, logit_scale_q24 i32 }`; `seat_pool_permille u16`; `anchor_floor_permille u16`; `n u32`; `n_min u32`;
+`delta_permille u16`; `epsilon_permille u16`; `epsilon_safety_permille u16`; `alpha_permille u16`; `max_new_tokens u32`;
+`stop_ids Vec<u32>`; `setter_cap_permille u16`; `max_eval_positions u64`.
+
+```
 L_e = w_collect + w_submit + w_holdout + w_eval + court_margin        // the nominal epoch length
 ```
 
@@ -705,7 +721,7 @@ hold-out, so the draw is fixed only after every candidate and every hold-out cas
   numbered `0..` in draw order.
 - **Suites** [decision, 2026-09-30]. Then, for each suite with items, `min(items, entries)` distinct entries of
   its registered dataset (§17.6.3) are drawn by a sparse Fisher–Yates shuffle driven by the epoch seed — for
-  `j = 0, 1, …`: `r_j = LE u64(H("…/suite-draw/v1", seed ‖ dataset_id ‖ role ‖ LE u32 j)[0..8]) mod (n − j)`
+  `j = 0, 1, …`: `r_j = LE u64(H("…/suite-draw/v1", seed ‖ dataset_id ‖ role ‖ LE u32 j)[0..8]) mod (n − j)` (`role` ONE byte, `j` four)
   over the `n` entries, the entry at virtual position `j + r_j` is drawn and the entry at `j` takes its place
   (`role` 1 for the regression suite, 2 for the safety suite, so two suites over one dataset draw different
   entries) — at a cost of `O(items · log items)`, whatever `n` is. Each drawn entry `e` is appended as an item
@@ -735,12 +751,28 @@ Every subject gets the same jobs on every item: one job per stage that applies t
 Pairwise job exists only for candidates and `Previous`: it compares the subject with the parent. The
 job family is the evaluation lane's (A6):
 - contexts derived by the chain;
-- job ids `H("…/eval-job/v1", line ‖ LE u64 epoch ‖ LE u32 item ‖ borsh(subject) ‖ kind)`, `kind` one
+- job ids `H("…/eval-job/v1", line ‖ LE u64 epoch ‖ LE u32 item ‖ borsh(subject) ‖ kind ‖ part)`, `kind` one
   byte holding the kind's value (ExactMatch 1, RefLogLik 2, Judge 3, Pairwise 4 — the policy's
-  encoding, not the scoring library's tags 0–3) [S9];
+  encoding, not the scoring library's tags 0–3) [S9]; `part` one byte (§17.0), 0 for every kind but a judged one;
 - open claiming in `[draw, t_eval)`;
 - the fee per job, paid from the subject's escrow;
 - capacity reservation (§17.8.4).
+
+**`J`, the jobs of a subject — the one definition** [decision, 2026-10-01; the chapter's other statements cite it]. A job is
+one claim, keyed `(line, epoch, item, subject, kind, part)`. A subject `s` is given at most
+
+```
+J_s = (n + m) + 2·n·[Judge ∈ stages] + 4·n·[Pairwise ∈ stages ∧ s ≠ Parent]            m = regression_items + safety_items
+```
+
+jobs in an epoch: **one primary job** per drawn item and per suite entry (an item is exact-key or likelihood, never both, and an
+ExactMatch key's scoring is the fold's at the key's reveal, §17.8.3 — it is not a second claim), **two judged parts** per drawn
+item for a Judge stage and **four** for a Pairwise stage of a non-parent subject (§17.8.5: a judged score is that many claims;
+suite items are never judged). The epoch's claimable jobs are `J_epoch = J_Parent + (S − 1)·J_non-parent` over its `S` subjects
+(the parent, every candidate, and `Previous` in a regression check) — `(n·(1 + 2·[Judge]) + m)·S + 4·n·[Pairwise]·(S − 1)`. Every
+bound in this chapter that counts jobs reads this: **the escrow** of a subject is `J_s × eval_fee_per_job` (§17.11.1, §17.11.2),
+**the position budget's share** is `⌊B / J_epoch⌋` (§17.8.4). The core's `palw_improvement_jobs_per_subject_v1` and the evaluation
+lane's `palw_improve_eval_epoch_jobs_v1` are the two spellings of it, and the second is the sum of the first.
 
 **Key disclosure** (RFC §7.1, amended):
 - setter prompts, and the references of teacher-forced items, are disclosed at the draw;
@@ -764,7 +796,7 @@ subject, kind)`, and the claim is the evaluation lane's job row's.
 | Kind | `value` |
 | --- | --- |
 | ExactMatch | 1 pass, 0 fail |
-| RefLogLik | the Q24 log-likelihood, `hi·2^31 + lo` of the stage's output |
+| RefLogLik | the Q24 log-likelihood, `hi·2^31 + lo` of the stage's output: the exact `i64` sum over the reference's tokens of `v_t = clamp(z_t − IntLn(Σ_j IntExp(z_j)), i32::MIN, 0)`, with `z_j = clamp((x_j − max x)·scale, i32::MIN, 0)` — **the per-token value is clamped at `i32::MIN` (−128 nats)** [D10b, lane E; the library `ref_logprob_v1` is canonical]: a token whose gap saturates while the row has other mass is worth `i32::MIN`, not the unclamped difference |
 | Judge | the judge's margin `LL(verdict_a) − LL(verdict_b)` on the subject's output, in Q24 nats, clamped to the stage's `[lo, hi]` (§17.8.5) |
 | Pairwise | the outcome from the candidate's side: **+1** when the sum of the judge's two margins (both orders shown, §17.8.5) exceeds the stage's `margin`, **−1** otherwise — a tie goes to the incumbent, so it is never 0 |
 
@@ -818,6 +850,53 @@ below are the evaluation lane's (`palw_improve_eval_v1`, `palw_improve_eval_fold
   (`palw_improve_eval_execution_root_v1`); `schedule_root` and `trace_manifest_root` are zero and
   `trace_chunk_count = 1`; the retention is the chain's (the accepting DAA plus the network's minimum). The
   claim id is the commitment's, its job named under `misaka-palw/improve/fp-eval/job-id/v1`.
+
+**The binding and the roots, byte-exact** [consensus-critical; the court's check (§17.8.6) and a second implementation read this].
+Notation: `H(k; p₁ ‖ p₂ …)` is BLAKE2b-512 **keyed** with the ASCII key `k` (the domain strings of §17.0, at most 64 bytes) over
+the concatenation of the parts (`…/` abbreviates `misaka-palw/improve/`); `[64]` is a 64-byte hash as its raw bytes; integers are little-endian; `ids(x) = LE u32 |x| ‖
+LE u32 each id` (the same for a `Vec<u32>` in borsh); borsh follows its standard rules (a `Vec` is `LE u32` length then
+elements, an enum a `u8` tag in declaration order then its fields, an `Option` a `u8` 0/1 then the value).
+
+`PalwEvalBindingV1` (borsh, `PALW_IMPROVE_EVAL_BINDING_VERSION_V1 = 1`) — every court move and every data-availability
+answer about an evaluation claim carries one, and **its fields in this order** are:
+
+| # | Field | Form |
+| --- | --- | --- |
+| 1 | `version` | `u16` = 1 |
+| 2 | `job` | `PalwEvalJobV1`: `line_id [64]`, `epoch u64`, `item u32`, `subject` (`0x00` Parent \| `0x01 ‖ class [64]` Candidate \| `0x02 ‖ class [64]` Previous), `kind u8` (ExactMatch 1, RefLogLik 2, Judge 3, Pairwise 4), `part u8`, `mode` (`0x00 ‖ seed [64] ‖ max_new u32 ‖ stop_ids` Generate \| `0x01 ‖ reference_commitment [64]` TeacherForced \| `0x02 ‖ judge [64]` Judged) |
+| 3 | `subject_class` | `[64]` — the class the claim ran (the item's judge for a judged part) |
+| 4 | `subject_layout` | `PalwTirLayoutV1`: `version u16`, `max_context u32`, `checkpoint_interval u32`, `h_tile u32`, `commit_tiles` (`LE u32 n ‖ u32 each`), `state_tiles` (the same); its digest `H("misaka-palw/tir/layout/v1"; borsh(layout))` is the class row's `layout_digest` |
+| 5 | `stage_roots` | `LE u32 n ‖ [64] each`, one per pipeline stage in stage order (RFC-0003's stage roots) |
+| 6 | `step_leaf_count` | `u64` — the chain's closed-form count of the derived context (the claim's `work_leaves`) |
+| 7 | `prompt_root` | `[64]` = `H("…/eval-prompt/v1"; ids(prompt))` |
+| 8 | `prompt_tokens` | `u32` — the prompt's length, so a step space derives without its ids |
+| 9 | `params` | `PalwEvalStageParamsV1`: `0x00 ‖ open i32 ‖ close i32` ExactMatch \| `0x01 ‖ logit_scale_q24 i32` RefLogLik \| `0x02 ‖ lo i32 ‖ hi i32 ‖ logit_scale_q24 i32` Judge \| `0x03 ‖ margin i32 ‖ logit_scale_q24 i32` Pairwise |
+| 10 | `generated` | `LE u32 n ‖ u32 each` — the stream stage's ids: decoded (a generating job) or given (the reference, teacher-forced) |
+| 11 | `finalized` | `LE u32 m ‖ (LE u32 n ‖ u32 each)` per output a judged part read, in the order its part shows (§17.8.5); empty for a job that reads none |
+| 12 | `score` | `LE u32 n ‖ i32 each` — the score stage's committed output (empty for a generation-only job) |
+| 13 | `committed_execution_root` | `[64]` — the `execution_root` of fields 1-12, below; not an input of it |
+
+The roots, from the fields above (`step_root`, `generated_root`, `finalized_root` and `execution_root` are the claim's `trace_root`,
+`output_root` and `execution_root` as the commitment carries them, with `work_leaves = step_leaf_count`):
+
+```
+job_id          = H("…/eval-job/v1"; line ‖ LE u64 epoch ‖ LE u32 item ‖ borsh(subject) ‖ kind ‖ part)
+step_root       = H("misaka-palw/gen/step-root/v1"; LE u16 |stages| ‖ stage_root₀ ‖ … )        (RFC-0003; the claim's trace_root)
+generated_root  = H("…/eval-generated/v1"; ids(generated))                                      (the claim's output_root)
+finalized_root  = H("…/eval-finalized/v1"; LE u32 m ‖ generated_root(out₀) ‖ … ‖ generated_root(out_{m−1}))   (each output's own generated_root;
+                  m = 0 for a job that reads none; the fold derives the outputs from the job table, never from the claim)
+execution_root  = H("…/eval-execution-root/v1";
+                    job_id ‖ subject_class ‖ LE u64 step_leaf_count ‖ step_root ‖ prompt_root ‖ LE u32 prompt_tokens ‖
+                    borsh(params) ‖ generated_root ‖ finalized_root ‖ LE u32 |score| ‖ LE i32 each score lane)
+answer_span_hash = H("…/answer-span/v1"; ids(span))   (an ExactMatch generation's answer span, or a revealed key: equal exactly when the ids are, §17.8.3)
+fp job id       = H("…/fp-eval/job-id/v1"; LE u64 len ‖ bytes), bytes = the whole borsh of the version-9 job (the claim id's input, as the V3-V5 ids)
+```
+
+The tail's fields (`generated`, `score`, `subject_layout`, `params`; §17.8.4 Carriage) are fields 10, 12, 4 and 9 of the binding, the
+prompt is the payload's, and `finalized` is the fold's; the claim's `execution_root` is field 13. A court move that carries a binding
+is held to the claim and the chain by `verify_eval_binding_v1` (§17.8.6): the binding's `job` is the job table's row for the claim, its
+`subject_class` the claim's class, field 13 and the roots above the claim's, `step_leaf_count` the claim's `work_leaves`, and
+`H("misaka-palw/tir/layout/v1"; borsh(subject_layout))` the class row's `layout_digest`.
 
 **The door** — one decision at three places, so a build that carries the fence and one that does not agree
 on every transaction below it:
@@ -898,12 +977,10 @@ its own life.
   is capacity, not collateral.
 - *The epoch's evaluation budget in positions* **[decision A6-2]**. A job's positions are its prompt's ids plus
   its stream's. The budget is `B = min(policy.max_eval_positions, C.max_eval_positions_per_epoch ·
-  C.max_eval_budget_permille / 1000)`, and the epoch's claimable jobs are at most `J = (n·(1 + 2·[Judge]) +
-  m)·S + 4·n·[Pairwise]·(S − 1)` over its `S` subjects, `m = regression_items + safety_items`: one job per drawn
-  item and subject for the item's primary kind (an item is exact-key or likelihood, never both), two more for a
-  Judge stage (a judged score is two claims, §17.8.5), four per item and non-parent subject for a Pairwise stage,
-  and one per suite entry and subject (a suite item discloses its entry in its claim, §17.8.1). An ExactMatch
-  key's scoring is the fold's, not a claim, so it adds none. A claim whose positions exceed `⌊B / J⌋` is
+  C.max_eval_budget_permille / 1000)`, and the epoch's claimable jobs are at most `J_epoch` (§17.8.2: one primary job per
+  drawn item and suite entry and subject — a suite item discloses its entry in its claim, §17.8.1 — plus two judged parts
+  per drawn item for a Judge stage and four per non-parent subject for a Pairwise stage; an ExactMatch key's scoring is the
+  fold's, not a claim, so it adds none). A claim whose positions exceed `⌊B / J_epoch⌋` is
   refused. The shares are equal and independent, so no order of
   claims can spend another job's share, a voided claim returns nothing to anyone, and the epoch's total never
   exceeds `B`. *No chapter defines a claim capacity in positions; v1 takes the network's per-epoch ceiling as
@@ -953,7 +1030,9 @@ evaluate and can never make a promotion. The pieces of the lane are consistent w
   ExactMatch generation scored at a key's reveal needs a `Final` claim, and a missing one scores nothing;
 - *fees and refunds*: such a claim is paid nothing — the subject's escrow is the epoch's, and what it did not
   spend returns at the epoch's end (§17.11.2) — and its executor bears the work; its reservation is released as
-  any claim's is. Its job row retires with the epoch (§17.5.4), so a late `Final` finds no row and does nothing;
+  any claim's is. Its job row retires with the epoch (§17.5.4), so a late `Final` finds no row and does nothing. A fee
+  is paid once, at `Final`, and stays paid (§17.8.6, E-C9): a claim convicted before `Final` was never paid, and a
+  freed job's next claim is paid from what the escrow has left;
 - *the sign test*: counts are over recorded scores only (§17.9.3), so a late or voided claim is the same as an
   unclaimed job: nothing recorded, the item for the incumbent;
 - *courts*: a court that convicts a claim slashes it by the claim rules (`claim.reserved`, §17.8.4 above, the
@@ -1166,7 +1245,11 @@ no close carries a program or a policy. *E-C4*: a close is priced by its own enc
 swing lock; a false accusation is charged `min(reserved, floor)`. *E-C6*: a convicted `Final` claim retracts its
 score — and the judged scores that read a convicted generation — while the epoch takes scores (conservative: missing
 scores favour the incumbent). *E-C7*: a claim is beyond the one-move court once `Final`; a later conviction by another
-path is E-C6's. *E-C8*: an evaluation dissection's verdict is recorded as an IR dissection's — `CourtHeldVerdict` past
+path is E-C6's. *E-C9* [lane E's E30]: a fee already paid at `Final` stays paid — nothing is clawed back and the
+escrow does not refill — so a convicted `Final` claim's executor keeps the fee while the claim rules slash its swing lock
+(which dwarfs a fee), and the freed job's next claim is paid from what the escrow has left (§17.11.2); a claim convicted
+before `Final` was never paid; the judged parts that read a reversed generation are paid their fee at their own `Final`
+(§17.8.5). *E-C8*: an evaluation dissection's verdict is recorded as an IR dissection's — `CourtHeldVerdict` past
 `palw_offence_attribution` (the bottom proves the responder's filings false, not necessarily the committed execution;
 charged the same). The rule is one predicate, `PalwCourtVerdictProofV2::is_dissection_bottom_v1` (attention, IR,
 generative and evaluation dissections), which the fold's close arm asks and no list of its own. *Open*: calibrating the false-accusation charge for evaluation claims, whose reservations are larger
@@ -1391,13 +1474,9 @@ Three paths bring money into the pool.
    escrow as held for the jobs it pays. The debit is refused by name unless the bond is `Active` and
    its free collateral covers it. Free collateral is its collateral less slashed, less what the
    R-core+ ledger holds committed, less its accuser ledger.
-   - `CandidateSubmitted`: `registration_fee` (balance, at once — the draw's escrow may use it
-     [D2]), `candidate_bond` (held), and `eval_fee_per_job × J` (the candidate's escrow, held). `J`
-     is the most jobs a subject can be given [D1]: one per item for its primary kind —
-     `n + regression_items + safety_items`, since an ExactMatch job generates and the fold scores it
-     at the key's reveal, and a likelihood job is one teacher-forced pipeline — plus `n` with a Judge
-     stage (drawn items only), plus `n` with a Pairwise stage for a candidate or `Previous` (the parent
-     has no Pairwise job). `palw_improvement_jobs_per_subject_v1` computes it.
+   - `CandidateSubmitted`: `registration_fee` (balance, at once — the draw's escrow may use it [D2]), `candidate_bond` (held), and
+     `eval_fee_per_job × J_s` (the candidate's escrow). `J_s` is the most jobs a non-parent subject can be given, as §17.8.2
+     defines it once: `(n + m) + 2n·[Judge] + 4n·[Pairwise]` with `m = regression_items + safety_items`.
    - `HardCaseSubmitted`: `hard_case_fee` (balance).
    - `TeachingArtifactCommitted`: `artifact_bond` (held).
    - `SetterSetCommitted`: `setter_bond` (held).
@@ -1415,11 +1494,12 @@ Three paths bring money into the pool.
 
 ### 17.11.2 Escrow
 
-At the draw, the parent's escrow (`J_parent × eval_fee_per_job`) is moved from the balance to the
+At the draw, the parent's escrow (`J_Parent × eval_fee_per_job`) is moved from the balance to the
 epoch's escrow, and so is the `Previous` subject's. If the balance cannot cover both, the epoch ends
-`NoChange(PoolInsufficient)`. `J` bounds the jobs one subject can be given: two per item for its primary kind (a
-generation, then its scoring once the key is out — the upper bound), **two per drawn item for a Judge stage and
-four for a Pairwise stage (§17.8.5: a judged score is that many claims)**, and two per suite item.
+`NoChange(PoolInsufficient)`. `J_s` bounds the jobs one subject can be given, as §17.8.2 defines it once — one primary job
+per drawn item and suite entry, **two judged parts per drawn item for a Judge stage and four for a Pairwise stage of a
+non-parent subject** (§17.8.5: a judged score is that many claims): a subject's escrow is `J_s × eval_fee_per_job`, the
+parent's with no Pairwise term.
 
 The evaluation lane pays, when a job's claim is final — while the epoch is `Evaluating` or `Closing`; a claim final
 after the epoch's end is not paid [E23] — `eval_fee_per_job` from the subject's escrow, as earnings credits
@@ -1432,7 +1512,10 @@ is **not spent**: it stays in the escrow and returns with it at the epoch's end,
 it. *(The ordinary rule sends that remainder to the panel reserve; this escrow's accounting has no place for it,
 and returning it is the conservative choice — an executor can never profit from a seat's silence.)* A claim with
 no duty row (bound below the panel economy) pays its executor the whole fee. The escrow's `spent` grows by what
-was paid, so a job whose escrow is exhausted pays only what is left.
+was paid, so a job whose escrow is exhausted pays only what is left [E31, decision 2026-10-01]: the reward is
+`min(fee, escrow left)` and it divides by the rule above — `P = ⌊reward · seat_pool_permille / 1000⌋`, each credited seat
+`⌊P / d⌋`, the executor `reward − P` — so a short escrow scales the seats' pool and the executor's share together (the
+executor is not paid first and the seats are not paid last); with nothing left the claim is paid nothing.
 
 At the epoch's end, whatever is left of an escrow goes back to where it came from, **first** the
 parent's and `Previous`'s to the balance — so S2's `R` (§17.11.3) is taken from a balance that
