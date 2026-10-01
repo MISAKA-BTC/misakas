@@ -141,7 +141,7 @@ mod tests {
         let mut rng = Lcg(seed);
         let w: Vec<f32> = (0..spec.cout * spec.taps()).map(|_| rng.unit() as f32).collect();
         let bias: Vec<f32> = (0..spec.cout).map(|_| rng.unit() as f32).collect();
-        let (sx, sy) = (1.0 / 2048.0, 1.0 / 2048.0);
+        let (sx, sy) = (1.0 / 2048.0, 1.0 / 512.0);
         let q = QConv::new(spec, &w, with_bias.then_some(&bias[..]), sx, sy);
         let x: Vec<i128> = (0..spec.cin * spec.h * spec.w).map(|_| rng.range(-15_000, 15_000)).collect();
         let x2 = x.clone();

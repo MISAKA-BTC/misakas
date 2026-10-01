@@ -297,7 +297,9 @@ fn attention_stage(
 /// Nearest ×2 then the upsampler's 3×3 convolution.
 #[allow(clippy::too_many_arguments)]
 fn upsample_stage(vae: &Vae, cal: &Calib, prefix: &str, s: &str, c: usize, h: usize, w: usize, s_in: f64) -> Result<VaeStage, String> {
-    let s_uc = cal.scale16(&format!("{s}.uc"));
+    // The float decoder notes the upsampler's convolution as `vae.up{i}.uc`; this stage is named `vae.up{i}.us`.
+    let uc_site = format!("{}.uc", s.trim_end_matches(".us"));
+    let s_uc = cal.scale16(&uc_site);
     let q = qconv(vae, &format!("{prefix}.conv"), 2 * h, 2 * w, 1, s_in, s_uc);
     let spec = q.spec;
     let idx = upsample_index(c, h, w);
@@ -334,7 +336,7 @@ fn upsample_stage(vae: &Vae, cal: &Calib, prefix: &str, s: &str, c: usize, h: us
         in_scale: s_in,
         out_shape: vec![c, 2 * h, 2 * w],
         out_scale: s_uc,
-        site: Some(format!("{s}.uc")),
+        site: Some(uc_site),
     })
 }
 

@@ -91,7 +91,7 @@ impl QBlock {
     pub fn new(i: usize, dit: &Dit, cal: &Calib, n_txt: usize) -> Self {
         let cfg = &dit.cfg;
         let pre_only = i + 1 == cfg.num_layers;
-        let (d, n) = (cfg.width(), cfg.grid() * cfg.grid());
+        let n = cfg.grid() * cfg.grid();
         let b = format!("b{i}");
         let pf = format!("transformer_blocks.{i}");
         let (s_ca, s_si, s_st) = (cal.scale16("cond_a"), cal.scale32("stream_img"), cal.scale32("stream_txt"));

@@ -45,7 +45,7 @@ mod tests {
     #[test]
     fn an_activation_table_is_the_function_on_the_grid() {
         let mut rng = Lcg(5);
-        let (sx, sy) = (1.0 / 2048.0, 1.0 / 4096.0);
+        let (sx, sy) = (1.0 / 2048.0, 1.0 / 2048.0);
         let x: Vec<i128> = (0..24).map(|_| rng.range(-20_000, 20_000)).collect();
         for (name, q, f) in
             [("silu", QAct::silu(sx, sy), silu as fn(f64) -> f64), ("gelu", QAct::gelu_tanh(sx, sy), gelu_tanh as fn(f64) -> f64)]

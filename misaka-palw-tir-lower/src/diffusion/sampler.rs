@@ -247,7 +247,7 @@ mod tests {
                     let vel = sink.put(pb, "v", DType::I16, &[c as u32, h as u32, w as u32], v2);
                     let dsig = t2.declare(pb, sink, "smp");
                     let st =
-                        pb.fixed_state("latent", DType::I32, &[c as u32, h as u32, w as u32], i32::MIN as i64, i32::MAX as i64, false);
+                        pb.fixed_state("latent", DType::I32, &[c as u32, h as u32, w as u32], i32::MIN as i64, i32::MAX as i64, true);
                     (noise, vel, dsig, st)
                 },
                 |b, (noise, vel, dsig, st)| {

@@ -113,7 +113,7 @@ mod tests {
         let mut rng = Lcg(seed);
         let w: Vec<f32> = (0..out * inn).map(|_| rng.unit() as f32 * (1.0 + (rng.range(0, 3) as f32))).collect();
         let bias: Vec<f32> = (0..out).map(|_| rng.unit() as f32 * 2.0).collect();
-        let (sx, sy) = (1.0 / 4096.0, 1.0 / 2048.0);
+        let (sx, sy) = (1.0 / 4096.0, 1.0 / 512.0);
         let q = QLinear::new(&w, out, inn, with_bias.then_some(&bias[..]), sx, sy);
         let x: Vec<i128> = (0..rows * inn).map(|_| rng.range(-20_000, 20_000)).collect();
         let x2 = x.clone();

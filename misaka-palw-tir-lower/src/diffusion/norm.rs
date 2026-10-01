@@ -157,9 +157,16 @@ pub fn lower_group_norm(b: &mut BlockBuilder<'_>, x: Ref, q: &QGroupNorm, r: &QG
     // The totals: the exact sums of the partials over H.
     let p64 = b.cast(part, DType::I64);
     let tot = b.reduce_sum(p64, 0, DType::I64); // [1, G, 3]
+    // A slice carries its tensor's one interval, the union of three lanes of very different ranges; each total is
+    // clamped to what its lane can hold (`i16` inputs: `|x| ≤ 32767`, a row of `Cg·W` elements, `H` rows) — a clamp
+    // that never fires and makes the range analysis total, the library's convention.
+    let (rows, row) = (spec.h as i64, spec.row() as i64);
     let t1 = b.slice(tot, 2, 0, 1);
+    let t1 = b.clamp(t1, -rows * row * 32_767, rows * row * 32_767, DType::I64);
     let thi = b.slice(tot, 2, 1, 1);
+    let thi = b.clamp(thi, 0, rows * (row / 2 + 1), DType::I64);
     let tlo = b.slice(tot, 2, 2, 1);
+    let tlo = b.clamp(tlo, 0, rows * i32::MAX as i64, DType::I64);
     let base = b.c(DType::I64, 1 << 31);
     let t2h = b.mul(thi, base, DType::I64);
     let t2 = b.add(t2h, tlo, DType::I64); // [1, G, 1]
