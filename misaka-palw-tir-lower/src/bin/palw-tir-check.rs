@@ -166,11 +166,24 @@ fn main() {
         }
     };
     // The feature report (model_type is informational; the features, the level, the adapter used).
-    let arch = {
+    let (arch, encdec) = {
         let cfg: Result<serde_json::Value, _> = serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&text));
         let tensors = a.weights.as_ref().and_then(|p| TensorIndex::from_checkpoint_path(p).ok());
-        cfg.ok().map(|c| model::analyze(&c, tensors.as_ref(), &read))
+        let encdec = cfg.as_ref().ok().is_some_and(misaka_palw_tir_lower::hf_schema::is_encoder_decoder);
+        (cfg.ok().map(|c| model::analyze(&c, tensors.as_ref(), &read)), encdec)
     };
+    // An encoder-decoder lowers to TWO programs (the encoder over the padded source, the decoder's text stage): this
+    // tool's per-position cost report is for one decoder-shaped program, so the feature report is the whole answer here
+    // and `palw-class check-architecture` judges both stages under the network's ceilings.
+    if encdec && let Some(r) = &arch {
+        if a.json {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"architecture_report": r})).unwrap_or_default());
+        } else {
+            print!("{}", r.render());
+            println!("an encoder–decoder lowers to two programs; `palw-class check-architecture` admits both stages");
+        }
+        std::process::exit(if matches!(r.result, model::ReportResult::Lowerable) { 0 } else { 2 });
+    }
     match report::check_read(&text, &read, w) {
         Ok(c) => {
             let (tir_json, tir_text, tir_ok) = tir_section(&c, &a);
