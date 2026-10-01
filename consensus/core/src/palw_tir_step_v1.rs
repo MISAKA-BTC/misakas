@@ -715,6 +715,31 @@ pub fn palw_tir_lanes_le_v1(dtype: DType, values: &[i128]) -> Result<Vec<u8>, Pa
     Ok(out)
 }
 
+/// **A leaf's lanes exactly as committed, whatever they hold** (PALW-TIR-5; spec 04b §15.14): each value
+/// is its lane's four little-endian bytes, the **low 32 bits** — `idx`'s as `u32`, every other
+/// dtype's as `i32` — with no judgement of whether the dtype or the node's interval contains it. A value
+/// the dtype contains encodes as [`palw_tir_lanes_le_v1`] encodes it, byte for byte; a value outside it
+/// (an `i16` node's 32,768, an `i8`'s 128, an `idx`'s −1) still has its lane, so a leaf the executor
+/// committed with one **opens, proves under its stage's root and is convicted by PALW-TIR-33's interval
+/// check** — instead of being an unprovable leaf that convicts nobody (finding G21: the executor hashes
+/// its own tree, so it could otherwise commit such a lane and escape). Total except for a dtype that is
+/// never committed. The IR builder's strict [`palw_tir_lanes_le_v1`] stays what an honest producer builds
+/// with; every path that hashes or re-encodes a leaf DISCLOSED to a court uses this one.
+pub fn palw_tir_lanes_wire_v1(dtype: DType, values: &[i128]) -> Result<Vec<u8>, PalwTirStepError> {
+    if !dtype.committable() {
+        return Err(PalwTirStepError::NotCanonical(format!("{} is never committed", dtype.name())));
+    }
+    let mut out = Vec::with_capacity(values.len() * 4);
+    for v in values {
+        if dtype == DType::Idx {
+            out.extend_from_slice(&(*v as u32).to_le_bytes());
+        } else {
+            out.extend_from_slice(&(*v as i32).to_le_bytes());
+        }
+    }
+    Ok(out)
+}
+
 /// **The integers a leaf's lanes hold**, read without judging them: `idx` lanes as `u32`, every
 /// other dtype's as `i32`. Whether each value is one its node can produce is PALW-TIR-33's
 /// question, asked by the court against the node's proven interval (which lies inside the dtype).

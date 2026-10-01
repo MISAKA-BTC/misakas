@@ -1,7 +1,7 @@
 //! **RFC-0003: the generative court's consensus objects** — what pins a pipeline claim's execution
 //! (its binding), and the closes a `CourtClosed` carries for one
 //! (`PalwCourtVerdictProofV2::GenCone`, tag 10; `PalwCourtVerdictProofV2::GenDecodeToken`, tag 11;
-//! Phase F's allocation; and a tensor claim's `GenOutputTile`, tag 13).
+//! Phase F's allocation; and a tensor claim's `GenOutputTile`, tag 16).
 //!
 //! **The binding.** A V5 claim (RFC-0003 §II.2.1) commits one step tree (`palw_gen_step_v1`: every
 //! stage's leaves, a root per stage, the step root over them) and its generated ids; its commitment's
@@ -39,7 +39,9 @@
 //! the narrowed leaf is.
 //!
 //! **On the wire** a leaf's values ride as their 4-byte lanes (PALW-TIR-5), read back under the
-//! dtype the space gives the leaf ([`PalwGenLeafOpeningV1`]). The prompt ids ride only when the
+//! dtype the space gives the leaf ([`PalwGenLeafOpeningV1`]) **without judging them**: the leaf's hash
+//! is over the lanes as committed (total, finding G21), so a lane outside its node's dtype or proven
+//! interval proves under the stage's root like any other and PALW-TIR-33 convicts it. The prompt ids ride only when the
 //! disputed stage reads them (the text stage, or a stage whose tokens or bindings read the prompt),
 //! whole, checked against the job's `prompt_token_ids_hash` in the network's form; a dispute
 //! anywhere else reveals nothing of the prompt. The source ids (RFC-0003 §II.2.2, an
@@ -357,11 +359,12 @@ fn leaf_dtype(space: &PalwGenStepSpaceV1, coord: &PalwGenLeafCoordV1) -> Option<
 }
 
 impl PalwGenLeafOpeningV1 {
-    /// An opened leaf as it rides: `None` when its coordinate is no leaf of `space` or a value is not
-    /// one of the leaf's dtype.
+    /// An opened leaf as it rides: `None` when its coordinate is no leaf of `space`. Total over the lanes:
+    /// a lane outside the leaf's dtype rides as its low 32 bits (finding G21), so the court can convict it.
     pub fn of(space: &PalwGenStepSpaceV1, leaf: &PalwGenOpenedLeafV1) -> Option<Self> {
         let dtype = leaf_dtype(space, &leaf.coord)?;
-        let lanes_le = crate::palw_tir_step_v1::palw_tir_lanes_le_v1(dtype, &leaf.values).ok()?;
+        // Total over the lanes (finding G21): an opened leaf rides as the lanes it was committed with.
+        let lanes_le = crate::palw_tir_step_v1::palw_tir_lanes_wire_v1(dtype, &leaf.values).ok()?;
         Some(Self { coord: leaf.coord, lanes_le, path: leaf.path.clone() })
     }
 
@@ -403,7 +406,7 @@ pub struct PalwGenDecodeCloseV1 {
     pub row: Vec<PalwGenLeafOpeningV1>,
 }
 
-/// **A generative output close** (`GenOutputTile`, tag 13; RFC-0003 §I.3.2, PALW-OUT-4): the claim's
+/// **A generative output close** (`GenOutputTile`, tag 16; RFC-0003 §I.3.2, PALW-OUT-4): the claim's
 /// output digest against its own step tree — output tile `tile`, proven under the claim's `output_root`,
 /// against the output node's committed step tile of the same lanes, opened under its stage's root. The
 /// executor's two statements disagree (`TirOutputDigestMismatch`) or a lane is outside the output node's
@@ -1189,11 +1192,16 @@ impl PalwGenEvidenceV1<'_> {
         })
     }
 
-    /// **A cone close of leaf `index`**, carrying exactly what its cone reads.
+    /// **A cone close of leaf `index`**, carrying exactly what its cone reads — or, when the leaf holds a
+    /// lane outside its node's proven interval (an `i16` node's 32,768 included: finding G21), the leaf
+    /// alone, which convicts on PALW-TIR-33 before the court reads anything else.
     pub fn cone_close(&self, index: u64, limits: &DemandLimits) -> Result<PalwGenConeCloseV1, String> {
         let v = self.verified()?;
         let case = v.case(self.row);
         let full = self.full_close(&v, index)?;
+        if let Some(conviction) = crate::palw_gen_court_v1::palw_gen_interval_conviction_close_v1(&case, &full) {
+            return self.wire(&v, &conviction);
+        }
         let used = crate::palw_gen_court_v1::palw_gen_cone_units_v1(&case, &full, limits).map_err(|e| e.to_string())?;
         self.wire(&v, &crate::palw_gen_court_v1::palw_gen_restrict_close_v1(&case, &full, &used))
     }

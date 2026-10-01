@@ -1182,6 +1182,24 @@ pub fn palw_gen_cone_units_v1(
     Ok(used)
 }
 
+/// **The close that convicts on PALW-TIR-33 alone** (finding G21): when the disputed leaf of `full` is
+/// under its stage's root and one of its lanes is outside its node's proven interval — whatever the
+/// dtype, an `i16` node's 32,768 included — the leaf and nothing else is a conviction
+/// ([`palw_gen_adjudicate_leaf_v1`] convicts before it reads an operand, a param or an image), so a
+/// challenger that finds such a lane files exactly this. `None` when the leaf's lanes are all inside the
+/// interval, or when the leaf does not prove (evidence that does not hold convicts nobody).
+pub fn palw_gen_interval_conviction_close_v1(case: &PalwGenCourtCaseV1<'_>, full: &PalwGenCloseV1) -> Option<PalwGenCloseV1> {
+    let d = &full.disputed;
+    let sp = case.space.stages.get(d.coord.stage as usize)?;
+    let stage_root = case.claim.stage_roots.get(d.coord.stage as usize)?;
+    if !palw_gen_verify_leaf_v1(sp, stage_root, d) {
+        return None;
+    }
+    let interval = leaf_interval(case, &d.coord)?;
+    first_outside(&d.values, interval)?;
+    Some(PalwGenCloseV1 { disputed: d.clone(), operands: Vec::new(), image_tiles: Vec::new(), params: Vec::new() })
+}
+
 /// **A close cut down to the units in `used`**: the disputed leaf, the carried leaves the evaluation
 /// read, the param leaves it read and the image tiles it read — exactly what the court repeats it
 /// from.

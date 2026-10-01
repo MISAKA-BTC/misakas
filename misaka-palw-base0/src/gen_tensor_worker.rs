@@ -33,7 +33,7 @@ use kaspa_consensus_core::palw_gen_step_v1::{
 use kaspa_consensus_core::palw_gen_worker_v1::{PalwGenClaimRootsV1, PalwGenExecutionV1, PalwGenOutputV1, palw_gen_execute_tensor_v1};
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_consensus_core::palw_step_leg::PalwStepFaultV1;
-use kaspa_consensus_core::palw_tir_step_v1::{palw_tir_lane_values_v1, palw_tir_lanes_le_v1};
+use kaspa_consensus_core::palw_tir_step_v1::{palw_tir_lane_values_v1, palw_tir_lanes_wire_v1};
 use kaspa_hashes::Hash64;
 use misaka_palw_tir::demand::DemandLimits;
 use misaka_palw_tir::pipeline::{JobImageV1, PipelineParams, stage_job_facts};
@@ -227,7 +227,7 @@ impl GenTensorCaptureV1 {
         for (stage, values) in work.execution.space.stages.iter().zip(&work.execution.leaf_values) {
             let mut lanes = Vec::with_capacity(values.len());
             for (leaf, v) in stage.leaves().iter().zip(values) {
-                lanes.push(palw_tir_lanes_le_v1(leaf.dtype, v).map_err(|e| e.to_string())?);
+                lanes.push(palw_tir_lanes_wire_v1(leaf.dtype, v).map_err(|e| e.to_string())?);
             }
             leaves.push(lanes);
         }

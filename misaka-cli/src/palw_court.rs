@@ -1193,10 +1193,14 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         PalwCourtVerdictProofV2::TirDecodeToken { .. } => "TirDecodeToken",
         // RFC-0002 Phase F (F7): the bottom of an IR history dissection.
         PalwCourtVerdictProofV2::TirDissection { .. } => "TirDissection",
-        // RFC-0003: a generative class's closes and its dissection's bottom.
+        // RFC-0003: a generative class's closes and its dissection's bottom. Named, never folded
+        // into a catch-all, for the reason the arms above give: this is the line that tells an
+        // operator which close they are about to spend carriers on, and a generative close is
+        // the widest proof the ruleset admits once the fence is open.
         PalwCourtVerdictProofV2::GenCone { .. } => "GenCone",
         PalwCourtVerdictProofV2::GenDecodeToken { .. } => "GenDecodeToken",
         PalwCourtVerdictProofV2::GenDissection { .. } => "GenDissection",
+        PalwCourtVerdictProofV2::GenOutputTile { .. } => "GenOutputTile",
     }
 }
 

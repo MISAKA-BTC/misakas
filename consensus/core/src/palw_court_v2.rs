@@ -404,7 +404,17 @@ pub fn validate_court_opened_v2(
 /// acceptance layer re-derives the verdict from it rather than believing the one declared beside
 /// it. Before that, a close carried a bare verdict, so the pipeline had nothing to check and
 /// refused every close outright — the court existed and could not be used.
+///
+/// **The discriminants are an allocation** (spec 17 §17.0 is its authority for every branch): 0–9 are
+/// RFC-0002's and the legacy closes', 10–12 RFC-0003's generative closes, **13–15 are reserved for
+/// RFC-0004's evaluation proofs**, and **16 is RFC-0003's output close** (`GenOutputTile`). A discriminant
+/// that is positional breaks the moment two branches append at the same place, so this enum carries them
+/// explicitly (`use_discriminant`, and the `repr` Rust asks of a data-carrying variant with one): a
+/// variant declared between `GenDissection` and `GenOutputTile` takes the next number after the one
+/// before it, and `GenOutputTile` stays 16 whatever is declared before it.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum PalwCourtVerdictProofV2 {
     /// Terminal arithmetic adjudication from carried proofs (Decision 8 / P0-8): every operand
     /// the recomputation touches arrives as an opening against the class's registered artifact
@@ -510,12 +520,14 @@ pub enum PalwCourtVerdictProofV2 {
     /// `TirDissection` with the generative close as its carriage, graded against its session's phase
     /// ([`crate::palw_gen_close_v1::check_gen_dissect_bottom_v1`]), never against the claim alone.
     GenDissection { bottom: Box<crate::palw_gen_close_v1::PalwGenConeCloseV1> },
-    /// **RFC-0003 (tag 13): a tensor claim's output close** — one output tile of the claim's canonical
+    /// **RFC-0003 (tag 16): a tensor claim's output close** — one output tile of the claim's canonical
     /// output, proven under its `output_root`, against the output node's committed step tile of the
     /// same lanes: the executor's two statements about one output disagree, or a lane is outside the
     /// node's proven interval ([`crate::palw_gen_close_v1::check_gen_output_close_v1`], PALW-OUT-4).
-    /// Appended last, so no earlier discriminant moves.
-    GenOutputTile { close: Box<crate::palw_gen_close_v1::PalwGenOutputCloseV1> },
+    /// **Tag 16, not 13**: spec 17 §17.0 reserves 13–15 for RFC-0004's evaluation proofs and this is the
+    /// next free number. Its discriminant is explicit, so no declaration order moves it. Dormant behind
+    /// `palw_gen_v1` (a tag no network has ever carried).
+    GenOutputTile { close: Box<crate::palw_gen_close_v1::PalwGenOutputCloseV1> } = 16,
 }
 
 impl PalwCourtVerdictProofV2 {
