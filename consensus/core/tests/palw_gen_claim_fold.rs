@@ -51,6 +51,7 @@ fn armed() -> Params {
     p.sync_palw_tir_v1();
     p.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(ForkActivation::new(AT)));
     p.palw_fp_decode_rules = Some(ForkActivation::new(AT));
+    p.sync_palw_fp_decode_rules();
     p.palw_fp_job_v5 = Some(ForkActivation::new(AT));
     p.sync_palw_gen_v1();
     p.validate_palw_v2().unwrap_or_else(|e| panic!("the four fences at {AT}: {e}"));
@@ -385,9 +386,10 @@ fn an_embedding_claim_of_a_private_job_folds_with_no_ids() {
 fn below_either_fence_a_tensor_claim_is_refused_by_name() {
     let net = net();
     let (object, _) = image_claim(&net, EXECUTOR, 1, 0x33, 0);
-    // Below the fence: the second lock behind the walk's drop.
-    let below = net.chain.try_fold(&net.chain.s, &ctx(0xCA_0000 + AT, AT - 1, AT - 1, 0), &[object.clone()], PalwBlockWorkV3::None, Hash64::default());
-    assert!(matches!(&below, Err(PalwStateV2Error::GenClaimRefused(why)) if why.contains("palw_fp_job_v5")), "{below:?}");
+    // Below the fence: the second lock behind the walk's drop (a block at AT - 1 on the pre-registration state).
+    let fresh = Chain::new(armed());
+    let below = fresh.try_fold(&fresh.s, &ctx(0xCA_0000 + AT - 1, AT - 1, AT - 1, 0), &[object.clone()], PalwBlockWorkV3::None, Hash64::default());
+    assert!(matches!(&below, Err(PalwStateV2Error::GenObjectRefused(_))), "the generative fence's own lock fires first: {below:?}");
     // The generative fence alone (palw_fp_job_v5 pushed out): refused too — the lane's fence is the claim's.
     let mut p = armed();
     p.palw_fp_job_v5 = Some(ForkActivation::new(AT + 500));

@@ -80,25 +80,26 @@ pub(super) fn apply_gen_tensor_commitment_v1(
     if crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&builder.state, c.bond) {
         return Err(PalwStateV2Error::ProducerFrozen { bond: *c.bond });
     }
-    // 2. The class: a registry row that is not frozen and admits claims, and a generative class of a
-    // tensor profile (a text class takes V4/V5).
+    // 2. The class: a registry row that is Active (not frozen, not awaiting its activation, not reclaimed), a
+    // generative class of a tensor profile (a text class takes V4/V5). **The model registry's lifecycle does
+    // not gate it**: a generative class's graph derives no priced work (the registry's `Registered` row, which
+    // never admits, is all a pipeline class ever gets — its ramp is the attempt lane's probes, which a
+    // pipeline has none of), so the lane's own bounds do the gating — the per-class cap on claims in flight
+    // below, the executor's reservation against its collateral, and the panel's readiness.
     let class = builder.state.classes.get(c.class_id).ok_or(PalwStateV2Error::MissingClass(*c.class_id))?;
-    if let PalwClassStatusV2::Frozen { .. } = class.status {
-        return Err(PalwStateV2Error::FrozenClass(*c.class_id));
+    match class.status {
+        PalwClassStatusV2::Active => {}
+        PalwClassStatusV2::Frozen { .. } => return Err(PalwStateV2Error::FrozenClass(*c.class_id)),
+        ref other => return Err(refused(format!("the class is {other:?}, not Active"))),
     }
     let slash_value_per_pwu = class.slash_value_per_pwu;
     let row = builder.state.gen_classes.get(c.class_id).cloned().ok_or_else(|| refused("the claim's class is no generative class"))?;
-    if let Some(state) = builder.read().class_lifecycle_refusal(c.class_id) {
-        return Err(PalwStateV2Error::ClassNotAdmitting { class: *c.class_id, state });
-    }
     builder.check_class_verify_admits_v1(
         c.class_id,
         daa,
         crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::FreePrompt { work_leaves: c.work_leaves },
         true,
     )?;
-    // T-2(a): the executor's share of the class's unlicensed claims, one per commitment.
-    builder.check_bond_class_share(c.bond, c.class_id, daa)?;
     // 3. The job against the class (the version, the profile, the modes, the seed rule, every parameter in
     // the class's offers, one image reference per slot at its size), and — where the ids ride — their count
     // and the class's token bound (their hashes were the walk's).
@@ -137,6 +138,14 @@ pub(super) fn apply_gen_tensor_commitment_v1(
     let inflight = builder.read().class_inflight_free_prompt_claims_v1(c.class_id);
     if inflight >= cap as u64 {
         return Err(PalwStateV2Error::GenClassInflightCapped { class: *c.class_id, inflight, cap });
+    }
+    // T-2(a)'s rule, over the lane's own cap (the registry's `c_class` is a lifecycle row's, which a pipeline
+    // class never has): one bond holds at most half the class's slots (`⌈cap / 2⌉`) among its claims not yet
+    // licensed, so one executor cannot take every slot of a class and refuse the others' claims.
+    let share = (cap as u64).div_ceil(2);
+    let unlicensed = builder.read().bond_class_unlicensed(c.class_id, c.bond);
+    if (unlicensed as u64).saturating_add(1) > share {
+        return Err(PalwStateV2Error::BondClassShareExceeded { bond: *c.bond, class: *c.class_id, unlicensed, share });
     }
     // 6. The work identity: one inference, one claim per bond.
     let work_id = palw_gen_work_id_v1(c.class_id, &c.job.tail(), &c.bond.0);
