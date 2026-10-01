@@ -180,11 +180,32 @@ read + gathered bytes` on every run (every read is counted). The fleet measureme
 `tir-exec-bench --container <path> --resident-bytes <n>` (the mapping's run without the flag); this
 lane runs nothing on a fleet host.
 
-**Estimated** (arithmetic, not measured; reference read rates ADR-0112 §1: 845 MB/s on `ibm`, about
-500 MB/s with a producer running): Qwen4-Exp at ~210 GiB converted, ~116 GiB of which one replay's
-routed rows touch at the cold expected union — 116 GiB at 845 MB/s is ~2.5 min, at 500 MB/s ~4.1 min,
-against ~3 h at the fault rate (11 MB/s). The registration preflight (`tir/residency-preflight`)
-prints these terms for any program before conversion.
+**Real checkpoints, from their configs alone** (`misaka-palw-tir-lower/tests/residency_tiers.rs`:
+each program lowered at its real shapes, no weight read; the node's rule; GiB; "replay" is a
+4,097-forward canonical job — a 4,096-position context — at the cold expected union of its routes
+plus its gathered rows, ESTIMATED at 845 MB/s):
+
+| config | weights | pinned | routed (a token) | floor | a fifth | replay |
+| --- | --- | --- | --- | --- | --- | --- |
+| qwen3-30b-a3b | 28.96 | 1.28 | 27.09 (1.69) | 3.01 | 5.79, holds it | 27.1 GiB, 34 s |
+| qwen3-next-80b-a3b | 75.20 | 2.01 | 72.61 (1.42) | 3.45 | 15.04, holds it | 72.6 GiB, 92 s |
+| gpt-oss-20b | 20.15 | 1.28 | 17.80 (2.23) | 3.59 | 4.03, holds it | 17.8 GiB, 23 s |
+| deepseek-v2-lite | 14.93 | 1.10 | 13.43 (1.26) | 2.41 | 2.99, holds it | 13.4 GiB, 17 s |
+| qwen1.5-moe-a2.7b | 13.72 | 1.54 | 11.60 (0.77) | 2.35 | 2.74, holds it | 11.6 GiB, 15 s |
+| olmoe-1b-7b | 6.59 | 0.38 | 6.02 (0.75) | 1.18 | 1.32, holds it | 6.0 GiB, 8 s |
+| mixtral-8x7b | 43.72 | 1.48 | 42.00 (10.50) | 12.30 | 8.74, SHORT | 42.0 GiB, 53 s |
+| granite-3.1-3b-a800m | 3.19 | 0.37 | 2.81 (0.56) | 0.95 | 0.64, SHORT | 2.8 GiB, 4 s |
+| qwen2.5-7b (dense) | 7.72 | 6.70 | 0 | 6.70 | 1.54, SHORT | 0.03 GiB |
+
+The ratio is a property of the mixture (ADR-0112 §8): routing few of many experts (8 of 128, 10 of
+512) holds the floor inside a fifth; routing two of eight (Mixtral) or eight of forty (Granite) does
+not, and those stay on the page cache by default unless a budget at least the floor is stated; a
+dense model's floor is its size. At a long canonical job a replay touches nearly every expert once,
+so it reads about the routed stacks: 34 s for Qwen3-30B-A3B at 845 MB/s, against about 44 minutes
+at the fault rate (11 MB/s). Qwen4-Exp (Level B on `tir/generic`, ~210 GiB converted) is the same
+arithmetic at its size: ~116 GiB a replay is ~2.5 min at 845 MB/s, ~4.1 min at 500 MB/s, against ~3 h
+through faults. The registration preflight (`tir/residency-preflight`) prints these terms for any
+model from its headers.
 
 ## 8. Candidates of one parent, weight-stationary (`misaka-palw-tir-exec/src/lockstep.rs`)
 

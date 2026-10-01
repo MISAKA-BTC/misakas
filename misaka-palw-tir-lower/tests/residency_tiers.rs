@@ -88,3 +88,65 @@ fn every_fixture_program_is_tiered_by_its_dataflow() {
     assert!(lowered >= 40, "{lowered}");
     assert!(mixtures.len() >= 8, "{mixtures:?}");
 }
+
+/// **The residency of real checkpoints, from their configs alone** (`tests/configs/real/`, the
+/// programs lowered at real shapes; no weight is read): the table an operator sizes a host by —
+/// the weights, the pinned set, one token's routed rows, the floor, the default fifth, and what a
+/// replay of `F` forwards reads (the expected union of its routes, and its gathered rows) at 845 MB/s.
+/// The ratio is a property of the mixture (ADR-0112 §8): a model that routes few of many experts
+/// holds its floor inside a fifth; one that routes two of eight does not, and its default stays on
+/// the page cache unless a budget is stated.
+#[test]
+fn real_checkpoints_size_their_residency_from_the_config() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real");
+    let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
+    let rules = TirTierRulesV1::default();
+    let mut rows = Vec::new();
+    for name in [
+        "qwen3-30b-a3b",
+        "qwen3-next-80b-a3b-instruct",
+        "mixtral-8x7b-v0.1",
+        "olmoe-1b-7b-0924",
+        "qwen1.5-moe-a2.7b",
+        "granite-3.1-3b-a800m",
+        "gpt-oss-20b-bf16",
+        "deepseek-v2-lite",
+        "gemma-3n-e4b",
+        "qwen2.5-7b-instruct",
+    ] {
+        let Ok(text) = std::fs::read_to_string(root.join(format!("{name}.json"))) else { continue };
+        let Ok(prep) = fidelity::prepare(&text, &LowerOpts { max_window: Some(4096), ..Default::default() }) else {
+            eprintln!("{name}: not lowered here");
+            continue;
+        };
+        let t = TirTiersV1::of(&prep.lowered.program, rules);
+        let a = t.arithmetic();
+        assert_eq!(a.weight_bytes, a.pinned_bytes + a.routed_bytes + a.gathered_bytes, "{name}");
+        assert_eq!(a.floor_bytes, a.pinned_bytes + a.routed_token_bytes + a.in_flight_bytes, "{name}");
+        // One forward reads its token's routed rows; a long job, close to every expert.
+        let (one, long) = (t.routed_union_bytes(1), t.routed_union_bytes(4097));
+        assert!(
+            one.abs_diff(a.routed_token_bytes) <= 1 + a.routed_token_bytes / 1_000_000,
+            "{name}: {one} vs {}",
+            a.routed_token_bytes
+        );
+        assert!(long <= a.routed_bytes && long >= one, "{name}");
+        let replay = long + a.gathered_token_bytes * 4097;
+        rows.push(format!(
+            "{name:<30} weights {:>7.2} GiB  pinned {:>6.2}  routed {:>7.2} ({:.3} a token)  floor {:>6.2}  fifth {:>6.2} {}  replay@4097 {:>7.2} GiB = {:>5.0} s at 845 MB/s",
+            gib(a.weight_bytes),
+            gib(a.pinned_bytes),
+            gib(a.routed_bytes),
+            gib(a.routed_token_bytes),
+            gib(a.floor_bytes),
+            gib(a.fifth_bytes),
+            if a.fifth_bytes >= a.floor_bytes { "holds" } else { "SHORT" },
+            gib(replay),
+            replay as f64 / 845e6
+        ));
+    }
+    for r in &rows {
+        eprintln!("{r}");
+    }
+    assert!(rows.len() >= 6, "{rows:?}");
+}
