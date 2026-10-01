@@ -2425,6 +2425,19 @@ pub struct Params {
     /// at a height; a node on a build without it forks off there. Meaningless without the market,
     /// so it is read through `palw_model_seed_v2_fence` only, which folds that in.
     pub palw_model_seed_v2: Option<ForkActivation>,
+    /// **ADR-0162 — the pair opens on a virtual reserve, by activation.** `None` on every shipped
+    /// preset. Past it every registered line's market is open from the line's creation (a line older
+    /// than the fence: from the fence) on `PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2` — 10,000,000 MSK that
+    /// prices and is never paid — with no seed required: ADR-0120's least seed is zero, a pledge still
+    /// collecting ADR-0094's floor opens with the pledge as its seed, and a seed is optional depth,
+    /// taken only before the line's first trade. Buys (and the reward's buyback) need the class
+    /// `Active` in status and lifecycle; sells drain as before. A market opened before the fence keeps
+    /// its curve. It changes what the fold writes into the rows, so it is a consensus change and
+    /// arrives at a height. Meaningless without the market, so it is read through
+    /// `palw_model_virtual_v1_fence` only, which folds that in. **Some-only everywhere** — the params
+    /// id, the schedule id and `for_each_fence` (lane sink's shape) — so no preset's fingerprint, fork
+    /// id or schedule moves while it is `None`, and its `Some(never())` collapses to `None`.
+    pub palw_model_virtual_v1: Option<ForkActivation>,
     /// **ADR-0089 Decision 9 — the market's EVM face is a consensus rule armed by activation.**
     /// `None` on every shipped preset: below it the four system addresses and the facades are
     /// empty accounts, the writer accepts nothing and the transition takes an empty action list;
@@ -5995,6 +6008,10 @@ impl Params {
         if self.palw_model_seed_v2 == Some(ForkActivation::never()) {
             self.palw_model_seed_v2 = None;
         }
+        // ADR-0162, a bare Some-only fence: the same collapse, so `Some(never())` is absence.
+        if self.palw_model_virtual_v1 == Some(ForkActivation::never()) {
+            self.palw_model_virtual_v1 = None;
+        }
         if self.palw_model_lines == Some(ForkActivation::never()) {
             self.palw_model_lines = None;
         }
@@ -7874,9 +7891,34 @@ impl Params {
         matches!(self.palw_model_seed_v2_fence(), Some(fence) if fence.is_active(daa_score))
     }
 
-    /// The least seed that opens a market at `daa_score` (ADR-0090, ADR-0120), in sompi.
+    /// The least seed that opens a market at `daa_score` (ADR-0090, ADR-0120), in sompi — zero past
+    /// ADR-0162's fence, where every line's market is open from its creation and a seed is optional.
     pub fn palw_model_seed_min_sompi_at(&self, daa_score: u64) -> u64 {
-        crate::palw_model_market_v1::palw_model_seed_min_sompi(self.palw_model_seed_v2_active_at(daa_score))
+        crate::palw_model_market_v1::palw_model_seed_min_sompi_v2(
+            self.palw_model_seed_v2_active_at(daa_score),
+            self.palw_model_virtual_v1_active_at(daa_score),
+        )
+    }
+
+    /// ADR-0162's fence with the market dependency folded in: a virtual reserve for a market that does
+    /// not exist is meaningless, so this is `Some` only where the market is armed too — the ONE place
+    /// ADR-0162 is decided. It takes precedence over `palw_model_seed_v2` wherever both are in force.
+    pub fn palw_model_virtual_v1_fence(&self) -> Option<ForkActivation> {
+        match (self.palw_model_market_fence(), self.palw_model_virtual_v1) {
+            (Some(_), Some(f)) if f != ForkActivation::never() => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Is ADR-0162's virtual reserve in force at `daa_score`? `false` on every shipped preset.
+    pub fn palw_model_virtual_v1_active_at(&self, daa_score: u64) -> bool {
+        matches!(self.palw_model_virtual_v1_fence(), Some(fence) if fence.is_active(daa_score))
+    }
+
+    /// ADR-0162, as the fold reads it (`PalwTransitionExtrasV1::model_virtual_v1`): the height the
+    /// fence came into force at, where it is in force at `daa_score`; `None` below it.
+    pub fn palw_model_virtual_v1_from_at(&self, daa_score: u64) -> Option<u64> {
+        self.palw_model_virtual_v1_fence().filter(|fence| fence.is_active(daa_score)).map(|fence| fence.daa_score())
     }
 
     /// Is ADR-0088's model registry in force at `daa_score`? `false` on every shipped preset.
@@ -8366,6 +8408,7 @@ impl Params {
             leg_v2_active: self.palw_model_leg_v2_active_at(daa_score),
             seed_v2_active: self.palw_model_seed_v2_active_at(daa_score),
             audit_2026_09_23_active: self.palw_audit_2026_09_23_active_at(daa_score),
+            virtual_v1_from: self.palw_model_virtual_v1_from_at(daa_score),
         }
     }
 
@@ -9245,6 +9288,7 @@ impl Params {
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
+            palw_model_virtual_v1,
             palw_model_evm,
             // Lane sink (the model sink binding, post-launch).
             palw_model_sink_bound,
@@ -9480,6 +9524,7 @@ impl Params {
             ("palw_model_benefits", *palw_model_benefits),
             ("palw_model_leg_v2", *palw_model_leg_v2),
             ("palw_model_seed_v2", *palw_model_seed_v2),
+            ("palw_model_virtual_v1", *palw_model_virtual_v1),
             ("palw_model_evm", *palw_model_evm),
             // Lane sink (the model sink binding, post-launch): a top-level fence an un-upgraded peer
             // does not implement, so it is on the schedule and gates the fork id like every other.
@@ -10034,6 +10079,13 @@ impl Params {
             h.write(b"palw_model_sink_bound");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0162, NAMED and Some-only for lane sink's reason: it changes what the fold writes into the
+        // market rows past its height, so an operator reading the schedule must see it, and a preset
+        // that leaves it `None` prints the id of a build without the field.
+        if let Some(activation) = self.palw_model_virtual_v1 {
+            h.write(b"palw_model_virtual_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0160 lane verify (F-B, F-R), NAMED and Some-only for lane sink's reason: each changes what
         // a block may carry or admit past its height.
         if let Some(activation) = self.palw_capacity_batch_licence {
@@ -10239,6 +10291,7 @@ impl Params {
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
+            palw_model_virtual_v1,
             palw_model_evm,
             // Lane sink (the model sink binding, post-launch).
             palw_model_sink_bound,
@@ -10809,6 +10862,12 @@ impl Params {
         if let Some(activation) = palw_model_sink_bound.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0162: SOME-ONLY for lane sink's reason — a `None` visited through the sentinel would move
+        // every preset's schedule id — and its `Some(never())` collapses in
+        // `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_model_virtual_v1.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0160 lane verify (F-B, F-R): SOME-ONLY, for lane sink's reason, each collapsed from
         // `Some(never())` in `normalize_values_a_scheduled_fence_drags_with_it`.
         if let Some(activation) = palw_capacity_batch_licence.as_mut() {
@@ -11364,6 +11423,7 @@ impl Params {
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
+            palw_model_virtual_v1,
             palw_model_evm,
             // Lane sink (the model sink binding, post-launch).
             palw_model_sink_bound,
@@ -11982,6 +12042,11 @@ impl Params {
         // ADR-0120: Some-only, so every preset that does not schedule it fingerprints as before.
         if let Some(activation) = palw_model_seed_v2 {
             h.write(b"palw_model_seed_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0162: Some-only, so every preset that does not schedule it fingerprints as before.
+        if let Some(activation) = palw_model_virtual_v1 {
+            h.write(b"palw_model_virtual_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0089 Decision 9: the same contract.
@@ -12755,6 +12820,7 @@ impl Params {
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
             palw_model_seed_v2: self.palw_model_seed_v2,
+            palw_model_virtual_v1: self.palw_model_virtual_v1,
             palw_model_evm: self.palw_model_evm,
             // Lane sink (the model sink binding, post-launch): CARRIED with the market it binds and
             // the audit fence it needs, both carried too.
@@ -13818,6 +13884,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
+    // ADR-0162: dormant on every preset.
+    palw_model_virtual_v1: None,
     palw_model_evm: None,
     palw_model_sink_bound: None,
     palw_capacity_batch_licence: None,
@@ -14073,6 +14141,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
+    // ADR-0162: dormant on every preset.
+    palw_model_virtual_v1: None,
     palw_model_evm: None,
     palw_model_sink_bound: None,
     palw_capacity_batch_licence: None,
@@ -14310,6 +14380,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
+    // ADR-0162: dormant on every preset.
+    palw_model_virtual_v1: None,
     palw_model_evm: None,
     palw_model_sink_bound: None,
     palw_capacity_batch_licence: None,
@@ -21460,6 +21532,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
+    // ADR-0162: dormant on every preset.
+    palw_model_virtual_v1: None,
     palw_model_evm: None,
     palw_model_sink_bound: None,
     palw_capacity_batch_licence: None,
@@ -25072,6 +25146,62 @@ mod consensus_params_id_tests {
         assert_ne!(other.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
     }
 
+    /// **ADR-0162's fence is dormant on every shipped preset and moves no id while it is.** On every
+    /// preset — the four constants, testnet-11's schedule (which arms the market at 1,900) and
+    /// testnet-12's genesis ruleset (which arms it from genesis) — it is `None`, in force nowhere, and
+    /// `Some(never())` is absence: the identity and the fork id's schedule are the preset's own.
+    /// Scheduled at a height it keeps the builds peers until it (the identity does not move) while the
+    /// params id and the fork id's schedule show it. Its dependency on the market is folded in, and
+    /// past it the least seed is zero whatever ADR-0120 says; ADR-0114's schedule is untouched.
+    #[test]
+    fn the_virtual_reserve_fence_is_dormant_everywhere_and_moves_no_id_while_it_is() {
+        use crate::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PALW_MODEL_SEED_MIN_SOMPI_V2};
+        let presets = [
+            ("mainnet", MAINNET_PARAMS),
+            ("testnet", TESTNET_PARAMS),
+            ("devnet", DEVNET_PARAMS),
+            ("simnet", SIMNET_PARAMS),
+            ("testnet-11", palw_rc_shipped_params()),
+            ("testnet-12", palw_t12_shipped_params()),
+        ];
+        for (name, p) in presets {
+            assert_eq!(p.palw_model_virtual_v1, None, "{name}: ADR-0162 ships dormant");
+            assert_eq!(p.palw_model_virtual_v1_fence(), None, "{name}");
+            assert!(!p.palw_model_virtual_v1_active_at(0) && !p.palw_model_virtual_v1_active_at(u64::MAX), "{name}");
+            assert_eq!(p.palw_model_virtual_v1_from_at(u64::MAX), None, "{name}");
+            assert!(p.palw_fences_v1().contains(&("palw_model_virtual_v1", None)), "{name}: the fence is listed");
+            let mut never = p.clone();
+            never.palw_model_virtual_v1 = Some(ForkActivation::never());
+            assert_eq!(never.consensus_identity_id(), p.consensus_identity_id(), "{name}: Some(never()) is absence");
+            assert_eq!(never.fence_schedule_v1(), p.fence_schedule_v1(), "{name}: …to the fork id too");
+            let mut scheduled = p.clone();
+            scheduled.palw_model_virtual_v1 = Some(ForkActivation::new(9_000_001));
+            assert_eq!(scheduled.consensus_identity_id(), p.consensus_identity_id(), "{name}: scheduled keeps the builds peers");
+            assert_ne!(scheduled.consensus_params_id(), p.consensus_params_id(), "{name}: …and is a visible commitment");
+            assert!(scheduled.fence_schedule_v1().contains(&9_000_001), "{name}: the fork id gates at its height");
+        }
+        // The market's dependency is folded in: no market, no virtual reserve.
+        let mut no_market = MAINNET_PARAMS;
+        no_market.palw_model_virtual_v1 = Some(ForkActivation::always());
+        assert_eq!(no_market.palw_model_virtual_v1_fence(), None, "meaningless without the market");
+        // Over testnet-12's genesis market (ADR-0120's million in force from genesis): past the fence the
+        // least seed is zero, ADR-0114's schedule does not move, and the EVM window is told the height.
+        let mut armed = palw_t12_shipped_params();
+        assert!(armed.palw_model_market_active_at(0) && armed.palw_model_seed_v2_active_at(0), "the premise: t12's market");
+        armed.palw_model_virtual_v1 = Some(ForkActivation::new(5_000));
+        assert_eq!(armed.palw_model_virtual_v1_fence(), Some(ForkActivation::new(5_000)));
+        assert_eq!(armed.palw_model_seed_min_sompi_at(4_999), PALW_MODEL_SEED_MIN_SOMPI_V2, "ADR-0120 below it");
+        assert_eq!(armed.palw_model_seed_min_sompi_at(5_000), 0, "ADR-0162 over ADR-0120 past it");
+        assert_eq!((armed.palw_model_virtual_v1_from_at(4_999), armed.palw_model_virtual_v1_from_at(5_000)), (None, Some(5_000)));
+        assert_eq!(armed.palw_model_fees_at(5_000), armed.palw_model_fees_at(4_999), "the fee schedule is ADR-0114's on both sides");
+        assert_eq!(armed.palw_evm_market_fences_at(5_000).virtual_v1_from, Some(5_000));
+        assert_eq!(armed.palw_evm_market_fences_at(4_999).virtual_v1_from, None);
+        let mut t11 = palw_rc_shipped_params();
+        assert_eq!(t11.palw_model_seed_min_sompi_at(0), PALW_MODEL_SEED_MIN_SOMPI_V1, "testnet-11 below its own seed fence");
+        t11.palw_model_virtual_v1 = Some(ForkActivation::new(9_000));
+        assert_eq!(t11.palw_model_seed_min_sompi_at(9_000), 0, "and the same precedence there");
+    }
+
     /// **The 2026-09-23 audit fence is testnet-12's alone** (the 2026-09-23 Position route matrix).
     /// Every fix that fence carries (P-B4's sell payee, P-B3's lifecycle gate, P-B1's refunds, …)
     /// claims "inert on testnet-11" by reading this fence; this pins the premise at the params
@@ -25315,6 +25445,8 @@ mod consensus_params_id_tests {
                 seed_v2_active: bits & 2 != 0,
                 // Nor does the 2026-09-23 audit: it changes what `market().exists` means (P10).
                 audit_2026_09_23_active: bits & 4 != 0,
+                // Nor does ADR-0162: it changes what a quote and `constants()` say.
+                virtual_v1_from: (bits & 1 != 0).then_some(1_000),
             };
             assert_eq!(f.any_active(), bits != 0, "one window iff some fence is in force");
         }

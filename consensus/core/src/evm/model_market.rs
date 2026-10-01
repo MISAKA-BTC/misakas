@@ -247,6 +247,11 @@ pub mod refusal {
     /// reason and the caller's escrow is refunded at the settling block — applied to the queue.
     /// The queue drains `PALW_V2_MAX_PAYOUTS_PER_BLOCK` rows a block, so it clears on its own.
     pub const PAYOUT_QUEUE_FULL: u8 = 13;
+    /// **ADR-0162 Decision 4: the line has traded, so its market takes no seed.** A seed is taken
+    /// only before the first trade (a seed paid while positions are out is a seed their holders can
+    /// sell back out of the curve); the escrow is refunded like every refusal's. Past
+    /// `Params::palw_model_virtual_v1` only.
+    pub const SEED_AFTER_TRADE: u8 = 14;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -323,6 +328,17 @@ pub struct PalwEvmMarketFencesV1 {
     /// on the EVM lane; the RPC's `opened` had the same defect). Changes no handler and no address,
     /// so it is not part of [`Self::any_active`]; below it every word is byte-identical.
     pub audit_2026_09_23_active: bool,
+    /// **`Params::palw_model_virtual_v1` (ADR-0162): `Some(height)` where it is in force at this
+    /// block, the height being the one it came into force at.** Past it every line in the view has an
+    /// open market from its creation on the virtual reserve (the window synthesizes the opening, as the
+    /// fold does, opened at the line's founding height or this one); `constants()` names the virtual
+    /// reserve in the word ADR-0090 gave the least seed; `market()` appends the row's own reserve as a
+    /// twelfth word; `quoteSell`'s first word is the gross `mskOut` (the 2026-09-25 Position review's
+    /// #2); the writer reverts a buy on a class that does not trade yet and a seed on a line that has
+    /// traded, and never a seed for its class's lifecycle. Changes no address and no handler's
+    /// existence, so it is not part of [`Self::any_active`]; `None` everywhere today, and then every
+    /// word is byte-identical.
+    pub virtual_v1_from: Option<u64>,
 }
 
 impl PalwEvmMarketFencesV1 {

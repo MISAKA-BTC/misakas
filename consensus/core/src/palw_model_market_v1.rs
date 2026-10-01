@@ -19,6 +19,16 @@
 //! chain's own move — no leg, no holder — and the positions the curve gives up for it are
 //! RETIRED (`retired_units`: the chain's, for good; M1 counts them). The other 95 % is the
 //! miner's. Where a line has no pair, or a closed one, the miner is paid in full.
+//!
+//! **Amended by ADR-0162 (2026-10-01): the pair opens on a virtual reserve.** Past
+//! `Params::palw_model_virtual_v1` a line's market is open from the line's creation with no MSK in
+//! it: the curve is `X × position_units` with `X = virtual_sompi + msk_reserve`, `virtual_sompi` the
+//! row's own [`PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2`] (10,000,000 MSK — a first price of 20 MSK), and
+//! `K` taken from the row at every move as before. Nobody is ever paid out of `V`: a sell is paid
+//! only out of the real reserve above the locked seed, so the arithmetic is exactly ADR-0090's with a
+//! seed of `V` that nobody had to lock. The seed is optional — any amount, before the first trade,
+//! locked for good, raising the floor `(V + seed) / supply`. A row opened before the fence has
+//! `virtual_sompi == 0` and quotes, encodes and hashes exactly as it did.
 
 use crate::Hash64;
 use crate::tx::ScriptPublicKey;
@@ -34,6 +44,13 @@ pub const PALW_MODEL_SUPPLY_UNITS_V1: u64 = PALW_MODEL_POSITION_SUPPLY_V1 * PALW
 /// ADR-0090 Decision 2 retired the virtual reserve; the constant is kept at zero so a reader
 /// that still adds it adds nothing. The first price is `seed / supply` now.
 pub const PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1: u64 = 0;
+/// **ADR-0162: the virtual reserve a line's market opens on past `Params::palw_model_virtual_v1`** —
+/// 10,000,000 MSK, so the first of the 500,000 positions costs 20 MSK and the curve is as deep as a
+/// pair seeded with ten million MSK. It prices and it never pays: no object pays a sompi of it to
+/// anyone, because a sell is paid only out of the real reserve above the locked seed. The row
+/// records the value it opened on (`PalwModelMarketV1::virtual_sompi`), so a later constant moves
+/// no market that already exists.
+pub const PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2: u64 = 10_000_000 * 100_000_000;
 /// ADR-0090 Decision 2: the least seed that opens a line's market — 100,000 MSK, every sompi of
 /// which enters the curve, none of which any object ever pays out.
 pub const PALW_MODEL_SEED_MIN_SOMPI_V1: u64 = 100_000 * 100_000_000;
@@ -47,6 +64,14 @@ pub const PALW_MODEL_SEED_MIN_SOMPI_V2: u64 = 1_000_000 * 100_000_000;
 /// payment to two floors.
 pub const fn palw_model_seed_min_sompi(seed_v2_active: bool) -> u64 {
     if seed_v2_active { PALW_MODEL_SEED_MIN_SOMPI_V2 } else { PALW_MODEL_SEED_MIN_SOMPI_V1 }
+}
+
+/// **The least seed in force, with ADR-0162 over ADR-0120** — zero once `palw_model_virtual_v1` is in
+/// force (no seed opens a market: every line's market is open from its creation, and a seed is
+/// optional depth), else [`palw_model_seed_min_sompi`]. The virtual fence takes precedence over the
+/// seed fence wherever both are armed; below the virtual fence nothing here moves.
+pub const fn palw_model_seed_min_sompi_v2(seed_v2_active: bool, virtual_active: bool) -> u64 {
+    if virtual_active { 0 } else { palw_model_seed_min_sompi(seed_v2_active) }
 }
 /// ADR-0091 Decision 1: the part of a claim's escrowed worker reward that buys from the pair of
 /// the line the claim ran, in permille — the other 950 ‰ is named for the miner at `Final`.
@@ -112,11 +137,25 @@ pub const PALW_MODEL_SELL_MLDSA87_CONTEXT: &[u8] = b"misaka-palw-model-sell-v1";
 /// So the encoding writes the pre-ADR-0094 fields exactly and the reader derives the pledge. The
 /// bytes of every row an old node could produce are unchanged, byte for byte, and the invariant
 /// that makes this sound is asserted on the way out rather than assumed.
+///
+/// **ADR-0162's `virtual_sompi` IS new information, and it rides behind a flag the row already
+/// carries.** A market opened on the virtual reserve must remember the reserve it opened on — a row
+/// opened before the fence has none, and a later constant must not reprice a market that exists — so
+/// it cannot be derived the way the pledge is. It is written as a trailing `u64` that only a flagged
+/// row has, and the flag is bit 1 of the `closed_to_buys` byte, which borsh writes as `0` or `1` and
+/// which this encoding reads BEFORE the tail: the reader knows from inside the row whether a word
+/// follows, so it never peeks past the row into the next `BTreeMap` entry. A row with
+/// `virtual_sompi == 0` — every row any network holds below the fence — writes the byte `0`/`1` and
+/// no tail, so its bytes, the state root over it, the carriage and every delta are unchanged. The
+/// encoding is one-to-one: an unknown bit, or a flag whose word is zero, is refused.
+const PALW_MODEL_MARKET_CLOSED_BIT: u8 = 0b01;
+const PALW_MODEL_MARKET_VIRTUAL_BIT: u8 = 0b10;
+
 impl borsh::BorshSerialize for PalwModelMarketV1 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         debug_assert_eq!(
             self.seed_pledged_sompi,
-            if self.seed_sompi > 0 { self.seed_sompi } else { self.msk_reserve },
+            palw_model_seed_pledged_of_v1(self.seed_sompi, self.msk_reserve, self.virtual_sompi),
             "ADR-0094's pledge must stay derivable or this encoding loses it"
         );
         self.opened_daa.serialize(writer)?;
@@ -125,12 +164,18 @@ impl borsh::BorshSerialize for PalwModelMarketV1 {
         self.sold_units.serialize(writer)?;
         self.burned_sompi.serialize(writer)?;
         self.registrant_paid_sompi.serialize(writer)?;
-        self.closed_to_buys.serialize(writer)?;
+        let flags = if self.closed_to_buys { PALW_MODEL_MARKET_CLOSED_BIT } else { 0 }
+            | if self.virtual_sompi > 0 { PALW_MODEL_MARKET_VIRTUAL_BIT } else { 0 };
+        flags.serialize(writer)?;
         self.contributor_paid_sompi.serialize(writer)?;
         self.seed_sompi.serialize(writer)?;
         self.seeded_by.serialize(writer)?;
         self.buyback_sompi.serialize(writer)?;
-        self.retired_units.serialize(writer)
+        self.retired_units.serialize(writer)?;
+        if self.virtual_sompi > 0 {
+            self.virtual_sompi.serialize(writer)?;
+        }
+        Ok(())
     }
 }
 
@@ -142,13 +187,26 @@ impl borsh::BorshDeserialize for PalwModelMarketV1 {
         let sold_units = u64::deserialize_reader(reader)?;
         let burned_sompi = u64::deserialize_reader(reader)?;
         let registrant_paid_sompi = u64::deserialize_reader(reader)?;
-        let closed_to_buys = bool::deserialize_reader(reader)?;
+        let flags = u8::deserialize_reader(reader)?;
+        if flags & !(PALW_MODEL_MARKET_CLOSED_BIT | PALW_MODEL_MARKET_VIRTUAL_BIT) != 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "a model market row's flag byte has an unknown bit"));
+        }
+        let closed_to_buys = flags & PALW_MODEL_MARKET_CLOSED_BIT != 0;
         let contributor_paid_sompi = u64::deserialize_reader(reader)?;
         let seed_sompi = u64::deserialize_reader(reader)?;
         let seeded_by = Hash64::deserialize_reader(reader)?;
         let buyback_sompi = u64::deserialize_reader(reader)?;
         let retired_units = u64::deserialize_reader(reader)?;
-        let seed_pledged_sompi = if seed_sompi > 0 { seed_sompi } else { msk_reserve };
+        let virtual_sompi = if flags & PALW_MODEL_MARKET_VIRTUAL_BIT != 0 {
+            let value = u64::deserialize_reader(reader)?;
+            if value == 0 {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "a model market row flags a virtual reserve of zero"));
+            }
+            value
+        } else {
+            0
+        };
+        let seed_pledged_sompi = palw_model_seed_pledged_of_v1(seed_sompi, msk_reserve, virtual_sompi);
         Ok(Self {
             opened_daa,
             msk_reserve,
@@ -163,8 +221,16 @@ impl borsh::BorshDeserialize for PalwModelMarketV1 {
             seed_pledged_sompi,
             buyback_sompi,
             retired_units,
+            virtual_sompi,
         })
     }
+}
+
+/// **ADR-0094's pledge, derived from the fields that are encoded** — the one spelling the encoder's
+/// assertion and the decoder share. An open market (`seed_sompi > 0`, or ADR-0162's virtual reserve)
+/// has pledged exactly its seed; a row still collecting its floor has pledged its whole reserve.
+const fn palw_model_seed_pledged_of_v1(seed_sompi: u64, msk_reserve: u64, virtual_sompi: u64) -> u64 {
+    if seed_sompi > 0 || virtual_sompi > 0 { seed_sompi } else { msk_reserve }
 }
 
 /// One class's market row, as the fold holds it (Decision 1).
@@ -204,6 +270,13 @@ pub struct PalwModelMarketV1 {
     /// ADR-0091 Decision 4: the positions the reward's buys took out of the curve — the chain's,
     /// for good; no object sells them, and `position_units + Σ holders + retired_units = supply`.
     pub retired_units: u64,
+    /// **ADR-0162: the virtual reserve this market opened on** — [`PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2`]
+    /// for a market opened past `Params::palw_model_virtual_v1`, zero for every market opened before
+    /// it (ADR-0090's seeded pairs and ADR-0094's pledges keep their curve). The curve's `X` is
+    /// `msk_reserve + virtual_sompi`; nothing ever pays a sompi of it out. Encoded behind a flag bit
+    /// (see the `BorshSerialize` impl), so a row with zero here has the bytes it always had.
+    #[serde(default)]
+    pub virtual_sompi: u64,
 }
 
 impl PalwModelMarketV1 {
@@ -225,6 +298,7 @@ impl PalwModelMarketV1 {
             seed_pledged_sompi: pledged_sompi,
             buyback_sompi: 0,
             retired_units: 0,
+            virtual_sompi: 0,
         }
     }
 
@@ -232,8 +306,83 @@ impl PalwModelMarketV1 {
     /// market only once the collected total reached the floor, which is the one predicate every
     /// move consults. `seed_sompi` is set at that moment and never after, so it doubles as the
     /// record of what the pair opened with.
+    ///
+    /// **ADR-0162: a market that opened on the virtual reserve is open with no seed at all** — it was
+    /// open from its line's creation, and a seed paid into it later is depth, not an opening.
     pub fn is_open(&self) -> bool {
-        self.seed_sompi > 0
+        self.seed_sompi > 0 || self.virtual_sompi > 0
+    }
+
+    /// **ADR-0162: the curve's `X`** — the real reserve plus the virtual reserve the market opened
+    /// on (zero for a market opened before the fence, so `X` is ADR-0090's reserve there).
+    pub fn curve_x(&self) -> u128 {
+        self.msk_reserve as u128 + self.virtual_sompi as u128
+    }
+
+    /// **ADR-0162: the positions holders have out of the curve** — the supply less the curve's and
+    /// less what the reward retired (ADR-0091 M1). Zero for a row that is not a market.
+    pub fn positions_out(&self) -> u64 {
+        if !self.is_open() {
+            return 0;
+        }
+        PALW_MODEL_SUPPLY_UNITS_V1.saturating_sub(self.position_units).saturating_sub(self.retired_units)
+    }
+
+    /// **ADR-0162 I-V3: the lowest price the curve can ever quote from this row** — the price with
+    /// every holder's position back in the curve, `⌈K / (supply − retired)⌉ / (supply − retired)`.
+    /// The product never falls and the retired never return, so this only rises; at the opening it is
+    /// `(V + seed) / supply`. Zero for a row that is not a market.
+    pub fn price_floor_sompi_per_position_v2(&self) -> u64 {
+        if !self.is_open() {
+            return 0;
+        }
+        let room = PALW_MODEL_SUPPLY_UNITS_V1.saturating_sub(self.retired_units) as u128;
+        if room == 0 {
+            return u64::MAX;
+        }
+        (self.k().div_ceil(room) / room).min(u64::MAX as u128) as u64
+    }
+
+    /// **ADR-0162 Decision 1: a line's market as it stands from the line's creation** — the whole
+    /// supply in the curve, no MSK in it, `X = virtual_sompi`: open, with a first price of
+    /// `virtual_sompi / supply`. `opened_daa` is the line's founding height, or the fence's for a line
+    /// older than the fence. Nothing writes this row by itself: the fold writes it with the first move
+    /// that changes it, and every reader synthesizes it until then (lazily, as ADR-0087 §7 learnt).
+    pub fn open_virtual_v2(opened_daa: u64, virtual_sompi: u64) -> Self {
+        Self {
+            opened_daa,
+            msk_reserve: 0,
+            position_units: PALW_MODEL_SUPPLY_UNITS_V1,
+            sold_units: 0,
+            burned_sompi: 0,
+            registrant_paid_sompi: 0,
+            closed_to_buys: false,
+            contributor_paid_sompi: 0,
+            seed_sompi: 0,
+            seeded_by: Hash64::default(),
+            seed_pledged_sompi: 0,
+            buyback_sompi: 0,
+            retired_units: 0,
+            virtual_sompi,
+        }
+    }
+
+    /// **ADR-0162 Decision 3: a pledge that was collecting ADR-0094's floor when the fence crossed.**
+    /// It opens on the virtual reserve with the whole pledge as its seed — every sompi of it already
+    /// locked in the line's sink — and the first payer keeps the record. A row that is already a
+    /// market is returned as it is.
+    pub fn open_virtual_from_pledge_v2(&self, opened_daa: u64, virtual_sompi: u64) -> Self {
+        if self.is_open() {
+            return *self;
+        }
+        Self {
+            opened_daa,
+            position_units: PALW_MODEL_SUPPLY_UNITS_V1,
+            seed_sompi: self.seed_pledged_sompi,
+            seed_pledged_sompi: self.seed_pledged_sompi,
+            virtual_sompi,
+            ..*self
+        }
     }
 
     /// What is still owed before this line is a market under ADR-0090's floor. Zero once it is one.
@@ -266,6 +415,7 @@ impl PalwModelMarketV1 {
             seed_pledged_sompi: seed_sompi,
             buyback_sompi: 0,
             retired_units: 0,
+            virtual_sompi: 0,
         }
     }
 
@@ -276,9 +426,10 @@ impl PalwModelMarketV1 {
         Self { opened_daa: daa, position_units: PALW_MODEL_SUPPLY_UNITS_V1, seed_sompi: self.seed_pledged_sompi, ..*self }
     }
 
-    /// The product the next move must not fall under: the row's own `reserve × units`.
+    /// The product the next move must not fall under: the row's own `reserve × units` — ADR-0162:
+    /// `(reserve + virtual) × units`, which is the same number for a market opened before the fence.
     pub fn k(&self) -> u128 {
-        self.msk_reserve as u128 * self.position_units as u128
+        self.curve_x() * self.position_units as u128
     }
 
     pub fn price_sompi_per_position_v1(&self) -> u64 {
@@ -291,7 +442,8 @@ impl PalwModelMarketV1 {
         if self.position_units == 0 {
             return u64::MAX;
         }
-        let numerator = self.msk_reserve as u128 * PALW_MODEL_POSITION_UNITS_V1 as u128;
+        // ADR-0162: `(reserve + V) / units` — the virtual reserve prices, it is just never paid.
+        let numerator = self.curve_x() * PALW_MODEL_POSITION_UNITS_V1 as u128;
         (numerator / self.position_units as u128).min(u64::MAX as u128) as u64
     }
 }
@@ -339,12 +491,15 @@ pub fn palw_model_buy_quote_with(market: &PalwModelMarketV1, msk_in: u64, schedu
     // synthesise one for a line that has no seed) — it quotes nothing rather than the whole curve.
     // ADR-0094: a row that has been paid into but has not reached its floor is not a market — it
     // has no positions and no price, and quoting one would invent both.
-    if !market.is_open() || market.closed_to_buys || msk_in == 0 || market.position_units == 0 || market.msk_reserve == 0 {
+    // ADR-0162: the guard is on the curve's `X`, not the real reserve — a market opened on the
+    // virtual reserve has no MSK in it at its opening and is a market all the same. Below the fence
+    // `X` IS the reserve, so this is the same test there.
+    if !market.is_open() || market.closed_to_buys || msk_in == 0 || market.position_units == 0 || market.curve_x() == 0 {
         return None;
     }
     let fees = palw_model_fee_split_with(msk_in, schedule);
     let k = market.k();
-    let x_after = market.msk_reserve as u128 + fees.net as u128;
+    let x_after = market.curve_x() + fees.net as u128;
     let units_after = k.div_ceil(x_after);
     let units_out = (market.position_units as u128).checked_sub(units_after)?;
     if units_out == 0 {
@@ -368,9 +523,10 @@ pub fn palw_model_buy_quote_with(market: &PalwModelMarketV1, msk_in: u64, schedu
 }
 
 /// What a sell of `units_in` does: the gross MSK leg the curve pays, `gross = (reserve + V) −
-/// ⌈K / (units + units_in)⌉` (rounded so the curve's product never falls below `K`), capped by
-/// the reserve — the virtual reserve is never paid out — and its split. `None` when the curve
-/// pays nothing.
+/// ⌈K / (units + units_in)⌉` (rounded so the curve's product never falls below `K`), and its split.
+/// `None` when the curve pays nothing, or when it would pay more than the REAL reserve above the
+/// locked seed — the virtual reserve (ADR-0162) and the seed (ADR-0090) are never paid out, and a
+/// sell that would need either is refused whole, never filled in part (ADR-0087 M5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwModelSellQuoteV1 {
     pub fees: PalwModelFeeSplitV1,
@@ -396,10 +552,19 @@ pub fn palw_model_sell_quote_with(
     if units_after > (PALW_MODEL_SUPPLY_UNITS_V1 - market.retired_units) as u128 {
         return None;
     }
-    let x_now = market.msk_reserve as u128;
+    let x_now = market.curve_x();
     let x_after = k.div_ceil(units_after);
-    let gross = x_now.checked_sub(x_after)?.min(market.msk_reserve as u128);
-    if gross == 0 {
+    let gross = x_now.checked_sub(x_after)?;
+    // **ADR-0162: a sell is paid only out of the real reserve above the locked seed** — never out of
+    // `V`, which nobody paid in, and never out of the seed, which nobody may take out. The curve's
+    // own rounding keeps `gross` inside that bound on every row the fold can reach (a seed is taken
+    // only before the first trade, so the product at the opening already prices it in); this is the
+    // checked refusal that keeps it so if the rounding ever changes. On a market opened before the
+    // fence (`V = 0`) it is exactly ADR-0090's two checks — the old `.min(reserve)` never bound, since
+    // `X` was the reserve, and `reserve − gross < seed` is `gross > reserve − seed`. A row whose
+    // reserve is under its seed — a state the design says cannot exist — pays nothing at all.
+    let payable = market.msk_reserve.checked_sub(market.seed_sompi)? as u128;
+    if gross == 0 || gross > payable {
         return None;
     }
     let fees = palw_model_fee_split_with(gross as u64, schedule);
@@ -450,12 +615,14 @@ pub struct PalwModelBuybackQuoteV1 {
 }
 
 pub fn palw_model_buyback_quote_v1(market: &PalwModelMarketV1, slice: u64) -> Option<PalwModelBuybackQuoteV1> {
-    if !market.is_open() || market.closed_to_buys || slice == 0 || market.position_units == 0 || market.msk_reserve == 0 {
+    // ADR-0162: the guard is on the curve's `X` (a virtual market holds no MSK at its opening and
+    // takes the reward all the same); below the fence `X` is the reserve, so it is the same test.
+    if !market.is_open() || market.closed_to_buys || slice == 0 || market.position_units == 0 || market.curve_x() == 0 {
         return None;
     }
     let k = market.k();
     let reserve_after = market.msk_reserve.checked_add(slice)?;
-    let units_after = k.div_ceil(reserve_after as u128).min(market.position_units as u128) as u64;
+    let units_after = k.div_ceil(market.curve_x() + slice as u128).min(market.position_units as u128) as u64;
     let retired = market.position_units - units_after;
     let after = PalwModelMarketV1 {
         msk_reserve: reserve_after,
@@ -465,6 +632,46 @@ pub fn palw_model_buyback_quote_v1(market: &PalwModelMarketV1, slice: u64) -> Op
         ..*market
     };
     Some(PalwModelBuybackQuoteV1 { slice, retired, after })
+}
+
+/// **ADR-0162 Decision 4: a seed paid into an open market before its first trade** — the whole
+/// payment joins the real reserve AND the locked seed, fee-free, and no position is minted to anyone:
+/// the curve's `X` grows, the product with it, and the floor `(V + seed) / supply` rises by
+/// `msk_seed / supply`. The first payer stays the record (ADR-0094 Decision 3). Any amount; as many
+/// payments as it takes (ADR-0094's instalments, with no floor to reach).
+///
+/// `None` — refused — once the market has had a trade (`sold_units > 0`): a seed paid while positions
+/// are out raises their price, and their holders could sell part of the locked seed back out of the
+/// curve. Only before the first trade is the product it sets one no holder can ever reach under,
+/// which is what makes "locked for good" a property of the arithmetic and not a promise
+/// (`a_late_seed_would_be_sold_out_of_the_curve_so_it_is_refused`). `None` too for a payment of
+/// nothing, a row that is not a market, and an overflow.
+pub fn palw_model_seed_deepen_v2(market: &PalwModelMarketV1, seeder: &Hash64, msk_seed: u64) -> Option<PalwModelMarketV1> {
+    if !market.is_open() || market.sold_units > 0 || msk_seed == 0 {
+        return None;
+    }
+    let msk_reserve = market.msk_reserve.checked_add(msk_seed)?;
+    let seed_sompi = market.seed_sompi.checked_add(msk_seed)?;
+    let seeded_by = if market.seeded_by == Hash64::default() { *seeder } else { market.seeded_by };
+    let after = PalwModelMarketV1 { msk_reserve, seed_sompi, seed_pledged_sompi: seed_sompi, seeded_by, ..*market };
+    // The product only grows: `X` rose and the curve's units did not move.
+    debug_assert!(after.k() >= market.k());
+    Some(after)
+}
+
+/// **ADR-0162 Decision 1: the market every surface reads for a line past `palw_model_virtual_v1`.**
+/// A market already open keeps its row (an ADR-0090 pair opened before the fence keeps `V = 0` and
+/// its curve); a pledge still collecting ADR-0094's floor opens on the virtual reserve with the
+/// pledge as its seed; a line with no row has the market it had from its creation, `X = V`, the
+/// whole supply in the curve. `opened_daa` is the line's founding height or the fence's, whichever is
+/// later. One function, so the fold, the RPC, the EVM window and the CLI cannot open one line two
+/// ways.
+pub fn palw_model_market_in_force_v2(row: Option<&PalwModelMarketV1>, opened_daa: u64) -> PalwModelMarketV1 {
+    match row {
+        Some(market) if market.is_open() => *market,
+        Some(pledge) => pledge.open_virtual_from_pledge_v2(opened_daa, PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2),
+        None => PalwModelMarketV1::open_virtual_v2(opened_daa, PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2),
+    }
 }
 
 /// The sink a buy's carrier pays into: `OP_RETURN <8-byte tag> <64-byte class id>`. Unspendable
@@ -1059,5 +1266,580 @@ mod tests {
             assert_ne!(holder, paid, "card {n}: the id is not the payload");
             assert_ne!(p2pkh_mldsa87_spk(&holder.as_bytes()), p2pkh_mldsa87_spk(&paid.as_bytes()), "card {n}: two different locks");
         }
+    }
+}
+
+/// **ADR-0162 — the pair opens on a virtual reserve: the arithmetic's half of the invariants.**
+///
+/// I-V1..I-V8 are stated in the ADR (§6). The fold's half — the gates, the late seed refused at the
+/// fold, I-V9 and I-V10 — is `palw_state_v2::tests::model_market_virtual`. Every random sequence here
+/// is drawn from a fixed seed by a splitmix64, so a failure names the case that reproduces it.
+#[cfg(test)]
+mod adr0162_virtual_reserve {
+    use super::*;
+
+    const MSK: u64 = 100_000_000;
+    const V: u64 = PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2;
+    const SUPPLY: u64 = PALW_MODEL_SUPPLY_UNITS_V1;
+    /// The worked table's schedule: no fee, so a row shows the curve's own arithmetic and nothing else.
+    const FREE: PalwModelFeesV1 = PalwModelFeesV1 { burn_permille: 0, leg_permille: 0 };
+
+    fn opened() -> PalwModelMarketV1 {
+        PalwModelMarketV1::open_virtual_v2(7, V)
+    }
+
+    fn payer() -> Hash64 {
+        Hash64::from_u64_word(0x5EED)
+    }
+
+    /// splitmix64 — a fixed stream per case, no dependency.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n.max(1)
+        }
+        /// An amount spread over many orders of magnitude, from a sompi to `max`.
+        fn amount(&mut self, max: u64) -> u64 {
+            let digits = 1 + self.below(19) as u32;
+            (self.next() % 10u64.saturating_pow(digits)).clamp(1, max)
+        }
+    }
+
+    /// **ADR-0162 §4's worked table, and nothing in it is typed**: from the opening (`X = 10,000,000
+    /// MSK`, 500,000 positions, no seed, no fee), A buys with 100,000 MSK, B with 1,000,000 MSK, A sells
+    /// everything, B sells everything — and then the same four moves under ADR-0087's and ADR-0114's
+    /// schedules. Every number is the curve's own arithmetic with its real rounding.
+    #[test]
+    fn the_adr_0162_table_is_the_virtual_curves_arithmetic() {
+        let m0 = opened();
+        assert!(m0.is_open(), "a market from its line's creation, with no MSK in it");
+        assert_eq!((m0.msk_reserve, m0.position_units, m0.seed_sompi, m0.virtual_sompi), (0, SUPPLY, 0, V));
+        assert_eq!(m0.price_sompi_per_position_v1(), 20 * MSK, "I-V9: the first quote is V / 500,000 = 20 MSK");
+        assert_eq!(m0.price_floor_sompi_per_position_v2(), 20 * MSK, "and the floor starts at the price");
+        let a = palw_model_buy_quote_with(&m0, 100_000 * MSK, FREE).expect("A's buy");
+        assert_eq!(a.units_out, 4_950, "100,000 MSK into X = 10,000,000 MSK releases 4,950 whole positions");
+        assert_eq!(a.after.price_sompi_per_position_v1(), 2_040_197_959);
+        let b = palw_model_buy_quote_with(&a.after, 1_000_000 * MSK, FREE).expect("B's buy");
+        assert_eq!(b.units_out, 44_599);
+        assert_eq!(b.after.price_sompi_per_position_v1(), 2_464_196_993, "≈ 24.64 MSK");
+        assert_eq!(b.after.msk_reserve, 1_100_000 * MSK, "the real reserve is what was paid in, and nothing else");
+        let sa = palw_model_sell_quote_with(&b.after, a.units_out, FREE).expect("A sells everything");
+        assert_eq!(sa.fees.gross, 12_065_190_897_692, "A is paid 120,651.90897692 MSK");
+        assert_eq!(sa.after.price_sompi_per_position_v1(), 2_410_918_748);
+        let sb = palw_model_sell_quote_with(&sa.after, b.units_out, FREE).expect("B sells everything");
+        assert_eq!(sb.fees.gross, 97_933_589_102_307, "B is paid 979,335.89102307 MSK");
+        assert_eq!(sb.after.position_units, SUPPLY, "every position is back in the curve");
+        assert_eq!(sb.after.msk_reserve, 1_220_000_001, "and the real reserve ends at 12.2 MSK: the rounding's dust");
+        assert_eq!(sb.after.price_sompi_per_position_v1(), 2_000_002_440, "the price is back at the floor, plus the dust");
+        assert_eq!(sa.fees.gross + sb.fees.gross + sb.after.msk_reserve, 1_100_000 * MSK, "nobody was paid out of V");
+
+        // The same four moves under both fee schedules: the curve is scale-free, so 94,000 MSK into
+        // ten million releases ADR-0090 §4's 4,656 (940 into a hundred thousand).
+        type Row = (PalwModelFeesV1, u64, u64, u64, u64, u64);
+        let rows: [Row; 2] = [
+            (PalwModelFeesV1::V1, 4_656, 42_198, 10_548_631_452_026, 86_644_931_315_975, 2_592_800_001),
+            (PalwModelFeesV1::V2, 4_459, 40_581, 9_599_944_495_113, 79_498_183_504_888, 2_080_000_001),
+        ];
+        for (fees, a_units, b_units, a_net, b_net, dust) in rows {
+            let a = palw_model_buy_quote_with(&m0, 100_000 * MSK, fees).unwrap();
+            let b = palw_model_buy_quote_with(&a.after, 1_000_000 * MSK, fees).unwrap();
+            assert_eq!((a.units_out, b.units_out), (a_units, b_units), "{fees:?}");
+            let sa = palw_model_sell_quote_with(&b.after, a.units_out, fees).unwrap();
+            let sb = palw_model_sell_quote_with(&sa.after, b.units_out, fees).unwrap();
+            assert_eq!((sa.fees.net, sb.fees.net, sb.after.msk_reserve), (a_net, b_net, dust), "{fees:?}");
+            let legs = a.fees.registrant + b.fees.registrant + sa.fees.registrant + sb.fees.registrant;
+            let burned = a.fees.burn + b.fees.burn + sa.fees.burn + sb.fees.burn;
+            assert_eq!(1_100_000 * MSK, sb.after.msk_reserve + sa.fees.net + sb.fees.net + burned + legs, "{fees:?}: M2");
+        }
+    }
+
+    /// **The curve's depth at the opening** (ADR-0162 §5.4): the price is `X² / K`, so doubling it
+    /// takes `(√2 − 1) × V` ≈ 4.14 M MSK, four times `V` = 10 M, ten times `(√10 − 1) × V` ≈ 21.6 M — net
+    /// legs, no fee. The whole positions round each threshold up by a few dozen MSK: the curve keeps
+    /// the fraction of a position a buy cannot be paid in.
+    #[test]
+    fn doubling_the_first_price_takes_four_million_msk_and_ten_times_it_takes_twenty_one() {
+        let m0 = opened();
+        let at = |net_msk: u64| palw_model_buy_quote_with(&m0, net_msk * MSK, FREE).unwrap().after.price_sompi_per_position_v1();
+        assert!(at(4_142_100) < 40 * MSK && at(4_142_200) >= 40 * MSK, "2×: {} / {}", at(4_142_100), at(4_142_200));
+        assert_eq!(at(10_000_000), 80 * MSK, "4× at exactly V: half the positions leave");
+        assert!(at(21_622_700) < 200 * MSK && at(21_623_000) >= 200 * MSK, "10×: {} / {}", at(21_622_700), at(21_623_000));
+    }
+
+    /// **I-V4: a virtual market quotes every move exactly as ADR-0090's pair seeded with `S = V`**,
+    /// because nobody is ever paid out of a seed either: the locked seed's one effect was its opener's
+    /// permanent cost. Random buys, sells and reward slices, a pre-trade seed or none, under both
+    /// schedules: every quote equal, every product equal, the real reserves `V` apart.
+    #[test]
+    fn a_virtual_market_quotes_every_move_as_a_pair_seeded_with_v() {
+        for schedule in [PalwModelFeesV1::V1, PalwModelFeesV1::V2, FREE] {
+            for case in 0..64u64 {
+                let mut rng = Rng(case.wrapping_mul(0xA5A5) ^ schedule.leg_permille);
+                let pre_seed = if case % 3 == 0 { 0 } else { rng.amount(5_000_000 * MSK) };
+                let mut virt = opened();
+                if pre_seed > 0 {
+                    virt = palw_model_seed_deepen_v2(&virt, &payer(), pre_seed).expect("a seed before the first trade");
+                }
+                let mut seeded = PalwModelMarketV1::seed_v1(7, V + pre_seed, payer());
+                let mut held = 0u64;
+                for step in 0..48 {
+                    let what = format!("case {case} step {step} {schedule:?}");
+                    assert_eq!(virt.k(), seeded.k(), "{what}: one product");
+                    assert_eq!(virt.msk_reserve + V, seeded.msk_reserve, "{what}: the reserves are V apart");
+                    assert_eq!(virt.price_sompi_per_position_v1(), seeded.price_sompi_per_position_v1(), "{what}");
+                    match rng.below(3) {
+                        0 => {
+                            let msk_in = rng.amount(3_000_000 * MSK);
+                            let (qv, qs) =
+                                (palw_model_buy_quote_with(&virt, msk_in, schedule), palw_model_buy_quote_with(&seeded, msk_in, schedule));
+                            assert_eq!(qv.map(|q| (q.units_out, q.fees)), qs.map(|q| (q.units_out, q.fees)), "{what}: buy {msk_in}");
+                            if let (Some(qv), Some(qs)) = (qv, qs) {
+                                held += qv.units_out;
+                                (virt, seeded) = (qv.after, qs.after);
+                            }
+                        }
+                        1 if held > 0 => {
+                            let units = 1 + rng.below(held);
+                            let (qv, qs) =
+                                (palw_model_sell_quote_with(&virt, units, schedule), palw_model_sell_quote_with(&seeded, units, schedule));
+                            assert_eq!(qv.map(|q| q.fees), qs.map(|q| q.fees), "{what}: sell {units}");
+                            if let (Some(qv), Some(qs)) = (qv, qs) {
+                                held -= units;
+                                (virt, seeded) = (qv.after, qs.after);
+                            }
+                        }
+                        _ => {
+                            let slice = rng.amount(50 * MSK);
+                            let (qv, qs) = (palw_model_buyback_quote_v1(&virt, slice), palw_model_buyback_quote_v1(&seeded, slice));
+                            assert_eq!(qv.map(|q| q.retired), qs.map(|q| q.retired), "{what}: reward slice {slice}");
+                            if let (Some(qv), Some(qs)) = (qv, qs) {
+                                (virt, seeded) = (qv.after, qs.after);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The moves a random history is made of, and what each did, so the invariants can be summed.
+    #[derive(Default)]
+    struct Books {
+        seeds: u128,
+        net_in: u128,
+        gross_out: u128,
+        buyback_in: u128,
+        held: u64,
+        /// What the roundings can have added to the product: under `X′` for a buy and for a slice
+        /// that retired positions (`⌈K / X′⌉` whole positions), under `units′` for a sell
+        /// (`⌈K / units′⌉` sompi). A slice that retires nothing adds `slice × units` to the product
+        /// exactly — that is the reward's, not the rounding's, and it is not counted here.
+        slack: u128,
+        moves: u128,
+    }
+
+    impl Books {
+        /// I-V6's dust: the slack spread over the positions the curve can hold at the end, plus a
+        /// sompi a move for the divisions — under one position's worth a move, at that move's price.
+        fn dust(&self, room: u64) -> u128 {
+            self.slack / room as u128 + self.moves + 1
+        }
+    }
+
+    /// **I-V1, I-V2, I-V3, I-V5 and I-V6 over random histories, under both schedules.** A history
+    /// pays its seeds first (ADR-0162 Decision 4: a seed is taken only before the first trade), then
+    /// buys, sells and the reward's slices in any order, then sells every position still held.
+    /// Checked at every stop: the real reserve never falls under the locked seed (I-V1); the sells'
+    /// gross never exceeds the buys' net plus the slices — nobody is paid out of `V` or a seed (I-V2);
+    /// the price is at or above the floor, the floor at or above `(V + seed) / supply` and never falls
+    /// (I-V3); a position is whole and every rounding leaves the product at or above where it was
+    /// (I-V5); conservation and M1 hold exactly. At the end, every position back (I-V6): the reserve
+    /// is the seed, plus at least what the retired positions pin at the floor and at most the slices,
+    /// plus less than one position's worth of dust a move.
+    #[test]
+    fn the_virtual_curve_holds_its_invariants_under_random_histories() {
+        for schedule in [PalwModelFeesV1::V1, PalwModelFeesV1::V2] {
+            for case in 0..96u64 {
+                let mut rng = Rng(0xC0FFEE ^ case.wrapping_mul(0x1F1F_1F1F) ^ schedule.leg_permille);
+                let mut m = opened();
+                let mut books = Books::default();
+                for _ in 0..rng.below(3) {
+                    let s = rng.amount(20_000_000 * MSK);
+                    m = palw_model_seed_deepen_v2(&m, &payer(), s).expect("a seed before the first trade is taken");
+                    books.seeds += s as u128;
+                }
+                let static_floor = (V + m.seed_sompi) / SUPPLY;
+                let mut floor = m.price_floor_sompi_per_position_v2();
+                assert_eq!(floor, static_floor, "case {case}: at the opening the floor is (V + seed) / supply");
+                let check = |m: &PalwModelMarketV1, books: &Books, floor: &mut u64, what: &str| {
+                    assert!(m.msk_reserve >= m.seed_sompi, "{what}: I-V1");
+                    assert!(books.gross_out <= books.net_in + books.buyback_in, "{what}: I-V2");
+                    assert_eq!(
+                        books.seeds + books.net_in + books.buyback_in,
+                        m.msk_reserve as u128 + books.gross_out,
+                        "{what}: conservation — what went in is the reserve or was paid out"
+                    );
+                    assert_eq!(m.position_units + books.held + m.retired_units, SUPPLY, "{what}: M1");
+                    assert_eq!(m.positions_out(), books.held, "{what}: positions out");
+                    let f = m.price_floor_sompi_per_position_v2();
+                    assert!(f >= *floor && f >= static_floor, "{what}: I-V3 — the floor never falls ({f} < {})", *floor);
+                    assert!(m.price_sompi_per_position_v1() >= f, "{what}: I-V3 — the price is never under the floor");
+                    *floor = f;
+                };
+                let mut traded = false;
+                for step in 0..80 {
+                    let what = format!("{schedule:?} case {case} step {step}");
+                    let k = m.k();
+                    match rng.below(4) {
+                        0 | 1 => {
+                            let msk_in = rng.amount(4_000_000 * MSK);
+                            if let Some(q) = palw_model_buy_quote_with(&m, msk_in, schedule) {
+                                assert!(q.units_out >= 1 && q.after.k() >= k, "{what}: I-V5 on a buy");
+                                assert_eq!(q.after.msk_reserve, m.msk_reserve + q.fees.net, "{what}: the net leg is the reserve's");
+                                books.net_in += q.fees.net as u128;
+                                books.held += q.units_out;
+                                books.slack += q.after.curve_x();
+                                books.moves += 1;
+                                m = q.after;
+                                traded = true;
+                            }
+                        }
+                        2 if books.held > 0 => {
+                            let units = 1 + rng.below(books.held);
+                            let q = palw_model_sell_quote_with(&m, units, schedule).expect("a held position always sells");
+                            assert!(q.after.k() >= k, "{what}: I-V5 on a sell");
+                            assert!(q.fees.gross <= m.msk_reserve - m.seed_sompi, "{what}: I-V2 per move");
+                            books.gross_out += q.fees.gross as u128;
+                            books.held -= units;
+                            books.slack += q.after.position_units as u128;
+                            books.moves += 1;
+                            m = q.after;
+                        }
+                        _ => {
+                            let slice = rng.amount(2_000 * MSK);
+                            let q = palw_model_buyback_quote_v1(&m, slice).expect("an open market takes every slice");
+                            assert!(q.after.k() >= k, "{what}: I-V5 on a reward slice");
+                            books.buyback_in += slice as u128;
+                            if q.retired > 0 {
+                                books.slack += q.after.curve_x();
+                            }
+                            books.moves += 1;
+                            m = q.after;
+                        }
+                    }
+                    if traded {
+                        assert_eq!(palw_model_seed_deepen_v2(&m, &payer(), MSK), None, "{what}: I-V7 — no seed after the first trade");
+                    }
+                    check(&m, &books, &mut floor, &what);
+                }
+                if books.held > 0 {
+                    let q = palw_model_sell_quote_with(&m, books.held, schedule).expect("everything held sells");
+                    books.gross_out += q.fees.gross as u128;
+                    books.slack += q.after.position_units as u128;
+                    books.moves += 1;
+                    books.held = 0;
+                    m = q.after;
+                    check(&m, &books, &mut floor, &format!("{schedule:?} case {case} sold out"));
+                }
+                // I-V6: every position back in the curve.
+                assert_eq!(m.position_units + m.retired_units, SUPPLY);
+                let reserve = m.msk_reserve as u128;
+                let seed = m.seed_sompi as u128;
+                let room = (SUPPLY - m.retired_units) as u128;
+                let pinned = (V as u128 + seed) * m.retired_units as u128 / room;
+                let dust = books.dust(SUPPLY - m.retired_units);
+                assert!(reserve >= seed + pinned, "case {case}: the retired positions pin {pinned} of the slices in the reserve");
+                assert!(
+                    reserve <= seed + books.buyback_in + dust,
+                    "case {case}: the reserve {reserve} is the seed {seed}, the slices {} and dust under {dust}",
+                    books.buyback_in
+                );
+                if books.buyback_in == 0 {
+                    assert!(reserve - seed <= dust, "case {case}: with no slice, what is left is dust alone");
+                }
+            }
+        }
+    }
+
+    /// **I-V7: a seed after the first trade is refused, and this is the extraction it prevents.** A
+    /// late seed raises the price of positions already out, so their holders sell part of it back out
+    /// of the curve: here A, who paid 100,000 MSK, would be paid 131,521.45 MSK instead of 120,651.91,
+    /// and B — the other holder — could then not leave at all, because the curve would have to pay out
+    /// 99,085.80 MSK of the locked seed to let them. The row with the late seed is built BY HAND,
+    /// because the function the fold calls refuses to build it.
+    #[test]
+    fn a_late_seed_would_be_sold_out_of_the_curve_so_it_is_refused() {
+        let a = palw_model_buy_quote_with(&opened(), 100_000 * MSK, FREE).unwrap();
+        let b = palw_model_buy_quote_with(&a.after, 1_000_000 * MSK, FREE).unwrap();
+        let traded = b.after;
+        assert_eq!(palw_model_seed_deepen_v2(&traded, &payer(), 1_000_000 * MSK), None, "refused: positions are out");
+        assert_eq!(palw_model_seed_deepen_v2(&a.after, &payer(), MSK), None, "refused after a single trade too");
+        let fair = palw_model_sell_quote_with(&traded, a.units_out, FREE).unwrap().fees.gross;
+        assert_eq!(fair, 12_065_190_897_692);
+        // What the seed would have done, had it been taken.
+        let late = 1_000_000 * MSK;
+        let seeded = PalwModelMarketV1 {
+            msk_reserve: traded.msk_reserve + late,
+            seed_sompi: traded.seed_sompi + late,
+            seed_pledged_sompi: traded.seed_sompi + late,
+            ..traded
+        };
+        let a_out = palw_model_sell_quote_with(&seeded, a.units_out, FREE).expect("A's sell still fits above the seed");
+        assert_eq!(a_out.fees.gross, 13_152_145_032_619, "A is paid 131,521.45 MSK for what was worth 120,651.91");
+        assert_eq!(a_out.fees.gross - fair, 1_086_954_134_927, "10,869.54 MSK of the late seed's price, taken out by A");
+        // B now holds positions the curve values above everything it may pay without the seed.
+        let x = a_out.after.curve_x();
+        let units_after = a_out.after.position_units as u128 + b.units_out as u128;
+        let wants = x - a_out.after.k().div_ceil(units_after);
+        let payable = (a_out.after.msk_reserve - a_out.after.seed_sompi) as u128;
+        assert_eq!((wants, payable), (106_756_434_967_380, 96_847_854_967_381));
+        assert!(wants > payable, "B could only leave by being paid out of the locked seed");
+        assert_eq!(palw_model_sell_quote_with(&a_out.after, b.units_out, FREE), None, "so B's sell is refused, whole");
+        // Unguarded, the reserve would end 99,085.80 MSK under the seed that was "locked for good".
+        assert_eq!(a_out.after.seed_sompi as u128 - (a_out.after.msk_reserve as u128 - wants), 9_908_579_999_999);
+        // Before the first trade the same seed is safe: no position is out for anyone to sell it to.
+        let early = palw_model_seed_deepen_v2(&opened(), &payer(), late).expect("taken before the first trade");
+        assert_eq!((early.msk_reserve, early.seed_sompi, early.seeded_by), (late, late, payer()));
+        assert_eq!(early.price_floor_sompi_per_position_v2(), (V + late) / SUPPLY, "it raised the floor by seed / supply");
+        let again = palw_model_seed_deepen_v2(&early, &Hash64::from_u64_word(2), 3 * MSK).expect("as many payments as it takes");
+        assert_eq!((again.seed_sompi, again.seeded_by), (late + 3 * MSK, payer()), "and the first payer stays the record");
+        assert_eq!(palw_model_seed_deepen_v2(&early, &payer(), 0), None, "a payment of nothing is no seed");
+    }
+
+    /// **I-V8 at the arithmetic layer: with no virtual reserve every quote is ADR-0090's, byte for
+    /// byte.** The pre-ADR-0162 quote functions are kept here verbatim — their `X` is the reserve and
+    /// a market is a seed — and compared with the live ones on random rows that every pre-fence
+    /// network can hold: seeded at either least seed, traded, slices taken, closed, sold out, and a
+    /// hand-built row under its floor.
+    #[test]
+    fn with_no_virtual_reserve_every_quote_is_the_adr_0090_quote() {
+        mod reference {
+            use super::super::*;
+            fn k(m: &PalwModelMarketV1) -> u128 {
+                m.msk_reserve as u128 * m.position_units as u128
+            }
+            pub fn buy(market: &PalwModelMarketV1, msk_in: u64, schedule: PalwModelFeesV1) -> Option<PalwModelBuyQuoteV1> {
+                if market.seed_sompi == 0
+                    || market.closed_to_buys
+                    || msk_in == 0
+                    || market.position_units == 0
+                    || market.msk_reserve == 0
+                {
+                    return None;
+                }
+                let fees = palw_model_fee_split_with(msk_in, schedule);
+                let k0 = k(market);
+                let units_after = k0.div_ceil(market.msk_reserve as u128 + fees.net as u128);
+                let units_out = (market.position_units as u128).checked_sub(units_after)?;
+                if units_out == 0 {
+                    return None;
+                }
+                let units_out = units_out as u64;
+                let after = PalwModelMarketV1 {
+                    msk_reserve: market.msk_reserve.checked_add(fees.net)?,
+                    position_units: market.position_units - units_out,
+                    sold_units: market.sold_units.checked_add(units_out)?,
+                    burned_sompi: market.burned_sompi.checked_add(fees.burn)?,
+                    ..*market
+                };
+                (k(&after) >= k0).then_some(PalwModelBuyQuoteV1 { fees, units_out, after })
+            }
+            pub fn sell(market: &PalwModelMarketV1, units_in: u64, schedule: PalwModelFeesV1) -> Option<PalwModelSellQuoteV1> {
+                if units_in == 0 || market.seed_sompi == 0 {
+                    return None;
+                }
+                let k0 = k(market);
+                let units_after = market.position_units as u128 + units_in as u128;
+                if units_after > (PALW_MODEL_SUPPLY_UNITS_V1 - market.retired_units) as u128 {
+                    return None;
+                }
+                let gross = (market.msk_reserve as u128).checked_sub(k0.div_ceil(units_after))?.min(market.msk_reserve as u128);
+                if gross == 0 {
+                    return None;
+                }
+                let fees = palw_model_fee_split_with(gross as u64, schedule);
+                let after = PalwModelMarketV1 {
+                    msk_reserve: market.msk_reserve - fees.gross,
+                    position_units: units_after as u64,
+                    burned_sompi: market.burned_sompi.checked_add(fees.burn)?,
+                    ..*market
+                };
+                (after.msk_reserve >= market.seed_sompi && k(&after) >= k0).then_some(PalwModelSellQuoteV1 { fees, after })
+            }
+            pub fn buyback(market: &PalwModelMarketV1, slice: u64) -> Option<PalwModelBuybackQuoteV1> {
+                if market.seed_sompi == 0
+                    || market.closed_to_buys
+                    || slice == 0
+                    || market.position_units == 0
+                    || market.msk_reserve == 0
+                {
+                    return None;
+                }
+                let reserve_after = market.msk_reserve.checked_add(slice)?;
+                let units_after = k(market).div_ceil(reserve_after as u128).min(market.position_units as u128) as u64;
+                let retired = market.position_units - units_after;
+                let after = PalwModelMarketV1 {
+                    msk_reserve: reserve_after,
+                    position_units: units_after,
+                    buyback_sompi: market.buyback_sompi.checked_add(slice)?,
+                    retired_units: market.retired_units.checked_add(retired)?,
+                    ..*market
+                };
+                Some(PalwModelBuybackQuoteV1 { slice, retired, after })
+            }
+        }
+        let mut compared = 0u64;
+        for schedule in [PalwModelFeesV1::V1, PalwModelFeesV1::V2] {
+            for case in 0..48u64 {
+                let mut rng = Rng(0x0090 ^ case.wrapping_mul(0x3141_5926) ^ schedule.leg_permille);
+                let seed = if case % 2 == 0 { PALW_MODEL_SEED_MIN_SOMPI_V1 } else { PALW_MODEL_SEED_MIN_SOMPI_V2 };
+                let mut m = PalwModelMarketV1::seed_v1(3, seed + rng.amount(seed), payer());
+                let mut held = 0u64;
+                for step in 0..64 {
+                    let what = format!("{schedule:?} case {case} step {step}");
+                    assert_eq!(m.virtual_sompi, 0);
+                    let msk_in = rng.amount(500_000 * MSK);
+                    let units = 1 + rng.below(held.max(1) * 2);
+                    let slice = rng.amount(40 * MSK);
+                    let (b, rb) = (palw_model_buy_quote_with(&m, msk_in, schedule), reference::buy(&m, msk_in, schedule));
+                    let (s, rs) = (palw_model_sell_quote_with(&m, units, schedule), reference::sell(&m, units, schedule));
+                    let (r, rr) = (palw_model_buyback_quote_v1(&m, slice), reference::buyback(&m, slice));
+                    assert_eq!(b, rb, "{what}: buy {msk_in}");
+                    assert_eq!(s, rs, "{what}: sell {units}");
+                    assert_eq!(r, rr, "{what}: slice {slice}");
+                    let under = PalwModelMarketV1 { msk_reserve: m.seed_sompi.saturating_sub(1), ..m };
+                    assert_eq!(palw_model_sell_quote_with(&under, units, schedule), reference::sell(&under, units, schedule), "{what}");
+                    let closed = PalwModelMarketV1 { closed_to_buys: true, ..m };
+                    assert_eq!(palw_model_buy_quote_with(&closed, msk_in, schedule), None, "{what}");
+                    assert_eq!(reference::buy(&closed, msk_in, schedule), None, "{what}");
+                    compared += 3;
+                    match rng.below(3) {
+                        0 => {
+                            if let Some(q) = b {
+                                held += q.units_out;
+                                m = q.after;
+                            }
+                        }
+                        1 => {
+                            if let Some(q) = s
+                                && units <= held
+                            {
+                                held -= units;
+                                m = q.after;
+                            }
+                        }
+                        _ => {
+                            if let Some(q) = r {
+                                m = q.after;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(compared > 10_000, "the comparison ran: {compared}");
+        // A pledge and the reader's empty row quote nothing, on either side.
+        for row in [PalwModelMarketV1::pledge_v1(5, 4 * MSK, payer()), PalwModelMarketV1::seed_v1(5, 0, Hash64::default())] {
+            assert_eq!(palw_model_buy_quote_with(&row, MSK, PalwModelFeesV1::V1), reference::buy(&row, MSK, PalwModelFeesV1::V1));
+            assert_eq!(palw_model_buy_quote_with(&row, MSK, PalwModelFeesV1::V1), None);
+            assert_eq!(palw_model_buyback_quote_v1(&row, MSK), None);
+            assert_eq!(row.price_sompi_per_position_v1(), 0, "no market, no price");
+        }
+    }
+
+    /// **I-V8 in the bytes: a row with no virtual reserve encodes exactly as it always did**, so the
+    /// state root over every market any network holds today, its carriage and its deltas do not move;
+    /// a row with one carries it behind bit 1 of the flag byte and a trailing word, round-trips, and
+    /// sits beside other rows in a map without disturbing them; and the encoding is one-to-one.
+    #[test]
+    fn a_row_without_a_virtual_reserve_has_the_bytes_it_always_had() {
+        fn legacy(m: &PalwModelMarketV1) -> Vec<u8> {
+            let mut v = Vec::new();
+            for word in [m.opened_daa, m.msk_reserve, m.position_units, m.sold_units, m.burned_sompi, m.registrant_paid_sompi] {
+                v.extend_from_slice(&word.to_le_bytes());
+            }
+            v.push(u8::from(m.closed_to_buys));
+            for word in [m.contributor_paid_sompi, m.seed_sompi] {
+                v.extend_from_slice(&word.to_le_bytes());
+            }
+            v.extend_from_slice(m.seeded_by.as_byte_slice());
+            for word in [m.buyback_sompi, m.retired_units] {
+                v.extend_from_slice(&word.to_le_bytes());
+            }
+            v
+        }
+        let seeded = PalwModelMarketV1::seed_v1(9, PALW_MODEL_SEED_MIN_SOMPI_V2, payer());
+        let traded = palw_model_buy_quote_with(&seeded, 1_234 * MSK, PalwModelFeesV1::V2).unwrap().after;
+        let closed = PalwModelMarketV1 { closed_to_buys: true, ..traded };
+        let pledged = PalwModelMarketV1::pledge_v1(4, 77 * MSK, payer());
+        for row in [seeded, traded, closed, pledged] {
+            let bytes = borsh::to_vec(&row).unwrap();
+            assert_eq!(bytes, legacy(&row), "a pre-fence row's bytes are the pre-fence encoding");
+            assert_eq!(borsh::from_slice::<PalwModelMarketV1>(&bytes).unwrap(), row, "and decode to the same row");
+        }
+        let virt = palw_model_buy_quote_with(&opened(), 5_000 * MSK, PalwModelFeesV1::V1).unwrap().after;
+        let virt_closed = PalwModelMarketV1 { closed_to_buys: true, ..virt };
+        for (row, flags) in [(virt, 0b10u8), (virt_closed, 0b11u8)] {
+            let bytes = borsh::to_vec(&row).unwrap();
+            let mut want = legacy(&row);
+            want[48] = flags;
+            want.extend_from_slice(&V.to_le_bytes());
+            assert_eq!(bytes, want, "the flag bit, and the virtual reserve as the trailing word");
+            assert_eq!(borsh::from_slice::<PalwModelMarketV1>(&bytes).unwrap(), row);
+        }
+        let map: std::collections::BTreeMap<Hash64, PalwModelMarketV1> =
+            [(Hash64::from_u64_word(1), virt), (Hash64::from_u64_word(2), seeded), (Hash64::from_u64_word(3), virt_closed)].into();
+        assert_eq!(borsh::from_slice::<std::collections::BTreeMap<Hash64, PalwModelMarketV1>>(&borsh::to_vec(&map).unwrap()).unwrap(), map);
+        // One-to-one: an unknown bit, or a flag whose word is zero, is refused.
+        let mut unknown = borsh::to_vec(&seeded).unwrap();
+        unknown[48] = 0b100;
+        assert!(borsh::from_slice::<PalwModelMarketV1>(&unknown).is_err());
+        let mut zero_word = borsh::to_vec(&seeded).unwrap();
+        zero_word[48] = 0b10;
+        zero_word.extend_from_slice(&0u64.to_le_bytes());
+        assert!(borsh::from_slice::<PalwModelMarketV1>(&zero_word).is_err());
+    }
+
+    /// **ADR-0162 Decision 1 and 3: the market every surface reads past the fence.** A line with no
+    /// row has its opening; a pledge that was collecting ADR-0094's floor opens on `V` with the pledge
+    /// as its seed; and an ADR-0090 pair seeded under ADR-0120's floor before the fence keeps `V = 0`
+    /// and quotes, after the fence, exactly what it quoted before it.
+    #[test]
+    fn a_pair_seeded_before_the_fence_quotes_after_it_exactly_as_before() {
+        let fresh = palw_model_market_in_force_v2(None, 900);
+        assert_eq!(fresh, PalwModelMarketV1::open_virtual_v2(900, V));
+        assert_eq!(fresh.price_sompi_per_position_v1(), 20 * MSK);
+        let pledge = PalwModelMarketV1::pledge_v1(5, 250_000 * MSK, payer());
+        let opened_pledge = palw_model_market_in_force_v2(Some(&pledge), 900);
+        assert!(opened_pledge.is_open());
+        assert_eq!(
+            (opened_pledge.msk_reserve, opened_pledge.seed_sompi, opened_pledge.seeded_by, opened_pledge.opened_daa),
+            (250_000 * MSK, 250_000 * MSK, payer(), 900),
+            "the pledge is the seed, locked as it already was, and the first payer is still the record"
+        );
+        assert_eq!(opened_pledge.price_sompi_per_position_v1(), (V + 250_000 * MSK) / SUPPLY);
+        let before = PalwModelMarketV1::seed_v1(40, PALW_MODEL_SEED_MIN_SOMPI_V2, payer());
+        let before = palw_model_buy_quote_with(&before, 20_000 * MSK, PalwModelFeesV1::V2).unwrap().after;
+        let after = palw_model_market_in_force_v2(Some(&before), 900);
+        assert_eq!(after, before, "the row is the row: V stays 0");
+        for msk_in in [MSK, 777 * MSK, 50_000 * MSK] {
+            assert_eq!(
+                palw_model_buy_quote_with(&after, msk_in, PalwModelFeesV1::V2),
+                palw_model_buy_quote_with(&before, msk_in, PalwModelFeesV1::V2)
+            );
+        }
+        assert_eq!(after.price_sompi_per_position_v1(), before.price_sompi_per_position_v1());
+        assert_eq!(after.price_floor_sompi_per_position_v2(), before.price_floor_sompi_per_position_v2());
+        assert!(
+            after.price_floor_sompi_per_position_v2() >= PALW_MODEL_SEED_MIN_SOMPI_V2 / SUPPLY,
+            "its floor is its seed's, plus the dust its buy left in the curve"
+        );
     }
 }

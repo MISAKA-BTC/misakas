@@ -107,6 +107,9 @@ pub(crate) fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketRespons
         seed_pledged_sompi: r.seed_pledged_sompi,
         buyback_sompi: r.buyback_sompi,
         retired_units: r.retired_units,
+        // ADR-0162: the market's own virtual reserve, so every quote this tool makes is the fold's.
+        // Zero for a market opened before the fence (and from every node before ADR-0162).
+        virtual_sompi: r.virtual_sompi,
     }
 }
 

@@ -1539,6 +1539,7 @@ mod tests {
                     leg_v2_active,
                     seed_v2_active: false,
                     audit_2026_09_23_active: false,
+                    virtual_v1_from: None,
                 },
                 1,
             );
@@ -1584,6 +1585,7 @@ mod tests {
                 leg_v2_active: false,
                 seed_v2_active: false,
                 audit_2026_09_23_active: false,
+                virtual_v1_from: None,
             },
             1,
         );
@@ -1642,6 +1644,7 @@ mod tests {
             leg_v2_active: false,
             seed_v2_active: false,
             audit_2026_09_23_active: false,
+            virtual_v1_from: None,
         };
         let closed = |view: &PalwEvmViewV1| {
             let m = MarketHandlers::new(std::sync::Arc::new(view.clone()), fences, 1);
@@ -1684,6 +1687,7 @@ mod tests {
                 leg_v2_active: false,
                 seed_v2_active: false,
                 audit_2026_09_23_active: audit,
+                virtual_v1_from: None,
             };
             let m = MarketHandlers::new(view.clone(), fences, 1);
             let mut input = sel().market.to_vec();
@@ -1714,6 +1718,7 @@ mod tests {
                 leg_v2_active: false,
                 seed_v2_active: false,
                 audit_2026_09_23_active: false,
+                virtual_v1_from: None,
             },
             1,
         );

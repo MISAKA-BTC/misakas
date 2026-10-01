@@ -9255,6 +9255,21 @@ pub enum PalwStateV2Error {
     ModelMarketAlreadySeeded(Hash64),
     #[error("the seed of {got} sompi is under the least seed of {want}")]
     ModelSeedTooSmall { want: u64, got: u64 },
+    /// **ADR-0162 Decision 4: a seed is taken only before the line's first trade.** A seed paid
+    /// while positions are out raises their price, and their holders could sell part of it back out
+    /// of the curve — the seed would not be locked for good, only locked until someone sold. Past
+    /// `Params::palw_model_virtual_v1` only.
+    #[error("line {0} has traded, so its market takes no seed: a seed is taken only before the first trade")]
+    ModelSeedAfterTrade(Hash64),
+    /// **ADR-0162 Decision 5: the class's registry lifecycle is not `Active` — not yet, or no
+    /// longer — so its line's market, open since the line's creation, takes no buy.** `state` is the
+    /// registry row's lifecycle, or "no row". The EVM's reason 3 (`NOT_ACTIVE`). A seed is still
+    /// taken until the first trade, and a sell always. Past `Params::palw_model_virtual_v1` only.
+    #[error(
+        "class {class} is {state} under the model registry: its market is open and trades from the class's approval \
+         (Active); a seed is still taken until the first trade, and a sell always"
+    )]
+    ModelClassNotTrading { class: Hash64, state: String },
 
     /// **ADR-0042 Decision 10's queue is full** (mainnet audit 2026-09-06, M-10). A market move
     /// whose fee legs would push `pending_payouts` past [`PALW_V2_MAX_PENDING_PAYOUTS`] is refused;
@@ -10761,6 +10776,36 @@ impl PalwChainStateV2 {
 
     pub fn model_markets_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_model_market_v1::PalwModelMarketV1)> {
         self.model_markets.iter()
+    }
+
+    /// **ADR-0162 Decision 1: a line's market past `Params::palw_model_virtual_v1`** (in force from
+    /// `fence_daa`), as the fold moves it and every reader shows it — the one place a line is opened.
+    ///
+    /// Every line the registry resolves has a market from its creation: the row where one was
+    /// written, else the opening `palw_model_market_in_force_v2` gives it — `X = V`, the whole supply
+    /// in the curve, opened at the line's founding height or the fence's, whichever is later (a class's
+    /// founding line was created by the class's registration, a founded line by `ModelLineFounded`).
+    /// A pledge still collecting ADR-0094's floor opens with the pledge as its seed; a market opened
+    /// before the fence is returned as it is, `V = 0` and all. The floor class has no line
+    /// (`ModelLineOnFloor`), so it is opened by nothing here: its row, if a pre-fence seed made one,
+    /// and `None` otherwise. `None` for a line the registry does not know.
+    pub fn model_market_in_force_v2(
+        &self,
+        line_id: &Hash64,
+        fence_daa: u64,
+        base_class_id: &Hash64,
+    ) -> Option<crate::palw_model_market_v1::PalwModelMarketV1> {
+        let row = self.model_markets.get(line_id);
+        if let Some(market) = row
+            && market.is_open()
+        {
+            return Some(*market);
+        }
+        let line = self.model_line_or_founding(line_id)?;
+        if line.class_id == *base_class_id {
+            return row.copied();
+        }
+        Some(crate::palw_model_market_v1::palw_model_market_in_force_v2(row, line.founded_daa.max(fence_daa)))
     }
 
     /// ADR-0087: units `holder` holds in `class_id`, zero when no row exists.
@@ -15078,8 +15123,9 @@ impl PalwFoldReadV1<'_> {
             .claim_roots
             .get(claim_id)
             .and_then(|root| self.state.artifact_line_of_root(&claim.class_id, root, self.extras.artifact_root_ownership_active))
-            .and_then(|line_id| self.state.model_markets.get(&line_id))
-            .is_some_and(|market| crate::palw_model_market_v1::palw_model_buyback_quote_v1(market, slice).is_some());
+            // ADR-0162: the pair `model_buyback_at_final` buys from, by the same function.
+            .and_then(|line_id| self.model_buyback_market_v2(&line_id))
+            .is_some_and(|market| crate::palw_model_market_v1::palw_model_buyback_quote_v1(&market, slice).is_some());
         if open { slice } else { 0 }
     }
 
@@ -15329,6 +15375,57 @@ impl PalwFoldReadV1<'_> {
             Some(state) => Err(PalwStateV2Error::ModelClassNotEligible { class: *class_id, state }),
             None => Ok(()),
         }
+    }
+
+    /// **ADR-0162 Decision 5: a line's market trades only once the chain has APPROVED its class** —
+    /// past `Params::palw_model_virtual_v1`, the gate every buy answers (and the reward's buyback,
+    /// Decision 6): the class's status is `Active`, and where the registry is in force its lifecycle
+    /// is exactly `Active`. `Probation` and `ActiveLimited` admit claims and still admit no buy: the
+    /// market opens at the model's addition, its trading at its approval, and a position is never
+    /// sold in a model the chain is still trying out. A class without a registry row is asked
+    /// [`Self::class_lifecycle_refusal`]'s question, as the claim gate asks it. The refusals are
+    /// `ModelClassNotActive` and `ModelClassNotTrading`, both the EVM's reason 3 (`NOT_ACTIVE`). A sell never asks this: no position exists before the class's
+    /// first `Active`, and a holder can always leave a class that has since been held, frozen or
+    /// retired. Not consulted below the fence.
+    fn check_model_trading_v2(&self, class_id: &Hash64) -> Result<(), PalwStateV2Error> {
+        let class = self.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
+        if !matches!(class.status, PalwClassStatusV2::Active) {
+            return Err(PalwStateV2Error::ModelClassNotActive(*class_id));
+        }
+        if self.extras.model_registry.is_none() || *class_id == self.params.base_class_id() {
+            return Ok(());
+        }
+        let refusal = match self.state.model_lifecycles.get(class_id) {
+            Some(row) => {
+                (!matches!(row.state, crate::palw_model_registry_v1::PalwModelLifecycleV1::Active)).then(|| format!("{:?}", row.state))
+            }
+            None => self.class_lifecycle_refusal(class_id),
+        };
+        match refusal {
+            Some(state) => Err(PalwStateV2Error::ModelClassNotTrading { class: *class_id, state }),
+            None => Ok(()),
+        }
+    }
+
+    /// **The pair the reward's slice buys from at a claim's `Final`** (ADR-0091 Decision 2), as the
+    /// fold buys it and as ADR-0152's lock prices it (`rcore_buyback_bound`) — one answer for both.
+    /// Below ADR-0162's fence the line's row as written (`None` without one; a closed or unopened row
+    /// quotes nothing). Past it the line's market in force, and only where a buy would be admitted
+    /// now (ADR-0162 Decision 6): before the class is approved the miner is paid the whole escrow —
+    /// ADR-0091 Decision 3's "a market closed to buys" — so a class rejected before `Active` has
+    /// locked no miner's MSK in a pair that never trades, and trading opens exactly at
+    /// `(V + seed) / supply`. The row's `closed_to_buys` is a record of its last move past the fence,
+    /// not the gate: the gate is asked live (the 2026-09-25 Position review's #4).
+    fn model_buyback_market_v2(&self, line_id: &Hash64) -> Option<crate::palw_model_market_v1::PalwModelMarketV1> {
+        let Some(fence_daa) = self.extras.model_virtual_v1 else {
+            return self.state.model_markets.get(line_id).copied();
+        };
+        let line = self.state.model_line_or_founding(line_id)?;
+        if !line.is_active() || self.check_model_trading_v2(&line.class_id).is_err() {
+            return None;
+        }
+        let market = self.state.model_market_in_force_v2(line_id, fence_daa, &self.params.base_class_id())?;
+        Some(crate::palw_model_market_v1::PalwModelMarketV1 { closed_to_buys: false, ..market })
     }
 
     /// **ADR-0152 §4-quater V2: may a claim of `class_id` and `shape` be taken at `now_daa`, as far as
@@ -16642,13 +16739,22 @@ pub fn palw_claim_template_v1(class_id: Hash64, bond: PalwBondKeyV2, now_daa: u6
 /// Position route matrix, P-B3), for a caller that must answer before anyone pays — the node's
 /// `getPalwModelMarket` above all, because on the carrier lane a refused seed or buy still lands
 /// its carrier and the sink output is the payment (P-B1). A sell is never gated.
+///
+/// **Past ADR-0162's fence the question is the buy's alone** — whether the market TRADES
+/// (`check_model_trading_v2`: the class approved, the lifecycle exactly `Active`). A seed no longer
+/// asks the lifecycle (it is taken from the line's creation until its first trade, at the opener's
+/// risk), so a reader decides a seed from the row (`sold_units == 0`) and the class's status.
 pub fn palw_model_market_admits_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     extras: &PalwTransitionExtrasV1,
     class_id: &Hash64,
 ) -> Result<(), PalwStateV2Error> {
-    PalwFoldReadV1::outside(state, params, extras).check_model_market_admits(class_id)
+    let read = PalwFoldReadV1::outside(state, params, extras);
+    if extras.model_virtual_v1.is_some() {
+        return read.check_model_trading_v2(class_id);
+    }
+    read.check_model_market_admits(class_id)
 }
 
 /// **The same gate for the EVM lane's pre-checks** (the 2026-09-23 Position route matrix, P-B3):
@@ -16661,7 +16767,9 @@ pub fn palw_evm_market_refused_classes_v1(
     params: &PalwStateParamsV2,
     extras: &PalwTransitionExtrasV1,
 ) -> BTreeSet<Hash64> {
-    if !extras.audit_2026_09_23_active {
+    // ADR-0162: past the virtual fence the set is the classes whose market does not TRADE yet (or no
+    // more) — the writer reverts a buy on them at the call, and never a seed.
+    if !extras.audit_2026_09_23_active && extras.model_virtual_v1.is_none() {
         return BTreeSet::new();
     }
     state.classes.keys().filter(|class_id| palw_model_market_admits_v1(state, params, extras, class_id).is_err()).copied().collect()
@@ -35113,6 +35221,15 @@ pub struct PalwTransitionExtrasV1 {
     /// once 100,000 MSK is paid in, past it once 1,000,000 MSK is; `false` by `Default`, so every
     /// caller that does not set it keeps the floor every existing row was opened under.
     pub model_seed_v2_active: bool,
+    /// **ADR-0162: `Params::palw_model_virtual_v1` at the block's DAA — `Some(height)` where it is in
+    /// force at this block, the height being the one it came into force at.** Past it every
+    /// registered line's market is open from the line's creation on the virtual reserve (a line older
+    /// than the fence: from the fence, which is why the height rides here — it is the opening a
+    /// lazily written row records), a seed is optional and taken only before the first trade, a buy
+    /// and the reward's buyback need a class the chain has made `Active`, and ADR-0120's least seed is
+    /// zero. A flag and a height in one field, so the two cannot disagree. `None` by `Default` and on
+    /// every preset, and then the market folds exactly as it did.
+    pub model_virtual_v1: Option<u64>,
     /// ADR-0089 Decision 6: the actions the block's EVM execution queued, in sequence order —
     /// applied after every carrier-borne object, each quoted on the row as it then stands.
     pub evm_actions: Vec<crate::evm::model_market::PalwEvmMarketActionV1>,
@@ -35402,6 +35519,24 @@ impl<'a> TransitionBuilder<'a> {
         Ok(line)
     }
 
+    /// **ADR-0162: the market a seed or a buy past the virtual fence (in force from `fence_daa`) acts
+    /// on** — [`PalwChainStateV2::model_market_in_force_v2`] at this block, which opens every line
+    /// from its creation. Refused `ModelLineOnFloor` where it opens nothing (the floor class has no
+    /// line, so no market but one a pre-fence seed made), `ModelLineMissing` for a line the registry
+    /// does not know.
+    fn model_market_for_move_v2(
+        &self,
+        line_id: &Hash64,
+        fence_daa: u64,
+    ) -> Result<crate::palw_model_market_v1::PalwModelMarketV1, PalwStateV2Error> {
+        match self.state.model_market_in_force_v2(line_id, fence_daa, &self.params.base_class_id()) {
+            Some(market) if market.is_open() => Ok(market),
+            Some(_) => Err(PalwStateV2Error::ModelLineOnFloor),
+            None if self.state.model_line_or_founding(line_id).is_some() => Err(PalwStateV2Error::ModelLineOnFloor),
+            None => Err(PalwStateV2Error::ModelLineMissing(*line_id)),
+        }
+    }
+
     /// ADR-0088 Decision 8: the leg to the owner and, when a proposal was adopted and the owner
     /// shares, to the contributor; burned where a payee has no bond.
     fn pay_model_leg(
@@ -35454,7 +35589,9 @@ impl<'a> TransitionBuilder<'a> {
         else {
             return 0;
         };
-        let Some(market) = self.state.model_markets.get(&line_id).copied() else { return 0 };
+        // ADR-0162 Decision 6: past the virtual fence, the line's market in force where a buy would be
+        // admitted; below it, the row as written — one function with ADR-0152's lock price.
+        let Some(market) = self.read().model_buyback_market_v2(&line_id) else { return 0 };
         // ADR-0124 Decision 6: `escrow` is the claim's escrow as priced at this block — the whole
         // of it below the work-price fence, so every existing row is byte-identical.
         let Some(quote) = palw_model_buyback_quote_v1(&market, palw_model_buyback_slice_v1(escrow)) else {
@@ -35569,6 +35706,32 @@ fn model_seed_v1(
     if matches!(class.status, PalwClassStatusV2::Frozen { .. }) {
         return Err(PalwStateV2Error::ModelClassClosed(line.class_id));
     }
+    // **ADR-0162 Decision 4: past the virtual fence a seed is optional depth, not an opening.** The
+    // line's market is open from the line's creation, so a seed of any amount is taken — in as many
+    // payments as it takes — from then until the market's first trade, and refused after it
+    // (`ModelSeedAfterTrade`: a seed paid while positions are out is a seed their holders can sell
+    // back out). It joins the real reserve and the locked seed, fee-free, mints no position, and
+    // raises the floor `(V + seed) / supply`. No floor to reach and no lifecycle gate: the seed is
+    // at its opener's risk — a class that is never approved never trades, and its seed stays locked
+    // for good (P-B3's refusal was written for a pledge that could never become a market; here every
+    // line already is one).
+    if let Some(fence_daa) = builder.extras.model_virtual_v1 {
+        if !line.is_active() {
+            return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+        }
+        if msk_seed == 0 {
+            return Err(PalwStateV2Error::ModelSeedTooSmall { want: 1, got: 0 });
+        }
+        let market = builder.model_market_for_move_v2(line_id, fence_daa)?;
+        if market.sold_units > 0 {
+            return Err(PalwStateV2Error::ModelSeedAfterTrade(*line_id));
+        }
+        let after = crate::palw_model_market_v1::palw_model_seed_deepen_v2(&market, seeder, msk_seed)
+            .ok_or(PalwStateV2Error::Overflow("model seed"))?;
+        builder.write_model_market(*line_id, Some(after));
+        builder.model_moves += 1;
+        return Ok(after);
+    }
     // **The 2026-09-23 Position route matrix, P-B3: past the audit fence the registry decides too.**
     // ADR-0090 Decision 2 lets a class wait for its activation CLOCK seeded, and a clock always
     // arrives; a registry lifecycle may never leave `Candidate` or `Prefetching`, and a pledge into
@@ -35638,24 +35801,42 @@ fn model_buy_v1(
     }
     let line = builder.state.model_line_or_founding(line_id).ok_or(PalwStateV2Error::ModelLineMissing(*line_id))?;
     let class = builder.state.classes.get(&line.class_id).ok_or(PalwStateV2Error::MissingClass(line.class_id))?.clone();
-    if !matches!(class.status, PalwClassStatusV2::Active) {
-        return Err(PalwStateV2Error::ModelClassNotActive(line.class_id));
-    }
-    // **The 2026-09-23 Position route matrix, P-B3: `Active` above is the class's status, not
-    // whether the chain serves it.** Past the audit fence a buy also needs a registry lifecycle that
-    // admits claims — the claim gate's own predicate — so no position is sold in a model the chain
-    // refuses every claim of.
-    builder.read().check_model_market_admits(&line.class_id)?;
-    if !line.is_active() {
-        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
-    }
-    // ADR-0090 Decision 2: no market opens by a buy; it opens by a seed or not at all.
-    let market = *builder.state.model_markets.get(line_id).ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?;
-    // ADR-0094 Decision 2: a row that is still collecting its floor has no positions and no price.
-    // A trader is told the same thing they are told for a line nobody has paid into at all.
-    if !market.is_open() {
-        return Err(PalwStateV2Error::ModelMarketMissing(*line_id));
-    }
+    let market = match builder.extras.model_virtual_v1 {
+        // **ADR-0162 Decision 5: the market is open from the line's creation, and it TRADES from the
+        // class's approval.** The gate is the class's status and its lifecycle, both exactly
+        // `Active`, asked live; the row's `closed_to_buys` is a record of its last move, not the gate
+        // (the 2026-09-25 Position review's #4: a class that came back to `Active` must not find its
+        // market still shut by a flag the last sell wrote). No row yet is the opening, `X = V`.
+        Some(fence_daa) => {
+            builder.read().check_model_trading_v2(&line.class_id)?;
+            if !line.is_active() {
+                return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+            }
+            let market = builder.model_market_for_move_v2(line_id, fence_daa)?;
+            crate::palw_model_market_v1::PalwModelMarketV1 { closed_to_buys: false, ..market }
+        }
+        None => {
+            if !matches!(class.status, PalwClassStatusV2::Active) {
+                return Err(PalwStateV2Error::ModelClassNotActive(line.class_id));
+            }
+            // **The 2026-09-23 Position route matrix, P-B3: `Active` above is the class's status, not
+            // whether the chain serves it.** Past the audit fence a buy also needs a registry lifecycle that
+            // admits claims — the claim gate's own predicate — so no position is sold in a model the chain
+            // refuses every claim of.
+            builder.read().check_model_market_admits(&line.class_id)?;
+            if !line.is_active() {
+                return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+            }
+            // ADR-0090 Decision 2: no market opens by a buy; it opens by a seed or not at all.
+            let market = *builder.state.model_markets.get(line_id).ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?;
+            // ADR-0094 Decision 2: a row that is still collecting its floor has no positions and no price.
+            // A trader is told the same thing they are told for a line nobody has paid into at all.
+            if !market.is_open() {
+                return Err(PalwStateV2Error::ModelMarketMissing(*line_id));
+            }
+            market
+        }
+    };
     // ADR-0114: the schedule the fence names at this block's DAA — the one place the fold chooses it.
     let schedule = crate::palw_model_market_v1::PalwModelFeesV1::at(builder.extras.model_leg_v2_active);
     let quote = palw_model_buy_quote_with(&market, msk_in, schedule).ok_or(PalwStateV2Error::ModelBuyReleasesNothing(*line_id))?;
@@ -35706,12 +35887,24 @@ fn model_sell_v1(
     // how many of them a block may add. Refused, never truncated — a truncated fee leg is a payee
     // silently not paid.
     builder.check_model_payout_room(TransitionBuilder::model_payout_rows_would_add(pay_net_via_coinbase.is_some(), false))?;
-    let market = *builder.state.model_markets.get(line_id).ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?;
-    // ADR-0094 Decision 2: a row that is still collecting its floor has no positions and no price.
-    // A trader is told the same thing they are told for a line nobody has paid into at all.
-    if !market.is_open() {
-        return Err(PalwStateV2Error::ModelMarketMissing(*line_id));
-    }
+    let market = match builder.extras.model_virtual_v1 {
+        // ADR-0162: the line's market in force. A holder's position was bought, so the row exists;
+        // the opening is read only to answer a sell of nothing with the position it exceeds.
+        Some(fence_daa) => builder
+            .state
+            .model_market_in_force_v2(line_id, fence_daa, &builder.params.base_class_id())
+            .filter(|market| market.is_open())
+            .ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?,
+        None => {
+            let market = *builder.state.model_markets.get(line_id).ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?;
+            // ADR-0094 Decision 2: a row that is still collecting its floor has no positions and no price.
+            // A trader is told the same thing they are told for a line nobody has paid into at all.
+            if !market.is_open() {
+                return Err(PalwStateV2Error::ModelMarketMissing(*line_id));
+            }
+            market
+        }
+    };
     let held = builder.state.model_position(line_id, holder);
     if units_in == 0 || units_in > held {
         return Err(PalwStateV2Error::ModelSellExceedsPosition { held, want: units_in });
@@ -35746,7 +35939,12 @@ fn model_sell_v1(
     if let Some(payload) = pay_net_via_coinbase {
         builder.write_model_fee(ctx, line_id, holder, b"sell-net", Some(payload), quote.fees.net);
     }
-    after.closed_to_buys = !(class_active && line.as_ref().is_some_and(|l| l.is_active()));
+    // ADR-0162: past the virtual fence the record says what the live gate would answer now.
+    let takes_buys = match (builder.extras.model_virtual_v1, &line) {
+        (Some(_), Some(l)) => builder.read().check_model_trading_v2(&l.class_id).is_ok(),
+        _ => class_active,
+    };
+    after.closed_to_buys = !(takes_buys && line.as_ref().is_some_and(|l| l.is_active()));
     builder.write_model_market(*line_id, Some(after));
     builder.write_model_position((*line_id, *holder), held - units_in);
     // ADR-0095 §4.5: selling any part of a holding restarts it.
@@ -35764,7 +35962,9 @@ fn evm_refusal_reason(error: &PalwStateV2Error) -> u8 {
         // active for its market either. Raised only past the audit fence, so no earlier byte moves.
         PalwStateV2Error::ModelClassNotActive(_)
         | PalwStateV2Error::ModelLineNotActive(_)
-        | PalwStateV2Error::ModelClassNotEligible { .. } => NOT_ACTIVE,
+        | PalwStateV2Error::ModelClassNotEligible { .. }
+        // ADR-0162 Decision 5: a market that does not trade yet is "not active", reason 3.
+        | PalwStateV2Error::ModelClassNotTrading { .. } => NOT_ACTIVE,
         PalwStateV2Error::ModelBuyReleasesNothing(_) => RELEASES_NOTHING,
         PalwStateV2Error::ModelBuyBelowFloor { .. } | PalwStateV2Error::ModelSellBelowFloor { .. } => BELOW_FLOOR,
         PalwStateV2Error::ModelMarketMissing(_) => MARKET_MISSING,
@@ -35772,6 +35972,8 @@ fn evm_refusal_reason(error: &PalwStateV2Error) -> u8 {
         PalwStateV2Error::ModelSellPaysNothing(_) => PAYS_NOTHING,
         PalwStateV2Error::ModelMarketAlreadySeeded(_) => ALREADY_SEEDED,
         PalwStateV2Error::ModelSeedTooSmall { .. } => SEED_TOO_SMALL,
+        // ADR-0162 Decision 4: raised only past the virtual fence, so no earlier byte moves.
+        PalwStateV2Error::ModelSeedAfterTrade(_) => SEED_AFTER_TRADE,
         // ADR-0089 Decision 6 (audit M-10): the fold's own payout queue is full, so this action is
         // refused with a reason and its escrow is refunded at the settling block — the Decision's
         // own mechanism, applied to the Decision's own resource.
@@ -41237,6 +41439,147 @@ pub(crate) mod tests {
             let (s7, _) = step(&s6, &p, &ctx(7, 131, 7), &[], Some(&base_env), Some(f.clone())).unwrap();
             assert!(matches!(s7.claim(&attempt_id_v2(&base_env.attempt)).unwrap().phase, PalwClaimPhaseV2::Provisional));
             assert_eq!(s7.class_shares.get(&h64(1)).copied(), Some(1000), "the base class holds the table while Kimi is held");
+        }
+
+        /// **ADR-0162 Decision 5 and I-V10 against the registry: a market TRADES only at an `Active`
+        /// lifecycle, and a seed waits for nothing.** Kimi's market is open from its registration (I-V9)
+        /// and, at `Prefetching`, takes a seed — at its opener's risk; P-B3 refused one below this fence
+        /// — and no buy. `Probation`, `ActiveLimited`, `Held` and `Candidate` admit no buy either; only
+        /// `Active` does, and the reward's buyback (Decision 6), the node's `getPalwModelMarket` gate and
+        /// the EVM window's refused set give the fold's answer at every one. A holder bought in at
+        /// `Active` and demoted to `Held` takes no new buy and always sells out.
+        #[test]
+        fn adr0162_a_market_trades_only_at_an_active_lifecycle_and_a_seed_waits_for_nothing() {
+            use crate::palw_model_market_v1::{PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2, palw_model_holder_of_pubkey_v1};
+            const MSK: u64 = 100_000_000;
+            let p = params();
+            let (_, root) = inventory();
+            let f = fold(kimi_work());
+            // The virtual fence from genesis, beside the audit fence, so P-B3's gate stands next to it.
+            let e = PalwTransitionExtrasV1 { model_virtual_v1: Some(0), audit_2026_09_23_active: true, ..extras(Some(f.clone())) };
+            let fold_at = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2]| {
+                apply_palw_transition_v2_with_extras(parent, &p, c, objects, None, false, false, false, false, &e)
+            };
+            // Past the audit fence a sell's key is its holder's (P-B4): a real key's id holds the position.
+            let seller_key = crate::config::params::PALW_T12_GENESIS_BONDS[0].bond_pubkey;
+            let who = palw_model_holder_of_pubkey_v1(seller_key);
+            let buy =
+                PalwConsensusObjectV2::ModelBuy { line_id: kimi_id(), holder: who, msk_in: 1_000 * MSK, min_units_out: 0, sink_index: 1 };
+            let seed = PalwConsensusObjectV2::ModelSeed { line_id: kimi_id(), seeder: h64(0x5EED), msk_seed: 5 * MSK, sink_index: 1 };
+
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let (s2, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(s2.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Prefetching, "the premise");
+            let opened = s2.model_market_in_force_v2(&kimi_id(), 0, &h64(1)).expect("I-V9: open from its registration");
+            assert_eq!(opened.price_sompi_per_position_v1(), PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2 / 500_000);
+            let (s3, _) = fold_at(&s2, &ctx(3, 111, 3), std::slice::from_ref(&seed)).expect("a seed waits for no approval");
+            assert_eq!(
+                s3.model_market(&kimi_id()).map(|m| (m.seed_sompi, m.virtual_sompi)),
+                Some((5 * MSK, PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2))
+            );
+            let refused = fold_at(&s3, &ctx(4, 112, 4), std::slice::from_ref(&buy));
+            assert!(
+                matches!(&refused, Err(PalwStateV2Error::ModelClassNotTrading { class, state }) if *class == kimi_id() && state == "Prefetching"),
+                "{refused:?}"
+            );
+            assert!(palw_model_market_admits_v1(&s3, &p, &e, &h64(1)).is_ok(), "the floor's class is never gated");
+            let at = |state: PalwModelLifecycleV1| {
+                let mut t = s3.clone();
+                t.model_lifecycles.get_mut(&kimi_id()).expect("Kimi has a row").state = state;
+                t
+            };
+            for (state, trades) in [
+                (PalwModelLifecycleV1::Prefetching, false),
+                (PalwModelLifecycleV1::Probation { probes_passed: 3 }, false),
+                (PalwModelLifecycleV1::ActiveLimited { stable_epochs: 1 }, false),
+                (PalwModelLifecycleV1::Held, false),
+                (PalwModelLifecycleV1::Candidate, false),
+                (PalwModelLifecycleV1::Active, true),
+            ] {
+                let t = at(state);
+                assert_eq!(fold_at(&t, &ctx(4, 112, 4), std::slice::from_ref(&buy)).is_ok(), trades, "{state:?}: the buy");
+                assert_eq!(palw_model_market_admits_v1(&t, &p, &e, &kimi_id()).is_ok(), trades, "{state:?}: the node's gate");
+                assert_eq!(!palw_evm_market_refused_classes_v1(&t, &p, &e).contains(&kimi_id()), trades, "{state:?}: the EVM window");
+                assert_eq!(
+                    PalwFoldReadV1::outside(&t, &p, &e).model_buyback_market_v2(&kimi_id()).is_some(),
+                    trades,
+                    "{state:?}: the reward buys only what a buyer could"
+                );
+                // A seed answers the same at every one of them: the market has not traded.
+                assert!(fold_at(&t, &ctx(4, 112, 4), std::slice::from_ref(&seed)).is_ok(), "{state:?}: the seed");
+            }
+            let (bought, _) = fold_at(&at(PalwModelLifecycleV1::Active), &ctx(4, 112, 4), std::slice::from_ref(&buy)).unwrap();
+            let held = bought.model_position(&kimi_id(), &who);
+            assert!(held > 0, "bought at Active");
+            let mut demoted = bought.clone();
+            demoted.model_lifecycles.get_mut(&kimi_id()).unwrap().state = PalwModelLifecycleV1::Held;
+            assert!(fold_at(&demoted, &ctx(5, 113, 5), std::slice::from_ref(&buy)).is_err(), "a held class takes no buy");
+            assert!(
+                matches!(fold_at(&demoted, &ctx(5, 113, 5), std::slice::from_ref(&seed)), Err(PalwStateV2Error::ModelSeedAfterTrade(_))),
+                "nor a seed: it has traded"
+            );
+            let sell = PalwConsensusObjectV2::ModelSell {
+                line_id: kimi_id(),
+                holder: who,
+                units_in: held,
+                min_msk_out: 0,
+                held_units: held,
+                not_after_daa: u64::MAX,
+                pubkey: seller_key.to_vec(),
+                signature: vec![1],
+            };
+            let (left, _) = fold_at(&demoted, &ctx(5, 113, 5), &[sell]).expect("a holder always sells out");
+            assert_eq!(left.model_position(&kimi_id(), &who), 0);
+            assert!(left.model_market(&kimi_id()).unwrap().closed_to_buys, "the sell's record says what the gate answers now");
+        }
+
+        /// **ADR-0162 Decision 6: past the fence the reward buys a pair that trades, from the opening
+        /// on `V` — and the floor, which has no line, buys nothing.** Kimi's claim and a floor claim,
+        /// each walked to `Final` with the fence armed: Kimi's slice buys from its market (written by
+        /// that move, the slice its whole real reserve) and its miner is named the rest; the floor's
+        /// miner is paid the whole escrow and no row appears. The registry is dormant here, so Kimi's
+        /// `Active` status is its approval.
+        #[test]
+        fn adr0162_the_reward_buys_an_approved_pair_from_its_opening_and_the_floor_buys_nothing() {
+            use crate::palw_model_market_v1::{
+                PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2, PalwModelMarketV1, palw_model_buyback_quote_v1, palw_model_buyback_slice_v1,
+            };
+            let p = params().with_worker_carve_permille(620).unwrap();
+            let (_, root) = inventory();
+            let e = PalwTransitionExtrasV1 { model_lines_active: true, model_virtual_v1: Some(0), ..extras(None) };
+            let go = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2], att: Option<&PalwAttemptEnvelopeV2>| {
+                let (state, _) = apply_palw_transition_v2_with_extras(parent, &p, c, objects, att, false, false, false, false, &e)
+                    .expect("the transition applies");
+                state.assert_internal_consistency(&p).expect("internal consistency after apply");
+                state
+            };
+            let s1 = go(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &network(root), None);
+            for (env, class, seat) in [
+                (kimi_attempt(1, root), kimi_id(), PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(22) }),
+                (attempt(40, 9), h64(1), PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(22) }),
+            ] {
+                let claim_id = attempt_id_v2(&env.attempt);
+                let s2 = go(&s1, &PalwBlockContextV2 { subsidy: 1_000_000, ..ctx(2, 101, 2) }, &[], Some(&env));
+                assert!(s2.claim_root(&claim_id).is_some(), "{class}: attributed to its line");
+                let escrow = s2.claim(&claim_id).unwrap().escrowed_reward;
+                assert!(escrow > 0, "{class}: an escrow to take a slice of");
+                let s3 = go(&s2, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: vec![seat] }], None);
+                let s4 = go(&s3, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+                let s5 = go(&s4, &ctx(5, 124, 5), &[], None);
+                assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "{class}: Final");
+                let paid = s5.pending_payouts_iter().find(|(id, _)| **id == claim_id).map(|(_, row)| row.amount);
+                if class == kimi_id() {
+                    let slice = palw_model_buyback_slice_v1(escrow);
+                    let want = palw_model_buyback_quote_v1(&PalwModelMarketV1::open_virtual_v2(100, PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2), slice)
+                        .expect("the opening takes the slice");
+                    assert_eq!(s5.model_market(&class), Some(&want.after), "the reward's buy wrote the row, from the opening");
+                    assert_eq!((want.after.msk_reserve, want.after.buyback_sompi, want.after.seed_sompi), (slice, slice, 0));
+                    assert_eq!(paid, Some(escrow - slice), "the miner is named the other ninety-five percent");
+                } else {
+                    assert_eq!(s5.model_market(&class), None, "the floor has no pair, and none was conjured");
+                    assert_eq!(paid, Some(escrow), "its miner is paid in full");
+                }
+            }
         }
 
         /// **The 2026-09-23 Position route matrix, P-B3: past the audit fence a line's market asks its
@@ -64254,6 +64597,365 @@ pub(crate) mod tests {
         }
     }
 
+    // ---- ADR-0162 — the pair opens on a virtual reserve: the fold ------------------------------
+
+    /// **ADR-0162 at the fold: I-V7, I-V9 and I-V10, the precedence over ADR-0094/0120, and the EVM
+    /// lane's refusals.** The arithmetic's invariants (I-V1..I-V8) are
+    /// `palw_model_market_v1::adr0162_virtual_reserve`; the registry's half of the trading gate and
+    /// the reward's buyback are in `adr0135` beside the lifecycle fixtures. Every test here folds the
+    /// SAME objects a pre-fence test folds, with the fence's height in the extras: everything this
+    /// module shows is the fence's doing.
+    mod model_market_virtual {
+        use super::*;
+        use crate::palw_model_market_v1::{
+            PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2, PALW_MODEL_SUPPLY_UNITS_V1, PalwModelFeesV1, PalwModelMarketV1,
+            palw_model_buy_quote_with, palw_model_sell_quote_with,
+        };
+
+        const MSK: u64 = 100_000_000;
+        const V: u64 = PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2;
+        const SUPPLY: u64 = PALW_MODEL_SUPPLY_UNITS_V1;
+        /// The fence's height here: before the class's registration at DAA 100, so the class's own
+        /// line opens at its registration (and a reader asking at a later fence sees the later one).
+        const FENCE: u64 = 50;
+
+        fn holder(v: u64) -> Hash64 {
+            Hash64::from_u64_word(0xB0_0000 + v)
+        }
+        fn seed(line: Hash64, who: Hash64, msk_seed: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelSeed { line_id: line, seeder: who, msk_seed, sink_index: 1 }
+        }
+        fn buy(line: Hash64, who: Hash64, msk_in: u64, min_units_out: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelBuy { line_id: line, holder: who, msk_in, min_units_out, sink_index: 1 }
+        }
+        fn sell_from(state: &PalwChainStateV2, line: Hash64, who: Hash64, units_in: u64, min_msk_out: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelSell {
+                line_id: line,
+                holder: who,
+                units_in,
+                min_msk_out,
+                held_units: state.model_position(&line, &who),
+                not_after_daa: u64::MAX,
+                pubkey: vec![1],
+                signature: vec![1],
+            }
+        }
+        fn paid(state: &PalwChainStateV2) -> u64 {
+            state.pending_payouts_iter().map(|(_, p)| p.amount).sum()
+        }
+
+        /// The fence in force, and nothing else armed.
+        fn armed() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { model_virtual_v1: Some(FENCE), ..Default::default() }
+        }
+
+        fn fold_with(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            e: &PalwTransitionExtrasV1,
+        ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+            let out = apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, false, false, e)?;
+            out.0.assert_internal_consistency(p).expect("internal consistency after apply");
+            Ok(out)
+        }
+
+        fn fold(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+        ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+            fold_with(parent, p, c, objects, &armed())
+        }
+
+        fn fold_ok(parent: &PalwChainStateV2, p: &PalwStateParamsV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2]) -> PalwChainStateV2 {
+            fold(parent, p, c, objects).expect("the transition applies").0
+        }
+
+        /// A model class (h64(2)) registered at DAA 100 by bond 1, to activate at DAA 200 — h64(1) is
+        /// the floor, which has no line and so no market.
+        fn registered(e: &PalwTransitionExtrasV1) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            let p = economy_params();
+            let class = h64(2);
+            let mut objects = register_class_and_bond();
+            let mut future = registration(class, 100, Some(bond_key(1)));
+            if let PalwConsensusObjectV2::ClassRegistered { activation_daa, slash_value_per_pwu, .. } = &mut future {
+                *activation_daa = 200;
+                *slash_value_per_pwu = 5;
+            }
+            objects.push(future);
+            let (s1, _) = fold_with(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, e).expect("the class registers");
+            (p, s1, class)
+        }
+
+        /// The market every surface reads for `line` past the fence.
+        fn in_force(s: &PalwChainStateV2, p: &PalwStateParamsV2, line: Hash64) -> PalwModelMarketV1 {
+            s.model_market_in_force_v2(&line, FENCE, &p.base_class_id()).expect("a registered line has a market")
+        }
+
+        /// ADR-0087 M1 and M2 with the seed and the slices: what went in is the reserve, the owner's
+        /// and contributor's legs (the row's own totals — their payout rows drain block by block), the
+        /// sellers' net legs (`sold_net`) or burned; the reserve never under the seed.
+        fn invariants(state: &PalwChainStateV2, line: Hash64, paid_in: u64, sold_net: u64) {
+            let m = state.model_market(&line).expect("a market row");
+            assert_eq!(
+                m.position_units as u128 + state.model_units_held(&line) + m.retired_units as u128,
+                SUPPLY as u128,
+                "M1"
+            );
+            assert_eq!(
+                paid_in + m.seed_sompi + m.buyback_sompi,
+                m.msk_reserve + m.registrant_paid_sompi + m.contributor_paid_sompi + sold_net + m.burned_sompi,
+                "M2"
+            );
+            assert!(m.msk_reserve >= m.seed_sompi, "I-V1");
+        }
+
+        /// **I-V9 and I-V10 at the fold, and the seed's window between them.** A class registered past
+        /// the fence has an open market from its registration — `X = V`, 500,000 positions, the first
+        /// quote 20 MSK — with no row written until something moves it. It takes no buy until the
+        /// class is `Active`; it takes a seed of any amount, in as many payments as it takes, from its
+        /// registration until its first trade, and refuses one after (`ModelSeedAfterTrade`). A sell
+        /// is paid only out of the real reserve above the locked seed.
+        #[test]
+        fn a_line_is_a_market_from_its_registration_and_trades_from_its_approval() {
+            let (p, s1, class) = registered(&armed());
+            assert!(s1.model_market(&class).is_none(), "nothing written: the opening is what every reader synthesizes");
+            let m1 = in_force(&s1, &p, class);
+            assert_eq!(m1, PalwModelMarketV1::open_virtual_v2(100, V), "open at its registration, X = V, the supply in the curve");
+            assert_eq!(m1.price_sompi_per_position_v1(), 20 * MSK, "I-V9: the first quote is V / 500,000");
+            assert_eq!(
+                s1.model_market_in_force_v2(&class, 150, &p.base_class_id()).map(|m| m.opened_daa),
+                Some(150),
+                "a line older than the fence opens at the fence"
+            );
+            // I-V10: no buy before the class is Active (reason 3 on the EVM lane).
+            assert!(
+                matches!(fold(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 1_000 * MSK, 0)]), Err(PalwStateV2Error::ModelClassNotActive(c)) if c == class),
+                "trading starts at approval"
+            );
+            // The optional seed, before approval, in two payments by two payers.
+            let (s2, d2) = fold(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), 300_000 * MSK)]).unwrap();
+            let back = revert_delta_v2(&s2, &d2, &p).expect("the seed reverts");
+            assert_eq!(back.state_root(), s1.state_root(), "a reorg of the first seed leaves no row behind");
+            let s3 = fold_ok(&s2, &p, &ctx(3, 102, 3), &[seed(class, holder(8), 200_000 * MSK)]);
+            let m3 = *s3.model_market(&class).expect("the seed wrote the row");
+            assert_eq!(
+                (m3.msk_reserve, m3.seed_sompi, m3.seed_pledged_sompi, m3.seeded_by, m3.virtual_sompi),
+                (500_000 * MSK, 500_000 * MSK, 500_000 * MSK, holder(9), V),
+                "the whole seed is real reserve and locked; the first payer is the record"
+            );
+            assert_eq!((m3.position_units, m3.sold_units, m3.burned_sompi, m3.opened_daa), (SUPPLY, 0, 0, 100));
+            assert_eq!((paid(&s3), s3.model_position(&class, &holder(9))), (0, 0), "no leg, and the seeder holds nothing");
+            assert_eq!(m3.price_floor_sompi_per_position_v2(), (V + 500_000 * MSK) / SUPPLY, "the floor rose by seed / supply");
+            assert_eq!(in_force(&s3, &p, class), m3, "once written, the row is what every reader reads");
+            invariants(&s3, class, 0, 0);
+            assert!(matches!(
+                fold(&s3, &p, &ctx(4, 103, 4), &[buy(class, holder(1), 1_000 * MSK, 0)]),
+                Err(PalwStateV2Error::ModelClassNotActive(_))
+            ));
+            // At DAA 200 the class is Active, and the market trades on the curve the seed deepened.
+            let s4 = fold_ok(&s3, &p, &ctx(4, 250, 4), &[]);
+            let q = palw_model_buy_quote_with(&m3, 100_000 * MSK, PalwModelFeesV1::V1).expect("a buy");
+            let s5 = fold_ok(&s4, &p, &ctx(5, 251, 5), &[buy(class, holder(1), 100_000 * MSK, 0)]);
+            let m5 = *s5.model_market(&class).unwrap();
+            assert_eq!(s5.model_position(&class, &holder(1)), q.units_out, "the holder holds what the curve released");
+            assert_eq!(m5.msk_reserve, 500_000 * MSK + q.fees.net, "the net leg joins the real reserve");
+            assert_eq!(paid(&s5), q.fees.registrant, "the owner's leg is paid to bond 1's payload");
+            invariants(&s5, class, 100_000 * MSK, 0);
+            // I-V7 at the fold: the market has traded, so it takes no seed.
+            assert!(
+                matches!(fold(&s5, &p, &ctx(6, 252, 6), &[seed(class, holder(9), MSK)]), Err(PalwStateV2Error::ModelSeedAfterTrade(c)) if c == class),
+                "a seed after the first trade is refused"
+            );
+            // The sell: paid out of the real reserve above the seed, and nothing more.
+            let held = s5.model_position(&class, &holder(1));
+            let sq = palw_model_sell_quote_with(&m5, held, PalwModelFeesV1::V1).expect("the sell");
+            let s6 = fold_ok(&s5, &p, &ctx(6, 252, 6), &[sell_from(&s5, class, holder(1), held, 0)]);
+            let m6 = *s6.model_market(&class).unwrap();
+            assert_eq!((m6.position_units, s6.model_position(&class, &holder(1))), (SUPPLY, 0), "every position back");
+            assert!(sq.fees.gross <= q.fees.net, "I-V2: the seller was paid nothing the buyer had not paid in");
+            assert!(m6.msk_reserve >= m6.seed_sompi && m6.msk_reserve - m6.seed_sompi < 25 * MSK, "the seed, and dust above it");
+            invariants(&s6, class, 100_000 * MSK, sq.fees.net);
+        }
+
+        /// **ADR-0162 Decision 1's edges: the floor has no market, and a founded line opens at its
+        /// founding.** The floor class has no line (`ModelLineOnFloor`, ADR-0088), so the fence opens
+        /// nothing for it; a line founded past the fence is a market from the block that founds it.
+        #[test]
+        fn the_floor_has_no_market_and_a_founded_line_opens_at_its_founding() {
+            let lines = PalwTransitionExtrasV1 { model_lines_active: true, ..armed() };
+            let (p, s1, class) = registered(&lines);
+            let floor = p.base_class_id();
+            assert_eq!(s1.model_market_in_force_v2(&floor, FENCE, &floor), None, "the floor is opened by nothing");
+            for object in [buy(floor, holder(1), 1_000 * MSK, 0), seed(floor, holder(9), 1_000 * MSK)] {
+                assert!(
+                    matches!(fold_with(&s1, &p, &ctx(2, 101, 2), &[object], &lines), Err(PalwStateV2Error::ModelLineOnFloor)),
+                    "a move on the floor's line is refused"
+                );
+            }
+            let s2 = fold_with(&s1, &p, &ctx(2, 250, 2), &[], &lines).unwrap().0;
+            let found = PalwConsensusObjectV2::ModelLineFounded {
+                class_id: class,
+                name: b"virtual-line".to_vec(),
+                founder: bond_key(1),
+                root: h64(0xBEEF),
+                signature: Vec::new(),
+            };
+            let s3 = fold_with(&s2, &p, &ctx(3, 251, 3), &[found], &lines).expect("the line is founded").0;
+            let line = crate::palw_model_lines_v1::model_line_id_v1(&class, &bond_key(1), b"virtual-line");
+            let m = s3.model_market_in_force_v2(&line, FENCE, &floor).expect("a founded line has a market");
+            assert_eq!(m, PalwModelMarketV1::open_virtual_v2(251, V), "open from the block that founded it");
+            let s4 = fold_with(&s3, &p, &ctx(4, 252, 4), &[buy(line, holder(1), 1_000 * MSK, 0)], &lines).expect("it trades").0;
+            assert_eq!(
+                s4.model_position(&line, &holder(1)),
+                palw_model_buy_quote_with(&m, 1_000 * MSK, PalwModelFeesV1::V1).unwrap().units_out
+            );
+        }
+
+        /// **ADR-0162 Decision 3: a pledge still collecting ADR-0094's floor when the fence crosses
+        /// opens on the virtual reserve, with the whole pledge as its seed** — every sompi of it was
+        /// locked in the line's sink already. ADR-0120's floor is moot past the fence (the least seed
+        /// is zero), and the pledge takes further seeds until the first trade.
+        #[test]
+        fn a_pledge_collecting_its_floor_opens_on_the_virtual_reserve_with_the_pledge_as_its_seed() {
+            let before = PalwTransitionExtrasV1 { model_benefits_active: true, model_seed_v2_active: true, ..Default::default() };
+            let past = PalwTransitionExtrasV1 { model_virtual_v1: Some(FENCE), ..before.clone() };
+            let (p, s1, class) = registered(&before);
+            let (s2, _) = fold_with(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), 250_000 * MSK)], &before).unwrap();
+            let pledge = *s2.model_market(&class).unwrap();
+            assert!(!pledge.is_open(), "the premise: under ADR-0120's floor, a pledge and no market");
+            let opened = in_force(&s2, &p, class);
+            assert_eq!(
+                (opened.msk_reserve, opened.seed_sompi, opened.seeded_by, opened.virtual_sompi, opened.position_units),
+                (250_000 * MSK, 250_000 * MSK, holder(9), V, SUPPLY),
+                "past the fence the pledge is the seed of a market on V"
+            );
+            assert_eq!(opened.price_sompi_per_position_v1(), (V + 250_000 * MSK) / SUPPLY);
+            // A further payment before the first trade deepens it; ADR-0120's million is not asked.
+            let (s3, _) = fold_with(&s2, &p, &ctx(3, 102, 3), &[seed(class, holder(7), 3 * MSK)], &past).unwrap();
+            let m3 = *s3.model_market(&class).unwrap();
+            assert_eq!((m3.seed_sompi, m3.seeded_by, m3.virtual_sompi), (250_003 * MSK, holder(9), V));
+            let (s4, _) = fold_with(&s3, &p, &ctx(4, 250, 4), &[], &past).unwrap();
+            let (s5, _) = fold_with(&s4, &p, &ctx(5, 251, 5), &[buy(class, holder(1), 10_000 * MSK, 0)], &past).unwrap();
+            assert_eq!(
+                s5.model_position(&class, &holder(1)),
+                palw_model_buy_quote_with(&m3, 10_000 * MSK, PalwModelFeesV1::V1).unwrap().units_out,
+                "it trades on V + the pledge"
+            );
+            invariants(&s5, class, 10_000 * MSK, 0);
+        }
+
+        /// **Pre-fence markets keep `V = 0`: a pair seeded under ADR-0120's floor before the fence
+        /// folds after it exactly as it would have without the fence** — the same buy, the same sell,
+        /// on the same parent, to the same state root. Only a seed is answered differently, and only by
+        /// its reason: `ModelMarketAlreadySeeded` below the fence, `ModelSeedAfterTrade` past it.
+        #[test]
+        fn a_market_seeded_before_the_fence_folds_after_it_exactly_as_before() {
+            let before = PalwTransitionExtrasV1 { model_benefits_active: true, model_seed_v2_active: true, ..Default::default() };
+            let past = PalwTransitionExtrasV1 { model_virtual_v1: Some(FENCE), ..before.clone() };
+            let (p, s1, class) = registered(&before);
+            let seed_v2 = crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V2;
+            let (s2, _) = fold_with(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), seed_v2)], &before).unwrap();
+            let m2 = *s2.model_market(&class).unwrap();
+            assert!(m2.is_open() && m2.virtual_sompi == 0, "an ADR-0090 pair, opened before the fence");
+            assert_eq!(in_force(&s2, &p, class), m2, "past the fence it is read as it is");
+            let (s3, _) = fold_with(&s2, &p, &ctx(3, 250, 3), &[], &before).unwrap();
+            let moves: [&dyn Fn(&PalwChainStateV2) -> Vec<PalwConsensusObjectV2>; 3] = [
+                &|_| vec![buy(class, holder(1), 20_000 * MSK, 0)],
+                &|_| vec![buy(class, holder(2), 777 * MSK, 0)],
+                &|s| vec![sell_from(s, class, holder(1), s.model_position(&class, &holder(1)) / 2, 0)],
+            ];
+            let mut state = s3;
+            for (n, objects) in moves.iter().enumerate() {
+                let objects = objects(&state);
+                let c = ctx(4 + n as u64, 251 + n as u64, 4 + n as u64);
+                let (below_state, _) = fold_with(&state, &p, &c, &objects, &before).expect("below the fence");
+                let (past_state, _) = fold_with(&state, &p, &c, &objects, &past).expect("past the fence");
+                assert_eq!(past_state.state_root(), below_state.state_root(), "move {n}: one state root on both sides");
+                assert_eq!(past_state.model_market(&class), below_state.model_market(&class), "move {n}");
+                state = past_state;
+            }
+            assert!(matches!(
+                fold_with(&state, &p, &ctx(9, 260, 9), &[seed(class, holder(9), MSK)], &before),
+                Err(PalwStateV2Error::ModelMarketAlreadySeeded(_))
+            ));
+            assert!(matches!(
+                fold_with(&state, &p, &ctx(9, 260, 9), &[seed(class, holder(9), MSK)], &past),
+                Err(PalwStateV2Error::ModelSeedAfterTrade(_))
+            ));
+        }
+
+        /// **The EVM lane keeps the carrier lane's rules past the fence**: a seed before approval is
+        /// filled (the market exists from registration), a buy before approval is `Refused` with reason
+        /// 3 (`NOT_ACTIVE`) and its escrow refunded, a buy at approval fills on the curve over `V`, and a
+        /// seed after that trade is `Refused` with the new reason 14 (`SEED_AFTER_TRADE`), its escrow
+        /// refunded like every refusal's.
+        #[test]
+        fn on_the_evm_lane_a_buy_waits_for_approval_and_a_late_seed_is_refused_and_refunded() {
+            use crate::evm::model_market::{PalwEvmMarketActionKindV1, PalwEvmMarketActionV1, PalwEvmSettlementOutcomeV1, refusal};
+            let evm = |actions: Vec<PalwEvmMarketActionV1>| PalwTransitionExtrasV1 {
+                model_lines_active: true,
+                evm_market_active: true,
+                evm_actions: actions,
+                ..armed()
+            };
+            let account = crate::evm::EvmAddress::from_bytes([0x11; 20]);
+            let action = |seq: u32, kind: PalwEvmMarketActionKindV1, line: Hash64, gross: u64| PalwEvmMarketActionV1 {
+                seq,
+                account,
+                line_id: line,
+                kind,
+                gross_sompi: gross,
+            };
+            let (p, s1, class) = registered(&evm(vec![]));
+            let (s2, _) = fold_with(
+                &s1,
+                &p,
+                &ctx(2, 101, 2),
+                &[],
+                &evm(vec![
+                    action(0, PalwEvmMarketActionKindV1::Seed, class, 40_000 * MSK),
+                    action(1, PalwEvmMarketActionKindV1::Buy { min_units_out: 0 }, class, 1_000 * MSK),
+                ]),
+            )
+            .unwrap();
+            let st = s2.evm_settlements();
+            assert!(matches!(st[0].outcome, PalwEvmSettlementOutcomeV1::Filled { units: 0, .. }), "{:?}", st[0]);
+            assert!(matches!(st[1].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::NOT_ACTIVE }), "{:?}", st[1]);
+            assert_eq!(st[1].escrow_sompi, 1_000 * MSK, "the refused buy's escrow is refunded");
+            assert_eq!(s2.model_market(&class).map(|m| (m.seed_sompi, m.virtual_sompi)), Some((40_000 * MSK, V)));
+            let (s3, _) = fold_with(&s2, &p, &ctx(3, 250, 3), &[], &evm(vec![])).unwrap();
+            let (s4, _) = fold_with(
+                &s3,
+                &p,
+                &ctx(4, 251, 4),
+                &[],
+                &evm(vec![
+                    action(0, PalwEvmMarketActionKindV1::Buy { min_units_out: 0 }, class, 1_000 * MSK),
+                    action(1, PalwEvmMarketActionKindV1::Seed, class, 5 * MSK),
+                ]),
+            )
+            .unwrap();
+            let st = s4.evm_settlements();
+            let want = palw_model_buy_quote_with(s3.model_market(&class).unwrap(), 1_000 * MSK, PalwModelFeesV1::V1).unwrap();
+            assert!(
+                matches!(st[0].outcome, PalwEvmSettlementOutcomeV1::Filled { units, .. } if units == want.units_out),
+                "{:?}",
+                st[0]
+            );
+            assert!(
+                matches!(st[1].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::SEED_AFTER_TRADE }),
+                "{:?}",
+                st[1]
+            );
+            assert_eq!(st[1].escrow_sompi, 5 * MSK, "and its escrow is refunded");
+            assert_eq!(refusal::SEED_AFTER_TRADE, 14);
+        }
+    }
+
     // ---- ADR-0095 — the membership: N1–N12 at the fold ---------------------------------------
     mod model_benefits {
         use super::*;
@@ -65752,6 +66454,7 @@ pub(crate) mod tests {
                 evm_market_active: true,
                 model_leg_v2_active: false,
                 model_seed_v2_active: false,
+                model_virtual_v1: None,
                 evm_actions: actions,
                 carrier_market_refunds: Vec::new(),
                 model_registry: None,
@@ -66004,6 +66707,7 @@ pub(crate) mod tests {
                 evm_market_active: false,
                 model_leg_v2_active: false,
                 model_seed_v2_active: false,
+                model_virtual_v1: None,
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
                 carrier_market_refunds: Vec::new(),
                 model_registry: None,

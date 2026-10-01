@@ -412,6 +412,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_model_leg_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0120: `Params::palw_model_seed_v2_fence` — the one-million-MSK floor's height.
     pub(super) palw_model_seed_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0162: `Params::palw_model_virtual_v1_fence` — the height every line's market opens on the
+    /// virtual reserve from. `None` on every preset.
+    pub(super) palw_model_virtual_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0124 Decisions 1–5: `Params::palw_panel_economy_fence` — the panel economy's height.
     /// Resolved at the BLOCK's DAA for the fold and the receipt door, and at the claim's ANCHOR
     /// for the draw (the panel is a pure function of the claim).
@@ -1088,6 +1091,7 @@ impl VirtualStateProcessor {
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),
             palw_model_seed_v2: params.palw_model_seed_v2_fence(),
+            palw_model_virtual_v1: params.palw_model_virtual_v1_fence(),
             palw_panel_economy: params.palw_panel_economy_fence(),
             palw_work_priced_reward: params.palw_work_priced_reward_fence(),
             palw_execution_lane: params.palw_execution_lane_fence(),
@@ -5900,7 +5904,9 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> kaspa_consensus_core::evm::model_market::PalwEvmViewV1 {
         let mut view = state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, params.base_class_id());
-        if self.palw_audit_2026_09_23_at(daa_score) {
+        // ADR-0162: past the virtual fence the set is the classes whose market does not trade, and it
+        // is filled there too (the writer reverts a buy on one at the call).
+        if self.palw_audit_2026_09_23_at(daa_score) || self.palw_model_virtual_v1_from_at(daa_score).is_some() {
             let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
                 block: selected_parent,
                 daa_score,
@@ -12578,6 +12584,12 @@ impl VirtualStateProcessor {
         self.palw_model_seed_v2.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// ADR-0162, resolved at the BLOCK's own DAA like every other fence — as the height it came into
+    /// force at, where it is in force there (`PalwTransitionExtrasV1::model_virtual_v1`).
+    pub(super) fn palw_model_virtual_v1_from_at(&self, daa_score: u64) -> Option<u64> {
+        self.palw_model_virtual_v1.filter(|fence| fence.is_active(daa_score)).map(|fence| fence.daa_score())
+    }
+
     /// ADR-0124 Decisions 1–5, resolved at one DAA — the BLOCK's for the fold and the receipt
     /// door, the claim's ANCHOR for the draw.
     pub(super) fn palw_panel_economy_active_at(&self, daa_score: u64) -> bool {
@@ -12905,6 +12917,7 @@ impl VirtualStateProcessor {
             leg_v2_active: self.palw_model_leg_v2_active_at(daa_score),
             seed_v2_active: self.palw_model_seed_v2_active_at(daa_score),
             audit_2026_09_23_active: self.palw_audit_2026_09_23_at(daa_score),
+            virtual_v1_from: self.palw_model_virtual_v1_from_at(daa_score),
         }
     }
 
@@ -12935,6 +12948,8 @@ impl VirtualStateProcessor {
             model_leg_v2_active: self.palw_model_leg_v2_active_at(daa_score),
             // And this one decides which payment opens a market (ADR-0120).
             model_seed_v2_active: self.palw_model_seed_v2_active_at(daa_score),
+            // And this one opens every line's market on the virtual reserve (ADR-0162).
+            model_virtual_v1: self.palw_model_virtual_v1_from_at(daa_score),
             // Written explicitly, never left to `..Default::default()`: an unwritten default inside
             // a struct the fold reads is the one fault no golden can see, and this field decides
             // whether a producer's collateral is destroyed.
