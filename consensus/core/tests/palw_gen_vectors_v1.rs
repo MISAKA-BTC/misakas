@@ -529,6 +529,9 @@ fn claim_job_of(c: &Value) -> PipelineJob {
             .map(|i| JobImageV1 { h: i["h"].as_u64().unwrap() as u32, w: i["w"].as_u64().unwrap() as u32, rgb: hexv(&i["rgb_hex"]) })
             .collect(),
         generated: vec![],
+        // RFC-0004's token sources (an evaluation pipeline's key and finalized outputs): a corpus tensor class reads none.
+        key: vec![],
+        finalized: Default::default(),
     }
 }
 
