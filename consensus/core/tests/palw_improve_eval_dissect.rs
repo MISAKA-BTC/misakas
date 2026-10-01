@@ -220,13 +220,25 @@ fn the_root_claim_is_admitted_at_the_named_leaf_and_the_fold_derives_the_same_si
 
     // The claim is exactly the closure: a value the dissection never reads is refused, and so is a claim missing one.
     let r = root.elements.iter().position(|l| !l.is_empty()).unwrap();
-    let unread = (0..site.counts[r] as u32).find(|e| !root.elements[r].contains(e)).expect("an element the tile does not read");
-    let mut more = root.clone();
-    let at = more.elements[r].partition_point(|e| *e < unread);
-    more.elements[r].insert(at, unread);
-    more.totals.partials[r].insert(at, root.totals.partials[r][0]);
-    let extra = check_eval_root_claim_v1(&more, &facts, c.leaf, &LIMITS);
-    assert!(matches!(&extra, Err(why) if why.contains("never reads")), "{extra:?}");
+    // A reduction whose tile leaves some element unread (the small decoder's may read them all).
+    let unread_in = (0..root.elements.len()).find_map(|k| {
+        (!root.elements[k].is_empty())
+            .then(|| (0..site.counts[k] as u32).find(|e| !root.elements[k].contains(e)).map(|e| (k, e)))
+            .flatten()
+    });
+    if let Some((k, unread)) = unread_in {
+        let mut more = root.clone();
+        let at = more.elements[k].partition_point(|e| *e < unread);
+        more.elements[k].insert(at, unread);
+        more.totals.partials[k].insert(at, root.totals.partials[k][0]);
+        let extra = check_eval_root_claim_v1(&more, &facts, c.leaf, &LIMITS);
+        assert!(matches!(&extra, Err(why) if why.contains("never reads")), "{extra:?}");
+        assert_ne!(
+            palw_eval_root_claim_message_v1(&Hash64::from_bytes([5; 64]), &root),
+            palw_eval_root_claim_message_v1(&Hash64::from_bytes([5; 64]), &more),
+            "the claim"
+        );
+    }
     let mut fewer = root.clone();
     fewer.elements[r].remove(0);
     fewer.totals.partials[r].remove(0);
@@ -275,7 +287,6 @@ fn the_root_claim_is_admitted_at_the_named_leaf_and_the_fold_derives_the_same_si
     );
     let message = palw_eval_root_claim_message_v1(&session, &root);
     assert_ne!(message, palw_eval_root_claim_message_v1(&Hash64::from_bytes([6; 64]), &root), "the session");
-    assert_ne!(message, palw_eval_root_claim_message_v1(&session, &more), "the claim");
 }
 
 #[test]

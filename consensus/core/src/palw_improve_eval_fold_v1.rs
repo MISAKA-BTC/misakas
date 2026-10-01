@@ -2781,6 +2781,11 @@ mod tests {
     const LIMITS: misaka_palw_tir::demand::DemandLimits =
         misaka_palw_tir::demand::DemandLimits { max_elements: 1 << 20, max_terms: 1 << 24 };
 
+    /// The params the court tests fold accusations under: the IR fence in force (a one-move accusation is an IR object).
+    fn court_params() -> PalwStateParamsV2 {
+        params().with_tir_from_daa(Some(0))
+    }
+
     /// The ruleset's court the acceptance layer judges at (its default ceilings).
     fn court() -> crate::palw_mode_v2::PalwCourtParamsV2 {
         crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 26, 20, 2).expect("a court")
@@ -2872,7 +2877,7 @@ mod tests {
     /// honest claim of another job is untouched, and a false accusation of an honest claim is charged to its accuser.
     #[test]
     fn a_planted_lie_in_the_tree_is_convicted_voided_and_slashed_and_an_honest_claim_survives() {
-        let p = params();
+        let p = court_params();
         let s = with_real_roots(evaluating());
         let honest_probe = claim_run(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xB0, vec![3, 5, 0], None, Lie::None);
         let last = honest_probe.execution.space.stages[0].leaves().len() - 1;
@@ -2931,7 +2936,7 @@ mod tests {
         assert!(s3.improvement_eval_row_pending_v1(bystander_job), "an honest claim of another job is live");
         assert!(s3.improvement_result(&h(LINE), 1, 0, &PalwEvalSubjectV1::Parent).is_none(), "no score was recorded");
         // The job is free: another executor takes it.
-        let retake = claim(&s3, 0, PalwEvalSubjectV1::Parent, BOB, 0xB3);
+        let retake = claim_with(&s3, 0, PalwEvalSubjectV1::Parent, BOB, 0xB3, vec![3, 5, 0], None);
         assert_eq!(fold_one(&s3, &p, 1_700, &retake), Ok(()), "the convicted claim's job is re-taken");
         // A second conviction of the same claim is no second charge.
         assert!(matches!(fold_one(&s3, &p, 1_700, &guilty), Err(PalwStateV2Error::WrongPhase { .. })), "a claim already voided");
@@ -2941,7 +2946,7 @@ mod tests {
     /// not the lane FP Job V4's rules select from the committed logits row it was read from.
     #[test]
     fn a_wrong_generated_id_is_a_wrong_decode_and_is_convicted() {
-        let p = params();
+        let p = court_params();
         let s = with_real_roots(evaluating());
         let honest = claim_run(&s, 2, PalwEvalSubjectV1::Parent, CAROL, 0xB4, vec![3, 5, 2], None, Lie::None);
         let lying = claim_run(&s, 2, PalwEvalSubjectV1::Parent, CAROL, 0xB5, vec![3, 5, 2], None, Lie::Id { t: 1 });
@@ -2978,7 +2983,7 @@ mod tests {
     /// it is recorded, and the honest re-claim records the right one.
     #[test]
     fn a_wrong_score_at_an_item_is_convicted_and_its_score_never_reaches_the_sign_test() {
-        let p = params();
+        let p = court_params();
         let (s, entries, leaves) = evaluating_with_suite();
         let s = with_real_roots(s);
         let drawn: Vec<(u32, u32)> = (8..12u32)
@@ -3066,7 +3071,7 @@ mod tests {
     /// this claim's; a claim already `Final` is beyond the court.
     #[test]
     fn an_evaluation_accusation_is_refused_below_the_fence_on_another_kind_of_claim_and_on_another_claim() {
-        let p = params();
+        let p = court_params();
         let s = with_real_roots(evaluating());
         let a =
             claim_run(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xC0, vec![3, 5, 0], None, Lie::Leaf { stage: 0, index: 3, delta: 1 });
@@ -3081,7 +3086,7 @@ mod tests {
         assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty);
 
         // Below the fence: refused by name, whatever it proves.
-        let below = params().with_improve_from_daa(None);
+        let below = court_params().with_improve_from_daa(None);
         assert!(matches!(
             fold_one(&s1, &below, 1_650, &guilty),
             Err(PalwStateV2Error::ImprovementObjectRefused { object: "an evaluation court move", .. })
@@ -3258,7 +3263,7 @@ mod tests {
         const FORM: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
         let (_subject, tokens) = use_golden_subject();
         let prompt: Vec<u32> = tokens.iter().take(3).copied().collect();
-        let p = params();
+        let p = court_params();
         let base = with_real_roots(evaluating());
         test_disclosure::set(h(LINE), 1, 0, prompt.clone(), None);
         let run = claim_run(&base, 0, PalwEvalSubjectV1::Parent, CAROL, 0xE0, prompt.clone(), None, Lie::None);
