@@ -908,6 +908,12 @@ response is better / the second-shown is) and the judge's logit scale.
 - **Missing parts.** A judged score with a part unclaimed or not final is missing: it counts for the incumbent
   (§17.9.1). A claim's reading needs final generations, so an item with no final generation of the subject
   (or, for Pairwise, the parent) has no judged score.
+- **A reversed generation** [decision, 2026-10-01, E-C6]. The parts read FINAL generations, and the score is combined
+  only while those generations still are what the parts read: each is a held `Final` claim and every part was accepted
+  at or after the newest of them was final. A generation convicted after `Final` (§17.8.6) takes the judged scores
+  recorded over it out of the epoch, and the parts that had read it and finalize later record nothing — whether the
+  generation is claimed anew or not. Their executors were honest and are paid their fee; the item is missing for the
+  incumbent (a part, once final, is not claimed again).
 
 ### 17.8.6 The evaluation court (A6) [coordinator's priority addition, 2026-09-30]
 

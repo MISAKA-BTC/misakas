@@ -754,7 +754,10 @@ impl TransitionBuilder<'_> {
 
     /// **A judged score, once all its parts are final** (spec 17 §17.8.5): the policy's stage parameters and the
     /// parts' committed log-likelihoods combined ([`palw_improve_judged_score_v1`]). `None` while a part is missing
-    /// or not yet final.
+    /// or not yet final — and when a generation the parts read is no longer what they read (spec 17 §17.8.6: a
+    /// generation convicted after `Final` and perhaps claimed anew): each generation must still be a held FINAL claim,
+    /// and every part must have been accepted at or after the newest of them was final, so a part that read a
+    /// reversed generation records nothing and the item is missing for the incumbent.
     fn improvement_eval_judged_score_v1(
         &self,
         line_id: &Hash64,
@@ -765,6 +768,20 @@ impl TransitionBuilder<'_> {
     ) -> Option<i64> {
         let policy = self.state.improvement_policy(line_id)?;
         let params = palw_improve_eval_stage_params_of_v1(policy, kind)?;
+        let generation_final_daa = |of: &PalwEvalSubjectV1| -> Option<u64> {
+            let claim = self.state.improvement_eval_job(line_id, epoch, item, of, PalwScoringKindV1::ExactMatch, 0)?.claim?;
+            self.state.improvement_eval_claim_held_v1(&claim.claim_id).then_some(claim.final_daa).flatten()
+        };
+        let mut newest = generation_final_daa(subject)?;
+        if kind == PalwScoringKindV1::Pairwise {
+            newest = newest.max(generation_final_daa(&PalwEvalSubjectV1::Parent)?);
+        }
+        for part in 0..palw_improve_scoring_parts_v1(kind) {
+            let accepted = self.state.improvement_eval_job(line_id, epoch, item, subject, kind, part)?.claim?.accepted_daa;
+            if accepted < newest {
+                return None;
+            }
+        }
         let parts: Option<Vec<i64>> = (0..palw_improve_scoring_parts_v1(kind))
             .map(|part| {
                 self.state.improvement_eval_job(line_id, epoch, item, subject, kind, part).and_then(palw_improve_eval_score_v1)
@@ -2566,6 +2583,56 @@ mod tests {
         let sum = (v[0] as i128 - v[1] as i128) - (v[2] as i128 - v[3] as i128);
         assert_eq!(pairwise_of(&s8), Some(if sum > 0 { 1 } else { -1 }), "the sum of the two margins, a tie to the incumbent");
         assert_ne!(pairwise_of(&s8), Some(0), "a pairwise outcome is +1 or −1: there is no tie");
+    }
+
+    /// **A judged part that read a generation later reversed records no score** (spec 17 §17.8.6, E-C6): a judge reads
+    /// FINAL generations, and a generation convicted after `Final` is no longer what its parts read — whether it is
+    /// claimed anew or not, the judged score is missing and the item counts for the incumbent.
+    #[test]
+    fn a_judged_part_that_read_a_generation_later_reversed_records_no_score() {
+        let p = params();
+        let s = evaluating_judged();
+        let parent_claim = claim(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xA0);
+        let parent_gen = generated_of(&parent_claim);
+        let jt = judge_template();
+        let (s1, _) = at(&s, &p, 1_600, |b| apply_object(b, &ctx(1_600), &parent_claim).unwrap());
+        // The generation is licensed and finalized by the lane's own funnel, so it is a real `Final` claim.
+        let finalize = |s: &PalwChainStateV2, id: Hash64, daa: u64| {
+            let licensed =
+                PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: daa - 1 }, ..s.claims[&id].clone() };
+            at(s, &p, daa, |b| {
+                b.write_claim(id, Some(licensed.clone()));
+                b.finalize_claim(id, &licensed, daa).expect("the claim finalizes");
+            })
+            .0
+        };
+        let s2 = finalize(&s1, h(0xA0), 1_650);
+        let a = judged_part(0, PalwEvalSubjectV1::Parent, PalwScoringKindV1::Judge, 0, &jt, &[&parent_gen], ALICE, 0xB1);
+        let b = judged_part(0, PalwEvalSubjectV1::Parent, PalwScoringKindV1::Judge, 1, &jt, &[&parent_gen], ALICE, 0xB2);
+        let (s3, _) = at(&s2, &p, 1_660, |bld| {
+            apply_object(bld, &ctx(1_660), &a).expect("part 0");
+            apply_object(bld, &ctx(1_660), &b).expect("part 1");
+        });
+        let judged = |s: &PalwChainStateV2| {
+            s.improvement_result(&h(LINE), 1, 0, &PalwEvalSubjectV1::Parent)
+                .is_some_and(|r| r.scores.iter().any(|score| score.kind == PalwScoringKindV1::Judge))
+        };
+        // Control: parts that read a generation that stands record their score.
+        assert!(judged(&finalize_all(&finalize_all(&s3, &p, 1_700, &[h(0xB1)]), &p, 1_701, &[h(0xB2)])), "the generation stands");
+
+        // The generation is convicted after Final: the parts are accepted, and finalize, but record nothing.
+        let (s4, _) = at(&s3, &p, 1_670, |bld| {
+            bld.reverse_convicted_final(&ctx(1_670), h(0xA0), PalwVoidReasonV2::CourtFraud).expect("reversed")
+        });
+        assert!(matches!(s4.claims[&h(0xA0)].phase, PalwClaimPhaseV2::Voided { .. }));
+        let s5 = finalize_all(&finalize_all(&s4, &p, 1_700, &[h(0xB1)]), &p, 1_701, &[h(0xB2)]);
+        assert!(!judged(&s5), "a part that read a reversed generation records no judged score");
+        // …and when the generation is claimed anew and finalized, the old parts are still stale: they read the old one.
+        let retake = claim(&s4, 0, PalwEvalSubjectV1::Parent, BOB, 0xA9);
+        let (s6, _) = at(&s4, &p, 1_680, |bld| apply_object(bld, &ctx(1_680), &retake).expect("the freed job is re-taken"));
+        let s7 = finalize(&s6, h(0xA9), 1_690);
+        let s8 = finalize_all(&finalize_all(&s7, &p, 1_700, &[h(0xB1)]), &p, 1_701, &[h(0xB2)]);
+        assert!(!judged(&s8), "the parts were accepted before the new generation was final: stale");
     }
 
     // ---- panels: seat pay, the class's replay room, and the swing lock ------------------------------------------
