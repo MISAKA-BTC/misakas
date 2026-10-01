@@ -71618,6 +71618,9 @@ pub(crate) mod tests {
                     || code.starts_with("pub fn window_challenge_at(")
                     || ((release_start..=release_end).contains(&n) && code.contains("window_challenge_at(licensed_daa) / 2"))
                     || code.contains("window_challenge_at(final_daa)")
+                    // Λ (RFC-0004 §13): the window a policy's epoch is held to at its application, a bound on windows and
+                    // never a Final floor — nothing is held back by it.
+                    || code.contains("palw_improvement_claim_lifecycle_v1(base, self.window_challenge_at(daa))")
                     || code.contains("window_challenge_at(ctx.daa_score)");
                 assert!(allowed, "line {}: a Final floor computed outside palw_claim_final_floor_v1: {code}", n + 1);
             }
