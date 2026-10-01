@@ -20,5 +20,10 @@
 //! root workspace depends on this crate or sees its dependencies.
 
 pub mod device;
+pub mod kernels;
+pub mod tensor;
+pub mod wgsl;
 
 pub use device::{DeviceError, GpuDevice};
+pub use kernels::{DeviceFailure, Recorder, Unsupported};
+pub use tensor::{DevTensor, Form};

@@ -44,6 +44,7 @@ pub struct GpuDevice {
     pub info: wgpu::AdapterInfo,
     pub limits: wgpu::Limits,
     pipelines: Mutex<HashMap<String, Arc<wgpu::ComputePipeline>>>,
+    layouts: Mutex<HashMap<usize, Arc<wgpu::BindGroupLayout>>>,
 }
 
 impl GpuDevice {
@@ -70,7 +71,7 @@ impl GpuDevice {
             trace: Default::default(),
         }))
         .map_err(|e| DeviceError::Request(e.to_string()))?;
-        Ok(GpuDevice { device, queue, info, limits, pipelines: Mutex::new(HashMap::new()) })
+        Ok(GpuDevice { device, queue, info, limits, pipelines: Mutex::new(HashMap::new()), layouts: Mutex::new(HashMap::new()) })
     }
 
     /// One line naming the device (benchmarks, test logs).
@@ -78,22 +79,56 @@ impl GpuDevice {
         format!("{} ({:?}, {:?})", self.info.name, self.info.backend, self.info.device_type)
     }
 
-    /// The compute pipeline of a WGSL source (entry point `main`), compiled on first use.
+    /// The bind group layout of a kernel with `n_ops` operands: `0` the parameter words (read),
+    /// `1` the output and `2` the status words (read-write), then the operands (read). Explicit, so
+    /// that a kernel may declare a binding it does not touch (a `fail` it never calls).
+    pub fn layout(&self, n_ops: usize) -> Arc<wgpu::BindGroupLayout> {
+        let mut layouts = self.layouts.lock().unwrap_or_else(|p| p.into_inner());
+        Arc::clone(layouts.entry(n_ops).or_insert_with(|| {
+            let entry = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            };
+            let mut entries = vec![entry(0, true), entry(1, false), entry(2, false)];
+            entries.extend((0..n_ops).map(|k| entry(3 + k as u32, true)));
+            Arc::new(
+                self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("palw-tir-gpu kernel"),
+                    entries: &entries,
+                }),
+            )
+        }))
+    }
+
+    /// The compute pipeline of a WGSL source (entry point `main`) with `n_ops` operands, compiled on
+    /// first use.
     ///
     /// A source that fails to compile is a defect of this crate, not of the program being run, so
     /// it panics with the compiler's message: every source this crate generates is compiled by the
     /// conformance suite.
-    pub fn pipeline(&self, src: &str) -> Arc<wgpu::ComputePipeline> {
+    pub fn pipeline(&self, src: &str, n_ops: usize) -> Arc<wgpu::ComputePipeline> {
         if let Some(p) = self.pipelines.lock().unwrap_or_else(|p| p.into_inner()).get(src) {
             return Arc::clone(p);
         }
+        let layout = self.layout(n_ops);
+        let pl = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("palw-tir-gpu kernel"),
+            bind_group_layouts: &[Some(&*layout)],
+            immediate_size: 0,
+        });
         let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("palw-tir-gpu kernel"),
             source: wgpu::ShaderSource::Wgsl(src.into()),
         });
         let pipeline = Arc::new(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("palw-tir-gpu kernel"),
-            layout: None,
+            layout: Some(&pl),
             module: &module,
             entry_point: Some("main"),
             compilation_options: Default::default(),
