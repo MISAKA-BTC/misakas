@@ -613,6 +613,7 @@ fn the_proofs_take_the_reserved_tags_and_a_close_is_priced_by_its_own_bytes() {
         assert_eq!(bytes[0], *tag, "spec 17 §17.0: the evaluation court's proofs are 13, 14 and 15");
         assert_eq!(&borsh::from_slice::<PalwCourtVerdictProofV2>(&bytes).unwrap(), proof, "the object round-trips");
         assert!(proof.is_eval_v1() && !proof.is_gen_v1() && !proof.is_tir_v1(), "an evaluation proof is none of the others");
+        assert_eq!(proof.is_dissection_bottom_v1(), *tag == 15, "only the evaluation dissection's bottom is a dissection's bottom");
         assert_eq!(proof.eval_binding_v1(), Some(&claim.binding), "it carries the claim's binding");
         assert_eq!(check_close_cost_v2(proof, &court), Ok(()), "a close of a small program is within the ceiling");
     }

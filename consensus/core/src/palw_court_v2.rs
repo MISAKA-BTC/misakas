@@ -528,14 +528,18 @@ pub enum PalwCourtVerdictProofV2 {
 
 impl PalwCourtVerdictProofV2 {
     /// **Is this proof a dissection's BOTTOM** — the close that ends a history dissection (ADR-0082's
-    /// attention, RFC-0002 F7's IR, RFC-0003's generative one)? Such a verdict proves the producer's own
-    /// disclosure false, not the execution the seats replayed, so past `palw_offence_attribution` the claim
-    /// it voids is recorded `CourtHeldVerdict` and not `CourtFraud` (ADR-0152 §4-ter F3, decision (B);
+    /// attention, RFC-0002 F7's IR, RFC-0003's generative one, RFC-0004's evaluation one)? Such a verdict proves
+    /// the producer's own disclosure false, not the execution the seats replayed, so past
+    /// `palw_offence_attribution` the claim it voids is recorded `CourtHeldVerdict` and not `CourtFraud`
+    /// (ADR-0152 §4-ter F3, decision (B);
     /// [`crate::palw_state_v2::palw_court_verdict_void_reason_v1`]). **One spelling**: the fold's close arm
     /// asks this and no list of its own, so a dissection that a later RFC adds is added here and nowhere
     /// else (the generative one was missing from the arm's own list until 2026-10-01).
     pub fn is_dissection_bottom_v1(&self) -> bool {
-        matches!(self, Self::AttnDissection { .. } | Self::TirDissection { .. } | Self::GenDissection { .. })
+        matches!(
+            self,
+            Self::AttnDissection { .. } | Self::TirDissection { .. } | Self::GenDissection { .. } | Self::EvalDissection { .. }
+        )
     }
 
     /// **Is this a generative close** (RFC-0003)? A move only past `palw_gen_v1`; below it the

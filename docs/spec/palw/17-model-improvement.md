@@ -1078,7 +1078,8 @@ score — and the judged scores that read a convicted generation — while the e
 scores favour the incumbent). *E-C7*: a claim is beyond the one-move court once `Final`; a later conviction by another
 path is E-C6's. *E-C8*: an evaluation dissection's verdict is recorded as an IR dissection's — `CourtHeldVerdict` past
 `palw_offence_attribution` (the bottom proves the responder's filings false, not necessarily the committed execution;
-charged the same). *Open*: calibrating the false-accusation charge for evaluation claims, whose reservations are larger
+charged the same). The rule is one predicate, `PalwCourtVerdictProofV2::is_dissection_bottom_v1` (attention, IR,
+generative and evaluation dissections), which the fold's close arm asks and no list of its own. *Open*: calibrating the false-accusation charge for evaluation claims, whose reservations are larger
 than an ordinary claim's, is D-M1's.
 
 ## 17.9 Promotion
