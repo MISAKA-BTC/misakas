@@ -215,7 +215,7 @@ pub fn palw_gen_visit_inventory_v1(
     params: &dyn PipelineParams,
     visit: &mut dyn FnMut(&str, Option<u16>, u32, &[u8]),
 ) -> Result<u32, PalwTirInventoryError> {
-    walk(programs, params, visit)
+    walk(programs, params, PalwGenInventoryNamingV1::Pipeline, visit)
 }
 
 /// **A pipeline class's artifact root, streamed** from its programs and their params. Returns
