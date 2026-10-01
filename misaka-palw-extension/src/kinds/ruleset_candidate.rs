@@ -128,6 +128,11 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.palw_capacity_network_room = Some(at);
             params.sync_palw_capacity_stage2();
         }
+        // int-11: F-N's static verification term, a bare height with the fold's mirror.
+        "palw_capacity_network_verify" => {
+            params.palw_capacity_network_verify = Some(at);
+            params.sync_palw_capacity_network_verify();
+        }
         "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
         "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
         "palw_kary_court" => params.palw_kary_court = Some(at),

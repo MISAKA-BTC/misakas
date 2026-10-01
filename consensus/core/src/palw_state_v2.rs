@@ -1476,6 +1476,10 @@ pub struct PalwStateParamsV2 {
     capacity_network_from_daa: Option<u64>,
     #[borsh(skip)]
     capacity_network_anchor_delay: u64,
+    /// **int-11: `Params::palw_capacity_network_verify`'s height** (F-N's static verification term, `L_ver`), mirrored by
+    /// `Params::sync_palw_capacity_network_verify`. `None` on every shipped preset; borsh-skipped likewise.
+    #[borsh(skip)]
+    capacity_network_verify_from_daa: Option<u64>,
     /// **ADR-0152 §4-quater: `Params::palw_class_verify_deadline`'s height**, mirrored here by
     /// `Params::sync_palw_class_verify_deadline` because every rule it gates — the receipt window,
     /// the Final floor, the class gate, the lock at licence — is read by the rebuild at load and by
@@ -1781,6 +1785,7 @@ impl PalwStateParamsV2 {
             capacity_slots_from_daa: None,
             capacity_network_from_daa: None,
             capacity_network_anchor_delay: 0,
+            capacity_network_verify_from_daa: None,
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
             held_unanswerable_classes: Vec::new(),
@@ -2687,6 +2692,31 @@ impl PalwStateParamsV2 {
     /// ADR-0160 F-N: the panel's anchor delay `L_anchor` reads (0 where F-N is not armed).
     pub fn capacity_network_anchor_delay(&self) -> u64 {
         self.capacity_network_anchor_delay
+    }
+
+    /// **int-11: the verification term's mirror's setter** (F-N's static `L_ver`).
+    pub fn with_capacity_network_verify_mirror(mut self, from_daa: Option<u64>) -> Self {
+        self.capacity_network_verify_from_daa = from_daa;
+        self
+    }
+
+    /// int-11: `Params::palw_capacity_network_verify`'s height, if armed (the mirror).
+    pub fn capacity_network_verify_from_daa(&self) -> Option<u64> {
+        self.capacity_network_verify_from_daa
+    }
+
+    /// **int-11: does `L_net` carry the verification term at `daa_score`?** `false` on every shipped preset.
+    pub fn capacity_network_verify_active_at(&self, daa_score: u64) -> bool {
+        self.capacity_network_verify_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **int-11: the verification term's level at `daa_score`** — `Some(L_ver)` (`⌊1.5 × (window_receipt − anchor_delay) / 2⌋`,
+    /// 435 at the shipped 600 / 20) once `palw_capacity_network_verify` is in force, `None` below it (and on every shipped
+    /// preset): what `TransitionBuilder::network_level_v1` caps `L_net` with.
+    pub fn capacity_network_verify_level_at(&self, daa_score: u64) -> Option<u64> {
+        self.capacity_network_verify_active_at(daa_score).then(|| {
+            crate::palw_network_room_v1::palw_network_verify_level_v1(self.window_receipt(), self.capacity_network_anchor_delay())
+        })
     }
 
     /// ADR-0160 F-S: `Params::palw_capacity_issuance_slots`'s height, if armed (the mirror).
@@ -16306,11 +16336,16 @@ impl PalwFoldReadV1<'_> {
     fn network_level_v1(&self, claim: &PalwClaimStateV2, now_daa: u64) -> u64 {
         use crate::palw_network_room_v1 as n;
         let lpb = if self.params.capacity_batch_active_at(now_daa) { n::PALW_NETWORK_LPB_BATCH_V1 } else { n::PALW_NETWORK_LPB_SINGLE_V1 };
-        n::palw_network_level_v1(
+        // **int-11: past `palw_capacity_network_verify` the level is also capped by `L_ver`** — what the seats can verify
+        // inside the receipt window at the floor supply (lane P's finding on the live backlog); `None` below it: today's
+        // level, byte for byte.
+        let l_ver = self.params.capacity_network_verify_level_at(now_daa);
+        n::palw_network_level_with_verify_v1(
             self.network_seat_level_v1(claim, now_daa),
             n::palw_network_a_op_milli_v1(&self.state.operator_ring, now_daa),
             lpb,
             self.params.capacity_network_anchor_delay(),
+            l_ver,
         )
     }
 

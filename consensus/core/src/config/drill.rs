@@ -749,6 +749,11 @@ const PALW_DRILL_CAPACITY_NETWORK_ROOM_FENCES_V1: &[crate::config::params::PalwP
     &[crate::config::params::PALW_T12_CAPACITY_NETWORK_ROOM_V1];
 const PALW_DRILL_FLAG_DAY_CAPACITY_NETWORK_ROOM_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_NETWORK_ROOM_FENCES_V1, flag: "--palw-drill-capacity-network-room-at" };
+/// F-N's static verification term alone (`--palw-drill-capacity-network-verify-at`, int-11).
+const PALW_DRILL_FLAG_DAY_CAPACITY_NETWORK_VERIFY_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
+    list: crate::config::params::PALW_T12_CAPACITY_NETWORK_VERIFY_FENCES_V1,
+    flag: "--palw-drill-capacity-network-verify-at",
+};
 /// ρ = 25 as F-L's second step (`--palw-drill-capacity-step2-at`).
 const PALW_DRILL_FLAG_DAY_CAPACITY_STEP2_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_STEP2_FENCES_V1, flag: "--palw-drill-capacity-step2-at" };
@@ -807,6 +812,18 @@ pub fn palw_drill_capacity_network_room_at_v1(
     at: u64,
 ) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_NETWORK_ROOM_V1)
+}
+
+/// **A drill arms F-N's static verification term** (int-11, `palw_capacity_network_verify`; lane P's `L_ver` = 435 at the
+/// shipped windows) at its own height (`--palw-drill-capacity-network-verify-at`): `L_net` also capped by what the seats can
+/// verify inside the receipt window. It is dormant on every ruleset, so the move ARMS it; `validate_palw_v2` refuses a
+/// height below F-N (`palw_capacity_network_room`), whose level it caps. Every refusal of the post-launch moves applies,
+/// named for this flag.
+pub fn palw_drill_capacity_network_verify_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_NETWORK_VERIFY_V1)
 }
 
 /// **A drill appends the ρ = 25 step** (ADR-0160 stage 3, `--palw-drill-capacity-step2-at`) — F-L's second step at
@@ -1500,6 +1517,33 @@ mod tests {
             palw_drill_capacity_network_room_at_v1(&mut early, 70).unwrap_err().contains("does not validate"),
             "below the verify room and the issuance slots"
         );
+        // int-11: the static verification term arms (it is dormant everywhere) at or above F-N, its mirror follows, and
+        // nothing else moves; below F-N it is refused.
+        let mut verify = base.clone();
+        let moves = palw_drill_capacity_network_verify_at_v1(&mut verify, 120).expect("the term above F-N (80)");
+        assert_eq!((moves[0].name, moves[0].was, moves[0].at), ("palw_capacity_network_verify", None, 120));
+        assert_eq!(moves.len(), 1);
+        match &verify.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                assert_eq!(bundle.state.capacity_network_verify_from_daa(), Some(120), "the fold's mirror");
+                assert!(bundle.state.capacity_network_verify_active_at(120) && !bundle.state.capacity_network_verify_active_at(119));
+            }
+            _ => panic!("testnet-12 is ConsensusV2"),
+        }
+        assert_ne!(verify.consensus_params_id(), base.consensus_params_id(), "the term is in the fingerprint");
+        let mut below = base.clone();
+        assert!(
+            palw_drill_capacity_network_verify_at_v1(&mut below, 70).unwrap_err().contains("does not validate"),
+            "below F-N, which sits at 80"
+        );
+        let mut later_room = base.clone();
+        palw_drill_capacity_network_room_at_v1(&mut later_room, 150).expect("F-N later");
+        assert!(
+            palw_drill_capacity_network_verify_at_v1(&mut later_room, 120).unwrap_err().contains("does not validate"),
+            "F-N moved above the term"
+        );
+        let mut public = palw_t12_shipped_params();
+        assert!(palw_drill_capacity_network_verify_at_v1(&mut public, 120).unwrap_err().contains("PUBLIC testnet-12"));
     }
 
     /// **A drill crosses the DAA-3,600 flag day and nothing else moves** ([`palw_drill_tir_fence2_at_v1`],

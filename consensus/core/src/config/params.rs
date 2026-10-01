@@ -2529,6 +2529,16 @@ pub struct Params {
     /// below it. Mirrored by [`Self::sync_palw_capacity_stage2`]; dormant on every shipped preset; hashed
     /// Some-only with the `never()` collapse.
     pub palw_capacity_network_room: Option<ForkActivation>,
+    /// **int-11: F-N's verification term** (`palw_capacity_network_verify`; lane P's finding on the live backlog, 2026-10-01).
+    /// `L_net = min(L_seat, L_carry, L_anchor)` bounds the unlicensed queue by capital and carriage, not by what the
+    /// seats verify, so a collapsed verification supply lets claims wait past the receipt window and slashes honest
+    /// producers. Past this fence `L_net` is also capped by the static `L_ver = ⌊1.5 licences/DAA × (window_receipt −
+    /// anchor_delay) / 2⌋` — 435 at the shipped 600 / 20 ([`crate::palw_network_room_v1::palw_network_verify_level_v1`]);
+    /// never binds at the healthy supply. A constant: the adaptive form is stage 6. Refused by `validate_palw_v2` off
+    /// ConsensusV2 and without `palw_capacity_network_room` at or below it. Mirrored by
+    /// [`Self::sync_palw_capacity_network_verify`]; dormant on every shipped preset and in every flag-day list (int-11's names
+    /// its height); hashed Some-only with the `never()` collapse.
+    pub palw_capacity_network_verify: Option<ForkActivation>,
     /// **ADR-0075 Decision 14 — only a chunk that can complete a group may spend the block's
     /// certification cap.** `None` on every shipped preset, so the behaviour is byte-identical to
     /// not having the field.
@@ -3936,6 +3946,7 @@ impl Params {
         // ADR-0160 stage 2 (F-Q, F-S): over F-L, F-B, lane A (Q) and F-W, F-L, F-E (S), and a credited step
         // only past the audit door.
         self.validate_palw_capacity_stage2_v1()?;
+        self.validate_palw_capacity_network_verify_v1()?;
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
         // **ADR-0093 Decision 8 needs the court it is a move of.** A root claim is a dissection's
         // first move; a fence armed where the k-ary court is not has no dissection to anchor. Asked
@@ -6026,6 +6037,10 @@ impl Params {
         if self.palw_capacity_network_room == Some(ForkActivation::never()) {
             self.palw_capacity_network_room = None;
         }
+        // int-11: the verification term, the same collapse.
+        if self.palw_capacity_network_verify == Some(ForkActivation::never()) {
+            self.palw_capacity_network_verify = None;
+        }
         // ADR-0075 D14, a bare fence: the D2 collapse, for the D2 reason.
         if self.palw_chunk_cap_charge == Some(ForkActivation::never()) {
             self.palw_chunk_cap_charge = None;
@@ -8104,6 +8119,68 @@ impl Params {
         }
     }
 
+    /// **The verification term's fence** ([`Self::palw_capacity_network_verify`]), resolved like F-N's.
+    pub fn palw_capacity_network_verify_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_capacity_network_verify) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// **The fold's mirror of the verification term** (int-11): its height on the `#[borsh(skip)]` copy of
+    /// `PalwStateParamsV2`. Written here and nowhere else; call it wherever the fence is set on an assembled ruleset.
+    pub fn sync_palw_capacity_network_verify(&mut self) {
+        let at = self.palw_capacity_network_verify.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_capacity_network_verify_mirror(at);
+        }
+    }
+
+    /// **What the verification term refuses** (int-11). Called by `validate_palw_v2`, public so a test can name each
+    /// refusal: armed off ConsensusV2 (the fold that reads it is not running); armed without F-N
+    /// (`palw_capacity_network_room`) at or below it (the term caps F-N's level); the mirror unequal. Below the fence it
+    /// checks only that the bundle's mirror is empty.
+    pub fn validate_palw_capacity_network_verify_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let fence = self.palw_capacity_network_verify.filter(|fence| *fence != ForkActivation::never());
+        let bundle = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle),
+            _ => None,
+        };
+        let Some(fence) = fence else {
+            if let Some(bundle) = bundle
+                && bundle.state.capacity_network_verify_from_daa().is_some()
+            {
+                return Err(Invalid(
+                    "the V2 bundle mirrors palw_capacity_network_verify without the fence armed: mirror it with \
+                     Params::sync_palw_capacity_network_verify after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(bundle) = bundle else {
+            return Err(Invalid("palw_capacity_network_verify is armed off ConsensusV2: the fold that reads it is not running"));
+        };
+        let h = fence.daa_score();
+        let network_below = self
+            .palw_capacity_network_room
+            .filter(|f| *f != ForkActivation::never())
+            .is_some_and(|f| f.daa_score() <= h);
+        if !network_below {
+            return Err(Invalid(
+                "palw_capacity_network_verify is armed without palw_capacity_network_room at or below it: the term caps F-N's \
+                 level, and there is no level to cap before F-N",
+            ));
+        }
+        if bundle.state.capacity_network_verify_from_daa() != Some(h) {
+            return Err(Invalid(
+                "palw_capacity_network_verify disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_capacity_network_verify after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+
     /// **F-S's fence** ([`Self::palw_capacity_issuance_slots`]), resolved like F-B's.
     pub fn palw_capacity_issuance_slots_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_capacity_issuance_slots) {
@@ -9254,6 +9331,7 @@ impl Params {
             palw_capacity_audit_door,
             palw_capacity_issuance_slots,
             palw_capacity_network_room,
+            palw_capacity_network_verify,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -9490,6 +9568,7 @@ impl Params {
             ("palw_capacity_audit_door", *palw_capacity_audit_door),
             ("palw_capacity_issuance_slots", *palw_capacity_issuance_slots),
             ("palw_capacity_network_room", *palw_capacity_network_room),
+            ("palw_capacity_network_verify", *palw_capacity_network_verify),
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
             ("palw_kary_court", *palw_kary_court),
@@ -10057,6 +10136,10 @@ impl Params {
             h.write(b"palw_capacity_network_room");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = self.palw_capacity_network_verify {
+            h.write(b"palw_capacity_network_verify");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decision 11's complete context set (mainnet audit 2026-09-06, M-8). Some-only,
         // at the tail, for the reason its siblings are: it is genesis-only, so an operator reading
         // the schedule sees a rule in force from block one rather than a height to cross.
@@ -10248,6 +10331,7 @@ impl Params {
             palw_capacity_audit_door,
             palw_capacity_issuance_slots,
             palw_capacity_network_room,
+            palw_capacity_network_verify,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -10827,6 +10911,9 @@ impl Params {
         if let Some(activation) = palw_capacity_network_room.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_capacity_network_verify.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0069 Decision 7. A pure fence with no payload, so visiting it is safe — the same
         // shape as D2 beside it.
         match palw_uncertified_weightless.as_mut() {
@@ -11373,6 +11460,7 @@ impl Params {
             palw_capacity_audit_door,
             palw_capacity_issuance_slots,
             palw_capacity_network_room,
+            palw_capacity_network_verify,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -12017,6 +12105,10 @@ impl Params {
         }
         if let Some(activation) = palw_capacity_network_room {
             h.write(b"palw_capacity_network_room");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_capacity_network_verify {
+            h.write(b"palw_capacity_network_verify");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0075 D14, Some-only like its siblings: an unset fence writes nothing, so every
@@ -12766,6 +12858,7 @@ impl Params {
             palw_capacity_audit_door: self.palw_capacity_audit_door,
             palw_capacity_issuance_slots: self.palw_capacity_issuance_slots,
             palw_capacity_network_room: self.palw_capacity_network_room,
+            palw_capacity_network_verify: self.palw_capacity_network_verify,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
@@ -13825,6 +13918,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_capacity_audit_door: None,
     palw_capacity_issuance_slots: None,
     palw_capacity_network_room: None,
+    palw_capacity_network_verify: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -14080,6 +14174,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_capacity_audit_door: None,
     palw_capacity_issuance_slots: None,
     palw_capacity_network_room: None,
+    palw_capacity_network_verify: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -14317,6 +14412,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_capacity_audit_door: None,
     palw_capacity_issuance_slots: None,
     palw_capacity_network_room: None,
+    palw_capacity_network_verify: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -19634,6 +19730,20 @@ pub const PALW_T12_CAPACITY_NETWORK_ROOM_V1: PalwPostLaunchFenceV1 = PalwPostLau
     },
 };
 
+/// **int-11: F-N's static verification term as a flag-day entry** (lane P's `L_ver`, `palw_capacity_network_verify`): the
+/// network level capped by what the seats can verify, past its height. In no list and at no height on any preset — the
+/// flag day that arms it names its height; a drill moves it with `--palw-drill-capacity-network-verify-at`.
+pub const PALW_T12_CAPACITY_NETWORK_VERIFY_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_network_verify",
+    set: |params, at| {
+        params.palw_capacity_network_verify = at;
+        params.sync_palw_capacity_network_verify();
+    },
+};
+
+/// The verification term's one-entry list (a flag-day list takes it in one line; the drill's flag moves it).
+pub const PALW_T12_CAPACITY_NETWORK_VERIFY_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_T12_CAPACITY_NETWORK_VERIFY_V1];
+
 /// **ADR-0160 stage 3: the ready ρ = 25 variant — F-L's second step** (`…_step_2`), at its own flag day's
 /// height above the ρ = 10 flag day's. Its own fence value, never dynamic: the fork id names the step's
 /// height, so a node that did not append it is refused from there.
@@ -21467,6 +21577,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_capacity_audit_door: None,
     palw_capacity_issuance_slots: None,
     palw_capacity_network_room: None,
+    palw_capacity_network_verify: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
     // bytes against a one-carrier budget of 83,333, so the Merkle form buys nothing and arming it

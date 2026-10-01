@@ -354,6 +354,11 @@ pub struct Args {
     /// Command line only.
     #[serde(skip)]
     pub palw_drill_capacity_network_room_at: Option<u64>,
+    /// **DRILL ONLY: arm F-N's static verification term (`palw_capacity_network_verify`, int-11; `L_ver` = 435 at the shipped
+    /// windows) at this DAA** (`config::drill::palw_drill_capacity_network_verify_at_v1`): `L_net` also capped by what the
+    /// seats can verify inside the receipt window. At or above F-N. Command line only.
+    #[serde(skip)]
+    pub palw_drill_capacity_network_verify_at: Option<u64>,
     /// **DRILL ONLY: append the capacity ramp's ρ = 100 step after ρ = 25 at this DAA** — F-L's third step
     /// (`config::drill::palw_drill_capacity_step3_at_v1`); needs `--palw-drill-capacity-step2-at` below it.
     /// Command line only.
@@ -634,6 +639,7 @@ impl Default for Args {
             palw_drill_fence3_at: None,
             palw_drill_model_court_at: None,
             palw_drill_capacity_network_room_at: None,
+            palw_drill_capacity_network_verify_at: None,
             palw_drill_capacity_step2_at: None,
             palw_drill_capacity_step3_at: None,
             palw_drill_capacity_rho100_at: None,
@@ -1677,6 +1683,18 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-capacity-network-verify-at")
+                .long("palw-drill-capacity-network-verify-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm F-N's static verification term (palw_capacity_network_verify, L_ver = 435 \
+                     at the shipped windows) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a \
+                     height another fence uses, and below F-N (--palw-drill-fence3-at arms it; --palw-drill-capacity-network-room-at \
+                     moves it).",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-capacity-step2-at")
                 .long("palw-drill-capacity-step2-at")
                 .require_equals(true)
@@ -2709,6 +2727,7 @@ impl Args {
             palw_drill_fence3_at: m.get_one::<u64>("palw-drill-fence3-at").copied(),
             palw_drill_model_court_at: m.get_one::<u64>("palw-drill-model-court-at").copied(),
             palw_drill_capacity_network_room_at: m.get_one::<u64>("palw-drill-capacity-network-room-at").copied(),
+            palw_drill_capacity_network_verify_at: m.get_one::<u64>("palw-drill-capacity-network-verify-at").copied(),
             palw_drill_capacity_step2_at: m.get_one::<u64>("palw-drill-capacity-step2-at").copied(),
             palw_drill_capacity_step3_at: m.get_one::<u64>("palw-drill-capacity-step3-at").copied(),
             palw_drill_capacity_rho100_at: m.get_one::<u64>("palw-drill-capacity-rho100-at").copied(),
