@@ -265,4 +265,14 @@ mod tests {
             assert!(!palw_improve_watch_armed_v1(&params, u64::MAX / 2), "{net}: dormant");
         }
     }
+
+    /// **The status file's shape**: an empty status is an empty list under the schema tag; the format the
+    /// drill's watcher reads is stable JSON (ids as hex, no float).
+    #[test]
+    fn the_status_json_names_its_schema_and_lists_lines() {
+        let json = palw_improve_status_json_v1(&Default::default(), 123);
+        assert_eq!(json["schema"], "misaka.palw.improve-status.v1");
+        assert_eq!(json["daa"], 123);
+        assert_eq!(json["lines"], serde_json::json!([]));
+    }
 }

@@ -173,6 +173,18 @@ fn serve(adapter: &str) {
     assert_eq!(entry.class_id(), full.class.class_id(&r.artifact_root()), "{adapter}: its id over the composite root");
     assert_eq!(entry.model_id, "test/candidate");
 
+    // A node that holds its parent's entry from another loader (the process-wide cache hands one out)
+    // opens the section over THAT entry at run time — a prefetch — and gets the same class and root.
+    {
+        let parent_entry = TirLineageV1::open_entry(&pp).expect("the parent, opened apart from the lineage");
+        let over = TirLineageV1::load_composite_over(&parent_entry, &sp).expect("the section over a held parent entry");
+        let entries = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&over));
+        assert_eq!(entries.len(), 1);
+        assert_eq!((entries[0].class_id(), entries[0].artifact_root), (entry.class_id(), entry.artifact_root), "{adapter}: the same candidate");
+        let stranger = TirLineageV1::open_entry(&cp).expect("the full candidate is no parent");
+        assert!(TirLineageV1::load_composite_over(&stranger, &sp).is_err(), "{adapter}: a section opens over its own parent only");
+    }
+
     // Every instance it serves is the full candidate's; its inventory is the full candidate's leaves.
     for (j, layers) in misaka_palw_tir_artifact::param_instances_v1(&candidate_program).into_iter().enumerate() {
         for l in layers {

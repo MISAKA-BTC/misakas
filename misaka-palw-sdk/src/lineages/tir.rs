@@ -73,12 +73,12 @@ impl TirLineageV1 {
         })
     }
 
-    /// **Open a composite candidate's adapter section** (`PALWTIRS`, RFC-0004 §6.7) over the parent
-    /// this lineage holds — the one artifact a seat keeps for a line, reused: the section's record
-    /// names the parent class and both roots; the parent is the held entry of that class and root
-    /// (loaded first), whose file serves params `0..p`; the artifact checks the composite rule and the
-    /// adapter root (the parent's root is the one this lineage derived when it loaded the parent);
-    /// and the class is the candidate's, over the composite root.
+    /// **Open a composite candidate's adapter section** (`PALWTIRS`, RFC-0004 §6.7) over the parent this
+    /// lineage holds — the one artifact a seat keeps for a line, reused: the section's record names the
+    /// parent class and both roots; the parent is the held entry of that class and root (loaded first),
+    /// whose file serves params `0..p`; the artifact checks the composite rule and the adapter root (the
+    /// parent's root is the one this lineage derived when it loaded the parent); and the class is the
+    /// candidate's, over the composite root.
     pub fn open_composite_entry(&self, path: &Path) -> Result<PalwTirClassEntryV1, String> {
         let header = misaka_palw_tir_artifact::peek_section_header_v1(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let r = crate::tir_composite::tir_composite_ref_of_meta_v1(&header.meta).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -96,6 +96,25 @@ impl TirLineageV1 {
                     r.parent_class
                 )
             })?;
+        Self::open_composite_over(&parent, path)
+    }
+
+    /// **A composite candidate's section over a parent entry the caller holds** — the body of
+    /// [`Self::open_composite_entry`], for a node that already holds its parent's entry (from any loader:
+    /// the process-wide cache hands one out) and prefetches the section at run time.
+    pub fn open_composite_over(parent: &PalwTirClassEntryV1, path: &Path) -> Result<PalwTirClassEntryV1, String> {
+        let header = misaka_palw_tir_artifact::peek_section_header_v1(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let r = crate::tir_composite::tir_composite_ref_of_meta_v1(&header.meta).map_err(|e| format!("{}: {e}", path.display()))?;
+        if parent.artifact.composite_ref().is_some() || parent.artifact_root != r.parent_root || parent.class_id() != r.parent_class {
+            return Err(format!(
+                "{}: its parent is class {} under root {}, not the held class {} under root {}",
+                path.display(),
+                r.parent_class,
+                r.parent_root,
+                parent.class_id(),
+                parent.artifact_root
+            ));
+        }
         let parent_path = parent.path.as_deref().ok_or_else(|| format!("{}: the held parent has no file", path.display()))?;
         let artifact = Arc::new(TirArtifactV1::open_composite(parent_path, path, &r, Some(parent.artifact_root))?);
         let class = artifact.class().map_err(|e| format!("{}: {e}", path.display()))?;
@@ -111,6 +130,26 @@ impl TirLineageV1 {
             artifact,
             path: Some(path.to_path_buf()),
         })
+    }
+
+    /// **A section loaded over a held parent entry, as a held artifact** — what a node adds to its holdings
+    /// when it prefetches a candidate's adapter at run time ([`Self::open_composite_over`]).
+    pub fn load_composite_over(parent: &PalwTirClassEntryV1, path: &Path) -> Result<PalwLoadedArtifactV1, String> {
+        let entry = Self::open_composite_over(parent, path)?;
+        Ok(Self::loaded_of(entry, path))
+    }
+
+    fn loaded_of(entry: PalwTirClassEntryV1, path: &Path) -> PalwLoadedArtifactV1 {
+        let summary = format!(
+            "IR class {} ({}): {} params, {} blocks, max_context {}, artifact root {}",
+            entry.class_id(),
+            entry.model_id,
+            entry.artifact.plan().program.params.len(),
+            entry.artifact.plan().program.blocks.len(),
+            entry.class.layout.max_context,
+            entry.artifact_root
+        );
+        PalwLoadedArtifactV1::from_parts(TIR_LINEAGE_ID_V1, Some(path.to_path_buf()), summary, Arc::new(entry))
     }
 
     /// The backend for one held entry.
@@ -156,22 +195,13 @@ impl PalwModelLineageV1 for TirLineageV1 {
             Ok(_) => self.open_composite_entry(path)?,
             Err(_) => Self::open_entry(path)?,
         };
-        let summary = format!(
-            "IR class {} ({}): {} params, {} blocks, max_context {}, artifact root {}",
-            entry.class_id(),
-            entry.model_id,
-            entry.artifact.plan().program.params.len(),
-            entry.artifact.plan().program.blocks.len(),
-            entry.class.layout.max_context,
-            entry.artifact_root
-        );
         {
             let mut held = self.held.write().expect("the held list is never poisoned");
             if !held.iter().any(|e| e.class_id() == entry.class_id()) {
                 held.push(entry.clone());
             }
         }
-        Ok(PalwLoadedArtifactV1::from_parts(TIR_LINEAGE_ID_V1, Some(path.to_path_buf()), summary, Arc::new(entry)))
+        Ok(Self::loaded_of(entry, path))
     }
 
     fn registered_weight_keys(&self, artifact: &PalwLoadedArtifactV1) -> Vec<Hash64> {

@@ -272,7 +272,21 @@ impl PalwPanelService {
                 continue;
             }
             st.sections_tried.insert(key);
-            match self.improve_sdk.load_artifact_with(&path, self.config.class_residency) {
+            // The parent this node holds, from whichever loader mapped it (the process-wide cache hands one
+            // out): the section opens over that entry, not over a lineage's own list.
+            let PalwImprovePrefetchV1::Adapter { parent_class, parent_root, .. } = plan else {
+                warn!("[{PALW_PANEL}] [palw-improve] full-weight prefetch of {} is not served by this build", path.display());
+                return;
+            };
+            let holdings = self.backends().holdings().to_vec();
+            let Some(parent) = misaka_palw_sdk::tir_registration::tir_entries_of_v1(&holdings)
+                .into_iter()
+                .find(|e| e.artifact.composite_ref().is_none() && e.class_id() == parent_class && e.artifact_root == parent_root)
+            else {
+                warn!("[{PALW_PANEL}] [palw-improve] the parent {parent_class} of candidate {class_id} is not held: nothing to open {} over", path.display());
+                return;
+            };
+            match misaka_palw_sdk::lineages::tir::TirLineageV1::load_composite_over(&parent, &path) {
                 Ok(loaded) => {
                     let declared: Vec<Hash64> =
                         misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&loaded)).iter().map(|e| e.class_id()).collect();

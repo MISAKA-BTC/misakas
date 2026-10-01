@@ -3410,11 +3410,8 @@ pub struct PalwPanelService {
     /// Loaded once, through the SDK — whichever lineage's container each file is. Same contract
     /// as the producer's: container-checked at load, matched against the CHAIN per duty.
     class_holdings: Vec<misaka_palw_sdk::PalwLoadedArtifactV1>,
-    /// **RFC-0004 (A10): the SDK the holdings were loaded through, kept** — a composite candidate's
-    /// adapter section opens over the parent this SDK's IR lineage already holds — and the classes
-    /// prefetched since the node started (`improve`), which [`Self::backends`] serves beside
-    /// `class_holdings`.
-    improve_sdk: misaka_palw_sdk::PalwClassSdk,
+    /// **RFC-0004 (A10): the classes prefetched since the node started** (`improve`), which
+    /// [`Self::backends`] serves beside `class_holdings`.
     improve_holdings: std::sync::Mutex<Vec<misaka_palw_sdk::PalwLoadedArtifactV1>>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
@@ -3806,7 +3803,6 @@ impl PalwPanelService {
             keypair,
             bond,
             class_holdings,
-            improve_sdk: sdk,
             improve_holdings: std::sync::Mutex::new(Vec::new()),
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             foreign_pinned: std::sync::Mutex::new(HashSet::new()),
