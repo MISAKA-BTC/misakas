@@ -468,6 +468,7 @@ pub mod palw_gen_step_v1;
 /// RFC-0003: the pipeline inventory — the artifact layout a generative class's `artifact_root` commits to, and the court's authenticated params.
 pub mod palw_gen_artifact_v1;
 /// RFC-0003: the generative court's consensus objects — a pipeline claim's binding and its two closes.
+pub mod palw_gen_close_price_v1;
 pub mod palw_gen_close_v1;
 /// RFC-0003 activation step 4: the pipeline admission — the gate a generative class registration passes, its builder and the node's preflight.
 pub mod palw_gen_admission_v1;
