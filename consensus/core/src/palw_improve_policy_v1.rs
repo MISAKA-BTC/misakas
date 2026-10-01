@@ -62,20 +62,21 @@ pub fn palw_improvement_has_stage_v1(eval: &PalwEvalSpecV1, kind: PalwScoringKin
     eval.stages.iter().any(|stage| stage.kind == kind)
 }
 
-/// **The most evaluation jobs one subject can be given in an epoch** (spec 17 §17.11.1): two per item
-/// for its primary kind (a generation, then its scoring once the key is out — the upper bound; a
-/// teacher-forced item takes one), two per drawn item for a Judge stage (one teacher-forced pass per verdict
-/// sequence, §17.8.5), and four per drawn item for a Pairwise stage (two orders × two verdicts; `pairwise`
-/// false for the parent). The escrow is this times `eval_fee_per_job`; what is not spent comes back
-/// (§17.11.2).
+/// **`J`: the most evaluation jobs (claims) one subject can be given in an epoch** — the ONE definition (spec 17 §17.8.2):
+/// `J_s = (n + regression_items + safety_items) + parts(Judge)·n·[Judge] + parts(Pairwise)·n·[Pairwise ∧ s ≠ Parent]`, i.e.
+/// one primary job per drawn item and per suite entry (an item is exact-key or likelihood, never both, and an ExactMatch key's
+/// scoring is the fold's, not a claim), two judged parts per drawn item for a Judge stage and four for a Pairwise stage
+/// (§17.8.5: a judged score is that many claims; suite items are never judged). `pairwise` is true for a subject that is not
+/// the parent. The subject's escrow is this times `eval_fee_per_job` (§17.11.2); what is not spent comes back.
 pub fn palw_improvement_jobs_per_subject_v1(eval: &PalwEvalSpecV1, pairwise: bool) -> u64 {
-    let items = eval.n as u64 + eval.regression_items as u64 + eval.safety_items as u64;
-    let mut jobs = items * 2;
+    use crate::palw_improve_eval_v1::palw_improve_scoring_parts_v1 as parts;
+    let n = eval.n as u64;
+    let mut jobs = n + eval.regression_items as u64 + eval.safety_items as u64;
     if palw_improvement_has_stage_v1(eval, PalwScoringKindV1::Judge) {
-        jobs += 2 * eval.n as u64;
+        jobs += parts(PalwScoringKindV1::Judge) as u64 * n;
     }
     if pairwise && palw_improvement_has_stage_v1(eval, PalwScoringKindV1::Pairwise) {
-        jobs += 4 * eval.n as u64;
+        jobs += parts(PalwScoringKindV1::Pairwise) as u64 * n;
     }
     jobs
 }

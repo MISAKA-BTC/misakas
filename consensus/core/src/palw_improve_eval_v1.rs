@@ -1569,23 +1569,14 @@ pub fn palw_improve_eval_budget_positions_v1(
     policy_max_eval_positions.min(ceilings.max_eval_positions_per_epoch).min(share)
 }
 
-/// **The most evaluation jobs an epoch can hold**: the claimable ones — one per drawn item for each
-/// subject's primary kind (an item is exact-key or likelihood, never both), two more per item for a Judge
-/// stage (a judged score is two claims), and four per item and non-parent subject for a Pairwise stage —
-/// over `subjects` subjects (the parent counts) — plus the suites' items, one per entry and subject (a suite
-/// item discloses its entry in its claim, §17.8.1); `n` bounds the drawn items. An ExactMatch key's scoring
-/// is the fold's, not a claim.
+/// **The most evaluation jobs an epoch can hold**: the sum of its subjects' `J` (spec 17 §17.8.2,
+/// `palw_improvement_jobs_per_subject_v1`) — the parent's (no Pairwise) and each of the other `subjects − 1` subjects' — over
+/// `subjects` subjects (the parent counts). `(n·(1 + parts(Judge)·[Judge]) + m)·S + parts(Pairwise)·n·[Pairwise]·(S − 1)`,
+/// `m = regression_items + safety_items`.
 pub fn palw_improve_eval_epoch_jobs_v1(eval: &PalwEvalSpecV1, subjects: usize) -> u64 {
-    use crate::palw_improve_policy_v1::palw_improvement_has_stage_v1 as has;
-    let n = eval.n as u64;
-    let judge = has(eval, PalwScoringKindV1::Judge) as u64 * palw_improve_scoring_parts_v1(PalwScoringKindV1::Judge) as u64;
-    let pairwise = has(eval, PalwScoringKindV1::Pairwise) as u64 * palw_improve_scoring_parts_v1(PalwScoringKindV1::Pairwise) as u64;
-    let subjects = subjects as u64;
-    let suites = eval.regression_items as u64 + eval.safety_items as u64;
-    n.saturating_mul(1 + judge)
-        .saturating_add(suites)
-        .saturating_mul(subjects)
-        .saturating_add(n.saturating_mul(pairwise).saturating_mul(subjects.saturating_sub(1)))
+    use crate::palw_improve_policy_v1::palw_improvement_jobs_per_subject_v1 as per_subject;
+    let Some(others) = (subjects as u64).checked_sub(1) else { return 0 };
+    per_subject(eval, false).saturating_add(others.saturating_mul(per_subject(eval, true)))
 }
 
 /// **The positions one evaluation job may take**: the epoch's budget shared equally among the epoch's
