@@ -12,6 +12,8 @@
 //! * [`act`] — `ACT_TABLE_V1`, SiLU and GELU-tanh as `i16` tables on the code grid;
 //! * [`ada`] — `MOD_ADALN_V1`, the modulated LayerNorm and the gated residual;
 //! * [`calib`] / [`float`] — the per-site calibration and the float reference of the denoiser it is taken from;
+//! * [`dit`] — the denoiser stage: patch embed, timestep, blocks, output, Euler update, one program;
+//! * [`vae_float`] — the float reference of the VAE decoder, noting the sites the VAE lowering reads;
 //! * [`block`] — one joint transformer block assembled from the lowerers;
 //! * [`attn`] — `ATTN_JOINT_STREAMS_V1`, MMDiT's joint attention over both streams with committed row statistics;
 //! * [`linear`] — a quantised linear map: `i8` weights per output channel, one narrowing per channel;
@@ -33,6 +35,7 @@ pub mod attn;
 pub mod block;
 pub mod calib;
 pub mod conv;
+pub mod dit;
 pub mod embed;
 pub mod float;
 pub mod linear;
@@ -41,6 +44,7 @@ pub mod sampler;
 pub mod sink;
 pub mod stream;
 pub mod tables;
+pub mod vae_float;
 
 #[cfg(test)]
 pub(crate) mod testkit;
