@@ -16,7 +16,24 @@ crosses at `TIR2_AT` (default 50; the model court window stays dormant on testne
   forged outputs refused).
 - **Stage 2, after the rollout and before Phase H's phaseh2** (`df.sh stage2`): `bdc`, D-F1, D-F2.
 
+`df.sh restart-old` (wired into `stage1` after `below`): restart the old relay once the chain is between `TIR_AT` and `TIR2_AT`.
+On 2026-10-01 it was missing and the old relay, connected at DAA 1 when both sides' next fence was the same, followed the chain
+from DAA 50 to 52 (no refusal height stored, no rejudge); a hand restart at tip 52 gave the handshake refusal. The step
+reproduces the production case (an int-8 node already connected when the flag day is scheduled) and is untested live.
+
 `df.sh dry` prints the plan and every node's argv without starting anything.
+
+**Before `up`, once per class file:** `palw-class declare-layout` judges at the IR fence's height (the release's rules), not
+fence2's, so the class files are also asked under the flag day's rules:
+`DRILL_SMALL_CLASS=… DRILL_A16_CLASS=… cargo test -p misaka-palw-sdk --test tir_drill_class_admission_fence2 -- --ignored --nocapture`
+(both must be ADMITTED at DAA 3,599 and 3,600). It prints the canonical leaves the registrant's builder counts — 120 for the
+small class, 2,199,114 for the A16 class on 2026-10-01 — which go to `$WORK_DIR/ir/small-leaf-count.txt` and
+`$WORK_DIR/ir/leaf-count.txt`; `flagday classes` fails if the chain registered another count.
+
+**Memory.** The sampler (`dfwatch.py`) appends the drill nodes' resident memory and the machine's free memory to
+`$WORK_DIR/mem.tsv` every 30 s — the measurement the drill's quiet window is sized from — and stops the drill's nodes
+(SIGINT, `nodes.sh stop`; `MEM-TRIPWIRE` is written beside the logs) when the machine's free memory stays below
+`DF_MEM_FLOOR_PCT` (default 10, 0 = off) for two samples in a row. A real run refuses to start below 40% free.
 
 ## Known drill behaviours (not production defects)
 
