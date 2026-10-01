@@ -16395,6 +16395,9 @@ mod t12_model_sink_bound_fence;
 mod t12_tir_registration_cap;
 // RFC-0002 Phase F's second IR fence: the IR step-leaf DA demand at the gate.
 mod t12_tir_da_step_gate;
+// RFC-0004 A4/A5: the material objects' and the candidate's signatures at the gate, and a licence
+// through the walk and the fold, with real card and rights-holder signatures.
+mod t12_improve_material_gate;
 // ADR-0152 v3.1 S-7: the reporter's commitment (tag 53) and reveal (tag 54) at the gate, the walk
 // and the fold past `palw_rcore_plus`, with real card signatures.
 mod t12_rcore_s7_reporter_gate;
