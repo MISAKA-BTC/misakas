@@ -19,6 +19,12 @@
 //! index per program with a base), so a court names the leaf an operand lives in without the artifact.
 //! A registration binds the weights by this root: an executor that runs other weights commits leaves
 //! a court re-evaluates from the root's openings, and is convicted at the first divergent leaf.
+//!
+//! **An evaluation pipeline's inventory** (RFC-0004 §7.2, [`PalwGenInventoryNamingV1::Evaluation`])
+//! is its subject's own: program 0 is an IR class's program lifted to version 2, and its leaves are
+//! named as Phase F names them (no `p0/` prefix), so the tree is exactly the class's registered
+//! inventory and its root the class's `artifact_root`; every other program is a scoring stage, which
+//! declares no param.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -39,10 +45,27 @@ use misaka_palw_tir::program_v2::TirProgramV2;
 /// **Program `k`'s param view**: its version-1 view with the declared params only (the appended
 /// inputs cut), each named `p<k>/<name>` — what Phase F's inventory functions lay out.
 pub fn palw_gen_param_view_v1(k: u16, program: &TirProgramV2) -> TirProgramV1 {
+    palw_gen_param_view_named_v1(k, program, PalwGenInventoryNamingV1::Pipeline)
+}
+
+/// **How an inventory names its leaves.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwGenInventoryNamingV1 {
+    /// A pipeline class's: every program's params `p<k>/<name>`.
+    Pipeline,
+    /// An evaluation pipeline's (RFC-0004 §7.2): program 0's params as Phase F names them — the
+    /// subject IR class's own inventory — and every other program weightless.
+    Evaluation,
+}
+
+/// [`palw_gen_param_view_v1`] under `naming`.
+pub fn palw_gen_param_view_named_v1(k: u16, program: &TirProgramV2, naming: PalwGenInventoryNamingV1) -> TirProgramV1 {
     let mut view = program.v1_view();
     view.params.truncate(program.params.len());
-    for d in &mut view.params {
-        d.name = format!("p{k}/{}", d.name);
+    if !(naming == PalwGenInventoryNamingV1::Evaluation && k == 0) {
+        for d in &mut view.params {
+            d.name = format!("p{k}/{}", d.name);
+        }
     }
     view
 }
@@ -63,7 +86,17 @@ impl PalwGenInventoryIndexV1 {
     /// The index of a class's inventory, or `None` when the inventory refuses the class (a tensor
     /// past 4 GiB, past a `u32` of leaves, or no param in any program: no weights, no root).
     pub fn new(programs: &[TirProgramV2]) -> Option<Self> {
-        let views: Vec<TirProgramV1> = programs.iter().enumerate().map(|(k, p)| palw_gen_param_view_v1(k as u16, p)).collect();
+        Self::new_named(programs, PalwGenInventoryNamingV1::Pipeline)
+    }
+
+    /// The index under `naming`: an evaluation pipeline's is `None` unless every program but the
+    /// subject is weightless.
+    pub fn new_named(programs: &[TirProgramV2], naming: PalwGenInventoryNamingV1) -> Option<Self> {
+        if naming == PalwGenInventoryNamingV1::Evaluation && programs.iter().skip(1).any(|p| !p.params.is_empty()) {
+            return None;
+        }
+        let views: Vec<TirProgramV1> =
+            programs.iter().enumerate().map(|(k, p)| palw_gen_param_view_named_v1(k as u16, p, naming)).collect();
         let mut out = Vec::with_capacity(views.len());
         let mut base = 0u64;
         for view in &views {
@@ -101,10 +134,16 @@ impl PalwGenInventoryIndexV1 {
 }
 
 /// Every program's rows, in inventory order: `(program, row)`.
-fn rows(programs: &[TirProgramV2]) -> Result<Vec<(u16, PalwTirInventoryRowV1)>, PalwTirInventoryError> {
+fn rows(
+    programs: &[TirProgramV2],
+    naming: PalwGenInventoryNamingV1,
+) -> Result<Vec<(u16, PalwTirInventoryRowV1)>, PalwTirInventoryError> {
+    if naming == PalwGenInventoryNamingV1::Evaluation && programs.iter().skip(1).any(|p| !p.params.is_empty()) {
+        return Err(PalwTirInventoryError::Empty);
+    }
     let mut out = Vec::new();
     for (k, p) in programs.iter().enumerate() {
-        let view = palw_gen_param_view_v1(k as u16, p);
+        let view = palw_gen_param_view_named_v1(k as u16, p, naming);
         if view.params.is_empty() {
             continue;
         }
@@ -141,10 +180,12 @@ fn instance_bytes<'s>(
 fn walk(
     programs: &[TirProgramV2],
     params: &dyn PipelineParams,
+    naming: PalwGenInventoryNamingV1,
     visit: &mut dyn FnMut(&str, Option<u16>, u32, &[u8]),
 ) -> Result<u32, PalwTirInventoryError> {
-    let all = rows(programs)?;
-    let views: Vec<TirProgramV1> = programs.iter().enumerate().map(|(k, p)| palw_gen_param_view_v1(k as u16, p)).collect();
+    let all = rows(programs, naming)?;
+    let views: Vec<TirProgramV1> =
+        programs.iter().enumerate().map(|(k, p)| palw_gen_param_view_named_v1(k as u16, p, naming)).collect();
     let mut held: Option<((u16, u16, Option<u16>), Cow<'_, [u8]>)> = None;
     for (k, row) in &all {
         let key = (*k, row.param, row.layer);
@@ -164,9 +205,20 @@ pub fn palw_gen_inventory_root_v1(
     programs: &[TirProgramV2],
     params: &dyn PipelineParams,
 ) -> Result<(Hash64, u32), PalwTirInventoryError> {
+    palw_gen_inventory_root_named_v1(programs, params, PalwGenInventoryNamingV1::Pipeline)
+}
+
+/// [`palw_gen_inventory_root_v1`] under `naming` — an evaluation pipeline's is its subject class's
+/// `artifact_root`.
+pub fn palw_gen_inventory_root_named_v1(
+    programs: &[TirProgramV2],
+    params: &dyn PipelineParams,
+    naming: PalwGenInventoryNamingV1,
+) -> Result<(Hash64, u32), PalwTirInventoryError> {
     let mut frontier = PalwArtifactMerkleFrontierV1::new();
-    let count =
-        walk(programs, params, &mut |name, layer, start, piece| frontier.push(artifact_leaf_parts_v1(name, layer, start, piece)))?;
+    let count = walk(programs, params, naming, &mut |name, layer, start, piece| {
+        frontier.push(artifact_leaf_parts_v1(name, layer, start, piece))
+    })?;
     debug_assert_eq!(frontier.leaf_count(), count as u64);
     Ok((frontier.root().ok_or(PalwTirInventoryError::Empty)?, count))
 }
@@ -176,8 +228,17 @@ pub fn palw_gen_inventory_operands_v1(
     programs: &[TirProgramV2],
     params: &dyn PipelineParams,
 ) -> Result<Vec<PalwArtifactOperandV1>, PalwTirInventoryError> {
+    palw_gen_inventory_operands_named_v1(programs, params, PalwGenInventoryNamingV1::Pipeline)
+}
+
+/// [`palw_gen_inventory_operands_v1`] under `naming`.
+pub fn palw_gen_inventory_operands_named_v1(
+    programs: &[TirProgramV2],
+    params: &dyn PipelineParams,
+    naming: PalwGenInventoryNamingV1,
+) -> Result<Vec<PalwArtifactOperandV1>, PalwTirInventoryError> {
     let mut out = Vec::new();
-    walk(programs, params, &mut |name, layer, start, piece| {
+    walk(programs, params, naming, &mut |name, layer, start, piece| {
         out.push(PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start: start, bytes: piece.to_vec() })
     })?;
     Ok(out)
@@ -203,7 +264,17 @@ pub fn palw_gen_open_leaves_v1(
     params: &dyn PipelineParams,
     leaves: impl IntoIterator<Item = u32>,
 ) -> Result<Vec<PalwArtifactOpeningV1>, PalwTirInventoryError> {
-    let operands = palw_gen_inventory_operands_v1(programs, params)?;
+    palw_gen_open_leaves_named_v1(programs, params, PalwGenInventoryNamingV1::Pipeline, leaves)
+}
+
+/// [`palw_gen_open_leaves_v1`] under `naming`.
+pub fn palw_gen_open_leaves_named_v1(
+    programs: &[TirProgramV2],
+    params: &dyn PipelineParams,
+    naming: PalwGenInventoryNamingV1,
+    leaves: impl IntoIterator<Item = u32>,
+) -> Result<Vec<PalwArtifactOpeningV1>, PalwTirInventoryError> {
+    let operands = palw_gen_inventory_operands_named_v1(programs, params, naming)?;
     let wanted: std::collections::BTreeSet<u32> = leaves.into_iter().collect();
     let count = operands.len() as u32;
     wanted

@@ -479,6 +479,8 @@ pub mod palw_tir_fence2_v1;
 pub mod palw_improve_v1;
 /// RFC-0004: the protocol's state-side types (policy, lines, epochs, candidates, evaluation, promotion, rewards).
 pub mod palw_improve_state_v1;
+/// RFC-0004 §7.2 (A6): the evaluation job family — the job, its derived context, its binding, its table and the outcomes a missing evaluation takes.
+pub mod palw_improve_eval_v1;
 /// RFC-0004 §6.3: a candidate's artifact reference and the composite artifact root (the candidates lane's).
 pub mod palw_improve_artifact_v1;
 /// RFC-0004 §6: the candidate's wire payload (the candidates lane's).

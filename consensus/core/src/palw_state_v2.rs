@@ -106,6 +106,9 @@ mod palw_improve_fold_v1;
 mod palw_improve_material_fold_v1;
 pub use palw_improve_fold_v1::{PALW_STATE_V2_IMPROVE_PAYOUT_KEY_PREFIX, PalwMaterialPlacementV1};
 pub use palw_improve_material_fold_v1::PALW_IMPROVE_MATERIAL_SWEEP_ROWS_PER_BLOCK_V1;
+#[path = "palw_improve_eval_fold_v1.rs"]
+mod palw_improve_eval_fold_v1;
+pub use palw_improve_eval_fold_v1::PALW_IMPROVE_TABLE_EVAL_JOBS_V1;
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
@@ -6620,6 +6623,12 @@ pub enum PalwConsensusObjectV2 {
         /// extractor's, which recomputes it from the commitment.
         #[borsh(skip)]
         job_pin: Hash64,
+        /// **RFC-0004 A6: an evaluation claim's job and payload tail** (FP job version 9), built by the
+        /// extractor from the evaluation payload it decoded and checked; `None` for every other
+        /// commitment. **`#[borsh(skip)]`** as `job_pin` is: the object's Borsh encoding is exactly
+        /// the one before this field, and a decoded object reads `None` — never an evaluation claim.
+        #[borsh(skip)]
+        eval: Option<Box<crate::palw_improve_eval_v1::PalwFpEvalCarriageV1>>,
     },
     /// **ADR-0075 Decision 1: a drilled family enters the chain's certified set through its own
     /// evidence.** The transition grades `evidence` with the shipped court's grader
@@ -10291,6 +10300,10 @@ pub struct PalwChainStateV2 {
     improvement_licences: BTreeMap<Hash64, crate::palw_improve_material_v1::PalwTeacherLicenceRecordV1>,
     /// RFC-0004 A5 (decision 7a): the classes admitted as composite candidates, with their references.
     improvement_composite_classes: BTreeMap<Hash64, crate::palw_improve_composite_v1::PalwTirCompositeRefV1>,
+    /// **RFC-0004 A6: every evaluation job's row**, by `(line, epoch, item, subject, kind)` — written at
+    /// the job's first claim (`palw_improve_eval_fold_v1`). Its own Some-only root block
+    /// (`improvement-eval/v1`) and carriage tail (`0xCC`): empty below the fence.
+    improvement_eval_jobs: BTreeMap<crate::palw_improve_eval_v1::PalwEvalJobKeyV1, crate::palw_improve_eval_v1::PalwEvalJobStateV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
@@ -10320,6 +10333,8 @@ pub struct PalwChainStateV2 {
     improvement_opt_in_expiries: BTreeSet<(u64, Hash64)>,
     /// RFC-0004 A4: licences by `(expiry_daa, licence_id)`.
     improvement_licence_expiries: BTreeSet<(u64, Hash64)>,
+    /// RFC-0004 A6: the evaluation claims' jobs, by claim id — from `improvement_eval_jobs`' rows.
+    improvement_eval_claims: BTreeMap<Hash64, crate::palw_improve_eval_v1::PalwEvalJobKeyV1>,
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
     deadlines: BTreeSet<(u64, Hash64)>,
     /// `(accepted_blue_score, claim)` for every non-terminal claim — what the frontier reads.
@@ -10501,6 +10516,7 @@ impl PalwChainStateV2 {
             improvement_artifacts: BTreeMap::new(),
             improvement_licences: BTreeMap::new(),
             improvement_composite_classes: BTreeMap::new(),
+            improvement_eval_jobs: BTreeMap::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -10512,6 +10528,7 @@ impl PalwChainStateV2 {
             improvement_material_epochs: BTreeSet::new(),
             improvement_opt_in_expiries: BTreeSet::new(),
             improvement_licence_expiries: BTreeSet::new(),
+            improvement_eval_claims: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -12756,6 +12773,13 @@ impl PalwChainStateV2 {
             state.update(collection_root(b"improvement_licences", &self.improvement_licences).as_byte_slice());
             state.update(collection_root(b"improvement_composite_classes", &self.improvement_composite_classes).as_byte_slice());
         }
+        // **RFC-0004 A6: the evaluation jobs, ONE Some-only block** (after the material lane's
+        // `improvement-material/v1`) — empty until a job's first claim, which nothing below
+        // `palw_improvement_v1` can make.
+        if !self.improvement_eval_jobs.is_empty() {
+            state.update(b"improvement-eval/v1");
+            state.update(collection_root(b"improvement_eval_jobs", &self.improvement_eval_jobs).as_byte_slice());
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -12877,7 +12901,15 @@ impl PalwChainStateV2 {
             // ledger inside range, spends only on a certified (Final) claim, and zero immature
             // contribution (a commitment is not a block's work).
             if let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source {
-                if *quanta == 0 || claim.pwu % (*quanta as u64) != 0 || claim.pwu / (*quanta as u64) == 0 {
+                // RFC-0004 A6 (MIP-17): an evaluation claim is the one free-prompt claim with no quanta —
+                // and then it earns nothing at all: no pwu, no spend, no receipt rights, no escrow.
+                if *quanta == 0 {
+                    if claim.pwu != 0 || !spent.is_empty() || claim.rights_reserved != 0 || claim.escrowed_reward != 0 {
+                        return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                            "free-prompt claim {id} has no quanta and earns something"
+                        )));
+                    }
+                } else if claim.pwu % (*quanta as u64) != 0 || claim.pwu / (*quanta as u64) == 0 {
                     return Err(PalwStateV2Error::CarriageInconsistent(format!("free-prompt claim {id} has non-uniform quanta")));
                 }
                 if spent.iter().any(|q| *q >= *quanta) {
@@ -25055,6 +25087,8 @@ impl<'a> TransitionBuilder<'a> {
         self.note_final_work(&id, claim, final_daa);
         // RFC-0004 (spec 17 §17.4.5): a Final claim of a governed line's head counts toward its trigger.
         self.note_improvement_usage_at_final_v1(claim, final_daa);
+        // RFC-0004 A6 (MIP-17): an evaluation claim's Final records its score and pays its fee.
+        self.note_improvement_eval_final_v1(&id, claim, final_daa)?;
         self.release_for_claim(claim, final_daa)?;
         // The weight divergence between the lanes (ADR-0044): an attempt's Final IS its block's
         // certified work; a free-prompt Final only LICENSES — its weight arrives per spent
@@ -33820,6 +33854,7 @@ fn apply_object(
             trace_retention_daa,
             consumed_prefix_state,
             job_pin,
+            eval,
         } => {
             if builder.state.claims.contains_key(claim_id) {
                 return Err(PalwStateV2Error::DuplicateClaim(*claim_id));
@@ -33845,6 +33880,29 @@ fn apply_object(
             // ADR-0160 lane liab (AG-3): nor while its bond is frozen (empty map below the fence).
             if crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&builder.state, bond) {
                 return Err(PalwStateV2Error::ProducerFrozen { bond: *bond });
+            }
+            // **RFC-0004 A6 (MIP-17): an evaluation claim** — the arm's one guarded branch. It is off
+            // the reward path (no quanta, pwu, receipt rights or weight), priced by nothing, and its
+            // context is the chain's; its `Final` pays the subject's escrowed fee
+            // (`palw_improve_eval_fold_v1`). Every other commitment goes on below, as before.
+            if let Some(eval) = eval {
+                return palw_improve_eval_fold_v1::apply_improvement_eval_commitment_v1(
+                    builder,
+                    ctx,
+                    palw_improve_eval_fold_v1::PalwEvalCommitV1 {
+                        claim_id,
+                        class_id,
+                        bond,
+                        work_leaves: *work_leaves,
+                        prompt_token_ids,
+                        decode_tokens_executed: *decode_tokens_executed,
+                        trace_root,
+                        output_root,
+                        execution_root,
+                        job_pin,
+                        eval,
+                    },
+                );
             }
             let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
             if let PalwClassStatusV2::Frozen { .. } = class.status {
@@ -36498,6 +36556,7 @@ fn apply_improvement_row_v1(
         PALW_IMPROVE_TABLE_RESULTS_V1 => swap(&mut state.improvement_results, key, old, new, revert),
         PALW_IMPROVE_TABLE_GRANTS_V1 => swap(&mut state.improvement_grants, key, old, new, revert),
         PALW_IMPROVE_TABLE_EARNINGS_V1 => swap(&mut state.improvement_earnings, key, old, new, revert),
+        PALW_IMPROVE_TABLE_EVAL_JOBS_V1 => swap(&mut state.improvement_eval_jobs, key, old, new, revert),
         _ => Err(PalwStateV2Error::DeltaMismatch("an improvement row names no table")),
     }
 }
@@ -36853,6 +36912,7 @@ fn rebuild_improvement_indices_v1(state: &mut PalwChainStateV2) {
     state.improvement_retiring = state.improvement_epochs.values().filter_map(palw_improvement_retiring_entry_v1).collect();
     state.improvement_open_epochs = state.improvement_epochs.values().filter(|epoch| !epoch.is_decided()).count() as u32;
     state.improvement_live_results = state.improvement_epochs.values().map(palw_improvement_live_results_of_v1).sum();
+    state.improvement_eval_claims = palw_improve_eval_fold_v1::palw_improve_eval_claims_index_v1(&state.improvement_eval_jobs);
 }
 
 /// RFC-0004: what an epoch header holds against `max_live_results` — its bound until its results retire.
@@ -37200,6 +37260,8 @@ pub struct PalwStateCarriageV2 {
     pub improvement_artifacts: BTreeMap<(Hash64, Hash64), crate::palw_improve_material_v1::PalwTeachingArtifactRecordV1>,
     pub improvement_licences: BTreeMap<Hash64, crate::palw_improve_material_v1::PalwTeacherLicenceRecordV1>,
     pub improvement_composite_classes: BTreeMap<Hash64, crate::palw_improve_composite_v1::PalwTirCompositeRefV1>,
+    /// **RFC-0004 A6: the evaluation jobs.** A tagged tail (`0xCC`), encoded only when non-empty; rooted.
+    pub improvement_eval_jobs: BTreeMap<crate::palw_improve_eval_v1::PalwEvalJobKeyV1, crate::palw_improve_eval_v1::PalwEvalJobStateV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -37349,6 +37411,8 @@ const PALW_CARRIAGE_IMPROVEMENT_DATASETS_TAIL_V1: u8 = 0xC8;
 const PALW_CARRIAGE_IMPROVEMENT_ARTIFACTS_TAIL_V1: u8 = 0xC9;
 const PALW_CARRIAGE_IMPROVEMENT_LICENCES_TAIL_V1: u8 = 0xCA;
 const PALW_CARRIAGE_IMPROVEMENT_COMPOSITE_CLASSES_TAIL_V1: u8 = 0xCB;
+/// RFC-0004 A6: the evaluation jobs' tail (the evaluation lane's `0xCC`–`0xCF`).
+const PALW_CARRIAGE_IMPROVEMENT_EVAL_JOBS_TAIL_V1: u8 = 0xCC;
 
 /// **RFC-0004: the improvement tables' consistency** (spec 17 §17.3): every row under its own key,
 /// every governed line with exactly its policy, usage and pool, every detail row under an existing
@@ -37694,6 +37758,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_IMPROVEMENT_COMPOSITE_CLASSES_TAIL_V1.serialize(writer)?;
             self.improvement_composite_classes.serialize(writer)?;
         }
+        if !self.improvement_eval_jobs.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_EVAL_JOBS_TAIL_V1.serialize(writer)?;
+            self.improvement_eval_jobs.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -37863,6 +37931,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_improvement_licences = false;
         let mut improvement_composite_classes = BTreeMap::new();
         let mut seen_improvement_composite_classes = false;
+        let mut improvement_eval_jobs = BTreeMap::new();
+        let mut seen_improvement_eval_jobs = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -38093,6 +38163,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_improvement_composite_classes = true;
                     improvement_composite_classes = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_IMPROVEMENT_EVAL_JOBS_TAIL_V1 if !seen_improvement_eval_jobs => {
+                    seen_improvement_eval_jobs = true;
+                    improvement_eval_jobs = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -38221,6 +38295,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             improvement_artifacts,
             improvement_licences,
             improvement_composite_classes,
+            improvement_eval_jobs,
         })
     }
 }
@@ -38327,6 +38402,7 @@ impl PalwStateCarriageV2 {
             improvement_artifacts: state.improvement_artifacts.clone(),
             improvement_licences: state.improvement_licences.clone(),
             improvement_composite_classes: state.improvement_composite_classes.clone(),
+            improvement_eval_jobs: state.improvement_eval_jobs.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -38422,6 +38498,8 @@ impl PalwStateCarriageV2 {
         palw_improvement_carriage_consistent_v1(&self).map_err(PalwStateV2Error::CarriageInconsistent)?;
         // RFC-0004 A4/A5: the material tables likewise, and every revealed artifact opens its own key.
         palw_improve_material_fold_v1::palw_improvement_material_carriage_consistent_v1(&self)
+            .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        palw_improve_eval_fold_v1::palw_improve_eval_carriage_consistent_v1(&self.improvement_eval_jobs, &self.improvement_epochs)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
@@ -38522,6 +38600,7 @@ impl PalwStateCarriageV2 {
             improvement_artifacts: self.improvement_artifacts,
             improvement_licences: self.improvement_licences,
             improvement_composite_classes: self.improvement_composite_classes,
+            improvement_eval_jobs: self.improvement_eval_jobs,
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -38533,6 +38612,7 @@ impl PalwStateCarriageV2 {
             improvement_material_epochs: BTreeSet::new(),
             improvement_opt_in_expiries: BTreeSet::new(),
             improvement_licence_expiries: BTreeSet::new(),
+            improvement_eval_claims: BTreeMap::new(),
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -50758,6 +50838,7 @@ pub(crate) mod tests {
     fn fp_commit(claim_word: u64, pwu: u64, quanta: u32) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            eval: None,
             claim: h64(claim_word),
             class_id: h64(1),
             bond: bond_key(1),
@@ -51600,6 +51681,7 @@ pub(crate) mod tests {
     fn derived_commit_from(bond: u64, claim_word: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            eval: None,
             claim: h64(claim_word),
             class_id: derived_profile().shape_profile_id(),
             bond: bond_key(bond),
@@ -52010,6 +52092,7 @@ pub(crate) mod tests {
         fn commit(class: Hash64, claim_word: u64, bond: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::FreePromptCommitted {
                 job_pin: kaspa_hashes::Hash64::default(),
+                eval: None,
                 claim: h64(claim_word),
                 class_id: class,
                 bond: bond_key(bond),
@@ -52698,6 +52781,7 @@ pub(crate) mod tests {
                 ..
             } => PalwConsensusObjectV2::FreePromptCommitted {
                 job_pin: kaspa_hashes::Hash64::default(),
+                eval: None,
                 claim,
                 class_id,
                 bond,
@@ -55943,6 +56027,7 @@ pub(crate) mod tests {
             improvement_artifacts: _,
             improvement_licences: _,
             improvement_composite_classes: _,
+            improvement_eval_jobs: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -56122,6 +56207,17 @@ pub(crate) mod tests {
                     c,
                     crate::palw_improve_composite_v1::PalwTirCompositeRefV1 { parent_class: c, parent_root: c, adapter_root: c, p: 1 },
                 );
+            })),
+            ("improvement_eval_jobs", Box::new(|s| {
+                let job = crate::palw_improve_eval_v1::PalwEvalJobV1 {
+                    line_id: Hash64::from_bytes([0xCC; 64]),
+                    epoch: 1,
+                    item: 0,
+                    subject: crate::palw_improve_state_v1::PalwEvalSubjectV1::Parent,
+                    kind: crate::palw_improve_state_v1::PalwScoringKindV1::ExactMatch,
+                    mode: crate::palw_improve_eval_v1::PalwEvalModeV1::Generate { seed: Hash64::default(), max_new: 4, stop_ids: vec![] },
+                };
+                s.improvement_eval_jobs.insert(job.key(), crate::palw_improve_eval_v1::PalwEvalJobStateV1 { job, claim: None });
             })),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),

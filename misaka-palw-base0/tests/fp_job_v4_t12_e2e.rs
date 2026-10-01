@@ -225,7 +225,7 @@ fn a_v4_job_goes_produce_verify_license_on_testnet_12_with_the_decode_rules_arme
         sampling_seed: [0x3C; 32],
         temperature_q: 1 << 24,
         decode: None,
-        v5: None,
+        tail: None,
     };
     let controls =
         DecodeConfigV4 { repeat_penalty_q: 131_072, penalty_window: 8, presence_penalty_q: 1 << 23, ..DecodeConfigV4::NOOP };

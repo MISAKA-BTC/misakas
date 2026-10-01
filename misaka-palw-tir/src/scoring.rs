@@ -1,25 +1,29 @@
 //! **The scoring library** (RFC-0004 §7.3, work item A7) — the stages an evaluation pipeline scores a
-//! subject with: [`exact_match_v1`], [`ref_loglik_v1`], [`judge_v1`] and [`pairwise_v1`].
+//! subject with: [`exact_match_v1`], [`ref_logprob_v1`] and [`ref_loglik_sum_v1`] (RefLogLik, two
+//! stages), [`judge_v1`] and [`pairwise_v1`].
 //!
 //! Each is an ordinary version-2 program (spec 04b §15) of plain primitives — nothing here is known
 //! to the court, and a program built by these functions and the same program written out by hand are
-//! the same bytes. Each runs as ONE position (`TripRule::Fixed { n: 1 }`), reads only external inputs
-//! (no weights: every param is lifted into an input), and commits its score as its `Final` output —
+//! the same bytes. Each reads only external inputs (no weights: every param is lifted into an input)
+//! and all but RefLogLik's first stage run as ONE position (`TripRule::Fixed { n: 1 }`) and commit
+//! their score as their `Final` output —
 //! an `i32` tensor, so the score is a committed leaf a court adjudicates like any other and the
 //! pipeline's output digest (`score_root`, RFC-0003 §I.3) commits it.
 //!
 //! | kind | inputs (binding) | score |
 //! | --- | --- | --- |
 //! | ExactMatch | the generated ids (`Generated` or `FinalizedOutput`) and their count, the key's ids and their count (`Key`), the opening and closing delimiter ids (job scalars; `−1` for none) | `[1]`: 1 when the span after the first opening delimiter, up to the first closing one at or after it, equals the key; else 0 |
-//! | RefLogLik | a decode stage's consumed logits rows and their count (`StageRows`, `StageRowCount`), the reference ids and their count (`Generated`, teacher-forced), the subject's logit scale (a job scalar, Q24 nats per logit unit) | `[2]`: `Σ_r log p(ref_r)` in Q24 nats, exact, as `(hi, lo)` with `sum = hi · 2^31 + lo`, `lo ∈ [0, 2^31)` |
+//! | RefLogLik | stage 1 (`TokenCount` over the reference, `Generated`): the decode stage's consumed rows (`StageRows`) and the subject's logit scale (a job scalar, Q24 nats per logit unit), one position per reference id; stage 2: stage 1's rows and count | `[2]`: `Σ_r log p(ref_r)` in Q24 nats, exact, as `(hi, lo)` with `sum = hi · 2^31 + lo`, `lo ∈ [0, 2^31)` |
 //! | Judge | a judge stage's scalar (`StageFinal`) | `[1]`: the judge's scalar, clamped to the policy's `[lo, hi]` |
 //! | Pairwise | a pairwise judge's preference of `A` over `B` (`StageFinal`), the order R drew (a job scalar: 0 when `A` is the candidate) and the margin (a job scalar) | `[1]`: +1 when the candidate is preferred beyond the margin, −1 when the parent is, 0 otherwise |
 //!
 //! **RefLogLik's arithmetic** is the library's shifted softmax in log form, per row `r`: `m = max_j
 //! x_j`; `z_j = clamp((x_j − m) · scale, i32::MIN, 0)` (Q24 nats); `S = Σ_j IntExp(z_j)`;
-//! `log p(ref_r) = z_{ref_r} − IntLn(S)`; the rows before `min(ref_count, rows_count)` summed in `i64`,
-//! exactly. [`ref_loglik_reference_v1`] is the same arithmetic in plain Rust — what a second
-//! implementation checks the golden vectors against.
+//! `log p(ref_r) = clamp(z_{ref_r} − IntLn(S), i32::MIN, 0)`; the rows summed in `i64`, exactly. It is
+//! two stages so that no cone reads more than one logits row (the decode door's own bound): stage 1's
+//! leaf at position `p` reads row `p` and nothing else of the edge, stage 2's reads `R` values.
+//! [`ref_loglik_reference_v1`] is the same arithmetic in plain Rust — what a second implementation
+//! checks the golden vectors against.
 
 use crate::arith::{int_exp, int_ln};
 use crate::builder::ProgramBuilder;
@@ -48,8 +52,21 @@ fn carry_of(pb: &ProgramBuilder, block: u8) -> Vec<TensorType> {
 }
 
 /// `pre` computes the score, `post` commits it clamped to `[lo, hi]`; every param is lifted into an
-/// input with its declared interval, in declaration order.
-fn finish(mut pb: ProgramBuilder, pre: u8, lo: i64, hi: i64, inputs: &[(i64, i64)], name: &str) -> TirResult<TirProgramV2> {
+/// input with its declared interval, in declaration order. A `Final` output.
+fn finish(pb: ProgramBuilder, pre: u8, lo: i64, hi: i64, inputs: &[(i64, i64)], name: &str) -> TirResult<TirProgramV2> {
+    finish_as(pb, pre, lo, hi, inputs, name, false)
+}
+
+/// [`finish`], with a `Rows` output when `rows` (one value per position).
+fn finish_as(
+    mut pb: ProgramBuilder,
+    pre: u8,
+    lo: i64,
+    hi: i64,
+    inputs: &[(i64, i64)],
+    name: &str,
+    rows: bool,
+) -> TirResult<TirProgramV2> {
     let carry = carry_of(&pb, pre);
     let (post, out) = {
         let mut b = pb.block(&format!("{name}.post"), carry);
@@ -61,7 +78,8 @@ fn finish(mut pb: ProgramBuilder, pre: u8, lo: i64, hi: i64, inputs: &[(i64, i64
     let v1 = pb.finish(pre, vec![], post, out);
     let lifted: Vec<(u16, InputSource)> =
         inputs.iter().enumerate().map(|(j, (lo, hi))| (j as u16, InputSource::External { lo: *lo, hi: *hi })).collect();
-    TirProgramV2::from_v1_lifting_params(&v1, &lifted, OutputDecl::Final { node: out })
+    let output = if rows { OutputDecl::Rows { node: out } } else { OutputDecl::Final { node: out } };
+    TirProgramV2::from_v1_lifting_params(&v1, &lifted, output)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -177,11 +195,11 @@ pub fn exact_match_reference_v1(generated: &[u32], key: &[u32], open: i64, close
 }
 
 // ---------------------------------------------------------------------------------------------
-// RefLogLik
+// RefLogLik: two stages, so no cone reads more than one logits row
 // ---------------------------------------------------------------------------------------------
 
-/// RefLogLik's static shape: `R` rows (the decode stage's rows, padded — at least its `max_trip`),
-/// each of the subject's logits node shape `row` (its last axis the vocabulary).
+/// RefLogLik's shape: `R` rows as the decode stage's edge carries them (at least its `max_trip`),
+/// each of the subject's logits node shape `row`, its last axis the vocabulary `V`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefLogLikShapeV1 {
     pub rows: u32,
@@ -191,46 +209,71 @@ pub struct RefLogLikShapeV1 {
 /// The largest logit scale a RefLogLik stage takes (Q24 nats per logit unit, `< 2^31`).
 pub const REF_LOGLIK_MAX_SCALE_V1: i64 = i32::MAX as i64;
 
-/// **RefLogLik** (RFC-0004 §7.3). Inputs, in order: `rl.rows` `i32 [R] ++ row`, `rl.rows_count`
-/// `idx []`, `rl.ref` `idx [R]`, `rl.ref_count` `idx []`, `rl.scale` `i32 []` (`≥ 0`). Output `i32 [2]`: the
-/// exact Q24 log-likelihood as `(hi, lo)`.
-pub fn ref_loglik_v1(shape: &RefLogLikShapeV1) -> TirResult<TirProgramV2> {
+/// **RefLogLik, stage 1: each reference id's log-probability** (RFC-0004 §7.3) — a `TokenCount`
+/// stage over the reference (`TokenSource::Generated`), one position per id: position `p` reads the
+/// decode stage's consumed row `p` (its cone reads that row alone: a `Gather` reads its index first)
+/// and scores its token, `z_{ref_p} − IntLn(Σ_j IntExp(z_j))` with `z = clamp((x − max x) · scale,
+/// i32::MIN, 0)`, clamped at `i32::MIN` (−128 nats). Inputs: `rl.rows` `i32 [R] ++ row` (`StageRows`
+/// over the decode stage), `rl.scale` `i32 []` (a job scalar); the token is the reference id; the
+/// `Fixed` state `rl.pos` counts the rows read. Output `Rows` `i32 [1]`.
+pub fn ref_logprob_v1(shape: &RefLogLikShapeV1) -> TirResult<TirProgramV2> {
     let r = shape.rows;
     let v: u32 = shape.row.iter().product();
     if r == 0 || v == 0 || shape.row.last().copied() != Some(v) {
-        return err(TirErrorKind::NormalForm, "a reference log-likelihood reads at least one row, and a row is its vocabulary");
+        return err(TirErrorKind::NormalForm, "a reference log-probability reads at least one row, and a row is its vocabulary");
     }
     let mut rows_shape = vec![r];
     rows_shape.extend_from_slice(&shape.row);
-    let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+    let mut pb = ProgramBuilder::new(v, HISTORY_BOUND_V1_SMALL);
     let rows = pb.param("rl.rows", DType::I32, &rows_shape, false);
-    let rows_n = pb.param("rl.rows_count", DType::Idx, &[], false);
-    let refs = pb.param("rl.ref", DType::Idx, &[r], false);
-    let ref_n = pb.param("rl.ref_count", DType::Idx, &[], false);
     let scale = pb.param("rl.scale", DType::I32, &[], false);
+    let cursor = pb.fixed_state("rl.pos", DType::I32, &[1], 0, r as i64, false);
     let pre = {
         let mut b = pb.block("rl.pre", vec![]);
         let x = b.reshape_fixed(rows, &[r, v]);
-        let x = b.cast(x, DType::I64);
-        let m = b.reduce_max(x, 1);
-        let d = b.sub(x, m, DType::I64);
+        let at = b.clamp(Ref::State(cursor), 0, r as i64 - 1, DType::Idx);
+        let row = b.gather(x, at, 0, 0);
+        let row = b.cast(row, DType::I64);
+        let m = b.reduce_max(row, 1);
+        let d = b.sub(row, m, DType::I64);
         let scale = b.cast(scale, DType::I64);
         let w = b.mul(d, scale, DType::I128);
         let z = b.clamp(w, i32::MIN as i64, 0, DType::I32);
         let e = b.int_exp(z);
         let sum = b.reduce_sum(e, 1, DType::I64);
         let ln = b.int_ln(sum);
-        let ln = b.reshape_fixed(ln, &[r]);
-        let zr = b.gather(z, refs, 1, 1);
+        let ln = b.reshape_fixed(ln, &[1]);
+        let zr = b.gather(z, Ref::Input(0), 1, 0);
         let lp = b.sub(zr, ln, DType::I64);
-        let pos = b.iota(DType::Idx, &[Dim::Fixed(r)], 0, 0, 1);
-        let in_ref = b.compare(pos, ref_n, Cmp::Lt);
-        let in_rows = b.compare(pos, rows_n, Cmp::Lt);
-        let zero8 = b.c(DType::I8, 0);
-        let kept = b.select(in_ref, in_rows, zero8, DType::I8);
+        let lp = b.clamp(lp, i32::MIN as i64, 0, DType::I32);
+        let one = b.c(DType::I32, 1);
+        let next = b.add(Ref::State(cursor), one, DType::I32);
+        let next = b.clamp(next, 0, r as i64, DType::I32);
+        b.state_write(cursor, next);
+        b.finish(&[lp])
+    };
+    finish_as(pb, pre, i32::MIN as i64, 0, &[(i32::MIN as i64, i32::MAX as i64), (0, REF_LOGLIK_MAX_SCALE_V1)], "rl", true)
+}
+
+/// **RefLogLik, stage 2: the sum** — one position reading stage 1's rows (`StageRows`, `rl.lp` `i32
+/// [R, 1]`) and their count (`StageRowCount`, `rl.count` `idx []`): `Σ_{r < count} lp_r`, exact in
+/// `i64`, committed as `(hi, lo)` with `sum = hi · 2^31 + lo`, `lo ∈ [0, 2^31)`. Output `i32 [2]`.
+pub fn ref_loglik_sum_v1(rows: u32) -> TirResult<TirProgramV2> {
+    if rows == 0 {
+        return err(TirErrorKind::NormalForm, "a reference log-likelihood sums at least one row");
+    }
+    let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+    let lp = pb.param("rl.lp", DType::I32, &[rows, 1], false);
+    let count = pb.param("rl.count", DType::Idx, &[], false);
+    let pre = {
+        let mut b = pb.block("rl.sum", vec![]);
+        let x = b.reshape_fixed(lp, &[rows]);
+        let x = b.cast(x, DType::I64);
+        let pos = b.iota(DType::Idx, &[Dim::Fixed(rows)], 0, 0, 1);
+        let kept = b.compare(pos, count, Cmp::Lt);
         let zero = b.c(DType::I64, 0);
-        let lp = b.select(kept, lp, zero, DType::I64);
-        let total = b.reduce_sum(lp, 0, DType::I64);
+        let x = b.select(kept, x, zero, DType::I64);
+        let total = b.reduce_sum(x, 0, DType::I64);
         let hi = b.shr(total, 31, Rounding::Floor, DType::I64);
         let two31 = b.c(DType::I64, 1i128 << 31);
         let hi_part = b.mul(hi, two31, DType::I64);
@@ -240,28 +283,21 @@ pub fn ref_loglik_v1(shape: &RefLogLikShapeV1) -> TirResult<TirProgramV2> {
         let out = b.concat(&[hi, lo], 0);
         b.finish(&[out])
     };
-    let full = (i32::MIN as i64, i32::MAX as i64);
-    finish(
-        pb,
-        pre,
-        i32::MIN as i64,
-        i32::MAX as i64,
-        &[full, (0, r as i64), (0, v as i64 - 1), (0, r as i64), (0, REF_LOGLIK_MAX_SCALE_V1)],
-        "rl",
-    )
+    finish(pb, pre, i32::MIN as i64, i32::MAX as i64, &[(i32::MIN as i64, 0), (0, rows as i64)], "rl.sum")
 }
 
-/// **RefLogLik in plain Rust**: `rows[r]` the logits row `ref[r]` was scored against (`rows.len()`
-/// the decode stage's consumed rows), `scale` Q24 nats per logit unit. Returns the exact Q24 sum.
+/// **One reference id's log-probability in plain Rust** (stage 1's value at a position).
+pub fn ref_logprob_reference_v1(row: &[i32], id: u32, scale: i64) -> i32 {
+    let m = row.iter().copied().max().unwrap_or(0) as i128;
+    let z: Vec<i128> = row.iter().map(|x| ((*x as i128 - m) * scale as i128).clamp(i32::MIN as i128, 0)).collect();
+    let s: i128 = z.iter().map(|z| int_exp(*z)).sum();
+    (z[id as usize] - int_ln(s)).clamp(i32::MIN as i128, 0) as i32
+}
+
+/// **RefLogLik in plain Rust**: `rows[r]` the logits row `ref[r]` was scored against (the decode
+/// stage's consumed rows), `scale` Q24 nats per logit unit. Returns the exact Q24 sum.
 pub fn ref_loglik_reference_v1(rows: &[Vec<i32>], refs: &[u32], scale: i64) -> i64 {
-    let mut total: i128 = 0;
-    for (row, id) in rows.iter().zip(refs) {
-        let m = row.iter().copied().max().unwrap_or(0) as i128;
-        let z: Vec<i128> = row.iter().map(|x| ((*x as i128 - m) * scale as i128).clamp(i32::MIN as i128, 0)).collect();
-        let s: i128 = z.iter().map(|z| int_exp(*z)).sum();
-        total += z[*id as usize] - int_ln(s);
-    }
-    total as i64
+    rows.iter().zip(refs).map(|(row, id)| ref_logprob_reference_v1(row, *id, scale) as i64).sum()
 }
 
 /// A RefLogLik score's `(hi, lo)` as the exact sum.
@@ -321,4 +357,39 @@ pub fn pairwise_v1() -> TirResult<TirProgramV2> {
 pub fn pairwise_reference_v1(pref: i32, order: i32, margin: i32) -> i32 {
     let v = (pref as i64 > margin as i64) as i32 - ((pref as i64) < -(margin as i64)) as i32;
     if order == 1 { -v } else { v }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The scoring set's identity
+// ---------------------------------------------------------------------------------------------
+
+/// The key the scoring set's id is hashed under (the caller's: this crate never hashes).
+pub const PALW_IMPROVE_SCORING_SET_DOMAIN_V1: &[u8] = b"misaka-palw/improve/scoring-set/v1";
+
+/// **The library at its reference shapes**, in the order [`scoring_set_descriptor_v1`] lists them:
+/// each program's name and canonical bytes. The shapes are pins, not limits — a policy instantiates
+/// each kind at its own shape; the descriptor says which builders the network runs.
+pub fn scoring_reference_programs_v1() -> Vec<(&'static str, TirProgramV2)> {
+    let em = exact_match_v1(ExactMatchShapeV1 { gen_len: 8, key_len: 4, token_bound: 16 }).expect("the reference shape builds");
+    let lp = ref_logprob_v1(&RefLogLikShapeV1 { rows: 4, row: vec![1, 8] }).expect("the reference shape builds");
+    let sum = ref_loglik_sum_v1(4).expect("the reference shape builds");
+    let jd = judge_v1(-1000, 1000).expect("the reference range builds");
+    let pw = pairwise_v1().expect("builds");
+    vec![("exact-match", em), ("ref-logprob", lp), ("ref-loglik-sum", sum), ("judge", jd), ("pairwise", pw)]
+}
+
+/// **The scoring set's descriptor** — the canonical bytes RFC-0004's `scoring_set_id` hashes, keyed
+/// [`PALW_IMPROVE_SCORING_SET_DOMAIN_V1`] by the caller (this crate is a leaf and never hashes):
+/// `le16(SCORING_LIBRARY_VERSION_V1)` and, for each reference program in order, `le32(|name|) ‖ name ‖
+/// le32(|bytes|) ‖ bytes`. Two builds whose scoring stages differ in any byte differ here.
+pub fn scoring_set_descriptor_v1() -> Vec<u8> {
+    let mut out = SCORING_LIBRARY_VERSION_V1.to_le_bytes().to_vec();
+    for (name, program) in scoring_reference_programs_v1() {
+        let bytes = program.encode();
+        out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&bytes);
+    }
+    out
 }

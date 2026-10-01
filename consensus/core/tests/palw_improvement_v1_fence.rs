@@ -308,11 +308,16 @@ fn validate_refuses_every_value_this_build_cannot_run() {
 #[test]
 fn the_ids_are_keyed_hashes_of_their_descriptors() {
     let keyed = |key: &[u8], bytes: &[u8]| blake2b_simd::Params::new().hash_length(64).key(key).hash(bytes).as_bytes().to_vec();
-    use kaspa_consensus_core::palw_improve_v1::{PALW_IMPROVE_SCORING_SET_DESCRIPTOR_V1, PALW_IMPROVE_SCORING_SET_DOMAIN_V1};
+    use kaspa_consensus_core::palw_improve_v1::PALW_IMPROVE_SCORING_SET_DOMAIN_V1;
+    // The scoring set: the library's descriptor (its version and reference programs), pinned by its
+    // vector (consensus-vectors/tir-v2/scoring/set.json).
     assert_eq!(
         palw_improve_scoring_set_id_v1().as_byte_slice(),
-        &keyed(PALW_IMPROVE_SCORING_SET_DOMAIN_V1, PALW_IMPROVE_SCORING_SET_DESCRIPTOR_V1.as_bytes())[..]
+        &keyed(PALW_IMPROVE_SCORING_SET_DOMAIN_V1, &misaka_palw_tir::scoring::scoring_set_descriptor_v1())[..]
     );
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v2/scoring/set.json");
+    let set: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("the scoring set's vector")).expect("json");
+    assert_eq!(set["scoring_set_id_hex"].as_str().unwrap(), palw_improve_scoring_set_id_v1().to_string());
     // The sign table's id is the pinned digest of the whole table (spec 17 §17.9.2); the promotion
     // module's `the_pinned_sign_table_is_the_definition` recomputes it.
     let pinned = kaspa_consensus_core::palw_improve_promotion_v1::PALW_IMPROVE_SIGN_TABLE_ID_HEX_V1;

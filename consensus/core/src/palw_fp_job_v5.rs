@@ -181,16 +181,24 @@ impl PalwFreePromptJobV5 {
     /// bytes as this wrapper's.
     pub fn into_carried(&self) -> PalwFreePromptJobV3 {
         let tail = PalwFpV5TailV1 { images: self.images.clone(), source: self.source };
-        PalwFreePromptJobV3 { version: PALW_FP_V5_VERSION, v5: Some(tail), ..self.v4.clone() }
+        PalwFreePromptJobV3 {
+            version: PALW_FP_V5_VERSION,
+            tail: Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::V5(tail)),
+            ..self.v4.clone()
+        }
     }
 
     /// **The V5 job a carried job is**, if it is one: version 8, its decode rules and its tail present.
     pub fn from_carried(job: &PalwFreePromptJobV3) -> Result<Self, PalwFpV5Error> {
-        let Some(tail) = job.v5.clone().filter(|_| job.version == PALW_FP_V5_VERSION && job.decode.is_some()) else {
+        let tail = match &job.tail {
+            Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::V5(tail)) => Some(tail.clone()),
+            _ => None,
+        };
+        let Some(tail) = tail.filter(|_| job.version == PALW_FP_V5_VERSION && job.decode.is_some()) else {
             return Err(PalwFpV5Error::NotAV5Job { version: job.version });
         };
         Ok(Self {
-            v4: PalwFreePromptJobV3 { version: PALW_FP_V4_VERSION, v5: None, ..job.clone() },
+            v4: PalwFreePromptJobV3 { version: PALW_FP_V4_VERSION, tail: None, ..job.clone() },
             images: tail.images,
             source: tail.source,
         })

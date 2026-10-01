@@ -159,6 +159,7 @@ fn fp_commit(class_id: Hash64, bond: PalwBondKeyV2, pk: Vec<u8>, work_leaves: u6
     let ids = vec![i as u32];
     PalwConsensusObjectV2::FreePromptCommitted {
         job_pin: kaspa_hashes::Hash64::default(),
+        eval: None,
         claim: h(0xF0_0000_0000 + i),
         class_id,
         bond,

@@ -2371,7 +2371,10 @@ image is not among the job facts.
   scoring library (`misaka_palw_tir::scoring`: ExactMatch, RefLogLik, Judge, Pairwise; vectors
   `consensus-vectors/tir-v2/scoring/`). Its inputs are job facts (the generated ids, the key, a
   finalized output, job scalars) or edges (a decode stage's consumed rows, a judge stage's output),
-  and its score is its committed `Final` output — adjudicated as any committed leaf.
+  and its score is its committed `Final` output — adjudicated as any committed leaf. RefLogLik is two
+  stages so that no cone reads more than one logits row: a `TokenCount` stage over the reference
+  whose position `p` reads consumed row `p`, then their exact sum. The network's set is pinned by
+  `scoring_set_descriptor_v1` (hashed by the caller under `misaka-palw/improve/scoring-set/v1`).
 
 ### 15.11 Open items
 

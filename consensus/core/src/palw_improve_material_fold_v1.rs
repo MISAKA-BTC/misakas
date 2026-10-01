@@ -920,8 +920,8 @@ fn keys_may_open_v1(state: &PalwChainStateV2, header: &PalwImprovementEpochV1, i
 /// in `Evaluating`, every subject's ExactMatch job on `items` holds a final claim; in `Closing`, none
 /// holds a live one. The evaluation lane replaces this body with its job table's answer; until then a
 /// key opens in `Closing` only.
-fn palw_improve_generations_settled_hook_v1(_state: &PalwChainStateV2, header: &PalwImprovementEpochV1, _items: &[u32]) -> bool {
-    header.state == PalwEpochStateV1::Closing
+fn palw_improve_generations_settled_hook_v1(state: &PalwChainStateV2, header: &PalwImprovementEpochV1, items: &[u32]) -> bool {
+    header.state == PalwEpochStateV1::Closing && state.improvement_eval_generations_settled_v1(&header.line_id, header.epoch, items)
 }
 
 /// **The evaluation lane's ExactMatch scorer at a key's reveal** (spec 17 §17.8.3): for every subject
@@ -930,13 +930,13 @@ fn palw_improve_generations_settled_hook_v1(_state: &PalwChainStateV2, header: &
 /// `score_improvement_exact_match_v1(line, epoch, item, key)`; until then a revealed key scores
 /// nothing, and the item counts as the missing-evaluation rule says.
 fn palw_improve_exact_match_on_reveal_hook_v1(
-    _builder: &mut TransitionBuilder<'_>,
-    _line_id: &Hash64,
-    _epoch: u64,
-    _item: u32,
-    _key: &[u32],
+    builder: &mut TransitionBuilder<'_>,
+    line_id: &Hash64,
+    epoch: u64,
+    item: u32,
+    key: &[u32],
 ) -> Result<(), PalwStateV2Error> {
-    Ok(())
+    builder.score_improvement_exact_match_v1(line_id, epoch, item, key)
 }
 
 // ---- the hooks the core's scoring asks (spec 17 §17.5.3 step 7, §17.9.1) ---------------------------

@@ -760,34 +760,37 @@ pub fn eval_exact_match_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
 }
 
 /// **Teacher-forced, then RefLogLik** (RFC-0004 §7.3): the toy LM runs over `prompt ‖ reference`
-/// (the reference is the job's `generated`, given), and the RefLogLik stage reads its consumed logits
-/// rows (`StageRows`, `StageRowCount`), the reference (`Generated`) and the logit scale (job scalar 0).
+/// (the reference is the job's `generated`, given); RefLogLik's first stage runs one position per
+/// reference id (`TokenCount` over `Generated`) and reads the decode stage's consumed row at its
+/// position (`StageRows`) with the logit scale (job scalar 0); its second sums them.
 pub fn eval_ref_loglik_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
-    let rl =
-        misaka_palw_tir::scoring::ref_loglik_v1(&misaka_palw_tir::scoring::RefLogLikShapeV1 { rows: EVAL_TRIP, row: vec![1, TOK] })
-            .unwrap();
+    let shape = misaka_palw_tir::scoring::RefLogLikShapeV1 { rows: EVAL_TRIP, row: vec![1, TOK] };
+    let lp = misaka_palw_tir::scoring::ref_logprob_v1(&shape).unwrap();
+    let sum = misaka_palw_tir::scoring::ref_loglik_sum_v1(EVAL_TRIP).unwrap();
     let p = TirPipelineV1 {
         version: TIR_PIPELINE_VERSION_V1,
         stages: vec![
             subject_stage(),
             StageDecl {
-                name: "score".into(),
+                name: "ref.lp".into(),
                 program: 1,
+                trip: TripRule::TokenCount,
+                max_trip: EVAL_TRIP,
+                tokens: Some(TokenRule { prefix: vec![], source: TokenSource::Generated, suffix: vec![], pad: None }),
+                bind: vec![Binding::StageRows { stage: 0, drop: 0, pad_to: EVAL_TRIP }, Binding::JobScalar { index: 0 }],
+            },
+            StageDecl {
+                name: "score".into(),
+                program: 2,
                 trip: TripRule::Fixed { n: 1 },
                 max_trip: 1,
                 tokens: None,
-                bind: vec![
-                    Binding::StageRows { stage: 0, drop: 0, pad_to: EVAL_TRIP },
-                    Binding::StageRowCount { stage: 0, drop: 0 },
-                    Binding::JobTokens { rule: rule(TokenSource::Generated, EVAL_TRIP) },
-                    Binding::JobTokenCount { rule: rule(TokenSource::Generated, EVAL_TRIP) },
-                    Binding::JobScalar { index: 0 },
-                ],
+                bind: vec![Binding::StageRows { stage: 1, drop: 0, pad_to: EVAL_TRIP }, Binding::StageRowCount { stage: 1, drop: 0 }],
             },
         ],
-        output_stage: 1,
+        output_stage: 2,
     };
-    (p, vec![lm_program(false), rl])
+    (p, vec![lm_program(false), lp, sum])
 }
 
 /// A toy judge's masked embedding sum of a padded id list: `Σ_{i < count} emb[ids_i]` as `i32 [1, D]`.

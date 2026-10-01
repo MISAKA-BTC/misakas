@@ -340,12 +340,23 @@ pub struct PalwFreePromptJobV3 {
     /// pairing ([`PalwFpV3Error::DecodeConfigVersionMismatch`]). Serialized after every V3 field
     /// and only when present, so a V3 job's bytes are unchanged.
     pub decode: Option<DecodeConfigV4>,
-    /// **RFC-0003 §II.2.1–§II.2.2: FP Job V5's tail** — its images and its source — `Some` exactly at
-    /// [`crate::palw_fp_job_v5::PALW_FP_V5_VERSION`] (with `decode` present) and `None` at every other
-    /// version; validation refuses any other pairing ([`PalwFpV3Error::ImagesVersionMismatch`]).
-    /// Serialized after `decode` and only when present, so a V3 or V4 job's bytes are unchanged. A V5
-    /// job is dormant behind `Params::palw_fp_job_v5` ([`crate::palw_fp_job_v5`]).
-    pub v5: Option<crate::palw_fp_job_v5::PalwFpV5TailV1>,
+    /// **The tail a later job version adds after `decode`**: FP Job V5's images and source (RFC-0003
+    /// §II.2.1–§II.2.2) at [`crate::palw_fp_job_v5::PALW_FP_V5_VERSION`], or an evaluation job (RFC-0004
+    /// §7.2) at [`crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION`] — each with `decode` present — and
+    /// `None` at every other version; validation refuses any other pairing
+    /// ([`PalwFpV3Error::ImagesVersionMismatch`]). Serialized after `decode`, as the version's own
+    /// type and only when present, so a V3 or V4 job's bytes are unchanged. Both are dormant: V5 behind
+    /// `Params::palw_fp_job_v5`, evaluation behind `Params::palw_improvement_v1`.
+    pub tail: Option<PalwFpJobTailV1>,
+}
+
+/// **What a later job version adds after its V4 rules** — the version word says which.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwFpJobTailV1 {
+    /// FP Job V5 (version 8): the job's images and source.
+    V5(crate::palw_fp_job_v5::PalwFpV5TailV1),
+    /// An evaluation job (version 9, RFC-0004 §7.2): the job the chain derives the claim's context from.
+    Eval(Box<crate::palw_improve_eval_v1::PalwEvalJobV1>),
 }
 
 /// **RFC-0001 §A.4's `PalwFreePromptJobV4`**: a [`PalwFreePromptJobV3`] at
@@ -378,9 +389,12 @@ impl borsh::BorshSerialize for PalwFreePromptJobV3 {
         if let Some(decode) = &self.decode {
             borsh::BorshSerialize::serialize(decode, writer)?;
         }
-        // The V5 tail (RFC-0003 §II.2.1–§II.2.2), written exactly when it is present, after the V4 tail.
-        if let Some(tail) = &self.v5 {
-            borsh::BorshSerialize::serialize(tail, writer)?;
+        // A later version's tail (RFC-0003 §II.2.1–§II.2.2's V5, RFC-0004 §7.2's evaluation job), written
+        // exactly when it is present, after the V4 tail, as its own type (the version word names it).
+        match &self.tail {
+            Some(PalwFpJobTailV1::V5(tail)) => borsh::BorshSerialize::serialize(tail, writer)?,
+            Some(PalwFpJobTailV1::Eval(job)) => borsh::BorshSerialize::serialize(job.as_ref(), writer)?,
+            None => {}
         }
         Ok(())
     }
@@ -409,15 +423,20 @@ impl borsh::BorshDeserialize for PalwFreePromptJobV3 {
             sampling_seed: borsh::BorshDeserialize::deserialize_reader(reader)?,
             temperature_q: borsh::BorshDeserialize::deserialize_reader(reader)?,
             decode: None,
-            v5: None,
+            tail: None,
         };
         // The version decides whether the tail exists: a V3 job's bytes end at `temperature_q`; a V4
-        // job's at its decode rules; a V5 job's (RFC-0003 §II.2.1) at its images and source, after them.
-        if version == PALW_FP_V4_VERSION || version == crate::palw_fp_job_v5::PALW_FP_V5_VERSION {
+        // job's at its decode rules; a V5 job's (RFC-0003 §II.2.1) at its images and source, after them;
+        // an evaluation job's (RFC-0004 §7.2) at its evaluation job, after them.
+        let (v5, eval) = (crate::palw_fp_job_v5::PALW_FP_V5_VERSION, crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION);
+        if version == PALW_FP_V4_VERSION || version == v5 || version == eval {
             job.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
         }
-        if version == crate::palw_fp_job_v5::PALW_FP_V5_VERSION {
-            job.v5 = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
+        if version == v5 {
+            job.tail = Some(PalwFpJobTailV1::V5(borsh::BorshDeserialize::deserialize_reader(reader)?));
+        }
+        if version == eval {
+            job.tail = Some(PalwFpJobTailV1::Eval(Box::new(borsh::BorshDeserialize::deserialize_reader(reader)?)));
         }
         Ok(job)
     }
@@ -441,6 +460,11 @@ impl PalwFreePromptJobV3 {
         self.version == crate::palw_fp_job_v5::PALW_FP_V5_VERSION
     }
 
+    /// Is this an evaluation job (RFC-0004 §7.2: version 9, outside the reward path)?
+    pub fn is_eval(&self) -> bool {
+        self.version == crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION
+    }
+
     /// The job's ADR-0082 Decision 11 sampler inputs.
     pub fn sampling_v2(&self) -> crate::palw_decode_select_v2::PalwDecodeSamplingV2 {
         crate::palw_decode_select_v2::PalwDecodeSamplingV2 { seed: self.sampling_seed, temperature_q: self.temperature_q }
@@ -450,8 +474,9 @@ impl PalwFreePromptJobV3 {
     /// §A.3's pipeline for a V4 job — to the job's budget. What every engine's decode loop, every
     /// seat's replay and the gateway's display rule drive (`PalwFpDecoderV1`).
     pub fn decoder_v1(&self) -> crate::palw_decode_pipeline_v4::PalwFpDecoderV1 {
-        // A V5 job decodes under its V4 rules (RFC-0003 §II.2.1: V5 embeds V4 unchanged).
-        match (&self.decode, self.is_v4() || self.is_v5()) {
+        // A V5 job decodes under its V4 rules (RFC-0003 §II.2.1: V5 embeds V4 unchanged), and so does an
+        // evaluation job (RFC-0004 §7.2).
+        match (&self.decode, self.is_v4() || self.is_v5() || self.is_eval()) {
             (Some(decode), true) => {
                 crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v4(decode.clone(), self.sampling_v2(), self.decode_token_limit)
             }
@@ -471,6 +496,10 @@ pub fn fp_job_id_v3(job: &PalwFreePromptJobV3) -> Hash64 {
     // RFC-0003 §II.2.1: a V5 job is named under its own domain too.
     if job.version == crate::palw_fp_job_v5::PALW_FP_V5_VERSION {
         return crate::palw_fp_job_v5::fp_job_id_v5_carried(job);
+    }
+    // RFC-0004 §7.2: an evaluation job, under its own.
+    if job.version == crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION {
+        return crate::palw_improve_eval_v1::fp_job_id_eval_carried_v1(job);
     }
     let bytes = borsh::to_vec(job).expect("PalwFreePromptJobV3 is borsh-serializable");
     canonical_id(PALW_FP_V3_DOMAIN_JOB_ID, &bytes)
@@ -1491,6 +1520,14 @@ pub enum PalwFpV3Error {
     /// version 8 carries one.
     #[error("job version {version} carries a V5 tail (images, a source) — only FP Job V5 (version 8) does")]
     ImagesVersionMismatch { version: u16 },
+    /// **RFC-0004 §7.2: an evaluation job (version 9) at an FP lane validator.** Its context is the
+    /// chain's and it is outside the reward path, so the lane's own rules never admit one; the
+    /// evaluation lane's do (`palw_improve_eval_v1::palw_fp_eval_job_shape_v1`), behind
+    /// `Params::palw_improvement_v1`.
+    #[error(
+        "an evaluation job (version 9) is admitted by the evaluation lane's rules only (RFC-0004 §7.2, behind Params::palw_improvement_v1)"
+    )]
+    EvaluationJobNotHere,
     /// **RFC-0001 §A.2: the V4 job's `DecodeConfigV4` is not in canonical form**, by name.
     #[error("the V4 job's decode config is not canonical: {0}")]
     DecodeConfigNotCanonical(crate::palw_decode_pipeline_v4::PalwDecodeConfigV4Error),
@@ -1612,7 +1649,7 @@ impl PalwFpDecodeRulesV1 {
                 if job.decode.is_some() {
                     return Err(PalwFpV3Error::DecodeConfigVersionMismatch { version: job.version, present: true });
                 }
-                if job.v5.is_some() {
+                if job.tail.is_some() {
                     return Err(PalwFpV3Error::ImagesVersionMismatch { version: job.version });
                 }
                 if !self.admits_v3() {
@@ -1629,7 +1666,7 @@ impl PalwFpDecodeRulesV1 {
                 let Some(decode) = &job.decode else {
                     return Err(PalwFpV3Error::DecodeConfigVersionMismatch { version: job.version, present: false });
                 };
-                if job.v5.is_some() {
+                if job.tail.is_some() {
                     return Err(PalwFpV3Error::ImagesVersionMismatch { version: job.version });
                 }
                 if !self.admits_v4() {
@@ -1645,6 +1682,7 @@ impl PalwFpDecodeRulesV1 {
                 }
                 Ok(())
             }
+            crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION => Err(PalwFpV3Error::EvaluationJobNotHere),
             other => Err(PalwFpV3Error::UnsupportedVersion { got: other, expected: PALW_FP_V3_VERSION }),
         }
     }
@@ -2678,7 +2716,7 @@ mod tests {
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            v5: None,
+            tail: None,
         }
     }
 
@@ -3709,7 +3747,7 @@ mod fp_material_tests {
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            v5: None,
+            tail: None,
         }
     }
 
@@ -3922,7 +3960,7 @@ mod fp_answer_tests {
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            v5: None,
+            tail: None,
         }
     }
 
@@ -4277,7 +4315,7 @@ mod job_v4_tests {
             sampling_seed: [0u8; 32],
             temperature_q: 0,
             decode: None,
-            v5: None,
+            tail: None,
         }
     }
 
@@ -4532,7 +4570,7 @@ mod job_v4_tests {
             sampling_seed: bytes_of::<32>(&case.sampling_seed),
             temperature_q: case.temperature_q,
             decode: case.decode.clone(),
-            v5: None,
+            tail: None,
         }
     }
 

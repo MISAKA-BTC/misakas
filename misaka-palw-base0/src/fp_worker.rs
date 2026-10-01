@@ -879,7 +879,7 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         sampling_seed: request.sampling_seed,
         temperature_q: request.temperature_q,
         decode,
-        v5: None,
+        tail: None,
     };
     let binding = fp_job_id_v3(&job);
 
@@ -1336,7 +1336,7 @@ mod tests {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            v5: None,
+            tail: None,
         };
         let root_of = |b: &Qwen36Backend| {
             let out = b.execute_free_prompt(&job, &prompt).expect("the free prompt runs").outcome;

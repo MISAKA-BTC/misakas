@@ -30,8 +30,8 @@ use kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2;
 use kaspa_consensus_core::palw_fp_job_v5::*;
 use kaspa_consensus_core::palw_fp_v4_vectors::*;
 use kaspa_consensus_core::palw_freeprompt_v3::{
-    PALW_FP_V3_ALL_DOMAINS, PALW_FP_V3_VERSION, PALW_FP_V4_VERSION, PalwFpDecodeRulesV1, PalwFpV3Error, PalwFreePromptJobV3,
-    fp_job_id_v3, fp_job_id_v4,
+    PALW_FP_V3_ALL_DOMAINS, PALW_FP_V3_VERSION, PALW_FP_V4_VERSION, PalwFpDecodeRulesV1, PalwFpJobTailV1, PalwFpV3Error,
+    PalwFreePromptJobV3, fp_job_id_v3, fp_job_id_v4,
 };
 use kaspa_consensus_core::palw_gen_class_v1::{
     PalwGenImageInputRefV1, PalwGenImageOfferV1, PalwGenJobImageErrorV1, PalwGenOffersV1, PalwGenSourceRefV1,
@@ -250,7 +250,7 @@ fn a_source_rides_v5_after_its_images_and_is_priced_as_prompt_tokens() {
     assert_ne!(fp_job_id_v5(&s2s), fp_job_id_v5(&other));
     // A V3 or V4 job with a V5 tail is refused by name.
     let mut v4_with_source = v4.clone();
-    v4_with_source.v5 = Some(PalwFpV5TailV1 { images: vec![], source: Some(src(9)) });
+    v4_with_source.tail = Some(PalwFpJobTailV1::V5(PalwFpV5TailV1 { images: vec![], source: Some(src(9)) }));
     assert_eq!(PalwFpDecodeRulesV1::Active.check_job(&v4_with_source), Err(PalwFpV3Error::ImagesVersionMismatch { version: 7 }));
     // OQ14, extended: a class that reads a source takes V5 only.
     let s2s_offers = PalwGenOffersV1 { max_source_tokens: 12, ..offers(&[]) };
@@ -418,7 +418,7 @@ fn a_v5_job_rides_the_lanes_commitment_and_names_its_own_claim() {
     assert!(carried.is_v5() && !carried.is_v4());
     // Images on a V3 or V4 job are refused by name, before anything else reads them.
     let mut v4_with_images = v4.clone();
-    v4_with_images.v5 = Some(PalwFpV5TailV1 { images: vec![image(2, 3)], source: None });
+    v4_with_images.tail = Some(PalwFpJobTailV1::V5(PalwFpV5TailV1 { images: vec![image(2, 3)], source: None }));
     assert_eq!(PalwFpDecodeRulesV1::Active.check_job(&v4_with_images), Err(PalwFpV3Error::ImagesVersionMismatch { version: 7 }));
     // The payload and its claim.
     let p4 = payload_v4(&v4);

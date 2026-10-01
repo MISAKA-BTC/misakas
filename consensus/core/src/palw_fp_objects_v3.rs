@@ -374,6 +374,7 @@ where
             object: PalwConsensusObjectV2::FreePromptCommitted {
                 // ADR-0152 v3.1 J-1 (F1): the commitment's job pin, which the claim records as its identity.
                 job_pin: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&payload.commitment),
+                eval: None,
                 claim: payload.claim_id(),
                 class_id: commitment.job.class_id,
                 bond: PalwBondKeyV2(commitment.job.executor_bond),
@@ -569,7 +570,7 @@ mod tests {
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            v5: None,
+            tail: None,
         };
         let events: Vec<Hash64> = (0..decode as u64).map(|i| h64(i + 1)).collect();
         let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(h64(0xB1), &events);

@@ -1252,7 +1252,7 @@ mod engine_driver_tests {
             sampling_seed: [0; 32],
             temperature_q: 0,
             decode: None,
-            v5: None,
+            tail: None,
         }
     }
 
