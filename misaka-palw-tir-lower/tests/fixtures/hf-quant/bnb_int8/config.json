@@ -30,7 +30,7 @@
     "llm_int8_enable_fp32_cpu_offload": false,
     "llm_int8_has_fp16_weight": false,
     "llm_int8_skip_modules": null,
-    "llm_int8_threshold": 0.0,
+    "llm_int8_threshold": 6.0,
     "load_in_4bit": false,
     "load_in_8bit": true,
     "quant_method": "bitsandbytes"

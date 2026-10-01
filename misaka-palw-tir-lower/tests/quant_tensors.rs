@@ -486,7 +486,7 @@ fn an_mxfp4_configuration_is_read_by_its_descriptor() {
 fn bnb_cfg(load4: bool, qtype: &str, dq: bool) -> serde_json::Value {
     json!({"_load_in_4bit": load4, "_load_in_8bit": !load4, "bnb_4bit_compute_dtype": "bfloat16", "bnb_4bit_quant_storage": "uint8",
            "bnb_4bit_quant_type": qtype, "bnb_4bit_use_double_quant": dq, "llm_int8_enable_fp32_cpu_offload": false,
-           "llm_int8_has_fp16_weight": false, "llm_int8_skip_modules": null, "llm_int8_threshold": if load4 { json!(6.0) } else { json!(0.0) },
+           "llm_int8_has_fp16_weight": false, "llm_int8_skip_modules": null, "llm_int8_threshold": 6.0,
            "load_in_4bit": load4, "load_in_8bit": !load4, "quant_method": "bitsandbytes"})
 }
 
@@ -543,20 +543,16 @@ fn llm_int8_skip_modules_are_read_as_transformers_reads_them() {
     assert!(!skip_matches(&["path:layers.3".to_string()], "model.layers.30.mlp.gate"));
 }
 
-/// What a descriptor does not cover is refused BY NAME — int8 outlier decomposition above all.
+/// The outlier threshold changes how bitsandbytes RUNS an int8 layer, not what is stored: the registered model is the stored weights
+/// (the coordinator's decision of 2026-10-01), so any threshold is read. What a descriptor does not cover is still refused by name.
 #[test]
-fn what_bitsandbytes_cannot_reproduce_is_refused_by_name() {
+fn llm_int8_is_read_at_any_threshold_and_what_bitsandbytes_cannot_reproduce_is_refused_by_name() {
     let read = |v: &serde_json::Value| parse_quant_config(v, "LlamaForCausalLM", "llama");
-    // LLM.int8 with the default threshold decomposes each matmul at run time.
-    let mut v = bnb_cfg(false, "fp4", false);
-    v["llm_int8_threshold"] = json!(6.0);
-    let e = refusal(read(&v));
-    assert!(e.contains("llm_int8_threshold") && e.contains("outlier decomposition") && e.contains("run time") && e.contains("llm_int8_threshold 0"), "{e}");
-    // ... threshold 0 (written as an integer or a float) is read.
-    for t in [json!(0), json!(0.0)] {
+    // LLM.int8 with the configuration's default threshold (outlier decomposition at run time) is read, as is an explicit 0 (integer or float).
+    for t in [json!(6.0), json!(0), json!(0.0), json!(3.5)] {
         let mut v = bnb_cfg(false, "fp4", false);
-        v["llm_int8_threshold"] = t;
-        assert_eq!(name_of(&read(&v).expect("threshold 0")), "BNB_INT8");
+        v["llm_int8_threshold"] = t.clone();
+        assert_eq!(name_of(&read(&v).unwrap_or_else(|e| panic!("threshold {t}: {e:?}"))), "BNB_INT8", "threshold {t}");
     }
     // 4-bit weights packed into another storage dtype have another stored shape.
     let mut v = bnb_cfg(true, "nf4", false);

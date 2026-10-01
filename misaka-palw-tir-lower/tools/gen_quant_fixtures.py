@@ -147,7 +147,8 @@ CONFIGS.update({
     # llm_int8_skip_modules: every down_proj and the head stay float (transformers reads an entry as a module's last component or a path prefix)
     "bnb_nf4_skip_down": ("llama", bnb_config(True, "nf4", False, skip=["lm_head", "down_proj"])),
     "bnb_nf4_dq_qwen3moe": ("qwen3moe", bnb_config(True, "nf4", True, skip=["gate"])),
-    "bnb_int8": ("qwen2", bnb_config(False, threshold=0.0)),
+    # The default configuration (llm_int8_threshold 6.0, the run-time outlier decomposition): the stored weights are the model; and an explicit 0.
+    "bnb_int8": ("qwen2", bnb_config(False)),
     "bnb_int8_llama": ("llama", bnb_config(False, threshold=0.0, skip=["lm_head"])),
 })
 

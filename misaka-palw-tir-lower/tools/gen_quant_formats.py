@@ -338,7 +338,7 @@ F["mxfp4_hf"] = {
 BNB_INERT_4 = ["bnb_4bit_compute_dtype", "bnb_4bit_use_double_quant", "llm_int8_enable_fp32_cpu_offload", "llm_int8_has_fp16_weight",
                "llm_int8_threshold", "_load_in_4bit", "_load_in_8bit"]
 BNB_INERT_8 = ["bnb_4bit_compute_dtype", "bnb_4bit_quant_type", "bnb_4bit_quant_storage", "bnb_4bit_use_double_quant",
-               "llm_int8_enable_fp32_cpu_offload", "llm_int8_has_fp16_weight", "_load_in_4bit", "_load_in_8bit"]
+               "llm_int8_enable_fp32_cpu_offload", "llm_int8_has_fp16_weight", "llm_int8_threshold", "_load_in_4bit", "_load_in_8bit"]
 
 def bnb4(kind):
     K = "(o * shape1 + i)"
@@ -405,18 +405,18 @@ F["bnb_nf4"] = bnb4("nf4")
 F["bnb_fp4"] = bnb4("fp4")
 F["bnb_int8"] = {
     "schema": SCHEMA, "name": "BNB_INT8",
-    "doc": ("bitsandbytes LLM.int8, as `Linear8bitLt` saves it: `.weight` int8 [out, in] and `.SCB` float32 [out], the absolute maximum of each row of the original weight, so W[o, i] = weight[o, i] * SCB[o] / 127 "
-            "(row-wise absmax quantisation); `.weight_format` (uint8 scalar) must be 0, the row-major layout. The stored integers are lowered as they are (the per-row scale is SCB * float32(1 / 127), rounded to float32; "
-            "bitsandbytes' own `int8_vectorwise_dequant` rounds twice and agrees to one unit in the last place). "
-            "Refused by name: `llm_int8_threshold` above 0 — LLM.int8 then splits every matmul at run time (the activation columns whose magnitude passes the threshold are multiplied in float16 against the dequantised weight "
-            "columns, the rest in int8), which a fixed integer graph does not reproduce; and a hardware-reordered `weight_format` (col32 / col_turing / col_ampere)."),
+    "doc": ("bitsandbytes LLM.int8, as `Linear8bitLt` saves it: `.weight` int8 [out, in] and `.SCB` float32 [out], the absolute maximum of each row of the original weight, so W[o, i] = weight[o, i] * "
+            "SCB[o] / 127 (row-wise absmax quantisation); `.weight_format` (uint8 scalar) must be 0, the row-major layout. The stored integers are lowered as they are (the per-row scale is SCB * "
+            "float32(1 / 127), rounded to float32; bitsandbytes' own `int8_vectorwise_dequant` rounds twice and agrees to one unit in the last place). `llm_int8_threshold` is inert here: it changes how "
+            "bitsandbytes RUNS a layer (above 0 it splits every matmul at run time: the activation columns whose magnitude passes the threshold are multiplied in float16 against the dequantised weight "
+            "columns, the rest in int8), not what is stored, and the default of its configuration is 6.0. The registered model is the stored weights (decided 2026-10-01); the runtime pack's fidelity "
+            "measure against the Hugging Face reference says how far the integer program is from the library's own run. Refused by name: a hardware-reordered `weight_format` (col32 / col_turing / "
+            "col_ampere)."),
     "ids": [{"scheme": "config", "method": "bitsandbytes", "when": [{"path": "load_in_8bit", "one_of": [True]}]}],
     "config": {"inert": BNB_INERT_8, "skip": "llm_int8_skip_modules", "skip_match": "path", "lm_head": "unless_skipped",
                "checks": [
                    {"path": "load_in_8bit", "one_of": [True], "message": "this is the 8-bit format"},
-                   {"path": "load_in_4bit", "one_of": [None, False], "message": "4-bit and 8-bit together"},
-                   {"path": "llm_int8_threshold", "one_of": [0, 0.0],
-                    "message": "llm_int8_threshold above 0 means outlier decomposition: LLM.int8 splits each matmul at run time (activation columns above the threshold go through float16 against the dequantised weight columns, the rest through int8), which a fixed integer graph does not reproduce — a checkpoint saved with llm_int8_threshold 0 is read"}]},
+                   {"path": "load_in_4bit", "one_of": [None, False], "message": "4-bit and 8-bit together"}]},
     "params": {},
     "layout": {"kind": "tensors",
                "roles": [role("weight", ".weight", ["I8"], 2), role("scb", ".SCB", ["F32"], 1), role("wfmt", ".weight_format", ["U8"], 0, required=False)],
@@ -698,7 +698,7 @@ def tensor_vectors(d):
                 roles["nmap"] = role_json(t[".weight.nested_quant_map"], "F32")
             case(bcfg(dq, dt), roles, ref)
     elif name == "BNB_INT8":
-        for o, i in [(6, 16), (5, 9)]:
+        for o, i, threshold in [(6, 16, 6.0), (5, 9, 0.0)]:      # the configuration's default threshold and an explicit 0: the stored weights are the same
             w = (trng.standard_normal((o, i)) * trng.uniform(0.02, 0.4)).astype(np.float32)
             w[0, :] = 0.0                    # an all-zero row: SCB 0
             t = bnb_ref.quantize_int8(w)
@@ -709,7 +709,7 @@ def tensor_vectors(d):
             assert np.all(np.abs(ref - lib) <= np.abs(lib) * 2.4e-7), "the stored-integer scale and bitsandbytes' vectorwise dequantisation differ by more than an ulp"
             cfg = {"_load_in_4bit": False, "_load_in_8bit": True, "bnb_4bit_compute_dtype": "float32", "bnb_4bit_quant_storage": "uint8",
                    "bnb_4bit_quant_type": "fp4", "bnb_4bit_use_double_quant": False, "llm_int8_enable_fp32_cpu_offload": False,
-                   "llm_int8_has_fp16_weight": False, "llm_int8_skip_modules": None, "llm_int8_threshold": 0.0, "load_in_4bit": False,
+                   "llm_int8_has_fp16_weight": False, "llm_int8_skip_modules": None, "llm_int8_threshold": threshold, "load_in_4bit": False,
                    "load_in_8bit": True, "quant_method": "bitsandbytes"}
             roles = {"weight": role_json(t[".weight"], "I8"), "scb": role_json(t[".SCB"], "F32"), "wfmt": role_json(t[".weight_format"], "U8")}
             case(cfg, roles, ref)
