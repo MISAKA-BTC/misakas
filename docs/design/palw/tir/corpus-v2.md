@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | measured on 100 curated architectures plus a census of 111 further causal-LM families (transformers 5.17.0 / diffusers 0.40, tiny random-init fixtures); the numbers below are regenerable reports, not prose |
+| Status | measured on 100 curated architectures plus a census of 111 further causal-LM families (transformers 5.17.0 / diffusers 0.40, tiny random-init fixtures), on `tir/corpus` after the merge of `tir/generic` `239179132`; the numbers below are regenerable reports, not prose |
 | Lane | H (corpus and coverage), branch `tir/corpus` off `tir/generic` `1a4964205` |
 | Question | RFC-0002's aim is that **no model needs a core developer**. One more supported model is worthless; only infrastructure that admits them all counts. This document measures it |
 | Harness | `misaka-palw-tir-lower/tests/corpus_v2.rs` + `tools/corpus/` (fixture generator, manifest, adapters, blockers, report renderer) |
@@ -191,35 +191,36 @@ architectures here (§8).
 | | entries | share of corpus | usage-weighted |
 | --- | ---: | ---: | ---: |
 | Level A — the config alone | 6 | 6 % | 9 % |
-| Level B — a thin data adapter | 47 | 47 % | 46 % |
-| Level C — a capability is missing | 47 | 47 % | 45 % |
-| **A + B (expressible with existing features)** | **53** | **53 %** | **55 %** |
+| Level B — a thin data adapter | 57 | 57 % | 55 % |
+| Level C — a capability is missing | 37 | 37 % | 37 % |
+| **A + B (expressible with existing features)** | **63** | **63 %** | **63 %** |
+| *of the A + B, encoder-decoders read by a data adapter and proven to lower and be admitted only (no weights stage in this harness): `t5`, `t5_gated`, `bart`, `mbart`, `marian`* | 5 | 5 % | |
 | *of the A + B, read-level only (the reference is remote code, no weights to run): `internlm2`, `minicpm`* | 2 | 2 % | |
-| *A + B with every stage proven on weights* | 51 | 51 % | |
-| *Level C, but lowered today by a per-family Rust route (not data): `t5`, `t5_gated`, `bart`, `mbart`, `marian`, `clip_vision`, `siglip_vision`* | 7 | 7 % | |
-| *supported today by any route (A + B + Rust routes)* | 60 | 60 % | |
+| *A + B with every stage proven on weights* | 56 | 56 % | |
+| *Level C, but lowered today by a per-family Rust route (not data): `clip_vision`, `siglip_vision`* | 2 | 2 % | |
+| *supported today by any route (A + B + Rust routes)* | 65 | 65 % | |
 
 Level C by kind of gap (this lane's classification, `tools/corpus/blockers.json`):
 
 | kind | entries | meaning |
 | --- | ---: | --- |
-| feature | 20 | a generic FEATURE is missing; lowerable in principle with the existing primitives |
-| route | 19 | no data route exists for this kind of model yet (the lowering is Rust per family, or absent); existing primitives suffice |
+| feature | 15 | a generic FEATURE is missing; lowerable in principle with the existing primitives |
+| route | 14 | no data route exists for this kind of model yet (the lowering is Rust per family, or absent); existing primitives suffice |
 | protocol | 7 | a protocol capability beyond the IR is needed (an input binding, a second history, a stage kind) |
 | remote | 1 | the reference semantics are remote code outside transformers (cannot be pinned) |
 
-Court coverage: 48551 commit points over 51 lowered models reproduced by the cone evaluator from their opened leaves (reference evaluator and typed backend; 0 failures); 25 of the 25 primitives and 6 commit-point roles reached.
+Court coverage: 53687 commit points over 56 lowered models reproduced by the cone evaluator from their opened leaves (reference evaluator and typed backend; 0 failures); 25 of the 25 primitives and 6 commit-point roles reached.
 
 | category | A | B | C | total |
 | --- | ---: | ---: | ---: | ---: |
 | audio | 0 | 0 | 5 | 5 |
-| encdec | 0 | 0 | 7 | 7 |
+| encdec | 0 | 5 | 2 | 7 |
 | encoder | 0 | 6 | 4 | 10 |
 | image-gen | 0 | 0 | 6 | 6 |
 | remote-code | 0 | 2 | 1 | 3 |
-| text/dense | 6 | 17 | 5 | 28 |
-| text/hybrid | 0 | 7 | 6 | 13 |
-| text/moe | 0 | 9 | 7 | 16 |
+| text/dense | 6 | 18 | 4 | 28 |
+| text/hybrid | 0 | 8 | 5 | 13 |
+| text/moe | 0 | 12 | 4 | 16 |
 | vision | 0 | 0 | 4 | 4 |
 | vlm | 0 | 6 | 2 | 8 |
 <!-- END GENERATED: summary -->
@@ -246,13 +247,13 @@ Court coverage: 48551 commit points over 51 lowered models reproduced by the con
 | `granite` | text/dense | **A** | standard template (no adapter) | 10 |  |  |
 | `glm4` | text/dense | **B** | built-in adapter `glm4` | 11 |  |  |
 | `smollm3` | text/dense | **B** | built-in adapter `smollm3` | 9 |  |  |
-| `arcee` | text/dense | **B** | third-party adapter `arcee` (tools/corpus/adapters) | 7 |  |  |
+| `arcee` | text/dense | **B** | third-party adapter `arcee` (tools/corpus/adapters) | 7 | the checkpoint does not fit the reading |  |
 | `apertus` | text/dense | **C** | - |  | xIELU activation (learned per-layer parameters) → FR-05 | read |
 | `helium` | text/dense | **B** | third-party adapter `helium` (tools/corpus/adapters) | 7 |  |  |
-| `hunyuan_v1_dense` | text/dense | **C** | third-party adapter `hunyuan-v1-dense` (tools/corpus/adapters) (refuted: float_vs_hf) | 9 | q/k RMS norm applied AFTER the rotation → FR-02 | float_vs_hf |
+| `hunyuan_v1_dense` | text/dense | **B** | third-party adapter `hunyuan-v1-dense` (tools/corpus/adapters) | 10 |  |  |
 | `seed_oss` | text/dense | **B** | third-party adapter `seed-oss` (tools/corpus/adapters) | 8 |  |  |
 | `ernie4_5` | text/dense | **B** | third-party adapter `ernie4-5` (tools/corpus/adapters) | 9 |  |  |
-| `bitnet` | text/dense | **C** | standard template (no adapter) (refuted: bind) | 7 | attn_sub_norm before o_proj and ffn_sub_norm before down_proj → FR-03 | bind |
+| `bitnet` | text/dense | **C** | standard template (no adapter) (refuted: bind) | 7 | checkpoint tensors the reading never uses → FR-03 | bind |
 | `persimmon` | text/dense | **B** | third-party adapter `persimmon` (tools/corpus/adapters) | 12 |  |  |
 | `diffllama` | text/dense | **C** | - |  | differential attention (head-pair difference, 2d RMS group norm, derived lambda) → FR-04 | read |
 | `cwm` | text/dense | **A** | standard template (no adapter) | 9 |  |  |
@@ -265,10 +266,10 @@ Court coverage: 48551 commit points over 51 lowered models reproduced by the con
 | `gpt_oss` | text/moe | **B** | built-in adapter `gpt-oss` | 14 |  |  |
 | `llama4_text` | text/moe | **B** | built-in adapter `llama4-text` | 20 |  |  |
 | `glm4_moe` | text/moe | **B** | built-in adapter `glm4-moe` | 17 |  |  |
-| `dbrx` | text/moe | **C** | third-party adapter `dbrx` (tools/corpus/adapters) (refuted: bind) | 10 | experts stored flat [E*I, D]; everything else is data → FR-01 | bind |
+| `dbrx` | text/moe | **B** | built-in adapter `dbrx` | 11 |  |  |
 | `jetmoe` | text/moe | **C** | - |  | mixture-of-attention: routed per-expert q/o projections → FR-06 | read |
-| `ernie4_5_moe` | text/moe | **C** | third-party adapter `ernie4-5-moe` (tools/corpus/adapters) (refuted: bind) | 14 | selection bias [1,E] needs a squeeze; softmax router ignores selection_bias → FR-01, FR-07 | bind |
-| `hunyuan_v1_moe` | text/moe | **C** | third-party adapter `hunyuan-v1-moe` (tools/corpus/adapters) (refuted: float_vs_hf) | 12 | q/k RMS norm applied AFTER the rotation → FR-02 | float_vs_hf |
+| `ernie4_5_moe` | text/moe | **B** | built-in adapter `ernie4-5-moe` | 15 |  |  |
+| `hunyuan_v1_moe` | text/moe | **B** | third-party adapter `hunyuan-v1-moe` (tools/corpus/adapters) | 13 |  |  |
 | `minimax_m2` | text/moe | **B** | third-party adapter `minimax-m2` (tools/corpus/adapters) | 12 |  |  |
 | `longcat_flash` | text/moe | **C** | - |  | zero-computation experts and shortcut-connected MoE → FR-08, FR-07, FR-27 | read |
 | `deepseek_v32` | text/moe | **C** | - |  | DeepSeek sparse attention: a token-level top-k indexer → FR-09 | read |
@@ -281,7 +282,7 @@ Court coverage: 48551 commit points over 51 lowered models reproduced by the con
 | `falcon_mamba` | text/hybrid | **B** | built-in adapter `falcon-mamba` | 7 |  |  |
 | `rwkv` | text/hybrid | **B** | built-in adapter `rwkv4` | 8 |  |  |
 | `falcon_h1` | text/hybrid | **C** | - |  | MIXER_PARALLEL_BRANCH, SCALE_MUP → FR-11 | read |
-| `granitemoehybrid` | text/hybrid | **C** | third-party adapter `granitemoehybrid` (tools/corpus/adapters) (refuted: bind) | 11 | fused shared-expert gate/up tensor; a built-in refusal cannot be overridden → FR-01, FR-25 | bind |
+| `granitemoehybrid` | text/hybrid | **B** | built-in adapter `granitemoehybrid` | 12 |  |  |
 | `zamba2` | text/hybrid | **C** | - |  | ATTN_SHARED_BLOCK → FR-13 | read |
 | `nemotron_h` | text/hybrid | **C** | - |  | LAYER_FFN_ONLY → FR-14 | read |
 | `lfm2` | text/hybrid | **C** | - |  | gated short convolution mixer → FR-15 | read |
@@ -292,16 +293,16 @@ Court coverage: 48551 commit points over 51 lowered models reproduced by the con
 | `distilbert` | encoder | **B** | built-in adapter `distilbert` | 11 |  |  |
 | `mpnet` | encoder | **B** | built-in adapter `mpnet` | 12 |  |  |
 | `deberta_v2` | encoder | **C** | - |  | an adapter for `DebertaV2Model` → FR-17 | read |
-| `albert` | encoder | **C** | third-party adapter `albert` (tools/corpus/adapters) (refuted: panic) | 13 | factorised embedding in the bidirectional lowerer (it panics) → FR-17, FR-26 | panic |
+| `albert` | encoder | **C** | third-party adapter `albert` (tools/corpus/adapters) (refuted: lower) | 13 | checkpoint tensors the reading never uses, the checkpoint does not fit the reading → FR-17, FR-26 | lower |
 | `modernbert` | encoder | **C** | - |  | an adapter for `ModernBertModel` → FR-17 | read |
 | `nomic_bert` | encoder | **C** | - |  | an adapter for `NomicBertModel` → FR-17 | read |
 | `clip_text` | encoder | **B** | built-in adapter `clip-text` | 10 |  |  |
-| `t5` | encdec | **C** | core Rust route |  | an adapter for `T5ForConditionalGeneration` → FR-18 | read |
-| `t5_gated` | encdec | **C** | core Rust route |  | an adapter for `T5ForConditionalGeneration` → FR-18 | read |
-| `bart` | encdec | **C** | core Rust route |  | an adapter for `BartForConditionalGeneration` → FR-18 | read |
-| `mbart` | encdec | **C** | core Rust route |  | an adapter for `MBartForConditionalGeneration` → FR-18 | read |
-| `marian` | encdec | **C** | core Rust route |  | an adapter for `MarianMTModel` → FR-18 | read |
-| `longt5` | encdec | **C** | - |  | an adapter for `LongT5ForConditionalGeneration` → FR-18 | read |
+| `t5` | encdec | **B** | built-in encdec adapter `t5` (lower + admit only) ; core Rust route | 9 |  |  |
+| `t5_gated` | encdec | **B** | built-in encdec adapter `t5` (lower + admit only) ; core Rust route | 8 |  |  |
+| `bart` | encdec | **B** | built-in encdec adapter `bart` (lower + admit only) ; core Rust route | 12 |  |  |
+| `mbart` | encdec | **B** | built-in encdec adapter `mbart` (lower + admit only) ; core Rust route | 13 |  |  |
+| `marian` | encdec | **B** | built-in encdec adapter `marian` (lower + admit only) ; core Rust route | 12 |  |  |
+| `longt5` | encdec | **C** | - |  | an encoder–decoder adapter for `LongT5ForConditionalGeneration` → FR-18 | read |
 | `t5_encoder` | encdec | **C** | - |  | an adapter for `T5EncoderModel` → FR-18 | read |
 | `llava` | vlm | **B** | built-in adapter `vlm-llama` | 7 |  |  |
 | `qwen2_vl` | vlm | **B** | built-in adapter `vlm-qwen2-vl` | 9 |  |  |
@@ -321,10 +322,10 @@ Court coverage: 48551 commit points over 51 lowered models reproduced by the con
 | `flux` | image-gen | **C** | - |  | MMDiT double/single blocks, 3-axis RoPE, flow-matching loop → FR-22 | read |
 | `sd3` | image-gen | **C** | - |  | MMDiT joint attention, adaLN, flow-matching loop → FR-22 | read |
 | `vae_kl` | image-gen | **C** | - |  | convolutional encoder/decoder with a mid-block attention → FR-22 | read |
-| `whisper` | audio | **C** | - |  | an adapter for `WhisperForConditionalGeneration` → FR-23 | read |
+| `whisper` | audio | **C** | - |  | an encoder–decoder adapter for `WhisperForConditionalGeneration` → FR-23 | read |
 | `wav2vec2` | audio | **C** | - |  | an adapter for `Wav2Vec2ForCTC` → FR-23 | read |
-| `speecht5` | audio | **C** | - |  | an adapter for `SpeechT5ForTextToSpeech` → FR-23 | read |
-| `musicgen` | audio | **C** | - |  | an adapter for `MusicgenForConditionalGeneration` → FR-23 | read |
+| `speecht5` | audio | **C** | - |  | an encoder–decoder adapter for `SpeechT5ForTextToSpeech` → FR-23 | read |
+| `musicgen` | audio | **C** | - |  | an encoder–decoder adapter for `MusicgenForConditionalGeneration` → FR-23 | read |
 | `encodec` | audio | **C** | - |  | an adapter for `EncodecModel` → FR-23 | read |
 | `chatglm3` | remote-code | **C** | - |  | REFERENCE_REMOTE_CODE → FR-24 | read |
 | `internlm2` | remote-code | **B** | built-in adapter `internlm2` | 8 |  |  |
@@ -336,39 +337,50 @@ Court coverage: 48551 commit points over 51 lowered models reproduced by the con
 <!-- BEGIN GENERATED: census -->
 | outcome | families | share of the 111 |
 | --- | ---: | ---: |
-| Level A (the standard template alone) | 0 | 0 % |
-| Level B through the built-in adapter pack (nobody wrote anything for this run) | 21 | 19 % |
-| Level B through a third-party adapter (written by this lane for this table, data only: `tools/corpus/census-adapters/`) | 11 | 10 % |
+| Level A (the standard template alone) | 1 | 1 % |
+| Level B through the built-in adapter pack (nobody wrote anything for this run) | 24 | 22 % |
+| Level B through a third-party adapter (written by this lane for this table, data only: `tools/corpus/census-adapters/`) | 19 | 17 % |
 | Level B through a synthesised adapter (convention search) | 0 | 0 % |
-| **A + B** | **32** | **29 %** (of the 83 buildable: 39 %) |
-| Level C (read refused or a later stage failed) | 51 | 46 % |
-| no automatic tiny config (listed below) | 10 | 9 % |
+| **A + B** | **44** | **40 %** (of the 85 buildable: 52 %) |
+| Level C (read refused or a later stage failed) | 41 | 37 % |
+| no automatic tiny config (listed below) | 8 | 7 % |
 | excluded: not a standalone text decoder (listed below, with the reason) | 18 | 16 % |
 
 Why the Level C families are Level C (read-stage evidence, `census_report.json`):
 
 | reason | families | which |
 | --- | ---: | --- |
-| config keys the template does not model | 32 | `afmoe`, `aria_text`, `big_bird`, `bigbird_pegasus`, `biogpt`, `blenderbot_small`, `camembert`, `cohere2_moe`, `cpmant`, `data2vec_text`, `doge`, `electra`, `ernie`, `fuyu`, `gpt_neox_japanese`, `granite_swa`, `granitemoe_swa`, `granitemoeshared`, `hrm_text`, `megatron_bert`, `minimax_m3_vl_text`, `moshi`, `mvp`, `pegasus`, `recurrent_gemma`, `rembert`, `roberta_prelayernorm`, `roc_bert`, `roformer`, `trocr`, `xglm`, `xlm_roberta_xl` |
-| rope parameters keyed by layer type, layer has none | 6 | `gemma4_unified_text`, `laguna`, `mellum`, `mimo_v2_flash`, `modernbert_decoder`, `zaya` |
-| not a causal language model class (no adapter) | 5 | `bert_generation`, `ctrl`, `openai_gpt`, `xlm`, `xlnet` |
+| config keys the template does not model | 26 | `afmoe`, `big_bird`, `bigbird_pegasus`, `blenderbot_small`, `camembert`, `cpmant`, `data2vec_text`, `doge`, `electra`, `ernie`, `fuyu`, `gpt_neox_japanese`, `hrm_text`, `megatron_bert`, `minimax_m3_vl_text`, `moshi`, `mvp`, `pegasus`, `recurrent_gemma`, `rembert`, `roberta_prelayernorm`, `roc_bert`, `roformer`, `trocr`, `xglm`, `xlm_roberta_xl` |
+| rope parameters keyed by layer type, layer has none | 4 | `laguna`, `mimo_v2_flash`, `modernbert_decoder`, `zaya` |
 | layer type `deepseek_sparse_attention` (FR-09) | 3 | `axk2`, `glm_moe_dsa`, `hy_v4` |
+| not a causal language model class (no adapter) | 3 | `ctrl`, `xlm`, `xlnet` |
+| later stage: float_vs_hf | 2 | `biogpt`, `nanochat` |
 | layer type `linear_attention` not modelled | 2 | `minimax`, `olmo_hybrid` |
-| weights layout the binder cannot express (FR-01) | 1 | `codegen` |
-| later stage: bind | 1 | `nanochat` |
 | cross-attention (decoder half of an encoder-decoder) | 1 | `prophetnet` |
 
 | convention the template lacks | families it blocks | the keys |
 | --- | ---: | --- |
-| MoE hyper-parameters and layer pattern | 7 | `moe_intermediate_size`, `moe_topk`, `norm_topk_prob`, `num_experts`, `num_experts_per_tok`, `num_local_experts`, `routed_scaling_factor`, `router_jitter_noise` |
+| MoE hyper-parameters and layer pattern | 3 | `moe_intermediate_size`, `norm_topk_prob`, `num_experts`, `num_experts_per_tok`, `num_local_experts`, `routed_scaling_factor`, `router_jitter_noise` |
 | nested VLM wrapper (text_config, vision_config, token ids) | 1 | `image_token_id`, `text_config` |
 | bias switches | 2 | `use_bias` |
-| norm epsilon / norm kind aliases | 15 | `layer_norm_eps` |
+| norm epsilon / norm kind aliases | 13 | `layer_norm_eps` |
 | activation aliases | 7 | `activation_function`, `hidden_activation` |
 | dimension aliases (n_embd, n_head, n_layer, ...) | 7 | `d_model`, `ffn_dim` |
-| everything else (family-specific keys) | 32 | 93 distinct keys |
+| everything else (family-specific keys) | 26 | 84 distinct keys |
 
-No automatic tiny config (the family's defaults are over the size guard or its tiny build fails; recorded, not dropped): `bamba`, `cohere_compass_text`, `dots1`, `inkling_text`, `lfm2_moe`, `ministral`, `qwen4_exp`, `qwen4_exp_text`, `xlstm`, `zamba`.
+Variants (a second tiny config where the first cannot exercise a feature real checkpoints use; not counted as families): `granitemoeshared_shared` is Level B; `mimo_v2_flash_unscaled` is Level B; `biogpt_unscaled` is Level B; `cohere2_moe_shared_sum` is Level B; `cohere2_moe_shared_avg` is Level C (NOT_LOWERABLE(Cohere2MoeForCausalLM: a shared expert combined by `average` needs a scale on the shared expert (not a spec field yet) [in variable `com); `nanochat_std_rope` is Level B.
+
+What this lane has read of the Level C families (`tools/corpus/census_blockers.json`; the rest are listed by the reader's refusal above and are NOT classified):
+
+| class | families | which |
+| --- | ---: | --- |
+| feature | 29 | `afmoe`, `axk2`, `big_bird`, `biogpt`, `camembert`, `data2vec_text`, `doge`, `electra`, `ernie`, `glm_moe_dsa`, `gpt_neox_japanese`, `hrm_text`, `hy_v4`, `laguna`, `megatron_bert`, `mimo_v2_flash`, `minimax`, `minimax_m3_vl_text`, `modernbert_decoder`, `nanochat`, `olmo_hybrid`, `recurrent_gemma`, `rembert`, `roberta_prelayernorm`, `roc_bert`, `roformer`, `xglm`, `xlm_roberta_xl`, `zaya` |
+| route | 8 | `bigbird_pegasus`, `blenderbot_small`, `fuyu`, `moshi`, `mvp`, `pegasus`, `prophetnet`, `trocr` |
+| legacy | 4 | `cpmant`, `ctrl`, `xlm`, `xlnet` |
+
+Feature requests the census names (a family may name two): FR-29: 12; FR-18: 7; FR-09: 4; FR-30: 3; FR-34: 2; FR-01: 1; FR-10: 1; FR-16: 1; FR-19: 1; FR-23: 1; FR-31: 1; FR-32: 1; FR-35: 1.
+
+No automatic tiny config (the family's defaults are over the size guard or its tiny build fails; recorded, not dropped): `bamba`, `cohere_compass_text`, `dots1`, `inkling_text`, `lfm2_moe`, `qwen4_exp`, `xlstm`, `zamba`.
 
 Excluded, with the reason: `blenderbot` (the decoder half of an encoder-decoder (its `ForCausalLM` is not a standalone model)); `blt` (a byte-latent transformer (n-gram hash tables of 12 GB at the default; its patcher is a second model)); `emu3` (an image-generating multimodal model with a nested VQ config); `gemma3n` (the multimodal wrapper (needs `timm`); its text tower is the corpus entry `gemma3n_text`); `gemma4` (the multimodal wrapper; its text tower is the corpus entry `gemma4_text`); `gemma4_assistant` (an assistant/drafter head with no vocabulary of its own); `gemma4_unified` (the multimodal wrapper; the text tower is `gemma4_text`); `gemma4_unified_assistant` (an assistant/drafter head with no vocabulary of its own); `git` (a captioning decoder over a CLIP tower (nested vision config)); `got_ocr2` (an OCR VLM with a nested SAM-style tower); `llama4` (the multimodal wrapper; its text tower is the corpus entry `llama4_text`); `musicgen_melody` (a composite audio model; the decoder alone is not a text family); `phi4_multimodal` (a text+vision+audio model with nested towers); `plbart` (the decoder half of an encoder-decoder); `qwen3_5` (the multimodal wrapper; the text tower is `qwen3_5_text`); `qwen3_5_moe` (the multimodal wrapper; the text tower is the corpus entry `qwen3_5_moe`); `reformer` (bidirectional by default; the causal mode needs `is_decoder` and LSH chunking); `xmod` (an encoder with per-language adapters; the causal head needs a default language).
 <!-- END GENERATED: census -->
@@ -385,16 +397,26 @@ each), and every one of them lowers, is admitted and passes every stage includin
 
 ### 4.1 The pipeline holds wherever the reader says yes
 
-Of the 53 entries that read at Level A or B, 51 have weights to run and **every one** passes all later stages: the program is
+Of the 63 entries that read at Level A or B, 56 have weights to run and **every one** passes all later stages: the program is
 admitted, the float reference equals `transformers` to ≤ 3e-7 of the logit scale (encoders: ≤ 1e-4 of the embedding), the
 integer program agrees with it, the three implementations are bit-identical at every position and every commit point, and
-every commit point replays through the generic court path (48,551 replays on 51 lowered models, 25 of 25 primitives reached,
-0 failures; the six encoders now run the three-way and court stages too). The other two, `internlm2` and `minicpm`, are
-remote-code families whose reference cannot be run offline or pinned: they are Level B at the read stage only (FR-24). The
-same holds for the 11 census families rescued by third-party adapters (§4.6). The IR, the evaluators and the court are
-model-free in exactly the sense the freeze claims: no new primitive was needed for anything in the corpus or the census, and no
-Level C entry is blocked by one (the research passes behind `feature-requests.md` — decoder mixers, attention variants, encoders,
-encoder–decoders and vision towers, diffusion, audio — each end in the same sentence: it decomposes into the existing 25).
+every commit point replays through the generic court path (53,687 replays on 56 lowered models, 25 of 25 primitives reached,
+0 failures). Two are remote-code families whose reference cannot be run offline or pinned (`internlm2`, `minicpm`: Level B at
+the read stage only, FR-24); five are encoder–decoders read by lane G's built-in adapters of kind `encdec` and proven to lower
+and be admitted only (`t5`, `t5_gated`, `bart`, `mbart`, `marian`: the harness has no weights stage for an encoder–decoder yet, and the
+adapter's spec equals the Rust parser's up to the last bit of one float, `1/sqrt(d)`). The same holds for the census families rescued
+by third-party adapters (§4.6). The IR, the evaluators and the court are model-free in exactly the sense the freeze claims: no new
+primitive was needed for anything in the corpus or the census, and no Level C entry is blocked by one (the research passes behind
+`feature-requests.md` — decoder mixers, attention variants, encoders, encoder–decoders and vision towers, diffusion, audio — each end in
+the same sentence: it decomposes into the existing 25).
+
+**Re-measured on the merge of `tir/generic`** (twice: `fbbef69c6`, then `239179132`). The first merge (generic feature lowerers, LOGITS_Q24_V1,
+quant descriptors) moved nothing in the corpus: the 53 stayed 53, every stage, which is the regression gate. The second (WEIGHTS_EXPR_V1, encdec
+adapters, FR-02/07/25/26) moved the corpus from A 6 / B 47 to **A 6 / B 57**: `dbrx`, `ernie4_5_moe`, `granitemoehybrid` (built-in adapters now),
+`hunyuan_v1_dense` and `hunyuan_v1_moe` (this lane's adapters with `qk_norm_after_rope`), and the five encoder–decoders. It also moved the
+census (`aria_text`, `codegen`, `granitemoeshared` with a real shared expert: weight expressions). One regression was a property of the fixture:
+lane G's LOGITS_Q24_V1 refuses logits of more than 120 natural-log units, and the random tiny `minicpm3` reached 305 with `scale_emb` 12 and
+`dim_model_base` 256; the census config now keeps the logits near 30.
 
 ### 4.2 Level A is real but unconfirmed by the config alone
 
@@ -416,42 +438,42 @@ and the reader should refuse when a tensor index is given and any tensor is left
 
 ### 4.3 Data alone works, and it is cheap
 
-This lane wrote **nineteen** adapters as third-party data files that lower, are admitted and pass every stage. Eight for the
+This lane wrote **twenty-nine** adapters as third-party data files that lower, are admitted and pass every stage (or, for the six variants below, are Level B on a second tiny config). Eight for the
 corpus: `seed-oss`, `ernie4-5` (a use_bias switch and interleaved pairs), `persimmon` (per-head fused qkv, LayerNorm with bias, a
 per-head q/k LayerNorm, ReLU²), `arcee`, `helium`, `minimax-m2` (sigmoid router with correction bias, whole-projection q/k norm),
-`qwen3-vl` and `idefics3` (the text stage of a VLM wrapper under its own tensor prefix). Eleven for the census (§4.6):
+`qwen3-vl` and `idefics3` (the text stage of a VLM wrapper under its own tensor prefix). Nineteen for the census (§4.6):
 `vaultgemma`, `hyperclovax`, `jais2`, `flex_olmo`, `solar_open`, `glm4_moe_lite`, `youtu`, `axk1`, `hy_v3`, `exaone_moe`,
-`minicpm3`. Each is 15–50 lines of JSON. Of the eleven census adapters nine held on the first attempt and two on the second (a hub
+`minicpm3`, `granite_swa`, `granitemoe_swa`, `granitemoeshared`, `mellum`, `cohere2_moe`, `gemma4_unified_text`, `openai_gpt`, `bert_generation`,
+`aria_text`, `codegen`. Each is 15–50 lines of JSON. Of the eleven census adapters nine held on the first attempt and two on the second (a hub
 tensor name that differs from the module path; a head scale only the float-vs-HF stage notices); the eight corpus adapters took
 one or two attempts each. The census adapters are mostly *extends* of a built-in (`gemma2`, `glm4-moe`, `deepseek-v3`,
 `olmoe` + `mixin-post-norm`): a derived family is a few lines.
 Six more corpus adapters read, lower and are admitted and stop at **one** well-defined step (§4.4) — they are ready for the
 feature that closes them.
 
-### 4.4 Where data stops: three precise results
+### 4.4 Where data stopped, and what changed when lane G built the answers
 
-1. **Weights are not yet data.** `dbrx`, `granitemoehybrid` and `ernie4_5_moe` read and lower as data and stop at
-   *bind*: DBRX stores its experts flat (`[E·I, D]`, the down matrix transposed), Granite-4 fuses the shared
-   expert's gate and up into one tensor (the binder hard-codes `MlpLayout::Separate` for it), ERNIE stores its
-   selection bias as `[1, E]`. With that one storage difference removed in a copy of the fixture
-   (`tools/corpus/patch_checkpoint.py`), `dbrx` and `granitemoehybrid` pass **every** stage, court included. The
-   enums `QkvLayout`/`MlpLayout` are the wrong shape for this; `Src` (`weights/mod.rs`) is already a total
-   expression tree and only needs a surface in the adapter language (FR-01).
-2. **The lowering silently ignores a flag the spec accepts.** `RouterSpec.selection_bias` is applied only under
-   sigmoid scoring (`float_ref::route`, `lower::lower_route`); with softmax scoring it is dropped without a
-   refusal. ERNIE-4.5-MoE needs it; the corpus shows a 17 % error against `transformers` (FR-07, FR-26).
-3. **Two refusals are stale or unreachable.** `refusals.json`'s entry for `GraniteMoeHybridForCausalLM` names
-   `MIXER_LAYER_PATTERN_HYBRID_V1`, but the layer pattern *is* expressible (the third-party adapter proves it); and
-   `read_model` checks the refusal list before any adapter, so no user adapter can ever override one (FR-25).
+The first measurement found three precise results; all three were requests (FR-01, FR-07, FR-25) and all three are **closed on `tir/generic`**:
+
+1. **Weights were not data** (`dbrx`, `granitemoehybrid`, `ernie4_5_moe` stopped at *bind*). `spec.hf.weights` — a weight expression per HL
+   parameter: slices, reshapes, transposes, strided takes — makes a layout a few lines of an adapter. The three are built-in adapters now and pass every
+   stage; a registrant's own `aria_text` (stacked, transposed experts), `codegen` (a fused qkv in four partitions, `[q|v|k]`) and `granitemoeshared`
+   (a fused shared expert) are Level B with no Rust.
+2. **The lowering silently ignored a flag the spec accepts** (`selection_bias` under softmax scoring). Fixed, with a refusal for every
+   flag the lowerer would not apply (FR-07/FR-26): `ernie4_5_moe` passes.
+3. **A refusal could not be overridden** (`GraniteMoeHybridForCausalLM`; later `MiniCPM3ForCausalLM` and `CodeGenForCausalLM`). A user adapter may now
+   override a built-in refusal and the report says so ("user adapter overrides built-in refusal: …", FR-25): `minicpm3` and `codegen` are Level B that way.
+
+What data still cannot say is in the requests that remain open (§5).
 
 ### 4.5 The big gap is routes, not features
 
-47 entries are Level C. Twenty are decoder-side **features**, each small and unique to one or two families
-(§6). Nineteen are **routes**: bidirectional encoders beyond BERT's layer structure, encoder–decoders, vision
-towers, convolutional nets, DiT-style image generation. For three of those kinds the lowering exists — as Rust per family
-(`parse_encdec`, `parse_vision`, `lower::bidir`), not as data — so a new T5-like, ViT-like or ModernBERT-like model needs a core
-developer. That is the infrastructure gap that matters most: these routes are where the hub's repository counts
-are (T5/BART/Marian translation, CLIP/SigLIP, ViT/ResNet classification, sentence embedders). Seven need a **protocol**
+37 entries are Level C. Fifteen are decoder-side **features**, each small and unique to one or two families
+(§6). Fourteen are **routes**: bidirectional encoders beyond BERT's layer structure, the two remaining encoder–decoders (LongT5, a bare T5
+encoder), vision towers, convolutional nets, DiT-style image generation. Two of those kinds still have their lowering only as Rust per family
+(`parse_vision`, `lower::bidir`), and image generation has none, so a new ViT-like, CLIP-like or ModernBERT-like model needs a core
+developer (the encoder–decoders moved to data on `tir/generic`: five entries). That is the infrastructure gap that matters most: these routes are
+where the hub's repository counts are (CLIP/SigLIP, ViT/ResNet classification, sentence embedders). Seven need a **protocol**
 capability: five audio models (an audio input binding, a front end, a job body) and the two UNets (a per-occurrence carry
 signature: skip connections cannot be carried today, FR-22 C1); one is remote code. **No Level C entry needs a new
 primitive** — every decomposition in `feature-requests.md` lands on the 25. What decides *registrability* of the real-size
@@ -465,22 +487,22 @@ named lever (per-commit tile lengths, a stat-only softmax commit, per-level stag
 The census (§3.2) asks the question again on every causal-LM family of transformers 5.17 that is not one of the 100 curated
 entries. Four results.
 
-1. **39 % of the buildable families are expressible by data today** (32 of 83), 21 of them through the built-in pack and 11
-   through this lane's adapters; **29 % of all 111** once the families with no automatic tiny config (10) and the excluded ones
-   (18: composites, drafters, encoder-decoder halves) are counted. None is Level A (the standard-template families are in the
-   curated corpus), and the convention search synthesised none: the 51 refusals are on keys that *can* change the math (experts, MLA
+1. **52 % of the buildable families are expressible by data today** (44 of 85): one at Level A (`ministral`), 24 through the built-in pack and
+   19 through this lane's adapters; **40 % of all 111** once the families with no automatic tiny config (8) and the excluded ones
+   (18: composites, drafters, encoder-decoder halves) are counted (the standard-template families are in the
+   curated corpus), and the convention search synthesised none: the refusals are on keys that *can* change the math (experts, MLA
    ranks, norm kinds, layer patterns) or on whole layer types, which the search by design does not guess.
-2. **Of the 51 remaining, the evidence says what kind of gap each is** only where this lane read the code
-   (`tools/corpus/census_blockers.json`): DeepSeek sparse attention in three more families (`axk2`, `glm_moe_dsa`, `hy_v4`: FR-09 now
-   names four), a post-rotation q/k norm again (`nanochat`: FR-02 now names three), a weights layout (`codegen`: FR-01), a
-   prediction head (`modernbert_decoder`: the new FR-29), two unread hybrids (`minimax`, `olmo_hybrid`, `recurrent_gemma`).
-   About ten more are decoder families this lane expects an adapter to hold for and has **not yet written** (`afmoe`, `cohere2_moe`,
-   `granite_swa`, `granitemoe_swa`, `granitemoeshared`, `laguna`, `mellum`, `mimo_v2_flash`, `aria_text`, `biogpt`: the tensor names show
-   existing features — sinks, a gated attention output, sigmoid routing with a correction bias, shared experts, LayerNorm with learned
-   positions); `xglm` (sinusoidal positions), `doge` (dynamic-mask attention) and `gpt_neox_japanese` (a bias added outside the
-   projection) look like features (read from the tensor names, not verified); about twenty are BERT-lineage or encoder–decoder
-   classes whose `ForCausalLM` is a decoder mode nobody serves (`camembert`, `electra`, `roformer`, `pegasus`, `trocr`, …) or
-   historical LMs (`ctrl`, `openai_gpt`, `xlnet`). The 32 above are therefore a **floor**, not an estimate of the ceiling.
+2. **The 41 Level C families, by what this lane has read** (`tools/corpus/census_blockers.json`; 40 of the 41 are classified): 29 need a feature,
+   8 are a route (decoder halves of encoder–decoders, a VLM, a speech model), 4 are historical LMs. The named features: **FR-29** the BERT lineage's
+   prediction head (12 families, `ForCausalLM` modes hardly anyone serves, plus `modernbert_decoder`); **FR-09** DeepSeek sparse attention
+   (`axk2`, `glm_moe_dsa`, `hy_v4`, plus the corpus's `deepseek_v32`); **FR-30** a separate attention output gate (`afmoe`, `laguna`, `minimax`);
+   **FR-34** the embedding scale on tokens only (`biogpt`, `xglm`); **FR-31** a value scale (`mimo_v2_flash`); **FR-35** the sign of NanoChat's rotation;
+   and one-offs read but not built (`minimax` lightning attention FR-32, `olmo_hybrid`, `recurrent_gemma`, `zaya`, `doge`, `hrm_text`).
+   **The prediction test.** Before running, this lane expected an adapter to hold for ten decoder families. Six did (`cohere2_moe`, `granite_swa`,
+   `granitemoe_swa`, `granitemoeshared`, `mellum`, and `aria_text` once FR-01 landed); `biogpt` and `mimo_v2_flash` did not and the cause was
+   the one found by reading (FR-34; FR-31), proved by variants that remove only that gap (`biogpt_unscaled`, `mimo_v2_flash_unscaled`: Level B, every stage);
+   `afmoe` and `laguna` were read to need FR-30 and not run. The same method rescued five more (`gemma4_unified_text`, `openai_gpt`,
+   `bert_generation`, `minicpm3`, `codegen`). The 44 are therefore a **floor** for what data can do and the 41 an **upper bound** for what needs a feature.
 3. **The per-layer-type rope convention is necessary but not sufficient.** Six census families are refused because
    `rope_parameters` is keyed by layer type; `a-candidates/standard-v3.json` (a 30-line data file: the rope of layer *i* is the one of
    its type, with that type's partial-rotary factor) removes the refusal for five and moves **none** to Level B — each then stops at
@@ -494,10 +516,10 @@ entries. Four results.
 
 | criterion | target | measured |
 | --- | --- | --- |
-| expressible with existing features (A or B) | ≥ 90 % | **53 %** of the curated corpus (68 % of its 57 text-generation entries; 55 % usage-weighted); **39 %** of the 83 buildable census families (29 % of all 111); **51 %** of the 140 decoder-only families (57 curated + 83 census) |
-| needing a new feature | a few % | 20 % of the corpus (decoder-side features), 19 % routes, 7 % protocol, 1 % remote code |
+| expressible with existing features (A or B) | ≥ 90 % | **63 %** of the curated corpus (77 % of its 57 text-generation entries; 63 % usage-weighted); **52 %** of the 85 buildable census families (40 % of all 111); **62 %** of the 142 decoder-only families (57 curated + 85 census) |
+| needing a new feature | a few % | 15 % of the corpus (decoder-side features), 14 % routes, 7 % protocol, 1 % remote code |
 | needing a new primitive | very few | **0** identified (corpus, census, and the five research passes) |
-| court coverage | 100 % | 100 % of what lowers (48,551 / 48,551 commit points on 51 lowered models, 0 model-specific paths; 25 / 25 primitives reached) |
+| court coverage | 100 % | 100 % of what lowers (53,687 / 53,687 commit points on 56 lowered models, 0 model-specific paths; 25 / 25 primitives reached) |
 
 The target is **not met**. The ranked feature requests (`feature-requests.md`; size is a rough guess of the lowering
 lane's effort: S days, M one to two weeks, L weeks, XL months) show what would move it:
@@ -505,19 +527,17 @@ lane's effort: S days, M one to two weeks, L weeks, XL months) show what would m
 <!-- BEGIN GENERATED: frs -->
 | FR | feature | size | entries it names | entries |
 | --- | --- | :-: | ---: | --- |
-| FR-18 | encoder-decoders as data (cross-attention, relative bias, local/transient-global attention) | L | 7 | `t5`, `t5_gated`, `bart`, `mbart`, `marian`, `longt5`, `t5_encoder` |
 | FR-22 | image generation: conv/GroupNorm/adaLN/joint attention, denoise loop, VAE; UNets need carry pass-through (C1) | XL | 6 | `unet2d_condition`, `unet_sdxl`, `dit`, `flux`, `sd3`, `vae_kl` |
 | FR-23 | audio: STFT/mel front end, Conv1d, codec/vocoder, audio input and output bindings | XL | 5 | `whisper`, `wav2vec2`, `speecht5`, `musicgen`, `encodec` |
 | FR-17 | one rows-mode encoder lowerer driven by the ModelSpec (bidirectional, band, rope, embedding projection order, shared layers) | L | 4 | `deberta_v2`, `albert`, `modernbert`, `nomic_bert` |
 | FR-19 | vision towers and convolutions as data (patch front, conv by index table, pooling, padded carry) | L | 4 | `clip_vision`, `siglip_vision`, `vit`, `resnet` |
-| FR-01 | weights as data: tensor expressions (slice, reshape, squeeze, transpose, stack) in adapter `names` | M | 3 | `dbrx`, `ernie4_5_moe`, `granitemoehybrid` |
-| FR-02 | q/k norm applied after the rotation | S | 2 | `hunyuan_v1_dense`, `hunyuan_v1_moe` |
-| FR-07 | selection bias under softmax routing (+ refuse a flag the lowerer would drop) | S | 2 | `ernie4_5_moe`, `longcat_flash` |
+| FR-18 | encoder-decoders as data (cross-attention, relative bias, local/transient-global attention) | L | 2 | `longt5`, `t5_encoder` |
 | FR-27 | five small lowerer details (gated-norm gate act, router eps, MLA norm eps, ...) | S | 2 | `longcat_flash`, `kimi_linear` |
 | FR-03 | sub-layer norms (norm before o_proj, norm before down_proj) | S | 1 | `bitnet` |
 | FR-04 | differential attention | M | 1 | `diffllama` |
 | FR-05 | learned pointwise activation (xIELU) | S | 1 | `apertus` |
 | FR-06 | mixture-of-attention (routed per-expert q/o projections) | M | 1 | `jetmoe` |
+| FR-07 | selection bias under softmax routing (+ refuse a flag the lowerer would drop) | S | 1 | `longcat_flash` |
 | FR-08 | zero-computation experts and shortcut-connected MoE | M | 1 | `longcat_flash` |
 | FR-09 | token-level top-k indexer attention (DeepSeek sparse attention) | L | 1 | `deepseek_v32` |
 | FR-10 | DeepSeek-V4 set: hyper-connections, compressed attention, hash routing, sqrt-softplus | L | 1 | `deepseek_v4` |
@@ -530,7 +550,6 @@ lane's effort: S days, M one to two weeks, L weeks, XL months) show what would m
 | FR-20 | prefix-LM attention | M | 1 | `paligemma` |
 | FR-21 | cross-attention layers in a decoder | L | 1 | `mllama` |
 | FR-24 | a way to pin a remote-code reference | policy | 1 | `chatglm3` |
-| FR-25 | user adapters override built-in refusals; drop the stale Granite-hybrid refusal | S | 1 | `granitemoehybrid` |
 | FR-26 | lowerer robustness and Level A honesty (panics, dropped flags, unread tensors) | S | 1 | `albert` |
 <!-- END GENERATED: frs -->
 
@@ -636,8 +655,8 @@ compressed-tensors, MXFP4, NVFP4) are descriptor files; this lane wrote two more
 | format | by data today | evidence |
 | --- | --- | --- |
 | ggml block types (Q*, IQ*, TQ*, MXFP4, NVFP4), GPTQ, AWQ, FP8 block scales, compressed-tensors | yes (the pack) | lane F's vectors from the libraries' own dequantisers |
-| MLX affine, 2/4/8-bit | **decode: yes** (`mlx_affine.json`); **announcement: no** (FR-33a: its config has no `quant_method`) | written; vectors are a numpy transcription (MLX is not available offline); *validation pending the quiet window* |
-| bitsandbytes int8 (LLM.int8) | **decode: yes** (`bnb_int8.json`, which refuses 4-bit by a config check) | as above |
+| MLX affine, 2/4/8-bit | **decode: yes** (`mlx_affine.json`); **announcement: no** (FR-33a: its config has no `quant_method`) | descriptor loads and passes its three vectors (`tests/corpus_formats.rs`); the vectors are a numpy transcription of the layout (MLX is not available offline) |
+| bitsandbytes int8 (LLM.int8) | **decode: yes** (`bnb_int8.json`, which refuses 4-bit by a config check) | loads and passes its two vectors (same caveat) |
 | bitsandbytes nf4/fp4, double quantisation | **no**: the weight is a flat `[N/2, 1]` tensor and its `[out, in]` shape is stored only in a JSON blob (FR-33b) | read from the library's serialisation |
 | HQQ, Quanto, torchao | no: metadata blobs and tensor subclasses | not attempted |
 | EXL2/EXL3, AQLM, Marlin repacks | plausible (indexed reads, at most two codebooks, a fixed permutation); not attempted | not attempted |
@@ -647,16 +666,15 @@ Two limits are in the registry, not in any descriptor: a format can be announced
 
 ## 9. Open
 
-* **Census adapters not yet written** (about ten decoder families expected to hold, §4.6) and the families the census cannot build
-  (10 without an automatic tiny config, 18 excluded): the next batch, in the order of hub usage.
-* Storage formats (GPTQ/AWQ/GGUF/FP8/MXFP4 exist as descriptors; bitsandbytes, MLX, EXL2, HQQ, compressed-tensors, torchao are not)
-  as a second corpus, with test vectors per format.
+* **Not built by this lane, read to need a feature** (§4.6): `afmoe`, `laguna` (FR-30), the BERT-lineage decoders (FR-29), DSA (FR-09), `minimax` (FR-32), `olmo_hybrid`,
+  `recurrent_gemma`, `zaya`, `doge`, `hrm_text`; and the 8 families with no automatic tiny config (`bamba`, `cohere_compass_text`, `dots1`, `inkling_text`, `lfm2_moe`, `qwen4_exp`,
+  `xlstm`, `zamba`: lane G's hand-made tiny configs rescued `qwen4_exp_text` and `ministral`; the rest need one).
+* Encoder–decoders have no weights stage in this harness (lower + admit only); vision, encoder and audio routes are probed the same way. The fidelity records are in
+  `hf-coverage.md` §13, §17. The research passes (`feature-requests.md`) are analysis, not runs: their sizes are the research's own arithmetic.
+* A storage-format corpus beyond the two descriptors of §8, with the libraries' own dequantisers where they can be run; hub usage of formats is not measured.
 * LoRA/PEFT adapters (candidate = parent + adapter) as a third axis: `lora.rs` exists; not part of the 100.
-* The encoder–decoder and vision routes are probed to a lowered, admitted program only; their fidelity records are in
-  `hf-coverage.md` §13, §17. The five research passes (`feature-requests.md`) are analysis, not runs: their sizes are the research's
-  own arithmetic, with a short list of cheapest checks at the end of FR-22.
-* **Decided (coordinator, 2026-10-01).** Lane G takes the requests in the order FR-01, FR-18, FR-17, FR-19, FR-02, FR-09 after its
-  CP2; FR-22 and FR-23 go with RFC-0003's lane D (the FR-22 sizing discrepancy was forwarded); FR-25 is accepted (the report says
-  "user adapter overrides built-in refusal: <the refusal>") and FR-26 is accepted (a Level A with no reference check is
-  labelled "A (unconfirmed)"); per-layer-type rope is not adopted in the standard template; the convention search stays a dev tool.
-  The corpus is re-measured after each landing of `tir/generic` (merged into `tir/corpus`) and after every move of 10 points or more.
+* An **encoder census** (the masked-LM and embedding families of transformers 5.17 through the same meta-device guard) to size what FR-17 unlocks by family count.
+* **Decided (coordinator, 2026-10-01).** Lane G takes the requests in the order FR-01, FR-18, FR-17, FR-19, FR-02, FR-09 after its CP2 (FR-01, FR-02, FR-07, FR-18 phase 1,
+  FR-25, FR-26 have landed on `tir/generic` and are measured here); FR-22 and FR-23 go with RFC-0003's lane D; FR-25 and FR-26 are accepted and implemented in the harness;
+  per-layer-type rope is not adopted in the standard template; the convention search stays a dev tool. The corpus is re-measured after each landing of `tir/generic`
+  (merged into `tir/corpus`) and after every move of 10 points or more.
