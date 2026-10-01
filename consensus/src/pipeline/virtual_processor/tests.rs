@@ -16381,6 +16381,7 @@ mod hb_fork_choice_probe;
 // ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the node's H-1 gate asks the fold about a carrier
 // before this node admits, relays, spares or mines it.
 mod t12_h1_carrier_gate;
+mod t12_held_leaf_challenge_gate;
 mod t12_offence_attribution_gate;
 // ADR-0152 v3.1's v22 skeleton: the declared objects and offence kinds, dropped at acceptance and
 // refused by the fold until their owners land them.

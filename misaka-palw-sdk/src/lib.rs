@@ -48,6 +48,7 @@ pub mod conformance;
 pub mod lineage;
 pub mod lineages {
     pub mod dense;
+    pub mod generative;
     pub mod qwen36;
     pub mod tir;
 }
@@ -63,7 +64,7 @@ pub mod tir_layout;
 pub mod tir_registration;
 
 pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};
-pub use lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1, PalwWeightResidencyV1};
+pub use lineage::{PalwClassEntryV1, PalwGenClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1, PalwWeightResidencyV1};
 pub use sdk::{PalwCandidateError, PalwClassSdk, PalwRegistrationCandidateV1, builtin_lineages_v1};
 
 #[cfg(test)]

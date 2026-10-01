@@ -34,6 +34,8 @@ use misaka_palw_tir::pipeline::{PipelineParams, TirPipelineV1};
 use misaka_palw_tir::program_v2::TirProgramV2;
 
 use crate::check_architecture::{IR_DEFAULT_H_CHUNK_V1, IR_DEFAULT_TILE_LEN_V1};
+use crate::lineage::{PalwGenClassEntryV1, PalwLoadedArtifactV1};
+use crate::lineages::generative::GEN_LINEAGE_ID_V1;
 
 /// What an operator chooses; everything else is derived.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -312,5 +314,64 @@ struct PipelineParamsRef<'a>(&'a dyn PipelineParams);
 impl PipelineParams for PipelineParamsRef<'_> {
     fn params(&self, program: u16) -> &dyn misaka_palw_tir::interp::ParamSource {
         self.0.params(program)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The node's half: which held generative class registers (the IR selection's twin)
+// ---------------------------------------------------------------------------------------------
+
+/// **The generative classes of `holdings`** — every artifact the generative lineage loaded, one entry per
+/// class id (first holding wins). Read off the holdings themselves, so any SDK instance over them agrees.
+pub fn gen_entries_of_v1(holdings: &[PalwLoadedArtifactV1]) -> Vec<PalwGenClassEntryV1> {
+    let mut out: Vec<PalwGenClassEntryV1> = Vec::new();
+    for h in holdings.iter().filter(|h| h.lineage_id == GEN_LINEAGE_ID_V1) {
+        if let Some(entry) = h.payload().downcast_ref::<PalwGenClassEntryV1>()
+            && !out.iter().any(|e| e.class_id() == entry.class_id())
+        {
+            out.push(entry.clone());
+        }
+    }
+    out
+}
+
+/// Does `wanted` name `entry` — its model id, or its class id in hex?
+fn names(entry: &PalwGenClassEntryV1, wanted: &str) -> bool {
+    let w = wanted.trim_start_matches("0x");
+    entry.model_id == wanted || entry.class_id().to_string() == w
+}
+
+/// **The one generative registration this node should attempt, or why there is none** — the IR
+/// selection's sentences, over generative holdings: nothing held, everything already registered (by class
+/// id, or by artifact root: known weights are never re-registered under a fresh id), the operator's
+/// `--palw-register-class` matching nothing, or more than one left and nothing picked.
+pub fn gen_registration_candidate_v1(
+    holdings: &[PalwLoadedArtifactV1],
+    terms: &PalwRegistrationTermsV2,
+    wanted: Option<&str>,
+) -> Result<PalwGenClassEntryV1, String> {
+    let wanted = wanted.filter(|s| !s.is_empty());
+    let named: Vec<PalwGenClassEntryV1> =
+        gen_entries_of_v1(holdings).into_iter().filter(|e| wanted.is_none_or(|w| names(e, w))).collect();
+    if named.is_empty() {
+        return Err(match wanted {
+            Some(w) => format!("--palw-register-class {w} names no generative class this node's artifacts declare"),
+            None => {
+                "no --palw-class-artifact is a generative (PALWTIR2) artifact, so there is no generative class to register".to_string()
+            }
+        });
+    }
+    let fresh: Vec<PalwGenClassEntryV1> = named
+        .into_iter()
+        .filter(|e| !terms.registered_class_ids.contains(&e.class_id()) && !terms.registered_artifact_roots.contains(&e.artifact_root))
+        .collect();
+    match fresh.len() {
+        0 => Err("every generative class this node's artifacts declare is already registered on this chain (or its weights are)"
+            .to_string()),
+        1 => Ok(fresh.into_iter().next().expect("one")),
+        n => Err(format!(
+            "this node's artifacts declare {n} unregistered generative classes ({}) — name one with --palw-register-class <model-id>",
+            fresh.iter().map(|e| e.model_id.as_str()).collect::<Vec<_>>().join(", ")
+        )),
     }
 }

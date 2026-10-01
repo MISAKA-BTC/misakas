@@ -85,6 +85,8 @@ pub struct PalwDrillExtraFencesV1 {
     pub gen_at: Option<u64>,
     pub decode_rules_at: Option<u64>,
     pub fp_v5_at: Option<u64>,
+    /// RFC-0003's held leaf challenge (decision 22; `palw_held_close_chunks_v1`, object tag 90).
+    pub held_chunks_at: Option<u64>,
     pub improve_at: Option<u64>,
 }
 
@@ -102,6 +104,7 @@ impl PalwDrillExtraFencesV1 {
             gen_at: args.palw_drill_gen_at,
             decode_rules_at: args.palw_drill_decode_rules_at,
             fp_v5_at: args.palw_drill_fp_v5_at,
+            held_chunks_at: args.palw_drill_held_chunks_at,
             improve_at: args.palw_drill_improve_at,
         }
     }
@@ -114,6 +117,7 @@ impl PalwDrillExtraFencesV1 {
             || self.gen_at.is_some()
             || self.decode_rules_at.is_some()
             || self.fp_v5_at.is_some()
+            || self.held_chunks_at.is_some()
             || self.improve_at.is_some()
     }
 
@@ -151,6 +155,7 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-gen-at", self.gen_at, "RFC-0003's generative fence (palw_gen_v1)"),
             ("--palw-drill-decode-rules-at", self.decode_rules_at, "the decode rules (palw_fp_decode_rules)"),
             ("--palw-drill-fp-v5-at", self.fp_v5_at, "FP Job V5 (palw_fp_job_v5)"),
+            ("--palw-drill-held-chunks-at", self.held_chunks_at, "RFC-0003's held leaf challenge (palw_held_close_chunks_v1)"),
             ("--palw-drill-improve-at", self.improve_at, "RFC-0004's improvement fence (palw_improvement_v1)"),
         ]
         .into_iter()
@@ -206,6 +211,9 @@ impl PalwDrillExtraFencesV1 {
         if let Some(at) = self.fp_v5_at {
             moves.extend(d::palw_drill_fp_v5_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-v5-at: {e}"))?);
         }
+        if let Some(at) = self.held_chunks_at {
+            moves.extend(d::palw_drill_held_close_chunks_at_v1(params, at).map_err(|e| format!("--palw-drill-held-chunks-at: {e}"))?);
+        }
         if let Some(at) = self.improve_at {
             moves.extend(d::palw_drill_improve_fence_at_v1(params, at).map_err(|e| format!("--palw-drill-improve-at: {e}"))?);
         }
@@ -238,6 +246,13 @@ impl PalwDrillExtraFencesV1 {
             at(self.capacity_step3_at),
             at(self.capacity_rho100_at)
         )
+    }
+
+    /// **The marker's lines for the flags that came after `extra_at=`** (int-11): one line each — `(key=, flag, text)` —
+    /// `none` when absent, also what a marker written before the flag existed counts as, so no earlier line changes its text
+    /// and a chain a release line's binary started reopens under this build.
+    fn later_marker_lines(&self) -> Vec<(&'static str, &'static str, String)> {
+        vec![("held_chunks_at=", "--palw-drill-held-chunks-at", palw_drill_marker_fence_text_v1(self.held_chunks_at))]
     }
 
     /// The marker's `extra_at=` line — RFC-0003 / RFC-0004's four flags only (`none` when none stands, else
@@ -575,12 +590,14 @@ pub fn palw_drill_datadir_guard_v4(
     let model_court_text = extra.model_court_marker_text();
     let capacity_text = extra.capacity_marker_text();
     let extra_text = extra.marker_text();
+    let later = extra.later_marker_lines();
+    let later_lines: String = later.iter().map(|(key, _, text)| format!("{key}{text}\n")).collect();
     let write_marker = |salt: &PalwDrillSaltV1| {
         std::fs::create_dir_all(prefixed_dir).map_err(|e| format!("cannot create {}: {e}", prefixed_dir.display()))?;
         std::fs::write(
             &marker_path,
             format!(
-                "salt_id={}\ngenesis={genesis_hash}\nfence_at={fence_text}\nfence2_at={fence2_text}\nfence3_at={fence3_text}\ntir_at={tir_text}\ntir2_at={tir2_text}\nmodel_court_at={model_court_text}\ncapacity_at={capacity_text}\nextra_at={extra_text}\n",
+                "salt_id={}\ngenesis={genesis_hash}\nfence_at={fence_text}\nfence2_at={fence2_text}\nfence3_at={fence3_text}\ntir_at={tir_text}\ntir2_at={tir2_text}\nmodel_court_at={model_court_text}\ncapacity_at={capacity_text}\nextra_at={extra_text}\n{later_lines}",
                 salt.id()
             ),
         )
@@ -616,6 +633,7 @@ pub fn palw_drill_datadir_guard_v4(
                 && recorded_model_court == model_court_text
                 && recorded_capacity == capacity_text
                 && recorded_extra == extra_text
+                && later.iter().all(|(key, _, text)| marker_line(key).unwrap_or_else(|| palw_drill_marker_fence_text_v1(None)) == *text)
             {
                 return Ok(());
             }
@@ -667,6 +685,12 @@ pub fn palw_drill_datadir_guard_v4(
                     named = format!(
                         "{named} and different --palw-drill-gen-at/-decode-rules-at/-fp-v5-at/-improve-at (recorded {recorded_extra}, now {extra_text})"
                     );
+                }
+                for (key, flag_name, text) in &later {
+                    let recorded_later = marker_line(key).unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
+                    if recorded_later != *text {
+                        named = format!("{named} and a different {flag_name} (recorded {recorded_later}, now {text})");
+                    }
                 }
                 named
             };
@@ -846,6 +870,7 @@ pub fn palw_drill_write_keyring_v4(
         "gen_at": extra.gen_at,
         "decode_rules_at": extra.decode_rules_at,
         "fp_v5_at": extra.fp_v5_at,
+        "held_chunks_at": extra.held_chunks_at,
         "improve_at": extra.improve_at,
         "public_genesis_hash": public.genesis.hash.to_string(),
         "public_consensus_params_id": public.consensus_params_id().to_string(),
@@ -1969,6 +1994,7 @@ mod tests {
             "--palw-drill-gen-at=100",
             "--palw-drill-decode-rules-at=100",
             "--palw-drill-fp-v5-at=100",
+            "--palw-drill-held-chunks-at=100",
             "--palw-drill-improve-at=100",
         ] {
             let unsalted = parse(&["--testnet", "--netsuffix=12", flag]);
@@ -2014,5 +2040,75 @@ mod tests {
         let v3 = root.path().join("y/misaka-testnet-12");
         palw_drill_datadir_guard_v3(&v3, Some(&a), "g", None, None, None, None).expect("created");
         assert!(std::fs::read_to_string(v3.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap().contains("extra_at=none\n"));
+    }
+
+    /// **RFC-0003's held leaf challenge is a drill flag of its own** (`--palw-drill-held-chunks-at`, decision 22,
+    /// object tag 90): refused without the salt, and — by the ruleset's own check, never a panic — without
+    /// `palw_tir_v1` at or below it; with the IR fence in force it ARMS `palw_held_close_chunks_v1` at its height and
+    /// moves nothing else; the marker keeps it on a line of its own (`held_chunks_at=`, `none` where a marker written
+    /// before it has none, so no earlier line changes its text) and a stored chain is never reopened under another
+    /// height; the keyring's manifest names it and announces the fingerprint the node on the same command line announces.
+    #[test]
+    fn the_held_leaf_challenge_is_a_drill_flag_of_its_own() {
+        let a = salt();
+        let root = tempfile::tempdir().unwrap();
+        let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let salted = format!("--palw-drill-genesis-salt={SALT}");
+        let days = ["--palw-drill-fence-at=6", "--palw-drill-fence2-at=10", "--palw-drill-fence3-at=14"];
+        let parsed = |extra: &[&str]| {
+            let v: Vec<String> =
+                base.iter().copied().chain([salted.as_str()]).chain(days).chain(extra.iter().copied()).map(str::to_owned).collect();
+            parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        let unsalted = parse(&["--testnet", "--netsuffix=12", "--palw-drill-held-chunks-at=140"]);
+        let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
+        assert!(refused.contains("--palw-drill-held-chunks-at=140") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
+        // Below the IR fence the ruleset does not validate: refused by name.
+        let why = palw_drill_validate_args_v1(&parsed(&["--palw-drill-held-chunks-at=140"])).unwrap_err().to_string();
+        assert!(why.contains("--palw-drill-held-chunks-at"), "{why}");
+        // With the IR fence below it the flag arms the fence and moves nothing else.
+        let without = config_of(&parsed(&["--palw-drill-tir-at=20"]));
+        let with = config_of(&parsed(&["--palw-drill-tir-at=20", "--palw-drill-held-chunks-at=140"]));
+        assert_eq!(without.params.palw_held_close_chunks_v1, None);
+        assert_eq!(
+            with.params.palw_held_close_chunks_v1,
+            Some(kaspa_consensus_core::config::params::ForkActivation::new(140)),
+            "armed at its height"
+        );
+        assert_eq!(with.palw_drill_fence_moves.len(), without.palw_drill_fence_moves.len() + 1, "one fence moved");
+        with.params.validate_palw_v2().expect("the drill with the held leaf challenge validates");
+        assert_ne!(with.params.consensus_params_id(), without.params.consensus_params_id(), "the fence moves the fingerprint");
+        palw_drill_validate_args_v1(&parsed(&["--palw-drill-tir-at=20", "--palw-drill-held-chunks-at=140"])).expect("with the IR fence");
+        // The marker's own line, and a stored chain is never reopened under another height.
+        let dir = root.path().join("x/misaka-testnet-12");
+        let set = PalwDrillExtraFencesV1 { held_chunks_at: Some(140), ..Default::default() };
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("created");
+        assert!(marker_of(&dir).contains("extra_at=none\nheld_chunks_at=140\n"), "{}", marker_of(&dir));
+        std::fs::create_dir_all(dir.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("kept");
+        let moved = PalwDrillExtraFencesV1 { held_chunks_at: Some(150), ..Default::default() };
+        let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), moved).unwrap_err();
+        assert!(why.contains("--palw-drill-held-chunks-at (recorded 140, now 150)"), "{why}");
+        let dropped = PalwDrillExtraFencesV1::default();
+        let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), dropped).unwrap_err();
+        assert!(why.contains("--palw-drill-held-chunks-at (recorded 140, now none)"), "{why}");
+        // A marker written before the flag existed counts as `none`: the release line's chain reopens under this build.
+        let old = root.path().join("y/misaka-testnet-12");
+        palw_drill_datadir_guard_v3(&old, Some(&a), "g", Some(6), Some(10), Some(14), Some(20)).expect("created");
+        let text = marker_of(&old).replace("held_chunks_at=none\n", "");
+        std::fs::write(old.join(PALW_DRILL_DATADIR_MARKER_V1), text).unwrap();
+        std::fs::create_dir_all(old.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v3(&old, Some(&a), "g", Some(6), Some(10), Some(14), Some(20)).expect("an older marker is none");
+        // The keyring's manifest names it and announces the fingerprint of the same command line.
+        let keys = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), set).expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["held_chunks_at"], serde_json::json!(140));
+        assert_eq!(manifest["consensus_params_id"], with.params.consensus_params_id().to_string().as_str());
+        let keys_without = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v3(&a, keys_without.path(), Some(6), Some(10), Some(14), Some(20)).expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["held_chunks_at"], serde_json::Value::Null);
     }
 }

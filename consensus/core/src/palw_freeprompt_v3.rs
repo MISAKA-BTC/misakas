@@ -341,18 +341,22 @@ pub struct PalwFreePromptJobV3 {
     /// and only when present, so a V3 job's bytes are unchanged.
     pub decode: Option<DecodeConfigV4>,
     /// **The tail a later job version adds after `decode`**: FP Job V5's images and source (RFC-0003
-    /// §II.2.1–§II.2.2) at [`crate::palw_fp_job_v5::PALW_FP_V5_VERSION`], or an evaluation job (RFC-0004
-    /// §7.2) at [`crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION`] — each with `decode` present — and
-    /// `None` at every other version; validation refuses any other pairing
+    /// §II.2.1–§II.2.2) at [`crate::palw_fp_job_v5::PALW_FP_V5_VERSION`], an evaluation job (RFC-0004
+    /// §7.2) at [`crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION`] — each with `decode` present — or a
+    /// tensor job (RFC-0003 §I.4) at [`crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION`] (with `decode`
+    /// absent), and `None` at every other version; validation refuses any other pairing
     /// ([`PalwFpV3Error::ImagesVersionMismatch`]). Serialized after `decode`, as the version's own
-    /// type and only when present, so a V3 or V4 job's bytes are unchanged. Both are dormant: V5 behind
-    /// `Params::palw_fp_job_v5`, evaluation behind `Params::palw_improvement_v1`.
+    /// type and only when present, so a V3 or V4 job's bytes are unchanged. All are dormant: V5 and the
+    /// tensor job behind `Params::palw_fp_job_v5` ([`crate::palw_fp_job_v5`], [`crate::palw_gen_claim_v1`]),
+    /// evaluation behind `Params::palw_improvement_v1`.
     pub tail: Option<PalwFpJobTailV1>,
 }
 
 /// **What a later job version adds after its V4 rules** — the version word says which.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwFpJobTailV1 {
+    /// A tensor job (version 10, RFC-0003 §I.4): the job's seed and body; no decode rules.
+    Gen(Box<crate::palw_gen_claim_v1::PalwGenJobTailV1>),
     /// FP Job V5 (version 8): the job's images and source.
     V5(crate::palw_fp_job_v5::PalwFpV5TailV1),
     /// An evaluation job (version 9, RFC-0004 §7.2): the job the chain derives the claim's context from.
@@ -389,9 +393,11 @@ impl borsh::BorshSerialize for PalwFreePromptJobV3 {
         if let Some(decode) = &self.decode {
             borsh::BorshSerialize::serialize(decode, writer)?;
         }
-        // A later version's tail (RFC-0003 §II.2.1–§II.2.2's V5, RFC-0004 §7.2's evaluation job), written
-        // exactly when it is present, after the V4 tail, as its own type (the version word names it).
+        // A later version's tail (RFC-0003 §I.4's tensor job, §II.2.1–§II.2.2's V5, RFC-0004 §7.2's
+        // evaluation job), written exactly when it is present, after the V4 tail, as its own type (the
+        // version word names it).
         match &self.tail {
+            Some(PalwFpJobTailV1::Gen(tail)) => borsh::BorshSerialize::serialize(tail.as_ref(), writer)?,
             Some(PalwFpJobTailV1::V5(tail)) => borsh::BorshSerialize::serialize(tail, writer)?,
             Some(PalwFpJobTailV1::Eval(job)) => borsh::BorshSerialize::serialize(job.as_ref(), writer)?,
             None => {}
@@ -427,8 +433,10 @@ impl borsh::BorshDeserialize for PalwFreePromptJobV3 {
         };
         // The version decides whether the tail exists: a V3 job's bytes end at `temperature_q`; a V4
         // job's at its decode rules; a V5 job's (RFC-0003 §II.2.1) at its images and source, after them;
-        // an evaluation job's (RFC-0004 §7.2) at its evaluation job, after them.
+        // an evaluation job's (RFC-0004 §7.2) at its evaluation job, after them; a tensor job's (RFC-0003
+        // §I.4) at its seed and body, with no decode rules between.
         let (v5, eval) = (crate::palw_fp_job_v5::PALW_FP_V5_VERSION, crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION);
+        let gen_version = crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION;
         if version == PALW_FP_V4_VERSION || version == v5 || version == eval {
             job.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
         }
@@ -437,6 +445,9 @@ impl borsh::BorshDeserialize for PalwFreePromptJobV3 {
         }
         if version == eval {
             job.tail = Some(PalwFpJobTailV1::Eval(Box::new(borsh::BorshDeserialize::deserialize_reader(reader)?)));
+        }
+        if version == gen_version {
+            job.tail = Some(PalwFpJobTailV1::Gen(Box::new(borsh::BorshDeserialize::deserialize_reader(reader)?)));
         }
         Ok(job)
     }
@@ -463,6 +474,11 @@ impl PalwFreePromptJobV3 {
     /// Is this an evaluation job (RFC-0004 §7.2: version 9, outside the reward path)?
     pub fn is_eval(&self) -> bool {
         self.version == crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION
+    }
+
+    /// Is this a tensor job (RFC-0003 §I.4: FP job version 10, an image or an embedding)?
+    pub fn is_gen_tensor(&self) -> bool {
+        self.version == crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION
     }
 
     /// The job's ADR-0082 Decision 11 sampler inputs.
@@ -500,6 +516,10 @@ pub fn fp_job_id_v3(job: &PalwFreePromptJobV3) -> Hash64 {
     // RFC-0004 §7.2: an evaluation job, under its own.
     if job.version == crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION {
         return crate::palw_improve_eval_v1::fp_job_id_eval_carried_v1(job);
+    }
+    // RFC-0003 §I.4: a tensor job is named by the generative job's own id.
+    if job.version == crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION {
+        return crate::palw_gen_claim_v1::fp_job_id_gen_carried_v1(job);
     }
     let bytes = borsh::to_vec(job).expect("PalwFreePromptJobV3 is borsh-serializable");
     canonical_id(PALW_FP_V3_DOMAIN_JOB_ID, &bytes)
@@ -1516,9 +1536,11 @@ pub enum PalwFpV3Error {
     /// carrying one. One job, one encoding.
     #[error("job version {version} does not match its decode config (present: {present}) — version 7 carries one, version 5 none")]
     DecodeConfigVersionMismatch { version: u16, present: bool },
-    /// **RFC-0003 §II.2.1: a V5 tail (images, a source) on a job that is not FP Job V5** — only
-    /// version 8 carries one.
-    #[error("job version {version} carries a V5 tail (images, a source) — only FP Job V5 (version 8) does")]
+    /// **RFC-0003 §II.2.1, §I.4, RFC-0004 §7.2: a tail (V5's images and source, an evaluation job, a tensor job's
+    /// seed and body) on a job that is none of them** — only versions 8, 9 and 10 carry one.
+    #[error(
+        "job version {version} carries a tail (FP Job V5's images and source, an evaluation job, a tensor job's seed and body) — only versions 8, 9 and 10 do"
+    )]
     ImagesVersionMismatch { version: u16 },
     /// **RFC-0004 §7.2: an evaluation job (version 9) at an FP lane validator.** Its context is the
     /// chain's and it is outside the reward path, so the lane's own rules never admit one; the
@@ -1532,6 +1554,10 @@ pub enum PalwFpV3Error {
     /// own reason.
     #[error("the evaluation claim is refused: {0}")]
     EvaluationClaim(String),
+    /// **RFC-0003 §I.4: a tensor claim the generative lane refuses**, by the lane's own reason
+    /// (`palw_gen_claim_v1`).
+    #[error("the tensor claim is refused: {0}")]
+    TensorClaim(String),
     /// **RFC-0001 §A.2: the V4 job's `DecodeConfigV4` is not in canonical form**, by name.
     #[error("the V4 job's decode config is not canonical: {0}")]
     DecodeConfigNotCanonical(crate::palw_decode_pipeline_v4::PalwDecodeConfigV4Error),

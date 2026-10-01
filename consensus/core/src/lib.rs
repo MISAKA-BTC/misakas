@@ -500,6 +500,12 @@ pub mod palw_improve_promotion_v1;
 pub mod palw_improve_epoch_v1;
 /// **RFC-0004 §8.5 / spec 17 §17.11.1: the improvement sink a sponsor's deposit pays into, and its binding.**
 pub mod palw_improve_pool_v1;
+/// RFC-0003 §I.4: the tensor claim on the free-prompt lane — FP job version 10; dormant behind `palw_fp_job_v5` over `palw_gen_v1`.
+pub mod palw_gen_claim_v1;
+/// RFC-0003 §I.4.7: a pipeline claim accused in one move (the generative twin of `palw_tir_one_move_v1`) — dormant behind `palw_gen_v1`.
+pub mod palw_gen_one_move_v1;
+/// RFC-0003 §I.4.7, decision 22: the held leaf challenge — a named-leaf challenge with the declaration of its close, so a lie at a leaf whose close exceeds one carrier is convictable under the held regime; dormant behind `palw_held_close_chunks_v1`.
+pub mod palw_held_close_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.

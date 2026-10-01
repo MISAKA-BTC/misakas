@@ -111,6 +111,17 @@ pub use palw_improve_material_fold_v1::PALW_IMPROVE_MATERIAL_SWEEP_ROWS_PER_BLOC
 #[path = "palw_improve_eval_fold_v1.rs"]
 mod palw_improve_eval_fold_v1;
 pub use palw_improve_eval_fold_v1::PALW_IMPROVE_TABLE_EVAL_JOBS_V1;
+// RFC-0003 §I.4: the tensor claim's fold branch — a child module, as the evaluation lane's is, so it reads the
+// builder and the state's tables directly.
+#[path = "palw_gen_claim_fold_v1.rs"]
+mod palw_gen_claim_fold_v1;
+// One reading of "this class has seats" for every class kind (RFC-0002 Part II §II.7.5 Proposal A's possession
+// floor, extracted from the tensor claim's readiness gate): a child module for the same reason.
+#[path = "palw_class_seating_v1.rs"]
+mod palw_class_seating_v1;
+// RFC-0003 decision 22: the held leaf challenge's fold arm — a child module for the same reason.
+#[path = "palw_held_close_fold_v1.rs"]
+mod palw_held_close_fold_v1;
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
@@ -1564,6 +1575,18 @@ pub struct PalwStateParamsV2 {
     /// copy that disagrees.
     #[borsh(skip)]
     gen_from_daa: Option<u64>,
+    /// **RFC-0003 §I.4: `Params::palw_fp_job_v5`'s height**, mirrored by `Params::sync_palw_gen_v1`
+    /// because the fold's tensor branch holds only these params: below the height it refuses a tensor
+    /// claim by name, as the second lock behind the acceptance walk's drop. `None` on every shipped
+    /// preset; skipped by borsh for `gen_from_daa`'s reason, and `validate_palw_v2` refuses a copy that
+    /// disagrees.
+    #[borsh(skip)]
+    fp_job_v5_from_daa: Option<u64>,
+    /// **RFC-0003 §I.4.8: the generative fence's cap on claims one class holds in flight**, per profile
+    /// (`Image`, `Embedding`, `Audio`, `Video`), mirrored by `Params::sync_palw_gen_v1` for the same
+    /// reason; zeros where the fence is not armed. Skipped by borsh for `gen_from_daa`'s reason.
+    #[borsh(skip)]
+    gen_max_inflight_claims: [u32; 4],
     /// **RFC-0002 Phase F: `Params::palw_tir_fence2`'s height**, mirrored by
     /// `Params::sync_palw_tir_fence2` for `tir_from_daa`'s reason (the fold reads the credited work,
     /// the admission rules and the DA court's IR unit from it). `None` on every shipped preset.
@@ -1587,6 +1610,11 @@ pub struct PalwStateParamsV2 {
     /// in a fixture that does not set it, where the check is not asked.
     #[borsh(skip)]
     improve_lifecycle_base_daa: Option<u64>,
+    /// **RFC-0003 decision 22: `Params::palw_held_close_chunks_v1`'s height**, mirrored by
+    /// `Params::sync_palw_held_close_chunks_v1` for `tir_fence2_from_daa`'s reason (the fold's held leaf
+    /// challenge arm reads it). `None` on every shipped preset.
+    #[borsh(skip)]
+    held_close_chunks_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1796,10 +1824,13 @@ impl PalwStateParamsV2 {
             floor_refusal_retry_from_daa: None,
             tir_from_daa: None,
             gen_from_daa: None,
+            fp_job_v5_from_daa: None,
+            gen_max_inflight_claims: [0; 4],
             tir_fence2_from_daa: None,
             improve_from_daa: None,
             improve_ceilings: None,
             improve_lifecycle_base_daa: None,
+            held_close_chunks_from_daa: None,
         })
     }
 
@@ -1995,6 +2026,41 @@ impl PalwStateParamsV2 {
         self.gen_from_daa.is_some_and(|from| daa_score >= from)
     }
 
+    /// **RFC-0003 §I.4: the tensor lane's mirror of `Params::palw_fp_job_v5`'s height** — written by
+    /// `Params::sync_palw_gen_v1` and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_fp_job_v5_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.fp_job_v5_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_fp_job_v5`'s height, if the network arms it (the mirror).
+    pub fn fp_job_v5_from_daa(&self) -> Option<u64> {
+        self.fp_job_v5_from_daa
+    }
+
+    /// **Is `palw_fp_job_v5` in force at `daa_score`?** `false` on every shipped preset.
+    pub fn fp_job_v5_active_at(&self, daa_score: u64) -> bool {
+        self.fp_job_v5_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0003 §I.4.8: the generative fence's per-profile cap on claims in flight** — written by
+    /// `Params::sync_palw_gen_v1` and by nothing else (and by fixtures); zeros where the fence is not armed.
+    pub fn with_gen_max_inflight_claims(mut self, caps: [u32; 4]) -> Self {
+        self.gen_max_inflight_claims = caps;
+        self
+    }
+
+    /// The cap on one class's claims in flight for `profile` (`Image`, `Embedding`, `Audio`, `Video`; 0
+    /// for any other, and where the fence is not armed).
+    pub fn gen_max_inflight_claims(&self, profile: crate::palw_gen_v1::PalwGenProfileV1) -> u32 {
+        (profile as usize).checked_sub(1).and_then(|i| self.gen_max_inflight_claims.get(i)).copied().unwrap_or(0)
+    }
+
+    /// Every profile's cap, in `Image`, `Embedding`, `Audio`, `Video` order (the mirror as written).
+    pub fn gen_max_inflight_claims_all(&self) -> [u32; 4] {
+        self.gen_max_inflight_claims
+    }
+
     /// **RFC-0002 Phase F: the second IR fence's mirror** — written by `Params::sync_palw_tir_fence2`
     /// and by nothing else (and by fixtures); `None` where the fence is not armed.
     pub fn with_tir_fence2_from_daa(mut self, from_daa: Option<u64>) -> Self {
@@ -2067,6 +2133,24 @@ impl PalwStateParamsV2 {
     /// cannot disagree. `false` on every shipped preset.
     pub fn pipeline_da_active_at(&self, daa_score: u64) -> bool {
         self.improve_active_at(daa_score)
+    }
+
+    /// **RFC-0003 decision 22: the held leaf challenge's mirror** — written by
+    /// `Params::sync_palw_held_close_chunks_v1` and by nothing else (and by fixtures); `None` where the
+    /// fence is not armed.
+    pub fn with_held_close_chunks_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.held_close_chunks_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_held_close_chunks_v1`'s height, if the network arms it (the mirror).
+    pub fn held_close_chunks_from_daa(&self) -> Option<u64> {
+        self.held_close_chunks_from_daa
+    }
+
+    /// **Is the held leaf challenge in force at `daa_score`?** `false` on every shipped preset.
+    pub fn held_close_chunks_active_at(&self, daa_score: u64) -> bool {
+        self.held_close_chunks_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -6412,9 +6496,11 @@ impl PalwClassFrozenV2 {
 /// transition enforces referential integrity and the lattice.
 ///
 /// **A variant's discriminant is its tag, and from 83 on it is declared** (`= 83` …; spec 17 §17.0): the
-/// first 83 are their positions, and the later ones are allocations two lanes may append in either order
-/// without moving each other's number (`use_discriminant`, and the `repr` Rust asks of a data-carrying
-/// variant with one — the proof enum's own convention, `PalwCourtVerdictProofV2`).
+/// first 83 are their positions, and the later ones are allocations the lanes may append in either order
+/// without moving each other's number — RFC-0004's 83–86 and 89, RFC-0003's 87, 88 and 90 (`use_discriminant`,
+/// and the `repr` Rust asks of a data-carrying variant with one — the proof enum's own convention,
+/// `PalwCourtVerdictProofV2`). `use_discriminant` makes Borsh read the number the variant is declared with,
+/// which for every positional variant is its index.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -7626,6 +7712,57 @@ pub enum PalwConsensusObjectV2 {
         arity: u8,
         signature: Vec<u8>,
     } = 89,
+    // ---- RFC-0003 §I.4: the tensor claim's commitment (a lane object, like `FreePromptCommitted`). ----
+    /// **A tensor claim's commitment** (FP job version 10, RFC-0003 §I.4): the object the acceptance walk
+    /// (`palw_fp_gen_objects_from_accepted_txs_v1`) builds from a version-10 payload on the free-prompt
+    /// subnetwork, past `palw_fp_job_v5` over `palw_gen_v1`. Like `FreePromptCommitted` it is **never
+    /// serialized to a peer** (`palw_lifecycle_object_may_ride_v2` refuses it a carriage by name): the
+    /// transaction is the carrier, and this is what its payload means to the fold. Appended after
+    /// `CourtGenRootClaimed`; **its tag is 87, declared explicitly** (spec 17 section 17.0's allocation,
+    /// approved 2026-10-01; 83-85 stay Phase F's data-availability objects). The number is a name, not a
+    /// wire fact: the object is never serialized to a peer or stored. The
+    /// fold's tensor branch derives the class, the work and the capacity and writes a weightless claim
+    /// (`palw_gen_claim_fold_v1`); below the fences it refuses it by name.
+    GenTensorCommitted {
+        claim: Hash64,
+        class_id: Hash64,
+        bond: PalwBondKeyV2,
+        executor_pubkey: Vec<u8>,
+        /// The step tree's leaf count, as committed (the fold holds it to the chain's own count).
+        work_leaves: u64,
+        /// The payload's ids: the job's prompt ids then its negative ids under `PublicDa`, none under `PanelDa`.
+        prompt_token_ids: Vec<u32>,
+        trace_root: Hash64,
+        output_root: Hash64,
+        execution_root: Hash64,
+        /// The commitment's job pin (`palw_fp_job_pin_v1`), recorded as the claim's identity past
+        /// `palw_offence_attribution`.
+        job_pin: Hash64,
+        /// The tensor job, reconstructed from the version-10 job the commitment carries.
+        job: Box<crate::palw_gen_job_v1::PalwGenJobV1>,
+    } = 87,
+    /// **RFC-0003 §I.4.7: a pipeline claim accused in one move** — the generative twin of tag 62
+    /// (`TirShardCourtAccused`), for a chain that plays no bisection (the held regime, testnet-12): the
+    /// accusation carries a generative close (`GenCone`, `GenOutputTile`, `GenDecodeToken`), signed by the
+    /// accuser over its session id, and is adjudicated whole at acceptance (`palw_gen_one_move_v1`). Appended
+    /// after `GenTensorCommitted`; **its tag is 88, declared explicitly** (spec 17 section 17.0, approved
+    /// 2026-10-01). Below `palw_gen_v1` the acceptance walk drops it by name and the fold refuses it as the
+    /// second lock.
+    GenShardCourtAccused {
+        accusation: Box<crate::palw_gen_one_move_v1::PalwGenOneMoveAccusationV1>,
+    } = 88,
+    // Tag 89 is RFC-0004's `CourtEvalRootClaimed` (spec 17 section 17.0): declared on its own branch, integrated here.
+    /// **RFC-0003 §I.4.7, decision 22: a held leaf challenge** — a named-leaf challenge that carries the
+    /// declaration of its close ([`crate::palw_held_close_v1`], spec 04b §15.15.6): the fold opens a session
+    /// at `Terminal` on the leaf as ADR-0103 Decision 5 does and writes the challenger-side close group the
+    /// existing `CourtCloseDeclared` would have written, so a lie at a leaf whose close exceeds one carrier
+    /// (up to the carried cap) is convictable under the held regime, for IR and pipeline classes alike. Signed
+    /// by the accuser's bond. **Its tag is 90, declared explicitly** (spec 17 section 17.0, approved
+    /// 2026-10-01). Below `palw_held_close_chunks_v1` the acceptance walk drops it by name and the fold
+    /// refuses it as the second lock.
+    HeldLeafChallengeDeclared {
+        challenge: Box<crate::palw_held_close_v1::PalwHeldLeafChallengeV1>,
+    } = 90,
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7663,13 +7800,25 @@ pub fn palw_object_is_tir_fence2_v1(object: &PalwConsensusObjectV2) -> bool {
     }
 }
 
+/// **Is this object the held leaf challenge** (RFC-0003 decision 22) — a variant an older build cannot decode
+/// and skips (A-2)? Below `Params::palw_held_close_chunks_v1` the acceptance walk drops it by name before any
+/// slot, rent or budget is charged for it, and the fold refuses it as the second lock.
+pub fn palw_object_is_held_close_chunks_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::HeldLeafChallengeDeclared { .. })
+}
+
 /// **Is this object an RFC-0003 generative move** — an appended generative variant (today the
 /// pipeline class registration, tag 68) that an older build cannot decode and skips (A-2)? Below
 /// `palw_gen_v1` the acceptance walk drops every such object by name before any slot, rent or budget
 /// is charged for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
     match object {
-        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } | PalwConsensusObjectV2::CourtGenRootClaimed { .. } => true,
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. }
+        | PalwConsensusObjectV2::CourtGenRootClaimed { .. }
+        // RFC-0003 §I.4: a tensor claim's commitment is a generative move too, and so is a pipeline claim's
+        // one-move accusation (§I.4.7).
+        | PalwConsensusObjectV2::GenTensorCommitted { .. }
+        | PalwConsensusObjectV2::GenShardCourtAccused { .. } => true,
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_gen_v1(),
         _ => false,
     }
@@ -8270,6 +8419,9 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
         // chunk that pays (a chunk carries no `count`, chunks arrive in any order, and this ceiling
         // is read where the folded state is not in hand).
         PalwConsensusObjectV2::CourtCloseDeclared { count, .. } => palw_court_close_min_fee_v1(*count as u64),
+        // RFC-0003 decision 22: a held leaf challenge IS a declaration (it writes the group `CourtCloseDeclared`
+        // writes), so it buys the same one grading, priced on the same field.
+        PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge } => palw_court_close_min_fee_v1(u64::from(challenge.count)),
         // A chunk of a declared close pays its carriage and no rent: the grading was bought by the
         // declaration, the row was reserved by the deposit, and charging the chunks again would tax
         // only the honest carrier that completes — the sentence the `ObjectChunk` arm's own doc
@@ -8775,6 +8927,10 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
     // RFC-0002 Phase F: an IR one-move accusation is adjudicated whole at acceptance — a demand
     // evaluation bounded by the IR court's limits, not by its bytes — so it takes the block's slot.
     if matches!(object, PalwConsensusObjectV2::TirShardCourtAccused { .. }) {
+        return true;
+    }
+    // RFC-0003 §I.4.7: a pipeline claim's one-move accusation is adjudicated whole at acceptance too.
+    if matches!(object, PalwConsensusObjectV2::GenShardCourtAccused { .. }) {
         return true;
     }
     let session_id = match object {
@@ -9843,6 +9999,21 @@ pub enum PalwStateV2Error {
     /// walk drops it first; this is the second lock.
     #[error("a generative object is refused: {0}")]
     GenObjectRefused(&'static str),
+    /// **RFC-0003 §I.4: a tensor claim the fold refuses**, by the rule's own reason.
+    #[error("a tensor claim is refused: {0}")]
+    GenClaimRefused(String),
+    /// **RFC-0003 §I.4.8: a generative class's claims in flight are at the fence's cap** — it takes no
+    /// new claim until one leaves the live set.
+    #[error("generative class {class} holds {inflight} claims in flight, at the fence's cap of {cap}")]
+    GenClassInflightCapped { class: Hash64, inflight: u64, cap: u32 },
+    /// **RFC-0003 §I.4.5 step 3: no panel can be drawn for the class yet** — fewer distinct operators (the
+    /// executor's excluded) hold it with a fresh readiness V2 possession proof than a panel seats.
+    #[error("generative class {class} has {ready} operators ready to replay it, and a panel seats {needed}")]
+    GenClassNotReady { class: Hash64, ready: u32, needed: u32 },
+    /// **RFC-0003 decision 22: a held leaf challenge the fold refuses**, by the rule's own reason (below the
+    /// fence, off the held regime, a leaf outside the claim's step space, a claim of no IR or pipeline class).
+    #[error("a held leaf challenge is refused: {0}")]
+    HeldLeafChallengeRefused(String),
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -13113,8 +13284,9 @@ impl PalwChainStateV2 {
             // ledger inside range, spends only on a certified (Final) claim, and zero immature
             // contribution (a commitment is not a block's work).
             if let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source {
-                // RFC-0004 A6 (MIP-17): an evaluation claim is the one free-prompt claim with no quanta —
-                // and then it earns nothing at all: no pwu, no spend, no receipt rights, no escrow.
+                // RFC-0004 A6 (MIP-17), RFC-0003 §I.4: a weightless claim — an evaluation claim, a tensor claim —
+                // is the one free-prompt claim with no quanta, and then it earns nothing at all: no pwu, no spend,
+                // no receipt rights, no escrow.
                 if *quanta == 0 {
                     if claim.pwu != 0 || !spent.is_empty() || claim.rights_reserved != 0 || claim.escrowed_reward != 0 {
                         return Err(PalwStateV2Error::CarriageInconsistent(format!(
@@ -28443,6 +28615,7 @@ fn open_held_dissection_v1(
         ladder,
         opening_turn,
     )
+    .map(|_| ())
 }
 
 /// **A session opened at `Terminal` on a named leaf** — the body [`open_held_dissection_v1`] and
@@ -28460,7 +28633,7 @@ fn open_dissection_at_named_leaf_v1(
     leaf_index: u64,
     ladder: u64,
     opening_turn: u64,
-) -> Result<(), PalwStateV2Error> {
+) -> Result<Hash64, PalwStateV2Error> {
     let refused = |why: String| PalwStateV2Error::HeldDissectionRefused { claim: claim_id, leaf: leaf_index, why };
     let open_sessions = builder.state.court_sessions.len() as u64;
     let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
@@ -28556,7 +28729,8 @@ fn open_dissection_at_named_leaf_v1(
     if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
         builder.disarm_deadline(claim_id);
     }
-    Ok(())
+    // The session's id, for a caller that keys something to it (the held leaf challenge's close group).
+    Ok(session_id)
 }
 
 fn rearm_claim_after_da_session(
@@ -28749,6 +28923,16 @@ pub(crate) fn court_session_turn_and_rung_deadline_v2(
         None if court_session_executor_declared_at_the_ir_terminal_v1(state, session) => {
             (crate::palw_bisect::PalwBisectTurnV1::Terminal, session.ladder.last_deadline_daa())
         }
+        // **RFC-0003 decision 22: so does the CHALLENGER's declared close** (a held leaf challenge's group).
+        // The executor is not put on a clock for a close the accuser has pinned and may never deliver: while
+        // it stands at an IR or pipeline terminal the session waits at `Terminal`, and the group's own
+        // assembly deadline convicts a declarer that does not deliver. The mirror of the clause above, and it
+        // adds no state that clause does not already wait on: a challenger-side group at such a terminal
+        // exists only where a held leaf challenge wrote it (the declaration arm refuses it there — the turn
+        // reads `AwaitDisclosure`), which no state below `palw_held_close_chunks_v1` can hold.
+        None if court_session_challenger_declared_at_the_ir_terminal_v1(state, session) => {
+            (crate::palw_bisect::PalwBisectTurnV1::Terminal, session.ladder.last_deadline_daa())
+        }
         None => court_turn_and_rung_deadline_v2(session, court_session_class_is_fused_v2(state, session)),
     }
 }
@@ -28771,6 +28955,16 @@ pub(crate) fn court_session_at_the_ir_terminal_v1(state: &PalwChainStateV2, sess
 /// [`court_session_at_the_ir_terminal_v1`], and the executor's declared close stands.
 fn court_session_executor_declared_at_the_ir_terminal_v1(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> bool {
     state.court_close_groups.contains_key(&(session.ladder.session_id(), PalwCourtSideV1::Executor))
+        && court_session_at_the_ir_terminal_v1(state, session)
+}
+
+/// [`court_session_at_the_ir_terminal_v1`], and the CHALLENGER's declared close stands (RFC-0003 decision 22: the
+/// group a held leaf challenge wrote).
+pub(crate) fn court_session_challenger_declared_at_the_ir_terminal_v1(
+    state: &PalwChainStateV2,
+    session: &PalwCourtSessionStateV2,
+) -> bool {
+    state.court_close_groups.contains_key(&(session.ladder.session_id(), PalwCourtSideV1::Challenger))
         && court_session_at_the_ir_terminal_v1(state, session)
 }
 
@@ -31769,6 +31963,11 @@ fn apply_object(
             return Err(PalwStateV2Error::ImprovementObjectRefused { object: name, why });
         }
     }
+    // **RFC-0003 decision 22, likewise**: below `palw_held_close_chunks_v1` the held leaf challenge is a payload an
+    // older build cannot decode; the acceptance walk drops it by name, and this is the second lock.
+    if palw_object_is_held_close_chunks_v1(object) && !builder.params.held_close_chunks_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::HeldLeafChallengeRefused("a held leaf challenge before palw_held_close_chunks_v1 is in force".into()));
+    }
     match object {
         // ---- RFC-0004: the core lane's objects (spec 17 §17.4.2, §17.10) ----
         PalwConsensusObjectV2::ModelLineImprovementPolicySet { payload, signature: _ } => {
@@ -32011,6 +32210,79 @@ fn apply_object(
                     }
                 }
             }
+        }
+        // **RFC-0003 §I.4.7: a pipeline claim accused in one move.** The IR arm above with the class check
+        // turned to the generative registry: a live claim of a generative class, the executor and the roots
+        // the claim's, an accuser that is not the producer, the open-session rule, an Active accuser at or
+        // above the floor — then the verdict the acceptance layer re-derived from the proof
+        // (`palw_gen_one_move_v1`), applied as the legacy court applies its own. Under the held regime a cone
+        // accusation at a DISSECTED leaf opens a dissection there (the responder's generative root claim is
+        // its first move); below `palw_gen_v1` the lock above refused the object by name.
+        PalwConsensusObjectV2::GenShardCourtAccused { accusation } => {
+            let claim_id = accusation.claim;
+            let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+            if claim.phase.is_terminal() {
+                return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "GenShardCourtAccused" });
+            }
+            if !builder.state.gen_classes.contains_key(&claim.class_id) {
+                return Err(PalwStateV2Error::GenObjectRefused(
+                    "a generative one-move accusation names a claim of a class that is not a pipeline",
+                ));
+            }
+            if accusation.executor_bond != claim.bond {
+                return Err(PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(claim_id));
+            }
+            if accusation.execution_root != claim.execution_root || accusation.trace_root != claim.trace_root {
+                return Err(PalwStateV2Error::ShardCourtRootsDiffer(claim_id));
+            }
+            let accuser = accusation.accuser_bond;
+            if accuser == claim.bond {
+                return Err(PalwStateV2Error::ShardCourtAccuserIsTheProducer(accuser));
+            }
+            let open_session = builder.state.court_sessions.iter().find(|(_, s)| s.claim == claim_id).map(|(id, _)| *id);
+            if let Some(session) = open_session
+                && !builder.extras.offence_attribution_active
+            {
+                return Err(PalwStateV2Error::ShardCourtClaimUnderSession { claim: claim_id, session });
+            }
+            let accuser_record = builder.state.bonds.get(&accuser).ok_or(PalwStateV2Error::MissingBond(accuser))?.clone();
+            if !matches!(accuser_record.status, PalwBondStatusV2::Active) {
+                return Err(PalwStateV2Error::BondNotActive(accuser));
+            }
+            let floor = builder.params.min_collateral_sompi();
+            if accuser_record.collateral < floor {
+                return Err(PalwStateV2Error::BondBelowFloor { bond: accuser, collateral: accuser_record.collateral, floor });
+            }
+            let dissected_leaf = match builder.extras.held_context_ladder {
+                Some(held) => crate::palw_gen_one_move_v1::palw_gen_one_move_dissected_leaf_v1(&builder.state, &claim, accusation)
+                    .map_err(|e| PalwStateV2Error::ShardCourt(e.to_string()))?
+                    .map(|leaf| (held, leaf)),
+                None => None,
+            };
+            if let Some((held, leaf)) = dissected_leaf {
+                if accusation.verdict != PalwCourtVerdictV2::ExecutorGuilty {
+                    return Err(PalwStateV2Error::ShardCourt("an accusation that opens a dissection declares ExecutorGuilty".into()));
+                }
+                if open_session.is_some() {
+                    check_further_held_dissection_v1(&builder.state, claim_id, accuser)?;
+                }
+                let ladder = builder.state.class_step_ladder_v1(&claim.class_id, held);
+                let turn = builder.params.turn_deadline_daa();
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn)?;
+            } else {
+                match accusation.verdict {
+                    PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
+                    PalwCourtVerdictV2::ChallengerDefeated => {
+                        let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
+                        builder.slash_seat(accuser, charge, floor)?;
+                    }
+                }
+            }
+        }
+        // **RFC-0003 decision 22: a named-leaf challenge with the declaration of its close** — the session at
+        // `Terminal` on the leaf and the challenger-side group, in one step (`palw_held_close_fold_v1`).
+        PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge } => {
+            palw_held_close_fold_v1::apply_held_leaf_challenge_v1(builder, ctx, challenge)?;
         }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
@@ -32640,6 +32912,40 @@ fn apply_object(
         // reduces over the history, F7 composed) owes its court's terminal move, as an IR class does
         // (`fused_attention`); nothing is held; and a pipeline opens no registry lifecycle row in v1
         // (the registry's work model is a text model's).
+        // **RFC-0003 §I.4: a tensor claim's commitment** — the fences, the bond, the class, the job against the
+        // class, the work (the chain's own count), the class's capacity, the work identity, the reservation; then
+        // a weightless claim that is any claim of its class (`palw_gen_claim_fold_v1`).
+        PalwConsensusObjectV2::GenTensorCommitted {
+            claim,
+            class_id,
+            bond,
+            executor_pubkey,
+            work_leaves,
+            prompt_token_ids,
+            trace_root,
+            output_root,
+            execution_root,
+            job_pin,
+            job,
+        } => {
+            palw_gen_claim_fold_v1::apply_gen_tensor_commitment_v1(
+                builder,
+                ctx,
+                palw_gen_claim_fold_v1::PalwGenCommitV1 {
+                    claim_id: claim,
+                    class_id,
+                    bond,
+                    executor_pubkey,
+                    work_leaves: *work_leaves,
+                    prompt_token_ids,
+                    trace_root,
+                    output_root,
+                    execution_root,
+                    job_pin,
+                    job,
+                },
+            )?;
+        }
         PalwConsensusObjectV2::ClassRegisteredGenV1 {
             class_id,
             artifact_root,
@@ -40453,6 +40759,225 @@ pub(crate) mod tests {
         state.assert_internal_consistency(p).expect("internal consistency after apply");
         state.assert_deadline_consistency(p).expect("deadline consistency after apply");
         (state, delta)
+    }
+
+    // ---- RFC-0003 decision 22: the challenger's declared close in the court's clock ----------------
+
+    /// **The clock clause the held leaf challenge adds** (`court_session_challenger_declared_at_the_ir_terminal_v1`,
+    /// spec 04b §15.15.6), pinned on the court of `fused_terminal_court` with its class recorded as each kind.
+    ///
+    /// The fixture's court has converged to a FUSED terminal, so before the clause a session of an IR or a
+    /// pipeline class there reads `AwaitDisclosure` (the executor owes a root claim) at the ladder's last rung —
+    /// unless its own declared close stands, which makes the turn `Terminal` (RFC-0002 F7). The clause adds the
+    /// same wait for the CHALLENGER's group, and only that state moves.
+    mod held_close_chunks_clock {
+        use super::*;
+        use crate::palw_bisect::PalwBisectTurnV1;
+
+        #[derive(Clone, Copy, Debug)]
+        enum Kind {
+            /// A class that is neither an IR program nor a pipeline: what a chain below the fences holds.
+            Legacy,
+            Ir,
+            Pipeline,
+        }
+
+        /// The fused terminal court, its class recorded as `kind`.
+        fn court_of(kind: Kind) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Hash64) {
+            let p = params_with_ladder();
+            let (mut s, claim_id, sid) = fused_terminal_court(&p, false);
+            let class = s.claim(&claim_id).expect("the claim").class_id;
+            match kind {
+                Kind::Legacy => {}
+                Kind::Ir => {
+                    s.tir_classes.insert(class, crate::palw_tir_admission_v1::PalwTirClassRecordV1::test_row_v1(class));
+                }
+                Kind::Pipeline => {
+                    s.gen_classes.insert(class, crate::palw_gen_class_v1::PalwGenClassRecordV1::test_row_v1(0xC2));
+                }
+            }
+            (p, s, claim_id, sid)
+        }
+
+        /// A group of `declarer` declared at `declared`, assembling by `deadline` (nothing delivered).
+        fn group_of(declarer: PalwBondKeyV2, declared: u64, deadline: u64) -> PalwCourtCloseGroupV2 {
+            PalwCourtCloseGroupV2 {
+                declarer,
+                count: 2,
+                chunk_digests: vec![palw_court_close_chunk_digest_v1(&[7u8; 16]), palw_court_close_chunk_digest_v1(&[8u8; 16])],
+                close_digest: h64(0xDC),
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                declared_daa: declared,
+                assembly_deadline_daa: deadline,
+                present: 0,
+                deposit_outpoint: TransactionOutpoint::default(),
+                deposit: 0,
+                chunks: BTreeMap::new(),
+            }
+        }
+
+        /// Stand `group` on the session as `write_court_close_group` would: the row, the assembly-window queue
+        /// and the session's own key in the deadline index.
+        fn stand(state: &mut PalwChainStateV2, sid: Hash64, side: PalwCourtSideV1, group: PalwCourtCloseGroupV2) {
+            state.court_close_deadlines.insert((group.assembly_deadline_daa, (sid, side)));
+            state.court_close_groups.insert((sid, side), group);
+            let next = court_next_deadline_v2(state, state.court_sessions.get(&sid).expect("the session"));
+            state.court_deadlines.retain(|(_, id)| *id != sid);
+            state.court_deadlines.insert((next, sid));
+        }
+
+        /// The clock as it stood before the clause: the IR phase's, the executor's declared close, the record's.
+        fn clock_before_the_clause(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> (PalwBisectTurnV1, u64) {
+            match state.tir_dissections.get(&session.ladder.session_id()) {
+                Some(phase) => (phase.turn(), phase.last_deadline_daa()),
+                None if court_session_executor_declared_at_the_ir_terminal_v1(state, session) => {
+                    (PalwBisectTurnV1::Terminal, session.ladder.last_deadline_daa())
+                }
+                None => court_turn_and_rung_deadline_v2(session, court_session_class_is_fused_v2(state, session)),
+            }
+        }
+
+        /// The four group combinations a session can stand in.
+        const COMBINATIONS: [(&str, bool, bool); 4] =
+            [("no group", false, false), ("the executor's group", true, false), ("both groups", true, true), ("the challenger's group alone", false, true)];
+
+        fn with_groups(base: &PalwChainStateV2, sid: Hash64, executor: bool, challenger: bool) -> PalwChainStateV2 {
+            let mut s = base.clone();
+            let rung = s.court_session(&sid).expect("the session").ladder.last_deadline_daa();
+            if executor {
+                stand(&mut s, sid, PalwCourtSideV1::Executor, group_of(bond_key(1), 112, rung + 8));
+            }
+            if challenger {
+                stand(&mut s, sid, PalwCourtSideV1::Challenger, group_of(bond_key(2), 112, rung + 8));
+            }
+            s
+        }
+
+        /// **Every state but the challenger-only one at an IR or pipeline terminal reads the clock it read before** —
+        /// the one equivalence the clause owes the chains below its fence (a state with only a challenger's group
+        /// at such a terminal exists where a held leaf challenge wrote it: the declaration arm refuses the
+        /// challenger there, the turn being the executor's).
+        #[test]
+        fn the_clause_moves_no_clock_but_the_challenger_only_one_at_an_ir_or_pipeline_terminal() {
+            for kind in [Kind::Legacy, Kind::Ir, Kind::Pipeline] {
+                let (_p, base, _claim, sid) = court_of(kind);
+                let rung = base.court_session(&sid).unwrap().ladder.last_deadline_daa();
+                for (name, executor, challenger) in COMBINATIONS {
+                    let s = with_groups(&base, sid, executor, challenger);
+                    let session = s.court_session(&sid).unwrap();
+                    let (before, after) = (clock_before_the_clause(&s, session), court_session_turn_and_rung_deadline_v2(&s, session));
+                    let the_new_state = matches!(kind, Kind::Ir | Kind::Pipeline) && challenger && !executor;
+                    if the_new_state {
+                        assert_eq!(before, (PalwBisectTurnV1::AwaitDisclosure, rung), "{kind:?}, {name}: the premise — the old clock owed a root claim");
+                        assert_eq!(after, (PalwBisectTurnV1::Terminal, rung), "{kind:?}, {name}: the session now waits at the terminal");
+                    } else {
+                        assert_eq!(before, after, "{kind:?}, {name}: the clause moves nothing here");
+                    }
+                }
+            }
+        }
+
+        /// **The challenger-only state's deadline key is the backstop**, and the index, its rebuild and its checker
+        /// agree on it (they all ask `court_next_deadline_v2`): `Terminal` has no rung to fire.
+        #[test]
+        fn a_challenger_only_group_keys_the_session_at_its_backstop() {
+            for kind in [Kind::Ir, Kind::Pipeline] {
+                let (p, base, _claim, sid) = court_of(kind);
+                let backstop = base.court_session(&sid).unwrap().deadline_daa;
+                let rung = base.court_session(&sid).unwrap().ladder.last_deadline_daa();
+                assert!(rung < backstop, "the premise: the rung fires before the backstop");
+                assert_eq!(court_next_deadline_v2(&base, base.court_session(&sid).unwrap()), rung, "{kind:?}: before the group, the rung");
+                let s = with_groups(&base, sid, false, true);
+                assert_eq!(court_next_deadline_v2(&s, s.court_session(&sid).unwrap()), backstop, "{kind:?}: with the group, the backstop");
+                assert!(s.court_deadlines.contains(&(backstop, sid)), "{kind:?}: the index holds the backstop key");
+                assert!(!s.court_deadlines.contains(&(rung, sid)), "{kind:?}: and not the rung's");
+                s.assert_internal_consistency(&p).expect("the index is what the sessions say");
+                s.assert_deadline_consistency(&p).expect("the deadline queues agree");
+            }
+        }
+
+        /// **The duty view reads the same clock** (`palw_court_duties_v2` asks the helper the fold asks): both
+        /// parties are told `Terminal` once the challenger's group stands, and the executor — which was told to
+        /// owe a root claim before it — is told nothing it cannot do.
+        #[test]
+        fn the_executors_duty_turn_is_terminal_where_the_challengers_group_stands() {
+            let (_p, base, _claim, sid) = court_of(Kind::Pipeline);
+            let rung = base.court_session(&sid).unwrap().ladder.last_deadline_daa();
+            let before = crate::palw_producer_v2::palw_court_duties_v2(&base, &[bond_key(1)]);
+            assert_eq!(before.len(), 1);
+            assert_eq!((before[0].turn, before[0].rung_deadline_daa), (PalwBisectTurnV1::AwaitDisclosure, rung), "the premise");
+            let s = with_groups(&base, sid, false, true);
+            let executor = crate::palw_producer_v2::palw_court_duties_v2(&s, &[bond_key(1)]);
+            let challenger = crate::palw_producer_v2::palw_court_duties_v2(&s, &[bond_key(2)]);
+            assert_eq!((executor.len(), challenger.len()), (1, 1));
+            assert!(executor[0].i_am_responder && !challenger[0].i_am_responder);
+            assert_eq!(executor[0].turn, PalwBisectTurnV1::Terminal, "the executor's view");
+            assert_eq!(challenger[0].turn, PalwBisectTurnV1::Terminal, "the challenger's view");
+            assert_eq!(executor[0].rung_deadline_daa, rung, "the ladder's last deadline, as for the executor's own declared close");
+            assert_eq!(executor[0].session_deadline_daa, s.court_session(&sid).unwrap().deadline_daa);
+        }
+
+        /// **A silent executor is not convicted** while the challenger's close is being assembled: the rung that
+        /// would have charged it at the fused terminal (`rung + 1`, below) does not fire, the session stands, and
+        /// the executor is untouched — the control is the same block with no group, which convicts it.
+        #[test]
+        fn a_silent_executor_is_not_convicted_past_the_old_rung_while_the_challengers_close_assembles() {
+            let (p, base, claim_id, sid) = court_of(Kind::Pipeline);
+            let rung = base.court_session(&sid).unwrap().ladder.last_deadline_daa();
+            let executor_before = base.bond(&bond_key(1)).unwrap().clone();
+            // The control: with no group the fused terminal's silence convicts at the rung, below the coverage fence.
+            let (control, _) = apply_with_coverage(&base, &p, &ctx(14, rung + 1, 14), &[], false);
+            assert!(matches!(control.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "the premise: silence convicted before the group");
+            // With the challenger's group standing the same block convicts nobody.
+            let s = with_groups(&base, sid, false, true);
+            let (after, _) = apply_with_coverage(&s, &p, &ctx(14, rung + 1, 14), &[], false);
+            assert!(after.court_session(&sid).is_some(), "the session stands past the old rung");
+            assert!(!after.claim(&claim_id).unwrap().phase.is_terminal(), "the claim is not voided");
+            let executor_after = after.bond(&bond_key(1)).unwrap();
+            assert_eq!((executor_after.collateral, executor_after.slashed), (executor_before.collateral, executor_before.slashed));
+        }
+
+        /// **A lapsed group convicts its declarer**, the claim untouched and the executor uncharged — the
+        /// delta re-applies and reverts, and the state stays internally consistent after it.
+        #[test]
+        fn a_lapsed_challenger_group_convicts_the_challenger_and_nobody_else() {
+            let (p, base, claim_id, sid) = court_of(Kind::Pipeline);
+            let s = with_groups(&base, sid, false, true);
+            let group_deadline = s.court_close_group(&sid, PalwCourtSideV1::Challenger).expect("the group").assembly_deadline_daa;
+            let backstop = s.court_session(&sid).unwrap().deadline_daa;
+            assert!(group_deadline < backstop, "the premise: the group's window ends inside the session's");
+            let (executor_before, challenger_before) = (s.bond(&bond_key(1)).unwrap().clone(), s.bond(&bond_key(2)).unwrap().clone());
+            // Inside the window nothing happens.
+            let (inside, _) = apply_with_coverage(&s, &p, &ctx(14, group_deadline, 14), &[], false);
+            assert!(inside.court_session(&sid).is_some(), "the window is open at its deadline");
+            // Past it the sweep convicts the declarer.
+            let (after, delta) = apply_with_coverage(&s, &p, &ctx(15, group_deadline + 1, 15), &[], false);
+            assert!(after.court_session(&sid).is_none(), "the session ended");
+            assert!(after.court_close_group(&sid, PalwCourtSideV1::Challenger).is_none(), "and its group");
+            assert!(!after.claim(&claim_id).unwrap().phase.is_terminal(), "the claim is untouched");
+            let (executor_after, challenger_after) = (after.bond(&bond_key(1)).unwrap(), after.bond(&bond_key(2)).unwrap());
+            assert_eq!((executor_after.collateral, executor_after.slashed), (executor_before.collateral, executor_before.slashed), "the executor pays nothing");
+            assert!(
+                challenger_after.slashed > challenger_before.slashed || challenger_after.collateral < challenger_before.collateral,
+                "the declarer is charged"
+            );
+            assert_eq!(apply_delta_v2(&s, &delta, &p).expect("re-applies"), after, "the delta is the transition");
+            assert_eq!(revert_delta_v2(&after, &delta, &p).expect("reverts"), s, "the delta reverts");
+            after.assert_internal_consistency(&p).expect("consistent after the sweep");
+        }
+
+        /// **Both groups standing**: the executor's group is the one a delivered acquittal would complete, and the
+        /// clock is the same with or without the challenger's — the executor's clause answers first.
+        #[test]
+        fn with_both_groups_standing_the_session_waits_at_the_terminal_on_the_executors_clause_first() {
+            let (p, base, _claim, sid) = court_of(Kind::Pipeline);
+            let only_executor = with_groups(&base, sid, true, false);
+            let both = with_groups(&base, sid, true, true);
+            let clock = |s: &PalwChainStateV2| court_session_turn_and_rung_deadline_v2(s, s.court_session(&sid).unwrap());
+            assert_eq!(clock(&only_executor), clock(&both));
+            assert_eq!(clock(&both).0, PalwBisectTurnV1::Terminal);
+            both.assert_internal_consistency(&p).expect("consistent with both groups standing");
+        }
     }
 
     // ---- ADR-0135: the model registry in the fold --------------------------------------------

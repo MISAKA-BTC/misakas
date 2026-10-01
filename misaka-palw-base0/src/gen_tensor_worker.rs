@@ -382,3 +382,144 @@ pub fn gen_tensor_output_audit_v1<P: PipelineParams>(
     }
     None
 }
+
+// ---------------------------------------------------------------------------------------------
+// Planted faults (drill and test tooling) and the leaf listing they are chosen from
+// ---------------------------------------------------------------------------------------------
+
+/// **A planted fault**: what a lying executor commits instead of the honest run, for the drills and the court
+/// battery — never a node's behaviour. Either is a *consistent* lie: the claim's roots are those of the lying
+/// execution (the step tree is re-hashed over the planted lane), so only the court, recomputing the leaf's cone
+/// or the output tile, can tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GenPlantV1 {
+    /// Add `delta` to lane `lane` of the step leaf at global index `leaf` (the claim's one leaf order).
+    StepLane { leaf: u64, lane: u32, delta: i64 },
+    /// Add `delta` to element `lane` of the claimed canonical output (the step tree stays honest: the output
+    /// close, not a cone, convicts).
+    OutputLane { lane: u32, delta: i64 },
+}
+
+impl GenPlantV1 {
+    /// `step:<global leaf>:<lane>:<delta>` or `output:<lane>:<delta>`.
+    pub fn parse(spec: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = spec.split(':').collect();
+        let num = |s: &str, what: &str| s.parse::<i64>().map_err(|_| format!("--plant {spec}: {what} is not a number"));
+        match parts.as_slice() {
+            ["step", leaf, lane, delta] => Ok(Self::StepLane {
+                leaf: u64::try_from(num(leaf, "the leaf")?).map_err(|_| format!("--plant {spec}: the leaf is negative"))?,
+                lane: u32::try_from(num(lane, "the lane")?).map_err(|_| format!("--plant {spec}: the lane is negative"))?,
+                delta: num(delta, "the delta")?,
+            }),
+            ["output", lane, delta] => Ok(Self::OutputLane {
+                lane: u32::try_from(num(lane, "the lane")?).map_err(|_| format!("--plant {spec}: the lane is negative"))?,
+                delta: num(delta, "the delta")?,
+            }),
+            _ => Err(format!("--plant {spec}: expected step:<global leaf>:<lane>:<delta> or output:<lane>:<delta>")),
+        }
+    }
+}
+
+/// One step leaf, as the drill picks a fault site from: `(global index, stage, position, kind, tile, lanes, dtype)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenLeafListingV1 {
+    pub global: u64,
+    pub stage: u8,
+    pub pos: u32,
+    /// `commit <occurrence>.<node>` or `state <state>[.<layer>]`.
+    pub kind: String,
+    pub tile: u32,
+    pub lanes: u32,
+    pub dtype: String,
+}
+
+impl GenTensorWorkV1 {
+    /// **Every step leaf of the run**, in the claim's one order, for choosing a planted fault's site.
+    pub fn leaf_listing(&self) -> Vec<GenLeafListingV1> {
+        let mut out = Vec::new();
+        let mut global = 0u64;
+        for (stage, space) in self.execution.space.stages.iter().enumerate() {
+            for leaf in space.leaves() {
+                out.push(GenLeafListingV1 {
+                    global,
+                    stage: stage as u8,
+                    pos: leaf.coord.pos,
+                    kind: match leaf.coord.kind {
+                        PalwGenLeafKindV1::Commit { occurrence, node } => format!("commit {occurrence}.{node}"),
+                        PalwGenLeafKindV1::State { state, layer } => match layer {
+                            Some(l) => format!("state {state}.{l}"),
+                            None => format!("state {state}"),
+                        },
+                    },
+                    tile: leaf.coord.tile,
+                    lanes: leaf.value_count,
+                    dtype: leaf.dtype.name().to_string(),
+                });
+                global += 1;
+            }
+        }
+        out
+    }
+
+    /// **The run a lying executor commits** (see [`GenPlantV1`]): the planted lane, every affected hash and root
+    /// recomputed, and the binding over them.
+    pub fn planted(&self, plant: &GenPlantV1) -> Result<GenTensorWorkV1, String> {
+        let mut e = self.execution.clone();
+        match *plant {
+            GenPlantV1::StepLane { leaf, lane, delta } => {
+                let (stage, local) =
+                    e.space.locate(leaf).ok_or_else(|| format!("{leaf} is no leaf of the run ({} leaves)", e.space.leaf_count()))?;
+                let (stage, local) = (stage as usize, local as usize);
+                let step_leaf = e.space.stages[stage].leaves()[local];
+                let lanes = e.leaf_values[stage][local].len();
+                let slot = e.leaf_values[stage][local]
+                    .get_mut(lane as usize)
+                    .ok_or_else(|| format!("leaf {leaf} has {lanes} lanes, not {lane}"))?;
+                *slot = slot.checked_add(i128::from(delta)).ok_or("the planted lane overflows")?;
+                e.leaf_hashes[stage][local] =
+                    palw_gen_step_leaf_hash_v1(&step_leaf, &e.leaf_values[stage][local]).map_err(|er| er.to_string())?;
+                e.claim.stage_roots[stage] = palw_gen_stage_root_v1(stage as u8, &e.leaf_hashes[stage]);
+                e.claim.step_root = palw_gen_step_root_v1(&e.claim.stage_roots);
+            }
+            GenPlantV1::OutputLane { lane, delta } => {
+                let out = e.output.as_mut().ok_or("the run has no canonical output")?;
+                let slot = out.values.get_mut(lane as usize).ok_or("the output has no such element")?;
+                *slot = slot.checked_add(delta).ok_or("the planted element overflows")?;
+                out.root = Hash64::from_bytes(
+                    misaka_palw_gen::output_root_v1(&out.spec, &out.values, out.tile_len)
+                        .map_err(|er| format!("the output: {er:?}"))?,
+                );
+                e.claim.output_root = Some(out.root);
+            }
+        }
+        let output_root = e.claim.output_root.ok_or("a tensor run commits an output root")?;
+        let binding = PalwGenTensorBindingV1::of(&self.job, &e.claim, e.space.leaf_count(), output_root);
+        Ok(GenTensorWorkV1 { execution: e, binding, ..self.clone() })
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The material a producer serves for a tensor claim
+// ---------------------------------------------------------------------------------------------
+
+/// **The magic a tensor claim's material starts with**: `FPG1` then the Borsh of its capture
+/// ([`GenTensorCaptureV1`]: the inputs, every committed leaf and the claimed canonical output, lies included).
+/// The material of a free-prompt text claim is `FPM1`/`FPC1` (the job and, with the capture, the executor's
+/// whole run); a tensor claim's job is the user's, so its material is its capture — which carries the inputs a
+/// seat replays from and the leaves a challenger builds a close from.
+pub const GEN_TENSOR_MATERIAL_MAGIC_V1: [u8; 4] = *b"FPG1";
+
+/// A tensor claim's material: the magic and the capture's Borsh.
+pub fn gen_tensor_material_encode_v1(capture: &GenTensorCaptureV1) -> Vec<u8> {
+    let mut out = GEN_TENSOR_MATERIAL_MAGIC_V1.to_vec();
+    out.extend_from_slice(&borsh::to_vec(capture).expect("a capture serializes"));
+    out
+}
+
+/// The capture a tensor claim's material carries, or `None` for bytes that are not one (another family's
+/// material, junk). Nothing is checked here beyond the encoding: whether it answers for a claim is the reader's
+/// ([`GenTensorCaptureV1::rebuild`] and the claim's roots).
+pub fn gen_tensor_material_decode_v1(bytes: &[u8]) -> Option<GenTensorCaptureV1> {
+    let body = bytes.strip_prefix(&GEN_TENSOR_MATERIAL_MAGIC_V1)?;
+    borsh::from_slice(body).ok()
+}

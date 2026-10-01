@@ -397,6 +397,13 @@ pub struct Args {
     /// Command line only.
     #[serde(skip)]
     pub palw_drill_fp_v5_at: Option<u64>,
+    /// **DRILL ONLY: arm RFC-0003's held leaf challenge (`palw_held_close_chunks_v1`, object tag 90) at this DAA**
+    /// (`config::drill::palw_drill_held_close_chunks_at_v1`): a named-leaf challenge that carries the declaration of its
+    /// close, so a lie at a leaf whose close exceeds one carrier is convictable on a chain that plays no bisection. It
+    /// needs `palw_tir_v1` and `palw_held_context` in force at or below it (combine with `--palw-drill-tir-at`). Command
+    /// line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_held_chunks_at: Option<u64>,
     /// **DRILL ONLY: arm RFC-0004's improvement fence (`palw_improvement_v1`) at this DAA**
     /// (`config::drill::palw_drill_improve_fence_at_v1`), with the drill's ceilings. It needs
     /// `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1`, `palw_kary_court` and `palw_fp_decode_rules` in
@@ -648,6 +655,7 @@ impl Default for Args {
             palw_drill_gen_at: None,
             palw_drill_decode_rules_at: None,
             palw_drill_fp_v5_at: None,
+            palw_drill_held_chunks_at: None,
             palw_drill_improve_at: None,
             palw_improve_evaluate: false,
             palw_improve_artifact_dir: None,
@@ -1761,6 +1769,18 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-held-chunks-at")
+                .long("palw-drill-held-chunks-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0003's held leaf challenge (palw_held_close_chunks_v1, object \
+                     tag 90) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another \
+                     fence uses, and unless palw_tir_v1 and palw_held_context are in force at or below it (--palw-drill-tir-at \
+                     arms the first).",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-improve-at")
                 .long("palw-drill-improve-at")
                 .require_equals(true)
@@ -2736,6 +2756,7 @@ impl Args {
             palw_drill_gen_at: m.get_one::<u64>("palw-drill-gen-at").copied(),
             palw_drill_decode_rules_at: m.get_one::<u64>("palw-drill-decode-rules-at").copied(),
             palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
+            palw_drill_held_chunks_at: m.get_one::<u64>("palw-drill-held-chunks-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
             palw_improve_artifact_dir: m.get_one::<String>("palw-improve-artifact-dir").cloned(),

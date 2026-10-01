@@ -326,6 +326,16 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // an IR close about the roots it names) at every height, as the registration does; the
         // ruleset's close ceiling and the verdict are the acceptance layer's.
         PalwConsensusObjectV2::TirShardCourtAccused { accusation } => crate::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(accusation),
+        // RFC-0003 §I.4.7: a pipeline claim's one-move accusation rides signed and shaped (its proof a
+        // generative close about the execution it names) at every height, as the IR one's does; the court's
+        // ceiling and the verdict are the acceptance layer's, and below `palw_gen_v1` the walk drops it by name.
+        PalwConsensusObjectV2::GenShardCourtAccused { accusation } => crate::palw_gen_one_move_v1::palw_gen_one_move_shape_v1(accusation),
+        // RFC-0003 decision 22: a held leaf challenge rides signed and shaped (one digest per declared chunk, the
+        // court's structural bound) at every height, as the one-move accusations do; the ruleset's carriage count
+        // and the signature are the acceptance layer's, and below `palw_held_close_chunks_v1` the walk drops it by name.
+        PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge } => {
+            crate::palw_held_close_v1::palw_held_leaf_challenge_shape_v1(challenge)
+        }
         PalwConsensusObjectV2::ClassRegistered { admission: None, .. } => Err(
             "a class registered on a running chain must carry its shape profile and canonical job —              without them nothing can check its coverage, its ladder depth or its declared pwu",
         ),
@@ -351,6 +361,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         ),
         PalwConsensusObjectV2::FreePromptCommitted { .. } => {
             Err("a free-prompt commitment rides its own subnetwork, where its price is checked")
+        }
+        // RFC-0003 §I.4: a tensor claim's commitment is a free-prompt commitment of job version 10.
+        PalwConsensusObjectV2::GenTensorCommitted { .. } => {
+            Err("a tensor claim's commitment rides the free-prompt subnetwork, where its price is checked")
         }
         // **ADR-0078: a derivation rides, and carries the executor's authorisation.** Same split
         // as a bond's declarations: this layer is stateless, so it checks SHAPE — the object's

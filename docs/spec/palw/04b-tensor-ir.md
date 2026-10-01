@@ -2740,3 +2740,322 @@ every leaf is adjudicated from leaves that precede it.
 names one leaf or one interior node of one stage's tree (`PipelineStepLeaf`, `PipelineStepNode`; spec 17
 §17.14), and an answer is checked by hash arithmetic over the stage roots above — the stage root commits the
 stage's leaf count, so no class, program or step space is derived to check it.
+### 15.15 The tensor claim's carriage (RFC-0003 §I.4; findings G23, G24)
+
+**Status.** Dormant: nothing below `palw_fp_job_v5` over `palw_gen_v1` reads any of it, and every shipped
+preset carries neither. Built in `kaspa-consensus-core` (`palw_gen_claim_v1`, `palw_gen_claim_fold_v1`,
+`palw_gen_one_move_v1`), the validator's two doors and the processor's walk, with `palw_gen_claim_wire`,
+`palw_gen_claim_fold` and `palw_gen_one_move` as the evidence; the node's worker production, seat replay and filing loops
+are §15.15.8 (written, not yet run). A second implementation computes everything below from this text and
+the RFC's §I.4.
+
+**15.15.1 The version-10 job.** A tensor job rides the lane's job type `PalwFreePromptJobV3` at
+`version = 10`. Its Borsh is the V3 fields in this order, then the tail, and nothing else:
+
+```
+version u16 = 10 ‖ network_domain Hash64 ‖ class_id Hash64 ‖ executor_bond (txid Hash64, index u32) ‖
+executor_pubkey (u32 length, bytes) ‖ operator_id Hash64 ‖ anchor_block Hash64 ‖ anchor_daa u64 ‖
+job_nonce [u8; 32] ‖ tokenizer_id Hash64 ‖ prompt_token_ids_hash Hash64 ‖ prompt_tokens u32 ‖
+decode_token_limit u32 ‖ max_context_tokens u32 ‖ privacy_mode u8 ‖ prompt_mode u8 ‖ sampling_seed [u8; 32] ‖
+temperature_q u32 ‖ borsh(PalwGenJobTailV1 { seed: [u8; 32], body: PalwGenBodyV1 })
+```
+
+(no decode configuration: the V4 tail is absent at this version). `PalwGenBodyV1` and the reconstruction are §15.13's.
+The shell is one encoding per behaviour: `tokenizer_id`, `prompt_token_ids_hash`, `prompt_tokens`,
+`decode_token_limit`, `max_context_tokens`, `sampling_seed` and `temperature_q` are zero and a non-zero value is
+refused by name (`ShellNotCanonical`); a version-10 job with a decode configuration or without its tail is
+`NotATensorJob`. The job the chain reads is `PalwGenJobV1 { version: 1, envelope, seed, body }` (the envelope
+from the shell's envelope fields, the seed and body from the tail), and **the job id is `palw_gen_job_id_v1`
+of that reconstruction** — the lane's `fp_job_id_v3` of a version-10 job returns it; a version-10 value that is
+not a well-formed tensor job has an id under the key `"misaka-palw/gen/fp-job-id/malformed/v1"` over its
+Borsh (an id is total over whatever a struct holds; validation refuses the job by name).
+
+**15.15.2 The commitment** (`PalwFreePromptCommitmentV3` over that job, in the lane's payload and under the
+lane's signature, `fp_claim_id_v3`):
+
+| field | value |
+| --- | --- |
+| `trace_root` | the step root (§15.14: `palw_gen_step_root_v1` over the stage roots) |
+| `output_root` | the canonical output root (§15.13, `misaka_palw_gen::output_root_v1`) |
+| `schedule_root` | zero |
+| `execution_root` | `palw_gen_tensor_execution_root_v1(job_id, class_id, work_leaves, trace_root, output_root)` — recomputed at acceptance |
+| `decode_tokens_executed`, `stop_reason` | `0`, `ExactBudgetReached` |
+| `work_leaves` | the step tree's leaf count, and the chain's own count of the job's step space |
+| `trace_manifest_root`, `trace_chunk_count`, `trace_retention_daa` | zero, `1`, zero |
+
+Under `PublicDa` the payload's `prompt_token_ids` are the job's prompt ids then its negative ids; under `PanelDa`
+none. **The stateless check, in order** (`palw_fp_gen_claim_check_v1`; each refusal is named, none corrects):
+`PayloadVersion`; the job (`NotATensorJob`, `ShellNotCanonical`); `NetworkDomainMismatch` (where the walk
+knows the domain); the privacy mode (`PrivacyModeNotOffered`, `PanelDaNotArmed`); `PromptModeNotOffered` (the
+user's only); `MissingPublicKey`; `SignatureLength` (ML-DSA-87's); `EmptyIdsEncoding` (an id list is the zero
+hash and a count of 0, and nothing else); `CommitmentNotCanonical` (the table's fixed fields: decode tokens,
+stop reason, schedule root, the data-availability trio); `ZeroWorkLeaves`; `WorkLeavesAboveCap` (the class's
+ladder at the walk, the structural cap at the door); `ZeroRoot` (trace, output, execution);
+`ExecutionRootNotItsParts`; and the ids (`PanelDaPayloadCarriesIds`, `IdsCount`, `IdsNotTheJobs`: each list
+against its own hash in the network's form). The signature is the walk's.
+
+**15.15.3 The three doors.** (1) *Isolation* (height-free): where the ruleset carries `palw_fp_job_v5`, a
+payload whose job version word (bytes 2..4) is 10 meets the tensor door
+(`validate_palw_fp_gen_commitment_tx_v1`: the check above, with no network domain and the structural cap);
+everywhere else the lane's own door refuses it by name (`UnsupportedVersion`), as a build without the fence
+refuses its bytes. (2) *Header context* (the containing block's DAA): a version-10 payload below the fence is
+refused (`PalwFpJobVersionAtHeight`). (3) *The acceptance walk*, past **both** fences only
+(`palw_gen_lane_open_v1`): each version-10 payload that passes the check at its class's ladder under the
+network's domain and `PanelDa` arming, with its signature verified under the key it carries, becomes
+`GenTensorCommitted { claim, class_id, bond, executor_pubkey, work_leaves, prompt_token_ids, trace_root,
+output_root, execution_root, job_pin, job }` (`job_pin` is the lane's `palw_fp_job_pin_v1` of the commitment);
+anything else is skipped with its reason, never rejected. The tensor walk's objects follow the lane's walk's
+in the block's object list.
+
+**15.15.4 The fold's tensor branch** (`apply_gen_tensor_commitment_v1`), in this order, every refusal by name:
+
+1. both fences in force at the block (`GenClaimRefused`; below `palw_gen_v1` the generic lock refuses first,
+   `GenObjectRefused`); a live claim of the id (`DuplicateClaim`);
+2. the bond: it exists (`MissingBond`), its key is the signer's (`BondKeyMismatch`), it is not retiring
+   (`RetiringBond`), not below the producer floor (`ProducerBelowFloor`) and not frozen (`ProducerFrozen`);
+3. the class: it exists (`MissingClass`), its status is `Active` (`FrozenClass`; any other status is
+   `GenClaimRefused`), it has a `gen_classes` row, and passes the verification-deadline admission
+   (ADR-0152 §4-quater V2). **The registry lifecycle is not asked** (its row for a pipeline is `Registered` and
+   never admits); **readiness is** (decision of 2026-10-01): at least `seat_count` (the registry fold's globals)
+   DISTINCT operators — never the executor's bond or operator — hold the class with a fresh readiness V2
+   possession proof (`model_registry_seat_is_ready`: active, above the floor, a fresh row, free collateral for the
+   readiness multiple), else `GenClassNotReady { ready, needed }`; with no registry in force the lane refuses
+   (`GenClaimRefused`). **The possession floor is one shared function** (`class_seating_v1` in
+   `palw_class_seating_v1`, extracted 2026-10-01): for a class and an executor bond it returns each ready
+   operator once with its ready bonds, the executor's bond and operator excluded, and the panel's size;
+   RFC-0002 Part II §II.7.5 Proposal A (the fence `palw_class_seating`, approved) makes it the one door every
+   class kind asks and adds the independence floor over the same map (`ready_operators_in`);
+4. the job against the class: `palw_gen_job_resolve_class_v1` (§15.13's refusals, as `GenClaimRefused`), the
+   profile an Image or an Embedding, and under `PublicDa` the carried ids within the class's counts and token
+   bounds;
+5. the execution root is non-zero (`UnadjudicableCommitment`) and the tensor execution root of the
+   commitment's parts;
+6. **the work**: `work_leaves` equals the chain's count — `PalwGenStepSpaceV1::leaf_count_v1(pipeline,
+   programs, layouts, trips, None, 0)` with `trips` from `stage_job_facts` over the class and the job with
+   zeros of the id lengths (the trips depend on the lengths alone) — else `GenClaimRefused`;
+7. **capacity**: the class's live free-prompt claims number fewer than the fence's `max_inflight_claims` for the
+   profile (`GenClassInflightCapped`), and the bond holds fewer than `⌈cap / 2⌉` claims of the class not yet
+   licensed (`BondClassShareExceeded`);
+8. **the work identity**: `work_id = H64(key "misaka-palw/gen/work-id/v1", class_id ‖ borsh(PalwGenJobTailV1) ‖
+   borsh(executor_bond))`; a live claim of it refuses (`DuplicateWork`);
+9. **the reservation**: `palw_claim_weight_reservation_of_v1(params, 0, 0, work_leaves × slash_value_per_pwu,
+   daa)` with the class's registered `slash_value_per_pwu`, held against the bond's committed ledger room and
+   the lane's exposure ceiling (`FreePromptExposureCeiling`);
+10. the claim is written: `FreePrompt { quanta: 0, spent: ∅ }`, `pwu = 0`, `rights_reserved = 0`,
+    `escrowed_reward = 0`, `immature_contribution = 0`, the roots as committed, `trace_chunk_count = 1`,
+    `trace_retention_daa = accepted_daa + palw_min_trace_retention_daa_v1`, the work id and the lane's job
+    identity, phase `Provisional`; the reservation is taken and the bind deadline armed. The consistency
+    check that guards every load accepts `quanta = 0` only for a claim that earns nothing at all.
+
+From here the claim is the lane's: panel at the bind (a bought class takes an outsider seat, ADR-0147), receipts,
+licence, `Final`, retirement, the lane's slash on a conviction. Weight for a tensor claim is a later fence.
+
+**15.15.5 The court under the held regime: the generative one-move accusation (G23).** Object
+`GenShardCourtAccused { accusation: PalwGenOneMoveAccusationV1 }`, tag 88 (approved):
+
+```
+PalwGenOneMoveAccusationV1 { version: u16 = 1, claim: Hash64, execution_root: Hash64, trace_root: Hash64,
+  executor_bond, accuser_bond, verdict: PalwCourtVerdictV2, proof: PalwCourtVerdictProofV2, signature: Vec<u8> }
+session_id = H64(key "misaka-palw/gen/one-move/session/v1",
+                 le32(|domain|) ‖ domain ‖ le16(version) ‖ claim ‖ execution_root ‖ trace_root ‖
+                 borsh(executor_bond) ‖ borsh(accuser_bond) ‖ borsh(verdict) ‖ le64(|borsh(proof)|) ‖ borsh(proof))
+signature  = ML-DSA-87(accuser's registered key, session_id, context "misaka-palw/gen/one-move/accuse/mldsa87/v1")
+```
+
+*Shape* (stateless, `palw_gen_one_move_shape_v1`): version 1; a non-empty signature; `proof` a `GenCone`,
+`GenOutputTile` or `GenDecodeToken` (`GenDissection` is a session's bottom and is refused); the proof's
+binding commits `execution_root`; `executor_bond ≠ accuser_bond`. *Acceptance*: `palw_gen_v1` in force; the
+shape; the signature; a live claim of a generative class whose executor, `execution_root` and `trace_root` are the
+claim's; and the **verdict re-derived** by `adjudicate_close_proof_v2` (the court close's own adjudication: cost
+ceiling, prompt form, the claim's `gen_classes` row, the binding's job and roots against the claim's, the
+generative court at the ruleset's limits) must equal the declared one, in either direction. *Fold*: a live
+non-terminal claim of a class with a `gen_classes` row; the executor and roots the claim's
+(`ShardCourtExecutorIsNotTheClaims`, `ShardCourtRootsDiffer`); an accuser that is not the producer; no open
+session on the claim unless `palw_offence_attribution` is armed; an Active accuser at or above the floor;
+then, outside a dissection, `ExecutorGuilty` convicts (`convict_by_court_verdict_v1`: the claim voids as
+`CourtFraud`, the executor is charged) and `ChallengerDefeated` charges the accuser
+`palw_shard_court_false_accusation_charge_v1(claim.reserved, floor)`. **Under the held regime a `GenCone` at a
+dissected leaf** (`palw_gen_dissect_site_v1` finds a site, the binding verified and not convicting on its face)
+**declares `ExecutorGuilty` and opens a dissection at that leaf** (`open_dissection_at_named_leaf_v1`; the
+responder's `CourtGenRootClaimed` is its first move). The object spends the block's adjudication slot, is a
+court opening for the H-1 heartbeat lane (`CourtOpening(claim)`), and is dropped by name below `palw_gen_v1`.
+
+**15.15.6 One carrier, and the chunked close that lifts it (G24; decision 22, approved 2026-10-01).** *Status:
+specified here, dormant behind `palw_held_close_chunks_v1`, built after the node's halves (§15.15.8).*
+
+*The limit.* A one-move accusation (tag 62 for an IR class, tag 88 above) is one lifecycle object in one
+carrier (about 100,000 bytes, `PALW_OBJECT_CHUNK_MAX_BYTES`). The chunk path for larger objects is
+`palw_chunked_object_kind_admitted_v1` (`FamilyCertified` only), and a close's own chunks
+(`CourtCloseDeclared`/`CourtCloseChunk`, PALW-TIR-38's 32 × 100,000 B) are keyed to a **session**, which a chain
+that plays no bisection (the held regime) opens only by naming a dissected leaf (ADR-0103 Decision 5). So on a
+held-regime chain a lie is convictable **only at a leaf whose close fits one carrier**. **Known limitation,
+recorded (it holds for the live IR classes of testnet-12 as for a pipeline class):** a lie at a leaf whose
+close exceeds one carrier is **refused its licence but not slashed** — the panel's seats replay the claim, find
+the difference and file no receipt (a difference files nothing, ADR-0077 W10), so the claim never licenses and
+never reaches `Final`, its reservation is released when its receipt window lapses, and the liar loses fees and
+time and no collateral. Tag 62's semantics below the fence are not changed to close it.
+
+*The mechanism.* One generic object, for IR and pipeline classes alike, under one dormant fence
+**`palw_held_close_chunks_v1`** (a bare height; `None` on every preset and in no testnet-12 list; Some-only in
+both fingerprints, collapsed from `never()`; requires `palw_tir_v1` and `palw_held_context` at or below it; the
+V2 bundle mirrors it, borsh-skipped, written by `sync_palw_gen_v1`; armed by the drill's gen list). It carries no
+new table: it opens a session at the named leaf as ADR-0103 Decision 5 does and writes **the challenger-side
+close group the existing `CourtCloseDeclared` would have written**, so the group rule, the chunks, the assembly
+and the verdict are the court's own. Object `HeldLeafChallengeDeclared { challenge: PalwHeldLeafChallengeV1 }`,
+tag 90 (approved):
+
+```
+PalwHeldLeafChallengeV1 { version: u16 = 1, claim: Hash64, execution_root: Hash64, trace_root: Hash64,
+  executor_bond, accuser_bond, leaf_index: u64, count: u8, chunk_digests: Vec<Hash64>, close_digest: Hash64,
+  signature: Vec<u8> }
+challenge_digest = H64(key "misaka-palw/held-close/challenge/v1",
+                       le32(|domain|) ‖ domain ‖ le16(version) ‖ claim ‖ execution_root ‖ trace_root ‖
+                       borsh(executor_bond) ‖ borsh(accuser_bond) ‖ le64(leaf_index) ‖ count ‖
+                       chunk_digests ‖ close_digest)
+signature       = ML-DSA-87(accuser's registered key, challenge_digest,
+                            context "misaka-palw/held-close/challenge/mldsa87/v1")
+session_id      = bisect_session_id_v1(claim, trace_root, party(accuser_bond), party(executor_bond),
+                                       StepLeaves, the claim's class ladder)      -- unchanged: it names no leaf
+```
+
+`chunk_digests[i]` and `close_digest` are the court's own `palw_court_close_chunk_digest_v1` over chunk `i` and
+over the assembled bytes, which are `borsh(CourtClosed { session_id, verdict: ExecutorGuilty, proof })` for the
+session id above (the accuser computes it before it files: it names the claim, the roots, the two bonds and the
+class's ladder, never the leaf). The session is therefore keyed to **(claim, accuser bond)** by construction,
+exactly the group rule's key, and the leaf is bound by the signature and, at assembly, by the court's own rule
+that a close is judged at the leaf the session narrowed to.
+
+*Acceptance* (`palw_v2_validate_objects`): the fence (dropped by name below it, as every gated object is); the
+shape — version 1, a non-empty signature, `1 ≤ count ≤ min(max_close_chunks, 32)`, `|chunk_digests| = count`,
+`accuser_bond ≠ executor_bond`; the accuser's registered key over `challenge_digest`. The object pays the grading
+rent of a declaration of `count` chunks (`palw_court_close_min_fee_v1(count)`), spends no adjudication slot (it
+adjudicates nothing) and is a court opening for the H-1 heartbeat lane (`CourtOpening(claim)`).
+
+*Fold*: the fence (the second lock); a live non-terminal claim of a class with a `tir_classes` or a `gen_classes`
+row; the executor and the roots the claim's; an accuser that is not the producer; **the held regime in force**
+(the object is refused by name where bisection is played: the ladder reaches the leaf there); an Active accuser at
+or above the floor; **a session already open on the claim admits another challenge only from a seat of the
+claim's panel, one per seat, at most `1 + seat_count` on the claim** (`check_further_held_dissection_v1`: a decoy
+the producer's Sybil opened holds off no seat); then the session opens at `Terminal` on the named leaf
+(`open_dissection_at_named_leaf_v1`: the network's session capacity, the accuser's reservation through the
+accuser gate at `held_dissection_charge_v1`, the claim's path to `Final` frozen) and the group
+`(session_id, Challenger)` is written with `declarer = accuser_bond`, `declared_daa`, `assembly_deadline_daa =
+daa + 4 · count` (refused, `CourtCloseCannotAssemble`, if it does not fit inside the session's backstop), the
+pinned digests and the deposit `palw_close_assembly_deposit_v1(count)` backed by the accuser's own bond.
+
+*Delivery and verdict.* The close rides as the court's `CourtCloseChunk { session_id, side: Challenger, index,
+bytes }` objects — each at most 100,000 B, digest-checked at arrival, in any order — and the chunk that completes
+the group assembles it: bytes that do not hash to `close_digest`, or do not decode to this session's
+`CourtClosed { ExecutorGuilty }`, convict the declarer in that block; otherwise the acceptance layer adjudicates
+the assembled proof at the session's named leaf (`adjudicate_court_close_v3`, the same function a one-carrier
+close meets) and **refuses the completing chunk unless it adjudicates to `ExecutorGuilty`** (the object is
+dropped, the block stands, the group runs on to its deadline); an adjudicated conviction is applied **through
+the `CourtClosed` arm**, so a challenged conviction and a one-move one are the same state machine: the claim
+voids as `CourtFraud` and the executor is charged. A `GenCone` or `TirCone` at a **dissected** leaf is not a
+whole close and never adjudicates to a conviction there: such a leaf is the cone accusation's
+(`NeedsDissection`, §15.15.5), and a challenge at it fails as below.
+
+*The executor's clock.* At a fused class's terminal the court clocks the executor for its opening move (its root
+claim, or at an undissected leaf an acquitting close). A challenge must not put an honest executor on a clock for
+a close the accuser has pinned and may never deliver, so **while the challenger's declared close stands at the IR
+or pipeline terminal the session waits at `Terminal`** (the mirror of the clause that makes the executor's own
+declared close its terminal move, `court_session_executor_declared_at_the_ir_terminal_v1`): its clock is the
+group's assembly deadline, which convicts a declarer that does not deliver. The executor has **no move owed**; it
+may file an acquitting close of its own (one carrier, or declared in its own group) to end the freeze early, and
+whichever side's close completes first ends the session. **It may also file its root claim at a dissected leaf**
+(the `CourtTirRootClaimed` and `CourtGenRootClaimed` arms read no clock): the phase then clocks the session
+itself — the challenger owes the choice of a child — while the challenger's group stands, and a challenger that
+neither delivers the close it pinned nor chooses loses on both clocks. The clause reads rooted state only (a
+challenger-side group at a fused terminal with no phase open) and adds no state the executor-side clause does
+not already wait on.
+
+*Griefing, and what bounds it.* (1) **The accuser alone bears the clock and the deposit.** The window is
+`4 · count` DAA (at most 128) from the block that carries the object, inside the session's backstop; the deposit
+`count × palw_close_chunk_carriage_v1()` is a charge against the accuser's own bond, collected when the session
+ends without the close it pinned; the object pays the declaration's grading rent and the chunks pay their own
+carriage. The executor pays nothing. (2) **If the accuser never completes the close** — no chunk, a missing
+chunk, a close that does not decode, a close that adjudicates to anything but `ExecutorGuilty`, a challenge at a
+dissected leaf — the sweep at `assembly_deadline_daa` (or the completing chunk) convicts the *declarer*
+(`convict_close_declarer_v1`, side `Challenger`): the session ends, **the claim is not convicted, voided or
+slashed**, the accuser's deposit is forfeited and it is charged what a lost held dissection costs (`max(reserved,
+G)` capped at the floor where the class is held, `reserved` otherwise, plus the court-time charge), and the
+claim's licence anchor moves to the close so the seats keep a whole challenge window — a decoy cannot carry a lie
+to `Final` (`rearm_after_challenger_side_close`, ADR-0152 §4-ter C3). (3) **Concurrency is capped three ways:**
+the claim admits one challenge, then one per panel seat (`1 + seat_count`); the network admits
+`palw_max_concurrent_court_sessions_v1(turn_deadline_daa)` sessions, each holding the accuser's reservation (a
+bond opens about one such session at a time); and the block grades at most one close completion
+(`PALW_COURT_CLOSE_MAX_PER_BLOCK`). (4) A claim under a challenge cannot reach `Final` for at most the assembly
+window; a challenge that does not convict leaves it a whole further challenge window.
+
+*PALW-GEN-21.* Registration of a pipeline class on a network that carries `palw_held_context` MUST be refused when
+any terminal close's exact bytes exceed the carried limit **in force at the registration block**: one carrier
+less the accusation's own framing (`palw_gen_one_move_max_proof_bytes_v1`) while `palw_held_close_chunks_v1` is not
+in force, and `min(max_close_chunks, 32) × 100,000` bytes (PALW-TIR-38) once it is. A class registered before the
+fence keeps the stricter bound it was admitted under; one registered after it may use the carried limit. The
+live IR classes of testnet-12 are unchanged (their admission already stands).
+
+**15.15.7 Allocations.** FP job version 10; object tags 87 `GenTensorCommitted`, 88 `GenShardCourtAccused` and
+90 `HeldLeafChallengeDeclared` (all approved 2026-10-01; 89 is RFC-0004's `CourtEvalRootClaimed`), **declared
+with explicit `= N` discriminants** (the object enum is `#[borsh(use_discriminant = true)] #[repr(u8)]`, every
+positional variant keeping the number its position gave it, so no declaration order moves an allocation); court proof
+tag 16 `GenOutputTile` (§15.13; the enum's discriminants are explicit); the fences `palw_fp_job_v5` over
+`palw_gen_v1` (the per-profile `max_inflight_claims` is in the latter's value) and `palw_held_close_chunks_v1`
+(§15.15.6) — the V2 bundle mirrors them, borsh-skipped, written only by `sync_palw_gen_v1`; keys
+`"misaka-palw/gen/work-id/v1"`, `"misaka-palw/gen/fp-job-id/malformed/v1"`,
+`"misaka-palw/gen/one-move/session/v1"`, `"misaka-palw/held-close/challenge/v1"` and the contexts
+`"misaka-palw/gen/one-move/accuse/mldsa87/v1"` and `"misaka-palw/held-close/challenge/mldsa87/v1"`.
+
+**15.15.8 The node's halves** (written 2026-10-01; node behaviour, not consensus — a second implementation may
+differ wherever it files the same objects). Dormant with the lane; the library halves are in
+`misaka-palw-base0::gen_tensor_worker`, the node's loops in `kaspad/src/palw_panel/gen_court.rs`, the producer's
+tool in `misaka palw gen-claim`.
+
+*The held class.* A node holds a pipeline class from its `PALWTIR2` file (`GenLineageV1::open_entry`): the declared
+class decoded, the pipeline inventory root streamed once from the weights, the chain's row derived from the class and
+the root. It serves a chain-named `(class_id, artifact_root)` from a holding that derives exactly that pair, as a
+`GenBackendV1`, which is also the readiness door — a seat proves possession with the multiproof of the drawn leaves of
+its inventory, as every class kind does (`artifact_readiness_material`). A node registers a held class like an IR
+one (`--palw-register-class`, or `misaka palw gen-registration` to a file).
+
+*The material.* A tensor claim's material is its producer's capture, **`FPG1` ‖ Borsh(`GenTensorCaptureV1`)**: the job,
+the prompt and negative ids, the images, every leaf the run committed (as four-byte lanes, in the claim's one order)
+and the claimed canonical output's values, lies included. It is written to the executor node's retention directory as
+`<claim>.material` and served on a pull like every free-prompt material. The capture is the claim's own when its
+rebuilt execution (`GenTensorCaptureV1::rebuild`: the space from the job's trips, every leaf's hash and every stage's
+root from the captured lanes, the output root from the captured output) commits the claim's roots — a test that runs
+nothing.
+
+*The worker* (`GenBackendV1::answer`: a `PalwGenTensorRequestV1` in, the binding or a refusal naming the rule out)
+runs the job over the held class; `misaka palw gen-claim` writes the claim: the signed commitment transaction, funded
+from the bond's key at its measured relay fee and checked by the tensor door before a fee is spent, and the material.
+
+*The seat* (SEAT-R's full seat; a tensor claim has no partial seat, no interval seat and no capture sampler): the
+claim's own capture's inputs are replayed over the held class **off the loop**, in the replay slots, under the
+host ledger's reservation; the replay's execution root, step root, step leaf count and canonical output root are
+compared with the claim's (`palw_seat_replay_step_v1`): `Valid` when they agree, **terminal for `Valid`** when they do
+not (the court's question; a sampled verdict never slashes), and silence while it runs. A seat served no capture of the
+claim's class and executor asks for it at the tail's pace and, served nothing by the material wait, files
+`Unavailable` (N-5), as the free-prompt seat does.
+
+*The court* where the held regime plays no bisection: for a claim this seat's replay refuted — or any licensed claim
+of a pipeline class with `--palw-challenge` — the accused capture rebuilt, this node's own run of the same inputs,
+the first leaf where their commitments part (where the steps agree: the first output tile that is not its own step
+tile's, `gen_tensor_output_audit_v1`), the moves a challenger may file there (`gen_tensor_court_candidates_v1`: a
+cone close, and at the output node's step tile the output close), the first of which the court convicts on **as the
+chain derives it** (`palw_gen_close_verdict_for_row_v1`: the court close's own grading from the class's row, the
+claim's class and its execution root), signed over its session id and queued as `GenShardCourtAccused`. Once per
+claim. **A close past one carrier** is filed, where `palw_held_close_chunks_v1` is armed, as the held leaf challenge of
+§15.15.6, and recorded, not filed, below it. The node cuts the court's close (`CourtClosed` over the session the
+challenge opens, verdict `ExecutorGuilty`) by the court's own cut (`PALW_COURT_CLOSE_CHUNK_MAX_BYTES`), refuses before a
+fee is spent a close the ruleset's court cannot carry (more chunks than `max_close_chunks`, or an assembly clock
+`4 · count` that does not end inside the court window), signs the challenge digest, and asks the fold what it makes of
+the declaration at the tip (`palw_object_rehearsal_v1`) before paying a carrier for it. The declaration rides the court
+queue at round 0 and chunk `i` at round `1 + i` (a session's items sort by round, so the carriers chain
+declaration-first), each chunk queued only once the chain's group names it missing and due by the group's assembly
+deadline; a node that restarts mid-assembly finds its group on the chain (same declarer, same close digest) and delivers
+what is missing. An entry leaves the node's books when its group is gone (the completing chunk applied the close, or the
+sweep convicted the declarer) or its declaration never landed. The same module serves an IR class's pass (a close it
+builds past one carrier is the same object). Where bisection is played the ladder's prefix state is a node-side convention
+both parties compute alike: `H64(key "misaka-palw/gen/bisect-prefix-state/v1", execution_root ‖ le64(index) ‖
+le64(take) ‖ the first take leaf hashes, stage-major)` with `take = min(index, leaf count)` (the IR's convention,
+`tir_bisect_prefix_state_v1`, under its own key).

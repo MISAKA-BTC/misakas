@@ -118,6 +118,10 @@ mod improve;
 mod tir_court;
 /// RFC-0002 F7's node side: an IR class's history dissection, played.
 mod tir_dissect;
+/// RFC-0003 (carriage node half): a tensor claim's seat replay and its one-move court.
+mod gen_court;
+/// RFC-0003 decision 22: the held leaf challenge filed from a node — a close past one carrier, declared and delivered in chunks.
+mod held_chunks;
 #[cfg(test)]
 mod tir_court_e2e;
 /// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
@@ -1156,6 +1160,29 @@ impl PalwSeatReplaysV1 {
         let handle = tokio::task::spawn_blocking(move || {
             let _held_for_the_replay = reservation;
             PalwSeatTaskOutV1::Replay(work(backend.as_ref()))
+        });
+        self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy });
+    }
+
+    /// **Start a whole-job replay that carries its own class** (RFC-0003: a pipeline class's replay) — the
+    /// closure holds the held class itself, so no backend object rides with it. In the same slots as
+    /// [`Self::start`] (`heavy` for a C7 class), holding `reservation` for its life, timed, detached with its
+    /// claim and retried on a refusal exactly as a backend's replay is.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn start_task<W>(
+        &mut self,
+        key: PalwSeatReplayKeyV1,
+        class: Hash64,
+        heavy: bool,
+        now_daa: u64,
+        reservation: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
+        work: W,
+    ) where
+        W: FnOnce() -> PalwSeatReplayResultV1 + Send + 'static,
+    {
+        let handle = tokio::task::spawn_blocking(move || {
+            let _held_for_the_replay = reservation;
+            PalwSeatTaskOutV1::Replay(work())
         });
         self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy });
     }
@@ -3656,6 +3683,16 @@ impl PalwPanelService {
                 .ok()
                 .map(|entry| entry.class_id())
             })
+            // RFC-0003: the generative class one of this node's PALWTIR2 artifacts declares.
+            .or_else(|| {
+                misaka_palw_sdk::gen_class::gen_registration_candidate_v1(
+                    registry.holdings(),
+                    &terms,
+                    self.config.register_class.as_deref(),
+                )
+                .ok()
+                .map(|entry| entry.class_id())
+            })
     }
 
     // **This network's price for a job shape** — the same arithmetic the chain used to open the
@@ -5490,9 +5527,28 @@ impl PalwPanelService {
         let candidate = match picked {
             Ok(candidate) => candidate,
             // RFC-0002 Phase F (F6): no legacy class is the pick, and this node holds IR artifacts —
-            // the class one of them declares is.
-            Err(_) if !misaka_palw_sdk::tir_registration::tir_entries_of_v1(registry.holdings()).is_empty() => {
+            // the class one of them declares is. (RFC-0003: unless the operator's pick is a pipeline class
+            // and no IR class matches it, below.)
+            Err(_)
+                if !misaka_palw_sdk::tir_registration::tir_entries_of_v1(registry.holdings()).is_empty()
+                    && (misaka_palw_sdk::tir_registration::tir_registration_candidate_v1(
+                        registry.holdings(),
+                        &terms,
+                        self.config.register_class.as_deref(),
+                    )
+                    .is_ok()
+                        || misaka_palw_sdk::gen_class::gen_registration_candidate_v1(
+                            registry.holdings(),
+                            &terms,
+                            self.config.register_class.as_deref(),
+                        )
+                        .is_err()) =>
+            {
                 return self.build_tir_class_registration(session, &terms, bond_key);
+            }
+            // RFC-0003: this node holds generative (PALWTIR2) artifacts — the class one of them declares.
+            Err(_) if !misaka_palw_sdk::gen_class::gen_entries_of_v1(registry.holdings()).is_empty() => {
+                return self.build_gen_class_registration(session, &terms, bond_key);
             }
             Err(e) => return Err(e.to_string()),
         };
@@ -5607,6 +5663,49 @@ impl PalwPanelService {
         let message = tir_registration_message_v1(domain, &unsigned).ok_or("the builder did not build an IR registration")?;
         let signature = self
             .sign(message.as_byte_slice(), kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1)
+            .ok_or("this node holds no bond key, so it cannot sign a registration")?;
+        build(signature)
+    }
+
+    /// **Build the `ClassRegisteredGenV1` for the pipeline class this node holds an artifact for** (RFC-0003, the
+    /// carriage's node half). The IR registration's discipline: the class is the one the loaded `PALWTIR2`
+    /// artifact declares (pipeline, programs, layouts, output header, offers, tokenizer) under the root its
+    /// weights derive, every term is the chain's (weightless: a pipeline class earns no weight), the admission
+    /// gate runs before anything is signed, and the registrant bond signs the message of the object's own fields
+    /// under the generative registration context.
+    fn build_gen_class_registration(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        terms: &kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2,
+        bond_key: PalwBondKeyV2,
+    ) -> Result<PalwConsensusObjectV2, String> {
+        use misaka_palw_sdk::gen_class::{build_gen_registration_v1, gen_registration_candidate_v1, gen_registration_message_v1};
+        let registry = self.backends();
+        let entry = gen_registration_candidate_v1(registry.holdings(), terms, self.config.register_class.as_deref())?;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+            &self.consensus_config.params.palw_consensus_mode
+        else {
+            return Err("this chain has no V2 bundle, so there is nothing to register a class into".to_string());
+        };
+        let params = &self.consensus_config.params;
+        let daa = session.get_virtual_daa_score();
+        info!(
+            "[{PALW_PANEL}] registering the generative class {} ({}) at artifact root {}",
+            entry.class_id(),
+            entry.model_id,
+            entry.artifact_root
+        );
+        let build = |signature: Vec<u8>| {
+            build_gen_registration_v1(params, bundle, entry.row.class.as_ref(), entry.artifact_root, terms, 0, bond_key, signature, daa)
+        };
+        let unsigned = build(Vec::new())?;
+        let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
+        let message = gen_registration_message_v1(domain, &unsigned).ok_or("the builder did not build a generative registration")?;
+        let signature = self
+            .sign(message.as_byte_slice(), kaspa_consensus_core::palw_gen_class_v1::PALW_GEN_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1)
             .ok_or("this node holds no bond key, so it cannot sign a registration")?;
         build(signature)
     }
@@ -7215,6 +7314,9 @@ impl PalwPanelService {
         // carried after every dated item, by age. The reporter filer's items are dated by the filer
         // (`queued_dues_v1`, read after each of its passes).
         let mut court_due: HashMap<(Hash64, u32, bool), u64> = HashMap::new();
+        // RFC-0003 decision 22: the held leaf challenges this node is carrying — each a close past one carrier,
+        // declared (queued above) and delivered in chunks once its group stands (`held_chunks`).
+        let mut held_chunks: Vec<held_chunks::PalwHeldChunksV1> = Vec::new();
         // ADR-0152 R-3 (P2-8): every conviction this node files on its own evidence — commit, then the
         // evidence, then the reveal, through `court_pending` — persisted so a restart still reveals.
         let mut reporter_filer = reporter_filer::PalwReporterFilerV1::load(&self.config.state_dir);
@@ -7801,6 +7903,38 @@ impl PalwPanelService {
                     },
                 )
                 .await;
+            }
+
+            // **RFC-0003 (carriage node half): a tensor claim's court where no bisection is played** — the
+            // pipeline twin of the pass above: the accused capture rebuilt, this node's own run, the first leaf
+            // where they part and the close the court convicts on there (`GenShardCourtAccused`, `gen_court`).
+            if !bisection_is_played
+                && crate::palw_gen_seat::palw_gen_lane_open_v1(&self.consensus_config.params, current_daa)
+                && (self.config.challenge || !seat_faulted.is_empty() || !replay_refuted.is_empty())
+            {
+                self.gen_one_move_pass_v1(
+                    &session,
+                    bond_key,
+                    network_domain,
+                    current_daa,
+                    &materials,
+                    &seat_faulted,
+                    &replay_refuted,
+                    gen_court::PalwGenOneMoveBooksV1 {
+                        challenged: &mut challenged,
+                        accused: &mut accused,
+                        court_pending: &mut court_pending,
+                        court_due: &mut court_due,
+                        held_chunks: &mut held_chunks,
+                    },
+                )
+                .await;
+            }
+            // **RFC-0003 decision 22: the chunks of every held leaf challenge this node carries**, once a tick, beside
+            // the passes that file their declarations (the generative pass above; an IR pass hands its close to the
+            // same module).
+            if !held_chunks.is_empty() {
+                self.held_chunks_tick_v1(&session, bond_key, current_daa, &mut held_chunks, &mut court_pending, &mut court_due, &court_moved);
             }
 
             // --- the court's half: answer the disputes this bond is a party to ---
@@ -9695,6 +9829,71 @@ impl PalwPanelService {
                     // them off the duty) but so the common garbage fails before the expensive
                     // step.
                     if duty.free_prompt {
+                        // **RFC-0003 (carriage node half): a TENSOR claim is judged by its own seat pass.** A claim of
+                        // an image or an embedding class this node holds is a `PalwGenJobV1` on the free-prompt lane,
+                        // its material the producer's capture (`FPG1`); the seat replays the whole job over its held
+                        // class (no partial seat, no interval seat, no capture sampler — a tensor claim has none) and
+                        // files `Valid` when the replay reproduces the claim's roots and canonical output. A class this
+                        // node does not hold answered `Incapable` above.
+                        let tensor_class = self.backends().resolve_gen_v1(duty.class_id, duty.artifact_root);
+                        if let Some(Ok(tensor)) = tensor_class
+                            && gen_court::gen_class_is_tensor_v1(&tensor)
+                        {
+                            if !(seat_r && seat_r_duty.role == PalwSeatRRoleV1::FullSeat) || refuted {
+                                break 'verdict None;
+                            }
+                            let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                            let pass = self
+                                .gen_tensor_seat_pass_v1(&session, std::sync::Arc::new(tensor), duty, seat_r_duty, current_daa, pooled, &mut seat_replays)
+                                .await;
+                            if pass.served {
+                                service.note_served(duty.claim_id);
+                            }
+                            match pass.step {
+                                PalwSeatReplayStepV1::Licensed => {
+                                    // X7: past the fence, a capture this seat could not keep is a Valid it cannot answer for.
+                                    if !self.licensed_job_kept_v1(&duty.claim_id, pass.kept, current_daa) {
+                                        break 'verdict None;
+                                    }
+                                    debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::FreePromptReplay));
+                                    licensed_by_replay = true;
+                                    break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                                }
+                                // Terminal for `Valid`; the court's pass accuses (`gen_one_move_pass_v1`).
+                                PalwSeatReplayStepV1::Refuted => {
+                                    replay_refuted.insert(duty.claim_id);
+                                    break 'verdict None;
+                                }
+                                PalwSeatReplayStepV1::Waiting => break 'verdict None,
+                                // Nothing replays and nothing is refuted: ask for the claim's capture at the tail's
+                                // pace, and — served none — file `Unavailable` at the material wait (N-5).
+                                PalwSeatReplayStepV1::NoVerdict => {
+                                    let reask_daa = seat_reask_daa_v1(deadline.saturating_sub(duty.bound_daa));
+                                    if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(reask_daa)) {
+                                        requested.insert(duty.claim_id, current_daa);
+                                        self.request_material_signed(network_domain, duty.claim_id, current_daa).await;
+                                    }
+                                    if !pass.served {
+                                        service.note_unserved(duty.claim_id, current_daa);
+                                        if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
+                                            Self::palw_licence_stands_v1(
+                                                &session,
+                                                duty.claim_id,
+                                                &receipt_pool_v2,
+                                                &receipt_pool_v3,
+                                                &receipt_facts,
+                                            )
+                                        }) {
+                                            break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
+                                                chunk_index: 0,
+                                                requested_daa: first_seen[&duty.claim_id].max(duty.bound_daa),
+                                            });
+                                        }
+                                    }
+                                    break 'verdict None;
+                                }
+                            }
+                        }
                         // **SEAT-S4 past SEAT-R: a C7 partial seat resumes its own mask** (the review's
                         // re-enable, `PalwSeatRRoleV1::PartialResumes`), off the loop, from served
                         // openings authenticated against the claim — under the job and context the
@@ -12685,6 +12884,12 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         PalwConsensusObjectV2::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
         PalwConsensusObjectV2::CourtEvalRootClaimed { .. } => "CourtEvalRootClaimed",
+        // RFC-0003 §I.4 (tag 87): the walk's product, never serialized — named for the logs only.
+        PalwConsensusObjectV2::GenTensorCommitted { .. } => "GenTensorCommitted",
+        // RFC-0003 §I.4.7 (tag 88): a pipeline claim accused in one move.
+        PalwConsensusObjectV2::GenShardCourtAccused { .. } => "GenShardCourtAccused",
+        // RFC-0003 decision 22 (tag 90): a named-leaf challenge with the declaration of its close.
+        PalwConsensusObjectV2::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",
@@ -18338,9 +18543,11 @@ mod seat_r_tests {
     /// Every `break 'verdict` of the verdict block is one of six spellings, and every mention of
     /// `PalwReceiptVerdictV2::Valid` in it is a `Valid` exit or one of the two interval gates — so a
     /// `Valid` cannot leave the block by a spelling this pin does not see (the review, LOW). Every
-    /// `Valid` exit is attributed to the nearest arm named before it, fourteen in all, in order. The two
-    /// replay exits past the fence are the `Licensed` arms of the two off-loop replays
-    /// (`fp_seat_replay_pass_v1`, `attempt_seat_replay_v1`), the only lines that set
+    /// `Valid` exit is attributed to the nearest arm named before it, fifteen in all, in order. The four
+    /// replay exits past the fence are the `Licensed` arms of the three off-loop replays
+    /// (`gen_tensor_seat_pass_v1` — RFC-0003's tensor claim, first in the free-prompt lane —
+    /// `fp_seat_replay_pass_v1`, `attempt_seat_replay_v1`) and RFC-0004's evaluation replay (the `Valid` arm of
+    /// its own step, at the head of the block), the only lines that set
     /// `licensed_by_replay`; the two SEAT-S4 exits are the `Licensed` arms of the verified resume, one
     /// a lane, the only lines that set `licensed_by_verified_resume` (for a `PartialResumes` seat's
     /// own-mask V3 alone); those four are the only exits whose arm the rule admits. The two other
@@ -18407,6 +18614,8 @@ mod seat_r_tests {
                 // RFC-0004 (A10): the evaluation claim's replay, at the head of the block (after the
                 // capability check): a claim with no quanta is never judged by the free-prompt arms below.
                 EvaluationReplay,
+                // RFC-0003: a tensor claim's own seat pass, first in the free-prompt lane.
+                FreePromptReplay,
                 VerifiedSegmentResume,
                 FreePromptReplay,
                 SegmentResume,
@@ -18448,18 +18657,29 @@ mod seat_r_tests {
         let writers: Vec<usize> = block.match_indices(LICENSED).map(|(i, _)| i).collect();
         assert_eq!(
             writers.len(),
-            3,
-            "three writers, and no other: the two off-loop replays' `Licensed` arms, and RFC-0004's evaluation replay"
+            4,
+            "four writers, and no other: the three off-loop replays' `Licensed` arms (the tensor pass, the FP pass, the attempt pass), and RFC-0004's evaluation replay"
         );
+        let tensor_pass = block.find(".gen_tensor_seat_pass_v1(").expect("the tensor pass (RFC-0003)");
+        assert!(tensor_pass < fp_pass, "a tensor claim's pass runs before the FP replay arm: it never reaches the FPM1 arms");
         for at in &writers {
             assert!(block[at + LICENSED.len()..].trim_start().starts_with(VALID), "a writer is its exit's last line");
             // RFC-0004 (A10): the evaluation replay's writer is the `Valid` arm of its own step.
             if block[..*at].rfind("improve::PalwImproveSeatStepV1::Valid => {").is_some_and(|v| *at - v < 300) {
                 continue;
             }
-            let licensed = block[..*at].rfind("(PalwSeatReplayStepV1::Licensed, ").expect("a Licensed arm");
+            let licensed = block[..*at]
+                .rfind("(PalwSeatReplayStepV1::Licensed, ")
+                .into_iter()
+                .chain(block[..*at].rfind("PalwSeatReplayStepV1::Licensed => {"))
+                .max()
+                .expect("a Licensed arm");
             assert!(*at - licensed < 600, "inside the Licensed arm");
-            assert!((fp_pass < licensed && licensed - fp_pass < 400) || (attempt_pass < licensed && licensed - attempt_pass < 900));
+            assert!(
+                (tensor_pass < licensed && licensed - tensor_pass < 900)
+                    || (fp_pass < licensed && licensed - fp_pass < 400)
+                    || (attempt_pass < licensed && licensed - attempt_pass < 900)
+            );
         }
         // SEAT-S4's two writers: the verified resume's `Licensed` arms, one a lane, each just before
         // its `Valid` and inside the arm of a `seat_s4_resume_v1` step.
@@ -18570,7 +18790,11 @@ mod seat_r_tests {
             "if refuted && seat_r_duty.role != PalwSeatRRoleV1::FullSeat {\n                        break 'verdict None;"
         ));
         assert!(!block.contains("if seat_r && replay_refuted.contains(&duty.claim_id) {"), "no gate stops the full seat");
-        assert_eq!(block.matches("replay_refuted.insert(duty.claim_id);\n").count(), 2, "both lanes' refutations are recorded");
+        assert_eq!(
+            block.matches("replay_refuted.insert(duty.claim_id);\n").count(),
+            3,
+            "the tensor lane's, the free-prompt lane's and the attempt lane's refutations are recorded"
+        );
         let fp_refuted = block.find("(PalwSeatReplayStepV1::Refuted, _) => {\n").expect("the FP refutation");
         assert!(
             block[fp_refuted..]

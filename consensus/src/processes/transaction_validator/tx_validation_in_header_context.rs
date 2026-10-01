@@ -55,7 +55,8 @@ impl TransactionValidator {
         self.check_improvement_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_evaluation_in_context(tx, ctx_daa_score)
+        self.check_palw_fp_evaluation_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_gen_claim_in_context(tx, ctx_daa_score)
     }
 
     /// **RFC-0004 A6, the height-indexed half of the evaluation door.** Isolation admits an evaluation
@@ -90,6 +91,26 @@ impl TransactionValidator {
                 Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(leaves, ctx_daa_score))
             }
             Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why.why(), ctx_daa_score)),
+            None => Ok(()),
+        }
+    }
+
+    /// **RFC-0003 §I.4.4, the height-indexed half of the tensor claim's door.** Isolation admits a
+    /// version-10 commitment's stateless rules wherever the ruleset carries `Params::palw_fp_job_v5`
+    /// at all, because it holds no height; here, at the containing block's DAA, one below the fence is
+    /// refused. So a build that schedules the fence and one that does not agree on every transaction
+    /// below it: the one refuses the claim here, the other at its isolation door. Inert on every preset
+    /// without the fence: isolation refused every version-10 payload already, and this returns on its
+    /// first line.
+    fn check_palw_fp_gen_claim_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_fp_job_v5_fence else {
+            return Ok(());
+        };
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_refusal_at_v1(&tx.payload, fence.is_active(ctx_daa_score)) {
+            Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score)),
             None => Ok(()),
         }
     }

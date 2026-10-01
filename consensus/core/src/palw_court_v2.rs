@@ -1864,7 +1864,6 @@ fn adjudicate_gen_close_v1(
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     decode_close_convicts_only: bool,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
-    use crate::palw_gen_close_v1 as g;
     let row = state
         .gen_class_v1(&claim.class_id)
         .ok_or_else(|| PalwCourtV2Error::DoesNotAdjudicate(format!("claim {}'s class is not a generative class", claim.class_id)))?;
@@ -1872,17 +1871,43 @@ fn adjudicate_gen_close_v1(
     if class.artifact_root != row.artifact_root {
         return Err(PalwCourtV2Error::OperandProofInvalid("the class's artifact root is not its generative row's".into()));
     }
+    palw_gen_close_verdict_for_row_v1(
+        row,
+        &claim.class_id,
+        &claim.execution_root,
+        proof,
+        narrowed,
+        court,
+        prompt_ids_form,
+        decode_close_convicts_only,
+    )
+}
+
+/// **The verdict a generative close supports against a claim of `class_id` committing `execution_root`, from the
+/// class's registry row alone** — [`adjudicate_gen_close_v1`]'s grading with its three state reads (the row, the
+/// claim's class and root) supplied by the caller. The chain reads them from its state; a node that holds the
+/// class (its row derives from the artifact it loaded) derives the same verdict before it files a close, so an
+/// accusation that would not convict is never filed and charged. One spelling: the chain's adjudication calls
+/// this.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_gen_close_verdict_for_row_v1(
+    row: &crate::palw_gen_class_v1::PalwGenClassRecordV1,
+    class_id: &Hash64,
+    execution_root: &Hash64,
+    proof: &PalwCourtVerdictProofV2,
+    narrowed: Option<u64>,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    decode_close_convicts_only: bool,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    use crate::palw_gen_close_v1 as g;
     let limits = palw_tir_court_limits_v1(court);
     let outcome = match proof {
         PalwCourtVerdictProofV2::GenCone { close } => {
-            g::check_gen_cone_close_v1(close, row, &claim.class_id, &claim.execution_root, narrowed, prompt_ids_form, &limits)
+            g::check_gen_cone_close_v1(close, row, class_id, execution_root, narrowed, prompt_ids_form, &limits)
         }
-        PalwCourtVerdictProofV2::GenDecodeToken { close } => {
-            g::check_gen_decode_close_v1(close, row, &claim.class_id, &claim.execution_root, narrowed)
-        }
-        PalwCourtVerdictProofV2::GenOutputTile { close } => {
-            g::check_gen_output_close_v1(close, row, &claim.class_id, &claim.execution_root, narrowed)
-        }
+        PalwCourtVerdictProofV2::GenDecodeToken { close } => g::check_gen_decode_close_v1(close, row, class_id, execution_root, narrowed),
+        PalwCourtVerdictProofV2::GenOutputTile { close } => g::check_gen_output_close_v1(close, row, class_id, execution_root, narrowed),
         // Graded against its phase, in `adjudicate_court_close_v3` — refused here, never read as
         // "no fault found" (which would acquit).
         PalwCourtVerdictProofV2::GenDissection { .. } => return Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),

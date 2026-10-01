@@ -69,7 +69,7 @@ pub const PALW_FP_V5_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-v5/job-id/v1";
 pub const PALW_FP_V5_MAX_IMAGES: usize = misaka_palw_tir::pipeline::MAX_JOB_IMAGES;
 
 /// **FP Job V5's tail**: what version 8 adds after the V4 job's bytes — its images, then its source.
-/// The lane's job type carries it as one field (`PalwFreePromptJobV3::v5`), so the carried bytes are
+/// The lane's job type carries it as one field (`PalwFreePromptJobV3::tail`), so the carried bytes are
 /// this wrapper's.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwFpV5TailV1 {

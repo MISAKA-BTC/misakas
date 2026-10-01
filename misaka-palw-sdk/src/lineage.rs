@@ -122,6 +122,50 @@ impl std::fmt::Debug for PalwTirClassEntryV1 {
     }
 }
 
+/// **One generative (pipeline) class a node holds** (RFC-0003 §II.2.1) — the pipeline twin of
+/// [`PalwTirClassEntryV1`].
+///
+/// A generative class is DATA too: the class the `PALWTIR2` artifact declares (the pipeline, its programs, a
+/// layout per stage, the output header, the offers and the tokenizer) under the pipeline inventory root its
+/// weights derive. The entry carries the chain's row of that class (`palw_gen_class_record_v1` over the
+/// declared class and the root — the row a registration writes and the court reads), the root, and the class
+/// HELD: its decoded pipeline and programs and the container its weights are read from, which hash to the
+/// root (verified once, at load). It is kept beside the IR entry, not inside it: an IR class has one
+/// program, a pipeline class many, and the node's verbs differ (a tensor worker, a seat's replay, a
+/// court's output close).
+#[derive(Clone)]
+pub struct PalwGenClassEntryV1 {
+    pub model_id: String,
+    /// The lineage that supplies this class (asserted by the conformance harness).
+    pub lineage_id: &'static str,
+    /// The artifact root the weights derive — the proof this node holds what the chain registered.
+    pub artifact_root: Hash64,
+    /// The chain row this class registers as, derived from the declared class and the root.
+    pub row: kaspa_consensus_core::palw_gen_class_v1::PalwGenClassRecordV1,
+    /// The class held, over its `PALWTIR2` container.
+    pub held: Arc<misaka_palw_base0::gen_worker::GenHeldClassV1<misaka_palw_tir_artifact::PalwTirContainerV2>>,
+    pub path: Option<PathBuf>,
+}
+
+impl PalwGenClassEntryV1 {
+    /// The class id: `PalwGenClassV1::class_id` over the class and its artifact root (RFC-0003 §II.2.1).
+    pub fn class_id(&self) -> Hash64 {
+        self.row.class_id
+    }
+}
+
+impl std::fmt::Debug for PalwGenClassEntryV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PalwGenClassEntryV1")
+            .field("model_id", &self.model_id)
+            .field("lineage_id", &self.lineage_id)
+            .field("class_id", &self.class_id())
+            .field("artifact_root", &self.artifact_root)
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
 /// One artifact file (or derived equivalent) as loaded by the lineage that owns its container.
 ///
 /// The payload is opaque on purpose: only the lineage that loaded an artifact ever looks inside
@@ -189,6 +233,12 @@ pub trait PalwModelLineageV1: Send + Sync {
     /// **The IR classes of the artifacts this lineage has loaded** (RFC-0002 Phase F). Every
     /// legacy lineage has none, which is the default.
     fn tir_classes(&self) -> Vec<PalwTirClassEntryV1> {
+        Vec::new()
+    }
+
+    /// **The generative classes of the artifacts this lineage has loaded** (RFC-0003 §II.2.1). Every
+    /// other lineage has none, which is the default.
+    fn gen_classes(&self) -> Vec<PalwGenClassEntryV1> {
         Vec::new()
     }
 

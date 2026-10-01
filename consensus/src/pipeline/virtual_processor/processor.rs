@@ -575,6 +575,10 @@ pub struct VirtualStateProcessor {
     /// from which a new free-prompt job is V4 only (and below which it is V3 only), read by the
     /// extraction walk at the accepting block's DAA. `None` on every shipped preset.
     pub(super) palw_fp_decode_rules: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0003 §I.4: `Params::palw_fp_job_v5_fence()`** — the height from which a tensor claim (FP job
+    /// version 10) may be accepted, over `palw_gen_v1` ([`Self::palw_gen_lane_open_at`]); read by the
+    /// extraction walk at the accepting block's DAA. `None` on every shipped preset.
+    pub(super) palw_fp_job_v5: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
     /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
     pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1137,6 +1141,7 @@ impl VirtualStateProcessor {
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_held_context: params.palw_held_context_fence(),
             palw_fp_decode_rules: params.palw_fp_decode_rules_fence(),
+            palw_fp_job_v5: params.palw_fp_job_v5_fence(),
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
@@ -7421,6 +7426,15 @@ impl VirtualStateProcessor {
                 );
                 continue;
             }
+            // **RFC-0003 decision 22, likewise**: below `palw_held_close_chunks_v1` a held leaf challenge is a payload
+            // an older build cannot decode and skips (A-2), so it is dropped here, first, and charged nothing; the
+            // fold refuses it too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_held_close_chunks_v1(&object)
+                && !self.palw_held_close_chunks_at(point.daa_score)
+            {
+                info!("Block {block}: a held leaf challenge was dropped by name below palw_held_close_chunks_v1, and the block stands (RFC-0003)");
+                continue;
+            }
             if tir_registration_gated
                 && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
             {
@@ -11162,6 +11176,118 @@ impl VirtualStateProcessor {
                         }
                     }
                 }
+                // **RFC-0003 §I.4.7 (tensor claims' court under the held regime): a pipeline claim accused in one
+                // move.** The IR accusation's gates with the generative registry: signed over its session id by
+                // the accuser's registered key; about a live claim of a generative class, its executor and roots the
+                // claim's; and the verdict it DECLARES is the one its proof produces under this block's court
+                // (`palw_gen_one_move_verdict_v1`, the court close's own adjudication) — refused in either direction
+                // otherwise, so the fold may apply it. A cone accusation at a dissected leaf declares ExecutorGuilty
+                // and opens a dissection under the held regime.
+                Obj::GenShardCourtAccused { accusation } => {
+                    let claim_id = accusation.claim;
+                    if !self.palw_gen_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim_id}: a generative accusation is refused: palw_gen_v1 is not in force (RFC-0003)"
+                        ));
+                    }
+                    kaspa_consensus_core::palw_gen_one_move_v1::palw_gen_one_move_shape_v1(accusation)
+                        .map_err(|e| format!("claim {claim_id}: {e}"))?;
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a generative one-move accusation on a network with no V2 court parameters".to_string())?;
+                    let record = state
+                        .bond(&accusation.accuser_bond)
+                        .ok_or_else(|| format!("an accusation names bond {:?} this chain does not have", accusation.accuser_bond))?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    let session_id = kaspa_consensus_core::palw_gen_one_move_v1::palw_gen_one_move_session_id_v1(
+                        domain.as_byte_slice(),
+                        accusation,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        session_id.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_gen_one_move_v1::PALW_GEN_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1,
+                    ) {
+                        return Err(format!("claim {claim_id}'s generative accusation is not signed by the bond it names"));
+                    }
+                    let claim = state
+                        .claim(&claim_id)
+                        .ok_or_else(|| format!("an accusation names claim {claim_id} this chain does not have"))?;
+                    if state.gen_class_v1(&claim.class_id).is_none() {
+                        return Err(format!("claim {claim_id} is not a claim of a pipeline class"));
+                    }
+                    if claim.bond != accusation.executor_bond
+                        || claim.execution_root != accusation.execution_root
+                        || claim.trace_root != accusation.trace_root
+                    {
+                        return Err(format!("claim {claim_id}: the accusation's executor or roots are not the claim's"));
+                    }
+                    let ladder = state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
+                    let outcome = kaspa_consensus_core::palw_gen_one_move_v1::palw_gen_one_move_outcome_v1(
+                        state,
+                        claim,
+                        accusation,
+                        court,
+                        ladder,
+                        self.palw_prompt_ids_form_at(point.daa_score),
+                        self.palw_held_context_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("claim {claim_id}: the generative accusation does not adjudicate: {e}"))?;
+                    match outcome {
+                        kaspa_consensus_core::palw_gen_one_move_v1::PalwGenOneMoveOutcomeV1::Verdict(derived) => {
+                            if derived != accusation.verdict {
+                                return Err(format!(
+                                    "claim {claim_id}: the generative accusation declares {:?} and its proof produces {derived:?}",
+                                    accusation.verdict
+                                ));
+                            }
+                        }
+                        kaspa_consensus_core::palw_gen_one_move_v1::PalwGenOneMoveOutcomeV1::NeedsDissection { leaf } => {
+                            if accusation.verdict != kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty {
+                                return Err(format!(
+                                    "claim {claim_id}: a generative accusation at dissected leaf {leaf} opens a dissection and                                      declares ExecutorGuilty, not {:?}",
+                                    accusation.verdict
+                                ));
+                            }
+                        }
+                    }
+                }
+                // **RFC-0003 decision 22 (the held leaf challenge): a named-leaf challenge with the declaration of its
+                // close.** Signed over its digest by the accuser's registered key, within the ruleset's own carriage
+                // count; everything about the claim (live, its class, its roots, the leaf, the open sessions, the
+                // accuser's standing) is the fold's, where the state is in hand, and the rehearsal drops what the fold
+                // refuses. It adjudicates nothing — the close it pins is graded, once, by the completing chunk.
+                Obj::HeldLeafChallengeDeclared { challenge } => {
+                    let claim_id = challenge.claim;
+                    if !self.palw_held_close_chunks_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim_id}: a held leaf challenge is refused: palw_held_close_chunks_v1 is not in force (RFC-0003)"
+                        ));
+                    }
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a held leaf challenge on a network with no V2 court parameters".to_string())?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    kaspa_consensus_core::palw_held_close_v1::check_held_leaf_challenge_acceptance_v1(
+                        state,
+                        domain.as_byte_slice(),
+                        challenge,
+                        court,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| format!("claim {claim_id}: {e}"))?;
+                }
                 Obj::ShardCourtAccused { accusation } => {
                     let claim_id = accusation.claim;
                     if !self.palw_shard_court_at(point.daa_score) {
@@ -11715,6 +11841,10 @@ impl VirtualStateProcessor {
                     }
                 }
                 Obj::FreePromptCommitted { .. } => {}
+                // **RFC-0003 §I.4: a tensor claim's commitment** is a free-prompt commitment of job version 10:
+                // the acceptance walk built it only past both fences, from a payload whose signature it verified
+                // under the key the job carries, and the fold derives the rest (the class, the work, the capacity).
+                Obj::GenTensorCommitted { .. } => {}
                 // **RFC-0003 (tag 68): a generative class registration.** Below `palw_gen_v1` it is
                 // dropped by name, exactly as an older build skips the payload it cannot decode (A-2;
                 // the walk dropped it first). Past it, the IR arm's order: the chain's target (one map
@@ -11752,6 +11882,9 @@ impl VirtualStateProcessor {
                         fence: self.palw_gen_v1.expect("palw_gen_at said the fence is in force"),
                         court,
                         held_armed: self.palw_held_context_at(point.daa_score),
+                        // RFC-0003 decision 22, read off the bundle's mirror: with the held leaf challenge a close up to
+                        // the carried cap is convictable under the held regime (PALW-GEN-21's bound lifts).
+                        held_close_chunks: self.palw_held_close_chunks_at(point.daa_score),
                         // The block's box-demand rules, as the IR arm reads them (the fold's mirror).
                         demand: kaspa_consensus_core::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(&bundle.state, point.daa_score),
                     };
@@ -13531,6 +13664,18 @@ impl VirtualStateProcessor {
         self.palw_gen_v1.is_some_and(|fence| fence.activation.is_active(daa_score))
     }
 
+    /// **RFC-0003 §I.4: is the free-prompt lane open for tensor claims at `daa_score`?** Both fences in
+    /// force — `palw_gen_v1` (the registry, the court) and `palw_fp_job_v5` (the lane's job versions
+    /// past V4): `palw_gen_lane_open_v1`, resolved here in exactly one place. The extraction walk reads
+    /// it at the accepting block; below it no tensor claim becomes an object.
+    pub(super) fn palw_gen_lane_open_at(&self, daa_score: u64) -> bool {
+        self.palw_gen_at(daa_score)
+            && self
+                .palw_fp_job_v5
+                .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
+                .is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// **RFC-0002 Phase F's second IR fence, read off the bundle's mirror** (`tir_fence2_from_daa`,
     /// which `validate_palw_v2` holds equal to `Params::palw_tir_fence2`).
     fn palw_tir_fence2_at(&self, daa_score: u64) -> bool {
@@ -13547,6 +13692,12 @@ impl VirtualStateProcessor {
     /// (`PalwStateParamsV2::pipeline_da_active_at`): the acceptance walk, the gate and the fold must agree.
     fn palw_pipeline_da_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.pipeline_da_active_at(daa_score))
+    }
+
+    /// **RFC-0003 decision 22's held leaf challenge, read off the bundle's mirror**
+    /// (`held_close_chunks_from_daa`, which `validate_palw_v2` holds equal to `Params::palw_held_close_chunks_v1`).
+    fn palw_held_close_chunks_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.held_close_chunks_active_at(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
@@ -15054,6 +15205,41 @@ impl VirtualStateProcessor {
         Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound { claim: *claim_id, anchor: seed, seats })
     }
 
+    /// **RFC-0003 §I.4.4: the tensor claims of an accepted set** — the free-prompt walk's twin for
+    /// version-10 payloads ([`kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_objects_from_accepted_txs_v1`]),
+    /// at `block_daa` against the parent `state`: this network's domain and `PanelDa` arming, each
+    /// commitment bounded by its CLASS's ladder (the bundle's, or the one the class recorded under the held
+    /// regime), the network's form and this processor's verifier. Empty below `palw_gen_v1` or
+    /// `palw_fp_job_v5` ([`Self::palw_gen_lane_open_at`]): no tensor claim becomes an object. The one place
+    /// the walk's arguments are written — the extraction and the tests' helper both read it.
+    pub(super) fn palw_v2_gen_objects_of_txs(
+        &self,
+        txs: &[Transaction],
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        block_daa: u64,
+    ) -> kaspa_consensus_core::palw_fp_objects_v3::PalwFpExtractionV3 {
+        if !self.palw_gen_lane_open_at(block_daa) {
+            return Default::default();
+        }
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        let ladder = self
+            .palw_v2_bundle
+            .as_ref()
+            .map(|bundle| bundle.court.max_step_leaf_count())
+            .unwrap_or(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
+        kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_objects_from_accepted_txs_v1(
+            txs,
+            network_domain,
+            self.palw_panel_da_at(block_daa),
+            |class_id| state.class_step_ladder_v1(class_id, ladder),
+            self.palw_prompt_ids_form_at(block_daa),
+            Self::verify_mldsa87_with_context_bool,
+        )
+    }
+
     fn palw_v2_objects_of_block(
         &self,
         acceptance: &AcceptanceData,
@@ -15135,6 +15321,7 @@ impl VirtualStateProcessor {
             // a claim bound to any bond outpoint it named — the genesis premine bond among them.
             Self::verify_mldsa87_with_context_bool,
         );
+        let mut extraction = extraction;
         for (carrier, reason) in &extraction.skipped {
             info!("[palw-fp] carrier {carrier} produced no object: {reason}");
         }
@@ -15172,6 +15359,16 @@ impl VirtualStateProcessor {
         for (carrier, reason) in &evaluation.skipped {
             info!("[palw-eval] carrier {carrier} produced no object: {reason}");
         }
+        // **RFC-0003 §I.4.4: the tensor claims (FP job version 10), past both fences.** The lane's walk
+        // above skipped every version-10 payload as not stateless-admissible; this is its twin for them,
+        // at each commitment's CLASS's ladder, under the network's domain and arming, and its objects are
+        // appended after the lane's own — a fixed concatenation, as the lifecycle walk's below. Below
+        // either fence it does not run: no tensor claim becomes an object.
+        let tensor = self.palw_v2_gen_objects_of_txs(&txs, state, block_daa);
+        for (carrier, reason) in &tensor.skipped {
+            info!("[palw-fp] carrier {carrier} produced no tensor object: {reason}");
+        }
+        extraction.objects.extend(tensor.objects);
         // P0-11: the claim-lifecycle objects. Without this walk no block could carry a
         // `PanelBound`, so every claim on a V2 network voided at `BindTimeout` and PALW weight —
         // the network's whole fork choice — was permanently zero.
@@ -19521,6 +19718,9 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         O::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",
         O::TirShardCourtAccused { .. } => "TirShardCourtAccused",
+        O::GenShardCourtAccused { .. } => "GenShardCourtAccused",
+        O::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
+        O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         O::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",

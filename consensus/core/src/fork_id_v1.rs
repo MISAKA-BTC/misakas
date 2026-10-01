@@ -731,6 +731,8 @@ mod tests {
             "palw_tir_fence2" => params.palw_tir_fence2 = Some(at),
             // RFC-0004, likewise: the drill's value (the fence is in no network's release).
             "palw_improvement_v1" => params.palw_improvement_v1 = Some(crate::palw_improve_v1::PalwImprovementFenceV1::drill_v1(at)),
+            // RFC-0003 decision 22: a bare height.
+            "palw_held_close_chunks_v1" => params.palw_held_close_chunks_v1 = Some(at),
             "palw_canonical_work" => params.palw_canonical_work = Some(at),
             "palw_admission_independence" => params.palw_admission_independence = Some(at),
             "palw_seat_gate_possession" => params.palw_seat_gate_possession = Some(at),
