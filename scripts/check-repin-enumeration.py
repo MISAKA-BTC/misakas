@@ -149,6 +149,33 @@ FROZEN = [
     "misaka-palw-shadow/src/main.rs",
     "misaka-palw/src/agent_client.rs",
     "misaka-palw/src/lib.rs",
+    # The RFC-0003 / RFC-0004 line (2026-09/10), classified at its integration (rfc4/int): test constants
+    # (`Hash64::from_bytes([n; 64])` fixtures) and domain-separated ids derived from them — none is a
+    # function of the genesis set, so none moves at a re-genesis. The line's vector files are blessed by
+    # their own tests (`IMPROVE_BLESS=1`), not re-pinned.
+    "consensus/core/src/palw_gen_class_v1.rs",
+    "consensus/core/src/palw_gen_step_v1.rs",
+    "consensus/core/src/palw_improve_artifact_v1.rs",
+    "consensus/core/src/palw_improve_candidate_v1.rs",
+    "consensus/core/src/palw_improve_epoch_v1.rs",
+    "consensus/core/src/palw_improve_eval_fold_v1.rs",
+    "consensus/core/src/palw_improve_eval_v1.rs",
+    "consensus/core/src/palw_improve_fold_v1.rs",
+    "consensus/core/src/palw_improve_material_fold_v1.rs",
+    "consensus/core/src/palw_improve_material_v1.rs",
+    "consensus/core/src/palw_improve_policy_v1.rs",
+    "consensus/core/src/palw_improve_pool_v1.rs",
+    "consensus/core/src/palw_improve_promotion_v1.rs",
+    "consensus/core/src/palw_improve_state_v1.rs",
+    "misaka-palw-base0/tests/gen_worker.rs",
+    "misaka-palw-gen/src/rand.rs",
+    "misaka-palw-sdk/src/improve_eval.rs",
+    "misaka-palw-sdk/src/improve_objects.rs",
+    "misaka-palw-sdk/tests/improve_cli.rs",
+    "misaka-palw-sdk/tests/improve_composite_lora.rs",
+    "misaka-palw-sdk/tests/improve_composite_node.rs",
+    "misaka-palw-sdk/tests/improve_composite_scale.rs",
+    "misaka-palw-sdk/tests/improve_composite_tools.rs",
 ]
 
 

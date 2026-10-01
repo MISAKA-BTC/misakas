@@ -414,7 +414,7 @@ fn dummy_carriage(pp: &Prepared) -> cc::palw_tir_court_v1::PalwTirConeRefutation
         output_opening: cc::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: h, siblings: vec![] },
         output_preimage: cc::palw_step_leg::PalwStepTileLeafV1 { version: 1, coord, value_count: 0, values_le: vec![] },
         operands: cc::palw_step_refute::PalwStepInputRowV1 { preimages: vec![], run_siblings: vec![] },
-        params: None,
+        params: cc::palw_tir_court_v1::PalwTirParamOpeningV1::None,
         prompt_token_ids: vec![],
         prompt_ids_openings: vec![],
         decode_tokens: None,
