@@ -185,7 +185,7 @@ impl PalwPanelService {
         palw_improve_log_tick_v1(&tick);
         st.views = views;
         st.evals = evals;
-        self.improve_write_status_v1(&status, current_daa);
+        self.improve_write_status_v1(&status, &st.evals, current_daa);
         // The retry rule: a job this node ran stays its own until the chain takes it or the retry age.
         st.attempted.retain(|_, at| current_daa < at.saturating_add(PALW_IMPROVE_RETRY_AFTER_DAA_V1));
         st.ready.retain(|(_, at)| current_daa < at.saturating_add(PALW_IMPROVE_READY_TTL_DAA_V1));
@@ -239,9 +239,9 @@ impl PalwPanelService {
 
     /// **The status file**: the chain's improvement status at the tip, as JSON, beside the panel's other
     /// state. Written whole then renamed, so a reader never sees half a file.
-    fn improve_write_status_v1(&self, status: &PalwImprovementStatusV1, daa: u64) {
+    fn improve_write_status_v1(&self, status: &PalwImprovementStatusV1, evals: &[PalwImprovementEvalViewV1], daa: u64) {
         let path = self.config.state_dir.join("palw-improve-status.json");
-        let json = palw_improve_status_json_v1(status, daa);
+        let json = palw_improve_status_json_v1(status, evals, daa);
         let _ = std::fs::create_dir_all(&self.config.state_dir);
         let partial = path.with_extension("json.partial");
         if let Err(e) = std::fs::write(&partial, serde_json::to_vec_pretty(&json).unwrap_or_default()).and_then(|()| std::fs::rename(&partial, &path)) {

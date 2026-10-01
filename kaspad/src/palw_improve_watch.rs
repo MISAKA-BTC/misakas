@@ -142,7 +142,12 @@ fn bond_text(bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2) -> Strin
 /// (state and clock, candidates with their counts, items, the outcome and the grants). Ids are hex, bonds
 /// `txid:index`, enums their names. The format is the drill watcher's and an operator's; nothing in
 /// consensus reads it.
-pub(crate) fn palw_improve_status_json_v1(status: &kaspa_consensus_core::palw_improve_node_v1::PalwImprovementStatusV1, daa: u64) -> serde_json::Value {
+pub(crate) fn palw_improve_status_json_v1(
+    status: &kaspa_consensus_core::palw_improve_node_v1::PalwImprovementStatusV1,
+    evals: &[kaspa_consensus_core::palw_improve_node_v1::PalwImprovementEvalViewV1],
+    daa: u64,
+) -> serde_json::Value {
+    use kaspa_consensus_core::palw_improve_state_v1::PalwEvalSubjectV1;
     use serde_json::json;
     let lines: Vec<serde_json::Value> = status
         .lines
@@ -228,7 +233,49 @@ pub(crate) fn palw_improve_status_json_v1(status: &kaspa_consensus_core::palw_im
             })
         })
         .collect();
-    json!({ "schema": "misaka.palw.improve-status.v1", "daa": daa, "lines": lines })
+    // The evaluation view: for every open epoch past its draw, each drawn item (whether its prompt is
+    // disclosed, its reference's kind) and every job that holds a claim — the drill's watcher counts the
+    // claims, their finality and the voids from it, and tells when a setter's keys may be revealed.
+    let evaluation: Vec<serde_json::Value> = evals
+        .iter()
+        .map(|e| {
+            json!({
+                "line_id": e.line_id.to_string(),
+                "epoch": e.epoch,
+                "items": e.items.iter().map(|i| json!({
+                    "item": i.item,
+                    "dropped": i.dropped,
+                    "prompt_disclosed": i.prompt_ids.is_some(),
+                    "prompt_len": i.prompt_ids.as_ref().map(Vec::len),
+                    "reference": format!("{:?}", i.reference).split(' ').next().unwrap_or("").to_string(),
+                    "reference_disclosed": i.reference_ids.is_some(),
+                })).collect::<Vec<_>>(),
+                "jobs": e.jobs.iter().map(|j| {
+                    let (subject, class) = match j.job.subject {
+                        PalwEvalSubjectV1::Parent => ("Parent", None),
+                        PalwEvalSubjectV1::Candidate(c) => ("Candidate", Some(c)),
+                        PalwEvalSubjectV1::Previous(c) => ("Previous", Some(c)),
+                    };
+                    json!({
+                        "item": j.job.item,
+                        "subject": subject,
+                        "subject_class": class.map(|c| c.to_string()),
+                        "kind": format!("{:?}", j.job.kind),
+                        "claim": j.claim.as_ref().map(|c| json!({
+                            "id": c.claim_id.to_string(),
+                            "bond": bond_text(&c.bond),
+                            "accepted_daa": c.accepted_daa,
+                            "final_daa": c.final_daa,
+                            "voided": c.voided,
+                            "work_leaves": c.work_leaves,
+                            "score": c.score,
+                        })),
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    json!({ "schema": "misaka.palw.improve-status.v1", "daa": daa, "lines": lines, "evaluation": evaluation })
 }
 
 #[cfg(test)]
@@ -367,9 +414,82 @@ mod tests {
     /// drill's watcher reads is stable JSON (ids as hex, no float).
     #[test]
     fn the_status_json_names_its_schema_and_lists_lines() {
-        let json = palw_improve_status_json_v1(&Default::default(), 123);
+        let json = palw_improve_status_json_v1(&Default::default(), &[], 123);
         assert_eq!(json["schema"], "misaka.palw.improve-status.v1");
         assert_eq!(json["daa"], 123);
         assert_eq!(json["lines"], serde_json::json!([]));
+        assert_eq!(json["evaluation"], serde_json::json!([]));
+    }
+
+    /// **The status file carries the evaluation view** — the drill's watcher counts the claims, their
+    /// finality and voids per job from it, and knows when an item's prompt is disclosed.
+    #[test]
+    fn the_status_json_lists_the_evaluation_jobs_with_their_claims() {
+        use kaspa_consensus_core::palw_improve_eval_v1::{PalwEvalJobV1, PalwEvalModeV1};
+        use kaspa_consensus_core::palw_improve_material_v1::PalwCaseReferenceV1;
+        use kaspa_consensus_core::palw_improve_node_v1::{
+            PalwImprovementEvalClaimViewV1, PalwImprovementEvalItemViewV1, PalwImprovementEvalJobViewV1, PalwImprovementEvalViewV1,
+        };
+        use kaspa_consensus_core::palw_improve_state_v1::{PalwEvalSubjectV1, PalwScoringKindV1};
+        use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+        let line = h(0x11E);
+        let job = PalwEvalJobV1 {
+            line_id: line,
+            epoch: 3,
+            item: 1,
+            subject: PalwEvalSubjectV1::Candidate(h(0xC1)),
+            kind: PalwScoringKindV1::ExactMatch,
+            mode: PalwEvalModeV1::Generate { seed: h(5), max_new: 3, stop_ids: vec![] },
+        };
+        let view = PalwImprovementEvalViewV1 {
+            line_id: line,
+            epoch: 3,
+            items: vec![
+                PalwImprovementEvalItemViewV1 {
+                    item: 1,
+                    prompt_ids: Some(vec![1, 5, 9, 7]),
+                    reference: PalwCaseReferenceV1::ExactKey { commitment: h(0xB0) },
+                    reference_ids: None,
+                    domain: 0,
+                    dropped: false,
+                },
+                PalwImprovementEvalItemViewV1 {
+                    item: 2,
+                    prompt_ids: None,
+                    reference: PalwCaseReferenceV1::ExactKey { commitment: h(0xB1) },
+                    reference_ids: None,
+                    domain: 0,
+                    dropped: true,
+                },
+            ],
+            jobs: vec![PalwImprovementEvalJobViewV1 {
+                key: (line, 3, 1, job.subject, job.kind),
+                job,
+                claim: Some(PalwImprovementEvalClaimViewV1 {
+                    claim_id: h(0xC1A),
+                    bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(9), index: 2 }),
+                    accepted_daa: 351,
+                    final_daa: Some(502),
+                    voided: false,
+                    trace_root: h(1),
+                    output_root: h(2),
+                    execution_root: h(3),
+                    work_leaves: 180,
+                    score: None,
+                }),
+            }],
+        };
+        let json = palw_improve_status_json_v1(&Default::default(), &[view], 400);
+        let e = &json["evaluation"][0];
+        assert_eq!((e["epoch"].as_u64(), e["items"].as_array().map(Vec::len), e["jobs"].as_array().map(Vec::len)), (Some(3), Some(2), Some(1)));
+        assert_eq!((e["items"][0]["prompt_disclosed"].as_bool(), e["items"][0]["prompt_len"].as_u64()), (Some(true), Some(4)));
+        assert_eq!((e["items"][1]["prompt_disclosed"].as_bool(), e["items"][1]["dropped"].as_bool()), (Some(false), Some(true)));
+        assert_eq!(e["items"][0]["reference"], "ExactKey");
+        let j = &e["jobs"][0];
+        assert_eq!((j["subject"].as_str(), j["kind"].as_str(), j["item"].as_u64()), (Some("Candidate"), Some("ExactMatch"), Some(1)));
+        assert_eq!(j["subject_class"].as_str(), Some(h(0xC1).to_string().as_str()));
+        assert_eq!((j["claim"]["accepted_daa"].as_u64(), j["claim"]["final_daa"].as_u64(), j["claim"]["voided"].as_bool()), (Some(351), Some(502), Some(false)));
+        assert_eq!(j["claim"]["bond"], format!("{}:2", TransactionId::from_u64_word(9)));
     }
 }
