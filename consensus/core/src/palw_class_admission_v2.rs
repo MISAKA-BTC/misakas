@@ -480,6 +480,7 @@ pub fn palw_admission_shape_at_v1(
     daa_score: u64,
 ) -> Result<PalwAdmissionShapeV1, String> {
     let held_armed = params.palw_held_context_active_at(daa_score);
+    let court_window = palw_class_court_window_at_v1(params, bundle, profile, daa_score)?;
     let court = if params.palw_kary_court_active_at(daa_score) {
         // The court the acceptance path resolves (`palw_court_params_at`): held, its arity is
         // derived with the leaf ladder's rounds at zero (ADR-0103 Decision 5).
@@ -488,7 +489,7 @@ pub fn palw_admission_shape_at_v1(
         Some(PalwKaryCourtV1 {
             dissection_arity: derived.dissection_arity(),
             prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
-            window_court_daa: bundle.state.window_court(),
+            window_court_daa: court_window,
         })
     } else {
         None
@@ -510,6 +511,65 @@ pub fn palw_admission_shape_at_v1(
         offence_attribution: params.palw_offence_attribution_active_at(daa_score),
         prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
     })
+}
+
+/// The finite court window committed for one model under the rules active at registration.
+/// Existing classes and non-fused profiles keep the network window. Once the model-court fence is
+/// active, a fused-attention class receives the greater of the network minimum and the exact
+/// minimum needed by its model-specific court shape. There is deliberately no shared upper cap.
+pub fn palw_class_court_window_at_v1(
+    params: &crate::config::params::Params,
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    daa_score: u64,
+) -> Result<u64, String> {
+    let network_window = bundle.state.window_court();
+    if !params.palw_model_court_window_active_at(daa_score)
+        || !params.palw_kary_court_active_at(daa_score)
+        || !palw_profile_has_fused_attention_v1(profile)
+    {
+        return Ok(network_window);
+    }
+    let held = params.palw_held_context_active_at(daa_score);
+    let court = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, held)
+        .map_err(|e| format!("the model court has no finite shape at DAA {daa_score}: {e}"))?;
+    palw_class_court_window_for_shape_v1(network_window, true, held, &court, profile)
+}
+
+/// Shared derivation used by admission and the consensus acceptance/fold paths, so every node
+/// stores and later enforces exactly the same finite model-specific horizon.
+pub fn palw_class_court_window_for_shape_v1(
+    network_window: u64,
+    model_window_active: bool,
+    held: bool,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    profile: &PalwShapeProfileV3,
+) -> Result<u64, String> {
+    // **Only a fused-attention class has a history to dissect**, so only it is asked for a tile: a profile with
+    // no attention cache to chunk (`palw_map_history_tile_positions_v1` answers `None`) is not a refusal here —
+    // it keeps the network window, as every class did before this rule (the review of 2026-10-01).
+    if !model_window_active || !palw_profile_has_fused_attention_v1(profile) {
+        return Ok(network_window);
+    }
+    let tile = crate::palw_state_chunk_map::palw_map_history_tile_positions_v1(profile, profile.n_ctx)
+        .ok_or_else(|| "the model's court history cannot be tiled by its committed state map".to_string())?;
+    palw_court_window_for_history_v1(network_window, true, held, court, profile.n_ctx as u64, tile)
+}
+
+pub fn palw_court_window_for_history_v1(
+    network_window: u64,
+    model_window_active: bool,
+    held: bool,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    history: u64,
+    tile: u32,
+) -> Result<u64, String> {
+    if !model_window_active || history == 0 {
+        return Ok(network_window);
+    }
+    let required = crate::palw_attn_court_v1::palw_model_court_window_daa_v1(court, history, tile, held)
+        .ok_or_else(|| "the model's court window overflows or has no finite bound".to_string())?;
+    Ok(network_window.max(required))
 }
 
 /// **Does a genesis set register a class under the held map?** (ADR-0103.) A genesis row is

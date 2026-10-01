@@ -100,6 +100,8 @@ pub struct PalwTirAdmissionRulesV1 {
     /// **The box-demand rules at the block** (spec 04b §10.3): the release's, or ref2's H7 `TopK`
     /// row past `Params::palw_tir_fence2` — read by `tir_admit` and the value bound `V`.
     pub demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
+    /// The model-specific court-window flag at the registration DAA.
+    pub model_court_window_active: bool,
 }
 
 impl PalwTirAdmissionRulesV1 {
@@ -128,6 +130,7 @@ impl PalwTirAdmissionRulesV1 {
             prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
             court,
             demand: params.palw_tir_demand_rules_at(daa_score),
+            model_court_window_active: params.palw_model_court_window_active_at(daa_score),
         })
     }
 }
@@ -437,6 +440,23 @@ pub fn verify_class_admission_v10(
     exceeds("IR program bytes", class.program.len() as u64, ceilings.max_program_bytes as u64)?;
     let program = class.decode_program().map_err(tir_program_error)?;
 
+    let mut model_rules = *rules;
+    if let Some(k) = rules.court {
+        let network_window = bundle.state.window_court();
+        let derived = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, rules.held.armed)
+            .map_err(|e| PalwClassAdmissionError::Profile(format!("the IR model court has no shape: {e}")))?;
+        let window = crate::palw_class_admission_v2::palw_court_window_for_history_v1(
+            network_window,
+            rules.model_court_window_active,
+            rules.held.armed,
+            &derived,
+            class.layout.max_context as u64,
+            class.layout.h_tile.max(1),
+        )
+        .map_err(|why| PalwClassAdmissionError::Profile(format!("the IR model court window is not finite: {why}")))?;
+        model_rules.court = Some(crate::palw_class_admission_v2::PalwKaryCourtV1 { window_court_daa: window, ..k });
+    }
+
     // 2. The primitive set, the scheme, the token bound, the history bound.
     let prim_set = Hash64::from_bytes(program.prim_set_id);
     if prim_set != rules.fence.prim_set_id {
@@ -536,9 +556,9 @@ pub fn verify_class_admission_v10(
             // §9.5.6, a round and a root claim that each fit one carrier, the whole dispute inside
             // `window_court`. Without the court nothing dissects, so such a cone is adjudicated whole
             // and its tile at `H = W` must fit like any other.
-            let dissected = !cone.h_reductions.is_empty() && rules.court.is_some();
+            let dissected = !cone.h_reductions.is_empty() && model_rules.court.is_some();
             if !cone.h_reductions.is_empty() {
-                match rules.court {
+                match model_rules.court {
                     None => {
                         let whole = cone.tile.macs.saturating_add(cone.tile.elementwise).saturating_add(cone.tile.transcendentals);
                         if cone.tile.macs > bundle.court.max_terminal_macs() || whole > work_limit {
@@ -546,7 +566,7 @@ pub fn verify_class_admission_v10(
                         }
                     }
                     Some(k) => {
-                        palw_tir_dissected_cone_admits_v1(bundle, rules, class, &program, block, bi as u8, ni as u16, tile_len, k)?
+                        palw_tir_dissected_cone_admits_v1(bundle, &model_rules, class, &program, block, bi as u8, ni as u16, tile_len, k)?
                     }
                 }
             }
@@ -655,7 +675,7 @@ pub fn verify_class_admission_v10(
         &space,
         &program,
         &deepest,
-        rules.court.is_some(),
+        model_rules.court.is_some(),
         palw_tir_carriable_close_bytes_v1(&bundle.court),
         crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1,
         // The second IR fence sizes by the range twin: the same bounds, far fewer steps.

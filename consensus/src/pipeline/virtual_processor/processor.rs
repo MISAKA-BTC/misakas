@@ -364,6 +364,8 @@ pub struct VirtualStateProcessor {
     /// get the same answer for the same block, or one node's session has a phase another node's
     /// does not.
     pub(super) palw_kary_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// Per-model finite adjudication horizons, activated independently at the fleet flag day.
+    pub(super) palw_model_court_window: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0081 Decision 3 / ADR-0082 Decision 5's fence, `None` on every shipped preset** —
     /// and un-armable on this build (`Params::validate_palw_v2` refuses it, audit D M-2). Held
     /// here so the `ClassRegistered` arm reads the form from the ONE place that decides it
@@ -1067,6 +1069,7 @@ impl VirtualStateProcessor {
             palw_capability_bound: params.palw_capability_bound_fence(),
             palw_certification_rent: params.palw_certification_rent,
             palw_kary_court: params.palw_kary_court_fence(),
+            palw_model_court_window: params.palw_model_court_window,
             palw_prompt_ids_merkle: params.palw_prompt_ids_merkle_fence(),
             palw_panel_da: params.palw_panel_da_fence(),
             palw_court_ladder: params.palw_court_ladder_fence(),
@@ -1487,7 +1490,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for(point),
+            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(object)),
         )
         .err()
         .map(|why| why.to_string())
@@ -2530,7 +2533,7 @@ impl VirtualStateProcessor {
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
-                                        let mut extras = self.palw_transition_extras_for(&point);
+                                        let mut extras = self.palw_transition_extras_for_objects(&point, &objects);
                                         if let Some(staged) = evm_staged.as_ref() {
                                             extras.evm_actions = staged.result.market_actions.clone();
                                         }
@@ -2555,6 +2558,23 @@ impl VirtualStateProcessor {
                                             info!(
                                                 "PALW: merged blue {blue} carried work this chain point refused (the accepting block stands): {why}"
                                             );
+                                        }
+                                        // `palw_model_court_window`: a class registered past the fence commits its own court
+                                        // window — say which, once per registration, so an operator (and the flag-day drill)
+                                        // can read what every node derived. Empty below the fence.
+                                        for entry in &delta.entries {
+                                            if let kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::ClassCourtWindow {
+                                                key,
+                                                old: None,
+                                                new: Some(window),
+                                            } = entry
+                                            {
+                                                info!(
+                                                    "PALW model court window: class {key} registered at DAA {} commits a {window}-DAA court window (the network window is {})",
+                                                    point.daa_score,
+                                                    state_params.window_court()
+                                                );
+                                            }
                                         }
                                         *state = next;
                                         // Launch blockers §8: say it out loud. A voided claim's
@@ -4680,7 +4700,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for(point),
+            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(object)),
         ) {
             Ok(_) => PalwObjectRehearsalV1::Accepted,
             Err(why) => PalwObjectRehearsalV1::Refused(why),
@@ -4950,7 +4970,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for(point),
+            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(object)),
         ) {
             Ok(_) => check,
             Err(why) => Check::Refused(why.to_string()),
@@ -7748,7 +7768,7 @@ impl VirtualStateProcessor {
                         self.palw_da_court_at(point.daa_score),
                         &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                             own_attempt_class,
-                            ..self.palw_transition_extras_for(point)
+                            ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
                         },
                     ) {
                         Ok(next) => rehearsed_registration = Some(next),
@@ -7877,7 +7897,7 @@ impl VirtualStateProcessor {
                             self.palw_da_court_at(point.daa_score),
                             &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 own_attempt_class,
-                                ..self.palw_transition_extras_for(point)
+                                ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
                             },
                         )
                     } else {
@@ -7894,7 +7914,7 @@ impl VirtualStateProcessor {
                             self.palw_capability_bound_at(point.daa_score),
                             self.palw_uncertified_weightless_at(point.daa_score),
                             self.palw_da_court_at(point.daa_score),
-                            &self.palw_transition_extras_for(point),
+                            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object)),
                         )
                         .map(|(next, _)| next)
                     };
@@ -9966,7 +9986,14 @@ impl VirtualStateProcessor {
                             Some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
                                 dissection_arity: derived.dissection_arity(),
                                 prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
-                                window_court_daa: bundle.state.window_court(),
+                                window_court_daa: kaspa_consensus_core::palw_class_admission_v2::palw_class_court_window_for_shape_v1(
+                                    bundle.state.window_court(),
+                                    self.palw_model_court_window_active_at(point.daa_score),
+                                    self.palw_held_context_at(point.daa_score),
+                                    &derived,
+                                    &carriage.profile,
+                                )
+                                .map_err(|e| format!("class {class_id}: {e}"))?,
                             })
                         }
                     };
@@ -11381,7 +11408,7 @@ impl VirtualStateProcessor {
                 // it cannot decode, A-2); above it, a bought registration (a slot and the 1 MSK burn)
                 // judged in the legacy arm's order and then by admission v10 — at most one a block
                 // reaches here (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`, the walk's by-name drop).
-                Obj::ClassRegisteredTirV1 { class_id, share_permille, .. } => {
+                Obj::ClassRegisteredTirV1 { class_id, share_permille, admission, .. } => {
                     if !self.palw_tir_at(point.daa_score) {
                         return Err(format!(
                             "IR class {class_id} is refused: palw_tir_v1 is not in force at this block (RFC-0002 Phase F)"
@@ -11404,10 +11431,19 @@ impl VirtualStateProcessor {
                                 .palw_court_params_at(point.daa_score)
                                 .ok_or_else(|| format!("IR class {class_id} is registered on a chain with no V2 ruleset"))?
                                 .map_err(|e| format!("IR class {class_id} is judged under a court with no shape: {e}"))?;
+                            let window = kaspa_consensus_core::palw_class_admission_v2::palw_court_window_for_history_v1(
+                                bundle.state.window_court(),
+                                self.palw_model_court_window_active_at(point.daa_score),
+                                self.palw_held_context_at(point.daa_score),
+                                &derived,
+                                admission.class.layout.max_context as u64,
+                                admission.class.layout.h_tile.max(1),
+                            )
+                            .map_err(|e| format!("IR class {class_id}: {e}"))?;
                             Some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
                                 dissection_arity: derived.dissection_arity(),
                                 prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
-                                window_court_daa: bundle.state.window_court(),
+                                window_court_daa: window,
                             })
                         }
                     };
@@ -11420,6 +11456,7 @@ impl VirtualStateProcessor {
                         prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
                         court,
                         demand: kaspa_consensus_core::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(&bundle.state, point.daa_score),
+                        model_court_window_active: self.palw_model_court_window_active_at(point.daa_score),
                     };
                     // The network's committed certified families and the chain's own, as the legacy
                     // arm reads them (consensus never reads the drilled registry).
@@ -12629,7 +12666,68 @@ impl VirtualStateProcessor {
             // at it. Written explicitly for the reason every line above gives: a default here would void,
             // in its anchor block, a claim no seed could have seated.
             sw8_draw,
+            model_court_window_active: self.palw_model_court_window_active_at(daa_score),
+            class_court_windows: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Derive each carried fused class's exact finite window before the block fold. Missing or
+    /// uncomputable values are intentionally omitted; the transition then refuses that registration
+    /// under the active fence instead of silently reverting to the network-wide window.
+    fn palw_class_court_windows_for_objects(
+        &self,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+        daa_score: u64,
+    ) -> std::collections::BTreeMap<kaspa_hashes::Hash64, u64> {
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        let mut windows = std::collections::BTreeMap::new();
+        if !self.palw_model_court_window_active_at(daa_score) || !self.palw_kary_court_active_at(daa_score) {
+            return windows;
+        }
+        let Some(bundle) = self.palw_v2_bundle.as_ref() else { return windows };
+        let Some(Ok(court)) = self.palw_court_params_at(daa_score) else { return windows };
+        for object in objects {
+            match object {
+                Obj::ClassRegistered { class_id, admission: Some(carriage), .. }
+                    if kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&carriage.profile) =>
+                {
+                    if let Ok(window) = kaspa_consensus_core::palw_class_admission_v2::palw_class_court_window_for_shape_v1(
+                        bundle.state.window_court(),
+                        true,
+                        self.palw_held_context_at(daa_score),
+                        &court,
+                        &carriage.profile,
+                    ) {
+                        windows.insert(*class_id, window);
+                    }
+                }
+                Obj::ClassRegisteredTirV1 { class_id, admission, .. } => {
+                    if let Ok(window) = kaspa_consensus_core::palw_class_admission_v2::palw_court_window_for_history_v1(
+                        bundle.state.window_court(),
+                        true,
+                        self.palw_held_context_at(daa_score),
+                        &court,
+                        admission.class.layout.max_context as u64,
+                        admission.class.layout.h_tile.max(1),
+                    ) {
+                        windows.insert(*class_id, window);
+                    }
+                }
+                _ => {}
+            }
+        }
+        windows
+    }
+
+    fn palw_transition_extras_for_objects(
+        &self,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+    ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+        let mut extras = self.palw_transition_extras_for(point);
+        extras.model_court_window_active = self.palw_model_court_window_active_at(point.daa_score);
+        extras.class_court_windows = self.palw_class_court_windows_for_objects(objects, point.daa_score);
+        extras
     }
 
     /// **ADR-0072 Decision 8's free-prompt half, resolved in exactly one place, at the BLOCK's own
@@ -13366,6 +13464,10 @@ impl VirtualStateProcessor {
     /// root claim its peers refused, or deal a different number of children from the same range.
     pub(super) fn palw_kary_court_active_at(&self, daa_score: u64) -> bool {
         self.palw_kary_court.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    pub(super) fn palw_model_court_window_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_court_window.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **ADR-0077 Decision 16's `PanelDa` at this block, resolved in exactly one place.** `false` on
