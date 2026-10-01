@@ -917,6 +917,16 @@ impl<'a> Env<'a> {
                 let spec = crate::rope::RopeSpec { rotary_dim: dim, offset: 0, style, freqs: crate::rope::RopeFreqs::plain(theta, dim) };
                 serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
             }
+            "$rope_config" => {
+                // The rope parameters the configuration names, before any computation: {rope_type,
+                // theta, params} (the keys are read, so they count as used). For a rule that depends on
+                // them (DeepSeek's `mscale_all_dim` on the attention scale).
+                let o = arg.as_object().ok_or_else(|| bad("`$rope_config` takes {theta?, layer_type?}"))?;
+                let theta = o.get("theta").map(|e| self.ev(e, d)).transpose()?.filter(|v| !v.is_null()).map(|v| num(&v).map(N::f).ok_or_else(|| bad("rope theta"))).transpose()?;
+                let layer_type = o.get("layer_type").map(|e| self.ev(e, d)).transpose()?.and_then(|v| v.as_str().map(str::to_string));
+                let rc = crate::rope::read_rope_config(&self.cur(), theta, layer_type.as_deref())?;
+                Ok(serde_json::json!({"rope_type": rc.rope_type, "theta": rc.theta, "params": rc.params}))
+            }
             "$partial_rotary" => {
                 // The effective partial-rotary factor: `rope_parameters.partial_rotary_factor`
                 // (transformers 5), else the first of the legacy keys present, else the default.
@@ -948,6 +958,9 @@ impl<'a> Env<'a> {
             "$layers" => {
                 let o = arg.as_object().ok_or_else(|| bad("`$layers` takes {count, each}"))?;
                 let n = as_usize(&self.ev(o.get("count").ok_or_else(|| bad("`$layers`: count"))?, d)?, op)?;
+                if n == 0 {
+                    return Err(bad(format!("{}: a decoder needs at least one layer", self.arch)));
+                }
                 if n > MAX_LAYERS {
                     return Err(LowerError::not_lowerable(format!("{} layers (the lowerer reads at most {MAX_LAYERS})", n)));
                 }
@@ -1006,6 +1019,17 @@ impl<'a> Env<'a> {
         let top_orig = get("top_orig")?.filter(|v| !v.is_null()).map(|v| as_usize(&v, op)).transpose()?;
         let q_scaled = get("q_scaled")?.map(|v| as_bool(&v, op)).transpose()?.unwrap_or(false);
         let offset = get("offset")?.map(|v| as_usize(&v, op)).transpose()?.unwrap_or(0);
+        // `"longrope": "short_only"`: LongRoPE as Phi-3.5-MoE runs it in transformers 5.17 (the short
+        // factors at every length); an ordinary `default` rope falls through to the usual reading.
+        let short_only = match get("longrope")? {
+            None | Some(Value::Null) => false,
+            Some(Value::String(s)) if s == "short_only" => true,
+            Some(other) => return Err(bad(format!("`{op}`: longrope mode {other}"))),
+        };
+        if short_only && op == "$rope" && let Some(mut spec) = crate::rope::longrope_short_only_spec(&self.cur(), rotary_dim, theta)? {
+            spec.offset = offset;
+            return serde_json::to_value(&spec).map_err(|e| bad(e.to_string()));
+        }
         let (mut spec, temp) =
             crate::rope::rope_spec_from_config(&self.cur(), rotary_dim, style, theta, layer_type.as_deref(), partial, max_pos, top_orig, q_scaled)?;
         spec.offset = offset;

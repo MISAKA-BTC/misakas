@@ -1,0 +1,6 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vlm-llama4",
+  "doc": "Llama-4 VLM (Llama4ForConditionalGeneration): the llama4_text decoder; the wrapper's tie_word_embeddings defaults to false.",
+  "extends": ["llama4-text", "mixin-vlm"]
+}

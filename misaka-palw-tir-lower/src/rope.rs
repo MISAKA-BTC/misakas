@@ -163,6 +163,64 @@ pub struct RopeConfig {
     pub params: Map<String, Value>,
 }
 
+/// **LongRoPE as transformers 5.17 runs Phi-3.5-MoE** (`ROPE_LONGROPE_V1`, short-factors-only mode):
+/// the SHORT factors at every length (its forward rebuilds the frequencies without the sequence
+/// length) and cos/sin times `short_mscale`; `long_mscale` must equal it (the published checkpoint
+/// does), and a factor list of the wrong length, a missing mscale or any other rope key is refused.
+/// `Ok(None)` when the rope type is `default` (the caller reads the ordinary rope); any other type
+/// is not modelled.
+pub fn longrope_short_only_spec(cfg: &Cfg, head_dim: usize, theta_default: Option<f64>) -> Result<Option<RopeSpec>> {
+    let arch = &cfg.arch;
+    let rc = read_rope_config(cfg, theta_default, None)?;
+    match rc.rope_type.as_str() {
+        "default" => return Ok(None),
+        "longrope" | "su" => {}
+        other => return Err(LowerError::not_lowerable(format!("{arch}: rope type `{other}` is not modelled"))),
+    }
+    let list = |k: &str| -> Result<Vec<f64>> {
+        rc.params
+            .get(k)
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<f64>>())
+            .ok_or_else(|| LowerError::bad(format!("{arch}: longrope without `{k}`")))
+    };
+    let num = |k: &str| rc.params.get(k).and_then(Value::as_f64);
+    let short = list("short_factor")?;
+    list("long_factor")?;
+    if short.len() != head_dim / 2 {
+        return Err(LowerError::bad(format!("{arch}: short_factor has {} entries for head dim {head_dim}", short.len())));
+    }
+    let (sm, lm) = match (num("short_mscale"), num("long_mscale")) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return Err(LowerError::not_lowerable(format!("{arch}: longrope without short_mscale and long_mscale"))),
+    };
+    if sm != lm {
+        return Err(LowerError::not_lowerable(format!(
+            "{arch}: short_mscale {sm} ≠ long_mscale {lm} (a cos/sin factor that changes at the original length)"
+        )));
+    }
+    if let Some(k) = rc.params.keys().find(|k| {
+        !["short_factor", "long_factor", "short_mscale", "long_mscale", "original_max_position_embeddings", "factor", "attention_factor"].contains(&k.as_str())
+    }) {
+        return Err(LowerError::not_lowerable(format!("{arch}: rope parameter `{k}` is not modelled")));
+    }
+    Ok(Some(RopeSpec {
+        rotary_dim: head_dim,
+        offset: 0,
+        style: RopeStyle::Half,
+        freqs: RopeFreqs {
+            rope_type: rc.rope_type.clone(),
+            theta: rc.theta,
+            dim: head_dim,
+            inv_freq: longrope_inv_freq(rc.theta, head_dim, &short),
+            attention_factor: sm,
+            dynamic: None,
+            longrope: None,
+            mrope: None,
+        },
+    }))
+}
+
 /// Read `rope_theta` + `rope_scaling` (transformers 4.x) or `rope_parameters` (5.x; flat, or keyed
 /// by layer type as Gemma-3 does). `theta_default` is the arch's default when no theta is given.
 pub fn read_rope_config(cfg: &Cfg, theta_default: Option<f64>, layer_type: Option<&str>) -> Result<RopeConfig> {

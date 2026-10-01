@@ -6,7 +6,7 @@
   "match": {"architectures": ["ExaoneForCausalLM"], "model_types": ["exaone"]},
   "remote_code": ["modeling_exaone.ExaoneForCausalLM"],
   "remote_code_required": true,
-  "config": {"defaults": {"vocab_size": 102400, "hidden_size": 2048, "num_layers": 32, "num_attention_heads": 32, "activation_function": "silu", "layer_norm_epsilon": 1e-05, "tie_word_embeddings": true}, "inert": ["embed_dropout"]},
+  "config": {"defaults": {"intermediate_size": {"$unset": true}, "vocab_size": 102400, "hidden_size": 2048, "num_layers": 32, "num_attention_heads": 32, "activation_function": "silu", "layer_norm_epsilon": 1e-05, "tie_word_embeddings": true}, "inert": ["embed_dropout"]},
   "vars": [
     {"name": "n", "value": {"$cfg": "num_layers"}},
     {"name": "inter", "value": {"$cfg": ["intermediate_size", {"$mul": [{"$var": "hidden"}, 4]}]}},
