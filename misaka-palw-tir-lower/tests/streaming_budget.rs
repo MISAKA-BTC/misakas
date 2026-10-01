@@ -9,7 +9,7 @@
 //!
 //! Calibration (the float reference over a few positions, one layer's weights resident at a time)
 //! runs before the budgeted window and is reported, not budgeted: making the float reference itself
-//! row-streamed is separate work (RFC-0002 Part II §II.5, known limits).
+//! row-streamed is separate work (RFC-0002 Part II §II.9 L1, known limits).
 //!
 //! One test only, because the allocator counts the whole process. Sizes: `TIR_BUDGET_LAYERS`
 //! (default 24 layers, ≈ 270 MB), `TIR_BUDGET_MIB` (default 32); a 2 GB-disk run is
