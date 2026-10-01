@@ -306,6 +306,7 @@ material frontier — the next epoch's before it opens).
 | `seed` | the epoch seed (§17.8.1) |
 | `previous_counts`, `outcome` | the regression check's counts, and the decision (§17.9) |
 | `escrow` | the parent's and the regression check's evaluation escrow, and what they spent (§17.11.2) |
+| `results_bound` | `u32`: the result rows the epoch reserved against `C.max_live_results` when it opened, `(n + regression_items + safety_items) × (k_max + 2)`; freed when its results retire (§17.2). A header field, not a table: the state's live-result count (`improvement_live_results`, re-derived on every load) is the sum of `results_bound` over the epochs not yet retired, and a block's epoch opens only if that sum plus the new bound fits [P12] |
 | `decided_daa`, `retire` | when the epoch ended, and the retirement sweep's progress (§17.5.4) |
 
 Its rows, keyed under `(line, epoch, …)`: `improvement_candidates` (in acceptance order, each with what
@@ -470,6 +471,8 @@ A policy is refused by name unless every check below holds. `C` is the fence's `
 | 18 | `seat_pool_permille ≤ C.max_eval_seat_permille` (§17.11.2) |
 | 19 | **`court_margin ≥ Λ`**, where `Λ` is the ruleset's fast honest claim path (below) [decision, 2026-09-30, corrected 2026-10-01]: a claim accepted in the epoch's last DAA before `t_eval` and left unchallenged could not otherwise reach `Final` before `t_score` |
 | 20 | **a judged policy** (a Judge or Pairwise stage): `w_eval > beacon_delay + Λ + 32` — a judge reads FINAL generations, so the epoch evaluates in two rounds (generations, then judged parts), each needing the fast honest path |
+
+The rows are checked **in ascending order and the first one a policy breaks names the refusal** [E36]: a policy that breaks rows 8 and 9 together (D9's item total and a suite's own cap) is refused by row 8. A refusal's name is not state, so this order is not consensus; it is stated so that two implementations give the same name.
 
 ```
 Λ = anchor_delay + A + max(C, 120)         A = min(window_receipt, 30)          C = the challenge window in force
@@ -771,6 +774,8 @@ below the fence and for every other class — byte for byte, at every height**.
 | The parent | A seat counts as ready for `C` only if it is **also ready for every ancestor of `C`** — a fresh row of its own on `parent_class` passing the same five registry clauses (active, above the floor, a fresh row, free collateral for the readiness multiple, and lane maturity) — recursively when the parent is itself a composite, to depth 8 (`PALW_COMPOSITE_READINESS_MAX_DEPTH_V1`); a chain of composites longer than that is one no seat is ready for **[decision R1]**. The clause is per seat, not per class: RFC-0004 §6.7 has a seat that holds the parent fetch only the adapter, so the seats that can replay a composite are the seats that hold both, and a class-level "the parent has its seats" would count adapter holders that cannot replay. The parent's row is judged at the DAA of the question: when it lapses, the composite's count falls with it |
 | Where it applies | The one readiness predicate (`palw_seat_class_not_ready_reason_net_v1`): the fold's ready-seat count and the `Candidate` jury (`model_registry_seat_is_ready`), the registry read (`readySeatsNow`, and each row's `not_ready_reason`, `parent not ready`; the panel view's hold reason `PARENT_NOT_READY`), and the panel room's ready count; the panel draw (`palw_bond_may_judge_class_v4`) asks the parent row's freshness likewise, so a seat without the parent is never seated on a composite's panel |
 | Lifecycle | Unchanged: `Candidate → Prefetching → Probation` read the count above; a composite is admitted exactly when `required_ready_seats` seats prove the adapter and are ready for the parent |
+
+**An empty adapter section is refused** [C4, decision 2026-10-01]. A composite whose adapter section holds no params (`p = 0`), or whose `p` is not the parent's own param count, is not a composite: the candidate's `PalwTirCompositeRefV1` check refuses it at the door (`palw_improve_composite_v1`: both sections are non-empty, and a parent of no params has no inventory to reuse), so no composite record is written and nothing here applies to it. The chain's check is the rule; an implementation that admits an empty section (the reference interpreter `ref2` did) is wrong and MUST refuse, since an adapter proof over an empty inventory opens no leaf and would make every seat "ready" for a class that adds nothing.
 
 **What the node does** (lane C, on top of this rule): a seat that holds the parent and the adapter section
 files the adapter proof for `C` from the section's own inventory and keeps its parent row fresh; the parent's
@@ -1482,6 +1487,11 @@ On `NoChange`, every candidate's bond is refunded.
 ```
 PalwLineageRollbackV1 { line_id, epoch, to_class, cause }
 cause = Owner | CanaryFailed { claim, item } | LaterRegression { epoch } | LicenceViolation { challenge }
+```
+
+`cause` is a Borsh enum, its variant index one byte in this order, with these field types: `Owner` 0 (no field); `CanaryFailed` 1 `{ claim: Hash64, item: Hash64 }` (`item` is an item id, §17.8.1); `LaterRegression` 2 `{ epoch: u64 }`; `LicenceViolation` 3 `{ challenge: Hash64 }`. The payload is `line_id: Hash64 ‖ epoch: u64 ‖ to_class: Hash64 ‖ cause` [P14].
+
+```
 message = H("misaka-palw/improve/rollback/v1", network_domain ‖ borsh(payload))
 ```
 
