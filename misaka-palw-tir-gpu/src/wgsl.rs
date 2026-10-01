@@ -180,6 +180,112 @@ fn int_ln64(x: i64) -> i64 {
 }
 "#;
 
+/// The exact 128-bit library: a value is `W { lo, hi }`, two's complement over two `u64` words.
+/// Addition, subtraction and the low 128 bits of a product are ring operations mod 2^128 — exact
+/// wherever the plan proved the true result inside `i128` (a node with `checked_arith` is never run
+/// here); products of two words are formed from four 32×32 partial products; shifts branch on
+/// the amount (never a shift by 64 or more); division is restoring long division over 128 bits.
+pub const INTLIB128: &str = r#"
+struct W { lo: u64, hi: u64 }
+
+fn wi(x: i64) -> W { return W(bitcast<u64>(x), bitcast<u64>(x >> 63u)); }
+fn wu(x: u64) -> W { return W(x, 0lu); }
+fn w_add(a: W, b: W) -> W { let lo = a.lo + b.lo; return W(lo, a.hi + b.hi + select(0lu, 1lu, lo < a.lo)); }
+fn w_sub(a: W, b: W) -> W { return W(a.lo - b.lo, a.hi - b.hi - select(0lu, 1lu, a.lo < b.lo)); }
+fn w_neg(a: W) -> W { return w_sub(W(0lu, 0lu), a); }
+fn w_isneg(a: W) -> bool { return (a.hi >> 63u) == 1lu; }
+fn w_iszero(a: W) -> bool { return a.lo == 0lu && a.hi == 0lu; }
+fn w_eq(a: W, b: W) -> bool { return a.lo == b.lo && a.hi == b.hi; }
+// Signed a < b.
+fn w_lt(a: W, b: W) -> bool {
+    let ah = bitcast<i64>(a.hi); let bh = bitcast<i64>(b.hi);
+    return ah < bh || (ah == bh && a.lo < b.lo);
+}
+// Unsigned a < b.
+fn w_ult(a: W, b: W) -> bool { return a.hi < b.hi || (a.hi == b.hi && a.lo < b.lo); }
+fn w_min(a: W, b: W) -> W { if (w_lt(b, a)) { return b; } return a; }
+fn w_max(a: W, b: W) -> W { if (w_lt(a, b)) { return b; } return a; }
+// The full 128-bit product of two words.
+fn w_mul64(a: u64, b: u64) -> W {
+    let a0 = a & 0xFFFFFFFFlu; let a1 = a >> 32u; let b0 = b & 0xFFFFFFFFlu; let b1 = b >> 32u;
+    let p00 = a0 * b0; let p01 = a0 * b1; let p10 = a1 * b0; let p11 = a1 * b1;
+    let mid = (p00 >> 32u) + (p01 & 0xFFFFFFFFlu) + (p10 & 0xFFFFFFFFlu);
+    return W((p00 & 0xFFFFFFFFlu) | (mid << 32u), p11 + (p01 >> 32u) + (p10 >> 32u) + (mid >> 32u));
+}
+// The low 128 bits of a·b: the signed product whenever it fits i128.
+fn w_mul(a: W, b: W) -> W { let p = w_mul64(a.lo, b.lo); return W(p.lo, p.hi + a.hi * b.lo + a.lo * b.hi); }
+fn w_shl(a: W, s: u32) -> W {
+    if (s == 0u) { return a; }
+    if (s < 64u) { return W(a.lo << s, (a.hi << s) | (a.lo >> (64u - s))); }
+    return W(0lu, a.lo << (s - 64u));
+}
+fn w_shr_u(a: W, s: u32) -> W {
+    if (s == 0u) { return a; }
+    if (s < 64u) { return W((a.lo >> s) | (a.hi << (64u - s)), a.hi >> s); }
+    return W(a.hi >> (s - 64u), 0lu);
+}
+fn w_shr_s(a: W, s: u32) -> W {
+    if (s == 0u) { return a; }
+    let hs = bitcast<i64>(a.hi);
+    if (s < 64u) { return W((a.lo >> s) | (a.hi << (64u - s)), bitcast<u64>(hs >> s)); }
+    return W(bitcast<u64>(hs >> (s - 64u)), bitcast<u64>(hs >> 63u));
+}
+fn w_bit(a: W, i: u32) -> u64 { if (i < 64u) { return (a.lo >> i) & 1lu; } return (a.hi >> (i - 64u)) & 1lu; }
+// |x| as an unsigned 128-bit value (|i128::MIN| = 2^127).
+fn w_uabs(x: W) -> W { if (w_isneg(x)) { return w_neg(x); } return x; }
+fn w_clz(a: W) -> u32 { if (a.hi != 0lu) { return u32(countLeadingZeros(a.hi)); } return 64u + u32(countLeadingZeros(a.lo)); }
+fn w_log2(x: W) -> i64 { if (w_isneg(x) || w_iszero(x)) { return -1li; } return 127li - i64(w_clz(x)); }
+// round_rule(x / 2^s), 0 ≤ s ≤ 126.
+fn w_shr_rule(x: W, s: u32, rule: u32) -> W {
+    if (s == 0u) { return x; }
+    if (rule == 0u) { return w_shr_s(x, s); }
+    if (rule == 1u) { return w_add(w_shr_s(x, s), wu(w_bit(x, s - 1u))); }
+    let m = w_uabs(x);
+    let q = w_add(w_shr_u(m, s), wu(w_bit(m, s - 1u)));
+    if (w_isneg(x)) { return w_neg(q); }
+    return q;
+}
+// ⌊n / d⌋, unsigned, d ≥ 1.
+fn w_udiv(n: W, d: W) -> W {
+    if (n.hi == 0lu && d.hi == 0lu) { return wu(udiv64(n.lo, d.lo)); }
+    if (w_ult(n, d)) { return W(0lu, 0lu); }
+    if ((d.hi >> 63u) != 0lu) { return wu(1lu); }
+    var q = W(0lu, 0lu);
+    var r = W(0lu, 0lu);
+    var i = 128u - w_clz(n);
+    loop {
+        if (i == 0u) { break; }
+        i = i - 1u;
+        r = w_shl(r, 1u);
+        r.lo = r.lo | w_bit(n, i);
+        if (!w_ult(r, d)) {
+            r = w_sub(r, d);
+            if (i < 64u) { q.lo = q.lo | (1lu << i); } else { q.hi = q.hi | (1lu << (i - 64u)); }
+        }
+    }
+    return q;
+}
+// round_rule(x / d) for d ≥ 1: arith::div_round on 128 bits.
+fn w_div_rule(x: W, d: W, rule: u32) -> W {
+    if (d.hi == 0lu && (d.lo & (d.lo - 1lu)) == 0lu) { return w_shr_rule(x, u32(countTrailingZeros(d.lo)), rule); }
+    if (d.lo == 0lu && (d.hi & (d.hi - 1lu)) == 0lu) { return w_shr_rule(x, 64u + u32(countTrailingZeros(d.hi)), rule); }
+    if (rule == 2u) {
+        let m = w_uabs(x);
+        var q = w_udiv(m, d);
+        let r = w_sub(m, w_mul(q, d));
+        if (!w_ult(r, w_sub(d, r))) { q = w_add(q, wu(1lu)); }
+        if (w_isneg(x)) { return w_neg(q); }
+        return q;
+    }
+    var q: W;
+    if (!w_isneg(x)) { q = w_udiv(x, d); } else { q = w_sub(w_neg(w_udiv(w_neg(w_add(x, wu(1lu))), d)), wu(1lu)); }
+    if (rule == 0u) { return q; }
+    let r = w_sub(x, w_mul(q, d));
+    if (!w_ult(r, w_sub(d, r))) { return w_add(q, wu(1lu)); }
+    return q;
+}
+"#;
+
 /// The bindings and helpers every kernel starts with: `P`, `O` (of `out`), `S`, the operands, a
 /// 64-bit constant reader and `fail`.
 pub fn header(out: Form, ins: &[Form]) -> String {
@@ -204,6 +310,9 @@ fn fail(e: u32, kind: u32) { atomicMax(&S[P[1]], ~((e << 2u) | kind)); }
 "#,
     );
     s.push_str(INTLIB);
+    s.push_str(INTLIB128);
+    s.push_str("fn p128(i: u32) -> W { return W((u64(P[i + 1u]) << 32u) | u64(P[i]), (u64(P[i + 3u]) << 32u) | u64(P[i + 2u])); }\n");
+    s.push_str(&storer128(out));
     s
 }
 
@@ -228,8 +337,14 @@ pub fn loader(k: usize, f: Form) -> String {
         Form::P16 => format!(
             "fn ld32_{k}(i: u32) -> i32 {{ return extractBits(bitcast<i32>(B{k}[i >> 1u]), (i & 1u) * 16u, 16u); }}\nfn ld{k}(i: u32) -> i64 {{ return i64(ld32_{k}(i)); }}\n"
         ),
+        // An i128 operand is read whole by `ld128`; `ld`/`ld32` read its low word, which only a
+        // kernel whose plan proved the value inside i64 (resp. i32) may use.
+        Form::I128 => format!(
+            "fn ld128_{k}(i: u32) -> W {{ return W(B{k}[2u * i], B{k}[2u * i + 1u]); }}\nfn ld{k}(i: u32) -> i64 {{ return bitcast<i64>(B{k}[2u * i]); }}\nfn ld32_{k}(i: u32) -> i32 {{ return bitcast<i32>(u32(B{k}[2u * i] & 0xFFFFFFFFlu)); }}\n"
+        ),
     };
-    decl + &body
+    let wide = if f == Form::I128 { String::new() } else { format!("fn ld128_{k}(i: u32) -> W {{ return wi(ld{k}(i)); }}\n") };
+    decl + &body + &wide
 }
 
 /// `st(i, v)`: element `i` of `O` holds `v` (which the plan proved, or the kernel checked, to be a
@@ -238,6 +353,18 @@ pub fn storer(f: Form) -> String {
     match f {
         Form::S32 | Form::U32 => "fn st(i: u32, v: i64) { O[i] = u32(bitcast<u64>(v) & 0xFFFFFFFFlu); }\n".to_string(),
         Form::I64 => "fn st(i: u32, v: i64) { O[i] = v; }\n".to_string(),
+        Form::I128 => "fn st(i: u32, v: i64) { O[2u * i] = bitcast<u64>(v); O[2u * i + 1u] = bitcast<u64>(v >> 63u); }\n".to_string(),
+        Form::P8 | Form::P16 => unreachable!("a kernel never writes a packed form"),
+    }
+}
+
+/// `st128(i, v)`: element `i` of `O` holds the 128-bit `v` (proved, or checked, to be a value of the
+/// output's dtype; a narrower form keeps its low bits).
+pub fn storer128(f: Form) -> String {
+    match f {
+        Form::S32 | Form::U32 => "fn st128(i: u32, v: W) { O[i] = u32(v.lo & 0xFFFFFFFFlu); }\n".to_string(),
+        Form::I64 => "fn st128(i: u32, v: W) { O[i] = bitcast<i64>(v.lo); }\n".to_string(),
+        Form::I128 => "fn st128(i: u32, v: W) { O[2u * i] = v.lo; O[2u * i + 1u] = v.hi; }\n".to_string(),
         Form::P8 | Form::P16 => unreachable!("a kernel never writes a packed form"),
     }
 }
@@ -314,10 +441,14 @@ pub struct EwKey {
     pub op: EwOp,
     pub ins: Vec<Form>,
     pub out: Form,
-    /// Check the result against the output dtype's bounds (two `i64` constants after the op's own).
+    /// Check the result against the output dtype's bounds (two constants after the op's own:
+    /// `i64` each, or `i128` — four words — in wide mode).
     pub check_out: bool,
     /// `Gather`: check every index against its axis.
     pub check_operand: bool,
+    /// Compute in 128 bits ([`INTLIB128`]): the plan's working type is `i128`, or a value moved is
+    /// held as `i128`.
+    pub wide: bool,
 }
 
 /// The parameter word where an elementwise kernel's 64-bit constants start.
@@ -336,53 +467,79 @@ pub fn ew_source(k: &EwKey) -> String {
          \x20   if (e >= P[0]) { return; }\n",
     );
     s.push_str(&index_prelude(n));
-    let load = |j: usize| format!("    let x{j} = ld{j}(off{j});\n");
+    let w = k.wide;
+    let load = |j: usize| if w { format!("    let x{j} = ld128_{j}(off{j});\n") } else { format!("    let x{j} = ld{j}(off{j});\n") };
     match k.op {
         EwOp::Gather => {
-            // P[cc]: the gathered axis's extent; P[cc + 1]: its stride in the data.
-            s.push_str(&load(1));
+            // P[cc]: the gathered axis's extent; P[cc + 1]: its stride in the data. Indices are never
+            // i128 (type rule): read as i64.
+            s.push_str("    let x1 = ld1(off1);\n");
             if k.check_operand {
                 s.push_str(&format!("    if (x1 < 0li || x1 >= i64(P[{cc}])) {{ fail(e, 3u); return; }}\n"));
             }
-            s.push_str(&format!("    var v = ld0(off0 + u32(x1) * P[{}]);\n", cc + 1));
+            let ld = if w { "ld128_0" } else { "ld0" };
+            s.push_str(&format!("    var v = {ld}(off0 + u32(x1) * P[{}]);\n", cc + 1));
         }
         EwOp::Iota => {
             // P[cc]: the axis, right-aligned to rank 4.
-            s.push_str(&format!(
-                "    var ix = array<u32, 4>(i0, i1, i2, i3);\n    var v = p64({c}u) + p64({}u) * i64(ix[P[{cc}]]);\n",
-                c + 2
-            ));
+            s.push_str("    var ix = array<u32, 4>(i0, i1, i2, i3);\n");
+            if w {
+                s.push_str(&format!("    var v = w_add(wi(p64({c}u)), w_mul(wi(p64({}u)), wu(u64(ix[P[{cc}]]))));\n", c + 2));
+            } else {
+                s.push_str(&format!("    var v = p64({c}u) + p64({}u) * i64(ix[P[{cc}]]);\n", c + 2));
+            }
         }
         op => {
             for j in 0..n {
                 s.push_str(&load(j));
             }
-            let body = match op {
-                EwOp::Copy => "    var v = x0;\n".to_string(),
-                EwOp::Add => "    var v = x0 + x1;\n".to_string(),
-                EwOp::Sub => "    var v = x0 - x1;\n".to_string(),
-                EwOp::Mul => "    var v = x0 * x1;\n".to_string(),
-                EwOp::Div(rule) => format!("    if (x1 < 1li) {{ fail(e, 2u); return; }}\n    var v = div_rule64(x0, x1, {rule}u);\n"),
-                EwOp::Compare(cmp) => {
+            let body = match (op, w) {
+                (EwOp::Copy, _) => "    var v = x0;\n".to_string(),
+                (EwOp::Add, false) => "    var v = x0 + x1;\n".to_string(),
+                (EwOp::Sub, false) => "    var v = x0 - x1;\n".to_string(),
+                (EwOp::Mul, false) => "    var v = x0 * x1;\n".to_string(),
+                (EwOp::Add, true) => "    var v = w_add(x0, x1);\n".to_string(),
+                (EwOp::Sub, true) => "    var v = w_sub(x0, x1);\n".to_string(),
+                (EwOp::Mul, true) => "    var v = w_mul(x0, x1);\n".to_string(),
+                (EwOp::Div(rule), false) => {
+                    format!("    if (x1 < 1li) {{ fail(e, 2u); return; }}\n    var v = div_rule64(x0, x1, {rule}u);\n")
+                }
+                (EwOp::Div(rule), true) => {
+                    format!("    if (w_lt(x1, wu(1lu))) {{ fail(e, 2u); return; }}\n    var v = w_div_rule(x0, x1, {rule}u);\n")
+                }
+                (EwOp::Compare(cmp), false) => {
                     let rel = ["==", "!=", "<", "<=", ">", ">="][cmp as usize];
                     format!("    var v = select(0li, 1li, x0 {rel} x1);\n")
                 }
-                EwOp::Select => "    var v = select(x2, x1, x0 != 0li);\n".to_string(),
-                EwOp::Clamp => format!("    var v = min(max(x0, p64({c}u)), p64({}u));\n", c + 2),
-                EwOp::Log2Floor => "    var v = log2_floor64(x0);\n".to_string(),
-                EwOp::IntExp => "    var v = int_exp64(x0);\n".to_string(),
-                EwOp::IntRsqrt => "    var v = int_rsqrt64(x0);\n".to_string(),
-                EwOp::IntLn => "    var v = int_ln64(x0);\n".to_string(),
-                EwOp::Iota | EwOp::Gather => unreachable!(),
+                (EwOp::Compare(cmp), true) => {
+                    let cond = ["w_eq(x0, x1)", "!w_eq(x0, x1)", "w_lt(x0, x1)", "!w_lt(x1, x0)", "w_lt(x1, x0)", "!w_lt(x0, x1)"]
+                        [cmp as usize];
+                    format!("    var v = wu(select(0lu, 1lu, {cond}));\n")
+                }
+                (EwOp::Select, false) => "    var v = select(x2, x1, x0 != 0li);\n".to_string(),
+                (EwOp::Select, true) => "    var v = x2;\n    if (!w_iszero(x0)) { v = x1; }\n".to_string(),
+                (EwOp::Clamp, false) => format!("    var v = min(max(x0, p64({c}u)), p64({}u));\n", c + 2),
+                (EwOp::Clamp, true) => format!("    var v = w_min(w_max(x0, wi(p64({c}u))), wi(p64({}u)));\n", c + 2),
+                (EwOp::Log2Floor, false) => "    var v = log2_floor64(x0);\n".to_string(),
+                (EwOp::Log2Floor, true) => "    var v = wi(w_log2(x0));\n".to_string(),
+                (EwOp::IntExp, false) => "    var v = int_exp64(x0);\n".to_string(),
+                (EwOp::IntRsqrt, false) => "    var v = int_rsqrt64(x0);\n".to_string(),
+                (EwOp::IntLn, false) => "    var v = int_ln64(x0);\n".to_string(),
+                (EwOp::IntExp | EwOp::IntRsqrt | EwOp::IntLn, true) => unreachable!("a transcendental's operand is never i128"),
+                (EwOp::Iota | EwOp::Gather, _) => unreachable!(),
             };
             s.push_str(&body);
         }
     }
     if k.check_out {
         let b = c + 2 * k.op.consts() + if k.op == EwOp::Gather || k.op == EwOp::Iota { 2 } else { 0 };
-        s.push_str(&format!("    if (v < p64({b}u) || v > p64({}u)) {{ fail(e, 1u); return; }}\n", b + 2));
+        if w {
+            s.push_str(&format!("    if (w_lt(v, p128({b}u)) || w_lt(p128({}u), v)) {{ fail(e, 1u); return; }}\n", b + 4));
+        } else {
+            s.push_str(&format!("    if (v < p64({b}u) || v > p64({}u)) {{ fail(e, 1u); return; }}\n", b + 2));
+        }
     }
-    s.push_str("    st(off_o, v);\n}\n");
+    s.push_str(if w { "    st128(off_o, v);\n}\n" } else { "    st(off_o, v);\n}\n" });
     s
 }
 
@@ -405,12 +562,17 @@ pub struct ReduceKey {
     pub out: Form,
     /// One workgroup per output element (long axes) instead of one invocation.
     pub cooperative: bool,
+    /// 128-bit values and sums (`Acc::Fast128`/`Pn128`, a maximum in `i128`); never cooperative.
+    pub wide: bool,
 }
 
 /// Parameter block: `P[0]` outputs, `P[1]` status slot, `P[2..11]` output geometry, `P[11..16]`
 /// the operand's `(base, strides)` at the output's multi-index, `P[16]` the axis extent, `P[17]`
 /// its stride, `P[18..22]` the dtype bounds (Pn).
 pub fn reduce_source(k: &ReduceKey) -> String {
+    if k.wide {
+        return reduce_wide_source(k);
+    }
     let mut s = header(k.out, &[k.x]);
     let combine_sum = |acc: &str, x: &str| match k.mode {
         SumMode::Fast => format!("{acc} = {acc} + {x};"),
@@ -481,6 +643,85 @@ pub fn reduce_source(k: &ReduceKey) -> String {
                 combine_sum("acc", "x")
             ));
         }
+    }
+    s
+}
+
+/// A reduction in 128 bits, one invocation per output element. `PosNeg` checks every partial sum
+/// as it grows — the positive part against the dtype's maximum, the negative part against its
+/// minimum (`P[18..22]` / `P[22..26]`, four words each) — which is the CPU executor's checked
+/// accumulation and also catches a sum past `i128` itself.
+fn reduce_wide_source(k: &ReduceKey) -> String {
+    let mut s = header(k.out, &[k.x]);
+    s.push_str(
+        "\n@compute @workgroup_size(256)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {\n\
+         \x20   let e = gid.x + gid.y * nwg.x * 256u;\n\
+         \x20   if (e >= P[0]) { return; }\n",
+    );
+    s.push_str(&index_prelude(1));
+    s.push_str("    let n = P[16]; let st_ax = P[17];\n");
+    if k.max {
+        s.push_str("    var acc = ld128_0(off0);\n    for (var t = 1u; t < n; t = t + 1u) { acc = w_max(acc, ld128_0(off0 + t * st_ax)); }\n    st128(off_o, acc);\n}\n");
+        return s;
+    }
+    match k.mode {
+        SumMode::Fast => s.push_str(
+            "    var acc = W(0lu, 0lu);\n    for (var t = 0u; t < n; t = t + 1u) { acc = w_add(acc, ld128_0(off0 + t * st_ax)); }\n    st128(off_o, acc);\n}\n",
+        ),
+        SumMode::PosNeg => s.push_str(
+            "    let hi = p128(18u); let lo = p128(22u);\n\
+             \x20   var ps = W(0lu, 0lu); var ng = W(0lu, 0lu);\n\
+             \x20   for (var t = 0u; t < n; t = t + 1u) {\n\
+             \x20       let x = ld128_0(off0 + t * st_ax);\n\
+             \x20       if (!w_isneg(x) && !w_iszero(x)) {\n\
+             \x20           if (w_lt(w_sub(hi, ps), x)) { fail(e, 1u); return; }\n\
+             \x20           ps = w_add(ps, x);\n\
+             \x20       } else {\n\
+             \x20           if (w_lt(x, w_sub(lo, ng))) { fail(e, 1u); return; }\n\
+             \x20           ng = w_add(ng, x);\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   st128(off_o, w_add(ps, ng));\n}\n",
+        ),
+    }
+    s
+}
+
+/// `MatMul` in 128 bits (`Acc::Fast128`/`Pn128`), one invocation per output element: each term is
+/// the exact 128-bit product of two `i64` operands; `PosNeg` checks each partial as
+/// [`reduce_wide_source`] does (bounds at `P[19..23]` hi and `P[24..28]` lo, four words each).
+pub fn matmul_wide_source(a: Form, b: Form, out: Form, mode: SumMode) -> String {
+    let mut s = header(out, &[a, b]);
+    s.push_str(
+        "\n@compute @workgroup_size(256)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {\n\
+         \x20   let e = gid.x + gid.y * nwg.x * 256u;\n\
+         \x20   if (e >= P[0]) { return; }\n\
+         \x20   let m = P[2]; let n = P[3]; let kk = P[4];\n\
+         \x20   let c = e % n; let rest = e / n; let r = rest % m; let bi = rest / m;\n\
+         \x20   let b1 = bi % P[10]; let b0 = bi / P[10];\n\
+         \x20   let ao = P[17] + b0 * P[11] + b1 * P[12] + r * P[5];\n\
+         \x20   let bo = P[18] + b0 * P[13] + b1 * P[14] + c * P[8];\n\
+         \x20   let a_k = P[6]; let b_k = P[7];\n",
+    );
+    match mode {
+        SumMode::Fast => s.push_str(
+            "    var acc = W(0lu, 0lu);\n    for (var t = 0u; t < kk; t = t + 1u) { acc = w_add(acc, w_mul(wi(ld0(ao + t * a_k)), wi(ld1(bo + t * b_k)))); }\n    st128(P[23] + e, acc);\n}\n",
+        ),
+        SumMode::PosNeg => s.push_str(
+            "    let hi = p128(24u); let lo = p128(28u);\n\
+             \x20   var ps = W(0lu, 0lu); var ng = W(0lu, 0lu);\n\
+             \x20   for (var t = 0u; t < kk; t = t + 1u) {\n\
+             \x20       let x = w_mul(wi(ld0(ao + t * a_k)), wi(ld1(bo + t * b_k)));\n\
+             \x20       if (!w_isneg(x) && !w_iszero(x)) {\n\
+             \x20           if (w_lt(w_sub(hi, ps), x)) { fail(e, 1u); return; }\n\
+             \x20           ps = w_add(ps, x);\n\
+             \x20       } else {\n\
+             \x20           if (w_lt(x, w_sub(lo, ng))) { fail(e, 1u); return; }\n\
+             \x20           ng = w_add(ng, x);\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   st128(P[23] + e, w_add(ps, ng));\n}\n",
+        ),
     }
     s
 }
@@ -813,23 +1054,25 @@ pub fn gemm_source(k: &GemmKey) -> String {
 
 /// `TopK`, pass 1: per element of a contiguous `[outer, n, inner]` operand, `1` if it is among the
 /// row's `k` largest by (value descending, index ascending) — the definition, counted.
-pub fn topk_rank_source(x: Form) -> String {
+pub fn topk_rank_source(x: Form, wide: bool) -> String {
     let mut s = header(Form::U32, &[x]);
-    s.push_str(
-        "\n@compute @workgroup_size(256)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {\n\
+    let (ld, beats) =
+        if wide { ("ld128_0", "w_lt(xt, xu) || (w_eq(xu, xt) && u < t)") } else { ("ld0", "xu > xt || (xu == xt && u < t)") };
+    s.push_str(&format!(
+        "\n@compute @workgroup_size(256)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {{\n\
          \x20   let e = gid.x + gid.y * nwg.x * 256u;\n\
-         \x20   if (e >= P[0]) { return; }\n\
+         \x20   if (e >= P[0]) {{ return; }}\n\
          \x20   let n = P[2]; let inner = P[3]; let kk = P[4]; let base = P[5];\n\
          \x20   let i = e % inner; let rest = e / inner; let t = rest % n; let o = rest / n;\n\
          \x20   let rb = base + o * n * inner + i;\n\
-         \x20   let xt = ld0(rb + t * inner);\n\
+         \x20   let xt = {ld}(rb + t * inner);\n\
          \x20   var ahead = 0u;\n\
-         \x20   for (var u = 0u; u < n; u = u + 1u) {\n\
-         \x20       let xu = ld0(rb + u * inner);\n\
-         \x20       if (xu > xt || (xu == xt && u < t)) { ahead = ahead + 1u; }\n\
-         \x20   }\n\
-         \x20   O[e] = select(0u, 1u, ahead < kk);\n}\n",
-    );
+         \x20   for (var u = 0u; u < n; u = u + 1u) {{\n\
+         \x20       let xu = {ld}(rb + u * inner);\n\
+         \x20       if ({beats}) {{ ahead = ahead + 1u; }}\n\
+         \x20   }}\n\
+         \x20   O[e] = select(0u, 1u, ahead < kk);\n}}\n"
+    ));
     s
 }
 

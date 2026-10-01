@@ -97,6 +97,12 @@ impl Params {
         self.set(i, u as u32);
         self.set(i + 1, (u >> 32) as u32);
     }
+    fn set128(&mut self, i: usize, v: i128) {
+        let u = v as u128;
+        for w in 0..4 {
+            self.set(i + w, (u >> (32 * w)) as u32);
+        }
+    }
 }
 
 /// Elements of a value as a `u32`, or [`Unsupported::PastU32`].
@@ -261,8 +267,31 @@ impl<'d> Recorder<'d> {
         check_operand: bool,
         slot: u32,
     ) -> Result<(), Unsupported> {
+        // 128-bit when an operand or the output is held as i128, or the caller asks (`ew_wide`).
+        let wide = out.1 == Form::I128 || ins.iter().any(|(t, _)| t.form == Form::I128);
+        self.ew_wide(op, geometry, out, ins, consts, extra, check, check_operand, slot, wide)
+    }
+
+    /// [`Self::ew`] with the width chosen by the caller: `wide` computes in 128 bits (the plan's
+    /// working type is `i128`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn ew_wide(
+        &mut self,
+        op: EwOp,
+        geometry: &[usize],
+        out: (&wgpu::Buffer, Form, &Layout),
+        ins: &[(&DevTensor, Layout)],
+        consts: &[i64],
+        extra: &[u32],
+        check: Option<DType>,
+        check_operand: bool,
+        slot: u32,
+        wide: bool,
+    ) -> Result<(), Unsupported> {
+        let wide = wide || out.1 == Form::I128 || ins.iter().any(|(t, _)| t.form == Form::I128);
         let n = u32_of(numel(geometry))?;
-        let key = EwKey { op, ins: ins.iter().map(|(t, _)| t.form).collect(), out: out.1, check_out: check.is_some(), check_operand };
+        let key =
+            EwKey { op, ins: ins.iter().map(|(t, _)| t.form).collect(), out: out.1, check_out: check.is_some(), check_operand, wide };
         let mut p = Params::default();
         p.set(0, n);
         p.set(1, slot);
@@ -289,12 +318,17 @@ impl<'d> Recorder<'d> {
             at += 2;
         }
         if let Some(d) = check {
-            let (lo, hi) = bounds64(d);
-            p.set64(at, lo);
-            p.set64(at + 2, hi);
+            if wide {
+                p.set128(at, d.min_value());
+                p.set128(at + 4, d.max_value());
+            } else {
+                let (lo, hi) = bounds64(d);
+                p.set64(at, lo);
+                p.set64(at + 2, hi);
+            }
         }
         let src = wgsl::ew_source(&key);
-        self.log.push(format!("ew:{op:?}"));
+        self.log.push(format!("ew:{op:?}{}", if wide { ":w128" } else { "" }));
         let bufs: Vec<&wgpu::Buffer> = ins.iter().map(|(t, _)| &*t.buf).collect();
         let groups = self.groups(n, 256);
         self.dispatch(&src, &p, out.0, &bufs, groups);
@@ -323,9 +357,6 @@ impl<'d> Recorder<'d> {
     /// say why the device does not run it. Structural primitives are materialised here (the
     /// executor treats them as views instead).
     pub fn node(&mut self, node: &NodePlan, ins: &[&DevTensor], out_shape: &[usize], slot: u32) -> Result<DevTensor, Unsupported> {
-        if ins.iter().any(|t| t.dtype == DType::I128 && t.form != Form::I64) {
-            return Err(Unsupported::I128Operand);
-        }
         let out_dtype = node.out.dtype;
         let bc = |t: &DevTensor| t.layout.broadcast_to(out_shape);
         match &node.prim {
@@ -358,22 +389,23 @@ impl<'d> Recorder<'d> {
                 Ok(o)
             }
             Prim::Iota { axis, start, step } => {
+                // `start + step·i` is exact in i64 when its interval is inside i64, in i128 otherwise
+                // (the interval always fits i128: |step·i| ≤ 2^63·2^24).
                 let exact = node.facts.exact.ok_or(Unsupported::IotaPastI64)?;
-                if !(Interval::of(DType::I64).contains(exact.lo) && Interval::of(DType::I64).contains(exact.hi)) {
-                    return Err(Unsupported::IotaPastI64);
-                }
+                let wide = !(Interval::of(DType::I64).contains(exact.lo) && Interval::of(DType::I64).contains(exact.hi));
                 let o = self.output(node.store, out_dtype, out_shape)?;
                 let ax = (MAX_RANK - out_shape.len() + *axis as usize) as u32;
                 let check = node.check_out.then_some(out_dtype);
                 let ol = o.layout;
-                self.ew(EwOp::Iota, out_shape, (&o.buf, o.form, &ol), &[], &[*start, *step], &[ax, 0], check, false, slot)?;
+                self.ew_wide(EwOp::Iota, out_shape, (&o.buf, o.form, &ol), &[], &[*start, *step], &[ax, 0], check, false, slot, wide)?;
                 Ok(o)
             }
             Prim::Gather { axis, batch_dims } => {
                 self.gather(node, ins[0], ins[1], *axis as usize, *batch_dims as usize, out_shape, slot)
             }
             Prim::Add | Prim::Sub | Prim::Mul | Prim::Div { .. } | Prim::Compare { .. } => {
-                if node.work != Work::I64 || node.checked_arith {
+                // A result that may not even fit i128 is checked arithmetic on the CPU.
+                if node.checked_arith {
                     return Err(Unsupported::I128Work);
                 }
                 let op = match &node.prim {
@@ -387,34 +419,21 @@ impl<'d> Recorder<'d> {
                 let o = self.output(node.store, out_dtype, out_shape)?;
                 let check = node.check_out.then_some(out_dtype);
                 let ol = o.layout;
-                self.ew(
-                    op,
-                    out_shape,
-                    (&o.buf, o.form, &ol),
-                    &[(ins[0], bc(ins[0])), (ins[1], bc(ins[1]))],
-                    &[],
-                    &[],
-                    check,
-                    false,
-                    slot,
-                )?;
+                let ops = [(ins[0], bc(ins[0])), (ins[1], bc(ins[1]))];
+                let wide = node.work == Work::I128;
+                self.ew_wide(op, out_shape, (&o.buf, o.form, &ol), &ops, &[], &[], check, false, slot, wide)?;
                 Ok(o)
             }
             Prim::Select => {
-                if node.work != Work::I64 {
-                    return Err(Unsupported::I128Work);
-                }
                 let o = self.output(node.store, out_dtype, out_shape)?;
                 let check = node.check_out.then_some(out_dtype);
                 let ol = o.layout;
                 let ops = [(ins[0], bc(ins[0])), (ins[1], bc(ins[1])), (ins[2], bc(ins[2]))];
-                self.ew(EwOp::Select, out_shape, (&o.buf, o.form, &ol), &ops, &[], &[], check, false, slot)?;
+                let wide = node.work == Work::I128;
+                self.ew_wide(EwOp::Select, out_shape, (&o.buf, o.form, &ol), &ops, &[], &[], check, false, slot, wide)?;
                 Ok(o)
             }
             Prim::Cast | Prim::Clamp { .. } | Prim::Log2Floor | Prim::IntExp | Prim::IntRsqrt | Prim::IntLn => {
-                if node.work != Work::I64 {
-                    return Err(Unsupported::I128Work);
-                }
                 let (op, consts, check) = match &node.prim {
                     Prim::Cast => (EwOp::Copy, vec![], node.check_out),
                     // The CPU clamps with the bounds saturated into its working type.
@@ -425,19 +444,12 @@ impl<'d> Recorder<'d> {
                     Prim::IntLn => (EwOp::IntLn, vec![], node.check_out),
                     _ => unreachable!(),
                 };
+                // The transcendentals' operands are never i128 (type rule): their work is i64.
+                let wide = node.work == Work::I128;
                 let o = self.output(node.store, out_dtype, out_shape)?;
                 let ol = o.layout;
-                self.ew(
-                    op,
-                    out_shape,
-                    (&o.buf, o.form, &ol),
-                    &[(ins[0], bc(ins[0]))],
-                    &consts,
-                    &[],
-                    check.then_some(out_dtype),
-                    false,
-                    slot,
-                )?;
+                let ops = [(ins[0], bc(ins[0]))];
+                self.ew_wide(op, out_shape, (&o.buf, o.form, &ol), &ops, &consts, &[], check.then_some(out_dtype), false, slot, wide)?;
                 Ok(o)
             }
             Prim::MatMul => self.matmul(node, ins[0], ins[1], out_shape, slot),
@@ -457,23 +469,12 @@ impl<'d> Recorder<'d> {
         dst: &DevTensor,
         slot: u32,
     ) -> Result<(), Unsupported> {
-        if node.work != Work::I64 {
-            return Err(Unsupported::I128Work);
-        }
         let StateKind::Fixed { lo, hi } = state.kind else { return Err(Unsupported::StatePrimitive) };
         let shape = dst.shape().to_vec();
         let dl = dst.layout;
-        self.ew(
-            EwOp::Clamp,
-            &shape,
-            (&dst.buf, dst.form, &dl),
-            &[(x, x.layout.broadcast_to(&shape))],
-            &[lo, hi],
-            &[],
-            None,
-            false,
-            slot,
-        )
+        let ops = [(x, x.layout.broadcast_to(&shape))];
+        let wide = node.work == Work::I128;
+        self.ew_wide(EwOp::Clamp, &shape, (&dst.buf, dst.form, &dl), &ops, &[lo, hi], &[], None, false, slot, wide)
     }
 
     fn copy_view(
@@ -552,10 +553,11 @@ impl<'d> Recorder<'d> {
         out_shape: &[usize],
         slot: u32,
     ) -> Result<DevTensor, Unsupported> {
-        let mode = match node.acc {
-            Acc::Fast64 => SumMode::Fast,
-            Acc::Pn64 => SumMode::PosNeg,
-            Acc::Fast128 | Acc::Pn128 => return Err(Unsupported::WideSum),
+        let (mode, wide) = match node.acc {
+            Acc::Fast64 => (SumMode::Fast, false),
+            Acc::Pn64 => (SumMode::PosNeg, false),
+            Acc::Fast128 => (SumMode::Fast, true),
+            Acc::Pn128 => (SumMode::PosNeg, true),
         };
         let o = self.output(node.store, node.out.dtype, out_shape)?;
         let (ash, bsh) = (a.shape(), b.shape());
@@ -607,6 +609,15 @@ impl<'d> Recorder<'d> {
         p.set64(19, hi);
         p.set64(21, lo);
         p.set(23, 0);
+        if wide {
+            // Terms are exact 128-bit products of i64 operands; the general kernel, in 128 bits.
+            p.set128(24, node.out.dtype.max_value());
+            p.set128(28, node.out.dtype.min_value());
+            self.log.push(format!("matmul:{mode:?}:w128"));
+            let groups = self.groups(outputs, 256);
+            self.dispatch(&wgsl::matmul_wide_source(a.form, b.form, o.form, mode), &p, &o.buf, &[&*a.buf, &*b.buf], groups);
+            return Ok(o);
+        }
         let chunk = i32_chunk(node.in_ivs[0], node.in_ivs[1]).unwrap_or(0);
         let nbatch = nb[0] * nb[1];
         let bufs = [&*a.buf, &*b.buf];
@@ -691,23 +702,24 @@ impl<'d> Recorder<'d> {
         out_shape: &[usize],
         slot: u32,
     ) -> Result<DevTensor, Unsupported> {
-        let (max, mode) = match (&node.prim, node.acc) {
-            (Prim::ReduceMax { .. }, _) => {
-                if node.work != Work::I64 {
-                    return Err(Unsupported::I128Work);
-                }
-                (true, SumMode::Fast)
-            }
-            (_, Acc::Fast64) => (false, SumMode::Fast),
-            (_, Acc::Pn64) => (false, SumMode::PosNeg),
-            _ => return Err(Unsupported::WideSum),
+        let (max, mode, wide) = match (&node.prim, node.acc) {
+            (Prim::ReduceMax { .. }, _) => (true, SumMode::Fast, node.work == Work::I128),
+            (_, Acc::Fast64) => (false, SumMode::Fast, false),
+            (_, Acc::Pn64) => (false, SumMode::PosNeg, false),
+            (_, Acc::Fast128) => (false, SumMode::Fast, true),
+            (_, Acc::Pn128) => (false, SumMode::PosNeg, true),
         };
         let o = self.output(node.store, node.out.dtype, out_shape)?;
         let n_out = u32_of(numel(out_shape))?;
         let ext = x.shape()[axis];
-        let cooperative = ext >= 512;
-        let key = ReduceKey { max, mode, x: x.form, out: o.form, cooperative };
-        self.log.push(format!("{}:{mode:?}{}", if max { "reduce_max" } else { "reduce_sum" }, if cooperative { ":wg" } else { "" }));
+        let cooperative = !wide && ext >= 512;
+        let key = ReduceKey { max, mode, x: x.form, out: o.form, cooperative, wide };
+        self.log.push(format!(
+            "{}:{mode:?}{}{}",
+            if max { "reduce_max" } else { "reduce_sum" },
+            if cooperative { ":wg" } else { "" },
+            if wide { ":w128" } else { "" }
+        ));
         let mut p = Params::default();
         p.set(0, n_out);
         p.set(1, slot);
@@ -722,9 +734,14 @@ impl<'d> Recorder<'d> {
         }
         p.set(16, u32_of(ext)?);
         p.set(17, u32_of(x.layout.strides[axis])?);
-        let (lo, hi) = bounds64(node.out.dtype);
-        p.set64(18, hi);
-        p.set64(20, lo);
+        if wide {
+            p.set128(18, node.out.dtype.max_value());
+            p.set128(22, node.out.dtype.min_value());
+        } else {
+            let (lo, hi) = bounds64(node.out.dtype);
+            p.set64(18, hi);
+            p.set64(20, lo);
+        }
         let groups = if cooperative { self.groups(n_out, 1) } else { self.groups(n_out, 256) };
         self.dispatch(&wgsl::reduce_source(&key), &p, &o.buf, &[&*x.buf], groups);
         Ok(o)
@@ -741,9 +758,7 @@ impl<'d> Recorder<'d> {
         out_shape: &[usize],
         slot: u32,
     ) -> Result<DevTensor, Unsupported> {
-        if node.work != Work::I64 {
-            return Err(Unsupported::I128Work);
-        }
+        let wide = node.work == Work::I128;
         let x = if x.layout.is_contiguous() { x.clone() } else { self.materialize(x, x.form, slot)? };
         let sh = x.shape().to_vec();
         let (outer, n, inner): (usize, usize, usize) = (sh[..axis].iter().product(), sh[axis], sh[axis + 1..].iter().product());
@@ -757,7 +772,7 @@ impl<'d> Recorder<'d> {
         p.set(5, u32_of(x.layout.offset)?);
         let groups = self.groups(u32_of(numel(&sh))?, 256);
         self.log.push("topk".to_string());
-        self.dispatch(&wgsl::topk_rank_source(x.form), &p, &flags, &[&*x.buf], groups);
+        self.dispatch(&wgsl::topk_rank_source(x.form, wide), &p, &flags, &[&*x.buf], groups);
         let o = self.output(DType::Idx, DType::Idx, out_shape)?;
         p.set(0, u32_of(outer * inner)?);
         let flags_t = DevTensor { buf: flags, form: Form::U32, dtype: DType::Idx, layout: Layout::contiguous(&sh) };

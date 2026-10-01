@@ -84,6 +84,10 @@ pub struct ExecStats {
     pub dispatches: u64,
     /// Mid-step synchronisations (one per fallback node).
     pub syncs: u64,
+    /// Host time recording dispatches (params, bind groups, outputs), in nanoseconds.
+    pub record_ns: u64,
+    /// Time from the step's submission to its status and lanes being read back.
+    pub wait_ns: u64,
 }
 
 /// Runs one program over positions on a device, holding its run state there.
@@ -264,6 +268,7 @@ impl<'a> GpuExecutor<'a> {
         let plan = self.plan;
         let dev = self.dev;
         let every = sink.every_node();
+        let t_record = std::time::Instant::now();
         let slots = plan.slots_per_position();
         let mut rec = Recorder::new(dev, slots);
         self.inputs_host = [token, pos];
@@ -351,6 +356,8 @@ impl<'a> GpuExecutor<'a> {
             }
         }
         self.stats.dispatches += rec.dispatches as u64;
+        self.stats.record_ns += t_record.elapsed().as_nanos() as u64;
+        let t_wait = std::time::Instant::now();
         let status = rec.finish();
         // The first failure in slot order: a device node's, or the host's (a CPU fallback or a
         // scalar index found out of range before the device saw it).
@@ -364,6 +371,7 @@ impl<'a> GpuExecutor<'a> {
         // One readback of every staged lane; the rest (host values, every-node mode) one by one.
         let lanes =
             if lanes_at > 0 { unpack(&dev.read_bytes(&staging, 0, 4 * lanes_at as u64), Form::S32, lanes_at) } else { Vec::new() };
+        self.stats.wait_ns += t_wait.elapsed().as_nanos() as u64;
         for pv in pending {
             let buf = match (&pv.val, pv.lanes_at) {
                 (_, Some(at)) => {

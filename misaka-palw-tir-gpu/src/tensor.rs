@@ -9,6 +9,7 @@
 //! | [`Form::I64`] | one `i64` each | `i64` values, and `i128` nodes the plan stores in `i64` |
 //! | [`Form::P8`] | four per word, little-endian | `i8` params as the artifact stores them |
 //! | [`Form::P16`] | two per word | `i16` params |
+//! | [`Form::I128`] | two `u64` words each, low first | computed `i128` values (the wide norm sums, the fixed-point products before their rounding) and `i128` consts |
 //!
 //! A form is a storage decision, never a value decision: an element reads back as the same
 //! mathematical integer in every form, and a commitment is made of lanes whatever form a value had.
@@ -34,16 +35,17 @@ pub enum Form {
     I64,
     P8,
     P16,
+    I128,
 }
 
 impl Form {
-    /// The form a COMPUTED value of `dtype` takes; `None` for `i128` (never on the device).
+    /// The form a COMPUTED value (or a const) of `dtype` takes.
     pub fn computed(dtype: DType) -> Option<Form> {
         match dtype {
             DType::I8 | DType::I16 | DType::I32 => Some(Form::S32),
             DType::Idx => Some(Form::U32),
             DType::I64 => Some(Form::I64),
-            DType::I128 => None,
+            DType::I128 => Some(Form::I128),
         }
     }
 
@@ -52,6 +54,8 @@ impl Form {
         match dtype {
             DType::I8 => Some(Form::P8),
             DType::I16 => Some(Form::P16),
+            // A param is never i128 (NF-7).
+            DType::I128 => None,
             other => Form::computed(other),
         }
     }
@@ -64,6 +68,7 @@ impl Form {
             Form::I64 => 8 * n,
             Form::P8 => n,
             Form::P16 => 2 * n,
+            Form::I128 => 16 * n,
         };
         (raw.max(1).div_ceil(16) * 16) as u64
     }
@@ -72,6 +77,7 @@ impl Form {
     pub fn wgsl_array(self) -> &'static str {
         match self {
             Form::I64 => "i64",
+            Form::I128 => "u64",
             _ => "u32",
         }
     }
@@ -188,6 +194,12 @@ pub fn pack(data: Slice<'_>, form: Form) -> Vec<u8> {
                 out.extend_from_slice(&(misaka_palw_tir_exec::elem::Elem::to_i64(*x) as u16).to_le_bytes());
             }
         }),
+        Form::I128 => with_slice!(data, v => {
+            out.reserve(16 * v.len());
+            for x in v.iter() {
+                out.extend_from_slice(&misaka_palw_tir_exec::elem::Elem::to_i128(*x).to_le_bytes());
+            }
+        }),
     }
     out
 }
@@ -200,6 +212,7 @@ pub fn unpack(bytes: &[u8], form: Form, n: usize) -> Vec<i128> {
         Form::I64 => bytes.chunks_exact(8).take(n).map(|c| i64::from_le_bytes(c.try_into().unwrap()) as i128).collect(),
         Form::P8 => bytes.iter().take(n).map(|b| *b as i8 as i128).collect(),
         Form::P16 => bytes.chunks_exact(2).take(n).map(|c| i16::from_le_bytes(c.try_into().unwrap()) as i128).collect(),
+        Form::I128 => bytes.chunks_exact(16).take(n).map(|c| i128::from_le_bytes(c.try_into().unwrap())).collect(),
     }
 }
 

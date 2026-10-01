@@ -45,11 +45,22 @@ impl Report {
     /// Panic unless the CPU executor equals the reference and the device (when it ran) equals both.
     pub fn assert_agree(&self, what: &str) {
         assert_eq!(self.cpu, self.reference, "{what}: CPU executor ≠ reference");
-        if let Ok(g) = &self.gpu {
-            assert_eq!(
-                *g, self.cpu,
-                "{what}: DEVICE ≠ CPU executor (plan work {:?} acc {:?} check_out {})",
-                self.plan.work, self.plan.acc, self.plan.check_out
+        if let Ok(g) = &self.gpu
+            && *g != self.cpu
+        {
+            let show = |o: &Outcome| match o {
+                Outcome::Value(v) => format!("{:?}", &v[..v.len().min(12)]),
+                Outcome::Error(k) => format!("{k:?}"),
+            };
+            panic!(
+                "{what}: DEVICE ≠ CPU executor (plan work {:?} acc {:?} check_out {} store {:?}; kernels {:?})\n  device {}\n  cpu    {}",
+                self.plan.work,
+                self.plan.acc,
+                self.plan.check_out,
+                self.plan.store,
+                self.kernels,
+                show(g),
+                show(&self.cpu)
             );
         }
     }
