@@ -107,6 +107,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::ShardCourtAccused { .. } | O::CheckpointAccused { .. } => true,
         // RFC-0002 Phase F (tag 62): the IR one-move accusation, a court opening like the one above.
         O::TirShardCourtAccused { .. } => true,
+        // RFC-0003 §I.4.7: the generative one-move accusation, a court opening too.
+        O::GenShardCourtAccused { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }
@@ -270,6 +272,7 @@ pub fn palw_h1_carrier_lane_key_v1(object: &PalwConsensusObjectV2) -> Option<Pal
         O::CourtOpened { claim, .. } => Some(PalwH1LaneKeyV1::CourtOpening(*claim)),
         O::ShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
         O::TirShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
+        O::GenShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
         O::CheckpointAccused { accusation } => Some(PalwH1LaneKeyV1::CheckpointConviction(accusation.claim)),
         _ => None,
     }

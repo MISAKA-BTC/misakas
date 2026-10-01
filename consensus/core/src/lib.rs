@@ -477,6 +477,8 @@ pub mod palw_gen_worker_v1;
 pub mod palw_fp_job_v5;
 /// RFC-0003 §I.4: the tensor claim on the free-prompt lane — FP job version 10; dormant behind `palw_fp_job_v5` over `palw_gen_v1`.
 pub mod palw_gen_claim_v1;
+/// RFC-0003 §I.4.7: a pipeline claim accused in one move (the generative twin of `palw_tir_one_move_v1`) — dormant behind `palw_gen_v1`.
+pub mod palw_gen_one_move_v1;
 /// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA unit `TirStepLeaf`.
 pub mod palw_tir_fence2_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.

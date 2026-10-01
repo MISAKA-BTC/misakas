@@ -7435,6 +7435,16 @@ pub enum PalwConsensusObjectV2 {
         /// The tensor job, reconstructed from the version-10 job the commitment carries.
         job: Box<crate::palw_gen_job_v1::PalwGenJobV1>,
     },
+    /// **RFC-0003 §I.4.7: a pipeline claim accused in one move** — the generative twin of tag 62
+    /// (`TirShardCourtAccused`), for a chain that plays no bisection (the held regime, testnet-12): the
+    /// accusation carries a generative close (`GenCone`, `GenOutputTile`, `GenDecodeToken`), signed by the
+    /// accuser over its session id, and is adjudicated whole at acceptance (`palw_gen_one_move_v1`). Appended
+    /// after `GenTensorCommitted`; **its allocated tag is 88** (spec 17 section 17.0's next free tag after
+    /// 87, requested of the core lane), taken where the integration declares it. Below `palw_gen_v1` the
+    /// acceptance walk drops it by name and the fold refuses it as the second lock.
+    GenShardCourtAccused {
+        accusation: Box<crate::palw_gen_one_move_v1::PalwGenOneMoveAccusationV1>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7482,8 +7492,10 @@ pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
     match object {
         PalwConsensusObjectV2::ClassRegisteredGenV1 { .. }
         | PalwConsensusObjectV2::CourtGenRootClaimed { .. }
-        // RFC-0003 §I.4: a tensor claim's commitment is a generative move too.
-        | PalwConsensusObjectV2::GenTensorCommitted { .. } => true,
+        // RFC-0003 §I.4: a tensor claim's commitment is a generative move too, and so is a pipeline claim's
+        // one-move accusation (§I.4.7).
+        | PalwConsensusObjectV2::GenTensorCommitted { .. }
+        | PalwConsensusObjectV2::GenShardCourtAccused { .. } => true,
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_gen_v1(),
         _ => false,
     }
@@ -8504,6 +8516,10 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
     // RFC-0002 Phase F: an IR one-move accusation is adjudicated whole at acceptance — a demand
     // evaluation bounded by the IR court's limits, not by its bytes — so it takes the block's slot.
     if matches!(object, PalwConsensusObjectV2::TirShardCourtAccused { .. }) {
+        return true;
+    }
+    // RFC-0003 §I.4.7: a pipeline claim's one-move accusation is adjudicated whole at acceptance too.
+    if matches!(object, PalwConsensusObjectV2::GenShardCourtAccused { .. }) {
         return true;
     }
     let session_id = match object {
@@ -30916,6 +30932,74 @@ fn apply_object(
                 }
                 if builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id) {
                     return Err(PalwStateV2Error::ShardCourtHeldSiteUnanswerable { claim: claim_id, leaf, class: claim.class_id });
+                }
+                if open_session.is_some() {
+                    check_further_held_dissection_v1(&builder.state, claim_id, accuser)?;
+                }
+                let ladder = builder.state.class_step_ladder_v1(&claim.class_id, held);
+                let turn = builder.params.turn_deadline_daa();
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn)?;
+            } else {
+                match accusation.verdict {
+                    PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
+                    PalwCourtVerdictV2::ChallengerDefeated => {
+                        let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
+                        builder.slash_seat(accuser, charge, floor)?;
+                    }
+                }
+            }
+        }
+        // **RFC-0003 §I.4.7: a pipeline claim accused in one move.** The IR arm above with the class check
+        // turned to the generative registry: a live claim of a generative class, the executor and the roots
+        // the claim's, an accuser that is not the producer, the open-session rule, an Active accuser at or
+        // above the floor — then the verdict the acceptance layer re-derived from the proof
+        // (`palw_gen_one_move_v1`), applied as the legacy court applies its own. Under the held regime a cone
+        // accusation at a DISSECTED leaf opens a dissection there (the responder's generative root claim is
+        // its first move); below `palw_gen_v1` the lock above refused the object by name.
+        PalwConsensusObjectV2::GenShardCourtAccused { accusation } => {
+            let claim_id = accusation.claim;
+            let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+            if claim.phase.is_terminal() {
+                return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "GenShardCourtAccused" });
+            }
+            if !builder.state.gen_classes.contains_key(&claim.class_id) {
+                return Err(PalwStateV2Error::GenObjectRefused(
+                    "a generative one-move accusation names a claim of a class that is not a pipeline",
+                ));
+            }
+            if accusation.executor_bond != claim.bond {
+                return Err(PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(claim_id));
+            }
+            if accusation.execution_root != claim.execution_root || accusation.trace_root != claim.trace_root {
+                return Err(PalwStateV2Error::ShardCourtRootsDiffer(claim_id));
+            }
+            let accuser = accusation.accuser_bond;
+            if accuser == claim.bond {
+                return Err(PalwStateV2Error::ShardCourtAccuserIsTheProducer(accuser));
+            }
+            let open_session = builder.state.court_sessions.iter().find(|(_, s)| s.claim == claim_id).map(|(id, _)| *id);
+            if let Some(session) = open_session
+                && !builder.extras.offence_attribution_active
+            {
+                return Err(PalwStateV2Error::ShardCourtClaimUnderSession { claim: claim_id, session });
+            }
+            let accuser_record = builder.state.bonds.get(&accuser).ok_or(PalwStateV2Error::MissingBond(accuser))?.clone();
+            if !matches!(accuser_record.status, PalwBondStatusV2::Active) {
+                return Err(PalwStateV2Error::BondNotActive(accuser));
+            }
+            let floor = builder.params.min_collateral_sompi();
+            if accuser_record.collateral < floor {
+                return Err(PalwStateV2Error::BondBelowFloor { bond: accuser, collateral: accuser_record.collateral, floor });
+            }
+            let dissected_leaf = match builder.extras.held_context_ladder {
+                Some(held) => crate::palw_gen_one_move_v1::palw_gen_one_move_dissected_leaf_v1(&builder.state, &claim, accusation)
+                    .map_err(|e| PalwStateV2Error::ShardCourt(e.to_string()))?
+                    .map(|leaf| (held, leaf)),
+                None => None,
+            };
+            if let Some((held, leaf)) = dissected_leaf {
+                if accusation.verdict != PalwCourtVerdictV2::ExecutorGuilty {
+                    return Err(PalwStateV2Error::ShardCourt("an accusation that opens a dissection declares ExecutorGuilty".into()));
                 }
                 if open_session.is_some() {
                     check_further_held_dissection_v1(&builder.state, claim_id, accuser)?;
