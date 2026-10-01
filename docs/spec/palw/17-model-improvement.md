@@ -49,7 +49,11 @@ Contents:
 Every number below was chosen free on every branch that touches the same space:
 - `tir/fence-2`: object tag 67, delta 88–89, tails `0xC0`–`0xC1`;
 - `rfc3/fp-v5`: object tags 68–69, delta 90, tail `0xC2`, court proofs 10–12 and 16, step fault 21;
-- the capacity line: tails `0xB*`.
+- the capacity line: tails `0xB*`;
+- `rcore/int-10` (the release line): the model court window's delta entry `ClassCourtWindow`, which that line
+  declared at 90 and which sits at the **end** of the delta enum here (100; `GenClass` keeps 90 — the
+  integration's decision of 2026-10-01: `palw_model_court_window` is armed on no network, so no serialised
+  delta of it exists and moving it moves no stored byte), and its carriage tail `0xE0`.
 
 ### Consensus objects (`PalwConsensusObjectV2`, appended)
 
@@ -77,7 +81,20 @@ Tags 83–85 are reserved for Phase F's pipeline-claim data-availability objects
 decision of 2026-09-29): evaluation claims otherwise have no on-chain DA transport, so a withholding
 evaluator could not be convicted. Those objects are dropped by name below `palw_improvement_v1`. Tag 86
 is `HardCaseKeyRevealed` (the material lane's: a hold-out case's committed key or reference, opened in
-`Closing`, unsigned, as `SetterKeysRevealed` opens a set's). Tag 87 is the next free tag.
+`Closing`, unsigned, as `SetterKeysRevealed` opens a set's).
+
+The integration's allocations beyond them (2026-10-01; each lane asked the core lane, §17.0's rule):
+
+| Tag | Variant | What it is | On the wire |
+| --- | --- | --- | --- |
+| 87 | `GenTensorCommitted` | RFC-0003 §I.4: a tensor claim's commitment, the object the acceptance walk builds from an FP job version 10 payload (`palw_fp_gen_objects_from_accepted_txs_v1`), past `palw_fp_job_v5` over `palw_gen_v1` (approved for `rfc3/gen-claim`) | **never**: the transaction is the carrier and `palw_lifecycle_object_may_ride_v2` refuses it a carriage by name, as `FreePromptCommitted`. The number is a name, held so that no other object is ever declared at 87 |
+| 88 | `GenShardCourtAccused` | RFC-0003 §I.4.7: a pipeline claim accused in one move — the generative twin of tag 62 for a chain that plays no bisection (the held regime); the accusation carries a generative close and is adjudicated whole at acceptance (requested by `rfc3/gen-claim`, granted in its order) | yes |
+| 89 | `CourtEvalRootClaimed` | RFC-0004 §7.2 (A6): the evaluation court's history-dissection root claim (`PalwEvalRootClaimV1`'s carrier); the evaluation lane's | yes |
+| 90 and up | free | the next tag is 90 | |
+
+Tags 83–89 are declared with **explicit discriminants** (`#[borsh(use_discriminant = true)]`), as
+`PalwCourtVerdictProofV2` already carries them: a tag is an allocation, not a position, and two lanes that
+append at the same place cannot move each other's number by the order they merge in.
 
 **Every layer asks the same three predicates:**
 - the stateless gate (`palw_lifecycle_object_may_ride_v2`) lets each of the thirteen ride at every
@@ -131,7 +148,7 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 | Lane | Delta entries | Carriage tails | `state_root` block (after `improvement/v1`) |
 | --- | --- | --- | --- |
 | cand (A4: cases, setter sets, datasets, artifacts, licences, opt-ins) | 93–99 | `0xC5`–`0xCB` | `improvement-material/v1` |
-| eval (A6: per-job state) | none: the job table is `ImprovementRow` table 13 (`improvement_eval_jobs`); 100–103 stay free | `0xCC` (`0xCD`–`0xCF` free) | `improvement-eval/v1` |
+| eval (A6: per-job state) | none: the job table is `ImprovementRow` table 13 (`improvement_eval_jobs`); 101–103 stay free (100 is `ClassCourtWindow`, the release line's) | `0xCC` (`0xCD`–`0xCF` free) | `improvement-eval/v1` |
 
 ### Court and step ids (reserved, not used by step 0)
 
@@ -143,9 +160,9 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 | `PalwDaAnswerV1` tags | 7 and up for the pipeline-claim answers (the out-of-range proof is an answer of tag 5's shape, generic over the claim kind) | 6 (the row node's answer, after `TirStepOutOfRange` 5) |
 
 Evaluation jobs are RFC-0003 pipeline jobs, adjudicated by the courts that already exist. A new proof
-or fault is added only if A6/A7 show one is needed, and takes the next number here. Object tag 83 and
-up, court proof 17 and up and step fault 22 and up are shared (13–15 are the evaluation lane's): a lane asks the core lane before taking
-one.
+or fault is added only if A6/A7 show one is needed, and takes the next number here. Object tag 90 and
+up, court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
+object tags 83–89 are allocated above): a lane asks the core lane before taking one.
 
 ### The fence
 
