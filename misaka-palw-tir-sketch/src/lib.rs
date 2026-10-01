@@ -28,9 +28,12 @@
 //!
 //! [`analysis`] says which `MatMul` is checked how, read off the dataflow alone; [`fixture`] holds
 //! the tiny classes the tests run; [`cost`] counts what a check costs on a real program's shapes
-//! (the measurement tool, `--features measure`).
+//! (the measurement tool, `--features measure`). [`audit`] is Part IV.1's random leaf audit: one
+//! committed tile recomputed by the court's demand evaluator from openings alone, by a seat that
+//! holds no model.
 
 pub mod analysis;
+pub mod audit;
 pub mod check;
 pub mod cost;
 pub mod field;
