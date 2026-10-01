@@ -889,7 +889,7 @@ impl ValidatorKey {
         funding: &UtxoEntry,
         fee: u64,
     ) -> Result<Transaction, String> {
-        kaspa_consensus_core::palw_improve_eval_v1::palw_fp_eval_claim_check_v1(&commitment, &prompt_token_ids, tail, &[])
+        kaspa_consensus_core::palw_improve_eval_v1::palw_fp_eval_claim_check_v1(&commitment, &prompt_token_ids, tail)
             .map_err(|e| format!("the evaluation claim is not admissible: {e}"))?;
         let signature =
             self.sign_with_context(fp_claim_id_v3(&commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT).to_vec();

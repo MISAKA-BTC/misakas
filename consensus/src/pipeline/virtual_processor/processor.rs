@@ -12025,6 +12025,8 @@ impl VirtualStateProcessor {
                         ));
                     }
                 }
+                // Phase F's reserved tags 84 and 85 carry an uninhabited payload: no such object can be decoded.
+                Obj::ReservedPipelineDa84(never) | Obj::ReservedPipelineDa85(never) => match *never {},
             }
         }
         Ok(())
