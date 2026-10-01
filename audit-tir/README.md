@@ -4,6 +4,20 @@ One salted testnet-12 drill chain on this Mac, loopback only. Usage, stages and 
 header of `df.sh` (`bash audit-tir/df.sh` with no argument prints it); the layout (nodes, ports, classes) is
 `lib-df.sh`; the sampler is `dfwatch.py`.
 
+## The DAA-3,600 flag day's drill (int-10)
+
+One chain, the shipping binary, the fleet's int-8 release as the old relay (`OLD_KASPAD_BIN`). `palw_tir_fence2` alone
+crosses at `TIR2_AT` (default 50; the model court window stays dormant on testnet-12 and nothing here arms it).
+
+- **Stage 1, the rollout gate** (`df.sh stage1`, on the final binary): `flagday old` / `below` (int-8 agrees with the new
+  binary below the fence), `register-past` (the small class registers past the fence), `flagday cross` (the fork id refuses
+  the old release at `TIR2_AT`), `flagday classes` (every new node lists the small class with one registeredDaa >= `TIR2_AT`
+  and the artifact's root — admitted under fence2's sizing — and the A16 class below the fence, the twin), `df3` (8 of 8
+  forged outputs refused).
+- **Stage 2, after the rollout and before Phase H's phaseh2** (`df.sh stage2`): `bdc`, D-F1, D-F2.
+
+`df.sh dry` prints the plan and every node's argv without starting anything.
+
 ## Known drill behaviours (not production defects)
 
 - **The old relay must connect after the flag days are scheduled past, or it is never refused**
@@ -39,7 +53,7 @@ condition, on a class that runs in minutes):
   bottom from new4's root claim on chain.
 - **C**: B's lie with `--palw-drill-refuse-leaf-evidence` (no annex served): the seats demand on chain
   (`DefaultAccusedTirStep`, keyed by the claim alone) — the root, then the first frontier node their own tree
-  disputes (eight levels a session), then the leaf — taking the rounds in turn (a seat waits on an open demand of
+  disputes (ten levels a session), then the leaf — taking the rounds in turn (a seat waits on an open demand of
   the unit and staggers its own); new4's node answers each; the seats read the disclosures back and convict.
 - **C0**: C, and new4 stopped once a demand is on chain: its claim defaults (`ProducerWithholding`, counted by
   `dfwatch.py` as `withheld`).

@@ -1,5 +1,22 @@
 #!/usr/bin/env bash
-# audit-tir/df.sh — the D-F drills' runner (RFC-0002 Phase F), ONE salted testnet-12 drill chain on this Mac:
+# audit-tir/df.sh — the D-F drills' runner (RFC-0002 Phase F), ONE salted testnet-12 drill chain on this Mac.
+#
+# **THE int-10 KIT (df-kit-int10, 2026-10-01) — the DAA-3,600 flag day's drill, on the SHIPPING binary.**
+#   `palw_tir_fence2` ALONE crosses at TIR2_AT (default 50; `--palw-drill-tir2-at` on every new node; the model court
+#   window stays dormant on testnet-12, the coordinator's decision of 2026-10-01 — nothing here arms it), over the IR
+#   fence at TIR_AT (20) and the post-launch flag days (6/10/14). The old relay is the fleet's int-8 release
+#   (OLD_KASPAD_BIN=lifecycle-run/bin/4ca695b98/kaspad): it knows the IR fence, not the new flag day, so it follows the
+#   new nodes exactly to TIR2_AT − 1 and the fork id refuses it at TIR2_AT.
+#   The A16 class (new0, D-F1) registers BELOW the flag day (the release's sizing); the small class (new4, D-F2 and the
+#   B/D/C piece) registers PAST it — `df.sh register-past` — admitted under fence2's sizing (admission v10's range
+#   twin) by every node. Commands added: `flagday [step]`, `register-past` (PAST_CLASS=small|ir picks the class that
+#   registers past the flag day).
+#   STAGE 1 = the ROLLOUT GATE, run on the final binary (`df.sh stage1`): below / cross of fence2, the old release
+#   refused by the fork id at the fence, the small class registered past the fence and admitted, and df3 (the red-team's
+#   8 forged outputs). STAGE 2 = after the rollout, before Phase H's phaseh2 (`df.sh stage2`): `bdc` (the DA ladder's
+#   evidence transport on the small class), D-F1 (the A16 class: Active → claims → Final) and D-F2 (the court battery).
+#
+# (the D-F kit as it was follows)
 #   D-F1  the Qwen2.5-A16 IR class end to end: registered past the IR fence → Candidate → the admission jury
 #         (readiness V2) → Prefetching → Probation (10 probe claims) → ActiveLimited → Active → claims → Final,
 #         and its logits equal to the legacy class's (palw-tir-equiv);
@@ -10,7 +27,8 @@
 #   bash audit-tir/df.sh <command> --bin-dir <release dir>      (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
 #     OLD_KASPAD_BIN=<the fleet's release kaspad>  A16_ARTIFACT=<qwen2.5-1.5B A16 .palwart>
 #     [WORK_DIR=~/.misaka-palw-tir-drill] [TIR_AT=20] [IR_CONTEXT=512] [IR_LOGITS_TILE=1024]
-#   commands: dry | class | small | up | stage1 | stage2 | df1 | df2 | df3 | df4 | bdc | status | down
+#   commands: dry | class | small | up | register-past | flagday [old|below|cross|classes] | stage1 | stage2 | df1 | df2 | df3 | df4 | bdc | status | down
+#   [WORK_DIR=~/.misaka-palw-int10-drill] [TIR2_AT=50]  (the DAA-3,600 flag day's drill height; fixed for the chain's life)
 #
 #   THE B/D/C PIECE (RFC-0002's evidence transport, docs/design/palw/tir/evidence-transport-scope.md), on its
 #   own chain: `DF1=0 TIR2_AT=30 df.sh up` (palw_tir_fence2 armed at `up` — a stored chain keeps its height;
@@ -21,21 +39,22 @@
 #     D   at the dissected kind: the named leaf opens F7's dissection, the challenger's bottom built from new4's
 #         root claim ON CHAIN → convicted
 #     C   B's lie, no annex served (--palw-drill-refuse-leaf-evidence): the seats demand on chain (the root,
-#         the first frontier node their own tree disputes — eight levels a session — then the leaf), new4's node
+#         the first frontier node their own tree disputes — ten levels a session — then the leaf), new4's node
 #         answers each, the seats read the disclosures back and convict
 #     C0  C, and new4 stopped once a demand is on chain: its claim defaults (ProducerWithholding)
 #   Verdict in $WORK_DIR/bdc.verdict. BDC_LEAF / BDC_DISSECTED_LEAF override the leaves (small-leaves.txt).
 #
-#   STAGE 1 (the arming gate, ~2-3 h from `up`): `stage1` = df4 (below the fence the IR registration dropped
-#   by name by the release and skipped by the old relay at identical tips; blocks above; the old peer refused
-#   past the fence) + the registration past the fence reaching Prefetching with seats proving readiness
-#   (Candidate → the admission jury → Prefetching) + df3 (8 of 8 forged-output attacks refused, the producer
-#   on the IR class). Its verdict is printed and written to $WORK_DIR/stage1.verdict on its own.
-#   STAGE 2 (the same chain and the same release — F7's node side ships in the DAA-2,000 release, no interim
-#   guard): `stage2` = df1 (D-F1: Active → claims → Final; new0 produces D-F1 from Probation on) + df2 (every
-#   commit-point kind of the SMALL class live, the node playing F7's dissection at its dissected kind — a 1.5B
-#   class's capture cannot reach a seat under the 16 MiB material cap, so D-F1's kinds are certified offline
-#   with palw-class certify) + df4 court.
+#   STAGE 1 (the rollout gate, ~2-3 h from `up`): `stage1` = flagday old / below (the old relay is int-8 and agrees with the new
+#   binary below the fence: one sink at one DAA) + register-past (the small class's registrant restarted past the fence)
+#   + flagday cross (the fork id refuses the old release at the fence; it stops) + flagday classes (the small class is
+#   admitted by every node under fence2's sizing, the A16 class below it the twin; no court-window line anywhere) + df3
+#   (8 of 8 forged-output attacks refused, run past the fence on the final rules). Its verdict is printed and written to
+#   $WORK_DIR/stage1.verdict on its own.
+#   STAGE 2 (the same chain and the same release, after the fleet rollout and before Phase H's phaseh2): `stage2` = bdc (B/D/C
+#   on the small class once it is Active: the DA ladder's evidence transport) + df1 (D-F1: Active → claims → Final; new0
+#   produces D-F1 from Probation on) + df2 (every commit-point kind of the SMALL class live, the node playing F7's
+#   dissection at its dissected kind — a 1.5B class's capture cannot reach a seat under the 16 MiB material cap, so D-F1's
+#   kinds are certified offline with palw-class certify).
 #
 #   dry     preflight (binaries, flags, tools, artifacts, ports, memory, disk, another drill) and the plan with
 #           every node's argv (salt redacted, a throwaway keyring stub) — nothing is created, nothing started
@@ -60,11 +79,13 @@ A=$(cd "$(dirname "$0")" && pwd)
 cmd=${1:-dry}
 shift || true
 # --bin-dir <dir>: the release under test (before lib-df.sh derives every binary from it).
+STEP=""   # `df.sh flagday <old|below|cross|classes|run>`: one positional step after the command
 while [ $# -gt 0 ]; do
     case $1 in
         --bin-dir) BIN_DIR=$2; export BIN_DIR; shift 2 ;;
         --bin-dir=*) BIN_DIR=${1#--bin-dir=}; export BIN_DIR; shift ;;
-        *) echo "unknown argument $1"; exit 2 ;;
+        -*) echo "unknown argument $1"; exit 2 ;;
+        *) [ -z "$STEP" ] || { echo "unknown argument $1"; exit 2; }; STEP=$1; shift ;;
     esac
 done
 . "$A/lib-df.sh"
@@ -75,7 +96,7 @@ note() { echo "  note $*"; }
 
 preflight() {
     local real=$1
-    echo "== D-F preflight ($(date '+%F %T')): flag days $FENCE_AT/$FENCE2_AT/$FENCE3_AT, IR fence $TIR_AT, work dir $WORK_DIR, ports ${P2P_BASE}+/${BORSH_BASE}+/${JSON_BASE}+/${GRPC_BASE}+"
+    echo "== D-F preflight ($(date '+%F %T')): flag days $FENCE_AT/$FENCE2_AT/$FENCE3_AT, IR fence $TIR_AT, the DAA-3,600 flag day (palw_tir_fence2) at ${TIR2_AT:-<none>}, work dir $WORK_DIR, ports ${P2P_BASE}+/${BORSH_BASE}+/${JSON_BASE}+/${GRPC_BASE}+"
     local b
     for b in "$KASPAD_BIN" "$CLI_BIN" "$OLD_KASPAD_BIN"; do
         [ -n "$b" ] && [ -x "$b" ] && ok "$b ($(shasum -a 256 "$b" | cut -c1-16))" || bad "binary missing: '${b}' (KASPAD_BIN, CLI_BIN, OLD_KASPAD_BIN)"
@@ -88,15 +109,17 @@ preflight() {
         done
     fi
     if [ -n "$TIR2_AT" ] && [ -x "${KASPAD_BIN:-/nonexistent}" ]; then
-        # The B/D/C piece: the second IR fence, the answer-only and refuse-evidence drills, and C's node half.
+        # The DAA-3,600 flag day (palw_tir_fence2): the drill flag, the answer-only and refuse-evidence drills (the B/D/C
+        # piece), and C's node half.
         local H2; H2=$("$KASPAD_BIN" --help 2>/dev/null || true)
         for f in --palw-drill-tir2-at --palw-drill-answer-only --palw-drill-refuse-leaf-evidence; do
-            grep -q -- "$f" <<<"$H2" && ok "kaspad lists $f" || bad "kaspad lacks $f (TIR2_AT is set: the B/D/C piece)"
+            grep -q -- "$f" <<<"$H2" && ok "kaspad lists $f" || bad "kaspad lacks $f (the second IR fence is crossed: the B/D/C piece)"
         done
         grep -aqF "RFC-0002 evidence transport C" "$KASPAD_BIN" && ok "kaspad carries C's node half (the demand and the answer)" \
             || bad "kaspad has no evidence transport C (the B/D/C piece needs tir/node past ba20ee56f)"
-        [ "$TIR2_AT" -gt "$TIR_AT" ] 2>/dev/null && ok "palw_tir_fence2 at $TIR2_AT, past palw_tir_v1 at $TIR_AT" \
-            || bad "TIR2_AT=$TIR2_AT must be past TIR_AT=$TIR_AT (the ruleset refuses it at or below)"
+        [ "$TIR2_AT" -gt "$TIR_AT" ] 2>/dev/null && ok "the flag day's fence at $TIR2_AT, past palw_tir_v1 at $TIR_AT" \
+            || bad "the flag day's height $TIR2_AT must be past TIR_AT=$TIR_AT (the ruleset refuses it at or below)"
+        [ "$TIR2_AT" -gt "$FENCE3_AT" ] 2>/dev/null || bad "TIR2_AT=$TIR2_AT must be past the post-launch flag days ($FENCE_AT/$FENCE2_AT/$FENCE3_AT)"
     fi
     if [ -x "${KASPAD_BIN:-/nonexistent}" ]; then
         # F7's node side ships in the DAA-2,000 release: Stage 2 needs the node's own dissection play, and a build
@@ -112,7 +135,12 @@ preflight() {
     if [ -x "${OLD_KASPAD_BIN:-/nonexistent}" ]; then
         local O; O=$("$OLD_KASPAD_BIN" --help 2>/dev/null || true)
         grep -q -- "--palw-drill-fence3-at" <<<"$O" && ok "the old release lists the flag days" || bad "the old release lacks --palw-drill-fence3-at"
-        grep -q -- "--palw-drill-tir-at" <<<"$O" && bad "the old release lists --palw-drill-tir-at (D-F4 needs a release without the IR fence)" || ok "the old release has no IR fence (D-F4's other side)"
+        grep -q -- "--palw-drill-tir-at" <<<"$O" && ok "the old release has the IR fence (int-8: it follows the new nodes through TIR_AT)" \
+            || bad "the old release lacks --palw-drill-tir-at (the int-10 drill's old relay is int-8, which has the IR fence)"
+        for f in --palw-drill-tir2-at --palw-drill-model-court-at; do
+            grep -q -- "$f" <<<"$O" && bad "the old release lists $f: it is not the fleet's int-8 (the flag day's other side)" || true
+        done
+        grep -q -- "--palw-drill-tir2-at" <<<"$O" || ok "the old release has no DAA-3,600 flag day (its fork id parts at TIR2_AT)"
     fi
     if [ -x "${CLI_BIN:-/nonexistent}" ]; then
         HOME=${TMPDIR:-/tmp} "$CLI_BIN" palw tir-registration --help >/dev/null 2>&1 && ok "misaka palw tir-registration" || bad "misaka lacks palw tir-registration"
@@ -163,18 +191,28 @@ preflight() {
 
 plan() {
     cat <<EOF
-== plan (one chain; the drill runs the release under test, Phase F's scripts read the same layout)
-  1. up      keyring + new0..new7 (new1, new2 heartbeat clocks; new3 floor producer; new0 D-F1's registrant and producer;
-             new4 the small class's; new0, new1..new6 hold both IR artifacts: seven ready seats, t12's 5 + 2) + old (the
-             fleet's release, keyless, peered to new0); the signed below-the-fence IR registration → \$WORK_DIR/ir-registration.obj
-  2. df4     (Phase F) DAA < $TIR_AT: the IR registration dropped by name by the new nodes, skipped by the old one;
-             crossing $TIR_AT: WrongForkId between new0 and old
-  3. df1     past $TIR_AT new0 registers the class → Candidate → jury readiness → Prefetching → Probation (10 probes)
-             → ActiveLimited → Active → claims → Final; logits already compared offline (class, palw-tir-equiv)
-  4. df2     on the small class, per commit-point kind (ir/small-leaves.txt): new4 lies at that leaf, the refuting
-             seats accuse it at once (TirShardCourtAccused past the fence; at a dissected kind the named-leaf challenge
-             and F7's dissection); new4's honest claims went Final first (its probation)
-  5. df3     (Phase F) the red-team against new0's gRPC, 8 of 8 refused, no node panics
+== plan — the int-10 DAA-3,600 flag day (one chain; the drill runs the release under test on the shipping rules)
+  flag days $FENCE_AT/$FENCE2_AT/$FENCE3_AT, IR fence $TIR_AT, the DAA-3,600 flag day (palw_tir_fence2 ALONE; the court window is dormant) at ${TIR2_AT:-<none>}
+  1. up              keyring + new0..new7 + old (the fleet's int-8: it has the IR fence, not the flag day); new0 registers the A16
+                     class (below ${TIR2_AT:-the flag day}: the release's sizing); new4, the small class's registrant, only produces
+                     until step 3; new0, new1..new6 hold both IR artifacts (seven ready seats, t12's 5 + 2)
+  == STAGE 1 — the ROLLOUT GATE, on the final binary — \`df.sh stage1\` runs 2 to 4 in order and writes \$WORK_DIR/stage1.verdict ==
+  2. flagday old     the old relay runs the drill's flag days and the IR fence, not palw_tir_fence2; new0's banner names palw_tir_fence2
+                     at ${TIR2_AT:-?} and no court window
+     flagday below   new0 DAA < $((${TIR2_AT:-$TIR_AT} - 2)): new0 and the old relay report one sink at one DAA (the old release
+                     validated every block the new binary built below the fence: the rules below it are unchanged)
+  3. register-past   the tip past ${TIR2_AT:-?}: the $PAST_CLASS class's registrant restarted with --palw-register-class — it registers PAST the flag day
+     flagday cross   new0 past ${TIR2_AT:-?} + 5: 'Fork-id mismatch … crossed fence ${TIR2_AT:-?}'; the old relay stops (DAA <= ${TIR2_AT:-?} + 3)
+     flagday classes the $PAST_CLASS class (registered past the fence) is listed by every running new node (getPalwClasses): one registeredDaa
+                     (>= ${TIR2_AT:-?}), canonicalLeaves and artifactRoot, the artifact's — admitted under fence2's sizing (the range twin);
+                     the other class (registered below) is the twin under the release's; no "PALW model court window" line on any node
+  4. df3             the red-team's 8 forged outputs against new0, past the fence (the producer on the A16 class)
+  == STAGE 2 — after the rollout, before Phase H's phaseh2 — \`df.sh stage2\` ==
+  5. bdc             fence2's B/D/C on the small class once it is Active (B served annexes, D the root claim on chain, C the demand on
+                     chain at the class's DA ladder, C0 the silent executor), with palw_tir_fence2 in force
+  6. df1             the A16 class: Prefetching → Probation → ActiveLimited → Active → claims → Final
+  7. df2             the court battery on the small class: new4 lies at every commit-point kind; each is convicted (CourtFraud, or at the
+                     dissected kind F7's named-leaf challenge and the default at the rung); its honest claims went Final first
 EOF
 }
 
@@ -258,7 +296,8 @@ up() {
         mkdir -p "$KR" "$WORK_DIR/keyring-app"; chmod 700 "$KR"
         "$KASPAD_BIN" --testnet --netsuffix=12 --appdir="$WORK_DIR/keyring-app" --palw-drill-genesis-salt="$(salt)" \
             "--palw-drill-fence-at=$FENCE_AT" "--palw-drill-fence2-at=$FENCE2_AT" "--palw-drill-fence3-at=$FENCE3_AT" \
-            "--palw-drill-tir-at=$TIR_AT" ${TIR2_AT:+"--palw-drill-tir2-at=$TIR2_AT"} --palw-drill-write-keyring="$KR" 2>&1 \
+            "--palw-drill-tir-at=$TIR_AT" ${TIR2_AT:+"--palw-drill-tir2-at=$TIR2_AT"} \
+            --palw-drill-write-keyring="$KR" 2>&1 \
             | tail -2 | sed -E "s/[0-9a-f]{64}/<64hex>/g"
         chmod 600 "$KR"/*
     fi
@@ -274,7 +313,7 @@ up() {
     fi
     ( cd "$A"; WORK_DIR=$WORK_DIR DF_PORT=$(jport new3) nohup python3 dfwatch.py >> "$WORK_DIR/dfwatch.out" 2>&1 & echo $! > "$WORK_DIR/dfwatch.pid" )
     export_layout
-    say "up: tip $(tip new3); sampler pid $(cat "$WORK_DIR/dfwatch.pid"); next: df.sh df4 (below $TIR_AT), then df1"
+    say "up: tip $(tip new3); sampler pid $(cat "$WORK_DIR/dfwatch.pid"); next: df.sh flagday old, flagday below (DAA < $((${TIR2_AT:-$TIR_AT} - 2))), then register-past once the tip is past ${TIR2_AT:-the flag day}"
 }
 
 df1() {
@@ -321,36 +360,75 @@ phase_f() {
 # One part's verdict: PASS (0), FAIL (1), INCOMPLETE (3), written beside the rest.
 verdict_of() { case $1 in 0) echo PASS ;; 3) echo INCOMPLETE ;; *) echo FAIL ;; esac; }
 
-# STAGE 1, the arming gate: df4 (below, cross) + the registration to Prefetching with ready seats + df3.
+# The int-10 flag-day step script (scripts/misaka-palw-int10-flagday.sh): old / below / cross / classes, on this layout.
+flagday_script() {
+    local s=$WT/scripts/misaka-palw-int10-flagday.sh
+    [ -x "$s" ] || [ -f "$s" ] || die "$s is missing (the int-10 kit's)"
+    [ -n "$TIR2_AT" ] || die "the flag-day drill needs TIR2_AT (the chain's \`--palw-drill-tir2-at\`; a stored chain keeps its height)"
+    export_layout
+    export TIR2_AT JSON_BASE RPC_PY="$A/rpc.py" CLASSROWS_PY="$A/classrows.py"
+    bash "$s" "${1:-run}"
+}
+
+# register-past: the PAST_CLASS (small by default, or ir) registers PAST the flag day. Waits for the tip to pass TIR2_AT + 1,
+# creates the marker lib-df.sh reads, and restarts that class's registrant (new4 for small, new0 for ir) with --palw-register-class.
+register_past() {
+    [ -n "$TIR2_AT" ] || die "no TIR2_AT: classes register at once at \`up\` on a chain without the flag day"
+    local who=new4 cid=small_class_id
+    [ "$PAST_CLASS" = ir ] && { who=new0; cid=ir_class_id; }
+    [ -s "$WORK_DIR/$([ "$PAST_CLASS" = ir ] && echo ir-class.id || echo small-class.id)" ] || die "no $PAST_CLASS class (df.sh class / small)"
+    [ ! -e "$PAST_REGISTER_MARKER" ] || { say "register-past: already done ($(cat "$PAST_REGISTER_MARKER"))"; return 0; }
+    local now i
+    for i in $(seq 1 "${REGISTER_PAST_WAIT_SAMPLES:-720}"); do
+        now=$(tip new3)
+        [[ "$now" =~ ^[0-9]+$ ]] && [ "$now" -gt $((TIR2_AT + 1)) ] && break
+        sleep 10
+    done
+    [[ "$now" =~ ^[0-9]+$ ]] && [ "$now" -gt $((TIR2_AT + 1)) ] || die "the chain is still at DAA ${now:-?}, not past the flag day $TIR2_AT"
+    echo "tip $now at $(date '+%F %T')" > "$PAST_REGISTER_MARKER"
+    say "register-past: tip $now is past the flag day $TIR2_AT — restarting $who with --palw-register-class ($PAST_CLASS class)"
+    bash "$A/nodes.sh" stop "$who"; bash "$A/nodes.sh" start "$who"
+}
+
+# STAGE 1, the rollout gate (the int-10 flag day, on the final binary): old / below, the small class past the fence,
+# cross, classes (the small class admitted under fence2's sizing, the A16 class the twin), then df3 (the red-team's 8 forged
+# outputs, past the fence) — one verdict, $WORK_DIR/stage1.verdict.
 stage1() {
-    local rc4=0 rcr=0 rc3=0
-    phase_f df4 run || rc4=$?
-    ( cd "$A"; WORK_DIR=$WORK_DIR DF_PORT=$(jport new3) python3 dfwatch.py --until prefetching --deadline-daa "${STAGE1_DEADLINE_DAA:-400}" ) || rcr=$?
-    phase_f df3 run || rc3=$?
-    local v=PASS
-    for rc in $rc4 $rcr $rc3; do [ "$rc" = 0 ] || { [ "$rc" = 3 ] && [ "$v" = PASS ] && v=INCOMPLETE || v=FAIL; }; done
+    local rco=0 rcb=0 rcr=0 rcx=0 rcc=0 rc3=0
+    flagday_script old || rco=$?
+    flagday_script below || rcb=$?
+    register_past || rcr=$?
+    flagday_script cross || rcx=$?
+    flagday_script classes || rcc=$?
+    phase_f df3 || rc3=$?
+    local v=PASS rc
+    for rc in $rco $rcb $rcr $rcx $rcc $rc3; do [ "$rc" = 0 ] || { [ "$rc" = 3 ] && [ "$v" = PASS ] && v=INCOMPLETE || v=FAIL; }; done
     {
-        echo "STAGE 1 $v ($(date '+%F %T'), tip $(tip new3))"
-        echo "  df4 (below/cross)                  $(verdict_of $rc4)"
-        echo "  registration → Prefetching, ready  $(verdict_of $rcr) $(tr '\n' ' ' < "$WORK_DIR/df-milestones.tsv" 2>/dev/null)"
-        echo "  df3 (8 forged outputs)             $(verdict_of $rc3)"
+        echo "STAGE 1 $v ($(date '+%F %T'), tip $(tip new3); the DAA-3,600 flag day (palw_tir_fence2 alone) at ${TIR2_AT:-?})"
+        echo "  old relay is int-8 (IR fence, no flag day)             $(verdict_of $rco)"
+        echo "  below the flag day: one sink, old = new                $(verdict_of $rcb)"
+        echo "  the $PAST_CLASS class registers past the flag day              $(verdict_of $rcr)"
+        echo "  cross: fork-id refusal, old stops                      $(verdict_of $rcx)"
+        echo "  classes: admitted past the fence (range twin), twin below  $(verdict_of $rcc)"
+        echo "  df3: 8 of 8 forged outputs refused, past the fence      $(verdict_of $rc3)"
     } | tee "$WORK_DIR/stage1.verdict"
     case $v in PASS) return 0 ;; INCOMPLETE) return 3 ;; *) return 1 ;; esac
 }
 
-# STAGE 2, on the same chain after the fleet rollout: df1 (Active → Final), df2, df4 court.
+# STAGE 2, on the same chain after the fleet rollout and before Phase H's phaseh2: the B/D/C piece (fence2's evidence transport
+# on the small class), D-F1 (A16: Active → claims → Final) and D-F2 (the court battery on the small class).
 stage2() {
-    local rc1=0 rc2=0 rcc=0
+    local rcd=0 rc1=0 rc2=0
+    bdc || rcd=$?
     df1 || rc1=$?
     df2 || rc2=$?
-    phase_f df4 court || rcc=$?
-    local v=PASS
-    for rc in $rc1 $rc2 $rcc; do [ "$rc" = 0 ] || { [ "$rc" = 3 ] && [ "$v" = PASS ] && v=INCOMPLETE || v=FAIL; }; done
+    local v=PASS rc
+    for rc in $rcd $rc1 $rc2; do [ "$rc" = 0 ] || { [ "$rc" = 3 ] && [ "$v" = PASS ] && v=INCOMPLETE || v=FAIL; }; done
     {
         echo "STAGE 2 $v ($(date '+%F %T'), tip $(tip new3))"
-        echo "  df1 (Active → claims → Final)      $(verdict_of $rc1)"
-        echo "  df2 (court battery)                $(verdict_of $rc2)"
-        echo "  df4 court (a close past the fence) $(verdict_of $rcc)"
+        echo "  B/D/C on the small class (fence2's DA ladder)  $(verdict_of $rcd)"
+        echo "  D-F1 (A16: Active → claims → Final)            $(verdict_of $rc1)"
+        echo "  D-F2 (court battery, small class)              $(verdict_of $rc2)"
     } | tee "$WORK_DIR/stage2.verdict"
     [ "$v" = PASS ]
 }
@@ -393,19 +471,20 @@ print((pow2 or ok or [0])[0])
 }
 
 bdc() {
-    [ -n "$TIR2_AT" ] || die "the B/D/C piece needs palw_tir_fence2: \`DF1=0 TIR2_AT=30 df.sh up\` (a stored chain keeps its height)"
+    local FD_AT=$TIR2_AT
+    [ -n "$FD_AT" ] || die "the B/D/C piece needs palw_tir_fence2: \`TIR2_AT=50 df.sh up\` or \`DF1=0 TIR2_AT=30 df.sh up\` (a stored chain keeps its height)"
     [ -s "$IR_DIR/small-leaves.txt" ] && [ -s "$IR_DIR/small-close-sizes.txt" ] || die "no small-class leaves: run \`df.sh small\`"
     ( cd "$A"; WORK_DIR=$WORK_DIR DF_PORT=$(jport new3) python3 dfwatch.py --until small-active --deadline-daa "${BDC_ACTIVE_DEADLINE_DAA:-3000}" ) \
         || { echo "B/D/C INCOMPLETE: the small class is not Active"; return 3; }
     local now; now=$(tip new3)
-    [ "$now" -ge "$TIR2_AT" ] 2>/dev/null || die "the chain is below palw_tir_fence2 ($now < $TIR2_AT)"
+    [ "$now" -ge "$FD_AT" ] 2>/dev/null || die "the chain is below palw_tir_fence2 ($now < $FD_AT)"
     # The dissected kind (small-close-sizes.txt: `<n> dissected <leaf> <call> <kind>`) for D; for B and C an
     # undissected leaf, a power of two where one is (the descent from leaf 0 takes the fewest rounds there).
     local dissected leaf
     dissected=${BDC_DISSECTED_LEAF:-$(awk '$2=="dissected" {print $3; exit}' "$IR_DIR/small-close-sizes.txt")}
     leaf=${BDC_LEAF:-$(bdc_default_leaf)}
     [ -n "$dissected" ] || die "the small class has no dissected kind in small-close-sizes.txt (D needs one)"
-    say "B/D/C on the small class: B/C at leaf $leaf, D at the dissected leaf $dissected, palw_tir_fence2 at $TIR2_AT (tip $now)"
+    say "B/D/C on the small class: B/C at leaf $leaf, D at the dissected leaf $dissected, palw_tir_fence2 at $FD_AT (tip $now)"
     local rb=1 rd=1 rcc=1 rc0=1 before after why i
 
     # B — served annexes.
@@ -446,7 +525,7 @@ bdc() {
     local v=PASS r
     for r in $rb $rd $rcc $rc0; do [ "$r" = 0 ] || v=FAIL; done
     {
-        echo "B/D/C $v ($(date '+%F %T'), tip $(tip new3); leaf $leaf, dissected $dissected, palw_tir_fence2 $TIR2_AT)"
+        echo "B/D/C $v ($(date '+%F %T'), tip $(tip new3); leaf $leaf, dissected $dissected, palw_tir_fence2 $FD_AT)"
         echo "  B  $(verdict_of $rb)   D  $(verdict_of $rd)   C  $(verdict_of $rcc)   C0  $(verdict_of $rc0)"
     } | tee "$WORK_DIR/bdc.verdict"
     [ "$v" = PASS ]
@@ -459,6 +538,8 @@ case $cmd in
     up) up ;;
     stage1) stage1 ;;
     stage2) stage2 ;;
+    flagday) flagday_script "${STEP:-run}" ;;
+    register-past|register-small) register_past ;;
     df1) df1 ;;
     df2) df2 ;;
     df3) phase_f df3 ;;
