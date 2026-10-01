@@ -99,7 +99,7 @@ pub fn palw_execution_quantum_count_v1(credited_work: u128, quantum: u128, seed:
         state.update(final_id.as_byte_slice());
         if u128::from(lead_u64(&finish(state))) % quantum < frac { 1 } else { 0 }
     };
-    whole.saturating_add(u128::from(extra)).min(u128::from(u32::MAX)) as u32
+    whole.saturating_add(extra).min(u128::from(u32::MAX)) as u32
 }
 
 /// One issued execution quantum, assigned to a future round. Distinct from a free-prompt receipt

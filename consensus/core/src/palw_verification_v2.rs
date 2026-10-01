@@ -146,6 +146,9 @@ pub fn palw_segment_assignment_v2(anchor: Hash64, claim_id: Hash64, seat_count: 
         }
         let first = (ordinal + rotation) % k;
         let mut mask = PalwSegmentMaskV2::single(first);
+        // The constant is 1 — a partial seat holds exactly one segment, so this adds none today; the loop is the rule for a
+        // ruleset that gives a partial seat more.
+        #[allow(clippy::reversed_empty_ranges)]
         for extra in 1..PALW_VERIFICATION_V2_SEGMENTS_PER_PARTIAL_SEAT {
             mask = mask.union(PalwSegmentMaskV2::single((first + extra) % k));
         }
