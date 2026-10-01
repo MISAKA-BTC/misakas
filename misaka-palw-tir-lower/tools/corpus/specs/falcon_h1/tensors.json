@@ -49,25 +49,25 @@
  "model.layers.0.mamba.A_log": {
   "dtype": "BF16",
   "shape": [
-   128
+   8
   ]
  },
  "model.layers.0.mamba.D": {
   "dtype": "BF16",
   "shape": [
-   128
+   8
   ]
  },
  "model.layers.0.mamba.conv1d.bias": {
   "dtype": "BF16",
   "shape": [
-   1536
+   80
   ]
  },
  "model.layers.0.mamba.conv1d.weight": {
   "dtype": "BF16",
   "shape": [
-   1536,
+   80,
    1,
    4
   ]
@@ -75,13 +75,13 @@
  "model.layers.0.mamba.dt_bias": {
   "dtype": "BF16",
   "shape": [
-   128
+   8
   ]
  },
  "model.layers.0.mamba.in_proj.weight": {
   "dtype": "BF16",
   "shape": [
-   2688,
+   152,
    32
   ]
  },
@@ -89,7 +89,7 @@
   "dtype": "BF16",
   "shape": [
    32,
-   1024
+   64
   ]
  },
  "model.layers.0.pre_ff_layernorm.weight": {
@@ -156,25 +156,25 @@
  "model.layers.1.mamba.A_log": {
   "dtype": "BF16",
   "shape": [
-   128
+   8
   ]
  },
  "model.layers.1.mamba.D": {
   "dtype": "BF16",
   "shape": [
-   128
+   8
   ]
  },
  "model.layers.1.mamba.conv1d.bias": {
   "dtype": "BF16",
   "shape": [
-   1536
+   80
   ]
  },
  "model.layers.1.mamba.conv1d.weight": {
   "dtype": "BF16",
   "shape": [
-   1536,
+   80,
    1,
    4
   ]
@@ -182,13 +182,13 @@
  "model.layers.1.mamba.dt_bias": {
   "dtype": "BF16",
   "shape": [
-   128
+   8
   ]
  },
  "model.layers.1.mamba.in_proj.weight": {
   "dtype": "BF16",
   "shape": [
-   2688,
+   152,
    32
   ]
  },
@@ -196,7 +196,7 @@
   "dtype": "BF16",
   "shape": [
    32,
-   1024
+   64
   ]
  },
  "model.layers.1.pre_ff_layernorm.weight": {

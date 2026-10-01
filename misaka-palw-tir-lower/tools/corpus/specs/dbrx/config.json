@@ -4,7 +4,7 @@
   ],
   "attn_config": {
     "attn_pdrop": 0.0,
-    "clip_qkv": 8.0,
+    "clip_qkv": 0.5,
     "kv_n_heads": 2,
     "model_type": "",
     "rope_theta": 10000.0

@@ -169,6 +169,75 @@ def by_category_md(s):
     return "\n".join(rows)
 
 
+
+def fr_table(blk):
+    """FR -> entries it names, ranked by how many entries it names."""
+    titles = blk.get("_frs", {})
+    by = defaultdict(list)
+    for k, v in blk.items():
+        if k.startswith("_"):
+            continue
+        for fr in v.get("frs", []):
+            by[fr].append(k)
+    rows = ["| FR | feature | size | entries it names | entries |", "| --- | --- | :-: | ---: | --- |"]
+    for fr, ids in sorted(by.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        t = titles.get(fr, {})
+        rows.append(f"| {fr} | {t.get('title', '')} | {t.get('size', '')} | {len(ids)} | {', '.join('`'+i+'`' for i in ids)} |")
+    return "\n".join(rows)
+
+
+UPLIFT_GROUPS = [
+    ("MoE hyper-parameters and layer pattern", {"num_experts_per_tok", "num_local_experts", "num_experts", "moe_intermediate_size", "norm_topk_prob",
+        "first_k_dense_replace", "n_group", "topk_group", "routed_scaling_factor", "n_routed_experts", "n_shared_experts", "decoder_sparse_step",
+        "mlp_only_layers", "moe_topk", "router_jitter_noise", "num_nextn_predict_layers", "shared_expert_intermediate_size"}),
+    ("MLA dimensions", {"kv_lora_rank", "q_lora_rank", "qk_head_dim", "qk_nope_head_dim", "qk_rope_head_dim", "v_head_dim"}),
+    ("nested VLM wrapper (text_config, vision_config, token ids)", {"text_config", "vision_config", "image_token_id", "image_token_index", "video_token_id",
+        "vision_start_token_id", "vision_end_token_id", "boi_token_index", "eoi_token_index", "mm_tokens_per_image"}),
+    ("bias switches", {"use_bias", "attention_out_bias", "bias", "enable_bias", "use_qkv_bias", "qkv_bias", "add_bias_linear"}),
+    ("norm epsilon / norm kind aliases", {"layer_norm_eps", "layer_norm_epsilon", "norm_epsilon", "norm_eps", "layer_norm_elementwise_affine", "do_layer_norm_before", "_remove_final_layer_norm"}),
+    ("activation aliases", {"activation_function", "hidden_activation", "activation", "mlp_hidden_act"}),
+    ("dimension aliases (n_embd, n_head, n_layer, ...)", {"n_embd", "n_head", "n_layer", "n_positions", "n_inner", "d_model", "n_heads", "n_layers", "ffn_dim", "word_embed_proj_dim", "ffn_hidden_size", "max_seq_len"}),
+    ("rope / position keys", {"original_max_position_embeddings", "rotary_pct", "no_rope_layer_interval", "alibi", "use_parallel_residual", "multi_query", "new_decoder_architecture"}),
+]
+
+
+def uplift_md(rep):
+    keys = Counter()
+    who = defaultdict(set)
+    n_read = 0
+    n_dec = 0
+    for e in rep["entries"]:
+        if e["route"] not in ("decoder", "vlm"):
+            continue
+        n_dec += 1
+        n = e["read"]["none"]
+        if n.get("ok"):
+            n_read += 1
+            continue
+        for k in (n["failure"].get("unmapped_config_keys") or []):
+            keys[k] += 1
+            who[k].add(e["id"])
+    rows = ["| convention the template lacks | entries it blocks | the keys |", "| --- | ---: | --- |"]
+    seen = set()
+    for name, ks in UPLIFT_GROUPS:
+        ids = set()
+        used = []
+        for k in ks:
+            if k in who:
+                ids |= who[k]
+                used.append(k)
+                seen.add(k)
+        if ids:
+            rows.append(f"| {name} | {len(ids)} | {', '.join('`'+k+'`' for k in sorted(used))} |")
+    rest = sorted(set(who) - seen)
+    other_ids = set()
+    for k in rest:
+        other_ids |= who[k]
+    rows.append(f"| everything else (family-specific keys) | {len(other_ids)} | {len(rest)} distinct keys |")
+    head = f"The standard template (no adapter) reads {n_read} of the {n_dec} decoder-route entries without refusing; for the rest it names the keys it does not model:\n\n"
+    return head + "\n".join(rows)
+
+
 def splice(path, name, body):
     b, e = BEGIN.format(name), END.format(name)
     text = open(path).read() if os.path.exists(path) else ""
@@ -197,12 +266,18 @@ def main():
         splice(a.md, "corpus", table_corpus(man))
         splice(a.md, "summary", summary_md(s) + "\n\n" + by_category_md(s))
         splice(a.md, "results", table_results(rep, man, blk))
+        splice(a.md, "frs", fr_table(blk))
+        splice(a.md, "uplift", uplift_md(rep))
     else:
         print(summary_md(s))
         print()
         print(by_category_md(s))
         print()
         print(table_results(rep, man, blk))
+        print()
+        print(fr_table(blk))
+        print()
+        print(uplift_md(rep))
 
 
 if __name__ == "__main__":

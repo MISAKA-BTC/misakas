@@ -21,23 +21,23 @@
  "model.layers.0.mlp.input_linear.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
-   128,
+   4,
+   32,
    32
   ]
  },
  "model.layers.0.mlp.output_linear.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
+   4,
    32,
-   64
+   16
   ]
  },
  "model.layers.0.mlp.router.layer.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
+   4,
    32
   ]
  },
@@ -56,30 +56,30 @@
  "model.layers.0.self_attention.experts.input_linear.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
-   256,
+   4,
+   16,
    32
   ]
  },
  "model.layers.0.self_attention.experts.output_linear.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
+   4,
    32,
-   256
+   16
   ]
  },
  "model.layers.0.self_attention.experts.router.layer.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
+   4,
    32
   ]
  },
  "model.layers.0.self_attention.kv_proj.weight": {
   "dtype": "BF16",
   "shape": [
-   512,
+   32,
    32
   ]
  },
@@ -98,23 +98,23 @@
  "model.layers.1.mlp.input_linear.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
-   128,
+   4,
+   32,
    32
   ]
  },
  "model.layers.1.mlp.output_linear.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
+   4,
    32,
-   64
+   16
   ]
  },
  "model.layers.1.mlp.router.layer.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
+   4,
    32
   ]
  },
@@ -133,30 +133,30 @@
  "model.layers.1.self_attention.experts.input_linear.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
-   256,
+   4,
+   16,
    32
   ]
  },
  "model.layers.1.self_attention.experts.output_linear.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
+   4,
    32,
-   256
+   16
   ]
  },
  "model.layers.1.self_attention.experts.router.layer.weight": {
   "dtype": "BF16",
   "shape": [
-   8,
+   4,
    32
   ]
  },
  "model.layers.1.self_attention.kv_proj.weight": {
   "dtype": "BF16",
   "shape": [
-   512,
+   32,
    32
   ]
  },

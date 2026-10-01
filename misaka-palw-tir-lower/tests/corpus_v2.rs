@@ -238,7 +238,7 @@ struct Reads {
 }
 
 fn adapters_dir() -> PathBuf {
-    corpus_dir().join("adapters")
+    std::env::var("PALW_CORPUS_ADAPTERS").map(PathBuf::from).unwrap_or_else(|_| corpus_dir().join("adapters"))
 }
 
 /// Read one config three ways (the built-in routing, the standard template alone, a third-party
@@ -251,7 +251,19 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
     let none = read_model(cfg, tensors, &ReadOptions { adapter: AdapterChoice::None });
     let user_path = adapters_dir().join(format!("{}.json", e.id));
     let user_text = std::fs::read_to_string(&user_path).ok();
-    let user = user_text.as_ref().map(|t| read_model(cfg, tensors, &ReadOptions { adapter: AdapterChoice::Text(t.clone()) }));
+    // A built-in refusal (adapters/refusals.json) is checked BEFORE any adapter, so a third party's
+    // adapter can never override it. The harness measures whether DATA could express the model, so
+    // it reads such a configuration under a renamed architecture and says so in the report.
+    let arch = cfg.get("architectures").and_then(|a| a.get(0)).and_then(Value::as_str).unwrap_or("").to_string();
+    let bypass = misaka_palw_tir_lower::adapter::builtin::refusal_for(&arch).is_some();
+    let user_cfg: Value = if bypass {
+        let mut c = cfg.clone();
+        c["architectures"] = json!([format!("User{arch}")]);
+        c
+    } else {
+        cfg.clone()
+    };
+    let user = user_text.as_ref().map(|t| read_model(&user_cfg, tensors, &ReadOptions { adapter: AdapterChoice::Text(t.clone()) }));
 
     let mut j = serde_json::Map::new();
     let sum = |r: &Result<ModelRead, ReadFailure>| -> Value {
@@ -282,6 +294,7 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
             a_same = Some(true);
         }
     }
+    j.insert("refusal_bypassed_for_user_adapter".into(), json!(bypass && user_text.is_some()));
     j.insert("a_same_as_adapter".into(), json!(a_same));
     j.insert("a_diff".into(), json!(a_diff));
 
@@ -326,7 +339,7 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
     } else {
         ReadOptions { adapter: AdapterChoice::Auto }
     };
-    let rep = analyze(cfg, tensors, &opts);
+    let rep = analyze(if best_user { &user_cfg } else { cfg }, tensors, &opts);
     j.insert("report".into(), report_json(&rep));
     j.insert("claimed_level".into(), json!(candidates.first().map(|c| c.level).unwrap_or("C")));
     Reads { candidates, json: Value::Object(j) }

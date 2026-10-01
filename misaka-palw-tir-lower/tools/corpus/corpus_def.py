@@ -217,16 +217,16 @@ add("glm4_moe", "text/moe", "decoder", "Glm4MoeForCausalLM", "glm4_moe", "causal
 
 # ─────────────────────────────── D. MoE decoders NOT in the pack ───────────────────────────────
 add("dbrx", "text/moe", "decoder", "DbrxForCausalLM", "dbrx", "causal",
-    dict(attn_config={"clip_qkv": 8.0, "kv_n_heads": 2, "rope_theta": 10000.0},
+    dict(attn_config={"clip_qkv": 0.5, "kv_n_heads": 2, "rope_theta": 10000.0},
          ffn_config={"ffn_hidden_size": 64, "moe_num_experts": 4, "moe_top_k": 2}, num_key_value_heads=2), usage="l", why="fused expert tensors, QKV clip, bias-free LayerNorm (Databricks)", examples=["databricks/dbrx-instruct"])
 add("jetmoe", "text/moe", "decoder", "JetMoeForCausalLM", "jetmoe", "causal",
-    dict(), usage="l", why="MoE for BOTH the MLP and the attention (mixture-of-attention heads)", examples=["jetmoe/jetmoe-8b"])
+    dict(num_key_value_heads=2, kv_channels=8, intermediate_size=16, num_local_experts=4, num_experts_per_tok=2), usage="l", why="MoE for BOTH the MLP and the attention (mixture-of-attention heads)", examples=["jetmoe/jetmoe-8b"])
 add("ernie4_5_moe", "text/moe", "decoder", "Ernie4_5_MoeForCausalLM", "ernie4_5_moe", "causal",
-    dict(), usage="m", why="softmax router with a correction bias, shared experts, interleaved rotary (ERNIE-4.5-21B/300B-A47B)", examples=["baidu/ERNIE-4.5-21B-A3B-PT"])
+    dict(moe_num_experts=8, moe_k=2, moe_intermediate_size=16, moe_num_shared_experts=1), usage="m", why="softmax router with a correction bias, shared experts, interleaved rotary (ERNIE-4.5-21B/300B-A47B)", examples=["baidu/ERNIE-4.5-21B-A3B-PT"])
 add("hunyuan_v1_moe", "text/moe", "decoder", "HunYuanMoEV1ForCausalLM", "hunyuan_v1_moe", "causal",
-    dict(head_dim=8), usage="m", why="Hunyuan-A13B: QK-norm, shared expert, top-k routing", examples=["tencent/Hunyuan-A13B-Instruct"])
+    dict(head_dim=8, num_experts=4, moe_topk=2), usage="m", why="Hunyuan-A13B: QK-norm, shared expert, top-k routing", examples=["tencent/Hunyuan-A13B-Instruct"])
 add("minimax_m2", "text/moe", "decoder", "MiniMaxM2ForCausalLM", "minimax_m2", "causal",
-    dict(), usage="m", why="sigmoid router + bias, QK-norm over the whole projection, partial rotary (MiniMax-M2)", examples=["MiniMaxAI/MiniMax-M2"])
+    dict(head_dim=8, num_local_experts=8, num_experts_per_tok=2, intermediate_size=16), usage="m", why="sigmoid router + bias, QK-norm over the whole projection, partial rotary (MiniMax-M2)", examples=["MiniMaxAI/MiniMax-M2"])
 add("longcat_flash", "text/moe", "decoder", "LongcatFlashForCausalLM", "longcat_flash", "causal",
     dict(num_layers=2, head_dim=4, ffn_hidden_size=64, q_lora_rank=12, kv_lora_rank=8, qk_nope_head_dim=8,
          qk_rope_head_dim=4, v_head_dim=8, qk_head_dim=12, moe_topk=2, n_routed_experts=8, zero_expert_num=2,
@@ -237,7 +237,11 @@ add("deepseek_v32", "text/moe", "decoder", "DeepseekV32ForCausalLM", "deepseek_v
          n_group=4, topk_group=2, num_experts_per_tok=2, moe_intermediate_size=16, first_k_dense_replace=1,
          layer_types=["deepseek_sparse_attention"] * 2, mlp_layer_types=["dense", "sparse"]), usage="h", why="DeepSeek sparse attention: a learned lightning indexer picks the top-k keys (V3.2)", examples=["deepseek-ai/DeepSeek-V3.2"])
 add("deepseek_v4", "text/moe", "decoder", "DeepseekV4ForCausalLM", "deepseek_v4", "causal",
-    dict(), usage="h", why="2026 DeepSeek: hyper-connections, compressed sparse attention, hash-routed experts", examples=["deepseek-ai/DeepSeek-V4"])
+    dict(head_dim=16, partial_rotary_factor=0.5, num_key_value_heads=1, q_lora_rank=12, o_groups=2, o_lora_rank=8, index_n_heads=2,
+         index_head_dim=8, index_topk=4, n_routed_experts=8, moe_intermediate_size=16, num_experts_per_tok=2,
+         compress_rates={"compressed_sparse_attention": 2, "heavily_compressed_attention": 4},
+         layer_types=["compressed_sparse_attention", "heavily_compressed_attention"], mlp_layer_types=["hash_moe", "moe"],
+         sliding_window=4, num_nextn_predict_layers=0, hc_mult=2, hc_sinkhorn_iters=4), usage="h", why="2026 DeepSeek: hyper-connections, compressed sparse attention, hash-routed experts", examples=["deepseek-ai/DeepSeek-V4"])
 
 # ─────────────────────────────── E. hybrids, SSMs, recurrent models already in the pack ───────────────────────────────
 add("qwen3_next", "text/hybrid", "decoder", "Qwen3NextForCausalLM", "qwen3_next", "causal",
@@ -266,7 +270,10 @@ add("rwkv", "text/hybrid", "decoder", "RwkvForCausalLM", "rwkv", "causal",
 
 # ─────────────────────────────── F. hybrids NOT in the pack ───────────────────────────────
 add("falcon_h1", "text/hybrid", "decoder", "FalconH1ForCausalLM", "falcon_h1", "causal",
-    dict(), usage="m", why="attention and Mamba-2 in PARALLEL inside every layer, muP multipliers (TII)", examples=["tiiuae/Falcon-H1-7B-Instruct"])
+    dict(num_key_value_heads=2, head_dim=8, mamba_d_ssm=64, mamba_n_heads=8, mamba_d_head=8, mamba_d_state=4, mamba_n_groups=2,
+         mamba_chunk_size=8, embedding_multiplier=2.0, lm_head_multiplier=0.5, mlp_multipliers=[1.5, 0.5], key_multiplier=0.8,
+         attention_out_multiplier=0.9, attention_in_multiplier=1.1, ssm_multipliers=[1.2, 0.8, 1.1, 0.9, 1.0],
+         ssm_in_multiplier=1.3, ssm_out_multiplier=0.7), usage="m", why="attention and Mamba-2 in PARALLEL inside every layer, muP multipliers (TII)", examples=["tiiuae/Falcon-H1-7B-Instruct"])
 add("granitemoehybrid", "text/hybrid", "decoder", "GraniteMoeHybridForCausalLM", "granitemoehybrid", "causal",
     dict(num_key_value_heads=2, mamba_n_heads=8, mamba_d_head=8, mamba_d_state=4, mamba_n_groups=2, mamba_chunk_size=8,
          layer_types=["linear_attention", "full_attention"], num_local_experts=4, num_experts_per_tok=2,
@@ -276,9 +283,12 @@ add("zamba2", "text/hybrid", "decoder", "Zamba2ForCausalLM", "zamba2", "causal",
          mamba_d_state=4, n_mamba_heads=4, mamba_headdim=16, attention_hidden_size=64, attention_head_dim=16,
          num_key_value_heads=4, num_query_groups=4, kv_channels=16, use_mamba_kernels=False, adapter_rank=4), usage="l", why="Mamba-2 backbone with ONE shared attention block reused at several depths", examples=["Zyphra/Zamba2-7B-Instruct"])
 add("nemotron_h", "text/hybrid", "decoder", "NemotronHForCausalLM", "nemotron_h", "causal",
-    dict(), usage="m", why="single-block layers (Mamba-2, attention, MLP or MoE) in a pattern string", examples=["nvidia/NVIDIA-Nemotron-Nano-9B-v2"])
+    dict(layers_block_type=["linear_attention", "moe", "full_attention", "mlp"], num_hidden_layers=4, mamba_num_heads=8,
+         mamba_head_dim=8, ssm_state_size=4, n_groups=2, n_routed_experts=4, moe_intermediate_size=16,
+         moe_shared_expert_intermediate_size=16, head_dim=8, num_key_value_heads=2, intermediate_size=64, chunk_size=8), usage="m", why="single-block layers (Mamba-2, attention, MLP or MoE) in a pattern string", examples=["nvidia/NVIDIA-Nemotron-Nano-9B-v2"])
 add("lfm2", "text/hybrid", "decoder", "Lfm2ForCausalLM", "lfm2", "causal",
-    dict(), usage="m", why="gated short convolutions interleaved with attention (Liquid LFM2)", examples=["LiquidAI/LFM2-1.2B"])
+    dict(num_hidden_layers=4, num_key_value_heads=2, layer_types=["conv", "conv", "full_attention", "conv"], full_attn_idxs=[2],
+         block_auto_adjust_ff_dim=False, conv_L_cache=3, conv_bias=True), usage="m", why="gated short convolutions interleaved with attention (Liquid LFM2)", examples=["LiquidAI/LFM2-1.2B"])
 add("kimi_linear", "text/hybrid", "decoder", "KimiLinearForCausalLM", "kimi_linear", "causal",
     dict(layer_types=["linear_attention", "full_attention"], mlp_layer_types=["dense", "sparse"], linear_head_dim=8,
          linear_num_heads=4, kv_lora_rank=8, qk_rope_head_dim=4, qk_nope_head_dim=8, v_head_dim=8, head_dim=4,

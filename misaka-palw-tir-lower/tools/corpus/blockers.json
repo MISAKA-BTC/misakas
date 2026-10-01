@@ -1,0 +1,488 @@
+{
+ "_doc": "Lane H's classification of every corpus entry that is not Level A/B: the KIND of gap (feature | route | primitive | protocol | remote), the feature requests (docs/design/palw/tir/feature-requests.md) that name it, and one line. 'feature': a generic lowering feature is missing, expressible with the existing primitives; 'route': no data route exists for this kind of model (the lowering is Rust per family or absent), existing primitives suffice; 'primitive': a new general primitive is needed; 'protocol': a capability beyond the IR (an input/output binding, a stage kind) is needed; 'remote': the reference semantics are remote code outside transformers. 'evidence' says what was run: 'adapter' = a third-party adapter was written and the harness shows the single failing step; 'patched' = with the one storage difference removed in a copy of the fixture every stage holds; 'analysis' = read from the transformers code, not yet run.",
+ "apertus": {
+  "class": "feature",
+  "frs": [
+   "FR-05"
+  ],
+  "short": "xIELU activation (learned per-layer parameters)",
+  "evidence": "analysis"
+ },
+ "hunyuan_v1_dense": {
+  "class": "feature",
+  "frs": [
+   "FR-02"
+  ],
+  "short": "q/k RMS norm applied AFTER the rotation",
+  "evidence": "adapter: float vs HF rel 8.9e-2 with the norm before the rotation"
+ },
+ "hunyuan_v1_moe": {
+  "class": "feature",
+  "frs": [
+   "FR-02"
+  ],
+  "short": "q/k RMS norm applied AFTER the rotation",
+  "evidence": "adapter: float vs HF rel 4.6e-2 with the norm before the rotation"
+ },
+ "bitnet": {
+  "class": "feature",
+  "frs": [
+   "FR-03"
+  ],
+  "short": "attn_sub_norm before o_proj and ffn_sub_norm before down_proj",
+  "evidence": "adapter-free: the standard template leaves 4 tensors unread"
+ },
+ "diffllama": {
+  "class": "feature",
+  "frs": [
+   "FR-04"
+  ],
+  "short": "differential attention (head-pair difference, 2d RMS group norm, derived lambda)",
+  "evidence": "analysis"
+ },
+ "gemma3n_text": {
+  "class": "feature",
+  "frs": [
+   "FR-12"
+  ],
+  "short": "AltUp, LAuReL, activation sparsity (named in the registry)",
+  "evidence": "registry"
+ },
+ "dbrx": {
+  "class": "feature",
+  "frs": [
+   "FR-01"
+  ],
+  "short": "experts stored flat [E*I, D]; everything else is data",
+  "evidence": "patched: all stages hold with the experts split"
+ },
+ "jetmoe": {
+  "class": "feature",
+  "frs": [
+   "FR-06"
+  ],
+  "short": "mixture-of-attention: routed per-expert q/o projections",
+  "evidence": "analysis"
+ },
+ "ernie4_5_moe": {
+  "class": "feature",
+  "frs": [
+   "FR-01",
+   "FR-07"
+  ],
+  "short": "selection bias [1,E] needs a squeeze; softmax router ignores selection_bias",
+  "evidence": "adapter + patched: with the squeeze float vs HF still rel 1.7e-1 (the bias is dropped)"
+ },
+ "granitemoehybrid": {
+  "class": "feature",
+  "frs": [
+   "FR-01",
+   "FR-25"
+  ],
+  "short": "fused shared-expert gate/up tensor; a built-in refusal cannot be overridden",
+  "evidence": "patched: all stages hold with the shared MLP split"
+ },
+ "longcat_flash": {
+  "class": "feature",
+  "frs": [
+   "FR-08"
+  ],
+  "short": "zero-computation experts and shortcut-connected MoE",
+  "evidence": "analysis"
+ },
+ "deepseek_v32": {
+  "class": "feature",
+  "frs": [
+   "FR-09"
+  ],
+  "short": "DeepSeek sparse attention: a token-level top-k indexer",
+  "evidence": "analysis"
+ },
+ "deepseek_v4": {
+  "class": "feature",
+  "frs": [
+   "FR-10"
+  ],
+  "short": "hyper-connections, compressed sparse/heavily compressed attention, hash routing, sqrt-softplus scoring",
+  "evidence": "analysis"
+ },
+ "falcon_h1": {
+  "class": "feature",
+  "frs": [
+   "FR-11"
+  ],
+  "short": "attention and Mamba-2 in parallel in one layer; muP multipliers",
+  "evidence": "registry"
+ },
+ "zamba2": {
+  "class": "feature",
+  "frs": [
+   "FR-13"
+  ],
+  "short": "one shared attention block reused at several depths with per-depth LoRA",
+  "evidence": "registry"
+ },
+ "nemotron_h": {
+  "class": "feature",
+  "frs": [
+   "FR-14"
+  ],
+  "short": "layers that are a single block (no mixer)",
+  "evidence": "registry"
+ },
+ "lfm2": {
+  "class": "feature",
+  "frs": [
+   "FR-15"
+  ],
+  "short": "gated short convolution mixer",
+  "evidence": "analysis"
+ },
+ "kimi_linear": {
+  "class": "feature",
+  "frs": [
+   "FR-16"
+  ],
+  "short": "Kimi delta attention (channel-wise gated delta rule)",
+  "evidence": "analysis"
+ },
+ "deberta_v2": {
+  "class": "route",
+  "frs": [
+   "FR-17"
+  ],
+  "short": "disentangled attention in the bidirectional encoder",
+  "evidence": "analysis"
+ },
+ "albert": {
+  "class": "route",
+  "frs": [
+   "FR-17",
+   "FR-26"
+  ],
+  "short": "factorised embedding in the bidirectional lowerer (it panics)",
+  "evidence": "adapter: lower panics 'Add operands do not broadcast'"
+ },
+ "modernbert": {
+  "class": "route",
+  "frs": [
+   "FR-17"
+  ],
+  "short": "RoPE, local/global windows, GeGLU, pre-norm in the bidirectional lowerer",
+  "evidence": "analysis"
+ },
+ "nomic_bert": {
+  "class": "route",
+  "frs": [
+   "FR-17"
+  ],
+  "short": "RoPE and a gated MLP in the bidirectional lowerer",
+  "evidence": "analysis"
+ },
+ "t5": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "encoder-decoder lowering is a per-family Rust parser",
+  "evidence": "core Rust route lowers and is admitted"
+ },
+ "t5_gated": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "encoder-decoder lowering is a per-family Rust parser",
+  "evidence": "core Rust route lowers and is admitted"
+ },
+ "bart": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "encoder-decoder lowering is a per-family Rust parser",
+  "evidence": "core Rust route lowers and is admitted"
+ },
+ "mbart": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "encoder-decoder lowering is a per-family Rust parser",
+  "evidence": "core Rust route lowers and is admitted"
+ },
+ "marian": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "encoder-decoder lowering is a per-family Rust parser",
+  "evidence": "core Rust route lowers and is admitted"
+ },
+ "longt5": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "local / transient-global encoder attention; no parser",
+  "evidence": "analysis"
+ },
+ "t5_encoder": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "an encoder alone as an Embedding/Rows class",
+  "evidence": "analysis"
+ },
+ "paligemma": {
+  "class": "feature",
+  "frs": [
+   "FR-20"
+  ],
+  "short": "prefix-LM attention (named in the registry)",
+  "evidence": "registry"
+ },
+ "mllama": {
+  "class": "feature",
+  "frs": [
+   "FR-21"
+  ],
+  "short": "cross-attention layers over vision states (named in the registry)",
+  "evidence": "registry"
+ },
+ "clip_vision": {
+  "class": "route",
+  "frs": [
+   "FR-19"
+  ],
+  "short": "vision towers are per-family Rust parsers",
+  "evidence": "core Rust route lowers and is admitted"
+ },
+ "siglip_vision": {
+  "class": "route",
+  "frs": [
+   "FR-19"
+  ],
+  "short": "vision towers are per-family Rust parsers",
+  "evidence": "core Rust route lowers and is admitted"
+ },
+ "vit": {
+  "class": "route",
+  "frs": [
+   "FR-19"
+  ],
+  "short": "no vision parser for ViT/DeiT/DINOv2",
+  "evidence": "analysis"
+ },
+ "resnet": {
+  "class": "route",
+  "frs": [
+   "FR-19"
+  ],
+  "short": "convolutions: Conv2d/BatchNorm folding/pooling lowering",
+  "evidence": "analysis"
+ },
+ "unet2d_condition": {
+  "class": "route",
+  "frs": [
+   "FR-22"
+  ],
+  "short": "Conv2d, GroupNorm, timestep embedding, cross-attention, denoise loop",
+  "evidence": "analysis"
+ },
+ "unet_sdxl": {
+  "class": "route",
+  "frs": [
+   "FR-22"
+  ],
+  "short": "as the SD UNet plus added text/time conditioning",
+  "evidence": "analysis"
+ },
+ "dit": {
+  "class": "route",
+  "frs": [
+   "FR-22"
+  ],
+  "short": "patchify, adaLN-Zero, class conditioning, denoise loop",
+  "evidence": "analysis"
+ },
+ "flux": {
+  "class": "route",
+  "frs": [
+   "FR-22"
+  ],
+  "short": "MMDiT double/single blocks, 3-axis RoPE, flow-matching loop",
+  "evidence": "analysis"
+ },
+ "sd3": {
+  "class": "route",
+  "frs": [
+   "FR-22"
+  ],
+  "short": "MMDiT joint attention, adaLN, flow-matching loop",
+  "evidence": "analysis"
+ },
+ "vae_kl": {
+  "class": "route",
+  "frs": [
+   "FR-22"
+  ],
+  "short": "convolutional encoder/decoder with a mid-block attention",
+  "evidence": "analysis"
+ },
+ "whisper": {
+  "class": "protocol",
+  "frs": [
+   "FR-23"
+  ],
+  "short": "audio input binding + log-mel front end + Conv1d stem + cross-attention",
+  "evidence": "analysis"
+ },
+ "wav2vec2": {
+  "class": "protocol",
+  "frs": [
+   "FR-23"
+  ],
+  "short": "raw-waveform input + conv feature extractor + grouped positional conv",
+  "evidence": "analysis"
+ },
+ "speecht5": {
+  "class": "protocol",
+  "frs": [
+   "FR-23"
+  ],
+  "short": "speech pre/post-nets and a vocoder; audio output kind",
+  "evidence": "analysis"
+ },
+ "musicgen": {
+  "class": "protocol",
+  "frs": [
+   "FR-23"
+  ],
+  "short": "multi-codebook autoregressive decoder, delay pattern, audio output",
+  "evidence": "analysis"
+ },
+ "encodec": {
+  "class": "protocol",
+  "frs": [
+   "FR-23"
+  ],
+  "short": "causal conv codec with residual vector quantisation",
+  "evidence": "analysis"
+ },
+ "chatglm3": {
+  "class": "remote",
+  "frs": [
+   "FR-24"
+  ],
+  "short": "trust_remote_code: the reference is not in transformers",
+  "evidence": "registry"
+ },
+ "_frs": {
+  "FR-01": {
+   "title": "weights as data: tensor expressions (slice, reshape, squeeze, transpose, stack) in adapter `names`",
+   "size": "M"
+  },
+  "FR-02": {
+   "title": "q/k norm applied after the rotation",
+   "size": "S"
+  },
+  "FR-03": {
+   "title": "sub-layer norms (norm before o_proj, norm before down_proj)",
+   "size": "S"
+  },
+  "FR-04": {
+   "title": "differential attention",
+   "size": "M"
+  },
+  "FR-05": {
+   "title": "learned pointwise activation (xIELU)",
+   "size": "S"
+  },
+  "FR-06": {
+   "title": "mixture-of-attention (routed per-expert q/o projections)",
+   "size": "M"
+  },
+  "FR-07": {
+   "title": "selection bias under softmax routing (+ refuse a flag the lowerer would drop)",
+   "size": "S"
+  },
+  "FR-08": {
+   "title": "zero-computation experts and shortcut-connected MoE",
+   "size": "M"
+  },
+  "FR-09": {
+   "title": "token-level top-k indexer attention (DeepSeek sparse attention)",
+   "size": "L"
+  },
+  "FR-10": {
+   "title": "DeepSeek-V4 set: hyper-connections, compressed attention, hash routing, sqrt-softplus",
+   "size": "L"
+  },
+  "FR-11": {
+   "title": "parallel mixers in one layer (attention + Mamba-2) and muP multipliers",
+   "size": "M"
+  },
+  "FR-12": {
+   "title": "Gemma-3n set: AltUp, LAuReL, activation sparsity",
+   "size": "L"
+  },
+  "FR-13": {
+   "title": "shared attention block with per-depth LoRA (Zamba2)",
+   "size": "L"
+  },
+  "FR-14": {
+   "title": "layers without a mixer (a layer that is one block)",
+   "size": "S"
+  },
+  "FR-15": {
+   "title": "gated short-convolution mixer",
+   "size": "M"
+  },
+  "FR-16": {
+   "title": "Kimi delta attention",
+   "size": "L"
+  },
+  "FR-17": {
+   "title": "bidirectional encoders lowered from a ModelSpec (not BERT-shaped Rust)",
+   "size": "L"
+  },
+  "FR-18": {
+   "title": "encoder-decoders lowered from a spec (cross-attention, relative bias, local attention)",
+   "size": "L"
+  },
+  "FR-19": {
+   "title": "vision towers and convolutions lowered from a spec",
+   "size": "L"
+  },
+  "FR-20": {
+   "title": "prefix-LM attention",
+   "size": "M"
+  },
+  "FR-21": {
+   "title": "cross-attention layers in a decoder",
+   "size": "L"
+  },
+  "FR-22": {
+   "title": "image generation: conv/GroupNorm/adaLN/timestep blocks, denoise loop, VAE",
+   "size": "XL"
+  },
+  "FR-23": {
+   "title": "audio: front end, Conv1d, codec/vocoder, audio input and output bindings",
+   "size": "XL"
+  },
+  "FR-24": {
+   "title": "a way to pin a remote-code reference",
+   "size": "policy"
+  },
+  "FR-25": {
+   "title": "user adapters override built-in refusals; drop the stale Granite-hybrid refusal",
+   "size": "S"
+  },
+  "FR-26": {
+   "title": "lowerer robustness and Level A honesty (panics, dropped flags, unread tensors)",
+   "size": "S"
+  }
+ }
+}

@@ -40,10 +40,73 @@
    32
   ]
  },
+ "model.layers.0.mlp.experts.1.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.0.mlp.experts.1.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.1.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.2.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.0.mlp.experts.2.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.2.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.3.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.0.mlp.experts.3.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.3.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
  "model.layers.0.mlp.gate.wg.weight": {
   "dtype": "BF16",
   "shape": [
-   1,
+   4,
    32
   ]
  },
@@ -141,10 +204,73 @@
    32
   ]
  },
+ "model.layers.1.mlp.experts.1.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.1.mlp.experts.1.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.1.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.2.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.1.mlp.experts.2.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.2.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.3.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.1.mlp.experts.3.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.3.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
  "model.layers.1.mlp.gate.wg.weight": {
   "dtype": "BF16",
   "shape": [
-   1,
+   4,
    32
   ]
  },
