@@ -31,11 +31,14 @@ pub(crate) fn served_schedule(r: &kaspa_rpc_core::GetPalwModelMarketResponse) ->
 /// the registry has not admitted its class. Asked before a carrier is built: a refused carrier seed
 /// or buy still lands, and its sink output is the payment (P-B1). A node older than version 7 served
 /// no gate — its fold asked none — and reads as `None`. A sell never asks.
+///
+/// It used to say the MSK paid into the sink "would not come back": a node does not relay such a
+/// carrier, and where one is mined anyway the chain pays it back past the 2026-09-23 audit fence
+/// (P-B1) — [`refusal_line`] says which, per network (the 2026-09-25 Position review's N3).
 pub(crate) fn market_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> Option<String> {
     (!r.market_refusal.is_empty()).then(|| {
         format!(
-            "line {} takes no seed and no buy now: {} — the chain would refuse the move and the MSK paid into the \
-             sink would not come back (sells stay open)",
+            "line {} takes no seed and no buy now: {} — the chain would refuse the move (sells stay open)",
             r.line_id, r.market_refusal
         )
     })
@@ -785,7 +788,10 @@ mod tests {
             ..Default::default()
         };
         let why = market_refusal(&refused).expect("refused");
-        assert!(why.contains("Prefetching") && why.contains("would not come back"), "{why}");
+        assert!(why.contains("Prefetching") && why.contains("would refuse"), "{why}");
+        // N3: it no longer promises the MSK is lost — a node does not relay such a carrier, and the
+        // chain pays a mined one back where it refunds (P-B1); `refusal_line` says which, per network.
+        assert!(!why.contains("would not come back"), "{why}");
     }
 
     /// **P-B4: below the 2026-09-23 fence a sell burns its proceeds, so the tool refuses to sign
