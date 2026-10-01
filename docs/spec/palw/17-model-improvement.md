@@ -151,13 +151,13 @@ one.
 | Value | `{ activation, scoring_set_id, sign_table_id, court_version, ceilings: PalwImprovementCeilingsV1 }` |
 | `consensus_params_id` | Some-only: `"palw_improvement_v1/protocol-v1"`, the activation (LE u64), then the value |
 | `consensus_schedule_id` | Some-only: `"palw_improvement_v1"`, the activation, then the value |
-| Value bytes | `scoring_set_id` (64) ‖ `sign_table_id` (64) ‖ LE u16 `court_version` ‖ u8 `max_candidates_per_epoch` ‖ LE u32 `max_items_per_epoch` ‖ LE u64 `max_eval_positions_per_epoch` ‖ LE u16 `max_eval_budget_permille` ‖ LE u32 `max_governed_lines` ‖ LE u32 `max_policy_bytes` ‖ LE u32 `max_open_epochs` ‖ LE u32 `max_live_results` |
+| Value bytes | `scoring_set_id` (64) ‖ `sign_table_id` (64) ‖ LE u16 `court_version` ‖ u8 `max_candidates_per_epoch` ‖ LE u32 `max_items_per_epoch` ‖ LE u64 `max_eval_positions_per_epoch` ‖ LE u16 `max_eval_budget_permille` ‖ LE u32 `max_governed_lines` ‖ LE u32 `max_policy_bytes` ‖ LE u32 `max_open_epochs` ‖ LE u32 `max_live_results` ‖ LE u16 `max_eval_seat_permille` (appended last, 2026-09-30) |
 | Normaliser | `Some(never())` collapses to `None`; `for_each_fence` visits the activation only |
 | Fork id | listed in `palw_fences_v1` as `("palw_improvement_v1", activation)` |
-| Mirror | `PalwStateParamsV2::improve_from_daa` and `improve_ceilings` (borsh-skipped), written by `Params::sync_palw_improvement_v1` only |
+| Mirror | `PalwStateParamsV2::improve_from_daa`, `improve_ceilings` and `improve_lifecycle_daa` (borsh-skipped; the last is the ruleset's claim lifecycle bound, §17.4.3 rows 19–20), written by `Params::sync_palw_improvement_v1` only |
 | Drill | `--palw-drill-improve-at` (`palw_drill_improve_fence_at_v1`, list `PALW_DRILL_IMPROVE_FENCES_V1`, ceilings `PALW_DRILL_IMPROVE_CEILINGS_V1`) |
-| Format caps | candidates ≤ 16, items ≤ 4,096 per epoch, positions ≤ 2^40 per epoch, budget ≤ 1,000 ‰, lines ≤ 1,024, policy ≤ 16,384 bytes, open epochs ≤ 64, **live results ≤ 2^17**; none zero. `max_live_results` is the product bound every block's root rehash pays: an epoch reserves `(n + regression_items + safety_items) × (k_max + 2)` result rows when it opens (the policy check refuses a policy whose epoch could never fit), and frees them when its results retire; an epoch opens only if the reservation fits. The drill's ceilings are (8, 1,024, 2^32, 500, 64, 16,384, 8, 2^14) |
-| Prerequisites | a `ConsensusV2` ruleset (checked first); `palw_audit_2026_09_11` declared; `palw_tir_v1`, **`palw_tir_fence2`**, `palw_gen_v1` and `palw_kary_court` in force at or below the activation (the second IR fence since 2026-09-29: every evaluation pipeline sized under H7, and no verdict may flip mid-epoch). *An evaluation claim also needs `palw_fp_decode_rules` in force (§17.8.4); `validate_palw_v2` does not require it at arming in v1 **[decision A6-1]** — a ruleset that arms improvement without it opens epochs whose evaluation claims the header-context door refuses, so every such epoch ends `NoChange`. Recommended at the integration, with the decode-rules entry in a flag-day list: require it here as `palw_fp_job_v5` does.* |
+| Format caps | candidates ≤ 16, items ≤ 4,096 per epoch, positions ≤ 2^40 per epoch, budget ≤ 1,000 ‰, lines ≤ 1,024, policy ≤ 16,384 bytes, open epochs ≤ 64, **live results ≤ 2^17**, **seat share ≤ 1,000 ‰** (zero allowed: no seat share); the others none zero. `max_live_results` is the product bound every block's root rehash pays: an epoch reserves `(n + regression_items + safety_items) × (k_max + 2)` result rows when it opens (the policy check refuses a policy whose epoch could never fit), and frees them when its results retire; an epoch opens only if the reservation fits. The drill's ceilings are (8, 1,024, 2^32, 500, 64, 16,384, 8, 2^14, 500) |
+| Prerequisites | a `ConsensusV2` ruleset (checked first); `palw_audit_2026_09_11` declared; `palw_tir_v1`, **`palw_tir_fence2`**, `palw_gen_v1` and `palw_kary_court` in force at or below the activation (the second IR fence since 2026-09-29: every evaluation pipeline sized under H7, and no verdict may flip mid-epoch); **and `palw_fp_decode_rules` in force at or below the activation** **[decision A6-1, the coordinator's, 2026-09-30]** — an evaluation claim is an FP Job V4's bytes under the decode rules (§17.8.4), so a ruleset that armed improvement without them would open epochs whose claims the header-context door refuses, and every such epoch would end `NoChange`. `validate_palw_v2` refuses such a ruleset, as it refuses `palw_fp_job_v5` without them; the integration adds the check and a decode-rules entry (`--palw-drill-decode-rules-at`) to the flag-day and drill lists. |
 | Shipped | `None` on every preset and in no testnet-12 flag-day list |
 
 ### Domain keys (keyed BLAKE2b-512, 64-byte output)
@@ -173,9 +173,12 @@ one.
 | `misaka-palw/improve/epoch-seed/v1` | the epoch seed (§17.8.1) |
 | `misaka-palw/improve/draw/v1` | the draw order (§17.8.1) |
 | `misaka-palw/improve/setter-item/v1`, `…/suite-item/v1` | a setter item's and a suite item's id (§17.8.1) |
-| `misaka-palw/improve/judge/v1`, `…/pair-order/v1` | the judge draw and the pairwise order (§17.8.1) |
+| `misaka-palw/improve/suite-draw/v1` | the entries a suite draws from its dataset (§17.8.1) |
+| `misaka-palw/improve/suite-leaf/v1`, `…/suite-node/v1` | a suite dataset's tree (§17.6.3) |
+| `misaka-palw/improve/judge-template/v1` | a judge template dataset's one entry (§17.8.5) |
+| `misaka-palw/improve/judge/v1` | the judge draw (§17.8.1). *`…/pair-order/v1` is retired by the 2026-09-30 decision: a Pairwise score shows both orders (§17.8.5)* |
 | `misaka-palw/improve/eval-seed/v1` | an item's generation seed, `H(epoch seed ‖ LE u32 item)` |
-| `misaka-palw/improve/eval-job/v1` | an evaluation job's id (A6: `H(line ‖ LE u64 epoch ‖ LE u32 item ‖ borsh(subject) ‖ kind)`, with `borsh(subject)` = `0x00` (Parent), `0x01 ‖ class` (Candidate) or `0x02 ‖ class` (Previous), and `kind` one byte: ExactMatch 1, RefLogLik 2, Judge 3, Pairwise 4 [S9]) |
+| `misaka-palw/improve/eval-job/v1` | an evaluation job's id (A6: `H(line ‖ LE u64 epoch ‖ LE u32 item ‖ borsh(subject) ‖ kind ‖ part)`, with `borsh(subject)` = `0x00` (Parent), `0x01 ‖ class` (Candidate) or `0x02 ‖ class` (Previous), `kind` one byte (ExactMatch 1, RefLogLik 2, Judge 3, Pairwise 4 [S9]) and `part` one byte, 0 for every kind but a judged one, whose score is several claims, §17.8.5) |
 | `misaka-palw/improve/payout/v1` | an earnings payout's key, `H(borsh(bond) ‖ LE u64 DAA ‖ block)`, first byte forced to `0xFD` (§17.11.5) |
 | `misaka-palw/improve/composite-artifact/v1` | a composite candidate's artifact root, `H(parent_class ‖ parent_root ‖ adapter_root ‖ LE u32 P)` |
 | `misaka-palw/improve/candidate-declarations/v1` | a candidate's declarations digest |
@@ -206,6 +209,15 @@ Improvement sink script: `OP_RETURN <b"MSKIMP01"> <64-byte line id>`.
 `palw_improvement_v1` is one fence with a value. Its shape and identity rules are in §17.0. Past its
 activation, and only there, the fold reads this chapter. The fence's `ceilings` bound every policy
 (§17.4.3), and the policy may only tighten them.
+
+**Prerequisite: `palw_fp_decode_rules`** [decision A6-1, 2026-09-30]. `palw_improvement_v1` REQUIRES
+`Params::palw_fp_decode_rules` in force at or below its activation, and `validate_palw_v2` refuses a ruleset
+that arms improvement without it. An evaluation claim is an FP Job V4's bytes under the decode rules (§17.8.4):
+below them its header-context door refuses it by name, so a line governed on such a ruleset would open epochs
+no claim could answer, and every one would end `NoChange`. The requirement is a check on the schedule, not a
+second fence: nothing is armed by it, and a ruleset with `palw_improvement_v1` absent or dormant is untouched.
+The integration (lane A) adds it with `palw_fp_decode_rules`'s own flag-day and drill entry
+(`--palw-drill-decode-rules-at`), so the drill that arms improvement arms the rules first.
 
 ## 17.3 State
 
@@ -305,8 +317,9 @@ PalwImprovementPolicyV1 {
   version: u16 = 1,
   usage: { measure: Claims | WorkLeaves, value: u128 },
   windows: { grid, w_collect, w_submit, w_holdout, w_eval, beacon_delay, court_margin },
-  eval: { stages: [ { kind, params } ], regression_suite_root, regression_items, safety_suite_root,
-          safety_items, judge_set: [class], anchor_floor_permille, n, n_min, delta_permille,
+  eval: { stages: [ { kind, params } ], regression_dataset, regression_items, safety_dataset,
+          safety_items, judge_set: [class], judge: Option<JudgeSpec>, pairwise: Option<JudgeSpec>,
+          seat_pool_permille, anchor_floor_permille, n, n_min, delta_permille,
           epsilon_permille, epsilon_safety_permille, alpha_permille, max_new_tokens, stop_ids,
           setter_cap_permille, max_eval_positions },
   k_max: u8,
@@ -331,6 +344,14 @@ L_e = w_collect + w_submit + w_holdout + w_eval + court_margin        // the nom
 The chain derives each stage's program from its kind, these parameters and the subject's shape, with
 the builders `scoring_set_id` pins (A7).
 
+`JudgeSpec { template_dataset: id, verdict_a: [u32], verdict_b: [u32], logit_scale_q24: i32 }` is what a judged
+stage needs (§17.8.5): `Some` exactly when the stages hold the matching kind (`judge` for Judge, `pairwise` for
+Pairwise). `template_dataset` names a registered dataset of exactly one entry, the stage's canonical prompt
+template; the two verdict sequences are the token ids the judge scores ("Yes" and "No"); `logit_scale_q24` is the
+judge's scale. `regression_dataset` and `safety_dataset` name the registered public datasets the suites draw from
+(§17.6.3, §17.8.1): the zero id exactly when the suite has no items. `seat_pool_permille` is the share of an
+evaluation job's fee its panel's credited seats divide (§17.11.2).
+
 A policy is refused by name unless every check below holds. `C` is the fence's `ceilings`.
 
 | # | Check |
@@ -342,8 +363,9 @@ A policy is refused by name unless every check below holds. `C` is the fence's `
 | 5 | `1 ≤ \|stages\| ≤ 8`; each stage's params match its kind; at least one stage is primary (ExactMatch or RefLogLik); no kind appears twice |
 | 6 | ExactMatch: `1 ≤ key_cap ≤ max_new_tokens`, `open ≥ −1`, `close ≥ −1`. RefLogLik: `logit_scale_q24 > 0`. Judge: `lo < hi`. Pairwise: `0 ≤ margin ≤ i32::MAX` (the stage's input interval) |
 | 7 | a Judge or Pairwise stage requires `1 ≤ \|judge_set\| ≤ 16`, the set without duplicates, each an admitted IR class; without one, `judge_set` is empty; `anchor_floor_permille ≤ 1000` |
+| 7b | **each judged stage carries its specification** [decision, 2026-09-30]: `judge` is `Some` exactly when there is a Judge stage and `pairwise` exactly when there is a Pairwise stage; each names a template dataset (non-zero id), two different verdict sequences of 1 to 8 ids each, and `logit_scale_q24 > 0` |
 | 8 | `1 ≤ n_min ≤ n ≤ min(C.max_items_per_epoch, PALW_IMPROVE_SIGN_N_MAX_V1 = 2048)` |
-| 9 | `regression_items, safety_items ≤ 1024`; a suite with items has a non-zero root, and a suite with none has a zero root |
+| 9 | `regression_items, safety_items ≤ 1024`; **a suite with items names its dataset (a non-zero id), and a suite with none names none** — a policy whose suite names no dataset is refused [decision, 2026-09-30] |
 | 10 | `delta_permille, epsilon_permille, epsilon_safety_permille ≤ 1000` |
 | 11 | `alpha_permille` is one of the sign table's levels, `{10, 50}` [P1] |
 | 12 | `1 ≤ max_new_tokens ≤ 4096`; `\|stop_ids\| ≤ 16`; `1 ≤ setter_cap_permille ≤ 1000` |
@@ -352,6 +374,24 @@ A policy is refused by name unless every check below holds. `C` is the fence's `
 | 15 | `phi_permille, bounty_share_permille, promotion_share_permille, s2_trainer_permille ≤ 1000`; `1 ≤ s2_dataset_cap_permille, s2_contributor_cap_permille ≤ 1000` |
 | 16 | `teacher_classes ≠ 0` and within the six defined bits; `\|licence_classes\| ≤ 32`, without duplicates; `base_licence_class ≠ 0` |
 | 17 | `1 ≤ vest_epochs ≤ 64`; `rollback_epochs ≤ 16`; `ban_epochs ≤ 256` |
+| 18 | `seat_pool_permille ≤ C.max_eval_seat_permille` (§17.11.2) |
+| 19 | **`court_margin ≥ Λ`**, where `Λ` is the ruleset's unchallenged claim lifecycle (below) [decision, 2026-09-30, refined the same day]: a claim accepted in the epoch's last DAA before `t_eval` and left unchallenged could not otherwise reach `Final` before `t_score` |
+| 20 | **a judged policy** (a Judge or Pairwise stage): `w_eval > beacon_delay + Λ + 32` — a judge reads FINAL generations, so the epoch evaluates in two rounds (generations, then judged parts), each needing the unchallenged lifecycle |
+
+`Λ = anchor_delay + window_receipt + max(window_challenge, the short challenge window where scheduled)` — the
+**unchallenged finalization path** under the ruleset's own windows: the anchor slot that binds the claim's panel,
+the receipt window in which the panel licenses it, and the challenge window it finalizes after. **The court
+window is not in it** [coordinator's refinement, 2026-09-30]: bounding the epoch by a dispute's whole course (≈ 4.8k
+DAA with the 3,000-DAA court window) would make epochs days long and refuse every practical policy, and a
+claim that is not `Final` at the decision point is simply *missing* — the missing-evaluation rule (§17.9.1)
+gives its item to the incumbent. A court that convicts such a claim later still slashes it (the claim rules,
+independently of the epoch's decision); a conviction before the decision also voids the claim, which frees its
+job and keeps its score out of the sign test (§17.8.6). `Λ` is computed from the ruleset
+(`palw_improvement_claim_lifecycle_v1`) and mirrored in the state parameters (`improve_lifecycle_daa`). Rows 19
+and 20 are asked at policy registration where the mirror is set (every ruleset that arms the fence); a policy
+they refuse is unworkable on this ruleset and is refused by name. *The "submission" window the coordinator's
+decision lists is read as the window evaluation claims are submitted in, `w_eval − beacon_delay` — the one
+window of the epoch in which a claim is submitted; `w_submit` holds no claim and is not held to `Λ`.*
 
 ### 17.4.4 Opting out [E6]
 
@@ -514,6 +554,29 @@ refusal.
   one hash commits a set's keys, so a set cannot disclose a reference at the draw apart from its keys
   (PALW-MIP-9).
 
+### 17.6.3 Suites: registered public datasets [decision, 2026-09-30]
+
+The regression and safety suites are **guards, never a gain measure** (§17.9.3: they enter the sign test only as
+a no-regression bound). Their items come from **registered, public datasets** (`DatasetRegistered`, tag 76) the
+policy names — never from a bare root — and are drawn from them by R (§17.8.1); their prompts are disclosed
+through the dataset's own committed content (§17.8.4).
+
+- **The content.** A suite dataset's `content_root` is the root of an RFC 6962 Merkle tree over its `items`
+  entries: a leaf is `H("misaka-palw/improve/suite-leaf/v1", borsh(entry))`, a node is
+  `H("…/suite-node/v1", left ‖ right)`, and the tree of `n` leaves splits at the largest power of two below
+  `n` (one leaf is its own root). An entry is `PalwSuiteEntryV1 { prompt: [u32], reference }` with
+  `reference = ExactKey([u32]) | Continuation([u32])`: an exact-match key (the answer span a generation must
+  equal), or a likelihood reference (the continuation a teacher-forced pass scores).
+- **Registration is not verification.** The chain cannot see the content, so `DatasetRegistered` binds only the
+  root and the count; a dataset whose root is not such a tree has entries nobody can open, and each of its
+  suite items counts for the incumbent (§17.9.1). That fails closed: only the line's own candidates lose.
+- **What a policy needs.** A suite with items names a dataset registered on this line with at least that many
+  entries (and at most 2^32), checked when the policy object is applied (§17.4.2); a policy whose suite names no
+  dataset is refused by §17.4.3 row 9 (the pure check), and one whose dataset is missing or too small by the
+  fold. A template dataset (§17.8.5) is a registered dataset of exactly one entry.
+- **Public means public.** A suite's prompts and keys are readable by everyone, a candidate's trainer included.
+  That is why a suite never measures gain: memorising it earns nothing, and failing it blocks.
+
 ## 17.7 Candidates
 
 `CandidateSubmitted` (tag 80) is admitted by the candidates lane (A5):
@@ -562,17 +625,22 @@ the draw is fixed only after every candidate and every hold-out case is.
 
   Items are without replacement. A pool smaller than `n` gives all of it [E10]. Drawn items are
   numbered `0..` in draw order.
-- **Suites.** Then every regression item `j < regression_items` and every safety item
-  `j < safety_items` is appended. Its id is `H("…/suite-item/v1", suite_root ‖ LE u32 j)` and its source
-  is `Regression` or `Safety`. Suites are evaluated whole, every epoch [P4], and do not count toward `n`.
+- **Suites** [decision, 2026-09-30]. Then, for each suite with items, `min(items, entries)` distinct entries of
+  its registered dataset (§17.6.3) are drawn by a sparse Fisher–Yates shuffle driven by the epoch seed — for
+  `j = 0, 1, …`: `r_j = LE u64(H("…/suite-draw/v1", seed ‖ dataset_id ‖ role ‖ LE u32 j)[0..8]) mod (n − j)`
+  over the `n` entries, the entry at virtual position `j + r_j` is drawn and the entry at `j` takes its place
+  (`role` 1 for the regression suite, 2 for the safety suite, so two suites over one dataset draw different
+  entries) — at a cost of `O(items · log items)`, whatever `n` is. Each drawn entry `e` is appended as an item
+  whose id is `H("…/suite-item/v1", dataset_id ‖ LE u32 e)` and whose source is `Regression { index: e }` or
+  `Safety { index: e }`. Suites are evaluated whole, every epoch [P4], and do not count toward `n`. A dataset
+  smaller than the suite gives all of it.
 - **Per item.** `seed_i = H("…/eval-seed/v1", seed ‖ LE u32 i)`: one per item, the same for every
   subject.
 - **Judges.** When the policy has a Judge or Pairwise stage, a judge is drawn for each drawn (non-suite)
-  item: `judge_set[LE u64(H("…/judge/v1", seed ‖ LE u32 i)[0..8]) mod |judge_set|]`.
-- **Pairwise order.** The order of a pairwise comparison of item `i` and candidate `C` is bit 0 of
-  `H("…/pair-order/v1", seed ‖ LE u32 i ‖ C)[0]`. It is the stage's `order` scalar: 0 shows the
-  candidate first (as A), 1 shows the parent first. The Pairwise stage applies the order and the margin
-  inside the circuit (`misaka_palw_tir::scoring::pairwise_v1`, A7).
+  item: `judge_set[LE u64(H("…/judge/v1", seed ‖ LE u32 i)[0..8]) mod |judge_set|]`. Suite items are never
+  judged.
+- **Pairwise order — retired** [decision, 2026-09-30]. A Pairwise score shows the judge BOTH orders of the pair
+  (§17.8.5), so no order is drawn; the `pair-order` key is unused.
 - **Items' kinds.** An item is **primary** when its case's reference is an exact-match key or a
   likelihood reference; a judged-only item gives no primary outcome, does not count toward `n`, and
   feeds only the guards [P8]. The job family knows each item's kind from its case (A4, A6); the
@@ -613,8 +681,8 @@ subject, kind)`, and the claim is the evaluation lane's job row's.
 | --- | --- |
 | ExactMatch | 1 pass, 0 fail |
 | RefLogLik | the Q24 log-likelihood, `hi·2^31 + lo` of the stage's output |
-| Judge | the judge's scalar |
-| Pairwise | the stage's committed outcome from the candidate's side: +1 preferred beyond the margin, −1 the parent preferred beyond it, 0 otherwise |
+| Judge | the judge's margin `LL(verdict_a) − LL(verdict_b)` on the subject's output, in Q24 nats, clamped to the stage's `[lo, hi]` (§17.8.5) |
+| Pairwise | the outcome from the candidate's side: **+1** when the sum of the judge's two margins (both orders shown, §17.8.5) exceeds the stage's `margin`, **−1** otherwise — a tie goes to the incumbent, so it is never 0 |
 
 A second score for the same `(item, subject, kind)` is refused. A score is taken only while the epoch
 is `Evaluating` or `Closing`, for an item it drew and a subject it evaluates.
@@ -623,9 +691,11 @@ is `Evaluating` or `Closing`, for an item it drew and a subject it evaluates.
 subject's outputs are final, so no single claim may read one. An ExactMatch job is generation only; its
 claim carries the generated ids, and the evaluation lane keeps the answer span's hash in its job row.
 The arm that reveals a key (A4: `SetterKeysRevealed`, or a case's key) computes each subject's
-pass/fail with the evaluation lane's `palw_improve_exact_match_score_v1` and records it here. RefLogLik,
-Judge and Pairwise scores are recorded at `Final` from the claim's committed score lanes. The policy's
-`key_cap` bounds a revealed key's length.
+pass/fail with the evaluation lane's `palw_improve_exact_match_score_v1` and records it here. **A suite entry's
+key is public** (§17.6.3), so its generation is scored from the opened entry at acceptance and recorded at its
+`Final`, with no reveal. RefLogLik scores are recorded at `Final` from the claim's committed score lanes; **a
+Judge or Pairwise score is recorded when the last of its parts is final** (§17.8.5). The policy's `key_cap`
+bounds a key's length, a suite's included.
 
 ### 17.8.4 The evaluation claim (A6)
 
@@ -635,12 +705,19 @@ below are the evaluation lane's (`palw_improve_eval_v1`, `palw_improve_eval_fold
 
 **Carriage.**
 - The job is an FP Job V4's bytes with the version word 9, then a `PalwEvalJobV1 { line_id, epoch, item,
-  subject, kind, mode }` (the job's `tail`). Its fixed FP fields: public (`PublicDa`), its prompt on the
+  subject, kind, part, mode }` (the job's `tail`). `part` is 0 for every kind but a judged one, whose score is
+  several claims (§17.8.5). Its fixed FP fields: public (`PublicDa`), its prompt on the
   payload (user mode), greedy (temperature 0, a zero seed), a zero nonce, canonical decode rules equal to the
-  ones its mode derives (a generating job's stops and budget; a teacher-forced job's no-op rules), at most
-  4,096 ids in its stream, its kind's mode, and the class its subject names.
+  ones its mode derives (a generating job's stops and budget; a teacher-forced job's — and a judged
+  part's — no-op rules), at most 4,096 ids in its stream, its kind's mode, and the class it runs: its
+  subject's, or for a judged part (`mode = Judged { judge }`) the judge class.
 - The payload is the FP payload's borsh, then `PalwEvalClaimTailV1 { generated: [u32], score: [i32],
-  subject_layout, params }`. An FP decoder refuses the whole as undecodable, so a build below the fence
+  subject_layout, params, read: Option<PalwEvalReadV1>, opening: Option<PalwSuiteOpeningV1> }`. `read` is a
+  judged part's — the template it filled (opened) and the lengths dividing its prompt into the item's prompt and
+  the outputs it read, `{ template, item_len, output_lens }` — and exactly a judged part carries one;
+  `opening` is a suite item's — `{ reference, proof }`, the entry's reference and its RFC 6962 inclusion
+  proof (§17.6.3), the entry's prompt being the claim's own — and exactly a claim on a suite item carries one
+  (the fold knows which). An FP decoder refuses the whole as undecodable, so a build below the fence
   refuses an evaluation claim at its door. The tail rides outside the signature and is bound by the roots:
   `trace_root` the step root, `output_root = H("misaka-palw/improve/eval-generated/v1", LE u32 n ‖ LE u32
   ids)`, `execution_root` over the job id, the class, the leaves, the step root, the prompt's root and length,
@@ -656,8 +733,11 @@ on every transaction below it:
   its bytes as undecodable. The evaluation door decodes the payload and tail, runs **every rule of FP Job V4
   on the claim's stand-in** (the same payload with job version 7 and no tail: the network and key shape, the
   prompt ids against their hash and form, the context, the executed count and stop reason, the ladder, the
-  ruleset's caps) under the ruleset's decode-rules door, then the claim's own stateless rules (the job's
-  shape, the tail against the roots). Judged kinds are refused by name.
+  ruleset's caps) under the ruleset's decode-rules door, then the claim's own stateless rules: the job's
+  shape (a judged part runs its judge class, a part is in its kind's range), the tail against the roots, a
+  judged part's prompt against its declared reading (the prompt is exactly the template's fill of the item's
+  prompt and the outputs the lengths slice from it, whose roots are the claim's `finalized` root), and a suite
+  opening's agreement with the job's kind and the claim's own prompt and ids.
 - *Header context* (the containing block's DAA): refused by name below `palw_improvement_v1`, below
   `palw_fp_decode_rules`, and past the structural work cap below the held regime (the FP lane's own height
   rules read an FP payload, so they never see this one).
@@ -671,73 +751,162 @@ the free-prompt arm's bond checks (the bond exists and its key is the claim's, i
 it holds the producer floor):
 - below `palw_improvement_v1`; no such epoch; the epoch not `Evaluating`; at or after `t_eval`;
 - an item the epoch did not draw, or dropped; a subject the epoch does not evaluate; a Pairwise job of the parent;
-- a class that is not the subject's; a kind the policy does not score; judged kinds (§17.8.4, below);
+- a class that is not the one the claim runs — its subject's, or its item's drawn judge for a judged part; a
+  kind the policy does not score; a part past the kind's claims;
 - a generating job whose seed, budget or stops are not the item's seed and the policy's;
-- **a likelihood item** (a hold-out case whose reference is a continuation) **taking a generation job** —
-  one job per stage that applies to the item's kind (§17.8.2); a teacher-forced job whose reference is not the
-  case's disclosed one, or not yet disclosed; a prompt that is not the item's disclosed prompt, or not disclosed;
-- stage parameters that are not the policy's; roots that are not the tail's; a committed score outside its
-  kind's range (Judge inside the stage's `[lo, hi]`, Pairwise −1, 0 or 1);
+- **a likelihood item** (a hold-out case whose reference is a continuation, or a suite entry whose reference is
+  one) **taking a generation job** — one job per stage that applies to the item's kind (§17.8.2); a
+  teacher-forced job whose reference is not the case's disclosed one, or not yet disclosed; a prompt that is not
+  the item's disclosed prompt, or not disclosed;
+- **a suite item** [decision, 2026-09-30] whose claim does not open its entry, whose opening does not verify under
+  its dataset's registered `content_root` (the tree size is the dataset's `items`, never the claim's word), whose
+  entry's reference is not the job's kind, or whose key is longer than the policy's `key_cap`; and **an opening
+  on any other item**;
+- **a judged part** (§17.8.5): a kind the policy has no judge specification for, an item whose drawn judge is not
+  the claim's, a suite item, ids that are not the part's verdict sequence, a template that is not the
+  registered dataset's one entry, a generation it reads that is not FINAL (the subject's, and for a Pairwise
+  part the parent's too), outputs whose roots are not those final claims' `output_root` in the order the part's
+  order shows, an item prompt that is not the item's disclosed prompt;
+- stage parameters that are not the policy's (a judged stage's include its specification's scale); roots that
+  are not the tail's;
 - **the epoch's evaluation budget** (below); a class that is not an IR class; a layout that is not the one the
   class id binds; a `work_leaves` that is not the chain's closed-form count of the derived context;
-- **a class the chain does not serve** (below);
+- **a class the chain does not serve** (below), and **a class whose replay room has no more for evaluation**
+  (below);
 - the job already taken by a live claim (open claiming, below); the executor's exposure ceiling
-  (`FreePromptExposureCeiling`); the evaluation's share of the executor's room (below).
+  (`FreePromptExposureCeiling`), which the swing lock raises (below); the evaluation's share of the executor's
+  room (below).
 
 **Open claiming.** The first claim the chain holds takes the job. A claim voided or retired before `Final`
 frees it — the row is cleared when the next claim for it is folded — so a dead claim never holds a job past
 its own life.
 
-**Capacity** (PALW-MIP-20; RFC-0004 §13, open question 7). Three bounds, all dormant below the fence:
-- *Reservation.* The claim is an FP claim with no quanta, no `pwu`, no receipt rights, no weight and no reward
-  escrow (PALW-MIP-17). It reserves what a claim of that work on its class reserves — its step leaves at the
-  class's `slash_value_per_pwu`, under ADR-0160's stage-1 rule `⌈w / ρ⌉` — and passes the free-prompt arm's
-  exposure ceiling, so a false claim is slashed like any other.
+**Capacity** (PALW-MIP-20; RFC-0004 §13, open question 7). Five bounds, all dormant below the fence:
+- *Reservation, and the swing lock* [decision, 2026-09-30]. The claim is an FP claim with no quanta, no `pwu`,
+  no receipt rights, no weight and no reward escrow (PALW-MIP-17). It reserves what a claim of that work on
+  its class reserves — its step leaves at the class's `slash_value_per_pwu`, under ADR-0160's stage-1 rule
+  `⌈w / ρ⌉` — **and at least what it could swing**, and passes the free-prompt arm's exposure ceiling, so a
+  false claim is slashed like any other (a conviction takes `claim.reserved`). *Fraud gain is not zero*: a
+  forged evaluation can flip a sign test, and a promotion pays `R = ⌊balance · promotion_share / 1000⌋`
+  (§17.11.3) to the parties it favours. The collateral bar (the most a claim's executor can steal is at most what
+  its lock recovers) sizes the lock per claim:
+
+  ```
+  swing(claim)  = ⌈ R / F ⌉          R = ⌊pool.balance · promotion_share_permille / 1000⌋  at the claim's acceptance
+  reserved      = max( work lock,  swing )
+  ```
+
+  `F` is the fewest forged pair outcomes that flip the sign test. v1's **conservative** reading is `F = 1`
+  (`PALW_IMPROVE_SWING_FORGED_PAIRS_V1`): an honest result one pair short of the critical value is flipped by
+  one forged claim, and the attacker chooses its candidate — so `F` colluding claims' locks together cover the
+  payout. Calibrating `F` (and `R`'s horizon: a pool can grow after acceptance) is D-M1's. The lock raises the
+  claim's exposure like any reservation (an executor whose room cannot carry it is refused
+  `FreePromptExposureCeiling`); the *share of the executor's room* bound below reads the work's own lock, which
+  is capacity, not collateral.
 - *The epoch's evaluation budget in positions* **[decision A6-2]**. A job's positions are its prompt's ids plus
   its stream's. The budget is `B = min(policy.max_eval_positions, C.max_eval_positions_per_epoch ·
-  C.max_eval_budget_permille / 1000)`, and the epoch's claimable jobs are at most `J = n·(1 + [Judge])·S +
-  n·[Pairwise]·(S − 1)` over its `S` subjects: one job per drawn item and subject for the item's primary kind
-  (an item is exact-key or likelihood, never both), one more for a Judge stage, and one per item and non-parent
-  subject for a Pairwise stage. An ExactMatch key's scoring is the fold's, not a claim, and a suite's items are
-  not claimable (below), so neither adds a job. A claim whose positions exceed `⌊B / J⌋` is refused. The shares
-  are equal and independent, so no order of
+  C.max_eval_budget_permille / 1000)`, and the epoch's claimable jobs are at most `J = (n·(1 + 2·[Judge]) +
+  m)·S + 4·n·[Pairwise]·(S − 1)` over its `S` subjects, `m = regression_items + safety_items`: one job per drawn
+  item and subject for the item's primary kind (an item is exact-key or likelihood, never both), two more for a
+  Judge stage (a judged score is two claims, §17.8.5), four per item and non-parent subject for a Pairwise stage,
+  and one per suite entry and subject (a suite item discloses its entry in its claim, §17.8.1). An ExactMatch
+  key's scoring is the fold's, not a claim, so it adds none. A claim whose positions exceed `⌊B / J⌋` is
+  refused. The shares are equal and independent, so no order of
   claims can spend another job's share, a voided claim returns nothing to anyone, and the epoch's total never
   exceeds `B`. *No chapter defines a claim capacity in positions; v1 takes the network's per-epoch ceiling as
   the span's capacity and `max_eval_budget_permille` as the evaluation's share of it — a network that wants
   the budget tighter lowers either ceiling. The RFC leaves the share open; this reading is the one the chain
   can compute.*
 - *The share of the executor's room* **[decision A6-3]**. One evaluation claim may reserve at most
-  `C.max_eval_budget_permille` of its executor bond's exposure ceiling (the room the bond carries), so an
-  evaluation claim cannot take the room an executor's attempts need.
+  `C.max_eval_budget_permille` of its executor bond's exposure ceiling (the room the bond carries; the work's own
+  lock, not the swing), so an evaluation claim cannot take the room an executor's attempts need.
+- *The class's replay room* **[decision A6-4, the coordinator's, 2026-09-30]**. An evaluation claim is **counted in
+  its class's replay room (ADR-0137)** as one whole claim of the class, from acceptance until its licence (or
+  `Final`, for a class held to Final), as an attempt is: a lane of the in-flight tally of its own
+  (`eval_claims`, `licensed_eval_claims`; no quanta, so nothing to round into a canonical job), pooled with
+  the class's attempts and free-prompt claims in the rate rule, in the registry's in-flight count, and in
+  `check_class_admits_claim` (asked as the free-prompt arm asks it, past `palw_audit_2026_09_23`, with the
+  claim itself as one more); the executor's share of the class's unlicensed claims (T-2(a)) is asked too. And
+  **`max_eval_budget_permille` bounds them**: the class's evaluation claims whose replay is still owed, with
+  the one asked about, may not exceed that share of the class's capacity in claims (at least one is always
+  admitted) — evaluation cannot crowd out the class's attempts. A claim past either is refused by name.
 
-**Panels** (who seats an evaluation claim) **[decision A6-4]**. An evaluation claim is an FP claim of its
-subject's class, so the chain derives its panel as it derives any claim's (the same seed, the same draw over
-the seats ready for that class; no evaluation-specific code). The fold therefore requires the class to be one
-the chain serves: not frozen (`FrozenClass`), admitted by the model registry where the registry governs
-(`ClassNotAdmitting`), and verifiable inside the windows (`check_class_verify_admits_v1`, as a free-prompt claim
-asks it: an NM class, an unmeasured deadline and a measured `D` over the cap are refused). Every seat that may
-verify a candidate must hold its artifact; that is the registry's lifecycle for the candidate's class
-(Prefetching → admitting), which an evaluation claim waits for. v1 pays the seats nothing for an evaluation
-panel: the fee is the executor's (§17.11.2), and a claim without a reward has no panel share to credit.
-*Open (coordinator): whether a share of `eval_fee_per_job` should credit the seats as ADR-0124 credits a
-reward's, and whether evaluation claims should count in the class's replay room (ADR-0137): they do not in v1;
-their load on the seats is bounded by the budget above and by each seat's own duty collateral.*
+**Panels** (who seats an evaluation claim, and who is paid). An evaluation claim is an FP claim of the class it
+runs, so the chain derives its panel as it derives any claim's (the same seed, the same draw over the seats ready
+for that class; no evaluation-specific code). The fold therefore requires the class to be one the chain serves:
+not frozen (`FrozenClass`), admitted by the model registry where the registry governs (`ClassNotAdmitting`), and
+verifiable inside the windows (`check_class_verify_admits_v1`, as a free-prompt claim asks it: an NM class, an
+unmeasured deadline and a measured `D` over the cap are refused). Every seat that may verify a candidate must
+hold its artifact; that is the registry's lifecycle for the candidate's class (Prefetching → admitting), which an
+evaluation claim waits for. **The seats are paid from the epoch's evaluation escrow** [decision A6-4]: at `Final`,
+`seat_pool_permille` of the job's fee is the seats' pool, divided over the seats DRAWN and paid to those credited
+(the ordinary per-claim rule, `palw_panel_split_permille_v1`), the executor taking the rest (§17.11.2).
 
 **Fees and scores at `Final`** (the claim's `finalize_claim`): the job's row records its finality; a kind that
-committed a score (RefLogLik, Judge, Pairwise) records it through `record_improvement_score_v1`; the subject's
-escrow pays `eval_fee_per_job` to the executor's bond as an earnings credit (§17.11.5), once. An ExactMatch
-generation is scored at its key's reveal (§17.8.3). A claim final after the epoch stops taking scores earns
-neither: the escrow is the epoch's, and returns with it.
+committed a score records it through `record_improvement_score_v1` (RefLogLik at once; a Judge or Pairwise score
+when the last of its parts is final, §17.8.5; an ExactMatch suite entry's pass/fail from its opened key); the
+subject's escrow pays the job's `eval_fee_per_job` as earnings credits (§17.11.5), once — the executor's, and the
+credited seats' share (§17.11.2). An ExactMatch generation of a hidden key is scored at its key's reveal
+(§17.8.3). A claim final after the epoch stops taking scores earns neither: the escrow is the epoch's, and
+returns with it.
 
-**Not in v1.**
-- *Judged kinds* (Judge, Pairwise) are not claimable **[decision A6-5]**: a judge class's kind (its output
-  interface: a scalar head, a preference) is not specified, so the chain derives no judged pipeline and refuses
-  every judged job by name. A policy that names a Judge or Pairwise stage still passes §17.4.3, but its judged
-  items are never evaluated, and by §17.9.1 each counts for the incumbent: the guard then blocks every promotion.
-  A line that wants promotions in v1 names ExactMatch or RefLogLik stages only.
-- *Suite items* (regression and safety) have no disclosed prompt on chain — only the suite's root is — so no
-  claim can evaluate them; each counts for the incumbent (§17.9.1), and a policy with `regression_items > 0`
-  or `safety_items > 0` blocks every promotion until a suite's items are disclosed. *Open (spec): how.*
+**Late claims** [coordinator, 2026-09-30]. Claims are accepted before `t_eval` (open claiming), but one counts only
+if it is `Final` when the epoch scores — in the first block with `DAA ≥ t_score = t_eval + court_margin`, or
+earlier in `Closing` when nothing of the evaluation is still to come (§17.5.3 step 7). At that block every job
+without a `Final` claim is **missing**, and §17.9.1's rule gives it to the incumbent: a missing candidate score
+is a loss and a missing parent score a parent win, so a late claim can hurt the candidate it was meant to
+evaluate and can never make a promotion. The pieces of the lane are consistent with it:
+- *scores*: a claim that finalizes after the decision records none (the epoch no longer takes scores); an
+  ExactMatch generation scored at a key's reveal needs a `Final` claim, and a missing one scores nothing;
+- *fees and refunds*: such a claim is paid nothing — the subject's escrow is the epoch's, and what it did not
+  spend returns at the epoch's end (§17.11.2) — and its executor bears the work; its reservation is released as
+  any claim's is. Its job row retires with the epoch (§17.5.4), so a late `Final` finds no row and does nothing;
+- *the sign test*: counts are over recorded scores only (§17.9.3), so a late or voided claim is the same as an
+  unclaimed job: nothing recorded, the item for the incumbent;
+- *courts*: a court that convicts a claim slashes it by the claim rules (`claim.reserved`, §17.8.4 above, the
+  swing lock) independently of the epoch's decision, whenever it rules; before the decision it also voids the claim,
+  which frees the job while the epoch still takes claims and keeps the score out of the sign test (§17.8.6).
+The policy's windows hold the *unchallenged* path (§17.4.3 rows 19–20): an honest claim accepted before `t_eval`
+finalizes by `t_score`; a challenged one may not, and is then a missing evaluation by the rule above.
+
+### 17.8.5 Judged scores (A6) [decision, 2026-09-30]
+
+A Judge or Pairwise score involves **no generation and no sampling**. It reuses the deterministic teacher-forced
+RefLogLik pass (§17.8.3): the judge — a registered IR text class, drawn per item from the policy's `judge_set`
+(§17.8.1), never the line's head nor a former head nor a candidate of the line (checked when the policy is applied
+and when a candidate is admitted) — is run teacher-forced over a canonical prompt and scores one of two fixed
+verdict sequences. The stage's `JudgeSpec` (§17.4.3) declares the template's registered dataset, the two
+verdicts (`verdict_a`, `verdict_b`, 1–8 ids each: "Yes"/"No" for a Judge stage; for Pairwise, the first-shown
+response is better / the second-shown is) and the judge's logit scale.
+
+- **The template.** A registered dataset of exactly one entry, a `PalwJudgeTemplateV1 { segments: [[u32]] }` of
+  three (Judge) or four (Pairwise) segments within 1,024 ids in all, whose `content_root` is
+  `H("misaka-palw/improve/judge-template/v1", borsh(template))`. A part's prompt is the template filled:
+  `seg₀ ‖ item prompt ‖ seg₁ ‖ output₀ ‖ seg₂ [‖ output₁ ‖ seg₃]`.
+- **The parts.** A Judge score is two parts (`part` 0: `verdict_a`, 1: `verdict_b`), each a teacher-forced pass
+  of the judge class over the template filled with the item's prompt and the subject's FINAL generation, the
+  verdict as its reference; a Pairwise score is four (`part = 2·order + verdict`): both orders — order 0 shows
+  the subject's generation first and the parent's second, order 1 the reverse — each with both verdicts. A part
+  is an evaluation claim of its own (job key `(line, epoch, item, subject, kind, part)`), claimed openly, paid
+  its fee at its `Final`, and scored `LL = hi·2^31 + lo` of the pass (the RefLogLik lanes). The fold reads the
+  generations from its job table: the subject's ExactMatch job (and the parent's) must hold a FINAL claim, and the
+  outputs the part's prompt carries (sliced from it by the declared lengths) must hash to those claims'
+  `output_root`s, in the order the part's order shows. So an epoch with a judged policy evaluates in two
+  rounds — generations, then judged parts — which the policy's windows must hold (§17.4.3 row 20).
+- **The score** (when all the parts are final): **Judge** = `clamp(LL(verdict_a) − LL(verdict_b), lo, hi)`, the
+  judge's preference for the first verdict on the subject's output. **Pairwise**: with `m₀ = LL(o0,a) −
+  LL(o0,b)` (the preference for the first-shown, the subject's) and `m₁ = LL(o1,a) − LL(o1,b)` (the first-shown
+  there is the parent's), the score is the sum of the two margins from the subject's side, `m₀ − m₁`, and the
+  recorded outcome is **+1 when it exceeds the stage's `margin` and −1 otherwise — ties go to the incumbent**.
+  A judge that always prefers the first-shown (or the second) has `m₀ = m₁` and scores 0: the sum cancels the
+  position bias, and the incumbent keeps the item.
+- **Missing parts.** A judged score with a part unclaimed or not final is missing: it counts for the incumbent
+  (§17.9.1). A claim's reading needs final generations, so an item with no final generation of the subject
+  (or, for Pairwise, the parent) has no judged score.
+
+### 17.8.6 The evaluation court
+
+*Reserved for the evaluation court (proofs 13–15, §17.0): added with its implementation.*
 
 ## 17.9 Promotion
 
@@ -933,10 +1102,21 @@ Three paths bring money into the pool.
 
 At the draw, the parent's escrow (`J_parent × eval_fee_per_job`) is moved from the balance to the
 epoch's escrow, and so is the `Previous` subject's. If the balance cannot cover both, the epoch ends
-`NoChange(PoolInsufficient)`.
+`NoChange(PoolInsufficient)`. `J` bounds the jobs one subject can be given: two per item for its primary kind (a
+generation, then its scoring once the key is out — the upper bound), **two per drawn item for a Judge stage and
+four for a Pairwise stage (§17.8.5: a judged score is that many claims)**, and two per suite item.
 
-The evaluation lane pays each executor `eval_fee_per_job` from the subject's escrow, as a payout, when
-the job's claim is final.
+The evaluation lane pays, when a job's claim is final, `eval_fee_per_job` from the subject's escrow, as earnings
+credits (§17.11.5): **the executor's, and the credited seats' share of it** [decision A6-4, 2026-09-30]. With
+`P = ⌊fee · seat_pool_permille / 1000⌋` (the policy's `seat_pool_permille`, at most the fence's
+`max_eval_seat_permille`, §17.4.3 row 18), the seats' pool, and `d` the seats DRAWN for the claim's panel (its
+duty row), each CREDITED seat — one that answered — takes `⌊P / d⌋` and the executor takes `fee − P`: the
+ordinary per-claim rule (`palw_panel_split_permille_v1`). What no seat was credited for, and the division's dust,
+is **not spent**: it stays in the escrow and returns with it at the epoch's end, and the executor never takes
+it. *(The ordinary rule sends that remainder to the panel reserve; this escrow's accounting has no place for it,
+and returning it is the conservative choice — an executor can never profit from a seat's silence.)* A claim with
+no duty row (bound below the panel economy) pays its executor the whole fee. The escrow's `spent` grows by what
+was paid, so a job whose escrow is exhausted pays only what is left.
 
 At the epoch's end, whatever is left of an escrow goes back to where it came from:
 - a candidate's, to its submitter;
@@ -1046,7 +1226,9 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
 - **PALW-MIP-11 (scores).** A score MUST be the committed output of the policy's scoring stage, recorded
   once (§17.8.3).
 - **PALW-MIP-12 (judges).** A judge MUST be drawn as §17.8.1 says, and excluded when it fails its
-  anchors (§17.9.3). A judge MAY block a promotion and MUST NOT make one.
+  anchors (§17.9.3). A judge MAY block a promotion and MUST NOT make one. A judge MUST be run teacher-forced
+  over the registered template (§17.8.5): no generation, no sampling; and MUST NOT be the line's head, a former
+  head or a candidate of the line.
 - **PALW-MIP-13 (promotion).** The fold MUST decide exactly as §17.9 says, with the pinned table.
 - **PALW-MIP-14 (rollback).** Only the latest promotion MAY be rolled back: by the owner within its
   window, or by anyone with a proof of §17.10.1's valid kinds.
@@ -1066,15 +1248,17 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
   `TeacherLicence` that covers the use. A governed line's base licence class MUST be declared.
 - **PALW-MIP-19 (privacy).** A hard case MAY use a job's prompt only under that job's `DataUseOptIn`, and
   its prompt MUST match the job's committed prompt hash.
-- **PALW-MIP-20 (capacity).** Evaluation claims MUST reserve capacity as claims do (ADR-0160). An
-  epoch's evaluation positions MUST NOT exceed the policy's `max_eval_positions`, nor the network's
-  ceiling as a share of claim capacity (§17.8.4: each job is held to an equal share of the budget).
+- **PALW-MIP-20 (capacity).** Evaluation claims MUST reserve capacity as claims do (ADR-0160), and lock at
+  least what they could swing (§17.8.4). An epoch's evaluation positions MUST NOT exceed the policy's
+  `max_eval_positions`, nor the network's ceiling as a share of claim capacity (§17.8.4: each job is held to an
+  equal share of the budget). An evaluation claim MUST count in its class's replay room and MUST NOT take more
+  than `max_eval_budget_permille` of it.
 - **PALW-MIP-21 (conservation).** The pool MUST satisfy §17.11.5 after every block. Every sompi it pays
   MUST have been taken in by §17.11.1.
 - **PALW-MIP-22 (abort).** A rollback while an epoch is open MUST abort it and refund every candidate in
   full (§17.10.3).
 - **PALW-MIP-23 (the policy check).** A policy MUST satisfy every check of §17.4.3. `w_eval` MUST exceed
-  `beacon_delay` by more than 32 DAA.
+  `beacon_delay` by more than 32 DAA, and the windows MUST hold the ruleset's claim lifecycle `Λ` (rows 19–20).
 - **PALW-MIP-24 (order).** Transitions due in one block MUST be applied before that block's objects,
   lines in `(next_due_daa, line_id)` order, and each line's transitions in §17.5.3's order.
 
@@ -1088,9 +1272,10 @@ the fold, and `misaka-palw-improve-ref2` — MUST agree on every one.
 | `sign-table.json` | `sign_table_id`, the byte form's length, and 200 sample entries (every `m ≤ 20` at `K ∈ {1, 2, 4, 64}`, and edges at `m = 2048`) | core (A8) |
 | `policy.json` | policy digests; one refusal per row of §17.4.3's table; the policy message | core (A2) |
 | `material.json` | material frontiers and roots for 0, 1, 2, 3, 7, 8 and 33 leaves; `dataset_root` | core (A3) |
-| `draw.json` | seeds, order keys, drawn items under caps, suite item ids, judge draws, pairwise order bits | core (A3) |
+| `draw.json` | seeds, order keys, drawn items under caps, **the suite draw (entries of a registered dataset by the epoch seed)**, suite item ids, judge draws | core (A3); the suite draw 2026-09-30 |
 | `transitions.json` | scripted epochs as `(DAA, event) → state` traces, including DAA jumps across several times, `NoCandidate`, `TooFewItems`, an abort by rollback, and an opt-out | core (A3) |
 | `promotion.json` | per-candidate score tables and their counts, eligibility bits and the decision, including the missing-evaluation rule, dropped items, anchors, both guards and ties | core (A8) |
 | `pool.json` | a line's pool through deposits, φ, fees, escrow, S1, S2 caps, vesting, forfeit and dissolution, with the conservation sums | core (A9) |
 | `scoring/*.json`, `pipelines/eval-*.json` | the scoring library (`consensus-vectors/tir-v2/`) | eval (A7, landed) |
 | `composite.json` | composite roots and class ids | cand (A5) |
+| `suite.json`, `judge.json` | a suite dataset's RFC 6962 roots and inclusion proofs (§17.6.3); a template's root, its fills and the judged score of parts (§17.8.5) | eval (A6, 2026-09-30) |
