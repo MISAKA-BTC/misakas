@@ -476,7 +476,7 @@ fn t18v_a_decode_close_is_judged_at_the_head_and_never_acquits() {
         // Past the fence: refused at the door — the session narrowed to a fused leaf, not the head.
         let head = profile.global_node_count() - 1;
         assert_ne!(coord.node_slot, head, "the held dissection narrowed to a fused attention leaf");
-        let past = adjudicate_court_close_v3(&s3, &session_id, &proof, &court, net_ladder, PalwPromptIdsFormV1::MerkleV1, true, true);
+        let past = adjudicate_court_close_v3(&s3, &session_id, &proof, &court, net_ladder, PalwPromptIdsFormV1::MerkleV1, true, true, None);
         assert_eq!(
             past,
             Err(PalwCourtV2Error::DecodeCloseNotAtTheHead { narrowed: leaf, slot: coord.node_slot }),
@@ -484,7 +484,7 @@ fn t18v_a_decode_close_is_judged_at_the_head_and_never_acquits() {
         );
         // Below it: the court as it was.
         let derived =
-            adjudicate_court_close_v3(&s3, &session_id, &proof, &court, net_ladder, PalwPromptIdsFormV1::MerkleV1, true, false);
+            adjudicate_court_close_v3(&s3, &session_id, &proof, &court, net_ladder, PalwPromptIdsFormV1::MerkleV1, true, false, None);
         assert_eq!(derived, Ok(expect), "[{label}] below the fence");
         if expect == PalwCourtVerdictV2::ExecutorGuilty {
             let (s4, _) = go(

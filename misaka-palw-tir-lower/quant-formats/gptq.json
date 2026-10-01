@@ -1,0 +1,110 @@
+{
+ "decode": {
+  "code": {
+   "max": "(1 << bits) - 1",
+   "min": 0
+  },
+  "group": {
+   "index": "has_g_idx ? g_idx[i] : i / gs",
+   "size": "group_size < 1 ? inp : group_size"
+  },
+  "q": "(qweight[i / (32 / bits), o] >> (bits * (i % (32 / bits)))) & ((1 << bits) - 1)",
+  "scale": "scales[g, o]",
+  "target": "integers",
+  "zero": "(((qzeros[g, o / (32 / bits)] >> (bits * (o % (32 / bits)))) & ((1 << bits) - 1)) + 1 - v2) & ((1 << bits) - 1)"
+ },
+ "doc": "AutoGPTQ / GPTQModel: qweight packs 32/bits codes per int32 along the input axis; qzeros pack along the output axis (v1 stores z − 1); scales per (group, output); g_idx (act-order) names each column's group.",
+ "ids": [
+  {
+   "method": "gptq",
+   "scheme": "config"
+  }
+ ],
+ "layout": {
+  "checks": [
+   {
+    "expr": "dim_scales[1] == out",
+    "message": "the scales are not one per output channel"
+   },
+   {
+    "expr": "dim_scales[0] == ng",
+    "message": "the number of scale groups is not the input width over the group size"
+   },
+   {
+    "expr": "dim_qzeros[0] == ng && dim_qzeros[1] * (32 / bits) == out",
+    "message": "qzeros is not [groups, outputs / pack]"
+   },
+   {
+    "expr": "!has_g_idx || dim_g_idx[0] == inp",
+    "message": "g_idx is not one entry per input"
+   }
+  ],
+  "dims": {
+   "inp": "dim_qweight[0] * (32 / bits)",
+   "out": "dim_qweight[1]"
+  },
+  "kind": "tensors",
+  "roles": [
+   {
+    "dtypes": [
+     "I32"
+    ],
+    "name": "qweight",
+    "rank": 2,
+    "suffix": ".qweight"
+   },
+   {
+    "dtypes": [
+     "I32"
+    ],
+    "name": "qzeros",
+    "rank": 2,
+    "suffix": ".qzeros"
+   },
+   {
+    "dtypes": [
+     "F16",
+     "BF16",
+     "F32"
+    ],
+    "name": "scales",
+    "rank": 2,
+    "suffix": ".scales"
+   },
+   {
+    "dtypes": [
+     "I32"
+    ],
+    "name": "g_idx",
+    "rank": 1,
+    "required": false,
+    "suffix": ".g_idx"
+   }
+  ]
+ },
+ "name": "GPTQ",
+ "params": {
+  "bits": {
+   "allowed": [
+    2,
+    4,
+    8
+   ],
+   "config": "bits",
+   "default": 4
+  },
+  "group_size": {
+   "config": "group_size",
+   "default": 128
+  },
+  "v2": {
+   "config": "checkpoint_format",
+   "default": 0,
+   "map": {
+    "gptq": 0,
+    "gptq_v2": 1
+   }
+  }
+ },
+ "schema": "misaka.palw.quant-format.v1"
+}

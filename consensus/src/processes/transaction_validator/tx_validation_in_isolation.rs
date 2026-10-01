@@ -43,6 +43,9 @@ impl TransactionValidator {
             self.palw_prompt_ids_form,
             self.palw_lifecycle_undecodable_tolerated,
             kaspa_consensus_core::palw_fp_objects_v3::palw_fp_isolation_work_leaves_cap_v1(self.palw_held_context_fence.is_some()),
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::door(
+                self.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
+            ),
         )?;
         check_transaction_version(tx)
     }
@@ -328,6 +331,8 @@ fn check_transaction_subnetwork(
     palw_lifecycle_undecodable_tolerated: bool,
     // ADR-0119 Decision 6: `palw_fp_isolation_work_leaves_cap_v1` — height-free, as isolation is.
     palw_fp_work_leaves_cap: u64,
+    // RFC-0001 §A.4: `PalwFpDecodeRulesV1::door` — height-free, as isolation is.
+    palw_fp_decode_rules_door: kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1,
 ) -> TxResult<()> {
     if tx.is_coinbase() || tx.subnetwork_id.is_native() {
         Ok(())
@@ -426,11 +431,14 @@ fn check_transaction_subnetwork(
         // carried prompt ids must hash to the job under the network's form — flat everywhere the
         // fence is dormant, the tiled Merkle root on a genesis that armed it. A door that spelled
         // `false, Flat` here would refuse every honest commitment on such a network.
-        kaspa_consensus_core::palw_fp_objects_v3::validate_palw_fp_commitment_tx_under_v4(
+        kaspa_consensus_core::palw_fp_objects_v3::validate_palw_fp_commitment_tx_under_v5(
             &tx.payload,
             palw_panel_da_admissible,
             palw_prompt_ids_form,
             palw_fp_work_leaves_cap,
+            // RFC-0001 §A.4, height-free: a V4 job's shape passes only where the ruleset carries
+            // the decode-rules fence; the header-context door decides the height.
+            palw_fp_decode_rules_door,
         )
         .map_err(TxRuleError::InvalidPalwFpPayload)?;
         Ok(())
@@ -1337,6 +1345,109 @@ mod pq_output_class_enforcement_tests {
         }
     }
 
+    /// **RFC-0001 §A.4, both doors: FP Job V4 is admitted exactly from `Params::palw_fp_decode_rules`,
+    /// and a new V3 job exactly below it.** Isolation is height-free: with no fence the V4 shape is
+    /// refused there (the bytes a pre-V4 build refuses, so both builds agree), with a scheduled fence
+    /// both shapes pass isolation and the header-context door splits them by the containing block's
+    /// DAA — V4 refused below, V3 refused at or past.
+    #[test]
+    fn fp_job_v4_is_admitted_exactly_from_the_decode_rules_fence() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3, PalwFpStopReasonV3, PalwFreePromptCommitmentV3, PalwFreePromptJobV3,
+        };
+        let h = kaspa_consensus_core::Hash64::from_u64_word;
+        let commitment_tx = |decode: Option<DecodeConfigV4>| {
+            let mut job = PalwFreePromptJobV3 {
+                version: PALW_FP_V3_VERSION,
+                network_domain: h(1),
+                class_id: h(2),
+                executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                    kaspa_consensus_core::tx::TransactionId::from_u64_word(3),
+                    0,
+                ),
+                executor_pubkey: vec![4; 8],
+                operator_id: h(5),
+                anchor_block: h(6),
+                anchor_daa: 7,
+                job_nonce: [8; 32],
+                tokenizer_id: h(9),
+                prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&[1, 2, 3]),
+                prompt_tokens: 3,
+                decode_token_limit: 4,
+                max_context_tokens: 20,
+                privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+                prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+                sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+                temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+                decode: None,
+                v5: None,
+            };
+            if let Some(decode) = decode {
+                job = job.into_v4(decode);
+            }
+            let payload = PalwFpCommitmentTxPayloadV3 {
+                version: PALW_FP_V3_VERSION,
+                commitment: PalwFreePromptCommitmentV3 {
+                    trace_root: h(11),
+                    output_root: h(12),
+                    execution_root: h(13),
+                    schedule_root: h(14),
+                    decode_tokens_executed: 2,
+                    stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+                    work_leaves: 1 << 12,
+                    trace_manifest_root: h(15),
+                    trace_chunk_count: 1,
+                    trace_retention_daa: 1_000,
+                    job,
+                },
+                prompt_token_ids: vec![1, 2, 3],
+                signature: vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            };
+            Transaction::new(
+                0,
+                vec![],
+                vec![],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+                0,
+                borsh::to_vec(&payload).unwrap(),
+            )
+        };
+        let v3 = commitment_tx(None);
+        let v4 = commitment_tx(Some(DecodeConfigV4 { stop_sequences: vec![vec![7, 7]], ..DecodeConfigV4::NOOP }));
+        let dormant = validator(PqEnforcementMode::Disabled);
+        let scheduled = validator(PqEnforcementMode::Disabled).with_fp_decode_rules_fence(Some(ForkActivation::new(1_500)));
+        let fp = |tv: &TransactionValidator, tx: &Transaction| {
+            super::check_transaction_subnetwork(
+                tx,
+                false,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                false,
+                kaspa_consensus_core::palw_fp_objects_v3::palw_fp_isolation_work_leaves_cap_v1(false),
+                kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::door(
+                    tv.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
+                ),
+            )
+        };
+        // Isolation: no fence, the V4 shape is refused (as a pre-V4 build refuses its bytes); a
+        // scheduled fence admits both shapes.
+        assert!(fp(&dormant, &v3).is_ok());
+        assert!(matches!(fp(&dormant, &v4), Err(TxRuleError::InvalidPalwFpPayload(_))), "{:?}", fp(&dormant, &v4));
+        assert!(fp(&scheduled, &v3).is_ok() && fp(&scheduled, &v4).is_ok());
+        // The header context splits them by the containing block's height.
+        let header =
+            |tv: &TransactionValidator, tx: &Transaction, daa: u64| tv.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa);
+        assert!(header(&scheduled, &v3, 1_499).is_ok());
+        assert!(matches!(header(&scheduled, &v4, 1_499), Err(TxRuleError::PalwFpJobVersionAtHeight(_, 1_499))));
+        assert!(header(&scheduled, &v4, 1_500).is_ok());
+        assert!(matches!(header(&scheduled, &v3, 1_500), Err(TxRuleError::PalwFpJobVersionAtHeight(_, 1_500))));
+        // No fence: the header context is inert (isolation already refused V4).
+        assert!(header(&dormant, &v3, u64::MAX).is_ok() && header(&dormant, &v4, 0).is_ok());
+    }
+
     /// **ADR-0119 Decision 6: a build that SCHEDULES the held regime accepts, below the fence,
     /// exactly the free-prompt commitments a build without it accepts** — the market's equality
     /// (M-9) on the work-leaves cap. Arm (a) declares no regime and arm (b) schedules it at
@@ -1374,6 +1485,8 @@ mod pq_output_class_enforcement_tests {
                 prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
                 sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
                 temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+                decode: None,
+                v5: None,
             };
             let payload = PalwFpCommitmentTxPayloadV3 {
                 version: PALW_FP_V3_VERSION,

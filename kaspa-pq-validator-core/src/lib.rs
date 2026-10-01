@@ -817,9 +817,19 @@ impl ValidatorKey {
             prompt_token_ids
         };
         let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
-        // The same stateless rules a peer will apply, applied before spending a fee on them.
+        // The same stateless rules a peer will apply, applied before spending a fee on them — under
+        // the decode rules' height-free door (RFC-0001 §A.4): a builder holds no height, so a V3 and
+        // a V4 job both pass the shape here and the chain's header-context door decides which one
+        // the block's height takes.
         payload
-            .validate_stateless_v3(network_domain, prompt_ids_form)
+            .validate_stateless_under_ruleset_v4(
+                network_domain,
+                false,
+                kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+                None,
+                prompt_ids_form,
+                kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Scheduled,
+            )
             .map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
         let (quanta, pwu) = match price {
             // **The chain's own number, not a re-derivation of it.** The 2026-09-20 Studio drill:
@@ -2103,6 +2113,7 @@ mod tests {
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
         };
         let events: Vec<Hash64> = (0..256u64).map(|i| Hash64::from_u64_word(i + 1)).collect();
         let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(Hash64::from_bytes([0xB1; 64]), &events);

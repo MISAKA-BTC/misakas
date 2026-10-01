@@ -1,0 +1,53 @@
+{
+ "decode": {
+  "target": "floats",
+  "value": "v"
+ },
+ "doc": "bfloat16.",
+ "ids": [
+  {
+   "id": 30,
+   "scheme": "ggml"
+  }
+ ],
+ "layout": {
+  "bytes": 2,
+  "elems": 1,
+  "fields": [
+   {
+    "at": 0,
+    "name": "v",
+    "type": "bf16"
+   }
+  ],
+  "kind": "blocks"
+ },
+ "name": "BF16",
+ "schema": "misaka.palw.quant-format.v1",
+ "tests": [
+  {
+   "block_hex": "19666c4abbfa26b6",
+   "values_f32_hex": "0000196600006c4a0000bbfa000026b6"
+  },
+  {
+   "block_hex": "a9dd5ae33e96f958",
+   "values_f32_hex": "0000a9dd00005ae300003e960000f958"
+  },
+  {
+   "block_hex": "2705305bb7ce71b0",
+   "values_f32_hex": "000027050000305b0000b7ce000071b0"
+  },
+  {
+   "block_hex": "70cf06812a916d47",
+   "values_f32_hex": "000070cf0000068100002a9100006d47"
+  },
+  {
+   "block_hex": "64899c3c9a15ba07",
+   "values_f32_hex": "0000648900009c3c00009a150000ba07"
+  },
+  {
+   "block_hex": "f9fa2e8caeee9ba7",
+   "values_f32_hex": "0000f9fa00002e8c0000aeee00009ba7"
+  }
+ ]
+}

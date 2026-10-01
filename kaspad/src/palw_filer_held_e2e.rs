@@ -195,6 +195,8 @@ fn produce(artifact: &Arc<Base0ArtifactV1>, profile: &PalwShapeProfileV3, lie: b
         prompt_mode: PALW_FP_PROMPT_MODE_USER,
         sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
         temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        decode: None,
+        v5: None,
     };
     let prompt: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
     // The job's context, off an honest run (the drill's leaf is named in it).
@@ -451,6 +453,7 @@ fn adjudicate(state: &PalwChainStateV2, sid: Hash64, proof: &PalwCourtVerdictPro
         PalwPromptIdsFormV1::MerkleV1,
         true,
         true,
+        None,
     )
 }
 

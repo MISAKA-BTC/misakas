@@ -239,6 +239,7 @@ pub mod palw_court_v2;
 pub mod palw_credit;
 pub mod palw_credit_batch;
 pub mod palw_decode_constraint_v1;
+pub mod palw_decode_pipeline_v4;
 pub mod palw_decode_select_v2;
 pub mod palw_derived_v1;
 pub mod palw_dispute;
@@ -277,6 +278,7 @@ pub mod palw_fp_devnet_v3;
 pub mod palw_fp_execution_v3;
 pub mod palw_fp_interval_v1;
 pub mod palw_fp_objects_v3;
+pub mod palw_fp_v4_vectors;
 pub mod palw_freeprompt_v3;
 pub mod palw_genesis_v2;
 pub mod palw_heartbeat_v1;
@@ -459,6 +461,20 @@ pub mod palw_gen_v1;
 pub mod palw_gen_class_v1;
 /// RFC-0003: the generative court's own questions — R's inputs recomputed from the job, PALW-TIR-33 on edges, the output digest (fault 21).
 pub mod palw_gen_court_v1;
+/// RFC-0003 §I.2.3: the one step tree of a pipeline claim — every stage's leaves, stage-major.
+pub mod palw_gen_step_v1;
+/// RFC-0003: the pipeline inventory — the artifact layout a generative class's `artifact_root` commits to, and the court's authenticated params.
+pub mod palw_gen_artifact_v1;
+/// RFC-0003: the generative court's consensus objects — a pipeline claim's binding and its two closes.
+pub mod palw_gen_close_v1;
+/// RFC-0003 activation step 4: the pipeline admission — the gate a generative class registration passes, its builder and the node's preflight.
+pub mod palw_gen_admission_v1;
+/// RFC-0003 §II.2.1: the worker and the panel of a pipeline class — a V5 job run into the step tree, and a seat's replay.
+pub mod palw_gen_worker_v1;
+/// RFC-0003 §II.2.1 (RFC-0001's lane): FP Job V5 — a V4 job with image inputs, for a vision-language class; dormant behind `palw_fp_job_v5`.
+pub mod palw_fp_job_v5;
+/// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA unit `TirStepLeaf`.
+pub mod palw_tir_fence2_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
@@ -475,6 +491,8 @@ pub mod palw_tir_court_v1;
 pub mod palw_tir_one_move_v1;
 /// RFC-0002 Phase F step F7: the generic history dissection of an IR class — every reduction over H of the disputed cone, folded exactly.
 pub mod palw_tir_dissect_v1;
+/// RFC-0002 Phase F step F7 (PALW-TIR-38): the carried size of every terminal close of an IR class — the court's own read set, priced as carried.
+pub mod palw_tir_close_size_v1;
 /// RFC-0002 Phase F step F4: the step space of an IR class — commit-point tiles, Fixed-state checkpoints and history tiles as step leaves, in closed form.
 pub mod palw_tir_step_v1;
 /// RFC-0002 Phase F step F8: an IR class's canonical work vector, classified and priced by structure alone.

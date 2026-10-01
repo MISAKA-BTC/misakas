@@ -31,12 +31,14 @@
 //! `pwu_per_inference` (RFC-0003's activation step 4); nothing a registrant says about it is believed.
 //!
 //! **Carriage.** The registration object is APPENDED to the lifecycle objects
-//! (`PalwConsensusObjectV2::ClassRegisteredGenV1`, tag 67, from Phase F's allocation): an older build
+//! (`PalwConsensusObjectV2::ClassRegisteredGenV1`, tag 68, the next free after the second IR fence's 67): an older build
 //! on a ruleset that declared `palw_audit_2026_09_11` skips a payload it cannot decode (A-2). A class
 //! larger than one carrier rides in `ObjectChunk`s (the user's decision 8, multi-carrier registration)
-//! once admission admits the kind. Until the pipeline admission lands this build drops the object by
-//! name at every height — below `palw_gen_v1` exactly as an older build skips it — and the fold
-//! refuses it as the second lock, so every network folds as before the variant existed.
+//! once admission admits the kind. Below `palw_gen_v1` this build drops the object by name exactly as
+//! an older build skips it, and the fold refuses it as the second lock, so every network folds as
+//! before the variant existed; past it the pipeline admission
+//! ([`crate::palw_gen_admission_v1::verify_gen_class_admission_v1`]) decides, and the fold writes the
+//! class's `gen_classes` row ([`PalwGenClassRecordV1`]).
 //!
 //! [`palw_gen_class_preflight_v1`] is the question a registrant asks first, and admission's first
 //! half: the class's structure against the fence — versions, the profile and its ceilings, the strict
@@ -50,7 +52,9 @@ use crate::Hash64;
 use crate::palw_gen_v1::{PalwGenFenceV1, PalwGenProfileV1};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwPwuRuleV2};
 use crate::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
-use misaka_palw_gen::OutputSpecV1;
+/// The canonical output header a class declares (re-exported: a node builds classes without naming
+/// the generative crate).
+pub use misaka_palw_gen::OutputSpecV1;
 use misaka_palw_tir::admit::{TirAdmitError, TirAdmitInputsV1, TirCeilingsV1};
 use misaka_palw_tir::admit_v2::{TirJobCeilingsV1, TirPipelineAdmissionV1, tir_admit_pipeline_staged_v1};
 use misaka_palw_tir::pipeline::{Binding, TirPipelineV1, TokenRule, TokenSource, TripRule};
@@ -89,6 +93,13 @@ pub struct PalwGenImageOfferV1 {
     pub w: u32,
     /// Bytes per input tile, in `[4, 2^16]`: what a court opens against `input_root`.
     pub tile_len: u32,
+    /// **The image's price in prompt tokens** (RFC-0003 open question 13, the recommendation —
+    /// PENDING USER CONFIRMATION): a text class's image stages are charged as this many
+    /// prefill-equivalent tokens per image, at the job's per-token price. Declared by the registrant
+    /// and floored by admission at `⌈admitted per-image work / per-token work⌉`
+    /// ([`palw_gen_image_token_floor_v1`]); `0` on a class that is not a text class (its images are
+    /// its job, priced by its own profile).
+    pub token_equivalents: u32,
 }
 
 /// **A job's reference to one of its images** (RFC-0003 §II.4, `ImageInputRefV1`): the chain carries
@@ -99,6 +110,15 @@ pub struct PalwGenImageInputRefV1 {
     pub input_root: Hash64,
     pub h: u32,
     pub w: u32,
+}
+
+/// **A job's reference to its source ids** (RFC-0003 §II.2.2): the ids' commitment in the network's
+/// prompt-id form (`palw_prompt_ids_v1::prompt_token_ids_commitment_v1`, as the prompt's hash) and
+/// their count. The ids travel as the prompt's do; a dispute over a stage that reads them carries them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenSourceRefV1 {
+    pub token_ids_hash: Hash64,
+    pub tokens: u32,
 }
 
 /// Why a job's images are not the class's.
@@ -154,6 +174,19 @@ pub struct PalwGenOffersV1 {
     /// The image slots, in image order: exactly the images the pipeline binds, each at its bound
     /// size (NF-P10). A job carries one image per slot.
     pub images: Vec<PalwGenImageOfferV1>,
+    /// **The longest source** (RFC-0003 §II.2.2: `TokenSource::Source`, an encoder–decoder's source
+    /// text); 0 when no rule reads the source. Only a text class reads one.
+    pub max_source_tokens: u32,
+    /// **The least a job's source is charged, in prompt tokens** (RFC-0003 open question 15, the
+    /// recommendation — PENDING USER CONFIRMATION with 13): a source is charged as prompt tokens, one
+    /// per id, and never below this — an encoder runs its whole padded width for any source. Declared
+    /// by the registrant and floored by admission at `⌈admitted source work / per-token work⌉`
+    /// ([`palw_gen_input_token_floors_v1`]); 0 on a class that reads no source.
+    pub source_token_floor: u32,
+    /// **The decoder's forced prefix** (RFC-0003 §II.2.2): the ids every prompt of the class starts
+    /// with (`decoder_start_token_id`, a forced target language) — declared by the class, carried at
+    /// the prompt's head. Empty for a class that forces none; only a text class may declare one.
+    pub forced_prompt_prefix: Vec<u32>,
 }
 
 /// **A generative class**: a pipeline of version-2 programs, its layouts, its output, its offers and
@@ -318,6 +351,106 @@ pub struct PalwGenClassReportV1 {
     pub output_tile_len: Option<u32>,
     /// Whether any stage draws `R` (PALW-GEN-6: a job's seed is all zeros exactly when it does not).
     pub draws_randomness: bool,
+    /// A text class's per-slot price floor in prompt tokens ([`palw_gen_image_token_floor_v1`]);
+    /// empty for every other class.
+    pub image_token_floor: Vec<u32>,
+    /// A text class's source price floor in prompt tokens ([`palw_gen_input_token_floors_v1`]); 0 for
+    /// a class that reads no source, and for every class that is not a text class.
+    pub source_token_floor: u32,
+}
+
+/// Work in MAC-equivalents: ADR-0131's table over §8's three arithmetic counts (a MAC 1, an
+/// elementwise op 1, a transcendental 4) — the units the canonical work rule prices arithmetic in.
+pub fn palw_gen_work_units_v1(cost: &misaka_palw_tir::admit::CostV1) -> u128 {
+    let t = crate::palw_economic_compute_v1::PALW_ECONOMIC_COST_TABLE_V1;
+    cost.macs as u128 * t.matmul_mac as u128
+        + cost.elementwise as u128 * t.elementwise as u128
+        + cost.transcendentals as u128 * t.transcendental as u128
+}
+
+/// **A text class's input price floors, in prompt tokens** — per image slot and for the source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwGenInputFloorsV1 {
+    /// Per image slot (open question 13's floor).
+    pub images: Vec<u32>,
+    /// The source's (open question 15's floor; 0 when no stage depends on the source).
+    pub source: u32,
+}
+
+/// **The price floors of a text class's inputs, in prompt tokens** (RFC-0003 open questions 13 and
+/// 15's recommendations, PENDING USER CONFIRMATION): `⌈admitted input work / per-token work⌉`.
+///
+/// * **Input work.** Every stage but the text stage is input work: its admitted job work (every
+///   position, [`palw_gen_work_units_v1`]) is split evenly over the inputs it depends on — the images
+///   it binds, the source if it reads it (a token rule or a token binding over `TokenSource::Source`,
+///   RFC-0003 §II.2.2), and those of every earlier stage it reads — and an input's work is the sum of
+///   its shares, each rounded up.
+/// * **Per-token work.** The text stage's admitted work for one position: what a prompt token costs.
+///
+/// `Err` names a stage of a text class that depends on no image and not on the source: prefill no
+/// rule prices (RFC-0001's D10 pays decode leaves only), refused rather than carried free.
+pub fn palw_gen_input_token_floors_v1(
+    pipeline: &TirPipelineV1,
+    admission: &TirPipelineAdmissionV1,
+    images: usize,
+) -> Result<PalwGenInputFloorsV1, PalwGenClassErrorV1> {
+    /// The source's mark among a stage's dependencies, beside the image indices (at most 16).
+    const SOURCE: u8 = u8::MAX;
+    let reads_source = |rule: &TokenRule| rule.source == TokenSource::Source;
+    let text = pipeline.output_stage as usize;
+    let mut depends: Vec<std::collections::BTreeSet<u8>> = Vec::with_capacity(pipeline.stages.len());
+    let (mut work, mut source_work) = (vec![0u128; images], 0u128);
+    for (s, st) in pipeline.stages.iter().enumerate() {
+        let mut set = std::collections::BTreeSet::new();
+        if st.tokens.as_ref().is_some_and(reads_source) {
+            set.insert(SOURCE);
+        }
+        for b in &st.bind {
+            match b {
+                Binding::JobImage { index } => {
+                    set.insert(*index);
+                }
+                Binding::StageRows { stage, .. } | Binding::StageFinal { stage } | Binding::StageRowCount { stage, .. } => {
+                    set.extend(depends[*stage as usize].iter().copied());
+                }
+                Binding::JobTokens { rule } | Binding::JobTokenCount { rule } if reads_source(rule) => {
+                    set.insert(SOURCE);
+                }
+                _ => {}
+            }
+        }
+        if s != text {
+            if set.is_empty() {
+                return Err(PalwGenClassErrorV1::Offers(format!(
+                    "stage {s} ({}) of a text class reads no image and no source: prefill no rule prices",
+                    st.name
+                )));
+            }
+            let share = palw_gen_work_units_v1(&admission.stages[s].job_cost).div_ceil(set.len() as u128);
+            for i in &set {
+                if *i == SOURCE {
+                    source_work = source_work.saturating_add(share);
+                } else if let Some(w) = work.get_mut(*i as usize) {
+                    *w = w.saturating_add(share);
+                }
+            }
+        }
+        depends.push(set);
+    }
+    let per_token = palw_gen_work_units_v1(&admission.stages[text].admission.view.position.cost).max(1);
+    let tokens = |w: u128| u32::try_from(w.div_ceil(per_token)).unwrap_or(u32::MAX);
+    Ok(PalwGenInputFloorsV1 { images: work.iter().map(|w| tokens(*w)).collect(), source: tokens(source_work) })
+}
+
+/// **The price floor of every image slot of a text class, in prompt tokens** (RFC-0003 open question
+/// 13's recommendation, PENDING USER CONFIRMATION): the image half of
+/// [`palw_gen_input_token_floors_v1`].
+pub fn palw_gen_image_token_floor_v1(
+    pipeline: &TirPipelineV1,
+    admission: &TirPipelineAdmissionV1,
+    images: usize,
+) -> Result<Vec<u32>, PalwGenClassErrorV1> {
+    palw_gen_input_token_floors_v1(pipeline, admission, images).map(|f| f.images)
 }
 
 fn fixed_shape(dims: &[Dim]) -> Option<Vec<u32>> {
@@ -397,16 +530,26 @@ fn check_offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2], offers: &Pa
         if !(4..=1 << 16).contains(&slot.tile_len) {
             return bad(format!("image slot {i}'s input tile {} is outside [4, 2^16]", slot.tile_len));
         }
+        // Only a text class prices its images in prompt tokens; its floor is checked with admission.
+        let text = pipeline.stages.iter().any(|st| matches!(st.trip, TripRule::TextStream));
+        if !text && slot.token_equivalents != 0 {
+            return bad(format!("image slot {i} declares a token price on a class that is not a text class"));
+        }
     }
     // Prompts: an offered length fits every rule that reads it; nothing is offered that no rule reads.
     for (source, max, what) in [
         (TokenSource::Prompt, offers.max_prompt_tokens, "prompt"),
         (TokenSource::Negative, offers.max_negative_tokens, "negative prompt"),
+        (TokenSource::Source, offers.max_source_tokens, "source"),
     ] {
         let readers: Vec<(usize, u32)> =
             prompt_readers(pipeline).into_iter().filter(|(s, _, _)| *s == source).map(|(_, t, r)| (t, r)).collect();
         if readers.is_empty() && max != 0 {
             return bad(format!("a {what} is offered and no rule reads it"));
+        }
+        // A source is the job's input or nothing (RFC-0003 §II.2.2): a class that reads one offers one.
+        if source == TokenSource::Source && !readers.is_empty() && max == 0 {
+            return bad("a rule reads the source and no source is offered".into());
         }
         for (template, room) in readers {
             let need = template as u64 + max as u64;
@@ -416,8 +559,31 @@ fn check_offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2], offers: &Pa
         }
     }
     // A text stream starts with at least one prompt id: a text class offers a prompt.
-    if pipeline.stages.iter().any(|st| matches!(st.trip, TripRule::TextStream)) && offers.max_prompt_tokens == 0 {
+    let text_stage = pipeline.stages.iter().find(|st| matches!(st.trip, TripRule::TextStream));
+    if text_stage.is_some() && offers.max_prompt_tokens == 0 {
         return bad("a text class offers a prompt of at least one id".into());
+    }
+    // The source (RFC-0003 §II.2.2) is a text class's input — the V5 job carries it — and only a
+    // class that reads one prices one (its floor is checked with admission).
+    if offers.max_source_tokens > 0 && text_stage.is_none() {
+        return bad("a source is offered on a class that is not a text class".into());
+    }
+    if offers.max_source_tokens == 0 && offers.source_token_floor != 0 {
+        return bad("a source price on a class that reads no source".into());
+    }
+    // The forced prefix (RFC-0003 §II.2.2): only a text class's, ids its text stage takes, and a
+    // prompt long enough to start with it.
+    if !offers.forced_prompt_prefix.is_empty() {
+        let Some(text) = text_stage else {
+            return bad("a forced prompt prefix on a class that is not a text class".into());
+        };
+        let bound = programs[text.program as usize].token_bound;
+        if let Some(id) = offers.forced_prompt_prefix.iter().find(|id| **id >= bound) {
+            return bad(format!("the forced prefix's id {id} is past the text stage's token bound {bound}"));
+        }
+        if offers.forced_prompt_prefix.len() as u64 > offers.max_prompt_tokens as u64 {
+            return bad("the forced prefix is longer than the longest offered prompt".into());
+        }
     }
     Ok(())
 }
@@ -505,7 +671,32 @@ pub fn palw_gen_class_preflight_v1(
         }
         check_offers(&pipeline, &programs, &class.offers)?;
         let admission = admit_class(class, ceilings)?;
-        return Ok(PalwGenClassReportV1 { profile, admission, output_tile_len: None, draws_randomness: draws_randomness(&programs) });
+        let floors = palw_gen_input_token_floors_v1(&pipeline, &admission, class.offers.images.len())?;
+        let image_token_floor = floors.images;
+        if class.offers.max_source_tokens > 0 && class.offers.source_token_floor < floors.source.max(1) {
+            return Err(PalwGenClassErrorV1::Offers(format!(
+                "the source is priced at no less than {} prompt tokens, below its floor {} (⌈source work / per-token work⌉)",
+                class.offers.source_token_floor,
+                floors.source.max(1)
+            )));
+        }
+        for (i, (slot, floor)) in class.offers.images.iter().zip(&image_token_floor).enumerate() {
+            if slot.token_equivalents < (*floor).max(1) {
+                return Err(PalwGenClassErrorV1::Offers(format!(
+                    "image slot {i} is priced at {} prompt tokens, below its floor {} (⌈per-image work / per-token work⌉)",
+                    slot.token_equivalents,
+                    (*floor).max(1)
+                )));
+            }
+        }
+        return Ok(PalwGenClassReportV1 {
+            profile,
+            admission,
+            output_tile_len: None,
+            draws_randomness: draws_randomness(&programs),
+            image_token_floor,
+            source_token_floor: floors.source,
+        });
     }
     let post = &out_prog.blocks[out_prog.schedule.post as usize];
     let node = out_prog.output.node();
@@ -556,6 +747,8 @@ pub fn palw_gen_class_preflight_v1(
         admission,
         output_tile_len: Some(output_tile_len),
         draws_randomness: draws_randomness(&programs),
+        image_token_floor: Vec::new(),
+        source_token_floor: 0,
     })
 }
 
@@ -599,5 +792,149 @@ fn admit_class(
         TirAdmitError::Program(e) => PalwGenClassErrorV1::Program(e.to_string()),
         TirAdmitError::Exceeds { limit, at, value, cap } => PalwGenClassErrorV1::AdmissionExceeds { limit, at, value, cap },
         TirAdmitError::Inputs(why) => PalwGenClassErrorV1::Layout(why.into()),
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
+// The registry row
+// ---------------------------------------------------------------------------------------------
+
+pub const PALW_GEN_CLASS_RECORD_VERSION_V1: u16 = 1;
+
+/// **What the chain keeps of an admitted generative class** (the `gen_classes` table's row): the
+/// facts a V5 job and a court read — the class id and its artifact root, the profile, the image
+/// slots, the text stage's context — and the class itself, which every generative object that
+/// names the class references instead of carrying.
+///
+/// **Rooted without the class's bytes**: [`Self::rooted_bytes_v1`] is every field but `class`, and the
+/// class is committed through `pipeline_root`, `terms_digest` and the class id; a carriage whose
+/// class does not hash to them is refused at load ([`Self::check_class_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenClassRecordV1 {
+    /// [`PALW_GEN_CLASS_RECORD_VERSION_V1`].
+    pub version: u16,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub profile: u8,
+    pub pipeline_root: Hash64,
+    pub terms_digest: Hash64,
+    pub tokenizer_id: Hash64,
+    /// The image slots a V5 job's images are held to.
+    pub images: Vec<PalwGenImageOfferV1>,
+    /// The text stage's `max_trip` — a V5 job's `prompt + decode − 1` bound — for a text class.
+    pub text_max_trip: Option<u32>,
+    /// The class's carried bytes, counted.
+    pub class_bytes: u64,
+    /// **The dissected commit points** `(stage, block, node)`, in stage then block then node order:
+    /// the commit points whose cone reduces over the history (spec 04b §9.5.1, each stage's view). A
+    /// class with any owes the terminal move of its court (`PalwClassStateV2::fused_attention`): a
+    /// root claim at a dissected leaf (RFC-0002 F7 composed), an acquitting close at any other.
+    pub dissected: Vec<(u8, u8, u16)>,
+    /// The class (rooted through the three hashes above, never by its bytes).
+    pub class: std::sync::Arc<PalwGenClassV1>,
+}
+
+impl PalwGenClassRecordV1 {
+    /// A self-consistent row over a class that decodes to nothing — for tests that need a row to
+    /// exist (its hashes are its class's, so it passes the load check).
+    #[cfg(test)]
+    pub(crate) fn test_row_v1(seed: u8) -> Self {
+        let class = PalwGenClassV1 {
+            version: PALW_GEN_CLASS_VERSION_V1,
+            profile: PalwGenProfileV1::Text as u8,
+            pipeline: vec![seed],
+            programs: Vec::new(),
+            layouts: Vec::new(),
+            output: OutputSpecV1::image_rgb8(1, 1),
+            offers: PalwGenOffersV1 {
+                steps: Vec::new(),
+                scalars: Vec::new(),
+                max_prompt_tokens: 1,
+                max_negative_tokens: 0,
+                images: Vec::new(),
+                max_source_tokens: 0,
+                source_token_floor: 0,
+                forced_prompt_prefix: Vec::new(),
+            },
+            tokenizer_id: Hash64::from_bytes([seed; 64]),
+        };
+        let artifact_root = Hash64::from_bytes([seed ^ 0x5A; 64]);
+        Self {
+            version: PALW_GEN_CLASS_RECORD_VERSION_V1,
+            class_id: class.class_id(&artifact_root),
+            artifact_root,
+            profile: class.profile,
+            pipeline_root: class.pipeline_root(),
+            terms_digest: class.terms_digest(),
+            tokenizer_id: class.tokenizer_id,
+            images: Vec::new(),
+            text_max_trip: Some(8),
+            class_bytes: class.carried_bytes(),
+            dissected: Vec::new(),
+            class: std::sync::Arc::new(class),
+        }
+    }
+
+    /// **The bytes the `gen_classes` root commits for this record**: every field but the class.
+    pub fn rooted_bytes_v1(&self) -> Vec<u8> {
+        borsh::to_vec(&(
+            self.version,
+            self.class_id,
+            self.artifact_root,
+            self.profile,
+            self.pipeline_root,
+            self.terms_digest,
+            self.tokenizer_id,
+            &self.images,
+            self.text_max_trip,
+            self.class_bytes,
+            &self.dissected,
+        ))
+        .expect("a record is borsh-serializable")
+    }
+
+    /// **The load check**: the class hashes to the recorded roots and id and is its recorded size.
+    pub fn check_class_v1(&self) -> Result<(), &'static str> {
+        if self.class.carried_bytes() != self.class_bytes {
+            return Err("a gen_classes row's class is not its recorded size");
+        }
+        if self.class.pipeline_root() != self.pipeline_root || self.class.terms_digest() != self.terms_digest {
+            return Err("a gen_classes row's class does not hash to its recorded roots");
+        }
+        if self.class.class_id(&self.artifact_root) != self.class_id {
+            return Err("a gen_classes row's class does not hash to its class id");
+        }
+        Ok(())
+    }
+}
+
+/// **The row a registration writes**, derived from the carried class alone (the class decodes, and
+/// its facts are read off it); `Err` when the class does not decode.
+pub fn palw_gen_class_record_v1(class: &PalwGenClassV1, artifact_root: &Hash64) -> Result<PalwGenClassRecordV1, PalwGenClassErrorV1> {
+    let (programs, pipeline) = class.decode().map_err(|e| PalwGenClassErrorV1::Program(e.to_string()))?;
+    let out = &pipeline.stages[pipeline.output_stage as usize];
+    let dissected = pipeline
+        .stages
+        .iter()
+        .enumerate()
+        .flat_map(|(s, st)| {
+            let view = programs[st.program as usize].v1_view();
+            crate::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&view).into_iter().map(move |(b, n)| (s as u8, b, n))
+        })
+        .collect();
+    let text_max_trip = matches!(out.trip, TripRule::TextStream).then_some(out.max_trip);
+    Ok(PalwGenClassRecordV1 {
+        version: PALW_GEN_CLASS_RECORD_VERSION_V1,
+        class_id: class.class_id(artifact_root),
+        artifact_root: *artifact_root,
+        profile: class.profile,
+        pipeline_root: class.pipeline_root(),
+        terms_digest: class.terms_digest(),
+        tokenizer_id: class.tokenizer_id,
+        images: class.offers.images.clone(),
+        text_max_trip,
+        class_bytes: class.carried_bytes(),
+        dissected,
+        class: std::sync::Arc::new(class.clone()),
     })
 }

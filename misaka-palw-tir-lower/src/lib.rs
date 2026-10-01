@@ -53,7 +53,9 @@
 pub mod adapter;
 pub mod admission;
 pub mod artifact;
+pub mod calib;
 pub mod cfg;
+pub mod convert;
 pub mod encoder;
 pub mod error;
 pub mod fidelity;
@@ -67,6 +69,7 @@ pub mod lora;
 pub mod lower;
 pub mod model;
 pub mod prequant;
+pub mod quantfmt;
 pub mod quant;
 pub mod report;
 pub mod rope;

@@ -237,6 +237,11 @@ pub enum TxRuleError {
     #[error("a free-prompt commitment declares {0} work leaves, past the structural cap, before the held regime (daa {1})")]
     PalwFpWorkLeavesBeforeHeldActivation(u64, u64),
 
+    /// **RFC-0001 §A.4: the free-prompt job's version is not the one the containing block's height
+    /// admits** — a V4 job below `Params::palw_fp_decode_rules`, or a new V3 job at or past it.
+    #[error("{0} (daa {1})")]
+    PalwFpJobVersionAtHeight(&'static str, u64),
+
     /// **The 2026-09-23 Position route matrix, P-B3: a mempool and template refusal, never a block
     /// rule.** The carrier's `ModelSeed` or `ModelBuy` names a line whose class the registry has not
     /// admitted, so the fold at the virtual's next block would drop the object — and keep the

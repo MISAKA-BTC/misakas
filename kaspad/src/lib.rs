@@ -21,6 +21,8 @@ pub mod palw_filer_false_valid;
 /// ADR-0077 Decision 8's seat: the interval draw, the signed opening request, the exact replay,
 /// and Decision 16's `PanelDa` gate. See the module's own header.
 pub mod palw_fp_seat;
+/// RFC-0003 §II.2.1: the seat's receipt and a party's court objects for a pipeline class's V5 claim (dormant).
+pub mod palw_gen_seat;
 pub mod palw_heartbeat_miner;
 pub mod palw_lane_watch;
 /// V04 (the pre-t12 drill of 2026-09-25): the order a collector offers licences in (node policy).

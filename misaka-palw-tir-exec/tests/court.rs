@@ -362,6 +362,30 @@ fn the_inventory_tree_opens_as_the_consensus_inventory() {
             opened += 1;
         }
         assert!(held.param_opening(count).is_none());
+        // One multiproof over a set of leaves: the consensus builder's proof, byte for byte, read off the
+        // held levels — every leaf, a run inside, a run at each end, a scattered set, one leaf — and it
+        // verifies against the root; a run pays at most its two boundary paths.
+        use kaspa_consensus_core::palw_artifact::{palw_artifact_multiproof_v1, verify_artifact_multiproof_v1};
+        let depth = (count as f64).log2().ceil() as usize;
+        let mid = count / 3;
+        let sets: Vec<Vec<u32>> = vec![
+            (0..count).collect(),
+            (mid..(mid + count / 3).max(mid + 1).min(count)).collect(),
+            (0..count.div_ceil(2)).collect(),
+            (count / 2..count).collect(),
+            (0..count).filter(|l| l % 3 == 1 || l % 7 == 0).rev().collect(),
+            vec![count - 1],
+        ];
+        for set in sets.into_iter().filter(|s| !s.is_empty()) {
+            let proof = held.param_multiproof(&set).unwrap_or_else(|| panic!("{name}: a multiproof over {} leaves", set.len()));
+            let operands: Vec<_> = set.iter().map(|&l| (l, palw_tir_open_leaf_v1(&program, &src, l).unwrap().operand)).collect();
+            assert_eq!(proof, palw_artifact_multiproof_v1(held.tree.leaves(), &operands).unwrap(), "{name}: {} leaves", set.len());
+            verify_artifact_multiproof_v1(&proof, root).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let run = set.windows(2).all(|w| w[1] == w[0] + 1);
+            assert!(!run || proof.siblings.len() <= 2 * depth, "{name}: a run of {} paid {} siblings", set.len(), proof.siblings.len());
+        }
+        assert!(held.param_multiproof(&[]).is_none() && held.param_multiproof(&[count]).is_none());
+        assert!(count < 2 || held.param_multiproof(&[1, 1]).is_none(), "{name}: a repeated leaf");
     }
     assert!(opened > 100, "{opened}");
 }

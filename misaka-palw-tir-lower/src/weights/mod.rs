@@ -13,8 +13,16 @@ use crate::prequant::{QFormat, QLayout, QWeight, unpack_awq, unpack_gptq};
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+mod remote;
+pub use remote::{MemoryFetcher, RangeFetcher, RemoteCheckpoint};
+#[cfg(feature = "remote")]
+pub use remote::CurlFetcher;
+pub mod stream;
 
 /// A dense row-major f32 tensor.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,7 +41,44 @@ impl Tensor {
     }
 }
 
+/// What a source says about a tensor **without reading its data** (a header's entry).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TensorMeta {
+    /// The stored element type as its format names it (`BF16`, `F32`, `I32`, `Q4_K`, …).
+    pub dtype: String,
+    /// The logical shape, Hugging Face order.
+    pub shape: Vec<usize>,
+    /// Bytes the tensor's data occupies as stored (`0` when the format's type is not known here:
+    /// the size of an unknown block type is not guessed).
+    pub bytes: u64,
+}
+
+impl TensorMeta {
+    pub fn numel(&self) -> usize {
+        self.shape.iter().product()
+    }
+    /// `(rows, cols)`: every axis but the last flattened into rows (a rank-1 tensor is one row).
+    pub fn rows_cols(&self) -> (usize, usize) {
+        match self.shape.split_last() {
+            Some((c, lead)) => (lead.iter().product(), *c),
+            None => (1, 1),
+        }
+    }
+    /// Stored bytes of one row (`bytes / rows`).
+    pub fn row_bytes(&self) -> u64 {
+        self.bytes / self.rows_cols().0.max(1) as u64
+    }
+}
+
 /// Where checkpoint tensors come from.
+///
+/// The first four methods read DECODED values (`f32`, or a quantised weight's stored integers).
+/// The last three are the **streaming loader's** face: [`metadata`](Self::metadata) is a header
+/// lookup (no data), [`read_slice`](Self::read_slice) reads a byte range of a tensor's stored data
+/// (a `pread` of a shard file, a range fetch of a remote one), and
+/// [`load_rows`](Self::load_rows) decodes just a row range — so a conversion holds a block of a
+/// tensor, never the whole of it. A source that cannot serve ranges keeps the defaults, which are
+/// correct and read whole tensors.
 pub trait TensorSource {
     fn shape(&self, name: &str) -> Option<Vec<usize>>;
     fn load(&self, name: &str) -> Result<Tensor>;
@@ -46,6 +91,38 @@ pub trait TensorSource {
     fn load_qweight(&self, name: &str) -> Result<QWeight> {
         Err(LowerError::weights(format!("`{name}`: this source holds no block-quantised tensors")))
     }
+    /// The tensor's header entry. The default describes a source that serves decoded `f32`.
+    fn metadata(&self, name: &str) -> Option<TensorMeta> {
+        self.shape(name).map(|shape| {
+            let bytes = shape.iter().product::<usize>() as u64 * 4;
+            TensorMeta { dtype: "F32".into(), shape, bytes }
+        })
+    }
+    /// Bytes `range` of the tensor's stored data (offsets within the tensor).
+    fn read_slice(&self, name: &str, _range: Range<u64>) -> Result<Vec<u8>> {
+        Err(LowerError::weights(format!("`{name}`: this source cannot serve byte ranges")))
+    }
+    /// Rows `rows` of the tensor as `f32`, a `[rows.len(), cols]` tensor (every axis but the last
+    /// flattened into rows; see [`TensorMeta::rows_cols`]). The default loads the whole tensor.
+    fn load_rows(&self, name: &str, rows: Range<usize>) -> Result<Tensor> {
+        let t = self.load(name)?;
+        slice_rows(&t, rows)
+    }
+    /// Whether [`load_rows`](Self::load_rows) reads only the rows asked for (false: it loads the
+    /// whole tensor, so a caller streaming in blocks gains nothing).
+    fn serves_row_ranges(&self) -> bool {
+        false
+    }
+}
+
+/// Rows `rows` of `t` (every axis but the last flattened), as a `[rows.len(), cols]` tensor.
+pub fn slice_rows(t: &Tensor, rows: Range<usize>) -> Result<Tensor> {
+    let cols = t.shape.last().copied().unwrap_or(1);
+    let n = if cols == 0 { 0 } else { t.data.len() / cols };
+    if rows.start > rows.end || rows.end > n {
+        return Err(LowerError::weights(format!("rows {rows:?} of a tensor of {n} rows (shape {:?})", t.shape)));
+    }
+    Ok(Tensor::new(vec![rows.len(), cols], t.data[rows.start * cols..rows.end * cols].to_vec()))
 }
 
 /// Two sources read as one: `over` (an adapter's tensors) before `base` (the parent checkpoint).
@@ -74,6 +151,18 @@ impl TensorSource for Overlay<'_> {
     fn load_qweight(&self, name: &str) -> Result<QWeight> {
         if self.over.shape(name).is_some() { self.over.load_qweight(name) } else { self.base.load_qweight(name) }
     }
+    fn metadata(&self, name: &str) -> Option<TensorMeta> {
+        self.over.metadata(name).or_else(|| self.base.metadata(name))
+    }
+    fn read_slice(&self, name: &str, range: Range<u64>) -> Result<Vec<u8>> {
+        if self.over.shape(name).is_some() { self.over.read_slice(name, range) } else { self.base.read_slice(name, range) }
+    }
+    fn load_rows(&self, name: &str, rows: Range<usize>) -> Result<Tensor> {
+        if self.over.shape(name).is_some() { self.over.load_rows(name, rows) } else { self.base.load_rows(name, rows) }
+    }
+    fn serves_row_ranges(&self) -> bool {
+        self.over.serves_row_ranges() && self.base.serves_row_ranges()
+    }
 }
 
 /// An in-memory source (tests, synthetic checkpoints).
@@ -100,12 +189,53 @@ pub struct Entry {
     pub end: u64,
 }
 
-/// One `.safetensors` file: the header is parsed eagerly, tensor bytes are read on demand.
+/// One `.safetensors` file: the header is parsed eagerly, tensor bytes are read on demand — by
+/// `pread` of just the range asked for, on one open handle.
 #[derive(Clone, Debug)]
 pub struct SafetensorsFile {
     pub path: PathBuf,
     pub entries: BTreeMap<String, Entry>,
     pub data_offset: u64,
+    file: Arc<std::fs::File>,
+}
+
+/// `pread`: fill `buf` from `offset` of `file`, without moving a cursor (so many readers share one
+/// handle).
+pub(crate) fn read_exact_at(file: &std::fs::File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileExt;
+        file.read_exact_at(buf, offset)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileExt;
+        let mut done = 0usize;
+        while done < buf.len() {
+            let n = file.seek_read(&mut buf[done..], offset + done as u64)?;
+            if n == 0 {
+                return Err(std::io::ErrorKind::UnexpectedEof.into());
+            }
+            done += n;
+        }
+        Ok(())
+    }
+}
+
+/// Widen stored floats (`BF16`/`F16`/`F32`/`F64`, little-endian) to `f32`.
+pub fn widen_floats(dtype: &str, raw: &[u8]) -> Result<Vec<f32>> {
+    let sz = dtype_size(dtype).ok_or_else(|| LowerError::weights(format!("a {dtype} tensor is not a float type this reader widens")))?;
+    if !raw.len().is_multiple_of(sz) {
+        return Err(LowerError::weights(format!("{} bytes is not a whole number of {dtype} elements", raw.len())));
+    }
+    Ok(match dtype {
+        // BF16 is the top half of an f32: widening is a shift.
+        "BF16" => raw.chunks_exact(sz).map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16)).collect(),
+        "F16" => raw.chunks_exact(sz).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
+        "F32" => raw.chunks_exact(sz).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
+        "F64" => raw.chunks_exact(sz).map(|c| f64::from_le_bytes(c.try_into().unwrap_or([0; 8])) as f32).collect(),
+        other => return Err(LowerError::weights(format!("dtype {other}"))),
+    })
 }
 
 fn dtype_size(d: &str) -> Option<usize> {
@@ -222,26 +352,49 @@ impl SafetensorsFile {
         buf[..8].copy_from_slice(&head);
         f.read_exact(&mut buf[8..]).map_err(|e| LowerError::weights(e.to_string()))?;
         let (entries, data_offset) = parse_header(&buf, len)?;
-        Ok(SafetensorsFile { path: path.to_path_buf(), entries, data_offset })
+        Ok(SafetensorsFile { path: path.to_path_buf(), entries, data_offset, file: Arc::new(f) })
+    }
+
+    fn entry(&self, name: &str) -> Result<&Entry> {
+        self.entries.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}` in {}", self.path.display())))
+    }
+
+    /// Bytes `range` of tensor `name`'s data, by `pread` — nothing else of the file is read.
+    pub fn read_range(&self, name: &str, range: Range<u64>) -> Result<Vec<u8>> {
+        let e = self.entry(name)?;
+        if range.start > range.end || range.end > e.end - e.begin {
+            return Err(LowerError::weights(format!("`{name}`: bytes {range:?} of a tensor of {}", e.end - e.begin)));
+        }
+        let mut raw = vec![0u8; (range.end - range.start) as usize];
+        read_exact_at(&self.file, &mut raw, self.data_offset + e.begin + range.start)
+            .map_err(|x| LowerError::weights(format!("`{name}`: {x}")))?;
+        Ok(raw)
+    }
+
+    pub fn meta(&self, name: &str) -> Option<TensorMeta> {
+        self.entries.get(name).map(|e| TensorMeta { dtype: e.dtype.clone(), shape: e.shape.clone(), bytes: e.end - e.begin })
     }
 
     pub fn read(&self, name: &str) -> Result<Tensor> {
-        let e = self.entries.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}` in {}", self.path.display())))?;
-        let sz = dtype_size(&e.dtype)
-            .ok_or_else(|| LowerError::weights(format!("`{name}` is {}, not a float type this reader widens", e.dtype)))?;
-        let mut f = std::fs::File::open(&self.path).map_err(|x| LowerError::Io(x.to_string()))?;
-        f.seek(SeekFrom::Start(self.data_offset + e.begin)).map_err(|x| LowerError::Io(x.to_string()))?;
-        let mut raw = vec![0u8; (e.end - e.begin) as usize];
-        f.read_exact(&mut raw).map_err(|x| LowerError::weights(format!("`{name}`: {x}")))?;
-        let data: Vec<f32> = match e.dtype.as_str() {
-            // BF16 is the top half of an f32: widening is a shift.
-            "BF16" => raw.chunks_exact(sz).map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16)).collect(),
-            "F16" => raw.chunks_exact(sz).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
-            "F32" => raw.chunks_exact(sz).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
-            "F64" => raw.chunks_exact(sz).map(|c| f64::from_le_bytes(c.try_into().unwrap_or([0; 8])) as f32).collect(),
-            other => return Err(LowerError::weights(format!("`{name}`: dtype {other}"))),
-        };
+        let e = self.entry(name)?;
+        let data = widen_floats(&e.dtype, &self.read_range(name, 0..e.end - e.begin)?)
+            .map_err(|x| LowerError::weights(format!("`{name}` is {}, not a float type this reader widens ({x})", e.dtype)))?;
         Ok(Tensor::new(e.shape.clone(), data))
+    }
+
+    /// Rows `rows` (every axis but the last flattened) widened to `f32`: only those rows' bytes
+    /// are read.
+    pub fn read_rows(&self, name: &str, rows: Range<usize>) -> Result<Tensor> {
+        let e = self.entry(name)?;
+        let meta = TensorMeta { dtype: e.dtype.clone(), shape: e.shape.clone(), bytes: e.end - e.begin };
+        let (n, cols) = meta.rows_cols();
+        if rows.start > rows.end || rows.end > n {
+            return Err(LowerError::weights(format!("`{name}`: rows {rows:?} of {n} (shape {:?})", e.shape)));
+        }
+        let rb = meta.row_bytes();
+        let raw = self.read_range(name, rows.start as u64 * rb..rows.end as u64 * rb)?;
+        let data = widen_floats(&e.dtype, &raw).map_err(|x| LowerError::weights(format!("`{name}`: {x}")))?;
+        Ok(Tensor::new(vec![rows.len(), cols], data))
     }
 }
 
@@ -252,10 +405,7 @@ impl SafetensorsFile {
         if e.dtype != "I32" {
             return Err(LowerError::weights(format!("`{name}` is {}, not I32", e.dtype)));
         }
-        let mut f = std::fs::File::open(&self.path).map_err(|x| LowerError::Io(x.to_string()))?;
-        f.seek(SeekFrom::Start(self.data_offset + e.begin)).map_err(|x| LowerError::Io(x.to_string()))?;
-        let mut raw = vec![0u8; (e.end - e.begin) as usize];
-        f.read_exact(&mut raw).map_err(|x| LowerError::weights(format!("`{name}`: {x}")))?;
+        let raw = self.read_range(name, 0..e.end - e.begin)?;
         Ok((e.shape.clone(), raw.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()))
     }
 }
@@ -322,6 +472,20 @@ impl TensorSource for Checkpoint {
     fn load_i32(&self, name: &str) -> Result<(Vec<usize>, Vec<i32>)> {
         let i = self.index.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
         self.files[*i].read_i32(name)
+    }
+    fn metadata(&self, name: &str) -> Option<TensorMeta> {
+        self.index.get(name).and_then(|i| self.files[*i].meta(name))
+    }
+    fn read_slice(&self, name: &str, range: Range<u64>) -> Result<Vec<u8>> {
+        let i = self.index.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
+        self.files[*i].read_range(name, range)
+    }
+    fn load_rows(&self, name: &str, rows: Range<usize>) -> Result<Tensor> {
+        let i = self.index.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
+        self.files[*i].read_rows(name, rows)
+    }
+    fn serves_row_ranges(&self) -> bool {
+        true
     }
 }
 
@@ -481,18 +645,18 @@ pub struct Resolver<'a> {
     pub aliases: Vec<(String, String)>,
     pub touched: RefCell<BTreeSet<String>>,
     pub ignored_prefixes: Vec<String>,
-    names: BTreeSet<String>,
+    names: Arc<BTreeSet<String>>,
 }
 
 impl<'a> Resolver<'a> {
     pub fn new(src: &'a dyn TensorSource, aliases: &[(String, String)]) -> Self {
-        Resolver {
-            src,
-            aliases: aliases.to_vec(),
-            touched: RefCell::new(BTreeSet::new()),
-            ignored_prefixes: vec![],
-            names: src.names().into_iter().collect(),
-        }
+        Self::shared(src, aliases, Arc::new(src.names().into_iter().collect()))
+    }
+
+    /// A resolver over names listed once and shared (a streaming conversion makes one per row
+    /// block).
+    pub fn shared(src: &'a dyn TensorSource, aliases: &[(String, String)], names: Arc<BTreeSet<String>>) -> Self {
+        Resolver { src, aliases: aliases.to_vec(), touched: RefCell::new(BTreeSet::new()), ignored_prefixes: vec![], names }
     }
 
     pub fn resolve(&self, name: &str) -> Option<String> {
@@ -792,15 +956,7 @@ pub fn eval_src(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<c
         }
         Src::Map { src, f } => {
             let mut t = eval_src(src, r, layer, vars)?;
-            match f {
-                MapFn::NegExp => t.data.iter_mut().for_each(|x| *x = -((*x as f64).exp() as f32)),
-                MapFn::Scale(c) => t.data.iter_mut().for_each(|x| *x = (*x as f64 * c) as f32),
-                MapFn::RescaleByLayer { every } => {
-                    let l = layer.ok_or_else(|| LowerError::eval("rescale needs a layer"))?;
-                    let div = 2f64.powi((l / every.max(&1)) as i32);
-                    t.data.iter_mut().for_each(|x| *x = (*x as f64 / div) as f32);
-                }
-            }
+            stream::apply_map(&mut t, f, layer)?;
             Ok(t)
         }
         Src::Reshape { src, shape } => {
@@ -934,6 +1090,11 @@ mod tests {
     use super::*;
 
     pub(crate) fn write_safetensors(path: &Path, tensors: &[(&str, &str, Vec<usize>, Vec<u8>)]) {
+        std::fs::write(path, safetensors_bytes(tensors)).unwrap();
+    }
+
+    /// A `.safetensors` file's bytes (8-byte length, JSON header, data).
+    pub(crate) fn safetensors_bytes(tensors: &[(&str, &str, Vec<usize>, Vec<u8>)]) -> Vec<u8> {
         let mut header = serde_json::Map::new();
         let mut data = Vec::new();
         for (name, dtype, shape, bytes) in tensors {
@@ -946,7 +1107,7 @@ mod tests {
         let mut out = (h.len() as u64).to_le_bytes().to_vec();
         out.extend(h);
         out.extend(data);
-        std::fs::write(path, out).unwrap();
+        out
     }
 
     fn tmpdir(tag: &str) -> PathBuf {

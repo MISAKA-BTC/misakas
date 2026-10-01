@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use kaspa_consensus_core::Hash64;
-use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
+use kaspa_consensus_core::palw_artifact::{PalwArtifactMultiproofV1, PalwArtifactOpeningV1};
 use kaspa_consensus_core::palw_tir_artifact_v1::{PalwTirTensorSourceV1, palw_tir_inventory_root_v1};
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1, PalwTirLayoutV1};
 use misaka_palw_tir_artifact::PalwTirContainerV1;
@@ -111,5 +111,9 @@ impl PalwTirTensorSourceV1 for TirArtifactV1 {
 impl TirParamOpenerV1 for TirArtifactV1 {
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
         self.inventory_tree().ok()?.open(&self.plan.program, self, leaf)
+    }
+
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        self.inventory_tree().ok()?.multiproof(&self.plan.program, self, leaves)
     }
 }

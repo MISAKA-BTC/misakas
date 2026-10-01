@@ -52,7 +52,29 @@ impl TransactionValidator {
         self.check_model_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_model_sink_binding_in_context(tx, ctx_daa_score)?;
         self.check_activation_sink_outputs_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)
+        self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)
+    }
+
+    /// **RFC-0001 §A.4, the height-indexed half of the decode-rules door.** Isolation admits a V4
+    /// job's shape wherever the ruleset carries `Params::palw_fp_decode_rules` at all, because it
+    /// holds no height; here, at the containing block's DAA, a V4 commitment below the fence and a
+    /// new V3 commitment at or past it are refused. So a build that schedules the fence and one
+    /// that does not agree on every transaction below it, and from it only V4 jobs are admitted.
+    /// Inert on every preset without the fence: isolation refused every V4 shape already, and
+    /// this returns on its first line.
+    fn check_palw_fp_job_version_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_fp_decode_rules_fence else {
+            return Ok(());
+        };
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        let rules = kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::at(Some(fence.daa_score()), ctx_daa_score);
+        match kaspa_consensus_core::palw_fp_objects_v3::palw_fp_job_version_refusal_v1(&tx.payload, rules) {
+            Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score)),
+            None => Ok(()),
+        }
     }
 
     /// **ADR-0119 Decision 6, the height-indexed half of the free-prompt door.** Isolation admits a

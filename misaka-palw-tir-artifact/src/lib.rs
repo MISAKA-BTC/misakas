@@ -33,6 +33,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+/// **`PALWTIR2`**: a pipeline class's container (RFC-0003) — N programs and one tensor table in the
+/// pipeline inventory's order. A PALWTIR1 reader refuses it by its magic.
+pub mod v2;
+
+/// Content-addressed chunks: a converter cuts each tensor instance into canonical chunks as it is
+/// produced and assembles the container from them (RFC-0002 Part II, the streaming loader).
+pub mod chunks;
+pub use v2::{
+    PALW_TIR_CONTAINER_MAGIC_V2, PALW_TIR_CONTAINER_VERSION_V2, PalwTirContainerHeaderV2, PalwTirContainerProgramV2,
+    PalwTirContainerV2, PalwTirTensorEntryV2, pipeline_instances_v2, write_container_v2,
+};
+
 pub const PALW_TIR_CONTAINER_MAGIC_V1: &[u8; 8] = b"PALWTIR1";
 pub const PALW_TIR_CONTAINER_VERSION_V1: u16 = 1;
 /// Every tensor starts at a multiple of this.
@@ -137,6 +149,25 @@ pub fn write_container_v1(
     meta: String,
     tensor: &mut dyn FnMut(u16, Option<u16>) -> std::result::Result<Vec<u8>, String>,
 ) -> Result<[u8; 64]> {
+    write_container_v1_streamed(path, program, layout, tokenizer_id, meta, &mut |j, l, out| {
+        let bytes = tensor(j, l)?;
+        out.write_all(&bytes).map_err(|e| e.to_string())
+    })
+}
+
+/// **Write a container, streaming**: `tensor(param, layer, out)` is asked for each instance in
+/// inventory order and writes exactly its declared bytes to `out`, in as many pieces as it likes —
+/// so no instance need ever be resident whole (a chunk store feeds it chunk by chunk,
+/// [`chunks`]). The file is byte-identical to [`write_container_v1`]'s for the same tensors (that
+/// function is this one with a callback that returns the bytes). Returns the file digest.
+pub fn write_container_v1_streamed(
+    path: &Path,
+    program: &TirProgramV1,
+    layout: Vec<u8>,
+    tokenizer_id: [u8; 64],
+    meta: String,
+    tensor: &mut dyn FnMut(u16, Option<u16>, &mut dyn Write) -> std::result::Result<(), String>,
+) -> Result<[u8; 64]> {
     misaka_palw_tir::validate::validate(program).map_err(|e| PalwTirContainerError::Program(e.to_string()))?;
     let program_bytes = program.encode();
     let instances = param_instances_v1(program);
@@ -171,21 +202,17 @@ pub fn write_container_v1(
     w.write_all(&(hb.len() as u32).to_le_bytes())?;
     w.write_all(&hb)?;
     for e in &header.tensors {
-        let pad = e.offset - w.written;
-        w.write_all(&vec![0u8; pad as usize])?;
-        let bytes = tensor(e.param, e.layer).map_err(PalwTirContainerError::Bytes)?;
-        if bytes.len() as u64 != e.bytes {
-            let name = &program.params[e.param as usize].name;
-            return Err(PalwTirContainerError::Bytes(format!(
-                "`{name}` (layer {:?}): {} bytes, declared {}",
-                e.layer,
-                bytes.len(),
-                e.bytes
-            )));
+        let pad = (e.offset - w.written) as usize;
+        // At most 63 bytes of zeros (the alignment).
+        w.write_all(&[0u8; PALW_TIR_TENSOR_ALIGN_V1 as usize][..pad])?;
+        let name = &program.params[e.param as usize].name;
+        let before = w.written;
+        tensor(e.param, e.layer, &mut w).map_err(PalwTirContainerError::Bytes)?;
+        let got = w.written - before;
+        if got != e.bytes {
+            return Err(PalwTirContainerError::Bytes(format!("`{name}` (layer {:?}): {got} bytes, declared {}", e.layer, e.bytes)));
         }
-        check_values(program.params[e.param as usize].dtype, &bytes)
-            .map_err(|m| PalwTirContainerError::Bytes(format!("`{}`: {m}", program.params[e.param as usize].name)))?;
-        w.write_all(&bytes)?;
+        check_len(program.params[e.param as usize].dtype, got).map_err(|m| PalwTirContainerError::Bytes(format!("`{name}`: {m}")))?;
     }
     w.inner.flush()?;
     let mut out = [0u8; 64];
@@ -197,11 +224,16 @@ pub fn write_container_v1(
 /// `i8`/`i16`/`i32`/`i64` and `idx` (unsigned 32) cover every bit pattern of their width. `i128` is
 /// never a param (NF-7). Kept as a function so the rule has one place.
 fn check_values(dtype: DType, bytes: &[u8]) -> std::result::Result<(), String> {
+    check_len(dtype, bytes.len() as u64)
+}
+
+/// [`check_values`] by length (a streamed tensor is never held whole).
+fn check_len(dtype: DType, len: u64) -> std::result::Result<(), String> {
     if dtype == DType::I128 {
         return Err("an i128 param".into());
     }
-    if !bytes.len().is_multiple_of(dtype.width()) {
-        return Err(format!("{} bytes is not a whole number of {}", bytes.len(), dtype.name()));
+    if !len.is_multiple_of(dtype.width() as u64) {
+        return Err(format!("{len} bytes is not a whole number of {}", dtype.name()));
     }
     Ok(())
 }

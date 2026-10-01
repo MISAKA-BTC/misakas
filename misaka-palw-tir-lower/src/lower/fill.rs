@@ -12,11 +12,12 @@ use super::qlinear::QInts;
 use super::{Base, Lowered, ScaleKey, occurrences};
 use crate::prequant::QLayout;
 use crate::error::{LowerError, Result};
-use crate::float_ref::stream::OccParams;
+use crate::float_ref::stream::{OccParams, RowSource};
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::hl::HlProgram;
-use crate::quant::{CODE16_MAX, CODE32_MAX, QuantPolicy, RowCodes, RowCodes16, code_scale, quantize_rows, quantize_rows16};
+use crate::quant::{CODE16_MAX, CODE32_MAX, QuantPolicy, RowCodes, RowCodes16, code_scale, quantize_rows, quantize_rows16, row_scales};
 use crate::weights::Tensor;
+use crate::weights::stream::row_blocks;
 use misaka_palw_tir as tir;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -151,6 +152,26 @@ pub struct FillCtx<'a> {
     split_memo: Mutex<BTreeMap<String, Arc<SplitCodes>>>,
     qmemo: Mutex<BTreeMap<String, Arc<QInts>>>,
     qstack_memo: Mutex<BTreeMap<u32, Arc<Vec<QInts>>>>,
+    /// HL params left out of `params` in this occurrence and read by row blocks through `rowsrc`
+    /// (a streaming conversion, `crate::lower::stream`); `None` outside one.
+    deferred: Option<&'a BTreeSet<u32>>,
+    rowsrc: Option<&'a dyn RowSource>,
+    /// Elements of an `f32` block read to compute a deferred param's row scales.
+    block_elems: usize,
+    rscale_memo: Mutex<BTreeMap<(u32, bool), Arc<Vec<f64>>>>,
+}
+
+/// The prefix of the error a fill returns when it needs the whole of a param the streaming
+/// conversion deferred (`<prefix><hl param>: …`): the conversion then loads that param whole for
+/// the occurrence and runs again, so a fill that has no row-wise form is slower, never wrong.
+pub const DEFERRED_MARK: &str = "deferred param ";
+
+/// The HL param a [`DEFERRED_MARK`] error names.
+pub fn deferred_param_of(e: &LowerError) -> Option<u32> {
+    match e {
+        LowerError::Eval(m) => m.strip_prefix(DEFERRED_MARK)?.split(':').next()?.trim().parse().ok(),
+        _ => None,
+    }
 }
 
 impl<'a> FillCtx<'a> {
@@ -178,7 +199,33 @@ impl<'a> FillCtx<'a> {
             split_memo: Mutex::new(BTreeMap::new()),
             qmemo: Mutex::new(BTreeMap::new()),
             qstack_memo: Mutex::new(BTreeMap::new()),
+            deferred: None,
+            rowsrc: None,
+            block_elems: 0,
+            rscale_memo: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// A context for one occurrence of a streaming conversion: `deferred` HL params are not in
+    /// `params`; they are read by blocks of rows from `rowsrc` (`block_elems` elements at a time).
+    #[allow(clippy::too_many_arguments)]
+    pub fn streaming(
+        hl: &'a HlProgram,
+        params: &'a ParamStore,
+        layer: Option<usize>,
+        prefix: &'a str,
+        stats: &'a BTreeMap<String, SiteStat>,
+        resid: f64,
+        policy: &'a QuantPolicy,
+        deferred: &'a BTreeSet<u32>,
+        rowsrc: Option<&'a dyn RowSource>,
+        block_elems: usize,
+    ) -> Self {
+        let mut c = Self::for_scales(hl, params, layer, prefix, stats, resid, policy);
+        c.deferred = Some(deferred);
+        c.rowsrc = rowsrc;
+        c.block_elems = block_elems;
+        c
     }
 
     /// A pre-quantised projection's integers in `layout`, for the input key `kx` (its outlier
@@ -230,9 +277,45 @@ impl<'a> FillCtx<'a> {
             + self.qstack_memo.lock().expect("memo").values().flat_map(|v| v.iter()).map(|q| q.inexact).sum::<usize>()
     }
 
-    /// A float param of this occurrence.
+    /// A float param of this occurrence. A param the streaming conversion deferred is not here
+    /// (see [`DEFERRED_MARK`]).
     pub fn f(&self, p: u32) -> Result<&Tensor> {
-        self.params.get(p, self.layer)
+        match self.params.get(p, self.layer) {
+            Err(_) if self.deferred.is_some_and(|d| d.contains(&p)) => {
+                Err(LowerError::eval(format!("{DEFERRED_MARK}{p}: read whole by a fill with no row-wise form")))
+            }
+            r => r,
+        }
+    }
+
+    /// The per-row scales of an HL `[.., in]` param's codes — `i8` (`wide16 = false`) or `i16`.
+    /// The values [`rows`](Self::rows) / [`rows16`](Self::rows16) carry in `.scales`, but a param
+    /// the streaming conversion deferred has them computed block by block, without its codes and
+    /// without holding it.
+    pub fn row_scales(&self, p: u32, wide16: bool) -> Result<Arc<Vec<f64>>> {
+        if let Some(r) = self.rscale_memo.lock().expect("memo").get(&(p, wide16)) {
+            return Ok(r.clone());
+        }
+        let scales = match (self.deferred.is_some_and(|d| d.contains(&p)), self.rowsrc) {
+            (true, Some(rs)) if self.params.get(p, self.layer).is_err() => {
+                let (rows, cols) = rs
+                    .row_space(p, self.layer)?
+                    .ok_or_else(|| LowerError::eval(format!("{DEFERRED_MARK}{p}: deferred but not readable by rows")))?;
+                let code_max = if wide16 { CODE16_MAX } else { 127.0 };
+                let step = (self.block_elems / cols.max(1)).max(1);
+                let mut out = Vec::with_capacity(rows);
+                for blk in row_blocks(rows, step) {
+                    let t = rs.rows(p, self.layer, blk.clone())?;
+                    out.extend(row_scales(&t.data, blk.len(), cols, code_max));
+                }
+                out
+            }
+            _ if wide16 => self.rows16(p)?.scales.clone(),
+            _ => self.rows(p)?.scales.clone(),
+        };
+        let r = Arc::new(scales);
+        self.rscale_memo.lock().expect("memo").insert((p, wide16), r.clone());
+        Ok(r)
     }
 
     /// The calibrated absmax of a site in this occurrence.
@@ -364,6 +447,16 @@ impl<'a> FillCtx<'a> {
         Ok(rc)
     }
 
+    /// Hand the context the split of HL param `p` under `kx` and `f_max` ready-made, so
+    /// [`split_rows`](Self::split_rows) answers from it without the weight (a streaming conversion
+    /// computes the small per-row parts — scales, shifts, outlier columns — in a pass over blocks and
+    /// keeps no codes: `sc.main.codes` is empty).
+    pub fn inject_split(&self, p: u32, kx: &ScaleKey, f_max: i32, sc: SplitCodes) -> Result<()> {
+        let out = self.outliers(kx)?;
+        self.split_memo.lock().expect("memo").insert(format!("{p}:{out:?}:{f_max}"), Arc::new(sc));
+        Ok(())
+    }
+
     /// The split form of an HL `[out, in]` weight read by a split input `kx`: the main codes (the
     /// outlier columns zeroed, per-row scale over the rest), and the outlier columns in `i32`
     /// fixed point relative to each row's main unit, `wo[o][j] = W[o, c_j] · t_{c_j} /
@@ -424,8 +517,24 @@ pub struct Materialised {
     pub quant_inexact: usize,
 }
 
+/// The residual stream's scale: sized on every value carried at it (`Lowered::resid_sites`).
+pub(crate) fn residual_scale(lw: &Lowered, stats: &BTreeMap<String, SiteStat>, policy: &QuantPolicy) -> Result<f64> {
+    let mut amax_r = 0f64;
+    let mut seen = false;
+    for (k, factor) in &lw.resid_sites {
+        if let Some(s) = stats.get(k) {
+            amax_r = amax_r.max(s.absmax / factor.abs());
+            seen = true;
+        }
+    }
+    if !seen {
+        return Err(LowerError::eval("calibration has no statistics for the residual stream"));
+    }
+    Ok(code_scale(amax_r, CODE32_MAX, policy.headroom_resid))
+}
+
 /// Params each TIR block references.
-fn params_of_blocks(p: &tir::TirProgramV1) -> Vec<BTreeSet<u16>> {
+pub(crate) fn params_of_blocks(p: &tir::TirProgramV1) -> Vec<BTreeSet<u16>> {
     p.blocks
         .iter()
         .map(|b| {
@@ -447,18 +556,7 @@ pub fn materialise(
     policy: &QuantPolicy,
     progress: &dyn Fn(usize, usize),
 ) -> Result<Materialised> {
-    let mut amax_r = 0f64;
-    let mut seen = false;
-    for (k, factor) in &lw.resid_sites {
-        if let Some(s) = stats.get(k) {
-            amax_r = amax_r.max(s.absmax / factor.abs());
-            seen = true;
-        }
-    }
-    if !seen {
-        return Err(LowerError::eval("calibration has no statistics for the residual stream"));
-    }
-    let resid = code_scale(amax_r, CODE32_MAX, policy.headroom_resid);
+    let resid = residual_scale(lw, stats, policy)?;
     let used = params_of_blocks(&lw.program);
     let mut out = IntParams::default();
     let mut logits_scale = None;
@@ -481,6 +579,10 @@ pub fn materialise(
             split_memo: Mutex::new(BTreeMap::new()),
             qmemo: Mutex::new(BTreeMap::new()),
             qstack_memo: Mutex::new(BTreeMap::new()),
+            deferred: None,
+            rowsrc: None,
+            block_elems: 0,
+            rscale_memo: Mutex::new(BTreeMap::new()),
         };
         for &pi in &used[tb] {
             let d = &lw.program.params[pi as usize];

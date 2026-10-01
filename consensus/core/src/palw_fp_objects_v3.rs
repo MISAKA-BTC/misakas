@@ -206,6 +206,9 @@ where
         ruleset_caps_armed,
         held_armed,
         prompt_ids_form,
+        // The pre-V4 entries: a caller that holds no decode-rules height admits V3 jobs only,
+        // which is what every one of them admitted before RFC-0001 §A.
+        crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::Dormant,
         verify_mldsa87,
     )
 }
@@ -267,6 +270,7 @@ pub fn palw_fp_objects_from_accepted_txs_by_class_v1<'a, V, C>(
     ruleset_caps_armed: bool,
     held_armed: bool,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    decode_rules: crate::palw_freeprompt_v3::PalwFpDecodeRulesV1,
     verify_mldsa87: V,
 ) -> PalwFpExtractionV3
 where
@@ -294,8 +298,17 @@ where
                 if caps.held { crate::palw_freeprompt_v3::PALW_FP_HELD_MAX_PROMPT_TOKENS_V1 } else { freeprompt.max_prompt_tokens() };
             (prompt_cap, freeprompt.max_decode_tokens())
         });
+        // RFC-0001 §A.4 at the ACCEPTING block: below `Params::palw_fp_decode_rules` a V3 job only,
+        // from it a V4 job only — a V3 claim accepted before the fence stays what it was.
         if payload
-            .validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, caps.step_ladder, ruleset_caps, prompt_ids_form)
+            .validate_stateless_under_ruleset_v4(
+                network_domain,
+                panel_da_armed,
+                caps.step_ladder,
+                ruleset_caps,
+                prompt_ids_form,
+                decode_rules,
+            )
             .is_err()
         {
             out.skipped.push((id, "payload is not stateless-admissible"));
@@ -460,6 +473,45 @@ pub fn validate_palw_fp_commitment_tx_under_v4(
     payload.validate_shape_under_ruleset_v3(panel_da_admissible, work_leaves_cap, None, prompt_ids_form)
 }
 
+/// [`validate_palw_fp_commitment_tx_under_v4`] **under the decode rules' height-free door**
+/// (RFC-0001 §A.4): `decode_rules` is [`crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::door`] of
+/// `Params::palw_fp_decode_rules_fence` — `Dormant` on every ruleset that does not carry the
+/// fence, so a V4 job is refused there exactly as a build without V4 refuses its bytes, and
+/// `Scheduled` where it is carried, leaving the height to [`palw_fp_job_version_refusal_v1`].
+pub fn validate_palw_fp_commitment_tx_under_v5(
+    payload: &[u8],
+    panel_da_admissible: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    work_leaves_cap: u64,
+    decode_rules: crate::palw_freeprompt_v3::PalwFpDecodeRulesV1,
+) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
+    let payload: PalwFpCommitmentTxPayloadV3 =
+        borsh::from_slice(payload).map_err(|_| crate::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)?;
+    payload.validate_shape_under_ruleset_v4(panel_da_admissible, work_leaves_cap, None, prompt_ids_form, decode_rules)
+}
+
+/// **The header-context half of the decode-rules door** (RFC-0001 §A.4): at the containing block's
+/// height, which job version does this commitment carry that the height does not admit? A V4 job
+/// below `Params::palw_fp_decode_rules`, or a V3 job at or past it — `Some(why)`; `None` for an
+/// admissible version and for bytes that do not decode (isolation refused those already). With
+/// the isolation door's `Scheduled` answer this makes a build that schedules the fence and one that
+/// does not agree on every transaction below the fence.
+pub fn palw_fp_job_version_refusal_v1(
+    payload: &[u8],
+    decode_rules: crate::palw_freeprompt_v3::PalwFpDecodeRulesV1,
+) -> Option<&'static str> {
+    let payload: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(payload).ok()?;
+    match payload.commitment.job.version {
+        crate::palw_freeprompt_v3::PALW_FP_V4_VERSION if !decode_rules.admits_v4() => {
+            Some("an FP Job V4 commitment below Params::palw_fp_decode_rules")
+        }
+        crate::palw_freeprompt_v3::PALW_FP_V3_VERSION if !decode_rules.admits_v3() => {
+            Some("a new FP Job V3 commitment at or past Params::palw_fp_decode_rules — from the fence every new job is V4")
+        }
+        _ => None,
+    }
+}
+
 /// **The header-context half of the door** (ADR-0119 Decision 6): the work leaves a commitment
 /// declares, when they are past the structural cap — `Some(work_leaves)` is a commitment that only
 /// the held regime's ladder admits, which the containing block's DAA must be past the fence for.
@@ -516,6 +568,8 @@ mod tests {
             prompt_mode: crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
         let events: Vec<Hash64> = (0..decode as u64).map(|i| h64(i + 1)).collect();
         let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(h64(0xB1), &events);
@@ -542,6 +596,58 @@ mod tests {
 
     fn tx(subnetwork: crate::subnets::SubnetworkId, payload_bytes: Vec<u8>) -> Transaction {
         Transaction::new(TX_VERSION, vec![], vec![], 0, subnetwork, 0, payload_bytes)
+    }
+
+    /// **RFC-0001 §A.4 at the walk: V3 below the decode-rules fence, V4 from it.** The accepting
+    /// block's rule decides which of the two a carrier may open a claim with, so a V3 claim accepted
+    /// before the fence is state and a new one past it is skipped, and a V4 commitment below the
+    /// fence opens nothing; the door helpers answer the same way.
+    #[test]
+    fn the_walk_admits_one_job_version_per_side_of_the_decode_rules_fence() {
+        use crate::palw_decode_pipeline_v4::DecodeConfigV4;
+        use crate::palw_freeprompt_v3::PalwFpDecodeRulesV1;
+        let v3 = payload(8, 4);
+        let mut v4 = payload(8, 4);
+        v4.commitment.job =
+            v4.commitment.job.clone().into_v4(DecodeConfigV4 { stop_sequences: vec![vec![3]], ..DecodeConfigV4::NOOP });
+        let walk = |p: &PalwFpCommitmentTxPayloadV3, rules: PalwFpDecodeRulesV1| {
+            palw_fp_objects_from_accepted_txs_by_class_v1(
+                &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(p).unwrap())],
+                net(),
+                &freeprompt(),
+                crate::BlockHash::default(),
+                false,
+                |_| PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: PalwFpDerivedWorkCapV1::Declared },
+                false,
+                false,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                rules,
+                |_, _, _, _| true,
+            )
+            .objects
+            .len()
+        };
+        assert_eq!(walk(&v3, PalwFpDecodeRulesV1::Dormant), 1);
+        assert_eq!(walk(&v4, PalwFpDecodeRulesV1::Dormant), 0, "no V4 claim below the fence");
+        assert_eq!(walk(&v4, PalwFpDecodeRulesV1::Active), 1, "a V4 claim from the fence");
+        assert_eq!(walk(&v3, PalwFpDecodeRulesV1::Active), 0, "no NEW V3 claim past the fence");
+        // A V4 claim's id is the commitment's, which holds the V4 job — decode config and all.
+        let mut moved = v4.clone();
+        moved.commitment.job.decode.as_mut().unwrap().stop_sequences = vec![vec![4]];
+        assert_ne!(moved.claim_id(), v4.claim_id());
+        // The doors: isolation by the ruleset's schedule, the header context by the height.
+        let (b3, b4) = (borsh::to_vec(&v3).unwrap(), borsh::to_vec(&v4).unwrap());
+        let door = |bytes: &[u8], rules| {
+            validate_palw_fp_commitment_tx_under_v5(bytes, false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, 1 << 32, rules)
+        };
+        assert!(door(&b3, PalwFpDecodeRulesV1::Dormant).is_ok());
+        assert_eq!(door(&b4, PalwFpDecodeRulesV1::Dormant), Err(crate::palw_freeprompt_v3::PalwFpV3Error::DecodeRulesNotArmed));
+        assert!(door(&b4, PalwFpDecodeRulesV1::Scheduled).is_ok() && door(&b3, PalwFpDecodeRulesV1::Scheduled).is_ok());
+        assert!(palw_fp_job_version_refusal_v1(&b4, PalwFpDecodeRulesV1::Dormant).is_some());
+        assert!(palw_fp_job_version_refusal_v1(&b3, PalwFpDecodeRulesV1::Active).is_some());
+        assert!(palw_fp_job_version_refusal_v1(&b4, PalwFpDecodeRulesV1::Active).is_none());
+        assert!(palw_fp_job_version_refusal_v1(&b3, PalwFpDecodeRulesV1::Dormant).is_none());
+        assert!(palw_fp_job_version_refusal_v1(&[0xFF; 4], PalwFpDecodeRulesV1::Active).is_none(), "isolation's to refuse");
     }
 
     /// **A commitment nobody signed for creates no claim** (launch blockers §4).
@@ -621,6 +727,7 @@ mod tests {
                 false,
                 true,
                 crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::Dormant,
                 |_, _, _, _| true,
             )
         };
@@ -1119,6 +1226,7 @@ mod tests {
                 false,
                 true,
                 crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::Dormant,
                 |_, _, _, _| true,
             )
         };

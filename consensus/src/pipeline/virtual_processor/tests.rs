@@ -11210,6 +11210,8 @@ async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_qua
         prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
         temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        decode: None,
+        v5: None,
     };
 
     let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
@@ -11525,6 +11527,8 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
         prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
         temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        decode: None,
+        v5: None,
     };
     let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
     let class = PalwFpClassFactsV3 {
@@ -16386,6 +16390,11 @@ mod t12_rcore_s6_producer_share;
 // in the block below the fence, refused from it; a bound buy valid on both sides; the released rule
 // and the armed one agreeing on every block below it.
 mod t12_model_sink_bound_fence;
+// RFC-0002 Phase F: one IR class registration a block reaches admission v10 — the walk drops a second
+// by name before any slot or fee, and the fold refuses a second as its second lock.
+mod t12_tir_registration_cap;
+// RFC-0002 Phase F's second IR fence: the IR step-leaf DA demand at the gate.
+mod t12_tir_da_leaf_gate;
 // ADR-0152 v3.1 S-7: the reporter's commitment (tag 53) and reveal (tag 54) at the gate, the walk
 // and the fold past `palw_rcore_plus`, with real card signatures.
 mod t12_rcore_s7_reporter_gate;

@@ -2678,18 +2678,17 @@ pub struct Params {
     /// A bare fence, top level, `None` on every shipped preset — the `palw_kary_court` shape
     /// directly above, for its reasons.
     ///
-    /// **ARMING IT IS REFUSED BY [`Self::validate_palw_v2`] ON THIS BUILD** (audit D M-1): neither
-    /// rule exists on the path that would apply it. Decision 10's numerator is not in the
-    /// transition — `apply_free_prompt` answers `FreePromptDecodeLeavesUnavailable` the moment
-    /// `PalwStateParamsV2::fp_decode_rules_at` is true, so an armed chain refuses EVERY
-    /// free-prompt claim rather than crediting decode leaves — and Decision 11's sampler exists
-    /// in [`crate::palw_decode_select_v2`] but in no engine, while all eight `validate_*_v3`
-    /// entry points pass `decode_rules_armed: false` as a literal, so every temperature job would
-    /// be refused `SamplingNotArmed` after a full inference. Arming it changes exactly one
-    /// observable thing today — `ChainFacts::fp_decode_rules_armed`, which the gateway acts on by
-    /// accepting those jobs — so the fence's only reachable effect is a lane that burns
-    /// inferences and looks broken. The refusal lifts when the transition can enumerate the
-    /// decode half and an engine implements `decode_token_select_v2`.
+    /// **RFC-0001 §A (FP Job V4, 2026-09-27): the same fence also says "V4 from here".** Below it
+    /// every new free-prompt job is V3 (greedy); from it every new job is V4
+    /// (`palw_decode_pipeline_v4`: repeat / frequency / presence penalties, `logit_bias`, stop token
+    /// sequences, Decision 11's key), and a V3 claim accepted before it is verified to the end by the
+    /// V3 verifier. One fence, because the three are one ruleset move (RFC-0001 §3).
+    ///
+    /// **Armable on this build** — the audit D M-1 refusal is lifted: the transition credits decode
+    /// work over the class's derived graph and every engine selects through `PalwFpDecoderV1`.
+    /// `validate_palw_v2` still refuses it off ConsensusV2, below `palw_fp_derived_work`, or with the
+    /// bundle's mirror out of step ([`Self::validate_palw_fp_decode_rules_v1`]). Arm it at a flag day
+    /// through [`PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1`], which sets the fence and its mirror.
     pub palw_fp_decode_rules: Option<ForkActivation>,
 
     /// **ADR-0145 §5/§6: the free-prompt lane's work is DERIVED, and a cached prefix is not paid
@@ -2843,6 +2842,28 @@ pub struct Params {
     /// option collapsed from `Some(never())` — `palw_tir_v1`'s shape. [`Self::validate_palw_gen_v1`]
     /// holds its refusals.
     pub palw_gen_v1: Option<crate::palw_gen_v1::PalwGenFenceV1>,
+
+    /// **FP Job V5: a free-prompt job with image inputs** (RFC-0003 §II.2.1, PALW-GEN-13; RFC-0001's
+    /// lane) — the job of a vision-language class, which embeds FP Job V4 unchanged
+    /// ([`crate::palw_fp_job_v5`]). Past this height a V5 job may be admitted for a text class with
+    /// image slots; below it, and on every network that leaves it `None`, a V5 job is refused by
+    /// name and FP Job V4 is exactly what it was.
+    ///
+    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only in both
+    /// fingerprints, the whole option collapsed from `Some(never())`. Requires `palw_gen_v1` (a
+    /// vision-language class is a generative class) and `palw_fp_decode_rules` (V5 embeds V4) in
+    /// force at or below it ([`Self::validate_palw_fp_job_v5_v1`]).
+    pub palw_fp_job_v5: Option<ForkActivation>,
+
+    /// **RFC-0002 Phase F, the second IR fence** (`crate::palw_tir_fence2_v1`): the consensus half of
+    /// the fixes after the DAA-2,000 release — ref2's H7 (the `TopK` row of the box demand and the
+    /// value bound `V`), the `Select`-arm work credit, and the IR data-availability unit
+    /// `TirStepLeaf { index }`. A bare height; `None` on every preset (testnet-12 included) until a
+    /// later flag day arms it. Hashed Some-only in every writer with the `never()` collapse, so a build
+    /// that carries the field fingerprints and peers exactly as one that does not. Refused by
+    /// [`Self::validate_palw_tir_fence2`] off ConsensusV2, without `palw_tir_v1` in force at or below
+    /// it, or with the bundle's mirror unsynced.
+    pub palw_tir_fence2: Option<ForkActivation>,
 
     /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
     ///
@@ -3817,6 +3838,10 @@ impl Params {
         self.validate_palw_tir_v1()?;
         // **RFC-0003: the generative fence's own refusals** (`crate::palw_gen_v1`).
         self.validate_palw_gen_v1()?;
+        // **FP Job V5** (`crate::palw_fp_job_v5`): over the generative fence and FP Job V4's.
+        self.validate_palw_fp_job_v5_v1()?;
+        // **RFC-0002 Phase F, the second IR fence's refusals** (`crate::palw_tir_fence2_v1`).
+        self.validate_palw_tir_fence2()?;
         // **ADR-0152 v2 F2: the offence-attribution fence is armed at genesis or not at all.** Past
         // it the V1 `PanelFalseValid` is refused and a kind the chain never consumed before is; a
         // later crossing would leave pre-fence V1 rows beside V2 rows keyed differently for the
@@ -4646,6 +4671,8 @@ impl Params {
         self.validate_palw_lane_accept_parents_first_v1()?;
         // Lane cap-weight (ADR-0160 F-W): over R-core+ and the strict-win reorg rule, mirrored.
         self.validate_palw_capacity_weight_cap_v1()?;
+        // FP Job V4 (RFC-0001 §A): ConsensusV2 over the derivation, mirrored — on both paths.
+        self.validate_palw_fp_decode_rules_v1()?;
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
@@ -4790,34 +4817,13 @@ impl Params {
                  end unprosecuted at the price it was admitted for (ADR-0082 Decision 1, ADR-0049 Decision C)",
             ));
         }
-        // **ADR-0082 Decisions 10 and 11 cannot be armed by this build, and saying so is the
-        // fence's job** (audit D M-1 / audit C M-5).
-        //
-        // Arming `palw_fp_decode_rules` moves `consensus_identity_id` and `ChainFacts`, and the
-        // gateway starts accepting `temperature_q > 0` jobs on the strength of it — while the two
-        // inputs the rule needs are not in this cut. Decision 10's decode-leaf enumeration is not
-        // in the transition: `apply_free_prompt` answers `FreePromptDecodeLeavesUnavailable` the
-        // moment `fp_decode_rules_at` is true, so an armed chain refuses EVERY free-prompt claim.
-        // Decision 11's sampler exists in consensus-core (`palw_decode_select_v2`) and is not in
-        // any engine, and the eight `validate_*_v3` entry points pass `decode_rules_armed: false`
-        // as a literal, so every commitment a temperature job produced would be refused
-        // `SamplingNotArmed`. Threading the fence through those validators would arm a rule whose
-        // transition refuses — a lane that looks broken and burns inferences.
-        //
-        // So the fence is refused at assembly, exactly as `palw_uncertified_weightless` refuses a
-        // scheduled height: a configuration that reads as "armed" and behaves as "no claim can be
-        // credited" must not start. `never()` is absence and is exempt.
-        if let Some(activation) = self.palw_fp_decode_rules
-            && activation != ForkActivation::never()
-        {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_fp_decode_rules is armed and this build cannot carry ADR-0082 Decisions 10/11: the state \
-                 transition has no decode-leaf enumeration (every free-prompt claim would be refused \
-                 FreePromptDecodeLeavesUnavailable) and no engine implements decode_token_select_v2 (every \
-                 temperature job would be refused SamplingNotArmed) — the fence may only be armed by a build \
-                 that carries both",
-            ));
-        }
+        // **ADR-0082 Decisions 10 and 11 — the audit D M-1 / audit C M-5 refusal is LIFTED** (RFC-0001
+        // §A, lane fp-sampler, 2026-09-27). It stood because the transition answered
+        // `FreePromptDecodeLeavesUnavailable` past the fence and no engine implemented
+        // `decode_token_select_v2`. Both now exist, with FP Job V4: the transition credits decode
+        // work over the derived graph, every free-prompt engine and seat selects through
+        // `PalwFpDecoderV1`, and the doors admit one job version per height. What arming still
+        // requires is `validate_palw_fp_decode_rules_v1`'s, asked on both paths above.
         // **ADR-0096 Decisions 6–8 cannot be armed by this build either, and the fence says so**
         // — the same shape as the refusal directly above, for the same reason: a configuration
         // that reads as "armed" while no job may carry a constraint, no court can try one and no
@@ -6046,6 +6052,14 @@ impl Params {
         if self.palw_gen_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_gen_v1 = None;
         }
+        // FP Job V5, likewise.
+        if self.palw_fp_job_v5 == Some(ForkActivation::never()) {
+            self.palw_fp_job_v5 = None;
+        }
+        // RFC-0002 Phase F's second IR fence: Some-only hashed, so the same collapse.
+        if self.palw_tir_fence2 == Some(ForkActivation::never()) {
+            self.palw_tir_fence2 = None;
+        }
         // ADR-0093 Decision 6, likewise.
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
             self.palw_fused_dissectable = None;
@@ -6592,6 +6606,90 @@ impl Params {
         // Lane F2-lock (post-launch): the lock life applied retroactively rides the same re-mirror, beside
         // the lane V02 fence it extends.
         self.sync_palw_final_lock_life_retro();
+        // FP Job V4 (RFC-0001 §A, lane fp-sampler): ADR-0082 D10/D11's height rides the same re-mirror,
+        // so every site that re-assembles a bundle carries it.
+        self.sync_palw_fp_decode_rules();
+    }
+
+    // ---- FP Job V4 (RFC-0001 §A, 2026-09-27): ADR-0082 D10 + D11 + "V4 from here" ----
+
+    /// **Mirrors [`Self::palw_fp_decode_rules`] into the V2 bundle's state params** — the
+    /// borsh-skipped copy the transition reads (`PalwStateParamsV2::fp_decode_rules_at`), because the
+    /// fold holds only the bundle. `None` where the fence is not armed. Called by
+    /// [`Self::sync_palw_rcore_plus`] and by the flag-day entry
+    /// [`PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1`]; `validate_palw_v2` refuses a ruleset whose copy
+    /// disagrees, so a missed call is a startup refusal, not a quiet dormant rule.
+    pub fn sync_palw_fp_decode_rules(&mut self) {
+        let from_daa = self.palw_fp_decode_rules.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_fp_decode_rules_v1(from_daa);
+        }
+    }
+
+    /// **What the FP Job V4 fence refuses** (RFC-0001 §A; audit D M-1 lifted by what this build now
+    /// carries). Called by `validate_palw_v2` on both paths, public so a test can name each refusal.
+    ///
+    /// The M-1 refusal stood because neither half of ADR-0082 D10/D11 existed on the path that
+    /// applies it. This build carries both, and V4 with them: the transition credits a free-prompt
+    /// claim its DECODE work (`palw_fp_commitment_price_from_state_v1`, over the class's published
+    /// graph), every free-prompt engine selects through `palw_decode_pipeline_v4::PalwFpDecoderV1`
+    /// (the V3 rule for a V3 job, the §A.3 pipeline with Decision 11's key for a V4 job), and every
+    /// admission door admits exactly one job version per height. What remains is what the rules
+    /// NEED, refused by name:
+    ///
+    /// * **ConsensusV2** — the free-prompt lane exists nowhere else;
+    /// * **`palw_fp_derived_work` at or below it** — D10 enumerates the decode leaves from the class's
+    ///   published graph (ADR-0145 §5); below the derivation the transition has nothing to split the
+    ///   capture with and would refuse every claim `FreePromptDecodeLeavesUnavailable`;
+    /// * **the bundle's mirror equal to the fence**, and the retired serialized height `None` — a
+    ///   height inside the bundle's borsh would move `palw_ruleset_id_v2`, which the identity id reads
+    ///   unnormalised, at deploy instead of at the fence.
+    pub fn validate_palw_fp_decode_rules_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let (mirror, serialized) = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                (bundle.state.fp_decode_rules_from_daa(), bundle.state.fp_decode_rules_serialized_daa())
+            }
+            _ => (None, None),
+        };
+        if serialized.is_some() {
+            return Err(Invalid(
+                "the V2 bundle serializes a decode-rules height: it moves palw_ruleset_id_v2 — and with it the identity every \
+                 peer compares — at deploy; the height rides the borsh-skipped mirror Params::sync_palw_fp_decode_rules writes",
+            ));
+        }
+        let Some(fence) = self.palw_fp_decode_rules.filter(|fence| *fence != ForkActivation::never()) else {
+            if mirror.is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a decode-rules height without palw_fp_decode_rules armed: mirror the fence with \
+                     Params::sync_palw_fp_decode_rules after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return Err(Invalid(
+                "palw_fp_decode_rules is armed on a network that is not ConsensusV2: the free-prompt lane it governs exists only there",
+            ));
+        }
+        match self.palw_fp_derived_work.filter(|derived| *derived != ForkActivation::never()) {
+            Some(derived) if derived.daa_score() <= fence.daa_score() => {}
+            _ => {
+                return Err(Invalid(
+                    "palw_fp_decode_rules is armed without palw_fp_derived_work at or below its height: ADR-0082 Decision 10 \
+                     credits a claim's decode leaves, which the transition enumerates from the class's published graph \
+                     (ADR-0145 §5) — below the derivation every free-prompt claim would be refused \
+                     FreePromptDecodeLeavesUnavailable",
+                ));
+            }
+        }
+        if mirror != Some(fence.daa_score()) {
+            return Err(Invalid(
+                "palw_fp_decode_rules is armed and the V2 bundle's mirror disagrees: mirror the fence with \
+                 Params::sync_palw_fp_decode_rules after the bundle is assembled",
+            ));
+        }
+        Ok(())
     }
 
     // ---- lane V02 (post-launch, 2026-09-26): a resolved claim's lock is carried by the whole collateral ----
@@ -9123,6 +9221,8 @@ impl Params {
             palw_kimi_k3,
             palw_tir_v1,
             palw_gen_v1,
+            palw_fp_job_v5,
+            palw_tir_fence2,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -9355,6 +9455,8 @@ impl Params {
             ("palw_kimi_k3", *palw_kimi_k3),
             ("palw_tir_v1", palw_tir_v1.map(|fence| fence.activation)),
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
+            ("palw_fp_job_v5", *palw_fp_job_v5),
+            ("palw_tir_fence2", *palw_tir_fence2),
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
@@ -9599,6 +9701,17 @@ impl Params {
             h.write(b"palw_gen_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
+        }
+        // FP Job V5, NAMED likewise.
+        if let Some(v5) = self.palw_fp_job_v5 {
+            h.write(b"palw_fp_job_v5");
+            h.write(v5.daa_score().to_le_bytes());
+        }
+        // RFC-0002 Phase F's second IR fence, NAMED likewise: it changes admission, the credited work
+        // and the DA court from its height.
+        if let Some(activation) = self.palw_tir_fence2 {
+            h.write(b"palw_tir_fence2");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0093 Decision 6's fence, NAMED likewise: it changes which classes may register.
         if let Some(dissectable) = self.palw_fused_dissectable {
@@ -10092,6 +10205,8 @@ impl Params {
             palw_kimi_k3,
             palw_tir_v1,
             palw_gen_v1,
+            palw_fp_job_v5,
+            palw_tir_fence2,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -10773,6 +10888,14 @@ impl Params {
         if let Some(fence) = palw_gen_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        // FP Job V5. Some-only.
+        if let Some(activation) = palw_fp_job_v5.as_mut() {
+            fork(activation, visit);
+        }
+        // RFC-0002 Phase F's second IR fence: Some-only, a bare height.
+        if let Some(activation) = palw_tir_fence2.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0093 Decision 6. Some-only, likewise.
         if let Some(activation) = palw_fused_dissectable.as_mut() {
             fork(activation, visit);
@@ -11198,6 +11321,8 @@ impl Params {
             palw_kimi_k3,
             palw_tir_v1,
             palw_gen_v1,
+            palw_fp_job_v5,
+            palw_tir_fence2,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -11920,6 +12045,18 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
+        // FP Job V5, Some-only for the same reason: a dormant network fingerprints byte-identically
+        // to a build without the field, and FP Job V4's own bytes never move.
+        if let Some(activation) = palw_fp_job_v5 {
+            h.write(b"palw_fp_job_v5");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0002 Phase F's second IR fence, Some-only: every shipped preset leaves it `None` and
+        // fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_tir_fence2 {
+            h.write(b"palw_tir_fence2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
         // byte-identically to a build without the field.
         if let Some(activation) = palw_fused_dissectable {
@@ -12563,6 +12700,8 @@ impl Params {
             palw_kimi_k3: self.palw_kimi_k3,
             palw_tir_v1: self.palw_tir_v1,
             palw_gen_v1: self.palw_gen_v1,
+            palw_fp_job_v5: self.palw_fp_job_v5,
+            palw_tir_fence2: self.palw_tir_fence2,
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
@@ -13617,6 +13756,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_token_lift: None,
     palw_tir_v1: None,
     palw_gen_v1: None,
+    palw_fp_job_v5: None,
+    palw_tir_fence2: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -13868,6 +14009,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_token_lift: None,
     palw_tir_v1: None,
     palw_gen_v1: None,
+    palw_fp_job_v5: None,
+    palw_tir_fence2: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14101,6 +14244,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_token_lift: None,
     palw_tir_v1: None,
     palw_gen_v1: None,
+    palw_fp_job_v5: None,
+    palw_tir_fence2: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -19029,8 +19174,9 @@ pub fn palw_t12_launch_params_v1() -> Params {
     let mut params = palw_t12_shipped_params();
     // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
     // DAA-750 list: testnet-12 as it launched carries neither.
-    for fence in PALW_T12_TIR_FLAG_DAY_FENCES_V1
+    for fence in PALW_T12_TIR_FENCE2_FENCES_V1
         .iter()
+        .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V3)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V2)
         .chain(PALW_T12_POST_LAUNCH_FENCES_V1)
@@ -19518,6 +19664,24 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V2: &[PalwPostLaunchFenceV1] = &[
     },
 ];
 
+/// **FP Job V4's flag-day entry** (RFC-0001 §A.4, lane fp-sampler, 2026-09-27): ADR-0082 D10 + D11
+/// + "only V4 FP jobs from here", one fence (`palw_fp_decode_rules`) and its bundle mirror, set
+/// through its own `set` like every entry of the post-launch lists. **Dormant on this branch** — no
+/// list carries it, so every shipped id is unchanged — and arming it at the integration is a
+/// one-entry addition to the flag day's list.
+///
+/// TODO(int-6, flag day DAA 1,500): add `PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1` to the third
+/// post-launch list (`PALW_T12_POST_LAUNCH_FENCES_V3`, the DAA-1,500 flag day armed with the capacity
+/// work) — one line — and re-pin testnet-12 (`scripts/t12-repin.sh --shipping`). Its prerequisite
+/// `palw_fp_derived_work` is armed at testnet-12's genesis, so `validate_palw_v2` holds at any height.
+pub const PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_fp_decode_rules",
+    set: |params, at| {
+        params.palw_fp_decode_rules = at;
+        params.sync_palw_fp_decode_rules();
+    },
+};
+
 /// **testnet-12's second post-launch flag day: DAA 1,300** (the user's decision of 2026-09-27, with the
 /// live chain at DAA ~853: the seats' room runs out again at DAA ~1,350–1,575, so both fences of
 /// [`PALW_T12_POST_LAUNCH_FENCES_V2`] arm before that). A height no other fence uses — not 750 and
@@ -19584,12 +19748,34 @@ fn palw_t12_arm_tir_flag_day_v1(params: &mut Params) {
     }
 }
 
+/// **testnet-12's second IR flag day: the fixes after DAA 2,000** — `palw_tir_fence2` alone
+/// ([`crate::palw_tir_fence2_v1`]: ref2's H7 `TopK` row, the `Select`-arm work credit, the IR DA unit
+/// `TirStepLeaf`). Its prerequisite is the IR flag day's `palw_tir_v1` at or below it
+/// (`validate_palw_tir_fence2`).
+pub const PALW_T12_TIR_FENCE2_FENCES_V1: &[PalwPostLaunchFenceV1] = &[crate::palw_tir_fence2_v1::PALW_T12_TIR_FENCE2_ENTRY];
+
+/// **The second IR flag day's height — `None` until the user sets it.** While `None` the list is
+/// dormant on every ruleset, the shipped one included, and a drill crosses it with
+/// `--palw-drill-tir2-at`. It must be a height no other fence uses (not 750, 1,000, 1,300, 1,700 or
+/// 2,000): the fork id names heights, not fences.
+pub const PALW_T12_TIR_FENCE2_DAA: Option<u64> = None;
+
+/// **The second IR flag day, armed** — every entry of [`PALW_T12_TIR_FENCE2_FENCES_V1`] at
+/// [`PALW_T12_TIR_FENCE2_DAA`], on the ASSEMBLED ruleset, after the IR flag day; a no-op while the
+/// height is `None`.
+fn palw_t12_arm_tir_fence2_v1(params: &mut Params) {
+    let Some(at) = PALW_T12_TIR_FENCE2_DAA else { return };
+    for fence in PALW_T12_TIR_FENCE2_FENCES_V1 {
+        (fence.set)(params, Some(ForkActivation::new(at)));
+    }
+}
+
 /// **testnet-12 as its DAA-1,700 release (int-7, `7aba8dd57`) ships it** — [`palw_t12_shipped_params`] with
 /// the IR flag day's list set back to dormant: the ruleset a node that has not taken the IR release runs
 /// (the fleet's, params `770fb822…`, schedule `9410712f…`), and the baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_TIR_FLAG_DAY_FENCES_V1 {
+    for fence in PALW_T12_TIR_FENCE2_FENCES_V1.iter().chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1) {
         (fence.set)(&mut params, None);
     }
     params
@@ -19601,7 +19787,7 @@ pub fn palw_t12_release_v3_params() -> Params {
 /// against.
 pub fn palw_t12_release_v2_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_TIR_FLAG_DAY_FENCES_V1.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V3) {
+    for fence in PALW_T12_TIR_FENCE2_FENCES_V1.iter().chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1).chain(PALW_T12_POST_LAUNCH_FENCES_V3) {
         (fence.set)(&mut params, None);
     }
     params
@@ -19613,7 +19799,12 @@ pub fn palw_t12_release_v2_params() -> Params {
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_TIR_FLAG_DAY_FENCES_V1.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V3).chain(PALW_T12_POST_LAUNCH_FENCES_V2) {
+    for fence in PALW_T12_TIR_FENCE2_FENCES_V1
+        .iter()
+        .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
+        .chain(PALW_T12_POST_LAUNCH_FENCES_V3)
+        .chain(PALW_T12_POST_LAUNCH_FENCES_V2)
+    {
         (fence.set)(&mut params, None);
     }
     params
@@ -19660,6 +19851,8 @@ fn palw_t12_params_with_registry_v1(
     // **The IR flag day** (RFC-0002 PALW-TIR v1, 2026-09-28): `palw_tir_v1` at `PALW_T12_TIR_FLAG_DAY_DAA`,
     // after the third list, on the same assembled ruleset (its prerequisites are genesis rules here).
     palw_t12_arm_tir_flag_day_v1(&mut params);
+    // RFC-0002 Phase F's second IR flag day (dormant while its height is `None`).
+    palw_t12_arm_tir_fence2_v1(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or
@@ -20322,12 +20515,10 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     params.palw_signature_contexts_v2 = Some(at);
     // ADR-0082 D2 (C-2/H-5): the fused terminal's clock does not convict for a move nobody can make.
     params.palw_court_responder_coverage = Some(at);
-    // **ADR-0082 D10/D11 stays dormant because THIS BUILD cannot carry it**, and `validate_palw_v2`
-    // says so in those words: the state transition has no decode-leaf enumeration (every
-    // free-prompt claim would be refused `FreePromptDecodeLeavesUnavailable`) and no engine
-    // implements `decode_token_select_v2` (every temperature job would be refused
-    // `SamplingNotArmed`). That is a missing implementation, not a decision a regenesis can make —
-    // arming it here would ship a network whose free-prompt lane refuses every claim.
+    // **ADR-0082 D10/D11 (with FP Job V4, RFC-0001 §A) is not armed at genesis**: this build carries
+    // both rules, and they arm at a post-launch flag day through
+    // `PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1` (dormant on this branch; see its TODO) — a live
+    // chain changes its rules by activation, never by regenesis.
     // params.palw_fp_decode_rules = Some(at);
     // **ADR-0096 D6-D8 stays dormant because THIS BUILD cannot carry it**, in `validate_palw_v2`'s
     // own words: consensus-core has no constraint automaton and no version-6 free-prompt job, the
@@ -20566,7 +20757,10 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     debug_assert!(params.palw_frontier_provenance.is_none(), "ADR-0065 D2 is unimplementable inside the state fold");
     debug_assert!(params.palw_beacon_fold.is_none(), "PALW block production has no beacon to fold");
     debug_assert!(params.palw_shard_licensing.is_none(), "validate_palw_v2 refuses it beside palw_admission_independence");
-    debug_assert!(params.palw_fp_decode_rules.is_none(), "this build carries neither half of ADR-0082 D10/D11");
+    debug_assert!(
+        params.palw_fp_decode_rules.is_none(),
+        "ADR-0082 D10/D11 (and FP Job V4) are not a genesis rule here: they arm at a flag day through PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1"
+    );
     debug_assert!(params.palw_fp_decode_constraint.is_none(), "this build carries no constraint automaton (ADR-0096 D6-D8)");
 }
 
@@ -20868,6 +21062,10 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_floor_refusal_retry();
     // RFC-0002 Phase F's IR fence, for the same reason and in the same place.
     params.sync_palw_tir_v1();
+    // RFC-0003's generative fence, likewise.
+    params.sync_palw_gen_v1();
+    // RFC-0002 Phase F's second IR fence, likewise.
+    params.sync_palw_tir_fence2();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -21118,6 +21316,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_token_lift: None,
     palw_tir_v1: None,
     palw_gen_v1: None,
+    palw_fp_job_v5: None,
+    palw_tir_fence2: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -23381,12 +23581,12 @@ mod consensus_params_id_tests {
         shipped.validate_palw_v2().expect("the shipped devnet assembles");
 
         for (name, arm) in [
-            (
-                "palw_fp_decode_rules",
-                (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation),
-            ),
-            // ADR-0096 Decisions 6–8: the same refusal, for the same reason — no job may carry
-            // a constraint, no court can try one, no engine masks one.
+            // (`palw_fp_decode_rules` left this table with RFC-0001 §A: this build carries D10, D11
+            // and V4 — `the_decode_rules_fence_arms_over_the_derivation_with_its_mirror` holds what
+            // arming it still requires.)
+            //
+            // ADR-0096 Decisions 6–8: no job may carry a constraint, no court can try one, no
+            // engine masks one.
             (
                 "palw_fp_decode_constraint",
                 (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_constraint = Some(a)) as fn(&mut Params, ForkActivation),
@@ -23403,6 +23603,66 @@ mod consensus_params_id_tests {
             arm(&mut never_armed, ForkActivation::never());
             never_armed.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: Some(never()) is absence, not an arming: {e}"));
         }
+    }
+
+    /// **RFC-0001 §A / ADR-0082 D10–D11: the decode-rules fence arms — ConsensusV2 only, over the
+    /// derivation at or below it, with its bundle mirror — and the M-1 refusal is gone.** Over the
+    /// bundled devnet (no derived work) it is refused naming the derivation; over testnet-12 (derived
+    /// work at genesis) the flag-day entry arms it at any height and the ruleset assembles; a mirror
+    /// out of step, or a height written into the bundle's serialized field, is refused by name; and
+    /// the entry is dormant on every shipped preset, so no shipped id moves.
+    #[test]
+    fn the_decode_rules_fence_arms_over_the_derivation_with_its_mirror() {
+        // Over a network without the derivation: refused, naming it.
+        let mut devnet = devnet_shipped_params();
+        (PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1.set)(&mut devnet, Some(ForkActivation::new(9_000_000)));
+        let err = format!("{}", devnet.validate_palw_v2().expect_err("no derivation"));
+        assert!(err.contains("palw_fp_derived_work"), "{err}");
+
+        // Over testnet-12: the entry arms it, mirror and all, at the flag day's height.
+        let shipped = palw_t12_shipped_params();
+        assert!(shipped.palw_fp_decode_rules.is_none(), "dormant on the shipped preset");
+        let mut armed = shipped.clone();
+        (PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1.set)(&mut armed, Some(ForkActivation::new(1_500)));
+        armed.validate_palw_v2().expect("testnet-12 carries the derivation at genesis, so the rules arm");
+        assert!(armed.palw_fp_decode_rules_active_at(1_500) && !armed.palw_fp_decode_rules_active_at(1_499));
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else { panic!("V2") };
+        assert_eq!(bundle.state.fp_decode_rules_from_daa(), Some(1_500));
+        assert!(bundle.state.fp_decode_rules_at(1_500) && !bundle.state.fp_decode_rules_at(1_499));
+        // The mirror is borsh-skipped: the ruleset id — which the identity reads unnormalised — does
+        // not move at deploy; the fence itself is what the params and schedule ids name.
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(shipped_bundle) = &shipped.palw_consensus_mode else { panic!("V2") };
+        assert_eq!(crate::palw_mode_v2::palw_ruleset_id_v2(bundle), crate::palw_mode_v2::palw_ruleset_id_v2(shipped_bundle));
+        assert_eq!(armed.consensus_identity_id(), shipped.consensus_identity_id(), "a scheduled fence keeps its peers until it fires");
+        assert_ne!(armed.consensus_params_id(), shipped.consensus_params_id(), "armed, the fingerprint says so");
+        assert_ne!(armed.consensus_schedule_id(), shipped.consensus_schedule_id(), "and the operator log names it");
+
+        // The fence without its mirror, and a mirror without its fence: refused by name.
+        let mut unmirrored = shipped.clone();
+        unmirrored.palw_fp_decode_rules = Some(ForkActivation::new(1_500));
+        let err = format!("{}", unmirrored.validate_palw_v2().expect_err("mirror out of step"));
+        assert!(err.contains("sync_palw_fp_decode_rules"), "{err}");
+        let mut orphan = armed.clone();
+        orphan.palw_fp_decode_rules = None;
+        let err = format!("{}", orphan.validate_palw_v2().expect_err("mirror without the fence"));
+        assert!(err.contains("without palw_fp_decode_rules armed"), "{err}");
+        // `Some(never())` is absence.
+        let mut never = shipped.clone();
+        (PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1.set)(&mut never, Some(ForkActivation::never()));
+        never.validate_palw_v2().expect("Some(never()) is absence");
+        // Setting it back to dormant is the shipped ruleset, byte for byte.
+        let mut back = armed.clone();
+        (PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1.set)(&mut back, None);
+        assert_eq!(back.consensus_params_id(), shipped.consensus_params_id());
+        // No shipped list carries it yet: arming is the integration's one-line addition.
+        assert!(
+            PALW_T12_POST_LAUNCH_FENCES_V2.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V1).all(|f| f.name != "palw_fp_decode_rules"),
+            "FP Job V4 is dormant on this branch"
+        );
+        assert!(
+            shipped.palw_fences_v1().iter().any(|(name, _)| *name == PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1.name),
+            "the entry names a real fence"
+        );
     }
 
     /// **ADR-0100: the one-move court arms only over a bundle that commits to its signing context.**

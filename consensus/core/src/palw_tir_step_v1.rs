@@ -191,7 +191,7 @@ pub struct PalwTirStepSpaceV1 {
 }
 
 /// `Σ_{i=0}^{n−1} ⌊(a·i + b) / m⌋` for `m ≥ 1` (the standard floor-sum recursion).
-fn floor_sum(n: u128, m: u128, a: u128, b: u128) -> u128 {
+pub(crate) fn floor_sum(n: u128, m: u128, a: u128, b: u128) -> u128 {
     let (mut n, mut m, mut a, mut b) = (n, m, a, b);
     let mut ans = 0u128;
     loop {

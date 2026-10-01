@@ -590,8 +590,27 @@ pub fn manifest_json_v1(manifest: &PalwFpWorkerManifestV1) -> serde_json::Value 
 /// request still fails in milliseconds rather than after an eight-minute map, and run again inside
 /// [`run_one_job_v1`] so the resident path cannot skip them.
 pub fn precheck_request_v1(request: &PalwFpWorkerRequestV3) -> Result<(), String> {
-    if request.version != PALW_FP_V3_VERSION {
-        return Err(format!("request version {} is not {}", request.version, PALW_FP_V3_VERSION));
+    // **V3 or V4** (RFC-0001 §A.4): the version decides whether the request carries a decode
+    // config, and the job this worker builds is the request's version with the request's config.
+    let v4 = request.version == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION;
+    if request.version != PALW_FP_V3_VERSION && !v4 {
+        return Err(format!(
+            "request version {} is neither {} (V3) nor {} (V4)",
+            request.version,
+            PALW_FP_V3_VERSION,
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION
+        ));
+    }
+    match (&request.decode, v4) {
+        (Some(decode), true) => {
+            decode.validate_canonical().map_err(|e| format!("the request's decode config is not canonical: {e}"))?
+        }
+        (None, false) => {}
+        (Some(_), false) => return Err("a V3 request carries no decode config".to_string()),
+        (None, true) => return Err("a V4 request carries its decode config".to_string()),
+    }
+    if !v4 && !request.stop_texts.is_empty() {
+        return Err("a V3 request carries no stop strings: stop sequences are FP Job V4's (RFC-0001 §A)".to_string());
     }
     // **Both modes the chain carries** (ADR-0077 Decision 16; ADR-0119 Decision 7). This refused
     // every mode but PublicDa on the reasoning that the panel could not replay the other — written
@@ -613,38 +632,23 @@ pub fn precheck_request_v1(request: &PalwFpWorkerRequestV3) -> Result<(), String
     if request.prompt_mode != PALW_FP_PROMPT_MODE_USER && request.prompt_mode != PALW_FP_PROMPT_MODE_CANONICAL {
         return Err(format!("prompt mode {} is neither User nor Canonical", request.prompt_mode));
     }
-    // **This worker decodes GREEDILY, and it has to say so at the entrance** (ADR-0082 Decision
-    // 11; audit M-6).
-    //
-    // The refusal exists in the consensus envelope (`PalwFpV3Error::SamplingNotArmed`) and in the
-    // shipped gateway, and did not exist in the component that actually selects tokens. Every
-    // backend here calls `base0_decode_token_select_v1` — plain argmax — so a request carrying a
-    // temperature ran the whole inference and then built a `PalwFreePromptJobV3` whose
-    // `fp_job_id_v3` DECLARES that temperature over tokens that obey no temperature at all. Two
-    // failures, both of them this one line:
-    //
-    // * today, any caller that is not the shipped gateway (`misaka-palw-fp-submit`, an operator's
-    //   own rail, a devnet drill) pays for the run and the chain then refuses the commitment as
-    //   `SamplingNotArmed` — precisely the "after the inference had already been paid for" failure
-    //   the design says it avoids;
-    // * armed without a v2-aware engine it is worse, because the commitment is ACCEPTED: five
-    //   seats replay it with the same greedy code, agree, and `temperature` becomes a field that
-    //   changes the claim id and nothing else. `palw_freeprompt_v3` names that outcome itself —
-    //   "a user who asked for a temperature and silently got greedy has been told a false thing
-    //   about what ran".
-    //
-    // **This refusal is deleted in the commit that gives the backends
-    // `PalwDecodeSamplingV2::select`, and not before.** It is a statement about what this binary
-    // implements, so the day the binary implements the sampler the statement becomes false; until
-    // then it is the only thing between a paying caller and an answer that is not the one the job
-    // id describes.
-    if request.temperature_q != PALW_DECODE_TEMPERATURE_GREEDY || request.sampling_seed != PALW_DECODE_SEED_GREEDY {
+    // **ADR-0082 Decision 11 is implemented here now** (RFC-0001 §A): every backend selects
+    // through the job's decoder (`palw_decode_pipeline_v4::palw_fp_decode_run_v1`), so a V4 job's
+    // temperature and seed are what its tokens obey — the refusal that stood here ("this worker
+    // decodes greedily") is gone with the reason for it. A V3 job still carries the greedy
+    // defaults only: the chain admits no sampled V3 job (`SamplingNotArmed`), and running one would
+    // spend an inference on a commitment every node refuses.
+    if !v4 && (request.temperature_q != PALW_DECODE_TEMPERATURE_GREEDY || request.sampling_seed != PALW_DECODE_SEED_GREEDY) {
         return Err(format!(
-            "this worker decodes greedily: it selects tokens with base0_decode_token_select_v1 and has no \
-             PalwDecodeSamplingV2::select, so a job declaring temperature_q {} / a non-zero sampling seed would commit \
-             greedy tokens under a sampled job id (ADR-0082 Decision 11 is not implemented in this binary)",
+            "a V3 job decodes greedily (temperature_q 0, zero seed): a job declaring temperature_q {} / a non-zero seed is FP Job \
+             V4's (RFC-0001 §A), which carries the sampler with the rest of its decode config",
             request.temperature_q
         ));
+    }
+    // A V4 job's seed decides nothing at a greedy temperature, and the chain refuses the second
+    // encoding (`PalwFpDecodeRulesV1::check_job`) — refused here, before the run is paid for.
+    if v4 && request.temperature_q == PALW_DECODE_TEMPERATURE_GREEDY && request.sampling_seed != PALW_DECODE_SEED_GREEDY {
+        return Err("a greedy V4 job carries the zero seed: the seed decides nothing at temperature_q 0".to_string());
     }
     Ok(())
 }
@@ -670,6 +674,38 @@ fn check_identity_v1(manifest: &PalwFpWorkerManifestV1, request: &PalwFpWorkerRe
     pin("runtime_manifest_hash", manifest.runtime_manifest_hash, request.runtime_manifest_hash)?;
     pin("trace_scheme_id", manifest.trace_scheme_id, request.trace_scheme_id)?;
     Ok(())
+}
+
+/// **The job's decode config: the request's, its stop strings spelled by this class's tokenizer**
+/// (RFC-0001 §A.3). Each string is encoded ALONE with special-token parsing off; the resulting
+/// sequences join the request's, sorted and de-duplicated into the canonical form, which is then
+/// checked whole. A string that encodes to nothing or to more than 16 ids, and a total past four
+/// sequences, is refused by its position — never by its text (SA-7: it is a stranger's).
+pub fn decode_with_stop_texts_v1(
+    tokenizer: &QwenTokenizer,
+    asked: &kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4,
+    stop_texts: &[Vec<u8>],
+) -> Result<kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4, String> {
+    use kaspa_consensus_core::palw_decode_pipeline_v4::PALW_DECODE_V4_MAX_STOP_TOKENS;
+    let mut decode = asked.clone();
+    for (at, text) in stop_texts.iter().enumerate() {
+        let text = std::str::from_utf8(text).map_err(|_| format!("stop string {at} is not UTF-8"))?;
+        let ids = tokenizer.encode_without_specials(text).map_err(|e| format!("stop string {at} did not tokenize: {}", e.kind()))?;
+        if ids.is_empty() {
+            return Err(format!("stop string {at} encodes to no token"));
+        }
+        if ids.len() > PALW_DECODE_V4_MAX_STOP_TOKENS {
+            return Err(format!(
+                "stop string {at} encodes to {} tokens under this class's tokenizer; a stop sequence is at most {PALW_DECODE_V4_MAX_STOP_TOKENS}",
+                ids.len()
+            ));
+        }
+        decode.stop_sequences.push(ids);
+    }
+    decode.stop_sequences.sort();
+    decode.stop_sequences.dedup();
+    decode.validate_canonical().map_err(|e| format!("the job's decode config is not canonical: {e}"))?;
+    Ok(decode)
 }
 
 /// **Decision 6: the prompt's ids, by arm.**
@@ -783,6 +819,28 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
     if let Some(at) = prompt_ids.iter().position(|t| *t >= rt.manifest.vocab) {
         return Err(format!("the prompt token at position {at} is outside the model's vocab ({})", rt.manifest.vocab));
     }
+    // **RFC-0001 §A.3: stop strings become token-id sequences HERE, with the class's tokenizer** —
+    // each string encoded ALONE with special tokens off, so a string maps to exactly one sequence.
+    // Generated text that splits the same characters differently does not match it, which is the
+    // documented cost of keeping the tokenizer out of consensus (the gateway says so in its answer).
+    let decode = match &request.decode {
+        None => None,
+        Some(asked) => Some(decode_with_stop_texts_v1(&rt.tokenizer, asked, &request.stop_texts)?),
+    };
+    // RFC-0001 §A.2 against THIS class: a decode config naming an id past the vocabulary names a
+    // lane the class does not have (a bias that moves nothing, a stop that can never match) — a
+    // gateway error, refused by position before the run (never by value: SA-7).
+    if let Some(decode) = &decode {
+        if let Some(at) = decode.logit_bias.iter().position(|(id, _)| *id >= rt.manifest.vocab) {
+            return Err(format!("logit_bias entry {at} names an id outside the model's vocab ({})", rt.manifest.vocab));
+        }
+        if let Some(at) = decode.stop_sequences.iter().position(|s| s.iter().any(|id| *id >= rt.manifest.vocab)) {
+            return Err(format!("stop sequence {at} names an id outside the model's vocab ({})", rt.manifest.vocab));
+        }
+        if decode.bans_cover_vocab(rt.manifest.vocab) {
+            return Err("logit_bias bans every lane of the model's vocabulary: no token could be committed".to_string());
+        }
+    }
     let prefill = prompt_ids.len() as u32;
     if prefill as u64 + request.decode_token_limit as u64 > request.max_context_tokens as u64 {
         return Err(format!(
@@ -793,7 +851,8 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
 
     // The job identity the trace binds — rebuilt by every replayer from chain data alone.
     let job = PalwFreePromptJobV3 {
-        version: PALW_FP_V3_VERSION,
+        // RFC-0001 §A.4: the request's version, with its decode config verbatim below.
+        version: request.version,
         network_domain: request.network_domain,
         class_id: request.class_id,
         executor_bond: request.executor_bond,
@@ -819,6 +878,8 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         // bind its trace to a job id nobody else can rebuild.
         sampling_seed: request.sampling_seed,
         temperature_q: request.temperature_q,
+        decode,
+        v5: None,
     };
     let binding = fp_job_id_v3(&job);
 
@@ -1274,6 +1335,8 @@ mod tests {
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
         let root_of = |b: &Qwen36Backend| {
             let out = b.execute_free_prompt(&job, &prompt).expect("the free prompt runs").outcome;
@@ -1411,6 +1474,8 @@ mod tests {
             runtime_class_id: manifest.runtime_class_id,
             shape_profile_id: manifest.shape_profile_id,
             trace_scheme_id: manifest.trace_scheme_id,
+            decode: None,
+            stop_texts: Vec::new(),
         }
     }
 

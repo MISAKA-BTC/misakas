@@ -402,22 +402,35 @@ impl Base0Backend {
         // rebuilt it at the ceiling too, and the claim was excluded from the interval lane. This
         // producer still runs its ceiling; the derivation is what makes that a statement about
         // this call instead of about the type.
-        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
-
-        // The context the COURT will recompute against — built first, and then run under. The
-        // roots in `shape` are placeholders and are not read: the context is the job's shape, the
-        // roots belong to the execution root derived from it afterwards.
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, RC_NETWORK_ID).map_err(|e| format!("{e:?}"))?;
-
-        let mut run = crate::produce::base0_execute_for_attempt_streaming_capped_v1(
-            &self.artifact,
-            &self.profile,
-            &ctx,
-            prompt_tokens,
-            self.network_ladder,
+        //
+        // **RFC-0001 §A.3: the count is the job's DECODER's** — its budget for a V3 job (run once,
+        // byte for byte as before), or where a V4 job's pipeline stops (a stop sequence, or no
+        // admissible lane): `palw_fp_decode_run_v1` runs the capture at the budget and, if the
+        // pipeline stopped earlier, once more at exactly that count, streaming each committed id
+        // once. The context the COURT will recompute against is built for each count before that
+        // run — the roots in `shape` are placeholders and are not read: the context is the job's
+        // shape, the roots belong to the execution root derived from it afterwards.
+        let ((mut run, shape, ctx), _stop) = kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_decode_run_v1(
+            job,
+            self.artifact.shape.vocab as u32,
             on_token,
-        )
-        .map_err(|e| e.to_string())?;
+            |count, select, stream| {
+                let shape = palw_fp_run_facts_for_executed_v1(job, count);
+                let ctx = palw_fp_job_context_v3(job, &class, &shape, RC_NETWORK_ID).map_err(|e| format!("{e:?}"))?;
+                let run = crate::produce::base0_execute_streaming_select_capped_v1(
+                    &self.artifact,
+                    &self.profile,
+                    &ctx,
+                    prompt_tokens,
+                    self.network_ladder,
+                    stream,
+                    select,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok((run, shape, ctx))
+            },
+            |(run, _, _)| run.generated_token_ids.as_slice(),
+        )?;
         // DRILL ONLY (`execute_free_prompt_with_injected_fault`): corrupted before anything below
         // is measured, so the facts, the material and the manifest are all the lie's own.
         if let Some(leaf) = drill_fault_leaf {
@@ -507,6 +520,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
 
     /// SEAT-S4: the authenticated `SC02` opening, at this class's ladder.
     fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
+        // RFC-0001 §A: the executor replays its own committed ids (a V4 answer is not re-selected).
+        crate::fp_interval::base0_fp_executor_replay_v1(capture, || -> Result<Vec<u8>, String> {
         crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
             capture,
             seat_count,
@@ -515,6 +530,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             self.step_ladder_cap(),
         )
         .map_err(|e| e.to_string())
+        })
     }
 
     /// SEAT-S4: authenticated against `claim` and this seat's `job` before the floor's kernels replay.
@@ -777,6 +793,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
         .map_err(|e| e.to_string())
     }
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        // RFC-0001 §A: the executor replays its own committed ids (a V4 answer is not re-selected).
+        crate::fp_interval::base0_fp_executor_replay_v1(capture, || -> Result<Vec<u8>, String> {
         let material = base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
         crate::fp_interval::base0_open_fp_interval_capped_v1(
             &material,
@@ -787,6 +805,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             self.prompt_ids_form,
         )
         .map_err(|e| e.to_string())
+        })
     }
 
     fn verify_fp_interval_opening(
@@ -1296,6 +1315,8 @@ mod tests {
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         }
     }
 
@@ -2445,6 +2466,8 @@ mod end_to_end_tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
         let class = PalwFpClassFactsV3 {

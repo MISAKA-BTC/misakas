@@ -56,7 +56,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Hash64;
-use crate::palw_artifact::{PalwArtifactOpeningV1, verify_artifact_opening_v1};
+use crate::palw_artifact::{
+    PalwArtifactMultiproofV1, PalwArtifactOpeningV1, palw_artifact_multiproof_borsh_len_v1, palw_artifact_multiproof_from_openings_v1,
+    palw_artifact_multiproof_sibling_count_v1, palw_artifact_opening_path_len_v1, palw_artifact_operand_borsh_len_v1,
+    verify_artifact_multiproof_v1,
+};
 use crate::palw_prompt_ids_v1::{PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, PalwPromptIdsOpeningV1, verify_prompt_ids_opening_v1};
 use crate::palw_step::PalwStepCoordinateV1;
 use crate::palw_step_leg::{
@@ -115,8 +119,11 @@ pub struct PalwTirConeRefutationV1 {
     /// Every step leaf the evaluation reads, ascending leaf index, as one row: preimages plus one
     /// sibling set per contiguous run the indices derive.
     pub operands: PalwStepInputRowV1,
-    /// The artifact openings of every inventory leaf the evaluation reads, ascending leaf index.
-    pub params: Vec<PalwArtifactOpeningV1>,
+    /// Every inventory leaf the evaluation reads, as ONE multiproof against the class's
+    /// `artifact_root` (ascending leaf index; a run of consecutive leaves shares its path, so a
+    /// vocabulary or head tile pays two boundary paths, not a path per row — design §2.12.1);
+    /// `None` exactly when the evaluation reads no inventory leaf.
+    pub params: Option<PalwArtifactMultiproofV1>,
     /// Flat prompt form: the whole prompt when the evaluation reads a prompt token, else empty.
     pub prompt_token_ids: Vec<u32>,
     /// Merkle prompt form: one opening per prompt tile the evaluation reads, ascending tile.
@@ -139,12 +146,28 @@ pub trait PalwTirEvidenceStoreV1 {
     fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>>;
     /// The artifact opening of inventory leaf `leaf`.
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1>;
+    /// **One multiproof of inventory leaves `leaves`** (ascending, distinct) against the class's
+    /// `artifact_root` — what a close carries. The default assembles it from [`Self::param_opening`]'s
+    /// paths ([`palw_artifact_multiproof_from_openings_v1`]); a store holding the inventory's leaf
+    /// hashes may build it directly (`palw_artifact_multiproof_v1`) — the bytes are the same.
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        let openings: Option<Vec<PalwArtifactOpeningV1>> = leaves.iter().map(|leaf| self.param_opening(*leaf)).collect();
+        palw_artifact_multiproof_from_openings_v1(&openings?)
+    }
     /// The whole prompt (flat form).
     fn prompt_token_ids(&self) -> Option<Vec<u32>>;
     /// The opening of prompt tile `tile` (Merkle form).
     fn prompt_ids_opening(&self, tile: u32) -> Option<PalwPromptIdsOpeningV1>;
     /// The generated ids' pin under the class's logits scheme.
     fn decode_pin(&self) -> Option<PalwDecodeTokenPinV1>;
+    /// **The tiled row pin of decode row `row`, aimed at lane `lane`** (the second IR fence's DA
+    /// unit): the row opened in the rows tree, the committed token's tile and lane `lane`'s tile, each
+    /// opened in the row's tile tree (`palw_step_refute::tiled_decode_pin_v1`'s shape). `None` by
+    /// default — a store that holds the rows answers it.
+    fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
+        let _ = (row, lane);
+        None
+    }
 }
 
 /// Why a builder could not build a refutation.
@@ -744,38 +767,89 @@ fn authenticate_operands(
     Ok(leaves)
 }
 
-/// The carried artifact openings, authenticated against the class's `artifact_root`: ascending,
-/// each exactly one whole inventory leaf of the class.
+/// The carried multiproof, authenticated against the class's `artifact_root`: of this class's
+/// inventory, ascending, each opened operand exactly one whole inventory leaf of the class, and the
+/// proof reaching the root. `None` carries nothing. Total on hostile input: every malformed proof —
+/// an empty one, another inventory's size, an index out of range, out of order or repeated, a
+/// sibling short, extra or altered, an operand not its leaf's piece — is refused, never a panic.
 fn authenticate_params(
     binding: &PalwTirStepBindingV1,
     v: &PalwTirVerifiedBindingV1,
     inventory: &PalwTirInventoryIndexV1,
-    openings: &[PalwArtifactOpeningV1],
+    proof: Option<&PalwArtifactMultiproofV1>,
 ) -> Result<BTreeMap<u32, (u32, Vec<u8>)>, PalwStepRefuteError> {
     let mut out = BTreeMap::new();
+    let Some(proof) = proof else { return Ok(out) };
+    if proof.opened.is_empty() {
+        return Err(bad("an artifact multiproof opens nothing (carry none instead)"));
+    }
+    if proof.leaf_count != inventory.leaf_count() {
+        return Err(bad("the artifact multiproof is of another inventory"));
+    }
     let mut last: Option<u32> = None;
-    for o in openings {
-        if last.is_some_and(|l| l >= o.leaf_index) {
-            return Err(bad("the artifact openings are not in ascending leaf order"));
+    for (index, operand) in &proof.opened {
+        if last.is_some_and(|l| l >= *index) {
+            return Err(bad("the artifact multiproof's leaves are not in ascending order"));
         }
-        last = Some(o.leaf_index);
-        if o.leaf_count != inventory.leaf_count() {
-            return Err(bad("an artifact opening is of another inventory"));
+        last = Some(*index);
+        let (param, layer, start, len) = inventory.piece_of(*index).ok_or(bad("the artifact multiproof names no leaf"))?;
+        let d = v.space.program.params.get(param as usize).ok_or(bad("the artifact multiproof names no leaf"))?;
+        if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize {
+            return Err(bad("an opened operand is not its leaf's canonical piece"));
         }
-        let (param, layer, start, len) = inventory.piece_of(o.leaf_index).ok_or(bad("an artifact opening names no leaf"))?;
-        let d = &v.space.program.params[param as usize];
-        if o.operand.tensor_name != d.name
-            || o.operand.layer != layer
-            || o.operand.row_start != start
-            || o.operand.bytes.len() != len as usize
-        {
-            return Err(bad("an artifact opening is not its leaf's canonical piece"));
-        }
-        verify_artifact_opening_v1(o, binding.artifact_root)
-            .map_err(|_| bad("an artifact opening does not reach the class's root"))?;
-        out.insert(o.leaf_index, (o.operand.row_start, o.operand.bytes.clone()));
+    }
+    verify_artifact_multiproof_v1(proof, binding.artifact_root)
+        .map_err(|_| bad("the artifact multiproof does not reach the class's root"))?;
+    for (index, operand) in &proof.opened {
+        out.insert(*index, (operand.row_start, operand.bytes.clone()));
     }
     Ok(out)
+}
+
+/// **How an IR close carries its parameter openings** — the parameter of
+/// [`palw_tir_param_carriage_bytes_v1`], so an admission price can compare the two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwTirParamCarriageV1 {
+    /// One `PalwArtifactOpeningV1` per leaf, each with its whole path (the format before §2.12.1).
+    PerLeafOpenings,
+    /// ONE `PalwArtifactMultiproofV1` (the carried format, [`PalwTirConeRefutationV1::params`]).
+    Multiproof,
+}
+
+/// **The borsh bytes of an IR close's parameter carriage** for inventory leaves `leaves` of
+/// `program`, in `format` — byte for byte what [`build_tir_cone_refutation_v1`] carries in
+/// [`PalwTirConeRefutationV1::params`] (`Multiproof`: the option's tag, then the proof, or the tag
+/// alone for no leaf), or what the per-leaf vector was (`PerLeafOpenings`). The one price of
+/// parameter bytes an admission rule may use (design §2.12.1). `leaves` ascending and distinct;
+/// `None` when the program has no inventory index or a leaf is not in it.
+pub fn palw_tir_param_carriage_bytes_v1(program: &TirProgramV1, format: PalwTirParamCarriageV1, leaves: &[u32]) -> Option<u64> {
+    if leaves.windows(2).any(|w| w[0] >= w[1]) {
+        return None;
+    }
+    let inventory = PalwTirInventoryIndexV1::new(program)?;
+    let mut operand_lens = Vec::with_capacity(leaves.len());
+    for leaf in leaves {
+        let (param, layer, _, len) = inventory.piece_of(*leaf)?;
+        let name = &program.params.get(param as usize)?.name;
+        operand_lens.push(palw_artifact_operand_borsh_len_v1(name.len(), layer.is_some(), len as usize));
+    }
+    match format {
+        PalwTirParamCarriageV1::Multiproof => {
+            if leaves.is_empty() {
+                return Some(1);
+            }
+            let siblings = palw_artifact_multiproof_sibling_count_v1(inventory.leaf_count(), leaves)?;
+            Some(1u64.saturating_add(palw_artifact_multiproof_borsh_len_v1(operand_lens, siblings)))
+        }
+        PalwTirParamCarriageV1::PerLeafOpenings => {
+            let mut total = 4u64;
+            for (leaf, operand) in leaves.iter().zip(operand_lens) {
+                let path = palw_artifact_opening_path_len_v1(inventory.leaf_count(), *leaf)?;
+                total = total.saturating_add(operand + 4 + 4 + 4 + 64 * path);
+            }
+            Some(total)
+        }
+    }
 }
 
 /// The carried prompt ids, authenticated in the network's form: position → id.
@@ -979,7 +1053,7 @@ fn check_carriage<'r>(
     // 5.
     let operands = authenticate_operands(binding, &v, &refutation.operands, out_index, rules.max_step_leaf_count)?;
     let inventory = PalwTirInventoryIndexV1::new(&v.space.program).ok_or(PalwStepRefuteError::Unadjudicable)?;
-    let params = authenticate_params(binding, &v, &inventory, &refutation.params)?;
+    let params = authenticate_params(binding, &v, &inventory, refutation.params.as_ref())?;
     let (prompt, prompt_tiles) =
         authenticate_prompt(&binding.job_context, rules.prompt_form, &refutation.prompt_token_ids, &refutation.prompt_ids_openings)?;
     let generated = match &refutation.decode_tokens {
@@ -1046,8 +1120,8 @@ impl CheckedCarriage<'_> {
         if used.steps.len() != self.operands.len() || !self.operands.iter().all(|(i, _)| used.steps.contains(i)) {
             return Err(bad("the operand row is not the set the evaluation reads"));
         }
-        if used.params.len() != r.params.len() {
-            return Err(bad("the artifact openings are not the set the evaluation reads"));
+        if used.params.len() != r.params.as_ref().map_or(0, |p| p.opened.len()) {
+            return Err(bad("the artifact multiproof is not the set the evaluation reads"));
         }
         match rules.prompt_form {
             PalwPromptIdsFormV1::Flat => {
@@ -1177,10 +1251,22 @@ fn assemble_carriage(
         );
         k += len;
     }
-    let mut params = Vec::with_capacity(used.params.len());
-    for leaf in &used.params {
-        params.push(store.param_opening(*leaf).ok_or_else(|| missing(format!("inventory leaf {leaf}")))?);
-    }
+    let params = if used.params.is_empty() {
+        None
+    } else {
+        let leaves: Vec<u32> = used.params.iter().copied().collect();
+        let proof = store
+            .param_multiproof(&leaves)
+            .ok_or_else(|| missing(format!("the multiproof of inventory leaves {}..={}", leaves[0], leaves[leaves.len() - 1])))?;
+        // A store whose paths disagree with the class's root would build a close the court refuses:
+        // say so here, where the store can be named.
+        if proof.opened.iter().map(|(i, _)| *i).ne(leaves.iter().copied())
+            || verify_artifact_multiproof_v1(&proof, binding.artifact_root).is_err()
+        {
+            return Err(missing("a multiproof of the read leaves that reaches the class's artifact root".into()));
+        }
+        Some(proof)
+    };
     let (mut prompt_token_ids, mut prompt_ids_openings) = (Vec::new(), Vec::new());
     if !used.prompt.is_empty() {
         match rules.prompt_form {
@@ -1449,7 +1535,7 @@ pub fn build_tir_named_leaf_refutation_v1(
         output_opening: store.step_opening(leaf).ok_or_else(|| missing(format!("the opening of leaf {leaf}")))?,
         output_preimage: store.step_leaf(leaf).ok_or_else(|| missing(format!("step leaf {leaf}")))?,
         operands: PalwStepInputRowV1 { preimages: Vec::new(), run_siblings: Vec::new() },
-        params: Vec::new(),
+        params: None,
         prompt_token_ids: Vec::new(),
         prompt_ids_openings: Vec::new(),
         decode_tokens: None,
@@ -2025,6 +2111,173 @@ pub fn tir_logits_event_disclosure_v1(
 /// A tiny IR class and an honest (or single-lane forged) execution of it, for the court's wiring
 /// tests elsewhere in the crate: an embedding, one layer with a saturating running sum (a `Fixed`
 /// state, so checkpoints and replay occur) and a projection, and a tiled-logits head.
+// ---------------------------------------------------------------------------------------------
+// Data availability: one committed step leaf of an IR claim, disclosed (the second IR fence)
+// ---------------------------------------------------------------------------------------------
+
+/// **What a `TirStepLeaf { index }` data-availability answer opens** (past `Params::palw_tir_fence2`;
+/// evidence transport C): committed step leaf `index` — its preimage and its opening under the step
+/// root — with what a challenger builds its court moves from beside the leaf: the claim's generated
+/// ids in the class's scheme, and, for a tile of the post block's logits node at a decode row under the
+/// tiled scheme, that row's pin aimed at the tile's first lane (the logits door's material). The
+/// binding rides with its program EMPTY (the chain holds the class's).
+///
+/// So a lie a seat's replay finds at leaf `index` becomes a cone close, a named-leaf challenge or a
+/// logits door the seat can build from its own execution plus this answer, and a producer that does
+/// not answer inside `W_disclose` defaults.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTirStepLeafDisclosureV1 {
+    pub binding: PalwTirStepBindingV1,
+    pub preimage: PalwStepTileLeafV1,
+    pub opening: PalwStepOpeningV1,
+    /// The generated ids under the class's scheme: `TiledV1 { rows_root, ids }`, or `Base0V1` with
+    /// every row (the flat scheme), authenticated against the claim's trace root.
+    pub decode: PalwDecodeTokenPinV1,
+    /// Exactly for a tile of the logits node at a decode row, tiled scheme: the row's pin aimed at the
+    /// tile's first lane; `None` otherwise.
+    pub row_pin: Option<PalwTiledDecodePinV1>,
+}
+
+impl PalwTirStepLeafDisclosureV1 {
+    /// **Empties the carried program** — what a discloser does before the answer rides.
+    pub fn strip_program_v1(&mut self) {
+        crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut self.binding);
+    }
+
+    /// The disclosure with the registered class's program put back; refused when it carried one.
+    pub fn with_program_v1(&self, record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1) -> Result<Self, &'static str> {
+        let mut filled = self.clone();
+        filled.binding = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(&self.binding, record)?;
+        Ok(filled)
+    }
+}
+
+/// The decode row of a leaf of the post block's logits node — `a − (P − 1)` for a position with a row
+/// — and the leaf's first lane; `None` for any other leaf.
+fn logits_leaf_row(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, leaf: &PalwTirLeafV1) -> Option<(u32, u32)> {
+    let PalwTirLeafKindV1::Commit { occurrence, node, first_element, .. } = leaf.kind else { return None };
+    let program = &space.program;
+    let block = occurrence_block(space, u16::try_from(occurrence).ok()?)?;
+    if block != program.schedule.post || node != program.logits {
+        return None;
+    }
+    let first_row_position = ctx.declared_prefill_tokens.checked_sub(1)?;
+    let row = leaf.position.checked_sub(first_row_position)?;
+    (row < ctx.exact_decode_tokens).then_some((row, u32::try_from(first_element).ok()?))
+}
+
+/// **Verify a `TirStepLeaf` answer against the claim — by hash arithmetic** (the second IR fence).
+/// `Ok(())` answers the unit; an `Err` is a disclosure that is not an answer. In order: the binding
+/// verifies at `max_step_leaf_count` and names the claim's two roots; `index` is a leaf of it and the
+/// opening opens it; the preimage hashes to the opened leaf; the ids authenticate against the trace
+/// root in the class's scheme; the row pin is present exactly for a logits tile at a decode row under
+/// the tiled scheme, and then opens that row under the ids' rows root, carries the same ids, and
+/// authenticates the committed token's tile and the leaf's first lane's tile. The leaf's STRUCTURE is
+/// not judged here: a malformed committed leaf is answered (it is what was committed) and convicted by
+/// the court from this answer.
+pub fn check_tir_step_leaf_disclosure_v1(
+    claim_trace_root: Hash64,
+    claim_execution_root: Hash64,
+    index: u64,
+    disclosure: &PalwTirStepLeafDisclosureV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepRefuteError> {
+    let binding = &disclosure.binding;
+    let v = crate::palw_tir_step_v1::verify_tir_binding_v1(binding, max_step_leaf_count).map_err(|_| bad("the IR binding does not verify"))?;
+    if binding.full_logits_trace_root != claim_trace_root {
+        return Err(bad("the disclosure binds to another trace root than the claim committed"));
+    }
+    if binding.committed_execution_root != claim_execution_root {
+        return Err(bad("the disclosure binds to another execution root than the claim committed"));
+    }
+    if index >= binding.step_leaf_count || disclosure.opening.leaf_index != index {
+        return Err(bad("the opening does not open the demanded leaf of this execution"));
+    }
+    let implied = step_opening_root_capped_v1(binding.step_leaf_count, &disclosure.opening, max_step_leaf_count)
+        .map_err(|_| bad("the leaf's opening does not walk"))?;
+    if implied != binding.step_merkle_root {
+        return Err(bad("the leaf's opening does not reach the claim's step root"));
+    }
+    if step_tile_leaf_hash_v1(&v.context_hash, &v.class_id, &disclosure.preimage) != disclosure.opening.leaf_hash {
+        return Err(bad("the preimage is not the opened leaf"));
+    }
+    let ids = authenticate_decode_pin(binding, &v.space, &disclosure.decode)?;
+    let ctx = &binding.job_context;
+    let (vocab, scheme) = logits_shape(&v.space);
+    let leaf = v.space.leaf_at(ctx, index).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let aimed = if scheme == tiled_logits_scheme_id_v1() { logits_leaf_row(&v.space, ctx, &leaf) } else { None };
+    match (aimed, &disclosure.row_pin) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(bad("a row pin rides only for a logits tile at a decode row, tiled scheme")),
+        (Some(_), None) => Err(bad("a logits tile at a decode row is answered with its row's pin")),
+        (Some((row, lane)), Some(pin)) => {
+            let PalwDecodeTokenPinV1::TiledV1(tiled) = &disclosure.decode else {
+                return Err(bad("the tiled scheme's ids ride as TiledV1"));
+            };
+            let decode = ctx.exact_decode_tokens as u64;
+            if pin.position != row || pin.beat_lane != lane || pin.generated_token_ids != ids {
+                return Err(bad("the row pin is not aimed at this leaf's row and first lane, or carries other ids"));
+            }
+            let rows_root = step_opening_root_capped_v1(decode, &pin.row_opening, max_step_leaf_count)
+                .map_err(|_| bad("the row opening does not walk"))?;
+            if rows_root != tiled.rows_root || pin.row_opening.leaf_index != row as u64 || pin.row_opening.leaf_hash != pin.row_root {
+                return Err(bad("the row pin does not open this row under the claim's rows root"));
+            }
+            let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
+            let open = |lanes: &[i32], opening: &PalwStepOpeningV1, at: usize| {
+                tiled_tile_authenticate_v1(
+                    &v.context_hash,
+                    row,
+                    vocab,
+                    tiles,
+                    &pin.row_root,
+                    (at / PALW_LOGITS_TILE_LANES) as u64,
+                    lanes,
+                    opening,
+                    max_step_leaf_count,
+                )
+            };
+            let committed = ids[row as usize] as usize;
+            if committed < vocab {
+                open(&pin.committed_tile_lanes, &pin.committed_opening, committed)?;
+            }
+            if (lane as usize) >= vocab {
+                return Err(bad("the leaf's first lane is past the vocabulary"));
+            }
+            open(&pin.beat_tile_lanes, &pin.beat_opening, lane as usize)
+        }
+    }
+}
+
+/// **A `TirStepLeaf` answer, built from what the answering node holds** (its own capture, or the
+/// accused's through the store): the leaf, its opening, the ids, and the row pin exactly where the
+/// fold asks for one; the program stripped. Checked with [`check_tir_step_leaf_disclosure_v1`]
+/// before it is returned, so a node never pays a carrier for an answer the fold refuses.
+pub fn build_tir_step_leaf_disclosure_v1(
+    binding: &PalwTirStepBindingV1,
+    index: u64,
+    store: &dyn PalwTirEvidenceStoreV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwTirStepLeafDisclosureV1, PalwTirEvidenceErrorV1> {
+    let missing = |what: String| PalwTirEvidenceErrorV1::Store(what);
+    let v = crate::palw_tir_step_v1::verify_tir_binding_v1(binding, max_step_leaf_count)
+        .map_err(|e| PalwTirEvidenceErrorV1::Binding(e.to_string()))?;
+    let preimage = store.step_leaf(index).ok_or_else(|| missing(format!("step leaf {index}")))?;
+    let opening = store.step_opening(index).ok_or_else(|| missing(format!("the opening of leaf {index}")))?;
+    let decode = store.decode_pin().ok_or_else(|| missing("the decode pin".into()))?;
+    let leaf = v.space.leaf_at(&binding.job_context, index).ok_or_else(|| missing(format!("leaf {index} in the step space")))?;
+    let (_, scheme) = logits_shape(&v.space);
+    let row_pin = match (scheme == tiled_logits_scheme_id_v1()).then(|| logits_leaf_row(&v.space, &binding.job_context, &leaf)).flatten() {
+        Some((row, lane)) => Some(store.row_pin(row, lane).ok_or_else(|| missing(format!("row {row}'s pin at lane {lane}")))?),
+        None => None,
+    };
+    let mut disclosure = PalwTirStepLeafDisclosureV1 { binding: binding.clone(), preimage, opening, decode, row_pin };
+    check_tir_step_leaf_disclosure_v1(binding.full_logits_trace_root, binding.committed_execution_root, index, &disclosure, max_step_leaf_count)
+        .map_err(|e| PalwTirEvidenceErrorV1::Store(format!("the store's leaf {index} does not answer: {e}")))?;
+    disclosure.strip_program_v1();
+    Ok(disclosure)
+}
+
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
@@ -2077,6 +2330,9 @@ pub(crate) mod test_support {
                 rows_root: tiled_logits_rows_root_v1(&self.binding.job_context, &self.rows)?,
                 generated_token_ids: self.generated.clone(),
             }))
+        }
+        fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
+            crate::palw_step_refute::tiled_decode_pin_v1(&self.binding.job_context, &self.rows, &self.generated, row, lane)
         }
     }
 
@@ -2303,6 +2559,38 @@ pub(crate) mod test_support {
         );
     }
 
+    /// **The multiproof vectors on the tiny program** (design §2.12.1): its closes carry a single
+    /// inventory leaf (a `Fixed`-state checkpoint whose update reads the gathered embedding row), a run
+    /// (a matmul's whole weight) and none; every one is acquitted, is the builder's multiproof of the
+    /// leaves read, and is priced to the byte by `palw_tir_param_carriage_bytes_v1`.
+    #[test]
+    fn the_tiny_program_s_closes_carry_a_single_leaf_a_run_and_none() {
+        let rules =
+            PalwTirCourtRulesV1 { max_step_leaf_count: 1 << 26, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+        let x = tiny_execution(None);
+        let program = x.binding.class.decode_program().expect("decodes");
+        let hashes: Vec<Hash64> = x.ops.iter().map(crate::palw_artifact::artifact_leaf_v1).collect();
+        let (mut singles, mut runs, mut none) = (0, 0, 0);
+        for leaf in 0..x.preimages.len() as u64 {
+            let r = build_tir_cone_refutation_v1(&x.binding, leaf, &x, &rules).expect("buildable");
+            assert_eq!(check_tir_cone_refutation_v1(&r, &rules), Err(PalwStepRefuteError::NoFaultFound), "leaf {leaf}");
+            let leaves: Vec<u32> = r.params.iter().flat_map(|p| p.opened.iter().map(|(l, _)| *l)).collect();
+            if !leaves.is_empty() {
+                let opened: Vec<_> = leaves.iter().map(|l| (*l, x.ops[*l as usize].clone())).collect();
+                assert_eq!(r.params, crate::palw_artifact::palw_artifact_multiproof_v1(&hashes, &opened), "leaf {leaf}");
+            }
+            let carried = borsh::to_vec(&r.params).unwrap().len() as u64;
+            assert_eq!(palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::Multiproof, &leaves), Some(carried));
+            match leaves.len() {
+                0 => none += 1,
+                1 => singles += 1,
+                _ if leaves.windows(2).all(|w| w[1] == w[0] + 1) => runs += 1,
+                _ => {}
+            }
+        }
+        assert!(singles > 0 && runs > 0 && none > 0, "{singles} single-leaf closes, {runs} runs, {none} with none");
+    }
+
     /// **A job at exactly `layout.max_context` positions, in the CANONICAL job context, end to end**
     /// (ref2's Phase F observation, `tir/ref2` 533e7b7fa, item 7). The context carries a TOKEN budget
     /// (`prefill + decode ≤ max_context_tokens`, the v2 family's rule every court path checks) and the
@@ -2361,6 +2649,112 @@ pub(crate) mod test_support {
                 );
             }
         }
+    }
+}
+
+/// **The second IR fence's DA unit: one committed step leaf, disclosed** (evidence transport C) —
+/// built from the tiny execution's store for every leaf, checked, and refused in every other shape.
+#[cfg(test)]
+mod step_leaf_da_tests {
+    use super::test_support::{TinyExecution, tiny_execution};
+    use super::*;
+
+    const MAX: u64 = 1 << 26;
+
+    fn check(x: &TinyExecution, index: u64, d: &PalwTirStepLeafDisclosureV1) -> Result<(), PalwStepRefuteError> {
+        check_tir_step_leaf_disclosure_v1(x.binding.full_logits_trace_root, x.binding.committed_execution_root, index, d, MAX)
+    }
+
+    /// The disclosure with its program put back, as the fold reads it.
+    fn filled(x: &TinyExecution, d: &PalwTirStepLeafDisclosureV1) -> PalwTirStepLeafDisclosureV1 {
+        let mut f = d.clone();
+        f.binding = x.binding.clone();
+        f
+    }
+
+    #[test]
+    fn every_leaf_is_disclosed_and_a_logits_tile_carries_its_row_pin() {
+        let x = tiny_execution(None);
+        let space = PalwTirStepSpaceV1::new(&x.binding.class).unwrap();
+        let (mut pinned, mut plain) = (0, 0);
+        for index in 0..x.preimages.len() as u64 {
+            let d = build_tir_step_leaf_disclosure_v1(&x.binding, index, &x, MAX).unwrap_or_else(|e| panic!("leaf {index}: {e}"));
+            assert!(d.binding.class.program.is_empty(), "it rides without the program");
+            let f = filled(&x, &d);
+            check(&x, index, &f).unwrap_or_else(|e| panic!("leaf {index}: {e}"));
+            let leaf = space.leaf_at(&x.binding.job_context, index).unwrap();
+            let is_logits_row = logits_leaf_row(&space, &x.binding.job_context, &leaf).is_some();
+            assert_eq!(d.row_pin.is_some(), is_logits_row, "leaf {index}: a row pin exactly for a logits tile at a decode row");
+            if is_logits_row {
+                pinned += 1;
+            } else {
+                plain += 1;
+            }
+            // Another index than the opening's is not an answer.
+            if index + 1 < x.preimages.len() as u64 {
+                assert!(check(&x, index + 1, &f).is_err(), "leaf {index} does not answer leaf {}", index + 1);
+            }
+        }
+        assert!(pinned > 0 && plain > 0, "{pinned} logits tiles, {plain} others");
+    }
+
+    #[test]
+    fn a_disclosure_in_any_other_shape_is_refused() {
+        let x = tiny_execution(None);
+        let space = PalwTirStepSpaceV1::new(&x.binding.class).unwrap();
+        let logits = (0..x.preimages.len() as u64)
+            .find(|i| logits_leaf_row(&space, &x.binding.job_context, &space.leaf_at(&x.binding.job_context, *i).unwrap()).is_some())
+            .expect("a logits tile at a decode row");
+        let plain = (0..x.preimages.len() as u64).find(|i| *i != logits && !x.preimages.is_empty()).unwrap();
+        for index in [plain, logits] {
+            let honest = filled(&x, &build_tir_step_leaf_disclosure_v1(&x.binding, index, &x, MAX).unwrap());
+            check(&x, index, &honest).expect("honest");
+            let mut edits: Vec<(&str, PalwTirStepLeafDisclosureV1)> = Vec::new();
+            let mut d = honest.clone();
+            d.preimage.values_le[0] ^= 1;
+            edits.push(("a preimage byte", d));
+            let mut d = honest.clone();
+            d.opening = crate::palw_step_leg::step_opening_v1(&x.hashes, (index + 1) % x.hashes.len() as u64).unwrap();
+            edits.push(("another leaf's opening", d));
+            let mut d = honest.clone();
+            if let PalwDecodeTokenPinV1::TiledV1(t) = &mut d.decode {
+                t.generated_token_ids[0] ^= 1;
+            }
+            edits.push(("other ids", d));
+            let mut d = honest.clone();
+            d.binding.full_logits_trace_root = Hash64::from_bytes([9; 64]);
+            edits.push(("another trace root", d));
+            let mut d = honest.clone();
+            d.row_pin = if index == logits { None } else { crate::palw_step_refute::tiled_decode_pin_v1(&x.binding.job_context, &x.rows, &x.generated, 0, 0) };
+            edits.push(("the row pin where it does not belong, or missing", d));
+            if index == logits {
+                let mut d = honest.clone();
+                let pin = d.row_pin.as_mut().unwrap();
+                pin.beat_lane = (pin.beat_lane + 1) % 8;
+                edits.push(("a pin aimed at another lane", d));
+                let mut d = honest.clone();
+                d.row_pin.as_mut().unwrap().beat_tile_lanes[0] ^= 1;
+                edits.push(("a pinned tile lane", d));
+            }
+            for (what, d) in edits {
+                assert!(check(&x, index, &d).is_err(), "leaf {index}: {what} is not an answer");
+            }
+        }
+        // A leaf past the execution.
+        let past = x.preimages.len() as u64;
+        let honest = filled(&x, &build_tir_step_leaf_disclosure_v1(&x.binding, 0, &x, MAX).unwrap());
+        assert!(check(&x, past, &honest).is_err());
+    }
+
+    #[test]
+    fn the_draw_space_of_a_leaf_demand_is_the_execution_s_leaves() {
+        use crate::palw_da_rcore_v1::{PalwDaDrawSpaceV1, PalwDaUnitV1, palw_da_draw_units_v1};
+        let named = PalwDaUnitV1::TirStepLeaf { index: 3 };
+        let small = palw_da_draw_units_v1(&Hash64::from_bytes([1; 64]), &named, &PalwDaDrawSpaceV1::TirStepLeaves { leaves: 4 });
+        assert_eq!(small, vec![0, 1, 2].into_iter().map(|index| PalwDaUnitV1::TirStepLeaf { index }).collect::<Vec<_>>());
+        let wide = palw_da_draw_units_v1(&Hash64::from_bytes([2; 64]), &named, &PalwDaDrawSpaceV1::TirStepLeaves { leaves: 1 << 20 });
+        assert_eq!(wide.len(), 3);
+        assert!(wide.iter().all(|u| matches!(u, PalwDaUnitV1::TirStepLeaf { index } if *index < 1 << 20 && *index != 3)));
     }
 }
 

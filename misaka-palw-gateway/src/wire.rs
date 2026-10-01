@@ -537,11 +537,39 @@ pub struct AnswerStream {
     emitted: usize,
     /// Where the SHOWN answer ends. `None` while the display is still open.
     cut: Option<usize>,
+    /// **RFC-0001 §A.3 step 7: how many trailing ids to hold back** — a V4 job with stop strings
+    /// holds its last 16 (the longest a stop sequence may be). A stop sequence ends the RUN, so it
+    /// is always the stream's tail: holding the tail until the stream ends is enough to never show
+    /// a stop token, and [`Self::finish_with_stop`] cuts exactly the stop sequence's ids, which the
+    /// result's job names. `0` for a V3 job and for a V4 job without stops.
+    hold_ids: usize,
+    /// Where each id's bytes begin in `bytes`.
+    offsets: Vec<usize>,
 }
 
 impl AnswerStream {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The stream of a V4 job with stop strings: its last `hold_ids` ids are held until the end.
+    pub fn with_stop_holdback(hold_ids: usize) -> Self {
+        Self { hold_ids, ..Self::default() }
+    }
+
+    /// **Flush at the end, cutting a completed stop sequence of `stop_len` ids from the display**
+    /// (the stop tokens are committed — part of the answer the claim covers — and not shown, as an
+    /// OpenAI client expects). `None` is [`Self::finish`].
+    pub fn finish_with_stop(&mut self, stop_len: Option<usize>) -> Option<String> {
+        if self.cut.is_none()
+            && let Some(len) = stop_len
+            && len > 0
+            && len <= self.ids.len()
+        {
+            self.cut = Some(self.offsets[self.ids.len() - len]);
+        }
+        self.hold_ids = 0;
+        self.finish()
     }
 
     /// Take one `Token` frame. Returns the delta to send, if any is safe to send yet.
@@ -552,6 +580,7 @@ impl AnswerStream {
     pub fn push(&mut self, token_id: u32, rendered: &[u8], eog: &BTreeSet<u32>) -> Option<String> {
         let before = self.bytes.len();
         self.ids.push(token_id);
+        self.offsets.push(before);
         self.bytes.extend_from_slice(rendered);
         if self.cut.is_none() {
             if eog.contains(&token_id) {
@@ -591,6 +620,11 @@ impl AnswerStream {
         // Hold back anything that could still become the stop guard, then back off to a UTF-8
         // boundary so a half character never reaches a client's decoder.
         let mut end = self.bytes.len().saturating_sub(STOP_GUARD.len() - 1);
+        // …and the held tail of ids (RFC-0001 §A.3): a stop sequence can only be the stream's end.
+        if self.hold_ids > 0 && self.ids.len() >= 1 {
+            let first_held = self.ids.len().saturating_sub(self.hold_ids);
+            end = end.min(self.offsets[first_held]);
+        }
         while end > self.emitted && !is_char_boundary(&self.bytes, end) {
             end -= 1;
         }
@@ -617,6 +651,38 @@ impl AnswerStream {
     /// nothing to cross-check — which the caller must say out loud rather than report as a pass.
     pub fn streamed(&self) -> bool {
         !self.ids.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod v4_stop_display_tests {
+    use super::*;
+
+    /// **RFC-0001 §A.3: the stop tokens are committed and not shown**, and a tail that could still
+    /// become a stop sequence is held back until the next id says it is not one.
+    #[test]
+    fn a_stop_sequence_is_cut_from_the_display_and_the_held_tail_never_shows_it() {
+        let eog = BTreeSet::new();
+        let mut stream = AnswerStream::with_stop_holdback(2);
+        let mut shown = String::new();
+        for (id, bytes) in [(1u32, &b"Hello"[..]), (7, b" wo"), (9, b"rld"), (7, b"!"), (8, b"?")] {
+            let delta = stream.push(id, bytes, &eog);
+            assert!(delta.as_deref().is_none_or(|d| !d.contains('!') && !d.contains('?')), "the held tail is never shown early");
+            shown.extend(delta);
+        }
+        // The result's job says the answer ended with a two-id stop sequence.
+        shown.extend(stream.finish_with_stop(Some(2)));
+        assert_eq!(shown, "Hello world", "every id before the stop is shown; the stop's are not");
+        assert_eq!(stream.shown(), "Hello world");
+        assert_eq!(stream.bytes(), b"Hello world!?", "the committed bytes keep the stop tokens");
+        // Without a stop the held tail is flushed whole.
+        let mut open = AnswerStream::with_stop_holdback(2);
+        let mut all = String::new();
+        for (id, bytes) in [(1u32, &b"a"[..]), (2, b"b"), (3, b"c")] {
+            all.extend(open.push(id, bytes, &eog));
+        }
+        all.extend(open.finish_with_stop(None));
+        assert_eq!(all, "abc");
     }
 }
 
@@ -980,6 +1046,8 @@ mod tests {
                 prompt_mode: 0,
                 sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
                 temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+                decode: None,
+                v5: None,
             },
             prompt_token_ids: vec![1, 2, 3],
             trace_root: Hash64::from_u64_word(7),

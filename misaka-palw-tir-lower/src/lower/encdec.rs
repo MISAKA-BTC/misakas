@@ -972,6 +972,7 @@ fn new_cx(hl: &HlProgram, hb: u32, max_window: u32) -> Cx<'_> {
     Cx {
         hl,
         fills: Vec::new(),
+        row_params: BTreeMap::new(),
         resid_sites: BTreeMap::new(),
         tstate: BTreeMap::new(),
         history_bound: hb,
@@ -1085,7 +1086,7 @@ fn rel_table_q(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, s: &EncDecSpe
 fn word_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, s: &EncDecSpec, ids: tir::Ref, n: u32) -> Result<tir::Ref> {
     let tp = hl_param(cx.hl, "embed.table")?;
     let (rows, cols) = (s.vocab, s.d);
-    let table = decl(b, cx, lb, "embed.table", DType::I16, &[rows, cols], false, table_codes(tp))?;
+    let table = decl_rows(b, cx, lb, "embed.table", &[rows, cols], false, RowKind::T16, tp)?;
     let es = s.embed_scale;
     let key = ScaleKey::resid();
     let (m, sh) = decl_ms(
@@ -1095,9 +1096,9 @@ fn word_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, s: &EncDecSpec,
         "embed",
         rows,
         Arc::new(move |c| {
-            let rc = c.rows16(tp)?;
+            let scales = c.row_scales(tp, true)?;
             let to = c.scale(&key)?;
-            Ok(rc.scales.iter().map(|sw| sw * es / to).collect())
+            Ok(scales.iter().map(|sw| sw * es / to).collect())
         }),
     )?;
     let row = b.gather(table, ids, 0, 0);
@@ -1318,7 +1319,7 @@ fn finish(pb: ProgramBuilder, cx: Cx<'_>, hl: &HlProgram, block_map: Vec<u8>, ou
     tir::validate::validate(&program).map_err(|e| LowerError::eval(format!("internal: the {what} program is not in normal form: {e}")))?;
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no output scale"))?;
-    Ok(Lowered { program, fills: cx.fills, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
+    Ok(Lowered { program, fills: cx.fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
 }
 
 fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDecSpec, l: u32) -> Result<(u8, Option<u16>)> {

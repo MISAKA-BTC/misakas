@@ -248,7 +248,7 @@ pub fn pre_carry(p: &TirProgramV2, k: usize) -> u16 {
 }
 
 pub fn toy_job() -> PipelineJob {
-    PipelineJob { prompt: vec![5, 6, 7], negative: vec![], steps: 3, scalars: vec![24, 1], images: vec![], generated: vec![] }
+    PipelineJob { prompt: vec![5, 6, 7], steps: 3, scalars: vec![24, 1], ..PipelineJob::default() }
 }
 
 /// A 64-bit LCG, so no vector depends on an RNG crate's stream.
@@ -522,8 +522,9 @@ pub fn vlm_vision_program() -> TirProgramV2 {
 }
 
 /// A toy language model over a token stream (`Logits [1, 16]`): the token's `i8` embedding — or, with
-/// `images`, at a position whose token is [`PLACEHOLDER`], the next image row (a `Fixed` cursor
-/// counts the placeholders passed; RFC-0003 §II.2.1's placement) — projected to the vocabulary.
+/// `images`, at a position whose token is [`PLACEHOLDER`] while image rows remain, the next image row
+/// (a `Fixed` cursor counts the rows placed; RFC-0003 §II.2.1's placement: a placeholder past the
+/// last row is an ordinary token, embedded as one, as HF embeds it) — projected to the vocabulary.
 pub fn lm_program(images: bool) -> TirProgramV2 {
     let mut pb = ProgramBuilder::new(TOK, HISTORY_BOUND_V1_SMALL);
     let rows = images.then(|| pb.param("lm.image_rows", DType::I32, &[VLM_ROWS, D], false));
@@ -538,7 +539,11 @@ pub fn lm_program(images: bool) -> TirProgramV2 {
         let x = match (rows, cursor) {
             (Some(rows), Some(cursor)) => {
                 let ph = b.c(DType::Idx, PLACEHOLDER as i128);
-                let is_img = b.compare(Ref::Input(0), ph, Cmp::Eq);
+                let is_ph = b.compare(Ref::Input(0), ph, Cmp::Eq);
+                let rows_n = b.c(DType::I32, VLM_ROWS as i128);
+                let room = b.compare(Ref::State(cursor), rows_n, Cmp::Lt);
+                let no = b.c(DType::I8, 0);
+                let is_img = b.select(is_ph, room, no, DType::I8);
                 let at = b.clamp(Ref::State(cursor), 0, VLM_ROWS as i64 - 1, DType::Idx);
                 let row = b.gather(rows, at, 0, 0);
                 let row = b.shr(row, 16, Rounding::HalfAwayFromZero, DType::I32);
@@ -612,6 +617,92 @@ pub fn vlm_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
         output_stage: 1,
     };
     (p, vec![vlm_vision_program(), lm_program(true)])
+}
+
+/// The toy encoder–decoder's forced decoder start id (RFC-0003 §II.2.2; T5's `decoder_start_token_id`
+/// is its pad id, 0): the class declares it, and every prompt starts with it.
+pub const ENCDEC_START: u32 = 0;
+/// The toy encoder–decoder's longest source: its template `[1] ‖ source ‖ [2]` pads to 6.
+pub const ENCDEC_MAX_SOURCE: u32 = 4;
+
+/// A toy encoder–decoder's encoder (RFC-0003 §II.2.2): the job's SOURCE ids in a padded template
+/// (`JobTokens` and `JobTokenCount` over `TokenSource::Source`), embedded, masked by the count and
+/// summed in two groups of three positions, scaled by `2^12` — `Final [2, 4]`, the rows the decoder
+/// reads.
+pub fn encdec_encoder_program() -> TirProgramV2 {
+    let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+    let tokens = pb.param("ed.tokens", DType::Idx, &[6], false);
+    let count = pb.param("ed.count", DType::Idx, &[], false);
+    let embed = pb.param("ed.embed", DType::I16, &[TOK, D], false);
+    let pre = {
+        let mut b = pb.block("ed.pre", vec![]);
+        let e = b.gather(embed, tokens, 0, 0);
+        let iota = b.iota(DType::Idx, &[Dim::Fixed(6)], 0, 0, 1);
+        let mask = b.compare(iota, count, Cmp::Lt);
+        let mask = b.reshape_fixed(mask, &[6, 1]);
+        let e32 = b.cast(e, DType::I32);
+        let zero = b.c(DType::I32, 0);
+        let kept = b.select(mask, e32, zero, DType::I32);
+        let groups = b.reshape_fixed(kept, &[VLM_ROWS, 3, D]);
+        let rows = b.reduce_sum(groups, 1, DType::I32);
+        // Scaled by 2^12, so the rows the decoder shifts down by 16 are not all zero.
+        let scale = b.c(DType::I32, 4096);
+        let rows = b.mul(rows, scale, DType::I32);
+        let rows = b.reshape_fixed(rows, &[VLM_ROWS, D]);
+        b.finish(&[rows])
+    };
+    let carry = carry_of(&pb, pre);
+    let (post, out) = {
+        let mut b = pb.block("ed.post", carry);
+        let o = b.clamp(Ref::CarryIn(0), i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.commit(o);
+        (b.finish(&[]), node_of(o))
+    };
+    let v1 = pb.finish(pre, vec![], post, out);
+    TirProgramV2::from_v1_lifting_params(
+        &v1,
+        &[(0, InputSource::External { lo: 0, hi: TOK as i64 - 1 }), (1, InputSource::External { lo: 0, hi: 6 })],
+        OutputDecl::Final { node: out },
+    )
+    .unwrap()
+}
+
+/// **The toy encoder–decoder** (RFC-0003 §II.2.2): the encoder over the job's source, then the
+/// language model over the text stream — whose prompt starts with [`ENCDEC_START`] — with the
+/// encoder's rows through a `StageFinal` edge. The rows enter at placeholder ids, as the VLM's image
+/// rows do: the toy's stand-in for cross-attention (tir-lower's encoder–decoder lowerings read them
+/// over a `Fixed` source axis instead).
+pub fn encdec_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
+    let rule = TokenRule { prefix: vec![1], source: TokenSource::Source, suffix: vec![2], pad: Some(TokenPad { id: 0, to_len: 6 }) };
+    let p = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![
+            StageDecl {
+                name: "encode".into(),
+                program: 0,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![Binding::JobTokens { rule: rule.clone() }, Binding::JobTokenCount { rule }],
+            },
+            StageDecl {
+                name: "lm".into(),
+                program: 1,
+                trip: TripRule::TextStream,
+                max_trip: 12,
+                tokens: None,
+                bind: vec![Binding::StageFinal { stage: 0 }],
+            },
+        ],
+        output_stage: 1,
+    };
+    (p, vec![encdec_encoder_program(), lm_program(true)])
+}
+
+/// The toy encoder–decoder's job: a source of three ids, and a prompt that is the forced start, two
+/// placeholders and one id.
+pub fn encdec_job() -> PipelineJob {
+    PipelineJob { prompt: vec![ENCDEC_START, PLACEHOLDER, PLACEHOLDER, 5], source: vec![7, 9, 11], ..PipelineJob::default() }
 }
 
 /// A greedy selector (the argmax, the lowest id on ties) that ends after `limit` ids — a stand-in for

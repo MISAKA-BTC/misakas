@@ -480,6 +480,7 @@ fn adjudicate(state: &PalwChainStateV2, sid: Hash64, proof: &PalwCourtVerdictPro
         true,
         // ADR-0152 v3.1 §4-bis.9's decode-close door: read by a decode-token close only.
         true,
+        None,
     )
 }
 
@@ -1473,6 +1474,8 @@ fn forge_cache_row(artifact: &Arc<Base0ArtifactV1>, profile: &PalwShapeProfileV3
         prompt_mode: PALW_FP_PROMPT_MODE_USER,
         sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
         temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        decode: None,
+        v5: None,
     };
     let prompt: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
     let fault = PalwFreePromptDrillFaultV1::CacheRow { call: 0, layer: 0, position: q, kind, lane: 0, delta };

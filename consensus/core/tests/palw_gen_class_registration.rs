@@ -1,12 +1,13 @@
 //! **RFC-0003: the generative class, its identity, its preflight, and a registration object that
-//! changes nothing until the pipeline admission lands.**
+//! changes nothing below `palw_gen_v1`.**
 //!
-//! `ClassRegisteredGenV1` is APPENDED (tag 67, Phase F's allocation) so no earlier discriminant
+//! `ClassRegisteredGenV1` is APPENDED (tag 68, after the second IR fence's 67) so no earlier discriminant
 //! moves; it rides the stateless gate at every height (a block carrying it must be valid on this build
-//! and on an older one that skips it undecoded), rents nothing, is charged no registration slot, is
-//! not a carrier a halt must let through, and the fold refuses it by name — so a block carrying one
-//! folds exactly as the same block without it. The processor drops it by name below `palw_gen_v1`
-//! (and, until the pipeline admission, above it).
+//! and on an older one that skips it undecoded), rents nothing, is charged a registration slot like
+//! any bought registration (past the fence only: the walk drops it by name first below), is not a
+//! carrier a halt must let through, and below the fence the fold refuses it by name — so a block
+//! carrying one folds exactly as the same block without it. Past the fence the pipeline admission and
+//! the registry (`palw_gen_registration_fold.rs`).
 //!
 //! The class is the golden toy image pipeline (`consensus-vectors/tir-v2/pipelines/toy-image.json`:
 //! a causal text encoder, a denoiser over the job's steps, a decoder to `ImageRgb8 [2, 2, 3]`).
@@ -100,6 +101,9 @@ fn offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2]) -> PalwGenOffersV
         max_prompt_tokens: max_prompt,
         max_negative_tokens: 0,
         images: vec![],
+        max_source_tokens: 0,
+        forced_prompt_prefix: vec![],
+        source_token_floor: 0,
     }
 }
 
@@ -144,7 +148,7 @@ fn registration(class: PalwGenClassV1) -> PalwConsensusObjectV2 {
 fn the_object_is_appended_after_every_existing_tag() {
     let object = registration(class());
     let bytes = borsh::to_vec(&object).expect("encodes");
-    assert_eq!(bytes[0], 67, "tag 67, Phase F's allocation: no earlier discriminant moves");
+    assert_eq!(bytes[0], 68, "tag 68, after the second IR fence's 67: no earlier discriminant moves");
     let last = PalwConsensusObjectV2::CourtTirChildChosen {
         session_id: Hash64::from_bytes([1; 64]),
         choice: kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectChoiceV1 {
@@ -170,25 +174,29 @@ fn it_rides_statelessly_rents_nothing_and_takes_no_slot() {
     assert!(validate_palw_lifecycle_tx(&payload, false).is_ok());
     assert!(validate_palw_lifecycle_tx(&payload, true).is_ok());
     assert_eq!(palw_object_rent_ceiling_v1(&object), 0, "no rent: an older build that skips it burns nothing either");
-    assert_eq!(palw_class_registration_buyer_v1(&object), None, "never charged a registration slot before its admission lands");
+    assert_eq!(
+        palw_class_registration_buyer_v1(&object),
+        Some(PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(3))),
+        "a bought registration, as an IR one (the walk drops it by name below palw_gen_v1 before any slot)"
+    );
     assert!(!palw_h1_carrier_object_v1(&object), "a registration, not a conviction a halt must let through");
 
     // What an OLDER build meets: a tag its enum does not have — tolerated only under A-2.
     let mut unknown = payload.clone();
-    unknown[2] = 68;
-    assert!(borsh::from_slice::<PalwLifecycleTxPayloadV2>(&unknown).is_err(), "tag 68 is past this build's enum");
+    unknown[2] = 70;
+    assert!(borsh::from_slice::<PalwLifecycleTxPayloadV2>(&unknown).is_err(), "tag 70 is past this build's enum");
     assert!(validate_palw_lifecycle_tx(&unknown, true).is_ok(), "A-2: tolerated where palw_audit_2026_09_11 is declared");
     assert!(validate_palw_lifecycle_tx(&unknown, false).is_err(), "…and refused where it is not, which is why the fence needs it");
 }
 
 #[test]
-fn the_fold_refuses_it_by_name() {
+fn below_the_fence_the_fold_refuses_it_by_name() {
     let p = palw_t12_shipped_params();
     let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("testnet-12 is V2") };
     for daa_score in [10, 2_500, u64::MAX - 1] {
         let ctx = PalwBlockContextV2 { block: Default::default(), daa_score, blue_score: 10, subsidy: 0 };
         let refused = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &[registration(class())], None);
-        assert!(matches!(refused, Err(PalwStateV2Error::GenRegistrationRefused(_))), "at {daa_score}: {refused:?}");
+        assert!(matches!(refused, Err(PalwStateV2Error::GenObjectRefused(_))), "at {daa_score}: {refused:?}");
     }
 }
 
@@ -352,12 +360,22 @@ fn vision_class() -> PalwGenClassV1 {
         h: img["h"].as_u64().unwrap() as u32,
         w: img["w"].as_u64().unwrap() as u32,
         tile_len: img["tile_len"].as_u64().unwrap() as u32,
+        token_equivalents: 0,
     };
     PalwGenClassV1 {
         version: PALW_GEN_CLASS_VERSION_V1,
         profile: PalwGenProfileV1::Embedding as u8,
         layouts: layouts(&p, &progs),
-        offers: PalwGenOffersV1 { steps: vec![], scalars: vec![], max_prompt_tokens: 0, max_negative_tokens: 0, images: vec![slot] },
+        offers: PalwGenOffersV1 {
+            steps: vec![],
+            scalars: vec![],
+            max_prompt_tokens: 0,
+            max_negative_tokens: 0,
+            images: vec![slot],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
+        },
         output: OutputSpecV1::embedding_i32(1, 4, 0, false),
         pipeline,
         programs,
@@ -381,8 +399,11 @@ fn an_image_class_declares_its_slots_and_its_id_covers_them() {
     };
     for (what, e) in [
         ("no slot", refused(&|c| c.offers.images.clear())),
-        ("a slot no stage reads", refused(&|c| c.offers.images.push(PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4 }))),
-        ("another size", refused(&|c| c.offers.images[0] = PalwGenImageOfferV1 { h: 3, w: 2, tile_len: 4 })),
+        (
+            "a slot no stage reads",
+            refused(&|c| c.offers.images.push(PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4, token_equivalents: 0 })),
+        ),
+        ("another size", refused(&|c| c.offers.images[0] = PalwGenImageOfferV1 { h: 3, w: 2, tile_len: 4, token_equivalents: 0 })),
         ("a tile under 4", refused(&|c| c.offers.images[0].tile_len = 3)),
         ("a tile over 2^16", refused(&|c| c.offers.images[0].tile_len = (1 << 16) + 1)),
     ] {
@@ -434,7 +455,16 @@ fn text_class(vector: &str, images: Vec<PalwGenImageOfferV1>) -> PalwGenClassV1 
         version: PALW_GEN_CLASS_VERSION_V1,
         profile: PalwGenProfileV1::Text as u8,
         layouts: layouts(&p, &progs),
-        offers: PalwGenOffersV1 { steps: vec![], scalars: vec![], max_prompt_tokens: 8, max_negative_tokens: 0, images },
+        offers: PalwGenOffersV1 {
+            steps: vec![],
+            scalars: vec![],
+            max_prompt_tokens: 8,
+            max_negative_tokens: 0,
+            images,
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
+        },
         output: OutputSpecV1::tokens(max_trip),
         pipeline,
         programs,
@@ -442,8 +472,9 @@ fn text_class(vector: &str, images: Vec<PalwGenImageOfferV1>) -> PalwGenClassV1 
     }
 }
 
+/// The toy VLM class, its image priced well above any floor.
 fn vlm_class() -> PalwGenClassV1 {
-    text_class("toy-vlm.json", vec![PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4 }])
+    text_class("toy-vlm.json", vec![PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4, token_equivalents: 1_000_000 }])
 }
 
 #[test]
@@ -501,7 +532,16 @@ fn a_text_only_pipeline_is_a_text_class() {
         version: PALW_GEN_CLASS_VERSION_V1,
         profile: PalwGenProfileV1::Text as u8,
         layouts: layouts(&pipeline, &decoded_progs),
-        offers: PalwGenOffersV1 { steps: vec![], scalars: vec![], max_prompt_tokens: 12, max_negative_tokens: 0, images: vec![] },
+        offers: PalwGenOffersV1 {
+            steps: vec![],
+            scalars: vec![],
+            max_prompt_tokens: 12,
+            max_negative_tokens: 0,
+            images: vec![],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
+        },
         output: OutputSpecV1::tokens(12),
         pipeline: p,
         programs: progs,
@@ -509,4 +549,36 @@ fn a_text_only_pipeline_is_a_text_class() {
     };
     let report = palw_gen_class_preflight_v1(&c, &fence()).unwrap_or_else(|e| panic!("the text class: {e}"));
     assert_eq!((report.profile, report.output_tile_len, report.draws_randomness), (PalwGenProfileV1::Text, None, false));
+}
+
+/// **An image's price in prompt tokens** (RFC-0003 open question 13's recommendation, pending user
+/// confirmation): declared per slot, floored at `⌈admitted per-image work / per-token work⌉`, and
+/// declared only by a text class.
+#[test]
+fn a_text_class_prices_each_image_at_or_above_its_token_floor() {
+    let c = vlm_class();
+    let report = palw_gen_class_preflight_v1(&c, &fence()).unwrap();
+    let a = &report.admission;
+    let per_image = palw_gen_work_units_v1(&a.stages[0].job_cost);
+    let per_token = palw_gen_work_units_v1(&a.stages[1].admission.view.position.cost);
+    let floor = per_image.div_ceil(per_token) as u32;
+    assert!(per_image > 0 && per_token > 0);
+    assert_eq!(report.image_token_floor, vec![floor], "⌈{per_image} / {per_token}⌉");
+    let priced = |tokens: u32| {
+        let mut p = c.clone();
+        p.offers.images[0].token_equivalents = tokens;
+        palw_gen_class_preflight_v1(&p, &fence())
+    };
+    assert!(priced(floor.max(1)).is_ok(), "at the floor");
+    assert!(matches!(priced(floor.max(1) - 1), Err(PalwGenClassErrorV1::Offers(_))), "one token below it");
+    // The price is in the class id: another price is another class.
+    let root = Hash64::from_bytes([0xA9; 64]);
+    let mut other = c.clone();
+    other.offers.images[0].token_equivalents += 1;
+    assert_ne!(c.class_id(&root), other.class_id(&root));
+    // A class that is not a text class declares no token price.
+    let mut vision = vision_class();
+    vision.offers.images[0].token_equivalents = 1;
+    assert!(matches!(palw_gen_class_preflight_v1(&vision, &fence()), Err(PalwGenClassErrorV1::Offers(_))));
+    assert!(palw_gen_class_preflight_v1(&vision_class(), &fence()).unwrap().image_token_floor.is_empty());
 }

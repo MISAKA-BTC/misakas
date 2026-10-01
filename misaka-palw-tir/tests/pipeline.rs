@@ -160,6 +160,60 @@ fn a_token_count_masks_by_length_whatever_the_pad_id() {
     assert_eq!(e.kind, TirErrorKind::Operand);
 }
 
+/// **The source (RFC-0003 §II.2.2)**: `TokenSource::Source` reads the job's own second list — not the
+/// prompt, not the negative prompt — with every template rule a prompt's has, and encodes as tag 2.
+#[test]
+fn a_source_is_the_jobs_own_token_list() {
+    let (p, progs) = bidirectional_pipeline(0);
+    let mut over_source = p.clone();
+    for b in &mut over_source.stages[0].bind {
+        if let Binding::JobTokens { rule } | Binding::JobTokenCount { rule } = b {
+            rule.source = TokenSource::Source;
+        }
+    }
+    validate_pipeline(&over_source, &progs).unwrap();
+    let bytes = over_source.encode();
+    assert_eq!(TirPipelineV1::decode_canonical(&bytes, &progs).unwrap(), over_source, "the canonical bytes round-trip");
+    assert_ne!(bytes, p.encode(), "tag 2, not the prompt's 0");
+    let (params, random) = (params_for(&progs), GenRandom { seed: [0; 32], position: 0 });
+    let run = |p: &TirPipelineV1, job: &PipelineJob| run_pipeline(p, &progs, &params, &random, job);
+    let from_prompt = run(&p, &PipelineJob { prompt: vec![5, 6], ..toy_job() }).unwrap();
+    let from_source = run(&over_source, &PipelineJob { prompt: vec![9], source: vec![5, 6], ..toy_job() }).unwrap();
+    assert_eq!(from_source.output, from_prompt.output, "the same ids, the same encoding, whichever list carries them");
+    let other_prompt = run(&over_source, &PipelineJob { prompt: vec![3, 4, 8], source: vec![5, 6], ..toy_job() }).unwrap();
+    assert_eq!(other_prompt.output, from_source.output, "the prompt is not read");
+    let facts = stage_job_facts(&over_source, &progs, &PipelineJob { source: vec![5, 6], ..toy_job() }).unwrap();
+    assert_eq!(facts[0].inputs[&0].data, vec![1, 5, 6, 2, 0, 0], "the template over the source, padded");
+    assert_eq!(facts[0].inputs[&1].data, vec![4], "its count");
+    // A source past its pad is refused as a prompt is; an empty one is the template alone.
+    let long = run(&over_source, &PipelineJob { source: vec![5; 5], ..toy_job() }).unwrap_err();
+    assert_eq!(long.kind, TirErrorKind::Operand);
+    assert!(run(&over_source, &PipelineJob { source: vec![], ..toy_job() }).is_ok());
+}
+
+/// **The toy encoder–decoder** (RFC-0003 §II.2.2): the encoder over the source, the text stage over
+/// a prompt that starts with the forced start id; the committed ids replay; a different source is a
+/// different run of the text stage, and the source never enters the text stream.
+#[test]
+fn an_encoder_decoder_reads_its_source_through_the_edge() {
+    let (p, progs) = encdec_pipeline();
+    validate_pipeline(&p, &progs).unwrap();
+    let params = ProgramParams(progs.iter().enumerate().map(|(i, prog)| materialize_v2(prog, 500 + i as u64)).collect());
+    let random = GenRandom { seed: [0; 32], position: 0 };
+    let job = encdec_job();
+    let (run, generated) = run_text_pipeline(&p, &progs, &params, &random, &job, &mut greedy(4)).unwrap();
+    assert_eq!(generated.len(), 4);
+    let committed = PipelineJob { generated: generated.clone(), ..job.clone() };
+    assert_eq!(run_pipeline(&p, &progs, &params, &random, &committed).unwrap(), run, "the replay");
+    assert_eq!(run.stages[1].tokens[..4], job.prompt[..], "the stream is the prompt, then the ids");
+    assert_eq!(run.stages[1].tokens[0], ENCDEC_START);
+    let other = PipelineJob { source: vec![3, 4, 13], generated, ..job.clone() };
+    let replay = run_pipeline(&p, &progs, &params, &random, &other).unwrap();
+    assert_ne!(replay.stages[0].steps, run.stages[0].steps, "the encoder read the source");
+    assert_ne!(replay.stages[1].steps, run.stages[1].steps, "and the decoder read the encoder");
+    assert_eq!(replay.stages[1].tokens, run.stages[1].tokens, "the stream is not the source");
+}
+
 #[test]
 fn token_count_rules_refuse_by_name() {
     let (base, progs) = bidirectional_pipeline(0);
@@ -357,11 +411,13 @@ fn image_rows_enter_the_text_stage_at_placeholder_ids() {
     // Without placeholders the image changes nothing; the rows still ran.
     let plain = |job: &PipelineJob| PipelineJob { prompt: vec![3, 4, 5], ..job.clone() };
     assert_eq!(logits_at(&plain(&base)), logits_at(&plain(&dark)));
-    // A third placeholder re-reads the last row (the cursor is clamped): total, never out of range.
+    // A third placeholder is an ordinary token (the rows are spent): embedded as the token, as HF
+    // embeds it — the image changes rows 0 and 1 only.
     let three = |job: &PipelineJob| PipelineJob { prompt: vec![PLACEHOLDER, PLACEHOLDER, PLACEHOLDER], ..job.clone() };
-    let r = logits_at(&three(&base));
-    assert_eq!(r[1], r[2], "rows 1 and 1 again");
+    let (r, dark_r) = (logits_at(&three(&base)), logits_at(&three(&dark)));
     assert_ne!(r[0], r[1], "row 0, then row 1");
+    assert!(r[0] != dark_r[0] && r[1] != dark_r[1], "the first two read the image");
+    assert_eq!(r[2], dark_r[2], "the third is the token's embedding, whatever the image");
     // Generating over it replays.
     let job = with(&base);
     let (run, generated) = run_text_pipeline(&p, &programs, &params, &random, &job, &mut greedy(3)).unwrap();

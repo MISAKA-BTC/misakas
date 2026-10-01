@@ -50,7 +50,7 @@ use crate::palw_tir_step_v1::PalwTirStepSpaceV1;
 use crate::palw_tir_v1::PalwTirFenceV1;
 use crate::palw_v2::PalwJobContextV2;
 use misaka_palw_tir::TirProgramV1;
-use misaka_palw_tir::admit::{TirAdmissionV1, TirAdmitError, TirAdmitInputsV1, TirCeilingsV1, tir_admit_v1};
+use misaka_palw_tir::admit::{TirAdmissionV1, TirAdmitError, TirAdmitInputsV1, TirCeilingsV1};
 
 /// The most distinct commit tile lengths a layout may use: admission runs `tir_admit_v1` once per
 /// length, so this bounds its work at a small multiple of one run.
@@ -97,6 +97,9 @@ pub struct PalwTirAdmissionRulesV1 {
     /// its window): `None` where it is not armed. A cone that reduces over the history is dissected
     /// only under it (spec 04b §9.5, RFC-0002 F7); without it such a cone must fit the court whole.
     pub court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+    /// **The box-demand rules at the block** (spec 04b §10.3): the release's, or ref2's H7 `TopK`
+    /// row past `Params::palw_tir_fence2` — read by `tir_admit` and the value bound `V`.
+    pub demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
 }
 
 impl PalwTirAdmissionRulesV1 {
@@ -124,6 +127,7 @@ impl PalwTirAdmissionRulesV1 {
             held: PalwHeldAdmissionV1 { armed: held_armed, panel_da: params.palw_panel_da_at(daa_score) },
             prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
             court,
+            demand: params.palw_tir_demand_rules_at(daa_score),
         })
     }
 }
@@ -280,6 +284,63 @@ pub fn palw_tir_carriable_close_bytes_v1(court: &crate::palw_mode_v2::PalwCourtP
     chunks.saturating_mul(crate::palw_state_v2::PALW_COURT_CLOSE_CHUNK_MAX_BYTES as u64)
 }
 
+/// **PALW-TIR-38, the carried closes of a class** (spec 04b §10.3, `TirCloseDemandV1`): the worst
+/// terminal close of every commit point over every job of `longest` (the layout's longest job) —
+/// what the court's own evaluation reads, priced as carried, the parameters in the multiproof the
+/// close carries — within `carriable` bytes, and every dissected point's worst root claim within one
+/// carrier; `court` says whether history cones are dissected. A sizing past `work_cap` steps is
+/// refused rather than run (`TirExceeds { limit: "IR close sizing work" }`), and the sizing stops at
+/// the first commit point past either bound, which is refused by name. Returns the bounds, one per
+/// commit point sized.
+pub fn palw_tir_carried_closes_admit_v1(
+    space: &PalwTirStepSpaceV1,
+    program: &TirProgramV1,
+    longest: &PalwJobContextV2,
+    court: bool,
+    carriable: u64,
+    work_cap: u64,
+) -> Result<Vec<crate::palw_tir_close_size_v1::PalwTirCloseBoundV1>, PalwClassAdmissionError> {
+    use crate::palw_tir_close_size_v1 as z;
+    let inventory = crate::palw_tir_court_v1::PalwTirInventoryIndexV1::new(program)
+        .ok_or_else(|| PalwClassAdmissionError::TirLayout("the class's inventory has no index".into()))?;
+    let sizing = z::PalwTirCloseSizingV1 {
+        form: z::PalwTirParamFormV1::Multiproof,
+        court,
+        cap: work_cap,
+        stop_above: Some((carriable, PALW_TIR_DISSECT_CARRIER_BYTES_V1)),
+    };
+    let bounds = z::palw_tir_worst_closes_v1(space, &inventory, longest, &sizing).map_err(|e| {
+        if e == z::PALW_TIR_CLOSE_SIZING_OVER_CAP_V1 {
+            PalwClassAdmissionError::TirExceeds {
+                limit: "IR close sizing work",
+                at: "the class's terminal closes".into(),
+                value: work_cap.saturating_add(1),
+                cap: work_cap,
+            }
+        } else {
+            PalwClassAdmissionError::TirLayout(format!("the close sizing refuses the class: {e}"))
+        }
+    })?;
+    palw_tir_carried_close_bounds_admit_v1(&bounds, carriable)?;
+    Ok(bounds)
+}
+
+/// **PALW-TIR-38's comparison**: every commit point's worst terminal close within `carriable`
+/// bytes, and every dissected point's worst root claim within one carrier — refused by name, with
+/// the bytes and the cap, at the first that is not.
+pub fn palw_tir_carried_close_bounds_admit_v1(
+    bounds: &[crate::palw_tir_close_size_v1::PalwTirCloseBoundV1],
+    carriable: u64,
+) -> Result<(), PalwClassAdmissionError> {
+    for b in bounds {
+        exceeds("IR terminal close bytes as carried", b.close_bytes, carriable)?;
+        if b.dissected {
+            exceeds("IR dissection root claim bytes", b.root_claim_bytes, PALW_TIR_DISSECT_CARRIER_BYTES_V1)?;
+        }
+    }
+    Ok(())
+}
+
 /// **What one lifecycle object may weigh on the wire**: every dissection move rides one carrier (only
 /// a `FamilyCertified` rides in chunks), whose payload is at most one object chunk.
 pub const PALW_TIR_DISSECT_CARRIER_BYTES_V1: u64 = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
@@ -293,10 +354,8 @@ pub const PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1: u64 = 1 + 64 + 4 + 4 + 4_627 + 6
 /// * O-1 to O-3 ([`crate::palw_tir_dissect_v1::palw_tir_dissect_obligations_v1`]);
 /// * the claim's values, bounded by the box demand at `H = 1`
 ///   ([`crate::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1`]), within the claim cap;
-/// * a round at the court's arity fits one carrier, and so does the root claim — the close frame, the
-///   chunk's opened operands (what the finalize and its probes read, bounded by one chunk) and the
-///   claim; the program is referenced, never carried — both NECESSARY conditions, as the close
-///   check is;
+/// * a round at the court's arity fits one carrier (the root claim's carrier is priced with every
+///   terminal close, exactly as carried: [`palw_tir_carried_closes_admit_v1`]);
 /// * O-5: the whole exchange inside `window_court` at the court's arity, on the network's clock
 ///   (the held clock opens at the accusation's leaf: no ladder rounds), over `max_context` positions
 ///   in `h_tile` tiles — the legacy fused row's window rule applied to this site.
@@ -310,33 +369,58 @@ fn palw_tir_dissected_cone_admits_v1(
     bi: u8,
     ni: u16,
     tile_len: u32,
-    cone: &misaka_palw_tir::admit::ConeV1,
+    k: crate::palw_class_admission_v2::PalwKaryCourtV1,
+) -> Result<(), PalwClassAdmissionError> {
+    palw_tir_dissected_cone_admits_parts_v1(
+        bundle,
+        rules.held.armed,
+        rules.demand,
+        program,
+        block,
+        bi,
+        ni,
+        tile_len,
+        class.layout.max_context as u64,
+        class.layout.h_tile,
+        k,
+    )
+}
+
+/// **[`palw_tir_dissected_cone_admits_v1`] over the parts it reads** — the held regime's reading,
+/// the block's box-demand rules, the program (a version-1 program, or a version-2 stage's view), the
+/// history bound and the history tile — so RFC-0003's pipeline admission asks F7's questions of each
+/// stage verbatim.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn palw_tir_dissected_cone_admits_parts_v1(
+    bundle: &PalwConsensusParamsV2,
+    held_armed: bool,
+    demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
+    program: &TirProgramV1,
+    block: &misaka_palw_tir::program::Block,
+    bi: u8,
+    ni: u16,
+    tile_len: u32,
+    max_context: u64,
+    h_tile: u32,
     k: crate::palw_class_admission_v2::PalwKaryCourtV1,
 ) -> Result<(), PalwClassAdmissionError> {
     use crate::palw_tir_dissect_v1 as d;
     let refused = |why: String| PalwClassAdmissionError::TirDissection { block: bi, node: ni, why };
     d::palw_tir_dissect_obligations_v1(block, ni).map_err(|e| refused(e.to_string()))?;
     let reductions = d::palw_tir_cone_reductions_v1(block, ni).len();
-    let values = d::palw_tir_dissect_value_bound_v1(program, block, ni, tile_len);
+    let values = d::palw_tir_dissect_value_bound_v2(program, block, ni, tile_len, demand);
     if values > d::PALW_TIR_DISSECT_MAX_VALUES as u64 {
         return Err(refused(format!("a claim may carry {values} values; at most {}", d::PALW_TIR_DISSECT_MAX_VALUES)));
     }
     let round = d::palw_tir_dissect_round_bytes_v1(k.dissection_arity, reductions, values).saturating_add(PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1);
     exceeds("IR dissection round bytes", round, PALW_TIR_DISSECT_CARRIER_BYTES_V1)?;
-    // The root claim references the registered program (its binding rides with the program empty),
-    // so what it weighs is the close frame, the opened evidence, the claim and the move's frame.
-    let root = PALW_TIR_CLOSE_FRAME_BYTES_V1
-        .saturating_add(cone.terminal_opened_bytes())
-        .saturating_add(values.saturating_mul(20))
-        .saturating_add(PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1);
-    exceeds("IR dissection root claim bytes", root, PALW_TIR_DISSECT_CARRIER_BYTES_V1)?;
     let played = bundle
         .court
         .with_dissection_arity(k.dissection_arity)
         .map_err(|e| refused(format!("the court's dissection arity is not legal: {e}")))?;
-    let history = class.layout.max_context as u64;
-    let tile = class.layout.h_tile.max(1);
-    let admits = if rules.held.armed {
+    let history = max_context;
+    let tile = h_tile.max(1);
+    let admits = if held_armed {
         crate::palw_attn_court_v1::palw_attn_court_admits_row_held_v1(&played, history, tile, k.window_court_daa)
     } else {
         crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa)
@@ -440,7 +524,7 @@ pub fn verify_class_admission_v10(
     let mut runs: Vec<(u32, TirAdmissionV1)> = Vec::with_capacity(tile_lens.len());
     for &tile_len in &tile_lens {
         let inputs = TirAdmitInputsV1 { tile_len, h_chunk: layout.h_tile, ceilings: admit_ceilings };
-        let admitted = tir_admit_v1(&class.program, &inputs).map_err(|e| match e {
+        let admitted = misaka_palw_tir::admit::tir_admit_with_rules_v1(&class.program, &inputs, rules.demand).map_err(|e| match e {
             TirAdmitError::Program(e) => tir_program_error(e),
             TirAdmitError::Exceeds { limit, at, value, cap } => PalwClassAdmissionError::TirExceeds { limit, at, value, cap },
             TirAdmitError::Inputs(why) => PalwClassAdmissionError::TirLayout(why.into()),
@@ -483,9 +567,9 @@ pub fn verify_class_admission_v10(
                             return Err(PalwClassAdmissionError::TirNeedsDissection { block: bi as u8, node: ni as u16 });
                         }
                     }
-                    Some(k) => palw_tir_dissected_cone_admits_v1(
-                        bundle, rules, class, &program, block, bi as u8, ni as u16, tile_len, cone, k,
-                    )?,
+                    Some(k) => {
+                        palw_tir_dissected_cone_admits_v1(bundle, rules, class, &program, block, bi as u8, ni as u16, tile_len, k)?
+                    }
                 }
             }
             let (tile, opened) = if dissected { (cone.terminal(), cone.terminal_opened_bytes()) } else { (&cone.tile, cone.tile_opened_bytes) };
@@ -503,14 +587,6 @@ pub fn verify_class_admission_v10(
             exceeds("IR cone evaluation work (tile and state replay)", work, work_limit)?;
             let close = (class.program.len() as u64).saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1).saturating_add(opened);
             exceeds("IR close bytes", close, bundle.court.max_close_bytes())?;
-            // **Every terminal close an executor can be clocked for is CARRIABLE** (decision (1) of
-            // 2026-09-28; spec 04b §10.3). An IR class with a dissected point clocks its executor at
-            // every terminal leaf (ADR-0082 C-5), so its acquitting close there — the whole tile, or a
-            // dissected cone's bottom — must be one the chain can carry: at most the chunks the fold
-            // assembles, of one carrier each, the program referenced (never carried). The ruleset's
-            // close ceiling above may be wider than that; this is the bound that holds.
-            let carried = PALW_TIR_CLOSE_FRAME_BYTES_V1.saturating_add(opened);
-            exceeds("IR terminal close bytes as carried", carried, palw_tir_carriable_close_bytes_v1(&bundle.court))?;
             worst_close = worst_close.max(close);
             worst_macs = worst_macs.max(tile.macs);
             worst_operands = worst_operands.max(cone.operands);
@@ -587,6 +663,24 @@ pub fn verify_class_admission_v10(
             return Err(PalwClassAdmissionError::NotEndToEndCertified { share: *share_permille });
         }
     }
+
+    // 9. **Every terminal close an executor can be clocked for is CARRIABLE** (decision (1) of
+    // 2026-09-28; spec 04b §10.3, PALW-TIR-38). An IR class with a dissected point clocks its
+    // executor at every terminal leaf (ADR-0082 C-5), so its acquitting close there — a whole tile's,
+    // a dissected cone's bottom — must be one the chain can carry: at most the chunks the fold
+    // assembles, of one carrier each, the program referenced (never carried); and a dissected
+    // cone's root claim rides one carrier. Priced EXACTLY as carried (`TirCloseDemandV1`): the units
+    // the court's own evaluation reads, over every job of the layout's longest, the parameters in
+    // the multiproof the close carries. The ruleset's close ceiling above may be wider than that;
+    // this is the bound that holds. Last, as the costliest check (at most the sizing's work cap).
+    palw_tir_carried_closes_admit_v1(
+        &space,
+        &program,
+        &deepest,
+        rules.court.is_some(),
+        palw_tir_carriable_close_bytes_v1(&bundle.court),
+        crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1,
+    )?;
 
     let entry = PalwClassCatalogEntryV2 {
         class_id: derived_id,

@@ -59,6 +59,7 @@ pub mod encdec;
 pub mod qlinear;
 pub mod vision;
 pub mod fill;
+pub mod stream;
 
 use crate::error::{LowerError, Result};
 use crate::hl::{self, BlockRole, HlProgram, Op, StateKind};
@@ -72,6 +73,7 @@ use tir::program::{INPUT_POS, INPUT_TOKEN};
 use tir::{DType, Dim, Rounding, TensorType, TirProgramV1};
 
 pub use fill::{FillCtx, IntData, IntParams, IntTensor, Materialised, materialise};
+pub use stream::{ChunkSink, StreamMaterialised, StreamOpts, StreamStats, TensorSink, materialise_stream};
 
 /// Lowering options.
 #[derive(Clone, Debug)]
@@ -185,11 +187,40 @@ impl ScaleKey {
 /// Computes one TIR param for one occurrence.
 pub type FillFn = Arc<dyn Fn(&FillCtx<'_>) -> Result<IntTensor> + Send + Sync>;
 
+/// How a param's integers derive from ONE float param, row by row.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RowKind {
+    /// Per-row `i8` codes (`quantize_rows`): the row's absmax maps to ±127.
+    W8,
+    /// Per-row `i16` codes (`quantize_rows16`): a gathered table, and a head that reads it.
+    T16,
+    /// The main codes of a projection whose input has split outlier channels
+    /// ([`FillCtx::split_rows`]): per-row `i8` codes of the weight with the outlier columns zeroed.
+    /// The same split yields the projection's outlier columns (`.wo`), their shifts (`.of`) and the
+    /// per-row scales its narrowing needs — all per row, all small — which a streaming conversion
+    /// computes in a first pass over the blocks and hands the sibling fills ready-made
+    /// ([`FillCtx::inject_split`]); this param's own codes are made in a second.
+    SplitMain { kx: ScaleKey, f_max: i32 },
+}
+
+/// A TIR param whose integers are [`RowKind`] codes of the HL param `hl`: row `r` of the artifact's
+/// tensor is a function of row `r` of the checkpoint's alone, so a conversion can produce it a block
+/// of rows at a time (`crate::lower::stream`) and never hold the whole weight.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowParam {
+    pub hl: u32,
+    pub kind: RowKind,
+}
+
 /// A lowered program: the structure, and how to fill each of its params.
 pub struct Lowered {
     pub program: TirProgramV1,
     /// One per `program.params`, same order.
     pub fills: Vec<FillFn>,
+    /// The params that are row-wise codes of one HL param, by TIR param name (names are unique in a
+    /// program, so the map survives reordering): the ones a streaming conversion produces by row
+    /// blocks.
+    pub row_params: BTreeMap<String, RowParam>,
     /// Statistics keys (with occurrence prefix) of every value carried at the residual scale, and
     /// the factor its scale carries: `S_r` is sized on them.
     pub resid_sites: Vec<(String, f64)>,
@@ -323,6 +354,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     let mut cx = Cx {
         hl,
         fills: Vec::new(),
+        row_params: BTreeMap::new(),
         resid_sites: BTreeMap::new(),
         tstate: BTreeMap::new(),
         history_bound: hb,
@@ -366,6 +398,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
                 cx.site_nodes.clone(),
                 cx.logits_key.clone(),
                 cx.carry_keys.clone(),
+                cx.row_params.clone(),
             );
             cx.split_max_readers = readers;
             quiet_budget_hook();
@@ -396,6 +429,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
                     cx.site_nodes = snap.7;
                     cx.logits_key = snap.8;
                     cx.carry_keys = snap.9;
+                    cx.row_params = snap.10;
                     if !msg.contains("exceeds") || readers == 0 {
                         return Err(LowerError::not_lowerable(format!("block `{}`: {msg}", hl.blocks[hbk].name)));
                     }
@@ -420,7 +454,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no logits scale"))?;
-    Ok(Lowered { program, fills, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks })
+    Ok(Lowered { program, fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks })
 }
 
 thread_local! {
@@ -453,6 +487,8 @@ fn quiet_budget_hook() {
 struct Cx<'h> {
     hl: &'h HlProgram,
     fills: Vec<FillFn>,
+    /// [`Lowered::row_params`].
+    row_params: BTreeMap<String, RowParam>,
     /// (stats key, factor bits) → factor.
     resid_sites: BTreeMap<(String, u64), f64>,
     /// HL state → TIR state.
@@ -1067,6 +1103,59 @@ fn decl(
     Ok(r)
 }
 
+/// [`decl`] for a param that is the row-wise codes of the HL param `hl_p` (`W8`: [`weight_codes`],
+/// `T16`: [`table_codes`]): the fill is the same, and the param is registered so a streaming
+/// conversion can produce it by blocks of rows ([`Lowered::row_params`]).
+#[allow(clippy::too_many_arguments)]
+fn decl_rows(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &Lb,
+    name: &str,
+    shape: &[usize],
+    per_layer: bool,
+    kind: RowKind,
+    hl_p: u32,
+) -> Result<tir::Ref> {
+    let (dt, fill) = match kind {
+        RowKind::W8 => (DType::I8, weight_codes(hl_p)),
+        RowKind::T16 => (DType::I16, table_codes(hl_p)),
+        RowKind::SplitMain { .. } => return Err(LowerError::eval("internal: a split main is declared with decl_rows_with")),
+    };
+    decl_rows_with(b, cx, lb, name, dt, shape, per_layer, kind, hl_p, fill)
+}
+
+/// [`decl_rows`] with the fill given (the split projection's main codes).
+#[allow(clippy::too_many_arguments)]
+fn decl_rows_with(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &Lb,
+    name: &str,
+    dt: DType,
+    shape: &[usize],
+    per_layer: bool,
+    kind: RowKind,
+    hl_p: u32,
+    fill: FillFn,
+) -> Result<tir::Ref> {
+    let before = cx.fills.len();
+    let r = decl(b, cx, lb, name, dt, shape, per_layer, fill)?;
+    if let tir::Ref::Param(j) = r {
+        // Register the name the param ended up with (`decl` may suffix it). A param this call
+        // declared is row-wise by its fill; one it reused is only if it was registered the same
+        // way — never one another site declared with a different fill.
+        let pname = b.pb.params[j as usize].name.clone();
+        let rp = RowParam { hl: hl_p, kind };
+        if cx.fills.len() > before {
+            cx.row_params.insert(pname, rp);
+        } else if cx.row_params.get(&pname) != Some(&rp) {
+            cx.row_params.remove(&pname);
+        }
+    }
+    Ok(r)
+}
+
 fn per_layer(lb: &Lb) -> bool {
     lb.role == BlockRole::Layer
 }
@@ -1654,7 +1743,7 @@ fn lower_row_lookup(
     let hl = cx.hl;
     let d = &hl.params[tp as usize];
     let (rows, cols) = (d.shape[0], d.shape[1]);
-    let table = decl(b, cx, lb, &d.name, DType::I16, &[rows, cols], d.per_layer, table_codes(tp))?;
+    let table = decl_rows(b, cx, lb, &d.name, &[rows, cols], d.per_layer, RowKind::T16, tp)?;
     let key = want.key.clone();
     let (m, s) = decl_ms(
         b,
@@ -1663,9 +1752,9 @@ fn lower_row_lookup(
         site,
         rows,
         Arc::new(move |c| {
-            let rc = c.rows16(tp)?;
+            let scales = c.row_scales(tp, true)?;
             let to = c.scale(&key)?;
-            Ok(rc.scales.iter().map(|sw| sw / to).collect())
+            Ok(scales.iter().map(|sw| sw / to).collect())
         }),
     )?;
     let row = b.gather(table, at, 0, 0);
@@ -2010,8 +2099,8 @@ fn lower_linear(
     let r = if k == 0 {
         // A head tied to an embedding reads the table's `i16` codes (the same param).
         let rows16 = table || wide16;
-        let (dt, fill) = if rows16 { (DType::I16, table_codes(w)) } else { (DType::I8, weight_codes(w)) };
-        let wt = decl(b, cx, lb, &d.name, dt, &[out, inp], d.per_layer, fill)?;
+        let kind = if rows16 { RowKind::T16 } else { RowKind::W8 };
+        let wt = decl_rows(b, cx, lb, &d.name, &[out, inp], d.per_layer, kind, w)?;
         let (m, s) = decl_ms(
             b,
             cx,
@@ -2019,7 +2108,7 @@ fn lower_linear(
             site,
             out,
             Arc::new(move |c| {
-                let scales = if rows16 { c.rows16(w)?.scales.clone() } else { c.rows(w)?.scales.clone() };
+                let scales = c.row_scales(w, rows16)?;
                 let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, out)?);
                 Ok(scales.iter().zip(&sy).map(|(sw, sy)| sw * sx / sy).collect())
             }),
@@ -2032,7 +2121,7 @@ fn lower_linear(
         let acc_bits = 22 + (inp as f64).log2().ceil() as i32;
         let f_max = (62 - acc_bits).clamp(0, 24);
         let (k1, k2, k3, k4) = (kx.clone(), kx.clone(), kx.clone(), kx.clone());
-        let wt = decl(
+        let wt = decl_rows_with(
             b,
             cx,
             lb,
@@ -2040,6 +2129,8 @@ fn lower_linear(
             DType::I8,
             &[out, inp],
             d.per_layer,
+            RowKind::SplitMain { kx: kx.clone(), f_max },
+            w,
             Arc::new(move |c| {
                 let sc = c.split_rows(w, &k1, f_max)?;
                 Ok(IntTensor::i8(vec![sc.main.rows, sc.main.cols], sc.main.codes.clone()))
@@ -3075,7 +3166,7 @@ fn lower_moe(
         }
         let pd = &hl.params[p as usize];
         let (rows, cols) = (pd.shape[1], pd.shape[2]);
-        let codes = decl(b, cx, lb, &pd.name, DType::I8, &[e, rows, cols], pd.per_layer, weight_codes(p))?;
+        let codes = decl_rows(b, cx, lb, &pd.name, &[e, rows, cols], pd.per_layer, RowKind::W8, p)?;
         let (ki, ko) = (in_key.clone(), out.clone());
         let (m, s) = decl_ms(
             b,
@@ -3084,9 +3175,9 @@ fn lower_moe(
             name,
             e * rows,
             Arc::new(move |c| {
-                let rc = c.rows(p)?;
+                let scales = c.row_scales(p, false)?;
                 let (si, so) = (c.scale(&ki)?, c.scale(&ko)?);
-                Ok(rc.scales.iter().map(|sw| sw * si / so).collect())
+                Ok(scales.iter().map(|sw| sw * si / so).collect())
             }),
         )?;
         let z = match bias {

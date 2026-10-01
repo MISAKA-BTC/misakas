@@ -116,6 +116,84 @@ pub fn tir_drill_covering_leaves_v1(
     Ok(candidates)
 }
 
+/// **One terminal close this node's builders produce, as it rides** ([`tir_terminal_close_sizes_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TirCloseSizeV1 {
+    /// The step leaf the close is at: the first leaf of its commit-point kind and call.
+    pub leaf: u64,
+    pub kind: TirDrillUnitKindV1,
+    pub call: TirDrillCallV1,
+    /// `cone` (`TirCone`), `logits` (`TirLogits`), `decode token` (`TirDecodeToken[Tiled]`), or
+    /// `dissected`: a commit point whose cone reduces over the history (F7), where the court's
+    /// terminal move is the dissection's and no whole close is built.
+    pub door: &'static str,
+    /// The close's `borsh` bytes with its program stripped — what the carrier carries; 0 for a
+    /// dissected point.
+    pub carried_bytes: u64,
+}
+
+/// **Every terminal close this node's IR builders produce for `material`'s job, measured as it
+/// rides** — the stable entry point a differential test holds admission v10's carried-close figure
+/// (PALW-TIR-38) against: at the first leaf of every commit-point kind and call (the drill's covering
+/// set, [`tir_drill_covering_leaves_v1`]) the cone close, and at the logits node's leaves the
+/// logits-consistency close and the decode-token door too; each exactly as the node files it (its
+/// program stripped), its `borsh` length. A dissected point (a cone reducing over the history,
+/// `palw_tir_dissected_commit_points_v1`) is listed with no size: its terminal move is F7's
+/// dissection, never a whole close.
+pub fn tir_terminal_close_sizes_v1(
+    backend: &TirBackendV1,
+    material: &[u8],
+    rules: &PalwTirCourtRulesV1,
+) -> Result<Vec<TirCloseSizeV1>, String> {
+    let capture = backend.decode_capture(material)?;
+    let ctx = capture.binding.job_context.clone();
+    let space = backend.space();
+    let program = &space.program;
+    let dissected = kaspa_consensus_core::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(program);
+    let post = (space.occurrences().len() - 1) as u32;
+    let carried = |mut proof: kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2| -> Result<u64, String> {
+        proof.tir_strip_program_v1();
+        borsh::to_vec(&proof).map(|b| b.len() as u64).map_err(|e| e.to_string())
+    };
+    let mut out = Vec::new();
+    for ((kind, call), leaf) in tir_drill_covering_leaves_v1(space, &ctx, capture.binding.step_leaf_count)? {
+        if matches!(kind, TirDrillUnitKindV1::Commit { block, node } if dissected.contains(&(block, node))) {
+            out.push(TirCloseSizeV1 { leaf, kind, call, door: "dissected", carried_bytes: 0 });
+            continue;
+        }
+        out.push(TirCloseSizeV1 {
+            leaf,
+            kind,
+            call,
+            door: "cone",
+            carried_bytes: carried(backend.cone_close(material, leaf, rules)?)?,
+        });
+        let at = space.leaf_at(&ctx, leaf).ok_or_else(|| format!("leaf {leaf} is not a leaf of the job"))?;
+        let logits =
+            matches!(at.kind, PalwTirLeafKindV1::Commit { occurrence, node, .. } if occurrence == post && node == program.logits);
+        if logits {
+            out.push(TirCloseSizeV1 {
+                leaf,
+                kind,
+                call,
+                door: "logits",
+                carried_bytes: carried(backend.logits_close(material, leaf)?)?,
+            });
+            if let Some(row) = (at.position + 1).checked_sub(ctx.declared_prefill_tokens) {
+                let beat = capture.generated.get(row as usize).map(|t| (t + 1) % program.token_bound.max(1)).unwrap_or(0);
+                out.push(TirCloseSizeV1 {
+                    leaf,
+                    kind,
+                    call,
+                    door: "decode token",
+                    carried_bytes: carried(backend.decode_token_close(material, row, beat)?)?,
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// The kernel id of an IR primitive (design §2.7).
 pub fn tir_prim_kernel_id_v1(name: &str) -> Hash64 {
     kernel_semantics_id_v1(&format!("palw-tir/v1/prim={name}"))

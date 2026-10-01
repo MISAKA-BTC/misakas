@@ -226,6 +226,7 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
         on_token,
         None,
         crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+        &mut |row: &[i32]| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32,
     )
 }
 
@@ -259,6 +260,16 @@ pub fn a16_execute_in_storage_v1(
         on_token,
         drill_fault_leaf.map(A16DrillLieV1::tile_v1),
         kv_storage,
+        // The replay selector (RFC-0001 §A): the shipped argmax unless the caller scoped a claim's
+        // rule — a re-execution of a V4 claim's fold selects as that claim did.
+        &mut {
+            let mut row_index = 0u32;
+            move |row: &[i32]| {
+                let id = kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_replay_select_v1(row, row_index);
+                row_index += 1;
+                id
+            }
+        },
     )
 }
 
@@ -289,6 +300,7 @@ pub fn a16_execute_free_prompt_streaming_v1(
         on_token,
         None,
         crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+        &mut |row: &[i32]| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32,
     )
 }
 
@@ -321,6 +333,7 @@ pub fn a16_execute_free_prompt_streaming_with_drill_fault_v1(
         on_token,
         Some(A16DrillLieV1::tile_v1(leaf)),
         crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+        &mut |row: &[i32]| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32,
     )
 }
 
@@ -502,6 +515,9 @@ fn a16_execute_streaming_v1(
     on_token: &mut dyn FnMut(u32),
     drill: Option<A16DrillLieV1>,
     kv_storage: crate::engine_a16::KvStorageProfileV1,
+    // The id each selecting row feeds forward: the shipped argmax on the attempt lane, the job's
+    // decoder on the free-prompt lane (RFC-0001 §A.3, `palw_fp_decode_run_v1`).
+    select: &mut dyn FnMut(&[i32]) -> u32,
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
 
@@ -673,7 +689,7 @@ fn a16_execute_streaming_v1(
         position = end;
     }
     bracket("prefill done", prefill, &cache, &capture, &checkpoints);
-    let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
+    let mut next = select(&last_logits);
     generated.push(next);
     on_token(next);
     logits_rows.push(last_logits);
@@ -690,7 +706,7 @@ fn a16_execute_streaming_v1(
             fault.apply(call as u32, 0, &mut rows)?;
         }
         capture.push_call(profile, ctx, call as u32, 0, &rows).map_err(|e| format!("{e:?}"))?;
-        next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits) as u32;
+        next = select(&logits);
         generated.push(next);
         on_token(next);
         logits_rows.push(logits);
@@ -1330,29 +1346,43 @@ impl Qwen25A16Backend {
         // run. The pairing is DERIVED from the count (ADR-0074 Decision 7) rather than typed here,
         // so that a seat rebuilding this context for an early-stopping claim gets the run that
         // happened instead of the budget that was asked for.
-        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
-        // Built BEFORE the run and run under: `palw_fp_execution_root_v3` recomputes the court's
-        // root from this context, so an execution carried out under any other one commits a root
-        // nobody can reproduce.
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
-
+        //
+        // **RFC-0001 §A.3: the count is the job's DECODER's** (`palw_fp_decode_run_v1`): the budget
+        // for a V3 job, run once exactly as before; for a V4 job, where its pipeline stops — the
+        // capture runs at the budget and, if a stop sequence or an empty admitted set ended the
+        // answer earlier, once more at exactly that count. Each context is built BEFORE its run and
+        // run under: `palw_fp_execution_root_v3` recomputes the court's root from it, so an
+        // execution carried out under any other one commits a root nobody can reproduce.
         let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
-        let drill = drill_fault.map(|fault| A16DrillLieV1::of_fault_v1(&fault, &self.profile, &ctx)).transpose()?;
         // **The one capture path this family has** (ADR-0049 Decision F's probe, the checkpoint
         // serializer at the class's declared width, and the selecting-rows retention all live in
-        // it). The free-prompt lane differs from the attempt lane only in where its context and
-        // its tokens come from, so the run itself must not be a second implementation.
-        let run = a16_execute_streaming_v1(
-            &self.artifact,
-            &self.profile,
-            self.plan.as_ref(),
-            &ctx,
-            prompt_tokens,
-            self.step_ladder_cap(),
-            crate::legs::Base0CaptureKindV1::Fold,
+        // it). The free-prompt lane differs from the attempt lane only in where its context, its
+        // tokens and its selection rule come from, so the run itself must not be a second
+        // implementation.
+        let ((run, shape, ctx, drill), _stop) = kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_decode_run_v1(
+            job,
+            vocab as u32,
             on_token,
-            drill,
-            self.runtime_profile,
+            |count, select, stream| {
+                let shape = palw_fp_run_facts_for_executed_v1(job, count);
+                let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
+                let drill = drill_fault.map(|fault| A16DrillLieV1::of_fault_v1(&fault, &self.profile, &ctx)).transpose()?;
+                let run = a16_execute_streaming_v1(
+                    &self.artifact,
+                    &self.profile,
+                    self.plan.as_ref(),
+                    &ctx,
+                    prompt_tokens,
+                    self.step_ladder_cap(),
+                    crate::legs::Base0CaptureKindV1::Fold,
+                    stream,
+                    drill,
+                    self.runtime_profile,
+                    select,
+                )?;
+                Ok((run, shape, ctx, drill))
+            },
+            |(run, _, _, _)| run.generated_token_ids.as_slice(),
         )?;
         if let Some(lie) = drill {
             // What this instance serves for the job from now on replays the lie it committed.
@@ -1422,17 +1452,26 @@ impl Qwen25A16Backend {
         let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
         // An HONEST dense re-execution, in this instance's own cache representation: a fold is judged
         // by re-deriving it, and a re-derivation that reproduced a lie would be evidence of nothing.
-        let run = a16_execute_in_storage_v1(
-            &self.artifact,
-            &material.binding.shape_profile,
-            self.plan.as_ref(),
-            &material.binding.job_context,
-            &prompt,
-            self.materialize_cap(),
-            crate::legs::Base0CaptureKindV1::DenseTiles,
-            &mut |_| {},
-            None,
-            self.runtime_profile,
+        // **The committed ids are fed back** (RFC-0001 §A): the arithmetic is re-derived, the token
+        // choices are the fold's own — which is what every honest V3 fold committed anyway (the
+        // shipped argmax) and the only way to re-derive a V4 fold, whose tokens follow its job's
+        // pipeline. A wrong token choice is the decode close's question, not this conversion's.
+        let run = kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(
+            Some(kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpReplayRuleV1::forced(&material.generated_token_ids)),
+            || {
+                a16_execute_in_storage_v1(
+                    &self.artifact,
+                    &material.binding.shape_profile,
+                    self.plan.as_ref(),
+                    &material.binding.job_context,
+                    &prompt,
+                    self.materialize_cap(),
+                    crate::legs::Base0CaptureKindV1::DenseTiles,
+                    &mut |_| {},
+                    None,
+                    self.runtime_profile,
+                )
+            },
         )?;
         if run.binding.committed_execution_root != material.binding.committed_execution_root {
             return Err("the retained fold and its re-execution are not one execution".to_string());
@@ -2394,6 +2433,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     /// SEAT-S4: the authenticated `SC02` opening at this class's ladder — a dense capture proves the
     /// segment exactly, a held attempt's fold proves its span at the retained level.
     fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
+        // RFC-0001 §A: the executor replays its own committed ids (a V4 answer is not re-selected).
+        crate::fp_interval::base0_fp_executor_replay_v1(capture, || -> Result<Vec<u8>, String> {
         crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
             capture,
             seat_count,
@@ -2402,6 +2443,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             self.step_ladder_cap(),
         )
         .map_err(|e| e.to_string())
+        })
     }
 
     /// SEAT-S4: authenticated against `claim` and this seat's `job`, then the window replayed in STEPS
@@ -2816,6 +2858,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     }
 
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        // RFC-0001 §A: the executor replays its own committed ids (a V4 answer is not re-selected).
+        crate::fp_interval::base0_fp_executor_replay_v1(capture, || -> Result<Vec<u8>, String> {
         // **Two retention forms, one opening, and the class's map decides whether the history travels.**
         // ADR-0082 Decision 7: a FOLDED retention kept no tiles, so the span's leaf hashes are
         // re-derived by replaying the interval from its checkpoint with this family's own kernels —
@@ -2851,6 +2895,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
         }
         Ok(chunked)
+        })
     }
 
     fn verify_fp_interval_opening(
@@ -3866,6 +3911,8 @@ mod free_prompt_tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         }
     }
 
@@ -6405,6 +6452,8 @@ mod held_real_row_probe {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
 
         // ---- the producer: the fold, past the network's ladder ----------------------------
@@ -6665,6 +6714,8 @@ mod held_real_row_probe {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the held producer runs");
         let leaves = run.facts.step_leaf_count;
@@ -6767,6 +6818,8 @@ mod held_real_row_probe {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the held producer runs");
         let leaves = run.facts.step_leaf_count;
@@ -6876,6 +6929,8 @@ mod held_real_row_probe {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
         let run = honest.execute_free_prompt(&job, &prompt).expect("the held producer runs");
         let (capture, leaves) = (run.outcome.material.clone(), run.facts.step_leaf_count);
@@ -7119,6 +7174,8 @@ mod aheld_windowed_builder {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
         (job, prompt, ids)
     }
@@ -7952,6 +8009,7 @@ mod aheld_end_to_end {
             // ADR-0152 v3.1 §4-bis.9's decode-close door (`palw_offence_attribution`): read by a
             // decode-token close only, never by an attention bottom.
             true,
+            None,
         )
     }
 

@@ -1025,6 +1025,8 @@ mod tests {
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
 
         // Nothing served: the producer's default arm, and never `Valid`.
@@ -1185,6 +1187,140 @@ mod tests {
                     assert!(!line.contains(banned), "{file}:{} logs a prompt ({banned}): {line}", number + 1);
                 }
             }
+        }
+    }
+}
+
+/// **RFC-0001 §A on the panel (G5)**: the golden vectors through the rule a seat scopes around one
+/// verification, and a V4 claim on the floor verified through the backend method the panel calls
+/// (`verify_fp_interval_opening_under_job_v1`, the claim's job and committed answer) after the V4
+/// answer passes the stop rule the panel checks first (`decode_answer_stop_v4`).
+#[cfg(test)]
+mod fp_job_v4_panel_tests {
+    use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwFpIntervalVerdictV1};
+    use kaspa_consensus_core::palw_decode_pipeline_v4::{
+        DecodeConfigV4, PALW_DECODE_V4_BIAS_BAN_Q, PalwFpDecoderV1, PalwFpReplayRuleV1, decode_answer_stop_v4, decode_select_v4,
+        palw_fp_replay_select_v1, palw_fp_with_replay_rule_v1,
+    };
+    use kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2;
+    use kaspa_consensus_core::palw_freeprompt_v3::{PalwFreePromptJobV3, fp_job_id_v3};
+    use kaspa_hashes::Hash64;
+
+    const PROCESSOR: &str = include_str!("../../consensus-vectors/fp-v4/processor_order.json");
+
+    fn floor() -> misaka_palw_base0::backend::Base0Backend {
+        use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .expect("the shipped court");
+        let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is registered");
+        let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
+        misaka_palw_base0::backend::Base0Backend::new(
+            resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves"),
+        )
+    }
+
+    fn job(backend: &misaka_palw_base0::backend::Base0Backend, prompt: &[u32], limit: u32) -> PalwFreePromptJobV3 {
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+        PalwFreePromptJobV3 {
+            version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: backend.profile().shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt),
+            prompt_tokens: prompt.len() as u32,
+            decode_token_limit: limit,
+            max_context_tokens: backend.profile().n_ctx,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: None,
+            v5: None,
+        }
+    }
+
+    #[test]
+    fn the_panel_replays_the_golden_vectors_under_the_claims_rule() {
+        let seat = |config: &DecodeConfigV4,
+                    sampling: &PalwDecodeSamplingV2,
+                    generated: &[u32],
+                    row: &[i32],
+                    admitted: &dyn Fn(usize) -> bool| {
+            if (0..row.len()).any(|lane| !admitted(lane)) {
+                return decode_select_v4(config, sampling, generated, row, admitted);
+            }
+            let claim =
+                PalwFreePromptJobV3 { temperature_q: sampling.temperature_q, sampling_seed: sampling.seed, ..job(&floor(), &[1], 8) }
+                    .into_v4(config.clone());
+            let expected = decode_select_v4(config, sampling, generated, row, &|_| true)?;
+            let replayed = palw_fp_with_replay_rule_v1(PalwFpReplayRuleV1::of_job(&claim, generated), || {
+                palw_fp_replay_select_v1(row, generated.len() as u32)
+            });
+            assert_eq!(replayed as usize, expected, "the panel's scoped rule is the processor");
+            Some(expected)
+        };
+        let run = |config: &DecodeConfigV4, limit: u32, rows: &[Vec<i32>]| {
+            let mut decoder = PalwFpDecoderV1::v4(config.clone(), PalwDecodeSamplingV2::GREEDY, limit);
+            let fed: Vec<u32> = rows.iter().map(|row| decoder.select(row)).collect();
+            (fed, decoder.generated().to_vec(), decoder.stop())
+        };
+        let n = kaspa_consensus_core::palw_fp_v4_vectors::fp_v4_check_processor_vectors(PROCESSOR, &seat, &run)
+            .expect("processor_order.json");
+        assert!(n > 100);
+    }
+
+    #[test]
+    fn a_v4_claim_verifies_through_the_method_the_panel_calls() {
+        let backend = floor();
+        let prompt: Vec<u32> = vec![7, 11, 13, 17];
+        let usize_prompt: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+        let v3 = job(&backend, &prompt, 6);
+        let greedy = backend.execute_free_prompt(&v3, &usize_prompt).expect("the greedy run");
+        let claim_job = v3.into_v4(DecodeConfigV4 {
+            logit_bias: vec![(greedy.output_token_ids[0], PALW_DECODE_V4_BIAS_BAN_Q)],
+            repeat_penalty_q: 262_144,
+            penalty_window: 16,
+            ..DecodeConfigV4::NOOP
+        });
+        let run = backend.execute_free_prompt(&claim_job, &usize_prompt).expect("the V4 run");
+        decode_answer_stop_v4(claim_job.decode.as_ref().unwrap(), claim_job.decode_token_limit, u32::MAX, &run.output_token_ids)
+            .expect("the panel's stop check passes an honest answer");
+        let roots = PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            anchor: fp_job_id_v3(&claim_job),
+            attempt_draw: None,
+            output_root: None,
+            job_pin: None,
+        };
+        let count = backend.fp_interval_count_for(claim_job.prompt_tokens, run.facts.decode_tokens_executed).expect("intervals");
+        for index in 0..count {
+            let opening = backend.open_fp_interval(&run.outcome.material, index, &prompt).expect("opens");
+            backend.fp_forget_seat_state_v1();
+            if let Some((_, covered, _)) = misaka_palw_base0::fp_interval::base0_fp_interval_opening_anchor_v1(&opening) {
+                let ctx = misaka_palw_base0::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).unwrap().binding.job_context;
+                backend.checkpoint_root_for_context_v1(&ctx, &prompt, &run.output_token_ids, covered).expect("recomputes");
+            }
+            assert_eq!(
+                backend.verify_fp_interval_opening_under_job_v1(
+                    &opening,
+                    roots,
+                    index,
+                    &prompt,
+                    run.facts.step_leaf_count,
+                    &claim_job,
+                    &run.output_token_ids
+                ),
+                PalwFpIntervalVerdictV1::Valid,
+                "interval {index}"
+            );
         }
     }
 }

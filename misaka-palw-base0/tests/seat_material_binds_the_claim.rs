@@ -595,6 +595,8 @@ fn fp_job(class: &PalwShapeProfileV3, form: PalwPromptIdsFormV1, prompt: &[usize
         prompt_mode,
         sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
         temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        decode: None,
+        v5: None,
     };
     FpQuestion { job, ids, form }
 }

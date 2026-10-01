@@ -113,6 +113,8 @@ const PALW_PANEL: &str = "palw-panel";
 mod held_court;
 /// RFC-0002 Phase F (F6, node half): an IR class's court close.
 mod tir_court;
+/// RFC-0002 F7's node side: an IR class's history dissection, played.
+mod tir_dissect;
 #[cfg(test)]
 mod tir_court_e2e;
 /// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
@@ -2078,6 +2080,12 @@ pub(crate) fn palw_da_unit_answer_v1(
             return Err("an IR claim answers no held unit: the held regime's units are the legacy families' (RFC-0002 Phase F)".into());
         }
         PalwDaUnitV1::Held(missing) => missing,
+        // RFC-0002 Phase F's second IR fence (dormant): an IR step leaf is answered by the IR
+        // responder (`kaspa_consensus_core::palw_tir_court_v1::build_tir_step_leaf_disclosure_v1` over
+        // the claim's IR evidence store), which the node lane lands before the fence is armed.
+        PalwDaUnitV1::TirStepLeaf { index } => {
+            return Err(format!("IR step leaf {index}: answered by the IR responder, not the capture path (RFC-0002 Phase F)"));
+        }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
         (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(
@@ -2201,6 +2209,35 @@ enum CloseFromServedV1 {
     Missing(Vec<u32>),
     NotThisLane,
     Refused(String),
+}
+
+/// **`verify_material` of a free-prompt capture under its claim's decode rule** (RFC-0001 §A, G5):
+/// the capture's own job — bound to the claim by the id and pin the roots carry — decides the
+/// selection rule the seat rules check (T4): the shipped argmax for a V3 job, the job's pipeline over
+/// the capture's committed answer for a V4 job. Bytes that are not an FP capture are verified as
+/// they are, exactly as before.
+fn fp_verify_material_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    bytes: &[u8],
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
+) -> kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1 {
+    match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes, prompt_ids_form) {
+        Some(payload) => fp_verify_capture_under_job_v1(backend, &payload.material.job, &payload.capture, roots),
+        None => backend.verify_material(bytes, roots),
+    }
+}
+
+/// [`fp_verify_material_v1`] for a capture already decoded: `job` is the claim's.
+fn fp_verify_capture_under_job_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    capture: &[u8],
+    roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
+) -> kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1 {
+    let committed = misaka_palw_base0::fp_interval::base0_fp_capture_committed_ids_v1(capture).unwrap_or_default();
+    let rule = kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(job, &committed);
+    kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, || backend.verify_material(capture, roots))
 }
 
 fn fp_capture_view(
@@ -3164,10 +3201,12 @@ pub(crate) fn palw_disclosure_answer_due_v1(duty: &kaspa_consensus_core::palw_pr
 fn court_move_round_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2) -> u32 {
     const DISSECTION: u32 = 1 << 31;
     const ROOT_CLAIM: u32 = 1 << 30;
-    match &duty.dissection {
-        Some(phase) => DISSECTION | phase.round(),
-        None if duty.fused_class && duty.terminal_index.is_some() => ROOT_CLAIM,
-        None => duty.round,
+    match (&duty.dissection, &duty.tir_dissection) {
+        (Some(phase), _) => DISSECTION | phase.round(),
+        // RFC-0002 F7: an IR class's phase, beside the session — keyed as the legacy phase is.
+        (None, Some(phase)) => DISSECTION | phase.round(),
+        (None, None) if duty.fused_class && duty.terminal_index.is_some() => ROOT_CLAIM,
+        (None, None) => duty.round,
     }
 }
 /// Submission attempts per assembled object before giving up (each tick retries).
@@ -6362,7 +6401,15 @@ impl PalwPanelService {
             prompt_mode: PALW_FP_PROMPT_MODE_CANONICAL,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
+        // **RFC-0001 §A.4: past `Params::palw_fp_decode_rules` every new free-prompt job is FP Job
+        // V4** — the network's own canonical job too, as the no-op V4 (it decodes exactly what the
+        // V3 job decodes, with the same work). Below the fence it stays V3, byte for byte.
+        if self.consensus_config.params.palw_fp_decode_rules_active_at(current_daa) {
+            job = job.into_v4(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+        }
         // The anchor is a function of the job's own facts, not of its prompt — so the prompt
         // can be derived from it and then written into the job.
         let (canonical_ctx, prompt) = backend.job_for_anchor(fp_canonical_anchor_v1(&job))?;
@@ -7594,7 +7641,9 @@ impl PalwPanelService {
                     materials: &materials,
                     open_claims: &HashMap::new(),
                 };
-                if held_court.routes_v1(&held_host, duty, current_daa) {
+                // An IR class's history dissection is F7's (`tir_dissect`, below) — never the attention
+                // held route's, whose windowed builders an IR program has none of.
+                if session.palw_tir_class_record_v1(duty.class_id).is_none() && held_court.routes_v1(&held_host, duty, current_daa) {
                     held_duties.push(duty.clone());
                     continue;
                 }
@@ -7689,7 +7738,7 @@ impl PalwPanelService {
                     .get(&duty.claim_id)
                     .map(|pool| {
                         pool.iter().any(|b| {
-                            backend.verify_material(&fp_capture_view(b, self.class_prompt_ids_form(duty.class_id)), roots)
+                            fp_verify_material_v1(backend.as_ref(), b, self.class_prompt_ids_form(duty.class_id), roots)
                                 == PalwMaterialVerdictV1::Matches
                         })
                     })
@@ -7697,7 +7746,7 @@ impl PalwPanelService {
                 let mut accused_held = pool_has_it;
                 if !accused_held
                     && let Some(bytes) = self.retained_capture(&duty.claim_id)
-                    && backend.verify_material(&fp_capture_view(&bytes, self.class_prompt_ids_form(duty.class_id)), roots)
+                    && fp_verify_material_v1(backend.as_ref(), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
                         == PalwMaterialVerdictV1::Matches
                 {
                     info!(
@@ -7744,7 +7793,7 @@ impl PalwPanelService {
                     };
                     match remade {
                         Some(bytes)
-                            if backend.verify_material(&fp_capture_view(&bytes, self.class_prompt_ids_form(duty.class_id)), roots)
+                            if fp_verify_material_v1(backend.as_ref(), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
                                 == PalwMaterialVerdictV1::Matches =>
                         {
                             info!(
@@ -7871,6 +7920,74 @@ impl PalwPanelService {
                     trace!("[{PALW_PANEL}] session {} needs a move but this node holds no matching capture", duty.session_id);
                     continue;
                 };
+                // ---- RFC-0002 F7: an IR class's history dissection ---------------------------------
+                //
+                // At a dissected leaf of an IR class the responder owes the IR root claim, then a round
+                // per disclosure; the challenger names a child per round; at the bottom a close finishes
+                // it (`palw_panel::tir_dissect`). Built off the tick from the party's own capture (the
+                // responder's is the claim's; a challenger's its own execution) and, for the bottom, the
+                // ACCUSED capture; signed here, and queued as every court move is.
+                if let Some(mv) = tir_dissect::palw_tir_dissect_move_of_duty_v1(duty)
+                    && let Some(tir) = self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root)
+                {
+                    let tir = match tir {
+                        Ok(tir) => tir,
+                        Err(why) => {
+                            *court_stalls.entry("the IR backend does not build for the class").or_default() += 1;
+                            warn!("[{PALW_PANEL}] session {}: {why}", duty.session_id);
+                            continue;
+                        }
+                    };
+                    let Some((rules, arity)) = self.tir_dissection_rules_v1(&tir, duty.class_id, current_daa) else {
+                        *court_stalls.entry("no V2 court parameters for an IR dissection").or_default() += 1;
+                        continue;
+                    };
+                    let name = tir_dissect::palw_tir_dissect_move_name_v1(mv);
+                    let (own, accused, task_duty) = (capture.to_vec(), accused_capture.as_deref().map(|c| c.to_vec()), duty.clone());
+                    let built = tokio::task::spawn_blocking(move || {
+                        tir_dissect::palw_tir_dissect_build_v1(&tir, &task_duty, mv, &own, accused.as_deref(), &rules)
+                    })
+                    .await;
+                    let built = match built {
+                        Ok(Ok(built)) => built,
+                        Ok(Err(why)) => {
+                            *court_stalls.entry("an IR dissection move does not build").or_default() += 1;
+                            crate::palw_backends::note_throttled_v1(&format!("tir-dissect-{}-{name}", duty.session_id), || {
+                                format!("[{PALW_PANEL}] session {}: the IR dissection's {name} does not build: {why}", duty.session_id)
+                            });
+                            continue;
+                        }
+                        Err(_) => {
+                            *court_stalls.entry("the IR dissection move's task did not finish").or_default() += 1;
+                            continue;
+                        }
+                    };
+                    let object = tir_dissect::palw_tir_dissect_object_v1(
+                        built,
+                        duty,
+                        arity,
+                        &|message, context| self.sign(message, context),
+                        &|sid, proof| session.palw_court_close_verdict_v2(sid, proof),
+                    );
+                    let object = match object {
+                        Ok(Some(object)) => object,
+                        Ok(None) => {
+                            *court_stalls.entry("the IR bottom does not win this party's side").or_default() += 1;
+                            continue;
+                        }
+                        Err(why) => {
+                            *court_stalls.entry("an IR dissection move cannot be filed").or_default() += 1;
+                            crate::palw_backends::note_throttled_v1(&format!("tir-dissect-{}-{name}", duty.session_id), || {
+                                format!("[{PALW_PANEL}] session {}: the IR dissection's {name}: {why}", duty.session_id)
+                            });
+                            continue;
+                        }
+                    };
+                    info!("[{PALW_PANEL}] session {}: filing the IR dissection's {name} (round {})", duty.session_id, duty.round);
+                    court_due.insert((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
+                    court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
+                    continue;
+                }
                 // ---- ADR-0093 as built: the fused site's dissection -------------------------------
                 //
                 // At a fused terminal the ladder's close is not the move: the responder owes a ROOT
@@ -9525,6 +9642,26 @@ impl PalwPanelService {
                             // early. Built at the CEILING it excluded every `EndOfGeneration`
                             // claim from this lane by making its surplus interval indices
                             // unopenable by construction.
+                            // **RFC-0001 §A.3 step 7, before any interval is replayed**: a V4 answer
+                            // must end exactly where its stop rule ends it (or run its whole budget)
+                            // and commit no banned id. Pure in the job and the answer, which the chain
+                            // already bound; an answer that fails it is not one this seat vouches for.
+                            if let Some(output_ids) = output_ids.as_ref()
+                                && let Some(decode) = material.job.decode.as_ref().filter(|_| material.job.is_v4())
+                                && let Err(why) = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(
+                                    decode,
+                                    material.job.decode_token_limit,
+                                    u32::MAX,
+                                    output_ids,
+                                )
+                            {
+                                warn!(
+                                    "[{PALW_PANEL}] claim {}: the V4 answer does not stop where its job's stop rule ends it ({why}) — \
+                                     filing nothing",
+                                    duty.claim_id
+                                );
+                                break 'verdict None;
+                            }
                             if let Some(output_ids) = output_ids
                                 && let Some(ctx) = resolved
                                     .fp_job_context_for_executed_v1(&material.job, output_ids.len().min(u32::MAX as usize) as u32)
@@ -9539,6 +9676,7 @@ impl PalwPanelService {
                                         &prompt_ids,
                                         &output_ids,
                                         &interval_openings,
+                                        Some(&material.job),
                                     )
                                     .await
                                 // SEAT-R: the sampled intervals find faults; they license nothing.
@@ -9624,7 +9762,10 @@ impl PalwPanelService {
                                     // ADR-0152 v3.1 J-1 (the 3a review's L-b): the pin the claim recorded.
                                     job_pin: duty.fp_job_pin_v1(),
                                 };
-                                if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {
+                                // RFC-0001 §A: under the claim's decode rule (its job's, for a V4 claim).
+                                let fp_verdict =
+                                    fp_verify_capture_under_job_v1(backend.as_ref(), &payload.material.job, &payload.capture, roots);
+                                if fp_verdict != PalwMaterialVerdictV1::Matches {
                                     // P2-8, J1 auto: the claim's committed execution under another job?
                                     self.j1_auto_probe_v1(
                                         &session,
@@ -10420,6 +10561,7 @@ impl PalwPanelService {
                                     &prompt_ids,
                                     &output_ids,
                                     &interval_openings,
+                                    None,
                                 )
                                 .await
                             // SEAT-R: the sampled intervals find faults; they license nothing.
@@ -12240,8 +12382,10 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::TirShardCourtAccused { .. } => "TirShardCourtAccused",
         PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
+        PalwConsensusObjectV2::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
+        PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
         PalwConsensusObjectV2::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared; the chain drops each until its owner lands it, and no
         // path in this node builds one yet.
@@ -13346,6 +13490,10 @@ impl PalwPanelService {
         prompt_ids: &[u32],
         output_ids: &[u32],
         openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        // RFC-0001 §A (G5): a free-prompt claim's JOB — its id is the claim's, so its decode rule is
+        // the claim's — and `None` for an attempt. A V4 job's intervals are replayed under its
+        // pipeline over `output_ids`; a V3 job keeps the V3 verifier byte for byte.
+        fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
     ) -> Option<PalwReceiptVerdictV2> {
         use crate::palw_fp_seat::PalwFpChainCountsV1;
         use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
@@ -13586,9 +13734,16 @@ impl PalwPanelService {
                 let (candidate, prompt_owned) = (bytes.clone(), prompt_ids.to_vec());
                 let work_leaves = duty.work_leaves;
                 let interval = *index;
-                let Ok((returned, verdict)) =
-                    offload(backend, move |b| b.verify_fp_interval_opening(&candidate, roots, interval, &prompt_owned, work_leaves))
-                        .await
+                // RFC-0001 §A (G5): a V4 claim's rows are replayed under the claim's rule — its job's
+                // pipeline over the committed answer — and a V3 claim's under the V3 verifier.
+                let v4 = fp_job.filter(|job| job.is_v4()).cloned().map(|job| (job, output_ids.to_vec()));
+                let Ok((returned, verdict)) = offload(backend, move |b| match &v4 {
+                    Some((job, answer)) => {
+                        b.verify_fp_interval_opening_under_job_v1(&candidate, roots, interval, &prompt_owned, work_leaves, job, answer)
+                    }
+                    None => b.verify_fp_interval_opening(&candidate, roots, interval, &prompt_owned, work_leaves),
+                })
+                .await
                 else {
                     return None;
                 };
@@ -18191,6 +18346,8 @@ mod seat_s_tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            v5: None,
         };
         (job, ids)
     }
@@ -21140,5 +21297,81 @@ mod readiness_memory_and_stuck_carrier_tests {
         let write_back = tail.find("if !held {\n                    chained_funding = funding;").expect("the write-back");
         assert!(close < write_back, "a tick that sent nothing is held again before the chain is written back");
         assert!(tail[close..write_back].contains("inflight = MAX_INFLIGHT_CARRIERS;\n                        held = true;"));
+    }
+}
+
+/// **RFC-0001 §A (G5) on the material route**: a free-prompt capture is checked under its claim's
+/// decode rule — a V4 claim's penalized answer passes the seat rules only under its job's pipeline,
+/// never under the shipped argmax — and a V3 capture is checked exactly as before.
+#[cfg(test)]
+mod fp_job_v4_material_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwMaterialVerdictV1};
+    use kaspa_consensus_core::palw_decode_pipeline_v4::{DecodeConfigV4, PALW_DECODE_V4_BIAS_BAN_Q};
+    use kaspa_consensus_core::palw_freeprompt_v3::{PalwFreePromptJobV3, fp_job_id_v3, palw_fp_capture_encode_v1};
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+
+    #[test]
+    fn a_v4_capture_verifies_under_its_jobs_rule_and_a_v3_capture_as_before() {
+        use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .unwrap();
+        let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").unwrap();
+        let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().unwrap();
+        let backend = misaka_palw_base0::backend::Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).unwrap());
+        let prompt: Vec<u32> = vec![5, 9, 21];
+        let usize_prompt: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+        let v3 = PalwFreePromptJobV3 {
+            version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: backend.profile().shape_profile_id(),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
+                0,
+            ),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt),
+            prompt_tokens: prompt.len() as u32,
+            decode_token_limit: 6,
+            max_context_tokens: backend.profile().n_ctx,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: None,
+            v5: None,
+        };
+        let greedy = backend.execute_free_prompt(&v3, &usize_prompt).unwrap();
+        let v4 = v3.clone().into_v4(DecodeConfigV4 {
+            logit_bias: vec![(greedy.output_token_ids[0], PALW_DECODE_V4_BIAS_BAN_Q)],
+            repeat_penalty_q: 262_144,
+            penalty_window: 16,
+            ..DecodeConfigV4::NOOP
+        });
+        for (job, penalized) in [(v3, false), (v4, true)] {
+            let run = backend.execute_free_prompt(&job, &usize_prompt).unwrap();
+            let roots = PalwClaimRootsV1 {
+                execution_root: run.outcome.execution_root,
+                trace_root: run.outcome.trace_root,
+                anchor: fp_job_id_v3(&job),
+                attempt_draw: None,
+                output_root: None,
+                job_pin: None,
+            };
+            let bytes = palw_fp_capture_encode_v1(&job, &prompt, &run.outcome.material);
+            assert_eq!(fp_verify_material_v1(&backend, &bytes, PalwPromptIdsFormV1::Flat, roots), PalwMaterialVerdictV1::Matches);
+            let unscoped = backend.verify_material(&run.outcome.material, roots);
+            if penalized {
+                assert_ne!(unscoped, PalwMaterialVerdictV1::Matches, "the argmax cannot vouch for a penalized answer");
+            } else {
+                assert_eq!(unscoped, PalwMaterialVerdictV1::Matches, "a V3 capture is checked as before");
+            }
+        }
     }
 }

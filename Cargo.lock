@@ -6248,6 +6248,7 @@ dependencies = [
  "blake2b_simd",
  "borsh",
  "misaka-palw-tir",
+ "serde_json",
  "thiserror 1.0.64",
 ]
 
