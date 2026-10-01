@@ -303,31 +303,33 @@ pub fn tir_window_covers_context_v1(meta: &serde_json::Value, max_context: u32) 
     }
 }
 
-/// **Write `input`'s program and tensors to `output` as a class** — under the logits scheme `choice`
-/// names ([`tir_program_with_scheme_v1`]) and a declared layout: `choice` tiled, the logits at the
-/// widest divisor of 4,096 lanes whose terminal close the chain can carry (PALW-TIR-38), its
-/// checkpoint interval the widest admission v10 accepts (halved from `min_j C_j` down to 1) — with
-/// `model_id` recorded in the container's provenance when given. The inventory root is the input's (the scheme
-/// and the layout enter the class id, never the root).
-pub fn tir_declare_layout_v1(
+/// **The layout chosen for a program, and what the registration gate says of it** — a layout [`TirLayoutChoiceV1`]
+/// derives (the logits tile searched, the checkpoint interval halved from `min_j C_j`) until admission v10
+/// admits the class, or the widest one's refusal where none is. `declare-layout` writes it into a container;
+/// the model preflight asks it of a program with no weights (the artifact root a placeholder, the leaf count an
+/// estimate: neither enters the gate's verdict beyond the close's path length).
+#[derive(Clone, Debug)]
+pub struct TirChosenLayoutV1 {
+    pub layout: PalwTirLayoutV1,
+    pub admission: Result<(), String>,
+}
+
+pub fn tir_choose_layout_v1(
     params: &Params,
     bundle: &PalwConsensusParamsV2,
-    input: &Path,
-    output: &Path,
+    program: &TirProgramV1,
+    tokenizer_id: Hash64,
+    artifact_root: Hash64,
+    leaf_count: u32,
     choice: &TirLayoutChoiceV1,
-    model_id: Option<&str>,
-) -> Result<TirDeclaredLayoutV1, String> {
-    let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(input)?;
-    let container = artifact.container();
-    let program = &tir_program_with_scheme_v1(&container.program, choice.logits_scheme)?;
+) -> Result<TirChosenLayoutV1, String> {
     let program_bytes = program.encode();
-    let (artifact_root, leaf_count) = artifact.inventory_root()?;
     let carriable = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&bundle.court);
     let class_of = |layout: &PalwTirLayoutV1| PalwTirClassV1 {
         version: PALW_TIR_CLASS_VERSION_V1,
         program: program_bytes.clone(),
         layout: layout.clone(),
-        tokenizer_id: Hash64::from_bytes(container.header.tokenizer_id),
+        tokenizer_id,
     };
     // The logits tiles to try: the one asked for, else — under the tiled scheme — every divisor of
     // the scheme's 4,096 lanes, widest first, until the terminal close is one the chain can carry.
@@ -369,6 +371,43 @@ pub fn tir_declare_layout_v1(
     }
     // None admitted: keep the widest, whose refusal is the one an operator acts on.
     let (layout, admission) = found.or(first).ok_or("no layout to try")?;
+    Ok(TirChosenLayoutV1 { layout, admission })
+}
+
+/// **Write `input`'s program and tensors to `output` as a class** — under the logits scheme `choice`
+/// names ([`tir_program_with_scheme_v1`]) and a declared layout: `choice` tiled, the logits at the
+/// widest divisor of 4,096 lanes whose terminal close the chain can carry (PALW-TIR-38), its
+/// checkpoint interval the widest admission v10 accepts (halved from `min_j C_j` down to 1) — with
+/// `model_id` recorded in the container's provenance when given. The inventory root is the input's (the scheme
+/// and the layout enter the class id, never the root).
+pub fn tir_declare_layout_v1(
+    params: &Params,
+    bundle: &PalwConsensusParamsV2,
+    input: &Path,
+    output: &Path,
+    choice: &TirLayoutChoiceV1,
+    model_id: Option<&str>,
+) -> Result<TirDeclaredLayoutV1, String> {
+    let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(input)?;
+    let container = artifact.container();
+    let program = &tir_program_with_scheme_v1(&container.program, choice.logits_scheme)?;
+    let (artifact_root, leaf_count) = artifact.inventory_root()?;
+    let chosen = tir_choose_layout_v1(
+        params,
+        bundle,
+        program,
+        Hash64::from_bytes(container.header.tokenizer_id),
+        artifact_root,
+        leaf_count,
+        choice,
+    )?;
+    let (layout, admission) = (chosen.layout, chosen.admission);
+    let class_of = |layout: &PalwTirLayoutV1| PalwTirClassV1 {
+        version: PALW_TIR_CLASS_VERSION_V1,
+        program: program.encode(),
+        layout: layout.clone(),
+        tokenizer_id: Hash64::from_bytes(container.header.tokenizer_id),
+    };
     let mut meta = serde_json::from_str::<serde_json::Value>(&container.header.meta).unwrap_or_else(|_| serde_json::json!({}));
     tir_calibration_covers_context_v1(program, &meta, layout.max_context)?;
     tir_window_covers_context_v1(&meta, layout.max_context)?;

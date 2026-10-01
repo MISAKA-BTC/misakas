@@ -29,6 +29,7 @@ USAGE:
     palw-class pack build|verify|show ...   runtime packs: build one from a model, verify one, show one (palw-class pack for its usage)
     palw-class ledger    --network <id>
     palw-class inspect   --network <id> <artifact-path>
+    palw-class preflight [--network <id>] <model>  [--depth headers|shape] [--height <DAA>] [--json] [more: see below]
     palw-class preflight --network <id> <artifact-path> [--model-id <model-id>]
     palw-class bind-tokenizer --network <id> --tokenizer <tokenizer.json> --out <path> [--model-id <model-id>] <artifact-path>
     palw-class measure   --network <id> [--name <model name>] [--replay-ms <ms> --measured-on <host>]
@@ -42,6 +43,19 @@ USAGE:
     palw-class close-sizes --network <id> [--anchor <hex>] [--json] <artifact-path>
     palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
                          [--logits-scheme tiled|flat] [--logits-tile N] [--model-id <model-id>] <lowered.palwtir>
+
+`preflight <model>` (RFC-0002 Part II §II.2) answers, for a model nobody has downloaded yet, whether it can be
+registered and what is missing, reading the HEADERS only: a Hugging Face directory (config.json, the shard
+index and each shard's header), a config.json (with --headers <dir> of header dumps), or a .gguf file (its
+metadata and tensor table). The first line says which mode ran. It judges three stages — convert, register,
+mine — each ok, blocked or unknown, with a stable code, the numbers and what exists instead per blocker.
+--depth headers stops at the convert stage; shape (the default) adds the chain's conditions on --network (default
+testnet-12) at --height (default: the first height at which every scheduled fence is in force): admission, the
+court window, the canonical job, the fences, the seat's memory (--seat-memory-gib) and the lifecycle forecast.
+--quant-format <file.json> (repeatable) adds quant-format descriptors, --adapter <file.json> a data adapter,
+--max-context N / --tile-len N / --h-chunk N the layout it is judged at, --held the held history bound,
+--json the machine form (misaka.palw.preflight.v1: no timestamp, no path). Exits 0 when nothing blocks, 2 when
+something does. Given a .palwtir artifact, `preflight` runs the artifact admission below instead.
 
 `drill-leaves` (RFC-0002 Phase F, drill D-F2) prints, for an IR class's attempt job — its canonical
 prefill, --decode tokens (1 where the network draws one forward, the default; 2 otherwise) — the first
@@ -183,6 +197,17 @@ fn run(args: &[String]) -> Result<(), String> {
             inspect(&view, &path)
         }
         "preflight" => {
+            // A model (a directory, a config.json, a .gguf) is judged from its headers; a PALWTIR1 artifact by the
+            // artifact admission, as before.
+            let first = args.iter().find(|a| !a.starts_with("--") && std::path::Path::new(a.as_str()).exists()).cloned();
+            if let Some(p) = &first
+                && !matches!(misaka_palw_sdk::preflight::detect(std::path::Path::new(p)), Ok(misaka_palw_sdk::preflight::InputKind::Artifact))
+            {
+                return match model_preflight(network.as_deref(), &mut args)? {
+                    true => Ok(()),
+                    false => std::process::exit(2),
+                };
+            }
             let wanted = take_flag(&mut args, "--model-id");
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
             let path = PathBuf::from(args.first().ok_or(USAGE)?);
@@ -302,6 +327,54 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         _ => Err(USAGE.to_string()),
     }
+}
+
+/// `preflight <model>` (RFC-0002 Part II §II.2): returns whether nothing blocks.
+fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool, String> {
+    use misaka_palw_sdk::preflight::{Depth, Options};
+    let number = |v: Option<String>, name: &str| -> Result<Option<u64>, String> {
+        v.map(|v| v.replace('_', "").parse::<u64>().map_err(|e| format!("{name} {v}: {e}"))).transpose()
+    };
+    let depth = match take_flag(args, "--depth") {
+        Some(d) => Depth::parse(&d).ok_or_else(|| format!("--depth {d}: headers, shape or full"))?,
+        None => Depth::Shape,
+    };
+    let height = number(take_flag(args, "--height"), "--height")?;
+    let max_context = number(take_flag(args, "--max-context"), "--max-context")?.map(|v| v as u32);
+    let tile_len = number(take_flag(args, "--tile-len"), "--tile-len")?.map(|v| v as u32);
+    let h_chunk = number(take_flag(args, "--h-chunk"), "--h-chunk")?.map(|v| v as u32);
+    let seat_memory_gib = number(take_flag(args, "--seat-memory-gib"), "--seat-memory-gib")?;
+    let headers = take_flag(args, "--headers").map(PathBuf::from);
+    let adapter = take_flag(args, "--adapter").map(PathBuf::from);
+    let mut quant_formats = Vec::new();
+    while let Some(f) = take_flag(args, "--quant-format") {
+        quant_formats.push(PathBuf::from(f));
+    }
+    let held = args.iter().any(|a| a == "--held");
+    let json = args.iter().any(|a| a == "--json");
+    args.retain(|a| a != "--held" && a != "--json");
+    let path = PathBuf::from(args.first().ok_or(USAGE)?);
+    let defaults = Options::default();
+    let opts = Options {
+        depth,
+        network: Some(network.unwrap_or("testnet-12").to_string()),
+        height,
+        quant_formats,
+        adapter,
+        headers,
+        max_context,
+        tile_len: tile_len.unwrap_or(defaults.tile_len),
+        h_chunk: h_chunk.unwrap_or(defaults.h_chunk),
+        held,
+        seat_memory_gib,
+    };
+    let report = misaka_palw_sdk::preflight::run(&path, &opts)?;
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        print!("{}", report.render());
+    }
+    Ok(report.registrable())
 }
 
 /// `check-architecture`'s switches.

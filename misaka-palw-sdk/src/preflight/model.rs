@@ -1,0 +1,826 @@
+//! **The convert stage of a preflight** (RFC-0002 Part II §II.2.3 items 1–5): the generic frontend run over
+//! the headers — features, scope, storage and its descriptors, the tensor check against the program's
+//! parameters, the artifact estimate — and the blockers each of them raises.
+//!
+//! Nothing here reads tensor data except the few small role tensors a described format reads for its own
+//! parameters (`DescribedSource::new`), and only when they are on disk.
+
+use super::source::{HeaderSource, InputKind, Source};
+use super::{Blocker, Options, Stage};
+use misaka_palw_tir::TirProgramV1;
+use misaka_palw_tir_lower::fidelity::{Prepared, prepare_spec};
+use misaka_palw_tir_lower::gguf::GgufFile;
+use misaka_palw_tir_lower::hf_schema::{AdapterChoice, MissingItem, ReadOptions, TensorIndex, read_model_with};
+use misaka_palw_tir_lower::lower::LowerOpts;
+use misaka_palw_tir_lower::model::{
+    ArchitectureReport, FeatureReport, FeatureScope, FeatureStatus, ReportResult, analyze_with, spec_digest,
+};
+use misaka_palw_tir_lower::quantfmt::{QuantRegistry, known_undescribed_method};
+use misaka_palw_tir_lower::weights::{check_names, check_weights};
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// What the model is, as the frontend read it.
+#[derive(Clone, Debug, Serialize)]
+pub struct ModelInfo {
+    /// Informational only: nothing is selected by it.
+    pub model_type: Option<String>,
+    pub architectures: Vec<String>,
+    /// `A` (the standard keys), `B` (a data adapter maps the rest), `C` (a capability is missing).
+    pub level: String,
+    pub adapter: misaka_palw_tir_lower::hf_schema::AdapterSource,
+    pub features: Vec<FeatureReport>,
+    pub assumed_defaults: Vec<String>,
+    pub unmapped_config_keys: Vec<String>,
+    pub missing: Vec<MissingItem>,
+    pub new_consensus_primitive_required: bool,
+    pub new_court_kernel_required: bool,
+    pub lowerable: bool,
+    pub reason: Option<String>,
+    /// The identity of the spec the lowering starts from (equal digests are the same function whatever the names).
+    pub spec_digest: Option<String>,
+    /// The history bound the program was lowered with.
+    pub history_bound: u32,
+}
+
+/// One storage type of the checkpoint and what reads it.
+#[derive(Clone, Debug, Serialize)]
+pub struct StorageRow {
+    /// A safetensors dtype (`BF16`, `I32`, `F8_E4M3`) or a GGUF type (`Q4_K`, `type40`).
+    pub storage: String,
+    pub tensors: usize,
+    pub bytes: u64,
+    /// `float`, `described`, `no_descriptor`, `known_undescribed`, `refused` or `other` (not a weight type).
+    pub status: String,
+    pub descriptor: Option<DescriptorRef>,
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DescriptorRef {
+    pub name: String,
+    pub digest: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct StorageInfo {
+    /// The `quantization_config` the checkpoint announces, `quant_method` and all (HF), when it has one.
+    pub quant_method: Option<String>,
+    /// The descriptor that reads it.
+    pub quant_descriptor: Option<DescriptorRef>,
+    pub rows: Vec<StorageRow>,
+}
+
+/// The checkpoint's tensors against the program's parameters.
+#[derive(Clone, Debug, Serialize)]
+pub struct TensorsInfo {
+    /// `shapes` (every header read), `names` (an index only), `none`, or why it could not run.
+    pub checked: String,
+    pub bound: usize,
+    pub missing: Vec<String>,
+    pub missing_total: usize,
+    pub shape_mismatch: Vec<String>,
+    pub shape_mismatch_total: usize,
+    /// Tensors whose shape a described format derives from the data of a small role tensor (at most 4 KiB) that is not
+    /// on disk: the shape could not be checked, and is not reported as wrong. The names are the role tensors to fetch.
+    pub unverified: Vec<String>,
+    pub unverified_total: usize,
+    pub unused: Vec<String>,
+    pub unused_total: usize,
+    pub unused_bytes: u64,
+}
+
+/// What converting the model would produce and fetch.
+#[derive(Clone, Debug, Serialize)]
+pub struct ArtifactInfo {
+    /// The program's parameters as the lowering stores them (integers, per-row scales, tables).
+    pub params_bytes: u64,
+    pub program_bytes: u64,
+    pub tokenizer_bytes: u64,
+    pub estimate_bytes: u64,
+    /// The inventory's leaves (32 KiB at most each), estimated: the depth of the root's paths.
+    pub inventory_leaves_estimate: u64,
+    /// The bytes of the tensors the class reads (what a download must fetch), when every header was read.
+    pub download_bytes_needed: Option<u64>,
+    /// The checkpoint's weight bytes in all.
+    pub download_bytes_total: Option<u64>,
+    /// The bytes of tensors the feature scope leaves out (a vision tower): need not be fetched.
+    pub left_out_bytes: u64,
+    pub note: String,
+}
+
+/// Everything the convert stage learned.
+pub struct Analysis {
+    pub model: Option<ModelInfo>,
+    pub scope: Option<FeatureScope>,
+    pub storage: StorageInfo,
+    pub tensors: TensorsInfo,
+    pub artifact: Option<ArtifactInfo>,
+    pub blockers: Vec<Blocker>,
+    pub notes: Vec<String>,
+    /// The shape-only lowering, when the convert stage got that far.
+    pub program: Option<TirProgramV1>,
+    /// The tokenizer is present (or its absence is not known).
+    pub tokenizer_known: Option<bool>,
+}
+
+const CAP: usize = 24;
+
+fn capped(mut v: Vec<String>) -> Vec<String> {
+    v.truncate(CAP);
+    v
+}
+
+/// The `quantization_config` of a configuration (the text decoder's, when the model nests it).
+fn quantization_config(config: &serde_json::Value) -> Option<&serde_json::Value> {
+    config
+        .get("quantization_config")
+        .filter(|q| !q.is_null())
+        .or_else(|| config.get("text_config").and_then(|t| t.get("quantization_config")).filter(|q| !q.is_null()))
+}
+
+fn float_dtype(d: &str) -> bool {
+    matches!(d, "F32" | "F16" | "BF16" | "F64")
+}
+
+fn descriptor_ref(f: &misaka_palw_tir_lower::quantfmt::QuantFormat) -> DescriptorRef {
+    DescriptorRef { name: f.name().to_string(), digest: f.digest_hex() }
+}
+
+fn dtype_descriptor(dtype: &str, reg: &QuantRegistry) -> Option<DescriptorRef> {
+    reg.all().iter().find(|f| f.name().eq_ignore_ascii_case(dtype)).map(|f| descriptor_ref(f))
+}
+
+/// The cap of a message in evidence.
+fn short(s: &str) -> String {
+    const N: usize = 600;
+    if s.len() <= N { s.to_string() } else { format!("{}…", s.chars().take(N).collect::<String>()) }
+}
+
+/// Run the convert stage over a source.
+pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: Option<&str>) -> Analysis {
+    let mut blockers: Vec<Blocker> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    let read_opts = ReadOptions { adapter: adapter_text.map(|t| AdapterChoice::Text(t.to_string())).unwrap_or_default() };
+    let history_bound =
+        if opts.held { misaka_palw_tir::program::HISTORY_BOUND_V1_HELD } else { misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL };
+    let lopts = LowerOpts { history_bound, ..Default::default() };
+
+    // ---- completeness of the source -------------------------------------------------------------------------------
+    if !src.missing_shards.is_empty() {
+        notes.push(format!(
+            "{} shard(s) are not in the directory ({}): their tensors are known by name from the index, not by shape",
+            src.missing_shards.len(),
+            src.missing_shards.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let partial: Vec<&str> = src.shards.iter().filter(|s| !s.complete()).map(|s| s.file.as_str()).collect();
+    if !partial.is_empty() {
+        notes.push(format!(
+            "{} shard file(s) hold a header and not all of their data ({}): a preflight reads headers, and a conversion needs the whole files",
+            partial.len(),
+            partial.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if src.gguf_truncated {
+        notes.push(
+            "the GGUF holds its header and not all of its data: a preflight reads the header, and a conversion needs the whole file"
+                .into(),
+        );
+    }
+
+    // ---- the configuration, the features, the scope -----------------------------------------------------------------
+    let mut model: Option<ModelInfo> = None;
+    let mut scope: Option<FeatureScope> = None;
+    let mut lowerable = false;
+    let mut report: Option<ArchitectureReport> = None;
+    let tindex: Option<TensorIndex> = src.tensor_index();
+    match (&src.config, &src.config_error) {
+        (Some(config), _) => {
+            let r = analyze_with(config, tindex.as_ref(), &read_opts, reg, &src.file_names());
+            lowerable = r.result == ReportResult::Lowerable;
+            scope = Some(r.scope.clone());
+            report = Some(r);
+        }
+        (None, why) => {
+            let why = why.clone().unwrap_or_else(|| "no configuration".into());
+            if src.kind == InputKind::Gguf {
+                blockers.push(
+                    Blocker::new(
+                        Stage::Convert,
+                        "ARCH_REFUSED",
+                        "the GGUF's architecture has no mapping to a Hugging Face configuration",
+                    )
+                    .evidence([short(&why)])
+                    .safe([
+                        "convert the model's original Hugging Face checkpoint instead".to_string(),
+                        "supply a data adapter (--adapter) when the architecture is a combination of known features".to_string(),
+                    ]),
+                );
+            } else {
+                blockers.push(Blocker::new(Stage::Convert, "CONFIG_INVALID", "config.json cannot be read").evidence([short(&why)]));
+            }
+        }
+    }
+
+    // ---- the storage, and its descriptors ------------------------------------------------------------------------------
+    let (storage, quant_blockers) = storage_of(src, reg);
+    blockers.extend(quant_blockers);
+
+    // ---- the frontend's verdict ------------------------------------------------------------------------------------------
+    if let Some(r) = &report {
+        if let ReportResult::NotLowerable { reason } = &r.result {
+            for m in &r.missing {
+                blockers.push(
+                    Blocker::new(
+                        Stage::Convert,
+                        "ARCH_NEEDS_FEATURE",
+                        format!("the model needs `{}`, which the generic lowerer does not lower yet", m.what),
+                    )
+                    .arg(m.what.clone())
+                    .evidence([m.why.clone()])
+                    .safe(
+                        m.general_primitive.iter().map(|g| format!("the smallest general addition that closes it: {g}")).chain(
+                            std::iter::once(
+                                "a data adapter (--adapter) can map a missing key or tensor name, never a missing computation"
+                                    .to_string(),
+                            ),
+                        ),
+                    ),
+                );
+            }
+            for k in &r.unmapped_config_keys {
+                blockers.push(
+                    Blocker::new(
+                        Stage::Convert,
+                        "CONFIG_KEY_UNREAD",
+                        "a configuration key that might change the math has no rule (refused, never ignored)",
+                    )
+                    .arg(k.clone())
+                    .safe(["a data adapter (--adapter) that maps the key, if it is a renaming".to_string()]),
+                );
+            }
+            if r.missing.is_empty() && r.unmapped_config_keys.is_empty() && !quant_refusal_in_reason(reason) {
+                let (code, what) = if reason.contains("bad config") {
+                    ("CONFIG_INVALID", "the configuration is malformed")
+                } else if reason.contains("remote code") || reason.contains("auto_map") {
+                    ("REMOTE_CODE", "the architecture is defined by remote code")
+                } else {
+                    ("ARCH_REFUSED", "the generic frontend refuses this architecture")
+                };
+                blockers.push(Blocker::new(Stage::Convert, code, what).evidence([short(reason)]));
+            }
+        }
+        model = Some(ModelInfo {
+            model_type: r.model_type.clone(),
+            architectures: r.architectures.clone(),
+            level: r.level.to_string(),
+            adapter: r.adapter.clone(),
+            features: r.features.clone(),
+            assumed_defaults: r.assumed_defaults.clone(),
+            unmapped_config_keys: r.unmapped_config_keys.clone(),
+            missing: r.missing.clone(),
+            new_consensus_primitive_required: r.new_consensus_primitive_required,
+            new_court_kernel_required: r.new_court_kernel_required,
+            lowerable,
+            reason: match &r.result {
+                ReportResult::NotLowerable { reason } => Some(short(reason)),
+                ReportResult::Lowerable => None,
+            },
+            spec_digest: None,
+            history_bound,
+        });
+        for f in r.features.iter().filter(|f| f.status == FeatureStatus::Missing) {
+            // Reported as blockers above through `missing`; a feature without a `missing` row still blocks.
+            if !r.missing.iter().any(|m| m.what == f.id)
+                && !blockers.iter().any(|b| b.code == "ARCH_NEEDS_FEATURE" && b.arg.as_deref() == Some(&f.id))
+            {
+                blockers.push(
+                    Blocker::new(
+                        Stage::Convert,
+                        "ARCH_NEEDS_FEATURE",
+                        format!("the model needs `{}`, which the generic lowerer does not lower yet", f.id),
+                    )
+                    .arg(f.id.clone())
+                    .evidence(f.capability.iter().cloned()),
+                );
+            }
+        }
+        if let Some(sc) = &scope {
+            if sc.text_only {
+                notes.push(format!(
+                    "text stage only on testnet-12: {} — a vision-language or audio model registers as its text decoder; the other parts need RFC-0003's generative class",
+                    sc.modalities_left_out().join(", ")
+                ));
+            }
+        }
+    }
+
+    // ---- the shape-only lowering and the tensor check ------------------------------------------------------------------------------
+    let mut prepared: Option<Prepared> = None;
+    let mut digest: Option<String> = None;
+    if lowerable && let Some(config) = &src.config {
+        let prep: Result<Prepared, String> = match &src.gguf_model {
+            Some(m) => m.prepare(&lopts).map_err(|e| e.to_string()),
+            None => read_model_with(config, tindex.as_ref(), &read_opts, reg).map_err(|f| f.to_string()).and_then(|read| {
+                digest = Some(spec_digest(&read.spec));
+                prepare_spec(read.spec, &lopts).map_err(|e| e.to_string())
+            }),
+        };
+        match prep {
+            Ok(p) => prepared = Some(p),
+            Err(e) => {
+                if !quant_refusal_in_reason(&e) {
+                    blockers
+                        .push(Blocker::new(Stage::Convert, "ARCH_REFUSED", "the lowering refuses this model").evidence([short(&e)]));
+                }
+            }
+        }
+    }
+    if let Some(m) = model.as_mut() {
+        m.spec_digest = digest.clone();
+        if prepared.is_none() && lowerable {
+            m.lowerable = false;
+        }
+    }
+    let (tensors, unused_set, ignored) = match &prepared {
+        Some(p) => tensor_check(src, p, reg, &mut blockers, &mut notes),
+        None => (
+            TensorsInfo {
+                checked: "none (no program to bind the tensors to)".into(),
+                bound: 0,
+                missing: vec![],
+                missing_total: 0,
+                shape_mismatch: vec![],
+                shape_mismatch_total: 0,
+                unverified: vec![],
+                unverified_total: 0,
+                unused: vec![],
+                unused_total: 0,
+                unused_bytes: 0,
+            },
+            BTreeSet::new(),
+            Vec::new(),
+        ),
+    };
+    let mut storage = storage;
+    // A weight stored as a type no descriptor claims: the bound tensors of an `other` row.
+    if prepared.is_some() && tensors.checked != "none" {
+        for row in storage.rows.iter_mut().filter(|r| r.status == "other") {
+            let bound = bound_in_dtype(src, &row.storage, &unused_set, &ignored);
+            if bound > 0 {
+                row.status = "no_descriptor".into();
+                row.note = Some(format!(
+                    "{bound} tensor(s) the class reads are stored as {} and no quantization_config describes it",
+                    row.storage
+                ));
+                blockers.push(
+                    Blocker::new(
+                        Stage::Convert,
+                        "QUANT_NO_DESCRIPTOR",
+                        format!("{bound} tensor(s) the class reads are stored as {}, and no descriptor reads that type", row.storage),
+                    )
+                    .arg(format!("safetensors/{}", row.storage))
+                    .safe([
+                        "the model's original (float) checkpoint, if it publishes one".to_string(),
+                        "a descriptor file for the format (--quant-format <file.json>): a data change, no code".to_string(),
+                    ]),
+                );
+            }
+        }
+    }
+
+    // ---- the tokenizer ------------------------------------------------------------------------------------------------------------
+    let tokenizer_known = match src.kind {
+        InputKind::HfDirectory => {
+            Some(src.files.iter().any(|f| matches!(f.name.as_str(), "tokenizer.json" | "tokenizer.model" | "vocab.json")))
+        }
+        InputKind::Gguf => src.gguf_file.as_ref().map(|g| g.meta.contains_key("tokenizer.ggml.tokens")),
+        _ => None,
+    };
+    if tokenizer_known == Some(false) {
+        blockers.push(
+            Blocker::new(
+                Stage::Convert,
+                "TOKENIZER_MISSING",
+                "no tokenizer file beside the checkpoint: the class commits to a tokenizer id",
+            )
+            .safe(["download tokenizer.json (a few MB) from the model repository".to_string()]),
+        );
+    }
+
+    // ---- the artifact estimate ------------------------------------------------------------------------------------------------------
+    let program = prepared.as_ref().map(|p| p.lowered.program.clone());
+    let artifact = program.as_ref().map(|p| artifact_of(src, p, &scope, &tensors, &unused_set, &ignored));
+    Analysis { model, scope, storage, tensors, artifact, blockers, notes, program, tokenizer_known }
+}
+
+/// Whether a refusal's text is the quantisation's (already raised as its own blocker).
+fn quant_refusal_in_reason(reason: &str) -> bool {
+    reason.contains("quant-format descriptor") || reason.contains("quantization_config") || reason.contains("pre-quantized checkpoint")
+}
+
+/// The storage histogram and the quantisation blockers.
+fn storage_of(src: &Source, reg: &QuantRegistry) -> (StorageInfo, Vec<Blocker>) {
+    let mut blockers = Vec::new();
+    let mut quant_method = None;
+    let mut quant_descriptor = None;
+    let mut rows: Vec<StorageRow> = Vec::new();
+
+    if let Some(g) = &src.gguf_file {
+        rows = gguf_rows(g);
+        for n in g.needs_descriptors() {
+            let known = reg.names();
+            let id = n.id.map(|i| i.to_string()).unwrap_or_default();
+            blockers.push(
+                Blocker::new(
+                    Stage::Convert,
+                    "QUANT_NO_DESCRIPTOR",
+                    format!(
+                        "GGUF tensor type {id}{} has no quant-format descriptor: {} tensor(s) need it",
+                        n.name.as_ref().map(|x| format!(" ({x})")).unwrap_or_default(),
+                        n.tensors.len()
+                    ),
+                )
+                .arg(format!("ggml/{id}"))
+                .evidence(capped(n.tensors.clone()))
+                .safe([
+                    "the model's original safetensors checkpoint, converted by this tool".to_string(),
+                    format!("re-quantise it to a described type ({})", known.join(", ")),
+                    "a descriptor file for the type (--quant-format <file.json>) once its layout is specified: a data change, no code"
+                        .to_string(),
+                ]),
+            );
+        }
+    } else {
+        // Safetensors dtypes.
+        let mut by: BTreeMap<String, (usize, u64)> = BTreeMap::new();
+        for s in &src.shards {
+            for e in s.entries.values() {
+                let r = by.entry(e.dtype.clone()).or_default();
+                r.0 += 1;
+                r.1 += e.bytes;
+            }
+        }
+        let q = src.config.as_ref().and_then(quantization_config);
+        let mut described: Option<DescriptorRef> = None;
+        if let Some(q) = q {
+            let method = q.get("quant_method").and_then(|m| m.as_str()).unwrap_or("unknown").to_ascii_lowercase();
+            let name = match q.get("format").and_then(|f| f.as_str()) {
+                Some(f) => format!("{method}/{f}"),
+                None => method.clone(),
+            };
+            quant_method = Some(name.clone());
+            let cfg = src.config.as_ref().unwrap();
+            let arch = cfg.get("architectures").and_then(|a| a.get(0)).and_then(|a| a.as_str()).unwrap_or("?").to_string();
+            let model_type = cfg.get("model_type").and_then(|a| a.as_str()).unwrap_or("").to_string();
+            match misaka_palw_tir_lower::prequant::parse_quant_config_with(q, &arch, &model_type, reg) {
+                Ok(c) => {
+                    if let Some((f, _)) = c.fmt.binding() {
+                        described = Some(descriptor_ref(&f));
+                    }
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("has no quant-format descriptor") {
+                        if let Some(k) = known_undescribed_method(&method) {
+                            blockers.push(
+                                Blocker::new(
+                                    Stage::Convert,
+                                    "QUANT_KNOWN_UNDESCRIBED",
+                                    format!("`{}` ({}) is known and not yet described: {}", k.method, k.title, k.note),
+                                )
+                                .arg(method.clone())
+                                .evidence([format!("status {}", k.status)])
+                                .safe([
+                                    "the model's original (float) checkpoint, if it publishes one".to_string(),
+                                    format!("re-quantise it to a described type ({})", reg.names().join(", ")),
+                                ]),
+                            );
+                        } else {
+                            blockers.push(
+                                Blocker::new(
+                                    Stage::Convert,
+                                    "QUANT_NO_DESCRIPTOR",
+                                    format!("quantization_config quant_method={name} has no quant-format descriptor"),
+                                )
+                                .arg(format!("config/{name}"))
+                                .evidence([format!("described methods: {}", reg.config_methods().join(", "))])
+                                .safe([
+                                    "the model's original (float) checkpoint, if it publishes one".to_string(),
+                                    "a descriptor file for the format (--quant-format <file.json>): a data change, no code"
+                                        .to_string(),
+                                ]),
+                            );
+                        }
+                    } else {
+                        // A descriptor read it and refused: its own rule, by name.
+                        let by = reg.config_for(&method, q).map(|f| f.name().to_string()).unwrap_or_else(|| method.clone());
+                        blockers.push(
+                            Blocker::new(Stage::Convert, "QUANT_REFUSED", format!("the descriptor `{by}` refuses this configuration"))
+                                .arg(by)
+                                .evidence([short(&msg)])
+                                .safe(["the model's original (float) checkpoint, if it publishes one".to_string()]),
+                        );
+                    }
+                }
+            }
+            quant_descriptor = described.clone();
+        }
+        for (dtype, (tensors, bytes)) in by {
+            let (status, descriptor, note) = if float_dtype(&dtype) {
+                ("float".to_string(), dtype_descriptor(&dtype, reg), None)
+            } else if let Some(d) = &described {
+                (
+                    "described".to_string(),
+                    Some(d.clone()),
+                    Some(format!("read through the descriptor of quantization_config ({})", quant_method.clone().unwrap_or_default())),
+                )
+            } else if q.is_some() {
+                ("no_descriptor".to_string(), None, Some("the quantization_config has no descriptor".to_string()))
+            } else {
+                ("other".to_string(), None, None)
+            };
+            rows.push(StorageRow { storage: dtype, tensors, bytes, status, descriptor, note });
+        }
+    }
+    (StorageInfo { quant_method, quant_descriptor, rows }, blockers)
+}
+
+fn gguf_rows(g: &GgufFile) -> Vec<StorageRow> {
+    let mut by: BTreeMap<u32, (usize, u64, Option<DescriptorRef>, String)> = BTreeMap::new();
+    for t in g.tensors.values() {
+        let e = by.entry(t.ty.id).or_insert_with(|| (0, 0, t.ty.fmt.as_ref().map(|f| descriptor_ref(f)), t.ty.name()));
+        e.0 += 1;
+        e.1 += g.stored_bytes(&t.name).unwrap_or(0);
+    }
+    let need: BTreeMap<u32, ()> = g.needs_descriptors().into_iter().filter_map(|n| n.id.map(|i| (i, ()))).collect();
+    by.into_iter()
+        .map(|(id, (tensors, bytes, descriptor, name))| {
+            let undescribed = need.contains_key(&id);
+            let status = if undescribed {
+                "no_descriptor"
+            } else if descriptor.as_ref().is_some_and(|d| matches!(d.name.as_str(), "F32" | "F16" | "BF16" | "F64")) {
+                "float"
+            } else {
+                "described"
+            };
+            StorageRow {
+                storage: if undescribed { format!("type{id}") } else { name },
+                tensors,
+                bytes,
+                status: status.into(),
+                descriptor,
+                note: undescribed.then(|| format!("ggml type id {id}")),
+            }
+        })
+        .collect()
+}
+
+/// The tensors the class reads against the program's parameters: shapes where every header was read, names where
+/// only the index was.
+fn tensor_check(
+    src: &Source,
+    prep: &Prepared,
+    reg: &QuantRegistry,
+    blockers: &mut Vec<Blocker>,
+    notes: &mut Vec<String>,
+) -> (TensorsInfo, BTreeSet<String>, Vec<String>) {
+    let _ = reg;
+    let ignored = prep.binding.ignored_prefixes.clone();
+    let mut info = TensorsInfo {
+        checked: "none".into(),
+        bound: 0,
+        missing: vec![],
+        missing_total: 0,
+        shape_mismatch: vec![],
+        shape_mismatch_total: 0,
+        unverified: vec![],
+        unverified_total: 0,
+        unused: vec![],
+        unused_total: 0,
+        unused_bytes: 0,
+    };
+    let rep = if let Some(m) = &src.gguf_model {
+        info.checked = "shapes".into();
+        Some(check_weights(&prep.hl, &prep.binding, m))
+    } else if src.shapes_known() {
+        let hs = HeaderSource::new(&src.shards);
+        match prep.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()).and_then(|q| q.fmt.binding()) {
+            Some((f, params)) => match misaka_palw_tir_lower::weights::described::DescribedSource::new(Box::new(hs), f, params) {
+                Ok(d) => {
+                    info.checked = "shapes".into();
+                    Some(check_weights(&prep.hl, &prep.binding, &d))
+                }
+                Err(e) => {
+                    info.checked = format!("skipped: {}", short(&e.to_string()));
+                    notes.push(format!(
+                        "the packed tensors' shapes could not be derived from the headers alone ({}): the tensor check ran when their small role tensors are on disk",
+                        short(&e.to_string())
+                    ));
+                    None
+                }
+            },
+            None => {
+                info.checked = "shapes".into();
+                Some(check_weights(&prep.hl, &prep.binding, &hs))
+            }
+        }
+    } else if let Some(names) = checkpoint_names(src) {
+        info.checked = "names".into();
+        Some(check_names(&prep.hl, &prep.binding, &names))
+    } else {
+        None
+    };
+    let mut unused_set = BTreeSet::new();
+    if let Some(rep) = rep {
+        info.bound = rep.bound;
+        let (mut miss, mut shp, mut unv) = (Vec::new(), Vec::new(), Vec::new());
+        for e in &rep.errors {
+            if e.contains("its data is not in this file") {
+                // The role tensor named last: the one whose few bytes the shape needs.
+                unv.push(last_name(e));
+            } else if e.contains("checkpoint gives") {
+                shp.push(e.clone());
+            } else {
+                miss.push(e.clone());
+            }
+        }
+        unv.sort();
+        unv.dedup();
+        info.missing_total = miss.len();
+        info.shape_mismatch_total = shp.len();
+        info.unverified_total = unv.len();
+        if !unv.is_empty() {
+            info.checked = format!("shapes ({} role tensor(s) whose data is not here)", unv.len());
+            notes.push(format!(
+                "{} tensor shape(s) a described format reads from small role tensors (at most 4 KiB each) could not be checked: fetch {}",
+                unv.len(),
+                unv.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+            ));
+        }
+        info.unverified = capped(unv);
+        if !miss.is_empty() {
+            blockers.push(
+                Blocker::new(
+                    Stage::Convert,
+                    "TENSOR_MISSING",
+                    format!("{} tensor(s) the program reads are not in the checkpoint", miss.len()),
+                )
+                .arg(first_name(&miss[0]))
+                .evidence(capped(miss.clone()))
+                .numbers(rep.bound as u64, (rep.bound + miss.len() + shp.len() + info.unverified_total) as u64, "tensors")
+                .safe(["a data adapter (--adapter) when the checkpoint names the tensor differently".to_string()]),
+            );
+        }
+        if !shp.is_empty() {
+            blockers.push(
+                Blocker::new(
+                    Stage::Convert,
+                    "TENSOR_SHAPE",
+                    format!("{} tensor(s) have a shape the program does not read", shp.len()),
+                )
+                .arg(first_name(&shp[0]))
+                .evidence(capped(shp.clone()))
+                .safe(["a data adapter (--adapter) when the checkpoint stores the tensor transposed or reshaped".to_string()]),
+            );
+        }
+        info.missing = capped(miss);
+        info.shape_mismatch = capped(shp);
+        info.unused_total = rep.unused.len();
+        let bytes = unused_bytes(src, &rep.unused);
+        info.unused_bytes = bytes;
+        unused_set = rep.unused.iter().cloned().collect();
+        info.unused = capped(rep.unused);
+    }
+    (info, unused_set, ignored)
+}
+
+/// The last backquoted name of a message.
+fn last_name(e: &str) -> String {
+    let parts: Vec<&str> = e.split('`').collect();
+    // `a `x` b `y` c` splits into [a, x, b, y, c]: the names are the odd positions.
+    parts.iter().enumerate().filter(|(i, _)| i % 2 == 1).map(|(_, p)| *p).last().unwrap_or(e).to_string()
+}
+
+/// The first backquoted name of a message (`param `X` ...` is `X`).
+fn first_name(e: &str) -> String {
+    let mut parts = e.split('`');
+    parts.next();
+    match parts.next() {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => e.chars().take(60).collect(),
+    }
+}
+
+fn checkpoint_names(src: &Source) -> Option<BTreeSet<String>> {
+    if src.shards.is_empty() && src.index_names.is_none() {
+        return None;
+    }
+    let mut n: BTreeSet<String> = src.shards.iter().flat_map(|s| s.entries.keys().cloned()).collect();
+    if let Some(i) = &src.index_names {
+        n.extend(i.iter().cloned());
+    }
+    Some(n)
+}
+
+fn unused_bytes(src: &Source, unused: &[String]) -> u64 {
+    let set: BTreeSet<&str> = unused.iter().map(String::as_str).collect();
+    src.shards.iter().flat_map(|s| s.entries.iter()).filter(|(n, _)| set.contains(n.as_str())).map(|(_, e)| e.bytes).sum()
+}
+
+fn bound_in_dtype(src: &Source, dtype: &str, unused: &BTreeSet<String>, ignored: &[String]) -> usize {
+    src.shards
+        .iter()
+        .flat_map(|s| s.entries.iter())
+        .filter(|(n, e)| e.dtype == dtype && !unused.contains(*n) && !ignored.iter().any(|p| n.starts_with(p.as_str())))
+        .count()
+}
+
+fn artifact_of(
+    src: &Source,
+    program: &TirProgramV1,
+    scope: &Option<FeatureScope>,
+    tensors: &TensorsInfo,
+    unused: &BTreeSet<String>,
+    ignored: &[String],
+) -> ArtifactInfo {
+    let params_bytes = kaspa_consensus_core::palw_tir_work_v1::palw_tir_work_shape_v1(program)
+        .map(|s| s.param_bytes().min(u64::MAX as u128) as u64)
+        .unwrap_or(0);
+    let program_bytes = program.encode().len() as u64;
+    let tokenizer_bytes: u64 = src
+        .files
+        .iter()
+        .filter(|f| {
+            matches!(
+                f.name.as_str(),
+                "tokenizer.json"
+                    | "tokenizer.model"
+                    | "tokenizer_config.json"
+                    | "vocab.json"
+                    | "merges.txt"
+                    | "special_tokens_map.json"
+            )
+        })
+        .map(|f| f.bytes)
+        .sum();
+    let left_out_bytes = scope.as_ref().map(|s| s.excluded.iter().filter_map(|e| e.bytes).sum()).unwrap_or(0);
+    let total = src.declared_weight_bytes();
+    let needed = if src.gguf_file.is_some() {
+        total
+    } else if src.shapes_known() && tensors.checked == "shapes" {
+        Some(
+            src.shards
+                .iter()
+                .flat_map(|s| s.entries.iter())
+                .filter(|(n, _)| !unused.contains(*n) && !ignored.iter().any(|p| n.starts_with(p.as_str())))
+                .map(|(_, e)| e.bytes)
+                .sum(),
+        )
+    } else {
+        None
+    };
+    ArtifactInfo {
+        params_bytes,
+        program_bytes,
+        tokenizer_bytes,
+        estimate_bytes: params_bytes + program_bytes + tokenizer_bytes,
+        inventory_leaves_estimate: params_bytes.div_ceil(32 << 10) + program.params.len() as u64,
+        download_bytes_needed: needed,
+        download_bytes_total: total,
+        left_out_bytes,
+        note: if src.gguf_file.is_some() {
+            "a GGUF is one file: it is fetched whole".into()
+        } else if needed.is_none() {
+            "the shards' headers are not all here: the size of the tensors the class reads is known only from the index's total".into()
+        } else {
+            "the size of the tensors the class reads; tensors the scope leaves out and tensors nothing reads need not be fetched"
+                .into()
+        },
+    }
+}
+
+/// What `Report::source` carries.
+pub fn source_info(src: &Source) -> super::SourceInfo {
+    super::SourceInfo {
+        files: src.files.clone(),
+        config_sha256: src.config_sha256.clone(),
+        shards: src
+            .shards
+            .iter()
+            .map(|s| super::ShardInfo {
+                file: s.file.clone(),
+                header_bytes: s.header_bytes,
+                declared_data_bytes: s.declared_data_bytes,
+                file_bytes: s.file_bytes,
+                complete: s.complete(),
+                header_sha256: s.header_sha256.clone(),
+                tensors: s.entries.len(),
+            })
+            .collect(),
+        missing_shards: src.missing_shards.clone(),
+        weight_bytes: src.declared_weight_bytes(),
+        index_total_size: src.index_total_size,
+    }
+}

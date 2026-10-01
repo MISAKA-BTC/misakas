@@ -950,6 +950,50 @@ It does not claim fidelity (that needs the weights: §II.4's reference fit), it 
 data), and it does not claim that the chain *will* admit the class: it computes the chain's own functions at a height, and the
 chain decides when the object is carried. It claims only what the headers and the rules say, and says which.
 
+### II.2.9 As built (2026-10-01), and what this slice leaves out
+
+`misaka_palw_sdk::preflight` is the library; `palw-class preflight <model>` and `misaka model preflight <model>` are two faces
+of it (the same report, `--json` the same bytes). Where the build differs from, or decides within, the text above:
+
+- **Dispatch.** A directory with `config.json`, a `config.json` file, a `.gguf` file (or a directory holding only a
+  `model.gguf`) is a model; a `.palwtir` file is an artifact and keeps its old meaning in both commands (`palw-class preflight`
+  runs the artifact admission; `misaka model preflight` asks the live chain). The first line says which ran.
+- **Exit code.** 0 when no stage is blocked and the convert stage is `ok`, 2 when a blocker exists, 1 for an input the command
+  cannot read.
+- **Network and height.** `--network` defaults to `testnet-12` for a model; `--depth headers` needs none. With no `--height` the
+  height is the last DAA `Params::fence_schedule_v1` lists (every fence the network schedules is in force there) and the report
+  prints how it was chosen. `palw_tir_v1` is read from the network's real schedule: below its activation, or on a network that
+  has not armed it, the register stage carries `FENCE_NOT_ARMED(palw_tir_v1)` and **every other condition is judged as if it
+  were armed** (at the fence's own height, or DAA 1), so a model learns what else stands in its way before the flag day.
+- **The declared context is searched.** A class is declared at a context; `declare-layout` defaults to the widest the program
+  and the network admit, which no one can register (past 32,783 positions the canonical prompt exceeds J5b's 4,096 inline ids).
+  The preflight, given no `--max-context`, declares the **widest context at which admission v10 admits the class** (the court
+  window and the inline bound cap the search, then halving and bisection on the gate itself) and says so, with the refusal the
+  program's own widest context meets. `--max-context N` judges exactly N.
+- **Every wall at once.** The gate refuses at the first wall it meets; the preflight also computes the court window, the canonical
+  job and the sizing on their own, and any that is over its limit is a blocker too, so fixing one wall is not mistaken for
+  fixing the model (ADR-0097's rule). Each condition is `needed / limit / unit / ok`.
+- **Shape-only lowering.** The program is the lowering of the configuration (`prepare_spec`, which reads no weights); the
+  parameters' shapes are checked against the headers by the frontend's own binding (`check_weights`; `check_names` when only the
+  index is present). A described format that derives a shape from a small role tensor (at most 4 KiB) whose data is not on disk
+  is reported as `not checkable` with the tensor to fetch, never as a wrong shape.
+- **The artifact estimate** is `palw_tir_work_shape_v1(program).param_bytes()` — the registry's own figure for the class's
+  parameters — plus the program and the tokenizer files; the download figure is the tensors the class reads, minus what the
+  scope leaves out. The inventory's leaf count is an estimate (it only sets the depth of a close's paths).
+- **The seat.** `needed = artifact (mapped) + state at the declared context + one position's peak live bytes + the widest tile a
+  close opens`; the share is `--seat-memory-gib`, else a **reference seat assumed at 16 GiB** (a named assumption, printed with
+  the verdict; the fleet's real shares are an operator fact). `SEAT_MEMORY_SHORT` carries the context at which the class fits.
+- **The forecast** is `palw_derive_profile_v1` over `palw_tir_model_work_v2`: the registry's own derivation of the window,
+  prefetch, ready seats, in-flight claims and registration bond. It does not know how many independent operators the network has.
+- **Tokenizer.** `TOKENIZER_MISSING` is raised for a directory (no `tokenizer.json`, `tokenizer.model` or `vocab.json`) and for a
+  GGUF without `tokenizer.ggml.tokens`; a lone `config.json` says nothing about it.
+
+**Not in this slice**, each with where it plugs in: `--node` (the live chain's registration terms and tip, and with them
+`READY_SEATS_INSUFFICIENT` for a class already on the chain); a repository id by HTTP ranges (the `remote` feature of the
+lowerer's `RemoteCheckpoint` is the reader; no network is used by any test); the `full` depth, which reports what it needs
+(`palw-tir-fidelity`, `pack build`, `pack verify`) and `PACK_NOT_VERIFIED` / `ARTIFACT_ROOT_KNOWN`; and the class-specific court
+window, which replaces one function (`window_at` in `preflight::chain`) when release int-10 merges.
+
 ## II.3 The streaming loader and the converter (R2)
 
 A conversion that must hold a checkpoint in memory cannot be run on a 360 GB model, so the converter is built around one rule:
