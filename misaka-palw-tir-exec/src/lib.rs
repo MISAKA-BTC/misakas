@@ -44,9 +44,11 @@ pub mod params;
 pub mod plan;
 pub mod ranges;
 pub mod scalar;
+pub mod tiers;
 
 pub use cone::eval_cone;
 pub use elem::{Buf, Elem, Slice};
 pub use exec::{NoSink, NodeValue, StepSink, TirExecutor};
 pub use params::{ParamData, TirParams};
 pub use plan::TirPlan;
+pub use tiers::{TirResidencyArithmeticV1, TirTierRulesV1, TirTierV1, TirTiersV1};
