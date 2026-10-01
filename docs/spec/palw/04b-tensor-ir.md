@@ -2682,8 +2682,8 @@ every leaf is adjudicated from leaves that precede it.
 **Status.** Dormant: nothing below `palw_fp_job_v5` over `palw_gen_v1` reads any of it, and every shipped
 preset carries neither. Built in `kaspa-consensus-core` (`palw_gen_claim_v1`, `palw_gen_claim_fold_v1`,
 `palw_gen_one_move_v1`), the validator's two doors and the processor's walk, with `palw_gen_claim_wire`,
-`palw_gen_claim_fold` and `palw_gen_one_move` as the evidence; **not built**: the node's worker production,
-seat replay and filing loops (§15.15.8). A second implementation computes everything below from this text and
+`palw_gen_claim_fold` and `palw_gen_one_move` as the evidence; the node's worker production, seat replay and filing loops
+are §15.15.8 (written, not yet run). A second implementation computes everything below from this text and
 the RFC's §I.4.
 
 **15.15.1 The version-10 job.** A tensor job rides the lane's job type `PalwFreePromptJobV3` at
@@ -2942,13 +2942,47 @@ tag 16 `GenOutputTile` (§15.13; the enum's discriminants are explicit); the fen
 `"misaka-palw/gen/one-move/session/v1"`, `"misaka-palw/held-close/challenge/v1"` and the contexts
 `"misaka-palw/gen/one-move/accuse/mldsa87/v1"` and `"misaka-palw/held-close/challenge/mldsa87/v1"`.
 
-**15.15.8 The node's halves (not built).** The worker serves `PalwGenTensorRequestV1` (the job, its prompt and
-negative ids, its images) and answers with the claim's binding; the claim is submitted as the lane's
-commitment with the request frame retained for its panel; a seat replays the request over its held class
-(`gen_tensor_seat_judge_v1`) and files `Valid` iff the replay's `execution_root` is the claim's; a challenger
-replays the job, finds the first divergent leaf (`gen_tensor_court_candidates_v1`, `gen_tensor_output_audit_v1`)
-and files the one-move accusation; where bisection is played the ladder's prefix state is a node-side convention both parties compute alike:
-`H64(key "misaka-palw/gen/bisect-prefix-state/v1", execution_root ‖ le64(index) ‖ le64(take) ‖ the first take
-leaf hashes, stage-major)` with `take = min(index, leaf count)` (the IR's convention, `tir_bisect_prefix_state_v1`,
-under its own key). The worker, seat and court halves are built and tested at the library level in
-`misaka-palw-base0`'s `gen_tensor_worker`.
+**15.15.8 The node's halves** (written 2026-10-01; node behaviour, not consensus — a second implementation may
+differ wherever it files the same objects). Dormant with the lane; the library halves are in
+`misaka-palw-base0::gen_tensor_worker`, the node's loops in `kaspad/src/palw_panel/gen_court.rs`, the producer's
+tool in `misaka palw gen-claim`.
+
+*The held class.* A node holds a pipeline class from its `PALWTIR2` file (`GenLineageV1::open_entry`): the declared
+class decoded, the pipeline inventory root streamed once from the weights, the chain's row derived from the class and
+the root. It serves a chain-named `(class_id, artifact_root)` from a holding that derives exactly that pair, as a
+`GenBackendV1`, which is also the readiness door — a seat proves possession with the multiproof of the drawn leaves of
+its inventory, as every class kind does (`artifact_readiness_material`). A node registers a held class like an IR
+one (`--palw-register-class`, or `misaka palw gen-registration` to a file).
+
+*The material.* A tensor claim's material is its producer's capture, **`FPG1` ‖ Borsh(`GenTensorCaptureV1`)**: the job,
+the prompt and negative ids, the images, every leaf the run committed (as four-byte lanes, in the claim's one order)
+and the claimed canonical output's values, lies included. It is written to the executor node's retention directory as
+`<claim>.material` and served on a pull like every free-prompt material. The capture is the claim's own when its
+rebuilt execution (`GenTensorCaptureV1::rebuild`: the space from the job's trips, every leaf's hash and every stage's
+root from the captured lanes, the output root from the captured output) commits the claim's roots — a test that runs
+nothing.
+
+*The worker* (`GenBackendV1::answer`: a `PalwGenTensorRequestV1` in, the binding or a refusal naming the rule out)
+runs the job over the held class; `misaka palw gen-claim` writes the claim: the signed commitment transaction, funded
+from the bond's key at its measured relay fee and checked by the tensor door before a fee is spent, and the material.
+
+*The seat* (SEAT-R's full seat; a tensor claim has no partial seat, no interval seat and no capture sampler): the
+claim's own capture's inputs are replayed over the held class **off the loop**, in the replay slots, under the
+host ledger's reservation; the replay's execution root, step root, step leaf count and canonical output root are
+compared with the claim's (`palw_seat_replay_step_v1`): `Valid` when they agree, **terminal for `Valid`** when they do
+not (the court's question; a sampled verdict never slashes), and silence while it runs. A seat served no capture of the
+claim's class and executor asks for it at the tail's pace and, served nothing by the material wait, files
+`Unavailable` (N-5), as the free-prompt seat does.
+
+*The court* where the held regime plays no bisection: for a claim this seat's replay refuted — or any licensed claim
+of a pipeline class with `--palw-challenge` — the accused capture rebuilt, this node's own run of the same inputs,
+the first leaf where their commitments part (where the steps agree: the first output tile that is not its own step
+tile's, `gen_tensor_output_audit_v1`), the moves a challenger may file there (`gen_tensor_court_candidates_v1`: a
+cone close, and at the output node's step tile the output close), the first of which the court convicts on **as the
+chain derives it** (`palw_gen_close_verdict_for_row_v1`: the court close's own grading from the class's row, the
+claim's class and its execution root), signed over its session id and queued as `GenShardCourtAccused`. Once per
+claim. A close past one carrier is recorded and not filed until the held leaf challenge (§15.15.6) is armed, and the
+node's filing of it follows its fence. Where bisection is played the ladder's prefix state is a node-side convention
+both parties compute alike: `H64(key "misaka-palw/gen/bisect-prefix-state/v1", execution_root ‖ le64(index) ‖
+le64(take) ‖ the first take leaf hashes, stage-major)` with `take = min(index, leaf count)` (the IR's convention,
+`tir_bisect_prefix_state_v1`, under its own key).
