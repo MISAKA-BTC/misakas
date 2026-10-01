@@ -62,6 +62,32 @@
 //! refusal and, past F-N, the class room's (`FloorRoomExhausted`, `BondClassShareExceeded`) set it.
 //!
 //! **Queue bound, never safety**: nothing in the liability, the weight cap or the audit door reads it.
+//!
+//! # `L_ver` — the verification term (int-11, STATIC, dormant: nothing calls it yet)
+//!
+//! `L_net = min(L_seat, L_carry, L_anchor)` bounds the unlicensed queue by capital and carriage, not by
+//! what the seats can verify. On testnet-12 at DAA 3,100 it was `L_seat` ≈ 1,200 (J-6 room ~900 + 262 bound
+//! + the 8k share) against `U` = 439: free 770, never refused. A claim in a queue pinned at `L` waits
+//! `L / μ` DAA for its licence (`μ` = licences a DAA); at the healthy `μ` = 5.7 that is 210 DAA, inside the
+//! 600-DAA receipt window, and at the collapsed `μ` = 1.86 (DAA 3,000–3,100, the five 5.104 seats and b6
+//! thrashing or starved) it is 645 DAA — past it: the tail redraws, and the second timeout voids the claim
+//! and slashes its honest producer (`sweep_deadlines`; the seats are never charged).
+//!
+//! [`palw_network_verify_level_v1`] is a fourth term, a CONSTANT sized from the measured supply:
+//! `L_ver = ⌊μ_floor × W_safe⌋` with `μ_floor` = 1.5 licences a DAA ([`PALW_NETWORK_VERIFY_FLOOR_MILLI_V1`]:
+//! under the collapsed 1.86, over the worst 50-DAA window's 1.2 only by the margin `W_safe` gives) and
+//! `W_safe = (window_receipt − anchor_delay) / 2` = 290 DAA — half the receipt window. At the shipped
+//! windows that is **435**. It never binds at the healthy rate (`U` settles at `λ × (bind + wait)` ≈ 5.3 ×
+//! 24 = 127), it binds from `U` = 435 down (the live `U` of 439 would be refused until it drains), and once
+//! it binds the queue admits what it licenses: the wait is `435 / μ` ≤ 290 DAA for every `μ ≥ 1.5`, ≤ 363 at
+//! the worst measured window (1.2), and under the window for every `μ ≥ 0.75`. Honest producers' refused
+//! attempts are skipped, never charged (`NetworkRoomExhausted` is non-fatal for the block).
+//!
+//! A feedback form (`μ_obs`, a rooted ring of licences a DAA) is the stage-6 design and is deliberately NOT
+//! here: the user's staged capacity rule puts any consensus loop that adjusts itself from observed rates
+//! last. Integration is lane A's: `network_level_v1` in `palw_state_v2` calls
+//! [`palw_network_level_with_verify_v1`] past a new dormant fence, with `window_receipt` and
+//! `capacity_network_anchor_delay()` from the params; nothing here reads state.
 
 use crate::palw_state_v2::PalwBondKeyV2;
 use std::collections::BTreeMap;
@@ -93,6 +119,28 @@ pub fn palw_network_level_v1(l_seat: u64, a_op_milli: u64, lpb: u64, anchor_dela
     let l_carry = PALW_NETWORK_H_L_DAA_V1.saturating_mul(lpb).saturating_mul(b) / 1_000;
     let l_anchor = PALW_NETWORK_B_BIND_V1.saturating_mul(b).saturating_mul(anchor_delay.max(1)) / 1_000;
     l_seat.min(l_carry).min(l_anchor)
+}
+
+/// **`μ_floor` in milli-licences a DAA** — the verification supply the network must stay safe at: 1.5 a
+/// DAA, between the collapsed rate the fleet measured (1.86 over DAA 3,000–3,100, 1.2 in the worst 50-DAA
+/// window) and the healthy one (5.5–5.8 at DAA 2,850–3,000). A constant: a consensus loop that adjusts
+/// itself from observed rates is the stage-6 design, not this.
+pub const PALW_NETWORK_VERIFY_FLOOR_MILLI_V1: u64 = 1_500;
+
+/// **`L_ver = ⌊μ_floor × W_safe⌋`**, `W_safe = (window_receipt − anchor_delay) / 2` DAA: the unlicensed
+/// claims the network may hold so that, at the floor supply, the last of them is licensed inside half the
+/// receipt window. 435 for the shipped 600 / 20. Zero when the window does not exceed the anchor delay
+/// (nothing can be licensed in time, so nothing is admitted — a parameter error, not a rule).
+pub const fn palw_network_verify_level_v1(window_receipt_daa: u64, anchor_delay_daa: u64) -> u64 {
+    let w_safe = window_receipt_daa.saturating_sub(anchor_delay_daa) / 2;
+    w_safe.saturating_mul(PALW_NETWORK_VERIFY_FLOOR_MILLI_V1) / 1_000
+}
+
+/// **`L_net` with the verification term**: [`palw_network_level_v1`] capped by `l_ver` when the fence that
+/// arms it is in force (`None` below it: byte for byte the level of today).
+pub fn palw_network_level_with_verify_v1(l_seat: u64, a_op_milli: u64, lpb: u64, anchor_delay: u64, l_ver: Option<u64>) -> u64 {
+    let level = palw_network_level_v1(l_seat, a_op_milli, lpb, anchor_delay);
+    l_ver.map_or(level, |l_ver| level.min(l_ver))
 }
 
 /// `units = ⌊C / C_min⌋`.
@@ -264,6 +312,106 @@ mod tests {
         let refused = palw_network_share_admits_v1(40, 16, 24, &bond(1), 0, 0, false, &others).expect_err("16 free, 16 owed");
         assert_eq!((refused.level, refused.share, refused.deficit_others), (16, 0, 16));
         assert!(palw_network_share_admits_v1(40, 16, 23, &bond(1), 0, 0, false, &others).is_ok(), "17 free, 16 owed: one first come");
+    }
+
+    /// `L_ver` at the shipped windows, and the level it caps.
+    #[test]
+    fn the_verification_term_is_435_at_the_shipped_windows_and_only_ever_lowers_the_level() {
+        assert_eq!(palw_network_verify_level_v1(600, 20), 435, "(600 − 20) / 2 = 290 DAA × 1.5 a DAA");
+        assert_eq!(palw_network_verify_level_v1(120, 20), 75, "a shorter window gives a smaller room");
+        assert_eq!(palw_network_verify_level_v1(20, 20), 0);
+        assert_eq!(palw_network_verify_level_v1(10, 20), 0, "a window under the anchor delay admits nothing");
+        // Below the fence (`None`) the level is today's, byte for byte; past it the cap only lowers it.
+        for l_seat in [900, 1_200, 10_000] {
+            for a_op in [0, 1_000, 2_600] {
+                let today = palw_network_level_v1(l_seat, a_op, PALW_NETWORK_LPB_BATCH_V1, 20);
+                assert_eq!(palw_network_level_with_verify_v1(l_seat, a_op, PALW_NETWORK_LPB_BATCH_V1, 20, None), today);
+                let capped = palw_network_level_with_verify_v1(l_seat, a_op, PALW_NETWORK_LPB_BATCH_V1, 20, Some(435));
+                assert_eq!(capped, today.min(435));
+                assert!(capped <= today);
+            }
+        }
+        // The live testnet-12 level at DAA 3,100: L_seat ≈ 1,200 (ā_op 2.6 puts the other two at 3,494 and 5,200).
+        assert_eq!(palw_network_level_with_verify_v1(1_200, 2_600, PALW_NETWORK_LPB_BATCH_V1, 20, None), 1_200);
+        assert_eq!(palw_network_level_with_verify_v1(1_200, 2_600, PALW_NETWORK_LPB_BATCH_V1, 20, Some(435)), 435);
+    }
+
+    /// **What the constant does, simulated** (a fluid FIFO queue, one step a DAA): claims arrive at `λ`
+    /// and are admitted while `U < L`; each claim is licensable `bind` DAA after its acceptance and the
+    /// seats license `μ` a DAA, oldest first; a claim waiting past `window` DAA (the receipt window plus
+    /// the bind) is the one that redraws and, the second time, slashes its producer. The measured
+    /// numbers: λ = 5.3, healthy μ = 5.7, collapsed μ = 1.86, the worst 50-DAA window 1.2.
+    struct Sim {
+        peak: u64,
+        max_wait: u64,
+        late: u64,
+    }
+
+    fn simulate(lambda: f64, mu: f64, level: u64, steps: u64) -> Sim {
+        let (bind, window) = (20u64, 620u64);
+        let mut queue: std::collections::VecDeque<u64> = std::collections::VecDeque::new();
+        let (mut arrive_acc, mut serve_acc) = (0.0f64, 0.0f64);
+        let mut out = Sim { peak: 0, max_wait: 0, late: 0 };
+        for t in 0..steps {
+            // Seats license first (oldest bound claim first), then arrivals are admitted against the level.
+            serve_acc += mu;
+            while serve_acc >= 1.0 {
+                match queue.front() {
+                    Some(at) if t >= at + bind => {
+                        let wait = t - at;
+                        out.max_wait = out.max_wait.max(wait);
+                        if wait > window {
+                            out.late += 1;
+                        }
+                        queue.pop_front();
+                        serve_acc -= 1.0;
+                    }
+                    _ => {
+                        serve_acc = serve_acc.min(1.0); // nothing licensable: the supply is not banked
+                        break;
+                    }
+                }
+            }
+            arrive_acc += lambda;
+            while arrive_acc >= 1.0 {
+                arrive_acc -= 1.0;
+                if (queue.len() as u64) < level {
+                    queue.push_back(t);
+                }
+            }
+            out.peak = out.peak.max(queue.len() as u64);
+        }
+        out
+    }
+
+    /// **The constant protects honest producers at the collapsed rate and costs nothing at the healthy one.**
+    #[test]
+    fn a_queue_pinned_at_435_licenses_everything_inside_the_window_where_the_live_level_does_not() {
+        let (lambda, healthy, collapsed, worst) = (5.3, 5.7, 1.86, 1.2);
+        let (live, ver) = (1_200u64, palw_network_verify_level_v1(600, 20));
+        // Healthy supply: the queue settles at λ × (bind + wait) ≈ 130 claims, never touches 435, and the
+        // two levels behave identically — nobody is refused for want of the new term.
+        let (a, b) = (simulate(lambda, healthy, live, 3_000), simulate(lambda, healthy, ver, 3_000));
+        assert!(b.peak < 435, "the term does not bind: peak {}", b.peak);
+        assert_eq!((a.peak, a.max_wait, a.late), (b.peak, b.max_wait, b.late), "identical at the healthy rate");
+        assert_eq!(b.late, 0);
+        // Collapsed supply, the live level: the queue climbs to 1,200 and the tail waits ~650 DAA — past the
+        // 620-DAA window (the redraw, then the slash).
+        let a = simulate(lambda, collapsed, live, 6_000);
+        assert!(a.max_wait > 620, "the live level lets a claim wait {} DAA at 1.86 a DAA", a.max_wait);
+        assert!(a.late > 0, "and claims run past the window: {}", a.late);
+        // The constant: the queue is pinned at 435 and the wait is 435 / μ + the bind, inside the window.
+        let b = simulate(lambda, collapsed, ver, 6_000);
+        assert_eq!(b.peak, 435, "the room admits what it licenses");
+        assert!(b.max_wait <= 290 + 20 && b.late == 0, "wait {} DAA at 1.86, {} late", b.max_wait, b.late);
+        // The worst measured 50-DAA window, sustained: still inside the window.
+        let b = simulate(lambda, worst, ver, 6_000);
+        assert!(b.max_wait <= 435 * 10 / 12 + 20 && b.late == 0, "wait {} DAA at 1.2, {} late", b.max_wait, b.late);
+        // And the edge: safe down to μ = 0.75; under it nothing a room can do keeps the wait inside the window.
+        let b = simulate(lambda, 0.8, ver, 12_000);
+        assert_eq!(b.late, 0, "0.8 a DAA: wait {}", b.max_wait);
+        let b = simulate(lambda, 0.6, ver, 12_000);
+        assert!(b.late > 0 && b.max_wait > 620, "0.6 a DAA is under the safe floor: wait {}", b.max_wait);
     }
 
     /// **Split-neutral, the unit arithmetic**: ten 13k bonds hold ten units, one 130k bond ten.
