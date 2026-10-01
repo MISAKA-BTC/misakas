@@ -128,6 +128,22 @@ unknown step key is an error. Every step is an exact copy or re-indexing, so the
 The grammar, its bounds and the design are in [`frontend-as-data-v1.md`](frontend-as-data-v1.md) §2; every layout the
 built-in binder enumerates is an instance of it (`tests/weights_expr.rs` round-trips every binding of every fixture).
 
+### 5.2 Encoder–decoder adapters (`"kind": "encdec"`, `ENCDEC_FROM_SPEC_V1`)
+
+An adapter whose top-level `"kind"` is `"encdec"` instantiates not a `ModelSpec` but an `EncDecSpec`
+(`misaka.palw.encdec-spec.v1`, `lower::encdec`): the encoder–decoder's math (positions — `Relative`, `Learned`,
+`Sinusoidal` —, norms, activation, gating, scales, the decoder's start token) and **where its tensors live**
+(`names`: the shared embedding, the `[q, k, v, o]` projection modules, and for each stack the layer prefix with
+`{L}`, the self-/cross-attention modules, the norms, the FFN projections, the embedding-side modules, T5's
+relative-bias table, the head, `final_logits_bias`, the prefixes neither stage reads). Everything else is the same
+language and the same strictness: variables, class defaults, inert keys, a key nobody accounts for refused. The mixins
+`encdec-frame` (the spec's frame) and `mixin-bart-lineage` (LayerNorm, `fc1`/`fc2`, biased projections, softmax scores
+scaled by `head_dim^-1/2`, a tied head plus `final_logits_bias`) carry what the families share: `t5`, `bart`, `mbart`,
+`marian` and `pegasus` are 6 to 40 lines each. `hf_schema::read_encdec` reads them (`--adapter` works the same); the
+decoder reader never sees one; `palw-class check-architecture` routes an encoder–decoder config to them and
+judges the two stages (the encoder over the padded source, the decoder's text stage) separately. The Rust reader the
+five families used to need (`parse_encdec`) remains as the oracle of `tests/encdec_adapters.rs`.
+
 ## 6. The built-in pack
 
 `adapters/*.json`: `decoder-core` (the strict Llama-lineage decoder every family adapter extends: it reads

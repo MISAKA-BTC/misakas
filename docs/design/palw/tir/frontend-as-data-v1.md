@@ -374,7 +374,16 @@ cannot pass all four is not a feature yet; it is a Level C finding with the gene
 
 ## 9. State of the code (2026-10-01, quiet window)
 
-The quiet window (the release drill needs ≥ 20 GB of RAM) forbids building and testing, so the FR-01, FR-25, FR-26 and FR-07 code in this
-commit was **written without being compiled or run**. The first action after the window lifts is a build and the new tests
-(`tests/weights_expr.rs`, additions to `tests/architecture_report.rs`, the router tests), then the full release suite, then the
-corpus harness for the three acceptance entries. Until then the commit is a design with a reviewed draft, nothing more.
+The quiet window (the release drill needs ≥ 20 GB of RAM) forbids building and testing, so the code below was **written without
+being compiled or run**; the first action after the window lifts is a build, then each item's tests, then the full release suite.
+
+| item | written | tests (to run first) |
+| --- | --- | --- |
+| FR-01 `WEIGHTS_EXPR_V1` | `weights/expr.rs`, the binder's override and tolerance, `{p}` inside expressions, the size-1 hint | `tests/weights_expr.rs` (re-laid dbrx/granite/ernie storage; every built-in `Src` round-trips; the three corpus families from their tensor headers), `weights::expr` unit tests |
+| FR-25, FR-26 | `hf_schema::read_model` (override), `model::report` (label, tensor-index check), buffers are not weights | `tests/architecture_report.rs` (+3) |
+| FR-07 | `float_ref::route`, `lower::lower_route`, the HL guard | the corpus entry `ernie4_5_moe` once its fixture runs; the golden gates must not move |
+| FR-02 | `AttnSpec.qk_norm_after_rope`, the HL order | `tests/qk_norm_post_rope.rs`; the corpus entries `hunyuan_v1_dense`, `hunyuan_v1_moe` |
+| FR-18 Phase 1 | `EncDecSpec` as data (`EncDecNames`, `family_names`, validation), adapters of kind `encdec` (`encdec-frame`, `mixin-bart-lineage`, `t5`, `bart`, `mbart`, `marian`, `pegasus`), `hf_schema::read_encdec`, the report, the SDK's two-stage check | `tests/encdec_adapters.rs` (the oracle: adapter = `parse_encdec` on every fixture, real config and single-key mutant), `tests/encdec.rs` unchanged and green |
+| not started | FR-18 Phase 2, FR-17, FR-19, FR-09 | — |
+
+Until the build, the commit is a design with a reviewed draft, nothing more.

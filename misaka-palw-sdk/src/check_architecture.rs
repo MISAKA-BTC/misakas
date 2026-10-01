@@ -110,6 +110,11 @@ pub struct IrReportV1 {
 /// `commit_tiles` and `h_tile`).
 pub const IR_DEFAULT_TILE_LEN_V1: u32 = 64;
 pub const IR_DEFAULT_H_CHUNK_V1: u32 = 64;
+/// The source length (the encoder's padded axis) IR mode judges an encoder–decoder at unless given: the encoder is ONE
+/// position over this many rows, so its cost and cones scale with it (`docs/design/palw/tir/frontend-as-data-v1.md` §3.4).
+pub const IR_DEFAULT_SOURCE_LEN_V1: u32 = 128;
+/// The decoder's window (target positions its histories keep) it is judged at unless given.
+pub const IR_DEFAULT_TARGET_LEN_V1: u32 = 128;
 
 /// **The inputs `tir_admit_v1` runs with on this network**: the layout facts, tir/core's terminal
 /// ceilings, and the network's per-position MACs, state bytes and admission work cap in place of
@@ -162,9 +167,8 @@ pub fn check_ir_config_read_v1(
     tile_len: u32,
     h_chunk: u32,
 ) -> IrReportV1 {
-    let report = serde_json::from_str::<serde_json::Value>(&misaka_palw_tir_lower::hf_config::sanitize_json(config_text))
-        .ok()
-        .map(|c| misaka_palw_tir_lower::model::analyze(&c, tensors, read));
+    let parsed = serde_json::from_str::<serde_json::Value>(&misaka_palw_tir_lower::hf_config::sanitize_json(config_text)).ok();
+    let report = parsed.as_ref().map(|c| misaka_palw_tir_lower::model::analyze(c, tensors, read));
     let opts = misaka_palw_tir_lower::lower::LowerOpts {
         history_bound: if long_history {
             misaka_palw_tir::program::HISTORY_BOUND_V1_HELD
@@ -191,6 +195,11 @@ pub fn check_ir_config_read_v1(
         admission_json: serde_json::Value::Null,
         architecture_report: report.clone(),
     };
+    // An encoder–decoder is two programs (the encoder over the padded source, then the decoder's text stage): each is
+    // admitted on its own, and the model is admissible when both are (ENCDEC_FROM_SPEC_V1).
+    if let Some(c) = parsed.as_ref().filter(|c| misaka_palw_tir_lower::hf_schema::is_encoder_decoder(c)) {
+        return check_ir_encdec_v1(params, c, tensors, read, tile_len, h_chunk, report);
+    }
     let spec = match misaka_palw_tir_lower::hf_config::parse_config_str_read(config_text, read, misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin()) {
         Ok(s) => s,
         Err(e) => return empty(String::new(), not_lowerable(e)),
@@ -208,6 +217,79 @@ pub fn check_ir_config_read_v1(
             .push("the architecture is remote code: the lowering follows its source, no installed transformers reference".into());
     }
     r
+}
+
+/// **IR mode on an encoder–decoder config**: the adapter of kind `encdec` builds the spec, both stages are lowered
+/// (the encoder at [`IR_DEFAULT_SOURCE_LEN_V1`] source rows, the decoder over [`IR_DEFAULT_TARGET_LEN_V1`]) and each is
+/// judged by [`check_ir_program_at_v1`]. The verdict is the first stage's that is not admissible, else admissible;
+/// the numbers add up (`program_bytes`, `blocks`, `nodes`, `unrolled_nodes`), `admission_json` carries both stages'.
+#[allow(clippy::too_many_arguments)]
+fn check_ir_encdec_v1(
+    params: &Params,
+    config: &serde_json::Value,
+    tensors: Option<&misaka_palw_tir_lower::hf_schema::TensorIndex>,
+    read: &ReadOptions,
+    tile_len: u32,
+    h_chunk: u32,
+    report: Option<misaka_palw_tir_lower::model::ArchitectureReport>,
+) -> IrReportV1 {
+    use misaka_palw_tir_lower::lower::encdec::{hl_programs, lower_decoder, lower_encoder};
+    let (ceilings, source, _) = tir_ceilings_v1(params);
+    let refuse = |architecture: String, verdict: ArchVerdictV1| IrReportV1 {
+        architecture,
+        verdict,
+        unverified: Vec::new(),
+        ceilings_source: source.clone(),
+        ceilings,
+        program_bytes: 0,
+        blocks: 0,
+        nodes: 0,
+        unrolled_nodes: 0,
+        max_context: 0,
+        graph_ir_root: None,
+        inputs: None,
+        admission_text: String::new(),
+        admission_json: serde_json::Value::Null,
+        architecture_report: report.clone(),
+    };
+    let spec = match misaka_palw_tir_lower::hf_schema::read_encdec(config, read) {
+        Ok(r) => r.spec,
+        Err(f) => return refuse(String::new(), not_lowerable(f.error)),
+    };
+    let arch = spec.architecture.clone();
+    let has = |n: &str| tensors.is_some_and(|t| t.has(n));
+    let (lmax, wmax) = (IR_DEFAULT_SOURCE_LEN_V1, IR_DEFAULT_TARGET_LEN_V1);
+    let stages = hl_programs(&spec, lmax as usize, &has).and_then(|((ehl, _), (dhl, _))| {
+        let enc = lower_encoder(&ehl, &spec, lmax)?;
+        let dec = lower_decoder(&dhl, &spec, lmax, wmax)?;
+        Ok((enc, dec))
+    });
+    let (enc, dec) = match stages {
+        Ok(p) => p,
+        Err(e) => return refuse(arch, not_lowerable(e)),
+    };
+    let (re, rd) = (check_ir_program_at_v1(params, &enc.program, tile_len, h_chunk), check_ir_program_at_v1(params, &dec.program, tile_len, h_chunk));
+    let verdict = if !re.verdict.is_admissible() { re.verdict.clone() } else { rd.verdict.clone() };
+    let mut unverified = re.unverified.clone();
+    unverified.push(format!("stage 0 (encoder, {lmax} source rows): {}", re.verdict));
+    unverified.push(format!("stage 1 (decoder, {wmax} target positions): {}", rd.verdict));
+    IrReportV1 {
+        architecture: arch,
+        verdict,
+        unverified,
+        ceilings_source: re.ceilings_source.clone(),
+        ceilings: re.ceilings,
+        program_bytes: re.program_bytes + rd.program_bytes,
+        blocks: re.blocks + rd.blocks,
+        nodes: re.nodes + rd.nodes,
+        unrolled_nodes: re.unrolled_nodes + rd.unrolled_nodes,
+        max_context: rd.max_context,
+        graph_ir_root: None,
+        inputs: re.inputs,
+        admission_text: format!("── stage 0: the encoder ──\n{}\n── stage 1: the decoder ──\n{}", re.admission_text, rd.admission_text),
+        admission_json: serde_json::json!({"stages": [re.admission_json, rd.admission_json]}),
+        architecture_report: report,
+    }
 }
 
 fn not_lowerable(e: misaka_palw_tir_lower::LowerError) -> ArchVerdictV1 {

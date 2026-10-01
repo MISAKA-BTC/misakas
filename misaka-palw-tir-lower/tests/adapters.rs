@@ -88,7 +88,8 @@ fn pairs() -> Vec<(String, String, Value)> {
     }
     for (name, cfg) in cfgs {
         let arch = arch_of(&cfg);
-        if let Some(a) = builtin::all().iter().find(|a| a.architectures().contains(&arch.as_str())) {
+        // The differential oracle is the DECODER readers'; the encoder-decoder adapters have their own (tests/encdec_adapters.rs).
+        if let Some(a) = builtin::all().iter().find(|a| a.kind() == "decoder" && a.architectures().contains(&arch.as_str())) {
             out.push((a.id.clone(), name, cfg));
         }
     }

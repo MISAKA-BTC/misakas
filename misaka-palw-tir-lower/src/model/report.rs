@@ -6,8 +6,8 @@
 //! same data serialises as JSON (`--json`) for the tools that wrap it (header-only preflight, the t12
 //! admission conditions).
 
-use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, feature_info};
-use crate::hf_schema::{AdapterSource, Level, MissingItem, ReadOptions, TensorIndex, read_model};
+use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, encdec_features, feature_info};
+use crate::hf_schema::{AdapterSource, Level, MissingItem, ReadOptions, TensorIndex, is_encoder_decoder, read_encdec, read_model};
 use serde::Serialize;
 use serde_json::Value;
 use std::fmt::Write;
@@ -150,8 +150,123 @@ fn short_list(v: &[String], n: usize) -> String {
     s
 }
 
+/// The encoder-decoder's weight binding run on the tensor index, as [`weights_check`] does for a decoder: both stages
+/// bind from ONE checkpoint, so a tensor is unread only when NEITHER stage reads it. Returns `(unread, errors)`.
+fn encdec_weights_check(spec: &crate::lower::encdec::EncDecSpec, t: &TensorIndex) -> (Vec<String>, Vec<String>) {
+    use crate::lower::encdec::hl_programs;
+    use crate::weights::{WeightReport, check_names, check_weights};
+    let has = |n: &str| t.has(n);
+    // The source length only sizes the carry of the encoder's program; the binding does not depend on it.
+    let ((ehl, ebind), (dhl, dbind)) = match hl_programs(spec, 16, &has) {
+        Ok(p) => p,
+        Err(e) => return (Vec::new(), vec![e.to_string()]),
+    };
+    let check = |hl: &crate::hl::HlProgram, b: &crate::weights::Binding| -> WeightReport {
+        if t.has_all_shapes() {
+            check_weights(hl, b, &crate::hf_schema::HeaderSource(t))
+        } else {
+            check_names(hl, b, &t.names().map(str::to_string).collect())
+        }
+    };
+    let (e, d) = (check(&ehl, &ebind), check(&dhl, &dbind));
+    let unread: Vec<String> = e.unused.iter().filter(|n| d.unused.contains(n)).cloned().collect();
+    let mut errors = e.errors;
+    for x in d.errors {
+        if !errors.contains(&x) {
+            errors.push(x);
+        }
+    }
+    (unread, errors)
+}
+
+/// [`analyze`] for an encoder-decoder (`ENCDEC_FROM_SPEC_V1`): the adapter of kind `encdec` builds the spec, the
+/// features are listed, and the tensor index is run through both stages' bindings.
+pub fn analyze_encdec(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
+    let model_type = model_type_of(config);
+    let architectures = architectures_of(config);
+    match read_encdec(config, opts) {
+        Ok(read) => {
+            let features: Vec<FeatureReport> = encdec_features(&read.spec).iter().map(feature_report).collect();
+            let mut missing = Vec::new();
+            let (unread_tensors, weight_errors) = match tensors {
+                Some(t) => encdec_weights_check(&read.spec, t),
+                None => (Vec::new(), Vec::new()),
+            };
+            if !unread_tensors.is_empty() {
+                missing.push(MissingItem {
+                    what: "checkpoint tensors the reading never uses".to_string(),
+                    why: format!(
+                        "{} tensor(s): {} — a feature this reading does not know; an adapter must account for every tensor (or list its prefix as ignored)",
+                        unread_tensors.len(),
+                        short_list(&unread_tensors, 6)
+                    ),
+                    general_primitive: None,
+                });
+            }
+            if !weight_errors.is_empty() {
+                missing.push(MissingItem {
+                    what: "the checkpoint does not fit the reading".to_string(),
+                    why: short_list(&weight_errors, 3),
+                    general_primitive: None,
+                });
+            }
+            let level = if missing.is_empty() { Level::B } else { Level::C };
+            let result = if missing.is_empty() {
+                ReportResult::Lowerable
+            } else {
+                ReportResult::NotLowerable {
+                    reason: format!("missing: {}", missing.iter().map(|m| m.what.clone()).collect::<Vec<_>>().join(", ")),
+                }
+            };
+            ArchitectureReport {
+                schema: REPORT_SCHEMA_V1,
+                model_type,
+                architectures,
+                adapter: read.adapter,
+                overrides_refusal: None,
+                level,
+                level_label: label_of(level, false),
+                reference_confirmed: false,
+                features,
+                assumed_defaults: read.assumed_defaults,
+                unmapped_config_keys: Vec::new(),
+                unread_tensors,
+                weight_errors,
+                missing,
+                new_consensus_primitive_required: false,
+                new_court_kernel_required: false,
+                result,
+                notes: vec!["an encoder–decoder lowers to two programs (the encoder over the padded source, then the decoder's text stage); admission is judged per stage".to_string()],
+            }
+        }
+        Err(f) => ArchitectureReport {
+            schema: REPORT_SCHEMA_V1,
+            model_type,
+            architectures,
+            adapter: f.adapter,
+            overrides_refusal: None,
+            level: Level::C,
+            level_label: label_of(Level::C, false),
+            reference_confirmed: false,
+            features: Vec::new(),
+            assumed_defaults: Vec::new(),
+            unmapped_config_keys: f.unmapped_config_keys,
+            unread_tensors: Vec::new(),
+            weight_errors: Vec::new(),
+            missing: f.missing,
+            new_consensus_primitive_required: false,
+            new_court_kernel_required: false,
+            result: ReportResult::NotLowerable { reason: f.error.to_string() },
+            notes: Vec::new(),
+        },
+    }
+}
+
 /// Read a configuration (and, if given, its tensor names) and report what it needs.
 pub fn analyze(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
+    if is_encoder_decoder(config) {
+        return analyze_encdec(config, tensors, opts);
+    }
     let model_type = model_type_of(config);
     let architectures = architectures_of(config);
     match read_model(config, tensors, opts) {

@@ -324,6 +324,81 @@ pub fn read_model_with(
     Ok(read)
 }
 
+/// A successful read of an **encoder-decoder** (`ENCDEC_FROM_SPEC_V1`).
+#[derive(Clone, Debug)]
+pub struct EncDecRead {
+    pub spec: crate::lower::encdec::EncDecSpec,
+    pub adapter: AdapterSource,
+    /// Config keys the class defaults supplied (the reader assumed them: confirm against the class).
+    pub assumed_defaults: Vec<String>,
+}
+
+/// Whether a configuration is an encoder-decoder: the reader's own key (`is_encoder_decoder`), or an architecture
+/// an adapter of kind `encdec` claims (an older hub config of T5 does not carry the key: the class default is true).
+pub fn is_encoder_decoder(config: &Value) -> bool {
+    if config.get("is_encoder_decoder").and_then(Value::as_bool) == Some(true) {
+        return true;
+    }
+    let arch = config.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("");
+    builtin::find_encdec_for(arch, config.get("model_type").and_then(Value::as_str)).is_some()
+}
+
+/// Read an encoder-decoder configuration through an adapter of kind `encdec`: the built-in one that claims the
+/// class, one by id, or one the caller supplies. There is no standard template for it (an encoder-decoder shares
+/// its keys with no decoder), so `--adapter none` is a refusal. The decoder reader ([`read_model`]) refuses these
+/// configurations; this is their reader, and the adapter is data like every other.
+pub fn read_encdec(config: &Value, opts: &ReadOptions) -> Result<EncDecRead, ReadFailure> {
+    let root = config.as_object().ok_or_else(|| fail(LowerError::bad("config.json is not an object"), AdapterSource::None))?;
+    let arch = match root.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str) {
+        Some(a) => a.to_string(),
+        None => {
+            return Err(fail(
+                LowerError::not_lowerable("config has no `architectures`: the reference implementation cannot be identified (not a transformers config?)"),
+                AdapterSource::None,
+            ));
+        }
+    };
+    let model_type = root.get("model_type").and_then(Value::as_str);
+    let adapter: Adapter = match &opts.adapter {
+        AdapterChoice::BuiltIn(id) => {
+            builtin::by_id(id).cloned().ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?
+        }
+        AdapterChoice::Text(t) => adapter::parse(t, Origin::User).map_err(|e| fail(e, AdapterSource::None))?,
+        AdapterChoice::None => {
+            return Err(fail(
+                LowerError::not_lowerable(format!("{arch}: an encoder–decoder has no standard template; it needs an adapter (kind `encdec`)")),
+                AdapterSource::None,
+            ));
+        }
+        AdapterChoice::Auto => match builtin::find_encdec_for(&arch, model_type) {
+            Some(a) => a.clone(),
+            None => {
+                return Err(ReadFailure {
+                    error: LowerError::not_lowerable(format!("`{arch}` is an encoder–decoder no adapter of kind `encdec` claims")),
+                    adapter: AdapterSource::None,
+                    unmapped_config_keys: Vec::new(),
+                    missing: vec![MissingItem {
+                        what: format!("an encoder–decoder adapter for `{arch}`"),
+                        why: "no built-in adapter of kind `encdec` claims this architecture".into(),
+                        general_primitive: None,
+                    }],
+                });
+            }
+        },
+    };
+    let src = source_of(&adapter);
+    if adapter.kind() != "encdec" {
+        return Err(fail(
+            LowerError::not_lowerable(format!("{arch}: adapter `{}` is of kind `{}`, not `encdec`", adapter.id, adapter.kind())),
+            src,
+        ));
+    }
+    match eval::build_encdec_spec(&adapter, config) {
+        Ok(b) => Ok(EncDecRead { spec: b.spec, adapter: src, assumed_defaults: b.assumed_defaults }),
+        Err(e) => Err(fail(e, src)),
+    }
+}
+
 /// The reader's own checks (before any adapter runs), the adapter's evaluation, and the
 /// pre-quantised-checkpoint attachment.
 fn read_with(

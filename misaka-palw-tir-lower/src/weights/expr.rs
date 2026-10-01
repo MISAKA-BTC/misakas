@@ -139,7 +139,8 @@ fn apply_step(
         return Err(bad(param, format!("a step has exactly one operation of {OPS:?}; this one has the keys {:?}", o.keys().collect::<Vec<_>>())));
     }
     let op = ops[0];
-    let allowed: &[&str] = if op == "stack" { &["stack", "count"] } else { &[op] };
+    let own = [op];
+    let allowed: &[&str] = if op == "stack" { &["stack", "count"] } else { &own };
     if let Some(extra) = o.keys().find(|k| !allowed.contains(&k.as_str())) {
         return Err(bad(param, format!("step `{op}` does not take `{extra}`")));
     }
@@ -265,7 +266,7 @@ pub fn parse_weight_expr(param: &str, v: &Value, declared: &[usize], per_layer: 
     for step in steps {
         src = apply_step(param, src, step, declared, &used, &mut bound)?;
     }
-    let free: Vec<String> = used.iter().filter(|c| **c != 'L' && !bound.contains(c)).map(|c| format!("{{{c}}}")).collect();
+    let free: Vec<String> = used.iter().filter(|c| **c != 'L' && !bound.contains(*c)).map(|c| format!("{{{c}}}")).collect();
     if !free.is_empty() {
         return Err(bad(param, format!("{} never bound: a `stack` step binds one variable", free.join(", "))));
     }

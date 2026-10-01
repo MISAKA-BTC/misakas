@@ -702,15 +702,26 @@ impl<'a> Resolver<'a> {
         self
     }
 
-    /// Tensors of the checkpoint the program never read (excluding the ignored prefixes).
+    /// Tensors of the checkpoint the program never read (excluding the ignored prefixes and the module
+    /// buffers older checkpoints save, [`is_module_buffer`]).
     pub fn untouched(&self) -> Vec<String> {
         let t = self.touched.borrow();
         self.names
             .iter()
-            .filter(|n| !t.contains(*n) && !self.ignored_prefixes.iter().any(|p| n.starts_with(p.as_str())))
+            .filter(|n| !t.contains(*n) && !is_module_buffer(n) && !self.ignored_prefixes.iter().any(|p| n.starts_with(p.as_str())))
             .cloned()
             .collect()
     }
+}
+
+/// A **buffer** of a module, not a parameter: rotary frequency tables and position-id ranges that older
+/// checkpoints saved (newer ones do not) and no forward pass reads as a weight. A tensor the reading does not use
+/// is a feature it may be missing (FR-26) — these are not. Any other buffer (a causal-mask table) is listed by
+/// the adapter that knows its family, in `ignored_prefixes`.
+pub fn is_module_buffer(name: &str) -> bool {
+    ["inv_freq", "cos_cached", "sin_cached", "position_ids"]
+        .iter()
+        .any(|b| name == *b || name.ends_with(&format!(".{b}")))
 }
 
 fn expand(template: &str, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<String> {
