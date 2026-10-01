@@ -15,6 +15,8 @@ kaspa-hashes.workspace = true
 misaka-palw-base0.workspace = true
 # RFC-0002 Phase F: IR artifacts (the PALWTIR1 container) and their manifest.
 misaka-palw-tir.workspace = true
+# RFC-0003: a generative class's output header (declaring a pipeline class).
+misaka-palw-gen.workspace = true
 misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
 # RFC-0002 Phase F (F9): the typed IR executor as a node runs a class — the mapped artifact, the
 # step leg, the evidence builders — behind `TirLineageV1`.

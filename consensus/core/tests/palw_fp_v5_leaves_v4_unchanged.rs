@@ -34,7 +34,7 @@ use kaspa_consensus_core::palw_freeprompt_v3::{
     PalwFreePromptJobV3, fp_job_id_v3, fp_job_id_v4,
 };
 use kaspa_consensus_core::palw_gen_class_v1::{
-    PalwGenImageInputRefV1, PalwGenImageOfferV1, PalwGenJobImageErrorV1, PalwGenOffersV1, PalwGenSourceRefV1,
+    PalwGenImageInputRefV1, PalwGenImageOfferV1, PalwGenJobImageErrorV1, PalwGenOffersV1, PalwGenProfileOffersV1, PalwGenSourceRefV1,
 };
 use kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1;
 
@@ -86,6 +86,7 @@ fn offers(slots: &[(u32, u32, u32)]) -> PalwGenOffersV1 {
         max_source_tokens: 0,
         forced_prompt_prefix: vec![],
         source_token_floor: 0,
+        profile: PalwGenProfileOffersV1::None,
     }
 }
 

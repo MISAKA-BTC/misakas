@@ -35,6 +35,8 @@ pub mod admission;
 pub mod artifact;
 pub mod cfg;
 pub mod encoder;
+/// RFC-0003 step 7: a bidirectional encoder as the pieces of a registered Embedding class.
+pub mod embedding;
 pub mod error;
 pub mod fidelity;
 pub mod float_ref;

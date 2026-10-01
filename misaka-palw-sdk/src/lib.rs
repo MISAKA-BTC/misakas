@@ -42,6 +42,8 @@ pub mod improve_eval;
 /// artifacts, licences, candidates, rollbacks — what `palw-class improve …` writes.
 pub mod improve_objects;
 pub mod class_manifest;
+/// RFC-0003 step 7: declaring a generative (pipeline) class — layouts, the registration gate offline, registration, container.
+pub mod gen_class;
 pub mod conformance;
 pub mod lineage;
 pub mod lineages {

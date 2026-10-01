@@ -61,6 +61,8 @@ pub mod fp_recompute;
 pub mod fp_worker;
 /// RFC-0003 §II.2.1: the generative worker, seat and court halves — FP Job V5 on a registered pipeline class (dormant).
 pub mod gen_worker;
+/// RFC-0003 §I.3, §II.2.1: the tensor (image, embedding) worker, seat and court halves — a `PalwGenJobV1` on a registered class (dormant).
+pub mod gen_tensor_worker;
 pub mod fuzz_a16;
 pub mod fuzz_qwen36;
 pub mod gguf;

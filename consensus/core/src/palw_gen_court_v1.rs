@@ -55,6 +55,14 @@ pub struct PalwGenDrawV1 {
 
 /// **Lane `lane` of a random input at stage position `pos`**, recomputed from the job: the domain's
 /// word at `(seed, step, item, lane)`, then `Uniform`'s word or `Normal`'s table entry (PALW-RND-4).
+///
+/// This function is more lenient than the input declaration it serves, by design: it accepts domain 0
+/// (not an input domain), a `Uniform` whose `bits` are not its domain's word width, and a lane past `2^28`
+/// (past any tensor), each of which the program's normal form (NF-26) or the demand machinery's bound on
+/// the tensor's shape already refuses. It is safe only as long as those run first — a class whose programs
+/// were decoded and validated (`PalwGenClassV1::decode`) — and the evaluator now also holds every element
+/// it is answered to the input's declared interval (PALW-TIR-42), so a mis-derived draw fails `Operand`
+/// by name (the independent second implementation's observation on this function).
 pub fn palw_gen_random_element_v1(
     domain: u16,
     dist: RandomDist,
@@ -143,7 +151,11 @@ pub fn palw_gen_stage_answers_v1(
                 Binding::StageFinal { stage: up } => {
                     let up_prog = &programs[pipeline.stages[*up as usize].program as usize];
                     let iv = misaka_palw_tir::interval_v2::output_interval_v2(up_prog)?;
-                    PalwGenInputAnswerV1::Edge { lo: iv.lo, hi: iv.hi, kept: d.shape.iter().fold(1u64, |acc, x| acc.saturating_mul(*x as u64)) }
+                    PalwGenInputAnswerV1::Edge {
+                        lo: iv.lo,
+                        hi: iv.hi,
+                        kept: d.shape.iter().fold(1u64, |acc, x| acc.saturating_mul(*x as u64)),
+                    }
                 }
                 Binding::JobImage { index } => {
                     let image = images.get(*index as usize).ok_or_else(|| missing(format!("the job has no image {index}")))?;

@@ -29,9 +29,11 @@ use misaka_palw_tir::program_v2::{RandomDist, TirProgramV2};
 use misaka_palw_tir::tensor::Tensor;
 use misaka_palw_tir::types::DType;
 
-/// `R` for a pipeline job: `dist(R(seed, domain, step, 0, lane))`.
+/// `R` for a pipeline job: `dist(R(seed, domain, step, item, lane))` — `item` is the job's item index
+/// (`R`'s `position`, RFC-0003 §I.1.3): 0 for a text job, the image's `image_index` for an image job.
 pub struct PalwGenRandomV1 {
     pub seed: [u8; 32],
+    pub item: u32,
 }
 
 impl RandomSource for PalwGenRandomV1 {
@@ -41,7 +43,7 @@ impl RandomSource for PalwGenRandomV1 {
             RandomDist::Uniform { .. } => (misaka_palw_gen::RandDistV1::Uniform, DType::Idx),
             RandomDist::Normal => (misaka_palw_gen::RandDistV1::Normal, DType::I32),
         };
-        let v = misaka_palw_gen::rand_values_v1(domain, d, &self.seed, step, 0, n).ok()?;
+        let v = misaka_palw_gen::rand_values_v1(domain, d, &self.seed, step, self.item, n).ok()?;
         Tensor::new(dtype, shape.iter().map(|x| *x as usize).collect(), v.into_iter().map(|x| x as i128).collect()).ok()
     }
 }
@@ -68,6 +70,20 @@ pub struct PalwGenClaimRootsV1 {
     pub step_root: Hash64,
     pub stage_roots: Vec<Hash64>,
     pub generated: Vec<u32>,
+    /// A tensor claim's output digest (RFC-0003 §I.3.2); `None` for a text claim, whose output is its
+    /// generated ids.
+    pub output_root: Option<Hash64>,
+}
+
+/// **A tensor claim's canonical output** (RFC-0003 §I.3): the header, the output node's tile length,
+/// the values the canonical bytes are made of and their `output_root`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwGenOutputV1 {
+    pub spec: misaka_palw_gen::OutputSpecV1,
+    pub tile_len: u32,
+    /// The output node's elements, row-major — the canonical bytes' values.
+    pub values: Vec<i64>,
+    pub root: Hash64,
 }
 
 /// **An execution**: the run, the answer, the step tree with every leaf's values, and the roots.
@@ -80,6 +96,8 @@ pub struct PalwGenExecutionV1 {
     pub leaf_values: Vec<Vec<Vec<i128>>>,
     pub leaf_hashes: Vec<Vec<Hash64>>,
     pub claim: PalwGenClaimRootsV1,
+    /// A tensor claim's canonical output; `None` for a text claim.
+    pub output: Option<PalwGenOutputV1>,
 }
 
 impl PalwGenExecutionV1 {
@@ -137,8 +155,8 @@ fn commit_run(
         leaf_hashes.push(hashes);
     }
     let stage_roots: Vec<Hash64> = leaf_hashes.iter().enumerate().map(|(s, h)| palw_gen_stage_root_v1(s as u8, h)).collect();
-    let claim = PalwGenClaimRootsV1 { step_root: palw_gen_step_root_v1(&stage_roots), stage_roots, generated };
-    Ok(PalwGenExecutionV1 { run, stop, space, leaf_values, leaf_hashes, claim })
+    let claim = PalwGenClaimRootsV1 { step_root: palw_gen_step_root_v1(&stage_roots), stage_roots, generated, output_root: None };
+    Ok(PalwGenExecutionV1 { run, stop, space, leaf_values, leaf_hashes, claim, output: None })
 }
 
 /// **The worker**: run a job on a text class with image stages, generating through the V4 decoder.
@@ -166,7 +184,7 @@ pub fn palw_gen_execute_v1(
             TextSelectV1::Next(id)
         }
     };
-    let (run, generated) = run_text_pipeline(pipeline, programs, params, &PalwGenRandomV1 { seed }, job, &mut select)
+    let (run, generated) = run_text_pipeline(pipeline, programs, params, &PalwGenRandomV1 { seed, item: 0 }, job, &mut select)
         .map_err(|e| PalwGenRunErrorV1::Run(e.to_string()))?;
     let stop = decoder.stop();
     commit_run(pipeline, programs, layouts, run, generated, stop, job.prompt.len() as u32)
@@ -227,7 +245,37 @@ pub fn palw_gen_replay_committed_v1(
     job: &PipelineJob,
     seed: [u8; 32],
 ) -> Result<PalwGenExecutionV1, PalwGenRunErrorV1> {
-    let run =
-        run_pipeline(pipeline, programs, params, &PalwGenRandomV1 { seed }, job).map_err(|e| PalwGenRunErrorV1::Run(e.to_string()))?;
+    let run = run_pipeline(pipeline, programs, params, &PalwGenRandomV1 { seed, item: 0 }, job)
+        .map_err(|e| PalwGenRunErrorV1::Run(e.to_string()))?;
     commit_run(pipeline, programs, layouts, run, job.generated.clone(), None, job.prompt.len() as u32)
+}
+
+/// **The worker of a tensor class** (an image, an embedding): run the job's pipeline — `R` keyed by the
+/// job's seed at its item index — into the one step tree, and commit the canonical output: the output
+/// node's elements as the kind's canonical bytes, cut at the output node's step tiles
+/// (PALW-OUT-3), under `spec`'s header. A seat's replay is this same function over the same job: its
+/// roots and its output root are the claim's when the claim is honest.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_gen_execute_tensor_v1(
+    pipeline: &TirPipelineV1,
+    programs: &[TirProgramV2],
+    layouts: &[PalwTirLayoutV1],
+    params: &dyn PipelineParams,
+    job: &PipelineJob,
+    seed: [u8; 32],
+    item: u32,
+    spec: &misaka_palw_gen::OutputSpecV1,
+) -> Result<PalwGenExecutionV1, PalwGenRunErrorV1> {
+    let run = run_pipeline(pipeline, programs, params, &PalwGenRandomV1 { seed, item }, job)
+        .map_err(|e| PalwGenRunErrorV1::Run(e.to_string()))?;
+    let tile_len = crate::palw_gen_class_v1::palw_gen_output_tile_len_v1(pipeline, programs, layouts)
+        .ok_or_else(|| PalwGenRunErrorV1::Run("the class's layout has no tile for its output node".into()))?;
+    let values: Vec<i64> = run.output.data.iter().map(|v| *v as i64).collect();
+    let root = Hash64::from_bytes(
+        misaka_palw_gen::output_root_v1(spec, &values, tile_len).map_err(|e| PalwGenRunErrorV1::Run(format!("the output: {e:?}")))?,
+    );
+    let mut execution = commit_run(pipeline, programs, layouts, run, Vec::new(), None, 0)?;
+    execution.claim.output_root = Some(root);
+    execution.output = Some(PalwGenOutputV1 { spec: spec.clone(), tile_len, values, root });
+    Ok(execution)
 }

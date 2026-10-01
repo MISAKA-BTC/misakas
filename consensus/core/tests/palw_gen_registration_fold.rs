@@ -106,7 +106,13 @@ fn image_class() -> PalwGenClassV1 {
         profile: PalwGenProfileV1::Image as u8,
         layouts: layouts(&p, &progs, 1, 4),
         offers: PalwGenOffersV1 {
-            steps: (1..=steps_max).collect(),
+            // Two offered step counts: the toy denoiser's scalar 1 is the step count's position in them.
+            steps: vec![steps_max - 1, steps_max],
+            profile: PalwGenProfileOffersV1::Image(PalwGenImageOffersV1 {
+                sampler_id: Hash64::from_bytes([0x5A; 64]),
+                guidance: Some(PalwGenGuidanceOfferV1 { scalar: 0, lo: scalars[0].lo as u16, hi: scalars[0].hi as u16 }),
+                steps_scalar: Some(1),
+            }),
             scalars,
             max_prompt_tokens: encoder.max_trip - (rule.prefix.len() + rule.suffix.len()) as u32,
             max_negative_tokens: 0,
@@ -140,6 +146,7 @@ fn vlm_class() -> PalwGenClassV1 {
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
         },
         output: OutputSpecV1::tokens(max_trip),
         pipeline,
@@ -224,6 +231,40 @@ fn the_pipeline_admission_admits_the_toy_classes_and_counts_their_yardstick() {
     assert_eq!((record.profile, record.text_max_trip, record.images.len()), (PalwGenProfileV1::Text as u8, Some(12), 1));
     let record = palw_gen_class_record_v1(&image_class(), &root_of(0xA9)).unwrap();
     assert_eq!((record.text_max_trip, record.images.len()), (None, 0), "an image class has no text stage");
+}
+
+/// **G9 through the registration's own gates.** An output header whose element count is past `u64`
+/// (a video `[2^24, 2^24, 2^24, 3]`, and the other kinds' widest headers) once panicked in the output's
+/// layout arithmetic, on a path a registration walks: it is a named refusal at the admission
+/// (`verify_gen_class_admission_v1`) and at the preflight a node asks before it signs
+/// (`palw_gen_registration_preflight_at_v1`), and the builder never panics either.
+#[test]
+fn an_overflowing_output_header_is_refused_by_name_at_both_registration_gates() {
+    let p = armed();
+    let bundle = &bundle(&p);
+    let big = 1u32 << 24;
+    let mut built = 0;
+    for (what, profile, spec) in [
+        ("video [2^24, 2^24, 2^24, 3]", PalwGenProfileV1::Video, OutputSpecV1::video_rgb8(big, big, big, 30, 1)),
+        ("video [2^20, 2^20, 2^20, 3]", PalwGenProfileV1::Video, OutputSpecV1::video_rgb8(1 << 20, 1 << 20, 1 << 20, 30, 1)),
+        ("an image [2^24, 2^24, 3]", PalwGenProfileV1::Image, OutputSpecV1::image_rgb8(big, big)),
+        ("an embedding [2^24, 2^24]", PalwGenProfileV1::Embedding, OutputSpecV1::embedding_i32(big, big, 0, false)),
+        ("audio [2^24, 2^24]", PalwGenProfileV1::Audio, OutputSpecV1::pcm_i16(big, big, 48_000)),
+    ] {
+        let mut class = image_class();
+        class.profile = profile as u8;
+        class.output = spec;
+        let Ok(object) = palw_gen_post_genesis_registration_v1(class, root_of(0xA9), 0, 1 << 100, 1, AT, someone(), vec![]) else {
+            // The builder may refuse a class it cannot count; it must never panic.
+            continue;
+        };
+        built += 1;
+        let e = verify_gen_class_admission_v1(bundle, &rules(&p), &object).expect_err(what);
+        assert!(matches!(e, PalwClassAdmissionError::GenClass(_)), "{what}: the admission: {e}");
+        let e = palw_gen_registration_preflight_at_v1(&p, bundle, &object, AT).expect_err(what);
+        assert!(matches!(e, PalwClassAdmissionError::GenClass(_)), "{what}: the preflight: {e}");
+    }
+    assert!(built >= 1, "the builder builds at least one of these (it counts the yardstick, not the output)");
 }
 
 #[test]

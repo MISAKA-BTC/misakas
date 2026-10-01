@@ -459,6 +459,8 @@ pub mod palw_tir_v1;
 pub mod palw_gen_v1;
 /// RFC-0003: a generative class — a pipeline of PALW-TIR version-2 programs — its identity, its registration carriage and its preflight.
 pub mod palw_gen_class_v1;
+/// RFC-0003 §I.0: the generative job `PalwGenJobV1` (an image, an embedding) — its identity and its acceptance by name.
+pub mod palw_gen_job_v1;
 /// RFC-0003: the generative court's own questions — R's inputs recomputed from the job, PALW-TIR-33 on edges, the output digest (fault 21).
 pub mod palw_gen_court_v1;
 /// RFC-0003 §I.2.3: the one step tree of a pipeline claim — every stage's leaves, stage-major.

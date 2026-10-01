@@ -510,13 +510,19 @@ pub enum PalwCourtVerdictProofV2 {
     /// `TirDissection` with the generative close as its carriage, graded against its session's phase
     /// ([`crate::palw_gen_close_v1::check_gen_dissect_bottom_v1`]), never against the claim alone.
     GenDissection { bottom: Box<crate::palw_gen_close_v1::PalwGenConeCloseV1> },
+    /// **RFC-0003 (tag 13): a tensor claim's output close** — one output tile of the claim's canonical
+    /// output, proven under its `output_root`, against the output node's committed step tile of the
+    /// same lanes: the executor's two statements about one output disagree, or a lane is outside the
+    /// node's proven interval ([`crate::palw_gen_close_v1::check_gen_output_close_v1`], PALW-OUT-4).
+    /// Appended last, so no earlier discriminant moves.
+    GenOutputTile { close: Box<crate::palw_gen_close_v1::PalwGenOutputCloseV1> },
 }
 
 impl PalwCourtVerdictProofV2 {
     /// **Is this a generative close** (RFC-0003)? A move only past `palw_gen_v1`; below it the
     /// acceptance layer drops it by name and the fold reads an assembled one as undecodable bytes.
     pub fn is_gen_v1(&self) -> bool {
-        matches!(self, Self::GenCone { .. } | Self::GenDecodeToken { .. } | Self::GenDissection { .. })
+        matches!(self, Self::GenCone { .. } | Self::GenDecodeToken { .. } | Self::GenDissection { .. } | Self::GenOutputTile { .. })
     }
 
     /// **Is this an IR class's close** (RFC-0002 Phase F)? Such a close is a move only past
@@ -1070,7 +1076,8 @@ fn binding_of(proof: &PalwCourtVerdictProofV2) -> Option<&crate::palw_step_leg::
         | PalwCourtVerdictProofV2::TirDissection { .. }
         | PalwCourtVerdictProofV2::GenCone { .. }
         | PalwCourtVerdictProofV2::GenDecodeToken { .. }
-        | PalwCourtVerdictProofV2::GenDissection { .. } => None,
+        | PalwCourtVerdictProofV2::GenDissection { .. }
+        | PalwCourtVerdictProofV2::GenOutputTile { .. } => None,
     }
 }
 
@@ -1352,7 +1359,9 @@ pub fn adjudicate_court_close_v3(
         // the ladder narrowed to (in the claim's one stage-major order), a decode close must name the
         // id whose logits row the narrowed leaf is a tile of; both are checked with the binding, which
         // the door needs to place the leaf.
-        PalwCourtVerdictProofV2::GenCone { .. } | PalwCourtVerdictProofV2::GenDecodeToken { .. } => {
+        PalwCourtVerdictProofV2::GenCone { .. }
+        | PalwCourtVerdictProofV2::GenDecodeToken { .. }
+        | PalwCourtVerdictProofV2::GenOutputTile { .. } => {
             return adjudicate_gen_close_v1(state, claim, proof, Some(narrowed), court, prompt_ids_form, decode_close_convicts_only);
         }
         // **RFC-0003: the generative dissection's bottom, graded against F7's phase** — the tile it
@@ -1648,9 +1657,9 @@ pub fn adjudicate_close_proof_v2(
         | PalwCourtVerdictProofV2::TirDecodeToken { .. }
         | PalwCourtVerdictProofV2::TirDissection { .. } => Err(PalwCourtV2Error::DoesNotAdjudicate("an IR close".into())),
         // Adjudicated above, by `adjudicate_gen_close_v1`; the bottom only in its session.
-        PalwCourtVerdictProofV2::GenCone { .. } | PalwCourtVerdictProofV2::GenDecodeToken { .. } => {
-            Err(PalwCourtV2Error::DoesNotAdjudicate("a generative close".into()))
-        }
+        PalwCourtVerdictProofV2::GenCone { .. }
+        | PalwCourtVerdictProofV2::GenDecodeToken { .. }
+        | PalwCourtVerdictProofV2::GenOutputTile { .. } => Err(PalwCourtV2Error::DoesNotAdjudicate("a generative close".into())),
         PalwCourtVerdictProofV2::GenDissection { .. } => Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
     }
 }
@@ -1684,6 +1693,9 @@ fn adjudicate_gen_close_v1(
         }
         PalwCourtVerdictProofV2::GenDecodeToken { close } => {
             g::check_gen_decode_close_v1(close, row, &claim.class_id, &claim.execution_root, narrowed)
+        }
+        PalwCourtVerdictProofV2::GenOutputTile { close } => {
+            g::check_gen_output_close_v1(close, row, &claim.class_id, &claim.execution_root, narrowed)
         }
         // Graded against its phase, in `adjudicate_court_close_v3` — refused here, never read as
         // "no fault found" (which would acquit).
@@ -2334,7 +2346,8 @@ pub fn check_close_cost_v2(
         // RFC-0003: a generative close likewise, measured as it rides (the class referenced by id).
         | PalwCourtVerdictProofV2::GenCone { .. }
         | PalwCourtVerdictProofV2::GenDecodeToken { .. }
-        | PalwCourtVerdictProofV2::GenDissection { .. } => {
+        | PalwCourtVerdictProofV2::GenDissection { .. }
+        | PalwCourtVerdictProofV2::GenOutputTile { .. } => {
             let bytes = borsh::to_vec(proof).map(|b| b.len() as u64).unwrap_or(u64::MAX);
             if bytes > court.max_close_bytes() {
                 return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });
