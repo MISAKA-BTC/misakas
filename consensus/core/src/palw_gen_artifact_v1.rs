@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 
 use crate::Hash64;
 use crate::palw_artifact::{
-    PalwArtifactMerkleFrontierV1, PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_parts_v1, open_artifact_leaf_v1,
+    PalwArtifactMerkleFrontierV1, PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_parts_v1,
     verify_artifact_opening_v1,
 };
 use crate::palw_tir_artifact_v1::{
@@ -294,12 +294,16 @@ pub fn palw_gen_open_leaves_named_v1(
     leaves: impl IntoIterator<Item = u32>,
 ) -> Result<Vec<PalwArtifactOpeningV1>, PalwTirInventoryError> {
     let operands = palw_gen_inventory_operands_named_v1(programs, params, naming)?;
-    let wanted: std::collections::BTreeSet<u32> = leaves.into_iter().collect();
+    let wanted: Vec<u32> = leaves.into_iter().collect::<std::collections::BTreeSet<u32>>().into_iter().collect();
     let count = operands.len() as u32;
-    wanted
-        .into_iter()
-        .map(|i| open_artifact_leaf_v1(&operands, i).ok_or(PalwTirInventoryError::IndexOutOfRange { index: i, count }))
-        .collect()
+    if let Some(bad) = wanted.iter().find(|i| **i >= count) {
+        return Err(PalwTirInventoryError::IndexOutOfRange { index: *bad, count });
+    }
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    // One build of the tree for every opening of the cone (see `open_artifact_leaves_v1`).
+    crate::palw_artifact::open_artifact_leaves_v1(&operands, &wanted).ok_or(PalwTirInventoryError::IndexOutOfRange { index: wanted[0], count })
 }
 
 /// Why carried param openings are refused (the close then convicts nobody).
