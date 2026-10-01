@@ -44,6 +44,15 @@ pub(crate) fn run_steps<D>(
     build: impl FnOnce(&mut BlockBuilder<'_>, D) -> Ref,
     n: usize,
 ) -> Vec<Tensor> {
+    run_multi(declare, |b, d| vec![build(b, d)], n).into_iter().map(|mut v| v.remove(0)).collect()
+}
+
+/// [`run_steps`] observing several nodes: `result[position][k]` is the `k`-th returned node's value.
+pub(crate) fn run_multi<D>(
+    declare: impl FnOnce(&mut ProgramBuilder, &mut ParamSink) -> D,
+    build: impl FnOnce(&mut BlockBuilder<'_>, D) -> Vec<Ref>,
+    n: usize,
+) -> Vec<Vec<Tensor>> {
     let mut pb = ProgramBuilder::new(16, HISTORY_BOUND_V1_SMALL);
     let mut sink = ParamSink::new();
     let declared = declare(&mut pb, &mut sink);
@@ -53,15 +62,19 @@ pub(crate) fn run_steps<D>(
         let c = b.iota(DType::I16, &[Dim::Fixed(1)], 0, 0, 0);
         b.finish(&[c])
     };
-    let (layer, node) = {
+    let (layer, nodes) = {
         let mut b = pb.block("layer", vec![carry.clone()]);
-        let r = build(&mut b, declared);
-        let dt = b.ty(r).dtype;
-        let r = if dt.committable() { r } else { b.clamp(r, i32::MIN as i64, i32::MAX as i64, DType::I32) };
-        b.commit(r);
-        let Ref::Node(i) = r else { panic!("the observed value is a node") };
+        let rs = build(&mut b, declared);
+        let mut nodes = Vec::new();
+        for r in rs {
+            let dt = b.ty(r).dtype;
+            let r = if dt.committable() { r } else { b.clamp(r, i32::MIN as i64, i32::MAX as i64, DType::I32) };
+            b.commit(r);
+            let Ref::Node(i) = r else { panic!("an observed value is a node") };
+            nodes.push(i);
+        }
         let c = b.reshape_fixed(Ref::CarryIn(0), &[1]);
-        (b.finish(&[c]), i)
+        (b.finish(&[c]), nodes)
     };
     let post = {
         let mut b = pb.block("post", vec![carry]);
@@ -80,7 +93,17 @@ pub(crate) fn run_steps<D>(
     (0..n)
         .map(|i| {
             let step = interp.step(&mp, &mut st, 0).unwrap_or_else(|e| panic!("step {i}: {e}"));
-            step.commits.iter().find(|c| c.block == layer && c.node == node).expect("the observed node is committed").value.clone()
+            nodes
+                .iter()
+                .map(|node| {
+                    step.commits
+                        .iter()
+                        .find(|c| c.block == layer && c.node == *node)
+                        .expect("an observed node is committed")
+                        .value
+                        .clone()
+                })
+                .collect()
         })
         .collect()
 }

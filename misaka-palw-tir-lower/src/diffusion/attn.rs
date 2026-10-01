@@ -140,9 +140,12 @@ pub fn lower_joint_attention(
     let tok = b.transpose(codes, &[1, 0, 2]); // [T, h, dh]
     let joint = b.reshape_fixed(tok, &[t, d]);
     let img = b.slice(joint, 0, 0, spec.n_img as u32);
-    let txt = b.slice(joint, 0, spec.n_img as u32, spec.n_txt as u32);
     let out_img = lower_linear(b, img, &r.o, out.0, out.1, out.2);
-    let out_txt = r.add_o.map(|w| lower_linear(b, txt, &w, out.0, out.1, out.2));
+    // The text slice exists only when its projection does (a node nothing reads is refused by normal form).
+    let out_txt = r.add_o.map(|w| {
+        let txt = b.slice(joint, 0, spec.n_img as u32, spec.n_txt as u32);
+        lower_linear(b, txt, &w, out.0, out.1, out.2)
+    });
     (out_img, out_txt)
 }
 

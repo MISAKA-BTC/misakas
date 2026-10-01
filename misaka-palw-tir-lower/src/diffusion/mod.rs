@@ -11,6 +11,8 @@
 //! * [`sink`] — the integer params a lowering produces, keyed by name and bound to a program's param indices;
 //! * [`act`] — `ACT_TABLE_V1`, SiLU and GELU-tanh as `i16` tables on the code grid;
 //! * [`ada`] — `MOD_ADALN_V1`, the modulated LayerNorm and the gated residual;
+//! * [`calib`] / [`float`] — the per-site calibration and the float reference of the denoiser it is taken from;
+//! * [`block`] — one joint transformer block assembled from the lowerers;
 //! * [`attn`] — `ATTN_JOINT_STREAMS_V1`, MMDiT's joint attention over both streams with committed row statistics;
 //! * [`linear`] — a quantised linear map: `i8` weights per output channel, one narrowing per channel;
 //! * [`embed`] — `PATCH_EMBED_V1`, `EMBED_TIMESTEP_TABLE_V1`, the conditioning embedders;
@@ -28,8 +30,11 @@
 pub mod act;
 pub mod ada;
 pub mod attn;
+pub mod block;
+pub mod calib;
 pub mod conv;
 pub mod embed;
+pub mod float;
 pub mod linear;
 pub mod norm;
 pub mod sampler;
