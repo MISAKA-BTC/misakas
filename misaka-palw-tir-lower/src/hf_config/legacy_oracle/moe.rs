@@ -406,7 +406,7 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
         && mad != 0.0
     {
         let f = rc.params.get("factor").and_then(Value::as_f64).unwrap_or(1.0);
-        let ms = if f <= 1.0 { 1.0 } else { 0.1 * mad * f.ln() + 1.0 };
+        let ms = if f <= 1.0 { 1.0 } else { 0.1 * mad * crate::detmath::ln(f) + 1.0 };
         scale *= ms * ms;
     }
     let norm = NormSpec::rms(eps);

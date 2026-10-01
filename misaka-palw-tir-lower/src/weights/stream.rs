@@ -52,6 +52,10 @@ fn streamable(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<cha
             ishape.len() >= 2 && streamable(inner, r, layer, &v)?
         }
         Src::Map { src: inner, .. } => streamable(inner, r, layer, vars)?,
+        Src::PadRows { src: inner, .. } => {
+            let ishape = src_shape(inner, r, layer, vars)?;
+            ishape.len() >= 2 && streamable(inner, r, layer, vars)?
+        }
         Src::Reshape { src: inner, shape: out } => {
             let ishape = src_shape(inner, r, layer, vars)?;
             ishape.len() >= 2 && ishape.last() == out.last() && streamable(inner, r, layer, vars)?
@@ -155,6 +159,17 @@ fn rows_of(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, 
             Ok(t)
         }
         Src::Reshape { src: inner, .. } => rows_of(inner, r, layer, vars, rows, cols),
+        Src::PadRows { src: inner, .. } => {
+            // The inner value's rows, then zero rows.
+            let ishape = src_shape(inner, r, layer, vars)?;
+            let have: usize = ishape[..ishape.len() - 1].iter().product();
+            let mut data = Vec::with_capacity(rows.len() * cols);
+            if rows.start < have {
+                data.extend(rows_of(inner, r, layer, vars, rows.start..rows.end.min(have), cols)?.data);
+            }
+            data.resize(rows.len() * cols, 0.0);
+            Ok(Tensor::new(vec![rows.len(), cols], data))
+        }
         Src::Transpose(_) | Src::Quant { .. } => Err(LowerError::eval("a transpose or a quantised weight is not evaluated by row ranges")),
     }
 }
@@ -163,7 +178,7 @@ fn rows_of(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, 
 /// evaluation both call it).
 pub(super) fn apply_map(t: &mut Tensor, f: &MapFn, layer: Option<usize>) -> Result<()> {
     match f {
-        MapFn::NegExp => t.data.iter_mut().for_each(|x| *x = -((*x as f64).exp() as f32)),
+        MapFn::NegExp => t.data.iter_mut().for_each(|x| *x = -(crate::detmath::exp(*x as f64) as f32)),
         MapFn::Scale(c) => t.data.iter_mut().for_each(|x| *x = (*x as f64 * c) as f32),
         MapFn::RescaleByLayer { every } => {
             let l = layer.ok_or_else(|| LowerError::eval("rescale needs a layer"))?;

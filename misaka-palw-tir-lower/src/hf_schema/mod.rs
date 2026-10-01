@@ -66,6 +66,23 @@ pub enum AdapterChoice {
     Text(String),
 }
 
+impl AdapterChoice {
+    /// The command-line spelling: `none`, `builtin:<id>`, `auto`, or the path of an adapter file
+    /// (`misaka.palw.model-adapter.v1`), read here.
+    pub fn parse_arg(arg: &str) -> Result<AdapterChoice, LowerError> {
+        match arg {
+            "auto" => Ok(AdapterChoice::Auto),
+            "none" => Ok(AdapterChoice::None),
+            _ => match arg.strip_prefix("builtin:") {
+                Some(id) => Ok(AdapterChoice::BuiltIn(id.to_string())),
+                None => std::fs::read_to_string(arg)
+                    .map(AdapterChoice::Text)
+                    .map_err(|e| LowerError::Io(format!("adapter file {arg}: {e}"))),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ReadOptions {
     pub adapter: AdapterChoice,
@@ -166,6 +183,17 @@ fn source_of(a: &Adapter) -> AdapterSource {
 /// Read a Hugging Face `config.json` (and, optionally, the checkpoint's tensor names and shapes)
 /// into a [`ModelSpec`].
 pub fn read_model(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> Result<ModelRead, ReadFailure> {
+    read_model_with(config, tensors, opts, crate::quantfmt::QuantRegistry::builtin())
+}
+
+/// [`read_model`] with the quant formats of `reg` (the built-ins plus the descriptors a model needs):
+/// a pre-quantised checkpoint's `quantization_config` is read by the format files of that registry.
+pub fn read_model_with(
+    config: &Value,
+    tensors: Option<&TensorIndex>,
+    opts: &ReadOptions,
+    reg: &crate::quantfmt::QuantRegistry,
+) -> Result<ModelRead, ReadFailure> {
     let root = config.as_object().ok_or_else(|| fail(LowerError::bad("config.json is not an object"), AdapterSource::None))?;
     let arch = match root.get("architectures") {
         Some(Value::Array(a)) if !a.is_empty() => match a[0].as_str() {
@@ -248,7 +276,7 @@ pub fn read_model(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOpti
         other => other,
     };
     match route {
-        Route::Adapter(a) => read_with(&a, &arch, config, tensors),
+        Route::Adapter(a) => read_with(&a, &arch, config, tensors, reg),
         Route::Generic => {
             // The standard decoder template is the reading of a causal language model whose class
             // follows the Hugging Face convention (`…ForCausalLM`): a configuration of another kind
@@ -270,7 +298,7 @@ pub fn read_model(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOpti
                 });
             }
             let std = builtin::by_id("standard-decoder").ok_or_else(|| fail(LowerError::eval("internal: no standard-decoder adapter"), AdapterSource::None))?;
-            let mut r = read_with(std, &arch, config, tensors)?;
+            let mut r = read_with(std, &arch, config, tensors, reg)?;
             r.adapter = AdapterSource::None;
             Ok(r)
         }
@@ -279,7 +307,13 @@ pub fn read_model(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOpti
 
 /// The reader's own checks (before any adapter runs), the adapter's evaluation, and the
 /// pre-quantised-checkpoint attachment.
-fn read_with(a: &Adapter, arch: &str, config: &Value, tensors: Option<&TensorIndex>) -> Result<ModelRead, ReadFailure> {
+fn read_with(
+    a: &Adapter,
+    arch: &str,
+    config: &Value,
+    tensors: Option<&TensorIndex>,
+    reg: &crate::quantfmt::QuantRegistry,
+) -> Result<ModelRead, ReadFailure> {
     let src = source_of(a);
     let f = |e: LowerError| fail(e, src.clone());
     let root = config.as_object().ok_or_else(|| f(LowerError::bad("config.json is not an object")))?;
@@ -294,7 +328,7 @@ fn read_with(a: &Adapter, arch: &str, config: &Value, tensors: Option<&TensorInd
     let quant = match root.get("quantization_config").filter(|q| !q.is_null()) {
         Some(q) => {
             let mt = root.get("model_type").and_then(Value::as_str).unwrap_or("");
-            Some(crate::prequant::parse_quant_config(q, arch, mt).map_err(f)?)
+            Some(crate::prequant::parse_quant_config_with(q, arch, mt, reg).map_err(f)?)
         }
         None => None,
     };

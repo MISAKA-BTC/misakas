@@ -64,6 +64,13 @@ impl M<'_> {
             "moe.shared.up",
             "moe.shared.down",
         ];
+        // A format that decodes to floats (FP8) reads whatever the quantiser converted — a projection of
+        // any mixer — as the float weight it is; one that yields integers is lowered from them, and only
+        // the plain attention and MLP projections are (`crate::lower::qlinear`).
+        const ALSO_FLOAT: &[&str] = &[
+            "mla.q_a", "mla.q_b", "mla.q", "mla.kv_a", "mla.kv_b", "mla.o", "gdn.qkvz", "gdn.ba", "gdn.qkv", "gdn.z", "gdn.b", "gdn.a", "gdn.out",
+            "mamba.in", "mamba.x", "mamba.dt", "mamba.out", "mamba2.in", "mamba2.out",
+        ];
         let Some(q) = &self.st.quant else { return Ok(None) };
         // GGUF: every tensor has its own type; the modules stored block-quantised are listed.
         if let crate::prequant::QFormat::Gguf { .. } = q.fmt {
@@ -75,7 +82,7 @@ impl M<'_> {
         if role == "lm_head" {
             return Ok(q.lm_head.then(|| q.fmt.clone()));
         }
-        if !PROJECTIONS.contains(&role) {
+        if !(PROJECTIONS.contains(&role) || (!q.fmt.is_integers() && ALSO_FLOAT.contains(&role))) {
             return Ok(None);
         }
         let t = self.role(role)?;
@@ -135,6 +142,12 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     }
     if let Some(n) = &spec.final_norm {
         m.norm("final_norm", "final_norm", n)?;
+    }
+    // Hyper-connections: the last gated mix of the streams (it stands where the final norm would).
+    if let Some(hy) = &spec.hyper {
+        m.norm("hc.final.norm", "hc.final.norm", &hy.norm)?;
+        m.lin("hc.final.down", "hc.final.down", false)?;
+        m.lin("hc.final.up", "hc.final.up", false)?;
     }
     let logits = matches!(spec.output, OutputSpec::Logits);
     if let OutputSpec::Embedding { proj: Some((_, bias)), .. } = spec.output {
@@ -236,8 +249,18 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
                 m.put("layer.scalar", Src::t(m.role("layer.scalar")?))?;
             }
         }
-        Residual::HyperConnection { .. } => {
-            return Err(LowerError::not_lowerable("RESIDUAL_GATED_HC_V1: no weight binding yet (the generic lowerer of hyper-connections is not in this build)"));
+        Residual::HyperConnection { ple } => {
+            let hy = spec.hyper.as_ref().ok_or_else(|| LowerError::eval("internal: a hyper-connection layer without the model's streams"))?;
+            for tag in ["mix", "ffn"] {
+                let role = |part: &str| format!("hc.{tag}.{part}");
+                m.norm(&role("norm"), &role("norm"), &hy.norm)?;
+                for part in ["down", "up", "inject"] {
+                    m.lin(&role(part), &role(part), false)?;
+                }
+            }
+            if let Some(p) = ple {
+                ple_ngram(m, spec, p)?;
+            }
         }
     }
     match &ls.mixer {
@@ -376,7 +399,39 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
     if a.sinks {
         m.put(n("sinks"), Src::t(m.role("attn.sinks")?))?;
     }
+    // Sparse block attention's indexer: one fused query+key projection and the two norms.
+    if let Some(sp) = &a.sparse {
+        m.lin("attn.idx.qk", "attn.idx.qk", false)?;
+        m.norm("attn.idx.q_norm", "attn.idx.q_norm", &sp.q_norm)?;
+        m.norm("attn.idx.k_norm", "attn.idx.k_norm", &sp.k_norm)?;
+    }
     Ok(())
+}
+
+/// The per-layer n-gram embedding's params: its two projections, three norms, the dilated depthwise
+/// convolution, and the hash heads' table (the checkpoint's row shards, concatenated, padded to the
+/// tallest layer's height).
+fn ple_ngram(m: &mut M, spec: &ArchSpec, p: &NgramPleSpec) -> Result<()> {
+    let streams = spec.hyper.as_ref().map_or(1, |h| h.streams);
+    let n = streams * spec.hidden_size;
+    m.lin("ple.key", "ple.key", false)?;
+    m.lin("ple.value", "ple.value", false)?;
+    for name in ["ple.norm_key", "ple.norm_query", "ple.norm_conv"] {
+        m.norm(name, name, &p.norm)?;
+    }
+    conv(m, "ple.conv", n, p.conv_kernel, false)?;
+    let rows_max = spec
+        .layers
+        .iter()
+        .filter_map(|l| match &l.residual {
+            Residual::HyperConnection { ple: Some(q) } => Some(crate::ngram::NgramTables::cached(q).padded_vocab as usize),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let shards = m.st.table_shards.max(1);
+    let table = Src::t(format!("{}.weight", m.role("ple.table")?)).stack('S', shards).pad_rows(rows_max);
+    m.put("ple.ngram.table", table)
 }
 
 fn mla(m: &mut M, a: &MlaSpec) -> Result<()> {

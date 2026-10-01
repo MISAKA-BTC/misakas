@@ -119,6 +119,8 @@ pub enum Op {
         eps: f64,
         groups: usize,
         gate_first: bool,
+        /// The gate's activation (SiLU; Qwen4-Exp's `output_gate_type` may say sigmoid).
+        act: Act,
     },
     /// `x · rsqrt(Σx² + eps)` per group (FLA's l2norm).
     L2Norm {
@@ -134,6 +136,17 @@ pub enum Op {
         offset: usize,
         style: RopeStyle,
         table: u32,
+    },
+    /// [`Op::Rope`] by the position at the START of the position's block of `ratio` positions
+    /// (`pos − pos mod ratio`): the rotation of a pooled key. In: `[x, Pos]`.
+    RopeAtBlock {
+        heads: usize,
+        head_dim: usize,
+        rotary_dim: usize,
+        offset: usize,
+        style: RopeStyle,
+        table: u32,
+        ratio: usize,
     },
     /// Llama-4's attention temperature: `x · t(pos)`, `t` the spec's [`QTemperature`]. In: `[x, Pos]`.
     PosScale {
@@ -158,6 +171,9 @@ pub enum Op {
         sinks: bool,
         /// Chunked attention: only the keys of the query's own `chunk`-position chunk.
         chunk: Option<usize>,
+        /// Sparse block attention (`ATTN_SPARSE_BLOCK_V1`): the tokens of the blocks the extra last
+        /// input names (`BlockSelect`'s ids, blocks of this many positions) plus the incomplete tail.
+        blocks: Option<usize>,
     },
     /// Multi-head latent attention over a compressed history (DeepSeek). Keys/values are
     /// `kv_b · latent` per head plus the shared rotary key. In: `[q, State(latent), State(k_rope), kv_b]`.
@@ -177,6 +193,8 @@ pub enum Op {
         kernel: usize,
         bias: bool,
         act: Option<Act>,
+        /// Distance between taps (1: contiguous); the state keeps `(kernel − 1)·dilation` rows.
+        dilation: usize,
     },
     /// Gated delta rule (Qwen3-Next): per value head `S ← S·exp(g); S += k (β(v − Sᵀk))ᵀ; o = Sᵀ(q·q_scale)`.
     /// In: `[q, k, v, g, beta, State(S [vh, dk, dv])]`.
@@ -215,6 +233,61 @@ pub enum Op {
     Wkv7 {
         heads: usize,
         head_size: usize,
+    },
+    // ── multi-stream residuals (RESIDUAL_GATED_HC_V1) ──
+    /// Mean over `streams` equal groups: `out[d] = (1/S) Σ_s x[s·D + d]`. In: `[x]`.
+    StreamMean {
+        streams: usize,
+    },
+    /// A vector scaled per stream: `out[s·D + d] = o[d] · w[s]`. In: `[o [D], w [S]]`.
+    StreamOuter {
+        streams: usize,
+    },
+    /// Per-group dot product: `out[g] = Σ_{j in group g} a[j]·b[j]`. In: `[a, b]`.
+    GroupDot {
+        groups: usize,
+    },
+    // ── hashed n-gram per-layer embedding (EMBED_NGRAM_PLE_V1) ──
+    /// The table row of every hash head for this position's token and the segment-masked tokens
+    /// before it ([`crate::ngram`]): an `Idx` vector of `(ngram_size − 1)·heads_per_ngram` ids.
+    /// `layers` lists `(model layer, its index among the PLE layers)` for every layer that runs
+    /// this block (the hash constants depend on the index); `ple.layer_index` is not read.
+    /// In: `[Token, State(window [ngram_size − 1])]`; the state holds the last tokens, `eos` at the start.
+    NgramIds {
+        ple: crate::spec::NgramPleSpec,
+        layers: Vec<(usize, usize)>,
+    },
+    /// Rows of a table by an index vector: `out = concat_h table[ids[h]]` (`heads` rows of `dim`).
+    /// In: `[ids (Idx), table [R, dim]]`. The lowering reads the table per hash head (each head owns a
+    /// contiguous range of rows, cut into chunks under NF-8's `2^24` rows), so the ids must be a
+    /// [`Op::NgramIds`] node's, which says how the table splits.
+    GatherRows {
+        heads: usize,
+        dim: usize,
+    },
+    // ── sparse block attention (ATTN_SPARSE_BLOCK_V1) ──
+    /// The running sum of the keys of the position's block, and the mean of what the block holds so
+    /// far (`sum / ratio`: exact once the block is complete). The sum restarts at the block's first
+    /// position. In: `[k [dim], State(sum [dim])]`; writes the state.
+    BlockMean {
+        ratio: usize,
+    },
+    /// The block-key matrix `[blocks, dim]`: row `pos / ratio` becomes the input when the position
+    /// completes its block (`(pos + 1) mod ratio = 0`). In: `[row [dim], State(keys), Pos]`; writes the state.
+    BlockWrite {
+        ratio: usize,
+        blocks: usize,
+    },
+    /// The blocks a query attends over. Block scores `Σ_h relu(q_h · key_b)` over the complete blocks
+    /// (this position's own block counts when it completes now: its row is the input `cand`), the
+    /// `top` best by score (ties → lower index; a block not complete scores lowest); out: the `top`
+    /// block ids, a fixed-size vector (`Idx`). In: `[q [heads·dim], cand [dim], State(keys), Pos]`.
+    BlockSelect {
+        heads: usize,
+        dim: usize,
+        ratio: usize,
+        blocks: usize,
+        top: usize,
     },
     // ── routing ──
     /// Expert selection. Out 0: `top_k` expert ids in index order (ties → lowest index);
@@ -259,6 +332,15 @@ impl Op {
             Op::GatedRmsNorm { .. } => "GatedRmsNorm",
             Op::L2Norm { .. } => "L2Norm",
             Op::Rope { .. } => "Rope",
+            Op::RopeAtBlock { .. } => "RopeAtBlock",
+            Op::StreamMean { .. } => "StreamMean",
+            Op::StreamOuter { .. } => "StreamOuter",
+            Op::GroupDot { .. } => "GroupDot",
+            Op::NgramIds { .. } => "NgramIds",
+            Op::GatherRows { .. } => "GatherRows",
+            Op::BlockMean { .. } => "BlockMean",
+            Op::BlockWrite { .. } => "BlockWrite",
+            Op::BlockSelect { .. } => "BlockSelect",
             Op::PosScale { .. } => "PosScale",
             Op::ScaleParam => "ScaleParam",
             Op::HistAppend => "HistAppend",

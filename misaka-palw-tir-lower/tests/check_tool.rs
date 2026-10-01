@@ -77,3 +77,18 @@ fn parameter_counts_of_known_checkpoints_are_right() {
         assert!(p >= lo && p <= hi, "{name}: {p:.4e} params, expected [{lo:.3e}, {hi:.3e}]");
     }
 }
+
+/// A layer that runs as several blocks (Gemma-4's mixer and FFN halves; Qwen4-Exp's n-gram, mixer and FFN
+/// blocks) is checked against the checkpoint's tensors of its MODEL layer, not of each block's occurrence
+/// index: the weights check reports no phantom layer, and no tensor of the checkpoint is left unread.
+#[test]
+fn a_layer_run_as_several_blocks_checks_clean() {
+    for name in ["gemma4", "qwen4_exp", "qwen4_qsa_r3"] {
+        let dir = root().join("tests/fixtures/hf").join(name);
+        let cfg = std::fs::read_to_string(dir.join("config.json")).unwrap();
+        let c = report::check(&cfg, Some(WeightsArg::Files(&dir))).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let w = c.weights.as_ref().unwrap();
+        assert!(w.errors.is_empty() && w.unused.is_empty(), "{name}: {:?} {:?}", w.errors, w.unused);
+        assert!(w.bound > 0, "{name}");
+    }
+}

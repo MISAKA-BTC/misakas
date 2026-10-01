@@ -30,6 +30,9 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
     let mut schedule = Vec::with_capacity(spec.layers.len());
     let mut layer_of = Vec::with_capacity(spec.layers.len());
     for (li, ls) in spec.layers.iter().enumerate() {
+        // Layers that differ only in constants the program reads as data (a PLE layer's hash
+        // constants follow from its index) run the same block.
+        let ls = &block_kind(ls);
         let bis = match kinds.iter().find(|(s, _)| s == ls) {
             Some((_, bis)) => bis.clone(),
             None => {
@@ -48,6 +51,24 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
         }
     }
     let post = b.post_block()?;
+    // The layers that run each n-gram block, with their index among the PLE layers.
+    for (li, ls) in spec.layers.iter().enumerate() {
+        if let Residual::HyperConnection { ple: Some(p) } = &ls.residual {
+            for (slot, l) in layer_of.iter().enumerate() {
+                if *l != li {
+                    continue;
+                }
+                let bi = schedule[slot] as usize;
+                for n in &mut b.blocks[bi].nodes {
+                    if let Op::NgramIds { layers, .. } = &mut n.op
+                        && !layers.contains(&(li, p.layer_index))
+                    {
+                        layers.push((li, p.layer_index));
+                    }
+                }
+            }
+        }
+    }
     let carries = b.carries.clone();
     let p = HlProgram {
         architecture: spec.architecture.clone(),
@@ -85,10 +106,35 @@ struct Builder<'a> {
     carry_out: BTreeMap<usize, Ref>,
 }
 
-/// The carries a spec needs: the residual stream, then a key row and a value row for each KV
-/// slot a [`KvShare::Source`] layer fills.
+/// A layer spec as the block builder sees it: the hash constants of a PLE layer (its index among
+/// the PLE layers) are data the lowering fills per layer, not part of the block.
+fn block_kind(ls: &LayerSpec) -> LayerSpec {
+    let mut k = ls.clone();
+    if let Residual::HyperConnection { ple: Some(p) } = &mut k.residual {
+        p.layer_index = 0;
+    }
+    k
+}
+
+/// The carries a spec needs: the residual stream (`streams` copies of the hidden width under
+/// hyper-connections), then a key row and a value row for each KV slot a [`KvShare::Source`] layer fills.
 fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
-    let mut out = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size] }];
+    // What a program carries and a block holds: the streams of a gated residual are a few, and their
+    // carry (`streams × hidden`) is one tensor under NF-8's `2^24`.
+    if let Some(h) = &spec.hyper
+        && (h.streams == 0
+            || h.streams > 64
+            || h.lowrank == 0
+            || h.lowrank > 1 << 16
+            || h.streams.saturating_mul(spec.hidden_size) > 1 << 24)
+    {
+        return Err(LowerError::not_lowerable(format!(
+            "RESIDUAL_GATED_HC_V1: {} streams of {} with a low rank of {} are past what a program carries (1..=64 streams, `streams × hidden` ≤ 2^24, rank ≤ 65,536)",
+            h.streams, spec.hidden_size, h.lowrank
+        )));
+    }
+    let streams = spec.hyper.as_ref().map_or(1, |h| h.streams);
+    let mut out = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size * streams] }];
     // slot → the (kv heads, head width, value width) of the one layer that fills it.
     let mut slots: BTreeMap<usize, (usize, usize, usize)> = BTreeMap::new();
     for (li, ls) in spec.layers.iter().enumerate() {
@@ -283,6 +329,10 @@ impl Builder<'_> {
         if let Some(n) = e.norm {
             x = self.full_norm(&mut bk, x, n, "embed.norm", d, false)?;
         }
+        // Hyper-connections: the embedding is repeated into every stream.
+        if let Some(hy) = s.hyper.as_ref().filter(|h| h.streams > 1) {
+            x = bk.st(Op::Concat, vec![x; hy.streams], d * hy.streams);
+        }
         // Declared for the binding only: a bidirectional encoder's lowering (`lower::bidir`) folds
         // row 0 into its position rows; a per-position program never reads it.
         if let Some(rows) = e.type_rows {
@@ -316,6 +366,11 @@ impl Builder<'_> {
         let d = s.hidden_size;
         let mut bk = Bk { nodes: vec![] };
         let mut x = Ref::Carry(0);
+        // Hyper-connections: one more gated mix brings the streams down to the hidden width (its norm
+        // stands where the final norm would).
+        if s.hyper.is_some() {
+            x = self.hc_mix(&mut bk, x, "final", false, false)?.0;
+        }
         if let Some(n) = s.final_norm {
             x = self.full_norm(&mut bk, x, n, "final_norm", d, false)?;
         }
@@ -385,6 +440,30 @@ impl Builder<'_> {
             let a = self.blocks.len() - 1;
             let f = self.layer_block(ls, kind_index)?;
             return Ok(vec![a, f]);
+        }
+        // A hyper-connection layer: the per-layer n-gram embedding (its own block when the layer has
+        // one — it is as large as a mixer), the mixer half (the gated mix of the streams, the mixer,
+        // the injection back) and the FFN half the same way.
+        if let Residual::HyperConnection { ple } = &ls.residual {
+            let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
+            let mut blocks = Vec::new();
+            if let Some(p) = ple {
+                let mut bk = Bk { nodes: vec![] };
+                let h = self.ple_ngram(&mut bk, p, Ref::Carry(0))?;
+                let outputs = self.layer_outputs(h);
+                self.blocks.push(Block { name: format!("{name}.ple"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+                blocks.push(self.blocks.len() - 1);
+            }
+            let mut bk = Bk { nodes: vec![] };
+            let x = Ref::Carry(0);
+            let (mixed, inj) = self.hc_mix(&mut bk, x, "mix", true, true)?;
+            let o = self.mixer(&mut bk, &ls.mixer, mixed)?;
+            let h = self.hc_inject(&mut bk, x, o, inj.ok_or_else(|| LowerError::eval("internal: no injection weights"))?, "mix")?;
+            let outputs = self.layer_outputs(h);
+            self.blocks.push(Block { name: format!("{name}.mix"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+            blocks.push(self.blocks.len() - 1);
+            blocks.push(self.layer_block(ls, kind_index)?);
+            return Ok(blocks);
         }
         Ok(vec![self.layer_block(ls, kind_index)?])
     }
@@ -481,15 +560,21 @@ impl Builder<'_> {
                 }
                 h
             }
+            // The FFN half: the mixer half ([`Builder::layer_blocks`]) carries in the streams.
             Residual::HyperConnection { .. } => {
-                return Err(LowerError::not_lowerable("RESIDUAL_GATED_HC_V1: the generic lowerer of hyper-connections is not in this build"));
+                if ls.ffn == Ffn::None {
+                    return Err(LowerError::eval("internal: a hyper-connection layer without an FFN"));
+                }
+                let (mixed, inj) = self.hc_mix(&mut bk, x, "ffn", true, true)?;
+                let f = self.ffn(&mut bk, &ls.ffn, mixed)?;
+                self.hc_inject(&mut bk, x, f, inj.ok_or_else(|| LowerError::eval("internal: no injection weights"))?, "ffn")?
             }
         };
         if ls.post_scale != 1.0 {
             h = bk.f(Op::Scale { c: ls.post_scale }, vec![h], d, "resid.rescaled");
         }
         let mut name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
-        if matches!(ls.residual, Residual::Sandwich { .. }) {
+        if matches!(ls.residual, Residual::Sandwich { .. } | Residual::HyperConnection { .. }) {
             name.push_str(".ffn");
         }
         let outputs = self.layer_outputs(h);
@@ -536,6 +621,203 @@ impl Builder<'_> {
         let te = bk.f(Op::Scale { c: p.table_scale }, vec![te], p.dim, "ple.token_scaled");
         let sum = bk.f(Op::Add, vec![pr, te], p.dim, "ple.sum");
         Ok(bk.f(Op::Scale { c: p.combine_scale }, vec![sum], p.dim, "ple"))
+    }
+
+    // ───────────────────────────── hyper-connections ─────────────────────────────
+
+    fn hyper(&self) -> Result<HyperSpec> {
+        self.s
+            .hyper
+            .clone()
+            .ok_or_else(|| LowerError::not_lowerable("RESIDUAL_GATED_HC_V1: a hyper-connection layer needs the model's streams (ModelSpec::hyper)"))
+    }
+
+    /// One gated mix of the residual's streams (`hc.{tag}.*`, `RESIDUAL_GATED_HC_V1`): the streams
+    /// are normed per stream, a low-rank pair of projections with a SiLU between them (and a
+    /// sigmoid after) gates them, and the mean over the streams is the block's input `[D]`. With
+    /// `inject`, a third projection gives the weights `2σ(·/S)` each stream takes of the block's
+    /// output (`hc_inject`).
+    fn hc_mix(&mut self, bk: &mut Bk, x: Ref, tag: &str, inject: bool, per_layer: bool) -> Result<(Ref, Option<Ref>)> {
+        let hy = self.hyper()?;
+        let (s, d, r) = (hy.streams, self.s.hidden_size, hy.lowrank);
+        let n = s * d;
+        let t = |part: &str| format!("hc.{tag}.{part}");
+        let normed = self.norm(bk, x, hy.norm, &t("norm"), n, s, vec![n], per_layer, &t("norm"))?;
+        let down = self.linear(bk, normed, &t("down"), r, n, false, per_layer, &t("down"))?;
+        let down = bk.f(Op::Scale { c: 1.0 / s as f64 }, vec![down], r, &t("down_scaled"));
+        let act = bk.f(Op::Act(Act::Silu), vec![down], r, &t("silu"));
+        let up = self.linear(bk, act, &t("up"), n, r, false, per_layer, &t("up"))?;
+        let gate = bk.f(Op::Act(Act::Sigmoid), vec![up], n, &t("gate"));
+        let gated = bk.f(Op::Mul, vec![gate, normed], n, &t("gated"));
+        let mixed = bk.f(Op::StreamMean { streams: s }, vec![gated], d, &t("mixed"));
+        let inj = if inject {
+            let j = self.linear(bk, normed, &t("inject"), s, n, false, per_layer, &t("inject"))?;
+            let j = bk.f(Op::Scale { c: 1.0 / s as f64 }, vec![j], s, &t("inject_scaled"));
+            let j = bk.f(Op::Act(Act::Sigmoid), vec![j], s, &t("inject_sigmoid"));
+            Some(bk.f(Op::Scale { c: 2.0 }, vec![j], s, &t("inject_w")))
+        } else {
+            None
+        };
+        Ok((mixed, inj))
+    }
+
+    /// The block's output `o [D]` joins every stream with its own weight: `x + o ⊗ w`.
+    fn hc_inject(&mut self, bk: &mut Bk, x: Ref, o: Ref, w: Ref, tag: &str) -> Result<Ref> {
+        let s = self.hyper()?.streams;
+        let n = s * self.s.hidden_size;
+        let delta = bk.f(Op::StreamOuter { streams: s }, vec![o, w], n, &format!("hc.{tag}.delta"));
+        Ok(bk.f(Op::Add, vec![x, delta], n, &format!("resid.hc.{tag}")))
+    }
+
+    // ───────────────────────────── hashed n-gram per-layer embedding ─────────────────────────────
+
+    /// `EMBED_NGRAM_PLE_V1`: this layer's hashed n-gram rows project to a key per stream and a shared
+    /// value; the normed streams gate the value (`σ(signed √(k·q / √D))`), a dilated depthwise
+    /// causal convolution adds local context, and the result joins every stream. Returns the streams
+    /// `x + ple(x)`.
+    fn ple_ngram(&mut self, bk: &mut Bk, p: &NgramPleSpec, x: Ref) -> Result<Ref> {
+        let hy = self.hyper()?;
+        let (s, d) = (hy.streams, self.s.hidden_size);
+        let n = s * d;
+        let heads = p.ngram_size.saturating_sub(1).saturating_mul(p.heads_per_ngram);
+        if heads == 0 || p.embed_dim % heads != 0 || p.ngram_size < 2 {
+            return Err(LowerError::bad(format!("EMBED_NGRAM_PLE_V1: {} embedding width over {heads} hash heads", p.embed_dim)));
+        }
+        let dpn = p.embed_dim / heads;
+        // What a program can declare: the hash is `~n·63` nodes, every head is a table, and each head size is a
+        // prime searched by trial division from the layer's position in the sequence of primes.
+        let deepest = self
+            .s
+            .layers
+            .iter()
+            .filter_map(|l| match &l.residual {
+                Residual::HyperConnection { ple: Some(q) } => Some(q.layer_index),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        if p.ngram_size > 8
+            || heads > 1024
+            || (deepest + 1).saturating_mul(heads) > 65_536
+            || p.vocab_base as u64 >= 1 << 32
+            || p.conv_kernel == 0
+            || p.conv_kernel > 64
+            || p.conv_dilation == 0
+            || (p.conv_kernel - 1).saturating_mul(p.conv_dilation) > 4096
+        {
+            return Err(LowerError::not_lowerable(format!(
+                "EMBED_NGRAM_PLE_V1: {}-grams over {heads} hash heads at {} layers deep, tables from {}, a convolution of {} taps dilated {} — past what a program declares (n ≤ 8, ≤ 1,024 heads, ≤ 65,536 primes, tables under 2^32 rows, ≤ 64 taps over ≤ 4,096 rows)",
+                p.ngram_size,
+                deepest + 1,
+                p.vocab_base,
+                p.conv_kernel,
+                p.conv_dilation
+            )));
+        }
+        // The table rows differ by layer (the head sizes are consecutive primes): the block's param
+        // is as tall as the tallest, and a layer's rows past its own are never read.
+        let rows_max = self
+            .s
+            .layers
+            .iter()
+            .filter_map(|l| match &l.residual {
+                Residual::HyperConnection { ple: Some(q) } => Some(crate::ngram::NgramTables::new(q).padded_vocab as usize),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let win = self.state("ple.ngram.win", StateKind::Fixed, vec![p.ngram_size - 1], p.eos_id as f32)?;
+        let ids = Ref::Node(
+            bk.push(Op::NgramIds { ple: p.clone(), layers: vec![] }, vec![Ref::Token, win], vec![vec![heads]], vec![HlType::Idx], None, vec![sid(win)]),
+            0,
+        );
+        let table = self.param("ple.ngram.table", vec![rows_max, dpn], true, Init::Normal(0.5))?;
+        let rows = bk.f(Op::GatherRows { heads, dim: dpn }, vec![ids, table], heads * dpn, "ple.rows");
+        let key = self.linear(bk, rows, "ple.key", n, p.embed_dim, false, true, "ple.key")?;
+        let key = self.norm(bk, key, p.norm, "ple.norm_key", n, s, vec![n], true, "ple.norm_key")?;
+        let val = self.linear(bk, rows, "ple.value", d, p.embed_dim, false, true, "ple.value")?;
+        let qry = self.norm(bk, x, p.norm, "ple.norm_query", n, s, vec![n], true, "ple.norm_query")?;
+        let dot = bk.f(Op::GroupDot { groups: s }, vec![key, qry], s, "ple.dot");
+        let dot = bk.f(Op::Scale { c: 1.0 / (d as f64).sqrt() }, vec![dot], s, "ple.dot_scaled");
+        let g = bk.f(Op::Act(Act::SignedSqrt), vec![dot], s, "ple.gate_sqrt");
+        let g = bk.f(Op::Act(Act::Sigmoid), vec![g], s, "ple.gate");
+        let gv = bk.f(Op::StreamOuter { streams: s }, vec![val, g], n, "ple.gated");
+        let gvn = self.norm(bk, gv, p.norm, "ple.norm_conv", n, s, vec![n], true, "ple.norm_conv")?;
+        let conv = self.conv_dilated(bk, gvn, n, p.conv_kernel, p.conv_dilation, "ple.conv")?;
+        let out = bk.f(Op::Add, vec![gv, conv], n, "ple.out");
+        Ok(bk.f(Op::Add, vec![x, out], n, "resid.ple"))
+    }
+
+    /// [`Builder::conv`] with taps `dilation` positions apart (the state keeps `(kernel − 1)·dilation` rows).
+    fn conv_dilated(&mut self, bk: &mut Bk, x: Ref, ch: usize, kernel: usize, dilation: usize, name: &str) -> Result<Ref> {
+        let w = self.param(&format!("{name}.w"), vec![ch, kernel], true, Init::Normal(0.3))?;
+        let st = self.state(&format!("{name}.window"), StateKind::Fixed, vec![kernel.saturating_sub(1) * dilation, ch], 0.0)?;
+        Ok(bk.fw(
+            Op::CausalConv1d { channels: ch, kernel, bias: false, act: Some(Act::Silu), dilation },
+            vec![x, st, w],
+            ch,
+            Some(name),
+            vec![sid(st)],
+        ))
+    }
+
+    // ───────────────────────────── sparse block attention ─────────────────────────────
+
+    /// The token indexer of `ATTN_SPARSE_BLOCK_V1`: queries from `x`, one pooled key per block of
+    /// `ratio` positions (the mean of the block's raw keys, normed, rotated at the block's first
+    /// position), block scores, and the ids of the `top` best blocks.
+    fn sparse_indexer(&mut self, bk: &mut Bk, sp: &SparseBlockSpec, rp: &crate::rope::RopeSpec, x: Ref) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let (n, dim, ratio) = (sp.index_heads, sp.index_dim, sp.ratio);
+        if n == 0 || dim == 0 || ratio == 0 || sp.top_blocks == 0 || rp.rotary_dim > dim {
+            return Err(LowerError::bad(format!("ATTN_SPARSE_BLOCK_V1: {n} index heads of {dim}, blocks of {ratio}, rotary {}", rp.rotary_dim)));
+        }
+        let max_pos = self
+            .s
+            .max_position_embeddings
+            .ok_or_else(|| LowerError::not_lowerable("ATTN_SPARSE_BLOCK_V1 needs max_position_embeddings (the block-key matrix is sized on it)"))?;
+        let blocks = max_pos.div_ceil(ratio);
+        // The block-key matrix is a state and the scores are `[blocks, index heads]`: both inside NF-8's 2^28 elements.
+        if (blocks as u64).saturating_mul(dim.max(n) as u64) > 1 << 27 {
+            return Err(LowerError::not_lowerable(format!(
+                "ATTN_SPARSE_BLOCK_V1: {blocks} blocks of {dim} (and {n} index heads) are past the 2^27 elements a program keeps as block keys and scores; use blocks of more positions or a shorter context"
+            )));
+        }
+        let top = sp.top_blocks.min(blocks);
+        let t = self.rope_table(&rp.freqs);
+        let qk = self.linear(bk, x, "attn.idx.qk", (n + 1) * dim, d, false, true, "attn.idx.qk")?;
+        let q = bk.st(Op::Slice { start: 0, len: n * dim }, vec![qk], n * dim);
+        let kraw = bk.st(Op::Slice { start: n * dim, len: dim }, vec![qk], dim);
+        let q = self.norm(bk, q, sp.q_norm, "attn.idx.q_norm", n * dim, n, vec![dim], true, "attn.idx.q_norm")?;
+        let q = bk.f(
+            Op::Rope { heads: n, head_dim: dim, rotary_dim: rp.rotary_dim, offset: 0, style: rp.style, table: t },
+            vec![q, Ref::Pos],
+            n * dim,
+            "attn.idx.q_rope",
+        );
+        let sum = self.state("attn.idx.sum", StateKind::Fixed, vec![dim], 0.0)?;
+        let pooled = bk.fw(Op::BlockMean { ratio }, vec![kraw, sum], dim, Some("attn.idx.pooled"), vec![sid(sum)]);
+        let kn = self.norm(bk, pooled, sp.k_norm, "attn.idx.k_norm", dim, 1, vec![dim], true, "attn.idx.k_norm")?;
+        let kb = bk.f(
+            Op::RopeAtBlock { heads: 1, head_dim: dim, rotary_dim: rp.rotary_dim, offset: 0, style: rp.style, table: t, ratio },
+            vec![kn, Ref::Pos],
+            dim,
+            "attn.idx.k_rope",
+        );
+        let keys = self.state("attn.idx.keys", StateKind::Fixed, vec![blocks, dim], 0.0)?;
+        let ids = Ref::Node(
+            bk.push(
+                Op::BlockSelect { heads: n, dim, ratio, blocks, top },
+                vec![q, kb, keys, Ref::Pos],
+                vec![vec![top]],
+                vec![HlType::Idx],
+                None,
+                vec![],
+            ),
+            0,
+        );
+        bk.push(Op::BlockWrite { ratio, blocks }, vec![kb, keys, Ref::Pos], vec![vec![]], vec![HlType::Unit], None, vec![sid(keys)]);
+        Ok(ids)
     }
 
     // ───────────────────────────── attention ─────────────────────────────
@@ -585,6 +867,7 @@ impl Builder<'_> {
                 alibi: None,
                 sinks: false,
                 chunk: a.chunk,
+                blocks: None,
             };
             let o = bk.f(op, vec![q, ks, vs], h * vd, &n("ctx"));
             return self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"));
@@ -649,6 +932,20 @@ impl Builder<'_> {
         if a.sinks {
             ins.push(self.param(&n("sinks"), vec![h], true, Init::Normal(1.0))?);
         }
+        // Sparse block attention: the indexer picks the key blocks this query reads.
+        let mut blocks = None;
+        if let Some(sp) = &a.sparse {
+            let Position::Rope(rp) = &a.position else {
+                return Err(LowerError::not_lowerable("ATTN_SPARSE_BLOCK_V1: the indexer rotates by the attention's rope"));
+            };
+            if a.window.is_some() || a.chunk.is_some() || alibi.is_some() || a.softcap.is_some() || a.kv_share.is_some() {
+                return Err(LowerError::not_lowerable(
+                    "ATTN_SPARSE_BLOCK_V1 over a window, chunks, ALiBi, a soft-cap or shared keys is not modelled",
+                ));
+            }
+            ins.push(self.sparse_indexer(bk, sp, rp, x)?);
+            blocks = Some(sp.ratio);
+        }
         let op = Op::Attention {
             heads: h,
             kv_heads: kv,
@@ -660,6 +957,7 @@ impl Builder<'_> {
             alibi,
             sinks: a.sinks,
             chunk: a.chunk,
+            blocks,
         };
         let mut o = bk.f(op, ins, h * vd, &n("ctx"));
         if let Some(g) = gate {
@@ -757,7 +1055,7 @@ impl Builder<'_> {
             vec![sid(st)],
         );
         let w = self.param("gdn.norm.gain", vec![dv], true, Init::Uniform(0.6, 1.4))?;
-        let o = bk.f(Op::GatedRmsNorm { eps: g.norm_eps, groups: nv, gate_first: false }, vec![o, z, w], nv * dv, "gdn.normed");
+        let o = bk.f(Op::GatedRmsNorm { eps: g.norm_eps, groups: nv, gate_first: false, act: g.gate_act }, vec![o, z, w], nv * dv, "gdn.normed");
         self.linear(bk, o, "gdn.out", d, nv * dv, false, true, "gdn.out")
     }
 
@@ -769,7 +1067,7 @@ impl Builder<'_> {
         if bias {
             ins.push(self.param(&format!("{name}.b"), vec![ch], true, Init::Uniform(-0.1, 0.1))?);
         }
-        Ok(bk.fw(Op::CausalConv1d { channels: ch, kernel, bias, act: Some(Act::Silu) }, ins, ch, Some(name), vec![sid(st)]))
+        Ok(bk.fw(Op::CausalConv1d { channels: ch, kernel, bias, act: Some(Act::Silu), dilation: 1 }, ins, ch, Some(name), vec![sid(st)]))
     }
 
     // ───────────────────────────── Mamba ─────────────────────────────
@@ -830,7 +1128,7 @@ impl Builder<'_> {
         );
         let w = self.param("mamba2.norm.gain", vec![inner], true, Init::Uniform(0.6, 1.4))?;
         let y =
-            bk.f(Op::GatedRmsNorm { eps: m.norm_eps, groups: m.norm_groups, gate_first: true }, vec![y, z, w], inner, "mamba2.normed");
+            bk.f(Op::GatedRmsNorm { eps: m.norm_eps, groups: m.norm_groups, gate_first: true, act: Act::Silu }, vec![y, z, w], inner, "mamba2.normed");
         self.linear(bk, y, "mamba2.out", d, inner, m.proj_bias, true, "mamba2.out")
     }
 

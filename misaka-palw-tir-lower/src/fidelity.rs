@@ -35,25 +35,86 @@ pub fn prepare(config_text: &str, opts: &LowerOpts) -> Result<Prepared> {
     prepare_spec(crate::parse_config_str(config_text)?, opts)
 }
 
-/// A checkpoint on disk, prepared: a Hugging Face directory (`config.json` + safetensors), or a
-/// GGUF file (a `.gguf` path, or a directory holding `model.gguf` and no `config.json`), whose
-/// tensors are then served under their Hugging Face names (`crate::gguf::GgufModel`).
-pub fn open_model(path: &std::path::Path, opts: &LowerOpts) -> Result<(Prepared, Box<dyn crate::weights::TensorSource + Sync>)> {
-    let gguf = if path.is_dir() {
+/// [`prepare`] with the quant formats of `reg` (built-ins plus descriptors the caller supplied).
+pub fn prepare_with(config_text: &str, opts: &LowerOpts, reg: &crate::quantfmt::QuantRegistry) -> Result<Prepared> {
+    prepare_spec(crate::parse_config_str_with(config_text, reg)?, opts)
+}
+
+/// The GGUF file `path` names, if it names one: a `.gguf` path, or a directory holding `model.gguf` and
+/// no `config.json`.
+pub fn gguf_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if path.is_dir() {
         let g = path.join("model.gguf");
         (g.exists() && !path.join("config.json").exists()).then_some(g)
     } else {
         (path.extension().and_then(|e| e.to_str()) == Some("gguf")).then(|| path.to_path_buf())
-    };
+    }
+}
+
+/// The quant-format descriptors a model's quantised weights are read with — a GGUF's tensor types (from
+/// its header alone), a pre-quantised checkpoint's format — as `(name, digest)` in name order: what a
+/// runtime pack pins. A float checkpoint uses none.
+pub fn quant_descriptors_used(path: &std::path::Path, prep: &Prepared, reg: &crate::quantfmt::QuantRegistry) -> Result<Vec<(String, String)>> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    match gguf_path(path) {
+        Some(g) => {
+            let f = crate::gguf::GgufFile::open_with(&g, reg)?;
+            for t in f.tensors.values() {
+                if let Some(fmt) = &t.ty.fmt {
+                    out.insert(fmt.name().to_string(), fmt.digest_hex());
+                }
+            }
+        }
+        None => {
+            if let Some((f, _)) = prep.spec.hf.quant.as_ref().and_then(|q| q.fmt.binding()) {
+                out.insert(f.name().to_string(), f.digest_hex());
+            }
+        }
+    }
+    Ok(out.into_iter().collect())
+}
+
+/// [`prepare_with`] reading the config through the adapter `read` names (a user-supplied adapter file,
+/// a built-in by id, none).
+pub fn prepare_read(config_text: &str, read: &crate::hf_schema::ReadOptions, opts: &LowerOpts, reg: &crate::quantfmt::QuantRegistry) -> Result<Prepared> {
+    prepare_spec(crate::hf_config::parse_config_str_read(config_text, read, reg)?, opts)
+}
+
+/// A checkpoint on disk, prepared: a Hugging Face directory (`config.json` + safetensors), or a
+/// GGUF file (a `.gguf` path, or a directory holding `model.gguf` and no `config.json`), whose
+/// tensors are then served under their Hugging Face names (`crate::gguf::GgufModel`).
+pub fn open_model(path: &std::path::Path, opts: &LowerOpts) -> Result<(Prepared, Box<dyn crate::weights::TensorSource + Sync>)> {
+    open_model_with(path, opts, crate::quantfmt::QuantRegistry::builtin())
+}
+
+/// [`open_model`] with the quant formats of `reg`: a GGUF tensor type or a `quantization_config` the
+/// built-ins do not describe is resolved by the descriptors in it.
+pub fn open_model_with(
+    path: &std::path::Path,
+    opts: &LowerOpts,
+    reg: &crate::quantfmt::QuantRegistry,
+) -> Result<(Prepared, Box<dyn crate::weights::TensorSource + Sync>)> {
+    open_model_read(path, &crate::hf_schema::ReadOptions::default(), opts, reg)
+}
+
+/// [`open_model_with`] choosing the adapter of a Hugging Face directory's config by `read` (a GGUF
+/// file's architecture is its own, read by the GGUF importer).
+pub fn open_model_read(
+    path: &std::path::Path,
+    read: &crate::hf_schema::ReadOptions,
+    opts: &LowerOpts,
+    reg: &crate::quantfmt::QuantRegistry,
+) -> Result<(Prepared, Box<dyn crate::weights::TensorSource + Sync>)> {
+    let gguf = gguf_path(path);
     match gguf {
         Some(g) => {
-            let m = crate::gguf::GgufModel::open(&g)?;
+            let m = crate::gguf::GgufModel::open_with(&g, reg)?;
             let prep = m.prepare(opts)?;
             Ok((prep, Box::new(m)))
         }
         None => {
             let cfg = std::fs::read_to_string(path.join("config.json")).map_err(|e| LowerError::Io(format!("config.json: {e}")))?;
-            let prep = prepare(&cfg, opts)?;
+            let prep = prepare_read(&cfg, read, opts, reg)?;
             Ok((prep, Box::new(crate::weights::Checkpoint::open(path)?)))
         }
     }

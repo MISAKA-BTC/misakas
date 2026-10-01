@@ -226,6 +226,10 @@ mod tests {
 
     /// A container the lowerer's streaming converter makes from one of its Hugging Face fixtures.
     fn lowered(name: &str) -> std::path::PathBuf {
+        lowered_as(name, "")
+    }
+
+    fn lowered_as(name: &str, tag: &str) -> std::path::PathBuf {
         use misaka_palw_tir_lower::convert::{ConvertOpts, convert_to_container};
         use misaka_palw_tir_lower::float_ref::stream::Streamed;
         use misaka_palw_tir_lower::lower::{LowerOpts, StreamOpts};
@@ -238,10 +242,10 @@ mod tests {
         let loader = Streamed::new(&prep.hl, &prep.binding, &ck);
         let calib = fidelity::random_sequences(prep.hl.vocab, 2, 12, 7);
         let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &|_, _| {}).expect("calibrate");
-        let out = std::env::temp_dir().join(format!("tir-stream-lowered-{name}-{}.palwtir", std::process::id()));
-        let store = std::env::temp_dir().join(format!("tir-stream-lowered-{name}-{}.chunks", std::process::id()));
+        let out = std::env::temp_dir().join(format!("tir-stream-lowered-{name}{tag}-{}.palwtir", std::process::id()));
+        let store = std::env::temp_dir().join(format!("tir-stream-lowered-{name}{tag}-{}.chunks", std::process::id()));
         let meta = |_: &misaka_palw_tir_lower::lower::StreamMaterialised| serde_json::json!({"fixture": name});
-        let opts = ConvertOpts { stream: StreamOpts { defer_min_elems: 0, block_elems: 64 }, layout: Vec::new(), tokenizer_id: [4u8; 64], meta: &meta, keep_chunks: false };
+        let opts = ConvertOpts { stream: StreamOpts { defer_min_elems: 0, block_elems: 64 }, layout: Vec::new(), tokenizer_id: [4u8; 64], meta: &meta, keep_chunks: false, math: misaka_palw_tir_lower::detmath::MathMode::LibmV1 };
         convert_to_container(&prep, &loader, &stats, &QuantPolicy::default(), &store, &out, &opts, &|_, _| {}).expect("converted");
         out
     }
@@ -257,6 +261,23 @@ mod tests {
             // The checked manifest round-trips and agrees with the file.
             b.check(&path).expect("agrees");
             let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// `math: "libm-v1"` is what lets a seat rebuild an artifact and get the root: the same conversion
+    /// on a pool of one thread and a pool of seven gives the same inventory root. Families whose tables are
+    /// transcendental (RoPE variants, SSM, activations) are the ones that would show a difference.
+    #[test]
+    fn a_libm_v1_conversion_has_one_root_on_any_thread_count() {
+        use crate::tir_manifest::PalwTirManifestV1;
+        let pool = |n: usize| rayon::ThreadPoolBuilder::new().num_threads(n).build().expect("pool");
+        let (one, many) = (pool(1), pool(7));
+        for name in ["llama", "gemma2", "qwen3_5", "mamba2", "phi3_longrope"] {
+            let (a, b) = (one.install(|| lowered_as(name, "-t1")), many.install(|| lowered_as(name, "-t7")));
+            let (ra, rb) = (PalwTirManifestV1::derive_streamed(&a).expect("root"), PalwTirManifestV1::derive_streamed(&b).expect("root"));
+            assert_eq!(ra.inventory_root, rb.inventory_root, "{name}: the root depends on the thread count");
+            assert_eq!(ra, rb, "{name}");
+            let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
         }
     }
 

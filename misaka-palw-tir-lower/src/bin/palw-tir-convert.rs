@@ -14,10 +14,12 @@
 use clap::Parser;
 use misaka_palw_tir_lower::calib::{stats_digest_hex, stats_from_json, stats_to_json};
 use misaka_palw_tir_lower::convert::{ConvertOpts, convert_to_container};
+use misaka_palw_tir_lower::detmath::{MathMode, platform, set_mode};
 use misaka_palw_tir_lower::float_ref::SiteStat;
 use misaka_palw_tir_lower::float_ref::stream::Streamed;
 use misaka_palw_tir_lower::lower::{LowerOpts, StreamOpts};
 use misaka_palw_tir_lower::quant::QuantPolicy;
+use misaka_palw_tir_lower::quantfmt::QuantRegistry;
 use misaka_palw_tir_lower::{artifact, fidelity};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -73,6 +75,21 @@ struct Args {
     /// The tokenizer the class binds (default: `<model>/tokenizer.json`, zero when absent).
     #[arg(long)]
     tokenizer: Option<PathBuf>,
+    /// The math the tables and scales are computed with: `libm-v1` (pure-Rust libm; the same bytes on
+    /// every platform — the default) or `std` (the platform's libm: reproduces an artifact built
+    /// before libm-v1, on the platform that built it).
+    #[arg(long, default_value = "libm-v1")]
+    math: String,
+    /// A quant-format descriptor (`misaka.palw.quant-format.v1`, a JSON file) for a type or a
+    /// `quantization_config` the built-in registry does not describe; repeatable. A runtime pack pins
+    /// each by digest.
+    #[arg(long = "quant-format")]
+    quant_format: Vec<PathBuf>,
+    /// How the config is read: `auto` (the built-in adapter that claims it, else the standard keys),
+    /// `none`, `builtin:<id>`, or the path of an adapter file (`misaka.palw.model-adapter.v1`): a
+    /// model written for as data lowers with no code change.
+    #[arg(long, default_value = "auto")]
+    adapter: String,
     /// Print the report as JSON.
     #[arg(long)]
     json: bool,
@@ -93,8 +110,16 @@ fn tokens(path: &PathBuf) -> Result<(Vec<Vec<usize>>, serde_json::Value), String
 fn run(a: &Args) -> Result<serde_json::Value, String> {
     let t0 = Instant::now();
     let log = |m: String| eprintln!("[{:>7.1}s] {m}", t0.elapsed().as_secs_f64());
+    let math = MathMode::parse(&a.math).ok_or_else(|| format!("--math {}: libm-v1 or std", a.math))?;
+    // Before `open_model`: lowering evaluates RoPE frequencies and the like, in this mode.
+    set_mode(math);
     let opts = LowerOpts { max_window: a.max_window, ..LowerOpts::default() };
-    let (prep, ck) = fidelity::open_model(&a.model, &opts).map_err(|e| e.to_string())?;
+    let reg = QuantRegistry::with_files(&a.quant_format).map_err(|e| e.to_string())?;
+    let (prep, ck) = fidelity::open_model_read(&a.model, &misaka_palw_tir_lower::hf_schema::ReadOptions { adapter: misaka_palw_tir_lower::hf_schema::AdapterChoice::parse_arg(&a.adapter).map_err(|e| e.to_string())? }, &opts, &reg).map_err(|e| e.to_string())?;
+    let descriptors = fidelity::quant_descriptors_used(&a.model, &prep, &reg).map_err(|e| e.to_string())?;
+    for (n, d) in &descriptors {
+        log(format!("quant format {n} {d}"));
+    }
     log(format!("{} — {}", prep.spec.architecture, misaka_palw_tir_lower::lower::program_summary(&prep.lowered.program).lines().next().unwrap_or("")));
     let loader = Streamed::new(&prep.hl, &prep.binding, ck.as_ref());
     let progress = |what: &'static str| {
@@ -159,10 +184,14 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             "architecture": prep.spec.architecture,
             "resid_scale": m.resid_scale,
             "logits_scale": m.logits_scale,
+            "lowering_version": misaka_palw_tir_lower::lower::LOWERING_VERSION,
             "policy": { "headroom16": policy.headroom16, "headroom32": policy.headroom32, "headroom_resid": policy.headroom_resid },
             "calibration": { "schema": "misaka.palw.calib-stats.v1", "digest": stats_digest },
             "max_window": a.max_window,
+            "quant": { "descriptors": descriptors.iter().map(|(n, d)| serde_json::json!({ "name": n, "digest": d })).collect::<Vec<_>>() },
             "converter": format!("palw-tir-convert {}", env!("CARGO_PKG_VERSION")),
+            // The platform is recorded only for `std`: libm-v1 does not depend on it.
+            "math": if math == MathMode::Std { serde_json::json!({ "mode": "std", "platform": platform() }) } else { serde_json::json!({ "mode": "libm-v1" }) },
         })
     };
     let copts = ConvertOpts {
@@ -171,6 +200,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         tokenizer_id,
         meta: &meta,
         keep_chunks: a.keep_chunks,
+        math,
     };
     log("converting".into());
     let r = convert_to_container(&prep, &loader, &stats, &policy, &store_dir, &a.out, &copts, &progress("materialise")).map_err(|e| e.to_string())?;

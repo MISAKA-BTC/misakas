@@ -14,6 +14,7 @@ Usage: LLAMA_CPP=/path/to/llama.cpp python tools/gen_quant_formats.py   (offline
 """
 import json, os, re, struct, sys
 import numpy as np
+import torch
 
 LLAMA = os.environ.get("LLAMA_CPP", os.path.expanduser("~/Downloads/misaka-palw-runtime/llama.cpp"))
 sys.path.insert(0, os.path.join(LLAMA, "gguf-py"))
@@ -184,7 +185,8 @@ F["gptq"] = {
     "schema": SCHEMA, "name": "GPTQ", "doc": "AutoGPTQ / GPTQModel: qweight packs 32/bits codes per int32 along the input axis; qzeros pack along the output axis (v1 stores z − 1); scales per (group, output); g_idx (act-order) names each column's group.",
     "ids": [{"scheme": "config", "method": "gptq"}],
     "params": {"bits": {"config": "bits", "default": 4, "allowed": [2, 4, 8]}, "group_size": {"config": "group_size", "default": 128},
-               "v2": {"config": "checkpoint_format", "default": 0, "map": {"gptq": 0, "gptq_v2": 1}}},
+               "v2": {"config": "checkpoint_format", "default": 0, "map": {"gptq": 0, "gptq_v2": 1}},
+               "sym": {"config": "sym", "default": 1}},
     "layout": {"kind": "tensors",
                "roles": [role("qweight", ".qweight", ["I32"], 2), role("qzeros", ".qzeros", ["I32"], 2), role("scales", ".scales", FLOATS, 2),
                          role("g_idx", ".g_idx", ["I32"], 1, required=False)],
@@ -199,7 +201,9 @@ F["gptq"] = {
                "q": "(qweight[i / %s, o] >> (bits * (i %% %s))) & %s" % (PACK, PACK, MASK),
                "scale": "scales[g, o]",
                "zero": "(((qzeros[g, o / %s] >> (bits * (o %% %s))) & %s) + 1 - v2) & %s" % (PACK, PACK, MASK, MASK),
-               "code": {"min": 0, "max": "(1 << bits) - 1"}},
+               "code": {"min": 0, "max": "(1 << bits) - 1"},
+               # 8-bit asymmetric codes minus their zero point do not fit i8: the lowering carries a per-group offset term.
+               "offset_term": "bits == 8 && !sym"},
 }
 F["awq"] = {
     "schema": SCHEMA, "name": "AWQ", "doc": "AutoAWQ GEMM: eight 4-bit codes per int32 along the OUTPUT axis in the order 0,2,4,6,1,3,5,7; qzeros the same; scales per (group, output).",
@@ -226,7 +230,81 @@ F["fp8_block"] = {
                "dims": {"out": "dim_weight[0]", "inp": "dim_weight[1]"},
                "checks": [{"expr": "dim_scale_inv[0] == (out + bo - 1) / bo && dim_scale_inv[1] == (inp + bi - 1) / bi",
                            "message": "the block scales are not [ceil(out / bo), ceil(in / bi)]"}]},
+    "config": {"inert": ["activation_scheme", "fmt"], "skip": "modules_to_not_convert", "skip_match": "contains", "lm_head": "never"},
     "decode": {"target": "floats", "value": "weight[o, i] * scale_inv[o / bo, i / bi]"},
+}
+
+CT = "config_groups.group_0.weights."
+CT_COMMON = [
+    {"path": "config_groups.group_1", "one_of": [None], "message": "more than one config group: modules of one checkpoint use different formats"},
+    {"path": "config_groups.group_0.targets", "one_of": [["Linear"]], "message": "targets other than all Linear modules"},
+    {"path": "kv_cache_scheme", "one_of": [None], "message": "a quantised KV cache changes what the model computes"},
+    {"path": "sparsity_config", "one_of": [None, {}], "message": "a sparse checkpoint stores its tensors differently"},
+    {"path": "transform_config", "one_of": [None, {}], "message": "transforms (rotations) are applied to the weights at run time"},
+    {"path": CT + "dynamic", "one_of": [None, False], "message": "dynamic weight quantisation"},
+]
+CT_CONFIG = {"inert": ["format", "global_compression_ratio", "compression_ratio", "quantization_status", "version"], "skip": "ignore", "skip_match": "exact", "lm_head": "unless_skipped"}
+F["ct_pack"] = {
+    "schema": SCHEMA, "name": "CT_PACK_QUANTIZED",
+    "doc": "compressed-tensors, format pack-quantized (llm-compressor W4A16 / W8A16): `weight_packed` int32 [out, in/pack] packs 32/bits codes along the INPUT axis, stored unsigned (offset by 2^(bits-1)); `weight_scale` [out, groups]; an asymmetric checkpoint adds `weight_zero_point` int32 [out/pack, groups] packed along the OUTPUT axis (offset the same way, so the offsets cancel in q - zero); `weight_shape` [out, in]; act-order adds `weight_g_idx` [in]. W = scale * (q - zero).",
+    "ids": [{"scheme": "config", "method": "compressed-tensors/pack-quantized"}],
+    "config": dict(CT_CONFIG, checks=CT_COMMON + [
+        {"path": CT + "type", "one_of": ["int"], "message": "float weights are format float-quantized"},
+        {"path": CT + "strategy", "one_of": ["group", "channel"], "message": "a weight strategy other than group or channel"},
+    ]),
+    "params": {"bits": {"config": CT + "num_bits", "default": 4, "allowed": [4, 8]},
+               "group_size": {"config": CT + "group_size", "default": -1},
+               "sym": {"config": CT + "symmetric", "default": 1},
+               "actorder": {"config": CT + "actorder", "default": 0, "map": {"group": 1, "weight": 1, "static": 1, "dynamic": 1}}},
+    "layout": {"kind": "tensors",
+               "roles": [role("packed", ".weight_packed", ["I32"], 2), role("scale", ".weight_scale", FLOATS, 2),
+                         role("zp", ".weight_zero_point", ["I32"], 2, required=False), role("shape", ".weight_shape", ["I64", "I32"], 1),
+                         role("g_idx", ".weight_g_idx", ["I32"], 1, required=False)],
+               "dims": {"out": "shape[0]", "inp": "shape[1]"},
+               "checks": [
+                   {"expr": "dim_packed[0] == out && dim_packed[1] == (inp + " + PACK + " - 1) / " + PACK, "message": "weight_packed is not [out, ceil(in / pack)]"},
+                   {"expr": "dim_scale[0] == out && dim_scale[1] == ng", "message": "weight_scale is not [out, groups]"},
+                   {"expr": "sym || (has_zp && dim_zp[0] * " + PACK + " >= out && dim_zp[1] == ng)", "message": "the checkpoint is asymmetric but weight_zero_point is missing or not [out / pack, groups]"},
+                   {"expr": "!has_g_idx || dim_g_idx[0] == inp", "message": "weight_g_idx is not one entry per input"}]},
+    "decode": {"target": "integers",
+               "group": {"size": "group_size < 1 ? inp : group_size", "index": "has_g_idx ? g_idx[i] : i / gs"},
+               "q": "(packed[o, i / %s] >> (bits * (i %% %s))) & %s" % (PACK, PACK, MASK),
+               "scale": "scale[o, g]",
+               "zero": "has_zp ? ((zp[o / %s, g] >> (bits * (o %% %s))) & %s) : (1 << (bits - 1))" % (PACK, PACK, MASK),
+               "code": {"min": 0, "max": "(1 << bits) - 1"},
+               "offset_term": "bits == 8 && !sym", "order": "actorder != 0"},
+}
+F["ct_fp8"] = {
+    "schema": SCHEMA, "name": "CT_FP8_CHANNEL",
+    "doc": "compressed-tensors, format float-quantized, FP8 weights with one scale per output channel (RedHatAI *-FP8-dynamic): `weight` float8_e4m3fn [out, in], `weight_scale` [out, 1]. W = fp8(w) * scale; the elements are floats, so it decodes to floats and takes the ordinary W8 path.",
+    "ids": [{"scheme": "config", "method": "compressed-tensors/float-quantized"}],
+    "config": dict(CT_CONFIG, checks=CT_COMMON + [
+        {"path": CT + "type", "one_of": ["float"], "message": "integer weights are another format"},
+        {"path": CT + "num_bits", "one_of": [8], "message": "FP8 is 8 bits"},
+        {"path": CT + "strategy", "one_of": ["channel"], "message": "a weight strategy other than per-channel"}]),
+    "params": {},
+    "layout": {"kind": "tensors",
+               "roles": [role("weight", ".weight", ["F8_E4M3"], 2), role("scale", ".weight_scale", FLOATS, 2)],
+               "dims": {"out": "dim_weight[0]", "inp": "dim_weight[1]"},
+               "checks": [{"expr": "dim_scale[0] == out && dim_scale[1] == 1", "message": "weight_scale is not [out, 1]"}]},
+    "decode": {"target": "floats", "value": "weight[o, i] * scale[o, 0]"},
+}
+F["ct_int8"] = {
+    "schema": SCHEMA, "name": "CT_INT8_CHANNEL",
+    "doc": "compressed-tensors, format int-quantized, symmetric INT8 weights with one scale per output channel (W8A8): `weight` int8 [out, in], `weight_scale` [out, 1]. W = scale * q.",
+    "ids": [{"scheme": "config", "method": "compressed-tensors/int-quantized"}],
+    "config": dict(CT_CONFIG, checks=CT_COMMON + [
+        {"path": CT + "type", "one_of": ["int"], "message": "float weights are format float-quantized"},
+        {"path": CT + "num_bits", "one_of": [8], "message": "this format is 8-bit"},
+        {"path": CT + "symmetric", "one_of": [True], "message": "asymmetric INT8 weights"},
+        {"path": CT + "strategy", "one_of": ["channel"], "message": "a weight strategy other than per-channel"}]),
+    "params": {},
+    "layout": {"kind": "tensors",
+               "roles": [role("weight", ".weight", ["I8"], 2), role("scale", ".weight_scale", FLOATS, 2)],
+               "dims": {"out": "dim_weight[0]", "inp": "dim_weight[1]"},
+               "checks": [{"expr": "dim_scale[0] == out && dim_scale[1] == 1", "message": "weight_scale is not [out, 1]"}]},
+    "decode": {"target": "integers", "group": {"size": "inp"}, "q": "weight[o, i]", "scale": "scale[o, 0]", "zero": "0",
+               "code": {"min": -128, "max": 127}},
 }
 
 # ───────────────────────────── test vectors ─────────────────────────────
@@ -266,10 +344,194 @@ def reference(name, raw):
     with np.errstate(all="ignore"):
         return gq.dequantize(raw.reshape(1, -1), QT[name]).reshape(-1).astype(np.float32)
 
+# ───────────────── multi-tensor vectors: torch re-implementations of each library's own dequantiser ─────────────────
+# The role tensors are random but valid; the expected weight is computed FROM THE STORED TENSORS by code that follows
+# the reference library (AutoGPTQ's QuantLinear dequant, AutoAWQ's dequantize_gemm, DeepSeek's weight_dequant,
+# compressed-tensors' unpack_from_int32 + dequantize), not by the descriptor. Products are taken in float32.
+trng = np.random.default_rng(0x54454E53)   # a separate stream: the blocks formats' vectors do not move when a tensors format is added
+
+def pack_along(vals, bits, axis):
+    """Unsigned codes packed into int32 words along `axis`, lowest code in the lowest bits."""
+    pack = 32 // bits
+    v = np.moveaxis(np.asarray(vals).astype(np.uint64), axis, -1)
+    n = v.shape[-1]
+    assert n % pack == 0
+    v = v.reshape(*v.shape[:-1], n // pack, pack)
+    w = (v << (np.arange(pack, dtype=np.uint64) * bits)).sum(-1) & 0xFFFFFFFF
+    return np.ascontiguousarray(np.moveaxis(w.astype(np.uint32).view(np.int32), -1, axis))
+
+def ti(a):
+    return torch.from_numpy(np.ascontiguousarray(a).astype(np.int32))
+
+def ref_gptq(qweight, qzeros, scales, g_idx, bits, v2):
+    pack, mask = 32 // bits, (1 << bits) - 1
+    wf = torch.arange(0, 32, bits, dtype=torch.int32)
+    zeros = (torch.unsqueeze(ti(qzeros), 2).expand(-1, -1, pack) >> wf.unsqueeze(0)) & mask
+    sc = torch.from_numpy(scales.astype(np.float32))
+    zeros = zeros.reshape(sc.shape)
+    if not v2:
+        zeros = zeros + 1
+    weight = (torch.unsqueeze(ti(qweight), 1).expand(-1, pack, -1) >> wf.unsqueeze(-1)) & mask
+    weight = weight.reshape(-1, weight.shape[2])
+    gi = torch.from_numpy(g_idx.astype(np.int64))
+    w = sc[gi] * (weight - zeros[gi]).to(torch.float32)
+    return w.t().contiguous().numpy()
+
+AWQ_REVERSE_ORDER = [0, 4, 1, 5, 2, 6, 3, 7]
+
+def ref_awq(qweight, qzeros, scales, bits, group_size):
+    qw, qz = ti(qweight), ti(qzeros)
+    shifts = torch.arange(0, 32, bits)
+    iw = torch.bitwise_right_shift(qw[:, :, None], shifts[None, None, :]).to(torch.int16)
+    iw = iw.view(iw.shape[0], -1)
+    iz = torch.bitwise_right_shift(qz[:, :, None], shifts[None, None, :]).to(torch.int16)
+    iz = iz.view(iz.shape[0], -1)
+    rev = torch.arange(iw.shape[-1], dtype=torch.int32).view(-1, 32 // bits)[:, AWQ_REVERSE_ORDER].reshape(-1).long()
+    iw, iz = iw[:, rev], iz[:, rev]
+    iw = torch.bitwise_and(iw, (1 << bits) - 1)
+    iz = torch.bitwise_and(iz, (1 << bits) - 1)
+    sc = torch.from_numpy(scales.astype(np.float32)).repeat_interleave(group_size, dim=0)
+    iz = iz.repeat_interleave(group_size, dim=0)
+    w = (iw - iz).to(torch.float32) * sc
+    return w.t().contiguous().numpy()
+
+def ref_fp8_block(w_u8, scale_inv, bo, bi):
+    w = torch.from_numpy(w_u8.copy()).view(torch.float8_e4m3fn).to(torch.float32)
+    s = torch.from_numpy(scale_inv.astype(np.float32)).repeat_interleave(bo, 0).repeat_interleave(bi, 1)
+    return (w * s[: w.shape[0], : w.shape[1]]).numpy()
+
+def unpack_ct(value, num_bits, shape, packed_dim):
+    """compressed_tensors.compressors.quantized_compressors.pack_quantized.unpack_from_int32"""
+    pack_factor, mask = 32 // num_bits, (1 << num_bits) - 1
+    if packed_dim == 1:
+        out = torch.zeros((value.shape[0], value.shape[1] * pack_factor), dtype=torch.int32)
+        for i in range(pack_factor):
+            out[:, i::pack_factor] = (value >> (num_bits * i)) & mask
+        out = out[:, : int(shape[1])]
+    else:
+        out = torch.zeros((value.shape[0] * pack_factor, value.shape[1]), dtype=torch.int32)
+        for i in range(pack_factor):
+            out[i::pack_factor, :] = (value >> (num_bits * i)) & mask
+        out = out[: int(shape[0]), :]
+    return (out - (1 << num_bits) // 2).to(torch.int8)
+
+def ref_ct_pack(packed, scale, zp, shape, g_idx, bits, group_size):
+    out, inp = int(shape[0]), int(shape[1])
+    q = unpack_ct(ti(packed), bits, shape, 1).to(torch.int32)
+    sc = torch.from_numpy(scale.astype(np.float32))
+    ng = sc.shape[1]
+    z = unpack_ct(ti(zp), bits, (out, ng), 0).to(torch.int32) if zp is not None else torch.zeros((out, ng), dtype=torch.int32)
+    gi = torch.from_numpy(g_idx.astype(np.int64)) if g_idx is not None else torch.arange(inp) // (inp if group_size < 1 else group_size)
+    w = (q - z[:, gi]).to(torch.float32) * sc[:, gi]
+    return w.contiguous().numpy()
+
+def f16_scales(shape, lo=0.02, hi=1.5):
+    return trng.uniform(lo, hi, size=shape).astype(np.float16)
+
+def role_json(arr, dtype):
+    return {"dtype": dtype, "shape": list(arr.shape), "hex": np.ascontiguousarray(arr).tobytes().hex()}
+
+def ct_config(bits, group_size, sym, strategy, actorder=None, fmt="pack-quantized", typ="int"):
+    return {"quant_method": "compressed-tensors", "format": fmt, "quantization_status": "compressed", "ignore": ["lm_head"],
+            "kv_cache_scheme": None, "sparsity_config": {}, "transform_config": {},
+            "config_groups": {"group_0": {"targets": ["Linear"], "input_activations": None, "output_activations": None,
+                                          "weights": {"num_bits": bits, "type": typ, "symmetric": sym, "strategy": strategy, "group_size": group_size,
+                                                      "actorder": actorder, "dynamic": False, "observer": "minmax"}}}}
+
+def tensor_vectors(d):
+    name, out = d["name"], []
+    def case(cfg, roles, ref):
+        assert np.isfinite(ref).all()
+        out.append({"config": cfg, "roles": roles, "values_f32_hex": ref.astype("<f4").tobytes().hex()})
+    if name == "GPTQ":
+        for bits, gs, v2, act, sym in [(4, 8, False, False, True), (4, 8, True, True, False), (8, 16, False, True, False), (2, 8, False, False, True),
+                                       (4, -1, False, False, True), (8, 16, False, False, True)]:
+            o, i = 16, 32
+            pack, ggs = 32 // bits, (i if gs < 1 else gs)
+            ng = -(-i // ggs)
+            qweight = trng.integers(-2**31, 2**31, size=(i // pack, o), dtype=np.int64).astype(np.int32)
+            zfield = trng.integers(0, (1 << bits) - 1, size=(ng, o))     # stored z (v2) or z - 1 (v1): v1's z = 0 edge avoided
+            qzeros = pack_along(zfield, bits, 1)
+            scales = f16_scales((ng, o))
+            perm = trng.permutation(i)
+            g_idx = ((perm // ggs) if act else (np.arange(i) // ggs)).astype(np.int32)
+            ref = ref_gptq(qweight, qzeros, scales, g_idx, bits, v2)
+            cfg = {"quant_method": "gptq", "bits": bits, "group_size": gs, "sym": sym, "desc_act": act, "checkpoint_format": "gptq_v2" if v2 else "gptq"}
+            case(cfg, {"qweight": role_json(qweight, "I32"), "qzeros": role_json(qzeros, "I32"), "scales": role_json(scales, "F16"),
+                       "g_idx": role_json(g_idx, "I32")}, ref)
+        # no g_idx tensor at all (checkpoints written without act-order may omit it)
+        o, i, bits, gs = 8, 16, 4, 8
+        qweight = trng.integers(-2**31, 2**31, size=(i // 8, o), dtype=np.int64).astype(np.int32)
+        qzeros = pack_along(trng.integers(0, 15, size=(2, o)), 4, 1)
+        scales = f16_scales((2, o))
+        case({"quant_method": "gptq", "bits": 4, "group_size": 8}, {"qweight": role_json(qweight, "I32"), "qzeros": role_json(qzeros, "I32"), "scales": role_json(scales, "F16")},
+             ref_gptq(qweight, qzeros, scales, np.arange(i) // gs, 4, False))
+    elif name == "AWQ":
+        for gs in (8, 16, -1):
+            o, i = 16, 32
+            ggs = i if gs < 1 else gs
+            ng = i // ggs
+            qweight = trng.integers(-2**31, 2**31, size=(i, o // 8), dtype=np.int64).astype(np.int32)
+            qzeros = trng.integers(-2**31, 2**31, size=(ng, o // 8), dtype=np.int64).astype(np.int32)
+            scales = f16_scales((ng, o))
+            case({"quant_method": "awq", "bits": 4, "group_size": gs, "zero_point": True, "version": "gemm"},
+                 {"qweight": role_json(qweight, "I32"), "qzeros": role_json(qzeros, "I32"), "scales": role_json(scales, "F16")},
+                 ref_awq(qweight, qzeros, scales, 4, ggs))
+    elif name == "FP8_BLOCK":
+        for o, i, bo, bi, sdt in [(12, 20, 4, 8, "F32"), (5, 7, 3, 4, "BF16"), (8, 16, 8, 16, "F16")]:
+            w = trng.integers(0, 256, size=(o, i), dtype=np.uint8)
+            w[(w & 0x7F) == 0x7F] = 0x38          # e4m3fn's NaN encodings
+            ns = (-(-o // bo), -(-i // bi))
+            if sdt == "BF16":
+                sc32 = trng.uniform(0.001, 0.5, size=ns).astype(np.float32)
+                sc = (sc32.view(np.uint32) >> 16).astype(np.uint16)             # bf16 bits
+                sc_f = (sc.astype(np.uint32) << 16).view(np.float32)
+                role = {"dtype": "BF16", "shape": list(ns), "hex": sc.astype("<u2").tobytes().hex()}
+            elif sdt == "F16":
+                sc_f = f16_scales(ns, 0.001, 0.5).astype(np.float32)
+                role = role_json(sc_f.astype(np.float16), "F16")
+            else:
+                sc_f = trng.uniform(0.001, 0.5, size=ns).astype(np.float32)
+                role = role_json(sc_f, "F32")
+            case({"quant_method": "fp8", "activation_scheme": "dynamic", "fmt": "e4m3", "weight_block_size": [bo, bi]},
+                 {"weight": role_json(w, "F8_E4M3"), "scale_inv": role}, ref_fp8_block(w, sc_f, bo, bi))
+    elif name == "CT_PACK_QUANTIZED":
+        for bits, gs, sym, act in [(4, 8, True, False), (4, 8, False, False), (8, 16, True, False), (8, 16, False, False), (4, -1, True, False),
+                                   (4, 8, True, True), (4, 16, False, True)]:
+            o, i = 16, 32
+            pack, ggs = 32 // bits, (i if gs < 1 else gs)
+            ng = i // ggs
+            packed = trng.integers(-2**31, 2**31, size=(o, i // pack), dtype=np.int64).astype(np.int32)
+            scale = f16_scales((o, ng))
+            zp = None if sym else trng.integers(-2**31, 2**31, size=(o // pack, ng), dtype=np.int64).astype(np.int32)
+            g_idx = (trng.permutation(i) // ggs).astype(np.int32) if act else None
+            shape = np.array([o, i], dtype=np.int64)
+            ref = ref_ct_pack(packed, scale, zp, shape, g_idx, bits, gs)
+            roles = {"packed": role_json(packed, "I32"), "scale": role_json(scale, "F16"), "shape": role_json(shape, "I64")}
+            if zp is not None:
+                roles["zp"] = role_json(zp, "I32")
+            if g_idx is not None:
+                roles["g_idx"] = role_json(g_idx, "I32")
+            case(ct_config(bits, gs if gs > 0 else None, sym, "group" if gs > 0 else "channel", "group" if act else None), roles, ref)
+    elif name == "CT_FP8_CHANNEL":
+        for o, i in [(8, 16), (5, 7)]:
+            w = trng.integers(0, 256, size=(o, i), dtype=np.uint8)
+            w[(w & 0x7F) == 0x7F] = 0x38
+            sc = trng.uniform(0.001, 0.5, size=(o, 1)).astype(np.float32)
+            ref = ref_fp8_block(w, sc, 1, i)
+            case(ct_config(8, None, True, "channel", None, "float-quantized", "float"), {"weight": role_json(w, "F8_E4M3"), "scale": role_json(sc, "F32")}, ref)
+    elif name == "CT_INT8_CHANNEL":
+        for o, i in [(8, 16), (6, 9)]:
+            w = trng.integers(-128, 128, size=(o, i)).astype(np.int8)
+            sc = f16_scales((o, 1), 0.001, 0.2)
+            ref = (torch.from_numpy(w.astype(np.int32)).to(torch.float32) * torch.from_numpy(sc.astype(np.float32))).numpy()
+            case(ct_config(8, None, True, "channel", None, "int-quantized", "int"), {"weight": role_json(w, "I8"), "scale": role_json(sc, "F16")}, ref)
+    return out
+
 def vectors(d, kinds=("random", "random", "random", "random", "extreme", "extreme")):
     name, L = d["name"], d["layout"]
     if L["kind"] != "blocks":
-        return []
+        return tensor_vectors(d)
     blocks = 1 if L["elems"] >= 64 else 4
     out = []
     for kind in kinds:

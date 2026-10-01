@@ -9,12 +9,18 @@
 //! * [`expr`] — the closed, total, deterministic expression language descriptors are written in.
 //! * [`desc`] — the schema, its canonical text and digest (what a runtime pack pins).
 //! * [`blocks`] — the interpreter for tensors stored as rows of fixed-size blocks (ggml's types).
+//! * [`tensors`] — the interpreter for a weight stored as several named checkpoint tensors (GPTQ,
+//!   AWQ, FP8 with block scales, compressed-tensors): the descriptor says which tensors (`roles`),
+//!   how a `quantization_config` is read (`config`: the keys it knows, the conditions under which the
+//!   tensors mean what the descriptor says, the modules left in float), and how each weight decodes.
 //! * [`QuantRegistry`] — the built-in descriptors (`quant-formats/*.json`, embedded) plus any a
 //!   caller supplies; a GGUF tensor type or a `quantization_config` is looked up in it, and a type
 //!   it does not hold is a named refusal that says what to supply ([`NeedsDescriptor`]).
 //!
-//! A descriptor carries its own test vectors — block bytes and the `f32` values an independent
-//! implementation decodes them to — and one that fails them is refused when loaded.
+//! A descriptor carries its own test vectors — block bytes, or the role tensors of a weight and
+//! its configuration, and the `f32` values an independent implementation decodes them to — and one
+//! that fails them is refused when loaded. The built-in vectors come from gguf-py (ggml types) and
+//! from torch re-implementations of each library's own dequantiser (`tools/gen_quant_formats.py`).
 
 pub mod blocks;
 pub mod desc;
@@ -23,8 +29,8 @@ pub mod tensors;
 
 use crate::error::{LowerError, Result};
 use blocks::BlocksFormat;
-use tensors::TensorsFormat;
 use desc::{FormatId, LayoutDesc, QuantFormatDesc, unhex};
+use tensors::{RoleTensor, TensorsFormat};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
@@ -80,6 +86,9 @@ impl QuantFormat {
 
     /// The descriptor's own vectors: each block's bytes must decode to its `f32` values, bit for bit.
     fn run_tests(&self) -> Result<()> {
+        if let Some(t) = &self.tensors {
+            return self.run_tensor_tests(t);
+        }
         let Some(b) = &self.blocks else { return Ok(()) };
         for (n, t) in self.desc.tests.iter().enumerate() {
             let raw = unhex(&t.block_hex).map_err(|e| LowerError::bad(format!("{} test {n}: {e}", self.name())))?;
@@ -110,6 +119,43 @@ impl QuantFormat {
     }
 }
 
+impl QuantFormat {
+    /// A `tensors` format's vectors: the role tensors of one weight and the configuration, the weight
+    /// they must decode to (float32, bit for bit).
+    fn run_tensor_tests(&self, t: &TensorsFormat) -> Result<()> {
+        let roles: Vec<(String, bool)> = t.roles().map(|(n, _, req)| (n.to_string(), req)).collect();
+        for (n, v) in self.desc.tests.iter().enumerate() {
+            let bad = |m: String| LowerError::bad(format!("quant format `{}` test {n}: {m}", self.name()));
+            if let Some(k) = v.roles.keys().find(|k| !roles.iter().any(|(r, _)| r == *k)) {
+                return Err(bad(format!("a tensor for role `{k}`, which the format does not declare")));
+            }
+            let mut tensors: Vec<Option<RoleTensor>> = Vec::with_capacity(roles.len());
+            for (r, required) in &roles {
+                match v.roles.get(r) {
+                    Some(tr) => tensors.push(Some(RoleTensor { shape: tr.shape.clone(), dtype: tr.dtype.clone(), data: unhex(&tr.hex).map_err(|e| bad(e.to_string()))? })),
+                    None if *required => return Err(bad(format!("no tensor for the required role `{r}`"))),
+                    None => tensors.push(None),
+                }
+            }
+            let cfg = v.config.clone().unwrap_or_else(|| serde_json::json!({}));
+            // A format that says how its configuration is read is tested through that reading.
+            let params = if self.desc.config.is_some() { t.read_config(&cfg).map_err(|e| bad(e.to_string()))?.params } else { t.resolve_params(&cfg).map_err(|e| bad(e.to_string()))? };
+            let (got, out, inp) = t.decode_floats(&tensors, &params).map_err(|e| bad(e.to_string()))?;
+            let want = unhex(&v.values_f32_hex).map_err(|e| bad(e.to_string()))?;
+            if want.len() != got.len() * 4 {
+                return Err(bad(format!("{} values expected, {} decoded ({out} × {inp})", want.len() / 4, got.len())));
+            }
+            for (i, (g, w)) in got.iter().zip(want.chunks_exact(4)).enumerate() {
+                let w = f32::from_le_bytes([w[0], w[1], w[2], w[3]]);
+                if g.to_bits() != w.to_bits() && !(*g == 0.0 && w == 0.0) {
+                    return Err(bad(format!("fails at element {i} (row {}, column {}): decodes to {g:e}, the vector says {w:e}", i / inp, i % inp)));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// What a GGUF file (or a checkpoint) holds that no descriptor in the registry describes: the
 /// refusal that says what to supply.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,19 +170,22 @@ pub struct NeedsDescriptor {
 impl NeedsDescriptor {
     pub fn message(&self, known: &[String]) -> String {
         let what = match (&self.id, &self.name) {
+            (_, Some(n)) if self.scheme == "config" => format!("quantization_config quant_method={n}"),
             (Some(id), Some(n)) => format!("{} type {id} (`{n}`)", self.scheme),
             (Some(id), None) => format!("{} type {id}", self.scheme),
             (None, Some(n)) => format!("{} format `{n}`", self.scheme),
             (None, None) => format!("a {} format", self.scheme),
         };
         let some: Vec<&String> = self.tensors.iter().take(3).collect();
+        let which = if self.tensors.is_empty() {
+            String::new()
+        } else {
+            format!(": {} tensor(s) need one ({}{})", self.tensors.len(), some.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "), if self.tensors.len() > 3 { ", …" } else { "" })
+        };
         format!(
-            "{what} has no quant-format descriptor: {} tensor(s) need one ({}{}). \
+            "{what} has no quant-format descriptor{which}. \
              A descriptor is a file (misaka.palw.quant-format.v1) — supply it with --quant-format <file.json> or a pack's quant.descriptors; \
              no code change is needed. Without one: use the model's original safetensors, or re-quantise it to a described type ({})",
-            self.tensors.len(),
-            some.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
-            if self.tensors.len() > 3 { ", …" } else { "" },
             known.join(", ")
         )
     }
@@ -148,6 +197,8 @@ pub struct QuantRegistry {
     formats: Vec<Arc<QuantFormat>>,
     by_ggml: BTreeMap<u32, usize>,
     by_name: BTreeMap<String, usize>,
+    /// A `quantization_config`'s `quant_method` (`gptq`, `compressed-tensors/pack-quantized`).
+    by_config: BTreeMap<String, usize>,
 }
 
 macro_rules! builtin {
@@ -160,7 +211,7 @@ macro_rules! builtin {
 const BUILTIN: &[&str] = builtin!(
     "f32", "f16", "bf16", "f64", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "q2_k", "q3_k", "q4_k", "q5_k", "q6_k", "iq4_nl", "iq4_xs",
     "tq1_0", "tq2_0", "mxfp4", "nvfp4", "q1_0", "q2_0", "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m", "gptq", "awq",
-    "fp8_block",
+    "fp8_block", "ct_pack", "ct_fp8", "ct_int8",
 );
 
 impl QuantRegistry {
@@ -192,13 +243,34 @@ impl QuantRegistry {
         {
             return Err(LowerError::bad(format!("ggml type {id} is already `{}`; `{}` cannot redefine it", self.formats[i].name(), f.name())));
         }
+        let methods: Vec<String> = f.ids().iter().filter(|i| i.scheme == "config").filter_map(|i| i.method.clone()).collect();
+        for m in &methods {
+            if let Some(&i) = self.by_config.get(m) {
+                return Err(LowerError::bad(format!("quant_method `{m}` is already read by `{}`; `{}` cannot redefine it", self.formats[i].name(), f.name())));
+            }
+        }
         let i = self.formats.len();
+        for m in methods {
+            self.by_config.insert(m, i);
+        }
         if let Some(id) = f.ggml_id() {
             self.by_ggml.insert(id, i);
         }
         self.by_name.insert(f.name().to_string(), i);
         self.formats.push(Arc::new(f));
         Ok(())
+    }
+
+    /// The built-in registry extended with the descriptor files at `paths` (`--quant-format`). A file
+    /// that is malformed, fails its own test vectors or redefines a type the registry holds is
+    /// refused by its path.
+    pub fn with_files(paths: &[std::path::PathBuf]) -> Result<QuantRegistry> {
+        let mut extra = Vec::new();
+        for p in paths {
+            let text = std::fs::read_to_string(p).map_err(|e| LowerError::Io(format!("{}: {e}", p.display())))?;
+            extra.push(QuantFormat::from_json(&text).map_err(|e| LowerError::bad(format!("{}: {e}", p.display())))?);
+        }
+        QuantRegistry::builtin().with(extra)
     }
 
     /// This registry and `extra` (parsed descriptors the caller supplies).
@@ -215,6 +287,19 @@ impl QuantRegistry {
     }
     pub fn named(&self, name: &str) -> Option<&Arc<QuantFormat>> {
         self.by_name.get(name).map(|i| &self.formats[*i])
+    }
+    /// The format a `quantization_config` announces: `quant_method` with its `format` first
+    /// (`compressed-tensors/pack-quantized`), then `quant_method` alone.
+    pub fn config(&self, method: &str, format: Option<&str>) -> Option<&Arc<QuantFormat>> {
+        let method = method.to_ascii_lowercase();
+        format
+            .and_then(|f| self.by_config.get(&format!("{method}/{}", f.to_ascii_lowercase())))
+            .or_else(|| self.by_config.get(&method))
+            .map(|i| &self.formats[*i])
+    }
+    /// The `quant_method` ids this registry reads, for a refusal that lists them.
+    pub fn config_methods(&self) -> Vec<String> {
+        self.by_config.keys().cloned().collect()
     }
     pub fn all(&self) -> &[Arc<QuantFormat>] {
         &self.formats

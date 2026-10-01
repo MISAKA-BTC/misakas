@@ -1,0 +1,251 @@
+{
+ "config": {
+  "checks": [
+   {
+    "message": "more than one config group: modules of one checkpoint use different formats",
+    "one_of": [
+     null
+    ],
+    "path": "config_groups.group_1"
+   },
+   {
+    "message": "targets other than all Linear modules",
+    "one_of": [
+     [
+      "Linear"
+     ]
+    ],
+    "path": "config_groups.group_0.targets"
+   },
+   {
+    "message": "a quantised KV cache changes what the model computes",
+    "one_of": [
+     null
+    ],
+    "path": "kv_cache_scheme"
+   },
+   {
+    "message": "a sparse checkpoint stores its tensors differently",
+    "one_of": [
+     null,
+     {}
+    ],
+    "path": "sparsity_config"
+   },
+   {
+    "message": "transforms (rotations) are applied to the weights at run time",
+    "one_of": [
+     null,
+     {}
+    ],
+    "path": "transform_config"
+   },
+   {
+    "message": "dynamic weight quantisation",
+    "one_of": [
+     null,
+     false
+    ],
+    "path": "config_groups.group_0.weights.dynamic"
+   },
+   {
+    "message": "float weights are format float-quantized",
+    "one_of": [
+     "int"
+    ],
+    "path": "config_groups.group_0.weights.type"
+   },
+   {
+    "message": "this format is 8-bit",
+    "one_of": [
+     8
+    ],
+    "path": "config_groups.group_0.weights.num_bits"
+   },
+   {
+    "message": "asymmetric INT8 weights",
+    "one_of": [
+     true
+    ],
+    "path": "config_groups.group_0.weights.symmetric"
+   },
+   {
+    "message": "a weight strategy other than per-channel",
+    "one_of": [
+     "channel"
+    ],
+    "path": "config_groups.group_0.weights.strategy"
+   }
+  ],
+  "inert": [
+   "format",
+   "global_compression_ratio",
+   "compression_ratio",
+   "quantization_status",
+   "version"
+  ],
+  "lm_head": "unless_skipped",
+  "skip": "ignore",
+  "skip_match": "exact"
+ },
+ "decode": {
+  "code": {
+   "max": 127,
+   "min": -128
+  },
+  "group": {
+   "size": "inp"
+  },
+  "q": "weight[o, i]",
+  "scale": "scale[o, 0]",
+  "target": "integers",
+  "zero": "0"
+ },
+ "doc": "compressed-tensors, format int-quantized, symmetric INT8 weights with one scale per output channel (W8A8): `weight` int8 [out, in], `weight_scale` [out, 1]. W = scale * q.",
+ "ids": [
+  {
+   "method": "compressed-tensors/int-quantized",
+   "scheme": "config"
+  }
+ ],
+ "layout": {
+  "checks": [
+   {
+    "expr": "dim_scale[0] == out && dim_scale[1] == 1",
+    "message": "weight_scale is not [out, 1]"
+   }
+  ],
+  "dims": {
+   "inp": "dim_weight[1]",
+   "out": "dim_weight[0]"
+  },
+  "kind": "tensors",
+  "roles": [
+   {
+    "dtypes": [
+     "I8"
+    ],
+    "name": "weight",
+    "rank": 2,
+    "suffix": ".weight"
+   },
+   {
+    "dtypes": [
+     "F16",
+     "BF16",
+     "F32"
+    ],
+    "name": "scale",
+    "rank": 2,
+    "suffix": ".weight_scale"
+   }
+  ]
+ },
+ "name": "CT_INT8_CHANNEL",
+ "params": {},
+ "schema": "misaka.palw.quant-format.v1",
+ "tests": [
+  {
+   "config": {
+    "config_groups": {
+     "group_0": {
+      "input_activations": null,
+      "output_activations": null,
+      "targets": [
+       "Linear"
+      ],
+      "weights": {
+       "actorder": null,
+       "dynamic": false,
+       "group_size": null,
+       "num_bits": 8,
+       "observer": "minmax",
+       "strategy": "channel",
+       "symmetric": true,
+       "type": "int"
+      }
+     }
+    },
+    "format": "int-quantized",
+    "ignore": [
+     "lm_head"
+    ],
+    "kv_cache_scheme": null,
+    "quant_method": "compressed-tensors",
+    "quantization_status": "compressed",
+    "sparsity_config": {},
+    "transform_config": {}
+   },
+   "roles": {
+    "scale": {
+     "dtype": "F16",
+     "hex": "3031c82e7e2ec1234830443213327b31",
+     "shape": [
+      8,
+      1
+     ]
+    },
+    "weight": {
+     "dtype": "I8",
+     "hex": "31474058bb90de807e5ced9411f47018a6788532e1a7dc6c856c9811ae691c2ac1140178cff54370454534d4c0d610d6e6d96618055648e315ee20d8cb8d47994d7719ddfc2fba010e1e9b07bf18126cc53aa131c515696d5e3f80e16d6fa6a02fc76fa1bb4c0ad45399508757ba4a589c4c59f639ced8921733d77bca41a4d7",
+     "shape": [
+      8,
+      16
+     ]
+    }
+   },
+   "values_f32_hex": "0030fe4000283841000026410040644100f832c1004091c10060b0c00000a6c10068a34100a06e41002045c000108cc1006030400000f9bf0040914100007940009418c100704b41008650c10088a940003852c000e216c1002074c000183741008650c100183741005030c10090e63f00040bc10002324100e03d4000688e400081ccc000d8014000c0cf3d00c44241000f9fc000d48ebf007dd94000c8354100fbdf4000fbdf4000cca84000d48ec000c0cfc0005688c000c0cf3f005688c0009ac9be803317bf80b9c53f0018ba3e00149b3d80b5a63f00928b3f00dde0be00d5a23e00928bbe0020f83e00141bbf807a4dbfc0ecdebfc0a1893fc0a9c7bf00d4244100bc7e410010564000d895c0000009bf0038c94000d815c10000093e00c0ef3f00708040003458c100c06f3f00240bc100804d4000201a400030674100d638c100b4354100cf94c10082194100d638c1009483400079a44100bdaa41003e9341005e45410080c8c1003cc2c000bdaa4100dfad4100fa8cc1006096c180be0e41801d2dc1408fa841404390c1808f51c100d2664100f8f23f00a205c180147c4140699cc100f87241c0beb7c1401d8441009954c100bf604100a28541000389c10042504180e173410038dbbf80311c41000309c10038dbc080b696c1001a7c4080c00b4100b3e0c04086a84100f913c1801d3241001a7cc100b3e0c0"
+  },
+  {
+   "config": {
+    "config_groups": {
+     "group_0": {
+      "input_activations": null,
+      "output_activations": null,
+      "targets": [
+       "Linear"
+      ],
+      "weights": {
+       "actorder": null,
+       "dynamic": false,
+       "group_size": null,
+       "num_bits": 8,
+       "observer": "minmax",
+       "strategy": "channel",
+       "symmetric": true,
+       "type": "int"
+      }
+     }
+    },
+    "format": "int-quantized",
+    "ignore": [
+     "lm_head"
+    ],
+    "kv_cache_scheme": null,
+    "quant_method": "compressed-tensors",
+    "quantization_status": "compressed",
+    "sparsity_config": {},
+    "transform_config": {}
+   },
+   "roles": {
+    "scale": {
+     "dtype": "F16",
+     "hex": "cd2f1e2aaf2fd8303d30ec2f",
+     "shape": [
+      6,
+      1
+     ]
+    },
+    "weight": {
+     "dtype": "I8",
+     "hex": "3beac04b7c5bfef859cf62a13dd21b0db5807bfb7c3ecdc0deae2a417cc0efbb641a8273689cbb34b2df88dff23458f29fb8b6ee94b9",
+     "shape": [
+      6,
+      9
+     ]
+    }
+   },
+   "values_f32_hex": "801fe640009e2bc000a0f9c0c043124100d37141c077314100a079be00a079bf40912d4100df15c000df9540804891c000933a4000b20cc0002aa53f000c1f3f006565c000c0c3c040456c4100ac19bf00316e410031ee4080eec3c000e0f5c0009f82c080831dc1005ba140006c1d410028964100001bc100b024c0001c27c10030724100e07b40009498c100428b4100645c4100ea53c1803812c10064dc40004b25c100dd8bc0004c7ec100dd8bc00058edbf00f8cd4000482e4100d0ddbf001b40c100980ec1008e12c100980ec000e455c1009d0cc1"
+  }
+ ]
+}

@@ -483,7 +483,7 @@ impl<'a> FillCtx<'a> {
         for r in 0..rows {
             let vals: Vec<f64> = out.iter().map(|c| t.data[r * cols + c] as f64 * tv[*c] / (main.scales[r] * tn)).collect();
             let mx = vals.iter().fold(0f64, |m, v| m.max(v.abs()));
-            let fr = if mx > 0.0 { (30 - mx.log2().ceil() as i32).clamp(0, f_max) } else { f_max };
+            let fr = if mx > 0.0 { (30 - crate::detmath::ceil_log2(mx) as i32).clamp(0, f_max) } else { f_max };
             f.push(fr as i8);
             wo.extend(
                 vals.iter().map(|v| (v * 2f64.powi(fr)).round().clamp(-(1i64 << 31) as f64 + 1.0, (1i64 << 31) as f64 - 1.0) as i32),
@@ -604,6 +604,7 @@ pub fn materialise(
             out.tensors.insert(key, t);
         }
         if hbk == hl.post {
+            super::check_logits_range(hl, &ctx)?;
             logits_scale = Some(ctx.scale(&lw.logits_key)?);
         }
         quant_inexact += ctx.quant_inexact();
@@ -623,5 +624,5 @@ pub fn output_q(s: f64) -> Option<u8> {
     if s.is_nan() || s <= 0.0 || !s.is_finite() {
         return None;
     }
-    Some((-s.log2().ceil()).clamp(0.0, 31.0) as u8)
+    Some((-crate::detmath::ceil_log2(s)).clamp(0.0, 31.0) as u8)
 }

@@ -191,7 +191,7 @@ pub fn parse_encdec(config: &str) -> Result<EncDecSpec> {
                 embed_norm: false,
                 final_norm: true,
                 attn_scale: 1.0,
-                head_scale: if scale_out { (d as f64).powf(-0.5) } else { 1.0 },
+                head_scale: if scale_out { crate::detmath::powf(d as f64, -0.5) } else { 1.0 },
                 logits_bias: false,
                 decoder_start: start,
             })
@@ -245,7 +245,7 @@ pub fn parse_encdec(config: &str) -> Result<EncDecSpec> {
                 embed_scale: if scale { (d as f64).sqrt() } else { 1.0 },
                 embed_norm: learned,
                 final_norm: pre,
-                attn_scale: (dec_head_dim as f64).powf(-0.5),
+                attn_scale: crate::detmath::powf(dec_head_dim as f64, -0.5),
                 head_scale: 1.0,
                 logits_bias: true,
                 decoder_start: start,
@@ -272,7 +272,7 @@ pub fn t5_bucket(rel: i64, bidirectional: bool, num_buckets: usize, max_distance
     if n < max_exact {
         return (ret + n) as usize;
     }
-    let lg = ((n as f32) / (max_exact as f32)).ln() / ((max_distance as f64 / max_exact as f64).ln() as f32) * ((nb - max_exact) as f32);
+    let lg = crate::detmath::ln_f32((n as f32) / (max_exact as f32)) / (crate::detmath::ln(max_distance as f64 / max_exact as f64) as f32) * ((nb - max_exact) as f32);
     (ret + (max_exact + lg as i64).min(nb - 1)) as usize
 }
 
@@ -283,7 +283,7 @@ pub fn sinusoid(rows: usize, d: usize) -> Vec<f32> {
     for p in 0..rows {
         for j in 0..d {
             let (k, f): (usize, fn(f64) -> f64) = if j < half { (2 * j, f64::sin) } else { (2 * (j - half) + 1, f64::cos) };
-            let ang = p as f64 / 10000f64.powf((2 * (k / 2)) as f64 / d as f64);
+            let ang = p as f64 / crate::detmath::powf(10000.0, (2 * (k / 2)) as f64 / d as f64);
             v[p * d + j] = f(ang) as f32;
         }
     }
@@ -987,6 +987,7 @@ fn new_cx(hl: &HlProgram, hb: u32, max_window: u32) -> Cx<'_> {
         split_max_readers: 0,
         quant: BTreeMap::new(),
         carry_keys: BTreeMap::new(),
+        table_chunk: 1 << 24,
     }
 }
 
@@ -1019,6 +1020,7 @@ fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
         suffix: String::new(),
         appended: BTreeMap::new(),
         carry_in: Vec::new(),
+        gx: Default::default(),
     }
 }
 
@@ -1596,7 +1598,7 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
                 _ => None,
             };
             let dims = AttnDims { heads: h, kv: h, d: dh, dv: dh, window };
-            let ex = AttnExtras { scale: s.attn_scale, softcap: None, alibi: None, sinks: None, rel_bias, chunk: None };
+            let ex = AttnExtras { scale: s.attn_scale, softcap: None, alibi: None, sinks: None, rel_bias, chunk: None, sparse: None };
             let ctx = lower_attention(&mut b, cx, &mut lb, &qv, (kw, k.key.clone()), (vw, v.key.clone()), dims, &ex, "attn.ctx", &codes_want("attn.ctx"))?;
             let cr = b.reshape_fixed(ctx.r, &[1, inner]);
             let ctx = Val { r: cr, ..ctx };
@@ -1660,7 +1662,8 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             // T5's `d^−½` on the decoder output rides in the codes' scale into the head.
             let xn = Val { key: xn.key.times(s.head_scale), ..xn };
             let hb = if s.logits_bias { Some("head.b") } else { None };
-            let lk = ScaleKey::site(vec!["logits".into()], true);
+            // LOGITS_Q24_V1: natural-log units × 2^24, whatever the model.
+            let lk = ScaleKey::q24();
             let lg = linear_rows(&mut b, cx, &mut lb, &xn, "head.w", hb, "logits", &Want { dt: DType::I32, key: lk.clone() })?;
             let r = b.reshape_fixed(lg.r, &[s.vocab as u32]);
             let out = ensure_node(&mut b, &Val { r, ..lg });

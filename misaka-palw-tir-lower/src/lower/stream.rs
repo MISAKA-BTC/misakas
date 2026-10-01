@@ -216,6 +216,7 @@ pub fn materialise_stream(
                     done.insert(key);
                 }
                 if hbk == hl.post {
+                    super::check_logits_range(hl, &ctx)?;
                     logits_scale = Some(ctx.scale(&lw.logits_key)?);
                 }
                 Ok(())

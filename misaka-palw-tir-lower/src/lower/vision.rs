@@ -627,7 +627,7 @@ pub fn rope_2d(s: &VisionSpec) -> Option<(Vec<f64>, Vec<f64>)> {
     let theta = s.rope_theta?;
     let dh = s.head_dim();
     let spatial = dh / 2;
-    let inv: Vec<f64> = (0..spatial).step_by(2).map(|i| 1.0 / theta.powf(i as f64 / spatial as f64)).collect();
+    let inv: Vec<f64> = (0..spatial).step_by(2).map(|i| 1.0 / crate::detmath::powf(theta, i as f64 / spatial as f64)).collect();
     let mut coords = patch_coords(s);
     if let Some((perm, _, _)) = window_tables(s) {
         coords = perm.iter().map(|p| coords[*p as usize]).collect();
@@ -638,8 +638,8 @@ pub fn rope_2d(s: &VisionSpec) -> Option<(Vec<f64>, Vec<f64>)> {
         ang.extend(inv.iter().map(|f| w as f64 * (*f as f32) as f64));
         let half = ang.clone();
         ang.extend(half);
-        c.extend(ang.iter().map(|a| ((*a as f32).cos()) as f64));
-        sn.extend(ang.iter().map(|a| ((*a as f32).sin()) as f64));
+        c.extend(ang.iter().map(|a| crate::detmath::cos_f32(*a as f32) as f64));
+        sn.extend(ang.iter().map(|a| crate::detmath::sin_f32(*a as f32) as f64));
     }
     Some((c, sn))
 }
@@ -960,6 +960,7 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
         split_max_readers: 0,
         quant: BTreeMap::new(),
         carry_keys: BTreeMap::new(),
+        table_chunk: 1 << 24,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];
@@ -1016,6 +1017,7 @@ fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
         suffix,
         appended: BTreeMap::new(),
         carry_in: Vec::new(),
+        gx: Default::default(),
     }
 }
 

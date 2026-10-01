@@ -9,7 +9,8 @@
 
 use crate::error::{LowerError, Result};
 use crate::hl::HlProgram;
-use crate::prequant::{QFormat, QLayout, QWeight, unpack_awq, unpack_gptq};
+use crate::prequant::{QFormat, QLayout, QWeight};
+use crate::quantfmt::tensors::RoleTensor;
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -585,6 +586,13 @@ pub enum Src {
         src: Box<Src>,
         shape: Vec<usize>,
     },
+    /// The value's leading axes flattened into rows (`[Π lead, cols]`), then zero rows appended up to
+    /// `rows`: per-layer tables of different heights (a hashed n-gram embedding's primes differ by
+    /// layer) brought to the one shape their shared block declares.
+    PadRows {
+        src: Box<Src>,
+        rows: usize,
+    },
     /// A group-quantised linear stored as `{module}.qweight`, `.qzeros`, `.scales` (and GPTQ's
     /// `.g_idx`): its value is the `[out, in]` weight the format defines ([`QWeight::dequant`]);
     /// [`eval_qsrc`] reads the stored integers themselves.
@@ -598,9 +606,14 @@ impl Src {
     /// Whether a pre-quantised tensor is read somewhere inside.
     pub fn is_quant(&self) -> bool {
         match self {
-            Src::Quant { .. } => true,
+            Src::Quant { fmt, .. } => fmt.is_integers(),
             Src::Tensor(_) => false,
-            Src::Take { src, .. } | Src::Transpose(src) | Src::Stack { src, .. } | Src::Map { src, .. } | Src::Reshape { src, .. } => {
+            Src::Take { src, .. }
+            | Src::Transpose(src)
+            | Src::Stack { src, .. }
+            | Src::Map { src, .. }
+            | Src::Reshape { src, .. }
+            | Src::PadRows { src, .. } => {
                 src.is_quant()
             }
         }
@@ -608,9 +621,14 @@ impl Src {
     /// The quantised format read inside, if any.
     pub fn quant_format(&self) -> Option<&QFormat> {
         match self {
-            Src::Quant { fmt, .. } => Some(fmt),
+            Src::Quant { fmt, .. } => fmt.is_integers().then_some(fmt),
             Src::Tensor(_) => None,
-            Src::Take { src, .. } | Src::Transpose(src) | Src::Stack { src, .. } | Src::Map { src, .. } | Src::Reshape { src, .. } => {
+            Src::Take { src, .. }
+            | Src::Transpose(src)
+            | Src::Stack { src, .. }
+            | Src::Map { src, .. }
+            | Src::Reshape { src, .. }
+            | Src::PadRows { src, .. } => {
                 src.quant_format()
             }
         }
@@ -632,6 +650,10 @@ impl Src {
     }
     pub fn reshape(self, shape: Vec<usize>) -> Src {
         Src::Reshape { src: Box::new(self), shape }
+    }
+    /// [`Src::PadRows`].
+    pub fn pad_rows(self, rows: usize) -> Src {
+        Src::PadRows { src: Box::new(self), rows }
     }
     pub fn stack(self, var: char, count: usize) -> Src {
         Src::Stack { src: Box::new(self), var, count }
@@ -806,6 +828,15 @@ pub fn src_shape(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<
             }
             Ok(shape.clone())
         }
+        Src::PadRows { src, rows } => {
+            let s = src_shape(src, r, layer, vars)?;
+            let Some((cols, lead)) = s.split_last() else { return Err(LowerError::weights("padding the rows of a scalar")) };
+            let have: usize = lead.iter().product();
+            if have > *rows {
+                return Err(LowerError::weights(format!("{have} rows do not fit the {rows} the table is padded to")));
+            }
+            Ok(vec![*rows, *cols])
+        }
         Src::Quant { module, fmt: QFormat::Gguf { .. } } => {
             let m = expand(module, layer, vars)?;
             let n = format!("{m}.weight");
@@ -815,42 +846,62 @@ pub fn src_shape(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<
         }
         Src::Quant { module, fmt } => {
             let m = expand(module, layer, vars)?;
-            let names = quant_names(&m, r)?;
-            let qw = r.src.shape(&names[0]).ok_or_else(|| LowerError::weights(format!("no shape for `{}`", names[0])))?;
-            let sc = r.src.shape(&names[2]).ok_or_else(|| LowerError::weights(format!("no shape for `{}`", names[2])))?;
-            for n in &names {
-                r.touched.borrow_mut().insert(n.clone());
+            let (f, params) = fmt_binding(fmt)?;
+            let t = tensors_of(&f);
+            if !t.is_integers()
+                && let Some(w) = plain_float(&m, t, r)
+            {
+                r.touched.borrow_mut().insert(w.clone());
+                return r.src.shape(&w).ok_or_else(|| LowerError::weights(format!("no shape for `{w}`")));
             }
-            match (fmt, qw.as_slice(), sc.as_slice()) {
-                (QFormat::Gptq { bits, .. }, [rows, out], _) => Ok(vec![*out, rows * (32 / *bits as usize)]),
-                (QFormat::Awq { .. }, [inp, _], [_, out]) => Ok(vec![*out, *inp]),
-                _ => Err(LowerError::weights(format!("`{m}`: quantised shapes {qw:?} / {sc:?}"))),
-            }
+            let roles = role_tensors(&m, t, r, false)?;
+            let (out, inp) = t.dims(&roles, &params).map_err(|e| LowerError::weights(format!("`{m}`: {e}")))?;
+            Ok(vec![out, inp])
         }
     }
 }
 
-/// The resolved names of a quantised module's tensors: `qweight`, `qzeros`, `scales`, then
-/// `g_idx` when the checkpoint has it.
-fn quant_names(module: &str, r: &Resolver) -> Result<Vec<String>> {
-    let mut v = Vec::with_capacity(4);
-    for part in ["qweight", "qzeros", "scales"] {
-        let n = format!("{module}.{part}");
-        v.push(r.resolve(&n).ok_or_else(|| {
-            if r.resolve(&format!("{module}.weight")).is_some() {
-                LowerError::weights(format!("`{module}` is stored in float, but the config says it is quantised"))
-            } else {
-                LowerError::weights(format!("missing tensor `{n}`"))
-            }
-        })?);
+/// The descriptor a pre-quantised format is read with, and its parameters.
+fn fmt_binding(fmt: &QFormat) -> Result<(std::sync::Arc<crate::quantfmt::QuantFormat>, BTreeMap<String, i64>)> {
+    let (f, params) = fmt.binding().ok_or_else(|| LowerError::weights("a block-quantised (GGUF) tensor is read by `load_qweight`"))?;
+    if f.as_tensors().is_none() {
+        return Err(LowerError::weights(format!("quant format `{}` is not a tensors format", f.name())));
     }
-    if let Some(g) = r.resolve(&format!("{module}.g_idx")) {
-        v.push(g);
-    }
-    Ok(v)
+    Ok((f, params))
 }
 
-/// Read a quantised module's integers.
+fn tensors_of(f: &crate::quantfmt::QuantFormat) -> &crate::quantfmt::tensors::TensorsFormat {
+    f.as_tensors().expect("checked by fmt_binding")
+}
+
+/// The role tensors of the module `module` as a `tensors` descriptor declares them. A role's data is
+/// read when `with_data`, or when it is small (a shape tensor: the shape expressions may read its
+/// elements); otherwise only its header is.
+fn role_tensors(module: &str, t: &crate::quantfmt::tensors::TensorsFormat, r: &Resolver, with_data: bool) -> Result<Vec<Option<RoleTensor>>> {
+    let mut out = Vec::new();
+    for (_role, suffix, required) in t.roles() {
+        let n = format!("{module}{suffix}");
+        match r.resolve(&n) {
+            Some(rn) => {
+                r.touched.borrow_mut().insert(rn.clone());
+                let meta = r.src.metadata(&rn).ok_or_else(|| LowerError::weights(format!("no header for `{rn}`")))?;
+                let data = if with_data || meta.bytes <= 4096 { r.src.read_slice(&rn, 0..meta.bytes)? } else { Vec::new() };
+                out.push(Some(RoleTensor { shape: meta.shape, dtype: meta.dtype, data }));
+            }
+            None if required => {
+                return Err(if r.resolve(&format!("{module}.weight")).is_some() && suffix != ".weight" {
+                    LowerError::weights(format!("`{module}` is stored in float, but the config says it is quantised"))
+                } else {
+                    LowerError::weights(format!("missing tensor `{n}`"))
+                });
+            }
+            None => out.push(None),
+        }
+    }
+    Ok(out)
+}
+
+/// Read a quantised module's integers: the descriptor's decode of its role tensors.
 fn load_quant(module: &str, fmt: &QFormat, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<QWeight> {
     let m = expand(module, layer, vars)?;
     if let QFormat::Gguf { .. } = fmt {
@@ -859,25 +910,36 @@ fn load_quant(module: &str, fmt: &QFormat, r: &Resolver, layer: Option<usize>, v
         r.touched.borrow_mut().insert(rn.clone());
         return r.src.load_qweight(&rn).map_err(|e| LowerError::weights(format!("`{m}`: {e}")));
     }
-    let names = quant_names(&m, r)?;
-    for n in &names {
-        r.touched.borrow_mut().insert(n.clone());
+    let (f, params) = fmt_binding(fmt)?;
+    let t = tensors_of(&f);
+    let roles = role_tensors(&m, t, r, true)?;
+    t.decode_integers(&roles, &params).map_err(|e| LowerError::weights(format!("`{m}`: {e}")))
+}
+
+/// The plain float tensor a module of a floats-decoding format is stored as, when the quantiser left
+/// it alone (`<module>.weight` is an ordinary float tensor and the format's other roles are absent):
+/// a float is its own value, so reading it as stored is exact.
+fn plain_float(m: &str, t: &crate::quantfmt::tensors::TensorsFormat, r: &Resolver) -> Option<String> {
+    let dtype_of = |suffix: &str| r.resolve(&format!("{m}{suffix}")).and_then(|n| r.src.metadata(&n)).map(|x| x.dtype);
+    if t.stores(dtype_of) {
+        return None;
     }
-    let (qs, qw) = r.src.load_i32(&names[0])?;
-    let (zs, qz) = r.src.load_i32(&names[1])?;
-    let sc = r.src.load(&names[2])?;
-    let w = match fmt {
-        QFormat::Gptq { .. } => {
-            let g = match names.get(3) {
-                Some(n) => Some(r.src.load_i32(n)?),
-                None => None,
-            };
-            unpack_gptq(fmt, (&qs, &qw), (&zs, &qz), &sc, g.as_ref().map(|(s, v)| (s.as_slice(), v.as_slice())))
-        }
-        QFormat::Awq { .. } => unpack_awq(fmt, (&qs, &qw), (&zs, &qz), &sc),
-        QFormat::Gguf { .. } => unreachable!("returned above"),
-    };
-    w.map_err(|e| LowerError::weights(format!("`{m}`: {e}")))
+    let w = r.resolve(&format!("{m}.weight"))?;
+    matches!(r.src.metadata(&w)?.dtype.as_str(), "F32" | "F16" | "BF16" | "F64").then_some(w)
+}
+
+/// A module of a format that decodes to floats (an FP8 weight and its scales): its `[out, in]` weight.
+fn load_quant_floats(module: &str, fmt: &QFormat, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<Tensor> {
+    let m = expand(module, layer, vars)?;
+    let (f, params) = fmt_binding(fmt)?;
+    let t = tensors_of(&f);
+    if let Some(w) = plain_float(&m, t, r) {
+        r.touched.borrow_mut().insert(w.clone());
+        return r.src.load(&w);
+    }
+    let roles = role_tensors(&m, t, r, true)?;
+    let (data, out, inp) = t.decode_floats(&roles, &params).map_err(|e| LowerError::weights(format!("`{m}`: {e}")))?;
+    Ok(Tensor::new(vec![out, inp], data))
 }
 
 /// The stored integers of a quantised param (`None` when the param is not quantised): the
@@ -886,7 +948,8 @@ fn load_quant(module: &str, fmt: &QFormat, r: &Resolver, layer: Option<usize>, v
 /// it would not keep the integers.
 pub fn eval_qsrc(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<Option<Vec<QWeight>>> {
     match src {
-        Src::Quant { module, fmt } => Ok(Some(vec![load_quant(module, fmt, r, layer, vars)?])),
+        Src::Quant { module, fmt } if fmt.is_integers() => Ok(Some(vec![load_quant(module, fmt, r, layer, vars)?])),
+        Src::Quant { .. } => Ok(None),
         Src::Take { src: inner, axis: 0, pick } => match eval_qsrc(inner, r, layer, vars)? {
             Some(v) if v.len() == 1 => Ok(Some(vec![v[0].take_rows(&pick.indices_at(layer)?)?])),
             Some(_) => Err(LowerError::not_lowerable("a row slice across stacked quantised experts")),
@@ -966,7 +1029,18 @@ pub fn eval_src(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<c
             }
             Ok(Tensor::new(shape.clone(), t.data))
         }
-        Src::Quant { module, fmt } => Ok(load_quant(module, fmt, r, layer, vars)?.dequant()),
+        Src::PadRows { src, rows } => {
+            let t = eval_src(src, r, layer, vars)?;
+            let Some(cols) = t.shape.last().copied() else { return Err(LowerError::weights("padding the rows of a scalar")) };
+            let mut data = t.data;
+            if data.len() > rows * cols {
+                return Err(LowerError::weights(format!("{} rows do not fit the {rows} the table is padded to", data.len() / cols.max(1))));
+            }
+            data.resize(rows * cols, 0.0);
+            Ok(Tensor::new(vec![*rows, cols], data))
+        }
+        Src::Quant { module, fmt } if fmt.is_integers() => Ok(load_quant(module, fmt, r, layer, vars)?.dequant()),
+        Src::Quant { module, fmt } => load_quant_floats(module, fmt, r, layer, vars),
     }
 }
 
@@ -974,6 +1048,12 @@ pub fn eval_src(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<c
 pub fn layers_of_param(prog: &HlProgram, p: u32) -> Vec<usize> {
     let blocks: BTreeSet<usize> = (0..prog.blocks.len()).filter(|b| prog.block_params(*b).contains(&p)).collect();
     prog.schedule.iter().enumerate().filter(|(_, k)| blocks.contains(&(**k as usize))).map(|(l, _)| l).collect()
+}
+
+/// The MODEL layers whose checkpoint tensors a per-layer param reads (the occurrences of its block,
+/// mapped through [`HlProgram::model_layer`]: a layer run as several blocks counts once).
+pub fn model_layers_of_param(prog: &HlProgram, p: u32) -> Vec<Option<usize>> {
+    layers_of_param(prog, p).into_iter().map(|l| prog.model_layer(l)).collect::<BTreeSet<usize>>().into_iter().map(Some).collect()
 }
 
 /// A frontend's weight mapping: one [`Src`] per HL param (same order as `HlProgram::params`),
@@ -1000,7 +1080,7 @@ pub fn check_weights(prog: &HlProgram, binding: &Binding, source: &dyn TensorSou
     let none = BTreeMap::new();
     for (pi, d) in prog.params.iter().enumerate() {
         let layers: Vec<Option<usize>> =
-            if d.per_layer { layers_of_param(prog, pi as u32).into_iter().map(Some).collect() } else { vec![None] };
+            if d.per_layer { model_layers_of_param(prog, pi as u32) } else { vec![None] };
         for l in layers {
             match src_shape(&binding.srcs[pi], &r, l, &none) {
                 Ok(s) if s == d.shape => rep.bound += 1,
@@ -1041,12 +1121,18 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
         match s {
             Src::Tensor(t) => out.push((t.clone(), vec![])),
             Src::Quant { module, fmt: QFormat::Gguf { .. } } => out.push((format!("{module}.weight"), vec![])),
-            Src::Quant { module, .. } => {
-                for part in ["qweight", "qzeros", "scales"] {
-                    out.push((format!("{module}.{part}"), vec![]));
+            Src::Quant { module, fmt } => {
+                if let Ok((f, _)) = fmt_binding(fmt) {
+                    for (_, suffix, required) in tensors_of(&f).roles() {
+                        if required {
+                            out.push((format!("{module}{suffix}"), vec![]));
+                        }
+                    }
                 }
             }
-            Src::Take { src, .. } | Src::Transpose(src) | Src::Map { src, .. } | Src::Reshape { src, .. } => leaves(src, out),
+            Src::Take { src, .. } | Src::Transpose(src) | Src::Map { src, .. } | Src::Reshape { src, .. } | Src::PadRows { src, .. } => {
+                leaves(src, out)
+            }
             Src::Stack { src, var, count } => {
                 let mut inner = vec![];
                 leaves(src, &mut inner);
@@ -1062,7 +1148,7 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
     }
     for (pi, d) in prog.params.iter().enumerate() {
         let layers: Vec<Option<usize>> =
-            if d.per_layer { layers_of_param(prog, pi as u32).into_iter().map(Some).collect() } else { vec![None] };
+            if d.per_layer { model_layers_of_param(prog, pi as u32) } else { vec![None] };
         let mut ls = vec![];
         leaves(&binding.srcs[pi], &mut ls);
         for l in layers {

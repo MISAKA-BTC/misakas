@@ -120,6 +120,8 @@ pub enum Act {
     Tanh,
     Softplus,
     Identity,
+    /// `sign(x)·√max(|x|, 10⁻⁶)` — the gate of Qwen4-Exp's n-gram embedding.
+    SignedSqrt,
 }
 
 impl Act {
@@ -304,7 +306,7 @@ impl QTemperature {
 
     /// The factor for `floor((p + 1) / floor) = q`.
     pub fn of_quotient(&self, q: usize) -> f32 {
-        (q as f32).ln_1p() * self.scale as f32 + 1.0
+        crate::detmath::ln_1p_f32(q as f32) * self.scale as f32 + 1.0
     }
 }
 
