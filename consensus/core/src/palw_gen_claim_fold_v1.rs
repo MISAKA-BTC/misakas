@@ -44,9 +44,13 @@ pub(super) struct PalwGenCommitV1<'a> {
 impl PalwFoldReadV1<'_> {
     /// **How many of a class's claims are in flight on the free-prompt lane** (RFC-0003 §I.4.8): the live
     /// (non-terminal) claims of the class, whatever their quanta — the registry's in-flight index counts
-    /// a weightless claim as one.
+    /// a weightless claim as one. The index files a free-prompt claim of ZERO quanta under its `eval_claims` lane
+    /// (RFC-0004 A6's lane for the claims that earn nothing: no quanta to round into whole jobs), and a tensor
+    /// claim is exactly such a claim, so the class's live free-prompt claims are both lanes'.
     pub(super) fn class_inflight_free_prompt_claims_v1(&self, class_id: &Hash64) -> u64 {
-        self.with_inflight_index(|index| index.get(class_id).map(|tally| tally.free_prompts).unwrap_or(0))
+        self.with_inflight_index(|index| {
+            index.get(class_id).map(|tally| tally.free_prompts.saturating_add(tally.eval_claims)).unwrap_or(0)
+        })
     }
 }
 
