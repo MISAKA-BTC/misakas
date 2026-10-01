@@ -12,6 +12,16 @@ shows the single failing step; **patched** = with the one storage difference rem
 (`tools/corpus/patch_checkpoint.py`) every stage holds, court included; **analysis** = read from the transformers
 code, not yet run. Semantics are cited as `models/<arch>/modeling_<arch>.py:<Class.function>` in transformers 5.17.0.
 
+## Decisions (coordinator, 2026-10-01)
+
+| decision | what |
+| --- | --- |
+| Order for lane G, after its CP2 | **FR-01** weights as data (any remaining Rust weight mapping blocks permissionlessness) → **FR-18** encoder–decoders as data → **FR-17** rows-mode encoders → **FR-19** vision towers and convolutions (this also feeds audio) → **FR-02** post-rotation q/k norm → **FR-09** DeepSeek sparse attention |
+| Owner of FR-22 and FR-23 | RFC-0003's lane D. The FR-22 sizing discrepancy (box demand in the code against element-exact demand and a 16.8 MB close in RFC-0003 §II.1.5.4, with PALW-TIR-38's 3.2 MB carried close) was forwarded to D |
+| FR-25 accepted | a user-supplied adapter may override a built-in refusal, provided it passes the same validation; the report says "user adapter overrides built-in refusal: <the refusal>" (the harness does, `refusal_overridden`) |
+| FR-26 accepted | a Level A without a reference check is labelled "A (unconfirmed)" until a transformers/diffusers class confirms it (the harness does, `level_label`; confirmation is `float_vs_hf` on the same weights) |
+| Not adopted | per-layer-type rope in the standard template: the candidate (`tools/corpus/a-candidates/standard-v3.json`) moved none of the six families it targets, so there is no evidence. The convention search stays a development tool in `tools/corpus`, documented in `corpus-v2.md` §6, and is not a product feature |
+
 ## Ranked
 
 <!-- BEGIN GENERATED: frs -->

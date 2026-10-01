@@ -576,10 +576,12 @@ each MoE family also chooses a scoring rule, so it moves only the softmax-top-k 
 
 **Measured, second candidate.** `a-candidates/standard-v3.json` adds one more convention to v2: when `rope_parameters` is keyed by layer
 type, layer *i* takes the rope of its own type, with that type's partial-rotary factor. It removes the refusal of five of the six census
-families that have it and moves **none** to Level B: each stops at its own next convention (§4.6). So per-layer-type rope belongs in the
-standard template (it is a pure data convention and costs nothing), but it is not what limits Level A.
+families that have it and moves **none** to Level B: each stops at its own next convention (§4.6). The coordinator's decision is that it is
+**not adopted** in the standard template — there is no evidence it matters — and the file stays in `a-candidates/` as the record of the
+experiment.
 
-The way past the template ceiling is not a bigger template but a **fixture-verified convention search**: given the tiny HF fixture a
+The way past the template ceiling is not a bigger template but a **fixture-verified convention search** — kept, by decision, as a
+**development tool** in `tools/corpus` (documented here), not a product feature: given the tiny HF fixture a
 registrant has to produce anyway, enumerate the finite convention switches, keep the combination whose float reference matches the
 fixture to 1e-4, and emit the adapter. A prototype is in the harness (`synthesize()` / `benign_key()` in `tests/corpus_v2.rs`; off with
 `PALW_CORPUS_NO_SYNTH`): candidate = `standard-decoder` + the v2 conventions + every unknown key whose name is on a benign list treated as
@@ -635,6 +637,8 @@ python3 report.py report.json --md ../../../docs/design/palw/tir/corpus-v2.md --
 * The encoder–decoder and vision routes are probed to a lowered, admitted program only; their fidelity records are in
   `hf-coverage.md` §13, §17. The five research passes (`feature-requests.md`) are analysis, not runs: their sizes are the research's
   own arithmetic, with a short list of cheapest checks at the end of FR-22.
-* Decisions for lane G: priority of the routes FR-17/18/19 (the largest block of Level C by entries and by hub weight) and of
-  FR-01 (weights as data); the refusal-override policy (FR-25, two instances); the labelling of Level A as *unconfirmed* unless a
-  fixture check passed (FR-26); whether the convention search is wanted as a tool of the onboarding pipeline.
+* **Decided (coordinator, 2026-10-01).** Lane G takes the requests in the order FR-01, FR-18, FR-17, FR-19, FR-02, FR-09 after its
+  CP2; FR-22 and FR-23 go with RFC-0003's lane D (the FR-22 sizing discrepancy was forwarded); FR-25 is accepted (the report says
+  "user adapter overrides built-in refusal: <the refusal>") and FR-26 is accepted (a Level A with no reference check is
+  labelled "A (unconfirmed)"); per-layer-type rope is not adopted in the standard template; the convention search stays a dev tool.
+  The corpus is re-measured after each landing of `tir/generic` (merged into `tir/corpus`) and after every move of 10 points or more.

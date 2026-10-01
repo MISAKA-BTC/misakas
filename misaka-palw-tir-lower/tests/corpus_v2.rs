@@ -262,7 +262,12 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
     // adapter can never override it. The harness measures whether DATA could express the model, so
     // it reads such a configuration under a renamed architecture and says so in the report.
     let arch = cfg.get("architectures").and_then(|a| a.get(0)).and_then(Value::as_str).unwrap_or("").to_string();
-    let bypass = misaka_palw_tir_lower::adapter::builtin::refusal_for(&arch).is_some();
+    let refusal = misaka_palw_tir_lower::adapter::builtin::refusal_for(&arch);
+    let bypass = refusal.is_some();
+    // FR-25 (accepted): a user adapter may override a built-in refusal, and the report says so, naming the refusal.
+    let refusal_note: Option<String> = refusal.as_ref().filter(|_| user_text.is_some()).map(|(missing, why)| {
+        format!("user adapter overrides built-in refusal: {}{}", missing.join(", "), if why.is_empty() { String::new() } else { format!(" ({})", short(why, 160)) })
+    });
     let user_cfg: Value = if bypass {
         let mut c = cfg.clone();
         c["architectures"] = json!([format!("User{arch}")]);
@@ -307,6 +312,7 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
         a_same = Some(true);
     }
     j.insert("refusal_bypassed_for_user_adapter".into(), json!(bypass && user_text.is_some()));
+    j.insert("refusal_overridden".into(), json!(refusal_note));
     j.insert("a_same_as_adapter".into(), json!(a_same));
     j.insert("a_diff".into(), json!(a_diff));
 
@@ -341,7 +347,15 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
             misaka_palw_tir_lower::hf_schema::AdapterSource::UserFile { id, .. } => id.clone(),
             _ => "?".into(),
         };
-        push("B", format!("third-party adapter `{id}` (tools/corpus/adapters)"), m);
+        let dir_name = adapters_dir().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        push(
+            "B",
+            match &refusal_note {
+                Some(n) => format!("third-party adapter `{id}` (tools/corpus/{dir_name}); {n}"),
+                None => format!("third-party adapter `{id}` (tools/corpus/{dir_name})"),
+            },
+            m,
+        );
     }
 
     // The report for the best route: its features and MISSING items (Level C names them).
@@ -1335,6 +1349,11 @@ fn run_entry(e: &Entry, full: bool) -> Value {
         }
     }
     out.insert("synthesized".into(), synthesized);
+    // FR-26 (accepted): a Level A with no reference check is labelled "A (unconfirmed)"; the check is the float reference
+    // against the transformers/diffusers class on the same weights (`float_vs_hf`).
+    let confirmed = stages.get("float_vs_hf").and_then(|s| s["ok"].as_bool()).unwrap_or(false);
+    let level_label = if level == "A" && !confirmed { "A (unconfirmed)".to_string() } else { level.clone() };
+    out.insert("level_label".into(), json!(level_label));
     out.insert("level".into(), json!(level));
     out.insert("via".into(), json!(via));
     out.insert("refuted_routes".into(), json!(refuted));
@@ -1367,7 +1386,7 @@ fn run_all(full: bool) -> Value {
             i + 1,
             entries.len(),
             e.id,
-            r["level"].as_str().unwrap_or("?"),
+            r["level_label"].as_str().or(r["level"].as_str()).unwrap_or("?"),
             short(r["via"].as_str().unwrap_or(""), 46),
             r["failed_stage"].as_str().unwrap_or("-"),
             r["ms"].as_u64().unwrap_or(0)

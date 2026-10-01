@@ -69,6 +69,7 @@ def summarise(rep, man, blk):
     # data-expressible = Level A or B (and the later stages did not disprove it)
     proven = [e for e in ents if e["level"] in ("A", "B") and e.get("failed_stage") is None]
     refuted = [e for e in ents if e["level"] in ("A", "B") and e.get("failed_stage") is not None]
+    unconfirmed_a = [e["id"] for e in ents if e["level"] == "A" and (e.get("level_label") or "A") != "A"]
     # an A/B entry whose reference is remote code has no weights to run: it is Level B at the READ stage only
     read_only = [e["id"] for e in proven if "lower" not in e.get("stages", {})]
     cls = Counter()
@@ -101,7 +102,7 @@ def summarise(rep, man, blk):
         "level_pct": {k: 100.0 * v / n for k, v in lv.items()},
         "usage_weighted_pct": {k: 100.0 * v / tot for k, v in wt.items()},
         "data_expressible_proven": len(proven), "data_expressible_refuted": [e["id"] for e in refuted],
-        "read_only": read_only,
+        "read_only": read_only, "unconfirmed_a": unconfirmed_a,
         "level_c_by_class": dict(cls),
         "core_rust_routes": core_routes,
         "by_category": {k: dict(v) for k, v in by_cat.items()},
@@ -131,7 +132,8 @@ def table_results(rep, man, blk):
         if e.get("core", {}).get("core_route"):
             via = (via if via != "-" else "") + (" ; " if via != "-" else "") + "core Rust route"
         fs = e.get("failed_stage") or ""
-        rows.append(f"| `{e['id']}` | {e['category']} | **{e['level']}** | {via} | {fcount or ''} | {why} | {fs} |")
+        lvl = e.get("level_label") or e["level"]
+        rows.append(f"| `{e['id']}` | {e['category']} | **{lvl}** | {via} | {fcount or ''} | {why} | {fs} |")
     return "\n".join(rows)
 
 
@@ -154,6 +156,9 @@ def summary_md(s):
         lines.append(f"| {name} | {lv.get(k, 0)} | {pct(lv.get(k, 0), n)} | {s['usage_weighted_pct'].get(k, 0):.0f} % |")
     ab = lv.get("A", 0) + lv.get("B", 0)
     lines.append(f"| **A + B (expressible with existing features)** | **{ab}** | **{pct(ab, n)}** | **{s['usage_weighted_pct'].get('A', 0) + s['usage_weighted_pct'].get('B', 0):.0f} %** |")
+    if s.get("unconfirmed_a"):
+        k = len(s["unconfirmed_a"])
+        lines.append(f"| *of the Level A, **unconfirmed** (no reference check ran): {', '.join('`'+i+'`' for i in s['unconfirmed_a'])}* | {k} | {pct(k, n)} | |")
     if s.get("read_only"):
         k = len(s["read_only"])
         lines.append(f"| *of the A + B, read-level only (the reference is remote code, no weights to run): {', '.join('`'+i+'`' for i in s['read_only'])}* | {k} | {pct(k, n)} | |")
