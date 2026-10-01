@@ -281,8 +281,9 @@ seat resources gate readiness (staged enablement), never admission, and the pref
 (`palw-class check-architecture` prints `seat need: … GiB`; `artifact_bytes` in its JSON). What stands between the IR and a
 published-size `Qwen4-Exp` artifact is therefore the CONVERSION, and it is built from the loader lane F owns (a `TensorSource`
 that serves row ranges and a chunked writer), which already generalises to any huge `Gather` table. The hooks this feature
-provides, designed here and implemented after the quiet window (they touch `RowParam`, `lower/stream.rs` and `lower/fill.rs`, and each
-step has a byte-for-byte test against the whole-tensor path):
+provides, **implemented** (`RowKind::Mapped`, `RowMap`/`RowRun`, `FillCtx::table_amax`, the mapped branch of `lower/stream.rs::fill_by_blocks`;
+`tests/streaming_convert.rs` holds the byte equality with the whole-tensor path over every fixture, `tests/streaming_ple.rs` that the PLE chunks
+really go by blocks, with a first pass that keeps only the maximum):
 
 1. **A row map.** `RowParam` says which HL rows feed which artifact rows. Today it is the identity (`row r ← row r`); the PLE
    chunks need *runs*: chunk `k` of the layer's table is `[heads, rows_k, dim]` and its row `(h, r)` comes from HL row

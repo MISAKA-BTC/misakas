@@ -217,6 +217,56 @@ pub enum RowKind {
     /// computes in a first pass over the blocks and hands the sibling fills ready-made
     /// ([`FillCtx::inject_split`]); this param's own codes are made in a second.
     SplitMain { kx: ScaleKey, f_max: i32 },
+    /// **A gathered table's codes at ONE scale per (layer, table)** (the hashed n-gram per-layer embedding's chunks;
+    /// any huge `Gather` table whose rows share a scale): the artifact's rows are NOT the checkpoint's rows in
+    /// order — the [`RowMap`] says which HL rows feed which artifact rows — and the scale is a reduction over the
+    /// HL rows the table uses (`max |x| / 32767`), a first pass over the blocks that keeps nothing but the maximum
+    /// ([`FillCtx::table_amax`]). The whole-tensor path computes the same number, so streaming = whole, byte for byte.
+    Mapped(MapRef),
+}
+
+/// A run of rows: artifact rows `dest..dest+len` are HL rows `src..src+len`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowRun {
+    pub dest: usize,
+    pub src: usize,
+    pub len: usize,
+}
+
+/// How an artifact param's rows come from ONE HL param's rows ([`RowKind::Mapped`]): the hook a streaming writer calls
+/// to read exactly the checkpoint rows a block of artifact rows needs.
+pub trait RowMap: Send + Sync {
+    /// Identifies the map (equality, debugging).
+    fn key(&self) -> String;
+    /// The runs of this occurrence (`layer`: the occurrence's layer index). Artifact rows no run covers are zero.
+    fn runs(&self, hl: &HlProgram, layer: Option<usize>) -> Result<Vec<RowRun>>;
+    /// HL rows `0..used` carry the table (the rest is padding): the range the shared scale is taken over.
+    fn used_rows(&self, hl: &HlProgram, layer: Option<usize>) -> Result<usize>;
+}
+
+/// A shared [`RowMap`], equal by its key.
+#[derive(Clone)]
+pub struct MapRef(pub Arc<dyn RowMap>);
+
+impl std::fmt::Debug for MapRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MapRef({})", self.0.key())
+    }
+}
+
+impl PartialEq for MapRef {
+    fn eq(&self, o: &Self) -> bool {
+        self.0.key() == o.0.key()
+    }
+}
+
+/// Artifact rows `0..total` from the HL rows `src` (a flat `[rows, dim]`) by `runs`; the rows no run covers are zero.
+pub fn gather_runs(runs: &[RowRun], src: &[f32], dim: usize, total: usize) -> Vec<f32> {
+    let mut out = vec![0f32; total * dim];
+    for r in runs {
+        out[r.dest * dim..(r.dest + r.len) * dim].copy_from_slice(&src[r.src * dim..(r.src + r.len) * dim]);
+    }
+    out
 }
 
 /// A TIR param whose integers are [`RowKind`] codes of the HL param `hl`: row `r` of the artifact's
@@ -1193,7 +1243,9 @@ fn decl_rows(
     let (dt, fill) = match kind {
         RowKind::W8 => (DType::I8, weight_codes(hl_p)),
         RowKind::T16 => (DType::I16, table_codes(hl_p)),
-        RowKind::SplitMain { .. } => return Err(LowerError::eval("internal: a split main is declared with decl_rows_with")),
+        RowKind::SplitMain { .. } | RowKind::Mapped(_) => {
+            return Err(LowerError::eval("internal: a split main or a mapped table is declared with decl_rows_with"));
+        }
     };
     decl_rows_with(b, cx, lb, name, dt, shape, per_layer, kind, hl_p, fill)
 }
