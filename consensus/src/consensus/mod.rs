@@ -1330,6 +1330,19 @@ impl ConsensusApi for Consensus {
         let class = state.class(&line.class_id)?;
         let daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
         let closed_line = !line.is_active();
+        // **ADR-0162 Decision 1: past the virtual fence every line's market is open from the line's
+        // creation**, and this answers what the fold of the virtual's next block moves — the row, or
+        // the opening every surface synthesizes (`X = V`, the supply in the curve), the same function
+        // the fold calls. It answers as a market (`true`): there is no "not opened" line past the
+        // fence. The row's `closed_to_buys` is a record of its last move there, not the gate, so the
+        // answer carries the line's own state and the service adds the class's and the registry's.
+        if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+            && let Some(fence_daa) = self.config.params.palw_model_virtual_v1_from_at(self.get_virtual_daa_score())
+            && let Some(mut market) = state.model_market_in_force_v2(&line_id, fence_daa, &bundle.state.base_class_id())
+        {
+            market.closed_to_buys = closed_line;
+            return Some((market, true, class.status.clone()));
+        }
         match state.model_market(&line_id) {
             Some(market) => {
                 let mut market = *market;

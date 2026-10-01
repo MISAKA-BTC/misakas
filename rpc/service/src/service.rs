@@ -352,6 +352,12 @@ fn palw_class_context_row(
 /// virtual's next block: the class's registry lifecycle and, where the fold would refuse a seed or
 /// a buy, its refusal. A refusal is also OR'd into `closed_to_buys`, so a client that reads only
 /// that flag — an older CLI, the options site — is not offered a buy the fold refuses.
+///
+/// **ADR-0162: past the virtual fence every registered line reads as an open market from its
+/// creation** — the consensus read synthesizes the opening the fold would move, and answers it as
+/// a market — with `virtual_sompi` the row's own reserve (`V`; zero for a market opened before the
+/// fence, exactly as every pre-fence answer served it), `seed_min_sompi` zero, and the gate's refusal
+/// being the BUY's: "trading starts at approval". A seed is still taken while `sold_units` is zero.
 fn rpc_palw_model_market(
     line_id: kaspa_hashes::Hash64,
     read: Option<(
@@ -364,7 +370,7 @@ fn rpc_palw_model_market(
     seed_min_sompi: u64,
     leg_v2_activation_daa: u64,
 ) -> GetPalwModelMarketResponse {
-    use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1, PALW_MODEL_SUPPLY_UNITS_V1};
+    use kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SUPPLY_UNITS_V1;
     let Some((market, row, status)) = read else {
         return GetPalwModelMarketResponse {
             line_id: line_id.to_string(),
@@ -391,11 +397,18 @@ fn rpc_palw_model_market(
             || !market_refusal.is_empty(),
         price_sompi_per_position: market.price_sompi_per_position_v1(),
         supply_units: PALW_MODEL_SUPPLY_UNITS_V1,
-        virtual_sompi: PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1,
+        // ADR-0162: the row's own virtual reserve — zero for every market opened before the fence,
+        // which is the constant every earlier node served (`PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1`).
+        virtual_sompi: market.virtual_sompi,
         class_status: format!("{status:?}"),
         contributor_paid_sompi: market.contributor_paid_sompi,
         seed_sompi: market.seed_sompi,
-        seeded_by: if row { market.seeded_by.to_string() } else { String::new() },
+        // ADR-0162: a market opened on the virtual reserve has no payer until a seed is paid.
+        seeded_by: if row && market.seeded_by != kaspa_hashes::Hash64::default() {
+            market.seeded_by.to_string()
+        } else {
+            String::new()
+        },
         seed_min_sompi,
         seed_pledged_sompi: market.seed_pledged_sompi,
         buyback_sompi: market.buyback_sompi,
@@ -5594,6 +5607,39 @@ mod palw_model_market_tests {
         let admitted = kaspa_consensus_core::api::PalwModelMarketGateReadV1 { lifecycle: "Active".to_string(), refusal: None };
         let admitted = answer_gated(Some((seeded, true, PalwClassStatusV2::Active)), admitted);
         assert!(!admitted.closed_to_buys && admitted.market_refusal.is_empty() && admitted.class_lifecycle == "Active");
+    }
+
+    /// **ADR-0162: past the virtual fence a line with no row reads as the open market it is** — the
+    /// consensus read hands the service the opening (`X = V`, the supply in the curve) as a market:
+    /// opened at its creation, priced at `V / 500,000`, the row's own virtual reserve served, no payer
+    /// named until someone pays, the least seed zero, and the gate's refusal the buy's ("trades from
+    /// the class's approval"). A market opened before the fence is served with `virtual_sompi` 0,
+    /// exactly as every node before this one served it.
+    #[test]
+    fn past_the_virtual_fence_a_line_reads_as_an_open_market_from_its_creation() {
+        use kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2 as V;
+        let opening = PalwModelMarketV1::open_virtual_v2(100, V);
+        let gate = kaspa_consensus_core::api::PalwModelMarketGateReadV1 {
+            lifecycle: "Probation { probes_passed: 0 }".to_string(),
+            refusal: Some("class 07… is Probation { probes_passed: 0 } under the model registry: its market is open and trades from the class's approval (Active)".to_string()),
+        };
+        let r = rpc_palw_model_market(
+            kaspa_hashes::Hash64::from_u64_word(7),
+            Some((opening, true, PalwClassStatusV2::Active)),
+            gate,
+            PalwModelFeesV1::V2,
+            0,
+            0,
+        );
+        assert!(r.found && r.opened, "I-V9: a market from its creation");
+        assert_eq!((r.opened_daa, r.msk_reserve, r.position_units, r.virtual_sompi, r.seed_min_sompi), (100, 0, 500_000, V, 0));
+        assert_eq!(r.price_sompi_per_position, V / 500_000, "20 MSK");
+        assert!(r.seeded_by.is_empty() && r.seed_sompi == 0, "nobody has paid, so nobody is named");
+        assert!(r.closed_to_buys && r.market_refusal.contains("trades from the class's approval"), "trading starts at approval");
+        let seeded = PalwModelMarketV1::seed_v1(5, PALW_MODEL_SEED_MIN_SOMPI_V1, kaspa_hashes::Hash64::from_u64_word(0xF1));
+        let old = answer(Some((seeded, true, PalwClassStatusV2::Active)));
+        assert_eq!(old.virtual_sompi, 0, "a pre-fence market is served as it always was");
+        assert_eq!(old.seeded_by, kaspa_hashes::Hash64::from_u64_word(0xF1).to_string(), "and names its first payer");
     }
 
     /// **A line paid into but short of its floor is not `opened`** (the 2026-09-23 Position route
