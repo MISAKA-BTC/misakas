@@ -1191,7 +1191,7 @@ enum PalwCmd {
         /// Where to write `<claim>.commitment-tx.borsh`.
         #[arg(long)]
         out_dir: std::path::PathBuf,
-        /// The node's retention directory (`--palw-retention-dir`): where `<claim>.material` is written, from which
+        /// The node's retention directory (`<appdir>/<network>/palw-retention`): where `<claim>.material` is written, from which
         /// the executor's node serves the panel. Without it the material is written beside the transaction.
         #[arg(long)]
         retention_dir: Option<std::path::PathBuf>,
