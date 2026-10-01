@@ -37,9 +37,14 @@ fn weights_of_another_model_are_reported_not_accepted() {
 
 #[test]
 fn refusals_print_the_rfc_verdict() {
+    // MXFP4 is a described format now (`mxfp4_hf`): the real gpt-oss config checks. A quantisation no descriptor reads is still
+    // refused by name, in the RFC's verdict form.
     let cfg = std::fs::read_to_string(root().join("tests/configs/real/gpt-oss-20b-mxfp4.json")).unwrap();
-    let e = report::check(&cfg, None).err().unwrap();
-    assert!(report::refusal(&e).starts_with("NOT_LOWERABLE(GptOssForCausalLM: pre-quantized"));
+    assert!(report::check(&cfg, None).is_ok(), "gpt-oss MXFP4 is read through its descriptor");
+    let mut v: serde_json::Value = serde_json::from_str(&cfg).unwrap();
+    v["quantization_config"] = serde_json::json!({ "quant_method": "zzz-quant" });
+    let e = report::check(&v.to_string(), None).err().unwrap();
+    assert!(report::refusal(&e).starts_with("NOT_LOWERABLE(GptOssForCausalLM: pre-quantized"), "{}", report::refusal(&e));
 }
 
 #[test]
