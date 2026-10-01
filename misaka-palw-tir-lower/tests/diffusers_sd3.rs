@@ -71,7 +71,8 @@ fn the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline() {
         let (lats_f, vels_f) = float_loop(&fx.dit, &fx.tables, si, &noise_f, &rows, &pooled, &mut Calib::new());
         let img_f = fx.vae.decode(&Fm { c, h: side, w: side, d: lats_f.last().unwrap().clone() }, &mut Calib::new());
 
-        let job = PipelineJob { prompt: prompt.clone(), steps, scalars: vec![steps as i64], ..Default::default() };
+        // The steps scalar is the step count's position among the class's offered counts.
+        let job = PipelineJob { prompt: prompt.clone(), steps, scalars: vec![si as i64], ..Default::default() };
         let run = run_pipeline(&pipe.pipeline, &pipe.programs, pipe, &Noise(words), &job).expect("the integer pipeline runs");
         let denoise = &run.stages[2];
         for (i, st) in denoise.steps.iter().enumerate() {

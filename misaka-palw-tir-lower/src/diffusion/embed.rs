@@ -9,7 +9,7 @@
 //! into the residual stream's `i32`, then the table added (it is a param at the stream's own scale, so the add is
 //! exact). The timestep path is a table lookup by `(steps index, position)`: the sinusoid of each step's timestep
 //! is a registration-time value (PALW-EX-5), carried as `i16` codes at `1/32767` and gathered by
-//! `base[steps] + pos`; the embedder after it is two projections and a SiLU table.
+//! `base[steps_index] + pos`; the embedder after it is two projections and a SiLU table.
 
 use misaka_palw_tir::builder::{BlockBuilder, ProgramBuilder};
 use misaka_palw_tir::program::INPUT_POS;
@@ -92,9 +92,10 @@ pub fn lower_patch_embed(b: &mut BlockBuilder<'_>, x: Ref, r: &QPatchEmbedRefs, 
 pub struct TimestepTable {
     /// The offered step counts, ascending.
     pub counts: Vec<u32>,
-    /// `base[s]` for `s` in `0..=max`: the row of step 0 of count `s` (0 for a count that is not offered).
+    /// `base[k]`: the row of step 0 of the `k`-th offered count. The job's steps scalar is this INDEX `k` (the position
+    /// of its step count among the class's offered counts), never the count itself.
     pub base: Vec<u32>,
-    /// `[rows, dim]` row-major: row `base[s] + i` is the embedding of the `i`-th timestep of count `s`.
+    /// `[rows, dim]` row-major: row `base[k] + i` is the embedding of the `i`-th timestep of the `k`-th count.
     pub rows: Vec<i16>,
     pub dim: usize,
 }
@@ -109,12 +110,11 @@ impl TimestepTable {
     pub fn new(counts: &[u32], timesteps: &[Vec<f64>], dim: usize, flip: bool, shift: f64, max_period: f64) -> Self {
         assert_eq!(counts.len(), timesteps.len());
         assert!(counts.windows(2).all(|w| w[0] < w[1]) && !counts.is_empty(), "ascending, non-empty step counts");
-        let max = *counts.last().unwrap() as usize;
-        let mut base = vec![0u32; max + 1];
+        let mut base = vec![0u32; counts.len()];
         let mut rows: Vec<i16> = Vec::new();
         for (k, c) in counts.iter().enumerate() {
             assert_eq!(timesteps[k].len(), *c as usize, "{c} steps carry {c} timesteps");
-            base[*c as usize] = (rows.len() / dim) as u32;
+            base[k] = (rows.len() / dim) as u32;
             for t in &timesteps[k] {
                 for v in timestep_embedding(*t, dim, flip, shift, max_period) {
                     rows.push((v / TIMESTEP_CODE_SCALE).round().clamp(-32_767.0, 32_767.0) as i16);
@@ -153,10 +153,11 @@ pub struct TimestepRefs {
     pub base: Ref,
 }
 
-/// **The row index of this position**: `base[steps] + pos`, clamped into `[0, rows)` (the clamp never fires for an
-/// offered count; it states the range to the analysis). `steps` is the job's step count, a rank-0 `idx`.
-pub fn lower_step_row_index(b: &mut BlockBuilder<'_>, steps: Ref, base: Ref, max_steps: u32, total_rows: u32) -> Ref {
-    let s = b.clamp(steps, 0, max_steps as i64, DType::Idx);
+/// **The row index of this position**: `base[steps_index] + pos`, clamped into `[0, rows)` (the clamp never fires for
+/// an offered count; it states the range to the analysis). `steps_index` is the job's steps scalar — the position of
+/// its step count among the offered counts, `[0, counts − 1]` — a rank-0 `idx`.
+pub fn lower_step_row_index(b: &mut BlockBuilder<'_>, steps_index: Ref, base: Ref, max_index: u32, total_rows: u32) -> Ref {
+    let s = b.clamp(steps_index, 0, max_index as i64, DType::Idx);
     let at = b.gather(base, s, 0, 0); // scalar
     let sum = b.add(at, Ref::Input(INPUT_POS), DType::I64);
     b.clamp(sum, 0, total_rows as i64 - 1, DType::Idx)
@@ -164,8 +165,7 @@ pub fn lower_step_row_index(b: &mut BlockBuilder<'_>, steps: Ref, base: Ref, max
 
 /// **`EMBED_TIMESTEP_TABLE_V1`**: this position's timestep sinusoid, `[1, dim]` `i16` codes at `1/32767`.
 pub fn lower_timestep_row(b: &mut BlockBuilder<'_>, steps: Ref, r: &TimestepRefs, t: &TimestepTable) -> Ref {
-    let max = *t.counts.last().unwrap();
-    let at = lower_step_row_index(b, steps, r.base, max, t.total_rows() as u32);
+    let at = lower_step_row_index(b, steps, r.base, t.counts.len() as u32 - 1, t.total_rows() as u32);
     let row = b.gather(r.rows, at, 0, 0); // [dim]
     b.reshape_fixed(row, &[1, t.dim as u32])
 }
@@ -291,13 +291,13 @@ mod tests {
         // The scheduler's timesteps for 2 and 4 steps (any values will do for the lookup).
         let ts = vec![vec![1000.0, 750.0], vec![1000.0, 900.0, 700.0, 300.0]];
         let table = TimestepTable::new(&counts, &ts, dim, true, 0.0, 10_000.0);
-        assert_eq!((table.total_rows(), table.base[2], table.base[4], table.base[3]), (6, 0, 2, 0));
+        assert_eq!((table.total_rows(), table.base.clone()), (6, vec![0, 2]));
         for (k, steps) in counts.iter().enumerate() {
             let t2 = table.clone();
             let rows = run_steps(
                 |pb, sink| {
                     let r = t2.declare(pb, sink, "ts");
-                    (sink.put(pb, "steps", DType::Idx, &[], vec![*steps as i128]), r)
+                    (sink.put(pb, "steps", DType::Idx, &[], vec![k as i128]), r)
                 },
                 |b, (s, r)| lower_timestep_row(b, s, &r, &t2),
                 *steps as usize,
