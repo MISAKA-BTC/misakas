@@ -342,6 +342,21 @@ pub struct Args {
     /// (`config::drill::palw_drill_model_court_window_at_v1`). Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_model_court_at: Option<u64>,
+    /// **DRILL ONLY: append the capacity ramp's ρ = 25 step (ADR-0160 stage 3) at this DAA** — F-L's second step,
+    /// above the ρ = 10 flag day's height (move that with `--palw-drill-fence3-at`;
+    /// `config::drill::palw_drill_capacity_step2_at_v1`). Command line only.
+    #[serde(skip)]
+    pub palw_drill_capacity_step2_at: Option<u64>,
+    /// **DRILL ONLY: append the capacity ramp's ρ = 100 step after ρ = 25 at this DAA** — F-L's third step
+    /// (`config::drill::palw_drill_capacity_step3_at_v1`); needs `--palw-drill-capacity-step2-at` below it.
+    /// Command line only.
+    #[serde(skip)]
+    pub palw_drill_capacity_step3_at: Option<u64>,
+    /// **DRILL ONLY: append ρ = 100 straight after ρ = 10 at this DAA** — F-L's second step with ρ = 100
+    /// (`config::drill::palw_drill_capacity_rho100_at_v1`); not with the two flags above, which are the same
+    /// slot. Command line only.
+    #[serde(skip)]
+    pub palw_drill_capacity_rho100_at: Option<u64>,
     /// **DRILL ONLY: arm testnet-12's IR fence (`palw_tir_v1`, RFC-0002 Phase F) at this DAA** — with
     /// the salt, `PALW_T12_TIR_V1_ENTRY` is armed, or moved, to this height on the drill chain, after
     /// the flag days' moves and at a height of its own (`config::drill::palw_drill_tir_fence_at_v1`,
@@ -611,6 +626,9 @@ impl Default for Args {
             palw_drill_fence2_at: None,
             palw_drill_fence3_at: None,
             palw_drill_model_court_at: None,
+            palw_drill_capacity_step2_at: None,
+            palw_drill_capacity_step3_at: None,
+            palw_drill_capacity_rho100_at: None,
             palw_drill_tir_at: None,
             palw_drill_tir2_at: None,
             palw_drill_gen_at: None,
@@ -1639,6 +1657,40 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-capacity-step2-at")
+                .long("palw-drill-capacity-step2-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: append the capacity ramp's rho = 25 step (palw_capacity_aggregate_liability_step_2) \
+                     at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, \
+                     and unless the rho = 10 flag day (--palw-drill-fence3-at) stands below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-capacity-step3-at")
+                .long("palw-drill-capacity-step3-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: append the capacity ramp's rho = 100 step after rho = 25 \
+                     (palw_capacity_aggregate_liability_step_3) at this DAA on the drill chain. Nothing else moves. Refused without the \
+                     salt, at 0, at a height another fence uses, and unless --palw-drill-capacity-step2-at stands below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-capacity-rho100-at")
+                .long("palw-drill-capacity-rho100-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: append rho = 100 straight after rho = 10 \
+                     (palw_capacity_aggregate_liability_step_2) at this DAA on the drill chain. Nothing else moves. Not with \
+                     --palw-drill-capacity-step2-at or -step3-at (the same slot). Refused without the salt, at 0, at a height another \
+                     fence uses, and unless the rho = 10 flag day stands below it.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-gen-at")
                 .long("palw-drill-gen-at")
                 .require_equals(true)
@@ -2636,6 +2688,9 @@ impl Args {
             palw_drill_fence2_at: m.get_one::<u64>("palw-drill-fence2-at").copied(),
             palw_drill_fence3_at: m.get_one::<u64>("palw-drill-fence3-at").copied(),
             palw_drill_model_court_at: m.get_one::<u64>("palw-drill-model-court-at").copied(),
+            palw_drill_capacity_step2_at: m.get_one::<u64>("palw-drill-capacity-step2-at").copied(),
+            palw_drill_capacity_step3_at: m.get_one::<u64>("palw-drill-capacity-step3-at").copied(),
+            palw_drill_capacity_rho100_at: m.get_one::<u64>("palw-drill-capacity-rho100-at").copied(),
             palw_drill_tir_at: m.get_one::<u64>("palw-drill-tir-at").copied(),
             palw_drill_tir2_at: m.get_one::<u64>("palw-drill-tir2-at").copied(),
             palw_drill_gen_at: m.get_one::<u64>("palw-drill-gen-at").copied(),

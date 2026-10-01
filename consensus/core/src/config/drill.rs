@@ -736,14 +736,100 @@ const PALW_DRILL_FLAG_DAY_IMPROVE_V1: PalwDrillFlagDayV1 =
 const PALW_DRILL_FLAG_DAY_MODEL_COURT_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, flag: "--palw-drill-model-court-at" };
 
-/// The one body both flag days share — see [`palw_drill_post_launch_fences_at_v1`].
-fn palw_drill_move_fences_v1(
+/// The capacity ramp's ready steps (ADR-0160 stage 3), one entry each: drill-only lists, in no flag day's list and at
+/// no height on any ruleset — int-11 chooses its heights.
+const PALW_DRILL_CAPACITY_STEP2_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
+    &[crate::config::params::PALW_T12_CAPACITY_RHO25_STEP_2_V1];
+const PALW_DRILL_CAPACITY_STEP3_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
+    &[crate::config::params::PALW_T12_CAPACITY_RHO100_STEP_3_V1];
+const PALW_DRILL_CAPACITY_RHO100_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
+    &[crate::config::params::PALW_T12_CAPACITY_RHO100_STEP_2_V1];
+/// ρ = 25 as F-L's second step (`--palw-drill-capacity-step2-at`).
+const PALW_DRILL_FLAG_DAY_CAPACITY_STEP2_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_STEP2_FENCES_V1, flag: "--palw-drill-capacity-step2-at" };
+/// ρ = 100 as F-L's third step, after ρ = 25 (`--palw-drill-capacity-step3-at`).
+const PALW_DRILL_FLAG_DAY_CAPACITY_STEP3_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_STEP3_FENCES_V1, flag: "--palw-drill-capacity-step3-at" };
+/// ρ = 100 as F-L's second step, straight after ρ = 10 (`--palw-drill-capacity-rho100-at`).
+const PALW_DRILL_FLAG_DAY_CAPACITY_RHO100_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_RHO100_FENCES_V1, flag: "--palw-drill-capacity-rho100-at" };
+
+/// **What a ready capacity step needs of the ruleset it is armed on**, asked before the move so a drill that
+/// misses it is refused by name and never reaches the entry's own `set`, which PANICS on a step whose
+/// predecessors are not carried: the ρ = 10 flag day's F-L armed (move it with `--palw-drill-fence3-at`: the
+/// release arms it at DAA 1,700) with the earlier steps in place, and a height strictly above the step it builds
+/// on (the ramp's heights strictly increase — one height, one step).
+fn palw_drill_capacity_step_prerequisite_v1(
+    params: &crate::config::params::Params,
+    slot: usize,
+    at: u64,
+    flag: &str,
+) -> Result<(), String> {
+    use crate::config::params::ForkActivation;
+    let carried: &[crate::palw_aggregate_liability_v1::PalwCapacityStepV1] = params
+        .palw_capacity_aggregate_liability
+        .as_ref()
+        .filter(|value| value.activation != ForkActivation::never())
+        .map_or(&[], |value| value.steps.as_slice());
+    if carried.len() < slot - 1 {
+        return Err(format!(
+            "{flag}={at}: step {slot} of the capacity ramp builds on {} earlier step(s) and this ruleset's palw_capacity_aggregate_liability \
+             carries {} — arm the ρ = 10 capacity flag day first (--palw-drill-fence3-at, below this height) and the steps before it",
+            slot - 1,
+            carried.len()
+        ));
+    }
+    let previous = carried[slot - 2].from_daa;
+    if at <= previous {
+        return Err(format!(
+            "{flag}={at}: step {slot} must start above step {} (DAA {previous}): the ramp's heights strictly increase — one \
+             height, one step",
+            slot - 1
+        ));
+    }
+    Ok(())
+}
+
+/// **A drill appends the ρ = 25 step** (ADR-0160 stage 3, `--palw-drill-capacity-step2-at`) — F-L's second step at
+/// `at` on a ruleset whose F-L carries the ρ = 10 step, through [`crate::config::params::PALW_T12_CAPACITY_RHO25_STEP_2_V1`]'s own
+/// `set` (which writes the fold's mirror) and nothing else. Every refusal of the post-launch moves applies, named
+/// for this flag, and the prerequisite above.
+pub fn palw_drill_capacity_step2_at_v1(
     params: &mut crate::config::params::Params,
     at: u64,
-    day: &PalwDrillFlagDayV1,
 ) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
-    use crate::config::params::ForkActivation;
-    let (list, flag) = (day.list, day.flag);
+    palw_drill_chain_refusal_v1(params, at, PALW_DRILL_FLAG_DAY_CAPACITY_STEP2_V1.flag)?;
+    palw_drill_capacity_step_prerequisite_v1(params, 2, at, PALW_DRILL_FLAG_DAY_CAPACITY_STEP2_V1.flag)?;
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_STEP2_V1)
+}
+
+/// **A drill appends the ρ = 100 step after ρ = 25** (`--palw-drill-capacity-step3-at`): F-L's third step, on a
+/// ruleset whose F-L carries two steps ([`palw_drill_capacity_step2_at_v1`] first).
+pub fn palw_drill_capacity_step3_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_chain_refusal_v1(params, at, PALW_DRILL_FLAG_DAY_CAPACITY_STEP3_V1.flag)?;
+    palw_drill_capacity_step_prerequisite_v1(params, 3, at, PALW_DRILL_FLAG_DAY_CAPACITY_STEP3_V1.flag)?;
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_STEP3_V1)
+}
+
+/// **A drill appends ρ = 100 straight after ρ = 10** (`--palw-drill-capacity-rho100-at`): F-L's second step with
+/// ρ = 100 — the alternative to ρ = 25 then ρ = 100, never combined with it (both are the second step).
+pub fn palw_drill_capacity_rho100_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_chain_refusal_v1(params, at, PALW_DRILL_FLAG_DAY_CAPACITY_RHO100_V1.flag)?;
+    palw_drill_capacity_step_prerequisite_v1(params, 2, at, PALW_DRILL_FLAG_DAY_CAPACITY_RHO100_V1.flag)?;
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_RHO100_V1)
+}
+
+/// **The refusals every post-launch mover makes first**, in this order: a ruleset that is not testnet-12's, one
+/// that runs PUBLIC testnet-12's genesis (the fences move on a salted drill chain only), a height that is not one a
+/// drill can cross (0, never). One spelling for [`palw_drill_move_fences_v1`] and the capacity steps' prerequisites,
+/// which are asked after these and before the move.
+fn palw_drill_chain_refusal_v1(params: &crate::config::params::Params, at: u64, flag: &str) -> Result<(), String> {
     if params.net != palw_drill_network_v1() {
         return Err(format!(
             "the post-launch fences are testnet-12's release, and this ruleset is {}: {flag} runs on a salted \
@@ -762,6 +848,18 @@ fn palw_drill_move_fences_v1(
              above it — not genesis (0) and not never"
         ));
     }
+    Ok(())
+}
+
+/// The one body both flag days share — see [`palw_drill_post_launch_fences_at_v1`].
+fn palw_drill_move_fences_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+    day: &PalwDrillFlagDayV1,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    use crate::config::params::ForkActivation;
+    let (list, flag) = (day.list, day.flag);
+    palw_drill_chain_refusal_v1(params, at, flag)?;
     let listed = |name: &str| list.iter().any(|fence| fence.name == name);
     let before = params.palw_fences_v1();
     if let Some((other, _)) = before.iter().find(|(name, fence)| !listed(name) && fence.is_some_and(|fence| fence.daa_score() == at)) {
@@ -1293,6 +1391,75 @@ mod tests {
         palw_drill_post_launch_fences_at_v1(&mut both, 40).expect("the release's flag day at 40");
         palw_drill_capacity_fences_at_v1(&mut both, 60).expect("the capacity flag day at 60, over the release's");
         assert_eq!(both.palw_capacity_weight_cap, Some(ForkActivation::new(60)));
+    }
+
+    /// **A drill appends the capacity ramp's ready steps and nothing else moves** ([`palw_drill_capacity_step2_at_v1`],
+    /// `--palw-drill-capacity-step2-at`, ρ = 25; [`palw_drill_capacity_step3_at_v1`], `--palw-drill-capacity-step3-at`,
+    /// ρ = 100 after it; [`palw_drill_capacity_rho100_at_v1`], `--palw-drill-capacity-rho100-at`, ρ = 100 straight
+    /// after ρ = 10): refused on public testnet-12, at 0 and at `u64::MAX`, at another fence's height; refused by name
+    /// (never panicking in the entry's `set`) where F-L does not carry the steps they build on or the height is not
+    /// above the step before; on a drill whose ρ = 10 flag day is moved low, each appends exactly its one step with
+    /// its ρ, the fork id names its height, the params id moves and no other fence moves.
+    #[test]
+    fn a_drill_appends_the_capacity_ramp_steps_and_nothing_else_moves() {
+        use crate::config::params::{ForkActivation, palw_t12_drill_params_v1, palw_t12_shipped_params};
+        let drill = palw_t12_drill_params_v1(&salt(0x57));
+        let ramp = |p: &crate::config::params::Params| -> Vec<(u64, u32)> {
+            p.palw_capacity_aggregate_liability.as_ref().map(|v| v.steps.iter().map(|s| (s.from_daa, s.rho)).collect()).unwrap_or_default()
+        };
+        let mut public = palw_t12_shipped_params();
+        assert!(palw_drill_capacity_step2_at_v1(&mut public, 560).unwrap_err().contains("PUBLIC testnet-12"));
+        for bad in [0, u64::MAX] {
+            let mut p = drill.clone();
+            assert!(palw_drill_capacity_step2_at_v1(&mut p, bad).is_err(), "{bad}");
+            assert_eq!(format!("{p:?}"), format!("{drill:?}"), "a refusal leaves the ruleset untouched");
+        }
+        // The release arms F-L at DAA 1,700: a step below it is refused by name, not by a panic.
+        let mut release_ramp = drill.clone();
+        let why = palw_drill_capacity_step2_at_v1(&mut release_ramp, 560).unwrap_err();
+        assert!(why.contains("must start above step 1") && why.contains("1700"), "{why}");
+        assert_eq!(format!("{release_ramp:?}"), format!("{drill:?}"));
+        // The ρ = 10 flag day moved low (the release's flag days first), then the ramp above it.
+        let mut base = drill.clone();
+        palw_drill_post_launch_fences_at_v1(&mut base, 40).expect("the release's fences at 40");
+        palw_drill_post_launch_fences_v2_at_v1(&mut base, 60).expect("the second flag day at 60");
+        palw_drill_post_launch_fences_v3_at_v1(&mut base, 80).expect("the capacity package at 80");
+        assert_eq!(ramp(&base), vec![(80, 10)]);
+        // Step 3 builds on step 2.
+        let mut early = base.clone();
+        let why = palw_drill_capacity_step3_at_v1(&mut early, 655).unwrap_err();
+        assert!(why.contains("builds on 2 earlier step(s)") && why.contains("carries 1"), "{why}");
+        // Another fence's height, and a height not above the step before.
+        let mut taken = base.clone();
+        assert!(palw_drill_capacity_step2_at_v1(&mut taken, 750).unwrap_err().contains("already"), "750 is the release's height");
+        let mut flat = base.clone();
+        assert!(palw_drill_capacity_step2_at_v1(&mut flat, 80).unwrap_err().contains("must start above"));
+        // ρ = 25, then ρ = 100.
+        let mut ramped = base.clone();
+        let moves = palw_drill_capacity_step2_at_v1(&mut ramped, 560).expect("step 2 at 560");
+        assert_eq!(moves.len(), 1);
+        assert_eq!((moves[0].name, moves[0].was, moves[0].at), ("palw_capacity_aggregate_liability_step_2", None, 560));
+        assert_eq!(ramp(&ramped), vec![(80, 10), (560, 25)]);
+        assert_ne!(ramped.consensus_params_id(), base.consensus_params_id(), "the step is in the fingerprint");
+        let named = |p: &crate::config::params::Params, name: &str| p.palw_fences_v1().iter().find(|(n, _)| *n == name).and_then(|(_, f)| *f);
+        assert_eq!(named(&ramped, "palw_capacity_aggregate_liability_step_2"), Some(ForkActivation::new(560)), "the fork id names it");
+        for ((name, before), (_, after)) in base.palw_fences_v1().iter().zip(ramped.palw_fences_v1().iter()) {
+            if *name != "palw_capacity_aggregate_liability_step_2" {
+                assert_eq!(before, after, "{name} did not move");
+            }
+        }
+        let mut late = ramped.clone();
+        assert!(palw_drill_capacity_step3_at_v1(&mut late, 560).unwrap_err().contains("must start above step 2"));
+        let moves = palw_drill_capacity_step3_at_v1(&mut ramped, 655).expect("step 3 at 655");
+        assert_eq!((moves[0].name, moves[0].was, moves[0].at), ("palw_capacity_aggregate_liability_step_3", None, 655));
+        assert_eq!(ramp(&ramped), vec![(80, 10), (560, 25), (655, 100)]);
+        ramped.validate_palw_v2().expect("the ramp validates");
+        // ρ = 100 straight after ρ = 10 is the second step too.
+        let mut straight = base.clone();
+        let moves = palw_drill_capacity_rho100_at_v1(&mut straight, 560).expect("rho 100 straight at 560");
+        assert_eq!(moves[0].name, "palw_capacity_aggregate_liability_step_2");
+        assert_eq!(ramp(&straight), vec![(80, 10), (560, 100)]);
+        assert_ne!(straight.consensus_params_id(), ramped.consensus_params_id());
     }
 
     /// **A drill crosses the DAA-3,600 flag day and nothing else moves** ([`palw_drill_tir_fence2_at_v1`],
