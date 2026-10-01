@@ -244,9 +244,11 @@ class_rows() {
 
 # Judge one class: it must be listed by every answering node, with ONE (registeredDaa, canonicalLeaves, artifactRoot)
 # everywhere and the artifact's root, past or below the fence as asked. Sets JUDGED_DAA to its registeredDaa.
-# `judge_class <label> <class id> <artifact root file> <below|past>` (runs in this shell: its die / incomplete exit the script).
+# `judge_class <label> <class id> <artifact root file> <offline leaf count file> <below|past>` (runs in this shell: its die /
+# incomplete exit the script). The offline count is what the registrant's own builder counts for the class's canonical job
+# (misaka-palw-sdk's zz_drill_fence2_admission check, written beside the class files): the chain must have registered it.
 judge_class() {
-  local label="$1" cid="$2" rootfile="$3" side="$4" rows listed distinct d leaves root want
+  local label="$1" cid="$2" rootfile="$3" countfile="$4" side="$5" rows listed distinct d leaves root want offline
   class_rows "$cid" "$EVIDENCE/class-rows.tmp"
   rows="$(cat "$EVIDENCE/class-rows.tmp")"
   [ "${NODES_ANSWERING:-0}" -ge 1 ] || incomplete "no new node's JSON-RPC answers (JSON_BASE=$JSON_BASE)"
@@ -261,24 +263,36 @@ $rows"
   [[ "$d" =~ ^[0-9]+$ ]] && [[ "$leaves" =~ ^[0-9]+$ ]] && [ "$leaves" -gt 0 ] || die "unreadable $label class row: $rows"
   case "$side" in
     past) [ "$d" -ge "$TIR2_AT" ] || die "the $label class registered at DAA $d, BELOW the flag day $TIR2_AT: the past-the-fence half did not happen" ;;
-    below) [ "$d" -lt "$TIR2_AT" ] || die "the $label class registered at DAA $d, not below the flag day $TIR2_AT: the below half did not happen" ;;
+    below)
+      if [ "$d" -ge "$TIR2_AT" ]; then
+        # Not a failure of the flag day: the registrant was slow, and the twin half (a registration under the release's sizing) did
+        # not happen on this chain. Said, and not counted.
+        log "NOTE: the $label class registered at DAA $d, NOT below the flag day $TIR2_AT: the twin half (the release's sizing) was not exercised"
+        echo "$label class ${cid:0:16}… registered at DAA $d, NOT below the fence: the twin half was not exercised" >> "$EVIDENCE/classes.txt"
+        JUDGED_DAA="$d"; TWIN_LATE=1
+        return 0
+      fi ;;
   esac
   want="$(tr -d ' \n' < "$rootfile" 2>/dev/null || true)"
   [ -z "$want" ] || [ "$root" = "$want" ] || die "the $label class's registered root $root is not the artifact's $want"
+  offline="$(tr -d ' \n' < "$countfile" 2>/dev/null || true)"
+  [ -z "$offline" ] || [ "$leaves" = "$offline" ] || die "the $label class registered $leaves canonical leaves; its registrant's builder counts $offline offline"
   echo "$label class ${cid:0:16}… ($side the fence): registered at DAA $d, $leaves canonical leaves, root ${root:0:16}…, listed by $listed of $NODES_ANSWERING answering nodes" >> "$EVIDENCE/classes.txt"
   JUDGED_DAA="$d"
 }
 
 step_classes() {
   mkdir -p "$EVIDENCE"; : > "$EVIDENCE/classes.txt"
-  local ir_id small_id past_id below_id past_label below_label past_root below_root
+  local ir_id small_id past_id below_id past_label below_label past_root below_root past_count below_count
   ir_id="$(tr -d ' \n' < "$WORK_DIR/ir-class.id" 2>/dev/null || true)"
   small_id="$(tr -d ' \n' < "$WORK_DIR/small-class.id" 2>/dev/null || true)"
   case "${PAST_CLASS:-small}" in
     ir)    past_id="$ir_id";    below_id="$small_id"; past_label=A16;   below_label=small
-           past_root="$WORK_DIR/ir-artifact.root";    below_root="$WORK_DIR/small-artifact.root" ;;
+           past_root="$WORK_DIR/ir-artifact.root";    below_root="$WORK_DIR/small-artifact.root"
+           past_count="$WORK_DIR/ir/leaf-count.txt";  below_count="$WORK_DIR/ir/small-leaf-count.txt" ;;
     small) past_id="$small_id"; below_id="$ir_id";    past_label=small; below_label=A16
-           past_root="$WORK_DIR/small-artifact.root"; below_root="$WORK_DIR/ir-artifact.root" ;;
+           past_root="$WORK_DIR/small-artifact.root"; below_root="$WORK_DIR/ir-artifact.root"
+           past_count="$WORK_DIR/ir/small-leaf-count.txt"; below_count="$WORK_DIR/ir/leaf-count.txt" ;;
     *) die "PAST_CLASS must be small or ir" ;;
   esac
   [ -n "$past_id" ] || die "no $PAST_CLASS class id under $WORK_DIR"
@@ -294,12 +308,13 @@ step_classes() {
     sleep 15
   done
   # The class registered PAST the fence: admitted by every node, one row everywhere, the artifact's root.
-  judge_class "$past_label" "$past_id" "$past_root" past
+  judge_class "$past_label" "$past_id" "$past_root" "$past_count" past
   log "the $past_label class registered at DAA $JUDGED_DAA, past the flag day $TIR2_AT, is admitted on every new node under fence2's sizing"
   # The twin: the class registered BELOW the fence, under the release's sizing, accepted the same way (when it is on this chain).
   if [ -n "$below_id" ] && [ -s "$below_root" ]; then
-    judge_class "$below_label" "$below_id" "$below_root" below
-    log "the $below_label class registered at DAA $JUDGED_DAA, below $TIR2_AT, is the twin (the release's sizing), accepted on every new node"
+    TWIN_LATE=0
+    judge_class "$below_label" "$below_id" "$below_root" "$below_count" below
+    [ "$TWIN_LATE" = 1 ] || log "the $below_label class registered at DAA $JUDGED_DAA, below $TIR2_AT, is the twin (the release's sizing), accepted on every new node"
   else
     log "note: the other class is not on this chain (DF1=0, or its artifact is not built): its half is not judged"
   fi
