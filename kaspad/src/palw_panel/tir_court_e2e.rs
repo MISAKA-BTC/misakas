@@ -1235,7 +1235,7 @@ fn a_challenger_builds_the_dissection_bottom_from_the_on_chain_root_claim() {
             .expect("the bottom from the capture");
     let PalwTirDissectBuiltV1::Close(canonical) = canonical else { panic!("a close") };
     assert_eq!(from_chain, canonical, "the bottom from the chain is the canonical bottom");
-    let verdict = adjudicate_court_close_v3(&s, &sid, &from_chain, &court(), LADDER, FORM, false, false).expect("it adjudicates");
+    let verdict = adjudicate_court_close_v3(&s, &sid, &from_chain, &court(), LADDER, FORM, false, false, None).expect("it adjudicates");
     assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest leaf's bottom acquits, whoever builds it");
     let _ = phase;
 }
