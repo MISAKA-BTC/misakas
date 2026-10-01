@@ -64975,6 +64975,98 @@ pub(crate) mod tests {
             assert_eq!(refusal::SEED_AFTER_TRADE, 14);
         }
 
+        /// **No node folds a market move with default model extras (ADR-0162 §10a).** The coordinator
+        /// asked on 2026-10-02 whether this was so. `consensus/src/processes/palw_state_v2_sync.rs`
+        /// folds every step with `..Default::default()` for the model fences (`model_lines_active`,
+        /// `evm_market_active`, `model_leg_v2_active`, `model_seed_v2_active`, `model_virtual_v1`, the EVM
+        /// actions, the carrier refunds), so on testnet-12, which arms the market from genesis, it
+        /// WOULD fold a buy at the 1 % owner leg instead of 5 %, judge a seed against the 100,000 MSK
+        /// floor instead of the million and pay no carrier refund: a different state root once a
+        /// market has moves. It is harmless for one reason only: nothing constructs it. A node folds every block, live or in IBD, through the
+        /// virtual processor's chain walk (`apply_palw_transition_v7` with
+        /// `palw_transition_extras_for_objects`, the EVM step's actions and the filter's refunds), a
+        /// pruning-point sync imports a carriage checked against the witness header's committed root,
+        /// and the reorg walker (`palw_state_walk.rs`) applies stored deltas — none of them folds with
+        /// a default.
+        ///
+        /// This pins both halves the answer rests on, the way `nothing_in_consensus_reads_the_unrooted_
+        /// carriage_tails` and `only_this_module_may_ask_the_pre_fence_slot_rule` pin theirs: the walk
+        /// keeps no caller outside its own module, and the chain walk's extras builder writes every
+        /// model fence from the block's own DAA. Wiring the walk means threading those fences onto it
+        /// first, and then this guard moves with it.
+        #[test]
+        fn the_sync_walk_that_folds_with_default_model_extras_has_no_caller_and_the_chain_walk_resolves_every_model_fence() {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+            // Spelled in halves so this guard does not find itself.
+            let tokens = [concat!("PalwState", "SyncV2"), concat!("PalwChain", "StepV2")];
+            let mut offenders = Vec::new();
+            let mut walked = 0usize;
+            let mut stack = vec![root.clone()];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if path.is_dir() {
+                        if !matches!(name.as_str(), "target" | ".git" | "node_modules" | "vendor") {
+                            stack.push(path);
+                        }
+                        continue;
+                    }
+                    // The walk's own module defines it and tests it; nothing else may name it.
+                    if !name.ends_with(".rs") || name == "palw_state_v2_sync.rs" {
+                        continue;
+                    }
+                    let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                    walked += 1;
+                    for (n, line) in text.lines().enumerate() {
+                        let trimmed = line.trim_start();
+                        if trimmed.starts_with("//") {
+                            continue;
+                        }
+                        if tokens.iter().any(|token| line.contains(token)) {
+                            offenders.push(format!("{}:{}: {}", path.display(), n + 1, trimmed.trim_end()));
+                        }
+                    }
+                }
+            }
+            assert!(walked > 200, "the walk found only {walked} source files — it is not looking at the workspace");
+            assert!(
+                offenders.is_empty(),
+                "the PALW state sync walk has a caller, and it folds every step with DEFAULT model extras — on a \
+                 network that arms the market it would write a different state root than the chain walk once a \
+                 market has moves. Thread the model fences onto it (as the processor's extras builder resolves \
+                 them) before wiring it, then move this guard:\n  {}",
+                offenders.join("\n  ")
+            );
+
+            // The other half: the extras every production fold takes are written field by field from
+            // the block's own DAA, never left to a default.
+            let processor = std::fs::read_to_string(root.join("consensus/src/pipeline/virtual_processor/processor.rs"))
+                .expect("the virtual processor's source");
+            let start = processor.find("fn palw_transition_extras_for(").expect("the chain walk's extras builder");
+            let body = &processor[start..];
+            let body = &body[..body.find("\n    }\n").expect("the builder's end")];
+            for field in [
+                "model_lines_active: self.palw_model_lines_active_at(daa_score)",
+                "model_benefits_active: self.palw_model_benefits_active_at(daa_score)",
+                "evm_market_active: self.palw_model_evm_active_at(daa_score)",
+                "model_leg_v2_active: self.palw_model_leg_v2_active_at(daa_score)",
+                "model_seed_v2_active: self.palw_model_seed_v2_active_at(daa_score)",
+                "model_virtual_v1: self.palw_model_virtual_v1_from_at(daa_score)",
+                "audit_2026_09_23_active: self.palw_audit_2026_09_23_at(daa_score)",
+            ] {
+                assert!(body.contains(field), "the chain walk's extras builder no longer writes `{field}`");
+            }
+            // …and the chain walk folds a block's objects, its EVM actions and its refunds with them.
+            for line in [
+                "let mut extras = self.palw_transition_extras_for_objects(&point, &objects);",
+                "extras.evm_actions = staged.result.market_actions.clone();",
+                "extras.carrier_market_refunds = carrier_refunds;",
+            ] {
+                assert!(processor.contains(line), "the chain walk no longer folds with `{line}`");
+            }
+        }
     }
 
     // ---- ADR-0095 — the membership: N1–N12 at the fold ---------------------------------------
