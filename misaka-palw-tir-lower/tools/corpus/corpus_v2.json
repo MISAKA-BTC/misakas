@@ -549,7 +549,7 @@
    },
    "usage": "l",
    "share": null,
-   "why": "Llama-shaped (Kyutai) with its own norm epsilon: a Level A control",
+   "why": "Llama-shaped (Kyutai) with INTERLEAVED rotary pairs: reads cleanly as Level A and is wrong, because the pairing is class code",
    "examples": [
     "kyutai/helium-1-2b"
    ],

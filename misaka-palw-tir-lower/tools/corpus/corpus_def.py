@@ -149,7 +149,7 @@ add("apertus", "text/dense", "decoder", "ApertusForCausalLM", "apertus", "causal
                           "low_freq_factor": 1.0, "high_freq_factor": 4.0}),
     usage="l", why="xIELU activation with learned per-layer parameters, QK-norm, llama3 rope (Swiss AI)", examples=["swiss-ai/Apertus-8B-Instruct-2509"])
 add("helium", "text/dense", "decoder", "HeliumForCausalLM", "helium", "causal",
-    dict(num_key_value_heads=2, head_dim=8), usage="l", why="Llama-shaped (Kyutai) with its own norm epsilon: a Level A control", examples=["kyutai/helium-1-2b"])
+    dict(num_key_value_heads=2, head_dim=8), usage="l", why="Llama-shaped (Kyutai) with INTERLEAVED rotary pairs: reads cleanly as Level A and is wrong, because the pairing is class code", examples=["kyutai/helium-1-2b"])
 add("hunyuan_v1_dense", "text/dense", "decoder", "HunYuanDenseV1ForCausalLM", "hunyuan_v1_dense", "causal",
     dict(num_key_value_heads=2, head_dim=8), usage="m", why="Llama + QK-norm placed after the rotation (Hunyuan-7B/4B/1.8B)", examples=["tencent/Hunyuan-7B-Instruct"])
 add("seed_oss", "text/dense", "decoder", "SeedOssForCausalLM", "seed_oss", "causal",

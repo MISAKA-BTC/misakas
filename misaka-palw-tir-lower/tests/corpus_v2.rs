@@ -94,7 +94,7 @@ fn corpus_dir() -> PathBuf {
 }
 
 fn manifest() -> Manifest {
-    let p = corpus_dir().join("corpus_v2.json");
+    let p = std::env::var("PALW_CORPUS_MANIFEST").map(PathBuf::from).unwrap_or_else(|_| corpus_dir().join("corpus_v2.json"));
     serde_json::from_str(&std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))).expect("manifest json")
 }
 
@@ -248,7 +248,14 @@ fn adapters_dir() -> PathBuf {
 ///    nothing missing; C: neither.
 fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
     let auto = read_model(cfg, tensors, &ReadOptions { adapter: AdapterChoice::Auto });
-    let none = read_model(cfg, tensors, &ReadOptions { adapter: AdapterChoice::None });
+    // Level A reads with the built-in template; PALW_CORPUS_STANDARD=<file> reads with a CANDIDATE template
+    // instead (a data file extending `standard-decoder`): the measurement of a Level A uplift.
+    let standard: Option<String> = std::env::var("PALW_CORPUS_STANDARD").ok().and_then(|p| std::fs::read_to_string(p).ok());
+    let none = read_model(
+        cfg,
+        tensors,
+        &ReadOptions { adapter: standard.clone().map(AdapterChoice::Text).unwrap_or(AdapterChoice::None) },
+    );
     let user_path = adapters_dir().join(format!("{}.json", e.id));
     let user_text = std::fs::read_to_string(&user_path).ok();
     // A built-in refusal (adapters/refusals.json) is checked BEFORE any adapter, so a third party's
@@ -293,6 +300,11 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
         } else {
             a_same = Some(true);
         }
+    }
+    // No adapter to compare with (the built-in route refused, e.g. because a key is unknown to it): a standard
+    // `…ForCausalLM` class read by the candidate template stands on its own.
+    if a_same.is_none() && auto.is_err() && none.is_ok() && arch.ends_with("ForCausalLM") {
+        a_same = Some(true);
     }
     j.insert("refusal_bypassed_for_user_adapter".into(), json!(bypass && user_text.is_some()));
     j.insert("a_same_as_adapter".into(), json!(a_same));
@@ -784,6 +796,54 @@ fn run_decoder(e: &Entry, read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap
     (st, failed)
 }
 
+// ───────────────────────────────────────── convention search ─────────────────────────────────────────
+
+/// Config keys that cannot change a forward pass whatever their value (bookkeeping, dropout, token ids,
+/// training-only losses). The synthesizer may mark an UNKNOWN key inert only if it is one of these by
+/// name; any other unknown key is a feature or a human decision, and the search stops there.
+fn benign_key(k: &str) -> bool {
+    k.ends_with("_dropout")
+        || k.ends_with("_pdrop")
+        || k.ends_with("_token_id")
+        || k.ends_with("_token_ids")
+        || k.starts_with("initializer_")
+        || k.starts_with("router_aux")
+        || matches!(
+            k,
+            "use_cache" | "output_router_logits" | "output_attentions" | "output_hidden_states" | "pretraining_tp" | "attention_dropout" | "tie_word_embeddings_"
+                | "sliding_window_pattern_" | "use_return_dict" | "return_dict" | "torchscript"
+        )
+}
+
+/// **Convention search (adapter synthesis).** For a standard-looking `…ForCausalLM` class with no adapter:
+/// start from the candidate Level A template (`a-candidates/standard-v2.json`), mark the benign unknown
+/// keys inert, and enumerate the finite convention switches that are class code (today: the rotary
+/// pairing). Each combination is DATA (an adapter text). The caller keeps the first whose pipeline holds.
+/// Returns the candidates, and the unknown keys that are not benign (what a human or a feature must decide).
+fn synthesize(cfg: &Value, tensors: Option<&TensorIndex>) -> (Vec<(String, String)>, Vec<String>) {
+    let Ok(base_text) = std::fs::read_to_string(corpus_dir().join("a-candidates/standard-v2.json")) else { return (vec![], vec![]) };
+    let Ok(base): Result<Value, _> = serde_json::from_str(&base_text) else { return (vec![], vec![]) };
+    let unknown: Vec<String> = match read_model(cfg, tensors, &ReadOptions { adapter: AdapterChoice::Text(base_text.clone()) }) {
+        Ok(_) => vec![],
+        Err(f) => f.unmapped_config_keys,
+    };
+    let (benign, rest): (Vec<String>, Vec<String>) = unknown.into_iter().partition(|k| benign_key(k));
+    if !rest.is_empty() {
+        return (vec![], rest);
+    }
+    let mut out = Vec::new();
+    for style in ["Half", "Interleaved"] {
+        let mut vars = vec![];
+        if style != "Half" {
+            vars.push(json!({"name": "rope_style", "value": style}));
+        }
+        let over = json!({"id": format!("synthesized-{style}"), "config": {"inert": benign}, "vars": vars});
+        let merged = misaka_palw_tir_lower::adapter::merge(base.clone(), over);
+        out.push((format!("rope pairing {style}"), serde_json::to_string(&merged).unwrap_or_default()));
+    }
+    (out, vec![])
+}
+
 // ───────────────────────────────────────── other routes ─────────────────────────────────────────
 
 fn cosine(a: &[f64], b: &[f64]) -> f64 {
@@ -798,12 +858,6 @@ fn rel_err(a: &[f64], b: &[f64]) -> f64 {
     d / b.iter().map(|x| x * x).sum::<f64>().sqrt()
 }
 
-struct OneProgram<'a>(&'a dyn tir::ParamSource);
-impl tir::pipeline::PipelineParams for OneProgram<'_> {
-    fn params(&self, _: u16) -> &dyn tir::ParamSource {
-        self.0
-    }
-}
 
 /// A bidirectional encoder (BERT family): lower with `lower::bidir`, admit the version-2 program,
 /// the float reference and the integer program against the HF embedding (mean pooled, normalised).
@@ -943,6 +997,184 @@ fn run_bidir(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'static str
             Ok(json!({"min_cosine_vs_hf": worst}))
         })
     );
+    // The version-1 program (its two inputs are params) on the three implementations, and the court
+    // property: one step per sequence computes the whole pooled vector.
+    let mut court = None;
+    let s = stage(|| {
+        use misaka_palw_tir_lower::lower::IntTensor;
+        let ids_j = lw.program.param_index(bidir::IDS_PARAM).ok_or("no ids param")?;
+        let cnt_j = lw.program.param_index(bidir::COUNT_PARAM).ok_or("no count param")?;
+        let (mut replayed, mut exec_replayed, mut positions) = (0u64, 0u64, 0u64);
+        let mut by_prim: BTreeMap<String, u64> = BTreeMap::new();
+        for (p, _) in &seqs {
+            let mut ip = mat.params.clone();
+            ip.tensors.insert((ids_j, None), IntTensor::idx(vec![lmax as usize], p.ids.iter().map(|t| *t as u32).collect()));
+            ip.tensors.insert((cnt_j, None), IntTensor::idx(vec![], vec![p.count as u32]));
+            let (tw, ct) = three_way_and_court(&lw.program, &ip, &[vec![0usize]])?;
+            positions += tw["positions"].as_u64().unwrap_or(0);
+            replayed += ct["commit_points_replayed"].as_u64().unwrap_or(0);
+            exec_replayed += ct["replayed_on_exec"].as_u64().unwrap_or(0);
+            for (k, v) in ct["by_terminal_primitive"].as_object().into_iter().flatten() {
+                *by_prim.entry(k.clone()).or_default() += v.as_u64().unwrap_or(0);
+            }
+        }
+        court = Some(json!({"commit_points_replayed": replayed, "replayed_on_exec": exec_replayed, "all_equal": true, "by_terminal_primitive": by_prim}));
+        Ok(json!({"positions": positions, "sequences": seqs.len(), "equal": true}))
+    });
+    let ok = s.ok;
+    st.insert("three_way", s);
+    if !ok {
+        let msg = st["three_way"].data["error"].as_str().unwrap_or("").to_string();
+        if msg.starts_with("court") {
+            st.insert("court", Stage { ok: false, ms: 0, data: json!({"error": msg}) });
+            return (st, Some("court"));
+        }
+        return (st, Some("three_way"));
+    }
+    st.insert("court", Stage { ok: true, ms: 0, data: court.unwrap_or(Value::Null) });
+    (st, None)
+}
+
+/// A causal encoder (CLIP's text tower): the decoder lowering with an Embedding output (the final row
+/// at the end-of-text token); float and integer rows against HF's `text_embeds`, then the three
+/// implementations and the court over the same token scan.
+fn run_causal_encoder(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'static str, Stage>, Option<&'static str>) {
+    let mut st: BTreeMap<&'static str, Stage> = BTreeMap::new();
+    macro_rules! fail_if {
+        ($name:literal, $s:expr) => {{
+            let s: Stage = $s;
+            let ok = s.ok;
+            st.insert($name, s);
+            if !ok {
+                return (st, Some($name));
+            }
+        }};
+    }
+    let ctx = read.spec.max_position_embeddings.unwrap_or(77) as u32;
+    let opts = LowerOpts { max_window: Some(ctx), ..LowerOpts::default() };
+    let mut prepared = None;
+    fail_if!(
+        "lower",
+        stage(|| {
+            let p = fidelity::prepare_spec(read.spec.clone(), &opts).map_err(|e| e.to_string())?;
+            let v = program_facts(&p.lowered.program);
+            prepared = Some(p);
+            Ok(v)
+        })
+    );
+    let prep = prepared.expect("prepared");
+    fail_if!(
+        "admit",
+        stage(|| {
+            let inputs = admission::default_inputs();
+            let v = admission::admit(&prep.lowered.program, &inputs);
+            let j = admission::to_json(&prep.lowered.program, &inputs, &v);
+            v.map(|_| j).map_err(|e| format!("tir_admit_v1 refuses: {e}"))
+        })
+    );
+    let reference = read_json(&dir.join("reference.json"));
+    let ck = match Checkpoint::open(dir) {
+        Ok(c) if full => c,
+        _ => {
+            st.insert("fixture", Stage { ok: true, ms: 0, data: json!({"available": false}) });
+            return (st, None);
+        }
+    };
+    let Some(refm) = reference.filter(|m| m.get("sequences").is_some()) else {
+        st.insert("fixture", Stage { ok: true, ms: 0, data: json!({"available": false, "note": "no reference.json"}) });
+        return (st, None);
+    };
+    st.insert("fixture", Stage { ok: true, ms: 0, data: json!({"available": true}) });
+    let seqs: Vec<(Vec<usize>, Vec<f64>)> = refm["sequences"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|s| {
+            let toks: Vec<usize> = s["tokens"].as_array()?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
+            let want: Vec<f64> = s["embeds"].as_array()?.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect();
+            Some((toks, want))
+        }).collect())
+        .unwrap_or_default();
+    if seqs.is_empty() {
+        st.insert("float_vs_hf", Stage { ok: true, ms: 0, data: json!({"skipped": "the reference has no `embeds`"}) });
+        return (st, None);
+    }
+    let mut params_opt = None;
+    fail_if!(
+        "bind",
+        stage(|| {
+            let (params, unused) = ParamStore::from_source(&prep.hl, &prep.binding, &ck).map_err(|e| e.to_string())?;
+            if !unused.is_empty() {
+                return Err(format!("checkpoint tensors the program never reads: {}", short(&format!("{unused:?}"), 300)));
+            }
+            params_opt = Some(params);
+            Ok(json!({"unused_tensors": 0}))
+        })
+    );
+    let params = params_opt.expect("params");
+    fail_if!(
+        "float_vs_hf",
+        stage(|| {
+            let mut worst = 0f64;
+            for (toks, want) in &seqs {
+                let rows = Session::new(&prep.hl, &params).run(toks).map_err(|e| format!("float reference: {e}"))?;
+                let last: Vec<f64> = rows.last().ok_or("no rows")?.iter().map(|x| *x as f64).collect();
+                worst = worst.max(rel_err(&last, want));
+            }
+            if worst > 1e-4 {
+                return Err(format!("float reference vs HF: rel {worst:.2e}"));
+            }
+            Ok(json!({"max_rel_vs_hf": worst, "sequences": seqs.len()}))
+        })
+    );
+    let loader = Resident(Arc::new(params));
+    let (bos, eos) = (seqs[0].0[0], *seqs[0].0.last().unwrap_or(&0));
+    let quiet = |_: usize, _: usize| {};
+    let mut mat_opt = None;
+    fail_if!(
+        "materialise",
+        stage(|| {
+            let calib: Vec<Vec<usize>> = fidelity::random_sequences(prep.hl.vocab.saturating_sub(2).max(2), 6, 12, 7)
+                .into_iter()
+                .map(|p| std::iter::once(bos).chain(p).chain(std::iter::once(eos)).collect())
+                .collect();
+            let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).map_err(|e| format!("calibrate: {e}"))?;
+            let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+            mat_opt = Some(mat);
+            Ok(json!({}))
+        })
+    );
+    let mat = mat_opt.expect("mat");
+    fail_if!(
+        "int_vs_hf",
+        stage(|| {
+            let mut worst = 1f64;
+            for (toks, want) in &seqs {
+                let rows = fidelity::int_logits(&prep.lowered.program, &mat.params, toks, mat.logits_scale, &|_| {}).map_err(|e| format!("integer run: {e}"))?;
+                worst = worst.min(cosine(rows.last().ok_or("no rows")?, want));
+            }
+            if worst < 0.999 {
+                return Err(format!("integer vs HF: cosine {worst:.5}"));
+            }
+            Ok(json!({"min_cosine_vs_hf": worst}))
+        })
+    );
+    let eval: Vec<Vec<usize>> = seqs.iter().map(|(t, _)| t.clone()).collect();
+    let mut court = None;
+    let s = stage(|| {
+        let (tw, ct) = three_way_and_court(&prep.lowered.program, &mat.params, &eval)?;
+        court = Some(ct);
+        Ok(tw)
+    });
+    let ok = s.ok;
+    st.insert("three_way", s);
+    if !ok {
+        let msg = st["three_way"].data["error"].as_str().unwrap_or("").to_string();
+        if msg.starts_with("court") {
+            st.insert("court", Stage { ok: false, ms: 0, data: json!({"error": msg}) });
+            return (st, Some("court"));
+        }
+        return (st, Some("three_way"));
+    }
+    st.insert("court", Stage { ok: true, ms: 0, data: court.unwrap_or(Value::Null) });
     (st, None)
 }
 
@@ -990,7 +1222,7 @@ fn probe_core_route(e: &Entry, cfg_text: &str, tensors: Option<&TensorIndex>) ->
 
 fn run_entry(e: &Entry, full: bool) -> Value {
     let t0 = Instant::now();
-    let spec_dir = corpus_dir().join("specs").join(&e.id);
+    let spec_dir = std::env::var("PALW_CORPUS_SPECS").map(PathBuf::from).unwrap_or_else(|_| corpus_dir().join("specs")).join(&e.id);
     let heavy = fixtures_root().map(|r| r.join(&e.id)).filter(|d| d.join("config.json").exists());
     let cfg_path = heavy.as_ref().map(|d| d.join("config.json")).filter(|p| p.exists()).unwrap_or_else(|| spec_dir.join("config.json"));
     let mut out = serde_json::Map::new();
@@ -1024,7 +1256,7 @@ fn run_entry(e: &Entry, full: bool) -> Value {
         out.insert("core".into(), probe_core_route(e, &misaka_palw_tir_lower::hf_config::sanitize_json(&cfg_text), tensors.as_ref()));
     }
     let dir = heavy.as_deref().unwrap_or(Path::new("/nonexistent"));
-    let pipeline = matches!(e.route.as_str(), "decoder" | "vlm" | "encoder-bidir");
+    let pipeline = matches!(e.route.as_str(), "decoder" | "vlm" | "encoder-bidir" | "encoder-causal");
     let mut refuted: Vec<Value> = Vec::new();
     if reads.candidates.is_empty() {
         failed = Some("read".into());
@@ -1036,7 +1268,11 @@ fn run_entry(e: &Entry, full: bool) -> Value {
     if pipeline {
         for (ci, c) in reads.candidates.iter().enumerate() {
             let run = catch_unwind(AssertUnwindSafe(|| {
-                if e.route == "encoder-bidir" { run_bidir(&c.read, dir, full) } else { run_decoder(e, &c.read, dir, full) }
+                match e.route.as_str() {
+                    "encoder-bidir" => run_bidir(&c.read, dir, full),
+                    "encoder-causal" => run_causal_encoder(&c.read, dir, full),
+                    _ => run_decoder(e, &c.read, dir, full),
+                }
             }));
             let (st, f) = match run {
                 Ok(x) => x,
@@ -1067,6 +1303,38 @@ fn run_entry(e: &Entry, full: bool) -> Value {
             }
         }
     }
+    // Convention search: a decoder class nothing above could read or hold is given one more route, an
+    // adapter SYNTHESIZED from the standard template and a finite set of conventions (data, not Rust).
+    let mut synthesized: Value = Value::Null;
+    if level == "C" && matches!(e.route.as_str(), "decoder") && e.hf_arch.ends_with("ForCausalLM") && std::env::var("PALW_CORPUS_NO_SYNTH").is_err() {
+        let (cands, blocked_by) = synthesize(&cfg, tensors.as_ref());
+        let mut tried = Vec::new();
+        'search: for (what, text) in &cands {
+            let Ok(read) = read_model(&cfg, tensors.as_ref(), &ReadOptions { adapter: AdapterChoice::Text(text.clone()) }) else { continue };
+            if !all_supported(&read).0 {
+                continue;
+            }
+            let run = catch_unwind(AssertUnwindSafe(|| run_decoder(e, &read, dir, full)));
+            let (st, f) = match run {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
+            let this: serde_json::Map<String, Value> = st.iter().map(|(k, s)| ((*k).to_string(), stage_json(s))).collect();
+            tried.push(json!({"what": what, "failed_stage": f}));
+            if f.is_none() {
+                stages = this;
+                level = "B".to_string();
+                via = format!("synthesized adapter ({what})");
+                failed = None;
+                synthesized = json!({"what": what, "adapter": serde_json::from_str::<Value>(text).unwrap_or(Value::Null)});
+                break 'search;
+            }
+        }
+        if synthesized.is_null() {
+            synthesized = json!({"tried": tried, "blocked_by_keys": blocked_by});
+        }
+    }
+    out.insert("synthesized".into(), synthesized);
     out.insert("level".into(), json!(level));
     out.insert("via".into(), json!(via));
     out.insert("refuted_routes".into(), json!(refuted));
@@ -1131,6 +1399,9 @@ fn write_report(v: &Value) {
 
 #[test]
 fn the_manifest_is_a_corpus_of_50_to_100_distinct_architectures() {
+    if std::env::var("PALW_CORPUS_MANIFEST").is_ok() {
+        return; // another manifest (the census) is not held to the corpus's shape
+    }
     let m = manifest();
     let ids: BTreeSet<&str> = m.entries.iter().map(|e| e.id.as_str()).collect();
     assert_eq!(ids.len(), m.entries.len(), "duplicate ids");

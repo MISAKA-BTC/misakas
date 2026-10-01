@@ -69,9 +69,12 @@ def summarise(rep, man, blk):
     proven = [e for e in ents if e["level"] in ("A", "B") and e.get("failed_stage") is None]
     refuted = [e for e in ents if e["level"] in ("A", "B") and e.get("failed_stage") is not None]
     cls = Counter()
+    core_routes = []
     for e in ents:
         if e["level"] == "C":
             cls[blk.get(e["id"], {}).get("class", "unclassified")] += 1
+            if e.get("core", {}).get("core_route"):
+                core_routes.append(e["id"])
     by_cat = defaultdict(Counter)
     for e in ents:
         by_cat[e["category"]][e["level"]] += 1
@@ -96,6 +99,7 @@ def summarise(rep, man, blk):
         "usage_weighted_pct": {k: 100.0 * v / tot for k, v in wt.items()},
         "data_expressible_proven": len(proven), "data_expressible_refuted": [e["id"] for e in refuted],
         "level_c_by_class": dict(cls),
+        "core_rust_routes": core_routes,
         "by_category": {k: dict(v) for k, v in by_cat.items()},
         "court": {
             "entries_replayed": len(court), "commit_points_replayed": commits, "replayed_on_exec": exec_commits,
@@ -146,6 +150,10 @@ def summary_md(s):
         lines.append(f"| {name} | {lv.get(k, 0)} | {pct(lv.get(k, 0), n)} | {s['usage_weighted_pct'].get(k, 0):.0f} % |")
     ab = lv.get("A", 0) + lv.get("B", 0)
     lines.append(f"| **A + B (expressible with existing features)** | **{ab}** | **{pct(ab, n)}** | **{s['usage_weighted_pct'].get('A', 0) + s['usage_weighted_pct'].get('B', 0):.0f} %** |")
+    if s.get("core_rust_routes"):
+        k = len(s["core_rust_routes"])
+        lines.append(f"| *Level C, but lowered today by a per-family Rust route (not data): {', '.join('`'+i+'`' for i in s['core_rust_routes'])}* | {k} | {pct(k, n)} | |")
+        lines.append(f"| *supported today by any route (A + B + Rust routes)* | {ab + k} | {pct(ab + k, n)} | |")
     lines.append("")
     lines.append("Level C by kind of gap (this lane's classification, `tools/corpus/blockers.json`):")
     lines.append("")

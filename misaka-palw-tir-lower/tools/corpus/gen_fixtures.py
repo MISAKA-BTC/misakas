@@ -180,7 +180,28 @@ def model_class(e):
     raise RuntimeError(f"no model class for builder {b}")
 
 
-def instantiate(e, cfg):
+MAX_PARAMS = 20_000_000          # a corpus model is TINY: more than this means a config key was not shrunk
+MAX_TENSOR_BYTES = 64 * 1024 * 1024
+
+
+def size_guard(build):
+    """Instantiate `build()` on the META device (no storage) and refuse a model that is not tiny.
+
+    Never instantiate a model to discover its size (incident of 2026-10-01: a census probe over
+    every transformers family built models with unshrunk defaults and grew to 43 GB): count the
+    parameters on `meta`, skip anything over 20 M parameters or with a single tensor over 64 MB.
+    """
+    with torch.device("meta"):
+        m = build()
+    n = sum(p.numel() for p in m.parameters())
+    big = max((p.numel() * 4 for p in m.parameters()), default=0)
+    del m
+    if n > MAX_PARAMS or big > MAX_TENSOR_BYTES:
+        raise RuntimeError(f"not tiny: {n:,} parameters, largest tensor {big / 2**20:.0f} MiB (shrink its config keys)")
+    return n
+
+
+def _build(e, cfg):
     cls = model_class(e)
     if hasattr(cls, "from_config") and cls.__name__.startswith("Auto"):
         return cls.from_config(cfg)
@@ -188,6 +209,11 @@ def instantiate(e, cfg):
         return cls(cfg)
     except TypeError:
         return cls._from_config(cfg)
+
+
+def instantiate(e, cfg):
+    size_guard(lambda: _build(e, cfg))
+    return _build(e, cfg)
 
 
 def save_and_reload(e, model, cfg, outdir, cls=None):
@@ -366,6 +392,7 @@ def build_diffusers(e, outdir, probe):
     seed = seed_of(e)
     cls = getattr(diffusers, e["builder"].split(":", 1)[1])
     torch.manual_seed(seed)
+    size_guard(lambda: cls(**e["cfg"]))
     model = cls(**e["cfg"])
     model.eval()
     inp = _diff_inputs(e["options"]["inputs"], torch)
@@ -476,7 +503,16 @@ def main():
     ap.add_argument("--probe", action="store_true")
     ap.add_argument("--out", default=os.path.expanduser("~/Downloads/MISAKA-wt-b/corpus-fixtures"))
     ap.add_argument("--specs", action="store_true", help="also write the light specs into tools/corpus/specs")
+    ap.add_argument("--entries", help="build the entries of this manifest (e.g. census_v2.json) instead of the corpus")
+    ap.add_argument("--specs-dir", help="where --specs writes (default tools/corpus/specs; census: tools/corpus/census-specs)")
     a = ap.parse_args()
+    global SPECS
+    if a.specs_dir:
+        SPECS = os.path.abspath(a.specs_dir)
+    entries_all = C.ENTRIES
+    if a.entries:
+        with open(a.entries) as f:
+            entries_all = json.load(f)["entries"]
     if a.manifest:
         manifest()
         return
@@ -484,7 +520,7 @@ def main():
         sys.exit("refusing to run without HF_HUB_OFFLINE=1 (fixtures are built from local configs only)")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     _lazy()
-    entries = [e for e in C.ENTRIES if not a.ids or e["id"] in a.ids]
+    entries = [e for e in entries_all if not a.ids or e["id"] in a.ids]
     bad = 0
     for e in entries:
         t0 = time.time()
