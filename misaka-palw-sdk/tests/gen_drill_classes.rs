@@ -190,6 +190,8 @@ fn toy_image() -> DrillClass {
     let rule = pipeline.stages.iter().find_map(|st| st.tokens.as_ref()).expect("the encoder reads the prompt");
     let encoder = pipeline.stages.iter().find(|st| st.tokens.is_some()).unwrap();
     let guidance = PalwGenGuidanceOfferV1 { scalar: 0, lo: scalars[0].lo as u16, hi: scalars[0].hi as u16 };
+    // Read off the encoder stage before the pipeline moves into the spec (the rule borrows it).
+    let max_prompt_tokens = encoder.max_trip - (rule.prefix.len() + rule.suffix.len()) as u32;
     let spec = GenClassSpecV1 {
         profile: PalwGenProfileV1::Image,
         pipeline,
@@ -204,7 +206,7 @@ fn toy_image() -> DrillClass {
                 steps_scalar: Some(1),
             }),
             scalars,
-            max_prompt_tokens: encoder.max_trip - (rule.prefix.len() + rule.suffix.len()) as u32,
+            max_prompt_tokens,
             max_negative_tokens: 0,
             images: vec![],
             max_source_tokens: 0,

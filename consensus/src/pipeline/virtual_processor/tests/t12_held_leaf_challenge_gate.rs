@@ -14,7 +14,10 @@ use kaspa_consensus_core::palw_held_close_v1::{
     palw_held_leaf_challenge_digest_v1,
 };
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwConsensusObjectV2 as Obj, palw_court_close_chunk_digest_v1};
+use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 as Rehearsal;
+use kaspa_consensus_core::palw_state_v2::{
+    PalwBlockContextV2, PalwConsensusObjectV2 as Obj, PalwStateV2Error, palw_court_close_chunk_digest_v1,
+};
 use kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1;
 use kaspa_hashes::Hash64;
 
@@ -81,10 +84,16 @@ async fn t12_a_held_leaf_challenge_is_signed_by_its_accuser_and_dropped_below_it
             continue;
         }
         gate(&signed).expect("signed by its accuser, past the fence");
-        assert_eq!(
-            vp.palw_v2_accepted_objects_for_tests(&state, &bundle.state, &point, vec![signed.clone()], block).len(),
-            1,
-            "and walked"
+        // The gate takes it. What the walk then does is the FOLD's: the challenge names a claim this chain does not
+        // have, so the rehearsal reaches the fold's own arm and is refused there, typed `MissingClaim` — not at the
+        // gate, not for a fence, not for a signature — and the walk, which drops what the fold refuses, drops it.
+        match vp.palw_object_rehearsal_v1_on(&state, &bundle.state, &point, &signed) {
+            Rehearsal::Refused(PalwStateV2Error::MissingClaim(claim)) => assert_eq!(claim, Hash64::from_bytes([0x5C; 64])),
+            other => panic!("the fold's refusal of an absent claim, not {other:?}"),
+        }
+        assert!(
+            vp.palw_v2_accepted_objects_for_tests(&state, &bundle.state, &point, vec![signed.clone()], block).is_empty(),
+            "the walk drops what the fold refuses"
         );
         for (what, object) in [
             // A field the signature covers, moved after signing: the digest no longer verifies.
