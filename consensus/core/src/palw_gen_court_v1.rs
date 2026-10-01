@@ -539,6 +539,24 @@ impl DemandSourceV2 for CarriageSource<'_, '_> {
             return Ok(StateSupply::Value(0));
         }
         let sp = &self.case.space.stages[self.stage];
+        // **A `post`-written state's value at the start of `pos` is the committed write of `pos − 1`** (spec 04b NF-29: the write is
+        // a commit point, so the court reads the latent as that leaf — never a replay of `post`, and never a checkpoint leaf, which
+        // the step space does not make for it). A stage whose denoise latent is a post-written state is convictable at every
+        // position only with this arm.
+        if let Some((node, _)) = sp.info.post_writes.iter().find(|(_, st)| *st == state) {
+            let ctx = DemandContext { pos: pos - 1, occurrence: (sp.program.occurrences().len() - 1) as u16 };
+            let (leaf, lane) = sp
+                .commit_leaf_of(ctx, *node, index as u64)
+                .ok_or_else(|| missing(format!("the committed write of state {state} at position {}", pos - 1)))?;
+            self.used.leaves.insert((self.stage as u8, leaf));
+            return self
+                .leaves
+                .get(&(self.stage as u8, leaf))
+                .and_then(|v| v.get(lane))
+                .copied()
+                .map(StateSupply::Value)
+                .ok_or_else(|| missing(format!("leaf {leaf}")));
+        }
         if !pos.is_multiple_of(sp.layout.checkpoint_interval) {
             return Ok(StateSupply::Replay);
         }
