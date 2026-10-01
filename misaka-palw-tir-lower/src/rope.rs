@@ -337,7 +337,7 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
             .map(|i| {
                 if i < angles {
                     let e = (2 * i) as f32 / dim as f32;
-                    (1.0f32 / rc.theta.powf(e as f64) as f32) / factor as f32
+                    (1.0f32 / crate::detmath::powf(rc.theta, e as f64) as f32) / factor as f32
                 } else {
                     0.0
                 }

@@ -95,8 +95,7 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
 /// [`parse_config`] with the quant formats of `reg`: a `quantization_config` the built-ins do not
 /// read is read by the descriptors in it.
 pub fn parse_config_with(v: &Value, reg: &crate::quantfmt::QuantRegistry) -> Result<ArchSpec> {
-    let opts = crate::hf_schema::ReadOptions { quant: Some(reg.clone()), ..Default::default() };
-    crate::hf_schema::read_model(v, None, &opts).map(|r| r.spec).map_err(|f| f.error)
+    crate::hf_schema::read_model_with(v, None, &crate::hf_schema::ReadOptions::default(), reg).map(|r| r.spec).map_err(|f| f.error)
 }
 
 /// Attach a pre-quantised checkpoint's config to a parsed spec: dense attention + MLP decoders,

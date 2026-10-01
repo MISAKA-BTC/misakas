@@ -573,9 +573,9 @@ impl<'a> Env<'a> {
                         if n.f() <= 0.0 {
                             return Err(bad("`$ln` of a non-positive number"));
                         }
-                        N::F(n.f().ln()).value()
+                        N::F(crate::detmath::ln(n.f())).value()
                     }
-                    "$exp" => N::F(n.f().exp()).value(),
+                    "$exp" => N::F(crate::detmath::exp(n.f())).value(),
                     "$floor" => N::I(n.f().floor() as i64).value(),
                     "$ceil" => N::I(n.f().ceil() as i64).value(),
                     "$round" => N::I(n.f().round() as i64).value(),
@@ -614,7 +614,7 @@ impl<'a> Env<'a> {
                     (N::I(b), N::I(e)) if (0..=62).contains(&e) => {
                         Ok(Value::from(b.checked_pow(e as u32).ok_or_else(|| bad("integer overflow in `$pow`"))?))
                     }
-                    (b, e) => N::F(b.f().powf(e.f())).value(),
+                    (b, e) => N::F(crate::detmath::powf(b.f(), e.f())).value(),
                 }
             }
             // ───────────── comparison and logic ─────────────
