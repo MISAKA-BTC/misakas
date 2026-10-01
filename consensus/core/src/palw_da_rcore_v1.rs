@@ -1005,18 +1005,21 @@ pub fn palw_tir_step_accusation_message_v1(
 
 /// **The ONE builder of a `DefaultAccusedTirStep`** — what a seat files when its replay disputes the
 /// claim below `unit` and the producer has not served it: the unit held to
-/// [`palw_tir_step_unit_is_admissible_v1`] at the widest ladder any network runs
-/// ([`crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1`]; the chain holds it to the claim's
-/// class's), signed by `sign(message, context)` with the accuser's key, held to the ride rule.
+/// [`palw_tir_step_unit_is_admissible_v1`] at `ladder`, the step ladder of the network the node runs
+/// (the court's `max_step_leaf_count` where the held regime rides it, the release's
+/// [`crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES`] otherwise — what the acceptance gate holds the unit
+/// to; the fold holds it to the claim's class's), signed by `sign(message, context)` with the accuser's
+/// key, held to the ride rule. A builder that took the widest ladder any network runs would file demands
+/// the gate refuses on a network that runs a narrower one.
 pub fn palw_tir_step_accusation_object_v1(
     network_domain: &Hash64,
     claim: Hash64,
     unit: PalwDaUnitV1,
     accuser: PalwBondKeyV2,
+    ladder: u64,
     sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
 ) -> Result<crate::palw_state_v2::PalwConsensusObjectV2, PalwDaAccusationBuildErrorV1> {
-    palw_tir_step_unit_is_admissible_v1(&unit, crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1)
-        .map_err(|why| PalwDaAccusationBuildErrorV1::NotATirStepUnit(unit, why))?;
+    palw_tir_step_unit_is_admissible_v1(&unit, ladder).map_err(|why| PalwDaAccusationBuildErrorV1::NotATirStepUnit(unit, why))?;
     let message = palw_tir_step_accusation_message_v1(*network_domain, &claim, &unit, &accuser);
     let signature = sign(message.as_byte_slice(), PALW_TIR_STEP_ACCUSATION_MLDSA87_CONTEXT_V1)
         .filter(|signature| !signature.is_empty())

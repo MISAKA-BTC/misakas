@@ -2387,7 +2387,7 @@ fn claims_binding(
 
 /// **Verify a `TirStepNode` answer against the claim — by hash arithmetic.** The binding verifies and
 /// names the claim's roots; `(level, index)` is an interior node of its tree (`level ≥ 1`); the
-/// frontier is exactly the nodes it covers `min(level, 8)` levels down and folds to the node, and the
+/// frontier is exactly the nodes it covers `min(level, PALW_TIR_STEP_NODE_DEPTH_V1)` levels down and folds to the node, and the
 /// siblings walk the node to the claim's step root.
 pub fn check_tir_step_node_disclosure_v1(
     claim_trace_root: Hash64,
@@ -2412,7 +2412,7 @@ pub fn check_tir_step_node_disclosure_v1(
 
 /// **The hash arithmetic of a `TirStepNode` answer, its binding aside**: in the step tree over
 /// `leaf_count` leaves, `(level, index)` is an interior node (`level ≥ 1`); `frontier` is exactly the
-/// nodes it covers `min(level, 8)` levels down, and folds to it by the tree's own rule; `siblings` walk
+/// nodes it covers `min(level, PALW_TIR_STEP_NODE_DEPTH_V1)` levels down, and folds to it by the tree's own rule; `siblings` walk
 /// it to `step_root`. What [`check_tir_step_node_disclosure_v1`] asks once the binding names the
 /// claim, and what a seat asks of each answer as it descends.
 pub fn palw_tir_step_node_reaches_v1(
@@ -2436,7 +2436,7 @@ pub fn palw_tir_step_node_reaches_v1(
 }
 
 /// **Where node `(level, index)`'s frontier sits**: `(frontier level, first, end)` — the level
-/// `level − 8` (or 0, the leaf nodes, when nearer) and the positions `[first, end)` it covers there;
+/// `level − PALW_TIR_STEP_NODE_DEPTH_V1` (or 0, the leaf nodes, when nearer) and the positions `[first, end)` it covers there;
 /// `None` for a leaf or a node past the tree. A seat descending names next the first frontier node its
 /// own tree disagrees with: `TirStepNode { level: frontier level, index: first + k }`, or, at level 0,
 /// `TirStepLeaf { index: first + k }`.
