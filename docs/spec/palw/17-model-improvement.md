@@ -777,7 +777,7 @@ below are the evaluation lane's (`palw_improve_eval_v1`, `palw_improve_eval_fold
 
 **The binding and the roots, byte-exact** [consensus-critical; the court's check (§17.8.6) and a second implementation read this].
 Notation: `H(k; p₁ ‖ p₂ …)` is BLAKE2b-512 **keyed** with the ASCII key `k` (the domain strings of §17.0, at most 64 bytes) over
-the concatenation of the parts; `[64]` is a 64-byte hash as its raw bytes; integers are little-endian; `ids(x) = LE u32 |x| ‖
+the concatenation of the parts (`…/` abbreviates `misaka-palw/improve/`); `[64]` is a 64-byte hash as its raw bytes; integers are little-endian; `ids(x) = LE u32 |x| ‖
 LE u32 each id` (the same for a `Vec<u32>` in borsh); borsh follows its standard rules (a `Vec` is `LE u32` length then
 elements, an enum a `u8` tag in declaration order then its fields, an `Option` a `u8` 0/1 then the value).
 
