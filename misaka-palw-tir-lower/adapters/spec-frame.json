@@ -10,6 +10,8 @@
     {"name": "mlp_layout", "value": "Separate"},
     {"name": "experts_layout", "value": "Separate"},
     {"name": "gdn_layout", "value": "FusedPerKeyHead"},
+    {"name": "table_shards", "value": 1},
+    {"name": "hyper", "value": null},
     {"name": "conv1d", "value": false},
     {"name": "prefix_aliases", "value": []},
     {"name": "ignored_prefixes", "value": []},
@@ -17,5 +19,6 @@
     {"name": "model_type", "value": "decoder"},
     {"name": "families", "value": ["C1"]}
   ],
-  "spec": {"architecture": {"$var": "arch"}, "model_type": {"$var": "model_type"}, "families": {"$var": "families"}, "vocab_size": {"$var": "vocab"}, "hidden_size": {"$var": "hidden"}, "max_position_embeddings": {"$var": "max_pos"}, "embedding": {"$var": "embedding"}, "layers": {"$layers": {"count": {"$var": "n"}, "each": {"mixer": {"$var": "l_mixer"}, "ffn": {"$var": "l_ffn"}, "residual": {"$var": "l_residual"}}}}, "final_norm": {"$var": "final_norm"}, "head": {"$var": "head"}, "hf": {"names": {"$var": "names"}, "prefix_aliases": {"$var": "prefix_aliases"}, "ignored_prefixes": {"$var": "ignored_prefixes"}, "qkv": {"$var": "qkv_layout"}, "mlp": {"$var": "mlp_layout"}, "experts": {"$var": "experts_layout"}, "gdn": {"$var": "gdn_layout"}, "conv1d_weights": {"$var": "conv1d"}}}
+  "spec": {"architecture": {"$var": "arch"}, "model_type": {"$var": "model_type"}, "families": {"$var": "families"}, "vocab_size": {"$var": "vocab"}, "hidden_size": {"$var": "hidden"}, "max_position_embeddings": {"$var": "max_pos"}, "embedding": {"$var": "embedding"}, "layers": {"$layers": {"count": {"$var": "n"}, "each": {"mixer": {"$var": "l_mixer"}, "ffn": {"$var": "l_ffn"}, "residual": {"$var": "l_residual"}}}}, "final_norm": {"$var": "final_norm"},
+    "hyper": {"$var": "hyper"}, "head": {"$var": "head"}, "hf": {"names": {"$var": "names"}, "prefix_aliases": {"$var": "prefix_aliases"}, "ignored_prefixes": {"$var": "ignored_prefixes"}, "qkv": {"$var": "qkv_layout"}, "mlp": {"$var": "mlp_layout"}, "experts": {"$var": "experts_layout"}, "gdn": {"$var": "gdn_layout"}, "conv1d_weights": {"$var": "conv1d"}, "table_shards": {"$var": "table_shards"}}}
 }

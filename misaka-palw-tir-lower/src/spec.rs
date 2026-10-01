@@ -843,6 +843,14 @@ pub struct HfStorage {
     /// A pre-quantised checkpoint (GPTQ, AWQ): which linears are stored as integers, and how.
     #[serde(default, skip_deserializing)]
     pub quant: Option<crate::prequant::QuantConfig>,
+    /// A per-layer embedding table the checkpoint stores in this many equal row shards (`{S}` in its
+    /// tensor-name template, concatenated in order): Qwen4-Exp's n-gram tables (`split_ngram_parts`).
+    #[serde(default = "one_shard")]
+    pub table_shards: usize,
+}
+
+fn one_shard() -> usize {
+    1
 }
 
 impl HfStorage {

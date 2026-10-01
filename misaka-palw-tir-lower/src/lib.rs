@@ -68,6 +68,7 @@ pub mod hl;
 pub mod lora;
 pub mod lower;
 pub mod model;
+pub mod ngram;
 pub mod prequant;
 pub mod quantfmt;
 pub mod quant;

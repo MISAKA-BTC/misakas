@@ -710,6 +710,39 @@ impl<'a> Env<'a> {
                 }
             }
             "$is_num" => Ok(Value::Bool(num(&self.ev(arg, d)?).is_some())),
+            "$is_list" => Ok(Value::Bool(self.ev(arg, d)?.is_array())),
+            // A list of numbers (or of strings) in ascending order.
+            "$sort" => {
+                let v = self.ev(arg, d)?;
+                let mut items = v.as_array().ok_or_else(|| bad("`$sort` wants a list"))?.clone();
+                if items.iter().all(|x| num(x).is_some()) {
+                    items.sort_by(|a, b| num(a).map(|x| x.f()).partial_cmp(&num(b).map(|x| x.f())).unwrap_or(std::cmp::Ordering::Equal));
+                } else if items.iter().all(Value::is_string) {
+                    items.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+                } else {
+                    return Err(bad("`$sort` wants numbers or strings"));
+                }
+                Ok(Value::Array(items))
+            }
+            // The list without repeats, first occurrences kept in order.
+            "$unique" => {
+                let v = self.ev(arg, d)?;
+                let items = v.as_array().ok_or_else(|| bad("`$unique` wants a list"))?;
+                let mut out: Vec<Value> = Vec::new();
+                for x in items {
+                    if !out.iter().any(|y| values_equal(x, y)) {
+                        out.push(x.clone());
+                    }
+                }
+                Ok(Value::Array(out))
+            }
+            // `[list, value]`: the index of the value in the list, or null.
+            "$find" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let l = a[0].as_array().ok_or_else(|| bad("`$find` wants a list"))?;
+                Ok(l.iter().position(|x| values_equal(x, &a[1])).map_or(Value::Null, |i| Value::from(i as u64)))
+            }
             "$flatten" => {
                 let v = self.ev(arg, d)?;
                 let mut out = Vec::new();

@@ -76,6 +76,7 @@ pack!(
     "qwen3-5-moe",
     "qwen3-moe",
     "qwen3-next",
+    "qwen4-exp",
     "roberta",
     "rwkv4",
     "smollm3",

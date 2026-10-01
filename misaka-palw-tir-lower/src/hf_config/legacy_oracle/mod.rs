@@ -544,6 +544,7 @@ impl P<'_> {
                 gdn: self.layouts.gdn,
                 ignored_prefixes: std::mem::take(&mut self.ignored_prefixes),
                 quant: None,
+                table_shards: 1,
             },
             notes: std::mem::take(&mut self.notes),
         }
