@@ -7,7 +7,7 @@
 //! admission conditions).
 
 use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, feature_info};
-use crate::hf_schema::{AdapterSource, Level, MissingItem, ReadOptions, TensorIndex, read_model};
+use crate::hf_schema::{AdapterSource, Level, MissingItem, ReadOptions, TensorIndex};
 use serde::Serialize;
 use serde_json::Value;
 use std::fmt::Write;
@@ -107,9 +107,21 @@ fn feature_report(u: &FeatureUse) -> FeatureReport {
 
 /// Read a configuration (and, if given, its tensor names) and report what it needs.
 pub fn analyze(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
+    analyze_with(config, tensors, opts, crate::quantfmt::QuantRegistry::builtin(), &[])
+}
+
+/// [`analyze`] with the quant formats of `reg` (a `quantization_config` the built-ins do not read is read by the descriptors in it)
+/// and `files`, the names of the files beside the checkpoint (a GGUF's `mmproj`), which the feature scope reads as evidence.
+pub fn analyze_with(
+    config: &Value,
+    tensors: Option<&TensorIndex>,
+    opts: &ReadOptions,
+    reg: &crate::quantfmt::QuantRegistry,
+    files: &[String],
+) -> ArchitectureReport {
     let model_type = model_type_of(config);
     let architectures = architectures_of(config);
-    match read_model(config, tensors, opts) {
+    match crate::hf_schema::read_model_with(config, tensors, opts, reg) {
         Ok(read) => {
             let uses = read.spec.features();
             let features: Vec<FeatureReport> = uses.iter().map(feature_report).collect();
@@ -158,7 +170,7 @@ pub fn analyze(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions
                 new_court_kernel_required: kernel,
                 result,
                 notes: read.spec.notes.clone(),
-                scope: super::scope::scope_of(config, Some(&read.spec), tensors, &[]),
+                scope: super::scope::scope_of(config, Some(&read.spec), tensors, files),
             }
         }
         Err(f) => {
@@ -177,7 +189,7 @@ pub fn analyze(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions
                 new_court_kernel_required: false,
                 result: ReportResult::NotLowerable { reason },
                 notes: Vec::new(),
-                scope: super::scope::scope_of(config, None, tensors, &[]),
+                scope: super::scope::scope_of(config, None, tensors, files),
             }
         }
     }
