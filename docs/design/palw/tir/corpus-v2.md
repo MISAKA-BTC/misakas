@@ -494,10 +494,10 @@ entries. Four results.
 
 | criterion | target | measured |
 | --- | --- | --- |
-| expressible with existing features (A or B) | ≥ 90 % | **53 %** of the corpus (68 % of the 57 text-generation entries; 55 % usage-weighted) |
-| needing a new feature | a few % | 20 % (decoder-side features), 21 % (routes) |
-| needing a new primitive | very few | **0** identified |
-| court coverage | 100 % | 100 % of what lowers (47,880 / 47,880 commit points, 0 model-specific paths) |
+| expressible with existing features (A or B) | ≥ 90 % | **53 %** of the curated corpus (68 % of its 57 text-generation entries; 55 % usage-weighted); **39 %** of the 83 buildable census families (29 % of all 111); **51 %** of the 140 decoder-only families (57 curated + 83 census) |
+| needing a new feature | a few % | 20 % of the corpus (decoder-side features), 19 % routes, 7 % protocol, 1 % remote code |
+| needing a new primitive | very few | **0** identified (corpus, census, and the five research passes) |
+| court coverage | 100 % | 100 % of what lowers (48,551 / 48,551 commit points on 51 lowered models, 0 model-specific paths; 25 / 25 primitives reached) |
 
 The target is **not met**. The ranked feature requests (`feature-requests.md`; size is a rough guess of the lowering
 lane's effort: S days, M one to two weeks, L weeks, XL months) show what would move it:
@@ -574,12 +574,22 @@ tensor-name-driven (gating, biases, sub-norms) move `arcee`, `seed_oss`, `ernie4
 the three nested-VLM text stages that need only a different tensor prefix; the MoE group is the biggest by entries but
 each MoE family also chooses a scoring rule, so it moves only the softmax-top-k ones.
 
-The way past that ceiling is not a bigger template but a **fixture-verified convention search**: given the tiny HF
-fixture a registrant has to produce anyway, enumerate the finite convention switches (rope pairing, MLP gating, norm
-placement, bias map, router scoring, tensor prefix), keep the combination whose float reference matches the fixture to
-1e-4, and emit the adapter. The harness already contains every piece (a reader that takes adapter text, the float
-reference against HF, the bind check): the search is a loop around them. It is data and a harness, not new protocol,
-and it turns "write an adapter" into "run a command" for every family that is a combination of existing features.
+**Measured, second candidate.** `a-candidates/standard-v3.json` adds one more convention to v2: when `rope_parameters` is keyed by layer
+type, layer *i* takes the rope of its own type, with that type's partial-rotary factor. It removes the refusal of five of the six census
+families that have it and moves **none** to Level B: each stops at its own next convention (§4.6). So per-layer-type rope belongs in the
+standard template (it is a pure data convention and costs nothing), but it is not what limits Level A.
+
+The way past the template ceiling is not a bigger template but a **fixture-verified convention search**: given the tiny HF fixture a
+registrant has to produce anyway, enumerate the finite convention switches, keep the combination whose float reference matches the
+fixture to 1e-4, and emit the adapter. A prototype is in the harness (`synthesize()` / `benign_key()` in `tests/corpus_v2.rs`; off with
+`PALW_CORPUS_NO_SYNTH`): candidate = `standard-decoder` + the v2 conventions + every unknown key whose name is on a benign list treated as
+inert + the finite switch the harness can verify (rope pairing, Half or Interleaved). With the four hand-written adapters removed it
+re-derives `arcee` and `seed_oss` (Half), `helium` and `ernie4_5` (Interleaved) as Level B with no human adapter, every later stage
+holding; on the census it synthesises **none**, because the 51 refusals are on keys that can change the math, which a search over
+*benign* keys must not guess. Extending the search to norm kind (RMS or LayerNorm with the `layer_norm_eps` key), activation aliases and
+router keys would reach the next layer of families (about 15 of the census's `layer_norm_eps` and activation-alias refusals), at the cost
+of a larger candidate space; the verification step (float reference against HF to 1e-4 on the fixture the registrant must produce anyway)
+is what makes that safe. It is data and a harness, not new protocol.
 
 ## 7. Reproducing
 
@@ -595,12 +605,36 @@ python3 misaka-palw-tir-lower/tools/corpus/report.py report.json --md docs/desig
 ```
 
 `PALW_CORPUS_ONLY=id,id` restricts the run, `PALW_CORPUS_FIXTURES` and `PALW_CORPUS_ADAPTERS` redirect the heavy
-fixtures and the adapter directory (used to verify a feature request with a patched copy of a checkpoint).
+fixtures and the adapter directory (used to verify a feature request with a patched copy of a checkpoint),
+`PALW_CORPUS_STANDARD=<file>` reads Level A with a candidate template instead of the built-in one, and `PALW_CORPUS_NO_SYNTH`
+switches the convention search off.
+
+The census (guarded: meta-device sizing first, one family per subprocess, RSS 4 GB, two threads):
+
+```bash
+cd misaka-palw-tir-lower/tools/corpus
+export HF_HUB_OFFLINE=1 OMP_NUM_THREADS=2
+~/Downloads/MISAKA-wt-b/tir-venv/bin/python census_def.py probe > census_probe.jsonl   # which families derive a tiny model
+~/Downloads/MISAKA-wt-b/tir-venv/bin/python census_def.py reprobe [id ...]              # re-run the ones with overrides
+~/Downloads/MISAKA-wt-b/tir-venv/bin/python census_def.py manifest                      # census_v2.json
+~/Downloads/MISAKA-wt-b/tir-venv/bin/python gen_fixtures.py --entries census_v2.json --out ~/Downloads/MISAKA-wt-b/corpus-fixtures-census --specs --specs-dir census-specs
+C=$PWD  # then, from the repository root, one cargo command at a time:
+PALW_CORPUS_MANIFEST=$C/census_v2.json PALW_CORPUS_SPECS=$C/census-specs PALW_CORPUS_FIXTURES=~/Downloads/MISAKA-wt-b/corpus-fixtures-census \
+  PALW_CORPUS_ADAPTERS=$C/census-adapters PALW_CORPUS_REPORT=$C/census_report.json \
+  cargo test -p misaka-palw-tir-lower --test corpus_v2 corpus_v2_full -- --ignored --nocapture
+python3 report.py report.json --md ../../../docs/design/palw/tir/corpus-v2.md --census census_report.json
+```
 
 ## 8. Open
 
-* Storage formats (GPTQ/AWQ/GGUF/FP8/MXFP4 exist as descriptors; bitsandbytes, MLX, EXL2, HQQ, compressed-tensors,
-  torchao are not) as a second corpus.
+* **Census adapters not yet written** (about ten decoder families expected to hold, §4.6) and the families the census cannot build
+  (10 without an automatic tiny config, 18 excluded): the next batch, in the order of hub usage.
+* Storage formats (GPTQ/AWQ/GGUF/FP8/MXFP4 exist as descriptors; bitsandbytes, MLX, EXL2, HQQ, compressed-tensors, torchao are not)
+  as a second corpus, with test vectors per format.
 * LoRA/PEFT adapters (candidate = parent + adapter) as a third axis: `lora.rs` exists; not part of the 100.
-* The encoder–decoder and vision routes are probed to a lowered, admitted program only; their fidelity records are
-  in `hf-coverage.md` §13, §17.
+* The encoder–decoder and vision routes are probed to a lowered, admitted program only; their fidelity records are in
+  `hf-coverage.md` §13, §17. The five research passes (`feature-requests.md`) are analysis, not runs: their sizes are the research's
+  own arithmetic, with a short list of cheapest checks at the end of FR-22.
+* Decisions for lane G: priority of the routes FR-17/18/19 (the largest block of Level C by entries and by hub weight) and of
+  FR-01 (weights as data); the refusal-override policy (FR-25, two instances); the labelling of Level A as *unconfirmed* unless a
+  fixture check passed (FR-26); whether the convention search is wanted as a tool of the onboarding pipeline.
