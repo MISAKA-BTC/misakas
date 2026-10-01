@@ -500,13 +500,33 @@ pub fn palw_gen_leaf_path_v1(leaves: &[Hash64], index: usize) -> Option<Vec<Hash
     if index >= leaves.len() {
         return None;
     }
-    let (mut path, mut level, mut i) = (Vec::new(), leaves.to_vec(), index);
-    while level.len() > 1 {
+    palw_gen_path_in_levels_v1(&palw_gen_leaf_levels_v1(leaves), index)
+}
+
+/// **Every level of a stage's leaf tree** (level 0 the leaves, the last level the root; an odd node is promoted): built ONCE, so
+/// the paths of the many leaves a close opens are each read in `O(depth)` — [`palw_gen_leaf_path_v1`] rebuilt the whole tree per
+/// leaf, which made a close that opens every prior leaf quadratic.
+pub fn palw_gen_leaf_levels_v1(leaves: &[Hash64]) -> Vec<Vec<Hash64>> {
+    let mut levels = vec![leaves.to_vec()];
+    while levels.last().is_some_and(|l| l.len() > 1) {
+        let level = levels.last().expect("a level");
+        let next: Vec<Hash64> = level.chunks(2).map(|p| if p.len() == 2 { node_hash(&p[0], &p[1]) } else { p[0] }).collect();
+        levels.push(next);
+    }
+    levels
+}
+
+/// The path of leaf `index` in prebuilt `levels` ([`palw_gen_leaf_levels_v1`]): the sibling at each level where it exists.
+pub fn palw_gen_path_in_levels_v1(levels: &[Vec<Hash64>], index: usize) -> Option<Vec<Hash64>> {
+    if levels.first().is_none_or(|l| index >= l.len()) {
+        return None;
+    }
+    let (mut path, mut i) = (Vec::new(), index);
+    for level in &levels[..levels.len() - 1] {
         let sibling = i ^ 1;
         if sibling < level.len() {
             path.push(level[sibling]);
         }
-        level = level.chunks(2).map(|p| if p.len() == 2 { node_hash(&p[0], &p[1]) } else { p[0] }).collect();
         i /= 2;
     }
     Some(path)
@@ -539,4 +559,37 @@ pub fn palw_gen_verify_leaf_v1(space: &PalwGenStageSpaceV1, stage_root: &Hash64,
     used == leaf.path.len()
         && keyed64(PALW_GEN_STAGE_ROOT_DOMAIN_V1, &[&[space.stage], &(space.leaves.len() as u64).to_le_bytes(), h.as_byte_slice()])
             == *stage_root
+}
+
+#[cfg(test)]
+mod level_path_tests {
+    use super::*;
+
+    /// The path as it was computed before the levels were shared: the whole tree rebuilt for the one leaf.
+    fn path_by_rebuilding(leaves: &[Hash64], index: usize) -> Vec<Hash64> {
+        let (mut path, mut level, mut i) = (Vec::new(), leaves.to_vec(), index);
+        while level.len() > 1 {
+            let sibling = i ^ 1;
+            if sibling < level.len() {
+                path.push(level[sibling]);
+            }
+            level = level.chunks(2).map(|p| if p.len() == 2 { node_hash(&p[0], &p[1]) } else { p[0] }).collect();
+            i /= 2;
+        }
+        path
+    }
+
+    #[test]
+    fn shared_levels_give_the_paths_the_rebuilt_tree_gave_at_every_size() {
+        for n in [1usize, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 33] {
+            let leaves: Vec<Hash64> = (0..n).map(|i| Hash64::from_bytes([i as u8 + 1; 64])).collect();
+            let levels = palw_gen_leaf_levels_v1(&leaves);
+            for i in 0..n {
+                assert_eq!(palw_gen_path_in_levels_v1(&levels, i).unwrap(), path_by_rebuilding(&leaves, i), "n = {n}, leaf {i}");
+                assert_eq!(palw_gen_leaf_path_v1(&leaves, i).unwrap(), path_by_rebuilding(&leaves, i));
+            }
+            assert_eq!(palw_gen_path_in_levels_v1(&levels, n), None);
+        }
+        assert_eq!(palw_gen_path_in_levels_v1(&palw_gen_leaf_levels_v1(&[]), 0), None);
+    }
 }
