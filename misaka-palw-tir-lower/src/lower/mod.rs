@@ -88,11 +88,23 @@ pub struct LowerOpts {
     /// Pre-quantised projections (GPTQ, AWQ), by HL param: lowered from the stored integers
     /// (`qlinear`), not re-quantised. [`crate::weights::quant_layouts`] of the binding.
     pub quant: BTreeMap<u32, crate::prequant::QLayout>,
+    /// **How coarsely an activation table is indexed**: the input code `c` is looked up at `(c + 32768) >> table_shift` in a table of
+    /// `65536 >> table_shift` entries, each the function at the midpoint of the `2^table_shift` codes it stands for. `0` (the default)
+    /// is the full `i16` domain, a 128 KiB table. A pipeline class prices a close at every distinct artifact piece a tile's lookups can
+    /// touch — an executor's activations can land in all of them (PALW-GEN-20) — and a piece is 32 KiB: a class that must be
+    /// convictable in one carrier needs a table of at most two pieces (`1`), or no table.
+    pub table_shift: u8,
 }
 
 impl Default for LowerOpts {
     fn default() -> Self {
-        Self { history_bound: tir::program::HISTORY_BOUND_V1_SMALL, max_window: None, image_rows: None, quant: BTreeMap::new() }
+        Self {
+            history_bound: tir::program::HISTORY_BOUND_V1_SMALL,
+            max_window: None,
+            image_rows: None,
+            quant: BTreeMap::new(),
+            table_shift: 0,
+        }
     }
 }
 
@@ -336,6 +348,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         image_cursor_layer: None,
         split_max_readers: usize::MAX,
         quant: opts.quant.clone(),
+        table_shift: opts.table_shift,
         carry_keys: BTreeMap::new(),
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
@@ -480,6 +493,8 @@ struct Cx<'h> {
     split_max_readers: usize,
     /// [`LowerOpts::quant`].
     quant: BTreeMap<u32, crate::prequant::QLayout>,
+    /// [`LowerOpts::table_shift`].
+    table_shift: u8,
     /// The scale of each carry past the residual (a KV slot's rows), fixed by the one layer that
     /// fills it ([`carry_out`]).
     carry_keys: BTreeMap<usize, ScaleKey>,
@@ -2295,25 +2310,39 @@ fn lower_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize,
     names.extend(lb.rope_sites[i].iter().cloned());
     let out_key = ScaleKey::site(names, false);
     let (kx, ko) = (x.key.clone(), out_key.clone());
+    let shift = cx.table_shift.min(8) as u32;
+    let entries = 65536usize >> shift;
     let t = decl(
         b,
         cx,
         lb,
         &format!("{site}.table"),
         DType::I16,
-        &[65536],
+        &[entries],
         per_layer(lb),
         Arc::new(move |c| {
             let (sx, so) = (c.scale(&kx)?, c.scale(&ko)?);
+            // Entry `i` stands for the codes `i·2^shift ..= i·2^shift + 2^shift − 1`: the function at their midpoint.
+            let width = (1i64 << shift) as f64;
             Ok(IntTensor::i16(
-                vec![65536],
-                (0..65536i64).map(|i| (f.eval((i - 32768) as f64 * sx) / so).round().clamp(-32767.0, 32767.0) as i16).collect(),
+                vec![entries],
+                (0..entries as i64)
+                    .map(|i| {
+                        let mid = i as f64 * width + (width - 1.0) / 2.0 - 32768.0;
+                        (f.eval(mid * sx) / so).round().clamp(-32767.0, 32767.0) as i16
+                    })
+                    .collect(),
             ))
         }),
     )?;
-    // `code + 32768` straight into `idx` (every i16 code lands in [0, 65535]).
+    // `(code + 32768) >> shift` into `idx` (every i16 code lands in [0, 65535 >> shift]).
     let off = b.c(DType::I32, 32768);
-    let at = b.add(x.r, off, DType::Idx);
+    let at = if shift == 0 {
+        b.add(x.r, off, DType::Idx)
+    } else {
+        let biased = b.add(x.r, off, DType::I32);
+        b.shr(biased, shift, Rounding::Floor, DType::Idx)
+    };
     let r = b.gather(t, at, 0, 0);
     b.commit(r);
     Ok(Val { r, dt: DType::I16, key: out_key, len: x.len, site: site.to_string() })
