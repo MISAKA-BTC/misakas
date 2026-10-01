@@ -57,6 +57,7 @@ pub mod calib;
 pub mod cfg;
 pub mod convert;
 pub mod detmath;
+pub mod diffusion;
 pub mod encoder;
 /// RFC-0003 step 7: a bidirectional encoder as the pieces of a registered Embedding class.
 pub mod embedding;
