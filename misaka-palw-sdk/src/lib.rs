@@ -38,6 +38,9 @@ pub mod check_architecture;
 pub mod improve;
 /// RFC-0004's evaluation executor (A10): an evaluation job run as its RFC-0003 pipeline.
 pub mod improve_eval;
+/// RFC-0004's objects (A10), built and signed offline: policy, hard cases, setter sets, datasets, teaching
+/// artifacts, licences, candidates, rollbacks — what `palw-class improve …` writes.
+pub mod improve_objects;
 pub mod class_manifest;
 pub mod conformance;
 pub mod lineage;

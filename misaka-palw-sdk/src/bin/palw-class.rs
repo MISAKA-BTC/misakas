@@ -45,6 +45,25 @@ USAGE:
     palw-class close-sizes --network <id> [--anchor <hex>] [--json] <artifact-path>
     palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
                          [--logits-scheme tiled|flat] [--logits-tile N] [--model-id <model-id>] <lowered.palwtir>
+    palw-class improve <policy|hard-case|opt-in|setter-set|dataset|artifact|licence|candidate|rollback>
+                         --network <id> [--drill-salt <hex>] --key-file <ml-dsa-87 seed> [--bond <txid:index>]
+                         [--spec <json>] [--parent <parent.palwtir> --section <candidate.palwtirs> | --artifact <candidate.palwtir>]
+                         [--commitment-tx <fp-commitment-tx.borsh>] --out <path>
+
+
+`improve` (RFC-0004, A10) builds and signs the Model Improvement Protocol's objects offline, as
+`misaka palw tir-registration` and `certify` do — the carrier that funds and submits one is
+`misaka palw submit-object --object <out>`. Each takes a JSON spec (ids are 128 hex characters, token ids
+arrays) and writes the signed object to --out, naming every id it derived (a case's id, a set's, a
+dataset's, a candidate's class): `policy` {line, sequence, opt_out?, policy: {…overrides of the example…}}
+(tag 70, the line owner's key); `hard-case` {line, domain, prompt, reference?, source?} (71, a bond's key,
+the key and its salt written to <out>.key.json); `opt-in` --commitment-tx (72, the job's committer's key);
+`setter-set` {line, epoch, prompts, keys, salt?} (73, with the two reveals as <out>.prompts (74) and
+<out>.keys (75)); `dataset` (76); `artifact` (77, with the reveal as <out>.reveal (78)); `licence` {model_family,
+domains, uses, per_use_fee, expiry_daa} (79, the rights holder's own key); `candidate` {line, epoch,
+declarations} over --parent and --section (a composite) or --artifact (full weights) (80); `rollback` {line,
+epoch, to_class, cause} (81). --drill-salt names a salted testnet-12 drill's genesis, whose domain the
+signatures bind.
 
 `drill-leaves` (RFC-0002 Phase F, drill D-F2) prints, for an IR class's attempt job — its canonical
 prefill, --decode tokens (1 where the network draws one forward, the default; 2 otherwise) — the first
@@ -285,6 +304,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 false => std::process::exit(2),
             }
         }
+        "improve" => improve(&mut args, network.as_deref()),
         "composite" => {
             let parent = take_flag(&mut args, "--parent").ok_or(USAGE)?;
             let parent_class = match take_flag(&mut args, "--parent-class") {
@@ -480,6 +500,178 @@ fn lora_budget(
 
 /// `composite`: a LoRA candidate's container checked against its parent's, its sections rooted, and
 /// (with `out`) written again with the record in its provenance.
+/// **`improve <kind>`** (RFC-0004, A10): build and sign one of the Model Improvement Protocol's objects.
+fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> {
+    use kaspa_consensus_core::palw_improve_artifact_v1::PalwTirArtifactRefV1;
+    use kaspa_consensus_core::palw_improve_state_v1::PalwLineageRollbackV1;
+    use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+    use misaka_palw_sdk::improve_objects::{self as obj, PalwImproveSignerV1, spec};
+    let kind = if args.is_empty() { return Err(USAGE.to_string()) } else { args.remove(0) };
+    let network_id: NetworkId = network.ok_or(USAGE)?.parse().map_err(|e| format!("--network: {e}"))?;
+    let drill = match take_flag(args, "--drill-salt") {
+        Some(hex) => Some(kaspa_consensus_core::config::drill::PalwDrillSaltV1::from_hex(&hex).map_err(|e| format!("--drill-salt: {e}"))?),
+        None => None,
+    };
+    let params = kaspa_consensus_core::config::drill::palw_chain_params_v1(network_id, drill.as_ref())?;
+    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(params.net.to_string().as_bytes(), Some(params.genesis.hash));
+    let key_file = take_flag(args, "--key-file").ok_or("--key-file <ml-dsa-87 seed> is required")?;
+    let seed = kaspa_pq_validator_core::load_validator_seed(&key_file)?;
+    let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+    let signer = PalwImproveSignerV1 { key: &key, network_domain: domain };
+    let out = PathBuf::from(take_flag(args, "--out").ok_or("--out <path> is required")?);
+    let bond = match take_flag(args, "--bond") {
+        Some(b) => Some(spec::bond(&b)?),
+        None => None,
+    };
+    let need_bond = || bond.ok_or_else(|| "--bond <txid:index> is required for this object".to_string());
+    let spec_json = |args: &mut Vec<String>| -> Result<serde_json::Value, String> {
+        let path = take_flag(args, "--spec").ok_or("--spec <json> is required")?;
+        serde_json::from_slice(&std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?).map_err(|e| format!("{path}: {e}"))
+    };
+    let write = |path: &std::path::Path, object: &PalwConsensusObjectV2, what: &str| -> Result<(), String> {
+        let bytes = borsh::to_vec(object).map_err(|e| e.to_string())?;
+        std::fs::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        println!("wrote {} ({} bytes): {what}", path.display(), bytes.len());
+        Ok(())
+    };
+    let side = |suffix: &str| -> PathBuf {
+        let mut name = out.clone().into_os_string();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    match kind.as_str() {
+        "policy" => {
+            let v = spec_json(args)?;
+            let line = spec::hash(v.get("line").and_then(|l| l.as_str()).ok_or("the spec has no `line`")?)?;
+            let sequence = v.get("sequence").and_then(|s| s.as_u64()).ok_or("the spec has no `sequence`")?;
+            let opt_out = v.get("opt_out").and_then(|o| o.as_bool()).unwrap_or(false);
+            let policy = if opt_out { None } else { Some(spec::policy(v.get("policy").unwrap_or(&serde_json::Value::Null))?) };
+            if let Some(p) = &policy {
+                let ceilings = match params.palw_improvement_v1 {
+                    Some(f) => f.ceilings,
+                    None => kaspa_consensus_core::palw_improve_v1::PALW_DRILL_IMPROVE_CEILINGS_V1,
+                };
+                kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_policy_check_v1(p, &ceilings)
+                    .map_err(|why| format!("the policy would be refused: {why}"))?;
+                println!("policy check      ok under {} ceilings", if params.palw_improvement_v1.is_some() { "the network's" } else { "the drill's" });
+                println!("policy digest     {}", kaspa_consensus_core::palw_improve_state_v1::palw_improvement_policy_digest_v1(p));
+                println!("epoch length L_e  {} DAA", kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_epoch_length_v1(&p.windows));
+            }
+            write(&out, &signer.policy(line, sequence, policy), "ModelLineImprovementPolicySet (tag 70)")
+        }
+        "hard-case" => {
+            let v = spec_json(args)?;
+            let (case, opened) = spec::hard_case(&v)?;
+            println!("case id           {}", case.case_id);
+            if let Some((key, salt)) = opened {
+                std::fs::write(side(".key.json"), serde_json::json!({ "case_id": case.case_id.to_string(), "key": key, "salt": salt.to_string() }).to_string())
+                    .map_err(|e| e.to_string())?;
+                println!("key and salt      {}", side(".key.json").display());
+            }
+            write(&out, &signer.hard_case(need_bond()?, case), "HardCaseSubmitted (tag 71)")
+        }
+        "opt-in" => {
+            let tx_path = take_flag(args, "--commitment-tx").ok_or("--commitment-tx <fp-commitment-tx.borsh> is required")?;
+            let tx: kaspa_consensus_core::tx::Transaction =
+                borsh::from_slice(&std::fs::read(&tx_path).map_err(|e| format!("{tx_path}: {e}"))?).map_err(|e| format!("{tx_path}: {e}"))?;
+            let payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 =
+                borsh::from_slice(&tx.payload).map_err(|e| format!("{tx_path}: the payload is not a free-prompt commitment: {e}"))?;
+            let facts = kaspa_consensus_core::palw_improve_material_v1::PalwFpJobFactsV1::of_commitment(&payload.commitment);
+            let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&payload.commitment);
+            let committer = PalwBondKeyV2(payload.commitment.job.executor_bond);
+            println!("claim             {claim}\njob pin           {}", facts.pin());
+            let optin = kaspa_consensus_core::palw_improve_material_v1::PalwDataUseOptInV1 { job_pin: facts.pin(), claim, job: facts };
+            write(&out, &signer.data_use_opt_in(committer, optin), "DataUseOptIn (tag 72)")
+        }
+        "setter-set" => {
+            let v = spec_json(args)?;
+            let (set, salt) = spec::setter_set(&v)?;
+            println!("set id            {}\nitems             {}\nsalt              {salt}", set.commitment.set_id, set.commitment.items);
+            write(&side(".prompts"), &obj::improve_setter_prompts_object_v1(set.prompts), "SetterSetRevealed (tag 74): the prompts")?;
+            write(&side(".keys"), &obj::improve_setter_keys_object_v1(set.keys), "SetterKeysRevealed (tag 75): the keys")?;
+            write(&out, &signer.setter_set(need_bond()?, set.commitment), "SetterSetCommitted (tag 73)")
+        }
+        "dataset" => {
+            let dataset = spec::dataset(&spec_json(args)?)?;
+            println!("dataset id        {}", dataset.dataset_id);
+            write(&out, &signer.dataset(need_bond()?, dataset), "DatasetRegistered (tag 76)")
+        }
+        "artifact" => {
+            let artifact = spec::teaching_artifact(&spec_json(args)?)?;
+            let commit = obj::improve_teaching_commit_v1(&artifact);
+            println!("commitment        {}\nsalt              {}", commit.commit, artifact.salt);
+            write(&side(".reveal"), &obj::improve_artifact_reveal_object_v1(artifact), "TeachingArtifactRevealed (tag 78)")?;
+            write(&out, &signer.teaching_artifact(need_bond()?, commit), "TeachingArtifactCommitted (tag 77)")
+        }
+        "licence" => {
+            let v = spec_json(args)?;
+            let domains: Vec<u16> = match v.get("domains") {
+                Some(d) => d
+                    .as_array()
+                    .ok_or("`domains` is not an array")?
+                    .iter()
+                    .map(|x| x.as_u64().and_then(|x| u16::try_from(x).ok()).ok_or("a domain is not a u16"))
+                    .collect::<Result<_, _>>()?,
+                None => Vec::new(),
+            };
+            let licence = obj::improve_licence_v1(
+                key.public_key().to_vec(),
+                spec::hash(v.get("model_family").and_then(|m| m.as_str()).ok_or("the spec has no `model_family`")?)?,
+                domains,
+                v.get("uses").and_then(|u| u.as_u64()).unwrap_or(1) as u8,
+                v.get("per_use_fee").and_then(|f| f.as_u64()).unwrap_or(0),
+                v.get("expiry_daa").and_then(|e| e.as_u64()).ok_or("the spec has no `expiry_daa`")?,
+            );
+            println!("licence id        {}", licence.licence_id);
+            write(&out, &signer.licence(licence)?, "TeacherLicenceRegistered (tag 79)")
+        }
+        "candidate" => {
+            let v = spec_json(args)?;
+            let line = spec::hash(v.get("line").and_then(|l| l.as_str()).ok_or("the spec has no `line`")?)?;
+            let epoch = v.get("epoch").and_then(|e| e.as_u64()).ok_or("the spec has no `epoch`")?;
+            let declarations = spec::declarations(v.get("declarations").unwrap_or(&serde_json::Value::Null))?;
+            let parent = take_flag(args, "--parent");
+            let section = take_flag(args, "--section");
+            let full = take_flag(args, "--artifact");
+            let (class_id, artifact, layout) = match (parent, section, full) {
+                (Some(parent), Some(section), None) => {
+                    let lineage = misaka_palw_sdk::lineages::tir::TirLineageV1::new();
+                    use misaka_palw_sdk::PalwModelLineageV1;
+                    lineage
+                        .load(std::path::Path::new(&parent), misaka_palw_sdk::PalwWeightResidencyV1::PageCache)
+                        .map_err(|e| format!("{parent}: {e}"))?;
+                    let entry = lineage.open_composite_entry(std::path::Path::new(&section))?;
+                    let r = *entry.artifact.composite_ref().ok_or("the section opened as a single artifact")?;
+                    (
+                        entry.class_id(),
+                        PalwTirArtifactRefV1::Composite { parent_class: r.parent_class, parent_root: r.parent_root, adapter_root: r.adapter_root, p: r.p },
+                        entry.class.layout.clone(),
+                    )
+                }
+                (None, None, Some(full)) => {
+                    let entry = misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(std::path::Path::new(&full))?;
+                    (entry.class_id(), PalwTirArtifactRefV1::Single { root: entry.artifact_root }, entry.class.layout.clone())
+                }
+                _ => return Err("a candidate is --parent <parent.palwtir> --section <candidate.palwtirs> (a composite) or --artifact <candidate.palwtir> (full weights)".into()),
+            };
+            println!("candidate class   {class_id}");
+            let payload = obj::improve_candidate_v1(line, epoch, class_id, artifact, layout, declarations);
+            write(&out, &signer.candidate(need_bond()?, payload), "CandidateSubmitted (tag 80)")
+        }
+        "rollback" => {
+            let v = spec_json(args)?;
+            let payload = PalwLineageRollbackV1 {
+                line_id: spec::hash(v.get("line").and_then(|l| l.as_str()).ok_or("the spec has no `line`")?)?,
+                epoch: v.get("epoch").and_then(|e| e.as_u64()).ok_or("the spec has no `epoch`")?,
+                to_class: spec::hash(v.get("to_class").and_then(|c| c.as_str()).ok_or("the spec has no `to_class`")?)?,
+                cause: spec::rollback_cause(v.get("cause").ok_or("the spec has no `cause`")?)?,
+            };
+            write(&out, &signer.rollback(need_bond()?, payload), "LineageHeadRolledBack (tag 81)")
+        }
+        other => Err(format!("unknown improve kind {other:?}\n\n{USAGE}")),
+    }
+}
+
 fn composite(
     parent: &std::path::Path,
     parent_class: Option<Hash64>,
