@@ -4,8 +4,10 @@
 #         evaluation claims → the keys' reveal → scoring → promotion over the sign test → the rewards, and their vesting;
 #   D-M2  a candidate that must not win (it breaks what the parent passes; and a winner held to one setter's half of the draw)
 #         → NoChange, every bond refunded;
-#   D-M3  the court battery on evaluation claims (a planted wrong output or score convicted, honest claims survive) —
-#         NOT RUNNABLE until the evaluation court exists (see `plan`);
+#   D-M3  the court battery on evaluation claims: two executors each commit one self-consistent lie on line T (a moved step leaf,
+#         a moved first id), a challenger replays every claim, locates each lie from the accused's capture and files the court
+#         proof; the lies are convicted (claim voided, bond slashed) and the honest claims survive — runs once the build under
+#         test carries the evaluation court (spec 17 court proofs 13-15), else the verdict stays INCOMPLETE at "not convicted";
 #   D-M4  rollback: by the owner within rollback_epochs (W2), and by proof — the next epoch's regression check showing the
 #         predecessor beats the promoted head (W1's second epoch);
 #   D-M5  the fence crossing on the shipping binary: an improvement object below the fence dropped by name (new) / skipped (old),
@@ -15,7 +17,7 @@
 #
 #   bash audit-improve/dm.sh <command> --bin-dir <release dir>       (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
 #     OLD_KASPAD_BIN=<the release before the fence>  [WORK_DIR=~/.misaka-palw-improve-drill]
-#   commands: dry | plan | model | keys | up | status | verdicts | once | selftest | down
+#   commands: dry | plan | model | composites | keys | up | status | verdicts | once | selftest | down
 #
 #   dry       preflight (binaries, flags, tools, model files, ports, memory, disk, another drill) and the plan with every node's
 #             argv (salt redacted, a throwaway keyring) — and every object the drill builds, built offline with a throwaway key
@@ -24,6 +26,8 @@
 #   model     OFFLINE: the head class H (byte-identical to D-F's small class), the synthetic exact-match pools, a LoRA adapter that
 #             wins, one that loses, their merges into full-weight candidate classes, the composite of the winner, and the check
 #             with the integer executor that each does what it was made to do (palw-class improve eval)
+#   composites  OFFLINE: the composite candidate classes (winc, losec: parent + PALWTIRS adapter section) from the adapters `model` trained, and
+#             the same check with the integer executor (no training, no torch; `model` does it too)
 #   keys      write the drill keyring with the shipping kaspad (up does it too)
 #   up        salt (0600, never printed), keyring, every node (clocks first, the old relay last), the driver
 #   status    nodes, DAA, the verdicts so far
@@ -52,9 +56,9 @@ note() { echo "  note $*"; }
 # the plan
 # ---------------------------------------------------------------------------------------------------------------------
 plan() {
-    python3 - "$A/drill.json" "$FENCE_AT" "$FENCE2_AT" "$FENCE3_AT" "$TIR_AT" "$TIR2_AT" "$GEN_AT" "$DECODE_AT" "$IMPROVE_AT" <<'PY'
+    python3 - "$A/drill.json" "$FENCE_AT" "$FENCE2_AT" "$FENCE3_AT" "$TIR_AT" "$TIR2_AT" "$GEN_AT" "$DECODE_AT" "$IMPROVE_AT" "$CAND_FORM" <<'PY'
 import json, sys
-p = json.load(open(sys.argv[1])); f = list(map(int, sys.argv[2:]))
+p = json.load(open(sys.argv[1])); f = list(map(int, sys.argv[2:10]))
 w = p["policy"]["windows"]; le = sum(w[k] for k in ("w_collect", "w_submit", "w_holdout", "w_eval", "court_margin")); g = w["grid"]
 H = lambda daa: f"{daa / 27.7:5.1f} h"
 print(f"== plan (one chain; ~133 s per DAA = 27.7 DAA/h, measured on D-F's chain)")
@@ -62,17 +66,23 @@ print(f"  fences  flag days {f[0]}/{f[1]}/{f[2]}, IR {f[3]}, IR-2 {f[4]}, genera
 print(f"  epoch   grid {g}, L_e = {le} DAA = {H(le)}  (collect {w['w_collect']}, submit {w['w_submit']}, hold-out {w['w_holdout']}, eval {w['w_eval']}, court margin {w['court_margin']}; beacon {w['beacon_delay']})")
 print(f"          the court margin is the claims' time to Final: a claim is licensed in a few tens of DAA and Final 120 DAA after its licence")
 print(f"          (the short challenge window), ~150-170 DAA from the claim; a shorter margin leaves the last claims missing, which count for the incumbent")
-print( "  lines   W1 (H's founding line, owner seat 4), W2 and L (founded by seat 7 on H): all three open at the same boundary")
-print( "  who     seat 7 = the drills' own bond (no node): setter, candidates, registrant, owner of W2 and L; seat 3 a second setter and the dataset contributor;")
+print( "  lines   W1 (H's founding line, owner seat 4), W2, L and T (founded by seat 7 on H): all four open at the same boundary")
+print( "  who     seat 7 = the drills' own bond (no node): setter, candidates, registrant, owner of W2, L and T; seat 3 a second setter and the dataset contributor;")
 print( "          new4 registers and produces H; new5 and new6 evaluate; new6 also produces W (the usage of W1 once W heads it); the old relay peers new0")
+print( "  D-M3    on line T new5 commits one moved step leaf and new6 one moved first id (--palw-drill-tamper-eval, drill chains only); new1 (--palw-challenge) replays")
+print( "          every claim, locates each lie from the shared capture dir and files the evaluation court's proof: the claims void, the bonds are slashed")
 t_open = g
 t_fix = t_open + w["w_collect"]; t_close = t_fix + w["w_submit"]; t_draw = t_close + w["w_holdout"]; t_ev = t_draw + w["w_eval"]; t_score = t_ev + w["court_margin"]
-print(f"  DAA     {f[3]:>5}  IR fence: new4 registers H;  seat 7 registers win, lose, winc (CAND_FORM=full: win/lose are full-weight classes)")
-print(f"          {f[7]:>5}  improvement fence; seat 7 founds W2 and L; the three policies (opt-in); the material (a dataset, a hard case)")
-print(f"          ~{f[3] + 72:>4}  H and the candidates reach Probation (D-F's small class: 71 DAA from registration, jury and readiness)")
+print(f"  DAA     {f[3]:>5}  IR fence: new4 registers H;  seat 7 registers the candidate classes: composites winc/losec over H, and the full-weight `win` as the extra (CAND_FORM={sys.argv[10]})")
+print(f"          {f[7]:>5}  improvement fence; seat 7 founds W2, L and T; the four policies (opt-in); the material (a dataset, a hard case)")
+print(f"          ~{f[3] + 72:>4}  H and the full-weight class reach Probation (D-F's small class: 71 DAA from registration, jury and readiness)")
 print(f"          ~{f[3] + 72 + 160:>4}  H's first Final claim — the usage that opens an epoch (needs the grid boundary {g} to be later: {'ok' if f[3] + 72 + 160 < g else 'TOO LATE'})")
-print(f"          {t_open:>5}  OPEN (epoch 1, all three lines)   {H(t_open)}")
+print(f"          {t_open:>5}  OPEN (epoch 1, all four lines)   {H(t_open)}")
 print(f"          {t_fix:>5}  Submission: candidates, setter sets   {t_close:>5} HoldOut   {t_draw:>5} Drawing   {t_draw + w['beacon_delay']:>5} Evaluating (draw): prompts revealed")
+if sys.argv[10] == "composite":
+    print(f"  timing  a composite candidate's possession proofs wait for its record (CandidateSubmitted, from {t_fix}): its jury sits at its class's own audit slot of the 100-DAA")
+    print(f"          period (up to ~100 DAA after the record) and Probation follows: {t_fix} + ~110 = ~{t_fix + 110} against Closing at {t_ev}. {'TIGHT: the worst slot leaves no time for claims — a w_submit of ~120 (grid and L_e follow) makes it certain' if t_fix + 110 >= t_ev - 20 else 'fits'};")
+    print( "          the driver logs each class's slot at registration (admission-audit slots)")
 print(f"          {t_ev:>5}  Closing: no more claims; every claim Final by ~{t_ev + 160}; the keys revealed; scoring")
 print(f"          ~{t_ev + 170:>4}  epoch 1 decided (latest {t_score}) {H(t_ev + 170)}: W1 and W2 promote `win`, L is NoChange; W2's owner rolls back")
 print(f"          ~{t_ev + 170 + le:>4}  the grants' first vesting unit (vest_epochs 1, unit L_e)   {H(t_ev + 170 + le)}")
@@ -80,17 +90,17 @@ nb = ((t_ev + 170) // g + 1) * g
 print(f"          {nb:>5}  L's epoch 2 (H's own claims keep its usage up): D-M6's hold-out flood in its HoldOut (~{nb + w['w_collect'] + w['w_submit'] + 1}), {H(nb + w['w_collect'] + w['w_submit'])}")
 print(f"          ~{nb + g:>4}  W1's epoch 2 (the regression check; `Previous` = H vs the promoted `win` on items W regresses) opens at the first boundary after W's")
 print(f"                 own claims are Final: ~{nb + g + le - 40}  it is decided  {H(nb + g + le - 40)}: the rollback by proof")
-print("  claims  3 lines x 8 items x (parent + candidates): ~56 evaluation claims in the 70-DAA window, one carrier per node per block")
+print("  claims  4 lines x 8 items x (parent + candidates): ~80 evaluation claims in the 70-DAA window, one carrier per node per block")
 PY
     cat <<'EOF'
 == what blocks, and what the drills stand in for
-  composite candidates  A composite class (parent + PALWTIRS adapter) cannot prove readiness: the V2 possession proof opens the
-                        registered artifact root with a multiproof over an inventory, and a composite's root is
-                        H(parent_class ‖ parent_root ‖ adapter_root ‖ P), which no inventory has. So no composite class can leave
-                        Candidate/Prefetching, and no evaluation claim of one is ever admitted (ClassNotAdmitting). The drills run
-                        their candidates as full-weight classes (the adapter merged: an ordinary IR class); `winc` (a composite) rides
-                        along on line L to be prefetched by the seats and to show the gap in the registry and the nodes' logs.
-  D-M3                  needs the court over evaluation claims; the seat's half (a replay that differs files nothing) is a unit test.
+  composite candidates  RFC-0004's own form (CAND_FORM=composite, the default): parent + PALWTIRS adapter. A seat fetches the adapter, proves
+                        possession of it as a multiproof under the chain's `adapter_root` record (spec 17 §17.7.1) and of the parent as the
+                        class of its own; the chain counts it ready for the composite only with both. Needs the core lane's composite
+                        readiness in the build under test; below it a composite class never leaves Candidate (ClassNotAdmitting) and the
+                        drill stops there: CAND_FORM=full runs the full-weight form (the adapter merged: an ordinary IR class).
+  D-M3                  the evaluation court: a lying executor (--palw-drill-tamper-eval) is replayed by a challenger (--palw-challenge) that
+                        finds where the lie is and files the court proof; the verdict reads the claim voided and the executor's bond slashed.
 EOF
 }
 
@@ -111,8 +121,8 @@ preflight() {
     if [ -x "${KASPAD_BIN:-/nonexistent}" ]; then
         H=$(bin_help "$KASPAD_BIN")
         local f
-        for f in --palw-drill-write-keyring --palw-improve-evaluate --palw-improve-artifact-dir --palw-class-artifact --palw-register-class \
-                 --palw-producer-class --palw-drill-genesis-salt; do
+        for f in --palw-drill-write-keyring --palw-improve-evaluate --palw-improve-artifact-dir --palw-improve-capture-dir --palw-drill-tamper-eval \
+                 --palw-challenge --palw-class-artifact --palw-register-class --palw-producer-class --palw-drill-genesis-salt; do
             grep -q -- "$f" <<<"$H" && ok "kaspad lists $f" || bad "kaspad lacks $f"
         done
         local name flag at dflag; dflag=${DECODE_FLAG:-$(detect_decode_flag "$H")}
@@ -124,6 +134,14 @@ preflight() {
         done < <(fence_rows)
         if grep -aqF "palw-improve-status" "$KASPAD_BIN"; then ok "kaspad writes the improvement status file (the drill's watcher reads it)"
         else bad "kaspad carries no improvement status file (no A10 node loop): not the build under test"; fi
+        if [ "$CAND_FORM" = composite ]; then
+            # The core lane's composite readiness (spec 17 §17.7.1) adds a parent clause to the ready-seat predicate; its reason string is in
+            # the binary. A build without it never lets a composite class leave Candidate: the drill would stop at the first candidate.
+            if grep -aqF "parent not ready" "$KASPAD_BIN"; then ok "kaspad carries the composite readiness's parent clause (CAND_FORM=composite)"
+            else note "no composite readiness in $KASPAD_BIN (no 'parent not ready' clause): a composite class would stay Candidate — CAND_FORM=full runs the full-weight form"; fi
+            if grep -aqF "chain holds no composite record" "$KASPAD_BIN"; then ok "kaspad proves a composite's possession over its adapter section (node half)"
+            else bad "kaspad lacks the node half of composite readiness (the possession proof over the adapter section)"; fi
+        fi
     fi
     if [ "${NO_OLD:-0}" != 1 ] && [ -n "$OLD_KASPAD_BIN" ] && [ -x "$OLD_KASPAD_BIN" ]; then
         local O lacks; O=$(bin_help "$OLD_KASPAD_BIN")
@@ -164,8 +182,14 @@ preflight() {
     for m in head.class.palwtir win.class.palwtir lose.class.palwtir pool-a.json pool-b.json pool-reg.json ids/head.class ids/win.class ids/lose.class; do
         [ -s "$MODEL_DIR/$m" ] || missing="$missing $m"
     done
-    if [ -z "$missing" ]; then ok "model files built: head $(model_id head | cut -c1-16)… win $(model_id win | cut -c1-16)… lose $(model_id lose | cut -c1-16)…"
-    else bad "model files missing:$missing — run \`dm.sh model\`"; fi
+    local c
+    if [ "$CAND_FORM" = composite ]; then
+        for c in winc losec; do
+            for m in $c.class.palwtir $c.palwtirs drop/$c.palwtirs ids/$c.class ids/$c.root; do [ -s "$MODEL_DIR/$m" ] || missing="$missing $m"; done
+        done
+    fi
+    if [ -z "$missing" ]; then ok "model files built (CAND_FORM=$CAND_FORM): head $(model_id head | cut -c1-16)… win=$(asset_of win) $(model_id "$(asset_of win)" | cut -c1-16)… lose=$(asset_of lose) $(model_id "$(asset_of lose)" | cut -c1-16)…"
+    else bad "model files missing:$missing — run \`dm.sh model\` (the composites alone: \`dm.sh composites\`)"; fi
     local n k base busy=""
     for n in $(all_nodes); do k=$(kof "$n"); for base in $P2P_BASE $BORSH_BASE $JSON_BASE $EVM_BASE; do
         lsof -nP -iTCP:$((base + k)) -sTCP:LISTEN >/dev/null 2>&1 && busy="$busy $((base + k))"; done; done
@@ -224,7 +248,7 @@ for name, l in plan["lines"].items():
     json.dump({"line": line, "sequence": 1, "policy": p}, open(f"{T}/policy-{name}.json", "w"))
 PY
     local name okc=1
-    for name in W1 W2 L; do
+    for name in W1 W2 L T; do
         if out=$("$TOOLS_BIN/palw-class" improve policy --network testnet-12 --drill-salt "$DM_SALT_DRY" --key-file "$T/seed" --bond "$bond" \
                  --spec "$T/policy-$name.json" --out "$T/policy-$name.obj" 2>&1) && grep -q "policy check      ok" <<<"$out"; then
             ok "policy $name passes the chain's own check ($(grep 'epoch length' <<<"$out" | tr -s ' '))"
@@ -244,22 +268,23 @@ PY
                  --bond "$bond" --spec "$T/set-$name.json" --out "$T/set-$name.obj" 2>&1); then ok "setter set from pool $name builds ($(grep 'set id' <<<"$out" | cut -c1-40)…)"
         else bad "setter set from pool $name: $(tail -1 <<<"$out")"; fi
     done
-    local cls
-    for cls in win lose; do
-        if [ -s "$MODEL_DIR/$cls.class.palwtir" ]; then
+    local cls asset
+    for cls in win lose extra; do
+        asset=$(asset_of "$cls")
+        if [ -s "$MODEL_DIR/$asset.palwtirs" ]; then   # a composite candidate: parent + section
             if out=$("$TOOLS_BIN/palw-class" improve candidate --network testnet-12 --drill-salt "$DM_SALT_DRY" --key-file "$T/seed" --bond "$bond" \
-                     --spec "$T/cand.json" --artifact "$MODEL_DIR/$cls.class.palwtir" --out "$T/cand-$cls.obj" 2>&1); then
-                [ "$(awk '/candidate class/ {print $3}' <<<"$out")" = "$(model_id "$cls")" ] && ok "candidate object over $cls names class $(model_id "$cls" | cut -c1-16)…" \
-                    || bad "candidate object over $cls names another class than ids/$cls.class"
-            else bad "candidate over $cls: $(tail -1 <<<"$out")"; fi
-        fi
+                     --spec "$T/cand.json" --parent "$MODEL_DIR/head.class.palwtir" --section "$MODEL_DIR/$asset.palwtirs" --out "$T/cand-$asset.obj" 2>&1); then
+                [ "$(awk '/candidate class/ {print $3}' <<<"$out")" = "$(model_id "$asset")" ] && ok "composite candidate $cls ($asset) names class $(model_id "$asset" | cut -c1-16)…" \
+                    || bad "composite candidate $cls ($asset) names another class than ids/$asset.class"
+            else bad "composite candidate $cls ($asset): $(tail -1 <<<"$out")"; fi
+        elif [ -s "$MODEL_DIR/$asset.class.palwtir" ]; then
+            if out=$("$TOOLS_BIN/palw-class" improve candidate --network testnet-12 --drill-salt "$DM_SALT_DRY" --key-file "$T/seed" --bond "$bond" \
+                     --spec "$T/cand.json" --artifact "$MODEL_DIR/$asset.class.palwtir" --out "$T/cand-$asset.obj" 2>&1); then
+                [ "$(awk '/candidate class/ {print $3}' <<<"$out")" = "$(model_id "$asset")" ] && ok "candidate object $cls ($asset) names class $(model_id "$asset" | cut -c1-16)…" \
+                    || bad "candidate object $cls ($asset) names another class than ids/$asset.class"
+            else bad "candidate $cls ($asset): $(tail -1 <<<"$out")"; fi
+        else bad "no model asset for the candidate $cls ($asset): run \`dm.sh model\` (or \`dm.sh composites\`)"; fi
     done
-    if [ -s "$MODEL_DIR/winc.palwtirs" ]; then
-        if out=$("$TOOLS_BIN/palw-class" improve candidate --network testnet-12 --drill-salt "$DM_SALT_DRY" --key-file "$T/seed" --bond "$bond" \
-                 --spec "$T/cand.json" --parent "$MODEL_DIR/head.class.palwtir" --section "$MODEL_DIR/winc.palwtirs" --out "$T/cand-winc.obj" 2>&1); then
-            ok "composite candidate over winc names class $(awk '/candidate class/ {print $3}' <<<"$out" | cut -c1-16)…"
-        else bad "composite candidate: $(tail -1 <<<"$out")"; fi
-    fi
     rm -rf "$T"
 }
 
@@ -292,6 +317,51 @@ PY
 # ---------------------------------------------------------------------------------------------------------------------
 eval_passes() {  # eval_passes <class|parent+section…> <items.json> → "passes items"
     python3 -c "import json,sys; d=json.load(sys.stdin); print(d['passes'], d['items'])"
+}
+
+# composite_candidate <name> — the LoRA adapter under $MODEL_DIR/adapters/<name> as a composite candidate class <name>c (RFC-0004 §6.3, the
+# candidate's own form): lowered over the head's calibration (palw-tir-fidelity --adapter), recorded as a composite of the head, declared
+# under the head's layout, its PALWTIRS section written and dropped where the seats prefetch it from (§6.7). Assets: <name>c.class.palwtir,
+# <name>c.palwtirs, ids/<name>c.class and ids/<name>c.root (the composite artifact root).
+composite_candidate() {
+    local name=$1 c=${1}c W=$MODEL_DIR/work PC=$TOOLS_BIN/palw-class PF=$TOOLS_BIN/palw-tir-fidelity PID
+    PID=$(model_id head)
+    [ -d "$MODEL_DIR/adapters/$name" ] && [ -s "$W/head-stats.json" ] && [ -n "$PID" ] || die "no adapter $name, head stats or head id under $MODEL_DIR (run dm.sh model)"
+    say "$c: the $name adapter as a composite candidate (a PALWTIRS section over the head)"
+    "$PF" "$FIXTURE" --adapter "$MODEL_DIR/adapters/$name" --parent-stats "$W/head-stats.json" --artifact-out "$W/$c.lowered.palwtir" > "$W/$c-fidelity.txt" 2>&1 \
+        || die "palw-tir-fidelity --adapter failed ($W/$c-fidelity.txt)"
+    "$PC" composite --parent "$MODEL_DIR/head.class.palwtir" --parent-class "$PID" --out "$W/$c.rec.palwtir" "$W/$c.lowered.palwtir" > "$W/$c-composite.txt"
+    "$PC" declare-layout --network testnet-12 --max-context "$HEAD_CONTEXT" --model-id "$HEAD_MODEL_ID/$c" --parent "$MODEL_DIR/head.class.palwtir" \
+        --out "$MODEL_DIR/$c.class.palwtir" "$W/$c.rec.palwtir" | tee "$W/$c-declare.txt" | grep -E "class id|ADMISSIBLE|REFUSED|artifact root"
+    grep -q ADMISSIBLE "$W/$c-declare.txt" || die "the composite class $c is not admissible"
+    awk '/class id/ {print $3}' "$W/$c-declare.txt" > "$MODEL_DIR/ids/$c.class"
+    awk '/artifact root/ {print $3}' "$W/$c-declare.txt" > "$MODEL_DIR/ids/$c.root"
+    "$PC" composite --parent "$MODEL_DIR/head.class.palwtir" --parent-class "$PID" --section-out "$MODEL_DIR/$c.palwtirs" "$MODEL_DIR/$c.class.palwtir" > /dev/null
+    mkdir -p "$MODEL_DIR/drop"; cp "$MODEL_DIR/$c.palwtirs" "$MODEL_DIR/drop/$c.palwtirs"
+}
+
+# composite_checks — the composite candidates do what they were made to do under the integer executor (the parent + the section, as a node
+# serves them): the winner wins pool A (the parent fails all of it), the regressing one fails pool B (the parent passes all of it).
+composite_checks() {
+    local PC=$TOOLS_BIN/palw-class r
+    r=$("$PC" improve eval --parent "$MODEL_DIR/head.class.palwtir" --section "$MODEL_DIR/winc.palwtirs" --items "$MODEL_DIR/pool-a.json" --max-new 3 | eval_passes)
+    say "winc on pool A: $r (at least 14 of 16 wanted: the sign test needs 7 of 8 items)"
+    [ "${r%% *}" -ge 14 ] || die "the composite winner does not pass pool A under the integer executor"
+    r=$("$PC" improve eval --parent "$MODEL_DIR/head.class.palwtir" --section "$MODEL_DIR/losec.palwtirs" --items "$MODEL_DIR/pool-b.json" --max-new 3 | eval_passes)
+    say "losec on pool B: $r (at most 2 of 16 wanted: it breaks what the parent passes)"
+    [ "${r%% *}" -le 2 ] || die "the composite regressing candidate passes items of pool B"
+}
+
+# composites — (re)build the composite candidate classes from the adapters already trained (no training, no torch): what the RFC's form needs.
+composites() {
+    [ -x "$TOOLS_BIN/palw-tir-fidelity" ] && [ -x "$TOOLS_BIN/palw-class" ] || die "palw-tir-fidelity / palw-class not found beside $TOOLS_BIN (BIN_DIR, TOOLS_BIN)"
+    [ -s "$MODEL_DIR/ids/head.class" ] || die "no model under $MODEL_DIR (run dm.sh model first)"
+    local name
+    for name in win lose; do
+        if [ -s "$MODEL_DIR/ids/${name}c.class" ] && [ -s "$MODEL_DIR/${name}c.palwtirs" ] && [ "$FORCE" != 1 ]; then say "${name}c exists (--force rebuilds it: another class id)"; continue; fi
+        composite_candidate "$name"
+    done
+    composite_checks
 }
 
 model() {
@@ -345,19 +415,9 @@ model() {
     [ "${r%% *}" = 0 ] || die "the regressing candidate passes items of pool B"
     r=$("$PC" improve eval --artifact "$MODEL_DIR/lose.class.palwtir" --items "$MODEL_DIR/pool-a.json" --max-new 3 | eval_passes); say "lose on pool A: $r (informational: the parent fails all of A)"
 
-    say "winc: the winner's adapter as a composite candidate (PALWTIRS section over the head), for the prefetch and the readiness gap"
-    local PID; PID=$(model_id head)
-    "$PF" "$FIXTURE" --adapter "$MODEL_DIR/adapters/win" --parent-stats "$W/head-stats.json" --artifact-out "$W/winc.lowered.palwtir" > "$W/winc-fidelity.txt" 2>&1 || die "palw-tir-fidelity --adapter failed ($W/winc-fidelity.txt)"
-    "$PC" composite --parent "$MODEL_DIR/head.class.palwtir" --parent-class "$PID" --out "$W/winc.rec.palwtir" "$W/winc.lowered.palwtir" > "$W/winc-composite.txt"
-    "$PC" declare-layout --network testnet-12 --max-context "$HEAD_CONTEXT" --model-id "$HEAD_MODEL_ID/winc" --parent "$MODEL_DIR/head.class.palwtir" \
-        --out "$MODEL_DIR/winc.class.palwtir" "$W/winc.rec.palwtir" | tee "$W/winc-declare.txt" | grep -E "class id|ADMISSIBLE|REFUSED|artifact root"
-    grep -q ADMISSIBLE "$W/winc-declare.txt" || die "the composite class is not admissible"
-    awk '/class id/ {print $3}' "$W/winc-declare.txt" > "$MODEL_DIR/ids/winc.class"
-    awk '/artifact root/ {print $3}' "$W/winc-declare.txt" > "$MODEL_DIR/ids/winc.root"
-    "$PC" composite --parent "$MODEL_DIR/head.class.palwtir" --parent-class "$PID" --section-out "$MODEL_DIR/winc.palwtirs" "$MODEL_DIR/winc.class.palwtir" > /dev/null
-    cp "$MODEL_DIR/winc.palwtirs" "$MODEL_DIR/drop/winc.palwtirs"
-    r=$("$PC" improve eval --parent "$MODEL_DIR/head.class.palwtir" --section "$MODEL_DIR/winc.palwtirs" --items "$MODEL_DIR/pool-a.json" --max-new 3 | eval_passes) || r="? ?"
-    say "winc on pool A: $r (informational)"
+    composite_candidate win
+    composite_candidate lose
+    composite_checks
 
     say "the regression pool (D-M4 by proof): prompts the head passes by construction and the winner fails"
     $MT items --out "$W/pool-c-raw.json" --n 64 --seed 41 --key-len 3 --key-alphabet 8 >/dev/null
@@ -376,8 +436,9 @@ PY
     python3 - "$MODEL_DIR" <<'PY'
 import json, os, sys
 m = sys.argv[1]
-rep = {k: open(f"{m}/ids/{k}.class").read().strip() for k in ("head", "win", "lose", "winc")}
-rep["roots"] = {k: open(f"{m}/ids/{k}.root").read().strip() for k in ("head", "win", "lose", "winc")}
+names = [k for k in ("head", "win", "lose", "winc", "losec") if os.path.exists(f"{m}/ids/{k}.class")]
+rep = {k: open(f"{m}/ids/{k}.class").read().strip() for k in names}
+rep["roots"] = {k: open(f"{m}/ids/{k}.root").read().strip() for k in names}
 rep["files"] = {f: os.path.getsize(f"{m}/{f}") for f in sorted(os.listdir(m)) if os.path.isfile(f"{m}/{f}")}
 json.dump(rep, open(f"{m}/report.json", "w"), indent=1)
 print("model report:", json.dumps({k: v[:16] for k, v in rep.items() if isinstance(v, str)}))
@@ -401,11 +462,31 @@ keys() {
     manifest "'genesis', m['genesis_hash'][:16], 'params', m['consensus_params_id'][:16], 'salt_id', m['salt_id']"
 }
 
+# D-M3's per-node flags (node_args reads $WORK_DIR/<node>/extra-args): every new node shares one capture directory — the evidence transport of a
+# drill on one machine, where an executor retains the capture of each claim it carries and a challenger reads the accused's — new5 and new6 each
+# lie once on line T (a moved step leaf, a moved first id; T's id is derived before the chain exists, dmdrive.py line-id), new1 is the challenger.
+dm3_args() {
+    local tid prefix n
+    tid=$(cd "$A" && export_env && python3 dmdrive.py line-id T) || die "cannot derive line T's id (is the model built, the keyring written?)"
+    [[ "$tid" =~ ^[0-9a-f]{128}$ ]] || die "line T's id is not a 128-hex id: '$tid'"
+    prefix=${tid:0:32}
+    mkdir -p "$WORK_DIR/captures"
+    for n in $(new_nodes); do
+        mkdir -p "$WORK_DIR/$n"
+        echo "--palw-improve-capture-dir=$WORK_DIR/captures" > "$WORK_DIR/$n/extra-args"
+    done
+    echo "--palw-drill-tamper-eval=leaf:1@$prefix" >> "$WORK_DIR/new5/extra-args"
+    echo "--palw-drill-tamper-eval=output@$prefix" >> "$WORK_DIR/new6/extra-args"
+    echo "--palw-challenge" >> "$WORK_DIR/new1/extra-args"
+    say "D-M3 roles: new5 lies (leaf:1) and new6 lies (output) on line T ($prefix…), new1 challenges; captures in $WORK_DIR/captures"
+}
+
 up() {
     mkdir -p "$WORK_DIR"
     WRITE_LACKS=1 preflight 1
     [ "$FAILED" = 0 ] || die "preflight failed — not starting"
     keys
+    dm3_args
     touch "$WORK_DIR/.up"; mkdir -p "$VERDICT_DIR"
     local n
     for n in new1 new2 new3 new0 new4 new5 new6 old; do [ -n "$(row "$n")" ] && { bash "$A/nodes.sh" start "$n"; sleep 3; }; done
@@ -436,6 +517,7 @@ case $cmd in
     dry) dry ;;
     plan) plan ;;
     model) model ;;
+    composites) composites ;;
     keys) keys ;;
     up) up ;;
     status) status ;;

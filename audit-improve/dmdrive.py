@@ -20,6 +20,7 @@ evidence/ (log lines the verdicts cite), verdict/dmN.verdict (PASS | FAIL | INCO
 """
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
@@ -44,7 +45,7 @@ CLI = E.get("CLI_BIN", "misaka")
 TOOLS = E.get("TOOLS_BIN", ".")
 JSON_BASE = int(E.get("JSON_BASE", "63100"))
 BORSH_BASE = int(E.get("BORSH_BASE", "62100"))
-CAND_FORM = E.get("CAND_FORM", "full")
+CAND_FORM = E.get("CAND_FORM", "composite")
 IMPROVE_AT = int(E.get("IMPROVE_AT", "40"))
 TIR_AT = int(E.get("TIR_AT", "20"))
 TICK_S = int(E.get("DM_TICK_S", "30"))
@@ -100,6 +101,39 @@ def bond_of(seat):
 
 def seed_of(seat):
     return f"{KR}/bond-{seat}.seed"
+
+
+def model_line_id(class_id, founder_bond, name):
+    """`model_line_id_v1`, offline: the id of a non-founding line — keyed blake2b-64 over the class, the founder's bond (borsh: the transaction id, the
+    index as u32 LE) and the name (length u32 LE, bytes). Known before the chain exists, so a drill's lying executor can be told which line to spoil;
+    pinned against the chain's own function by misaka-palw-sdk/tests/improve_line_id.rs."""
+    txid, index = founder_bond.rsplit(":", 1)
+    nb = name.encode()
+    msg = bytes.fromhex(class_id) + bytes.fromhex(txid) + int(index).to_bytes(4, "little") + len(nb).to_bytes(4, "little") + nb
+    return hashlib.blake2b(msg, digest_size=64, key=b"misaka-palw/model-line/id/v1").hexdigest()
+
+
+def audit_slot(class_id, span_daa, period_daa=100):
+    """Where in each `period_daa` DAA a class meets its admission jury (`palw_admission_audit_due_staggered_v1`: `(span + H(class) mod period) mod period == 0`,
+    the period 100 DAA on testnet-12). A composite candidate's proofs are possible only once the chain holds its record (its candidate's submission), and its jury
+    sits at this slot, so the wait from the submission to the class's admission is the DAA until the next one."""
+    period = max(period_daa // max(span_daa, 1), 1)
+    d = hashlib.blake2b(bytes.fromhex(class_id), key=b"misaka-palw/admission-audit/stagger/v1", digest_size=64).digest()
+    off = int.from_bytes(d[:8], "little") % period
+    return ((-off) % period) * span_daa, period * span_daa
+
+
+def line_id_of(name):
+    """The id of a plan line before it is founded: the founding line's is its class's, the others' `model_line_id`."""
+    head = model_id("head")
+    if name == "W1":
+        return head
+    return model_line_id(head, bond_of(PLAN["lines"][name]["owner_seat"]), PLAN["lines"][name]["name"])
+
+
+# D-M3's roles: the executors that each lie once (their first evaluation of line T) and the challenger that replays and files.
+TAMPER = {"new5": "leaf:1", "new6": "output"}
+CHALLENGER = "new1"
 
 
 def read(path, default=None):
@@ -316,11 +350,25 @@ def pool_slice(name, lo, hi):
     return {"prompts": d["prompts"][lo:hi], "keys": d["keys"][lo:hi]}
 
 
+def asset_of(cls):
+    """The model asset a plan class name stands for (the map lib-dm.sh's asset_of keeps). `composite` (RFC-0004's own form, the default): `win` and `lose` are
+    the adapters as composite classes (winc, losec: parent + PALWTIRS section) and `extra` is the full-weight winner that rides along on line L. `full`: `win` and
+    `lose` are full-weight classes and `extra` is the composite winner."""
+    if CAND_FORM == "composite":
+        return {"win": "winc", "lose": "losec", "extra": "win"}.get(cls, cls)
+    return {"extra": "winc"}.get(cls, cls)
+
+
+def is_composite(asset):
+    return asset in ("winc", "losec")
+
+
 def class_container(cls):
-    """The artifact flags `palw-class improve candidate` takes for a candidate class, and the file a registration names."""
-    if cls == "winc":
-        return ["--parent", f"{MODEL}/head.class.palwtir", "--section", f"{MODEL}/winc.palwtirs"]
-    return ["--artifact", f"{MODEL}/{cls}.class.palwtir"]
+    """The artifact flags `palw-class improve candidate` takes for a candidate class (a plan name)."""
+    a = asset_of(cls)
+    if is_composite(a):
+        return ["--parent", f"{MODEL}/head.class.palwtir", "--section", f"{MODEL}/{a}.palwtirs"]
+    return ["--artifact", f"{MODEL}/{a}.class.palwtir"]
 
 
 def first_lacking_fence():
@@ -424,10 +472,10 @@ class Drive:
         self.reg = rpc("getPalwModelRegistry", {})
         got = read_status()
         self.status, self.status_path = got if got else (None, None)
-        self.ids = {n: model_id(n) for n in ("head", "win", "lose", "winc")}
+        self.ids = {n: model_id(asset_of(n)) for n in ("head", "win", "lose", "extra")}
         self.milestones()
         for step in (self.step_m5_below, self.step_m5_below_verify, self.step_m5_cross, self.step_register_classes, self.step_lines, self.step_policies,
-                     self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks):
+                     self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks, self.step_dm3_probe):
             key = step.__name__
             if self.s.d["failed"].get(key):
                 continue
@@ -618,16 +666,17 @@ class Drive:
         if not self.s.d["milestones"].get("class:head:Candidate") and lifecycle_of(self.reg, self.ids["head"])[0] == "absent":
             return
         objs = []
-        for cls in ("win", "lose", "winc"):
-            if cls == "winc" and not os.path.exists(f"{MODEL}/winc.palwtirs"):
+        for cls in ("win", "lose", "extra"):
+            asset = asset_of(cls)
+            if is_composite(asset) and not os.path.exists(f"{MODEL}/{asset}.palwtirs"):
                 continue
             if lifecycle_of(self.reg, self.ids[cls])[0] != "absent":
                 continue
-            out = f"{OBJ}/register-{cls}.obj"
-            if cls == "winc":
-                art = ["--artifact", f"{MODEL}/winc.palwtirs", "--parent", f"{MODEL}/head.class.palwtir"]
+            out = f"{OBJ}/register-{asset}.obj"
+            if is_composite(asset):
+                art = ["--artifact", f"{MODEL}/{asset}.palwtirs", "--parent", f"{MODEL}/head.class.palwtir"]
             else:
-                art = ["--artifact", f"{MODEL}/{cls}.class.palwtir"]
+                art = ["--artifact", f"{MODEL}/{asset}.class.palwtir"]
             cmd = cli_prefix("new3") + ["palw", "tir-registration", *art, "--bond", bond_of(7), "--key-file", seed_of(7), "--out", out]
             rc, text = run(cmd, home=UHOME)
             if rc != 0:
@@ -643,6 +692,10 @@ class Drive:
             raise RuntimeError(f"cannot submit the registrations: {text.strip()[-300:]}")
         self.s.mark("register-classes", daa=self.daa, objects=objs)
         log(f"classes registered (seat 7) at DAA {self.daa}: {[os.path.basename(o) for o in objs]}")
+        span = int(pick(self.reg, "spanDaa", "span_daa", default=0) or 0)
+        if span:
+            log("admission-audit slots (DAA mod period): " + ", ".join(
+                f"{n}={audit_slot(self.ids[n], span)[0]} mod {audit_slot(self.ids[n], span)[1]}" for n in ("head", "win", "lose", "extra") if self.ids.get(n)))
 
     # ----- lines ------------------------------------------------------------------------------------------------
     def step_lines(self):
@@ -653,7 +706,7 @@ class Drive:
             return
         root = model_id("head", "root")
         lines = dict(self.s.get("lines") or {})
-        for name in ("W2", "L"):
+        for name in ("W2", "L", "T"):
             if name in lines:
                 continue
             cmd = cli_prefix("new3") + ["palw", "line-found", "--class", self.ids["head"], "--name", name, "--root", root,
@@ -668,6 +721,10 @@ class Drive:
             lines[name] = lid
             self.s.put("lines", lines)
             log(f"line {name} founded by seat 7: {lid[:16]}…")
+            if lid != line_id_of(name):
+                # D-M3's tamper flags name T by this id, derived before the chain existed: a mismatch is the harness's own bug.
+                self.s.put(f"line-id-mismatch:{name}", {"chain": lid, "derived": line_id_of(name)})
+                log(f"line {name}: the chain's id {lid[:16]}… is not the derived one {line_id_of(name)[:16]}…")
             time.sleep(SPACING_S)
         self.s.mark("lines", **lines)
 
@@ -676,11 +733,11 @@ class Drive:
         if self.s.done("policies") or not self.s.done("lines") or self.daa < IMPROVE_AT + 2:
             return
         lines = self.line_ids()
-        if not all(l in lines for l in ("W1", "W2", "L")):
+        if not all(l in lines for l in ("W1", "W2", "L", "T")):
             return
         # the founding line's row exists once the head's class is registered; the founded lines' once their objects are mined
         objs = []
-        for name in ("W1", "W2", "L"):
+        for name in ("W1", "W2", "L", "T"):
             owner = PLAN["lines"][name]["owner_seat"]
             out = f"{OBJ}/policy-{name}.obj"
             spec = {"line": lines[name], "sequence": 1, "policy": line_policy(name)}
@@ -692,7 +749,7 @@ class Drive:
         if not ok:
             raise RuntimeError(f"cannot submit the policies: {text.strip()[-300:]}")
         self.s.mark("policies", daa=self.daa)
-        log(f"opt-in: three policy objects submitted at DAA {self.daa}")
+        log(f"opt-in: four policy objects submitted at DAA {self.daa}")
 
     # ----- material (D-M1): a dataset and a hard case, admitted while the line is idle: the next epoch's material -----
     def step_material(self):
@@ -966,8 +1023,55 @@ class Drive:
         return verdict_dm2(self.s.d, self.status, self.line_ids())
 
     def verdict_dm3(self):
-        return ("INCOMPLETE", "needs the evaluation court (court proofs 13-15 / the gen court over an evaluation binding are not in the tree) "
-                "and a node-side accuser; the seat half (a replay that differs files nothing) is covered by tests")
+        return verdict_dm3(self.s.d, self.line_ids())
+
+    # ----- D-M3: what the lying executors did, what the challenger found, what the chain made of it -------------------------
+    def step_dm3_probe(self):
+        """Read, once a tick and only from the fence on: each lying executor's log (which evaluation it lied about, with which fault), its bond and claims
+        (phases, void reasons, slashed), and the challenger's disputes (its status file). The verdict is pure over this record."""
+        if self.daa < IMPROVE_AT or "T" not in self.line_ids():
+            return
+        liars = dict(self.s.get("dm3-liars") or {})
+        probe = {"daa": self.daa, "liars": liars, "claims": {}, "disputes": [], "mismatch": self.s.get("line-id-mismatch:T")}
+        pat = re.compile(r"DRILL: this node LIES about item (\d+) of epoch (\d+) of line (\S+) for [^:]*: (\S+) \(--palw-drill-tamper-eval\)")
+        for node in TAMPER:
+            if node not in NODES:
+                continue
+            if node not in liars:
+                # The lie is said once, in the node's log: read what is new since the last tick (a drill's log is long), once found keep it.
+                path = f"{WORK}/{node}/kaspad.out"
+                cursor = int((self.s.get("dm3-cursor") or {}).get(node, 0))
+                try:
+                    with open(path, "rb") as f:
+                        f.seek(cursor)
+                        data = f.read()
+                except OSError:
+                    data = b""
+                m = pat.search(data.decode("utf-8", "replace"))
+                if m:
+                    liars[node] = {"item": int(m.group(1)), "epoch": int(m.group(2)), "line": m.group(3), "fault": m.group(4)}
+                    self.s.put("dm3-liars", liars)
+                else:
+                    # keep a margin so a line split across two reads is found by the next one
+                    cur = dict(self.s.get("dm3-cursor") or {})
+                    cur[node] = max(cursor + len(data) - 512, 0)
+                    self.s.put("dm3-cursor", cur)
+            seat = NODES[node]["seat"]
+            if seat is None:
+                continue
+            r = rpc("getPalwClaims", {"bond": bond_of(seat), "role": "executor", "includeTerminal": True, "limit": 0})
+            probe["claims"][node] = {
+                "slashed": int(pick(r, "bondSlashed", default=0) or 0),
+                "rows": [{"id": str(pick(c, "claimId", default="")), "phase": str(pick(c, "phase", default="")), "void": str(pick(c, "voidReason", default=""))}
+                         for c in (pick(r, "claims", default=[]) or [])],
+            }
+        f = status_file_of(CHALLENGER) if CHALLENGER in NODES else None
+        if f:
+            try:
+                probe["disputes"] = json.load(open(f)).get("disputes", [])
+            except (OSError, ValueError):
+                pass
+        self.s.put("dm3", probe)
 
     def verdict_dm4(self):
         return verdict_dm4(self.s.d, self.status, self.line_ids(), self.ids)
@@ -1080,6 +1184,56 @@ def verdict_dm2(sd, st, lines):
             checks.append((not k.get("eligible"), f"candidate {c['class'][:8]} is not eligible ({k['primary']})"))
     lose = [c for c in e1.get("candidates", []) if c.get("counts") and c["counts"]["primary"]["wins"] == 0 and c["counts"]["primary"]["losses"] > 0]
     checks.append((bool(lose), "the regressing candidate lost items and won none"))
+    return v_all(checks)
+
+
+def verdict_dm3(sd, lines):
+    """D-M3 (RFC-0004 A13): a lying evaluation claim is CONVICTED. Over the probe record (`step_dm3_probe`): each executor told to lie did, on line T; the
+    challenger's replay found each lie that landed as a claim, where the lie is (a moved step leaf: the first divergent leaf; a moved id: the first id);
+    and the chain voided the claim and slashed the executor's bond. A lie that reached Final unconvicted is a FAIL; the honest claims of the lying bonds
+    (every claim that is not a landed lie) are not voided."""
+    p = (sd.get("data") or {}).get("dm3")
+    tid = lines.get("T")
+    if not tid:
+        return "INCOMPLETE", "line T is not founded yet"
+    if not p:
+        return "INCOMPLETE", "no probe yet (it reads from the improvement fence on)"
+    if p.get("mismatch"):
+        return "FAIL", f"the harness derived another id for line T than the chain's ({p['mismatch']}): the tamper flags name the wrong line"
+    checks = []
+    liars = p.get("liars") or {}
+    for node, fault in TAMPER.items():
+        lie = liars.get(node)
+        if lie is None:
+            checks.append((None, f"{node} has not lied yet (its first evaluation of T, fault {fault})"))
+        else:
+            checks.append((lie["line"] == tid[: len(lie["line"])] and lie["fault"] == fault, f"{node} lied about item {lie['item']} of epoch {lie['epoch']} of line T: {lie['fault']}"))
+    disputes = {d["claim"]: d for d in (p.get("disputes") or [])}
+    expected_kind = {"leaf": "leaf", "output": "output"}
+    landed = []
+    for node, fault in TAMPER.items():
+        rows = {c["id"]: c for c in ((p.get("claims") or {}).get(node) or {}).get("rows", [])}
+        mine = [(rows[c], disputes[c]) for c in disputes if c in rows]
+        if node in liars and not mine:
+            checks.append((None, f"the challenger has found no dispute on a claim of {node}'s yet"))
+        for row, d in mine:
+            landed.append((node, row, d))
+            want = expected_kind[fault.split(":")[0]]
+            checks.append((d.get("kind") == want, f"{node}'s lie, claim {row['id'][:12]}…: the challenger located it as {d.get('kind')} ({str(d.get('detail'))[:70]}), expected {want}"))
+            phase = row["phase"]
+            slashed = int(((p.get("claims") or {}).get(node) or {}).get("slashed", 0))
+            if phase.startswith("Final"):
+                checks.append((False, f"{node}'s lying claim {row['id'][:12]}… reached Final unconvicted"))
+            elif phase.startswith("Voided"):
+                checks.append((slashed > 0, f"{node}'s lying claim {row['id'][:12]}… is voided ({row['void'] or 'no reason'}) and its bond slashed ({slashed} sompi)"))
+            else:
+                checks.append((None, f"{node}'s lying claim {row['id'][:12]}… is {phase}: the court has not convicted it yet ({str(d.get('filing'))[:80]})"))
+    for node in TAMPER:
+        landed_ids = {row["id"] for n, row, _ in landed if n == node}
+        honest_voided = [c["id"][:12] for c in ((p.get("claims") or {}).get(node) or {}).get("rows", [])
+                         if c["phase"].startswith("Voided") and c["id"] not in landed_ids]
+        if honest_voided:
+            checks.append((False, f"{node}'s honest claim(s) {honest_voided} were voided"))
     return v_all(checks)
 
 
@@ -1200,6 +1354,51 @@ def selftest():
     sd["done"]["rollback-proof"] = {"daa": 1300}
     w1 = {"line_id": "11" * 64, "heads": [{"seq": 3, "cause": "RolledBackByProof"}], "epochs": []}
     assert verdict_dm4(sd, {"lines": [w1, w2]}, {"W1": "11" * 64, "W2": "33" * 64}, {})[0] == "PASS"
+
+    # D-M3: the verdict over the probe record.
+    tid = "ab" * 64
+    t_lines = {"T": tid}
+    assert verdict_dm3({"data": {}}, {})[0] == "INCOMPLETE"
+    assert verdict_dm3({"data": {}}, t_lines)[0] == "INCOMPLETE"
+    c1, c2, c3 = "c1" * 64, "c2" * 64, "c3" * 64
+    probe = {"daa": 500, "mismatch": None,
+             "liars": {"new5": {"item": 2, "epoch": 1, "line": tid[:32], "fault": "leaf:1"},
+                       "new6": {"item": 5, "epoch": 1, "line": tid[:32], "fault": "output"}},
+             "claims": {"new5": {"slashed": 0, "rows": [{"id": c1, "phase": "Accepted", "void": ""}, {"id": c2, "phase": "Final", "void": ""}]},
+                        "new6": {"slashed": 0, "rows": [{"id": c3, "phase": "Accepted", "void": ""}]}},
+             "disputes": [{"claim": c1, "kind": "leaf", "detail": "leaf 1", "filing": "not filed"},
+                          {"claim": c3, "kind": "output", "detail": "generated id 0", "filing": "not filed"}]}
+    clone = lambda x: json.loads(json.dumps(x))  # noqa: E731
+    r = verdict_dm3({"data": {"dm3": probe}}, t_lines)
+    assert r[0] == "INCOMPLETE" and "not convicted" in r[1], r
+    convicted = clone(probe)
+    for node, cid in (("new5", c1), ("new6", c3)):
+        convicted["claims"][node]["slashed"] = 1_000_000
+        for c in convicted["claims"][node]["rows"]:
+            if c["id"] == cid:
+                c["phase"], c["void"] = "Voided", "CourtConviction"
+    r = verdict_dm3({"data": {"dm3": convicted}}, t_lines)
+    assert r[0] == "PASS", r
+    final = clone(probe)
+    final["claims"]["new5"]["rows"][0]["phase"] = "Final"
+    assert verdict_dm3({"data": {"dm3": final}}, t_lines)[0] == "FAIL", "a lie that reached Final unconvicted"
+    wrong = clone(convicted)
+    wrong["disputes"][0]["kind"] = "output"
+    assert verdict_dm3({"data": {"dm3": wrong}}, t_lines)[0] == "FAIL", "the lie located as another kind"
+    honest = clone(convicted)
+    honest["claims"]["new5"]["rows"][1]["phase"] = "Voided"
+    assert verdict_dm3({"data": {"dm3": honest}}, t_lines)[0] == "FAIL", "an honest claim voided"
+    quiet = clone(probe)
+    quiet["liars"] = {}
+    quiet["disputes"] = []
+    assert verdict_dm3({"data": {"dm3": quiet}}, t_lines)[0] == "INCOMPLETE", "nobody lied yet"
+    bad_id = clone(probe)
+    bad_id["mismatch"] = {"chain": "x", "derived": "y"}
+    assert verdict_dm3({"data": {"dm3": bad_id}}, t_lines)[0] == "FAIL", "the harness derived another line id"
+    # The line id derived offline is the chain's: golden values pinned by misaka-palw-sdk/tests/improve_line_id.rs.
+    g_class, g_bond = "ab" * 64, "07" * 64 + ":1"
+    assert model_line_id(g_class, g_bond, "T") == "17131be198686c865fff3483f36c895a686bd10d8d92c0a894920e2a7923450c89f8e8061afefc2b29ab5667516311de410d614e2811d1379e11cee4fa89dacd"
+    assert model_line_id(g_class, "07" * 64 + ":3", "W2") == "7d1e43e6c6cc6dadc5b93e262bf559252feacb19508696972ffba06980aa28975049a00df7c2626ee6d03eff66453e46a71c1782983fd178a3e2b721737546b2"
     print("selftest ok")
 
 
@@ -1217,23 +1416,25 @@ def selftest_drive():
         os.makedirs(d, exist_ok=True)
     json.dump({"seats": [{"bond_outpoint": f"{i:0128x}:{i}", "fee_float_outpoint": f"{i:0128x}:9"} for i in range(8)]}, open(f"{KR}/manifest.json", "w"))
     h = lambda c: c * 128  # noqa: E731
-    ids = {"head": h("a"), "win": h("b"), "lose": h("c"), "winc": h("d")}
+    ids = {"head": h("a"), "win": h("b"), "lose": h("c"), "extra": h("d")}   # by the plan's names; the files are the assets' (composite form)
     for k, v in ids.items():
-        open(f"{MODEL}/ids/{k}.class", "w").write(v)
-        open(f"{MODEL}/ids/{k}.root", "w").write(h("e"))
+        open(f"{MODEL}/ids/{asset_of(k)}.class", "w").write(v)
+        open(f"{MODEL}/ids/{asset_of(k)}.root", "w").write(h("e"))
     mk = lambda n: {"prompts": [[1, 3 + i, 4 + i, 5 + i] for i in range(n)], "keys": [[3 + i % 8, 4 + i % 8, 5] for i in range(n)]}  # noqa: E731
     for name in ("a", "b", "reg"):
         json.dump(mk(16), open(f"{MODEL}/pool-{name}.json", "w"))
-    open(f"{MODEL}/winc.palwtirs", "w").write("x")
+    for a in ("winc", "losec"):
+        open(f"{MODEL}/{a}.palwtirs", "w").write("x")
     g["NODES"] = {n: {"k": k, "seat": s, "role": r, "hb": False, "ir": True} for n, k, s, r in
-                  (("new0", 0, 3, "floor"), ("new3", 3, 2, "seat"), ("new4", 4, 4, "head"), ("old", 7, None, "old"))}
+                  (("new0", 0, 3, "floor"), ("new1", 1, 0, "seat"), ("new3", 3, 2, "seat"), ("new4", 4, 4, "head"), ("new5", 5, 5, "eval"),
+                   ("new6", 6, 6, "evalw"), ("old", 7, None, "old"))}
     open(f"{WORK}/old-lacks.txt", "w").write("tir2@24 gen@28 decode@32 improve@40")
     os.makedirs(f"{WORK}/new0", exist_ok=True)
     os.makedirs(f"{WORK}/old", exist_ok=True)
 
     clock = {"daa": 0}
     submitted, built, sh = [], [], []
-    lid = {"W1": ids["head"], "W2": h("2"), "L": h("3")}
+    lid = {"W1": ids["head"], "W2": h("2"), "L": h("3"), "T": line_id_of("T")}
     g["salt"] = lambda: "00" * 32
     g["chain_daa"] = lambda: clock["daa"]
     g["node_alive"] = lambda n: True
@@ -1243,9 +1444,30 @@ def selftest_drive():
     g["time"] = type("T", (), {"sleep": staticmethod(lambda x: None), "strftime": staticmethod(time.strftime), "time": staticmethod(time.time)})
     Drive.log_after = lambda self, node, cursor, pattern: ("matched: " + pattern[:24])
 
+    # D-M3's scripted evidence: the two liars' logs, the challenger's disputes, the chain's claims of the liars' bonds.
+    T_ID = lid["T"]
+    c_leaf, c_out, c_honest = "c1" * 64, "c3" * 64, "c2" * 64
+    for node, fault in (("new5", "leaf:1"), ("new6", "output")):
+        os.makedirs(f"{WORK}/{node}", exist_ok=True)
+        open(f"{WORK}/{node}/kaspad.out", "w").write(
+            f"2026-10-02 [WARN ] [PALW-PANEL] [palw-improve] DRILL: this node LIES about item 2 of epoch 1 of line {T_ID} for Candidate({h('b')}): {fault} "
+            f"(--palw-drill-tamper-eval) - the claim it files is self-consistent\n")
+    os.makedirs(f"{WORK}/new1/app/testnet-12", exist_ok=True)
+    json.dump({"schema": "misaka.palw.improve-status.v1", "daa": 1, "lines": [], "evaluation": [],
+               "disputes": [{"claim": c_leaf, "job": h("5"), "kind": "leaf", "detail": "leaf 1 (stage 0, leaf 1) of the step tree", "found_daa": 400, "filing": "scripted"},
+                            {"claim": c_out, "job": h("6"), "kind": "output", "detail": "generated id 0: committed 4, honest 5", "found_daa": 401, "filing": "scripted"}]},
+              open(f"{WORK}/new1/app/testnet-12/palw-improve-status.json", "w"))
+
     def fake_rpc(method, params=None, prefer=()):
+        if method == "getPalwClaims" and (params or {}).get("role") == "executor" and (params or {}).get("bond") in (bond_of(5), bond_of(6)):
+            convicted = clock["daa"] >= 700
+            mine, other = (c_leaf, c_honest) if params["bond"] == bond_of(5) else (c_out, None)
+            rows = [{"claimId": mine, "phase": "Voided" if convicted else "Accepted", "voidReason": "CourtConviction" if convicted else ""}]
+            if other:
+                rows.append({"claimId": other, "phase": "Final" if clock["daa"] >= 600 else "Accepted", "voidReason": ""})
+            return {"bondSlashed": 1_000_000 if convicted else 0, "claims": rows}
         if method == "getPalwModelRegistry":
-            return {"classes": [{"classId": v, "state": "Probation { probes_passed: 0 }", "readySeats": 7} for v in ids.values() if v != ids["winc"]]}
+            return {"classes": [{"classId": v, "state": "Probation { probes_passed: 0 }", "readySeats": 7} for v in ids.values()]}
         if method == "getPalwClaims":
             return {"claims": [{"classId": ids["head"], "phase": "Final"}] if clock["daa"] >= 255 else []}
         return {}
@@ -1361,13 +1583,21 @@ def selftest_drive():
     assert verdicts["dm5"].startswith("PASS"), verdicts["dm5"]
     assert verdicts["dm1"].startswith("PASS"), verdicts["dm1"]
     assert verdicts["dm2"].startswith("PASS"), verdicts["dm2"]
+    assert verdicts["dm3"].startswith("PASS"), verdicts["dm3"]   # the scripted liars were convicted at DAA 700: probe -> verdict end to end
     print("selftest-drive ok")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["run", "once", "verdicts", "selftest", "selftest-drive"])
+    ap.add_argument("cmd", choices=["run", "once", "verdicts", "selftest", "selftest-drive", "line-id"])
+    ap.add_argument("arg", nargs="?", default="")
     a = ap.parse_args()
+    if a.cmd == "line-id":
+        if a.arg not in PLAN["lines"] or not model_id("head"):
+            print(f"no line {a.arg!r} in the plan, or no model under {MODEL}", file=sys.stderr)
+            return 2
+        print(line_id_of(a.arg))
+        return 0
     if a.cmd == "selftest":
         selftest()
         return 0

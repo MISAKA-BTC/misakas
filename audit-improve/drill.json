@@ -190,8 +190,35 @@
         }
       }
     },
+    "T": {
+      "_for": "D-M3, the court battery on evaluation claims: two executors (new5, new6) each commit ONE self-consistent lie on this line (new5 a moved step leaf, new6 a moved first id: --palw-drill-tamper-eval=<fault>@<T's id prefix>, the id is derived before the chain exists) and a challenger (new1, --palw-challenge) replays every claim it can, finds where each lie is from the accused's capture (the shared --palw-improve-capture-dir) and files the court proof. The lies are convicted; the honest claims, on this line and on every other, stay unvoided.",
+      "founding": false,
+      "name": "T",
+      "owner_seat": 7,
+      "epochs": {
+        "1": {
+          "candidates": [
+            {
+              "class": "win",
+              "seat": 7
+            }
+          ],
+          "sets": [
+            {
+              "name": "St",
+              "seat": 7,
+              "pool": "a",
+              "items": [
+                0,
+                8
+              ]
+            }
+          ]
+        }
+      }
+    },
     "L": {
-      "_for": "D-M2 (a candidate that regresses what the parent passes must not win) and the single-setter leakage bound of D-M6: two setters, the cap keeps each to half of the draw; the winner W is trained on S_b's prompts only, so it can win four items at most and the sign test cannot reject. winc is the composite candidate: it is prefetched, and its class never proves readiness (the gap)",
+      "_for": "D-M2 (a candidate that regresses what the parent passes must not win) and the single-setter leakage bound of D-M6: two setters, the cap keeps each to half of the draw; the winner W is trained on S_b's prompts only, so it can win four items at most and the sign test cannot reject. `extra` is the extra line's candidate: the full-weight winner in the composite form (the default), the composite winner in the full form",
       "founding": false,
       "name": "L",
       "owner_seat": 7,
@@ -212,7 +239,7 @@
               "seat": 7
             },
             {
-              "class": "winc",
+              "class": "extra",
               "seat": 7
             }
           ],
@@ -273,6 +300,10 @@
     },
     "L": {
       "epoch1": "NoChange"
+    },
+    "T": {
+      "lies_convicted": true,
+      "honest_claims_unvoided": true
     }
   }
 }

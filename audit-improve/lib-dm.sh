@@ -41,12 +41,21 @@ DECODE_FLAG=${DECODE_FLAG:-}     # e.g. --palw-drill-decode-at; empty = look for
 FIXTURE=${FIXTURE:-$WT/misaka-palw-tir-lower/tests/fixtures/hf/llama}
 HEAD_MODEL_ID=${HEAD_MODEL_ID:-test/llama-tiny-ir}
 HEAD_CONTEXT=${HEAD_CONTEXT:-32}
-# What a candidate IS: `full` (the adapter merged into a full-weight class: an ordinary IR class, which proves readiness as D-F's
-# classes did) or `composite` (parent + PALWTIRS adapter section). Composite is the RFC's form, but a composite class cannot yet
-# prove readiness: the chain's V2 possession proof opens the registered artifact root, and a composite's root
-# (palw_improve_composite_root_v1) is no inventory root. Until the core lane's readiness for composites lands, the drills'
-# candidates are full-weight and ONE composite candidate (`winc`) rides along to show the gap and the prefetch.
-CAND_FORM=${CAND_FORM:-full}
+# What a candidate IS: `composite` (parent + PALWTIRS adapter section: RFC-0004's own form, the default — a seat fetches only the
+# adapter, proves possession of it under `adapter_root` and of the parent as its own class, spec 17 §17.7.1) or `full` (the adapter
+# merged into a full-weight class: an ordinary IR class; the form of the drills before the core lane's composite readiness, kept as
+# the extra line). The plan names its candidates `win` and `lose` and one `extra`; asset_of() says which model asset each is.
+CAND_FORM=${CAND_FORM:-composite}
+# asset_of <win|lose|extra|head> — the model asset (`$MODEL_DIR/<asset>.class.palwtir`, ids/<asset>.class) a plan name stands for.
+# composite: win=winc, lose=losec (the adapters as composite classes), extra=win (the full-weight winner, riding along on line L);
+# full: win=win, lose=lose (full-weight), extra=winc (the composite winner).
+asset_of() {
+    case "$CAND_FORM:$1" in
+        composite:win) echo winc ;; composite:lose) echo losec ;; composite:extra) echo win ;;
+        full:extra) echo winc ;;
+        *) echo "$1" ;;
+    esac
+}
 
 # Ports: the coordinator's range for this drill — disjoint from the D-F drill (55100+), lane D's (40100+) and public nodes.
 P2P_BASE=${P2P_BASE:-61100}; BORSH_BASE=${BORSH_BASE:-62100}; JSON_BASE=${JSON_BASE:-63100}
@@ -98,7 +107,7 @@ salt() {
     echo "$s"
 }
 manifest() { python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print($1)" "$KR/manifest.json"; }
-# The ids `dm.sh model` writes: head, win, lose, winc (a class id, hex) and each one's artifact root.
+# The ids `dm.sh model` writes: head, win, lose, winc, losec (a class id, hex) and each one's artifact root.
 model_id() { tr -d ' \n' < "$MODEL_DIR/ids/$1.${2:-class}" 2>/dev/null || true; }
 
 # The fences a drill arms, `name|flag|height`, in the order the node applies them.
@@ -161,18 +170,19 @@ node_args() {
     fi
     if [ "$ir" = 1 ]; then
         # The head first (a composite section opens over it), then the full-weight candidates every seat must hold to be a ready
-        # seat for them. The composite candidate's section is NOT loaded: it sits in the drop directory, and the seats that see
-        # the candidate fetch it (adapter prefetch, RFC-0004 §6.7).
+        # seat for them: both in the full form, the winner alone in the composite form (the extra line's candidate). The composite
+        # candidates' sections are NOT loaded: they sit in the drop directory, and the seats that see a candidate fetch its section
+        # (adapter prefetch, RFC-0004 §6.7) and then prove possession of it.
         a+=("--palw-class-artifact=$MODEL_DIR/head.class.palwtir")
         [ -s "$MODEL_DIR/win.class.palwtir" ] && a+=("--palw-class-artifact=$MODEL_DIR/win.class.palwtir")
-        [ -s "$MODEL_DIR/lose.class.palwtir" ] && a+=("--palw-class-artifact=$MODEL_DIR/lose.class.palwtir")
+        [ "$CAND_FORM" = full ] && [ -s "$MODEL_DIR/lose.class.palwtir" ] && a+=("--palw-class-artifact=$MODEL_DIR/lose.class.palwtir")
         a+=("--palw-improve-artifact-dir=$MODEL_DIR/drop")
     fi
     case $role in
         floor) a+=(--palw-produce) ;;
         head) a+=(--palw-produce "--palw-register-class=$HEAD_MODEL_ID" "--palw-producer-class=$(model_id head)") ;;
         eval) a+=(--palw-improve-evaluate) ;;
-        evalw) a+=(--palw-improve-evaluate --palw-produce "--palw-producer-class=$(model_id win)") ;;
+        evalw) a+=(--palw-improve-evaluate --palw-produce "--palw-producer-class=$(model_id "$(asset_of win)")") ;;
     esac
     [ "$hb" = 1 ] && a+=("--palw-heartbeat-miner-address=$(manifest "m['heartbeat'][$k]['address']")" --enable-unsynced-mining)
     local m; for m in $(new_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done
