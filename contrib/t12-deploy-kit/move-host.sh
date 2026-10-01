@@ -194,6 +194,9 @@ add_checks() { # <id> <hard: 1 = die on what add needs, 0 = warn (the key is cop
 
 cmd_add() {
     local id=$1 since want rd deadline
+    # REL ($REL_ROOT/$RID) is set by require_release; without it the node spec parses N_LAUNCH as /launch/b<id>.sh
+    # (the 10-02 b7 move aborted there with `mktemp: /launch/b7.sh.tmp…` after the retire)
+    require_release
     [ "${CONFIRM_SOURCE_STOPPED:-}" = yes ] || die "add starts bond $id HERE. The unit on the old host must be stopped and retired (move-host.sh retire $id there; its marker makes it unstartable): one bond is never in two processes. CONFIRM_SOURCE_STOPPED=yes"
     add_checks "$id" 1
     [ ! -e "$(moved_in_mark "$id")" ] || die "b$id was already added here: $(cat "$(moved_in_mark "$id")")"
