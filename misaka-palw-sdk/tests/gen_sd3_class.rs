@@ -766,7 +766,7 @@ fn every_leaf_of_the_widest_job_has_a_cone_close_that_fits_one_carrier() {
 /// requirement on PALW-GEN-20). The latent is a state `post` writes (NF-29): the court reads its value at the start of `p` as the
 /// committed write of `p − 1` (the `StateWrite`'s commit leaf at the stage's `post` occurrence), so a cone at a position ≥ 1 that reads
 /// the latent carries that leaf. For every denoiser leaf at positions 1.. whose MEASURED close carries such a leaf (`SD3_WRITE_STRIDE=<n>`
-/// takes every `n`-th, default 4, and always the first and last tile of each commit point at each position): (1) every committed-write
+/// takes every `n`-th, default 4, and always the first and last tile of each commit point of `pre` and `post` at each position): (1) every committed-write
 /// leaf of the measured close is in the twin's read set of the same cone — the leaf, by its coordinate, not by a count; (2) the price of
 /// the commit point is at least the measured close. A cone that reads the latent is among the sampled leaves of the sweep too; this one
 /// is held to the leaf.
@@ -807,6 +807,11 @@ fn the_price_counts_the_committed_write_of_the_previous_position_for_every_eleme
     let (mut measured, mut with_write, mut leaves_checked, mut worst_margin) = (0usize, 0usize, 0usize, i64::MAX);
     let mut positions = std::collections::BTreeSet::new();
     for ((pos, occurrence, node), locals) in &by_site {
+        // The latent is read by `pre` (the patch embedding of the current latent) and by `post` (the Euler step's `Select(first, noise,
+        // state)`); a layer block reads only its carry-in.
+        if *occurrence != 0 && *occurrence != post_occ {
+            continue;
+        }
         let block = sp.occurrence_block(*occurrence).expect("an occurrence");
         let point = (denoise as u8, block, *node);
         let Some(bound) = prices.get(&point) else { continue };
