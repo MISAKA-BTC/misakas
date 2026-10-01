@@ -67,8 +67,6 @@ fn the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline() {
         let words = noise_words(seed, len);
         let noise_f: Vec<f64> = words.iter().map(|w| *w as f64 / (1u64 << 24) as f64).collect();
         // The text the integer pipeline hands the denoiser, as floats (the float run is fed the same rows).
-        let (rows_stage_params, pool_stage_params) = (&pipe.params[0], &pipe.params[1]);
-        let _ = (rows_stage_params, pool_stage_params);
         let (rows, pooled) = integer_text_floats(&fx, &prompt);
         let (lats_f, vels_f) = float_loop(&fx.dit, &fx.tables, si, &noise_f, &rows, &pooled, &mut Calib::new());
         let img_f = fx.vae.decode(&Fm { c, h: side, w: side, d: lats_f.last().unwrap().clone() }, &mut Calib::new());
