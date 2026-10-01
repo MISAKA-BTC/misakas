@@ -130,6 +130,9 @@ impl PalwGenProfileV1 {
     }
 }
 
+/// The widest per-class cap on claims in flight the format allows (RFC-0003 §I.4.8).
+pub const PALW_GEN_MAX_INFLIGHT_CLAIMS_FORMAT_CAP_V1: u32 = 4_096;
+
 /// **One profile's ceilings.** Per position they bound each stage (spec 04b §15.9 with the IR
 /// court's terminal ceilings); per job they bound the pipeline's totals; per class they bound what a
 /// registration carries (several carriers: the user's decision 8).
@@ -152,6 +155,12 @@ pub struct PalwGenProfileCeilingsV1 {
     pub max_stages: u8,
     /// Bytes of the pipeline and every program a registration carries.
     pub max_class_bytes: u32,
+    /// **Claims one class may hold in flight on the free-prompt lane** (RFC-0003 §I.4.8): a tensor claim
+    /// costs a panel a full replay, and a generative class has no registry lifecycle row, hence no
+    /// panel-room budget — so the cap is the fence's. A commitment that would make the class's claims
+    /// in flight reach it is refused (`GenClassInflightCapped`). Provisional until the first profile's
+    /// corpus is measured.
+    pub max_inflight_claims: u32,
 }
 
 impl PalwGenProfileCeilingsV1 {
@@ -168,6 +177,7 @@ impl PalwGenProfileCeilingsV1 {
         max_stages: misaka_palw_tir::pipeline::MAX_STAGES as u8,
         max_class_bytes: (misaka_palw_tir::pipeline::MAX_STAGES * misaka_palw_tir::program::MAX_PROGRAM_BYTES
             + misaka_palw_tir::pipeline::MAX_PIPELINE_BYTES) as u32,
+        max_inflight_claims: PALW_GEN_MAX_INFLIGHT_CLAIMS_FORMAT_CAP_V1,
     };
 
     /// Is every ceiling inside the format's cap, and none zero?
@@ -183,6 +193,7 @@ impl PalwGenProfileCeilingsV1 {
             self.max_job_cone_work,
             self.max_stages as u64,
             self.max_class_bytes as u64,
+            self.max_inflight_claims as u64,
         ];
         if nonzero.contains(&0) {
             return Err("a generative ceiling of zero admits no class");
@@ -202,6 +213,9 @@ impl PalwGenProfileCeilingsV1 {
         if self.max_class_bytes > caps.max_class_bytes {
             return Err("max_class_bytes must be at most sixteen programs and a pipeline");
         }
+        if self.max_inflight_claims > caps.max_inflight_claims {
+            return Err("max_inflight_claims must be at most 4,096");
+        }
         Ok(())
     }
 
@@ -215,6 +229,7 @@ impl PalwGenProfileCeilingsV1 {
         h.write(self.max_job_cone_work.to_le_bytes());
         h.write([self.max_stages]);
         h.write(self.max_class_bytes.to_le_bytes());
+        h.write(self.max_inflight_claims.to_le_bytes());
     }
 }
 
@@ -267,6 +282,7 @@ pub const PALW_DRILL_GEN_PROFILE_CEILINGS_V1: PalwGenProfileCeilingsV1 = PalwGen
     max_job_cone_work: 1 << 22,
     max_stages: 16,
     max_class_bytes: 1 << 21,
+    max_inflight_claims: 16,
 };
 
 pub const PALW_DRILL_GEN_CEILINGS_V1: PalwGenCeilingsV1 = PalwGenCeilingsV1 {
@@ -362,11 +378,33 @@ impl Params {
     /// registration is refused by name. Written here and nowhere else; `None` where the fence is not
     /// armed (or is `never()`). Call it wherever the fence is set on an assembled ruleset;
     /// [`Self::validate_palw_gen_v1`] refuses a ruleset whose copy disagrees.
+    ///
+    /// **It also mirrors the tensor lane's two facts** (RFC-0003 §I.4): `Params::palw_fp_job_v5`'s
+    /// height (`PalwStateParamsV2::fp_job_v5_from_daa`) and the fence's per-profile cap on claims in
+    /// flight (`gen_max_inflight_claims`), because the fold's tensor branch holds only the bundle.
     pub fn sync_palw_gen_v1(&mut self) {
         let from_daa = self.palw_gen_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+        let (v5_daa, caps) = self.palw_gen_lane_mirror_v1();
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state = bundle.state.clone().with_gen_from_daa(from_daa);
+            bundle.state = bundle.state.clone().with_gen_from_daa(from_daa).with_fp_job_v5_from_daa(v5_daa).with_gen_max_inflight_claims(caps);
         }
+    }
+
+    /// The tensor lane's mirrored facts, as the fences state them: `palw_fp_job_v5`'s height (`None`
+    /// where it is not armed or is `never()`) and the generative fence's cap on claims in flight per
+    /// profile (`Image`, `Embedding`, `Audio`, `Video`; zeros where the fence is not armed).
+    fn palw_gen_lane_mirror_v1(&self) -> (Option<u64>, [u32; 4]) {
+        let v5 = self.palw_fp_job_v5.filter(|a| *a != ForkActivation::never()).map(|a| a.daa_score());
+        let caps = match self.palw_gen_v1.filter(|f| f.activation != ForkActivation::never()) {
+            Some(fence) => [
+                fence.ceilings.image.max_inflight_claims,
+                fence.ceilings.embedding.max_inflight_claims,
+                fence.ceilings.audio.max_inflight_claims,
+                fence.ceilings.video.max_inflight_claims,
+            ],
+            None => [0; 4],
+        };
+        (v5, caps)
     }
 
     /// **The generative fence's own refusals**, asked by [`Params::validate_palw_v2`]. A
@@ -381,6 +419,17 @@ impl Params {
             return Err(PalwModeV2Error::Invalid(
                 "palw_gen_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_gen_v1 after the bundle is \
                  assembled",
+            ));
+        }
+        // The tensor lane's mirrored facts (RFC-0003 §I.4): `palw_fp_job_v5`'s height and the cap on claims in flight.
+        let lane_mirror = match &self.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) => (bundle.state.fp_job_v5_from_daa(), bundle.state.gen_max_inflight_claims_all()),
+            _ => (None, [0; 4]),
+        };
+        if lane_mirror != self.palw_gen_lane_mirror_v1() {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_fp_job_v5 or palw_gen_v1's in-flight cap disagrees with the V2 bundle's mirror: mirror them with \
+                 Params::sync_palw_gen_v1 after the bundle is assembled",
             ));
         }
         let Some(fence) = self.palw_gen_v1 else { return Ok(()) };

@@ -1541,6 +1541,18 @@ pub struct PalwStateParamsV2 {
     /// copy that disagrees.
     #[borsh(skip)]
     gen_from_daa: Option<u64>,
+    /// **RFC-0003 §I.4: `Params::palw_fp_job_v5`'s height**, mirrored by `Params::sync_palw_gen_v1`
+    /// because the fold's tensor branch holds only these params: below the height it refuses a tensor
+    /// claim by name, as the second lock behind the acceptance walk's drop. `None` on every shipped
+    /// preset; skipped by borsh for `gen_from_daa`'s reason, and `validate_palw_v2` refuses a copy that
+    /// disagrees.
+    #[borsh(skip)]
+    fp_job_v5_from_daa: Option<u64>,
+    /// **RFC-0003 §I.4.8: the generative fence's cap on claims one class holds in flight**, per profile
+    /// (`Image`, `Embedding`, `Audio`, `Video`), mirrored by `Params::sync_palw_gen_v1` for the same
+    /// reason; zeros where the fence is not armed. Skipped by borsh for `gen_from_daa`'s reason.
+    #[borsh(skip)]
+    gen_max_inflight_claims: [u32; 4],
     /// **RFC-0002 Phase F: `Params::palw_tir_fence2`'s height**, mirrored by
     /// `Params::sync_palw_tir_fence2` for `tir_from_daa`'s reason (the fold reads the credited work,
     /// the admission rules and the DA court's IR unit from it). `None` on every shipped preset.
@@ -1754,6 +1766,8 @@ impl PalwStateParamsV2 {
             floor_refusal_retry_from_daa: None,
             tir_from_daa: None,
             gen_from_daa: None,
+            fp_job_v5_from_daa: None,
+            gen_max_inflight_claims: [0; 4],
             tir_fence2_from_daa: None,
         })
     }
@@ -1948,6 +1962,41 @@ impl PalwStateParamsV2 {
     /// **Is `palw_gen_v1` in force at `daa_score`?** `false` on every shipped preset.
     pub fn gen_active_at(&self, daa_score: u64) -> bool {
         self.gen_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0003 §I.4: the tensor lane's mirror of `Params::palw_fp_job_v5`'s height** — written by
+    /// `Params::sync_palw_gen_v1` and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_fp_job_v5_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.fp_job_v5_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_fp_job_v5`'s height, if the network arms it (the mirror).
+    pub fn fp_job_v5_from_daa(&self) -> Option<u64> {
+        self.fp_job_v5_from_daa
+    }
+
+    /// **Is `palw_fp_job_v5` in force at `daa_score`?** `false` on every shipped preset.
+    pub fn fp_job_v5_active_at(&self, daa_score: u64) -> bool {
+        self.fp_job_v5_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0003 §I.4.8: the generative fence's per-profile cap on claims in flight** — written by
+    /// `Params::sync_palw_gen_v1` and by nothing else (and by fixtures); zeros where the fence is not armed.
+    pub fn with_gen_max_inflight_claims(mut self, caps: [u32; 4]) -> Self {
+        self.gen_max_inflight_claims = caps;
+        self
+    }
+
+    /// The cap on one class's claims in flight for `profile` (`Image`, `Embedding`, `Audio`, `Video`; 0
+    /// for any other, and where the fence is not armed).
+    pub fn gen_max_inflight_claims(&self, profile: crate::palw_gen_v1::PalwGenProfileV1) -> u32 {
+        (profile as usize).checked_sub(1).and_then(|i| self.gen_max_inflight_claims.get(i)).copied().unwrap_or(0)
+    }
+
+    /// Every profile's cap, in `Image`, `Embedding`, `Audio`, `Video` order (the mirror as written).
+    pub fn gen_max_inflight_claims_all(&self) -> [u32; 4] {
+        self.gen_max_inflight_claims
     }
 
     /// **RFC-0002 Phase F: the second IR fence's mirror** — written by `Params::sync_palw_tir_fence2`

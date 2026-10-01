@@ -69,7 +69,7 @@ pub const PALW_FP_V5_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-v5/job-id/v1";
 pub const PALW_FP_V5_MAX_IMAGES: usize = misaka_palw_tir::pipeline::MAX_JOB_IMAGES;
 
 /// **FP Job V5's tail**: what version 8 adds after the V4 job's bytes — its images, then its source.
-/// The lane's job type carries it as one field (`PalwFreePromptJobV3::v5`), so the carried bytes are
+/// The lane's job type carries it as one field (`PalwFreePromptJobV3::tail`), so the carried bytes are
 /// this wrapper's.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwFpV5TailV1 {
@@ -181,16 +181,22 @@ impl PalwFreePromptJobV5 {
     /// bytes as this wrapper's.
     pub fn into_carried(&self) -> PalwFreePromptJobV3 {
         let tail = PalwFpV5TailV1 { images: self.images.clone(), source: self.source };
-        PalwFreePromptJobV3 { version: PALW_FP_V5_VERSION, v5: Some(tail), ..self.v4.clone() }
+        PalwFreePromptJobV3 {
+            version: PALW_FP_V5_VERSION,
+            tail: Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::V5(tail)),
+            ..self.v4.clone()
+        }
     }
 
     /// **The V5 job a carried job is**, if it is one: version 8, its decode rules and its tail present.
     pub fn from_carried(job: &PalwFreePromptJobV3) -> Result<Self, PalwFpV5Error> {
-        let Some(tail) = job.v5.clone().filter(|_| job.version == PALW_FP_V5_VERSION && job.decode.is_some()) else {
+        let Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::V5(tail)) =
+            job.tail.clone().filter(|_| job.version == PALW_FP_V5_VERSION && job.decode.is_some())
+        else {
             return Err(PalwFpV5Error::NotAV5Job { version: job.version });
         };
         Ok(Self {
-            v4: PalwFreePromptJobV3 { version: PALW_FP_V4_VERSION, v5: None, ..job.clone() },
+            v4: PalwFreePromptJobV3 { version: PALW_FP_V4_VERSION, tail: None, ..job.clone() },
             images: tail.images,
             source: tail.source,
         })
