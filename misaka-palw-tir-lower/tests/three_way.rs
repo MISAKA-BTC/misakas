@@ -164,7 +164,7 @@ fn every_hf_tiny_fixture_program_is_the_same_on_all_three_implementations() {
 #[test]
 fn every_prequantised_fixture_is_the_same_on_all_three_implementations() {
     let mut names: Vec<(String, String)> = Vec::new();
-    for (root, count) in [("tests/fixtures/hf-quant", 24), ("tests/fixtures/gguf", 11)] {
+    for (root, count) in [("tests/fixtures/hf-quant", 33), ("tests/fixtures/gguf", 11)] {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(root);
         let mut here: Vec<String> =
             std::fs::read_dir(&dir).expect("fixtures").map(|e| e.expect("entry").file_name().to_string_lossy().to_string()).collect();
