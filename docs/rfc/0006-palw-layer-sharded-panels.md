@@ -7,7 +7,7 @@
 | Created | 2026-10-01 |
 | Normative dependencies | RFC-0002 (PALW-TIR v1: commit points, cones, the step space of an IR class, the IR one-move court) |
 | Affects | spec/palw 04b (§10: a cell), 07 (licence by parts, Final), 08 (draw, receipts, quorum, recount, outsider), 10 (locks and pay per cell), 16 (fences) · IR classes only, all networks (dormant until armed) · `consensus/core` (`palw_shard_panel_v1`, `palw_panel_v2`, `palw_state_v2`, `palw_verification_v2`, `palw_receipt`, `palw_tir_class_v1`), kaspad's panel worker, `misaka-palw-tir-exec` (a cell verifier) |
-| Branch | `rfc6/gpu-shard` (text; an off-chain prototype in `misaka-palw-tir-exec/tests/layer_shard.rs`) |
+| Branch | `rfc6/gpu-shard` (text; an off-chain prototype in `misaka-palw-tir-gpu/tests/layer_shard.rs`) |
 | Related | ADR-0098 (coverage is a number), **ADR-0099 / ADR-0100** (a seat holds a shard: the plan, the stratified draw, `ShardCourtAccused`, `ShardReceiptLicensed` — built for legacy classes, dormant), ADR-0103 (held context; D2 interval, D7 a seat holds a shard of the model and its state), ADR-0111 (leaf demand), ADR-0062 (DA court), ADR-0117 (a draw is one forward), ADR-0133 (verification is its own clock; segment-scoped receipts), **ADR-0147** (independence is drawn: the outsider seat), ADR-0152 (Q-1…Q-7, `basis_k`), ADR-0160 (claim capacity), RFC-0002 Phase F (`TirShardCourtAccused`, `TirStepLeaf`/`TirStepNode`), **RFC-0007** (lane M4: batched verification certificates and algebraic checks — receipt aggregation and cheaper per-shard checks are its subject, not this RFC's), `docs/design/palw/tir/gpu-integer-backend.md` |
 
 ## 概要(日本語)
@@ -47,8 +47,13 @@
 - **費用。** 1 claim の receipt が shard 数倍になる(4 shard で約 77 KB)。receipt の集約は RFC-0007 の主題。
 - **有効化。** 休眠 fence `palw_tir_shard_v1` を 1 本(Some-only hash、`never()` collapse、未使用の高さ)。fence を跨ぐ
   drill(cell の嘘・境界行の隠匿・shard だけ持てる seat)を出荷 binary で回してから。
-- **prototype(D4)。** 小さな TIR fixture を producer として 1 回実行して trace を commit する。次に層 `[a, b)` だけを、
-  境界行とその層の重みだけで検証する。honest trace は受理し、cell 内の改ざんは検出する(§9)。
+- **prototype(D4、実装済み)。** 小さな TIR fixture を producer として 1 回実行し、trace を Merkle root に commit する。
+  層 `[a, b)` × 位置区間の cell を、root に対して開いた境界行・過去の History 行・checkpoint と、その層の重みだけで
+  検証する(参照評価器の `eval_cone`)。
+  - honest trace は全 cell が受理する。cell 内の改ざんは、その cell がその leaf で検出する。
+  - 境界行の「つじつま合わせ」の嘘は、下流 cell が素通しし、上流 cell が検出する(補題どおり)。
+  - state の嘘は、それを書く segment が checkpoint で検出する。
+  - 8 層 4 shard では、1 cell が持つ重みは 25〜27 %、読む trace は 0〜1.6 %、照合するのは 1/8(§9)。
 
 ## Summary
 
@@ -623,21 +628,58 @@ Not projected:
 
 ## 9. The prototype (D4)
 
-`misaka-palw-tir-exec/tests/layer_shard.rs` is an off-chain test; it changes no consensus code. It:
+`misaka-palw-tir-gpu/tests/layer_shard.rs` is an off-chain test; it changes no consensus code. It runs
+on the reference evaluator only and needs no GPU.
 
-1. builds a small PALW-TIR program (four dense layers of the RFC-0002 corpus shape: RMS norm, GQA over a
-   history, a GLU MLP, an `i32` residual carry);
-2. runs it once as a producer would, committing every commit point of every occurrence at every
-   position (the step tree's leaves);
-3. verifies the cell of layers `[a, b)` over a position segment **from the committed boundary rows,
-   the committed history rows before the segment, and only those layers' params**. Every other param
-   instance is absent, and the verifier fails if it reads one;
-4. shows the cell accepts the honest trace, rejects a tampered leaf inside it, and does NOT reject a
-   consistent lie planted at its input boundary, which the upstream cell does reject (§2.1,
-   consequence 1);
-5. reports the fraction of the weights and of the committed trace the cell touched.
+1. **Produce.** A small PALW-TIR program runs once as a producer would. Every commit point of every
+   occurrence at every position becomes a leaf, in slot order, with every `Fixed` instance
+   checkpointed after each position `a` where `(a + 1) % C == 0`. The leaves become a Merkle tree
+   (BLAKE2b-256), whose root is the claim's commitment. The producer is cross-checked against the
+   reference evaluator's own run (`Interpreter::run`), commit point for commit point.
+2. **Verify a cell.** A seat verifies occurrences `[a, b)` over positions `[p, q)`. It holds the root
+   and a params source that serves exactly the cell's param instances and refuses every other one, so
+   a check that needed another shard's weight fails. It opens every input against the root:
+   - each position's carry-in;
+   - the history rows before `p`;
+   - the checkpoints at `p`.
 
-Results: §9.1 (added with the prototype's commit).
+   It recomputes every commit point with `Interpreter::eval_cone` — the court's own function — in
+   position order, and checks each recomputed leaf by hashing it up the committed path. No producer
+   value is used as an output.
+3. **Fixtures:**
+   - a four-layer decoder in `tir-exec-bench`'s conventions (`d` 64, GQA over full-attention histories,
+     the wide RMS norm, a GLU MLP; 2 shards × 3 segments);
+   - the same at eight layers and `d` 256 (4 shards × 2 segments);
+   - the golden vector's gated-delta program `gdn-k2-v4-grouped` (two layers of per-layer `Fixed` state,
+     `C = 2`; 2 shards × 4 segments).
+
+### 9.1 Results (2026-10-01)
+
+- **The honest trace verifies cell by cell**: 6 cells, 14 cells (with the 8-layer fixture) and 8 cells.
+  No cell asked for a param outside its shard. The cells' checks **tile** the committed leaves: every
+  leaf is checked by exactly one cell.
+- **A tampered leaf inside a cell** (a commit point of layer 2 at position 5, one value moved by one)
+  is found by that cell, **at that leaf**. The other five cells verify.
+- **A consistent lie at a boundary row.** Layer 1's carry-out at position 6 is moved, and every later
+  leaf is computed honestly from it. The **downstream** cell (layers 2–3, positions 4–8) verifies:
+  its inputs and outputs agree. The **upstream** cell (layers 0–1, positions 4–8) finds the lie at
+  the boundary row. This is the detection lemma's first consequence (§2.1), exactly.
+- **A consistent lie in a state.** The GDN layer 1's state write at position 3 is moved, and the lie
+  rides into the checkpoint the next segment starts from. The cell that writes it finds it at the
+  checkpoint leaf. The next segment's cell starts from the lying checkpoint and verifies. Shard 0
+  never reads it.
+- **What a cell touches** (8 layers, 4 shards × 2 segments, `d` 256):
+
+  | | per cell |
+  | --- | --- |
+  | weights | 25.3–26.8 % of all param bytes (`pre`'s embedding and `post`'s head ride with the end shards) |
+  | committed trace read, as opened inputs | 0 % (the first segment of shard 0: tokens only) to 1.6 % (a late segment of a middle shard: its carry-ins and its layers' earlier history rows) |
+  | committed trace checked | 12.2–13.1 % (one eighth) |
+
+  At four layers and two shards the cells held 54 % of the weights, read up to 9.4 % of a 12-position
+  trace, and checked 15.6–17.8 %. The history a late segment reads grows with its position (§7). At
+  real widths it is a small fraction next to the weights, which dominate these toy models less than
+  the per-layer 65,536-entry activation tables do.
 
 ## 10. Activation
 

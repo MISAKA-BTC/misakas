@@ -21,6 +21,7 @@
 
 pub mod device;
 pub mod exec;
+pub mod fixtures;
 pub mod kernels;
 pub mod tensor;
 pub mod wgsl;

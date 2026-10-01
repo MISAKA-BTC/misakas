@@ -33,6 +33,8 @@ bytemuck = "1"
 rayon = "1.8.0"
 
 [dev-dependencies]
+# The RFC-0006 prototype's trace root (tests/layer_shard.rs): leaves opened against a Merkle root.
+blake2b_simd = "1.0.2"
 borsh = { version = "1.5.1", features = ["derive", "rc"] }
 rand = "0.8.5"
 rand_chacha = "0.3.1"

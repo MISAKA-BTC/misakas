@@ -90,6 +90,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2261d10cca569e4643e526d8dc2e62e433cc8aba21ab764233731f8d369bf394"
 
 [[package]]
+name = "blake2b_simd"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3560a7b1951efe814fcd721938313adc56753ca39f4b23847d7e9a2402f5dbff"
+dependencies = [
+ "arrayvec",
+ "constant_time_eq",
+]
+
+[[package]]
 name = "block2"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -174,6 +184,12 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "unicode-width",
 ]
+
+[[package]]
+name = "constant_time_eq"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "crossbeam-deque"
@@ -436,6 +452,7 @@ dependencies = [
 name = "misaka-palw-tir-gpu"
 version = "0.1.0"
 dependencies = [
+ "blake2b_simd",
  "borsh",
  "bytemuck",
  "misaka-palw-tir",
