@@ -156,7 +156,10 @@ impl Drop for Guard {
 }
 
 fn held(c: &Sd3Class) -> (GenHeldClassV1<misaka_palw_tir_artifact::PalwTirContainerV2>, Guard) {
-    let path = std::env::temp_dir().join(format!("misaka-gen-sd3-{}.palwtir2", std::process::id()));
+    // One file per call: the tests of this file run in threads of one process and each removes its own container on drop.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("misaka-gen-sd3-{}-{n}.palwtir2", std::process::id()));
     let guard = Guard(path.clone());
     gen_write_declared_container_v1(&path, &c.declared, &c.weights, "{\"model_id\":\"palw-fixture/sd3-tiny\"}".to_string())
         .expect("the container");
@@ -268,6 +271,38 @@ fn the_sd3_class_passes_the_gate_and_every_cone_close_fits_one_carrier() {
     assert!(over.is_empty(), "kinds whose cone close exceeds the one-move carrier: {over:?}");
 }
 
+/// **The class registers where a close can only ride ONE carrier** (PALW-GEN-21): the same registration under the same ruleset without
+/// the held leaf challenge's chunks (`palw_held_close_chunks_v1`) is admitted — every close the gate prices, as the builder carries it
+/// (PALW-GEN-20), fits the one-move accusation — and the catalog records the worst of them. Before the lowering used static maps and
+/// two-piece tables the same pricing refused it (the HF activation tables of four 32 KiB pieces are a 140 KB close; a convolution that
+/// gathers by an index table is a close of one input leaf per tap).
+#[test]
+fn the_sd3_class_registers_where_a_close_can_only_ride_one_carrier() {
+    use kaspa_consensus_core::palw_gen_admission_v1::{PalwGenAdmissionRulesV1, palw_gen_post_genesis_registration_v1, palw_gen_registration_preflight_at_v1};
+    use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+    let Some(c) = sd3_class() else { return };
+    let mut p = all_armed();
+    (PALW_HELD_CLOSE_CHUNKS_ENTRY_V1.set)(&mut p, None);
+    let rules = PalwGenAdmissionRulesV1::at(&p, 1).expect("the generative fence is in force");
+    assert!(rules.held_armed && !rules.held_close_chunks, "the held regime without chunks: a close can only ride one carrier");
+    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
+    let bond = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_bytes([0; 64]), 0));
+    let object =
+        palw_gen_post_genesis_registration_v1(c.declared.class.clone(), c.declared.artifact_root, 0, 1 << 100, 1, 1, bond, Vec::new())
+            .expect("the registration counts");
+    let admitted = palw_gen_registration_preflight_at_v1(&p, bundle, &object, 1)
+        .unwrap_or_else(|e| panic!("the class is refused where a close can only ride one carrier: {e}"));
+    let one_move = palw_gen_one_move_max_proof_bytes_v1();
+    eprintln!(
+        "admitted with one-move closes only: the catalog's worst close {} B (one-move carrier {one_move} B), {} B of terminal MACs",
+        admitted.entry.court_cost.max_close_bytes, admitted.entry.court_cost.max_terminal_macs
+    );
+    assert!(admitted.entry.court_cost.max_close_bytes <= one_move);
+    // And the chunked ruleset records the same class and the same worst close.
+    let chunked = c.declared.admission.as_ref().expect("admitted with chunks");
+    assert_eq!(chunked.entry.court_cost.max_close_bytes, admitted.entry.court_cost.max_close_bytes);
+}
+
 /// What one cone close is made of, for the kinds the table flags: the frame, the operands (step leaves it opens, each with
 /// its path) and the params (artifact openings). `SD3_KIND=<substring of a kind>` picks the kinds (default: none).
 #[test]
@@ -323,10 +358,35 @@ fn gate_prices(
     let mut by_point = BTreeMap::new();
     for (s, stage) in bounds.into_iter().enumerate() {
         for b in stage {
-            by_point.insert((s as u8, b.block, b.node), b);
+            // A checkpoint leaf's bound is by `(stage, state)`: see `checkpoint_prices`.
+            if b.checkpoint.is_none() {
+                by_point.insert((s as u8, b.block, b.node), b);
+            }
         }
     }
     (by_point, work)
+}
+
+/// The prices of the stages' checkpoint leaves, by `(stage, state)` — none for this class (no `Fixed` state outside `post`).
+fn checkpoint_prices(c: &Sd3Class) -> BTreeMap<(u8, u16), u64> {
+    use kaspa_consensus_core::palw_gen_close_price_v1::{PALW_GEN_CLOSE_SIZING_WORK_CAP_V1, palw_gen_worst_closes_of_class_v1};
+    let leaves = kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&c.spec.programs).expect("inventory").leaf_count();
+    let (bounds, _) = palw_gen_worst_closes_of_class_v1(
+        &c.declared.class,
+        &c.spec.pipeline,
+        &c.spec.programs,
+        leaves,
+        true,
+        u64::MAX,
+        u64::MAX,
+        PALW_GEN_CLOSE_SIZING_WORK_CAP_V1,
+    )
+    .expect("the sizing");
+    bounds
+        .into_iter()
+        .enumerate()
+        .flat_map(|(s, st)| st.into_iter().filter_map(move |b| b.checkpoint.map(|state| ((s as u8, state), b.close_bytes))))
+        .collect()
 }
 
 /// The commit point `(stage, block, node)` a listed leaf is a leaf of, and its kind's name — `None` for a checkpoint leaf.
@@ -361,6 +421,24 @@ fn the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap() {
     }
     eprintln!("the largest priced close: {} B at {:?} (one-move carrier {one_move_max} B)", worst.0, worst.1);
     assert!(work <= PALW_GEN_CLOSE_SIZING_WORK_CAP_V1);
+    // Where the work goes: per stage.
+    {
+        use kaspa_consensus_core::palw_gen_close_price_v1::PalwGenClassSizingV1;
+        use kaspa_consensus_core::palw_tir_close_size_v1::{PalwTirCloseSizingV1, PalwTirParamFormV1, palw_gen_worst_closes_v1};
+        let class = &c.declared.class;
+        let tables = PalwGenClassSizingV1::new(class, &c.spec.pipeline, &c.spec.programs).expect("tables");
+        let leaves =
+            kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&c.spec.programs).expect("inventory").leaf_count();
+        let mut total = 0u64;
+        for (s, st) in c.spec.pipeline.stages.iter().enumerate() {
+            let z = tables.stage(class, &c.spec.pipeline, &c.spec.programs, s).expect("stage");
+            let sizing = PalwTirCloseSizingV1 { form: PalwTirParamFormV1::PerLeaf, court: true, cap: 1 << 40, stop_above: None };
+            let (_, w) = palw_gen_worst_closes_v1(&z.space, &z.inventory, &z.job, &sizing, s, leaves, &z.model, z.pricing).expect("sizes");
+            total += w;
+            eprintln!("  stage {s:>2} {:<12} {w:>10} steps", st.name);
+        }
+        eprintln!("  total {total} steps");
+    }
 }
 
 /// **PALW-GEN-20: the gate's price is an upper bound of the measured close — at every commit point, at every sampled leaf** (a
@@ -408,6 +486,9 @@ fn the_gate_prices_every_close_at_least_what_it_measures() {
         }
     }
     let by_leaf: BTreeMap<u64, (u8, u8, u16)> = by_point.iter().flat_map(|(k, v)| v.iter().map(move |l| (*l, *k))).collect();
+    let state_leaves = listing.iter().filter(|l| l.lanes > 0 && point_of(&c, l).is_none()).count();
+    eprintln!("{state_leaves} checkpoint leaves; their prices by (stage, state): {:?}", checkpoint_prices(&c));
+    assert_eq!(state_leaves == 0, checkpoint_prices(&c).is_empty(), "a class with checkpoint leaves is priced at them, and one without is not");
     eprintln!("the gate sizes {} commit points in {work} steps; measuring {} leaves (stride {stride})", prices.len(), sample.len());
     // Measured, per commit point: the largest, its leaf and the samples taken.
     let mut measured: BTreeMap<(u8, u8, u16), (u64, u64, usize)> = BTreeMap::new();

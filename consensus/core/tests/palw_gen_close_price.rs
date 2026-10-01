@@ -13,7 +13,12 @@
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_class_admission_v2::PalwClassAdmissionError;
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
-use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PROMPT_MODE_USER};
+use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
+use kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2;
+use kaspa_consensus_core::palw_fp_job_v5::PalwFreePromptJobV5;
+use kaspa_consensus_core::palw_freeprompt_v3::{
+    PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V4_VERSION, PalwFreePromptJobV3,
+};
 use kaspa_consensus_core::palw_gen_artifact_v1::{PalwGenInventoryIndexV1, palw_gen_inventory_root_v1};
 use kaspa_consensus_core::palw_gen_class_v1::*;
 use kaspa_consensus_core::palw_gen_close_price_v1::palw_gen_worst_closes_of_class_v1;
@@ -21,7 +26,7 @@ use kaspa_consensus_core::palw_gen_close_v1::*;
 use kaspa_consensus_core::palw_gen_job_v1::*;
 use kaspa_consensus_core::palw_gen_step_v1::PalwGenLeafKindV1;
 use kaspa_consensus_core::palw_gen_v1::PalwGenProfileV1;
-use kaspa_consensus_core::palw_gen_worker_v1::{PalwGenExecutionV1, palw_gen_execute_tensor_v1};
+use kaspa_consensus_core::palw_gen_worker_v1::{PalwGenDecodeV1, PalwGenExecutionV1, palw_gen_execute_tensor_v1, palw_gen_execute_v1};
 use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
@@ -288,7 +293,7 @@ fn priced_bounds_measured(f: &Fixture, job: &PalwGenJobV1, ids: PalwGenIdsV1<'_>
     let by_point: BTreeMap<(u8, u8, u16), (u64, bool)> = priced
         .iter()
         .enumerate()
-        .flat_map(|(s, st)| st.iter().map(move |b| ((s as u8, b.block, b.node), (b.close_bytes, b.dissected))))
+        .flat_map(|(s, st)| st.iter().filter(|b| b.checkpoint.is_none()).map(move |b| ((s as u8, b.block, b.node), (b.close_bytes, b.dissected))))
         .collect();
     let ev = PalwGenEvidenceV1 {
         row: &f.row,
@@ -375,4 +380,142 @@ fn a_close_priced_past_the_carrier_is_refused_by_name_and_the_sizing_stops_there
         }
         other => panic!("a sizing past its work cap is refused by name: {other:?}"),
     }
+}
+
+// ---- a Text class (the golden toy VLM: a vision stage, the language model as the text stage over `TextStream`, one image) --------
+
+fn vlm() -> (Fixture, PalwFreePromptJobV5) {
+    let (v, pipeline_bytes, program_bytes, pipeline, programs, params) = load("toy-vlm.json");
+    let img = &v["job"]["images"][0];
+    let image = JobImageV1 {
+        h: img["h"].as_u64().unwrap() as u32,
+        w: img["w"].as_u64().unwrap() as u32,
+        rgb: unhex(img["rgb_hex"].as_str().unwrap()),
+    };
+    let class = PalwGenClassV1 {
+        version: PALW_GEN_CLASS_VERSION_V1,
+        profile: PalwGenProfileV1::Text as u8,
+        pipeline: pipeline_bytes,
+        programs: program_bytes,
+        layouts: layouts(&pipeline, &programs, 4),
+        output: OutputSpecV1::tokens(pipeline.stages[pipeline.output_stage as usize].max_trip),
+        offers: PalwGenOffersV1 {
+            steps: vec![],
+            scalars: vec![],
+            max_prompt_tokens: 8,
+            max_negative_tokens: 0,
+            images: vec![PalwGenImageOfferV1 { h: image.h, w: image.w, tile_len: 4, token_equivalents: 1_000_000 }],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
+        },
+        tokenizer_id: Hash64::from_bytes([0x72; 64]),
+    };
+    let row = registered(class.clone(), &programs, &params);
+    let f = Fixture { class, row, pipeline, programs, params, image: Some(image) };
+    // An FP Job V4 of the golden vectors, retargeted at the class, with the key as long as it is on chain.
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/fp-v4/job_v4_encoding.json");
+    let j: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let mut v4: PalwFreePromptJobV3 = j["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| borsh::from_slice::<PalwFreePromptJobV3>(&unhex(c["borsh_hex"].as_str().unwrap())).unwrap())
+        .find(|j| j.version == PALW_FP_V4_VERSION)
+        .unwrap();
+    v4.class_id = f.row.class_id;
+    v4.tokenizer_id = f.class.tokenizer_id;
+    v4.prompt_tokens = vlm_prompt().len() as u32;
+    v4.prompt_token_ids_hash = prompt_token_ids_commitment_v1(FORM, &vlm_prompt()).unwrap();
+    v4.decode_token_limit = 4;
+    v4.decode = Some(DecodeConfigV4::NOOP);
+    v4.temperature_q = PalwDecodeSamplingV2::GREEDY.temperature_q;
+    v4.executor_pubkey = vec![0xAB; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN];
+    let image = f.image.as_ref().unwrap();
+    let input_root = misaka_palw_gen::output::input_image_root_v1(image.h, image.w, 4, &image.rgb).unwrap();
+    let images = vec![PalwGenImageInputRefV1 { input_root: Hash64::from_bytes(input_root), h: image.h, w: image.w }];
+    (f, PalwFreePromptJobV5 { v4, images, source: None })
+}
+
+fn vlm_prompt() -> Vec<u32> {
+    vec![3, 15, 15, 5]
+}
+
+#[test]
+fn the_price_bounds_every_measured_close_of_the_toy_vlm_class() {
+    let (f, job) = vlm();
+    let run_job = misaka_palw_tir::pipeline::PipelineJob {
+        prompt: vlm_prompt(),
+        images: vec![f.image.clone().unwrap()],
+        ..misaka_palw_tir::pipeline::PipelineJob::default()
+    };
+    let decode = PalwGenDecodeV1::of(&job).unwrap();
+    let e = palw_gen_execute_v1(&f.pipeline, &f.programs, &f.class.layouts, &f.params, &run_job, &decode, job.v4.sampling_seed).unwrap();
+    let binding = PalwGenStepBindingV1::of(&job, &e.claim, e.space.leaf_count());
+    let leaves = PalwGenInventoryIndexV1::new(&f.programs).expect("an inventory").leaf_count();
+    let (priced, work) =
+        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, &f.programs, leaves, true, u64::MAX, u64::MAX, 1 << 30).expect("sizing");
+    let by_point: BTreeMap<(u8, u8, u16), (u64, bool)> = priced
+        .iter()
+        .enumerate()
+        .flat_map(|(s, st)| st.iter().filter(|b| b.checkpoint.is_none()).map(move |b| ((s as u8, b.block, b.node), (b.close_bytes, b.dissected))))
+        .collect();
+    // The checkpoint leaves' prices, by `(stage, state)`.
+    let by_state: BTreeMap<(u8, u16), u64> = priced
+        .iter()
+        .enumerate()
+        .flat_map(|(s, st)| st.iter().filter_map(move |b| b.checkpoint.map(|state| ((s as u8, state), b.close_bytes))))
+        .collect();
+    let prompt = vlm_prompt();
+    let images: Vec<JobImageV1> = f.image.iter().cloned().collect();
+    let ev = PalwGenEvidenceV1 {
+        row: &f.row,
+        params: &f.params,
+        execution: &e,
+        binding: binding.into(),
+        prompt: &prompt,
+        negative: &[],
+        images: &images,
+        source: &[],
+    };
+    let (mut done, mut margin, mut state_leaves, mut worst_state) = (0usize, i64::MAX, 0usize, 0u64);
+    let mut global = 0u64;
+    for (s, stage) in e.space.stages.iter().enumerate() {
+        for leaf in stage.leaves() {
+            let index = global;
+            global += 1;
+            let close = || {
+                let c = ev.cone_close(index, &LIMITS).unwrap_or_else(|e| panic!("stage {s} leaf {index}: {e}"));
+                borsh::to_vec(&PalwCourtVerdictProofV2::GenCone { close: Box::new(c) }).unwrap().len() as u64
+            };
+            let PalwGenLeafKindV1::Commit { occurrence, node } = leaf.coord.kind else {
+                let PalwGenLeafKindV1::State { state, .. } = leaf.coord.kind else { unreachable!() };
+                let bytes = close();
+                let price = by_state
+                    .get(&(s as u8, state))
+                    .copied()
+                    .unwrap_or_else(|| panic!("toy vlm: no price for the checkpoint of state {state} of stage {s}"));
+                assert!(price >= bytes, "toy vlm: stage {s} checkpoint of state {state} at leaf {index}: priced {price} B, measured {bytes} B");
+                state_leaves += 1;
+                worst_state = worst_state.max(bytes);
+                continue;
+            };
+            let block = stage.occurrence_block(occurrence).expect("an occurrence");
+            let (price, dissected) = by_point[&(s as u8, block, node)];
+            if dissected || f.row.dissected.contains(&(s as u8, block, node)) {
+                continue;
+            }
+            let bytes = close();
+            assert!(price >= bytes, "toy vlm: stage {s} block {block} node {node} at leaf {index}: priced {price} B, measured {bytes} B");
+            margin = margin.min(price as i64 - bytes as i64);
+            done += 1;
+        }
+    }
+    let worst_priced = by_point.values().map(|p| p.0).max().unwrap_or(0);
+    eprintln!(
+        "toy vlm: {} commit points sized in {work} steps, {done} cone closes measured, the smallest margin {margin} B; {state_leaves} checkpoint leaves (priced per state: {by_state:?}), the largest of their closes {worst_state} B (the largest priced commit-point close {worst_priced} B)",
+        by_point.len()
+    );
+    assert!(done > 0);
 }

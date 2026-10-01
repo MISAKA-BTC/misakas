@@ -1232,6 +1232,10 @@ impl<'a> PalwTirClosePriceV1<'a> {
 pub struct PalwTirCloseBoundV1 {
     pub block: u8,
     pub node: u16,
+    /// A pipeline stage's CHECKPOINT leaf (RFC-0003 PALW-GEN-20): the `Fixed` state whose leaf this bound sizes, `node` then being the
+    /// `StateWrite` that writes it (a close at the leaf evaluates the state's value after the position, which is that node's). `None`
+    /// for a commit point.
+    pub checkpoint: Option<u16>,
     pub dissected: bool,
     /// The carried bytes of the worst terminal close (a whole tile's, or a bottom's).
     pub close_bytes: u64,
@@ -1409,7 +1413,8 @@ fn worst_closes_priced(
             // row `t` only, the same units at every position — so its history reads are counted from
             // one row's pattern.
             let local = !dissected && has_h && reductions.is_empty() && !has_fixed && p_late <= p_max;
-            let mut worst = PalwTirCloseBoundV1 { block: bi8, node: ni16, dissected, close_bytes: 0, root_claim_bytes: 0 };
+            let mut worst =
+                PalwTirCloseBoundV1 { block: bi8, node: ni16, checkpoint: None, dissected, close_bytes: 0, root_claim_bytes: 0 };
             for occ in chosen.iter().copied().filter(|o| occurrences[*o as usize].0 == bi8) {
                 let twin = |pos: u32,
                             elements: &[usize],
@@ -1731,6 +1736,57 @@ fn worst_closes_priced(
                 .is_some_and(|(close, root)| worst.close_bytes > close || (worst.dissected && worst.root_claim_bytes > root));
             out.push(worst);
             if past {
+                return Ok((out, sizing.cap - budget.get()));
+            }
+        }
+    }
+    // **Checkpoint leaves** (a pipeline stage's): a `Fixed` state the stage does not write in `post` has a leaf after every `C`-th
+    // position (`palw_gen_step_v1`), and a close at it evaluates the state's value after the position — the `StateWrite`'s cone —
+    // from the leaves before it. Sized at the checkpoint position of the widest job whose replay is longest, over every tile of the
+    // state, the disputed leaf a state tile. A cone that reduces over the history is not sized here: refused by name.
+    if let Some(g) = gen_stage
+        && p_max + 1 >= c
+    {
+        for inst in space.fixed_instances() {
+            if g.post_writers.iter().any(|(state, _)| *state == inst.state) {
+                continue;
+            }
+            // Never written: its checkpoint is zeros, and nothing is read.
+            let Some((occ, writer)) = state_writer_v1(program, inst.state, inst.layer) else { continue };
+            let (block, _) = occurrences[occ as usize];
+            if !crate::palw_tir_dissect_v1::palw_tir_cone_reductions_v1(&program.blocks[block as usize], writer).is_empty() {
+                return Err(format!("the checkpoint leaf of state {} reduces over the history: its close is not sized", inst.state));
+            }
+            let pos = rep_from(0);
+            let (lanes, count) = (inst.tile_lanes as usize, inst.elements as usize);
+            let mut bound = PalwTirCloseBoundV1 {
+                block,
+                node: writer,
+                checkpoint: Some(inst.state),
+                dissected: false,
+                close_bytes: 0,
+                root_claim_bytes: 0,
+            };
+            for first in (0..count).step_by(lanes.max(1)) {
+                let elements: Vec<usize> = (first..(first + lanes).min(count)).collect();
+                charge(16 + elements.len() as u64)?;
+                let request = PalwTirCloseRequestV1 {
+                    ctx: DemandContext { pos, occurrence: occ },
+                    target: writer,
+                    elements: &elements,
+                    supplied: &[],
+                    range: None,
+                    both: false,
+                };
+                let split =
+                    close_reads_split(space, job_ctx, inventory, &request, budget.get(), false, false, leaf_cost, gen_stage)?;
+                budget.set(budget.get().saturating_sub(split.work));
+                let mut reads = split.reads;
+                reads.merge(&split.hist);
+                bound.close_bytes = bound.close_bytes.max(price.close(&reads, elements.len() as u32));
+            }
+            out.push(bound);
+            if sizing.stop_above.is_some_and(|(close, _)| out.last().is_some_and(|b| b.close_bytes > close)) {
                 return Ok((out, sizing.cap - budget.get()));
             }
         }

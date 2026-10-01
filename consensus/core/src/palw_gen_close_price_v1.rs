@@ -109,7 +109,6 @@ fn widest_binding(class: &PalwGenClassV1, pipeline: &TirPipelineV1) -> PalwGenBi
     let bond = TransactionOutpoint::new(TransactionId::from_bytes([0; 64]), 0);
     if PalwGenProfileV1::from_tag(class.profile) == Some(PalwGenProfileV1::Text) {
         let offers = &class.offers;
-        let generated = pipeline.stages.iter().find(|st| matches!(st.trip, TripRule::TextStream)).map_or(0, |st| st.max_trip as usize);
         let job = PalwFreePromptJobV5 {
             v4: PalwFreePromptJobV3 {
                 version: PALW_FP_V4_VERSION,
@@ -140,14 +139,17 @@ fn widest_binding(class: &PalwGenClassV1, pipeline: &TirPipelineV1) -> PalwGenBi
                 }),
                 tail: None,
             },
-            images: vec![PalwGenImageInputRefV1 { input_root: zero, h: 0, w: 0 }; offers.images.len()],
+            // A job carries at most 16 images (FP Job V5): a registration's offers are held to it at the preflight; the bound is also
+            // what keeps this allocation small whatever a class says.
+            images: vec![PalwGenImageInputRefV1 { input_root: zero, h: 0, w: 0 }; offers.images.len().min(16)],
             source: (offers.max_source_tokens > 0).then_some(PalwGenSourceRefV1 { token_ids_hash: zero, tokens: 0 }),
         };
         PalwGenBindingV1::Text(PalwGenStepBindingV1 {
             version: PALW_GEN_CLOSE_VERSION_V1,
             job,
             stage_roots,
-            generated: vec![0; generated],
+            // The generated ids ride the binding too: priced by their number (`ids_bytes`), never allocated.
+            generated: Vec::new(),
             step_leaf_count: 0,
             committed_execution_root: zero,
         })
@@ -197,15 +199,14 @@ fn widest_binding(class: &PalwGenClassV1, pipeline: &TirPipelineV1) -> PalwGenBi
 /// disputed leaf's opening at the stage's depth, no lane.
 fn empty_close(class: &PalwGenClassV1, pipeline: &TirPipelineV1, binding: &PalwGenBindingV1, stage: usize, depth: u64) -> PalwGenConeCloseV1 {
     let zero = Hash64::from_bytes([0; 64]);
-    let offers = &class.offers;
-    let ids = |reads: bool, n: u32| vec![0u32; if reads { n as usize } else { 0 }];
+    let _ = (class, pipeline, stage);
     PalwGenConeCloseV1 {
         version: PALW_GEN_CLOSE_VERSION_V1,
         binding: binding.clone(),
-        // The prompt rides whole, with the class's forced prefix when it has one (at the head of the prompt).
-        prompt_ids: ids(palw_gen_stage_reads_prompt_v1(pipeline, stage), offers.max_prompt_tokens.saturating_add(offers.forced_prompt_prefix.len() as u32)),
-        negative_ids: ids(palw_gen_stage_reads_negative_v1(pipeline, stage), offers.max_negative_tokens),
-        source_ids: ids(palw_gen_stage_reads_source_v1(pipeline, stage), offers.max_source_tokens),
+        // The ids a stage reads ride whole; they are priced by their number (`ids_bytes`), never allocated.
+        prompt_ids: Vec::new(),
+        negative_ids: Vec::new(),
+        source_ids: Vec::new(),
         disputed: PalwGenLeafOpeningV1 {
             // The widest coordinate: a checkpoint of a per-layer state (a commit leaf's is a byte shorter).
             coord: PalwGenLeafCoordV1 {
@@ -228,6 +229,23 @@ fn object_len(object: &PalwConsensusObjectV2) -> Result<u64, String> {
     borsh::to_vec(object).map(|v| v.len() as u64).map_err(|e| e.to_string())
 }
 
+/// **What the ids a close carries weigh**, beyond the empty vectors the frame serializes: the prompt (with the class's forced prefix, at
+/// its head), the negative prompt and the source, each four bytes an id, exactly when the stage reads them
+/// (`palw_gen_stage_reads_*`), and a text binding's generated ids, four bytes each, at the text stage's `max_trip`.
+fn ids_bytes(class: &PalwGenClassV1, pipeline: &TirPipelineV1, stage: usize) -> u64 {
+    let offers = &class.offers;
+    let per = |reads: bool, n: u64| if reads { 4 * n } else { 0 };
+    let generated = if PalwGenProfileV1::from_tag(class.profile) == Some(PalwGenProfileV1::Text) {
+        pipeline.stages.iter().find(|st| matches!(st.trip, TripRule::TextStream)).map_or(0, |st| 4 * st.max_trip as u64)
+    } else {
+        0
+    };
+    per(palw_gen_stage_reads_prompt_v1(pipeline, stage), offers.max_prompt_tokens as u64 + offers.forced_prompt_prefix.len() as u64)
+        + per(palw_gen_stage_reads_negative_v1(pipeline, stage), offers.max_negative_tokens as u64)
+        + per(palw_gen_stage_reads_source_v1(pipeline, stage), offers.max_source_tokens as u64)
+        + generated
+}
+
 /// **The frames of stage `stage`'s closes**: the close object with nothing opened, and the dissected cone's root claim (signed, with
 /// its carrier's extra) around the same close.
 fn frames(
@@ -239,12 +257,13 @@ fn frames(
 ) -> Result<(u64, u64), String> {
     let zero = Hash64::from_bytes([0; 64]);
     let close = empty_close(class, pipeline, binding, stage, depth);
-    let frame = object_len(&PalwConsensusObjectV2::CourtClosed {
+    let ids = ids_bytes(class, pipeline, stage);
+    let frame = ids + object_len(&PalwConsensusObjectV2::CourtClosed {
         session_id: zero,
         verdict: PalwCourtVerdictV2::ChallengerDefeated,
         proof: PalwCourtVerdictProofV2::GenCone { close: Box::new(close.clone()) },
     })?;
-    let root_frame = object_len(&PalwConsensusObjectV2::CourtGenRootClaimed {
+    let root_frame = ids + object_len(&PalwConsensusObjectV2::CourtGenRootClaimed {
         session_id: zero,
         root: Box::new(PalwGenRootClaimV1 {
             version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
@@ -375,7 +394,8 @@ impl PalwGenClassSizingV1 {
         let st = &pipeline.stages[s];
         let program = &programs[st.program as usize];
         let info = validate_v2(program).map_err(|e| refused(format!("stage {s}: {e}")))?;
-        let space = PalwTirStepSpaceV1::from_program(info.view.clone(), info.v1.clone(), class.layouts[s].clone())
+        let layout = class.layouts.get(s).ok_or_else(|| refused(format!("stage {s} has no layout")))?;
+        let space = PalwTirStepSpaceV1::from_program(info.view.clone(), info.v1.clone(), layout.clone())
             .map_err(|e| refused(format!("stage {s}: {e}")))?;
         let inventory = PalwTirInventoryIndexV1::new(&space.program)
             .ok_or_else(|| refused(format!("stage {s} has no param or input to index")))?;
