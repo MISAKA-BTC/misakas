@@ -88,17 +88,67 @@ pub fn open_model_with(
     opts: &LowerOpts,
     reg: &crate::quantfmt::QuantRegistry,
 ) -> Result<(Prepared, Box<dyn crate::weights::TensorSource + Sync>)> {
-    let gguf = gguf_path(path);
-    match gguf {
+    let o = open_model_full(path, opts, reg, &crate::hf_schema::ReadOptions::default())?;
+    Ok((o.prepared, o.source))
+}
+
+/// What the frontend read a model with: the configuration, which adapter (if any) mapped it, what
+/// the class defaults had to supply, and the identity of the spec that came out.
+#[derive(Clone, Debug)]
+pub struct Frontend {
+    /// The Hugging Face configuration (a GGUF's: the one synthesised from its metadata).
+    pub config: serde_json::Value,
+    pub adapter: crate::model::AdapterSource,
+    /// `A`: the standard keys and tensor names; `B`: an adapter file mapped the class's own.
+    pub level: crate::model::Level,
+    /// Configuration keys the class defaults supplied (the reader assumed them).
+    pub assumed_defaults: Vec<String>,
+    /// [`crate::model::spec_digest`] of the spec the lowering started from.
+    pub spec_digest: String,
+}
+
+/// A model opened for conversion: its preparation, the tensors it reads, and what the frontend read.
+pub struct Opened {
+    pub prepared: Prepared,
+    pub source: Box<dyn crate::weights::TensorSource + Sync>,
+    pub frontend: Frontend,
+    /// Whether the checkpoint is a GGUF file.
+    pub gguf: bool,
+}
+
+/// [`open_model_with`] that also says how the frontend read the model, with the adapter choice of `read`
+/// (a user-supplied adapter file is `AdapterChoice::Text`).
+pub fn open_model_full(
+    path: &std::path::Path,
+    opts: &LowerOpts,
+    reg: &crate::quantfmt::QuantRegistry,
+    read: &crate::hf_schema::ReadOptions,
+) -> Result<Opened> {
+    let level_of = |a: &crate::model::AdapterSource| if matches!(a, crate::model::AdapterSource::None) { crate::model::Level::A } else { crate::model::Level::B };
+    match gguf_path(path) {
         Some(g) => {
             let m = crate::gguf::GgufModel::open_with(&g, reg)?;
-            let prep = m.prepare(opts)?;
-            Ok((prep, Box::new(m)))
+            let prepared = m.prepare(opts)?;
+            // The same synthesised configuration through the reader, for what it says of the adapter.
+            let r = crate::hf_schema::read_model_with(&m.config, None, read, reg).map_err(|f| f.error)?;
+            let frontend = Frontend {
+                config: m.config.clone(),
+                level: level_of(&r.adapter),
+                adapter: r.adapter,
+                assumed_defaults: r.assumed_defaults,
+                spec_digest: crate::model::spec_digest(&prepared.spec),
+            };
+            Ok(Opened { prepared, source: Box::new(m), frontend, gguf: true })
         }
         None => {
-            let cfg = std::fs::read_to_string(path.join("config.json")).map_err(|e| LowerError::Io(format!("config.json: {e}")))?;
-            let prep = prepare_with(&cfg, opts, reg)?;
-            Ok((prep, Box::new(crate::weights::Checkpoint::open(path)?)))
+            let text = std::fs::read_to_string(path.join("config.json")).map_err(|e| LowerError::Io(format!("config.json: {e}")))?;
+            let config: serde_json::Value = serde_json::from_str(&crate::hf_config::sanitize_json(&text))
+                .map_err(|e| LowerError::bad(format!("config.json is not JSON: {e}")))?;
+            let r = crate::hf_schema::read_model_with(&config, None, read, reg).map_err(|f| f.error)?;
+            let spec_digest = crate::model::spec_digest(&r.spec);
+            let prepared = prepare_spec(r.spec.clone(), opts)?;
+            let frontend = Frontend { config, level: level_of(&r.adapter), adapter: r.adapter, assumed_defaults: r.assumed_defaults, spec_digest };
+            Ok(Opened { prepared, source: Box::new(crate::weights::Checkpoint::open(path)?), frontend, gguf: false })
         }
     }
 }
