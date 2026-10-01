@@ -123,6 +123,9 @@ pub struct TirPlan {
     /// The fused regions of every block ([`crate::fused::match_program`]), matched once per plan on
     /// first use: structural, so they hold for every executor and every artifact of the class.
     pub fused: std::sync::OnceLock<Vec<Vec<crate::fused::Region>>>,
+    /// Every row gather and its group ([`crate::tiers::tir_row_sites_v1`]) — where a residency
+    /// serves rows instead of a whole param, and where a route's rows are admitted together.
+    pub rows: crate::tiers::TirRowSitesV1,
 }
 
 fn work_of(ivs: &[Interval]) -> Work {
@@ -331,7 +334,18 @@ impl TirPlan {
             instance_of,
             param_instances,
             fused: std::sync::OnceLock::new(),
+            rows: crate::tiers::tir_row_sites_v1(program),
         })
+    }
+
+    /// Every instance the program's inventory holds, in inventory order (params ascending, each
+    /// one's layers ascending) — the order a container stores them and a pass reads them in.
+    pub fn param_instances_in_order(&self) -> Vec<(u16, Option<u16>)> {
+        crate::tiers::tir_param_instances_v1(&self.program)
+            .into_iter()
+            .enumerate()
+            .flat_map(|(j, inst)| inst.into_iter().map(move |l| (j as u16, l)))
+            .collect()
     }
 
     /// The fused regions of every block, matched on first use.

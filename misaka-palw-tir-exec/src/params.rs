@@ -1,17 +1,26 @@
-//! Params: typed, borrowed, zero-copy.
+//! Params: typed, borrowed, zero-copy — or served by rows.
 //!
 //! A param instance is a slice of its declared native type. From a mapped artifact it is the
 //! mapping itself (little-endian elements reinterpreted in place when the target is little-endian
 //! and the bytes are aligned); nothing is copied or widened. Every bit pattern of `i8`…`i64` and
 //! `u32` is a value of its dtype (spec 04b §3.5: params take their dtype's full range), so a
 //! borrowed tensor needs only its length checked.
+//!
+//! **Under a runtime residency** (ADR-0112 for IR classes, [`crate::tiers`], [`crate::rows`]) an
+//! instance the residency routes or gathers is not bound at all: a [`TirRowSourceV1`] serves the rows
+//! a `Gather` names, and every other instance is bound as above (from memory the residency owns).
+//! A dense read of a row-served instance — which the tiers never plan — is answered with the whole
+//! instance, read once and counted ([`TirParams::get`]), so a value never depends on the tiers.
 
 use std::borrow::Cow;
+use std::sync::{Arc, OnceLock};
 
+use misaka_palw_tir::interval::Interval;
 use misaka_palw_tir::{DType, MapParams, TirError, TirErrorKind, TirResult};
 
 use crate::elem::{Buf, Elem, Slice};
 use crate::plan::TirPlan;
+use crate::rows::TirRowSourceV1;
 
 /// One param instance's elements.
 #[derive(Clone, Debug)]
@@ -93,19 +102,108 @@ impl<'a> ParamData<'a> {
 }
 
 /// The param instances a plan reads: `[param][layer or 0]`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TirParams<'a> {
     table: Vec<Vec<Option<ParamData<'a>>>>,
     per_layer: Vec<bool>,
+    /// The instances a residency serves by rows, when one does.
+    rows: Option<TirServedV1>,
+    /// `[min, max]` of each instance, computed on first use: an executor is built per job, and
+    /// every build read every weight again before this memo (the whole artifact, per run).
+    ranges: Vec<Vec<OnceLock<Option<Interval>>>>,
+}
+
+/// The row-served half of a [`TirParams`].
+#[derive(Clone)]
+struct TirServedV1 {
+    source: Arc<dyn TirRowSourceV1>,
+    /// `[param][layer or 0]`: served by rows.
+    served: Vec<Vec<bool>>,
+    /// `[param][layer or 0]`: the whole instance, read on a dense read (the counted fallback).
+    whole: Vec<Vec<OnceLock<Option<ParamData<'static>>>>>,
+}
+
+impl std::fmt::Debug for TirParams<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let bound = self.table.iter().flatten().filter(|d| d.is_some()).count();
+        let served = self.rows.as_ref().map_or(0, |r| r.served.iter().flatten().filter(|s| **s).count());
+        write!(f, "TirParams({bound} instances bound, {served} served by rows)")
+    }
 }
 
 impl<'a> TirParams<'a> {
     pub fn new(plan: &TirPlan) -> Self {
         let layers = plan.program.schedule.layers.len().max(1);
+        let width = |per_layer: bool| if per_layer { layers } else { 1 };
         TirParams {
-            table: plan.program.params.iter().map(|d| vec![None; if d.per_layer { layers } else { 1 }]).collect(),
+            table: plan.program.params.iter().map(|d| vec![None; width(d.per_layer)]).collect(),
             per_layer: plan.program.params.iter().map(|d| d.per_layer).collect(),
+            rows: None,
+            ranges: plan.program.params.iter().map(|d| (0..width(d.per_layer)).map(|_| OnceLock::new()).collect()).collect(),
         }
+    }
+
+    fn key(&self, j: u16, layer: Option<u16>) -> usize {
+        if self.per_layer.get(j as usize).copied().unwrap_or(false) { layer.map(|l| l as usize).unwrap_or(0) } else { 0 }
+    }
+
+    /// The instance an occurrence at `layer` reads of param `j`: `(j, layer)` for a per-layer param,
+    /// `(j, None)` for a global one — the key a row source serves it under.
+    #[inline]
+    pub fn instance_layer(&self, j: u16, layer: Option<u16>) -> Option<u16> {
+        if self.per_layer.get(j as usize).copied().unwrap_or(false) { layer } else { None }
+    }
+
+    /// **Serve instances by rows from `source`** (a runtime residency): `served(j, layer)` names
+    /// the instances it serves; each must be one the plan reads and must not be bound. A `Gather`
+    /// of a served instance asks the source for its rows; anything else is answered whole, once,
+    /// and counted by the source ([`TirRowSourceV1::read_whole`]).
+    pub fn serve_rows(
+        &mut self,
+        plan: &TirPlan,
+        source: Arc<dyn TirRowSourceV1>,
+        served: &dyn Fn(u16, Option<u16>) -> bool,
+    ) -> TirResult<()> {
+        let mut flags: Vec<Vec<bool>> = self.table.iter().map(|row| vec![false; row.len()]).collect();
+        for &(j, layer) in &plan.param_instances {
+            if !served(j, layer) {
+                continue;
+            }
+            let key = self.key(j, layer);
+            if self.table[j as usize][key].is_some() {
+                return Err(TirError::new(TirErrorKind::Operand, format!("param {j} (layer {layer:?}) is bound and served")));
+            }
+            if source.row_shape(j, layer).is_none() {
+                return Err(TirError::new(
+                    TirErrorKind::Missing,
+                    format!("the row source does not serve param {j} (layer {layer:?})"),
+                ));
+            }
+            flags[j as usize][key] = true;
+            self.ranges[j as usize][key] = OnceLock::new();
+        }
+        let whole = self.table.iter().map(|row| (0..row.len()).map(|_| OnceLock::new()).collect()).collect();
+        self.rows = Some(TirServedV1 { source, served: flags, whole });
+        Ok(())
+    }
+
+    /// The row source, when a residency serves some instance by rows.
+    pub fn row_source(&self) -> Option<&Arc<dyn TirRowSourceV1>> {
+        self.rows.as_ref().map(|r| &r.source)
+    }
+
+    /// Is instance `(j, layer)` served by rows (not bound)?
+    #[inline]
+    pub fn serves_rows(&self, j: u16, layer: Option<u16>) -> bool {
+        let Some(rows) = &self.rows else { return false };
+        let key = self.key(j, layer);
+        rows.served.get(j as usize).and_then(|r| r.get(key)).copied().unwrap_or(false)
+    }
+
+    /// Is instance `(j, layer)` bound or served — readable at all?
+    pub fn has(&self, j: u16, layer: Option<u16>) -> bool {
+        let key = self.key(j, layer);
+        self.table.get(j as usize).and_then(|r| r.get(key)).is_some_and(|d| d.is_some()) || self.serves_rows(j, layer)
     }
 
     /// Bind one instance, checking its dtype and element count against the declaration.
@@ -126,6 +224,7 @@ impl<'a> TirParams<'a> {
         let row = &mut self.table[j as usize];
         let slot = row.get_mut(key).ok_or_else(|| TirError::new(TirErrorKind::Operand, "no such layer"))?;
         *slot = Some(data);
+        self.ranges[j as usize][key] = OnceLock::new();
         Ok(())
     }
 
@@ -176,10 +275,11 @@ impl<'a> TirParams<'a> {
         Ok(p)
     }
 
-    /// Every instance the plan reads is bound (else `Missing`, as the reference at first use).
+    /// Every instance the plan reads is bound or served (else `Missing`, as the reference at first
+    /// use).
     pub fn check_complete(&self, plan: &TirPlan) -> TirResult<()> {
         for &(j, layer) in &plan.param_instances {
-            if self.get(j, layer).is_none() {
+            if !self.has(j, layer) {
                 return Err(TirError::new(
                     TirErrorKind::Missing,
                     format!("param {} (layer {layer:?})", plan.program.params[j as usize].name),
@@ -189,27 +289,79 @@ impl<'a> TirParams<'a> {
         Ok(())
     }
 
-    /// `[min, max]` of one bound instance's elements (the interval [`TirPlan::refine`] plans with).
-    pub fn range(&self, j: u16, layer: Option<u16>) -> Option<misaka_palw_tir::interval::Interval> {
-        use rayon::prelude::*;
-        fn minmax<T: Elem>(v: &[T]) -> Option<(T, T)> {
-            let fold = |c: &[T]| c.iter().fold((c[0], c[0]), |(lo, hi), x| (lo.min(*x), hi.max(*x)));
-            if v.is_empty() {
-                return None;
+    /// `[min, max]` of one instance's elements (the interval [`TirPlan::refine`] plans with): a
+    /// bound instance's computed once and kept, a served one's as its source knows it (a residency
+    /// computes it in the pass it opens with). Never a reason to read a served instance whole.
+    pub fn range(&self, j: u16, layer: Option<u16>) -> Option<Interval> {
+        let key = self.key(j, layer);
+        let memo = self.ranges.get(j as usize)?.get(key)?;
+        *memo.get_or_init(|| {
+            if let Some(d) = self.table.get(j as usize).and_then(|r| r.get(key)).and_then(|d| d.as_ref()) {
+                return slice_range(d.slice());
             }
-            if v.len() < 1 << 20 {
-                return Some(fold(v));
+            if self.serves_rows(j, layer) {
+                return self.rows.as_ref().and_then(|r| r.source.range(j, self.instance_layer(j, layer)));
             }
-            v.par_chunks(1 << 20).map(fold).reduce_with(|a, b| (a.0.min(b.0), a.1.max(b.1)))
-        }
-        let s = self.get(j, layer)?;
-        crate::with_slice!(s, v => minmax(v).map(|(lo, hi)| misaka_palw_tir::interval::Interval::new(lo.to_i128(), hi.to_i128())))
+            None
+        })
     }
 
-    /// The instance an occurrence at `layer` reads.
+    /// The instance an occurrence at `layer` reads. A row-served instance is answered whole — read
+    /// once through its source, kept, and counted there: the tiers plan no dense read of one, so a
+    /// node path never pays it, and a path the tiers did not foresee (a sink that asks for every
+    /// node's value) still computes the reference's values.
     #[inline]
     pub fn get(&self, j: u16, layer: Option<u16>) -> Option<Slice<'_>> {
-        let key = if self.per_layer[j as usize] { layer.map(|l| l as usize).unwrap_or(0) } else { 0 };
-        self.table.get(j as usize)?.get(key)?.as_ref().map(|d| d.slice())
+        let key = self.key(j, layer);
+        if let Some(d) = self.table.get(j as usize)?.get(key)?.as_ref() {
+            return Some(d.slice());
+        }
+        let rows = self.rows.as_ref()?;
+        if !rows.served.get(j as usize)?.get(key).copied().unwrap_or(false) {
+            return None;
+        }
+        let instance = self.instance_layer(j, layer);
+        rows.whole[j as usize][key].get_or_init(|| rows.source.read_whole(j, instance).ok()).as_ref().map(|d| d.slice())
     }
+
+    /// **Owned params from the reference's map, split by `tiers`**: the instances the tiers route
+    /// or gather served by an in-memory row source ([`crate::rows::TirRowsInMemoryV1`]), the rest
+    /// bound — what a residency does, without a file. Checked exactly as [`Self::from_map`].
+    pub fn from_map_served(
+        plan: &TirPlan,
+        map: &MapParams,
+        tiers: &crate::tiers::TirTiersV1,
+    ) -> TirResult<(TirParams<'static>, Arc<crate::rows::TirRowsInMemoryV1>)> {
+        let mut all = TirParams::from_map(plan, map)?;
+        let mut held = std::collections::BTreeMap::new();
+        for &(j, layer) in &plan.param_instances {
+            let Some(t) = tiers.params.get(j as usize) else { continue };
+            if !t.tier.is_rows() {
+                continue;
+            }
+            let key = all.key(j, layer);
+            let data = all.table[j as usize][key].take().expect("from_map bound every instance");
+            held.insert((j, layer), (data.slice().to_buf(), t.rows, t.unit));
+        }
+        let source = Arc::new(crate::rows::TirRowsInMemoryV1::new(held));
+        let keys: std::collections::BTreeSet<(u16, Option<u16>)> = source.instances().collect();
+        all.serve_rows(plan, source.clone(), &|j, l| keys.contains(&(j, l)))?;
+        Ok((all, source))
+    }
+}
+
+/// `[min, max]` of a slice's elements (in parallel over large ones).
+pub(crate) fn slice_range(s: Slice<'_>) -> Option<Interval> {
+    use rayon::prelude::*;
+    fn minmax<T: Elem>(v: &[T]) -> Option<(T, T)> {
+        let fold = |c: &[T]| c.iter().fold((c[0], c[0]), |(lo, hi), x| (lo.min(*x), hi.max(*x)));
+        if v.is_empty() {
+            return None;
+        }
+        if v.len() < 1 << 20 {
+            return Some(fold(v));
+        }
+        v.par_chunks(1 << 20).map(fold).reduce_with(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+    }
+    crate::with_slice!(s, v => minmax(v).map(|(lo, hi)| Interval::new(lo.to_i128(), hi.to_i128())))
 }

@@ -27,6 +27,11 @@
 //!   success are order-independent (the order-free rule, PALW-TIR-24), so `MatMul` and `ReduceSum`
 //!   vectorise and thread; every lossy site (`Div`, `Clamp`, the transcendentals, selection,
 //!   state) computes each element exactly as spec 04b §6 defines it.
+//! * **Weights within a budget** ([`tiers`], [`rows`], `node::residency`; ADR-0112 for IR classes,
+//!   `docs/design/palw/tir/runtime-residency.md`): the program's dataflow tells the params every
+//!   forward reads whole (pinned) from those a route selects rows of (routed) and those an input
+//!   selects rows of (gathered); a residency serves the last two as the rows a `Gather` names, read
+//!   through the file descriptor, and computes the same bytes.
 //!
 //! Node software only: `kaspa-consensus-core` never depends on this crate. The court runs the
 //! reference; the tests hold the two equal (golden vectors, whole programs, random programs,
@@ -43,10 +48,14 @@ pub mod node;
 pub mod params;
 pub mod plan;
 pub mod ranges;
+pub mod rows;
 pub mod scalar;
+pub mod tiers;
 
 pub use cone::eval_cone;
 pub use elem::{Buf, Elem, Slice};
 pub use exec::{NoSink, NodeValue, StepSink, TirExecutor};
 pub use params::{ParamData, TirParams};
 pub use plan::TirPlan;
+pub use rows::{TirRowCountsV1, TirRowSourceV1, TirRowsInMemoryV1};
+pub use tiers::{TirResidencyArithmeticV1, TirTierRulesV1, TirTierV1, TirTiersV1};
