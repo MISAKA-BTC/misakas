@@ -436,6 +436,52 @@ lowering shares nothing with: float `10⁻⁷`, integer cosine 0.9999. **Admissi
 886 nodes, 4.09·10⁹ MACs, cone work 2,284; ResNet-152 12 blocks, 2,620 nodes, 1.15·10¹⁰ MACs, cone work 6,752 (of 65,536) — the
 class's own job ceiling decides which of them it takes.
 
+### 9.8 Encoder-decoders beyond text: Whisper, an encoder alone, and the weights stage (`EMBED_FRAMES_CONV1D_V1`, `OUTPUT_ROWS_V1`, FR-18 phase 2)
+
+**What phase 2 was.** The design (`frontend-as-data-v1.md` §3.3) had phase 2 replace the hand-written encoder and decoder block
+builders of `lower/encdec.rs` by the generic rows lowerer and an `Op::CrossAttention`. Reading the route before writing any of it
+showed that the blocks are no longer per family: since phase 1 five adapters instantiate one `EncDecSpec`, and the blocks are
+spec-driven code over the helpers the generic encoder and decoder lowerers use (`linear_rows`, `norm_rows_kind`, `add_rows`,
+`softmax_committed`, `lower_attention` with its `RelBias` for the decoder's causal bias, `lower_table_named`). What the family kinds
+still lacked were *features of the spec*, not a lowerer, so phase 2 was built as features, all data: an encoder that reads feature
+frames, a position table of the encoder's own length, a fixed-length source, a key projection without a bias, and an encoder alone.
+A decoder-only text model with cross-attention LAYERS inside its stack (Llama-3.2-Vision's text decoder, FR-21) is a different
+thing — the cross-attention would live in the main layer stack's HL — and is not built here.
+
+**Whisper** (`adapters/whisper.json`, data only; no Rust reader of the family). The encoder reads the normalised log-mel
+`[bins, 2·L]` as `i16` codes at the fixed unit `2^-13` (a normalised log-mel lies in about `[-1, 1.5]`; the range is ±4), through
+two `Conv1d` (`k3 s1`, `k3 s2`, padding 1, a bias and the stack's activation each) — the convolution lowering of §9.7 with a
+kernel along the width (`k 1, kw 3`: `ConvOp::conv1d`) — adds the checkpoint's table of positions (1,500 rows: `enc_pos_rows`),
+and runs pre-LN layers whose `k_proj` has no bias (`k_bias: false`; the stacked cross keys' offsets are zeros). The source is a
+fixed 30 s window: no count input and no mask (`fixed_source`), the decoder reads every one of the encoder's rows. The decoder is
+mBART's shape with learned positions at offset 0 and a head tied to the token table. The log-mel front end (STFT, mel filterbank,
+log) is NOT in the program: a class needs the frames bound as an input, and the protocol has no audio binding yet
+(`Binding::JobAudio`, FR-23) — a consensus-side decision, and the model's two programs run standalone until it exists.
+
+**Evidence** (`tests/whisper.rs`; the tiny model of `tools/gen_hf_encdec_fixtures.py`, frames exact on the code grid). The float
+encoder and decoder equal `transformers` to `3·10⁻⁷`; the integer decoder, fed the INTEGER encoder's own cross keys and values,
+has logits within 1.3 % of HF's at every position of two streams and agrees on the top-1 id at all 32; the three implementations
+are bit-identical and the court replays every commit point of both stages (33 + 210). **Real shapes at 1,500 source rows**
+(`tests/configs/encdec/whisper-*.json`, no weights): the decoder of every size is admitted; the encoder of tiny (2.0·10¹⁰ MACs,
+1.67 M step leaves) and base (4.8·10¹⁰, 3.30 M) is ADMITTED; small and medium are REFUSED by name (9.75 M and 25.8 M step leaves of
+4.19 M: the committed logits `[h, L, L]` of a 1,500-frame attention) and large-v3 by `max_position_macs` (1.29·10¹² of 1.10·10¹²) —
+the figures FR-23's research derived independently. The levers are the ones it named: per-commit tile lengths or a stat-only
+softmax (`ATTN_STAT_COMMIT_V1`) for small and medium, a stage split for large-v3 — admission and layout, not primitives.
+
+**An encoder alone** (`adapters/t5-encoder.json`, extends `t5`): `dec_layers: 0`; the final-normed rows are the program's `Final`
+output, `i32` at a calibrated power-of-two unit (`OUTPUT_ROWS_V1`). The text encoder of Flux, Stable Diffusion 3, PixArt, Wan and
+Sana is this model: cosine 0.9997 against HF on the fixture, court-replayed. T5-XXL's encoder is over the leaf cap at 256 and
+512 tokens (`tests/configs/encdec/t5-v1_1-xxl-encoder.json`; FR-18's capacity table).
+
+**The weights stage.** Every encoder-decoder, not only the new ones, now runs the stages the corpus harness runs on a decoder:
+the float stages against HF, the integer stages against it, **the three implementations and the court on both stage programs**
+(`tests/encdec.rs`: t5, t5_gated, bart, mbart, marian, pegasus — 29–33 commit points of the encoder and 210–246 of the decoder each,
+19–20 primitives reached — and the decoder is fed the integer encoder's output). The lowering declares a stage's inputs as params;
+the second implementation, the typed backend and the court's demand evaluator all see that version-1 view (the version-2 stage lifts
+them), with the inputs as leaves — the evaluator `eval_demanded_v2` is `eval_demanded` over the same view. The same step runs on
+every route this branch added: the ResNets, the six vision towers, the nine encoder families and the DSA program
+(`tests/{cnn,vision,encoders,dsa}.rs`).
+
 ## 10. The gates that keep it honest
 
 | gate | what it holds |
@@ -443,6 +489,7 @@ class's own job ceiling decides which of them it takes.
 | `tests/golden_lowering.rs` | every lowering is byte-identical to a recorded baseline under both math modes (`std`, `libm-v1`): version-1 *programs* (92 fixtures + 63 real configs, recorded before the generic frontend) and version-2 artifacts (119 fixtures + 63 configs) — a refactor that moves a byte fails; a family that changes on purpose is listed with the commit that explains it |
 | `tests/adapters.rs` (`legacy-oracle`) | every family adapter reads the `ModelSpec` the Rust parser it replaced produced, on 224 configs and ~15,000 single-key mutants |
 | `tests/feature_registry.rs` | the vocabulary is honest (§3) |
+| `tests/{encdec,whisper,cnn,vision,encoders,dsa}.rs` (court) | the weights stage on every route: the three implementations are bit-identical and the court's demand evaluator reproduces every commit point of every position from committed leaves — encoder-decoder stages, Whisper, the CNNs, the vision towers, the encoders, DSA (536 commit points, 144 reductions over `H` dissected) |
 | `tests/cnn.rs` | a convolutional network is a data spec: the HF ResNet fixtures (basic, bottleneck, one that crosses a block boundary), a depthwise / dilated network against a naive direct convolution, the real ResNet-18/50/152 admitted at 224 px, the adapter equal to the Rust structure |
 | `tests/qwen4_exp.rs`, `tests/common` | the acceptance matrix for a model that is a combination: float reference ↔ transformers, integer ↔ transformers, the in-program ids ↔ transformers' ids, the program's selected blocks ↔ the indexer's, reference ↔ ref2 ↔ exec on every commit point, the court's demand evaluator reproducing every node of every occurrence (all 25 primitives, state replay, the dissection arithmetic) |
 | admission | every fixture admitted; the largest block ≤ 512 nodes, ≤ 16 blocks |
