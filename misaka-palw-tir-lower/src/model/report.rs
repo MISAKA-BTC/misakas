@@ -60,6 +60,8 @@ pub struct ArchitectureReport {
     pub new_court_kernel_required: bool,
     pub result: ReportResult,
     pub notes: Vec<String>,
+    /// What the class computes and what the model has that it does not (images, audio, extra heads).
+    pub scope: super::scope::FeatureScope,
 }
 
 fn model_type_of(config: &Value) -> Option<String> {
@@ -156,6 +158,7 @@ pub fn analyze(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions
                 new_court_kernel_required: kernel,
                 result,
                 notes: read.spec.notes.clone(),
+                scope: super::scope::scope_of(config, Some(&read.spec), tensors, &[]),
             }
         }
         Err(f) => {
@@ -174,6 +177,7 @@ pub fn analyze(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions
                 new_court_kernel_required: false,
                 result: ReportResult::NotLowerable { reason },
                 notes: Vec::new(),
+                scope: super::scope::scope_of(config, None, tensors, &[]),
             }
         }
     }
@@ -238,6 +242,15 @@ impl ArchitectureReport {
         }
         for n in &self.notes {
             let _ = writeln!(o, "note: {n}");
+        }
+        let _ = writeln!(o, "scope           {}", self.scope.headline());
+        for e in &self.scope.excluded {
+            let size = match (e.tensors, e.bytes) {
+                (0, _) => String::new(),
+                (n, Some(b)) => format!("; {n} tensors, {:.1} MiB", b as f64 / (1 << 20) as f64),
+                (n, None) => format!("; {n} tensors"),
+            };
+            let _ = writeln!(o, "  not computed: {} — {} [{}{size}]", e.what, e.why, e.evidence.join(", "));
         }
         if matches!(self.result, ReportResult::Lowerable) || !self.missing.is_empty() || !self.features.is_empty() {
             let _ = writeln!(

@@ -226,6 +226,8 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("QUANT_GPTQ_V1", Storage, "GPTQ-quantised projections, lowered from the stored integers", Implemented, [], NoReq, ["quantized::gptq_b4_g128_act_asym"], "Grouped integer matmul with the checkpoint's scales."),
     feature!("QUANT_AWQ_V1", Storage, "AWQ-quantised projections", Implemented, [], NoReq, ["quantized::awq_g128"], "Same, activation-aware scales."),
     feature!("QUANT_GGUF_V1", Storage, "GGUF block-quantised tensors", Implemented, [], NoReq, ["gguf::gguf_llama_q4_k_m"], "Q4_0 … Q8_0, K-quants."),
+    feature!("QUANT_DESCRIBED_INTEGERS_V1", Storage, "checkpoint quantisation read through a descriptor, lowered from the stored integers", Implemented, [], NoReq, ["quantized::ct_pack_b4_g32", "quantized::ct_int8_channel"], "A quant-format descriptor (misaka.palw.quant-format.v1, data) decodes the stored tensors to integers and scales; the exact grouped integer matmul is the one GPTQ and AWQ use."),
+    feature!("QUANT_DESCRIBED_FLOATS_V1", Storage, "checkpoint quantisation read through a descriptor, decoded to floats", Implemented, [], NoReq, ["quantized::fp8_block_32", "quantized::ct_fp8_channel"], "The elements are floats under a scale (FP8): a descriptor decodes them and the weight takes the ordinary W8 path."),
     feature!("ADAPTER_LORA_V1", Storage, "LoRA adapter over the parent (candidate = parent + adapter)", Implemented, [], NoReq, ["lora::llama_r16"], "Unmerged low-rank path."),
 ];
 
@@ -546,15 +548,16 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     }
     // storage
     if let Some(q) = &s.hf.quant {
-        u.add(
-            match q.fmt {
-                crate::prequant::QFormat::Gguf { .. } => "QUANT_GGUF_V1",
-                crate::prequant::QFormat::Awq { .. } => "QUANT_AWQ_V1",
-                _ => "QUANT_GPTQ_V1",
-            },
-            None,
-            "",
-        );
+        let (id, detail) = match &q.fmt {
+            crate::prequant::QFormat::Gguf { .. } => ("QUANT_GGUF_V1", String::new()),
+            crate::prequant::QFormat::Awq { .. } => ("QUANT_AWQ_V1", String::new()),
+            crate::prequant::QFormat::Gptq { .. } => ("QUANT_GPTQ_V1", String::new()),
+            crate::prequant::QFormat::Described(d) => (
+                if d.format.as_tensors().is_some_and(|t| t.is_integers()) { "QUANT_DESCRIBED_INTEGERS_V1" } else { "QUANT_DESCRIBED_FLOATS_V1" },
+                format!("{} {}", d.format.name(), &d.format.digest_hex()[..16]),
+            ),
+        };
+        u.add(id, None, detail);
     }
     if s.adapter.is_some() {
         u.add("ADAPTER_LORA_V1", None, "");
