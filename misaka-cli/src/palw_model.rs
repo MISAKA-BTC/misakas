@@ -44,6 +44,34 @@ pub(crate) fn market_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> 
     })
 }
 
+/// **What a seed of `msk_seed` does, said before it is signed** (the 2026-09-25 Position review's N1:
+/// the preview ignored what was already pledged — it priced a 600,000 MSK instalment as if it were the
+/// whole seed): the pledge it adds to, and the market it opens when the total reaches the floor.
+pub(crate) fn seed_preview(r: &kaspa_rpc_core::GetPalwModelMarketResponse, msk_seed: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    let total = r.seed_pledged_sompi.saturating_add(msk_seed);
+    if total >= r.seed_min_sompi {
+        out.push(format!(
+            "  opens the pair  {} collected in all: first price {} per position ({} positions in the curve)",
+            msk(total),
+            msk(total / PALW_MODEL_POSITION_SUPPLY_V1),
+            PALW_MODEL_POSITION_SUPPLY_V1
+        ));
+    } else {
+        out.push(format!(
+            "  instalment     {} of {} collected after this one, {} to go — the market opens on the payment that reaches the floor",
+            msk(total),
+            msk(r.seed_min_sompi),
+            msk(r.seed_min_sompi - total)
+        ));
+    }
+    out.push(
+        "  LOCKED FOR GOOD: no object pays a seed out; only a holder's sell moves MSK out of the curve, and never below the seed."
+            .into(),
+    );
+    out
+}
+
 /// **Why a seed this carrier cannot fund is refused, and what to pay instead** (the 2026-09-25
 /// Position review's #5). One carrier spends at most [`PALW_CARRIER_MAX_INPUTS`] utxos, so the advice
 /// is an instalment of what those utxos hold less the fee — in whole MSK, and only when that is at
@@ -535,14 +563,9 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
     if ctx.output != OutputFormat::Json {
         println!("seed {} into line {line}", msk(msk_seed));
         println!("  seeder         {seeder} (for the record; the seeder holds no position)");
-        println!(
-            "  first price    {} per position ({} positions in the curve)",
-            msk(msk_seed / PALW_MODEL_POSITION_SUPPLY_V1),
-            PALW_MODEL_POSITION_SUPPLY_V1
-        );
-        println!(
-            "  LOCKED FOR GOOD: no object pays a seed out; only a holder's sell moves MSK out of the curve, and never below the seed."
-        );
+        for preview in seed_preview(&r, msk_seed) {
+            println!("{preview}");
+        }
         println!("{}", refusal_line(&nv, msk_seed, &addr));
     }
     let what = format!("ModelSeed {} into line {}", msk(msk_seed), line);
@@ -957,6 +980,22 @@ mod tests {
             (v["open"].as_bool(), v["position_units"].as_u64(), v["price_sompi_per_position"].as_u64()),
             (Some(false), Some(0), Some(0))
         );
+    }
+
+    /// **The 2026-09-25 Position review's N1: the seed preview adds the payment to what is already
+    /// pledged** — on the live drill it priced a 600,000 MSK instalment on a 400,000 MSK pledge as a
+    /// whole seed (0.8 and 1.2 MSK) where the market opened at 2.0.
+    #[test]
+    fn the_seed_preview_counts_what_is_already_pledged() {
+        use super::seed_preview;
+        use kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1;
+        const MSK: u64 = 100_000_000;
+        let pledge = PalwModelMarketV1::pledge_v1(5, 400_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
+        let r = answer(MILLION_MSK, pledge);
+        let opens = seed_preview(&r, 600_000 * MSK).join("\n");
+        assert!(opens.contains("opens the pair") && opens.contains("first price 2.00000000 MSK"), "400k + 600k opens at 2.0: {opens}");
+        let part = seed_preview(&r, 100_000 * MSK).join("\n");
+        assert!(part.contains("500000.00000000 MSK of 1000000.00000000 MSK") && part.contains("500000.00000000 MSK to go"), "{part}");
     }
 
     #[test]
