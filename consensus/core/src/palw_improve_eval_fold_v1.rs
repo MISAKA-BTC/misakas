@@ -3205,12 +3205,14 @@ mod tests {
         // An epoch already decided is not reopened: the reversal leaves the results alone.
         let (decided, _) = at(&s2, &p, 1_800, |_| {});
         assert_eq!(decided.improvement_epoch(&h(LINE), 1).unwrap().state, PalwEpochStateV1::Decided);
+        // (The decided epoch's rows retire by a bounded sweep, so the baseline is the same block without the reversal.)
+        let (baseline, _) = at(&decided, &p, 1_900, |_| {});
         let (after, _) = at(&decided, &p, 1_900, |b| {
             let _ = b.reverse_convicted_final(&ctx(1_900), id, PalwVoidReasonV2::CourtFraud);
         });
         assert_eq!(
             after.improvement_result(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent),
-            decided.improvement_result(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent),
+            baseline.improvement_result(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent),
             "a decided epoch's results stand"
         );
     }
