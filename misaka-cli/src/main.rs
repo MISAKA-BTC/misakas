@@ -3109,12 +3109,21 @@ mod cli_surface_tests {
     /// that may not happen.
     #[test]
     fn a_seed_on_argv_is_refused() {
-        for flag in ["--seed", "--seed-hex", "--hex", "--mnemonic", "--key", "--secret"] {
-            let parsed = Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/never-written", flag, SEED_HEX]);
-            assert!(parsed.is_err(), "`key import {flag} <seed>` parsed — a seed must have no argv door");
-        }
-        // A bare positional is the same door with the flag filed off.
-        assert!(Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/never-written", SEED_HEX]).is_err());
+        // The whole CLI is one clap derive tree: parsing it in a debug build needs more than the test harness's 2 MiB
+        // thread stack, so this test parses on a thread of its own with room (it overflowed otherwise).
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                for flag in ["--seed", "--seed-hex", "--hex", "--mnemonic", "--key", "--secret"] {
+                    let parsed = Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/never-written", flag, SEED_HEX]);
+                    assert!(parsed.is_err(), "`key import {flag} <seed>` parsed — a seed must have no argv door");
+                }
+                // A bare positional is the same door with the flag filed off.
+                assert!(Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/never-written", SEED_HEX]).is_err());
+            })
+            .expect("the parsing thread starts")
+            .join()
+            .expect("a seed on argv is refused");
     }
 
     /// **SA-1: no argument of `key import` reads the environment.**
