@@ -72,6 +72,12 @@ OVERRIDES = {
 VARIANTS = {
     "granitemoeshared_shared": ("granitemoeshared", dict(shared_intermediate_size=32),
                                 "the real Granite-MoE-shared checkpoints have a shared expert (shared_intermediate_size > 0); the default tiny config has none"),
+    "mimo_v2_flash_unscaled": ("mimo_v2_flash", dict(attention_value_scale=1.0),
+                               "the same family with the value scale removed: everything else of MiMo-V2-Flash is data, the scale (0.707 in the release) is FR-31"),
+    "cohere2_moe_shared_sum": ("cohere2_moe", dict(num_shared_experts=1, shared_expert_combination_strategy="sum"),
+                               "a Cohere2-MoE with a shared expert added to the routed output (the default tiny config has none)"),
+    "cohere2_moe_shared_avg": ("cohere2_moe", dict(num_shared_experts=1, shared_expert_combination_strategy="average"),
+                               "a Cohere2-MoE whose shared and routed outputs are averaged: needs a scale on the shared expert, not a spec field"),
 }
 
 # Families the census does not build, with the reason. Never dropped silently.
