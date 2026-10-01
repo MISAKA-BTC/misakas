@@ -349,6 +349,26 @@ def census_md(rep, cman):
         out.append("")
         out.append("Variants (a second tiny config where the first cannot exercise a feature real checkpoints use; not counted as families): " + "; ".join(
             f"`{e['id']}` is Level {e.get('level_label') or e['level']}" + (f" ({e['read'].get('user', {}).get('failure', {}).get('error', '')[:150]})" if e["level"] == "C" else "") for e in variants) + ".")
+    cb_path = os.path.join(HERE, "census_blockers.json")
+    if os.path.exists(cb_path):
+        cb = load(cb_path)
+        c_ids = [e["id"] for e in ents if e["level"] == "C"]
+        cls = defaultdict(list)
+        for i in c_ids:
+            cls[cb.get(i, {}).get("class", "not classified")].append(i)
+        frs = defaultdict(list)
+        for i in c_ids:
+            for fr in cb.get(i, {}).get("frs", []):
+                frs[fr].append(i)
+        out.append("")
+        out.append("What this lane has read of the Level C families (`tools/corpus/census_blockers.json`; the rest are listed by the reader's refusal above and are NOT classified):")
+        out.append("")
+        out.append("| class | families | which |")
+        out.append("| --- | ---: | --- |")
+        for k, ids in sorted(cls.items(), key=lambda kv: -len(kv[1])):
+            out.append(f"| {k} | {len(ids)} | {', '.join('`'+i+'`' for i in sorted(ids))} |")
+        out.append("")
+        out.append("Feature requests the census names (a family may name two): " + "; ".join(f"{fr}: {len(ids)}" for fr, ids in sorted(frs.items(), key=lambda kv: (-len(kv[1]), kv[0]))) + ".")
     nd = cen.get("not_derivable", [])
     if nd:
         out.append("")

@@ -251,5 +251,107 @@
   ],
   "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
   "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "bigbird_pegasus": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "blenderbot_small": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "mvp": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "pegasus": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "prophetnet": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "trocr": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "ctrl": {
+  "class": "legacy",
+  "frs": [],
+  "short": "a historical language model (CTRL, XLM, XLNet's permutation LM, CPM-Ant) with its own mechanics; not examined and not a candidate by hub usage",
+  "evidence": "not read"
+ },
+ "xlm": {
+  "class": "legacy",
+  "frs": [],
+  "short": "a historical language model (CTRL, XLM, XLNet's permutation LM, CPM-Ant) with its own mechanics; not examined and not a candidate by hub usage",
+  "evidence": "not read"
+ },
+ "xlnet": {
+  "class": "legacy",
+  "frs": [],
+  "short": "a historical language model (CTRL, XLM, XLNet's permutation LM, CPM-Ant) with its own mechanics; not examined and not a candidate by hub usage",
+  "evidence": "not read"
+ },
+ "cpmant": {
+  "class": "legacy",
+  "frs": [],
+  "short": "a historical language model (CTRL, XLM, XLNet's permutation LM, CPM-Ant) with its own mechanics; not examined and not a candidate by hub usage",
+  "evidence": "not read"
+ },
+ "fuyu": {
+  "class": "route",
+  "frs": [
+   "FR-19"
+  ],
+  "short": "a vision-language model: Persimmon's decoder (this lane's `persimmon` adapter lowers it) over image patches fed as embeddings (the vision stage is RFC-0003's)",
+  "evidence": "config keys (image_size, patch_size, text_config)"
+ },
+ "moshi": {
+  "class": "route",
+  "frs": [
+   "FR-23"
+  ],
+  "short": "a speech-text model: a codec-fed temporal transformer and a depth decoder",
+  "evidence": "config keys (audio_encoder_config, depth_decoder_config)"
+ },
+ "hrm_text": {
+  "class": "feature",
+  "frs": [],
+  "short": "a hierarchical recurrent model (H and L cycles over shared stacks, `num_layers_per_stack`, a prefix-LM mask): a new composition of layers, not examined",
+  "evidence": "config keys (H_cycles, L_cycles, L_bp_cycles, prefix_lm)"
+ },
+ "minimax_m3_vl_text": {
+  "class": "feature",
+  "frs": [
+   "FR-09"
+  ],
+  "short": "a BLOCK-sparse attention indexer with local blocks (index_block_size, index_local_blocks, index_topk_blocks) plus MoE; `ATTN_SPARSE_BLOCK_V1` exists for Qwen4's variant and was not tried",
+  "evidence": "config keys; not run"
  }
 }
