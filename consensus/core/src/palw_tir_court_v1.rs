@@ -177,7 +177,7 @@ pub trait PalwTirEvidenceStoreV1 {
         None
     }
     /// **The tiled logits trace's rows-tree node `(level, index)`'s frontier and opening** (the
-    /// second IR fence's `TirRowNode`): at `level ≥ 1` the rows-tree nodes eight levels below it (the
+    /// second IR fence's `TirRowNode`): at `level ≥ 1` the rows-tree nodes ten levels below it (the
     /// row leaves when nearer) and its siblings to the rows root; at level 0 row `index`'s tile
     /// leaves and the row's opening — [`palw_tir_row_node_parts_v1`] over the store's rows. `None`
     /// by default.
@@ -2174,10 +2174,20 @@ impl PalwTirStepLeafDisclosureV1 {
 // ---------------------------------------------------------------------------------------------
 
 /// **Levels a `TirStepNode` answer covers**: its frontier is the nodes this many levels below the
-/// demanded node (the leaf nodes, when nearer) — at most 2^8 hashes — so one session descends eight
-/// levels and a 2^22-leaf execution's first divergent leaf is three node sessions and one leaf session
-/// away.
-pub const PALW_TIR_STEP_NODE_DEPTH_V1: u8 = 8;
+/// demanded node (the leaf nodes, when nearer) — at most 2^10 hashes, 64 KiB, so the answer rides one
+/// 100,000-byte carrier with its opening, binding and signature — so one session descends ten levels
+/// and one seat's four sessions reach the first divergent leaf of a 2^30-leaf execution: three node
+/// sessions and a leaf session ([`PALW_TIR_DA_SEAT_REACH_LEAVES_V1`]). A real-size class's job is
+/// 2^24–2^29 leaves (Llama-3.1-70B at 2,048 positions and 64-lane tiles: 450 M).
+pub const PALW_TIR_STEP_NODE_DEPTH_V1: u8 = 10;
+
+/// **The most step leaves one seat's data-availability budget descends** — its sessions a claim
+/// (`PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1`, four) less the leaf's, each [`PALW_TIR_STEP_NODE_DEPTH_V1`]
+/// levels: 2^30. Past `palw_tir_fence2` admission refuses a class whose canonical job commits more
+/// (`TirExceeds { limit: "IR DA seat reach" }`), so one honest seat can reach every leaf of every
+/// attempt of every class the chain admits.
+pub const PALW_TIR_DA_SEAT_REACH_LEAVES_V1: u64 =
+    1 << ((crate::palw_da_rcore_v1::PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1 as u32 - 1) * PALW_TIR_STEP_NODE_DEPTH_V1 as u32);
 
 /// **The step tree's width at `level`** (0 = the leaf nodes; each level `⌈w / 2⌉`, an odd last node
 /// promoted), or `None` past the root or for an empty tree.
@@ -2328,7 +2338,7 @@ pub fn palw_tir_step_node_parts_v1(ordered_leaf_hashes: &[Hash64], level: u8, in
 /// frontier — the nodes [`PALW_TIR_STEP_NODE_DEPTH_V1`] levels below it, or the leaf nodes when nearer
 /// — and its siblings up to the step root, with the claim's binding (program EMPTY). A challenger
 /// compares the frontier with its own execution's tree and names the first node that differs next:
-/// eight levels a session, then the leaf.
+/// ten levels a session, then the leaf.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwTirStepNodeDisclosureV1 {
     pub binding: PalwTirStepBindingV1,
@@ -2526,12 +2536,16 @@ pub fn palw_tir_row_node_parts_v1(
         .enumerate()
         .map(|(t, lanes)| crate::palw_step_refute::tiled_logits_tile_leaf_v1(&ctx_hash, index as u32, t as u32, lanes))
         .collect();
-    let opening = crate::palw_step_leg::step_opening_v1(&row_roots, index).ok()?;
+    // The rows tree is bounded by its own row count — the job's decode count — not by the class's step
+    // ladder: the prover holds no ruleset here, and the checker walks the opening at the claim's
+    // ladder (`check_tir_row_node_disclosure_v1`), which a tree of rows the prover holds never
+    // exceeds. The default ladder (2^22) is not this tree's bound (ADR-0084 U-08's guard).
+    let opening = crate::palw_step_leg::step_opening_capped_v1(&row_roots, index, row_roots.len() as u64).ok()?;
     Some((tiles, opening.siblings))
 }
 
 /// **What a `TirRowNode { level, index }` answer opens** (past `Params::palw_tir_fence2`): a node of
-/// the claim's tiled logits trace's rows tree — at `level ≥ 1` its frontier eight levels down (the row
+/// the claim's tiled logits trace's rows tree — at `level ≥ 1` its frontier ten levels down (the row
 /// leaves when nearer) and its siblings to the rows root; at level 0, row `index`'s tile leaves and
 /// the row's siblings — with the generated ids that, with the rows root, reproduce the claim's trace
 /// root, and the claim's binding (program EMPTY). A seat whose replay disagrees with the claim's trace

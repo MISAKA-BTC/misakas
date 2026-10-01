@@ -64,16 +64,26 @@ one-move accusation and every close stay exactly as the chain adjudicates them t
 - **The demand is keyed by the claim alone** (`DefaultAccusedTirStep { claim, unit, accuser, signature }`,
   no binding, no draws): a seat facing a producer that served nothing holds no binding, and the fold cannot
   count an IR execution's leaves without one (the class record keeps its layout's digest). The fold refuses
-  only a unit past every execution (a leaf at or past 2^22, a node above 22 levels or past the widest
+  only a unit past every execution at the class's ladder (a leaf at or past it, a node above its tree or past the widest
   level's width); a unit past the claim's own execution is answered by the claim's binding proving so
-  (`TirStepOutOfRange`), and that session is refuted like any other.
-- **The descent unit `TirStepNode { level, index }`** is answered by the node's frontier — the nodes eight
-  levels below it, or the leaf nodes when nearer (≤ 256 hashes, 16 KiB) — and its opening; the chain folds
+  (`TirStepOutOfRange`), and that session is refuted like any other. (The widest execution is the class's
+  ladder since 2026-09-29; below.)
+- **The descent unit `TirStepNode { level, index }`** is answered by the node's frontier — the nodes ten
+  levels below it, or the leaf nodes when nearer (≤ 1,024 hashes, 64 KiB) — and its opening; the chain folds
   the frontier by the tree's own rule (pairs, an odd last node promoted) and walks it to the committed step
   root. A session's units are fixed when it opens, so "eight nodes along a path" cannot be named up front;
   the frontier carries the same information for whichever path the seat then takes. The seat names the
-  root, then the first frontier node its own tree disagrees with, then that leaf: ⌈h / 8⌉ node sessions and
-  one leaf session — four for a 2^22-leaf (D-F1) execution, inside one seat's budget of four.
+  root, then the first frontier node its own tree disagrees with, then that leaf: ⌈h / 10⌉ node sessions
+  and one leaf session — four up to a 2^30-leaf execution, inside one seat's budget of four. (It was eight
+  levels, ≤ 256 hashes; real-size classes commit 2^24–2^29 leaves — Llama-3.1-70B at 2,048 positions and
+  64-lane tiles 450 M — so the depth went to ten: a 1,024-hash frontier, 64 KiB, with its opening, binding
+  and signature still one 100,000-byte carrier.)
+- **At the class's ladder** (2026-09-29): every IR answer's binding — the release's `TirEvent` included —
+  and every step demand's unit is checked at the claim's class's ladder past the fence (the court's step
+  ladder the held regime rides, 2^40 on testnet-12), where the release checked them at 2^22 leaves: a claim
+  of an execution past 2^22 could answer NO demand and defaulted, whatever it did. Admission refuses a class
+  whose canonical job commits more than one seat reaches (`PALW_TIR_DA_SEAT_REACH_LEAVES_V1`, 2^30). Until
+  the fence, declare-layout refuses a canonical job past 2^22 and a producer does not mine one.
 - **The close from the disclosure alone.** The descent takes the FIRST differing node at every level, so
   every accused node wholly before the disputed leaf `L` is the seat's own; the nodes on `L`'s path follow
   from the disclosed leaf and its opening, and so do their right siblings. Every opening and run the cone of
