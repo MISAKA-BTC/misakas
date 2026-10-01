@@ -17,7 +17,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 use common::device;
-use common::one_node::{NodeCase, Tally, run_case};
+use common::one_node::{NodeCase, Tally, run_case_forms};
 
 struct Gen(ChaCha8Rng);
 
@@ -175,8 +175,9 @@ fn unary_case(g: &mut Gen) -> NodeCase {
 fn matmul_case(g: &mut Gen) -> NodeCase {
     let kind = g.0.gen_range(0..4);
     let (m, k, n) = match kind {
-        // A decode projection: packed weight rows against one column.
-        0 => (g.0.gen_range(1..80), 4 * g.0.gen_range(1..300), 1),
+        // A decode projection: packed weight rows against one column (K a multiple of 16 half the
+        // time: the vec4 kernel).
+        0 => (g.0.gen_range(1..80), if g.chance(0.5) { 16 * g.0.gen_range(1..80) } else { 4 * g.0.gen_range(1..300) }, 1),
         // A batch of positions: the tiled kernel.
         1 => (g.0.gen_range(64..100), g.0.gen_range(1..90), g.0.gen_range(48..80)),
         // Long contractions: every i32 chunk boundary.
@@ -332,7 +333,9 @@ fn run_family(name: &str, seed: u64, n: usize, gen_case: fn(&mut Gen) -> NodeCas
     let mut tally = Tally::default();
     for i in 0..n {
         let c = gen_case(&mut g);
-        let r = run_case(&dev, &c);
+        // Every operand in its param form (packed) or its computed form (lanes), at random.
+        let forms = g.0.r#gen::<u32>();
+        let r = run_case_forms(&dev, &c, forms);
         if let Some(r) = &r {
             r.assert_agree(&format!(
                 "{name} case {i}: {:?} out {:?} ins {:?}",

@@ -159,6 +159,9 @@ pub struct Recorder<'d> {
     pub dispatches: usize,
     /// The kernel of every dispatch, in order (`ew:Add`, `gemv`, `gemm`, `matmul`, …): what ran.
     pub log: Vec<String>,
+    /// The open compute pass: consecutive dispatches share one (each dispatch is its own usage
+    /// scope, so a dispatch sees every earlier one's writes); copies and the submission close it.
+    pass: Option<wgpu::ComputePass<'static>>,
 }
 
 impl<'d> Recorder<'d> {
@@ -172,7 +175,7 @@ impl<'d> Recorder<'d> {
         }));
         let mut enc = dev.device.create_command_encoder(&Default::default());
         enc.clear_buffer(&status, 0, None);
-        Recorder { dev, enc, status, slots, dispatches: 0, log: Vec::new() }
+        Recorder { dev, enc, status, slots, dispatches: 0, log: Vec::new(), pass: None }
     }
 
     /// Record one dispatch of `src` over `groups` workgroups.
@@ -215,8 +218,15 @@ impl<'d> Recorder<'d> {
         if wg <= max { (wg, 1, 1) } else { (max, wg.div_ceil(max), 1) }
     }
 
+    /// The command encoder, with any open compute pass closed (for copies).
+    pub fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
+        self.pass = None;
+        &mut self.enc
+    }
+
     /// Submit everything recorded and wait; return the status words.
-    pub fn finish(self) -> Vec<u32> {
+    pub fn finish(mut self) -> Vec<u32> {
+        self.pass = None;
         let Recorder { dev, enc, status, slots, .. } = self;
         dev.queue.submit([enc.finish()]);
         let bytes = dev.read_bytes(&status, 0, 4 * slots.max(1) as u64);
@@ -226,6 +236,7 @@ impl<'d> Recorder<'d> {
     /// Submit what is recorded so far without waiting, and start a new encoder (the status words
     /// carry over).
     pub fn flush(&mut self) {
+        self.pass = None;
         let enc = std::mem::replace(&mut self.enc, self.dev.device.create_command_encoder(&Default::default()));
         self.dev.queue.submit([enc.finish()]);
     }
@@ -595,44 +606,77 @@ impl<'d> Recorder<'d> {
         p.set64(19, hi);
         p.set64(21, lo);
         p.set(23, 0);
-        let chunk = i32_chunk(node.in_ivs[0], node.in_ivs[1]);
+        let chunk = i32_chunk(node.in_ivs[0], node.in_ivs[1]).unwrap_or(0);
         let nbatch = nb[0] * nb[1];
         let bufs = [&*a.buf, &*b.buf];
-        // The matrix–vector product over packed weight rows (a decode projection).
+        let a_m = a.layout.strides[ra - 2];
+        let aligned = |q: usize| a.layout.offset.is_multiple_of(q) && a_m.is_multiple_of(q) && abs.iter().all(|s| s.is_multiple_of(q));
+        // The matrix–vector product over packed weight rows (a decode projection, an expert).
         let gemv_ok = mode == SumMode::Fast
             && a.form == Form::P8
             && n == 1
-            && nbatch == 1
             && k >= 4
-            && k % 4 == 0
+            && k.is_multiple_of(4)
             && a.layout.strides[ra - 1] == 1
-            && a.layout.strides[ra - 2].is_multiple_of(4)
-            && a.layout.offset.is_multiple_of(4);
+            && aligned(4)
+            && nbatch <= 65_535;
         if gemv_ok {
-            let words = chunk.map(|c| c / 4).filter(|w| *w >= 1);
-            p.set(16, words.unwrap_or(1));
-            let key = GemvKey { b: b.form, out: o.form, chunked: words.is_some() };
-            self.log.push(format!("gemv{}", if key.chunked { ":i32" } else { ":i64" }));
-            let groups = self.groups(u32_of(m)?, 4);
-            self.dispatch(&wgsl::gemv_source(&key), &p, &o.buf, &bufs, groups);
+            let vec4 = k.is_multiple_of(16)
+                && aligned(16)
+                && chunk >= 16
+                && b.form == Form::S32
+                && b.layout.strides[rb - 2] == 1
+                && b.layout.offset.is_multiple_of(4)
+                && bbs.iter().all(|s| s.is_multiple_of(4));
+            let (per, rows_per_wg) = if vec4 { (16u32, 32u32) } else { (4u32, 4u32) };
+            let chunked = chunk / per >= 1;
+            p.set(16, if chunked { chunk / per } else { 1 });
+            let key = GemvKey { b: b.form, out: o.form, chunked: chunked || vec4, vec4 };
+            self.log.push(format!(
+                "gemv{}",
+                if vec4 {
+                    ":vec4"
+                } else if chunked {
+                    ":i32"
+                } else {
+                    ":i64"
+                }
+            ));
+            let (x, y, _) = self.groups(u32_of(m)?, rows_per_wg);
+            self.dispatch(&wgsl::gemv_source(&key), &p, &o.buf, &bufs, (x, y, u32_of(nbatch)?));
             return Ok(o);
         }
-        // Many output columns (a batch of positions): tiled through workgroup memory.
-        if mode == SumMode::Fast && n >= 8 && m * n >= 4096 && nbatch <= 65_535 {
-            let tiles = chunk.map(|c| c / 16).filter(|t| *t >= 1);
-            p.set(16, tiles.unwrap_or(1));
-            let key = GemmKey { a: a.form, b: b.form, out: o.form, chunked: tiles.is_some() };
-            self.log.push(format!("gemm{}", if key.chunked { ":i32" } else { ":i64" }));
+        // Many output columns (a batch of positions): tiled through workgroup memory, i32 terms.
+        if mode == SumMode::Fast && chunk >= 32 && n >= 8 && m * n >= 4096 && nbatch <= 65_535 {
+            p.set(16, chunk / 32);
+            let fast_a = a.form == Form::P8 && a.layout.strides[ra - 1] == 1 && k.is_multiple_of(4) && aligned(4);
+            let key = GemmKey { a: a.form, b: b.form, out: o.form, fast_a };
+            self.log.push(format!("gemm{}", if fast_a { ":p8" } else { "" }));
             let groups = (u32_of(n.div_ceil(64))?, u32_of(m.div_ceil(64))?, u32_of(nbatch)?);
             self.dispatch(&wgsl::gemm_source(&key), &p, &o.buf, &bufs, groups);
             return Ok(o);
         }
-        let chunked = chunk.filter(|c| *c >= 2);
-        p.set(16, chunked.unwrap_or(1));
-        let key = MatMulKey { a: a.form, b: b.form, out: o.form, mode, chunked: chunked.is_some() };
-        self.log.push(format!("matmul:{mode:?}{}", if key.chunked { ":i32" } else { ":i64" }));
+        let chunked = chunk >= 2;
+        p.set(16, if chunked { chunk } else { 1 });
+        // A long contraction with few outputs (attention values over a long history): split K.
+        let split = (outputs as usize) < 16_384 && k >= 1024;
+        let key = MatMulKey { a: a.form, b: b.form, out: if split { Form::I64 } else { o.form }, mode, chunked, split };
+        self.log.push(format!("matmul:{mode:?}{}{}", if chunked { ":i32" } else { ":i64" }, if split { ":split" } else { "" }));
+        if !split {
+            let groups = self.groups(outputs, 256);
+            self.dispatch(&wgsl::matmul_source(&key), &p, &o.buf, &bufs, groups);
+            return Ok(o);
+        }
+        let slice = 256usize;
+        let slices = k.div_ceil(slice);
+        p.set(24, u32_of(slice)?);
+        p.set(25, u32_of(slices)?);
+        let parts = outputs as usize * slices * if mode == SumMode::PosNeg { 2 } else { 1 };
+        let tmp = self.dev.alloc(Form::I64, parts);
+        let groups = self.groups(u32_of(outputs as usize * slices)?, 256);
+        self.dispatch(&wgsl::matmul_source(&key), &p, &tmp, &bufs, groups);
         let groups = self.groups(outputs, 256);
-        self.dispatch(&wgsl::matmul_source(&key), &p, &o.buf, &bufs, groups);
+        self.dispatch(&wgsl::splitk_finish_source(mode, o.form), &p, &o.buf, &[&*tmp], groups);
         Ok(o)
     }
 

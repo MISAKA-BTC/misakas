@@ -99,8 +99,16 @@ pub fn program_of(case: &NodeCase) -> Option<misaka_palw_tir::TirProgramV1> {
     Some(pb.finish(pre, vec![], post, 0))
 }
 
-/// Run `case` through the three implementations; `None` when it is not a program node.
+/// Run `case` through the three implementations; `None` when it is not a program node. Operands
+/// are uploaded in their param form (packed `i8`/`i16`).
 pub fn run_case(dev: &GpuDevice, case: &NodeCase) -> Option<Report> {
+    run_case_forms(dev, case, 0)
+}
+
+/// [`run_case`], with operand `k` uploaded in its COMPUTED form (lanes) when bit `k` of `computed`
+/// is set — the form an activation produced by an earlier node has. A form is storage, never a
+/// value: every combination must give the same bytes.
+pub fn run_case_forms(dev: &GpuDevice, case: &NodeCase, computed: u32) -> Option<Report> {
     let program = program_of(case)?;
     let plan = TirPlan::compile(&program).ok()?;
     let out_shape: Vec<usize> = case.out.resolve(1);
@@ -123,7 +131,11 @@ pub fn run_case(dev: &GpuDevice, case: &NodeCase) -> Option<Report> {
     let ins: Vec<DevTensor> = bufs
         .iter()
         .zip(&case.inputs)
-        .map(|(b, t)| dev.upload(b.slice(), Form::param(t.dtype).expect("a param dtype"), &t.shape))
+        .enumerate()
+        .map(|(k, (b, t))| {
+            let form = if computed >> k & 1 == 1 { Form::computed(t.dtype) } else { Form::param(t.dtype) };
+            dev.upload(b.slice(), form.expect("a param dtype"), &t.shape)
+        })
         .collect();
     let refs: Vec<&DevTensor> = ins.iter().collect();
     let mut rec = Recorder::new(dev, 1);

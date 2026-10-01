@@ -183,13 +183,19 @@ fn int_ln64(x: i64) -> i64 {
 /// The bindings and helpers every kernel starts with: `P`, `O` (of `out`), `S`, the operands, a
 /// 64-bit constant reader and `fail`.
 pub fn header(out: Form, ins: &[Form]) -> String {
+    let mut s = header_base(out);
+    for (k, f) in ins.iter().enumerate() {
+        s.push_str(&loader(k, *f));
+    }
+    s
+}
+
+/// [`header`] without the operand bindings (a kernel that declares its own views of them).
+pub fn header_base(out: Form) -> String {
     let mut s = String::new();
     s.push_str("@group(0) @binding(0) var<storage, read> P: array<u32>;\n");
     s.push_str(&format!("@group(0) @binding(1) var<storage, read_write> O: array<{}>;\n", out.wgsl_array()));
     s.push_str("@group(0) @binding(2) var<storage, read_write> S: array<atomic<u32>>;\n");
-    for (k, f) in ins.iter().enumerate() {
-        s.push_str(&loader(k, *f));
-    }
     s.push_str(&storer(out));
     s.push_str(
         r#"
@@ -479,7 +485,8 @@ pub fn reduce_source(k: &ReduceKey) -> String {
     s
 }
 
-/// `MatMul`, one invocation per output element, any strides and forms: the general kernel.
+/// `MatMul`, one invocation per output element (or per output element and K-slice), any strides
+/// and forms: the general kernel.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MatMulKey {
     pub a: Form,
@@ -489,88 +496,136 @@ pub struct MatMulKey {
     /// Terms are formed in `i32` and summed in `i32` chunks of at most `P[16]` terms (the plan
     /// proved every operand inside `i32` and `chunk · max|term| < 2^31`); otherwise `i64` terms.
     pub chunked: bool,
+    /// Split the contraction into `P[25]` slices of `P[24]` terms: each invocation writes one
+    /// slice's partial (an `i64` sum, or its positive and negative parts) to the temporary `O`, and
+    /// [`splitk_finish_source`] adds the slices. A long contraction with few outputs (the values
+    /// of an attention over a long history) then has an invocation per slice, not per output.
+    pub split: bool,
 }
 
 /// Parameter block shared by the MatMul kernels: `P[0]` outputs, `P[1]` slot, `P[2]` M, `P[3]` N,
 /// `P[4]` K, `P[5]` a_m, `P[6]` a_k, `P[7]` b_k, `P[8]` b_n, `P[9..11]` the output batch dims (two,
-/// right-aligned), `P[11..13]` / `P[13..15]` `a`'s / `b`'s batch strides, `P[15]` reserved, `P[16]`
-/// the i32 chunk, `P[17]` / `P[18]` the operands' base offsets, `P[19..23]` the dtype bounds (Pn),
-/// `P[23]` the output base offset.
+/// right-aligned), `P[11..13]` / `P[13..15]` `a`'s / `b`'s batch strides, `P[16]` the i32 chunk,
+/// `P[17]` / `P[18]` the operands' base offsets, `P[19..23]` the dtype bounds (hi, lo), `P[23]` the
+/// output base offset, `P[24]` / `P[25]` the slice length and count of a split contraction.
 pub fn matmul_source(k: &MatMulKey) -> String {
     let mut s = header(k.out, &[k.a, k.b]);
+    let total = if k.split { "P[0] * P[25]" } else { "P[0]" };
+    s.push_str(&format!(
+        "\n@compute @workgroup_size(256)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {{\n\
+         \x20   let ee = gid.x + gid.y * nwg.x * 256u;\n\
+         \x20   if (ee >= {total}) {{ return; }}\n"
+    ));
+    if k.split {
+        s.push_str("    let e = ee % P[0]; let slice = ee / P[0];\n    let t0 = slice * P[24]; let t1 = min(t0 + P[24], P[4]);\n");
+    } else {
+        s.push_str("    let e = ee;\n    let t0 = 0u; let t1 = P[4];\n");
+    }
     s.push_str(
-        "\n@compute @workgroup_size(256)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {\n\
-         \x20   let e = gid.x + gid.y * nwg.x * 256u;\n\
-         \x20   if (e >= P[0]) { return; }\n\
-         \x20   let m = P[2]; let n = P[3]; let kk = P[4];\n\
+        "    let m = P[2]; let n = P[3];\n\
          \x20   let c = e % n; let rest = e / n; let r = rest % m; let bi = rest / m;\n\
          \x20   let b1 = bi % P[10]; let b0 = bi / P[10];\n\
          \x20   let ao = P[17] + b0 * P[11] + b1 * P[12] + r * P[5];\n\
          \x20   let bo = P[18] + b0 * P[13] + b1 * P[14] + c * P[8];\n\
          \x20   let a_k = P[6]; let b_k = P[7];\n",
     );
-    let (acc_decl, fold64) = match k.mode {
-        SumMode::Fast => ("    var acc = 0li;\n", "acc = acc + "),
-        SumMode::PosNeg => ("    var accp = 0li; var accn = 0li;\n", ""),
-    };
-    s.push_str(acc_decl);
+    match k.mode {
+        SumMode::Fast => s.push_str("    var acc = 0li;\n"),
+        SumMode::PosNeg => s.push_str("    var accp = 0li; var accn = 0li;\n"),
+    }
     if k.chunked {
         // Every term and every chunk total fit i32: chunk totals are exact, then widened.
-        let flush = match k.mode {
-            SumMode::Fast => "acc = acc + i64(sp);".to_string(),
-            SumMode::PosNeg => "accp = accp + i64(sp); accn = accn + i64(sn);".to_string(),
-        };
-        let (decl, add) = match k.mode {
-            SumMode::Fast => ("var sp = 0i;", "sp = sp + x * y;"),
-            SumMode::PosNeg => ("var sp = 0i; var sn = 0i;", "let q = x * y; if (q > 0i) { sp = sp + q; } else { sn = sn + q; }"),
+        let (decl, add, flush) = match k.mode {
+            SumMode::Fast => ("var sp = 0i;", "sp = sp + x * y;", "acc = acc + i64(sp);"),
+            SumMode::PosNeg => (
+                "var sp = 0i; var sn = 0i;",
+                "let q = x * y; if (q > 0i) { sp = sp + q; } else { sn = sn + q; }",
+                "accp = accp + i64(sp); accn = accn + i64(sn);",
+            ),
         };
         s.push_str(&format!(
-            "    let ch = P[16];\n    var t = 0u;\n    loop {{\n        if (t >= kk) {{ break; }}\n        let end = min(t + ch, kk);\n        {decl}\n\
+            "    let ch = P[16];\n    var t = t0;\n    loop {{\n        if (t >= t1) {{ break; }}\n        let end = min(t + ch, t1);\n        {decl}\n\
              \x20       for (; t < end; t = t + 1u) {{ let x = ld32_0(ao + t * a_k); let y = ld32_1(bo + t * b_k); {add} }}\n        {flush}\n    }}\n"
         ));
     } else {
         match k.mode {
-            SumMode::Fast => s.push_str(&format!(
-                "    for (var t = 0u; t < kk; t = t + 1u) {{ {fold64}ld0(ao + t * a_k) * ld1(bo + t * b_k); }}\n"
-            )),
+            SumMode::Fast => s.push_str("    for (var t = t0; t < t1; t = t + 1u) { acc = acc + ld0(ao + t * a_k) * ld1(bo + t * b_k); }\n"),
             SumMode::PosNeg => s.push_str(
-                "    for (var t = 0u; t < kk; t = t + 1u) { let q = ld0(ao + t * a_k) * ld1(bo + t * b_k); if (q > 0li) { accp = accp + q; } else { accn = accn + q; } }\n",
+                "    for (var t = t0; t < t1; t = t + 1u) { let q = ld0(ao + t * a_k) * ld1(bo + t * b_k); if (q > 0li) { accp = accp + q; } else { accn = accn + q; } }\n",
             ),
         }
     }
-    match k.mode {
-        SumMode::Fast => s.push_str("    let v = acc;\n"),
-        SumMode::PosNeg => {
-            s.push_str("    if (accp > p64(19u) || accn < p64(21u)) { fail(e, 1u); return; }\n    let v = accp + accn;\n")
+    match (k.split, k.mode) {
+        (true, SumMode::Fast) => s.push_str("    O[ee] = acc;\n}\n"),
+        (true, SumMode::PosNeg) => s.push_str("    O[2u * ee] = accp; O[2u * ee + 1u] = accn;\n}\n"),
+        (false, SumMode::Fast) => s.push_str("    st(P[23] + e, acc);\n}\n"),
+        (false, SumMode::PosNeg) => {
+            s.push_str("    if (accp > p64(19u) || accn < p64(21u)) { fail(e, 1u); return; }\n    st(P[23] + e, accp + accn);\n}\n")
         }
     }
-    s.push_str("    st(P[23] + e, v);\n}\n");
     s
 }
 
-/// `MatMul` as a matrix–vector product with `i8` packed weight rows: `out[r] = Σ_t W[r, t]·x[t]`,
-/// one 64-invocation lane group per row, four rows per workgroup. `W` rows are contiguous and
-/// word-aligned (`K % 4 = 0`, base and row stride multiples of 4 elements).
+/// The second pass of a split contraction: per output, the slices' partials added (any order:
+/// each is a sum of a subset of the terms, inside `i64` by the plan's proof), the `Pn` check on the
+/// whole positive and negative parts, the value stored.
+pub fn splitk_finish_source(mode: SumMode, out: Form) -> String {
+    let mut s = header(out, &[Form::I64]);
+    s.push_str(
+        "\n@compute @workgroup_size(256)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {\n\
+         \x20   let e = gid.x + gid.y * nwg.x * 256u;\n\
+         \x20   if (e >= P[0]) { return; }\n",
+    );
+    match mode {
+        SumMode::Fast => s.push_str(
+            "    var acc = 0li;\n    for (var q = 0u; q < P[25]; q = q + 1u) { acc = acc + B0[q * P[0] + e]; }\n    st(P[23] + e, acc);\n}\n",
+        ),
+        SumMode::PosNeg => s.push_str(
+            "    var accp = 0li; var accn = 0li;\n\
+             \x20   for (var q = 0u; q < P[25]; q = q + 1u) { accp = accp + B0[2u * (q * P[0] + e)]; accn = accn + B0[2u * (q * P[0] + e) + 1u]; }\n\
+             \x20   if (accp > p64(19u) || accn < p64(21u)) { fail(e, 1u); return; }\n\
+             \x20   st(P[23] + e, accp + accn);\n}\n",
+        ),
+    }
+    s
+}
+
+/// `MatMul` as a matrix–vector product with `i8` packed weight rows: `out[β, r] = Σ_t W[β, r, t]·x[β, t]`.
+/// Two shapes of it:
+///
+/// * **`vec4`**: 32 invocations per row, eight rows per workgroup, sixteen weights (one
+///   `vec4<u32>`) and sixteen activation lanes (four) per load — `K % 16 = 0`, the weight rows and
+///   base 16-aligned, the activations `S32` lanes, contiguous and 4-aligned. Terms in `i32`,
+///   chunked (`P[16]` loads of sixteen terms per `i32` partial).
+/// * **scalar**: 64 invocations per row, four rows per workgroup, one weight word per load, any
+///   activation form and stride; `i32` chunks of `P[16]` words, or `i64` terms.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GemvKey {
     pub b: Form,
     pub out: Form,
-    /// i32 terms in chunks of `P[16]` packed WORDS (4 terms each); otherwise `i64` terms.
     pub chunked: bool,
+    pub vec4: bool,
 }
 
 pub fn gemv_source(k: &GemvKey) -> String {
+    if k.vec4 {
+        return gemv4_source(k.out);
+    }
     let mut s = header(k.out, &[Form::P8, k.b]);
     s.push_str("var<workgroup> W0: array<i64, 256>;\n");
     s.push_str(
         "\n@compute @workgroup_size(256)\nfn main(@builtin(local_invocation_index) lid: u32, @builtin(workgroup_id) wid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {\n\
          \x20   let row = (wid.x + wid.y * nwg.x) * 4u + (lid >> 6u);\n\
          \x20   let lane = lid & 63u;\n\
-         \x20   let m = P[2]; let kw = P[4] >> 2u;\n\
+         \x20   let bi = wid.z; let b1 = bi % P[10]; let b0 = bi / P[10];\n\
+         \x20   let m = P[2];\n\
          \x20   var acc = 0li;\n\
          \x20   if (row < m) {\n\
-         \x20       let wbase = (P[17] + row * P[5]) >> 2u;\n\
-         \x20       let bo = P[18]; let b_k = P[7];\n",
+         \x20       let abase = P[17] + b0 * P[11] + b1 * P[12] + row * P[5];\n\
+         \x20       let bo = P[18] + b0 * P[13] + b1 * P[14];\n\
+         \x20       let b_k = P[7];\n\
+         \x20       let kw = P[4] >> 2u;\n\
+         \x20       let wbase = abase >> 2u;\n",
     );
     if k.chunked {
         s.push_str(
@@ -598,29 +653,125 @@ pub fn gemv_source(k: &GemvKey) -> String {
         "    }\n\
          \x20   W0[lid] = acc;\n\
          \x20   workgroupBarrier();\n\
-         \x20   for (var w = 32u; w > 0u; w = w >> 1u) { if (lane < w) { W0[lid] = W0[lid] + W0[lid + w]; } workgroupBarrier(); }\n\
-         \x20   if (lane == 0u && row < m) { st(P[23] + row, W0[lid]); }\n}\n",
+         \x20   for (var h = 32u; h > 0u; h = h >> 1u) { if (lane < h) { W0[lid] = W0[lid] + W0[lid + h]; } workgroupBarrier(); }\n\
+         \x20   if (lane == 0u && row < m) { st(P[23] + bi * m + row, W0[lid]); }\n}\n",
+    );
+    s
+}
+
+/// The `vec4` GEMV: 32 invocations per group of FOUR rows, eight groups (32 rows) per workgroup.
+/// Each step loads sixteen activation lanes once and sixteen weights of each of the four rows, so
+/// an activation is read once per four rows rather than once per row; four `i32` partials (one per
+/// row, `P[16]` steps each) widen into four `i64` totals.
+fn gemv4_source(out: Form) -> String {
+    let mut s = header_base(out);
+    s.push_str("@group(0) @binding(3) var<storage, read> W4: array<vec4<u32>>;\n");
+    s.push_str("@group(0) @binding(4) var<storage, read> X4: array<vec4<u32>>;\n");
+    s.push_str("var<workgroup> W0: array<i64, 1024>;\n");
+    s.push_str(
+        "fn unpack(w: u32) -> vec4<i32> {\n    let x = bitcast<i32>(w);\n    return vec4<i32>(extractBits(x, 0u, 8u), extractBits(x, 8u, 8u), extractBits(x, 16u, 8u), extractBits(x, 24u, 8u));\n}\n\
+         fn dot16(w: vec4<u32>, x0: vec4<i32>, x1: vec4<i32>, x2: vec4<i32>, x3: vec4<i32>) -> i32 {\n    return dot(unpack(w.x), x0) + dot(unpack(w.y), x1) + dot(unpack(w.z), x2) + dot(unpack(w.w), x3);\n}\n",
+    );
+    s.push_str(
+        "\n@compute @workgroup_size(256)\nfn main(@builtin(local_invocation_index) lid: u32, @builtin(workgroup_id) wid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {\n\
+         \x20   let group = lid >> 5u; let lane = lid & 31u;\n\
+         \x20   let row0 = ((wid.x + wid.y * nwg.x) * 8u + group) * 4u;\n\
+         \x20   let bi = wid.z; let b1 = bi % P[10]; let b0 = bi / P[10];\n\
+         \x20   let m = P[2];\n\
+         \x20   let ab = P[17] + b0 * P[11] + b1 * P[12];\n\
+         \x20   let xb = (P[18] + b0 * P[13] + b1 * P[14]) >> 2u;\n\
+         \x20   // Rows past m read the last row (uniform control flow) and are never stored.\n\
+         \x20   let w0 = (ab + min(row0, m - 1u) * P[5]) >> 4u;\n\
+         \x20   let w1 = (ab + min(row0 + 1u, m - 1u) * P[5]) >> 4u;\n\
+         \x20   let w2 = (ab + min(row0 + 2u, m - 1u) * P[5]) >> 4u;\n\
+         \x20   let w3 = (ab + min(row0 + 3u, m - 1u) * P[5]) >> 4u;\n\
+         \x20   let kv = P[4] >> 4u;\n\
+         \x20   let ch = P[16];\n\
+         \x20   var q0 = 0li; var q1 = 0li; var q2 = 0li; var q3 = 0li;\n\
+         \x20   var v = lane;\n\
+         \x20   loop {\n\
+         \x20       if (v >= kv) { break; }\n\
+         \x20       var s0 = 0i; var s1 = 0i; var s2 = 0i; var s3 = 0i;\n\
+         \x20       var c = 0u;\n\
+         \x20       for (; v < kv && c < ch; v = v + 32u) {\n\
+         \x20           let x0 = bitcast<vec4<i32>>(X4[xb + 4u * v]); let x1 = bitcast<vec4<i32>>(X4[xb + 4u * v + 1u]);\n\
+         \x20           let x2 = bitcast<vec4<i32>>(X4[xb + 4u * v + 2u]); let x3 = bitcast<vec4<i32>>(X4[xb + 4u * v + 3u]);\n\
+         \x20           s0 = s0 + dot16(W4[w0 + v], x0, x1, x2, x3);\n\
+         \x20           s1 = s1 + dot16(W4[w1 + v], x0, x1, x2, x3);\n\
+         \x20           s2 = s2 + dot16(W4[w2 + v], x0, x1, x2, x3);\n\
+         \x20           s3 = s3 + dot16(W4[w3 + v], x0, x1, x2, x3);\n\
+         \x20           c = c + 1u;\n\
+         \x20       }\n\
+         \x20       q0 = q0 + i64(s0); q1 = q1 + i64(s1); q2 = q2 + i64(s2); q3 = q3 + i64(s3);\n\
+         \x20   }\n\
+         \x20   let base = group * 128u + lane;\n\
+         \x20   W0[base] = q0; W0[base + 32u] = q1; W0[base + 64u] = q2; W0[base + 96u] = q3;\n\
+         \x20   workgroupBarrier();\n\
+         \x20   for (var h = 16u; h > 0u; h = h >> 1u) {\n\
+         \x20       if (lane < h) {\n\
+         \x20           W0[base] = W0[base] + W0[base + h]; W0[base + 32u] = W0[base + 32u] + W0[base + 32u + h];\n\
+         \x20           W0[base + 64u] = W0[base + 64u] + W0[base + 64u + h]; W0[base + 96u] = W0[base + 96u] + W0[base + 96u + h];\n\
+         \x20       }\n\
+         \x20       workgroupBarrier();\n\
+         \x20   }\n\
+         \x20   if (lane < 4u && row0 + lane < m) { st(P[23] + bi * m + row0 + lane, W0[group * 128u + lane * 32u]); }\n}\n",
     );
     s
 }
 
 /// `MatMul` tiled through workgroup memory for many output columns (a batch of positions):
-/// 64×64 outputs per workgroup of 16×16 invocations, each 4×4, a K tile of 16. Any strides.
+/// 64×64 outputs per workgroup of 16×16 invocations, each a 4×4 block held in sixteen `i32`
+/// partials and sixteen `i64` totals (named registers, not an array a compiler may spill), a K tile
+/// of 32 staged in workgroup memory as `i32`. Terms in `i32`, widened every `P[16]` K-tiles (the
+/// plan's chunk over 32). `fast_a`: `a` is packed `i8` rows, contiguous along K and word-aligned —
+/// staged a word (four weights) at a time.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GemmKey {
     pub a: Form,
     pub b: Form,
     pub out: Form,
-    /// i32 terms, summed in i32 over `P[16]` K-tiles before widening; otherwise `i64` terms.
-    pub chunked: bool,
+    pub fast_a: bool,
 }
 
 pub fn gemm_source(k: &GemmKey) -> String {
     let mut s = header(k.out, &[k.a, k.b]);
-    let ty = if k.chunked { "i32" } else { "i64" };
-    s.push_str(&format!("var<workgroup> TA: array<{ty}, 1024>;\nvar<workgroup> TB: array<{ty}, 1024>;\n"));
-    let (lda, ldb) = if k.chunked { ("ld32_0", "ld32_1") } else { ("ld0", "ld1") };
-    let zero = if k.chunked { "0i" } else { "0li" };
+    s.push_str("var<workgroup> TA: array<i32, 2048>;\nvar<workgroup> TB: array<i32, 2048>;\n");
+    let mut decl = String::new();
+    let mut flush = String::new();
+    let mut mac = String::new();
+    let mut store = String::new();
+    for i in 0..4 {
+        for j in 0..4 {
+            decl.push_str(&format!("    var p{i}{j} = 0i; var q{i}{j} = 0li;\n"));
+            flush.push_str(&format!("            q{i}{j} = q{i}{j} + i64(p{i}{j}); p{i}{j} = 0i;\n"));
+            mac.push_str(&format!("            p{i}{j} = p{i}{j} + a{i} * c{j};\n"));
+            store.push_str(&format!(
+                "    if (row0 + ty * 4u + {i}u < m && col0 + tx * 4u + {j}u < n) {{ st(P[23] + (bi * m + row0 + ty * 4u + {i}u) * n + col0 + tx * 4u + {j}u, q{i}{j} + i64(p{i}{j})); }}\n"
+            ));
+        }
+    }
+    let load_a = if k.fast_a {
+        // 2 words = 8 weights per invocation: row (lid / 4), word ((lid % 4) · 2 + q) of the
+        // 8-word K tile.
+        "        for (var q = 0u; q < 2u; q = q + 1u) {\n\
+         \x20           let ar = lid >> 2u; let kw = ((lid & 3u) << 1u) + q;\n\
+         \x20           let kk0 = k0 + kw * 4u;\n\
+         \x20           var w = 0i;\n\
+         \x20           if (row0 + ar < m && kk0 < kk) { w = bitcast<i32>(B0[(ab + (row0 + ar) * P[5] + kk0) >> 2u]); }\n\
+         \x20           let base = ar * 32u + kw * 4u;\n\
+         \x20           TA[base] = extractBits(w, 0u, 8u); TA[base + 1u] = extractBits(w, 8u, 8u);\n\
+         \x20           TA[base + 2u] = extractBits(w, 16u, 8u); TA[base + 3u] = extractBits(w, 24u, 8u);\n\
+         \x20       }\n"
+            .to_string()
+    } else {
+        "        for (var q = 0u; q < 8u; q = q + 1u) {\n\
+         \x20           let li = lid * 8u + q; let ar = li >> 5u; let ak = li & 31u;\n\
+         \x20           var av = 0i;\n\
+         \x20           if (row0 + ar < m && k0 + ak < kk) { av = ld32_0(ab + (row0 + ar) * P[5] + (k0 + ak) * P[6]); }\n\
+         \x20           TA[li] = av;\n\
+         \x20       }\n"
+            .to_string()
+    };
     s.push_str(&format!(
         "\n@compute @workgroup_size(16, 16)\nfn main(@builtin(local_invocation_id) lid3: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {{\n\
          \x20   let tx = lid3.x; let ty = lid3.y; let lid = ty * 16u + tx;\n\
@@ -629,44 +780,33 @@ pub fn gemm_source(k: &GemmKey) -> String {
          \x20   let b1 = bi % P[10]; let b0 = bi / P[10];\n\
          \x20   let ab = P[17] + b0 * P[11] + b1 * P[12];\n\
          \x20   let bb = P[18] + b0 * P[13] + b1 * P[14];\n\
-         \x20   var acc: array<i64, 16>;\n\
-         \x20   for (var i = 0u; i < 16u; i = i + 1u) {{ acc[i] = 0li; }}\n\
-         \x20   var part: array<{ty}, 16>;\n\
          \x20   let ch = P[16];\n\
          \x20   var tiles = 0u;\n\
-         \x20   for (var i = 0u; i < 16u; i = i + 1u) {{ part[i] = {zero}; }}\n\
-         \x20   for (var k0 = 0u; k0 < kk; k0 = k0 + 16u) {{\n\
-         \x20       for (var q = 0u; q < 4u; q = q + 1u) {{\n\
-         \x20           let li = lid * 4u + q;\n\
-         \x20           let ar = li / 16u; let ak = li % 16u;\n\
-         \x20           var av = {zero};\n\
-         \x20           if (row0 + ar < m && k0 + ak < kk) {{ av = {lda}(ab + (row0 + ar) * P[5] + (k0 + ak) * P[6]); }}\n\
-         \x20           TA[li] = av;\n\
-         \x20           let bk = li / 64u; let bc = li % 64u;\n\
-         \x20           var bv = {zero};\n\
-         \x20           if (k0 + bk < kk && col0 + bc < n) {{ bv = {ldb}(bb + (k0 + bk) * P[7] + (col0 + bc) * P[8]); }}\n\
+         {decl}\
+         \x20   for (var k0 = 0u; k0 < kk; k0 = k0 + 32u) {{\n\
+         {load_a}\
+         \x20       for (var q = 0u; q < 8u; q = q + 1u) {{\n\
+         \x20           let li = lid * 8u + q; let bk = li >> 6u; let bc = li & 63u;\n\
+         \x20           var bv = 0i;\n\
+         \x20           if (k0 + bk < kk && col0 + bc < n) {{ bv = ld32_1(bb + (k0 + bk) * P[7] + (col0 + bc) * P[8]); }}\n\
          \x20           TB[li] = bv;\n\
          \x20       }}\n\
          \x20       workgroupBarrier();\n\
-         \x20       for (var t = 0u; t < 16u; t = t + 1u) {{\n\
-         \x20           for (var i = 0u; i < 4u; i = i + 1u) {{\n\
-         \x20               let a = TA[(ty * 4u + i) * 16u + t];\n\
-         \x20               for (var j = 0u; j < 4u; j = j + 1u) {{ part[i * 4u + j] = part[i * 4u + j] + a * TB[t * 64u + tx * 4u + j]; }}\n\
-         \x20           }}\n\
+         \x20       for (var t = 0u; t < 32u; t = t + 1u) {{\n\
+         \x20           let a0 = TA[(ty * 4u) * 32u + t]; let a1 = TA[(ty * 4u + 1u) * 32u + t];\n\
+         \x20           let a2 = TA[(ty * 4u + 2u) * 32u + t]; let a3 = TA[(ty * 4u + 3u) * 32u + t];\n\
+         \x20           let c0 = TB[t * 64u + tx * 4u]; let c1 = TB[t * 64u + tx * 4u + 1u];\n\
+         \x20           let c2 = TB[t * 64u + tx * 4u + 2u]; let c3 = TB[t * 64u + tx * 4u + 3u];\n\
+         {mac}\
          \x20       }}\n\
          \x20       workgroupBarrier();\n\
          \x20       tiles = tiles + 1u;\n\
          \x20       if (tiles >= ch) {{\n\
-         \x20           for (var i = 0u; i < 16u; i = i + 1u) {{ acc[i] = acc[i] + i64(part[i]); part[i] = {zero}; }}\n\
+         {flush}\
          \x20           tiles = 0u;\n\
          \x20       }}\n\
          \x20   }}\n\
-         \x20   for (var i = 0u; i < 4u; i = i + 1u) {{\n\
-         \x20       for (var j = 0u; j < 4u; j = j + 1u) {{\n\
-         \x20           let r = row0 + ty * 4u + i; let c = col0 + tx * 4u + j;\n\
-         \x20           if (r < m && c < n) {{ st(P[23] + (bi * m + r) * n + c, acc[i * 4u + j] + i64(part[i * 4u + j])); }}\n\
-         \x20       }}\n\
-         \x20   }}\n}}\n"
+         {store}}}\n"
     ));
     s
 }
