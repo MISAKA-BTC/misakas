@@ -6341,7 +6341,16 @@ impl PalwClassFrozenV2 {
 /// The consensus objects a block can carry into the state, in the block's deterministic
 /// acceptance order. ACCEPTANCE (who may say this, with what proof) belongs to later PRs; the
 /// transition enforces referential integrity and the lattice.
+///
+/// **Discriminants are explicit where they are allocated** (spec 17 section 17.0): the variants declared
+/// by position carry the number their position gave them, byte for byte as before, and an allocation —
+/// RFC-0003's tags 87, 88 and 90 — is written `= N`, so no declaration order moves it. (A positional append
+/// after tag 88 would have been 89, which RFC-0004's `CourtEvalRootClaimed` holds.) `use_discriminant`
+/// makes Borsh read the number the variant is declared with, which for every positional variant is its
+/// index.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum PalwConsensusObjectV2 {
     /// Carries the operator's KEY, not an operator id: the id is derived
     /// ([`palw_operator_id_v2`]) so it names something someone must hold rather than a label
@@ -7415,10 +7424,9 @@ pub enum PalwConsensusObjectV2 {
     /// subnetwork, past `palw_fp_job_v5` over `palw_gen_v1`. Like `FreePromptCommitted` it is **never
     /// serialized to a peer** (`palw_lifecycle_object_may_ride_v2` refuses it a carriage by name): the
     /// transaction is the carrier, and this is what its payload means to the fold. Appended after
-    /// `CourtGenRootClaimed` (tag 70 on this branch, where RFC-0004's objects 70-82 are not declared);
-    /// **its allocated tag is 87** (spec 17 section 17.0's next free tag, requested of the core lane; 83-85
-    /// stay Phase F's data-availability objects), taken where the integration declares it after RFC-0004's.
-    /// The number is a name, not a wire fact: the object is never serialized to a peer or stored. The
+    /// `CourtGenRootClaimed`; **its tag is 87, declared explicitly** (spec 17 section 17.0's allocation,
+    /// approved 2026-10-01; 83-85 stay Phase F's data-availability objects). The number is a name, not a
+    /// wire fact: the object is never serialized to a peer or stored. The
     /// fold's tensor branch derives the class, the work and the capacity and writes a weightless claim
     /// (`palw_gen_claim_fold_v1`); below the fences it refuses it by name.
     GenTensorCommitted {
@@ -7438,17 +7446,17 @@ pub enum PalwConsensusObjectV2 {
         job_pin: Hash64,
         /// The tensor job, reconstructed from the version-10 job the commitment carries.
         job: Box<crate::palw_gen_job_v1::PalwGenJobV1>,
-    },
+    } = 87,
     /// **RFC-0003 §I.4.7: a pipeline claim accused in one move** — the generative twin of tag 62
     /// (`TirShardCourtAccused`), for a chain that plays no bisection (the held regime, testnet-12): the
     /// accusation carries a generative close (`GenCone`, `GenOutputTile`, `GenDecodeToken`), signed by the
     /// accuser over its session id, and is adjudicated whole at acceptance (`palw_gen_one_move_v1`). Appended
-    /// after `GenTensorCommitted`; **its allocated tag is 88** (spec 17 section 17.0's next free tag after
-    /// 87, requested of the core lane), taken where the integration declares it. Below `palw_gen_v1` the
-    /// acceptance walk drops it by name and the fold refuses it as the second lock.
+    /// after `GenTensorCommitted`; **its tag is 88, declared explicitly** (spec 17 section 17.0, approved
+    /// 2026-10-01). Below `palw_gen_v1` the acceptance walk drops it by name and the fold refuses it as the
+    /// second lock.
     GenShardCourtAccused {
         accusation: Box<crate::palw_gen_one_move_v1::PalwGenOneMoveAccusationV1>,
-    },
+    } = 88,
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
