@@ -39,7 +39,7 @@ Contents:
 - §17.9 promotion;
 - §17.10 rollback;
 - §17.11 the pool and rewards;
-- §17.12 rules PALW-MIP-1…24 (and PALW-MIP-25…27, §17.14.5);
+- §17.12 rules PALW-MIP-1…25 (and PALW-MIP-26…28, §17.14.5);
 - §17.13 vectors;
 - §17.14 pipeline-claim data availability (Phase F's half).
 
@@ -1579,14 +1579,14 @@ An answer of a unit inside the tree by out-of-range, or of a unit past it by a d
 
 ### 17.14.5 Rules
 
-- **PALW-MIP-25 (pipeline DA objects).** Below `palw_improvement_v1` the objects and answers of this
+- **PALW-MIP-26 (pipeline DA objects).** Below `palw_improvement_v1` the objects and answers of this
   section MUST be dropped by name in the acceptance walk and refused by the gate and the fold. Past it,
   a demand MUST be signed by its accuser's registered key over the network, the claim, the unit and the
   accuser, and name a unit within §17.14.4's door bounds.
-- **PALW-MIP-26 (answers).** An answer MUST verify by hash arithmetic against the claim's committed roots
+- **PALW-MIP-27 (answers).** An answer MUST verify by hash arithmetic against the claim's committed roots
   alone (§17.14.3). The fold MUST NOT accept an answer for a claim that is not a pipeline claim of the
   binding's kind, and MUST NOT judge a leaf's structure or a count's canonicality.
-- **PALW-MIP-27 (default).** A demanded unit unanswered by the producer or a bond with a live lock on
+- **PALW-MIP-28 (default).** A demanded unit unanswered by the producer or a bond with a live lock on
   the claim inside `W_disclose` MUST default the claim as a DA court default does (DA-7); an answer
   answers every session that demands the unit (DA-4).
 
