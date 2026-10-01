@@ -7323,6 +7323,12 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a generative object was dropped by name below palw_gen_v1, and the block stands (RFC-0003)");
                 continue;
             }
+            // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is dropped by name**, first and
+            // charged nothing, for the generative objects' reason above.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_eval_v1(&object) && !self.palw_improvement_at(point.daa_score) {
+                info!("Block {block}: an evaluation court object was dropped by name below palw_improvement_v1, and the block stands (RFC-0004)");
+                continue;
+            }
             // **RFC-0002 Phase F: one IR class registration a block reaches admission v10**
             // (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`). Sizing an IR program costs every node up to
             // seconds, so a further `ClassRegisteredTirV1` is dropped by name HERE — before any rent,
@@ -9384,6 +9390,11 @@ impl VirtualStateProcessor {
                             .filter(|object| {
                                 !matches!(object, Obj::CourtClosed { proof, .. }
                                     if proof.is_gen_v1() && !self.palw_gen_at(point.daa_score))
+                            })
+                            // RFC-0004 A6: likewise an evaluation proof below `palw_improvement_v1`.
+                            .filter(|object| {
+                                !matches!(object, Obj::CourtClosed { proof, .. }
+                                    if proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score))
                             });
                         // Only when the bytes ARE this session's close does the adjudication run;
                         // anything else is the transition's conviction, not this layer's refusal.
@@ -9715,6 +9726,12 @@ impl VirtualStateProcessor {
                             "court {session_id}: a generative close is refused: palw_gen_v1 is not in force at this block (RFC-0003)"
                         ));
                     }
+                    // RFC-0004 A6: an evaluation close likewise below `palw_improvement_v1`.
+                    if proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score) {
+                        return Err(format!(
+                            "court {session_id}: an evaluation close is refused: palw_improvement_v1 is not in force at this block (RFC-0004)"
+                        ));
+                    }
                     // The close carries its proof now, so there is something to adjudicate. The
                     // node re-derives the verdict from the proof and compares: a declared verdict
                     // that its own proof does not produce is refused, in EITHER direction — an
@@ -9935,6 +9952,48 @@ impl VirtualStateProcessor {
                         derived.dissection_arity(),
                         court,
                         self.palw_prompt_ids_form_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                }
+                // RFC-0004 A6: the evaluation root claim — the generative arm's gates over the claim's own evaluation
+                // context: the improvement fence (the walk dropped it by name below), the k-ary court, the
+                // responder's signature, the arity and the finalize at the court's limits.
+                Obj::CourtEvalRootClaimed { session_id, root, arity, signature } => {
+                    if !self.palw_improvement_at(point.daa_score) {
+                        return Err(format!(
+                            "session {session_id}: an evaluation root claim is refused: palw_improvement_v1 is not in force (RFC-0004)"
+                        ));
+                    }
+                    kaspa_consensus_core::palw_court_v2::palw_tir_dissection_move_is_admissible_v1(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    let derived = self
+                        .palw_court_params_at(point.daa_score)
+                        .ok_or_else(|| "an evaluation dissection move on a network with no V2 bundle".to_string())?
+                        .map_err(|e| format!("session {session_id}: {e}"))?;
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "an evaluation dissection move on a network with no V2 court parameters".to_string())?;
+                    kaspa_consensus_core::palw_court_v2::check_court_eval_root_claim_acceptance_v1(
+                        state,
+                        session_id,
+                        root,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                    kaspa_consensus_core::palw_court_v2::check_court_eval_root_claim_admits_v1(
+                        state,
+                        session_id,
+                        root,
+                        *arity,
+                        derived.dissection_arity(),
+                        court,
                     )
                     .map_err(|e| format!("session {session_id}: {e}"))?;
                 }
@@ -10985,6 +11044,12 @@ impl VirtualStateProcessor {
                     let claim_id = accusation.claim;
                     if !self.palw_tir_at(point.daa_score) {
                         return Err(format!("claim {claim_id}: an IR accusation is refused: palw_tir_v1 is not in force (RFC-0002)"));
+                    }
+                    // RFC-0004 A6: an evaluation close rides this accusation past `palw_improvement_v1` only.
+                    if accusation.proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim_id}: an evaluation accusation is refused: palw_improvement_v1 is not in force (RFC-0004)"
+                        ));
                     }
                     kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(accusation)
                         .map_err(|e| format!("claim {claim_id}: {e}"))?;
@@ -19283,6 +19348,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         O::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
+        O::CourtEvalRootClaimed { .. } => "CourtEvalRootClaimed",
         O::CourtTirDissected { .. } => "CourtTirDissected",
         O::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         O::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

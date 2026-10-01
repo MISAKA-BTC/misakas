@@ -1569,6 +1569,13 @@ pub struct PalwStateParamsV2 {
     /// network's open epochs by them). `None` exactly where `improve_from_daa` is.
     #[borsh(skip)]
     improve_ceilings: Option<crate::palw_improve_v1::PalwImprovementCeilingsV1>,
+    /// **RFC-0004 A6: the DAA-independent part of the claim lifecycle bound a policy's windows are held to** (spec 17
+    /// §17.4.3 rows 19–20) — the anchor slot plus the licence allowance — mirrored with the fence's height by
+    /// `Params::sync_palw_improvement_v1` from this ruleset's own windows (`palw_improvement_claim_lifecycle_base_v1`);
+    /// [`Self::improve_lifecycle_at`] adds the challenge window in force. `None` exactly where `improve_from_daa` is — and
+    /// in a fixture that does not set it, where the check is not asked.
+    #[borsh(skip)]
+    improve_lifecycle_base_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1780,6 +1787,7 @@ impl PalwStateParamsV2 {
             tir_fence2_from_daa: None,
             improve_from_daa: None,
             improve_ceilings: None,
+            improve_lifecycle_base_daa: None,
         })
     }
 
@@ -2009,6 +2017,27 @@ impl PalwStateParamsV2 {
     /// The fence's ceilings, if the network arms it (the mirror).
     pub fn improve_ceilings(&self) -> Option<crate::palw_improve_v1::PalwImprovementCeilingsV1> {
         self.improve_ceilings
+    }
+
+    /// RFC-0004 A6: the claim lifecycle bound's DAA-independent mirror, written with the fence's height by
+    /// `Params::sync_palw_improvement_v1`.
+    pub fn with_improve_lifecycle_base(mut self, base_daa: Option<u64>) -> Self {
+        self.improve_lifecycle_base_daa = base_daa;
+        self
+    }
+
+    /// The mirror as it is: the anchor slot and the licence allowance, if the network arms the fence.
+    pub fn improve_lifecycle_base_daa(&self) -> Option<u64> {
+        self.improve_lifecycle_base_daa
+    }
+
+    /// **`Λ` at `daa`** (spec 17 §17.4.3 rows 19–20): the mirror plus the challenge window in force for a claim licensed at
+    /// `daa` ([`Self::window_challenge_at`]), never less than the challenge floor — what an epoch's windows are held to when a
+    /// policy is applied at `daa`. A fence that only shortens the window (ADR-0132 §7.6) can only shorten `Λ`, so a policy that
+    /// held it when applied holds it ever after. `None` where the fence is not armed (or a fixture sets no mirror).
+    pub fn improve_lifecycle_at(&self, daa: u64) -> Option<u64> {
+        self.improve_lifecycle_base_daa
+            .map(|base| crate::palw_improve_v1::palw_improvement_claim_lifecycle_v1(base, self.window_challenge_at(daa)))
     }
 
     /// `Params::palw_improvement_v1`'s height, if the network arms it (the mirror).
@@ -7503,6 +7532,22 @@ pub enum PalwConsensusObjectV2 {
     ImprovementPoolFunded {
         payload: Box<crate::palw_improve_state_v1::PalwImprovementPoolFundingV1>,
     },
+    // ---- RFC-0004 A6: the evaluation court's history dissection (spec 17 §17.8.6.3) ----
+    /// **Move 1 of a history dissection of an evaluation claim: the responder's root claim** at a dissected leaf
+    /// ([`crate::palw_improve_eval_court_v1::PalwEvalRootClaimV1`]) — `CourtGenRootClaimed` with the evaluation cone
+    /// close as its finalize's carriage. The acceptance layer admits it only if it finalizes to the committed leaf
+    /// reading exactly the claimed values (`check_eval_root_claim_v1`, at the court's limits) and `arity` is the
+    /// ruleset's derived one; the fold derives the site from the claim's own evaluation context and opens F7's phase
+    /// (`tir_dissections`), whose rounds and choices are F7's own objects (tags 65, 66). Signed by the claim's bond
+    /// under the ADR-0082 responder context over
+    /// [`crate::palw_improve_eval_court_v1::palw_eval_root_claim_message_v1`]. Appended after the reserved tags of
+    /// spec 17 §17.0 (its tag is assigned at the integration); dropped by name below `palw_improvement_v1`.
+    CourtEvalRootClaimed {
+        session_id: Hash64,
+        root: Box<crate::palw_improve_eval_court_v1::PalwEvalRootClaimV1>,
+        arity: u8,
+        signature: Vec<u8>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7548,6 +7593,19 @@ pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
     match object {
         PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } | PalwConsensusObjectV2::CourtGenRootClaimed { .. } => true,
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_gen_v1(),
+        _ => false,
+    }
+}
+
+/// **Is this object an RFC-0004 evaluation court move** (spec 17 §17.8.6) — a close or an accusation carrying one of
+/// the evaluation proofs (tags 13–15 of `PalwCourtVerdictProofV2`) that an older build cannot decode and skips (A-2)?
+/// Below `palw_improvement_v1` the acceptance walk drops every such object by name before any slot, rent or budget is
+/// charged for it, and the fold refuses it as the second lock.
+pub fn palw_object_is_eval_v1(object: &PalwConsensusObjectV2) -> bool {
+    match object {
+        PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_eval_v1(),
+        PalwConsensusObjectV2::TirShardCourtAccused { accusation } => accusation.proof.is_eval_v1(),
+        PalwConsensusObjectV2::CourtEvalRootClaimed { .. } => true,
         _ => false,
     }
 }
@@ -7618,6 +7676,7 @@ pub fn palw_object_is_tir_dissection_move_v1(object: &PalwConsensusObjectV2) -> 
             | PalwConsensusObjectV2::CourtTirDissected { .. }
             | PalwConsensusObjectV2::CourtTirChildChosen { .. }
             | PalwConsensusObjectV2::CourtGenRootClaimed { .. }
+            | PalwConsensusObjectV2::CourtEvalRootClaimed { .. }
     )
 }
 
@@ -8635,7 +8694,8 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         | PalwConsensusObjectV2::CourtTirRootClaimed { session_id, .. }
         | PalwConsensusObjectV2::CourtTirDissected { session_id, .. }
         | PalwConsensusObjectV2::CourtTirChildChosen { session_id, .. }
-        | PalwConsensusObjectV2::CourtGenRootClaimed { session_id, .. } => session_id,
+        | PalwConsensusObjectV2::CourtGenRootClaimed { session_id, .. }
+        | PalwConsensusObjectV2::CourtEvalRootClaimed { session_id, .. } => session_id,
         _ => return false,
     };
     let Some(session) = state.court_session(session_id) else {
@@ -8677,6 +8737,13 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         // RFC-0003: the generative root claim, by the same questions (its finalize is a demand
         // evaluation at the court's limits too).
         PalwConsensusObjectV2::CourtGenRootClaimed { root, .. } => {
+            session.dissection.is_none()
+                && state.tir_dissections.get(session_id).is_none()
+                && session.ladder.terminal_index().is_some()
+                && root.version == crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1
+        }
+        // RFC-0004 A6: the evaluation root claim, by the same questions.
+        PalwConsensusObjectV2::CourtEvalRootClaimed { root, .. } => {
             session.dissection.is_none()
                 && state.tir_dissections.get(session_id).is_none()
                 && session.ladder.terminal_index().is_some()
@@ -15404,7 +15471,7 @@ impl PalwFoldReadV1<'_> {
         // free-prompt claim's size, so the per-claim measured cap (V2(c)) is the free-prompt arm's.
         let shape = match incoming {
             PalwGatedClaimV1::Attempt => crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
-            PalwGatedClaimV1::FreePrompt { .. } => {
+            PalwGatedClaimV1::FreePrompt { .. } | PalwGatedClaimV1::Evaluation => {
                 crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::FreePrompt { work_leaves: 0 }
             }
         };
@@ -15497,6 +15564,31 @@ impl PalwFoldReadV1<'_> {
             return Err(PalwStateV2Error::ClassInflightCapped { class: *class_id, inflight, cap: row.profile.max_inflight_claims });
         }
         Ok(())
+    }
+
+    /// **RFC-0004 A6 (spec 17 §17.8.4, decided 2026-09-30): the evaluation claims' share of a class's replay
+    /// room.** Evaluation claims are counted in the room as whole claims ([`PalwGatedClaimV1::Evaluation`]) and
+    /// are bounded to `permille` of the class's capacity (the fence's `max_eval_budget_permille`), so evaluation
+    /// cannot crowd out the class's attempts and free-prompt claims — at least one is always admitted. Read where
+    /// the rate room is read (the registry governing, the work target in force), for a class with a registry row
+    /// whose in-flight evaluation claims (replay still owed, or all of them for a class held to Final) plus this
+    /// one are past the share; `None` otherwise.
+    fn eval_room_share_refusal_v1(&self, class_id: &Hash64, now_daa: u64, permille: u16) -> Option<&'static str> {
+        let fold = self.extras.model_registry.as_ref()?;
+        if !(self.extras.work_target_active && fold.governs_at(now_daa)) || *class_id == self.params.base_class_id() {
+            return None;
+        }
+        let row = self.state.model_lifecycles.get(class_id)?;
+        let rate = self.panel_rate_v1(class_id, row, fold, now_daa, Some((*class_id, PalwGatedClaimV1::Evaluation)));
+        let held = palw_panel_holds_to_final_v1(self.params, self.state, class_id);
+        let pending = self.with_inflight_index(|index| {
+            index
+                .get(class_id)
+                .map(|tally| if held { tally.eval_claims } else { tally.eval_claims.saturating_sub(tally.licensed_eval_claims) })
+                .unwrap_or(0)
+        });
+        palw_eval_room_share_exceeded_v1(pending, rate.capacity, permille)
+            .then_some("an evaluation claim past its share of its class's replay room (max_eval_budget_permille)")
     }
 
     fn panel_room_v1(
@@ -16977,6 +17069,14 @@ pub fn palw_inflight_claims_counted_v1(attempts: u64, fp_claims: u64, fp_quanta:
     attempts.saturating_add(fp).min(u32::MAX as u64) as u32
 }
 
+/// **Is one more evaluation claim past its class's share of the replay room?** (RFC-0004 A6, decided 2026-09-30):
+/// the class holds `pending` evaluation claims whose replay is still owed; with the one asked about they may not
+/// exceed `permille` of the class's `capacity` (in claims) — and at least one is always admitted.
+pub fn palw_eval_room_share_exceeded_v1(pending: u64, capacity: u64, permille: u16) -> bool {
+    let share = (capacity as u128).saturating_mul(permille as u128) / 1_000;
+    (pending as u128).saturating_add(1) > share.max(1)
+}
+
 /// **The claim a class gate is asked about** (`check_class_admits_claim`): an attempt, or a
 /// free-prompt commitment of `quanta`. Past the 2026-09-23 audit fence the rate room pools it with
 /// its class's claims in flight before counting ([`palw_panel_owed_v1`]); [`Self::whole_claims`]
@@ -16986,21 +17086,26 @@ pub fn palw_inflight_claims_counted_v1(attempts: u64, fp_claims: u64, fp_quanta:
 enum PalwGatedClaimV1 {
     Attempt,
     FreePrompt { quanta: u64 },
+    /// **RFC-0004 A6 (spec 17 §17.8.4, decided 2026-09-30): an evaluation claim** — counted in its class's
+    /// replay room as one whole claim, whatever its size (a panel replays the whole of it), and held to the
+    /// fence's `max_eval_budget_permille` of the class's capacity ([`PalwFoldReadV1::eval_room_share_refusal_v1`]).
+    Evaluation,
 }
 
 impl PalwGatedClaimV1 {
-    /// `(attempts, free-prompt claims, their quanta)`: the tally's lanes.
-    fn lanes(self) -> (u64, u64, u64) {
+    /// `(attempts, free-prompt claims, their quanta, evaluation claims)`: the tally's lanes.
+    fn lanes(self) -> (u64, u64, u64, u64) {
         match self {
-            Self::Attempt => (1, 0, 0),
-            Self::FreePrompt { quanta } => (0, 1, quanta),
+            Self::Attempt => (1, 0, 0, 0),
+            Self::FreePrompt { quanta } => (0, 1, quanta, 0),
+            Self::Evaluation => (0, 0, 0, 1),
         }
     }
 
     /// The claim counted alone, in whole jobs, and never less than one claim.
     fn whole_claims(self, quanta_per_job: u64) -> u64 {
-        let (attempts, fp, quanta) = self.lanes();
-        (palw_inflight_claims_counted_v1(attempts, fp, quanta, quanta_per_job, true) as u64).max(1)
+        let (attempts, fp, quanta, evals) = self.lanes();
+        (palw_inflight_claims_counted_v1(attempts, fp, quanta, quanta_per_job, true) as u64).saturating_add(evals).max(1)
     }
 }
 
@@ -17019,6 +17124,12 @@ struct PalwInflightTallyV1 {
     licensed_attempts: u64,
     licensed_free_prompts: u64,
     licensed_free_prompt_quanta: u64,
+    /// **RFC-0004 A6: evaluation claims in flight** (an evaluation claim is a free-prompt claim of zero quanta,
+    /// `palw_improve_claim_is_evaluation_v1`) — a lane of their own, each counted as one whole claim in the
+    /// room, and not among `free_prompts`: no quanta, so no part-job of the class's canonical job to round into.
+    eval_claims: u64,
+    /// The part of `eval_claims` whose replay is done (licensed, as the other lanes' are).
+    licensed_eval_claims: u64,
     /// **ADR-0152 T-2(a)'s index (S-SPEC 1g): this class's claims in flight that do NOT count as
     /// licensed ([`palw_rcore_counts_licensed_v1`]), per producing bond** — attempts and free-prompt
     /// claims alike, one per claim. Derived with the rest of the tally (the walk and `write_claim`'s
@@ -17028,7 +17139,7 @@ struct PalwInflightTallyV1 {
 
 impl PalwInflightTallyV1 {
     fn is_empty(&self) -> bool {
-        self.attempts == 0 && self.free_prompts == 0
+        self.attempts == 0 && self.free_prompts == 0 && self.eval_claims == 0
     }
 
     /// **The claims whose replay the panel still owes** (2026-09-24 audit #4): in flight and not
@@ -17038,11 +17149,12 @@ impl PalwInflightTallyV1 {
     /// opened on a licensed claim puts its replay back ([`palw_panel_owed_v1`]), and a class held to
     /// Final ([`crate::palw_work_target_v1::palw_panel_held_to_final_v1`]) owes every claim to Final
     /// whatever this says.
-    fn replay_pending(&self) -> (u64, u64, u64) {
+    fn replay_pending(&self) -> (u64, u64, u64, u64) {
         (
             self.attempts.saturating_sub(self.licensed_attempts),
             self.free_prompts.saturating_sub(self.licensed_free_prompts),
             self.free_prompt_quanta.saturating_sub(self.licensed_free_prompt_quanta),
+            self.eval_claims.saturating_sub(self.licensed_eval_claims),
         )
     }
 
@@ -17057,6 +17169,7 @@ impl PalwInflightTallyV1 {
             quanta_per_job as u64,
             audit_2026_09_23_active,
         )
+        .saturating_add(self.eval_claims.min(u32::MAX as u64) as u32)
     }
 }
 
@@ -17074,6 +17187,8 @@ fn palw_inflight_index_note_v1(index: &mut BTreeMap<Hash64, PalwInflightTallyV1>
     let licensed = palw_rcore_counts_licensed_v1(claim);
     let (slot, licensed_slot, quanta) = match &claim.source {
         PalwClaimSourceV2::Attempt => (&mut tally.attempts, &mut tally.licensed_attempts, None),
+        // RFC-0004 A6: an evaluation claim has a lane of its own, and no quanta to add.
+        PalwClaimSourceV2::FreePrompt { quanta: 0, .. } => (&mut tally.eval_claims, &mut tally.licensed_eval_claims, None),
         PalwClaimSourceV2::FreePrompt { quanta, .. } => {
             (&mut tally.free_prompts, &mut tally.licensed_free_prompts, Some(*quanta as u64))
         }
@@ -17167,11 +17282,14 @@ fn palw_panel_owed_v1(
     // (`palw_rcore_class_is_c7_v1`, the S review's L2; the conservative list is empty below the fence),
     // with §4-quater K-1's long-D classes past `palw_class_verify_deadline` (`palw_panel_holds_to_final_v1`).
     let held_to_final = |id: &Hash64| state.model_lifecycles.contains_key(id) && palw_panel_holds_to_final_v1(params, state, id);
-    // (attempts, free-prompt claims, free-prompt quanta), pooled per class.
-    let mut pooled: BTreeMap<Hash64, (u64, u64, u64)> = BTreeMap::new();
+    // (attempts, free-prompt claims, free-prompt quanta, evaluation claims), pooled per class.
+    let mut pooled: BTreeMap<Hash64, (u64, u64, u64, u64)> = BTreeMap::new();
     for (id, tally) in index.iter().filter(|(id, _)| **id != base) {
-        let row =
-            if held_to_final(id) { (tally.attempts, tally.free_prompts, tally.free_prompt_quanta) } else { tally.replay_pending() };
+        let row = if held_to_final(id) {
+            (tally.attempts, tally.free_prompts, tally.free_prompt_quanta, tally.eval_claims)
+        } else {
+            tally.replay_pending()
+        };
         pooled.insert(*id, row);
     }
     for (claim_key, open) in state.open_courts_by_claim.iter() {
@@ -17187,6 +17305,7 @@ fn palw_panel_owed_v1(
         let slot = pooled.entry(claim.class_id).or_default();
         match &claim.source {
             PalwClaimSourceV2::Attempt => slot.0 = slot.0.saturating_add(1),
+            PalwClaimSourceV2::FreePrompt { quanta: 0, .. } => slot.3 = slot.3.saturating_add(1),
             PalwClaimSourceV2::FreePrompt { quanta, .. } => {
                 slot.1 = slot.1.saturating_add(1);
                 slot.2 = slot.2.saturating_add(*quanta as u64);
@@ -17198,13 +17317,21 @@ fn palw_panel_owed_v1(
         slot.0 = slot.0.saturating_add(1);
     }
     if let Some((id, claim)) = extra.filter(|(id, _)| *id != base) {
-        let (attempts, fp, quanta) = claim.lanes();
+        let (attempts, fp, quanta, evals) = claim.lanes();
         let slot = pooled.entry(id).or_default();
-        *slot = (slot.0.saturating_add(attempts), slot.1.saturating_add(fp), slot.2.saturating_add(quanta));
+        *slot = (
+            slot.0.saturating_add(attempts),
+            slot.1.saturating_add(fp),
+            slot.2.saturating_add(quanta),
+            slot.3.saturating_add(evals),
+        );
     }
+    // An evaluation claim is one whole claim, added after the free-prompt claims round (it has no quanta to round).
     pooled
         .into_iter()
-        .map(|(id, (attempts, fp, quanta))| (id, palw_inflight_claims_counted_v1(attempts, fp, quanta, per_job, true) as u128))
+        .map(|(id, (attempts, fp, quanta, evals))| {
+            (id, (palw_inflight_claims_counted_v1(attempts, fp, quanta, per_job, true) as u128).saturating_add(evals as u128))
+        })
         .collect()
 }
 
@@ -21650,6 +21777,9 @@ impl<'a> TransitionBuilder<'a> {
         if let PalwClaimSourceV2::FreePrompt { spent, .. } = &mut voided.source {
             spent.clear();
         }
+        // RFC-0004 A6: an evaluation claim convicted after `Final` takes its score back out of the epoch while the
+        // epoch still takes scores, and frees its job (spec 17 §17.8.6).
+        self.note_improvement_eval_reversed_v1(&id, &claim)?;
         self.write_claim(id, Some(voided.clone()));
         self.disarm_deadline(id);
         self.arm_retirement(id, &voided)?;
@@ -31382,6 +31512,14 @@ fn apply_object(
     if palw_object_is_gen_v1(object) && !builder.params.gen_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::GenObjectRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
     }
+    // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is refused by name** — the acceptance walk
+    // drops it first (an older build cannot decode it and skips it); this is the second lock.
+    if palw_object_is_eval_v1(object) && !builder.params.improve_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::ImprovementObjectRefused {
+            object: "an evaluation court move",
+            why: "before palw_improvement_v1 is in force (RFC-0004)",
+        });
+    }
     // **The second IR fence, likewise**: below `palw_tir_fence2` its moves are payloads an older build
     // cannot decode; the acceptance walk drops them by name, and this is the second lock.
     if palw_object_is_tir_fence2_v1(object) && !builder.params.tir_fence2_active_at(ctx.daa_score) {
@@ -31585,6 +31723,13 @@ fn apply_object(
                 return Err(PalwStateV2Error::TirRegistrationRefused(
                     "an IR one-move accusation names a claim of a class that is not an IR program",
                 ));
+            }
+            // RFC-0004 A6: an evaluation proof accuses an evaluation claim of the job table, and no other.
+            if accusation.proof.is_eval_v1() && !palw_improve_eval_fold_v1::palw_improve_claim_is_evaluation_v1(&claim) {
+                return Err(PalwStateV2Error::ImprovementObjectRefused {
+                    object: "an evaluation court move",
+                    why: "it accuses a claim that is not an evaluation claim",
+                });
             }
             if accusation.executor_bond != claim.bond {
                 return Err(PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(claim_id));
@@ -33014,14 +33159,14 @@ fn apply_object(
                         // whatever the class — recorded `CourtHeldVerdict`, charged the same, no
                         // kind-3 basis.
                         // RFC-0002 F7: an IR dissection's bottom proves the same thing — the responder's
-                        // own claim of partials false — so it is recorded the same way.
+                        // own claim of partials false — so it is recorded the same way. RFC-0003: and a
+                        // pipeline's (`GenDissection`, F7 composed into the generative court) — the arm
+                        // listed the first two and left the third a `CourtFraud`, which kind 3 reads as
+                        // the replayed execution proven false against every full-mask `Valid` signer
+                        // (lane B's finding, 2026-10-01).
                         let reason = palw_court_verdict_void_reason_v1(
                             builder.extras.offence_attribution_active,
-                            matches!(
-                                proof,
-                                crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { .. }
-                                    | crate::palw_court_v2::PalwCourtVerdictProofV2::TirDissection { .. }
-                            ),
+                            proof.is_dissection_bottom_v1(),
                         );
                         builder.convict_by_court_verdict_as_v1(
                             ctx,
@@ -33405,6 +33550,11 @@ fn apply_object(
                 .filter(|object| {
                     !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
                         if proof.is_gen_v1() && !builder.params.gen_active_at(ctx.daa_score))
+                })
+                // RFC-0004 A6: likewise an evaluation proof below `palw_improvement_v1`.
+                .filter(|object| {
+                    !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
+                        if proof.is_eval_v1() && !builder.params.improve_active_at(ctx.daa_score))
                 });
             let Some(close) = decoded else {
                 return convict_close_declarer_v1(builder, ctx, *session_id, *side);
@@ -33775,6 +33925,42 @@ fn apply_object(
             let site =
                 crate::palw_gen_close_v1::palw_gen_root_claim_site_v1(root, row, &claim.class_id, &claim.execution_root, narrowed)
                     .map_err(refused)?;
+            let mut phase = crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open_parts(
+                *session_id,
+                narrowed,
+                &site,
+                root.version,
+                &root.elements,
+                &root.totals,
+                *arity,
+                ctx.daa_score,
+                builder.params.turn_deadline_daa(),
+            )
+            .map_err(|e| refused(e.to_string()))?;
+            cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
+            builder.write_tir_dissection(*session_id, Some(phase));
+            builder.write_court(*session_id, Some(session))?;
+        }
+        // **RFC-0004 A6: an evaluation claim's root claim opens F7's phase** — the generative arm above over the
+        // claim's own evaluation context: the claim must be the evaluation claim the job table holds for the
+        // binding's job, the binding the claim's, and the site the context's description of the narrowed leaf,
+        // derived from the class's program and the job's trips (`palw_eval_root_claim_site_v1`), never supplied by
+        // the mover. The finalize is the acceptance layer's; `palw_improvement_v1` is the lock above.
+        PalwConsensusObjectV2::CourtEvalRootClaimed { session_id, root, arity, signature: _ } => {
+            let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            if session.dissection.is_some() || builder.state.tir_dissections.contains_key(session_id) {
+                return Err(PalwStateV2Error::DissectionAlreadyOpen(*session_id));
+            }
+            let narrowed = session.ladder.terminal_index().ok_or(PalwStateV2Error::LadderNotTerminal(*session_id))?;
+            let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
+            let refused = |why: String| PalwStateV2Error::DissectionRefused(*session_id, why);
+            let site = {
+                let facts = builder
+                    .state
+                    .improvement_eval_claim_facts_v1(&claim, &root.finalize.binding)
+                    .map_err(|why| refused(why.into()))?;
+                crate::palw_improve_eval_court_v1::palw_eval_root_claim_site_v1(root, &facts, narrowed).map_err(refused)?
+            };
             let mut phase = crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open_parts(
                 *session_id,
                 narrowed,
@@ -56331,6 +56517,7 @@ pub(crate) mod tests {
                     item: 0,
                     subject: crate::palw_improve_state_v1::PalwEvalSubjectV1::Parent,
                     kind: crate::palw_improve_state_v1::PalwScoringKindV1::ExactMatch,
+                    part: 0,
                     mode: crate::palw_improve_eval_v1::PalwEvalModeV1::Generate { seed: Hash64::default(), max_new: 4, stop_ids: vec![] },
                 };
                 s.improvement_eval_jobs.insert(job.key(), crate::palw_improve_eval_v1::PalwEvalJobStateV1 { job, claim: None });
@@ -70948,7 +71135,10 @@ pub(crate) mod tests {
                     || code.starts_with("pub fn window_challenge_at(")
                     || ((release_start..=release_end).contains(&n) && code.contains("window_challenge_at(licensed_daa) / 2"))
                     || code.contains("window_challenge_at(final_daa)")
-                    || code.contains("window_challenge_at(ctx.daa_score)");
+                    || code.contains("window_challenge_at(ctx.daa_score)")
+                    // RFC-0004's `Λ` (spec 17 §17.4.3 rows 19-20): the challenge window in force at the DAA a POLICY is applied, a bound on an
+                    // epoch's windows — the time a fast honest claim needs to Final — and not a licensed claim's own floor.
+                    || code.contains("palw_improvement_claim_lifecycle_v1(base, self.window_challenge_at(daa))");
                 assert!(allowed, "line {}: a Final floor computed outside palw_claim_final_floor_v1: {code}", n + 1);
             }
             // The helper at every re-arm: DL-1's row, the legacy load check, the court close, the

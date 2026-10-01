@@ -342,6 +342,7 @@ fn serve(adapter: &str) {
                 item: 7,
                 subject,
                 kind,
+                part: 0,
                 mode: mode.clone(),
             };
             PalwImproveEvalTaskV1 {

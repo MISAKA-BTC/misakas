@@ -56,7 +56,7 @@ pub struct PalwImprovementEvalClaimViewV1 {
     pub score: Option<i64>,
 }
 
-/// **An evaluation job that holds a claim**: its key (line, epoch, item, subject, kind) and its claim.
+/// **An evaluation job that holds a claim**: its key (line, epoch, item, subject, kind, part) and its claim.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwImprovementEvalJobViewV1 {
     pub key: PalwEvalJobKeyV1,
@@ -109,7 +109,7 @@ impl PalwChainStateV2 {
     /// own sources): a hold-out case's prompt ids and its reference — a `Continuation`'s ids once
     /// opened; a setter item's prompt once the set revealed, its reference an `ExactKey` over the set's
     /// key commitment (a setter's item is generated: its kind is ExactMatch, scored at the keys' reveal).
-    /// A suite item's prompt is not on chain and is never disclosed.
+    /// A suite item's prompt is not on chain: its claim discloses it (spec 17 §17.8.1), so this view never does.
     fn improvement_eval_item_view_v1(&self, line_id: &Hash64, epoch: u64, item: u32) -> Option<PalwImprovementEvalItemViewV1> {
         let row = self.improvement_item(line_id, epoch, item)?;
         let view = match row.source {
@@ -139,8 +139,9 @@ impl PalwChainStateV2 {
                     dropped: row.dropped,
                 }
             }
-            // A suite item has no prompt on chain: its jobs take no claim, and the item counts for the
-            // incumbent (A6).
+            // A suite item's prompt is not on chain either: its claim discloses the entry (the reference and an inclusion
+            // proof under the registered dataset's `content_root`, spec 17 §17.8.1), so a node that holds the dataset's
+            // content could evaluate it. This view discloses none: a node's loop plans no suite item yet.
             PalwItemSourceV1::Regression { .. } | PalwItemSourceV1::Safety { .. } => return None,
         };
         Some(view)

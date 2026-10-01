@@ -457,13 +457,17 @@ impl PalwImproveEvalTaskV1 {
             item: self.item,
             subject: self.subject,
             kind: self.kind,
+            // A task is never a judged part (a judged kind is not runnable, below): part 0, the only part of every
+            // other kind.
+            part: 0,
             mode: self.mode.clone(),
         }
     }
 }
 
 /// **The job id a task is claimed under** — the one place the node computes it (A6's formula, which
-/// binds the kind: a subject's primary and judge jobs share an item).
+/// binds the kind and the part: a subject's primary and judge jobs share an item, and a judged score is several
+/// claims). A task is part 0, the only part of every kind this build runs.
 pub fn palw_improve_task_job_id_v1(
     line_id: &Hash64,
     epoch: u64,
@@ -471,7 +475,7 @@ pub fn palw_improve_task_job_id_v1(
     subject: &PalwEvalSubjectV1,
     kind: PalwScoringKindV1,
 ) -> Hash64 {
-    palw_improve_eval_job_id_v1(line_id, epoch, item, subject, kind)
+    palw_improve_eval_job_id_v1(line_id, epoch, item, subject, kind, 0)
 }
 
 /// **The scoring stage's parameters for a kind, as the policy fixes them** — what the chain derives
@@ -479,17 +483,26 @@ pub fn palw_improve_task_job_id_v1(
 /// the revealed key's length bound is no context's.
 pub fn palw_improve_stage_params_of_v1(policy: &PalwImprovementPolicyV1, kind: PalwScoringKindV1) -> Option<PalwEvalStageParamsV1> {
     use kaspa_consensus_core::palw_improve_state_v1::PalwScoringParamsV1 as P;
-    policy.eval.stages.iter().find(|stage| stage.kind == kind).map(|stage| match stage.params {
-        P::ExactMatch { open, close, .. } => PalwEvalStageParamsV1::ExactMatch { open, close },
-        P::RefLogLik { logit_scale_q24 } => PalwEvalStageParamsV1::RefLogLik { logit_scale_q24 },
-        P::Judge { lo, hi } => PalwEvalStageParamsV1::Judge { lo, hi },
-        P::Pairwise { margin } => PalwEvalStageParamsV1::Pairwise { margin },
+    // A judged stage's include its judge specification's logit scale (the pass it is runs at the judge's scale): a
+    // policy with a judged stage and no specification derives none (the chain's check refuses such a policy).
+    policy.eval.stages.iter().find(|stage| stage.kind == kind).and_then(|stage| {
+        Some(match stage.params {
+            P::ExactMatch { open, close, .. } => PalwEvalStageParamsV1::ExactMatch { open, close },
+            P::RefLogLik { logit_scale_q24 } => PalwEvalStageParamsV1::RefLogLik { logit_scale_q24 },
+            P::Judge { lo, hi } => PalwEvalStageParamsV1::Judge { lo, hi, logit_scale_q24: policy.eval.judge.as_ref()?.logit_scale_q24 },
+            P::Pairwise { margin } => {
+                PalwEvalStageParamsV1::Pairwise { margin, logit_scale_q24: policy.eval.pairwise.as_ref()?.logit_scale_q24 }
+            }
+        })
     })
 }
 
-/// **Can this build run a job of `kind` yet?** A6 derives a context for ExactMatch (the subject's
-/// generation, scored by the fold at the key's reveal) and RefLogLik; judged kinds wait for the judge
-/// set's class kind (`PalwEvalErrorV1::JudgedNotYet`), so a node plans none.
+/// **Can this build run a job of `kind`?** A6 derives a context for every kind now — ExactMatch (the subject's
+/// generation, scored by the fold at the key's reveal), RefLogLik, and a judged part (the judge class's
+/// teacher-forced pass over the registered template filled with the item and the final generations it reads,
+/// spec 17 §17.8.5). This node plans the first two only: a judged part needs the template's dataset content, the
+/// judge class and the generations' ids (which ride in claims' payloads, not in the chain's state), none of which
+/// a node's loop reads yet — so it plans none, and a policy with a judged stage is evaluated by the lanes it has.
 pub const fn palw_improve_kind_runnable_v1(kind: PalwScoringKindV1) -> bool {
     matches!(kind, PalwScoringKindV1::ExactMatch | PalwScoringKindV1::RefLogLik)
 }
@@ -519,7 +532,7 @@ pub fn palw_improve_eval_task_v1(
     let kind = palw_improve_scoring_kind_of_v1(&case.reference);
     let params = palw_improve_stage_params_of_v1(&line.policy, kind).ok_or("the policy's eval spec has no stage of the case's scoring kind")?;
     if !palw_improve_kind_runnable_v1(kind) {
-        return Err("a judged kind waits for the judge set's class kind (A6)");
+        return Err("this build plans no judged part (spec 17 §17.8.5: it needs the template, the judge class and the generations a node does not read yet)");
     }
     let reference_commitment = match case.reference {
         PalwCaseReferenceV1::Continuation { commitment } => Some(commitment),
@@ -691,11 +704,19 @@ mod tests_fixtures {
                     },
                     PalwScoringStageV1 { kind: PalwScoringKindV1::Judge, params: PalwScoringParamsV1::Judge { lo: -100, hi: 100 } },
                 ],
-                regression_suite_root: h(0),
+                regression_dataset: h(0),
                 regression_items: 0,
-                safety_suite_root: h(0),
+                safety_dataset: h(0),
                 safety_items: 0,
                 judge_set: vec![h(0x7D)],
+                judge: Some(kaspa_consensus_core::palw_improve_state_v1::PalwJudgeSpecV1 {
+                    template_dataset: h(0x7E),
+                    verdict_a: vec![1],
+                    verdict_b: vec![2],
+                    logit_scale_q24: 1 << 20,
+                }),
+                pairwise: None,
+                seat_pool_permille: 100,
                 anchor_floor_permille: 800,
                 n: 8,
                 n_min: 4,
@@ -883,7 +904,7 @@ mod tests {
         assert_eq!(planned.len(), 6, "two runnable items × the parent, the held candidate and the predecessor (the judged item waits)");
         let seed = chain.epochs[&(h(LINE), 3)].seed.unwrap();
         for task in &planned {
-            assert_eq!(task.job_id, palw_improve_eval_job_id_v1(&h(LINE), 3, task.item, &task.subject, task.kind), "the chain's id");
+            assert_eq!(task.job_id, palw_improve_eval_job_id_v1(&h(LINE), 3, task.item, &task.subject, task.kind, 0), "the chain's id");
             assert_eq!(task.job().id(), task.job_id, "A6's job type derives the same id");
             assert_eq!(task.prompt_ids, vec![1, 5, 9]);
             let expected_class = match task.subject {
@@ -941,8 +962,10 @@ mod tests {
         let chain = chain(PalwEpochStateV1::Evaluating, false);
         let line = chain.line(&h(LINE)).unwrap();
         let epoch = chain.epoch(&h(LINE), 3).unwrap();
-        // 8 items × (1 + the Judge stage) × 4 subjects (the parent, two candidates, the predecessor) = 64 jobs.
-        let capped = |share: u64| PalwImprovementCeilingsV1 { max_eval_positions_per_epoch: 64 * share, ..PalwImprovementCeilingsV1::FORMAT_CAPS_V1 };
+        // 8 items × (1 primary + the Judge stage's 2 parts) × 4 subjects (the parent, two candidates, the predecessor), no suite entries = 96 jobs.
+        let jobs = palw_improve_eval_epoch_jobs_v1(&line.policy.eval, 4);
+        assert_eq!(jobs, 96, "the epoch's jobs");
+        let capped = |share: u64| PalwImprovementCeilingsV1 { max_eval_positions_per_epoch: jobs * share, ..PalwImprovementCeilingsV1::FORMAT_CAPS_V1 };
         assert_eq!(palw_improve_job_cap_v1(&line.policy, &epoch, &capped(4)), 4);
         assert_eq!(palw_improve_job_cap_v1(&line.policy, &epoch, &capped(10)), 10);
         let narrower = PalwImprovementCeilingsV1 { max_eval_budget_permille: 500, ..capped(10) };

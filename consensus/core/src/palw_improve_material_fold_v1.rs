@@ -1375,9 +1375,9 @@ mod tests {
         p.eval.n = 8;
         p.eval.n_min = 4;
         p.eval.regression_items = 0;
-        p.eval.regression_suite_root = Hash64::default();
+        p.eval.regression_dataset = Hash64::default();
         p.eval.safety_items = 0;
-        p.eval.safety_suite_root = Hash64::default();
+        p.eval.safety_dataset = Hash64::default();
         p.eval.stages.truncate(1);
         p.eval.setter_cap_permille = 1_000;
         p.usage.value = 2;

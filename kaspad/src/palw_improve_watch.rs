@@ -272,6 +272,7 @@ pub(crate) fn palw_improve_status_json_v1(
                         "subject": subject,
                         "subject_class": class.map(|c| c.to_string()),
                         "kind": format!("{:?}", j.job.kind),
+                        "part": j.job.part,
                         "claim": j.claim.as_ref().map(|c| json!({
                             "id": c.claim_id.to_string(),
                             "bond": bond_text(&c.bond),
@@ -662,6 +663,7 @@ mod tests {
             item: 1,
             subject: PalwEvalSubjectV1::Candidate(h(0xC1)),
             kind: PalwScoringKindV1::ExactMatch,
+            part: 0,
             mode: PalwEvalModeV1::Generate { seed: h(5), max_new: 3, stop_ids: vec![] },
         };
         let view = PalwImprovementEvalViewV1 {
@@ -686,7 +688,7 @@ mod tests {
                 },
             ],
             jobs: vec![PalwImprovementEvalJobViewV1 {
-                key: (line, 3, 1, job.subject, job.kind),
+                key: (line, 3, 1, job.subject, job.kind, job.part),
                 job,
                 claim: Some(PalwImprovementEvalClaimViewV1 {
                     claim_id: h(0xC1A),

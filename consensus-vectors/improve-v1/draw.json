@@ -23,16 +23,6 @@
   ],
   "line": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
   "n": 8,
-  "pair_order_of_item_for_candidate_F1": [
-    0,
-    0,
-    0,
-    1,
-    1,
-    1,
-    1,
-    1
-  ],
   "pool": [
     {
       "id": "10101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010",
@@ -101,5 +91,34 @@
   ],
   "seed": "f2c080ff11948c4e04b06ee39868f4d6e565482038728345aca50858e2d3ca1585dbd4b87ef378873cd6e454c379af9e9232bc7837a678338215325c76334096",
   "setter_cap_permille": 250,
-  "suite_item_0_of_root_E1": "c8375147e634342183681491c2fce32049bbd82246f13cdddc10db689eb0025b63e69dbd97708d5dd4930cf8fbd18f66a38132a76487bb6badbedb47189a622c"
+  "suite_draw": {
+    "all_of_a_dataset_of_4": [
+      3,
+      2,
+      0,
+      1
+    ],
+    "dataset": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+    "first_3_of_a_dataset_of_2_pow_32_minus_1": [
+      3219666132,
+      2985887666,
+      1360467983
+    ],
+    "none_of_an_empty_dataset": [],
+    "regression_5_of_40": [
+      27,
+      23,
+      9,
+      1,
+      32
+    ],
+    "safety_5_of_40": [
+      31,
+      6,
+      18,
+      7,
+      34
+    ]
+  },
+  "suite_item_id_of_dataset_E1_entry_5": "eadd12ac6cfe69d35450cc15640e3c5e641db29c50c9a129b736f9940a577d323a76704861deccb24ae6bbb4019fb4f8c6ee89343888ef50917f523046e9a35e"
 }

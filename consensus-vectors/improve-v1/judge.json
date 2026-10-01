@@ -1,0 +1,194 @@
+{
+  "fills": {
+    "item": [
+      10,
+      11
+    ],
+    "judge_a": [
+      1,
+      1,
+      10,
+      11,
+      2,
+      20,
+      21,
+      22,
+      3
+    ],
+    "output_a": [
+      20,
+      21,
+      22
+    ],
+    "output_b": [
+      30
+    ],
+    "pairwise_a_then_b": [
+      1,
+      10,
+      11,
+      2,
+      20,
+      21,
+      22,
+      3,
+      30,
+      4
+    ],
+    "pairwise_b_then_a": [
+      1,
+      10,
+      11,
+      2,
+      30,
+      3,
+      20,
+      21,
+      22,
+      4
+    ]
+  },
+  "judge_scores": {
+    "parts_to_score": [
+      {
+        "ll_a_ll_b": [
+          -30,
+          -50
+        ],
+        "score": 20
+      },
+      {
+        "ll_a_ll_b": [
+          -50,
+          -30
+        ],
+        "score": -20
+      },
+      {
+        "ll_a_ll_b": [
+          0,
+          -1000000
+        ],
+        "score": 100
+      },
+      {
+        "ll_a_ll_b": [
+          -1000000,
+          0
+        ],
+        "score": -100
+      }
+    ],
+    "stage": "Judge { lo: -100, hi: 100 }"
+  },
+  "pairwise_outcomes": {
+    "cases": [
+      {
+        "margin": 0,
+        "outcome": 1,
+        "parts": [
+          -10,
+          -30,
+          -30,
+          -10
+        ]
+      },
+      {
+        "margin": 0,
+        "outcome": -1,
+        "parts": [
+          -30,
+          -10,
+          -10,
+          -30
+        ]
+      },
+      {
+        "margin": 0,
+        "outcome": -1,
+        "parts": [
+          -10,
+          -30,
+          -10,
+          -30
+        ]
+      },
+      {
+        "margin": 0,
+        "outcome": -1,
+        "parts": [
+          -30,
+          -10,
+          -30,
+          -10
+        ]
+      },
+      {
+        "margin": 40,
+        "outcome": -1,
+        "parts": [
+          -10,
+          -30,
+          -30,
+          -10
+        ]
+      },
+      {
+        "margin": 39,
+        "outcome": 1,
+        "parts": [
+          -10,
+          -30,
+          -30,
+          -10
+        ]
+      },
+      {
+        "margin": 0,
+        "outcome": -1,
+        "parts": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "stage": "Pairwise { margin }; parts = [LL(o0,a), LL(o0,b), LL(o1,a), LL(o1,b)]; score = (a0 − b0) − (a1 − b1); +1 iff score > margin else −1"
+  },
+  "templates": {
+    "judge": {
+      "root": "e2cee79460694761481f3a7f07cace4e3eee3a2741492ed01c814e0f4b781a708d267524badb1f1397e06d560b90390c3edc32e7ae078d727d97e434ec473d70",
+      "segments": [
+        [
+          1,
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ]
+      ]
+    },
+    "pairwise": {
+      "root": "5790f4e905cc30f9abb38ee49c8e5801e42703e3a1ae9ba5ba6d51c4c3ef3b101390c4b284438e7ff3fe54b760c016ee18a4b4d7f1b461d69b6d21cdcbe51e52",
+      "segments": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ],
+        [
+          4
+        ]
+      ]
+    },
+    "root": "H(\"misaka-palw/improve/judge-template/v1\", borsh(template))"
+  }
+}

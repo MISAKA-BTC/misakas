@@ -24,6 +24,15 @@
 //!   (a seat files nothing on it, never a sampled conviction), and a claim this seat cannot judge is
 //!   never accused of withholding: an evaluation claim has no material to withhold.
 //!
+//! * **Accuse** (`--palw-challenge`, [`PalwPanelService::improve_court_pass_v1`]). A challenger's audit of an
+//!   evaluation claim whose replay differs locates the lie from the accused's capture and builds the evaluation court's
+//!   proof in the same blocking task (`palw_eval_court_filing_v1`: `EvalCone` at the first divergent step leaf,
+//!   `EvalDecodeToken` at a moved id or score, each checked as the chain checks it and offered only when it convicts); the
+//!   pass signs it as the IR one-move accusation it is (`TirShardCourtAccused`, tag 62, the accuser's ML-DSA-87 over its
+//!   session id) and queues it on the court's own carrier path. A leaf whose cone reduces over the history is only named
+//!   (the held regime tries no such leaf in one move: the chain opens a dissection session there, and the accused's
+//!   silence is the clock's to convict — this build plays no further move of it).
+//!
 //! **Dormant**: nothing here runs below the fence.
 
 use super::*;
@@ -33,14 +42,20 @@ use std::path::Path;
 
 use kaspa_consensus_core::palw_improve_node_v1::{PalwImprovementEvalViewV1, PalwImprovementStatusV1};
 use kaspa_consensus_core::palw_improve_state_v1::PalwImprovementEpochViewV1;
+use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwCourtVerdictV2};
+use kaspa_consensus_core::palw_tir_one_move_v1::{
+    PALW_TIR_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1, PALW_TIR_ONE_MOVE_VERSION_V1, PalwTirOneMoveAccusationV1,
+    palw_tir_one_move_session_id_v1, palw_tir_one_move_shape_v1,
+};
 use misaka_palw_sdk::improve::{
     PalwImproveDutyV1, PalwImproveEvalTaskV1, PalwImproveNodeChainV1, PalwImproveNodeV1, PalwImprovePrefetchV1,
     palw_improve_stage_params_of_v1,
 };
 use misaka_palw_sdk::improve_eval::{
-    PalwEvalCaptureV1, PalwEvalClaimFactsV1, PalwEvalCommittedRootsV1, PalwEvalDisputeV1, PalwEvalHeldV1, PalwEvalSeatJudgmentV1,
-    PalwEvalWorkV1, palw_eval_claim_v1, palw_eval_dispute_committed_v1, palw_eval_run_faulted_v1, palw_eval_run_v1,
-    palw_eval_seat_judge_roots_v1,
+    PalwEvalCaptureV1, PalwEvalClaimFactsV1, PalwEvalCommittedRootsV1, PalwEvalDisputeV1, PalwEvalFilingV1, PalwEvalHeldV1,
+    PalwEvalSeatJudgmentV1, PalwEvalWorkV1, palw_eval_claim_v1, palw_eval_court_filing_v1, palw_eval_dispute_committed_v1,
+    palw_eval_run_faulted_v1, palw_eval_run_v1, palw_eval_seat_judge_roots_v1,
 };
 
 use crate::palw_improve_watch::{
@@ -84,6 +99,10 @@ pub(super) struct PalwImproveLoopV1 {
     seat_done: HashMap<Hash64, PalwEvalSeatJudgmentV1>,
     /// The disputes this node found (RFC-0004 D-M3): the claims whose replay on its weights differs, by claim id.
     disputes: std::collections::BTreeMap<Hash64, PalwImproveDisputeV1>,
+    /// Accusations an audit built that wait for [`PalwPanelService::improve_court_pass_v1`] to sign and queue them.
+    court_ready: Vec<(Hash64, PalwEvalFilingV1)>,
+    /// The claims whose accusation this node has queued, or found there is none to file: once each.
+    court_done: HashSet<Hash64>,
     /// Where this node's drill lie stands (`--palw-drill-tamper-eval`): told until one lands on the chain.
     lie: PalwImproveLieV1,
     /// The DAA of the last tick (what a finding is dated by).
@@ -96,29 +115,54 @@ pub(super) struct PalwImproveLoopV1 {
 }
 
 /// **What an audit of an evaluation claim came to**: the judgment of its replay and, when that differs and the
-/// accused's capture was served, where the capture parts from the honest run.
+/// accused's capture was served, where the capture parts from the honest run — and, for a challenger, the court's proof
+/// built from it.
 struct PalwImproveAuditV1 {
     judgment: PalwEvalSeatJudgmentV1,
     dispute: Option<Result<PalwEvalDisputeV1, String>>,
+    /// The accusation's proof (`None`: this audit builds none — the node is no challenger, or there is no located dispute).
+    filing: Option<Result<PalwEvalFilingV1, String>>,
+}
+
+/// **What a challenger builds an accusation under**: the ruleset's court (the work limits and the cost ceiling a close is
+/// held to) and whether the chain is in the held regime (a dissected leaf is then only challenged).
+#[derive(Clone, Copy)]
+struct PalwImproveCourtRulesV1 {
+    court: PalwCourtParamsV2,
+    held_regime: bool,
 }
 
 /// **Replay an evaluation claim, and dispute it from the accused's capture when it differs.** The capture is
 /// read from `capture` and held to the roots the claim committed ([`palw_eval_dispute_committed_v1`]): a file
-/// that is not the accused's disputes nothing.
+/// that is not the accused's disputes nothing. With `court` (a challenger), a located dispute is also built into the
+/// proof that convicts ([`palw_eval_court_filing_v1`]) and held to the court's cost ceiling.
 fn palw_improve_audit_v1(
     held: &PalwEvalHeldV1,
     task: &PalwImproveEvalTaskV1,
     roots: &PalwEvalCommittedRootsV1,
     capture: &Path,
+    court: Option<PalwImproveCourtRulesV1>,
 ) -> PalwImproveAuditV1 {
     let judgment = palw_eval_seat_judge_roots_v1(held, task, roots);
+    let mut filing = None;
     let dispute = matches!(judgment, PalwEvalSeatJudgmentV1::Differs(_)).then(|| {
         let bytes = std::fs::read(capture).map_err(|e| format!("no capture served for the claim ({}): {e}", capture.display()))?;
         let accused =
             borsh::from_slice::<PalwEvalCaptureV1>(&bytes).map_err(|e| format!("the served capture does not decode: {e}"))?;
-        palw_eval_dispute_committed_v1(held, task, roots, &accused)
+        let found = palw_eval_dispute_committed_v1(held, task, roots, &accused)?;
+        if let Some(rules) = court
+            && !matches!(found, PalwEvalDisputeV1::Agrees)
+        {
+            let limits = kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(&rules.court);
+            filing = Some(palw_eval_court_filing_v1(held, task, roots, &accused, &found, &limits, rules.held_regime).and_then(|f| {
+                kaspa_consensus_core::palw_court_v2::check_close_cost_v2(&f.proof, &rules.court)
+                    .map_err(|e| format!("the close is over the court's cost ceiling: {e}"))?;
+                Ok(f)
+            }));
+        }
+        Ok::<PalwEvalDisputeV1, String>(found)
     });
-    PalwImproveAuditV1 { judgment, dispute }
+    PalwImproveAuditV1 { judgment, dispute, filing }
 }
 
 /// What a seat's step on an evaluation duty came to.
@@ -808,8 +852,25 @@ impl PalwPanelService {
             task.item, task.epoch, task.subject, task.kind
         );
         let capture = self.improve_capture_dir_v1().join(format!("{claim}.capture"));
-        st.seat_runs.insert(claim, tokio::task::spawn_blocking(move || palw_improve_audit_v1(&held, &task, &roots, &capture)));
+        let court = self.improve_court_rules_v1(st.daa);
+        st.seat_runs.insert(claim, tokio::task::spawn_blocking(move || palw_improve_audit_v1(&held, &task, &roots, &capture, court)));
         Ok(())
+    }
+
+    /// **What this node builds an evaluation accusation under**, `None` where it files none: it is no challenger
+    /// (`--palw-challenge`), has no bond and key to accuse under, or the network has no V2 court or no IR court yet. A seat's
+    /// audit builds none either way: a seat files nothing on a differing replay.
+    fn improve_court_rules_v1(&self, daa: u64) -> Option<PalwImproveCourtRulesV1> {
+        if !self.config.challenge || self.bond.is_none() || self.keypair.is_none() {
+            return None;
+        }
+        let params = &self.consensus_config.params;
+        if !matches!(params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+            || !params.palw_tir_v1_active_at(daa)
+        {
+            return None;
+        }
+        Some(PalwImproveCourtRulesV1 { court: self.config.court, held_regime: params.palw_held_context_active_at(daa) })
     }
 
     /// **Collect a finished audit.** A judgment is final for the claim; a replay that differs is the court's
@@ -820,12 +881,20 @@ impl PalwPanelService {
         let audit = handle.await.unwrap_or_else(|e| PalwImproveAuditV1 {
             judgment: PalwEvalSeatJudgmentV1::Unjudgeable(format!("the replay did not finish: {e}")),
             dispute: None,
+            filing: None,
         });
         match &audit.judgment {
             PalwEvalSeatJudgmentV1::Valid => info!("[{PALW_PANEL}] [palw-improve] evaluation claim {claim}: the replay reproduces it"),
             PalwEvalSeatJudgmentV1::Differs(why) => {
                 warn!("[{PALW_PANEL}] [palw-improve] evaluation claim {claim}: the replay differs — the court's question: {why}");
-                self.improve_note_dispute_v1(st, claim, why, audit.dispute);
+                let files = self.improve_court_rules_v1(st.daa).is_some();
+                self.improve_note_dispute_v1(st, claim, why, audit.dispute, &audit.filing, files);
+                match audit.filing {
+                    Some(Ok(filing)) => st.court_ready.push((claim, filing)),
+                    Some(Err(_)) | None => {
+                        st.court_done.insert(claim);
+                    }
+                }
             }
             PalwEvalSeatJudgmentV1::Unjudgeable(why) => {
                 warn!("[{PALW_PANEL}] [palw-improve] evaluation claim {claim}: cannot be judged: {why}")
@@ -873,14 +942,15 @@ impl PalwPanelService {
     }
 
     /// **Record a dispute** ([`PalwImproveDisputeV1`]): what the replay found, where the accused's capture says the
-    /// lie is, and how the dispute stands. The evaluation court's proofs (spec 17: court proof tags 13–15) are the
-    /// consensus half the evaluation lane lands; a build without them files nothing, and the record says so.
+    /// lie is, and how the dispute stands — the accusation built for it (`filing`, a challenger's), or why none is.
     fn improve_note_dispute_v1(
         &self,
         st: &mut PalwImproveLoopV1,
         claim: Hash64,
         why: &str,
         found: Option<Result<PalwEvalDisputeV1, String>>,
+        filing: &Option<Result<PalwEvalFilingV1, String>>,
+        files: bool,
     ) {
         let job_id = st
             .evals
@@ -897,11 +967,129 @@ impl PalwPanelService {
             Some(Err(e)) => ("unlocated", format!("{why}; the accused's capture cannot be used: {e}")),
             None => ("unlocated", why.to_string()),
         };
-        let filing =
-            "not filed: this build carries no evaluation court proof to file with (spec 17 court proof tags 13-15)".to_string();
+        let filing = match (filing, files) {
+            (Some(Ok(f)), _) => format!(
+                "accusation built ({} close{}): waits for the court's carrier",
+                f.label,
+                if f.opens_dissection { ", the named leaf is dissected: it opens a dissection" } else { "" }
+            ),
+            (Some(Err(e)), _) => format!("not filed: {e}"),
+            (None, false) => {
+                "not filed: this node files no accusation (it is not a challenger, or has no bond and key to accuse under)".to_string()
+            }
+            (None, true) => {
+                "not filed: the dispute is not located (the accused's capture is not served, or it agrees with the honest run)"
+                    .to_string()
+            }
+        };
         warn!("[{PALW_PANEL}] [palw-improve] DISPUTE evaluation claim {claim}: {kind}: {detail}; {filing}");
         let found_daa = st.daa;
         st.disputes.insert(claim, PalwImproveDisputeV1 { claim_id: claim, job_id, kind, detail, found_daa, filing });
+    }
+
+    /// **Say how a dispute stands now** (the status file's `filing`).
+    fn improve_set_filing_v1(st: &mut PalwImproveLoopV1, claim: Hash64, filing: String) {
+        if let Some(dispute) = st.disputes.get_mut(&claim) {
+            dispute.filing = filing;
+        }
+    }
+
+    /// **The evaluation court's pass** (RFC-0004 A10, spec 17 §17.8.6): sign and queue the accusations a challenger's audit
+    /// built. An evaluation accusation is the IR one-move accusation it rides as — `TirShardCourtAccused` (tag 62) over the
+    /// claim's roots and executor bond, the accuser this node's bond, the verdict `ExecutorGuilty` the proof was checked to
+    /// support, the accuser's ML-DSA-87 over `palw_tir_one_move_session_id_v1` under the accusation context — and takes the
+    /// court's own carrier path (`court_pending`, `court_due`: due now, like every one-move accusation, so the priority
+    /// lane carries it ahead of undated items and it folds while the claim can still be convicted). The claim is read from
+    /// the chain's evaluation view as of now: one already void or `Final` is not accused (the accusation would be refused
+    /// whole), and a claim another challenger's accusation convicted first is simply gone.
+    pub(super) fn improve_court_pass_v1(
+        &self,
+        st: &mut PalwImproveLoopV1,
+        bond_key: PalwBondKeyV2,
+        current_daa: u64,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) {
+        if st.court_ready.is_empty() {
+            return;
+        }
+        for (claim, filing) in std::mem::take(&mut st.court_ready) {
+            if st.court_done.contains(&claim) {
+                continue;
+            }
+            let view =
+                st.evals.iter().flat_map(|v| v.jobs.iter()).find_map(|j| j.claim.as_ref().filter(|c| c.claim_id == claim)).cloned();
+            let Some(view) = view.filter(|c| !c.voided && c.final_daa.is_none()) else {
+                warn!(
+                    "[{PALW_PANEL}] [palw-improve] evaluation claim {claim}: it is void, final or gone from the chain's evaluation \
+                     view: the accusation built for it is not filed"
+                );
+                Self::improve_set_filing_v1(
+                    st,
+                    claim,
+                    "not filed: the claim was void, final or gone from the chain's evaluation view before the accusation could ride"
+                        .to_string(),
+                );
+                st.court_done.insert(claim);
+                continue;
+            };
+            let mut accusation = PalwTirOneMoveAccusationV1 {
+                version: PALW_TIR_ONE_MOVE_VERSION_V1,
+                claim,
+                execution_root: view.execution_root,
+                trace_root: view.trace_root,
+                executor_bond: view.bond,
+                accuser_bond: bond_key,
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                proof: filing.proof.clone(),
+                signature: Vec::new(),
+            };
+            let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                self.consensus_config.params.net.to_string().as_bytes(),
+                Some(self.consensus_config.genesis.hash),
+            );
+            let session_id = palw_tir_one_move_session_id_v1(domain.as_byte_slice(), &accusation);
+            let Some(signature) = self.sign(session_id.as_byte_slice(), PALW_TIR_ONE_MOVE_MLDSA87_ACCUSE_CONTEXT_V1) else {
+                // No key at this moment: the accusation waits for the next pass.
+                st.court_ready.push((claim, filing));
+                continue;
+            };
+            accusation.signature = signature;
+            if let Err(why) = palw_tir_one_move_shape_v1(&accusation) {
+                warn!(
+                    "[{PALW_PANEL}] [palw-improve] evaluation claim {claim}: its accusation is malformed ({why}); recorded, not filed"
+                );
+                Self::improve_set_filing_v1(st, claim, format!("not filed: the accusation is malformed ({why})"));
+                st.court_done.insert(claim);
+                continue;
+            }
+            let object = PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(accusation) };
+            if let Err(why) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object) {
+                warn!(
+                    "[{PALW_PANEL}] [palw-improve] evaluation claim {claim}: the accusation cannot ride a carrier ({why}); recorded, not filed"
+                );
+                Self::improve_set_filing_v1(st, claim, format!("not filed: the accusation cannot ride a carrier ({why})"));
+                st.court_done.insert(claim);
+                continue;
+            }
+            st.court_done.insert(claim);
+            if court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
+                continue;
+            }
+            info!(
+                "[{PALW_PANEL}] [palw-improve] evaluation claim {claim}: filing its one-move accusation ({} close, leaf {:?}{}), session {session_id}",
+                filing.label,
+                filing.leaf,
+                if filing.opens_dissection { ", a dissected leaf: the chain opens a dissection there" } else { "" }
+            );
+            court_due.insert((session_id, 0, false), current_daa);
+            court_pending.push((session_id, 0, false, object));
+            Self::improve_set_filing_v1(
+                st,
+                claim,
+                format!("filed: TirShardCourtAccused ({} close) as session {session_id} at DAA {current_daa}", filing.label),
+            );
+        }
     }
 }
 
@@ -919,14 +1107,27 @@ const PALW_IMPROVE_CAPTURE_MAX_LEAVES_V1: u64 = 1 << 20;
 
 #[cfg(test)]
 mod tests {
-    /// **The panel hooks the improvement loop in three places and nowhere else**: the tick after the
-    /// chain reads, the carrier at the `Own` site beside the canonical claim, and the seat's step at the
-    /// head of the verdict block — each behind the fence (the tick) or the claim's own predicate (the
-    /// seat), none changing a line below it.
+    /// **The panel hooks the improvement loop in four places and nowhere else**: the tick after the
+    /// chain reads, the carrier at the `Own` site beside the canonical claim, the seat's step at the
+    /// head of the verdict block, and the evaluation court's pass beside the IR one-move pass — each behind
+    /// the fence (the tick) or the claim's own predicate (the seat), none changing a line below it.
     #[test]
-    fn the_panel_loop_hooks_the_improvement_loop_in_its_three_places() {
+    fn the_panel_loop_hooks_the_improvement_loop_in_its_four_places() {
         let panel = include_str!("../palw_panel.rs");
         assert!(panel.contains("self.improve_tick_v1(&mut improve, current_daa).await"));
+        let one_move = panel.find("self.tir_one_move_pass_v1(").expect("the IR one-move pass");
+        let court = panel
+            .find("self.improve_court_pass_v1(&mut improve, bond_key, current_daa, &mut court_pending, &mut court_due)")
+            .expect("the evaluation court's pass");
+        assert!(one_move < court, "the evaluation accusations are queued after the IR pass, on the same court path");
+        assert!(
+            court
+                < panel[one_move..]
+                    .find("// --- the court's half: answer the disputes this bond is a party to ---")
+                    .expect("the court's half")
+                    + one_move,
+            "and before the court's half answers its duties"
+        );
         assert!(
             panel
                 .contains(".improve_carry_v1(&mut improve, &session, network_domain, bond, current_daa, &mut funding, &mut inflight)")

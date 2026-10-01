@@ -24,14 +24,20 @@
 //!   self-consistent, so the chain's own door takes it — and [`palw_eval_dispute_v1`] /
 //!   [`palw_eval_dispute_committed_v1`] say where an honest replay parts from an accused's capture
 //!   ([`PalwEvalDisputeV1`]: the first divergent leaf, else the first id, else the score), the capture held to
-//!   the roots the claim committed. The court proof built from that finding is the evaluation court's (spec 17).
+//!   the roots the claim committed. The court proof built from that finding ([`palw_eval_court_filing_v1`]) is the
+//!   evaluation court's (spec 17 §17.8.6): `EvalCone` (court proof tag 13) at the divergent leaf — only the leaf named
+//!   where its cone reduces over the history — `EvalDecodeToken` (tag 14) at a moved id or score, each built from the
+//!   accused's capture ([`PalwEvalCaptureV1::rebuild_execution`]) and checked as the chain checks it.
 //!
-//! **Judged kinds** wait for the judge set's class kind (A6, `PalwEvalErrorV1::JudgedNotYet`): no node
-//! plans one ([`crate::improve::palw_improve_kind_runnable_v1`]).
+//! **Judged kinds** (A6, spec 17 §17.8.5) have a context now — the judge class's teacher-forced pass over the
+//! registered template filled with the item and the final generations it reads — but this node plans none
+//! ([`crate::improve::palw_improve_kind_runnable_v1`]): a judged part needs the template dataset's content, the
+//! judge class and the generations' ids, which a node's loop does not read yet.
 
 use std::sync::Arc;
 
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
 use kaspa_consensus_core::palw_freeprompt_v3::{
     PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PalwFpJobTailV1, PalwFpStopReasonV3, PalwFreePromptCommitmentV3,
@@ -43,10 +49,16 @@ use kaspa_consensus_core::palw_gen_step_v1::{
 use kaspa_consensus_core::palw_gen_worker_v1::{
     PalwGenClaimRootsV1, PalwGenExecutionV1, palw_gen_execute_v1, palw_gen_replay_committed_v1,
 };
+use kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1;
+use kaspa_consensus_core::palw_improve_eval_court_v1::{
+    PalwEvalClaimFactsV1 as PalwEvalCourtFactsV1, PalwEvalEvidenceV1, check_eval_cone_close_v1, check_eval_decode_close_v1,
+    palw_eval_named_dissected_leaf_v1,
+};
 use kaspa_consensus_core::palw_improve_eval_v1::{
     PalwEvalBindingV1, PalwEvalClaimRootsV1, PalwEvalClaimTailV1, PalwEvalContextV1, PalwEvalJobV1, PalwEvalModeV1,
     PalwEvalStageParamsV1, PalwEvalSubjectClassV1, palw_fp_eval_claim_check_v1, palw_improve_answer_of_v1,
-    palw_improve_eval_context_v1, palw_improve_eval_decode_config_v1, palw_improve_eval_pipeline_job_v1,
+    palw_improve_eval_context_v1, palw_improve_eval_decode_config_v1, palw_improve_eval_layout_digest_v1,
+    palw_improve_eval_pipeline_job_v1,
 };
 use kaspa_consensus_core::palw_improve_state_v1::PalwScoringKindV1;
 use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
@@ -54,10 +66,11 @@ use kaspa_consensus_core::palw_tir_artifact_v1::PalwTirTensorSourceV1;
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1;
 use kaspa_consensus_core::palw_tir_step_v1::{palw_tir_lane_values_v1, palw_tir_lanes_le_v1};
 use kaspa_consensus_core::tx::TransactionOutpoint;
-use misaka_palw_tir::TirProgramV1;
+use misaka_palw_tir::demand::DemandLimits;
 use misaka_palw_tir::interp::{MapParams, ParamSource};
-use misaka_palw_tir::pipeline::{PipelineParams, stage_job_facts};
+use misaka_palw_tir::pipeline::{PipelineParams, PipelineRun, stage_job_facts};
 use misaka_palw_tir::tensor::Tensor;
+use misaka_palw_tir::{DType, TirProgramV1};
 use misaka_palw_tir_exec::node::TirArtifactV1;
 
 use crate::improve::PalwImproveEvalTaskV1;
@@ -81,7 +94,13 @@ pub struct PalwEvalHeldV1 {
     pub artifact_root: Hash64,
     pub tokenizer_id: Hash64,
     pub program: TirProgramV1,
+    /// The class's canonical program bytes, as the registry holds them (the court's facts carry the bytes, not the
+    /// decoded program).
+    pub program_bytes: Vec<u8>,
     pub layout: PalwTirLayoutV1,
+    /// A composite candidate's reference (RFC-0004 §6.3), when the class is one: the evaluation court's parameter
+    /// openings are then under the two sections' own roots.
+    pub composite: Option<PalwTirCompositeRefV1>,
     weights: PalwEvalWeightsV1,
 }
 
@@ -95,7 +114,9 @@ impl PalwEvalHeldV1 {
             artifact_root: entry.artifact_root,
             tokenizer_id: entry.class.tokenizer_id,
             program,
+            program_bytes: entry.class.program.clone(),
             layout: entry.class.layout.clone(),
+            composite: entry.artifact.composite_ref().copied(),
             weights: PalwEvalWeightsV1::Artifact { artifact: entry.artifact.clone() },
         })
     }
@@ -109,7 +130,17 @@ impl PalwEvalHeldV1 {
         layout: PalwTirLayoutV1,
         params: MapParams,
     ) -> Self {
-        Self { class_id, artifact_root, tokenizer_id, program, layout, weights: PalwEvalWeightsV1::Map(params) }
+        let program_bytes = program.encode();
+        Self {
+            class_id,
+            artifact_root,
+            tokenizer_id,
+            program,
+            program_bytes,
+            layout,
+            composite: None,
+            weights: PalwEvalWeightsV1::Map(params),
+        }
     }
 
     fn subject(&self) -> PalwEvalSubjectClassV1<'_> {
@@ -248,7 +279,7 @@ pub fn palw_eval_run_v1(held: &PalwEvalHeldV1, task: &PalwImproveEvalTaskV1) -> 
                 palw_gen_replay_committed_v1(&ctx.pipeline, &ctx.programs, &ctx.layouts, params, &pjob, ctx.seed)
                     .map_err(|e| e.to_string())
             }
-            PalwEvalModeV1::Judged { .. } => Err("judged kinds wait for the judge set's class kind (A6)".to_string()),
+            PalwEvalModeV1::Judged { .. } => Err("this build runs no judged part (spec 17 §17.8.5)".to_string()),
         }
     })?;
     let score = score_lanes_of(task.kind, &execution.run.output.data)?;
@@ -281,6 +312,10 @@ fn eval_bind_v1(
         score,
         subject_layout: held.layout.clone(),
         params: task.params,
+        // Neither a judged part's reading nor a suite entry's opening: this node's tasks are a hold-out case's or a
+        // setter item's.
+        read: None,
+        opening: None,
     };
     (binding, tail)
 }
@@ -509,7 +544,7 @@ fn carried_job(work: &PalwEvalWorkV1, facts: &PalwEvalClaimFactsV1, tokenizer_id
     let (limit, decode) = match &task.mode {
         PalwEvalModeV1::Generate { max_new, stop_ids, .. } => (*max_new, palw_improve_eval_decode_config_v1(stop_ids)),
         PalwEvalModeV1::TeacherForced { .. } => (task.reference_ids.len() as u32, DecodeConfigV4::NOOP),
-        PalwEvalModeV1::Judged { .. } => return Err("judged kinds wait for the judge set's class kind (A6)".to_string()),
+        PalwEvalModeV1::Judged { .. } => return Err("this build runs no judged part (spec 17 §17.8.5)".to_string()),
     };
     let prompt_hash = prompt_token_ids_commitment_v1(facts.prompt_ids_form, &task.prompt_ids).map_err(|e| e.to_string())?;
     Ok(PalwFreePromptJobV3 {
@@ -562,7 +597,7 @@ pub fn palw_eval_claim_v1(
         trace_retention_daa: facts.trace_retention_daa,
     };
     let claim = PalwEvalClaimV1 { commitment, tail: work.tail.clone(), prompt: work.task.prompt_ids.clone() };
-    palw_fp_eval_claim_check_v1(&claim.commitment, &claim.prompt, &claim.tail, &[])
+    palw_fp_eval_claim_check_v1(&claim.commitment, &claim.prompt, &claim.tail)
         .map_err(|e| format!("the claim does not check: {e}"))?;
     Ok(claim)
 }
@@ -620,7 +655,7 @@ pub fn palw_eval_seat_judge_v1(
     tail: &PalwEvalClaimTailV1,
 ) -> PalwEvalSeatJudgmentV1 {
     use PalwEvalSeatJudgmentV1 as J;
-    if let Err(e) = palw_fp_eval_claim_check_v1(commitment, prompt, tail, &[]) {
+    if let Err(e) = palw_fp_eval_claim_check_v1(commitment, prompt, tail) {
         return J::Unjudgeable(format!("the claim does not check: {e}"));
     }
     let Some(task) = palw_eval_task_of_claim_v1(commitment, prompt, tail) else {
@@ -756,6 +791,29 @@ impl PalwEvalCaptureV1 {
     /// execution the captured commitments describe, whatever computed them. The roots a claim built
     /// from a lying capture carries are what a challenger's honest run is compared with.
     pub fn rebuild(&self, held: &PalwEvalHeldV1) -> Result<(PalwGenClaimRootsV1, PalwEvalBindingV1, Vec<Vec<Hash64>>), String> {
+        let parts = self.rebuild_parts(held)?;
+        Ok((parts.claim, parts.binding, parts.hashes))
+    }
+
+    /// **The accused's execution, whole** ([`Self::rebuild`] with every leaf's values kept): what the evaluation
+    /// court's builders open leaves from (`PalwEvalEvidenceV1::execution`) — each leaf with its path under the
+    /// roots the accused committed, lies included. The run's own tensors are not captured (the court opens leaves,
+    /// never the run), so that field is an empty placeholder. Returns the binding the roots produce beside it.
+    pub fn rebuild_execution(&self, held: &PalwEvalHeldV1) -> Result<(PalwGenExecutionV1, PalwEvalBindingV1), String> {
+        let parts = self.rebuild_parts(held)?;
+        let run = PipelineRun { stages: Vec::new(), output: Tensor::zeros(DType::I32, &[0]) };
+        let execution = PalwGenExecutionV1 {
+            run,
+            stop: None,
+            space: parts.space,
+            leaf_values: parts.values,
+            leaf_hashes: parts.hashes,
+            claim: parts.claim,
+        };
+        Ok((execution, parts.binding))
+    }
+
+    fn rebuild_parts(&self, held: &PalwEvalHeldV1) -> Result<PalwEvalRebuiltV1, String> {
         let ctx = held.context(&self.job, self.params)?;
         let pjob = palw_improve_eval_pipeline_job_v1(&ctx, &self.prompt, &self.generated, &[]);
         let facts = stage_job_facts(&ctx.pipeline, &ctx.programs, &pjob).map_err(|e| e.to_string())?;
@@ -765,11 +823,13 @@ impl PalwEvalCaptureV1 {
         if self.leaves.len() != space.stages.len() {
             return Err("one leaf list per stage".into());
         }
+        let mut leaf_values = Vec::with_capacity(space.stages.len());
         let mut leaf_hashes = Vec::with_capacity(space.stages.len());
         for (s, (stage, lanes)) in space.stages.iter().zip(&self.leaves).enumerate() {
             if lanes.len() != stage.leaves().len() {
                 return Err(format!("stage {s}: {} leaves captured for {}", lanes.len(), stage.leaves().len()));
             }
+            let mut values = Vec::with_capacity(lanes.len());
             let mut hashes = Vec::with_capacity(lanes.len());
             for (leaf, bytes) in stage.leaves().iter().zip(lanes) {
                 let v = palw_tir_lane_values_v1(leaf.dtype, bytes).map_err(|e| e.to_string())?;
@@ -777,7 +837,9 @@ impl PalwEvalCaptureV1 {
                     return Err(format!("{:?}: {} lanes for {}", leaf.coord, v.len(), leaf.value_count));
                 }
                 hashes.push(palw_gen_step_leaf_hash_v1(leaf, &v).map_err(|e| e.to_string())?);
+                values.push(v);
             }
+            leaf_values.push(values);
             leaf_hashes.push(hashes);
         }
         let stage_roots: Vec<Hash64> = leaf_hashes.iter().enumerate().map(|(s, h)| palw_gen_stage_root_v1(s as u8, h)).collect();
@@ -793,8 +855,18 @@ impl PalwEvalCaptureV1 {
             Vec::new(),
             self.score.clone(),
         );
-        Ok((claim, binding, leaf_hashes))
+        Ok(PalwEvalRebuiltV1 { space, values: leaf_values, hashes: leaf_hashes, claim, binding })
     }
+}
+
+/// What rebuilding a capture produces: the step space of the job, every leaf's values and hash, the roots the
+/// hashes give and the binding over them.
+struct PalwEvalRebuiltV1 {
+    space: PalwGenStepSpaceV1,
+    values: Vec<Vec<Vec<i128>>>,
+    hashes: Vec<Vec<Hash64>>,
+    claim: PalwGenClaimRootsV1,
+    binding: PalwEvalBindingV1,
 }
 
 /// **The first leaf, in the claim's one order, where the accused's commitments part from an honest run
@@ -808,6 +880,152 @@ pub fn palw_eval_first_divergence_v1(accused: &[Vec<Hash64>], honest: &PalwGenEx
         before += a.len() as u64;
     }
     None
+}
+
+// ---------------------------------------------------------------------------------------------
+// The court: the close that convicts an accused evaluation (spec 17 §17.8.6)
+// ---------------------------------------------------------------------------------------------
+
+/// **An accusation's proof, built from the accused's capture** — what a challenger files against an evaluation claim
+/// whose replay differs: the evaluation court's close at the place [`palw_eval_dispute_v1`] found the lie, checked by
+/// the court's own functions before it is offered (so a node never files an accusation the chain would refuse or, worse,
+/// acquit — an accusation that does not convict charges its accuser).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwEvalFilingV1 {
+    /// The close's name for a log: `named leaf` (a dissected leaf's challenge), `cone`, `decode token` or `score`.
+    pub label: &'static str,
+    /// The proof the one-move accusation carries: `EvalCone` (court proof tag 13) or `EvalDecodeToken` (tag 14).
+    pub proof: PalwCourtVerdictProofV2,
+    /// The leaf the proof names (in the claim's one order), where it names one.
+    pub leaf: Option<u64>,
+    /// The leaf is DISSECTED — its cone reduces over the history — and under the held regime such a leaf is never
+    /// tried in one move: the accusation is only the challenge, the chain opens a dissection session at the leaf and the
+    /// responder's root claim is its first move. This build files that challenge and plays no further move of the session
+    /// (its answer is the clock's: an executor that cannot finalize its own lie files none).
+    pub opens_dissection: bool,
+}
+
+/// **Build the proof that convicts an accused evaluation** from the accused's capture and where an honest replay found it
+/// parts from the honest run ([`PalwEvalDisputeV1`]):
+///
+/// * a divergent step leaf — under the held regime (`held_regime`), a DISSECTED leaf is named only
+///   ([`PalwEvalFilingV1::opens_dissection`]); any other leaf is closed whole: its cone, every unit it reads and the
+///   subject's parameter leaves it reads, opened under the roots the accused committed (`EvalCone`, tag 13);
+/// * a committed id that is not the decode rule's selection from its committed logits row (`EvalDecodeToken`,
+///   `Token`, tag 14);
+/// * a committed score that is not the score stage's committed output tile (`EvalDecodeToken`, `Score`).
+///
+/// The capture is held to the roots the claim committed (`committed`, the chain's own) and must be of the task's job, as
+/// for [`palw_eval_dispute_committed_v1`]; the close is then checked as the chain checks it (the evaluation court's
+/// `check_eval_cone_close_v1` / `check_eval_decode_close_v1` over the claim's facts) and offered only when it convicts.
+/// `Err` names why there is nothing to file.
+pub fn palw_eval_court_filing_v1(
+    held: &PalwEvalHeldV1,
+    task: &PalwImproveEvalTaskV1,
+    committed: &PalwEvalCommittedRootsV1,
+    accused: &PalwEvalCaptureV1,
+    found: &PalwEvalDisputeV1,
+    limits: &DemandLimits,
+    held_regime: bool,
+) -> Result<PalwEvalFilingV1, String> {
+    let job = task.job();
+    if accused.job != job
+        || accused.subject_class != task.subject_class
+        || accused.prompt != task.prompt_ids
+        || accused.params != task.params
+    {
+        return Err("the capture is not of this job".to_string());
+    }
+    if task.subject_class != held.class_id {
+        return Err(format!("the task's subject is class {}, this node holds {}", task.subject_class, held.class_id));
+    }
+    let (execution, binding) = accused.rebuild_execution(held)?;
+    let roots = binding.claim_roots();
+    if (roots.trace_root, roots.output_root, roots.execution_root, roots.work_leaves)
+        != (committed.trace_root, committed.output_root, committed.execution_root, committed.work_leaves)
+    {
+        return Err("the served capture does not rebuild to the roots the claim committed: it is not the accused's".to_string());
+    }
+    let facts = PalwEvalCourtFactsV1 {
+        class_id: &held.class_id,
+        execution_root: &committed.execution_root,
+        trace_root: &committed.trace_root,
+        output_root: &committed.output_root,
+        work_leaves: committed.work_leaves,
+        job: &job,
+        program: &held.program_bytes,
+        layout_digest: palw_improve_eval_layout_digest_v1(&held.layout),
+        artifact_root: held.artifact_root,
+    };
+    with_params(held, |params| {
+        let evidence = PalwEvalEvidenceV1 {
+            facts,
+            params,
+            execution: &execution,
+            binding: &binding,
+            prompt: &task.prompt_ids,
+            composite: held.composite,
+        };
+        match found {
+            PalwEvalDisputeV1::Agrees => Err("the served capture agrees with the honest run: nothing to file".to_string()),
+            PalwEvalDisputeV1::Leaf { index, .. } => {
+                if held_regime {
+                    let named = evidence.named_leaf_close(*index)?;
+                    let dissected = palw_eval_named_dissected_leaf_v1(&named, &facts)
+                        .map_err(|why| format!("the named leaf does not verify against the claim: {why}"))?;
+                    if let Some(leaf) = dissected {
+                        return Ok(PalwEvalFilingV1 {
+                            label: "named leaf",
+                            proof: PalwCourtVerdictProofV2::EvalCone { close: Box::new(named) },
+                            leaf: Some(leaf),
+                            opens_dissection: true,
+                        });
+                    }
+                }
+                let close = evidence.cone_close(*index, limits)?;
+                match check_eval_cone_close_v1(&close, &facts, None, limits) {
+                    Ok(Some(_fault)) => Ok(PalwEvalFilingV1 {
+                        label: "cone",
+                        proof: PalwCourtVerdictProofV2::EvalCone { close: Box::new(close) },
+                        leaf: Some(*index),
+                        opens_dissection: false,
+                    }),
+                    Ok(None) => Err(format!("the court acquits leaf {index} over the accused's own operands: no conviction to file")),
+                    Err(why) => Err(format!("the cone close of leaf {index} does not adjudicate: {why}")),
+                }
+            }
+            PalwEvalDisputeV1::Output { position, .. } => {
+                let close = evidence.decode_close(*position)?;
+                match check_eval_decode_close_v1(&close, &facts, None) {
+                    Ok(Some(_fault)) => Ok(PalwEvalFilingV1 {
+                        label: "decode token",
+                        proof: PalwCourtVerdictProofV2::EvalDecodeToken { close: Box::new(close) },
+                        leaf: None,
+                        opens_dissection: false,
+                    }),
+                    Ok(None) => {
+                        Err(format!("the court acquits generated id {position} against its committed row: no conviction to file"))
+                    }
+                    Err(why) => Err(format!("the decode close of generated id {position} does not adjudicate: {why}")),
+                }
+            }
+            PalwEvalDisputeV1::Score { .. } => {
+                let close = evidence.score_close()?;
+                match check_eval_decode_close_v1(&close, &facts, None) {
+                    Ok(Some(_fault)) => Ok(PalwEvalFilingV1 {
+                        label: "score",
+                        proof: PalwCourtVerdictProofV2::EvalDecodeToken { close: Box::new(close) },
+                        leaf: None,
+                        opens_dissection: false,
+                    }),
+                    Ok(None) => {
+                        Err("the court acquits the committed score against the output tile: no conviction to file".to_string())
+                    }
+                    Err(why) => Err(format!("the score close does not adjudicate: {why}")),
+                }
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -915,7 +1133,8 @@ mod tests {
         params: PalwEvalStageParamsV1,
     ) -> PalwImproveEvalTaskV1 {
         let subject = PalwEvalSubjectV1::Candidate(held.class_id);
-        let job = PalwEvalJobV1 { line_id: Hash64::from_bytes([0x11; 64]), epoch: 3, item: 7, subject, kind, mode: mode.clone() };
+        let job =
+            PalwEvalJobV1 { line_id: Hash64::from_bytes([0x11; 64]), epoch: 3, item: 7, subject, kind, part: 0, mode: mode.clone() };
         PalwImproveEvalTaskV1 {
             line_id: job.line_id,
             epoch: 3,
@@ -1080,7 +1299,7 @@ mod tests {
             PalwScoringKindV1::Judge,
             PalwEvalModeV1::Judged { judge: Hash64::from_bytes([6; 64]) },
             vec![],
-            PalwEvalStageParamsV1::Judge { lo: -1, hi: 1 },
+            PalwEvalStageParamsV1::Judge { lo: -1, hi: 1, logit_scale_q24: 1 << 12 },
         );
         assert!(palw_eval_run_v1(&held, &judged).is_err());
     }
@@ -1233,5 +1452,103 @@ mod tests {
             assert_eq!(PalwEvalFaultV1::parse(&fault.describe()), Ok(fault));
         }
         assert!(PalwEvalFaultV1::parse("leaf:x").is_err() && PalwEvalFaultV1::parse("tree").is_err());
+    }
+
+    /// **The close that convicts an accused evaluation is built from its capture and checked as the chain checks it**
+    /// (D-M3, spec 17 §17.8.6): a moved leaf is convicted by the cone close at its leaf (`EvalCone`), a moved first id by
+    /// the decode close of that id (`EvalDecodeToken`, `Token`), a moved score by the score close; an honest capture has
+    /// nothing to file, a capture that is not the claim's (other roots, another job) is refused, and the close the node
+    /// offers is the one the chain's own court function convicts on.
+    #[test]
+    fn an_accused_evaluation_is_convicted_by_the_close_the_node_builds_from_its_capture() {
+        use kaspa_consensus_core::palw_improve_eval_court_v1::PalwEvalOutputCloseV1;
+        const LIMITS: DemandLimits = DemandLimits { max_elements: 1 << 20, max_terms: 1 << 24 };
+        let held = held(5);
+        let t = generating(&held);
+        let honest = palw_eval_run_v1(&held, &t).expect("the run");
+        let roots_of = |w: &PalwEvalWorkV1| {
+            let c = palw_eval_claim_v1(w, &held, &facts()).expect("the claim");
+            PalwEvalCommittedRootsV1 {
+                trace_root: c.commitment.trace_root,
+                output_root: c.commitment.output_root,
+                execution_root: c.commitment.execution_root,
+                work_leaves: c.commitment.work_leaves,
+            }
+        };
+        let honest_roots = roots_of(&honest);
+        let honest_capture = PalwEvalCaptureV1::of(&honest, &held).unwrap();
+        assert!(
+            palw_eval_court_filing_v1(&held, &t, &honest_roots, &honest_capture, &PalwEvalDisputeV1::Agrees, &LIMITS, true).is_err(),
+            "an honest capture agrees: nothing to file"
+        );
+
+        // A moved leaf: the cone close of that leaf convicts. The toy class has no history reduction, so no leaf is dissected.
+        let total = honest.execution.space.leaf_count();
+        for planted in [0, total / 2, total - 1] {
+            let lie = palw_eval_run_faulted_v1(&held, &t, PalwEvalFaultV1::Leaf(planted)).expect("the lie runs");
+            let committed = roots_of(&lie);
+            let capture = PalwEvalCaptureV1::of(&lie, &held).unwrap();
+            let found = palw_eval_dispute_committed_v1(&held, &t, &committed, &capture).expect("disputes");
+            for held_regime in [false, true] {
+                let filing = palw_eval_court_filing_v1(&held, &t, &committed, &capture, &found, &LIMITS, held_regime)
+                    .expect("a close that convicts");
+                assert_eq!(
+                    (filing.label, filing.leaf, filing.opens_dissection),
+                    ("cone", Some(planted), false),
+                    "leaf {planted}, held {held_regime}"
+                );
+                let PalwCourtVerdictProofV2::EvalCone { close } = &filing.proof else { panic!("a cone proof") };
+                assert_eq!(close.binding.committed_execution_root, committed.execution_root, "the close is the claim's");
+                assert_eq!(
+                    honest.execution.space.global_index(&close.disputed.coord),
+                    Some(planted),
+                    "the close names the planted leaf"
+                );
+            }
+            // Held to another claim's roots, the same capture is no evidence.
+            assert!(palw_eval_court_filing_v1(&held, &t, &honest_roots, &capture, &found, &LIMITS, true).is_err());
+            // A capture of another job is no evidence of this one.
+            let mut other = t.clone();
+            other.item += 1;
+            other.job_id = other.job().id();
+            assert!(palw_eval_court_filing_v1(&held, &other, &committed, &capture, &found, &LIMITS, true).is_err());
+        }
+
+        // A moved first id: the decode close of that id.
+        let lie = palw_eval_run_faulted_v1(&held, &t, PalwEvalFaultV1::Output).expect("the lie runs");
+        let committed = roots_of(&lie);
+        let capture = PalwEvalCaptureV1::of(&lie, &held).unwrap();
+        let found = palw_eval_dispute_committed_v1(&held, &t, &committed, &capture).expect("disputes");
+        let filing = palw_eval_court_filing_v1(&held, &t, &committed, &capture, &found, &LIMITS, true).expect("a close that convicts");
+        assert_eq!((filing.label, filing.leaf, filing.opens_dissection), ("decode token", None, false));
+        let PalwCourtVerdictProofV2::EvalDecodeToken { close } = &filing.proof else { panic!("a decode proof") };
+        assert!(matches!(&close.output, PalwEvalOutputCloseV1::Token { t, .. } if *t == 0), "the first id's row");
+
+        // A moved score, on a teacher-forced likelihood job: the score close.
+        let tf = task(
+            &held,
+            PalwScoringKindV1::RefLogLik,
+            PalwEvalModeV1::TeacherForced { reference_commitment: Hash64::from_bytes([0x44; 64]) },
+            vec![7u32, 2, 9, 9],
+            PalwEvalStageParamsV1::RefLogLik { logit_scale_q24: 1 << 12 },
+        );
+        let lie = palw_eval_run_faulted_v1(&held, &tf, PalwEvalFaultV1::Score).expect("the lie runs");
+        let committed = roots_of(&lie);
+        let capture = PalwEvalCaptureV1::of(&lie, &held).unwrap();
+        let found = palw_eval_dispute_committed_v1(&held, &tf, &committed, &capture).expect("disputes");
+        assert!(matches!(found, PalwEvalDisputeV1::Score { .. }));
+        let filing =
+            palw_eval_court_filing_v1(&held, &tf, &committed, &capture, &found, &LIMITS, true).expect("a close that convicts");
+        assert_eq!((filing.label, filing.leaf, filing.opens_dissection), ("score", None, false));
+        let PalwCourtVerdictProofV2::EvalDecodeToken { close } = &filing.proof else { panic!("a score proof") };
+        assert!(matches!(&close.output, PalwEvalOutputCloseV1::Score { .. }));
+        // The same run's leaf lie is a cone close at that leaf, never the score's.
+        let lie = palw_eval_run_faulted_v1(&held, &tf, PalwEvalFaultV1::Leaf(1)).expect("the lie runs");
+        let committed = roots_of(&lie);
+        let capture = PalwEvalCaptureV1::of(&lie, &held).unwrap();
+        let found = palw_eval_dispute_committed_v1(&held, &tf, &committed, &capture).expect("disputes");
+        let filing =
+            palw_eval_court_filing_v1(&held, &tf, &committed, &capture, &found, &LIMITS, true).expect("a close that convicts");
+        assert_eq!((filing.label, filing.leaf), ("cone", Some(1)));
     }
 }

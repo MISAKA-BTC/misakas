@@ -177,6 +177,11 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::CourtGenRootClaimed { .. } => {
             Err("a generative root claim must carry the signature of the responder — unsigned, the challenger could write it")
         }
+        // RFC-0004 A6: the evaluation root claim rides as the generative one does, signed by its party.
+        PalwConsensusObjectV2::CourtEvalRootClaimed { signature, .. } if !signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::CourtEvalRootClaimed { .. } => {
+            Err("an evaluation root claim must carry the signature of the responder — unsigned, the challenger could write it")
+        }
         // The second IR fence: an IR step demand names a step unit and carries its accuser's signature.
         PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } if !accusation.unit.is_tir_fence2_v1() => {
             Err("an IR step demand names a step leaf, a step node or a rows-tree node")

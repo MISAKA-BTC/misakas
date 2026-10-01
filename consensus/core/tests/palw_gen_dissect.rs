@@ -410,3 +410,38 @@ fn a_lie_in_the_totals_is_convicted_wherever_it_hides() {
         );
     }
 }
+
+/// **A generative dissection's bottom is a dissection's verdict, and the claim it voids is recorded as
+/// one** (lane B's finding, 2026-10-01). The close arm of the fold chose the void reason from a list of
+/// two proof kinds (the attention and the IR dissection) and left the generative one a `CourtFraud` —
+/// which kind 3 reads as the replayed execution proven false against every full-mask `Valid` signer,
+/// though a dissection's bottom proves the producer's own disclosure false (ADR-0152 §4-ter F3,
+/// decision (B)). The list is one predicate now, `is_dissection_bottom_v1`; this pins that it holds the
+/// generative bottom and not the whole cone close it is built from, and the reason the arm derives from it.
+#[test]
+fn a_generative_dissections_bottom_voids_a_claim_as_a_dissections_verdict() {
+    use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2 as Proof;
+    use kaspa_consensus_core::palw_state_v2::{PalwVoidReasonV2, palw_court_verdict_void_reason_v1};
+    let f = fixture();
+    let (_job, e, binding, index) = execute(&f);
+    let close = cone(&f, &e, &binding, index);
+    let bottom = Proof::GenDissection { bottom: Box::new(close.clone()) };
+    let whole = Proof::GenCone { close: Box::new(close) };
+    assert!(bottom.is_dissection_bottom_v1(), "tag 12 is a dissection's bottom");
+    assert!(!whole.is_dissection_bottom_v1(), "tag 10 is a verdict on committed data");
+    assert_eq!(
+        palw_court_verdict_void_reason_v1(true, bottom.is_dissection_bottom_v1()),
+        PalwVoidReasonV2::CourtHeldVerdict,
+        "past palw_offence_attribution the generative bottom voids as CourtHeldVerdict"
+    );
+    assert_eq!(
+        palw_court_verdict_void_reason_v1(true, whole.is_dissection_bottom_v1()),
+        PalwVoidReasonV2::CourtFraud,
+        "a whole cone close stays CourtFraud"
+    );
+    assert_eq!(
+        palw_court_verdict_void_reason_v1(false, bottom.is_dissection_bottom_v1()),
+        PalwVoidReasonV2::CourtFraud,
+        "below the fence every verdict is CourtFraud, as it was"
+    );
+}

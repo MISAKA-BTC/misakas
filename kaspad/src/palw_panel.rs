@@ -7677,6 +7677,12 @@ impl PalwPanelService {
                 .await;
             }
 
+            // **RFC-0004 (A10): the evaluation court's pass.** An evaluation claim a challenger's audit disputed was
+            // built its accusation off the improvement loop; it is signed and queued here, on the court's own carrier
+            // path, as the IR one-move accusation it is (`TirShardCourtAccused`, tag 62). Nothing is ready on any node
+            // that is no challenger, and nothing at all below `palw_improvement_v1`.
+            self.improve_court_pass_v1(&mut improve, bond_key, current_daa, &mut court_pending, &mut court_due);
+
             // --- the court's half: answer the disputes this bond is a party to ---
             //
             // Nothing in this tree used to construct a `CourtDisclosed`. A challenger could open a
@@ -12506,6 +12512,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         PalwConsensusObjectV2::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
+        PalwConsensusObjectV2::CourtEvalRootClaimed { .. } => "CourtEvalRootClaimed",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

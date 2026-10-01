@@ -168,6 +168,42 @@ fn a_scheduled_fence_moves_the_ruleset_and_the_schedule_and_never_the_identity()
     assert!(!bundle.state.improve_active_at(AT - 1) && bundle.state.improve_active_at(AT));
 }
 
+/// **`Λ` is the fast honest path** (spec 17 §17.4.3 rows 19-20, corrected 2026-10-01): the anchor slot, a licence allowance of
+/// 30 DAA (capped by the receipt window) and the challenge window in force — never the receipt window (a deadline) nor the court
+/// window. On testnet-12 and its drills (the RC windows: anchor 20, receipt 600, challenge 1,200, the 120-DAA short challenge
+/// window in force from genesis) it is 170 DAA, not the 1,820 the deadlines made it; where the short window is not in force the
+/// 1,200-DAA window is, and a window that arms later shortens it from then on and never before. The challenge floor holds a
+/// shorter window (devnet's 100) to 120.
+#[test]
+fn the_claim_lifecycle_bound_is_the_fast_honest_path_and_not_the_deadlines() {
+    use kaspa_consensus_core::palw_improve_v1::{
+        PALW_IMPROVE_LICENCE_ALLOWANCE_DAA_V1, palw_improvement_claim_lifecycle_base_v1, palw_improvement_claim_lifecycle_v1,
+    };
+    let armed = t12_armed(ForkActivation::new(AT));
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else { panic!("V2") };
+    let state = &bundle.state;
+    assert_eq!((bundle.panel.anchor_delay(), state.window_receipt(), state.window_challenge()), (20, 600, 1_200), "the RC windows");
+    assert_eq!(PALW_IMPROVE_LICENCE_ALLOWANCE_DAA_V1, 30);
+    assert_eq!(palw_improvement_claim_lifecycle_base_v1(bundle), 20 + 30, "the anchor slot and the licence allowance");
+    assert_eq!(state.improve_lifecycle_base_daa(), Some(50), "the mirror");
+    assert_eq!(state.window_challenge_at(0), 120, "testnet-12 runs the short challenge window from genesis");
+    assert_eq!(state.improve_lifecycle_at(AT), Some(170), "Λ = 20 + 30 + 120 on testnet-12 and its drills");
+    // Where the short window is not in force the 1,200-DAA window is.
+    let long = state.clone().with_short_challenge_window_from_daa(None);
+    assert_eq!(long.improve_lifecycle_at(AT), Some(20 + 30 + 1_200));
+    // The window in force at the DAA: a fence that arms later shortens Λ then and never before.
+    let later = state.clone().with_short_challenge_window_from_daa(Some(500));
+    assert_eq!((later.improve_lifecycle_at(499), later.improve_lifecycle_at(500)), (Some(1_250), Some(170)));
+    // The challenge floor: devnet's 100-DAA window counts as 120 (anchor 4, receipt 40 gives the allowance 30).
+    assert_eq!(palw_improvement_claim_lifecycle_v1(4 + 30, 100), 154);
+    // Not armed, not asked.
+    let dormant = t12_with_gen();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(dormant) = &dormant.palw_consensus_mode else {
+        panic!("V2")
+    };
+    assert_eq!(dormant.state.improve_lifecycle_at(AT), None);
+}
+
 #[test]
 fn never_is_absence_for_the_identity_and_genesis_is_a_rule() {
     let base = t12_with_gen();
@@ -204,6 +240,7 @@ fn the_value_is_fingerprinted_field_by_field() {
         ("max_policy_bytes", Box::new(|f| f.ceilings.max_policy_bytes -= 1)),
         ("max_open_epochs", Box::new(|f| f.ceilings.max_open_epochs -= 1)),
         ("max_live_results", Box::new(|f| f.ceilings.max_live_results -= 1)),
+        ("max_eval_seat_permille", Box::new(|f| f.ceilings.max_eval_seat_permille -= 1)),
     ];
     let mut seen = std::collections::BTreeSet::new();
     seen.insert(a.consensus_params_id().to_string());
@@ -250,6 +287,11 @@ fn validate_refuses_every_value_this_build_cannot_run() {
         "past 2^40 positions"
     );
     assert!(with(&|f| f.ceilings.max_eval_budget_permille = 1_001).is_err(), "past the whole capacity");
+    assert!(with(&|f| f.ceilings.max_eval_seat_permille = 1_001).is_err(), "a panel's share past the whole fee");
+    assert!(
+        with(&|f| f.ceilings.max_eval_seat_permille = 0).is_ok(),
+        "no seat share is a legal ceiling: the policy then pays its seats nothing"
+    );
     assert!(with(&|f| f.ceilings.max_governed_lines = caps.max_governed_lines + 1).is_err(), "past 2^16 lines");
     assert!(with(&|f| f.ceilings.max_policy_bytes = caps.max_policy_bytes + 1).is_err(), "past 64 KiB policies");
     assert!(with(&|f| f.ceilings = caps).is_ok(), "the format's caps themselves are legal");
@@ -283,7 +325,11 @@ fn validate_refuses_every_value_this_build_cannot_run() {
     let mut same_height = ok.clone();
     same_height.palw_improvement_v1 = Some(PalwImprovementFenceV1::drill_v1(ForkActivation::new(GEN_AT)));
     same_height.sync_palw_improvement_v1();
-    assert!(same_height.validate_palw_improvement_v1().is_ok(), "at the generative fence's own height");
+    // (the decode rules, a prerequisite since ADR-0082 D10/D11, must be in force at or below it too)
+    same_height.palw_fp_decode_rules = Some(ForkActivation::new(GEN_AT));
+    same_height.sync_palw_fp_decode_rules();
+    let at_gen = same_height.validate_palw_improvement_v1();
+    assert!(at_gen.is_ok(), "at the generative fence's own height: {at_gen:?}");
     // The second IR fence (every evaluation pipeline sized under H7; no verdict flips mid-epoch).
     let mut no_fence2 = ok.clone();
     no_fence2.palw_tir_fence2 = None;
