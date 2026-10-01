@@ -11,6 +11,13 @@
 //! `resolve` serves a chain-named `(class_id, artifact_root)` from a held artifact that derives
 //! exactly that pair, through `misaka_palw_tir_exec`'s generic backend; any other pair is not this
 //! lineage's.
+//!
+//! **Residency (ADR-0112 for IR classes).** `load` takes the node's policy
+//! (`--palw-class-resident-bytes`, or the default measured against the host): a budget at or above
+//! the class's floor holds it within the budget — the pinned set read once, routed rows (a mixture's
+//! experts) held under what the budget leaves, gathered rows (embeddings, n-gram tables) read per
+//! row, nothing mapped — and a default under the floor leaves it on the page cache, mapped as
+//! before. [`tir_residency_stats_of`] is a holding's numbers, for the node's load and draw lines.
 
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -21,7 +28,8 @@ use kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1;
 use kaspa_hashes::Hash64;
 use misaka_palw_tir_exec::node::TirArtifactV1;
 
-use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1};
+use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1, PalwWeightResidencyV1};
+use misaka_palw_tir_exec::node::{TirResidencyDeclinedV1, TirResidencyPolicyV1, TirResidencyStatsV1};
 
 /// The IR backend and its capture, for the node's IR-only verbs (the IR court's close proofs).
 pub use misaka_palw_tir_exec::node::{
@@ -33,6 +41,65 @@ pub use misaka_palw_tir_exec::node::{
 
 /// The lineage's id.
 pub const TIR_LINEAGE_ID_V1: &str = "palw-tir-v1";
+
+/// **The node's residency policy, for an IR class** — the same four answers (ADR-0112 Decision 2).
+pub fn tir_residency_policy_v1(residency: PalwWeightResidencyV1) -> TirResidencyPolicyV1 {
+    match residency {
+        PalwWeightResidencyV1::PageCache => TirResidencyPolicyV1::PageCache,
+        PalwWeightResidencyV1::Bytes(b) => TirResidencyPolicyV1::Bytes(b),
+        PalwWeightResidencyV1::FifthOfTheWeights => TirResidencyPolicyV1::FifthOfTheWeights,
+        PalwWeightResidencyV1::FifthWithin(spare) => TirResidencyPolicyV1::FifthWithin(spare),
+    }
+}
+
+/// The IR entry a holding of this lineage carries, if it is one.
+pub fn tir_entry_of(holding: &PalwLoadedArtifactV1) -> Option<PalwTirClassEntryV1> {
+    if holding.lineage_id != TIR_LINEAGE_ID_V1 {
+        return None;
+    }
+    holding.payload().downcast_ref::<PalwTirClassEntryV1>().cloned()
+}
+
+/// **An IR holding's residency numbers** (ADR-0112 Decision 8): `None` for another lineage's holding
+/// and for one the page cache decides. A composite candidate reports its parent's store, which it
+/// shares.
+pub fn tir_residency_stats_of(holding: &PalwLoadedArtifactV1) -> Option<TirResidencyStatsV1> {
+    tir_entry_of(holding)?.artifact.residency_stats()
+}
+
+/// **Why an IR holding has no residency although the default asked for one** (ADR-0112 Decision 2,
+/// amended): the default's bytes under the class's floor.
+pub fn tir_residency_declined_of(holding: &PalwLoadedArtifactV1) -> Option<TirResidencyDeclinedV1> {
+    tir_entry_of(holding)?.artifact.residency_declined()
+}
+
+/// **The bytes an IR holding pins for itself beside a shared store** — a composite candidate's
+/// adapter and private pins; zero for a single artifact.
+pub fn tir_own_pinned_bytes_of(holding: &PalwLoadedArtifactV1) -> Option<u64> {
+    tir_entry_of(holding).map(|e| e.artifact.own_pinned_bytes())
+}
+
+/// **The residency numbers of an IR holding that owns its store** — a single artifact under a
+/// budget; `None` for a composite candidate, whose store is its parent's and is reported there (a
+/// load line, a draw's storage line and a default's spending count each store once).
+pub fn tir_residency_owner_stats_of(holding: &PalwLoadedArtifactV1) -> Option<TirResidencyStatsV1> {
+    let entry = tir_entry_of(holding)?;
+    if entry.artifact.composite_ref().is_some() {
+        return None;
+    }
+    entry.artifact.residency_stats()
+}
+
+/// **What an IR holding's load took of the bytes a default budget measured** (ADR-0112 Decision 2,
+/// amended: a default measured once is spent across the files one load holds): its store's budget
+/// for an artifact that owns one, its own pins for a composite candidate beside its parent's store.
+pub fn tir_residency_spent_of(holding: &PalwLoadedArtifactV1) -> Option<u64> {
+    let entry = tir_entry_of(holding)?;
+    match entry.artifact.composite_ref() {
+        Some(_) => Some(entry.artifact.own_pinned_bytes()),
+        None => entry.artifact.residency_stats().map(|s| s.budget_bytes),
+    }
+}
 
 /// **The IR lineage.** Holds the classes of the artifacts it loaded.
 #[derive(Default)]
@@ -54,9 +121,16 @@ impl TirLineageV1 {
         Self::default()
     }
 
-    /// Open one PALWTIR1 file into the entry of the class it declares.
+    /// Open one PALWTIR1 file into the entry of the class it declares (the page cache decides).
     pub fn open_entry(path: &Path) -> Result<PalwTirClassEntryV1, String> {
-        let artifact = Arc::new(TirArtifactV1::open(path)?);
+        Self::open_entry_with(path, TirResidencyPolicyV1::PageCache)
+    }
+
+    /// [`Self::open_entry`] under a residency policy (ADR-0112): within a budget at or above the
+    /// class's floor, read through the file descriptor and never mapped; a stated budget below the
+    /// floor is refused by name; a default below it maps the class and says why.
+    pub fn open_entry_with(path: &Path, policy: TirResidencyPolicyV1) -> Result<PalwTirClassEntryV1, String> {
+        let artifact = Arc::new(TirArtifactV1::open_with_residency(path, policy)?);
         let class = artifact.class().map_err(|e| {
             format!("{}: {e} — an IR class needs a declared layout (`palw-class declare-layout` writes one)", path.display())
         })?;
@@ -117,8 +191,9 @@ impl TirLineageV1 {
                 parent.artifact_root
             ));
         }
-        let parent_path = parent.path.as_deref().ok_or_else(|| format!("{}: the held parent has no file", path.display()))?;
-        let artifact = Arc::new(TirArtifactV1::open_composite(parent_path, path, &r, Some(parent.artifact_root))?);
+        // Over the held parent's own artifact: its residency's store when it has one (one store per
+        // parent root, shared by every candidate), its file mapped again when the page cache decides.
+        let artifact = Arc::new(TirArtifactV1::open_composite_over(&parent.artifact, path, &r)?);
         let class = artifact.class().map_err(|e| format!("{}: {e}", path.display()))?;
         let canonical_job = palw_tir_attempt_canonical_v1(&class).ok_or_else(|| {
             format!("{}: a context of {} positions is too narrow for a canonical job", path.display(), class.layout.max_context)
@@ -142,8 +217,29 @@ impl TirLineageV1 {
     }
 
     fn loaded_of(entry: PalwTirClassEntryV1, path: &Path) -> PalwLoadedArtifactV1 {
+        // ADR-0112: what of the file this process holds, said where the file is named.
+        let gib = |bytes: u64| bytes as f64 / (1u64 << 30) as f64;
+        let residency = match (entry.artifact.residency_stats(), entry.artifact.residency_declined()) {
+            (Some(s), _) => format!(
+                "; resident within {:.2} GiB ({:.2} GiB pinned, {:.2} GiB for routed rows — about {:.1} tokens of them){}",
+                gib(s.budget_bytes),
+                gib(s.pinned_bytes),
+                gib(s.routed_capacity_bytes),
+                s.tokens_held(),
+                match entry.artifact.own_pinned_bytes() {
+                    0 => String::new(),
+                    own => format!(", {:.3} GiB pinned for this candidate beside its parent's store", gib(own)),
+                }
+            ),
+            (None, Some(d)) => format!(
+                "; residency left to the page cache: the default came to {:.2} GiB, under the class's floor of {:.2} GiB",
+                gib(d.budget_bytes),
+                gib(d.floor_bytes)
+            ),
+            (None, None) => "; residency left to the page cache".to_string(),
+        };
         let summary = format!(
-            "IR class {} ({}): {} params, {} blocks, max_context {}, artifact root {}",
+            "IR class {} ({}): {} params, {} blocks, max_context {}, artifact root {}{residency}",
             entry.class_id(),
             entry.model_id,
             entry.artifact.plan().program.params.len(),
@@ -190,12 +286,13 @@ impl PalwModelLineageV1 for TirLineageV1 {
         head == misaka_palw_tir_artifact::PALW_TIR_CONTAINER_MAGIC_V1 || head == misaka_palw_tir_artifact::PALW_TIR_SECTION_MAGIC_V1
     }
 
-    /// Mapped, checked, rooted — and remembered, so the class is one of this lineage's. A section is
-    /// opened over its held parent ([`Self::open_composite_entry`]).
-    fn load(&self, path: &Path, _residency: crate::lineage::PalwWeightResidencyV1) -> Result<PalwLoadedArtifactV1, String> {
+    /// Opened under the node's residency, checked, rooted — and remembered, so the class is one of
+    /// this lineage's. A section is opened over its held parent ([`Self::open_composite_entry`]),
+    /// sharing the parent's residency when it has one.
+    fn load(&self, path: &Path, residency: PalwWeightResidencyV1) -> Result<PalwLoadedArtifactV1, String> {
         let entry = match misaka_palw_tir_artifact::peek_section_header_v1(path) {
             Ok(_) => self.open_composite_entry(path)?,
-            Err(_) => Self::open_entry(path)?,
+            Err(_) => Self::open_entry_with(path, tir_residency_policy_v1(residency))?,
         };
         {
             let mut held = self.held.write().expect("the held list is never poisoned");
