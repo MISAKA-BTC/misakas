@@ -201,7 +201,7 @@ pub struct AttnSpec {
     /// `q = rope(q); q = RMSNorm_head(q)`); Qwen3's order, the default, is the reverse. Rotation preserves a head's
     /// L2 norm but a per-channel gain does not commute with it, so the two orders are different functions. The
     /// history keeps the normed, rotated key either way.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub qk_norm_after_rope: bool,
     /// `clamp(q|k|v, −c, c)` after projection (OLMo `clip_qkv`, MPT).
     #[serde(default)]
@@ -866,6 +866,10 @@ pub struct HfStorage {
 
 fn one_shard() -> usize {
     1
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl HfStorage {

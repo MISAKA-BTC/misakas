@@ -759,7 +759,7 @@ mod tests {
             .filter(|p| p.join("config.json").exists())
             .collect();
         dirs.sort();
-        assert_eq!(dirs.len(), 68, "tir-lower's HF tiny fixtures");
+        assert_eq!(dirs.len(), 84, "tir-lower's HF tiny fixtures (the 16 Qwen4-Exp ones included)");
         for d in dirs {
             let text = std::fs::read_to_string(d.join("config.json")).expect("config");
             let r = check_ir_config_v1(&params, &text, false);
@@ -776,8 +776,12 @@ mod tests {
         let verdict = |f: &str| check_ir_config_v1(&params, &read(&format!("tests/configs/real/{f}")), false).verdict;
         assert!(verdict("qwen2.5-1.5b-instruct.json").is_admissible());
         assert!(verdict("llama-3.1-8b.json").is_admissible());
+        // An encoder-decoder is two programs (ENCDEC_FROM_SPEC_V1): the encoder over the padded source and the decoder's
+        // text stage, each admitted on its own — it is no longer refused for being one.
+        let t5 = check_ir_config_v1(&params, &read("tests/configs/encdec/t5-small.json"), false);
+        assert!(!matches!(t5.verdict, ArchVerdictV1::NotLowerable(_)), "{}", t5.verdict);
+        assert!(t5.unverified.iter().any(|u| u.starts_with("stage 0 (encoder")) && t5.unverified.iter().any(|u| u.starts_with("stage 1 (decoder")), "{:?}", t5.unverified);
         // Encoder-only models are not decoders.
-        assert!(matches!(verdict("t5-small.json"), ArchVerdictV1::NotLowerable(_)));
         assert!(matches!(verdict("bert-base-uncased.json"), ArchVerdictV1::NotLowerable(_)));
         // 671B parameters at a 2^18-position history: past the provisional per-position MACs.
         assert!(matches!(verdict("deepseek-v3-bf16.json"), ArchVerdictV1::Exceeds { .. }), "{}", verdict("deepseek-v3-bf16.json"));
