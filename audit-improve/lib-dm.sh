@@ -35,6 +35,16 @@ VERDICT_DIR=$WORK_DIR/verdict
 # refuses the improvement fence unless palw_tir_v1, palw_tir_fence2, palw_gen_v1 and palw_kary_court are in force at or below it.
 FENCE_AT=${FENCE_AT:-6}; FENCE2_AT=${FENCE2_AT:-10}; FENCE3_AT=${FENCE3_AT:-14}; TIR_AT=${TIR_AT:-20}
 TIR2_AT=${TIR2_AT:-24}; GEN_AT=${GEN_AT:-28}; DECODE_AT=${DECODE_AT:-32}; IMPROVE_AT=${IMPROVE_AT:-40}
+# The int-11 combined chain's other fences (the flag set is NOT frozen until the integration order is given: a flag the build under test
+# does not list is reported by `dm.sh dry` and left out, never assumed). Heights, all distinct from each other and from the flag days:
+# gen and decode-rules stay below the improvement fence (validate_palw_v2: RFC-0004's fence needs tir, tir2, gen, kary court and the decode
+# rules at or below it, and it is pinned at DAA 40: line R's epoch 1 opens at the 255 boundary, so the head's first Final claim, ~252, must
+# be after it); the model court at 36; lane D's tensor-claim carriage (fp-v5) at 104 and held-chunk closes (tag 90) at 140; lane F's class
+# seating at 240 (F's SEAT slots S-2..S+55 = 238..295, before the first evaluation claims at 323); the capacity steps at 560 (rho 25) and 655 (rho 100) — they need the rho-10 flag day (--palw-drill-fence3-at, 14) below them.
+MODEL_COURT_AT=${MODEL_COURT_AT:-36}; FPV5_AT=${FPV5_AT:-104}; HELD_AT=${HELD_AT:-140}; SEAT_AT=${SEAT_AT:-240}
+LATE_AT=${LATE_AT:-103}           # lane D's DG-2: the embedding class is registered late, at this DAA (one below the fp-v5 fence)
+GEN_DIR=${GEN_DIR:-$WORK_DIR/gen} # lane D's Plan B class artifacts (drill-classes.json and the .class.palwtir2 files)
+CAP2_AT=${CAP2_AT:-560}; CAP3_AT=${CAP3_AT:-655}
 DECODE_FLAG=${DECODE_FLAG:-}     # e.g. --palw-drill-decode-at; empty = look for one in kaspad --help
 
 # The head: the tiny HF llama at 32 positions — D-F's small class (class eaabaff9…) — and the model ids of the candidates.
@@ -60,7 +70,10 @@ asset_of() {
 # Ports: the coordinator's range for this drill — disjoint from the D-F drill (55100+), lane D's (40100+) and public nodes.
 P2P_BASE=${P2P_BASE:-61100}; BORSH_BASE=${BORSH_BASE:-62100}; JSON_BASE=${JSON_BASE:-63100}
 EVM_BASE=${EVM_BASE:-64100}; GRPC_BASE=${GRPC_BASE:-60100}
-RAM_SCALE=${RAM_SCALE:-0.3}
+# LOWMEM=1: the ram-scale 0.25 variant (the Mac's memory while other lanes' nodes run). The replay share stays: the panel's capacity numbers the
+# capacity line measures are not to move with the memory profile. Measured RSS at 0.3 is ~2.1 GB a node; 0.25 is an estimate (~1.9 GB: the 1 GiB share does
+# not scale) until a node is measured — the driver's sampler writes $WORK_DIR/memory.tsv from the first tick and `dm.sh status` prints the first hour's figure.
+if [ "${LOWMEM:-0}" = 1 ]; then RAM_SCALE=${RAM_SCALE:-0.25}; else RAM_SCALE=${RAM_SCALE:-0.3}; fi
 SHARE_MIB=${SHARE_MIB:-1024}      # each node's replay share: the artifacts are tens of KiB each, the scratch is the cost
 
 # The node table:  name k seat role hb ir
@@ -70,6 +83,13 @@ SHARE_MIB=${SHARE_MIB:-1024}      # each node's replay share: the artifacts are 
 #         eval   an evaluation executor (--palw-improve-evaluate): runs the epoch's jobs and carries their claims
 #         evalw  an executor that also produces claims of the winner W (the usage of the line once W heads it: D-M4's second epoch)
 #         seat   a seat only;   old  the release before the fence, keyless, a relay peered to new0 (D-M5)
+#         liar   a SACRIFICIAL evaluator (D-M3: new7 lies a step leaf, new8 a first id): its bond is a post-genesis one (bonds 8 and 9 of the
+#                keyring, registered by the driver), and the drill's capacity package arms F-L from DAA 14, so one CourtFraud conviction (AG-2)
+#                voids the bond's live claims and freezes it for good — which is why it is not one of the seven seats. Started just-in-time
+#                (the `jit` mark, field 7: `up` does not start it; the driver starts it before T's window, it syncs from its peers, lies, is
+#                convicted and is stopped), so the steady state is seven nodes.
+#         reg    the registrar: one run per post-genesis bond (the liars' 8 and 9, lane D's 10..13): `kaspad --palw-register-bond` for the key
+#                and pay address the driver writes to its extra-args, which prints the bond outpoint and stops
 #   hb    1 = a heartbeat clock;  ir  1 = loads the head and the candidates' artifacts (a ready seat: t12 needs 5 + 2 of them)
 # Seven IR holders — the fewest t12's registry admits — and the old relay: eight nodes. Seat 7 has no node: it is the drills'
 # own bond (the lines it founds, the candidates it submits and registers, the setters and the material), so its carriers are
@@ -81,9 +101,12 @@ new3 3 2 seat 0 1
 new4 4 4 head 0 1
 new5 5 5 eval 0 1
 new6 6 6 evalw 0 1
-old 7 - old 0 0"
+new7 7 8 liar 0 1 jit
+new8 8 9 liar 0 1 jit
+reg 9 - reg 0 0 jit
+old 10 - old 0 0"
 
-# NO_OLD=1: no old relay (D-M5 is then not run) — eight nodes become seven.
+# NO_OLD=1: no old relay (D-M5 is then not run). The just-in-time nodes (liars, registrar) never run in the steady state: seven nodes + the relay.
 [ "${NO_OLD:-0}" = 1 ] && NODES=$(echo "$NODES" | grep -v '^old ')
 
 say() { printf '[improve-dm %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
@@ -95,7 +118,9 @@ p2p() { echo $((P2P_BASE + $(kof "$1"))); }
 borsh() { echo $((BORSH_BASE + $(kof "$1"))); }
 jport() { echo $((JSON_BASE + $(kof "$1"))); }
 all_nodes() { echo "$NODES" | awk '{print $1}'; }
-new_nodes() { echo "$NODES" | awk '$4!="old" {print $1}'; }
+new_nodes() { echo "$NODES" | awk '$4!="old" && $4!="reg" {print $1}'; }
+# The nodes that are up from the start (the ones a new node peers with): the just-in-time nodes are not.
+peer_nodes() { echo "$NODES" | awk '$4!="old" && $4!="reg" && $7!="jit" {print $1}'; }
 ir_holders() { echo "$NODES" | awk '$6==1 {print $1}'; }
 running() { local d=$WORK_DIR/$1; [ -f "$d/kaspad.pid" ] && ps -p "$(cat "$d/kaspad.pid")" -o command= 2>/dev/null | grep -q -- "--appdir=$d/app"; }
 
@@ -121,6 +146,12 @@ tir2|--palw-drill-tir2-at|$TIR2_AT
 gen|--palw-drill-gen-at|$GEN_AT
 decode|${DECODE_FLAG:-@detect}|$DECODE_AT
 improve|--palw-drill-improve-at|$IMPROVE_AT
+model_court|--palw-drill-model-court-at|$MODEL_COURT_AT
+fp_v5|--palw-drill-fp-v5-at|$FPV5_AT
+held_chunks|--palw-drill-held-chunks-at|$HELD_AT
+class_seating|--palw-drill-class-seating-at|$SEAT_AT
+capacity_step2|--palw-drill-capacity-step2-at|$CAP2_AT
+capacity_step3|--palw-drill-capacity-step3-at|$CAP3_AT
 EOF
 }
 # A decode-rules flag, if the build has one: --palw-drill-<…decode…>-at.
@@ -159,14 +190,23 @@ node_args() {
         # The release before the fence: keyless, peered to new0 only, the same salt and every flag day it lists. Past the first
         # fence it lacks its fork id is not the new nodes' (D-M5).
         a+=("--addpeer=127.0.0.1:$(p2p new0)")
+        # The release before the fence: the same memory profile as the others where it has the flag (LOWMEM's point is every node's footprint).
+        grep -q -- "--ram-scale" <<<"$(bin_help "$bin")" && a+=("--ram-scale=$RAM_SCALE")
         printf '%s\n' "${a[@]}" "$@"
         return
     fi
     a+=("--ram-scale=$RAM_SCALE" "--palw-host-memory-share=$(( $(cat "$d/share-mib" 2>/dev/null || echo "$SHARE_MIB") * 1048576 ))")
-    if [ "$seat" != - ]; then
+    if [ "$seat" != - ] && [ "$seat" -lt 8 ]; then
         a+=("--palw-producer-key=$KR/bond-$seat.seed"
             "--palw-producer-bond=$(manifest "m['seats'][$seat]['bond_outpoint']")"
             "--palw-fee-outpoint=$(manifest "m['seats'][$seat]['fee_float_outpoint']")")
+    elif [ "$seat" != - ]; then
+        # A post-genesis bond (the liars'): the driver's extra-bond step wrote its outpoint and a fee float to $WORK_DIR/liars/bond-<n>.json.
+        local bj=$WORK_DIR/liars/bond-$seat.json
+        [ -s "$bj" ] || die "bond $seat is not registered yet ($bj): the driver registers it first"
+        a+=("--palw-producer-key=$KR/bond-$seat.seed"
+            "--palw-producer-bond=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['bond_outpoint'])" "$bj")"
+            "--palw-fee-outpoint=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['fee_outpoint'])" "$bj")")
     fi
     if [ "$ir" = 1 ]; then
         # The head first (a composite section opens over it), then the full-weight candidates every seat must hold to be a ready seat
@@ -177,15 +217,20 @@ node_args() {
         [ -s "$MODEL_DIR/win.class.palwtir" ] && a+=("--palw-class-artifact=$MODEL_DIR/win.class.palwtir")
         [ -s "$MODEL_DIR/lose.class.palwtir" ] && a+=("--palw-class-artifact=$MODEL_DIR/lose.class.palwtir")
         a+=("--palw-improve-artifact-dir=$MODEL_DIR/drop")
+        # Lane D's RFC-0003 Plan B classes (toy-image, toy-embed, wide-embed; `gen_drill_classes --ignored` writes them to $GEN_DIR): every IR holder loads all of
+        # them from the start, the wide class included, as it loads the head before the head is registered (a class the chain does not list yet is not an error).
+        local g; for g in "$GEN_DIR"/*.class.palwtir2; do [ -s "$g" ] && a+=("--palw-class-artifact=$g"); done
     fi
     case $role in
         floor) a+=(--palw-produce) ;;
         head) a+=(--palw-produce "--palw-register-class=$HEAD_MODEL_ID" "--palw-producer-class=$(model_id head)") ;;
-        eval) a+=(--palw-improve-evaluate) ;;
-        evalw) a+=(--palw-improve-evaluate --palw-produce "--palw-producer-class=$(model_id "$(asset_of win)")") ;;
+        eval|liar) a+=(--palw-improve-evaluate) ;;
+        # evalw produces the FULL-WEIGHT winner's claims: the usage of line R once `win` heads it (D-M4's second epoch). W1's composite winner
+        # has no second epoch any more, so nothing produces winc.
+        evalw) a+=(--palw-improve-evaluate --palw-produce "--palw-producer-class=$(model_id win)") ;;
     esac
     [ "$hb" = 1 ] && a+=("--palw-heartbeat-miner-address=$(manifest "m['heartbeat'][$k]['address']")" --enable-unsynced-mining)
-    local m; for m in $(new_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done
+    local m; for m in $(peer_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done
     # Per-node additions (a tamper flag, a challenger), one per line.
     local extra="$d/extra-args"; if [ -s "$extra" ]; then while read -r x; do [ -n "$x" ] && a+=("$x"); done < "$extra"; fi
     printf '%s\n' "${a[@]}" "$@"
@@ -199,6 +244,6 @@ tip() { python3 "$A/rpc.py" call --port "$(jport "${1:-new0}")" getBlockDagInfo 
 # The environment the Python driver reads (everything it needs to find a node, a key, a tool or a model file).
 export_env() {
     export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TOOLS_BIN VENV_PY KR UHOME MODEL_DIR VERDICT_DIR CAND_FORM NODES
-    export FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT
+    export FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
     export P2P_BASE BORSH_BASE JSON_BASE EVM_BASE GRPC_BASE
 }

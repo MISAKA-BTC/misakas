@@ -4,10 +4,14 @@
 #         evaluation claims → the keys' reveal → scoring → promotion over the sign test → the rewards, and their vesting;
 #   D-M2  a candidate that must not win (it breaks what the parent passes; and a winner held to one setter's half of the draw)
 #         → NoChange, every bond refunded;
-#   D-M3  the court battery on evaluation claims: two executors each commit one self-consistent lie on line T (a moved step leaf,
-#         a moved first id), a challenger replays every claim, locates each lie from the accused's capture and files the court
-#         proof; the lies are convicted (claim voided, bond slashed) and the honest claims survive — runs once the build under
-#         test carries the evaluation court (spec 17 court proofs 13-15), else the verdict stays INCOMPLETE at "not convicted";
+#   D-M3  the court battery on evaluation claims: two SACRIFICIAL executors (new7, new8: post-genesis bonds, nodes started just-in-time)
+#         each commit one self-consistent lie on line T (a moved step leaf, a moved first id), a challenger replays every claim, locates
+#         each lie from the accused's capture and files the court proof — the IR one-move accusation (TirShardCourtAccused, tag 62)
+#         carrying EvalCone (spec 17 court proof 13) or EvalDecodeToken (14); the lies are convicted (claim voided, bond slashed, its job
+#         freed, no score recorded), and AG-2 (aggregate liability) voids the convicted bond's other live claims and freezes it; the
+#         honest claims of every other bond survive. A leaf whose cone reduces over the history is only NAMED (the held regime tries none in one move:
+#         the chain opens a dissection there, and the accused's silence is the clock's to convict — the drill's lies sit on leaves
+#         that are not dissected, and the verdict stays INCOMPLETE at "not convicted" if one is);
 #   D-M4  rollback: by the owner within rollback_epochs (W2), and by proof — the next epoch's regression check showing the
 #         predecessor beats the promoted head (W1's second epoch);
 #   D-M5  the fence crossing on the shipping binary: an improvement object below the fence dropped by name (new) / skipped (old),
@@ -17,7 +21,7 @@
 #
 #   bash audit-improve/dm.sh <command> --bin-dir <release dir>       (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
 #     OLD_KASPAD_BIN=<the release before the fence>  [WORK_DIR=~/.misaka-palw-improve-drill]
-#   commands: dry | plan | model | composites | keys | up | status | verdicts | once | selftest | down
+#   commands: dry | plan | model | composites | keys | up | status | verdicts | once | selftest | down | gen <dgN…> | seat <script args…>
 #
 #   dry       preflight (binaries, flags, tools, model files, ports, memory, disk, another drill) and the plan with every node's
 #             argv (salt redacted, a throwaway keyring) — and every object the drill builds, built offline with a throwaway key
@@ -33,6 +37,8 @@
 #   status    nodes, DAA, the verdicts so far
 #   verdicts  every drill's verdict file
 #   down      SIGINT every node (never SIGKILL), stop the driver
+#   gen       lane D's RFC-0003 scenarios on this chain (audit-gen/dg.sh, sourced over this harness's lib: `dm.sh gen dg1`…), run by hand or by the plan's clock
+#   seat      lane F's seating scenarios (SEAT_SCRIPT, default audit-seat/ds.sh), likewise
 set -euo pipefail
 A=$(cd "$(dirname "$0")" && pwd)
 cmd=${1:-dry}
@@ -56,8 +62,8 @@ note() { echo "  note $*"; }
 # the plan
 # ---------------------------------------------------------------------------------------------------------------------
 plan() {
-    python3 - "$A/drill.json" "$FENCE_AT" "$FENCE2_AT" "$FENCE3_AT" "$TIR_AT" "$TIR2_AT" "$GEN_AT" "$DECODE_AT" "$IMPROVE_AT" "$CAND_FORM" <<'PY'
-import json, math, sys
+    FENCE_LIST="$(fence_rows | awk -F'|' '{printf "%s@%s ", $1, $3}')" python3 - "$A/drill.json" "$FENCE_AT" "$FENCE2_AT" "$FENCE3_AT" "$TIR_AT" "$TIR2_AT" "$GEN_AT" "$DECODE_AT" "$IMPROVE_AT" "$CAND_FORM" <<'PY'
+import json, math, os, sys
 p = json.load(open(sys.argv[1])); f = list(map(int, sys.argv[2:10])); cand_form = sys.argv[10]
 base = p["policy"]["windows"]
 def form_of(line): return "full" if cand_form == "full" else p["lines"][line].get("form", "composite")
@@ -75,6 +81,7 @@ H = lambda daa: f"{daa / 27.7:5.1f} h"
 C = {n: clock(n) for n in p["lines"]}
 print(f"== plan (one chain; ~133 s per DAA = 27.7 DAA/h, measured on D-F's chain)")
 print(f"  fences  flag days {f[0]}/{f[1]}/{f[2]}, IR {f[3]}, IR-2 {f[4]}, generative {f[5]}, decode rules {f[6]} (if the build has the flag), improvement {f[7]}")
+print(f"          every row (a flag the build lacks is left out and reported): {os.environ.get('FENCE_LIST', '').strip()}")
 print( "  lines   " + ", ".join(f"{n} ({form_of(n)})" for n in p["lines"]) + "  (CAND_FORM=" + cand_form + ")")
 print( "          W1 is H's founding line (owner seat 4); W2, L and T are founded by seat 7 on H. A composite line holds its candidates as parent + adapter section and has the long")
 print( "          Submission window; the full-weight lines are the extra ones, with the short windows. Every line has its own policy, so its own grid.")
@@ -84,11 +91,11 @@ for n, c in C.items():
 print( "          the court margin is the claims' time to Final: a claim is licensed in a few tens of DAA and Final 120 DAA after its licence")
 print( "          (the short challenge window), ~150-170 DAA from the claim; a shorter margin leaves the last claims missing, which count for the incumbent")
 print( "  who     seat 7 = the drills' own bond (no node): setter, candidates, registrant, owner of W2, L and T; seat 3 a second setter and the dataset contributor;")
-print( "          new4 registers and produces H; new5 and new6 evaluate; new6 also produces W (the usage of W1 once W heads it); the old relay peers new0")
-print( "  D-M3    on line T new5 commits a moved step leaf on a CANDIDATE's evaluation (a composite's cone reads params under the two sub-roots) and new6 a moved first id on")
+print( "          new4 registers and produces H; new5 and new6 evaluate (honestly: the liars are the just-in-time new7 and new8); new6 also produces `win` (R's usage once `win` heads it); the old relay peers new0 until D-M5 is done")
+print( "  D-M3    on line T the sacrificial liar nodes (post-genesis bonds 8 and 9, started just before T's window, stopped after the convictions): new7 commits a moved step leaf on a CANDIDATE's evaluation (a composite's cone reads params under the two sub-roots) and new8 a moved first id on")
 print( "          the PARENT's (--palw-drill-tamper-eval, drill chains only; each lies on one job at a time until one lie lands, so the two never race for a job); new1 (--palw-challenge) replays")
-print( "          every claim, locates each lie from the shared capture dir (a stand-in for the pipeline-claim data-availability units) and files the evaluation court's proof:")
-print( "          the claims void, the bonds are slashed")
+print( "          every claim, locates each lie from the shared capture dir (a stand-in for the pipeline-claim data-availability units) and files the evaluation court's proof")
+print( "          (TirShardCourtAccused carrying EvalCone / EvalDecodeToken): the claims void, the bonds are slashed, the jobs are freed and no score is recorded")
 first_grid = min(c["w"]["grid"] for c in C.values())
 print(f"  DAA     {f[3]:>5}  IR fence: new4 registers H;  seat 7 registers the candidate classes the lines need (composites winc/losec over H; the full-weight win/lose)")
 print(f"          {f[7]:>5}  improvement fence; seat 7 founds W2, L and T; the four policies (opt-in); the material (a dataset, a hard case)")
@@ -109,10 +116,18 @@ for n, c in C.items():
 print( "          (the driver logs each class's admission-audit slot at registration)")
 l = C["L"]; nb = (l["dec"] // l["w"]["grid"] + 1) * l["w"]["grid"]
 print(f"  {nb:>9}  L's epoch 2 (H's own claims keep its usage up): D-M6's hold-out flood in its HoldOut (~{nb + l['w']['w_collect'] + l['w']['w_submit'] + 1}), {H(nb + l['w']['w_collect'] + l['w']['w_submit'])}")
-w1 = C["W1"]; g1 = w1["w"]["grid"]; open2 = math.ceil((w1["dec"] + 190) / g1) * g1
-dec2 = open2 + w1["w"]["w_collect"] + w1["w"]["w_submit"] + w1["w"]["w_holdout"] + w1["w"]["w_eval"] + 170
-print(f"  {open2:>9}  W1's epoch 2 (the regression check; `Previous` = H vs the promoted `win` on items W regresses) opens at the first boundary after W's own claims are Final")
-print(f"  ~{dec2:>8}  it is decided  {H(dec2)}: the rollback by proof — the run's end; the grants' first vesting unit is due ~{w1['dec'] + w1['le']} ({H(w1['dec'] + w1['le'])})")
+r = C["R"]; gr = r["w"]["grid"]
+# R's head (the promoted `win`) is produced by new6 from the start, but the line's usage restarts at the promotion: the first Final claim
+# accepted after it is licensed (~20 DAA) and Final 120 DAA later, so epoch 2 opens at the first boundary at or after decision + ~190.
+open2 = math.ceil((r["dec"] + 190) / gr) * gr
+dec2 = open2 + r["w"]["w_collect"] + r["w"]["w_submit"] + r["w"]["w_holdout"] + r["w"]["w_eval"] + 170
+print(f"  {open2:>9}  R's epoch 2 (the regression check; `Previous` = H vs the promoted `win` on the reg pool's items, where W regresses) opens at the first boundary after W's own claims are Final")
+print(f"  ~{dec2:>8}  it is decided  {H(dec2)}: the rollback by proof (D-M4) — the D-M part's end; R's grants vest in 3 units of L_e {r['le']} from ~{r['dec']} (first due ~{r['dec'] + r['le']}, {H(r['dec'] + r['le'])}), the unvested remainder is forfeited by the rollback")
+print(f"  capacity  rho 25 at {os.environ.get('FENCE_LIST','').split('capacity_step2@')[-1].split()[0] if 'capacity_step2@' in os.environ.get('FENCE_LIST','') else '?'}, rho 100 at {os.environ.get('FENCE_LIST','').split('capacity_step3@')[-1].split()[0] if 'capacity_step3@' in os.environ.get('FENCE_LIST','') else '?'}: the load line (accepted/DAA, licensed/DAA, licence latency p50/p95, backlog trend, seat occupancy) runs 570-650 at rho 25 and 665-745 at rho 100, clear of the evaluation windows (R's epoch 2 claims from ~{open2 + 78})")
+print( "  lane D  RFC-0003 (dm.sh gen dg1..dg7b, audit-gen/dg.sh over this harness's lib; Plan B classes loaded on every IR holder from the start): DG-1 the crossings (gen 28, fp-v5 104, held chunks 140),")
+print( "          DG-2 the readiness gate (embedding class registered at 103), DG-3 honest claims to Final, DG-4 cone/output lies (bonds 10, 11), DG-5 the caps, DG-6/7a the held leaf challenge")
+print( "          (bond 12, with the kill/restart), DG-7b the lapse (bond 13): the liars' bonds are post-genesis, registered by the driver from DAA 44 (lane D's first, then the D-M3 liars' 8, 9)")
+print( "  lane F  class seating (dm.sh seat …, SEAT_SCRIPT): the fence at the seating height, its slots before the first evaluation claims; F's own script (not in this tree yet) registers its X2/X4 classes and packs from seat 7 early (DAA 40..60 in the layout agreed with F)")
 n_claims = sum(8 * (1 + len(p["lines"][n]["epochs"]["1"]["candidates"])) for n in p["lines"])
 print(f"  claims  8 items x (parent + candidates) per line: ~{n_claims} evaluation claims over the lines' 70-DAA windows, one carrier per node per block")
 PY
@@ -147,7 +162,8 @@ preflight() {
         H=$(bin_help "$KASPAD_BIN")
         local f
         for f in --palw-drill-write-keyring --palw-improve-evaluate --palw-improve-artifact-dir --palw-improve-capture-dir --palw-drill-tamper-eval \
-                 --palw-challenge --palw-class-artifact --palw-register-class --palw-producer-class --palw-drill-genesis-salt; do
+                 --palw-challenge --palw-class-artifact --palw-register-class --palw-producer-class --palw-drill-genesis-salt \
+                 --palw-register-bond --palw-bond-collateral --palw-producer-pay-address --palw-producer-bond --palw-fee-outpoint --ram-scale --palw-host-memory-share; do
             grep -q -- "$f" <<<"$H" && ok "kaspad lists $f" || bad "kaspad lacks $f"
         done
         local name flag at dflag; dflag=${DECODE_FLAG:-$(detect_decode_flag "$H")}
@@ -184,11 +200,19 @@ preflight() {
     fi
     if [ -x "${CLI_BIN:-/nonexistent}" ]; then
         local c
-        for c in "palw tir-registration" "palw submit-object" "palw line-found"; do
+        for c in "palw tir-registration" "palw submit-object" "palw line-found" "wallet send" "bond status"; do
             HOME=${TMPDIR:-/tmp} "$CLI_BIN" $c --help >/dev/null 2>&1 && ok "misaka $c" || bad "misaka lacks $c"
         done
         HOME=${TMPDIR:-/tmp} "$CLI_BIN" palw tir-registration --help 2>&1 | grep -q -- "--parent" && ok "misaka palw tir-registration --parent" || bad "tir-registration has no --parent"
     fi
+    local hk
+    for hk in "$WT/audit-gen/dg.sh" "$WT/audit-gen/dgwatch.py"; do
+        if [ -s "$hk" ]; then
+            case $hk in *.sh) bash -n "$hk" && ok "lane D's $(basename "$hk") parses" || bad "lane D's $(basename "$hk") does not parse" ;; *) python3 -m py_compile "$hk" 2>/dev/null && ok "lane D's $(basename "$hk") compiles" || bad "lane D's $(basename "$hk") does not compile" ;; esac
+        else note "lane D's $(basename "$hk") is not in this tree yet (integration brings it): \`dm.sh gen\` refuses until it is"; fi
+    done
+    if [ -s "${SEAT_SCRIPT:-$WT/audit-seat/ds.sh}" ]; then bash -n "${SEAT_SCRIPT:-$WT/audit-seat/ds.sh}" && ok "lane F's seating script parses" || bad "lane F's seating script does not parse"
+    else note "lane F's seating script (SEAT_SCRIPT, default audit-seat/ds.sh) is not in this tree yet: \`dm.sh seat\` refuses until it is"; fi
     local t
     [ -x "$TOOLS_BIN/palw-class" ] && ok "$TOOLS_BIN/palw-class" || bad "tool missing: $TOOLS_BIN/palw-class (TOOLS_BIN)"
     # palw-tir-fidelity is the model step's (offline, before the chain): a release without it is fine once the model is built.
@@ -248,11 +272,16 @@ flagset_check() {
     local s; s=$(openssl rand -hex 32)
     if out=$("$KASPAD_BIN" --testnet --netsuffix=12 --appdir="$T/app" "--palw-drill-genesis-salt=$s" "${fl[@]}" --palw-drill-write-keyring="$T/kr" 2>&1); then
         ok "the shipping kaspad accepts the fence set (${fl[*]})"
-        python3 - "$T/kr/manifest.json" <<'PY' 2>/dev/null && true
+        local mo; mo=$(python3 - "$T/kr/manifest.json" <<'PY' 2>&1 || true
 import json, sys
 m = json.load(open(sys.argv[1]))
 print("  ok   keyring manifest names the fences:", {k: v for k, v in m.items() if k.endswith("_at") or k == "extra_at"})
+b = {r["n"]: r for r in m.get("bonds", [])}
+miss = [n for n in (8, 9, 10, 11, 12, 13) if n not in b or not b[n].get("address")]
+print("  ok   keyring manifest has the post-genesis bonds' keys and addresses (the liars' 8 and 9, lane D's 10..13)" if not miss else f"  FAIL keyring manifest lacks bonds {miss}")
 PY
+)
+        echo "$mo"; grep -q "FAIL" <<<"$mo" && FAILED=1
     else
         bad "kaspad refuses the fence set: $(echo "$out" | tail -3 | sed -E 's/[0-9a-f]{64}/<64hex>/g' | tr '\n' ' ')"
     fi
@@ -324,22 +353,33 @@ dry() {
     preflight 0
     plan
     objects_check
-    echo "== per-node argv (redacted; a throwaway salt and keyring stub, nothing written under $WORK_DIR)"
+    echo "== per-node argv (redacted; a throwaway salt, keyring stub and work dir, nothing written under $WORK_DIR)"
     local T; T=$(mktemp -d)
     ( export SALT; SALT=$(openssl rand -hex 32)
-      KR=$T/keyring; mkdir -p "$KR"
-      python3 - "$KR/manifest.json" <<'PY'
+      KR=$T/keyring; mkdir -p "$KR" "$T/work/liars"; WORK_DIR=$T/work; GEN_DIR=$T/work/gen
+      python3 - "$KR/manifest.json" "$T/work/liars" <<'PY'
 import json, sys
 json.dump({"seats": [{"bond_outpoint": "<bond-%d>" % i, "fee_float_outpoint": "<fee-%d>" % i} for i in range(16)],
+           "bonds": [{"n": 8 + i, "address": "<bond-address-%d>" % (8 + i)} for i in range(8)],
            "heartbeat": [{"address": "<hb-address-%d>" % i} for i in range(16)], "genesis_hash": "<genesis>"}, open(sys.argv[1], "w"))
+for n in (8, 9, 10, 11, 12, 13):   # what the driver's extra-bond step writes
+    json.dump({"n": n, "bond_outpoint": "<bond-%d>" % n, "seed_file": "<seed-%d>" % n, "operator_id": "<op-%d>" % n, "fee_outpoint": "<fee-%d>" % n}, open(f"{sys.argv[2]}/bond-{n}.json", "w"))
 PY
       for n in $(all_nodes); do
           [ "$(field "$n" 4)" = old ] && [ -z "$OLD_KASPAD_BIN" ] && { echo "-- $n (old): OLD_KASPAD_BIN is unset"; continue; }
-          echo "-- $n ($(field "$n" 4)): $(node_args "$n" | sed 's/salt=[0-9a-f]*/salt=<SALT>/' \
-              | grep -E -- '--palw-drill|--listen=|--palw-produce$|--palw-producer-class|--palw-register-class|--palw-class-artifact|--palw-improve|heartbeat-miner|--appdir|--ram-scale|--addpeer' \
-              | sed -e "s#$MODEL_DIR#\$MODEL#g" -e "s#$WORK_DIR#\$WORK#g" | tr '\n' ' ')"
-      done )
+          echo "-- $n ($(field "$n" 4)$([ "$(field "$n" 7 2>/dev/null)" = jit ] && echo ', just-in-time')): $(node_args "$n" | sed 's/salt=[0-9a-f]*/salt=<SALT>/' \
+              | grep -E -- '--palw-drill|--listen=|--palw-produce$|--palw-producer-(class|bond|key)|--palw-register-class|--palw-class-artifact|--palw-improve|heartbeat-miner|--appdir|--ram-scale|--addpeer' \
+              | sed -e "s#$MODEL_DIR#\$MODEL#g" -e "s#$T/work#\$WORK#g" | tr '\n' ' ')"
+      done
+      echo "-- reg (one run per post-genesis bond, extra-args by the driver): --palw-register-bond --palw-producer-key=\$KR/bond-<n>.seed --palw-producer-pay-address=<manifest bonds[n-8].address> --palw-bond-collateral=<seat 0's collateral>" )
     rm -rf "$T"
+    echo "== nodes: $(new_nodes | while read -r n; do [ "$(field "$n" 7 2>/dev/null)" = jit ] || echo "$n"; done | wc -l | tr -d ' ') steady-state new nodes$([ "${NO_OLD:-0}" = 1 ] || echo " + the old relay until D-M5") ($(peer_nodes | wc -l | tr -d ' ') peers up from the start), the liars new7 and new8 and the registrar reg just-in-time (peak $(( $(peer_nodes | wc -l) + 2 )) new nodes at D-M3's window; one registrar run at a time from DAA $(python3 -c "import json; print(json.load(open('$A/drill.json'))['extra_bonds']['from_daa'])"))"
+    local rss; rss=$(python3 -c "
+scale = float('$RAM_SCALE'); share = $SHARE_MIB / 1024
+per = share + (2.1 - 1.0) * scale / 0.3     # measured 2.1 GiB a node at ram-scale 0.3 with the 1 GiB replay share; the share does not scale, the rest is taken as proportional: an estimate until a node is measured
+steady = len('$(peer_nodes | tr '\n' ' ')'.split())
+print(f'{per:.2f} GiB/node at ram-scale {scale} (estimate), steady {steady * per:.1f} GiB over {steady} nodes, peak {(steady + 2) * per:.1f} GiB with the two liars (+ the registrar ~{per:.1f} GiB while it runs)')")
+    echo "== memory: $rss"
     echo "== DRY RUN done (preflight failures: $FAILED)"
     [ "$FAILED" = 0 ]
 }
@@ -495,9 +535,9 @@ keys() {
 }
 
 # D-M3's per-node flags (node_args reads $WORK_DIR/<node>/extra-args): every new node shares one capture directory — the evidence transport of a
-# drill on one machine, where an executor retains the capture of each claim it carries and a challenger reads the accused's — new5 and new6 each
-# lie on line T until one lie lands (new5 a moved step leaf on a CANDIDATE's evaluation — a composite's cone reads parameters under the two
-# sub-roots; new6 a moved first id on the PARENT's: the two never race for one job; T's id is derived before the chain exists,
+# drill on one machine, where an executor retains the capture of each claim it carries and a challenger reads the accused's — the liar nodes new7 and
+# new8 each lie on line T until one lie lands (new7 a moved step leaf on a CANDIDATE's evaluation — a composite's cone reads parameters under the two
+# sub-roots; new8 a moved first id on the PARENT's: the two never race for one job; T's id is derived before the chain exists,
 # dmdrive.py line-id), new1 is the challenger.
 dm3_args() {
     local tid prefix n
@@ -509,10 +549,10 @@ dm3_args() {
         mkdir -p "$WORK_DIR/$n"
         echo "--palw-improve-capture-dir=$WORK_DIR/captures" > "$WORK_DIR/$n/extra-args"
     done
-    echo "--palw-drill-tamper-eval=leaf:1@$prefix/candidate" >> "$WORK_DIR/new5/extra-args"
-    echo "--palw-drill-tamper-eval=output@$prefix/parent" >> "$WORK_DIR/new6/extra-args"
+    echo "--palw-drill-tamper-eval=leaf:1@$prefix/candidate" >> "$WORK_DIR/new7/extra-args"
+    echo "--palw-drill-tamper-eval=output@$prefix/parent" >> "$WORK_DIR/new8/extra-args"
     echo "--palw-challenge" >> "$WORK_DIR/new1/extra-args"
-    say "D-M3 roles: new5 lies (leaf:1, a candidate's) and new6 lies (output, the parent's) on line T ($prefix…), new1 challenges; captures in $WORK_DIR/captures"
+    say "D-M3 roles: the sacrificial liar nodes new7 (leaf:1, a candidate's) and new8 (output, the parent's) lie on line T ($prefix…), new1 challenges; captures in $WORK_DIR/captures"
 }
 
 up() {
@@ -531,12 +571,29 @@ up() {
 
 status() {
     bash "$A/nodes.sh" status
+    python3 - "$WORK_DIR" <<'PY' 2>/dev/null || true
+import json, sys
+w = sys.argv[1]
+try:
+    m = json.load(open(f"{w}/drive-state.json"))["data"].get("mem")
+except (OSError, ValueError):
+    m = None
+if m:
+    fh = m.get("first_hour_summary") or {}
+    print(f"memory: first hour max {fh.get('max_total_mib')} MiB over {fh.get('nodes')} nodes ({fh.get('per_node_mib')} MiB each); peak {m['peak_total_mib']} MiB over {m['peak_nodes']} nodes; the Mac's free memory low {m['min_free_pct']}%")
+try:
+    c = json.load(open(f"{w}/drive-state.json"))["data"].get("cap-summary") or {}
+    for k, v in c.items():
+        print(f"capacity {k}: accepted {v['accepted_per_daa']}/DAA licensed {v['licensed_per_daa']}/DAA latency p50 {v['latency_p50']} p95 {v['latency_p95']} backlog {v['backlog_first']}->{v['backlog_last']} diverges {v['diverges']}")
+except (OSError, ValueError):
+    pass
+PY
     verdicts
 }
 
 verdicts() {
     local d
-    for d in dm5 dm1 dm2 dm3 dm4 dm6; do printf '%-4s %s\n' "$d" "$(cat "$VERDICT_DIR/$d.verdict" 2>/dev/null || echo 'not yet')"; done
+    for d in dm5 dm1 dm2 dm3 dm4 dm6 cap; do printf '%-4s %s\n' "$d" "$(cat "$VERDICT_DIR/$d.verdict" 2>/dev/null || echo 'not yet')"; done
     [ -s "$WORK_DIR/milestones.tsv" ] && { echo "-- milestones"; cat "$WORK_DIR/milestones.tsv"; }
     return 0
 }
@@ -559,5 +616,14 @@ case $cmd in
     once) export_env; export SALT; SALT=$(salt); ( cd "$A"; python3 dmdrive.py once ) ;;
     selftest) python3 "$A/dmdrive.py" selftest && python3 "$A/dmdrive.py" selftest-drive | tail -8 ;;
     down) down ;;
-    *) sed -n '2,42p' "$0"; exit 2 ;;
+    gen)
+        [ -s "$WT/audit-gen/dg.sh" ] || die "lane D's audit-gen/dg.sh is not in this tree (integration brings it)"
+        export_env; SALT=$(salt); export SALT DG_LIB="$A/lib-dm.sh" GEN_AT FPV5_AT HELD_AT LATE_AT GEN_DIR SEAT_NODES="new0 new1 new2 new3 new4 new5 new6"
+        bash "$WT/audit-gen/dg.sh" "$@" ;;
+    seat)
+        S=${SEAT_SCRIPT:-$WT/audit-seat/ds.sh}
+        [ -s "$S" ] || die "lane F's seating script ($S) is not in this tree (SEAT_SCRIPT; integration brings it)"
+        export_env; SALT=$(salt); export SALT DG_LIB="$A/lib-dm.sh" SEAT_AT
+        bash "$S" "$@" ;;
+    *) sed -n '2,45p' "$0"; exit 2 ;;
 esac

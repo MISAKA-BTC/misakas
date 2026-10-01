@@ -42,6 +42,7 @@ OBJ = f"{WORK}/objects"
 EVID = f"{WORK}/evidence"
 SNAP = f"{WORK}/snapshots"
 CLI = E.get("CLI_BIN", "misaka")
+KASPAD = E.get("KASPAD_BIN", "kaspad")
 TOOLS = E.get("TOOLS_BIN", ".")
 JSON_BASE = int(E.get("JSON_BASE", "63100"))
 BORSH_BASE = int(E.get("BORSH_BASE", "62100"))
@@ -56,7 +57,8 @@ NODES = {}
 for _row in (E.get("NODES") or "").strip().splitlines():
     _f = _row.split()
     if len(_f) >= 6:
-        NODES[_f[0]] = {"k": int(_f[1]), "seat": None if _f[2] == "-" else int(_f[2]), "role": _f[3], "hb": _f[4] == "1", "ir": _f[5] == "1"}
+        NODES[_f[0]] = {"k": int(_f[1]), "seat": None if _f[2] == "-" else int(_f[2]), "role": _f[3], "hb": _f[4] == "1", "ir": _f[5] == "1",
+                        "jit": len(_f) > 6 and _f[6] == "jit"}
 
 SPACING_S = 25            # between two carriers funded by the main wallet: the second must find the first's change confirmed
 GIVE_UP_TRIES = 8         # a step that failed this many ticks is INCOMPLETE, said once
@@ -93,7 +95,27 @@ def manifest():
     return json.load(open(f"{KR}/manifest.json"))
 
 
+GENESIS_SEATS = 8                      # keyring seats 0..7 are genesis bonds; 8.. are registered after genesis (liars, lane D's)
+
+
+def liar_path(n):
+    return f"{WORK}/liars/bond-{n}.json"
+
+
+def extra_bond(n):
+    """The record the registration step wrote for post-genesis bond n (bond_outpoint, seed_file, operator_id, fee_outpoint, address, collateral), or None."""
+    try:
+        return json.load(open(liar_path(n)))
+    except (OSError, ValueError):
+        return None
+
+
 def bond_of(seat):
+    if seat >= GENESIS_SEATS:
+        rec = extra_bond(seat)
+        if rec is None:
+            raise LookupError(f"bond {seat} is not registered yet ({liar_path(seat)})")
+        return rec["bond_outpoint"]
     return manifest()["seats"][seat]["bond_outpoint"]
 
 
@@ -129,8 +151,10 @@ def line_id_of(name):
     return model_line_id(head, bond_of(PLAN["lines"][name]["owner_seat"]), PLAN["lines"][name]["name"])
 
 
-# D-M3's roles: the executors that each lie once (their first evaluation of line T) and the challenger that replays and files.
-TAMPER = {"new5": "leaf:1", "new6": "output"}
+# D-M3's roles: the two SACRIFICIAL executors that each lie once (their first evaluation of line T; their bonds are registered after genesis and the nodes
+# started just-in-time, because the capacity package's aggregate liability (AG-2) makes one CourtFraud conviction void ALL the bond's live claims and freeze
+# the bond) and the challenger that replays and files.
+TAMPER = {"new7": "leaf:1", "new8": "output"}
 CHALLENGER = "new1"
 
 
@@ -420,6 +444,11 @@ def lifecycle_of(reg, class_id):
     return "absent", None
 
 
+def phase_is(phase, name):
+    """getPalwClaims spells a phase in snake case (`final`, `voided`, `panel_bound`) and its void reason likewise (`court_fraud`, `aggregate_forfeit`)."""
+    return str(phase).lower().startswith(name)
+
+
 def claims_of(bond):
     r = rpc("getPalwClaims", {"bond": bond, "role": "executor", "includeTerminal": True, "limit": 0})
     return pick(r, "claims", default=[]) or []
@@ -428,7 +457,7 @@ def claims_of(bond):
 def final_claims(bond, class_id):
     n = 0
     for c in claims_of(bond):
-        if pick(c, "classId") in (None, class_id) and str(pick(c, "phase", default="")).startswith("Final"):
+        if pick(c, "classId") in (None, class_id) and phase_is(pick(c, "phase", default=""), "final"):
             n += 1
     return n
 
@@ -455,6 +484,20 @@ def eval_view(st, line_id, epoch):
     return None
 
 
+def eval_rows_of(st, line_id):
+    """Every evaluation job row of a line the status file's evaluation view lists (spec 17 §17.8.6: a convicted claim
+    frees its job, so the row stops holding it): epoch, item, subject, kind, and the claim the row holds, if any."""
+    rows = []
+    for e in (st or {}).get("evaluation", []) or []:
+        if e.get("line_id") != line_id:
+            continue
+        for j in e.get("jobs", []) or []:
+            c = j.get("claim") or {}
+            rows.append({"epoch": e.get("epoch"), "item": j.get("item"), "subject": j.get("subject"), "kind": j.get("kind"),
+                         "claim": c.get("id"), "voided": bool(c.get("voided")), "score": c.get("score")})
+    return rows
+
+
 def jobs_settled(view):
     """Every job that holds a claim holds a final (or a void) one — keys may open (spec 17 §17.8.2, in Closing)."""
     jobs = [j for j in (view or {}).get("jobs", []) if j.get("claim")]
@@ -466,6 +509,127 @@ def jobs_settled(view):
 def outcome_of(erow):
     return (erow or {}).get("outcome")
 
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# post-genesis bonds, the just-in-time liar nodes, the capacity sampler (int-11 combined drill)
+# ---------------------------------------------------------------------------------------------------------------------
+XB = PLAN.get("extra_bonds", {})
+XB_ORDER = [int(x) for x in XB.get("order", [10, 11, 12, 13, 8, 9])]     # lane D's 10..13 are needed first (DG-4 from ~150); the liars' 8, 9 by ~440
+XB_FROM_DAA = int(XB.get("from_daa", 44))                                 # after the improvement fence: below it the main wallet is D-M5's
+XB_FLOAT_MSK = int(XB.get("float_msk", 150))                              # on top of the collateral: the 100 MSK fee float the genesis seats carry, and fees
+XB_WAIT_DAA = int(XB.get("registrar_wait_daa", 12))                       # a registrar that has not printed its bond after this many DAA is stopped and tried again
+LIARS = PLAN.get("liars", {})
+LIAR_START_DAA = int(LIARS.get("start_daa", 440))
+LIAR_DEADLINE_DAA = int(LIARS.get("deadline_daa", 300))                   # past start + this a liar that never lied or was never convicted is stopped, and the verdict says so
+CAP = PLAN.get("capacity", {})
+CAP_WINDOWS = {                                                           # the measured windows, DAA: [lo, hi)
+    "rho25": (int(E.get("CAP2_AT", "560")) + int(CAP.get("settle_daa", 10)), int(E.get("CAP2_AT", "560")) + int(CAP.get("settle_daa", 10)) + int(CAP.get("window_daa", 80))),
+    "rho100": (int(E.get("CAP3_AT", "655")) + int(CAP.get("settle_daa", 10)), int(E.get("CAP3_AT", "655")) + int(CAP.get("settle_daa", 10)) + int(CAP.get("window_daa", 80))),
+}
+CAP_STEPS = (("rho25", "capacity_step2"), ("rho100", "capacity_step3"))
+LIVE_PHASES = ("provisional", "panel_bound", "receipt_licensed", "default_disputed")   # a claim not yet Final and not void
+UNLICENSED_PHASES = ("provisional", "panel_bound", "default_disputed")                  # accepted and waiting for its licence: the backlog
+
+
+MEM = PLAN.get("memory", {})
+MEM_TRIP_PCT = int(E.get("MEM_TRIP_PCT", MEM.get("trip_free_pct", 12)))       # system free memory below this, two ticks running: stop the sacrificial nodes
+MEM_TRIP2_PCT = int(E.get("MEM_TRIP2_PCT", MEM.get("trip2_free_pct", 8)))     # below this: the old relay too (D-M5's, once it has been done). Never a seat or the clocks.
+MEM_FIRST_HOUR_TICKS = max(3600 // max(TICK_S, 1), 1)
+
+
+def parse_free_pct(text):
+    m = re.search(r"System-wide memory free percentage:\s*(\d+)%", text or "")
+    return int(m.group(1)) if m else None
+
+
+def rss_mib(pid):
+    rc, out = run(["ps", "-o", "rss=", "-p", str(pid)], timeout=20)
+    try:
+        return int(out.strip().split()[0]) // 1024 if rc == 0 and out.strip() else None
+    except (ValueError, IndexError):
+        return None
+
+
+
+def msk_text(sompi):
+    return f"{sompi // 10**8}.{sompi % 10**8:08d}"
+
+
+def seat_bonds():
+    """The genesis seats' bonds that have a node (they are the panel and the producers the capacity line measures)."""
+    return [(n, v["seat"]) for n, v in NODES.items() if v["seat"] is not None and v["seat"] < GENESIS_SEATS and v["role"] != "old"]
+
+
+def percentile(xs, q):
+    if not xs:
+        return None
+    xs = sorted(xs)
+    i = min(len(xs) - 1, max(0, int(round(q * (len(xs) - 1)))))
+    return xs[i]
+
+
+def slope(points):
+    """Least-squares slope of (x, y) points (None under two points or no spread)."""
+    n = len(points)
+    if n < 2:
+        return None
+    mx = sum(x for x, _ in points) / n
+    my = sum(y for _, y in points) / n
+    den = sum((x - mx) ** 2 for x, _ in points)
+    return None if den == 0 else sum((x - mx) * (y - my) for x, y in points) / den
+
+
+def capacity_summary(series, claims, lo, hi):
+    """One window's numbers. `series`: the sampler's per-tick rows {daa, backlog, occ_max, occ_mean, reserved_ratio}; `claims`: {claim id: {acc, lic, fin}}
+    (the DAA a claim was accepted at — the chain's own; licensed and Final — the DAA of the first tick that saw it so, the chain's own where it was caught
+    in its licensed phase: a licence latency is exact to one sampler tick, ~0.2 DAA). The gate is the coordinator's: the queue does not diverge — here:
+    the backlog's slope over the window's second half is not positive beyond 0.05 claims per DAA, and its last quarter's mean is not above 1.5 times the
+    second quarter's plus 2."""
+    span = max(hi - lo, 1)
+    acc = [c for c in claims.values() if c.get("acc") is not None and lo <= c["acc"] < hi]
+    lic = [c for c in claims.values() if c.get("lic") is not None and lo <= c["lic"] < hi]
+    lat = [c["lic"] - c["acc"] for c in claims.values() if c.get("acc") is not None and c.get("lic") is not None and lo <= c["acc"] < hi]
+    rows = [r for r in series if lo <= r["daa"] < hi]
+    q = max(len(rows) // 4, 1)
+    first_half = [(r["daa"], r["backlog"]) for r in rows[len(rows) // 2:]]
+    mean = lambda rr: (sum(r["backlog"] for r in rr) / len(rr)) if rr else None  # noqa: E731
+    q2, q4 = mean(rows[q:2 * q]), mean(rows[-q:])
+    sl = slope(first_half)
+    diverges = None
+    if rows and sl is not None and q2 is not None and q4 is not None and len(rows) >= 8:
+        diverges = bool(sl > 0.05 and q4 > 1.5 * q2 + 2)
+    return {"lo": lo, "hi": hi, "samples": len(rows), "accepted": len(acc), "accepted_per_daa": round(len(acc) / span, 3),
+            "licensed": len(lic), "licensed_per_daa": round(len(lic) / span, 3),
+            "latency_p50": percentile(lat, 0.5), "latency_p95": percentile(lat, 0.95), "latency_n": len(lat),
+            "backlog_first": rows[0]["backlog"] if rows else None, "backlog_last": rows[-1]["backlog"] if rows else None,
+            "backlog_max": max((r["backlog"] for r in rows), default=None), "backlog_slope_per_daa_second_half": None if sl is None else round(sl, 4),
+            "backlog_q2_mean": None if q2 is None else round(q2, 2), "backlog_q4_mean": None if q4 is None else round(q4, 2),
+            "occupancy_max": max((r["occ_max"] for r in rows), default=None),
+            "occupancy_mean": round(sum(r["occ_mean"] for r in rows) / len(rows), 2) if rows else None,
+            "exposure_reserved_ratio_max": max((r["reserved_ratio"] for r in rows if r.get("reserved_ratio") is not None), default=None),
+            "diverges": diverges}
+
+
+def verdict_cap(sd):
+    """The capacity line: each step's window measured, and the gate (the queue does not diverge) read. ρ=25 first; ρ=100 after it. A step the binary
+    could not arm is reported as such (the drill's capacity flags come from lane A's int-capdrill, not in every build)."""
+    cap = (sd.get("data") or {}).get("cap-summary") or {}
+    armed = (sd.get("data") or {}).get("cap-armed") or {}
+    checks = []
+    for name, fence in CAP_STEPS:
+        sm = cap.get(name)
+        if armed.get(fence) is False:
+            checks.append((None, f"{name}: this build lists no --palw-drill-{fence.replace('_', '-')}-at, not armed"))
+            continue
+        if not sm:
+            checks.append((None, f"{name}: window {CAP_WINDOWS[name][0]}..{CAP_WINDOWS[name][1]} not measured yet"))
+            continue
+        txt = (f"{name}: accepted {sm['accepted_per_daa']}/DAA, licensed {sm['licensed_per_daa']}/DAA, licence latency p50 {sm['latency_p50']} p95 {sm['latency_p95']} DAA "
+               f"(n={sm['latency_n']}), backlog {sm['backlog_first']}->{sm['backlog_last']} (max {sm['backlog_max']}, slope {sm['backlog_slope_per_daa_second_half']}/DAA), "
+               f"seat occupancy max {sm['occupancy_max']} mean {sm['occupancy_mean']}, exposure reserved/ceiling max {sm['exposure_reserved_ratio_max']}")
+        checks.append((None if sm["diverges"] is None else (not sm["diverges"]), txt))
+    return v_all(checks)
 
 # ---------------------------------------------------------------------------------------------------------------------
 # the actor
@@ -494,8 +658,9 @@ class Drive:
         self.status, self.status_path = got if got else (None, None)
         self.ids = {n: model_id(n) for n in ASSETS}
         self.milestones()
-        for step in (self.step_m5_below, self.step_m5_below_verify, self.step_m5_cross, self.step_register_classes, self.step_lines, self.step_policies,
-                     self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks, self.step_dm3_probe):
+        for step in (self.step_memory, self.step_m5_below, self.step_m5_below_verify, self.step_m5_cross, self.step_register_classes, self.step_lines, self.step_policies,
+                     self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks, self.step_dm3_probe, self.step_seat_operator_ids, self.step_extra_bonds, self.step_liars_jit,
+                     self.step_capacity):
             key = step.__name__
             if self.s.d["failed"].get(key):
                 continue
@@ -733,7 +898,7 @@ class Drive:
             return
         root = model_id("head", "root")
         lines = dict(self.s.get("lines") or {})
-        for name in ("W2", "L", "T"):
+        for name in ("W2", "L", "T", "R"):
             if name in lines:
                 continue
             cmd = cli_prefix("new3") + ["palw", "line-found", "--class", self.ids["head"], "--name", name, "--root", root,
@@ -760,11 +925,11 @@ class Drive:
         if self.s.done("policies") or not self.s.done("lines") or self.daa < IMPROVE_AT + 2:
             return
         lines = self.line_ids()
-        if not all(l in lines for l in ("W1", "W2", "L", "T")):
+        if not all(l in lines for l in ("W1", "W2", "L", "T", "R")):
             return
         # the founding line's row exists once the head's class is registered; the founded lines' once their objects are mined
         objs = []
-        for name in ("W1", "W2", "L", "T"):
+        for name in ("W1", "W2", "L", "T", "R"):
             owner = PLAN["lines"][name]["owner_seat"]
             out = f"{OBJ}/policy-{name}.obj"
             spec = {"line": lines[name], "sequence": 1, "policy": line_policy(name)}
@@ -776,7 +941,7 @@ class Drive:
         if not ok:
             raise RuntimeError(f"cannot submit the policies: {text.strip()[-300:]}")
         self.s.mark("policies", daa=self.daa)
-        log(f"opt-in: four policy objects submitted at DAA {self.daa}")
+        log(f"opt-in: five policy objects submitted at DAA {self.daa}")
 
     # ----- material (D-M1): a dataset and a hard case, admitted while the line is idle: the next epoch's material -----
     def step_material(self):
@@ -921,13 +1086,14 @@ class Drive:
                 log(f"D-M4: W2's promotion rolled back by its owner at DAA {self.daa}")
 
     def rollback_proof(self, lines):
-        # by proof: W1's second epoch showed the predecessor H beating the promoted W
-        if not self.s.done("rollback-proof") and "W1" in lines:
-            row = line_status(self.status, lines["W1"])
+        # by proof: line R's second epoch showed the predecessor H beating the promoted W (R is the full-weight line that carries it: a
+        # composite epoch is 363 DAA, two of them do not fit the run)
+        if not self.s.done("rollback-proof") and "R" in lines:
+            row = line_status(self.status, lines["R"])
             e2 = epoch_row(row, 2)
             if e2 and e2["state"] == "Decided" and (e2.get("previous_counts") or {}).get("eligible"):
-                out = f"{OBJ}/rollback-proof-W1.obj"
-                spec = {"line": lines["W1"], "epoch": 1, "to_class": self.ids["head"], "cause": {"later_regression": 2}}
+                out = f"{OBJ}/rollback-proof-R.obj"
+                spec = {"line": lines["R"], "epoch": 1, "to_class": self.ids["head"], "cause": {"later_regression": 2}}
                 rc, text = improve_object("rollback", 7, spec, out)
                 if rc != 0:
                     raise RuntimeError(f"rollback (proof): {text.strip()[-300:]}")
@@ -935,7 +1101,7 @@ class Drive:
                 if not ok:
                     raise RuntimeError(f"cannot submit the rollback: {text.strip()[-300:]}")
                 self.s.mark("rollback-proof", daa=self.daa)
-                log(f"D-M4: W1's promotion rolled back by proof (epoch 2's regression check) at DAA {self.daa}")
+                log(f"D-M4: R's promotion rolled back by proof (epoch 2's regression check) at DAA {self.daa}")
 
     # ----- D-M6: the attacks ------------------------------------------------------------------------------------
     def step_attacks(self):
@@ -1026,10 +1192,291 @@ class Drive:
         self.s.mark(k, submitted_daa=self.daa, built=len(objs), holdout_before=before, ok=ok and ok2)
         log(f"D-M6 hold-out spam: {len(objs)} hold-out cases submitted at DAA {self.daa}")
 
+
+    def step_seat_operator_ids(self):
+        """Lane D's scenarios (`seat_field <n> operator_id`) read a genesis seat's operator id from the keyring manifest, which the keyring writer does not put there
+        (it has the operator PUBKEY). Read each seat's id from the chain once and add it as `operator_id` to the manifest's seats — an added field, nothing else changes."""
+        if self.s.done("seat-operator-ids") or self.daa < 2:
+            return
+        m = manifest()
+        ids = []
+        for seat in m["seats"]:
+            t, i = seat["bond_outpoint"].rsplit(":", 1)
+            f = rpc("getPalwProducerFacts", {"classId": "", "bondTransactionId": t, "bondIndex": int(i), "withBond": True})
+            op = str(pick(f, "bondOperatorId", default="") or "")
+            if not op:
+                return
+            ids.append(op)
+        for seat, op in zip(m["seats"], ids):
+            seat["operator_id"] = op
+        tmp = f"{KR}/manifest.json.partial"
+        with open(tmp, "w") as fh:
+            json.dump(m, fh, indent=2)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, f"{KR}/manifest.json")
+        self.s.mark("seat-operator-ids", seats=len(ids))
+        log(f"the keyring manifest names {len(ids)} seats' operator ids (lane D's seat_field reads them)")
+
+    # ----- the memory sampler and tripwire ---------------------------------------------------------------------------------
+    def step_memory(self):
+        """Every tick: each node's RSS and the Mac's free-memory percentage, appended to $WORK/memory.tsv. The first hour's steady figure and the peak are kept in
+        the state (the coordinator's number to size the run by). The tripwire protects the seats: the Mac's free memory under MEM_TRIP_PCT for two ticks running stops
+        the SACRIFICIAL nodes (the registrar first, then the liars), under MEM_TRIP2_PCT the old relay as well (after D-M5). It never touches a seat or a clock."""
+        rc, out = run(["memory_pressure"], timeout=60)
+        free = parse_free_pct(out)
+        rows = {}
+        for n in NODES:
+            pid = read(f"{WORK}/{n}/kaspad.pid")
+            if pid and node_alive(n):
+                r = rss_mib(pid)
+                if r is not None:
+                    rows[n] = r
+        total = sum(rows.values())
+        with open(f"{WORK}/memory.tsv", "a") as f:
+            f.write(f"{now()}\t{self.daa}\t{free}\t{total}\t{json.dumps(rows, sort_keys=True)}\n")
+        mem = dict(self.s.get("mem") or {"ticks": 0, "first_hour": [], "peak_total_mib": 0, "peak_nodes": 0, "min_free_pct": None, "low_ticks": 0})
+        mem["ticks"] += 1
+        if mem["ticks"] <= MEM_FIRST_HOUR_TICKS and rows:
+            mem["first_hour"].append([total, len(rows)])
+        if total > mem["peak_total_mib"]:
+            mem["peak_total_mib"], mem["peak_nodes"] = total, len(rows)
+        if free is not None and (mem["min_free_pct"] is None or free < mem["min_free_pct"]):
+            mem["min_free_pct"] = free
+        mem["low_ticks"] = mem["low_ticks"] + 1 if (free is not None and free < MEM_TRIP_PCT) else 0
+        if mem["first_hour"]:
+            steady = max(mem["first_hour"], key=lambda x: x[0])
+            mem["first_hour_summary"] = {"max_total_mib": steady[0], "nodes": steady[1], "per_node_mib": round(steady[0] / max(steady[1], 1)), "samples": len(mem["first_hour"])}
+        if mem["low_ticks"] >= 2:
+            victims = [n for n in ("reg", "new7", "new8") if n in rows]
+            if free is not None and free < MEM_TRIP2_PCT and self.s.done("m5-cross") and "old" in rows:
+                victims.append("old")
+            for n in victims[:1] if free is not None and free >= MEM_TRIP2_PCT else victims:
+                self.nodes_sh("stop", n)
+                self.s.mark(f"tripwire:{n}:{self.daa}", free_pct=free, total_mib=total)
+                if n in TAMPER and not self.s.done(f"liar-stop:{n}"):
+                    self.s.mark(f"liar-stop:{n}", daa=self.daa, why=f"memory tripwire: the Mac's free memory was {free}%")
+                log(f"TRIPWIRE: the Mac's free memory is {free}% (< {MEM_TRIP_PCT}%): stopped {n} (RSS {rows.get(n)} MiB) at DAA {self.daa}")
+        self.s.put("mem", mem)
+
+    # ----- post-genesis bonds: the liars' (8, 9) and lane D's (10..13) -------------------------------------------------
+    def nodes_sh(self, *args, timeout=240):
+        """`nodes.sh start|stop <node>` (the harness's own: memory gate, salted genesis line, SIGINT stop) with this driver's environment."""
+        return run(["bash", f"{HERE}/nodes.sh", *args], timeout=timeout)
+
+    def xb_collateral(self):
+        c = self.s.get("xbond:collateral")
+        if c:
+            return int(c)
+        r = rpc("getPalwClaims", {"bond": bond_of(0), "role": "executor", "includeTerminal": True, "limit": 0})
+        c = int(pick(r, "bondCollateral", default=0) or 0)
+        if c <= 0:
+            raise RuntimeError("cannot read seat 0's collateral to size the new bonds by")
+        self.s.put("xbond:collateral", c)
+        return c
+
+    def utxos_at(self, addr):
+        r = rpc("getUtxosByAddresses", {"addresses": [addr]})
+        out = []
+        for e in pick(r, "entries", default=[]) or []:
+            u = pick(e, "utxoEntry", default={}) or {}
+            op = pick(e, "outpoint", default={}) or {}
+            out.append((f"{pick(op, 'transactionId')}:{pick(op, 'index')}", int(pick(u, "amount", default=0) or 0)))
+        return out
+
+    def step_extra_bonds(self):
+        """One post-genesis bond at a time, in XB_ORDER: fund its pay address from the main wallet (collateral as a genesis seat's + a fee float), run the
+        registrar (`kaspad --palw-register-bond`, which prints the bond and then KEEPS RUNNING as a node: the driver stops it), read the operator id from the
+        chain, write $WORK/liars/bond-<n>.json (lane D's `liar_field` and the liar nodes' argv read it). The registrar's directory is archived between bonds
+        (a remembered change outpoint belongs to the previous key)."""
+        if self.daa < XB_FROM_DAA:
+            return
+        todo = [n for n in XB_ORDER if extra_bond(n) is None]
+        if not todo:
+            return
+        n = todo[0]
+        key = f"xbond:{n}"
+        st = dict(self.s.get(key) or {"stage": "fund", "attempts": 0})
+        row = manifest()["bonds"][n - GENESIS_SEATS]
+        addr = row["address"]
+        if st["stage"] == "fund":
+            collateral = self.xb_collateral()
+            have = sum(a for _, a in self.utxos_at(addr))
+            if have < collateral:
+                node = (live_nodes(("seat", "floor", "head", "eval", "evalw")) or ["new3"])[0]
+                cmd = cli_prefix(node) + ["wallet", "send", "--to", addr, "--amount", msk_text(collateral + XB_FLOAT_MSK * 10**8), "--yes", "--key-file", f"{KR}/main-0.seed"]
+                rc, out = run(cmd, home=UHOME)
+                if rc != 0:
+                    if "already spent" in out or "no mature" in out or "mempool" in out or "insufficient mature" in out:
+                        log(f"bond {n}: the main wallet's funding is not free yet ({out.strip().splitlines()[-1][:100] if out.strip() else ''}); next tick")
+                        return
+                    raise RuntimeError(f"wallet send for bond {n}: {out.strip()[-300:]}")
+                log(f"bond {n}: funded {msk_text(collateral + XB_FLOAT_MSK * 10**8)} MSK at {addr[:24]}… at DAA {self.daa}")
+                time.sleep(SPACING_S)
+            st.update(stage="funded", funded_daa=self.daa, collateral=collateral)
+            self.s.put(key, st)
+            return
+        if st["stage"] == "funded":
+            if sum(a for _, a in self.utxos_at(addr)) < int(st["collateral"]):
+                if self.daa > st["funded_daa"] + 20:
+                    st.update(stage="fund")      # the transfer never confirmed (dropped): send again
+                    self.s.put(key, st)
+                return
+            d = f"{WORK}/reg"
+            if os.path.isdir(d) and os.path.exists(f"{d}/kaspad.pid") and node_alive("reg"):
+                self.nodes_sh("stop", "reg")
+            if os.path.isdir(d) and os.path.isdir(f"{d}/app"):
+                os.replace(d, f"{d}.done-{int(time.time())}")
+            os.makedirs(d, exist_ok=True)
+            with open(f"{d}/extra-args", "w") as f:
+                f.write("\n".join(["--palw-register-bond", f"--palw-producer-key={KR}/bond-{n}.seed", f"--palw-producer-pay-address={addr}",
+                                   f"--palw-bond-collateral={int(st['collateral'])}"]) + "\n")
+            cursor = os.path.getsize(f"{d}/kaspad.out") if os.path.exists(f"{d}/kaspad.out") else 0
+            rc, out = self.nodes_sh("start", "reg", timeout=300)
+            if rc != 0 and "not starting" in out:       # the harness's memory gate: try again next tick
+                log(f"bond {n}: the registrar is not started yet ({out.strip().splitlines()[-1][:100]})")
+                return
+            if rc != 0:
+                st["attempts"] = int(st.get("attempts", 0)) + 1
+                self.s.put(key, st)
+                raise RuntimeError(f"cannot start the registrar for bond {n}: {out.strip()[-200:]}")
+            st.update(stage="registrar", start_daa=self.daa, cursor=cursor)
+            self.s.put(key, st)
+            log(f"bond {n}: the registrar node is up at DAA {self.daa}")
+            return
+        if st["stage"] == "registrar":
+            pat = r"registered bond ([0-9a-f]+):(\d+) with (\d+) sompi of collateral, in tx ([0-9a-f]+)"
+            got = self.log_after("reg", int(st["cursor"]), pat)
+            m = re.search(pat, got or "")
+            if not m:
+                if self.daa > int(st["start_daa"]) + XB_WAIT_DAA:
+                    self.nodes_sh("stop", "reg")
+                    st["attempts"] = int(st.get("attempts", 0)) + 1
+                    st.update(stage="funded")
+                    self.s.put(key, st)
+                    log(f"bond {n}: the registrar printed no bond in {XB_WAIT_DAA} DAA; stopped (attempt {st['attempts']}), trying again")
+                    if st["attempts"] >= 4:
+                        self.s.fail("step_extra_bonds", f"bond {n} could not be registered in 4 attempts (see {WORK}/reg*/kaspad.out)")
+                return
+            bond = f"{m.group(1)}:{m.group(2)}"
+            collateral = int(m.group(3))
+            self.nodes_sh("stop", "reg")
+            facts = rpc("getPalwProducerFacts", {"classId": self.ids.get("head") or "", "bondTransactionId": m.group(1), "bondIndex": int(m.group(2)), "withBond": True})
+            op = str(pick(facts, "bondOperatorId", default="") or "")
+            spendable = [(o, a) for o, a in self.utxos_at(addr) if a < collateral and a >= 10**8 and o != bond]
+            if not op or not spendable:
+                raise RuntimeError(f"bond {n} {bond}: operator id '{op[:12]}' / fee float {spendable} not readable yet")
+            fee = max(spendable, key=lambda x: x[1])[0]
+            write_json(liar_path(n), {"n": n, "bond_outpoint": bond, "seed_file": f"{KR}/bond-{n}.seed", "operator_id": op, "fee_outpoint": fee,
+                                      "address": addr, "collateral_sompi": collateral, "registered_daa": self.daa, "tx": m.group(4)})
+            self.s.mark(f"xbond:{n}:registered", bond=bond, daa=self.daa)
+            log(f"bond {n}: registered {bond[:20]}… ({collateral} sompi), fee float {fee[:20]}…")
+
+    # ----- D-M3's sacrificial liar nodes: started just before the window, stopped after the conviction -----------------------
+    def liar_status(self, node):
+        """(convicted?, why) from the D-M3 probe record: the node's lying claim is Voided and no claim of its bond is still live."""
+        p = self.s.get("dm3") or {}
+        rows = ((p.get("claims") or {}).get(node) or {}).get("rows", [])
+        fraud = [r for r in rows if r["phase"].startswith("voided") and "court_fraud" in (r["void"] or "")]
+        live = [r for r in rows if r["phase"] in LIVE_PHASES]
+        return (bool(fraud) and not live), f"{len(fraud)} court_fraud, {len(live)} live"
+
+    def step_liars_jit(self):
+        if not LIARS:
+            return
+        for node in TAMPER:
+            if node not in NODES:
+                continue
+            seat = NODES[node]["seat"]
+            ks, kp = f"liar-start:{node}", f"liar-stop:{node}"
+            if not self.s.done(ks):
+                if self.daa < LIAR_START_DAA or extra_bond(seat) is None:
+                    if self.daa >= LIAR_START_DAA and extra_bond(seat) is None and not self.s.get(f"liar-wait:{node}"):
+                        self.s.put(f"liar-wait:{node}", True)
+                        log(f"{node}: its bond {seat} is not registered at DAA {self.daa}: the node waits for it (D-M3 cannot run without it)")
+                    continue
+                rc, out = self.nodes_sh("start", node, timeout=300)
+                if rc != 0:
+                    if "not starting" in out:           # the harness's memory gate: try again next tick, never a step failure
+                        log(f"{node}: not started yet ({out.strip().splitlines()[-1][:100]})")
+                        continue
+                    raise RuntimeError(f"cannot start {node}: {out.strip()[-200:]}")
+                self.s.mark(ks, daa=self.daa)
+                log(f"D-M3: the liar node {node} started at DAA {self.daa}")
+                continue
+            if self.s.done(kp):
+                continue
+            started = int(self.s.d["done"][ks]["daa"])
+            convicted, why = self.liar_status(node)
+            lied = (self.s.get("dm3-liars") or {}).get(node)
+            if convicted:
+                reason = f"convicted ({why})"
+            elif self.daa >= started + LIAR_DEADLINE_DAA:
+                reason = f"deadline: {'it lied' if lied else 'it NEVER lied'} and was {'not ' if not convicted else ''}convicted by DAA {self.daa} ({why})"
+            else:
+                continue
+            self.nodes_sh("stop", node)
+            self.s.mark(kp, daa=self.daa, why=reason)
+            log(f"D-M3: the liar node {node} stopped at DAA {self.daa}: {reason}")
+
+    # ----- the capacity line: ρ=25 and ρ=100 windows measured on the same chain ---------------------------------------------
+    def step_capacity(self):
+        lo_all = min(w[0] for w in CAP_WINDOWS.values())
+        hi_all = max(w[1] for w in CAP_WINDOWS.values())
+        if "cap-armed" not in self.s.d["data"]:
+            rc, h = run([KASPAD, "--help"], timeout=60)
+            self.s.put("cap-armed", {fence: (f"--palw-drill-{fence.replace('_', '-')}-at" in h) for _, fence in CAP_STEPS})
+        for name, fence in CAP_STEPS:
+            at = CAP_WINDOWS[name][0] - int(CAP.get("settle_daa", 10))
+            if self.daa >= at:
+                self.note(f"fence:{fence}")
+        claims = dict(self.s.get("cap-claims") or {})
+        series = list(self.s.get("cap-series") or [])
+        sampling = any(lo - 3 <= self.daa < hi + 1 for lo, hi in CAP_WINDOWS.values())
+        if sampling:
+            backlog, occ, rsv = 0, [], None
+            for node, seat in seat_bonds():
+                bond = bond_of(seat)
+                for c in claims_of(bond):
+                    cid = str(pick(c, "claimId", default=""))
+                    ph = str(pick(c, "phase", default=""))
+                    rec = claims.setdefault(cid, {"acc": int(pick(c, "acceptedDaa", default=0) or 0), "lic": None, "fin": None})
+                    if ph == "receipt_licensed" and rec["lic"] is None:
+                        rec["lic"] = int(pick(c, "phaseDaa", default=self.daa) or self.daa)
+                    elif ph == "final" and rec["fin"] is None:
+                        rec["fin"] = int(pick(c, "phaseDaa", default=self.daa) or self.daa)
+                    if ph in UNLICENSED_PHASES:
+                        backlog += 1
+                r = rpc("getPalwClaims", {"bond": bond, "role": "seat", "includeTerminal": False, "limit": 0})
+                occ.append(sum(1 for c in (pick(r, "claims", default=[]) or []) if str(pick(c, "phase", default="")) in LIVE_PHASES))
+                if seat == 4 and self.ids.get("head"):
+                    t, i = bond.rsplit(":", 1)
+                    f = rpc("getPalwProducerFacts", {"classId": self.ids["head"], "bondTransactionId": t, "bondIndex": int(i), "withBond": True})
+                    res, ceil = int(pick(f, "bondReservedExposure", default=0) or 0), int(pick(f, "bondExposureCeiling", default=0) or 0)
+                    rsv = round(res / ceil, 4) if ceil else None
+            row = {"daa": self.daa, "backlog": backlog, "occ_max": max(occ, default=0), "occ_mean": round(sum(occ) / max(len(occ), 1), 2), "reserved_ratio": rsv}
+            series.append(row)
+            self.s.put("cap-claims", claims)
+            self.s.put("cap-series", series)
+            os.makedirs(f"{WORK}/capacity", exist_ok=True)
+            with open(f"{WORK}/capacity/samples.tsv", "a") as f:
+                f.write(f"{now()}\t{json.dumps(row)}\n")
+        summ = dict(self.s.get("cap-summary") or {})
+        changed = False
+        for name, (lo, hi) in CAP_WINDOWS.items():
+            if name not in summ and self.daa >= hi + 1 and any(lo <= r["daa"] < hi for r in series):
+                summ[name] = capacity_summary(series, claims, lo, hi)
+                changed = True
+                write_json(f"{WORK}/capacity/{name}.json", summ[name])
+                log(f"CAPACITY {name} window {lo}..{hi}: {json.dumps(summ[name])}")
+        if changed:
+            self.s.put("cap-summary", summ)
+        if self.daa > hi_all + 5 and "cap-done" not in self.s.d["done"]:
+            self.s.mark("cap-done")
+
     # ----- verdicts ---------------------------------------------------------------------------------------------
     def write_verdicts(self):
         for name, fn in (("dm5", self.verdict_dm5), ("dm1", self.verdict_dm1), ("dm2", self.verdict_dm2), ("dm3", self.verdict_dm3),
-                         ("dm4", self.verdict_dm4), ("dm6", self.verdict_dm6)):
+                         ("dm4", self.verdict_dm4), ("dm6", self.verdict_dm6), ("cap", self.verdict_cap)):
             try:
                 v, why = fn()
             except Exception as e:  # noqa: BLE001
@@ -1084,24 +1531,43 @@ class Drive:
                     cur[node] = max(cursor + len(data) - 512, 0)
                     self.s.put("dm3-cursor", cur)
             seat = NODES[node]["seat"]
-            if seat is None:
+            if seat is None or (seat >= GENESIS_SEATS and extra_bond(seat) is None):
                 continue
             r = rpc("getPalwClaims", {"bond": bond_of(seat), "role": "executor", "includeTerminal": True, "limit": 0})
-            probe["claims"][node] = {
-                "slashed": int(pick(r, "bondSlashed", default=0) or 0),
-                "rows": [{"id": str(pick(c, "claimId", default="")), "phase": str(pick(c, "phase", default="")), "void": str(pick(c, "voidReason", default=""))}
-                         for c in (pick(r, "claims", default=[]) or [])],
-            }
+            rows = [{"id": str(pick(c, "claimId", default="")), "phase": str(pick(c, "phase", default="")), "void": str(pick(c, "voidReason", default="")),
+                     "acc": int(pick(c, "acceptedDaa", default=0) or 0), "pdaa": int(pick(c, "phaseDaa", default=0) or 0)}
+                    for c in (pick(r, "claims", default=[]) or [])]
+            probe["claims"][node] = {"slashed": int(pick(r, "bondSlashed", default=0) or 0), "collateral": int(pick(r, "bondCollateral", default=0) or 0), "rows": rows}
+            # What AG-2 must leave alone: the claims already Final (remembered, so a Final that turns into anything else is seen).
+            seen = set(self.s.get(f"dm3-final-seen:{node}") or [])
+            now_final = {c["id"] for c in rows if phase_is(c["phase"], "final")}
+            if now_final - seen:
+                self.s.put(f"dm3-final-seen:{node}", sorted(seen | now_final))
         f = status_file_of(CHALLENGER) if CHALLENGER in NODES else None
         if f:
             try:
-                probe["disputes"] = json.load(open(f)).get("disputes", [])
+                st = json.load(open(f))
+                probe["disputes"] = st.get("disputes", [])
+                probe["eval_rows"] = eval_rows_of(st, self.line_ids().get("T"))
+                trow = line_status(st, self.line_ids().get("T"))
+                er = epoch_row(trow, 1) if trow else None
+                if er:
+                    probe["t_epoch"] = {"epoch": 1, "state": er.get("state"), "outcome": er.get("outcome")}
+                # Which job each claim held, remembered: a conviction frees the job, and the verdict asks whether somebody claimed it again.
+                jobs = dict(self.s.get("dm3-jobs") or {})
+                grew = False
+                for r in probe["eval_rows"]:
+                    if r.get("claim") and r["claim"] not in jobs:
+                        jobs[r["claim"]] = [r["epoch"], r["item"], r["subject"]]
+                        grew = True
+                if grew:
+                    self.s.put("dm3-jobs", jobs)
             except (OSError, ValueError):
                 pass
         self.s.put("dm3", probe)
 
     def verdict_dm4(self):
-        return verdict_dm4(self.s.d, self.status, self.line_ids(), self.ids_of("W1"))
+        return verdict_dm4(self.s.d, self.status, self.line_ids(), self.ids_of("R"))
 
     def ids_of(self, line):
         """The class ids a line's verdict reads by the plan's names: `head`, and `win` / `lose` as that line's form holds them."""
@@ -1109,6 +1575,9 @@ class Drive:
 
     def verdict_dm6(self):
         return verdict_dm6(self.s.d, self.status, self.line_ids())
+
+    def verdict_cap(self):
+        return verdict_cap(self.s.d)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1189,13 +1658,20 @@ def verdict_dm1(sd, st, lines, ids, daa):
         lhs = sum(int(pool_[k]) for k in ("deposited", "fees_in", "phi_in", "held_in"))
         rhs = sum(int(pool_[k]) for k in ("balance", "held", "unvested", "paid", "refunded"))
         checks.append((lhs == rhs, f"the pool's conservation law ({lhs} = {rhs})"))
-    vest_from = max([g.get("vest_from_daa") or 0 for g in grants] or [0])
-    if vest_from and daa is not None:
-        due = vest_from + line_l_e("W1")
+    # Vesting is read on the full-weight lines: a composite epoch is 363 DAA, so W1's first unit (decision + L_e) falls past the run's end.
+    # R's first unit is due at its decision + 253 (vest_epochs 3: three units, a rollback by proof forfeits what is unvested).
+    rrow = line_status(st, lines.get("R", "")) if lines.get("R") else None
+    r1 = epoch_row(rrow, 1) if rrow else None
+    rgrants = (r1 or {}).get("grants", [])
+    vest_from = max([g.get("vest_from_daa") or 0 for g in rgrants] or [0])
+    if not r1 or r1.get("state") != "Decided":
+        checks.append((None, "vesting (line R): R's epoch 1 is not decided yet"))
+    elif vest_from and daa is not None:
+        due = vest_from + line_l_e("R")
         if daa < due:
-            checks.append((None, f"vesting: the first unit is due at DAA {due}"))
+            checks.append((None, f"vesting (line R): the first unit is due at DAA {due}"))
         else:
-            checks.append((any((g.get("vested") or 0) > 0 for g in grants), "vesting: a unit paid"))
+            checks.append((any((g.get("vested") or 0) > 0 for g in rgrants), "vesting (line R): a unit paid"))
     return v_all(checks)
 
 
@@ -1225,11 +1701,16 @@ def verdict_dm2(sd, st, lines):
 EVIDENCE_STAND_IN = " [evidence transport: the shared capture directory (--palw-improve-capture-dir), a stand-in until the pipeline-claim data-availability units land]"
 
 
+T_EPOCH_OPEN_STATES = ("Submission", "HoldOut", "Drawing", "Evaluating")
+
+
 def verdict_dm3(sd, lines):
-    """D-M3 (RFC-0004 A13): a lying evaluation claim is CONVICTED. Over the probe record (`step_dm3_probe`): each executor told to lie did, on line T; the
-    challenger's replay found each lie that landed as a claim, where the lie is (a moved step leaf: the first divergent leaf; a moved id: the first id);
-    and the chain voided the claim and slashed the executor's bond. A lie that reached Final unconvicted is a FAIL; the honest claims of the lying bonds
-    (every claim that is not a landed lie) are not voided."""
+    """D-M3 (RFC-0004 A13): a lying evaluation claim is CONVICTED — on the SACRIFICIAL liar nodes new7 (a moved step leaf) and new8 (a moved first id), each with
+    its own post-genesis bond. Over the probe record (`step_dm3_probe`): each liar lied on line T; the challenger's replay found each lie that landed as a claim,
+    where the lie is (the first divergent leaf; the first id); the chain voided the claim (`court_fraud`) and slashed the bond. And AG-2 (the capacity
+    package's aggregate liability, armed from the fence-3 flag day): the conviction voids ALL the bond's other live claims (`aggregate_forfeit`), forfeits the
+    collateral and freezes the bond — no claim accepted after it — while the claims already Final STAY Final; the freed jobs are claimed again by honest
+    evaluators within the epoch. A lie that reached Final unconvicted is a FAIL; a claim of a liar's bond voided for any other reason is a FAIL."""
     p = (sd.get("data") or {}).get("dm3")
     tid = lines.get("T")
     if not tid:
@@ -1240,38 +1721,90 @@ def verdict_dm3(sd, lines):
         return "FAIL", f"the harness derived another id for line T than the chain's ({p['mismatch']}): the tamper flags name the wrong line"
     checks = []
     liars = p.get("liars") or {}
+    done = sd.get("done") or {}
     for node, fault in TAMPER.items():
         lie = liars.get(node)
+        stop = done.get(f"liar-stop:{node}")
         if lie is None:
-            checks.append((None, f"{node} has not lied yet (its first evaluation of T, fault {fault})"))
+            if stop and "NEVER lied" in str(stop.get("why", "")):
+                checks.append((False, f"{node} never lied by its deadline ({stop['why']})"))
+            elif stop:
+                checks.append((None, f"{node} was stopped before it lied: {stop.get('why')}"))
+            else:
+                checks.append((None, f"{node} has not lied yet (its first evaluation of T, fault {fault})"))
         else:
             checks.append((lie["line"] == tid[: len(lie["line"])] and lie["fault"] == fault, f"{node} lied about item {lie['item']} of epoch {lie['epoch']} of line T: {lie['fault']}"))
     disputes = {d["claim"]: d for d in (p.get("disputes") or [])}
     expected_kind = {"leaf": "leaf", "output": "output"}
+    t_epoch = p.get("t_epoch") or {}
+    t_open = t_epoch.get("state") in T_EPOCH_OPEN_STATES if t_epoch else True
+    jobs_of = (sd.get("data") or {}).get("dm3-jobs") or {}          # claim id -> [epoch, item, subject], from every tick's view of T's jobs
     landed = []
     for node, fault in TAMPER.items():
-        rows = {c["id"]: c for c in ((p.get("claims") or {}).get(node) or {}).get("rows", [])}
+        rec = (p.get("claims") or {}).get(node) or {}
+        rows = {c["id"]: c for c in rec.get("rows", [])}
         mine = [(rows[c], disputes[c]) for c in disputes if c in rows]
         if node in liars and not mine:
             checks.append((None, f"the challenger has found no dispute on a claim of {node}'s yet"))
+        convicted_daa = None
         for row, d in mine:
             landed.append((node, row, d))
             want = expected_kind[fault.split(":")[0]]
             checks.append((d.get("kind") == want, f"{node}'s lie, claim {row['id'][:12]}…: the challenger located it as {d.get('kind')} ({str(d.get('detail'))[:70]}), expected {want}"))
             phase = row["phase"]
-            slashed = int(((p.get("claims") or {}).get(node) or {}).get("slashed", 0))
-            if phase.startswith("Final"):
+            slashed = int(rec.get("slashed", 0))
+            if phase_is(phase, "final"):
                 checks.append((False, f"{node}'s lying claim {row['id'][:12]}… reached Final unconvicted"))
-            elif phase.startswith("Voided"):
-                checks.append((slashed > 0, f"{node}'s lying claim {row['id'][:12]}… is voided ({row['void'] or 'no reason'}) and its bond slashed ({slashed} sompi)"))
+            elif phase_is(phase, "voided"):
+                convicted_daa = int(row.get("pdaa") or 0) or convicted_daa
+                checks.append(("court_fraud" in (row["void"] or "") and slashed > 0,
+                               f"{node}'s lying claim {row['id'][:12]}… is voided ({row['void'] or 'no reason'}) and its bond slashed ({slashed} sompi of {rec.get('collateral', '?')})"))
+                # A convicted evaluation claim frees its job and records no score (spec 17 §17.8.6): the chain's view of the epoch, where it still lists it,
+                # no longer holds the claim on any job row.
+                holders = [r for r in (p.get("eval_rows") or []) if r.get("claim") == row["id"]]
+                checks.append((not holders, f"{node}'s voided claim {row['id'][:12]}… holds no job row any more and records no score" if not holders
+                               else f"{node}'s voided claim {row['id'][:12]}… still holds job row(s) {[(r['epoch'], r['item'], r['subject']) for r in holders]}: the conviction did not free its job"))
             else:
                 checks.append((None, f"{node}'s lying claim {row['id'][:12]}… is {phase}: the court has not convicted it yet ({str(d.get('filing'))[:80]})"))
+        if convicted_daa is None:
+            continue
+        # AG-2 on the convicted bond.
+        others = [c for c in rec.get("rows", []) if c["id"] not in {r["id"] for r, _ in mine}]
+        live = [c for c in others if str(c["phase"]).lower() in LIVE_PHASES]
+        agg = [c for c in others if phase_is(c["phase"], "voided") and "aggregate_forfeit" in (c["void"] or "")]
+        stray = [c for c in others if phase_is(c["phase"], "voided") and not any(k in (c["void"] or "") for k in ("aggregate_forfeit", "court_fraud"))]
+        checks.append((not live, f"AG-2, {node}: no live claim is left on the convicted bond" if not live
+                       else f"AG-2, {node}: {len(live)} claim(s) of the convicted bond are still live ({sorted({c['phase'] for c in live})}): the aggregate forfeiture did not void them"))
+        checks.append((not stray, f"AG-2, {node}: {len(agg)} other live claim(s) voided as aggregate_forfeit, none voided for another reason" if not stray
+                       else f"{node}'s claim(s) {[c['id'][:12] for c in stray]} were voided for {sorted({c['void'] for c in stray})}: not the conviction's doing"))
+        was_final = set((sd.get("data") or {}).get(f"dm3-final-seen:{node}") or [])
+        lost = [c["id"][:12] for c in rec.get("rows", []) if c["id"] in was_final and not phase_is(c["phase"], "final")]
+        checks.append((not lost, f"AG-2, {node}: the claims already Final ({len(was_final)}) stay Final" if not lost
+                       else f"AG-2, {node}: claim(s) {lost} were Final and are not any more"))
+        after = [c["id"][:12] for c in rec.get("rows", []) if int(c.get("acc") or 0) > convicted_daa]
+        checks.append((not after, f"AG-2, {node}: the bond is frozen (no claim accepted after the conviction at DAA {convicted_daa})" if not after
+                       else f"AG-2, {node}: claim(s) {after} were accepted after the conviction (DAA {convicted_daa}): the bond is not frozen"))
+        # The freed jobs are claimed again (by anyone else) within the epoch.
+        voided_ids = {c["id"] for c in rec.get("rows", []) if phase_is(c["phase"], "voided")}
+        freed = {tuple(jobs_of[i]) for i in voided_ids if i in jobs_of}
+        unclaimed = []
+        for (epoch, item, subject) in freed:
+            held = [r for r in (p.get("eval_rows") or []) if (r["epoch"], r["item"], r["subject"]) == (epoch, item, subject) and r.get("claim") and r["claim"] not in voided_ids]
+            if not held:
+                unclaimed.append((epoch, item, subject))
+        if freed and not unclaimed:
+            checks.append((True, f"AG-2, {node}: the {len(freed)} freed job(s) were claimed again by other evaluators"))
+        elif freed:
+            checks.append((None if t_open else False, f"AG-2, {node}: {len(unclaimed)} of {len(freed)} freed job(s) {sorted(unclaimed)[:4]} not claimed again yet"
+                           + ("" if t_open else " and T's epoch has left Evaluating")))
     for node in TAMPER:
         landed_ids = {row["id"] for n, row, _ in landed if n == node}
-        honest_voided = [c["id"][:12] for c in ((p.get("claims") or {}).get(node) or {}).get("rows", [])
-                         if c["phase"].startswith("Voided") and c["id"] not in landed_ids]
-        if honest_voided:
-            checks.append((False, f"{node}'s honest claim(s) {honest_voided} were voided"))
+        # (the other voids of a convicted bond are checked above; a bond whose lie has not been convicted must have no voided claim at all)
+        rec = (p.get("claims") or {}).get(node) or {}
+        if not any(n == node and phase_is(row["phase"], "voided") for n, row, _ in landed):
+            odd = [c["id"][:12] for c in rec.get("rows", []) if phase_is(c["phase"], "voided") and c["id"] not in landed_ids]
+            if odd:
+                checks.append((False, f"{node}'s claim(s) {odd} were voided before any conviction"))
     v, why = v_all(checks)
     return v, why + EVIDENCE_STAND_IN
 
@@ -1288,11 +1821,16 @@ def verdict_dm4(sd, st, lines, ids):
         out.append((bool((row or {}).get("barred")), "the rolled-back submitter is barred"))
     prf = sd["done"].get("rollback-proof")
     if prf is None:
-        out.append((None, "by proof: W1's second epoch has not shown the regression yet"))
+        out.append((None, "by proof: R's second epoch has not shown the regression yet"))
     else:
-        row = line_status(st, lines.get("W1", "")) if st else None
+        row = line_status(st, lines.get("R", "")) if st else None
         heads = [h["cause"] for h in (row or {}).get("heads", [])]
         out.append(("RolledBackByProof" in heads, f"by proof: head history {heads}"))
+        # vest_epochs 3: the rollback lands with part of epoch 1's grants unvested, and that remainder is forfeited (vested stays final).
+        g1 = ((epoch_row(row, 1) or {}).get("grants") or []) if row else []
+        if g1:
+            forfeited = sum(int(g.get("forfeited") or 0) for g in g1)
+            out.append((forfeited > 0, f"by proof: the unvested remainder is forfeited ({forfeited} sompi of {sum(int(g.get('amount') or 0) for g in g1)}; vested {sum(int(g.get('vested') or 0) for g in g1)} stays)"))
     return v_all(out)
 
 
@@ -1368,16 +1906,23 @@ def selftest():
           "grants": [{"vest_from_daa": 500, "vested": 5}]}
     row = {"line_id": "11" * 64, "epochs": [e1], "heads": [], "pool": {"deposited": "0", "fees_in": "10", "phi_in": "0", "held_in": "5",
                                                                         "balance": "3", "held": "2", "unvested": "5", "paid": "3", "refunded": "2"}}
-    st = {"lines": [row]}
+    # Vesting is read on line R (the full-weight line: its first unit is due at its decision + L_e 253); W1's own is past the run's end.
+    rrow = {"line_id": "44" * 64, "heads": [], "epochs": [{"epoch": 1, "state": "Decided", "grants": [
+        {"vest_from_daa": 500, "vested": 3, "amount": 9, "forfeited": 0, "vest_epochs": 3}]}]}
+    st = {"lines": [row, rrow]}
+    dm1_lines = {"W1": "11" * 64, "R": "44" * 64}
     sd["milestones"] = {"head:first-final-claim": {"daa": 260}}
-    r = verdict_dm1(sd, st, {"W1": "11" * 64}, {"win": win}, 950)
-    assert r[0] == "PASS", r
+    r = verdict_dm1(sd, st, dm1_lines, {"win": win}, 950)
+    assert r[0] == "PASS" and "vesting (line R)" in r[1], r
     row["pool"]["balance"] = "4"
-    assert verdict_dm1(sd, st, {"W1": "11" * 64}, {"win": win}, 950)[0] == "FAIL"
+    assert verdict_dm1(sd, st, dm1_lines, {"win": win}, 950)[0] == "FAIL"
     row["pool"]["balance"] = "3"
-    assert verdict_dm1(sd, st, {"W1": "11" * 64}, {"win": win}, 700)[0] == "INCOMPLETE"
+    assert verdict_dm1(sd, st, dm1_lines, {"win": win}, 700)[0] == "INCOMPLETE"
+    rrow["epochs"][0]["grants"][0]["vested"] = 0
+    assert verdict_dm1(sd, st, dm1_lines, {"win": win}, 950)[0] == "FAIL", "R's first unit is due and nothing vested"
+    rrow["epochs"][0]["grants"][0]["vested"] = 3
     e1["outcome"] = "NoChange { reason: NoneEligible }"
-    assert verdict_dm1(sd, st, {"W1": "11" * 64}, {"win": win}, 950)[0] == "FAIL"
+    assert verdict_dm1(sd, st, dm1_lines, {"win": win}, 950)[0] == "FAIL"
 
     lose = "cd" * 64
     rowl = {"line_id": "22" * 64, "epochs": [{"epoch": 1, "state": "Decided", "outcome": "NoChange { reason: NoneEligible }",
@@ -1391,49 +1936,114 @@ def selftest():
     r = verdict_dm4(sd, {"lines": [w2]}, {"W2": "33" * 64}, {})
     assert r[0] == "INCOMPLETE" and "by proof" in r[1], r
     sd["done"]["rollback-proof"] = {"daa": 1300}
-    w1 = {"line_id": "11" * 64, "heads": [{"seq": 3, "cause": "RolledBackByProof"}], "epochs": []}
-    assert verdict_dm4(sd, {"lines": [w1, w2]}, {"W1": "11" * 64, "W2": "33" * 64}, {})[0] == "PASS"
+    rl = {"line_id": "44" * 64, "heads": [{"seq": 3, "cause": "RolledBackByProof"}],
+          "epochs": [{"epoch": 1, "grants": [{"amount": 9, "vested": 6, "forfeited": 3}]}]}
+    r = verdict_dm4(sd, {"lines": [rl, w2]}, {"R": "44" * 64, "W2": "33" * 64}, {})
+    assert r[0] == "PASS" and "forfeited" in r[1], r
+    rl["epochs"][0]["grants"][0]["forfeited"] = 0
+    assert verdict_dm4(sd, {"lines": [rl, w2]}, {"R": "44" * 64, "W2": "33" * 64}, {})[0] == "FAIL", "nothing unvested to forfeit"
 
-    # D-M3: the verdict over the probe record.
+    # D-M3: the verdict over the probe record (the real RPC spellings: snake-case phases and void reasons; the liars new7 and new8 with AG-2).
     tid = "ab" * 64
     t_lines = {"T": tid}
     assert verdict_dm3({"data": {}}, {})[0] == "INCOMPLETE"
     assert verdict_dm3({"data": {}}, t_lines)[0] == "INCOMPLETE"
-    c1, c2, c3 = "c1" * 64, "c2" * 64, "c3" * 64
+    c1, c2, c3, c4, c5 = "c1" * 64, "c2" * 64, "c3" * 64, "c4" * 64, "c5" * 64
+    row = lambda i, ph, void="", acc=300, pdaa=0: {"id": i, "phase": ph, "void": void, "acc": acc, "pdaa": pdaa}  # noqa: E731
     probe = {"daa": 500, "mismatch": None,
-             "liars": {"new5": {"item": 2, "epoch": 1, "line": tid[:32], "fault": "leaf:1"},
-                       "new6": {"item": 5, "epoch": 1, "line": tid[:32], "fault": "output"}},
-             "claims": {"new5": {"slashed": 0, "rows": [{"id": c1, "phase": "Accepted", "void": ""}, {"id": c2, "phase": "Final", "void": ""}]},
-                        "new6": {"slashed": 0, "rows": [{"id": c3, "phase": "Accepted", "void": ""}]}},
+             "liars": {"new7": {"item": 2, "epoch": 1, "line": tid[:32], "fault": "leaf:1"},
+                       "new8": {"item": 5, "epoch": 1, "line": tid[:32], "fault": "output"}},
+             "claims": {"new7": {"slashed": 0, "collateral": 9_000_000, "rows": [row(c1, "panel_bound"), row(c2, "final", acc=200), row(c4, "provisional", acc=310)]},
+                        "new8": {"slashed": 0, "collateral": 9_000_000, "rows": [row(c3, "receipt_licensed"), row(c5, "provisional", acc=312)]}},
              "disputes": [{"claim": c1, "kind": "leaf", "detail": "leaf 1", "filing": "not filed"},
-                          {"claim": c3, "kind": "output", "detail": "generated id 0", "filing": "not filed"}]}
+                          {"claim": c3, "kind": "output", "detail": "generated id 0", "filing": "not filed"}],
+             "t_epoch": {"epoch": 1, "state": "Evaluating", "outcome": None}}
     clone = lambda x: json.loads(json.dumps(x))  # noqa: E731
-    r = verdict_dm3({"data": {"dm3": probe}}, t_lines)
+    sd3 = lambda pr, **extra: {"data": {"dm3": pr, "dm3-final-seen:new7": [c2], **extra}, "done": {}}  # noqa: E731
+    r = verdict_dm3(sd3(probe), t_lines)
     assert r[0] == "INCOMPLETE" and "not convicted" in r[1], r
-    convicted = clone(probe)
-    for node, cid in (("new5", c1), ("new6", c3)):
-        convicted["claims"][node]["slashed"] = 1_000_000
-        for c in convicted["claims"][node]["rows"]:
-            if c["id"] == cid:
-                c["phase"], c["void"] = "Voided", "CourtConviction"
-    r = verdict_dm3({"data": {"dm3": convicted}}, t_lines)
-    assert r[0] == "PASS" and "stand-in" in r[1], r
+
+    def convict(pr):
+        """The conviction of each lie (court_fraud) and the aggregate forfeiture (aggregate_forfeit) of everything else live on the bond (AG-2)."""
+        pr = clone(pr)
+        for node, cid in (("new7", c1), ("new8", c3)):
+            rec = pr["claims"][node]
+            rec["slashed"] = rec["collateral"]
+            for c in rec["rows"]:
+                if c["id"] == cid:
+                    c["phase"], c["void"], c["pdaa"] = "voided", "court_fraud", 400
+                elif c["phase"] in LIVE_PHASES:
+                    c["phase"], c["void"], c["pdaa"] = "voided", "aggregate_forfeit", 400
+        return pr
+    convicted = convict(probe)
+    r = verdict_dm3(sd3(convicted), t_lines)
+    assert r[0] == "PASS" and "stand-in" in r[1] and "aggregate_forfeit" in r[1] and "frozen" in r[1], r
+    # AG-2 broken three ways: a live claim survives, a Final claim is voided, a claim is accepted after the conviction.
+    live = clone(convicted)
+    live["claims"]["new7"]["rows"][2].update(phase="provisional", void="", pdaa=0)
+    assert verdict_dm3(sd3(live), t_lines)[0] == "FAIL", "AG-2: a live claim of the convicted bond survived"
+    lost = clone(convicted)
+    lost["claims"]["new7"]["rows"][1].update(phase="voided", void="aggregate_forfeit")
+    assert verdict_dm3(sd3(lost), t_lines)[0] == "FAIL", "AG-2: a Final claim was voided"
+    thawed = clone(convicted)
+    thawed["claims"]["new7"]["rows"].append(row("c9" * 64, "provisional", acc=401))
+    assert verdict_dm3(sd3(thawed), t_lines)[0] == "FAIL", "AG-2: the bond accepted a claim after its conviction"
+    stray = clone(convicted)
+    stray["claims"]["new7"]["rows"][2].update(phase="voided", void="receipt_timeout")
+    assert verdict_dm3(sd3(stray), t_lines)[0] == "FAIL", "a claim voided for another reason"
+    # The freed jobs: claimed again by someone else (PASS), not yet (pending while T is evaluating), never (FAIL once T has left Evaluating).
+    jobs = {c1: [1, 2, "Candidate"], c3: [1, 5, "Parent"]}
+    held = lambda claim: [{"epoch": 1, "item": 2, "subject": "Candidate", "kind": "ExactMatch", "claim": claim, "voided": False, "score": None},  # noqa: E731
+                          {"epoch": 1, "item": 5, "subject": "Parent", "kind": "ExactMatch", "claim": claim, "voided": False, "score": None}]
+    again = clone(convicted)
+    again["eval_rows"] = held("e1" * 64)
+    assert verdict_dm3(sd3(again, **{"dm3-jobs": jobs}), t_lines)[0] == "PASS", "the freed jobs were claimed again"
+    nobody = clone(convicted)
+    nobody["eval_rows"] = held(None)
+    assert verdict_dm3(sd3(nobody, **{"dm3-jobs": jobs}), t_lines)[0] == "INCOMPLETE", "not claimed again yet, T still evaluating"
+    nobody["t_epoch"]["state"] = "Decided"
+    assert verdict_dm3(sd3(nobody, **{"dm3-jobs": jobs}), t_lines)[0] == "FAIL", "never claimed again"
+    still = clone(convicted)
+    still["eval_rows"] = held(c1)
+    assert verdict_dm3(sd3(still, **{"dm3-jobs": jobs}), t_lines)[0] == "FAIL", "a voided claim that still holds its job"
     final = clone(probe)
-    final["claims"]["new5"]["rows"][0]["phase"] = "Final"
-    assert verdict_dm3({"data": {"dm3": final}}, t_lines)[0] == "FAIL", "a lie that reached Final unconvicted"
+    final["claims"]["new7"]["rows"][0]["phase"] = "final"
+    assert verdict_dm3(sd3(final), t_lines)[0] == "FAIL", "a lie that reached Final unconvicted"
     wrong = clone(convicted)
     wrong["disputes"][0]["kind"] = "output"
-    assert verdict_dm3({"data": {"dm3": wrong}}, t_lines)[0] == "FAIL", "the lie located as another kind"
-    honest = clone(convicted)
-    honest["claims"]["new5"]["rows"][1]["phase"] = "Voided"
-    assert verdict_dm3({"data": {"dm3": honest}}, t_lines)[0] == "FAIL", "an honest claim voided"
+    assert verdict_dm3(sd3(wrong), t_lines)[0] == "FAIL", "the lie located as another kind"
+    early = clone(probe)
+    early["claims"]["new7"]["rows"][2].update(phase="voided", void="aggregate_forfeit")
+    assert verdict_dm3(sd3(early), t_lines)[0] == "FAIL", "a claim voided before any conviction"
     quiet = clone(probe)
     quiet["liars"] = {}
     quiet["disputes"] = []
-    assert verdict_dm3({"data": {"dm3": quiet}}, t_lines)[0] == "INCOMPLETE", "nobody lied yet"
+    assert verdict_dm3(sd3(quiet), t_lines)[0] == "INCOMPLETE", "nobody lied yet"
+    nolie = sd3(quiet)
+    nolie["done"] = {"liar-stop:new7": {"daa": 760, "why": "deadline: it NEVER lied and was not convicted by DAA 760 (0 court_fraud, 0 live)"}}
+    assert verdict_dm3(nolie, t_lines)[0] == "FAIL", "a liar stopped at its deadline that never lied"
     bad_id = clone(probe)
     bad_id["mismatch"] = {"chain": "x", "derived": "y"}
-    assert verdict_dm3({"data": {"dm3": bad_id}}, t_lines)[0] == "FAIL", "the harness derived another line id"
+    assert verdict_dm3(sd3(bad_id), t_lines)[0] == "FAIL", "the harness derived another line id"
+    assert parse_free_pct("The system has 34359738368 (2097152 pages with a page size of 16384).\nSystem-wide memory free percentage: 46%\n") == 46 and parse_free_pct("") is None
+    stopped = sd3(quiet)
+    stopped["done"] = {"liar-stop:new7": {"daa": 480, "why": "memory tripwire: the Mac's free memory was 9%"}}
+    r = verdict_dm3(stopped, t_lines)
+    assert r[0] == "INCOMPLETE" and "tripwire" in r[1], r
+    # The capacity line: the windows' numbers and the gate.
+    claims = {f"k{i}": {"acc": 570 + i * 0.8, "lic": 570 + i * 0.8 + 6, "fin": None} for i in range(100)}
+    flat = [{"daa": 570 + i * 2, "backlog": 8 + (i % 3), "occ_max": 5, "occ_mean": 3.5, "reserved_ratio": 0.4} for i in range(40)]
+    sm = capacity_summary(flat, claims, 570, 650)
+    assert sm["diverges"] is False and sm["latency_p50"] == 6 and 1.2 <= sm["accepted_per_daa"] <= 1.3, sm
+    growing = [{"daa": 570 + i * 2, "backlog": 5 + i * 3, "occ_max": 7, "occ_mean": 6.0, "reserved_ratio": 0.9} for i in range(40)]
+    assert capacity_summary(growing, claims, 570, 650)["diverges"] is True
+    assert capacity_summary(flat[:3], claims, 570, 650)["diverges"] is None, "too few samples to say"
+    assert verdict_cap({"data": {}})[0] == "INCOMPLETE"
+    assert verdict_cap({"data": {"cap-armed": {"capacity_step2": True, "capacity_step3": True}, "cap-summary": {"rho25": sm, "rho100": capacity_summary(growing, claims, 665, 745)}}})[0] in ("INCOMPLETE", "FAIL")
+    two = {"rho25": sm, "rho100": dict(sm)}
+    assert verdict_cap({"data": {"cap-armed": {"capacity_step2": True, "capacity_step3": True}, "cap-summary": two}})[0] == "PASS"
+    two["rho100"]["diverges"] = True
+    assert verdict_cap({"data": {"cap-armed": {"capacity_step2": True, "capacity_step3": True}, "cap-summary": two}})[0] == "FAIL", "ρ=100 diverges"
     # The line id derived offline is the chain's: golden values pinned by misaka-palw-sdk/tests/improve_line_id.rs.
     g_class, g_bond = "ab" * 64, "07" * 64 + ":1"
     assert model_line_id(g_class, g_bond, "T") == "17131be198686c865fff3483f36c895a686bd10d8d92c0a894920e2a7923450c89f8e8061afefc2b29ab5667516311de410d614e2811d1379e11cee4fa89dacd"
@@ -1453,7 +2063,8 @@ def selftest_drive():
         g[k] = v
     for d in (KR, MODEL, f"{MODEL}/ids", UHOME):
         os.makedirs(d, exist_ok=True)
-    json.dump({"seats": [{"bond_outpoint": f"{i:0128x}:{i}", "fee_float_outpoint": f"{i:0128x}:9"} for i in range(8)]}, open(f"{KR}/manifest.json", "w"))
+    json.dump({"seats": [{"bond_outpoint": f"{i:0128x}:{i}", "fee_float_outpoint": f"{i:0128x}:9"} for i in range(8)],
+               "bonds": [{"n": 8 + i, "address": f"misakatest:qaddr{i}", "seed_file": f"{KR}/bond-{8 + i}.seed"} for i in range(8)]}, open(f"{KR}/manifest.json", "w"))
     h = lambda c: c * 128  # noqa: E731
     ids = {"head": h("a"), "win": h("b"), "lose": h("c"), "winc": h("d"), "losec": h("f")}   # by the assets' names
     for k, v in ids.items():
@@ -1464,16 +2075,16 @@ def selftest_drive():
         json.dump(mk(16), open(f"{MODEL}/pool-{name}.json", "w"))
     for a in ("winc", "losec"):
         open(f"{MODEL}/{a}.palwtirs", "w").write("x")
-    g["NODES"] = {n: {"k": k, "seat": s, "role": r, "hb": False, "ir": True} for n, k, s, r in
+    g["NODES"] = {n: {"k": k, "seat": s, "role": r, "hb": False, "ir": True, "jit": r in ("liar", "reg")} for n, k, s, r in
                   (("new0", 0, 3, "floor"), ("new1", 1, 0, "seat"), ("new3", 3, 2, "seat"), ("new4", 4, 4, "head"), ("new5", 5, 5, "eval"),
-                   ("new6", 6, 6, "evalw"), ("old", 7, None, "old"))}
+                   ("new6", 6, 6, "evalw"), ("new7", 7, 8, "liar"), ("new8", 8, 9, "liar"), ("reg", 9, None, "reg"), ("old", 10, None, "old"))}
     open(f"{WORK}/old-lacks.txt", "w").write("tir2@24 gen@28 decode@32 improve@40")
     os.makedirs(f"{WORK}/new0", exist_ok=True)
     os.makedirs(f"{WORK}/old", exist_ok=True)
 
     clock = {"daa": 0}
     submitted, built, sh = [], [], []
-    lid = {"W1": ids["head"], "W2": h("2"), "L": h("3"), "T": line_id_of("T")}
+    lid = {"W1": ids["head"], "W2": h("2"), "L": h("3"), "T": line_id_of("T"), "R": h("4")}
     g["salt"] = lambda: "00" * 32
     g["chain_daa"] = lambda: clock["daa"]
     g["node_alive"] = lambda n: True
@@ -1481,12 +2092,19 @@ def selftest_drive():
     g["call"] = lambda port, method, params=None: {"sink": "abcdef0123456789", "virtualDaaScore": clock["daa"]}
     g["log_after"] = lambda self, node, cursor, pattern: ("matched: " + pattern[:20]) if (node != "old" or "palw-lifecycle" in pattern) else None
     g["time"] = type("T", (), {"sleep": staticmethod(lambda x: None), "strftime": staticmethod(time.strftime), "time": staticmethod(time.time)})
-    Drive.log_after = lambda self, node, cursor, pattern: ("matched: " + pattern[:24])
+    def fake_log_after(self, node, cursor, pattern):
+        if "registered bond" in pattern:      # the registrar's line for the bond being registered
+            n = next(x for x in XB_ORDER if extra_bond(x) is None)
+            return f"registered bond {n:0128x}:0 with {COLL} sompi of collateral, in tx {n + 100:0128x}"
+        return "matched: " + pattern[:24]
+    Drive.log_after = fake_log_after
+    nodes_calls = []
+    Drive.nodes_sh = lambda self, *a, **k: (nodes_calls.append((clock["daa"], a)), (0, ""))[1]
 
     # D-M3's scripted evidence: the two liars' logs, the challenger's disputes, the chain's claims of the liars' bonds.
     T_ID = lid["T"]
     c_leaf, c_out, c_honest = "c1" * 64, "c3" * 64, "c2" * 64
-    for node, fault in (("new5", "leaf:1"), ("new6", "output")):
+    for node, fault in (("new7", "leaf:1"), ("new8", "output")):
         os.makedirs(f"{WORK}/{node}", exist_ok=True)
         open(f"{WORK}/{node}/kaspad.out", "w").write(
             f"2026-10-02 [WARN ] [PALW-PANEL] [palw-improve] DRILL: this node LIES about item 2 of epoch 1 of line {T_ID} for Candidate({h('b')}): {fault} "
@@ -1497,18 +2115,35 @@ def selftest_drive():
                             {"claim": c_out, "job": h("6"), "kind": "output", "detail": "generated id 0: committed 4, honest 5", "found_daa": 401, "filing": "scripted"}]},
               open(f"{WORK}/new1/app/testnet-12/palw-improve-status.json", "w"))
 
+    funded = {}
+    COLL = 9 * 10**13       # a genesis seat's collateral, ~900,000 MSK (bigger than the 150 MSK fee float the registrar leaves as change)
+
     def fake_rpc(method, params=None, prefer=()):
-        if method == "getPalwClaims" and (params or {}).get("role") == "executor" and (params or {}).get("bond") in (bond_of(5), bond_of(6)):
+        liar_bonds = {r["bond_outpoint"]: n for n in (8, 9) for r in [extra_bond(n)] if r}
+        if method == "getPalwClaims" and (params or {}).get("role") == "executor" and (params or {}).get("bond") in liar_bonds:
             convicted = clock["daa"] >= 700
-            mine, other = (c_leaf, c_honest) if params["bond"] == bond_of(5) else (c_out, None)
-            rows = [{"claimId": mine, "phase": "Voided" if convicted else "Accepted", "voidReason": "CourtConviction" if convicted else ""}]
-            if other:
-                rows.append({"claimId": other, "phase": "Final" if clock["daa"] >= 600 else "Accepted", "voidReason": ""})
-            return {"bondSlashed": 1_000_000 if convicted else 0, "claims": rows}
+            first = liar_bonds[params["bond"]] == 8
+            lie, live = (c_leaf, "c4" * 64) if first else (c_out, "c5" * 64)
+            rows = [{"claimId": lie, "phase": "voided" if convicted else "panel_bound", "voidReason": "court_fraud" if convicted else "", "acceptedDaa": 300, "phaseDaa": 700 if convicted else 0},
+                    {"claimId": live, "phase": "voided" if convicted else "provisional", "voidReason": "aggregate_forfeit" if convicted else "", "acceptedDaa": 310,
+                     "phaseDaa": 700 if convicted else 0}]
+            if first:
+                rows.append({"claimId": c_honest, "phase": "final", "voidReason": "", "acceptedDaa": 200, "phaseDaa": 450})
+            return {"bondSlashed": COLL if convicted else 0, "bondCollateral": COLL, "claims": rows}
         if method == "getPalwModelRegistry":
             return {"classes": [{"classId": v, "state": "Probation { probes_passed: 0 }", "readySeats": 7} for v in ids.values()]}
         if method == "getPalwClaims":
-            return {"claims": [{"classId": ids["head"], "phase": "Final"}] if clock["daa"] >= 255 else []}
+            return {"bondCollateral": COLL, "claims": [{"claimId": f"{clock['daa']:0128x}", "classId": ids["head"], "phase": "final", "acceptedDaa": clock["daa"] - 40, "phaseDaa": clock["daa"]}]
+                    if clock["daa"] >= 255 else []}
+        if method == "getUtxosByAddresses":
+            addr = (params or {}).get("addresses", [""])[0]
+            amt = funded.get(addr)
+            if not amt:
+                return {"entries": []}
+            return {"entries": [{"outpoint": {"transactionId": "ab" * 64, "index": 0}, "utxoEntry": {"amount": amt}},
+                                {"outpoint": {"transactionId": "cd" * 64, "index": 1}, "utxoEntry": {"amount": 150 * 10**8}}]}
+        if method == "getPalwProducerFacts":
+            return {"bondOperatorId": "0f" * 64, "bondReservedExposure": "40", "bondExposureCeiling": "100"}
         return {}
     g["rpc"] = fake_rpc
 
@@ -1530,6 +2165,11 @@ def selftest_drive():
 
     def fake_run(cmd, timeout=900, home=None):
         sh.append((clock["daa"], " ".join(cmd[-8:])))
+        if cmd[-1:] == ["--help"]:
+            return 0, "--palw-drill-capacity-step2-at --palw-drill-capacity-step3-at"
+        if "wallet" in cmd and "send" in cmd:      # a transfer to a bond's pay address: the funding that address then shows
+            funded[cmd[cmd.index("--to") + 1]] = int(float(cmd[cmd.index("--amount") + 1]) * 10**8)
+            return 0, ""
         if "line-found" in cmd:
             name = cmd[cmd.index("--name") + 1]
             return 0, f"found line '{name}'\n  line id        {lid[name]}\n"
@@ -1571,7 +2211,7 @@ def selftest_drive():
             win_class = ids[asset_of("win", name)]
             epochs = []
             heads = [{"seq": 0, "epoch": 0, "class": ids["head"], "cause": "OptIn"}]
-            for e_no, t0 in ((1, t_open), (2, {"W1": 3 * t_open, "L": 2 * t_open}.get(name, 3 * t_open))):
+            for e_no, t0 in ((1, t_open), (2, {"R": 3 * t_open, "L": 2 * t_open}.get(name, 3 * t_open))):
                 if str(e_no) not in plan["epochs"] and name != "W2":
                     continue
                 st = epoch_state(daa, t0, name)
@@ -1586,20 +2226,21 @@ def selftest_drive():
                        "previous_counts": None,
                        "candidates": [{"class": ids[asset_of(c["class"], name)], "counts": None} for c in plan["epochs"].get(str(e_no), {}).get("candidates", [])] if ncand else []}
                 if st == "Decided":
-                    if name in ("W1", "W2") and e_no == 1:
+                    if name in ("W1", "W2", "R") and e_no == 1:
                         row["outcome"] = "Promoted { class_id: " + win_class + ", wins: 8, losses: 0 }"
                         row["candidates"][0]["counts"] = {"primary": {"wins": 8, "losses": 0, "ties": 0}, "eligible": True}
-                        row["grants"] = [{"vest_from_daa": t0 + 300, "vested": 5 if daa > t0 + 300 + line_l_e(name) else 0}]
+                        row["grants"] = [{"vest_from_daa": t0 + 300, "amount": 9, "vested": 5 if daa > t0 + 300 + line_l_e(name) else 0,
+                                          "forfeited": 3 if (name == "R" and "rollback-proof" in done) else 0}]
                         heads.append({"seq": 1, "epoch": 1, "class": win_class, "cause": "Promoted"})
                         if name == "W2" and "rollback-owner" in done:
                             heads.append({"seq": 2, "epoch": 1, "class": ids["head"], "cause": "RolledBackByOwner"})
-                        if name == "W1" and "rollback-proof" in done:
+                        if name == "R" and "rollback-proof" in done:
                             heads.append({"seq": 2, "epoch": 1, "class": ids["head"], "cause": "RolledBackByProof"})
                     else:
                         row["outcome"] = "NoChange { reason: NoneEligible }"
                         for c in row["candidates"]:
                             c["counts"] = {"primary": {"wins": 0, "losses": 4, "ties": 4}, "eligible": False}
-                        if name == "W1" and e_no == 2:
+                        if name == "R" and e_no == 2:
                             row["previous_counts"] = {"primary": {"wins": 8, "losses": 0, "ties": 0}, "eligible": True}
                 epochs.append(row)
                 if st in ("Evaluating", "Closing"):
@@ -1617,7 +2258,7 @@ def selftest_drive():
     for daa in range(0, 1800, 5):
         clock["daa"] = daa
         d.tick()
-    verdicts = {n: read(f"{VERDICTS}/{n}.verdict", "none") for n in ("dm5", "dm1", "dm2", "dm3", "dm4", "dm6")}
+    verdicts = {n: read(f"{VERDICTS}/{n}.verdict", "none") for n in ("dm5", "dm1", "dm2", "dm3", "dm4", "dm6", "cap")}
     for n, v in verdicts.items():
         print(f"{n}: {v[:170]}")
     kinds = [b[1] for b in built]
@@ -1629,6 +2270,15 @@ def selftest_drive():
     assert verdicts["dm1"].startswith("PASS"), verdicts["dm1"]
     assert verdicts["dm2"].startswith("PASS"), verdicts["dm2"]
     assert verdicts["dm3"].startswith("PASS"), verdicts["dm3"]   # the scripted liars were convicted at DAA 700: probe -> verdict end to end
+    assert "aggregate_forfeit" in verdicts["dm3"], verdicts["dm3"]
+    assert verdicts["cap"].startswith("PASS"), verdicts["cap"]
+    regd = sorted(n for n in XB_ORDER if extra_bond(n))
+    assert regd == sorted(XB_ORDER), f"bonds registered: {regd}"
+    assert [a for _, a in nodes_calls if a[0] == "start" and a[1] in ("new7", "new8")] and [a for _, a in nodes_calls if a[0] == "stop" and a[1] in ("new7", "new8")], nodes_calls[-8:]
+    starts = [d_ for d_, a in nodes_calls if a[0] == "start" and a[1] == "new7"]
+    assert starts and starts[0] >= LIAR_START_DAA, starts
+    ops = [s_ for s_ in json.load(open(f"{KR}/manifest.json"))["seats"] if s_.get("operator_id")]
+    assert len(ops) == 8, "the manifest names every seat's operator id"
     print("selftest-drive ok")
 
 
