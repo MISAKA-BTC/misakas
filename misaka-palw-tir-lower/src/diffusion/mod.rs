@@ -11,6 +11,7 @@
 //! * [`sink`] — the integer params a lowering produces, keyed by name and bound to a program's param indices;
 //! * [`act`] — `ACT_TABLE_V1`, SiLU and GELU-tanh as `i16` tables on the code grid;
 //! * [`ada`] — `MOD_ADALN_V1`, the modulated LayerNorm and the gated residual;
+//! * [`fixture`] — the reduced SD3 fixture lowered end to end (shared by the lowerer's and the SDK's tests);
 //! * [`calib`] / [`float`] — the per-site calibration and the float reference of the denoiser it is taken from;
 //! * [`dit`] — the denoiser stage: patch embed, timestep, blocks, output, Euler update, one program;
 //! * [`vae`] — the VAE decoder as a chain of single-position stages (resnet, attention, upsample, head);
@@ -39,6 +40,7 @@ pub mod calib;
 pub mod conv;
 pub mod dit;
 pub mod embed;
+pub mod fixture;
 pub mod float;
 pub mod linear;
 pub mod norm;
