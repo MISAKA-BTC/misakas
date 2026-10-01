@@ -27,7 +27,7 @@ use kaspa_consensus_core::palw_gen_artifact_v1::palw_gen_artifact_matches_v1;
 use kaspa_consensus_core::palw_gen_class_v1::PalwGenClassRecordV1;
 use kaspa_consensus_core::palw_gen_close_v1::{
     PalwGenEvidenceV1, PalwGenRootClaimV1, PalwGenStepBindingV1, check_gen_cone_close_v1, check_gen_decode_close_v1,
-    palw_gen_image_input_ref_v1, palw_gen_root_claim_message_v1,
+    check_gen_output_close_v1, palw_gen_image_input_ref_v1, palw_gen_root_claim_message_v1,
 };
 use kaspa_consensus_core::palw_gen_step_v1::{
     PalwGenLeafKindV1, PalwGenStepSpaceV1, palw_gen_stage_root_v1, palw_gen_step_leaf_hash_v1, palw_gen_step_root_v1,
@@ -203,8 +203,9 @@ impl GenWorkV1 {
             row: &held.row,
             params: &held.params,
             execution: &self.execution,
-            binding: &self.binding,
+            binding: self.binding.clone().into(),
             prompt: &self.prompt,
+            negative: &[],
             images: &self.images,
             source: &self.source,
         }
@@ -375,15 +376,19 @@ impl GenCaptureV1 {
             leaf_hashes.push(hashes);
         }
         let stage_roots: Vec<Hash64> = leaf_hashes.iter().enumerate().map(|(s, h)| palw_gen_stage_root_v1(s as u8, h)).collect();
-        let claim =
-            PalwGenClaimRootsV1 { step_root: palw_gen_step_root_v1(&stage_roots), stage_roots, generated: self.generated.clone() };
+        let claim = PalwGenClaimRootsV1 {
+            step_root: palw_gen_step_root_v1(&stage_roots),
+            stage_roots,
+            generated: self.generated.clone(),
+            output_root: None,
+        };
         let binding = PalwGenStepBindingV1::of(&self.job, &claim, space.leaf_count());
         // The capture holds commitments, not a run: the rebuilt execution's run is empty.
         let run = misaka_palw_tir::pipeline::PipelineRun {
             stages: Vec::new(),
             output: misaka_palw_tir::tensor::Tensor::zeros(misaka_palw_tir::types::DType::I32, &[0]),
         };
-        let execution = PalwGenExecutionV1 { run, stop: None, space, leaf_values, leaf_hashes, claim };
+        let execution = PalwGenExecutionV1 { run, stop: None, space, leaf_values, leaf_hashes, claim, output: None };
         Ok(GenWorkV1 { job: self.job.clone(), prompt: self.prompt.clone(), images, source: self.source.clone(), execution, binding })
     }
 }
@@ -391,8 +396,14 @@ impl GenCaptureV1 {
 /// **The first leaf, in the claim's one order, where the accused's commitments part from an honest
 /// run of the same job** — the leaf a challenger disputes (the bisection's destination).
 pub fn gen_first_divergence_v1(accused: &GenWorkV1, own: &GenWorkV1) -> Option<u64> {
+    gen_execution_first_divergence_v1(&accused.execution, &own.execution)
+}
+
+/// [`gen_first_divergence_v1`] over two executions (a text run's or a tensor run's): the first leaf, in
+/// the claim's one order, whose hashes differ.
+pub fn gen_execution_first_divergence_v1(accused: &PalwGenExecutionV1, own: &PalwGenExecutionV1) -> Option<u64> {
     let mut before = 0u64;
-    for (a, o) in accused.execution.leaf_hashes.iter().zip(&own.execution.leaf_hashes) {
+    for (a, o) in accused.leaf_hashes.iter().zip(&own.leaf_hashes) {
         if let Some(i) = a.iter().zip(o).position(|(x, y)| x != y) {
             return Some(before + i as u64);
         }
@@ -404,7 +415,7 @@ pub fn gen_first_divergence_v1(accused: &GenWorkV1, own: &GenWorkV1) -> Option<u
 /// **A move a party files at the narrowed leaf.**
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GenCourtMoveV1 {
-    /// A close (`GenCone` or `GenDecodeToken`).
+    /// A close (`GenCone`, `GenDecodeToken` or, for a tensor claim, `GenOutputTile`).
     Close(PalwCourtVerdictProofV2),
     /// The responder's root claim at a dissected leaf (`CourtGenRootClaimed`).
     RootClaim(PalwGenRootClaimV1),
@@ -504,6 +515,9 @@ pub fn gen_court_object_v1(
                 }
                 PalwCourtVerdictProofV2::GenDecodeToken { close } => {
                     check_gen_decode_close_v1(close, row, &row.class_id, claim_execution_root, Some(narrowed))
+                }
+                PalwCourtVerdictProofV2::GenOutputTile { close } => {
+                    check_gen_output_close_v1(close, row, &row.class_id, claim_execution_root, Some(narrowed))
                 }
                 _ => return Err("not a generative close a party files at a leaf".into()),
             }
