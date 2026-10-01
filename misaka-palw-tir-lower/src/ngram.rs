@@ -130,6 +130,23 @@ impl NgramTables {
         }
     }
 
+    /// [`NgramTables::new`], memoised by spec: the head sizes are primes found by trial division,
+    /// which takes a moment at a vocabulary of tens of millions and is asked for per layer and per
+    /// param.
+    pub fn cached(p: &NgramPleSpec) -> std::sync::Arc<NgramTables> {
+        use std::sync::{Arc, Mutex, OnceLock};
+        type Cache = Mutex<std::collections::BTreeMap<String, Arc<NgramTables>>>;
+        static CACHE: OnceLock<Cache> = OnceLock::new();
+        let key = format!("{p:?}");
+        let cache = CACHE.get_or_init(Default::default);
+        if let Some(t) = cache.lock().expect("n-gram cache").get(&key) {
+            return t.clone();
+        }
+        let t = Arc::new(NgramTables::new(p));
+        cache.lock().expect("n-gram cache").insert(key, t.clone());
+        t
+    }
+
     pub fn heads(&self) -> usize {
         self.head_sizes.len()
     }

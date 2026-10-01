@@ -436,6 +436,7 @@ calibration statistics (`lower::fill`), so a recalibration moves the artifact, n
 | weights | W8: `i8` per output row. A table gathered by row (an embedding, a learned position table) is `i16` per row, and a head tied to it reads the same codes (`i16 × i16`, exact in `i64`). `(m, s, z)` are three typed per-channel params (`i64`, `i8`, `i64`) |
 | norm unit rows, softmax probabilities, decays, gates | Q24 `i32` |
 | attention and router logits | Q14 `i32` (±131,072: Qwen2.5's layer-0 logits reach 24,000) |
+| the text program's logits | Q24 `i32`: natural-log units × 2^24 whatever the model (`LOGITS_Q24_V1`, §22; `|logit| < 128`) |
 | activations | `Table(x; T)`: 65,536 `i16` entries per site and layer, the float function rounded on the code grid |
 
 **Outlier channels.** A value read only by projections splits off its `k ≤ 16` channels with the
@@ -1274,3 +1275,97 @@ large by downloads):
 | **text generation in all** | **≈ 423 k, ≈ 13.6 % of HF** | by `tir_admit_v1`; the sizing cap lowers it until fence2 |
 | + RFC-0003 classes | **≈ 505 k, ≈ 16.3 %** | |
 
+
+## 21. Generic feature lowerers: Qwen4-Exp as a combination, not a model (2026-10-01, RFC-0002 lane G)
+
+The generic frontend's acceptance test. Qwen4-Exp (transformers 5.17 `qwen4_exp_text`) combines four
+residual streams with gated mixes, gated delta layers at a key:value head ratio, sparse block
+attention, hashed n-gram per-layer embeddings, a routed MoE and an attention output gate. It is read
+by ONE data file (`adapters/qwen4-exp.json`, Level B) into a `ModelSpec` of generic features and
+lowered by generic lowerers (`src/lower/generic.rs`). Nothing in the lowering knows the name `qwen4`;
+**no new primitive, no new court kernel** (the registry says so for every feature below).
+
+| feature | what the spec says | how it lowers (`lower/generic.rs`) |
+| --- | --- | --- |
+| `RESIDUAL_GATED_HC_V1` | `streams` rows of the hidden width; each block reads a gated mean of them and writes back through learned weights | the carry is `streams × hidden` `i32`; a grouped RMS norm, a low-rank pair of projections (SiLU between), a sigmoid gate, `StreamMean` (one `ReduceSum` and one narrowing), `StreamOuter` (one broadcast product and one narrowing); two blocks a layer |
+| `EMBED_NGRAM_PLE_V1` | per layer, hashed 2- and 3-gram rows gate against the streams, a dilated causal conv adds context | the hash IN the program (below); a per-head table read; `GroupDot`, a signed-sqrt table and a sigmoid table; the third block of the layer |
+| `ATTN_SPARSE_BLOCK_V1` | mean-pooled block keys, ReLU scores over index heads, top-K blocks plus the incomplete tail | `BlockMean`, `RopeAtBlock`, `BlockSelect`, `BlockWrite`, and a key mask in the attention (below) |
+| `CONV_DEPTHWISE_CAUSAL_V1` at any dilation | taps `d` positions apart | a window state of `(k−1)·d` rows and one `Gather` by a constant index vector |
+| `MIXER_GDN_V1` | any key:value head ratio, gate `silu` or `sigmoid` | the existing delta step; `GatedRmsNorm` now carries its gate's activation |
+
+**Data-dependent values, never shapes.** A sparse-attention layer reads a different set of blocks at
+every position, but every tensor keeps its static shape: the block scores are computed for ALL
+`blocks` rows, an incomplete block scores `−1` (every real score is `≥ 0`), a fixed-K `TopK` picks
+the ids (04b §6.6: the higher score first, equal scores the lower index first, the set in ascending
+index order), and the logits of the keys outside the picked blocks and outside the incomplete tail
+take the softmax's floor through a `Select`. The `1/√dim` of the float score moves no rank and is
+dropped; the scores are shifted into `i32` so they can be committed (a `TopK` cone is then `blocks`
+leaves, each a small matmul).
+
+**The n-gram hash, in `i64`, with no consensus change.** `mixed_n = t₀·m₀ ⊕ … ⊕ t_{n−1}·m_{n−1}` needs an
+XOR the primitive set does not have. It is bit decomposition: `bit_k(a) = ⌊a/2^k⌋ − 2⌊a/2^(k+1)⌋` for
+the 63 bits of each product (a `Div` by a constant vector, a `Div`, a `Mul`, a `Sub`, a never-fires
+`Clamp(0, 1)` to give the range analysis the interval it cannot derive), the XOR of the first `m`
+products' bits as the parity of their sum (ONE `MatMul` by a 0/1 triangular constant gives every order),
+the recomposition as a `MatMul` by `2^k` into `i128` and a `Clamp` back (the analysis bounds a
+63-term sum of up to `2^62` terms by `2^68`), and `mixed mod size` as a floor-division, a `Mul` in `i128`
+and a `Sub`. The multipliers are bounded by `i64::MAX / vocab` (a `Clamp` states it), so `token ·
+multiplier` never leaves `i64`. The segment window (the last `n − 1` tokens, an `eos` ending a
+segment) is a `Fixed` state of `token − eos`: a fresh sequence is all zeros.
+- **Measured** (trigram layer, tiny fixture): the ids are **26 nodes**, the per-head table read 14 (one
+  chunk), the whole PLE block 187 nodes with its three norms, the mixer half at most 450.
+- **Evidence for a possible one-time primitive-set extension** (decided later, not required): general
+  integer bit primitives — `XOR`, shifts, a wrapping multiply, a remainder — would cut the ids from 26
+  nodes to about 6.
+- The in-program ids equal transformers' ids at every (PLE layer × position) of every PLE fixture
+  (`PLE_01..04`, `PLE_06`), including eos inside n-grams and the extreme token ids.
+
+**A table above 2^24 rows is a lowering matter (NF-8).** Each hash head owns a contiguous range of the
+layer's table, so the table becomes `[heads, rows, dim]` `i16` codes at one scale per layer, cut into
+chunks of at most `2^24` rows (`LowerOpts::table_chunk_rows`), one batched `Gather` (`batch_dims` 1)
+per chunk and a `Select` by the chunk index. Published sizes (20 M rows a head, 16 heads) need two
+chunks. The fixture test cuts at 16 rows (`PLE_06`): the logits are bit-identical to the unchunked
+lowering's and the three implementations agree.
+
+**Results** (16 fixtures, `tests/qwen4_exp.rs`; float = the HL interpreter; KL in nats):
+
+| check | result |
+| --- | --- |
+| float reference ↔ transformers | max abs logit difference 2.4e-7 … 3.4e-6 (logit scale ≈ 1.5–1.8) on all 16 |
+| integer program ↔ transformers | KL 1e-5 … 4.1e-4; no top-1 differs where transformers leads by more than 8× the quantisation error |
+| streaming program ↔ transformers' cached decode | the same (QSA-06, PLE-04) |
+| block selection | at every position of K = 1, K = max, tie, ratio-3 and the full model, the program's selected blocks read exactly the tokens transformers' indexer keeps (an all-zero indexer included: the tie rule is the lower index) |
+| reference ↔ ref2 ↔ exec | logits and every commit point equal, all fixtures |
+| court | the demand evaluator reproduces every node of every occurrence from the committed leaves alone, with `Fixed` state replayed between checkpoints, and the dissection arithmetic of every reduction over `H`; all **25** primitives are evaluated |
+| admission (`tir_admit_v1`) | admitted: largest block 450 nodes (NF-12: 512), 6–9 blocks, worst court terminal 4,096 MACs (16,384 at 512 experts) |
+
+**Limits found.**
+- The PLE table of a real checkpoint (hundreds of millions of rows × `dim` × the PLE layers) is
+  hundreds of GB: the lowering has no dimension problem, but an in-memory fill of it does. A row-wise
+  (streamed) fill of the chunk params is the missing piece, not a primitive.
+- The block-key matrix is written by a one-hot `Select` over `[blocks, dim]` (cost `O(blocks·dim)` a
+  position, small beside the matmuls at published sizes); a dynamic-row write would make it `O(dim)`.
+- `ple_layer_ids` are 1-based in the config and the tensors are named by the 0-based layer; the
+  adapter does the shift and the fixtures pin it against transformers' ids.
+
+## 22. `LOGITS_Q24_V1` (lowering version 2): a text program's logits are natural-log units × 2^24 (2026-10-01)
+
+Until version 2 the logits left the head at a calibrated static scale — an arbitrary real
+(`2^−27.5 … 2^−23.7` on the tiny fixtures) — so a sampler had to read the scale from the pack, and a
+temperature meant something different for every class. Version 2 fixes the unit: **the logits are
+natural-log units × 2^24 in an `i32`, whatever the model.**
+- **What moved.** The head's last narrowing lands on `2^−24` (`ScaleKey::q24`) instead of the
+  site's calibrated scale: the same nodes, other `(m, s)` params. The program's digest, node count
+  and param count are identical to version 1's; only the artifact changes. The version-1 golden files
+  hold the programs (what a deliberate change must NOT move) and `tests/golden/lowering_v2{,_libm}.json`
+  pin the artifacts of version 2. `LOWERING_VERSION` is recorded in the convert and fidelity provenance.
+- **The bound.** `i32` at `2^−24` holds `|logit| < 128`. A model whose calibrated logits reach 120
+  natural-log units is refused (`NOT_LOWERABLE`, `LOGITS_Q24_V1`), not clipped; an input beyond 128 at
+  run time saturates. Two synthetic GGUF fixtures whose random weights reached 200+ were regenerated
+  with a final-norm gain.
+- **Cost.** None on the logits tile: the close carries `i32` logits as before, so close sizes and the
+  court's cone for the logits node are unchanged.
+- **Check.** `tests/logits_q24.rs`: the logits scale is exactly `2^−24`; the integer logits divided by
+  `2^24` agree with transformers' on eight head shapes (plain, tied, soft-capped, scaled, MoE,
+  recurrent, learned-position, Gemma-4) within the quantisation's error and top-1 agrees wherever
+  transformers leads by more than 8× that error; a head scaled to hundreds is refused by name.

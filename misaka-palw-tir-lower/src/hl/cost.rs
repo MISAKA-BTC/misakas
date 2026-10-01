@@ -97,7 +97,16 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     c.elementwise += 3 * out;
                     c.transcendental += *groups as u64;
                 }
-                Op::Rope { heads, rotary_dim, .. } => c.elementwise += 3 * (*heads * *rotary_dim) as u64,
+                Op::Rope { heads, rotary_dim, .. } | Op::RopeAtBlock { heads, rotary_dim, .. } => c.elementwise += 3 * (*heads * *rotary_dim) as u64,
+                Op::StreamMean { .. } | Op::StreamOuter { .. } | Op::GroupDot { .. } | Op::GatherRows { .. } | Op::BlockMean { .. } => c.elementwise += out.max(1),
+                // the hash: a few dozen elementwise ops over 63-bit vectors per order
+                Op::NgramIds { ple, .. } => c.elementwise += 63 * 6 * ple.ngram_size as u64,
+                // block scores: one dot per (head, block), the keys written back
+                Op::BlockSelect { heads, dim, blocks, .. } => {
+                    c.macs_fixed += (*heads * *dim * *blocks) as u64;
+                    c.elementwise += *blocks as u64;
+                }
+                Op::BlockWrite { blocks, .. } => c.elementwise += *blocks as u64,
                 Op::Route { experts, .. } => {
                     c.elementwise += 2 * *experts as u64;
                     c.transcendental += *experts as u64;

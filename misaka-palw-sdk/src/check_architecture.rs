@@ -32,6 +32,7 @@ use kaspa_consensus_core::palw_tir_v1::{PALW_T12_TIR_CEILINGS_V1, PalwTirCeiling
 use kaspa_hashes::Hash64;
 use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir::admit::{TirAdmitError, TirAdmitInputsV1, TirCeilingsV1};
+use misaka_palw_tir_lower::hf_schema::ReadOptions;
 use misaka_palw_tir_lower::spec::{Act, ArchSpec, Ffn, Gain, Glu, Mixer, NormKind, Position, Residual};
 
 /// A verdict of either mode.
@@ -98,6 +99,11 @@ pub struct IrReportV1 {
     /// `tir_admit_v1`'s report (text lines and JSON) — its numbers, or its refusal.
     pub admission_text: String,
     pub admission_json: serde_json::Value,
+    /// The feature report of a config ([`misaka_palw_tir_lower::model::ArchitectureReport`]): the
+    /// model_type (informational), the features each `SUPPORTED` or `MISSING` with the capability that
+    /// would close the gap, the support level, the adapter used, and whether the protocol would need a
+    /// new primitive or court kernel. `None` for a program, which has no config.
+    pub architecture_report: Option<misaka_palw_tir_lower::model::ArchitectureReport>,
 }
 
 /// `tile_len` and the canonical history chunk IR mode admits with unless given (a layout's
@@ -140,6 +146,25 @@ pub fn check_ir_config_v1(params: &Params, config_text: &str, long_history: bool
 
 /// **IR mode from a config** with `tile_len` and the history chunk given.
 pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: bool, tile_len: u32, h_chunk: u32) -> IrReportV1 {
+    check_ir_config_read_v1(params, config_text, None, &ReadOptions::default(), long_history, tile_len, h_chunk)
+}
+
+/// **IR mode from a config**, read through the adapter `read` names (the built-in that claims it, a
+/// user-supplied adapter file, none) and, when given, the checkpoint's tensor names (which a Level-B
+/// adapter's name templates are checked against): the feature report first, then lowering and
+/// `tir_admit_v1`. A model is judged by the features it combines, never by its `model_type`.
+pub fn check_ir_config_read_v1(
+    params: &Params,
+    config_text: &str,
+    tensors: Option<&misaka_palw_tir_lower::hf_schema::TensorIndex>,
+    read: &ReadOptions,
+    long_history: bool,
+    tile_len: u32,
+    h_chunk: u32,
+) -> IrReportV1 {
+    let report = serde_json::from_str::<serde_json::Value>(&misaka_palw_tir_lower::hf_config::sanitize_json(config_text))
+        .ok()
+        .map(|c| misaka_palw_tir_lower::model::analyze(&c, tensors, read));
     let opts = misaka_palw_tir_lower::lower::LowerOpts {
         history_bound: if long_history {
             misaka_palw_tir::program::HISTORY_BOUND_V1_HELD
@@ -164,8 +189,9 @@ pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: b
         inputs: None,
         admission_text: String::new(),
         admission_json: serde_json::Value::Null,
+        architecture_report: report.clone(),
     };
-    let spec = match misaka_palw_tir_lower::parse_config_str(config_text) {
+    let spec = match misaka_palw_tir_lower::hf_config::parse_config_str_read(config_text, read, misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin()) {
         Ok(s) => s,
         Err(e) => return empty(String::new(), not_lowerable(e)),
     };
@@ -176,6 +202,7 @@ pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: b
     };
     let mut r = check_ir_program_at_v1(params, &prep.program, tile_len, h_chunk);
     r.architecture = arch;
+    r.architecture_report = report;
     if matches!(spec.reference, misaka_palw_tir_lower::spec::Reference::RemoteCode { .. }) {
         r.unverified
             .push("the architecture is remote code: the lowering follows its source, no installed transformers reference".into());
@@ -222,6 +249,7 @@ pub fn check_ir_program_at_v1(params: &Params, program: &TirProgramV1, tile_len:
         inputs: Some(inputs),
         admission_text: String::new(),
         admission_json: serde_json::Value::Null,
+        architecture_report: None,
     };
     // The primitive set first: a program over another set is not this network's to judge.
     if program.prim_set_id[..] != *prim_set.as_byte_slice() {

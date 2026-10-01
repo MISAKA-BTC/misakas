@@ -987,6 +987,7 @@ fn new_cx(hl: &HlProgram, hb: u32, max_window: u32) -> Cx<'_> {
         split_max_readers: 0,
         quant: BTreeMap::new(),
         carry_keys: BTreeMap::new(),
+        table_chunk: 1 << 24,
     }
 }
 
@@ -1019,6 +1020,7 @@ fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
         suffix: String::new(),
         appended: BTreeMap::new(),
         carry_in: Vec::new(),
+        gx: Default::default(),
     }
 }
 
@@ -1596,7 +1598,7 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
                 _ => None,
             };
             let dims = AttnDims { heads: h, kv: h, d: dh, dv: dh, window };
-            let ex = AttnExtras { scale: s.attn_scale, softcap: None, alibi: None, sinks: None, rel_bias, chunk: None };
+            let ex = AttnExtras { scale: s.attn_scale, softcap: None, alibi: None, sinks: None, rel_bias, chunk: None, sparse: None };
             let ctx = lower_attention(&mut b, cx, &mut lb, &qv, (kw, k.key.clone()), (vw, v.key.clone()), dims, &ex, "attn.ctx", &codes_want("attn.ctx"))?;
             let cr = b.reshape_fixed(ctx.r, &[1, inner]);
             let ctx = Val { r: cr, ..ctx };

@@ -120,6 +120,8 @@ pub enum Act {
     Tanh,
     Softplus,
     Identity,
+    /// `sign(x)·√max(|x|, 10⁻⁶)` — the gate of Qwen4-Exp's n-gram embedding.
+    SignedSqrt,
 }
 
 impl Act {

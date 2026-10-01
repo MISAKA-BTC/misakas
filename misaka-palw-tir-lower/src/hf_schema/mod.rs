@@ -66,6 +66,23 @@ pub enum AdapterChoice {
     Text(String),
 }
 
+impl AdapterChoice {
+    /// The command-line spelling: `none`, `builtin:<id>`, `auto`, or the path of an adapter file
+    /// (`misaka.palw.model-adapter.v1`), read here.
+    pub fn parse_arg(arg: &str) -> Result<AdapterChoice, LowerError> {
+        match arg {
+            "auto" => Ok(AdapterChoice::Auto),
+            "none" => Ok(AdapterChoice::None),
+            _ => match arg.strip_prefix("builtin:") {
+                Some(id) => Ok(AdapterChoice::BuiltIn(id.to_string())),
+                None => std::fs::read_to_string(arg)
+                    .map(AdapterChoice::Text)
+                    .map_err(|e| LowerError::Io(format!("adapter file {arg}: {e}"))),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ReadOptions {
     pub adapter: AdapterChoice,

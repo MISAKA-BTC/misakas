@@ -8,7 +8,7 @@ use crate::hl::{self, HlProgram, cost};
 use crate::rope::RopeStyle;
 use crate::spec::*;
 use crate::weights::{self, Checkpoint, IndexOnly, WeightReport};
-use crate::{hf_weights, parse_config_str};
+use crate::hf_weights;
 use std::fmt::Write;
 use std::path::Path;
 
@@ -29,7 +29,13 @@ pub struct Checked {
 }
 
 pub fn check(config_text: &str, weights: Option<WeightsArg>) -> Result<Checked> {
-    let spec = parse_config_str(config_text)?;
+    check_read(config_text, &crate::hf_schema::ReadOptions::default(), weights)
+}
+
+/// [`check`] reading the config through the adapter `read` names (a user-supplied adapter file, a
+/// built-in by id, none).
+pub fn check_read(config_text: &str, read: &crate::hf_schema::ReadOptions, weights: Option<WeightsArg>) -> Result<Checked> {
+    let spec = crate::hf_config::parse_config_str_read(config_text, read, crate::quantfmt::QuantRegistry::builtin())?;
     let program = hl::build_program(&spec)?;
     let binding = hf_weights::bind(&spec, &program)?;
     let cost = cost::estimate(&program);

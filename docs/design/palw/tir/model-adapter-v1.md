@@ -127,7 +127,7 @@ and the Rust parser either read the same spec or both refuse. Where an adapter r
 parser read, the refusal comes from the generic checks of the evaluator (a head count that does not
 divide the width, an odd rotary dimension, a division by zero, a non-finite number, a decoder with no
 layer): stricter, never looser. `tests/golden_lowering.rs` holds the lowered programs and artifacts
-(92 fixtures, 63 real configs) byte-identical to the baseline recorded before the refactor; it is the
+(119 fixtures — 84 float, 24 GPTQ/AWQ/FP8/compressed-tensors, 11 GGUF — and 63 real configs; the 16 Qwen4-Exp fixtures have version-2 rows only, no version-1 baseline existed) byte-identical to the baseline recorded before the refactor; it is the
 permanent gate, and the Rust parsers (`src/hf_config/legacy_oracle`, compiled only with the feature) can
 be deleted once the corpus lane has validated the pack.
 
@@ -138,3 +138,11 @@ be deleted once the corpus lane has validated the pack.
    and override the variables your class departs in (`norm`, `residual`, `names`, `l_mixer`, `l_ffn`, …).
 3. If a key changes the math and no variable can express it, the gap is a **feature**: name it, add it
    generically (a `FeatureId`, a spec field with a default, a lowerer) — never family code.
+4. Run it with your file, no rebuild: `palw-class check-architecture <hf dir> --adapter my.json` (the
+   feature report names the adapter used: a built-in, `user file <id> <hash>`, or none),
+   `palw-tir-check --config <hf dir>/config.json --adapter my.json`, and the same `--adapter` on
+   `palw-tir-fidelity` and `palw-tir-convert` (`auto` is the default: the built-in that claims the
+   config; `none` reads the standard keys only; `builtin:<id>` forces one). A model the vocabulary
+   already has the features for is added with DATA only — `adapters/qwen4-exp.json` combines
+   hyper-connection residuals, gated delta layers, sparse block attention, hashed n-gram per-layer
+   embeddings and a routed MoE and has no Rust of its own.

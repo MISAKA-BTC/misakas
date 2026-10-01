@@ -160,6 +160,28 @@ macro_rules! recurrent {
 
 recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm, mamba, falcon_mamba, mamba2, jamba, rwkv);
 
+// Qwen4-Exp's generic features (hyper-connection streams, hashed n-gram per-layer embeddings, sparse block attention,
+// delta nets at any ratio, a routed MoE): the named acceptance matrix is `tests/qwen4_exp.rs`; here every fixture
+// holds the same bar as the recurrent families.
+recurrent!(
+    qwen4_exp,
+    qwen4_gdn_1_1,
+    qwen4_gdn_1_3,
+    qwen4_gdn_1_4,
+    qwen4_gdn_sigmoid_gate,
+    qwen4_hc1,
+    qwen4_hc2,
+    qwen4_hc_edge,
+    qwen4_moe512,
+    qwen4_ple_bigram,
+    qwen4_ple_boundary,
+    qwen4_ple_trigram,
+    qwen4_qsa_k1,
+    qwen4_qsa_kmax,
+    qwen4_qsa_r3,
+    qwen4_qsa_tie,
+);
+
 /// Per-site errors of one fixture (debugging aid): `PALW_SITES=qwen3_5 cargo test … -- --ignored`.
 #[test]
 #[ignore]

@@ -74,6 +74,12 @@ pub fn quant_descriptors_used(path: &std::path::Path, prep: &Prepared, reg: &cra
     Ok(out.into_iter().collect())
 }
 
+/// [`prepare_with`] reading the config through the adapter `read` names (a user-supplied adapter file,
+/// a built-in by id, none).
+pub fn prepare_read(config_text: &str, read: &crate::hf_schema::ReadOptions, opts: &LowerOpts, reg: &crate::quantfmt::QuantRegistry) -> Result<Prepared> {
+    prepare_spec(crate::hf_config::parse_config_str_read(config_text, read, reg)?, opts)
+}
+
 /// A checkpoint on disk, prepared: a Hugging Face directory (`config.json` + safetensors), or a
 /// GGUF file (a `.gguf` path, or a directory holding `model.gguf` and no `config.json`), whose
 /// tensors are then served under their Hugging Face names (`crate::gguf::GgufModel`).
@@ -88,6 +94,17 @@ pub fn open_model_with(
     opts: &LowerOpts,
     reg: &crate::quantfmt::QuantRegistry,
 ) -> Result<(Prepared, Box<dyn crate::weights::TensorSource + Sync>)> {
+    open_model_read(path, &crate::hf_schema::ReadOptions::default(), opts, reg)
+}
+
+/// [`open_model_with`] choosing the adapter of a Hugging Face directory's config by `read` (a GGUF
+/// file's architecture is its own, read by the GGUF importer).
+pub fn open_model_read(
+    path: &std::path::Path,
+    read: &crate::hf_schema::ReadOptions,
+    opts: &LowerOpts,
+    reg: &crate::quantfmt::QuantRegistry,
+) -> Result<(Prepared, Box<dyn crate::weights::TensorSource + Sync>)> {
     let gguf = gguf_path(path);
     match gguf {
         Some(g) => {
@@ -97,7 +114,7 @@ pub fn open_model_with(
         }
         None => {
             let cfg = std::fs::read_to_string(path.join("config.json")).map_err(|e| LowerError::Io(format!("config.json: {e}")))?;
-            let prep = prepare_with(&cfg, opts, reg)?;
+            let prep = prepare_read(&cfg, read, opts, reg)?;
             Ok((prep, Box::new(crate::weights::Checkpoint::open(path)?)))
         }
     }

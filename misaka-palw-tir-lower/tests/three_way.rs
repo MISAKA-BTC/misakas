@@ -1,4 +1,4 @@
-//! **Freeze criterion 4 on the HF-lowered programs**: for every one of the 68 tiny-fixture
+//! **Freeze criterion 4 on the HF-lowered programs**: for every one of the 84 tiny-fixture
 //! architectures (and the 11 pre-quantised GPTQ/AWQ fixtures), the lowered program with its
 //! calibrated integer params is run on
 //!
@@ -10,41 +10,17 @@
 //! and at every position the logits and every commit point (slot, block, layer, node, value)
 //! must be equal across all three, byte for byte.
 
-use misaka_palw_tir::Interpreter;
-use misaka_palw_tir_exec::{NodeValue, ParamData, StepSink, TirExecutor, TirParams, TirPlan};
+mod common;
+
+use common::three_ways;
 use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
-use misaka_palw_tir_lower::lower::{IntParams, LowerOpts, materialise};
+use misaka_palw_tir_lower::lower::{LowerOpts, materialise};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::weights::Checkpoint;
 use std::path::Path;
 use std::sync::Arc;
-
-/// One commit: `(slot, block, layer, node, values)`.
-type Commit = (u64, u8, Option<u32>, u16, Vec<i128>);
-
-struct Collect(Vec<Commit>);
-impl StepSink for Collect {
-    fn node(&mut self, v: &NodeValue<'_>) {
-        if v.commit {
-            self.0.push((v.slot as u64, v.block, v.layer.map(u32::from), v.node, v.data.to_i128s()));
-        }
-    }
-}
-
-fn ref2_dtype(d: misaka_palw_tir::DType) -> misaka_palw_tir_ref2::DType {
-    use misaka_palw_tir::DType as A;
-    use misaka_palw_tir_ref2::DType as B;
-    match d {
-        A::I8 => B::I8,
-        A::I16 => B::I16,
-        A::I32 => B::I32,
-        A::I64 => B::I64,
-        A::I128 => B::I128,
-        A::Idx => B::Idx,
-    }
-}
 
 /// Positions run on all three for one fixture, or why it could not be prepared.
 fn run(name: &str) -> Result<usize, String> {
@@ -67,74 +43,13 @@ fn run_in(root: &str, name: &str) -> Result<usize, String> {
     three_ways(&prep.lowered.program, &mat.params, &eval)
 }
 
-/// Run `p` with `params` over `eval` on the reference evaluator, ref2 and the typed backend; every
-/// position's logits and commits must be equal. Returns the positions run.
-fn three_ways(p: &misaka_palw_tir::TirProgramV1, params: &IntParams, eval: &[Vec<usize>]) -> Result<usize, String> {
-    let IntParams { tensors } = params;
-
-    // ref2: its own decoding of the canonical bytes, its own tensors.
-    let bytes = p.encode();
-    let p2 = misaka_palw_tir_ref2::codec::decode_canonical(&bytes).map_err(|e| format!("ref2 refuses the program: {e:?}"))?;
-    let mut params2 = misaka_palw_tir_ref2::eval::Params::new();
-    for ((j, layer), t) in tensors {
-        let d = &p2.params[*j as usize];
-        let shape = d.shape.iter().map(|x| *x as u64).collect();
-        let t2 =
-            misaka_palw_tir_ref2::Tensor::from_le_bytes(d.dtype, shape, &t.le_bytes()).map_err(|e| format!("ref2 tensor: {e:?}"))?;
-        assert_eq!(d.dtype, ref2_dtype(p.params[*j as usize].dtype));
-        params2.insert((*j, layer.map(u32::from)), t2);
-    }
-    // exec: the plan and borrowed little-endian params.
-    let owned: Vec<((u16, Option<u16>), Vec<u8>)> = tensors.iter().map(|(k, t)| (*k, t.le_bytes())).collect();
-    let plan = TirPlan::compile(p).map_err(|e| format!("exec plan: {e}"))?;
-    let mut xparams = TirParams::new(&plan);
-    for ((j, layer), b) in &owned {
-        let data = ParamData::from_le_bytes(p.params[*j as usize].dtype, b).map_err(|e| e.to_string())?;
-        xparams.insert(&plan, *j, *layer, data).map_err(|e| e.to_string())?;
-    }
-
-    let interp = Interpreter::new(p).map_err(|e| e.to_string())?;
-    let mut positions = 0;
-    for seq in eval {
-        let mut st1 = misaka_palw_tir::RunState::default();
-        let mut st2 = misaka_palw_tir_ref2::eval::initial_state(&p2);
-        let mut exec = TirExecutor::new(&plan, &xparams).map_err(|e| e.to_string())?;
-        for (pos, tok) in seq.iter().enumerate() {
-            let o1 = interp.step(params, &mut st1, *tok as u32).map_err(|e| format!("reference at {pos}: {e}"))?;
-            let (o2, next) =
-                misaka_palw_tir_ref2::eval::step(&p2, &params2, &st2, *tok as u64).map_err(|e| format!("ref2 at {pos}: {e:?}"))?;
-            st2 = next;
-            let mut sink = Collect(Vec::new());
-            exec.step(*tok as u32, &mut sink).map_err(|e| format!("exec at {pos}: {e}"))?;
-            let (_, xl) = exec.logits();
-            let l1 = &o1.logits.data;
-            if *l1 != o2.logits.data || *l1 != xl.to_i128s() {
-                return Err(format!("position {pos}: the logits differ"));
-            }
-            let c1: Vec<Commit> =
-                o1.commits.iter().map(|c| (c.slot as u64, c.block, c.layer.map(u32::from), c.node, c.value.data.clone())).collect();
-            let c2: Vec<Commit> = o2.commits.iter().map(|c| (c.slot, c.block, c.layer, c.node, c.value.data.clone())).collect();
-            let mut c3 = sink.0;
-            c3.sort_by_key(|c| c.0);
-            if c1 != c2 {
-                return Err(format!("position {pos}: reference and ref2 commit differently ({} vs {} commits)", c1.len(), c2.len()));
-            }
-            if c1 != c3 {
-                return Err(format!("position {pos}: reference and exec commit differently ({} vs {} commits)", c1.len(), c3.len()));
-            }
-            positions += 1;
-        }
-    }
-    Ok(positions)
-}
-
 #[test]
 fn every_hf_tiny_fixture_program_is_the_same_on_all_three_implementations() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf");
     let mut names: Vec<String> =
         std::fs::read_dir(&root).expect("fixtures").map(|e| e.expect("entry").file_name().to_string_lossy().to_string()).collect();
     names.sort();
-    assert_eq!(names.len(), 68);
+    assert_eq!(names.len(), 84);
     let mut failed = Vec::new();
     let mut total = 0;
     for n in &names {

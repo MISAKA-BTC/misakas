@@ -85,6 +85,11 @@ struct Args {
     /// each by digest.
     #[arg(long = "quant-format")]
     quant_format: Vec<PathBuf>,
+    /// How the config is read: `auto` (the built-in adapter that claims it, else the standard keys),
+    /// `none`, `builtin:<id>`, or the path of an adapter file (`misaka.palw.model-adapter.v1`): a
+    /// model written for as data lowers with no code change.
+    #[arg(long, default_value = "auto")]
+    adapter: String,
     /// Print the report as JSON.
     #[arg(long)]
     json: bool,
@@ -110,7 +115,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     set_mode(math);
     let opts = LowerOpts { max_window: a.max_window, ..LowerOpts::default() };
     let reg = QuantRegistry::with_files(&a.quant_format).map_err(|e| e.to_string())?;
-    let (prep, ck) = fidelity::open_model_with(&a.model, &opts, &reg).map_err(|e| e.to_string())?;
+    let (prep, ck) = fidelity::open_model_read(&a.model, &misaka_palw_tir_lower::hf_schema::ReadOptions { adapter: misaka_palw_tir_lower::hf_schema::AdapterChoice::parse_arg(&a.adapter).map_err(|e| e.to_string())? }, &opts, &reg).map_err(|e| e.to_string())?;
     let descriptors = fidelity::quant_descriptors_used(&a.model, &prep, &reg).map_err(|e| e.to_string())?;
     for (n, d) in &descriptors {
         log(format!("quant format {n} {d}"));

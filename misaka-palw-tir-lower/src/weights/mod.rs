@@ -586,6 +586,13 @@ pub enum Src {
         src: Box<Src>,
         shape: Vec<usize>,
     },
+    /// The value's leading axes flattened into rows (`[Π lead, cols]`), then zero rows appended up to
+    /// `rows`: per-layer tables of different heights (a hashed n-gram embedding's primes differ by
+    /// layer) brought to the one shape their shared block declares.
+    PadRows {
+        src: Box<Src>,
+        rows: usize,
+    },
     /// A group-quantised linear stored as `{module}.qweight`, `.qzeros`, `.scales` (and GPTQ's
     /// `.g_idx`): its value is the `[out, in]` weight the format defines ([`QWeight::dequant`]);
     /// [`eval_qsrc`] reads the stored integers themselves.
@@ -601,7 +608,12 @@ impl Src {
         match self {
             Src::Quant { fmt, .. } => fmt.is_integers(),
             Src::Tensor(_) => false,
-            Src::Take { src, .. } | Src::Transpose(src) | Src::Stack { src, .. } | Src::Map { src, .. } | Src::Reshape { src, .. } => {
+            Src::Take { src, .. }
+            | Src::Transpose(src)
+            | Src::Stack { src, .. }
+            | Src::Map { src, .. }
+            | Src::Reshape { src, .. }
+            | Src::PadRows { src, .. } => {
                 src.is_quant()
             }
         }
@@ -611,7 +623,12 @@ impl Src {
         match self {
             Src::Quant { fmt, .. } => fmt.is_integers().then_some(fmt),
             Src::Tensor(_) => None,
-            Src::Take { src, .. } | Src::Transpose(src) | Src::Stack { src, .. } | Src::Map { src, .. } | Src::Reshape { src, .. } => {
+            Src::Take { src, .. }
+            | Src::Transpose(src)
+            | Src::Stack { src, .. }
+            | Src::Map { src, .. }
+            | Src::Reshape { src, .. }
+            | Src::PadRows { src, .. } => {
                 src.quant_format()
             }
         }
@@ -633,6 +650,10 @@ impl Src {
     }
     pub fn reshape(self, shape: Vec<usize>) -> Src {
         Src::Reshape { src: Box::new(self), shape }
+    }
+    /// [`Src::PadRows`].
+    pub fn pad_rows(self, rows: usize) -> Src {
+        Src::PadRows { src: Box::new(self), rows }
     }
     pub fn stack(self, var: char, count: usize) -> Src {
         Src::Stack { src: Box::new(self), var, count }
@@ -806,6 +827,15 @@ pub fn src_shape(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<
                 return Err(LowerError::weights(format!("reshape {s:?} → {shape:?}")));
             }
             Ok(shape.clone())
+        }
+        Src::PadRows { src, rows } => {
+            let s = src_shape(src, r, layer, vars)?;
+            let Some((cols, lead)) = s.split_last() else { return Err(LowerError::weights("padding the rows of a scalar")) };
+            let have: usize = lead.iter().product();
+            if have > *rows {
+                return Err(LowerError::weights(format!("{have} rows do not fit the {rows} the table is padded to")));
+            }
+            Ok(vec![*rows, *cols])
         }
         Src::Quant { module, fmt: QFormat::Gguf { .. } } => {
             let m = expand(module, layer, vars)?;
@@ -999,6 +1029,16 @@ pub fn eval_src(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<c
             }
             Ok(Tensor::new(shape.clone(), t.data))
         }
+        Src::PadRows { src, rows } => {
+            let t = eval_src(src, r, layer, vars)?;
+            let Some(cols) = t.shape.last().copied() else { return Err(LowerError::weights("padding the rows of a scalar")) };
+            let mut data = t.data;
+            if data.len() > rows * cols {
+                return Err(LowerError::weights(format!("{} rows do not fit the {rows} the table is padded to", data.len() / cols.max(1))));
+            }
+            data.resize(rows * cols, 0.0);
+            Ok(Tensor::new(vec![*rows, cols], data))
+        }
         Src::Quant { module, fmt } if fmt.is_integers() => Ok(load_quant(module, fmt, r, layer, vars)?.dequant()),
         Src::Quant { module, fmt } => load_quant_floats(module, fmt, r, layer, vars),
     }
@@ -1008,6 +1048,12 @@ pub fn eval_src(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<c
 pub fn layers_of_param(prog: &HlProgram, p: u32) -> Vec<usize> {
     let blocks: BTreeSet<usize> = (0..prog.blocks.len()).filter(|b| prog.block_params(*b).contains(&p)).collect();
     prog.schedule.iter().enumerate().filter(|(_, k)| blocks.contains(&(**k as usize))).map(|(l, _)| l).collect()
+}
+
+/// The MODEL layers whose checkpoint tensors a per-layer param reads (the occurrences of its block,
+/// mapped through [`HlProgram::model_layer`]: a layer run as several blocks counts once).
+pub fn model_layers_of_param(prog: &HlProgram, p: u32) -> Vec<Option<usize>> {
+    layers_of_param(prog, p).into_iter().map(|l| prog.model_layer(l)).collect::<BTreeSet<usize>>().into_iter().map(Some).collect()
 }
 
 /// A frontend's weight mapping: one [`Src`] per HL param (same order as `HlProgram::params`),
@@ -1034,7 +1080,7 @@ pub fn check_weights(prog: &HlProgram, binding: &Binding, source: &dyn TensorSou
     let none = BTreeMap::new();
     for (pi, d) in prog.params.iter().enumerate() {
         let layers: Vec<Option<usize>> =
-            if d.per_layer { layers_of_param(prog, pi as u32).into_iter().map(Some).collect() } else { vec![None] };
+            if d.per_layer { model_layers_of_param(prog, pi as u32) } else { vec![None] };
         for l in layers {
             match src_shape(&binding.srcs[pi], &r, l, &none) {
                 Ok(s) if s == d.shape => rep.bound += 1,
@@ -1084,7 +1130,9 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
                     }
                 }
             }
-            Src::Take { src, .. } | Src::Transpose(src) | Src::Map { src, .. } | Src::Reshape { src, .. } => leaves(src, out),
+            Src::Take { src, .. } | Src::Transpose(src) | Src::Map { src, .. } | Src::Reshape { src, .. } | Src::PadRows { src, .. } => {
+                leaves(src, out)
+            }
             Src::Stack { src, var, count } => {
                 let mut inner = vec![];
                 leaves(src, &mut inner);
@@ -1100,7 +1148,7 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
     }
     for (pi, d) in prog.params.iter().enumerate() {
         let layers: Vec<Option<usize>> =
-            if d.per_layer { layers_of_param(prog, pi as u32).into_iter().map(Some).collect() } else { vec![None] };
+            if d.per_layer { model_layers_of_param(prog, pi as u32) } else { vec![None] };
         let mut ls = vec![];
         leaves(&binding.srcs[pi], &mut ls);
         for l in layers {

@@ -12,7 +12,9 @@
 //! weights mismatch or an admission refusal, 1 usage or I/O error. Non-consensus tooling.
 
 use clap::Parser;
+use misaka_palw_tir_lower::hf_schema::{AdapterChoice, ReadOptions, TensorIndex};
 use misaka_palw_tir_lower::lower::{self, LowerOpts};
+use misaka_palw_tir_lower::model;
 use misaka_palw_tir_lower::report::{self, WeightsArg};
 use std::path::PathBuf;
 
@@ -46,6 +48,11 @@ struct Args {
     /// attention cone at this window (the same option as `palw-tir-fidelity --max-window`).
     #[arg(long)]
     max_window: Option<u32>,
+    /// How the config is read: `auto` (the built-in adapter that claims it, else the standard keys),
+    /// `none` (the standard keys only), `builtin:<id>`, or the path of an adapter file
+    /// (`misaka.palw.model-adapter.v1`): a model written for as data lowers with no code change.
+    #[arg(long, default_value = "auto")]
+    adapter: String,
     /// Print the ArchSpec, HL program and costs as JSON instead of text.
     #[arg(long)]
     json: bool,
@@ -151,12 +158,26 @@ fn main() {
         }
         (None, None) => None,
     };
-    match report::check(&text, w) {
+    let read = match AdapterChoice::parse_arg(&a.adapter) {
+        Ok(adapter) => ReadOptions { adapter },
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    // The feature report (model_type is informational; the features, the level, the adapter used).
+    let arch = {
+        let cfg: Result<serde_json::Value, _> = serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&text));
+        let tensors = a.weights.as_ref().and_then(|p| TensorIndex::from_checkpoint_path(p).ok());
+        cfg.ok().map(|c| model::analyze(&c, tensors.as_ref(), &read))
+    };
+    match report::check_read(&text, &read, w) {
         Ok(c) => {
             let (tir_json, tir_text, tir_ok) = tir_section(&c, &a);
             if a.json {
                 let v = serde_json::json!({
                     "verdict": report::verdict(&c),
+                    "architecture_report": arch,
                     "spec": c.spec,
                     "program": c.program,
                     "cost": c.cost,
@@ -165,6 +186,9 @@ fn main() {
                 });
                 println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             } else {
+                if let Some(r) = &arch {
+                    print!("{}", r.render());
+                }
                 print!("{}", report::render(&c));
                 print!("{tir_text}");
             }
@@ -172,6 +196,11 @@ fn main() {
             std::process::exit(if bad || !tir_ok { 2 } else { 0 });
         }
         Err(e) => {
+            if let Some(r) = &arch
+                && !a.json
+            {
+                print!("{}", r.render());
+            }
             println!("{}", report::refusal(&e));
             std::process::exit(if matches!(e, misaka_palw_tir_lower::LowerError::NotLowerable(_)) { 2 } else { 1 });
         }
