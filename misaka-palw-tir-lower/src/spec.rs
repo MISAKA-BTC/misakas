@@ -759,6 +759,24 @@ pub struct EmbeddingSpec {
     /// layer (MPNet: T5's bidirectional buckets). Read by `lower::bidir` only.
     #[serde(default)]
     pub rel_bias: Option<RelBiasSpec>,
+    /// **`ATTN_DISENTANGLED_V1`** (DeBERTa-v2/v3): relative-position embeddings projected by the layer's own key and
+    /// query projections (`share_att_key`) and added to the scores as content-to-position and position-to-content
+    /// terms. Read by `lower::bidir` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disentangled: Option<DisentangledSpec>,
+}
+
+/// DeBERTa's disentangled attention (`position_buckets`, `max_relative_positions`, `pos_att_type`, `norm_rel_ebd`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DisentangledSpec {
+    /// `position_buckets`: the table has `2·span` rows and a relative position is log-bucketed into `[-span, span)`.
+    pub span: usize,
+    /// The largest relative distance the log buckets reach (`max_relative_positions`, else `max_position_embeddings`).
+    pub max_position: usize,
+    pub c2p: bool,
+    pub p2c: bool,
+    /// `norm_rel_ebd = layer_norm`: the table passes through this norm (a bias per `bias`) once.
+    pub norm: Option<NormSpec>,
 }
 
 /// `table[bucket(j − i), head]` added to the scaled scores of query `i` and key `j`.

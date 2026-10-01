@@ -32,6 +32,7 @@ pack!(
     "nomic-bert",
     "modernbert",
     "albert",
+    "deberta-v2",
     "bert",
     "bloom",
     "clip-text",

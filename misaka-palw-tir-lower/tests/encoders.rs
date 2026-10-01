@@ -242,6 +242,14 @@ fn albert_matches_its_hf_fixture() {
     bidir_case("albert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, false, "cls");
 }
 
+/// FR-17: DeBERTa-v2's disentangled attention (content-to-position and position-to-content terms over a log-bucketed
+/// relative table projected by the layer's own key and query weights), from data only.
+#[test]
+fn deberta_v2_matches_its_hf_fixture() {
+    bidir_case("deberta_v2", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, true, "mean_normalized");
+    bidir_case("deberta_v2", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, false, "cls");
+}
+
 #[test]
 fn bert_mean_pooled_and_normalised_matches_its_hf_fixture() {
     bidir_case("bert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, true, "mean_normalized");
@@ -344,7 +352,8 @@ fn a_decoder_as_a_last_token_embedder_matches_its_hf_fixture() {
 }
 
 /// **Real configurations** (hand-written from the hub, `tests/configs/encoders/`), no weights:
-/// BERT-base, all-MiniLM-L6-v2, RoBERTa-base, XLM-R-base, all-mpnet-base-v2 and DistilBERT-base lower
+/// BERT-base, all-MiniLM-L6-v2, RoBERTa-base, XLM-R-base, all-mpnet-base-v2, DistilBERT-base, ModernBERT-base,
+/// nomic-embed-text-v1.5, ALBERT-base-v2 and DeBERTa-v3-base lower
 /// at 128, 256 and 512 tokens and
 /// are admitted with their one-stage pipeline (mean pooling, normalised). Past the tile ceilings the
 /// softmax is split at commit points and the residual sums the norms read are committed
@@ -359,6 +368,10 @@ fn real_encoders_lower_and_are_admitted_at_128_to_512_tokens() {
         ("xlm-roberta-base", 1),
         ("all-mpnet-base-v2", 1),
         ("distilbert-base-uncased", 0),
+        ("modernbert-base", 50283),
+        ("nomic-embed-text-v1.5", 0),
+        ("albert-base-v2", 0),
+        ("deberta-v3-base", 0),
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/encoders").join(format!("{name}.json"));
         let spec = misaka_palw_tir_lower::parse_config_str(&std::fs::read_to_string(path).expect("config")).expect("spec");

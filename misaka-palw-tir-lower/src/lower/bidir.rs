@@ -89,6 +89,8 @@ struct Arch {
     pos_offset: usize,
     /// MPNet's bias over bucketed relative positions.
     rel: Option<crate::spec::RelBiasSpec>,
+    /// DeBERTa's disentangled attention (`ATTN_DISENTANGLED_V1`).
+    dis: Option<crate::spec::DisentangledSpec>,
     /// ALBERT: the embedding is at the table's width and a projection (bias or not) lifts the normed row to the hidden width.
     proj_in: Option<bool>,
 }
@@ -192,11 +194,22 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
     if (e.proj_in != factorised) || (e.dim != spec.hidden_size && !factorised) || e.scale != 1.0 {
         return bad("an embedding of another width than the hidden size without a projection after its norm (OPT's project_in first), or an embedding scale: this lowering reads the plain BERT embedding and ALBERT's factorised one");
     }
-    if e.positions.is_none() && layers.iter().all(|l| l.rope.is_none()) {
-        return bad("no positions: neither a learned position table nor a rotary position");
+    if e.positions.is_none() && e.disentangled.is_none() && layers.iter().all(|l| l.rope.is_none()) {
+        return bad("no positions: neither a learned position table, a rotary position nor relative-position embeddings");
     }
     if e.positions.is_some() && layers.iter().any(|l| l.rope.is_some()) {
         return bad("learned positions together with a rotary position");
+    }
+    if let Some(dis) = &e.disentangled {
+        if e.rel_bias.is_some() {
+            return bad("a relative-position bias together with disentangled attention");
+        }
+        if !(dis.c2p || dis.p2c) || dis.span < 2 || dis.max_position < 2 {
+            return bad("disentangled attention with no position term or a degenerate bucket span");
+        }
+        if dis.norm.is_some_and(|n| n.kind != NormKind::Layer) {
+            return bad("a relative-embedding norm other than LayerNorm");
+        }
     }
     let embed_norm = e.norm.as_ref().map(norm_cfg);
     if embed_norm.is_some_and(|n| n.kind == NormKind::Rms && n.bias) {
@@ -210,7 +223,43 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
         pos_offset: e.positions.as_ref().map_or(0, |p| p.offset),
         rel: e.rel_bias,
         proj_in: factorised.then_some(e.proj_in_bias),
+        dis: e.disentangled,
     })
+}
+
+/// DeBERTa's `build_relative_position` + `make_log_bucket_position` for one `(query i, key j)` pair — float32 exactly as
+/// transformers computes it — then the clamp into the table's `2·span` rows (`c2p_pos = clamp(rel + span, 0, 2·span − 1)`).
+/// The bucket is odd in the relative position, so the position-to-content term reads the same index.
+pub fn deberta_index(i: usize, j: usize, span: usize, max_position: usize) -> usize {
+    let rel = i as i64 - j as i64;
+    let mid = (span / 2) as i64;
+    let sign = rel.signum();
+    let abs_pos = if rel < mid && rel > -mid { mid - 1 } else { rel.abs() };
+    let bucket = if abs_pos <= mid {
+        rel
+    } else {
+        let a = (abs_pos as f32 / mid as f32).ln();
+        let b = (((max_position as f64 - 1.0) / mid as f64) as f32).ln();
+        ((a / b * (mid - 1) as f32).ceil() as i64 + mid) * sign
+    };
+    (bucket + span as i64).clamp(0, 2 * span as i64 - 1) as usize
+}
+
+/// One row through a LayerNorm or RMSNorm, in f64.
+fn norm_row(kind: NormKind, eps: f64, x: &[f64], g: &[f64], bias: Option<&[f64]>) -> Vec<f64> {
+    let n = x.len() as f64;
+    match kind {
+        NormKind::Layer => {
+            let mu = x.iter().sum::<f64>() / n;
+            let var = x.iter().map(|v| (v - mu) * (v - mu)).sum::<f64>() / n;
+            let inv = 1.0 / (var + eps).sqrt();
+            x.iter().enumerate().map(|(i, v)| (v - mu) * inv * g[i] + bias.map_or(0.0, |b| b[i])).collect()
+        }
+        NormKind::Rms => {
+            let inv = 1.0 / (x.iter().map(|v| v * v).sum::<f64>() / n + eps).sqrt();
+            x.iter().enumerate().map(|(i, v)| v * inv * g[i]).collect()
+        }
+    }
 }
 
 pub(super) fn hl_param(hl: &HlProgram, name: &str) -> Result<u32> {
@@ -468,9 +517,9 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                 None => None,
             };
             // q, k, v: codes [L, d], committed head-major [h, L, dh] (one head's K/V is whole leaves), q and k rotated.
-            let heads_of = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, name: &str, bias: bool, rotate: bool| -> Result<Val> {
+            let heads_of = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, name: &str, bias: bool, rotate: bool, slot: &mut Option<tir::Ref>| -> Result<Val> {
                 let bn = format!("{name}.b");
-                let v = linear_rows(b, cx, lb, &xc, &format!("{name}.w"), if bias { Some(bn.as_str()) } else { None }, name, &Want { dt: DType::I16, key: site_key(name) })?;
+                let v = linear_rows_shared(b, cx, lb, &xc, &format!("{name}.w"), if bias { Some(bn.as_str()) } else { None }, name, &Want { dt: DType::I16, key: site_key(name) }, slot)?;
                 let r = b.reshape_fixed(v.r, &[l, h, dh]);
                 let mut r = b.transpose(r, &[1, 0, 2]);
                 if let (true, Some((cos, sin))) = (rotate, rope_tabs) {
@@ -491,9 +540,10 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                 note_site(cx, tb, &hv);
                 Ok(hv)
             };
-            let q = heads_of(&mut b, cx, &mut lb, "attn.q", la.bias[0], true)?;
-            let k = heads_of(&mut b, cx, &mut lb, "attn.k", la.bias[1], true)?;
-            let v = heads_of(&mut b, cx, &mut lb, "attn.v", la.bias[2], false)?;
+            let (mut qslot, mut kslot, mut vslot) = (None, None, None);
+            let q = heads_of(&mut b, cx, &mut lb, "attn.q", la.bias[0], true, &mut qslot)?;
+            let k = heads_of(&mut b, cx, &mut lb, "attn.k", la.bias[1], true, &mut kslot)?;
+            let v = heads_of(&mut b, cx, &mut lb, "attn.v", la.bias[2], false, &mut vslot)?;
             // Scores: q·kᵀ (exact i64) to Q14 logits, the 1/√d scale and both code scales in m.
             let kt = b.transpose(k.r, &[0, 2, 1]);
             let s = b.matmul(q.r, kt, DType::I64);
@@ -507,6 +557,81 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                 Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * sc * (1u64 << LOGIT_Q) as f64])),
             )?;
             let mut logits = narrow(&mut b, s, m, sh, None, DType::I32);
+            // DeBERTa: the relative-position table, normed, goes through this layer's own key and query weights, and its
+            // products with q (content to position) and k (position to content) are read at the bucket of (i − j).
+            if let Some(dis) = a.dis {
+                let (span2, lu) = (2 * dis.span, l as usize);
+                let (tp, gp, bp) = (hl_param(hl, "rel.table")?, dis.norm.map(|_| hl_param(hl, "rel.norm.gain")).transpose()?, if dis.norm.is_some_and(|n| n.bias) { Some(hl_param(hl, "rel.norm.bias")?) } else { None });
+                let rel_key = site_key("rel.rows");
+                let rk = rel_key.clone();
+                let rel_rows = decl(
+                    &mut b,
+                    cx,
+                    &lb,
+                    "rel.rows",
+                    DType::I16,
+                    &[span2, d],
+                    false,
+                    Arc::new(move |c| {
+                        let t = c.f(tp)?;
+                        let sc = c.scale(&rk)?;
+                        let g = match gp {
+                            Some(g) => Some(c.f(g)?.data.iter().map(|x| *x as f64).collect::<Vec<_>>()),
+                            None => None,
+                        };
+                        let bi = match bp {
+                            Some(b) => Some(c.f(b)?.data.iter().map(|x| *x as f64).collect::<Vec<_>>()),
+                            None => None,
+                        };
+                        let mut v = Vec::with_capacity(span2 * d);
+                        for r in 0..span2 {
+                            let row: Vec<f64> = t.data[r * d..(r + 1) * d].iter().map(|x| *x as f64).collect();
+                            let row = match (&g, dis.norm) {
+                                (Some(g), Some(n)) => norm_row(n.kind, n.eps, &row, g, bi.as_deref()),
+                                _ => row,
+                            };
+                            v.extend(row.iter().map(|x| (x / sc).round().clamp(-32767.0, 32767.0) as i16));
+                        }
+                        Ok(IntTensor::i16(vec![span2, d], v))
+                    }),
+                )?;
+                let relv = rows_val(rel_rows, DType::I16, rel_key, d, "rel.rows");
+                let ids: Vec<u32> = (0..lu).flat_map(|i| (0..lu).map(move |j| deberta_index(i, j, dis.span, dis.max_position) as u32)).collect();
+                let idx = decl(&mut b, cx, &lb, "attn.rel_index", DType::Idx, &[lu, lu], false, Arc::new(move |_| Ok(IntTensor::idx(vec![lu, lu], ids.clone()))))?;
+                let idx = b.clamp(idx, 0, span2 as i64 - 1, DType::Idx); // admission proves the gather's range from the clamp
+                let mut terms: Vec<tir::Ref> = Vec::new();
+                for (c2p, name, slot, bias, side) in [(true, "attn.pos_k", &mut kslot, la.bias[1], &q), (false, "attn.pos_q", &mut qslot, la.bias[0], &k)] {
+                    if (c2p && !dis.c2p) || (!c2p && !dis.p2c) {
+                        continue;
+                    }
+                    let (wname, bname) = if c2p { ("attn.k.w", "attn.k.b") } else { ("attn.q.w", "attn.q.b") };
+                    let pos = linear_rows_shared(&mut b, cx, &mut lb, &relv, wname, bias.then_some(bname), name, &Want { dt: DType::I16, key: site_key(name) }, slot)?;
+                    let pr = b.reshape_fixed(pos.r, &[span2 as u32, h, dh]);
+                    let pt = b.transpose(pr, &[1, 2, 0]); // [h, dh, 2s]
+                    // c2p: q [h, L, dh] · pos_k; p2c: k [h, L, dh] · pos_q — both [h, L, 2s].
+                    let operand = if c2p { q.r } else { k.r };
+                    let acc = b.matmul(operand, pt, DType::I64);
+                    let (ko, kp, scl) = (side.key.clone(), pos.key.clone(), la.scale);
+                    let site = if c2p { "attn.c2p" } else { "attn.p2c" };
+                    let (m, sh) = decl_ms(&mut b, cx, &lb, site, 1, Arc::new(move |cc| Ok(vec![cc.scale(&ko)? * cc.scale(&kp)? * scl * (1u64 << LOGIT_Q) as f64])))?;
+                    let prod = narrow(&mut b, acc, m, sh, None, DType::I32);
+                    b.commit(prod);
+                    let by_row = b.transpose(prod, &[1, 0, 2]); // [L, h, 2s], the rows (i for c2p, j for p2c) the gather is batched over
+                    let term = if c2p {
+                        let g = b.gather(by_row, idx, 2, 1); // [L(i), h, L(j)]
+                        b.transpose(g, &[1, 0, 2])
+                    } else {
+                        let idx_t = b.transpose(idx, &[1, 0]);
+                        let g = b.gather(by_row, idx_t, 2, 1); // [L(j), h, L(i)]
+                        b.transpose(g, &[1, 2, 0])
+                    };
+                    terms.push(term);
+                }
+                for t in terms {
+                    let sum = b.add(logits, t, DType::I64);
+                    logits = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);
+                }
+            }
             // MPNet: `table[bucket(j − i), head]` in Q`LOGIT_Q` on the scaled scores, one table and
             // one pinned `[L, L]` bucket map for every layer.
             if let Some(rb) = a.rel {
@@ -749,6 +874,24 @@ pub(super) fn linear_rows(
     site: &str,
     want: &Want,
 ) -> Result<Val> {
+    linear_rows_shared(b, cx, lb, x, w_name, b_name, site, want, &mut None)
+}
+
+/// [`linear_rows`] reading a weight another product of this block already declared (`wt`, the `[in, out]` codes): the
+/// weight is stored once and a second input (DeBERTa's relative-position rows) goes through the same matrix. The slot is
+/// filled by the first call.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn linear_rows_shared(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    w_name: &str,
+    b_name: Option<&str>,
+    site: &str,
+    want: &Want,
+    wt_slot: &mut Option<tir::Ref>,
+) -> Result<Val> {
     let hl = cx.hl;
     let w = hl_param(hl, w_name)?;
     let (out, inp) = (hl.params[w as usize].shape[0], hl.params[w as usize].shape[1]);
@@ -756,25 +899,32 @@ pub(super) fn linear_rows(
         return Err(LowerError::eval(format!("internal: `{site}` reads {:?} rows of {}, W has {inp} columns", x.dt, x.len)));
     }
     let pl = per_layer(lb);
-    let wt = decl(
-        b,
-        cx,
-        lb,
-        &format!("{w_name}.t"),
-        DType::I8,
-        &[inp, out],
-        pl,
-        Arc::new(move |c| {
-            let rc = c.rows(w)?;
-            let mut t = vec![0i8; inp * out];
-            for o in 0..out {
-                for i in 0..inp {
-                    t[i * out + o] = rc.codes[o * inp + i];
-                }
-            }
-            Ok(IntTensor::i8(vec![inp, out], t))
-        }),
-    )?;
+    let wt = match *wt_slot {
+        Some(r) => r,
+        None => {
+            let r = decl(
+                b,
+                cx,
+                lb,
+                &format!("{w_name}.t"),
+                DType::I8,
+                &[inp, out],
+                pl,
+                Arc::new(move |c| {
+                    let rc = c.rows(w)?;
+                    let mut t = vec![0i8; inp * out];
+                    for o in 0..out {
+                        for i in 0..inp {
+                            t[i * out + o] = rc.codes[o * inp + i];
+                        }
+                    }
+                    Ok(IntTensor::i8(vec![inp, out], t))
+                }),
+            )?;
+            *wt_slot = Some(r);
+            r
+        }
+    };
     let (kx, ky) = (x.key.clone(), want.key.clone());
     let (m, s) = decl_ms(
         b,
@@ -1027,21 +1177,8 @@ pub fn float_forward(
     };
     let norm = |x: &[f64], c: &NormCfg, name: &str, layer: Option<usize>| -> Result<Vec<f64>> {
         let g = p(&format!("{name}.gain"), layer)?;
-        let bias = if c.bias { p(&format!("{name}.bias"), layer)? } else { vec![0.0; x.len()] };
-        let n = x.len() as f64;
-        Ok(match c.kind {
-            NormKind::Layer => {
-                let mu = x.iter().sum::<f64>() / n;
-                let var = x.iter().map(|v| (v - mu) * (v - mu)).sum::<f64>() / n;
-                let inv = 1.0 / (var + c.eps).sqrt();
-                x.iter().zip(&g).zip(&bias).map(|((v, g), b)| (v - mu) * inv * g + b).collect()
-            }
-            NormKind::Rms => {
-                let ms = x.iter().map(|v| v * v).sum::<f64>() / n;
-                let inv = 1.0 / (ms + c.eps).sqrt();
-                x.iter().zip(&g).map(|(v, g)| v * inv * g).collect()
-            }
-        })
+        let bias = if c.bias { Some(p(&format!("{name}.bias"), layer)?) } else { None };
+        Ok(norm_row(c.kind, c.eps, x, &g, bias.as_deref()))
     };
     let lin = |x: &[f64], w: &[f64], bias: Option<&[f64]>, out: usize| -> Vec<f64> {
         let inp = x.len();
@@ -1111,6 +1248,35 @@ pub fn float_forward(
             observe(format!("{pre}attn.k"), &k[..n_real]);
         }
         observe(format!("{pre}attn.v"), &v[..n_real]);
+        // DeBERTa: pos_key = K(table), pos_query = Q(table) with this layer's weights.
+        let dis_rows: Option<(Vec<Vec<f64>>, Vec<Vec<f64>>)> = match a.dis {
+            Some(dis) => {
+                let span2 = 2 * dis.span;
+                let t = p("rel.table", None)?;
+                let g = dis.norm.map(|_| p("rel.norm.gain", None)).transpose()?;
+                let bi = if dis.norm.is_some_and(|n| n.bias) { Some(p("rel.norm.bias", None)?) } else { None };
+                let rows: Vec<Vec<f64>> = (0..span2)
+                    .map(|r| {
+                        let row = t[r * d..(r + 1) * d].to_vec();
+                        match (&g, dis.norm) {
+                            (Some(g), Some(n)) => norm_row(n.kind, n.eps, &row, g, bi.as_deref()),
+                            _ => row,
+                        }
+                    })
+                    .collect();
+                observe(format!("{pre}rel.rows"), &rows);
+                let pk = if dis.c2p { proj("attn.k", &rows, h * dh, la.bias[1])? } else { vec![] };
+                let pq = if dis.p2c { proj("attn.q", &rows, h * dh, la.bias[0])? } else { vec![] };
+                if dis.c2p {
+                    observe(format!("{pre}attn.pos_k"), &pk);
+                }
+                if dis.p2c {
+                    observe(format!("{pre}attn.pos_q"), &pq);
+                }
+                Some((pk, pq))
+            }
+            None => None,
+        };
         let rel = match a.rel {
             Some(rb) => Some((p("attn.rel_bias", None)?, rb)),
             None => None,
@@ -1128,7 +1294,17 @@ pub fn float_forward(
                         let bias = rel.as_ref().map_or(0.0, |(t, rb)| {
                             t[super::encdec::t5_bucket(j as i64 - i as i64, true, rb.buckets, rb.max_distance) * h + hh]
                         });
-                        (0..dh).map(|t| q[i][hh * dh + t] * k[j][hh * dh + t]).sum::<f64>() * la.scale + bias
+                        let mut dot: f64 = (0..dh).map(|t| q[i][hh * dh + t] * k[j][hh * dh + t]).sum();
+                        if let (Some(dis), Some((pk, pq))) = (a.dis, &dis_rows) {
+                            let ix = deberta_index(i, j, dis.span, dis.max_position);
+                            if dis.c2p {
+                                dot += (0..dh).map(|t| q[i][hh * dh + t] * pk[ix][hh * dh + t]).sum::<f64>();
+                            }
+                            if dis.p2c {
+                                dot += (0..dh).map(|t| k[j][hh * dh + t] * pq[ix][hh * dh + t]).sum::<f64>();
+                            }
+                        }
+                        dot * la.scale + bias
                     })
                     .collect();
                 let mx = sc.iter().cloned().fold(f64::MIN, f64::max);

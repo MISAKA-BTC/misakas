@@ -173,6 +173,12 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     if spec.embedding.type_rows.is_some() {
         m.put("embed.type_table", Src::t(format!("{}.weight", m.role("type_embed")?)))?;
     }
+    if let Some(dis) = &spec.embedding.disentangled {
+        m.put("rel.table", Src::t(format!("{}.weight", m.role("rel_embed")?)))?;
+        if let Some(n) = &dis.norm {
+            m.norm("rel.norm", "rel_norm", n)?;
+        }
+    }
     if spec.embedding.rel_bias.is_some() {
         m.put("attn.rel_bias", Src::t(format!("{}.weight", m.role("rel_bias")?)))?;
     }

@@ -348,6 +348,16 @@ impl Builder<'_> {
         if let Some(rb) = e.rel_bias {
             self.param("attn.rel_bias", vec![rb.buckets, rb.heads], false, Init::Normal(0.2))?;
         }
+        // DeBERTa's relative-position table and its norm: declared for the binding only; `lower::bidir` reads them.
+        if let Some(dis) = e.disentangled {
+            self.param("rel.table", vec![2 * dis.span, d], false, Init::Normal(0.2))?;
+            if let Some(n) = dis.norm {
+                self.param("rel.norm.gain", vec![d], false, Init::Uniform(0.6, 1.4))?;
+                if n.bias {
+                    self.param("rel.norm.bias", vec![d], false, Init::Uniform(-0.1, 0.1))?;
+                }
+            }
+        }
         let mut outputs = vec![x];
         for c in self.carries.clone().iter().skip(1) {
             let n: usize = c.shape.iter().product();
