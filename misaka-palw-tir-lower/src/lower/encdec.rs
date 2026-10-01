@@ -985,6 +985,7 @@ fn new_cx(hl: &HlProgram, hb: u32, max_window: u32) -> Cx<'_> {
         image_cursor_layer: None,
         split_max_readers: 0,
         quant: BTreeMap::new(),
+        table_shift: 0,
         carry_keys: BTreeMap::new(),
     }
 }

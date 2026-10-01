@@ -30,7 +30,7 @@ use super::embed::{
 };
 use super::float::Dit;
 use super::linear::lower_linear_codes;
-use super::sampler::{SamplerTables, declare_unpatchify, lower_euler_step, lower_initial_latent, lower_unpatchify};
+use super::sampler::{SamplerTables, lower_euler_step, lower_initial_latent, lower_unpatchify};
 use super::sink::ParamSink;
 use super::stream::lower_to_codes;
 use crate::quant::mul_shift;
@@ -148,7 +148,6 @@ pub fn lower_dit_stage(dit: &Dit, cal: &Calib, spec: &DitStageSpec) -> Result<Di
     let block_r: Vec<_> = blocks.iter().map(|b| b.declare(&mut pb, &mut sink)).collect();
     let no_r = no_mod.declare(&mut pb, &mut sink, "norm_out.linear");
     let proj_r = proj_out.declare(&mut pb, &mut sink, "proj_out");
-    let unpatch_r = declare_unpatchify(&mut pb, &mut sink, "unpatchify", c, g, g, p);
     let dsigma_r = tables.declare(&mut pb, &mut sink, "sampler");
 
     // ---- pre ----
@@ -203,7 +202,7 @@ pub fn lower_dit_stage(dit: &Dit, cal: &Calib, spec: &DitStageSpec) -> Result<Di
         b.commit(x);
         let rows = lower_linear_codes(&mut b, x, &proj_r); // [N, p·p·C]
         b.commit(rows);
-        let v = lower_unpatchify(&mut b, rows, unpatch_r, n * p * p * c);
+        let v = lower_unpatchify(&mut b, rows, c, g, g, p);
         let at = lower_step_row_index(&mut b, steps_in, ts_r.base, spec.counts.len() as u32 - 1, timesteps.total_rows() as u32);
         let dsig = b.gather(dsigma_r, at, 0, 0);
         let cur = lower_initial_latent(&mut b, noise_in, Ref::State(latent), spec.q_lat);
