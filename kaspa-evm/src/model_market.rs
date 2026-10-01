@@ -932,8 +932,13 @@ impl MarketHandlers {
                 let a = Args::parse(input, 3)?;
                 let units_in = a.u64(2)?;
                 match self.market_row(&a.hash64(0)).and_then(|(m, _)| palw_model_sell_quote_with(&m, units_in, self.schedule())) {
+                    // **The 2026-09-25 Position review's #2: the first word is `mskOut`, the GROSS**
+                    // (ADR-0089, IMisakaModelAMM `quoteSell`): what leaves the curve, of which `burn +
+                    // leg + net` are the parts. It answered the net twice. Fixed with ADR-0162's
+                    // fence, where every quote of the window moves anyway; below it the old word, byte
+                    // for byte, so no execution result moves on a network that has not crossed it.
                     Some(q) => Out::default()
-                        .u64(q.fees.net)
+                        .u64(if self.fences.virtual_v1_from.is_some() { q.fees.gross } else { q.fees.net })
                         .u64(q.fees.burn)
                         .u64(q.fees.registrant)
                         .u64(q.fees.net)
@@ -1725,9 +1730,10 @@ mod tests {
     /// it is.** `constants()` names the virtual reserve in its third word (ADR-0090 had put the least
     /// seed there); `market()` answers the opening — `exists`, the supply in the curve, opened at the
     /// line's founding, nothing in the reserve — with `V` appended as a twelfth word; `price`,
-    /// `quoteBuy` and `quoteSell` are the fold's own arithmetic on the curve over `V`. Below the
+    /// `quoteBuy` and `quoteSell` are the fold's own arithmetic on the curve over `V`, and
+    /// `quoteSell`'s first word is the gross `mskOut` (the 2026-09-25 Position review's #2). Below the
     /// fence every word is the old one: eleven words, the least seed, a line with no row quoting
-    /// nothing.
+    /// nothing, and `quoteSell`'s first word the net.
     #[test]
     fn adr0162_the_window_reads_every_line_as_an_open_market_on_the_virtual_reserve() {
         use kaspa_consensus_core::evm::model_market::PalwEvmLineRowV1;
@@ -1792,7 +1798,7 @@ mod tests {
             "the fold's own quote on the opening"
         );
         assert_eq!(ask(&fresh, below, sel().quote_buy_of, Some(1_000 * MSK)), vec![0; 5], "below: no market, no quote");
-        // A market someone has bought into: the sell is the fold's own quote on its row.
+        // A market someone has bought into: the sell's first word is the gross past the fence.
         let mut traded = (*fresh).clone();
         traded.markets.insert(line, qb.after);
         let traded = std::sync::Arc::new(traded);
@@ -1800,7 +1806,11 @@ mod tests {
         let units = qb.units_out / 2;
         let qs = palw_model_sell_quote_with(&qb.after, units, PalwModelFeesV1::V2).unwrap();
         let sell = ask(&traded, past, sel().quote_sell_of, Some(units));
-        assert_eq!(sell, vec![qs.fees.net, qs.fees.burn, qs.fees.registrant, qs.fees.net, qs.after.price_sompi_per_position_v1()]);
+        assert_eq!(sell, vec![qs.fees.gross, qs.fees.burn, qs.fees.registrant, qs.fees.net, qs.after.price_sompi_per_position_v1()]);
+        assert_eq!(sell[0], sell[1] + sell[2] + sell[3], "mskOut is the sum of its parts");
+        let old = ask(&traded, below, sel().quote_sell_of, Some(units));
+        assert_eq!(old[0], qs.fees.net, "below the fence the first word stays the net, byte for byte");
+        assert_eq!(old[1..], sell[1..], "and every other word is the curve's either way");
     }
 
     /// **P10 on the EVM lane (the 2026-09-23 Position route matrix): past the audit fence
