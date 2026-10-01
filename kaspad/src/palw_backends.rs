@@ -2574,6 +2574,45 @@ mod tests {
         assert_eq!(cgroup_headroom_from_v1("0::/a/b", 800, &read), Some(400), "the credit is capped at 60 % of the limit: 1000 − 600");
     }
 
+    /// **The growth, simulated: the ledger's headroom does not fall as the allocator hoards freed
+    /// memory.** b6's anon grew 7.5 → 16.4 GiB over 36 h at a live set of ~7.9 GiB: everything above the
+    /// live set is `MADV_FREE`d pages, which accumulate (the allocator reuses them lazily) until
+    /// `memory.current` reaches `memory.max` and the kernel starts reclaiming. Walk that accumulation
+    /// from nothing to the whole of the room above the live set: the kernel's own `max − current`
+    /// falls to nothing — the reading that refused every duty — while the credited headroom stays at
+    /// `max − live` (less the cap's slack) the whole way.
+    #[test]
+    fn the_headroom_does_not_fall_as_freed_memory_accumulates() {
+        const GIB: u64 = 1 << 30;
+        let max = 17 * GIB;
+        let live = 8 * GIB; // dirty, in use
+        let cg = "0::/system.slice/misaka-t12-node.service\n";
+        let mut worst_credited = u64::MAX;
+        let mut naive_at_the_end = u64::MAX;
+        for lazy_mib in (0..=(max - live) >> 20).step_by(256) {
+            let lazy = lazy_mib << 20;
+            let current = live + lazy;
+            let pairs: Vec<(String, String)> = vec![
+                ("/sys/fs/cgroup/system.slice/misaka-t12-node.service/memory.max".into(), max.to_string()),
+                ("/sys/fs/cgroup/system.slice/misaka-t12-node.service/memory.current".into(), current.to_string()),
+            ];
+            let read = move |path: &Path| pairs.iter().find(|(p, _)| Path::new(p) == path).map(|(_, v)| v.clone());
+            let credited = cgroup_headroom_from_v1(cg, lazy, &read).expect("a limit");
+            let naive = cgroup_headroom_from_v1(cg, 0, &read).expect("a limit");
+            assert_eq!(naive, max - current, "the old reading, step by step");
+            // The credit is capped (60 % of the limit): below the cap the credited headroom is exactly
+            // `max − live`; above it, it never falls below `max − live − (lazy − cap)` … which is the cap's slack.
+            let cap = max / 1_000 * PALW_LAZYFREE_CREDIT_PERMILLE_V1;
+            assert_eq!(credited, max - (current - lazy.min(cap)), "lazy {lazy_mib} MiB");
+            worst_credited = worst_credited.min(credited);
+            naive_at_the_end = naive;
+        }
+        assert!(naive_at_the_end < GIB / 2, "the kernel's figure reaches nothing: {naive_at_the_end}");
+        // b6's live set is below the cap's reach, so the credited reading stays above what a 3.37 GiB
+        // full-seat replay and the 1 GiB reserve need.
+        assert!(worst_credited > 4 * GIB + GIB, "the credited headroom never fell under {} MiB", worst_credited >> 20);
+    }
+
     /// `/proc/loadavg` over the CPUs, in thousandths: the 5.104 host's 35.5 on eight cores is 4,437.
     #[test]
     fn the_load_per_cpu_reads_the_first_loadavg_field() {
