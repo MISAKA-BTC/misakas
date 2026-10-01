@@ -51,6 +51,8 @@ pub(crate) struct ModelAddArgs {
     /// The sompi to sponsor into the class's Activation Pool once its registration folds
     /// (`--sponsor` / `--no-sponsor`; 500 MSK by default — the pool's P4). `None`: no sponsor.
     pub(crate) sponsor: Option<u64>,
+    /// The runtime pack gate of an IR artifact (RFC-0002 Part II §II.7.5, decided 2026-10-01).
+    pub(crate) pack_gate: crate::pack_gate::PackGateFlags,
 }
 
 /// A certified family as the chain holds it.
@@ -390,6 +392,17 @@ impl Walk<'_> {
 
 /// `misaka model add [<model>]`.
 pub(crate) async fn run(ctx: &crate::node::Ctx, profile: Profile, args: ModelAddArgs) -> CliResult {
+    // **An IR artifact is registered only against a runtime pack that verifies** (or the expert's explicit override, with a warning): the
+    // pack is what says the executors agree with the program and that this is the artifact the pack describes. A catalog model has no
+    // pack; the gate is for IR containers.
+    if let Some(artifact) = args.artifact.as_deref().map(std::path::Path::new)
+        && misaka_palw_sdk::tir_manifest::PalwTirManifestV1::sniff(artifact)
+    {
+        let gate = crate::pack_gate::require_verified_pack(&args.pack_gate, artifact)?;
+        for line in gate.lines() {
+            eprintln!("{line}");
+        }
+    }
     let mut flow = Flow::new(ctx.output, args.yes);
     let mut doc = serde_json::Map::new();
     let result = walk(ctx, &profile, &args, &mut flow, &mut doc).await;

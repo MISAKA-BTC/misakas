@@ -243,7 +243,14 @@ pub(crate) async fn tir_registration_object(
     bond: &str,
     out: &Path,
     model_id: Option<&str>,
+    pack_gate: &crate::pack_gate::PackGateFlags,
 ) -> CliResult {
+    // RFC-0002 Part II §II.7.5 (decided 2026-10-01): a registration needs a runtime pack that verifies against the artifact, or the
+    // expert's explicit override (a warning is printed). A CLI policy; the chain does not read a pack.
+    let gate = crate::pack_gate::require_verified_pack(pack_gate, artifact)?;
+    for line in gate.lines() {
+        eprintln!("{line}");
+    }
     let nv = connect(ctx).await?;
     let params = nv.params.clone();
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
@@ -309,6 +316,7 @@ pub(crate) async fn tir_registration_object(
                 "artifact_root": entry.artifact_root.to_string(),
                 "model_id": entry.model_id,
                 "registrant_bond": bond,
+                "pack": gate.word(),
             })
         );
     } else {

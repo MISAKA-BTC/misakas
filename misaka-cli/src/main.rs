@@ -33,6 +33,7 @@ mod node;
 /// ADR-0122: `mining`, `doctor`, `work` — the operator surface over the components.
 mod operator;
 /// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
+mod pack_gate;
 mod palw_activation_pool;
 mod palw_capacity_shadow;
 mod palw_claim;
@@ -588,6 +589,10 @@ enum ModelCmd {
         no_wait: bool,
         #[command(flatten)]
         sponsor: palw_activation_pool::ListingSponsorArgs,
+        /// An IR artifact (PALWTIR1) is registered only with a runtime pack that verifies against it (`--pack`), unless `--skip-pack-verify`.
+        /// A catalog model has no pack: the gate does not apply to it.
+        #[command(flatten)]
+        pack_gate: pack_gate::PackGateFlags,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -1145,6 +1150,9 @@ enum PalwCmd {
         /// The class's model id, when the artifact declares more than one class.
         #[arg(long)]
         model_id: Option<String>,
+        /// A registration needs a runtime pack that verifies against the artifact (`--pack`), unless `--skip-pack-verify`.
+        #[command(flatten)]
+        pack_gate: pack_gate::PackGateFlags,
     },
     /// Submit a PALW lifecycle object written by `palw-certify` — the ADR-0075 certification
     /// objects `FamilyCertified` (a family's drill evidence, graded on chain) and
@@ -2611,6 +2619,7 @@ async fn main() -> std::process::ExitCode {
             yes,
             no_wait,
             sponsor,
+            pack_gate,
             profile: args,
         }) => match (profile(&args), sponsor.resolve()) {
             (Ok(p), Ok(sponsor)) => {
@@ -2623,6 +2632,7 @@ async fn main() -> std::process::ExitCode {
                     yes,
                     no_wait,
                     sponsor,
+                    pack_gate,
                 };
                 operator::model_add::run(&ctx, p, a).await
             }
@@ -2706,8 +2716,8 @@ async fn main() -> std::process::ExitCode {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await.map(|_| ()),
-        Command::Palw(PalwCmd::TirRegistration { key, artifact, bond, out, model_id }) => {
-            palw_model_ops::tir_registration_object(&ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await
+        Command::Palw(PalwCmd::TirRegistration { key, artifact, bond, out, model_id, pack_gate }) => {
+            palw_model_ops::tir_registration_object(&ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref(), &pack_gate).await
         }
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Inspect { manifest, json })) => palw_extension::inspect(&ctx, &manifest, json),
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Verify { manifest, depth, receipt_out, key, json })) => {
