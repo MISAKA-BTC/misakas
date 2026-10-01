@@ -688,7 +688,8 @@ subject, kind)`, and the claim is the evaluation lane's job row's.
 | Judge | the judge's margin `LL(verdict_a) − LL(verdict_b)` on the subject's output, in Q24 nats, clamped to the stage's `[lo, hi]` (§17.8.5) |
 | Pairwise | the outcome from the candidate's side: **+1** when the sum of the judge's two margins (both orders shown, §17.8.5) exceeds the stage's `margin`, **−1** otherwise — a tie goes to the incumbent, so it is never 0 |
 
-A second score for the same `(item, subject, kind)` is refused. A score is taken only while the epoch
+A second score for the same `(item, subject, kind)` is refused (a score that stands: a convicted claim's
+score is taken back out, §17.8.6, and the job's next claim records its own). A score is taken only while the epoch
 is `Evaluating` or `Closing`, for an item it drew and a subject it evaluates.
 
 **ExactMatch is scored by the fold at the key's reveal**, not by a claim: keys stay hidden until every
