@@ -52,6 +52,7 @@ kit)
         push "$h" "$KIT/fleet.env" "$REL_ROOT/kit/"
         push "$h" "$KIT/lib.sh" "$REL_ROOT/kit/"
         push "$h" "$KIT/t12check.py" "$REL_ROOT/kit/"
+        push "$h" "$KIT/pinner-lib.sh" "$REL_ROOT/kit/"   # int-10.2: lib.sh sources it on every host
         case $h in
             5104)  push "$h" "$KIT/install-5104.sh" "$REL_ROOT/kit/"; push "$h" "$KIT/build-release-5104.sh" "$REL_ROOT/kit/" ;;
             113)   push "$h" "$KIT/install-113.sh" "$REL_ROOT/kit/" ;;
