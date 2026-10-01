@@ -9,16 +9,22 @@
 //! is a defect the conformance suite catches (F-4), and on the chain it convicts whoever ran it.
 //!
 //! * **API: wgpu** ([`device`]) — Metal on macOS, Vulkan on Linux, one WGSL source for both.
-//! * **`i64` is native** (`SHADER_INT64`, required of the device); **`i128` never lives on the
-//!   device** — a node whose refined plan needs `i128` work runs on the CPU executor.
+//! * **`i64` is native** (`SHADER_INT64`, required of the device); **`i128`** is two `u64` words
+//!   with an exact library of its own ([`wgsl::INTLIB128`]); only checked `i128` arithmetic (a
+//!   result that may not even fit `i128`) runs on the CPU executor's kernel.
 //! * **The plan decides, not the backend.** A kernel takes the CPU executor's refined
 //!   [`NodePlan`](misaka_palw_tir_exec::plan::NodePlan) — the working type, the accumulation proof
 //!   (`Acc`), the checks that can still fire — and computes under exactly that proof; a node whose
 //!   plan it cannot honour is not run here.
+//! * **Two executors.** [`GpuExecutor`] steps one position at a time, as `TirExecutor` does;
+//!   [`BatchReplay`] replays a whole job a layer at a time over all of its positions (a projection
+//!   one GEMM over the positions, causal attention one masked batched product), for a seat that
+//!   holds every token before it starts.
 //!
 //! Node software, never a consensus dependency, and an isolated cargo workspace: nothing in the
 //! root workspace depends on this crate or sees its dependencies.
 
+pub mod batch;
 pub mod device;
 pub mod exec;
 pub mod fixtures;
@@ -26,7 +32,8 @@ pub mod kernels;
 pub mod tensor;
 pub mod wgsl;
 
+pub use batch::{BatchReplay, BatchStats, ReplayOut, ReplaySink};
 pub use device::{DeviceError, GpuDevice};
 pub use exec::{ExecStats, GpuExecutor};
-pub use kernels::{DeviceFailure, Recorder, Unsupported};
+pub use kernels::{DeviceFailure, Ragged, Recorder, Unsupported};
 pub use tensor::{DevTensor, Form};

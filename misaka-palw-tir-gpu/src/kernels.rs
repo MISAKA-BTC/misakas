@@ -168,6 +168,37 @@ pub struct Recorder<'d> {
     /// The open compute pass: consecutive dispatches share one (each dispatch is its own usage
     /// scope, so a dispatch sees every earlier one's writes); copies and the submission close it.
     pass: Option<wgpu::ComputePass<'static>>,
+    /// Set by the batched replay (`crate::batch`) while it records a node whose value has a padded
+    /// history axis: the kernels then mask padding and reduce over each position's `H_p`.
+    pub ragged: Option<Ragged>,
+}
+
+/// A batch of positions' padded history axis, as the kernels need it (`wgsl::RAGGED_MASK`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Ragged {
+    /// The output's `H` axis, right-aligned to rank 4 (elementwise outputs, a reduction's output).
+    pub h_axis: u32,
+    /// The output's position axis, right-aligned to rank 4.
+    pub pos_axis: u32,
+    /// The block's window `W`.
+    pub window: u32,
+    /// The batch's first position.
+    pub p0: u32,
+    /// Reduce: 1 — the reduced axis is `H`; 2 — the output has `H` elsewhere; 0 — neither.
+    pub reduce_mode: u8,
+    /// MatMul: bit 1 `M` is `H`, bit 2 `N` is `H`, bit 4 the contraction is `H`.
+    pub mm_bits: u8,
+    /// MatMul: the output batch slot (0 or 1, right-aligned to two) that holds the position.
+    pub pos_slot: u32,
+}
+
+impl Ragged {
+    fn set(&self, p: &mut Params) {
+        p.set(60, self.h_axis);
+        p.set(61, self.pos_axis);
+        p.set(62, self.window);
+        p.set(63, self.p0);
+    }
 }
 
 impl<'d> Recorder<'d> {
@@ -181,7 +212,7 @@ impl<'d> Recorder<'d> {
         }));
         let mut enc = dev.device.create_command_encoder(&Default::default());
         enc.clear_buffer(&status, 0, None);
-        Recorder { dev, enc, status, slots, dispatches: 0, log: Vec::new(), pass: None }
+        Recorder { dev, enc, status, slots, dispatches: 0, log: Vec::new(), pass: None, ragged: None }
     }
 
     /// Record one dispatch of `src` over `groups` workgroups.
@@ -290,8 +321,15 @@ impl<'d> Recorder<'d> {
     ) -> Result<(), Unsupported> {
         let wide = wide || out.1 == Form::I128 || ins.iter().any(|(t, _)| t.form == Form::I128);
         let n = u32_of(numel(geometry))?;
-        let key =
-            EwKey { op, ins: ins.iter().map(|(t, _)| t.form).collect(), out: out.1, check_out: check.is_some(), check_operand, wide };
+        let key = EwKey {
+            op,
+            ins: ins.iter().map(|(t, _)| t.form).collect(),
+            out: out.1,
+            check_out: check.is_some(),
+            check_operand,
+            wide,
+            ragged: self.ragged.is_some(),
+        };
         let mut p = Params::default();
         p.set(0, n);
         p.set(1, slot);
@@ -327,8 +365,11 @@ impl<'d> Recorder<'d> {
                 p.set64(at + 2, hi);
             }
         }
+        if let Some(r) = self.ragged {
+            r.set(&mut p);
+        }
         let src = wgsl::ew_source(&key);
-        self.log.push(format!("ew:{op:?}{}", if wide { ":w128" } else { "" }));
+        self.log.push(format!("ew:{op:?}{}{}", if wide { ":w128" } else { "" }, if key.ragged { ":rag" } else { "" }));
         let bufs: Vec<&wgpu::Buffer> = ins.iter().map(|(t, _)| &*t.buf).collect();
         let groups = self.groups(n, 256);
         self.dispatch(&src, &p, out.0, &bufs, groups);
@@ -494,7 +535,7 @@ impl<'d> Recorder<'d> {
     // ---------------------------------------------------------------- Gather
 
     #[allow(clippy::too_many_arguments)]
-    fn gather(
+    pub fn gather(
         &mut self,
         node: &NodePlan,
         data: &DevTensor,
@@ -609,13 +650,19 @@ impl<'d> Recorder<'d> {
         p.set64(19, hi);
         p.set64(21, lo);
         p.set(23, 0);
+        // A batch of positions with a padded history axis: the general kernels, masked.
+        let rag = self.ragged.map(|r| r.mm_bits).unwrap_or(0);
+        if let Some(r) = self.ragged.filter(|_| rag != 0) {
+            r.set(&mut p);
+            p.set(60, r.pos_slot);
+        }
         if wide {
             // Terms are exact 128-bit products of i64 operands; the general kernel, in 128 bits.
             p.set128(24, node.out.dtype.max_value());
             p.set128(28, node.out.dtype.min_value());
-            self.log.push(format!("matmul:{mode:?}:w128"));
+            self.log.push(format!("matmul:{mode:?}:w128{}", if rag != 0 { ":rag" } else { "" }));
             let groups = self.groups(outputs, 256);
-            self.dispatch(&wgsl::matmul_wide_source(a.form, b.form, o.form, mode), &p, &o.buf, &[&*a.buf, &*b.buf], groups);
+            self.dispatch(&wgsl::matmul_wide_source(a.form, b.form, o.form, mode, rag), &p, &o.buf, &[&*a.buf, &*b.buf], groups);
             return Ok(o);
         }
         let chunk = i32_chunk(node.in_ivs[0], node.in_ivs[1]).unwrap_or(0);
@@ -625,6 +672,7 @@ impl<'d> Recorder<'d> {
         let aligned = |q: usize| a.layout.offset.is_multiple_of(q) && a_m.is_multiple_of(q) && abs.iter().all(|s| s.is_multiple_of(q));
         // The matrix–vector product over packed weight rows (a decode projection, an expert).
         let gemv_ok = mode == SumMode::Fast
+            && rag == 0
             && a.form == Form::P8
             && n == 1
             && k >= 4
@@ -659,7 +707,7 @@ impl<'d> Recorder<'d> {
             return Ok(o);
         }
         // Many output columns (a batch of positions): tiled through workgroup memory, i32 terms.
-        if mode == SumMode::Fast && chunk >= 32 && n >= 8 && m * n >= 4096 && nbatch <= 65_535 {
+        if mode == SumMode::Fast && rag == 0 && chunk >= 32 && n >= 8 && m * n >= 4096 && nbatch <= 65_535 {
             p.set(16, chunk / 32);
             let fast_a = a.form == Form::P8 && a.layout.strides[ra - 1] == 1 && k.is_multiple_of(4) && aligned(4);
             let key = GemmKey { a: a.form, b: b.form, out: o.form, fast_a };
@@ -671,9 +719,14 @@ impl<'d> Recorder<'d> {
         let chunked = chunk >= 2;
         p.set(16, if chunked { chunk } else { 1 });
         // A long contraction with few outputs (attention values over a long history): split K.
-        let split = (outputs as usize) < 16_384 && k >= 1024;
-        let key = MatMulKey { a: a.form, b: b.form, out: if split { Form::I64 } else { o.form }, mode, chunked, split };
-        self.log.push(format!("matmul:{mode:?}{}{}", if chunked { ":i32" } else { ":i64" }, if split { ":split" } else { "" }));
+        let split = rag == 0 && (outputs as usize) < 16_384 && k >= 1024;
+        let key = MatMulKey { a: a.form, b: b.form, out: if split { Form::I64 } else { o.form }, mode, chunked, split, rag };
+        self.log.push(format!(
+            "matmul:{mode:?}{}{}{}",
+            if chunked { ":i32" } else { ":i64" },
+            if split { ":split" } else { "" },
+            if rag != 0 { ":rag" } else { "" }
+        ));
         if !split {
             let groups = self.groups(outputs, 256);
             self.dispatch(&wgsl::matmul_source(&key), &p, &o.buf, &bufs, groups);
@@ -694,7 +747,7 @@ impl<'d> Recorder<'d> {
 
     // ---------------------------------------------------------------- reductions
 
-    fn reduce(
+    pub fn reduce(
         &mut self,
         node: &NodePlan,
         x: &DevTensor,
@@ -713,7 +766,8 @@ impl<'d> Recorder<'d> {
         let n_out = u32_of(numel(out_shape))?;
         let ext = x.shape()[axis];
         let cooperative = !wide && ext >= 512;
-        let key = ReduceKey { max, mode, x: x.form, out: o.form, cooperative, wide };
+        let ragged = self.ragged.map(|r| r.reduce_mode).unwrap_or(0);
+        let key = ReduceKey { max, mode, x: x.form, out: o.form, cooperative, wide, ragged };
         self.log.push(format!(
             "{}:{mode:?}{}{}",
             if max { "reduce_max" } else { "reduce_sum" },
@@ -734,6 +788,9 @@ impl<'d> Recorder<'d> {
         }
         p.set(16, u32_of(ext)?);
         p.set(17, u32_of(x.layout.strides[axis])?);
+        if let Some(r) = self.ragged.filter(|_| ragged != 0) {
+            r.set(&mut p);
+        }
         if wide {
             p.set128(18, node.out.dtype.max_value());
             p.set128(22, node.out.dtype.min_value());
@@ -749,7 +806,7 @@ impl<'d> Recorder<'d> {
 
     // ---------------------------------------------------------------- TopK
 
-    fn topk(
+    pub fn topk(
         &mut self,
         node: &NodePlan,
         x: &DevTensor,
@@ -759,7 +816,13 @@ impl<'d> Recorder<'d> {
         slot: u32,
     ) -> Result<DevTensor, Unsupported> {
         let wide = node.work == Work::I128;
-        let x = if x.layout.is_contiguous() { x.clone() } else { self.materialize(x, x.form, slot)? };
+        // A strided operand is copied out first — into its computed form: a view of a packed param
+        // (a transposed `i8` weight) is never written back packed.
+        let x = if x.layout.is_contiguous() {
+            x.clone()
+        } else {
+            self.materialize(x, Form::computed(x.dtype).ok_or(Unsupported::I128Store)?, slot)?
+        };
         let sh = x.shape().to_vec();
         let (outer, n, inner): (usize, usize, usize) = (sh[..axis].iter().product(), sh[axis], sh[axis + 1..].iter().product());
         let flags = self.dev.alloc(Form::U32, numel(&sh));

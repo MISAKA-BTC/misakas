@@ -449,7 +449,18 @@ pub struct EwKey {
     /// Compute in 128 bits ([`INTLIB128`]): the plan's working type is `i128`, or a value moved is
     /// held as `i128`.
     pub wide: bool,
+    /// A batch of positions with a padded history axis ([`RAGGED_MASK`]): an element past its
+    /// position's `H_p` is padding — stored as 0, never loaded from, never failing.
+    pub ragged: bool,
 }
+
+/// **The ragged history axis of a batch of positions** (`crate::batch`). A value whose shape has `H`
+/// is held for positions `p0 … p0+T−1` as one tensor with a leading position axis and `H` padded to
+/// the batch's largest. Position `p`'s valid extent is `H_p = min(p + 1, W)`. Parameter words:
+/// `P[60]` the output's `H` axis and `P[61]` its position axis (both right-aligned to rank 4),
+/// `P[62]` the window `W`, `P[63]` the first position `p0`. The mask runs before any load, so a
+/// padding element reads nothing and reports nothing.
+pub const RAGGED_MASK: &str = "    var rx = array<u32, 4>(i0, i1, i2, i3);\n    let hp = min(rx[P[61]] + P[63] + 1u, P[62]);\n";
 
 /// The parameter word where an elementwise kernel's 64-bit constants start.
 pub fn ew_const_base(n_ops: usize) -> usize {
@@ -468,6 +479,14 @@ pub fn ew_source(k: &EwKey) -> String {
     );
     s.push_str(&index_prelude(n));
     let w = k.wide;
+    if k.ragged {
+        s.push_str(RAGGED_MASK);
+        s.push_str(if w {
+            "    if (rx[P[60]] >= hp) { st128(off_o, W(0lu, 0lu)); return; }\n"
+        } else {
+            "    if (rx[P[60]] >= hp) { st(off_o, 0li); return; }\n"
+        });
+    }
     let load = |j: usize| if w { format!("    let x{j} = ld128_{j}(off{j});\n") } else { format!("    let x{j} = ld{j}(off{j});\n") };
     match k.op {
         EwOp::Gather => {
@@ -564,6 +583,21 @@ pub struct ReduceKey {
     pub cooperative: bool,
     /// 128-bit values and sums (`Acc::Fast128`/`Pn128`, a maximum in `i128`); never cooperative.
     pub wide: bool,
+    /// A batch of positions ([`RAGGED_MASK`]): 1 — the reduced axis is `H`, reduced over `H_p`;
+    /// 2 — the output has `H` on another axis, padding masked; 0 — neither.
+    pub ragged: u8,
+}
+
+/// The ragged prologue of a reduction: the extent `n` it reduces over, and the padding mask.
+fn reduce_ragged(ragged: u8, wide: bool) -> String {
+    match ragged {
+        1 => format!("{RAGGED_MASK}    let n = min(P[16], hp); let st_ax = P[17];\n"),
+        2 => format!(
+            "{RAGGED_MASK}    if (rx[P[60]] >= hp) {{ {} return; }}\n    let n = P[16]; let st_ax = P[17];\n",
+            if wide { "st128(off_o, W(0lu, 0lu));" } else { "st(off_o, 0li);" }
+        ),
+        _ => "    let n = P[16]; let st_ax = P[17];\n".to_string(),
+    }
 }
 
 /// Parameter block: `P[0]` outputs, `P[1]` status slot, `P[2..11]` output geometry, `P[11..16]`
@@ -586,7 +620,7 @@ pub fn reduce_source(k: &ReduceKey) -> String {
              \x20   if (e >= P[0]) { return; }\n",
         );
         s.push_str(&index_prelude(1));
-        s.push_str("    let n = P[16]; let st_ax = P[17];\n");
+        s.push_str(&reduce_ragged(k.ragged, false));
         if k.max {
             s.push_str("    var acc = ld0(off0);\n    for (var t = 1u; t < n; t = t + 1u) { acc = max(acc, ld0(off0 + t * st_ax)); }\n    let v = acc;\n");
         } else {
@@ -615,7 +649,7 @@ pub fn reduce_source(k: &ReduceKey) -> String {
          \x20   if (e >= P[0]) { return; }\n",
     );
     s.push_str(&index_prelude(1));
-    s.push_str("    let n = P[16]; let st_ax = P[17];\n");
+    s.push_str(&reduce_ragged(k.ragged, false));
     if k.max {
         s.push_str(
             "    var acc = ld0(off0);\n    for (var t = lid; t < n; t = t + 256u) { acc = max(acc, ld0(off0 + t * st_ax)); }\n\
@@ -659,7 +693,7 @@ fn reduce_wide_source(k: &ReduceKey) -> String {
          \x20   if (e >= P[0]) { return; }\n",
     );
     s.push_str(&index_prelude(1));
-    s.push_str("    let n = P[16]; let st_ax = P[17];\n");
+    s.push_str(&reduce_ragged(k.ragged, true));
     if k.max {
         s.push_str("    var acc = ld128_0(off0);\n    for (var t = 1u; t < n; t = t + 1u) { acc = w_max(acc, ld128_0(off0 + t * st_ax)); }\n    st128(off_o, acc);\n}\n");
         return s;
@@ -690,19 +724,21 @@ fn reduce_wide_source(k: &ReduceKey) -> String {
 /// `MatMul` in 128 bits (`Acc::Fast128`/`Pn128`), one invocation per output element: each term is
 /// the exact 128-bit product of two `i64` operands; `PosNeg` checks each partial as
 /// [`reduce_wide_source`] does (bounds at `P[19..23]` hi and `P[24..28]` lo, four words each).
-pub fn matmul_wide_source(a: Form, b: Form, out: Form, mode: SumMode) -> String {
+pub fn matmul_wide_source(a: Form, b: Form, out: Form, mode: SumMode, rag: u8) -> String {
     let mut s = header(out, &[a, b]);
     s.push_str(
         "\n@compute @workgroup_size(256)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {\n\
          \x20   let e = gid.x + gid.y * nwg.x * 256u;\n\
          \x20   if (e >= P[0]) { return; }\n\
-         \x20   let m = P[2]; let n = P[3]; let kk = P[4];\n\
+         \x20   let m = P[2]; let n = P[3];\n\
          \x20   let c = e % n; let rest = e / n; let r = rest % m; let bi = rest / m;\n\
          \x20   let b1 = bi % P[10]; let b0 = bi / P[10];\n\
          \x20   let ao = P[17] + b0 * P[11] + b1 * P[12] + r * P[5];\n\
          \x20   let bo = P[18] + b0 * P[13] + b1 * P[14] + c * P[8];\n\
          \x20   let a_k = P[6]; let b_k = P[7];\n",
     );
+    s.push_str(&matmul_ragged(rag, true, "P[4]"));
+    s.push_str("    let kk = tk;\n");
     match mode {
         SumMode::Fast => s.push_str(
             "    var acc = W(0lu, 0lu);\n    for (var t = 0u; t < kk; t = t + 1u) { acc = w_add(acc, w_mul(wi(ld0(ao + t * a_k)), wi(ld1(bo + t * b_k)))); }\n    st128(P[23] + e, acc);\n}\n",
@@ -742,6 +778,32 @@ pub struct MatMulKey {
     /// [`splitk_finish_source`] adds the slices. A long contraction with few outputs (the values
     /// of an attention over a long history) then has an invocation per slice, not per output.
     pub split: bool,
+    /// A batch of positions with a padded history axis ([`RAGGED_MASK`]'s words; `P[60]` names the
+    /// output batch slot that holds the position): bit 1 — `M` is `H`, bit 2 — `N` is `H` (padding
+    /// outputs stored 0, never failing); bit 4 — the contraction is `H`, summed over `H_p` terms.
+    pub rag: u8,
+}
+
+/// The ragged prologue of a MatMul: `hp` for the output's position, the padding mask, and the
+/// contraction's length `tk` (`kk` past the mask).
+fn matmul_ragged(rag: u8, wide: bool, kk: &str) -> String {
+    if rag == 0 {
+        return format!("    let tk = {kk};\n");
+    }
+    let zero = if wide { "st128(P[23] + e, W(0lu, 0lu));" } else { "st(P[23] + e, 0li);" };
+    let mut s = String::from("    let pos = select(b1, b0, P[60] == 0u);\n    let hp = min(pos + P[63] + 1u, P[62]);\n");
+    if rag & 1 != 0 {
+        s.push_str(&format!("    if (r >= hp) {{ {zero} return; }}\n"));
+    }
+    if rag & 2 != 0 {
+        s.push_str(&format!("    if (c >= hp) {{ {zero} return; }}\n"));
+    }
+    if rag & 4 != 0 {
+        s.push_str(&format!("    let tk = min({kk}, hp);\n"));
+    } else {
+        s.push_str(&format!("    let tk = {kk};\n"));
+    }
+    s
 }
 
 /// Parameter block shared by the MatMul kernels: `P[0]` outputs, `P[1]` slot, `P[2]` M, `P[3]` N,
@@ -758,9 +820,9 @@ pub fn matmul_source(k: &MatMulKey) -> String {
          \x20   if (ee >= {total}) {{ return; }}\n"
     ));
     if k.split {
-        s.push_str("    let e = ee % P[0]; let slice = ee / P[0];\n    let t0 = slice * P[24]; let t1 = min(t0 + P[24], P[4]);\n");
+        s.push_str("    let e = ee % P[0]; let slice = ee / P[0];\n    let t0 = slice * P[24]; let t1s = min(t0 + P[24], P[4]);\n");
     } else {
-        s.push_str("    let e = ee;\n    let t0 = 0u; let t1 = P[4];\n");
+        s.push_str("    let e = ee;\n    let t0 = 0u; let t1s = P[4];\n");
     }
     s.push_str(
         "    let m = P[2]; let n = P[3];\n\
@@ -770,6 +832,8 @@ pub fn matmul_source(k: &MatMulKey) -> String {
          \x20   let bo = P[18] + b0 * P[13] + b1 * P[14] + c * P[8];\n\
          \x20   let a_k = P[6]; let b_k = P[7];\n",
     );
+    s.push_str(&matmul_ragged(k.rag, false, "t1s"));
+    s.push_str("    let t1 = tk;\n");
     match k.mode {
         SumMode::Fast => s.push_str("    var acc = 0li;\n"),
         SumMode::PosNeg => s.push_str("    var accp = 0li; var accn = 0li;\n"),
