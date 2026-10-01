@@ -1201,6 +1201,10 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         PalwCourtVerdictProofV2::GenDecodeToken { .. } => "GenDecodeToken",
         PalwCourtVerdictProofV2::GenDissection { .. } => "GenDissection",
         PalwCourtVerdictProofV2::GenOutputTile { .. } => "GenOutputTile",
+        // RFC-0004 A6 (proofs 13-15): an evaluation claim's closes, named for the same reason.
+        PalwCourtVerdictProofV2::EvalCone { .. } => "EvalCone",
+        PalwCourtVerdictProofV2::EvalDecodeToken { .. } => "EvalDecodeToken",
+        PalwCourtVerdictProofV2::EvalDissection { .. } => "EvalDissection",
     }
 }
 

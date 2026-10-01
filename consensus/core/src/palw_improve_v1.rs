@@ -91,6 +91,9 @@ pub struct PalwImprovementCeilingsV1 {
     /// every epoch whose results may still exist — what every block's root rehash pays. An epoch
     /// reserves `(n + suites) × (k_max + 2)` when it opens and frees it when its results retire.
     pub max_live_results: u32,
+    /// **The most a policy may give an evaluation claim's panel**, in permille of the job's fee (spec 17
+    /// §17.8.4, RFC-0004 §13 as decided 2026-09-30): `0` allows none, `1,000` the whole fee.
+    pub max_eval_seat_permille: u16,
 }
 
 impl PalwImprovementCeilingsV1 {
@@ -104,6 +107,7 @@ impl PalwImprovementCeilingsV1 {
         max_policy_bytes: 16_384,
         max_open_epochs: 64,
         max_live_results: 1 << 17,
+        max_eval_seat_permille: 1_000,
     };
 
     /// Is every ceiling inside the format's cap, and none zero?
@@ -146,6 +150,9 @@ impl PalwImprovementCeilingsV1 {
         if self.max_live_results > caps.max_live_results {
             return Err("max_live_results must be at most 2^17");
         }
+        if self.max_eval_seat_permille > caps.max_eval_seat_permille {
+            return Err("max_eval_seat_permille must be at most 1,000");
+        }
         Ok(())
     }
 
@@ -158,6 +165,7 @@ impl PalwImprovementCeilingsV1 {
         h.write(self.max_policy_bytes.to_le_bytes());
         h.write(self.max_open_epochs.to_le_bytes());
         h.write(self.max_live_results.to_le_bytes());
+        h.write(self.max_eval_seat_permille.to_le_bytes());
     }
 }
 
@@ -172,6 +180,7 @@ pub const PALW_DRILL_IMPROVE_CEILINGS_V1: PalwImprovementCeilingsV1 = PalwImprov
     max_policy_bytes: 16_384,
     max_open_epochs: 8,
     max_live_results: 1 << 14,
+    max_eval_seat_permille: 500,
 };
 
 /// **`Params::palw_improvement_v1`'s value**: the fence and what it carries.
@@ -225,6 +234,23 @@ pub const PALW_DRILL_IMPROVE_V1_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFen
 /// The drill's one-entry list.
 pub const PALW_DRILL_IMPROVE_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_DRILL_IMPROVE_V1_ENTRY];
 
+/// **The claim lifecycle bound a policy's windows are held to** (spec 17 §17.4.3 rows 19–20; RFC-0004 §13 as decided
+/// 2026-09-30 and refined the same day): the longest an UNCHALLENGED evaluation claim takes from its acceptance to
+/// `Final`, under this ruleset's own windows — its panel's anchor slot, the receipt window in which the panel
+/// licenses it, and the challenge window it finalizes after (the longer of the ruleset's two). The court window is
+/// not in it: a claim that is not `Final` at the decision point is a missing evaluation, which the incumbent keeps,
+/// and a court that convicts it later still slashes it, independently of the epoch's decision. A policy whose
+/// `court_margin` is shorter cannot see a late honest claim reach `Final` before `t_score`.
+pub fn palw_improvement_claim_lifecycle_v1(bundle: &crate::palw_mode_v2::PalwConsensusParamsV2) -> u64 {
+    let state = &bundle.state;
+    let challenge = state.window_challenge().max(if state.short_challenge_window_from_daa().is_some() {
+        crate::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1
+    } else {
+        0
+    });
+    bundle.panel.anchor_delay().saturating_add(state.window_receipt()).saturating_add(challenge)
+}
+
 impl Params {
     /// `palw_improvement_v1`, resolved: `Some` only on a `ConsensusV2` network that armed it.
     pub fn palw_improvement_v1_fence(&self) -> Option<PalwImprovementFenceV1> {
@@ -247,7 +273,13 @@ impl Params {
         let armed = self.palw_improvement_v1.filter(|f| f.activation != ForkActivation::never());
         let from_daa = armed.map(|f| f.activation.daa_score());
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state = bundle.state.clone().with_improve_from_daa(from_daa).with_improve_ceilings(armed.map(|f| f.ceilings));
+            let lifecycle = armed.map(|_| palw_improvement_claim_lifecycle_v1(bundle));
+            bundle.state = bundle
+                .state
+                .clone()
+                .with_improve_from_daa(from_daa)
+                .with_improve_ceilings(armed.map(|f| f.ceilings))
+                .with_improve_lifecycle(lifecycle);
         }
     }
 
@@ -259,13 +291,18 @@ impl Params {
             return Err(PalwModeV2Error::Invalid("palw_improvement_v1 is a ConsensusV2 rule: this ruleset has no V2 bundle"));
         }
         let mirror = match &self.palw_consensus_mode {
-            PalwConsensusMode::ConsensusV2(bundle) => bundle.state.improve_from_daa().map(|at| (at, bundle.state.improve_ceilings())),
+            PalwConsensusMode::ConsensusV2(bundle) => {
+                bundle.state.improve_from_daa().map(|at| (at, bundle.state.improve_ceilings(), bundle.state.improve_lifecycle_daa()))
+            }
             _ => None,
         };
-        let armed = self
-            .palw_improvement_v1
-            .filter(|f| f.activation != ForkActivation::never())
-            .map(|f| (f.activation.daa_score(), Some(f.ceilings)));
+        let armed = self.palw_improvement_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| {
+            let lifecycle = match &self.palw_consensus_mode {
+                PalwConsensusMode::ConsensusV2(bundle) => Some(palw_improvement_claim_lifecycle_v1(bundle)),
+                _ => None,
+            };
+            (f.activation.daa_score(), Some(f.ceilings), lifecycle)
+        });
         if mirror != armed {
             return Err(PalwModeV2Error::Invalid(
                 "palw_improvement_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_improvement_v1 after \

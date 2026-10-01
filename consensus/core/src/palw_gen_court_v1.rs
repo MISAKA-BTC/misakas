@@ -387,6 +387,16 @@ pub struct PalwGenImageTileV1 {
     pub proof: Vec<[u8; 64]>,
 }
 
+/// **Where a close's param leaves come from** (RFC-0004 A6): carried in the close, each proven under the case's
+/// `artifact_root` — the format of every pipeline claim's close — or already authenticated by the caller, which
+/// proves them its own way (an evaluation claim of a composite candidate: the leaves of each section under the
+/// section's sub-root, [`crate::palw_gen_artifact_v1::PalwGenOpenedParamsV1::authenticate_sections`]).
+#[derive(Clone, Copy, Debug)]
+pub enum PalwGenParamsV1<'a> {
+    Carried,
+    Authenticated(&'a crate::palw_gen_artifact_v1::PalwGenOpenedParamsV1),
+}
+
 /// **A generative close**: the disputed leaf and every unit its cone reads, opened — leaves of the
 /// disputed stage that precede it, leaves of earlier stages (the edges), job-image tiles, and the
 /// class's param leaves (whole leaves of its pipeline inventory, ascending, each with its path to
@@ -603,7 +613,17 @@ pub fn palw_gen_adjudicate_leaf_v1(
     close: &PalwGenCloseV1,
     limits: &DemandLimits,
 ) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
-    let p = match prove_close(case, close)? {
+    palw_gen_adjudicate_leaf_with_v1(case, close, PalwGenParamsV1::Carried, limits)
+}
+
+/// [`palw_gen_adjudicate_leaf_v1`] over param leaves from `params`.
+pub fn palw_gen_adjudicate_leaf_with_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    params: PalwGenParamsV1<'_>,
+    limits: &DemandLimits,
+) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
+    let p = match prove_close(case, close, params)? {
         ProvedV1::Convicted(verdict) => return Ok(verdict),
         ProvedV1::Proven(p) => p,
     };
@@ -650,7 +670,11 @@ enum ProvedV1 {
 /// **Steps 1–3 of every generative close** (see [`palw_gen_adjudicate_leaf_v1`]): the roots bound,
 /// every carried leaf under its stage's root and preceding the disputed one, PALW-TIR-33 on each
 /// (a conviction), the stage's inputs as the court answers them, and the params authenticated.
-fn prove_close(case: &PalwGenCourtCaseV1<'_>, close: &PalwGenCloseV1) -> Result<ProvedV1, PalwGenCloseRefusalV1> {
+fn prove_close(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    params: PalwGenParamsV1<'_>,
+) -> Result<ProvedV1, PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
     if crate::palw_gen_step_v1::palw_gen_step_root_v1(&case.claim.stage_roots) != case.claim.step_root
         || case.claim.stage_roots.len() != case.space.stages.len()
@@ -696,8 +720,13 @@ fn prove_close(case: &PalwGenCourtCaseV1<'_>, close: &PalwGenCloseV1) -> Result<
     let answers = palw_gen_stage_answers_v1(case.pipeline, case.programs, s, case.facts, case.images)
         .map_err(|e| R::Incomplete(format!("the job does not fix the stage's inputs: {e}")))?;
     // The class's params: the carried inventory leaves, each proven under its artifact root.
-    let params = crate::palw_gen_artifact_v1::PalwGenOpenedParamsV1::authenticate(case.inventory, &case.artifact_root, &close.params)
-        .map_err(R::Params)?;
+    let params = match params {
+        PalwGenParamsV1::Carried => {
+            crate::palw_gen_artifact_v1::PalwGenOpenedParamsV1::authenticate(case.inventory, &case.artifact_root, &close.params)
+                .map_err(R::Params)?
+        }
+        PalwGenParamsV1::Authenticated(authenticated) => authenticated.clone(),
+    };
     Ok(ProvedV1::Proven(ProvenCloseV1 { s, before, leaves, params, answers }))
 }
 
@@ -974,7 +1003,19 @@ pub fn palw_gen_check_root_claim_v1(
     totals: &PalwTirRangeClaimV1,
     limits: &DemandLimits,
 ) -> Result<PalwTirDissectSiteV1, String> {
-    let p = match prove_close(case, close).map_err(|e| e.to_string())? {
+    palw_gen_check_root_claim_with_v1(case, close, elements, totals, PalwGenParamsV1::Carried, limits)
+}
+
+/// [`palw_gen_check_root_claim_v1`] over param leaves from `params`.
+pub fn palw_gen_check_root_claim_with_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    elements: &[Vec<u32>],
+    totals: &PalwTirRangeClaimV1,
+    params: PalwGenParamsV1<'_>,
+    limits: &DemandLimits,
+) -> Result<PalwTirDissectSiteV1, String> {
+    let p = match prove_close(case, close, params).map_err(|e| e.to_string())? {
         ProvedV1::Convicted(v) => return Err(format!("the leaf convicts on its own ({v:?}): it is closed, not dissected")),
         ProvedV1::Proven(p) => p,
     };
@@ -1013,7 +1054,19 @@ pub fn palw_gen_dissect_partials_v1(
     range: (usize, usize),
     limits: &DemandLimits,
 ) -> Result<Result<PalwTirRangeClaimV1, PalwGenVerdictV1>, PalwGenCloseRefusalV1> {
-    palw_gen_dissect_partials_recorded_v1(case, close, phase, range, limits).map(|(out, _)| out)
+    palw_gen_dissect_partials_with_v1(case, close, phase, range, PalwGenParamsV1::Carried, limits)
+}
+
+/// [`palw_gen_dissect_partials_v1`] over param leaves from `params`.
+pub fn palw_gen_dissect_partials_with_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    phase: &PalwTirDissectPhaseV1,
+    range: (usize, usize),
+    params: PalwGenParamsV1<'_>,
+    limits: &DemandLimits,
+) -> Result<Result<PalwTirRangeClaimV1, PalwGenVerdictV1>, PalwGenCloseRefusalV1> {
+    palw_gen_dissect_partials_recorded_with_v1(case, close, phase, range, params, limits).map(|(out, _)| out)
 }
 
 /// [`palw_gen_dissect_partials_v1`], and the units the evaluation read — a bottom's carriage.
@@ -1024,8 +1077,20 @@ pub fn palw_gen_dissect_partials_recorded_v1(
     range: (usize, usize),
     limits: &DemandLimits,
 ) -> Result<(Result<PalwTirRangeClaimV1, PalwGenVerdictV1>, PalwGenUsedUnitsV1), PalwGenCloseRefusalV1> {
+    palw_gen_dissect_partials_recorded_with_v1(case, close, phase, range, PalwGenParamsV1::Carried, limits)
+}
+
+/// [`palw_gen_dissect_partials_recorded_v1`] over param leaves from `params`.
+pub fn palw_gen_dissect_partials_recorded_with_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    phase: &PalwTirDissectPhaseV1,
+    range: (usize, usize),
+    params: PalwGenParamsV1<'_>,
+    limits: &DemandLimits,
+) -> Result<(Result<PalwTirRangeClaimV1, PalwGenVerdictV1>, PalwGenUsedUnitsV1), PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
-    let p = match prove_close(case, close)? {
+    let p = match prove_close(case, close, params)? {
         ProvedV1::Convicted(v) => return Ok((Err(v), PalwGenUsedUnitsV1::default())),
         ProvedV1::Proven(p) => p,
     };
@@ -1066,9 +1131,20 @@ pub fn palw_gen_check_dissect_bottom_v1(
     phase: &PalwTirDissectPhaseV1,
     limits: &DemandLimits,
 ) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
+    palw_gen_check_dissect_bottom_with_v1(case, close, phase, PalwGenParamsV1::Carried, limits)
+}
+
+/// [`palw_gen_check_dissect_bottom_v1`] over param leaves from `params`.
+pub fn palw_gen_check_dissect_bottom_with_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    phase: &PalwTirDissectPhaseV1,
+    params: PalwGenParamsV1<'_>,
+    limits: &DemandLimits,
+) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
     let range = phase.terminal_range().ok_or(R::Unadjudicable("the dissection has not narrowed to one tile".into()))?;
-    let partials = match palw_gen_dissect_partials_v1(case, close, phase, range, limits)? {
+    let partials = match palw_gen_dissect_partials_with_v1(case, close, phase, range, params, limits)? {
         Ok(partials) => partials,
         Err(verdict) => return Ok(verdict),
     };
@@ -1102,8 +1178,18 @@ pub fn palw_gen_build_root_claim_recorded_v1(
     close: &PalwGenCloseV1,
     limits: &DemandLimits,
 ) -> Result<(Vec<Vec<u32>>, PalwTirRangeClaimV1, PalwGenUsedUnitsV1), PalwGenCloseRefusalV1> {
+    palw_gen_build_root_claim_recorded_with_v1(case, close, PalwGenParamsV1::Carried, limits)
+}
+
+/// [`palw_gen_build_root_claim_recorded_v1`] over param leaves from `params`.
+pub fn palw_gen_build_root_claim_recorded_with_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    close: &PalwGenCloseV1,
+    params: PalwGenParamsV1<'_>,
+    limits: &DemandLimits,
+) -> Result<(Vec<Vec<u32>>, PalwTirRangeClaimV1, PalwGenUsedUnitsV1), PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
-    let p = match prove_close(case, close)? {
+    let p = match prove_close(case, close, params)? {
         ProvedV1::Convicted(v) => return Err(R::Unadjudicable(format!("the leaf convicts on its own: {v:?}"))),
         ProvedV1::Proven(p) => p,
     };
@@ -1161,8 +1247,18 @@ pub fn palw_gen_cone_units_v1(
     full: &PalwGenCloseV1,
     limits: &DemandLimits,
 ) -> Result<PalwGenUsedUnitsV1, PalwGenCloseRefusalV1> {
+    palw_gen_cone_units_with_v1(case, full, PalwGenParamsV1::Carried, limits)
+}
+
+/// [`palw_gen_cone_units_v1`] over param leaves from `params`.
+pub fn palw_gen_cone_units_with_v1(
+    case: &PalwGenCourtCaseV1<'_>,
+    full: &PalwGenCloseV1,
+    params: PalwGenParamsV1<'_>,
+    limits: &DemandLimits,
+) -> Result<PalwGenUsedUnitsV1, PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
-    let p = match prove_close(case, full)? {
+    let p = match prove_close(case, full, params)? {
         ProvedV1::Convicted(v) => return Err(R::Unadjudicable(format!("the carriage convicts on its face: {v:?}"))),
         ProvedV1::Proven(p) => p,
     };

@@ -3,51 +3,151 @@
   "checks": [
     {
       "accepted": true,
-      "case": "the example"
+      "case": "the example",
+      "lifecycle": null
     },
     {
       "accepted": false,
-      "case": "w_eval = beacon_delay + 32 (E12)"
+      "case": "w_eval = beacon_delay + 32 (E12)",
+      "lifecycle": null
     },
     {
       "accepted": true,
-      "case": "w_eval = beacon_delay + 33"
+      "case": "w_eval = beacon_delay + 33",
+      "lifecycle": null
     },
     {
       "accepted": false,
-      "case": "grid below L_e"
+      "case": "grid below L_e",
+      "lifecycle": null
     },
     {
       "accepted": false,
-      "case": "grid = L_e (E18)"
+      "case": "grid = L_e (E18)",
+      "lifecycle": null
     },
     {
       "accepted": false,
-      "case": "α = 25 (untabled)"
+      "case": "α = 25 (untabled)",
+      "lifecycle": null
     },
     {
       "accepted": true,
-      "case": "α = 10"
+      "case": "α = 10",
+      "lifecycle": null
     },
     {
       "accepted": false,
-      "case": "k_max = 9 (past the drill's 8)"
+      "case": "k_max = 9 (past the drill's 8)",
+      "lifecycle": null
     },
     {
       "accepted": false,
-      "case": "n_min > n"
+      "case": "n_min > n",
+      "lifecycle": null
     },
     {
       "accepted": false,
-      "case": "no primary stage"
+      "case": "no primary stage",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "a suite with items naming no dataset",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "a suite without items naming a dataset",
+      "lifecycle": null
+    },
+    {
+      "accepted": true,
+      "case": "seat_pool_permille at the drill's ceiling (500)",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "seat_pool_permille past the ceiling (501)",
+      "lifecycle": null
+    },
+    {
+      "accepted": true,
+      "case": "a Judge stage with its specification",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "a Judge stage without a specification",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "a judge specification without a Judge stage",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "equal verdict sequences",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "a verdict of nine ids",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "an empty verdict",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "a zero logit scale",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "no template dataset",
+      "lifecycle": null
+    },
+    {
+      "accepted": false,
+      "case": "court_margin 150 under a 4,820-DAA claim lifecycle",
+      "lifecycle": 4820
+    },
+    {
+      "accepted": true,
+      "case": "court_margin 4,820 under a 4,820-DAA claim lifecycle",
+      "lifecycle": 4820
+    },
+    {
+      "accepted": false,
+      "case": "court_margin 4,819 under a 4,820-DAA claim lifecycle",
+      "lifecycle": 4820
+    },
+    {
+      "accepted": false,
+      "case": "a judged policy with w_eval 300 under a 4,820-DAA claim lifecycle",
+      "lifecycle": 4820
+    },
+    {
+      "accepted": false,
+      "case": "a judged policy with w_eval = beacon_delay + 4,820 + 32",
+      "lifecycle": 4820
+    },
+    {
+      "accepted": true,
+      "case": "a judged policy with w_eval = beacon_delay + 4,820 + 33",
+      "lifecycle": 4820
     }
   ],
-  "example_borsh_len": 510,
-  "example_digest": "6441012509f7b9a3cdca7e6011a7d9009b4c938e166864ed54ca23b6e198d2743c7c79f68ad95c79cc645e551d4c6e6555c3eecbc7849584166078f63826ab2d",
+  "example_borsh_len": 514,
+  "example_digest": "4d0069c6aaf064ee89bcc5896bf5cc6eb881a2f88a0079b24bb3dafc3c08309e0bde011911b00015d9eb154edf26b8575022279b4f133a920ef5c1cc14e30d04",
   "message": {
     "line_id": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
     "network_domain": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
     "opt_out_seq_2": "7ed2aab39487763883dd5bf602658c43b6d44406219b33b051a8a86f0fd1b451aee6457707f79b9d73db858613ec6963eef259167d0eb675a5da27331b9fe9d4",
-    "set_seq_1": "3660169e1436cf695c75ac42968363c8a12733b7e86bf91e36acac3d733d65d219751871b05b85ae1959c213bcf9bec811e4c5bcc2622d1589c235128b84a87a"
+    "set_seq_1": "4782e309696b8276edf45ebeeb898e176ee5a102ebcb363ce0f385c7af10ba8f2572e213c6987cf71e742c37ada2991f5c43656ba4deab28be3870e800bb3513"
   }
 }

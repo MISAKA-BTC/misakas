@@ -23,6 +23,8 @@ pub const PALW_IMPROVE_MAX_JUDGES_V1: usize = 16;
 pub const PALW_IMPROVE_MAX_SUITE_ITEMS_V1: u32 = 1_024;
 pub const PALW_IMPROVE_MAX_NEW_TOKENS_V1: u32 = 4_096;
 pub const PALW_IMPROVE_MAX_STOP_IDS_V1: usize = 16;
+/// The most ids a judge's verdict sequence has (spec 17 §17.4.3 row 7).
+pub const PALW_IMPROVE_MAX_VERDICT_IDS_V1: usize = 8;
 pub const PALW_IMPROVE_MAX_LICENCE_CLASSES_V1: usize = 32;
 pub const PALW_IMPROVE_MAX_VEST_EPOCHS_V1: u32 = 64;
 pub const PALW_IMPROVE_MAX_ROLLBACK_EPOCHS_V1: u32 = 16;
@@ -60,28 +62,31 @@ pub fn palw_improvement_has_stage_v1(eval: &PalwEvalSpecV1, kind: PalwScoringKin
     eval.stages.iter().any(|stage| stage.kind == kind)
 }
 
-/// **The most evaluation jobs one subject can be given in an epoch** (spec 17 §17.11.1) [D1]: one per
-/// item for its primary kind (an ExactMatch job generates and the fold scores it at the key's reveal; a
-/// likelihood job is one teacher-forced pipeline), one per drawn item for a Judge stage, and one per
-/// drawn item for a Pairwise stage (`pairwise` false for the parent):
-/// `J = (n + reg + safety) + n·[Judge] + n·[Pairwise ∧ not the parent]`. The escrow is `J` times
-/// `eval_fee_per_job`; what is not spent comes back (§17.11.2).
+/// **The most evaluation jobs one subject can be given in an epoch** (spec 17 §17.11.1): one per item for its
+/// primary kind [D1] (an ExactMatch job generates and the fold scores it at the key's reveal; a likelihood job is
+/// one teacher-forced pipeline), two per drawn item for a Judge stage (one teacher-forced pass per verdict
+/// sequence, §17.8.5 [A6]), and four per drawn item for a Pairwise stage (two orders × two verdicts; `pairwise`
+/// false for the parent): `J = (n + reg + safety) + 2·n·[Judge] + 4·n·[Pairwise ∧ not the parent]`. The escrow
+/// is this times `eval_fee_per_job`; what is not spent comes back (§17.11.2).
 pub fn palw_improvement_jobs_per_subject_v1(eval: &PalwEvalSpecV1, pairwise: bool) -> u64 {
     let items = eval.n as u64 + eval.regression_items as u64 + eval.safety_items as u64;
     let mut jobs = items;
     if palw_improvement_has_stage_v1(eval, PalwScoringKindV1::Judge) {
-        jobs += eval.n as u64;
+        jobs += 2 * eval.n as u64;
     }
     if pairwise && palw_improvement_has_stage_v1(eval, PalwScoringKindV1::Pairwise) {
-        jobs += eval.n as u64;
+        jobs += 4 * eval.n as u64;
     }
     jobs
 }
 
-/// **The policy check** (spec 17 §17.4.3): `Err` names the first rule a policy breaks.
+/// **The policy check** (spec 17 §17.4.3): `Err` names the first rule a policy breaks. `lifecycle` is the
+/// ruleset's unchallenged claim lifecycle bound (`palw_improvement_claim_lifecycle_v1`, mirrored in the state params): `Some`
+/// asks rows 19 and 20, which hold the epoch's windows to it; `None` — a fixture that does not set it — does not.
 pub fn palw_improvement_policy_check_v1(
     policy: &PalwImprovementPolicyV1,
     ceilings: &PalwImprovementCeilingsV1,
+    lifecycle: Option<u64>,
 ) -> Result<(), &'static str> {
     // 1
     if policy.version != PALW_IMPROVEMENT_POLICY_VERSION_V1 {
@@ -169,6 +174,32 @@ pub fn palw_improvement_policy_check_v1(
     if e.anchor_floor_permille > 1000 {
         return Err("anchor_floor_permille is at most 1,000");
     }
+    // 7b (RFC-0004 §7.3 as decided 2026-09-30): each judged stage carries the judge's specification.
+    for (kind, spec, names) in [
+        (PalwScoringKindV1::Judge, &e.judge, &JUDGE_SPEC_REFUSALS),
+        (PalwScoringKindV1::Pairwise, &e.pairwise, &PAIRWISE_SPEC_REFUSALS),
+    ] {
+        match (seen.contains(&kind), spec) {
+            (true, None) => return Err(names.missing),
+            (false, Some(_)) => return Err(names.without_stage),
+            (false, None) => {}
+            (true, Some(spec)) => {
+                if spec.template_dataset == Hash64::default() {
+                    return Err(names.template);
+                }
+                let ids = 1..=PALW_IMPROVE_MAX_VERDICT_IDS_V1;
+                if !ids.contains(&spec.verdict_a.len()) || !ids.contains(&spec.verdict_b.len()) {
+                    return Err(names.verdict_len);
+                }
+                if spec.verdict_a == spec.verdict_b {
+                    return Err(names.verdict_same);
+                }
+                if spec.logit_scale_q24 <= 0 {
+                    return Err(names.scale);
+                }
+            }
+        }
+    }
     // 8, 9
     let n_cap = (ceilings.max_items_per_epoch).min(PALW_IMPROVE_SIGN_N_MAX_V1);
     if e.n_min == 0 || e.n_min > e.n || e.n > n_cap {
@@ -177,10 +208,10 @@ pub fn palw_improvement_policy_check_v1(
     if e.regression_items > PALW_IMPROVE_MAX_SUITE_ITEMS_V1 || e.safety_items > PALW_IMPROVE_MAX_SUITE_ITEMS_V1 {
         return Err("a suite has at most 1,024 items");
     }
-    if (e.regression_items == 0) != (e.regression_suite_root == Hash64::default())
-        || (e.safety_items == 0) != (e.safety_suite_root == Hash64::default())
+    if (e.regression_items == 0) != (e.regression_dataset == Hash64::default())
+        || (e.safety_items == 0) != (e.safety_dataset == Hash64::default())
     {
-        return Err("a suite with items has a root, and a suite without items has none");
+        return Err("a suite with items names its dataset, and a suite without items names none");
     }
     if e.n as u64 + e.regression_items as u64 + e.safety_items as u64 > ceilings.max_items_per_epoch as u64 {
         return Err("n and the suites together exceed max_items_per_epoch");
@@ -255,8 +286,54 @@ pub fn palw_improvement_policy_check_v1(
     if policy.ban_epochs > PALW_IMPROVE_MAX_BAN_EPOCHS_V1 {
         return Err("ban_epochs is at most 256");
     }
+    // 18
+    if e.seat_pool_permille > ceilings.max_eval_seat_permille {
+        return Err("seat_pool_permille is at most the network's max_eval_seat_permille");
+    }
+    // 19, 20: the epoch's windows against the ruleset's unchallenged claim lifecycle (RFC-0004 §13 as decided 2026-09-30,
+    // refined the same day: the court window is not in it — a claim not Final at the decision is a missing evaluation).
+    if let Some(lifecycle) = lifecycle {
+        if w.court_margin < lifecycle {
+            return Err(
+                "court_margin is shorter than the ruleset's unchallenged claim lifecycle (anchor, licence and finalization): a claim accepted late could never reach Final in time",
+            );
+        }
+        if judged && w.w_eval <= w.beacon_delay.saturating_add(lifecycle).saturating_add(PALW_IMPROVE_MIN_CLAIM_WINDOW_DAA_V1) {
+            return Err(
+                "a judged policy's w_eval must exceed beacon_delay, the claim lifecycle and 32 DAA: a judge reads final generations, so the epoch evaluates in two rounds",
+            );
+        }
+    }
     Ok(())
 }
+
+/// The refusals of one judged stage's specification, by name.
+struct JudgeSpecRefusalsV1 {
+    missing: &'static str,
+    without_stage: &'static str,
+    template: &'static str,
+    verdict_len: &'static str,
+    verdict_same: &'static str,
+    scale: &'static str,
+}
+
+const JUDGE_SPEC_REFUSALS: JudgeSpecRefusalsV1 = JudgeSpecRefusalsV1 {
+    missing: "a Judge stage needs a judge specification (template dataset, verdicts, logit scale)",
+    without_stage: "a judge specification without a Judge stage",
+    template: "a judge specification names no template dataset",
+    verdict_len: "a judge's verdict sequences are 1 to 8 ids each",
+    verdict_same: "a judge's two verdict sequences are the same",
+    scale: "a judge specification needs a positive logit scale",
+};
+
+const PAIRWISE_SPEC_REFUSALS: JudgeSpecRefusalsV1 = JudgeSpecRefusalsV1 {
+    missing: "a Pairwise stage needs a pairwise specification (template dataset, verdicts, logit scale)",
+    without_stage: "a pairwise specification without a Pairwise stage",
+    template: "a pairwise specification names no template dataset",
+    verdict_len: "a pairwise judge's verdict sequences are 1 to 8 ids each",
+    verdict_same: "a pairwise judge's two verdict sequences are the same",
+    scale: "a pairwise specification needs a positive logit scale",
+};
 
 /// **The owner's policy message** (spec 17 §17.4.2): `H("misaka-palw/improve/policy-set/v1",
 /// network_domain ‖ line_id ‖ LE u64 sequence ‖ (0x00 | 0x01 ‖ policy_digest))`.
@@ -325,11 +402,14 @@ pub fn palw_improvement_policy_example_v1() -> PalwImprovementPolicyV1 {
                     params: PalwScoringParamsV1::RefLogLik { logit_scale_q24: 1 << 24 },
                 },
             ],
-            regression_suite_root: root(0x51),
+            regression_dataset: root(0x51),
             regression_items: 32,
-            safety_suite_root: root(0x52),
+            safety_dataset: root(0x52),
             safety_items: 16,
             judge_set: Vec::new(),
+            judge: None,
+            pairwise: None,
+            seat_pool_permille: 100,
             anchor_floor_permille: 900,
             n: 256,
             n_min: 64,
@@ -382,7 +462,7 @@ mod tests {
     fn check(edit: impl Fn(&mut PalwImprovementPolicyV1)) -> Result<(), &'static str> {
         let mut policy = palw_improvement_policy_example_v1();
         edit(&mut policy);
-        palw_improvement_policy_check_v1(&policy, &PALW_DRILL_IMPROVE_CEILINGS_V1)
+        palw_improvement_policy_check_v1(&policy, &PALW_DRILL_IMPROVE_CEILINGS_V1, None)
     }
 
     #[test]
@@ -424,7 +504,7 @@ mod tests {
             ("a set without a judge", Box::new(|p| p.eval.judge_set = vec![Hash64::from_bytes([9; 64])])),
             ("n_min above n", Box::new(|p| p.eval.n_min = p.eval.n + 1)),
             ("n past the ceiling", Box::new(|p| p.eval.n = 1_025)),
-            ("suite without root", Box::new(|p| p.eval.regression_suite_root = Hash64::default())),
+            ("suite without a dataset", Box::new(|p| p.eval.regression_dataset = Hash64::default())),
             (
                 "items past the ceiling",
                 Box::new(|p| {

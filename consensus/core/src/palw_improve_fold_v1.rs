@@ -436,6 +436,10 @@ impl TransitionBuilder<'_> {
         if *class_id == line.head {
             return Err(refused("the head is not a candidate"));
         }
+        // RFC-0004 §7.3 as decided 2026-09-30: a judge class is never a candidate of the line it judges.
+        if policy.eval.judge_set.contains(class_id) {
+            return Err(refused("a judge class of the line's policy is not a candidate"));
+        }
         if self.state.improvement_candidate(line_id, epoch, class_id).is_some() {
             return Err(refused("the class is already a candidate of this epoch"));
         }
@@ -654,14 +658,47 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
-    /// **Pay an evaluation job's fee** (spec 17 §17.11.2) to `executor` from the subject's escrow.
-    /// Returns the fee paid (0 once the escrow is spent).
+    /// **Take a recorded score back out** (spec 17 §17.8.6): a convicted evaluation claim's, while the epoch still takes
+    /// scores. The item is then missing for that subject — it counts for the incumbent — until another claim records
+    /// it. `Ok(false)` when there is nothing to take: no such epoch, an epoch that no longer takes scores, no score.
+    pub(crate) fn retract_improvement_score_v1(
+        &mut self,
+        line_id: &Hash64,
+        epoch: u64,
+        item: u32,
+        subject: PalwEvalSubjectV1,
+        kind: PalwScoringKindV1,
+    ) -> Result<bool, PalwStateV2Error> {
+        let Some(header) = self.state.improvement_epochs.get(&(*line_id, epoch)) else { return Ok(false) };
+        if !matches!(header.state, PalwEpochStateV1::Evaluating | PalwEpochStateV1::Closing) {
+            return Ok(false);
+        }
+        let key = (*line_id, epoch, item, subject);
+        let Some(mut row) = self.state.improvement_results.get(&key).cloned() else { return Ok(false) };
+        let before = row.scores.len();
+        row.scores.retain(|score| score.kind != kind);
+        if row.scores.len() == before {
+            return Ok(false);
+        }
+        self.write_improvement_result(key, if row.scores.is_empty() { None } else { Some(row) });
+        Ok(true)
+    }
+
+    /// **Pay an evaluation job's fee** (spec 17 §17.11.2) from the subject's escrow: the executor's, and — where
+    /// the claim's panel is known (`panel` = the seats drawn and the ones credited, those that answered) — the
+    /// credited seats' share of it, `seat_pool_permille` of the fee divided over the seats DRAWN, exactly as an
+    /// ordinary claim's reward is split ([`crate::palw_panel_economy_v1::palw_panel_split_permille_v1`]).
+    /// What no seat was credited for, and the division's dust, is **not spent**: it stays in the escrow and goes
+    /// back with the rest at the epoch's end (the ordinary rule gives it to the panel reserve, which this
+    /// escrow's accounting has no place for), and the executor never takes it. Returns what was paid
+    /// (0 once the escrow is spent).
     pub(crate) fn pay_improvement_eval_fee_v1(
         &mut self,
         line_id: &Hash64,
         epoch: u64,
         subject: &PalwEvalSubjectV1,
         executor: &PalwBondKeyV2,
+        panel: Option<(usize, &[PalwBondKeyV2])>,
     ) -> Result<u64, PalwStateV2Error> {
         let policy = self.improvement_policy_of_v1(line_id)?;
         let fee = policy.fees.eval_fee_per_job;
@@ -671,35 +708,55 @@ impl TransitionBuilder<'_> {
         if !matches!(header.state, PalwEpochStateV1::Evaluating | PalwEpochStateV1::Closing) {
             return Ok(0);
         }
-        let paid = match subject {
+        // The fee the escrow can still pay for this job, and how it divides.
+        let available = match subject {
+            PalwEvalSubjectV1::Parent => header.escrow.parent - header.escrow.parent_spent,
+            PalwEvalSubjectV1::Previous(_) => header.escrow.previous - header.escrow.previous_spent,
+            PalwEvalSubjectV1::Candidate(class_id) => {
+                let (_, row) =
+                    self.state.improvement_candidate(line_id, epoch, class_id).ok_or_else(|| refused("no such candidate"))?;
+                row.escrow - row.escrow_spent
+            }
+        };
+        let reward = fee.min(available);
+        let split = match panel {
+            Some((drawn, credited)) => crate::palw_panel_economy_v1::palw_panel_split_permille_v1(
+                reward,
+                policy.eval.seat_pool_permille,
+                drawn,
+                credited.len(),
+            ),
+            None => crate::palw_panel_economy_v1::PalwPanelSplitV1 { producer: reward, per_seat: 0, credited: 0, paid: 0, reserve: 0 },
+        };
+        let paid = split.producer + split.paid;
+        match subject {
             PalwEvalSubjectV1::Parent => {
-                let paid = fee.min(header.escrow.parent - header.escrow.parent_spent);
                 header.escrow.parent_spent += paid;
                 self.write_improvement_epoch((*line_id, epoch), Some(header));
-                paid
             }
             PalwEvalSubjectV1::Previous(_) => {
-                let paid = fee.min(header.escrow.previous - header.escrow.previous_spent);
                 header.escrow.previous_spent += paid;
                 self.write_improvement_epoch((*line_id, epoch), Some(header));
-                paid
             }
             PalwEvalSubjectV1::Candidate(class_id) => {
                 let (index, row) =
                     self.state.improvement_candidate(line_id, epoch, class_id).ok_or_else(|| refused("no such candidate"))?;
                 let mut row = row.clone();
-                let paid = fee.min(row.escrow - row.escrow_spent);
                 row.escrow_spent += paid;
                 self.write_improvement_candidate((*line_id, epoch, index), Some(row));
-                paid
             }
-        };
+        }
         if paid > 0 {
             let mut pool = self.improvement_pool_of_v1(line_id);
             pool.held = pool.held.checked_sub(paid).ok_or(PalwStateV2Error::Overflow("improvement held underflow"))?;
             pool.paid += paid as u128;
             self.write_improvement_pool_row_v1(line_id, pool);
-            self.credit_improvement_earnings_v1(executor, paid);
+            self.credit_improvement_earnings_v1(executor, split.producer);
+            if let Some((_, credited)) = panel {
+                for seat in credited.iter().take(split.credited as usize) {
+                    self.credit_improvement_earnings_v1(seat, split.per_seat);
+                }
+            }
         }
         Ok(paid)
     }
@@ -807,9 +864,40 @@ pub(super) fn apply_improvement_policy_set_v1(
         return Err(policy_refused("the policy object's sequence is not the line's next"));
     }
     if let Some(policy) = &payload.policy {
-        palw_improvement_policy_check_v1(policy, &ceilings).map_err(policy_refused)?;
+        palw_improvement_policy_check_v1(policy, &ceilings, builder.params.improve_lifecycle_daa()).map_err(policy_refused)?;
         if policy.eval.judge_set.iter().any(|judge| !builder.state.tir_classes.contains_key(judge)) {
             return Err(policy_refused("a judge is not an admitted IR class"));
+        }
+        // A judge class is not the line's head, nor a class that was (RFC-0004 §7.3 as decided 2026-09-30).
+        let head = row.as_ref().filter(|r| r.status != PalwImprovementLineStatusV1::Dissolved).map_or(spec15.class_id, |r| r.head);
+        let history = builder.state.improvement_head_history(&line_id);
+        if policy
+            .eval
+            .judge_set
+            .iter()
+            .any(|judge| *judge == head || *judge == spec15.class_id || history.iter().any(|(_, entry)| entry.class_id == *judge))
+        {
+            return Err(policy_refused("a judge class is the line's head, or was"));
+        }
+        // The datasets a policy names are registered on this line (a policy that names one before it is registered is
+        // refused): a suite's holds its items, a judge's template holds exactly one entry.
+        for (dataset_id, items, role) in [
+            (policy.eval.regression_dataset, policy.eval.regression_items, "the regression suite's dataset"),
+            (policy.eval.safety_dataset, policy.eval.safety_items, "the safety suite's dataset"),
+        ] {
+            if items == 0 {
+                continue;
+            }
+            let record = builder.state.improvement_dataset(&line_id, &dataset_id);
+            if record.is_none_or(|r| r.dataset.items < items as u64 || r.dataset.items > u32::MAX as u64) {
+                return Err(policy_refused(role_refusal(role)));
+            }
+        }
+        for spec in [&policy.eval.judge, &policy.eval.pairwise].into_iter().flatten() {
+            let record = builder.state.improvement_dataset(&line_id, &spec.template_dataset);
+            if record.is_none_or(|r| r.dataset.items != 1) {
+                return Err(policy_refused("a judge's template dataset is not registered on this line with one entry"));
+            }
         }
     }
     let digest = payload.policy.as_ref().map(palw_improvement_policy_digest_v1);
@@ -898,6 +986,14 @@ pub(super) fn apply_improvement_policy_set_v1(
         }
     }
     Ok(())
+}
+
+/// The refusal a suite dataset's role names (`&'static str`, so the policy refusal can carry it).
+fn role_refusal(role: &str) -> &'static str {
+    match role {
+        "the regression suite's dataset" => "the regression suite's dataset is not registered on this line with at least its items",
+        _ => "the safety suite's dataset is not registered on this line with at least its items",
+    }
 }
 
 /// Append a head entry at `seq`, dropping the one 64 behind it.
@@ -1395,16 +1491,23 @@ fn draw_epoch_v1(
         );
         item += 1;
     }
-    for (root, count, regression) in [
-        (policy.eval.regression_suite_root, policy.eval.regression_items, true),
-        (policy.eval.safety_suite_root, policy.eval.safety_items, false),
+    // The suites (spec 17 §17.8.1): entries drawn by R from the registered public datasets the policy names, `min(count,
+    // entries)` of each, whatever the dataset's size.
+    for (dataset_id, count, regression) in [
+        (policy.eval.regression_dataset, policy.eval.regression_items, true),
+        (policy.eval.safety_dataset, policy.eval.safety_items, false),
     ] {
-        for index in 0..count {
+        let entries = builder
+            .state
+            .improvement_dataset(&line_id, &dataset_id)
+            .map_or(0, |record| record.dataset.items.min(u32::MAX as u64) as u32);
+        let role = if regression { 1 } else { 2 };
+        for index in palw_improve_suite_draw_v1(&seed, &dataset_id, role, entries, count) {
             builder.write_improvement_item(
                 (line_id, epoch, item),
                 Some(PalwEvalItemV1 {
                     item,
-                    case_id: palw_improve_suite_item_id_v1(&root, index),
+                    case_id: palw_improve_suite_item_id_v1(&dataset_id, index),
                     source: if regression { PalwItemSourceV1::Regression { index } } else { PalwItemSourceV1::Safety { index } },
                     supplier: None,
                     seed: palw_improve_eval_seed_v1(&seed, item),
@@ -1825,9 +1928,9 @@ mod tests {
         p.eval.n = 8;
         p.eval.n_min = 4;
         p.eval.regression_items = 0;
-        p.eval.regression_suite_root = Hash64::default();
+        p.eval.regression_dataset = Hash64::default();
         p.eval.safety_items = 0;
-        p.eval.safety_suite_root = Hash64::default();
+        p.eval.safety_dataset = Hash64::default();
         p.eval.stages.truncate(1);
         p.eval.setter_cap_permille = 1_000;
         p.usage.value = 2;
@@ -2017,7 +2120,7 @@ mod tests {
                 ] {
                     let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
                     b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
-                    assert!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL)).unwrap() > 0);
+                    assert!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL), None).unwrap() > 0);
                 }
             }
             let dup = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value: 1 };
@@ -2471,7 +2574,7 @@ mod tests {
                 ] {
                     let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
                     b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
-                    b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL)).unwrap();
+                    b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL), None).unwrap();
                 }
             }
         });
@@ -2604,5 +2707,242 @@ mod tests {
         let s = at(&s, &p, 600, |_| {});
         assert_eq!(s.improvement_earnings.len(), 3, "two paid out per block");
         assert_eq!(s.pending_payouts.len(), 0, "a bond that does not exist is paid nothing (burned)");
+    }
+
+    // ---- the policy names registered datasets and judges that are not the head (decisions of 2026-09-30) -------
+
+    const JUDGE: u8 = 0x13;
+
+    fn dataset_row(id: u8, items: u64) -> crate::palw_improve_material_v1::PalwDatasetRecordV1 {
+        crate::palw_improve_material_v1::PalwDatasetRecordV1 {
+            dataset: crate::palw_improve_material_v1::PalwDatasetV1 {
+                line_id: h(LINE),
+                dataset_id: h(id),
+                content_root: h(0x99),
+                items,
+                license_classes: vec![h(0x91)],
+                teacher_classes: 1,
+                provenance_commitment: h(0x92),
+            },
+            registrant: bond(CAROL),
+            registered_daa: 10,
+            bond: 6,
+            epoch: 0,
+        }
+    }
+
+    fn refusal_of(s: &PalwChainStateV2, sequence: u64, policy: PalwImprovementPolicyV1) -> Option<&'static str> {
+        let p = params();
+        let extras = PalwTransitionExtrasV1::default();
+        let mut b = TransitionBuilder::new(s, &p, false, false, false, false, &extras);
+        match apply_improvement_policy_set_v1(&mut b, &ctx(600), &set(LINE, sequence, Some(policy))) {
+            Ok(()) => None,
+            Err(PalwStateV2Error::ImprovementPolicyRefused(why)) => Some(why),
+            Err(other) => panic!("a policy refusal by name, got {other:?}"),
+        }
+    }
+
+    /// **A suite names a registered public dataset, and a judge is a class that was never the head** (spec 17 §17.6.3,
+    /// §17.8.5): a policy whose suite names a dataset the line has not registered, or registered with fewer entries
+    /// than the suite draws, is refused; so is one whose judge set holds the line's head (or a class that was); a
+    /// judged stage's template dataset is a registered dataset of exactly one entry; and a judge class is not a
+    /// candidate of the line it judges.
+    #[test]
+    fn a_policy_names_registered_datasets_and_judges_that_are_never_the_head() {
+        let p = params();
+        let mut g = genesis();
+        g.tir_classes.insert(h(JUDGE), PalwTirClassRecordV1::test_row_v1(h(JUDGE)));
+        let mut suite = policy();
+        suite.eval.regression_items = 4;
+        suite.eval.regression_dataset = h(0x61);
+        suite.eval.safety_items = 2;
+        suite.eval.safety_dataset = h(0x62);
+        assert_eq!(
+            refusal_of(&g, 1, suite.clone()),
+            Some("the regression suite's dataset is not registered on this line with at least its items"),
+            "a dataset nobody registered"
+        );
+        g.improvement_datasets.insert((h(LINE), h(0x61)), dataset_row(0x61, 3));
+        assert_eq!(
+            refusal_of(&g, 1, suite.clone()),
+            Some("the regression suite's dataset is not registered on this line with at least its items"),
+            "three entries for a suite of four"
+        );
+        g.improvement_datasets.insert((h(LINE), h(0x61)), dataset_row(0x61, 4));
+        assert_eq!(
+            refusal_of(&g, 1, suite.clone()),
+            Some("the safety suite's dataset is not registered on this line with at least its items"),
+            "the regression suite is served; the safety one's is not"
+        );
+        g.improvement_datasets.insert((h(LINE), h(0x62)), dataset_row(0x62, 2));
+        assert_eq!(refusal_of(&g, 1, suite.clone()), None, "both registered, with enough entries");
+        // A dataset of another line is not this line's.
+        let mut stranger = g.clone();
+        let mut row = dataset_row(0x61, 99);
+        row.dataset.line_id = h(0x77);
+        stranger.improvement_datasets.remove(&(h(LINE), h(0x61)));
+        stranger.improvement_datasets.insert((h(0x77), h(0x61)), row);
+        assert!(refusal_of(&stranger, 1, suite.clone()).is_some(), "registered on another line");
+        // More than 2^32 entries cannot be drawn from.
+        let mut huge = g.clone();
+        huge.improvement_datasets.insert((h(LINE), h(0x61)), dataset_row(0x61, u32::MAX as u64 + 1));
+        assert!(refusal_of(&huge, 1, suite.clone()).is_some());
+
+        // Judges.
+        let judged = |judge_set: Vec<Hash64>| {
+            let mut pol = policy();
+            pol.eval
+                .stages
+                .push(PalwScoringStageV1 { kind: PalwScoringKindV1::Judge, params: PalwScoringParamsV1::Judge { lo: -9, hi: 9 } });
+            pol.eval.judge_set = judge_set;
+            pol.eval.judge =
+                Some(PalwJudgeSpecV1 { template_dataset: h(0x71), verdict_a: vec![7], verdict_b: vec![8], logit_scale_q24: 4096 });
+            pol
+        };
+        g.improvement_datasets.insert((h(LINE), h(0x71)), dataset_row(0x71, 1));
+        assert_eq!(refusal_of(&g, 1, judged(vec![h(JUDGE)])), None, "a judge that was never the head, a one-entry template");
+        assert_eq!(
+            refusal_of(&g, 1, judged(vec![h(LINE)])),
+            Some("a judge class is the line's head, or was"),
+            "the founding class is the head"
+        );
+        assert_eq!(
+            refusal_of(&g, 1, judged(vec![h(JUDGE), h(0x55)])),
+            Some("a judge is not an admitted IR class"),
+            "an unadmitted class"
+        );
+        let mut two = g.clone();
+        two.improvement_datasets.insert((h(LINE), h(0x71)), dataset_row(0x71, 2));
+        assert_eq!(
+            refusal_of(&two, 1, judged(vec![h(JUDGE)])),
+            Some("a judge's template dataset is not registered on this line with one entry"),
+            "a template of two entries"
+        );
+        let mut none = g.clone();
+        none.improvement_datasets.remove(&(h(LINE), h(0x71)));
+        assert_eq!(
+            refusal_of(&none, 1, judged(vec![h(JUDGE)])),
+            Some("a judge's template dataset is not registered on this line with one entry"),
+            "no template"
+        );
+        // A class that was once the head is no judge either: promote CAND_A, then name the old head.
+        let opted =
+            at(&g, &p, 500, |b| apply_improvement_policy_set_v1(b, &ctx(500), &set(LINE, 1, Some(judged(vec![h(JUDGE)])))).unwrap());
+        let mut promoted = opted.clone();
+        let mut line = promoted.improvement_lines.get(&h(LINE)).unwrap().clone();
+        line.head = h(CAND_A);
+        promoted.improvement_lines.insert(h(LINE), line);
+        promoted.tir_classes.insert(h(CAND_A), PalwTirClassRecordV1::test_row_v1(h(CAND_A)));
+        assert_eq!(
+            refusal_of(&promoted, 2, judged(vec![h(CAND_A)])),
+            Some("a judge class is the line's head, or was"),
+            "the current head"
+        );
+        assert_eq!(
+            refusal_of(&promoted, 2, judged(vec![h(LINE)])),
+            Some("a judge class is the line's head, or was"),
+            "the founding class still heads the history"
+        );
+
+        // A judge class is not a candidate of the line it judges: the epoch opens, and admitting it is refused.
+        let mut s = opted;
+        s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
+        let s = at(&s, &p, 1_000, |b| {
+            b.note_improvement_material_v1(&h(LINE), PalwMaterialKindV1::Dataset, &h(0x40), &bond(CAROL), 1_000).unwrap();
+        });
+        let _ = at(&s, &p, 1_200, |b| {
+            let refused = b.admit_improvement_candidate_v1(
+                &h(LINE),
+                1,
+                &h(JUDGE),
+                &bond(ALICE),
+                crate::palw_improve_artifact_v1::PalwTirArtifactRefV1::Single { root: h(JUDGE) },
+                h(0x50),
+                Vec::new(),
+                1_200,
+            );
+            assert_eq!(refused, Err(PalwStateV2Error::ImprovementRefused("a judge class of the line's policy is not a candidate")));
+            assert!(
+                b.admit_improvement_candidate_v1(
+                    &h(LINE),
+                    1,
+                    &h(CAND_A),
+                    &bond(ALICE),
+                    crate::palw_improve_artifact_v1::PalwTirArtifactRefV1::Single { root: h(CAND_A) },
+                    h(0x50),
+                    Vec::new(),
+                    1_200,
+                )
+                .is_ok(),
+                "an ordinary class enters"
+            );
+        });
+    }
+
+    /// The draw names the suite items: entries of the registered dataset by the epoch seed, each a `Regression` or
+    /// `Safety` item over its own dataset's entry.
+    #[test]
+    fn the_draw_takes_the_suites_entries_from_their_registered_datasets() {
+        let p = params();
+        let mut g = genesis();
+        let mut pol = policy();
+        pol.eval.regression_items = 3;
+        pol.eval.regression_dataset = h(0x61);
+        pol.eval.safety_items = 2;
+        pol.eval.safety_dataset = h(0x61); // the same dataset: the roles draw different entries
+        g.improvement_datasets.insert((h(LINE), h(0x61)), dataset_row(0x61, 20));
+        let mut s = at(&g, &p, 500, |b| apply_improvement_policy_set_v1(b, &ctx(500), &set(LINE, 1, Some(pol.clone()))).unwrap());
+        s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
+        let s = at(&s, &p, 1_000, |b| {
+            b.note_improvement_material_v1(&h(LINE), PalwMaterialKindV1::Dataset, &h(0x40), &bond(CAROL), 1_000).unwrap();
+        });
+        let s = at(&s, &p, 1_200, |b| {
+            b.admit_improvement_candidate_v1(
+                &h(LINE),
+                1,
+                &h(CAND_A),
+                &bond(ALICE),
+                crate::palw_improve_artifact_v1::PalwTirArtifactRefV1::Single { root: h(CAND_A) },
+                h(0x50),
+                Vec::new(),
+                1_200,
+            )
+            .unwrap();
+        });
+        let s = at(&s, &p, 1_400, |b| {
+            for i in 0..8u8 {
+                b.note_improvement_material_v1(&h(LINE), PalwMaterialKindV1::HardCase, &h(0x60 + i), &bond(CAROL), 1_400).unwrap();
+            }
+        });
+        // Eight cases from one supplier under κ = 1,000 ‰: eight drawn items, then the suites'.
+        let s = at(&s, &p, 1_510, |_| {});
+        let header = s.improvement_epoch(&h(LINE), 1).unwrap();
+        assert_eq!((header.state, header.items), (PalwEpochStateV1::Evaluating, 8 + 3 + 2));
+        let seed = header.seed.unwrap();
+        let entries = |from: u32, count: u32| {
+            (from..from + count).map(|item| s.improvement_item(&h(LINE), 1, item).unwrap().clone()).collect::<Vec<_>>()
+        };
+        let regression: Vec<u32> = entries(8, 3)
+            .iter()
+            .map(|i| match i.source {
+                PalwItemSourceV1::Regression { index } => {
+                    assert_eq!(i.case_id, palw_improve_suite_item_id_v1(&h(0x61), index));
+                    assert!(i.supplier.is_none() && i.judge.is_none());
+                    index
+                }
+                other => panic!("a regression item, got {other:?}"),
+            })
+            .collect();
+        let safety: Vec<u32> = entries(11, 2)
+            .iter()
+            .map(|i| match i.source {
+                PalwItemSourceV1::Safety { index } => index,
+                other => panic!("a safety item, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(regression, palw_improve_suite_draw_v1(&seed, &h(0x61), 1, 20, 3));
+        assert_eq!(safety, palw_improve_suite_draw_v1(&seed, &h(0x61), 2, 20, 2));
+        assert_eq!(regression.iter().copied().collect::<std::collections::BTreeSet<_>>().len(), 3, "without replacement");
+        assert!(regression.iter().chain(&safety).all(|e| *e < 20));
     }
 }

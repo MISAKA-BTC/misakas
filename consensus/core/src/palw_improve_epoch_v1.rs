@@ -15,8 +15,8 @@ pub const PALW_IMPROVE_EPOCH_SEED_DOMAIN_V1: &[u8] = b"misaka-palw/improve/epoch
 pub const PALW_IMPROVE_DRAW_DOMAIN_V1: &[u8] = b"misaka-palw/improve/draw/v1";
 pub const PALW_IMPROVE_SETTER_ITEM_DOMAIN_V1: &[u8] = b"misaka-palw/improve/setter-item/v1";
 pub const PALW_IMPROVE_SUITE_ITEM_DOMAIN_V1: &[u8] = b"misaka-palw/improve/suite-item/v1";
+pub const PALW_IMPROVE_SUITE_DRAW_DOMAIN_V1: &[u8] = b"misaka-palw/improve/suite-draw/v1";
 pub const PALW_IMPROVE_JUDGE_DOMAIN_V1: &[u8] = b"misaka-palw/improve/judge/v1";
-pub const PALW_IMPROVE_PAIR_ORDER_DOMAIN_V1: &[u8] = b"misaka-palw/improve/pair-order/v1";
 
 fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(key).to_state();
@@ -115,9 +115,34 @@ pub fn palw_improve_setter_item_id_v1(set_id: &Hash64, index: u32) -> Hash64 {
     keyed64(PALW_IMPROVE_SETTER_ITEM_DOMAIN_V1, &[set_id.as_byte_slice(), &index.to_le_bytes()])
 }
 
-/// A suite item's id: `H("…/suite-item/v1", suite_root ‖ LE u32 j)`.
-pub fn palw_improve_suite_item_id_v1(suite_root: &Hash64, index: u32) -> Hash64 {
-    keyed64(PALW_IMPROVE_SUITE_ITEM_DOMAIN_V1, &[suite_root.as_byte_slice(), &index.to_le_bytes()])
+/// A suite item's id: `H("…/suite-item/v1", dataset_id ‖ LE u32 entry)` — the suite's registered dataset and the
+/// entry drawn from it (spec 17 §17.8.1).
+pub fn palw_improve_suite_item_id_v1(dataset_id: &Hash64, entry: u32) -> Hash64 {
+    keyed64(PALW_IMPROVE_SUITE_ITEM_DOMAIN_V1, &[dataset_id.as_byte_slice(), &entry.to_le_bytes()])
+}
+
+/// **The entries a suite draws from its dataset** (spec 17 §17.8.1; RFC-0004 §7 as decided 2026-09-30): `min(count, n)`
+/// distinct entry indices of the dataset's `n` entries, by a sparse Fisher–Yates shuffle driven by the epoch seed —
+/// for `j = 0, 1, …`: `r_j = LE u64(H("…/suite-draw/v1", seed ‖ dataset_id ‖ role ‖ LE u32 j)[0..8]) mod (n − j)`, the
+/// entry at virtual position `j + r_j` is drawn and the entry at `j` takes its place. `role` is 1 for the regression
+/// suite and 2 for the safety suite, so two suites naming one dataset do not draw the same entries. Cost
+/// `O(count · log count)`, whatever `n` is.
+pub fn palw_improve_suite_draw_v1(seed: &Hash64, dataset_id: &Hash64, role: u8, n: u32, count: u32) -> Vec<u32> {
+    let k = count.min(n);
+    let mut moved: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+    let at = |moved: &std::collections::BTreeMap<u32, u32>, position: u32| moved.get(&position).copied().unwrap_or(position);
+    let mut drawn = Vec::with_capacity(k as usize);
+    for j in 0..k {
+        let h =
+            keyed64(PALW_IMPROVE_SUITE_DRAW_DOMAIN_V1, &[seed.as_byte_slice(), dataset_id.as_byte_slice(), &[role], &j.to_le_bytes()]);
+        let mut word = [0u8; 8];
+        word.copy_from_slice(&h.as_byte_slice()[0..8]);
+        let position = j + (u64::from_le_bytes(word) % (n - j) as u64) as u32;
+        let (here, there) = (at(&moved, j), at(&moved, position));
+        drawn.push(there);
+        moved.insert(position, here);
+    }
+    drawn
 }
 
 /// An entry's order key: `H("…/draw/v1", seed ‖ entry id)`.
@@ -176,13 +201,8 @@ pub fn palw_improve_judge_index_v1(seed: &Hash64, item: u32, set_len: usize) -> 
     Some((u64::from_le_bytes(word) % set_len as u64) as usize)
 }
 
-/// **The pairwise order** of item `i` and candidate `C`: bit 0 of `H("…/pair-order/v1", epoch seed ‖
-/// LE u32 i ‖ C)[0]` — the stage's `order` scalar (0: the candidate is A; 1: the parent is A).
-pub fn palw_improve_pair_order_v1(epoch_seed: &Hash64, item: u32, candidate: &Hash64) -> u8 {
-    keyed64(PALW_IMPROVE_PAIR_ORDER_DOMAIN_V1, &[epoch_seed.as_byte_slice(), &item.to_le_bytes(), candidate.as_byte_slice()])
-        .as_byte_slice()[0]
-        & 1
-}
+// The pairwise order was retired by the 2026-09-30 decision: a Pairwise score shows the judge both orders
+// (spec 17 §17.8.5), so no order is drawn.
 
 #[cfg(test)]
 mod tests {
@@ -267,12 +287,34 @@ mod tests {
     }
 
     #[test]
-    fn judges_and_orders_are_seeded() {
+    fn a_suite_draws_distinct_entries_of_its_dataset_whatever_its_size() {
+        let (seed, dataset) = (h(5), h(6));
+        let drawn = palw_improve_suite_draw_v1(&seed, &dataset, 1, 1_000, 32);
+        assert_eq!(drawn.len(), 32);
+        let unique: std::collections::BTreeSet<u32> = drawn.iter().copied().collect();
+        assert_eq!(unique.len(), 32, "no replacement");
+        assert!(drawn.iter().all(|&e| e < 1_000));
+        assert_eq!(drawn, palw_improve_suite_draw_v1(&seed, &dataset, 1, 1_000, 32), "deterministic");
+        assert_ne!(drawn, palw_improve_suite_draw_v1(&h(7), &dataset, 1, 1_000, 32), "another seed");
+        assert_ne!(drawn, palw_improve_suite_draw_v1(&seed, &dataset, 2, 1_000, 32), "another role: another suite's entries");
+        // A prefix of a longer draw: the same first entries (the shuffle is sequential).
+        assert_eq!(drawn[..8], palw_improve_suite_draw_v1(&seed, &dataset, 1, 1_000, 8)[..]);
+        // A dataset smaller than the suite gives all of it; a huge one costs the same.
+        let all = palw_improve_suite_draw_v1(&seed, &dataset, 1, 5, 32);
+        assert_eq!(all.len(), 5);
+        assert_eq!(all.iter().copied().collect::<std::collections::BTreeSet<u32>>(), (0..5).collect());
+        assert_eq!(palw_improve_suite_draw_v1(&seed, &dataset, 1, u32::MAX, 32).len(), 32);
+        assert!(palw_improve_suite_draw_v1(&seed, &dataset, 1, 0, 32).is_empty());
+        // Over a small dataset every entry comes up (a permutation), in a seed-dependent order.
+        let order = palw_improve_suite_draw_v1(&seed, &dataset, 1, 20, 20);
+        assert_eq!(order.iter().copied().collect::<std::collections::BTreeSet<u32>>(), (0..20).collect());
+    }
+
+    #[test]
+    fn judges_are_seeded() {
         let seed = h(9);
         assert_eq!(palw_improve_judge_index_v1(&seed, 0, 0), None);
         let spread: std::collections::BTreeSet<usize> = (0..64).filter_map(|i| palw_improve_judge_index_v1(&seed, i, 4)).collect();
         assert_eq!(spread.len(), 4, "every judge is drawn somewhere in 64 items");
-        let orders: u32 = (0..64).map(|i| palw_improve_pair_order_v1(&seed, i, &h(3)) as u32).sum();
-        assert!(orders > 10 && orders < 54, "about half the orders put the parent first");
     }
 }
