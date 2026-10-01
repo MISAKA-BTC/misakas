@@ -1875,12 +1875,18 @@ Do you confirm? (y/n)";
                             Some(spec) => match crate::palw_improve_watch::palw_improve_tamper_spec_v1(spec) {
                                 Ok(tamper) => {
                                     warn!(
-                                        "PALW DRILL: this node's first evaluation of {} will be committed with the fault {}. \
-                                         It is meant to be disputed by an honest replay and convicted by the evaluation court.",
+                                        "PALW DRILL: this node's evaluations of {}{} will be committed with the fault {} until one lands on the \
+                                         chain. It is meant to be disputed by an honest replay and convicted by the evaluation court.",
                                         if tamper.line_prefix.is_empty() {
                                             "any line".to_string()
                                         } else {
                                             format!("a line starting {}", tamper.line_prefix)
+                                        },
+                                        match tamper.subject {
+                                            None => "",
+                                            Some(crate::palw_improve_watch::PalwImproveTamperSubjectV1::Parent) => " (the parent's)",
+                                            Some(crate::palw_improve_watch::PalwImproveTamperSubjectV1::Candidate) =>
+                                                " (a candidate's)",
                                         },
                                         tamper.fault.describe()
                                     );

@@ -44,9 +44,9 @@ use misaka_palw_sdk::improve_eval::{
 };
 
 use crate::palw_improve_watch::{
-    PALW_IMPROVE_READ_EVERY_V1, PalwImproveDisputeV1, PalwImproveWatchV1, palw_improve_admitting_classes_v1,
-    palw_improve_disputes_json_v1, palw_improve_held_classes_v1, palw_improve_log_tick_v1, palw_improve_status_json_v1,
-    palw_improve_watch_armed_v1,
+    PALW_IMPROVE_READ_EVERY_V1, PalwImproveDisputeV1, PalwImproveLieV1, PalwImproveWatchV1, palw_improve_admitting_classes_v1,
+    palw_improve_disputes_json_v1, palw_improve_held_classes_v1, palw_improve_lie_carried_step_v1, palw_improve_log_tick_v1,
+    palw_improve_status_json_v1, palw_improve_watch_armed_v1,
 };
 
 /// A job this node ran whose claim has not taken it is offered again after this many DAA (a carrier
@@ -84,8 +84,8 @@ pub(super) struct PalwImproveLoopV1 {
     seat_done: HashMap<Hash64, PalwEvalSeatJudgmentV1>,
     /// The disputes this node found (RFC-0004 D-M3): the claims whose replay on its weights differs, by claim id.
     disputes: std::collections::BTreeMap<Hash64, PalwImproveDisputeV1>,
-    /// A drill's tamper (`--palw-drill-tamper-eval`) is spent: this node lied once.
-    tampered: bool,
+    /// Where this node's drill lie stands (`--palw-drill-tamper-eval`): told until one lands on the chain.
+    lie: PalwImproveLieV1,
     /// The DAA of the last tick (what a finding is dated by).
     daa: u64,
     /// The section files this node already tried against a candidate (by path and modification time).
@@ -189,6 +189,7 @@ impl PalwPanelService {
         st.daa = current_daa;
         self.improve_reap_v1(st, current_daa).await;
         self.improve_audit_reap_v1(st).await;
+        self.improve_lie_tick_v1(st, current_daa);
         if st.read_at.is_some_and(|at| at.elapsed() < PALW_IMPROVE_READ_EVERY_V1) {
             return;
         }
@@ -244,12 +245,17 @@ impl PalwPanelService {
                         "[{PALW_PANEL}] [palw-improve] evaluating item {} of epoch {} for {:?} ({:?}), due by DAA {until_daa}",
                         task.item, task.epoch, task.subject, task.kind
                     );
-                    // **A drill's lie** (`--palw-drill-tamper-eval`, salted drill chains only): the first evaluation of the
-                    // named line this node runs is committed with the fault; every one after it is honest.
-                    let fault =
-                        self.config.improve_tamper.as_ref().filter(|t| !st.tampered && t.applies_to(&task.line_id)).map(|t| t.fault);
+                    // **A drill's lie** (`--palw-drill-tamper-eval`, salted drill chains only): an evaluation of the named line
+                    // (and subject) this node runs is committed with the fault — one lie in flight at a time, again on the next job
+                    // while the last was lost to a racing claim, never once the chain holds one.
+                    let fault = self
+                        .config
+                        .improve_tamper
+                        .as_ref()
+                        .filter(|t| st.lie == PalwImproveLieV1::Idle && t.applies_to(&task.line_id, &task.subject))
+                        .map(|t| t.fault);
                     if let Some(fault) = fault {
-                        st.tampered = true;
+                        st.lie = PalwImproveLieV1::Pending { job: task.job_id };
                         warn!(
                             "[{PALW_PANEL}] [palw-improve] DRILL: this node LIES about item {} of epoch {} of line {} for {:?}: {} \
                              (--palw-drill-tamper-eval) — the claim it files is self-consistent and an honest replay disputes it",
@@ -273,6 +279,47 @@ impl PalwPanelService {
             }
         }
         self.improve_audit_tick_v1(st);
+    }
+
+    /// **Where the drill lie stands, against the chain** (see [`PalwImproveLieV1`]): a faulted run that is gone without a carrier is a lie
+    /// not told; a carried one is spent when the chain's view holds it, lost when another claim took its job or none shows in time.
+    fn improve_lie_tick_v1(&self, st: &mut PalwImproveLoopV1, daa: u64) {
+        match st.lie {
+            PalwImproveLieV1::Pending { job } => {
+                let alive =
+                    st.running.iter().any(|run| run.task.job_id == job) || st.ready.iter().any(|(work, _)| work.task.job_id == job);
+                if !alive {
+                    info!(
+                        "[{PALW_PANEL}] [palw-improve] DRILL: the faulted run of job {job} is gone without a carrier: the lie is told again"
+                    );
+                    st.lie = PalwImproveLieV1::Idle;
+                }
+            }
+            PalwImproveLieV1::Carried { job, claim, daa: carried } => {
+                let claim_of_job = st
+                    .evals
+                    .iter()
+                    .flat_map(|view| view.jobs.iter())
+                    .find(|j| j.job.id() == job)
+                    .and_then(|j| j.claim.as_ref().map(|c| c.claim_id));
+                let next = palw_improve_lie_carried_step_v1(job, claim, carried, claim_of_job, daa);
+                if next != st.lie {
+                    match next {
+                        PalwImproveLieV1::Spent => {
+                            info!(
+                                "[{PALW_PANEL}] [palw-improve] DRILL: the lying claim {claim} landed on the chain: this node is honest from here"
+                            )
+                        }
+                        _ => info!(
+                            "[{PALW_PANEL}] [palw-improve] DRILL: the lying claim {claim} did not land (its job was taken, or it never mined): \
+                             the lie is told again on the next job"
+                        ),
+                    }
+                    st.lie = next;
+                }
+            }
+            PalwImproveLieV1::Idle | PalwImproveLieV1::Spent => {}
+        }
     }
 
     /// **Prefetch every composite class the chain records and this node does not hold** (RFC-0004 §6.7): the epoch's plan
@@ -537,6 +584,8 @@ impl PalwPanelService {
     ) -> bool {
         let Some((funding_outpoint, funding_entry)) = funding.clone() else { return false };
         let Some((work, finished_daa)) = st.ready.pop_front() else { return false };
+        // The drill lie follows its claim: if this is the faulted run, a claim not carried is a lie not told.
+        let lying = matches!(st.lie, PalwImproveLieV1::Pending { job } if job == work.task.job_id);
         // A claim another node's took meanwhile is not carried: the first valid claim per job is the one.
         let taken = {
             let chain = PalwImproveNodeChainV1 { views: &st.views, eval: &st.evals };
@@ -544,6 +593,9 @@ impl PalwPanelService {
         };
         if taken {
             info!("[{PALW_PANEL}] [palw-improve] job {} is taken already: not carrying this node's claim", work.task.job_id);
+            if lying {
+                st.lie = PalwImproveLieV1::Idle;
+            }
             return false;
         }
         // MIP-20: the chain refuses a claim past its job's share of the epoch's evaluation budget whole, so
@@ -560,6 +612,9 @@ impl PalwPanelService {
                     st.over_budget.clear();
                 }
                 st.over_budget.insert(work.task.job_id);
+                if lying {
+                    st.lie = PalwImproveLieV1::Idle;
+                }
                 return false;
             }
         }
@@ -579,6 +634,9 @@ impl PalwPanelService {
                     "[{PALW_PANEL}] [palw-improve] cannot build the claim for item {} of epoch {} ({:?}): {why}",
                     work.task.item, work.task.epoch, work.task.subject
                 );
+                if lying {
+                    st.lie = PalwImproveLieV1::Idle;
+                }
                 return false;
             }
         };
@@ -613,6 +671,9 @@ impl PalwPanelService {
                         warn!("[{PALW_PANEL}] [palw-improve] cannot retain the capture of claim {claim_id}");
                     }
                 }
+                if lying {
+                    st.lie = PalwImproveLieV1::Carried { job: work.task.job_id, claim: claim_id, daa: current_daa };
+                }
                 let next = TransactionOutpoint::new(txid, 0);
                 self.persist_fee_outpoint(next);
                 *funding = Some((
@@ -631,6 +692,9 @@ impl PalwPanelService {
                 warn!("[{PALW_PANEL}] [palw-improve] the mempool refused the evaluation claim: {e}");
                 // The job is offered again at the retry age; the funding outpoint may be stale.
                 *funding = None;
+                if lying {
+                    st.lie = PalwImproveLieV1::Idle;
+                }
                 false
             }
         }

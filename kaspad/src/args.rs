@@ -385,8 +385,9 @@ pub struct Args {
     /// The evidence transport of a drill on one machine; default beside the node's other retention.
     pub palw_improve_capture_dir: Option<String>,
     /// **DRILL ONLY (RFC-0004 D-M3): commit one evaluation with a fault** — `leaf:<index>`, `output` or `score`,
-    /// optionally `@<line id hex prefix>`: the executor's first evaluation of that line is a self-consistent lie
-    /// (its roots bind what it committed) that an honest replay disputes. Salted drill chains and devnet only.
+    /// optionally `@<line id hex prefix>` and `/<parent|candidate>`: an evaluation of that line (and subject) is committed
+    /// as a self-consistent lie (its roots bind what it committed) that an honest replay disputes — told again on the
+    /// next job until one lands on the chain. Salted drill chains and devnet only.
     #[serde(skip)]
     pub palw_drill_tamper_eval: Option<String>,
     /// **Run the IR fused kernels** (RFC-0002 §7, Phase G): every IR backend this node builds runs
@@ -1714,10 +1715,11 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help(
-                    "PALW DRILL ONLY (RFC-0004, D-M3): commit this node's first evaluation of a line with a fault — leaf:<index>, \
-                     output or score, optionally @<line id hex prefix> — with the claim's roots re-derived so the lie is \
-                     self-consistent and only a replay can see it. Exists so the evaluation court can be shown convicting on a \
-                     live chain. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                    "PALW DRILL ONLY (RFC-0004, D-M3): commit an evaluation of a line with a fault — leaf:<index>, output or \
+                     score, optionally @<line id hex prefix> and /<parent|candidate> — with the claim's roots re-derived so the \
+                     lie is self-consistent and only a replay can see it; told on one job at a time until a lie lands on the \
+                     chain, then honest. Exists so the evaluation court can be shown convicting on a live chain. \
+                     DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
                 ),
         )
         .arg(

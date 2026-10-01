@@ -304,32 +304,91 @@ pub(crate) fn palw_improve_status_json_v1(
     })
 }
 
-/// **A drill's tamper** (`--palw-drill-tamper-eval=<fault>[@<line>]`): the fault this node's executor commits
-/// ([`PalwEvalFaultV1`]: `leaf:<index>`, `output` or `score`) and the line whose evaluation it spoils — a hex prefix
-/// of the line id, empty for any. Once per run of the node: one lie, then honest (a convicted bond is slashed once).
+/// Which of a line's evaluations a drill's lie may spoil: those of the parent (the line's head), or those of a candidate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwImproveTamperSubjectV1 {
+    Parent,
+    Candidate,
+}
+
+/// **A drill's tamper** (`--palw-drill-tamper-eval=<fault>[@<line>][/<parent|candidate>]`): the fault this node's executor
+/// commits ([`PalwEvalFaultV1`]: `leaf:<index>`, `output` or `score`), the line whose evaluation it spoils — a hex prefix of
+/// the line id, empty for any — and which subject's evaluations (a parent's, a candidate's, or either). One lie per node: it
+/// lies on a matching evaluation until a lie lands on the chain ([`PalwImproveLieV1`]), then is honest (a convicted bond is slashed).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PalwImproveTamperV1 {
     pub fault: misaka_palw_sdk::improve_eval::PalwEvalFaultV1,
     pub line_prefix: String,
+    pub subject: Option<PalwImproveTamperSubjectV1>,
 }
 
 impl PalwImproveTamperV1 {
-    /// Does the tamper spoil an evaluation of this line?
-    pub(crate) fn applies_to(&self, line: &Hash64) -> bool {
+    /// Does the tamper spoil an evaluation of this line, for this subject?
+    pub(crate) fn applies_to(&self, line: &Hash64, subject: &kaspa_consensus_core::palw_improve_state_v1::PalwEvalSubjectV1) -> bool {
+        use kaspa_consensus_core::palw_improve_state_v1::PalwEvalSubjectV1 as S;
         line.to_string().starts_with(&self.line_prefix)
+            && match (self.subject, subject) {
+                (None, _) => true,
+                (Some(PalwImproveTamperSubjectV1::Parent), S::Parent) => true,
+                (Some(PalwImproveTamperSubjectV1::Candidate), S::Candidate(_)) => true,
+                _ => false,
+            }
     }
 }
 
-/// Parse `--palw-drill-tamper-eval`'s value: `<fault>` or `<fault>@<line hex prefix>`.
+/// Parse `--palw-drill-tamper-eval`'s value: `<fault>`, optionally `@<line hex prefix>` and `/<parent|candidate>`.
 pub(crate) fn palw_improve_tamper_spec_v1(spec: &str) -> Result<PalwImproveTamperV1, String> {
-    let (fault, line) = match spec.split_once('@') {
+    let (rest, subject) = match spec.rsplit_once('/') {
+        Some((rest, "parent")) => (rest, Some(PalwImproveTamperSubjectV1::Parent)),
+        Some((rest, "candidate")) => (rest, Some(PalwImproveTamperSubjectV1::Candidate)),
+        Some((_, other)) => return Err(format!("`{other}` is not a subject: parent or candidate")),
+        None => (spec, None),
+    };
+    let (fault, line) = match rest.split_once('@') {
         Some((fault, line)) => (fault, line.trim().to_ascii_lowercase()),
-        None => (spec, String::new()),
+        None => (rest, String::new()),
     };
     if !line.chars().all(|c| c.is_ascii_hexdigit()) || line.len() > 128 {
         return Err(format!("`{line}` is not a hex prefix of a line id"));
     }
-    Ok(PalwImproveTamperV1 { fault: misaka_palw_sdk::improve_eval::PalwEvalFaultV1::parse(fault)?, line_prefix: line })
+    Ok(PalwImproveTamperV1 { fault: misaka_palw_sdk::improve_eval::PalwEvalFaultV1::parse(fault)?, line_prefix: line, subject })
+}
+
+/// A carried lie waits this many DAA for the chain to show it before it is given up as lost (the carrier never mined).
+pub(crate) const PALW_IMPROVE_LIE_PATIENCE_DAA_V1: u64 = 36;
+
+/// **Where a drill liar's lie stands** — one lie per node, told until it lands. Two executors race for every evaluation job
+/// (the first valid claim takes it), so a lie that loses the race is no lie told: the liar keeps lying on matching jobs, one at a
+/// time, until the chain holds a lying claim of its own; then it is honest, and a bond is slashed once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PalwImproveLieV1 {
+    /// No lie in flight: the next matching evaluation is run with the fault.
+    #[default]
+    Idle,
+    /// The faulted run of this job is running or waits for a carrier.
+    Pending { job: Hash64 },
+    /// The lying claim was carried at `daa` and the chain's view does not show it yet.
+    Carried { job: Hash64, claim: Hash64, daa: u64 },
+    /// The chain holds the lying claim: the lie is told.
+    Spent,
+}
+
+/// **A carried lie against the chain's view of its job** (`claim_of_job`: the claim the view holds for it, if any): landed when the
+/// view's claim is the lie's; lost (told again on the next job) when another claim took the job, or when nothing shows after the
+/// patience.
+pub(crate) fn palw_improve_lie_carried_step_v1(
+    job: Hash64,
+    claim: Hash64,
+    carried_daa: u64,
+    claim_of_job: Option<Hash64>,
+    daa: u64,
+) -> PalwImproveLieV1 {
+    match claim_of_job {
+        Some(c) if c == claim => PalwImproveLieV1::Spent,
+        Some(_) => PalwImproveLieV1::Idle,
+        None if daa > carried_daa.saturating_add(PALW_IMPROVE_LIE_PATIENCE_DAA_V1) => PalwImproveLieV1::Idle,
+        None => PalwImproveLieV1::Carried { job, claim, daa: carried_daa },
+    }
 }
 
 /// **A dispute this node found**: an evaluation claim whose replay on this node's weights differs, with where it
@@ -531,18 +590,27 @@ mod tests {
             (Some(h(0xA0).to_string().as_str()), Some(h(0xA2).to_string().as_str()), Some(17))
         );
         // The tamper spec.
+        use kaspa_consensus_core::palw_improve_state_v1::PalwEvalSubjectV1 as Subject;
         let any = palw_improve_tamper_spec_v1("leaf:7").expect("a spec");
-        assert_eq!((any.fault, any.line_prefix.as_str()), (PalwEvalFaultV1::Leaf(7), ""));
-        assert!(any.applies_to(&h(1)) && any.applies_to(&h(2)));
+        assert_eq!((any.fault, any.line_prefix.as_str(), any.subject), (PalwEvalFaultV1::Leaf(7), "", None));
+        assert!(any.applies_to(&h(1), &Subject::Parent) && any.applies_to(&h(2), &Subject::Candidate(h(9))));
         let line = h(0x11E).to_string();
         let one = palw_improve_tamper_spec_v1(&format!("output@{line}")).expect("a spec with a line");
         assert_eq!(one.fault, PalwEvalFaultV1::Output);
-        assert!(one.applies_to(&h(0x11E)) && !one.applies_to(&h(0x11F)), "only the named line");
+        assert!(one.applies_to(&h(0x11E), &Subject::Parent) && !one.applies_to(&h(0x11F), &Subject::Parent), "only the named line");
         assert_eq!(palw_improve_tamper_spec_v1("score@AB").expect("case-insensitive").line_prefix, "ab");
-        for bad in ["", "leaf", "leaf:x", "tree", "leaf:1@zz"] {
+        for bad in ["", "leaf", "leaf:x", "tree", "leaf:1@zz", "leaf:1@ab/grandparent", "output/"] {
             assert!(palw_improve_tamper_spec_v1(bad).is_err(), "{bad:?}");
         }
         assert_eq!(palw_improve_tamper_spec_v1("output@").expect("an empty line is any").line_prefix, "");
+        // A subject pin: a parent's evaluations, or a candidate's (a composite's among them), never both.
+        let cand = palw_improve_tamper_spec_v1(&format!("leaf:1@{line}/candidate")).expect("a pinned spec");
+        assert_eq!((cand.fault, cand.subject), (PalwEvalFaultV1::Leaf(1), Some(PalwImproveTamperSubjectV1::Candidate)));
+        assert!(cand.applies_to(&h(0x11E), &Subject::Candidate(h(7))) && !cand.applies_to(&h(0x11E), &Subject::Parent));
+        assert!(!cand.applies_to(&h(0x11E), &Subject::Previous(h(7))), "the regression check's incumbent is neither");
+        let parent = palw_improve_tamper_spec_v1("output@/parent").expect("a subject without a line");
+        assert_eq!((parent.line_prefix.as_str(), parent.subject), ("", Some(PalwImproveTamperSubjectV1::Parent)));
+        assert!(parent.applies_to(&h(5), &Subject::Parent) && !parent.applies_to(&h(5), &Subject::Candidate(h(7))));
         // The dispute records.
         let json = palw_improve_disputes_json_v1(&[PalwImproveDisputeV1 {
             claim_id: h(1),
@@ -557,6 +625,22 @@ mod tests {
             (Some("leaf"), Some(77), Some(h(1).to_string().as_str()))
         );
         assert_eq!(palw_improve_disputes_json_v1(&[]), serde_json::json!([]));
+    }
+
+    /// **A drill liar's lie is told until it lands** (two executors race for every job): a carried lie is spent when the chain's view
+    /// holds its claim, lost — to tell again — when another claim took its job or nothing shows within the patience.
+    #[test]
+    fn a_carried_lie_is_spent_when_it_lands_and_told_again_when_it_is_lost() {
+        let (job, lie, other) = (h(0x70B), h(0x11E), h(0x07E));
+        let carried = PalwImproveLieV1::Carried { job, claim: lie, daa: 100 };
+        let step = |claim_of_job, daa| palw_improve_lie_carried_step_v1(job, lie, 100, claim_of_job, daa);
+        assert_eq!(step(Some(lie), 103), PalwImproveLieV1::Spent, "the chain holds the lying claim");
+        assert_eq!(step(Some(lie), 400), PalwImproveLieV1::Spent, "however late the view shows it");
+        assert_eq!(step(Some(other), 103), PalwImproveLieV1::Idle, "another claim took the job: the lie lost the race");
+        assert_eq!(step(None, 105), carried, "nothing yet, within the patience: wait");
+        assert_eq!(step(None, 100 + PALW_IMPROVE_LIE_PATIENCE_DAA_V1), carried, "the patience is not past");
+        assert_eq!(step(None, 101 + PALW_IMPROVE_LIE_PATIENCE_DAA_V1), PalwImproveLieV1::Idle, "never mined: tell it again");
+        assert_eq!(PalwImproveLieV1::default(), PalwImproveLieV1::Idle);
     }
 
     /// **The status file carries the evaluation view** — the drill's watcher counts the claims, their

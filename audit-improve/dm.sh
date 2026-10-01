@@ -85,7 +85,8 @@ print( "          the court margin is the claims' time to Final: a claim is lice
 print( "          (the short challenge window), ~150-170 DAA from the claim; a shorter margin leaves the last claims missing, which count for the incumbent")
 print( "  who     seat 7 = the drills' own bond (no node): setter, candidates, registrant, owner of W2, L and T; seat 3 a second setter and the dataset contributor;")
 print( "          new4 registers and produces H; new5 and new6 evaluate; new6 also produces W (the usage of W1 once W heads it); the old relay peers new0")
-print( "  D-M3    on line T new5 commits one moved step leaf and new6 one moved first id (--palw-drill-tamper-eval, drill chains only); new1 (--palw-challenge) replays")
+print( "  D-M3    on line T new5 commits a moved step leaf on a CANDIDATE's evaluation (a composite's cone reads params under the two sub-roots) and new6 a moved first id on")
+print( "          the PARENT's (--palw-drill-tamper-eval, drill chains only; each lies on one job at a time until one lie lands, so the two never race for a job); new1 (--palw-challenge) replays")
 print( "          every claim, locates each lie from the shared capture dir (a stand-in for the pipeline-claim data-availability units) and files the evaluation court's proof:")
 print( "          the claims void, the bonds are slashed")
 first_grid = min(c["w"]["grid"] for c in C.values())
@@ -495,7 +496,9 @@ keys() {
 
 # D-M3's per-node flags (node_args reads $WORK_DIR/<node>/extra-args): every new node shares one capture directory — the evidence transport of a
 # drill on one machine, where an executor retains the capture of each claim it carries and a challenger reads the accused's — new5 and new6 each
-# lie once on line T (a moved step leaf, a moved first id; T's id is derived before the chain exists, dmdrive.py line-id), new1 is the challenger.
+# lie on line T until one lie lands (new5 a moved step leaf on a CANDIDATE's evaluation — a composite's cone reads parameters under the two
+# sub-roots; new6 a moved first id on the PARENT's: the two never race for one job; T's id is derived before the chain exists,
+# dmdrive.py line-id), new1 is the challenger.
 dm3_args() {
     local tid prefix n
     tid=$(cd "$A" && export_env && python3 dmdrive.py line-id T) || die "cannot derive line T's id (is the model built, the keyring written?)"
@@ -506,10 +509,10 @@ dm3_args() {
         mkdir -p "$WORK_DIR/$n"
         echo "--palw-improve-capture-dir=$WORK_DIR/captures" > "$WORK_DIR/$n/extra-args"
     done
-    echo "--palw-drill-tamper-eval=leaf:1@$prefix" >> "$WORK_DIR/new5/extra-args"
-    echo "--palw-drill-tamper-eval=output@$prefix" >> "$WORK_DIR/new6/extra-args"
+    echo "--palw-drill-tamper-eval=leaf:1@$prefix/candidate" >> "$WORK_DIR/new5/extra-args"
+    echo "--palw-drill-tamper-eval=output@$prefix/parent" >> "$WORK_DIR/new6/extra-args"
     echo "--palw-challenge" >> "$WORK_DIR/new1/extra-args"
-    say "D-M3 roles: new5 lies (leaf:1) and new6 lies (output) on line T ($prefix…), new1 challenges; captures in $WORK_DIR/captures"
+    say "D-M3 roles: new5 lies (leaf:1, a candidate's) and new6 lies (output, the parent's) on line T ($prefix…), new1 challenges; captures in $WORK_DIR/captures"
 }
 
 up() {
