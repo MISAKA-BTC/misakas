@@ -3,7 +3,7 @@
 {"model_type": "axk1", "class": "AXK1ForCausalLM", "ok": true, "params": 30312, "s": 1.3}
 {"model_type": "axk2", "class": "AXK2ForCausalLM", "ok": true, "params": 37096, "s": 1.2}
 {"model_type": "bamba", "ok": false, "error": "ValueError: `get_seq_length` can only be called on Attention layers, and the current Cache seem to only contain LinearAttention layers.", "class": "BambaForCausalLM"}
-{"model_type": "bert-generation", "class": "BertGenerationDecoder", "ok": true, "params": 23360, "s": 0.9}
+{"model_type": "bert-generation", "class": "BertGenerationDecoder", "ok": true, "params": 23360, "s": 1.0}
 {"model_type": "big_bird", "class": "BigBirdForCausalLM", "ok": true, "params": 25600, "s": 0.8}
 {"model_type": "bigbird_pegasus", "class": "BigBirdPegasusForCausalLM", "ok": true, "params": 4402752, "s": 1.0}
 {"model_type": "biogpt", "class": "BioGptForCausalLM", "ok": true, "params": 23360, "s": 0.7}

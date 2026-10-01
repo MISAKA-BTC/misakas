@@ -300,7 +300,16 @@
           "sinks": {
             "$var": "is_sw"
           },
-          "q_temperature": null
+          "q_temperature": null,
+          "param_prefix": {
+            "$if": [
+              {
+                "$var": "is_sw"
+              },
+              "attn_sw",
+              null
+            ]
+          }
         }
       }
     },

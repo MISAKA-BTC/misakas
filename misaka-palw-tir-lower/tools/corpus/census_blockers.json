@@ -6,7 +6,7 @@
    "FR-02"
   ],
   "short": "q/k RMS norm AFTER the rotation, weightless norms everywhere, an extra norm on the embeddings, ReLU\u00b2 ungated MLP; the standard template reads it and bind refutes it",
-  "evidence": "read from modeling_nanochat.py; adapter written (census-adapters-pending), expected to stop at float_vs_hf because the spec has only the pre-rotation q/k norm"
+  "evidence": "adapter run: reads, lowers, binds, stops at float_vs_hf (0.48 of the logit scale, 3 argmax differences): the spec has only the pre-rotation q/k norm (FR-02)"
  },
  "modernbert_decoder": {
   "class": "feature",
@@ -102,7 +102,7 @@
    "FR-31"
   ],
   "short": "attention_value_scale (values times 0.707) has no spec field; the rest (per-layer-type kv heads, sinks on the sliding layers only under the hub name attention_sink_bias, per-layer-type partial rotary, a sigmoid router with a correction bias) is data",
-  "evidence": "read from modeling_mimo_v2_flash.py; an adapter that treats the scale as inert is expected to stop at float_vs_hf (not yet run: quiet window)"
+  "evidence": "adapter run: refuses the config by its own check naming FR-31; the variant mimo_v2_flash_unscaled is Level B with every stage including the court"
  },
  "zaya": {
   "class": "feature",
@@ -133,19 +133,13 @@
   "short": "an output-projection bias stored as a separate tensor (attention.dense_bias) added outside the projection on some layers",
   "evidence": "tensor names"
  },
- "cohere2_moe": {
-  "class": "data",
-  "frs": [],
-  "short": "expected Level B: Cohere2's parallel block with a top-k MoE; written (census-adapters-pending), not yet run; a shared expert combined by `average` needs a scale on the shared expert",
-  "evidence": "adapter written, pending validation"
- },
  "aria_text": {
   "class": "feature",
   "frs": [
    "FR-01"
   ],
   "short": "experts stacked and TRANSPOSED (experts.fc1.weight [E, in, 2I], fc2 [E, I, out]): a layout the binder has no name for",
-  "evidence": "adapter written, expected to stop at bind (pending validation)"
+  "evidence": "adapter run: reads, lowers, stops at bind: `take index 32 >= axis length 32 (shape [8, 32, 128])` (the stacked, transposed fc1/fc2 layout, FR-01)"
  },
  "biogpt": {
   "class": "feature",
@@ -153,19 +147,7 @@
    "FR-34"
   ],
   "short": "OPT's block under another prefix, but the embedding scale multiplies the token embedding only (the builder multiplies token + position): expected to stop at float_vs_hf; the variant without the scale shows the rest is data",
-  "evidence": "read from hl/build.rs and modeling_biogpt.py; adapter written, pending validation"
- },
- "openai_gpt": {
-  "class": "data",
-  "frs": [],
-  "short": "expected Level B: GPT-2's tensors in a post-norm block without a final norm; written, not yet run",
-  "evidence": "adapter written, pending validation"
- },
- "gemma4_unified_text": {
-  "class": "data",
-  "frs": [],
-  "short": "expected Level B: the built-in gemma4-text without PLE and without the MoE block; written, not yet run",
-  "evidence": "adapter written, pending validation"
+  "evidence": "adapter run: stops at float_vs_hf (0.43 of the logit scale); the variant biogpt_unscaled (scale_embedding false) is Level B with every stage including the court (FR-34)"
  },
  "camembert": {
   "class": "feature",
@@ -357,10 +339,10 @@
   "short": "a BLOCK-sparse attention indexer with local blocks (index_block_size, index_local_blocks, index_topk_blocks) plus MoE; `ATTN_SPARSE_BLOCK_V1` exists for Qwen4's variant and was not tried",
   "evidence": "config keys; not run"
  },
- "bert_generation": {
-  "class": "data",
+ "cohere2_moe_shared_avg": {
+  "class": "feature",
   "frs": [],
-  "short": "expected Level B: BERT blocks under a causal mask with a tied head and a logits bias (the fixture needs is_decoder = true); written, not yet run",
-  "evidence": "adapter written, pending validation"
+  "short": "a shared expert averaged with the routed output needs a scale on the shared expert (SharedExpertSpec has none); the adapter refuses by its own check; the `sum` variant is Level B",
+  "evidence": "adapter run"
  }
 }

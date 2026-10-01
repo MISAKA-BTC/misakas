@@ -111,7 +111,9 @@
    "hf_arch": "BertGenerationDecoder",
    "model_type": "bert-generation",
    "builder": "causal",
-   "cfg": {},
+   "cfg": {
+    "is_decoder": true
+   },
    "usage": "l",
    "share": null,
    "why": "a transformers 5.17 causal-LM family at its tiny default (census)",

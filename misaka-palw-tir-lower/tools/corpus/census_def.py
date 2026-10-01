@@ -65,7 +65,7 @@ OVERRIDES = {
     "qwen3_5_text": dict(layer_types=["linear_attention", "full_attention"]),
     "recurrent_gemma": dict(num_hidden_layers=3),
     "zamba": dict(layers_block_type=["mamba", "hybrid"]),
-    "bert_generation": dict(is_decoder=True),
+    "bert-generation": dict(is_decoder=True),
 }
 
 # Hand-made tiny configs (lane G's, `tests/configs/tiny/*.json`) for families whose defaults cannot be shrunk automatically. The census
