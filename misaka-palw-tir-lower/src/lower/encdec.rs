@@ -1660,7 +1660,8 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             // T5's `d^−½` on the decoder output rides in the codes' scale into the head.
             let xn = Val { key: xn.key.times(s.head_scale), ..xn };
             let hb = if s.logits_bias { Some("head.b") } else { None };
-            let lk = ScaleKey::site(vec!["logits".into()], true);
+            // LOGITS_Q24_V1: natural-log units × 2^24, whatever the model.
+            let lk = ScaleKey::q24();
             let lg = linear_rows(&mut b, cx, &mut lb, &xn, "head.w", hb, "logits", &Want { dt: DType::I32, key: lk.clone() })?;
             let r = b.reshape_fixed(lg.r, &[s.vocab as u32]);
             let out = ensure_node(&mut b, &Val { r, ..lg });

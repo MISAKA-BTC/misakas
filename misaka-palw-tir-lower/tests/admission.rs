@@ -74,8 +74,10 @@ fn every_lowerable_real_configuration_is_admitted() {
         }
     }
     // 671B parameters at a 2^18-position window: past the per-position MACs (2^40) — refused by
-    // name and number, as it should be; every other lowerable configuration is admitted.
-    assert_eq!(refused, vec!["deepseek-v3-bf16.json".to_string()]);
+    // name and number, as it should be; every other lowerable configuration is admitted. The FP8
+    // export is the same model (its block-scale quantisation is a descriptor now, so it lowers and
+    // meets the same ceiling instead of stopping at "no descriptor").
+    assert_eq!(refused, vec!["deepseek-v3-bf16.json".to_string(), "deepseek-v3-fp8.json".to_string()]);
 }
 
 /// DeepSeek-V3's attention scales with its window: at `2^17` it still passes `2^40` MACs a

@@ -20,6 +20,13 @@
 //! the mode every new conversion runs in, recorded when it was introduced (`d2aecfe77`). The two differ
 //! only where a table entry is a transcendental on which Apple's libm and the pure-Rust port disagree
 //! by an ulp (the position temperature of Llama-4 and Ministral-3).
+//!
+//! **Two lowering versions** ([`misaka_palw_tir_lower::lower::LOWERING_VERSION`]): version 2
+//! (`LOGITS_Q24_V1`) moves every text artifact on purpose — the head's last narrowing lands on `2^−24`
+//! instead of a calibrated scale — and nothing else. So the `v1` files are held for what a deliberate
+//! change must NOT move, the *program* (its digest, node count and param count), and are no longer
+//! compared on the artifact digest; `lowering_v2.json` / `lowering_v2_libm.json` pin the artifacts of
+//! version 2 from the commit that introduced it.
 
 use misaka_palw_tir_lower::detmath::{MathMode, set_mode};
 use misaka_palw_tir_lower::float_ref::ParamStore;
@@ -38,8 +45,9 @@ const INTENDED: &[(&str, &str)] = &[(
     "1db3c430f (lane F): FP8 checkpoints with block scales are quant-format descriptors now, so the config lowers (it was refused)",
 )];
 
-/// The two modes of `detmath` and the baseline file of each.
-const MODES: &[(MathMode, &str)] = &[(MathMode::Std, "lowering_v1.json"), (MathMode::LibmV1, "lowering_v1_libm.json")];
+/// The two modes of `detmath`; per mode the version-1 baseline (programs only) and the version-2 one.
+const MODES: &[(MathMode, &str, &str)] =
+    &[(MathMode::Std, "lowering_v1.json", "lowering_v2.json"), (MathMode::LibmV1, "lowering_v1_libm.json", "lowering_v2_libm.json")];
 
 fn golden_path(file: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(file)
@@ -113,16 +121,27 @@ fn real_configs() -> Vec<(String, String)> {
 #[test]
 fn every_lowering_is_byte_identical_to_the_recorded_baseline() {
     // The math mode is process-wide: both modes run in this one test, one after the other.
-    for (mode, file) in MODES {
+    for (mode, v1, v2) in MODES {
         set_mode(*mode);
-        check_baseline(mode.name(), file);
+        check_baseline(mode.name(), v1, v2);
     }
     set_mode(MathMode::LibmV1);
 }
 
-fn check_baseline(mode: &str, file: &str) {
+/// The fields of a row that survive a version change that moves only artifacts: everything but the
+/// artifact digest.
+fn program_fields(v: &Value) -> Value {
+    let mut v = v.clone();
+    if let Some(o) = v.as_object_mut() {
+        o.remove("artifact");
+    }
+    v
+}
+
+fn check_baseline(mode: &str, v1_file: &str, v2_file: &str) {
     let update = std::env::var_os("PALW_GOLDEN_UPDATE").is_some();
-    let mut golden = load_golden(file);
+    let v1 = load_golden(v1_file);
+    let mut v2 = load_golden(v2_file);
     let mut got: BTreeMap<String, Value> = BTreeMap::new();
     let mut failed = Vec::new();
     for root in ["tests/fixtures/hf", "tests/fixtures/hf-quant", "tests/fixtures/gguf"] {
@@ -149,25 +168,25 @@ fn check_baseline(mode: &str, file: &str) {
     assert!(failed.is_empty(), "{failed:?}");
     if update {
         for (k, v) in &got {
-            match golden.get(k) {
+            match v2.get(k) {
                 Some(old) if old != v && !INTENDED.iter().any(|(n, _)| n == k) => {
                     panic!("[{mode}] {k}: the baseline row would change ({old} → {v}); list it in INTENDED with the commit that explains it")
                 }
                 _ => {}
             }
-            golden.insert(k.clone(), v.clone());
+            v2.insert(k.clone(), v.clone());
         }
-        std::fs::create_dir_all(golden_path(file).parent().expect("dir")).expect("mkdir");
-        std::fs::write(golden_path(file), serde_json::to_string_pretty(&golden).expect("json") + "\n").expect("write golden");
-        eprintln!("[{mode}] wrote {} rows to {}", golden.len(), golden_path(file).display());
-        return;
+        std::fs::create_dir_all(golden_path(v2_file).parent().expect("dir")).expect("mkdir");
+        std::fs::write(golden_path(v2_file), serde_json::to_string_pretty(&v2).expect("json") + "\n").expect("write golden");
+        eprintln!("[{mode}] wrote {} rows to {}", v2.len(), golden_path(v2_file).display());
     }
-    assert!(!golden.is_empty(), "[{mode}] no recorded baseline at {}", golden_path(file).display());
+    // Version 1: the program of every recorded row is unchanged (its artifact moved on purpose).
+    assert!(!v1.is_empty(), "[{mode}] no recorded baseline at {}", golden_path(v1_file).display());
     let mut moved = Vec::new();
     let mut missing = Vec::new();
-    for (k, want) in &golden {
+    for (k, want) in &v1 {
         match got.get(k) {
-            Some(have) if have == want => {}
+            Some(have) if program_fields(have) == program_fields(want) => {}
             Some(have) => {
                 if INTENDED.iter().any(|(n, _)| n == k) {
                     eprintln!("[{mode}] {k}: changed on purpose");
@@ -178,9 +197,23 @@ fn check_baseline(mode: &str, file: &str) {
             None => missing.push(k.clone()),
         }
     }
-    eprintln!("[{mode}] {} rows compared, {} on purpose", golden.len(), INTENDED.len());
-    assert!(moved.is_empty(), "[{mode}] lowered bytes changed:\n{}", moved.join("\n"));
+    eprintln!("[{mode}] {} rows compared against version 1 (programs), {} on purpose", v1.len(), INTENDED.len());
+    assert!(moved.is_empty(), "[{mode}] lowered programs changed:\n{}", moved.join("\n"));
     assert!(missing.is_empty(), "[{mode}] baseline rows no longer produced: {missing:?}");
+    // Version 2: every byte.
+    if update {
+        return;
+    }
+    assert!(!v2.is_empty(), "[{mode}] no version-2 baseline at {} (record it with PALW_GOLDEN_UPDATE=1)", golden_path(v2_file).display());
+    let mut moved = Vec::new();
+    for (k, want) in &v2 {
+        match got.get(k) {
+            Some(have) if have == want => {}
+            Some(have) => moved.push(format!("{k}: {want} → {have}")),
+            None => moved.push(format!("{k}: no longer produced")),
+        }
+    }
+    assert!(moved.is_empty(), "[{mode}] lowered bytes (version 2) changed:\n{}", moved.join("\n"));
 }
 
 /// The audit directories of the 09-29 sweep (`~/Downloads/MISAKA-wt-b/tir-audit/<family>/`, or

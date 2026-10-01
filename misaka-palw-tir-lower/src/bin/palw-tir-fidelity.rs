@@ -215,6 +215,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             "architecture": prep.spec.architecture,
             "resid_scale": mat.resid_scale,
             "logits_scale": mat.logits_scale,
+            "lowering_version": misaka_palw_tir_lower::lower::LOWERING_VERSION,
             "policy": { "headroom16": policy.headroom16, "headroom32": policy.headroom32, "headroom_resid": policy.headroom_resid },
             "calibration": calib_src,
             "calibrated_context": calib.iter().map(Vec::len).max(),

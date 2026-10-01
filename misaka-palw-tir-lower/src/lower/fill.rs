@@ -604,6 +604,7 @@ pub fn materialise(
             out.tensors.insert(key, t);
         }
         if hbk == hl.post {
+            super::check_logits_range(hl, &ctx)?;
             logits_scale = Some(ctx.scale(&lw.logits_key)?);
         }
         quant_inexact += ctx.quant_inexact();

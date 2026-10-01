@@ -843,12 +843,48 @@ fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
     want
 }
 
-/// The key of `post`'s output node: the logits at their site's `i32` scale, or an encoder's
-/// embedding in fixed point — `Q30` when L2-normalised (every lane is in `[−1, 1]`), else a
-/// power-of-two unit sized on the calibration ([`Base::Pow2Site`]).
+/// **The lowering's version** — the recipe that turns a spec into a program and an artifact.
+///
+/// * `1` — until `LOGITS_Q24_V1`: the logits at a calibrated static scale (an arbitrary real,
+///   `≈ 2^−27.5 … 2^−23.7` on the tiny fixtures), so a sampler had to read the scale from the pack.
+/// * `2` — `LOGITS_Q24_V1`: **a text program's `logits` are natural-log units × 2^24 in an `i32`,
+///   whatever the model** (temperature means the same for every class). The last narrowing of the
+///   head lands on `2^−24` instead of the calibrated scale — the same nodes, other `(m, s)` params.
+///   `i32` holds `|logit| < 128`; calibration that sees a logit past [`LOGITS_Q24_REFUSE_AT`] is
+///   refused ([`check_logits_range`]), and an input beyond 128 at run time saturates.
+pub const LOWERING_VERSION: u32 = 2;
+
+/// A model whose calibrated logits reach this many natural-log units is refused (`i32` at `2^−24`
+/// holds ±127.99999994; the margin keeps ordinary inputs from saturating).
+pub const LOGITS_Q24_REFUSE_AT: f64 = 120.0;
+
+/// `LOGITS_Q24_V1`'s bound, checked where the post occurrence's scales resolve: the calibrated
+/// absmax of the logits site, in natural-log units, must fit.
+pub(crate) fn check_logits_range(hl: &HlProgram, ctx: &FillCtx<'_>) -> Result<()> {
+    if !matches!(hl.output, hl::HlOutput::Logits) {
+        return Ok(());
+    }
+    let site = match hl.blocks[hl.post].outputs.first() {
+        Some(hl::Ref::Node(i, _)) => hl.blocks[hl.post].nodes[*i as usize].site.clone(),
+        _ => None,
+    };
+    let Some(site) = site else { return Ok(()) };
+    let amax = ctx.absmax(&site)?;
+    if amax >= LOGITS_Q24_REFUSE_AT {
+        return Err(LowerError::not_lowerable(format!(
+            "LOGITS_Q24_V1: the calibrated logits reach {amax:.1} natural-log units; the Q24 logits of a text program hold |logit| < 128"
+        )));
+    }
+    Ok(())
+}
+
+/// The key of `post`'s output node: the logits in Q24 (`LOGITS_Q24_V1`: natural-log units × 2^24,
+/// the same for every model), or an encoder's embedding in fixed point — `Q30` when L2-normalised
+/// (every lane is in `[−1, 1]`), else a power-of-two unit sized on the calibration
+/// ([`Base::Pow2Site`]).
 fn output_key(hl: &HlProgram, site: &str) -> ScaleKey {
     match hl.output {
-        hl::HlOutput::Logits => ScaleKey::site(vec![site.to_string()], true),
+        hl::HlOutput::Logits => ScaleKey::q24(),
         hl::HlOutput::Embedding { normalized: true } => ScaleKey { base: Base::Fixed(1.0 / (1u64 << 30) as f64), factor: 1.0 },
         hl::HlOutput::Embedding { normalized: false } => {
             ScaleKey { base: Base::Pow2Site { names: vec![site.to_string()] }, factor: 1.0 }
