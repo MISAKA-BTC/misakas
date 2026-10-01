@@ -46,5 +46,10 @@ misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec" }
 # the reference evaluator and the typed backend. Tests only.
 misaka-palw-tir-ref2 = { path = "../misaka-palw-tir-ref2" }
 
+[features]
+# `curl`-backed range fetching for remote checkpoints (`weights::CurlFetcher`). Off by default: the
+# library never opens a network connection on its own, and no test does.
+remote = []
+
 [lints]
 workspace = true

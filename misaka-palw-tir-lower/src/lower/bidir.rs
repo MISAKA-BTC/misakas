@@ -127,6 +127,7 @@ pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lo
     let mut cx = Cx {
         hl,
         fills: Vec::new(),
+        row_params: BTreeMap::new(),
         resid_sites: BTreeMap::new(),
         tstate: BTreeMap::new(),
         history_bound: hb,
@@ -166,7 +167,7 @@ pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lo
     let fills = cx.fills;
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no output scale"))?;
-    Ok(Lowered { program, fills, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
+    Ok(Lowered { program, fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
 }
 
 /// A value of this lowering: `[L, n]` (or `[1, n]`) rows.
@@ -238,7 +239,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             // Word rows, each at its table row's scale, narrowed to the residual scale.
             let tp = hl_param(hl, "embed.table")?;
             let (rows, cols) = (hl.params[tp as usize].shape[0], hl.params[tp as usize].shape[1]);
-            let table = decl(&mut b, cx, &lb, "embed.table", DType::I16, &[rows, cols], false, table_codes(tp))?;
+            let table = decl_rows(&mut b, cx, &lb, "embed.table", &[rows, cols], false, RowKind::T16, tp)?;
             let key = resid.clone();
             let (m, s) = decl_ms(
                 &mut b,
@@ -247,9 +248,9 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                 "embed",
                 rows,
                 Arc::new(move |c| {
-                    let rc = c.rows16(tp)?;
+                    let scales = c.row_scales(tp, true)?;
                     let to = c.scale(&key)?;
-                    Ok(rc.scales.iter().map(|sw| sw / to).collect())
+                    Ok(scales.iter().map(|sw| sw / to).collect())
                 }),
             )?;
             let row = b.gather(table, ids, 0, 0);

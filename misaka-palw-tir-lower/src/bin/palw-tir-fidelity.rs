@@ -132,7 +132,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     if let Some(p) = &a.tir_out {
         std::fs::write(p, prep.lowered.program.encode()).map_err(|e| e.to_string())?;
     }
-    let loader = Streamed { prog: &prep.hl, binding: &prep.binding, source: ck };
+    let loader = Streamed::new(&prep.hl, &prep.binding, ck);
     let vocab = prep.hl.vocab;
     let cut = |mut s: Vec<Vec<usize>>, n: Option<usize>| {
         if let Some(n) = n {

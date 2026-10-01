@@ -13,14 +13,38 @@
 use super::{ParamStore, Session, SiteStat, bind_one, check_shape};
 use crate::error::{LowerError, Result};
 use crate::hl::HlProgram;
-use crate::weights::{Binding, Resolver, TensorSource};
+use crate::weights::stream::{eval_src_rows, src_row_space};
+use crate::weights::{Binding, Resolver, Tensor, TensorSource};
 use rayon::prelude::*;
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
+use std::sync::{Arc, OnceLock};
 
 /// Supplies the params one occurrence reads (block `bi` at `layer`), globals included.
 pub trait OccParams: Sync {
     fn load(&self, bi: usize, layer: Option<usize>) -> Result<Arc<ParamStore>>;
+
+    /// [`load`](Self::load) without the HL params in `defer`: the caller reads those by blocks of
+    /// rows through [`row_source`](Self::row_source), so a vocabulary-sized table or a stack of
+    /// experts is never resident whole. A loader that cannot serve row ranges ignores `defer`.
+    fn load_deferring(&self, bi: usize, layer: Option<usize>, defer: &BTreeSet<u32>) -> Result<Arc<ParamStore>> {
+        let _ = defer;
+        self.load(bi, layer)
+    }
+
+    /// Row-range access to the params (see [`RowSource`]), when this loader has it.
+    fn row_source(&self) -> Option<&dyn RowSource> {
+        None
+    }
+}
+
+/// HL params read by blocks of rows — `rows a..b` of the param's value, every axis but the last
+/// flattened ([`crate::weights::stream`]).
+pub trait RowSource: Sync {
+    /// `(rows, cols)` of HL param `p` at occurrence `layer`, when it can be read by row ranges.
+    fn row_space(&self, p: u32, layer: Option<usize>) -> Result<Option<(usize, usize)>>;
+    /// Rows `rows` of the param, a `[rows.len(), cols]` tensor.
+    fn rows(&self, p: u32, layer: Option<usize>, rows: Range<usize>) -> Result<Tensor>;
 }
 
 /// Every param already in memory (small models, tests).
@@ -37,13 +61,71 @@ pub struct Streamed<'a> {
     pub prog: &'a HlProgram,
     pub binding: &'a Binding,
     pub source: &'a (dyn TensorSource + Sync),
+    /// The checkpoint's tensor names, listed once (a resolver per row block would list them again).
+    names: OnceLock<Arc<BTreeSet<String>>>,
+}
+
+impl<'a> Streamed<'a> {
+    pub fn new(prog: &'a HlProgram, binding: &'a Binding, source: &'a (dyn TensorSource + Sync)) -> Self {
+        Streamed { prog, binding, source, names: OnceLock::new() }
+    }
+
+    fn resolver(&self) -> Resolver<'a> {
+        let names = self.names.get_or_init(|| Arc::new(self.source.names().into_iter().collect())).clone();
+        Resolver::shared(self.source, &self.binding.aliases, names).with_ignored(&self.binding.ignored_prefixes)
+    }
+
+    /// The model layer an HL param's source expression is evaluated at (`None` for a global).
+    fn model_layer_of(&self, p: u32, layer: Option<usize>) -> Result<Option<usize>> {
+        let d = &self.prog.params[p as usize];
+        if d.per_layer {
+            let l = layer.ok_or_else(|| LowerError::eval(format!("per-layer param `{}` outside a layer", d.name)))?;
+            Ok(Some(self.prog.model_layer(l)))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl RowSource for Streamed<'_> {
+    fn row_space(&self, p: u32, layer: Option<usize>) -> Result<Option<(usize, usize)>> {
+        if !self.source.serves_row_ranges() {
+            return Ok(None);
+        }
+        let ml = self.model_layer_of(p, layer)?;
+        let r = self.resolver();
+        src_row_space(&self.binding.srcs[p as usize], &r, ml, &BTreeMap::new())
+    }
+
+    fn rows(&self, p: u32, layer: Option<usize>, rows: Range<usize>) -> Result<Tensor> {
+        let ml = self.model_layer_of(p, layer)?;
+        let r = self.resolver();
+        eval_src_rows(&self.binding.srcs[p as usize], &r, ml, &BTreeMap::new(), rows)
+    }
 }
 
 impl OccParams for Streamed<'_> {
+    fn row_source(&self) -> Option<&dyn RowSource> {
+        Some(self)
+    }
+
+    fn load_deferring(&self, bi: usize, layer: Option<usize>, defer: &BTreeSet<u32>) -> Result<Arc<ParamStore>> {
+        self.load_except(bi, layer, defer)
+    }
+
     fn load(&self, bi: usize, layer: Option<usize>) -> Result<Arc<ParamStore>> {
-        let r = Resolver::new(self.source, &self.binding.aliases).with_ignored(&self.binding.ignored_prefixes);
+        self.load_except(bi, layer, &BTreeSet::new())
+    }
+}
+
+impl Streamed<'_> {
+    fn load_except(&self, bi: usize, layer: Option<usize>, skip: &BTreeSet<u32>) -> Result<Arc<ParamStore>> {
+        let r = self.resolver();
         let mut st = ParamStore::default();
         for pi in self.prog.block_params(bi) {
+            if skip.contains(&pi) {
+                continue;
+            }
             let d = &self.prog.params[pi as usize];
             if d.per_layer {
                 let l = layer.ok_or_else(|| LowerError::eval(format!("per-layer param `{}` outside a layer", d.name)))?;
