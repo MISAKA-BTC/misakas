@@ -8,7 +8,7 @@
 | Affects | spec/palw 03 (registry), 04/04a (execution, arithmetic), 05 (canonical work), 08 (verification), 09 (court), 14 (node), 16 (fences) · all networks (dormant until armed) · `consensus/core` (admission, court), `misaka-palw-base0` (engines), `misaka-palw-sdk`, `misaka-palw-extension` |
 | Branch | `rfc/0002-tensor-ir` (text only; no prototype yet) |
 | Related | ADR-0135 (a model is data; Decision 7 the VM boundary), ADR-0038 A4 (100 % catalog coverage), ADR-0040 (BASE-0; Decision E order-free accumulation), ADR-0047 (A16), ADR-0049 (adjudication contract), ADR-0052 (QWEN36 ops), ADR-0057 (backends below the semantic boundary), ADR-0069 (e2e adjudicability), ADR-0082/0093 (fused attention and dissection), ADR-0102 (fenced kernels), ADR-0103/0116 (held context, history bound), ADR-0145 (canonical work) |
-| Part II | Model onboarding (header-only preflight, the streaming loader, runtime packs, the quant registry, feature scope, staged enablement) — appended 2026-10-01, lane F; §II.7.5 is a proposal, not implemented |
+| Part II | Model onboarding (header-only preflight, the streaming loader, runtime packs, the quant registry, feature scope, staged enablement) — appended 2026-10-01, lane F; §II.7.5 records decided consensus rules, not yet built |
 
 ## 概要(日本語)
 
@@ -45,7 +45,7 @@
   Rust 製の pliron(MLIR 風)も評価し、参照 lowerer の内部 IR には今は採らない(検証器・正準形・評価器は consensus 側が自前で持つ
   必要があり、pliron はその二重定義になる)。第三者の利用は自由、凍結後に任意の dialect adapter、lowerer の Gate 2 で再評価。
 
-- **Part II(10-01 追記)。** モデル受け入れの標準経路 — header だけで読む preflight、streaming 変換と runtime pack、量子化 descriptor、feature scope、convert / register / mine の段階的な有効化(consensus に触れる §II.7.5 は提案のみ)。本文は末尾の Part II。
+- **Part II(10-01 追記)。** モデル受け入れの標準経路 — header だけで読む preflight、streaming 変換と runtime pack、量子化 descriptor、feature scope、convert / register / mine の段階的な有効化(consensus に触れる §II.7.5 は決定済み・未実装)。本文は末尾の Part II。
 
 ## Summary
 
@@ -668,8 +668,8 @@ after the capacity steps (ADR-0160), at a height chosen when Phase F's drill pas
 
 *Added 2026-10-01 (lane F, branch `tir/onboard`). Part I defines the IR, the court and the fused-kernel rule; Part II
 defines everything between a model someone downloaded and a class that earns. **Part II adds no primitive and changes
-no consensus rule.** §II.7.5 is a proposal for consensus rules under a dormant fence; it is not implemented and waits for
-a decision. Everything else in Part II is tooling, data formats and node-side reporting, outside consensus (P7).*
+no consensus rule.** §II.7.5 records the consensus rules *decided* on 2026-10-01 under a dormant fence; they are specified there and
+not yet built. Everything else in Part II is tooling, data formats and node-side reporting, outside consensus (P7).*
 
 ## Part II in one page
 
@@ -695,7 +695,8 @@ things, one per requirement of §II.0.1.
    a part entirely or says it does not.
 5. **Staged enablement (§II.7).** Registration is existence; mining is a separate, gated stage. The chain's lifecycle
    already separates them; §II.7 states what it does and does not guarantee against the requirement, gives the registry a
-   structured `blocking` field (stage, code, what is missing, how much), and proposes the consensus rules that are missing.
+   structured `blocking` field (stage, code, what is missing, how much), and records the consensus rules, decided but not yet built,
+   that close what it lacks.
 
 ## 概要(Part II、日本語)
 
@@ -708,7 +709,7 @@ things, one per requirement of §II.0.1.
 - **量子化はデータ(§II.5)。** GGUF/GPTQ/AWQ/FP8/compressed-tensors/MXFP4/bitsandbytes は descriptor ファイル。未知の型は **名指しで拒否** し、安全な経路を示す。新型は release でなくファイル+テストベクタ。
 - **feature scope(§II.6)。** text-only はすべての面に出る。vision / audio / projector は「未対応の feature」であり、部分対応にはしない。
 - **段階的な有効化(§II.7)。** 登録は存在、mining は別の段階。現行 lifecycle の穴(ready seat は bond 数・probation の claim は報酬が出る・実行系の認証 gate が無い・seat のメモリ不足は無言)を洗い出し、
-  node 側だけで直せる部分(registry の構造化 `blocking`)は実装し、consensus に触れる部分は **dormant fence の提案** として判断を仰ぐ。
+  node 側だけで直せる部分(registry の構造化 `blocking`)は実装し、consensus に触れる部分は dormant fence(`palw_class_seating`、全 class 種別に 1 つの着席規則)として 2026-10-01 に決定済み(未実装)。
 - **完成基準(§II.8)。** 50〜100 の代表 architecture、既存 feature で ≥ 90 % 表現可能、到達可能な TIR op への court coverage 100 %。
 
 ## II.0 Requirements, acceptance and the three examples
@@ -759,7 +760,7 @@ The user's, in the user's order. R1–R5 are what Part II implements; the accept
 | R2 packs | §II.3, §II.4 | implemented: `palw-class pack build \| verify \| show` (`468ae4404`); `libm-v1` (`537ca553f`); streaming converter (`b0d799769`, `0876a1744`, `ef1f8ef40`); content-addressed chunks (`e6fbb3ba2`); streamed inventory root (`e502567ba`) |
 | R3 quant registry | §II.5 | implemented: 29 ggml types (`957d8e26d`), GPTQ, AWQ, FP8 block, three compressed-tensors formats (`1db3c430f`), MXFP4 from safetensors (`096e88de5`), bitsandbytes nf4/fp4/int8 (`f74d1a333`); known-undescribed list (`17febcd9d`) |
 | R4 feature scope | §II.6 | implemented (`d7c0d776a`); shown by the report, the pack and `misaka model inspect` |
-| R5 staged enablement | §II.7 | analysed here; the registry's `blocking` field and its CLI display are node-only and specified in §II.7.4; the consensus rules of §II.7.5 are proposals |
+| R5 staged enablement | §II.7 | analysed here; the registry's `blocking` field and its CLI display are node-only and specified in §II.7.4; the consensus rules of §II.7.5 are decided (2026-10-01) and not yet built |
 | A1–A5 | §II.8 | A2 is met by the pack; A1, A3, A4, A5 complete with the preflight (task 7), `blocking` and the decision on §II.7.5 |
 
 ## II.1 Principles
@@ -888,7 +889,8 @@ Each item names the function that answers it, so the preflight is a composition 
    ready and, today, says so nowhere (§II.7.3 F4); the preflight is where it is said first.
 9. **The forecast.** The path the lifecycle (§II.7.1) would take on the network: an admission jury at the next audit
    (`palw_admission_audit_period_daa`), `required_ready_seats` ready seats, `probation_claims` probe claims, `stable_epochs`
-   stable spans, and the earliest time to the first paid claim. It is informational: the chain decides.
+   stable spans, how many independent operators the network has against the seating floor (§II.7.5), and the earliest time to the
+   first paid claim. It is informational: the chain decides.
 
 ### II.2.4 Verdicts, stages and codes
 
@@ -1240,12 +1242,13 @@ first checkpoint from the real quantiser belongs in the corpus (§II.8) and woul
   product of its code and its absmax, rounded once to the module's dtype (bitsandbytes' CUDA kernel's arithmetic; its pure-PyTorch
   fallback rounds the code table to that dtype first and differs by up to one bfloat16 ulp). For FP4 the kernel's literal for code 1
   (0.00520833) differs from the stored table's (0.0625 / 12 in float32) in the seventh digit; the descriptor follows the stored
-  table. **Refused by name**: `bnb_4bit_quant_storage` other than `uint8`, a hardware-reordered int8 `weight_format`, and
-  **`llm_int8_threshold` above 0** — LLM.int8 then splits every matmul at run time (activation columns past the threshold go through
-  float16 against the dequantised weight columns, the rest through int8), which a fixed integer graph does not reproduce. Because
-  `BitsAndBytesConfig`'s default threshold is 6.0 and the configuration records it, **most int8 checkpoints published are
-  refused**; admitting them would be a one-line change of the descriptor's `one_of`, because the stored weights are the same
-  whatever the threshold. That is a decision about what "the model" means for an int8 checkpoint (§II.9).
+  table. **Refused by name**: `bnb_4bit_quant_storage` other than `uint8`, and a hardware-reordered int8 `weight_format`.
+  **`llm_int8_threshold` is inert (decided 2026-10-01).** Above 0, LLM.int8 splits every matmul at run time (activation columns past
+  the threshold go through float16 against the dequantised weight columns, the rest through int8); that is how bitsandbytes *runs* a
+  layer, not what is stored, and `BitsAndBytesConfig`'s default is 6.0, so most int8 checkpoints published carry it. The stored
+  weights define the model, whatever the threshold. The pack's fidelity measure against the Hugging Face reference (§II.4.4) says how
+  far the integer program is from the library's own run, and it must still pass; the `SCB` rounding stays counted
+  (`quant_inexact`).
 
 ### II.5.9 Adding a format
 
@@ -1290,7 +1293,7 @@ as a partly multimodal one: **a class computes a part entirely or says that it d
 The requirement is that **registering a model and enabling mining for it are different acts**, and that when either does not
 happen the user is told which stage lacked what. §II.7.1 states the lifecycle the chain has today; §II.7.2 what it already
 guarantees; §II.7.3 where it falls short of R5 (found by reading the code, with the functions named); §II.7.4 the node-only change
-that makes every stage visible; §II.7.5 the consensus rules that are missing, **as a proposal**.
+that makes every stage visible; §II.7.5 the consensus rules that were decided to close what is missing.
 
 ### II.7.1 The lifecycle today
 
@@ -1405,17 +1408,28 @@ an element of `classes` is not extended, because it is read as a vector element 
 while a trailing field of the response is not read by one. The CLI shows it in `misaka palw registry` (a line under each class
 that has one) and in `misaka model status <class>` (`stage`, `blocked by`, `have/need`, `next`), and it is in `--json`.
 
+Reserved for Proposal A (§II.7.5): `INDEPENDENT_OPERATORS` (`have / need` independent operators) and the class's licensable share,
+served once the consensus read that carries the seating facts exists.
+
 This closes F5 and the *reporting* half of F4 (the registry names `READY_SEATS` and the preflight, §II.2.3 item 8, names the
 memory). It changes nothing the chain decides.
 
-### II.7.5 Proposal — consensus rules that would close F1, F2 and F3 (NOT IMPLEMENTED; for decision)
+### II.7.5 The consensus rules — decided 2026-10-01, NOT YET IMPLEMENTED
 
-All of these are consensus rules, so each is a **fence**: dormant on every preset (`None`, hashed Some-only, a dormant network
-fingerprints as if the rule did not exist), armed on testnet-12 through a flag-day entry like `PALW_T12_TIR_FENCE2_ENTRY`, with a
-drill that crosses it on the shipping binary. None is built, and none is built before it is decided.
+The coordinator decided on 2026-10-01: **Proposal A approved** (one seating rule for every class kind, under the new dormant fence
+`palw_class_seating`; the independence floor a fence parameter, default 3; armed with the RFC-0003/0004 flag day, not with int-10);
+**Proposal B: go**; **Proposal C: C1**; and **`misaka model add` requires a `pack verify` PASS by default**, with an explicit expert
+override flag that prints a warning (the chain does not enforce it). The consensus rules below are built by the consensus lanes
+(lane D owns the shared predicate; this lane specifies it here, writes the scenarios the drills must include, and builds the
+node-side reporting and the seat duty). None of the consensus rules is built yet.
 
-**Proposal A — one seating rule for every class kind (closes F1; sets the independence number).** A fence `palw_class_seating`.
-Past it there is **one predicate**, asked at every door through which a class's work is admitted.
+All of them are **fences**: dormant on every preset (`None`, hashed Some-only, a dormant network fingerprints as if the rule did not
+exist), armed on testnet-12 through a flag-day entry like `PALW_T12_TIR_FENCE2_ENTRY`, with a drill that crosses the fence on the
+shipping binary.
+
+#### Proposal A — one seating rule for every class kind (approved)
+
+A fence `palw_class_seating`. Past it there is **one predicate**, asked at every door through which a class's work is admitted.
 
 > `class_seated(class, executor, span)`. Let `Ready(class, span)` be the set of **operators** — an operator counted once, however many
 > bonds it holds — with a fresh readiness V2 possession proof for the class, by the registry's own five-clause predicate (an active
@@ -1424,9 +1438,16 @@ Past it there is **one predicate**, asked at every door through which a class's 
 > matured, registered before the span's cut). The class is **seated** for a claim whose executor is `e` iff
 >
 > 1. **possession floor** — `|Ready \ {operator(e)}| ≥ seat_count`: a panel can be drawn without the executor;
-> 2. **independence floor** — `|(Ready ∩ Base) \ {operator(registrant), operator(e)}| ≥ quorum(seat_count)`, that is
->    `⌊seat_count / 2⌋ + 1` (3 on testnet-12): a majority of a panel's worth of operators that are neither the claim's executor nor
->    the class's registrant and that the network's own lottery could have drawn. A genesis class has no registrant to exclude.
+> 2. **independence floor** — `|(Ready ∩ Base) \ {operator(registrant), operator(e)}| ≥ independent_floor`, where `independent_floor`
+>    is a **parameter of the fence** (default `quorum(seat_count)` = `⌊seat_count / 2⌋ + 1` = **3** on testnet-12): operators that are
+>    neither the claim's executor nor the class's registrant and that the network's own lottery could have drawn. A genesis class has no
+>    registrant to exclude.
+
+**The parameter.** `independent_floor` lives in the fence's ceilings (`PalwClassSeatingCeilingsV1`), hashed into the params
+fingerprint with the fence (Some-only), so it can be raised by a later flag-day entry and never moves under a running chain.
+`validate_palw_v2` refuses a floor of 0 or above `seat_count` (a floor no panel could meet). Three is the default because it is the
+number of operators the network already accepts as evidence of independence when it admits a bought class (the jury's strict
+majority), made a *continuing* condition; the reasoning is below.
 
 **Where it is asked** (one function, so the doors cannot disagree):
 
@@ -1435,8 +1456,53 @@ Past it there is **one predicate**, asked at every door through which a class's 
 | claims of an IR or legacy attempt class, bought or genesis | the lifecycle state admits claims (`Prefetching → Probation` at `required_ready_seats` ready *bonds*); a claim no panel can be drawn for is voided *after* the bind window as `NoCapablePanel`, the executor's reservation held meanwhile | `class_seated` at claim admission: a refusal (`ClassNotSeated`, naming the floor that failed) before the reservation is taken |
 | a tensor claim of an RFC-0003 generative class | lane D's `GenClassNotReady`: `seat_count` distinct operators, never the executor's, hold the class with a fresh readiness V2 proof (`rfc3/gen-claim`, `9a25e6d20` / `28f60cf24`); its lifecycle row stays `Registered`, so this is its only gate | the same function: D's rule *is* condition 1; condition 2 is added |
 | claims of a composite class (a parent and an unmerged adapter) | as an attempt class, on the composite's own class id and artifact root | the same function, on the composite's readiness rows |
-| the lifecycle | `Prefetching → Probation` and `Held → Probation` read the bond count against `required_ready_seats` | they read `|Ready| ≥ required_ready_seats` (`seat_count` + spare, 7 on testnet-12) **and** condition 2: the class enters `Probation`, and its probe claims begin to be paid, only when seven distinct operators, three of them independent, are ready |
-| the registry, the CLI and the preflight | `blocking` (§II.7.4) names `READY_SEATS` with a bond count | `blocking` reports `have / need` for each condition; the preflight's forecast says how many independent operators the network has |
+| the lifecycle | `Prefetching → Probation` and `Held → Probation` read the bond count against `required_ready_seats` | they read `|Ready| ≥ required_ready_seats` (`seat_count` + spare, **7** on testnet-12) **and** condition 2: the class enters `Probation`, and its probe claims begin to be paid, only when seven distinct operators, three of them independent, are ready |
+| the registry, the CLI and the preflight | `blocking` (§II.7.4) names `READY_SEATS` with a bond count | `blocking` reports `have / need` for each condition (`INDEPENDENT_OPERATORS`), and the registry reports the class's licensable share; the preflight's forecast says how many independent operators the network has |
+
+**The shared function — the API proposed to lane D.** One implementation in `consensus/core` (`palw_class_seating_v1.rs`), pure over the
+state, with no side effect. Lane D's inline loop in `apply_gen_tensor_commitment_v1` becomes a call to it.
+
+```rust
+/// The fence's terms in force at a DAA (`Params::palw_class_seating_terms_at`): `None` below the fence.
+pub struct PalwClassSeatingTermsV1 { pub independent_floor: u16 }          // default 3
+
+/// What the predicate counted: every number a refusal, the lifecycle, the registry RPC and the preflight need.
+pub struct PalwClassSeatingV1 {
+    pub ready_operators: u32,        // |Ready \ {operator(executor)}|                       condition 1, have
+    pub needed_operators: u32,       // seat_count                                           condition 1, need
+    pub independent_operators: u32,  // |(Ready ∩ Base) \ {operator(registrant), operator(executor)}|   condition 2, have
+    pub needed_independent: u32,     // terms.independent_floor                              condition 2, need
+    pub base_operators: u32,         // |Base \ {operator(registrant)}|                      the licensable share's denominator
+}
+pub enum PalwClassNotSeatedV1 {
+    Possession { ready: u32, needed: u32 },
+    Independence { independent: u32, needed: u32 },
+}
+impl PalwClassSeatingV1 {
+    pub fn verdict(&self) -> Result<(), PalwClassNotSeatedV1>;     // condition 1 first: possession, then independence
+    pub fn licensable_share_permille(&self) -> u16;                // independent_operators × 1000 / base_operators; 0 for an empty base
+}
+pub fn palw_class_seating_v1(
+    read: &PalwFoldReadV1<'_>,                 // the fold's reader at the block, of which `model_registry_seat_is_ready` is a method
+    fold: &PalwModelRegistryFoldV1,            // the registry fold: `globals.seat_count`, the readiness horizon
+    class_id: &Hash64,
+    executor: Option<&PalwBondKeyV2>,          // the claim's executor bond; `None` for the lifecycle's observation and the registry read
+    daa: u64,                                  // the block's DAA score
+    terms: PalwClassSeatingTermsV1,
+) -> PalwClassSeatingV1;
+```
+
+- The **population** `Base` is one function, extracted from `admission_jury_v1`'s filter (`Active`, `palw_bond_may_take_work_v2`,
+  `palw_bond_may_judge_class_v2`, registered before the span's cut and matured, the registrant's bond and operator removed), so the
+  jury, the per-claim outsider draw and the seating floor read **one** population and cannot drift apart.
+- **The refusal** is one error, `PalwStateV2Error::ClassNotSeated { class, floor, have, need }`, with `GenClassNotReady` kept as the
+  generative lane's name for the possession floor if lane D prefers (`Possession` maps to it one to one).
+- **The lifecycle** reads it with `executor: None`: `PalwLifecycleObservationV1.ready_seats` becomes `ready_operators` and a new field
+  `independence_floor_met` (true below the fence, so no existing transition changes); `Prefetching → Probation` and `Held →
+  Probation` require `ready_enough && independence_floor_met`.
+- **The registry read** (`PalwModelRegistryClassReadV1`) gains `seating: Option<PalwClassSeatingV1>` (`None` below the fence); the RPC
+  and the node's `blocking` (§II.7.4) serve it, and `GetPalwModelRegistryResponse` gains the class's licensable share.
+- It is `O(bonds)` per call over a `BTreeMap`, deterministic, and called once per claim at admission and once per class per span.
 
 **Why these numbers.**
 
@@ -1446,7 +1512,7 @@ Past it there is **one predicate**, asked at every door through which a class's 
   snapshot, and it is the least that stops the registrant and the executor, between them, from completing a first panel's quorum.
   Fewer (1) leaves one operator's outage between a class and `Incapable` voids; more (`seat_count`) makes every new class depend on
   the whole fleet of a network that has a few dozen operators. Independence beyond the quorum is carried by the lottery and by the
-  collateral behind each key, not by a larger count.
+  collateral behind each key, not by a larger count — and the count is a parameter, so a larger network can raise it.
 - *Operators, not bonds.* As the panel room's `ready_eff` already counts. On testnet-12, where `palw_operator_id_unique` makes an
   operator one bond, it changes no number; elsewhere it removes an over-count.
 - *What it cannot do.* The chain cannot tell two keys of one party from two parties (§II.7.3 F1(iii)): a registrant that funds three
@@ -1462,36 +1528,65 @@ ADR-0147's price and it is kept on purpose: drawing the outsider from the *holde
 which is exactly what ADR-0147 refuses. What Proposal A adds is **visibility**: the registry and the preflight report that share (the
 class's *licensable share*), so a producer sees before its first claim what fraction of its claims can be licensed. No gate reads it.
 
+**Arming.** With the RFC-0003/0004 flag day (the same consensus release as `palw_gen_v1` and the improvement protocol), **not** with
+int-10. `palw_class_seating` is `None` on every preset until that flag day's entry sets its height and ceilings.
+
 Cost: a class nobody else serves is admitted no claim, which is the independence the jury demanded once, kept; adoption is how a model
 gets claims, and the registry says how far it is (`blocking`: `have 2 / need 3` independent operators). Risk: one function now guards
 every door, so a defect in it is a defect everywhere; the predicate is pure over the state, is tested against lane D's gate and the
 lifecycle's, and the fence is crossed by a drill on the shipping binary.
 
-**Proposal B — executor conformance by the seat, as a precondition of its own readiness proof (closes the executor half of F3,
-node-only).** No fence. A seat, before it first proves readiness for a class, runs the class's canonical self-test on its own
-executor against the reference evaluator — a few positions, or one tile of each primitive kind for a large class (§II.9 L2: sampled
-conformance) — and posts a possession proof only if they agree. When it does not, it writes why, and `getPalwNodeStatus` (what this node
-is doing) shows it. A dishonest seat can skip the test, but it harms only itself: the court convicts it on its first wrong tile. This puts
-"the executor is certified" where it can be enforced, on each seat, and does not need the chain to verify an execution (which it cannot do
-without re-executing it). The chain still sees only ready seats; the registry cannot tell which seats tested.
+##### Scenarios the drills must include
 
-**Proposal C — what probation pays (F2; two options).**
+The seating rule is exercised in the RFC-0003/0004 drills (lane C's D-M and lane D's step 8). Each scenario applies to every class
+kind (an attempt class, a generative class, a composite class) unless it says otherwise, and states what must be observed.
 
-- **C1 (recommended): keep probation paid, and move the gates in front of it** (A, and B at the seats). Probation then begins only
-  with seven ready *distinct* operators, three of them independent of the registrant and the executor, each of which ran the class's
-  conformance on its own executor, and it admits 50 ‰ of the derived volume until ten probe claims have been verified. The first paid claim follows every condition of R5
-  that a chain can enforce.
-- **C2: unpaid probation.** Probe claims are admitted but earn no escrow payout and no weight until `ActiveLimited`; the seats
-  that verified them are paid by the Activation Pool's (b) at `Probation → ActiveLimited` (that machinery exists), the producers of the
-  probe claims are not. It honours R5's wording literally ("rewards stay off until …") but needs a probe-claim marker or a
-  state-dependent payout in the claim accounting, touches conservation properties of the escrow and the vesting, and asks producers to
-  run inferences unpaid for a class they may not trust. It should be decided against measured demand, not before.
+| # | Setup | Observed |
+| --- | --- | --- |
+| SEAT-1 | **Too few operators.** Fewer than `seat_count` distinct operators, the executor's excluded, hold the class ready (4 of 5) | the claim is refused, `ClassNotSeated { Possession, have 4, need 5 }` (a generative claim: `GenClassNotReady`); no reservation is taken and no `NoCapablePanel` void follows; the registry's `blocking` says `READY_SEATS` with `have / need`; the CLI shows stage `mine` |
+| SEAT-2 | **The executor does not count.** Exactly `seat_count` ready operators, the executor's among them | refused with `have = seat_count − 1`; the same class and claim with a different executor (not among the ready operators) is admitted |
+| SEAT-3 | **Enough operators, too few independent.** `seat_count` ready operators of which only two are independent (the others: the registrant's, the executor's, or registered after the span's cut) | refused, `ClassNotSeated { Independence, have 2, need 3 }`; `blocking: INDEPENDENT_OPERATORS 2/3`; when a third independent operator proves readiness the next claim is admitted |
+| SEAT-4 | **Enough.** At least `seat_count` ready operators, three independent. For an attempt class in `Prefetching`: with six ready operators it stays `Prefetching` (`READY_SEATS 6/7`); with a seventh (three independent) it enters `Probation` at the next span boundary; likewise `Held → Probation` | claims admitted; the lifecycle transitions as stated; the first probe claim is paid |
+| SEAT-5 | **A lapse.** One independent operator's readiness expires (the readiness age) while the class is in `Probation` | the next claim is refused (`Independence`, 2/3), the state stays `Probation` until the existing rule holds it (`ready < seat_count`), and claims flow again when the operator re-proves; no probe is counted for a refused claim |
+| SEAT-6 | **Operators, not bonds** (a devnet without `palw_operator_id_unique`). One operator with three ready bonds | counts once: five bonds from three operators are three ready operators, and the claim is refused |
+| SEAT-7 | **A genesis class** (no registrant). The floor excludes only the executor | with the eight genesis operators ready: admitted; with four: refused |
+| SEAT-8 | **The outsider.** A bought class held by 3 of a base of 20 | the registry reports a licensable share of 150 ‰ before the first claim; over at least 400 claims the licensed fraction is within tolerance of it, and the rest void as `Incapable`, as ADR-0147 says |
+| SEAT-9 | **The fence's edge.** A claim accepted just below the fence height | judged by the old rules for its whole life (the claim's own `accepted_daa`, as ADR-0147 §2.4: the draw, the bind and every licensing arm read one answer); a claim accepted above it by the seating rule; below the height every rule is byte for byte the release's |
+| SEAT-10 | **The parameter.** `independent_floor` raised from 3 to 4 at a later flag-day entry | a class with three independent operators is admitted below the new height and refused (`Independence`, 3/4) above it |
+| SEAT-11 | **A composite class.** The parent held by seven operators, the composite (parent + adapter) by two | the composite is refused (readiness is per class id and artifact root); the parent's claims are unaffected |
 
-**What is needed from you:** (1) the fence name and height for A (testnet-12 flag-day list), a drill slot, and lane D to expose its
-readiness predicate as the one shared function (`class_seated`) that this proposal extends with the independence floor; confirm the
-number, `quorum(seat_count)` = 3 independent operators on testnet-12; (2) go or no-go for B (a node-only seat duty, built after the
-preflight); (3) C1 or C2; (4) whether `palw-class pack verify` PASS should be required by `misaka model add` before it carries a
-registration (a CLI policy, not consensus: recommended, with an explicit `--no-pack` override).
+#### Proposal B — executor conformance by the seat (go)
+
+**Decided: go.** To be built by this lane after the preflight (§II.2), node-only, no fence. A seat, before it first proves readiness
+for a class, runs the class's canonical self-test on its own executor against the reference evaluator — a few positions, or one tile
+of each primitive kind for a large class (§II.9 L2: sampled conformance) — and posts a possession proof only if they agree. When it
+does not, it writes why, and `getPalwNodeStatus` (what this node is doing) shows it. A dishonest seat can skip the test, but it harms
+only itself: the court convicts it on its first wrong tile. This puts "the executor is certified" where it can be enforced, on each
+seat, and does not need the chain to verify an execution (which it cannot do without re-executing it). The chain still sees only ready
+seats; the registry cannot tell which seats tested.
+
+#### Proposal C — what probation pays (C1 decided)
+
+**Decided: C1.** Probation stays paid, and the gates move in front of it (A, and B at the seats). Probation then begins only with
+seven ready *distinct* operators, three of them independent of the registrant and the executor, each of which ran the class's
+conformance on its own executor, and it admits 50 ‰ of the derived volume until ten probe claims have been verified. The first paid
+claim follows every condition of R5 that a chain can enforce. (C2, unpaid probation, was not chosen: it needs a probe-claim marker or
+a state-dependent payout in the claim accounting, touches conservation properties of the escrow and the vesting, and asks producers to
+run inferences unpaid for a class they may not trust.)
+
+#### The registration policy of the CLI (decided)
+
+`misaka model add` **requires a `palw-class pack verify` PASS by default**: it takes the pack with `--pack <dir>`, verifies it against
+the artifact, and registers only on PASS. An explicit expert override, `--skip-pack-verify`, registers without one and prints a
+warning that nothing the pack would have checked was checked. This is a CLI policy, not consensus: the chain does not enforce it, and a
+registration made any other way is valid.
+
+#### Open items
+
+1. **The API with lane D** (above): to confirm or amend the signature, the error and the lifecycle observation's new field; one
+   implementation for IR, generative and composite classes.
+2. **The flag-day height** for `palw_class_seating` (the RFC-0003/0004 flag day).
+3. **The drills** (lane C's D-M, lane D's step 8) to include SEAT-1 to SEAT-11.
 
 ## II.8 Acceptance criteria and corpus completion
 
@@ -1502,7 +1597,7 @@ registration (a CLI policy, not consensus: recommended, with an explicit `--no-p
 | **A1** a custom quantisation gets a verdict before the weights are fetched | `palw-class preflight` over a synthetic GGUF header with custom type ids and an `mmproj`, in a file truncated after the header: the verdict names the type ids, the tensors and the unsupported feature, and the source never reads past the data offset (instrumented) | with the preflight (task 7). The refusal's content exists (§II.5.6) |
 | **A2** root, converter version and profile reproducible; independent conformance | `pack build` then `pack verify --rebuild` rebuilds the artifact under pools of 1 and 7 threads to one root and runs the vectors on the reference evaluator, the typed backend and the independent implementation; the Hugging Face fit is within the tolerance | met on the fixtures (`tests/runtime_pack.rs`, `tests/determinism.rs`); cross-platform reproduction is §II.9 L7 |
 | **A3** the testnet-12 preflight shows the court window and the canonical-job conditions | a Qwen3.5-9B-shaped configuration: the window needed and the limit, and the canonical job against the network's bounds, at a height | with the preflight (task 7) and the court-window plug point (§II.2.6) |
-| **A4** mining starts only after ready seats of distinct operators with possession proofs | today: ready bonds with possession proofs (the lifecycle, §II.7.2); after Proposal A and C1: for every class kind, seven distinct ready operators, three of them independent of the registrant and the executor | partly met today; Proposal A decides the rest |
+| **A4** mining starts only after ready seats of distinct operators with possession proofs | today: ready bonds with possession proofs (the lifecycle, §II.7.2); after Proposal A and C1: for every class kind, seven distinct ready operators, three of them independent of the registrant and the executor | partly met today; Proposal A (approved) closes the rest |
 | **A5** failures are visible per stage in the CLI and the registry | the preflight's stage table (convert, register, mine); the registry's `blocking` and its CLI display (§II.7.4), one test per lifecycle state | with `blocking` (this lane) and the preflight (task 7) |
 
 ### II.8.2 Corpus completion
@@ -1538,7 +1633,9 @@ Part I's freeze criterion (§1.2), for the corpus-and-coverage lane. The corpus 
 - **L4. Quant vectors from re-implementations** (§II.5.7): only the ggml types and `MXFP4_HF` are checked against the maintainers'
   own code. A real GPTQ, AWQ, compressed-tensors and bitsandbytes checkpoint, with the library's own dequantised output, belongs in the
   corpus.
-- **L5. Most published LLM.int8 checkpoints are refused** by name (§II.5.8): their configuration records `llm_int8_threshold` 6.0.
+- **L5. An LLM.int8 checkpoint is read at any threshold** (§II.5.8), so the integer program omits the run-time outlier decomposition the
+  library applies at a threshold above 0; the pack's reference fit is what measures the difference, and a pack that fails its tolerance is
+  not VERIFIED. No real int8 checkpoint has been measured (the library is not installed offline).
 - **L6. A 4-bit code costs a byte** (§II.5.8); a packed `i4` is a v2 candidate in `freeze-v1.md`.
 - **L7. `libm-v1` is argued platform-independent (pure Rust, no `std` math) and measured on one platform** (§II.3.3); a Linux
   x86-64 rebuild of a pack built on macOS arm64 has not been run.
@@ -1547,14 +1644,10 @@ Part I's freeze criterion (§1.2), for the corpus-and-coverage lane. The corpus 
 
 **Open questions.**
 
-1. **Is the stored int8 weight of a default-threshold LLM.int8 checkpoint "the model"?** The threshold changes how bitsandbytes
-   *runs* the layer, not what is stored; the integer graph computes the dequantised weights either way, so admitting them is one line
-   of the descriptor. The conservative reading (refuse) is what is built; the question is the registry's rule for a checkpoint whose
-   own runtime computes something this IR does not (the same question GPTQ and AWQ raise for their kernels' activation numerics).
-2. **Should a pack's digest be committed in the class record?** It would let a seat check that the artifact it holds was built by a
+1. **Should a pack's digest be committed in the class record?** It would let a seat check that the artifact it holds was built by a
    verifiable pack. The container's meta already carries the provenance and the sidecar binds file digest and inventory root, so this
    is not proposed: a class record is consensus data, and a pack is evidence.
-3. **Where do conformance vectors for a permissionless class come from?** The registrant's pack is one source; every seat can also
+2. **Where do conformance vectors for a permissionless class come from?** The registrant's pack is one source; every seat can also
    regenerate the vectors from the program on the reference evaluator, which is Proposal B.
-4. **The court window** (§II.2.6): whether the class-specific window of int-10 replaces the global rule everywhere the preflight
+3. **The court window** (§II.2.6): whether the class-specific window of int-10 replaces the global rule everywhere the preflight
    reads it, and what the preflight reports for a class registered under the old rule.
