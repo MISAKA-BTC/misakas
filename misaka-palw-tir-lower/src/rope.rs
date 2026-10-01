@@ -313,12 +313,21 @@ pub struct RopeContext {
     pub partial_rotary_factor: f64,
 }
 
+/// The widest rotary dimension a program rotates (the widest published is 256).
+pub const MAX_ROTARY_DIM: usize = 1 << 12;
+
 /// Compute the frequencies for a rope config. Unknown keys in the rope dict are refused.
 pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<RopeFreqs> {
     let mut m = rc.params.clone();
     let dim = ctx.dim;
     if dim == 0 || !dim.is_multiple_of(2) {
         return Err(LowerError::bad(format!("{arch}: rotary dim {dim} must be even and positive")));
+    }
+    // The frequencies are `dim / 2` floats and two tables of `dim / 2` Q24 rows a program declares: a
+    // rotary width past what any model rotates (the widest is a few hundred) is a mistaken or hostile
+    // config, refused before anything is sized on it.
+    if dim > MAX_ROTARY_DIM {
+        return Err(LowerError::not_lowerable(format!("{arch}: rotary dim {dim} is past the {MAX_ROTARY_DIM} a program rotates")));
     }
     // `proportional` (Gemma-4's full-attention rope, `ROPE_PROPORTIONAL_V1`): frequencies on the
     // first `partial_rotary_factor` of the head width, zeros after (those pairs are not rotated), all

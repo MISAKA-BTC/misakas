@@ -3574,6 +3574,11 @@ fn lower_conv(
     act: Option<Act>,
     site: &str,
 ) -> Result<Val> {
+    // A convolution has at least one tap, spaced at least one position apart (a config with none is a
+    // mistaken one, refused here rather than underflowing the window's length).
+    if kernel == 0 || dilation == 0 {
+        return Err(LowerError::bad(format!("a causal convolution of {kernel} taps dilated {dilation}")));
+    }
     let hl = cx.hl;
     let sd = &hl.states[st as usize];
     let ts = match cx.tstate.get(&st) {

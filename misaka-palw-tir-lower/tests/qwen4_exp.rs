@@ -40,6 +40,95 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+// ───────────────────────────── nothing in these tests may grow large ─────────────────────────────
+//
+// A config the lowering mishandles must fail loudly and at once, not thrash the machine: this binary's
+// allocator aborts on one allocation over 512 MiB and on live memory over 4 GiB, naming the size. The
+// fixtures and every mutated config are tiny — each test also asserts, by ARITHMETIC over the shapes the
+// program declares, that no param passes 64 MiB and that the program holds under 20 M elements — and the
+// real-scale n-gram check is the hash function alone (`lower::generic::tests`), never a table.
+
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+struct Guard;
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+const ONE_MAX: usize = 512 << 20;
+const LIVE_MAX: usize = 4 << 30;
+
+fn too_big(n: usize, live: usize) -> ! {
+    // No allocation here: a fixed message through the unbuffered stderr, then the process ends.
+    eprintln!("qwen4_exp: an allocation of {n} bytes with {live} live is past the test's bound; aborting before the machine swaps");
+    std::process::abort()
+}
+
+unsafe impl GlobalAlloc for Guard {
+    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+        let live = LIVE.fetch_add(l.size(), Ordering::Relaxed) + l.size();
+        if l.size() > ONE_MAX || live > LIVE_MAX {
+            too_big(l.size(), live);
+        }
+        unsafe { System.alloc(l) }
+    }
+    unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+        let live = LIVE.fetch_add(l.size(), Ordering::Relaxed) + l.size();
+        if l.size() > ONE_MAX || live > LIVE_MAX {
+            too_big(l.size(), live);
+        }
+        unsafe { System.alloc_zeroed(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+        LIVE.fetch_sub(l.size(), Ordering::Relaxed);
+        unsafe { System.dealloc(p, l) }
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
+        let live = if new >= l.size() { LIVE.fetch_add(new - l.size(), Ordering::Relaxed) + (new - l.size()) } else { LIVE.fetch_sub(l.size() - new, Ordering::Relaxed) };
+        if new > ONE_MAX || live > LIVE_MAX {
+            too_big(new, live);
+        }
+        unsafe { System.realloc(p, l, new) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Guard = Guard;
+
+/// `(elements of the largest param, its bytes, elements in all)` of what a program declares, by
+/// arithmetic over its shapes (a per-layer param once for every layer occurrence whose block reads it).
+/// Nothing is allocated.
+fn declared(p: &misaka_palw_tir::TirProgramV1) -> (u64, u64, u64) {
+    use misaka_palw_tir::Ref;
+    // the layer occurrences that read each param
+    let mut uses = vec![0u64; p.params.len()];
+    for b in &p.schedule.layers {
+        let mut seen = BTreeSet::new();
+        for n in &p.blocks[*b as usize].nodes {
+            for r in &n.inputs {
+                if let Ref::Param(j) = r {
+                    seen.insert(*j as usize);
+                }
+            }
+        }
+        for j in seen {
+            uses[j] += 1;
+        }
+    }
+    let (mut largest, mut bytes, mut total) = (0u64, 0u64, 0u64);
+    for (j, d) in p.params.iter().enumerate() {
+        let e: u64 = d.shape.iter().fold(1u64, |a, x| a.saturating_mul(*x as u64));
+        largest = largest.max(e);
+        bytes = bytes.max(e.saturating_mul(d.dtype.width() as u64));
+        total = total.saturating_add(e.saturating_mul(if d.per_layer { uses[j].max(1) } else { 1 }));
+    }
+    (largest, bytes, total)
+}
+
+/// The tests' bound: no param over 64 MiB, under 20 M elements in all.
+fn assert_tiny(what: &str, p: &misaka_palw_tir::TirProgramV1) {
+    let (largest, bytes, total) = declared(p);
+    assert!(bytes <= 64 << 20 && total <= 20_000_000, "{what}: declares a param of {largest} elements ({bytes} bytes) and {total} elements in all — not a tiny test program");
+}
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf")
 }
@@ -180,6 +269,7 @@ fn case_with(name: &str, tag: &str, opts: LowerOpts) -> Arc<Case> {
 fn build(name: &str, opts: &LowerOpts) -> Case {
     let dir = fixture(name);
     let (prep, ck) = fidelity::open_model(&dir, opts).unwrap_or_else(|e| panic!("{name}: prepare: {e}"));
+    assert_tiny(name, &prep.lowered.program);
     let (params, unused) = ParamStore::from_source(&prep.hl, &prep.binding, ck.as_ref()).unwrap_or_else(|e| panic!("{name}: params: {e}"));
     // Every checkpoint tensor is read or declared ignored (the hash buffers: recomputed from the config, equal to the checkpoint's).
     assert!(unused.is_empty(), "{name}: tensors the program never reads: {unused:?}");
@@ -688,8 +778,10 @@ fn the_hl_ops_of_the_new_features_carry_no_checkpoint_names() {
 
 /// A config at the SHAPE of the model's class defaults (transformers' `Qwen4ExpTextConfig`: 2048 wide, 40
 /// layers, 512 experts of top 10, 4 streams, hashed tables of 20 M rows a head) — never its weights: the
-/// lowering declares tables, it does not instantiate them. NF-8 caps a dimension at 2^24, so every head's
-/// table takes two chunks; NF-12 caps a block at 512 nodes.
+/// lowering DECLARES tables (shapes in a program), it never instantiates them, and this test has no param
+/// store, no fill and no materialisation (the allocator bound above would end it if it grew). NF-8 caps a
+/// dimension at 2^24, so every head's table takes two chunks; NF-12 caps a block at 512 nodes. The hash
+/// itself is checked at this scale by `lower::generic::tests` with the function alone.
 #[test]
 fn a_config_at_the_real_shape_lowers_with_chunked_tables_inside_the_caps() {
     let layer_types: Vec<&str> = (0..40).map(|i| if (i + 1) % 4 == 0 { "qwen_sparse_attention" } else { "linear_attention" }).collect();
@@ -701,7 +793,7 @@ fn a_config_at_the_real_shape_lowers_with_chunked_tables_inside_the_caps() {
         "attention_bias": false, "linear_conv_kernel_dim": 4, "linear_key_head_dim": 128, "linear_value_head_dim": 128,
         "linear_num_key_heads": 16, "linear_num_value_heads": 32, "moe_intermediate_size": 512, "shared_expert_intermediate_size": 512,
         "num_experts_per_tok": 10, "num_experts": 512, "norm_topk_prob": true, "layer_types": layer_types,
-        "hc_count": 4, "hc_lowrank": 320, "ple_layer_ids": [4, 8, 12, 16, 20, 24, 28, 32, 36], "ple_embed_dim": 2048,
+        "hc_count": 4, "hc_lowrank": 320, "ple_layer_ids": [2, 6, 10, 14, 18, 22, 26, 30, 34], "ple_embed_dim": 2048,
         "ple_conv_kernel_size": 4, "ngram_size": 3, "heads_per_ngram": 8, "ngram_vocab_size_base": 20_000_000,
         "make_ngram_vocab_size_divisible_by": 128, "seed": 1234, "split_ngram_parts": 512,
         "indexer_n_heads": 16, "indexer_kv_heads": 1, "indexer_head_dim": 128, "indexer_budget": 2048, "indexer_compress_ratio": 16,
@@ -715,6 +807,8 @@ fn a_config_at_the_real_shape_lowers_with_chunked_tables_inside_the_caps() {
         assert!(t.shape.iter().all(|d| *d <= 1 << 24), "{}: {:?}", t.name, t.shape);
         assert_eq!(t.shape[0], 16, "one table per hash head");
     }
+    let (largest, bytes, total) = declared(p);
+    eprintln!("real shape DECLARES (never allocates) a param of {largest} elements ({bytes} bytes) and {total} elements in all");
     let most = p.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
     let counts: Vec<String> = p.blocks.iter().map(|b| format!("{}: {}", b.name, b.nodes.len())).collect();
     eprintln!("real shape: {} blocks, largest {most} nodes; PLE table chunks {:?}; [{}]", p.blocks.len(), tables.iter().map(|t| t.shape.clone()).collect::<Vec<_>>(), counts.join(", "));
@@ -729,15 +823,19 @@ fn a_config_at_the_real_shape_lowers_with_chunked_tables_inside_the_caps() {
     }
 }
 
-/// A hostile or mistaken config key is read or refused — never a panic, never a hang. Every key of two of
-/// the fixtures' configs is deleted and rewritten to a null, zero, one, a negative, a huge number, a boolean,
-/// a string and an empty list; each result must come back (lowered or refused by name) in seconds.
+/// A mistaken config key is read or refused — never a panic, never a hang. Every key of two of the fixtures'
+/// configs is deleted and rewritten to a null, small numbers (0, 1, 2, 3, 7, 65 and −1), a float, a boolean, a
+/// string and an empty list. The numbers are SMALL on purpose: one key changed to at most 65 can widen a tensor
+/// of a 32-wide fixture by a factor of about 30, so every mutant stays tiny by arithmetic — and each one that
+/// lowers is sized by arithmetic over what it declares, and the test never materialises a program (a deleted key
+/// falls back to the class default, which can be the published size: such a program is counted, never built).
+/// (A hostile huge number is the next test's, over the keys that size a feature.)
 #[test]
 fn a_mutated_config_is_read_or_refused_never_a_panic_or_a_hang() {
     use serde_json::json;
     use std::time::Instant;
-    let variants = [Value::Null, json!(0), json!(1), json!(-1), json!(1_000_000_000_000u64), json!(true), json!("x"), json!([])];
-    let (mut checked, mut lowered) = (0usize, 0usize);
+    let variants = [Value::Null, json!(0), json!(1), json!(2), json!(3), json!(7), json!(65), json!(-1), json!(0.5), json!(true), json!("x"), json!([])];
+    let (mut checked, mut lowered, mut declared_large) = (0usize, 0usize, 0usize);
     for name in ["qwen4_exp", "qwen4_qsa_r3"] {
         let cfg = json(&fixture(name).join("config.json"));
         let keys: Vec<String> = cfg.as_object().expect("an object").keys().cloned().collect();
@@ -758,12 +856,60 @@ fn a_mutated_config_is_read_or_refused_never_a_panic_or_a_hang() {
                 let r = std::panic::catch_unwind(|| fidelity::prepare(&text, &LowerOpts::default()));
                 let r = r.unwrap_or_else(|_| panic!("{name}: `{key}` = {v:?}: a panic"));
                 assert!(t.elapsed().as_secs() < 30, "{name}: `{key}` = {v:?}: took {:?}", t.elapsed());
-                if r.is_ok() {
-                    lowered += 1;
+                // A deleted key falls back to the class's default, which can be the published size (a table of
+                // 20 M rows a head): the program DECLARES it, and this test never materialises a program — it
+                // only lowers — so such a mutant is counted, not sized further.
+                if let Ok(prep) = &r {
+                    let (_, bytes, total) = declared(&prep.lowered.program);
+                    if bytes <= 64 << 20 && total <= 20_000_000 {
+                        lowered += 1;
+                    } else {
+                        declared_large += 1;
+                        if std::env::var_os("PALW_TRACE_MUTANTS").is_some() {
+                            eprintln!("  declares a param of {bytes} bytes / {total} elements: lowered only, never materialised");
+                        }
+                    }
                 }
                 checked += 1;
             }
         }
     }
-    eprintln!("{checked} mutated configs: {lowered} lowered, the rest refused by name; no panic, none over 30 s");
+    eprintln!(
+        "{checked} mutated configs: {lowered} lowered tiny, {declared_large} lowered to a program that DECLARES published-size tables (a deleted key's class default; never materialised), the rest refused by name; no panic, none over 30 s"
+    );
+    // the only mutants that reach a published size are the deleted keys the class defaults a size for
+    assert!(declared_large <= 40, "{declared_large} mutants declare published-size params");
+}
+
+/// A hostile huge number in a key that sizes a feature is refused by arithmetic before anything is sized on
+/// it: the streams, the hash heads, the table, the convolution, the indexer. Run under this binary's allocator
+/// bound, so a guard that regressed aborts the run at 512 MiB instead of reaching for the machine's memory.
+#[test]
+fn a_hostile_number_in_a_feature_key_is_refused_before_anything_is_sized_on_it() {
+    use serde_json::json;
+    use std::time::Instant;
+    let keys = [
+        "hc_count", "hc_lowrank", "heads_per_ngram", "ngram_size", "ngram_vocab_size_base", "ple_embed_dim", "ple_conv_kernel_size",
+        "split_ngram_parts", "indexer_n_heads", "indexer_kv_heads", "indexer_head_dim", "indexer_budget", "indexer_compress_ratio",
+        "max_position_embeddings", "head_dim",
+    ];
+    let huge = [json!(1_000_000_000_000u64), json!(4_294_967_296u64), json!(u64::MAX)];
+    let cfg = json(&fixture("qwen4_exp").join("config.json"));
+    let mut refused = 0;
+    for key in keys {
+        for v in &huge {
+            let mut c = cfg.clone();
+            c[key] = v.clone();
+            let t = Instant::now();
+            let r = std::panic::catch_unwind(|| fidelity::prepare(&c.to_string(), &LowerOpts::default()));
+            let r = r.unwrap_or_else(|_| panic!("`{key}` = {v}: a panic"));
+            assert!(t.elapsed().as_secs() < 30, "`{key}` = {v}: took {:?}", t.elapsed());
+            match r {
+                Ok(prep) => assert_tiny(&format!("`{key}` = {v}"), &prep.lowered.program),
+                Err(_) => refused += 1,
+            }
+        }
+    }
+    eprintln!("{refused} of {} hostile feature keys refused by name before sizing", keys.len() * huge.len());
+    assert!(refused >= keys.len(), "most of them are refused ({refused})");
 }

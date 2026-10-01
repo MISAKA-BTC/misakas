@@ -112,7 +112,8 @@ impl NgramTables {
         let mut total = 0i64;
         for h in 0..ngram_heads {
             let global = (p.layer_index * ngram_heads + h) as u64;
-            let size = nth_prime_after(p.vocab_base as u64 - 1, global + 1) as i64;
+            // `vocab_base − 1` as the reference does it, floored at 0 (the primes after −1 and after 0 are the same)
+            let size = nth_prime_after((p.vocab_base as u64).saturating_sub(1), global + 1) as i64;
             head_sizes.push(size);
             head_offsets.push(total);
             total += size;
