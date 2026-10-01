@@ -110,7 +110,7 @@ mod tests {
     fn sample() -> BTreeMap<String, SiteStat> {
         let mut m = BTreeMap::new();
         // Values whose decimal round trip is not exact in a best-effort parser: long mantissas.
-        let awkward = [0.1f64, 1.0 / 3.0, 5e-324, 1.7976931348623157e308, 2.2250738585072014e-308, 123456789.123456789];
+        let awkward = [0.1f64, 1.0 / 3.0, 5e-324, 1.7976931348623157e308, 2.2250738585072014e-308, 123_456_789.123_456_79];
         for (i, a) in awkward.iter().enumerate() {
             m.insert(
                 format!("L{i}.attn.q"),

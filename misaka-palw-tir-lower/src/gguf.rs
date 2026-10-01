@@ -612,7 +612,7 @@ pub(crate) mod legacy {
     /// Unpack `out` rows of `inp` values of a block-quantised type into its stored integers.
     pub(super) fn unpack(ty: Legacy, raw: &[u8], inp: usize, out: usize, name: &str) -> Result<QWeight> {
         let (be, bb) = ty.block().ok_or_else(|| LowerError::not_lowerable(format!("GGUF `{name}`: {} is not read", ty.name())))?;
-        if ty.is_float() || inp % be != 0 || raw.len() != out * (inp / be) * bb {
+        if ty.is_float() || !inp.is_multiple_of(be) || raw.len() != out * (inp / be) * bb {
             return Err(LowerError::weights(format!("GGUF `{name}`: {} bytes for {out} rows of {inp} {}", raw.len(), ty.name())));
         }
         let group = ty.group();
@@ -1609,12 +1609,12 @@ mod tests {
             out.extend(off.to_le_bytes());
             off += (data.len() as u64).div_ceil(32) * 32;
         }
-        while out.len() % 32 != 0 {
+        while !out.len().is_multiple_of(32) {
             out.push(0);
         }
         for (_, _, _, data) in tensors {
             out.extend(data);
-            while out.len() % 32 != 0 {
+            while !out.len().is_multiple_of(32) {
                 out.push(0);
             }
         }

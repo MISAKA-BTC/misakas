@@ -28,7 +28,7 @@ pub fn src_row_space(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTree
     if shape.len() < 2 {
         return Ok(None);
     }
-    if !streamable(src, &shape, r, layer, vars)? {
+    if !streamable(src, r, layer, vars)? {
         return Ok(None);
     }
     let (cols, lead) = shape.split_last().expect("rank ≥ 2");
@@ -37,24 +37,24 @@ pub fn src_row_space(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTree
 
 /// Whether the expression's structure can be evaluated by row ranges (its value has rank ≥ 2 and
 /// `shape`).
-fn streamable(src: &Src, shape: &[usize], r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<bool> {
+fn streamable(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<bool> {
     Ok(match src {
         Src::Tensor(_) => true,
         Src::Take { src: inner, axis, .. } => {
             let ishape = src_shape(inner, r, layer, vars)?;
-            ishape.len() >= 2 && (*axis == 0 || *axis == ishape.len() - 1) && streamable(inner, &ishape, r, layer, vars)?
+            ishape.len() >= 2 && (*axis == 0 || *axis == ishape.len() - 1) && streamable(inner, r, layer, vars)?
         }
         Src::Transpose(_) | Src::Quant { .. } => false,
         Src::Stack { src: inner, var, .. } => {
             let mut v = vars.clone();
             v.insert(*var, 0);
             let ishape = src_shape(inner, r, layer, &v)?;
-            ishape.len() >= 2 && streamable(inner, &ishape, r, layer, &v)?
+            ishape.len() >= 2 && streamable(inner, r, layer, &v)?
         }
-        Src::Map { src: inner, .. } => streamable(inner, shape, r, layer, vars)?,
+        Src::Map { src: inner, .. } => streamable(inner, r, layer, vars)?,
         Src::Reshape { src: inner, shape: out } => {
             let ishape = src_shape(inner, r, layer, vars)?;
-            ishape.len() >= 2 && ishape.last() == out.last() && streamable(inner, &ishape, r, layer, vars)?
+            ishape.len() >= 2 && ishape.last() == out.last() && streamable(inner, r, layer, vars)?
         }
     })
 }
@@ -70,7 +70,7 @@ pub fn eval_src_rows(
     rows: Range<usize>,
 ) -> Result<Tensor> {
     let shape = src_shape(src, r, layer, vars)?;
-    if !streamable(src, &shape, r, layer, vars)? || shape.len() < 2 {
+    if !streamable(src, r, layer, vars)? || shape.len() < 2 {
         return Err(LowerError::eval(format!("{src:?} cannot be evaluated by row ranges")));
     }
     let cols = *shape.last().expect("rank ≥ 2");

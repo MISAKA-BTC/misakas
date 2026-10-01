@@ -242,7 +242,7 @@ impl RangeFetcher for CurlFetcher {
         let out = c.output().map_err(|e| LowerError::Io(format!("curl: {e}")))?;
         let text = String::from_utf8_lossy(&out.stdout).to_string();
         // The status of the last response in the header dump.
-        let status = text.lines().filter(|l| l.starts_with("HTTP/")).next_back().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("");
+        let status = text.lines().rfind(|l| l.starts_with("HTTP/")).and_then(|l| l.split_whitespace().nth(1)).unwrap_or("");
         if status == "404" {
             return Ok(None);
         }

@@ -251,7 +251,7 @@ impl BlocksFormat {
 
     /// Bytes of `rows` rows of `inp` columns.
     pub fn row_bytes(&self, inp: usize) -> R<usize> {
-        if inp % self.elems != 0 {
+        if !inp.is_multiple_of(self.elems) {
             return Err(DslError(format!("rows of {inp} are not whole {}-element {} blocks", self.elems, self.name)));
         }
         Ok(inp / self.elems * self.bytes)
