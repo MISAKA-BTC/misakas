@@ -442,6 +442,18 @@ class Drive:
         with open(f"{WORK}/samples.tsv", "a") as f:
             f.write(f"{now()}\t{self.daa}\t{json.dumps(self.brief())}\n")
 
+    def guard(self, key, fn):
+        """One action under its own failure count: a line's bug must not stop another line's epoch."""
+        if self.s.d["failed"].get(key):
+            return
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            n = self.s.tried(key + ":exc")
+            log(f"{key}: {type(e).__name__}: {e} (try {n})")
+            if n >= GIVE_UP_TRIES:
+                self.s.fail(key, f"{type(e).__name__}: {e}")
+
     def brief(self):
         out = {}
         for name, cid in self.ids.items():
@@ -634,7 +646,8 @@ class Drive:
 
     # ----- lines ------------------------------------------------------------------------------------------------
     def step_lines(self):
-        if self.s.done("lines") or self.daa < IMPROVE_AT + 1 or not self.ids.get("head"):
+        # An ordinary spec-15 object (ModelLineFounded): any time after the head's class has a row.
+        if self.s.done("lines") or self.daa < TIR_AT + 3 or not self.ids.get("head"):
             return
         if lifecycle_of(self.reg, self.ids["head"])[0] == "absent":
             return
@@ -659,7 +672,8 @@ class Drive:
         self.s.mark("lines", **lines)
 
     def step_policies(self):
-        if self.s.done("policies") or not self.s.done("lines"):
+        # The opt-in is an improvement object: below the fence the chain drops it by name, so it waits for the fence.
+        if self.s.done("policies") or not self.s.done("lines") or self.daa < IMPROVE_AT + 2:
             return
         lines = self.line_ids()
         if not all(l in lines for l in ("W1", "W2", "L")):
@@ -721,7 +735,7 @@ class Drive:
                 continue
             for e in row.get("epochs", []):
                 if str(e["epoch"]) in PLAN["lines"][name]["epochs"]:
-                    self.act_epoch(name, lid, e)
+                    self.guard(f"epoch:{name}:e{e['epoch']}", lambda name=name, lid=lid, e=e: self.act_epoch(name, lid, e))
 
     def act_epoch(self, name, lid, e):
         epoch = e["epoch"]
@@ -803,6 +817,10 @@ class Drive:
     def step_rollbacks(self):
         lines = self.line_ids()
         # by the owner: W2's promotion of epoch 1, rolled back as soon as it is decided
+        self.guard("rollback-owner", lambda: self.rollback_owner(lines))
+        self.guard("rollback-proof", lambda: self.rollback_proof(lines))
+
+    def rollback_owner(self, lines):
         if not self.s.done("rollback-owner") and "W2" in lines:
             row = line_status(self.status, lines["W2"])
             e1 = epoch_row(row, 1)
@@ -817,6 +835,8 @@ class Drive:
                     raise RuntimeError(f"cannot submit the rollback: {text.strip()[-300:]}")
                 self.s.mark("rollback-owner", daa=self.daa)
                 log(f"D-M4: W2's promotion rolled back by its owner at DAA {self.daa}")
+
+    def rollback_proof(self, lines):
         # by proof: W1's second epoch showed the predecessor H beating the promoted W
         if not self.s.done("rollback-proof") and "W1" in lines:
             row = line_status(self.status, lines["W1"])
@@ -841,8 +861,8 @@ class Drive:
             row = line_status(self.status, lines["W1"])
             e1 = epoch_row(row, 1)
             if e1:
-                self.attack_copy(lines["W1"], e1)
-                self.attack_late(lines["W1"], e1)
+                self.guard("attack:copy", lambda: self.attack_copy(lines["W1"], e1))
+                self.guard("attack:late", lambda: self.attack_late(lines["W1"], e1))
         # The attacks that could cost a line its epoch run on L, whose expected outcome (NoChange) they cannot spoil: the early
         # keys in its first epoch, the hold-out flood in its second (the flood costs the epoch its items, so it never runs on a
         # line whose promotion another drill needs).
@@ -850,9 +870,9 @@ class Drive:
             row = line_status(self.status, lines["L"])
             e1, e2 = epoch_row(row, 1), epoch_row(row, 2)
             if e1:
-                self.attack_early_keys(lines["L"], e1)
+                self.guard("attack:early-keys", lambda: self.attack_early_keys(lines["L"], e1))
             if e2:
-                self.attack_holdout_spam(lines["L"], e2)
+                self.guard("attack:holdout-spam", lambda: self.attack_holdout_spam(lines["L"], e2))
 
     def attack_copy(self, lid, e1):
         """A copy of the entered candidate by another bond, in the same window: refused (the class is entered)."""

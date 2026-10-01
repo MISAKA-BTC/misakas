@@ -35,6 +35,10 @@ import os
 import random
 import sys
 
+# The Mac is shared with other lanes: torch gets two threads, never every core.
+for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_var, "2")
+
 FREE_LO = 3  # ids 0 (pad), 1 (BOS) and 2 (EOS) are never part of a pool's prompts or keys
 
 
@@ -97,6 +101,7 @@ def cmd_train(a):
     import torch
     from safetensors.torch import save_file
 
+    torch.set_num_threads(2)
     torch.manual_seed(a.seed)
     model = load_model(a.fixture)
     spec = json.load(open(a.items))
@@ -188,6 +193,8 @@ def cmd_merge(a):
     import shutil
 
     import torch
+
+    torch.set_num_threads(2)
     from safetensors import safe_open
     from safetensors.torch import save_file
 

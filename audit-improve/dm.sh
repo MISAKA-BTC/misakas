@@ -294,7 +294,7 @@ model() {
     [ -x "$VENV_PY" ] && "$VENV_PY" -c "import torch, transformers" 2>/dev/null || die "no torch + transformers in $VENV_PY (VENV_PY)"
     [ -s "$FIXTURE/model.safetensors" ] || die "no HF fixture at $FIXTURE"
     if [ -s "$MODEL_DIR/ids/win.class" ] && [ "$FORCE" != 1 ]; then die "$MODEL_DIR already holds a model (--force rebuilds it; a rebuilt model has other class ids)"; fi
-    export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2   # the Mac is shared: two threads
     local W=$MODEL_DIR/work PC=$TOOLS_BIN/palw-class PF=$TOOLS_BIN/palw-tir-fidelity MT="$VENV_PY $A/modeltool.py"
     rm -rf "$MODEL_DIR"; mkdir -p "$MODEL_DIR/ids" "$MODEL_DIR/drop" "$MODEL_DIR/adapters" "$W"
     say "the head: $FIXTURE lowered (D-F's recipe: default calibration, unwindowed), declared at $HEAD_CONTEXT positions"
