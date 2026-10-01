@@ -225,6 +225,25 @@ equal at every position before anything was timed):
   3. fewer passes, and subgroup reductions.
 
   None of these changes a byte; each is held by the same gate (§7).
+- **The bigger lever: batch positions into each dispatch.** A seat's replay is one forward, a layer at a
+  time over all positions (ADR-0117 "a draw is one forward"; `forward_prefill_planned` in
+  `misaka-palw-base0` does exactly this for the legacy engines). If the device executor evaluates each
+  occurrence for ALL positions of a job before the next, dispatches per claim scale with
+  **nodes × layers** instead of **nodes × layers × positions**. Today that is 948 dispatches per position
+  at four 1.5B layers; for a 512-position job it would be the same 948 for the whole job, 512 times
+  fewer. Every projection also becomes the GEMM this section measured at 13–43× the CPU kernel. The
+  per-position semantics are unchanged: a layer's carry-in at position `p` is its predecessor's
+  carry-out at `p`, and its `Hist` rows are appended in position order. What it needs:
+  1. a **batched causal attention** kernel — the scores and values of position `p` read history rows
+     `0..=p` only, through the two-pass softmax (max, then exact sums), every lossy site per position;
+  2. `Fixed`-state recurrences (the GDN, Mamba and RWKV scans) stepped in position order inside the
+     layer pass. They are sequential in `p` but cheap next to the projections, and a chunked-parallel
+     form is a fused kernel under F-2.
+
+  This is also exactly the shape of a **layer shard's verification from committed boundary rows**
+  (RFC-0006): there every position's carry-in and every earlier history row is a committed leaf, so
+  even the recurrence's carry between positions is opened rather than recomputed at the segment's
+  first position.
 - **Before i128 support** every wide-norm node fell back: 118 synchronisations a position, and the
   step was 4× slower than the CPU. With i128 on the device there are none.
 
@@ -338,8 +357,9 @@ and `device_ledger_v1`, "a device's memory when a GPU backend arrives". How a ba
    real programs: 60 node evaluations in 400 random programs, none in the corpus programs measured.
 3. **A param larger than one binding (4 GiB) or with more than `2^32` elements** is held on the host and
    its consumers fall back. Splitting a tensor across bindings is mechanical, not done.
-4. **Decode speed** needs §6's fused kernels. The batch-of-positions speed needs a batched executor —
-   a block evaluated for many positions at once from committed carry-ins and committed history rows,
-   which is exactly a layer shard's verification (RFC-0006 §5).
+4. **Step speed** needs §6's position batching first (dispatches per claim from nodes × layers ×
+   positions down to nodes × layers), then the fused chains. Position batching needs the batched causal
+   attention kernel; the same batched block evaluation, fed committed carry-ins and committed history
+   rows, is a layer shard's verification (RFC-0006).
 5. **Not measured:** Vulkan on NVIDIA. The code has no Metal-specific path. The gate must run there
    before anyone relies on it.
