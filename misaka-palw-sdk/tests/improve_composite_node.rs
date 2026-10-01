@@ -255,6 +255,95 @@ fn serve(adapter: &str) {
         "{adapter}: {acquitted} closes, {parent_side} parent / {adapter_side} adapter"
     );
 
+    // The evaluation executor (RFC-0004 A10) on the held classes: the candidate served from its two
+    // files runs an evaluation job exactly as its own container does — the same stage roots, step
+    // root, ids and score — and a seat holding either class replays the other's claim of the same
+    // work; the parent runs the same job as a subject of its own.
+    {
+        use kaspa_consensus_core::palw_improve_eval_v1::{PalwEvalModeV1, PalwEvalStageParamsV1};
+        use kaspa_consensus_core::palw_improve_state_v1::{PalwEvalSubjectV1, PalwScoringKindV1};
+        use misaka_palw_sdk::improve::PalwImproveEvalTaskV1;
+        use misaka_palw_sdk::improve_eval::{PalwEvalHeldV1, PalwEvalSeatJudgmentV1, palw_eval_run_v1, palw_eval_seat_judge_v1};
+        let task_of = |held: &PalwEvalHeldV1, kind, mode: PalwEvalModeV1, reference: Vec<u32>, params| {
+            let subject = PalwEvalSubjectV1::Candidate(held.class_id);
+            let job = kaspa_consensus_core::palw_improve_eval_v1::PalwEvalJobV1 {
+                line_id: Hash64::from_bytes([0x11; 64]),
+                epoch: 3,
+                item: 7,
+                subject,
+                kind,
+                mode: mode.clone(),
+            };
+            PalwImproveEvalTaskV1 {
+                line_id: job.line_id,
+                epoch: 3,
+                item: 7,
+                subject,
+                subject_class: held.class_id,
+                kind,
+                mode,
+                job_id: job.id(),
+                prompt_ids: vec![1, 5, 9],
+                reference_ids: reference,
+                params,
+            }
+        };
+        let (held_comp, held_full, held_parent) =
+            (PalwEvalHeldV1::from_entry(&entry).unwrap(), PalwEvalHeldV1::from_entry(&full).unwrap(), PalwEvalHeldV1::from_entry(&parent).unwrap());
+        let seed = kaspa_consensus_core::palw_improve_state_v1::palw_improve_eval_seed_v1(&Hash64::from_bytes([0x33; 64]), 7);
+        let generate = |h: &PalwEvalHeldV1| {
+            task_of(
+                h,
+                PalwScoringKindV1::ExactMatch,
+                PalwEvalModeV1::Generate { seed, max_new: 3, stop_ids: vec![] },
+                vec![],
+                PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 },
+            )
+        };
+        let (wc, wf) = (
+            palw_eval_run_v1(&held_comp, &generate(&held_comp)).expect("the composite generates"),
+            palw_eval_run_v1(&held_full, &generate(&held_full)).expect("the full candidate generates"),
+        );
+        assert_eq!(wc.execution.claim, wf.execution.claim, "{adapter}: the composite computes the candidate: one step tree, one answer");
+        assert_eq!(wc.generated().len(), 3);
+        assert_ne!(wc.binding.committed_execution_root, wf.binding.committed_execution_root, "the class is in the execution root");
+        let forced = |h: &PalwEvalHeldV1| {
+            task_of(
+                h,
+                PalwScoringKindV1::RefLogLik,
+                PalwEvalModeV1::TeacherForced { reference_commitment: Hash64::from_bytes([0x44; 64]) },
+                wc.generated().to_vec(),
+                PalwEvalStageParamsV1::RefLogLik { logit_scale_q24: 1 << 12 },
+            )
+        };
+        let (fc, ff) = (
+            palw_eval_run_v1(&held_comp, &forced(&held_comp)).expect("the composite scores"),
+            palw_eval_run_v1(&held_full, &forced(&held_full)).expect("the full candidate scores"),
+        );
+        assert_eq!(fc.tail.score, ff.tail.score, "{adapter}: the same log-likelihood from the two files as from one");
+        let fp = palw_eval_run_v1(&held_parent, &forced(&held_parent)).expect("the parent scores the same reference");
+        assert_ne!(fc.tail.score, fp.tail.score, "{adapter}: the adapter moves the likelihood: the candidate is not its parent");
+        // Claims check, and a seat holding the class replays them to Valid.
+        let facts = misaka_palw_sdk::improve_eval::PalwEvalClaimFactsV1 {
+            network_domain: Hash64::from_bytes([0x10; 64]),
+            executor_bond: kaspa_consensus_core::config::premine::premine_outpoint(2),
+            executor_pubkey: vec![7; 16],
+            operator_id: Hash64::from_bytes([0x12; 64]),
+            anchor_block: Hash64::from_bytes([0x13; 64]),
+            anchor_daa: 99,
+            prompt_ids_form: form,
+            trace_retention_daa: 5_000,
+        };
+        for (work, held) in [(&wc, &held_comp), (&fc, &held_comp), (&fp, &held_parent)] {
+            let claim = misaka_palw_sdk::improve_eval::palw_eval_claim_v1(work, held, &facts).expect("a claim the chain's check admits");
+            assert_eq!(
+                palw_eval_seat_judge_v1(held, &claim.commitment, &claim.prompt, &claim.tail),
+                PalwEvalSeatJudgmentV1::Valid,
+                "{adapter}: a seat holding the class replays the claim"
+            );
+        }
+    }
+
     // Refusals.
     let stranger = tir_composite_derive_v1(&pc, &cc, Some(Hash64::from_bytes([0x3c; 64]))).unwrap();
     let orphan = dir.0.join("orphan.palwtirs");

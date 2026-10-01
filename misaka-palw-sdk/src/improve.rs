@@ -223,6 +223,54 @@ impl PalwImproveChainV1 for PalwImproveViewsChainV1<'_> {
     }
 }
 
+/// **The node's read doors as one chain view** (`palw_improvement_open_epochs_v1` and the node lane's
+/// `palw_improvement_eval_views_v1`): the open epochs' headers, candidates and items, and — from the
+/// evaluation view — each item's disclosed prompt and reference and the jobs that already hold a live
+/// claim. A job is *claimed* while a claim holds it that is not voided (a voided claim frees it, and the
+/// fold's own rule: the first valid claim per job in the accepting chain's order is the one).
+pub struct PalwImproveNodeChainV1<'a> {
+    pub views: &'a [PalwImprovementEpochViewV1],
+    pub eval: &'a [kaspa_consensus_core::palw_improve_node_v1::PalwImprovementEvalViewV1],
+}
+
+impl PalwImproveNodeChainV1<'_> {
+    fn eval_view(&self, line_id: &Hash64, epoch: u64) -> Option<&kaspa_consensus_core::palw_improve_node_v1::PalwImprovementEvalViewV1> {
+        self.eval.iter().find(|v| v.line_id == *line_id && v.epoch == epoch)
+    }
+}
+
+impl PalwImproveChainV1 for PalwImproveNodeChainV1<'_> {
+    fn governed_lines(&self) -> Vec<Hash64> {
+        PalwImproveViewsChainV1 { views: self.views, case: &|_, _, _| None, claimed: &|_| false }.governed_lines()
+    }
+
+    fn line(&self, line_id: &Hash64) -> Option<PalwImproveLineViewV1> {
+        PalwImproveViewsChainV1 { views: self.views, case: &|_, _, _| None, claimed: &|_| false }.line(line_id)
+    }
+
+    fn epoch(&self, line_id: &Hash64, epoch: u64) -> Option<PalwImproveEpochViewV1> {
+        PalwImproveViewsChainV1 { views: self.views, case: &|_, _, _| None, claimed: &|_| false }.epoch(line_id, epoch)
+    }
+
+    fn items(&self, line_id: &Hash64, epoch: u64) -> Vec<PalwEvalItemV1> {
+        PalwImproveViewsChainV1 { views: self.views, case: &|_, _, _| None, claimed: &|_| false }.items(line_id, epoch)
+    }
+
+    fn case(&self, line_id: &Hash64, epoch: u64, item: &PalwEvalItemV1) -> Option<PalwEvalCaseViewV1> {
+        let view = self.eval_view(line_id, epoch)?.items.iter().find(|i| i.item == item.item)?;
+        Some(PalwEvalCaseViewV1 {
+            prompt_ids: view.prompt_ids.clone()?,
+            reference: view.reference,
+            reference_ids: view.reference_ids.clone(),
+            domain: view.domain,
+        })
+    }
+
+    fn job_claimed(&self, job_id: &Hash64) -> bool {
+        self.eval.iter().flat_map(|v| &v.jobs).any(|j| j.job.id() == *job_id && j.claim.as_ref().is_some_and(|c| !c.voided))
+    }
+}
+
 /// **A chain view in memory** — for tools and tests: lines, epochs, items and cases by id, the
 /// claimed jobs.
 #[derive(Clone, Debug, Default)]

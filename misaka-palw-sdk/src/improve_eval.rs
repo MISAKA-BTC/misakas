@@ -448,6 +448,51 @@ pub fn palw_eval_seat_judge_v1(
     J::Valid
 }
 
+/// **The roots an evaluation claim committed, as the chain's state holds them** (the claim row): what a
+/// seat that derives the task from the state — the job, the item's prompt and reference, the policy's
+/// parameters — holds its replay to, with no payload at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwEvalCommittedRootsV1 {
+    pub trace_root: Hash64,
+    pub output_root: Hash64,
+    pub execution_root: Hash64,
+    pub work_leaves: u64,
+}
+
+/// **Judge an evaluation claim from the chain's state alone**: the task the state derives for the
+/// claim's job, replayed on this seat's own weights, its roots held to the claim row's. The execution
+/// root binds the ids, the score, the prompt, the parameters and the layout, so a replay that reproduces
+/// all four roots reproduces the claim; a replay that does not is the court's question, never a seat's
+/// accusation.
+pub fn palw_eval_seat_judge_roots_v1(
+    held: &PalwEvalHeldV1,
+    task: &PalwImproveEvalTaskV1,
+    claim: &PalwEvalCommittedRootsV1,
+) -> PalwEvalSeatJudgmentV1 {
+    use PalwEvalSeatJudgmentV1 as J;
+    if task.subject_class != held.class_id {
+        return J::Unjudgeable(format!("this seat holds class {}, the claim is of {}", held.class_id, task.subject_class));
+    }
+    let replay = match palw_eval_run_v1(held, task) {
+        Ok(replay) => replay,
+        Err(why) => return J::Unjudgeable(format!("the replay cannot run: {why}")),
+    };
+    let roots = replay.roots();
+    if roots.work_leaves != claim.work_leaves {
+        return J::Differs(format!("the replay's work is {} leaves, the claim's {}", roots.work_leaves, claim.work_leaves));
+    }
+    if roots.output_root != claim.output_root {
+        return J::Differs("the replay's ids are not the claim's (output root)".into());
+    }
+    if roots.trace_root != claim.trace_root {
+        return J::Differs("the replay's step tree is not the claim's (trace root)".into());
+    }
+    if roots.execution_root != claim.execution_root {
+        return J::Differs(format!("the replay's execution root {} is not the claim's {}", roots.execution_root, claim.execution_root));
+    }
+    J::Valid
+}
+
 // ---------------------------------------------------------------------------------------------
 // The capture and the divergence
 // ---------------------------------------------------------------------------------------------
@@ -721,6 +766,18 @@ mod tests {
         assert_eq!((back.commitment, tail), (claim.commitment.clone(), claim.tail.clone()));
         // The seat: the same weights replay to the claim's roots.
         assert_eq!(palw_eval_seat_judge_v1(&held, &claim.commitment, &claim.prompt, &claim.tail), PalwEvalSeatJudgmentV1::Valid);
+        // The same judgment from the chain's state alone: the claim row's roots, no payload.
+        let committed = PalwEvalCommittedRootsV1 {
+            trace_root: claim.commitment.trace_root,
+            output_root: claim.commitment.output_root,
+            execution_root: claim.commitment.execution_root,
+            work_leaves: claim.commitment.work_leaves,
+        };
+        assert_eq!(palw_eval_seat_judge_roots_v1(&held, &t, &committed), PalwEvalSeatJudgmentV1::Valid);
+        let lying = PalwEvalCommittedRootsV1 { output_root: Hash64::from_bytes([9; 64]), ..committed };
+        assert!(matches!(palw_eval_seat_judge_roots_v1(&held, &t, &lying), PalwEvalSeatJudgmentV1::Differs(_)));
+        let lying = PalwEvalCommittedRootsV1 { execution_root: Hash64::from_bytes([9; 64]), ..committed };
+        assert!(matches!(palw_eval_seat_judge_roots_v1(&held, &t, &lying), PalwEvalSeatJudgmentV1::Differs(_)));
         // Other weights under the same class id: the replay differs (its roots are not the claim's).
         let other = PalwEvalHeldV1::from_map(
             held.class_id,

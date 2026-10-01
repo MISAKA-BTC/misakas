@@ -223,6 +223,14 @@ pub fn tir_composite_section_write_v1(
     .map_err(|e| format!("{}: {e}", output.display()))
 }
 
+/// **The chain's reference a section FILE records** — `None` when the file is not an adapter section at
+/// all (another artifact, another file in a drop directory), `Some(Err)` when it is one whose record is
+/// unreadable. Reads the section's header only; what a node's prefetch scans a directory with.
+pub fn tir_composite_ref_of_path_v1(path: &Path) -> Option<Result<PalwTirCompositeRefV1, String>> {
+    let header = misaka_palw_tir_artifact::peek_section_header_v1(path).ok()?;
+    Some(tir_composite_ref_of_meta_v1(&header.meta))
+}
+
 /// **The chain's reference a section's provenance records** (`meta.composite`, parent class
 /// included) — what a node opens the section against and holds to the candidate's registration.
 pub fn tir_composite_ref_of_meta_v1(meta: &str) -> Result<PalwTirCompositeRefV1, String> {
