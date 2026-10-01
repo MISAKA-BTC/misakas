@@ -1773,6 +1773,8 @@ def verdict_dm3(sd, lines):
         live = [c for c in others if str(c["phase"]).lower() in LIVE_PHASES]
         agg = [c for c in others if phase_is(c["phase"], "voided") and "aggregate_forfeit" in (c["void"] or "")]
         stray = [c for c in others if phase_is(c["phase"], "voided") and not any(k in (c["void"] or "") for k in ("aggregate_forfeit", "court_fraud"))]
+        checks.append((int(rec.get("collateral", 0)) == 0, f"AG-2, {node}: the whole posted collateral is taken (collateral 0)" if int(rec.get("collateral", 0)) == 0
+                       else f"AG-2, {node}: the bond still shows {rec.get('collateral')} sompi of collateral after the conviction"))
         checks.append((not live, f"AG-2, {node}: no live claim is left on the convicted bond" if not live
                        else f"AG-2, {node}: {len(live)} claim(s) of the convicted bond are still live ({sorted({c['phase'] for c in live})}): the aggregate forfeiture did not void them"))
         checks.append((not stray, f"AG-2, {node}: {len(agg)} other live claim(s) voided as aggregate_forfeit, none voided for another reason" if not stray
@@ -1969,6 +1971,7 @@ def selftest():
         for node, cid in (("new7", c1), ("new8", c3)):
             rec = pr["claims"][node]
             rec["slashed"] = rec["collateral"]
+            rec["collateral"] = 0
             for c in rec["rows"]:
                 if c["id"] == cid:
                     c["phase"], c["void"], c["pdaa"] = "voided", "court_fraud", 400
@@ -2129,7 +2132,7 @@ def selftest_drive():
                      "phaseDaa": 700 if convicted else 0}]
             if first:
                 rows.append({"claimId": c_honest, "phase": "final", "voidReason": "", "acceptedDaa": 200, "phaseDaa": 450})
-            return {"bondSlashed": COLL if convicted else 0, "bondCollateral": COLL, "claims": rows}
+            return {"bondSlashed": COLL if convicted else 0, "bondCollateral": 0 if convicted else COLL, "claims": rows}
         if method == "getPalwModelRegistry":
             return {"classes": [{"classId": v, "state": "Probation { probes_passed: 0 }", "readySeats": 7} for v in ids.values()]}
         if method == "getPalwClaims":
