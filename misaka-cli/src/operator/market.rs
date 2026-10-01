@@ -490,6 +490,21 @@ pub(crate) fn seed_plan(open: bool, pledged: u64, floor: u64, instalments: bool,
     }
 }
 
+/// **ADR-0162: a seed past the virtual fence.** The market is open from the line's creation, so no
+/// amount is owed: with no `--seed` there is nothing to pay. A seed is optional depth — any amount,
+/// it never "opens" anything — and it is refused once the market has traded (Decision 4: a seed paid
+/// while positions are out is a seed their holders could sell back out of the curve).
+pub(crate) fn seed_plan_virtual(sold_units: u64, amount: Option<u64>) -> SeedPlan {
+    match amount {
+        None => SeedPlan::AlreadyOpen,
+        Some(0) => SeedPlan::Refused("a seed of nothing pays nothing".into()),
+        Some(_) if sold_units > 0 => SeedPlan::Refused(
+            "the market has traded, so it takes no seed: a seed is taken only before the first trade (ADR-0162)".into(),
+        ),
+        Some(amount) => SeedPlan::Pay { amount, opens: false },
+    }
+}
+
 /// `misaka model market open <model> [--line <id>] [--seed <MSK>]`: make a model's positions
 /// buyable — the class's founding line (which every class has, with no object), or a line named,
 /// seeded up to the least seed in one payment or in instalments, each checked before it is signed.
@@ -539,14 +554,22 @@ pub(crate) async fn market_open(
         let instalments = p.palw_model_benefits_active_at(tip);
         let floor_now = p.palw_model_seed_min_sompi_at(tip);
         let floor_soon = p.palw_model_seed_min_sompi_at(tip + 30);
+        // ADR-0162: past the virtual fence every line's market is open from the line's creation.
+        let virtual_regime = p.palw_model_virtual_v1_active_at(tip);
         flow.row(
             Severity::Ok,
             "rules",
-            format!(
-                "market armed · least seed {} · {}",
-                catalog::msk(floor_now as u128),
-                if instalments { "paid in instalments allowed" } else { "one payment, no instalments" }
-            ),
+            if virtual_regime {
+                "market armed · every line open from its creation on a 10,000,000 MSK virtual reserve · trading from the \
+                 class's approval · a seed is optional, before the first trade"
+                    .to_string()
+            } else {
+                format!(
+                    "market armed · least seed {} · {}",
+                    catalog::msk(floor_now as u128),
+                    if instalments { "paid in instalments allowed" } else { "one payment, no instalments" }
+                )
+            },
         );
         // The model, its class, its line.
         let table =
@@ -603,13 +626,29 @@ pub(crate) async fn market_open(
             .map(crate::palw_model::parse_msk_amount)
             .transpose()
             .map_err(|e| blocked("E-ARG-SEED", exit::CONFIG, e.msg))?;
-        let plan = seed_plan(open, m.seed_pledged_sompi, floor_now, instalments, amount);
+        let plan = if virtual_regime {
+            seed_plan_virtual(m.sold_units, amount)
+        } else {
+            seed_plan(open, m.seed_pledged_sompi, floor_now, instalments, amount)
+        };
         let (amount, opens) = match plan {
             SeedPlan::AlreadyOpen => {
                 flow.row(
                     Severity::Ok,
                     "market",
-                    format!("open · {} per position · reserve {}", msk(m.price_sompi_per_position), msk(m.msk_reserve)),
+                    if virtual_regime {
+                        let market = market_from_response(&m);
+                        format!(
+                            "open since DAA {} · {} per position · floor {} · real reserve {} · {}",
+                            status::group(m.opened_daa),
+                            msk(m.price_sompi_per_position),
+                            msk(market.price_floor_sompi_per_position_v2()),
+                            msk(m.msk_reserve),
+                            if m.closed_to_buys { "trading starts at the class's approval" } else { "trading" }
+                        )
+                    } else {
+                        format!("open · {} per position · reserve {}", msk(m.price_sompi_per_position), msk(m.msk_reserve))
+                    },
                 );
                 doc.insert("open".into(), true.into());
                 return Ok(());
@@ -623,8 +662,9 @@ pub(crate) async fn market_open(
         };
         // **The 2026-09-23 Position route matrix, P-B3: the registry's gate, before anything is
         // paid.** The fold takes no seed on a class the registry has not admitted, and a refused seed
-        // still lands its carrier.
-        if let Some(why) = crate::palw_model::market_refusal(&m) {
+        // still lands its carrier. Past ADR-0162's fence the gate is the buy's, and a seed waits for
+        // nothing — at its opener's risk.
+        if let Some(why) = crate::palw_model::market_refusal(&m).filter(|_| !virtual_regime) {
             return Err(Halt::Blocked(
                 Finding::error("E-MARKET-NOT-ELIGIBLE", exit::MODEL, "The registry has not admitted this model")
                     .current(why)
@@ -635,13 +675,15 @@ pub(crate) async fn market_open(
         flow.row(
             Severity::Info,
             "market",
-            if m.seed_pledged_sompi > 0 {
+            if virtual_regime {
+                format!("open · {} locked so far · deepening it before its first trade", msk(m.seed_sompi))
+            } else if m.seed_pledged_sompi > 0 {
                 format!("not open · {} pledged of {}", msk(m.seed_pledged_sompi), catalog::msk(floor_now as u128))
             } else {
                 format!("not open · nothing pledged; the least seed is {}", catalog::msk(floor_now as u128))
             },
         );
-        if floor_soon > floor_now && !instalments {
+        if floor_soon > floor_now && !instalments && !virtual_regime {
             return Err(Halt::Blocked(
                 Finding::error("E-MARKET-FLOOR-MOVING", exit::FUNDS, "The least seed rises within the next blocks")
                     .current(format!(
@@ -683,22 +725,42 @@ pub(crate) async fn market_open(
             ));
         }
         flow.ui.say("");
-        flow.ui.say(&paint::bold(&format!(
-            "  Seed this line{}:",
-            if opens { " — this payment opens its market" } else { " — an instalment" }
-        )));
-        flow.ui.sub(&format!("pay       {} into line {}…", catalog::msk(amount as u128), &line_id[..16]));
-        flow.ui.sub(&format!(
-            "then      {} of {}{}",
-            catalog::msk(m.seed_pledged_sompi.saturating_add(amount) as u128),
-            catalog::msk(floor_now as u128),
-            if opens {
-                " — 500,000 positions enter the curve"
-            } else {
-                " — locked in the sink; it opens when the total reaches the floor"
-            }
-        ));
-        flow.ui.sub(&paint::dim("LOCKED FOR GOOD: no object pays a seed out, and the seeder holds no position"));
+        if virtual_regime {
+            let before = market_from_response(&m);
+            let floor_after =
+                kaspa_consensus_core::palw_model_market_v1::palw_model_seed_deepen_v2(&before, &Default::default(), amount)
+                    .map(|after| after.price_floor_sompi_per_position_v2())
+                    .unwrap_or_default();
+            flow.ui.say(&paint::bold("  Deepen this line's market (optional, before its first trade):"));
+            flow.ui.sub(&format!("pay       {} into line {}…", catalog::msk(amount as u128), &line_id[..16]));
+            flow.ui.sub(&format!(
+                "then      {} locked · the floor {} -> {} per position",
+                catalog::msk(m.seed_sompi.saturating_add(amount) as u128),
+                msk(before.price_floor_sompi_per_position_v2()),
+                msk(floor_after)
+            ));
+            flow.ui.sub(&paint::dim(
+                "LOCKED FOR GOOD, AT YOUR RISK: no object pays a seed out, the seeder holds no position, and a class never \
+                 approved never trades",
+            ));
+        } else {
+            flow.ui.say(&paint::bold(&format!(
+                "  Seed this line{}:",
+                if opens { " — this payment opens its market" } else { " — an instalment" }
+            )));
+            flow.ui.sub(&format!("pay       {} into line {}…", catalog::msk(amount as u128), &line_id[..16]));
+            flow.ui.sub(&format!(
+                "then      {} of {}{}",
+                catalog::msk(m.seed_pledged_sompi.saturating_add(amount) as u128),
+                catalog::msk(floor_now as u128),
+                if opens {
+                    " — 500,000 positions enter the curve"
+                } else {
+                    " — locked in the sink; it opens when the total reaches the floor"
+                }
+            ));
+            flow.ui.sub(&paint::dim("LOCKED FOR GOOD: no object pays a seed out, and the seeder holds no position"));
+        }
         flow.ask("Pay it?", false, "nothing was paid").await?;
         if flow.ui.json {
             return Err(Halt::Declined(format!(
@@ -719,7 +781,22 @@ pub(crate) async fn market_open(
         while std::time::Instant::now() < deadline {
             flow.pause(5).await?;
             let now = read().await?;
-            if market_from_response(&now).is_open() {
+            // ADR-0162: the market was open already; the seed landed when the locked seed grew.
+            if virtual_regime && now.seed_sompi > m.seed_sompi {
+                flow.row(
+                    Severity::Ok,
+                    "market",
+                    format!(
+                        "deepened · {} locked · floor {} per position · real reserve {}",
+                        msk(now.seed_sompi),
+                        msk(market_from_response(&now).price_floor_sompi_per_position_v2()),
+                        msk(now.msk_reserve)
+                    ),
+                );
+                doc.insert("open".into(), true.into());
+                return Ok(());
+            }
+            if !virtual_regime && market_from_response(&now).is_open() {
                 flow.row(
                     Severity::Ok,
                     "market",
@@ -968,6 +1045,17 @@ pub(crate) async fn position_sell(
 
 #[cfg(test)]
 mod tests {
+    /// **ADR-0162: past the virtual fence nothing is owed** — no `--seed` pays nothing (the market is
+    /// open), a seed is depth that opens nothing, and one after the first trade is refused.
+    #[test]
+    fn past_the_virtual_fence_a_seed_is_planned_as_optional_depth() {
+        use super::{SeedPlan as P, seed_plan_virtual};
+        assert_eq!(seed_plan_virtual(0, None), P::AlreadyOpen, "the market is open from its creation");
+        assert_eq!(seed_plan_virtual(0, Some(7)), P::Pay { amount: 7, opens: false }, "any amount, opening nothing");
+        assert!(matches!(seed_plan_virtual(3, Some(7)), P::Refused(why) if why.contains("before the first trade")));
+        assert!(matches!(seed_plan_virtual(0, Some(0)), P::Refused(_)));
+    }
+
     /// A refused seed burns its MSK on this lane, so the plan refuses what the chain would: under
     /// the floor without instalments, onto a pledge the chain will not add to, or nothing at all.
     #[test]
