@@ -106,6 +106,11 @@ pub struct PalwClassSdk {
     /// are what they were). Set with [`Self::with_held_answerability_v1`] from the node's params;
     /// past the fence it is what makes a resolved backend's `supports_dissection` held-aware.
     held_answerability: bool,
+    /// **The prefill run width every backend this SDK resolves STARTS at** (int-10.2 A2): the node's
+    /// `--palw-prefill-run-max`, `None` for the family's own default. A node narrows it on a duty's own
+    /// instance when the memory the duty can reserve calls for it; an instance nobody narrows — the
+    /// executor's shared one included — runs at this, and is priced at it.
+    prefill_run_cap: Option<u32>,
 }
 
 /// The model a row is a revision OF: `"Qwen/Qwen2.5-1.5B/graph-v2"` → `"Qwen/Qwen2.5-1.5B"`.
@@ -166,6 +171,7 @@ impl PalwClassSdk {
             chain_classes: false,
             attempt_rules: Default::default(),
             held_answerability: false,
+            prefill_run_cap: None,
         }
     }
 
@@ -194,6 +200,19 @@ impl PalwClassSdk {
         self.held_answerability
     }
 
+    /// **Resolve backends that start at a prefill run width of at most `cap`** (int-10.2 A2): every backend
+    /// this SDK resolves — through a lineage or the chain-registered arm — gets `cap`
+    /// (`set_prefill_run_positions_v1`; a family whose memory does not move with the width ignores it).
+    /// A node passes its `--palw-prefill-run-max`; `None` leaves each family at its own default.
+    pub fn with_prefill_run_cap_v1(mut self, cap: Option<u32>) -> Self {
+        self.prefill_run_cap = cap;
+        self
+    }
+
+    pub fn prefill_run_cap_v1(&self) -> Option<u32> {
+        self.prefill_run_cap
+    }
+
     /// **The canonical job a registration of `entry` carries**: the table's under `Legacy`; under
     /// `CoreV1` the formula's (`palw_attempt_canonical_v1`), since admission past
     /// `palw_offence_attribution` refuses any other — registrants no longer choose it (addendum
@@ -216,10 +235,11 @@ impl PalwClassSdk {
     pub fn with_lineage(mut self, lineage: Arc<dyn PalwModelLineageV1>) -> Self {
         let mut lineages = std::mem::take(&mut self.lineages);
         lineages.push(lineage);
-        let (attempt_rules, held_answerability) = (self.attempt_rules, self.held_answerability);
+        let (attempt_rules, held_answerability, prefill_run_cap) = (self.attempt_rules, self.held_answerability, self.prefill_run_cap);
         Self::with_lineages(lineages, self.court, self.prompt_ids_form, std::mem::take(&mut self.network_id))
             .with_attempt_rules_v1(attempt_rules)
             .with_held_answerability_v1(held_answerability)
+            .with_prefill_run_cap_v1(prefill_run_cap)
     }
 
     pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
@@ -273,6 +293,18 @@ impl PalwClassSdk {
         path: &Path,
         residency: crate::lineage::PalwWeightResidencyV1,
     ) -> Result<PalwLoadedArtifactV1, String> {
+        self.lineage_for_file_v1(path)?.load(path, residency)
+    }
+
+    /// **The lineage that would load `path`**, by the file's own magic — [`Self::load_artifact_with`]'s
+    /// dispatch without the load. What a node asks BEFORE it maps a file, to decide whether the file is
+    /// one it pins (kaspad's `palw_artifact_pin`: a whole-file mapping read in place is pinned, a
+    /// residency's container never is) while nothing has faulted its pages through another mapping yet.
+    pub fn lineage_id_for_file_v1(&self, path: &Path) -> Result<&'static str, String> {
+        self.lineage_for_file_v1(path).map(|lineage| lineage.lineage_id())
+    }
+
+    fn lineage_for_file_v1(&self, path: &Path) -> Result<&Arc<dyn PalwModelLineageV1>, String> {
         let mut head = [0u8; 8];
         {
             use std::io::Read;
@@ -282,13 +314,11 @@ impl PalwClassSdk {
                 return Err(format!("{}: shorter than any artifact magic", path.display()));
             }
         }
-        let lineage = self
-            .lineages
+        self.lineages
             .iter()
             .find(|l| l.sniffs(&head))
             .or_else(|| self.lineages.iter().find(|l| l.is_container_fallback()))
-            .ok_or_else(|| format!("{}: no lineage in this build claims this container", path.display()))?;
-        lineage.load(path, residency)
+            .ok_or_else(|| format!("{}: no lineage in this build claims this container", path.display()))
     }
 
     /// Every `(entry, pairing result)` for one artifact against its own lineage's classes — the
@@ -437,10 +467,13 @@ impl PalwClassSdk {
     }
 
     /// A resolved backend, running this SDK's attempt rule, held-aware where the fence is armed
-    /// (ADR-0152 §4-ter N4).
+    /// (ADR-0152 §4-ter N4), starting at this SDK's prefill run cap where one is set (int-10.2 A2).
     fn ruled_v1(&self, mut backend: Box<dyn PalwExecutionBackendV1>) -> Box<dyn PalwExecutionBackendV1> {
         backend.set_attempt_rules_v1(self.attempt_rules);
         backend.set_held_answerability_v1(self.held_answerability);
+        if let Some(cap) = self.prefill_run_cap {
+            backend.set_prefill_run_positions_v1(cap);
+        }
         backend
     }
 
@@ -614,13 +647,13 @@ impl PalwClassSdk {
             // past a few dozen positions, and every held class, all of which reach a network like
             // testnet-11 by registration (ADR-0118) — was refused by its own producer and seats,
             // and its retained blocks were addressed at a level the seats did not derive.
-            return Ok(Box::new(
+            return Ok(self.ruled_v1(Box::new(
                 backend
                     .with_step_ladder_cap(self.court.max_step_leaf_count())
                     .with_prompt_ids_form(self.prompt_ids_form)
                     .with_attempt_rules(self.attempt_rules)
                     .with_held_answerability_v1(self.held_answerability),
-            ));
+            )));
         }
         if let Some(artifact) = crate::lineages::qwen36::qwen36_artifact_by_registered_root(holdings, artifact_root, profile) {
             let backend = misaka_palw_base0::qwen36_backend::Qwen36Backend::from_registered_profile(
@@ -629,13 +662,13 @@ impl PalwClassSdk {
                 profile.clone(),
                 (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
             )?;
-            return Ok(Box::new(
+            return Ok(self.ruled_v1(Box::new(
                 backend
                     .with_step_ladder_cap(self.court.max_step_leaf_count())
                     .with_prompt_ids_form(self.prompt_ids_form)
                     .with_attempt_rules(self.attempt_rules)
                     .with_held_answerability_v1(self.held_answerability),
-            ));
+            )));
         }
         Err(format!(
             "this node holds no artifact whose digest is the registered root {artifact_root} — fetch the class's \

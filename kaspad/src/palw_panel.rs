@@ -105,9 +105,44 @@ fn reserve_replay_on_host_v1(
         .map_err(|refusal| format!("a {role} replay needs {} and {refusal}", need.describe()))
 }
 
+/// **Take the host ledger's reservation for a replay of `role` on `backend`, at the widest prefill run
+/// it grants** (int-10.2 A2, `palw_prefill_run`): `need_at` derives the role's need from the instance at
+/// each width tried, the instance is left at the width reserved, and the caller runs THAT instance — the
+/// figure reserved and the run that spends it are one width. A width the ledger made narrower than the
+/// node's cap is logged (once a minute per role) and counted (`run_narrowed`); `Err` is the narrowest
+/// width's hold sentence. Free of the service for the same reason [`reserve_replay_on_host_v1`] is.
+fn reserve_replay_on_host_at_widest_run_v1(
+    role: &'static str,
+    backend: &mut dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    class_id: Hash64,
+    job: Hash64,
+    need_at: impl FnMut(&dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1) -> crate::palw_backends::PalwRoleMemoryNeedV1,
+) -> Result<(crate::palw_memory_ledger::PalwMemoryReservationV1, crate::palw_backends::PalwRoleMemoryNeedV1), String> {
+    let cap = crate::palw_prefill_run::armed_prefill_run_cap_v1();
+    match crate::palw_prefill_run::reserve_at_widest_run_v1(backend, cap, need_at, |need| {
+        reserve_replay_on_host_v1(role, need, class_id, job)
+    }) {
+        Ok(taken) => {
+            if taken.need_at_cap.is_some() {
+                crate::palw_prefill_run::note_narrowed_v1(PALW_PANEL, role, &format!("claim {job}"), &taken);
+            }
+            Ok((taken.reserved, taken.need))
+        }
+        Err((why, _)) => Err(why),
+    }
+}
+
 use crate::palw_readiness_escalation::PalwReadinessDutyV1;
 
 const PALW_PANEL: &str = "palw-panel";
+
+/// The narrowest prefill run a replay may start at — what the per-duty pre-check and a seat's
+/// "could start now" ask about (int-10.2 A2).
+const PALW_PREFILL_RUN_NARROWEST_V1: u32 = 1;
+
+/// The full seat's role, as the widest-run reservations name it.
+const FULL_SEAT_V1: kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1 =
+    kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat;
 
 /// ADR-0152 §4-ter N3: a held dissection's moves, answered off the tick by the windowed builders.
 mod held_court;
@@ -4169,6 +4204,19 @@ impl PalwPanelService {
                 hold = Some(PalwPanelHoldReasonV1::NodeIbd);
             }
             let replay_capable = artifact_loaded && hold.is_none() && !ibd;
+            // Whether a replay of this class could START now (int-10.2 A2: at the narrowest prefill run; the
+            // reservation takes the widest the ledger grants). The figures reported stay the cap's.
+            let narrowest = artifact_loaded
+                .then(|| {
+                    backends.role_memory_need_at_run_or_chain_v1(
+                        class.class_id,
+                        class.artifact_root,
+                        PalwResourceRoleV1::FullSeat,
+                        Some(PALW_PREFILL_RUN_NARROWEST_V1),
+                        |id| self.chain_carriage_v1(session, id),
+                    )
+                })
+                .flatten();
             let admits = |need: &crate::palw_backends::PalwRoleMemoryNeedV1| crate::palw_backends::ledger_admits_v1(need.total_bytes()).is_ok();
             let (runtime_profile, artifact_resident_bytes, producer_ws, full_ws, producer_capable, full_capable) = match &by_role {
                 Some((producer, full)) => (
@@ -4177,7 +4225,7 @@ impl PalwPanelService {
                     producer.total_bytes(),
                     full.total_bytes(),
                     artifact_loaded && !ibd && admits(producer),
-                    artifact_loaded && !ibd && admits(full),
+                    artifact_loaded && !ibd && admits(narrowest.as_ref().unwrap_or(full)),
                 ),
                 None => (String::new(), working_set_bytes, 0, working_set_bytes, false, replay_capable),
             };
@@ -5089,21 +5137,29 @@ impl PalwPanelService {
     /// `--palw-chain-classes` — the chain's registration, the way [`Self::resolve_backend`] finds the
     /// backend the replay will run. A table-only figure missed every chain-registered class and fell
     /// back to the widest holding with no derived, KV or runtime bytes.
-    fn replay_memory_need_v1(
+    ///
+    /// **At a stated prefill run width** (int-10.2 A2; `None`: the cap, the width a replay starts from).
+    /// The narrowest width is what a replay COULD start with, which is the pre-check's question; the
+    /// readiness proof asks each width from the cap down; the reservation itself takes the widest the
+    /// ledger grants when the replay starts.
+    fn replay_memory_need_at_run_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         class: Option<(Hash64, Hash64)>,
+        run: Option<u32>,
     ) -> crate::palw_backends::PalwRoleMemoryNeedV1 {
         use kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1;
         class
             .and_then(|(class_id, artifact_root)| {
-                self.backends().role_memory_need_or_chain_v1(class_id, artifact_root, PalwResourceRoleV1::FullSeat, |id| {
+                self.backends().role_memory_need_at_run_or_chain_v1(class_id, artifact_root, PalwResourceRoleV1::FullSeat, run, |id| {
                     self.chain_carriage_v1(session, id)
                 })
             })
             .unwrap_or_else(|| crate::palw_backends::PalwRoleMemoryNeedV1 {
                 role: PalwResourceRoleV1::FullSeat,
                 holding_bytes: self.class_holdings.iter().filter_map(crate::palw_backends::holding_replay_bytes_v1).max().unwrap_or(0),
+                pinned_bytes: 0,
+                prefill_run_positions: None,
                 derived_bytes: 0,
                 runtime: None,
                 profile: None,
@@ -5120,7 +5176,10 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         class: Option<(Hash64, Hash64)>,
     ) -> Result<(), String> {
-        let need = self.replay_memory_need_v1(session, class);
+        // **At the narrowest prefill run** (int-10.2 A2): the replay's own reservation takes the widest
+        // width the ledger grants when it starts, so a duty is deferred only when not even one position
+        // at a time fits — the question the 3.37 GiB line on 5.104 asked at 64 and answered "no".
+        let need = self.replay_memory_need_at_run_v1(session, class, Some(PALW_PREFILL_RUN_NARROWEST_V1));
         crate::palw_backends::ledger_admits_v1(need.total_bytes()).map_err(|why| format!("a replay needs {} and {why}", need.describe()))
     }
 
@@ -5135,8 +5194,29 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         class: Option<(Hash64, Hash64)>,
     ) -> Result<(), String> {
-        let need = self.replay_memory_need_v1(session, class);
-        crate::palw_memory_ledger::host_ledger_v1().capacity_admits(need.total_bytes()).map_err(|refusal| {
+        // **The widest prefill run this host's capacity admits** (int-10.2 A2): a seat that can replay
+        // the class at SOME width is a seat for it — its replays run at the widest the ledger grants —
+        // and one that can only below `PALW_PREFILL_RUN_SLOW_BELOW_V1` is said and counted
+        // (`capacity_narrow_classes`), because its receipts are the class's slow tail.
+        let ledger = crate::palw_memory_ledger::host_ledger_v1();
+        let cap = crate::palw_prefill_run::armed_prefill_run_cap_v1();
+        let mut need = self.replay_memory_need_at_run_v1(session, class, Some(cap));
+        for width in crate::palw_prefill_run::palw_prefill_run_candidates_v1(cap) {
+            let at = self.replay_memory_need_at_run_v1(session, class, Some(width));
+            if ledger.capacity_admits(at.total_bytes()).is_ok() {
+                if let Some((class_id, _)) = class {
+                    crate::palw_prefill_run::note_capacity_width_v1(PALW_PANEL, class_id, at.prefill_run_positions, &at);
+                }
+                return Ok(());
+            }
+            // A width that does not lower the need is the last one that can be asked.
+            let moved = at.total_bytes() < need.total_bytes();
+            need = at;
+            if !moved && width != cap {
+                break;
+            }
+        }
+        ledger.capacity_admits(need.total_bytes()).map_err(|refusal| {
             format!(
                 "a replay needs {} and this host's memory caps any one duty at {:.2} GiB ({}) — this node cannot replay the class",
                 need.describe(),
@@ -5170,6 +5250,18 @@ impl PalwPanelService {
                 need,
             )
             .map_err(|refusal| format!("the proof's own {:.1} MiB are not free ({refusal})", need as f64 / (1u64 << 20) as f64))
+    }
+
+    /// [`reserve_replay_on_host_at_widest_run_v1`], from the service (int-10.2 A2).
+    fn reserve_replay_at_widest_run_v1(
+        &self,
+        role: &'static str,
+        backend: &mut dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        class_id: Hash64,
+        job: Hash64,
+        need_at: impl FnMut(&dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1) -> crate::palw_backends::PalwRoleMemoryNeedV1,
+    ) -> Result<(crate::palw_memory_ledger::PalwMemoryReservationV1, crate::palw_backends::PalwRoleMemoryNeedV1), String> {
+        reserve_replay_on_host_at_widest_run_v1(role, backend, class_id, job, need_at)
     }
 
     /// **Take the ledger's reservation for a replay of `role`** — held for the replay's life, so a
@@ -9150,24 +9242,30 @@ impl PalwPanelService {
                         // instance, and under the process-wide slot that walk evicted the
                         // executor's idle one, so the two were never resident together.
                         self.release_executor_backend_v1();
-                        let court_need = self.backends().role_memory_need_for_backend_or_chain_v1(
-                            backend.as_ref(),
-                            duty.class_id,
-                            duty.artifact_root,
-                            None,
-                            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
-                            |id| self.chain_carriage_v1(&session, id),
-                        );
-                        let court_reserved = match self.reserve_replay_v1("court", &court_need, duty.class_id, duty.claim_id) {
-                            Ok(reserved) => reserved,
-                            Err(why) => {
-                                *court_stalls.entry("the memory ledger cannot cover the close's replay").or_default() += 1;
-                                crate::palw_backends::note_throttled_v1("panel-court-ledger", || {
-                                    format!("[{PALW_PANEL}] session {}: the close waits — {why}", duty.session_id)
-                                });
-                                continue;
-                            }
-                        };
+                        // At the widest prefill run the ledger grants, on this duty's own instance —
+                        // the one the close below runs on (int-10.2 A2).
+                        let mut backend = backend;
+                        let backends = self.backends();
+                        let court_reserved =
+                            match self.reserve_replay_at_widest_run_v1("court", backend.as_mut(), duty.class_id, duty.claim_id, |b| {
+                                backends.role_memory_need_for_backend_or_chain_v1(
+                                    b,
+                                    duty.class_id,
+                                    duty.artifact_root,
+                                    None,
+                                    FULL_SEAT_V1,
+                                    |id| self.chain_carriage_v1(&session, id),
+                                )
+                            }) {
+                                Ok((reserved, _)) => reserved,
+                                Err(why) => {
+                                    *court_stalls.entry("the memory ledger cannot cover the close's replay").or_default() += 1;
+                                    crate::palw_backends::note_throttled_v1("panel-court-ledger", || {
+                                        format!("[{PALW_PANEL}] session {}: the close waits — {why}", duty.session_id)
+                                    });
+                                    continue;
+                                }
+                            };
                         let Ok((_backend, assembled)) = offload(backend, move |b| {
                             let _held_for_the_close = court_reserved;
                             // **No segment resume before the refutation** (the audit's SEAT-S review,
@@ -10591,7 +10689,8 @@ impl PalwPanelService {
                                 // is the streamed routes' to judge), then priced as a full seat whose
                                 // capture is the DENSE one, then reserved; a refusal defers the duty
                                 // and files nothing, as the full-seat replay's and the court's do.
-                                let need = match self.backends().whole_capture_memory_need_v1(
+                                let backends = self.backends();
+                                let need = match backends.whole_capture_memory_need_v1(
                                     backend.as_ref(),
                                     duty.class_id,
                                     duty.artifact_root,
@@ -10611,8 +10710,30 @@ impl PalwPanelService {
                                         continue;
                                     }
                                 };
-                                let reserved = match self.reserve_replay_v1("full-seat capture", &need, duty.class_id, duty.claim_id) {
-                                    Ok(reserved) => reserved,
+                                // At the widest prefill run the ledger grants, on this duty's own instance
+                                // — the re-execution that lays the capture out runs on it (int-10.2 A2).
+                                // The refusal above does not move with the width, so a width it could
+                                // refuse at falls back to the cap's figure.
+                                let mut backend = backend;
+                                let reserved = match self.reserve_replay_at_widest_run_v1(
+                                    "full-seat capture",
+                                    backend.as_mut(),
+                                    duty.class_id,
+                                    duty.claim_id,
+                                    |b| {
+                                        backends
+                                            .whole_capture_memory_need_v1(
+                                                b,
+                                                duty.class_id,
+                                                duty.artifact_root,
+                                                &payload.capture,
+                                                ladder,
+                                                |id| self.chain_carriage_v1(&session, id),
+                                            )
+                                            .unwrap_or_else(|_| need.clone())
+                                    },
+                                ) {
+                                    Ok((reserved, _)) => reserved,
                                     Err(why) => {
                                         crate::palw_backends::note_throttled_v1("panel-capture-ledger", || {
                                             format!("[{PALW_PANEL}] capture sample of claim {} deferred: {why}", duty.claim_id)
@@ -11228,16 +11349,27 @@ impl PalwPanelService {
                             // the blocking task starts and released when it returns, so a producer's
                             // attempt in this process cannot start beside it. A refusal defers the
                             // duty to a later tick, as the pre-check's did.
-                            let need = self.backends().role_memory_need_for_backend_or_chain_v1(
-                                resolved.as_ref(),
+                            // At the widest prefill run the ledger grants, on this duty's own instance —
+                            // the one offloaded below (int-10.2 A2).
+                            let mut resolved = resolved;
+                            let backends = self.backends();
+                            let reserved = match self.reserve_replay_at_widest_run_v1(
+                                "full-seat",
+                                resolved.as_mut(),
                                 duty.class_id,
-                                duty.artifact_root,
-                                Some(&ctx),
-                                kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
-                                |id| self.chain_carriage_v1(&session, id),
-                            );
-                            let reserved = match self.reserve_replay_v1("full-seat", &need, duty.class_id, duty.claim_id) {
-                                Ok(reserved) => reserved,
+                                duty.claim_id,
+                                |b| {
+                                    backends.role_memory_need_for_backend_or_chain_v1(
+                                        b,
+                                        duty.class_id,
+                                        duty.artifact_root,
+                                        Some(&ctx),
+                                        FULL_SEAT_V1,
+                                        |id| self.chain_carriage_v1(&session, id),
+                                    )
+                                },
+                            ) {
+                                Ok((reserved, _)) => reserved,
                                 Err(why) => {
                                     crate::palw_backends::note_throttled_v1("panel-replay-ledger", || {
                                         format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
@@ -14448,16 +14580,20 @@ impl PalwPanelService {
             self.release_executor_backend_v1();
             // Through the one door (the route-matrix re-audit's #5): a chain-registered class's
             // holding is found through its registration, never priced at zero bytes.
-            let need = self.backends().role_memory_need_for_backend_or_chain_v1(
-                backend.as_ref(),
-                duty.class_id,
-                duty.artifact_root,
-                Some(ctx),
-                kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
-                |id| self.chain_carriage_v1(session, id),
-            );
-            match self.reserve_replay_v1("interval-seat", &need, duty.class_id, duty.claim_id) {
-                Ok(reserved) => Some(reserved),
+            // At the widest prefill run the ledger grants, on this duty's own instance — every replay
+            // of the route below runs on it (int-10.2 A2).
+            let backends = self.backends();
+            match self.reserve_replay_at_widest_run_v1("interval-seat", backend.as_mut(), duty.class_id, duty.claim_id, |b| {
+                backends.role_memory_need_for_backend_or_chain_v1(
+                    b,
+                    duty.class_id,
+                    duty.artifact_root,
+                    Some(ctx),
+                    FULL_SEAT_V1,
+                    |id| self.chain_carriage_v1(session, id),
+                )
+            }) {
+                Ok((reserved, _)) => Some(reserved),
                 Err(why) => {
                     crate::palw_backends::note_throttled_v1("panel-interval-ledger", || {
                         format!("[{PALW_PANEL}] interval seat of claim {} deferred: {why}", duty.claim_id)
@@ -15460,18 +15596,38 @@ impl PalwPanelService {
                     });
                     return (PalwSeatReplayStepV1::Waiting, None);
                 }
-                let reserved = match self.reserve_replay_v1("full-seat", &need, duty.class_id, duty.claim_id) {
-                    Ok(reserved) => reserved,
-                    Err(why) => {
-                        crate::palw_backends::note_throttled_v1("panel-replay-ledger", || {
-                            format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
-                        });
-                        return (PalwSeatReplayStepV1::Waiting, None);
-                    }
-                };
+                // **At the widest prefill run the ledger grants** (int-10.2 A2): the need above is the
+                // cap's (F2's question is how big the replay wants to be); the reservation narrows this
+                // duty's own instance when the ledger cannot grant that, and the instance it leaves at
+                // the width reserved is the one `replays.start` runs.
+                let mut backend = backend;
+                let backends = self.backends();
+                let (reserved, need) =
+                    match self.reserve_replay_at_widest_run_v1("full-seat", backend.as_mut(), duty.class_id, duty.claim_id, |b| {
+                        backends.role_memory_need_for_backend_or_chain_v1(
+                            b,
+                            duty.class_id,
+                            duty.artifact_root,
+                            Some(ctx),
+                            FULL_SEAT_V1,
+                            |id| self.chain_carriage_v1(session, id),
+                        )
+                    }) {
+                        Ok(taken) => taken,
+                        Err(why) => {
+                            crate::palw_backends::note_throttled_v1("panel-replay-ledger", || {
+                                format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
+                            });
+                            return (PalwSeatReplayStepV1::Waiting, None);
+                        }
+                    };
                 info!(
-                    "[{PALW_PANEL}] claim {}: replaying the anchor's job off the loop for a verdict ({:?}, deadline DAA {}, SEAT-R)",
-                    duty.claim_id, seat_r_duty.role, seat_r_duty.deadline
+                    "[{PALW_PANEL}] claim {}: replaying the anchor's job off the loop for a verdict ({:?}, deadline DAA {}, SEAT-R), \
+                     reserved {}",
+                    duty.claim_id,
+                    seat_r_duty.role,
+                    seat_r_duty.deadline,
+                    need.describe()
                 );
                 let (ctx, prompt) = (ctx.clone(), prompt.to_vec());
                 replays.start(key, duty.class_id, seat_r_duty.heavy, current_daa, Some(reserved), backend, move |b| {
@@ -15681,34 +15837,39 @@ impl PalwPanelService {
                         });
                         continue;
                     }
-                    let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
+                    let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
                         return (PalwSeatReplayStepV1::NoVerdict, None);
                     };
                     let Some(prompt_ids) = Self::fp_prompt_for_job(backend.as_ref(), material, form) else { continue };
                     let ctx = backend.fp_job_context_v1(&material.job);
-                    let need = self.backends().role_memory_need_for_backend_or_chain_v1(
-                        backend.as_ref(),
-                        duty.class_id,
-                        duty.artifact_root,
-                        ctx.as_ref(),
-                        kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
-                        |id| self.chain_carriage_v1(session, id),
-                    );
-                    let reserved = match self.reserve_replay_v1("full-seat", &need, duty.class_id, duty.claim_id) {
-                        Ok(reserved) => reserved,
-                        Err(why) => {
-                            crate::palw_backends::note_throttled_v1("panel-replay-ledger", || {
-                                format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
-                            });
-                            continue;
-                        }
-                    };
+                    // At the widest prefill run the ledger grants, on this duty's own instance (int-10.2 A2).
+                    let backends = self.backends();
+                    let (reserved, need) =
+                        match self.reserve_replay_at_widest_run_v1("full-seat", backend.as_mut(), duty.class_id, duty.claim_id, |b| {
+                            backends.role_memory_need_for_backend_or_chain_v1(
+                                b,
+                                duty.class_id,
+                                duty.artifact_root,
+                                ctx.as_ref(),
+                                FULL_SEAT_V1,
+                                |id| self.chain_carriage_v1(session, id),
+                            )
+                        }) {
+                            Ok(taken) => taken,
+                            Err(why) => {
+                                crate::palw_backends::note_throttled_v1("panel-replay-ledger", || {
+                                    format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
+                                });
+                                continue;
+                            }
+                        };
                     info!(
-                        "[{PALW_PANEL}] claim {}: replaying {} off the loop for a verdict ({:?}, deadline DAA {}, SEAT-R)",
+                        "[{PALW_PANEL}] claim {}: replaying {} off the loop for a verdict ({:?}, deadline DAA {}, SEAT-R), reserved {}",
                         duty.claim_id,
                         if is_own { "the claim's own job" } else { "a served job" },
                         seat_r_duty.role,
-                        seat_r_duty.deadline
+                        seat_r_duty.deadline,
+                        need.describe()
                     );
                     let job = material.job.clone();
                     let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
@@ -15781,17 +15942,21 @@ impl PalwPanelService {
                     });
                     return false;
                 }
-                let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return false };
-                let need = crate::palw_backends::palw_partial_seat_streamed_need_v1(self.backends().role_memory_need_for_backend_or_chain_v1(
-                    backend.as_ref(),
-                    duty.class_id,
-                    duty.artifact_root,
-                    Some(ctx),
-                    kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment },
-                    |id| self.chain_carriage_v1(session, id),
-                ));
-                let reserved = match self.reserve_replay_v1("partial-seat", &need, duty.class_id, duty.claim_id) {
-                    Ok(reserved) => reserved,
+                let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return false };
+                // At the widest prefill run the ledger grants, on this duty's own instance (int-10.2 A2).
+                let backends = self.backends();
+                let partial = kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment };
+                let reserved = match self.reserve_replay_at_widest_run_v1("partial-seat", backend.as_mut(), duty.class_id, duty.claim_id, |b| {
+                    crate::palw_backends::palw_partial_seat_streamed_need_v1(backends.role_memory_need_for_backend_or_chain_v1(
+                        b,
+                        duty.class_id,
+                        duty.artifact_root,
+                        Some(ctx),
+                        partial,
+                        |id| self.chain_carriage_v1(session, id),
+                    ))
+                }) {
+                    Ok((reserved, _)) => reserved,
                     Err(why) => {
                         crate::palw_backends::note_throttled_v1("panel-segment-ledger", || {
                             format!("[{PALW_PANEL}] claim {} segment {segment}: the resume waits — {why}", duty.claim_id)
@@ -15905,23 +16070,23 @@ impl PalwPanelService {
         network_domain: Hash64,
         pooled: &[Vec<u8>],
     ) -> Result<Option<tokio::task::JoinHandle<PalwSeatS3SampleV1>>, ()> {
-        let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return Ok(None) };
+        let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return Ok(None) };
         let captures = self.seat_s3_captures_v1(session, backend.as_ref(), duty, network_domain, pooled);
         if captures.is_empty() {
             return Ok(None);
         }
         let seats = duty.panel_seat_count.max(1);
         let last = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats).saturating_sub(1);
-        let need = self.backends().role_memory_need_for_backend_or_chain_v1(
-            backend.as_ref(),
-            duty.class_id,
-            duty.artifact_root,
-            None,
-            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: last },
-            |id| self.chain_carriage_v1(session, id),
-        );
-        let reserved = match self.reserve_replay_v1("s3-sampler", &need, duty.class_id, duty.claim_id) {
-            Ok(reserved) => reserved,
+        // At the widest prefill run the ledger grants, on this duty's own instance (int-10.2 A2).
+        let backends = self.backends();
+        let partial =
+            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: last };
+        let reserved = match self.reserve_replay_at_widest_run_v1("s3-sampler", backend.as_mut(), duty.class_id, duty.claim_id, |b| {
+            backends.role_memory_need_for_backend_or_chain_v1(b, duty.class_id, duty.artifact_root, None, partial, |id| {
+                self.chain_carriage_v1(session, id)
+            })
+        }) {
+            Ok((reserved, _)) => reserved,
             Err(why) => {
                 crate::palw_backends::note_throttled_v1("panel-s3-ledger", || {
                     format!("[{PALW_PANEL}] claim {}: the S3 sampling waits — {why}", duty.claim_id)
@@ -16738,15 +16903,15 @@ mod tests {
             assert!(!seat.contains(kept), "a seat must not judge on the executor's instance (`{kept}`)");
         }
         let released = seat.find("self.release_executor_backend_v1();").expect("the seat releases the executor's walk");
-        let reserved = seat.find("self.reserve_replay_v1(\"interval-seat\"").expect("the seat reserves");
+        let reserved = seat.find("self.reserve_replay_at_widest_run_v1(\"interval-seat\"").expect("the seat reserves");
         assert!(released < reserved, "the executor's idle walk is released before the seat reserves");
         // And before a court's close reserves: its walk from served intervals is on its own instance.
-        let court = production.find("self.reserve_replay_v1(\"court\"").expect("the court reserves its close");
+        let court = production.find("self.reserve_replay_at_widest_run_v1(\"court\"").expect("the court reserves its close");
         let released =
             production[..court].rfind("self.release_executor_backend_v1();").expect("the court releases the executor's walk");
         let between = &production[released..court];
         assert!(
-            !between.contains("\n    fn ") && !between.contains("\n    async fn ") && !between.contains("reserve_replay_v1("),
+            !between.contains("\n    fn ") && !between.contains("\n    async fn ") && !between.contains("reserve_replay_"),
             "the release is the court arm's own, just before its reservation"
         );
         assert!(!production.contains("base0_fp_seat_state_forget_v1("), "no production path clears another instance's memo");
@@ -17310,12 +17475,15 @@ mod court_responder_coverage_pin {
         let call = source.find("Self::fp_capture_samples_clear(\n").expect("the sampler's one call site");
         let arm_start = source[..call].rfind("palw_fp_capture_decode_v1(").expect("the capture arm");
         let arm = &source[arm_start..call];
-        let need = arm.find(".whole_capture_memory_need_v1(").expect("the capture is priced as a whole capture");
-        let reserve = arm.find("self.reserve_replay_v1(\"full-seat capture\", &need,").expect("and reserved");
-        let offloaded = arm.rfind("offload(backend, move |b| {").expect("then offloaded");
+        // Read with the whitespace squeezed out: a call the formatter splits across lines is the same call.
+        let squeezed: String = arm.chars().filter(|c| !c.is_whitespace()).collect();
+        let need = squeezed.find(".whole_capture_memory_need_v1(").expect("the capture is priced as a whole capture");
+        let reserve =
+            squeezed.find("self.reserve_replay_at_widest_run_v1(\"full-seatcapture\",backend.as_mut(),").expect("and reserved");
+        let offloaded = squeezed.rfind("offload(backend,move|b|{").expect("then offloaded");
         assert!(need < reserve && reserve < offloaded, "priced, reserved, offloaded — in that order");
-        assert!(arm[reserve..].contains("break 'verdict None;"), "a refusal defers the duty and files nothing");
-        assert!(arm[offloaded..].contains("let _held_for_the_samples = reserved;"), "the guard lives as long as the samples");
+        assert!(squeezed[reserve..].contains("break'verdictNone;"), "a refusal defers the duty and files nothing");
+        assert!(squeezed[offloaded..].contains("let_held_for_the_samples=reserved;"), "the guard lives as long as the samples");
         // The sampler prepares once and draws from the prover.
         let sampler = &source[source.find("fn fp_capture_samples_clear(").expect("the sampler")..];
         let sampler = &sampler[..sampler.find("\n    }\n").expect("its end")];
@@ -17324,7 +17492,8 @@ mod court_responder_coverage_pin {
         assert!(!sampler.contains("refutation_for_free_prompt_index("), "no draw re-executes the job");
         // The interval route: reserved before its first replay.
         let route = &source[source.find("async fn interval_seat_outcome_v1(").expect("the interval route")..];
-        let reserved = route.find("self.reserve_replay_v1(\"interval-seat\", &need,").expect("the route reserves");
+        let reserved =
+            route.find("self.reserve_replay_at_widest_run_v1(\"interval-seat\", backend.as_mut(),").expect("the route reserves");
         let first_replay = route.find("offload(backend, move |b|").expect("its first replay");
         assert!(reserved < first_replay, "the reservation precedes every replay of the route");
         assert!(route[..first_replay].contains("let _held_for_the_intervals = if held > 0 {"), "held for the route's life");
@@ -17338,7 +17507,7 @@ mod court_responder_coverage_pin {
         let whole = include_str!("palw_panel.rs");
         let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
         let close = source.find("the close does not assemble from this capture").expect("the close arm");
-        let reserve = source[..close].rfind("let court_reserved = match").expect("the close's reservation");
+        let reserve = source[..close].rfind("let court_reserved =").expect("the close's reservation");
         let arm = &source[reserve..close];
         assert!(arm.contains("offload(backend, move |b|"), "the close still runs off the runtime");
         assert!(!arm.contains(".replay_accused_segment_v1("), "M1: no whole-segment replay whose result nothing reads");
@@ -19247,12 +19416,15 @@ mod seat_r_tests {
             let squeezed: String = body.chars().filter(|c| !c.is_whitespace()).collect();
             assert!(squeezed.contains("palw_seat_replay_step_v1(&"), "{name}: the one replay rule");
             assert!(squeezed.contains("duty.work_leaves,duty.output_root"), "{name}: and the claim's answer (SEAT-S2)");
-            assert!(body.contains("self.reserve_replay_v1(\"full-seat\", &need,"), "{name}: reserved for its life");
+            assert!(
+                body.contains("self.reserve_replay_at_widest_run_v1(\"full-seat\", backend.as_mut(),"),
+                "{name}: reserved for its life"
+            );
             assert!(body.contains("replays.retry_refused(&key, current_daa, seat_r_duty.deadline)"), "{name}: retried once, in time");
             assert!(body.contains("replays.has_room(seat_r_duty.heavy)"), "{name}: a C7 replay takes the heavy slot");
             assert!(body.contains("replays.fits(&duty.class_id, current_daa, seat_r_duty.deadline)"), "{name}: never started late");
             let fits = body.find("replays.fits(").unwrap();
-            assert!(fits < body.find("replays.start(").unwrap() && fits < body.find("self.reserve_replay_v1(").unwrap());
+            assert!(fits < body.find("replays.start(").unwrap() && fits < body.find("self.reserve_replay_at_widest_run_v1(").unwrap());
         }
         // The free-prompt pass: the claim's own job first, and a stranger's never started beside it.
         assert!(fp.contains("order.sort_by_key(|i| !own[*i]);"));
@@ -19849,6 +20021,8 @@ mod seat_s_tests {
         let need = |role, capture| PalwRoleMemoryNeedV1 {
             role,
             holding_bytes: 11,
+            pinned_bytes: 0,
+            prefill_run_positions: None,
             derived_bytes: 0,
             runtime: None,
             profile: Some(profile(role, capture, two_m_segment)),
@@ -20155,7 +20329,10 @@ mod seat_s_tests {
             "past SEAT-R only: below it the check prices every duty as it did"
         );
         let route = body_of(source, "    async fn seat_s4_resume_v1(");
-        assert!(route.contains("self.reserve_replay_v1(\"partial-seat\", &need, duty.class_id, duty.claim_id)"), "its own reservation");
+        assert!(
+            route.contains("self.reserve_replay_at_widest_run_v1(\"partial-seat\", backend.as_mut(), duty.class_id, duty.claim_id"),
+            "its own reservation"
+        );
     }
 
     /// **F5: a claim first seen while its class is unread gets `R_eff` once the class reads.** Noted

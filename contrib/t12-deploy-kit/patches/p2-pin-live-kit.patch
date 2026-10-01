@@ -1,0 +1,45 @@
+int-10.2 A1 (the artifact pin) for the LIVE kit (deploy-int10), on top of p1-f4-live-kit.patch:
+  cd deploy-int10 && patch -p3 < p1-f4-live-kit.patch && patch -p3 < p2-pin-live-kit.patch
+lib.sh: LimitMEMLOCK=infinity in every unit. The fleet's units run as root (CAP_IPC_LOCK), so the pin works without it; it is a
+  unit line beyond ARGS, which a REL_TAG (same-binaries) release's `upgrade` refuses unless UPGRADE_OTHER_CHANGE_OK=1.
+t12check.py: prints pinned_mib / pinned_files from getPalwNodeStatus.verification, and a NOTE when nothing is pinned.
+
+--- a/contrib/t12-deploy-kit/lib.sh
++++ b/contrib/t12-deploy-kit/lib.sh
+@@ -292,6 +292,11 @@
+     # `Environment=` / `EnvironmentFile=` with no value RESET what the base unit (or an earlier drop-in)
+     # set: kaspad reads ~100 KASPAD_* variables, and one left on an old unit (a KASPAD_PALW_PRODUCE, a
+     # KASPAD_PALW_DRILL_TAMPER_LEAF) would add a flag the launch script does not show.
++    # LimitMEMLOCK=infinity (int-10.2 A1): kaspad pins the class artifacts a replay reads in place (mlock of
++    # the file's one page-cache copy, shared by every seat on the host). The kit's units run as root, whose
++    # CAP_IPC_LOCK already lifts the limit; the line keeps the pin working under a unit without it (and says
++    # what the node needs). A refused pin is not fatal: the node logs `not pinned: ... RLIMIT_MEMLOCK ...` and
++    # reserves the file per replay, as before.
+     cat <<EOF
+ Environment=
+ EnvironmentFile=
+@@ -308,6 +313,7 @@
+ StandardError=journal
+ MemoryHigh=infinity
+ MemoryMax=$( [ "$N_MEMMAX" = - ] && echo infinity || echo "${N_MEMMAX}G" )
++LimitMEMLOCK=infinity
+ EOF
+ }
+ 
+--- a/contrib/t12-deploy-kit/t12check.py
++++ b/contrib/t12-deploy-kit/t12check.py
+@@ -279,6 +279,14 @@
+                 print(f"  WARNING: this seat's oldest duty has waited {wait} DAA for its panel's quorum (healthy: 2-6)")
+             if num("seat_receipts_1h") is not None and (num("seat_duties") or 0) > 20 and num("seat_receipts_1h") < 20:
+                 print(f"  WARNING: this seat filed only {num('seat_receipts_1h')} receipts in the last hour with {num('seat_duties')} duties on the chain")
++            # 10-01 int-10.2 A1: the class artifacts this node pinned -- resident once on the HOST (count each distinct file once
++            # across the seats that report it), outside the ledger, charged to the cgroup of the seat that faulted it in first.
++            if num("pinned_mib") is not None:
++                print(f"  pinned class artifacts: {num('pinned_mib')} MiB in {num('pinned_files') or 0} file(s) (resident once on the host, "
++                      f"not reserved per replay)")
++                if (num("pinned_files") or 0) == 0:
++                    print("  NOTE: no class artifact is pinned -- expected on a node that holds the 8k or IR artifact; its journal says why "
++                          "(`is not pinned:` -- RLIMIT_MEMLOCK, the cap, or the host's room), and its replays reserve the file as before")
+         # 09-25: the seat duties are always on for a bonded node — the startup 'PALW duties' line is the
+         # PLAN; this is whether the panel worker actually started (its key and bond loaded, the gossip
+         # inbox was free).

@@ -1365,7 +1365,7 @@ impl PalwProducerService {
         // BOTH. The floor is derived so it resolves from nothing; a converted class resolves from
         // a file the operator deployed. Derive, never declare (ADR-0046): the producer proves it
         // has what the chain named rather than asserting it.
-        let backend = self
+        let mut backend = self
             .backends()
             .resolve_or_chain(facts.class_id, facts.artifact_root, |id| {
                 if self.config.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None }
@@ -1456,29 +1456,58 @@ impl PalwProducerService {
         // producer hold. The reservation lives until this function returns, on every path.
         // The holding is found through the door the backend came through (the route-matrix
         // re-audit's #5): a chain-registered class's artifact was priced at zero bytes off the tables.
-        let need = self.backends().role_memory_need_for_backend_or_chain_v1(
-            backend.as_ref(),
-            facts.class_id,
-            facts.artifact_root,
-            Some(&job),
-            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer,
-            |id| if self.config.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None },
-        );
-        let reserved = crate::palw_memory_ledger::host_ledger_v1().reserve(
-            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role: "producer", class_id: facts.class_id, job: job.context_hash() },
-            need.total_bytes(),
+        //
+        // **At the widest prefill run the ledger grants** (int-10.2 A2, `palw_prefill_run`): the cap's
+        // width (64 unless `--palw-prefill-run-max` says less) whenever its need fits — an attempt is the
+        // producer's race, and the widest width is the fastest — and a narrower one only where the
+        // attempt would otherwise HOLD, since an attempt that holds produces nothing. The width is set on
+        // this attempt's own instance, its need derived from it, and that instance is what executes.
+        let backends = self.backends();
+        let reserved = crate::palw_prefill_run::reserve_at_widest_run_v1(
+            backend.as_mut(),
+            crate::palw_prefill_run::armed_prefill_run_cap_v1(),
+            |b| {
+                backends.role_memory_need_for_backend_or_chain_v1(
+                    b,
+                    facts.class_id,
+                    facts.artifact_root,
+                    Some(&job),
+                    kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer,
+                    |id| if self.config.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None },
+                )
+            },
+            |need| {
+                crate::palw_memory_ledger::host_ledger_v1()
+                    .reserve(
+                        crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                            role: "producer",
+                            class_id: facts.class_id,
+                            job: job.context_hash(),
+                        },
+                        need.total_bytes(),
+                    )
+                    .map_err(|refusal| refusal.to_string())
+            },
         );
         // The ledger as it stands after this decision, where `getPalwNodeStatus` reads it — on the
         // refusal as much as on the grant, since the refusal is the state an operator asks about.
         self.flow_context.update_palw_runtime(crate::palw_backends::publish_memory_ledger_v1);
-        let _reserved = reserved.map_err(|refusal| {
-            format!(
-                "this attempt needs {} for a {}-token prefill and {refusal} — holding rather than being OOM-killed; a \
-                 narrower class, a host with the memory, or the running duty finishing, produces",
-                need.describe(),
-                prompt.len()
-            )
-        })?;
+        let _reserved = match reserved {
+            Ok(taken) => {
+                if taken.need_at_cap.is_some() {
+                    crate::palw_prefill_run::note_narrowed_v1(PALW_PRODUCER, "producer", &format!("class {}", facts.class_id), &taken);
+                }
+                taken.reserved
+            }
+            Err((refusal, need)) => {
+                return Err(format!(
+                    "this attempt needs {} for a {}-token prefill and {refusal} — holding rather than being OOM-killed; a \
+                     narrower class, a host with the memory, or the running duty finishing, produces",
+                    need.describe(),
+                    prompt.len()
+                ));
+            }
+        };
         let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
         let tamper = self.config.drill_tamper_leaf;
         // ADR-0112 Decision 8: what one draw reads from storage, printed beside the draw. The
@@ -1934,7 +1963,7 @@ mod da_ladder_tests {
                 && guard.contains("return Err(refusal);")
         );
         let job = src.find("let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(").expect("the job");
-        let reservation = src.find("let need = self.backends().role_memory_need_for_backend_or_chain_v1(").expect("the reservation");
+        let reservation = src.find("let reserved = crate::palw_prefill_run::reserve_at_widest_run_v1(").expect("the reservation");
         assert!(job < at && at < reservation, "after the job is fixed, before a byte of the run is reserved");
     }
 }

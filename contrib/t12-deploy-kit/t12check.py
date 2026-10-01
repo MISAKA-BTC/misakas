@@ -257,7 +257,7 @@ def main():
         # 10-01 (panel backlog, F4): the verification debt — key=value pairs from the ledger, the seat and the producer.
         ver = str(pick(st, "verification", default="") or "")
         if ver:
-            print(f"  verification: {ver[:400]}")
+            print(f"  verification: {ver[:700]}")
             kv = dict(p.split("=", 1) for p in ver.split() if "=" in p)
             def num(key):
                 try:
@@ -279,6 +279,29 @@ def main():
                 print(f"  WARNING: this seat's oldest duty has waited {wait} DAA for its panel's quorum (healthy: 2-6)")
             if num("seat_receipts_1h") is not None and (num("seat_duties") or 0) > 20 and num("seat_receipts_1h") < 20:
                 print(f"  WARNING: this seat filed only {num('seat_receipts_1h')} receipts in the last hour with {num('seat_duties')} duties on the chain")
+            # 10-01 int-10.2 A1: the class artifacts this node pinned -- resident once on the HOST (count each distinct file once
+            # across the seats that report it), outside the ledger, charged to the cgroup of the seat that faulted it in first.
+            if num("pinned_mib") is not None:
+                print(f"  pinned class artifacts: {num('pinned_mib')} MiB in {num('pinned_files') or 0} file(s) (resident once on the host, "
+                      f"not reserved per replay)")
+                if (num("pinned_files") or 0) == 0:
+                    print("  NOTE: no class artifact is pinned -- expected on a node that holds the 8k or IR artifact; its journal says why "
+                          "(`is not pinned:` -- RLIMIT_MEMLOCK, the cap, or the host's room), and its replays reserve the file as before")
+            # 10-01 int-10.2 A2: the prefill run width replays run at -- the cap, the last one taken, how many reservations the
+            # ledger had to narrow, and the classes this host can meet only below 16 (their receipts are the class's slow tail).
+            if num("run_cap") is not None:
+                print(f"  prefill run: cap {num('run_cap')}, last {num('run_last')}, narrowed {num('run_narrowed')} reservation(s) since start")
+                if (num("capacity_narrow_classes") or 0) > 0:
+                    print(f"  WARNING: this host can replay {num('capacity_narrow_classes')} class(es) only below a prefill run of 16 "
+                          f"(narrowest {num('capacity_run_min')}): its replays of them run slowly -- the journal names the class")
+            # 10-01 int-10.2 D1: the host ledger every node on a multi-seat host shares, as its file says it now -- who takes part
+            # (the seats as nodes, the pinner), what is reserved on the host and by how many, and its distinct pinned files.
+            if kv.get("host_ledger") == "on":
+                print(f"  host ledger: {num('host_nodes')} node(s) and {num('host_pinner')} pinner, {num('host_reserved_mib')} MiB reserved by "
+                      f"{num('host_reserving')}, {num('host_pinned_mib')} MiB pinned in {num('host_pinned_files')} distinct file(s)")
+                if (num("host_pinner") or 0) == 0:
+                    print("  NOTE: no host pinner is registered on this host -- the artifacts' page cache is charged to the seat that "
+                          "faulted it first (a multi-seat host runs misaka-palw-pinner: pinner-lib.sh)")
         # 09-25: the seat duties are always on for a bonded node — the startup 'PALW duties' line is the
         # PLAN; this is whether the panel worker actually started (its key and bond loaded, the gossip
         # inbox was free).

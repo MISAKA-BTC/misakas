@@ -580,6 +580,22 @@ pub struct Args {
     /// an over-committed host lowers it — and the memory ledger still gates every start. A host
     /// whose load average per CPU is over 3 runs one regardless (the 2026-10-01 backlog).
     pub palw_seat_replay_slots: Option<u32>,
+    /// int-10.2 A1: do NOT pin the class artifacts this node reads in place (`palw_artifact_pin`).
+    /// Pinning is on by default: the one page-cache copy of each such file is locked in RAM and a
+    /// replay of its class reserves none of its bytes. Off, every replay reserves the file again, as
+    /// before this release.
+    pub palw_no_artifact_pin: bool,
+    /// int-10.2 A1: the most file bytes this process pins (`None` = a quarter of the host's memory).
+    pub palw_artifact_pin_max_bytes: Option<u64>,
+    /// int-10.2 A2: the widest prefill run (positions a layer at a time) a replay or an attempt runs at
+    /// (`None` = 64, the engine's). Each reservation takes the widest width up to this whose need the
+    /// memory ledger can grant, and runs at it; a narrower width trades speed for trace scratch.
+    pub palw_prefill_run_max: Option<u32>,
+    /// int-10.2 D1: the directory of the host ledger every kaspad on this host shares (`None` = off).
+    /// Set, every grant of this node's memory ledger also needs the host's aggregate bound.
+    pub palw_host_ledger_dir: Option<String>,
+    /// int-10.2 D1: run as the host pinner — pin every `--palw-class-artifact` and hold them, nothing else.
+    pub palw_host_pinner: bool,
     pub retention_period_days: Option<f64>,
 
     pub override_params_file: Option<String>,
@@ -755,6 +771,11 @@ impl Default for Args {
             palw_host_node_count: 1,
             palw_host_memory_share: None,
             palw_seat_replay_slots: None,
+            palw_no_artifact_pin: false,
+            palw_artifact_pin_max_bytes: None,
+            palw_prefill_run_max: None,
+            palw_host_ledger_dir: None,
+            palw_host_pinner: false,
             retention_period_days: None,
             override_params_file: None,
             rocksdb_preset: None,
@@ -2553,6 +2574,76 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 ),
         )
         .arg(
+            Arg::new("palw-no-artifact-pin")
+                .long("palw-no-artifact-pin")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW: do not pin the class artifacts this node reads in place (a dense .palwart, an IR \
+                     container). By default each is mapped shared and locked in RAM at load: the host's one page-cache \
+                     copy of the file — shared by every node on the host that maps it — is no longer evicted under memory \
+                     pressure and refaulted 4 KiB at a time under a replay, and a replay of its class no longer reserves \
+                     the file's bytes on this node's memory ledger (five seats charged five times for one copy on \
+                     testnet-12's 5.104). A pin the kernel refuses (RLIMIT_MEMLOCK: LimitMEMLOCK=infinity in a systemd \
+                     unit, ulimit -l unlimited in a shell), a cap it would pass or a host without the room keeps the old \
+                     behaviour and says so in the log. A Qwen3.6 artifact is never pinned: its residency decides.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-artifact-pin-max-bytes")
+                .long("palw-artifact-pin-max-bytes")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "MISAKA PALW: the most file bytes this node pins, over every class artifact it pins (default: a \
+                     quarter of the host's memory — on a 24 GiB host 6 GiB, which holds the 8k .palwart and the IR \
+                     container). A file that would pass it is not pinned and its replays reserve its bytes as before. \
+                     Several nodes on one host pinning the same file pay for it once: the cap is per process.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-prefill-run-max")
+                .long("palw-prefill-run-max")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u32).range(1..=64))
+                .help(
+                    "MISAKA PALW: the widest prefill run a replay or an attempt of a dense class walks (positions run \
+                     through each layer together; default 64, 1 to 64). Each run holds its positions' committed traces \
+                     until they are captured — at 64 an 8k replay's trace scratch is 1.67 GiB, at 32 0.84, at 16 0.42 — \
+                     so a reservation takes the widest width up to this whose need the memory ledger can grant now, and \
+                     the replay runs at exactly that width; every width commits the same bits. Lower it to make every \
+                     replay lighter and slower (stepped one position at a time a replay is ~2.5x slower than at 64).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-host-ledger-dir")
+                .long("palw-host-ledger-dir")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "MISAKA PALW: the directory of the host ledger every node on this host shares (e.g. /run/misaka-palw; \
+                     off when unset). Each node's memory ledger bounds its own duties by its share and the host's free \
+                     memory less ITS OWN reservations, so several nodes on one host each promise the same free memory \
+                     (five seats on a 24 GiB host swapped all night on testnet-12); with this set, every grant is also \
+                     registered here and needs the host's free memory less EVERY node's reservations. Give every node on \
+                     the host the same directory. A directory that cannot be created or written turns it off with a \
+                     warning; a node whose process is gone stops counting at the next grant.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-host-pinner")
+                .long("palw-host-pinner")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW: run as this host's pinner and nothing else — no chain, no appdir, no bond: lock every \
+                     --palw-class-artifact a replay reads in place (a dense .palwart, an IR container; never a Qwen3.6 \
+                     container) in RAM, register them in --palw-host-ledger-dir when given, and wait to be stopped. Started \
+                     before the host's seats, it is the memory cgroup their page cache is charged to, so no seat carries \
+                     an artifact in its own cgroup because it loaded first. Under a systemd Type=notify unit it reports \
+                     READY once every file is locked; it exits 1 if it could lock none. The seats still pin the same files \
+                     themselves (free: the pages are resident), so stopping it changes nothing for a running seat.",
+                ),
+        )
+        .arg(
             Arg::new("palw-host-node-count")
                 .long("palw-host-node-count")
                 .env("KASPAD_PALW_HOST_NODE_COUNT")
@@ -2932,6 +3023,14 @@ impl Args {
             palw_host_node_count: arg_match_unwrap_or::<u32>(&m, "palw-host-node-count", defaults.palw_host_node_count),
             palw_host_memory_share: m.get_one::<u64>("palw-host-memory-share").copied().or(defaults.palw_host_memory_share),
             palw_seat_replay_slots: m.get_one::<u32>("palw-seat-replay-slots").copied().or(defaults.palw_seat_replay_slots),
+            palw_no_artifact_pin: arg_match_unwrap_or::<bool>(&m, "palw-no-artifact-pin", defaults.palw_no_artifact_pin),
+            palw_artifact_pin_max_bytes: m
+                .get_one::<u64>("palw-artifact-pin-max-bytes")
+                .copied()
+                .or(defaults.palw_artifact_pin_max_bytes),
+            palw_prefill_run_max: m.get_one::<u32>("palw-prefill-run-max").copied().or(defaults.palw_prefill_run_max),
+            palw_host_ledger_dir: m.get_one::<String>("palw-host-ledger-dir").cloned().or(defaults.palw_host_ledger_dir.clone()),
+            palw_host_pinner: arg_match_unwrap_or::<bool>(&m, "palw-host-pinner", defaults.palw_host_pinner),
             retention_period_days: m.get_one::<f64>("retention-period-days").cloned().or(defaults.retention_period_days),
 
             #[cfg(feature = "devnet-prealloc")]
