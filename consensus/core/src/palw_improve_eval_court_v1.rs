@@ -719,6 +719,24 @@ impl PalwEvalEvidenceV1<'_> {
         self.wire(&v, &restricted, self.restrict_params(&v, &all, &used))
     }
 
+    /// **The accusation of a dissected leaf**: the binding and the disputed leaf with its path under its stage's root,
+    /// nothing else (spec 17 §17.8.6.3). Under the held regime a leaf whose cone reduces over the history is never tried
+    /// whole; this names it ([`palw_eval_named_dissected_leaf_v1`]), and the session it opens plays F7's dissection.
+    pub fn named_leaf_close(&self, index: u64) -> Result<PalwEvalConeCloseV1, String> {
+        let v = self.verified()?;
+        let (s, i) = v.space.locate(index).ok_or_else(|| format!("{index} is no leaf of this execution"))?;
+        let opened = self.execution.open(s as u8, i as u64).ok_or_else(|| format!("stage {s} leaf {i} does not open"))?;
+        let disputed = PalwGenLeafOpeningV1::of(&v.space, &opened).ok_or("the named leaf does not ride")?;
+        Ok(PalwEvalConeCloseV1 {
+            version: PALW_IMPROVE_EVAL_COURT_VERSION_V1,
+            binding: self.binding.clone(),
+            prompt_ids: Vec::new(),
+            disputed,
+            operands: Vec::new(),
+            params: PalwEvalParamsV1::Single(Vec::new()),
+        })
+    }
+
     /// **A decode close of generated id `t`**: every tile of its logits row.
     pub fn decode_close(&self, t: u32) -> Result<PalwEvalDecodeCloseV1, String> {
         let v = self.verified()?;

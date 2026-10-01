@@ -7518,6 +7518,22 @@ pub enum PalwConsensusObjectV2 {
     ImprovementPoolFunded {
         payload: Box<crate::palw_improve_state_v1::PalwImprovementPoolFundingV1>,
     },
+    // ---- RFC-0004 A6: the evaluation court's history dissection (spec 17 §17.8.6.3) ----
+    /// **Move 1 of a history dissection of an evaluation claim: the responder's root claim** at a dissected leaf
+    /// ([`crate::palw_improve_eval_court_v1::PalwEvalRootClaimV1`]) — `CourtGenRootClaimed` with the evaluation cone
+    /// close as its finalize's carriage. The acceptance layer admits it only if it finalizes to the committed leaf
+    /// reading exactly the claimed values (`check_eval_root_claim_v1`, at the court's limits) and `arity` is the
+    /// ruleset's derived one; the fold derives the site from the claim's own evaluation context and opens F7's phase
+    /// (`tir_dissections`), whose rounds and choices are F7's own objects (tags 65, 66). Signed by the claim's bond
+    /// under the ADR-0082 responder context over
+    /// [`crate::palw_improve_eval_court_v1::palw_eval_root_claim_message_v1`]. Appended after the reserved tags of
+    /// spec 17 §17.0 (its tag is assigned at the integration); dropped by name below `palw_improvement_v1`.
+    CourtEvalRootClaimed {
+        session_id: Hash64,
+        root: Box<crate::palw_improve_eval_court_v1::PalwEvalRootClaimV1>,
+        arity: u8,
+        signature: Vec<u8>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7577,6 +7593,7 @@ pub fn palw_object_is_eval_v1(object: &PalwConsensusObjectV2) -> bool {
     match object {
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_eval_v1(),
         PalwConsensusObjectV2::TirShardCourtAccused { accusation } => accusation.proof.is_eval_v1(),
+        PalwConsensusObjectV2::CourtEvalRootClaimed { .. } => true,
         _ => false,
     }
 }
@@ -7647,6 +7664,7 @@ pub fn palw_object_is_tir_dissection_move_v1(object: &PalwConsensusObjectV2) -> 
             | PalwConsensusObjectV2::CourtTirDissected { .. }
             | PalwConsensusObjectV2::CourtTirChildChosen { .. }
             | PalwConsensusObjectV2::CourtGenRootClaimed { .. }
+            | PalwConsensusObjectV2::CourtEvalRootClaimed { .. }
     )
 }
 
@@ -8664,7 +8682,8 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         | PalwConsensusObjectV2::CourtTirRootClaimed { session_id, .. }
         | PalwConsensusObjectV2::CourtTirDissected { session_id, .. }
         | PalwConsensusObjectV2::CourtTirChildChosen { session_id, .. }
-        | PalwConsensusObjectV2::CourtGenRootClaimed { session_id, .. } => session_id,
+        | PalwConsensusObjectV2::CourtGenRootClaimed { session_id, .. }
+        | PalwConsensusObjectV2::CourtEvalRootClaimed { session_id, .. } => session_id,
         _ => return false,
     };
     let Some(session) = state.court_session(session_id) else {
@@ -8706,6 +8725,13 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         // RFC-0003: the generative root claim, by the same questions (its finalize is a demand
         // evaluation at the court's limits too).
         PalwConsensusObjectV2::CourtGenRootClaimed { root, .. } => {
+            session.dissection.is_none()
+                && state.tir_dissections.get(session_id).is_none()
+                && session.ladder.terminal_index().is_some()
+                && root.version == crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1
+        }
+        // RFC-0004 A6: the evaluation root claim, by the same questions.
+        PalwConsensusObjectV2::CourtEvalRootClaimed { root, .. } => {
             session.dissection.is_none()
                 && state.tir_dissections.get(session_id).is_none()
                 && session.ladder.terminal_index().is_some()
@@ -33782,6 +33808,42 @@ fn apply_object(
             let site =
                 crate::palw_gen_close_v1::palw_gen_root_claim_site_v1(root, row, &claim.class_id, &claim.execution_root, narrowed)
                     .map_err(refused)?;
+            let mut phase = crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open_parts(
+                *session_id,
+                narrowed,
+                &site,
+                root.version,
+                &root.elements,
+                &root.totals,
+                *arity,
+                ctx.daa_score,
+                builder.params.turn_deadline_daa(),
+            )
+            .map_err(|e| refused(e.to_string()))?;
+            cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
+            builder.write_tir_dissection(*session_id, Some(phase));
+            builder.write_court(*session_id, Some(session))?;
+        }
+        // **RFC-0004 A6: an evaluation claim's root claim opens F7's phase** — the generative arm above over the
+        // claim's own evaluation context: the claim must be the evaluation claim the job table holds for the
+        // binding's job, the binding the claim's, and the site the context's description of the narrowed leaf,
+        // derived from the class's program and the job's trips (`palw_eval_root_claim_site_v1`), never supplied by
+        // the mover. The finalize is the acceptance layer's; `palw_improvement_v1` is the lock above.
+        PalwConsensusObjectV2::CourtEvalRootClaimed { session_id, root, arity, signature: _ } => {
+            let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            if session.dissection.is_some() || builder.state.tir_dissections.contains_key(session_id) {
+                return Err(PalwStateV2Error::DissectionAlreadyOpen(*session_id));
+            }
+            let narrowed = session.ladder.terminal_index().ok_or(PalwStateV2Error::LadderNotTerminal(*session_id))?;
+            let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
+            let refused = |why: String| PalwStateV2Error::DissectionRefused(*session_id, why);
+            let site = {
+                let facts = builder
+                    .state
+                    .improvement_eval_claim_facts_v1(&claim, &root.finalize.binding)
+                    .map_err(|why| refused(why.into()))?;
+                crate::palw_improve_eval_court_v1::palw_eval_root_claim_site_v1(root, &facts, narrowed).map_err(refused)?
+            };
             let mut phase = crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open_parts(
                 *session_id,
                 narrowed,

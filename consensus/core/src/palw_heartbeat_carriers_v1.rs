@@ -103,6 +103,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::CourtTirRootClaimed { .. } | O::CourtTirDissected { .. } | O::CourtTirChildChosen { .. } => true,
         // RFC-0003 (tag 69): the generative root claim, a court move like F7's.
         O::CourtGenRootClaimed { .. } => true,
+        // RFC-0004 A6: the evaluation root claim, a court move like the generative one.
+        O::CourtEvalRootClaimed { .. } => true,
         // ADR-0152 §4-ter: the held dissection's opening and step 6's checkpoint conviction.
         O::ShardCourtAccused { .. } | O::CheckpointAccused { .. } => true,
         // RFC-0002 Phase F (tag 62): the IR one-move accusation, a court opening like the one above.

@@ -12389,6 +12389,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         PalwConsensusObjectV2::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
+        PalwConsensusObjectV2::CourtEvalRootClaimed { .. } => "CourtEvalRootClaimed",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
