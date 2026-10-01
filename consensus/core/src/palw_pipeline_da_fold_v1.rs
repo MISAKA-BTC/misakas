@@ -59,7 +59,7 @@ pub(super) fn open_da_session_pipeline_step_v1(
     }
     let claim_id = accusation.claim;
     let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
-    pipeline_claim_facts_v1(builder.state, &claim_id, claim)
+    pipeline_claim_facts_v1(&builder.state, &claim_id, claim)
         .map_err(|why| PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why })?;
     palw_pipeline_step_unit_is_admissible_v1(&accusation.unit).map_err(PalwStateV2Error::PipelineDaRefused)?;
     open_da_session_rcore_v1(builder, ctx, claim_id, accusation.accuser, accusation.unit, None)
@@ -82,7 +82,7 @@ pub(super) fn check_pipeline_answer_v1(
             why: "a pipeline answer before palw_improvement_v1 is in force",
         });
     }
-    let facts = pipeline_claim_facts_v1(builder.state, &claim_id, claim)
+    let facts = pipeline_claim_facts_v1(&builder.state, &claim_id, claim)
         .map_err(|why| PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why })?;
     let refused = |why: &'static str| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: why.to_string() };
     match (unit, answer) {
@@ -454,7 +454,7 @@ mod tests {
             stage_roots: parts.stage_roots.clone(),
             prompt_root: h64(1),
             prompt_tokens: 3,
-            params: crate::palw_improve_eval_v1::PalwEvalStageParamsV1::Pairwise { margin: 0 },
+            params: crate::palw_improve_eval_v1::PalwEvalStageParamsV1::Pairwise { margin: 0, logit_scale_q24: 1 << 24 },
             generated_root: h64(2),
             finalized_root: h64(3),
             score: vec![0],
@@ -531,7 +531,7 @@ mod tests {
             stage_roots,
             prompt_root: h64(1),
             prompt_tokens: 3,
-            params: crate::palw_improve_eval_v1::PalwEvalStageParamsV1::Pairwise { margin: 0 },
+            params: crate::palw_improve_eval_v1::PalwEvalStageParamsV1::Pairwise { margin: 0, logit_scale_q24: 1 << 24 },
             generated_root: h64(2),
             finalized_root: h64(3),
             score: vec![0],
@@ -551,7 +551,7 @@ mod tests {
         let unit = PalwDaUnitV1::PipelineStepLeaf { stage: 1, index: 500 };
         let refused = run.try_at(FENCE, &[demand(claim_id, unit, OTHER)], None);
         assert!(matches!(refused, Err(PalwStateV2Error::DaAnswerMalformed { .. })), "no job recorded: {refused:?}");
-        run.s.improvement_eval_claims.insert(claim_id, (h64(10), 1, 0, PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch));
+        run.s.improvement_eval_claims.insert(claim_id, (h64(10), 1, 0, PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch, 0));
         run.at(FENCE, &[demand(claim_id, unit, OTHER)], None);
         assert_eq!(run.session_units(&claim_id, OTHER), Some(vec![unit]));
         let (generative, gen_leaves) = gen_binding([9, 1030, 2]);

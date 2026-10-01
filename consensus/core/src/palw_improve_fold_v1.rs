@@ -2367,7 +2367,7 @@ mod tests {
         let s = at(&s, &p, 2_400, |b| cases(b, 0x70, 2_400));
         let s = at(&s, &p, 2_510, |b| {
             for _ in 0..3 {
-                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 2, &PalwEvalSubjectV1::Parent, &bond(CAROL)).unwrap(), fee_per_job);
+                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 2, &PalwEvalSubjectV1::Parent, &bond(CAROL), None).unwrap(), fee_per_job);
             }
         });
         let e2 = s.improvement_epoch(&h(LINE), 2).unwrap();
@@ -2437,7 +2437,7 @@ mod tests {
         });
         let s = at(&s, &p, 1_510, |b| {
             for _ in 0..3 {
-                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &PalwEvalSubjectV1::Parent, &bond(CAROL)).unwrap(), 1);
+                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &PalwEvalSubjectV1::Parent, &bond(CAROL), None).unwrap(), 1);
             }
         });
         assert_eq!(s.improvement_epoch(&h(LINE), 1).unwrap().state, PalwEpochStateV1::Evaluating);
