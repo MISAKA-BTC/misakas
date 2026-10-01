@@ -8675,7 +8675,7 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         // acceptance is a demand evaluation at the IR court's limits, which is what the slot bounds).
         PalwConsensusObjectV2::CourtTirRootClaimed { root, .. } => {
             session.dissection.is_none()
-                && state.tir_dissections.get(session_id).is_none()
+                && !state.tir_dissections.contains_key(session_id)
                 && session.ladder.terminal_index().is_some()
                 && root.version == crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1
         }
@@ -8683,7 +8683,7 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         // evaluation at the court's limits too).
         PalwConsensusObjectV2::CourtGenRootClaimed { root, .. } => {
             session.dissection.is_none()
-                && state.tir_dissections.get(session_id).is_none()
+                && !state.tir_dissections.contains_key(session_id)
                 && session.ladder.terminal_index().is_some()
                 && root.version == crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1
         }
@@ -20573,11 +20573,11 @@ impl<'a> TransitionBuilder<'a> {
         {
             return Ok(());
         }
-        if valid_signers.is_empty() {
-            if let Some(panel) = self.state.panels.get(&claim_id) {
-                for seat in &panel.seats {
-                    valid_signers.push((seat.bond.0, claim_id));
-                }
+        if valid_signers.is_empty()
+            && let Some(panel) = self.state.panels.get(&claim_id)
+        {
+            for seat in &panel.seats {
+                valid_signers.push((seat.bond.0, claim_id));
             }
         }
         let (voided_daa, void_reason) = match voided {
@@ -21721,11 +21721,11 @@ impl<'a> TransitionBuilder<'a> {
         payload: &crate::palw_offence_v1::PalwPanelFalseValidEvidenceV1,
     ) -> Result<(Hash64, Hash64), PalwStateV2Error> {
         if let Some(claim) = self.state.claims.get(&payload.claim_id) {
-            let artifact = self.state.classes.get(&claim.class_id).map(|c| c.artifact_root).unwrap_or(Hash64::default());
+            let artifact = self.state.classes.get(&claim.class_id).map(|c| c.artifact_root).unwrap_or_default();
             return Ok((claim.execution_root, artifact));
         }
         if let Some(row) = self.state.panel_liabilities.get(&payload.claim_id) {
-            let artifact = self.state.classes.get(&row.class_id).map(|c| c.artifact_root).unwrap_or(Hash64::default());
+            let artifact = self.state.classes.get(&row.class_id).map(|c| c.artifact_root).unwrap_or_default();
             return Ok((row.execution_root, artifact));
         }
         Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -37698,10 +37698,10 @@ fn palw_improvement_carriage_consistent_v1(c: &PalwStateCarriageV2) -> Result<()
     for id in c.improvement_policies.keys().chain(c.improvement_usage.keys()).chain(c.improvement_pools.keys()) {
         line(id, "a policy, usage or pool row")?;
     }
-    for ((id, _), _) in &c.improvement_heads {
+    for (id, _) in c.improvement_heads.keys() {
         line(id, "a head entry")?;
     }
-    for ((id, _), _) in &c.improvement_material {
+    for (id, _) in c.improvement_material.keys() {
         line(id, "a material frontier")?;
     }
     let detail = c.improvement_candidates.keys().chain(c.improvement_items.keys());

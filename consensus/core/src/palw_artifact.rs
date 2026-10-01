@@ -452,7 +452,7 @@ impl PalwArtifactMultiproofStreamV1 {
                 self.kept.insert((level, index), hash);
             }
             let Some(&width) = self.widths.get(level) else { return }; // the root
-            if index % 2 == 0 {
+            if index.is_multiple_of(2) {
                 if index == width - 1 {
                     level += 1; // promoted, not duplicated
                     continue;

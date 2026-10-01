@@ -874,7 +874,7 @@ pub fn palw_gen_class_preflight_v1(
         .shape
         .iter()
         .fold(1u64, |acc, d| acc.saturating_mul(if let Dim::Fixed(n) = d { *n as u64 } else { 0 }));
-    if matches!(out_prog.output, OutputDecl::Rows { .. }) && row % output_tile_len as u64 != 0 {
+    if matches!(out_prog.output, OutputDecl::Rows { .. }) && !row.is_multiple_of(output_tile_len as u64) {
         return out(format!("a row of {row} elements is not whole tiles of {output_tile_len} (PALW-OUT-3's alignment)"));
     }
 
