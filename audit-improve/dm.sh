@@ -57,48 +57,72 @@ note() { echo "  note $*"; }
 # ---------------------------------------------------------------------------------------------------------------------
 plan() {
     python3 - "$A/drill.json" "$FENCE_AT" "$FENCE2_AT" "$FENCE3_AT" "$TIR_AT" "$TIR2_AT" "$GEN_AT" "$DECODE_AT" "$IMPROVE_AT" "$CAND_FORM" <<'PY'
-import json, sys
-p = json.load(open(sys.argv[1])); f = list(map(int, sys.argv[2:10]))
-w = p["policy"]["windows"]; le = sum(w[k] for k in ("w_collect", "w_submit", "w_holdout", "w_eval", "court_margin")); g = w["grid"]
+import json, math, sys
+p = json.load(open(sys.argv[1])); f = list(map(int, sys.argv[2:10])); cand_form = sys.argv[10]
+base = p["policy"]["windows"]
+def form_of(line): return "full" if cand_form == "full" else p["lines"][line].get("form", "composite")
+def windows(line):
+    w = dict(base)
+    row = p["lines"][line]
+    for ov in (row.get("policy"), row.get("policy_composite") if form_of(line) == "composite" else None):
+        w.update((ov or {}).get("windows") or {})
+    return w
+def clock(line):
+    w = windows(line); o = w["grid"]; fix = o + w["w_collect"]; close = fix + w["w_submit"]; draw = close + w["w_holdout"]; ev = draw + w["w_eval"]
+    return dict(w=w, open=o, fix=fix, close=close, draw=draw, ev=ev, score=ev + w["court_margin"], dec=ev + 170,
+                le=sum(w[k] for k in ("w_collect", "w_submit", "w_holdout", "w_eval", "court_margin")))
 H = lambda daa: f"{daa / 27.7:5.1f} h"
+C = {n: clock(n) for n in p["lines"]}
 print(f"== plan (one chain; ~133 s per DAA = 27.7 DAA/h, measured on D-F's chain)")
 print(f"  fences  flag days {f[0]}/{f[1]}/{f[2]}, IR {f[3]}, IR-2 {f[4]}, generative {f[5]}, decode rules {f[6]} (if the build has the flag), improvement {f[7]}")
-print(f"  epoch   grid {g}, L_e = {le} DAA = {H(le)}  (collect {w['w_collect']}, submit {w['w_submit']}, hold-out {w['w_holdout']}, eval {w['w_eval']}, court margin {w['court_margin']}; beacon {w['beacon_delay']})")
-print(f"          the court margin is the claims' time to Final: a claim is licensed in a few tens of DAA and Final 120 DAA after its licence")
-print(f"          (the short challenge window), ~150-170 DAA from the claim; a shorter margin leaves the last claims missing, which count for the incumbent")
-print( "  lines   W1 (H's founding line, owner seat 4), W2, L and T (founded by seat 7 on H): all four open at the same boundary")
+print( "  lines   " + ", ".join(f"{n} ({form_of(n)})" for n in p["lines"]) + "  (CAND_FORM=" + cand_form + ")")
+print( "          W1 is H's founding line (owner seat 4); W2, L and T are founded by seat 7 on H. A composite line holds its candidates as parent + adapter section and has the long")
+print( "          Submission window; the full-weight lines are the extra ones, with the short windows. Every line has its own policy, so its own grid.")
+for n, c in C.items():
+    w = c["w"]
+    print(f"  epoch   {n}: grid {w['grid']}, L_e = {c['le']} DAA = {H(c['le'])}  (collect {w['w_collect']}, submit {w['w_submit']}, hold-out {w['w_holdout']}, eval {w['w_eval']}, court margin {w['court_margin']}; beacon {w['beacon_delay']})")
+print( "          the court margin is the claims' time to Final: a claim is licensed in a few tens of DAA and Final 120 DAA after its licence")
+print( "          (the short challenge window), ~150-170 DAA from the claim; a shorter margin leaves the last claims missing, which count for the incumbent")
 print( "  who     seat 7 = the drills' own bond (no node): setter, candidates, registrant, owner of W2, L and T; seat 3 a second setter and the dataset contributor;")
 print( "          new4 registers and produces H; new5 and new6 evaluate; new6 also produces W (the usage of W1 once W heads it); the old relay peers new0")
 print( "  D-M3    on line T new5 commits one moved step leaf and new6 one moved first id (--palw-drill-tamper-eval, drill chains only); new1 (--palw-challenge) replays")
-print( "          every claim, locates each lie from the shared capture dir and files the evaluation court's proof: the claims void, the bonds are slashed")
-t_open = g
-t_fix = t_open + w["w_collect"]; t_close = t_fix + w["w_submit"]; t_draw = t_close + w["w_holdout"]; t_ev = t_draw + w["w_eval"]; t_score = t_ev + w["court_margin"]
-print(f"  DAA     {f[3]:>5}  IR fence: new4 registers H;  seat 7 registers the candidate classes: composites winc/losec over H, and the full-weight `win` as the extra (CAND_FORM={sys.argv[10]})")
+print( "          every claim, locates each lie from the shared capture dir (a stand-in for the pipeline-claim data-availability units) and files the evaluation court's proof:")
+print( "          the claims void, the bonds are slashed")
+first_grid = min(c["w"]["grid"] for c in C.values())
+print(f"  DAA     {f[3]:>5}  IR fence: new4 registers H;  seat 7 registers the candidate classes the lines need (composites winc/losec over H; the full-weight win/lose)")
 print(f"          {f[7]:>5}  improvement fence; seat 7 founds W2, L and T; the four policies (opt-in); the material (a dataset, a hard case)")
-print(f"          ~{f[3] + 72:>4}  H and the full-weight class reach Probation (D-F's small class: 71 DAA from registration, jury and readiness)")
-print(f"          ~{f[3] + 72 + 160:>4}  H's first Final claim — the usage that opens an epoch (needs the grid boundary {g} to be later: {'ok' if f[3] + 72 + 160 < g else 'TOO LATE'})")
-print(f"          {t_open:>5}  OPEN (epoch 1, all four lines)   {H(t_open)}")
-print(f"          {t_fix:>5}  Submission: candidates, setter sets   {t_close:>5} HoldOut   {t_draw:>5} Drawing   {t_draw + w['beacon_delay']:>5} Evaluating (draw): prompts revealed")
-if sys.argv[10] == "composite":
-    print(f"  timing  a composite candidate's possession proofs wait for its record (CandidateSubmitted, from {t_fix}): its jury sits at its class's own audit slot of the 100-DAA")
-    print(f"          period (up to ~100 DAA after the record) and Probation follows: {t_fix} + ~110 = ~{t_fix + 110} against Closing at {t_ev}. {'TIGHT: the worst slot leaves no time for claims — a w_submit of ~120 (grid and L_e follow) makes it certain' if t_fix + 110 >= t_ev - 20 else 'fits'};")
-    print( "          the driver logs each class's slot at registration (admission-audit slots)")
-print(f"          {t_ev:>5}  Closing: no more claims; every claim Final by ~{t_ev + 160}; the keys revealed; scoring")
-print(f"          ~{t_ev + 170:>4}  epoch 1 decided (latest {t_score}) {H(t_ev + 170)}: W1 and W2 promote `win`, L is NoChange; W2's owner rolls back")
-print(f"          ~{t_ev + 170 + le:>4}  the grants' first vesting unit (vest_epochs 1, unit L_e)   {H(t_ev + 170 + le)}")
-nb = ((t_ev + 170) // g + 1) * g
-print(f"          {nb:>5}  L's epoch 2 (H's own claims keep its usage up): D-M6's hold-out flood in its HoldOut (~{nb + w['w_collect'] + w['w_submit'] + 1}), {H(nb + w['w_collect'] + w['w_submit'])}")
-print(f"          ~{nb + g:>4}  W1's epoch 2 (the regression check; `Previous` = H vs the promoted `win` on items W regresses) opens at the first boundary after W's")
-print(f"                 own claims are Final: ~{nb + g + le - 40}  it is decided  {H(nb + g + le - 40)}: the rollback by proof")
-print("  claims  4 lines x 8 items x (parent + candidates): ~80 evaluation claims in the 70-DAA window, one carrier per node per block")
+print(f"          ~{f[3] + 72:>4}  H and the full-weight classes reach Probation (D-F's small class: 71 DAA from registration, jury and readiness)")
+print(f"          ~{f[3] + 72 + 160:>4}  H's first Final claim — the usage that opens an epoch (needs the first grid boundary {first_grid} to be later: {'ok' if f[3] + 72 + 160 < first_grid else 'TOO LATE'})")
+events = {}
+for n, c in C.items():
+    for at, text in ((c["open"], "OPEN epoch 1"), (c["fix"], "Submission (candidates, setter sets)"), (c["close"], "HoldOut"),
+                     (c["draw"], f"Drawing, prompts revealed at {c['draw'] + c['w']['beacon_delay']}"),
+                     (c["ev"], f"Closing, every claim Final by ~{c['ev'] + 160}; keys revealed; scoring"), (c["dec"], f"epoch 1 decided (latest {c['score']})")):
+        events.setdefault((at, text), []).append(n)
+for (at, text), names in sorted(events.items()):
+    print(f"          {at:>5}  {', '.join(sorted(names))}: {text}   {H(at)}")
+for n, c in C.items():
+    if form_of(n) == "composite":
+        print(f"  timing  {n}: a composite candidate's possession proofs wait for its record (CandidateSubmitted, from {c['fix']}); its jury sits at its class's own audit slot of the 100-DAA period")
+        print(f"          (up to ~100 DAA after the record) and Probation follows: {c['fix']} + ~110 = ~{c['fix'] + 110} against the draw at {c['draw']} — {'fits inside Submission' if c['fix'] + 110 <= c['draw'] else 'TIGHT: claims may find the class not yet admitted'}")
+print( "          (the driver logs each class's admission-audit slot at registration)")
+l = C["L"]; nb = (l["dec"] // l["w"]["grid"] + 1) * l["w"]["grid"]
+print(f"  {nb:>9}  L's epoch 2 (H's own claims keep its usage up): D-M6's hold-out flood in its HoldOut (~{nb + l['w']['w_collect'] + l['w']['w_submit'] + 1}), {H(nb + l['w']['w_collect'] + l['w']['w_submit'])}")
+w1 = C["W1"]; g1 = w1["w"]["grid"]; open2 = math.ceil((w1["dec"] + 190) / g1) * g1
+dec2 = open2 + w1["w"]["w_collect"] + w1["w"]["w_submit"] + w1["w"]["w_holdout"] + w1["w"]["w_eval"] + 170
+print(f"  {open2:>9}  W1's epoch 2 (the regression check; `Previous` = H vs the promoted `win` on items W regresses) opens at the first boundary after W's own claims are Final")
+print(f"  ~{dec2:>8}  it is decided  {H(dec2)}: the rollback by proof — the run's end; the grants' first vesting unit is due ~{w1['dec'] + w1['le']} ({H(w1['dec'] + w1['le'])})")
+n_claims = sum(8 * (1 + len(p["lines"][n]["epochs"]["1"]["candidates"])) for n in p["lines"])
+print(f"  claims  8 items x (parent + candidates) per line: ~{n_claims} evaluation claims over the lines' 70-DAA windows, one carrier per node per block")
 PY
     cat <<'EOF'
 == what blocks, and what the drills stand in for
-  composite candidates  RFC-0004's own form (CAND_FORM=composite, the default): parent + PALWTIRS adapter. A seat fetches the adapter, proves
+  composite candidates  RFC-0004's own form (CAND_FORM=composite, the default; lines W1 and T, with the long Submission window): parent + PALWTIRS adapter. A seat fetches the adapter, proves
                         possession of it as a multiproof under the chain's `adapter_root` record (spec 17 §17.7.1) and of the parent as the
                         class of its own; the chain counts it ready for the composite only with both. Needs the core lane's composite
                         readiness in the build under test; below it a composite class never leaves Candidate (ClassNotAdmitting) and the
-                        drill stops there: CAND_FORM=full runs the full-weight form (the adapter merged: an ordinary IR class).
+                        drill stops there: CAND_FORM=full runs the full-weight form (the adapter merged: an ordinary IR class) on every line, with
+                        the short windows. W2 and L are the extra lines, with full-weight candidates, in either form.
   D-M3                  the evaluation court: a lying executor (--palw-drill-tamper-eval) is replayed by a challenger (--palw-challenge) that
                         finds where the lie is and files the court proof; the verdict reads the claim voided and the executor's bond slashed.
 EOF
@@ -238,13 +262,15 @@ objects_check() {
     local bond line out
     bond="$(printf '%0128x' 7):1"; line=$(model_id head)
     DM_SALT_DRY=$(openssl rand -hex 32)
-    python3 - "$A/drill.json" "$T" "$line" <<'PY'
+    python3 - "$A/drill.json" "$T" "$line" "$CAND_FORM" <<'PY'
 import json, sys, os, copy
-plan = json.load(open(sys.argv[1])); T = sys.argv[2]; line = sys.argv[3]
+plan = json.load(open(sys.argv[1])); T = sys.argv[2]; line = sys.argv[3]; cand_form = sys.argv[4]
 for name, l in plan["lines"].items():
     p = copy.deepcopy(plan["policy"])
-    for k, v in (l.get("policy") or {}).items():
-        p.setdefault(k, {}).update(v) if isinstance(v, dict) else p.__setitem__(k, v)
+    composite = cand_form != "full" and l.get("form", "composite") == "composite"
+    for overrides in (l.get("policy"), l.get("policy_composite") if composite else None):
+        for k, v in (overrides or {}).items():
+            p.setdefault(k, {}).update(v) if isinstance(v, dict) else p.__setitem__(k, v)
     json.dump({"line": line, "sequence": 1, "policy": p}, open(f"{T}/policy-{name}.json", "w"))
 PY
     local name okc=1
@@ -269,8 +295,8 @@ PY
         else bad "setter set from pool $name: $(tail -1 <<<"$out")"; fi
     done
     local cls asset
-    for cls in win lose extra; do
-        asset=$(asset_of "$cls")
+    for asset in win lose winc losec; do
+        cls=$asset
         if [ -s "$MODEL_DIR/$asset.palwtirs" ]; then   # a composite candidate: parent + section
             if out=$("$TOOLS_BIN/palw-class" improve candidate --network testnet-12 --drill-salt "$DM_SALT_DRY" --key-file "$T/seed" --bond "$bond" \
                      --spec "$T/cand.json" --parent "$MODEL_DIR/head.class.palwtir" --section "$MODEL_DIR/$asset.palwtirs" --out "$T/cand-$asset.obj" 2>&1); then

@@ -46,13 +46,13 @@ HEAD_CONTEXT=${HEAD_CONTEXT:-32}
 # merged into a full-weight class: an ordinary IR class; the form of the drills before the core lane's composite readiness, kept as
 # the extra line). The plan names its candidates `win` and `lose` and one `extra`; asset_of() says which model asset each is.
 CAND_FORM=${CAND_FORM:-composite}
-# asset_of <win|lose|extra|head> — the model asset (`$MODEL_DIR/<asset>.class.palwtir`, ids/<asset>.class) a plan name stands for.
-# composite: win=winc, lose=losec (the adapters as composite classes), extra=win (the full-weight winner, riding along on line L);
-# full: win=win, lose=lose (full-weight), extra=winc (the composite winner).
+# asset_of <win|lose|head> — the model asset (`$MODEL_DIR/<asset>.class.palwtir`, ids/<asset>.class) a plan name stands for ON LINE W1, the
+# composite line of D-M1 (the producer of W1's promoted head is configured by it): composite: win=winc, lose=losec (the adapters as composite
+# classes); full: win=win, lose=lose (full-weight). The other lines' forms are drill.json's (`form` per line; the driver reads them): W2 and L
+# are full-weight, T is composite.
 asset_of() {
     case "$CAND_FORM:$1" in
-        composite:win) echo winc ;; composite:lose) echo losec ;; composite:extra) echo win ;;
-        full:extra) echo winc ;;
+        composite:win) echo winc ;; composite:lose) echo losec ;;
         *) echo "$1" ;;
     esac
 }
@@ -169,13 +169,13 @@ node_args() {
             "--palw-fee-outpoint=$(manifest "m['seats'][$seat]['fee_float_outpoint']")")
     fi
     if [ "$ir" = 1 ]; then
-        # The head first (a composite section opens over it), then the full-weight candidates every seat must hold to be a ready
-        # seat for them: both in the full form, the winner alone in the composite form (the extra line's candidate). The composite
-        # candidates' sections are NOT loaded: they sit in the drop directory, and the seats that see a candidate fetch its section
-        # (adapter prefetch, RFC-0004 §6.7) and then prove possession of it.
+        # The head first (a composite section opens over it), then the full-weight candidates every seat must hold to be a ready seat
+        # for them (the extra lines W2 and L hold full-weight candidates in every form). The composite candidates' sections are NOT
+        # loaded: they sit in the drop directory, and the seats that see a candidate fetch its section (adapter prefetch, RFC-0004
+        # §6.7) and then prove possession of it.
         a+=("--palw-class-artifact=$MODEL_DIR/head.class.palwtir")
         [ -s "$MODEL_DIR/win.class.palwtir" ] && a+=("--palw-class-artifact=$MODEL_DIR/win.class.palwtir")
-        [ "$CAND_FORM" = full ] && [ -s "$MODEL_DIR/lose.class.palwtir" ] && a+=("--palw-class-artifact=$MODEL_DIR/lose.class.palwtir")
+        [ -s "$MODEL_DIR/lose.class.palwtir" ] && a+=("--palw-class-artifact=$MODEL_DIR/lose.class.palwtir")
         a+=("--palw-improve-artifact-dir=$MODEL_DIR/drop")
     fi
     case $role in

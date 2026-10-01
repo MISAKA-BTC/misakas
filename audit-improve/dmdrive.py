@@ -51,8 +51,6 @@ TIR_AT = int(E.get("TIR_AT", "20"))
 TICK_S = int(E.get("DM_TICK_S", "30"))
 PLAN = json.load(open(os.path.join(HERE, "drill.json")))
 POLICY = PLAN["policy"]
-WIN = POLICY["windows"]
-L_E = sum(WIN[k] for k in ("w_collect", "w_submit", "w_holdout", "w_eval", "court_margin"))
 
 NODES = {}
 for _row in (E.get("NODES") or "").strip().splitlines():
@@ -329,15 +327,35 @@ def parse_after(text, label):
 # ---------------------------------------------------------------------------------------------------------------------
 # the plan's derived facts
 # ---------------------------------------------------------------------------------------------------------------------
+def line_form(name):
+    """How a line's candidates are held: `composite` (parent + PALWTIRS adapter: RFC-0004's own form, on the lines the plan marks so) or `full` (the adapter merged
+    into a full-weight class: the extra lines, and every line when CAND_FORM=full — the form before the core lane's composite readiness)."""
+    if CAND_FORM == "full":
+        return "full"
+    return (PLAN["lines"].get(name) or {}).get("form", "composite")
+
+
 def line_policy(line):
-    """The drill's common policy with the line's own overrides (setter_cap_permille, …)."""
+    """The drill's common policy with the line's own overrides (setter_cap_permille, …) and, on a composite line, the long Submission window its candidates' admission
+    needs (`policy_composite`)."""
     p = json.loads(json.dumps(POLICY))
-    for k, v in (PLAN["lines"][line].get("policy") or {}).items():
-        if isinstance(v, dict):
-            p.setdefault(k, {}).update(v)
-        else:
-            p[k] = v
+    row = PLAN["lines"][line]
+    for overrides in (row.get("policy"), row.get("policy_composite") if line_form(line) == "composite" else None):
+        for k, v in (overrides or {}).items():
+            if isinstance(v, dict):
+                p.setdefault(k, {}).update(v)
+            else:
+                p[k] = v
     return p
+
+
+def line_windows(line):
+    return line_policy(line)["windows"]
+
+
+def line_l_e(line):
+    w = line_windows(line)
+    return sum(w[k] for k in ("w_collect", "w_submit", "w_holdout", "w_eval", "court_margin"))
 
 
 def pool(name):
@@ -350,22 +368,24 @@ def pool_slice(name, lo, hi):
     return {"prompts": d["prompts"][lo:hi], "keys": d["keys"][lo:hi]}
 
 
-def asset_of(cls):
-    """The model asset a plan class name stands for (the map lib-dm.sh's asset_of keeps). `composite` (RFC-0004's own form, the default): `win` and `lose` are
-    the adapters as composite classes (winc, losec: parent + PALWTIRS section) and `extra` is the full-weight winner that rides along on line L. `full`: `win` and
-    `lose` are full-weight classes and `extra` is the composite winner."""
-    if CAND_FORM == "composite":
-        return {"win": "winc", "lose": "losec", "extra": "win"}.get(cls, cls)
-    return {"extra": "winc"}.get(cls, cls)
+ASSETS = ("head", "win", "lose", "winc", "losec")
+
+
+def asset_of(cls, line):
+    """The model asset a plan class name stands for on a line: on a composite line `win` and `lose` are the adapters as composite classes (winc, losec: parent +
+    PALWTIRS section), on a full-weight line the merged full-weight classes (win, lose); the head is always H."""
+    if cls in ("win", "lose") and line_form(line) == "composite":
+        return {"win": "winc", "lose": "losec"}[cls]
+    return cls
 
 
 def is_composite(asset):
     return asset in ("winc", "losec")
 
 
-def class_container(cls):
-    """The artifact flags `palw-class improve candidate` takes for a candidate class (a plan name)."""
-    a = asset_of(cls)
+def class_container(cls, line):
+    """The artifact flags `palw-class improve candidate` takes for a candidate class (a plan name) on a line."""
+    a = asset_of(cls, line)
     if is_composite(a):
         return ["--parent", f"{MODEL}/head.class.palwtir", "--section", f"{MODEL}/{a}.palwtirs"]
     return ["--artifact", f"{MODEL}/{a}.class.palwtir"]
@@ -472,7 +492,7 @@ class Drive:
         self.reg = rpc("getPalwModelRegistry", {})
         got = read_status()
         self.status, self.status_path = got if got else (None, None)
-        self.ids = {n: model_id(asset_of(n)) for n in ("head", "win", "lose", "extra")}
+        self.ids = {n: model_id(n) for n in ASSETS}
         self.milestones()
         for step in (self.step_m5_below, self.step_m5_below_verify, self.step_m5_cross, self.step_register_classes, self.step_lines, self.step_policies,
                      self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks, self.step_dm3_probe):
@@ -666,11 +686,18 @@ class Drive:
         if not self.s.d["milestones"].get("class:head:Candidate") and lifecycle_of(self.reg, self.ids["head"])[0] == "absent":
             return
         objs = []
-        for cls in ("win", "lose", "extra"):
-            asset = asset_of(cls)
+        wanted = []
+        for line_name, row in PLAN["lines"].items():
+            for ep in (row.get("epochs") or {}).values():
+                for c in ep.get("candidates", []):
+                    a = asset_of(c["class"], line_name)
+                    if a not in wanted:
+                        wanted.append(a)
+        for asset in wanted:
+            cls = asset
             if is_composite(asset) and not os.path.exists(f"{MODEL}/{asset}.palwtirs"):
                 continue
-            if lifecycle_of(self.reg, self.ids[cls])[0] != "absent":
+            if not self.ids.get(asset) or lifecycle_of(self.reg, self.ids[asset])[0] != "absent":
                 continue
             out = f"{OBJ}/register-{asset}.obj"
             if is_composite(asset):
@@ -695,7 +722,7 @@ class Drive:
         span = int(pick(self.reg, "spanDaa", "span_daa", default=0) or 0)
         if span:
             log("admission-audit slots (DAA mod period): " + ", ".join(
-                f"{n}={audit_slot(self.ids[n], span)[0]} mod {audit_slot(self.ids[n], span)[1]}" for n in ("head", "win", "lose", "extra") if self.ids.get(n)))
+                f"{n}={audit_slot(self.ids[n], span)[0]} mod {audit_slot(self.ids[n], span)[1]}" for n in ASSETS if self.ids.get(n)))
 
     # ----- lines ------------------------------------------------------------------------------------------------
     def step_lines(self):
@@ -860,7 +887,7 @@ class Drive:
             if c.get("teacher_classes"):
                 decl["teacher_classes"] = c["teacher_classes"]
             spec = {"line": lid, "epoch": epoch, "declarations": decl}
-            rc, text = improve_object("candidate", c["seat"], spec, out, extra=class_container(c["class"]))
+            rc, text = improve_object("candidate", c["seat"], spec, out, extra=class_container(c["class"], name))
             if rc != 0:
                 raise RuntimeError(f"candidate {c['class']}: {text.strip()[-300:]}")
             objs.append(out)
@@ -939,7 +966,7 @@ class Drive:
         before = e1["counts"]["candidates"]
         expected = len(PLAN["lines"]["W1"]["epochs"]["1"]["candidates"])  # what the plan enters: the copy must add nothing
         out = f"{OBJ}/attack-copy.obj"
-        rc, text = improve_object("candidate", 3, {"line": lid, "epoch": 1, "declarations": {}}, out, extra=class_container("win"))
+        rc, text = improve_object("candidate", 3, {"line": lid, "epoch": 1, "declarations": {}}, out, extra=class_container("win", "W1"))
         if rc != 0:
             self.s.mark(k, result="INCOMPLETE", why=f"cannot build: {text.strip()[-200:]}")
             return
@@ -952,7 +979,7 @@ class Drive:
         if self.s.done(k) or e1["state"] not in ("HoldOut", "Drawing") or not self.s.done("W1:e1:candidates"):
             return
         out = f"{OBJ}/attack-late.obj"
-        rc, text = improve_object("candidate", 7, {"line": lid, "epoch": 1, "declarations": {}}, out, extra=class_container("lose"))
+        rc, text = improve_object("candidate", 7, {"line": lid, "epoch": 1, "declarations": {}}, out, extra=class_container("lose", "W1"))
         if rc != 0:
             self.s.mark(k, result="INCOMPLETE", why=f"cannot build: {text.strip()[-200:]}")
             return
@@ -1017,7 +1044,7 @@ class Drive:
         return verdict_dm5(self.s.d)
 
     def verdict_dm1(self):
-        return verdict_dm1(self.s.d, self.status, self.line_ids(), self.ids, self.daa)
+        return verdict_dm1(self.s.d, self.status, self.line_ids(), self.ids_of("W1"), self.daa)
 
     def verdict_dm2(self):
         return verdict_dm2(self.s.d, self.status, self.line_ids())
@@ -1074,7 +1101,11 @@ class Drive:
         self.s.put("dm3", probe)
 
     def verdict_dm4(self):
-        return verdict_dm4(self.s.d, self.status, self.line_ids(), self.ids)
+        return verdict_dm4(self.s.d, self.status, self.line_ids(), self.ids_of("W1"))
+
+    def ids_of(self, line):
+        """The class ids a line's verdict reads by the plan's names: `head`, and `win` / `lose` as that line's form holds them."""
+        return {"head": self.ids.get("head", ""), "win": self.ids.get(asset_of("win", line), ""), "lose": self.ids.get(asset_of("lose", line), "")}
 
     def verdict_dm6(self):
         return verdict_dm6(self.s.d, self.status, self.line_ids())
@@ -1126,7 +1157,7 @@ def verdict_dm1(sd, st, lines, ids, daa):
     if not row:
         return "INCOMPLETE", "W1 is not governed yet"
     e1 = epoch_row(row, 1)
-    grid = WIN["grid"]
+    grid = line_windows("W1")["grid"]
     checks = []
     checks.append((True if "head:first-final-claim" in sd["milestones"] else None, "usage: the head's first Final claim"))
     if not e1:
@@ -1159,7 +1190,7 @@ def verdict_dm1(sd, st, lines, ids, daa):
         checks.append((lhs == rhs, f"the pool's conservation law ({lhs} = {rhs})"))
     vest_from = max([g.get("vest_from_daa") or 0 for g in grants] or [0])
     if vest_from and daa is not None:
-        due = vest_from + L_E
+        due = vest_from + line_l_e("W1")
         if daa < due:
             checks.append((None, f"vesting: the first unit is due at DAA {due}"))
         else:
@@ -1324,9 +1355,9 @@ def selftest():
 
     win = "ab" * 64
     cands = [{"class": win, "counts": {"primary": {"wins": 8, "losses": 0, "ties": 0}, "eligible": True}}]
-    e1 = {"epoch": 1, "state": "Decided", "times": {"t_open": 320}, "dataset_root": "dd" * 64, "candidates": cands,
+    e1 = {"epoch": 1, "state": "Decided", "times": {"t_open": line_windows("W1")["grid"]}, "dataset_root": "dd" * 64, "candidates": cands,
           "outcome": "Promoted { class_id: " + win + ", wins: 8, losses: 0 }",
-          "grants": [{"vest_from_daa": 600, "vested": 5}]}
+          "grants": [{"vest_from_daa": 500, "vested": 5}]}
     row = {"line_id": "11" * 64, "epochs": [e1], "heads": [], "pool": {"deposited": "0", "fees_in": "10", "phi_in": "0", "held_in": "5",
                                                                         "balance": "3", "held": "2", "unvested": "5", "paid": "3", "refunded": "2"}}
     st = {"lines": [row]}
@@ -1416,10 +1447,10 @@ def selftest_drive():
         os.makedirs(d, exist_ok=True)
     json.dump({"seats": [{"bond_outpoint": f"{i:0128x}:{i}", "fee_float_outpoint": f"{i:0128x}:9"} for i in range(8)]}, open(f"{KR}/manifest.json", "w"))
     h = lambda c: c * 128  # noqa: E731
-    ids = {"head": h("a"), "win": h("b"), "lose": h("c"), "extra": h("d")}   # by the plan's names; the files are the assets' (composite form)
+    ids = {"head": h("a"), "win": h("b"), "lose": h("c"), "winc": h("d"), "losec": h("f")}   # by the assets' names
     for k, v in ids.items():
-        open(f"{MODEL}/ids/{asset_of(k)}.class", "w").write(v)
-        open(f"{MODEL}/ids/{asset_of(k)}.root", "w").write(h("e"))
+        open(f"{MODEL}/ids/{k}.class", "w").write(v)
+        open(f"{MODEL}/ids/{k}.root", "w").write(h("e"))
     mk = lambda n: {"prompts": [[1, 3 + i, 4 + i, 5 + i] for i in range(n)], "keys": [[3 + i % 8, 4 + i % 8, 5] for i in range(n)]}  # noqa: E731
     for name in ("a", "b", "reg"):
         json.dump(mk(16), open(f"{MODEL}/pool-{name}.json", "w"))
@@ -1497,22 +1528,25 @@ def selftest_drive():
         return 0, "wrote the object\n"
     g["run"] = fake_run
 
-    W = WIN
-    t_open = W["grid"]
-    t_fix = t_open + W["w_collect"]
-    t_close = t_fix + W["w_submit"]
-    t_draw = t_close + W["w_holdout"]
-    t_eval = t_draw + W["w_eval"]
     d = Drive()
 
-    def epoch_state(daa, t0):
+    def clock_of(name):
+        """A line's own epoch clock: its windows are its policy's (a composite line's Submission window is the long one)."""
+        w = line_windows(name)
+        t_open = w["grid"]
+        t_fix = t_open + w["w_collect"]
+        t_close = t_fix + w["w_submit"]
+        t_draw = t_close + w["w_holdout"]
+        return w, t_open, t_fix, t_close, t_draw, t_draw + w["w_eval"]
+
+    def epoch_state(daa, t0, name):
+        w, t_open, t_fix, t_close, t_draw, t_eval = clock_of(name)
         o = t0
-        marks = [(o + W["w_collect"] + W["w_submit"] + W["w_holdout"] + W["w_eval"] + 165, "Decided"), (t_eval - t_open + o, "Closing"),
-                 (t_draw - t_open + o + W["beacon_delay"], "Evaluating"), (t_draw - t_open + o, "Drawing"), (t_close - t_open + o, "HoldOut"),
-                 (t_fix - t_open + o, "Submission"), (o, "Open")]
-        for at, name in marks:
+        marks = [(o + (t_eval - t_open) + 165, "Decided"), (o + (t_eval - t_open), "Closing"), (o + (t_draw - t_open) + w["beacon_delay"], "Evaluating"),
+                 (o + (t_draw - t_open), "Drawing"), (o + (t_close - t_open), "HoldOut"), (o + (t_fix - t_open), "Submission"), (o, "Open")]
+        for at, state in marks:
             if daa >= at:
-                return name
+                return state
         return None
 
     def fake_status():
@@ -1525,27 +1559,30 @@ def selftest_drive():
         for name, plan in PLAN["lines"].items():
             if "policies" not in done:
                 continue
+            w, t_open, t_fix, t_close, t_draw, t_eval = clock_of(name)
+            win_class = ids[asset_of("win", name)]
             epochs = []
             heads = [{"seq": 0, "epoch": 0, "class": ids["head"], "cause": "OptIn"}]
             for e_no, t0 in ((1, t_open), (2, {"W1": 3 * t_open, "L": 2 * t_open}.get(name, 3 * t_open))):
                 if str(e_no) not in plan["epochs"] and name != "W2":
                     continue
-                st = epoch_state(daa, t0)
+                st = epoch_state(daa, t0, name)
                 if st is None:
                     continue
                 key = f"{name}:e{e_no}"
                 ncand = len(plan["epochs"].get(str(e_no), {}).get("candidates", [])) if f"{key}:candidates" in done and done[f"{key}:candidates"].get("n") else 0
-                row = {"epoch": e_no, "state": st, "times": {"t_open": t0, "t_fix": t0 + 5, "t_close": t0 + 35, "t_draw": t0 + 45, "t_eval": t0 + 119, "t_score": t0 + 319},
+                row = {"epoch": e_no, "state": st, "times": {"t_open": t0, "t_fix": t0 + (t_fix - t_open), "t_close": t0 + (t_close - t_open), "t_draw": t0 + (t_draw - t_open),
+                                                              "t_eval": t0 + (t_eval - t_open), "t_score": t0 + (t_eval - t_open) + w["court_margin"]},
                        "dataset_root": h("7") if st != "Open" else None, "outcome": None, "grants": [],
                        "counts": {"candidates": ncand, "holdout_cases": 32 if (name == "L" and e_no == 2 and "attack:holdout-spam" in done) else 0},
                        "previous_counts": None,
-                       "candidates": [{"class": ids["win"] if c["class"] == "win" else ids[c["class"]], "counts": None} for c in plan["epochs"].get(str(e_no), {}).get("candidates", [])] if ncand else []}
+                       "candidates": [{"class": ids[asset_of(c["class"], name)], "counts": None} for c in plan["epochs"].get(str(e_no), {}).get("candidates", [])] if ncand else []}
                 if st == "Decided":
                     if name in ("W1", "W2") and e_no == 1:
-                        row["outcome"] = "Promoted { class_id: " + ids["win"] + ", wins: 8, losses: 0 }"
+                        row["outcome"] = "Promoted { class_id: " + win_class + ", wins: 8, losses: 0 }"
                         row["candidates"][0]["counts"] = {"primary": {"wins": 8, "losses": 0, "ties": 0}, "eligible": True}
-                        row["grants"] = [{"vest_from_daa": t0 + 300, "vested": 5 if daa > t0 + 300 + 315 else 0}]
-                        heads.append({"seq": 1, "epoch": 1, "class": ids["win"], "cause": "Promoted"})
+                        row["grants"] = [{"vest_from_daa": t0 + 300, "vested": 5 if daa > t0 + 300 + line_l_e(name) else 0}]
+                        heads.append({"seq": 1, "epoch": 1, "class": win_class, "cause": "Promoted"})
                         if name == "W2" and "rollback-owner" in done:
                             heads.append({"seq": 2, "epoch": 1, "class": ids["head"], "cause": "RolledBackByOwner"})
                         if name == "W1" and "rollback-proof" in done:
@@ -1559,7 +1596,7 @@ def selftest_drive():
                 epochs.append(row)
                 if st in ("Evaluating", "Closing"):
                     n_jobs = 16
-                    final = daa >= t0 + 200
+                    final = daa >= t0 + (t_eval - t_open) - w["w_eval"] + 130
                     evals.append({"line_id": lid[name], "epoch": e_no, "items": [{"item": i} for i in range(8)],
                                   "jobs": [{"item": i, "subject": "Parent", "claim": {"final_daa": daa if final else None, "voided": False}} for i in range(n_jobs)]})
             lines.append({"line_id": lid[name], "head": heads[-1]["class"], "next_due_daa": 0, "open_epoch": None, "epochs": epochs, "heads": heads,
@@ -1569,7 +1606,7 @@ def selftest_drive():
         return {"daa": daa, "lines": lines, "evaluation": evals}, "fake"
 
     g["read_status"] = fake_status
-    for daa in range(0, 1500, 5):
+    for daa in range(0, 1800, 5):
         clock["daa"] = daa
         d.tick()
     verdicts = {n: read(f"{VERDICTS}/{n}.verdict", "none") for n in ("dm5", "dm1", "dm2", "dm3", "dm4", "dm6")}
@@ -1612,7 +1649,7 @@ def main():
     if a.cmd == "once":
         d.tick()
         return 0
-    log(f"dmdrive: run (tick {TICK_S}s, L_e {L_E}, grid {WIN['grid']})")
+    log("dmdrive: run (tick %ds; %s)" % (TICK_S, ", ".join(f"{n}: {line_form(n)} L_e {line_l_e(n)} grid {line_windows(n)['grid']}" for n in PLAN["lines"])))
     while True:
         try:
             d.tick()

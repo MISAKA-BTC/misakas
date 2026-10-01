@@ -1,5 +1,5 @@
 {
-  "_comment": "The D-M drills' plan (RFC-0004 A13). Read by dmdrive.py and printed by `dm.sh plan`. Heights are DAA of the drill chain; at the observed ~133 s per DAA (27.7 DAA/h) 300 DAA is ~10.8 h. Every line runs the SAME windows: the grid, L_e = 315, so they open together. A setter set holds at most n items (spec 17 \u00a717.6.2), so every pool is cut into sets of eight.",
+  "_comment": "The D-M drills' plan (RFC-0004 A13). Read by dmdrive.py and printed by `dm.sh plan`. Heights are DAA of the drill chain; at the observed ~133 s per DAA (27.7 DAA/h) 300 DAA is ~10.8 h. Every line runs the SAME windows: the grid, L_e = 315, so they open together. A setter set holds at most n items (spec 17 \u00a717.6.2), so every pool is cut into sets of eight. Per line (policies are per line, spec 17 \u00a717.4): W1 and T hold composite candidates (parent + adapter section) and take the long Submission window (`policy_composite`: w_submit 120, grid 410 > L_e 405) \u2014 a composite's possession proofs wait for its record, so its admission jury (up to one 100-DAA audit period away) must fit inside Submission; W2 and L are the extra lines with full-weight candidates and keep the short windows. CAND_FORM=full makes every line full-weight and short.",
   "policy": {
     "usage": {
       "measure": "claims",
@@ -65,6 +65,13 @@
     "W1": {
       "_for": "D-M1 the whole epoch (usage trigger, material, candidate, evaluation, promotion, vesting) and, in its second epoch, D-M4's rollback by proof",
       "founding": true,
+      "form": "composite",
+      "policy_composite": {
+        "windows": {
+          "grid": 410,
+          "w_submit": 120
+        }
+      },
       "owner_seat": 4,
       "material": {
         "dataset": {
@@ -147,6 +154,7 @@
     "W2": {
       "_for": "D-M4's rollback by the owner (the promotion of epoch 1 is rolled back at once); and D-M6's withholding setter: Sw (seat 3, two items) is committed and never revealed \u2014 its items drop out of the draw for every subject and its bond is forfeited, while the epoch still has the n_min items the honest set gives",
       "founding": false,
+      "form": "full",
       "name": "W2",
       "owner_seat": 7,
       "epochs": {
@@ -191,8 +199,15 @@
       }
     },
     "T": {
-      "_for": "D-M3, the court battery on evaluation claims: two executors (new5, new6) each commit ONE self-consistent lie on this line (new5 a moved step leaf, new6 a moved first id: --palw-drill-tamper-eval=<fault>@<T's id prefix>, the id is derived before the chain exists) and a challenger (new1, --palw-challenge) replays every claim it can, finds where each lie is from the accused's capture (the shared --palw-improve-capture-dir) and files the court proof. The lies are convicted; the honest claims, on this line and on every other, stay unvoided.",
+      "_for": "D-M3, the court battery on evaluation claims: two executors (new5, new6) each commit ONE self-consistent lie on this line (new5 a moved step leaf, new6 a moved first id: --palw-drill-tamper-eval=<fault>@<T's id prefix>, the id is derived before the chain exists) and a challenger (new1, --palw-challenge) replays every claim it can, finds where each lie is from the accused's capture (the shared --palw-improve-capture-dir) and files the court proof. The lies are convicted; the honest claims, on this line and on every other, stay unvoided. T holds composite candidates, so that the court's moves over a composite subject (parameter openings under the two sub-roots) are exercised as well as a single artifact's.",
       "founding": false,
+      "form": "composite",
+      "policy_composite": {
+        "windows": {
+          "grid": 410,
+          "w_submit": 120
+        }
+      },
       "name": "T",
       "owner_seat": 7,
       "epochs": {
@@ -218,8 +233,9 @@
       }
     },
     "L": {
-      "_for": "D-M2 (a candidate that regresses what the parent passes must not win) and the single-setter leakage bound of D-M6: two setters, the cap keeps each to half of the draw; the winner W is trained on S_b's prompts only, so it can win four items at most and the sign test cannot reject. `extra` is the extra line's candidate: the full-weight winner in the composite form (the default), the composite winner in the full form",
+      "_for": "D-M2 (a candidate that regresses what the parent passes must not win) and the single-setter leakage bound of D-M6: two setters, the cap keeps each to half of the draw; the winner W is trained on S_b's prompts only, so it can win four items at most and the sign test cannot reject. L is an extra line: full-weight candidates, short windows",
       "founding": false,
+      "form": "full",
       "name": "L",
       "owner_seat": 7,
       "policy": {
@@ -236,10 +252,6 @@
             },
             {
               "class": "win",
-              "seat": 7
-            },
-            {
-              "class": "extra",
               "seat": 7
             }
           ],
