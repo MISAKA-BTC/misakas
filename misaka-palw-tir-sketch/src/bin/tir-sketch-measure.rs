@@ -273,9 +273,14 @@ fn class_tables(r: &Rates) {
             100.0 * k.sketch_entries as f64 * 8.0 / k.sketched_weight_bytes.max(1) as f64
         );
         println!("| weight sites (per occurrence) / needing ≥ 2 moduli | {} / {} |", k.weight_sites, k.wide_sites);
+        println!("| largest single served `MatMul`'s weight read (the escalation fetch) | {} |", gib(k.max_site_weight_bytes as f64));
+        // The committed tiles of a 512-position prefill job at 64 lanes a tile: the N a random leaf
+        // audit samples from (RFC-0007 Part IV.1).
+        let tiles: u64 =
+            (1..=512usize).map(|h| tir_position_cost_v1(&plan, &analysis, &pol, h, h == 512, true).committed_lanes.div_ceil(64)).sum();
         println!(
-            "| largest single served `MatMul`'s weight read (the escalation fetch) | {} |\n",
-            gib(k.max_site_weight_bytes as f64)
+            "| committed tiles of a 512-position job, 64 lanes a tile (lanes per decode token at H = 1,024) | {tiles} ({}) |\n",
+            tir_position_cost_v1(&plan, &analysis, &pol, 1024, true, true).committed_lanes
         );
         // Decode: one token at three context lengths, three policies.
         println!(

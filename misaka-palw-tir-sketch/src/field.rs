@@ -128,8 +128,8 @@ impl TirSketchModulusV1 {
 
     /// [`Self::dot_i64`] for `x` whose every element satisfies `|x| < 2^x_bits` — what a node's
     /// proven interval says. Over `P61` each product is a signed `i128` below `2^(x_bits + 61)`, so
-    /// `2^(126 − x_bits − 61)` of them sum without a reduction and without a branch: an `i16`
-    /// activation sums 2^49 terms, a 36-bit accumulator 2^29, a full `i64` four.
+    /// `2^min(126 − x_bits − 61, 30)` of them sum without a reduction and without a branch: an
+    /// `i16` activation sums 2^30 terms (the cap), a 36-bit accumulator 2^29, a full `i64` two.
     pub fn dot_i64_bounded(self, x: &[i64], s: &[u64], x_bits: u32) -> u64 {
         debug_assert_eq!(x.len(), s.len());
         if self.0 == M61 {

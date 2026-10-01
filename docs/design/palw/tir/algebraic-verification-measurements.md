@@ -39,8 +39,8 @@ about 1–2 Gbps.** In detail:
   | DeepSeek-V3 (671B) | 1.52 / 0.93 Gbps | 0.09 / 0.06 Gbps |
   | qwen4_exp-like (§7, analytic) | ≈ 2.6 / 1.4 Gbps | ≈ 0.16 / 0.08 Gbps |
 
-  For a prefill job of 1,024 positions the break-even is **2.0–5.5 Gbps** even against an NVMe seat,
-  because a batched recompute reads each weight once while the witness grows with every position.
+  For a prefill job of 1,024 positions the break-even is **1.5–5.5 Gbps** (packed–raw) even against an
+  NVMe seat, because a batched recompute reads each weight once while the witness grows with every position.
 - **Per link** (decode): at **1 Gbps** algebraic verification wins 5–10× for a seat whose weights
   stream from NVMe, and ranges from 2× slower to slightly faster (0.5–1.2×) for a RAM-resident seat.
   At **100 Mbps** it is roughly even against NVMe with raw values (0.7–1.1×) and wins 1.2–1.9× with
@@ -258,7 +258,7 @@ Each cell is the speed-up of algebraic verification over a recompute (above 1 it
 | Qwen3-Next-80B-A3B, NVMe | **5.2× / 7.5× — algebra** | 0.8× / 1.4× | recompute |
 | DeepSeek-V3, NVMe | **10× / 15× — algebra** | 1.1× / 1.8× | recompute |
 | qwen4_exp-like, NVMe | **4.8× / 7.2× — algebra** | 0.7× / 1.2× | recompute |
-| any class, prefill-heavy job | recompute (break-even 2–5.5 Gbps) | recompute | recompute |
+| any class, prefill-heavy job | recompute (break-even 1.5–5.5 Gbps) | recompute | recompute |
 
 The policy that follows is a seat's own choice, made per class and per job and never consensus.
 Algebra is for decode tokens of classes the seat does not hold in RAM, over a link of 100 Mbps or
@@ -287,10 +287,12 @@ committed row, the seat recomputes the failing node exactly. That needs that nod
   head (§3). For an expert product it is the gathered experts' slices, 1–3 MB each. Rows come as
   inventory leaves of ≤ 32 KiB with their paths. Fetching the head's 467 MB over 1 Gbps takes about
   4 s, once per failed claim — and a failed claim's producer is slashed.
-- **Bounding the fetch.** A seat may keep **block sketches** for its largest weights: `B` row blocks
-  per site, each sketched separately, costing `B × K` entries. A failing block then names `|W| / B`
-  rows. For the 151,936-row head at `B = 256`, that is 256 × 1,536 × 8 B = 3.1 MB of extra sketches
-  and a fetch of 1.8 MB instead of 467 MB.
+- **Bounding the fetch.** By default (RFC-0007 §II.8) a seat keeps **block sketches**: `B = ⌈|W| / F⌉`
+  row blocks per site for a fetch cap `F` (2 MiB), each sketched separately, costing `B × K` entries.
+  They are read only after a failure, and a failing block then names `|W| / B ≤ F` bytes of rows. For the
+  151,936-row head at `B = 256`, that is 256 × 1,536 × 8 B = 3.1 MB of extra sketches and a fetch of
+  1.8 MB instead of 467 MB. The overhead is `K · 8 / F` of a site's weight bytes: 0.6 % at `K = 1,536`,
+  3.4 % at `K = 8,960`.
 - **Or hand it off.** The interval goes to a seat that holds the class: a full-coverage holder or the
   layer shard of RFC-0006. RFC-0007 §II.8 specifies both paths.
 
