@@ -1,5 +1,14 @@
 //! Convert a Qwen3.6 GGUF checkpoint into a calibrated `PALW-QWEN36` integer artifact.
 //!
+//! # FROZEN (RFC-0002, 2026-10-01): no new architecture is added to this converter
+//!
+//! This is the legacy, model-specific path: three architectures hard-coded into one graph, one
+//! runtime and one court kernel set. It serves the checkpoints it already serves (`qwen35moe`,
+//! `qwen3moe`, `qwen35`) and refuses every other architecture, pointing at the generic route. A new
+//! model is registered through PALW-TIR (RFC-0002): `palw-class check-architecture <hf dir |
+//! config.json>` says which features it needs and whether each is supported, and `palw-tir-fidelity`
+//! lowers it (`misaka-palw-tir-lower`, adapters as data files — never a new converter here).
+//!
 //! ```text
 //! qwen36-convert --gguf FILE   --out ARTIFACT [--layers N] [--context N] [--prompt ids]
 //! qwen36-convert --url URL --header FIRST64MB --out ARTIFACT [--layers N] …
@@ -243,7 +252,12 @@ fn main() {
         .unwrap_or_else(|| die("the checkpoint declares no architecture".into()))
         .to_string();
     if arch != "qwen35moe" && arch != "qwen3moe" && arch != "qwen35" {
-        die(format!("this converter reads qwen35moe, qwen3moe or qwen35 checkpoints, not {arch}"));
+        die(format!(
+            "this converter is frozen: it reads only the qwen35moe, qwen3moe and qwen35 checkpoints it already serves, not `{arch}`. \
+             No architecture is added here. Register a new model through PALW-TIR (RFC-0002): run \
+             `palw-class check-architecture <hf dir | config.json>` to see which features it needs and whether each is supported, \
+             then lower it with `palw-tir-fidelity` (misaka-palw-tir-lower; an adapter is a data file, not a new converter)"
+        ));
     }
     // qwen35 (the dense 2B) is the hybrid's layer stack — same GDN recurrence, same fused
     // q/gate attention — with the mixture degenerated to one always-chosen expert: a dense
