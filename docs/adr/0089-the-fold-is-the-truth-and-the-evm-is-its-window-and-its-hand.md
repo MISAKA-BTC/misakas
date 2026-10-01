@@ -1,5 +1,7 @@
 # ADR-0089 — the fold is the truth; the EVM is its window and its hand
 
+> **Amended a third time (2026-10-01, implemented the same day behind the dormant fence `palw_model_virtual_v1`).** [0162](0162-the-pair-opens-on-a-virtual-reserve.md): past the fence the AMM window's `market()` answers a twelfth word (the row's own virtual reserve), `constants()`' third word is the virtual reserve again, `quoteSell`'s first word is the gross MSK out, and the writer reverts a seed after the market's first trade (`SeedAfterTrade()`) and a buy of a line whose class does not trade (`ClassNotEligible()`); a seed before the class's approval is taken.
+>
 > **Amended again (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md): the AMM window's `market()` (Decision 2) gains two words at its end — `buybackSompi`, `retiredUnits` — the MSK the mining reward has put into the pair and the positions the chain holds for good; every earlier word keeps its offset. The move itself is the fold's, on no lane: no action, no event.
 >
 > **Amended (2026-09-05, implemented the same day).** [ADR-0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) adds a third action to the writer (`3`, the seed — `msg.value` is the seed, at least 100,000 MSK), `seed()` and the `Seeded` event to the facade, `SeedTooSmall()`, the settlement's `action` in place of `is_buy`, and puts the least seed in `constants()` where the virtual reserve was; `decimals()` is 0. Decisions 3, 5 and 6 read with that in mind.

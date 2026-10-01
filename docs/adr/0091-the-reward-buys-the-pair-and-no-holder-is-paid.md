@@ -16,6 +16,8 @@
   0090 (the seeded pair, the whole position, the product that never falls).
 * Supersedes nothing.
 
+> **Amended (2026-10-01, implemented the same day behind the dormant fence `palw_model_virtual_v1`).** [0162](0162-the-pair-opens-on-a-virtual-reserve.md): past the fence the reward buys only a pair that trades — a line whose class is `Active` (approved); before approval, or once a class is closed, the miner is named the whole reward, as for a line with no pair. ADR-0152 IMPL-15's lock bound reads the same answer.
+
 ## 0. The sentence this ADR is
 
 Five percent of the worker reward a block earns with a model buys positions from that model's

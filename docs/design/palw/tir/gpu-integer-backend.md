@@ -1,6 +1,6 @@
 # PALW-TIR on a GPU — an exact integer backend (RFC-0002 §7 F-6, Phase G prototype)
 
-Status: **prototype, measured (2026-10-01)**. Node software only: nothing here reaches consensus, a
+Status: **prototype, measured (2026-10-01; position batching 2026-10-02, §11)**. Node software only: nothing here reaches consensus, a
 class id, a fingerprint or the release build. Lane M3, branch `rfc6/gpu-shard` (off `rfc4/int` @
 `ce04e5c22`), crate `misaka-palw-tir-gpu/` — an **isolated cargo workspace** with its own
 `Cargo.lock` (not a root member; the root lock and the release build are untouched). It reads
@@ -20,6 +20,12 @@ class id, a fingerprint or the release build. Lane M3, branch `rfc6/gpu-shard` (
 - **速度。** 位置の batch(seat が commit 済み job を検証する形、prefill)は CPU kernel の 13〜40 倍(GEMM 最大
   384 GMAC/s)。1 位置ずつの decode は primitive 1 個 = dispatch 1 回なので dispatch 律速で、CPU executor と同等。
   decode を速くするのは fused kernel(narrowing・norm・softmax の chain を 1 kernel に)— RFC-0002 Phase G の次の段。
+- **位置 batch の replay(§11、実装済み)。** commit 済み job の全 token を持つ seat は、occurrence を 1 つずつ chunk 内の
+  全位置に対して 1 回で実行する(projection は位置をまとめた 1 回の GEMM、因果 attention は H を padding して
+  mask した batched MatMul)。Qwen2.5 形 2 層・256/512/1024 位置の job 全体で CPU executor と commit・logits が全位置一致し、
+  **CPU executor の 11〜48 倍、1 位置ずつの device executor の 12〜16 倍**(負荷 75〜85 の共有機)、dispatch は
+  1 位置 502 回から job 全体で chunk あたり 520 回(1 位置 1〜2 回)に減った。Fixed state の再帰(GDN・Mamba-2)を書く
+  occurrence だけは chunk の中で位置ごとに実行する。
 - **未実装で仕様だけ書いたもの:** tir-exec 側の dispatch seam(`KernelBackendV1` trait)と、memory ledger の device pool の扱い。
 
 ## 1. Why exact, and why a float engine cannot be
@@ -169,7 +175,10 @@ Kernels (`wgsl.rs`, generated per operand forms and attributes, cached per sourc
   plus a second pass) for long contractions with few outputs — the values of an attention over a long
   history;
 - **reductions**: one invocation, or one workgroup tree for axes ≥ 512;
-- **TopK**: rank, then emit.
+- **TopK**: rank, then emit;
+- **ragged variants** for a batch of positions (§11): the elementwise kernels, the reductions and the
+  general MatMul mask a padded history axis — `wgsl::RAGGED_MASK`, `ReduceKey.ragged`,
+  `MatMulKey.rag` — and are otherwise the same source.
 
 Measured with `tir-gpu-bench` on the M1 Max. Every device result was byte-compared with the CPU
 executor's kernel before it was timed. Weights were resident and the operands synthetic, at the real
@@ -225,7 +234,7 @@ equal at every position before anything was timed):
   3. fewer passes, and subgroup reductions.
 
   None of these changes a byte; each is held by the same gate (§7).
-- **The bigger lever: batch positions into each dispatch.** A seat's replay is one forward, a layer at a
+- **The bigger lever: batch positions into each dispatch** (built since: §11). A seat's replay is one forward, a layer at a
   time over all positions (ADR-0117 "a draw is one forward"; `forward_prefill_planned` in
   `misaka-palw-base0` does exactly this for the legacy engines). If the device executor evaluates each
   occurrence for ALL positions of a job before the next, dispatches per claim scale with
@@ -260,6 +269,7 @@ compiler are part of the computation's trusted base.
 | `vectors` | the golden primitive vectors (`consensus-vectors/tir-v1/primitives/`) | 106 program-node cases on the device, 16 of them failing with the vector's class; 32 cases are not program nodes (type errors, `i128` params) |
 | `random` | 5,700 random primitive applications as one-node programs: reference, CPU executor and device under the CPU's refined plan, operands at random in param (packed) or computed (lane) form | every case on the device equal byte for byte (or failing with the same class): 5,472 device runs (the other 228 are not program nodes), 1,106 of them failures; no fallback in any family |
 | `fast_paths` | the vec4 GEMV and the GEMM at every row-group, tile and chunk-flush boundary, batches, the rails | 131 cases equal |
+| `batch` | `BatchReplay` (§11) vs `TirExecutor` stepping the same tokens until the first failure: how many positions succeed, the failure's class, every value of every successful position (every node, and the staged-lanes path) and the logits | **the seven program vectors** at chunks of 1, 2, 3, 5 and the whole job (chunk boundaries before, inside and after a window's first slide), both sink modes: 340 positions equal and equal to the vectors, Fixed-state occurrences per position and the rest batched, 0 fallbacks; **400 random programs** (`TIR_GPU_BATCH_PROGRAMS`; 3,000 run once: see §11) at random chunks of 1–64; **the Qwen2.5-shaped program** at a small geometry over 40 positions in chunks of 7, 16 and 40, every occurrence batched, 0 fallbacks |
 | `programs` | `GpuExecutor` vs `TirExecutor`, every node of every position ("every node" sink) and every commit point (the staged-lanes path) | **the seven program vectors** (dense GQA, sliding + global, GDN 2 key / 4 value heads, Mamba-2, top-2 MoE with a shared expert, Fixed-state saturation, a 3-row history window): equal to the CPU executor and to the vectors' committed values and logits, 15,738 device node evaluations, 0 fallbacks; **400 random programs** of the CPU executor's own generator (`misaka-palw-tir-exec/tests/common/progen.rs`, included by path): 725 steps equal, 1,015 fail in both with the same class, 40,287 device node evaluations, 60 checked-`i128` nodes on the CPU |
 
 ## 8. The dispatch seam `misaka-palw-tir-exec` would need (specified, not implemented)
@@ -357,9 +367,138 @@ and `device_ledger_v1`, "a device's memory when a GPU backend arrives". How a ba
    real programs: 60 node evaluations in 400 random programs, none in the corpus programs measured.
 3. **A param larger than one binding (4 GiB) or with more than `2^32` elements** is held on the host and
    its consumers fall back. Splitting a tensor across bindings is mechanical, not done.
-4. **Step speed** needs §6's position batching first (dispatches per claim from nodes × layers ×
-   positions down to nodes × layers), then the fused chains. Position batching needs the batched causal
-   attention kernel; the same batched block evaluation, fed committed carry-ins and committed history
-   rows, is a layer shard's verification (RFC-0006).
+4. **Step speed.** Position batching is built (§11): dispatches per job from nodes × layers ×
+   positions down to nodes × layers × chunks. What remains is per-dispatch work — the fused chains
+   (the LM head's narrowing over the whole vocabulary is now most of a replay's device time) — and
+   decode at batch 1, which batching does not touch. The same batched block evaluation, fed committed
+   carry-ins and committed history rows instead of recomputing them, is a layer shard's verification
+   (RFC-0006).
 5. **Not measured:** Vulkan on NVIDIA. The code has no Metal-specific path. The gate must run there
    before anyone relies on it.
+
+## 11. Position-batched replay — a job, a layer at a time over all its positions (built)
+
+`BatchReplay` (`misaka-palw-tir-gpu/src/batch.rs`) is §6's bigger lever. A seat replaying a committed
+job — a claim's prefill-and-decode run, a court's step leg, RFC-0006's cell over a position segment —
+holds every token before it starts. So it runs the occurrences in schedule order, and each occurrence
+ONCE over a chunk of positions: ADR-0117's "a draw is one forward", what `forward_prefill_planned`
+in `misaka-palw-base0` does for the legacy engines. The per-position semantics are unchanged: a
+layer's carry-in at position `p` is its predecessor's carry-out at `p`, and history rows are appended
+in position order.
+
+**The batched form.** A value whose per-position shape is `S` is one tensor `[T] ++ S` for the chunk's
+`T` positions. A value that depends on no position (params, consts and what is computed from them
+alone) is shared: computed once per replay, as `S`. A history axis `H` is padded to the chunk's
+largest, `H_max = min(p0 + T, W)`. Position `p`'s elements past `H_p = min(p + 1, W)` are padding.
+
+**Why padding never reaches a valid element.**
+
+- Every kernel whose output has `H` masks the padding before any load: stored 0, never read, never
+  failing. This is `wgsl::RAGGED_MASK`: `P[60]` names the `H` axis, `P[61]` the position axis, `P[62]`
+  is `W` and `P[63]` the chunk's first position.
+- A reduction over `H` stops at `H_p` (`ReduceKey.ragged = 1`). A `MatMul` that contracts `H` sums
+  `H_p` terms (`MatMulKey.rag` bit 4). A `MatMul` whose `M` or `N` is `H` masks those rows or columns
+  (bits 1 and 2).
+- Nothing else can read padding. By the type rules (`validate.rs`), `H` never broadcasts against a
+  constant; it is never sliced, concatenated, gathered or ranked along; a reshape keeps it a factor
+  with the same row-major split on both sides (`reshape_compatible`); and a value loses `H` only
+  through a reduction or a contraction over it.
+- So each valid element is computed from exactly the operands the per-position executor gives it,
+  under the same refined plan. The fast kernels (GEMV, GEMM, split-K) are not ragged; they run only
+  where no `H` is involved.
+
+**Failures, in the CPU executor's order.** A batched node's status word holds its first failing
+element in `[T] ++ S` order. That order is position-major, so the element's quotient by the
+per-position count is its position. Within the position the row-major order is the CPU's, because
+padding never fails. A per-position node (below) has one status word per position. The replay's
+failure is the least `(position, slot)` over every word and every host-side check (the step checks of
+spec 04b §9.1 first). Values reach the sink only for the positions before it, in the order
+`TirExecutor` hands them to its sink.
+
+**Causal attention needs no new primitive.**
+
+1. `HistAppend` writes the chunk's rows into the instance's row store, `[positions] ++ row`.
+2. Every position's window `[H, ..row]` is one view of that store:
+   - stride 0 along the positions while every position still sees every row from the first
+     (`p0 + T ≤ W`), each position's later rows being padding;
+   - stride one row once every window is full (`p0 ≥ W − 1`);
+   - in the one chunk where the windows start to slide, a gather by host-built row indices.
+3. The scores `q·kᵀ` are then one batched `MatMul` over `[T, kv]` whose `N` is `H_max`, masked.
+4. The two-pass softmax reduces over `H_p`, and the values `p·v` contract over `H_p`.
+
+**Projections fold into one product.** `W[M, K]·x[K, 1]` at every position is `W·X` with `X[K, T]` a
+view of the batched `x`: one register-blocked GEMM (`gemm:p8`, §6). Its `[M, T]` result is viewed as
+`[T, M, 1]`. Its elements are not position-major, so the fold is taken only where the plan proves the
+sum cannot fail (`Acc::Fast64`/`Fast128`). `x[1, K]·W[K, N]` folds into `X[T, K]·W` whatever the plan,
+since that result is position-major.
+
+**What stays per position.**
+
+- An occurrence that writes a `Fixed` state (a GDN or Mamba-2 scan, a counter) runs position by
+  position, still inside the chunk's recording. Every state value lives in a row store
+  `[positions + 1] ++ shape`, row `p` the value at the START of position `p`. So an occurrence that
+  only READS a state (`post` reading a global state `pre` wrote) batches again.
+- An occurrence whose batched values would pass rank 4 runs per position too.
+- A node the device does not run (checked `i128` arithmetic) runs on the CPU executor's kernel,
+  position by position, on each position's valid elements. A synchronisation first finds the earliest
+  failure so far, and the CPU kernel is handed only positions before it. It therefore only ever sees
+  operands the CPU executor would have handed it.
+- A program the batched form cannot hold at all is replayed by `GpuExecutor`, position by position:
+  a param past one binding, a rank-4 carry, or a value past one binding at a single position.
+
+**Memory.** A chunk's values are on the device together. Each occurrence is one submission, waited
+for, so the peak is about one occurrence's values. The chunk size bounds it: the LM head's `i64`
+products alone are `vocab × chunk × 8` bytes. Peak process footprint, which also counts the CPU
+executor's and the device's copies of the 0.56 GiB of params: 4.3 GB at chunks of 256, 6.3 GB at 512.
+
+### Conformance (`tests/batch.rs`)
+
+| programs | result (M1 Max, Metal) |
+| --- | --- |
+| the seven program vectors, chunks of 1, 2, 3, 5 and the whole job, every-node and commit sinks | 70 replays, 340 positions equal to the CPU executor and to the vectors' commits and logits. Occurrences: dense GQA, sliding + global, top-2 MoE and the 3-row window all batched; GDN, Mamba-2 and the saturation program per position in their state-writing layers. No fallback, no sequential replay |
+| 400 random programs of the CPU executor's generator, random chunks of 1–64, every third in every-node mode | 1,011 positions equal; 249 replays fail at the same position with the same class; 94 replays span more than one chunk; 1,958 occurrence-chunks batched, 788 per position; 17 checked-`i128` nodes on the CPU kernel; 15 replays by `GpuExecutor` (a rank-4 carry) |
+| the same generator, 3,000 programs (`TIR_GPU_BATCH_PROGRAMS=3000`), once | 8,052 positions equal; 1,780 replays fail alike; 723 span more than one chunk; 16,662 occurrence-chunks batched, 5,160 per position; 192 checked-`i128` nodes on the CPU kernel; 105 replays by `GpuExecutor` (a rank-4 carry). Seed 2525 found a defect shared with `GpuExecutor`: a `TopK` over a transposed `i8` param was materialised in the packed form, which no kernel writes. It is fixed and the seed is run every time |
+| the Qwen2.5-shaped program at `d` 64 (2 layers, 4 heads, 2 KV heads, `ff` 96, vocab 384), 40 positions, chunks of 7, 16 and 40, both sinks | equal at every position; every occurrence batched, no fallback; 520 dispatches for the whole job at chunk 40 (13 a position) against the step executor's 502 a position |
+
+### Measured (`tir-gpu-replay`)
+
+The Qwen2.5-1.5B-shaped program over 2 layers, with synthetic weights of the real shapes
+(`tir-gpu-layers`' program). The CPU executor steps the longest job once; a shorter job's time is its
+prefix. Every position's committed values and logits were compared (a digest per position, in sink
+order) before anything was printed. The host was shared (load average 75–85), and the CPU executor
+ran on 3 rayon threads. The two runs below differ mostly in how loaded the CPU was.
+
+| positions | CPU executor | device step executor (51.5 ms median × positions) | batched replay, chunks of 256 | × CPU | × step |
+| --- | --- | --- | --- | --- | --- |
+| 256 | 10.2 s | 13.2 s | 0.94 s | 11× | 14× |
+| 512 | 25.0 s | 26.4 s | 2.25 s | 11× | 12× |
+| 1,024 | 62.1 s | 52.7 s | 3.20 s | 19× | 16× |
+
+| positions | CPU executor (more loaded) | batched replay, chunks of 512 | × CPU |
+| --- | --- | --- | --- |
+| 256 | 41.9 s | 0.87 s | 48× |
+| 512 | 80.9 s | 1.80 s | 45× |
+| 1,024 | 109.7 s | 4.23 s | 26× |
+
+- **Dispatches.** 520 for a whole chunk at 2 layers (543 nodes per position), against 502 per
+  position for the step executor: 1.0–2.0 a position.
+- **Where the device time goes** (1,024 positions, chunks of 512): `pre` 0.08 s, each layer 0.33 s,
+  `post` 1.84 s. The LM head's GEMM over the 151,936-row vocabulary is about 0.7 s of `post`. Its
+  per-channel narrowing over `[T, 151,936]` — three elementwise passes (`Mul`, `Div` by `2^s`,
+  `Clamp`) and the commit's staging — is most of the rest. Handing the committed values to the sink is 0.25 s per 256 positions: 224 K lanes per
+  position, digested on both sides.
+- **The CPU executor's attention grows with the history** (10.2 → 25.0 → 62.1 s for ×2 positions
+  each time). The batched replay's cost per position stays about flat (3.7, 4.4, 3.1 ms), because its
+  time is the projections and the LM head.
+
+**Next, in order:**
+
+1. the narrowing epilogue fused into the GEMM's store (F-2: `Mul → Div_HAFZ(2^s) → Clamp` per channel),
+   which removes the passes that dominate `post`;
+2. a transposed GEMM store, so that the folded projection is position-major in memory and its
+   consumers read it coalesced, and so that a `Pn64` projection can fold too;
+3. packed history rows (`P16`, §9);
+4. a chunked-parallel form of the `Fixed`-state recurrences, as a fused kernel, so that GDN and
+   Mamba-2 layers batch as well.
+
+None of these changes a byte, and each is held by the same `batch` suite.
