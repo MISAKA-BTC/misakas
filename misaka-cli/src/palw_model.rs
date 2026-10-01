@@ -127,6 +127,23 @@ pub(crate) fn unseeded_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -
     ))
 }
 
+/// **Where a move's owner leg goes, said as the chain pays it** (the 2026-09-25 Position review's
+/// N4: the preview printed "owner 5 %" on a line with no owner, whose leg is burned). `owner` is the
+/// line's owner payout payload from `getPalwModelLine` (`None`: no owner, so the leg is burned);
+/// `contributor_permille` the share an adopted contributor takes while their version is current.
+pub(crate) fn leg_line(leg_permille: u64, leg: u64, owner: Option<&str>, contributor_permille: u32) -> String {
+    match owner {
+        None => format!("  owner {:<8} {} BURNED (this line has no owner)", pct(leg_permille), msk(leg)),
+        Some(_) if contributor_permille > 0 => format!(
+            "  owner {:<8} {} (to the owner; up to {} ‰ of it to an adopted contributor while their version is current)",
+            pct(leg_permille),
+            msk(leg),
+            contributor_permille
+        ),
+        Some(_) => format!("  owner {:<8} {} (to the line's owner)", pct(leg_permille), msk(leg)),
+    }
+}
+
 /// "5 %", "1 %": a permille as the percentage the CLI prints.
 pub(crate) fn pct(permille: u64) -> String {
     if permille.is_multiple_of(10) { format!("{} %", permille / 10) } else { format!("{}.{} %", permille / 10, permille % 10) }
@@ -488,6 +505,12 @@ pub(crate) async fn submit_move(
     Ok(())
 }
 
+/// The line's own row as the node serves it (`getPalwModelLine`), for the status and the owner a
+/// preview names; `None` where the node answers nothing (an older node, a registry not in force).
+async fn line_row(nv: &crate::wallet::NodeView, line: &kaspa_consensus_core::Hash64) -> Option<kaspa_rpc_core::RpcPalwModelLine> {
+    nv.client.get_palw_model_line(line.to_string()).await.ok().and_then(|r| r.line)
+}
+
 /// `misaka palw model-seed --line <id> --msk <amount> --key … [--yes]` — ADR-0090: open the
 /// line's market by locking the seed (at least the network's least seed) in its sink. The whole
 /// seed becomes the reserve; nothing ever pays it back to anyone.
@@ -682,6 +705,7 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
     if let Some(why) = unseeded_refusal(&r) {
         return Err(CliError::new(exit::GENERIC, why));
     }
+    let terms = line_row(&nv, &line).await;
     let market = market_from_response(&r);
     let Some(quote) = palw_model_buy_quote_with(&market, msk_in, served_schedule(&r)) else {
         let why = if r.closed_to_buys { "the line is closed to buys" } else { "the payment is too small to release a whole position" };
@@ -711,7 +735,15 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
         println!("buy {} of line {line}", msk(msk_in));
         println!("  holder         {holder}");
         println!("  burn {:<9} {}", pct(r.burn_permille), msk(quote.fees.burn));
-        println!("  owner {:<8} {}", pct(r.leg_permille), msk(quote.fees.registrant));
+        println!(
+            "{}",
+            leg_line(
+                r.leg_permille,
+                quote.fees.registrant,
+                terms.as_ref().and_then(|l| l.owner_payout_payload.as_deref()),
+                terms.as_ref().map(|l| l.contributor_permille_of_leg).unwrap_or(0)
+            )
+        );
         println!("  into the curve {}", msk(quote.fees.net));
         println!(
             "  positions out  {} at least {min_positions} ({} units)",
@@ -844,11 +876,20 @@ pub async fn sell(
         .ok_or_else(|| CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} to fund the carrier")))?;
     let (tx, fee) = build_move_carrier(&key, &nv, &object, outpoint, &entry, Vec::new())?;
     if ctx.output != OutputFormat::Json {
+        let terms = line_row(&nv, &line).await;
         println!("sell {positions} positions of line {line}");
         println!("  holder         {holder}");
         println!("  gross          {}", msk(quote.fees.gross));
         println!("  burn {:<9} {}", pct(r.burn_permille), msk(quote.fees.burn));
-        println!("  owner {:<8} {}", pct(r.leg_permille), msk(quote.fees.registrant));
+        println!(
+            "{}",
+            leg_line(
+                r.leg_permille,
+                quote.fees.registrant,
+                terms.as_ref().and_then(|l| l.owner_payout_payload.as_deref()),
+                terms.as_ref().map(|l| l.contributor_permille_of_leg).unwrap_or(0)
+            )
+        );
         println!("  paid to you    {} (coinbase payout), at least {}", msk(quote.fees.net), msk(min_msk_out));
         // **Where the net leg lands** (the 2026-09-23 Position route matrix, P-B4). Past the
         // 2026-09-23 fence the chain pays this key's own address; below it, the holder id, and an
@@ -996,6 +1037,16 @@ mod tests {
         assert!(opens.contains("opens the pair") && opens.contains("first price 2.00000000 MSK"), "400k + 600k opens at 2.0: {opens}");
         let part = seed_preview(&r, 100_000 * MSK).join("\n");
         assert!(part.contains("500000.00000000 MSK of 1000000.00000000 MSK") && part.contains("500000.00000000 MSK to go"), "{part}");
+    }
+
+    /// **The 2026-09-25 Position review's N4: the owner's leg is named as the chain pays it** — burned
+    /// on a line with no owner, the contributor's share named where the line has one.
+    #[test]
+    fn the_owner_leg_is_named_as_the_chain_pays_it() {
+        use super::leg_line;
+        assert!(leg_line(50, 5, None, 0).contains("BURNED (this line has no owner)"));
+        assert!(leg_line(50, 5, Some("aa"), 0).contains("to the line's owner"));
+        assert!(leg_line(50, 5, Some("aa"), 200).contains("200 ‰ of it to an adopted contributor"));
     }
 
     #[test]
