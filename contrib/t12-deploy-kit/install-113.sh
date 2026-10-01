@@ -34,6 +34,9 @@ START_GAP=10
 # connection (PLAN.md §15)
 UPGRADE_REQUIRE_UP=(169.58.39.220:26311 169.58.39.220:26321)
 BINARIES=(kaspad misaka palw-class)
+# int-10.2 D1: one seat here (b6) pins the class artifacts in its own process — no pinner, no host ledger. When b7
+# moves here (t12-panel-backlog-1001.md §7) this is a two-seat host: add HOST_PINNER=1 and
+# HOST_LEDGER_DIR=/run/misaka-palw as in install-5104.sh, with b7's spec in NODES, and re-stage.
 NODES=(
   "6|misaka-t12-node|dropin|0.0.0.0:26311|26313|26314|26312|8545|8192|17|floor|1|1|169.58.39.220:26311,169.58.39.220:26321"
 )

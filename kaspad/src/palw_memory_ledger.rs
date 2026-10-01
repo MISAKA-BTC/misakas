@@ -70,6 +70,18 @@
 //!   whole replay against it again refused the proof for the replay's whole life on a seat whose
 //!   live bound binds (the 2026-09-25 review of the shipped node; `available_for`).
 //!
+//! # The host's aggregate (int-10.2 D1)
+//!
+//! Every bound above is THIS process's. Five seats on one host each grant against the same
+//! `MemAvailable` less only their own reservations, so together they promise it five times (5.104,
+//! 2026-10-01). With `--palw-host-ledger-dir` the host pool also registers each grant in the host ledger
+//! every node on the host shares (`palw_host_ledger`), and a grant needs the host's aggregate bound too:
+//! `need ≤ (MemAvailable − 1 GiB, or 70 % of it without a declared share) − Σ every live process's
+//! reservations` — this module's own rule with the host's reservations in place of the node's. Neither
+//! readiness question reads it: [`PalwMemoryLedgerV1::capacity_admits`] is the node's own (a seat is a
+//! seat for the class while its host is busy), and the proof lane's reservation is registered on the
+//! host but never refused there (it is the node's carve). Off, the pool is exactly what it was.
+//!
 //! **Node-local, never consensus.** Nothing here is read by the chain; a refusal delays a duty and
 //! rejects no block. And capacity is not capability: what a class earns and locks is derived from
 //! its work, and this ledger is not an input to any of it.
@@ -138,6 +150,9 @@ pub struct PalwMemoryRefusalV1 {
     /// The proof lane's standing carve this request could not take (zero for a proof-lane request
     /// and on a pool without one) — named so the arithmetic in the line adds up.
     pub proof_carve_bytes: u64,
+    /// **The host ledger's refusal**, when this node's own bounds admitted the request and the host's
+    /// aggregate did not (int-10.2 D1); `None` otherwise.
+    pub host: Option<crate::palw_host_ledger::PalwHostRefusalV1>,
 }
 
 impl std::fmt::Display for PalwMemoryRefusalV1 {
@@ -172,7 +187,11 @@ impl std::fmt::Display for PalwMemoryRefusalV1 {
             // The proof lane charges the reservations to the share only (`available_for`).
             write!(f, "; for a readiness proof, reserved bytes are charged to the share and the headroom only to the proof lane")?;
         }
-        write!(f, ")")
+        write!(f, ")")?;
+        if let Some(host) = &self.host {
+            write!(f, " — this node's own bounds admit it, and {host} (int-10.2 D1)")?;
+        }
+        Ok(())
     }
 }
 
@@ -213,6 +232,16 @@ pub struct PalwMemoryLedgerV1 {
     proof_carve: u64,
     live: Box<dyn Fn() -> Option<PalwHostHeadroomV1> + Send + Sync>,
     state: Mutex<LedgerState>,
+    /// **The host's aggregate** (int-10.2 D1): the host ledger every node on the host shares, and the
+    /// host-wide headroom it is read against (`MemAvailable` without this process's cgroup term — the
+    /// cgroup is this node's, the host is everyone's). `None`: the pool is this process's alone.
+    host: Option<PalwHostTermV1>,
+}
+
+/// The host ledger and the headroom its aggregate is measured against.
+struct PalwHostTermV1 {
+    ledger: Arc<crate::palw_host_ledger::PalwHostLedgerV1>,
+    headroom: Box<dyn Fn() -> Option<PalwHostHeadroomV1> + Send + Sync>,
 }
 
 /// **A held reservation.** Dropping it returns the bytes — on the normal path, on an early error
@@ -265,7 +294,42 @@ impl PalwMemoryLedgerV1 {
             proof_carve,
             live: Box::new(live),
             state: Mutex::new(LedgerState { next_id: 1, rows: Vec::new() }),
+            host: None,
         })
+    }
+
+    /// [`Self::new_with_proof_carve`] whose every grant ALSO needs the host's aggregate bound (int-10.2 D1):
+    /// each reservation is registered in `host` — the ledger every node on the host shares — and refused
+    /// when the host's live reservations leave less than it needs of `host_headroom` (`past_reserve` with a
+    /// declared share, the haircut without, as this pool reads its own live bound).
+    pub fn new_with_host_v1(
+        pool: PalwMemoryPoolV1,
+        share: Option<u64>,
+        proof_carve: u64,
+        live: impl Fn() -> Option<PalwHostHeadroomV1> + Send + Sync + 'static,
+        host: Arc<crate::palw_host_ledger::PalwHostLedgerV1>,
+        host_headroom: impl Fn() -> Option<PalwHostHeadroomV1> + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            pool,
+            share,
+            proof_carve,
+            live: Box::new(live),
+            state: Mutex::new(LedgerState { next_id: 1, rows: Vec::new() }),
+            host: Some(PalwHostTermV1 { ledger: host, headroom: Box::new(host_headroom) }),
+        })
+    }
+
+    /// The host's bound for this pool's next grant: the host-wide headroom in the reading this pool
+    /// uses for its own live bound. `None` with no host ledger or no reading.
+    fn host_bound_v1(&self) -> Option<u64> {
+        let host = self.host.as_ref()?;
+        (host.headroom)().map(|h| if self.share.is_some() { h.past_reserve } else { h.haircut })
+    }
+
+    /// Whether this pool registers its grants in the host ledger.
+    pub fn host_ledger_armed(&self) -> bool {
+        self.host.is_some()
     }
 
     /// The standing carve for the proof lane.
@@ -371,6 +435,7 @@ impl PalwMemoryLedgerV1 {
                 available_bytes: capacity,
                 held: Vec::new(),
                 proof_carve_bytes: self.proof_carve,
+                host: None,
             }),
             _ => Ok(()),
         }
@@ -381,19 +446,28 @@ impl PalwMemoryLedgerV1 {
     pub fn can_reserve(&self, need_bytes: u64) -> Result<(), PalwMemoryRefusalV1> {
         let state = self.lock();
         let (share, live, reserved, available) = self.bounds(&state);
+        let refusal = |available: u64, host: Option<crate::palw_host_ledger::PalwHostRefusalV1>| PalwMemoryRefusalV1 {
+            pool: self.pool,
+            key: None,
+            need_bytes,
+            share_bytes: share,
+            live_bytes: live,
+            reserved_bytes: reserved,
+            available_bytes: available,
+            held: state.rows.clone(),
+            proof_carve_bytes: self.proof_carve,
+            host,
+        };
         match available {
-            Some(available) if need_bytes > available => Err(PalwMemoryRefusalV1 {
-                pool: self.pool,
-                key: None,
-                need_bytes,
-                share_bytes: share,
-                live_bytes: live,
-                reserved_bytes: reserved,
-                available_bytes: available,
-                held: state.rows.clone(),
-                proof_carve_bytes: self.proof_carve,
-            }),
-            _ => Ok(()),
+            Some(available) if need_bytes > available => Err(refusal(available, None)),
+            _ => match &self.host {
+                // The host's aggregate, as a dry run (int-10.2 D1): nothing is registered.
+                Some(host) => host
+                    .ledger
+                    .can_reserve(need_bytes, self.host_bound_v1())
+                    .map_err(|h| refusal(available.unwrap_or(need_bytes), Some(h))),
+                None => Ok(()),
+            },
         }
     }
 
@@ -417,9 +491,34 @@ impl PalwMemoryLedgerV1 {
                 available_bytes: available,
                 held: state.rows.clone(),
                 proof_carve_bytes,
+                host: None,
             });
         }
         let id = state.next_id;
+        // **And the host's aggregate** (int-10.2 D1): registered under this pool's lock, so the two
+        // ledgers cannot disagree about which grants exist; a host refusal leaves nothing registered.
+        // The readiness proof lane is registered and never refused by it: its bytes are the carve this
+        // node already holds back from every other duty, and a proof the host refused would lapse the
+        // seat's readiness row — the class HELD and its claims voided (the 2026-09-25 run above) —
+        // because the host was busy, not because the seat cannot replay.
+        let host_bound = if key.role == PALW_READINESS_PROOF_ROLE_V1 { None } else { self.host_bound_v1() };
+        if let Some(host) = &self.host
+            && let Err(refusal) = host.ledger.try_reserve(id, need_bytes, key.role, host_bound)
+        {
+            let proof_carve_bytes = if key.role == PALW_READINESS_PROOF_ROLE_V1 { 0 } else { self.proof_carve };
+            return Err(PalwMemoryRefusalV1 {
+                pool: self.pool,
+                key: Some(key),
+                need_bytes,
+                share_bytes: share,
+                live_bytes: live,
+                reserved_bytes: reserved,
+                available_bytes: available.unwrap_or(need_bytes),
+                held: state.rows.clone(),
+                proof_carve_bytes,
+                host: Some(refusal),
+            });
+        }
         state.next_id += 1;
         state.rows.push(PalwMemoryReservationRowV1 { id, key, bytes: need_bytes, since_unix: unix_now_secs() });
         Ok(PalwMemoryReservationV1 { ledger: Arc::clone(self), id, bytes: need_bytes })
@@ -428,6 +527,9 @@ impl PalwMemoryLedgerV1 {
     fn release(&self, id: u64) {
         let mut state = self.lock();
         state.rows.retain(|r| r.id != id);
+        if let Some(host) = &self.host {
+            host.ledger.release(id);
+        }
     }
 
     pub fn snapshot(&self) -> PalwMemoryLedgerSnapshotV1 {
@@ -494,6 +596,29 @@ pub fn arm_host_share_v1(share: Option<u64>) {
             crate::palw_backends::host_headroom_v1,
         );
     }
+}
+
+/// **Arm the host's aggregate** (int-10.2 D1) from `--palw-host-ledger-dir`, once, from the daemon —
+/// after [`arm_host_share_v1`] and before any service can reserve: the host pool is rebuilt with the same
+/// share and carve, registering every grant in the host ledger in `dir`. `None`, or a directory that
+/// cannot be used (logged by `palw_host_ledger`), leaves the pool this process's alone. Returns whether
+/// the host ledger is armed.
+pub fn arm_host_ledger_v1(dir: Option<&std::path::Path>) -> bool {
+    let Some(host) = crate::palw_host_ledger::arm_shared_host_ledger_v1(dir, crate::palw_host_ledger::PALW_HOST_MEMBER_NODE_V1) else {
+        return false;
+    };
+    let mut pools = pools().lock().unwrap_or_else(|p| p.into_inner());
+    if pools.host.reserved_bytes() == 0 && pools.host.host.is_none() {
+        pools.host = PalwMemoryLedgerV1::new_with_host_v1(
+            PalwMemoryPoolV1::Host,
+            pools.host.share,
+            PALW_READINESS_PROOF_CARVE_BYTES_V1,
+            crate::palw_backends::host_headroom_v1,
+            host,
+            crate::palw_backends::host_wide_headroom_v1,
+        );
+    }
+    pools.host.host_ledger_armed()
 }
 
 /// The host pool's ledger.
@@ -776,6 +901,121 @@ mod tests {
         let proof = undeclared.reserve(proof_key(10), carve).expect("the proof's bytes: the headroom the replay left the carve");
         assert!(undeclared.reserve(proof_key(11), 4 * GIB).is_err(), "never past the headroom less what the lane holds");
         drop((proof, replay));
+    }
+
+    /// Three nodes' host pools over one host ledger directory, as three seats on one host would hold them
+    /// (in one test process: three ledger instances), each with a 3.5 GiB share and the host's headroom
+    /// read from `host`.
+    fn three_seats(dir: &std::path::Path, host: std::sync::Arc<std::sync::atomic::AtomicU64>) -> Vec<Arc<PalwMemoryLedgerV1>> {
+        (0..3)
+            .map(|_| {
+                let host = std::sync::Arc::clone(&host);
+                PalwMemoryLedgerV1::new_with_host_v1(
+                    PalwMemoryPoolV1::Host,
+                    Some(3_584 << 20),
+                    PALW_READINESS_PROOF_CARVE_BYTES_V1,
+                    || None,
+                    crate::palw_host_ledger::PalwHostLedgerV1::open(dir).expect("a writable temp dir"),
+                    move || {
+                        let v = host.load(std::sync::atomic::Ordering::SeqCst);
+                        Some(PalwHostHeadroomV1 { past_reserve: v, haircut: v * 7 / 10 })
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn temp_host_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("misaka-host-ledger-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// **int-10.2 D1: three seats on one host cannot promise its memory three times.** Each seat's own
+    /// share (3.5 GiB) admits a 2.5 GiB replay; the host has 6 GiB past its reserve. Without the host
+    /// ledger all three would start (7.5 GiB on a host with 6); with it the third is refused BY THE HOST,
+    /// naming the host's bound, what is reserved on it and by how many ledgers — while its own share still
+    /// admits it, and a dry run says the same without registering. Its readiness proof still goes through
+    /// and its capacity still admits the class: a busy host is not a seat that cannot replay. When the
+    /// first seat's replay returns, the third starts. Every node's share holds as before.
+    #[test]
+    fn three_seats_on_one_host_cannot_promise_its_memory_three_times() {
+        let dir = temp_host_dir("three");
+        let host = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(6 * GIB));
+        let seats = three_seats(&dir, std::sync::Arc::clone(&host));
+        let a = seats[0].reserve(key("full-seat", 1), 5 * GIB / 2).expect("the first seat starts");
+        let _b = seats[1].reserve(key("full-seat", 2), 5 * GIB / 2).expect("the second seat starts");
+        assert!(seats[2].can_reserve(5 * GIB / 2).is_err(), "the dry run sees the host's aggregate");
+        let refused = seats[2].reserve(key("full-seat", 3), 5 * GIB / 2).expect_err("the host is full");
+        let on_host = refused.host.clone().expect("the host refused it, not the seat");
+        assert_eq!((on_host.host_bound_bytes, on_host.host_reserved_bytes, on_host.holders), (6 * GIB, 5 * GIB, 2));
+        assert_eq!(refused.reserved_bytes, 0, "the third seat holds nothing of its own");
+        assert!(refused.to_string().contains("this node's own bounds admit it, and the host ledger cannot cover"), "{refused}");
+        assert_eq!(seats[2].reserved_bytes(), 0, "a host refusal registers nothing");
+        // The readiness proof is the node's carve: registered on the full host, never refused there.
+        let proof = seats[2]
+            .reserve(
+                PalwMemoryReservationKeyV1 {
+                    role: PALW_READINESS_PROOF_ROLE_V1,
+                    class_id: Hash64::from_u64_word(0xC1A55),
+                    job: Hash64::from_u64_word(9),
+                },
+                PALW_READINESS_PROOF_CARVE_BYTES_V1,
+            )
+            .expect("a busy host never lapses a seat's readiness");
+        assert!(seats[2].capacity_admits(5 * GIB / 2).is_ok(), "nor its capacity: the seat can still replay the class");
+        drop(proof);
+        drop(a);
+        let _c = seats[2].reserve(key("full-seat", 3), 5 * GIB / 2).expect("the first seat's replay returned: room on the host");
+        let state = crate::palw_host_ledger::PalwHostLedgerV1::open(&dir).expect("opens").snapshot().expect("reads");
+        assert_eq!(state.reserved_bytes(), 5 * GIB, "the host's file holds exactly the live grants");
+        // A share still binds its own seat whatever the host has.
+        host.store(64 * GIB, std::sync::atomic::Ordering::SeqCst);
+        assert!(seats[1].reserve(key("full-seat", 4), 3 * GIB / 2).is_err(), "seat 2's own share: 3.5 − 2.5 − the carve");
+        drop(seats);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A process that is gone stops counting, a pinned file counts once, and a directory that cannot be
+    /// used is a node without the host ledger — never a hold.** A line left by a process that exited (a
+    /// real child's pid, reaped) is pruned at the next grant; two seats pinning the 8k file and one the IR
+    /// container count two files, each once; an unwritable directory refuses to open; and a directory that
+    /// vanishes under a running node fails OPEN to the node's own bounds.
+    #[test]
+    fn a_dead_process_stops_counting_a_shared_pin_counts_once_and_a_bad_directory_holds_nothing() {
+        let dir = temp_host_dir("stale");
+        let host = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(6 * GIB));
+        let seats = three_seats(&dir, std::sync::Arc::clone(&host));
+        // A process that held 5 GiB and exited without releasing it.
+        let mut child = std::process::Command::new("true").spawn().expect("a child");
+        let dead = child.id();
+        child.wait().expect("reaped");
+        let path = dir.join(crate::palw_host_ledger::PALW_HOST_LEDGER_FILE_V1);
+        std::fs::write(&path, format!("r {dead} 0 1 1 {} 0 full-seat\n", 5 * GIB)).expect("a stale line");
+        let _a = seats[0].reserve(key("full-seat", 1), 5 * GIB / 2).expect("the dead process's 5 GiB are nobody's");
+        let state = crate::palw_host_ledger::PalwHostLedgerV1::open(&dir).expect("opens").snapshot().expect("reads");
+        assert!(state.reservations.iter().all(|r| r.pid != dead), "pruned by the grant that met it");
+        // Pins: the 8k file by two seats, the IR container by one — two files, each once.
+        let host_ledger = |i: usize| seats[i].host.as_ref().expect("armed").ledger.clone();
+        let eight_k = misaka_palw_base0::mmap::FileIdentityV1 { dev: 1, ino: 42, len: 1_799_359_436, mtime_sec: 1, mtime_nsec: 0 };
+        let ir = misaka_palw_base0::mmap::FileIdentityV1 { dev: 1, ino: 43, len: 1_866_691_136, mtime_sec: 1, mtime_nsec: 0 };
+        host_ledger(0).register_pin(eight_k);
+        host_ledger(1).register_pin(eight_k);
+        host_ledger(1).register_pin(ir);
+        host_ledger(1).register_pin(ir);
+        let state = host_ledger(2).snapshot().expect("reads");
+        assert_eq!(state.distinct_pinned(), (2, 1_799_359_436 + 1_866_691_136), "two files, each once, for three registrations");
+        host_ledger(0).unregister_pin(eight_k);
+        assert_eq!(host_ledger(2).snapshot().expect("reads").distinct_pinned().0, 2, "seat 2 still holds the 8k file");
+        // A directory that cannot be used: a path under a file.
+        let file = dir.join("not-a-dir");
+        std::fs::write(&file, b"x").expect("a file");
+        assert!(crate::palw_host_ledger::PalwHostLedgerV1::open(&file.join("ledger")).is_err(), "refused at open: no host ledger");
+        // A directory that vanishes under running nodes: the host term fails open to each node's own bounds.
+        std::fs::remove_dir_all(&dir).expect("gone");
+        let _b = seats[1].reserve(key("full-seat", 2), 5 * GIB / 2).expect("the node's own share decides");
+        drop(seats);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A device pool is its own ledger: a host reservation does not consume device bytes and the

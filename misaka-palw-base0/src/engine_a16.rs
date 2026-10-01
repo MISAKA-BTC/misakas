@@ -3185,9 +3185,11 @@ mod profile_plan_tests {
 
     /// **The dense tier's one-pass prefill is the position-by-position one** (ADR-0117 Decision 2):
     /// over the v2, v5 (fused site) and v7 (held map) plans, on the fast engine and the catalog one,
-    /// a prompt run a layer at a time in runs of every width — from the sink, and from a cache a
-    /// stepped walk already filled — leaves every committed row, the last position's logits and the
-    /// cache exactly as the stepped walk leaves them. The post rows are the last position's only.
+    /// a prompt run a layer at a time in runs of every width — every width a node may choose for a
+    /// replay or an attempt (int-10.2 A2: the cap, 64, and each half of it down to 1) and the odd ones
+    /// between — from the sink, and from a cache a stepped walk already filled, leaves every committed
+    /// row, the last position's logits and the cache exactly as the stepped walk leaves them. The post
+    /// rows are the last position's only.
     #[test]
     fn the_one_pass_prefill_is_the_position_by_position_one() {
         use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_profile_v5, qwen25_a16_profile_v7};
@@ -3218,7 +3220,9 @@ mod profile_plan_tests {
                             want.push(trace);
                             last_logits = logits;
                         }
-                        for run in [1usize, 2, 3, 5, tokens.len()] {
+                        // Every width a node may choose (int-10.2 A2: 64 down to 1 by halves — past the prompt's
+                        // length a width is one run) and the odd widths between them.
+                        for run in [1usize, 2, 3, 4, 5, 8, 16, 32, 64, tokens.len()] {
                             let mut passed = A16Cache::new(layers);
                             for p in 0..start {
                                 engine
@@ -3257,7 +3261,7 @@ mod profile_plan_tests {
                 }
             }
         }
-        assert_eq!(checked, 2 * 2 * 3 * 3 * 5, "every plan, engine, start and run width");
+        assert_eq!(checked, 2 * 2 * 3 * 3 * 10, "every plan, engine, start and run width");
     }
 
     /// **The one-pass prefill on the real dense row, measured** (ADR-0117 Decision 2). Off unless

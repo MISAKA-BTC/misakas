@@ -4,6 +4,9 @@ pub mod daemon;
 #[cfg(feature = "evm")]
 pub mod eth_rpc;
 pub mod palw_agent;
+/// int-10.2 A1: the class artifacts a replay reads in place, pinned in RAM and counted once — the
+/// 2026-10-01 replay-memory note (node policy).
+pub mod palw_artifact_pin;
 pub mod palw_backends;
 /// The Activation Pool research's P3: a `Candidate` class is proved for its own admission audit
 /// (node policy).
@@ -25,11 +28,16 @@ pub mod palw_fp_seat;
 pub mod palw_gen_seat;
 pub mod palw_heartbeat_miner;
 pub mod palw_improve_watch;
+/// int-10.2 D1: the ledger every kaspad on one host reserves against together (node policy).
+pub mod palw_host_ledger;
 pub mod palw_lane_watch;
 /// V04 (the pre-t12 drill of 2026-09-25): the order a collector offers licences in (node policy).
 pub mod palw_licence_order;
 pub mod palw_memory_ledger;
 pub mod palw_panel;
+/// int-10.2 A2: the prefill run width a replay runs at, chosen from the memory the ledger can grant
+/// (node policy).
+pub mod palw_prefill_run;
 pub mod palw_producer;
 /// 2026-10-01 (F3): the producer holds its attempt lane while its own claims are not getting licensed
 /// (node policy).
