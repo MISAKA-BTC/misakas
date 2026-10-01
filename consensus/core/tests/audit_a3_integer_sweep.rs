@@ -215,7 +215,8 @@ fn a3_4_pwu_saturation_reachability_per_class() {
         let pwu = palw_pwu_v1(target, per);
         println!("{name:<20} {per:>22} {attempts_needed:>20} {target:>26}");
         println!("        at that target: expected_attempts = {got}, palw_pwu_v1 = {pwu} (u64::MAX = {})", u64::MAX);
-        assert!(pwu <= u64::MAX);
+        // `palw_pwu_v1` returns a `u64`, so "at most `u64::MAX`" is its type, not a property to assert (clippy's deny-level
+        // `absurd_extreme_comparisons`): the table above is what this sweep reports.
     }
     // The ADR-0137 work-target rule on t12: target = MAX * min(1, CCU/W0). W0 = escrow*1e9/rate.
     let w0 = (T12_ESCROW_SOMPI as u128) * PALW_LEDGER_RATE_SCALE_V1 / (T12_RATE_SOMPI_PER_GIGA as u128);
