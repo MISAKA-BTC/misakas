@@ -90,9 +90,10 @@ The integration's allocations beyond them (2026-10-01; each lane asked the core 
 | 87 | `GenTensorCommitted` | RFC-0003 §I.4: a tensor claim's commitment, the object the acceptance walk builds from an FP job version 10 payload (`palw_fp_gen_objects_from_accepted_txs_v1`), past `palw_fp_job_v5` over `palw_gen_v1` (approved for `rfc3/gen-claim`) | **never**: the transaction is the carrier and `palw_lifecycle_object_may_ride_v2` refuses it a carriage by name, as `FreePromptCommitted`. The number is a name, held so that no other object is ever declared at 87 |
 | 88 | `GenShardCourtAccused` | RFC-0003 §I.4.7: a pipeline claim accused in one move — the generative twin of tag 62 for a chain that plays no bisection (the held regime); the accusation carries a generative close and is adjudicated whole at acceptance (requested by `rfc3/gen-claim`, granted in its order) | yes |
 | 89 | `CourtEvalRootClaimed` | RFC-0004 §7.2 (A6): the evaluation court's history-dissection root claim (`PalwEvalRootClaimV1`'s carrier); the evaluation lane's | yes |
-| 90 and up | free | the next tag is 90 | |
+| 90 | the held regime's named-leaf challenge (lane D names the variant) | a challenge generic over IR and generative leaves, under the dormant fence `palw_held_close_chunks_v1`: it opens a Terminal session on the named leaf, and its close rides the existing `CourtCloseDeclared` / `CourtCloseChunk` group, so a leaf whose close does not fit one carrier (~100 KB) is convictable on a held chain. It replaces a chunk-group table design; tag 62 is untouched (lane D's decision 22, 2026-10-01) | yes |
+| 91 and up | free | the next tag is 91 | |
 
-Tags 83–89 are declared with **explicit discriminants** (`#[borsh(use_discriminant = true)]`), as
+Tags 83–90 are declared with **explicit discriminants** (`#[borsh(use_discriminant = true)]`), as
 `PalwCourtVerdictProofV2` already carries them: a tag is an allocation, not a position, and two lanes that
 append at the same place cannot move each other's number by the order they merge in.
 
@@ -160,9 +161,9 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 | `PalwDaAnswerV1` tags | 7 and up for the pipeline-claim answers (the out-of-range proof is an answer of tag 5's shape, generic over the claim kind) | 6 (the row node's answer, after `TirStepOutOfRange` 5) |
 
 Evaluation jobs are RFC-0003 pipeline jobs, adjudicated by the courts that already exist. A new proof
-or fault is added only if A6/A7 show one is needed, and takes the next number here. Object tag 90 and
+or fault is added only if A6/A7 show one is needed, and takes the next number here. Object tag 91 and
 up, court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
-object tags 83–89 are allocated above): a lane asks the core lane before taking one.
+object tags 83–90 are allocated above): a lane asks the core lane before taking one.
 
 ### The fence
 
