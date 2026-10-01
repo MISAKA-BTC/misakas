@@ -34,6 +34,12 @@ code, not yet run. Semantics are cited as `models/<arch>/modeling_<arch>.py:<Cla
 | FR-26 Level A honesty, panics | **landed** (the `albert` panic is a refusal now: stops at `lower`) | harness `level_label`; `albert` |
 | FR-03, 04, 05, 06, 08..17, 19..24, 27..35 | open | see each |
 
+## Findings for lane G (from the re-measure on `239179132`)
+
+1. **One ulp in the encoder–decoder adapters.** `read_encdec` builds `EncDecSpec` for `t5`, `bart`, `mbart` and `marian` equal to `parse_encdec`'s except a float scale: `head_scale` / `attn_scale` come out as `0.17677669529663687` (adapter arithmetic, `1/sqrt(d)`) against `0.1767766952966369` (the Rust parser's `powf(-0.5)`), and `0.35355339059327373` against `0.3535533905932738`. The harness accepts it (relative 1e-12) and records `ulp_only`; a Q-format conversion of the scale could turn it into a different program digest. Worth making the two spellings bit-equal (one expression for `d^-1/2`).
+2. **The `LOGITS_Q24_V1` bound meets random fixtures.** The tiny random `minicpm3` reached 305 natural-log units (`scale_emb` 12, `dim_model_base` 256 multiplying the head input by 8) and `materialise` refused it ("hold |logit| < 128"). The census config now keeps the logits near 30, so this is a property of the fixture, but a registrant's own random-init fixture can hit it and the refusal names no way out; a hint ("scale the fixture's weights") would help.
+3. **FR-35** — NanoChat's rotation sign (below): the only gap left once FR-02 is in, proved by a patched-reference variant.
+
 ## Ranked
 
 <!-- BEGIN GENERATED: frs -->
