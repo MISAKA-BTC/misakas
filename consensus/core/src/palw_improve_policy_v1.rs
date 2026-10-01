@@ -551,6 +551,23 @@ mod tests {
     fn the_epoch_length_and_the_jobs_bound() {
         let policy = palw_improvement_policy_example_v1();
         assert_eq!(palw_improvement_epoch_length_v1(&policy.windows), 950);
-        assert_eq!(palw_improvement_jobs_per_subject_v1(&policy.eval, true), (256 + 32 + 16) * 2);
+        // One primary job per drawn item and suite entry (spec 17 §17.8.2): 256 + 32 + 16.
+        assert_eq!(palw_improvement_jobs_per_subject_v1(&policy.eval, true), 256 + 32 + 16);
+        // A Judge stage adds two judged parts per drawn item, a Pairwise stage four per item of a non-parent subject.
+        let mut judged = policy.eval.clone();
+        judged
+            .stages
+            .push(PalwScoringStageV1 { kind: PalwScoringKindV1::Judge, params: PalwScoringParamsV1::Judge { lo: -9, hi: 9 } });
+        judged
+            .stages
+            .push(PalwScoringStageV1 { kind: PalwScoringKindV1::Pairwise, params: PalwScoringParamsV1::Pairwise { margin: 0 } });
+        assert_eq!(palw_improvement_jobs_per_subject_v1(&judged, false), 304 + 2 * 256, "the parent: no Pairwise");
+        assert_eq!(palw_improvement_jobs_per_subject_v1(&judged, true), 304 + 2 * 256 + 4 * 256);
+        // The epoch's claimable jobs are the sum over its subjects: the parent and two others.
+        assert_eq!(
+            crate::palw_improve_eval_v1::palw_improve_eval_epoch_jobs_v1(&judged, 3),
+            (304 + 2 * 256) + 2 * (304 + 2 * 256 + 4 * 256)
+        );
+        assert_eq!(crate::palw_improve_eval_v1::palw_improve_eval_epoch_jobs_v1(&judged, 0), 0);
     }
 }
