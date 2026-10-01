@@ -1218,6 +1218,12 @@ def verdict_dm2(sd, st, lines):
     return v_all(checks)
 
 
+# What the court's evidence travels by in this drill: the executor retains the capture of every claim it carries in a directory every node shares and the
+# challenger reads the accused's from it. A stand-in — the real transport (the pipeline-claim data-availability units) is the core lane's (its task 5) — named in
+# the verdict so a PASS is not read as a proof of that transport.
+EVIDENCE_STAND_IN = " [evidence transport: the shared capture directory (--palw-improve-capture-dir), a stand-in until the pipeline-claim data-availability units land]"
+
+
 def verdict_dm3(sd, lines):
     """D-M3 (RFC-0004 A13): a lying evaluation claim is CONVICTED. Over the probe record (`step_dm3_probe`): each executor told to lie did, on line T; the
     challenger's replay found each lie that landed as a claim, where the lie is (a moved step leaf: the first divergent leaf; a moved id: the first id);
@@ -1265,7 +1271,8 @@ def verdict_dm3(sd, lines):
                          if c["phase"].startswith("Voided") and c["id"] not in landed_ids]
         if honest_voided:
             checks.append((False, f"{node}'s honest claim(s) {honest_voided} were voided"))
-    return v_all(checks)
+    v, why = v_all(checks)
+    return v, why + EVIDENCE_STAND_IN
 
 
 def verdict_dm4(sd, st, lines, ids):
@@ -1409,7 +1416,7 @@ def selftest():
             if c["id"] == cid:
                 c["phase"], c["void"] = "Voided", "CourtConviction"
     r = verdict_dm3({"data": {"dm3": convicted}}, t_lines)
-    assert r[0] == "PASS", r
+    assert r[0] == "PASS" and "stand-in" in r[1], r
     final = clone(probe)
     final["claims"]["new5"]["rows"][0]["phase"] = "Final"
     assert verdict_dm3({"data": {"dm3": final}}, t_lines)[0] == "FAIL", "a lie that reached Final unconvicted"
