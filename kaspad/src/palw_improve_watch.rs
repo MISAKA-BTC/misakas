@@ -133,6 +133,20 @@ pub(crate) fn palw_improve_log_tick_v1(tick: &PalwImproveTickV1) {
 }
 
 /// A bond key as `txid:index`.
+/// A candidate's (or the regression check's) promotion counts as JSON: wins, losses and ties per kind and
+/// whether the candidate is eligible.
+fn counts_json(k: kaspa_consensus_core::palw_improve_state_v1::PalwPromotionCountsV1) -> serde_json::Value {
+    use serde_json::json;
+    json!({
+        "primary": {"wins": k.primary.wins, "losses": k.primary.losses, "ties": k.primary.ties},
+        "regression": {"wins": k.regression.wins, "losses": k.regression.losses, "ties": k.regression.ties},
+        "safety": {"wins": k.safety.wins, "losses": k.safety.losses, "ties": k.safety.ties},
+        "judge": {"wins": k.judge.wins, "losses": k.judge.losses, "ties": k.judge.ties},
+        "pairwise": {"wins": k.pairwise.wins, "losses": k.pairwise.losses, "ties": k.pairwise.ties},
+        "eligible": k.eligible,
+    })
+}
+
 fn bond_text(bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2) -> String {
     format!("{}:{}", bond.0.transaction_id, bond.0.index)
 }
@@ -175,6 +189,7 @@ pub(crate) fn palw_improve_status_json_v1(
                         },
                         "outcome": h.outcome.map(|o| format!("{o:?}")),
                         "decided_daa": h.decided_daa,
+                        "previous_counts": h.previous_counts.map(counts_json),
                         "retire": format!("{:?}", h.retire),
                         "escrow": {
                             "parent": h.escrow.parent, "parent_spent": h.escrow.parent_spent,
@@ -189,14 +204,7 @@ pub(crate) fn palw_improve_status_json_v1(
                             },
                             "fee_paid": c.fee_paid, "bond": c.bond, "escrow": c.escrow, "escrow_spent": c.escrow_spent,
                             "submitted_daa": c.submitted_daa,
-                            "counts": c.counts.map(|k| json!({
-                                "primary": {"wins": k.primary.wins, "losses": k.primary.losses, "ties": k.primary.ties},
-                                "regression": {"wins": k.regression.wins, "losses": k.regression.losses, "ties": k.regression.ties},
-                                "safety": {"wins": k.safety.wins, "losses": k.safety.losses, "ties": k.safety.ties},
-                                "judge": {"wins": k.judge.wins, "losses": k.judge.losses, "ties": k.judge.ties},
-                                "pairwise": {"wins": k.pairwise.wins, "losses": k.pairwise.losses, "ties": k.pairwise.ties},
-                                "eligible": k.eligible,
-                            })),
+                            "counts": c.counts.map(counts_json),
                         })).collect::<Vec<_>>(),
                         "grants": e.grants.iter().map(|g| json!({
                             "recipient": bond_text(&g.recipient), "stage": format!("{:?}", g.stage), "amount": g.amount,
@@ -217,6 +225,9 @@ pub(crate) fn palw_improve_status_json_v1(
                 "next_due_daa": l.line.next_due_daa,
                 "policy_sequence": l.line.policy_sequence,
                 "governed_from_daa": l.line.governed_from_daa,
+                "last_promotion": l.line.last_promotion,
+                "regression_epoch": l.line.regression_epoch,
+                "regression_check": l.line.regression_check.map(|c| c.to_string()),
                 "barred": l.line.barred.iter().map(|(b, until)| json!({"bond": bond_text(b), "until": until})).collect::<Vec<_>>(),
                 "usage": l.usage.map(|u| json!({"usage": u.usage.to_string(), "since_daa": u.since_daa})),
                 "pool": l.pool.map(|p| json!({
