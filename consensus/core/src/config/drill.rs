@@ -1431,7 +1431,10 @@ mod tests {
         assert!(why.contains("builds on 2 earlier step(s)") && why.contains("carries 1"), "{why}");
         // Another fence's height, and a height not above the step before.
         let mut taken = base.clone();
-        assert!(palw_drill_capacity_step2_at_v1(&mut taken, 750).unwrap_err().contains("already"), "750 is the release's height");
+        assert!(
+            palw_drill_capacity_step2_at_v1(&mut taken, 3_600).unwrap_err().contains("already"),
+            "3,600 is the DAA-3,600 flag day's height, which the moves above left alone"
+        );
         let mut flat = base.clone();
         assert!(palw_drill_capacity_step2_at_v1(&mut flat, 80).unwrap_err().contains("must start above"));
         // ρ = 25, then ρ = 100.
