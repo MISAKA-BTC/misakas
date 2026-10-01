@@ -437,9 +437,10 @@ install_unit_for_node() {
     fi
 }
 
+# FP_WAIT_ITERS: 3 s iterations to wait for the "Consensus params fingerprint" line (default 60 = 3 min); an overloaded host's start-up can exceed it.
 wait_fingerprint() { # unit since-epoch
     local u=$1 since=$2 got="" i
-    for i in $(seq 1 60); do
+    for i in $(seq 1 ${FP_WAIT_ITERS:-60}); do
         got=$(journalctl -u "$u" --since "@$since" --no-pager 2>/dev/null | grep -oE 'Consensus params fingerprint: [0-9a-f]{64}' | tail -1 | awk '{print $4}' || true)
         [ -n "$got" ] && break
         systemctl is-failed --quiet "$u" && break
@@ -1066,7 +1067,7 @@ upgrade_rollback_host() { # $1 = seconds between nodes — puts back the unit/dr
         # `systemctl start` returns once the process forks: ask the node itself (warns, never stops it)
         t12check_expect
         got=""
-        for i in $(seq 1 60); do
+        for i in $(seq 1 ${FP_WAIT_ITERS:-60}); do
             got=$(journalctl -u "$N_UNIT" --since "@$since" --no-pager 2>/dev/null | grep -oE 'Consensus params fingerprint: [0-9a-f]{64}' | tail -1 | awk '{print $4}' || true)
             [ -n "$got" ] && break
             systemctl is-active --quiet "$N_UNIT" || break
