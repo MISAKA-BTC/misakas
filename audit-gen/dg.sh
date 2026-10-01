@@ -22,10 +22,16 @@
 #   status    the generative claims of every drill bond
 #
 # Heights (lane C's int-11 layout): GEN_AT=28 FPV5_AT=104 HELD_AT=140. Per-claim identities (nonce, seed) derive from the tag.
+#
+# Plan A: IMAGE_CLASS=sd3-tiny DENOISE_STAGE=2 replaces the toy image class by the reduced SD3 pipeline (RFC-0003 step 6; its
+# artifact `sd3-tiny.class.palwtir2` and manifest entry `sd3-tiny.json` are written beside the Plan B classes by
+# `PALW_GEN_DRILL_OUT=$GEN_DIR cargo test -p misaka-palw-sdk --test gen_sd3_class -- --ignored write_the_sd3_class`;
+# merge its entry into drill-classes.json with `python3 audit-gen/merge-sd3-manifest.py $GEN_DIR`). Plan B is the default.
 set -euo pipefail
 G=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)
 . "${DG_LIB:-$G/../audit-tir/lib-df.sh}"
 GEN_DIR=${GEN_DIR:-$WORK_DIR/gen}
+IMAGE_CLASS=${IMAGE_CLASS:-toy-image}; DENOISE_STAGE=${DENOISE_STAGE:-1}
 GEN_AT=${GEN_AT:-28}; FPV5_AT=${FPV5_AT:-104}; HELD_AT=${HELD_AT:-140}; LATE_AT=${LATE_AT:-103}
 DG_NODE=${DG_NODE:-new3}                 # the node whose JSON port is read
 IMAGE_EXEC=${IMAGE_EXEC:-new5}; EMBED_EXEC=${EMBED_EXEC:-new6}
@@ -46,7 +52,8 @@ seat_of() { case $1 in new0) echo 3;; new1) echo 0;; new2) echo 1;; new3) echo 2
 
 classes() {
     classes_manifest
-    for c in toy-image toy-embed wide-embed; do
+    for c in toy-image toy-embed wide-embed sd3-tiny; do
+        [ "$c" = sd3-tiny ] && [ "$IMAGE_CLASS" != sd3-tiny ] && continue
         [ -s "$(class_file "$c")" ] && ok "$c: $(class_field "$c" bytes) bytes, class $(class_field "$c" class_id | cut -c1-16)… root $(class_field "$c" artifact_root | cut -c1-16)…" \
             || bad "$c: $(class_file "$c") missing"
     done
@@ -111,16 +118,16 @@ leaf_of() {
 dg1() {
     classes_manifest
     say "DG-1: below GEN_AT=$GEN_AT the gen registration is dropped by name"
-    at_daa $((GEN_AT - 4)); gen_register toy-image "$IMAGE_EXEC"
+    at_daa $((GEN_AT - 4)); gen_register "$IMAGE_CLASS" "$IMAGE_EXEC"
     at_daa $((GEN_AT + 3))
-    dgw class --class "$(class_field toy-image class_id)" >/dev/null && bad "the registration below the fence was taken" || ok "dropped by name below $GEN_AT"
-    gen_register toy-image "$IMAGE_EXEC"; sleep 60
-    at_daa $((GEN_AT + 8)); dgw class --class "$(class_field toy-image class_id)" >/dev/null && ok "accepted from $GEN_AT" || bad "not listed from $GEN_AT"
+    dgw class --class "$(class_field "$IMAGE_CLASS" class_id)" >/dev/null && bad "the registration below the fence was taken" || ok "dropped by name below $GEN_AT"
+    gen_register "$IMAGE_CLASS" "$IMAGE_EXEC"; sleep 60
+    at_daa $((GEN_AT + 8)); dgw class --class "$(class_field "$IMAGE_CLASS" class_id)" >/dev/null && ok "accepted from $GEN_AT" || bad "not listed from $GEN_AT"
     say "DG-1: a v10 claim below FPV5_AT=$FPV5_AT is skipped, from it accepted"
     local s; s=$(seat_of "$IMAGE_EXEC")
-    at_daa $((FPV5_AT - 4)); local early; early=$(gen_claim "$IMAGE_EXEC" toy-image "$(seat_field "$s" bond_outpoint)" "$KR/bond-$s.seed" "$(seat_field "$s" operator_id)" dg1-early)
+    at_daa $((FPV5_AT - 4)); local early; early=$(gen_claim "$IMAGE_EXEC" "$IMAGE_CLASS" "$(seat_field "$s" bond_outpoint)" "$KR/bond-$s.seed" "$(seat_field "$s" operator_id)" dg1-early)
     at_daa $((FPV5_AT + 4))
-    dgw claims --bond "$(seat_field "$s" bond_outpoint)" --class "$(class_field toy-image class_id)" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if not any(c['claim']==sys.argv[1][:16] for c in d['claims']) else 1)" "$early" \
+    dgw claims --bond "$(seat_field "$s" bond_outpoint)" --class "$(class_field "$IMAGE_CLASS" class_id)" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if not any(c['claim']==sys.argv[1][:16] for c in d['claims']) else 1)" "$early" \
         && ok "skipped below $FPV5_AT" || bad "the early claim was taken"
     say "DG-1: the wide class is refused (PALW-GEN-21) below HELD_AT=$HELD_AT"
     at_daa $((HELD_AT - 3)); gen_register wide-embed "$IMAGE_EXEC"
@@ -156,9 +163,9 @@ dg3() {
     classes_manifest
     local si ei; si=$(seat_of "$IMAGE_EXEC"); ei=$(seat_of "$EMBED_EXEC")
     at_daa "$FPV5_AT"
-    gen_claim "$IMAGE_EXEC" toy-image "$(seat_field "$si" bond_outpoint)" "$KR/bond-$si.seed" "$(seat_field "$si" operator_id)" dg3-image >/dev/null
+    gen_claim "$IMAGE_EXEC" "$IMAGE_CLASS" "$(seat_field "$si" bond_outpoint)" "$KR/bond-$si.seed" "$(seat_field "$si" operator_id)" dg3-image >/dev/null
     say "DG-3: waiting for the image claim's Final (licence + the 120-DAA window)"
-    dgw wait --bond "$(seat_field "$si" bond_outpoint)" --class "$(class_field toy-image class_id)" --final 1 --deadline-daa "${DG3_DEADLINE_DAA:-300}" \
+    dgw wait --bond "$(seat_field "$si" bond_outpoint)" --class "$(class_field "$IMAGE_CLASS" class_id)" --final 1 --deadline-daa "${DG3_DEADLINE_DAA:-300}" \
         && ok "the image claim reached Final" || bad "the image claim did not reach Final by ${DG3_DEADLINE_DAA:-300}"
     gen_claim "$EMBED_EXEC" toy-embed "$(seat_field "$ei" bond_outpoint)" "$KR/bond-$ei.seed" "$(seat_field "$ei" operator_id)" dg3-embed >/dev/null
     dgw wait --bond "$(seat_field "$ei" bond_outpoint)" --class "$(class_field toy-embed class_id)" --final 1 --deadline-daa "${DG3_DEADLINE_DAA:-300}" \
@@ -168,13 +175,13 @@ dg3() {
 
 dg4() {
     classes_manifest
-    local l10=$(leaf_of toy-image 1 "commit") out_lane=0
+    local l10=$(leaf_of "$IMAGE_CLASS" "$DENOISE_STAGE" "commit") out_lane=0
     say "DG-4: bond 10 plants a cone lie at the denoiser's leaf $l10; bond 11 an output lie (lane $out_lane)"
     local ex=$IMAGE_EXEC
-    gen_claim "$ex" toy-image "$(liar_field 10 bond_outpoint)" "$(liar_field 10 seed_file)" "$(liar_field 10 operator_id)" dg4-cone --plant "step:$l10:0:3" >/dev/null
-    gen_claim "$ex" toy-image "$(liar_field 11 bond_outpoint)" "$(liar_field 11 seed_file)" "$(liar_field 11 operator_id)" dg4-output --plant "output:$out_lane:1" >/dev/null
+    gen_claim "$ex" "$IMAGE_CLASS" "$(liar_field 10 bond_outpoint)" "$(liar_field 10 seed_file)" "$(liar_field 10 operator_id)" dg4-cone --plant "step:$l10:0:3" >/dev/null
+    gen_claim "$ex" "$IMAGE_CLASS" "$(liar_field 11 bond_outpoint)" "$(liar_field 11 seed_file)" "$(liar_field 11 operator_id)" dg4-output --plant "output:$out_lane:1" >/dev/null
     for b in 10 11; do
-        dgw wait --bond "$(liar_field $b bond_outpoint)" --class "$(class_field toy-image class_id)" --convicted 1 --deadline-daa "${DG4_DEADLINE_DAA:-$(( $(dgw tip) + 80 ))}" \
+        dgw wait --bond "$(liar_field $b bond_outpoint)" --class "$(class_field "$IMAGE_CLASS" class_id)" --convicted 1 --deadline-daa "${DG4_DEADLINE_DAA:-$(( $(dgw tip) + 80 ))}" \
             && ok "bond $b: the lying claim was convicted" || bad "bond $b: not convicted"
     done
     [ "$FAILED" = 0 ] && echo "DG-4 PASS" || { echo "DG-4 FAIL"; return 1; }
@@ -184,7 +191,7 @@ dg5() {
     classes_manifest
     local s i; s=$(seat_of "$IMAGE_EXEC")
     for i in $(seq 1 9); do
-        gen_claim "$IMAGE_EXEC" toy-image "$(seat_field "$s" bond_outpoint)" "$KR/bond-$s.seed" "$(seat_field "$s" operator_id)" "dg5-$i" >/dev/null || true
+        gen_claim "$IMAGE_EXEC" "$IMAGE_CLASS" "$(seat_field "$s" bond_outpoint)" "$KR/bond-$s.seed" "$(seat_field "$s" operator_id)" "dg5-$i" >/dev/null || true
         sleep 5
     done
     at_daa $(( $(dgw tip) + 8 ))
@@ -244,6 +251,6 @@ if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
     cmd=${1:-}; shift || true
     case $cmd in
         classes|dg1|dg2|dg3|dg4|dg5|dg6|dg7b|status) "$cmd" "$@" ;;
-        *) sed -n '2,27p' "$0"; exit 2 ;;
+        *) sed -n '2,32p' "$0"; exit 2 ;;
     esac
 fi

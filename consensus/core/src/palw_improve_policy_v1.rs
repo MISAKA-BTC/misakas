@@ -109,8 +109,10 @@ pub fn palw_improvement_policy_check_v1(
             return Err("every window must be between 1 and 2^32 DAA");
         }
     }
-    if w.grid < palw_improvement_epoch_length_v1(w) {
-        return Err("grid must be at least the epoch's length (w_collect + w_submit + w_holdout + w_eval + court_margin)");
+    // [E18] Strictly longer than the epoch, so an epoch that runs to `t_score` ends before the next
+    // boundary it could open at.
+    if w.grid <= palw_improvement_epoch_length_v1(w) {
+        return Err("grid must exceed the epoch's length (w_collect + w_submit + w_holdout + w_eval + court_margin)");
     }
     // 4 [E12]
     if w.w_eval <= w.beacon_delay.saturating_add(PALW_IMPROVE_MIN_CLAIM_WINDOW_DAA_V1) {
@@ -474,6 +476,7 @@ mod tests {
             ("usage", Box::new(|p| p.usage.value = 0)),
             ("zero window", Box::new(|p| p.windows.w_submit = 0)),
             ("grid below the epoch", Box::new(|p| p.windows.grid = 900)),
+            ("grid equal to the epoch (E18)", Box::new(|p| p.windows.grid = 950)),
             ("E12", Box::new(|p| p.windows.w_eval = p.windows.beacon_delay + 32)),
             ("no stage", Box::new(|p| p.eval.stages.clear())),
             ("params of another kind", Box::new(|p| p.eval.stages[0].kind = PalwScoringKindV1::RefLogLik)),

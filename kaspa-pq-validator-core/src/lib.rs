@@ -2175,6 +2175,7 @@ mod tests {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            tail: None,
         };
         let events: Vec<Hash64> = (0..256u64).map(|i| Hash64::from_u64_word(i + 1)).collect();
         let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(Hash64::from_bytes([0xB1; 64]), &events);

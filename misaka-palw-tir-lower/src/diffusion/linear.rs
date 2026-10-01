@@ -2,8 +2,8 @@
 //! feed-forward, the modulation, the embedders; the VAE's attention).
 //!
 //! `y = W·x (+ b)` with `W` `[out, in]`: `i8` weight codes at one scale per OUTPUT CHANNEL (the row's absmax maps to
-//! ±127), stored transposed `[in, out]` so one `MatMul` over the rows `x:[R, in]` gives the exact `i64`
-//! accumulator `[R, out]`; then ONE narrowing per channel, `N[lo,hi](acc; m_c, s_c, z_c)`, where
+//! ±127), stored output-major `[out, in]` (a cone of a tile of outputs is one contiguous run of the param) and
+//! transposed in the program, so one `MatMul` over the rows `x:[R, in]` gives the exact `i64` accumulator `[R, out]`; then ONE narrowing per channel, `N[lo,hi](acc; m_c, s_c, z_c)`, where
 //! `m_c / 2^s_c = x_scale · w_scale_c / y_scale` carries the input scale, the channel's weight scale and the output
 //! scale in one multiplier, and `z_c = round(b_c / y_scale)` is the bias at the output scale (the narrowing's own
 //! additive term: no `i64` bias add whose range depends on a param). That is the lowering's one lossy site per
@@ -24,7 +24,7 @@ use crate::quant::{mul_shift, quantize_rows};
 pub struct QLinear {
     pub inn: usize,
     pub out: usize,
-    /// `W` as `i8` codes, `[in, out]` row-major.
+    /// `W` as `i8` codes, `[out, in]` row-major (output-major).
     pub w: Vec<i8>,
     /// The float value of one weight code, per output channel.
     pub w_scale: Vec<f64>,
@@ -43,12 +43,10 @@ impl QLinear {
     pub fn new(w: &[f32], out: usize, inn: usize, bias: Option<&[f32]>, x_scale: f64, y_scale: f64) -> Self {
         assert!(x_scale > 0.0 && y_scale > 0.0, "a code scale is positive");
         let q = quantize_rows(w, out, inn, None);
-        let mut wt = vec![0i8; inn * out];
-        for o in 0..out {
-            for i in 0..inn {
-                wt[i * out + o] = q.codes[o * inn + i];
-            }
-        }
+        // Output-major `[out, in]`, as the checkpoint stores it: the cone of a tile of outputs then reads ONE contiguous
+        // run of the param (a `[in, out]` layout makes it `in` strided runs, each opened with its own Merkle path —
+        // measured on the fixture: 64 openings and 80 KB for a 64-output modulation).
+        let wt = q.codes.clone();
         let (mut m, mut s) = (Vec::with_capacity(out), Vec::with_capacity(out));
         for c in 0..out {
             let (mc, sc) = mul_shift(x_scale * q.scales[c] / y_scale);
@@ -68,7 +66,7 @@ impl QLinear {
             pb,
             &format!("{name}.w"),
             DType::I8,
-            &[self.inn as u32, self.out as u32],
+            &[self.out as u32, self.inn as u32],
             self.w.iter().map(|v| *v as i128).collect(),
         );
         let m = sink.put(pb, &format!("{name}.m"), DType::I64, &[self.out as u32], self.m.iter().map(|v| *v as i128).collect());
@@ -93,7 +91,10 @@ pub struct QLinearRefs {
 /// **The projection**: `x:[.., in]` `i16` codes (rank ≥ 2) to `[.., out]`, narrowed into `[lo, hi]` of `dtype`.
 /// One `MatMul` (exact `i64`) and one narrowing.
 pub fn lower_linear(b: &mut BlockBuilder<'_>, x: Ref, l: &QLinearRefs, lo: i64, hi: i64, dtype: DType) -> Ref {
-    let acc = b.matmul(x, l.w, DType::I64);
+    // The param is `[out, in]`; the product wants `[in, out]`: a `Transpose` the demand evaluation maps element for element,
+    // so a cone still reads the one contiguous run of the stored weights it needs.
+    let wt = b.transpose(l.w, &[1, 0]);
+    let acc = b.matmul(x, wt, DType::I64);
     b.narrow(acc, &Narrowing::new(l.m, l.s, l.z), lo, hi, dtype)
 }
 
