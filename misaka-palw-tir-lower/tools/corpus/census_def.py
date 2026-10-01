@@ -237,9 +237,97 @@ def manifest():
     print(f"census_v2.json: {len(entries)} entries; {len(failed)} of {len(recs)} families have no automatic tiny config")
 
 
+# ───────────────────────── the encoder census ─────────────────────────
+# Every masked-LM family of transformers 5.17 (the encoder and embedding lineage) that is not a corpus entry, through its BASE model
+# (`AutoModel`), as a bidirectional encoder fixture (`gen_fixtures.build_encoder`). Same guards: meta device first, one family per
+# subprocess, RSS and time caps. Entry ids are `<model_type>_enc`.
+
+def enc_families():
+    from transformers.models.auto.modeling_auto import MODEL_FOR_MASKED_LM_MAPPING_NAMES as ML, MODEL_MAPPING_NAMES as BASE
+    mine = {e["model_type"] for e in C.ENTRIES}
+    return [(mt, BASE[mt]) for mt in sorted(ML) if mt in BASE and mt not in mine]
+
+
+def one_enc(mt):
+    import gen_fixtures as G
+    G._lazy()
+    import torch
+    import transformers
+    G.torch, G.transformers = torch, transformers
+    t = time.time()
+    try:
+        cfg = G.auto_tiny(mt, ENC_OVERRIDES.get(mt, {}))
+        cls = getattr(transformers, BASE_NAME[mt]) if mt in BASE_NAME else transformers.AutoModel
+        build = (lambda: cls._from_config(cfg)) if cls is not transformers.AutoModel else (lambda: cls.from_config(cfg))
+        n = G.size_guard(build)
+        m = build()
+        m.eval()
+        pad = cfg.pad_token_id if isinstance(getattr(cfg, "pad_token_id", None), int) else 0
+        ids = torch.tensor([[2 if pad != 2 else 3, 11, 25, 7, 5] + [pad] * 5])
+        mask = torch.tensor([[1] * 5 + [0] * 5])
+        with torch.no_grad():
+            out = m(input_ids=ids, attention_mask=mask)
+        ok = hasattr(out, "last_hidden_state")
+        rec = {"model_type": mt, "class": type(m).__name__, "ok": ok, "params": n, "pad": pad, "s": round(time.time() - t, 1)}
+        if not ok:
+            rec["error"] = "no last_hidden_state"
+    except Exception as e:  # noqa: BLE001
+        rec = {"model_type": mt, "ok": False, "error": f"{type(e).__name__}: {str(e)[:160]}".replace("\n", " ")}
+    print(json.dumps(rec), flush=True)
+
+
+ENC_OVERRIDES = {}
+BASE_NAME = {}
+
+
+def run_enc_child(mt, cls):
+    p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "one-enc", mt], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    t0 = time.time()
+    while p.poll() is None:
+        time.sleep(0.25)
+        if rss_mb(p.pid) > RSS_LIMIT_MB or time.time() - t0 > TIMEOUT_S:
+            p.kill()
+            p.wait()
+            return {"model_type": mt, "class": str(cls), "ok": False, "error": "killed: RSS or time cap"}
+    for line in reversed(p.stdout.read().strip().splitlines()):
+        if line.startswith("{"):
+            return json.loads(line)
+    return {"model_type": mt, "class": str(cls), "ok": False, "error": f"no result (exit {p.returncode})"}
+
+
+def probe_enc():
+    for mt, cls in enc_families():
+        print(json.dumps(run_enc_child(mt, cls)), flush=True)
+
+
+def manifest_enc():
+    recs = [json.loads(l) for l in open(os.path.join(HERE, "census_enc_probe.jsonl")) if l.startswith("{")]
+    entries = []
+    for r in recs:
+        if not r["ok"]:
+            continue
+        mt = r["model_type"]
+        entries.append(C.entry(mt.replace("-", "_") + "_enc", "census/encoder", "encoder-bidir", r["class"], mt, "encoder", ENC_OVERRIDES.get(mt, {}),
+                               usage="l", why="a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+                               options={"pad": r["pad"], "lmax": 12}))
+    failed = [r for r in recs if not r["ok"]]
+    doc = {"schema": "misaka.palw.corpus-v2", "positions": 10, "vocab": C.V, "usage_weight": C.USAGE_WEIGHT, "entries": entries,
+           "census": {"families": len(recs), "built": len(entries), "not_derivable": failed, "excluded": [], "variants": []}}
+    with open(os.path.join(HERE, "census_enc_v2.json"), "w") as f:
+        json.dump(doc, f, indent=1)
+        f.write("\n")
+    print(f"census_enc_v2.json: {len(entries)} entries; {len(failed)} of {len(recs)} families have no automatic tiny config")
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1]
     if cmd == "one":
         one(sys.argv[2])
+    elif cmd == "one-enc":
+        one_enc(sys.argv[2])
+    elif cmd == "probe-enc":
+        probe_enc()
+    elif cmd == "manifest-enc":
+        manifest_enc()
     else:
         {"probe": probe, "reprobe": reprobe, "manifest": manifest}[cmd]()

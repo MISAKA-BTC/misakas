@@ -512,6 +512,22 @@ entries. Four results.
    yet", but the class transformers 5.17 ships is expressible with existing features: the adapter holds once the refusal is
    bypassed (FR-25, second instance).
 
+### 4.7 The encoder census
+
+The same method on the encoder and embedding lineage: every masked-LM family of transformers 5.17 that is not a corpus entry (37), through its base model as a
+bidirectional encoder, under the same guards (`census_def.py probe-enc`, `census_enc_v2.json`, `census_enc_report.json`). 25 build a tiny fixture; 12 do not
+(`esm`, `esmc`, `flaubert`, `funnel`, `luke`, `modernvbert`, `neomme`, `perceiver`, `reformer`, `squeezebert`, `xlm`, `xmod`: sizes over the guard or configs that need a hand-made tiny config).
+
+* **None reads with no adapter**: the standard template is a decoder, the built-in pack holds only the corpus's six encoders. All 25 are refused at `read` (`has no adapter and is not a causal language model class`).
+* **Three are Level B by this lane's data**, in 6 to 12 lines each, every stage including the court: `camembert` and `data2vec_text` (RoBERTa's encoder under another name or prefix) and `ernie` (BERT with the task-type embeddings refused).
+  So **3 of 25 (12 %)** by data today, all in the part of the lineage that is *BERT with another name*.
+* **The other 22** are not examined one by one; by what their classes are: pre-LayerNorm BERTs (`megatron_bert`, `roberta_prelayernorm`, `xlm_roberta_xl`) and `roformer`/`rembert`/`convbert`/`mobilebert`/`squeezebert`/`electra`
+  (factorised embeddings: FR-17's embedding projection order) are probably BERT-shaped data once the rows lowerer reads the whole spec (FR-17 step 2); `deberta` (disentangled attention),
+  `eurobert`/`jina_embeddings_v3` (rope, bidirectional, GQA), `longformer`/`big_bird`/`nystromformer`/`mra`/`yoso` (sparse or approximated attention) and `fnet` (no attention) are features of FR-17;
+  `layoutlm`, `tapas`, `roc_bert` carry extra embedding tables. This is a reading of the class names, not a measurement: the number FR-17 unlocks is *at most* 22 of 25, and the honest low
+  estimate is the dozen BERT-shaped ones.
+* **Hub weight differs from family count**: the encoder families that matter by downloads (BERT, RoBERTa/XLM-R, DistilBERT, MPNet, ModernBERT, the sentence-embedders built on them) are in the corpus, where 6 of 10 are Level B today; the census is the long tail.
+
 ## 5. Targets, honestly
 
 | criterion | target | measured |
