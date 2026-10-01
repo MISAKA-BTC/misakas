@@ -31,8 +31,10 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_improve_artifact_v1::PalwTirArtifactRefV1;
 use kaspa_consensus_core::palw_improve_material_v1::PalwCaseReferenceV1;
 use kaspa_consensus_core::palw_improve_eval_v1::{
-    PalwEvalJobV1, PalwEvalModeV1, PalwEvalStageParamsV1, palw_improve_eval_job_id_v1, palw_improve_eval_mode_v1,
+    PalwEvalJobV1, PalwEvalModeV1, PalwEvalStageParamsV1, palw_improve_eval_budget_positions_v1, palw_improve_eval_epoch_jobs_v1,
+    palw_improve_eval_job_id_v1, palw_improve_eval_job_position_cap_v1, palw_improve_eval_mode_v1, palw_improve_eval_positions_v1,
 };
+use kaspa_consensus_core::palw_improve_v1::PalwImprovementCeilingsV1;
 use kaspa_consensus_core::palw_improve_state_v1::{
     PalwEpochCandidateV1, PalwEpochStateV1, PalwEpochTimesV1, PalwEvalItemV1, PalwEvalSubjectV1, PalwImprovementEpochViewV1,
     PalwImprovementPolicyV1, PalwScoringKindV1, palw_improve_eval_seed_v1,
@@ -72,6 +74,23 @@ pub struct PalwImproveEpochViewV1 {
     pub candidates: Vec<PalwEpochCandidateV1>,
     /// The epoch seed, from `Drawing` on.
     pub seed: Option<Hash64>,
+}
+
+impl PalwImproveEpochViewV1 {
+    /// **An epoch as the watcher reads it, from the read door's view** (header, candidates, seed).
+    pub fn of_view_v1(v: &PalwImprovementEpochViewV1) -> Self {
+        let header = &v.epoch;
+        Self {
+            line_id: header.line_id,
+            epoch: header.epoch,
+            state: header.state,
+            times: header.times,
+            parent: header.parent,
+            previous: header.previous,
+            candidates: v.candidates.clone(),
+            seed: header.seed,
+        }
+    }
 }
 
 /// **What an item evaluates** — its prompt and its reference (a key's or a continuation's commitment,
@@ -197,17 +216,7 @@ impl PalwImproveChainV1 for PalwImproveViewsChainV1<'_> {
 
     fn epoch(&self, line_id: &Hash64, epoch: u64) -> Option<PalwImproveEpochViewV1> {
         let v = self.view(line_id).filter(|v| v.epoch.epoch == epoch)?;
-        let header = &v.epoch;
-        Some(PalwImproveEpochViewV1 {
-            line_id: header.line_id,
-            epoch: header.epoch,
-            state: header.state,
-            times: header.times,
-            parent: header.parent,
-            previous: header.previous,
-            candidates: v.candidates.clone(),
-            seed: header.seed,
-        })
+        Some(PalwImproveEpochViewV1::of_view_v1(v))
     }
 
     fn items(&self, line_id: &Hash64, epoch: u64) -> Vec<PalwEvalItemV1> {
@@ -316,6 +325,16 @@ pub struct PalwImproveNodeV1 {
     pub evaluates: bool,
     /// It fetches full-weight candidates too (their prefetch is the whole artifact, §6.7, §13).
     pub prefetch_full: bool,
+    /// **The classes the chain admits claims of now** (RFC-0004 §17.8.4, A6-4: an evaluation claim is an
+    /// FP claim of its subject's class, refused `ClassNotAdmitting` until the registry's lifecycle —
+    /// Candidate → Prefetching → Probation — has taken the class to a state that admits claims). `None`
+    /// where the registry does not govern: every class is then admitted. A node plans no evaluation for a
+    /// subject whose class is not in it, so no run is spent on a claim the chain would refuse.
+    pub admitting: Option<BTreeSet<Hash64>>,
+    /// **The network's ceilings** (`Params::palw_improvement_v1`): with the line's policy they fix each
+    /// evaluation job's share of the epoch's position budget (MIP-20, [`palw_improve_job_cap_v1`]).
+    /// `None` where unknown: no job is skipped for its size, and the chain's refusal is then the answer.
+    pub ceilings: Option<PalwImprovementCeilingsV1>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -373,6 +392,17 @@ pub fn palw_improve_subjects_v1(epoch: &PalwImproveEpochViewV1) -> Vec<(PalwEval
         .collect()
 }
 
+/// **The positions one evaluation job of `epoch` may take** (spec 17 §17.8.2, MIP-20): the fold's rule —
+/// the epoch's budget (the smaller of the policy's `max_eval_positions` and the network's ceiling taken
+/// at its permille) shared equally among the epoch's jobs (the policy's stages over the epoch's
+/// subjects). A claim past it is refused whole, so a node does not carry one.
+pub fn palw_improve_job_cap_v1(policy: &PalwImprovementPolicyV1, epoch: &PalwImproveEpochViewV1, ceilings: &PalwImprovementCeilingsV1) -> u64 {
+    palw_improve_eval_job_position_cap_v1(
+        palw_improve_eval_budget_positions_v1(policy.eval.max_eval_positions, ceilings),
+        palw_improve_eval_epoch_jobs_v1(&policy.eval, palw_improve_subjects_v1(epoch).len()),
+    )
+}
+
 /// **The scoring stage a case is scored by** (A6's mapping): an exact key by `ExactMatch`, a
 /// continuation by `RefLogLik`, a case with no reference by a `Judge` (which this build cannot run yet,
 /// [`palw_improve_kind_runnable_v1`]).
@@ -408,6 +438,17 @@ pub struct PalwImproveEvalTaskV1 {
 }
 
 impl PalwImproveEvalTaskV1 {
+    /// **The positions this job takes at the least**: its prompt, and a teacher-forced job's reference
+    /// (the stream it is given). A generating job takes more by what it generates.
+    pub fn positions_floor(&self) -> u64 {
+        palw_improve_eval_positions_v1(self.prompt_ids.len(), self.reference_ids.len())
+    }
+
+    /// **The positions the finished job took**: its prompt and the stream's ids (what the chain counts).
+    pub fn positions_of(&self, stream_len: usize) -> u64 {
+        palw_improve_eval_positions_v1(self.prompt_ids.len(), stream_len)
+    }
+
     /// **The evaluation job** the chain derives for this task (A6's type): its id is [`Self::job_id`].
     pub fn job(&self) -> PalwEvalJobV1 {
         PalwEvalJobV1 {
@@ -560,8 +601,11 @@ pub fn palw_improve_duties_v1(
         if !node.evaluates || epoch.state != PalwEpochStateV1::Evaluating || current_daa >= epoch.times.t_eval {
             continue;
         }
-        let subjects: Vec<(PalwEvalSubjectV1, Hash64)> =
-            palw_improve_subjects_v1(&epoch).into_iter().filter(|(_, class)| node.holds.contains(class)).collect();
+        let subjects: Vec<(PalwEvalSubjectV1, Hash64)> = palw_improve_subjects_v1(&epoch)
+            .into_iter()
+            .filter(|(_, class)| node.holds.contains(class) && node.admitting.as_ref().is_none_or(|admitting| admitting.contains(class)))
+            .collect();
+        let job_cap = node.ceilings.as_ref().map(|ceilings| palw_improve_job_cap_v1(&line.policy, &epoch, ceilings));
         for item in chain.items(&line_id, epoch.epoch) {
             let Some(case) = chain.case(&line_id, epoch.epoch, &item) else { continue };
             for (subject, class) in &subjects {
@@ -570,6 +614,10 @@ pub fn palw_improve_duties_v1(
                 }
                 let Ok(task) = palw_improve_eval_task_v1(&line, &epoch, &item, *subject, *class, &case) else { continue };
                 if chain.job_claimed(&task.job_id) {
+                    continue;
+                }
+                // A job whose floor is past its share of the epoch's budget can never be claimed (MIP-20).
+                if job_cap.is_some_and(|cap| task.positions_floor() > cap) {
                     continue;
                 }
                 duties.push(PalwImproveDutyV1::Evaluate { task, until_daa: epoch.times.t_eval });
@@ -790,7 +838,7 @@ mod tests {
     /// node opted in — and only from `Submission` to `Evaluating`, never for a class already held.
     #[test]
     fn a_node_prefetches_the_adapter_over_its_parent_and_full_weights_only_where_admitted() {
-        let node = PalwImproveNodeV1 { holds: [h(HEAD)].into(), evaluates: false, prefetch_full: false };
+        let node = PalwImproveNodeV1 { holds: [h(HEAD)].into(), evaluates: false, prefetch_full: false, admitting: None, ceilings: None };
         let submission = chain(PalwEpochStateV1::Submission, false);
         assert_eq!(
             prefetches(&submission, &node),
@@ -830,7 +878,7 @@ mod tests {
     #[test]
     fn an_evaluating_node_plans_every_unclaimed_task_it_can_run_as_the_chain_derives_it() {
         let mut chain = chain(PalwEpochStateV1::Evaluating, false);
-        let node = PalwImproveNodeV1 { holds: [h(HEAD), h(0xC1), h(PREVIOUS)].into(), evaluates: true, prefetch_full: false };
+        let node = PalwImproveNodeV1 { holds: [h(HEAD), h(0xC1), h(PREVIOUS)].into(), evaluates: true, prefetch_full: false, admitting: None, ceilings: None };
         let planned = tasks(&chain, &node, 250, 64);
         assert_eq!(planned.len(), 6, "two runnable items × the parent, the held candidate and the predecessor (the judged item waits)");
         let seed = chain.epochs[&(h(LINE), 3)].seed.unwrap();
@@ -869,11 +917,50 @@ mod tests {
         chain.claimed.insert(planned[0].job_id);
         assert!(!tasks(&chain, &node, 250, 64).iter().any(|t| t.job_id == planned[0].job_id), "a claimed task is taken");
         assert!(tasks(&chain, &node, 280, 64).is_empty(), "nothing past t_eval");
+        // A subject whose class the chain does not admit claims of yet (the registry's lifecycle) is not planned.
+        let only_head = PalwImproveNodeV1 { admitting: Some([h(HEAD)].into()), ..node.clone() };
+        let planned_head = tasks(&chain, &only_head, 250, 64);
+        assert!(
+            planned_head.iter().all(|t| t.subject_class == h(HEAD)) && planned_head.iter().map(|t| t.item).collect::<Vec<_>>() == vec![1],
+            "the parent's item 1 only (item 0 is claimed above): {planned_head:?}"
+        );
+        let none_admitting = PalwImproveNodeV1 { admitting: Some(BTreeSet::new()), ..node.clone() };
+        assert!(tasks(&chain, &none_admitting, 250, 64).is_empty());
         let idle = PalwImproveNodeV1 { evaluates: false, ..node.clone() };
         assert!(tasks(&chain, &idle, 250, 64).is_empty());
         for state in [PalwEpochStateV1::Drawing, PalwEpochStateV1::Closing, PalwEpochStateV1::HoldOut] {
             assert!(tasks(&self::chain(state, false), &node, 250, 64).is_empty(), "{state:?}");
         }
+    }
+
+    /// **A job past its share of the epoch's position budget is not planned** (MIP-20): the fold's cap —
+    /// the epoch's budget over its jobs (the policy's stages over the epoch's subjects) — held against the
+    /// job's floor (its prompt, and a teacher-forced job's reference); the exact count is the run's.
+    #[test]
+    fn a_job_whose_floor_is_past_its_share_of_the_epoch_s_position_budget_is_not_planned() {
+        let chain = chain(PalwEpochStateV1::Evaluating, false);
+        let line = chain.line(&h(LINE)).unwrap();
+        let epoch = chain.epoch(&h(LINE), 3).unwrap();
+        // 8 items × (1 + the Judge stage) × 4 subjects (the parent, two candidates, the predecessor) = 64 jobs.
+        let capped = |share: u64| PalwImprovementCeilingsV1 { max_eval_positions_per_epoch: 64 * share, ..PalwImprovementCeilingsV1::FORMAT_CAPS_V1 };
+        assert_eq!(palw_improve_job_cap_v1(&line.policy, &epoch, &capped(4)), 4);
+        assert_eq!(palw_improve_job_cap_v1(&line.policy, &epoch, &capped(10)), 10);
+        let narrower = PalwImprovementCeilingsV1 { max_eval_budget_permille: 500, ..capped(10) };
+        assert_eq!(palw_improve_job_cap_v1(&line.policy, &epoch, &narrower), 5, "the permille share of the ceiling");
+        let node = |ceilings| PalwImproveNodeV1 {
+            holds: [h(HEAD)].into(),
+            evaluates: true,
+            prefetch_full: false,
+            admitting: None,
+            ceilings,
+        };
+        let items = |ceilings| tasks(&chain, &node(ceilings), 250, 64).into_iter().map(|t| t.item).collect::<Vec<_>>();
+        assert_eq!(items(None), vec![0, 1], "no ceilings known: nothing is skipped for its size");
+        assert_eq!(items(Some(capped(5))), vec![0, 1], "the likelihood job's floor is 3 + 2 = 5: it fits");
+        assert_eq!(items(Some(capped(4))), vec![0], "past a cap of 4 only the generating job's floor (the prompt, 3) is within it");
+        assert!(items(Some(capped(2))).is_empty(), "no job fits a cap of 2");
+        let task = &tasks(&chain, &node(None), 250, 64)[1];
+        assert_eq!((task.positions_floor(), task.positions_of(2)), (5, 5), "the prompt and the reference");
     }
 
     /// **A task is the chain's or none**: an item whose seed is not the epoch's, a dropped item, an
@@ -904,7 +991,7 @@ mod tests {
         assert!(task(&items[0], &epoch, &narrow).is_err());
         let mut missing = chain.clone();
         missing.cases.remove(&h(0xCA0));
-        let node = PalwImproveNodeV1 { holds: [h(HEAD)].into(), evaluates: true, prefetch_full: false };
+        let node = PalwImproveNodeV1 { holds: [h(HEAD)].into(), evaluates: true, prefetch_full: false, admitting: None, ceilings: None };
         let planned: Vec<u32> = tasks(&missing, &node, 250, 64).into_iter().map(|t| t.item).collect();
         assert_eq!(planned, vec![1], "item 1 for the parent: item 0's case is not on chain yet, item 2 is judged and waits");
         // A likelihood item whose reference is not disclosed yet derives no task: its prefill needs it.
@@ -1006,7 +1093,7 @@ mod tests {
         assert_eq!(view.items(&h(LINE), 3), mem.items[&(h(LINE), 3)]);
         let subjects: Vec<PalwEvalSubjectV1> = palw_improve_subjects_v1(epoch).into_iter().map(|(s, _)| s).collect();
         assert_eq!(subjects, state.improvement_subjects(&h(LINE), 3), "the chain's own subject order");
-        let node = PalwImproveNodeV1 { holds: [h(HEAD), h(0xC1), h(PREVIOUS)].into(), evaluates: true, prefetch_full: false };
+        let node = PalwImproveNodeV1 { holds: [h(HEAD), h(0xC1), h(PREVIOUS)].into(), evaluates: true, prefetch_full: false, admitting: None, ceilings: None };
         assert_eq!(palw_improve_duties_v1(&view, &node, 250, 64), palw_improve_duties_v1(&mem, &node, 250, 64));
         // The node's read door (`improvement_open_epoch_views_v1`, what `ConsensusApi` serves) reads back
         // the same view, and plans the same.

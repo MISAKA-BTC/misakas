@@ -50,6 +50,9 @@ USAGE:
                          --network <id> [--drill-salt <hex>] --key-file <ml-dsa-87 seed> [--bond <txid:index>]
                          [--spec <json>] [--parent <parent.palwtir> --section <candidate.palwtirs> | --artifact <candidate.palwtir>]
                          [--commitment-tx <fp-commitment-tx.borsh>] --out <path>
+    palw-class improve eval (--artifact <class.palwtir> | --parent <parent.palwtir> --section <candidate.palwtirs>)
+                         (--items <setter-set-spec.json> | --prompt <ids>) [--key <ids>] [--max-new N] [--stop <ids>]
+                         [--open N] [--close N] [--reference <ids>]
 
 
 `improve` (RFC-0004, A10) builds and signs the Model Improvement Protocol's objects offline, as
@@ -65,6 +68,15 @@ domains, uses, per_use_fee, expiry_daa} (79, the rights holder's own key); `cand
 declarations} over --parent and --section (a composite) or --artifact (full weights) (80); `rollback` {line,
 epoch, to_class, cause} (81). --drill-salt names a salted testnet-12 drill's genesis, whose domain the
 signatures bind.
+
+`improve eval` runs the evaluation executor on a held class offline — the job a seat or an executor runs, as the
+chain derives its context — and prints what it generated and how it scores, as JSON (one result per prompt):
+for a generating ExactMatch job the generation, its answer span (--open/--close, -1 for none) and, when the item
+carries its key, pass or fail; for a teacher-forced RefLogLik job (--reference) the committed score. The class is a
+class container (--artifact), or a composite candidate: its adapter section opened over its parent
+(--parent --section). --items takes the setter-set spec (`prompts`, `keys`) a drill commits, so the model and
+the chain read one file. It is how a drill checks, before any DAA passes, that a candidate wins or loses the
+items it was made for.
 
 `drill-leaves` (RFC-0002 Phase F, drill D-F2) prints, for an IR class's attempt job — its canonical
 prefill, --decode tokens (1 where the network draws one forward, the default; 2 otherwise) — the first
@@ -310,6 +322,10 @@ fn run(args: &[String]) -> Result<(), String> {
                 false => std::process::exit(2),
             }
         }
+        "improve" if args.first().map(String::as_str) == Some("eval") => {
+            args.remove(0);
+            improve_eval(&mut args)
+        }
         "improve" => improve(&mut args, network.as_deref()),
         "composite" => {
             let parent = take_flag(&mut args, "--parent").ok_or(USAGE)?;
@@ -509,6 +525,135 @@ fn lora_budget(
         println!("on {}", view.network_id);
         print!("{}", r.render());
     }
+    Ok(())
+}
+
+/// **`improve eval`** (RFC-0004, A10): run the evaluation executor on a held class, offline.
+fn improve_eval(args: &mut Vec<String>) -> Result<(), String> {
+    use kaspa_consensus_core::palw_improve_eval_v1::{PalwEvalModeV1, PalwEvalStageParamsV1, palw_improve_answer_of_v1, palw_improve_answer_span_hash_v1, palw_improve_answer_span_v1};
+    use kaspa_consensus_core::palw_improve_state_v1::{PalwEvalSubjectV1, PalwScoringKindV1};
+    use misaka_palw_sdk::improve::PalwImproveEvalTaskV1;
+    use misaka_palw_sdk::improve_eval::{PalwEvalHeldV1, palw_eval_run_v1};
+    use misaka_palw_sdk::PalwModelLineageV1;
+    let ids = |text: String, what: &str| -> Result<Vec<u32>, String> {
+        text.split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(|t| t.parse::<u32>().map_err(|e| format!("{what}: {t:?}: {e}")))
+            .collect()
+    };
+    let parent = take_flag(args, "--parent");
+    let section = take_flag(args, "--section");
+    let full = take_flag(args, "--artifact");
+    let entry = match (parent, section, full) {
+        (Some(parent), Some(section), None) => {
+            let lineage = misaka_palw_sdk::lineages::tir::TirLineageV1::new();
+            lineage.load(std::path::Path::new(&parent), misaka_palw_sdk::PalwWeightResidencyV1::PageCache).map_err(|e| format!("{parent}: {e}"))?;
+            lineage.open_composite_entry(std::path::Path::new(&section))?
+        }
+        (None, None, Some(full)) => misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(std::path::Path::new(&full))?,
+        _ => return Err("improve eval takes --artifact <class.palwtir>, or --parent <parent.palwtir> --section <candidate.palwtirs>".into()),
+    };
+    let held = PalwEvalHeldV1::from_entry(&entry)?;
+    let max_new: u32 = take_flag(args, "--max-new").map(|v| v.parse().map_err(|e| format!("--max-new: {e}"))).transpose()?.unwrap_or(8);
+    let stop = take_flag(args, "--stop").map(|v| ids(v, "--stop")).transpose()?.unwrap_or_default();
+    let open: i32 = take_flag(args, "--open").map(|v| v.parse().map_err(|e| format!("--open: {e}"))).transpose()?.unwrap_or(-1);
+    let close: i32 = take_flag(args, "--close").map(|v| v.parse().map_err(|e| format!("--close: {e}"))).transpose()?.unwrap_or(-1);
+    let reference = take_flag(args, "--reference").map(|v| ids(v, "--reference")).transpose()?;
+    // The items: a setter-set spec's prompts and keys, or one --prompt (and --key).
+    let (prompts, keys): (Vec<Vec<u32>>, Vec<Option<Vec<u32>>>) = match take_flag(args, "--items") {
+        Some(path) => {
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?).map_err(|e| format!("{path}: {e}"))?;
+            let rows = |k: &str| -> Result<Vec<Vec<u32>>, String> {
+                v.get(k)
+                    .and_then(|a| a.as_array())
+                    .ok_or_else(|| format!("{path}: no `{k}` array"))?
+                    .iter()
+                    .map(|row| {
+                        row.as_array()
+                            .ok_or_else(|| format!("{path}: a `{k}` row is not an array"))?
+                            .iter()
+                            .map(|t| t.as_u64().and_then(|t| u32::try_from(t).ok()).ok_or_else(|| format!("{path}: a `{k}` id is not a u32")))
+                            .collect()
+                    })
+                    .collect()
+            };
+            let prompts = rows("prompts")?;
+            let keys = if v.get("keys").is_some() { rows("keys")?.into_iter().map(Some).collect() } else { vec![None; prompts.len()] };
+            (prompts, keys)
+        }
+        None => {
+            let prompt = ids(take_flag(args, "--prompt").ok_or("--items <spec.json> or --prompt <ids> is required")?, "--prompt")?;
+            let key = take_flag(args, "--key").map(|v| ids(v, "--key")).transpose()?;
+            (vec![prompt], vec![key])
+        }
+    };
+    let mut results = Vec::new();
+    for (i, prompt) in prompts.iter().enumerate() {
+        let (kind, mode, params, reference_ids) = match &reference {
+            Some(r) => (
+                PalwScoringKindV1::RefLogLik,
+                PalwEvalModeV1::TeacherForced { reference_commitment: Hash64::default() },
+                PalwEvalStageParamsV1::RefLogLik { logit_scale_q24: 1 << 20 },
+                r.clone(),
+            ),
+            None => (
+                PalwScoringKindV1::ExactMatch,
+                PalwEvalModeV1::Generate { seed: Hash64::default(), max_new, stop_ids: stop.clone() },
+                PalwEvalStageParamsV1::ExactMatch { open, close },
+                Vec::new(),
+            ),
+        };
+        let task = PalwImproveEvalTaskV1 {
+            line_id: Hash64::default(),
+            epoch: 0,
+            item: i as u32,
+            subject: PalwEvalSubjectV1::Parent,
+            subject_class: held.class_id,
+            kind,
+            mode: mode.clone(),
+            job_id: Hash64::default(),
+            prompt_ids: prompt.clone(),
+            reference_ids,
+            params,
+        };
+        let work = palw_eval_run_v1(&held, &task).map_err(|e| format!("item {i}: {e}"))?;
+        let generated = work.generated().to_vec();
+        let mut row = serde_json::json!({
+            "item": i,
+            "prompt": prompt,
+            "generated": generated,
+            "positions": task.positions_of(generated.len()),
+            "step_leaves": work.execution.space.leaf_count(),
+        });
+        if kind == PalwScoringKindV1::ExactMatch {
+            let span = palw_improve_answer_span_v1(&generated, open, close).map(<[u32]>::to_vec);
+            row["answer_span"] = serde_json::json!(span);
+            row["answer"] = serde_json::json!(palw_improve_answer_of_v1(&generated, open, close).map(|h| h.to_string()));
+            if let Some(Some(key)) = keys.get(i) {
+                row["key"] = serde_json::json!(key);
+                row["pass"] = serde_json::json!(palw_improve_answer_of_v1(&generated, open, close) == Some(palw_improve_answer_span_hash_v1(key)));
+            }
+        } else {
+            row["score"] = serde_json::json!(work.tail.score);
+        }
+        results.push(row);
+    }
+    let passes = results.iter().filter(|r| r["pass"] == serde_json::json!(true)).count();
+    let keyed = results.iter().filter(|r| r.get("pass").is_some()).count();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "class": entry.class_id().to_string(),
+            "artifact_root": entry.artifact_root.to_string(),
+            "composite": entry.artifact.composite_ref().is_some(),
+            "items": results.len(),
+            "keyed": keyed,
+            "passes": passes,
+            "results": results,
+        }))
+        .map_err(|e| e.to_string())?
+    );
     Ok(())
 }
 
