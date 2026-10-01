@@ -167,7 +167,7 @@ impl PalwGenStageSpaceV1 {
                     if tile == 0 {
                         return Err(bad("a zero state tile".into()));
                     }
-                    let n: u64 = st.shape.iter().map(|d| *d as u64).product();
+                    let n: u64 = st.shape.iter().fold(1u64, |acc, d| acc.saturating_mul(*d as u64));
                     let layers: Vec<Option<u16>> =
                         if st.per_layer { (0..program.schedule.layers.len() as u16).map(Some).collect() } else { vec![None] };
                     for layer in layers {
@@ -438,7 +438,7 @@ fn stage_leaf_count(
         if tile == 0 {
             return Err(bad("a zero state tile".into()));
         }
-        let n: u64 = st.shape.iter().map(|d| *d as u64).product();
+        let n: u64 = st.shape.iter().fold(1u64, |acc, d| acc.saturating_mul(*d as u64));
         let layers = if st.per_layer { program.schedule.layers.len() as u128 } else { 1 };
         per_checkpoint = per_checkpoint.saturating_add(layers.saturating_mul(n.div_ceil(tile) as u128));
     }

@@ -134,7 +134,7 @@ pub fn palw_gen_stage_answers_v1(
                 Binding::StageRows { stage: up, drop, .. } => {
                     let up_prog = &programs[pipeline.stages[*up as usize].program as usize];
                     let iv = misaka_palw_tir::interval_v2::output_interval_v2(up_prog)?;
-                    let per_row: u64 = d.shape[1..].iter().map(|x| *x as u64).product();
+                    let per_row: u64 = d.shape[1..].iter().fold(1u64, |acc, x| acc.saturating_mul(*x as u64));
                     let rows =
                         facts.get(*up as usize).ok_or_else(|| missing(format!("no facts of stage {up}")))?.trip.saturating_sub(*drop);
                     PalwGenInputAnswerV1::Edge { lo: iv.lo, hi: iv.hi, kept: rows as u64 * per_row }
@@ -142,7 +142,7 @@ pub fn palw_gen_stage_answers_v1(
                 Binding::StageFinal { stage: up } => {
                     let up_prog = &programs[pipeline.stages[*up as usize].program as usize];
                     let iv = misaka_palw_tir::interval_v2::output_interval_v2(up_prog)?;
-                    PalwGenInputAnswerV1::Edge { lo: iv.lo, hi: iv.hi, kept: d.shape.iter().map(|x| *x as u64).product() }
+                    PalwGenInputAnswerV1::Edge { lo: iv.lo, hi: iv.hi, kept: d.shape.iter().fold(1u64, |acc, x| acc.saturating_mul(*x as u64)) }
                 }
                 Binding::JobImage { index } => {
                     let image = images.get(*index as usize).ok_or_else(|| missing(format!("the job has no image {index}")))?;
@@ -448,7 +448,7 @@ fn edge_leaf(case: &PalwGenCourtCaseV1<'_>, stage: usize, input: u16, index: usi
         }
         Binding::StageRows { stage: u, drop, .. } => {
             let prog = &case.programs[case.pipeline.stages[stage].program as usize];
-            let row: u64 = prog.inputs[input as usize].shape[1..].iter().map(|d| *d as u64).product();
+            let row: u64 = prog.inputs[input as usize].shape[1..].iter().fold(1u64, |acc, d| acc.saturating_mul(*d as u64));
             (*u, (index as u64 / row) as u32 + drop, index as u64 % row)
         }
         _ => return None,
