@@ -111,7 +111,7 @@ pub(super) fn apply_gen_tensor_commitment_v1(
     };
     let seating = builder
         .read()
-        .class_seating_v1(c.class_id, c.bond, daa, &fold)
+        .class_seating_v1(c.class_id, Some(c.bond), daa, &fold)
         .ok_or(PalwStateV2Error::MissingBond(*c.bond))?;
     if !seating.possession_floor_met() {
         return Err(PalwStateV2Error::GenClassNotReady {

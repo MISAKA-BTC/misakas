@@ -8,9 +8,10 @@
 //!
 //! # The contract lane F builds on
 //!
-//! [`PalwFoldReadV1::class_seating_v1`] returns, for a class and an EXECUTOR bond at a DAA, the operators that
-//! hold the class with a fresh possession proof — **each operator once, however many bonds it holds, the
-//! executor's bond and its whole operator excluded** — with the ready bonds of each, in key order, and the
+//! [`PalwFoldReadV1::class_seating_v1`] returns, for a class and an optional EXECUTOR bond at a DAA, the
+//! operators that hold the class with a fresh possession proof — **each operator once, however many bonds it
+//! holds, the executor's bond and its whole operator excluded** (with no executor, nothing is excluded: the
+//! lifecycle step and the registry read have none) — with the ready bonds of each, in key order, and the
 //! panel's size (`seat_count`, the registry globals'). That is condition 1 of Proposal A, the *possession
 //! floor*: [`PalwClassSeatingV1::possession_floor_met`]. Condition 2, the *independence floor* —
 //! `|(Ready ∩ Base) \ {operator(registrant), operator(e)}| ≥ ⌊seat_count / 2⌋ + 1` — is a read over the same
@@ -62,19 +63,25 @@ impl PalwClassSeatingV1 {
 }
 
 impl PalwFoldReadV1<'_> {
-    /// **A class's seating for an executor** (see the module doc). `None` where the executor's bond is not in
-    /// the state (the caller refuses the claim for it before it asks).
+    /// **A class's seating, for an executor or for none** (see the module doc). With `Some(executor)` the
+    /// executor's bond and operator are excluded — a claim's door; with `None` nothing is excluded — the
+    /// lifecycle step and the registry read, which have no executor. `None` is returned only when
+    /// `Some(executor)` is not in the state (the caller refuses the claim for it before it asks); with no
+    /// executor it always returns `Some`.
     pub(super) fn class_seating_v1(
         &self,
         class_id: &Hash64,
-        executor: &PalwBondKeyV2,
+        executor: Option<&PalwBondKeyV2>,
         now_daa: u64,
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
     ) -> Option<PalwClassSeatingV1> {
-        let executor_operator = self.state.bonds.get(executor)?.operator_id;
+        let executor_operator = match executor {
+            Some(key) => Some(self.state.bonds.get(key)?.operator_id),
+            None => None,
+        };
         let mut ready: BTreeMap<Hash64, Vec<PalwBondKeyV2>> = BTreeMap::new();
         for (key, bond) in self.state.bonds.iter() {
-            if key == executor || bond.operator_id == executor_operator {
+            if executor == Some(key) || executor_operator == Some(bond.operator_id) {
                 continue;
             }
             if self.model_registry_seat_is_ready(key, bond, class_id, now_daa, fold) {
