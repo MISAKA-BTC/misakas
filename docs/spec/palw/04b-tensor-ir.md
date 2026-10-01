@@ -2899,8 +2899,12 @@ or pipeline terminal the session waits at `Terminal`** (the mirror of the clause
 declared close its terminal move, `court_session_executor_declared_at_the_ir_terminal_v1`): its clock is the
 group's assembly deadline, which convicts a declarer that does not deliver. The executor has **no move owed**; it
 may file an acquitting close of its own (one carrier, or declared in its own group) to end the freeze early, and
-whichever side's close completes first ends the session. The clause reads rooted state only (a challenger-side
-group at a fused terminal with no phase open) and cannot be true of any state below the fence.
+whichever side's close completes first ends the session. **It may also file its root claim at a dissected leaf**
+(the `CourtTirRootClaimed` and `CourtGenRootClaimed` arms read no clock): the phase then clocks the session
+itself — the challenger owes the choice of a child — while the challenger's group stands, and a challenger that
+neither delivers the close it pinned nor chooses loses on both clocks. The clause reads rooted state only (a
+challenger-side group at a fused terminal with no phase open) and adds no state the executor-side clause does
+not already wait on.
 
 *Griefing, and what bounds it.* (1) **The accuser alone bears the clock and the deposit.** The window is
 `4 · count` DAA (at most 128) from the block that carries the object, inside the session's backstop; the deposit
@@ -2928,7 +2932,9 @@ fence keeps the stricter bound it was admitted under; one registered after it ma
 live IR classes of testnet-12 are unchanged (their admission already stands).
 
 **15.15.7 Allocations.** FP job version 10; object tags 87 `GenTensorCommitted`, 88 `GenShardCourtAccused` and
-90 `HeldLeafChallengeDeclared` (all approved 2026-10-01; 89 is RFC-0004's `CourtEvalRootClaimed`); court proof
+90 `HeldLeafChallengeDeclared` (all approved 2026-10-01; 89 is RFC-0004's `CourtEvalRootClaimed`), **declared
+with explicit `= N` discriminants** (the object enum is `#[borsh(use_discriminant = true)] #[repr(u8)]`, every
+positional variant keeping the number its position gave it, so no declaration order moves an allocation); court proof
 tag 16 `GenOutputTile` (§15.13; the enum's discriminants are explicit); the fences `palw_fp_job_v5` over
 `palw_gen_v1` (the per-profile `max_inflight_claims` is in the latter's value) and `palw_held_close_chunks_v1`
 (§15.15.6) — the V2 bundle mirrors them, borsh-skipped, written only by `sync_palw_gen_v1`; keys
