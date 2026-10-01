@@ -45,7 +45,8 @@ library MisakaModelAddresses {
 
     /// wei per sompi (`EVM_NATIVE_SCALE`). A buy's `msg.value` must be a NONZERO MULTIPLE of
     /// it, so the fold's sompi leg is exact (the F002 rule). Every other MSK amount in these
-    /// interfaces is in sompi; every position amount is in units (10^6 units = one position).
+    /// interfaces is in sompi; every position amount is in units, and a position is ONE unit
+    /// (ADR-0090: `UNITS_PER_POSITION`, `decimals() == 0`).
     uint256 internal constant NATIVE_SCALE_WEI = 1e10;
 
     // ---- IMisakaModelWriter action encoding (ADR-0089 Decision 5) ----
@@ -58,8 +59,17 @@ library MisakaModelAddresses {
     uint24 internal constant ACTION_SELL = 2;
     /// ADR-0090: the seed that opens a line's market — `msg.value` is the whole of it.
     uint24 internal constant ACTION_SEED = 3;
-    /// ADR-0090: the least seed, in sompi (100,000 MSK); the writer reverts `SeedTooSmall()` under it.
-    uint64 internal constant SEED_MIN_SOMPI = 10_000_000_000_000;
+    /// The least seed that OPENS a market below ADR-0162's fence, in sompi: 1,000,000 MSK where
+    /// ADR-0120 is armed (testnet-12 from genesis), ADR-0090's 100,000 MSK before it. Read
+    /// `IMisakaModelAMM.constants()`' third word for the value in force. A seed under it does not
+    /// revert (ADR-0094): the fold collects it as a pledge, locked for good, and the market opens on
+    /// the payment that carries the total across. `SeedTooSmall()` stays declared; the writer no
+    /// longer raises it. Past ADR-0162's fence there is no least seed (see `VIRTUAL_RESERVE_SOMPI`).
+    uint64 internal constant SEED_MIN_SOMPI = 100_000_000_000_000;
+    /// ADR-0162: the virtual reserve every line's market opens on past `palw_model_virtual_v1` —
+    /// 10,000,000 MSK, in sompi. It prices the curve (a first price of 20 MSK) and is never paid to
+    /// anyone; `constants()`' third word carries it there.
+    uint64 internal constant VIRTUAL_RESERVE_SOMPI = 1_000_000_000_000_000;
     /// ADR-0090: a line's whole supply — 500,000 positions, and a position is one unit (no fraction).
     uint64 internal constant SUPPLY_POSITIONS = 500_000;
     uint64 internal constant UNITS_PER_POSITION = 1;

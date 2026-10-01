@@ -37,9 +37,9 @@ A reader that wants to know the window is open checks that `chainDaa()` returns 
 |---|---|
 | `MisakaModelAddresses.sol` | a library of constants: the four system addresses, `FACADE_PREFIX = 0x4d50`, the chain id, `NATIVE_SCALE_WEI = 1e10`, the writer's encoding version / action ids / per-block cap |
 | `IMisakaModelRegistry.sol` | the registry window: `classCount/classAt/classRow/certified/rootsInForceCount/rootInForceAt`, `lineCount/lineAt/linesOfCount/lineOfClassAt/line`, `version/usage`, `evaluationCount/evaluation`, `proposalCount/proposal`, `facadeOf/lineOf`, `chainDaa` |
-| `IMisakaModelAMM.sol` | the curve window: `market` (ADR-0091 appended `buybackSompi` and `retiredUnits` at the end, so every earlier word keeps its offset), `price`, `quoteBuy`, `quoteSell`, `constants` |
+| `IMisakaModelAMM.sol` | the curve window: `market` (ADR-0091 appended `buybackSompi` and `retiredUnits` at the end, so every earlier word keeps its offset; past ADR-0162's fence a twelfth word, `virtualSompi`, follows — `IMisakaModelAMMVirtual` declares it), `price`, `quoteBuy`, `quoteSell` (its first word is the gross past ADR-0162's fence), `constants` (its third word is the virtual reserve past that fence, the least seed below it) |
 | `IMisakaModelPosition.sol` | the position window: `balanceOf` (64-byte holder), `balanceOfAddress`, `totalSupply`, `sold`, `holderIdOf` |
-| `IMRC20.sol` | the per-line facade: `name/symbol/decimals/totalSupply/balanceOf`, `lineId/circulating/price/quoteBuy/quoteSell`, `buy/sell/seed`, `supportsInterface`; events `Bought/Sold/Seeded/Refused`; errors `NonTransferable/NotAnAccount/ClosedToBuys/BadValue/SeedTooSmall` |
+| `IMRC20.sol` | the per-line facade: `name/symbol/decimals/totalSupply/balanceOf`, `lineId/circulating/price/quoteBuy/quoteSell`, `buy/sell/seed`, `supportsInterface`; events `Bought/Sold/Seeded/Refused`; errors `NonTransferable/NotAnAccount/ClosedToBuys/BadValue/SeedTooSmall/SeedAfterTrade/ClassNotEligible` |
 | `IMisakaModelWriter.sol` | the hand: `sendAction(bytes) payable`, event `ActionQueued`, error `NotAnAccount`; the data layout and the settlement timing |
 
 Vocabulary (ADR-0088 §3): a **class** is a registered model family with a share and a budget;
@@ -61,15 +61,26 @@ views, the quotes and the settlement events. The one **wei** quantity is `msg.va
 (`sendAction` action 1 or `IMRC20.buy`), which must be a **nonzero multiple of 1e10**
 (`EVM_NATIVE_SCALE`, the F002 rule) so the fold's sompi leg is exact. Position amounts are in
 **units (ADR-0090)**: `decimals() == 0` — a position is a whole number, one unit, no fraction; the
-whole supply of a line is 500,000 positions, fixed at the seed. **The seed (ADR-0090)**: a line's
-market exists only once someone locks at least 100,000 MSK into it (`seed()` on the facade, or
-`sendAction` id 3, or the carrier object `ModelSeed`); the whole seed is the reserve, the first price
-is `seed / 500,000`, the seeder receives no position, and no object ever pays the seed out — the
-curve's product never falls, so with every position back in the curve the reserve is the seed or
-more.
+whole supply of a line is 500,000 positions. **The opening (ADR-0162)**: past
+`palw_model_virtual_v1` every registered line's market is open from the line's creation on a
+virtual reserve of 10,000,000 MSK (`constants()`' third word) — X = V, the whole supply in the
+curve, a first price of 20 MSK — and it trades from the class's approval (status and lifecycle
+exactly Active). The virtual reserve prices and is never paid: a sell is paid only out of the real
+reserve above the locked seed. **The seed** is then optional: any amount, before the market's first
+trade (`SeedAfterTrade()` after it), joining the real reserve and raising the floor `(V + seed) /
+500,000`; locked for good, no position for the seeder, at its payer's risk (a class never approved
+never trades). **Below that fence (ADR-0090/0094/0120)** a line's market exists only once the MSK
+locked into it reaches the least seed — `constants()`' third word, 1,000,000 MSK past ADR-0120
+(100,000 before it) — paid by `seed()` on the facade, `sendAction` id 3 or the carrier object
+`ModelSeed`; a payment under it is a **pledge** (ADR-0094), collected and locked, not a revert, so a
+contract reads `constants()` and `market().exists` rather than expect `SeedTooSmall()`, which the
+writer no longer raises. Either way the whole seed is reserve, the seeder receives no position, and
+no object ever pays a seed out — the curve's product never falls, so with every position back in the
+curve the reserve is the seed or more.
 
 The pair also grows without a trade: at the `Final` of a claim a block earned with the model,
-five percent of that block's escrowed worker reward buys from the line's curve and stays in it,
+five percent of that claim's escrowed worker reward buys from the line's curve (past ADR-0162's
+fence, only while the line trades — before approval the miner keeps it all) and stays in it,
 the miner is named the other ninety-five, and the positions the curve gives up are **retired** —
 the chain's, for good, counted by `retiredUnits` and by no `balanceOf`. Nothing is distributed to
 holders; the price is what mining moves (ADR-0091).
