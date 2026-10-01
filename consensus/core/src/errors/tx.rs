@@ -249,7 +249,9 @@ pub enum TxRuleError {
     PalwFpWorkLeavesBeforeHeldActivation(u64, u64),
 
     /// **RFC-0001 §A.4: the free-prompt job's version is not the one the containing block's height
-    /// admits** — a V4 job below `Params::palw_fp_decode_rules`, or a new V3 job at or past it.
+    /// admits** — a V4 job below `Params::palw_fp_decode_rules`, or a new V3 job at or past it; and,
+    /// RFC-0004 A6, an evaluation claim (job version 9) below `Params::palw_improvement_v1` or below
+    /// the decode rules its job carries.
     #[error("{0} (daa {1})")]
     PalwFpJobVersionAtHeight(&'static str, u64),
 

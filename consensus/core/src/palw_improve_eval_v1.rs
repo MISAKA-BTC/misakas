@@ -795,6 +795,243 @@ pub fn palw_fp_eval_payload_decode_v1(bytes: &[u8]) -> Result<(PalwFpCommitmentT
     Ok((payload, tail))
 }
 
+/// **Is this FP payload an evaluation claim's?** Its job's version word — the payload's bytes 2..4,
+/// after the payload's own version — is [`PALW_FP_EVAL_VERSION`]. Nothing else is read.
+pub fn palw_fp_payload_is_eval_v1(payload: &[u8]) -> bool {
+    payload.get(2..4) == Some(&PALW_FP_EVAL_VERSION.to_le_bytes()[..])
+}
+
+/// **The evaluation claim's FP stand-in**: the same payload at FP Job V4 (version 7, no tail), so
+/// every rule the lane applies to a V4 commitment — the network, the signer's shape, the prompt ids
+/// against their hash and form, the context, the executed count and stop, the ladder, the ruleset's
+/// caps — applies to the evaluation claim unchanged, and only the job-version rule is the lane's.
+fn palw_fp_eval_stand_in_v1(payload: &PalwFpCommitmentTxPayloadV3) -> PalwFpCommitmentTxPayloadV3 {
+    let mut stand_in = payload.clone();
+    stand_in.commitment.job.version = crate::palw_freeprompt_v3::PALW_FP_V4_VERSION;
+    stand_in.commitment.job.tail = None;
+    stand_in
+}
+
+fn eval_refused(e: PalwEvalErrorV1) -> crate::palw_freeprompt_v3::PalwFpV3Error {
+    crate::palw_freeprompt_v3::PalwFpV3Error::EvaluationClaim(e.to_string())
+}
+
+/// **The isolation door for an evaluation claim** (RFC-0004 A6), height-free as isolation is: the
+/// payload decodes as an evaluation claim's; its FP stand-in passes the lane's shape rules under the
+/// same door arguments an FP commitment meets; and the claim's own stateless rules hold
+/// ([`palw_fp_eval_claim_check_v1`], no finalized reads — judged kinds wait). Only where the ruleset
+/// carries `Params::palw_improvement_v1`; the header-context door decides the height
+/// ([`palw_fp_eval_refusal_at_v1`]).
+pub fn validate_palw_fp_eval_commitment_tx_v1(
+    payload: &[u8],
+    panel_da_admissible: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    work_leaves_cap: u64,
+    decode_rules: crate::palw_freeprompt_v3::PalwFpDecodeRulesV1,
+) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
+    let (fp, tail) = palw_fp_eval_payload_decode_v1(payload).map_err(eval_refused)?;
+    palw_fp_eval_stand_in_v1(&fp).validate_shape_under_ruleset_v4(
+        panel_da_admissible,
+        work_leaves_cap,
+        None,
+        prompt_ids_form,
+        decode_rules,
+    )?;
+    palw_fp_eval_claim_check_v1(&fp.commitment, &fp.prompt_token_ids, &tail, &[]).map_err(eval_refused)?;
+    Ok(())
+}
+
+/// **The free-prompt door with evaluation claims** (RFC-0004 A6): an evaluation claim's payload goes to
+/// [`validate_palw_fp_eval_commitment_tx_v1`] where `improvement_door` (the ruleset carries
+/// `palw_improvement_v1`), and every other payload — an evaluation claim's too, where the door is shut —
+/// to the lane's own door, which refuses its bytes as undecodable. So a build that carries the fence
+/// and one that does not agree on every transaction below it.
+pub fn validate_palw_fp_commitment_tx_under_v6(
+    payload: &[u8],
+    panel_da_admissible: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    work_leaves_cap: u64,
+    decode_rules: crate::palw_freeprompt_v3::PalwFpDecodeRulesV1,
+    improvement_door: bool,
+) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
+    if improvement_door && palw_fp_payload_is_eval_v1(payload) {
+        return validate_palw_fp_eval_commitment_tx_v1(payload, panel_da_admissible, prompt_ids_form, work_leaves_cap, decode_rules);
+    }
+    crate::palw_fp_objects_v3::validate_palw_fp_commitment_tx_under_v5(
+        payload,
+        panel_da_admissible,
+        prompt_ids_form,
+        work_leaves_cap,
+        decode_rules,
+    )
+}
+
+/// **Why the containing block's height refuses an evaluation claim** — the header-context half of the
+/// evaluation door ([`palw_fp_eval_refusal_at_v1`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwFpEvalHeightRefusalV1 {
+    /// Below `Params::palw_improvement_v1`: no evaluation claim exists yet.
+    BelowImprovement,
+    /// Below `Params::palw_fp_decode_rules`, whose V4 rules the job carries.
+    BelowDecodeRules,
+    /// Past the structural work-leaves cap (carrying so many leaves) below the held regime — the
+    /// FP lane's own height rule (ADR-0119 Decision 6), which reads an FP payload and so never sees
+    /// this one.
+    WorkLeavesBeforeHeld(u64),
+}
+
+impl PalwFpEvalHeightRefusalV1 {
+    /// The refusal's name, as the transaction rule error carries it.
+    pub fn why(self) -> &'static str {
+        match self {
+            Self::BelowImprovement => "an evaluation claim (FP job version 9) below Params::palw_improvement_v1",
+            Self::BelowDecodeRules => "an evaluation claim below Params::palw_fp_decode_rules, whose V4 rules its job carries",
+            Self::WorkLeavesBeforeHeld(_) => "an evaluation claim past the structural work cap below the held regime",
+        }
+    }
+}
+
+/// **The header-context half of the evaluation door**: at the containing block's height, why an
+/// evaluation claim is refused — below `palw_improvement_v1`, below the V4 decode rules its job
+/// carries, or past the structural work cap below the held regime (the FP lane's own height rules,
+/// which read an FP payload and so never see this one). `None` for an FP payload and for one the
+/// height admits. With the isolation door's height-free answer this makes a build that schedules the
+/// fence and one that does not agree on every transaction below it: the one refuses the claim here,
+/// the other at its isolation door (the bytes are undecodable to it), and a block carrying it is
+/// invalid to both.
+pub fn palw_fp_eval_refusal_at_v1(
+    payload: &[u8],
+    improvement_active: bool,
+    decode_rules_active: bool,
+    held_active: bool,
+) -> Option<PalwFpEvalHeightRefusalV1> {
+    if !palw_fp_payload_is_eval_v1(payload) {
+        return None;
+    }
+    if !improvement_active {
+        return Some(PalwFpEvalHeightRefusalV1::BelowImprovement);
+    }
+    if !decode_rules_active {
+        return Some(PalwFpEvalHeightRefusalV1::BelowDecodeRules);
+    }
+    if !held_active
+        && let Ok((fp, _)) = palw_fp_eval_payload_decode_v1(payload)
+        && fp.commitment.work_leaves > crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP
+    {
+        return Some(PalwFpEvalHeightRefusalV1::WorkLeavesBeforeHeld(fp.commitment.work_leaves));
+    }
+    None
+}
+
+/// **Extract one chain block's evaluation claims** (RFC-0004 A6) — the free-prompt walk's twin for
+/// version-9 payloads, which the lane's walk skips as undecodable
+/// (`palw_fp_objects_from_accepted_txs_by_class_v1`). Its arguments and the order of its checks are the
+/// FP walk's, so an evaluation claim meets every rule an FP commitment meets, at the same bounds:
+///
+/// * the payload decodes as an evaluation claim's;
+/// * its FP stand-in passes the stateless rules at the claim's CLASS's ladder and the ruleset's caps,
+///   under the block's decode rules ([`palw_fp_eval_stand_in_v1`]);
+/// * ADR-0103 Decision 4: under the held regime no `PublicDa` carrier's ids ride above one standard
+///   transaction;
+/// * the claim's own stateless rules hold ([`palw_fp_eval_claim_check_v1`], no finalized reads: judged
+///   kinds wait) — and its signature verifies under the key it carries.
+///
+/// Total over whatever was accepted: a payload that fails any of them is skipped with its reason, never
+/// rejected, so a peer's payload cannot invalidate the block that carried it. `derived_work` of the
+/// class's caps is not read: an evaluation claim's leaves are the chain's count of its derived context
+/// (the fold's rule), not the FP lane's shape profile. Each claim becomes the `FreePromptCommitted` its
+/// fold branch reads, its job and tail in `eval`. The caller runs it only past `palw_improvement_v1`
+/// and appends its objects after the free-prompt walk's.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_eval_objects_from_accepted_txs_v1<'a, V, C>(
+    txs: &[crate::tx::Transaction],
+    network_domain: Hash64,
+    freeprompt: &crate::palw_freeprompt_v3::PalwFreePromptParamsV3,
+    panel_da_armed: bool,
+    class_caps: C,
+    ruleset_caps_armed: bool,
+    held_armed: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    decode_rules: crate::palw_freeprompt_v3::PalwFpDecodeRulesV1,
+    verify_mldsa87: V,
+) -> crate::palw_fp_objects_v3::PalwFpExtractionV3
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    C: Fn(&Hash64) -> crate::palw_fp_objects_v3::PalwFpClassCapsV1<'a>,
+{
+    let mut out = crate::palw_fp_objects_v3::PalwFpExtractionV3::default();
+    for tx in txs {
+        if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || !palw_fp_payload_is_eval_v1(&tx.payload) {
+            continue;
+        }
+        let id = tx.id();
+        let Ok((payload, tail)) = palw_fp_eval_payload_decode_v1(&tx.payload) else {
+            out.skipped.push((id, "evaluation payload does not decode"));
+            continue;
+        };
+        // The same bounds the FP walk applies, at the commitment's own class.
+        let caps = class_caps(&payload.commitment.job.class_id);
+        let ruleset_caps = ruleset_caps_armed.then(|| {
+            let prompt_cap = if caps.held {
+                crate::palw_freeprompt_v3::PALW_FP_HELD_MAX_PROMPT_TOKENS_V1
+            } else {
+                freeprompt.max_prompt_tokens()
+            };
+            (prompt_cap, freeprompt.max_decode_tokens())
+        });
+        if palw_fp_eval_stand_in_v1(&payload)
+            .validate_stateless_under_ruleset_v4(
+                network_domain,
+                panel_da_armed,
+                caps.step_ladder,
+                ruleset_caps,
+                prompt_ids_form,
+                decode_rules,
+            )
+            .is_err()
+        {
+            out.skipped.push((id, "evaluation payload is not stateless-admissible"));
+            continue;
+        }
+        if held_armed && crate::palw_fp_objects_v3::palw_fp_public_ids_exceed_one_transaction_v1(&payload) {
+            out.skipped.push((id, "the held regime carries no prompt above one standard transaction"));
+            continue;
+        }
+        let Ok(job) = palw_fp_eval_claim_check_v1(&payload.commitment, &payload.prompt_token_ids, &tail, &[]).cloned() else {
+            out.skipped.push((id, "evaluation claim's tail is not its commitment's"));
+            continue;
+        };
+        if payload.validate_signature_v3(&verify_mldsa87).is_err() {
+            out.skipped.push((id, "commitment signature does not verify under the carried key"));
+            continue;
+        }
+        let commitment = &payload.commitment;
+        out.objects.push(crate::palw_fp_objects_v3::PalwConsensusObjectV3Carrier {
+            carrier: id,
+            object: crate::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted {
+                claim: payload.claim_id(),
+                class_id: commitment.job.class_id,
+                bond: crate::palw_state_v2::PalwBondKeyV2(commitment.job.executor_bond),
+                executor_pubkey: commitment.job.executor_pubkey.clone(),
+                work_leaves: commitment.work_leaves,
+                prompt_token_ids_hash: commitment.job.prompt_token_ids_hash,
+                prompt_tokens: commitment.job.prompt_tokens,
+                prompt_token_ids: payload.prompt_token_ids.clone(),
+                decode_tokens_executed: commitment.decode_tokens_executed,
+                trace_root: commitment.trace_root,
+                output_root: commitment.output_root,
+                execution_root: commitment.execution_root,
+                trace_chunk_count: commitment.trace_chunk_count,
+                trace_retention_daa: commitment.trace_retention_daa,
+                consumed_prefix_state: payload.consumed_prefix_state_v1(),
+                job_pin: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment),
+                eval: Some(Box::new(PalwFpEvalCarriageV1 { job, tail })),
+            },
+        });
+    }
+    out
+}
+
 /// **An evaluation claim's commitment against its tail** — the job's shape
 /// ([`palw_fp_eval_job_shape_v1`]), then: the tail's stage parameters are its kind's; its ids hash to
 /// the committed `output_root`, one per executed decode position and within the job's limit; the
@@ -991,6 +1228,51 @@ pub use crate::palw_improve_promotion_v1::palw_improve_item_outcome_v1;
 /// earns no weight; it holds collateral as any claim does, so a false one is slashed like any other.
 pub fn palw_improve_eval_reservation_v1(step_leaves: u64, slash_value_per_pwu: u64, rho: u32) -> u128 {
     (step_leaves as u128).saturating_mul(slash_value_per_pwu as u128).div_ceil(rho.max(1) as u128)
+}
+
+/// **An epoch's evaluation budget, in positions** (spec 17 §17.8.2, PALW-MIP-20; RFC-0004 §13 and open
+/// question 7): the smaller of the policy's `max_eval_positions` and the network's ceiling
+/// `max_eval_positions_per_epoch` taken at its `max_eval_budget_permille` — the one reading of "a share
+/// of the span's claim capacity" the chain can compute, because no chapter defines a capacity in positions:
+/// v1 takes the ceiling itself as the span's capacity. A network that wants the evaluation budget tighter
+/// lowers either ceiling.
+pub fn palw_improve_eval_budget_positions_v1(
+    policy_max_eval_positions: u64,
+    ceilings: &crate::palw_improve_v1::PalwImprovementCeilingsV1,
+) -> u64 {
+    let share = (ceilings.max_eval_positions_per_epoch as u128 * ceilings.max_eval_budget_permille as u128 / 1_000) as u64;
+    policy_max_eval_positions.min(ceilings.max_eval_positions_per_epoch).min(share)
+}
+
+/// **The most evaluation jobs an epoch can hold**: the claimable ones — one per drawn item for each
+/// subject's primary kind (an item is exact-key or likelihood, never both), one more per item for a Judge
+/// stage, and one per item and non-parent subject for a Pairwise stage — over `subjects` subjects (the
+/// parent counts). An ExactMatch key's scoring is the fold's, not a claim, and a suite's items have no
+/// disclosed prompt (§17.8.4), so neither adds a job; `n` bounds the drawn items.
+pub fn palw_improve_eval_epoch_jobs_v1(eval: &PalwEvalSpecV1, subjects: usize) -> u64 {
+    use crate::palw_improve_policy_v1::palw_improvement_has_stage_v1 as has;
+    let n = eval.n as u64;
+    let judge = has(eval, PalwScoringKindV1::Judge) as u64;
+    let pairwise = has(eval, PalwScoringKindV1::Pairwise) as u64;
+    let subjects = subjects as u64;
+    n.saturating_mul(1 + judge)
+        .saturating_mul(subjects)
+        .saturating_add(n.saturating_mul(pairwise).saturating_mul(subjects.saturating_sub(1)))
+}
+
+/// **The positions one evaluation job may take**: the epoch's budget shared equally among the epoch's
+/// jobs (rounded down; a job of at least one position always fits a budget of at least one job's worth).
+/// Each job's cap is independent of every other claim — no order of claims can spend another job's share,
+/// and a voided claim returns nothing to anyone — so the epoch's total never exceeds its budget:
+/// `jobs × (budget / jobs) ≤ budget`.
+pub fn palw_improve_eval_job_position_cap_v1(budget_positions: u64, epoch_jobs: u64) -> u64 {
+    budget_positions / epoch_jobs.max(1)
+}
+
+/// **An evaluation claim's positions** (RFC-0004 §13's worked size): the prompt's, then the stream stage's
+/// — the ids it generated, or the reference it was given.
+pub fn palw_improve_eval_positions_v1(prompt_len: usize, stream_len: usize) -> u64 {
+    (prompt_len as u64).saturating_add(stream_len as u64)
 }
 
 /// **A layout's digest**, as an IR class id binds it (`PalwTirClassV1::layout_digest`): what the fold
@@ -1445,5 +1727,355 @@ mod tests {
         let read = PalwEvalBindingV1 { finalized: vec![vec![1, 2]], ..binding.clone() };
         assert_ne!(read.execution_root(), binding.execution_root(), "a finalized read is in the root");
         assert_eq!(read.finalized_root(), palw_improve_eval_finalized_root_v1(&[palw_improve_eval_generated_root_v1(&[1, 2])]));
+    }
+
+    // ---- the door: isolation, the header context, the walk ---------------------------------------------
+
+    use crate::palw_freeprompt_v3::{PalwFpDecodeRulesV1, PalwFpStopReasonV3, PalwFpV3Error, PalwFreePromptParamsV3};
+    use crate::palw_fp_objects_v3::{PalwFpClassCapsV1, PalwFpDerivedWorkCapV1};
+    use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+
+    const DOOR_PROMPT: [u32; 3] = [1, 2, 3];
+
+    /// A complete evaluation claim as its executor would commit it: an ExactMatch generation of three
+    /// ids under the evaluation job's own rules, over a public three-id prompt, with the roots a binding
+    /// produces and a signature of the right shape.
+    fn door_claim() -> (PalwFpCommitmentTxPayloadV3, PalwEvalClaimTailV1) {
+        let mut job = eval_fp_job(generating(PalwEvalSubjectV1::Parent));
+        job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&DOOR_PROMPT);
+        let eval = palw_fp_eval_job_v1(&job).unwrap().clone();
+        let generated = vec![5u32, 6, 7];
+        let step_root = Hash64::from_bytes([0x31; 64]);
+        let params = PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 };
+        let layout = PalwTirLayoutV1 {
+            version: PALW_TIR_LAYOUT_VERSION_V1,
+            max_context: 8,
+            checkpoint_interval: 1,
+            h_tile: 16,
+            commit_tiles: vec![4],
+            state_tiles: vec![],
+        };
+        let output_root = palw_improve_eval_generated_root_v1(&generated);
+        let commitment = PalwFreePromptCommitmentV3 {
+            trace_root: step_root,
+            output_root,
+            schedule_root: Hash64::default(),
+            execution_root: palw_improve_eval_execution_root_v1(
+                &eval.id(),
+                &job.class_id,
+                40,
+                &step_root,
+                &palw_improve_eval_prompt_root_v1(&DOOR_PROMPT),
+                DOOR_PROMPT.len() as u32,
+                &params,
+                &output_root,
+                &palw_improve_eval_finalized_root_v1(&[]),
+                &[],
+            ),
+            decode_tokens_executed: generated.len() as u32,
+            stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+            work_leaves: 40,
+            trace_manifest_root: Hash64::default(),
+            trace_chunk_count: 1,
+            trace_retention_daa: 1000,
+            job,
+        };
+        let payload = PalwFpCommitmentTxPayloadV3 {
+            version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            commitment,
+            prompt_token_ids: DOOR_PROMPT.to_vec(),
+            signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        (payload, PalwEvalClaimTailV1 { generated, score: vec![], subject_layout: layout, params })
+    }
+
+    fn door_bytes() -> Vec<u8> {
+        let (payload, tail) = door_claim();
+        palw_fp_eval_payload_encode_v1(&payload, &tail)
+    }
+
+    /// The claim as the V4 lane would carry it, were it an FP commitment: the stand-in's bytes.
+    fn stand_in_bytes(payload: &PalwFpCommitmentTxPayloadV3) -> Vec<u8> {
+        borsh::to_vec(&palw_fp_eval_stand_in_v1(payload)).unwrap()
+    }
+
+    const FORM: PalwPromptIdsFormV1 = PalwPromptIdsFormV1::Flat;
+    const LADDER: u64 = 1 << 32;
+
+    fn eval_door(bytes: &[u8], rules: PalwFpDecodeRulesV1) -> Result<(), PalwFpV3Error> {
+        validate_palw_fp_eval_commitment_tx_v1(bytes, false, FORM, LADDER, rules)
+    }
+
+    fn v4_door(bytes: &[u8], rules: PalwFpDecodeRulesV1) -> Result<(), PalwFpV3Error> {
+        crate::palw_fp_objects_v3::validate_palw_fp_commitment_tx_under_v5(bytes, false, FORM, LADDER, rules)
+    }
+
+    #[test]
+    fn the_evaluation_door_admits_an_honest_claim_only_where_the_decode_rules_are_carried() {
+        let bytes = door_bytes();
+        assert!(palw_fp_payload_is_eval_v1(&bytes));
+        // The V4 rules its job carries are the lane's: height-free `Scheduled` and `Active` admit; a
+        // ruleset that never schedules them (`Dormant`) refuses the V4 shape by name, as it refuses V4.
+        for rules in [PalwFpDecodeRulesV1::Scheduled, PalwFpDecodeRulesV1::Active] {
+            assert_eq!(eval_door(&bytes, rules), Ok(()), "{rules:?}");
+        }
+        assert_eq!(eval_door(&bytes, PalwFpDecodeRulesV1::Dormant), Err(PalwFpV3Error::DecodeRulesNotArmed));
+        // The routing: the door shut, an FP door refuses the bytes as undecodable — what a build without
+        // the fence says; the door open, the evaluation lane's rules.
+        let route = |door: bool, rules| validate_palw_fp_commitment_tx_under_v6(&bytes, false, FORM, LADDER, rules, door);
+        assert_eq!(route(false, PalwFpDecodeRulesV1::Scheduled), Err(PalwFpV3Error::PayloadUndecodable));
+        assert_eq!(route(false, PalwFpDecodeRulesV1::Dormant), Err(PalwFpV3Error::PayloadUndecodable));
+        assert_eq!(route(true, PalwFpDecodeRulesV1::Scheduled), Ok(()));
+        assert_eq!(route(true, PalwFpDecodeRulesV1::Dormant), Err(PalwFpV3Error::DecodeRulesNotArmed));
+        // The same bytes without their tail are an FP payload at version 9: the lane refuses its version by
+        // name, and the evaluation lane its missing tail.
+        let (payload, _) = door_claim();
+        let no_tail = borsh::to_vec(&payload).unwrap();
+        assert!(palw_fp_payload_is_eval_v1(&no_tail));
+        assert!(matches!(
+            validate_palw_fp_commitment_tx_under_v6(&no_tail, false, FORM, LADDER, PalwFpDecodeRulesV1::Active, false),
+            Err(PalwFpV3Error::UnsupportedVersion { got: PALW_FP_EVAL_VERSION, .. })
+        ));
+        assert!(matches!(
+            validate_palw_fp_commitment_tx_under_v6(&no_tail, false, FORM, LADDER, PalwFpDecodeRulesV1::Active, true),
+            Err(PalwFpV3Error::EvaluationClaim(_))
+        ));
+        // Anything that is not version 9 is the lane's, whichever way the door is set — byte for byte.
+        let v4 = stand_in_bytes(&payload);
+        assert!(!palw_fp_payload_is_eval_v1(&v4) && !palw_fp_payload_is_eval_v1(b"") && !palw_fp_payload_is_eval_v1(&[5, 0, 9]));
+        for rules in [PalwFpDecodeRulesV1::Dormant, PalwFpDecodeRulesV1::Scheduled, PalwFpDecodeRulesV1::Active] {
+            for input in [&v4[..], &b"junk"[..], &[][..]] {
+                let lane = v4_door(input, rules);
+                assert_eq!(validate_palw_fp_commitment_tx_under_v6(input, false, FORM, LADDER, rules, false), lane);
+                assert_eq!(validate_palw_fp_commitment_tx_under_v6(input, false, FORM, LADDER, rules, true), lane);
+            }
+        }
+    }
+
+    /// **The stand-in meets every V4 rule**: whatever the V4 door refuses of a commitment, the evaluation
+    /// door refuses of the same claim, by the same name and before its own rules read anything; and a
+    /// claim the V4 door admits is refused only by the evaluation lane's own rules.
+    #[test]
+    fn the_stand_in_meets_every_v4_rule_the_lane_applies() {
+        let (base, tail) = door_claim();
+        // The honest claim passes both doors: the stand-in is exactly an FP Job V4 commitment.
+        assert_eq!(v4_door(&stand_in_bytes(&base), PalwFpDecodeRulesV1::Active), Ok(()));
+        assert_eq!(eval_door(&palw_fp_eval_payload_encode_v1(&base, &tail), PalwFpDecodeRulesV1::Active), Ok(()));
+        type Mutation = (&'static str, fn(&mut PalwFpCommitmentTxPayloadV3));
+        let mutations: Vec<Mutation> = vec![
+            ("the payload's own version", |p| p.version = 6),
+            ("no executor key", |p| p.commitment.job.executor_pubkey.clear()),
+            ("a signature of the wrong length", |p| p.signature.truncate(10)),
+            ("a mode nothing implements", |p| p.commitment.job.privacy_mode = 9),
+            ("a prompt mode nothing implements", |p| p.commitment.job.prompt_mode = 9),
+            ("no prompt", |p| p.commitment.job.prompt_tokens = 0),
+            ("no decode limit", |p| p.commitment.job.decode_token_limit = 0),
+            ("a context the prompt and limit overflow", |p| p.commitment.job.max_context_tokens = 5),
+            ("nothing executed", |p| p.commitment.decode_tokens_executed = 0),
+            ("past the limit", |p| p.commitment.decode_tokens_executed = 99),
+            ("a stop reason that is not the count's", |p| p.commitment.stop_reason = PalwFpStopReasonV3::ExactBudgetReached),
+            ("no work", |p| p.commitment.work_leaves = 0),
+            ("work past the ladder", |p| p.commitment.work_leaves = LADDER + 1),
+            ("no chunks", |p| p.commitment.trace_chunk_count = 0),
+            ("a carried prompt of another length", |p| p.prompt_token_ids.push(4)),
+            ("carried ids another prompt hashes to", |p| p.prompt_token_ids[0] = 9),
+            ("a prompt hash the ids do not match", |p| p.commitment.job.prompt_token_ids_hash = Hash64::from_bytes([1; 64])),
+            ("a prompt that rides under another mode", |p| p.commitment.job.privacy_mode = crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA),
+        ];
+        for (what, mutate) in mutations {
+            let mut mutated = base.clone();
+            mutate(&mut mutated);
+            let lane = v4_door(&stand_in_bytes(&mutated), PalwFpDecodeRulesV1::Active);
+            let evaluation = eval_door(&palw_fp_eval_payload_encode_v1(&mutated, &tail), PalwFpDecodeRulesV1::Active);
+            // A mutation the V4 lane refuses, the evaluation lane refuses with the lane's own error,
+            // before its own rules read anything; one the V4 lane admits, only its own rules may refuse.
+            match lane {
+                Err(e) => assert_eq!(evaluation, Err(e), "{what}"),
+                Ok(()) => assert!(evaluation.is_err(), "{what}: the evaluation lane's own rules refuse it"),
+            }
+        }
+        // The rules the evaluation lane adds on top, each by its own name.
+        let named = |f: &dyn Fn(&mut PalwFpCommitmentTxPayloadV3, &mut PalwEvalClaimTailV1)| {
+            let (mut p, mut t) = door_claim();
+            f(&mut p, &mut t);
+            eval_door(&palw_fp_eval_payload_encode_v1(&p, &t), PalwFpDecodeRulesV1::Active)
+        };
+        let refused = |r: Result<(), PalwFpV3Error>| matches!(r, Err(PalwFpV3Error::EvaluationClaim(_)));
+        assert!(refused(named(&|p, _| p.commitment.job.temperature_q = 1 << 24)), "greedy");
+        assert!(refused(named(&|p, _| p.commitment.job.job_nonce = [1; 32])), "a zero nonce");
+        assert!(refused(named(&|_, t| t.generated[0] ^= 1)), "the ids are the output root's");
+        assert!(refused(named(&|p, _| p.commitment.execution_root = Hash64::from_bytes([2; 64]))), "the execution root is the parts'");
+        assert!(refused(named(&|p, _| p.commitment.trace_chunk_count = 2)), "one chunk");
+        assert!(refused(named(&|_, t| t.score = vec![1])), "ExactMatch commits no score");
+    }
+
+    #[test]
+    fn the_evaluation_door_is_refused_below_its_heights_by_name() {
+        let bytes = door_bytes();
+        let at = |improvement, decode, held| palw_fp_eval_refusal_at_v1(&bytes, improvement, decode, held);
+        use PalwFpEvalHeightRefusalV1::*;
+        assert_eq!(at(false, true, true), Some(BelowImprovement), "below palw_improvement_v1");
+        assert_eq!(at(false, false, false), Some(BelowImprovement), "…whatever else is in force");
+        assert_eq!(at(true, false, true), Some(BelowDecodeRules), "below the V4 rules its job carries");
+        assert_eq!(at(true, true, false), None, "inside the structural cap the held regime is no business of it");
+        assert_eq!(at(true, true, true), None, "past the fence, with the V4 rules: admitted");
+        for why in [BelowImprovement, BelowDecodeRules, WorkLeavesBeforeHeld(1)] {
+            assert!(!why.why().is_empty());
+        }
+        assert!(BelowImprovement.why().contains("palw_improvement_v1") && BelowDecodeRules.why().contains("palw_fp_decode_rules"));
+        // The held regime's ladder: a claim past the structural cap needs the regime in force.
+        let (mut wide, tail) = door_claim();
+        wide.commitment.work_leaves = crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP + 1;
+        let wide_bytes = palw_fp_eval_payload_encode_v1(&wide, &tail);
+        assert_eq!(
+            palw_fp_eval_refusal_at_v1(&wide_bytes, true, true, false),
+            Some(WorkLeavesBeforeHeld(crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP + 1))
+        );
+        assert_eq!(palw_fp_eval_refusal_at_v1(&wide_bytes, true, true, true), None);
+        // An FP payload, and bytes that are neither, are never this door's.
+        let (payload, _) = door_claim();
+        let fp = stand_in_bytes(&payload);
+        for input in [&fp[..], &b"junk"[..], &[][..]] {
+            assert_eq!(palw_fp_eval_refusal_at_v1(input, false, false, false), None);
+        }
+    }
+
+    fn freeprompt() -> PalwFreePromptParamsV3 {
+        crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_for_tests(
+            Hash64::from_u64_word(1),
+            Hash64::from_u64_word(0xCA7),
+            Hash64::from_u64_word(0xC0757),
+        )
+        .unwrap()
+        .freeprompt
+    }
+
+    fn carrier(subnetwork: crate::subnets::SubnetworkId, payload: Vec<u8>) -> crate::tx::Transaction {
+        crate::tx::Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, subnetwork, 0, payload)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk(
+        txs: &[crate::tx::Transaction],
+        class_ladder: u64,
+        held: bool,
+        held_armed: bool,
+        ruleset_caps_armed: bool,
+        rules: PalwFpDecodeRulesV1,
+        verify: bool,
+    ) -> crate::palw_fp_objects_v3::PalwFpExtractionV3 {
+        palw_fp_eval_objects_from_accepted_txs_v1(
+            txs,
+            Hash64::from_bytes([0x10; 64]),
+            &freeprompt(),
+            false,
+            |_| PalwFpClassCapsV1 { step_ladder: class_ladder, held, derived_work: PalwFpDerivedWorkCapV1::Declared },
+            ruleset_caps_armed,
+            held_armed,
+            FORM,
+            rules,
+            move |_, _, _, _| verify,
+        )
+    }
+
+    #[test]
+    fn the_walk_extracts_the_object_the_fold_reads_and_skips_the_rest_by_name() {
+        let (payload, tail) = door_claim();
+        let tx = carrier(crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT, palw_fp_eval_payload_encode_v1(&payload, &tail));
+        let extraction = walk(std::slice::from_ref(&tx), 1 << 26, false, false, false, PalwFpDecodeRulesV1::Active, true);
+        assert!(extraction.skipped.is_empty(), "{:?}", extraction.skipped);
+        let [carried] = &extraction.objects[..] else { panic!("one object") };
+        assert_eq!(carried.carrier, tx.id());
+        let crate::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted {
+            claim, class_id, bond, work_leaves, prompt_token_ids, decode_tokens_executed, trace_root, output_root, execution_root, eval, ..
+        } = &carried.object
+        else {
+            panic!("a free-prompt commitment")
+        };
+        let commitment = &payload.commitment;
+        assert_eq!(*claim, payload.claim_id(), "the id is the eval-keyed commitment's");
+        assert_eq!(*claim, crate::palw_freeprompt_v3::fp_claim_id_v3(commitment));
+        assert_eq!((*class_id, bond.0), (commitment.job.class_id, commitment.job.executor_bond));
+        assert_eq!((*work_leaves, *decode_tokens_executed), (40, 3));
+        assert_eq!((*trace_root, *output_root, *execution_root), (commitment.trace_root, commitment.output_root, commitment.execution_root));
+        assert_eq!(prompt_token_ids, &DOOR_PROMPT.to_vec());
+        let eval = eval.as_ref().expect("an evaluation claim carries its job and tail");
+        assert_eq!((&eval.job, &eval.tail), (palw_fp_eval_job_v1(&commitment.job).unwrap(), &tail));
+        // An FP commitment and a non-FP carrier are the FP walk's (and a native one nobody's): not seen here.
+        let fp = carrier(crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT, stand_in_bytes(&payload));
+        let native = carrier(crate::subnets::SUBNETWORK_ID_NATIVE, palw_fp_eval_payload_encode_v1(&payload, &tail));
+        let ignored = walk(&[fp, native], 1 << 26, false, false, false, PalwFpDecodeRulesV1::Active, true);
+        assert!(ignored.objects.is_empty() && ignored.skipped.is_empty());
+        // Every other refusal is a skip, with its reason — total, never a rejection of the block.
+        let skipped = |tx: crate::tx::Transaction, ladder, held, held_armed, caps, rules, verify| {
+            let id = tx.id();
+            let out = walk(&[tx], ladder, held, held_armed, caps, rules, verify);
+            assert!(out.objects.is_empty(), "no object");
+            assert_eq!(out.skipped.len(), 1);
+            assert_eq!(out.skipped[0].0, id);
+            out.skipped[0].1
+        };
+        let eval_tx = |p: &PalwFpCommitmentTxPayloadV3, t: &PalwEvalClaimTailV1| {
+            carrier(crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT, palw_fp_eval_payload_encode_v1(p, t))
+        };
+        let active = PalwFpDecodeRulesV1::Active;
+        // Bytes that start like version 9 and are nothing.
+        let mut junk = vec![5, 0, 9, 0];
+        junk.extend([0xAB; 40]);
+        assert_eq!(
+            skipped(carrier(crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT, junk), 1 << 26, false, false, false, active, true),
+            "evaluation payload does not decode"
+        );
+        // The V4 rules below their fence: the stand-in is not admitted.
+        assert_eq!(
+            skipped(eval_tx(&payload, &tail), 1 << 26, false, false, false, PalwFpDecodeRulesV1::Dormant, true),
+            "evaluation payload is not stateless-admissible"
+        );
+        // Another network's claim.
+        let mut foreign = payload.clone();
+        foreign.commitment.job.network_domain = Hash64::from_bytes([0x11; 64]);
+        assert_eq!(
+            skipped(eval_tx(&foreign, &tail), 1 << 26, false, false, false, active, true),
+            "evaluation payload is not stateless-admissible"
+        );
+        // The class's ladder: 40 leaves against a ladder of 39.
+        assert_eq!(
+            skipped(eval_tx(&payload, &tail), 39, false, false, false, active, true),
+            "evaluation payload is not stateless-admissible"
+        );
+        // The ruleset's caps, past their fence: the advertised decode cap against a job's limit.
+        let mut wide = payload.clone();
+        wide.commitment.job.decode_token_limit = freeprompt().max_decode_tokens() + 1;
+        wide.commitment.job.max_context_tokens = u32::MAX;
+        assert_eq!(
+            skipped(eval_tx(&wide, &tail), 1 << 26, false, false, true, active, true),
+            "evaluation payload is not stateless-admissible"
+        );
+        // The held regime: no public ids above one standard transaction.
+        let mut big = payload.clone();
+        let n = (crate::palw_mode_v2::PALW_STANDARD_TX_BYTES / 4 + 1) as usize;
+        big.prompt_token_ids = (0..n as u32).collect();
+        big.commitment.job.prompt_tokens = n as u32;
+        big.commitment.job.max_context_tokens = n as u32 + 64;
+        big.commitment.job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&big.prompt_token_ids);
+        // (Its execution root names the three-id prompt: with the held rule off the claim's own rules refuse it…)
+        assert_eq!(
+            skipped(eval_tx(&big, &tail), 1 << 26, false, false, false, active, true),
+            "evaluation claim's tail is not its commitment's"
+        );
+        // …and with it on, the held rule is asked first, as the FP walk asks it.
+        assert_eq!(
+            skipped(eval_tx(&big, &tail), 1 << 26, false, true, false, active, true),
+            "the held regime carries no prompt above one standard transaction"
+        );
+        // The claim's own rules.
+        let mut tampered = tail.clone();
+        tampered.generated[0] ^= 1;
+        assert_eq!(skipped(eval_tx(&payload, &tampered), 1 << 26, false, false, false, active, true), "evaluation claim's tail is not its commitment's");
+        // The signature, last.
+        assert_eq!(
+            skipped(eval_tx(&payload, &tail), 1 << 26, false, false, false, active, false),
+            "commitment signature does not verify under the carried key"
+        );
     }
 }

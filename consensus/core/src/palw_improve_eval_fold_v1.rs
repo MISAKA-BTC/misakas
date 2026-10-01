@@ -285,6 +285,16 @@ pub(super) fn apply_improvement_eval_commitment_v1(
             if *seed != item_row.seed || *max_new != policy.eval.max_new_tokens || *stop_ids != policy.eval.stop_ids {
                 return Err(refused("a generating job's seed, budget and stops are the item's and the policy's"));
             }
+            // One job per stage that applies to the item's kind (spec 17 §17.8.2): a likelihood item
+            // is teacher-forced over its reference and takes no generation — a generation claim on it
+            // could never be scored, and would hold the epoch's scoring until `t_score`.
+            if item_row.source == PalwItemSourceV1::HoldOut
+                && builder.state.improvement_case(&line_id, &item_row.case_id).is_some_and(|case| {
+                    matches!(case.case.reference, crate::palw_improve_material_v1::PalwCaseReferenceV1::Continuation { .. })
+                })
+            {
+                return Err(refused("a likelihood item takes no generation job"));
+            }
         }
         PalwEvalModeV1::TeacherForced { .. } => {
             let reference = palw_improve_eval_item_reference_hook_v1(&builder.state, &line_id, epoch, item)
@@ -324,6 +334,15 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     {
         return Err(refused("the claim's roots are not its tail's"));
     }
+    // **MIP-20: the epoch's evaluation budget** (spec 17 §17.8.2) — each job's positions (prompt and
+    // stream ids) within its equal share of the policy's `max_eval_positions` and the network's ceiling.
+    let ceilings = builder.params.improve_ceilings().ok_or_else(|| refused("an evaluation claim below palw_improvement_v1"))?;
+    let epoch_jobs = palw_improve_eval_epoch_jobs_v1(&policy.eval, builder.state.improvement_subjects(&line_id, epoch).len());
+    let job_cap =
+        palw_improve_eval_job_position_cap_v1(palw_improve_eval_budget_positions_v1(policy.eval.max_eval_positions, &ceilings), epoch_jobs);
+    if palw_improve_eval_positions_v1(prompt.len(), tail.generated.len()) > job_cap {
+        return Err(refused("an evaluation claim past its job's share of the epoch's evaluation budget (MIP-20)"));
+    }
     // The subject is an IR class, its layout the one its id binds, and the claim's leaves the chain's
     // count of the derived context.
     let record =
@@ -332,6 +351,21 @@ pub(super) fn apply_improvement_eval_commitment_v1(
         return Err(refused("the carried layout is not the subject class's"));
     }
     let class = builder.state.classes.get(c.class_id).cloned().ok_or(PalwStateV2Error::MissingClass(*c.class_id))?;
+    // **Panels: who can seat the claim** (RFC-0004 §13). An evaluation claim is seated as any claim of its
+    // class is — drawn from the seats ready for that class — so the class must be one the chain serves: not
+    // frozen, admitted by the registry where it governs, and verifiable inside the windows.
+    if let PalwClassStatusV2::Frozen { .. } = class.status {
+        return Err(PalwStateV2Error::FrozenClass(*c.class_id));
+    }
+    if let Some(state) = builder.read().class_lifecycle_refusal(c.class_id) {
+        return Err(PalwStateV2Error::ClassNotAdmitting { class: *c.class_id, state });
+    }
+    builder.check_class_verify_admits_v1(
+        c.class_id,
+        daa,
+        crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::FreePrompt { work_leaves: c.work_leaves },
+        true,
+    )?;
     let program = misaka_palw_tir::TirProgramV1::decode_canonical(&record.program).map_err(|_| refused("the subject's program"))?;
     let subject_row = PalwEvalSubjectClassV1 {
         class_id: *c.class_id,
@@ -395,6 +429,12 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     let would_reserve = backed.checked_add(reserved).ok_or(PalwStateV2Error::Overflow("reserved exposure"))?;
     if would_reserve > ceiling {
         return Err(PalwStateV2Error::FreePromptExposureCeiling { bond: *c.bond, backed, claim: reserved, ceiling });
+    }
+    // **The evaluation's share of the executor's claim capacity** (RFC-0004 §13: evaluation cannot crowd
+    // out attempts): one evaluation claim may reserve at most the fence's `max_eval_budget_permille` of
+    // the room the executor's bond carries.
+    if reserved.saturating_mul(1_000) > ceiling.saturating_mul(ceilings.max_eval_budget_permille as u128) {
+        return Err(refused("an evaluation claim reserves more than the evaluation budget's share of its executor's claim capacity"));
     }
     // MIP-17: no quanta, no pwu, no receipt rights, no weight, no escrow; the DA trio the chain's.
     let claim = PalwClaimStateV2 {
@@ -736,8 +776,13 @@ mod tests {
     /// An epoch evaluating at 1,510: the line opted in at 500, candidate A in, eight hold-out items,
     /// their prompts disclosed.
     fn evaluating() -> PalwChainStateV2 {
-        let p = params();
-        let set = PalwImprovementPolicySetV1 { line_id: h(LINE), sequence: 1, policy: Some(policy()) };
+        evaluating_with(&params(), policy())
+    }
+
+    /// [`evaluating`] under other params (the fence's ceilings) and another policy.
+    fn evaluating_with(p: &PalwStateParamsV2, policy: PalwImprovementPolicyV1) -> PalwChainStateV2 {
+        let p = p.clone();
+        let set = PalwImprovementPolicySetV1 { line_id: h(LINE), sequence: 1, policy: Some(policy) };
         let (mut s, _) = at(&genesis(), &p, 500, |b| {
             crate::palw_state_v2::palw_improve_fold_v1::apply_improvement_policy_set_v1(b, &ctx(500), &set).expect("opt in")
         });
@@ -1024,5 +1069,365 @@ mod tests {
         assert!(unrevealed.improvement_eval_generations_settled_v1(&h(LINE), 1, &[1]), "closing: no live claim on it");
         let (late, _) = at(&unrevealed, &p, 1_950, |_| {});
         assert_eq!(late.improvement_epoch(&h(LINE), 1).unwrap().state, PalwEpochStateV1::Decided, "at t_score at the latest");
+    }
+
+    /// An evaluation claim's carrier as its executor would build it: the FP payload's bytes at job
+    /// version 9, then the claim's tail — the transaction the extraction walk reads.
+    fn carrier_of(object: &PalwConsensusObjectV2) -> crate::tx::Transaction {
+        let PalwConsensusObjectV2::FreePromptCommitted {
+            class_id,
+            bond,
+            executor_pubkey,
+            work_leaves,
+            prompt_token_ids,
+            decode_tokens_executed,
+            trace_root,
+            output_root,
+            execution_root,
+            eval: Some(eval),
+            ..
+        } = object
+        else {
+            panic!("an evaluation claim")
+        };
+        let PalwEvalModeV1::Generate { max_new, stop_ids, .. } = &eval.job.mode else { panic!("a generating job") };
+        let job = crate::palw_freeprompt_v3::PalwFreePromptJobV3 {
+            version: PALW_FP_EVAL_VERSION,
+            network_domain: h(0x10),
+            class_id: *class_id,
+            executor_bond: bond.0,
+            executor_pubkey: executor_pubkey.clone(),
+            operator_id: h(0x12),
+            anchor_block: h(0x13),
+            anchor_daa: 99,
+            job_nonce: [0; 32],
+            tokenizer_id: h(0x14),
+            prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids),
+            prompt_tokens: prompt_token_ids.len() as u32,
+            decode_token_limit: *max_new,
+            max_context_tokens: 64,
+            privacy_mode: crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: Some(palw_improve_eval_decode_config_v1(stop_ids)),
+            tail: Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::Eval(Box::new(eval.job.clone()))),
+        };
+        let commitment = crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
+            trace_root: *trace_root,
+            output_root: *output_root,
+            schedule_root: Hash64::default(),
+            execution_root: *execution_root,
+            decode_tokens_executed: *decode_tokens_executed,
+            stop_reason: if decode_tokens_executed == max_new {
+                crate::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached
+            } else {
+                crate::palw_freeprompt_v3::PalwFpStopReasonV3::EndOfGeneration
+            },
+            work_leaves: *work_leaves,
+            trace_manifest_root: Hash64::default(),
+            trace_chunk_count: 1,
+            trace_retention_daa: 0,
+            job,
+        };
+        let payload = crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 {
+            version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            commitment,
+            prompt_token_ids: prompt_token_ids.clone(),
+            signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        crate::tx::Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![],
+            vec![],
+            0,
+            crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+            0,
+            palw_fp_eval_payload_encode_v1(&payload, &eval.tail),
+        )
+    }
+
+    /// **The walk and the fold are one path**: the object the extraction builds from a carrier is the
+    /// object the fold's evaluation branch accepts, a transaction the walk skips never reaches it, and a
+    /// carrier the door refuses (below its heights, or not signed) takes no job.
+    #[test]
+    fn a_carried_evaluation_claim_is_extracted_and_folded_into_its_job() {
+        let p = params();
+        let s = evaluating();
+        let honest = claim(&s, 3, PalwEvalSubjectV1::Candidate(h(CAND_A)), BOB, 0xD0);
+        let tx = carrier_of(&honest);
+        let freeprompt = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_for_tests(
+            Hash64::from_u64_word(1),
+            Hash64::from_u64_word(0xCA7),
+            Hash64::from_u64_word(0xC0757),
+        )
+        .unwrap()
+        .freeprompt;
+        let extract = |tx: &crate::tx::Transaction, rules: crate::palw_freeprompt_v3::PalwFpDecodeRulesV1, signed: bool| {
+            palw_fp_eval_objects_from_accepted_txs_v1(
+                std::slice::from_ref(tx),
+                h(0x10),
+                &freeprompt,
+                false,
+                |_| crate::palw_fp_objects_v3::PalwFpClassCapsV1 {
+                    step_ladder: 1 << 26,
+                    held: false,
+                    derived_work: crate::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared,
+                },
+                false,
+                false,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                rules,
+                move |_, _, _, _| signed,
+            )
+        };
+        let active = crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active;
+        let extraction = extract(&tx, active, true);
+        assert!(extraction.skipped.is_empty(), "{:?}", extraction.skipped);
+        let [carried] = &extraction.objects[..] else { panic!("one object") };
+        assert_eq!(carried.carrier, tx.id());
+        // The extracted object differs from the hand-built one only in the fields the carrier derives
+        // (the id, the DA retention, the job pin): the evaluation carriage — the job and its tail — is
+        // the same, field for field.
+        let (PalwConsensusObjectV2::FreePromptCommitted { eval: built, .. }, PalwConsensusObjectV2::FreePromptCommitted { eval: extracted, .. }) =
+            (&honest, &carried.object)
+        else {
+            panic!("free-prompt commitments")
+        };
+        assert_eq!(built, extracted);
+        // …and the fold takes it: the job's row is written and the claim is the chain's.
+        let (s1, _) = at(&s, &p, 1_600, |b| apply_object(b, &ctx(1_600), &carried.object).expect("the extracted claim folds"));
+        let row = s1.improvement_eval_job(&h(LINE), 1, 3, &PalwEvalSubjectV1::Candidate(h(CAND_A)), PalwScoringKindV1::ExactMatch).unwrap();
+        let taken = row.claim.unwrap();
+        let PalwConsensusObjectV2::FreePromptCommitted { claim: id, .. } = &carried.object else { unreachable!() };
+        assert_eq!((taken.claim_id, taken.executor, taken.accepted_daa), (*id, bond(BOB), 1_600));
+        assert!(palw_improve_claim_is_evaluation_v1(s1.claims.get(id).unwrap()), "an evaluation claim: no quanta");
+        // The walk skips what its door refuses: below the decode rules, or unsigned — and nothing reaches the fold.
+        assert!(extract(&tx, crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::Dormant, true).objects.is_empty());
+        assert!(extract(&tx, active, false).objects.is_empty());
+    }
+
+    /// Fold `object` on `s` at `daa` as a block's object step would, on the state and params given.
+    fn fold_one(s: &PalwChainStateV2, p: &PalwStateParamsV2, daa: u64, object: &PalwConsensusObjectV2) -> Result<(), PalwStateV2Error> {
+        let extras = PalwTransitionExtrasV1::default();
+        let mut b = TransitionBuilder::new(s, p, false, false, false, false, &extras);
+        apply_object(&mut b, &ctx(daa), object)
+    }
+
+    /// **MIP-20 (spec 17 §17.8.2): the epoch's evaluation budget is shared among its jobs.** Each job's
+    /// positions (the prompt's ids and the stream's) are held to `⌊budget / jobs⌋`, where the budget is the
+    /// smaller of the policy's `max_eval_positions` and the network's per-epoch ceiling at its permille, and
+    /// the jobs are the core's escrow bound over the epoch's subjects — so no order of claims can spend
+    /// another job's share, and the epoch's total can never exceed its budget.
+    #[test]
+    fn an_evaluation_claim_holds_to_its_jobs_share_of_the_epoch_budget() {
+        // The epoch: eight items, the parent and one candidate, one ExactMatch stage — one claimable job
+        // an item and a subject: 8 + 8. The claim: a 3-id prompt and 4 generated ids.
+        let jobs = palw_improve_eval_epoch_jobs_v1(&policy().eval, 2);
+        assert_eq!(jobs, 16);
+        let positions = 7u64;
+        assert_eq!(palw_improve_eval_job_position_cap_v1(positions * jobs, jobs), positions);
+        assert_eq!(palw_improve_eval_job_position_cap_v1(positions * jobs - 1, jobs), positions - 1);
+        let refusal = Err(PalwStateV2Error::ImprovementRefused("an evaluation claim past its job's share of the epoch's evaluation budget (MIP-20)"));
+        // By the policy's own budget.
+        let p = params();
+        for (budget, fits) in [(positions * jobs, true), (positions * jobs + jobs - 1, true), (positions * jobs - 1, false), (jobs, false)] {
+            let mut tight = policy();
+            tight.eval.max_eval_positions = budget;
+            let s = evaluating_with(&p, tight);
+            let honest = claim(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xE0);
+            let folded = fold_one(&s, &p, 1_600, &honest);
+            assert_eq!(folded, if fits { Ok(()) } else { refusal.clone() }, "a budget of {budget} positions");
+        }
+        // By the network's ceiling, at its permille of the span: the same epoch, the policy asking for the
+        // ceiling whole, the share shrinking it.
+        for (permille, fits) in [(1_000u16, true), (35, true), (34, false), (1, false)] {
+            let ceilings = crate::palw_improve_v1::PalwImprovementCeilingsV1 {
+                max_eval_positions_per_epoch: 3_200,
+                max_eval_budget_permille: permille,
+                ..PALW_DRILL_IMPROVE_CEILINGS_V1
+            };
+            let p = params().with_improve_ceilings(Some(ceilings));
+            let mut tight = policy();
+            tight.eval.max_eval_positions = 3_200;
+            let s = evaluating_with(&p, tight);
+            let honest = claim(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xE1);
+            assert_eq!(fold_one(&s, &p, 1_600, &honest), if fits { Ok(()) } else { refusal.clone() }, "a permille of {permille}");
+        }
+        // The budget is the smaller of the two, and never past the ceiling itself.
+        let ceilings = PALW_DRILL_IMPROVE_CEILINGS_V1;
+        assert_eq!(palw_improve_eval_budget_positions_v1(1 << 20, &ceilings), 1 << 20, "the policy's, when smaller");
+        assert_eq!(palw_improve_eval_budget_positions_v1(u64::MAX, &ceilings), (1 << 32) / 2, "the ceiling's share, when smaller");
+        assert_eq!(
+            palw_improve_eval_budget_positions_v1(u64::MAX, &crate::palw_improve_v1::PalwImprovementCeilingsV1::FORMAT_CAPS_V1),
+            1 << 40,
+            "the whole ceiling at 1,000 permille"
+        );
+        // More subjects only shrink a job's share; judged stages and a Pairwise subject each add jobs.
+        let mut judged = policy().eval;
+        let one = palw_improve_eval_epoch_jobs_v1(&judged, 1);
+        assert_eq!(one, 8, "the parent alone");
+        assert_eq!(palw_improve_eval_epoch_jobs_v1(&judged, 5), 8 * 5);
+        judged.stages.push(PalwScoringStageV1 { kind: PalwScoringKindV1::Judge, params: PalwScoringParamsV1::Judge { lo: 0, hi: 10 } });
+        judged.stages.push(PalwScoringStageV1 { kind: PalwScoringKindV1::Pairwise, params: PalwScoringParamsV1::Pairwise { margin: 0 } });
+        assert_eq!(
+            palw_improve_eval_epoch_jobs_v1(&judged, 2),
+            (8 * 2) + (8 * 2 + 8),
+            "a judge job for every subject's item, a pairwise job for every other subject's"
+        );
+        // Suites and a key's scoring add none: the regression and safety items are not claimable (§17.8.4).
+        let mut suites = policy().eval;
+        suites.regression_items = 32;
+        suites.safety_items = 16;
+        assert_eq!(palw_improve_eval_epoch_jobs_v1(&suites, 2), 16, "n drawn items bound the epoch's claimable jobs");
+        assert_eq!(palw_improve_eval_job_position_cap_v1(10, 0), 10, "no division by zero");
+    }
+
+    /// **The panels' half of the capacity rules** (RFC-0004 §13): an evaluation claim is seated as any claim
+    /// of its class is, so its class must be one the chain serves — a frozen class takes none — and the
+    /// claim's reservation is a bounded share of its executor's room: one claim may take at most the
+    /// fence's `max_eval_budget_permille` of it, so evaluation cannot crowd out the executor's attempts.
+    #[test]
+    fn an_evaluation_claim_needs_a_class_the_chain_serves_and_a_bounded_share_of_its_executors_room() {
+        let p = params();
+        let s = evaluating();
+        let candidate = claim(&s, 1, PalwEvalSubjectV1::Candidate(h(CAND_A)), CAROL, 0xE2);
+        assert_eq!(fold_one(&s, &p, 1_600, &candidate), Ok(()), "the premise: an honest claim folds");
+        let mut frozen = s.clone();
+        frozen.classes.get_mut(&h(CAND_A)).unwrap().status = PalwClassStatusV2::Frozen { since_daa: 1_550 };
+        assert_eq!(fold_one(&frozen, &p, 1_600, &candidate), Err(PalwStateV2Error::FrozenClass(h(CAND_A))), "a frozen class takes no claim");
+        // The parent's class too: the head is no exception.
+        let parent = claim(&s, 1, PalwEvalSubjectV1::Parent, CAROL, 0xE3);
+        let mut frozen_head = s.clone();
+        frozen_head.classes.get_mut(&h(LINE)).unwrap().status = PalwClassStatusV2::Frozen { since_daa: 1_550 };
+        assert_eq!(fold_one(&frozen_head, &p, 1_600, &parent), Err(PalwStateV2Error::FrozenClass(h(LINE))));
+
+        // The share: raise the class's price per unit of work until the claim's reservation passes
+        // the fence's share of its executor's room — the refusal sits between "folds" and the room's own
+        // ceiling (`FreePromptExposureCeiling`), and a network that gives evaluation its whole room
+        // (1,000 permille) never refuses it.
+        let share = |permille: u16| params().with_improve_ceilings(Some(crate::palw_improve_v1::PalwImprovementCeilingsV1 {
+            max_eval_budget_permille: permille,
+            ..PALW_DRILL_IMPROVE_CEILINGS_V1
+        }));
+        let outcome = |price: u64, permille: u16| {
+            let p = share(permille);
+            let s = evaluating_with(&p, policy());
+            let mut priced = s.clone();
+            priced.classes.get_mut(&h(LINE)).unwrap().slash_value_per_pwu = price;
+            let honest = claim(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xE4);
+            fold_one(&priced, &p, 1_600, &honest)
+        };
+        let share_refusal = Err(PalwStateV2Error::ImprovementRefused(
+            "an evaluation claim reserves more than the evaluation budget's share of its executor's claim capacity",
+        ));
+        let mut seen = (false, false, false);
+        let mut price = 1u64;
+        while price < u64::MAX / 10 {
+            let result = outcome(price, 1);
+            if result == Ok(()) {
+                seen.0 = true;
+            } else if result == share_refusal {
+                seen.1 = true;
+            } else if matches!(result, Err(PalwStateV2Error::FreePromptExposureCeiling { .. })) {
+                seen.2 = true;
+            } else {
+                panic!("price {price}: {result:?}");
+            }
+            // With the room's whole share the same claim is never refused for its share.
+            assert_ne!(outcome(price, 1_000), share_refusal, "price {price}");
+            price = price.saturating_mul(4);
+        }
+        assert_eq!(seen, (true, true, true), "cheap work folds, dearer work meets the share, dearest the room's own ceiling");
+    }
+
+    /// **One job per stage that applies to the item's kind** (spec 17 §17.8.2): a likelihood item (its case's
+    /// reference is a committed continuation) is teacher-forced and takes no generation job — one on it
+    /// could never be scored, and would hold the epoch's scoring until `t_score`.
+    #[test]
+    fn a_likelihood_item_takes_no_generation_job() {
+        use crate::palw_improve_material_v1::{
+            PalwCaseReferenceV1, PalwCaseSourceV1, PalwHardCaseRecordV1, PalwHardCaseV1,
+        };
+        let p = params();
+        let mut s = evaluating();
+        let case_id = s.improvement_item(&h(LINE), 1, 2).unwrap().case_id;
+        let record = |reference| PalwHardCaseRecordV1 {
+            case: PalwHardCaseV1 {
+                line_id: h(LINE),
+                case_id,
+                domain: 0,
+                prompt_ids: vec![3, 5, 2],
+                reference,
+                source: PalwCaseSourceV1::Setter,
+                head_evidence: None,
+            },
+            submitter: bond(CAROL),
+            admitted_daa: 1_400,
+            epoch: 1,
+            holdout: true,
+            revealed: None,
+        };
+        let generation = claim(&s, 2, PalwEvalSubjectV1::Parent, CAROL, 0xE5);
+        s.improvement_cases.insert((h(LINE), case_id), record(PalwCaseReferenceV1::ExactKey { commitment: h(0x77) }));
+        assert_eq!(fold_one(&s, &p, 1_600, &generation), Ok(()), "an exact-key item takes its generation");
+        s.improvement_cases.insert((h(LINE), case_id), record(PalwCaseReferenceV1::None));
+        assert_eq!(fold_one(&s, &p, 1_600, &generation), Ok(()), "a judged-only item's output feeds its judges");
+        s.improvement_cases.insert((h(LINE), case_id), record(PalwCaseReferenceV1::Continuation { commitment: h(0x77) }));
+        assert_eq!(
+            fold_one(&s, &p, 1_600, &generation),
+            Err(PalwStateV2Error::ImprovementRefused("a likelihood item takes no generation job"))
+        );
+        // The other items of the epoch are untouched.
+        let other = claim(&s, 3, PalwEvalSubjectV1::Parent, CAROL, 0xE6);
+        assert_eq!(fold_one(&s, &p, 1_600, &other), Ok(()));
+    }
+
+    /// **An evaluation claim runs the whole `Final` path** (MIP-17): the lane's own `finalize_claim` — the
+    /// funnel every claim's Final passes — releases its reservation, writes no reward and no weight, records
+    /// the row's finality and pays the subject's escrowed fee to the executor, once; and a voided holder
+    /// frees the job for a re-claim.
+    #[test]
+    fn an_evaluation_claim_finalizes_through_the_lanes_own_funnel_and_pays_its_fee_once() {
+        let p = params();
+        let s = evaluating();
+        let honest = claim(&s, 4, PalwEvalSubjectV1::Candidate(h(CAND_A)), CAROL, 0xE7);
+        let id = h(0xE7);
+        let (s1, _) = at(&s, &p, 1_600, |b| apply_object(b, &ctx(1_600), &honest).expect("an honest claim"));
+        let live = s1.claims.get(&id).unwrap().clone();
+        assert!(live.reserved > 0 && matches!(live.phase, PalwClaimPhaseV2::Provisional));
+        let exposure = s1.reserved_exposure(&bond(CAROL));
+        assert_eq!(exposure, live.reserved, "the executor's room carries the reservation");
+        let fee = policy().fees.eval_fee_per_job;
+        let earned = s1.improvement_earnings(&bond(CAROL));
+        // Licensed, then Final: the funnel runs as the sweep runs it.
+        let licensed = PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1_620 }, ..live.clone() };
+        let (s2, _) = at(&s1, &p, 1_700, |b| {
+            b.write_claim(id, Some(licensed.clone()));
+            b.finalize_claim(id, &licensed, 1_700).expect("the claim finalizes");
+        });
+        assert!(matches!(s2.claims.get(&id).unwrap().phase, PalwClaimPhaseV2::Final { final_daa: 1_700 }));
+        assert_eq!(s2.reserved_exposure(&bond(CAROL)), 0, "the reservation is released");
+        assert_eq!(s2.pending_payouts_iter().count(), 0, "no reward: an evaluation claim escrows none");
+        assert_eq!(s2.improvement_earnings(&bond(CAROL)), earned + fee, "the subject's escrow paid the job's fee, once");
+        let (_, row) = s2.improvement_eval_job_of_claim(&id).unwrap();
+        assert_eq!(row.claim.unwrap().final_daa, Some(1_700), "the job's row records it");
+        let (_, cand) = s2.improvement_candidate(&h(LINE), 1, &h(CAND_A)).unwrap();
+        assert_eq!(cand.escrow_spent, fee, "from the candidate's escrow");
+        // The next block's flush turns the earnings into a payout row; a second Final of the same claim pays
+        // nothing more (the row is final), so the earnings stay at what the flush left.
+        let (s3, _) = at(&s2, &p, 1_701, |b| {
+            let done = b.state.claims.get(&id).cloned().unwrap();
+            let before = b.state.improvement_earnings(&bond(CAROL));
+            b.note_improvement_eval_final_v1(&id, &done, 1_701).unwrap();
+            assert_eq!(b.state.improvement_earnings(&bond(CAROL)), before, "never twice");
+        });
+        assert_eq!(s3.improvement_earnings(&bond(CAROL)), 0, "the fee left as a payout, and nothing more came");
+        // A voided holder frees the job: the next claim takes it, and the cap on its share is the job's own
+        // (no budget was spent by the dead claim).
+        let mut voided = s1.clone();
+        voided.claims.get_mut(&id).unwrap().phase = PalwClaimPhaseV2::Voided { voided_daa: 1_650, reason: PalwVoidReasonV2::BindTimeout };
+        let retake = claim(&s, 4, PalwEvalSubjectV1::Candidate(h(CAND_A)), BOB, 0xE8);
+        assert_eq!(fold_one(&voided, &p, 1_700, &retake), Ok(()), "the job is re-taken");
     }
 }

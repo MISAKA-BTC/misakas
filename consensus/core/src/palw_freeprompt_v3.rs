@@ -1528,6 +1528,10 @@ pub enum PalwFpV3Error {
         "an evaluation job (version 9) is admitted by the evaluation lane's rules only (RFC-0004 §7.2, behind Params::palw_improvement_v1)"
     )]
     EvaluationJobNotHere,
+    /// **RFC-0004 §7.2: an evaluation claim its lane refuses** (`palw_improve_eval_v1`), by the lane's
+    /// own reason.
+    #[error("the evaluation claim is refused: {0}")]
+    EvaluationClaim(String),
     /// **RFC-0001 §A.2: the V4 job's `DecodeConfigV4` is not in canonical form**, by name.
     #[error("the V4 job's decode config is not canonical: {0}")]
     DecodeConfigNotCanonical(crate::palw_decode_pipeline_v4::PalwDecodeConfigV4Error),

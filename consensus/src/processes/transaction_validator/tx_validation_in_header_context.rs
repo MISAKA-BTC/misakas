@@ -54,7 +54,44 @@ impl TransactionValidator {
         self.check_activation_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_improvement_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)
+        self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_evaluation_in_context(tx, ctx_daa_score)
+    }
+
+    /// **RFC-0004 A6, the height-indexed half of the evaluation door.** Isolation admits an evaluation
+    /// claim (FP job version 9: the FP payload's bytes, then the claim's tail) wherever the ruleset
+    /// carries `Params::palw_improvement_v1`, because it holds no height; here, at the containing
+    /// block's DAA, one below the fence, below the V4 decode rules its job carries, or past the
+    /// structural work cap below the held regime is refused by name — the FP lane's own height rules,
+    /// which read an FP payload and so never see this one. With the isolation door's height-free answer
+    /// this makes a build that schedules the fence and one that does not agree on every transaction
+    /// below it: the other refuses the claim's bytes at isolation, as undecodable. Inert on every
+    /// preset without the fence: returns on its first line.
+    fn check_palw_fp_evaluation_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        use kaspa_consensus_core::palw_improve_eval_v1::PalwFpEvalHeightRefusalV1;
+        let Some(fence) = self.palw_improvement_fence else {
+            return Ok(());
+        };
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        let decode_rules = kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::at(
+            self.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
+            ctx_daa_score,
+        );
+        let held_active = self.palw_held_context_fence.is_some_and(|fence| fence.is_active(ctx_daa_score));
+        match kaspa_consensus_core::palw_improve_eval_v1::palw_fp_eval_refusal_at_v1(
+            &tx.payload,
+            fence.is_active(ctx_daa_score),
+            matches!(decode_rules, kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active),
+            held_active,
+        ) {
+            Some(PalwFpEvalHeightRefusalV1::WorkLeavesBeforeHeld(leaves)) => {
+                Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(leaves, ctx_daa_score))
+            }
+            Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why.why(), ctx_daa_score)),
+            None => Ok(()),
+        }
     }
 
     /// **RFC-0001 §A.4, the height-indexed half of the decode-rules door.** Isolation admits a V4
