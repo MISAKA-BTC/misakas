@@ -91,6 +91,8 @@ VARIANTS = {
                                 "the real Granite-MoE-shared checkpoints have a shared expert (shared_intermediate_size > 0); the default tiny config has none"),
     "mimo_v2_flash_unscaled": ("mimo_v2_flash", dict(attention_value_scale=1.0),
                                "the same family with the value scale removed: everything else of MiMo-V2-Flash is data, the scale (0.707 in the release) is FR-31"),
+    "biogpt_unscaled": ("biogpt", dict(scale_embedding=False),
+                        "BioGPT with the embedding scale removed: the builder scales token + position, the model scales the token only (FR-34)"),
     "cohere2_moe_shared_sum": ("cohere2_moe", dict(num_shared_experts=1, shared_expert_combination_strategy="sum"),
                                "a Cohere2-MoE with a shared expert added to the routed output (the default tiny config has none)"),
     "cohere2_moe_shared_avg": ("cohere2_moe", dict(num_shared_experts=1, shared_expert_combination_strategy="average"),

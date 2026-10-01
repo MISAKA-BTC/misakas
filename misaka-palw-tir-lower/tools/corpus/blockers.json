@@ -514,6 +514,10 @@
   "FR-33": {
    "title": "quant-format registry: announcement by roles or a config sub-key; the weight shape from the model",
    "size": "S-M"
+  },
+  "FR-34": {
+   "title": "embedding scale on the token embedding only (fairseq lineage)",
+   "size": "S"
   }
  }
 }

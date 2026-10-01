@@ -113,9 +113,10 @@
  "xglm": {
   "class": "feature",
   "frs": [
-   "FR-18"
+   "FR-18",
+   "FR-34"
   ],
-  "short": "sinusoidal positions in a DECODER (the spec has learned positions only; the sinusoid exists in the Rust encoder-decoder path), embedding scale; otherwise OPT-like",
+  "short": "sinusoidal positions in a DECODER (the spec has learned positions only), and the embedding scale applies to the token embedding only (FR-34); otherwise OPT-like",
   "evidence": "tensor names and spec.rs / lower/encdec.rs"
  },
  "doge": {
@@ -147,10 +148,12 @@
   "evidence": "adapter written, expected to stop at bind (pending validation)"
  },
  "biogpt": {
-  "class": "data",
-  "frs": [],
-  "short": "expected Level B: OPT's block under another prefix, gelu, a scaled embedding; written, not yet run",
-  "evidence": "adapter written, pending validation"
+  "class": "feature",
+  "frs": [
+   "FR-34"
+  ],
+  "short": "OPT's block under another prefix, but the embedding scale multiplies the token embedding only (the builder multiplies token + position): expected to stop at float_vs_hf; the variant without the scale shows the rest is data",
+  "evidence": "read from hl/build.rs and modeling_biogpt.py; adapter written, pending validation"
  },
  "openai_gpt": {
   "class": "data",

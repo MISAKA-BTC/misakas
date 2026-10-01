@@ -1,6 +1,6 @@
 {
   "format": "misaka.palw.model-adapter.v1",
-  "id": "biogpt",
+  "id": "biogpt_unscaled",
   "doc": "BioGPT (Microsoft): OPT's block (pre-LN LayerNorm with bias, biased projections, an ungated up/down MLP, learned positions at pos + 2, a final LayerNorm, a tied head) under the prefix `biogpt.`, with the activation read from hidden_act (gelu), the width from intermediate_size, the token embedding times sqrt(hidden) when scale_embedding, and LayerNorm epsilon the torch default 1e-5 (the config's layer_norm_eps is not read by the class). EXPECTED TO STOP at float_vs_hf: the HL builder applies `embedding.scale` to the SUM of token and position embeddings (`x = (tok + pos)\u00b7scale`, hl/build.rs) while BioGPT (like every fairseq-style model: XGLM, M2M-100, Speech2Text) scales the TOKEN embedding only, `tok\u00b7scale + pos` (FR-34); the variant `biogpt_unscaled` (scale_embedding false) shows the rest is data. PENDING VALIDATION (written during the quiet window). Third-party adapter (lane H): data only, extends the built-in opt.",
   "extends": [
     "opt"
