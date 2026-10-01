@@ -14915,6 +14915,9 @@ impl VirtualStateProcessor {
                     step_ladder: state.class_step_ladder_v1(class_id, ladder),
                     held: state.class_is_held_v1(class_id),
                     derived_work: kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared,
+                    // The class's logit unit, as the FP walk asks it (RFC-0001 §A.3): an evaluation claim's
+                    // stand-in job meets the same decode-control offer as any V4 job on its class.
+                    logits_q24: state.class_commits_q24_logits_v1(class_id),
                 },
                 self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
                 self.palw_held_context_at(block_daa),
