@@ -396,6 +396,17 @@ fn the_gate_prices_every_close_at_least_what_it_measures() {
     for leaves in by_point.values() {
         sample.extend([leaves[0], leaves[leaves.len() / 2], leaves[leaves.len() - 1]]);
     }
+    // The first leaf of every position of every commit point: the structure of a cone moves with the position (a state's replay, a
+    // history's length, the first position's missing reads).
+    let positions: BTreeMap<u64, u32> = listing.iter().map(|l| (l.global, l.pos)).collect();
+    for leaves in by_point.values() {
+        let mut seen = std::collections::BTreeSet::new();
+        for leaf in leaves {
+            if seen.insert(positions[leaf]) {
+                sample.insert(*leaf);
+            }
+        }
+    }
     let by_leaf: BTreeMap<u64, (u8, u8, u16)> = by_point.iter().flat_map(|(k, v)| v.iter().map(move |l| (*l, *k))).collect();
     eprintln!("the gate sizes {} commit points in {work} steps; measuring {} leaves (stride {stride})", prices.len(), sample.len());
     // Measured, per commit point: the largest, its leaf and the samples taken.
