@@ -40,11 +40,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-10-01 @b1b35d8104e4: int-10: palw_tir_fence2 + palw_model_court_window at DAA 3,600 (was a61d8533…, 4711c15a…)
+// re-pin 2026-10-01 @d45b74bafc8e: int-10: palw_tir_fence2 alone at DAA 3,600 (the model court window stays dormant) (was 3d2cd09e…, a170d9d9…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "3d2cd09eb2f3c384de91298183dd4db9d2dba25fbb20a48d6c09d2848f837b4e",
+    "28ae3db8175100b4e3dfafedc191e1a880801408a0540487b620704e04075781",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "a170d9d931d445949c2fc4685b45c1f698e35905a6e437ff65c3de6b5c090ffe",
+    "7be0c159f9ff739591a433db17e5db167c3179e3dff6f863a61278d7bf78f515",
 );
 
 #[test]

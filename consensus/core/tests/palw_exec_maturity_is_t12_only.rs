@@ -67,20 +67,20 @@ const UNMOVED: &[(&str, &str, &str, &str)] = &[
 /// `palw_offence_attribution_is_t12_only`, `evm_bridge_ledger_is_t12_only` and
 /// `t12_mainnet_values_moved_only_these` hold unchanged with it taken away — so nothing else moved).
 /// The re-pin (`scripts/t12_repin.py`, `maturity.*`) moves it with every other twin.
-// re-pin 2026-10-01 @b1b35d8104e4: int-10: palw_tir_fence2 + palw_model_court_window at DAA 3,600 (was fb8aeb95…, 85a754a2…)
+// re-pin 2026-10-01 @d45b74bafc8e: int-10: palw_tir_fence2 alone at DAA 3,600 (the model court window stays dormant) (was 8c83fbea…, f752dcfd…)
 const T12_WITHOUT_THE_MATURITY: (&str, &str, &str) = (
-    "8c83fbea98b2e77ad125e781755151b37a4ed156df79e8fb1292cf8556aea7d1",
+    "65b20fbac9a9e3079590002dcae96acbfc23a67b28b7cb1ef6db91b6df4698a4",
     "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53",
-    "f752dcfd3e3191801a4b51b95e3af6ee4654a48832873d602e8a6a3d106ccf8e",
+    "335dfb99761b2b4d6f0d57b7ca5c9995412e182dac60f6b3a33d761c1e9b75d2",
 );
 
 /// testnet-12 with the 120-DAA maturity: the shipped preset's full ids (= `palw_readiness_horizon_is_t12_only`'s
 /// `T12_WITH_THE_HORIZON`). Taken from this test's own output.
-// re-pin 2026-10-01 @b1b35d8104e4: int-10: palw_tir_fence2 + palw_model_court_window at DAA 3,600 (was 3db42ea6…, 9d6b83fe…)
+// re-pin 2026-10-01 @d45b74bafc8e: int-10: palw_tir_fence2 alone at DAA 3,600 (the model court window stays dormant) (was c5e9fd82…, 686f65ea…)
 const T12_WITH_THE_MATURITY: (&str, &str, &str) = (
-    "c5e9fd82632a35173116c2f4f2c310e394d2b85b6b5f93a5e6f76f92cf8d5ead",
+    "254509533bb693ced0fed823a4c25e166ba2542d576e4021b0e4b4d6fe4079e1",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "686f65ea8d1f778d734294cc5a929c9144fc7a27ef0f5aee3c05ca03b934f109",
+    "1e39c738b97a695c8a2c2d4129660eda8fa7ac5f1e8b529b916314c01750c593",
 );
 
 fn shipped(name: &str) -> Params {

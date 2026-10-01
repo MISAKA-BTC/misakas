@@ -9,10 +9,10 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > launched on 2026-09-25/26 JST from release commit **`0e8ec984e`**; the current fleet lineage is
 > **`4ca695b98`**. Run it with
 > `kaspad --testnet --netsuffix=12` or `misaka --network testnet-12` (the CLI's default) and verify:
-> * consensus params fingerprint **`c5e9fd82632a35173116c2f4f2c310e394d2b85b6b5f93a5e6f76f92cf8d5ead`** — the
+> * consensus params fingerprint **`254509533bb693ced0fed823a4c25e166ba2542d576e4021b0e4b4d6fe4079e1`** — the
 >   post-launch release, which arms every post-launch fence **from DAA 750** (fence schedule `750, 1000, 1300, 1700, 2000, 3600`: the last is the DAA-3,600 flag day, `palw_tir_fence2` alone; `palw_model_court_window` stays dormant); a node
 >   still on the launch release (`b8564b88…`) is refused by upgraded peers from DAA 750
-> * genesis `a27f8f44fe4d91a5…` and schedule id `686f65ea8d1f778d…`
+> * genesis `a27f8f44fe4d91a5…` and schedule id `1e39c738b97a695c…`
 >
 > Read **[docs/t12-launch-2026-09-25.md](docs/t12-launch-2026-09-25.md)** before relying on it: what the
 > release contains, the known issues (two CRITICAL ones are fixed by post-launch activation fences),

@@ -35,11 +35,11 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
-// re-pin 2026-10-01 @b1b35d8104e4: int-10: palw_tir_fence2 + palw_model_court_window at DAA 3,600 (was 76a3bfaf…, 3f4f9cdc…)
+// re-pin 2026-10-01 @d45b74bafc8e: int-10: palw_tir_fence2 alone at DAA 3,600 (the model court window stays dormant) (was 8cff7cda…, 2bab33db…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "8cff7cdac0a341cf32586f0a8a0b625492c811455863b02643324d019719788d",
+    "9a87fbd05176f1c8a0a6f188a54bac1daa541a1e988fc65a37b7c8ae3330b662",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "2bab33db34062fefc00ac6a737b5096f1aa7298c7fc31cb716bfbd9301510cd0",
+    "c886dc23beb825ba2025c327af908cf1ffed0b4b6ee6f70412aa563a14d61e63",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the
