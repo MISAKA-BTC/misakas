@@ -2186,7 +2186,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 not_ready_reason: r.not_ready_reason.clone(),
             })
             .collect();
-        Ok(GetPalwModelRegistryResponse {
+        let mut response = GetPalwModelRegistryResponse {
             available: true,
             tip_daa: read.tip_daa,
             scheduled: read.fence_daa.is_some(),
@@ -2233,7 +2233,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 .iter()
                 .filter(|b| b.active && b.above_floor && b.free_collateral_sompi >= b.needed_collateral_sompi)
                 .count() as u32,
-        })
+            blocking: Vec::new(),
+        };
+        // RFC-0002 Part II §II.7.4: what blocks each class and at which stage, read off the response the node just built
+        // (one pure function, shared with the CLI, which derives the same reading for a node that serves none).
+        response.blocking = kaspa_rpc_core::palw_registry_blockings(&response);
+        Ok(response)
     }
 
     async fn get_palw_class_economics_call(

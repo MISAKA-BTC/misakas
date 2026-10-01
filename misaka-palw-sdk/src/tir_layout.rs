@@ -525,6 +525,92 @@ pub fn tir_window_covers_context_v1(meta: &serde_json::Value, max_context: u32) 
     }
 }
 
+/// **The layout chosen for a program, and what the registration gate says of it** — a layout [`TirLayoutChoiceV1`]
+/// derives (the logits tile searched, the checkpoint interval searched, the history tile halved) until the gate admits the
+/// class, or the widest one's refusal where none is. `declare-layout` writes it into a container; the model preflight asks it
+/// of a program with no weights (the artifact root a placeholder, the leaf count an estimate: neither enters the gate's
+/// verdict beyond the close's path length).
+#[derive(Clone, Debug)]
+pub struct TirChosenLayoutV1 {
+    pub layout: PalwTirLayoutV1,
+    pub admission: Result<(), String>,
+}
+
+/// **The registration gate's layout choice** for `program` (see [`TirChosenLayoutV1`]).
+pub fn tir_choose_layout_v1(
+    params: &Params,
+    bundle: &PalwConsensusParamsV2,
+    program: &TirProgramV1,
+    tokenizer_id: Hash64,
+    artifact_root: Hash64,
+    leaf_count: u32,
+    choice: &TirLayoutChoiceV1,
+) -> Result<TirChosenLayoutV1, String> {
+    tir_choose_layout_judged_v1(params, bundle, program, tokenizer_id, leaf_count, choice, false, &|class| {
+        tir_class_admission_offline_v1(params, bundle, class, artifact_root)
+    })
+}
+
+/// [`tir_choose_layout_v1`] under a gate of the caller's: `judge` admits or refuses a class at a layout. `composite` says the
+/// class is a composite candidate (RFC-0004 §6.3), judged by the composite admission alone — the registration gate's twin, that a
+/// canonical job the court could answer exists, is asked of every other class.
+#[allow(clippy::too_many_arguments)]
+pub fn tir_choose_layout_judged_v1(
+    params: &Params,
+    bundle: &PalwConsensusParamsV2,
+    program: &TirProgramV1,
+    tokenizer_id: Hash64,
+    leaf_count: u32,
+    choice: &TirLayoutChoiceV1,
+    composite: bool,
+    judge: &dyn Fn(&PalwTirClassV1) -> Result<(), String>,
+) -> Result<TirChosenLayoutV1, String> {
+    let program_bytes = program.encode();
+    let carriable = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&bundle.court);
+    let class_of = |layout: &PalwTirLayoutV1| PalwTirClassV1 {
+        version: PALW_TIR_CLASS_VERSION_V1,
+        program: program_bytes.clone(),
+        layout: layout.clone(),
+        tokenizer_id,
+    };
+    // The logits tiles to try: the one asked for, else — under the tiled scheme — every divisor of
+    // the scheme's 4,096 lanes, widest first, until the terminal close is one the chain can carry.
+    let tiled = Hash64::from_bytes(program.logits_scheme_id) == tiled_logits_scheme_id_v1();
+    let logits_tiles: Vec<Option<u32>> = match (choice.logits_tile, tiled) {
+        (Some(t), _) => vec![Some(t)],
+        (None, true) => (2..=12).rev().map(|k| Some(1u32 << k)).collect(),
+        (None, false) => vec![None],
+    };
+    // PALW-TIR-38 with the paths counted: a logits tile whose close the chain cannot carry is never
+    // declared, whatever the admission's opened-bytes count says.
+    let logits_tiles: Vec<Option<u32>> = logits_tiles
+        .into_iter()
+        .filter(|t| {
+            !(t.is_some()
+                && choice.logits_tile.is_none()
+                && t.and_then(|t| tir_logits_close_carried_estimate_v1(params, program, leaf_count, t, choice.h_chunk))
+                    .is_some_and(|est| est > carriable))
+        })
+        .collect();
+    let recurrent = program.states.iter().any(|s| matches!(s.kind, misaka_palw_tir::program::StateKind::Fixed { .. }));
+    // The widest layout the gate admits, else the refusal at the widest one tried.
+    let (layout, admission) = tir_declare_search_v1(
+        &mut |logits_tile, h_chunk| tir_layout_tiles_v1(params, program, &TirLayoutChoiceV1 { logits_tile, h_chunk, ..*choice }),
+        &mut |layout| tir_court_checkpoint_interval_v1(params, bundle, program, layout),
+        &mut |layout| {
+            // The gate this declaration is judged by: the registration's, or the composite's.
+            judge(&class_of(layout))?;
+            // The registration gate's twin: a canonical job the court could not answer is no class. A composite is
+            // judged by the composite admission alone (its work and carriage rules).
+            if composite { Ok(()) } else { tir_canonical_job_answerable_v1(params, &class_of(layout)) }
+        },
+        &logits_tiles,
+        choice.h_chunk,
+        recurrent,
+    )?;
+    Ok(TirChosenLayoutV1 { layout, admission })
+}
+
 /// **Write `input`'s program and tensors to `output` as a class** — under the logits scheme `choice`
 /// names ([`tir_program_with_scheme_v1`]) and a declared layout: `choice` tiled, the logits at the
 /// widest divisor of 4,096 lanes whose terminal close the chain can carry (PALW-TIR-38), its history
@@ -669,41 +755,18 @@ pub fn tir_declare_layout_with_parent_v1(
         layout: layout.clone(),
         tokenizer_id: Hash64::from_bytes(container.header.tokenizer_id),
     };
-    // The logits tiles to try: the one asked for, else — under the tiled scheme — every divisor of
-    // the scheme's 4,096 lanes, widest first, until the terminal close is one the chain can carry.
-    let tiled = Hash64::from_bytes(program.logits_scheme_id) == tiled_logits_scheme_id_v1();
-    let logits_tiles: Vec<Option<u32>> = match (choice.logits_tile, tiled) {
-        (Some(t), _) => vec![Some(t)],
-        (None, true) => (2..=12).rev().map(|k| Some(1u32 << k)).collect(),
-        (None, false) => vec![None],
-    };
-    // PALW-TIR-38 with the paths counted: a logits tile whose close the chain cannot carry is never
-    // declared, whatever the admission's opened-bytes count says.
-    let logits_tiles: Vec<Option<u32>> = logits_tiles
-        .into_iter()
-        .filter(|t| {
-            !(t.is_some()
-                && choice.logits_tile.is_none()
-                && t.and_then(|t| tir_logits_close_carried_estimate_v1(params, program, leaf_count, t, choice.h_chunk))
-                    .is_some_and(|est| est > carriable))
-        })
-        .collect();
-    let recurrent = program.states.iter().any(|s| matches!(s.kind, misaka_palw_tir::program::StateKind::Fixed { .. }));
-    // The widest layout the gate admits, else the refusal at the widest one tried.
-    let (layout, admission) = tir_declare_search_v1(
-        &mut |logits_tile, h_chunk| tir_layout_tiles_v1(params, program, &TirLayoutChoiceV1 { logits_tile, h_chunk, ..*choice }),
-        &mut |layout| tir_court_checkpoint_interval_v1(params, bundle, program, layout),
-        &mut |layout| {
-            // The gate this declaration is judged by: the registration's, or the composite's.
-            judge(&class_of(layout))?;
-            // The registration gate's twin: a canonical job the court could not answer is no class. A composite is
-            // judged by the composite admission alone (its work and carriage rules, above).
-            if composite.is_some() { Ok(()) } else { tir_canonical_job_answerable_v1(params, &class_of(layout)) }
-        },
-        &logits_tiles,
-        choice.h_chunk,
-        recurrent,
+    // The layout search is the one the model preflight runs too (`tir_choose_layout_judged_v1`), under this declaration's gate.
+    let chosen = tir_choose_layout_judged_v1(
+        params,
+        bundle,
+        program,
+        Hash64::from_bytes(container.header.tokenizer_id),
+        leaf_count,
+        choice,
+        composite.is_some(),
+        &judge,
     )?;
+    let (layout, admission) = (chosen.layout, chosen.admission);
     let mut meta = serde_json::from_str::<serde_json::Value>(&container.header.meta).unwrap_or_else(|_| serde_json::json!({}));
     tir_calibration_covers_context_v1(program, &meta, layout.max_context)?;
     tir_window_covers_context_v1(&meta, layout.max_context)?;

@@ -29,12 +29,35 @@
 //! * [`artifact`] writes the params (crate-local format with a digest); [`fidelity`] runs the
 //!   integer program on the reference evaluator against the float reference.
 //!
+//! # The generic frontend (ModelSpec V1)
+//!
+//! `model_type` selects no code. [`hf_schema::read_model`] turns a configuration (and, optionally, the
+//! checkpoint's tensor names and shapes — a safetensors header is enough) into a feature-based
+//! [`model::ModelSpec`]:
+//!
+//! * **Level A** — the standard keys and tensor names suffice (no adapter);
+//! * **Level B** — an *adapter*, a data file in the `misaka.palw.model-adapter.v1` format
+//!   ([`adapter`], `adapters/*.json`, documented in `docs/design/palw/tir/model-adapter-v1.md`), maps
+//!   the class's own keys onto features; no Rust code, no protocol change;
+//! * **Level C** — a feature is missing: named ([`model::REGISTRY`]), with the smallest general
+//!   primitive that would close a protocol gap.
+//!
+//! [`model::analyze`] wraps that in the report `palw-class check-architecture` prints
+//! ([`model::ArchitectureReport`]: features `SUPPORTED`/`MISSING`, the level, the adapter used, whether
+//! a new primitive or court kernel would be needed). [`model::ModelSpec::features`] lists what a spec
+//! uses. The per-architecture parsers of [`hf_config`] remain only as the oracle of
+//! `tests/adapters.rs` and as the route of families not yet converted into adapter files.
+//!
 //! Nothing here depends on consensus crates; nothing here is on a validation path.
 
+pub mod adapter;
 pub mod admission;
 pub mod artifact;
+pub mod calib;
 pub mod cfg;
 pub mod diffusion;
+pub mod convert;
+pub mod detmath;
 pub mod encoder;
 /// RFC-0003 step 7: a bidirectional encoder as the pieces of a registered Embedding class.
 pub mod embedding;
@@ -43,11 +66,15 @@ pub mod fidelity;
 pub mod float_ref;
 pub mod gguf;
 pub mod hf_config;
+pub mod hf_schema;
 pub mod hf_weights;
 pub mod hl;
 pub mod lora;
 pub mod lower;
+pub mod model;
+pub mod ngram;
 pub mod prequant;
+pub mod quantfmt;
 pub mod quant;
 pub mod report;
 pub mod rope;
@@ -55,4 +82,4 @@ pub mod spec;
 pub mod weights;
 
 pub use error::{LowerError, Result};
-pub use hf_config::{parse_config, parse_config_str};
+pub use hf_config::{parse_config, parse_config_str, parse_config_str_with, parse_config_with};

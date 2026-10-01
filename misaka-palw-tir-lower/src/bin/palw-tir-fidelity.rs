@@ -117,6 +117,14 @@ struct Args {
     /// section is not the parent's (`palw-class composite` refuses it).
     #[arg(long, requires = "adapter", conflicts_with = "stats_in")]
     parent_stats: Option<PathBuf>,
+    /// The math the tables and scales are computed with: `libm-v1` (the default; the same bytes on
+    /// every platform) or `std` (the platform's libm).
+    #[arg(long, default_value = "libm-v1")]
+    math: String,
+    /// A quant-format descriptor (`misaka.palw.quant-format.v1`, a JSON file) for a type or a
+    /// `quantization_config` the built-in registry does not describe; repeatable.
+    #[arg(long = "quant-format")]
+    quant_format: Vec<PathBuf>,
 }
 
 fn tokens(path: &Option<PathBuf>, vocab: usize, count: usize, seed: u64) -> Result<(Vec<Vec<usize>>, serde_json::Value), String> {
@@ -143,8 +151,12 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let t0 = Instant::now();
     let log = |m: String| eprintln!("[{:>7.1}s] {m}", t0.elapsed().as_secs_f64());
     let opts = LowerOpts { max_window: a.max_window, ..LowerOpts::default() };
+    misaka_palw_tir_lower::detmath::set_mode(
+        misaka_palw_tir_lower::detmath::MathMode::parse(&a.math).ok_or_else(|| format!("--math {}: libm-v1 or std", a.math))?,
+    );
     // A Hugging Face directory, or a GGUF file (`model.gguf` in the directory, or its path).
-    let (prep, ck) = fidelity::open_model(&a.model, &opts).map_err(|e| e.to_string())?;
+    let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::with_files(&a.quant_format).map_err(|e| e.to_string())?;
+    let (prep, ck) = fidelity::open_model_with(&a.model, &opts, &reg).map_err(|e| e.to_string())?;
     let ck = ck.as_ref();
     // RFC-0004: a LoRA candidate replaces the program; the parent stays for its calibration.
     let (prep, candidate) = match &a.adapter {
@@ -171,7 +183,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         Some(o) => o,
         None => ck,
     };
-    let loader = Streamed { prog: &prep.hl, binding: &prep.binding, source: src };
+    let loader = Streamed::new(&prep.hl, &prep.binding, src);
     let vocab = prep.hl.vocab;
     let cut = |mut s: Vec<Vec<usize>>, n: Option<usize>| {
         if let Some(n) = n {
@@ -281,6 +293,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             // as this run applied it (`waived` under --allow-short-calibration).
             "calibration_length_rule": calibrated,
             "max_window": a.max_window,
+            "math": a.math,
         });
         // A candidate's record for `palw-class composite`: where its adapter section begins, and
         // the adapter it was lowered with (the parent's tokenizer, below, is the candidate's).

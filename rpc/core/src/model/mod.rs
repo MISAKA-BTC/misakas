@@ -14,6 +14,8 @@ pub mod mempool;
 pub mod message;
 pub mod network;
 pub mod optional;
+/// RFC-0002 Part II §II.7.4: what blocks a class in the model registry, and at which stage.
+pub mod palw_blocking;
 pub mod peer;
 pub mod script_class;
 pub mod subnets;
@@ -33,6 +35,7 @@ pub use mempool::*;
 pub use message::*;
 pub use network::*;
 pub use optional::*;
+pub use palw_blocking::*;
 pub use peer::*;
 pub use subnets::*;
 pub use tx::*;

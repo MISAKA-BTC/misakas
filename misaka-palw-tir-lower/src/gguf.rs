@@ -25,12 +25,16 @@
 
 use crate::error::{LowerError, Result};
 use crate::prequant::{QFormat, QLayout, QWeight, QuantConfig};
+use crate::quantfmt::blocks::BlocksFormat;
+use crate::quantfmt::{NeedsDescriptor, QuantFormat, QuantRegistry};
 use crate::spec::{ArchSpec, Gain, NormSpec, Residual};
-use crate::weights::{Tensor, TensorSource, f16_to_f32};
+use crate::weights::{Tensor, TensorMeta, TensorSource, f16_to_f32, read_exact_at};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const MAX_STRING: u64 = 1 << 24;
 const MAX_ARRAY: u64 = 1 << 26;
@@ -38,99 +42,52 @@ const MAX_TENSORS: u64 = 1 << 20;
 const MAX_KV: u64 = 1 << 20;
 const MAX_DIMS: u32 = 4;
 
-/// A ggml tensor type (the ones this reader decodes by name; any other is `Other`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(non_camel_case_types)]
-pub enum GgmlType {
-    F32,
-    F16,
-    BF16,
-    Q4_0,
-    Q4_1,
-    Q5_0,
-    Q5_1,
-    Q8_0,
-    Q4_K,
-    Q5_K,
-    Q6_K,
-    Other(u32),
+/// A tensor's ggml type: its id, and the descriptor that decodes it when the registry holds one
+/// ([`crate::quantfmt`]). A type no descriptor describes has `fmt: None`: the tensors that use it are
+/// refused by name ([`GgufFile::needs_descriptors`]), never misread.
+#[derive(Clone, Debug)]
+pub struct GgmlType {
+    pub id: u32,
+    pub fmt: Option<Arc<QuantFormat>>,
+}
+
+impl PartialEq for GgmlType {
+    fn eq(&self, o: &Self) -> bool {
+        self.id == o.id && self.fmt.as_ref().map(|f| f.digest()) == o.fmt.as_ref().map(|f| f.digest())
+    }
 }
 
 impl GgmlType {
-    pub fn from_id(id: u32) -> Self {
-        match id {
-            0 => GgmlType::F32,
-            1 => GgmlType::F16,
-            2 => GgmlType::Q4_0,
-            3 => GgmlType::Q4_1,
-            6 => GgmlType::Q5_0,
-            7 => GgmlType::Q5_1,
-            8 => GgmlType::Q8_0,
-            12 => GgmlType::Q4_K,
-            13 => GgmlType::Q5_K,
-            14 => GgmlType::Q6_K,
-            30 => GgmlType::BF16,
-            x => GgmlType::Other(x),
-        }
+    pub fn from_id(id: u32, reg: &QuantRegistry) -> Self {
+        GgmlType { id, fmt: reg.ggml(id).cloned() }
     }
-    pub fn id(self) -> u32 {
-        match self {
-            GgmlType::F32 => 0,
-            GgmlType::F16 => 1,
-            GgmlType::Q4_0 => 2,
-            GgmlType::Q4_1 => 3,
-            GgmlType::Q5_0 => 6,
-            GgmlType::Q5_1 => 7,
-            GgmlType::Q8_0 => 8,
-            GgmlType::Q4_K => 12,
-            GgmlType::Q5_K => 13,
-            GgmlType::Q6_K => 14,
-            GgmlType::BF16 => 30,
-            GgmlType::Other(x) => x,
-        }
+    pub fn id(&self) -> u32 {
+        self.id
     }
-    /// `(elements, bytes)` of one block.
-    pub fn block(self) -> Option<(usize, usize)> {
-        Some(match self {
-            GgmlType::F32 => (1, 4),
-            GgmlType::F16 | GgmlType::BF16 => (1, 2),
-            GgmlType::Q4_0 => (32, 18),
-            GgmlType::Q4_1 => (32, 20),
-            GgmlType::Q5_0 => (32, 22),
-            GgmlType::Q5_1 => (32, 24),
-            GgmlType::Q8_0 => (32, 34),
-            GgmlType::Q4_K => (256, 144),
-            GgmlType::Q5_K => (256, 176),
-            GgmlType::Q6_K => (256, 210),
-            GgmlType::Other(_) => return None,
-        })
+    fn blocks(&self) -> Option<&BlocksFormat> {
+        self.fmt.as_ref().and_then(|f| f.as_blocks())
     }
-    pub fn is_float(self) -> bool {
-        matches!(self, GgmlType::F32 | GgmlType::F16 | GgmlType::BF16)
+    /// `(elements, bytes)` of one block, when the type is described.
+    pub fn block(&self) -> Option<(usize, usize)> {
+        self.blocks().map(|b| (b.elems, b.bytes))
+    }
+    /// Stored as floats (`F32`, `F16`, `BF16`, …), not as quantised integers.
+    pub fn is_float(&self) -> bool {
+        self.blocks().is_some_and(|b| !b.is_integers())
     }
     /// Columns per group of the unpacked weight.
-    fn group(self) -> usize {
-        match self {
-            GgmlType::Q6_K => 16,
-            _ => 32,
-        }
+    fn group(&self) -> usize {
+        self.blocks().map_or(32, |b| b.group)
     }
-    /// A float offset per group (`Q4_1`, `Q5_1`, the K-quant minimums).
-    fn has_min(self) -> bool {
-        matches!(self, GgmlType::Q4_1 | GgmlType::Q5_1 | GgmlType::Q4_K | GgmlType::Q5_K)
+    /// A float offset per group (`Q4_1`, `Q5_1`, the K-quant minimums, IQ1's deltas) — or a code range
+    /// the program cannot absorb into `i8`: the layout then carries the per-group offset term.
+    fn offset_term(&self) -> bool {
+        self.blocks().is_some_and(|b| b.offset_term())
     }
-    fn bits(self) -> u8 {
-        match self {
-            GgmlType::Q4_0 | GgmlType::Q4_1 | GgmlType::Q4_K => 4,
-            GgmlType::Q5_0 | GgmlType::Q5_1 | GgmlType::Q5_K => 5,
-            GgmlType::Q6_K => 6,
-            _ => 8,
-        }
-    }
-    pub fn name(self) -> String {
-        match self {
-            GgmlType::Other(x) => format!("type{x}"),
-            t => format!("{t:?}"),
+    pub fn name(&self) -> String {
+        match &self.fmt {
+            Some(f) => f.name().to_string(),
+            None => format!("type{}", self.id),
         }
     }
 }
@@ -215,6 +172,10 @@ pub struct GgufFile {
     pub tensors: BTreeMap<String, GgufTensorInfo>,
     pub alignment: u64,
     pub data_start: u64,
+    /// The open data file (`None` for a header parsed from a reader).
+    file: Option<Arc<std::fs::File>>,
+    /// Tensors of undescribed types: the most bytes the layout allows each (the gap to the next).
+    unsized_bounds: BTreeMap<String, u64>,
 }
 
 struct Rd<R: Read> {
@@ -283,14 +244,32 @@ impl<R: Read> Rd<R> {
 }
 
 impl GgufFile {
-    /// Parse the header of `path`. Total: a malformed or hostile file is an error, never a panic
-    /// or an unbounded allocation.
+    /// Parse the header of `path` with the built-in quant formats. Total: a malformed or hostile
+    /// file is an error, never a panic or an unbounded allocation.
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with(path, QuantRegistry::builtin())
+    }
+
+    /// [`open`](Self::open), types resolved through `reg` (a registry extended with the
+    /// descriptors a model needs).
+    pub fn open_with(path: &Path, reg: &QuantRegistry) -> Result<Self> {
         let f = std::fs::File::open(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?;
         let len = f.metadata().map_err(|e| LowerError::Io(e.to_string()))?.len();
-        let mut r = Rd { r: BufReader::new(f), pos: 0 };
+        let file = Arc::new(f.try_clone().map_err(|e| LowerError::Io(e.to_string()))?);
+        let mut g = Self::parse(BufReader::new(f), Some(len), path, reg)?;
+        g.file = Some(file);
+        Ok(g)
+    }
+
+    /// **The header of a GGUF file, from any reader** — a file, a prefix fetched by range, a header
+    /// file saved on its own. Reads the magic, the metadata and the tensor table and stops: no tensor
+    /// data is needed, so a model can be assessed before its weights are fetched. `file_len`, when
+    /// known, bounds every tensor against the file; when `None` (a header alone) the bounds are not
+    /// checked and a type no descriptor describes has no size.
+    pub fn parse(reader: impl Read, file_len: Option<u64>, label: &Path, reg: &QuantRegistry) -> Result<Self> {
+        let mut r = Rd { r: reader, pos: 0 };
         if &r.arr::<4>()? != b"GGUF" {
-            return Err(LowerError::weights(format!("{}: not a GGUF file", path.display())));
+            return Err(LowerError::weights(format!("{}: not a GGUF file", label.display())));
         }
         let version = r.u32()?;
         if !(2..=3).contains(&version) {
@@ -325,7 +304,7 @@ impl GgufFile {
             for _ in 0..nd {
                 dims.push(r.u64()?);
             }
-            let ty = GgmlType::from_id(r.u32()?);
+            let ty = GgmlType::from_id(r.u32()?, reg);
             let off = r.u64()?;
             infos.push((name, dims, ty, off));
         }
@@ -346,7 +325,10 @@ impl GgufFile {
                 return Err(LowerError::weights(format!("GGUF: `{name}` at an unaligned offset")));
             }
             let offset = data_start.checked_add(off).ok_or_else(|| LowerError::weights("GGUF: offset overflow"))?;
-            if ty.block().is_some() && offset.checked_add(bytes).is_none_or(|e| e > len) {
+            if ty.block().is_some()
+                && let Some(len) = file_len
+                && offset.checked_add(bytes).is_none_or(|e| e > len)
+            {
                 return Err(LowerError::weights(format!("GGUF: `{name}` runs past the end of the file")));
             }
             let info = GgufTensorInfo { name: name.clone(), dims, ty, offset, bytes };
@@ -354,22 +336,91 @@ impl GgufFile {
                 return Err(LowerError::weights(format!("GGUF: tensor `{name}` twice")));
             }
         }
-        Ok(GgufFile { path: path.to_path_buf(), version, meta, tensors, alignment, data_start })
+        // A tensor of a type no descriptor describes has no size of its own; the gap to the next
+        // tensor's data (or to the end of the file) bounds it, so a size estimate can still be made.
+        let mut starts: Vec<u64> = tensors.values().map(|t| t.offset).collect();
+        starts.sort_unstable();
+        let mut unsized_bounds = BTreeMap::new();
+        for t in tensors.values().filter(|t| t.ty.block().is_none()) {
+            let next = starts.iter().find(|s| **s > t.offset).copied().or(file_len);
+            if let Some(n) = next {
+                unsized_bounds.insert(t.name.clone(), n - t.offset);
+            }
+        }
+        Ok(GgufFile { path: label.to_path_buf(), version, meta, tensors, alignment, data_start, file: None, unsized_bounds })
     }
 
     fn info(&self, name: &str) -> Result<&GgufTensorInfo> {
         self.tensors.get(name).ok_or_else(|| LowerError::weights(format!("GGUF: no tensor `{name}`")))
     }
 
+    /// The tensors whose type no descriptor in the registry describes, grouped by type: what must be
+    /// supplied (a `misaka.palw.quant-format.v1` file each) before this model can be converted. A
+    /// name the file's metadata gives the type is carried when there is one.
+    pub fn needs_descriptors(&self) -> Vec<NeedsDescriptor> {
+        let mut by: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+        for t in self.tensors.values().filter(|t| t.ty.fmt.is_none()) {
+            by.entry(t.ty.id).or_default().push(t.name.clone());
+        }
+        by.into_iter()
+            .map(|(id, tensors)| NeedsDescriptor { scheme: "ggml".into(), id: Some(id), name: self.type_name_hint(id), tensors })
+            .collect()
+    }
+
+    /// A name for an unknown type id from the file's own metadata: `general.file_type` (llama.cpp's
+    /// `LLAMA_FTYPE`, named when the id is one this build lists) and any metadata string that names
+    /// the id (`…quantization_type_<id>`, a `quantize.*` key) — whatever the file says, quoted, not
+    /// guessed.
+    fn type_name_hint(&self, id: u32) -> Option<String> {
+        let mut hints = Vec::new();
+        for (k, v) in &self.meta {
+            if let GValue::Str(s) = v
+                && (k.starts_with("quantize.") || k.contains("quantization") || k.contains("quant_type"))
+                && s.len() <= 64
+            {
+                hints.push(format!("{k}={s}"));
+            }
+            if k == "general.file_type"
+                && let Some(ft) = v.as_u64()
+            {
+                hints.push(format!("general.file_type={ft}"));
+            }
+        }
+        let _ = id;
+        if hints.is_empty() { None } else { Some(hints.join("; ")) }
+    }
+
+    /// The message that refuses a model with undescribed types, or `None` when every type is described.
+    pub fn undescribed_refusal(&self, reg: &QuantRegistry) -> Option<String> {
+        let need = self.needs_descriptors();
+        if need.is_empty() {
+            return None;
+        }
+        let known = reg.names();
+        Some(need.iter().map(|n| n.message(&known)).collect::<Vec<_>>().join(" | "))
+    }
+
+    /// The bytes of a tensor as stored: its size when its type is described, else the upper bound the
+    /// layout gives (the gap to the next tensor), `None` when neither is known.
+    pub fn stored_bytes(&self, name: &str) -> Option<u64> {
+        let t = self.tensors.get(name)?;
+        if t.ty.block().is_some() { Some(t.bytes) } else { self.unsized_bounds.get(name).copied() }
+    }
+
+    fn data_file(&self) -> Result<&std::fs::File> {
+        self.file.as_deref().ok_or_else(|| LowerError::weights("GGUF: a header-only view holds no tensor data"))
+    }
+
     fn raw(&self, t: &GgufTensorInfo) -> Result<Vec<u8>> {
         if t.ty.block().is_none() {
-            return Err(LowerError::not_lowerable(format!("GGUF: `{}` is {} (not read)", t.name, t.ty.name())));
+            return Err(self.refuse_type(t));
         }
-        let mut f = std::fs::File::open(&self.path).map_err(|e| LowerError::Io(e.to_string()))?;
-        f.seek(SeekFrom::Start(t.offset)).map_err(|e| LowerError::Io(e.to_string()))?;
-        let mut b = vec![0u8; t.bytes as usize];
-        f.read_exact(&mut b).map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
-        Ok(b)
+        self.raw_range(t, 0, t.bytes)
+    }
+
+    fn refuse_type(&self, t: &GgufTensorInfo) -> LowerError {
+        let n = NeedsDescriptor { scheme: "ggml".into(), id: Some(t.ty.id), name: self.type_name_hint(t.ty.id), tensors: vec![t.name.clone()] };
+        LowerError::not_lowerable(format!("GGUF: `{}`: {}", t.name, n.message(&QuantRegistry::builtin().names())))
     }
 
     /// A tensor's stored integers (block-quantised matrices only).
@@ -379,36 +430,60 @@ impl GgufFile {
             return Err(LowerError::weights(format!("GGUF `{name}`: {} {:?} is not a quantised matrix", t.ty.name(), t.dims)));
         }
         let (inp, out) = (t.dims[0] as usize, t.dims[1] as usize);
-        unpack(t.ty, &self.raw(t)?, inp, out, name)
+        self.decode_integers(t, &self.raw(t)?, inp, out)
     }
 
-    /// A tensor as f32 in its Hugging Face shape: floats widened, quantised blocks dequantised
-    /// (`W = scale · (q − zero) − min`, the exact value rounded once — llama.cpp's
+    /// Decode `out` rows of `inp` columns of `t` to stored integers.
+    fn decode_integers(&self, t: &GgufTensorInfo, raw: &[u8], inp: usize, out: usize) -> Result<QWeight> {
+        let b = t.ty.blocks().ok_or_else(|| self.refuse_type(t))?;
+        let mut q = b.decode_integers(raw, out, inp).map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
+        q.label = format!("gguf {}", t.ty.name());
+        Ok(q)
+    }
+
+    /// Decode `rows` rows of `inp` columns of `t` to `f32` (floats widened, quantised blocks
+    /// dequantised: `W = scale · (q − zero) − min`, the exact value rounded once — llama.cpp's
     /// `dequantize_row_*`).
+    fn decode_floats(&self, t: &GgufTensorInfo, raw: &[u8], inp: usize, rows: usize) -> Result<Vec<f32>> {
+        // The three IEEE float types are by far the biggest tensors of a quantised file (the
+        // embedding, the norms): widened directly, which `tests` pin equal to the descriptors.
+        match t.ty.id {
+            0 => return Ok(raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()),
+            1 => return Ok(raw.chunks_exact(2).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect()),
+            30 => return Ok(raw.chunks_exact(2).map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16)).collect()),
+            _ => {}
+        }
+        let b = t.ty.blocks().ok_or_else(|| self.refuse_type(t))?;
+        b.decode_floats(raw, rows, inp).map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))
+    }
+
+    /// A tensor as f32 in its Hugging Face shape.
     pub fn tensor_f32(&self, name: &str) -> Result<Tensor> {
         let t = self.info(name)?;
         let raw = self.raw(t)?;
-        let data: Vec<f32> = match t.ty {
-            GgmlType::F32 => raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
-            GgmlType::F16 => raw.chunks_exact(2).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
-            GgmlType::BF16 => raw.chunks_exact(2).map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16)).collect(),
-            ty => {
-                let inp = t.dims[0] as usize;
-                let rows = (t.numel() / t.dims[0]) as usize;
-                return Ok(Tensor::new(t.shape(), unpack(ty, &raw, inp, rows, name)?.dequant().data));
-            }
-        };
-        Ok(Tensor::new(t.shape(), data))
+        let inp = t.dims[0] as usize;
+        let rows = (t.numel() / t.dims[0]) as usize;
+        Ok(Tensor::new(t.shape(), self.decode_floats(t, &raw, inp, rows)?))
     }
 
     fn raw_range(&self, t: &GgufTensorInfo, start: u64, len: u64) -> Result<Vec<u8>> {
         if start.checked_add(len).is_none_or(|e| e > t.bytes) {
             return Err(LowerError::weights(format!("GGUF `{}`: a slice past the tensor", t.name)));
         }
-        let mut f = std::fs::File::open(&self.path).map_err(|e| LowerError::Io(e.to_string()))?;
-        f.seek(SeekFrom::Start(t.offset + start)).map_err(|e| LowerError::Io(e.to_string()))?;
         let mut b = vec![0u8; len as usize];
-        f.read_exact(&mut b).map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
+        read_exact_at(self.data_file()?, &mut b, t.offset + start).map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
+        Ok(b)
+    }
+
+    /// Bytes `range` of tensor `name`'s stored data, by `pread`.
+    pub fn read_range(&self, name: &str, range: Range<u64>) -> Result<Vec<u8>> {
+        let t = self.info(name)?;
+        let len = self.stored_bytes(name).unwrap_or(t.bytes);
+        if range.start > range.end || range.end > len {
+            return Err(LowerError::weights(format!("GGUF `{name}`: bytes {range:?} of a tensor of {len}")));
+        }
+        let mut b = vec![0u8; (range.end - range.start) as usize];
+        read_exact_at(self.data_file()?, &mut b, t.offset + range.start).map_err(|e| LowerError::weights(format!("GGUF `{name}`: {e}")))?;
         Ok(b)
     }
 
@@ -418,7 +493,7 @@ impl GgufFile {
         if t.dims.len() != 3 || e as u64 >= t.dims[2] {
             return Err(LowerError::weights(format!("GGUF `{name}` {:?} has no expert {e}", t.dims)));
         }
-        let (be, bb) = t.ty.block().ok_or_else(|| LowerError::not_lowerable(format!("GGUF `{name}`: {} is not read", t.ty.name())))?;
+        let (be, bb) = t.ty.block().ok_or_else(|| self.refuse_type(t))?;
         let (inp, rows) = (t.dims[0] as usize, t.dims[1] as usize);
         let row_bytes = (inp / be * bb) as u64;
         Ok((t, inp, rows, e as u64 * rows as u64 * row_bytes, rows as u64 * row_bytes))
@@ -430,20 +505,14 @@ impl GgufFile {
         if t.ty.is_float() {
             return Err(LowerError::weights(format!("GGUF `{name}` is {}, not quantised", t.ty.name())));
         }
-        unpack(t.ty, &self.raw_range(t, start, len)?, inp, rows, name)
+        self.decode_integers(t, &self.raw_range(t, start, len)?, inp, rows)
     }
 
     /// Expert `e` of a stacked tensor as f32 `[rows, cols]`.
     pub fn tensor_f32_expert(&self, name: &str, e: usize) -> Result<Tensor> {
         let (t, inp, rows, start, len) = self.expert_rows(name, e)?;
         let raw = self.raw_range(t, start, len)?;
-        let data: Vec<f32> = match t.ty {
-            GgmlType::F32 => raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
-            GgmlType::F16 => raw.chunks_exact(2).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
-            GgmlType::BF16 => raw.chunks_exact(2).map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16)).collect(),
-            ty => unpack(ty, &raw, inp, rows, name)?.dequant().data,
-        };
-        Ok(Tensor::new(vec![rows, inp], data))
+        Ok(Tensor::new(vec![rows, inp], self.decode_floats(t, &raw, inp, rows)?))
     }
 
     /// Tensor count by type (for reports).
@@ -456,127 +525,199 @@ impl GgufFile {
     }
 }
 
-fn f16_at(b: &[u8], i: usize) -> f64 {
-    f16_to_f32(u16::from_le_bytes([b[i], b[i + 1]])) as f64
-}
 
-/// `get_scale_min_k4`: the 6-bit scale and minimum of sub-block `j` of a K-quant block.
-fn scale_min_k4(j: usize, q: &[u8]) -> (u8, u8) {
-    if j < 4 {
-        (q[j] & 63, q[j + 4] & 63)
-    } else {
-        ((q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4), (q[j + 4] >> 4) | ((q[j] >> 6) << 4))
-    }
-}
+/// **The hand-written decoders this crate shipped before quant formats became data** — kept, for
+/// tests only, as an independent oracle: every built-in descriptor of these types must decode to
+/// exactly the stored integers these functions produce (`tests::descriptors_equal_the_hand_written_decoders`).
+#[cfg(test)]
+pub(crate) mod legacy {
+    use super::*;
 
-/// Unpack `out` rows of `inp` values of a block-quantised type into its stored integers.
-fn unpack(ty: GgmlType, raw: &[u8], inp: usize, out: usize, name: &str) -> Result<QWeight> {
-    let (be, bb) = ty.block().ok_or_else(|| LowerError::not_lowerable(format!("GGUF `{name}`: {} is not read", ty.name())))?;
-    if ty.is_float() || inp % be != 0 || raw.len() != out * (inp / be) * bb {
-        return Err(LowerError::weights(format!("GGUF `{name}`: {} bytes for {out} rows of {inp} {}", raw.len(), ty.name())));
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[allow(non_camel_case_types)]
+    pub enum Legacy {
+        Q4_0,
+        Q4_1,
+        Q5_0,
+        Q5_1,
+        Q8_0,
+        Q4_K,
+        Q5_K,
+        Q6_K,
     }
-    let group = ty.group();
-    let (nb, gpb, ng) = (inp / be, be / group, inp / group);
-    let mut q = vec![0i16; out * inp];
-    let mut scale = vec![0f64; out * ng];
-    let mut zero = vec![0i16; out * ng];
-    let mut min = if ty.has_min() { Some(vec![0f64; out * ng]) } else { None };
-    for o in 0..out {
-        for b in 0..nb {
-            let blk = &raw[(o * nb + b) * bb..(o * nb + b + 1) * bb];
-            let qo = o * inp + b * be;
-            let go = o * ng + b * gpb;
-            let qs = &mut q[qo..qo + be];
-            match ty {
-                GgmlType::Q8_0 => {
-                    scale[go] = f16_at(blk, 0);
-                    for j in 0..32 {
-                        qs[j] = blk[2 + j] as i8 as i16;
+
+    impl Legacy {
+        pub fn id(self) -> u32 {
+            match self {
+                Legacy::Q4_0 => 2,
+                Legacy::Q4_1 => 3,
+                Legacy::Q5_0 => 6,
+                Legacy::Q5_1 => 7,
+                Legacy::Q8_0 => 8,
+                Legacy::Q4_K => 12,
+                Legacy::Q5_K => 13,
+                Legacy::Q6_K => 14,
+            }
+        }
+        pub fn block(self) -> Option<(usize, usize)> {
+            Some(match self {
+                Legacy::Q4_0 => (32, 18),
+                Legacy::Q4_1 => (32, 20),
+                Legacy::Q5_0 => (32, 22),
+                Legacy::Q5_1 => (32, 24),
+                Legacy::Q8_0 => (32, 34),
+                Legacy::Q4_K => (256, 144),
+                Legacy::Q5_K => (256, 176),
+                Legacy::Q6_K => (256, 210),
+            })
+        }
+        pub fn is_float(self) -> bool {
+            false
+        }
+        pub fn group(self) -> usize {
+            match self {
+                Legacy::Q6_K => 16,
+                _ => 32,
+            }
+        }
+        pub fn has_min(self) -> bool {
+            matches!(self, Legacy::Q4_1 | Legacy::Q5_1 | Legacy::Q4_K | Legacy::Q5_K)
+        }
+        pub fn bits(self) -> u8 {
+            match self {
+                Legacy::Q4_0 | Legacy::Q4_1 | Legacy::Q4_K => 4,
+                Legacy::Q5_0 | Legacy::Q5_1 | Legacy::Q5_K => 5,
+                Legacy::Q6_K => 6,
+                Legacy::Q8_0 => 8,
+            }
+        }
+        pub fn name(self) -> String {
+            format!("{self:?}")
+        }
+    }
+
+    fn f16_at(b: &[u8], i: usize) -> f64 {
+        f16_to_f32(u16::from_le_bytes([b[i], b[i + 1]])) as f64
+    }
+
+    /// `get_scale_min_k4`: the 6-bit scale and minimum of sub-block `j` of a K-quant block.
+    pub(super) fn scale_min_k4(j: usize, q: &[u8]) -> (u8, u8) {
+        if j < 4 {
+            (q[j] & 63, q[j + 4] & 63)
+        } else {
+            ((q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4), (q[j + 4] >> 4) | ((q[j] >> 6) << 4))
+        }
+    }
+
+    /// Unpack `out` rows of `inp` values of a block-quantised type into its stored integers.
+    pub(super) fn unpack(ty: Legacy, raw: &[u8], inp: usize, out: usize, name: &str) -> Result<QWeight> {
+        let (be, bb) = ty.block().ok_or_else(|| LowerError::not_lowerable(format!("GGUF `{name}`: {} is not read", ty.name())))?;
+        if ty.is_float() || !inp.is_multiple_of(be) || raw.len() != out * (inp / be) * bb {
+            return Err(LowerError::weights(format!("GGUF `{name}`: {} bytes for {out} rows of {inp} {}", raw.len(), ty.name())));
+        }
+        let group = ty.group();
+        let (nb, gpb, ng) = (inp / be, be / group, inp / group);
+        let mut q = vec![0i16; out * inp];
+        let mut scale = vec![0f64; out * ng];
+        let mut zero = vec![0i16; out * ng];
+        let mut min = if ty.has_min() { Some(vec![0f64; out * ng]) } else { None };
+        for o in 0..out {
+            for b in 0..nb {
+                let blk = &raw[(o * nb + b) * bb..(o * nb + b + 1) * bb];
+                let qo = o * inp + b * be;
+                let go = o * ng + b * gpb;
+                let qs = &mut q[qo..qo + be];
+                match ty {
+                    Legacy::Q8_0 => {
+                        scale[go] = f16_at(blk, 0);
+                        for j in 0..32 {
+                            qs[j] = blk[2 + j] as i8 as i16;
+                        }
                     }
-                }
-                GgmlType::Q4_0 | GgmlType::Q4_1 => {
-                    let at = if ty == GgmlType::Q4_1 { 4 } else { 2 };
-                    scale[go] = f16_at(blk, 0);
-                    if let Some(m) = min.as_mut() {
-                        m[go] = -f16_at(blk, 2);
-                    } else {
-                        zero[go] = 8;
+                    Legacy::Q4_0 | Legacy::Q4_1 => {
+                        let at = if ty == Legacy::Q4_1 { 4 } else { 2 };
+                        scale[go] = f16_at(blk, 0);
+                        if let Some(m) = min.as_mut() {
+                            m[go] = -f16_at(blk, 2);
+                        } else {
+                            zero[go] = 8;
+                        }
+                        for j in 0..16 {
+                            qs[j] = (blk[at + j] & 0xF) as i16;
+                            qs[j + 16] = (blk[at + j] >> 4) as i16;
+                        }
                     }
-                    for j in 0..16 {
-                        qs[j] = (blk[at + j] & 0xF) as i16;
-                        qs[j + 16] = (blk[at + j] >> 4) as i16;
+                    Legacy::Q5_0 | Legacy::Q5_1 => {
+                        let at = if ty == Legacy::Q5_1 { 4 } else { 2 };
+                        scale[go] = f16_at(blk, 0);
+                        if let Some(m) = min.as_mut() {
+                            m[go] = -f16_at(blk, 2);
+                        } else {
+                            zero[go] = 16;
+                        }
+                        let qh = u32::from_le_bytes([blk[at], blk[at + 1], blk[at + 2], blk[at + 3]]);
+                        for j in 0..16 {
+                            qs[j] = ((blk[at + 4 + j] & 0xF) as u32 | (((qh >> j) & 1) << 4)) as i16;
+                            qs[j + 16] = ((blk[at + 4 + j] >> 4) as u32 | (((qh >> (j + 16)) & 1) << 4)) as i16;
+                        }
                     }
-                }
-                GgmlType::Q5_0 | GgmlType::Q5_1 => {
-                    let at = if ty == GgmlType::Q5_1 { 4 } else { 2 };
-                    scale[go] = f16_at(blk, 0);
-                    if let Some(m) = min.as_mut() {
-                        m[go] = -f16_at(blk, 2);
-                    } else {
-                        zero[go] = 16;
+                    Legacy::Q4_K | Legacy::Q5_K => {
+                        let (d, dmin) = (f16_at(blk, 0), f16_at(blk, 2));
+                        let sc = &blk[4..16];
+                        let (qh, ql): (Option<&[u8]>, &[u8]) =
+                            if ty == Legacy::Q5_K { (Some(&blk[16..48]), &blk[48..176]) } else { (None, &blk[16..144]) };
+                        let m = min.as_mut().expect("K-quants carry minimums");
+                        for c in 0..4 {
+                            for h in 0..2 {
+                                let s = 2 * c + h;
+                                let (scv, mv) = scale_min_k4(s, sc);
+                                scale[go + s] = d * scv as f64;
+                                m[go + s] = dmin * mv as f64;
+                                for l in 0..32 {
+                                    let nib = if h == 0 { ql[32 * c + l] & 0xF } else { ql[32 * c + l] >> 4 };
+                                    let hi = qh.map_or(0, |qh| ((qh[l] >> s) & 1) << 4);
+                                    qs[64 * c + 32 * h + l] = (nib | hi) as i16;
+                                }
+                            }
+                        }
                     }
-                    let qh = u32::from_le_bytes([blk[at], blk[at + 1], blk[at + 2], blk[at + 3]]);
-                    for j in 0..16 {
-                        qs[j] = ((blk[at + 4 + j] & 0xF) as u32 | (((qh >> j) & 1) << 4)) as i16;
-                        qs[j + 16] = ((blk[at + 4 + j] >> 4) as u32 | (((qh >> (j + 16)) & 1) << 4)) as i16;
-                    }
-                }
-                GgmlType::Q4_K | GgmlType::Q5_K => {
-                    let (d, dmin) = (f16_at(blk, 0), f16_at(blk, 2));
-                    let sc = &blk[4..16];
-                    let (qh, ql): (Option<&[u8]>, &[u8]) =
-                        if ty == GgmlType::Q5_K { (Some(&blk[16..48]), &blk[48..176]) } else { (None, &blk[16..144]) };
-                    let m = min.as_mut().expect("K-quants carry minimums");
-                    for c in 0..4 {
-                        for h in 0..2 {
-                            let s = 2 * c + h;
-                            let (scv, mv) = scale_min_k4(s, sc);
-                            scale[go + s] = d * scv as f64;
-                            m[go + s] = dmin * mv as f64;
+                    Legacy::Q6_K => {
+                        let (ql, qh, sc) = (&blk[0..128], &blk[128..192], &blk[192..208]);
+                        let d = f16_at(blk, 208);
+                        for k in 0..16 {
+                            scale[go + k] = d * (sc[k] as i8) as f64;
+                            zero[go + k] = 32;
+                        }
+                        for n in 0..2 {
+                            let (l0, h0) = (64 * n, 32 * n);
                             for l in 0..32 {
-                                let nib = if h == 0 { ql[32 * c + l] & 0xF } else { ql[32 * c + l] >> 4 };
-                                let hi = qh.map_or(0, |qh| ((qh[l] >> s) & 1) << 4);
-                                qs[64 * c + 32 * h + l] = (nib | hi) as i16;
+                                let h = qh[h0 + l];
+                                qs[128 * n + l] = ((ql[l0 + l] & 0xF) | ((h & 3) << 4)) as i16;
+                                qs[128 * n + l + 32] = ((ql[l0 + l + 32] & 0xF) | (((h >> 2) & 3) << 4)) as i16;
+                                qs[128 * n + l + 64] = ((ql[l0 + l] >> 4) | (((h >> 4) & 3) << 4)) as i16;
+                                qs[128 * n + l + 96] = ((ql[l0 + l + 32] >> 4) | (((h >> 6) & 3) << 4)) as i16;
                             }
                         }
                     }
                 }
-                GgmlType::Q6_K => {
-                    let (ql, qh, sc) = (&blk[0..128], &blk[128..192], &blk[192..208]);
-                    let d = f16_at(blk, 208);
-                    for k in 0..16 {
-                        scale[go + k] = d * (sc[k] as i8) as f64;
-                        zero[go + k] = 32;
-                    }
-                    for n in 0..2 {
-                        let (l0, h0) = (64 * n, 32 * n);
-                        for l in 0..32 {
-                            let h = qh[h0 + l];
-                            qs[128 * n + l] = ((ql[l0 + l] & 0xF) | ((h & 3) << 4)) as i16;
-                            qs[128 * n + l + 32] = ((ql[l0 + l + 32] & 0xF) | (((h >> 2) & 3) << 4)) as i16;
-                            qs[128 * n + l + 64] = ((ql[l0 + l] >> 4) | (((h >> 4) & 3) << 4)) as i16;
-                            qs[128 * n + l + 96] = ((ql[l0 + l + 32] >> 4) | (((h >> 6) & 3) << 4)) as i16;
-                        }
-                    }
-                }
-                _ => unreachable!("float types are refused above"),
             }
         }
+        let gidx = (0..inp).map(|i| (i / group) as u32).collect();
+        Ok(QWeight {
+            out,
+            inp,
+            group,
+            q,
+            scale,
+            zero,
+            min,
+            gidx,
+            bits: ty.bits(),
+            signed: ty == Legacy::Q8_0,
+            label: format!("gguf {}", ty.name()),
+        })
     }
-    let gidx = (0..inp).map(|i| (i / group) as u32).collect();
-    Ok(QWeight {
-        out,
-        inp,
-        group,
-        q,
-        scale,
-        zero,
-        min,
-        gidx,
-        bits: ty.bits(),
-        signed: ty == GgmlType::Q8_0,
-        label: format!("gguf {}", ty.name()),
-    })
+
 }
 
 // ───────────────────────────── the Hugging Face view ─────────────────────────────
@@ -703,6 +844,11 @@ fn llama3_factors(dim: usize, theta: f64, (factor, lo, hi, orig): (f64, f64, f64
 impl GgufModel {
     pub fn open(path: &Path) -> Result<Self> {
         Self::from_file(GgufFile::open(path)?)
+    }
+
+    /// [`open`](Self::open) with the quant formats of `reg` (built-ins plus supplied descriptors).
+    pub fn open_with(path: &Path, reg: &QuantRegistry) -> Result<Self> {
+        Self::from_file(GgufFile::open_with(path, reg)?)
     }
 
     pub fn from_file(file: GgufFile) -> Result<Self> {
@@ -1152,7 +1298,7 @@ impl GgufModel {
                 None => module.to_string(),
             };
             let e = per.entry(template).or_insert((Vec::new(), false));
-            e.0.push(t.ty);
+            e.0.push(t.ty.clone());
             e.1 |= s.cols.is_some();
         }
         let mut per_module = BTreeMap::new();
@@ -1164,14 +1310,15 @@ impl GgufModel {
             if floats > 0 {
                 return Err(LowerError::not_lowerable(format!("GGUF: `{m}` is float in some layers and quantised in others")));
             }
-            if let Some(t) = types.iter().find(|t| t.block().is_none()) {
-                return Err(LowerError::not_lowerable(format!(
-                    "GGUF: `{m}` is {} (Q8_0, Q4_0/1, Q5_0/1, Q4_K, Q5_K, Q6_K are read)",
-                    t.name()
-                )));
+            if types.iter().any(|t| t.block().is_none()) {
+                // Every tensor of the file with a type no descriptor describes, not only this module's:
+                // the one message says everything that must be supplied.
+                return Err(LowerError::not_lowerable(
+                    self.file.undescribed_refusal(QuantRegistry::builtin()).unwrap_or_else(|| format!("GGUF: `{m}` has a type no descriptor describes")),
+                ));
             }
             let group = types.iter().map(|t| t.group()).min().unwrap_or(32);
-            let offset_term = types.iter().any(|t| t.has_min());
+            let offset_term = types.iter().any(|t| t.offset_term());
             per_module.insert(m, QLayout { group, order: cols, offset_term });
         }
         Ok(QuantConfig {
@@ -1216,6 +1363,8 @@ impl GgufModel {
                             w(n);
                         }
                     }
+                    // No GGUF architecture stores hyper-connections.
+                    Residual::HyperConnection { .. } => {}
                 }
                 if let crate::spec::Mixer::Attention(a) = &mut ls.mixer
                     && let Some(qk) = a.qk_norm.as_mut()
@@ -1305,6 +1454,33 @@ impl TensorSource for GgufModel {
         }
         Ok(q)
     }
+    /// The file's header entry for the tensor (its stored type and bytes; one expert's share of a
+    /// stacked tensor), under the Hugging Face shape.
+    fn metadata(&self, name: &str) -> Option<TensorMeta> {
+        let s = self.map.get(name)?;
+        let t = self.file.tensors.get(&s.gguf)?;
+        let shape = self.shape(name)?;
+        let total = self.file.stored_bytes(&s.gguf).unwrap_or(0);
+        let bytes = if s.expert.is_some() { total / t.dims.last().copied().unwrap_or(1).max(1) } else { total };
+        Some(TensorMeta { dtype: t.ty.name(), shape, bytes })
+    }
+    /// Bytes of the underlying GGUF tensor as the file stores them (for a tensor whose rows the view
+    /// permutes — llama's q/k, Qwen3.5's tiled heads — that is the file's row order, not the
+    /// Hugging Face one).
+    fn read_slice(&self, name: &str, range: Range<u64>) -> Result<Vec<u8>> {
+        let s = self.map.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
+        match s.expert {
+            None => self.file.read_range(&s.gguf, range),
+            Some(e) => {
+                let t = &self.file.tensors[&s.gguf];
+                let per = t.bytes / t.dims.last().copied().unwrap_or(1).max(1);
+                if range.end > per {
+                    return Err(LowerError::weights(format!("GGUF `{name}`: bytes {range:?} of an expert of {per}")));
+                }
+                self.file.read_range(&s.gguf, e as u64 * per + range.start..e as u64 * per + range.end)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1322,8 +1498,182 @@ mod tests {
         // Sub-blocks 0..3 read the low 6 bits of bytes 0..3 and 4..7; 4..7 combine nibbles of
         // bytes 8..11 with the top 2 bits of 0..3 / 4..7.
         let q = [0b1100_0001u8, 2, 3, 4, 0b0100_0101, 6, 7, 8, 0x9A, 0xBC, 0xDE, 0xF0];
-        assert_eq!(scale_min_k4(0, &q), (1, 5));
-        assert_eq!(scale_min_k4(4, &q), ((0x9A & 0xF) | (3 << 4), (0x9A >> 4) | (1 << 4)));
+        assert_eq!(legacy::scale_min_k4(0, &q), (1, 5));
+        assert_eq!(legacy::scale_min_k4(4, &q), ((0x9A & 0xF) | (3 << 4), (0x9A >> 4) | (1 << 4)));
+    }
+
+
+    // ───────────── the quant registry against the hand-written decoders and a custom type ─────────────
+
+    /// Random blocks of a legacy type with valid binary16 scales (finite, modest).
+    fn random_blocks(ty: legacy::Legacy, blocks: usize, seed: u64) -> Vec<u8> {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
+        let (_, bb) = ty.block().unwrap();
+        let mut raw: Vec<u8> = (0..blocks * bb).map(|_| rng.gen_range(0..=255u8)).collect();
+        // The f16 fields: d (and m / dmin) — set their exponents to something finite.
+        let at: &[usize] = match ty {
+            legacy::Legacy::Q4_0 | legacy::Legacy::Q5_0 | legacy::Legacy::Q8_0 => &[0],
+            legacy::Legacy::Q4_1 | legacy::Legacy::Q5_1 | legacy::Legacy::Q4_K | legacy::Legacy::Q5_K => &[0, 2],
+            legacy::Legacy::Q6_K => &[208],
+        };
+        for b in 0..blocks {
+            for &a in at {
+                let h = half_bits(rng.gen_range(-2.0f32..2.0));
+                raw[b * bb + a..b * bb + a + 2].copy_from_slice(&h.to_le_bytes());
+            }
+        }
+        raw
+    }
+
+    /// A binary16 pattern for `v` (round to nearest even is not needed: any finite pattern will do).
+    fn half_bits(v: f32) -> u16 {
+        let b = v.to_bits();
+        let sign = ((b >> 16) & 0x8000) as u16;
+        let exp = ((b >> 23) & 0xff) as i32 - 127 + 15;
+        if exp <= 0 {
+            return sign;
+        }
+        sign | ((exp.min(30) as u16) << 10) | ((b >> 13) & 0x3ff) as u16
+    }
+
+    #[test]
+    fn descriptors_equal_the_hand_written_decoders() {
+        let reg = QuantRegistry::builtin();
+        for ty in [
+            legacy::Legacy::Q4_0,
+            legacy::Legacy::Q4_1,
+            legacy::Legacy::Q5_0,
+            legacy::Legacy::Q5_1,
+            legacy::Legacy::Q8_0,
+            legacy::Legacy::Q4_K,
+            legacy::Legacy::Q5_K,
+            legacy::Legacy::Q6_K,
+        ] {
+            let (be, _) = ty.block().unwrap();
+            let (rows, inp) = (5usize, be * 3);
+            let raw = random_blocks(ty, rows * 3, 0xA11CE + ty.id() as u64);
+            let old = legacy::unpack(ty, &raw, inp, rows, "t").unwrap();
+            let fmt = reg.ggml(ty.id()).expect("a built-in descriptor");
+            let new = fmt.as_blocks().unwrap().decode_integers(&raw, rows, inp).unwrap();
+            assert_eq!((new.out, new.inp, new.group, new.bits, new.signed), (old.out, old.inp, old.group, old.bits, old.signed), "{ty:?}");
+            assert_eq!(new.q, old.q, "{ty:?}: codes");
+            assert_eq!(new.zero, old.zero, "{ty:?}: zero points");
+            assert_eq!(new.gidx, old.gidx, "{ty:?}: groups");
+            assert_eq!(new.scale.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), old.scale.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), "{ty:?}: scales");
+            assert_eq!(
+                new.min.as_ref().map(|m| m.iter().map(|x| x.to_bits()).collect::<Vec<_>>()),
+                old.min.as_ref().map(|m| m.iter().map(|x| x.to_bits()).collect::<Vec<_>>()),
+                "{ty:?}: offsets"
+            );
+            assert_eq!(fmt.as_blocks().unwrap().offset_term(), ty.has_min(), "{ty:?}: the layout's offset term");
+        }
+    }
+
+    // ───────────── a GGUF written here, with a type no one has described ─────────────
+
+    pub(crate) enum Kv {
+        Str(String),
+        U32(u32),
+    }
+
+    /// A GGUF v3 file: metadata, tensor table, aligned data.
+    pub(crate) fn write_gguf(meta: &[(&str, Kv)], tensors: &[(&str, Vec<u64>, u32, Vec<u8>)]) -> Vec<u8> {
+        fn st(out: &mut Vec<u8>, s: &str) {
+            out.extend((s.len() as u64).to_le_bytes());
+            out.extend(s.as_bytes());
+        }
+        let mut out = b"GGUF".to_vec();
+        out.extend(3u32.to_le_bytes());
+        out.extend((tensors.len() as u64).to_le_bytes());
+        out.extend((meta.len() as u64).to_le_bytes());
+        for (k, v) in meta {
+            st(&mut out, k);
+            match v {
+                Kv::Str(s) => {
+                    out.extend(8u32.to_le_bytes());
+                    st(&mut out, s);
+                }
+                Kv::U32(n) => {
+                    out.extend(4u32.to_le_bytes());
+                    out.extend(n.to_le_bytes());
+                }
+            }
+        }
+        let mut off = 0u64;
+        for (name, dims, ty, data) in tensors {
+            st(&mut out, name);
+            out.extend((dims.len() as u32).to_le_bytes());
+            for d in dims {
+                out.extend(d.to_le_bytes());
+            }
+            out.extend(ty.to_le_bytes());
+            out.extend(off.to_le_bytes());
+            off += (data.len() as u64).div_ceil(32) * 32;
+        }
+        while !out.len().is_multiple_of(32) {
+            out.push(0);
+        }
+        for (_, _, _, data) in tensors {
+            out.extend(data);
+            while !out.len().is_multiple_of(32) {
+                out.push(0);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn an_undescribed_type_is_a_named_refusal_until_its_descriptor_is_supplied() {
+        use crate::quantfmt::QuantFormat;
+        // Two tensors of the custom type 200 (16 weights in 6 bytes: a half scale and four code bytes), one F32.
+        let block = [0x00u8, 0x38, 0xE4, 0xE4, 0xE4, 0xE4]; // d = 0.5, codes 0,1,2,3 …
+        let data: Vec<u8> = block.iter().cycle().take(6 * 4).copied().collect(); // [16, 4]: 4 rows of one block
+        let dir = std::env::temp_dir().join(format!("tir-gguf-custom-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("custom.gguf");
+        let bytes = write_gguf(
+            &[("general.architecture", Kv::Str("llama".into())), ("general.file_type", Kv::U32(901)), ("general.name", Kv::Str("Mitsuba-test".into()))],
+            &[
+                ("blk.0.attn_q.weight", vec![16, 4], 200, data.clone()),
+                ("blk.0.ffn_up.weight", vec![16, 4], 200, data),
+                ("output_norm.weight", vec![4], 0, vec![0u8; 16]),
+            ],
+        );
+        std::fs::write(&path, &bytes).unwrap();
+        // The header parses; the file says what it needs.
+        let g = GgufFile::open(&path).unwrap();
+        let data_start = g.data_start as usize;
+        let need = g.needs_descriptors();
+        assert_eq!(need.len(), 1);
+        assert_eq!((need[0].id, need[0].tensors.len()), (Some(200), 2));
+        assert!(need[0].name.as_deref().is_some_and(|n| n.contains("general.file_type=901")), "{:?}", need[0].name);
+        // An unknown type has no size of its own, but the layout bounds it.
+        assert_eq!(g.tensors["blk.0.attn_q.weight"].bytes, 0);
+        assert!(g.stored_bytes("blk.0.attn_q.weight").unwrap() >= 24);
+        // Reading it is a refusal that names the type and what to do.
+        let e = g.qweight("blk.0.attn_q.weight").expect_err("undescribed").to_string();
+        assert!(e.contains("200") && e.contains("descriptor") && e.contains("--quant-format") && e.contains("Q4_K"), "{e}");
+        let msg = g.undescribed_refusal(QuantRegistry::builtin()).unwrap();
+        assert!(msg.contains("2 tensor(s)"), "{msg}");
+        // Supply the descriptor — a file — and the same GGUF decodes.
+        let reg = QuantRegistry::builtin().with(vec![QuantFormat::from_json(crate::quantfmt::tests::CUSTOM).unwrap()]).unwrap();
+        let g = GgufFile::open_with(&path, &reg).unwrap();
+        assert!(g.needs_descriptors().is_empty() && g.undescribed_refusal(&reg).is_none());
+        assert_eq!(g.tensors["blk.0.attn_q.weight"].bytes, 24);
+        let q = g.qweight("blk.0.attn_q.weight").unwrap();
+        assert_eq!((q.out, q.inp, q.group), (4, 16, 16));
+        assert_eq!(&q.q[..4], &[0, 1, 2, 3]);
+        let t = g.tensor_f32("blk.0.attn_q.weight").unwrap();
+        assert_eq!((t.shape.clone(), &t.data[..4]), (vec![4, 16], &[-0.5f32, 0.0, 0.5, 1.0][..]));
+        // A header alone (no data) tells the same verdict, with no file length to bound anything by.
+        let head = GgufFile::parse(&bytes[..data_start], None, std::path::Path::new("header-only"), QuantRegistry::builtin()).unwrap();
+        assert_eq!(head.needs_descriptors(), need);
+        assert!(head.stored_bytes("blk.0.attn_q.weight").is_some(), "bounded by the next tensor's offset");
+        assert!(head.read_range("blk.0.attn_q.weight", 0..4).is_err(), "a header holds no data");
+        // A truncated header is an error, not a guess.
+        assert!(GgufFile::parse(&bytes[..data_start - 8], None, std::path::Path::new("cut"), QuantRegistry::builtin()).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

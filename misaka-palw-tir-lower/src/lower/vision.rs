@@ -627,7 +627,7 @@ pub fn rope_2d(s: &VisionSpec) -> Option<(Vec<f64>, Vec<f64>)> {
     let theta = s.rope_theta?;
     let dh = s.head_dim();
     let spatial = dh / 2;
-    let inv: Vec<f64> = (0..spatial).step_by(2).map(|i| 1.0 / theta.powf(i as f64 / spatial as f64)).collect();
+    let inv: Vec<f64> = (0..spatial).step_by(2).map(|i| 1.0 / crate::detmath::powf(theta, i as f64 / spatial as f64)).collect();
     let mut coords = patch_coords(s);
     if let Some((perm, _, _)) = window_tables(s) {
         coords = perm.iter().map(|p| coords[*p as usize]).collect();
@@ -638,8 +638,8 @@ pub fn rope_2d(s: &VisionSpec) -> Option<(Vec<f64>, Vec<f64>)> {
         ang.extend(inv.iter().map(|f| w as f64 * (*f as f32) as f64));
         let half = ang.clone();
         ang.extend(half);
-        c.extend(ang.iter().map(|a| ((*a as f32).cos()) as f64));
-        sn.extend(ang.iter().map(|a| ((*a as f32).sin()) as f64));
+        c.extend(ang.iter().map(|a| crate::detmath::cos_f32(*a as f32) as f64));
+        sn.extend(ang.iter().map(|a| crate::detmath::sin_f32(*a as f32) as f64));
     }
     Some((c, sn))
 }
@@ -945,6 +945,7 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
     let mut cx = Cx {
         hl,
         fills: Vec::new(),
+        row_params: BTreeMap::new(),
         resid_sites: BTreeMap::new(),
         tstate: BTreeMap::new(),
         history_bound: hb,
@@ -983,7 +984,7 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
     tir::validate::validate(&program).map_err(|e| LowerError::eval(format!("internal: the tower's program is not in normal form: {e}")))?;
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no output scale"))?;
-    Ok(Lowered { program, fills: cx.fills, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
+    Ok(Lowered { program, fills: cx.fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
 }
 
 fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {

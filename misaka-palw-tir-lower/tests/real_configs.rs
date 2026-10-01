@@ -269,7 +269,12 @@ fn deepseek_mla_and_routing() {
     assert!((m.scale - ms * ms / 192f64.sqrt()).abs() < 1e-12);
     assert_eq!(moe_of(&s, 1).router.groups, None, "greedy");
     assert_eq!(kinds(&p), 2);
-    refused("deepseek-v3-fp8", "quant_method=fp8");
+    // FP8 with block scales is a built-in descriptor (`fp8_block`): the checkpoint parses, and every
+    // projection of the MLA and MoE layers reads as the float weight its stored bytes define.
+    let (s, _) = ok("deepseek-v3-fp8");
+    let q = s.hf.quant.as_ref().expect("a quantised checkpoint");
+    assert!(!q.fmt.is_integers() && q.fmt.label().starts_with("FP8_BLOCK bi=128 bo=128"), "{}", q.fmt.label());
+    assert!(!q.lm_head);
     let (s, _) = ok("deepseek-v3-bf16");
     let r = &moe_of(&s, 3).router;
     assert_eq!((r.scoring, r.selection_bias, r.scale), (Scoring::Sigmoid, true, 2.5));
@@ -278,8 +283,15 @@ fn deepseek_mla_and_routing() {
 }
 
 #[test]
-fn gpt_oss_quantised_is_refused_and_bf16_export_lowers() {
-    refused("gpt-oss-20b-mxfp4", "quant_method=mxfp4");
+fn gpt_oss_mxfp4_and_bf16_export_both_lower() {
+    // OCP MXFP4 as Hugging Face stores it is a built-in descriptor (`MXFP4_HF`, a virtual format): the packed experts are
+    // served as the float export's tensors, so the configuration lowers exactly like the bf16 export's.
+    let (q, qp) = ok("gpt-oss-20b-mxfp4");
+    assert!(q.hf.quant.as_ref().is_some_and(|c| c.fmt.is_virtual() && c.fmt.label().starts_with("MXFP4_HF")));
+    let (b, bp) = ok("gpt-oss-20b-bf16");
+    assert_eq!(kinds(&qp), kinds(&bp));
+    assert_eq!(qp.params.len(), bp.params.len(), "the same program as the float export");
+    assert_eq!(q.hf.experts, b.hf.experts);
     let (s, p) = ok("gpt-oss-20b-bf16");
     let a = attn(&s, 0);
     assert!(a.sinks && a.window == Some(128) && attn(&s, 1).window.is_none());
@@ -318,7 +330,7 @@ fn refusals_name_their_reason() {
     refused("rwkv-6-finch-1b6", "remote code");
     refused("rwkv7-fla-1.5b", "flash-linear-attention");
     refused("t5-small", "encoder–decoder");
-    refused("bert-base-uncased", "no lowerer template");
+    refused("bert-base-uncased", "no adapter");
     refused("gemma-3n-e4b", "AltUp");
     // Pre-quantised: GPTQ and AWQ are read from their integers; every other method is refused.
     let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/llama-3.1-8b-gptq.json")).unwrap();

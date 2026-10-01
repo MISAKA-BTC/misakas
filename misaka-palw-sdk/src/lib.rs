@@ -52,10 +52,15 @@ pub mod lineages {
     pub mod qwen36;
     pub mod tir;
 }
+/// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
+pub mod preflight;
+/// RFC-0002 Part II: runtime packs — the manifest that makes an artifact reproducible and its claims checkable.
+pub mod runtime_pack;
 pub mod sdk;
 /// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
 pub mod tir_equiv;
 pub mod tir_manifest;
+pub mod tir_stream;
 /// RFC-0002 Phase F (F6, node half): registering an IR class.
 pub mod tir_certification;
 /// RFC-0004 §6.3 (PALW-MIP-15): a LoRA candidate's container as a composite of its parent's.

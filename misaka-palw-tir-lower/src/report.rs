@@ -226,6 +226,10 @@ fn residual(r: &Residual) -> String {
             ple.as_ref().map(|p| format!(", per-layer input {}", p.dim)).unwrap_or_default(),
             if *layer_scalar { ", × layer scalar" } else { "" }
         ),
+        Residual::HyperConnection { ple } => format!(
+            "hyper-connections{}",
+            ple.as_ref().map(|p| format!(", n-gram per-layer embedding ({}-grams × {} heads)", p.ngram_size, p.heads_per_ngram)).unwrap_or_default()
+        ),
     }
 }
 

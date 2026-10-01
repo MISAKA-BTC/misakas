@@ -33,6 +33,8 @@ mod node;
 /// ADR-0122: `mining`, `doctor`, `work` — the operator surface over the components.
 mod operator;
 /// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
+mod model_preflight;
+mod pack_gate;
 mod palw_activation_pool;
 mod palw_capacity_shadow;
 mod palw_claim;
@@ -589,6 +591,10 @@ enum ModelCmd {
         no_wait: bool,
         #[command(flatten)]
         sponsor: palw_activation_pool::ListingSponsorArgs,
+        /// An IR artifact (PALWTIR1) is registered only with a runtime pack that verifies against it (`--pack`), unless `--skip-pack-verify`.
+        /// A catalog model has no pack: the gate does not apply to it.
+        #[command(flatten)]
+        pack_gate: pack_gate::PackGateFlags,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -598,9 +604,15 @@ enum ModelCmd {
         #[command(flatten)]
         profile: ProfileArgs,
     },
-    /// Would the live chain's processor admit this artifact (same reason codes).
+    /// Can this be registered, and what is missing? A model (a Hugging Face directory, a config.json, a .gguf): judged
+    /// from its HEADERS before any weights are downloaded — convert, register and mine, each ok/blocked/unknown with a
+    /// code, the numbers and what exists instead (RFC-0002 Part II §II.2; needs no node). An artifact: would the live
+    /// chain's processor admit it (same reason codes).
     Preflight {
+        /// A model, or a registration artifact.
         artifact: std::path::PathBuf,
+        #[command(flatten)]
+        model: model_preflight::ModelPreflightArgs,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -1152,6 +1164,9 @@ enum PalwCmd {
         /// The class's model id, when the artifact declares more than one class.
         #[arg(long)]
         model_id: Option<String>,
+        /// A registration needs a runtime pack that verifies against the artifact (`--pack`), unless `--skip-pack-verify`.
+        #[command(flatten)]
+        pack_gate: pack_gate::PackGateFlags,
     },
     /// **Write a signed generative class registration** (RFC-0003: `ClassRegisteredGenV1`) for a PALWTIR2
     /// artifact (`palw-class declare-layout`'s container for a pipeline class), at the connected chain's live
@@ -2657,10 +2672,17 @@ async fn main() -> std::process::ExitCode {
             Ok(p) => palw_model_ops::inspect(&ctx, p, artifact).await,
             Err(e) => Err(e),
         },
-        Command::Model(ModelCmd::Preflight { artifact, profile: args }) => match profile(&args) {
-            Ok(p) => palw_model_ops::preflight(&ctx, p, artifact).await,
-            Err(e) => Err(e),
-        },
+        Command::Model(ModelCmd::Preflight { artifact, model, profile: args }) => {
+            if model_preflight::is_model(&artifact) {
+                // A model is judged from its headers, locally: no node, no profile.
+                model_preflight::model_preflight(&ctx, &artifact, &model)
+            } else {
+                match profile(&args) {
+                    Ok(p) => palw_model_ops::preflight(&ctx, p, artifact).await,
+                    Err(e) => Err(e),
+                }
+            }
+        }
         Command::Model(ModelCmd::Registration { id, profile: args }) => match profile(&args) {
             Ok(p) => palw_model_ops::registration(&ctx, p, id).await,
             Err(e) => Err(e),
@@ -2682,6 +2704,7 @@ async fn main() -> std::process::ExitCode {
             yes,
             no_wait,
             sponsor,
+            pack_gate,
             profile: args,
         }) => match (profile(&args), sponsor.resolve()) {
             (Ok(p), Ok(sponsor)) => {
@@ -2694,6 +2717,7 @@ async fn main() -> std::process::ExitCode {
                     yes,
                     no_wait,
                     sponsor,
+                    pack_gate,
                 };
                 operator::model_add::run(&ctx, p, a).await
             }
@@ -2777,8 +2801,18 @@ async fn main() -> std::process::ExitCode {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await.map(|_| ()),
-        Command::Palw(PalwCmd::TirRegistration { key, artifact, parent, bond, out, model_id }) => {
-            palw_model_ops::tir_registration_object(&ctx, &key.source(), &artifact, parent.as_deref(), &bond, &out, model_id.as_deref()).await
+        Command::Palw(PalwCmd::TirRegistration { key, artifact, parent, bond, out, model_id, pack_gate }) => {
+            palw_model_ops::tir_registration_object(
+                &ctx,
+                &key.source(),
+                &artifact,
+                parent.as_deref(),
+                &bond,
+                &out,
+                model_id.as_deref(),
+                &pack_gate,
+            )
+            .await
         }
         Command::Palw(PalwCmd::GenRegistration { key, artifact, bond, out, model_id }) => {
             palw_gen::gen_registration_object(&ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await

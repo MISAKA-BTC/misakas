@@ -1775,6 +1775,18 @@ from!(item: &kaspa_rpc_core::RpcPalwSeatReadiness, protowire::RpcPalwSeatReadine
         not_ready_reason: item.not_ready_reason.clone(),
     }
 });
+from!(item: &kaspa_rpc_core::RpcPalwClassBlocking, protowire::RpcPalwClassBlocking, {
+    Self {
+        class_id: item.class_id.clone(),
+        stage: item.stage.clone(),
+        code: item.code.clone(),
+        what: item.what.clone(),
+        has_count: item.has_count,
+        have: item.have,
+        need: item.need,
+        next: item.next.clone(),
+    }
+});
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire::GetPalwModelRegistryResponseMessage, {
     Self {
         available: item.available,
@@ -1815,6 +1827,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire:
         panel_inflight_replay: item.panel_inflight_replay.clone(),
         panel_horizon_spans: item.panel_horizon_spans,
         final_work_epochs: item.final_work_epochs,
+        blocking: item.blocking.iter().map(protowire::RpcPalwClassBlocking::from).collect(),
         error: None,
     }
 });
@@ -3939,6 +3952,18 @@ try_from!(item: &protowire::RpcPalwSeatReadiness, kaspa_rpc_core::RpcPalwSeatRea
         not_ready_reason: item.not_ready_reason.clone(),
     }
 });
+from!(item: &protowire::RpcPalwClassBlocking, kaspa_rpc_core::RpcPalwClassBlocking, {
+    Self {
+        class_id: item.class_id.clone(),
+        stage: item.stage.clone(),
+        code: item.code.clone(),
+        what: item.what.clone(),
+        has_count: item.has_count,
+        have: item.have,
+        need: item.need,
+        next: item.next.clone(),
+    }
+});
 try_from!(item: &protowire::GetPalwModelRegistryResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelRegistryResponse>, {
     Self {
         available: item.available,
@@ -3979,6 +4004,7 @@ try_from!(item: &protowire::GetPalwModelRegistryResponseMessage, RpcResult<kaspa
         panel_inflight_replay: item.panel_inflight_replay.clone(),
         panel_horizon_spans: item.panel_horizon_spans,
         final_work_epochs: item.final_work_epochs,
+        blocking: item.blocking.iter().map(kaspa_rpc_core::RpcPalwClassBlocking::from).collect(),
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);

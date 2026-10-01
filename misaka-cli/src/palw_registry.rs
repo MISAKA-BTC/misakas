@@ -8,8 +8,8 @@
 
 use crate::node::Ctx;
 use crate::{CliError, CliResult, OutputFormat, exit};
-use kaspa_rpc_core::GetPalwModelRegistryResponse;
 use kaspa_rpc_core::api::rpc::RpcApi;
+use kaspa_rpc_core::{GetPalwModelRegistryResponse, RpcPalwClassBlocking};
 use serde_json::json;
 
 fn short(id: &str) -> String {
@@ -72,6 +72,26 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
     ));
     for c in r.classes.iter().filter(|c| c.has_row) {
         out.push_str(&format!("    {} — {}\n", short(&c.class_id), c.reason));
+    }
+    // RFC-0002 Part II §II.7.4: what blocks each class, and at which stage (convert / register / mine). A node that serves
+    // no such reading (a version-1 registry) is read the same way, by the same function.
+    let derived;
+    let blocking: &[RpcPalwClassBlocking] = if r.blocking.is_empty() {
+        derived = kaspa_rpc_core::palw_registry_blockings(r);
+        &derived
+    } else {
+        &r.blocking
+    };
+    for b in blocking {
+        out.push_str(&format!(
+            "    {} ▸ {}: {}{} — {}\n        next: {}\n",
+            short(&b.class_id),
+            b.stage,
+            b.code,
+            if b.has_count { format!(" ({}/{})", b.have, b.need) } else { String::new() },
+            b.what,
+            b.next
+        ));
     }
     let voids: u32 = r.classes.iter().map(|c| c.no_capable_panel_voids).sum();
     if voids > 0 {
@@ -194,5 +214,27 @@ mod tests {
                 && text.contains("recovers through probation"),
             "{text}"
         );
+        // The stage and what is missing (RFC-0002 Part II §II.7.4): three seats ready, a panel needs five.
+        assert!(
+            text.contains("▸ mine: PANEL_NOT_DRAWABLE (3/5)") && text.contains("only 3 seats are ready now and a panel needs 5"),
+            "{text}"
+        );
+        // A node that serves its own reading is shown as it says.
+        let mut served = live.clone();
+        served.blocking = vec![RpcPalwClassBlocking {
+            class_id: "ab".repeat(64),
+            stage: "register".to_string(),
+            code: "ADMISSION_JURY".to_string(),
+            what: "waiting for the jury".to_string(),
+            has_count: false,
+            next: "keep a seat ready".to_string(),
+            ..Default::default()
+        }];
+        let text = render(&served);
+        assert!(
+            text.contains("▸ register: ADMISSION_JURY — waiting for the jury") && text.contains("next: keep a seat ready"),
+            "{text}"
+        );
+        assert!(!text.contains("PANEL_NOT_DRAWABLE"), "a served reading replaces the derived one: {text}");
     }
 }

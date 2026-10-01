@@ -14,10 +14,10 @@
 
 use crate::cfg::Cfg;
 use crate::error::{LowerError, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RopeStyle {
     /// `rotate_half`: pairs `(i, i + d/2)` (Llama, NeoX, …).
     Half,
@@ -25,20 +25,20 @@ pub enum RopeStyle {
     Interleaved,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DynamicNtk {
     pub factor: f64,
     pub max_pos: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LongRopeSwitch {
     /// Used once `pos + 1 > original_max`.
     pub inv_freq_long: Vec<f32>,
     pub original_max: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RopeFreqs {
     pub rope_type: String,
     pub theta: f64,
@@ -57,7 +57,7 @@ pub struct RopeFreqs {
 }
 
 /// `mrope_section` and its layout over the `dim / 2` frequencies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MRope {
     pub section: [usize; 3],
     /// Qwen3-VL's and Qwen3.5's layout (`mrope_interleaved`): `h` and `w` take every third
@@ -86,7 +86,7 @@ impl MRope {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RopeSpec {
     /// Dimensions rotated in each head.
     pub rotary_dim: usize,
@@ -101,7 +101,7 @@ pub fn default_inv_freq(base: f64, dim: usize) -> Vec<f32> {
     (0..dim / 2)
         .map(|i| {
             let e = (2 * i) as f32 / dim as f32;
-            let p = base.powf(e as f64) as f32;
+            let p = crate::detmath::powf(base, e as f64) as f32;
             1.0f32 / p
         })
         .collect()
@@ -127,7 +127,7 @@ impl RopeFreqs {
             let seq_len = pos + 1;
             if seq_len > d.max_pos {
                 let dim = self.dim as f64;
-                let base = self.theta * ((d.factor * seq_len as f64 / d.max_pos as f64) - (d.factor - 1.0)).powf(dim / (dim - 2.0));
+                let base = self.theta * crate::detmath::powf((d.factor * seq_len as f64 / d.max_pos as f64) - (d.factor - 1.0), dim / (dim - 2.0));
                 return default_inv_freq(base, self.dim);
             }
         }
@@ -148,8 +148,8 @@ impl RopeFreqs {
         let mut s = Vec::with_capacity(inv.len());
         for f in inv {
             let ang = (pos as f32) * f;
-            c.push((ang as f64).cos() as f32 * af);
-            s.push((ang as f64).sin() as f32 * af);
+            c.push(crate::detmath::cos(ang as f64) as f32 * af);
+            s.push(crate::detmath::sin(ang as f64) as f32 * af);
         }
         (c, s)
     }
@@ -161,6 +161,64 @@ pub struct RopeConfig {
     pub rope_type: String,
     pub theta: f64,
     pub params: Map<String, Value>,
+}
+
+/// **LongRoPE as transformers 5.17 runs Phi-3.5-MoE** (`ROPE_LONGROPE_V1`, short-factors-only mode):
+/// the SHORT factors at every length (its forward rebuilds the frequencies without the sequence
+/// length) and cos/sin times `short_mscale`; `long_mscale` must equal it (the published checkpoint
+/// does), and a factor list of the wrong length, a missing mscale or any other rope key is refused.
+/// `Ok(None)` when the rope type is `default` (the caller reads the ordinary rope); any other type
+/// is not modelled.
+pub fn longrope_short_only_spec(cfg: &Cfg, head_dim: usize, theta_default: Option<f64>) -> Result<Option<RopeSpec>> {
+    let arch = &cfg.arch;
+    let rc = read_rope_config(cfg, theta_default, None)?;
+    match rc.rope_type.as_str() {
+        "default" => return Ok(None),
+        "longrope" | "su" => {}
+        other => return Err(LowerError::not_lowerable(format!("{arch}: rope type `{other}` is not modelled"))),
+    }
+    let list = |k: &str| -> Result<Vec<f64>> {
+        rc.params
+            .get(k)
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<f64>>())
+            .ok_or_else(|| LowerError::bad(format!("{arch}: longrope without `{k}`")))
+    };
+    let num = |k: &str| rc.params.get(k).and_then(Value::as_f64);
+    let short = list("short_factor")?;
+    list("long_factor")?;
+    if short.len() != head_dim / 2 {
+        return Err(LowerError::bad(format!("{arch}: short_factor has {} entries for head dim {head_dim}", short.len())));
+    }
+    let (sm, lm) = match (num("short_mscale"), num("long_mscale")) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return Err(LowerError::not_lowerable(format!("{arch}: longrope without short_mscale and long_mscale"))),
+    };
+    if sm != lm {
+        return Err(LowerError::not_lowerable(format!(
+            "{arch}: short_mscale {sm} ≠ long_mscale {lm} (a cos/sin factor that changes at the original length)"
+        )));
+    }
+    if let Some(k) = rc.params.keys().find(|k| {
+        !["short_factor", "long_factor", "short_mscale", "long_mscale", "original_max_position_embeddings", "factor", "attention_factor"].contains(&k.as_str())
+    }) {
+        return Err(LowerError::not_lowerable(format!("{arch}: rope parameter `{k}` is not modelled")));
+    }
+    Ok(Some(RopeSpec {
+        rotary_dim: head_dim,
+        offset: 0,
+        style: RopeStyle::Half,
+        freqs: RopeFreqs {
+            rope_type: rc.rope_type.clone(),
+            theta: rc.theta,
+            dim: head_dim,
+            inv_freq: longrope_inv_freq(rc.theta, head_dim, &short),
+            attention_factor: sm,
+            dynamic: None,
+            longrope: None,
+            mrope: None,
+        },
+    }))
 }
 
 /// Read `rope_theta` + `rope_scaling` (transformers 4.x) or `rope_parameters` (5.x; flat, or keyed
@@ -233,14 +291,14 @@ pub fn longrope_inv_freq(base: f64, dim: usize, ext: &[f64]) -> Vec<f32> {
     (0..dim / 2)
         .map(|i| {
             let e = (2 * i) as f32 / dim as f32;
-            let p = base.powf(e as f64) as f32;
+            let p = crate::detmath::powf(base, e as f64) as f32;
             1.0f32 / (ext[i] as f32 * p)
         })
         .collect()
 }
 
 fn get_mscale(scale: f64, mscale: f64) -> f64 {
-    if scale <= 1.0 { 1.0 } else { 0.1 * mscale * scale.ln() + 1.0 }
+    if scale <= 1.0 { 1.0 } else { 0.1 * mscale * crate::detmath::ln(scale) + 1.0 }
 }
 
 /// Everything the frequency computation needs besides the rope dict.
@@ -261,6 +319,31 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
     let dim = ctx.dim;
     if dim == 0 || !dim.is_multiple_of(2) {
         return Err(LowerError::bad(format!("{arch}: rotary dim {dim} must be even and positive")));
+    }
+    // `proportional` (Gemma-4's full-attention rope, `ROPE_PROPORTIONAL_V1`): frequencies on the
+    // first `partial_rotary_factor` of the head width, zeros after (those pairs are not rotated), all
+    // divided by `factor`; its `partial_rotary_factor` is a property of the rope, not the caller's.
+    if rc.rope_type == "proportional" {
+        let prop = take_f64(&mut m, "partial_rotary_factor")?.unwrap_or(1.0);
+        let factor = take_f64(&mut m, "factor")?.unwrap_or(1.0);
+        if let Some(k) = m.keys().next() {
+            return Err(LowerError::not_lowerable(format!("{arch}: proportional rope parameter `{k}`")));
+        }
+        // transformers: `rope_angles = int(prop · head_dim // 2)` frequencies over the head width.
+        let angles = (prop * dim as f64 / 2.0).floor() as usize;
+        let mut out = RopeFreqs::plain(rc.theta, dim);
+        out.rope_type = rc.rope_type.clone();
+        out.inv_freq = (0..dim / 2)
+            .map(|i| {
+                if i < angles {
+                    let e = (2 * i) as f32 / dim as f32;
+                    (1.0f32 / crate::detmath::powf(rc.theta, e as f64) as f32) / factor as f32
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        return Ok(out);
     }
     if let Some(p) = take_f64(&mut m, "partial_rotary_factor")?
         && (p - ctx.partial_rotary_factor).abs() > 1e-9
@@ -391,7 +474,7 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
             out.attention_factor = match attention_factor {
                 Some(a) => a,
                 None if factor <= 1.0 => 1.0,
-                None => (1.0 + factor.ln() / (original_max as f64).ln()).sqrt(),
+                None => (1.0 + crate::detmath::ln(factor) / crate::detmath::ln(original_max as f64)).sqrt(),
             };
             out.inv_freq = longrope_inv_freq(base, dim, &short);
             out.longrope = Some(LongRopeSwitch { inv_freq_long: longrope_inv_freq(base, dim, &long), original_max });
@@ -412,7 +495,7 @@ pub fn yarn_inv_freq(
     truncate: bool,
 ) -> Vec<f32> {
     let two_pi = 2.0 * std::f64::consts::PI;
-    let find_dim = |rot: f64| (dim as f64 * (original_max as f64 / (rot * two_pi)).ln()) / (2.0 * base.ln());
+    let find_dim = |rot: f64| (dim as f64 * crate::detmath::ln(original_max as f64 / (rot * two_pi))) / (2.0 * crate::detmath::ln(base));
     let (mut low, mut high) = (find_dim(beta_fast), find_dim(beta_slow));
     if truncate {
         low = low.floor();
@@ -427,7 +510,7 @@ pub fn yarn_inv_freq(
     (0..dim / 2)
         .map(|i| {
             let e = (2 * i) as f32 / dim as f32;
-            let pos_freq = base.powf(e as f64) as f32;
+            let pos_freq = crate::detmath::powf(base, e as f64) as f32;
             let extra = 1.0f32 / pos_freq;
             let inter = 1.0f32 / (factor as f32 * pos_freq);
             let ramp = (((i as f32) - lo as f32) / (hi as f32 - lo as f32)).clamp(0.0, 1.0);
@@ -459,7 +542,7 @@ pub fn llama3_inv_freq(inv: &[f32], factor: f64, low: f64, high: f64, old_ctx: f
 
 /// ALiBi as a per-head slope on the key distance: `score += −slope_h · (i − j)` (BLOOM, Falcon,
 /// MPT). HF adds `slope · j` (or `slope · (j − i)`); a per-row constant does not change a softmax.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AlibiSpec {
     pub slopes: Vec<f64>,
     /// Falcon adds the bias BEFORE multiplying by the softmax scale, so the bias is scaled too.
@@ -471,10 +554,10 @@ pub struct AlibiSpec {
 /// BLOOM / Falcon slopes (`build_alibi_tensor`).
 pub fn alibi_slopes_bloom(n: usize) -> Vec<f64> {
     let closest = 1usize << (usize::BITS - 1 - n.leading_zeros());
-    let base = 2f64.powf(-(2f64.powf(-((closest as f64).log2() - 3.0))));
+    let base = crate::detmath::powf(2.0, -crate::detmath::powf(2.0, -((closest as f64).log2() - 3.0)));
     let mut s: Vec<f64> = (1..=closest).map(|p| (base as f32).powi(p as i32) as f64).collect();
     if closest != n {
-        let extra_base = 2f64.powf(-(2f64.powf(-((2.0 * closest as f64).log2() - 3.0))));
+        let extra_base = crate::detmath::powf(2.0, -crate::detmath::powf(2.0, -((2.0 * closest as f64).log2() - 3.0)));
         let remaining = closest.min(n - closest);
         s.extend((0..remaining).map(|i| (extra_base as f32).powi((1 + 2 * i) as i32) as f64));
     }
@@ -484,7 +567,7 @@ pub fn alibi_slopes_bloom(n: usize) -> Vec<f64> {
 /// MPT slopes (`build_mpt_alibi_tensor`).
 pub fn alibi_slopes_mpt(n: usize, alibi_bias_max: f64) -> Vec<f64> {
     let p2 = n.next_power_of_two();
-    let slopes: Vec<f64> = (1..=p2).map(|i| 1.0 / 2f64.powf(i as f64 * (alibi_bias_max / p2 as f64))).collect();
+    let slopes: Vec<f64> = (1..=p2).map(|i| 1.0 / crate::detmath::powf(2.0, i as f64 * (alibi_bias_max / p2 as f64))).collect();
     if p2 == n {
         return slopes;
     }
@@ -680,4 +763,57 @@ mod tests {
         assert_eq!(bf16_round(1.0 + 3.0 / 256.0), 1.0 + 4.0 / 256.0);
         assert_eq!(bf16_round(0.70710677), 0.70703125);
     }
+}
+
+/// A rope spec from a config's rope fields (`rope_theta` + `rope_scaling`, or `rope_parameters`, flat or
+/// keyed by layer type), and the query temperature a `llama_4_scaling_beta` among them asks for
+/// (Ministral-3: `q ·= 1 + β·ln(1 + ⌊p / original_max_position_embeddings⌋)`). The temperature may
+/// only be carried by an architecture that applies it (`q_scaled`): elsewhere the key is refused,
+/// never dropped. Shared by the Rust parsers and the adapter evaluator (`rope` is a generic feature;
+/// which config keys feed it is the adapter's business).
+#[allow(clippy::too_many_arguments)]
+pub fn rope_spec_from_config(
+    cfg: &Cfg,
+    rotary_dim: usize,
+    style: RopeStyle,
+    theta_default: Option<f64>,
+    layer_type: Option<&str>,
+    partial: f64,
+    max_pos: Option<usize>,
+    top_orig: Option<usize>,
+    q_scaled: bool,
+) -> Result<(RopeSpec, Option<crate::spec::QTemperature>)> {
+    use crate::spec::QTemperature;
+    let mut rc = read_rope_config(cfg, theta_default, layer_type)?;
+    let beta = match rc.params.remove("llama_4_scaling_beta") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_f64().ok_or_else(|| LowerError::bad(format!("{}: llama_4_scaling_beta {v}", cfg.arch)))?),
+    };
+    if beta.is_some() && !q_scaled {
+        return Err(LowerError::not_lowerable(format!(
+            "{}: llama_4_scaling_beta (a query scaling) on an architecture that does not apply it",
+            cfg.arch
+        )));
+    }
+    // transformers 5 also keeps the model's own length among the rope parameters.
+    if let Some(v) = rc.params.remove("max_position_embeddings")
+        && v.as_u64().map(|m| m as usize) != max_pos
+    {
+        return Err(LowerError::bad(format!("{}: rope_parameters.max_position_embeddings {v} ≠ {max_pos:?}", cfg.arch)));
+    }
+    let temp = match beta {
+        Some(b) => {
+            let floor = rc.params.get("original_max_position_embeddings").and_then(Value::as_u64).ok_or_else(|| {
+                LowerError::bad(format!("{}: llama_4_scaling_beta without original_max_position_embeddings", cfg.arch))
+            })?;
+            Some(QTemperature { floor: floor as usize, scale: b, offset: 0 })
+        }
+        None => None,
+    };
+    let freqs = compute_freqs(
+        &cfg.arch,
+        &rc,
+        RopeContext { dim: rotary_dim, max_position_embeddings: max_pos, top_level_original_max: top_orig, partial_rotary_factor: partial },
+    )?;
+    Ok((RopeSpec { rotary_dim, offset: 0, style, freqs }, temp))
 }

@@ -20,7 +20,7 @@ pub fn mul_shift(r: f64) -> (i64, i8) {
         return (0, 0);
     }
     let a = r.abs();
-    let e = a.log2().floor() as i32;
+    let e = crate::detmath::floor_log2(a) as i32;
     let s = (30 - e).clamp(0, 62);
     let m = (a * 2f64.powi(s)).round().min((1u64 << 62) as f64) as i64;
     (if r < 0.0 { -m } else { m }, s as i8)
@@ -43,6 +43,21 @@ pub struct RowCodes {
     pub scales: Vec<f64>,
 }
 
+/// The scale of one row's per-row codes: its absmax over `code_max` (127 for `i8` codes, 32767 for
+/// `i16`); 1 for an all-zero or non-finite row. The one definition [`quantize_rows`],
+/// [`quantize_rows16`] and [`row_scales`] share, so a scale computed without the codes is the scale
+/// the codes were made with.
+pub fn row_scale(row: &[f32], code_max: f64) -> f64 {
+    let amax = row.iter().fold(0f64, |m, v| m.max((*v as f64).abs()));
+    if amax == 0.0 || !amax.is_finite() { 1.0 } else { amax / code_max }
+}
+
+/// The per-row scales of a `[rows, cols]` block, without its codes.
+pub fn row_scales(w: &[f32], rows: usize, cols: usize, code_max: f64) -> Vec<f64> {
+    assert_eq!(w.len(), rows * cols, "row_scales: {} values for [{rows}, {cols}]", w.len());
+    w.par_chunks(cols.max(1)).map(|row| row_scale(row, code_max)).collect()
+}
+
 pub fn quantize_rows(w: &[f32], rows: usize, cols: usize, col_scale: Option<&[f64]>) -> RowCodes {
     assert_eq!(w.len(), rows * cols, "quantize_rows: {} values for [{rows}, {cols}]", w.len());
     let per_row: Vec<(Vec<i8>, f64)> = w
@@ -54,6 +69,7 @@ pub fn quantize_rows(w: &[f32], rows: usize, cols: usize, col_scale: Option<&[f6
                 return (vec![0i8; cols], 1.0);
             }
             let scale = amax / 127.0;
+            debug_assert!(col_scale.is_some() || scale == row_scale(row, 127.0));
             ((0..cols).map(|c| (v(c) / scale).round().clamp(-127.0, 127.0) as i8).collect(), scale)
         })
         .collect();
@@ -89,6 +105,7 @@ pub fn quantize_rows16(w: &[f32], rows: usize, cols: usize) -> RowCodes16 {
                 return (vec![0i16; cols], 1.0);
             }
             let scale = amax / 32767.0;
+            debug_assert_eq!(scale, row_scale(row, 32767.0));
             (row.iter().map(|v| (*v as f64 / scale).round().clamp(-32767.0, 32767.0) as i16).collect(), scale)
         })
         .collect();
@@ -172,6 +189,21 @@ mod tests {
         assert_eq!(&q.codes[6..9], &[127, 64, -32]);
         let s = quantize_rows(&w, 3, 3, Some(&[2.0, 1.0, 1.0]));
         assert_eq!(&s.codes[0..3], &[127, -127, 32]);
+    }
+
+    #[test]
+    fn a_scale_without_the_codes_is_the_scale_with_them() {
+        let w: Vec<f32> = (0..96).map(|i| ((i * 37 % 101) as f32 - 50.0) * if i % 7 == 0 { 0.0 } else { 0.013 }).collect();
+        let mut z = w.clone();
+        z[32..64].iter_mut().for_each(|v| *v = 0.0);
+        for w in [w, z] {
+            let (q8, q16) = (quantize_rows(&w, 3, 32, None), quantize_rows16(&w, 3, 32));
+            assert_eq!(row_scales(&w, 3, 32, 127.0), q8.scales);
+            assert_eq!(row_scales(&w, 3, 32, 32767.0), q16.scales);
+            // Blocks of rows give the same scales as the whole.
+            let blocked: Vec<f64> = (0..3).flat_map(|r| row_scales(&w[r * 32..(r + 1) * 32], 1, 32, 127.0)).collect();
+            assert_eq!(blocked, q8.scales);
+        }
     }
 
     #[test]

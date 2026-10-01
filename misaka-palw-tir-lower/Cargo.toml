@@ -22,6 +22,10 @@ path = "src/bin/palw-tir-generate.rs"
 name = "palw-tir-fidelity"
 path = "src/bin/palw-tir-fidelity.rs"
 
+[[bin]]
+name = "palw-tir-convert"
+path = "src/bin/palw-tir-convert.rs"
+
 # Deliberately light: no kaspa-consensus-core, no misaka-palw-base0. This crate reads a Hugging
 # Face checkpoint, lowers it to a PALW-TIR program plus integer params, and measures fidelity;
 # nothing here is on a validation path. `misaka-palw-tir` is the IR itself (a leaf crate): the
@@ -37,6 +41,10 @@ rand_chacha.workspace = true
 clap = { workspace = true, features = ["derive"] }
 rayon.workspace = true
 blake2b_simd.workspace = true
+# The conversion's transcendental functions (activation and RoPE tables, scale arithmetic) are the
+# pure-Rust libm's, not the platform's, so an artifact rebuilt anywhere has the same bytes
+# (`detmath`, math mode `libm-v1`). Already in Cargo.lock.
+libm = "0.2.8"
 # palw-tir-fidelity --exec: the integer program on the typed backend (node software, no consensus;
 # byte-identical to the reference evaluator — tests/three_way.rs).
 misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec" }
@@ -45,6 +53,15 @@ misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec" }
 # Freeze criterion 4 on the lowered programs (tests/three_way.rs): the second implementation beside
 # the reference evaluator and the typed backend. Tests only.
 misaka-palw-tir-ref2 = { path = "../misaka-palw-tir-ref2" }
+
+[features]
+# The per-architecture Rust parsers this crate had before model adapters became data
+# (`src/hf_config/legacy_oracle`): compiled only to serve as the differential oracle of
+# `tests/adapters.rs`. No default build carries per-family code.
+legacy-oracle = []
+# `curl`-backed range fetching for remote checkpoints (`weights::CurlFetcher`). Off by default: the
+# library never opens a network connection on its own, and no test does.
+remote = []
 
 [lints]
 workspace = true

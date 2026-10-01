@@ -2222,6 +2222,18 @@ message RpcPalwSeatReadiness {
   string notReadyReason = 8;
 }
 
+// RFC-0002 Part II §II.7.4: what blocks a class in the model registry and at which stage (`convert`, `register`, `mine`).
+message RpcPalwClassBlocking {
+  string classId = 1;
+  string stage = 2;
+  string code = 3;
+  string what = 4;
+  bool hasCount = 5;
+  uint64 have = 6;
+  uint64 need = 7;
+  string next = 8;
+}
+
 message GetPalwModelRegistryResponseMessage {
   bool available = 1;
   uint64 tipDaa = 2;
@@ -2263,6 +2275,8 @@ message GetPalwModelRegistryResponseMessage {
   string panelInflightReplay = 34;
   uint64 panelHorizonSpans = 35;
   uint64 finalWorkEpochs = 36;
+  // RFC-0002 Part II §II.7.4: what blocks each class that has something blocking it.
+  repeated RpcPalwClassBlocking blocking = 39;
   RPCError error = 1000;
 }
 

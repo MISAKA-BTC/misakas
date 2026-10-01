@@ -163,6 +163,9 @@ fn inspect_tir(
             (entry, verdict)
         })
         .collect();
+    // What the artifact says of itself: its feature scope (what the class does not compute), the adapter and
+    // quant descriptors it was read with, the math and calibration it was built under.
+    let provenance_of = |entry: &misaka_palw_sdk::PalwTirClassEntryV1| misaka_palw_sdk::runtime_pack::provenance::provenance_of(&entry.artifact.container().header.meta);
     if ctx.output == OutputFormat::Json {
         let classes: Vec<_> = rows
             .iter()
@@ -170,6 +173,7 @@ fn inspect_tir(
                 let l = &entry.class.layout;
                 let canonical = entry.canonical_context();
                 serde_json::json!({
+                    "provenance": provenance_of(entry).json,
                     "model_id": entry.model_id,
                     "class_id": entry.class_id().to_string(),
                     "artifact_root": entry.artifact_root.to_string(),
@@ -215,6 +219,9 @@ fn inspect_tir(
             "CanonicalWork    prefill {} / decode {} / max_context {}",
             canonical.declared_prefill_tokens, canonical.exact_decode_tokens, canonical.max_context_tokens
         );
+        for line in provenance_of(entry).lines {
+            println!("{line}");
+        }
         match verdict {
             Ok(()) => println!("admission result ADMISSION_OK  (admission v10 {})", gate.note()),
             Err(why) => println!("admission result REFUSED — {why}  (admission v10 {})", gate.note()),
@@ -237,7 +244,14 @@ pub(crate) async fn tir_registration_object(
     bond: &str,
     out: &Path,
     model_id: Option<&str>,
+    pack_gate: &crate::pack_gate::PackGateFlags,
 ) -> CliResult {
+    // RFC-0002 Part II §II.7.5 (decided 2026-10-01): a registration needs a runtime pack that verifies against the artifact, or the
+    // expert's explicit override (a warning is printed). A CLI policy; the chain does not read a pack.
+    let gate = crate::pack_gate::require_verified_pack(pack_gate, artifact)?;
+    for line in gate.lines() {
+        eprintln!("{line}");
+    }
     let nv = connect(ctx).await?;
     let params = nv.params.clone();
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
@@ -315,6 +329,7 @@ pub(crate) async fn tir_registration_object(
                 "artifact_root": entry.artifact_root.to_string(),
                 "model_id": entry.model_id,
                 "registrant_bond": bond,
+                "pack": gate.word(),
             })
         );
     } else {
@@ -538,6 +553,30 @@ pub(crate) async fn status(ctx: &Ctx, profile: Profile, class_id: String) -> Cli
     println!("fence                 {}", if resp.fence_active { "armed" } else { "closed / inactive" });
     if !resp.reason.is_empty() {
         println!("reason                {}", resp.reason);
+    }
+    // RFC-0002 Part II §II.7.4: which stage lacks what, as the registry itself reads the class (best effort: the status above stands
+    // without it). A node that serves no such reading is read by the same function.
+    if let Ok(registry) = nv.client.get_palw_model_registry().await {
+        let served;
+        let blocking = if registry.blocking.is_empty() {
+            served = kaspa_rpc_core::palw_registry_blockings(&registry);
+            &served
+        } else {
+            &registry.blocking
+        };
+        match blocking.iter().find(|b| b.class_id.eq_ignore_ascii_case(&resp.class_id)) {
+            Some(b) => {
+                println!("stage                 {}", b.stage);
+                println!(
+                    "blocked by            {}{}",
+                    b.code,
+                    if b.has_count { format!(" ({} of {})", b.have, b.need) } else { String::new() }
+                );
+                println!("                      {}", b.what);
+                println!("next                  {}", b.next);
+            }
+            None => println!("stage                 nothing blocks this class (the registry reads it as admitted, or has no row for it)"),
+        }
     }
     Ok(())
 }

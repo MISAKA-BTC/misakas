@@ -2863,11 +2863,29 @@ mod mockery {
                 panel_inflight_replay: "2400000000000".to_string(),
                 panel_horizon_spans: mock(),
                 final_work_epochs: mock(),
+                blocking: mock(),
             }
         }
     }
 
     test!(GetPalwModelRegistryResponse);
+
+    impl Mock for RpcPalwClassBlocking {
+        fn mock() -> Self {
+            RpcPalwClassBlocking {
+                class_id: "ab".repeat(64),
+                stage: "mine".to_string(),
+                code: "READY_SEATS".to_string(),
+                what: "3 of 7 seats hold a fresh possession proof".to_string(),
+                has_count: mock(),
+                have: mock(),
+                need: mock(),
+                next: "run a seat for this class".to_string(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassBlocking);
 
     struct Misalign;
 

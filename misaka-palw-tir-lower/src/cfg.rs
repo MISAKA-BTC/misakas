@@ -164,6 +164,16 @@ impl<'a> Cfg<'a> {
         }
     }
 
+    /// Marks the key. `None`: absent; `Some(None)`: an explicit `null`; `Some(Some(v))`: a value.
+    pub fn raw_nullable(&self, k: &str) -> Option<Option<&'a Value>> {
+        self.mark(k);
+        match self.map.get(k) {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(v) => Some(Some(v)),
+        }
+    }
+
     pub fn inert(&self, keys: &[&str]) {
         for k in keys {
             self.mark(k);

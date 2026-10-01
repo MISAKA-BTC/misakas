@@ -1,0 +1,192 @@
+{
+ "config": {
+  "checks": [
+   {
+    "message": "this is the 8-bit format",
+    "one_of": [
+     true
+    ],
+    "path": "load_in_8bit"
+   },
+   {
+    "message": "4-bit and 8-bit together",
+    "one_of": [
+     null,
+     false
+    ],
+    "path": "load_in_4bit"
+   }
+  ],
+  "inert": [
+   "bnb_4bit_compute_dtype",
+   "bnb_4bit_quant_type",
+   "bnb_4bit_quant_storage",
+   "bnb_4bit_use_double_quant",
+   "llm_int8_enable_fp32_cpu_offload",
+   "llm_int8_has_fp16_weight",
+   "llm_int8_threshold",
+   "_load_in_4bit",
+   "_load_in_8bit"
+  ],
+  "lm_head": "unless_skipped",
+  "skip": "llm_int8_skip_modules",
+  "skip_match": "path"
+ },
+ "decode": {
+  "code": {
+   "max": 127,
+   "min": -128
+  },
+  "group": {
+   "size": "inp"
+  },
+  "q": "weight[o, i]",
+  "scale": "rnd(scb[o] * rnd(0.007874015718698502, 0), 0)",
+  "target": "integers",
+  "zero": "0"
+ },
+ "doc": "bitsandbytes LLM.int8, as `Linear8bitLt` saves it: `.weight` int8 [out, in] and `.SCB` float32 [out], the absolute maximum of each row of the original weight, so W[o, i] = weight[o, i] * SCB[o] / 127 (row-wise absmax quantisation); `.weight_format` (uint8 scalar) must be 0, the row-major layout. The stored integers are lowered as they are (the per-row scale is SCB * float32(1 / 127), rounded to float32; bitsandbytes' own `int8_vectorwise_dequant` rounds twice and agrees to one unit in the last place). `llm_int8_threshold` is inert here: it changes how bitsandbytes RUNS a layer (above 0 it splits every matmul at run time: the activation columns whose magnitude passes the threshold are multiplied in float16 against the dequantised weight columns, the rest in int8), not what is stored, and the default of its configuration is 6.0. The registered model is the stored weights (decided 2026-10-01); the runtime pack's fidelity measure against the Hugging Face reference says how far the integer program is from the library's own run. Refused by name: a hardware-reordered `weight_format` (col32 / col_turing / col_ampere).",
+ "ids": [
+  {
+   "method": "bitsandbytes",
+   "scheme": "config",
+   "when": [
+    {
+     "one_of": [
+      true
+     ],
+     "path": "load_in_8bit"
+    }
+   ]
+  }
+ ],
+ "layout": {
+  "checks": [
+   {
+    "expr": "dim_scb[0] == out",
+    "message": "SCB is not one scale per output row"
+   },
+   {
+    "expr": "!has_wfmt || wfmt == 0",
+    "message": "the int8 weight is stored in a hardware-reordered layout (`weight_format` col32 / col_turing / col_ampere), not row-major"
+   }
+  ],
+  "dims": {
+   "inp": "dim_weight[1]",
+   "out": "dim_weight[0]"
+  },
+  "kind": "tensors",
+  "roles": [
+   {
+    "dtypes": [
+     "I8"
+    ],
+    "name": "weight",
+    "rank": 2,
+    "suffix": ".weight"
+   },
+   {
+    "dtypes": [
+     "F32"
+    ],
+    "name": "scb",
+    "rank": 1,
+    "suffix": ".SCB"
+   },
+   {
+    "dtypes": [
+     "U8"
+    ],
+    "name": "wfmt",
+    "rank": 0,
+    "required": false,
+    "suffix": ".weight_format"
+   }
+  ]
+ },
+ "name": "BNB_INT8",
+ "params": {},
+ "schema": "misaka.palw.quant-format.v1",
+ "tests": [
+  {
+   "config": {
+    "_load_in_4bit": false,
+    "_load_in_8bit": true,
+    "bnb_4bit_compute_dtype": "float32",
+    "bnb_4bit_quant_storage": "uint8",
+    "bnb_4bit_quant_type": "fp4",
+    "bnb_4bit_use_double_quant": false,
+    "llm_int8_enable_fp32_cpu_offload": false,
+    "llm_int8_has_fp16_weight": false,
+    "llm_int8_skip_modules": null,
+    "llm_int8_threshold": 6.0,
+    "load_in_4bit": false,
+    "load_in_8bit": true,
+    "quant_method": "bitsandbytes"
+   },
+   "roles": {
+    "scb": {
+     "dtype": "F32",
+     "hex": "00000000764f833efb013c3f88972a3f9e01c93e83281a3f",
+     "shape": [
+      6
+     ]
+    },
+    "weight": {
+     "dtype": "I8",
+     "hex": "00000000000000000000000000000000804932f0a0d710384f3226682b0ab47ff9a5fa28f8ebfff0c33fd2291925e37f43c0031bf3182d33fad210cfb1f77f200232d2dfbf8f2b1b7f6919c4488136a3b65fa2a91af11b0dc9f0b6e140438107",
+     "shape": [
+      6,
+      16
+     ]
+    },
+    "wfmt": {
+     "dtype": "U8",
+     "hex": "00",
+     "shape": []
+    }
+   },
+   "values_f32_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000265884be8bf4163ebbc9ce3d265804bd398446bef190a9bd2658043d429ae73dcf5c233ebbc9ce3dad289d3d3e0f573e73d6b13d306ea53cad281dbe764f833e56cd25bdd6b606bfb81d0ebd32dc6c3ef57c3dbd02b4f8bdf57cbdbbf57cbdbd1a9bb4be0187ba3ed03188be1ac8723e9f09143e7b185b3e3eb92bbefb013c3fa0feb33e67efabbe8df3803cff11113e84b28bbd8df3003ea9c8713ec602893e8df300bd242877be67efab3d4ba383be833bd4be546d41bd88972a3f67ef2b3ecc96ca3bcf451e3e639c11be82ebd0bd27c14dbe20d9b2be511d083e3cefaa3d9e01c93eb32fa63ecf459e3d5fed3dbea6e9633e9e01c9be3cef2a3e903193be23a6b3be64a1e63ee733e4be7c35d3beca7afc3d4da991bd5f18033eca7a7c3ddc8585be415f9bbd23a6b3be478416be415f9b3eb8a7a23e82281abf59f3073d"
+  },
+  {
+   "config": {
+    "_load_in_4bit": false,
+    "_load_in_8bit": true,
+    "bnb_4bit_compute_dtype": "float32",
+    "bnb_4bit_quant_storage": "uint8",
+    "bnb_4bit_quant_type": "fp4",
+    "bnb_4bit_use_double_quant": false,
+    "llm_int8_enable_fp32_cpu_offload": false,
+    "llm_int8_has_fp16_weight": false,
+    "llm_int8_skip_modules": null,
+    "llm_int8_threshold": 0.0,
+    "load_in_4bit": false,
+    "load_in_8bit": true,
+    "quant_method": "bitsandbytes"
+   },
+   "roles": {
+    "scb": {
+     "dtype": "F32",
+     "hex": "00000000fce39f3e9583a43e9ea0ce3e709b0a3f",
+     "shape": [
+      5
+     ]
+    },
+    "weight": {
+     "dtype": "I8",
+     "hex": "0000000000000000008029c21acd039de67f8b7f1ed765d9a8e5de26ba7ffe34639f2904dcd6f97fdfea01183b",
+     "shape": [
+      5,
+      9
+     ]
+    },
+    "wfmt": {
+     "dtype": "U8",
+     "hex": "00",
+     "shape": []
+    }
+   },
+   "values_f32_hex": "0000000000000000000000000000000000000000000000000000000000000000000000004926a1be0e79ce3d171d1cbe1bef823d826a00be6eb9f13b394779be1bef82bdfce39f3e658f97be9583a43e40729b3d7971d4bd7ed5823e8614cabde6fc63bed3e68bbd262cb0bd564df73d3bc763be9ea0ce3e2041d0bbea34293e5f12a13e5ad19dbeb869053e2041503c31291dbeb95a37bef678f4bc709b0a3f6d1010bee615c0bdd6b28b3b418cd13dddc8803e"
+  }
+ ]
+}

@@ -1,0 +1,6 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vlm-gemma3",
+  "doc": "Gemma-3 VLM (Gemma3ForConditionalGeneration): gemma3_text decoder; the wrapper's tie_word_embeddings defaults to true.",
+  "extends": ["gemma3-text", "mixin-vlm"]
+}
